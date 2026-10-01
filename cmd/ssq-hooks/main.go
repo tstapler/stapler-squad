@@ -102,8 +102,8 @@ func handleCheck() {
 
 	var result classifier.ClassificationResult
 	ok := false
-	if home, err := os.UserHomeDir(); err == nil && remoteClassifyApplicable(*dbPath, storagePath, home) {
-		result, ok = tryRemoteClassify(payload, defaultSsqHooksBaseURL, os.LookupEnv)
+	if *dbPath == "" {
+		result, ok = tryRemoteClassify(payload, defaultSsqHooksBaseURL, filepath.Dir(storagePath), os.LookupEnv)
 	}
 	if !ok {
 		storage := loadStorage(storagePath)
@@ -790,12 +790,19 @@ const defaultSsqHooksBaseURL = "http://localhost:8543"
 // already costs today — a loopback HTTP round trip is normally sub-millisecond.
 const remoteClassifyTimeout = 75 * time.Millisecond
 
-// remoteClassifyApplicable reports whether the live :8543 server holds the same rule state this
-// process would load locally: no --db override, and the per-cwd DB resolved from the environment
-// (STAPLER_SQUAD_INSTANCE, workspace mode, test dir) is the default one. Otherwise the server
-// would classify against a different instance's rules.
-func remoteClassifyApplicable(dbFlag, resolvedDB, home string) bool {
-	return dbFlag == "" && resolvedDB == filepath.Join(home, ".stapler-squad", "sessions.db")
+// sameDir reports whether two directory paths name the same place, resolving symlinks where
+// possible (macOS /var vs /private/var).
+func sameDir(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	resolve := func(p string) string {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return r
+		}
+		return filepath.Clean(p)
+	}
+	return resolve(a) == resolve(b)
 }
 
 // remoteClassifyMaxResponseBytes caps the response read so a hostile listener on the port
@@ -809,6 +816,9 @@ const remoteClassifyMaxResponseBytes = 1 << 20
 // bad JSON, a response without the protocol version marker — so handleCheck falls back to its
 // local path; the server is not guaranteed to be running.
 //
+// wantConfigDir is the state directory this process would load rules from; a response from a
+// server serving a different one is discarded.
+//
 // A Bash command's referenced $VARs are sent with their values from this process's
 // environment, so the server expands them as this shell would. If any referenced variable is
 // unset here, the remote path is skipped: the server cannot express "unset", and the local path
@@ -816,7 +826,7 @@ const remoteClassifyMaxResponseBytes = 1 << 20
 //
 // baseURL and lookupEnv are parameters rather than package vars so tests inject an
 // httptest.Server and a fake environment directly.
-func tryRemoteClassify(payload classifier.PermissionRequestPayload, baseURL string, lookupEnv func(string) (string, bool)) (result classifier.ClassificationResult, ok bool) {
+func tryRemoteClassify(payload classifier.PermissionRequestPayload, baseURL, wantConfigDir string, lookupEnv func(string) (string, bool)) (result classifier.ClassificationResult, ok bool) {
 	req := classifier.RemoteClassifyRequest{Payload: payload}
 	if cmd, _ := payload.ToolInput["command"].(string); strings.EqualFold(payload.ToolName, "Bash") && cmd != "" {
 		for _, name := range classifier.ReferencedEnvVars(cmd) {
@@ -855,6 +865,11 @@ func tryRemoteClassify(payload classifier.PermissionRequestPayload, baseURL stri
 	// ClassificationDecision's zero value is AutoAllow, so a decoded-but-empty body must
 	// never count as a decision.
 	if out.Version != classifier.RemoteClassifyProtocolVersion {
+		return classifier.ClassificationResult{}, false
+	}
+	// The server must hold the same rule state this process would load locally: same instance,
+	// workspace and preferred-workspace selection.
+	if !sameDir(out.ConfigDir, wantConfigDir) {
 		return classifier.ClassificationResult{}, false
 	}
 	return out.Result, true

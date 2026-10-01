@@ -9,7 +9,7 @@ const RemoteClassifyProtocolVersion = 1
 type RemoteClassifyRequest struct {
 	Payload PermissionRequestPayload `json:"payload"`
 	// Env holds the caller's value for every $VAR referenced by a Bash command. The server
-	// expands from this map only, never its own environment, so a command is judged on the
+	// expands from this map only, never its own environment (ClassificationContext.IsolatedEnv), so a command is judged on the
 	// same text the caller's shell would run.
 	Env map[string]string `json:"env,omitempty"`
 }
@@ -18,6 +18,10 @@ type RemoteClassifyRequest struct {
 type RemoteClassifyResponse struct {
 	Version int                  `json:"version"`
 	Result  ClassificationResult `json:"result"`
+	// ConfigDir is the server's state directory. The client uses the answer only when this
+	// matches the directory it would have loaded rules from itself (instance, workspace and
+	// preferred-workspace selection all change it).
+	ConfigDir string `json:"config_dir"`
 }
 
 // ReferencedEnvVars returns the distinct variable names a command references via $VAR or

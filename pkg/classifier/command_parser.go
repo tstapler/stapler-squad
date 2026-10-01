@@ -193,6 +193,11 @@ var envVarRefPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-
 //
 // Command substitutions ($(...)) are not expanded — only simple variable references.
 func ExpandEnvVars(cmd string, env map[string]string) string {
+	return expandEnvVars(cmd, env, true)
+}
+
+// expandEnvVars is ExpandEnvVars with the OS-environment fallback made optional.
+func expandEnvVars(cmd string, env map[string]string, osFallback bool) string {
 	return envVarRefPattern.ReplaceAllStringFunc(cmd, func(m string) string {
 		var name string
 		if strings.HasPrefix(m, "${") {
@@ -203,8 +208,10 @@ func ExpandEnvVars(cmd string, env map[string]string) string {
 		if val, ok := env[name]; ok {
 			return val
 		}
-		if val, ok := os.LookupEnv(name); ok {
-			return val
+		if osFallback {
+			if val, ok := os.LookupEnv(name); ok {
+				return val
+			}
 		}
 		return m // leave unexpanded, preserving original $VAR / ${VAR} form
 	})

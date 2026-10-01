@@ -1034,6 +1034,8 @@ func TestWriteOpenCodeHookDecision_Escalate(t *testing.T) {
 	assert.NotContains(t, res.Stderr, "SSQ-Hooks: blocked", "escalate reason should use its own prefix, not AutoDeny's")
 }
 
+const testCfgDir = "/tmp/ssq-test-cfg"
+
 func fakeEnv(env map[string]string) func(string) (string, bool) {
 	return func(k string) (string, bool) { v, ok := env[k]; return v, ok }
 }
@@ -1059,12 +1061,13 @@ func TestTryRemoteClassify_ReturnsResult_OnSuccess(t *testing.T) {
 		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
 		_ = json.NewEncoder(w).Encode(classifier.RemoteClassifyResponse{
-			Version: classifier.RemoteClassifyProtocolVersion,
-			Result:  classifier.ClassificationResult{Decision: classifier.AutoDeny, RuleID: "remote-rule"},
+			Version:   classifier.RemoteClassifyProtocolVersion,
+			ConfigDir: testCfgDir,
+			Result:    classifier.ClassificationResult{Decision: classifier.AutoDeny, RuleID: "remote-rule"},
 		})
 	})
 
-	result, ok := tryRemoteClassify(bashPayload("rm -rf $TARGET ${OTHER}"), url, fakeEnv(map[string]string{"TARGET": "/", "OTHER": "x", "UNREFERENCED": "secret"}))
+	result, ok := tryRemoteClassify(bashPayload("rm -rf $TARGET ${OTHER}"), url, testCfgDir, fakeEnv(map[string]string{"TARGET": "/", "OTHER": "x", "UNREFERENCED": "secret"}))
 	require.True(t, ok)
 	assert.Equal(t, classifier.AutoDeny, result.Decision)
 	assert.Equal(t, "remote-rule", result.RuleID)
@@ -1091,7 +1094,7 @@ func TestTryRemoteClassify_FallsBack(t *testing.T) {
 	}
 	for name, h := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, ok := tryRemoteClassify(bashPayload("ls"), classifyServer(t, h), fakeEnv(nil))
+			_, ok := tryRemoteClassify(bashPayload("ls"), classifyServer(t, h), testCfgDir, fakeEnv(nil))
 			require.False(t, ok)
 		})
 	}
@@ -1100,7 +1103,7 @@ func TestTryRemoteClassify_FallsBack(t *testing.T) {
 // TestTryRemoteClassify_FallsBack_When_ServerUnreachable: nothing listening → ok=false, so the
 // local path runs on a machine whose server isn't up.
 func TestTryRemoteClassify_FallsBack_When_ServerUnreachable(t *testing.T) {
-	_, ok := tryRemoteClassify(bashPayload("ls"), "http://127.0.0.1:1", fakeEnv(nil)) // reserved, nothing listens here
+	_, ok := tryRemoteClassify(bashPayload("ls"), "http://127.0.0.1:1", testCfgDir, fakeEnv(nil)) // reserved, nothing listens here
 	require.False(t, ok)
 }
 
@@ -1109,16 +1112,29 @@ func TestTryRemoteClassify_FallsBack_When_ServerUnreachable(t *testing.T) {
 func TestTryRemoteClassify_SkipsRemote_When_ReferencedVarUnset(t *testing.T) {
 	called := false
 	url := classifyServer(t, func(w http.ResponseWriter, r *http.Request) { called = true })
-	_, ok := tryRemoteClassify(bashPayload("echo $NOT_SET"), url, fakeEnv(nil))
+	_, ok := tryRemoteClassify(bashPayload("echo $NOT_SET"), url, testCfgDir, fakeEnv(nil))
 	require.False(t, ok)
 	assert.False(t, called)
 }
 
-func TestRemoteClassifyApplicable(t *testing.T) {
-	home := "/home/u"
-	def := filepath.Join(home, ".stapler-squad", "sessions.db")
-	assert.True(t, remoteClassifyApplicable("", def, home))
-	assert.False(t, remoteClassifyApplicable("/tmp/x.db", "/tmp/x.db", home), "--db override")
-	assert.False(t, remoteClassifyApplicable("", filepath.Join(home, ".stapler-squad", "instances", "t", "sessions.db"), home), "named instance")
-	assert.False(t, remoteClassifyApplicable("", filepath.Join(home, ".stapler-squad", "workspaces", "w", "sessions.db"), home), "workspace mode")
+// TestTryRemoteClassify_FallsBack_When_ServerConfigDirDiffers: a server serving another
+// instance/workspace must not decide for this process.
+func TestTryRemoteClassify_FallsBack_When_ServerConfigDirDiffers(t *testing.T) {
+	url := classifyServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(classifier.RemoteClassifyResponse{
+			Version: classifier.RemoteClassifyProtocolVersion, ConfigDir: "/somewhere/else",
+		})
+	})
+	_, ok := tryRemoteClassify(bashPayload("ls"), url, testCfgDir, fakeEnv(nil))
+	require.False(t, ok)
+}
+
+func TestSameDir(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	require.NoError(t, os.Symlink(real, link))
+	assert.True(t, sameDir(real, link))
+	assert.True(t, sameDir(real, real+"/"))
+	assert.False(t, sameDir(real, t.TempDir()))
+	assert.False(t, sameDir("", real))
 }

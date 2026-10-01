@@ -738,6 +738,10 @@ func (h *ApprovalHandler) HandleClassify(w http.ResponseWriter, r *http.Request)
 	if classCtx.Env == nil {
 		classCtx.Env = map[string]string{}
 	}
+	classCtx.IsolatedEnv = true
+	// ssq-hooks' local path never loaded claude-settings rules; skipping them keeps both paths
+	// on the same rule set (seed + DB + shared_rules.yaml).
+	classCtx.SkipRuleSources = []string{string(classifier.SourceClaudeSettings)}
 	result := h.classifier.Classify(payload, classCtx)
 	durationMs := time.Since(start).Milliseconds()
 
@@ -753,6 +757,7 @@ func (h *ApprovalHandler) HandleClassify(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", "application/json")
 	resp := classifier.RemoteClassifyResponse{Version: classifier.RemoteClassifyProtocolVersion, Result: result}
+	resp.ConfigDir, _ = config.GetConfigDir()
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Warn("Failed to write /api/hooks/classify response", "err", err)
 	}

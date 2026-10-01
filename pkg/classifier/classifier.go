@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -91,6 +92,13 @@ type ClassificationContext struct {
 	// satisfy a MinSessionIdleMinutes > 0 condition — see ApprovalHandler's population
 	// logic for how this is populated from a live instance.
 	SessionIdleMinutes int
+	// IsolatedEnv, when true, expands $VAR references from Env only — never from the
+	// classifier process's own environment. Set for remote callers whose shell environment is
+	// not this process's (POST /api/hooks/classify).
+	IsolatedEnv bool
+	// SkipRuleSources lists Rule.Source values excluded from matching for this call, so a
+	// caller can classify against exactly the rule set another process would have loaded.
+	SkipRuleSources []string
 }
 
 // Classifier classifies a PermissionRequestPayload to determine the action to take.
@@ -485,7 +493,7 @@ func (c *RuleBasedClassifier) classifyInternal(payload PermissionRequestPayload,
 			// ctx.Env overrides take precedence, then the real OS environment is used
 			// as a fallback. Only applied when ctx.Env is non-nil (opt-in).
 			if ctx.Env != nil {
-				cmd = ExpandEnvVars(cmd, ctx.Env)
+				cmd = expandEnvVars(cmd, ctx.Env, !ctx.IsolatedEnv)
 				payload = payloadWithCommand(payload, cmd)
 			}
 
@@ -555,7 +563,7 @@ func (c *RuleBasedClassifier) classifyInternal(payload PermissionRequestPayload,
 // classifySingle evaluates rules against a single (non-compound) payload.
 func (c *RuleBasedClassifier) classifySingle(payload PermissionRequestPayload, ctx ClassificationContext) ClassificationResult {
 	for _, rule := range c.rules {
-		if !rule.Enabled {
+		if !rule.Enabled || slices.Contains(ctx.SkipRuleSources, rule.Source) {
 			continue
 		}
 		if c.matchesRule(rule, payload, ctx) {

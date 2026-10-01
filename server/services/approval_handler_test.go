@@ -17,7 +17,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
@@ -864,7 +866,8 @@ func TestHandleClassify_UsesCallerEnv_NotServerEnv(t *testing.T) {
 	require.Equal(t, map[string]string{"TARGET": "/"}, got.Env)
 
 	postClassify(h, classifyRequestBody(t, classifier.PermissionRequestPayload{ToolName: "Bash"}, nil), "application/json")
-	require.NotNil(t, got.Env, "nil Env would let the classifier fall back to os.LookupEnv expansion")
+	require.NotNil(t, got.Env, "nil Env skips expansion entirely instead of expanding from the request")
+	require.True(t, got.IsolatedEnv)
 	require.Empty(t, got.Env)
 }
 
@@ -903,7 +906,8 @@ func TestHandleClassify_RejectsBadRequests(t *testing.T) {
 	t.Parallel()
 	h, analytics := newClassifyHandler(t, stubClassifier{})
 	valid := classifyRequestBody(t, classifier.PermissionRequestPayload{ToolName: "Bash"}, nil)
-	oversized := append([]byte(`{"payload":{"tool_name":"`), bytes.Repeat([]byte("a"), classifyMaxBodyBytes+1)...)
+	// Well-formed JSON larger than the cap, so only MaxBytesReader (not a syntax error) rejects it.
+	oversized := []byte(`{"payload":{"tool_name":"` + strings.Repeat("a", classifyMaxBodyBytes+1) + `"}}`)
 
 	cases := []struct {
 		name, contentType string
@@ -943,4 +947,57 @@ func TestHandleClassify_ServiceUnavailable_When_ClassifierNil(t *testing.T) {
 	rec := postClassify(h, []byte(`{}`), "application/json")
 
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+}
+
+func classifyResult(t *testing.T, h *ApprovalHandler, payload classifier.PermissionRequestPayload, env map[string]string) classifier.RemoteClassifyResponse {
+	t.Helper()
+	rec := postClassify(h, classifyRequestBody(t, payload, env), "application/json")
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp classifier.RemoteClassifyResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	return resp
+}
+
+// TestHandleClassify_RealClassifier_NeverExpandsFromServerEnv uses the real classifier: the
+// server's own $ZZ_SERVER_ONLY must not be substituted when the caller did not send it.
+func TestHandleClassify_RealClassifier_NeverExpandsFromServerEnv(t *testing.T) {
+	t.Setenv("ZZ_SERVER_ONLY", "make") // only the real classifier can show whether it was expanded
+	c := classifier.NewRuleBasedClassifier()
+	c.AddRules([]classifier.Rule{{
+		ToolName: "Bash", Decision: classifier.AutoDeny,
+		Criteria: &classifier.CommandCriteria{Programs: []string{"make"}},
+		RuleMeta: classifier.RuleMeta{ID: "deny-make", Name: "deny make", Priority: 1000, Enabled: true, Source: string(classifier.SourceUser)},
+	}})
+	h, _ := newClassifyHandler(t, c)
+	payload := classifier.PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "$ZZ_SERVER_ONLY build"}}
+
+	notSent := classifyResult(t, h, payload, nil)
+	assert.NotEqual(t, "deny-make", notSent.Result.RuleID, "server env must not expand an unsent variable")
+
+	sent := classifyResult(t, h, payload, map[string]string{"ZZ_SERVER_ONLY": "make"})
+	assert.Equal(t, "deny-make", sent.Result.RuleID, "caller-sent value is expanded")
+}
+
+// TestHandleClassify_RealClassifier_IgnoresClaudeSettingsRules keeps the endpoint on the same
+// rule set as ssq-hooks' local path, which never loaded claude-settings rules.
+func TestHandleClassify_RealClassifier_IgnoresClaudeSettingsRules(t *testing.T) {
+	c := classifier.NewRuleBasedClassifier()
+	c.AddRules([]classifier.Rule{{
+		ToolName: "Bash", Decision: classifier.AutoAllow,
+		Criteria: &classifier.CommandCriteria{Programs: []string{"make"}},
+		RuleMeta: classifier.RuleMeta{ID: "cs-allow-make", Name: "cs allow make", Priority: 1000, Enabled: true, Source: string(classifier.SourceClaudeSettings)},
+	}})
+	h, _ := newClassifyHandler(t, c)
+	payload := classifier.PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "make build"}}
+
+	resp := classifyResult(t, h, payload, nil)
+	assert.NotEqual(t, "cs-allow-make", resp.Result.RuleID)
+}
+
+func TestHandleClassify_ReportsServerConfigDir(t *testing.T) {
+	want, err := config.GetConfigDir()
+	require.NoError(t, err)
+	h, _ := newClassifyHandler(t, stubClassifier{})
+	resp := classifyResult(t, h, classifier.PermissionRequestPayload{ToolName: "Bash"}, nil)
+	assert.Equal(t, want, resp.ConfigDir)
 }
