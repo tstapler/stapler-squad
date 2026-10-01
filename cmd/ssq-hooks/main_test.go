@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -1034,14 +1035,37 @@ func TestWriteOpenCodeHookDecision_Escalate(t *testing.T) {
 	assert.NotContains(t, res.Stderr, "SSQ-Hooks: blocked", "escalate reason should use its own prefix, not AutoDeny's")
 }
 
-const testCfgDir = "/tmp/ssq-test-cfg"
-
 func fakeEnv(env map[string]string) func(string) (string, bool) {
 	return func(k string) (string, bool) { v, ok := env[k]; return v, ok }
 }
 
 func bashPayload(cmd string) classifier.PermissionRequestPayload {
 	return classifier.PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": cmd}}
+}
+
+// hookFixture is a state dir holding a hook token, as the real server would create.
+type hookFixture struct {
+	dir   string
+	token []byte
+}
+
+func newHookFixture(t *testing.T) hookFixture {
+	t.Helper()
+	dir := t.TempDir()
+	tok, err := classifier.LoadOrCreateHookToken(dir)
+	require.NoError(t, err)
+	return hookFixture{dir: dir, token: tok}
+}
+
+// signedReply answers like the real server: reads the request nonce and returns a response
+// carrying a valid proof for result.
+func (f hookFixture) signedReply(t *testing.T, w http.ResponseWriter, r *http.Request, result classifier.ClassificationResult) {
+	t.Helper()
+	var req classifier.RemoteClassifyRequest
+	require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+	resp := classifier.RemoteClassifyResponse{Version: classifier.RemoteClassifyProtocolVersion, ConfigDir: f.dir, Result: result}
+	resp.Proof = classifier.ResponseProof(f.token, req.Nonce, resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func classifyServer(t *testing.T, handler http.HandlerFunc) string {
@@ -1051,50 +1075,74 @@ func classifyServer(t *testing.T, handler http.HandlerFunc) string {
 	return srv.URL
 }
 
-// TestTryRemoteClassify_ReturnsResult_OnSuccess: a versioned 200 response is decoded and
-// returned, and the request carries the payload plus only the $VARs the command references.
+// TestTryRemoteClassify_ReturnsResult_OnSuccess: an authenticated, versioned response is
+// returned, and the request is signed and carries only the $VARs the command references.
 func TestTryRemoteClassify_ReturnsResult_OnSuccess(t *testing.T) {
+	f := newHookFixture(t)
 	var got classifier.RemoteClassifyRequest
 	url := classifyServer(t, func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Equal(t, "/api/hooks/classify", r.URL.Path)
 		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
-		_ = json.NewEncoder(w).Encode(classifier.RemoteClassifyResponse{
-			Version:   classifier.RemoteClassifyProtocolVersion,
-			ConfigDir: testCfgDir,
-			Result:    classifier.ClassificationResult{Decision: classifier.AutoDeny, RuleID: "remote-rule"},
-		})
+		raw, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		assert.True(t, classifier.VerifyRequestBody(f.token, raw, r.Header.Get(classifier.HookSigHeader)), "request must be signed")
+		assert.NotContains(t, string(raw), hex.EncodeToString(f.token), "the token itself is never sent")
+		require.NoError(t, json.Unmarshal(raw, &got))
+		r.Body = io.NopCloser(bytes.NewReader(raw))
+		f.signedReply(t, w, r, classifier.ClassificationResult{Decision: classifier.AutoDeny, RuleID: "remote-rule"})
 	})
 
-	result, ok := tryRemoteClassify(bashPayload("rm -rf $TARGET ${OTHER}"), url, testCfgDir, fakeEnv(map[string]string{"TARGET": "/", "OTHER": "x", "UNREFERENCED": "secret"}))
+	result, ok := tryRemoteClassify(bashPayload("rm -rf $TARGET ${OTHER}"), url, f.dir, fakeEnv(map[string]string{"TARGET": "/", "OTHER": "x", "UNREFERENCED": "secret"}))
 	require.True(t, ok)
 	assert.Equal(t, classifier.AutoDeny, result.Decision)
 	assert.Equal(t, "remote-rule", result.RuleID)
 	assert.Equal(t, map[string]string{"TARGET": "/", "OTHER": "x"}, got.Env)
+	assert.NotEmpty(t, got.Nonce)
 }
 
 // TestTryRemoteClassify_FallsBack covers every response that must NOT be trusted as a decision.
-// The {} and null cases matter most: ClassificationDecision's zero value is AutoAllow, so
-// accepting them would silently allow every tool call.
+// The forged AutoAllow cases matter most: ClassificationDecision's zero value is AutoAllow, so
+// any listener on the port that can fake a well-formed reply would silently allow every call.
 func TestTryRemoteClassify_FallsBack(t *testing.T) {
+	f := newHookFixture(t)
+	other := newHookFixture(t) // a different secret, e.g. an attacker's guess
+	forge := func(mutate func(*classifier.RemoteClassifyResponse)) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			var req classifier.RemoteClassifyRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			resp := classifier.RemoteClassifyResponse{Version: classifier.RemoteClassifyProtocolVersion, ConfigDir: f.dir}
+			mutate(&resp)
+			_ = json.NewEncoder(w).Encode(resp)
+			_ = req
+		}
+	}
 	cases := map[string]http.HandlerFunc{
-		"non-200":        func(w http.ResponseWriter, r *http.Request) { http.Error(w, "nope", http.StatusServiceUnavailable) },
-		"html 200":       func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "<!DOCTYPE html><html></html>") },
-		"malformed json": func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, `{"version":`) },
-		"empty object":   func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, `{}`) },
-		"null":           func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, `null`) },
-		"bare result (no version)": func(w http.ResponseWriter, r *http.Request) {
-			_ = json.NewEncoder(w).Encode(classifier.ClassificationResult{Decision: classifier.AutoAllow})
+		"non-200":                func(w http.ResponseWriter, r *http.Request) { http.Error(w, "nope", http.StatusServiceUnavailable) },
+		"unauthorized":           func(w http.ResponseWriter, r *http.Request) { http.Error(w, "unauthorized", http.StatusUnauthorized) },
+		"html 200":               func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "<!DOCTYPE html><html></html>") },
+		"malformed json":         func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, `{"version":`) },
+		"empty object":           func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, `{}`) },
+		"null":                   func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, `null`) },
+		"wrong version":          func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, `{"version":99,"result":{}}`) },
+		"forged allow, no proof": forge(func(*classifier.RemoteClassifyResponse) {}),
+		"forged allow, proof from wrong secret": func(w http.ResponseWriter, r *http.Request) {
+			var req classifier.RemoteClassifyRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			resp := classifier.RemoteClassifyResponse{Version: classifier.RemoteClassifyProtocolVersion, ConfigDir: f.dir}
+			resp.Proof = classifier.ResponseProof(other.token, req.Nonce, resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
-		"wrong version": func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, `{"version":99,"result":{}}`) },
-		"slower than timeout": func(w http.ResponseWriter, r *http.Request) {
-			time.Sleep(remoteClassifyTimeout * 4)
+		"replayed proof for a different nonce": func(w http.ResponseWriter, r *http.Request) {
+			resp := classifier.RemoteClassifyResponse{Version: classifier.RemoteClassifyProtocolVersion, ConfigDir: f.dir}
+			resp.Proof = classifier.ResponseProof(f.token, "some-earlier-nonce", resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		},
+		"slower than timeout": func(w http.ResponseWriter, r *http.Request) { time.Sleep(remoteClassifyTimeout * 4) },
 	}
 	for name, h := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, ok := tryRemoteClassify(bashPayload("ls"), classifyServer(t, h), testCfgDir, fakeEnv(nil))
+			_, ok := tryRemoteClassify(bashPayload("ls"), classifyServer(t, h), f.dir, fakeEnv(nil))
 			require.False(t, ok)
 		})
 	}
@@ -1103,29 +1151,50 @@ func TestTryRemoteClassify_FallsBack(t *testing.T) {
 // TestTryRemoteClassify_FallsBack_When_ServerUnreachable: nothing listening → ok=false, so the
 // local path runs on a machine whose server isn't up.
 func TestTryRemoteClassify_FallsBack_When_ServerUnreachable(t *testing.T) {
-	_, ok := tryRemoteClassify(bashPayload("ls"), "http://127.0.0.1:1", testCfgDir, fakeEnv(nil)) // reserved, nothing listens here
+	f := newHookFixture(t)
+	_, ok := tryRemoteClassify(bashPayload("ls"), "http://127.0.0.1:1", f.dir, fakeEnv(nil)) // reserved, nothing listens here
 	require.False(t, ok)
+}
+
+// TestTryRemoteClassify_SkipsRemote_When_NoUsableToken: with no token (or a group-readable one)
+// the server cannot be authenticated, so the call must not even reach it.
+func TestTryRemoteClassify_SkipsRemote_When_NoUsableToken(t *testing.T) {
+	called := false
+	url := classifyServer(t, func(w http.ResponseWriter, r *http.Request) { called = true })
+
+	_, ok := tryRemoteClassify(bashPayload("ls"), url, t.TempDir(), fakeEnv(nil))
+	require.False(t, ok, "no token file")
+
+	f := newHookFixture(t)
+	require.NoError(t, os.Chmod(filepath.Join(f.dir, classifier.HookTokenFile), 0o644))
+	_, ok = tryRemoteClassify(bashPayload("ls"), url, f.dir, fakeEnv(nil))
+	require.False(t, ok, "group/other-readable token")
+	assert.False(t, called)
 }
 
 // TestTryRemoteClassify_SkipsRemote_When_ReferencedVarUnset: the server cannot express "unset",
 // so the call must not even reach it.
 func TestTryRemoteClassify_SkipsRemote_When_ReferencedVarUnset(t *testing.T) {
+	f := newHookFixture(t)
 	called := false
 	url := classifyServer(t, func(w http.ResponseWriter, r *http.Request) { called = true })
-	_, ok := tryRemoteClassify(bashPayload("echo $NOT_SET"), url, testCfgDir, fakeEnv(nil))
+	_, ok := tryRemoteClassify(bashPayload("echo $NOT_SET"), url, f.dir, fakeEnv(nil))
 	require.False(t, ok)
 	assert.False(t, called)
 }
 
 // TestTryRemoteClassify_FallsBack_When_ServerConfigDirDiffers: a server serving another
-// instance/workspace must not decide for this process.
+// instance/workspace must not decide for this process, even with a valid proof.
 func TestTryRemoteClassify_FallsBack_When_ServerConfigDirDiffers(t *testing.T) {
+	f := newHookFixture(t)
 	url := classifyServer(t, func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(classifier.RemoteClassifyResponse{
-			Version: classifier.RemoteClassifyProtocolVersion, ConfigDir: "/somewhere/else",
-		})
+		var req classifier.RemoteClassifyRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		resp := classifier.RemoteClassifyResponse{Version: classifier.RemoteClassifyProtocolVersion, ConfigDir: "/somewhere/else"}
+		resp.Proof = classifier.ResponseProof(f.token, req.Nonce, resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	})
-	_, ok := tryRemoteClassify(bashPayload("ls"), url, testCfgDir, fakeEnv(nil))
+	_, ok := tryRemoteClassify(bashPayload("ls"), url, f.dir, fakeEnv(nil))
 	require.False(t, ok)
 }
 

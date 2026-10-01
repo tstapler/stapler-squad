@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	pkganalytics "github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/pkg/buildinfo"
+	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/events"
@@ -741,6 +742,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Wire the classifier and analytics store for auto-approve/deny before manual review
 	approvalHandler.SetClassifier(deps.SessionService.GetClassifier())
 	approvalHandler.SetAnalyticsStore(deps.SessionService.GetAnalyticsStore())
+	// Shared secret for POST /api/hooks/classify; without it that endpoint stays disabled
+	// (503) and ssq-hooks falls back to its local path.
+	if cfgDir, err := config.GetConfigDir(); err == nil {
+		if tok, err := classifier.LoadOrCreateHookToken(cfgDir); err == nil {
+			approvalHandler.SetHookToken(tok)
+		} else {
+			log.Warn("hook token unavailable; /api/hooks/classify disabled", "err", err)
+		}
+	}
 	// Wire the domain age checker (enabled by default) for newly-registered domain escalation
 	approvalHandler.SetDomainChecker(services.NewDomainAgeChecker(true))
 	// Wire the shared Slack notifier (Epic 1.3, Story 1.3.2) — the same instance

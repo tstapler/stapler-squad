@@ -806,20 +806,26 @@ func newClassifyHandler(t *testing.T, c classifier.Classifier) (*ApprovalHandler
 	if c != nil {
 		h.SetClassifier(c)
 	}
+	h.SetHookToken(testHookToken)
 	analytics := NewAnalyticsStore(nil) // never Started: recorded entries stay in analytics.ch
 	h.SetAnalyticsStore(analytics)
 	return h, analytics
 }
 
+var testHookToken = []byte("0123456789abcdef0123456789abcdef")
+
 func classifyRequestBody(t *testing.T, payload classifier.PermissionRequestPayload, env map[string]string) []byte {
 	t.Helper()
-	body, err := json.Marshal(classifier.RemoteClassifyRequest{Payload: payload, Env: env})
+	body, err := json.Marshal(classifier.RemoteClassifyRequest{Payload: payload, Env: env, Nonce: testNonce})
 	require.NoError(t, err)
 	return body
 }
 
+const testNonce = "test-nonce"
+
 func postClassify(h *ApprovalHandler, body []byte, contentType string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/api/hooks/classify", bytes.NewReader(body))
+	req.Header.Set(classifier.HookSigHeader, classifier.SignRequestBody(testHookToken, body))
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
@@ -846,6 +852,7 @@ func TestHandleClassify_ReturnsVersionedResult_AndRecordsAnalytics(t *testing.T)
 	var resp classifier.RemoteClassifyResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	require.Equal(t, classifier.RemoteClassifyProtocolVersion, resp.Version)
+	require.True(t, classifier.VerifyResponseProof(testHookToken, testNonce, resp), "response must carry a valid proof for the request nonce")
 	require.Equal(t, classifier.AutoDeny, resp.Result.Decision)
 	require.Equal(t, "test-rule", resp.Result.RuleID)
 
@@ -896,6 +903,7 @@ func TestHandleClassify_SkipsAnalytics_When_ClientGone(t *testing.T) {
 	cancel()
 	req := httptest.NewRequest(http.MethodPost, "/api/hooks/classify", bytes.NewReader(classifyRequestBody(t, classifier.PermissionRequestPayload{ToolName: "Bash"}, nil))).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(classifier.HookSigHeader, classifier.SignRequestBody(testHookToken, classifyRequestBody(t, classifier.PermissionRequestPayload{ToolName: "Bash"}, nil)))
 	h.HandleClassify(httptest.NewRecorder(), req)
 
 	require.Empty(t, analytics.ch)
@@ -1000,4 +1008,39 @@ func TestHandleClassify_ReportsServerConfigDir(t *testing.T) {
 	h, _ := newClassifyHandler(t, stubClassifier{})
 	resp := classifyResult(t, h, classifier.PermissionRequestPayload{ToolName: "Bash"}, nil)
 	assert.Equal(t, want, resp.ConfigDir)
+}
+
+// TestHandleClassify_RejectsUnauthenticated_BeforeAnyWork: an unsigned or wrongly signed request
+// gets 401 and causes neither classification nor an analytics write.
+func TestHandleClassify_RejectsUnauthenticated_BeforeAnyWork(t *testing.T) {
+	t.Parallel()
+	h, analytics := newClassifyHandler(t, stubClassifier{})
+	body := classifyRequestBody(t, classifier.PermissionRequestPayload{ToolName: "Bash"}, nil)
+
+	for name, sig := range map[string]string{
+		"missing":          "",
+		"wrong secret":     classifier.SignRequestBody([]byte("ffffffffffffffffffffffffffffffff"), body),
+		"signs other body": classifier.SignRequestBody(testHookToken, []byte(`{}`)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/hooks/classify", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			if sig != "" {
+				req.Header.Set(classifier.HookSigHeader, sig)
+			}
+			rec := httptest.NewRecorder()
+			h.HandleClassify(rec, req)
+			require.Equal(t, http.StatusUnauthorized, rec.Code)
+		})
+	}
+	require.Empty(t, analytics.ch)
+}
+
+// TestHandleClassify_ServiceUnavailable_When_NoHookToken: with no secret configured the
+// endpoint is disabled rather than open.
+func TestHandleClassify_ServiceUnavailable_When_NoHookToken(t *testing.T) {
+	t.Parallel()
+	h, _ := newClassifyHandler(t, stubClassifier{})
+	h.SetHookToken(nil)
+	require.Equal(t, http.StatusServiceUnavailable, postClassify(h, []byte(`{}`), "application/json").Code)
 }

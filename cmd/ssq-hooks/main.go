@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -816,6 +818,9 @@ const remoteClassifyMaxResponseBytes = 1 << 20
 // bad JSON, a response without the protocol version marker — so handleCheck falls back to its
 // local path; the server is not guaranteed to be running.
 //
+// The state directory's hook token authenticates the server (see classifier.HookTokenFile);
+// a response without a valid proof for this call's nonce is discarded.
+//
 // wantConfigDir is the state directory this process would load rules from; a response from a
 // server serving a different one is discarded.
 //
@@ -827,7 +832,17 @@ const remoteClassifyMaxResponseBytes = 1 << 20
 // baseURL and lookupEnv are parameters rather than package vars so tests inject an
 // httptest.Server and a fake environment directly.
 func tryRemoteClassify(payload classifier.PermissionRequestPayload, baseURL, wantConfigDir string, lookupEnv func(string) (string, bool)) (result classifier.ClassificationResult, ok bool) {
-	req := classifier.RemoteClassifyRequest{Payload: payload}
+	// No readable, 0600 token means no way to authenticate the server: stay local.
+	token, err := classifier.ReadHookToken(wantConfigDir)
+	if err != nil {
+		return classifier.ClassificationResult{}, false
+	}
+	nonceBytes := make([]byte, 16)
+	if _, err := rand.Read(nonceBytes); err != nil {
+		return classifier.ClassificationResult{}, false
+	}
+	nonce := hex.EncodeToString(nonceBytes)
+	req := classifier.RemoteClassifyRequest{Payload: payload, Nonce: nonce}
 	if cmd, _ := payload.ToolInput["command"].(string); strings.EqualFold(payload.ToolName, "Bash") && cmd != "" {
 		for _, name := range classifier.ReferencedEnvVars(cmd) {
 			val, set := lookupEnv(name)
@@ -850,6 +865,7 @@ func tryRemoteClassify(payload classifier.PermissionRequestPayload, baseURL, wan
 		return classifier.ClassificationResult{}, false
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set(classifier.HookSigHeader, classifier.SignRequestBody(token, body))
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return classifier.ClassificationResult{}, false
@@ -865,6 +881,11 @@ func tryRemoteClassify(payload classifier.PermissionRequestPayload, baseURL, wan
 	// ClassificationDecision's zero value is AutoAllow, so a decoded-but-empty body must
 	// never count as a decision.
 	if out.Version != classifier.RemoteClassifyProtocolVersion {
+		return classifier.ClassificationResult{}, false
+	}
+	// Only a process that can read the 0600 token can produce a valid proof for this nonce, so
+	// another listener on the port cannot forge an AutoAllow.
+	if !classifier.VerifyResponseProof(token, nonce, out) {
 		return classifier.ClassificationResult{}, false
 	}
 	// The server must hold the same rule state this process would load locally: same instance,

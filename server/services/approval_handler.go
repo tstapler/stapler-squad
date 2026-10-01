@@ -77,6 +77,7 @@ type ApprovalHandler struct {
 	eventBus            *events.EventBus
 	queueChecker        ReviewQueueChecker          // optional: triggers immediate review queue check on new approval
 	classifier          classifier.Classifier       // optional: auto-classify before escalating to manual review
+	hookToken           []byte                      // optional: HMAC key for /api/hooks/classify; nil = endpoint disabled
 	analyticsStore      *AnalyticsStore             // optional: record classification decisions
 	domainChecker       *DomainAgeChecker           // optional: escalate requests to newly-registered domains
 	notificationStamper approvalNotificationStamper // optional: stamps approval outcomes on notification records
@@ -148,6 +149,12 @@ func (h *ApprovalHandler) SetQueueChecker(checker ReviewQueueChecker) {
 // before they reach the manual review queue.
 func (h *ApprovalHandler) SetClassifier(c classifier.Classifier) {
 	h.classifier = c
+}
+
+// SetHookToken sets the shared secret authenticating /api/hooks/classify callers and answers
+// (see classifier.HookTokenFile). Without it the endpoint answers 503 and clients fall back.
+func (h *ApprovalHandler) SetHookToken(token []byte) {
+	h.hookToken = token
 }
 
 // SetAnalyticsStore injects an AnalyticsStore for recording classification decisions.
@@ -711,7 +718,7 @@ func (h *ApprovalHandler) HandleClassify(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if h.classifier == nil {
+	if h.classifier == nil || len(h.hookToken) == 0 {
 		http.Error(w, "classifier not configured", http.StatusServiceUnavailable)
 		return
 	}
@@ -723,9 +730,19 @@ func (h *ApprovalHandler) HandleClassify(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, classifyMaxBodyBytes))
+	if err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	// Authenticate before parsing or doing any work: an unsigned caller must not trigger git
+	// subprocesses or analytics writes.
+	if !classifier.VerifyRequestBody(h.hookToken, raw, r.Header.Get(classifier.HookSigHeader)) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 	var req classifier.RemoteClassifyRequest
-	r.Body = http.MaxBytesReader(w, r.Body, classifyMaxBodyBytes)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(raw, &req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
@@ -758,6 +775,7 @@ func (h *ApprovalHandler) HandleClassify(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "application/json")
 	resp := classifier.RemoteClassifyResponse{Version: classifier.RemoteClassifyProtocolVersion, Result: result}
 	resp.ConfigDir, _ = config.GetConfigDir()
+	resp.Proof = classifier.ResponseProof(h.hookToken, req.Nonce, resp)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Warn("Failed to write /api/hooks/classify response", "err", err)
 	}

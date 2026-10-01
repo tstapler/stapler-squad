@@ -12,6 +12,8 @@ type RemoteClassifyRequest struct {
 	// expands from this map only, never its own environment (ClassificationContext.IsolatedEnv), so a command is judged on the
 	// same text the caller's shell would run.
 	Env map[string]string `json:"env,omitempty"`
+	// Nonce is a fresh random value the server must echo into RemoteClassifyResponse.Proof.
+	Nonce string `json:"nonce"`
 }
 
 // RemoteClassifyResponse is the POST /api/hooks/classify response body.
@@ -22,6 +24,9 @@ type RemoteClassifyResponse struct {
 	// matches the directory it would have loaded rules from itself (instance, workspace and
 	// preferred-workspace selection all change it).
 	ConfigDir string `json:"config_dir"`
+	// Proof is ResponseProof(token, request nonce, this response); the client rejects the
+	// response unless it verifies.
+	Proof string `json:"proof"`
 }
 
 // ReferencedEnvVars returns the distinct variable names a command references via $VAR or
