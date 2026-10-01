@@ -35,6 +35,7 @@ import { getStatusLabel } from "@/lib/backlog/status";
 import { compareByRepoPath, groupByRepoPath } from "@/lib/backlog/sortGroup";
 import { ALL_STATUSES, BACKLOG_FILTER_FIELDS, filterBacklogItems } from "@/lib/hooks/useBacklogFilters";
 import { BacklogFilterBar } from "@/components/backlog/BacklogFilterBar";
+import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import * as styles from "./backlog.css";
 
 // ---------------------------------------------------------------------------
@@ -224,6 +225,7 @@ function BacklogPageInner() {
   usePageView();
   const { track } = useAnalytics();
   const { createBacklogItem, importGitHubIssue, triggerTriage } = useBacklogService();
+  const { openOmnibar } = useOmnibar();
   const router = useRouter();
   const searchParams = useSearchParams();
   const dispatch = useAppDispatch();
@@ -665,6 +667,18 @@ function BacklogPageInner() {
             data-testid="backlog-tour-button"
           >
             ?
+          </button>
+          <button
+            className={styles.newItemButton}
+            onClick={() => {
+              track({ name: "backlog_ai_intake", category: "user_action", component: "BacklogPage" });
+              openOmnibar("backlog: ");
+            }}
+            aria-label="Create backlog item via AI intake"
+            data-testid="backlog-ai-intake-button"
+            style={{ marginRight: "8px", background: "var(--accent, #6366f1)" }}
+          >
+            ✨ AI Intake
           </button>
           <button
             className={styles.newItemButton}
