@@ -29,3 +29,15 @@ var lookupFn = (&resolver{}).Lookup
 func useLookupFn() string {
 	return lookupFn()
 }
+
+// bumped is incremented outside tests (`+=`), so it is a real mutable var, not a test-only
+// seam — must not be flagged even though a test also assigns it.
+var bumped = 0
+
+func bumpMore() { bumped += 2 }
+
+// addrTaken has its address taken outside tests (e.g. handed to a flag/setter), so it is
+// mutable by real code — must not be flagged.
+var addrTaken = "x"
+
+func takeAddr() *string { return &addrTaken }

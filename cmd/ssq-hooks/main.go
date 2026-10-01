@@ -23,7 +23,6 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session"
-	"gopkg.in/yaml.v3"
 )
 
 func main() {
@@ -96,13 +95,17 @@ func handleCheck() {
 		}
 	}
 
-	result, ok := tryRemoteClassify(payload, defaultSsqHooksBaseURL)
-	if !ok {
-		storagePath := *dbPath
-		if storagePath == "" {
-			storagePath = getDBPathForCwd(payload.Cwd)
-		}
+	storagePath := *dbPath
+	if storagePath == "" {
+		storagePath = getDBPathForCwd(payload.Cwd)
+	}
 
+	var result classifier.ClassificationResult
+	ok := false
+	if home, err := os.UserHomeDir(); err == nil && remoteClassifyApplicable(*dbPath, storagePath, home) {
+		result, ok = tryRemoteClassify(payload, defaultSsqHooksBaseURL, os.LookupEnv)
+	}
+	if !ok {
 		storage := loadStorage(storagePath)
 		defer storage.Close()
 
@@ -649,78 +652,14 @@ func loadClassifier(storage *session.Storage) *classifier.RuleBasedClassifier {
 	}
 	c.AddRules(classifierRules)
 
-	// Also load config file rules from ~/.config/stapler-squad/shared_rules.yaml.
-	configPath := filepath.Join(os.Getenv("HOME"), ".config", "stapler-squad", "shared_rules.yaml")
-	if data, err := os.ReadFile(configPath); err == nil { // #nosec G304 -- configPath is built from $HOME plus a fixed filename, not caller input.
-		var configFile struct {
-			Rules []struct {
-				Name           string   `yaml:"name"`
-				Tool           string   `yaml:"tool"`
-				ToolPattern    string   `yaml:"tool_pattern"`
-				Programs       []string `yaml:"programs"`
-				Subcommands    []string `yaml:"subcommands"`
-				BlockedSubs    []string `yaml:"blocked_subcommands"`
-				CommandPattern string   `yaml:"command_pattern"`
-				FilePattern    string   `yaml:"file_pattern"`
-				Decision       string   `yaml:"decision"`
-				Priority       int      `yaml:"priority"`
-				Enabled        *bool    `yaml:"enabled"`
-			} `yaml:"rules"`
-		}
-		if yamlErr := yaml.Unmarshal(data, &configFile); yamlErr == nil {
-			var configRules []classifier.Rule
-			for _, r := range configFile.Rules {
-				if r.Name == "" {
-					continue
-				}
-				enabled := true
-				if r.Enabled != nil {
-					enabled = *r.Enabled
-				}
-				priority := r.Priority
-				if priority == 0 {
-					priority = 10
-				}
-				decision := classifier.Escalate
-				switch r.Decision {
-				case "allow":
-					decision = classifier.AutoAllow
-				case "deny":
-					decision = classifier.AutoDeny
-				}
-				cr := classifier.Rule{
-					ToolName: r.Tool,
-					Decision: decision,
-					RuleMeta: classifier.RuleMeta{ID: "config-" + strings.ReplaceAll(r.Name, " ", "-"), Name: r.Name, Priority: priority, Enabled: enabled, Source: "config"},
-				}
-				if r.ToolPattern != "" {
-					if compiled, err := regexp.Compile(r.ToolPattern); err == nil {
-						cr.ToolPattern = compiled
-					}
-				}
-				if r.CommandPattern != "" {
-					if compiled, err := regexp.Compile(r.CommandPattern); err == nil {
-						cr.CommandPattern = compiled
-					}
-				}
-				if r.FilePattern != "" {
-					if compiled, err := regexp.Compile(r.FilePattern); err == nil {
-						cr.FilePattern = compiled
-					}
-				}
-				if len(r.Programs) > 0 || len(r.Subcommands) > 0 || len(r.BlockedSubs) > 0 {
-					cr.Criteria = &classifier.CommandCriteria{
-						Programs:           r.Programs,
-						Subcommands:        r.Subcommands,
-						BlockedSubcommands: r.BlockedSubs,
-					}
-				}
-				configRules = append(configRules, cr)
-			}
-			if len(configRules) > 0 {
-				c.AddRules(configRules)
-			}
-		}
+	// shared_rules.yaml is parsed by the same loader the server hot-reloads, so the remote and
+	// local classification paths cannot drift apart.
+	configRules, err := classifier.LoadConfigFileRules(classifier.ConfigFileRulesPath(os.Getenv("HOME")))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+	}
+	if len(configRules) > 0 {
+		c.AddRules(configRules)
 	}
 
 	return c
@@ -851,42 +790,74 @@ const defaultSsqHooksBaseURL = "http://localhost:8543"
 // already costs today — a loopback HTTP round trip is normally sub-millisecond.
 const remoteClassifyTimeout = 75 * time.Millisecond
 
+// remoteClassifyApplicable reports whether the live :8543 server holds the same rule state this
+// process would load locally: no --db override, and the per-cwd DB resolved from the environment
+// (STAPLER_SQUAD_INSTANCE, workspace mode, test dir) is the default one. Otherwise the server
+// would classify against a different instance's rules.
+func remoteClassifyApplicable(dbFlag, resolvedDB, home string) bool {
+	return dbFlag == "" && resolvedDB == filepath.Join(home, ".stapler-squad", "sessions.db")
+}
+
+// remoteClassifyMaxResponseBytes caps the response read so a hostile listener on the port
+// cannot make every hook call buffer unbounded data.
+const remoteClassifyMaxResponseBytes = 1 << 20
+
 // tryRemoteClassify asks the already-running stapler-squad server's warm in-memory classifier
 // (server/services/approval_handler.go's HandleClassify) to classify payload, instead of this
 // process opening its own SQLite handle and rebuilding the classifier from config on every
 // single invocation. Returns ok=false on any failure — connection refused, timeout, non-200,
-// bad JSON — so handleCheck falls back to its existing local path unchanged; the server is not
-// guaranteed to be running (e.g. `make install-service` never ran, or it's mid-restart).
+// bad JSON, a response without the protocol version marker — so handleCheck falls back to its
+// local path; the server is not guaranteed to be running.
 //
-// baseURL is a parameter (handleCheck always passes defaultSsqHooksBaseURL) rather than a
-// package var, so tests can point this at an httptest.Server directly instead of mutating
-// shared global state.
-func tryRemoteClassify(payload classifier.PermissionRequestPayload, baseURL string) (result classifier.ClassificationResult, ok bool) {
-	body, err := json.Marshal(payload)
+// A Bash command's referenced $VARs are sent with their values from this process's
+// environment, so the server expands them as this shell would. If any referenced variable is
+// unset here, the remote path is skipped: the server cannot express "unset", and the local path
+// leaves such references verbatim.
+//
+// baseURL and lookupEnv are parameters rather than package vars so tests inject an
+// httptest.Server and a fake environment directly.
+func tryRemoteClassify(payload classifier.PermissionRequestPayload, baseURL string, lookupEnv func(string) (string, bool)) (result classifier.ClassificationResult, ok bool) {
+	req := classifier.RemoteClassifyRequest{Payload: payload}
+	if cmd, _ := payload.ToolInput["command"].(string); strings.EqualFold(payload.ToolName, "Bash") && cmd != "" {
+		for _, name := range classifier.ReferencedEnvVars(cmd) {
+			val, set := lookupEnv(name)
+			if !set {
+				return classifier.ClassificationResult{}, false
+			}
+			if req.Env == nil {
+				req.Env = map[string]string{}
+			}
+			req.Env[name] = val
+		}
+	}
+	body, err := json.Marshal(req)
 	if err != nil {
 		return classifier.ClassificationResult{}, false
 	}
-
 	client := http.Client{Timeout: remoteClassifyTimeout}
-	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/hooks/classify", bytes.NewReader(body))
+	httpReq, err := http.NewRequest(http.MethodPost, baseURL+"/api/hooks/classify", bytes.NewReader(body))
 	if err != nil {
 		return classifier.ClassificationResult{}, false
 	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return classifier.ClassificationResult{}, false
 	}
 	defer func() { _ = resp.Body.Close() }()
-
 	if resp.StatusCode != http.StatusOK {
 		return classifier.ClassificationResult{}, false
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	var out classifier.RemoteClassifyResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, remoteClassifyMaxResponseBytes)).Decode(&out); err != nil {
 		return classifier.ClassificationResult{}, false
 	}
-	return result, true
+	// ClassificationDecision's zero value is AutoAllow, so a decoded-but-empty body must
+	// never count as a decision.
+	if out.Version != classifier.RemoteClassifyProtocolVersion {
+		return classifier.ClassificationResult{}, false
+	}
+	return out.Result, true
 }
 
 // installClaude copies the ssq-hooks binary to ~/.local/bin and registers it as

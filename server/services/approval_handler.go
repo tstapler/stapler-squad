@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path"
@@ -700,6 +701,9 @@ func (h *ApprovalHandler) HandlePiExtensionLoaded(w http.ResponseWriter, r *http
 // back to its own native permission prompt instead of hanging on a queue entry no UI is
 // showing for this ad hoc, session-less request.
 //
+// classifyMaxBodyBytes caps a /api/hooks/classify request body.
+const classifyMaxBodyBytes = 1 << 20
+
 // +http: POST /api/hooks/classify hooks:classify
 func (h *ApprovalHandler) HandleClassify(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -712,23 +716,44 @@ func (h *ApprovalHandler) HandleClassify(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	var payload classifier.PermissionRequestPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+	// A browser page can send a no-preflight text/plain POST; requiring JSON forces a preflight
+	// that the server's CORS allowlist rejects.
+	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/json" {
+		http.Error(w, "content type must be application/json", http.StatusUnsupportedMediaType)
 		return
 	}
 
+	var req classifier.RemoteClassifyRequest
+	r.Body = http.MaxBytesReader(w, r.Body, classifyMaxBodyBytes)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	payload := req.Payload
+
 	start := time.Now()
 	classCtx := h.classifier.BuildContext(payload.Cwd)
+	// Expand $VAR from the caller's environment only — BuildContext seeded the server's own.
+	classCtx.Env = req.Env
+	if classCtx.Env == nil {
+		classCtx.Env = map[string]string{}
+	}
 	result := h.classifier.Classify(payload, classCtx)
 	durationMs := time.Since(start).Milliseconds()
 
-	if h.analyticsStore != nil {
-		h.analyticsStore.RecordFromResult(payload, result, "", "", durationMs, "ssq-hooks-remote")
+	// If the client already timed out it falls back to its own local path, which records
+	// analytics too; recording here as well would count the same call twice.
+	if h.analyticsStore != nil && r.Context().Err() == nil {
+		source := payload.Source
+		if source == "" {
+			source = "claude"
+		}
+		h.analyticsStore.RecordFromResult(payload, result, "", "", durationMs, source)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(result); err != nil {
+	resp := classifier.RemoteClassifyResponse{Version: classifier.RemoteClassifyProtocolVersion, Result: result}
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Warn("Failed to write /api/hooks/classify response", "err", err)
 	}
 }

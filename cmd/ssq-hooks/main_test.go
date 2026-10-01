@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1033,45 +1034,91 @@ func TestWriteOpenCodeHookDecision_Escalate(t *testing.T) {
 	assert.NotContains(t, res.Stderr, "SSQ-Hooks: blocked", "escalate reason should use its own prefix, not AutoDeny's")
 }
 
-// TestTryRemoteClassify_ReturnsResult_OnSuccess proves the happy path: a warm server
-// responding 200 with a JSON ClassificationResult is decoded and returned as ok=true,
-// exercising the fast path handleCheck now prefers over its own cold local classification.
+func fakeEnv(env map[string]string) func(string) (string, bool) {
+	return func(k string) (string, bool) { v, ok := env[k]; return v, ok }
+}
+
+func bashPayload(cmd string) classifier.PermissionRequestPayload {
+	return classifier.PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": cmd}}
+}
+
+func classifyServer(t *testing.T, handler http.HandlerFunc) string {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// TestTryRemoteClassify_ReturnsResult_OnSuccess: a versioned 200 response is decoded and
+// returned, and the request carries the payload plus only the $VARs the command references.
 func TestTryRemoteClassify_ReturnsResult_OnSuccess(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var got classifier.RemoteClassifyRequest
+	url := classifyServer(t, func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Equal(t, "/api/hooks/classify", r.URL.Path)
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(classifier.ClassificationResult{
-			Decision: classifier.AutoDeny,
-			RuleID:   "remote-rule",
+		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+		_ = json.NewEncoder(w).Encode(classifier.RemoteClassifyResponse{
+			Version: classifier.RemoteClassifyProtocolVersion,
+			Result:  classifier.ClassificationResult{Decision: classifier.AutoDeny, RuleID: "remote-rule"},
 		})
-	}))
-	defer srv.Close()
+	})
 
-	result, ok := tryRemoteClassify(classifier.PermissionRequestPayload{ToolName: "Bash"}, srv.URL)
+	result, ok := tryRemoteClassify(bashPayload("rm -rf $TARGET ${OTHER}"), url, fakeEnv(map[string]string{"TARGET": "/", "OTHER": "x", "UNREFERENCED": "secret"}))
 	require.True(t, ok)
 	assert.Equal(t, classifier.AutoDeny, result.Decision)
 	assert.Equal(t, "remote-rule", result.RuleID)
+	assert.Equal(t, map[string]string{"TARGET": "/", "OTHER": "x"}, got.Env)
 }
 
-// TestTryRemoteClassify_FallsBack_When_ServerUnreachable proves the failure path: hitting a
-// port nothing is listening on returns ok=false instead of hanging or panicking, so
-// handleCheck's fallback to local classification actually triggers when the server isn't
-// running — the common case on a machine that hasn't run `make install-service`.
+// TestTryRemoteClassify_FallsBack covers every response that must NOT be trusted as a decision.
+// The {} and null cases matter most: ClassificationDecision's zero value is AutoAllow, so
+// accepting them would silently allow every tool call.
+func TestTryRemoteClassify_FallsBack(t *testing.T) {
+	cases := map[string]http.HandlerFunc{
+		"non-200":        func(w http.ResponseWriter, r *http.Request) { http.Error(w, "nope", http.StatusServiceUnavailable) },
+		"html 200":       func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "<!DOCTYPE html><html></html>") },
+		"malformed json": func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, `{"version":`) },
+		"empty object":   func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, `{}`) },
+		"null":           func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, `null`) },
+		"bare result (no version)": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(classifier.ClassificationResult{Decision: classifier.AutoAllow})
+		},
+		"wrong version": func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, `{"version":99,"result":{}}`) },
+		"slower than timeout": func(w http.ResponseWriter, r *http.Request) {
+			time.Sleep(remoteClassifyTimeout * 4)
+		},
+	}
+	for name, h := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, ok := tryRemoteClassify(bashPayload("ls"), classifyServer(t, h), fakeEnv(nil))
+			require.False(t, ok)
+		})
+	}
+}
+
+// TestTryRemoteClassify_FallsBack_When_ServerUnreachable: nothing listening → ok=false, so the
+// local path runs on a machine whose server isn't up.
 func TestTryRemoteClassify_FallsBack_When_ServerUnreachable(t *testing.T) {
-	_, ok := tryRemoteClassify(classifier.PermissionRequestPayload{ToolName: "Bash"}, "http://127.0.0.1:1") // reserved, nothing listens here
+	_, ok := tryRemoteClassify(bashPayload("ls"), "http://127.0.0.1:1", fakeEnv(nil)) // reserved, nothing listens here
 	require.False(t, ok)
 }
 
-// TestTryRemoteClassify_FallsBack_When_NonOKStatus proves a non-200 response (e.g. the
-// server's classifier isn't wired, HandleClassify's 503 path) is treated as ok=false rather
-// than decoded as a bogus zero-value result.
-func TestTryRemoteClassify_FallsBack_When_NonOKStatus(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "classifier not configured", http.StatusServiceUnavailable)
-	}))
-	defer srv.Close()
-
-	_, ok := tryRemoteClassify(classifier.PermissionRequestPayload{ToolName: "Bash"}, srv.URL)
+// TestTryRemoteClassify_SkipsRemote_When_ReferencedVarUnset: the server cannot express "unset",
+// so the call must not even reach it.
+func TestTryRemoteClassify_SkipsRemote_When_ReferencedVarUnset(t *testing.T) {
+	called := false
+	url := classifyServer(t, func(w http.ResponseWriter, r *http.Request) { called = true })
+	_, ok := tryRemoteClassify(bashPayload("echo $NOT_SET"), url, fakeEnv(nil))
 	require.False(t, ok)
+	assert.False(t, called)
+}
+
+func TestRemoteClassifyApplicable(t *testing.T) {
+	home := "/home/u"
+	def := filepath.Join(home, ".stapler-squad", "sessions.db")
+	assert.True(t, remoteClassifyApplicable("", def, home))
+	assert.False(t, remoteClassifyApplicable("/tmp/x.db", "/tmp/x.db", home), "--db override")
+	assert.False(t, remoteClassifyApplicable("", filepath.Join(home, ".stapler-squad", "instances", "t", "sessions.db"), home), "named instance")
+	assert.False(t, remoteClassifyApplicable("", filepath.Join(home, ".stapler-squad", "workspaces", "w", "sessions.db"), home), "workspace mode")
 }

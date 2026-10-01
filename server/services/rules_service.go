@@ -577,7 +577,7 @@ func (rs *RulesService) rebuildClassifier() {
 		userRules := rs.rulesStore.ToRules()
 		existing := rs.classifier.Rules()
 		rs.afterRebuildReadHook() // test-only: see field doc comment
-		nonUser := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceClaudeSettings)
+		nonUser := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceClaudeSettings, classifier.SourceConfig)
 		rs.classifier.ReplaceRules(append(nonUser, userRules...))
 	}()
 	// Per ADR-004: reconciliation runs asynchronously, after rebuildMu releases, so the
@@ -597,7 +597,7 @@ func (rs *RulesService) rebuildClaudeSettingsRules(newClaudeRules []classifier.R
 
 		existing := rs.classifier.Rules()
 		rs.afterRebuildReadHook() // test-only: see field doc comment
-		kept := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceUser)
+		kept := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceUser, classifier.SourceConfig)
 		rs.classifier.ReplaceRules(append(kept, newClaudeRules...))
 	}()
 	// See rebuildClassifier's identical comment above — same ADR-004 rationale.

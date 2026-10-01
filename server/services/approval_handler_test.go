@@ -778,88 +778,169 @@ func TestInjectHookConfig_ConcurrentWritesToSameRootDir_NeverProduceCorruptJSON(
 
 // stubClassifier is a minimal classifier.Classifier for HandleClassify tests — returns a
 // fixed decision regardless of input so the test isolates HandleClassify's HTTP plumbing
-// (method/JSON validation, response encoding, analytics recording) from real rule matching.
+// from real rule matching, and records the context Classify was called with.
 type stubClassifier struct {
 	result classifier.ClassificationResult
+	gotCtx *classifier.ClassificationContext
 }
 
-func (s stubClassifier) Classify(classifier.PermissionRequestPayload, classifier.ClassificationContext) classifier.ClassificationResult {
+func (s stubClassifier) Classify(_ classifier.PermissionRequestPayload, ctx classifier.ClassificationContext) classifier.ClassificationResult {
+	if s.gotCtx != nil {
+		*s.gotCtx = ctx
+	}
 	return s.result
 }
 
 func (s stubClassifier) BuildContext(cwd string) classifier.ClassificationContext {
-	return classifier.ClassificationContext{Cwd: cwd}
+	// Seeded like the real BuildContext, so tests can prove HandleClassify overrides it.
+	return classifier.ClassificationContext{Cwd: cwd, Env: map[string]string{"SERVER_ONLY": "leak"}}
 }
 
-// TestHandleClassify_ReturnsClassifierResult_AsJSON is the happy-path test: a POST with a
-// valid payload gets back exactly the classifier's decision as JSON, and it's recorded to
-// analytics — proving the stateless remote-classify path (cmd/ssq-hooks's tryRemoteClassify)
-// gets a usable response from the server's warm classifier without going through the
-// session-scoped, potentially-blocking HandlePermissionRequest flow.
-func TestHandleClassify_ReturnsClassifierResult_AsJSON(t *testing.T) {
-	t.Parallel()
+func newClassifyHandler(t *testing.T, c classifier.Classifier) (*ApprovalHandler, *AnalyticsStore) {
+	t.Helper()
 	bus := events.NewEventBus(4)
-	defer bus.Close()
+	t.Cleanup(bus.Close)
 	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
-	h.SetClassifier(stubClassifier{result: classifier.ClassificationResult{
-		Decision: classifier.AutoAllow,
-		Reason:   "test rule matched",
-		RuleID:   "test-rule",
-	}})
-	analytics := NewAnalyticsStore(nil)
-	h.SetAnalyticsStore(analytics)
-
-	payload := classifier.PermissionRequestPayload{
-		Cwd:      "/tmp/example",
-		ToolName: "Bash",
-		ToolInput: map[string]interface{}{
-			"command": "ls",
-		},
+	if c != nil {
+		h.SetClassifier(c)
 	}
-	body, err := json.Marshal(payload)
-	require.NoError(t, err)
+	analytics := NewAnalyticsStore(nil) // never Started: recorded entries stay in analytics.ch
+	h.SetAnalyticsStore(analytics)
+	return h, analytics
+}
 
+func classifyRequestBody(t *testing.T, payload classifier.PermissionRequestPayload, env map[string]string) []byte {
+	t.Helper()
+	body, err := json.Marshal(classifier.RemoteClassifyRequest{Payload: payload, Env: env})
+	require.NoError(t, err)
+	return body
+}
+
+func postClassify(h *ApprovalHandler, body []byte, contentType string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/api/hooks/classify", bytes.NewReader(body))
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
 	rec := httptest.NewRecorder()
 	h.HandleClassify(rec, req)
+	return rec
+}
+
+// TestHandleClassify_ReturnsVersionedResult_AndRecordsAnalytics is the happy path: the response
+// carries the protocol version marker plus the classifier's decision, and exactly one analytics
+// row is recorded with source defaulted to "claude" (comparable with the permission path).
+func TestHandleClassify_ReturnsVersionedResult_AndRecordsAnalytics(t *testing.T) {
+	t.Parallel()
+	h, analytics := newClassifyHandler(t, stubClassifier{result: classifier.ClassificationResult{
+		Decision: classifier.AutoDeny, Reason: "test rule matched", RuleID: "test-rule",
+	}})
+
+	body := classifyRequestBody(t, classifier.PermissionRequestPayload{
+		Cwd: "/tmp/example", ToolName: "Bash", ToolInput: map[string]interface{}{"command": "ls"},
+	}, nil)
+	rec := postClassify(h, body, "application/json")
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	var result classifier.ClassificationResult
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
-	require.Equal(t, classifier.AutoAllow, result.Decision)
-	require.Equal(t, "test-rule", result.RuleID)
+	var resp classifier.RemoteClassifyResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, classifier.RemoteClassifyProtocolVersion, resp.Version)
+	require.Equal(t, classifier.AutoDeny, resp.Result.Decision)
+	require.Equal(t, "test-rule", resp.Result.RuleID)
+
+	require.Len(t, analytics.ch, 1)
+	entry := <-analytics.ch
+	require.Equal(t, "claude", entry.Source)
+	require.Equal(t, "ls", entry.CommandPreview)
 }
 
-// TestHandleClassify_MethodNotAllowed_OnGet proves the endpoint rejects non-POST requests
-// rather than silently classifying on any method.
+// TestHandleClassify_UsesCallerEnv_NotServerEnv proves $VAR expansion inputs come from the
+// request, so a command is judged on the text the caller's shell would run.
+func TestHandleClassify_UsesCallerEnv_NotServerEnv(t *testing.T) {
+	t.Parallel()
+	var got classifier.ClassificationContext
+	h, _ := newClassifyHandler(t, stubClassifier{gotCtx: &got})
+
+	postClassify(h, classifyRequestBody(t, classifier.PermissionRequestPayload{ToolName: "Bash"}, map[string]string{"TARGET": "/"}), "application/json")
+	require.Equal(t, map[string]string{"TARGET": "/"}, got.Env)
+
+	postClassify(h, classifyRequestBody(t, classifier.PermissionRequestPayload{ToolName: "Bash"}, nil), "application/json")
+	require.NotNil(t, got.Env, "nil Env would let the classifier fall back to os.LookupEnv expansion")
+	require.Empty(t, got.Env)
+}
+
+// TestHandleClassify_Escalate_ReturnedAsIs_WithoutQueueing proves Escalate is passed through
+// untouched and nothing is queued for human review (the doc comment's promise).
+func TestHandleClassify_Escalate_ReturnedAsIs_WithoutQueueing(t *testing.T) {
+	t.Parallel()
+	h, _ := newClassifyHandler(t, stubClassifier{result: classifier.ClassificationResult{Decision: classifier.Escalate}})
+
+	rec := postClassify(h, classifyRequestBody(t, classifier.PermissionRequestPayload{ToolName: "Bash"}, nil), "application/json")
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp classifier.RemoteClassifyResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, classifier.Escalate, resp.Result.Decision)
+	require.Empty(t, h.store.ListAll(), "classify must not enqueue a review entry")
+}
+
+// TestHandleClassify_SkipsAnalytics_When_ClientGone proves a request whose context is already
+// cancelled (client hit its timeout and is classifying locally) does not double-record.
+func TestHandleClassify_SkipsAnalytics_When_ClientGone(t *testing.T) {
+	t.Parallel()
+	h, analytics := newClassifyHandler(t, stubClassifier{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodPost, "/api/hooks/classify", bytes.NewReader(classifyRequestBody(t, classifier.PermissionRequestPayload{ToolName: "Bash"}, nil))).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
+	h.HandleClassify(httptest.NewRecorder(), req)
+
+	require.Empty(t, analytics.ch)
+}
+
+// TestHandleClassify_RejectsBadRequests covers the request validation branches.
+func TestHandleClassify_RejectsBadRequests(t *testing.T) {
+	t.Parallel()
+	h, analytics := newClassifyHandler(t, stubClassifier{})
+	valid := classifyRequestBody(t, classifier.PermissionRequestPayload{ToolName: "Bash"}, nil)
+	oversized := append([]byte(`{"payload":{"tool_name":"`), bytes.Repeat([]byte("a"), classifyMaxBodyBytes+1)...)
+
+	cases := []struct {
+		name, contentType string
+		body              []byte
+		want              int
+	}{
+		{"invalid json", "application/json", []byte(`{"payload":`), http.StatusBadRequest},
+		{"oversized body", "application/json", oversized, http.StatusBadRequest},
+		{"text/plain (no-preflight browser POST)", "text/plain", valid, http.StatusUnsupportedMediaType},
+		{"missing content type", "", valid, http.StatusUnsupportedMediaType},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, postClassify(h, tc.body, tc.contentType).Code)
+		})
+	}
+	require.Empty(t, analytics.ch, "rejected requests must not write analytics")
+}
+
+// TestHandleClassify_MethodNotAllowed_OnGet proves the endpoint rejects non-POST requests.
 func TestHandleClassify_MethodNotAllowed_OnGet(t *testing.T) {
 	t.Parallel()
-	bus := events.NewEventBus(4)
-	defer bus.Close()
-	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
-	h.SetClassifier(stubClassifier{result: classifier.ClassificationResult{Decision: classifier.AutoAllow}})
+	h, _ := newClassifyHandler(t, stubClassifier{})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/hooks/classify", nil)
 	rec := httptest.NewRecorder()
-	h.HandleClassify(rec, req)
+	h.HandleClassify(rec, httptest.NewRequest(http.MethodGet, "/api/hooks/classify", nil))
 
 	require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
 }
 
-// TestHandleClassify_ServiceUnavailable_When_ClassifierNil proves a server with no
-// classifier wired (h.classifier == nil, the zero-value ApprovalHandler) returns 503 instead
-// of panicking — cmd/ssq-hooks's tryRemoteClassify treats any non-200 as "fall back to local
-// classification", so this just needs to not be a 200 with a bogus body.
+// TestHandleClassify_ServiceUnavailable_When_ClassifierNil proves a server with no classifier
+// wired returns 503 instead of panicking; the client treats any non-200 as "fall back local".
 func TestHandleClassify_ServiceUnavailable_When_ClassifierNil(t *testing.T) {
 	t.Parallel()
-	bus := events.NewEventBus(4)
-	defer bus.Close()
-	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
-	// Deliberately never call h.SetClassifier — h.classifier stays nil.
+	h, _ := newClassifyHandler(t, nil)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/hooks/classify", bytes.NewReader([]byte(`{}`)))
-	rec := httptest.NewRecorder()
-	h.HandleClassify(rec, req)
+	rec := postClassify(h, []byte(`{}`), "application/json")
 
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
 }

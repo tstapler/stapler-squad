@@ -61,3 +61,26 @@ func TestOverridesLookupFn(t *testing.T) {
 	defer func() { lookupFn = orig }()
 	_ = useLookupFn()
 }
+
+func TestAssignsRuntimeMutated(t *testing.T) {
+	bumped = 0
+	addrTaken = "y"
+}
+
+// Test-only compound/incdec/address-of mutations are caught too. The blank line before each
+// var keeps this prose from becoming its Doc comment.
+
+var tickCount = 0 // want `var tickCount is only reassigned in test files`
+
+func TestIncrements(t *testing.T) { tickCount++ }
+
+var accumulated = 0 // want `var accumulated is only reassigned in test files`
+
+func TestCompound(t *testing.T) { accumulated += 3 }
+
+var viaPointer = "a" // want `var viaPointer is only reassigned in test files`
+
+func TestAddressOf(t *testing.T) {
+	p := &viaPointer
+	*p = "b"
+}

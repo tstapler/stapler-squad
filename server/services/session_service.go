@@ -787,6 +787,11 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 			fmt.Sprintf("%d claude-settings rule(s) reloaded (%s).", len(rules), origin), origin)
 	})
 	rulesSvc.SetClaudeSettingsWatcher(claudeSettingsWatcher)
+	// Hot-reload shared_rules.yaml (gated on IsTestMode like the claude-settings load above, so
+	// tests never read the developer's real home directory).
+	if home, homeErr := os.UserHomeDir(); homeErr == nil && !config.IsTestMode() {
+		rulesSvc.StartConfigFileRulesReload(context.Background(), classifier.ConfigFileRulesPath(home), configFileRulesPollInterval)
+	}
 	rulesSvc.SetApprovalService(approvalSvc)
 
 	// Initialize capacity monitor.
