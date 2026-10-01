@@ -99,6 +99,44 @@ dispatching a duplicate implementation session that would find nothing to change
 `project_plans/backlog-already-implemented/` for why that outcome is itself a known,
 costly failure mode if not headed off explicitly here).
 
+## Root Cause (2026-09-30, from code; sources are file:line)
+
+Byte (VERIFIED): the Enter sent is CR, not LF — `EnterKeySequence = "\r"`
+(`session/instance_tmux.go:1428`), the same 0x0D that `TapEnter` writes
+(`session/tmux/tmux.go` `TapEnter`). BUG-047 already fixed an earlier LF-vs-CR bug, so
+CR-vs-LF is NOT the cause here.
+
+Timing (VERIFIED, pre-#832): all three tools built ONE string and wrote it once —
+`write_to_session`: `session.BuildSubmittableInput(input, pressEnter)` then
+`inst.SendKeys(text)`; `run_command`: `inst.SendKeys(session.BuildSubmittableInputAndSubmit(command))`
+(`git show e2085dec4^:server/mcp/tools_terminal.go`, lines ~295-300, ~556, ~706 for
+`steer_session`). `TmuxSession.SendKeys` is a single raw `file.Write([]byte(keys))` on
+the PTY master (`session/tmux/tmux.go` `SendKeys`), no pause, no bracketed-paste markers.
+So content and the trailing `\r` reach the TUI in one burst.
+
+Mechanism (INFERRED, not reproduced pre-fix here): Claude Code's Ink TUI treats a burst
+of input as a paste, so a trailing `\r` inside that window is folded into the pasted
+block instead of submitting. Source: BUG-031's postmortem
+(`docs/bugs/fixed/BUG-031-autonomous-driver-large-prompt-paste-not-submitted.md`), which
+records a live reproduction and says this timing bug cannot be forced deterministically
+in a unit test. The tool returned `success:true` because a PTY write succeeding says
+nothing about the TUI acting on it.
+
+Fix (VERIFIED in `main`, PR #832): `SubmitDriverContent` (`session/pane_submit.go:77`)
+writes content, waits for the pane to settle (150 ms poll, 2 s max), writes `\r` as a
+separate write, confirms a pane change, retries the `\r` once, else returns
+`ErrSubmitNotConfirmed`. `SubmitContentWithEnter` (`:117`) is the shared wrapper
+used by all three tools (`server/mcp/tools_terminal.go:314,582,712`).
+
+Known limitation (deliberately not fixed here): the confirmation only checks that the
+pane CHANGED after Enter (`waitForPaneUpdate`), not that the input line cleared, so an
+unrelated redraw can read as a confirmed submit. Checking the input line would mean
+parsing Claude Code's prompt box out of a captured pane: brittle across TUI versions
+and programs (aider, shells), and not unit-testable against the real paste-detector
+timing (BUG-031 says that race cannot be forced deterministically). Not a small,
+testable change, so left as a follow-up if a swallowed submit is ever observed after
+`SubmitDriverContent`'s retry.
+
 ## Baseline
 
 - Before PR #832 (through 2026-09-20): confirmed broken — `content+"\r"` sent as one

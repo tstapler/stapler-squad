@@ -897,6 +897,27 @@ func createTestEntRepository(t *testing.T) (*EntRepository, func()) {
 	return repo, func() {}
 }
 
+func TestEntRepository_should_PersistPinned_AcrossCreateAndUnrelatedUpdate(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	data := createTestSession("pin-roundtrip")
+	data.Pinned = true
+	require.NoError(t, repo.Create(ctx, data))
+
+	got, err := repo.Get(ctx, data.Title)
+	require.NoError(t, err)
+	assert.True(t, got.Pinned)
+
+	got.Category = "Other"
+	require.NoError(t, repo.Update(ctx, *got))
+	got, err = repo.Get(ctx, data.Title)
+	require.NoError(t, err)
+	assert.True(t, got.Pinned, "unrelated update must not reset pinned")
+}
+
 func TestEntRepository_Delete_StampsConversationUUIDOnItemSessions(t *testing.T) {
 	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)

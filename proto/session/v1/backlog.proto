@@ -1345,6 +1345,10 @@ message BacklogItemEvent {
   // published bus event and must not participate in the frontend's
   // afterSeq/gap-detection bookkeeping (see useWatchBacklogItems.ts).
   uint64 seq = 8;
+
+  // Synthetic marker (oneof left unset) sent periodically on an otherwise-
+  // idle connection -- see SessionEvent.heartbeat's identical doc comment.
+  bool heartbeat = 11;
 }
 
 // BacklogItemStatusChangedEvent is emitted when an item's status transitions

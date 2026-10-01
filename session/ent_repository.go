@@ -252,7 +252,8 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 		SetAutoApprove(data.AutoApprove).
 		SetAutonomousMode(data.AutonomousMode).
 		SetProgram(data.Program).
-		SetIsExpanded(data.IsExpanded)
+		SetIsExpanded(data.IsExpanded).
+		SetPinned(data.Pinned)
 
 	// Set optional fields
 	if data.WorkingDir != "" {
@@ -495,7 +496,8 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 		SetAutoApprove(data.AutoApprove).
 		SetAutonomousMode(data.AutonomousMode).
 		SetProgram(data.Program).
-		SetIsExpanded(data.IsExpanded)
+		SetIsExpanded(data.IsExpanded).
+		SetPinned(data.Pinned)
 
 	// Update optional fields
 	if data.WorkingDir != "" {
@@ -1331,6 +1333,7 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 		MCPServerURL:        sess.McpServerURL,
 		OneShot:             sess.OneShot,
 		Hidden:              sess.Hidden,
+		Pinned:              sess.Pinned,
 	}
 
 	// Set optional time fields

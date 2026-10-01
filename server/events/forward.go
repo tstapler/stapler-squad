@@ -33,6 +33,11 @@ const (
 
 	// FieldStatus is the UpdatedFields entry marking a session status change.
 	FieldStatus = pkgevents.FieldStatus
+
+	// HeartbeatInterval is how often every Watch* streaming RPC sends a
+	// synthetic heartbeat on an otherwise-idle connection (see pkg/events'
+	// doc comment).
+	HeartbeatInterval = pkgevents.HeartbeatInterval
 )
 
 // BacklogChangeKind constants (mirrors pkg/events/types.go).

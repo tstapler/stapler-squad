@@ -39,6 +39,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/session/sshremote"
+	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tokens"
 
@@ -97,6 +98,10 @@ type SessionService struct {
 	eventBus          *events.EventBus
 	statusManager     *session.InstanceStatusManager
 	reviewQueuePoller *session.ReviewQueuePoller
+
+	// tapRegistry backs SetCaptureTap/GetCaptureTap. nil means the process-wide
+	// streamhub.DefaultTapRegistry, which is what the terminal streams use.
+	tapRegistry *streamhub.TapRegistry
 
 	// sessionTagPoller drives the Phase 4 LLM fallback tag classification
 	// (session-classifier-pipeline Epic 4.4). nil when HeadlessPool is nil (no
@@ -4436,11 +4441,18 @@ func (s *SessionService) WatchSessions(
 	}
 
 	// Stream events until client disconnects or context is canceled
+	heartbeat := time.NewTicker(events.HeartbeatInterval)
+	defer heartbeat.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			// Client disconnected or context canceled
 			return nil
+		case <-heartbeat.C:
+			if err := stream.Send(&sessionv1.SessionEvent{Timestamp: timestamppb.Now(), Heartbeat: true}); err != nil {
+				return fmt.Errorf("failed to send session heartbeat: %w", err)
+			}
 		case event, ok := <-eventCh:
 			if !ok {
 				// Event channel closed (should not happen with proper cleanup)
@@ -6479,6 +6491,53 @@ func (s *SessionService) UnarchiveSession(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
 	}
 	return connect.NewResponse(&sessionv1.UnarchiveSessionResponse{}), nil
+}
+
+// +api: session:pin
+// PinSession pins a session so it surfaces in the dedicated Pinned section.
+// Idempotent. Archived sessions are rejected (archiving always auto-unpins).
+func (s *SessionService) PinSession(
+	ctx context.Context,
+	req *connect.Request[sessionv1.PinSessionRequest],
+) (*connect.Response[sessionv1.PinSessionResponse], error) {
+	if err := s.setPinned(req.Msg.SessionId, true); err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&sessionv1.PinSessionResponse{}), nil
+}
+
+// +api: session:unpin
+// UnpinSession clears the pinned flag, restoring normal grouped position. Idempotent.
+func (s *SessionService) UnpinSession(
+	ctx context.Context,
+	req *connect.Request[sessionv1.UnpinSessionRequest],
+) (*connect.Response[sessionv1.UnpinSessionResponse], error) {
+	if err := s.setPinned(req.Msg.SessionId, false); err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&sessionv1.UnpinSessionResponse{}), nil
+}
+
+func (s *SessionService) setPinned(sessionID string, pinned bool) error {
+	if sessionID == "" {
+		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
+	}
+	inst := s.FindLiveInstance(sessionID)
+	if inst == nil {
+		return connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", sessionID))
+	}
+	if err := inst.SetPinned(pinned); err != nil {
+		if errors.Is(err, session.ErrCannotPinArchivedSession) {
+			return connect.NewError(connect.CodeFailedPrecondition, err)
+		}
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update pin: %w", err))
+	}
+	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
+	}
+	// Push to other browsers' WatchSessions streams so a pin made in one appears in all.
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"pinned"}))
+	return nil
 }
 
 // +api: session:archive-workflow-sessions

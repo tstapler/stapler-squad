@@ -580,6 +580,13 @@ export const overflowMenuItem = style({
   },
 });
 
+// WCAG 2.5.5 / mobile: 44px minimum touch target for coarse pointers.
+export const overflowMenuItemTouch = style({
+  "@media": {
+    "(pointer: coarse), (max-width: 768px)": { minHeight: "44px" },
+  },
+});
+
 export const overflowMenuItemDanger = style({
   color: vars.color.errorText, // was #991b1b
   selectors: {

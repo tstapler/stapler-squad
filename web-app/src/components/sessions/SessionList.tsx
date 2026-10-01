@@ -1,4 +1,5 @@
 "use client";
+// +feature: session-pinned-section
 
 import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
@@ -15,7 +16,7 @@ import { SessionListEmptyState } from "./SessionListEmptyState";
 import { SessionListSkeleton } from "./SessionListSkeleton";
 import { BulkActions } from "./BulkActions";
 import { TagEditor } from "./TagEditor";
-import { GroupingStrategy, GroupingStrategyLabels, cycleGroupingStrategy } from "@/lib/grouping/strategies";
+import { GroupingStrategy, GroupingStrategyLabels, PINNED_GROUP_KEY, cycleGroupingStrategy } from "@/lib/grouping/strategies";
 import { ColumnKey, DEFAULT_VISIBLE_COLUMNS } from "./session-columns";
 import { usePersistedViewState, type PersistedFieldsConfig } from "@/lib/hooks/usePersistedViewState";
 import { useStaleSessionConfig } from "@/lib/hooks/useStaleSessionConfig";
@@ -80,6 +81,7 @@ export interface SessionListProps {
   onForkFromCheckpoint?: (sessionId: string, checkpointId: string, newTitle: string) => Promise<Session | null>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
+  onTogglePinned?: (sessionId: string, pinned: boolean) => void;
   onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
   onSteerAutonomousSession?: (sessionId: string, message: string) => Promise<boolean> | void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
@@ -128,6 +130,7 @@ interface SessionRowHandlers {
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onSetRateLimitEnabled?: (id: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (id: string, enabled: boolean) => void;
+  onTogglePinned?: (id: string, pinned: boolean) => void;
   onToggleAutoApprove?: (id: string, enabled: boolean) => void;
   onSteerAutonomousSession?: (id: string, message: string) => Promise<boolean> | void;
   onClearConversationState?: (id: string) => Promise<boolean>;
@@ -170,6 +173,7 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
   onCreateCheckpoint,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
+  onTogglePinned,
   onToggleAutoApprove,
   onSteerAutonomousSession,
   onClearConversationState,
@@ -195,6 +199,7 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
       onCreateCheckpoint={onCreateCheckpoint}
       onSetRateLimitEnabled={onSetRateLimitEnabled}
       onToggleAutonomousMode={onToggleAutonomousMode}
+      onTogglePinned={onTogglePinned}
       onToggleAutoApprove={onToggleAutoApprove}
       onSteerAutonomousSession={onSteerAutonomousSession}
       onClearConversationState={onClearConversationState}
@@ -363,6 +368,7 @@ export function SessionList({
   onForkFromCheckpoint,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
+  onTogglePinned,
   onToggleAutoApprove,
   onSteerAutonomousSession,
   onClearConversationState,
@@ -1205,6 +1211,7 @@ export function SessionList({
                   <div
                     role="heading"
                     aria-level={3}
+                    data-testid={item.groupKey === PINNED_GROUP_KEY ? "pinned-section-header" : undefined}
                     className={categoryTitle}
                     style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}
                     onClick={(e) => {
@@ -1345,6 +1352,7 @@ export function SessionList({
                     onCreateCheckpoint={onCreateCheckpoint}
                     onSetRateLimitEnabled={onSetRateLimitEnabled}
                     onToggleAutonomousMode={onToggleAutonomousMode}
+                    onTogglePinned={onTogglePinned}
                     onToggleAutoApprove={onToggleAutoApprove}
                     onSteerAutonomousSession={onSteerAutonomousSession}
                     onClearConversationState={onClearConversationState}
@@ -1383,6 +1391,7 @@ export function SessionList({
               <div
                 role="heading"
                 aria-level={3}
+                data-testid={groupKey === PINNED_GROUP_KEY ? "pinned-section-header" : undefined}
                 className={categoryTitle}
                 style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}
                 onClick={(e) => {
@@ -1531,6 +1540,7 @@ export function SessionList({
                   onForkFromCheckpoint={onForkFromCheckpoint}
                   onSetRateLimitEnabled={onSetRateLimitEnabled}
                   onToggleAutonomousMode={onToggleAutonomousMode}
+                  onTogglePinned={onTogglePinned}
                   onToggleAutoApprove={onToggleAutoApprove}
                   onSteerAutonomousSession={onSteerAutonomousSession}
                   onClearConversationState={onClearConversationState}
