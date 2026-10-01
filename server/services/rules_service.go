@@ -129,6 +129,7 @@ func (rs *RulesService) UpsertApprovalRule(
 
 	// Rebuild classifier rules.
 	rs.rebuildClassifier()
+	rs.syncAntigravityPermissions()
 
 	log.Info("[RulesService] upserted rule", "id", saved.ID, "create", isCreate)
 	return connect.NewResponse(&sessionv1.UpsertApprovalRuleResponse{
@@ -149,6 +150,7 @@ func (rs *RulesService) DeleteApprovalRule(
 		return nil, connect.NewError(connect.CodeNotFound, err)
 	}
 	rs.rebuildClassifier()
+	rs.syncAntigravityPermissions()
 	log.Info("[RulesService] deleted rule", "id", req.Msg.Id)
 	return connect.NewResponse(&sessionv1.DeleteApprovalRuleResponse{
 		Success: true,
@@ -440,6 +442,16 @@ func (rs *RulesService) rebuildClassifier() {
 		}
 	}
 	rs.classifier.ReplaceRules(append(nonUser, userRules...))
+}
+
+// syncAntigravityPermissions best-effort-exports the current user rule set to
+// Antigravity's permissions.allow (see antigravity_permissions_export.go).
+// Logged, not propagated: a local file-sync failure shouldn't fail the
+// triggering rule CRUD RPC.
+func (rs *RulesService) syncAntigravityPermissions() {
+	if err := SyncAntigravityPermissions(rs.rulesStore.ToRules()); err != nil {
+		log.Warn("[RulesService] failed to sync Antigravity permissions", "err", err)
+	}
 }
 
 // -- Mapping helpers ----------------------------------------------------------
