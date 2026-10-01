@@ -25,8 +25,17 @@ const hookTokenBytes = 32
 // LoadOrCreateHookToken returns the token in dir, creating it (dir 0700, file 0600) if absent.
 // Server side.
 func LoadOrCreateHookToken(dir string) ([]byte, error) {
-	if tok, err := ReadHookToken(dir); err == nil {
+	path := filepath.Join(dir, HookTokenFile)
+	tok, err := ReadHookToken(dir)
+	if err == nil {
 		return tok, nil
+	}
+	// A file that exists but is unusable (partial write, wrong mode) would otherwise leave the
+	// endpoint disabled until someone deletes it by hand.
+	if !os.IsNotExist(err) {
+		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+			return nil, fmt.Errorf("replace unusable %s: %w", path, rmErr)
+		}
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create %s: %w", dir, err)
@@ -35,7 +44,6 @@ func LoadOrCreateHookToken(dir string) ([]byte, error) {
 	if _, err := rand.Read(raw); err != nil {
 		return nil, fmt.Errorf("generate hook token: %w", err)
 	}
-	path := filepath.Join(dir, HookTokenFile)
 	// O_EXCL so two starting processes cannot each write a different token.
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- fixed filename under the state dir.
 	if err != nil {
@@ -100,7 +108,8 @@ func VerifyRequestBody(token, body []byte, sig string) bool {
 // response cannot be replayed for another request or another decision.
 func ResponseProof(token []byte, nonce string, r RemoteClassifyResponse) string {
 	return hmacHex(token, "resp", nonce, strconv.Itoa(r.Version), r.ConfigDir,
-		strconv.Itoa(int(r.Result.Decision)), r.Result.RuleID, r.Result.Reason, r.Result.Alternative)
+		strconv.Itoa(int(r.Result.Decision)), strconv.Itoa(int(r.Result.RiskLevel)), r.Result.RuleID,
+		r.Result.RuleName, r.Result.Source, r.Result.Reason, r.Result.Alternative)
 }
 
 // VerifyResponseProof checks r.Proof against nonce in constant time.

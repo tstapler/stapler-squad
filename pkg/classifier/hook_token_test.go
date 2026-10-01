@@ -73,6 +73,31 @@ func TestResponseProof_BindsNonceAndDecision(t *testing.T) {
 	flipped.Result.Decision = AutoAllow
 	assert.False(t, VerifyResponseProof(tok, "nonce-1", flipped), "decision tampered")
 
+	for name, mutate := range map[string]func(*RemoteClassifyResponse){
+		"risk level": func(r *RemoteClassifyResponse) { r.Result.RiskLevel = RiskCritical },
+		"rule name":  func(r *RemoteClassifyResponse) { r.Result.RuleName = "x" },
+		"source":     func(r *RemoteClassifyResponse) { r.Result.Source = "x" },
+		"reason":     func(r *RemoteClassifyResponse) { r.Result.Reason = "x" },
+		"config dir": func(r *RemoteClassifyResponse) { r.ConfigDir = "/x" },
+	} {
+		tampered := resp
+		mutate(&tampered)
+		assert.False(t, VerifyResponseProof(tok, "nonce-1", tampered), name)
+	}
+
 	forged := RemoteClassifyResponse{Version: 1, ConfigDir: "/c"} // zero Decision == AutoAllow, no proof
 	assert.False(t, VerifyResponseProof(tok, "nonce-1", forged))
+}
+
+func TestLoadOrCreateHookToken_ReplacesUnusableFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, HookTokenFile)
+	require.NoError(t, os.WriteFile(path, []byte("partial"), 0o600))
+
+	tok, err := LoadOrCreateHookToken(dir)
+	require.NoError(t, err)
+	assert.Len(t, tok, hookTokenBytes)
+	again, err := ReadHookToken(dir)
+	require.NoError(t, err)
+	assert.Equal(t, tok, again)
 }
