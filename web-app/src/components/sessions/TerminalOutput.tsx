@@ -56,7 +56,10 @@ import { TerminalStreamManager } from "@/lib/terminal/TerminalStreamManager";
 import { createViewportSettle, createRafScheduler, DEFAULT_STABLE_FRAMES, DEFAULT_MAX_WAIT_MS } from "@/lib/terminal/viewportSettle";
 import { mobileDebug } from "@/lib/terminal/mobileDebug";
 import { toolbarPageAction, PAGE_UP_BYTES, PAGE_DOWN_BYTES, type ScrollMode } from "@/lib/terminal/scrollRouting";
-import { createNetPagesUpTracker } from "@/lib/terminal/scrollPosition";
+import { createNetPagesUpTracker, MIN_ROWS_FOR_OVERLAYS } from "@/lib/terminal/scrollPosition";
+import { scrollSettings, type ScrollOverride } from "@/lib/terminal/scrollOverride";
+import { srOnly } from "@/components/ui/LiveRegion.css";
+import { ScrollingPanel, ScrollModeChip, SCROLL_OPTIONS, shouldRenderPanelAsOverlay, useMisrouteCue } from "./ScrollingPanel";
 import { useEffectiveScrollMode, useScrollSettings } from "@/lib/hooks/useEffectiveScrollMode";
 import { getCachedDimensions, saveDimensions, validateCellDimensions } from "@/lib/terminal/TerminalDimensionCache";
 import { DEFAULT_TERMINAL_CONFIG } from "@/lib/config/terminalConfig";
@@ -111,6 +114,9 @@ const DROP_EPISODE_COALESCE_WINDOW_MS = 400;
 
 // Matches XtermTerminal's assumed first scroll mode, so only real changes are reported.
 const INITIAL_SCROLL_MODE: ScrollMode = { bufferType: "normal", mouseTrackingMode: "none" };
+
+const SCROLL_PICKER_PANEL_ROWS = 10;
+const SCROLL_FULL_PANEL_ROWS = 20;
 
 export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSessionName, isVisible, shellId, onShellStatusChange, scheduleResync }: TerminalOutputProps) {
   const { track } = useAnalytics();
@@ -826,10 +832,42 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     );
   }, []);
   const effectiveScroll = useEffectiveScrollMode(scrollMode, scrollOverride, gestureScrollEnabled);
+
+  // Scrolling chip / picker / full panel (ux.md S6). Rows come from the terminal's own resize report.
+  const [scrollPanel, setScrollPanel] = useState<"picker" | "full" | null>(null);
+  const [terminalRows, setTerminalRows] = useState(0);
+  // Host-owned live region: the picker unmounts on select, so its own announcement would be lost.
+  const [scrollAnnouncement, setScrollAnnouncement] = useState("");
+  const scrollChipRef = useRef<HTMLButtonElement>(null);
+  const misrouteCue = useMisrouteCue();
+  const getTouchSurface = useCallback(() => terminalContainerRef.current, []);
+  const reportMisroute = misrouteCue.report;
   const scrollGestureProps = useMemo<ScrollGestureProps>(
-    () => ({ scrollOverride, gestureScrollEnabled, connectionEpoch }),
-    [scrollOverride, gestureScrollEnabled, connectionEpoch],
+    () => ({ scrollOverride, gestureScrollEnabled, connectionEpoch, onScrollGesture: reportMisroute }),
+    [scrollOverride, gestureScrollEnabled, connectionEpoch, reportMisroute],
   );
+  const handleScrollOverrideChange = useCallback(
+    (value: ScrollOverride) => {
+      scrollSettings.setOverride(value);
+      if (scrollPanel === "picker") {
+        const label = SCROLL_OPTIONS.find((o) => o.value === value)?.announce ?? value;
+        setScrollAnnouncement(`Scroll mode: ${label}`);
+      }
+    },
+    [scrollPanel],
+  );
+  const closeScrollPanel = useCallback(() => setScrollPanel(null), []);
+  const openScrollPicker = useCallback(() => setScrollPanel((p) => (p === "picker" ? null : "picker")), []);
+  const toggleScrollFullPanel = useCallback(() => setScrollPanel((p) => (p === "full" ? null : "full")), []);
+  const openScrollFullPanel = useCallback(() => setScrollPanel("full"), []);
+  // Approximate panel heights in terminal rows (picker: 3 radios + 2 buttons; full: adds switch and notes).
+  // Only used to decide inline vs overlay, so a rough constant is enough.
+  const panelRowsEstimate = scrollPanel === "full" ? SCROLL_FULL_PANEL_ROWS : SCROLL_PICKER_PANEL_ROWS;
+  const panelAsOverlay = shouldRenderPanelAsOverlay(terminalRows - panelRowsEstimate);
+  const panelMaxHeight =
+    panelAsOverlay && terminalRows > MIN_ROWS_FOR_OVERLAYS && containerSize.height > 0
+      ? Math.round((containerSize.height * (terminalRows - MIN_ROWS_FOR_OVERLAYS)) / terminalRows)
+      : undefined;
 
   // TUI page-key estimate fed by toolbar presses; the jump button that reads it is mounted separately.
   const [netPagesUp] = useState(createNetPagesUpTracker);
@@ -890,6 +928,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // Handle terminal resize with size stability detection
   const handleTerminalResize = useCallback((cols: number, rows: number) => {
     console.log(`[TerminalOutput] Terminal resized to ${cols}x${rows}`);
+    setTerminalRows(rows);
 
     const lastResize = lastResizeRef.current;
     const sizeChanged = !lastResize || lastResize.cols !== cols || lastResize.rows !== rows;
@@ -1670,6 +1709,15 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       },
     },
     {
+      key: 'scrolling',
+      icon: '↕️',
+      label: 'Scrolling',
+      ariaLabel: 'Scrolling settings',
+      title: 'How dragging scrolls, and gesture scrolling',
+      extraClass: '',
+      handler: toggleScrollFullPanel,
+    },
+    {
       key: 'mouse',
       icon: '🖱️',
       label: mouseMode === 'none' ? 'Mouse' : 'Mouse ON',
@@ -1770,6 +1818,21 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           >
             ↔️ Redraw
           </button>
+          {/* Scroll mode chip — outside the toolbarExpanded conditional so it is reachable with the toolbar collapsed */}
+          <ScrollModeChip
+            effectiveTarget={effectiveScroll.target}
+            gestureScrollEnabled={gestureScrollEnabled}
+            onClick={openScrollPicker}
+            visibleRows={terminalRows}
+            highlighted={misrouteCue.highlighted}
+            announcement={misrouteCue.announcement}
+            suppressAnnouncements={scrollPanel !== null}
+            getTouchSurface={getTouchSurface}
+            buttonRef={scrollChipRef}
+          />
+          <div role="status" aria-live="polite" className={srOnly} data-testid="scroll-mode-announcer">
+            {scrollAnnouncement}
+          </div>
           {toolbarExpanded && (
             <div className={styles.toolbarActions} data-testid="toolbar-actions">
               {/* Secondary actions (Copy, Paste, Bottom, Clear, Mouse) — inline on desktop, hidden on mobile */}
@@ -1968,6 +2031,21 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             </button>
           ))}
         </div>
+      )}
+      {scrollPanel && (
+        <ScrollingPanel
+          variant={scrollPanel}
+          override={scrollOverride}
+          onOverrideChange={handleScrollOverrideChange}
+          effectiveTarget={effectiveScroll.target}
+          gestureScrollEnabled={gestureScrollEnabled}
+          onGestureScrollChange={scrollSettings.setGestureScroll}
+          onClose={closeScrollPanel}
+          onOpenFull={openScrollFullPanel}
+          openerRef={scrollChipRef}
+          renderAsOverlay={panelAsOverlay}
+          maxHeight={panelMaxHeight}
+        />
       )}
       <div className={styles.terminal} ref={terminalContainerRef}>
         {showReconnectBanner && !isHardFailed && (
