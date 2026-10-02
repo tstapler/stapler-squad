@@ -126,9 +126,11 @@ func (r configRuleSpec) toRule() (Rule, error) {
 	return cr, nil
 }
 
+// compilePattern returns a nil regexp for an unset (empty) pattern, which Rule treats as "no
+// constraint".
 func compilePattern(field, pattern string) (*regexp.Regexp, error) {
 	if pattern == "" {
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil means "pattern not set"; callers rely on it
 	}
 	compiled, err := regexp.Compile(pattern)
 	if err != nil {
