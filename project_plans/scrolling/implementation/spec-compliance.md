@@ -359,3 +359,18 @@ Nothing below was run in this sweep or evidenced in the repo. Every row is NOT R
 | `CI=true make registry-generate` | Ran. No tracked change under `docs/registry` is attributable to this work; it emitted 6 untracked backend RPC JSONs for unrelated Go RPCs (not committed) and the scanner's pnpm install touched tracked files under `tools/scanner/frontend/node_modules` (not committed). The scanner did not emit per-feature files for the new markers `terminal-scroll-settings` and `terminal-jump-to-latest` (reason not investigated) |
 | `make quick-check`, `make ready` | Not run |
 | Coverage (`--coverage`) | Not run |
+
+## 6. Follow-up pass (gap closure, 2026-10-02)
+
+| Gap | Result |
+|---|---|
+| Registry: no per-feature files for `terminal-scroll-settings`, `terminal-jump-to-latest` | Root cause: the frontend scanner (`tools/scanner/frontend/src/main.ts`, `make registry-generate-frontend`) writes only the gitignored monolithic `frontend-features.json`; per-feature files under `docs/registry/features/frontend/` are hand-authored. Markers were already detected (ran the scanner to `/tmp`: both IDs found, `terminal-pre-sizing` too). Added `terminal-scroll-settings.json` and `terminal-jump-to-latest.json` by hand; `aggregate.py` reads them (128 features). `terminal-pre-sizing` still has no per-feature file (pre-existing, not touched). `tools/scanner/README.md` still claims the frontend scanner writes per-feature files; not edited. |
+| Gap 1 (S9 touchcancel mismatch) | CLOSED: ux.md S9 SCROLLING touchcancel row now says IDLE; plan.md Story 1.2.10 task wording aligned; validation.md had no conflicting wording. |
+| Gap 2 (empty-buffer drag no-op) | CLOSED: `useTerminalGestures.ts` `xterm-local` dispatch returns when `buffer.active.length === 0`; `scrollDrag_should_BeNoop_When_BufferEmpty` fails without the guard (verified) and passes with it. Applies to the local route only; TUI routes still send page keys. |
+| Gap 3 (netPagesUp reset on epoch) | CLOSED: `netPagesUp_should_Invalidate_When_ConnectionEpochChanges` in `TerminalOutput.scrollingUi.test.tsx` (full-snapshot bump -> `invalidate("reconnect")`, jump button hidden). |
+| Extra tests | `netPagesUp_should_Invalidate_When_ViewportSettles` (settle path calls `invalidate("resize")`); `jumpToLatest_should_NotInvalidateEstimate_When_ItsOwnPageDownIsSent`; `jumpToLatest_should_UseRecreatedTerminal_When_ResizeReportsANewInstance`; `toggle_should_RouteNextDragToPgKeys_When_TuiSelected` as a real-drag hook test in `useTerminalGestures.test.ts`. |
+| JumpToLatestMount terminal capture | No code bug found: `TerminalOutput.handleTerminalResize` calls `setJumpTerminal(xtermRef.current?.terminal ?? null)` on every resize report, not only the first, so a new instance is picked up on the next `onResize`. Residual: a recreated terminal that never fires `onResize` is not picked up (not changed). |
+| Gap 6 (hint test file) | CLOSED by updating validation.md (REQ-10, UX-29, REQ-15, UX-21, UX-32 rows) to the real file/test names. |
+| Hygiene | `tsc --noEmit` 0 lines; terminal jest subset 48 suites / 730 tests pass; full jest 441/442 suites, 5707/5710 tests pass (3 failures only in `LocalFileBrowser.test.tsx`, pre-existing); `pnpm run lint:duplicates` exit 0. |
+
+Still open: gap 4 (Story 2.1.6), gap 5 (Story 3.1.2 e2e), all device items, `ROUTING_VERIFIED=false`, `make ready`/`make quick-check`.

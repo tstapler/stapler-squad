@@ -642,7 +642,7 @@ Source: `research/qos.md` #18 (a reference recipe throttles wheel events to abou
 - Files: the two test files above
 
 ##### Task 1.2.10b: Implement in the state machine and the hook (green)
-- Add the CANCELLED transitions for `touchcancel` and horizontal-first, set the tap threshold to `SLOP_PX`, and the selection-clear branch. Re-run the 1.2.4a anchors (the one intended anchor change is the widened tap tolerance, recorded in the PR).
+- Add the CANCELLED transition for horizontal-first (`touchcancel` while SCROLLING goes to IDLE), set the tap threshold to `SLOP_PX`, and the selection-clear branch. Re-run the 1.2.4a anchors (the one intended anchor change is the widened tap tolerance, recorded in the PR).
 - Files: `lib/terminal/gestureMachine.ts`, `lib/hooks/useTerminalGestures.ts`
 
 #### Story 1.2.3: Overscroll / pull-to-refresh hardening
