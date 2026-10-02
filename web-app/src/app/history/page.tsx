@@ -314,7 +314,7 @@ function HistoryBrowserPageInner() {
       </div>
 
       {error && (
-        <div className={styles.errorBanner}>
+        <div className={styles.errorBanner} role="alert">
           <div className={styles.errorContent}>
             <span className={styles.errorIcon}>⚠️</span>
             <div>

@@ -138,14 +138,11 @@ export function UnfinishedSourcesSettings() {
         </div>
 
         <div className={styles.addRow}>
-          <input
-            type="text"
-            className={styles.input}
-            placeholder="/Users/you/my-project"
+          <RepoPathInput
             value={newPinnedRepo}
-            onChange={(e) => setNewPinnedRepo(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleAddPinnedRepo()}
-            aria-label="New pinned repository path"
+            onChange={setNewPinnedRepo}
+            placeholder="/Users/you/my-project"
+            data-testid="pinned-repo-input"
           />
           <button
             className={styles.addBtn}

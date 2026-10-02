@@ -28,6 +28,8 @@ import { createConnectTransport } from "@connectrpc/connect-web";
 jest.mock("@connectrpc/connect");
 jest.mock("@connectrpc/connect-web");
 jest.mock("@/lib/config", () => ({ getApiBaseUrl: () => "http://localhost" }));
+jest.mock("@/lib/hooks/useGitHubEnterpriseHosts", () => ({ useGitHubEnterpriseHosts: () => [] }));
+jest.mock("@/lib/hooks/useSessionRepoPaths", () => ({ useSessionRepoPaths: () => [] }));
 
 // Mock vanilla-extract CSS modules to return empty strings
 jest.mock("./AliasesManager.css", () => {
@@ -330,6 +332,17 @@ describe("AliasesManager", () => {
     // Collapse
     fireEvent.click(advancedCheckbox);
     expect(screen.queryByRole("button", { name: "Add variable" })).not.toBeInTheDocument();
+  });
+
+  it("uses the rich path field (RepoPathInput) for the alias path", async () => {
+    mockListAliases.mockResolvedValue({ aliases: [] });
+    render(<AliasesManager />);
+    await waitFor(() => screen.getByText("No aliases configured."));
+
+    fireEvent.click(screen.getByRole("button", { name: "New Alias" }));
+    const pathField = screen.getByLabelText("Path");
+    expect(pathField).toHaveAttribute("role", "combobox");
+    expect(pathField).toHaveAttribute("aria-autocomplete", "list");
   });
 
   it("shows error when upsertAlias RPC fails", async () => {

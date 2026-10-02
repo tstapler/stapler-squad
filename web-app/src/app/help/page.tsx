@@ -15,10 +15,14 @@ export default function HelpPage() {
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
   const [fuseIndex, setFuseIndex] = useState<Fuse<DocEntry> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setLoadError(false);
     loadDocs()
       .then((entries) => {
         if (cancelled) return;
@@ -31,7 +35,7 @@ export default function HelpPage() {
         }
       })
       .catch(() => {
-        // silently handle fetch errors — filtered/docs remain empty
+        if (!cancelled) setLoadError(true);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -39,7 +43,7 @@ export default function HelpPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadTick]);
 
   const handleSearch = useCallback(
     (value: string) => {
@@ -92,6 +96,11 @@ export default function HelpPage() {
       <main className={styles.articlePane}>
         {loading ? (
           <div className={styles.loadingContainer}>Loading documentation…</div>
+        ) : loadError ? (
+          <div className={styles.loadingContainer} role="alert" data-testid="help-load-error">
+            Couldn&apos;t load the documentation.{" "}
+            <button onClick={() => setReloadTick((t) => t + 1)}>Retry</button>
+          </div>
         ) : selectedDoc ? (
           <article className={styles.markdownBody}>
             <ReactMarkdown remarkPlugins={[remarkGfm]}>
