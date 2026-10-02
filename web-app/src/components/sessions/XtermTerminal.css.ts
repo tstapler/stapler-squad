@@ -58,6 +58,7 @@ export const terminal = style({
   // All touch handling is delegated to useTerminalGestures so the terminal
   // scroll never leaks into the page scroll.
   touchAction: "none",
+  overscrollBehavior: "contain",
 });
 
 // Global styles for xterm.js elements within the terminal container
