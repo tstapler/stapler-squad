@@ -236,8 +236,10 @@ describe('useTerminalGestures', () => {
       fireTouchStart(100, 100);
       // First move > 8px to enter SCROLLING
       fireTouchMove(80, 100);
-      // Second move while SCROLLING — should call scrollLines
+      // Second move while SCROLLING — scrollLines is rAF-coalesced (rafThrottlePoint),
+      // so it only fires once the fake animation frame is flushed.
       fireTouchMove(40, 100);
+      jest.advanceTimersByTime(16);
 
       expect((terminalRef.current as any).scrollLines).toHaveBeenCalled();
     });
@@ -330,6 +332,259 @@ describe('useTerminalGestures', () => {
         c[0]?.startsWith('\x1b[M'),
       );
       expect(calls.length).toBe(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Task 1.2.4a — characterization anchors (current, unmodified hook behavior)
+  // -------------------------------------------------------------------------
+  describe('characterization anchors (Task 1.2.4a)', () => {
+    /** Give the container a fake .xterm-screen so dispatched synthetic mouse events are observable. */
+    function withScreen() {
+      const screen = { dispatchEvent: jest.fn() };
+      (fakeContainer.el.querySelector as jest.Mock).mockReturnValue(screen);
+      return screen;
+    }
+    const dispatchedTypes = (screen: { dispatchEvent: jest.Mock }) =>
+      screen.dispatchEvent.mock.calls.map((c) => (c[0] as Event).type);
+
+    function touchEventWith(type: string, points: Array<[number, number]>, key: 'touches' | 'changedTouches' = 'touches') {
+      const list = points.map(([clientX, clientY]) => ({ clientX, clientY })) as unknown as TouchList;
+      return {
+        type,
+        touches: key === 'touches' ? list : ([] as unknown as TouchList),
+        changedTouches: list,
+        preventDefault: jest.fn(),
+      } as unknown as TouchEvent;
+    }
+
+    /** Fire a touchmove and return the event so preventDefault can be inspected. */
+    function move(x: number, y: number) {
+      const ev = makeTouchEvent('touchmove', x, y);
+      docHandlers['touchmove']?.(ev);
+      return ev;
+    }
+    const cancel = () => docHandlers['touchcancel']?.({} as TouchEvent);
+    const flushFrame = () => jest.advanceTimersByTime(16);
+
+    // ---- tap ----
+    it('touchend_should_RunTapPathAndFocusOnce_When_TotalDy5And100ms', () => {
+      const { terminalRef } = mount('none');
+      fireTouchStart(100, 100);
+      jest.advanceTimersByTime(100);
+      fireTouchEnd(100, 105);
+      expect(terminalRef.current!.focus).toHaveBeenCalledTimes(1);
+      expect(onSendData).not.toHaveBeenCalled();
+    });
+
+    it('touchend_should_Tap_When_MovedUnderSlopAndReleasedBefore400ms (current tolerance: dy < 8px)', () => {
+      const { terminalRef } = mount('none');
+      fireTouchStart(100, 100);
+      move(100, 107); // 7px: stays PENDING (below the 15px scroll threshold)
+      jest.advanceTimersByTime(399);
+      fireTouchEnd(100, 107);
+      expect(terminalRef.current!.focus).toHaveBeenCalledTimes(1);
+    });
+
+    it('touchend_should_NotTap_When_TotalDyIs8OrMore (current: 8px boundary, not 12/14px)', () => {
+      const { terminalRef } = mount('none');
+      fireTouchStart(100, 100);
+      move(100, 108);
+      jest.advanceTimersByTime(100);
+      fireTouchEnd(100, 108);
+      expect(terminalRef.current!.focus).not.toHaveBeenCalled();
+    });
+
+    it('touchend_should_Tap_When_OnlyHorizontalDrift (current: dx is not counted)', () => {
+      const { terminalRef } = mount('none');
+      fireTouchStart(100, 100);
+      move(160, 100);
+      jest.advanceTimersByTime(100);
+      fireTouchEnd(160, 100);
+      expect(terminalRef.current!.focus).toHaveBeenCalledTimes(1);
+    });
+
+    it('touchend_should_FocusAndNotClearSelection_When_TapWhileSelectionActive (current: no clear-selection branch)', () => {
+      const { terminalRef } = mount('none');
+      (terminalRef.current!.getSelection as jest.Mock).mockReturnValue('selected text');
+      (terminalRef.current as any).clearSelection = jest.fn();
+      fireTouchStart(100, 100);
+      jest.advanceTimersByTime(100);
+      fireTouchEnd(100, 100);
+      expect(terminalRef.current!.focus).toHaveBeenCalledTimes(1);
+      expect((terminalRef.current as any).clearSelection).not.toHaveBeenCalled();
+    });
+
+    // ---- long-press selecting ----
+    it('touchstart_should_EnterSelecting_When_Stationary400ms', () => {
+      const screen = withScreen();
+      mount('none');
+      fireTouchStart(100, 100);
+      jest.advanceTimersByTime(399);
+      expect(dispatchedTypes(screen)).toEqual([]);
+      jest.advanceTimersByTime(1);
+      expect(dispatchedTypes(screen)).toEqual(['mousedown']);
+    });
+
+    it('touchstart_should_EnterSelecting_When_Stationary400ms_InMouseTrackingMode (direct select)', () => {
+      const { terminalRef } = mount('vt200');
+      fireTouchStart(50, 60); // col 5, row 3 with 10x20 cells
+      jest.advanceTimersByTime(400);
+      expect(terminalRef.current!.select).toHaveBeenCalledWith(5, 3, 1);
+    });
+
+    it('selecting_should_NotScroll_When_DragInSelectionMode', () => {
+      const screen = withScreen();
+      const { terminalRef } = mount('none');
+      fireTouchStart(100, 100);
+      jest.advanceTimersByTime(400);
+      const ev = move(100, 200);
+      flushFrame();
+      expect(terminalRef.current!.scrollLines).not.toHaveBeenCalled();
+      expect(ev.preventDefault).toHaveBeenCalled();
+      expect(dispatchedTypes(screen)).toEqual(['mousedown', 'mousemove']);
+    });
+
+    it('selecting_should_DispatchMouseUpAndReturnToIdle_When_TouchEnd', () => {
+      const screen = withScreen();
+      const { terminalRef } = mount('none');
+      fireTouchStart(100, 100);
+      jest.advanceTimersByTime(400);
+      fireTouchEnd(100, 100);
+      expect(dispatchedTypes(screen)).toEqual(['mousedown', 'mouseup']);
+      expect(terminalRef.current!.focus).not.toHaveBeenCalled();
+      // Back in IDLE: a further move is ignored (no preventDefault)
+      expect(move(100, 300).preventDefault).not.toHaveBeenCalled();
+    });
+
+    // ---- double-tap ----
+    it('doubleTap_should_SelectWord_When_TwoTapsWithin300msAnd20px', () => {
+      const screen = withScreen();
+      const { terminalRef } = mount('none');
+      fireTouchStart(100, 100);
+      jest.advanceTimersByTime(50);
+      fireTouchEnd(100, 100);
+      jest.advanceTimersByTime(100);
+      fireTouchStart(110, 105);
+      jest.advanceTimersByTime(50);
+      fireTouchEnd(110, 105);
+      expect(dispatchedTypes(screen)).toEqual(['dblclick']);
+      expect(terminalRef.current!.focus).toHaveBeenCalledTimes(1); // first tap only
+    });
+
+    it('doubleTap_should_NotSelectWord_When_SecondTapAfter300ms', () => {
+      const screen = withScreen();
+      const { terminalRef } = mount('none');
+      fireTouchStart(100, 100);
+      fireTouchEnd(100, 100);
+      jest.advanceTimersByTime(301);
+      fireTouchStart(100, 100);
+      fireTouchEnd(100, 100);
+      expect(dispatchedTypes(screen)).toEqual([]);
+      expect(terminalRef.current!.focus).toHaveBeenCalledTimes(2);
+    });
+
+    it('doubleTap_should_NotSelectWord_When_SecondTapBeyond20px', () => {
+      const screen = withScreen();
+      mount('none');
+      fireTouchStart(100, 100);
+      fireTouchEnd(100, 100);
+      jest.advanceTimersByTime(100);
+      fireTouchStart(125, 100);
+      fireTouchEnd(125, 100);
+      expect(dispatchedTypes(screen)).toEqual([]);
+    });
+
+    it('doubleTap_should_SendTwoX10Taps_When_MouseTrackingActive (no dblclick)', () => {
+      const screen = withScreen();
+      mount('vt200');
+      fireTouchStart(100, 100);
+      fireTouchEnd(100, 100);
+      jest.advanceTimersByTime(100);
+      fireTouchStart(100, 100);
+      fireTouchEnd(100, 100);
+      expect(dispatchedTypes(screen)).toEqual([]);
+      expect(onSendData).toHaveBeenCalledTimes(2);
+    });
+
+    // ---- multi-touch ----
+    it('touchstart_should_CancelGesture_When_TwoTouches', () => {
+      const screen = withScreen();
+      mount('none');
+      fireTouchStart(100, 100);
+      fakeContainer.fire('touchstart', touchEventWith('touchstart', [[100, 100], [200, 200]]));
+      jest.advanceTimersByTime(500);
+      expect(dispatchedTypes(screen)).toEqual([]); // long-press timer cleared
+      fireTouchEnd(100, 100);
+      expect(onSendData).not.toHaveBeenCalled();
+    });
+
+    it('touchmove_should_CancelScroll_When_SecondFingerLandsMidScroll', () => {
+      const { terminalRef } = mount();
+      fireTouchStart(100, 100);
+      move(100, 60); // -> SCROLLING
+      docHandlers['touchmove'](touchEventWith('touchmove', [[100, 40], [200, 40]]));
+      flushFrame();
+      expect(terminalRef.current!.scrollLines).not.toHaveBeenCalled();
+      expect(move(100, 20).preventDefault).not.toHaveBeenCalled(); // IDLE now
+    });
+
+    // ---- touchcancel ----
+    it('touchcancel_should_ResetStateAndNotScroll_When_ScrollingTouchCancelled', () => {
+      const { terminalRef } = mount();
+      fireTouchStart(100, 100);
+      move(100, 60); // -> SCROLLING
+      move(100, 20); // frame pending
+      cancel();
+      flushFrame();
+      expect(terminalRef.current!.scrollLines).not.toHaveBeenCalled(); // pending frame cancelled
+      expect(move(100, 0).preventDefault).not.toHaveBeenCalled();
+    });
+
+    it('touchcancel_should_PreventLongPressSelect_When_PendingTouchCancelled', () => {
+      const screen = withScreen();
+      mount('none');
+      fireTouchStart(100, 100);
+      cancel();
+      jest.advanceTimersByTime(500);
+      expect(dispatchedTypes(screen)).toEqual([]);
+    });
+
+    it('touchcancel_should_ExitSelecting_When_SelectingTouchCancelled', () => {
+      withScreen();
+      mount('none');
+      fireTouchStart(100, 100);
+      jest.advanceTimersByTime(400);
+      cancel();
+      expect(move(100, 200).preventDefault).not.toHaveBeenCalled();
+    });
+
+    // ---- scroll / move semantics ----
+    it('touchmove_should_NotScrollOrPreventDefault_When_HorizontalFirstPastSlop', () => {
+      const { terminalRef } = mount();
+      fireTouchStart(100, 100);
+      const ev = move(200, 103); // large dx, tiny dy
+      flushFrame();
+      expect(ev.preventDefault).not.toHaveBeenCalled();
+      expect(terminalRef.current!.scrollLines).not.toHaveBeenCalled();
+    });
+
+    it('touchmove_should_NotPreventDefault_When_FirstMovePastSlop (current: only subsequent moves preventDefault)', () => {
+      mount();
+      fireTouchStart(100, 100);
+      expect(move(100, 70).preventDefault).not.toHaveBeenCalled(); // PENDING -> SCROLLING
+      expect(move(100, 40).preventDefault).toHaveBeenCalled(); // SCROLLING
+    });
+
+    it('scroll_should_ScrollLinesByRoundedCellDelta_And_NotFocusOnTouchEnd (current: scroll is lastY-relative)', () => {
+      const { terminalRef } = mount('none');
+      fireTouchStart(100, 100);
+      move(100, 80); // enters SCROLLING, lastY = 80, no scroll yet
+      move(100, 40); // 40px up with 20px cells -> +2 lines
+      flushFrame();
+      expect(terminalRef.current!.scrollLines).toHaveBeenCalledWith(2);
+      fireTouchEnd(100, 40);
+      expect(terminalRef.current!.focus).not.toHaveBeenCalled();
     });
   });
 
