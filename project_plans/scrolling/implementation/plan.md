@@ -394,6 +394,9 @@ Source: `research/qos.md` gaps 1 and 3 and open items. Record findings only; not
 - During the slot 2 core-fix pass (D1b, D2) compare the observed routing for a tmux shell and Claude Code with the rows set by 0.1.3a. No code change unless the pass contradicts them; if it does, edit the rows (data) and note it in Spike Findings. Flip `ROUTING_VERIFIED` only here, if still `false`.
 - Files: `plan.md`, `lib/terminal/scrollRouting.ts` (only on contradiction)
 
+**Baseline test run** (Task 0.0.1a, 2026-10-01, before any code change; requires `make proto-gen` first because `web-app/src/gen` is gitignored and absent in a fresh worktree):
+`npx jest --no-coverage --testPathPatterns="terminal|XtermTerminal|useTerminalGestures|useVisibilityResync"` -> Test Suites: 1 failed, 30 passed, 31 total; Tests: 1 failed, 413 passed, 414 total. Pre-existing failure: `useTerminalGestures › PENDING → SCROLLING on touchmove with large delta › should call terminal.scrollLines when in SCROLLING state and moved enough`. `pnpm run lint:duplicates` baseline: 9 clones, 247 duplicated lines (0.09%).
+
 **Spike Findings** (to fill in Phase 0):
 
 | Q | Verdict | Evidence | Date |
