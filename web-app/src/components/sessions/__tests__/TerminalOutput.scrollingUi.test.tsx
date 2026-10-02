@@ -17,6 +17,20 @@ jest.mock("../XtermTerminal", () =>
   })
 );
 
+const trackers: any[] = [];
+jest.mock("@/lib/terminal/scrollPosition", () => {
+  const actual = jest.requireActual("@/lib/terminal/scrollPosition");
+  return {
+    ...actual,
+    createNetPagesUpTracker: (...args: any[]) => {
+      const tracker = actual.createNetPagesUpTracker(...args);
+      jest.spyOn(tracker, "invalidate");
+      trackers.push(tracker);
+      return tracker;
+    },
+  };
+});
+
 jest.mock("@/lib/hooks/useTerminalStream", () => ({ useTerminalStream: jest.fn() }));
 jest.mock("@/lib/terminal/TerminalDimensionCache", () =>
   require("./terminalOutputTestMocks").terminalDimensionCacheWithValidationMockModule()
@@ -47,6 +61,8 @@ import { TerminalOutput } from "../TerminalOutput";
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
 // eslint-disable-next-line import/first
 import { scrollSettings } from "@/lib/terminal/scrollOverride";
+// eslint-disable-next-line import/first
+import { TerminalStreamManager } from "@/lib/terminal/TerminalStreamManager";
 // eslint-disable-next-line import/first
 import { HINT_TEXT_LOCAL, HINT_TEXT_TUI, SCROLL_HINT_SEEN_KEY } from "../ScrollHint";
 
@@ -126,6 +142,7 @@ beforeEach(() => {
   scrollSettings.setGestureScroll(true);
   capturedXtermProps = null;
   mockXtermHandle.terminal = null;
+  trackers.length = 0;
   streamMock = makeStreamMock();
   (useTerminalStream as jest.Mock).mockReturnValue(streamMock);
   jest.spyOn(console, "log").mockImplementation(() => {});
@@ -356,6 +373,80 @@ describe("TerminalOutput jump button and netPagesUp wiring (Story 1.2.7b)", () =
       capturedXtermProps.onScrollModeChange({ bufferType: "alternate", mouseTrackingMode: "none" });
     });
     expect(screen.queryByRole("button", tuiLabel)).toBeNull();
+  });
+
+  it("netPagesUp_should_Invalidate_When_ConnectionEpochChanges", async () => {
+    await renderTui();
+    expect(screen.getByRole("button", tuiLabel)).toBeTruthy();
+
+    // A full-snapshot write bumps connectionEpoch (the same signal a reconnect uses).
+    await act(async () => {
+      (useTerminalStream as jest.Mock).mock.calls.at(-1)![0].onOutput("hello");
+    });
+    const manager = (TerminalStreamManager as unknown as jest.Mock).mock.results.at(-1)!.value;
+    act(() => manager.setOnFullSnapshot.mock.calls[0][0]());
+
+    expect(trackers[0].invalidate).toHaveBeenCalledWith("reconnect");
+    expect(screen.queryByRole("button", tuiLabel)).toBeNull();
+  });
+
+  it("netPagesUp_should_Invalidate_When_ViewportSettles", async () => {
+    jest.useFakeTimers();
+    try {
+      const target = new EventTarget();
+      Object.defineProperty(window, "visualViewport", {
+        configurable: true,
+        writable: true,
+        value: {
+          height: 800,
+          offsetTop: 0,
+          addEventListener: (t: string, l: () => void) => target.addEventListener(t, l),
+          removeEventListener: (t: string, l: () => void) => target.removeEventListener(t, l),
+        },
+      });
+      await renderTui();
+      expect(screen.getByRole("button", tuiLabel)).toBeTruthy();
+      trackers[0].invalidate.mockClear();
+
+      (window.visualViewport as any).height = 480;
+      act(() => {
+        target.dispatchEvent(new Event("resize"));
+        jest.advanceTimersByTime(200);
+      });
+
+      expect(trackers[0].invalidate).toHaveBeenCalledWith("resize");
+      expect(screen.queryByRole("button", tuiLabel)).toBeNull();
+    } finally {
+      delete (window as any).visualViewport;
+      jest.useRealTimers();
+    }
+  });
+
+  it("jumpToLatest_should_NotInvalidateEstimate_When_ItsOwnPageDownIsSent", async () => {
+    await renderTui();
+    trackers[0].invalidate.mockClear();
+    streamMock.sendInput.mockClear();
+
+    fireEvent.click(screen.getByRole("button", tuiLabel));
+
+    expect(streamMock.sendInput).toHaveBeenCalledWith("\x1b[6~");
+    expect(trackers[0].invalidate).not.toHaveBeenCalled();
+  });
+
+  it("jumpToLatest_should_UseRecreatedTerminal_When_ResizeReportsANewInstance", async () => {
+    const first = makeTerminal();
+    await renderTerminal({ terminal: first });
+    expect(screen.queryByRole("button", { name: "Jump to latest" })).toBeNull();
+
+    const second = makeTerminal({ buffer: { active: { viewportY: 5, baseY: 20, length: 44, cursorY: 23 } } });
+    mockXtermHandle.terminal = second;
+    act(() => {
+      capturedXtermProps.onResize(second.cols, second.rows);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Jump to latest" }));
+
+    expect(second.scrollToBottom).toHaveBeenCalled();
+    expect(first.scrollToBottom).not.toHaveBeenCalled();
   });
 
   it("netPagesUp_should_CountEachPage_When_HookReportsMultiplePages", async () => {
