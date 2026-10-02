@@ -27,7 +27,9 @@ type Row = [name: string, from: GestureState, event: GestureEvent, to: GestureSt
 
 const TABLE: Row[] = [
   ["idle single touchstart starts pending + long-press timer", "IDLE", { type: "touchstart", touchCount: 1 }, "PENDING", ["startLongPressTimer"]],
-  ["multi-touch touchstart aborts", "IDLE", { type: "touchstart", touchCount: 2 }, "IDLE", ["abort"]],
+  ["multi-touch touchstart aborts", "IDLE", { type: "touchstart", touchCount: 2 }, "CANCELLED", ["abort"]],
+  ["cancelled multi-touch touchstart stays cancelled", "CANCELLED", { type: "touchstart", touchCount: 3 }, "CANCELLED", ["abort"]],
+  ["cancelled multi-touch move stays cancelled", "CANCELLED", move(80, 2), "CANCELLED", []],
   ["pending move under slop stays pending", "PENDING", move(15), "PENDING", []],
   ["pending move past slop begins scrolling", "PENDING", move(16), "SCROLLING", ["clearLongPressTimer", "beginScroll", "preventDefault"]],
   ["pending quick short touchend is a tap", "PENDING", end(5, 100), "IDLE", ["clearLongPressTimer", "tap"]],
@@ -58,7 +60,7 @@ const TABLE: Row[] = [
   ["diagonal move with dy dominant past slop scrolls", "PENDING", move(40, 1, 20), "SCROLLING", ["clearLongPressTimer", "beginScroll", "preventDefault"]],
   ["scrolling fling release coasts and suppresses the click", "SCROLLING", end(80, 300, { flinging: true }), "COASTING", ["startMomentum", "preventDefault"]],
   ["coasting touchstart cancels momentum and marks consumedByCoast (no long-press timer)", "COASTING", { type: "touchstart", touchCount: 1 }, "PENDING", ["abort", "setConsumedByCoast"]],
-  ["coasting multi-touch touchstart aborts", "COASTING", { type: "touchstart", touchCount: 2 }, "IDLE", ["abort"]],
+  ["coasting multi-touch touchstart aborts", "COASTING", { type: "touchstart", touchCount: 2 }, "CANCELLED", ["abort"]],
   ["coasting momentum end returns to idle", "COASTING", { type: "momentumEnd" }, "IDLE", ["abort"]],
   ["momentum end outside coasting is ignored", "IDLE", { type: "momentumEnd" }, "IDLE", []],
   ["coasting touchcancel resets to idle", "COASTING", { type: "touchcancel" }, "IDLE", ["abort"]],

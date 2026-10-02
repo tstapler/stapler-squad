@@ -61,7 +61,8 @@ const stay = (state: GestureState): GestureTransition => ({ state, effects: NONE
 const abort = (): GestureTransition => ({ state: "IDLE", effects: ["abort"] });
 
 function onTouchStart(state: GestureState, touchCount: number): GestureTransition {
-  if (touchCount !== 1) return abort();
+  // Multi-touch parks the gesture in CANCELLED so the remaining fingers' moves are ignored until a lone touchstart.
+  if (touchCount !== 1) return { state: "CANCELLED", effects: ["abort"] };
   // abort cancels momentum; no long-press timer, a touch-to-stop must not become a selection.
   if (state === "COASTING") return { state: "PENDING", effects: ["abort", "setConsumedByCoast"] };
   return { state: "PENDING", effects: ["startLongPressTimer"] };
@@ -71,7 +72,7 @@ function onTouchMove(
   state: GestureState,
   e: Extract<GestureEvent, { type: "touchmove" }>,
 ): GestureTransition {
-  if (e.touchCount !== 1) return abort();
+  if (e.touchCount !== 1) return state === "CANCELLED" ? stay(state) : abort();
   switch (state) {
     case "PENDING":
       if (e.absDx <= e.slopPx && e.absDy <= e.slopPx) return stay(state);
@@ -115,6 +116,8 @@ export function reduce(state: GestureState, event: GestureEvent): GestureTransit
     case "touchend":
       return onTouchEnd(state, event);
     case "touchcancel":
+      // Intentionally IDLE (not CANCELLED as in ux.md S9 for SCROLLING): plan AC 1.2.10 specifies IDLE, and
+      // the next touchstart begins a fresh PENDING from either state, so the two are observably identical.
       return abort();
     case "longPress":
       return state === "PENDING" ? { state: "SELECTING", effects: ["enterSelecting"] } : stay(state);
