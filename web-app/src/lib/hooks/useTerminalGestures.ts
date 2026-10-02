@@ -3,8 +3,12 @@
 /**
  * useTerminalGestures — Unified mobile gesture state machine for xterm.js terminals.
  *
- * Implements a 5-state machine:
- *   IDLE → PENDING → SCROLLING | SELECTING | TAPPING → IDLE
+ * Implements a gesture state machine (pure transition table in
+ * lib/terminal/gestureMachine.ts; this hook wires listeners, timers, rAF and effects):
+ *   IDLE → PENDING → SCROLLING | SELECTING | TAPPING → IDLE   (CANCELLED on interrupts)
+ *
+ * Scroll drags run through ScrollAccumulator and a per-frame routing decision
+ * (xterm-local scrollLines, or PgUp/PgDn / wheel bytes to a TUI).
  *
  * Replaces the conflicting useTouchScroll + useMobileTerminalGestures hooks (R4.3):
  * having both hooks register touchmove handlers on the same element caused double-scroll
@@ -18,22 +22,47 @@
 import { useEffect, useRef, RefObject } from "react";
 import type { Terminal } from "@xterm/xterm";
 import { getCellDimensions } from "@/lib/terminal/cellDimensions";
-import { isMouseTracking as isMouseTrackingUtil } from "@/lib/terminal/mouseTracking";
+import { isMouseTracking as isMouseTrackingUtil, readScrollMode } from "@/lib/terminal/mouseTracking";
 import { pointToCell, rafThrottlePoint, type CellGeometry } from "@/lib/terminal/touchDrag";
+import { reduce, type GestureEffect, type GestureEvent, type GestureState } from "@/lib/terminal/gestureMachine";
+import { clampLinesPerFrame, ScrollAccumulator, SLOP_PX } from "@/lib/terminal/scrollKinematics";
+import {
+  decideAndLogScrollTarget,
+  encodeWheel,
+  PageAccumulator,
+  ROUTING_VERIFIED,
+  type RouteDecisionLog,
+  type ScrollMode,
+  type ScrollOverride,
+  type ScrollRoutingPolicy,
+  type ScrollTarget,
+  type TuiScrollPolicy,
+} from "@/lib/terminal/scrollRouting";
+import { mobileDebug } from "@/lib/terminal/mobileDebug";
 
 // Re-export for consumers that import from this module
 export { getCellDimensions };
 
-// ---- Gesture state machine types ----
-type GestureState = 'IDLE' | 'PENDING' | 'SCROLLING' | 'SELECTING' | 'TAPPING';
+/** Touches that begin on these (xterm's own scrollbar, anything opted out) never start a gesture. */
+export const GESTURE_IGNORE_SELECTOR = '[data-gesture-ignore], .xterm-scrollable-element .scrollbar';
 
-interface UseTerminalGesturesOptions {
+export interface GestureOptions {
   containerRef: RefObject<HTMLElement | null>;
   /** Pass the RefObject itself (not .current) so event handlers always see the live terminal instance. */
   terminalRef: RefObject<Terminal | null>;
   onSendData: (data: string) => void;
   /** Milliseconds of hold before a touch becomes a long-press selection. Default: 400ms. */
   longPressMs?: number;
+  /** Scroll-target override (S6). Changing it mid-gesture cancels the gesture. Default 'auto'. */
+  override?: ScrollOverride;
+  /** When false the hook registers no touch listeners at all (TalkBack fallback). Default true. */
+  gestureScrollEnabled?: boolean;
+  /** How a TUI target is driven; 'wheel' is the only way to reach `tui-wheel`. Default: TUI_SCROLL_POLICY. */
+  tuiScrollPolicy?: TuiScrollPolicy;
+  /** Injected routing table (tests, spike results). Default: DEFAULT_ROUTING_POLICY. */
+  routingPolicy?: ScrollRoutingPolicy;
+  /** Bumped on reconnect / full-snapshot write; a change cancels the gesture. Default 0. */
+  connectionEpoch?: number;
 }
 
 /**
@@ -41,27 +70,33 @@ interface UseTerminalGesturesOptions {
  *
  * Returns a cleanup function (for use in useEffect return or manually).
  */
-export function useTerminalGestures({
-  containerRef,
-  terminalRef,
-  onSendData,
-  longPressMs = 400,
-}: UseTerminalGesturesOptions): void {
-  // Keep stable refs so event handlers don't form stale closures
-  const onSendDataRef = useRef(onSendData);
-  const longPressMsRef = useRef(longPressMs);
+export function useTerminalGestures(options: GestureOptions): void {
+  const { containerRef, terminalRef, gestureScrollEnabled = true, override = 'auto', connectionEpoch = 0 } = options;
+
+  // Latest options for event handlers, so they never form stale closures.
+  const optionsRef = useRef(options);
+  useEffect(() => {
+    optionsRef.current = options;
+  });
+  const cancelGestureRef = useRef<(() => void) | null>(null);
+
+  // Override / connection changes cancel an in-flight gesture (S9: reset remainders, ignore the touch).
+  const previousRef = useRef({ override, connectionEpoch });
+  useEffect(() => {
+    const prev = previousRef.current;
+    if (prev.override !== override || prev.connectionEpoch !== connectionEpoch) {
+      cancelGestureRef.current?.();
+    }
+    previousRef.current = { override, connectionEpoch };
+  }, [override, connectionEpoch]);
 
   useEffect(() => {
-    onSendDataRef.current = onSendData;
-  }, [onSendData]);
-
-  useEffect(() => {
-    longPressMsRef.current = longPressMs;
-  }, [longPressMs]);
-
-  useEffect(() => {
+    if (!gestureScrollEnabled) return;
     const containerEl = containerRef.current;
     if (!containerEl) return;
+
+    const onSendData = (data: string) => optionsRef.current.onSendData(data);
+    const longPressMs = () => optionsRef.current.longPressMs ?? 400;
 
     // ---- State machine ----
     let state: GestureState = 'IDLE';
@@ -91,6 +126,15 @@ export function useTerminalGestures({
     // multiple touchmove events into a single update per animation frame.
     let cellGeometry: CellGeometry | null = null;
     let cachedCellH = 0;
+    // Quantization + routing state for the current scroll gesture.
+    const lineAcc = new ScrollAccumulator();
+    const pageAcc = new PageAccumulator({
+      rows: 24,
+      now: () => Date.now(),
+      // The per-fling cap guards momentum, not a finger that is still down (Story 1.2.2 owns it).
+      flingCap: Number.POSITIVE_INFINITY,
+    });
+    let lastTarget: ScrollTarget | null = null;
     let scrollThrottled: ((clientX: number, clientY: number) => void) | null = null;
     let cancelScrollThrottle: (() => void) | null = null;
     let selectThrottled: ((clientX: number, clientY: number) => void) | null = null;
@@ -123,10 +167,13 @@ export function useTerminalGestures({
       containerEl.querySelector('.xterm-screen') as HTMLElement | null;
 
     // ---- Transition helpers ----
-    const transitionToIdle = () => {
+    // Stops timers, frames and remainders; the machine decides the resulting state.
+    const stopGesture = () => {
       clearLongPressTimer();
       cancelPendingFrames();
-      state = 'IDLE';
+      lineAcc.reset();
+      pageAcc.reset();
+      lastTarget = null;
     };
 
     // Non-mouse-tracking drag: xterm owns selection via real DOM mouse events. Coalesce
@@ -162,9 +209,8 @@ export function useTerminalGestures({
 
     const enterSelecting = () => {
       const t = terminalRef.current;
-      if (!t) { transitionToIdle(); return; }
+      if (!t) { state = 'IDLE'; stopGesture(); return; }
 
-      state = 'SELECTING';
       clearLongPressTimer();
 
       // Haptic feedback if available (R4.3)
@@ -177,198 +223,306 @@ export function useTerminalGestures({
       }
     };
 
+    // ---- Effect executor: runs the machine's effects in order ----
+    const runEffects = (effects: readonly GestureEffect[], e: TouchEvent | null, touch: Touch | undefined) => {
+      for (const effect of effects) {
+        switch (effect) {
+          case 'abort':
+            stopGesture();
+            break;
+          case 'startLongPressTimer':
+            longPressTimer = setTimeout(() => {
+              longPressTimer = null;
+              dispatch({ type: 'longPress' }, null, undefined);
+            }, longPressMs());
+            break;
+          case 'clearLongPressTimer':
+            clearLongPressTimer();
+            break;
+          case 'beginScroll':
+            beginScroll(touch);
+            break;
+          case 'continueScroll':
+            scrollThrottled?.(0, touch?.clientY ?? lastY);
+            break;
+          case 'continueSelect':
+            if (touch) selectThrottled?.(touch.clientX, touch.clientY);
+            break;
+          case 'preventDefault':
+            preventDefaultIfCancelable(e);
+            break;
+          case 'enterSelecting':
+            enterSelecting();
+            break;
+          case 'endSelecting':
+            endSelecting(touch);
+            break;
+          case 'tap':
+            handleTap();
+            break;
+        }
+      }
+    };
+
+    const dispatch = (event: GestureEvent, e: TouchEvent | null, touch: Touch | undefined) => {
+      const next = reduce(state, event);
+      state = next.state;
+      runEffects(next.effects, e, touch);
+    };
+
+    const preventDefaultIfCancelable = (e: TouchEvent | null) => {
+      if (!e) return;
+      if (e.cancelable) e.preventDefault();
+      else mobileDebug.log('not-cancelable', { event: e.type });
+    };
+
+    // Re-evaluated every frame; a target change resets the remainders and logs the decision.
+    const resolveTarget = (mode: ScrollMode): ScrollTarget => {
+      const o = optionsRef.current;
+      const logged: { entry?: RouteDecisionLog } = {};
+      const target = decideAndLogScrollTarget(mode, {
+        policy: o.routingPolicy,
+        tuiPolicy: o.tuiScrollPolicy,
+        override: o.override,
+        log: (entry) => { logged.entry = entry; },
+      });
+      if (target !== lastTarget) {
+        if (lastTarget !== null) {
+          lineAcc.reset();
+          pageAcc.reset();
+        }
+        lastTarget = target;
+        mobileDebug.routeDecision({
+          target,
+          source: logged.entry?.source ?? 'auto',
+          unverified: !ROUTING_VERIFIED,
+        });
+      }
+      return target;
+    };
+
+    const dispatchScroll = (terminal: Terminal, target: ScrollTarget, lines: number) => {
+      switch (target) {
+        case 'xterm-local': {
+          const clamped = clampLinesPerFrame(lines, terminal.rows);
+          if (clamped !== 0) terminal.scrollLines(clamped);
+          return;
+        }
+        case 'tui-pgkeys': {
+          pageAcc.setRows(terminal.rows);
+          const keys = pageAcc.push(lines);
+          if (keys) onSendData(keys);
+          return;
+        }
+        case 'tui-wheel': {
+          const reports = encodeWheel(lines, {
+            col: startCol + 1,
+            row: startRow + 1,
+            cols: terminal.cols,
+            rows: terminal.rows,
+          });
+          if (reports) onSendData(reports);
+          return;
+        }
+      }
+    };
+
+    const onScrollFrame = (_clientX: number, clientY: number) => {
+      const terminal = terminalRef.current;
+      if (!terminal || cachedCellH <= 0) return;
+      const moveDy = clientY - lastY;
+      lastY = clientY;
+      const mode = readScrollMode(terminal);
+      const target = resolveTarget(mode);
+      const lines = lineAcc.push(-moveDy, cachedCellH);
+      dispatchScroll(terminal, target, lines);
+      const active = terminal.buffer?.active;
+      mobileDebug.log('scroll', {
+        ...mode,
+        viewportY: active?.viewportY,
+        baseY: active?.baseY,
+        rows: terminal.rows,
+        cellH: cachedCellH,
+        moveDy,
+        lines,
+        target,
+      });
+    };
+
+    const beginScroll = (touch: Touch | undefined) => {
+      const y = touch?.clientY ?? lastY;
+      lastY = y;
+      lineAcc.reset();
+      pageAcc.reset();
+      lastTarget = null;
+      // Seed with the overshoot past the slop only, so crossing it emits no jump.
+      const travel = y - startY;
+      const overshoot = Math.sign(travel) * (Math.abs(travel) - SLOP_PX);
+      lineAcc.seed(-overshoot);
+      mobileDebug.log('scroll-start', { startY, y, slopPx: SLOP_PX, overshoot });
+
+      // Cache cell height once for the drag and coalesce touchmove into one
+      // dispatch per frame — same rationale as the SELECTING geometry cache.
+      const t = terminalRef.current;
+      cachedCellH = t ? getCellDimensions(t).cellH : 0;
+      [scrollThrottled, cancelScrollThrottle] = rafThrottlePoint(onScrollFrame);
+      scrollThrottled(0, y); // one frame carries the seeded overshoot
+    };
+
+    const handleTap = () => {
+      const now = Date.now();
+      const isDoubleTap =
+        (now - lastTapTime) < DOUBLE_TAP_MS &&
+        Math.abs(tapX - lastTapX) < DOUBLE_TAP_RADIUS_PX &&
+        Math.abs(tapY - lastTapY) < DOUBLE_TAP_RADIUS_PX;
+
+      const t = terminalRef.current;
+      if (isDoubleTap && !isMouseTracking()) {
+        // Dispatch synthetic dblclick to trigger xterm's native word selection
+        getScreenEl()?.dispatchEvent(new MouseEvent('dblclick', {
+          clientX: tapX,
+          clientY: tapY,
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          buttons: 1,
+          detail: 2,
+        }));
+      } else if (t) {
+        // Normal tap handling
+        if (!isMouseTracking()) {
+          t.focus();
+        } else if (t.element) {
+          const { cellH, cellW } = getCellDimensions(t);
+          const canvasRect = t.element.getBoundingClientRect();
+          const col = Math.floor((tapX - canvasRect.left) / cellW) + 1; // 1-based
+          const row = Math.floor((tapY - canvasRect.top) / cellH) + 1;   // 1-based
+          // X10 mouse encoding: \x1b[M + button(32=left-press) + col+32 + row+32
+          // Clamp col/row to 1-223 so charCode stays in 33-255 (valid X10 range)
+          const clampedCol = Math.max(1, Math.min(col, 223));
+          const clampedRow = Math.max(1, Math.min(row, 223));
+          const press   = `\x1b[M${String.fromCharCode(32, clampedCol + 32, clampedRow + 32)}`;
+          const release = `\x1b[M${String.fromCharCode(35, clampedCol + 32, clampedRow + 32)}`; // 35 = release
+          onSendData(press + release);
+          t.focus();
+        }
+      }
+
+      lastTapTime = now;
+      lastTapX = tapX;
+      lastTapY = tapY;
+    };
+
+    const endSelecting = (touch: Touch | undefined) => {
+      const t = terminalRef.current;
+      if (!isMouseTracking() && touch) {
+        getScreenEl()?.dispatchEvent(new MouseEvent('mouseup', {
+          clientX: touch.clientX,
+          clientY: touch.clientY,
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          buttons: 0,
+        }));
+        // xterm.js's platform check for "Linux" matches Android's user agent too, so
+        // completing a real mouse-event-driven selection makes it focus+select the
+        // hidden input textarea (to populate the X11 primary-selection clipboard for a
+        // desktop middle-click paste) — that focus() call is what pops the Android soft
+        // keyboard mid text-selection. Desktop Linux wants that; touch doesn't. The
+        // focus already happened synchronously inside dispatchEvent above, so blur
+        // it back immediately.
+        t?.textarea?.blur();
+      }
+      // Selection preserved in xterm's buffer — just transition back
+    };
+
     // ---- touchstart (registered on containerEl, passive: false) ----
+    const startedOnIgnoredSurface = (e: TouchEvent): boolean => {
+      const target = e.target as { closest?: (selector: string) => unknown } | null;
+      return Boolean(target?.closest?.(GESTURE_IGNORE_SELECTOR));
+    };
+
     const onTouchStart = (e: TouchEvent) => {
-      if (e.touches.length !== 1) {
-        // Multi-touch: cancel any in-progress gesture
-        transitionToIdle();
+      if (startedOnIgnoredSurface(e)) {
+        dispatch({ type: 'touchcancel' }, null, undefined);
         return;
       }
+      if (e.touches.length === 1) {
+        const touch = e.touches[0];
+        startX = touch.clientX;
+        startY = touch.clientY;
+        lastY = touch.clientY;
+        startTime = Date.now();
+        tapX = touch.clientX;
+        tapY = touch.clientY;
 
-      const touch = e.touches[0];
-      startX = touch.clientX;
-      startY = touch.clientY;
-      lastY = touch.clientY;
-      startTime = Date.now();
-      tapX = touch.clientX;
-      tapY = touch.clientY;
-
-      // Calculate starting cell coordinates for selection/tap
-      const t = terminalRef.current;
-      if (t?.element) {
-        const { cellH, cellW } = getCellDimensions(t);
-        const rect = t.element.getBoundingClientRect();
-        startCol = Math.max(0, Math.floor((startX - rect.left) / cellW));
-        startRow = Math.max(0, Math.floor((startY - rect.top) / cellH));
-      }
-
-      state = 'PENDING';
-
-      // Start long-press timer → SELECTING
-      longPressTimer = setTimeout(() => {
-        longPressTimer = null;
-        if (state === 'PENDING') {
-          enterSelecting();
+        // Calculate starting cell coordinates for selection/tap
+        const t = terminalRef.current;
+        if (t?.element) {
+          const { cellH, cellW } = getCellDimensions(t);
+          const rect = t.element.getBoundingClientRect();
+          startCol = Math.max(0, Math.floor((startX - rect.left) / cellW));
+          startRow = Math.max(0, Math.floor((startY - rect.top) / cellH));
         }
-      }, longPressMsRef.current);
+      }
+      dispatch({ type: 'touchstart', touchCount: e.touches.length }, e, undefined);
     };
 
     // ---- touchmove (registered on document, passive: false to allow preventDefault) ----
     const onTouchMove = (e: TouchEvent) => {
-      if (e.touches.length !== 1) {
-        transitionToIdle();
-        return;
-      }
-
       const touch = e.touches[0];
-      const dy = touch.clientY - startY;
-      const absDy = Math.abs(dy);
-
-      if (state === 'PENDING') {
-        if (absDy > 15) {
-          // Moved enough to be a scroll — cancel long-press.
-          // 15px threshold (was 8px): gives long-press timer room to fire even with
-          // minor finger drift, preventing accidental scroll-instead-of-select.
-          clearLongPressTimer();
-          state = 'SCROLLING';
-          lastY = touch.clientY;
-
-          // Cache cell height once for the drag and coalesce touchmove into one
-          // scrollLines() per frame — same rationale as the SELECTING geometry cache.
-          const t = terminalRef.current;
-          cachedCellH = t ? getCellDimensions(t).cellH : 0;
-          [scrollThrottled, cancelScrollThrottle] = rafThrottlePoint((_clientX, clientY) => {
-            const terminal = terminalRef.current;
-            if (!terminal || cachedCellH <= 0) return;
-            const moveDy = clientY - lastY;
-            lastY = clientY;
-            const lines = Math.round(-moveDy / cachedCellH);
-            if (lines !== 0) terminal.scrollLines(lines);
-          });
-        }
-        // Stay in PENDING if movement is small
-        return;
-      }
-
-      if (state === 'SCROLLING') {
-        scrollThrottled?.(0, touch.clientY);
-        e.preventDefault();
-        return;
-      }
-
-      if (state === 'SELECTING') {
-        // Task 3.1.5 — extend selection (both tracking modes), coalesced to one
-        // update per animation frame via the throttled callback set up in
-        // beginSyntheticMouseSelection/beginDirectSelectDrag.
-        selectThrottled?.(touch.clientX, touch.clientY);
-        e.preventDefault();
-        return;
-      }
+      const absDy = touch ? Math.abs(touch.clientY - startY) : 0;
+      dispatch({ type: 'touchmove', touchCount: e.touches.length, absDy, slopPx: SLOP_PX }, e, touch);
     };
 
     // ---- touchend (registered on document) ----
     const onTouchEnd = (e: TouchEvent) => {
       const touch = e.changedTouches[0];
-      const elapsed = Date.now() - startTime;
-      const totalDy = Math.abs((touch?.clientY ?? startY) - startY);
-
-      if (state === 'PENDING' && totalDy < 8 && elapsed < longPressMsRef.current) {
-        // Short tap — transition to TAPPING and handle
-        clearLongPressTimer();
-        state = 'TAPPING';
-
-        const now = Date.now();
-        const isDoubleTap =
-          (now - lastTapTime) < DOUBLE_TAP_MS &&
-          Math.abs(tapX - lastTapX) < DOUBLE_TAP_RADIUS_PX &&
-          Math.abs(tapY - lastTapY) < DOUBLE_TAP_RADIUS_PX;
-
-        const t = terminalRef.current;
-        if (isDoubleTap && !isMouseTracking()) {
-          // Dispatch synthetic dblclick to trigger xterm's native word selection
-          getScreenEl()?.dispatchEvent(new MouseEvent('dblclick', {
-            clientX: tapX,
-            clientY: tapY,
-            bubbles: true,
-            cancelable: true,
-            button: 0,
-            buttons: 1,
-            detail: 2,
-          }));
-        } else if (t) {
-          // Normal tap handling
-          if (!isMouseTracking()) {
-            t.focus();
-          } else if (t.element) {
-            const { cellH, cellW } = getCellDimensions(t);
-            const canvasRect = t.element.getBoundingClientRect();
-            const col = Math.floor((tapX - canvasRect.left) / cellW) + 1; // 1-based
-            const row = Math.floor((tapY - canvasRect.top) / cellH) + 1;   // 1-based
-            // X10 mouse encoding: \x1b[M + button(32=left-press) + col+32 + row+32
-            // Clamp col/row to 1-223 so charCode stays in 33-255 (valid X10 range)
-            const clampedCol = Math.max(1, Math.min(col, 223));
-            const clampedRow = Math.max(1, Math.min(row, 223));
-            const press   = `\x1b[M${String.fromCharCode(32, clampedCol + 32, clampedRow + 32)}`;
-            const release = `\x1b[M${String.fromCharCode(35, clampedCol + 32, clampedRow + 32)}`; // 35 = release
-            onSendDataRef.current(press + release);
-            t.focus();
-          }
-        }
-
-        lastTapTime = now;
-        lastTapX = tapX;
-        lastTapY = tapY;
-
-        state = 'IDLE';
-        return;
-      }
-
-      if (state === 'SELECTING') {
-        const t = terminalRef.current;
-        if (!isMouseTracking() && touch) {
-          getScreenEl()?.dispatchEvent(new MouseEvent('mouseup', {
-            clientX: touch.clientX,
-            clientY: touch.clientY,
-            bubbles: true,
-            cancelable: true,
-            button: 0,
-            buttons: 0,
-          }));
-          // xterm.js's platform check for "Linux" matches Android's user agent too, so
-          // completing a real mouse-event-driven selection makes it focus+select the
-          // hidden input textarea (to populate the X11 primary-selection clipboard for a
-          // desktop middle-click paste) — that focus() call is what pops the Android soft
-          // keyboard mid text-selection. Desktop Linux wants that; touch doesn't. The
-          // focus already happened synchronously inside dispatchEvent above, so blur
-          // it back immediately.
-          t?.textarea?.blur();
-        }
-        // Selection preserved in xterm's buffer — just transition back
-      }
-
-      transitionToIdle();
+      dispatch(
+        {
+          type: 'touchend',
+          elapsedMs: Date.now() - startTime,
+          totalDy: Math.abs((touch?.clientY ?? startY) - startY),
+          longPressMs: longPressMs(),
+          tapTolerancePx: SLOP_PX,
+        },
+        e,
+        touch,
+      );
     };
 
     // ---- touchcancel ----
     const onTouchCancel = () => {
-      transitionToIdle();
+      mobileDebug.log('touchcancel', { state });
+      dispatch({ type: 'touchcancel' }, null, undefined);
     };
+
+    // Keyboard toggle / rotation mid-gesture: drop remainders and ignore the rest of the touch.
+    const onInterrupt = () => dispatch({ type: 'interrupt' }, null, undefined);
 
     // Register listeners:
     // - touchstart on containerEl (catches gesture origin)
     // - touchmove + touchend on document (handles drags outside container)
+    // touchend is non-passive so it can preventDefault the synthesized click after a scroll.
+    const visualViewport = window.visualViewport;
     containerEl.addEventListener('touchstart', onTouchStart, { passive: false });
     document.addEventListener('touchmove', onTouchMove, { passive: false });
-    document.addEventListener('touchend', onTouchEnd, { passive: true });
+    document.addEventListener('touchend', onTouchEnd, { passive: false });
     document.addEventListener('touchcancel', onTouchCancel, { passive: true });
+    visualViewport?.addEventListener('resize', onInterrupt);
+    window.addEventListener('orientationchange', onInterrupt);
+    cancelGestureRef.current = onInterrupt;
 
     return () => {
+      cancelGestureRef.current = null;
       clearLongPressTimer();
       cancelPendingFrames();
       containerEl.removeEventListener('touchstart', onTouchStart);
       document.removeEventListener('touchmove', onTouchMove);
       document.removeEventListener('touchend', onTouchEnd);
       document.removeEventListener('touchcancel', onTouchCancel);
+      visualViewport?.removeEventListener('resize', onInterrupt);
+      window.removeEventListener('orientationchange', onInterrupt);
     };
-  }, [containerRef]); // Re-run only if containerRef changes (terminal/onSendData accessed via refs)
+  }, [containerRef, terminalRef, gestureScrollEnabled]); // options other than these are read via optionsRef
 }
