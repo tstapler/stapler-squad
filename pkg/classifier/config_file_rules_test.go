@@ -50,3 +50,38 @@ func TestLoadConfigFileRules_MalformedYAML_ReturnsError(t *testing.T) {
 	_, err := LoadConfigFileRules(path)
 	require.Error(t, err)
 }
+
+func writeRules(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "shared_rules.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	return path
+}
+
+// An invalid pattern must drop the rule, never widen it into "match every Bash command".
+func TestLoadConfigFileRules_InvalidRegex_SkipsRuleKeepsOthers(t *testing.T) {
+	path := writeRules(t, `rules:
+  - {name: bad allow, tool: Bash, command_pattern: '^git (status', decision: allow}
+  - {name: good deny, tool: Bash, programs: [mkfs], decision: deny}
+`)
+	rules, err := LoadConfigFileRules(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bad allow")
+	require.Len(t, rules, 1)
+	assert.Equal(t, "good deny", rules[0].Name)
+}
+
+func TestLoadConfigFileRules_UnknownDecision_SkipsRule(t *testing.T) {
+	path := writeRules(t, "rules:\n  - {name: typo, tool: Bash, decision: Deny}\n")
+	rules, err := LoadConfigFileRules(path)
+	require.Error(t, err)
+	assert.Empty(t, rules)
+}
+
+func TestLoadConfigFileRules_EmptyFile_IsAnError(t *testing.T) {
+	for _, content := range []string{"", "  \n\t\n"} {
+		rules, err := LoadConfigFileRules(writeRules(t, content))
+		require.Error(t, err)
+		assert.Nil(t, rules)
+	}
+}

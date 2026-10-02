@@ -94,3 +94,29 @@ func TestRebuilds_PreserveConfigFileRules(t *testing.T) {
 	rs.rebuildClaudeSettingsRules(nil)
 	assert.Equal(t, classifier.AutoDeny, classifyMake(rs.classifier), "survives a claude-settings rebuild")
 }
+
+// TestConfigFileRulesReloader_KeepsLastGood_OnEmptyFile proves a truncated, not-yet-rewritten
+// save cannot clear deny rules, and that a valid rule beside an invalid one still applies.
+func TestConfigFileRulesReloader_KeepsLastGood_OnEmptyFile(t *testing.T) {
+	r, rs, path := newReloaderUnderTest(t)
+	writeSharedRules(t, path, yamlDeny)
+	require.True(t, r.reloadIfChanged())
+
+	require.NoError(t, os.WriteFile(path, nil, 0o600))
+	future := time.Now().Add(72 * time.Hour)
+	require.NoError(t, os.Chtimes(path, future, future))
+
+	assert.False(t, r.reloadIfChanged())
+	assert.Equal(t, classifier.AutoDeny, classifyMake(rs.classifier))
+}
+
+func TestConfigFileRulesReloader_AppliesValidRules_WhenOneIsInvalid(t *testing.T) {
+	r, rs, path := newReloaderUnderTest(t)
+	require.NoError(t, os.WriteFile(path, []byte(`rules:
+  - {name: broken, tool: Bash, command_pattern: '(', decision: allow}
+  - {name: block make, tool: Bash, programs: [make], priority: 1000, decision: deny}
+`), 0o600))
+
+	assert.True(t, r.reloadIfChanged())
+	assert.Equal(t, classifier.AutoDeny, classifyMake(rs.classifier))
+}

@@ -51,8 +51,11 @@ func (r *configFileRulesReloader) reloadIfChanged() bool {
 
 	rules, err := classifier.LoadConfigFileRules(r.path)
 	if err != nil {
-		log.Warn("[ConfigFileRules] keeping last-good rules, reload failed", "path", r.path, "err", err)
-		return false
+		if rules == nil {
+			log.Warn("[ConfigFileRules] keeping last-good rules, reload failed", "path", r.path, "err", err)
+			return false
+		}
+		log.Warn("[ConfigFileRules] applying valid rules, some were skipped", "path", r.path, "err", err)
 	}
 	r.apply(rules)
 	log.Info("[ConfigFileRules] loaded shared rules", "path", r.path, "rule_count", len(rules))
