@@ -56,8 +56,11 @@ describe("protected resync triggers", () => {
       '    console.log("[TerminalOutput] Manual reconnect requested");',
       "    setConnectionAttempts(0);",
       "    setShowReconnectButton(false);",
+      // scrolling project (plan 1.2.5f): the reconnect also bumps connectionEpoch so an
+      // in-flight scroll gesture and the TUI page estimate reset; the reconnect itself is unchanged.
+      "    bumpConnectionEpoch();",
       "    connect();",
-      "  }, [connect]);",
+      "  }, [connect, bumpConnectionEpoch]);",
     ].join("\n");
     expect(terminalOutputSrc).toContain(handleManualReconnectSnippet);
 
