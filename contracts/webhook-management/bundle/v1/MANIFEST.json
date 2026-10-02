@@ -1,0 +1,77 @@
+{
+  "format_version": 1,
+  "contract": "stapler-squad.generic-webhook-management",
+  "version": "v1",
+  "files": [
+    {
+      "path": "fixtures/capability-response.json",
+      "sha256": "61d3e18d7b59b402a78deff59f3d84e40f5b31158230490aad38ab5241c55188",
+      "size_bytes": 185
+    },
+    {
+      "path": "fixtures/emergency-cleanup-request.delete.json",
+      "sha256": "0b30b916da4fb030a58175f78a4ba005ca97e4977529b3973b760d742be39c4d",
+      "size_bytes": 370
+    },
+    {
+      "path": "fixtures/error.unauthenticated.json",
+      "sha256": "4f4f3b79a16e399b7a0eb461cbfc1611f8baff54c96a4c724e02d9f97e7e3ed9",
+      "size_bytes": 93
+    },
+    {
+      "path": "fixtures/error.version-conflict.json",
+      "sha256": "f5ab3d78372dc6ef34fcaf9d8285880233eb65c4811abd98a0541350f1d3d5a0",
+      "size_bytes": 148
+    },
+    {
+      "path": "fixtures/lifecycle-request.disable.json",
+      "sha256": "fe1c2114ae85b3736c476e5f1dc1fadb921b6da1dadf51357f33c4b8acb3a04f",
+      "size_bytes": 346
+    },
+    {
+      "path": "fixtures/reconcile-request.create.json",
+      "sha256": "bb95063e08196c50874a96c2de0b3adddcba3ad8d05e9bc20b310c92c84f94a3",
+      "size_bytes": 690
+    },
+    {
+      "path": "fixtures/reconcile-response.created.json",
+      "sha256": "45b5d3d9590e1ba26516b16e609167db862774a234ae9c4c4ddd4702f7390f54",
+      "size_bytes": 789
+    },
+    {
+      "path": "schemas/capability-response.schema.json",
+      "sha256": "fda368c0748c51d63500644e572be0169f48db73a22383fddf4bb7d08593f4a5",
+      "size_bytes": 626
+    },
+    {
+      "path": "schemas/emergency-cleanup-request.schema.json",
+      "sha256": "9b9ab2a823d7c40665a153847e7969c98a532158bc15642ea4a370995eb83e96",
+      "size_bytes": 732
+    },
+    {
+      "path": "schemas/error-response.schema.json",
+      "sha256": "bec6dc79f2350308187df98f319d67867eab04985a546e64cbb202947606c5e1",
+      "size_bytes": 954
+    },
+    {
+      "path": "schemas/lifecycle-request.schema.json",
+      "sha256": "53638c3774ae5a1f60397810915e5b50bb7595e36cb49715b3286ea5f33329be",
+      "size_bytes": 601
+    },
+    {
+      "path": "schemas/reconcile-request.schema.json",
+      "sha256": "df1ed49082a660d7ae2bf154856d4f620055bd626c2a75e9b275aa9aac76c6e1",
+      "size_bytes": 2059
+    },
+    {
+      "path": "schemas/reconcile-response.schema.json",
+      "sha256": "9deae338c2453a77ba7207ba1d632db19621e5b3b79e649085ee13c7e3013b24",
+      "size_bytes": 442
+    },
+    {
+      "path": "schemas/registration.schema.json",
+      "sha256": "312570688765cdb5c0a28f6e0f6241b730987cd9ee93756ac190bff4a5be0b97",
+      "size_bytes": 1570
+    }
+  ]
+}
