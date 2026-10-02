@@ -47,6 +47,18 @@ export function xtermTerminalMockModule(mockXtermHandle: unknown) {
   return { XtermTerminal };
 }
 
+/** Like xtermTerminalMockModule, but hands every render's props to `capture` so tests can drive the callbacks. */
+export function capturingXtermTerminalMockModule(mockXtermHandle: unknown, capture: (props: any) => void) {
+  const React = require("react");
+  const XtermTerminal = React.forwardRef((props: any, ref: unknown) => {
+    capture(props);
+    React.useImperativeHandle(ref, () => mockXtermHandle);
+    return React.createElement("div", { "data-testid": "mock-xterm" });
+  });
+  XtermTerminal.displayName = "XtermTerminal";
+  return { XtermTerminal };
+}
+
 export function useTerminalStreamMockModule() {
   return { useTerminalStream: jest.fn() };
 }

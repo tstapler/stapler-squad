@@ -7,32 +7,15 @@
 import React from "react";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 
-const mockXtermHandle: any = {
-  terminal: null,
-  fit: jest.fn(),
-  refit: jest.fn(),
-  write: jest.fn(),
-  writeln: jest.fn(),
-  clear: jest.fn(),
-  focus: jest.fn(),
-  serializeAddon: null,
-  search: jest.fn().mockReturnValue(false),
-  searchNext: jest.fn().mockReturnValue(false),
-  searchPrevious: jest.fn().mockReturnValue(false),
-};
+const mockXtermHandle: any = { ...require("./terminalOutputTestMocks").createMockXtermHandle(), serializeAddon: null };
 
 let capturedXtermProps: any = null;
 
-jest.mock("../XtermTerminal", () => {
-  const React = require("react");
-  const XtermTerminal = React.forwardRef((props: any, ref: any) => {
+jest.mock("../XtermTerminal", () =>
+  require("./terminalOutputTestMocks").capturingXtermTerminalMockModule(mockXtermHandle, (props: any) => {
     capturedXtermProps = props;
-    React.useImperativeHandle(ref, () => mockXtermHandle);
-    return React.createElement("div", { "data-testid": "mock-xterm" });
-  });
-  XtermTerminal.displayName = "XtermTerminal";
-  return { XtermTerminal };
-});
+  })
+);
 
 jest.mock("@/lib/hooks/useTerminalStream", () => ({ useTerminalStream: jest.fn() }));
 jest.mock("@/lib/terminal/TerminalDimensionCache", () =>
