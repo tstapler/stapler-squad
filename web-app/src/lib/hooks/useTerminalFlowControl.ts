@@ -6,6 +6,7 @@ import { create } from "@bufbuild/protobuf";
 import { dimensionsEqual, type ResizeDimensions } from "@/lib/terminal/types";
 import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import { generateSecureId } from "@/lib/pane/paneUtils";
+import { mobileDebug } from "@/lib/terminal/mobileDebug";
 import type { Terminal } from '@xterm/xterm';
 
 // Epic 3.1 (AC2) — client-generated correlation ID echoed back on the
@@ -313,6 +314,7 @@ export function useTerminalFlowControl({
       dimensionsEqual(lastSentDimsRef.current, { cols, rows })
     ) {
       console.log(`[useTerminalFlowControl] Resize skipped, value unchanged (${cols}x${rows})`);
+      mobileDebug.log('resize', { cols, rows, outcome: 'deduped', bypassed: false });
       return;
     }
 
@@ -326,6 +328,7 @@ export function useTerminalFlowControl({
       if (!pushMessageRef.current || !isConnectedRef.current) return;
       try {
         console.log(`[useTerminalFlowControl] Sending resize to server: ${cols}x${rows}`);
+        mobileDebug.log('resize', { cols, rows, outcome: 'sent', bounce: false, bypassed: false });
         pushMessage(
           create(TerminalDataSchema, {
             sessionId,
@@ -395,6 +398,7 @@ export function useTerminalFlowControl({
       const holdMs = Math.min(BOUNCE_HOLD_BASE_MS * 2 ** bounceStreakRef.current, BOUNCE_HOLD_MAX_MS);
       bounceStreakRef.current += 1;
       console.log(`[useTerminalFlowControl] Resize bounce detected (${cols}x${rows} matches recent history), holding ${holdMs}ms (streak ${bounceStreakRef.current})`);
+      mobileDebug.log('resize', { cols, rows, outcome: 'bounce', bounce: true, holdMs, streak: bounceStreakRef.current, bypassed: false });
       pendingResizeTimerRef.current = setTimeout(() => {
         pendingResizeTimerRef.current = null;
         doSend();
@@ -407,6 +411,7 @@ export function useTerminalFlowControl({
       // settled size always reaches the server after rapid resize sequences.
       const remaining = THROTTLE_MS - timeSinceLastResize;
       console.log(`[useTerminalFlowControl] Resize deferred ${remaining}ms (${cols}x${rows})`);
+      mobileDebug.log('resize', { cols, rows, outcome: 'deferred', bounce: false, holdMs: remaining, bypassed: false });
       pendingResizeTimerRef.current = setTimeout(() => {
         pendingResizeTimerRef.current = null;
         doSend();

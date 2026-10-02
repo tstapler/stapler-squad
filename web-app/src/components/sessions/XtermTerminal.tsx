@@ -28,6 +28,17 @@ import { dimensionsEqual, isFiniteResizeDimensions, type ResizeDimensions } from
 import { getCellDimensions } from "@/lib/terminal/cellDimensions";
 import { pointToCell, rafThrottlePoint, type CellGeometry } from "@/lib/terminal/touchDrag";
 import { isMouseTracking } from "@/lib/terminal/mouseTracking";
+import { mobileDebug } from "@/lib/terminal/mobileDebug";
+import {
+  postFitRepaint,
+  canFit,
+  FIT_RETRY_MAX_ATTEMPTS,
+  FIT_RETRY_TIMEOUT_MS,
+  type RendererKind,
+  type RefitOptions,
+  type RefitReason,
+  type RequestFitOptions,
+} from "@/lib/terminal/postFitRepaint";
 
 const DEFAULT_SCROLLBACK_SIZE = 5000;
 
@@ -183,6 +194,13 @@ export interface XtermTerminalHandle {
    * silently dropped, leaving those rows unpainted until a later resize forces a full repaint.
    */
   resize: (cols: number, rows: number) => void;
+  /**
+   * Starts the resize sampler directly (no 150 ms RO debounce) and always
+   * repaints, even when rows/cols are unchanged. Safe to call when the
+   * container is zero-size: retries are bounded and then deferred to the
+   * next non-zero ResizeObserver delivery.
+   */
+  refit: (opts?: RefitOptions) => void;
   search: (term: string) => boolean;
   searchNext: (term: string) => boolean;
   searchPrevious: (term: string) => boolean;
@@ -228,6 +246,11 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   const webglAddonRef = useRef<WebglAddon | null>(null);
   const serializeAddonRef = useRef<SerializeAddon | null>(null);
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  // Active renderer, for postFitRepaint's WebGL-only atlas clear. Starts as 'dom'
+  // (xterm's default) until an addon load succeeds.
+  const rendererRef = useRef<RendererKind>("dom");
+  // Bridges the effect-local sampler to useImperativeHandle's refit().
+  const requestFitRef = useRef<(opts: RequestFitOptions) => void>(() => {});
 
   // Refs for floating Copy button and toast — avoid React re-renders on 60fps selection changes
   const copyButtonRef = useRef<HTMLButtonElement>(null);
@@ -465,6 +488,39 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       rightClickSelectsWord: true, // Right-click selects the word under cursor
     });
 
+    // Repaint seam: every confirmed fit and every refit() request repaints through
+    // here. Loop guard: a repeat repaint at unchanged dims inside one frame
+    // (REPAINT_COALESCE_MS) is dropped, so a burst of refit() calls costs one refresh.
+    const REPAINT_COALESCE_MS = 16;
+    let lastRepaintAt = -Infinity;
+    let lastRepaintDims: ResizeDimensions | null = null;
+    const repaint = (reason: RefitReason) => {
+      const dims = { cols: terminal.cols, rows: terminal.rows };
+      const now = performance.now();
+      if (lastRepaintDims && dimensionsEqual(lastRepaintDims, dims) && now - lastRepaintAt < REPAINT_COALESCE_MS) {
+        return;
+      }
+      lastRepaintAt = now;
+      lastRepaintDims = dims;
+      postFitRepaint(terminal, rendererRef.current, reason);
+    };
+
+    // Per-fit diagnostics for the mobile debug log (Task 0.1.1c2); zero cost when the flag is off.
+    const logFit = (event: string, extra: Record<string, unknown> = {}) => {
+      const el = containerRef.current;
+      const vv = window.visualViewport;
+      mobileDebug.log(event, {
+        vvHeight: vv?.height,
+        vvOffsetTop: vv?.offsetTop,
+        clientWidth: el?.clientWidth,
+        clientHeight: el?.clientHeight,
+        cols: terminal.cols,
+        rows: terminal.rows,
+        renderer: rendererRef.current,
+        ...extra,
+      });
+    };
+
     // WebGL mismatch tracker + one-directional Canvas fallback (AC5). See
     // project_plans/terminal-resize-fit-loop/decisions/ADR-001-add-xterm-addon-canvas-dependency.md
     let webglMismatchCount = 0;
@@ -492,6 +548,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
       try {
         terminal.loadAddon(new CanvasAddon());
+        rendererRef.current = "canvas";
         // Wait one RAF frame after the addon swap before fitting, per the
         // historical xterm.js #1416 crash precedent (measuring against a
         // not-yet-initialized renderer).
@@ -503,6 +560,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           } else {
             console.warn('[XtermTerminal] Skipped post-fallback fit: proposed dimensions not finite');
           }
+          repaint("context-loss");
         });
       } catch (err) {
         // adversarial-review.md Blocker: CanvasAddon construction must be
@@ -511,6 +569,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         // DOM renderer is left active automatically — no explicit fallback
         // code path is needed (confirmed by build-vs-buy.md research).
         console.error("[XtermTerminal] Canvas renderer also failed to load; falling back to xterm's built-in DOM renderer", err);
+        rendererRef.current = "dom";
       }
     };
 
@@ -595,8 +654,11 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           if (cancelled) return;
           webglAddonRef.current = new WebglAddon();
           terminal.loadAddon(webglAddonRef.current);
+          rendererRef.current = "webgl";
+          mobileDebug.log("renderer", { renderer: "webgl" });
           webglAddonRef.current.onContextLoss(() => {
             console.warn('[XtermTerminal] WebGL context lost, falling back to canvas renderer');
+            mobileDebug.log("context-loss", { renderer: rendererRef.current });
             triggerCanvasFallback();
           });
           console.log("[XtermTerminal] WebGL renderer enabled");
@@ -605,6 +667,8 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         }
       } else {
         console.log("[XtermTerminal] WebGL2 unavailable (Android?), using canvas renderer");
+        rendererRef.current = "canvas";
+        mobileDebug.log("renderer", { renderer: "canvas" });
       }
     })();
 
@@ -1024,6 +1088,20 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       let sampleTimeout: NodeJS.Timeout | null = null;
       let sampleCount = 0;
       let pendingProposedDims: ResizeDimensions | null = null;
+      // Set by requestFitRef (refit()); consumed by whichever sampler branch ends the run.
+      let repaintRequested = false;
+      let repaintReason: RefitReason = "viewport-settle";
+      let anchorBottom = false;
+      // refit() found a zero-size container for the whole retry budget; the next
+      // non-zero ResizeObserver delivery re-issues it.
+      let pendingRefit = false;
+      let wasZero = false;
+
+      const consumeRepaintRequest = (): boolean => {
+        const requested = repaintRequested;
+        repaintRequested = false;
+        return requested;
+      };
 
       const stopSampler = () => {
         samplerActive = false;
@@ -1037,6 +1115,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
       const sampleTick = () => {
         if (!fitAddonRef.current || !terminalRef.current) {
+          consumeRepaintRequest();
           stopSampler();
           return;
         }
@@ -1047,10 +1126,14 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           rows: terminalRef.current.rows,
         };
         const result = shouldScheduleFit(proposed, applied, pendingProposedDims);
+        logFit("sampler-tick", { count: sampleCount, proposed, applied });
 
         if (result.schedule) {
           fitAddonRef.current.fit();
           console.log(`[XtermTerminal] Sampler confirmed resize, fit applied: ${terminalRef.current.cols} cols × ${terminalRef.current.rows} rows`);
+          logFit("sampler-fit", { forced: repaintRequested });
+          if (anchorBottom) terminalRef.current.scrollToBottom?.();
+          anchorBottom = false;
 
           // Sync lastContainerSize to the post-fit DOM dimensions so the next
           // ResizeObserver entry (triggered by fit() resizing xterm.js internals)
@@ -1067,12 +1150,19 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
             recordMismatchSample(mismatchInputs);
           }
 
+          // Always repaint after a confirmed fit; reason is the pending refit's, else the RO default.
+          const reason = repaintReason;
+          consumeRepaintRequest();
+          repaint(reason);
           stopSampler();
           return;
         }
 
         if (result.nextPending === null) {
           // At rest (proposed equals applied) or proposeDimensions() returned undefined.
+          // Only a refit() request repaints here; RO-driven at-rest stays as ADR-002 had it.
+          if (consumeRepaintRequest()) repaint(repaintReason);
+          anchorBottom = false;
           stopSampler();
           return;
         }
@@ -1082,6 +1172,9 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
         if (sampleCount >= MAX_SAMPLES) {
           console.warn('[XtermTerminal] Resize did not converge after 20 samples; giving up');
+          logFit("sampler-giveup", { samples: sampleCount });
+          if (consumeRepaintRequest()) repaint(repaintReason);
+          anchorBottom = false;
           // Full reset (not a partial abandon): give-up must not leave the
           // sampler permanently inert, since startSamplerIfNeeded() is a
           // no-op whenever samplerActive is already true. See ADR-002.
@@ -1097,7 +1190,97 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         samplerActive = true;
         sampleCount = 0;
         pendingProposedDims = null;
+        logFit("sampler-start");
         sampleTick();
+      };
+
+      // Bounded zero-size retry for refit(): 20 rAF attempts or 1000 ms, whichever first.
+      let retryRaf: number | null = null;
+      let retryTimeout: NodeJS.Timeout | null = null;
+      let retryAttempts = 0;
+      let retryOpts: RequestFitOptions | null = null;
+
+      const clearRetry = () => {
+        if (retryRaf !== null) cancelAnimationFrame(retryRaf);
+        if (retryTimeout) clearTimeout(retryTimeout);
+        retryRaf = null;
+        retryTimeout = null;
+        retryOpts = null;
+      };
+
+      const startRequest = (opts: RequestFitOptions) => {
+        if (opts.forceRepaint) {
+          repaintRequested = true;
+          repaintReason = opts.reason;
+          const buf = terminal.buffer?.active;
+          if (buf && typeof buf.baseY === "number" && buf.viewportY >= buf.baseY) anchorBottom = true;
+        }
+        startSamplerIfNeeded();
+      };
+
+      // Q3 signal: a visible container that extends below the visual viewport does not track it.
+      const checkViewportTracking = (el: HTMLElement) => {
+        const containerHeight = el.offsetHeight; // reads layout, forcing a reflow before the sampler measures
+        const vv = window.visualViewport;
+        if (!vv) return;
+        const rect = el.getBoundingClientRect();
+        mobileDebug.log("refit-viewport", {
+          vvHeight: vv.height,
+          vvOffsetTop: vv.offsetTop,
+          containerHeight,
+          containerTop: rect.top,
+        });
+        if (rect.bottom > vv.offsetTop + vv.height + 1) {
+          console.warn(
+            `[XtermTerminal] refit: container (bottom ${rect.bottom}px) does not track visualViewport (bottom ${vv.offsetTop + vv.height}px)`
+          );
+        }
+      };
+
+      const exhaustRetry = () => {
+        const opts = retryOpts;
+        clearRetry();
+        console.warn("[XtermTerminal] refit: container stayed zero-size, deferring to next ResizeObserver delivery");
+        logFit("fit-skipped", { reason: "zero-size-exhausted" });
+        pendingRefit = true;
+        if (opts) repaint(opts.reason); // never leave a canvas with valid dims stale
+      };
+
+      const retryAttempt = () => {
+        retryRaf = null;
+        if (canFit(containerRef.current)) {
+          const opts = retryOpts;
+          clearRetry();
+          if (opts) requestFitRef.current(opts);
+          return;
+        }
+        retryAttempts++;
+        if (retryAttempts >= FIT_RETRY_MAX_ATTEMPTS) {
+          exhaustRetry();
+          return;
+        }
+        retryRaf = requestAnimationFrame(retryAttempt);
+      };
+
+      requestFitRef.current = (opts) => {
+        const el = containerRef.current;
+        if (!el) return;
+        if (!canFit(el)) {
+          logFit("fit-skipped", { reason: "zero-size" });
+          if (retryOpts) {
+            retryOpts = opts; // already retrying; keep the latest reason
+            return;
+          }
+          retryOpts = opts;
+          retryAttempts = 0;
+          retryTimeout = setTimeout(exhaustRetry, FIT_RETRY_TIMEOUT_MS);
+          retryRaf = requestAnimationFrame(retryAttempt);
+          return;
+        }
+        clearRetry();
+        pendingRefit = false;
+        checkViewportTracking(el);
+        startRequest(opts);
       };
 
       const resizeObserver = new ResizeObserver((entries: ResizeObserverEntry[]) => {
@@ -1108,6 +1291,17 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
         // Get current container size
         const { width, height } = entry.contentRect;
+
+        // A restore after zero-size (or an exhausted refit) must repaint even when the size
+        // matches lastContainerSize, which would otherwise dedupe it away.
+        if (width === 0 || height === 0) {
+          wasZero = true;
+        } else if (wasZero || pendingRefit) {
+          const reason: RefitReason = "visibility";
+          wasZero = false;
+          pendingRefit = false;
+          requestFitRef.current({ forceRepaint: true, reason });
+        }
 
         // Only fit if size actually changed (avoid sub-pixel changes)
         const widthChanged = Math.abs(width - lastContainerSize.width) > 1;
@@ -1143,6 +1337,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           }, debounceDelay);
         } else if ((widthChanged || heightChanged) && (width === 0 || height === 0)) {
           console.log(`[XtermTerminal] Skipping fit: container collapsed to zero-size (${width}px × ${height}px)`);
+          logFit("fit-skipped", { reason: "ro-zero-size", width, height });
         }
       });
 
@@ -1155,6 +1350,8 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           clearTimeout(resizeTimeout);
         }
         stopSampler();
+        clearRetry();
+        requestFitRef.current = () => {};
         if (postFallbackRafId !== null) {
           cancelAnimationFrame(postFallbackRafId);
           postFallbackRafId = null;
@@ -1271,6 +1468,9 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     },
     resize: (cols: number, rows: number) => {
       terminalRef.current?.resize(cols, rows);
+    },
+    refit: (opts?: RefitOptions) => {
+      requestFitRef.current({ forceRepaint: true, reason: opts?.reason ?? "manual-resize" });
     },
     search: (term: string): boolean => {
       if (!searchAddonRef.current) return false;

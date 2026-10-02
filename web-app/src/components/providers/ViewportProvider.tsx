@@ -1,5 +1,6 @@
 'use client';
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { mobileDebug } from '@/lib/terminal/mobileDebug';
 
 interface ViewportContextValue {
   isMobile: boolean;    // < 600px
@@ -35,6 +36,12 @@ export function ViewportProvider({ children }: { children?: ReactNode }) {
     const vv = window.visualViewport;
     if (!vv) return;
 
+    const logViewport = (event: 'resize' | 'scroll') => () => {
+      mobileDebug.log('viewport', { event, height: vv.height, offsetTop: vv.offsetTop });
+    };
+    const onResize = logViewport('resize');
+    const onScroll = logViewport('scroll');
+
     const update = () => {
       requestAnimationFrame(() => {
         // Must listen to both resize AND scroll events on iOS Safari —
@@ -47,10 +54,14 @@ export function ViewportProvider({ children }: { children?: ReactNode }) {
       });
     };
 
+    vv.addEventListener('resize', onResize);
+    vv.addEventListener('scroll', onScroll);
     vv.addEventListener('resize', update);
     vv.addEventListener('scroll', update);
     update();
     return () => {
+      vv.removeEventListener('resize', onResize);
+      vv.removeEventListener('scroll', onScroll);
       vv.removeEventListener('resize', update);
       vv.removeEventListener('scroll', update);
     };
