@@ -5,7 +5,7 @@
  *
  * Implements a gesture state machine (pure transition table in
  * lib/terminal/gestureMachine.ts; this hook wires listeners, timers, rAF and effects):
- *   IDLE → PENDING → SCROLLING | SELECTING | TAPPING → IDLE   (CANCELLED on interrupts)
+ *   IDLE → PENDING → SCROLLING (→ COASTING) | SELECTING | TAPPING → IDLE   (CANCELLED on interrupts)
  *
  * Scroll drags run through ScrollAccumulator and a per-frame routing decision
  * (xterm-local scrollLines, or PgUp/PgDn / wheel bytes to a TUI).
@@ -20,15 +20,22 @@
  */
 
 import { useEffect, useRef, RefObject } from "react";
-import type { Terminal } from "@xterm/xterm";
+import type { IDisposable, Terminal } from "@xterm/xterm";
 import { getCellDimensions } from "@/lib/terminal/cellDimensions";
 import { isMouseTracking as isMouseTrackingUtil, readScrollMode } from "@/lib/terminal/mouseTracking";
 import { pointToCell, rafThrottlePoint, type CellGeometry } from "@/lib/terminal/touchDrag";
 import { reduce, type GestureEffect, type GestureEvent, type GestureState } from "@/lib/terminal/gestureMachine";
-import { clampLinesPerFrame, ScrollAccumulator, SLOP_PX } from "@/lib/terminal/scrollKinematics";
+import {
+  clampLinesPerFrame,
+  MOMENTUM_CONSTANTS,
+  MomentumTracker,
+  ScrollAccumulator,
+  SLOP_PX,
+} from "@/lib/terminal/scrollKinematics";
 import {
   decideAndLogScrollTarget,
   encodeWheel,
+  PAGE_FLING_CAP,
   PageAccumulator,
   ROUTING_VERIFIED,
   type RouteDecisionLog,
@@ -135,6 +142,18 @@ export function useTerminalGestures(options: GestureOptions): void {
       flingCap: Number.POSITIVE_INFINITY,
     });
     let lastTarget: ScrollTarget | null = null;
+
+    // Momentum (COASTING). The page accumulator is separate so only the fling is capped.
+    const tracker = new MomentumTracker();
+    let lastSampleAt = 0;
+    let reducedMotion = false;
+    let consumedByCoast = false;
+    let flingPageAcc: PageAccumulator | null = null;
+    let momentumTarget: ScrollTarget | null = null;
+    let momentumRaf: number | null = null;
+    let momentumLastFrameAt = 0;
+    let bufferChangeSub: IDisposable | null = null;
+    const MAX_FRAME_DT_MS = 50;
     let scrollThrottled: ((clientX: number, clientY: number) => void) | null = null;
     let cancelScrollThrottle: (() => void) | null = null;
     let selectThrottled: ((clientX: number, clientY: number) => void) | null = null;
@@ -166,11 +185,25 @@ export function useTerminalGestures(options: GestureOptions): void {
     const getScreenEl = (): HTMLElement | null =>
       containerEl.querySelector('.xterm-screen') as HTMLElement | null;
 
+    // ---- Momentum helpers ----
+    const cancelMomentum = () => {
+      if (momentumRaf !== null) {
+        cancelAnimationFrame(momentumRaf);
+        momentumRaf = null;
+      }
+      bufferChangeSub?.dispose();
+      bufferChangeSub = null;
+      tracker.cancel();
+      flingPageAcc = null;
+      momentumTarget = null;
+    };
+
     // ---- Transition helpers ----
-    // Stops timers, frames and remainders; the machine decides the resulting state.
+    // Stops timers, frames, momentum and remainders; the machine decides the resulting state.
     const stopGesture = () => {
       clearLongPressTimer();
       cancelPendingFrames();
+      cancelMomentum();
       lineAcc.reset();
       pageAcc.reset();
       lastTarget = null;
@@ -260,6 +293,15 @@ export function useTerminalGestures(options: GestureOptions): void {
           case 'tap':
             handleTap();
             break;
+          case 'clearSelection':
+            clearSelection();
+            break;
+          case 'startMomentum':
+            startMomentum();
+            break;
+          case 'setConsumedByCoast':
+            consumedByCoast = true;
+            break;
         }
       }
     };
@@ -301,7 +343,7 @@ export function useTerminalGestures(options: GestureOptions): void {
       return target;
     };
 
-    const dispatchScroll = (terminal: Terminal, target: ScrollTarget, lines: number) => {
+    const dispatchScroll = (terminal: Terminal, target: ScrollTarget, lines: number, pages: PageAccumulator = pageAcc) => {
       switch (target) {
         case 'xterm-local': {
           const clamped = clampLinesPerFrame(lines, terminal.rows);
@@ -309,8 +351,8 @@ export function useTerminalGestures(options: GestureOptions): void {
           return;
         }
         case 'tui-pgkeys': {
-          pageAcc.setRows(terminal.rows);
-          const keys = pageAcc.push(lines);
+          pages.setRows(terminal.rows);
+          const keys = pages.push(lines);
           if (keys) onSendData(keys);
           return;
         }
@@ -349,9 +391,76 @@ export function useTerminalGestures(options: GestureOptions): void {
       });
     };
 
+    // ---- Momentum loop: one rAF per frame, one dispatch per frame ----
+    const endMomentumOnItsOwn = () => dispatch({ type: 'momentumEnd' }, null, undefined);
+
+    const atLocalEdge = (terminal: Terminal, lines: number): boolean => {
+      const active = terminal.buffer?.active;
+      if (!active || lines === 0) return false;
+      return lines < 0 ? active.viewportY <= 0 : active.viewportY >= active.baseY;
+    };
+
+    const momentumFrame = () => {
+      momentumRaf = null;
+      const terminal = terminalRef.current;
+      if (state !== 'COASTING' || !terminal || cachedCellH <= 0 || !flingPageAcc) {
+        endMomentumOnItsOwn();
+        return;
+      }
+      const target = resolveTarget(readScrollMode(terminal));
+      if (target !== momentumTarget) {
+        endMomentumOnItsOwn(); // routing flipped without a buffer switch (e.g. mouse tracking toggled)
+        return;
+      }
+      const now = Date.now();
+      const dt = Math.min(Math.max(now - momentumLastFrameAt, 1), MAX_FRAME_DT_MS);
+      momentumLastFrameAt = now;
+      // step() keeps the sign of the sampled y movement; line deltas are positive toward newer (finger up).
+      const lines = lineAcc.push(-tracker.step(dt), cachedCellH);
+      // A TUI owns its scrollback, so only the local buffer has a detectable edge.
+      if (target === 'xterm-local' && atLocalEdge(terminal, lines)) {
+        endMomentumOnItsOwn();
+        return;
+      }
+      dispatchScroll(terminal, target, lines, flingPageAcc);
+      mobileDebug.log('momentum', { target, lines, active: tracker.active });
+      if (!tracker.active || (target === 'tui-pgkeys' && flingPageAcc.capped)) {
+        endMomentumOnItsOwn();
+        return;
+      }
+      momentumRaf = requestAnimationFrame(momentumFrame);
+    };
+
+    const startMomentum = () => {
+      const terminal = terminalRef.current;
+      cancelPendingFrames(); // the finger-down frame; remainders stay for the first momentum frame
+      if (!terminal || cachedCellH <= 0) {
+        endMomentumOnItsOwn();
+        return;
+      }
+      momentumTarget = resolveTarget(readScrollMode(terminal));
+      flingPageAcc = new PageAccumulator({ rows: terminal.rows, now: () => Date.now(), flingCap: PAGE_FLING_CAP });
+      momentumLastFrameAt = Date.now();
+      bufferChangeSub = terminal.buffer?.onBufferChange?.(() => {
+        if (state === 'COASTING') dispatch({ type: 'interrupt' }, null, undefined);
+      }) ?? null;
+      momentumRaf = requestAnimationFrame(momentumFrame);
+    };
+
+    // Release speed from recent samples; a finger that paused before lifting does not fling.
+    const releaseStartsFling = (): boolean => {
+      if (cachedCellH <= 0 || Date.now() - lastSampleAt > MOMENTUM_CONSTANTS.windowMs) {
+        tracker.cancel();
+        return false;
+      }
+      return tracker.release(reducedMotion);
+    };
+
     const beginScroll = (touch: Touch | undefined) => {
       const y = touch?.clientY ?? lastY;
       lastY = y;
+      consumedByCoast = false;
+      tracker.cancel();
       lineAcc.reset();
       pageAcc.reset();
       lastTarget = null;
@@ -367,6 +476,13 @@ export function useTerminalGestures(options: GestureOptions): void {
       cachedCellH = t ? getCellDimensions(t).cellH : 0;
       [scrollThrottled, cancelScrollThrottle] = rafThrottlePoint(onScrollFrame);
       scrollThrottled(0, y); // one frame carries the seeded overshoot
+    };
+
+    const hasSelection = (t: Terminal): boolean =>
+      typeof t.hasSelection === 'function' ? t.hasSelection() : Boolean(t.getSelection?.());
+
+    const clearSelection = () => {
+      terminalRef.current?.clearSelection?.();
     };
 
     const handleTap = () => {
@@ -447,7 +563,10 @@ export function useTerminalGestures(options: GestureOptions): void {
         dispatch({ type: 'touchcancel' }, null, undefined);
         return;
       }
+      // A stale coast-stop flag never survives a touchstart that is not itself a touch-to-stop.
+      if (state !== 'COASTING') consumedByCoast = false;
       if (e.touches.length === 1) {
+        reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
         const touch = e.touches[0];
         startX = touch.clientX;
         startY = touch.clientY;
@@ -472,12 +591,20 @@ export function useTerminalGestures(options: GestureOptions): void {
     const onTouchMove = (e: TouchEvent) => {
       const touch = e.touches[0];
       const absDy = touch ? Math.abs(touch.clientY - startY) : 0;
-      dispatch({ type: 'touchmove', touchCount: e.touches.length, absDy, slopPx: SLOP_PX }, e, touch);
+      const absDx = touch ? Math.abs(touch.clientX - startX) : 0;
+      dispatch({ type: 'touchmove', touchCount: e.touches.length, absDx, absDy, slopPx: SLOP_PX }, e, touch);
+      if (state === 'SCROLLING' && touch) {
+        lastSampleAt = Date.now();
+        tracker.addSample(lastSampleAt, touch.clientY);
+      }
     };
 
     // ---- touchend (registered on document) ----
     const onTouchEnd = (e: TouchEvent) => {
       const touch = e.changedTouches[0];
+      const t = terminalRef.current;
+      const wasConsumedByCoast = consumedByCoast;
+      consumedByCoast = false;
       dispatch(
         {
           type: 'touchend',
@@ -485,6 +612,9 @@ export function useTerminalGestures(options: GestureOptions): void {
           totalDy: Math.abs((touch?.clientY ?? startY) - startY),
           longPressMs: longPressMs(),
           tapTolerancePx: SLOP_PX,
+          flinging: state === 'SCROLLING' && releaseStartsFling(),
+          consumedByCoast: wasConsumedByCoast,
+          selectionActive: state === 'PENDING' && t !== null && hasSelection(t),
         },
         e,
         touch,
@@ -494,6 +624,7 @@ export function useTerminalGestures(options: GestureOptions): void {
     // ---- touchcancel ----
     const onTouchCancel = () => {
       mobileDebug.log('touchcancel', { state });
+      consumedByCoast = false;
       dispatch({ type: 'touchcancel' }, null, undefined);
     };
 
@@ -517,6 +648,7 @@ export function useTerminalGestures(options: GestureOptions): void {
       cancelGestureRef.current = null;
       clearLongPressTimer();
       cancelPendingFrames();
+      cancelMomentum();
       containerEl.removeEventListener('touchstart', onTouchStart);
       document.removeEventListener('touchmove', onTouchMove);
       document.removeEventListener('touchend', onTouchEnd);

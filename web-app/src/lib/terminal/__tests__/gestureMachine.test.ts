@@ -1,12 +1,26 @@
 import { reduce, type GestureEvent, type GestureState, type GestureEffect } from "../gestureMachine";
 
-const move = (absDy: number, touchCount = 1): GestureEvent => ({ type: "touchmove", touchCount, absDy, slopPx: 15 });
-const end = (totalDy: number, elapsedMs: number): GestureEvent => ({
+const move = (absDy: number, touchCount = 1, absDx = 0): GestureEvent => ({
+  type: "touchmove",
+  touchCount,
+  absDx,
+  absDy,
+  slopPx: 15,
+});
+const end = (
+  totalDy: number,
+  elapsedMs: number,
+  flags: { flinging?: boolean; consumedByCoast?: boolean; selectionActive?: boolean } = {},
+): GestureEvent => ({
   type: "touchend",
   totalDy,
   elapsedMs,
   longPressMs: 400,
   tapTolerancePx: 15,
+  flinging: false,
+  consumedByCoast: false,
+  selectionActive: false,
+  ...flags,
 });
 
 type Row = [name: string, from: GestureState, event: GestureEvent, to: GestureState, effects: GestureEffect[]];
@@ -38,6 +52,21 @@ const TABLE: Row[] = [
   ["cancelled touchcancel returns to idle", "CANCELLED", { type: "touchcancel" }, "IDLE", ["abort"]],
   ["cancelled single-finger touchstart begins a new gesture", "CANCELLED", { type: "touchstart", touchCount: 1 }, "PENDING", ["startLongPressTimer"]],
   ["cancelled long-press is ignored", "CANCELLED", { type: "longPress" }, "CANCELLED", []],
+  // S9 rows added by Stories 1.2.2 / 1.2.10
+  ["horizontal-first move past slop cancels (no scroll, no preventDefault)", "PENDING", move(3, 1, 40), "CANCELLED", ["abort"]],
+  ["horizontal drift under slop stays pending", "PENDING", move(3, 1, 15), "PENDING", []],
+  ["diagonal move with dy dominant past slop scrolls", "PENDING", move(40, 1, 20), "SCROLLING", ["clearLongPressTimer", "beginScroll", "preventDefault"]],
+  ["scrolling fling release coasts and suppresses the click", "SCROLLING", end(80, 300, { flinging: true }), "COASTING", ["startMomentum", "preventDefault"]],
+  ["coasting touchstart cancels momentum and marks consumedByCoast (no long-press timer)", "COASTING", { type: "touchstart", touchCount: 1 }, "PENDING", ["abort", "setConsumedByCoast"]],
+  ["coasting multi-touch touchstart aborts", "COASTING", { type: "touchstart", touchCount: 2 }, "IDLE", ["abort"]],
+  ["coasting momentum end returns to idle", "COASTING", { type: "momentumEnd" }, "IDLE", ["abort"]],
+  ["momentum end outside coasting is ignored", "IDLE", { type: "momentumEnd" }, "IDLE", []],
+  ["coasting touchcancel resets to idle", "COASTING", { type: "touchcancel" }, "IDLE", ["abort"]],
+  ["coasting interrupt cancels", "COASTING", { type: "interrupt" }, "CANCELLED", ["abort"]],
+  ["coasting stray move is ignored", "COASTING", move(80), "COASTING", []],
+  ["coasting stray touchend does not stop momentum", "COASTING", end(0, 50), "COASTING", []],
+  ["touch-to-stop release is not a tap and suppresses the click", "PENDING", end(0, 50, { consumedByCoast: true }), "IDLE", ["abort", "preventDefault"]],
+  ["tap with a selection active clears it and does not tap", "PENDING", end(5, 100, { selectionActive: true }), "IDLE", ["clearLongPressTimer", "clearSelection"]],
 ];
 
 describe("gestureMachine.reduce", () => {

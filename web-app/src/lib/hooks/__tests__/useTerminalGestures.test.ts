@@ -394,7 +394,7 @@ describe('useTerminalGestures', () => {
     });
 
     // Deliberate change (plan Slop rule): tap tolerance widened from 8px to SLOP_PX, so there is no dead zone.
-    it.each([8, 12, 14])('touchend_should_Tap_When_MovedUnderSlop_NoDeadZone (%ipx)', (dy) => {
+    it.each([8, 12, 14])('touchend_should_Tap_When_MovedUnderSlopAndReleasedBefore400ms (%ipx drift, no dead zone)', (dy) => {
       const { terminalRef } = mount('none');
       fireTouchStart(100, 100);
       move(100, 100 + dy);
@@ -411,24 +411,71 @@ describe('useTerminalGestures', () => {
       expect(terminalRef.current!.focus).not.toHaveBeenCalled();
     });
 
-    it('touchend_should_Tap_When_OnlyHorizontalDrift (current: dx is not counted)', () => {
+    // Deliberate change (Story 1.2.10): a horizontal-first drag past the slop is CANCELLED, so its release is not a tap.
+    it('touchend_should_NotTap_When_HorizontalFirstDragPastSlop (was: dx not counted, tapped)', () => {
       const { terminalRef } = mount('none');
       fireTouchStart(100, 100);
       move(160, 100);
       jest.advanceTimersByTime(100);
       fireTouchEnd(160, 100);
+      expect(terminalRef.current!.focus).not.toHaveBeenCalled();
+    });
+
+    it('touchend_should_Tap_When_HorizontalDriftUnderSlop', () => {
+      const { terminalRef } = mount('none');
+      fireTouchStart(100, 100);
+      move(112, 100);
+      jest.advanceTimersByTime(100);
+      fireTouchEnd(112, 100);
       expect(terminalRef.current!.focus).toHaveBeenCalledTimes(1);
     });
 
-    it('touchend_should_FocusAndNotClearSelection_When_TapWhileSelectionActive (current: no clear-selection branch)', () => {
+    // Deliberate change (Story 1.2.10): a tap while a selection is active only clears it (was: focused, never cleared).
+    it('touchend_should_ClearSelectionAndNotFocus_When_TapWhileSelectionActive', () => {
       const { terminalRef } = mount('none');
-      (terminalRef.current!.getSelection as jest.Mock).mockReturnValue('selected text');
-      (terminalRef.current as any).clearSelection = jest.fn();
+      const term = terminalRef.current as any;
+      term.getSelection.mockReturnValue('selected text');
+      term.clearSelection = jest.fn(() => term.getSelection.mockReturnValue(''));
       fireTouchStart(100, 100);
       jest.advanceTimersByTime(100);
       fireTouchEnd(100, 100);
+      expect(term.clearSelection).toHaveBeenCalledTimes(1);
+      expect(term.focus).not.toHaveBeenCalled();
+      // The next tap focuses as usual (and the clearing tap does not arm a double-tap).
+      const screen = withScreen();
+      jest.advanceTimersByTime(100);
+      fireTouchStart(100, 100);
+      fireTouchEnd(100, 100);
+      expect(term.focus).toHaveBeenCalledTimes(1);
+      expect(dispatchedTypes(screen)).toEqual([]);
+    });
+
+    it('touchend_should_PreferHasSelection_When_TerminalExposesIt', () => {
+      const { terminalRef } = mount('none');
+      const term = terminalRef.current as any;
+      term.hasSelection = jest.fn().mockReturnValue(true);
+      term.clearSelection = jest.fn();
+      fireTouchStart(100, 100);
+      fireTouchEnd(100, 100);
+      expect(term.clearSelection).toHaveBeenCalledTimes(1);
+      expect(term.focus).not.toHaveBeenCalled();
+    });
+
+    it('touchcancel_should_ResetStateAndNotCoast_When_ScrollingTouchCancelled', () => {
+      const { terminalRef } = mount();
+      fireTouchStart(100, 100);
+      for (let i = 1; i <= 6; i++) { // fast fling samples (1.2 px/ms)
+        jest.advanceTimersByTime(16);
+        move(100, 100 + i * 19.2);
+      }
+      const callsBeforeCancel = (terminalRef.current!.scrollLines as jest.Mock).mock.calls.length;
+      cancel();
+      jest.advanceTimersByTime(16 * 30);
+      expect(terminalRef.current!.scrollLines).toHaveBeenCalledTimes(callsBeforeCancel); // no coasting frames
+      expect(move(100, 300).preventDefault).not.toHaveBeenCalled();
+      fireTouchStart(100, 100); // next touchstart begins a fresh PENDING: a tap focuses
+      fireTouchEnd(100, 100);
       expect(terminalRef.current!.focus).toHaveBeenCalledTimes(1);
-      expect((terminalRef.current as any).clearSelection).not.toHaveBeenCalled();
     });
 
     // ---- long-press selecting ----
@@ -1114,6 +1161,379 @@ describe('useTerminalGestures', () => {
       expect(term.scrollLines).toHaveBeenCalledWith(-2);
       rerender({ gestureScrollEnabled: false });
       expect(fakeContainer.el.removeEventListener).toHaveBeenCalledWith('touchstart', expect.any(Function));
+    });
+  });
+
+
+  // -------------------------------------------------------------------------
+  // Story 1.2.2 momentum in the hook (COASTING, consumedByCoast, cancel sources, edge/page cap)
+  // -------------------------------------------------------------------------
+  describe('momentum (Story 1.2.2)', () => {
+    const START_Y = 100;
+    const REDUCED_QUERY = '(prefers-reduced-motion: reduce)';
+    type HookOpts = Partial<Parameters<typeof useTerminalGestures>[0]>;
+
+    let reducedMotion = false;
+    let bufferChangeCb: (() => void) | null = null;
+    let bufferDispose: jest.Mock;
+    let origMatchMedia: typeof window.matchMedia;
+
+    beforeEach(() => {
+      reducedMotion = false;
+      bufferChangeCb = null;
+      bufferDispose = jest.fn();
+      origMatchMedia = window.matchMedia;
+      window.matchMedia = jest.fn((query: string) => ({ matches: query === REDUCED_QUERY && reducedMotion })) as any;
+      (getCellDimensions as jest.Mock).mockReturnValue({ cellH: 4, cellW: 10 });
+    });
+
+    afterEach(() => {
+      window.matchMedia = origMatchMedia;
+      (getCellDimensions as jest.Mock).mockReturnValue({ cellH: 20, cellW: 10 });
+      delete (window as any).visualViewport;
+    });
+
+    function mountM(
+      o: { bufferType?: 'normal' | 'alternate'; tracking?: string; cellH?: number; viewportY?: number; baseY?: number } = {},
+      hookOpts: HookOpts = {},
+    ) {
+      (getCellDimensions as jest.Mock).mockReturnValue({ cellH: o.cellH ?? 4, cellW: 10 });
+      const terminalRef = makeTerminalRef(o.tracking ?? 'none') as any;
+      const term = terminalRef.current;
+      const active = { type: o.bufferType ?? 'normal', viewportY: o.viewportY ?? 500, baseY: o.baseY ?? 1000 };
+      term.buffer = {
+        active,
+        onBufferChange: jest.fn((cb: () => void) => {
+          bufferChangeCb = cb;
+          return { dispose: bufferDispose };
+        }),
+      };
+      term.scrollLines.mockImplementation((n: number) => {
+        active.viewportY = Math.max(0, Math.min(active.baseY, active.viewportY + n));
+      });
+      const view = renderHook((props: HookOpts) =>
+        useTerminalGestures({ containerRef, terminalRef, onSendData, ...props }), { initialProps: hookOpts });
+      return { terminalRef, term, active, ...view };
+    }
+
+    const start = (y = START_Y, x = 100) => fireTouchStart(x, y);
+    const mv = (y: number, x = 100) => {
+      const ev = makeTouchEvent('touchmove', x, y);
+      docHandlers['touchmove']?.(ev);
+      return ev;
+    };
+    const end = (y: number) => {
+      const ev = makeTouchEvent('touchend', 100, y, 'changedTouches');
+      docHandlers['touchend']?.(ev);
+      return ev;
+    };
+    const frame = (n = 1) => { for (let i = 0; i < n; i++) jest.advanceTimersByTime(16); };
+
+    /** Finger-down drag at `pxPerMs` for 96 ms, then release: starts a fling (dir +1 = finger down = older). */
+    function fling(pxPerMs = 1.2, dir: 1 | -1 = 1) {
+      start(START_Y);
+      let y = START_Y;
+      for (let i = 0; i < 6; i++) {
+        jest.advanceTimersByTime(16);
+        y += dir * pxPerMs * 16;
+        mv(y);
+      }
+      end(y);
+      return y;
+    }
+
+    it('momentum_should_DispatchDecayingScrollLinesAtMostOncePerFrame_When_FlingReleased', () => {
+      const { term } = mountM();
+      fling(1.2);
+      term.scrollLines.mockClear();
+      const perFrame: number[] = [];
+      const callsAt: number[] = [];
+      for (let i = 0; i < 130; i++) {
+        const before = term.scrollLines.mock.calls.length;
+        frame();
+        const made = term.scrollLines.mock.calls.length - before;
+        expect(made).toBeLessThanOrEqual(1);
+        if (made === 1) perFrame.push(term.scrollLines.mock.calls[before][0]);
+        callsAt.push(term.scrollLines.mock.calls.length);
+      }
+      expect(perFrame.length).toBeGreaterThan(20);
+      expect(perFrame.every((n) => n < 0)).toBe(true); // finger moved down -> older output
+      const mags = perFrame.map(Math.abs);
+      for (let i = 1; i < mags.length; i++) expect(mags[i]).toBeLessThanOrEqual(mags[i - 1] + 1); // decays (trunc jitter of 1)
+      expect(mags[0]).toBeGreaterThan(mags[mags.length - 1]);
+      // 1.2 * 0.95^n < 0.02 px/ms by frame ~80: nothing dispatches after that
+      expect(callsAt[129]).toBe(callsAt[90]);
+    });
+
+    it('momentum_should_ScrollNewerWithPositiveLines_When_FingerFlungUp', () => {
+      const { term } = mountM();
+      fling(1.2, -1);
+      term.scrollLines.mockClear();
+      frame(5);
+      expect(term.scrollLines.mock.calls.length).toBeGreaterThan(0);
+      expect(term.scrollLines.mock.calls.every((c: number[]) => c[0] > 0)).toBe(true);
+    });
+
+    it('momentum_should_NeverDispatchTwiceInOneFrame_When_FlingRunsSixtyFrames', () => {
+      const { term } = mountM({ bufferType: 'alternate' });
+      fling(3);
+      term.scrollLines.mockClear();
+      onSendData.mockClear();
+      for (let i = 0; i < 60; i++) {
+        const before = term.scrollLines.mock.calls.length + onSendData.mock.calls.length;
+        frame();
+        expect(term.scrollLines.mock.calls.length + onSendData.mock.calls.length - before).toBeLessThanOrEqual(1);
+      }
+      expect(term.scrollLines).not.toHaveBeenCalled();
+    });
+
+    it('momentum_should_NotStart_When_PrefersReducedMotion (read at gesture start; drag still tracks)', () => {
+      reducedMotion = true;
+      const { term } = mountM();
+      start(START_Y);
+      expect(window.matchMedia).toHaveBeenCalledWith(REDUCED_QUERY);
+      let y = START_Y;
+      for (let i = 0; i < 6; i++) { jest.advanceTimersByTime(16); y += 19.2; mv(y); }
+      frame();
+      expect(term.scrollLines.mock.calls.length).toBeGreaterThan(0); // 1:1 drag
+      end(y);
+      term.scrollLines.mockClear();
+      frame(20);
+      expect(term.scrollLines).not.toHaveBeenCalled();
+    });
+
+    it('momentum_should_NotStart_When_SlowReleaseOrFingerHeldStill', () => {
+      const { term } = mountM();
+      start(START_Y);
+      let y = START_Y;
+      for (let i = 0; i < 6; i++) { jest.advanceTimersByTime(16); y += 0.1 * 16 + (i === 0 ? 15 : 0); mv(y); }
+      end(y);
+      term.scrollLines.mockClear();
+      frame(20);
+      expect(term.scrollLines).not.toHaveBeenCalled();
+
+      start(START_Y);
+      y = START_Y;
+      for (let i = 0; i < 6; i++) { jest.advanceTimersByTime(16); y += 19.2; mv(y); }
+      jest.advanceTimersByTime(300); // hold still before lifting
+      end(y);
+      term.scrollLines.mockClear();
+      frame(20);
+      expect(term.scrollLines).not.toHaveBeenCalled();
+    });
+
+    // ---- touch-to-stop / consumedByCoast ----
+    it('momentum_should_CancelAndSkipTapFocus_When_TouchstartDuringCoasting', () => {
+      const { term } = mountM();
+      const y = fling(1.2);
+      frame(3);
+      term.scrollLines.mockClear();
+      start(y);
+      frame(10);
+      expect(term.scrollLines).not.toHaveBeenCalled(); // momentum cancelled
+      const ev = end(y);
+      expect(term.focus).not.toHaveBeenCalled();
+      expect(onSendData).not.toHaveBeenCalled();
+      expect(ev.preventDefault).toHaveBeenCalled(); // no synthesized click -> no focus -> keyboard stays closed
+      // state is back to IDLE: the next tap focuses as before
+      start(START_Y);
+      end(START_Y);
+      expect(term.focus).toHaveBeenCalledTimes(1);
+    });
+
+    it('momentum_should_NotStartLongPress_When_TouchstartDuringCoasting', () => {
+      const screen = { dispatchEvent: jest.fn() };
+      (fakeContainer.el.querySelector as jest.Mock).mockReturnValue(screen);
+      mountM();
+      const y = fling(1.2);
+      frame(3);
+      start(y);
+      jest.advanceTimersByTime(500);
+      expect(screen.dispatchEvent).not.toHaveBeenCalled();
+    });
+
+    it('momentum_should_ClearCoastFlagAndScroll_When_TouchstartDuringCoastingBeginsNewDrag', () => {
+      const { term } = mountM();
+      const y = fling(1.2);
+      frame(3);
+      term.scrollLines.mockClear();
+      start(y);
+      mv(y + SLOP_PX + 40);
+      frame();
+      expect(term.scrollLines.mock.calls.length).toBeGreaterThan(0);
+      end(y + SLOP_PX + 40);
+      start(START_Y); // flag not stale
+      end(START_Y);
+      expect(term.focus).toHaveBeenCalledTimes(1);
+    });
+
+    it('momentum_should_ResetStateAndCoastFlag_When_TouchcancelDuringCoasting', () => {
+      const { term } = mountM();
+      const y = fling(1.2);
+      frame(3);
+      start(y); // touch-to-stop sets the flag
+      docHandlers['touchcancel']?.({} as TouchEvent);
+      term.scrollLines.mockClear();
+      frame(10);
+      expect(term.scrollLines).not.toHaveBeenCalled();
+      start(START_Y);
+      end(START_Y);
+      expect(term.focus).toHaveBeenCalledTimes(1); // flag was reset by the touchcancel
+    });
+
+    it('momentum_should_ClearStaleCoastFlag_When_NextTouchstartIsNotACoastStop', () => {
+      const { term } = mountM();
+      const y = fling(1.2);
+      frame(3);
+      start(y); // flag set, then a second finger aborts the touch before its touchend
+      fakeContainer.fire('touchstart', {
+        type: 'touchstart', cancelable: true, preventDefault: jest.fn(), target: null,
+        touches: [{ clientX: 100, clientY: y }, { clientX: 200, clientY: y }], changedTouches: [],
+      } as unknown as TouchEvent);
+      start(START_Y);
+      end(START_Y);
+      expect(term.focus).toHaveBeenCalledTimes(1);
+    });
+
+    it('momentum_should_ReturnToIdleAndFocusNextTap_When_TouchstartAfterMomentumEndedOnItsOwn', () => {
+      const { term } = mountM();
+      const y = fling(1.2);
+      frame(130); // decays out
+      term.scrollLines.mockClear();
+      start(y);
+      end(y);
+      expect(term.focus).toHaveBeenCalledTimes(1);
+    });
+
+    // ---- cancel sources ----
+    it.each(['resize', 'orientationchange', 'unmount'])(
+      'momentum_should_Cancel_When_VisualViewportResizeOrOrientationChangeOrUnmount (%s)',
+      (source) => {
+        const listeners: Record<string, Set<() => void>> = {};
+        Object.defineProperty(window, 'visualViewport', {
+          value: {
+            addEventListener: (t: string, l: () => void) => { (listeners[t] ??= new Set()).add(l); },
+            removeEventListener: (t: string, l: () => void) => { listeners[t]?.delete(l); },
+          },
+          configurable: true,
+        });
+        const { term, unmount } = mountM();
+        fling(1.2);
+        frame(3);
+        expect(term.scrollLines.mock.calls.length).toBeGreaterThan(0);
+        if (source === 'resize') listeners['resize']?.forEach((l) => l());
+        else if (source === 'orientationchange') window.dispatchEvent(new Event('orientationchange'));
+        else unmount();
+        term.scrollLines.mockClear();
+        onSendData.mockClear();
+        frame(20);
+        expect(term.scrollLines).not.toHaveBeenCalled();
+        expect(onSendData).not.toHaveBeenCalled();
+      },
+    );
+
+    it('momentum_should_Cancel_When_ConnectionEpochChanges', () => {
+      const { term, rerender } = mountM({}, { connectionEpoch: 0 });
+      fling(1.2);
+      frame(3);
+      rerender({ connectionEpoch: 1 });
+      term.scrollLines.mockClear();
+      frame(20);
+      expect(term.scrollLines).not.toHaveBeenCalled();
+    });
+
+    it('momentum_should_Cancel_When_OverrideChanges', () => {
+      const { term, rerender } = mountM({}, { override: 'auto' });
+      fling(1.2);
+      frame(3);
+      rerender({ override: 'tui' });
+      term.scrollLines.mockClear();
+      onSendData.mockClear();
+      frame(20);
+      expect(term.scrollLines).not.toHaveBeenCalled();
+      expect(onSendData).not.toHaveBeenCalled();
+    });
+
+    it('momentum_should_Cancel_When_BufferTypeChanges', () => {
+      const { term } = mountM();
+      fling(1.2);
+      frame(3);
+      expect(bufferChangeCb).not.toBeNull();
+      bufferChangeCb!();
+      term.scrollLines.mockClear();
+      frame(20);
+      expect(term.scrollLines).not.toHaveBeenCalled();
+      expect(bufferDispose).toHaveBeenCalled();
+    });
+
+    it('momentum_should_Cancel_When_RoutingTargetFlipsMidFling', () => {
+      const { term, terminalRef } = mountM();
+      fling(1.2);
+      frame(3);
+      terminalRef.current.modes.mouseTrackingMode = 'vt200'; // local -> TUI without a buffer switch
+      term.scrollLines.mockClear();
+      onSendData.mockClear();
+      frame(20);
+      expect(term.scrollLines).not.toHaveBeenCalled();
+      expect(onSendData).not.toHaveBeenCalled();
+    });
+
+    it('hook_should_DisposeBufferChangeSubscription_When_Unmounted', () => {
+      const { unmount } = mountM();
+      fling(1.2);
+      frame(3);
+      expect(bufferDispose).not.toHaveBeenCalled(); // live while coasting
+      unmount();
+      expect(bufferDispose).toHaveBeenCalledTimes(1);
+    });
+
+    it('hook_should_DisposeBufferChangeSubscription_When_MomentumEndsOnItsOwn', () => {
+      mountM();
+      fling(1.2);
+      frame(130);
+      expect(bufferDispose).toHaveBeenCalledTimes(1);
+    });
+
+    // ---- edge stop and page cap ----
+    it('momentum_should_StopAtEdge_When_ViewportYAtBoundary_InLocalBuffer', () => {
+      const { term, active } = mountM({ viewportY: 30, baseY: 1000 });
+      fling(2); // finger down -> older, will hit viewportY 0
+      term.scrollLines.mockClear();
+      frame(130);
+      expect(active.viewportY).toBe(0);
+      const callsAtEdge = term.scrollLines.mock.calls.length;
+      frame(20);
+      expect(term.scrollLines.mock.calls.length).toBe(callsAtEdge);
+      // momentum cancelled at the edge: the next tap is a plain tap
+      start(START_Y);
+      end(START_Y);
+      expect(term.focus).toHaveBeenCalledTimes(1);
+    });
+
+    it('momentum_should_StopAtEdgeBase_When_ViewportYAtBaseY_InLocalBuffer', () => {
+      const { term, active } = mountM({ viewportY: 970, baseY: 1000 });
+      fling(2, -1);
+      frame(130);
+      expect(active.viewportY).toBe(1000);
+      const n = term.scrollLines.mock.calls.length;
+      frame(20);
+      expect(term.scrollLines.mock.calls.length).toBe(n);
+    });
+
+    it('momentum_should_StopAtPageCap_When_TuiTarget', () => {
+      const { term } = mountM({ bufferType: 'alternate' });
+      fling(3);
+      onSendData.mockClear();
+      const stamps: number[] = [];
+      onSendData.mockImplementation(() => stamps.push(Date.now()));
+      frame(130);
+      expect(onSendData).toHaveBeenCalledTimes(5); // PAGE_FLING_CAP
+      for (let i = 1; i < stamps.length; i++) expect(stamps[i] - stamps[i - 1]).toBeGreaterThanOrEqual(100);
+      expect(term.scrollLines).not.toHaveBeenCalled();
+      onSendData.mockClear();
+      start(START_Y); // cancelled at the cap: IDLE, so a tap is a plain tap
+      end(START_Y);
+      expect(term.focus).toHaveBeenCalledTimes(1);
     });
   });
 
