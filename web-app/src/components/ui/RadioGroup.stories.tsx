@@ -12,9 +12,9 @@ const meta: Meta = { title: "UI/RadioGroup" };
 export default meta;
 type Story = StoryObj;
 
-export const Default: Story = {
-  render: () => {
-    const [v, setV] = useState<"a" | "b">("a");
-    return <RadioGroup options={options} value={v} onChange={setV} groupLabel="Pick one" />;
-  },
-};
+function Demo() {
+  const [v, setV] = useState<"a" | "b">("a");
+  return <RadioGroup options={options} value={v} onChange={setV} groupLabel="Pick one" />;
+}
+
+export const Default: Story = { render: () => <Demo /> };

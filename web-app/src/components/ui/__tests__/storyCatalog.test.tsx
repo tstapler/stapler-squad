@@ -52,7 +52,7 @@ const UNCATALOGED: Record<string, string> = {
 function componentFiles(dir: string): string[] {
   return fs
     .readdirSync(path.join(SRC, dir))
-    .filter((f) => /^[A-Z][A-Za-z]*\.tsx$/.test(f) && !/\.(test|stories)\.tsx$/.test(f))
+    .filter((f) => /^[A-Z][A-Za-z0-9]*\.tsx$/.test(f) && !/\.(test|stories)\.tsx$/.test(f))
     .map((f) => f.replace(/\.tsx$/, ""));
 }
 
@@ -74,6 +74,10 @@ describe("component library catalog", () => {
     expect(missing).toEqual([]);
   });
 
+  it("UNCATALOGED can only shrink (ratchet: lower this number when stories are added)", () => {
+    expect(Object.keys(UNCATALOGED).length).toBeLessThanOrEqual(25);
+  });
+
   it("UNCATALOGED has no stale entries", () => {
     const cataloged = new Set(storyFiles.map((f) => path.basename(f, ".stories.tsx")));
     const all = new Set(DIRS.flatMap(componentFiles));
@@ -85,11 +89,12 @@ describe("component library catalog", () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require(path.join(SRC, file));
     const stories = composeStories(mod) as Record<string, React.ComponentType>;
-    it.each(Object.keys(stories))("story %s renders", (name) => {
+    it.each(Object.keys(stories))("story %s renders real content", (name) => {
       const Story = stories[name];
       // baseElement: Modal portals out of the container
       const { baseElement } = render(<Story />);
-      expect(baseElement.querySelector("body > *")).not.toBeNull();
+      // RTL's own container div is always present; a story must add at least one element beyond it.
+      expect(baseElement.querySelectorAll("body *").length).toBeGreaterThan(1);
     });
   });
 });

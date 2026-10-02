@@ -11,8 +11,10 @@ browser; verification is jest + `tsc` + `build-storybook`.
 |---|---|---|---|
 | `/help` | Docs fetch failure swallowed; page ended on "Select a topic" with no error (`app/help/page.tsx`) | `role=alert` error + Retry | `app/help/__tests__/page.test.tsx` |
 | `/sessions/summary` | Missing `sessionId` rendered a blank page | Explanatory status message | `app/sessions/summary/__tests__/page.test.tsx` |
-| `/account` | Add-device input had only a placeholder | `aria-label="Device name"` | none (attribute-only; modal not exported) |
-| `/history` | Error banner not announced | `role="alert"` | none (attribute-only; page too heavy to mount cheaply) |
+| `/account` | Add-device input had only a placeholder | `aria-label="Device name"` | `app/account/__tests__/page.test.tsx` |
+| `/history` | Error banner not announced | `role="alert"` | `app/history/__tests__/page.test.tsx` |
+| History fork modal, Trigger form | Directory fields were plain inputs | `RepoPathInput` | `TriggerFormModal.test.tsx` (existing suite, now with hook mocks); guard test |
+| `RepoPathInput` | No accessible-name or Enter hook, so migrated fields lost `aria-label`/Enter-to-add (found in verify) | new `aria-label` + `onEnter` props | `UnfinishedSourcesSettings.test.tsx` (name + Enter) |
 | `/settings/unfinished` | Pinned-repo field was a plain input | `RepoPathInput` | `UnfinishedSourcesSettings.test.tsx` |
 | Settings → Aliases | Alias path was a plain input | `RepoPathInput` | `AliasesManager.test.tsx` |
 
@@ -23,6 +25,9 @@ browser; verification is jest + `tsc` + `build-storybook`.
 | Alias path, pinned repo | **migrated** here |
 | `AddRemoteForm` base path (`add-remote-base-path`) | **Exception**: path on the *remote* host; `RepoPathInput` completes local filesystem paths and would suggest wrong dirs |
 | `ProgramsManager` "Executable Command / Path" | **Exception**: a command line (may include args/PATH names), not a directory |
+| Omnibar title, `WorkspaceSwitchModal` filter | **Exception**: not path values (guard-test allowlist, with reasons) |
+| `OmnibarCreationPanel` working dir | **Exception**: relative subdirectory of the chosen repo |
+Guard: `components/ui/__tests__/pathInputGuard.test.ts` fails on any new `<input>` whose id/placeholder/aria-label looks path-like unless it is in its `ALLOWLIST`. It is a heuristic over attribute text, so a path field with no path-like attribute would escape it.
 
 ## Shared-component adoption (AC4) — recorded as follow-up
 Counts from `grep` over `web-app/src` excluding tests/stories:
@@ -75,3 +80,20 @@ Severity: H/M/L. "Fixed" = see table above; otherwise open follow-up.
 Skeleton, Tooltip, RadioGroup, ErrorState, Modal, RepoPathInput, InlineNotice (plus the 3 existing).
 `web-app/src/components/ui/__tests__/storyCatalog.test.tsx` renders every story and fails if a component in
 `components/ui` or `components/common` has neither a story nor a reasoned entry in its `UNCATALOGED` map.
+
+## Usage report (reproducible)
+`pnpm run report:component-usage` (script: `web-app/scripts/component-usage-report.mjs`) lists consumers per component in
+`components/ui` + `components/common`; output saved in `component-usage.md`. Flags UNUSED: `Card`, `Input`, `Navigation`
+(no production importers; `Card`/`Navigation` cross-checked with grep). No duplicate component names found.
+
+## Verification (sdd:6-verify)
+- Layer 1 (idiom) and Layer 2 (architecture) review agents ran on the diff. Fixed: pinned-repo/watch-dir a11y + Enter regression
+  (new `RepoPathInput` props), RadioGroup story hooks, wrong `useGitHubEnterpriseHosts` mock shape, vacuous story-render assertion,
+  `UNCATALOGED` ratchet (max 25), digit-bearing component filenames. Not done: shared hook-mock helper, per-story Redux store,
+  moving Provider decorators into `.storybook/preview.tsx` (would let several `UNCATALOGED` entries be cataloged).
+- Layer 3: jest 498 suites / 6000 tests pass; `tsc --noEmit` clean; `lint:duplicates` exit 0; `build-storybook` exit 0.
+  `next lint` exits 1 with 5 `analytics/*` errors in `insights/session-detail/page.tsx`, `RestartWithSummaryButton.tsx`,
+  `SessionBoard.tsx`, none touched by this branch.
+- Layer 4 / Playwright a11y specs: not run (needs the Go binary + browsers). Storybook dev server not launched.
+- Open against the backlog list: stories for *every* `components/ui` export with default/disabled/error/edge states (25 components still in
+  `UNCATALOGED`); bulk migration of raw button/input/modal (recorded above as follow-up); screenshots as before/after evidence.

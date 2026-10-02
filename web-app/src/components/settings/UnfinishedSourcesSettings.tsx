@@ -99,6 +99,8 @@ export function UnfinishedSourcesSettings() {
           <RepoPathInput
             value={newWatchDir}
             onChange={setNewWatchDir}
+            onEnter={handleAddWatchDir}
+            aria-label="New watch directory path"
             placeholder="/Users/you/code"
           />
           <button
@@ -141,6 +143,8 @@ export function UnfinishedSourcesSettings() {
           <RepoPathInput
             value={newPinnedRepo}
             onChange={setNewPinnedRepo}
+            onEnter={handleAddPinnedRepo}
+            aria-label="New pinned repository path"
             placeholder="/Users/you/my-project"
             data-testid="pinned-repo-input"
           />

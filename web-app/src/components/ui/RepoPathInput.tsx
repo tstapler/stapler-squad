@@ -31,6 +31,10 @@ interface RepoPathInputProps {
   detectGitHubUrl?: boolean;
   /** Called (in addition to onChange) when an entry is picked from the dropdown, not on every keystroke. */
   onSelect?: (entry: CompletionEntry) => void;
+  /** Accessible name when there is no associated <label>. */
+  "aria-label"?: string;
+  /** Fired on Enter when no dropdown entry is highlighted (Enter then belongs to the surrounding form/row). */
+  onEnter?: () => void;
   "data-testid"?: string;
 }
 
@@ -123,6 +127,8 @@ export function RepoPathInput({
   hint,
   detectGitHubUrl = false,
   onSelect,
+  "aria-label": ariaLabel,
+  onEnter,
   "data-testid": testId,
 }: RepoPathInputProps) {
   const generatedId = useId();
@@ -192,6 +198,11 @@ export function RepoPathInput({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" && onEnter && !(open && selectedIndex >= 0 && selectedIndex < allEntries.length)) {
+        e.preventDefault();
+        onEnter();
+        return;
+      }
       if (!open) {
         if (e.key === "ArrowDown" || e.key === "ArrowUp") {
           setOpen(true);
@@ -278,6 +289,7 @@ export function RepoPathInput({
             : undefined
         }
         aria-describedby={error ? `${id}-error` : undefined}
+        aria-label={ariaLabel}
         disabled={disabled}
         data-testid={testId}
         autoComplete="off"

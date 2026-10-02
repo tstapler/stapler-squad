@@ -11,7 +11,7 @@ jest.mock("@/lib/hooks/useUnfinishedWorkConfig", () => ({
     updateConfig: mockUpdateConfig,
   }),
 }));
-jest.mock("@/lib/hooks/useGitHubEnterpriseHosts", () => ({ useGitHubEnterpriseHosts: () => [] }));
+jest.mock("@/lib/hooks/useGitHubEnterpriseHosts", () => ({ useGitHubEnterpriseHosts: () => ({ hosts: [] }) }));
 jest.mock("@/lib/hooks/useSessionRepoPaths", () => ({ useSessionRepoPaths: () => [] }));
 jest.mock("@/lib/hooks/usePathCompletions", () => ({
   usePathCompletions: () => ({ entries: [], isLoading: false }),
@@ -33,6 +33,20 @@ describe("UnfinishedSourcesSettings path fields", () => {
     fireEvent.change(screen.getByTestId("pinned-repo-input"), { target: { value: "/Users/me/proj" } });
     const addButtons = screen.getAllByRole("button", { name: "Add" });
     fireEvent.click(addButtons[addButtons.length - 1]);
+    expect(mockUpdateConfig).toHaveBeenCalled();
+  });
+
+  it("gives both fields accessible names", () => {
+    render(<UnfinishedSourcesSettings />);
+    expect(screen.getByRole("combobox", { name: "New pinned repository path" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "New watch directory path" })).toBeInTheDocument();
+  });
+
+  it("adds a pinned repo on Enter (behavior preserved from the plain input)", () => {
+    render(<UnfinishedSourcesSettings />);
+    const field = screen.getByRole("combobox", { name: "New pinned repository path" });
+    fireEvent.change(field, { target: { value: "/Users/me/proj" } });
+    fireEvent.keyDown(field, { key: "Enter" });
     expect(mockUpdateConfig).toHaveBeenCalled();
   });
 });

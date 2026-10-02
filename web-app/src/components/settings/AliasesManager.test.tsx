@@ -28,7 +28,7 @@ import { createConnectTransport } from "@connectrpc/connect-web";
 jest.mock("@connectrpc/connect");
 jest.mock("@connectrpc/connect-web");
 jest.mock("@/lib/config", () => ({ getApiBaseUrl: () => "http://localhost" }));
-jest.mock("@/lib/hooks/useGitHubEnterpriseHosts", () => ({ useGitHubEnterpriseHosts: () => [] }));
+jest.mock("@/lib/hooks/useGitHubEnterpriseHosts", () => ({ useGitHubEnterpriseHosts: () => ({ hosts: [] }) }));
 jest.mock("@/lib/hooks/useSessionRepoPaths", () => ({ useSessionRepoPaths: () => [] }));
 
 // Mock vanilla-extract CSS modules to return empty strings

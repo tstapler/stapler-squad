@@ -36,6 +36,7 @@
     "build-storybook": "storybook build",
     "check-contrast": "npx --yes tsx scripts/check-theme-contrast.ts",
     "lint:duplicates": "jscpd src",
+    "report:component-usage": "node scripts/component-usage-report.mjs --md",
     "audit:css-tokens": "ts-node scripts/audit-css-tokens.ts",
     "validate-catalog": "ts-node --project tsconfig.node.json src/lib/features/validate.ts"
   },

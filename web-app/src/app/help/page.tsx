@@ -99,7 +99,7 @@ export default function HelpPage() {
         ) : loadError ? (
           <div className={styles.loadingContainer} role="alert" data-testid="help-load-error">
             Couldn&apos;t load the documentation.{" "}
-            <button onClick={() => setReloadTick((t) => t + 1)}>Retry</button>
+            <button type="button" onClick={() => setReloadTick((t) => t + 1)}>Retry</button>
           </div>
         ) : selectedDoc ? (
           <article className={styles.markdownBody}>
