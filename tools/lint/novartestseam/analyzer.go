@@ -112,32 +112,45 @@ func collectFromValueSpecs(pass *analysis.Pass, gd *ast.GenDecl, pkgVars map[typ
 	}
 }
 
-// collectAssignmentSites finds every reassignment (`ident = expr`, not `:=`, not the
-// declaration itself) of a tracked var, split by whether the assignment lives in a
-// _test.go file.
+// collectAssignmentSites finds every mutation of a tracked var — `ident = expr`, compound
+// assignment (`+=`), `ident++`/`ident--`, and `&ident` (the address may be handed to a setter
+// like flag.StringVar) — split by whether it lives in a _test.go file. The declaration itself
+// and `:=` are not mutations.
 func collectAssignmentSites(pass *analysis.Pass, tracked map[types.Object]varInfo) (inTest, outsideTest map[types.Object]bool) {
 	inTest = map[types.Object]bool{}
 	outsideTest = map[types.Object]bool{}
 
-	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
-	insp.Preorder([]ast.Node{(*ast.AssignStmt)(nil)}, func(n ast.Node) {
-		as := n.(*ast.AssignStmt)
-		if as.Tok != token.ASSIGN {
+	record := func(expr ast.Expr, pos token.Pos) {
+		id, ok := expr.(*ast.Ident)
+		if !ok {
 			return
 		}
-		for _, lhs := range as.Lhs {
-			id, ok := lhs.(*ast.Ident)
-			if !ok {
-				continue
+		obj := pass.TypesInfo.Uses[id]
+		if _, ok := tracked[obj]; !ok {
+			return
+		}
+		if strings.HasSuffix(pass.Fset.Position(pos).Filename, "_test.go") {
+			inTest[obj] = true
+		} else {
+			outsideTest[obj] = true
+		}
+	}
+
+	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
+	insp.Preorder([]ast.Node{(*ast.AssignStmt)(nil), (*ast.IncDecStmt)(nil), (*ast.UnaryExpr)(nil)}, func(n ast.Node) {
+		switch n := n.(type) {
+		case *ast.AssignStmt:
+			if n.Tok == token.DEFINE {
+				return
 			}
-			obj := pass.TypesInfo.Uses[id]
-			if _, ok := tracked[obj]; !ok {
-				continue
+			for _, lhs := range n.Lhs {
+				record(lhs, n.Pos())
 			}
-			if strings.HasSuffix(pass.Fset.Position(as.Pos()).Filename, "_test.go") {
-				inTest[obj] = true
-			} else {
-				outsideTest[obj] = true
+		case *ast.IncDecStmt:
+			record(n.X, n.Pos())
+		case *ast.UnaryExpr:
+			if n.Op == token.AND {
+				record(n.X, n.Pos())
 			}
 		}
 	})
