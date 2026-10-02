@@ -79,6 +79,8 @@ interface TerminalStreamResult {
   isConnected: boolean;
   error: Error | null;
   sendInput: (input: string) => void;
+  /** True while a chunked paste is in flight (see useTerminalFlowControl). */
+  isInputChunking: () => boolean;
   resize: (cols: number, rows: number, force?: boolean, opts?: ResizeOptions) => void;
   connect: (cols?: number, rows?: number) => Promise<void>; // Optional dimensions to override initial values
   disconnect: () => Promise<void>;

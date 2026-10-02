@@ -44,6 +44,8 @@ export interface UseTerminalFlowControlOptions {
 
 export interface UseTerminalFlowControlResult {
   sendInput: (input: string) => void;
+  /** True while a >512 B paste is mid-chunking; backed by a ref, safe to read inside rAF. */
+  isInputChunking: () => boolean;
   resize: (cols: number, rows: number, force?: boolean, opts?: ResizeOptions) => void;
   requestScrollback: (fromSequence: number, limit: number) => void;
   sendFlowControl: (paused: boolean, watermark?: number) => void;

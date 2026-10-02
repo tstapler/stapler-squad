@@ -404,6 +404,13 @@ describe("scroll settings wiring (Stories 1.2.5e / 1.2.5g)", () => {
     expect(hook).toHaveBeenLastCalledWith(expect.objectContaining(cb));
   });
 
+  it("XtermTerminal_should_PassIsInputBusyToHook", async () => {
+    const hook = useTerminalGestures as jest.Mock;
+    const isInputBusy = jest.fn().mockReturnValue(true);
+    await mount({ scrollGesture: { isInputBusy } });
+    expect(hook).toHaveBeenLastCalledWith(expect.objectContaining({ isInputBusy }));
+  });
+
   it("XtermTerminal_should_RouteHookSendsToProgrammaticSink_When_Provided", async () => {
     const hook = useTerminalGestures as jest.Mock;
     const onData = jest.fn();

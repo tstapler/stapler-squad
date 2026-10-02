@@ -159,6 +159,8 @@ export interface ScrollGestureProps {
   onScrollGesture?: GestureOptions["onScrollGesture"];
   onPageKeysSent?: GestureOptions["onPageKeysSent"];
   onGestureActiveChange?: GestureOptions["onGestureActiveChange"];
+  /** Live getter (ref-backed upstream): true while a chunked paste is in flight. */
+  isInputBusy?: GestureOptions["isInputBusy"];
   /**
    * Sink for bytes the gesture hook generates (page keys, wheel reports). Distinct from `onData`
    * so the host can tell them apart from user keystrokes. Falls back to `onData` when absent.
@@ -334,6 +336,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     onScrollGesture: scrollGesture?.onScrollGesture,
     onPageKeysSent: scrollGesture?.onPageKeysSent,
     onGestureActiveChange: scrollGesture?.onGestureActiveChange,
+    isInputBusy: scrollGesture?.isInputBusy,
   });
 
   // Show the "Copied/Copy failed" toast via DOM mutation (no re-render).

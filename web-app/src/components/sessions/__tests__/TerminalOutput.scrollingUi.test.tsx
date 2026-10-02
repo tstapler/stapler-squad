@@ -309,6 +309,15 @@ describe("TerminalOutput jump button and netPagesUp wiring (Story 1.2.7b)", () =
     expect(terminal.focus).not.toHaveBeenCalled();
   });
 
+  it("isInputBusy_should_BeThreadedFromStreamHookToXtermScrollGesture", async () => {
+    const isInputChunking = jest.fn().mockReturnValue(true);
+    streamMock = makeStreamMock({ isInputChunking });
+    (useTerminalStream as jest.Mock).mockReturnValue(streamMock);
+    await renderTerminal();
+    expect(capturedXtermProps.scrollGesture.isInputBusy()).toBe(true);
+    expect(isInputChunking).toHaveBeenCalled();
+  });
+
   it("jumpToLatest_should_BeAbsent_When_LocalBufferAtLive", async () => {
     await renderTerminal();
     expect(screen.queryByRole("button", { name: "Jump to latest" })).toBeNull();
