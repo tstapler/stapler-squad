@@ -401,6 +401,7 @@ export function useTerminalGestures(options: GestureOptions): void {
     const dispatchScroll = (terminal: Terminal, target: ScrollTarget, lines: number, pages: PageAccumulator = pageAcc) => {
       switch (target) {
         case 'xterm-local': {
+          if (terminal.buffer?.active?.length === 0) return; // nothing to scroll; mirrors the jump button's empty-buffer rule
           const clamped = clampLinesPerFrame(lines, terminal.rows);
           if (clamped !== 0) terminal.scrollLines(clamped);
           return;

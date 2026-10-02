@@ -1195,6 +1195,34 @@ describe('useTerminalGestures', () => {
       expect(term.scrollLines).toHaveBeenCalledWith(-1);
     });
 
+    it('scrollDrag_should_BeNoop_When_BufferEmpty', () => {
+      const { term } = mountScroll({ cellH: 20 });
+      term.buffer.active.length = 0;
+      start();
+      mv(START_Y + SLOP_PX + 100);
+      frame();
+      expect(term.scrollLines).not.toHaveBeenCalled();
+      expect(onSendData).not.toHaveBeenCalled();
+    });
+
+    it('toggle_should_RouteNextDragToPgKeys_When_TuiSelected', () => {
+      const { term, rerender } = mountScroll({ cellH: 20 }, { override: 'local' });
+      start();
+      mv(START_Y + SLOP_PX + 40);
+      frame();
+      end(START_Y + SLOP_PX + 40);
+      expect(term.scrollLines).toHaveBeenCalledWith(-2);
+      expect(onSendData).not.toHaveBeenCalled();
+
+      rerender({ override: 'tui' });
+      term.scrollLines.mockClear();
+      start();
+      mv(START_Y + SLOP_PX + 400);
+      frame();
+      expect(onSendData).toHaveBeenCalledWith(PGUP);
+      expect(term.scrollLines).not.toHaveBeenCalled();
+    });
+
     // ---- Pins: single scrollLines caller, no double scroll ----
     it('scrollLines_should_HaveSingleProductionCaller_InUseTerminalGestures', () => {
       const root = join(__dirname, '../../..'); // web-app/src
