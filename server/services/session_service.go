@@ -802,6 +802,13 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	})
 	rulesSvc.SetClaudeSettingsWatcher(claudeSettingsWatcher)
 	rulesSvc.SetApprovalService(approvalSvc)
+	// Started after SetApprovalService: the first load reconciles pending approvals, which reads
+	// rs.approvalSvc unsynchronised.
+	// Hot-reload shared_rules.yaml (gated on IsTestMode like the claude-settings load above, so
+	// tests never read the developer's real home directory).
+	if home, homeErr := os.UserHomeDir(); homeErr == nil && !config.IsTestMode() {
+		rulesSvc.StartConfigFileRulesReload(context.Background(), classifier.ConfigFileRulesPath(home), configFileRulesPollInterval)
+	}
 
 	// Initialize capacity monitor.
 	var capCfg config.CapacityConfig

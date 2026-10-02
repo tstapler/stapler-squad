@@ -24,7 +24,6 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
-	"gopkg.in/yaml.v3"
 )
 
 func main() {
@@ -142,10 +141,16 @@ func handleCheck() {
 }
 
 func handleClaudeIPCCheck(payload classifier.PermissionRequestPayload) {
+	classifyViaResident(payload, hookipc.DialUnix, os.LookupEnv, os.Stdout)
+}
+
+// classifyViaResident writes a decision to out only when the resident instance answers with
+// one; every failure writes nothing, so Claude Code falls back to its own permission prompt.
+func classifyViaResident(payload classifier.PermissionRequestPayload, dial hookipc.Dialer, lookupEnv func(string) (string, bool), out io.Writer) {
 	if payload.HookEventName == "" {
 		payload.HookEventName = "PreToolUse"
 	}
-	endpoint, err := hookipc.ResolveEndpoint(payload.Cwd)
+	endpoint, transport, err := dial(payload.Cwd)
 	if err != nil {
 		return
 	}
@@ -155,7 +160,7 @@ func handleClaudeIPCCheck(payload classifier.PermissionRequestPayload) {
 	}
 	selectedEnvironment := map[string]string(nil)
 	if command, ok := payload.ToolInput["command"].(string); ok {
-		selectedEnvironment = classifier.ReferencedEnvironment(command, os.LookupEnv)
+		selectedEnvironment = classifier.ReferencedEnvironment(command, lookupEnv)
 	}
 	envelope := hookipc.ClassificationEnvelope{
 		ProtocolVersion:     endpoint.ProtocolVersion,
@@ -167,16 +172,12 @@ func handleClaudeIPCCheck(payload classifier.PermissionRequestPayload) {
 			Env: selectedEnvironment,
 		},
 	}
-	client, err := hookipc.NewClient(endpoint)
-	if err != nil {
-		return
-	}
-	reply, err := client.Classify(context.Background(), envelope)
+	reply, err := transport.Classify(context.Background(), envelope)
 	if err != nil || reply.Output == nil {
 		return
 	}
-	if err := json.NewEncoder(os.Stdout).Encode(reply.Output); err != nil {
-		log.Warn("failed to write hook decision to stdout", "err", err)
+	if err := json.NewEncoder(out).Encode(reply.Output); err != nil {
+		log.Warn("failed to write hook decision", "err", err)
 	}
 }
 
@@ -708,78 +709,14 @@ func loadClassifier(storage *session.Storage) *classifier.RuleBasedClassifier {
 	}
 	c.AddRules(classifierRules)
 
-	// Also load config file rules from ~/.config/stapler-squad/shared_rules.yaml.
-	configPath := filepath.Join(os.Getenv("HOME"), ".config", "stapler-squad", "shared_rules.yaml")
-	if data, err := os.ReadFile(configPath); err == nil { // #nosec G304 -- configPath is built from $HOME plus a fixed filename, not caller input.
-		var configFile struct {
-			Rules []struct {
-				Name           string   `yaml:"name"`
-				Tool           string   `yaml:"tool"`
-				ToolPattern    string   `yaml:"tool_pattern"`
-				Programs       []string `yaml:"programs"`
-				Subcommands    []string `yaml:"subcommands"`
-				BlockedSubs    []string `yaml:"blocked_subcommands"`
-				CommandPattern string   `yaml:"command_pattern"`
-				FilePattern    string   `yaml:"file_pattern"`
-				Decision       string   `yaml:"decision"`
-				Priority       int      `yaml:"priority"`
-				Enabled        *bool    `yaml:"enabled"`
-			} `yaml:"rules"`
-		}
-		if yamlErr := yaml.Unmarshal(data, &configFile); yamlErr == nil {
-			var configRules []classifier.Rule
-			for _, r := range configFile.Rules {
-				if r.Name == "" {
-					continue
-				}
-				enabled := true
-				if r.Enabled != nil {
-					enabled = *r.Enabled
-				}
-				priority := r.Priority
-				if priority == 0 {
-					priority = 10
-				}
-				decision := classifier.Escalate
-				switch r.Decision {
-				case "allow":
-					decision = classifier.AutoAllow
-				case "deny":
-					decision = classifier.AutoDeny
-				}
-				cr := classifier.Rule{
-					ToolName: r.Tool,
-					Decision: decision,
-					RuleMeta: classifier.RuleMeta{ID: "config-" + strings.ReplaceAll(r.Name, " ", "-"), Name: r.Name, Priority: priority, Enabled: enabled, Source: "config"},
-				}
-				if r.ToolPattern != "" {
-					if compiled, err := regexp.Compile(r.ToolPattern); err == nil {
-						cr.ToolPattern = compiled
-					}
-				}
-				if r.CommandPattern != "" {
-					if compiled, err := regexp.Compile(r.CommandPattern); err == nil {
-						cr.CommandPattern = compiled
-					}
-				}
-				if r.FilePattern != "" {
-					if compiled, err := regexp.Compile(r.FilePattern); err == nil {
-						cr.FilePattern = compiled
-					}
-				}
-				if len(r.Programs) > 0 || len(r.Subcommands) > 0 || len(r.BlockedSubs) > 0 {
-					cr.Criteria = &classifier.CommandCriteria{
-						Programs:           r.Programs,
-						Subcommands:        r.Subcommands,
-						BlockedSubcommands: r.BlockedSubs,
-					}
-				}
-				configRules = append(configRules, cr)
-			}
-			if len(configRules) > 0 {
-				c.AddRules(configRules)
-			}
-		}
+	// shared_rules.yaml is parsed by the same loader the server hot-reloads, so the resident
+	// and local classification paths cannot drift apart.
+	configRules, err := classifier.LoadConfigFileRules(classifier.ConfigFileRulesPath(os.Getenv("HOME")))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+	}
+	if len(configRules) > 0 {
+		c.AddRules(configRules)
 	}
 
 	return c
