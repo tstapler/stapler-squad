@@ -811,7 +811,7 @@ LINTER_BIN := $(CURDIR)/bin/linter
 # running a stale binary that predates the change forever.
 LINTER_SRC := $(shell find $(CURDIR)/tools/lint -name '*.go' -not -path '*/testdata/*')
 
-lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (entfullscan, hotpolllog, nocommandpattern, nolegacylog, noliveinstanceraw, norawexec, norawghrequest, norawgitopen, silenttransition, tmuxsocketscope) in a single pass
+lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (entfullscan, hotpolllog, nocommandpattern, nolegacylog, noliveinstanceraw, norawexec, norawghrequest, norawgitopen, novartestseam, silenttransition, tmuxsocketscope) in a single pass
 	@echo "Running custom lint..."
 	@$(LINTER_BIN) $(shell go list ./... | grep -v "^github.com/tstapler/stapler-squad$$")
 	@echo "custom lint: ok"
