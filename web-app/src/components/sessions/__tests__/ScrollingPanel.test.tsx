@@ -35,7 +35,7 @@ describe("ScrollingPanel", () => {
       expect(r).toHaveAttribute("type", "radio");
       expect(document.getElementById(r.getAttribute("aria-describedby")!)?.textContent).toBeTruthy();
     }
-    expect(screen.getByRole("radio", { name: /Page keys/ })).toHaveAccessibleDescription(
+    expect(screen.getByRole("radio", { name: /^Page keys/ })).toHaveAccessibleDescription(
       "Dragging sends Page Up/Down to the app, one page per half-screen. Use for Claude Code or tmux history.",
     );
     expect(screen.getByRole("switch")).toBeInTheDocument();
@@ -46,13 +46,13 @@ describe("ScrollingPanel", () => {
     const status = screen.getByTestId("scrolling-announcer");
     expect(status).toHaveAttribute("role", "status");
     expect(status.textContent).toBe("");
-    await user.click(screen.getByRole("radio", { name: /Page keys/ }));
+    await user.click(screen.getByRole("radio", { name: /^Page keys/ }));
     expect(p.onOverrideChange).toHaveBeenCalledTimes(1);
     expect(p.onOverrideChange).toHaveBeenCalledWith("tui");
     expect(status.textContent).toBe("Scroll mode: Page keys");
     rerender(<ScrollingPanel {...p} override="tui" />);
     expect(status.textContent).toBe("Scroll mode: Page keys");
-    await user.click(screen.getByRole("radio", { name: /Terminal history/ }));
+    await user.click(screen.getByRole("radio", { name: /^Terminal history/ }));
     expect(status.textContent).toBe("Scroll mode: Terminal history");
   });
 
@@ -71,7 +71,7 @@ describe("ScrollingPanel", () => {
     screen.getByRole("radio", { name: /Auto/ }).focus();
     await user.keyboard("{ArrowDown}");
     expect(store.getOverride()).toBe("local");
-    expect(screen.getByRole("radio", { name: /Terminal history/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /^Terminal history/ })).toBeChecked();
     await user.keyboard("{ArrowDown}");
     expect(store.getOverride()).toBe("tui");
   });
@@ -93,7 +93,7 @@ describe("ScrollingPanel", () => {
     render(<ScrollingPanel {...p} />);
     expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.getAllByRole("radio")).toHaveLength(3);
-    await user.click(screen.getByRole("radio", { name: /Terminal history/ }));
+    await user.click(screen.getByRole("radio", { name: /^Terminal history/ }));
     expect(p.onOverrideChange).toHaveBeenCalledWith("local");
     expect(p.onClose).toHaveBeenCalledTimes(1);
     expect((p.onOverrideChange as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
