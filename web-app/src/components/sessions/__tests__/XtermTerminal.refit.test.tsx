@@ -270,3 +270,23 @@ describe("zero-size, restore, renderer and viewport handling", () => {
     }
   });
 });
+
+describe("former bare fit() call sites route through refit (Story 2.1.3c)", () => {
+  it("fontSizeChange_should_RepaintViaRefit_When_FontSizePropChanges", async () => {
+    const { rerender, terminal, fit } = await mount();
+    fit.proposeDimensions.mockReturnValue({ cols: 100, rows: 30 });
+    rerender(<XtermTerminal fontSize={20} />);
+    expect(fit.fit).not.toHaveBeenCalled(); // deferred, not synchronous
+    advance(0);
+    advance(SAMPLE_INTERVAL_MS);
+    expect(fit.fit).toHaveBeenCalledTimes(1);
+    expect(terminal.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("fitHandle_should_AliasRefit_When_Called", async () => {
+    const { ref, terminal, fit } = await mount();
+    act(() => ref.current!.fit());
+    expect(terminal.refresh).toHaveBeenCalledTimes(1); // refit repaints even at unchanged dims
+    expect(fit.fit).not.toHaveBeenCalled();
+  });
+});

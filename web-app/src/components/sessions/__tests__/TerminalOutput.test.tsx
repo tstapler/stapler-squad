@@ -23,12 +23,14 @@ jest.mock("../XtermTerminal", () => {
     cols: number;
     rows: number;
     fit: jest.Mock;
+    refit: jest.Mock;
     clear: jest.Mock;
   } = {
     onResize: null,
     cols: 80,
     rows: 24,
     fit: jest.fn(),
+    refit: jest.fn(),
     clear: jest.fn(),
   };
 
@@ -50,10 +52,12 @@ jest.mock("../XtermTerminal", () => {
       writeln: jest.fn(),
       clear: state.clear,
       focus: jest.fn(),
-      fit: () => {
+      fit: state.fit,
+      // refit() applies the new size synchronously here, standing in for the sampler's fit.
+      refit: (opts?: unknown) => {
         state.cols = 100;
         state.rows = 30;
-        state.fit();
+        state.refit(opts);
       },
       search: jest.fn(() => false),
       searchNext: jest.fn(() => false),
@@ -121,6 +125,7 @@ const mockXtermState = jest.requireMock("../XtermTerminal").__mockXtermState as 
   cols: number;
   rows: number;
   fit: jest.Mock;
+  refit: jest.Mock;
   clear: jest.Mock;
 };
 
@@ -202,6 +207,7 @@ function resetSharedTerminalMocks() {
   mockXtermState.cols = 80;
   mockXtermState.rows = 24;
   mockXtermState.fit.mockClear();
+  mockXtermState.refit.mockClear();
   mockXtermState.clear.mockClear();
 }
 
@@ -291,7 +297,8 @@ describe("TerminalOutput resize call sites", () => {
       fireEvent.click(fitButton);
     });
 
-    expect(mockXtermState.fit).toHaveBeenCalledTimes(1);
+    expect(mockXtermState.refit).toHaveBeenCalledTimes(1);
+    expect(mockXtermState.refit).toHaveBeenCalledWith({ reason: "manual-resize" });
     expect(streamState.resize).toHaveBeenCalledTimes(1);
     expect(streamState.resize).toHaveBeenCalledWith(100, 30, true);
     expectClearedBeforeResize(streamState);

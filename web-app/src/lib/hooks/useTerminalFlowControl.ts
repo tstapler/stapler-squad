@@ -15,6 +15,11 @@ import type { Terminal } from '@xterm/xterm';
 // requestFullResync()'s return value is always undefined.
 export const RESYNC_CORRELATION_ID_FLAG = 'terminal:resync-correlation-id';
 
+/** bypassBounceHold skips only the bounce hold; dedup and the 200 ms throttle still apply. */
+export interface ResizeOptions {
+  bypassBounceHold?: boolean;
+}
+
 export interface UseTerminalFlowControlOptions {
   sessionId: string;
   getTerminal: () => Terminal | null;
@@ -39,7 +44,7 @@ export interface UseTerminalFlowControlOptions {
 
 export interface UseTerminalFlowControlResult {
   sendInput: (input: string) => void;
-  resize: (cols: number, rows: number, force?: boolean) => void;
+  resize: (cols: number, rows: number, force?: boolean, opts?: ResizeOptions) => void;
   requestScrollback: (fromSequence: number, limit: number) => void;
   sendFlowControl: (paused: boolean, watermark?: number) => void;
   /**
@@ -290,7 +295,8 @@ export function useTerminalFlowControl({
     sendChunk();
   }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError, ensureConnected]);
 
-  const resize = useCallback((cols: number, rows: number, force: boolean = false) => {
+  const resize = useCallback((cols: number, rows: number, force: boolean = false, opts?: ResizeOptions) => {
+    const bypassed = opts?.bypassBounceHold === true;
     if (!ensureConnected("resize terminal")) return;
 
     // Cancel any previously deferred resize — we have newer dimensions now.
@@ -314,7 +320,7 @@ export function useTerminalFlowControl({
       dimensionsEqual(lastSentDimsRef.current, { cols, rows })
     ) {
       console.log(`[useTerminalFlowControl] Resize skipped, value unchanged (${cols}x${rows})`);
-      mobileDebug.log('resize', { cols, rows, outcome: 'deduped', bypassed: false });
+      mobileDebug.log('resize', { cols, rows, outcome: 'deduped', bypassed });
       return;
     }
 
@@ -328,7 +334,7 @@ export function useTerminalFlowControl({
       if (!pushMessageRef.current || !isConnectedRef.current) return;
       try {
         console.log(`[useTerminalFlowControl] Sending resize to server: ${cols}x${rows}`);
-        mobileDebug.log('resize', { cols, rows, outcome: 'sent', bounce: false, bypassed: false });
+        mobileDebug.log('resize', { cols, rows, outcome: 'sent', bounce: false, bypassed });
         pushMessage(
           create(TerminalDataSchema, {
             sessionId,
@@ -391,14 +397,14 @@ export function useTerminalFlowControl({
     // the one two sends ago, since a real oscillating viewport can wander through 3+
     // values on a slower cadence than THROTTLE_MS catches. Held out past an escalating
     // BOUNCE_HOLD_MS instead of sent immediately, coalescing the oscillation into one settled resize.
-    const isBounce = !force && sentHistoryRef.current.some((d) => dimensionsEqual(d, { cols, rows }));
+    const isBounce = !force && !bypassed && sentHistoryRef.current.some((d) => dimensionsEqual(d, { cols, rows }));
     if (isBounce) {
       const BOUNCE_HOLD_BASE_MS = 3000;
       const BOUNCE_HOLD_MAX_MS = 15000;
       const holdMs = Math.min(BOUNCE_HOLD_BASE_MS * 2 ** bounceStreakRef.current, BOUNCE_HOLD_MAX_MS);
       bounceStreakRef.current += 1;
       console.log(`[useTerminalFlowControl] Resize bounce detected (${cols}x${rows} matches recent history), holding ${holdMs}ms (streak ${bounceStreakRef.current})`);
-      mobileDebug.log('resize', { cols, rows, outcome: 'bounce', bounce: true, holdMs, streak: bounceStreakRef.current, bypassed: false });
+      mobileDebug.log('resize', { cols, rows, outcome: 'bounce', bounce: true, holdMs, streak: bounceStreakRef.current, bypassed });
       pendingResizeTimerRef.current = setTimeout(() => {
         pendingResizeTimerRef.current = null;
         doSend();
@@ -411,7 +417,7 @@ export function useTerminalFlowControl({
       // settled size always reaches the server after rapid resize sequences.
       const remaining = THROTTLE_MS - timeSinceLastResize;
       console.log(`[useTerminalFlowControl] Resize deferred ${remaining}ms (${cols}x${rows})`);
-      mobileDebug.log('resize', { cols, rows, outcome: 'deferred', bounce: false, holdMs: remaining, bypassed: false });
+      mobileDebug.log('resize', { cols, rows, outcome: 'deferred', bounce: false, holdMs: remaining, bypassed });
       pendingResizeTimerRef.current = setTimeout(() => {
         pendingResizeTimerRef.current = null;
         doSend();

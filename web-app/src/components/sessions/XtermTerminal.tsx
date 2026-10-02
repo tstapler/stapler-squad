@@ -1421,7 +1421,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     if (terminalRef.current && terminalRef.current.options.fontSize !== fontSize) {
       terminalRef.current.options.fontSize = fontSize;
       // Defer fit to avoid synchronous resize events
-      setTimeout(() => fitAddonRef.current?.fit(), 0);
+      setTimeout(() => requestFitRef.current({ forceRepaint: true, reason: "font-change" }), 0);
     }
   }, [fontSize]);
 
@@ -1430,7 +1430,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     if (terminalRef.current && terminalRef.current.options.fontFamily !== fontFamily) {
       terminalRef.current.options.fontFamily = fontFamily;
       // Defer fit to avoid synchronous resize events
-      setTimeout(() => fitAddonRef.current?.fit(), 0);
+      setTimeout(() => requestFitRef.current({ forceRepaint: true, reason: "font-change" }), 0);
     }
   }, [fontFamily]);
 
@@ -1464,7 +1464,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       terminalRef.current?.focus();
     },
     fit: () => {
-      fitAddonRef.current?.fit();
+      requestFitRef.current({ forceRepaint: true, reason: "manual-resize" });
     },
     resize: (cols: number, rows: number) => {
       terminalRef.current?.resize(cols, rows);

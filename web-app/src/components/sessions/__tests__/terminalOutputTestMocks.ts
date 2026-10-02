@@ -26,6 +26,7 @@ export function createMockXtermHandle() {
   return {
     terminal: null as null,
     fit: jest.fn(),
+    refit: jest.fn(),
     write: jest.fn(),
     writeln: jest.fn(),
     clear: jest.fn(),

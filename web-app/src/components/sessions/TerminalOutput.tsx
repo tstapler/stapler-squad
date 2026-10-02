@@ -53,6 +53,8 @@ import { InputDropBadge } from "./InputDropBadge";
 import { ConnectionCountIndicator } from "./ConnectionCountIndicator";
 import { useDropEpisodeCoalescer } from "./useDropEpisodeCoalescer";
 import { TerminalStreamManager } from "@/lib/terminal/TerminalStreamManager";
+import { createViewportSettle, createRafScheduler, DEFAULT_STABLE_FRAMES, DEFAULT_MAX_WAIT_MS } from "@/lib/terminal/viewportSettle";
+import { mobileDebug } from "@/lib/terminal/mobileDebug";
 import { getCachedDimensions, saveDimensions, validateCellDimensions } from "@/lib/terminal/TerminalDimensionCache";
 import { DEFAULT_TERMINAL_CONFIG } from "@/lib/config/terminalConfig";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
@@ -90,6 +92,8 @@ interface TerminalOutputProps {
 // from xterm.js before the CSS container has finished laying out. The first
 // resize event often fires at e.g. 10x6 before layout is complete; caching or
 // connecting at those dimensions produces a garbled terminal on the next view.
+// Equal to the XtermTerminal sampler's own bound (20 samples x 50 ms).
+const SETTLE_BYPASS_WINDOW_MS = 1000;
 const MIN_COLS = 30;
 const MIN_ROWS = 10;
 
@@ -121,7 +125,10 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const refreshCountRef = useRef(0);
   const isMountedRef = useRef(true);
-  const isFittingRef = useRef(false);
+  // Wall-clock stamp of the last settle-driven refit(); handleTerminalResize bypasses the
+  // server bounce hold only for resizes this soon after it (Story 2.1.5).
+  const lastSettleRefitAtRef = useRef<number | null>(null);
+  const clearedAtRef = useRef<number | null>(null);
   const sizeStabilityTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const hasInitiatedConnectionRef = useRef(false);
   const hasCachedDimensionsRef = useRef(false);
@@ -391,6 +398,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // differently-wrapped content for the ~100-400ms round trip until the server's
   // post-resize snapshot arrives and TerminalStreamManager clears it again anyway.
   const clearBufferBeforeResize = useCallback(() => {
+    clearedAtRef.current = Date.now();
+    mobileDebug.log("clear-before-resize", {});
     xtermRef.current?.clear();
     resetScrollbackPaging();
   }, [resetScrollbackPaging]);
@@ -410,7 +419,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     // Detect + clear on a full-pane replacement snapshot (ANSI_SNAPSHOT_PREFIX) — the
     // single spot this is handled; every write() call site (live output, the RESIZING
     // queue flush) benefits without needing its own check.
-    manager.setOnFullSnapshot(resetScrollbackPaging);
+    manager.setOnFullSnapshot(() => {
+      resetScrollbackPaging();
+      if (clearedAtRef.current !== null) {
+        mobileDebug.log("snapshot-after-clear", { elapsedMs: Date.now() - clearedAtRef.current });
+        clearedAtRef.current = null;
+      }
+    });
 
     // Inject SerializeAddon so prependScrollbackBatch can serialize the current buffer
     // before clearing it (enables correct history order without losing live content).
@@ -907,7 +922,12 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
     console.log(`[TerminalOutput] Sending resize: ${cols}x${rows} (prev: ${lastResize?.cols || 'none'}x${lastResize?.rows || 'none'})`);
     clearBufferBeforeResize();
-    resize(cols, rows);
+    const sinceSettle = lastSettleRefitAtRef.current === null ? Infinity : Date.now() - lastSettleRefitAtRef.current;
+    if (sinceSettle <= SETTLE_BYPASS_WINDOW_MS) {
+      resize(cols, rows, false, { bypassBounceHold: true });
+    } else {
+      resize(cols, rows);
+    }
   }, [isConnected, resize, connect, error, sessionId, clearBufferBeforeResize]);
 
   // Monitor connection state changes
@@ -1156,36 +1176,27 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, containerSize.width]);
 
-  // When terminal becomes visible (e.g. session switch in pool), trigger fit+focus
+  // When terminal becomes visible (e.g. session switch in pool), refit through the sampler + focus
   useEffect(() => {
     if (isVisible && xtermRef.current) {
-      setTimeout(() => {
-        xtermRef.current?.fit();
-        xtermRef.current?.terminal?.focus();
-      }, 50);
+      xtermRef.current.refit({ reason: 'visibility' });
+      xtermRef.current.terminal?.focus();
     }
   }, [isVisible]);
 
-  // visualViewport resize listener — re-fits terminal when the on-screen keyboard
-  // appears/disappears on mobile (visualViewport changes don't fire window resize).
-  // isFittingRef guard prevents resize loops on iOS where fit() triggers another resize event.
+  // On-screen keyboard / URL bar: refit once visualViewport height and offsetTop stop changing.
+  // Sole viewport-driven fit path; the sampler in XtermTerminal owns the actual fit.
   useEffect(() => {
-    const vp = window.visualViewport;
-    if (!vp) return;
-
-    const onVpResize = () => {
-      if (isFittingRef.current) return;
-      isFittingRef.current = true;
-      // Increase debounce on mobile (400ms) to wait for keyboard animation to finish
-      setTimeout(() => {
-        xtermRef.current?.fit();
-        requestAnimationFrame(() => { isFittingRef.current = false; });
-      }, isMobile ? 400 : 300);
-    };
-
-    vp.addEventListener('resize', onVpResize);
-    return () => vp.removeEventListener('resize', onVpResize);
-  }, [isMobile]);
+    return createViewportSettle(window.visualViewport, createRafScheduler(), {
+      stableFrames: DEFAULT_STABLE_FRAMES,
+      maxWaitMs: DEFAULT_MAX_WAIT_MS,
+      onSettled: (snapshot) => {
+        lastSettleRefitAtRef.current = Date.now();
+        mobileDebug.log("vp-settle", snapshot);
+        xtermRef.current?.refit({ reason: 'viewport-settle' });
+      },
+    });
+  }, []);
 
   // Reset loading state when switching sessions and trigger reconnect
   useEffect(() => {
@@ -1508,7 +1519,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const handleManualResize = () => {
     console.log("[TerminalOutput] Manual resize triggered");
     if (xtermRef.current) {
-      xtermRef.current.fit();
+      xtermRef.current.refit({ reason: 'manual-resize' });
 
       const terminal = xtermRef.current.terminal;
       if (terminal) {

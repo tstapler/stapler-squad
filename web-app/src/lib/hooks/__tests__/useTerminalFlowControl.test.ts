@@ -543,6 +543,85 @@ describe('useTerminalFlowControl', () => {
       );
       expect(staleResize).toBeUndefined();
     });
+
+    // Story 2.1.5: settle-driven resizes skip only the bounce hold.
+    describe('bypassBounceHold', () => {
+      const resizeCalls = (fn: jest.Mock) => fn.mock.calls.filter(([m]) => m.data.case === 'resize');
+      const paneCalls = (fn: jest.Mock) => fn.mock.calls.filter(([m]) => m.data.case === 'currentPaneRequest');
+
+      // History [A, B], last sent C, so resizing back to A is a bounce.
+      function seedBounceState() {
+        const ctx = createTestOptions();
+        const hook = renderHook(() => useTerminalFlowControl(ctx.options));
+        for (const [c, r] of [[100, 30], [120, 40], [140, 50]]) {
+          act(() => { hook.result.current.resize(c, r); });
+          act(() => { jest.advanceTimersByTime(201); });
+        }
+        ctx.pushMessageFn.mockClear();
+        return { ...ctx, result: hook.result };
+      }
+
+      it('resize_should_SendImmediatelyAndResetStreak_When_BypassBounceHoldAndDimsInHistory', () => {
+        const { pushMessageFn, result } = seedBounceState();
+
+        act(() => { result.current.resize(100, 30, false, { bypassBounceHold: true }); });
+        expect(resizeCalls(pushMessageFn)).toHaveLength(1); // 0 ms, no timer
+        expect(paneCalls(pushMessageFn)).toHaveLength(0);
+
+        act(() => { jest.advanceTimersByTime(100); });
+        expect(paneCalls(pushMessageFn)).toHaveLength(1);
+
+        // Streak is 0: the next non-bypassed bounce (120x40 is in history) holds the base 3000 ms, not 6000.
+        pushMessageFn.mockClear();
+        act(() => { result.current.resize(120, 40); });
+        act(() => { jest.advanceTimersByTime(2999); });
+        expect(resizeCalls(pushMessageFn)).toHaveLength(0);
+        act(() => { jest.advanceTimersByTime(2); });
+        expect(resizeCalls(pushMessageFn)).toHaveLength(1);
+      });
+
+      it('resize_should_HoldThreeThenSixSeconds_When_NoBypassAndDimsInHistory', () => {
+        const { pushMessageFn, result } = seedBounceState();
+
+        act(() => { result.current.resize(100, 30); });
+        act(() => { jest.advanceTimersByTime(2999); });
+        expect(resizeCalls(pushMessageFn)).toHaveLength(0);
+        act(() => { jest.advanceTimersByTime(2); });
+        expect(resizeCalls(pushMessageFn)).toHaveLength(1);
+      });
+
+      it('resize_should_HoldSixSeconds_When_SecondConsecutiveBounceWithoutBypass', () => {
+        const { pushMessageFn, result } = seedBounceState();
+
+        act(() => { result.current.resize(100, 30); }); // streak 1: 3000 ms
+        act(() => { result.current.resize(120, 40); }); // replaces pending; streak 2: 6000 ms
+        act(() => { jest.advanceTimersByTime(5999); });
+        expect(resizeCalls(pushMessageFn)).toHaveLength(0);
+        act(() => { jest.advanceTimersByTime(2); });
+        expect(resizeCalls(pushMessageFn)).toHaveLength(1);
+      });
+
+      it('resize_should_StillDedupe_When_BypassAndDimsUnchanged', () => {
+        const { pushMessageFn, result } = seedBounceState();
+
+        act(() => { result.current.resize(140, 50, false, { bypassBounceHold: true }); });
+        act(() => { jest.advanceTimersByTime(10_000); });
+        expect(resizeCalls(pushMessageFn)).toHaveLength(0);
+      });
+
+      it('resize_should_StillThrottle_When_BypassWithin200msOfLastSend', () => {
+        const { pushMessageFn, result } = seedBounceState();
+
+        act(() => { result.current.resize(100, 30, false, { bypassBounceHold: true }); });
+        expect(resizeCalls(pushMessageFn)).toHaveLength(1);
+        pushMessageFn.mockClear();
+
+        act(() => { result.current.resize(120, 40, false, { bypassBounceHold: true }); });
+        expect(resizeCalls(pushMessageFn)).toHaveLength(0); // deferred by the 200 ms throttle
+        act(() => { jest.advanceTimersByTime(201); });
+        expect(resizeCalls(pushMessageFn)).toHaveLength(1);
+      });
+    });
   });
 
   describe('requestFullResync', () => {
