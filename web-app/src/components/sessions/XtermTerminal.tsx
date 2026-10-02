@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useCallback, useImperativeHandle, forwardRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useTerminalGestures } from "@/lib/hooks/useTerminalGestures";
+import { useTerminalGestures, type GestureOptions } from "@/lib/hooks/useTerminalGestures";
 import { readScrollMode } from "@/lib/terminal/mouseTracking";
 import type { ScrollMode, ScrollOverride, TuiScrollPolicy } from "@/lib/terminal/scrollRouting";
 import { Terminal } from "@xterm/xterm";
@@ -154,6 +154,11 @@ export interface ScrollGestureProps {
   tuiScrollPolicy?: TuiScrollPolicy;
   /** Bumped on reconnect or full-snapshot write; cancels an in-flight gesture. */
   connectionEpoch?: number;
+  /** The hook reads these through its options ref, so a new identity never re-registers listeners. */
+  onScrollStart?: GestureOptions["onScrollStart"];
+  onScrollGesture?: GestureOptions["onScrollGesture"];
+  onPageKeysSent?: GestureOptions["onPageKeysSent"];
+  onGestureActiveChange?: GestureOptions["onGestureActiveChange"];
 }
 
 const INITIAL_SCROLL_MODE: ScrollMode = { bufferType: "normal", mouseTrackingMode: "none" };
@@ -317,6 +322,10 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     gestureScrollEnabled,
     tuiScrollPolicy: scrollGesture?.tuiScrollPolicy,
     connectionEpoch: scrollGesture?.connectionEpoch,
+    onScrollStart: scrollGesture?.onScrollStart,
+    onScrollGesture: scrollGesture?.onScrollGesture,
+    onPageKeysSent: scrollGesture?.onPageKeysSent,
+    onGestureActiveChange: scrollGesture?.onGestureActiveChange,
   });
 
   // Show the "Copied/Copy failed" toast via DOM mutation (no re-render).

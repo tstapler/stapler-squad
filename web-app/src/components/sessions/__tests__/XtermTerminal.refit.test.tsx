@@ -333,6 +333,13 @@ describe("scroll settings wiring (Stories 1.2.5e / 1.2.5g)", () => {
     expect(created.terminals.length).toBe(terminalBefore); // no remount
   });
 
+  it("XtermTerminal_should_PassGestureObservationCallbacksToHook", async () => {
+    const hook = useTerminalGestures as jest.Mock;
+    const cb = { onScrollStart: jest.fn(), onScrollGesture: jest.fn(), onPageKeysSent: jest.fn(), onGestureActiveChange: jest.fn() };
+    await mount({ scrollGesture: cb });
+    expect(hook).toHaveBeenLastCalledWith(expect.objectContaining(cb));
+  });
+
   it("XtermTerminal_should_SetDataGestureScrollAttribute", async () => {
     const { container, rerender } = await mount();
     const surface = () => container.querySelector("[data-gesture-scroll]");
