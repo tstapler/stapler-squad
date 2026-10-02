@@ -71,11 +71,14 @@ func TestLoadConfigFileRules_InvalidRegex_SkipsRuleKeepsOthers(t *testing.T) {
 	assert.Equal(t, "good deny", rules[0].Name)
 }
 
-func TestLoadConfigFileRules_UnknownDecision_SkipsRule(t *testing.T) {
+// A misspelled decision keeps guarding (escalate) rather than vanishing and letting a
+// lower-priority allow rule match.
+func TestLoadConfigFileRules_UnknownDecision_EscalatesAndReports(t *testing.T) {
 	path := writeRules(t, "rules:\n  - {name: typo, tool: Bash, decision: Deny}\n")
 	rules, err := LoadConfigFileRules(path)
 	require.Error(t, err)
-	assert.Empty(t, rules)
+	require.Len(t, rules, 1)
+	assert.Equal(t, Escalate, rules[0].Decision)
 }
 
 func TestLoadConfigFileRules_EmptyFile_IsAnError(t *testing.T) {

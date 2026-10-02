@@ -62,8 +62,10 @@ func TestConfigFileRulesReloader_PicksUpEdits(t *testing.T) {
 	assert.Equal(t, classifier.AutoAllow, classifyMake(rs.classifier))
 
 	require.NoError(t, os.Remove(path))
+	assert.False(t, r.reloadIfChanged(), "first poll of a missing file is treated as transient")
+	assert.Equal(t, classifier.AutoAllow, classifyMake(rs.classifier))
 	assert.True(t, r.reloadIfChanged())
-	assert.Equal(t, baseline, classifyMake(rs.classifier), "deleted file clears its rules")
+	assert.Equal(t, baseline, classifyMake(rs.classifier), "file missing for two polls clears its rules")
 }
 
 // TestConfigFileRulesReloader_KeepsLastGood_OnParseError proves a half-saved or broken edit
@@ -118,5 +120,51 @@ func TestConfigFileRulesReloader_AppliesValidRules_WhenOneIsInvalid(t *testing.T
 `), 0o600))
 
 	assert.True(t, r.reloadIfChanged())
+	assert.Equal(t, classifier.AutoDeny, classifyMake(rs.classifier))
+}
+
+func classifyEcho(c *classifier.RuleBasedClassifier) classifier.ClassificationDecision {
+	payload := classifier.PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "zzz-unknown-tool arg"}}
+	return c.Classify(payload, classifier.ClassificationContext{}).Decision
+}
+
+// TestConfigFileRulesReloader_InvalidRegex_NeverWidens classifies a command only the broken
+// rule could match: if the bad pattern degraded to match-all it would auto-allow.
+func TestConfigFileRulesReloader_InvalidRegex_NeverWidens(t *testing.T) {
+	r, rs, path := newReloaderUnderTest(t)
+	baseline := classifyEcho(rs.classifier)
+	require.NoError(t, os.WriteFile(path, []byte("rules:\n  - {name: broken, tool: Bash, command_pattern: '(', priority: 1000, decision: allow}\n"), 0o600))
+
+	r.reloadIfChanged()
+	assert.Equal(t, baseline, classifyEcho(rs.classifier))
+}
+
+// TestConfigFileRulesReloader_BadEdit_KeepsPreviousDeny proves an edit that breaks one rule
+// cannot drop a deny that was working before it.
+func TestConfigFileRulesReloader_BadEdit_KeepsPreviousDeny(t *testing.T) {
+	r, rs, path := newReloaderUnderTest(t)
+	writeSharedRules(t, path, yamlDeny)
+	require.True(t, r.reloadIfChanged())
+
+	require.NoError(t, os.WriteFile(path, []byte(`rules:
+  - {name: block make, tool: Bash, programs: [make], priority: 1000, command_pattern: '(', decision: deny}
+`), 0o600))
+	future := time.Now().Add(96 * time.Hour)
+	require.NoError(t, os.Chtimes(path, future, future))
+
+	assert.False(t, r.reloadIfChanged())
+	assert.Equal(t, classifier.AutoDeny, classifyMake(rs.classifier))
+}
+
+// TestConfigFileRulesReloader_TransientMissingFile_KeepsRules covers delete-then-write saves.
+func TestConfigFileRulesReloader_TransientMissingFile_KeepsRules(t *testing.T) {
+	r, rs, path := newReloaderUnderTest(t)
+	writeSharedRules(t, path, yamlDeny)
+	require.True(t, r.reloadIfChanged())
+
+	require.NoError(t, os.Remove(path))
+	assert.False(t, r.reloadIfChanged())
+	writeSharedRules(t, path, yamlDeny)
+	r.reloadIfChanged()
 	assert.Equal(t, classifier.AutoDeny, classifyMake(rs.classifier))
 }

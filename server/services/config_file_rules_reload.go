@@ -14,14 +14,17 @@ import (
 const configFileRulesPollInterval = 3 * time.Second
 
 // configFileRulesReloader hot-reloads shared_rules.yaml into the live classifier so the
-// server's /api/hooks/classify answers use the same rules ssq-hooks' local path loads at
-// startup. A parse error keeps the last-good rules; a deleted file clears them, matching the
-// local path where a missing file means no config rules.
+// resident classifier uses the same rules ssq-hooks' local path loads at startup. Any load
+// problem after a successful load keeps the last-good rules, so an edit can never silently drop
+// a deny; a file missing for two consecutive polls clears them (delete-then-write saves and
+// relinks are transient).
 type configFileRulesReloader struct {
-	path    string
-	apply   func([]classifier.Rule)
-	primed  bool
-	lastSig fileSignature
+	path         string
+	apply        func([]classifier.Rule)
+	primed       bool
+	loaded       bool // rules from the file have been applied at least once
+	pendingClear bool // file seen missing once
+	lastSig      fileSignature
 }
 
 // fileSignature is the cheap change detector: existence, mtime and size.
@@ -43,20 +46,26 @@ func statSignature(path string) fileSignature {
 // the first call). It reports whether rules were applied.
 func (r *configFileRulesReloader) reloadIfChanged() bool {
 	sig := statSignature(r.path)
-	if r.primed && sig == r.lastSig {
+	if r.primed && sig == r.lastSig && !r.pendingClear {
 		return false
 	}
+	if r.primed && r.loaded && !sig.exists && !r.pendingClear {
+		r.pendingClear = true
+		return false
+	}
+	r.pendingClear = false
 	r.primed = true
 	r.lastSig = sig
 
 	rules, err := classifier.LoadConfigFileRules(r.path)
 	if err != nil {
-		if rules == nil {
+		if rules == nil || r.loaded {
 			log.Warn("[ConfigFileRules] keeping last-good rules, reload failed", "path", r.path, "err", err)
 			return false
 		}
 		log.Warn("[ConfigFileRules] applying valid rules, some were skipped", "path", r.path, "err", err)
 	}
+	r.loaded = len(rules) > 0 || sig.exists
 	r.apply(rules)
 	log.Info("[ConfigFileRules] loaded shared rules", "path", r.path, "rule_count", len(rules))
 	return true

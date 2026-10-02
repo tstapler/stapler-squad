@@ -24,8 +24,9 @@ func ConfigFileRulesPath(home string) string {
 // not an error (nil, nil). It is the single parser shared by ssq-hooks' local path and the
 // server's hot-reloaded classifier, so both paths always see the same rule set.
 //
-// A rule with an invalid regex or unknown decision is skipped and reported in the returned
-// error alongside the valid rules: never widened into a match-all. An unreadable, unparsable
+// A rule with an invalid regex is skipped, and one with an unknown decision becomes an
+// escalate rule; both are reported in the returned error alongside the valid rules. Neither is
+// ever widened into an allow. An unreadable, unparsable
 // or empty file returns (nil, err) so callers can keep their last-good rules.
 func LoadConfigFileRules(path string) ([]Rule, error) {
 	data, err := os.ReadFile(path) // #nosec G304 -- path is built from $HOME plus a fixed filename, not caller input.
@@ -45,11 +46,14 @@ func LoadConfigFileRules(path string) ([]Rule, error) {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 
-	var rules []Rule
+	rules := []Rule{} // non-nil: callers tell "parsed, zero rules" from a failed load
 	var problems []error
 	for _, spec := range file.Rules {
 		if spec.Name == "" {
 			continue
+		}
+		if !knownDecision(spec.Decision) {
+			problems = append(problems, fmt.Errorf("rule %q: unknown decision %q, treated as escalate", spec.Name, spec.Decision))
 		}
 		rule, err := spec.toRule()
 		if err != nil {
@@ -75,7 +79,15 @@ type configRuleSpec struct {
 	Enabled        *bool    `yaml:"enabled"`
 }
 
-// toRule converts a spec to a Rule, rejecting anything that would silently change its meaning.
+func knownDecision(d string) bool {
+	switch d {
+	case "", "escalate", "allow", "deny":
+		return true
+	}
+	return false
+}
+
+// toRule converts a spec to a Rule, rejecting an invalid regex rather than widening the rule.
 func (r configRuleSpec) toRule() (Rule, error) {
 	enabled := r.Enabled == nil || *r.Enabled
 	priority := r.Priority
@@ -90,7 +102,8 @@ func (r configRuleSpec) toRule() (Rule, error) {
 	case "deny":
 		decision = AutoDeny
 	default:
-		return Rule{}, fmt.Errorf("unknown decision %q", r.Decision)
+		// Unknown values keep guarding as Escalate, as the pre-shared parser did; the loader
+		// reports them.
 	}
 	cr := Rule{
 		ToolName: r.Tool,
