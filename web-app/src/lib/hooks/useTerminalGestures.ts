@@ -88,6 +88,8 @@ export interface GestureOptions {
   onScrollGesture?: (info: ScrollGestureInfo) => void;
   /** Called whenever PgUp/PgDn bytes are sent on the `tui-pgkeys` route. */
   onPageKeysSent?: (direction: 'up' | 'down', pages: number) => void;
+  /** True while a chunked paste is in flight; TUI page-key steps are dropped (not queued) meanwhile. */
+  isInputBusy?: () => boolean;
   /** True while a finger is down or momentum runs; emitted only on change. */
   onGestureActiveChange?: (active: boolean) => void;
 }
@@ -404,6 +406,11 @@ export function useTerminalGestures(options: GestureOptions): void {
           return;
         }
         case 'tui-pgkeys': {
+          if (optionsRef.current.isInputBusy?.()) {
+            // Not pushed to the accumulator, so a dropped step neither counts toward the fling cap nor carries over.
+            mobileDebug.log('input-busy-drop', { target, lines });
+            return;
+          }
           pages.setRows(terminal.rows);
           const keys = pages.push(lines);
           if (keys) {
@@ -415,6 +422,10 @@ export function useTerminalGestures(options: GestureOptions): void {
           return;
         }
         case 'tui-wheel': {
+          if (optionsRef.current.isInputBusy?.()) {
+            mobileDebug.log('input-busy-drop', { target, lines });
+            return;
+          }
           const reports = encodeWheel(lines, {
             col: startCol + 1,
             row: startRow + 1,

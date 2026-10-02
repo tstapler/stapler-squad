@@ -130,6 +130,80 @@ describe('useTerminalFlowControl', () => {
     });
   });
 
+  describe('isInputChunking (Story 1.2.6)', () => {
+    it('sendInput_should_SetChunkingFlagUntilLastChunk_When_2000BytePaste', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+      expect(result.current.isInputChunking()).toBe(false);
+
+      act(() => {
+        result.current.sendInput('a'.repeat(2000)); // 4 chunks of <= 512 B
+      });
+      expect(pushMessageFn).toHaveBeenCalledTimes(1);
+      expect(result.current.isInputChunking()).toBe(true);
+
+      act(() => { jest.advanceTimersByTime(10); });
+      act(() => { jest.advanceTimersByTime(10); });
+      expect(pushMessageFn).toHaveBeenCalledTimes(3);
+      expect(result.current.isInputChunking()).toBe(true);
+
+      act(() => { jest.advanceTimersByTime(10); });
+      expect(pushMessageFn).toHaveBeenCalledTimes(4);
+      expect(result.current.isInputChunking()).toBe(false);
+    });
+
+    it('sendInput_should_ClearChunkingFlag_When_SessionChangesMidPaste', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result, rerender } = renderHook(
+        (props: { sessionId: string }) => useTerminalFlowControl({ ...options, sessionId: props.sessionId }),
+        { initialProps: { sessionId: 'test-session' } },
+      );
+      act(() => {
+        result.current.sendInput('a'.repeat(2000));
+      });
+      expect(result.current.isInputChunking()).toBe(true);
+
+      rerender({ sessionId: 'other-session' });
+      act(() => { jest.advanceTimersByTime(50); });
+
+      expect(result.current.isInputChunking()).toBe(false);
+      expect(pushMessageFn).toHaveBeenCalledTimes(1); // remaining chunks aborted
+    });
+
+    it('sendInput_should_ClearChunkingFlag_When_ConnectionDropsMidPaste', () => {
+      const { options, isConnectedRef } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+      act(() => {
+        result.current.sendInput('a'.repeat(2000));
+      });
+      expect(result.current.isInputChunking()).toBe(true);
+
+      isConnectedRef.current = false;
+      act(() => { jest.advanceTimersByTime(10); });
+      expect(result.current.isInputChunking()).toBe(false);
+    });
+
+    it('sendInput_should_ClearChunkingFlag_When_PushThrowsMidPaste', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+      act(() => {
+        result.current.sendInput('a'.repeat(2000));
+      });
+      pushMessageFn.mockImplementation(() => { throw new Error('boom'); });
+      act(() => { jest.advanceTimersByTime(10); });
+      expect(result.current.isInputChunking()).toBe(false);
+    });
+
+    it('sendInput_should_NotSetChunkingFlag_When_512BytesOrFewer', () => {
+      const { options } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+      act(() => {
+        result.current.sendInput('a'.repeat(512));
+      });
+      expect(result.current.isInputChunking()).toBe(false);
+    });
+  });
+
   describe('resize', () => {
     it('should send resize message', () => {
       const { options, pushMessageFn } = createTestOptions();

@@ -728,6 +728,7 @@ export function useTerminalStream({
     isConnected,
     error,
     sendInput: flowControl.sendInput,
+    isInputChunking: flowControl.isInputChunking,
     resize: flowControl.resize,
     connect,
     disconnect,

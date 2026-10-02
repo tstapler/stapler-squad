@@ -103,6 +103,10 @@ export function useTerminalFlowControl({
   // actually sends (a real new size, or a held one whose hold elapsed).
   const bounceStreakRef = useRef(0);
   const pendingResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Ref, not state: the gesture rAF callback must read the live value.
+  const inputChunkingRef = useRef(false);
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
   const paneRequestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dimensionSyncRef = useRef<{ cols?: number; rows?: number }>({});
   // Epic 3.1, Task 3.1.1.4a — last dimensions a resync response was actually
@@ -269,9 +273,16 @@ export function useTerminalFlowControl({
     const sessionIdAtStart = sessionId;
     let offset = 0;
     const sendChunk = () => {
-      if (!pushMessageRef.current || !isConnectedRef.current) return;
-      if (sessionId !== sessionIdAtStart) return; // session changed; abort
-      if (offset >= inputBytes.length) return;
+      // sessionIdRef, not the closed-over sessionId, which is always sessionIdAtStart.
+      if (
+        !pushMessageRef.current ||
+        !isConnectedRef.current ||
+        sessionIdRef.current !== sessionIdAtStart || // session changed; abort
+        offset >= inputBytes.length
+      ) {
+        inputChunkingRef.current = false;
+        return;
+      }
       const chunk = inputBytes.slice(offset, offset + PASTE_CHUNK_SIZE);
       offset += PASTE_CHUNK_SIZE;
       try {
@@ -285,15 +296,27 @@ export function useTerminalFlowControl({
           })
         );
       } catch (err) {
+        inputChunkingRef.current = false;
         handleError(err);
         return;
       }
       if (offset < inputBytes.length) {
+        inputChunkingRef.current = true;
         setTimeout(sendChunk, CHUNK_DELAY_MS);
+      } else {
+        inputChunkingRef.current = false;
       }
     };
     sendChunk();
   }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError, ensureConnected]);
+
+  // True from the first chunk of a >512 B paste until the last chunk is sent (or it aborts).
+  const isInputChunking = useCallback(() => inputChunkingRef.current, []);
+
+  // A session switch aborts the pending chunks; clear eagerly rather than waiting for the next timer.
+  useEffect(() => {
+    inputChunkingRef.current = false;
+  }, [sessionId]);
 
   const resize = useCallback((cols: number, rows: number, force: boolean = false, opts?: ResizeOptions) => {
     const bypassed = opts?.bypassBounceHold === true;
@@ -496,6 +519,7 @@ export function useTerminalFlowControl({
 
   return {
     sendInput,
+    isInputChunking,
     resize,
     requestScrollback,
     sendFlowControl,

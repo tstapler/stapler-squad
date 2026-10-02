@@ -965,6 +965,35 @@ describe('useTerminalGestures', () => {
       expect(term.scrollLines).not.toHaveBeenCalled();
     });
 
+    it('scrollDrag_should_DropTuiPageKeyAndLog_When_InputChunking', () => {
+      localStorage.setItem('debug-terminal-mobile', 'true');
+      jest.spyOn(console, 'debug').mockImplementation(() => {});
+      let busy = true;
+      mountScroll({ bufferType: 'alternate', cellH: 20 }, { isInputBusy: () => busy });
+      start();
+      mv(START_Y + SLOP_PX + 220); // enough for one page
+      frame();
+      expect(onSendData).not.toHaveBeenCalled();
+      const entries = JSON.parse((window as any).__termDebug.dump()) as Array<{ type: string; data: any }>;
+      expect(entries.some((e) => e.type === 'input-busy-drop')).toBe(true);
+
+      busy = false; // paste finished: the next due step sends and was not counted against the cap
+      jest.advanceTimersByTime(100);
+      mv(START_Y + SLOP_PX + 440);
+      frame();
+      expect(onSendData.mock.calls).toEqual([[PGUP]]);
+      (console.debug as jest.Mock).mockRestore();
+    });
+
+    it('scrollDrag_should_StillScrollLocally_When_InputChunking', () => {
+      const { term } = mountScroll({ bufferType: 'normal', cellH: 20 }, { isInputBusy: () => true });
+      start();
+      mv(START_Y + SLOP_PX + 40);
+      frame();
+      expect(term.scrollLines.mock.calls).toEqual([[-2]]);
+      expect(onSendData).not.toHaveBeenCalled();
+    });
+
     it('scrollDrag_should_DropExtraPages_When_RateLimitedWithin100ms', () => {
       mountScroll({ bufferType: 'alternate', cellH: 20 });
       start();
