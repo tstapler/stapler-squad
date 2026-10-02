@@ -27,7 +27,20 @@ export function xtermModule() {
     cols = 80;
     rows = 24;
     options: any;
-    buffer = { active: { length: 0, viewportY: 0 } };
+    modes: any = {};
+    writeParsedCallbacks: Array<() => void> = [];
+    bufferChangeCallbacks: Array<() => void> = [];
+    buffer = {
+      active: { length: 0, viewportY: 0, type: "normal" } as any,
+      onBufferChange: jest.fn((cb: () => void) => {
+        this.bufferChangeCallbacks.push(cb);
+        return { dispose: jest.fn() };
+      }),
+    };
+    onWriteParsed = jest.fn((cb: () => void) => {
+      this.writeParsedCallbacks.push(cb);
+      return { dispose: jest.fn() };
+    });
     _core = { _renderService: { dimensions: undefined } };
     refresh = jest.fn();
     clearTextureAtlas = jest.fn();

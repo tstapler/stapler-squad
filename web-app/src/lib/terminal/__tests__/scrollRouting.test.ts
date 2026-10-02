@@ -10,6 +10,9 @@ import {
   encodeWheel,
   encodeWheelX10,
   tuiPageStepLines,
+  toolbarPageAction,
+  PAGE_UP_BYTES,
+  PAGE_DOWN_BYTES,
   type MouseTrackingMode,
   type ScrollMode,
   type ScrollRoutingPolicy,
@@ -176,5 +179,58 @@ describe("PageAccumulator", () => {
     expect(a.capped).toBe(true);
     a.reset();
     expect(a.capped).toBe(false);
+  });
+});
+
+describe("toolbarPageAction", () => {
+  const none = { ctrl: false, alt: false, shift: false };
+
+  it("toolbarPageAction_should_ReturnScrollPages_When_LocalRouteAndNoModifier", () => {
+    expect(toolbarPageAction({ route: "xterm-local", direction: "up", modifiers: none, canScroll: true, override: "auto" })).toEqual({
+      type: "scroll-pages",
+      pages: -1,
+    });
+    expect(toolbarPageAction({ route: "xterm-local", direction: "down", modifiers: none, canScroll: true, override: "local" })).toEqual({
+      type: "scroll-pages",
+      pages: 1,
+    });
+  });
+
+  it("toolbarPageAction_should_ReturnBytes_When_TuiRoute", () => {
+    for (const route of ["tui-pgkeys", "tui-wheel"] as const) {
+      expect(toolbarPageAction({ route, direction: "up", modifiers: none, canScroll: true, override: "auto" })).toEqual({
+        type: "send-keys",
+        bytes: PAGE_UP_BYTES,
+        countsTowardNetPages: true,
+      });
+      expect(toolbarPageAction({ route, direction: "down", modifiers: none, canScroll: false, override: "tui" })).toEqual({
+        type: "send-keys",
+        bytes: PAGE_DOWN_BYTES,
+        countsTowardNetPages: true,
+      });
+    }
+  });
+
+  it("toolbarPageAction_should_ReturnModifiedBytes_When_ModifierArmed", () => {
+    // The action carries the base key; the caller's sendKey applies the armed modifier map.
+    for (const modifiers of [{ ...none, ctrl: true }, { ...none, alt: true }, { ...none, shift: true }]) {
+      const action = toolbarPageAction({ route: "xterm-local", direction: "up", modifiers, canScroll: true, override: "local" });
+      expect(action).toEqual({ type: "send-keys", bytes: PAGE_UP_BYTES, countsTowardNetPages: false });
+    }
+  });
+
+  it("toolbarPageAction_should_FallThroughToBytes_When_AutoLocalAtEdge", () => {
+    expect(toolbarPageAction({ route: "xterm-local", direction: "up", modifiers: none, canScroll: false, override: "auto" })).toEqual({
+      type: "send-keys",
+      bytes: PAGE_UP_BYTES,
+      countsTowardNetPages: false,
+    });
+  });
+
+  it("toolbarPageAction_should_NotFallThrough_When_ExplicitLocalAtEdge", () => {
+    expect(toolbarPageAction({ route: "xterm-local", direction: "down", modifiers: none, canScroll: false, override: "local" })).toEqual({
+      type: "scroll-pages",
+      pages: 1,
+    });
   });
 });

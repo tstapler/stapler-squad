@@ -1,7 +1,7 @@
 "use client";
 // +feature: terminal-pre-sizing terminal-dimension-cache terminal-image-upload
 
-import { useEffect, useRef, useCallback, useState, lazy, Suspense } from "react";
+import { useEffect, useRef, useCallback, useState, useMemo, lazy, Suspense } from "react";
 
 // xterm modifier key sequences (CSI parameter convention: modifier 5=Ctrl, 3=Alt).
 // Defined at module level to avoid per-render allocation inside sendKey.
@@ -46,7 +46,7 @@ import { useVisibilityResync } from "./useVisibilityResync";
 import { useBrowserLogStream } from "@/lib/hooks/useBrowserLogStream";
 import { useHandedness } from "@/lib/hooks/useHandedness";
 import { useSplitContainerSize } from "@/lib/hooks/useSplitContainerSize";
-import type { XtermTerminalHandle, XtermTerminalProps } from "./XtermTerminal";
+import type { XtermTerminalHandle, XtermTerminalProps, ScrollGestureProps } from "./XtermTerminal";
 import type { ForwardRefExoticComponent, RefAttributes } from "react";
 const XtermTerminal = lazy(() => import("./XtermTerminal").then((m) => ({ default: m.XtermTerminal }))) as ForwardRefExoticComponent<XtermTerminalProps & RefAttributes<XtermTerminalHandle>>;
 import { InputDropBadge } from "./InputDropBadge";
@@ -55,6 +55,9 @@ import { useDropEpisodeCoalescer } from "./useDropEpisodeCoalescer";
 import { TerminalStreamManager } from "@/lib/terminal/TerminalStreamManager";
 import { createViewportSettle, createRafScheduler, DEFAULT_STABLE_FRAMES, DEFAULT_MAX_WAIT_MS } from "@/lib/terminal/viewportSettle";
 import { mobileDebug } from "@/lib/terminal/mobileDebug";
+import { toolbarPageAction, PAGE_UP_BYTES, PAGE_DOWN_BYTES, type ScrollMode } from "@/lib/terminal/scrollRouting";
+import { createNetPagesUpTracker } from "@/lib/terminal/scrollPosition";
+import { useEffectiveScrollMode, useScrollSettings } from "@/lib/hooks/useEffectiveScrollMode";
 import { getCachedDimensions, saveDimensions, validateCellDimensions } from "@/lib/terminal/TerminalDimensionCache";
 import { DEFAULT_TERMINAL_CONFIG } from "@/lib/config/terminalConfig";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
@@ -105,6 +108,9 @@ const XTERM_DEFAULT_ROWS = 24;
 
 // Story 2.3 — coalescing window for InputDropBadge drop episodes (design/ux.md §2.2).
 const DROP_EPISODE_COALESCE_WINDOW_MS = 400;
+
+// Matches XtermTerminal's assumed first scroll mode, so only real changes are reported.
+const INITIAL_SCROLL_MODE: ScrollMode = { bufferType: "normal", mouseTrackingMode: "none" };
 
 export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSessionName, isVisible, shellId, onShellStatusChange, scheduleResync }: TerminalOutputProps) {
   const { track } = useAnalytics();
@@ -386,6 +392,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // itself owns detecting a full-pane replacement snapshot and clearing the xterm
   // buffer for it (ANSI_SNAPSHOT_PREFIX in TerminalStreamManager.ts); this only resets
   // the paging refs the manager doesn't know about.
+  // Gesture-cancel / netPagesUp-reset trigger (ux.md S7/S9): bumped on every reconnect
+  // and on every full-snapshot write.
+  const [connectionEpoch, setConnectionEpoch] = useState(0);
+  const bumpConnectionEpoch = useCallback(() => setConnectionEpoch((e) => e + 1), []);
+
   const resetScrollbackPaging = useCallback(() => {
     hasMoreScrollbackRef.current = true;
     oldestSequenceReceivedRef.current = 0;
@@ -421,6 +432,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     // queue flush) benefits without needing its own check.
     manager.setOnFullSnapshot(() => {
       resetScrollbackPaging();
+      bumpConnectionEpoch();
       if (clearedAtRef.current !== null) {
         mobileDebug.log("snapshot-after-clear", { elapsedMs: Date.now() - clearedAtRef.current });
         clearedAtRef.current = null;
@@ -454,7 +466,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
     streamManagerRef.current = manager;
     return manager;
-  }, [logTerminalMetrics, sessionId, track, resetScrollbackPaging]);
+  }, [logTerminalMetrics, sessionId, track, resetScrollbackPaging, bumpConnectionEpoch]);
 
   // Ref to track whether the initial scrollback has been written (Task 2.3.2)
   const isInitialScrollbackDoneRef = useRef(false);
@@ -655,6 +667,10 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   if (!retrySessionClientRef.current) {
     retrySessionClientRef.current = createClient(SessionService, createConnectTransport({ baseUrl }));
   }
+  const reconnectViaHook = useCallback(() => {
+    bumpConnectionEpoch();
+    handleHookReconnect();
+  }, [bumpConnectionEpoch, handleHookReconnect]);
   const [isRetryingSession, setIsRetryingSession] = useState(false);
   const handleRetryNow = useCallback(async () => {
     setIsRetryingSession(true);
@@ -665,9 +681,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       await retrySessionClientRef.current?.retrySession({ id: effectiveSessionId });
     } finally {
       setIsRetryingSession(false);
-      handleHookReconnect();
+      reconnectViaHook();
     }
-  }, [effectiveSessionId, handleHookReconnect]);
+  }, [effectiveSessionId, reconnectViaHook]);
 
   const { notifyResyncOutputReceived, resetStallWatchdog } = useVisibilityResync({
     sessionId: effectiveSessionId,
@@ -800,6 +816,30 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
   }, [sendInput, clearForSession, sessionId, refreshApprovals, pendingCount]);
 
+  // Scroll route shared by the toolbar PgUp/PgDn (and later the chip and jump button).
+  // XtermTerminal reports the live mode upward only when it changes.
+  const { override: scrollOverride, gestureScrollEnabled } = useScrollSettings();
+  const [scrollMode, setScrollMode] = useState<ScrollMode>(INITIAL_SCROLL_MODE);
+  const handleScrollModeChange = useCallback((next: ScrollMode) => {
+    setScrollMode((prev) =>
+      prev.bufferType === next.bufferType && prev.mouseTrackingMode === next.mouseTrackingMode ? prev : next,
+    );
+  }, []);
+  const effectiveScroll = useEffectiveScrollMode(scrollMode, scrollOverride, gestureScrollEnabled);
+  const scrollGestureProps = useMemo<ScrollGestureProps>(
+    () => ({ scrollOverride, gestureScrollEnabled, connectionEpoch }),
+    [scrollOverride, gestureScrollEnabled, connectionEpoch],
+  );
+
+  // TUI page-key estimate fed by toolbar presses; the jump button that reads it is mounted separately.
+  const [netPagesUp] = useState(createNetPagesUpTracker);
+  const lastEpochRef = useRef(connectionEpoch);
+  useEffect(() => {
+    if (lastEpochRef.current === connectionEpoch) return;
+    lastEpochRef.current = connectionEpoch;
+    netPagesUp.invalidate("reconnect");
+  }, [connectionEpoch, netPagesUp]);
+
   // Send a key sequence, applying any active sticky modifier (CTRL or ALT) first.
   // Modifier sequences follow xterm's parameter convention:
   //   modifier 3 = Alt (escape prefix or CSI param ;3)
@@ -820,6 +860,32 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
     handleTerminalData(data);
   }, [ctrlActive, altActive, shiftActive, handleTerminalData]);
+
+  // Route-aware PgUp/PgDn (ux.md S4): the same route as the drag, so the keys are an
+  // equivalent single-pointer alternative. TUI-route bytes are unchanged from before.
+  const sendToolbarPageKey = useCallback((direction: "up" | "down") => {
+    mobileDebug.toolbarKey(direction === "up" ? "PageUp" : "PageDown");
+    const terminal = xtermRef.current?.terminal ?? null;
+    const buffer = terminal?.buffer?.active;
+    const canScroll = !!buffer && (direction === "up" ? buffer.viewportY > 0 : buffer.viewportY < buffer.baseY);
+    const action = toolbarPageAction({
+      route: effectiveScroll.target,
+      direction,
+      modifiers: { ctrl: ctrlActive, alt: altActive, shift: shiftActive },
+      canScroll,
+      override: scrollOverride,
+    });
+    if (action.type === "scroll-pages" && terminal) {
+      terminal.scrollPages(action.pages);
+      return;
+    }
+    const bytes = action.type === "send-keys" ? action.bytes : direction === "up" ? PAGE_UP_BYTES : PAGE_DOWN_BYTES;
+    if (action.type === "send-keys" && action.countsTowardNetPages) {
+      if (direction === "up") netPagesUp.pageUp();
+      else netPagesUp.pageDown();
+    }
+    sendKey(bytes);
+  }, [effectiveScroll.target, scrollOverride, ctrlActive, altActive, shiftActive, sendKey, netPagesUp]);
 
   // Handle terminal resize with size stability detection
   const handleTerminalResize = useCallback((cols: number, rows: number) => {
@@ -1097,12 +1163,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
       const timeout = setTimeout(() => {
         console.log("[TerminalOutput] Attempting reconnection...");
+        bumpConnectionEpoch();
         connect();
       }, backoffDelay);
 
       return () => clearTimeout(timeout);
     }
-  }, [isConnected, error, connectionAttempts, connect, isHardFailed]);
+  }, [isConnected, error, connectionAttempts, connect, isHardFailed, bumpConnectionEpoch]);
 
   // Initialize with cached dimensions on mount.
   // When cell pixel metrics are also cached, pre-calculate cols/rows from the
@@ -1286,8 +1353,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     console.log("[TerminalOutput] Manual reconnect requested");
     setConnectionAttempts(0);
     setShowReconnectButton(false);
+    bumpConnectionEpoch();
     connect();
-  }, [connect]);
+  }, [connect, bumpConnectionEpoch]);
 
   const handleToggleDebug = useCallback(() => {
     const newDebugMode = !debugMode;
@@ -1690,17 +1758,17 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
               🔄 Reconnect
             </button>
           )}
-          {/* Resize — always visible (minimized default); heavily used per analytics */}
+          {/* Redraw (formerly "Resize") — always visible so a blank screen is recoverable with the toolbar collapsed */}
           <button
             className={styles.toolbarButton}
             onClick={() => {
               track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "resize" } });
               handleManualResize();
             }}
-            aria-label="Resize terminal to fit container"
-            title="Resize terminal to fit container"
+            aria-label="Redraw terminal (fixes a blank screen)"
+            title="Redraw terminal (fixes a blank screen)"
           >
-            ↔️ Resize
+            ↔️ Redraw
           </button>
           {toolbarExpanded && (
             <div className={styles.toolbarActions} data-testid="toolbar-actions">
@@ -1923,7 +1991,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
                 </button>
               </>
             ) : (
-              <>Connection lost — <button onClick={handleHookReconnect}>Retry</button></>
+              <>Connection lost — <button onClick={reconnectViaHook}>Retry</button></>
             )}
           </div>
         )}
@@ -1965,6 +2033,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     ref={xtermRef}
     onData={handleTerminalData}
     onResize={handleTerminalResize}
+    scrollGesture={scrollGestureProps}
+    onScrollModeChange={handleScrollModeChange}
     theme={theme}
     fontSize={14}
     scrollback={5000}
@@ -1992,7 +2062,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[H'); }} aria-label="Home" data-testid="mobile-key">Home</button>
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[A'); }} aria-label="Up arrow" data-testid="mobile-key">↑</button>
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[F'); }} aria-label="End" data-testid="mobile-key">End</button>
-            <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[5~'); }} aria-label="Page up" data-testid="mobile-key">PgUp</button>
+            <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendToolbarPageKey("up"); }} aria-label="Page up" data-testid="mobile-key">PgUp</button>
           </div>
           <div className={styles.mobileKeyRow}>
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\t'); }} aria-label="Tab" data-testid="mobile-key">Tab</button>
@@ -2026,7 +2096,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[D'); }} aria-label="Left arrow" data-testid="mobile-key">←</button>
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[B'); }} aria-label="Down arrow" data-testid="mobile-key">↓</button>
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[C'); }} aria-label="Right arrow" data-testid="mobile-key">→</button>
-            <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[6~'); }} aria-label="Page down" data-testid="mobile-key">PgDn</button>
+            <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendToolbarPageKey("down"); }} aria-label="Page down" data-testid="mobile-key">PgDn</button>
           </div>
           <div className={styles.mobileKeyRow}>
             <button className={`${styles.mobileKey} ${styles.mobileKeyCtrlC}`} onPointerDown={(e) => { e.preventDefault(); setCtrlActive(false); setAltActive(false); handleTerminalData('\x03'); }} aria-label="Ctrl+C (interrupt)" title="Interrupt (Ctrl+C)" data-testid="mobile-key">^C</button>

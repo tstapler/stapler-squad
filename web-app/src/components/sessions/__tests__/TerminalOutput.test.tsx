@@ -292,7 +292,7 @@ describe("TerminalOutput resize call sites", () => {
       fireEvent.click(toolbarToggle);
     });
 
-    const fitButton = getByRole("button", { name: "Resize terminal to fit container" });
+    const fitButton = getByRole("button", { name: "Redraw terminal (fixes a blank screen)" });
     act(() => {
       fireEvent.click(fitButton);
     });

@@ -89,6 +89,7 @@ export function terminalStreamManagerWithSerializeAddonMockModule() {
   return {
     TerminalStreamManager: jest.fn().mockImplementation(() => ({
       setOnFirstOutput: jest.fn(),
+      setOnFullSnapshot: jest.fn(),
       setSerializeAddon: jest.fn(),
       installDebugMonitor: jest.fn(),
       writeInitialContent: jest.fn().mockResolvedValue(undefined),

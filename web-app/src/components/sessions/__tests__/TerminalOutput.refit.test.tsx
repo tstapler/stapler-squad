@@ -68,6 +68,8 @@ jest.mock("@/components/providers/ViewportProvider", () =>
 import { TerminalOutput } from "../TerminalOutput";
 // eslint-disable-next-line import/first
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
+// eslint-disable-next-line import/first
+import { TerminalStreamManager } from "@/lib/terminal/TerminalStreamManager";
 
 function makeStreamMock(overrides: Record<string, unknown> = {}) {
   return {
@@ -205,7 +207,7 @@ describe("TerminalOutput refit wiring", () => {
   it("handleManualResize_should_CallRefit", async () => {
     await renderTerminal();
 
-    fireEvent.click(screen.getByLabelText("Resize terminal to fit container"));
+    fireEvent.click(screen.getByLabelText("Redraw terminal (fixes a blank screen)"));
 
     expect(mockXtermHandle.refit).toHaveBeenCalledWith({ reason: "manual-resize" });
     expect(mockXtermHandle.fit).not.toHaveBeenCalled();
@@ -255,5 +257,69 @@ describe("TerminalOutput settle-driven bounce-hold bypass", () => {
     act(() => { capturedXtermProps.onResize(80, 20); });
 
     expect(streamMock.resize.mock.calls[0][3]).toBeUndefined();
+  });
+});
+
+describe("TerminalOutput Redraw button (Story 1.2.8)", () => {
+  it("redrawButton_should_CallRefitWithManualResize_When_Tapped", async () => {
+    await renderTerminal();
+    fireEvent.click(screen.getByRole("button", { name: "Redraw terminal (fixes a blank screen)" }));
+    expect(mockXtermHandle.refit).toHaveBeenCalledTimes(1);
+    expect(mockXtermHandle.refit).toHaveBeenCalledWith({ reason: "manual-resize" });
+  });
+
+  it("redrawButton_should_BeRenderedWhenToolbarCollapsed", async () => {
+    await renderTerminal();
+    expect(screen.queryByTestId("toolbar-actions")).toBeNull(); // collapsed by default
+    const button = screen.getByRole("button", { name: "Redraw terminal (fixes a blank screen)" });
+    expect(button.textContent).toContain("Redraw");
+    expect(button.getAttribute("title")).toBe("Redraw terminal (fixes a blank screen)");
+  });
+});
+
+describe("TerminalOutput scroll settings plumbing (Stories 1.2.5e-g)", () => {
+  const epoch = () => capturedXtermProps.scrollGesture.connectionEpoch;
+
+  afterEach(() => {
+    (mockXtermHandle as any).terminal = null;
+  });
+
+  /** Gives TerminalOutput a live terminal and forces the stream manager into existence. */
+  async function attachTerminalAndOutput() {
+    (mockXtermHandle as any).terminal = { cols: 80, rows: 24 };
+    await act(async () => {
+      (useTerminalStream as jest.Mock).mock.calls.at(-1)![0].onOutput("hello");
+    });
+    const manager = (TerminalStreamManager as unknown as jest.Mock).mock.results.at(-1)!.value;
+    return manager.setOnFullSnapshot.mock.calls[0][0] as () => void;
+  }
+
+  it("connectionEpoch_should_Increment_When_ReconnectOrFullSnapshot", async () => {
+    const { rerender } = await renderTerminal();
+    expect(epoch()).toBe(0);
+
+    const onFullSnapshot = await attachTerminalAndOutput();
+    act(() => onFullSnapshot());
+    expect(epoch()).toBe(1);
+
+    // Hard failure: the banner's Retry goes through the hook reconnect.
+    streamMock = makeStreamMock({ isConnected: false, isHardFailed: true });
+    (useTerminalStream as jest.Mock).mockReturnValue(streamMock);
+    rerender(<TerminalOutput sessionId="s1" baseUrl="/api" isVisible={false} />);
+    act(() => { jest.advanceTimersByTime(2100); });
+    fireEvent.click(screen.getByRole("button", { name: /Retry/i }));
+    expect(epoch()).toBe(2);
+    expect(streamMock.handleManualReconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("TerminalOutput_should_ThreadSettingsToXterm_And_FollowScrollModeChanges", async () => {
+    localStorage.setItem("terminal-scroll-override", "tui");
+    await renderTerminal();
+    expect(capturedXtermProps.scrollGesture).toEqual(
+      expect.objectContaining({ scrollOverride: "tui", gestureScrollEnabled: true, connectionEpoch: 0 }),
+    );
+    expect(typeof capturedXtermProps.onScrollModeChange).toBe("function");
+    act(() => capturedXtermProps.onScrollModeChange({ bufferType: "alternate", mouseTrackingMode: "any" }));
+    expect(capturedXtermProps.scrollGesture.scrollOverride).toBe("tui");
   });
 });

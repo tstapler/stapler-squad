@@ -3,6 +3,8 @@
 import { useEffect, useRef, useCallback, useImperativeHandle, forwardRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTerminalGestures } from "@/lib/hooks/useTerminalGestures";
+import { readScrollMode } from "@/lib/terminal/mouseTracking";
+import type { ScrollMode, ScrollOverride, TuiScrollPolicy } from "@/lib/terminal/scrollRouting";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -144,7 +146,25 @@ export function isSustainedMismatch(
   return Math.abs(actualPxPerCol - expectedPxPerCol) > tolerance;
 }
 
+/** Settings that reach `useTerminalGestures` from TerminalOutput; changes apply on the next frame, no remount. */
+export interface ScrollGestureProps {
+  scrollOverride?: ScrollOverride;
+  /** False removes the touch listeners and sets `data-gesture-scroll="off"`. Default true. */
+  gestureScrollEnabled?: boolean;
+  tuiScrollPolicy?: TuiScrollPolicy;
+  /** Bumped on reconnect or full-snapshot write; cancels an in-flight gesture. */
+  connectionEpoch?: number;
+}
+
+const INITIAL_SCROLL_MODE: ScrollMode = { bufferType: "normal", mouseTrackingMode: "none" };
+
 export interface XtermTerminalProps {
+  scrollGesture?: ScrollGestureProps;
+  /**
+   * Called only when the buffer type or mouse-tracking mode changes. The first value
+   * is assumed to be `{ normal, none }`, so a terminal that starts there reports nothing.
+   */
+  onScrollModeChange?: (mode: ScrollMode) => void;
   /**
    * Callback when user types in terminal
    */
@@ -225,6 +245,8 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   fontSize: fontSizeProp,
   scrollback: scrollbackProp,
   useConfig = false,
+  scrollGesture,
+  onScrollModeChange,
 }, ref) => {
   // Load configuration
   const config = useConfig ? loadTerminalConfig() : null;
@@ -271,10 +293,15 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   const onDataRef = useRef(onData);
   const onResizeRef = useRef(onResize);
 
+  const onScrollModeChangeRef = useRef(onScrollModeChange);
+
   useEffect(() => {
     onDataRef.current = onData;
     onResizeRef.current = onResize;
-  }, [onData, onResize]);
+    onScrollModeChangeRef.current = onScrollModeChange;
+  }, [onData, onResize, onScrollModeChange]);
+
+  const gestureScrollEnabled = scrollGesture?.gestureScrollEnabled ?? true;
 
   // Unified mobile gesture state machine (R4.3).
   // Replaces the conflicting useTouchScroll + useMobileTerminalGestures hooks:
@@ -286,6 +313,10 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     containerRef,
     terminalRef,
     onSendData: useCallback((data: string) => onDataRef.current?.(data), []),
+    override: scrollGesture?.scrollOverride,
+    gestureScrollEnabled,
+    tuiScrollPolicy: scrollGesture?.tuiScrollPolicy,
+    connectionEpoch: scrollGesture?.connectionEpoch,
   });
 
   // Show the "Copied/Copy failed" toast via DOM mutation (no re-render).
@@ -857,7 +888,19 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       // scrolled up into history and new output arrives, onScroll doesn't fire (the
       // viewport position didn't change) but the buffer grew, so thumb proportions
       // go stale. Updating here keeps the thumb correctly sized while streaming.
-      const writeParsedDisposable = terminal.onWriteParsed?.(() => updateScrollbar(terminal));
+      // The same write hook re-reads the scroll mode: mouse-tracking changes only arrive via writes.
+      let lastScrollMode = INITIAL_SCROLL_MODE;
+      const reportScrollMode = () => {
+        const next = readScrollMode(terminal);
+        if (next.bufferType === lastScrollMode.bufferType && next.mouseTrackingMode === lastScrollMode.mouseTrackingMode) return;
+        lastScrollMode = next;
+        onScrollModeChangeRef.current?.(next);
+      };
+      const writeParsedDisposable = terminal.onWriteParsed?.(() => {
+        updateScrollbar(terminal);
+        reportScrollMode();
+      });
+      const bufferChangeDisposable = terminal.buffer?.onBufferChange?.(reportScrollMode);
 
       // CRITICAL: Store refs BEFORE triggering callbacks
       // This ensures terminalRef is available when parent component calls getTerminal()
@@ -1363,6 +1406,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         resizeDisposable?.dispose();
         scrollDisposable?.dispose();
         writeParsedDisposable?.dispose();
+        bufferChangeDisposable?.dispose();
         handleCleanupFns.forEach(fn => fn());
         terminal.dispose();
         terminalRef.current = null;
@@ -1488,7 +1532,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
   return (
     <div className={styles.container} data-context="terminal">
-      <div ref={containerRef} className={styles.terminal} />
+      <div ref={containerRef} className={styles.terminal} data-gesture-scroll={gestureScrollEnabled ? "on" : "off"} />
       {/* Custom left-side scrollbar — stays out of the right-side window-scrollbar zone.
           Only visible when scrollback content exists (controlled via updateScrollbar). */}
       <div ref={scrollTrackRef} className={styles.scrollTrack} style={{ display: 'none' }}>

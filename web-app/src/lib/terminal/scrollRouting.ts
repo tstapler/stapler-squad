@@ -213,3 +213,42 @@ export class PageAccumulator {
     this.lastEmitAt = Number.NEGATIVE_INFINITY;
   }
 }
+
+// ---- Toolbar PgUp/PgDn (S4) ----
+
+export interface ToolbarModifiers {
+  ctrl: boolean;
+  alt: boolean;
+  shift: boolean;
+}
+
+export type ToolbarPageAction =
+  | { type: "scroll-pages"; pages: -1 | 1 }
+  /** `bytes` is the unmodified key; the caller's sendKey applies any armed modifier map. */
+  | { type: "send-keys"; bytes: string; countsTowardNetPages: boolean };
+
+export interface ToolbarPageActionInput {
+  route: ScrollTarget;
+  direction: "up" | "down";
+  modifiers: ToolbarModifiers;
+  /** Whether scrollPages can move xterm history in this direction. */
+  canScroll: boolean;
+  override: ScrollOverride;
+}
+
+/**
+ * Same route as the drag, so the toolbar is an equivalent single-pointer
+ * alternative. A modifier always sends bytes; in `auto`, a local route at its
+ * edge falls through to bytes (today's behaviour for a normal-buffer TUI the
+ * table misclassifies as local); an explicit `local` override never falls through.
+ */
+export function toolbarPageAction(input: ToolbarPageActionInput): ToolbarPageAction {
+  const { route, direction, modifiers, canScroll, override } = input;
+  const bytes = direction === "up" ? PAGE_UP_BYTES : PAGE_DOWN_BYTES;
+  const modified = modifiers.ctrl || modifiers.alt || modifiers.shift;
+  const isTui = route !== "xterm-local";
+  if (modified) return { type: "send-keys", bytes, countsTowardNetPages: false };
+  if (isTui) return { type: "send-keys", bytes, countsTowardNetPages: true };
+  if (!canScroll && override !== "local") return { type: "send-keys", bytes, countsTowardNetPages: false };
+  return { type: "scroll-pages", pages: direction === "up" ? -1 : 1 };
+}

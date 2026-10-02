@@ -14,8 +14,10 @@ jest.mock("@xterm/addon-canvas", () => require("./xtermRefitMocks").canvasModule
 jest.mock("@xterm/addon-search", () => require("./xtermRefitMocks").searchModule());
 jest.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
 jest.mock("@/lib/terminal/mobileDebug", () => ({ mobileDebug: { log: jest.fn() } }));
+jest.mock("@/lib/hooks/useTerminalGestures", () => ({ useTerminalGestures: jest.fn() }));
 
-import { XtermTerminal, SAMPLE_INTERVAL_MS, MAX_SAMPLES, type XtermTerminalHandle } from "../XtermTerminal";
+import { XtermTerminal, SAMPLE_INTERVAL_MS, MAX_SAMPLES, type XtermTerminalHandle, type XtermTerminalProps } from "../XtermTerminal";
+import { useTerminalGestures } from "@/lib/hooks/useTerminalGestures";
 import { created, resetCreated } from "./xtermRefitMocks";
 import { createViewportSettle, createRafScheduler, type ViewportSource } from "@/lib/terminal/viewportSettle";
 import { mobileDebug } from "@/lib/terminal/mobileDebug";
@@ -55,9 +57,9 @@ afterEach(() => {
   jest.useRealTimers();
 });
 
-async function mount() {
+async function mount(props: Partial<XtermTerminalProps> = {}) {
   const ref = React.createRef<XtermTerminalHandle>();
-  const utils = render(<XtermTerminal ref={ref} />);
+  const utils = render(<XtermTerminal ref={ref} {...props} />);
   await act(async () => {
     jest.advanceTimersByTime(200);
     await Promise.resolve();
@@ -288,5 +290,54 @@ describe("former bare fit() call sites route through refit (Story 2.1.3c)", () =
     act(() => ref.current!.fit());
     expect(terminal.refresh).toHaveBeenCalledTimes(1); // refit repaints even at unchanged dims
     expect(fit.fit).not.toHaveBeenCalled();
+  });
+});
+
+describe("scroll settings wiring (Stories 1.2.5e / 1.2.5g)", () => {
+  const fireWriteParsed = (terminal: any) => act(() => terminal.writeParsedCallbacks.forEach((cb: () => void) => cb()));
+  const fireBufferChange = (terminal: any) => act(() => terminal.bufferChangeCallbacks.forEach((cb: () => void) => cb()));
+
+  it("XtermTerminal_should_ReportScrollModeOnlyOnChange", async () => {
+    const onScrollModeChange = jest.fn();
+    const { terminal } = await mount({ onScrollModeChange });
+
+    fireWriteParsed(terminal); // still normal / none: nothing to report
+    expect(onScrollModeChange).not.toHaveBeenCalled();
+
+    terminal.buffer.active.type = "alternate";
+    fireBufferChange(terminal);
+    expect(onScrollModeChange).toHaveBeenCalledTimes(1);
+    expect(onScrollModeChange).toHaveBeenLastCalledWith({ bufferType: "alternate", mouseTrackingMode: "none" });
+
+    fireWriteParsed(terminal); // unchanged: no repeat
+    fireBufferChange(terminal);
+    expect(onScrollModeChange).toHaveBeenCalledTimes(1);
+
+    terminal.modes = { mouseTrackingMode: "any" }; // mode changes arrive through writes
+    fireWriteParsed(terminal);
+    expect(onScrollModeChange).toHaveBeenCalledTimes(2);
+    expect(onScrollModeChange).toHaveBeenLastCalledWith({ bufferType: "alternate", mouseTrackingMode: "any" });
+  });
+
+  it("XtermTerminal_should_PassOverrideAndGestureFlagToHook", async () => {
+    const hook = useTerminalGestures as jest.Mock;
+    const scrollGesture = { scrollOverride: "tui", gestureScrollEnabled: false, tuiScrollPolicy: "wheel", connectionEpoch: 3 } as const;
+    const { rerender } = await mount({ scrollGesture });
+    expect(hook).toHaveBeenLastCalledWith(
+      expect.objectContaining({ override: "tui", gestureScrollEnabled: false, tuiScrollPolicy: "wheel", connectionEpoch: 3 }),
+    );
+
+    const terminalBefore = created.terminals.length;
+    rerender(<XtermTerminal scrollGesture={{ scrollOverride: "local", gestureScrollEnabled: true, connectionEpoch: 4 }} />);
+    expect(hook).toHaveBeenLastCalledWith(expect.objectContaining({ override: "local", gestureScrollEnabled: true, connectionEpoch: 4 }));
+    expect(created.terminals.length).toBe(terminalBefore); // no remount
+  });
+
+  it("XtermTerminal_should_SetDataGestureScrollAttribute", async () => {
+    const { container, rerender } = await mount();
+    const surface = () => container.querySelector("[data-gesture-scroll]");
+    expect(surface()?.getAttribute("data-gesture-scroll")).toBe("on"); // default
+    rerender(<XtermTerminal scrollGesture={{ gestureScrollEnabled: false }} />);
+    expect(surface()?.getAttribute("data-gesture-scroll")).toBe("off");
   });
 });
