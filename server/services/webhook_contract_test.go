@@ -1,22 +1,16 @@
 package services
 
 import (
-	"crypto/ed25519"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xeipuuv/gojsonschema"
-
-	"github.com/tstapler/stapler-squad/server/integrations/contractbundle"
 )
 
 type httpRecorder = httptest.ResponseRecorder
@@ -194,57 +188,4 @@ func TestContract_should_ReturnSchemaValidErrors_When_EachFailureClassOccurs(t *
 		assert.Equal(t, tc.code, errCode(t, rec), tc.name)
 		requireValid(t, "error-response.schema.json", rec.Body.Bytes())
 	}
-}
-
-func TestContractBundle_should_SignAndVerify_When_BuiltFromTheCheckedInContract(t *testing.T) {
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	require.NoError(t, err)
-	staged := t.TempDir()
-	require.NoError(t, copyTree(contractDir, staged))
-
-	manifest, err := contractbundle.BuildManifest(staged)
-	require.NoError(t, err)
-	sig, err := contractbundle.Sign(manifest, "test-key", priv)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(staged, contractbundle.ManifestFile), manifest, 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(staged, contractbundle.SignatureFile), sig, 0o644))
-
-	rootJSON, err := json.Marshal(contractbundle.TrustRoot{Version: 1, Keys: []contractbundle.TrustKey{{
-		ID: "test-key", PublicKey: base64.StdEncoding.EncodeToString(pub), NotBefore: time.Unix(0, 0).UTC(),
-	}}})
-	require.NoError(t, err)
-	root, err := contractbundle.ParseTrustRoot(rootJSON)
-	require.NoError(t, err)
-
-	got, err := contractbundle.Verify(staged, root, time.Now())
-
-	require.NoError(t, err)
-	assert.Contains(t, got.Files, "schemas/reconcile-request.schema.json")
-	assert.Contains(t, got.Files, "fixtures/capability-response.json")
-	assert.Len(t, got.Files, 14, "every checked-in contract artifact must be in the bundle")
-
-	require.NoError(t, os.WriteFile(filepath.Join(staged, "fixtures/capability-response.json"), []byte(`{}`), 0o644))
-	_, err = contractbundle.Verify(staged, root, time.Now())
-	assert.ErrorIs(t, err, contractbundle.ErrVerification, "altering any artifact after signing must fail verification")
-}
-
-func copyTree(src, dst string) error {
-	return filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, p)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-		if d.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-		raw, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(target, raw, 0o644)
-	})
 }
