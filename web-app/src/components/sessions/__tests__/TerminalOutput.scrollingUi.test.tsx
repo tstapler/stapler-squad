@@ -64,6 +64,8 @@ import { TerminalOutput } from "../TerminalOutput";
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
 // eslint-disable-next-line import/first
 import { scrollSettings } from "@/lib/terminal/scrollOverride";
+// eslint-disable-next-line import/first
+import { HINT_TEXT_LOCAL, HINT_TEXT_TUI, SCROLL_HINT_SEEN_KEY } from "../ScrollHint";
 
 function makeStreamMock(overrides: Record<string, unknown> = {}) {
   return {
@@ -231,5 +233,55 @@ describe("TerminalOutput scrolling chip, picker and panel (Story 1.2.5b3)", () =
     });
     expect(chip().getAttribute("data-highlighted")).toBe("true");
     expect(chip().textContent).toBe("! Terminal history");
+  });
+});
+
+describe("TerminalOutput first-use scroll hint (Task 1.2.5d)", () => {
+  const startScroll = (route: "xterm-local" | "tui-pgkeys") =>
+    act(() => {
+      capturedXtermProps.scrollGesture.onScrollStart(route);
+    });
+
+  it("hint_should_ShowRouteTextOnFirstScrollStart_And_SetSeenFlagOnGotIt", async () => {
+    await renderTerminal();
+    expect(screen.queryByTestId("scroll-hint")).toBeNull();
+
+    startScroll("xterm-local");
+    expect(screen.getByTestId("scroll-hint").textContent).toContain(HINT_TEXT_LOCAL);
+    expect(localStorage.getItem(SCROLL_HINT_SEEN_KEY)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Got it" }));
+    expect(screen.queryByTestId("scroll-hint")).toBeNull();
+    expect(localStorage.getItem(SCROLL_HINT_SEEN_KEY)).toBe("1");
+  });
+
+  it("hint_should_ShowTuiTextOnTuiRoute", async () => {
+    await renderTerminal();
+    startScroll("tui-pgkeys");
+    expect(screen.getByTestId("scroll-hint").textContent).toContain(HINT_TEXT_TUI);
+  });
+
+  it("hint_should_NotShow_When_SeenFlagSet", async () => {
+    localStorage.setItem(SCROLL_HINT_SEEN_KEY, "1");
+    await renderTerminal();
+    startScroll("xterm-local");
+    expect(screen.queryByTestId("scroll-hint")).toBeNull();
+  });
+
+  it("hint_should_DismissAndSetFlag_When_PickerOpens", async () => {
+    await renderTerminal();
+    startScroll("xterm-local");
+    fireEvent.click(chip());
+    expect(screen.queryByTestId("scroll-hint")).toBeNull();
+    expect(localStorage.getItem(SCROLL_HINT_SEEN_KEY)).toBe("1");
+  });
+
+  it("hint_should_DismissAndSetFlag_When_FullPanelOpens", async () => {
+    await renderTerminal();
+    startScroll("xterm-local");
+    fireEvent.click(screen.getByTestId("toolbar-toggle"));
+    fireEvent.click(screen.getByRole("button", { name: "Scrolling settings" }));
+    expect(screen.queryByTestId("scroll-hint")).toBeNull();
+    expect(localStorage.getItem(SCROLL_HINT_SEEN_KEY)).toBe("1");
   });
 });

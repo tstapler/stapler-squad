@@ -59,6 +59,7 @@ import { toolbarPageAction, PAGE_UP_BYTES, PAGE_DOWN_BYTES, type ScrollMode } fr
 import { createNetPagesUpTracker, MIN_ROWS_FOR_OVERLAYS } from "@/lib/terminal/scrollPosition";
 import { scrollSettings, type ScrollOverride } from "@/lib/terminal/scrollOverride";
 import { srOnly } from "@/components/ui/LiveRegion.css";
+import { ScrollHint, useScrollHint } from "./ScrollHint";
 import { ScrollingPanel, ScrollModeChip, SCROLL_OPTIONS, shouldRenderPanelAsOverlay, useMisrouteCue } from "./ScrollingPanel";
 import { useEffectiveScrollMode, useScrollSettings } from "@/lib/hooks/useEffectiveScrollMode";
 import { getCachedDimensions, saveDimensions, validateCellDimensions } from "@/lib/terminal/TerminalDimensionCache";
@@ -840,11 +841,20 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const [scrollAnnouncement, setScrollAnnouncement] = useState("");
   const scrollChipRef = useRef<HTMLButtonElement>(null);
   const misrouteCue = useMisrouteCue();
+  const scrollHint = useScrollHint();
+  const notifyScrollStart = scrollHint.notifyScrollStart;
+  const markScrollHintSeen = scrollHint.markSeenOnPanelOpen;
   const getTouchSurface = useCallback(() => terminalContainerRef.current, []);
   const reportMisroute = misrouteCue.report;
   const scrollGestureProps = useMemo<ScrollGestureProps>(
-    () => ({ scrollOverride, gestureScrollEnabled, connectionEpoch, onScrollGesture: reportMisroute }),
-    [scrollOverride, gestureScrollEnabled, connectionEpoch, reportMisroute],
+    () => ({
+      scrollOverride,
+      gestureScrollEnabled,
+      connectionEpoch,
+      onScrollGesture: reportMisroute,
+      onScrollStart: notifyScrollStart,
+    }),
+    [scrollOverride, gestureScrollEnabled, connectionEpoch, reportMisroute, notifyScrollStart],
   );
   const handleScrollOverrideChange = useCallback(
     (value: ScrollOverride) => {
@@ -857,8 +867,14 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     [scrollPanel],
   );
   const closeScrollPanel = useCallback(() => setScrollPanel(null), []);
-  const openScrollPicker = useCallback(() => setScrollPanel((p) => (p === "picker" ? null : "picker")), []);
-  const toggleScrollFullPanel = useCallback(() => setScrollPanel((p) => (p === "full" ? null : "full")), []);
+  const openScrollPicker = useCallback(() => {
+    markScrollHintSeen();
+    setScrollPanel((p) => (p === "picker" ? null : "picker"));
+  }, [markScrollHintSeen]);
+  const toggleScrollFullPanel = useCallback(() => {
+    markScrollHintSeen();
+    setScrollPanel((p) => (p === "full" ? null : "full"));
+  }, [markScrollHintSeen]);
   const openScrollFullPanel = useCallback(() => setScrollPanel("full"), []);
   // Approximate panel heights in terminal rows (picker: 3 radios + 2 buttons; full: adds switch and notes).
   // Only used to decide inline vs overlay, so a rough constant is enough.
@@ -2032,6 +2048,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           ))}
         </div>
       )}
+      <ScrollHint visible={scrollHint.visible} route={scrollHint.route} onDismiss={scrollHint.dismiss} />
       {scrollPanel && (
         <ScrollingPanel
           variant={scrollPanel}
