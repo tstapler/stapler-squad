@@ -36,6 +36,8 @@ import {
   decideAndLogScrollTarget,
   encodeWheel,
   PAGE_FLING_CAP,
+  PAGE_DOWN_BYTES,
+  PAGE_UP_BYTES,
   PageAccumulator,
   ROUTING_VERIFIED,
   type RouteDecisionLog,
@@ -52,6 +54,16 @@ export { getCellDimensions };
 
 /** Touches that begin on these (xterm's own scrollbar, anything opted out) never start a gesture. */
 export const GESTURE_IGNORE_SELECTOR = '[data-gesture-ignore], .xterm-scrollable-element .scrollbar';
+
+/** Summary of one finished scroll drag, for the misroute cue. */
+export interface ScrollGestureInfo {
+  /** Last resolved scroll target. */
+  route: ScrollTarget;
+  /** Absolute whole lines of travel produced after the slop. */
+  postSlopLines: number;
+  /** viewportY differed from its value at the start of the gesture at any sampled point. */
+  viewportYChanged: boolean;
+}
 
 export interface GestureOptions {
   containerRef: RefObject<HTMLElement | null>;
@@ -70,6 +82,14 @@ export interface GestureOptions {
   routingPolicy?: ScrollRoutingPolicy;
   /** Bumped on reconnect / full-snapshot write; a change cancels the gesture. Default 0. */
   connectionEpoch?: number;
+  /** Fired once when a touch first enters SCROLLING. */
+  onScrollStart?: (route: ScrollTarget) => void;
+  /** Fired once per gesture when a SCROLLING touch ends or is cancelled. */
+  onScrollGesture?: (info: ScrollGestureInfo) => void;
+  /** Called whenever PgUp/PgDn bytes are sent on the `tui-pgkeys` route. */
+  onPageKeysSent?: (direction: 'up' | 'down', pages: number) => void;
+  /** True while a finger is down or momentum runs; emitted only on change. */
+  onGestureActiveChange?: (active: boolean) => void;
 }
 
 /**
@@ -142,6 +162,38 @@ export function useTerminalGestures(options: GestureOptions): void {
       flingCap: Number.POSITIVE_INFINITY,
     });
     let lastTarget: ScrollTarget | null = null;
+
+    // Per-drag summary for onScrollGesture.
+    let dragActive = false;
+    let dragStartViewportY = 0;
+    let dragViewportYChanged = false;
+    let dragPostSlopLines = 0;
+    let dragRoute: ScrollTarget = 'xterm-local';
+    let gestureActive = false;
+
+    // Emits only when activity flips; called after every state change.
+    const syncActive = () => {
+      const active = state === 'PENDING' || state === 'SCROLLING' || state === 'SELECTING' || state === 'COASTING';
+      if (active === gestureActive) return;
+      gestureActive = active;
+      optionsRef.current.onGestureActiveChange?.(active);
+    };
+
+    const sampleViewportY = () => {
+      const y = terminalRef.current?.buffer?.active?.viewportY;
+      if (y !== undefined && y !== dragStartViewportY) dragViewportYChanged = true;
+    };
+
+    const reportScrollGesture = () => {
+      if (!dragActive || state !== 'SCROLLING') return;
+      dragActive = false;
+      sampleViewportY();
+      optionsRef.current.onScrollGesture?.({
+        route: dragRoute,
+        postSlopLines: dragPostSlopLines,
+        viewportYChanged: dragViewportYChanged,
+      });
+    };
 
     // Momentum (COASTING). The page accumulator is separate so only the fling is capped.
     const tracker = new MomentumTracker();
@@ -242,7 +294,7 @@ export function useTerminalGestures(options: GestureOptions): void {
 
     const enterSelecting = () => {
       const t = terminalRef.current;
-      if (!t) { state = 'IDLE'; stopGesture(); return; }
+      if (!t) { state = 'IDLE'; stopGesture(); syncActive(); return; }
 
       clearLongPressTimer();
 
@@ -310,6 +362,7 @@ export function useTerminalGestures(options: GestureOptions): void {
       const next = reduce(state, event);
       state = next.state;
       runEffects(next.effects, e, touch);
+      syncActive();
     };
 
     const preventDefaultIfCancelable = (e: TouchEvent | null) => {
@@ -353,7 +406,12 @@ export function useTerminalGestures(options: GestureOptions): void {
         case 'tui-pgkeys': {
           pages.setRows(terminal.rows);
           const keys = pages.push(lines);
-          if (keys) onSendData(keys);
+          if (keys) {
+            onSendData(keys);
+            const count = keys.split(PAGE_UP_BYTES).length - 1 + keys.split(PAGE_DOWN_BYTES).length - 1;
+            const direction = keys.startsWith(PAGE_UP_BYTES) ? 'up' : 'down';
+            optionsRef.current.onPageKeysSent?.(direction, count);
+          }
           return;
         }
         case 'tui-wheel': {
@@ -377,7 +435,10 @@ export function useTerminalGestures(options: GestureOptions): void {
       const mode = readScrollMode(terminal);
       const target = resolveTarget(mode);
       const lines = lineAcc.push(-moveDy, cachedCellH);
+      dragRoute = target;
+      dragPostSlopLines += Math.abs(lines);
       dispatchScroll(terminal, target, lines);
+      sampleViewportY();
       const active = terminal.buffer?.active;
       mobileDebug.log('scroll', {
         ...mode,
@@ -476,6 +537,15 @@ export function useTerminalGestures(options: GestureOptions): void {
       cachedCellH = t ? getCellDimensions(t).cellH : 0;
       [scrollThrottled, cancelScrollThrottle] = rafThrottlePoint(onScrollFrame);
       scrollThrottled(0, y); // one frame carries the seeded overshoot
+
+      dragActive = true;
+      dragPostSlopLines = 0;
+      dragViewportYChanged = false;
+      dragStartViewportY = t?.buffer?.active?.viewportY ?? 0;
+      if (t && cachedCellH > 0) {
+        dragRoute = resolveTarget(readScrollMode(t));
+        optionsRef.current.onScrollStart?.(dragRoute);
+      }
     };
 
     const hasSelection = (t: Terminal): boolean =>
@@ -605,6 +675,7 @@ export function useTerminalGestures(options: GestureOptions): void {
       const t = terminalRef.current;
       const wasConsumedByCoast = consumedByCoast;
       consumedByCoast = false;
+      reportScrollGesture();
       dispatch(
         {
           type: 'touchend',
@@ -625,6 +696,7 @@ export function useTerminalGestures(options: GestureOptions): void {
     const onTouchCancel = () => {
       mobileDebug.log('touchcancel', { state });
       consumedByCoast = false;
+      reportScrollGesture();
       dispatch({ type: 'touchcancel' }, null, undefined);
     };
 
@@ -646,6 +718,10 @@ export function useTerminalGestures(options: GestureOptions): void {
 
     return () => {
       cancelGestureRef.current = null;
+      if (gestureActive) {
+        gestureActive = false;
+        optionsRef.current.onGestureActiveChange?.(false);
+      }
       clearLongPressTimer();
       cancelPendingFrames();
       cancelMomentum();

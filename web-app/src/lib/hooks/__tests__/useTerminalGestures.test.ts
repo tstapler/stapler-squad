@@ -789,6 +789,103 @@ describe('useTerminalGestures', () => {
       expect(term.scrollLines.mock.calls).toEqual([[-30]]); // clamped to +-rows, excess not replayed
     });
 
+    // ---- Observation callbacks (onScrollStart / onScrollGesture / onPageKeysSent / onGestureActiveChange) ----
+    it('onScrollGesture_should_ReportNoMovement_When_LocalDragLeavesViewportUnchanged', () => {
+      const onScrollGesture = jest.fn();
+      mountScroll({ cellH: 20 }, { onScrollGesture }); // scrollLines is a mock: viewportY stays 3
+      start();
+      mv(START_Y + SLOP_PX + 60);
+      frame();
+      end(START_Y + SLOP_PX + 60);
+      expect(onScrollGesture).toHaveBeenCalledTimes(1);
+      expect(onScrollGesture).toHaveBeenCalledWith({ route: 'xterm-local', postSlopLines: 3, viewportYChanged: false });
+    });
+
+    it('onScrollGesture_should_ReportMovement_When_ViewportYChanges', () => {
+      const onScrollGesture = jest.fn();
+      const { term } = mountScroll({ cellH: 20 }, { onScrollGesture });
+      term.scrollLines.mockImplementation((n: number) => { term.buffer.active.viewportY += n; });
+      start();
+      mv(START_Y + SLOP_PX + 60);
+      frame();
+      end(START_Y + SLOP_PX + 60);
+      expect(onScrollGesture).toHaveBeenCalledWith(expect.objectContaining({ viewportYChanged: true, postSlopLines: 3 }));
+    });
+
+    it('onScrollGesture_should_FireOnceOnTouchCancel_And_NotForATap', () => {
+      const onScrollGesture = jest.fn();
+      mountScroll({ cellH: 20 }, { onScrollGesture });
+      start();
+      end(START_Y); // tap
+      expect(onScrollGesture).not.toHaveBeenCalled();
+      start();
+      mv(START_Y + SLOP_PX + 40);
+      frame();
+      docHandlers['touchcancel']?.(new Event('touchcancel') as any);
+      expect(onScrollGesture).toHaveBeenCalledTimes(1);
+    });
+
+    it('onPageKeysSent_should_ReportDirectionAndPages_When_TuiDrag', () => {
+      const onPageKeysSent = jest.fn();
+      mountScroll({ bufferType: 'alternate', cellH: 20 }, { onPageKeysSent });
+      start();
+      mv(START_Y + SLOP_PX + 220);
+      frame();
+      expect(onPageKeysSent).toHaveBeenLastCalledWith('up', 1);
+      jest.advanceTimersByTime(200);
+      mv(START_Y + SLOP_PX);
+      frame();
+      expect(onPageKeysSent).toHaveBeenLastCalledWith('down', 1);
+      expect(onPageKeysSent).toHaveBeenCalledTimes(2);
+    });
+
+    it('onScrollStart_should_FireOncePerGesture', () => {
+      const onScrollStart = jest.fn();
+      mountScroll({ bufferType: 'alternate', cellH: 20 }, { onScrollStart });
+      start();
+      mv(START_Y + SLOP_PX + 20);
+      frame();
+      mv(START_Y + SLOP_PX + 60);
+      frame();
+      expect(onScrollStart).toHaveBeenCalledTimes(1);
+      expect(onScrollStart).toHaveBeenCalledWith('tui-pgkeys');
+      end(START_Y + SLOP_PX + 60);
+      start();
+      mv(START_Y + SLOP_PX + 20);
+      expect(onScrollStart).toHaveBeenCalledTimes(2);
+    });
+
+    it('onGestureActiveChange_should_EmitOnlyOnChange', () => {
+      const onGestureActiveChange = jest.fn();
+      mountScroll({ cellH: 20 }, { onGestureActiveChange });
+      expect(onGestureActiveChange).not.toHaveBeenCalled();
+      start();
+      expect(onGestureActiveChange.mock.calls).toEqual([[true]]);
+      mv(START_Y + SLOP_PX + 20); // PENDING -> SCROLLING, still active
+      frame();
+      mv(START_Y + SLOP_PX + 40);
+      expect(onGestureActiveChange).toHaveBeenCalledTimes(1);
+      jest.advanceTimersByTime(500); // a paused finger does not fling
+      end(START_Y + SLOP_PX + 40);
+      expect(onGestureActiveChange.mock.calls).toEqual([[true], [false]]);
+    });
+
+    it('onGestureActiveChange_should_StayTrueThroughMomentumAndFalseWhenItEnds', () => {
+      const onGestureActiveChange = jest.fn();
+      mountScroll({ cellH: 20 }, { onGestureActiveChange });
+      start();
+      mv(START_Y + SLOP_PX + 30);
+      frame();
+      jest.advanceTimersByTime(8);
+      mv(START_Y + SLOP_PX + 200);
+      frame();
+      end(START_Y + SLOP_PX + 200); // fast release -> COASTING when a fling starts
+      jest.advanceTimersByTime(5000);
+      expect(onGestureActiveChange.mock.calls[0]).toEqual([true]);
+      expect(onGestureActiveChange.mock.calls[onGestureActiveChange.mock.calls.length - 1]).toEqual([false]);
+      expect(onGestureActiveChange.mock.calls.filter((c) => c[0] === true)).toHaveLength(1);
+    });
+
     // ---- Group B: routing per frame, mode flip, TUI forwarding, direction (1.2.1a2) ----
     it('scrollDrag_should_SendOnePgUpAndNeverScrollLines_When_11LinePostSlopDragInAlternateBuffer', () => {
       const { term } = mountScroll({ bufferType: 'alternate', cellH: 18, rows: 24 });
