@@ -1157,6 +1157,16 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       let pendingRefit = false;
       let wasZero = false;
 
+      // onFitted callbacks of requests coalesced into the current run; flushed once when it ends.
+      let pendingFitCallbacks: NonNullable<RefitOptions["onFitted"]>[] = [];
+      const flushFitted = () => {
+        if (pendingFitCallbacks.length === 0) return;
+        const callbacks = pendingFitCallbacks;
+        pendingFitCallbacks = [];
+        const dims = { cols: terminal.cols, rows: terminal.rows };
+        callbacks.forEach((cb) => cb(dims));
+      };
+
       const consumeRepaintRequest = (): boolean => {
         const requested = repaintRequested;
         repaintRequested = false;
@@ -1176,6 +1186,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       const sampleTick = () => {
         if (!fitAddonRef.current || !terminalRef.current) {
           consumeRepaintRequest();
+          pendingFitCallbacks = []; // disposed: nothing left to report
           stopSampler();
           return;
         }
@@ -1215,6 +1226,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           consumeRepaintRequest();
           repaint(reason);
           stopSampler();
+          flushFitted();
           return;
         }
 
@@ -1224,6 +1236,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           if (consumeRepaintRequest()) repaint(repaintReason);
           anchorBottom = false;
           stopSampler();
+          flushFitted();
           return;
         }
 
@@ -1239,6 +1252,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           // sampler permanently inert, since startSamplerIfNeeded() is a
           // no-op whenever samplerActive is already true. See ADR-002.
           stopSampler();
+          flushFitted();
           return;
         }
 
@@ -1304,6 +1318,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         logFit("fit-skipped", { reason: "zero-size-exhausted" });
         pendingRefit = true;
         if (opts) repaint(opts.reason); // never leave a canvas with valid dims stale
+        flushFitted();
       };
 
       const retryAttempt = () => {
@@ -1322,7 +1337,10 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         retryRaf = requestAnimationFrame(retryAttempt);
       };
 
-      requestFitRef.current = (opts) => {
+      requestFitRef.current = (requested) => {
+        // Registered once here; the zero-size retry re-enters with the callback stripped.
+        const { onFitted, ...opts } = requested;
+        if (onFitted) pendingFitCallbacks.push(onFitted);
         const el = containerRef.current;
         if (!el) return;
         if (!canFit(el)) {
@@ -1531,7 +1549,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       terminalRef.current?.resize(cols, rows);
     },
     refit: (opts?: RefitOptions) => {
-      requestFitRef.current({ forceRepaint: true, reason: opts?.reason ?? "manual-resize" });
+      requestFitRef.current({ forceRepaint: true, reason: opts?.reason ?? "manual-resize", onFitted: opts?.onFitted });
     },
     search: (term: string): boolean => {
       if (!searchAddonRef.current) return false;

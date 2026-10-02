@@ -298,7 +298,11 @@ describe("TerminalOutput resize call sites", () => {
     });
 
     expect(mockXtermState.refit).toHaveBeenCalledTimes(1);
-    expect(mockXtermState.refit).toHaveBeenCalledWith({ reason: "manual-resize" });
+    expect(mockXtermState.refit).toHaveBeenCalledWith(expect.objectContaining({ reason: "manual-resize" }));
+    expect(streamState.resize).not.toHaveBeenCalled(); // waits for the fit to complete
+    act(() => {
+      mockXtermState.refit.mock.calls[0][0].onFitted({ cols: 100, rows: 30 });
+    });
     expect(streamState.resize).toHaveBeenCalledTimes(1);
     expect(streamState.resize).toHaveBeenCalledWith(100, 30, true);
     expectClearedBeforeResize(streamState);

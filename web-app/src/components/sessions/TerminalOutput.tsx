@@ -1679,25 +1679,28 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
   };
 
+  // The fit completes asynchronously (sampler, rAF), so the forced resize message is sent from
+  // onFitted with the post-fit dims. The latest connection state is read when it fires, not when
+  // the button was tapped.
+  const manualResizeLatestRef = useRef({ isConnected, resize, clearBufferBeforeResize });
+  useEffect(() => {
+    manualResizeLatestRef.current = { isConnected, resize, clearBufferBeforeResize };
+  });
+
   const handleManualResize = () => {
     console.log("[TerminalOutput] Manual resize triggered");
-    if (xtermRef.current) {
-      xtermRef.current.refit({ reason: 'manual-resize' });
-
-      const terminal = xtermRef.current.terminal;
-      if (terminal) {
-        const cols = terminal.cols;
-        const rows = terminal.rows;
+    xtermRef.current?.refit({
+      reason: 'manual-resize',
+      onFitted: ({ cols, rows }) => {
+        const latest = manualResizeLatestRef.current;
         console.log(`[TerminalOutput] Terminal resized to ${cols}x${rows}`);
-
-        if (isConnected) {
-          console.log(`[TerminalOutput] Forcing resize message to backend: ${cols}x${rows}`);
-          lastResizeRef.current = { cols, rows };
-          clearBufferBeforeResize();
-          resize(cols, rows, true);
-        }
-      }
-    }
+        if (!isMountedRef.current || !latest.isConnected) return;
+        console.log(`[TerminalOutput] Forcing resize message to backend: ${cols}x${rows}`);
+        lastResizeRef.current = { cols, rows };
+        latest.clearBufferBeforeResize();
+        latest.resize(cols, rows, true);
+      },
+    });
   };
 
   // Epic 4.2, Story 4.2.2 (Task 4.2.2b) — best-effort resize-mismatch signal

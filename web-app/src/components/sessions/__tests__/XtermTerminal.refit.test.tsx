@@ -142,6 +142,70 @@ describe("sampler repaint branches", () => {
   });
 });
 
+describe("refit onFitted completion callback (Story 2.1.3b)", () => {
+  it("refit_should_InvokeOnFitted_AfterFitCompletes_WithFinalDims", async () => {
+    const { ref, fit } = await mount();
+    const onFitted = jest.fn();
+    fit.proposeDimensions.mockReturnValue({ cols: 100, rows: 30 });
+    act(() => ref.current!.refit({ reason: "manual-resize", onFitted }));
+    expect(onFitted).not.toHaveBeenCalled(); // first sample only registers the pending dims
+    advance(SAMPLE_INTERVAL_MS);
+    expect(fit.fit).toHaveBeenCalledTimes(1);
+    expect(onFitted).toHaveBeenCalledTimes(1);
+    expect(onFitted).toHaveBeenCalledWith({ cols: 100, rows: 30 });
+    advance(SAMPLE_INTERVAL_MS * 3);
+    expect(onFitted).toHaveBeenCalledTimes(1);
+  });
+
+  it("refit_should_InvokeOnFitted_WithUnchangedDims_When_ProposedEqualsApplied", async () => {
+    const { ref, fit } = await mount();
+    const onFitted = jest.fn();
+    act(() => ref.current!.refit({ onFitted }));
+    expect(fit.fit).not.toHaveBeenCalled();
+    expect(onFitted).toHaveBeenCalledTimes(1);
+    expect(onFitted).toHaveBeenCalledWith({ cols: 80, rows: 24 });
+  });
+
+  it("refit_should_InvokeOnFittedOnce_When_SamplerGivesUp", async () => {
+    const { ref, fit } = await mount();
+    const onFitted = jest.fn();
+    let n = 0;
+    fit.proposeDimensions.mockImplementation(() => ({ cols: 90 + n++, rows: 30 }));
+    act(() => ref.current!.refit({ onFitted }));
+    expect(onFitted).not.toHaveBeenCalled();
+    advance(SAMPLE_INTERVAL_MS * (MAX_SAMPLES + 1));
+    expect(onFitted).toHaveBeenCalledTimes(1);
+    expect(onFitted).toHaveBeenCalledWith({ cols: 80, rows: 24 });
+  });
+
+  it("refit_should_InvokeOnFittedOnce_When_ZeroSizeRetryExhausted", async () => {
+    const { ref } = await mount();
+    const onFitted = jest.fn();
+    size.w = 0;
+    size.h = 0;
+    act(() => ref.current!.refit({ onFitted }));
+    advance(50);
+    expect(onFitted).not.toHaveBeenCalled();
+    advance(1000);
+    expect(onFitted).toHaveBeenCalledTimes(1);
+    expect(onFitted).toHaveBeenCalledWith({ cols: 80, rows: 24 });
+  });
+
+  it("refit_should_InvokeEveryCoalescedOnFitted_When_RequestsOverlap", async () => {
+    const { ref, fit, ro } = await mount();
+    const first = jest.fn();
+    const second = jest.fn();
+    fit.proposeDimensions.mockReturnValue({ cols: 90, rows: 30 });
+    deliver(ro, 800, 480);
+    advance(151); // sampler active, pending registered
+    act(() => ref.current!.refit({ onFitted: first }));
+    act(() => ref.current!.refit({ onFitted: second }));
+    advance(SAMPLE_INTERVAL_MS * 2);
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("zero-size, restore, renderer and viewport handling", () => {
   it("refit_should_WarnRepaintAndSetPendingRefit_When_ContainerZeroFor20RafOr1000Ms", async () => {
     const { ref, terminal, fit, ro } = await mount();

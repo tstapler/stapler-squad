@@ -209,7 +209,7 @@ describe("TerminalOutput refit wiring", () => {
 
     fireEvent.click(screen.getByLabelText("Redraw terminal (fixes a blank screen)"));
 
-    expect(mockXtermHandle.refit).toHaveBeenCalledWith({ reason: "manual-resize" });
+    expect(mockXtermHandle.refit).toHaveBeenCalledWith(expect.objectContaining({ reason: "manual-resize" }));
     expect(mockXtermHandle.fit).not.toHaveBeenCalled();
   });
 });
@@ -265,7 +265,7 @@ describe("TerminalOutput Redraw button (Story 1.2.8)", () => {
     await renderTerminal();
     fireEvent.click(screen.getByRole("button", { name: "Redraw terminal (fixes a blank screen)" }));
     expect(mockXtermHandle.refit).toHaveBeenCalledTimes(1);
-    expect(mockXtermHandle.refit).toHaveBeenCalledWith({ reason: "manual-resize" });
+    expect(mockXtermHandle.refit).toHaveBeenCalledWith(expect.objectContaining({ reason: "manual-resize" }));
   });
 
   it("redrawButton_should_BeRenderedWhenToolbarCollapsed", async () => {

@@ -17,11 +17,18 @@ export type RefitReason =
 export interface RequestFitOptions {
   forceRepaint: boolean;
   reason: RefitReason;
+  onFitted?: RefitOptions["onFitted"];
 }
 
 /** Options for the XtermTerminal handle's `refit()`. */
 export interface RefitOptions {
   reason?: RefitReason;
+  /**
+   * Called once when the fit run ends, whichever way it ends (fit applied, dims already at rest,
+   * sampler gave up, or zero-size retry exhausted), with the terminal's dims at that moment.
+   * Not called if the terminal is disposed first.
+   */
+  onFitted?: (dims: { cols: number; rows: number }) => void;
 }
 
 /** Zero-size retry bounds: whichever limit is hit first ends the retry. */

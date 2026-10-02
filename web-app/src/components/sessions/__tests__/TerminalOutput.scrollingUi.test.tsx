@@ -374,3 +374,35 @@ describe("TerminalOutput jump button and netPagesUp wiring (Story 1.2.7b)", () =
     expect(screen.queryByRole("button", tuiLabel)).toBeNull(); // 1 up - 1 down = 0
   });
 });
+
+describe("Redraw waits for the fit to complete (Story 1.2.8 / 2.1.3b)", () => {
+  const redraw = () => fireEvent.click(screen.getByRole("button", { name: "Redraw terminal (fixes a blank screen)" }));
+  const fitOptions = () => mockXtermHandle.refit.mock.calls.at(-1)![0];
+
+  it("redrawButton_should_SendForcedResizeWithPostFitDims_When_FitCompletes", async () => {
+    await renderTerminal();
+    streamMock.resize.mockClear();
+    redraw();
+
+    expect(mockXtermHandle.refit).toHaveBeenCalledWith(expect.objectContaining({ reason: "manual-resize" }));
+    expect(streamMock.resize).not.toHaveBeenCalled(); // stale terminal dims must not go out
+
+    act(() => {
+      fitOptions().onFitted({ cols: 132, rows: 41 });
+    });
+    expect(streamMock.resize).toHaveBeenCalledTimes(1);
+    expect(streamMock.resize).toHaveBeenCalledWith(132, 41, true);
+  });
+
+  it("redrawButton_should_NotSendResize_When_Disconnected", async () => {
+    streamMock = makeStreamMock({ isConnected: false });
+    (useTerminalStream as jest.Mock).mockReturnValue(streamMock);
+    await renderTerminal();
+    streamMock.resize.mockClear();
+    redraw();
+    act(() => {
+      fitOptions().onFitted({ cols: 132, rows: 41 });
+    });
+    expect(streamMock.resize).not.toHaveBeenCalled();
+  });
+});
