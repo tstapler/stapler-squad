@@ -22,6 +22,15 @@ describe("overscroll hardening CSS", () => {
     expect(match).not.toBeNull();
     const block = match![1];
     expect(block).toMatch(/overscrollBehavior:\s*"contain"/);
-    expect(block).toMatch(/touchAction:\s*"none"/);
+    expect(block).toMatch(/\[data-gesture-scroll="on"\]'?\s*:\s*\{\s*touchAction:\s*"none"/);
+  });
+
+  it("terminalCss_should_RestoreDefaultTouchAction_When_GestureScrollOff", () => {
+    const src = read("../XtermTerminal.css.ts");
+    const block = src.match(/export const terminal = style\(\{([\s\S]*?)\n\}\);/)![1];
+    // No unconditional touchAction outside the "on" selector, and none keyed to "off".
+    const withoutSelectors = block.replace(/selectors:\s*\{[\s\S]*?\n  \},/, "");
+    expect(withoutSelectors).not.toMatch(/touchAction/);
+    expect(block).not.toMatch(/data-gesture-scroll="off"/);
   });
 });

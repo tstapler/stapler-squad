@@ -54,10 +54,11 @@ export const terminal = style({
   boxSizing: "content-box",
   padding: 0,
   margin: 0,
-  // Prevent the browser from claiming touch events as window scroll.
-  // All touch handling is delegated to useTerminalGestures so the terminal
-  // scroll never leaks into the page scroll.
-  touchAction: "none",
+  // With gesture scrolling on, touch handling is delegated to useTerminalGestures,
+  // so the browser must not claim touches as window scroll. Off leaves the default.
+  selectors: {
+    '&[data-gesture-scroll="on"]': { touchAction: "none" },
+  },
   overscrollBehavior: "contain",
 });
 
