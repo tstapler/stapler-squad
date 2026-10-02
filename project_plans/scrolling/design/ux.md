@@ -98,7 +98,7 @@ States: `IDLE`, `PENDING` (touch down, under slop), `SCROLLING`, `COASTING` (mom
 | PENDING | hold 400 ms, movement < slop | SELECTING | Scroll disabled for this touch |
 | SCROLLING | touchend, velocity >= min fling, no reduced motion | COASTING | Start momentum; `touchend` `preventDefault` if cancelable |
 | SCROLLING | touchend, slow | IDLE | Stop; `touchend` `preventDefault` if cancelable |
-| SCROLLING | touchcancel (system gesture, edge swipe, call) | CANCELLED | Reset remainder; no momentum from a cancelled touch |
+| SCROLLING | touchcancel (system gesture, edge swipe, call) | IDLE | Reset remainder; no momentum from a cancelled touch |
 | SCROLLING / COASTING / PENDING | keyboard toggle, `visualViewport` resize, orientation change, S6 override change, reconnect or full-snapshot write (`connectionEpoch` change) | CANCELLED | Reset line/page remainder and `netPagesUp`; ignore rest of touch |
 | COASTING | touchstart | PENDING | Cancel momentum; set `consumedByCoast` (the matching touchend is not a tap) |
 | COASTING | momentum ends (decay, edge, page cap) | IDLE | |
