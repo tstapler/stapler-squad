@@ -55,10 +55,12 @@ import { useDropEpisodeCoalescer } from "./useDropEpisodeCoalescer";
 import { TerminalStreamManager } from "@/lib/terminal/TerminalStreamManager";
 import { createViewportSettle, createRafScheduler, DEFAULT_STABLE_FRAMES, DEFAULT_MAX_WAIT_MS } from "@/lib/terminal/viewportSettle";
 import { mobileDebug } from "@/lib/terminal/mobileDebug";
-import { toolbarPageAction, PAGE_UP_BYTES, PAGE_DOWN_BYTES, type ScrollMode } from "@/lib/terminal/scrollRouting";
+import { toolbarPageAction, PAGE_UP_BYTES, PAGE_DOWN_BYTES, type ScrollMode, type ScrollOverride } from "@/lib/terminal/scrollRouting";
 import { createNetPagesUpTracker, MIN_ROWS_FOR_OVERLAYS } from "@/lib/terminal/scrollPosition";
-import { scrollSettings, type ScrollOverride } from "@/lib/terminal/scrollOverride";
+import { scrollSettings } from "@/lib/terminal/scrollOverride";
 import { srOnly } from "@/components/ui/LiveRegion.css";
+import { JumpToLatestMount } from "./JumpToLatestMount";
+import type { JumpTerminal } from "./JumpToLatestButton";
 import { ScrollHint, useScrollHint } from "./ScrollHint";
 import { ScrollingPanel, ScrollModeChip, SCROLL_OPTIONS, shouldRenderPanelAsOverlay, useMisrouteCue } from "./ScrollingPanel";
 import { useEffectiveScrollMode, useScrollSettings } from "@/lib/hooks/useEffectiveScrollMode";
@@ -804,8 +806,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     };
   }, []);
 
-  // Handle terminal data input
-  const handleTerminalData = useCallback((data: string) => {
+  // TUI page-key estimate (declared early: every input path below can invalidate it).
+  const [netPagesUp] = useState(createNetPagesUpTracker);
+
+  // Delivers bytes to the session without touching the page-key estimate. Programmatic page
+  // keys (drag, momentum, toolbar PgUp/PgDn, the jump button) use this directly; user input
+  // goes through handleTerminalData, which also invalidates the estimate.
+  const deliverTerminalData = useCallback((data: string) => {
     sendInput(data);
 
     // Optimistic clear on Enter only — reduces false-positive flicker
@@ -823,6 +830,12 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
   }, [sendInput, clearForSession, sessionId, refreshApprovals, pendingCount]);
 
+  // User keystrokes and pastes move the app's own position, so the estimate no longer holds.
+  const handleTerminalData = useCallback((data: string) => {
+    netPagesUp.invalidate("keystroke");
+    deliverTerminalData(data);
+  }, [netPagesUp, deliverTerminalData]);
+
   // Scroll route shared by the toolbar PgUp/PgDn (and later the chip and jump button).
   // XtermTerminal reports the live mode upward only when it changes.
   const { override: scrollOverride, gestureScrollEnabled } = useScrollSettings();
@@ -837,6 +850,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // Scrolling chip / picker / full panel (ux.md S6). Rows come from the terminal's own resize report.
   const [scrollPanel, setScrollPanel] = useState<"picker" | "full" | null>(null);
   const [terminalRows, setTerminalRows] = useState(0);
+  // The xterm instance is created inside XtermTerminal's effect; the first resize report reveals it.
+  const [jumpTerminal, setJumpTerminal] = useState<JumpTerminal | null>(null);
+  const [gestureActive, setGestureActive] = useState(false);
   // Host-owned live region: the picker unmounts on select, so its own announcement would be lost.
   const [scrollAnnouncement, setScrollAnnouncement] = useState("");
   const scrollChipRef = useRef<HTMLButtonElement>(null);
@@ -846,6 +862,16 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const markScrollHintSeen = scrollHint.markSeenOnPanelOpen;
   const getTouchSurface = useCallback(() => terminalContainerRef.current, []);
   const reportMisroute = misrouteCue.report;
+  // Drag/momentum page keys keep the estimate current instead of invalidating it.
+  const handlePageKeysSent = useCallback(
+    (direction: "up" | "down", pages: number) => {
+      for (let i = 0; i < pages; i++) {
+        if (direction === "up") netPagesUp.pageUp();
+        else netPagesUp.pageDown();
+      }
+    },
+    [netPagesUp],
+  );
   const scrollGestureProps = useMemo<ScrollGestureProps>(
     () => ({
       scrollOverride,
@@ -853,8 +879,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       connectionEpoch,
       onScrollGesture: reportMisroute,
       onScrollStart: notifyScrollStart,
+      onPageKeysSent: handlePageKeysSent,
+      onGestureActiveChange: setGestureActive,
+      onProgrammaticData: deliverTerminalData,
     }),
-    [scrollOverride, gestureScrollEnabled, connectionEpoch, reportMisroute, notifyScrollStart],
+    [scrollOverride, gestureScrollEnabled, connectionEpoch, reportMisroute, notifyScrollStart, handlePageKeysSent, deliverTerminalData],
   );
   const handleScrollOverrideChange = useCallback(
     (value: ScrollOverride) => {
@@ -885,8 +914,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       ? Math.round((containerSize.height * (terminalRows - MIN_ROWS_FOR_OVERLAYS)) / terminalRows)
       : undefined;
 
-  // TUI page-key estimate fed by toolbar presses; the jump button that reads it is mounted separately.
-  const [netPagesUp] = useState(createNetPagesUpTracker);
   const lastEpochRef = useRef(connectionEpoch);
   useEffect(() => {
     if (lastEpochRef.current === connectionEpoch) return;
@@ -894,11 +921,20 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     netPagesUp.invalidate("reconnect");
   }, [connectionEpoch, netPagesUp]);
 
+  // A buffer switch, mouse-mode change or override change reroutes scrolling; skip the initial mount.
+  const modeKey = `${scrollMode.bufferType}|${scrollMode.mouseTrackingMode}|${scrollOverride}`;
+  const lastModeKeyRef = useRef(modeKey);
+  useEffect(() => {
+    if (lastModeKeyRef.current === modeKey) return;
+    lastModeKeyRef.current = modeKey;
+    netPagesUp.invalidate("mode-change");
+  }, [modeKey, netPagesUp]);
+
   // Send a key sequence, applying any active sticky modifier (CTRL or ALT) first.
   // Modifier sequences follow xterm's parameter convention:
   //   modifier 3 = Alt (escape prefix or CSI param ;3)
   //   modifier 5 = Ctrl (CSI param ;5)
-  const sendKey = useCallback((keyData: string) => {
+  const sendKey = useCallback((keyData: string, programmatic = false) => {
     let data = keyData;
 
     if (ctrlActive) {
@@ -912,8 +948,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       setShiftActive(false);
     }
 
-    handleTerminalData(data);
-  }, [ctrlActive, altActive, shiftActive, handleTerminalData]);
+    (programmatic ? deliverTerminalData : handleTerminalData)(data);
+  }, [ctrlActive, altActive, shiftActive, handleTerminalData, deliverTerminalData]);
 
   // Route-aware PgUp/PgDn (ux.md S4): the same route as the drag, so the keys are an
   // equivalent single-pointer alternative. TUI-route bytes are unchanged from before.
@@ -934,17 +970,20 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       return;
     }
     const bytes = action.type === "send-keys" ? action.bytes : direction === "up" ? PAGE_UP_BYTES : PAGE_DOWN_BYTES;
-    if (action.type === "send-keys" && action.countsTowardNetPages) {
+    const countsTowardNetPages = action.type === "send-keys" && action.countsTowardNetPages;
+    if (countsTowardNetPages) {
       if (direction === "up") netPagesUp.pageUp();
       else netPagesUp.pageDown();
     }
-    sendKey(bytes);
+    sendKey(bytes, countsTowardNetPages);
   }, [effectiveScroll.target, scrollOverride, ctrlActive, altActive, shiftActive, sendKey, netPagesUp]);
 
   // Handle terminal resize with size stability detection
   const handleTerminalResize = useCallback((cols: number, rows: number) => {
     console.log(`[TerminalOutput] Terminal resized to ${cols}x${rows}`);
     setTerminalRows(rows);
+    setJumpTerminal(xtermRef.current?.terminal ?? null);
+    netPagesUp.invalidate("resize");
 
     const lastResize = lastResizeRef.current;
     const sizeChanged = !lastResize || lastResize.cols !== cols || lastResize.rows !== rows;
@@ -1049,7 +1088,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     } else {
       resize(cols, rows);
     }
-  }, [isConnected, resize, connect, error, sessionId, clearBufferBeforeResize]);
+  }, [isConnected, resize, connect, error, sessionId, clearBufferBeforeResize, netPagesUp]);
 
   // Monitor connection state changes
   useEffect(() => {
@@ -1315,10 +1354,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       onSettled: (snapshot) => {
         lastSettleRefitAtRef.current = Date.now();
         mobileDebug.log("vp-settle", snapshot);
+        netPagesUp.invalidate("resize");
         xtermRef.current?.refit({ reason: 'viewport-settle' });
       },
     });
-  }, []);
+  }, [netPagesUp]);
 
   // Reset loading state when switching sessions and trigger reconnect
   useEffect(() => {
@@ -2135,6 +2175,17 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     scrollback={5000}
   />
 </Suspense>
+        {jumpTerminal?.buffer?.active && (
+          <JumpToLatestMount
+            terminal={jumpTerminal}
+            route={effectiveScroll.target}
+            netPagesUp={netPagesUp}
+            connectionEpoch={connectionEpoch}
+            sendData={deliverTerminalData}
+            gestureActive={gestureActive}
+            getContainer={getTouchSurface}
+          />
+        )}
       </div>
       {/* Story 2.3 — InputDropBadge is `position: fixed` and portal-rendered
           to document.body (modeled on XtermTerminal's `copiedToast`), unlike

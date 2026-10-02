@@ -159,6 +159,11 @@ export interface ScrollGestureProps {
   onScrollGesture?: GestureOptions["onScrollGesture"];
   onPageKeysSent?: GestureOptions["onPageKeysSent"];
   onGestureActiveChange?: GestureOptions["onGestureActiveChange"];
+  /**
+   * Sink for bytes the gesture hook generates (page keys, wheel reports). Distinct from `onData`
+   * so the host can tell them apart from user keystrokes. Falls back to `onData` when absent.
+   */
+  onProgrammaticData?: (data: string) => void;
 }
 
 const INITIAL_SCROLL_MODE: ScrollMode = { bufferType: "normal", mouseTrackingMode: "none" };
@@ -299,12 +304,15 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   const onResizeRef = useRef(onResize);
 
   const onScrollModeChangeRef = useRef(onScrollModeChange);
+  const onProgrammaticDataRef = useRef(scrollGesture?.onProgrammaticData);
+  const onProgrammaticData = scrollGesture?.onProgrammaticData;
 
   useEffect(() => {
     onDataRef.current = onData;
     onResizeRef.current = onResize;
     onScrollModeChangeRef.current = onScrollModeChange;
-  }, [onData, onResize, onScrollModeChange]);
+    onProgrammaticDataRef.current = onProgrammaticData;
+  }, [onData, onResize, onScrollModeChange, onProgrammaticData]);
 
   const gestureScrollEnabled = scrollGesture?.gestureScrollEnabled ?? true;
 
@@ -317,7 +325,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   useTerminalGestures({
     containerRef,
     terminalRef,
-    onSendData: useCallback((data: string) => onDataRef.current?.(data), []),
+    onSendData: useCallback((data: string) => (onProgrammaticDataRef.current ?? onDataRef.current)?.(data), []),
     override: scrollGesture?.scrollOverride,
     gestureScrollEnabled,
     tuiScrollPolicy: scrollGesture?.tuiScrollPolicy,

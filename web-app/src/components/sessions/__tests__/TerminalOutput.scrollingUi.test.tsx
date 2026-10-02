@@ -285,3 +285,92 @@ describe("TerminalOutput first-use scroll hint (Task 1.2.5d)", () => {
     expect(localStorage.getItem(SCROLL_HINT_SEEN_KEY)).toBe("1");
   });
 });
+
+describe("TerminalOutput jump button and netPagesUp wiring (Story 1.2.7b)", () => {
+  const PG_UP = "\x1b[5~";
+  const tuiLabel = { name: "Page down to latest" };
+
+  async function renderTui() {
+    scrollSettings.setOverride("tui");
+    const utils = await renderTerminal();
+    // The hook reports page keys right after sending them through the programmatic sink
+    act(() => {
+      capturedXtermProps.scrollGesture.onProgrammaticData(PG_UP);
+      capturedXtermProps.scrollGesture.onPageKeysSent("up", 1);
+    });
+    return utils;
+  }
+
+  it("jumpToLatest_should_BeMountedInTerminalOutput_When_LocalBufferScrolledAway", async () => {
+    const terminal = makeTerminal({ buffer: { active: { viewportY: 5, baseY: 20, length: 44, cursorY: 23 } } });
+    await renderTerminal({ terminal });
+    fireEvent.click(screen.getByRole("button", { name: "Jump to latest" }));
+    expect(terminal.scrollToBottom).toHaveBeenCalled();
+    expect(terminal.focus).not.toHaveBeenCalled();
+  });
+
+  it("jumpToLatest_should_BeAbsent_When_LocalBufferAtLive", async () => {
+    await renderTerminal();
+    expect(screen.queryByRole("button", { name: "Jump to latest" })).toBeNull();
+  });
+
+  it("netPagesUp_should_NotInvalidate_When_DragPageKeysSent_And_ShouldInvalidate_When_UserTypes", async () => {
+    await renderTui();
+    expect(screen.getByRole("button", tuiLabel)).toBeTruthy();
+    expect(streamMock.sendInput).toHaveBeenCalledWith(PG_UP);
+
+    act(() => {
+      capturedXtermProps.scrollGesture.onProgrammaticData(PG_UP);
+    });
+    expect(screen.getByRole("button", tuiLabel)).toBeTruthy();
+
+    act(() => {
+      capturedXtermProps.onData("a");
+    });
+    expect(screen.queryByRole("button", tuiLabel)).toBeNull();
+  });
+
+  it("netPagesUp_should_NotInvalidate_When_ToolbarPageKeyPressed", async () => {
+    scrollSettings.setOverride("tui");
+    await renderTerminal();
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Page up" }));
+    expect(screen.getByRole("button", tuiLabel)).toBeTruthy();
+    expect(streamMock.sendInput).toHaveBeenCalledWith(PG_UP);
+  });
+
+  it("netPagesUp_should_Invalidate_When_ResizeOccurs", async () => {
+    await renderTui();
+    act(() => {
+      capturedXtermProps.onResize(80, 20);
+    });
+    expect(screen.queryByRole("button", tuiLabel)).toBeNull();
+  });
+
+  it("netPagesUp_should_Invalidate_When_OverrideOrModeChanges", async () => {
+    await renderTui();
+    act(() => {
+      scrollSettings.setOverride("local");
+    });
+    act(() => {
+      scrollSettings.setOverride("tui");
+    });
+    expect(screen.queryByRole("button", tuiLabel)).toBeNull();
+
+    act(() => {
+      capturedXtermProps.scrollGesture.onPageKeysSent("up", 1);
+    });
+    expect(screen.getByRole("button", tuiLabel)).toBeTruthy();
+    act(() => {
+      capturedXtermProps.onScrollModeChange({ bufferType: "alternate", mouseTrackingMode: "none" });
+    });
+    expect(screen.queryByRole("button", tuiLabel)).toBeNull();
+  });
+
+  it("netPagesUp_should_CountEachPage_When_HookReportsMultiplePages", async () => {
+    await renderTui();
+    act(() => {
+      capturedXtermProps.scrollGesture.onPageKeysSent("down", 1);
+    });
+    expect(screen.queryByRole("button", tuiLabel)).toBeNull(); // 1 up - 1 down = 0
+  });
+});

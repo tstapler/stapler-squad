@@ -340,6 +340,25 @@ describe("scroll settings wiring (Stories 1.2.5e / 1.2.5g)", () => {
     expect(hook).toHaveBeenLastCalledWith(expect.objectContaining(cb));
   });
 
+  it("XtermTerminal_should_RouteHookSendsToProgrammaticSink_When_Provided", async () => {
+    const hook = useTerminalGestures as jest.Mock;
+    const onData = jest.fn();
+    const onProgrammaticData = jest.fn();
+    await mount({ onData, scrollGesture: { onProgrammaticData } });
+    const { onSendData } = hook.mock.calls[hook.mock.calls.length - 1][0];
+    onSendData("\x1b[5~");
+    expect(onProgrammaticData).toHaveBeenCalledWith("\x1b[5~");
+    expect(onData).not.toHaveBeenCalled();
+  });
+
+  it("XtermTerminal_should_RouteHookSendsToOnData_When_NoProgrammaticSink", async () => {
+    const hook = useTerminalGestures as jest.Mock;
+    const onData = jest.fn();
+    await mount({ onData });
+    hook.mock.calls[hook.mock.calls.length - 1][0].onSendData("x");
+    expect(onData).toHaveBeenCalledWith("x");
+  });
+
   it("XtermTerminal_should_SetDataGestureScrollAttribute", async () => {
     const { container, rerender } = await mount();
     const surface = () => container.querySelector("[data-gesture-scroll]");
