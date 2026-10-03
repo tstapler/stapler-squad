@@ -37,7 +37,7 @@ function SessionSummaryPageInner() {
       {sessionId ? (
         <SessionSummaryPanel sessionId={sessionId} />
       ) : (
-        <p role="status" data-testid="summary-missing-session">
+        <p data-testid="summary-missing-session">
           No session specified. Open a session&apos;s summary from the session list.
         </p>
       )}

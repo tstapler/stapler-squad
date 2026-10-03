@@ -87,7 +87,7 @@ function AddDeviceModal({ onClose, onSuccess }: { onClose: () => void; onSuccess
           <input
             type="text"
             placeholder="Device name (optional)"
-            aria-label="Device name"
+            aria-label="Device name (optional)"
             value={label}
             onChange={(e) => setLabel(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && generate()}

@@ -32,6 +32,9 @@ export default function HelpPage() {
         setFuseIndex(index);
         if (entries.length > 0) {
           setSelectedSlug(entries[0].slug);
+        } else {
+          // loadDocs() swallows per-file failures (allSettled), so "nothing loaded" is the failure signal.
+          setLoadError(true);
         }
       })
       .catch(() => {
@@ -97,9 +100,9 @@ export default function HelpPage() {
         {loading ? (
           <div className={styles.loadingContainer}>Loading documentation…</div>
         ) : loadError ? (
-          <div className={styles.loadingContainer} role="alert" data-testid="help-load-error">
-            Couldn&apos;t load the documentation.{" "}
-            <button type="button" onClick={() => setReloadTick((t) => t + 1)}>Retry</button>
+          <div className={styles.loadingContainer} data-testid="help-load-error">
+            <p role="alert">Couldn&apos;t load the documentation.</p>
+            <button type="button" autoFocus onClick={() => setReloadTick((t) => t + 1)}>Retry</button>
           </div>
         ) : selectedDoc ? (
           <article className={styles.markdownBody}>

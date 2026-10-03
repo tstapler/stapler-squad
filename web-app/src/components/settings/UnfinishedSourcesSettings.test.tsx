@@ -33,7 +33,7 @@ describe("UnfinishedSourcesSettings path fields", () => {
     fireEvent.change(screen.getByTestId("pinned-repo-input"), { target: { value: "/Users/me/proj" } });
     const addButtons = screen.getAllByRole("button", { name: "Add" });
     fireEvent.click(addButtons[addButtons.length - 1]);
-    expect(mockUpdateConfig).toHaveBeenCalled();
+    expect(mockUpdateConfig).toHaveBeenCalledWith(expect.objectContaining({ pinnedRepos: ["/Users/me/proj"] }));
   });
 
   it("gives both fields accessible names", () => {
@@ -47,6 +47,6 @@ describe("UnfinishedSourcesSettings path fields", () => {
     const field = screen.getByRole("combobox", { name: "New pinned repository path" });
     fireEvent.change(field, { target: { value: "/Users/me/proj" } });
     fireEvent.keyDown(field, { key: "Enter" });
-    expect(mockUpdateConfig).toHaveBeenCalled();
+    expect(mockUpdateConfig).toHaveBeenCalledWith(expect.objectContaining({ pinnedRepos: ["/Users/me/proj"] }));
   });
 });

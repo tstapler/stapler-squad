@@ -17,7 +17,7 @@ components in a Storybook-style library, and make the app use shared components 
 | AC4 | Other unused-shared-component sites fixed or recorded as follow-up | `audit.md` § Shared-component adoption |
 
 ## Non-goals
-Migrating all ~217 raw `<button>` files / ~89 raw `<input>` files; redesigning pages.
+Migrating all ~221 raw `<button>` files / ~90 raw `<input>` files; redesigning pages.
 Those are recorded as follow-ups, not done here.
 
 ## Constraints

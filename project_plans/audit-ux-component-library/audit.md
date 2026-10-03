@@ -1,6 +1,6 @@
 # UX audit and component library
 
-Method: each of the 39 `web-app/src/app/**/page.tsx` routes and its delegate component was read by a
+Method: each of the 38 `web-app/src/app/**/page.tsx` routes (`find app -name page.tsx | wc -l`) and its delegate component was read by a
 read-only review pass (findings cite `file:line` under `web-app/src/`); I re-read the code for every
 finding I fixed. Not covered: tab bodies of `/settings` (e.g. `ProfilesManager`), the internals of
 `/account`'s modals, loading/empty states in `/sessions/import` children. Nothing was run in a
@@ -9,9 +9,9 @@ browser; verification is jest + `tsc` + `build-storybook`.
 ## Fixed in this change (each with a local test)
 | Route | Problem | Fix | Test |
 |---|---|---|---|
-| `/help` | Docs fetch failure swallowed; page ended on "Select a topic" with no error (`app/help/page.tsx`) | `role=alert` error + Retry | `app/help/__tests__/page.test.tsx` |
-| `/sessions/summary` | Missing `sessionId` rendered a blank page | Explanatory status message | `app/sessions/summary/__tests__/page.test.tsx` |
-| `/account` | Add-device input had only a placeholder | `aria-label="Device name"` | `app/account/__tests__/page.test.tsx` |
+| `/help` | Docs fetch failure swallowed; page ended on "Select a topic" with no error (`app/help/page.tsx`). `loadDocs()` never rejects (`Promise.allSettled`), so the page treats zero loaded docs as the failure | `role=alert` error + Retry (button outside the alert) | `app/help/__tests__/page.test.tsx` |
+| `/sessions/summary` | Missing `sessionId` rendered a blank page | Explanatory message | `app/sessions/summary/__tests__/page.test.tsx` |
+| `/account` | Add-device input had only a placeholder | `aria-label="Device name (optional)"` | `app/account/__tests__/page.test.tsx` |
 | `/history` | Error banner not announced | `role="alert"` | `app/history/__tests__/page.test.tsx` |
 | History fork modal, Trigger form | Directory fields were plain inputs | `RepoPathInput` | `TriggerFormModal.test.tsx` (existing suite, now with hook mocks); guard test |
 | `RepoPathInput` | No accessible-name or Enter hook, so migrated fields lost `aria-label`/Enter-to-add (found in verify) | new `aria-label` + `onEnter` props | `UnfinishedSourcesSettings.test.tsx` (name + Enter) |
@@ -26,12 +26,12 @@ browser; verification is jest + `tsc` + `build-storybook`.
 | `AddRemoteForm` base path (`add-remote-base-path`) | **Exception**: path on the *remote* host; `RepoPathInput` completes local filesystem paths and would suggest wrong dirs |
 | `ProgramsManager` "Executable Command / Path" | **Exception**: a command line (may include args/PATH names), not a directory |
 | Omnibar title, `WorkspaceSwitchModal` filter | **Exception**: not path values (guard-test allowlist, with reasons) |
-| `OmnibarCreationPanel` working dir | **Exception**: relative subdirectory of the chosen repo |
-Guard: `components/ui/__tests__/pathInputGuard.test.ts` fails on any new `<input>` whose id/placeholder/aria-label looks path-like unless it is in its `ALLOWLIST`. It is a heuristic over attribute text, so a path field with no path-like attribute would escape it.
+| `OmnibarCreationPanel` working dir, `SessionDetailView` working-dir editor | **Exception**: relative subdirectory within the repo (`Instance.WorkingDir`, `session/instance.go:215`) |
+Guard: `components/ui/__tests__/pathInputGuard.test.ts` parses every `.tsx` with the TypeScript AST and flags any `<input>`, `<textarea>` or shared `<Input>` whose id/name/placeholder/aria-label/testid, or `value`/`onChange` binding, mentions path/dir/cwd/folder/worktree. Allowlist entries carry a per-file count and a reason. Limits: it can't see a path field with no such naming hint, and substring matching can need an allowlist entry for a non-path field. It also found `SessionDetailView`'s working-dir editor (relative subdirectory, `session/instance.go:215`), allowlisted.
 
 ## Shared-component adoption (AC4) — recorded as follow-up
 Counts from `grep` over `web-app/src` excluding tests/stories:
-- `Button`: 3 importing files vs 217 files containing raw `<button`.
+- Counts from `grep -rl` over `web-app/src` excluding `.test.`/`.stories.`/`__tests__` (recounted 2026-10-03): `Button`: 1 importing file (`ReviewQueuePanel.tsx`) vs 221 files containing raw `<button`.
 - `Input`: 0 importing files vs 89 files containing `<input`.
 - `Modal`: 3 users vs 37 files with hand-rolled `role="dialog"`/`aria-modal`; `/`, `/history`, `/backlog`, `/review-queue` hand-roll modals (focus trap/return inconsistent).
 - `ErrorState`: no page uses it. `Skeleton`: insights + one backlog component; most pages use a bare "Loading…" div.
@@ -53,7 +53,7 @@ Severity: H/M/L. "Fixed" = see table above; otherwise open follow-up.
 | `/help` | Silent fetch failure — **fixed**; text-only loading L; root `div#main-content` not `<main>` L |
 | `/errors` | Error div unroled (`ErrorDashboard.tsx:89-91`) M; refresh has no busy state L; empty `<th>` L |
 | `/files` | Errors styled as empty states, no role (`LocalFileBrowser.tsx:425,458`) M; bare loading L |
-| `/notifications` | Native `window.confirm` for Clear read (`:206`) M; emoji loading L |
+| `/notifications` | (`NotificationsPage.tsx`) Native `window.confirm` for Clear read (`:206`) M; emoji loading L |
 | `/rules` | Rules panel error no role=alert (`ApprovalRulesPanel.tsx:359-363`) M; bare Suspense fallback L; no h1 L |
 | `/triggers` | `CallbackSettings` load error no role=alert (`:104-105`) L; no h1 L |
 | `/workflows` | Load error unroled (`WorkflowsPanel.tsx:202`) M; no Suspense fallback L |
@@ -64,7 +64,7 @@ Severity: H/M/L. "Fixed" = see table above; otherwise open follow-up.
 | `/login` | Error `<p>` no role=alert (`:104-106`) M |
 | `/account` | Unlabelled input — **fixed**; errors lack role=alert (`:104,338-339`) M; hand-rolled modals, 10 raw buttons M; no h1 L |
 | `/config`, `/settings/defaults` | redirects (defaults drops tab context) |
-| `/analytics/escape` | Good; tabpanel `aria-labelledby` hard-coded to `tab-per_session` (`:146`) — verify L |
+| `/analytics/escape` | Good. Each tabpanel hard-codes its own `aria-labelledby` (`components/analytics/EscapeAnalyticsPage.tsx:146,265`); not a finding |
 | `/insights` | Fetch error shown twice, unroled (`InsightsDashboard.tsx:171,176,182`) M; best loading handling |
 | `/insights/session-detail` | Good |
 | `/settings` | Active tab not reflected in `?tab=` (`page.tsx:32,38`) M; bare fallbacks L |
@@ -72,7 +72,7 @@ Severity: H/M/L. "Fixed" = see table above; otherwise open follow-up.
 | `/settings/backlog-stages`, `/pipeline-modes`, `/remotes`, `/jules`, `/tagging-classifier` | Good a11y/error handling; plain-text loading L; redundant list roles in tagging-classifier L |
 | `/settings/features` | "Please refresh" error with no Retry (`:100-107`) M |
 | `/settings/unfinished` | Path field **fixed**; load failure bare text, no retry (`UnfinishedSourcesSettings.tsx:19-20`) M |
-| `/unfinished` | "All repos are clean" shown before scan/on failure (`UnfinishedTab.tsx:168-171`) M; h1 "Up Next" vs title mismatch L |
+| `/unfinished` | "All repos are clean" shown before scan/on failure (`app/unfinished/UnfinishedTab.tsx:168-171`) M; h1 "Up Next" vs title mismatch L |
 | `/debug/escape-codes`, `/test/escape-codes`, `/test/layout-overlap`, `/test/terminal-stress` | Dev/test fixtures; unlabelled controls in test fixtures L. Whether `/test/*` ships in production builds is unchecked |
 
 ## Component library (AC2)
@@ -95,7 +95,7 @@ Skeleton, Tooltip, RadioGroup, ErrorState, Modal, RepoPathInput, InlineNotice (p
   `next lint` exits 1 with 5 `analytics/*` errors in `insights/session-detail/page.tsx`, `RestartWithSummaryButton.tsx`,
   `SessionBoard.tsx`, none touched by this branch.
 - Layer 4 / Playwright a11y specs: not run (needs the Go binary + browsers). Storybook dev server not launched.
-- Stories now exist for every component in `components/ui` + `components/common` (38 story files; `UNCATALOGED` is empty, cap 0).
+- Stories now exist for every component in `components/ui` + `components/common` (40 story files, 36 added here and 4 already on main; `UNCATALOGED` is empty, cap 0).
   Some stories are narrower than default/disabled/error/edge: Navigation has a Default story only (feature flag context not exported);
   FlagCombobox/AutocompleteInput show the closed list state; null-rendering components carry a text label. Seen only under jest
   and `build-storybook`, not in a browser.

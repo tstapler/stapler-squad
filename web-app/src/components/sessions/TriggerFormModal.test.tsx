@@ -43,6 +43,13 @@ function makeWorkflow(overrides: Partial<WorkflowProto> = {}): WorkflowProto {
 }
 
 describe("TriggerFormModal", () => {
+  it("TriggerFormModal_should_renderTargetDirectoryAsRichPathField", () => {
+    render(<TriggerFormModal open={true} onSave={jest.fn()} onClose={jest.fn()} />);
+    const field = screen.getByTestId("trigger-target-directory-input");
+    expect(field).toHaveAttribute("role", "combobox");
+    expect(field).toHaveAccessibleName("Target directory");
+  });
+
   it("TriggerFormModal_should_showGithubPushFields_When_defaultTypeSelected", () => {
     render(<TriggerFormModal open={true} onSave={jest.fn()} onClose={jest.fn()} />);
 

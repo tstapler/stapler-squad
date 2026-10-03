@@ -70,6 +70,9 @@ describe("component library catalog", () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require(path.join(SRC, file));
     const stories = composeStories(mod) as Record<string, React.ComponentType>;
+    it("exports at least one story", () => {
+      expect(Object.keys(stories).length).toBeGreaterThan(0);
+    });
     it.each(Object.keys(stories))("story %s renders real content", (name) => {
       const Story = stories[name];
       // baseElement: Modal portals out of the container

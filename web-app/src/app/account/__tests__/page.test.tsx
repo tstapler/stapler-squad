@@ -18,6 +18,6 @@ describe("AccountPage add-device modal", () => {
   it("exposes the device-name input via an accessible name, not only a placeholder", async () => {
     render(<AccountPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Add New Device" }));
-    await waitFor(() => expect(screen.getByLabelText("Device name")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText("Device name (optional)")).toBeInTheDocument());
   });
 });

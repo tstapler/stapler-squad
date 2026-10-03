@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 // Lists every component in components/ui + components/common with its consumer files,
 // flags components with no consumers (unused) and ones that have no story.
-// Usage: node scripts/component-usage-report.mjs [--md]
+// Regex-based: misses dynamic imports and `@/components/ui/index`, so treat UNUSED as "check before deleting".
+// Usage: node scripts/component-usage-report.mjs [--md]   (prints to stdout; component-usage.md is a snapshot)
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const SRC = path.resolve(import.meta.dirname, "../src");
+const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src");
 const DIRS = ["components/ui", "components/common"];
 
 function walk(dir, out = []) {
@@ -51,7 +53,8 @@ const rows = components.map(({ name, dir }) => {
 });
 
 // Duplicate candidates: same name in two directories.
-const dupes = Object.entries(Object.groupBy(rows, (r) => r.name)).filter(([, v]) => v.length > 1).map(([k]) => k);
+const nameCounts = rows.reduce((m, r) => m.set(r.name, (m.get(r.name) ?? 0) + 1), new Map());
+const dupes = [...nameCounts].filter(([, n]) => n > 1).map(([k]) => k);
 
 const md = process.argv.includes("--md");
 if (md) {

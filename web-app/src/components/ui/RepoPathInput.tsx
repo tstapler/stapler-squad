@@ -198,8 +198,20 @@ export function RepoPathInput({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" && onEnter && !(open && selectedIndex >= 0 && selectedIndex < allEntries.length)) {
+      // Focus opens the list, so Tab must close it or it stays over the next control.
+      if (e.key === "Tab") {
+        setOpen(false);
+        setSelectedIndex(-1);
+        return;
+      }
+      if (
+        e.key === "Enter" &&
+        onEnter &&
+        !e.nativeEvent.isComposing &&
+        !(open && selectedIndex >= 0 && selectedIndex < allEntries.length)
+      ) {
         e.preventDefault();
+        setOpen(false);
         onEnter();
         return;
       }
@@ -239,13 +251,15 @@ export function RepoPathInput({
             // listener lives on this node) but worth remembering before adding a second.
             e.stopPropagation();
             e.nativeEvent.stopImmediatePropagation();
+            // Also cancel the default so a native <dialog> doesn't close on this Escape.
+            e.preventDefault();
           }
           setOpen(false);
           setSelectedIndex(-1);
           break;
       }
     },
-    [open, allEntries, selectedIndex, handleSelect, showDropdown]
+    [open, allEntries, selectedIndex, handleSelect, showDropdown, onEnter]
   );
 
   useEffect(() => {
