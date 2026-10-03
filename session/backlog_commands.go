@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -29,6 +30,12 @@ const backlogCommandsDir = ".claude/commands/backlog"
 // instance (BacklogService.pipelineEngine) — passing two different engines would
 // reintroduce the "2 independent callers can drift" regression this seam closes.
 func WriteSlashCommands(engine PipelineEngine, item *BacklogItemData, worktreePath string) error {
+	// Writing into $HOME would create ~/.claude/commands/backlog/, which Claude Code loads as
+	// user-scope commands for EVERY session — a later item's sessions then see this item's ID.
+	if isUserHomeDir(worktreePath) {
+		return fmt.Errorf("WriteSlashCommands: refusing to write per-item commands into the home directory %s", worktreePath)
+	}
+
 	// Self-heal before writing: if a prior version of this branch ever got any backlog
 	// scaffolding file committed (see git.ScaffoldingExcludePatterns), untrack it now so this
 	// spawn doesn't perpetuate the pollution forward. See selfHealWorktreeScaffolding's doc comment.
@@ -79,6 +86,46 @@ func WriteSlashCommands(engine PipelineEngine, item *BacklogItemData, worktreePa
 	}
 
 	return nil
+}
+
+func isUserHomeDir(path string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" || path == "" {
+		return false
+	}
+	a, errA := filepath.EvalSymlinks(path)
+	b, errB := filepath.EvalSymlinks(home)
+	if errA != nil || errB != nil {
+		return filepath.Clean(path) == filepath.Clean(home)
+	}
+	return a == b
+}
+
+var generatedSlashCommandName = regexp.MustCompile(`^(status|review|ship|help|block|duplicate|done-\d+|fail-\d+)\.md$`)
+
+// RemoveStaleUserLevelBacklogCommands deletes <home>/.claude/commands/backlog when it holds only
+// stapler-squad-generated command files. Per-item commands belong in the session worktree; a copy
+// at user scope (written by an old build that targeted $HOME) is loaded by every session lacking
+// its own project-level copy and embeds one long-gone item's ID. A directory containing anything
+// else is left untouched. Returns whether the directory was removed.
+func RemoveStaleUserLevelBacklogCommands(home string) (bool, error) {
+	dir := filepath.Join(home, backlogCommandsDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, e := range entries {
+		if e.IsDir() || !generatedSlashCommandName.MatchString(e.Name()) {
+			return false, nil
+		}
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // pruneStaleSlashCommandFiles removes every file in cmdDir not present in newFiles: leftovers

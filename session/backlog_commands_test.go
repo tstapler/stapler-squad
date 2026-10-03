@@ -920,3 +920,93 @@ func TestGetWorktreeDirtyPaths_EmptyForScaffoldingOnlyLinkedWorktree(t *testing.
 		t.Errorf("expected no dirty paths for a scaffolding-only worktree, got %v", paths)
 	}
 }
+
+func TestWriteSlashCommands_should_RegenerateWithNewItemID_When_WorkspaceReusedForSecondItem(t *testing.T) {
+	t.Parallel()
+	worktree := t.TempDir()
+	acA := `[{"index":0,"text":"a0","status":"pending"},{"index":1,"text":"a1","status":"pending"},{"index":2,"text":"a2","status":"pending"},{"index":3,"text":"a3","status":"pending"}]`
+	acB := `[{"index":0,"text":"b0","status":"pending"},{"index":1,"text":"b1","status":"pending"}]`
+	itemA := makeTestBacklogItemWithID("aaaaaaaa-0000-0000-0000-000000000001", "A", acA)
+	itemB := makeTestBacklogItemWithID("bbbbbbbb-0000-0000-0000-000000000002", "B", acB)
+
+	if err := WriteSlashCommands(nil, itemA, worktree); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteSlashCommands(nil, itemB, worktree); err != nil {
+		t.Fatal(err)
+	}
+
+	cmdDir := filepath.Join(worktree, backlogCommandsDir)
+	entries, err := os.ReadDir(cmdDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"status.md", "done-0.md", "done-1.md", "review.md", "ship.md", "block.md", "duplicate.md"} {
+		b, err := os.ReadFile(filepath.Join(cmdDir, name))
+		if err != nil {
+			t.Fatalf("%s missing: %v", name, err)
+		}
+		if !strings.Contains(string(b), itemB.ID) {
+			t.Errorf("%s does not contain new item ID", name)
+		}
+	}
+	for _, e := range entries {
+		b, _ := os.ReadFile(filepath.Join(cmdDir, e.Name()))
+		if strings.Contains(string(b), itemA.ID) {
+			t.Errorf("%s still contains old item ID", e.Name())
+		}
+		if e.Name() == "done-2.md" || e.Name() == "fail-3.md" {
+			t.Errorf("stale file %s not pruned", e.Name())
+		}
+	}
+}
+
+func TestWriteSlashCommands_should_Refuse_When_TargetIsHomeDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	item := makeTestBacklogItemWithID("x", "X", `[{"index":0,"text":"t","status":"pending"}]`)
+	if err := WriteSlashCommands(nil, item, home); err == nil {
+		t.Fatal("expected error writing commands into home dir")
+	}
+	if _, err := os.Stat(filepath.Join(home, backlogCommandsDir)); !os.IsNotExist(err) {
+		t.Fatalf("commands dir must not be created in home: %v", err)
+	}
+}
+
+func TestRemoveStaleUserLevelBacklogCommands(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, backlogCommandsDir)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"status.md", "done-0.md", "fail-7.md", "ship.md"} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("item_id=old"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	removed, err := RemoveStaleUserLevelBacklogCommands(home)
+	if err != nil || !removed {
+		t.Fatalf("removed=%v err=%v", removed, err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal("dir should be gone")
+	}
+
+	// A user-authored file keeps the directory untouched.
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"status.md", "mine.md"} {
+		_ = os.WriteFile(filepath.Join(dir, n), []byte("x"), 0o600)
+	}
+	removed, err = RemoveStaleUserLevelBacklogCommands(home)
+	if err != nil || removed {
+		t.Fatalf("removed=%v err=%v", removed, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "status.md")); err != nil {
+		t.Fatal("must not touch dir with user files")
+	}
+	if removed, err := RemoveStaleUserLevelBacklogCommands(t.TempDir()); removed || err != nil {
+		t.Fatalf("absent dir: removed=%v err=%v", removed, err)
+	}
+}
