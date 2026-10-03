@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -18,6 +19,11 @@ const (
 	maxInputBytes  = 4096
 
 	writeRateLimitPerSec = 1.0
+
+	// Mirror session's defaultPaneSettle* (unexported) so MCP submissions wait
+	// on the same tuning as driver-generated ones.
+	paneSettlePollInterval = 150 * time.Millisecond
+	paneSettleMaxWait      = 2 * time.Second
 )
 
 // liveInstanceFinder resolves a session ID to its live, already-started
@@ -40,8 +46,22 @@ type liveInstanceFinder interface {
 	FindLiveInstance(id string) *session.Instance
 }
 
+// ptyWriteTimeout caps how long a handler waits on a PTY write (including the
+// pane-settle wait before Enter). A var so tests can shorten it.
+var ptyWriteTimeout = 5 * time.Second
+
+var errPTYWriteTimeout = errors.New("timed out writing to session PTY")
+
+// submitTarget is what the send helpers need from an instance; *session.Instance
+// satisfies it, and tests substitute a fake via terminalHandlers.targetFor.
+type submitTarget interface {
+	SendKeys(keys string) error
+	HasUpdated() (updated bool, hasPrompt bool)
+}
+
 // terminalHandlers implements terminal I/O and VCS MCP tools.
 type terminalHandlers struct {
+	targetFor  func(*session.Instance) submitTarget // nil means use the instance itself; test seam
 	store      session.InstanceStore
 	live       liveInstanceFinder // may be nil; see findInstance
 	scrollback *scrollback.ScrollbackManager
@@ -283,27 +303,22 @@ func (th *terminalHandlers) writeToSession(ctx context.Context, req mcpgo.CallTo
 		return errResult_, nil
 	}
 
-	// BUG-047: must use session.EnterKeySequence ('\r'), not a bare '\n' —
-	// the Claude Code CLI's raw-mode TUI only recognizes '\r' as submit, so a
-	// trailing '\n' leaves the text sitting unsubmitted in the input buffer.
-	text := session.BuildSubmittableInput(input, pressEnter)
-
-	// Wrap SendKeys in a goroutine with a 5-second timeout to prevent PTY write deadlock.
-	// Use the request context so caller cancellation propagates; add a hard 5s cap.
-	errCh := make(chan error, 1)
-	go func() { errCh <- inst.SendKeys(text) }()
-
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	select {
-	case err := <-errCh:
-		if err != nil {
-			return errResult(ErrInternalError, fmt.Sprintf("send keys failed: %v", err), "Check that the session is running and not paused"), nil
+	// BUG-047/BUG-031: content and Enter ('\r', not '\n') must travel as two
+	// separate writes via SubmitDriverContent, or Claude Code's paste detector
+	// swallows the Enter for long input.
+	err := th.sendWithTimeout(ctx, func(c context.Context) error {
+		if pressEnter {
+			return th.submit(c, inst, input)
 		}
-	case <-ctx.Done():
+		return th.target(inst).SendKeys(input)
+	})
+	if errors.Is(err, errPTYWriteTimeout) {
 		return errResult("PTY_WRITE_TIMEOUT", "timed out writing to session PTY", "The session may be blocked. Use send_control with key=C to interrupt"), nil
 	}
+	if err != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("send keys failed: %v", err), "Check that the session is running and not paused"), nil
+	}
+	text := session.BuildSubmittableInput(input, pressEnter)
 
 	return okResult(WriteSessionResult{
 		MCPResult:    MCPResult{Success: true},
@@ -542,23 +557,14 @@ func (th *terminalHandlers) runCommand(ctx context.Context, req mcpgo.CallToolRe
 		return errResult_, nil
 	}
 
-	// Send the command. BUG-047: must use session.EnterKeySequence ('\r'),
-	// not a bare '\n' — a raw-mode TUI target (e.g. the Claude Code CLI
-	// itself) only recognizes '\r' as submit, so a trailing '\n' leaves the
-	// command sitting unsubmitted in the input buffer.
-	sendErrCh := make(chan error, 1)
-	go func() { sendErrCh <- inst.SendKeys(session.BuildSubmittableInputAndSubmit(command)) }()
-
-	sendCtx, sendCancel := context.WithTimeout(ctx, 5*time.Second)
-	defer sendCancel()
-
-	select {
-	case err := <-sendErrCh:
-		if err != nil {
-			return errResult(ErrInternalError, fmt.Sprintf("send command failed: %v", err), "Check that the session is running and not paused"), nil
-		}
-	case <-sendCtx.Done():
+	// Send the command; content and Enter go as two writes (BUG-047/BUG-031,
+	// see writeToSession).
+	err := th.sendWithTimeout(ctx, func(c context.Context) error { return th.submit(c, inst, command) })
+	if errors.Is(err, errPTYWriteTimeout) {
 		return errResult("PTY_WRITE_TIMEOUT", "timed out writing command to session PTY", ""), nil
+	}
+	if err != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("send command failed: %v", err), "Check that the session is running and not paused"), nil
 	}
 
 	// Poll until output stops changing for 2 consecutive seconds or timeout expires.
@@ -681,21 +687,12 @@ func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallTool
 	}
 
 	// Fallback: send via PTY send-keys (interactive sessions or sessions without UUID).
-	text := message + "\r"
-
-	sendCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() { errCh <- inst.SendKeys(text) }()
-
-	select {
-	case err := <-errCh:
-		if err != nil {
-			return errResult(ErrInternalError, fmt.Sprintf("send keys failed: %v", err), "Check that the session is running and not paused"), nil
-		}
-	case <-sendCtx.Done():
+	err := th.sendWithTimeout(ctx, func(c context.Context) error { return th.submit(c, inst, message) })
+	if errors.Is(err, errPTYWriteTimeout) {
 		return errResult("PTY_WRITE_TIMEOUT", "timed out writing to session PTY", "The session may be blocked. Use send_control with key=C to interrupt"), nil
+	}
+	if err != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("send keys failed: %v", err), "Check that the session is running and not paused"), nil
 	}
 
 	return okResult(SteerSessionResult{
@@ -707,6 +704,34 @@ func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallTool
 }
 
 // ---- helpers ----
+
+func (th *terminalHandlers) target(inst *session.Instance) submitTarget {
+	if th.targetFor != nil {
+		return th.targetFor(inst)
+	}
+	return inst
+}
+
+// submit sends content then a separate Enter via session.SubmitDriverContent;
+// a failed Enter write surfaces as an error rather than a false success.
+func (th *terminalHandlers) submit(ctx context.Context, inst *session.Instance, content string) error {
+	return session.SubmitDriverContent(ctx, th.target(inst), content, paneSettlePollInterval, paneSettleMaxWait)
+}
+
+// sendWithTimeout runs fn under a hard ptyWriteTimeout cap to avoid a PTY write
+// deadlock hanging the handler; returns errPTYWriteTimeout if it elapses.
+func (th *terminalHandlers) sendWithTimeout(ctx context.Context, fn func(context.Context) error) error {
+	ctx, cancel := context.WithTimeout(ctx, ptyWriteTimeout)
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- fn(ctx) }()
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return errPTYWriteTimeout
+	}
+}
 
 // findInstance returns the live, already-started Instance for sessionID
 // (BUG-035) — trying th.live first (the real in-memory Instance with PTY/
