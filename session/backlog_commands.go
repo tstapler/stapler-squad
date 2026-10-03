@@ -101,7 +101,20 @@ func isUserHomeDir(path string) bool {
 	return a == b
 }
 
-var generatedSlashCommandName = regexp.MustCompile(`^(status|review|ship|help|block|duplicate|done-\d+|fail-\d+)\.md$`)
+// fixedSlashCommandNames are the non-per-criterion files WriteSlashCommands generates; the
+// per-criterion done-N/fail-N files match perCriterionSlashCommandName. Kept next to the
+// generators and cross-checked by TestIsGeneratedSlashCommandName_should_CoverEveryGeneratedFile,
+// so a new generated command can't silently escape the user-scope cleanup.
+var fixedSlashCommandNames = map[string]bool{
+	"status.md": true, "review.md": true, "ship.md": true,
+	"help.md": true, "block.md": true, "duplicate.md": true,
+}
+
+var perCriterionSlashCommandName = regexp.MustCompile(`^(done|fail)-\d+\.md$`)
+
+func isGeneratedSlashCommandName(name string) bool {
+	return fixedSlashCommandNames[name] || perCriterionSlashCommandName.MatchString(name)
+}
 
 // RemoveStaleUserLevelBacklogCommands deletes <home>/.claude/commands/backlog when it holds only
 // stapler-squad-generated command files. Per-item commands belong in the session worktree; a copy
@@ -133,8 +146,11 @@ func RemoveStaleUserLevelBacklogCommands(home string) (bool, error) {
 		}
 		return false, err
 	}
+	if len(entries) == 0 {
+		return false, nil // an empty directory holds nothing generated; leave it alone
+	}
 	for _, e := range entries {
-		if !e.Type().IsRegular() || !generatedSlashCommandName.MatchString(e.Name()) {
+		if !e.Type().IsRegular() || !isGeneratedSlashCommandName(e.Name()) {
 			return false, nil
 		}
 		// Name alone is a weak ownership signal; require the generator's item_id= marker.

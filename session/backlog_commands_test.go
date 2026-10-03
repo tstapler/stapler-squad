@@ -951,7 +951,10 @@ func TestWriteSlashCommands_should_RegenerateWithNewItemID_When_WorkspaceReusedF
 		}
 	}
 	for _, e := range entries {
-		b, _ := os.ReadFile(filepath.Join(cmdDir, e.Name()))
+		b, rErr := os.ReadFile(filepath.Join(cmdDir, e.Name()))
+		if rErr != nil {
+			t.Fatalf("read %s: %v", e.Name(), rErr)
+		}
 		if strings.Contains(string(b), itemA.ID) {
 			t.Errorf("%s still contains old item ID", e.Name())
 		}
@@ -964,6 +967,7 @@ func TestWriteSlashCommands_should_RegenerateWithNewItemID_When_WorkspaceReusedF
 func TestWriteSlashCommands_should_Refuse_When_TargetIsHomeDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 	item := makeTestBacklogItemWithID("x", "X", `[{"index":0,"text":"t","status":"pending"}]`)
 	if err := WriteSlashCommands(nil, item, home); err == nil {
 		t.Fatal("expected error writing commands into home dir")
@@ -1049,5 +1053,41 @@ func TestRemoveStaleUserLevelBacklogCommands_should_Skip_When_FileLacksItemIDMar
 	}
 	if removed, err := RemoveStaleUserLevelBacklogCommands(home); removed || err != nil {
 		t.Fatalf("removed=%v err=%v", removed, err)
+	}
+}
+
+func TestIsGeneratedSlashCommandName_should_CoverEveryGeneratedFile(t *testing.T) {
+	t.Parallel()
+	item := makeTestBacklogItemWithID("drift-id", "Drift", `[{"index":0,"text":"a","status":"pending"},{"index":11,"text":"b","status":"pending"}]`)
+	files, err := buildDefaultSlashCommandSet(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range buildBlockAndDuplicateCommands(item.ID) {
+		files[name] = content
+	}
+	for name := range files {
+		if !isGeneratedSlashCommandName(name) {
+			t.Errorf("generated file %q is not recognized by the user-scope cleanup allowlist", name)
+		}
+	}
+	for _, n := range []string{"mine.md", "status.txt", "done-x.md"} {
+		if isGeneratedSlashCommandName(n) {
+			t.Errorf("%q must not be treated as generated", n)
+		}
+	}
+}
+
+func TestRemoveStaleUserLevelBacklogCommands_should_LeaveEmptyDir(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, backlogCommandsDir)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := RemoveStaleUserLevelBacklogCommands(home); removed || err != nil {
+		t.Fatalf("removed=%v err=%v", removed, err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatal("empty dir must be left in place")
 	}
 }
