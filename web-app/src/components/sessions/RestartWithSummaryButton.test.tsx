@@ -5,6 +5,9 @@ import { useHandoffSummary } from "@/lib/hooks/useHandoffSummary";
 import { HandoffSummaryStatus } from "@/gen/session/v1/handoff_summary_pb";
 import type { HandoffSummaryProto } from "@/gen/session/v1/handoff_summary_pb";
 
+const mockTrack = jest.fn();
+jest.mock("@/lib/contexts/AnalyticsContext", () => ({ useAnalytics: () => ({ track: mockTrack }) }));
+
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
@@ -129,6 +132,9 @@ describe("RestartWithSummaryButton", () => {
       prompt: "Session recap text",
       restartFromSessionId: "source-session-1",
     });
+    expect(mockTrack).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "session_restart_with_summary", sessionId: "source-session-1" }),
+    );
 
     await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/?session=new-session-42"));
   });
