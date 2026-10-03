@@ -52,7 +52,7 @@ func (r *recordingPM) writes() []string {
 func newSubmitHarness(t *testing.T) (*terminalHandlers, *recordingPM) {
 	t.Helper()
 	pm := &recordingPM{}
-	inst := session.NewStartedInstanceForTest("submit-s1", pm)
+	inst := session.NewStartedInstanceForTest(t, "submit-s1", pm)
 	th := &terminalHandlers{
 		store:       &stubStore{instances: []*session.Instance{inst}},
 		scrollback:  makeScrollbackMgr(t),
