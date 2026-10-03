@@ -185,3 +185,43 @@ func TestRestoreWithWorkDir_ConcurrentCalls_OnlyOneRelaunch(t *testing.T) {
 	require.Equal(t, int32(1), newSessionCount.Load(),
 		"concurrent RestoreWithWorkDir callers racing the same missing session must only relaunch once")
 }
+
+// The relaunch must wait (bounded) for the SIGTERMed orphan to actually die.
+func TestRestoreWithWorkDir_OrphanGuard_WaitsForDeath(t *testing.T) {
+	t.Parallel()
+	var created atomic.Bool
+	var checks atomic.Int32
+	cmdExec := MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			if strings.Contains(cmd.String(), "new-session") {
+				created.Store(true)
+			}
+			return nil
+		},
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			if created.Load() {
+				return []byte("staplersquad_orphan-wait-test"), nil
+			}
+			return nil, fmt.Errorf("no server running")
+		},
+	}
+	var killed atomic.Bool
+	var aliveAtCreate atomic.Bool
+	// Dies only after the third liveness poll following the kill.
+	alive := func() bool {
+		if !killed.Load() {
+			return true
+		}
+		if created.Load() {
+			aliveAtCreate.Store(true)
+		}
+		return checks.Add(1) < 3
+	}
+	s := newTmuxSession("orphan-wait-test", "claude", NewMockPtyFactory(t), cmdExec, TmuxPrefix,
+		WithRegistry(nil),
+		WithOrphanProcessGuard(alive, func() error { killed.Store(true); return nil }),
+	)
+	require.NoError(t, s.RestoreWithWorkDir(t.TempDir()))
+	require.GreaterOrEqual(t, checks.Load(), int32(3), "must poll until the orphan is gone")
+	require.False(t, aliveAtCreate.Load())
+}

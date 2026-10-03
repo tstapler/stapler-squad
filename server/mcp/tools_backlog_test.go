@@ -2753,6 +2753,9 @@ func TestImportGitHubIssue_should_PersistItem_When_IssueFetchSucceeds(t *testing
 	assert.Equal(t, "bug: something is broken", fetched.Title)
 	assert.Equal(t, "Steps to reproduce...", fetched.Description)
 	assert.Contains(t, fetched.Notes, "https://github.com/tstapler/stapler-squad/issues/316")
+	// ExternalURL is what Storage.CreateBacklogItem keys the cross-host claim on.
+	assert.Equal(t, "https://github.com/tstapler/stapler-squad/issues/316", fetched.ExternalURL)
+	assert.Equal(t, "316", fetched.ExternalID)
 }
 
 // TestImportGitHubIssue_should_Succeed_When_NoSessionUUID mirrors
@@ -3731,7 +3734,7 @@ func TestReportPRCreated_should_RejectReassignment_When_AuthorMismatch(t *testin
 type fakeTriageHeadlessPool struct{}
 
 func (f *fakeTriageHeadlessPool) CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt, userPrompt string, opts headless.CallOptions, sink headless.CostSink) (string, error) {
-	sink(0)
+	sink(0, true)
 	return `{"title":"t","summary":"s","suggestions":[]}`, nil
 }
 
@@ -4692,6 +4695,8 @@ func TestReportDuplicate_NoOpOnExactRetry(t *testing.T) {
 	tc2, ok := result2.Content[0].(mcpgo.TextContent)
 	require.True(t, ok)
 	assert.Contains(t, tc2.Text, "already recorded")
+	assert.Contains(t, tc2.Text, "Confirmation is pending", "no-op must say the claim awaits an operator")
+	assert.Contains(t, tc2.Text, "archive the item", "no-op must say how the operator resolves it")
 	assert.Equal(t, 1, verifyCallCount, "the no-op retry must not call GitHub verification again")
 
 	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)

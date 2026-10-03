@@ -7,7 +7,6 @@ import { usePageView } from "@/lib/analytics";
 import { vars } from "@/styles/theme.css";
 import { StreamHubRolloutPanel } from "@/components/settings/StreamHubRolloutPanel";
 import { TymuxRolloutPanel } from "@/components/settings/TymuxRolloutPanel";
-import { NativeGitRolloutPanel } from "@/components/settings/NativeGitRolloutPanel";
 import { PiDisableWarningDialog } from "@/components/settings/PiDisableWarningDialog";
 import { PI_SUPPORT_FLAG_NAME } from "@/lib/constants/programs";
 import {
@@ -29,6 +28,7 @@ import {
 
 const FEATURE_META: Record<string, { label: string }> = {
   backlog: { label: "Backlog" },
+  "programs:cli-flag-probe": { label: "Program flag discovery (check binary and read --help)" },
   "pi-support": { label: "pi coding agent" },
   "backlog:sdd-default-pipeline": { label: "Backlog: default new items to SDD pipeline" },
   "review:block-approval-on-ci-failure": { label: "Block Approve when CI is failing" },
@@ -155,7 +155,6 @@ export default function FeaturesPage() {
 
       <StreamHubRolloutPanel />
       <TymuxRolloutPanel />
-      <NativeGitRolloutPanel />
 
       {pendingPiDisable && (
         <PiDisableWarningDialog onAcknowledge={confirmPiDisable} onCancel={cancelPiDisable} />

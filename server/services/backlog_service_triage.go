@@ -740,6 +740,14 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 	s.dequeueMu.Lock()
 	defer s.dequeueMu.Unlock()
 
+	// Read once per sweep, not per candidate: it is a config read.
+	claimDedup := s.crossHostClaimDedupEnabled()
+	var claims foreignClaimSet
+	if claimDedup {
+		claims = s.foreignClaimsSnapshot()
+	}
+	s.reconcileClaimBlockedStuck(ctx, claimDedup, claims)
+
 	liveCount, err := s.countLiveBacklogWorkSessions(ctx)
 	if err != nil {
 		return fmt.Errorf("count live work sessions: %w", err)
@@ -782,58 +790,73 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 		if spawned >= freeSlots {
 			break
 		}
-		fromStatus := session.BacklogStatus(item.Status)
-		claimed, claimErr := s.transitionWithGuard(ctx, &item,
-			session.BacklogStatusInProgress,
-			&session.BacklogItemPrecondition{ExpectedStatus: string(fromStatus), Note: "dequeued: WIP slot freed"},
-			session.TriggeredBySystem,
-			unresolvedBlockers[item.ID])
-		if claimErr != nil {
-			switch {
-			case errors.Is(claimErr, session.ErrPreconditionFailed):
-				// Expected under concurrent claims (another process's dequeue
-				// sweep, or a manual un-queue) — not worth logging.
-			case errors.Is(claimErr, session.ErrUnresolvedBlockers):
-				// Expected steady state: item is legitimately blocked and will be
-				// retried on a later sweep once its blocker reaches done — not a
-				// bug, so not worth a warning-level log every sweep. Still surface
-				// it durably (AC3) so the item detail view can render a BlockerChip
-				// instead of leaving the operator to guess why it's stalled.
-				s.notifyBlockedByDependency(ctx, item.ID, fromStatus)
-			case errors.Is(claimErr, session.ErrPlanRequired), errors.Is(claimErr, session.ErrPlanArtifactsRequired):
-				// Defense-in-depth (PR #199 review F2/F3): should be unreachable
-				// now that SpawnSessionFromItem's planning gate runs before the
-				// WIP-cap queue gate, but refuse the claim rather than silently
-				// spawning an unapproved item if this is ever hit (e.g. a future
-				// call site regression, or a pre-existing queued/ready row from
-				// before that ordering fix).
-				log.Warn("[DequeueNextQueuedItems] claim blocked by planning gate — leaving as-is", "item", item.ID, "status", fromStatus, "error", claimErr)
-			default:
-				log.Warn("[DequeueNextQueuedItems] claim failed", "item", item.ID, "status", fromStatus, "error", claimErr)
-			}
+		if claimDedup && s.skipForForeignClaim(ctx, &item, claims) {
 			continue
 		}
-
-		resp, spawnErr := s.spawnSessionAfterGates(ctx, claimed, true, item.QueuedAutonomous)
-		if spawnErr != nil {
-			log.Warn("[DequeueNextQueuedItems] spawn failed for dequeued item; rolling back", "item", item.ID, "error", spawnErr, "to", fromStatus)
-			if _, rbErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, fromStatus,
-				&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress), Note: "dequeue spawn failed"},
-				session.TriggeredBySystem); rbErr != nil {
-				log.Error("[DequeueNextQueuedItems] rollback failed", "to", fromStatus, "item", item.ID, "error", rbErr)
-				// The same silent-stranding shape notifySpawnAndRollbackFailed was
-				// built for (BUG-030) — that fix only wired this helper into
-				// AutoReopenAfterFailedReview's own spawn+rollback path, missing this
-				// sibling one. The item is left claimed (in_progress) with no live
-				// session and no visible error anywhere.
-				s.notifySpawnAndRollbackFailed(ctx, item.ID, item.Title, spawnErr, rbErr)
+		if s.claimAndSpawnCandidate(ctx, item, unresolvedBlockers[item.ID]) {
+			spawned++
+			if claimDedup {
+				s.resolveClaimBlockedLogged(ctx, item.ID)
 			}
-			continue
 		}
-		spawned++
-		log.Info("[DequeueNextQueuedItems] dequeued and spawned", "item", item.ID, "was", fromStatus, "priority", item.Priority, "session", resp.Msg.SessionUuid)
 	}
 	return nil
+}
+
+// claimAndSpawnCandidate claims item (CAS to in_progress via transitionWithGuard)
+// and spawns its work session, rolling back to the pre-claim status if the spawn
+// fails. It reports whether a session was spawned. Callers hold dequeueMu.
+func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item session.BacklogItemData, hasUnresolvedBlockers bool) bool {
+	fromStatus := session.BacklogStatus(item.Status)
+	claimed, claimErr := s.transitionWithGuard(ctx, &item,
+		session.BacklogStatusInProgress,
+		&session.BacklogItemPrecondition{ExpectedStatus: string(fromStatus), Note: "dequeued: WIP slot freed"},
+		session.TriggeredBySystem,
+		hasUnresolvedBlockers)
+	if claimErr != nil {
+		switch {
+		case errors.Is(claimErr, session.ErrPreconditionFailed):
+			// Expected under concurrent claims (another process's dequeue
+			// sweep, or a manual un-queue) — not worth logging.
+		case errors.Is(claimErr, session.ErrUnresolvedBlockers):
+			// Expected steady state: item is legitimately blocked and will be
+			// retried on a later sweep once its blocker reaches done — not a
+			// bug, so not worth a warning-level log every sweep. Still surface
+			// it durably (AC3) so the item detail view can render a BlockerChip
+			// instead of leaving the operator to guess why it's stalled.
+			s.notifyBlockedByDependency(ctx, item.ID, fromStatus)
+		case errors.Is(claimErr, session.ErrPlanRequired), errors.Is(claimErr, session.ErrPlanArtifactsRequired):
+			// Defense-in-depth (PR #199 review F2/F3): should be unreachable
+			// now that SpawnSessionFromItem's planning gate runs before the
+			// WIP-cap queue gate, but refuse the claim rather than silently
+			// spawning an unapproved item if this is ever hit (e.g. a future
+			// call site regression, or a pre-existing queued/ready row from
+			// before that ordering fix).
+			log.Warn("[DequeueNextQueuedItems] claim blocked by planning gate — leaving as-is", "item", item.ID, "status", fromStatus, "error", claimErr)
+		default:
+			log.Warn("[DequeueNextQueuedItems] claim failed", "item", item.ID, "status", fromStatus, "error", claimErr)
+		}
+		return false
+	}
+
+	resp, spawnErr := s.spawnSessionAfterGates(ctx, claimed, true, item.QueuedAutonomous)
+	if spawnErr != nil {
+		log.Warn("[DequeueNextQueuedItems] spawn failed for dequeued item; rolling back", "item", item.ID, "error", spawnErr, "to", fromStatus)
+		if _, rbErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, fromStatus,
+			&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress), Note: "dequeue spawn failed"},
+			session.TriggeredBySystem); rbErr != nil {
+			log.Error("[DequeueNextQueuedItems] rollback failed", "to", fromStatus, "item", item.ID, "error", rbErr)
+			// The same silent-stranding shape notifySpawnAndRollbackFailed was
+			// built for (BUG-030) — that fix only wired this helper into
+			// AutoReopenAfterFailedReview's own spawn+rollback path, missing this
+			// sibling one. The item is left claimed (in_progress) with no live
+			// session and no visible error anywhere.
+			s.notifySpawnAndRollbackFailed(ctx, item.ID, item.Title, spawnErr, rbErr)
+		}
+		return false
+	}
+	log.Info("[DequeueNextQueuedItems] dequeued and spawned", "item", item.ID, "was", fromStatus, "priority", item.Priority, "session", resp.Msg.SessionUuid)
+	return true
 }
 
 // effectiveQueueTime is the timestamp DequeueNextQueuedItems' priority-tiebreaker sort
@@ -904,14 +927,28 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// docs/tasks/backlog-feature-improvement.md).
 	s.tombstoneOrphanWorkSessions(ctx, item.ID, priorSessions)
 
+	// 8a'. No-op loop gate: refuse to dispatch another work session while a
+	// repeated_noop_dispatch row is open (see domain.StuckReasonRepeatedNoopDispatch).
+	// Autonomous respawns pass through here too, so this stops every auto path.
+	if blocked, gateErr := s.storage.HasOpenStuckReason(ctx, item.ID, domain.StuckReasonRepeatedNoopDispatch); gateErr != nil {
+		log.Warn("[spawnSessionAfterGates] no-op gate lookup failed, proceeding", "item", item.ID, "error", gateErr)
+	} else if blocked {
+		log.Warn("[spawnSessionAfterGates] refusing dispatch: repeated no-op sessions on this item", "item", item.ID)
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("item has repeated_noop_dispatch open: consecutive work sessions produced no commits; resolve the duplicate/shipped state (archive or reset the item) before dispatching again"))
+	}
+
 	// 8a2. Close the tmux pane of every already-ended work-session round before
 	// spawning the next one. Each rework round gets its own "-rN" title (see
 	// buildRevisionTitle) so the session list stays readable across rounds, but
 	// nothing previously closed a finished round's tmux pane — it sat around
 	// indefinitely as an idle "[exited]" pane, accumulating with every rework
 	// cycle. KillTmuxPaneOnly (not StopSessionByUUID/Instance.Kill) leaves the
-	// worktree alone, since rework rounds share one worktree/branch.
-	s.killEndedWorkSessionPanes(ctx, priorSessions)
+	// worktree alone, since rework rounds share one worktree/branch. Returns
+	// the UUIDs whose kill attempt did NOT confirm dead — see its doc comment
+	// and 8b2 below for why that set, not every ended session, is what 8b2
+	// needs to re-check.
+	unconfirmedDeadUUIDs := s.killEndedWorkSessionPanes(ctx, priorSessions)
 
 	// 8b. Guard against spawning a duplicate work session when one is already active.
 	if active := findActiveWorkSession(priorSessions); active != nil {
@@ -926,7 +963,13 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// session wrongly tombstoned by a transient liveness-check miss would
 	// pass the 8b guard above (its EndedAt is now set) but still fail here if
 	// IsSessionLive's OS-truth fallback confirms it's actually still running.
-	if live := findConfirmedLiveWorkSession(s.sessionStopper, priorSessions); live != nil {
+	// unconfirmedDeadUUIDs scopes the recheck to sessions 8a2 could not just
+	// confirm dead itself — every other already-ended session was either
+	// already gone or was just successfully killed (and deregistered, see
+	// KillTmuxPaneOnly), so re-asking IsSessionLive for it would repeat the
+	// exact same expensive tmux/storage round trip 8a2 already paid, once per
+	// historical rework round, on every single spawn attempt.
+	if live := findConfirmedLiveWorkSession(s.sessionStopper, priorSessions, unconfirmedDeadUUIDs); live != nil {
 		return nil, connect.NewError(connect.CodeAlreadyExists,
 			fmt.Errorf("a work session (%s) is already confirmed live for this item; refusing to spawn a concurrent one", live.SessionUUID))
 	}
@@ -982,6 +1025,38 @@ func (s *BacklogService) spawnSessionAfterGates(
 		return nil, wErr
 	}
 
+	// 10b. Resolve the work-stage executor BEFORE spawning (never after) so the session
+	// starts on the configured program on its first launch — no kill-and-relaunch via
+	// SwitchProgram/Restart, and no risk to the prompt CLI arg passed to the spawn call
+	// below. See Epic 2.4's design note. ComputeExecutorHash is deliberately computed
+	// from the RAW workExecModel (e.g. "family:sonnet"), never the ResolveExecutorProgram
+	// output below — see ComputeExecutorHash's doc comment for why hashing the resolved
+	// value would permanently false-flag drift against the mode-side hash.
+	var workExecProgram, workExecModel string
+	if s.pipelineEngine != nil {
+		workExecProgram, workExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleWork)
+	}
+	workExecutorHash := session.ComputeExecutorHash(workExecProgram, workExecModel)
+	var programOverride, workResolvedModel string
+	if workExecProgram != "" || workExecModel != "" {
+		var resolveErr error
+		programOverride, resolveErr = session.ResolveExecutorProgram(workExecProgram, workExecModel, s.modelFamilies)
+		if resolveErr != nil {
+			log.Warn("[SpawnSessionFromItem] failed to resolve work-stage executor program, falling back to default", "item", item.ID, "program", workExecProgram, "model", workExecModel, "err", resolveErr)
+			programOverride = ""
+		} else {
+			// workResolvedModel persists the concrete post-family-alias model onto
+			// the ItemSession row (resolved_model's contract) — independent of
+			// programOverride, which is the full "claude --model <id>" string.
+			var modelErr error
+			workResolvedModel, modelErr = session.ResolveModel(s.modelFamilies, workExecModel)
+			if modelErr != nil {
+				log.Warn("[SpawnSessionFromItem] failed to resolve work model family alias, using empty model", "item", item.ID, "model", workExecModel, "err", modelErr)
+				workResolvedModel = ""
+			}
+		}
+	}
+
 	// 11. Spawn session first so we have the real UUID before creating the ItemSession record.
 	spawnTags := []string{session.TagBacklogWork}
 	if isReopen {
@@ -993,10 +1068,10 @@ func (s *BacklogService) spawnSessionAfterGates(
 	var inst *session.Instance
 	if useWorktree {
 		inst, err = s.sessionCreator.CreateWorktreeSession(ctx, title, item.RepoPath, worktreePath, prompt,
-			spawnTags, false, false)
+			spawnTags, false, false, programOverride)
 	} else {
 		inst, err = s.sessionCreator.CreateDirectorySession(ctx, title, worktreePath, prompt,
-			spawnTags, false, false)
+			spawnTags, false, false, programOverride)
 	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn session: %w", err))
@@ -1058,7 +1133,14 @@ func (s *BacklogService) spawnSessionAfterGates(
 		AcSnapshot:               acSnapshot,
 		PipelineModeSnapshot:     item.PipelineMode,
 		PipelineModeSnapshotHash: pipelineModeSnapshotHash,
-		ClaimantHostID:           s.claimantHostID(),
+		// ResolvedProgram/ResolvedModel/ExecutorSnapshotHash freeze the work-stage
+		// executor resolved above at spawn time (Epic 2.4). The work stage has no
+		// headless-caller-registry fallback concept, so ConfiguredProgram/
+		// ExecutorFallbackReason/CostPriced are left at their zero-value defaults.
+		ResolvedProgram:      workExecProgram,
+		ResolvedModel:        workResolvedModel,
+		ExecutorSnapshotHash: workExecutorHash,
+		ClaimantHostID:       s.claimantHostID(),
 	})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create item session: %w", err))
@@ -1220,21 +1302,29 @@ func findActiveWorkSession(priorSessions []session.ItemSessionSummary) *session.
 	return nil
 }
 
-// findConfirmedLiveWorkSession is spawnSessionAfterGates' 8b2 concurrent-liveness
-// cap: it re-derives "is a work session already running for this item" straight
-// from sessionStopper.IsSessionLive (OS/tmux truth, via
-// SessionService.findConfirmedLiveInstance) instead of priorSessions' EndedAt
-// column, which findActiveWorkSession relies on and tombstoneOrphanWorkSessions
-// writes. Returns nil (never blocks) if stopper is nil, matching this file's
-// existing "unknown liveness assumes alive is not assumed, tombstoning is
-// skipped" conservative-nil convention elsewhere (e.g. tombstoneOrphanWorkSessions).
-func findConfirmedLiveWorkSession(stopper SessionStopper, priorSessions []session.ItemSessionSummary) *session.ItemSessionSummary {
+// findConfirmedLiveWorkSession is spawnSessionAfterGates' 8b2 concurrent-
+// liveness cap: re-derives "is a work session already running" from
+// sessionStopper.IsSessionLive (OS/tmux truth) rather than trusting
+// ItemSession.EndedAt, which can be wrongly set by a stale tombstone sweep —
+// the 2026-09-12 incident this guards against. Checks EndedAt!=nil sessions
+// too (8b's findActiveWorkSession already covers EndedAt==nil) for defense
+// in depth against exactly that wrong-EndedAt case; nil stopper never blocks,
+// matching this file's conservative-nil convention elsewhere.
+//
+// mustRecheck restricts which EndedAt!=nil sessions actually call
+// IsSessionLive — see killEndedWorkSessionPanes' doc comment for why every
+// other one is already known dead by the time this runs, and re-asking would
+// just repeat the same expensive round trip.
+func findConfirmedLiveWorkSession(stopper SessionStopper, priorSessions []session.ItemSessionSummary, mustRecheck map[string]bool) *session.ItemSessionSummary {
 	if stopper == nil {
 		return nil
 	}
 	for i := range priorSessions {
 		is := &priorSessions[i]
-		if is.Role != string(session.SessionRoleWork) || is.EndedAt != nil {
+		if is.Role != string(session.SessionRoleWork) {
+			continue
+		}
+		if is.EndedAt != nil && !mustRecheck[is.SessionUUID] {
 			continue
 		}
 		if stopper.IsSessionLive(is.SessionUUID) {
@@ -2724,15 +2814,19 @@ func (s *BacklogService) TriggerReReview(
 		priorVerdictSection = fmt.Sprintf("\n## Prior Review Verdict\nOutcome: %s\nSummary: %s\n", rv.OverallOutcome, rv.Summary)
 	}
 
+	attachedImages := session.AttachedImagesSection(item.Description)
+	if attachedImages != "" {
+		attachedImages = "\n" + attachedImages
+	}
 	reReviewPrompt := fmt.Sprintf(`You are re-reviewing a backlog item that previously entered the review state.
 
 # Item: %s
 
 ## Description
 %s
-%s
+%s%s
 ## Acceptance Criteria (at time of work session)
-`, item.Title, item.Description, priorVerdictSection)
+`, item.Title, item.Description, attachedImages, priorVerdictSection)
 
 	for _, ac := range acSnapshot {
 		reReviewPrompt += fmt.Sprintf("%d. %s (status: %s)\n", ac.Index, ac.Text, ac.Status)
@@ -2841,6 +2935,24 @@ Do not modify the code. Only write the review verdict.
 
 		headlessPrompt := s.reviewPromptFor(item, acSnapshot, workSessionDiff, false, verificationNotes, extras)
 		systemPrompt, callOpts, callTimeout, reviewPath := session.BuildReviewCallOptions(workSessionDiff, codebaseWorkDir)
+
+		// Resolve this stage's configured (program, model) executor (Epic 2.3,
+		// Story 2.3.3), mirroring TriggerTriage's identical resolution. As there:
+		// ComputeExecutorHash MUST hash the RAW reviewExecModel (e.g.
+		// "family:opus"), never the ResolveModel-resolved concrete ID that goes
+		// into callOpts.Model below — see ComputeExecutorHash's doc comment.
+		var reviewExecProgram, reviewExecModel string
+		if s.pipelineEngine != nil {
+			reviewExecProgram, reviewExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleReview)
+		}
+		reviewExecutorHash := session.ComputeExecutorHash(reviewExecProgram, reviewExecModel)
+		reviewCaller, reviewConfiguredProgram, reviewFallbackReason := s.resolveHeadlessCaller(reviewExecProgram, item.ID, "review")
+		reviewResolvedModel, reviewModelErr := session.ResolveModel(s.modelFamilies, reviewExecModel)
+		if reviewModelErr != nil {
+			log.Warn("[PipelineEngine] failed to resolve review model family alias, using empty model", "item", item.ID, "model", reviewExecModel, "err", reviewModelErr)
+			reviewResolvedModel = ""
+		}
+		callOpts.Model = reviewResolvedModel
 		// callStart is recorded immediately before the headless call sequence
 		// (capability self-check, then CallBlocking) so Epic 2.5's duration_ms=
 		// observability logging reflects the real cost of this re-review attempt,
@@ -2872,9 +2984,20 @@ Do not modify the code. Only write the review verdict.
 		defer reviewCancel()
 
 		var callCostUSD float64
-		reviewResult, callErr := s.headlessPool.CallBlocking(
+		// callCostPriced defaults true, matching cost_priced's own schema default,
+		// so a call that fails before the sink ever fires reads as "no cost
+		// incurred" rather than as an untrustworthy $0 — see the identical
+		// rationale on TriggerTriage's triageCostPriced.
+		callCostPriced := true
+		var reviewConversationID string
+		callOpts.OnConversationID = func(id string) { reviewConversationID = id }
+		reviewResult, callErr := reviewCaller.CallBlocking(
 			reviewCtx, headless.FeatureKeyReview, systemPrompt, headlessPrompt, callOpts,
-			func(usd float64) { callCostUSD = usd },
+			func(usd float64, priced bool) {
+				callCostUSD = usd
+				callCostPriced = priced
+				logBudgetWarningIfCrossed(item.ID, "review", item.CostBudgetThresholdUsd, sessions, usd)
+			},
 		)
 
 		// Explicit, immediate cleanup as soon as the transcript file is no longer
@@ -2949,11 +3072,18 @@ Do not modify the code. Only write the review verdict.
 
 		reviewSessionUUID := headlessReReviewUUIDPrefix + uuid.New().String()
 		is, createErr := s.storage.CreateItemSessionWithVerdict(cleanupCtx, session.ItemSessionData{
-			ItemID:           item.ID,
-			SessionUUID:      reviewSessionUUID,
-			SessionRole:      session.SessionRoleReview,
-			AcSnapshot:       session.AcCriteriaJSON(acSnapshotJSON),
-			EstimatedCostUsd: callCostUSD,
+			ItemID:                 item.ID,
+			SessionUUID:            reviewSessionUUID,
+			ConversationUUID:       reviewConversationID,
+			SessionRole:            session.SessionRoleReview,
+			AcSnapshot:             session.AcCriteriaJSON(acSnapshotJSON),
+			EstimatedCostUsd:       callCostUSD,
+			CostUnpriced:           !callCostPriced,
+			ResolvedProgram:        reviewExecProgram,
+			ResolvedModel:          reviewResolvedModel,
+			ExecutorSnapshotHash:   reviewExecutorHash,
+			ConfiguredProgram:      reviewConfiguredProgram,
+			ExecutorFallbackReason: reviewFallbackReason,
 		}, session.ReviewVerdictData{
 			OverallOutcome: overall,
 			PerCriterion:   string(perCriterionJSON),
@@ -3040,7 +3170,7 @@ Do not modify the code. Only write the review verdict.
 	}
 
 	inst, spawnErr := s.sessionCreator.CreateDirectorySession(ctx, title, item.RepoPath, reReviewPrompt,
-		[]string{"backlog:review"}, !useAutonomous /*oneShot*/, true /*hidden*/)
+		[]string{"backlog:review"}, !useAutonomous /*oneShot*/, true /*hidden*/, "" /*programOverride: review-stage threading is out of Epic 2.4's scope*/)
 	if spawnErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn re-review session: %w", spawnErr))
 	}
@@ -3155,18 +3285,30 @@ func (s *BacklogService) tombstoneOrphanWorkSessions(ctx context.Context, itemID
 // StopSessionByUUID, since rework rounds share one worktree/branch across
 // their "-rN" revisions (see buildRevisionTitle) and StopSessionByUUID's
 // Instance.Kill also runs CleanupWorktree.
-func (s *BacklogService) killEndedWorkSessionPanes(ctx context.Context, sessions []session.ItemSessionSummary) {
+//
+// Returns the UUIDs whose kill attempt errored — KillTmuxPaneOnly
+// deregisters a session it actually kills, so every UUID NOT in this set is
+// already confirmed dead (killed just now, or already gone before the
+// attempt); only a genuine kill failure leaves real doubt worth
+// findConfirmedLiveWorkSession (8b2) re-checking.
+func (s *BacklogService) killEndedWorkSessionPanes(ctx context.Context, sessions []session.ItemSessionSummary) map[string]bool {
 	if s.sessionStopper == nil {
-		return
+		return nil
 	}
+	var unconfirmedDead map[string]bool
 	for _, is := range sessions {
 		if is.Role != string(session.SessionRoleWork) || is.EndedAt == nil {
 			continue
 		}
 		if err := s.sessionStopper.KillTmuxPaneOnly(ctx, is.SessionUUID); err != nil {
 			log.Warn("[killEndedWorkSessionPanes] kill failed", "session", is.SessionUUID, "error", err)
+			if unconfirmedDead == nil {
+				unconfirmedDead = make(map[string]bool)
+			}
+			unconfirmedDead[is.SessionUUID] = true
 		}
 	}
+	return unconfirmedDead
 }
 
 // tombstoneOrphanTriageSessions marks any open triage ItemSessions that are no longer

@@ -227,6 +227,11 @@ func itemSessionToSummary(is *ent.ItemSession) ItemSessionSummary {
 		AcSnapshot:               AcCriteriaJSON(is.AcSnapshot),
 		PipelineModeSnapshot:     is.PipelineModeSnapshot,
 		PipelineModeSnapshotHash: is.PipelineModeSnapshotHash,
+		ResolvedProgram:          is.ResolvedProgram,
+		ResolvedModel:            is.ResolvedModel,
+		ExecutorSnapshotHash:     is.ExecutorSnapshotHash,
+		ConfiguredProgram:        is.ConfiguredProgram,
+		ExecutorFallbackReason:   is.ExecutorFallbackReason,
 		BaseCommitSha:            is.BaseCommitSha,
 		LastCommitSha:            is.LastCommitSha,
 		LastCommitMessage:        is.LastCommitMessage,
@@ -240,6 +245,7 @@ func itemSessionToSummary(is *ent.ItemSession) ItemSessionSummary {
 		LastProgressAt:           is.LastProgressAt,
 		CreatedAt:                is.CreatedAt,
 		EstimatedCostUsd:         is.EstimatedCostUsd,
+		CostPriced:               is.CostPriced,
 		TriageResult:             is.TriageResult,
 		TriageResultSummary:      triageResultSummary,
 		VerificationNotes:        is.VerificationNotes,
@@ -342,6 +348,7 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		ShippedFileStats:             item.ShippedFileStats,
 		ShippedSnapshotCaptureFailed: item.ShippedSnapshotCaptureFailed,
 		ReworkCapOverride:            item.ReworkCapOverride,
+		CostBudgetThresholdUsd:       item.CostBudgetThresholdUsd,
 		NextWorkflowID:               item.NextWorkflowID,
 		ChainFired:                   item.ChainFired,
 		ChainedAt:                    item.ChainedAt,
@@ -462,6 +469,7 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data BacklogItemD
 		SetLabels(data.Labels).
 		SetNillableArchivedAt(data.ArchivedAt).
 		SetNillableReworkCapOverride(data.ReworkCapOverride).
+		SetNillableCostBudgetThresholdUsd(data.CostBudgetThresholdUsd).
 		SetNillableGithubSyncedIssueUpdatedAt(data.GitHubSyncedIssueUpdatedAt)
 
 	if data.SourceID != "" {
@@ -1114,6 +1122,9 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	if update.ReworkCapOverride != nil {
 		u.SetReworkCapOverride(*update.ReworkCapOverride)
 	}
+	if update.CostBudgetThresholdUsd != nil {
+		u.SetCostBudgetThresholdUsd(*update.CostBudgetThresholdUsd)
+	}
 	if update.ExternalURL != nil {
 		u.SetExternalURL(*update.ExternalURL)
 	}
@@ -1260,6 +1271,9 @@ func updatedFieldsFromBacklogItemUpdate(update BacklogItemUpdate) []string {
 	}
 	if update.ReworkCapOverride != nil {
 		fields = append(fields, "reworkCapOverride")
+	}
+	if update.CostBudgetThresholdUsd != nil {
+		fields = append(fields, "costBudgetThresholdUsd")
 	}
 	if update.ExternalURL != nil {
 		fields = append(fields, "externalUrl")
@@ -1458,36 +1472,78 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 	result := backlogItemToData(existing)
 	r.attachItemSessionsForPublish(ctx, &result)
 
-	// Resolve item_session IDs first so we can delete their review_verdicts.
-	itemSessionIDs, err := r.client.ItemSession.Query().
+	// Resolve full item_session rows (not just IDs) so their cost fields can be
+	// preserved in the deleted-cost ledger below before they're hard-deleted.
+	itemSessions, err := r.client.ItemSession.Query().
 		Where(itemsession.HasBacklogItemWith(backlogitem.ID(parsedID))).
-		IDs(ctx)
+		All(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to query item sessions for backlog item %s: %w", id, err)
 	}
 
-	if len(itemSessionIDs) > 0 {
-		_, err = r.client.ReviewVerdict.Delete().
+	// The ledger write and the three deletes below must commit atomically: a
+	// partial failure between the ledger CreateBulk and BacklogItem.DeleteOneID
+	// would otherwise leave a retry racing a live ItemSession that a fresh
+	// DeleteBacklogItem call would ledger AGAIN — a permanent duplicate cost
+	// row (the ledger has no other retry-idempotency guard, only the
+	// session_uuid unique index added alongside this transaction to make a
+	// same-key retry fail loudly instead of double-counting). Follows the
+	// same r.client.Tx(ctx) pattern as MarkStuck/AddBacklogItemDependency
+	// above.
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("delete backlog item: begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if len(itemSessions) > 0 {
+		// Story 3: preserve each ItemSession's cost attribution in a durable
+		// ledger before it's hard-deleted below — see
+		// session/ent/schema/deleted_item_session_cost.go's doc comment for why
+		// this is additive-ledger rather than soft-delete.
+		ledgerBuilders := make([]*ent.DeletedItemSessionCostCreate, 0, len(itemSessions))
+		itemSessionIDs := make([]uuid.UUID, 0, len(itemSessions))
+		for _, is := range itemSessions {
+			itemSessionIDs = append(itemSessionIDs, is.ID)
+			ledgerBuilders = append(ledgerBuilders, tx.DeletedItemSessionCost.Create().
+				SetConversationUUID(is.ConversationUUID).
+				SetSessionUUID(is.SessionUUID).
+				SetSessionRole(is.SessionRole).
+				SetItemID(parsedID.String()).
+				SetItemTitle(existing.Title).
+				SetEstimatedCostUsd(is.EstimatedCostUsd).
+				SetCostPriced(is.CostPriced).
+				SetCreatedAt(is.CreatedAt))
+		}
+		if _, err := tx.DeletedItemSessionCost.CreateBulk(ledgerBuilders...).Save(ctx); err != nil {
+			return fmt.Errorf("delete backlog item: write deleted-cost ledger for %s: %w", id, err)
+		}
+
+		_, err = tx.ReviewVerdict.Delete().
 			Where(reviewverdict.HasItemSessionWith(itemsession.IDIn(itemSessionIDs...))).
 			Exec(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to delete review verdicts for backlog item %s: %w", id, err)
+			return fmt.Errorf("delete backlog item: delete review verdicts for %s: %w", id, err)
 		}
 
-		_, err = r.client.ItemSession.Delete().
+		_, err = tx.ItemSession.Delete().
 			Where(itemsession.IDIn(itemSessionIDs...)).
 			Exec(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to delete item sessions for backlog item %s: %w", id, err)
+			return fmt.Errorf("delete backlog item: delete item sessions for %s: %w", id, err)
 		}
 	}
 
-	err = r.client.BacklogItem.DeleteOneID(parsedID).Exec(ctx)
+	err = tx.BacklogItem.DeleteOneID(parsedID).Exec(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
 			return fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
 		}
-		return fmt.Errorf("failed to delete backlog item %s: %w", id, err)
+		return fmt.Errorf("delete backlog item: delete %s: %w", id, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("delete backlog item: commit: %w", err)
 	}
 
 	// Best-effort publish: never blocks or fails the delete itself. result was
@@ -1979,8 +2035,22 @@ func (r *EntRepository) attachItemSessionsForPublish(ctx context.Context, data *
 	data.ItemSessions = sessions
 }
 
+// maxPublishedStatusEvents caps how many status-transition rows a single
+// attachStatusEventsForPublish call loads and re-broadcasts. Without this,
+// an item stuck in a transition crash-loop (each retry appends one more
+// BacklogStatusEvent row) makes every subsequent publish reload and
+// re-broadcast the item's *entire*, ever-growing history — an O(N) cost per
+// transition that compounds into unbounded live-heap growth under a fast
+// retry loop (confirmed via pprof: this call path was 93% of a 7.6GB live
+// heap after ~80 minutes of a stuck session's retry storm). Same cap/pattern
+// as maxSourceSyncEventsHistory above; 200 is far more than any legitimate
+// transition history needs for the live-update UI merge this exists for
+// (see doc comment below) while bounding the pathological case.
+const maxPublishedStatusEvents = 200
+
 // attachStatusEventsForPublish best-effort loads and attaches this item's
-// status-transition audit trail onto data before it's handed to
+// most recent status-transition audit trail (capped at
+// maxPublishedStatusEvents) onto data before it's handed to
 // publishItemChanged, mirroring attachItemSessionsForPublish above.
 //
 // Every publish-hook call site builds its BacklogItemData from a plain
@@ -2004,9 +2074,12 @@ func (r *EntRepository) attachStatusEventsForPublish(ctx context.Context, data *
 		log.WarningLog().Printf("[EntRepository] attachStatusEventsForPublish: invalid item id %s: %v", data.ID, err)
 		return
 	}
+	// Fetch most-recent-first (capped) then reverse, so the attached slice
+	// keeps its existing ascending (oldest-first) contract for consumers.
 	events, err := r.client.BacklogStatusEvent.Query().
 		Where(backlogstatusevent.ItemID(parsedID)).
-		Order(ent.Asc(backlogstatusevent.FieldCreatedAt)).
+		Order(ent.Desc(backlogstatusevent.FieldCreatedAt)).
+		Limit(maxPublishedStatusEvents).
 		All(ctx)
 	if err != nil {
 		log.WarningLog().Printf("[EntRepository] attachStatusEventsForPublish: failed to load status events for item %s: %v", data.ID, err)
@@ -2014,7 +2087,7 @@ func (r *EntRepository) attachStatusEventsForPublish(ctx context.Context, data *
 	}
 	data.StatusEvents = make([]BacklogStatusEventData, len(events))
 	for i, ev := range events {
-		data.StatusEvents[i] = backlogStatusEventToData(ev)
+		data.StatusEvents[len(events)-1-i] = backlogStatusEventToData(ev)
 	}
 }
 
@@ -2224,6 +2297,71 @@ func (r *EntRepository) RecordRemediationAttempt(ctx context.Context, itemID str
 	n, err := update.Save(ctx)
 	if err != nil {
 		return false, fmt.Errorf("record remediation attempt %s/%s: %w", itemID, reason, err)
+	}
+	return n > 0, nil
+}
+
+// RecordDiagnoseNudgeAttempt records that a Diagnose & Nudge nudge attempt
+// was just made for an open (item_id, reason) row: sets diagnose_nudge_count
+// to count and diagnose_next_eligible_at to nextAt. Mirrors
+// RecordRemediationAttempt's shape/scoping (WHERE resolved_at IS NULL) for
+// the sibling counter — see session/diagnose_nudge.go for the calling
+// convention.
+func (r *EntRepository) RecordDiagnoseNudgeAttempt(ctx context.Context, itemID string, reason domain.StuckReason, count int32, nextAt *time.Time) (bool, error) {
+	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
+	if err != nil {
+		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+	}
+
+	update := r.client.BacklogStuckState.Update().
+		Where(
+			backlogstuckstate.ItemID(parsedID),
+			backlogstuckstate.Reason(string(reason)),
+			backlogstuckstate.ResolvedAtIsNil(),
+		).
+		SetDiagnoseNudgeCount(count)
+	if nextAt != nil {
+		update = update.SetDiagnoseNextEligibleAt(*nextAt)
+	} else {
+		update = update.ClearDiagnoseNextEligibleAt()
+	}
+
+	n, err := update.Save(ctx)
+	if err != nil {
+		return false, fmt.Errorf("record diagnose nudge attempt %s/%s: %w", itemID, reason, err)
+	}
+	return n > 0, nil
+}
+
+// RecordDiagnoseNudgeAttemptIfBelowCap atomically increments an open
+// (item_id, reason) row's diagnose_nudge_count by exactly 1 and sets
+// diagnose_next_eligible_at, but only if the row's current count is below
+// maxAttempts — a single UPDATE ... WHERE diagnose_nudge_count < ? statement,
+// so two concurrent nudge attempts for the same (item, reason) can't both
+// read a stale count in Go and both "succeed" (the plain read-then-Set
+// RecordDiagnoseNudgeAttempt above still does that, and remains used only to
+// seed a specific count directly in tests). Returns incremented=false with no
+// error, not an error, when no open row exists or the row was already at/over
+// cap when this UPDATE ran — see Storage.RecordDiagnoseNudgeAttempt's doc
+// comment for the caller-facing semantics this backs.
+func (r *EntRepository) RecordDiagnoseNudgeAttemptIfBelowCap(ctx context.Context, itemID string, reason domain.StuckReason, maxAttempts int32, nextAt time.Time) (incremented bool, err error) {
+	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
+	if err != nil {
+		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+	}
+
+	n, err := r.client.BacklogStuckState.Update().
+		Where(
+			backlogstuckstate.ItemID(parsedID),
+			backlogstuckstate.Reason(string(reason)),
+			backlogstuckstate.ResolvedAtIsNil(),
+			backlogstuckstate.DiagnoseNudgeCountLT(maxAttempts),
+		).
+		AddDiagnoseNudgeCount(1).
+		SetDiagnoseNextEligibleAt(nextAt).
+		Save(ctx)
+	if err != nil {
+		return false, fmt.Errorf("record diagnose nudge attempt (atomic) %s/%s: %w", itemID, reason, err)
 	}
 	return n > 0, nil
 }
@@ -2798,11 +2936,43 @@ func (r *EntRepository) GetAllItemSessionsWithBacklogInfo(ctx context.Context) (
 			continue
 		}
 		results = append(results, ItemSessionBacklogEntry{
-			SessionUUID: is.SessionUUID,
-			SessionRole: is.SessionRole,
-			ItemID:      is.Edges.BacklogItem.ID.String(),
-			ItemTitle:   is.Edges.BacklogItem.Title,
-			ItemStatus:  is.Edges.BacklogItem.Status,
+			ItemSessionID:    is.ID.String(),
+			SessionUUID:      is.SessionUUID,
+			ConversationUUID: is.ConversationUUID,
+			SessionRole:      is.SessionRole,
+			ItemID:           is.Edges.BacklogItem.ID.String(),
+			ItemTitle:        is.Edges.BacklogItem.Title,
+			ItemStatus:       is.Edges.BacklogItem.Status,
+			EstimatedCostUsd: is.EstimatedCostUsd,
+			CostPriced:       is.CostPriced,
+			CreatedAt:        is.CreatedAt,
+		})
+	}
+	return results, nil
+}
+
+// GetDeletedItemSessionCostLedger returns every DeletedItemSessionCost row —
+// the durable cost-attribution ledger DeleteBacklogItem writes before
+// hard-deleting an item's ItemSession rows (Story 3). Used by Insights to
+// keep a deleted item's cost attributed by conversation UUID after the item
+// itself is gone.
+func (r *EntRepository) GetDeletedItemSessionCostLedger(ctx context.Context) ([]DeletedItemSessionCostEntry, error) {
+	//nolint:entfullscan feeds the Insights dashboard, which needs the full ledger.
+	rows, err := r.client.DeletedItemSessionCost.Query().All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query deleted item session cost ledger: %w", err)
+	}
+	results := make([]DeletedItemSessionCostEntry, 0, len(rows))
+	for _, row := range rows {
+		results = append(results, DeletedItemSessionCostEntry{
+			ConversationUUID: row.ConversationUUID,
+			SessionUUID:      row.SessionUUID,
+			SessionRole:      row.SessionRole,
+			ItemID:           row.ItemID,
+			ItemTitle:        row.ItemTitle,
+			EstimatedCostUsd: row.EstimatedCostUsd,
+			CostPriced:       row.CostPriced,
+			CreatedAt:        row.CreatedAt,
 		})
 	}
 	return results, nil

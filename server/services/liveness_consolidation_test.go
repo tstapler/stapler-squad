@@ -188,6 +188,51 @@ func TestFindConfirmedLiveInstance_MapMiss_ShadowConfirmsAlive_ReturnsInstance(t
 	assert.True(t, svc.IsSessionLive(uuid), "IsSessionLive must route through the same confirmed-liveness check")
 }
 
+// TestKillTmuxPaneOnly_DeregistersFromPollerOnSuccess is the regression test
+// for a real bug found in code review: findConfirmedLiveInstance's fast path
+// (FindLiveInstance's poller-map hit) trusts poller registration
+// unconditionally, with no IsBackendProcessAlive() check — that verification
+// only runs on the map-miss fallback path. KillTmuxPaneOnly used to kill the
+// tmux pane but never deregister the Instance from the poller, so a
+// subsequent IsSessionLive call on the same UUID kept hitting the fast path
+// and reporting it live — exactly the failure mode spawnSessionAfterGates'
+// 8b2 check (findConfirmedLiveWorkSession) exists to catch, self-inflicted by
+// killEndedWorkSessionPanes' own kill a few lines earlier in the same call.
+// Uses a real, isolated-socket tmux session (not a mock) so this proves an
+// actual kill-session subprocess call, not just an in-memory bookkeeping
+// change.
+func TestKillTmuxPaneOnly_DeregistersFromPollerOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	title := "kill-pane-dereg-" + fmt.Sprint(time.Now().UnixNano())
+	const uuid = "uuid-kill-pane-dereg"
+	socket := startRealTmuxSession(t, title)
+
+	inst, err := session.FromInstanceDataDeferred(session.InstanceData{
+		Title:            title,
+		UUID:             uuid,
+		Path:             t.TempDir(),
+		Status:           session.Active,
+		TmuxServerSocket: socket,
+		TmuxPrefix:       tmux.TmuxPrefix,
+		Program:          "claude",
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
+	})
+	require.NoError(t, err)
+
+	poller := newEmptyPoller()
+	poller.SetInstances([]*session.Instance{inst})
+	svc := &SessionService{reviewQueuePoller: poller}
+
+	require.True(t, svc.IsSessionLive(uuid), "precondition: instance is genuinely alive in tmux and registered in the poller")
+
+	require.NoError(t, svc.KillTmuxPaneOnly(context.Background(), uuid))
+
+	assert.False(t, svc.IsSessionLive(uuid),
+		"after a successful kill, the poller-registered instance must no longer report live — otherwise every later confirmed-liveness check (spawnSessionAfterGates' 8b2) keeps seeing a genuinely-dead session as live forever")
+}
+
 // startRealTmuxSession starts a real, detached tmux session named exactly as a
 // persisted instance with this title resolves to, on the per-process isolated
 // socket tmux.ResolveSocket hands every tmux call inside a `go test` binary,
@@ -263,7 +308,17 @@ func TestOtherLiveSessionInsideWorktree_LiveSiblingInsideWorktree_Blocks(t *test
 	t.Parallel()
 
 	worktree := t.TempDir()
-	sibling := newLiveProbeInstance(t, "live-sibling-"+t.Name(), filepath.Join(worktree, "server", "services"))
+	siblingCWD := filepath.Join(worktree, "server", "services")
+	// CanonicalizeWorktreePath (server/services/session_service.go's
+	// OtherLiveSessionInsideWorktree) resolves symlinks via filepath.EvalSymlinks,
+	// which silently falls back to filepath.Clean on a nonexistent path -- so a
+	// sibling cwd that's never created on disk would skip symlink resolution
+	// while worktree (a real t.TempDir()) gets resolved, breaking the prefix
+	// match on any host with a symlink hop in its temp dir (macOS: /var ->
+	// /private/var). Must exist on disk for this test to actually exercise the
+	// canonicalization path it's guarding.
+	require.NoError(t, os.MkdirAll(siblingCWD, 0o755))
+	sibling := newLiveProbeInstance(t, "live-sibling-"+t.Name(), siblingCWD)
 	poller := newEmptyPoller()
 	poller.SetInstances([]*session.Instance{sibling})
 	svc := &SessionService{reviewQueuePoller: poller}
@@ -312,16 +367,99 @@ func TestOtherLiveSessionInsideWorktree_ExcludedAndUnrelatedAndDead_NotBlocked(t
 	}
 }
 
+// TestConversationOwnedByOtherLiveSession_should_ReportOwnership_When_LiveSiblingSharesUUIDAndPath
+// is worktree-envvars-hijack validation.md row 29 / Story 1.4.2's SessionService-level
+// unit test: unlike OtherLiveSessionInsideWorktree, path overlap alone must never be
+// enough to report ownership -- the sibling must also already own this exact
+// conversation UUID, so a session detecting its OWN first conversation at a shared
+// path is never mistaken for adopting someone else's.
+func TestConversationOwnedByOtherLiveSession_should_ReportOwnership_When_LiveSiblingSharesUUIDAndPath(t *testing.T) {
+	t.Parallel()
+
+	const conversationUUID = "550e8400-e29b-41d4-a716-446655440000"
+	sharedPath := t.TempDir()
+
+	t.Run("no reviewQueuePoller: nothing can be proven, so nothing may be reported owned", func(t *testing.T) {
+		t.Parallel()
+		svc := &SessionService{}
+		_, owned := svc.ConversationOwnedByOtherLiveSession("self-uuid", conversationUUID, sharedPath)
+		assert.False(t, owned)
+	})
+
+	t.Run("live sibling shares UUID and path: reports ownership", func(t *testing.T) {
+		t.Parallel()
+		sibling := newLiveProbeInstance(t, "owner-"+t.Name(), sharedPath)
+		sibling.SetHistoryInfo(conversationUUID, filepath.Join(sharedPath, conversationUUID+".jsonl"))
+		poller := newEmptyPoller()
+		poller.SetInstances([]*session.Instance{sibling})
+		svc := &SessionService{reviewQueuePoller: poller}
+
+		ownerUUID, owned := svc.ConversationOwnedByOtherLiveSession("self-uuid", conversationUUID, sharedPath)
+
+		require.True(t, owned, "a live sibling that already owns this exact conversation UUID at this path must be reported")
+		assert.Equal(t, sibling.UUID, ownerUUID)
+	})
+
+	t.Run("self-exclusion: a session's own record is never reported as another owner", func(t *testing.T) {
+		t.Parallel()
+		self := newLiveProbeInstance(t, "self-"+t.Name(), sharedPath)
+		self.SetHistoryInfo(conversationUUID, filepath.Join(sharedPath, conversationUUID+".jsonl"))
+		poller := newEmptyPoller()
+		poller.SetInstances([]*session.Instance{self})
+		svc := &SessionService{reviewQueuePoller: poller}
+
+		_, owned := svc.ConversationOwnedByOtherLiveSession(self.UUID, conversationUUID, sharedPath)
+
+		assert.False(t, owned, "cold-restore self-recovery must never be blocked by a session's own record")
+	})
+
+	t.Run("path shared but UUID differs: not reported owned (legitimate SessionTypeDirectory path-sharing)", func(t *testing.T) {
+		t.Parallel()
+		sibling := newLiveProbeInstance(t, "different-uuid-"+t.Name(), sharedPath)
+		sibling.SetHistoryInfo("11111111-1111-1111-1111-111111111111", filepath.Join(sharedPath, "other.jsonl"))
+		poller := newEmptyPoller()
+		poller.SetInstances([]*session.Instance{sibling})
+		svc := &SessionService{reviewQueuePoller: poller}
+
+		_, owned := svc.ConversationOwnedByOtherLiveSession("self-uuid", conversationUUID, sharedPath)
+
+		assert.False(t, owned, "path overlap alone must never be enough -- the sibling must own this exact UUID")
+	})
+
+	t.Run("dead sibling: not reported owned", func(t *testing.T) {
+		t.Parallel()
+		dead := newDeadProbeInstance(t, "dead-"+t.Name(), sharedPath)
+		dead.SetHistoryInfo(conversationUUID, filepath.Join(sharedPath, conversationUUID+".jsonl"))
+		poller := newEmptyPoller()
+		poller.SetInstances([]*session.Instance{dead})
+		svc := &SessionService{reviewQueuePoller: poller}
+
+		_, owned := svc.ConversationOwnedByOtherLiveSession("self-uuid", conversationUUID, sharedPath)
+
+		assert.False(t, owned, "a no-longer-live sibling must not block adoption")
+	})
+}
+
 // --------------------------------------------------------------------------
 // findConfirmedLiveWorkSession (spawnSessionAfterGates' 8b2 cap)
 // --------------------------------------------------------------------------
 
 // TestFindConfirmedLiveWorkSession covers the 8b2 concurrent-liveness cap's
-// contract. The "ended work session stays skipped even when the stopper says
-// live" case pins the deliberate scope boundary against findActiveWorkSession;
-// the "open + confirmed live" case is the one that fails against an
+// contract. The "open + confirmed live" case is the one that fails against an
 // EndedAt-only staleness check, since that check alone is what the 2026-09-12
-// incident showed can be wrong.
+// incident showed can be wrong. The "already-tombstoned but confirmed live,
+// in mustRecheck" case is the guard's actual reason for existing per its doc
+// comment: 8b (findActiveWorkSession) already blocks every EndedAt==nil work
+// session regardless of confirmed liveness, so this function only ever runs
+// against sessions 8b let through — i.e. ones already marked ended.
+// Excluding EndedAt!=nil sessions entirely (the pre-fix behavior) made 8b2
+// permanently unreachable in production; see
+// TestSpawnSessionFromItem_should_Refuse_When_WronglyTombstonedSessionIsConfirmedLive
+// for the end-to-end regression. The "not in mustRecheck" case is the
+// performance fix on top of that: killEndedWorkSessionPanes (8a2) already
+// confirmed dead every EndedAt!=nil session it doesn't report back in
+// mustRecheck, so this must not pay for an extra IsSessionLive call — proven
+// here by a stopper that would (wrongly) claim it live if asked.
 func TestFindConfirmedLiveWorkSession(t *testing.T) {
 	t.Parallel()
 
@@ -329,12 +467,14 @@ func TestFindConfirmedLiveWorkSession(t *testing.T) {
 	open := session.ItemSessionSummary{SessionUUID: "uuid-open-work", Role: session.SessionRoleWork}
 	tombstoned := session.ItemSessionSummary{SessionUUID: "uuid-ended-work", Role: session.SessionRoleWork, EndedAt: &ended}
 	review := session.ItemSessionSummary{SessionUUID: "uuid-review", Role: session.SessionRoleReview}
+	allEndedRecheck := map[string]bool{"uuid-ended-work": true}
 
 	cases := []struct {
-		name     string
-		stopper  SessionStopper
-		prior    []session.ItemSessionSummary
-		wantUUID string
+		name        string
+		stopper     SessionStopper
+		prior       []session.ItemSessionSummary
+		mustRecheck map[string]bool
+		wantUUID    string
 	}{
 		{
 			name:    "nil stopper never blocks",
@@ -342,9 +482,24 @@ func TestFindConfirmedLiveWorkSession(t *testing.T) {
 			prior:   []session.ItemSessionSummary{open},
 		},
 		{
-			name:    "ended work session is skipped even when the stopper reports it live",
+			name:        "already-tombstoned work session confirmed live still blocks the spawn",
+			stopper:     &mockSessionStopper{liveUUIDs: map[string]bool{"uuid-ended-work": true}},
+			prior:       []session.ItemSessionSummary{tombstoned},
+			mustRecheck: allEndedRecheck,
+			wantUUID:    "uuid-ended-work",
+		},
+		{
+			name:        "tombstoned work session the stopper cannot confirm live does not block",
+			stopper:     &mockSessionStopper{liveUUIDs: map[string]bool{}},
+			prior:       []session.ItemSessionSummary{tombstoned},
+			mustRecheck: allEndedRecheck,
+		},
+		{
+			name:    "already-confirmed-dead tombstoned session is not rechecked even if the stopper would (wrongly) call it live",
 			stopper: &mockSessionStopper{liveUUIDs: map[string]bool{"uuid-ended-work": true}},
 			prior:   []session.ItemSessionSummary{tombstoned},
+			// mustRecheck omitted: killEndedWorkSessionPanes already confirmed
+			// this one dead, so IsSessionLive must never be consulted for it.
 		},
 		{
 			name:    "non-work role is out of scope",
@@ -357,7 +512,7 @@ func TestFindConfirmedLiveWorkSession(t *testing.T) {
 			prior:   []session.ItemSessionSummary{open},
 		},
 		{
-			name:     "open work session confirmed live blocks the spawn",
+			name:     "open work session confirmed live blocks the spawn regardless of mustRecheck",
 			stopper:  &mockSessionStopper{liveUUIDs: map[string]bool{"uuid-open-work": true}},
 			prior:    []session.ItemSessionSummary{tombstoned, review, open},
 			wantUUID: "uuid-open-work",
@@ -367,7 +522,7 @@ func TestFindConfirmedLiveWorkSession(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := findConfirmedLiveWorkSession(tc.stopper, tc.prior)
+			got := findConfirmedLiveWorkSession(tc.stopper, tc.prior, tc.mustRecheck)
 			if tc.wantUUID == "" {
 				assert.Nil(t, got)
 				return

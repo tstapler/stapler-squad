@@ -199,11 +199,23 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"SearchGitHubRepos": "SearchGitHubRepos",
 	"ListGitHubIssues":  "ListGitHubIssues",
 	"ImportGitHubIssue": "ImportGitHubIssue",
+	// Cross-host claim RPCs (#893): identity ids, matching the committed fallback-id registry files.
+	"CheckCrossHostClaim": "CheckCrossHostClaim",
+	"ListForeignClaims":   "ListForeignClaims",
+	"OverrideClaimBlock":  "OverrideClaimBlock",
+	"RecordClaimOverride": "RecordClaimOverride",
+	"ResolveClaimDispute": "ResolveClaimDispute",
 	// Launcher presets RPCs
 	"GetLauncherPresets": "launcher_presets:get",
+	// Program config RPCs
+	"ListProgramsConfig":  "program_config:list",
+	"UpsertProgramConfig": "program_config:upsert",
+	"DeleteProgramConfig": "program_config:delete",
 	// Session lifecycle RPCs
 	"ArchiveSession":          "session:archive",
 	"UnarchiveSession":        "session:unarchive",
+	"PinSession":              "session:pin",
+	"UnpinSession":            "session:unpin",
 	"HibernateSession":        "session:hibernate",
 	"ResumeHibernatedSession": "session:resume-hibernated",
 	"ResumeCrashedSession":    "session:resume-crashed",
@@ -318,8 +330,15 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// remote.proto/headless.proto above, caught by TestMethodToIDCompleteness's
 	// glob. Wired fully (map entry + Makefile enumeration) like remote.proto,
 	// not left as a followup like headless.proto, since it was cheap here.
-	"GetHandoffSummary":     "handoff-summary:get",
-	"TriggerHandoffSummary": "handoff-summary:trigger",
+	// Tagging-classifier RPCs (tagging_classifier_service.go).
+	"GetTaggingClassifierConfig":    "tagging-classifier:get-config",
+	"UpdateTaggingClassifierConfig": "tagging-classifier:update-config",
+	"ReclassifySessionTags":         "tagging-classifier:reclassify-session",
+	"ListTaggingRules":              "tagging-rule:list",
+	"UpsertTaggingRule":             "tagging-rule:upsert",
+	"DeleteTaggingRule":             "tagging-rule:delete",
+	"GetHandoffSummary":             "handoff-summary:get",
+	"TriggerHandoffSummary":         "handoff-summary:trigger",
 	// LivenessDefinition CRUD RPCs (Epic 1.3 of backlog-custom-workflow-stages)
 	// -- pre-existing collateral debt found by TestMethodToIDCompleteness
 	// while wiring Epic 2.7's own methodToID entries below: these markers
@@ -356,16 +375,6 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"ListTransitionGates":   "backlog:list-transition-gates",
 	"RecordGateApproval":    "backlog:record-gate-approval",
 	"GetPendingGates":       "backlog:get-pending-gates",
-	// Native git rollout RPCs (NativeGitRolloutService in native_git_rollout.proto)
-	// -- pre-existing collateral debt found by TestMethodToIDCompleteness: must
-	// match the "// +api: native-git-rollout:*" markers in
-	// server/services/native_git_rollout_service.go verbatim, same failure mode
-	// as the SearchGitHubRepos comment above.
-	"GetNativeGitRolloutStatus":        "native-git-rollout:get",
-	"SetNativeWorktreeGlobalOverride":  "native-git-rollout:set-worktree-global-override",
-	"SetNativeWorktreeSessionOverride": "native-git-rollout:set-worktree-session-override",
-	"SetNativeMergeGlobalOverride":     "native-git-rollout:set-merge-global-override",
-	"SetNativeMergeWorktreeOverride":   "native-git-rollout:set-merge-worktree-override",
 	// Tmux client/server version mismatch RPCs (session.proto) -- pre-existing
 	// collateral debt found by TestMethodToIDCompleteness: must match the
 	// "// +api: tmux:*" markers in server/services/tmux_version_status_service.go
@@ -386,6 +395,18 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// already uses the method-name-as-id convention (see the SearchGitHubRepos
 	// comment above), so match it verbatim rather than a kebab-case id.
 	"DismissFinding": "DismissFinding",
+	// Diagnose & Nudge RPCs (DiagnosticService in diagnose.proto, backlog item
+	// 68964304) -- must match the "// +api: session:diagnose-*" markers in
+	// server/services/diagnostic_service.go verbatim, same failure mode as
+	// the SearchGitHubRepos comment above.
+	"AssembleDiagnosticBundle": "session:diagnose-assemble-bundle",
+	"DispatchDiagnose":         "session:diagnose-dispatch",
+	// ProbeProgram (SessionService in session.proto) -- pre-existing gap found
+	// by TestMethodToIDCompleteness while adding the entries above (unrelated
+	// to Diagnose & Nudge). No "// +api:" marker exists on
+	// server/services/session_service.go's ProbeProgram handler, so
+	// markerFound stays false for this entry until one is added separately.
+	"ProbeProgram": "program:probe",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

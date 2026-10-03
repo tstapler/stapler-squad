@@ -38,6 +38,20 @@ func logPTYUnavailableIfUnexpected(msg, sessionTitle string, ptyErr error) {
 	log.Error(msg, "session", sessionTitle, "err", ptyErr)
 }
 
+// ErrWorktreeResolutionFailed is wrapped by startLocked's pre-spawn guard
+// when a worktree-bearing first-time session's resolved basePath is still
+// the bare repo root -- i.e. no real worktree was actually created.
+// Pipeline-level error classification matches on this sentinel via
+// errors.Is, never on the detailed message text.
+var ErrWorktreeResolutionFailed = errors.New("resolved to no real worktree")
+
+// ErrDirectoryCollision is wrapped by startLocked's pre-spawn cross-session
+// collision guard and per-path spawn reservation when a worktree-bearing
+// first-time session's resolved worktree path is already another live
+// session's active directory (or claimed by a racing in-flight spawn).
+// Pipeline-level error classification matches on this sentinel via errors.Is.
+var ErrDirectoryCollision = errors.New("worktree already in use by another live session")
+
 type Status int
 
 const (
@@ -202,6 +216,15 @@ type Instance struct {
 	WorkingDir string
 	// Branch is the branch of the instance.
 	Branch string
+	// CreationWarning is a one-time, non-fatal signal set during
+	// setupFirstTimeWorktree (SessionTypeNewWorktree) when the source repo's
+	// ambient checked-out HEAD diverged from the resolved default branch the
+	// new worktree actually branched from — see newWorktreeFromResolvedBase.
+	// Surfaced to MCP callers via instanceToDetail rather than logged only,
+	// per this bug's AC1. Never cleared or updated again after creation, so
+	// no actor setter is needed for it the way GetPath()'s doc comment
+	// requires for fields background goroutines can mutate later.
+	CreationWarning string
 	// Status is the status of the instance.
 	Status Status
 	// Program is the program to run in the instance.
@@ -245,6 +268,12 @@ type Instance struct {
 	// resuming/attaching to an already-running pane, where a CLI arg can't be injected after the
 	// fact. Replaces the static driverInitialPrompt when non-empty.
 	InitialPrompt string
+	// InitialPromptSentAt records when InitialPrompt was actually typed into the tmux pane, set
+	// via SetInitialPromptSentAt and persisted to storage. runSessionDriverWithPrompt checks this
+	// FIRST (before the output/JSONL heuristics in outputShowsConversationStarted) so a service
+	// restart's fresh driver goroutine doesn't re-derive -- and risk getting wrong -- whether the
+	// prompt was already sent, which used to re-type it into an already-completed session.
+	InitialPromptSentAt time.Time
 	// ExistingWorktree is an optional path to an existing worktree to reuse
 	ExistingWorktree string
 	// Category is used for organizing sessions into groups
@@ -259,6 +288,13 @@ type Instance struct {
 	// if the path does not exist. Set from the request's create_if_missing field.
 	// Not persisted — only relevant during initial session start.
 	CreateIfMissing bool `json:"-"`
+	// RequestedNewWorktree records whether the ORIGINAL wire-level CreateSession
+	// request asked explicitly for SESSION_TYPE_NEW_WORKTREE, captured before any
+	// legitimate remap (alias fallback, deferred-GitHub-URL, resume-forced-directory,
+	// remote-target remap) runs. Feeds startLocked's invariant check that a
+	// non-remote NEW_WORKTREE request always resolves to SessionTypeNewWorktree
+	// by the time startLocked runs. Not persisted; same convention as CreateIfMissing.
+	RequestedNewWorktree bool `json:"-"`
 	// TmuxPrefix is the prefix to use for tmux session names
 	TmuxPrefix string
 	// TmuxServerSocket is the server socket name for tmux isolation (used with -L flag)
@@ -366,6 +402,10 @@ type Instance struct {
 	// appear in the user-facing session viewer.
 	Hidden bool
 
+	// Pinned surfaces the session in the dedicated Pinned section of the list.
+	// Cleared automatically on archive (see setArchivedAtLocked).
+	Pinned bool
+
 	// ProjectID is the optional project this session belongs to.
 	ProjectID string
 
@@ -382,10 +422,20 @@ type Instance struct {
 	// decision. Guarded by claudeSessionMu, same lock order as HistoryFilePath.
 	LastReviveOutcome ReviveOutcome
 
-	// MCPServerURL is the URL of the stapler-squad HTTP MCP endpoint.
-	// When set, passed as --mcp-config to claude on session start so no
-	// settings-file injection is needed.
+	// MCPServerURL is the URL of the stapler-squad HTTP MCP endpoint, passed
+	// as --mcp-config to claude on session start. A one-shot value resolved
+	// at construction time; buildClaudeCommand prefers mcpServerURLProvider
+	// and only falls back to this field (via GetMCPServerURL) when no
+	// provider is wired or the provider itself resolves empty.
 	MCPServerURL string `json:"mcp_server_url,omitempty"`
+
+	// mcpServerURLProvider re-resolves the MCP URL fresh on every claude
+	// launch (see buildClaudeCommand), fixing the restart-drop gap a
+	// one-shot MCPServerURL leaves open. Not actor-routed like
+	// SetMCPServerURL/claudeSessionIDSavedCallback below: buildClaudeCommand
+	// runs inside the actor's own goroutine, so an actor-routed setter would
+	// deadlock on the mailbox (sendSyncErr) when called from there.
+	mcpServerURLProvider atomic.Pointer[func() string]
 
 	// AppendSystemPrompt, when non-empty and the program is claude, passes
 	// --append-system-prompt to inject extra instructions into the system prompt
@@ -461,6 +511,10 @@ type Instance struct {
 	// shellRepo is the persistence backend for shell operations. Injected by Storage
 	// after instance creation/loading; nil disables persistence (tests, external instances).
 	shellRepo ShellRepository
+
+	// initialPromptRepo persists InitialPromptSentAt. Injected by Storage after
+	// instance creation/loading, same as shellRepo; nil disables persistence.
+	initialPromptRepo InitialPromptRepository
 
 	// shellRegistryEmbed holds in-memory shell state via a concurrent ShellRegistry.
 	// Initialized by initShellRegistry(); shell operations go through instance_shells.go.
@@ -604,6 +658,27 @@ type Instance struct {
 	// convention elsewhere in this codebase — and means "recording disabled," not an error.
 	tagFireRecorder TagFireRecorder
 
+	// preSpawnCollisionGuard is called by startLocked's firstTimeSetup branch, after a
+	// real worktree path has resolved and before any tmux/process spawn, with that
+	// resolved worktree path. A non-nil return aborts the spawn. Wired via
+	// SetPreSpawnCollisionGuard by SessionService.wireCallbacks; nil is a valid value
+	// (e.g. a bare struct-literal test Instance) and means "no collision check configured."
+	preSpawnCollisionGuard func(worktreePath string) error
+
+	// worktreeSpawnReservation is called by startLocked immediately before
+	// preSpawnCollisionGuard, claiming worktreePath to close the TOCTOU race between
+	// two concurrent CreateSession calls resolving the same path before either has
+	// spawned. Returns a release func (deferred), or an error if another in-flight
+	// spawn already claimed the path.
+	worktreeSpawnReservation func(worktreePath string) (release func(), err error)
+
+	// conversationOwnershipGuard is called by tryExtractConversationUUID's DetectByPath
+	// fallback with a detected (conversationUUID, effectivePath) pair, before adopting
+	// that UUID for this instance. A true ownedByOther return means some OTHER live
+	// instance already owns this conversation, so the fallback must not attribute it
+	// to this instance instead. nil is a valid value and means "no ownership check configured."
+	conversationOwnershipGuard func(candidateUUID, path string) (ownerUUID string, ownedByOther bool)
+
 	// snapshot is a lock-free atomic copy of all mutable Instance fields, published
 	// by every mutator before it releases mu. Readers can call Snapshot()
 	// without acquiring any lock. Load() is guaranteed non-nil after construction.
@@ -702,6 +777,10 @@ type Instance struct {
 	restartCount       int64
 	recentRestartTimes []time.Time
 	restartMu          deadlock.Mutex
+	// restartStormUntil blocks further Start() attempts until this time once
+	// trackRestartRate observes a crash loop (see its doc comment) — zero
+	// means no active cooldown.
+	restartStormUntil time.Time
 
 	// restartTriggerMu serializes every setter that can trigger a restart on an
 	// Active instance (SwitchProgram, SetAutoApprove) so a manual program-switch
@@ -897,6 +976,13 @@ type InstanceOptions struct {
 	// Branch is the git branch name to use when creating a new worktree.
 	// If empty and SessionType is SessionTypeNewWorktree, a branch name is derived from the title.
 	Branch string
+	// CreationWarning seeds Instance.CreationWarning up front for a remote
+	// SessionTypeNewWorktree, whose base-branch resolution (and any ambient-
+	// HEAD-divergence detection) already ran synchronously in CreateSession's
+	// remote mode-specific block, before this Instance exists. The local
+	// path's equivalent (newWorktreeFromResolvedBase) instead sets the field
+	// directly during setupFirstTimeWorktree, since it runs after construction.
+	CreationWarning string
 	// Program is the program to run in the instance (e.g. "claude", "aider --model ollama_chat/gemma3:1b")
 	Program string
 	// If AutoYes is true, automatically accept prompts
@@ -979,6 +1065,9 @@ type InstanceOptions struct {
 	// if the path does not exist. Only set when the user has confirmed the action.
 	CreateIfMissing bool
 
+	// RequestedNewWorktree: see Instance.RequestedNewWorktree's doc comment.
+	RequestedNewWorktree bool
+
 	// AutonomousMode, when true, starts an AutonomousDriver after session creation
 	// so the session runs to completion without manual steering.
 	AutonomousMode bool
@@ -1059,6 +1148,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		Status:           Creating,
 		Path:             absPath,
 		Branch:           opts.Branch,
+		CreationWarning:  opts.CreationWarning,
 		Program:          opts.Program,
 		Height:           0,
 		Width:            0,
@@ -1104,11 +1194,12 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		PermissionMode:     opts.PermissionMode,
 		AutonomousMode:     opts.AutonomousMode,
 		// Directory creation on missing path (R2 confirmation flow)
-		CreateIfMissing: opts.CreateIfMissing,
-		EnvVars:         opts.EnvVars,
-		CLIFlags:        opts.CLIFlags,
-		ExtraArgs:       opts.ExtraArgs,
-		ExecutionTarget: opts.ExecutionTarget,
+		CreateIfMissing:      opts.CreateIfMissing,
+		RequestedNewWorktree: opts.RequestedNewWorktree,
+		EnvVars:              opts.EnvVars,
+		CLIFlags:             opts.CLIFlags,
+		ExtraArgs:            opts.ExtraArgs,
+		ExecutionTarget:      opts.ExecutionTarget,
 		// Restart-from-session lineage (Story 2.3.1)
 		RestartedFromSessionID: opts.RestartedFromSessionID,
 	}
@@ -1202,6 +1293,13 @@ func (i *Instance) SetShellRepository(repo ShellRepository) {
 	i.shellRepo = repo
 }
 
+// SetInitialPromptRepository injects the InitialPromptSentAt persistence backend.
+// Called by Storage after instance creation/loading; pass nil to disable
+// persistence (e.g., tests).
+func (i *Instance) SetInitialPromptRepository(repo InitialPromptRepository) {
+	i.initialPromptRepo = repo
+}
+
 // SetTagFireRecorder injects the tagging-rule fire-count recorder. Pass nil to disable
 // recording (the default) — see TagFireRecorder's doc comment.
 func (i *Instance) SetTagFireRecorder(recorder TagFireRecorder) {
@@ -1215,6 +1313,32 @@ func (i *Instance) SetTagFireRecorder(recorder TagFireRecorder) {
 // construction-time wiring, not a runtime mutation that needs mailbox serialization.
 func (i *Instance) SetTaggingEngine(engine *classifier.TaggingEngine) {
 	i.taggingEngine = engine
+}
+
+// SetPreSpawnCollisionGuard injects the cross-session directory-collision check that
+// startLocked calls, with the resolved worktree path, before any tmux/process spawn
+// (worktree-envvars-hijack Story 3.3.2). nil disables it. Construction-time wiring,
+// same lifecycle as SetTaggingEngine above.
+func (i *Instance) SetPreSpawnCollisionGuard(guard func(worktreePath string) error) {
+	i.preSpawnCollisionGuard = guard
+}
+
+// SetWorktreeSpawnReservation injects the per-path spawn-reservation claim that
+// startLocked calls immediately before preSpawnCollisionGuard, closing the TOCTOU
+// race between two concurrent CreateSession calls resolving the same worktree path
+// (worktree-envvars-hijack Story 3.3.2c). Pass nil to disable (the default). Not
+// actor-routed — construction-time wiring, same lifecycle as SetTaggingEngine above.
+func (i *Instance) SetWorktreeSpawnReservation(claim func(worktreePath string) (release func(), err error)) {
+	i.worktreeSpawnReservation = claim
+}
+
+// SetConversationOwnershipGuard injects the cross-session conversation-ownership check
+// that tryExtractConversationUUID's DetectByPath fallback calls before adopting a
+// detected conversation UUID (worktree-envvars-hijack Story 1.4.2). Pass nil to
+// disable (the default). Not actor-routed — construction-time wiring, same lifecycle
+// as SetTaggingEngine above.
+func (i *Instance) SetConversationOwnershipGuard(guard func(candidateUUID, path string) (ownerUUID string, ownedByOther bool)) {
+	i.conversationOwnershipGuard = guard
 }
 
 // ReclassifyTagsAfterCreate runs the tagging fixpoint (and the Unclassified coexistence
@@ -1439,6 +1563,9 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	log.Info("starting instance", "session", i.Title, "path", i.Path, "program", i.Program, "first_time_setup", firstTimeSetup)
 
 	if !firstTimeSetup {
+		if err := i.checkRestartStorm(); err != nil {
+			return err
+		}
 		i.trackRestartRate()
 	}
 
@@ -1451,6 +1578,16 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	// from "recovery just found one" (ResumeRecovered) — session-revive-uuid-loss AC3.
 	hadUUIDBeforeRecovery := i.HasClaudeSession()
 	i.recoverConversationBeforeLaunch(firstTimeSetup)
+
+	// Invariant check: a non-remote SESSION_TYPE_NEW_WORKTREE request must
+	// resolve to SessionTypeNewWorktree by here — a remote target is deliberately
+	// remapped to ExistingWorktree (see setupFirstTimeWorktree), the one known
+	// exception. See research/architecture.md Q1/Q2 for why this is otherwise impossible.
+	if resolvedType := i.Snapshot().SessionType; firstTimeSetup && i.RequestedNewWorktree && !i.executionTarget().IsRemote() && resolvedType != SessionTypeNewWorktree {
+		recordSessionCreationWorktreeTypeMismatch(resolvedType)
+		log.Warn("session_creation_worktree_type_mismatch: SESSION_TYPE_NEW_WORKTREE request resolved to a non-NewWorktree SessionType",
+			"session", i.Title, "uuid", i.UUID, "resolved_session_type", resolvedType)
+	}
 
 	// Set in every branch below (ColdRestore, HotRestore, firstTimeSetup) so
 	// LastReviveOutcome never goes stale across a later cycle that doesn't
@@ -1564,6 +1701,45 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			}
 			basePath = i.gitManager.GetWorktreePath()
 		}
+
+		// Pre-spawn structural guard: a SessionTypeNewWorktree session whose
+		// resolved basePath is still the bare repo root means no real worktree was
+		// actually created. Fail loudly and BEFORE any tmux/process spawn instead
+		// of silently running in the shared repo directory.
+		if repoPath := i.GetPath(); i.SessionType == SessionTypeNewWorktree && basePath == repoPath {
+			setupErr = fmt.Errorf("%w: session %q resolved to no real worktree (basePath == repo root %q)",
+				ErrWorktreeResolutionFailed, i.Title, repoPath)
+			return setupErr
+		}
+
+		if i.gitManager.HasWorktree() {
+			// Per-path spawn reservation (Story 3.3.2c): closes the TOCTOU race between
+			// two concurrent CreateSession calls resolving the same worktree path before
+			// either has spawned -- claimed BEFORE the liveness-based collision guard
+			// below, which only detects a sibling whose backend process is already alive.
+			if i.worktreeSpawnReservation != nil {
+				release, reserveErr := i.worktreeSpawnReservation(basePath)
+				if reserveErr != nil {
+					setupErr = fmt.Errorf("worktree spawn reservation failed: %w", reserveErr)
+					return setupErr
+				}
+				if release != nil {
+					defer release()
+				}
+			}
+			// Cross-session directory-collision guard: refuse to spawn into a
+			// directory another live session already occupies. Applies to every
+			// worktree-bearing first-time session, since the collision risk is a
+			// property of "did this session resolve a worktree," not of which
+			// request shape asked for one.
+			if i.preSpawnCollisionGuard != nil {
+				if guardErr := i.preSpawnCollisionGuard(basePath); guardErr != nil {
+					setupErr = fmt.Errorf("worktree collision check failed: %w", guardErr)
+					return setupErr
+				}
+			}
+		}
+
 		// Build the launch command (and, for large prompts, write the temp file
 		// promptArg() arms a cleanup timer on) only now that worktree setup — an
 		// unbounded-duration git operation — has completed. Building it earlier,
@@ -1689,6 +1865,9 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	log.Info("starting instance", "session", i.Title, "path", i.Path, "program", i.Program, "first_time_setup", firstTimeSetup)
 
 	if !firstTimeSetup {
+		if err := i.checkRestartStorm(); err != nil {
+			return err
+		}
 		i.trackRestartRate()
 	}
 
@@ -1833,6 +2012,11 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	} else {
 		// firstTimeSetup: a brand new instance can never have prior history to lose.
 		reviveOutcome = ReviveOutcomeFreshExpected
+		// KNOWN GAP: this legacy path skips the worktree-resolution, collision, and
+		// spawn-reservation guards startLocked's firstTimeSetup branch runs. Currently
+		// inert in production — every StartWithCleanup caller is in a _test.go file
+		// (repo-wide grep) — but a future production caller would bypass isolation
+		// safety entirely. Track consolidation under Epic 7.
 		basePath := i.Path
 		if i.gitManager.HasWorktree() {
 			// ExistingWorktree sessions have a pre-created worktree; Setup() would tear it down.
@@ -2211,19 +2395,8 @@ func (i *Instance) Resume() error {
 		}
 		program := i.buildLaunchCommand(claudeSessionID)
 		i.LaunchCommand = program
-		tmuxPrefix := i.TmuxPrefix
-		if tmuxPrefix == "" {
-			tmuxPrefix = "staplersquad_"
-		}
-		if tb, ok := i.processManager.(*TmuxBackend); ok {
-			if i.TmuxServerSocket != "" {
-				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithServerSocket(i.Title, program, tmuxPrefix, i.TmuxServerSocket, tmux.WithRegistry(nil)))
-			} else {
-				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithPrefix(i.Title, program, tmuxPrefix))
-			}
-			if i.UUID != "" {
-				tb.TmuxManager().Session().SetExtraEnv([]string{"STAPLER_SESSION_UUID=" + i.UUID})
-			}
+		if _, ok := i.processManager.(*TmuxBackend); ok {
+			i.wireTmuxSession(program)
 			if claudeSessionID != "" {
 				log.Info("resume: reinitializing tmux session with --resume", "session", i.Title, "uuid", claudeSessionID)
 			}
@@ -2422,24 +2595,9 @@ func (i *Instance) Restart(preserveOutput bool) error {
 	i.piSession = restorePiSession
 	i.piSessionMu.Unlock()
 
-	// Create a new tmux session
-	// Use configurable prefix or default
-	tmuxPrefix := i.TmuxPrefix
-	if tmuxPrefix == "" {
-		tmuxPrefix = "staplersquad_" // Default fallback
-	}
-
-	// Record the full launch command for diagnostics (MCP injection verification, etc.)
 	i.LaunchCommand = program
-
-	// Use server socket isolation if specified, otherwise use prefix-only isolation
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		if i.TmuxServerSocket != "" {
-			tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithServerSocket(i.Title, program, tmuxPrefix, i.TmuxServerSocket, tmux.WithRegistry(nil)))
-		} else {
-			tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithPrefix(i.Title, program, tmuxPrefix))
-		}
-	}
+	// Create and wire a new tmux session with full environment configuration
+	i.wireTmuxSession(program)
 
 	// Start the new session
 	if err := i.pm().Start(worktreePath); err != nil {

@@ -37,6 +37,70 @@ func TestAppScrollGate_should_ReturnTrue_When_CapabilityAltScreenIdleAndSingleSu
 	}
 }
 
+// TestAppScrollGate_should_ReturnTrue_When_DetectedStatusIsUnknownWithActiveController
+// covers Claude Code's ordinary resting prompt: MatchLines's `.*` ready
+// catch-all (session/detection/pattern_set.go) deliberately reports that as
+// StatusUnknown, not StatusIdle, so the gate must allowlist StatusUnknown
+// too whenever a controller is confirmed active -- otherwise every
+// scroll-forward request against a genuinely idle Claude session is
+// rejected (the bug this test guards against).
+func TestAppScrollGate_should_ReturnTrue_When_DetectedStatusIsUnknownWithActiveController(t *testing.T) {
+	inst := newScrollGateTestInstance(t, "claude", true, detection.StatusUnknown)
+
+	ok, failure, reason := AppScrollGate(inst, 1)
+
+	if !ok || failure != ScrollGateOK || reason != "" {
+		t.Fatalf("AppScrollGate() = (%v, %v, %q), want (true, ScrollGateOK, \"\")", ok, failure, reason)
+	}
+}
+
+// TestAppScrollGate_should_ReturnTrue_When_DetectedStatusIsSuccess covers the
+// other real resting state found via live manual testing (2026-09-21):
+// Claude Code's "Churned for Ns · done HH:MM" completion banner persists on
+// screen after a turn finishes, so MatchLines keeps matching StatusSuccess
+// indefinitely until the next turn -- a session that has ever completed a
+// turn sits here, not at StatusIdle/StatusUnknown, until it's interacted
+// with again. AutonomousDriver's isIdleStatus already treats StatusSuccess
+// as idle-equivalent for the more sensitive operation of injecting real
+// input (session/autonomous_driver.go); the scroll gate must match.
+func TestAppScrollGate_should_ReturnTrue_When_DetectedStatusIsSuccess(t *testing.T) {
+	inst := newScrollGateTestInstance(t, "claude", true, detection.StatusSuccess)
+
+	ok, failure, reason := AppScrollGate(inst, 1)
+
+	if !ok || failure != ScrollGateOK || reason != "" {
+		t.Fatalf("AppScrollGate() = (%v, %v, %q), want (true, ScrollGateOK, \"\")", ok, failure, reason)
+	}
+}
+
+// TestAppScrollGate_should_ReturnTrue_When_DetectedStatusIsReady covers the
+// other member of isIdleStatus's allowlist (session/autonomous_driver.go)
+// alongside StatusIdle and StatusSuccess above.
+func TestAppScrollGate_should_ReturnTrue_When_DetectedStatusIsReady(t *testing.T) {
+	inst := newScrollGateTestInstance(t, "claude", true, detection.StatusReady)
+
+	ok, failure, reason := AppScrollGate(inst, 1)
+
+	if !ok || failure != ScrollGateOK || reason != "" {
+		t.Fatalf("AppScrollGate() = (%v, %v, %q), want (true, ScrollGateOK, \"\")", ok, failure, reason)
+	}
+}
+
+// TestAppScrollGate_should_ReturnFalseWithNoActiveControllerReason_When_NoControllerIsRegistered
+// covers the other source of StatusUnknown: GetDetectedStatus also returns
+// it when no ClaudeController/PiStatusSource is active at all, which must
+// stay unsafe even though bare StatusUnknown is now allowlisted above.
+func TestAppScrollGate_should_ReturnFalseWithNoActiveControllerReason_When_NoControllerIsRegistered(t *testing.T) {
+	inst := &Instance{Title: t.Name(), Program: "claude", AltScreenActive: true}
+	inst.SetStatusManager(NewInstanceStatusManager())
+
+	ok, failure, reason := AppScrollGate(inst, 1)
+
+	if ok || failure != ScrollGateNoActiveController || reason != "no active status controller" {
+		t.Fatalf("AppScrollGate() = (%v, %v, %q), want (false, ScrollGateNoActiveController, \"no active status controller\")", ok, failure, reason)
+	}
+}
+
 func TestAppScrollGate_should_ReturnFalseWithUnsafeStatusReason_When_DetectedStatusIsExecuting(t *testing.T) {
 	inst := newScrollGateTestInstance(t, "claude", true, detection.StatusExecuting)
 

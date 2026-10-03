@@ -134,6 +134,10 @@ func (BacklogItem) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("Per-item override for the auto-rework cap (MaxAutoReworkIterationsOrDefault). Nil = use the global default. 0 = unlimited for this item. >0 = this item's own cap, replacing (not adding to) the global value."),
+		field.Float("cost_budget_threshold_usd").
+			Optional().
+			Nillable().
+			Comment("Per-item soft-budget-warning threshold in USD. Nil = no threshold configured, no warning ever fires for this item. Mirrors rework_cap_override's single-pointer-presence convention."),
 		field.UUID("next_workflow_id", uuid.UUID{}).
 			Optional().
 			Nillable().

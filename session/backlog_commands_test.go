@@ -275,6 +275,26 @@ func TestPruneStaleSlashCommandFiles_should_RemoveExtraFiles_When_NewItemHasFewe
 	}
 }
 
+func TestPruneStaleSlashCommandFiles_should_RemoveNonCriterionFiles_When_NotInNewSet(t *testing.T) {
+	cmdDir := t.TempDir()
+	for _, name := range []string{"ship.md", "old-mode-step.md", "status.md"} {
+		if err := os.WriteFile(filepath.Join(cmdDir, name), []byte("old"), 0o644); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+
+	pruneStaleSlashCommandFiles(cmdDir, map[string]string{"status.md": "new"})
+
+	for _, name := range []string{"ship.md", "old-mode-step.md"} {
+		if _, err := os.Stat(filepath.Join(cmdDir, name)); !os.IsNotExist(err) {
+			t.Errorf("expected stale %s to be pruned", name)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(cmdDir, "status.md")); err != nil {
+		t.Errorf("status.md is in the new set and must survive: %v", err)
+	}
+}
+
 // TestPruneStaleSlashCommandFiles_should_PreserveAllFiles_When_NewItemHasMoreOrEqualCriteria
 // verifies pruneStaleSlashCommandFiles never deletes a file that's about to be rewritten.
 func TestPruneStaleSlashCommandFiles_should_PreserveAllFiles_When_NewItemHasMoreOrEqualCriteria(t *testing.T) {

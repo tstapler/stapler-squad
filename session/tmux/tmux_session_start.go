@@ -678,6 +678,27 @@ func (t *TmuxSession) terminateOrphanedPriorProcess() {
 	}
 	if err := t.killPriorProcessFunc(); err != nil {
 		log.Warn("failed to terminate orphaned prior process before relaunch", "session", t.sanitizedName, "err", err)
+		return
+	}
+	t.waitForPriorProcessExit()
+}
+
+const (
+	priorProcessExitTimeout = 3 * time.Second
+	priorProcessPollEvery   = 50 * time.Millisecond
+)
+
+// waitForPriorProcessExit polls until the terminated process is gone, bounded
+// by priorProcessExitTimeout. A process that ignores SIGTERM is logged and the
+// relaunch proceeds anyway rather than blocking the restore path forever.
+func (t *TmuxSession) waitForPriorProcessExit() {
+	deadline := time.Now().Add(priorProcessExitTimeout)
+	for t.priorProcessAliveFunc() {
+		if time.Now().After(deadline) {
+			log.Warn("orphaned prior process still alive after SIGTERM wait; relaunching anyway", "session", t.sanitizedName)
+			return
+		}
+		time.Sleep(priorProcessPollEvery)
 	}
 }
 

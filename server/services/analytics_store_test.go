@@ -2,13 +2,16 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"regexp"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/session"
 	"go.uber.org/goleak"
 )
 
@@ -432,6 +435,86 @@ func TestAnalyticsStore_Record_AfterStop_NoPanic(t *testing.T) {
 	require.NotPanics(t, func() {
 		store.Record(AnalyticsEntry{SessionID: "sess-1", ToolName: "Bash"})
 	})
+}
+
+type recordingAnalyticsBatchSink struct {
+	mu      sync.Mutex
+	batches [][]session.AnalyticsData
+	called  chan struct{}
+	block   <-chan struct{}
+}
+
+func (s *recordingAnalyticsBatchSink) RecordAnalyticsBatch(ctx context.Context, batch []session.AnalyticsData) error {
+	if s.block != nil {
+		select {
+		case <-s.block:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	copied := append([]session.AnalyticsData(nil), batch...)
+	s.mu.Lock()
+	s.batches = append(s.batches, copied)
+	s.mu.Unlock()
+	select {
+	case s.called <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func TestAnalyticsStoreFlushesLowTrafficByDeadline(t *testing.T) {
+	t.Parallel()
+	sink := &recordingAnalyticsBatchSink{called: make(chan struct{}, 1)}
+	store := newAnalyticsStore(nil, sink)
+	store.Start(context.Background())
+	defer store.Stop()
+
+	store.Record(AnalyticsEntry{ID: "one", ToolName: "Bash"})
+	select {
+	case <-sink.called:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("single analytics event did not flush by deadline")
+	}
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	require.Len(t, sink.batches, 1)
+	require.Len(t, sink.batches[0], 1)
+}
+
+func TestAnalyticsStoreFlushesBurstByBatchSize(t *testing.T) {
+	t.Parallel()
+	sink := &recordingAnalyticsBatchSink{called: make(chan struct{}, 1)}
+	store := newAnalyticsStore(nil, sink)
+	store.Start(context.Background())
+	defer store.Stop()
+
+	for i := range analyticsBatchSize {
+		store.Record(AnalyticsEntry{ID: fmt.Sprintf("event-%d", i), ToolName: "Bash"})
+	}
+	select {
+	case <-sink.called:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("full analytics batch did not flush")
+	}
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	require.Len(t, sink.batches, 1)
+	require.Len(t, sink.batches[0], analyticsBatchSize)
+	for i, entry := range sink.batches[0] {
+		require.Equal(t, fmt.Sprintf("event-%d", i), entry.ID)
+	}
+}
+
+func TestAnalyticsStoreFullQueueDropsWithoutBlocking(t *testing.T) {
+	t.Parallel()
+	store := newAnalyticsStore(nil, nil)
+	for i := range analyticsBufferSize + 1 {
+		store.Record(AnalyticsEntry{ID: fmt.Sprintf("event-%d", i)})
+	}
+	require.Equal(t, int64(1), store.DroppedCount())
 }
 
 // ── Story 2.3.3: Tagging-rule fire-count analytics ──────────────────────────

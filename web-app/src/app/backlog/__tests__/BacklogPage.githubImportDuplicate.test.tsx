@@ -4,6 +4,10 @@
  * modal must stay open (not navigate away via setShowForm(false)) and show
  * an error-styled "already imported" message instead of silently succeeding.
  *
+ * Also covers the third import outcome (cross_host_claim_dedup): an issue
+ * another host already claimed renders its own notice with Copy link and an
+ * audited "Import anyway" reason form.
+ *
  * Reuses the shared BacklogPage test harness (backlogPageTestFixtures.ts,
  * same pattern as BacklogPage.exitTransition.test.tsx etc.) rather than
  * building a new one -- only the GitHubIssuePicker and useBacklogService
@@ -11,7 +15,7 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import BacklogPage from "../page";
 import { itemFixture, mockUseWatchBacklogItems } from "./backlogPageTestFixtures";
 import type { GitHubIssue } from "@/lib/hooks/useBacklogService";
@@ -122,5 +126,79 @@ describe("BacklogPage handlePickerSelect — duplicate feedback (PR #663)", () =
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "Create new backlog item" })).not.toBeInTheDocument()
     );
+  });
+});
+
+const CLAIM = {
+  externalUrl: SELECTED_ISSUE.url,
+  claimingHostId: "host_abc123",
+  itemDeepLink: "ssq://hostA.example/backlog/v1/bl_01J",
+  disputed: false,
+};
+
+describe("BacklogPage handlePickerSelect — claimed by another host (cross_host_claim_dedup)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    jest.clearAllMocks();
+  });
+
+  it("handlePickerSelect_should_RenderAlreadyClaimedElsewhereBucketWithHostAndCopyLink_When_ImportResultIncludesClaimMetadata", async () => {
+    importGitHubIssue.mockResolvedValue({ alreadyClaimedElsewhere: CLAIM });
+    const writeText = jest.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+
+    openGitHubImportModal();
+    fireEvent.click(screen.getByRole("button", { name: "Mock select issue" }));
+
+    const notice = await screen.findByTestId("claimed-elsewhere-notice");
+    expect(within(notice).getByText(/claimed by hostA\.example/)).toBeInTheDocument();
+    // Distinct from the same-host "already imported" and generic-failure lines.
+    expect(screen.queryByText("Already imported — no new items created.")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Import failed/)).not.toBeInTheDocument();
+    // The modal stays open so Copy link / Import anyway remain reachable.
+    expect(screen.getByRole("dialog", { name: "Create new backlog item" })).toBeInTheDocument();
+
+    fireEvent.click(within(notice).getByTestId("claimed-elsewhere-copy"));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(CLAIM.itemDeepLink));
+  });
+
+  it("handlePickerSelect_should_ResubmitWithOverrideTrueAndReason_When_ImportAnywayConfirmedWithValidReason", async () => {
+    importGitHubIssue
+      .mockResolvedValueOnce({ alreadyClaimedElsewhere: CLAIM })
+      .mockResolvedValueOnce({ item: itemFixture({ id: "item-override-1" }), triageTriggered: false, alreadyExisted: false });
+
+    openGitHubImportModal();
+    fireEvent.click(screen.getByRole("button", { name: "Mock select issue" }));
+    const notice = await screen.findByTestId("claimed-elsewhere-notice");
+
+    fireEvent.click(within(notice).getByTestId("claimed-elsewhere-import-anyway"));
+    const confirm = screen.getByTestId("claim-override-confirm");
+    expect(confirm).toBeDisabled();
+
+    fireEvent.change(screen.getByTestId("claim-override-reason"), { target: { value: "abcd" } });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(screen.getByTestId("claim-override-reason"), { target: { value: "  stale claim, host is gone  " } });
+    expect(confirm).toBeEnabled();
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(importGitHubIssue).toHaveBeenCalledTimes(2));
+    expect(importGitHubIssue).toHaveBeenLastCalledWith(SELECTED_ISSUE.url, { overrideReason: "stale claim, host is gone" });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Create new backlog item" })).not.toBeInTheDocument()
+    );
+  });
+
+  it("keeps the notice and shows the failure on the form when the override import fails", async () => {
+    importGitHubIssue.mockResolvedValueOnce({ alreadyClaimedElsewhere: CLAIM }).mockResolvedValueOnce(null);
+
+    openGitHubImportModal();
+    fireEvent.click(screen.getByRole("button", { name: "Mock select issue" }));
+    const notice = await screen.findByTestId("claimed-elsewhere-notice");
+    fireEvent.click(within(notice).getByTestId("claimed-elsewhere-import-anyway"));
+    fireEvent.change(screen.getByTestId("claim-override-reason"), { target: { value: "valid reason" } });
+    fireEvent.click(screen.getByTestId("claim-override-confirm"));
+
+    expect(await screen.findByTestId("claim-override-error")).toBeInTheDocument();
+    expect(screen.getByTestId("claimed-elsewhere-notice")).toBeInTheDocument();
   });
 });

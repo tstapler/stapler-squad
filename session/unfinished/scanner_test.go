@@ -442,6 +442,7 @@ func TestScanner_Start_should_persistPeriodically_When_MaintenanceTickFires(t *t
 		return len(store.LoadScanCache()) == 1
 	}, wait.WaitConfig{Timeout: time.Second, PollInterval: 5 * time.Millisecond, Description: "maintenance tick persist"})
 	require.NoError(t, err, "the maintenance ticker should have persisted the dirty cache entry")
+	cancel()
 }
 
 // TestScanner_Start_should_flushOnShutdown_When_ContextCancelled verifies the

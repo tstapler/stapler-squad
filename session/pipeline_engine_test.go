@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"reflect"
 	"strings"
@@ -161,7 +163,9 @@ func TestPipelineModeCache_Get_should_ReturnFalse_When_SlugNotPresent(t *testing
 	if ok {
 		t.Fatalf("expected ok=false for missing slug, got rm=%+v", rm)
 	}
-	if rm != (resolvedPipelineMode{}) {
+	// resolvedPipelineMode now holds a StageExecutors map (Story 2.1.1), so it
+	// is no longer comparable via ==/!= — use reflect.DeepEqual instead.
+	if !reflect.DeepEqual(rm, resolvedPipelineMode{}) {
 		t.Fatalf("expected zero-value resolvedPipelineMode, got %+v", rm)
 	}
 }
@@ -653,4 +657,124 @@ func TestPipelineEngine_should_FallBackToDefaultNotCrash_When_UnresolvableSlugIn
 		t.Fatalf("expected default-mode triage prompt fallback")
 	}
 	assertWarnLogContainsUnresolved(t, buf.String(), created.ID, "nonexistent-slug-via-sql")
+}
+
+// ─── Story 2.1.1: ExecutorFor ───────────────────────────────────────────────
+
+func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmpty_When_ModeIsDefault(t *testing.T) {
+	t.Parallel()
+	engine := &CachingPipelineEngine{cache: &pipelineModeCache{}}
+	item := &BacklogItemData{ID: "item-default", PipelineMode: ""}
+
+	buf := swapWarningLog(t)
+	program, model := engine.ExecutorFor(item, StageRoleWork)
+	if program != "" || model != "" {
+		t.Fatalf("got (%q, %q), want (\"\", \"\")", program, model)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("expected no Warn log for PipelineModeDefault, got: %q", buf.String())
+	}
+}
+
+func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmptyAndWarnLog_When_PipelineModeSlugUnresolved(t *testing.T) {
+	t.Parallel()
+	repo := &fakePipelineModeRepository{
+		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+			return nil, nil // no modes: "does-not-exist" can never resolve
+		},
+	}
+	cache := &pipelineModeCache{}
+	if err := cache.Load(context.Background(), repo); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	engine := &CachingPipelineEngine{repo: repo, cache: cache}
+	item := &BacklogItemData{ID: "item-unresolved", PipelineMode: "does-not-exist"}
+
+	buf := swapWarningLog(t)
+	program, model := engine.ExecutorFor(item, StageRoleTriage)
+	if program != "" || model != "" {
+		t.Fatalf("got (%q, %q), want (\"\", \"\")", program, model)
+	}
+	assertWarnLogContainsUnresolved(t, buf.String(), item.ID, "does-not-exist")
+}
+
+func TestCachingPipelineEngine_ExecutorFor_should_ReturnConfiguredModel_When_RoleHasOverride(t *testing.T) {
+	t.Parallel()
+	stageJSON, err := SerializeStageExecutors(map[StageRole]PipelineStageExecutor{
+		StageRoleTriage: {Model: "claude-haiku-4-5"},
+	})
+	if err != nil {
+		t.Fatalf("SerializeStageExecutors: %v", err)
+	}
+	repo := &fakePipelineModeRepository{
+		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+			return []*ent.PipelineMode{{Slug: "cheap-triage", StageExecutorsJSON: stageJSON}}, nil
+		},
+	}
+	cache := &pipelineModeCache{}
+	if err := cache.Load(context.Background(), repo); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	engine := &CachingPipelineEngine{repo: repo, cache: cache}
+	item := &BacklogItemData{ID: "item-override", PipelineMode: "cheap-triage"}
+
+	program, model := engine.ExecutorFor(item, StageRoleTriage)
+	if program != "" || model != "claude-haiku-4-5" {
+		t.Fatalf("triage: got (%q, %q), want (\"\", \"claude-haiku-4-5\")", program, model)
+	}
+}
+
+func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmpty_When_ResolvedModeHasNoOverrideForRole(t *testing.T) {
+	t.Parallel()
+	// The mode overrides triage only -- review must inherit the default, not
+	// leak triage's override.
+	stageJSON, err := SerializeStageExecutors(map[StageRole]PipelineStageExecutor{
+		StageRoleTriage: {Model: "claude-haiku-4-5"},
+	})
+	if err != nil {
+		t.Fatalf("SerializeStageExecutors: %v", err)
+	}
+	repo := &fakePipelineModeRepository{
+		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+			return []*ent.PipelineMode{{Slug: "cheap-triage", StageExecutorsJSON: stageJSON}}, nil
+		},
+	}
+	cache := &pipelineModeCache{}
+	if err := cache.Load(context.Background(), repo); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	engine := &CachingPipelineEngine{repo: repo, cache: cache}
+	item := &BacklogItemData{ID: "item-no-override", PipelineMode: "cheap-triage"}
+
+	program, model := engine.ExecutorFor(item, StageRoleReview)
+	if program != "" || model != "" {
+		t.Fatalf("review: got (%q, %q), want (\"\", \"\")", program, model)
+	}
+}
+
+// ─── Story 2.1.2: ComputeExecutorHash ───────────────────────────────────────
+
+func TestComputeExecutorHash_should_MatchFixedProgramPipeModelFormula_When_GivenProgramAndModel(t *testing.T) {
+	t.Parallel()
+	sum := sha256.Sum256([]byte("|claude-haiku-4-5"))
+	want := hex.EncodeToString(sum[:])[:16]
+
+	got := ComputeExecutorHash("", "claude-haiku-4-5")
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestComputeExecutorHash_should_DifferOnRawAliasVersusResolvedModelID_When_HashingTheSameLogicalStage(t *testing.T) {
+	t.Parallel()
+	// Per ComputeExecutorHash's doc comment: every call site must hash the
+	// raw, pre-ResolveModel value ("family:opus"), never the resolved
+	// concrete ID ("claude-opus-4-8") -- ExecutorFor always returns the raw
+	// value, so these two must NOT collide, or a family-aliased stage would
+	// permanently false-flag drift against its own unedited configuration.
+	raw := ComputeExecutorHash("", "family:opus")
+	resolved := ComputeExecutorHash("", "claude-opus-4-8")
+	if raw == resolved {
+		t.Fatalf("expected raw alias hash to differ from resolved model hash, both were %q", raw)
+	}
 }

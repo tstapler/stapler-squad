@@ -38,13 +38,16 @@ enum Severity {
 }
 
 // FindingType identifies which waste-pattern heuristic produced a WasteFinding.
-// Exactly 4 non-zero values ship in v1 — see plan.md's "Detector scope cut" note.
+// 4 non-zero values shipped in v1 — see plan.md's "Detector scope cut" note.
+// FINDING_TYPE_LOW_CACHE_ROI (5) shipped later, promoting ComputeCacheROI from
+// a tooltip-only metric to a first-class finding — see tstapler/stapler-squad#879.
 enum FindingType {
   FINDING_TYPE_UNSPECIFIED              = 0;
   FINDING_TYPE_CACHE_HIT_FLOOR_BREACH   = 1;
   FINDING_TYPE_SESSION_TOKEN_CEILING    = 2;
   FINDING_TYPE_MODEL_SWITCH_CACHE_BUST  = 3;
   FINDING_TYPE_OVERSIZED_START_CONTEXT  = 4;
+  FINDING_TYPE_LOW_CACHE_ROI            = 5;
 }
 
 // ActivityType classifies the kind of work a session performed. Defined now
@@ -113,6 +116,15 @@ message SessionTokenSummary {
   // session/backlog.go), sourced once per request/event (ADR-029). Empty string means the
   // session was never linked to a backlog item, or its ItemSession row was hard-deleted.
   string session_role = 22;
+  // Per-category cost breakdown of estimated_cost_usd (Epic 1.4 follow-up):
+  // sum(input_cost_usd, output_cost_usd, cache_creation_cost_usd, cache_read_cost_usd)
+  // equals estimated_cost_usd for a fully-priced session; a partially-unpriced
+  // session (see unpriced_models) may sum to less, since unpriced usage
+  // contributes 0 to both the total and every category.
+  double input_cost_usd          = 23;
+  double output_cost_usd         = 24;
+  double cache_creation_cost_usd = 25;
+  double cache_read_cost_usd     = 26;
 }
 
 // TopToolEntry records a tool name and its call count in a session.
@@ -172,6 +184,37 @@ message ActivityCostBreakdown {
   int32        session_count      = 3;
 }
 
+// ItemRoleCost is one backlog item's cost within a single RoleCostBreakdown
+// bucket (Epic 4.1's item-drilldown data).
+message ItemRoleCost {
+  string item_id                 = 1;
+  string item_title              = 2;
+  double estimated_cost_usd      = 3;
+  int32  session_count           = 4;
+  int32  unpriced_session_count  = 5;
+}
+
+// RoleCostBreakdown aggregates estimated cost by SessionRole ("triage",
+// "review", "work", or "" for a session with no backlog-item attribution),
+// with a per-item drilldown. sum(role_breakdown[].estimated_cost_usd) across
+// a GetInsightsSummaryResponse always equals its total_cost_usd — both
+// exclude the same unpriced-session subset, see unpriced_session_count.
+message RoleCostBreakdown {
+  // session_role is a plain string (mirroring ItemSession.session_role's own
+  // proto representation), not ActivityType's enum — SessionRole is
+  // currently string-typed end-to-end.
+  string session_role            = 1;
+  double estimated_cost_usd      = 2;
+  int32  session_count           = 3;
+  repeated ItemRoleCost items    = 4;
+  // unpriced_session_count is the count of sessions in this bucket whose cost
+  // could not be trustworthily priced (mirrors ModelBreakdown.pricing_unavailable's
+  // "abstain rather than guess" convention). Those sessions are excluded from
+  // estimated_cost_usd (and from the response's total_cost_usd) rather than
+  // silently folded in as $0.
+  int32  unpriced_session_count  = 5;
+}
+
 // TopEntry is a generic name/value pair for top-N tables.
 message TopEntry {
   reserved 4;
@@ -217,6 +260,12 @@ message GetInsightsSummaryResponse {
   // activity_breakdown is total cost and session count sliced by ActivityType
   // across all in-range sessions, sorted by estimated_cost_usd descending.
   repeated ActivityCostBreakdown activity_breakdown = 15;
+  // role_breakdown is total cost sliced by SessionRole across all in-range
+  // sessions (Epic 4.1), sorted by estimated_cost_usd descending. Includes
+  // ItemSession-sourced costs with no matching Claude transcript (Story
+  // 4.1.4, e.g. a Gemini-priced triage call), which are folded into
+  // total_cost_usd above but not into daily/models/activity_breakdown.
+  repeated RoleCostBreakdown role_breakdown = 16;
 }
 
 // ListSessionTokensRequest supports paginated session listing.

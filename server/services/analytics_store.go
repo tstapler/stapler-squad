@@ -127,45 +127,68 @@ type AnalyticsSummary struct {
 	RiskLevelCounts map[string]int `json:"risk_level_counts"`
 }
 
-// AnalyticsStore writes AnalyticsEntry records asynchronously to SQLite
-// via session.Storage and provides aggregations.
+// AnalyticsBatchSink is the consumer-owned storage port used by the actor.
+// Implementations must commit a batch atomically and treat duplicate IDs as
+// idempotent.
+type AnalyticsBatchSink interface {
+	RecordAnalyticsBatch(context.Context, []session.AnalyticsData) error
+}
+
+// AnalyticsStore writes AnalyticsEntry records asynchronously to SQLite and
+// provides aggregations. One actor owns batching and is the only hook-analytics
+// writer, keeping persistence completely off the classification response path.
 type AnalyticsStore struct {
 	storage *session.Storage
+	sink    AnalyticsBatchSink
 	ch      chan AnalyticsEntry
-	dropped int64 // atomic counter for dropped entries
+	dropped int64 // atomic counter for dropped or unflushed entries
+	stopped atomic.Bool
 
 	cancel   context.CancelFunc
 	done     chan struct{}
 	stopOnce sync.Once
 }
 
-const analyticsBufferSize = 1000
+const (
+	analyticsBufferSize    = 1000
+	analyticsBatchSize     = 128
+	analyticsFlushDelay    = 2 * time.Millisecond
+	analyticsWriteTimeout  = time.Second
+	analyticsShutdownLimit = time.Second
+)
 
 // NewAnalyticsStore creates an AnalyticsStore backed by the given storage.
 // Call Start() to begin the background flush goroutine.
 func NewAnalyticsStore(storage *session.Storage) *AnalyticsStore {
+	return newAnalyticsStore(storage, storage)
+}
+
+func newAnalyticsStore(storage *session.Storage, sink AnalyticsBatchSink) *AnalyticsStore {
 	return &AnalyticsStore{
 		storage: storage,
+		sink:    sink,
 		ch:      make(chan AnalyticsEntry, analyticsBufferSize),
 	}
 }
 
-// Start launches the background goroutine that flushes entries to disk.
-// It stops when Stop is called or ctx is canceled.
+// Start launches the background actor that coalesces entries by size or
+// deadline. It stops when Stop is called or ctx is canceled.
 func (s *AnalyticsStore) Start(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
 	s.done = make(chan struct{})
 	go func() {
 		defer close(s.done)
+		defer s.stopped.Store(true)
 		s.flush(ctx)
 	}()
 }
 
-// Stop cancels the background flush goroutine and waits for it to drain and
-// exit. Idempotent — safe to call multiple times or before Start.
+// Stop stops accepting records, requests a bounded drain, and joins the actor.
+// Idempotent — safe to call multiple times or before Start.
 func (s *AnalyticsStore) Stop() {
 	s.stopOnce.Do(func() {
+		s.stopped.Store(true)
 		if s.cancel == nil {
 			return
 		}
@@ -177,6 +200,9 @@ func (s *AnalyticsStore) Stop() {
 // Record enqueues an analytics entry for async write. Non-blocking.
 // If the buffer is full, the entry is dropped and the dropped counter incremented.
 func (s *AnalyticsStore) Record(entry AnalyticsEntry) {
+	if s == nil || s.stopped.Load() {
+		return
+	}
 	if entry.ID == "" {
 		entry.ID = uuid.New().String()
 	}
@@ -187,7 +213,7 @@ func (s *AnalyticsStore) Record(entry AnalyticsEntry) {
 	case s.ch <- entry:
 	default:
 		atomic.AddInt64(&s.dropped, 1)
-		log.Warn("[AnalyticsStore] buffer full; dropped entry", "session", entry.SessionID, "tool", entry.ToolName)
+		log.Warn("[AnalyticsStore] buffer full; dropped entry")
 	}
 }
 
@@ -575,52 +601,111 @@ func ComputeDailyBuckets(entries []AnalyticsEntry) []DailyBucket {
 	return buckets
 }
 
-// flush drains the channel and writes to the DB.
-func (s *AnalyticsStore) flush(ctx interface{ Done() <-chan struct{} }) {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
+// flush owns the size-or-deadline batch loop. Producers only perform a
+// non-blocking channel send and never wait for SQLite.
+func (s *AnalyticsStore) flush(ctx context.Context) {
+	batch := make([]session.AnalyticsData, 0, analyticsBatchSize)
+	timer := time.NewTimer(analyticsFlushDelay)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	defer timer.Stop()
+	var timerC <-chan time.Time
 
-	flushEntry := func(e AnalyticsEntry) {
-		data := session.AnalyticsData{
-			ID:                 e.ID,
-			SessionID:          e.SessionID,
-			ToolName:           e.ToolName,
-			CommandPreview:     e.CommandPreview,
-			Cwd:                e.Cwd,
-			Decision:           e.Decision,
-			RiskLevel:          e.RiskLevel,
-			RuleID:             e.RuleID,
-			RuleName:           e.RuleName,
-			Reason:             e.Reason,
-			Alternative:        e.Alternative,
-			DurationMs:         e.DurationMs,
-			ApprovalID:         e.ApprovalID,
-			CommandProgram:     e.CommandProgram,
-			CommandCategory:    e.CommandCategory,
-			CommandSubcategory: e.CommandSubcategory,
-			PythonImports:      e.PythonImports,
-			Source:             e.Source,
-			CreatedAt:          e.Timestamp,
+	flushBatch := func(writeCtx context.Context) {
+		if len(batch) == 0 {
+			return
 		}
-		_ = s.storage.RecordAnalytics(context.Background(), data)
+		pending := batch
+		batch = make([]session.AnalyticsData, 0, analyticsBatchSize)
+		if s.sink == nil {
+			atomic.AddInt64(&s.dropped, int64(len(pending)))
+			return
+		}
+		if err := s.sink.RecordAnalyticsBatch(writeCtx, pending); err != nil {
+			atomic.AddInt64(&s.dropped, int64(len(pending)))
+			log.Warn("[AnalyticsStore] batch write failed", "count", len(pending), "err", err)
+		}
+	}
+	stopTimer := func() {
+		if timerC == nil {
+			return
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timerC = nil
+	}
+	armTimer := func() {
+		if timerC != nil {
+			return
+		}
+		timer.Reset(analyticsFlushDelay)
+		timerC = timer.C
 	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			// Drain remaining
+			stopTimer()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), analyticsShutdownLimit)
+			defer cancel()
 			for {
 				select {
-				case e := <-s.ch:
-					flushEntry(e)
+				case entry := <-s.ch:
+					batch = append(batch, analyticsEntryToData(entry))
+					if len(batch) == analyticsBatchSize {
+						flushBatch(shutdownCtx)
+					}
 				default:
+					flushBatch(shutdownCtx)
 					return
 				}
 			}
-		case e := <-s.ch:
-			flushEntry(e)
-		case <-ticker.C:
+		case entry := <-s.ch:
+			batch = append(batch, analyticsEntryToData(entry))
+			if len(batch) == 1 {
+				armTimer()
+			}
+			if len(batch) == analyticsBatchSize {
+				stopTimer()
+				writeCtx, cancel := context.WithTimeout(context.Background(), analyticsWriteTimeout)
+				flushBatch(writeCtx)
+				cancel()
+			}
+		case <-timerC:
+			timerC = nil
+			writeCtx, cancel := context.WithTimeout(context.Background(), analyticsWriteTimeout)
+			flushBatch(writeCtx)
+			cancel()
 		}
+	}
+}
+
+func analyticsEntryToData(e AnalyticsEntry) session.AnalyticsData {
+	return session.AnalyticsData{
+		ID:                 e.ID,
+		SessionID:          e.SessionID,
+		ToolName:           e.ToolName,
+		CommandPreview:     e.CommandPreview,
+		Cwd:                e.Cwd,
+		Decision:           e.Decision,
+		RiskLevel:          e.RiskLevel,
+		RuleID:             e.RuleID,
+		RuleName:           e.RuleName,
+		Reason:             e.Reason,
+		Alternative:        e.Alternative,
+		DurationMs:         e.DurationMs,
+		ApprovalID:         e.ApprovalID,
+		CommandProgram:     e.CommandProgram,
+		CommandCategory:    e.CommandCategory,
+		CommandSubcategory: e.CommandSubcategory,
+		PythonImports:      e.PythonImports,
+		Source:             e.Source,
+		CreatedAt:          e.Timestamp,
 	}
 }
 

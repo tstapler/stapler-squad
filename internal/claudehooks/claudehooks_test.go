@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -58,6 +59,78 @@ func TestInstallRules_Idempotent(t *testing.T) {
 	if len(groups) != 1 {
 		t.Errorf("expected exactly 1 PreToolUse group after double install, got %d", len(groups))
 	}
+}
+
+func TestInstallRules_should_PreserveUnrelatedHooksAndInstallOneCanonicalGroup_When_DuplicatesExist(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	seed := map[string]interface{}{
+		"hooks": map[string]interface{}{
+			"PreToolUse": []interface{}{
+				map[string]interface{}{
+					"matcher": ".*",
+					"hooks": []interface{}{
+						map[string]interface{}{"type": "command", "command": "/Users/test/bin/hookmetrics ssq-hooks-pretool -- /old/ssq-hooks check"},
+					},
+				},
+				map[string]interface{}{
+					"matcher": "Bash",
+					"hooks": []interface{}{
+						map[string]interface{}{"type": "command", "command": "$HOME/.local/bin/ssq-hooks check"},
+						map[string]interface{}{"type": "command", "command": "/other/tool guard"},
+					},
+				},
+			},
+		},
+		"someUserSetting": "keep-me",
+	}
+	raw, err := json.Marshal(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := InstallRules(path, "/new/ssq-hooks"); err != nil {
+		t.Fatalf("InstallRules: %v", err)
+	}
+
+	got := readBack(t, path)
+	if got["someUserSetting"] != "keep-me" {
+		t.Fatal("unrelated top-level setting was lost")
+	}
+	groups := got["hooks"].(map[string]interface{})["PreToolUse"].([]interface{})
+	if len(groups) != 2 {
+		t.Fatalf("PreToolUse groups = %d, want canonical plus preserved unrelated group", len(groups))
+	}
+	if countCommandsContaining(groups, rulesMarker) != 1 {
+		t.Fatalf("Stapler command count = %d, want 1", countCommandsContaining(groups, rulesMarker))
+	}
+	if countCommandsContaining(groups, "/other/tool guard") != 1 {
+		t.Fatal("unrelated command in shared group was not preserved")
+	}
+}
+
+func countCommandsContaining(groups []interface{}, marker string) int {
+	count := 0
+	for _, group := range groups {
+		groupMap, ok := group.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		commands, _ := groupMap["hooks"].([]interface{})
+		for _, command := range commands {
+			commandMap, ok := command.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			text, _ := commandMap["command"].(string)
+			if strings.Contains(text, marker) {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 func TestInstallNotifications_AddsNotificationAndStop(t *testing.T) {

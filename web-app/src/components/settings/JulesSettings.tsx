@@ -12,6 +12,7 @@ import { SessionService } from "@/gen/session/v1/session_pb";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { getApiBaseUrl } from "@/lib/config";
+import { RepoPathInput } from "@/components/ui/RepoPathInput";
 import {
   container,
   heading,
@@ -371,12 +372,10 @@ export function JulesSettings() {
             Test connection — repo path
           </label>
           <div className={inputRow}>
-            <input
+            <RepoPathInput
               id="jules-test-repo-path"
-              type="text"
-              className={input}
               value={testRepoPath}
-              onChange={(e) => setTestRepoPath(e.target.value)}
+              onChange={setTestRepoPath}
               placeholder="/home/you/code/github.com/owner/repo"
             />
             <button

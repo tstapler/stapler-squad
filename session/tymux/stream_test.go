@@ -924,12 +924,21 @@ func TestOpenStandingStream_TearDownForReopen_ProceedsAnyway_WhenOldReaderIsWedg
 	}
 	transport.attachFn = func(ctx context.Context) attachStream { return wedged }
 
+	active := func() int64 {
+		return sumForSubsystem(t, collectMetric(t, "session_lifecycle_active_generations"), "tymux_stream", "")
+	}
+	baseline := active()
+
 	sess := NewTymuxGRPCSession(transport)
 	setTeardownWait(sess, 50*time.Millisecond)
 	require.NoError(t, sess.Start(dir))
 	t.Cleanup(func() { _ = sess.Close() })
 
-	before := sumForSubsystem(t, collectMetric(t, "session_lifecycle_active_generations"), "tymux_stream", "")
+	// Start counts the generation from a goroutine; sampling before it lands
+	// would make the reopen look like two new generations.
+	wait.RequireEventually(t, func() bool { return active() == baseline+1 }, 5*time.Second, time.Millisecond,
+		"the first generation must be counted before the reopen")
+	before := baseline + 1
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -949,7 +958,7 @@ func TestOpenStandingStream_TearDownForReopen_ProceedsAnyway_WhenOldReaderIsWedg
 	wait.RequireEventually(t, func() bool {
 		after := sumForSubsystem(t, collectMetric(t, "session_lifecycle_active_generations"), "tymux_stream", "")
 		return after == before+1
-	}, time.Second, time.Millisecond,
+	}, 5*time.Second, time.Millisecond,
 		"the abandoned generation must stay counted as active — its EndGeneration is never reached")
 }
 

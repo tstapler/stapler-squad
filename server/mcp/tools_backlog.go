@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -326,6 +327,9 @@ type backlogHandlers struct {
 	// Defaults to VerifyPRMatchesBranch (tools_github.go) when nil;
 	// overridable in tests to avoid making real GitHub API calls.
 	verifyPRMatchesBranch func(ctx context.Context, ref githubpkg.RepoRef, prNumber int, expectedBranch string) (PRVerification, error)
+	// postPRComment backs report_pr_created's best-effort provenance stamp.
+	// Defaults to githubpkg.PostPRCommentREST when nil; overridable in tests.
+	postPRComment func(ctx context.Context, ref githubpkg.RepoRef, prNumber int, body string) error
 	// resolveSessionBranch resolves the git branch a session UUID is working
 	// on, used by report_pr_created to determine "this item's own branch"
 	// before trusting a self-reported PR against it. Defaults to
@@ -438,9 +442,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 
 	// Description.
 	if item.Description != "" {
-		sb.WriteString("## Description\n")
-		sb.WriteString(session.SanitizeForAgentContext(item.Description, 2000))
-		sb.WriteString("\n\n")
+		session.WriteDescriptionSection(&sb, item.Description, 2000)
 	}
 
 	// Latest review verdict, if one has been submitted. This is the primary way a
@@ -2083,6 +2085,17 @@ func (h *backlogHandlers) importGitHubIssue(ctx context.Context, req mcpgo.CallT
 		return errResult(ErrInternalError, fmt.Sprintf("fetch GitHub issue: %v", fetchErr), "Retry — this is usually transient. If it names missing credentials, that is not transient; configure GitHub access for this session instead."), nil
 	}
 
+	if h.backlogSvc != nil {
+		// Same live check the web import runs; a disabled flag, an error or an
+		// indeterminate result never blocks (LookupCrossHostClaim reports those
+		// as unclaimed or an error we ignore).
+		if verdict, claimErr := h.backlogSvc.LookupCrossHostClaim(ctx, issue.URL); claimErr == nil && verdict.Kind == services.ClaimHeldByOther {
+			return errResult(ErrInvalidArgument,
+				fmt.Sprintf("issue %s is already claimed by host %s (see %s)", issue.URL, verdict.Record.ClaimingHostID.String(), verdict.Record.ItemDeepLink),
+				"Open that link to see the owning item, or import from the web UI with an override reason."), nil
+		}
+	}
+
 	created, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
 		Title:       issue.Title,
 		Description: issue.Body,
@@ -2090,6 +2103,8 @@ func (h *backlogHandlers) importGitHubIssue(ctx context.Context, req mcpgo.CallT
 		Status:      string(session.BacklogStatusIdea),
 		RepoPath:    repoPath,
 		Notes:       fmt.Sprintf("Imported from %s", issue.URL),
+		ExternalID:  strconv.Itoa(ref.IssueNumber),
+		ExternalURL: issue.URL, // lets Storage.CreateBacklogItem record the cross-host claim
 	})
 	if err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("create backlog item: %v", err), ""), nil
@@ -2249,7 +2264,7 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 		for _, line := range strings.Split(itemSession.VerificationNotes, "\n") {
 			if strings.HasPrefix(line, notesMarker+" ") {
 				return mcpgo.NewToolResultText(fmt.Sprintf(
-					"duplicate report for %s already recorded for item %s (status already review) — no changes made.", duplicateRef, itemID,
+					"duplicate report for %s already recorded for item %s (status already review) — no changes made. Confirmation is pending: an operator must confirm the duplicate (archive the item in the backlog UI) or reject it (reset/reopen the item). Do not retry report_duplicate or start more work on this item; end your session.", duplicateRef, itemID,
 				)), nil
 			}
 		}

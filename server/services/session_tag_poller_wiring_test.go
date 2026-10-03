@@ -30,7 +30,7 @@ func (f *fakeSessionTagPoolClient) CallBlocking(_ context.Context, _ headless.Fe
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
-	sink(0)
+	sink(0, true)
 	return f.response, nil
 }
 
@@ -53,11 +53,10 @@ func TestSessionService_should_RegisterNewSessionWithTagPoller_When_SessionCreat
 	svc := newCreateTestService(t, storage)
 
 	engine := classifier.NewTaggingEngine()
-	fake := &fakeSessionTagPoolClient{response: `{"tags":["Unclassified"]}`}
+	fake := &fakeSessionTagPoolClient{response: `{"results":[{"name":"tag-poller-post-startup-session","tags":["Unclassified"]}]}`}
 	poller := session.NewSessionTagClassificationPollerWithConfig(fake, engine, session.SessionTagPollerConfig{
-		PollInterval:    20 * time.Millisecond,
-		ConcurrentCalls: 1,
-		CallTimeout:     5 * time.Second,
+		PollInterval: 20 * time.Millisecond,
+		CallTimeout:  5 * time.Second,
 	})
 	svc.SetSessionTagPoller(poller)
 
@@ -69,7 +68,7 @@ func TestSessionService_should_RegisterNewSessionWithTagPoller_When_SessionCreat
 	t.Cleanup(poller.Stop)
 
 	const title = "tag-poller-post-startup-session"
-	inst, err := svc.CreateDirectorySession(context.Background(), title, t.TempDir(), "", nil, true, false)
+	inst, err := svc.CreateDirectorySession(context.Background(), title, t.TempDir(), "", nil, true, false, "")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 

@@ -99,6 +99,14 @@ var snapshotTests = []snapshotTest{
 		description: "OpenCode actively processing a request",
 	},
 
+	// ── Agy (Antigravity CLI) ──────────────────────────────────────────────
+	{
+		fixture:     "agy_prompt_approval.txt",
+		expected:    StatusNeedsApproval,
+		program:     "agy",
+		description: "Agy showing a file-edit approval dialog (Pending edit diff + Accept this file edit? with > 1. Yes / 2. No options)",
+	},
+
 	// ── Aider ────────────────────────────────────────────────────────────────
 	{
 		fixture:     "aider_needs_approval.txt",

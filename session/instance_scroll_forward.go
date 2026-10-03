@@ -135,7 +135,7 @@ func mapGateReason(gateFailure ScrollGateFailure) sessionv1.ScrollBlockedReason 
 		return sessionv1.ScrollBlockedReason_UNSUPPORTED_STREAMING_PATH
 	case ScrollGateTooManyViewers:
 		return sessionv1.ScrollBlockedReason_MULTIPLE_VIEWERS
-	case ScrollGateOK, ScrollGateNoCapability, ScrollGateNotAltScreen, ScrollGateUnsafeStatus:
+	case ScrollGateOK, ScrollGateNoCapability, ScrollGateNotAltScreen, ScrollGateNoActiveController, ScrollGateUnsafeStatus:
 		return sessionv1.ScrollBlockedReason_SCROLL_BLOCKED_REASON_UNSPECIFIED
 	default:
 		return sessionv1.ScrollBlockedReason_SCROLL_BLOCKED_REASON_UNSPECIFIED

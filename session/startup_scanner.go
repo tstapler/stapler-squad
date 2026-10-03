@@ -32,7 +32,16 @@ func NewStartupScanner(statusManager StatusProvider, contentProvider ContentProv
 func (ss *StartupScanner) Scan(instances []*Instance, queue ReviewQueueWriter) int {
 	scanned, added := 0, 0
 	for _, inst := range instances {
-		if !inst.Started() || inst.Paused() {
+		// Mirrors ReviewQueuePoller.shouldSkipSession's ArchivedAt guard (Hidden
+		// is deliberately NOT checked here — Determine()'s reason-scoped Hidden
+		// gate handles that, see its comment and TestScan_SkipsHiddenInstance_
+		// ForSuppressedReasonsOnly). Without the ArchivedAt check, a soft-archived
+		// session with a long-dead tmux pane looks like a brand-new stale/idle
+		// session on every server restart (the startup scan runs once, before
+		// the poller's steady-state counterpart of this guard ever sees it) and
+		// gets re-added to the review queue, firing a "No activity for Xh Ym"
+		// notification for a session the user considers gone.
+		if inst.Snapshot().ArchivedAt != nil || !inst.Started() || inst.Paused() {
 			continue
 		}
 		scanned++

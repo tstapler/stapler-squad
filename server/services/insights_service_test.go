@@ -72,9 +72,13 @@ func (f *fakeSessionStorage) ListSessionRecords() []tokens.SessionRecord { retur
 type fakeBacklogReader struct {
 	entries []session.ItemSessionBacklogEntry
 	err     error
+	// calls counts GetAllItemSessionsWithBacklogInfo invocations — see
+	// TestGetInsightsSummary_should_FetchBacklogEntriesAndLedgerExactlyOnce.
+	calls int
 }
 
 func (f *fakeBacklogReader) GetAllItemSessionsWithBacklogInfo(_ context.Context) ([]session.ItemSessionBacklogEntry, error) {
+	f.calls++
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -83,6 +87,34 @@ func (f *fakeBacklogReader) GetAllItemSessionsWithBacklogInfo(_ context.Context)
 
 // Compile-time assertion: fakeBacklogReader must implement insightsBacklogReader.
 var _ insightsBacklogReader = (*fakeBacklogReader)(nil)
+
+// --------------------------------------------------------------------------
+// Fake insightsDeletedCostLedgerReader (Story 3 — deleted-item cost ledger)
+// --------------------------------------------------------------------------
+
+// fakeBacklogReaderWithLedger extends fakeBacklogReader with a controllable
+// deleted-item cost ledger, mirroring fakeBacklogReader's controllable-entries
+// shape for the second seam InsightsService optionally asserts for.
+type fakeBacklogReaderWithLedger struct {
+	fakeBacklogReader
+	ledgerEntries []session.DeletedItemSessionCostEntry
+	ledgerErr     error
+	// ledgerCalls counts GetDeletedItemSessionCostLedger invocations — see
+	// TestGetInsightsSummary_should_FetchBacklogEntriesAndLedgerExactlyOnce.
+	ledgerCalls int
+}
+
+func (f *fakeBacklogReaderWithLedger) GetDeletedItemSessionCostLedger(_ context.Context) ([]session.DeletedItemSessionCostEntry, error) {
+	f.ledgerCalls++
+	if f.ledgerErr != nil {
+		return nil, f.ledgerErr
+	}
+	return f.ledgerEntries, nil
+}
+
+// Compile-time assertions: fakeBacklogReaderWithLedger must implement both seams.
+var _ insightsBacklogReader = (*fakeBacklogReaderWithLedger)(nil)
+var _ insightsDeletedCostLedgerReader = (*fakeBacklogReaderWithLedger)(nil)
 
 // --------------------------------------------------------------------------
 // Helpers
@@ -923,7 +955,7 @@ func TestBuildSessionSummary_WhenCalledDirectly_ExpectProtoEqualToHandBuiltExpec
 	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
 	snapshot := associator.Snapshot()
 
-	got := buildSessionSummary(result, pt, associator, snapshot, nil)
+	got, _ := buildSessionSummary(result, pt, associator, snapshot, nil)
 
 	// Derivation (see Story 1.5.2's fixture comment above for full formulas):
 	//  - EstimatedCostUsd: 1.0*3.0 + 0.5*15.0 + 0.25*0.3 = 10.575 (1M input,
@@ -973,6 +1005,18 @@ func TestBuildSessionSummary_WhenCalledDirectly_ExpectProtoEqualToHandBuiltExpec
 		// CacheRoiUsd (Story 1.3.1c): cacheRead*(input-cacheRead)/1e6 -
 		// cacheCreation*cacheWrite/1e6 = 250,000*(3.0-0.3)/1e6 - 0 = 0.675.
 		CacheRoiUsd: 0.675,
+		// SessionRole (Story 5): no backlog attribution (sessionMeta is nil) and
+		// "/home/user/proj" has no /worktrees/ segment, so groupUnattributed
+		// classifies it "external" rather than leaving it "".
+		SessionRole: session.SessionRoleExternal,
+		// Per-category cost split (same EstimatedCostUsd formula, broken out):
+		// InputCostUsd: 1.0*3.0 = 3; OutputCostUsd: 0.5*15.0 = 7.5;
+		// CacheCreationCostUsd: 0 (no cache-creation tokens);
+		// CacheReadCostUsd: 0.25*0.3 = 0.075.
+		InputCostUsd:         3,
+		OutputCostUsd:        7.5,
+		CacheCreationCostUsd: 0,
+		CacheReadCostUsd:     0.075,
 	}
 
 	require.Empty(t, got.UnpricedModels)
@@ -988,15 +1032,27 @@ func TestBuildSessionSummary_WhenCalledDirectly_ExpectProtoEqualToHandBuiltExpec
 	require.Len(t, got.TopTools, 1)
 	assert.InDelta(t, 10.575, got.TopTools[0].CostUsd, 1e-9)
 	assert.InDelta(t, 0.675, got.CacheRoiUsd, 1e-9)
+	assert.InDelta(t, 3.0, got.InputCostUsd, 1e-9)
+	assert.InDelta(t, 7.5, got.OutputCostUsd, 1e-9)
+	assert.InDelta(t, 0.0, got.CacheCreationCostUsd, 1e-9)
+	assert.InDelta(t, 0.075, got.CacheReadCostUsd, 1e-9)
 
 	gotForEqual := proto.Clone(got).(*sessionv1.SessionTokenSummary)
 	gotForEqual.EstimatedCostUsd = 0
 	gotForEqual.TopTools[0].CostUsd = 0
 	gotForEqual.CacheRoiUsd = 0
+	gotForEqual.InputCostUsd = 0
+	gotForEqual.OutputCostUsd = 0
+	gotForEqual.CacheCreationCostUsd = 0
+	gotForEqual.CacheReadCostUsd = 0
 	wantForEqual := proto.Clone(want).(*sessionv1.SessionTokenSummary)
 	wantForEqual.EstimatedCostUsd = 0
 	wantForEqual.TopTools[0].CostUsd = 0
 	wantForEqual.CacheRoiUsd = 0
+	wantForEqual.InputCostUsd = 0
+	wantForEqual.OutputCostUsd = 0
+	wantForEqual.CacheCreationCostUsd = 0
+	wantForEqual.CacheReadCostUsd = 0
 	assert.True(t, proto.Equal(wantForEqual, gotForEqual), "buildSessionSummary output diverged from hand-built expected summary:\n got:  %+v\n want: %+v", got, want)
 }
 
@@ -1063,7 +1119,7 @@ func TestBuildSessionSummary_WhenSessionHasNoTags_ExpectTagsFieldEmptySlice(t *t
 	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
 	snapshot := associator.Snapshot()
 
-	got := buildSessionSummary(result, pt, associator, snapshot, nil)
+	got, _ := buildSessionSummary(result, pt, associator, snapshot, nil)
 
 	assert.False(t, got.IsOrphan)
 	assert.Empty(t, got.Tags, "Tags should be empty (not causing a proto nil-vs-empty-slice issue) when the matched record has no tags")
@@ -1458,7 +1514,33 @@ func TestGetInsightsSummary_WhenSessionHasItemSessionRole_ExpectSessionRolePopul
 	assert.Equal(t, session.SessionRoleWork, resp.Msg.Sessions[0].SessionRole)
 }
 
-func TestGetInsightsSummary_WhenNoItemSessionRow_ExpectSessionRoleEmpty(t *testing.T) {
+func TestGetInsightsSummary_WhenBacklogItemArchived_ExpectSessionRoleAndTagsPopulated(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("uuid-archived", "claude-sonnet-4", "/home/user/proj", 1000, 500, 0, now),
+	}
+	sessionRecords := []tokens.SessionRecord{
+		{SessionID: "sess-archived", ConversationID: "uuid-archived", Path: "/home/user/proj", Tags: []string{"triage-tag"}},
+	}
+	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
+	backlogReader := &fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+		{SessionUUID: "sess-archived", SessionRole: session.SessionRoleTriage, ItemStatus: string(session.BacklogStatusArchived)},
+	}}
+	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
+
+	resp, err := svc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Sessions, 1)
+	assert.Equal(t, session.SessionRoleTriage, resp.Msg.Sessions[0].SessionRole)
+	assert.Equal(t, []string{"triage-tag"}, resp.Msg.Sessions[0].Tags)
+}
+
+func TestGetInsightsSummary_WhenNoItemSessionRow_ExpectSessionRoleClassifiedExternal(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
@@ -1479,10 +1561,12 @@ func TestGetInsightsSummary_WhenNoItemSessionRow_ExpectSessionRoleEmpty(t *testi
 
 	require.NoError(t, err)
 	require.Len(t, resp.Msg.Sessions, 1)
-	assert.Equal(t, "", resp.Msg.Sessions[0].SessionRole)
+	// "/home/user/proj" has no /worktrees/ segment, so groupUnattributed
+	// (Story 5) classifies it "external" rather than leaving it "".
+	assert.Equal(t, session.SessionRoleExternal, resp.Msg.Sessions[0].SessionRole)
 }
 
-func TestGetInsightsSummary_WhenBacklogReaderNil_ExpectNoPanicAndEmptyRole(t *testing.T) {
+func TestGetInsightsSummary_WhenBacklogReaderNil_ExpectNoPanicAndExternalRole(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
@@ -1501,11 +1585,24 @@ func TestGetInsightsSummary_WhenBacklogReaderNil_ExpectNoPanicAndEmptyRole(t *te
 		)
 		require.NoError(t, err)
 		require.Len(t, resp.Msg.Sessions, 1)
-		assert.Equal(t, "", resp.Msg.Sessions[0].SessionRole)
+		assert.Equal(t, session.SessionRoleExternal, resp.Msg.Sessions[0].SessionRole)
 	})
 }
 
-func TestSessionRolesForSessions_WhenSessionUUIDHasMultipleItemSessionEntries_ExpectFirstEntrySeenWins(t *testing.T) {
+func TestSessionMetaForSessions_should_RetainItemIDAndItemTitle_When_BuildingMapFromBacklogEntries(t *testing.T) {
+	t.Parallel()
+	backlogReader := &fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+		{SessionUUID: "sess-1", SessionRole: session.SessionRoleTriage, ItemID: "bl_abc123", ItemTitle: "Fix login bug"},
+	}}
+	svc := NewInsightsService(&fakeTokenStore{}, tokens.DefaultPricingTable(), nil, backlogReader)
+
+	meta := svc.sessionMetaForSessions(context.Background()).meta
+
+	require.Contains(t, meta, "sess-1")
+	assert.Equal(t, SessionMeta{Role: session.SessionRoleTriage, ItemID: "bl_abc123", ItemTitle: "Fix login bug", ItemSessionUUID: "sess-1"}, meta["sess-1"])
+}
+
+func TestSessionMetaForSessions_WhenSessionUUIDHasMultipleItemSessionEntries_ExpectFirstEntrySeenWins(t *testing.T) {
 	t.Parallel()
 	// Mirrors the real query's explicit Order(Desc(CreatedAt)): the newest row
 	// comes first, so it must be the one the map keeps.
@@ -1515,10 +1612,10 @@ func TestSessionRolesForSessions_WhenSessionUUIDHasMultipleItemSessionEntries_Ex
 	}}
 	svc := NewInsightsService(&fakeTokenStore{}, tokens.DefaultPricingTable(), nil, backlogReader)
 
-	roles := svc.sessionRolesForSessions(context.Background())
+	meta := svc.sessionMetaForSessions(context.Background()).meta
 
-	require.Contains(t, roles, "dup-uuid")
-	assert.Equal(t, session.SessionRoleWork, roles["dup-uuid"], "must keep the first (newest) entry seen per session uuid")
+	require.Contains(t, meta, "dup-uuid")
+	assert.Equal(t, session.SessionRoleWork, meta["dup-uuid"].Role, "must keep the first (newest) entry seen per session uuid")
 }
 
 func TestBuildSessionSummary_WhenSessionHasTagsAndRole_ExpectBothPopulated(t *testing.T) {
@@ -1537,15 +1634,15 @@ func TestBuildSessionSummary_WhenSessionHasTagsAndRole_ExpectBothPopulated(t *te
 	}
 	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
 	snapshot := associator.Snapshot()
-	roleMap := map[string]string{"sess-tags-role": session.SessionRoleReview}
+	sessionMeta := map[string]SessionMeta{"sess-tags-role": {Role: session.SessionRoleReview}}
 
-	got := buildSessionSummary(result, pt, associator, snapshot, roleMap)
+	got, _ := buildSessionSummary(result, pt, associator, snapshot, sessionMeta)
 
 	assert.Equal(t, []string{"backend"}, got.Tags)
 	assert.Equal(t, session.SessionRoleReview, got.SessionRole)
 }
 
-func TestBuildSessionSummary_WhenNoBacklogLinkage_ExpectSessionRoleEmptyStringNotError(t *testing.T) {
+func TestBuildSessionSummary_WhenNoBacklogLinkage_ExpectSessionRoleClassifiedNotError(t *testing.T) {
 	t.Parallel()
 	pt := tokens.DefaultPricingTable()
 	result := &tokens.ParseResult{
@@ -1563,9 +1660,148 @@ func TestBuildSessionSummary_WhenNoBacklogLinkage_ExpectSessionRoleEmptyStringNo
 	snapshot := associator.Snapshot()
 
 	require.NotPanics(t, func() {
-		got := buildSessionSummary(result, pt, associator, snapshot, nil)
-		assert.Equal(t, "", got.SessionRole)
+		got, _ := buildSessionSummary(result, pt, associator, snapshot, nil)
+		// "/home/user/proj" has no /worktrees/ segment, so groupUnattributed
+		// (Story 5) classifies it "external" rather than leaving it "".
+		assert.Equal(t, session.SessionRoleExternal, got.SessionRole)
 	})
+}
+
+// --------------------------------------------------------------------------
+// Role/item cost breakdown (Epic 4.1)
+// --------------------------------------------------------------------------
+
+// TestGetInsightsSummary_should_SumRoleBreakdownToTotalCost_When_MultipleRolesPlusUnattributedSessionPresent
+// uses claude-haiku-4 (output-only tokens, $5/MTok output) so each session's
+// cost is a clean, hand-checkable number: 4000/30000/280000/10000 output
+// tokens -> $0.02/$0.15/$1.40/$0.05.
+func TestGetInsightsSummary_should_SumRoleBreakdownToTotalCost_When_MultipleRolesPlusUnattributedSessionPresent(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("conv-triage", "claude-haiku-4", "/proj", 0, 4000, 0, now),
+		newResult("conv-review", "claude-haiku-4", "/proj", 0, 30000, 0, now),
+		newResult("conv-work", "claude-haiku-4", "/proj", 0, 280000, 0, now),
+		newResult("conv-adhoc", "claude-haiku-4", "/proj", 0, 10000, 0, now),
+	}
+	sessionRecords := []tokens.SessionRecord{
+		{SessionID: "sess-triage", ConversationID: "conv-triage", Path: "/proj"},
+		{SessionID: "sess-review", ConversationID: "conv-review", Path: "/proj"},
+		{SessionID: "sess-work", ConversationID: "conv-work", Path: "/proj"},
+		{SessionID: "sess-adhoc", ConversationID: "conv-adhoc", Path: "/proj"},
+	}
+	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
+	backlogReader := &fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+		{SessionUUID: "sess-triage", SessionRole: session.SessionRoleTriage, ItemID: "bl_abc123", ItemTitle: "Fix login bug"},
+		{SessionUUID: "sess-review", SessionRole: session.SessionRoleReview, ItemID: "bl_abc123", ItemTitle: "Fix login bug"},
+		{SessionUUID: "sess-work", SessionRole: session.SessionRoleWork, ItemID: "bl_xyz789", ItemTitle: "Add feature"},
+		// sess-adhoc has no matching entry — an ad hoc session with no backlog attribution.
+	}}
+	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
+
+	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{}))
+	require.NoError(t, err)
+
+	assert.InDelta(t, 1.62, resp.Msg.TotalCostUsd, 0.0001)
+
+	var sum float64
+	for _, rb := range resp.Msg.RoleBreakdown {
+		sum += rb.EstimatedCostUsd
+	}
+	assert.InDelta(t, resp.Msg.TotalCostUsd, sum, 0.0001, "sum(role_breakdown[].estimated_cost_usd) must equal total_cost_usd exactly")
+
+	byRole := make(map[string]*sessionv1.RoleCostBreakdown, len(resp.Msg.RoleBreakdown))
+	for _, rb := range resp.Msg.RoleBreakdown {
+		byRole[rb.SessionRole] = rb
+	}
+	require.Contains(t, byRole, session.SessionRoleTriage)
+	assert.InDelta(t, 0.02, byRole[session.SessionRoleTriage].EstimatedCostUsd, 0.0001)
+	require.Contains(t, byRole, session.SessionRoleReview)
+	assert.InDelta(t, 0.15, byRole[session.SessionRoleReview].EstimatedCostUsd, 0.0001)
+	require.Contains(t, byRole, session.SessionRoleWork)
+	assert.InDelta(t, 1.40, byRole[session.SessionRoleWork].EstimatedCostUsd, 0.0001)
+	// sess-adhoc's project path ("/proj") isn't a stapler-squad worktree path, so
+	// groupUnattributed (Story 5) buckets it under "external" rather than "" —
+	// it must still bucket somewhere explicit, not be dropped.
+	require.Contains(t, byRole, session.SessionRoleExternal, "an unattributed, non-worktree session must bucket under an explicit \"external\" role, not be dropped")
+	assert.InDelta(t, 0.05, byRole[session.SessionRoleExternal].EstimatedCostUsd, 0.0001)
+
+	require.Len(t, byRole[session.SessionRoleTriage].Items, 1)
+	assert.Equal(t, "bl_abc123", byRole[session.SessionRoleTriage].Items[0].ItemId)
+	assert.Equal(t, "Fix login bug", byRole[session.SessionRoleTriage].Items[0].ItemTitle)
+	assert.InDelta(t, 0.02, byRole[session.SessionRoleTriage].Items[0].EstimatedCostUsd, 0.0001)
+}
+
+func TestGetInsightsSummary_RoleBreakdown_should_ExcludeUnpricedSessionFromCostSum_When_SessionSummaryReportsUnpricedModel(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("conv-review-priced", "claude-haiku-4", "/proj", 0, 4000, 0, now),
+		newResult("conv-review-unpriced", "claude-opus-9000", "/proj", 1000, 500, 0, now),
+	}
+	sessionRecords := []tokens.SessionRecord{
+		{SessionID: "sess-review-priced", ConversationID: "conv-review-priced", Path: "/proj"},
+		{SessionID: "sess-review-unpriced", ConversationID: "conv-review-unpriced", Path: "/proj"},
+	}
+	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
+	backlogReader := &fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+		{SessionUUID: "sess-review-priced", SessionRole: session.SessionRoleReview, ItemID: "bl_1", ItemTitle: "Item One"},
+		{SessionUUID: "sess-review-unpriced", SessionRole: session.SessionRoleReview, ItemID: "bl_1", ItemTitle: "Item One"},
+	}}
+	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
+
+	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{}))
+	require.NoError(t, err)
+
+	require.Len(t, resp.Msg.RoleBreakdown, 1)
+	rb := resp.Msg.RoleBreakdown[0]
+	assert.Equal(t, session.SessionRoleReview, rb.SessionRole)
+	assert.InDelta(t, 0.02, rb.EstimatedCostUsd, 0.0001, "the unpriced session's $0 must not be folded in as genuinely free")
+	assert.Equal(t, int32(2), rb.SessionCount)
+	assert.Equal(t, int32(1), rb.UnpricedSessionCount)
+	assert.InDelta(t, 0.02, resp.Msg.TotalCostUsd, 0.0001, "total_cost_usd must exclude the same subset as the role bucket")
+}
+
+func TestGetInsightsSummary_should_IncludeGeminiPricedSessionWithNoTranscript_When_ItemSessionHasNoMatchingParseResult(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("conv-claude-triage", "claude-haiku-4", "/proj", 0, 4000, 0, now),
+	}
+	sessionRecords := []tokens.SessionRecord{
+		{SessionID: "sess-claude-triage", ConversationID: "conv-claude-triage", Path: "/proj"},
+	}
+	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
+	backlogReader := &fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+		// Has a matching Claude transcript above — must be counted once, via the
+		// transcript path, not double-counted via this row's own EstimatedCostUsd.
+		{SessionUUID: "sess-claude-triage", SessionRole: session.SessionRoleTriage, ItemID: "bl_claude", ItemTitle: "Claude Item", EstimatedCostUsd: 0.02, CostPriced: true},
+		// No matching transcript anywhere in results (a Gemini headless call
+		// writes no JSONL) — must be folded in via Story 4.1.4's synthetic pass.
+		{SessionUUID: "sess-gemini-triage", SessionRole: session.SessionRoleTriage, ItemID: "bl_gemini", ItemTitle: "Gemini Item", EstimatedCostUsd: 0.003, CostPriced: true},
+	}}
+	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
+
+	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{}))
+	require.NoError(t, err)
+
+	assert.InDelta(t, 0.023, resp.Msg.TotalCostUsd, 0.0001, "claude session's transcript cost (0.02) plus the gemini fold-in (0.003), not double-counted")
+
+	require.Len(t, resp.Msg.RoleBreakdown, 1)
+	rb := resp.Msg.RoleBreakdown[0]
+	assert.Equal(t, session.SessionRoleTriage, rb.SessionRole)
+	assert.InDelta(t, 0.023, rb.EstimatedCostUsd, 0.0001)
+	require.Len(t, rb.Items, 2)
+
+	byItem := make(map[string]*sessionv1.ItemRoleCost, len(rb.Items))
+	for _, it := range rb.Items {
+		byItem[it.ItemId] = it
+	}
+	require.Contains(t, byItem, "bl_gemini")
+	assert.InDelta(t, 0.003, byItem["bl_gemini"].EstimatedCostUsd, 0.0001)
+	assert.Equal(t, int32(1), byItem["bl_gemini"].SessionCount)
+	require.Contains(t, byItem, "bl_claude")
+	assert.InDelta(t, 0.02, byItem["bl_claude"].EstimatedCostUsd, 0.0001)
 }
 
 // --------------------------------------------------------------------------
@@ -1787,4 +2023,205 @@ func TestDismissFinding_WhenFinishedSessionRecomputedIdentically_ExpectDismissal
 	second, err := svc2.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}))
 	require.NoError(t, err)
 	assert.Empty(t, second.Msg.Findings, "an unchanged finished session's recomputation must keep matching the earlier dismissal")
+}
+
+// TestGetInsightsSummary_should_FetchBacklogEntriesAndLedgerExactlyOnce guards
+// the fetch-once fix: GetAllItemSessionsWithBacklogInfo and
+// GetDeletedItemSessionCostLedger were each queried twice per
+// GetInsightsSummary call (once by sessionMetaForSessions, once again by the
+// fold-in loop) before sessionMetaForSessions started returning its raw rows
+// for the fold-in loop to reuse.
+func TestGetInsightsSummary_should_FetchBacklogEntriesAndLedgerExactlyOnce(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	backlogReader := &fakeBacklogReaderWithLedger{
+		fakeBacklogReader: fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+			{SessionUUID: "sess-once", SessionRole: session.SessionRoleWork, ItemID: "item-1", ItemTitle: "T", EstimatedCostUsd: 1, CostPriced: true, CreatedAt: now},
+		}},
+		ledgerEntries: []session.DeletedItemSessionCostEntry{
+			{ConversationUUID: "conv-once", SessionUUID: "sess-old-once", SessionRole: session.SessionRoleReview,
+				ItemID: "deleted-1", ItemTitle: "Deleted", EstimatedCostUsd: 0.5, CostPriced: true, CreatedAt: now},
+		},
+	}
+	svc := NewInsightsService(&fakeTokenStore{}, tokens.DefaultPricingTable(), nil, backlogReader)
+
+	_, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{}))
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, backlogReader.calls, "GetAllItemSessionsWithBacklogInfo must be fetched exactly once per GetInsightsSummary call")
+	assert.Equal(t, 1, backlogReader.ledgerCalls, "GetDeletedItemSessionCostLedger must be fetched exactly once per GetInsightsSummary call")
+}
+
+// TestGetInsightsSummary_should_IncludeDeletedItemLedgerCost_When_NoMatchingTranscript
+// (Story 3) proves a deleted item's cost ledger row is folded into
+// total_cost_usd/role_breakdown when no transcript in the current token-store
+// scan carries its conversation UUID — the ledger-only equivalent of Story
+// 4.1.4's transcript-less ItemSession fold-in.
+func TestGetInsightsSummary_should_IncludeDeletedItemLedgerCost_When_NoMatchingTranscript(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	backlogReader := &fakeBacklogReaderWithLedger{
+		ledgerEntries: []session.DeletedItemSessionCostEntry{
+			{ConversationUUID: "conv-deleted-1", SessionUUID: "sess-old-1", SessionRole: session.SessionRoleReview,
+				ItemID: "deleted-1", ItemTitle: "Deleted Item", EstimatedCostUsd: 0.5, CostPriced: true, CreatedAt: now},
+		},
+	}
+	svc := NewInsightsService(&fakeTokenStore{}, tokens.DefaultPricingTable(), tokens.NewAssociator(&fakeSessionStorage{}), backlogReader)
+
+	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{}))
+	require.NoError(t, err)
+
+	assert.InDelta(t, 0.5, resp.Msg.TotalCostUsd, 0.0001)
+	require.Len(t, resp.Msg.RoleBreakdown, 1)
+	assert.Equal(t, session.SessionRoleReview, resp.Msg.RoleBreakdown[0].SessionRole)
+	require.Len(t, resp.Msg.RoleBreakdown[0].Items, 1)
+	assert.Equal(t, "deleted-1", resp.Msg.RoleBreakdown[0].Items[0].ItemId)
+	assert.Equal(t, "Deleted Item", resp.Msg.RoleBreakdown[0].Items[0].ItemTitle)
+}
+
+// TestGetInsightsSummary_WhenDeletedItemTranscriptStillOnDisk_ExpectAttributedByConversationUUIDAndNotDoubleCountedByLedger
+// (Story 3) proves that when a deleted item's ledger row's conversation UUID
+// still matches a transcript in the current scan (the deleted session's JSONL
+// is still on disk), the transcript path attributes it via
+// sessionMetaForSessions' ledger fold, and the raw-cost ledger fold-in pass
+// does not additionally sum the ledger row's own EstimatedCostUsd on top.
+func TestGetInsightsSummary_WhenDeletedItemTranscriptStillOnDisk_ExpectAttributedByConversationUUIDAndNotDoubleCountedByLedger(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("conv-deleted-2", "claude-sonnet-4", "/wt/deleted", 1000, 500, 0, now),
+	}
+	// No live session record: the transcript is an orphan by path/UUID association.
+	associator := tokens.NewAssociator(&fakeSessionStorage{})
+	backlogReader := &fakeBacklogReaderWithLedger{
+		ledgerEntries: []session.DeletedItemSessionCostEntry{
+			{ConversationUUID: "conv-deleted-2", SessionUUID: "sess-old-2", SessionRole: session.SessionRoleWork,
+				ItemID: "deleted-2", ItemTitle: "T2", EstimatedCostUsd: 9, CostPriced: true, CreatedAt: now},
+		},
+	}
+	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
+
+	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{}))
+	require.NoError(t, err)
+
+	require.Len(t, resp.Msg.Sessions, 1)
+	assert.Equal(t, session.SessionRoleWork, resp.Msg.Sessions[0].SessionRole)
+	require.Len(t, resp.Msg.RoleBreakdown, 1)
+	assert.Equal(t, session.SessionRoleWork, resp.Msg.RoleBreakdown[0].SessionRole)
+	// The ledger row's own $9 must not be folded in on top of its transcript.
+	assert.InDelta(t, resp.Msg.Sessions[0].EstimatedCostUsd, resp.Msg.TotalCostUsd, 1e-9)
+}
+
+func TestGetInsightsSummary_WhenSessionDeleted_ExpectAttributedByConversationUUIDAndNotDoubleCounted(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("conv-gone", "claude-sonnet-4", "/wt/gone", 1000, 500, 0, now),
+	}
+	// No live session record: the transcript is an orphan by path/UUID association.
+	associator := tokens.NewAssociator(&fakeSessionStorage{})
+	backlogReader := &fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+		{SessionUUID: "sess-gone", ConversationUUID: "conv-gone", SessionRole: session.SessionRoleWork,
+			ItemID: "item-1", ItemTitle: "T", EstimatedCostUsd: 9, CostPriced: true, CreatedAt: now},
+	}}
+	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
+
+	// IncludeOrphans is false: a conversation-attributed transcript must not be filtered as an orphan.
+	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{}))
+
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Sessions, 1)
+	assert.Equal(t, session.SessionRoleWork, resp.Msg.Sessions[0].SessionRole)
+	require.Len(t, resp.Msg.RoleBreakdown, 1)
+	assert.Equal(t, session.SessionRoleWork, resp.Msg.RoleBreakdown[0].SessionRole)
+	// The item session's own $9 must not be folded in on top of its transcript.
+	assert.InDelta(t, resp.Msg.Sessions[0].EstimatedCostUsd, resp.Msg.TotalCostUsd, 1e-9)
+}
+
+func TestGetInsightsSummary_UnattributedRoleBreakdown_GroupsByWorktreeTitle(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	wt1 := "/home/u/.stapler-squad/workspaces/w/worktrees/steam-controls/18d2913c19117f25"
+	wt2 := "/home/u/.stapler-squad/workspaces/w/worktrees/steam-controls/18d2913c19117f25/tests/e2e"
+	results := []*tokens.ParseResult{
+		newResult("u1", "claude-sonnet-4", wt1, 1000, 500, 0, now),
+		newResult("u2", "claude-sonnet-4", wt2, 1000, 500, 0, now),
+	}
+	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), tokens.NewAssociator(&fakeSessionStorage{}), nil)
+
+	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}))
+
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.RoleBreakdown, 1)
+	unattributed := resp.Msg.RoleBreakdown[0]
+	assert.Equal(t, "", unattributed.SessionRole)
+	require.Len(t, unattributed.Items, 1, "one title: steam-controls (2 sessions, same worktree)")
+	assert.Equal(t, "steam-controls", unattributed.Items[0].ItemTitle)
+	assert.EqualValues(t, 2, unattributed.Items[0].SessionCount)
+}
+
+// TestGetInsightsSummary_UnattributedRoleBreakdown_SplitsExternalFromWorktree
+// (Story 5) asserts groupUnattributed's role split: a worktree-path session
+// with no backlog attribution stays in the "" (plain unattributed) bucket,
+// while a non-worktree-path session with no backlog attribution — some other
+// repo entirely (kibitzer here) — lands in a separate "external" bucket.
+func TestGetInsightsSummary_UnattributedRoleBreakdown_SplitsExternalFromWorktree(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	worktreePath := "/home/u/.stapler-squad/workspaces/w/worktrees/steam-controls/18d2913c19117f25"
+	externalPath := "/home/u/code/github/com/tstapler/kibitzer"
+	results := []*tokens.ParseResult{
+		newResult("u1", "claude-sonnet-4", worktreePath, 1000, 500, 0, now),
+		newResult("u2", "claude-sonnet-4", externalPath, 1000, 500, 0, now),
+	}
+	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), tokens.NewAssociator(&fakeSessionStorage{}), nil)
+
+	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}))
+
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.RoleBreakdown, 2)
+	byRole := map[string]*sessionv1.RoleCostBreakdown{}
+	for _, r := range resp.Msg.RoleBreakdown {
+		byRole[r.SessionRole] = r
+	}
+
+	require.Contains(t, byRole, "")
+	unattributed := byRole[""]
+	require.Len(t, unattributed.Items, 1)
+	assert.Equal(t, "steam-controls", unattributed.Items[0].ItemTitle)
+	assert.EqualValues(t, 1, unattributed.Items[0].SessionCount)
+
+	require.Contains(t, byRole, session.SessionRoleExternal)
+	external := byRole[session.SessionRoleExternal]
+	require.Len(t, external.Items, 1)
+	assert.Equal(t, "kibitzer", external.Items[0].ItemTitle)
+	assert.EqualValues(t, 1, external.Items[0].SessionCount)
+}
+
+// TestGetInsightsSummary_SessionRole_MatchesRoleBreakdownBucket guards the
+// cross-filter bug: SessionTokenSummary.SessionRole must report the same value
+// a session is actually counted under in role_breakdown (groupUnattributed's
+// classification), not the raw pre-classification "" for every unattributed
+// session — otherwise a UI click on the "external" bar filters SessionsTable
+// by a role value no session's SessionRole ever reports, and zero rows match.
+func TestGetInsightsSummary_SessionRole_MatchesRoleBreakdownBucket(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	worktreePath := "/home/u/.stapler-squad/workspaces/w/worktrees/steam-controls/18d2913c19117f25"
+	externalPath := "/home/u/code/github/com/tstapler/kibitzer"
+	results := []*tokens.ParseResult{
+		newResult("u1", "claude-sonnet-4", worktreePath, 1000, 500, 0, now),
+		newResult("u2", "claude-sonnet-4", externalPath, 1000, 500, 0, now),
+	}
+	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), tokens.NewAssociator(&fakeSessionStorage{}), nil)
+
+	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}))
+
+	require.NoError(t, err)
+	byConversation := map[string]string{}
+	for _, s := range resp.Msg.Sessions {
+		byConversation[s.ConversationId] = s.SessionRole
+	}
+	assert.Equal(t, "", byConversation["u1"], "worktree session stays in the plain unattributed bucket")
+	assert.Equal(t, session.SessionRoleExternal, byConversation["u2"], "non-worktree session must report \"external\", matching its role_breakdown bucket")
 }

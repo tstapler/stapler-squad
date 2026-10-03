@@ -85,6 +85,7 @@ func (s *BacklogService) GetBacklogItem(
 
 	p := backlogItemToProto(item, s.engine, s.buildCostLookup())
 	enrichItemSessionsWorktreeData(ctx, s.storage, p)
+	s.checkWorkStageBudget(item.ID, item.CostBudgetThresholdUsd, p.TotalEstimatedCostUsd)
 
 	return connect.NewResponse(&sessionv1.GetBacklogItemResponse{
 		Item: p,
@@ -160,6 +161,7 @@ func (s *BacklogService) ListBacklogItems(
 	costFor := s.buildCostLookup()
 	for i := range summaries {
 		protoItems[i] = backlogItemSummaryToProto(&summaries[i], s.engine, costFor)
+		s.annotateDuplicatePending(ctx, protoItems[i])
 	}
 
 	return connect.NewResponse(&sessionv1.ListBacklogItemsResponse{
@@ -557,4 +559,21 @@ func (s *BacklogService) GetSessionBacklogIndex(
 	return connect.NewResponse(&sessionv1.GetSessionBacklogIndexResponse{
 		Entries: protoEntries,
 	}), nil
+}
+
+// annotateDuplicatePending sets duplicate_pending/duplicate_ref on a list-view
+// item (summaries carry no ItemSessions). Only review items can be pending, so
+// the per-item session lookup is limited to that status.
+func (s *BacklogService) annotateDuplicatePending(ctx context.Context, p *sessionv1.BacklogItem) {
+	if p.Status != string(session.BacklogStatusReview) {
+		return
+	}
+	sessions, err := s.storage.ListItemSessions(ctx, p.Id)
+	if err != nil {
+		return
+	}
+	if ref := session.PendingDuplicateRef(sessions); ref != "" {
+		p.DuplicatePending = true
+		p.DuplicateRef = ref
+	}
 }

@@ -3,8 +3,10 @@ package server
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -13,6 +15,8 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -77,6 +81,31 @@ func TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueu
 		t.Errorf("SessionService's SlackNotifier is not the same instance as deps.SlackNotifier (split-brain regression, commit 13ad9c260): got %p, want %p",
 			deps.SessionService.SlackNotifierForTest(), deps.SlackNotifier)
 	}
+}
+
+// TestBuildDependencies_should_WireGeminiCaller_When_GeminiBinaryDetected is the
+// Task 3.1.2b integration test: confirms BuildDependencies actually constructs
+// a *headless.GeminiCaller when the gemini binary is present at startup,
+// mirroring HeadlessPool's own "non-fatal, just leave the field nil, if the
+// binary is missing" pattern (this branch does not yet register it into a
+// headlessCallers registry — Epic 2.3, not landed yet — see GeminiCaller's
+// doc comment on ServerDependencies). Skips (rather than asserting nil) when
+// gemini genuinely isn't installed on the machine running this test —
+// mirroring config.GetAvailablePrograms' own tests' convention of skipping
+// gracefully for an optional candidate CLI not guaranteed present in every
+// dev/CI environment.
+func TestBuildDependencies_should_WireGeminiCaller_When_GeminiBinaryDetected(t *testing.T) {
+	if _, lookErr := exec.LookPath("gemini"); lookErr != nil {
+		t.Skip("gemini binary not found on PATH; skipping (see config.GetAvailablePrograms' analogous convention)")
+	}
+
+	envtest.NewIsolatedStateDir(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+
+	require.NotNil(t, deps.GeminiCaller, "expected GeminiCaller to be wired when the gemini binary is detected at startup")
+	assert.True(t, deps.GeminiCaller.Available())
 }
 
 func TestBuildServiceDeps_RejectsNilCore(t *testing.T) {
@@ -327,6 +356,38 @@ func TestReconcileTicker_should_KeepRunningReconcileStuck_When_QuotaGateReconcil
 
 	if !backlogReconcileRan {
 		t.Error("backlog reconcile did not run after a panic in the sibling quota-gate reconcile call — the ticker goroutine must survive")
+	}
+}
+
+// TestWorktreeConsistencySweeperWiring_should_StartAndStopWithoutPanicking_When_DependenciesBuiltNarrow
+// is Task 1.3.2b's wiring smoke test for the session.StartWorktreeConsistencySweeper call
+// added alongside the 60s reconcile ticker above (server/dependencies.go): confirms the
+// sweeper goroutine starts and returns cleanly on ctx cancellation. Deliberately builds a
+// narrow session/events/config dependency set rather than calling server.BuildDependencies()
+// or NewServerWithDeps, which wire ~30 real production subsystems and make real outbound
+// network calls even under test isolation (instinct_ci_hermetic_testing_gotchas.md) —
+// mirroring server/services/session_service_test.go's createTestStorage pattern.
+func TestWorktreeConsistencySweeperWiring_should_StartAndStopWithoutPanicking_When_DependenciesBuiltNarrow(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	repo := session.NewTestEntRepository(t)
+	storage, err := session.NewStorageWithRepository(repo)
+	require.NoError(t, err)
+
+	notifier := &services.EventBusNotifier{Bus: events.NewEventBus(100)}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		session.StartWorktreeConsistencySweeper(ctx, storage, notifier, config.LoadConfig)
+		close(done)
+	}()
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("StartWorktreeConsistencySweeper did not return after ctx cancellation")
 	}
 }
 

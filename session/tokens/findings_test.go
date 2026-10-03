@@ -330,6 +330,90 @@ func TestDetectOversizedStartContext_WhenFirstTurnModelUnpriced_ExpectNilNotZero
 	assert.Nil(t, f)
 }
 
+// --- #879: detectLowCacheROI ---
+
+func TestDetectLowCacheROI_WhenCacheWrittenButNeverRead_ExpectCriticalFindingWithNetLoss(t *testing.T) {
+	t.Parallel()
+	pt := pricedTable()
+	r := &ParseResult{
+		SessionUUID:   "sess-roi-1",
+		PrimaryModel:  "claude-sonnet-4",
+		CacheCreation: 500_000,
+		CacheRead:     0,
+	}
+	// roi = 0*(3.00-0.30)/1e6 - 500_000*3.75/1e6 = -1.875 (below lowCacheROICriticalUSD)
+
+	f := detectLowCacheROI(r, pt)
+	require.NotNil(t, f)
+	assert.Equal(t, FindingLowCacheROI, f.Type)
+	assert.Equal(t, SeverityCritical, f.Severity)
+	assert.InDelta(t, 1.875, float64(f.DollarImpact), 0.001)
+	assert.Contains(t, f.Message, "$1.88")
+	assert.Contains(t, f.Message, "500,000")
+}
+
+func TestDetectLowCacheROI_WhenSmallNetLoss_ExpectWarnSeverity(t *testing.T) {
+	t.Parallel()
+	pt := pricedTable()
+	r := &ParseResult{
+		SessionUUID:   "sess-roi-2",
+		PrimaryModel:  "claude-sonnet-4",
+		CacheCreation: 100_000,
+		CacheRead:     50_000,
+	}
+	// roi = 50_000*2.70/1e6 - 100_000*3.75/1e6 = 0.135 - 0.375 = -0.24 (above the -1.00 critical line)
+
+	f := detectLowCacheROI(r, pt)
+	require.NotNil(t, f)
+	assert.Equal(t, SeverityWarn, f.Severity)
+	assert.InDelta(t, 0.24, float64(f.DollarImpact), 0.001)
+}
+
+func TestDetectLowCacheROI_WhenCacheCreationBelowMinimum_ExpectNoFinding(t *testing.T) {
+	t.Parallel()
+	pt := pricedTable()
+	r := &ParseResult{
+		SessionUUID:   "sess-roi-3",
+		PrimaryModel:  "claude-sonnet-4",
+		CacheCreation: 10_000, // below minCacheCreationForROI (50_000)
+		CacheRead:     0,
+	}
+	// Would be a negative ROI on its own merits, but too little cache activity
+	// for that negative number to mean anything — must abstain, not fire.
+
+	f := detectLowCacheROI(r, pt)
+	assert.Nil(t, f)
+}
+
+func TestDetectLowCacheROI_WhenCacheWellUtilized_ExpectNoFinding(t *testing.T) {
+	t.Parallel()
+	pt := pricedTable()
+	r := &ParseResult{
+		SessionUUID:   "sess-roi-4",
+		PrimaryModel:  "claude-sonnet-4",
+		CacheCreation: 100_000,
+		CacheRead:     500_000,
+	}
+	// roi = 500_000*2.70/1e6 - 100_000*3.75/1e6 = 1.35 - 0.375 = +0.975 (positive, cache paid for itself)
+
+	f := detectLowCacheROI(r, pt)
+	assert.Nil(t, f)
+}
+
+func TestDetectLowCacheROI_WhenModelUnpriced_ExpectNilNotZeroImpactFinding(t *testing.T) {
+	t.Parallel()
+	pt := pricedTable()
+	r := &ParseResult{
+		SessionUUID:   "sess-roi-5",
+		PrimaryModel:  "claude-unknown-model",
+		CacheCreation: 500_000,
+		CacheRead:     0,
+	}
+
+	f := detectLowCacheROI(r, pt)
+	assert.Nil(t, f)
+}
+
 // --- Story 1.1.3: ComputeFindings aggregator + panic isolation ---
 
 func TestComputeFindings_WhenCleanSession_ExpectNoFindings(t *testing.T) {
@@ -354,7 +438,7 @@ func TestComputeFindings_WhenPanicIsolationWrapperUsed_ExpectPanicDoesNotEscapeA
 	// the test, which would race a parallel sibling's own log output.
 
 	// Task 1.1.3d: no constructible ParseResult reaches a panicking index/divide
-	// in any of the 4 shipped detectors (each guards its own precondition), so
+	// in any of the 5 shipped detectors (each guards its own precondition), so
 	// this test exercises the identical recover-wrapping closure against a
 	// test-local detector double that deliberately panics, rather than a real
 	// detector. No mutable package-level seam is added to findings.go for this.

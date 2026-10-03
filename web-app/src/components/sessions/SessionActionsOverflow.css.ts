@@ -6,6 +6,7 @@ export {
   overflowButton,
   overflowMenu,
   overflowMenuItem,
+  overflowMenuItemTouch,
   overflowMenuItemDanger,
   actionButton,
   confirmDialog,

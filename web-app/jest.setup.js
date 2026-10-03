@@ -165,6 +165,26 @@ jest.mock("@/lib/hooks/useHandoffSummary", () => ({
   }),
 }));
 
+// useInsightsSummary (BacklogItemDetail's Story 5.2.3 ItemStageCostTable
+// fetch, plus every Insights dashboard component) opens a real WatchInsights
+// transport on mount unless mocked, breaking any test that renders
+// BacklogItemDetail without knowing about this dependency. Stub it globally
+// with a stable, non-fetching default (same rationale as
+// useSlashCommands/useAvailablePrograms/useBacklogStages above). Tests that
+// DO need to control the summary (StageCostChart/ItemStageCostTable wiring,
+// InsightsDashboard) override this locally with their own
+// jest.mock("@/lib/hooks/useInsightsService", ...).
+jest.mock("@/lib/hooks/useInsightsService", () => ({
+  ...jest.requireActual("@/lib/hooks/useInsightsService"),
+  useInsightsSummary: () => ({
+    summary: null,
+    loading: false,
+    isLiveUpdating: false,
+    error: null,
+    refetch: jest.fn(),
+  }),
+}));
+
 // useBacklogStages (BacklogBoard/StageTracker, Epic 2.9
 // backlog-custom-workflow-stages) calls ListStages via the real ConnectRPC
 // transport on mount. Stub it globally with the built-in-only default so

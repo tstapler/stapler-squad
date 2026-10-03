@@ -1333,46 +1333,11 @@ func overridePRPendingChecker(t *testing.T, listener *BacklogLifecycleListener, 
 	listener.SetPRPendingCheckerFactory(func(repoPath string) prPendingChecker { return checker })
 }
 
-// testInfoLogMu serializes access to the package-global log.InfoLog var
-// across every test in this file that redirects it. log.InfoLog is a single
-// shared variable, so two t.Parallel() tests (including sibling subtests of
-// the same parent, which run concurrently with each other) that both swap it
-// out and restore it race on the same memory: one test's restore can stomp
-// another's redirect mid-run. Locking for the duration of each test (release
-// happens in the same t.Cleanup that restores the original logger) serializes
-// only the tests that touch log.InfoLog, without affecting the parallelism of
-// any other test in the package.
-var testInfoLogMu sync.Mutex
-
 // redirectInfoLog redirects log.InfoLog's output to a returned buffer for
-// the duration of the test and restores the original on cleanup. It mutates
-// the existing *log.Logger in place (SetOutput/SetPrefix/SetFlags) rather
-// than reassigning the log.InfoLog variable itself: reassignment is a data
-// race against any concurrently running goroutine that reads log.InfoLog
-// directly (e.g. production code calling log.InfoLog().Printf), even though
-// testInfoLogMu serializes the writers here — a mutex around only the write
-// side cannot protect an unsynchronized reader elsewhere in the program.
-// The returned buffer is a *syncBuffer (not *bytes.Buffer) so a leaked
-// goroutine from an already-finished sibling test still writing to the
-// shared logger can't race a later buf.String() read.
-func redirectInfoLog(t *testing.T) *syncBuffer {
+// the duration of the test and restores the original on cleanup.
+func redirectInfoLog(t *testing.T) *log.SyncBuffer {
 	t.Helper()
-	testInfoLogMu.Lock()
-	buf := &syncBuffer{}
-	logger := log.InfoLog()
-	origOutput := logger.Writer()
-	origPrefix := logger.Prefix()
-	origFlags := logger.Flags()
-	logger.SetOutput(buf)
-	logger.SetPrefix("INFO: ")
-	logger.SetFlags(0)
-	t.Cleanup(func() {
-		logger.SetOutput(origOutput)
-		logger.SetPrefix(origPrefix)
-		logger.SetFlags(origFlags)
-		testInfoLogMu.Unlock()
-	})
-	return buf
+	return log.RedirectLogger(t, log.InfoLog(), "INFO: ")
 }
 
 // TestReconcilePRPending_SpawnsFixSession_WhenHasConflictsTrue_Alone verifies
@@ -2444,12 +2409,17 @@ func (f *fakeOneShotShipRunner) RunOneShotForSession(ctx context.Context, sessio
 	return f.prURL, f.err
 }
 
-// fakeNotifierCall records a single Notify invocation's title, message body,
-// notification type, and urgent/important axes, so tests can assert on
+// fakeNotifierCall records a single Notify/NotifySession invocation's title, message
+// body, notification type, and urgent/important axes, so tests can assert on
 // interpolated message content (e.g. that a verdict/outcome actually reached
 // the message) and on differentiated ERROR/URGENT vs WARNING/HIGH severity,
-// not just which notification fired.
+// not just which notification fired. Method/RecipientID (added for
+// session/worktree_consistency_sweep.go's Architecture-A1 regression guard) record which
+// Notifier method fired and the itemID (Notify) or sessionID (NotifySession) it was
+// called with.
 type fakeNotifierCall struct {
+	Method           string // "Notify" or "NotifySession"
+	RecipientID      string // itemID (Notify) or sessionID (NotifySession)
 	Title            string
 	Message          string
 	NotificationType int32
@@ -2459,11 +2429,15 @@ type fakeNotifierCall struct {
 
 // fakeNotifier is a test double implementing Notifier, recording every call.
 type fakeNotifier struct {
-	calls []fakeNotifierCall // one per Notify call, in order
+	calls []fakeNotifierCall // one per Notify/NotifySession call, in order
 }
 
 func (f *fakeNotifier) Notify(itemID, title, message string, notificationType int32, urgent, important bool) {
-	f.calls = append(f.calls, fakeNotifierCall{Title: title, Message: message, NotificationType: notificationType, Urgent: urgent, Important: important})
+	f.calls = append(f.calls, fakeNotifierCall{Method: "Notify", RecipientID: itemID, Title: title, Message: message, NotificationType: notificationType, Urgent: urgent, Important: important})
+}
+
+func (f *fakeNotifier) NotifySession(sessionID, title, message string, notificationType int32, urgent, important bool) {
+	f.calls = append(f.calls, fakeNotifierCall{Method: "NotifySession", RecipientID: sessionID, Title: title, Message: message, NotificationType: notificationType, Urgent: urgent, Important: important})
 }
 
 // titles returns just the Title of every recorded call, in order — for tests (the

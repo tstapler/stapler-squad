@@ -51,6 +51,17 @@ const (
 	SessionRoleTriage    = "triage"
 	SessionRoleReview    = "review"
 	SessionRoleJulesWork = "jules_work"
+	// SessionRoleDiagnose is the Diagnose & Nudge dispatched session's role
+	// (backlog item 68964304): a hidden, one-shot investigation agent, never
+	// a work/review/triage session. submit_diagnosis_result checks this role
+	// the same way submit_review_verdict checks SessionRoleReview.
+	SessionRoleDiagnose = "diagnose"
+	// SessionRoleExternal is never persisted to ItemSession.session_role — it's
+	// Insights' synthetic label (server/services/insights_service.go's
+	// groupUnattributed) for a session with no backlog attribution at all,
+	// distinct from the empty-string "" (never linked to an item, but still
+	// inside a stapler-squad worktree).
+	SessionRoleExternal = "external"
 )
 
 // IsTmuxBackedSessionRole reports whether role identifies a session that runs as a

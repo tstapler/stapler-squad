@@ -198,9 +198,14 @@ const callSitePRViewGraphQL = "pr.view.graphql"
 // This function is wired: GetPRInfoCtx (client.go) dispatches here when the
 // github:graphql-pr-info feature flag (githubGraphQLMigrationFlagName) is
 // enabled — see that constant's doc comment for the flag's default-off
-// rationale.
-func GetPRInfoGraphQL(ctx context.Context, owner, repo string, prNumber int) (*PRInfo, error) {
+// rationale. ref.Host() is threaded through to both the GraphQL endpoint URL
+// and the token lookup so GHE repos resolve against their own host instead
+// of always hitting github.com's GraphQL API (see
+// newGHGraphQLRequestForHostWithToken).
+func GetPRInfoGraphQL(ctx context.Context, ref RepoRef, prNumber int) (*PRInfo, error) {
 	ctx = WithGitHubCallSite(ctx, callSitePRViewGraphQL)
+
+	owner, repo, host := ref.Owner(), ref.Repo(), ref.Host()
 
 	reqBody, err := json.Marshal(map[string]any{
 		"query": graphQLPRInfoQuery,
@@ -214,7 +219,8 @@ func GetPRInfoGraphQL(ctx context.Context, owner, repo string, prNumber int) (*P
 		return nil, fmt.Errorf("marshal GraphQL query: %w", err)
 	}
 
-	req, err := newGHGraphQLRequest(ctx, "", reqBody)
+	token := getGHTokenForAccount(ctx, AccountRef{Host: host})
+	req, err := newGHGraphQLRequestForHostWithToken(ctx, host, reqBody, token)
 	if err != nil {
 		return nil, fmt.Errorf("build GraphQL request: %w", err)
 	}

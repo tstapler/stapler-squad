@@ -196,22 +196,41 @@ func (s *BacklogService) CreateBacklogItem(
 		baseBranch = *req.Msg.BaseBranch
 	}
 
+	var externalURL string
+	if req.Msg.ExternalUrl != nil {
+		externalURL = *req.Msg.ExternalUrl
+	}
+	gate, claimErr := s.gateOnClaim(ctx, preCreateClaimCheck{
+		ExternalURL: externalURL,
+		Override:    req.Msg.OverrideClaim,
+		Reason:      req.Msg.OverrideReason,
+		LogPrefix:   "nl_create",
+	})
+	if claimErr != nil {
+		return nil, claimErr
+	}
+	if gate.Claimed != nil {
+		return connect.NewResponse(&sessionv1.CreateBacklogItemResponse{AlreadyClaimedElsewhere: gate.Claimed}), nil
+	}
+
 	data := session.BacklogItemData{
-		Title:              req.Msg.Title,
-		Description:        req.Msg.Description,
-		AcceptanceCriteria: acJSON,
-		Priority:           priority,
-		Status:             string(session.BacklogStatusIdea),
-		RepoPath:           repoPath,
-		BaseBranch:         baseBranch,
-		SkipReviewGate:     req.Msg.SkipReviewGate,
-		SkipPlanning:       req.Msg.SkipPlanning,
-		AutoSpawnSession:   req.Msg.AutoSpawnSession,
-		AutoCreatePR:       req.Msg.AutoCreatePr,
-		AutoApprovePlan:    req.Msg.AutoApprovePlan,
-		PipelineMode:       defaultPipelineModeForNewItem(req.Msg.PipelineMode),
-		Category:           category,
-		Notes:              req.Msg.Notes,
+		Title:                  req.Msg.Title,
+		Description:            req.Msg.Description,
+		ExternalURL:            externalURL,
+		AcceptanceCriteria:     acJSON,
+		Priority:               priority,
+		Status:                 string(session.BacklogStatusIdea),
+		RepoPath:               repoPath,
+		BaseBranch:             baseBranch,
+		SkipReviewGate:         req.Msg.SkipReviewGate,
+		SkipPlanning:           req.Msg.SkipPlanning,
+		AutoSpawnSession:       req.Msg.AutoSpawnSession,
+		AutoCreatePR:           req.Msg.AutoCreatePr,
+		AutoApprovePlan:        req.Msg.AutoApprovePlan,
+		PipelineMode:           defaultPipelineModeForNewItem(req.Msg.PipelineMode),
+		Category:               category,
+		Notes:                  req.Msg.Notes,
+		CostBudgetThresholdUsd: req.Msg.CostBudgetThresholdUsd,
 	}
 
 	created, err := s.storage.CreateBacklogItem(ctx, data)
@@ -344,6 +363,12 @@ func (s *BacklogService) UpdateBacklogItem(
 	if req.Msg.ReworkCapOverride != nil {
 		override := int(*req.Msg.ReworkCapOverride)
 		update.ReworkCapOverride = &override
+	}
+	// CostBudgetThresholdUsd is presence-gated the same way as ReworkCapOverride
+	// above: only set when the client explicitly sent it, so an omitted field
+	// never clobbers the item's existing threshold.
+	if req.Msg.CostBudgetThresholdUsd != nil {
+		update.CostBudgetThresholdUsd = req.Msg.CostBudgetThresholdUsd
 	}
 	if req.Msg.Notes != "" {
 		notes := req.Msg.Notes

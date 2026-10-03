@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -114,6 +115,32 @@ func decideOverridePolicy(v PRVerification, overrideReason, callerLogin string, 
 			"PR is %s (not open or merged) — refusing to record it even with override_reason.", v.State)
 	}
 	return true, connect.Code(0), ""
+}
+
+// prProvenanceStampTimeout bounds the provenance comment so a slow GitHub call
+// cannot hold up report_pr_created's response.
+const prProvenanceStampTimeout = 10 * time.Second
+
+// stampPRProvenance comments the item's deep link and this host's opaque ID on
+// the PR so any host can trace it back (webhook read-back: handlePRFixEvent).
+// Best-effort: the PR/item transition already succeeded, so a failure is logged
+// and never returned.
+func (h *backlogHandlers) stampPRProvenance(ctx context.Context, item *session.BacklogItemData, ref githubpkg.RepoRef, prNumber int) {
+	body, ok := h.storage.PRProvenanceComment(item)
+	if !ok {
+		return
+	}
+	post := h.postPRComment
+	if post == nil {
+		post = githubpkg.PostPRCommentREST
+	}
+	stampCtx, cancel := context.WithTimeout(ctx, prProvenanceStampTimeout)
+	defer cancel()
+	if err := post(stampCtx, ref, prNumber, body); err != nil {
+		log.Warn("report_pr_created.provenance_stamp_failed", "item", item.ID, "pr_number", prNumber, "err", err)
+		return
+	}
+	log.Info("report_pr_created.provenance_stamped", "item", item.ID, "pr_number", prNumber)
 }
 
 // reportPRCreated records a PR the calling work session created itself
@@ -365,6 +392,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 	}
 
 	log.InfoLog().Printf("[mcp:report_pr_created] session=%s item=%s PR #%d %s", callerUUID, itemID, prNumber, prURL)
+	h.stampPRProvenance(ctx, item, repoRef, prNumber)
 
 	if isReassignment || !verification.Matched {
 		// The override path was actually taken (not the fast path) — audit

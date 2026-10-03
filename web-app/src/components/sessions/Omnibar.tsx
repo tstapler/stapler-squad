@@ -684,6 +684,7 @@ export function Omnibar({
   const totalResultCount = getResultListItemCount(
     displayedSessionResults.length,
     displayedRepoEntries.length,
+    true,
   );
 
   // Accept a completion entry: fill the input and continue for further completion.
@@ -1027,9 +1028,13 @@ export function Omnibar({
         const repoIndex = index - displayedSessionResults.length;
         if (repoIndex < displayedRepoEntries.length) {
           handleRepoSelect(displayedRepoEntries[repoIndex].path);
-        } else {
+        } else if (repoIndex === displayedRepoEntries.length) {
           dispatchMode({ kind: "open_creation_direct" });
           setResultHighlightIndex(-1);
+        } else {
+          setInput("backlog: ");
+          setResultHighlightIndex(-1);
+          inputRef.current?.focus();
         }
       }
     },
@@ -2025,6 +2030,11 @@ export function Omnibar({
             onCreateNew={() => {
               dispatchMode({ kind: "open_creation_direct" });
               setResultHighlightIndex(-1);
+            }}
+            onCreateBacklog={() => {
+              setInput("backlog: ");
+              setResultHighlightIndex(-1);
+              inputRef.current?.focus();
             }}
           />
         )}

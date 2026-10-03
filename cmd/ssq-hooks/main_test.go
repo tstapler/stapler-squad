@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/internal/hookipc"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 )
@@ -312,7 +315,7 @@ func callParseGeminiPayloadWithStdin(t *testing.T, input string) classifier.Perm
 	require.NoError(t, err)
 	w.Close()
 
-	return parseGeminiPayload()
+	return parseGeminiPayload("gemini")
 }
 
 // parseGeminiPayload_should_returnBashTool_When_variantAPayloadProvided
@@ -1029,4 +1032,52 @@ func TestWriteOpenCodeHookDecision_Escalate(t *testing.T) {
 	assert.Contains(t, res.Stderr, "requires manual review")
 	assert.Contains(t, res.Stderr, "no ask/dialog fallback")
 	assert.NotContains(t, res.Stderr, "SSQ-Hooks: blocked", "escalate reason should use its own prefix, not AutoDeny's")
+}
+
+type fakeTransport struct {
+	reply hookipc.ClassificationReply
+	err   error
+	got   hookipc.ClassificationEnvelope
+}
+
+func (f *fakeTransport) Classify(_ context.Context, e hookipc.ClassificationEnvelope) (hookipc.ClassificationReply, error) {
+	f.got = e
+	return f.reply, f.err
+}
+
+func fakeDialer(tr hookipc.Transport, dialErr error) hookipc.Dialer {
+	return func(string) (hookipc.HookEndpoint, hookipc.Transport, error) {
+		return hookipc.HookEndpoint{ProtocolVersion: hookipc.CurrentProtocolVersion, InstanceFingerprint: "fp"}, tr, dialErr
+	}
+}
+
+// TestClassifyViaResident_Transport covers the pluggable seam: a decision is written only when
+// the transport answers with one, and every failure leaves stdout empty (Claude then prompts).
+func TestClassifyViaResident_Transport(t *testing.T) {
+	payload := classifier.PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "echo $FOO $UNSET"}}
+	env := func(n string) (string, bool) { return "bar", n == "FOO" }
+	allow := &hookipc.HookOutput{HookSpecificOutput: hookipc.HookSpecificOutput{HookEventName: "PreToolUse", PermissionDecision: "allow"}}
+
+	cases := []struct {
+		name    string
+		tr      *fakeTransport
+		dialErr error
+		wantOut bool
+	}{
+		{"decision is written", &fakeTransport{reply: hookipc.ClassificationReply{Output: allow}}, nil, true},
+		{"defer writes nothing", &fakeTransport{}, nil, false},
+		{"transport error writes nothing", &fakeTransport{err: errors.New("boom")}, nil, false},
+		{"dial error writes nothing", &fakeTransport{}, errors.New("no instance"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			classifyViaResident(payload, fakeDialer(tc.tr, tc.dialErr), env, &out)
+			assert.Equal(t, tc.wantOut, out.Len() > 0)
+			if tc.dialErr == nil {
+				assert.Equal(t, map[string]string{"FOO": "bar"}, tc.tr.got.Context.Env, "only referenced, set vars are sent")
+				assert.Equal(t, "PreToolUse", tc.tr.got.Payload.HookEventName)
+			}
+		})
+	}
 }

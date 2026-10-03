@@ -56,9 +56,11 @@ type httpHandlers struct {
 	remotePort    int
 }
 
-// isLocalhostRequest returns true when the request originates from the loopback
-// interface (127.0.0.1 or ::1). Auth is not required for local access.
-func isLocalhostRequest(r *http.Request) bool {
+// IsLocalhostRequest returns true when the request originates from the loopback
+// interface (127.0.0.1 or ::1). Auth is not required for local access. Exported
+// so main.go's loopback-only manual redetect-hostnames endpoint (Task 4.2.2a)
+// can reuse the same check rather than duplicating it.
+func IsLocalhostRequest(r *http.Request) bool {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
@@ -78,7 +80,7 @@ func (h *httpHandlers) status(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Local clients bypass auth entirely.
-	if isLocalhostRequest(r) {
+	if IsLocalhostRequest(r) {
 		jsonResponse(w, map[string]interface{}{
 			"auth_enabled":    false,
 			"has_credentials": h.store.HasCredentials(),

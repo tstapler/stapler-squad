@@ -198,6 +198,16 @@ type ItemSessionSummary struct {
 	AcSnapshot               AcCriteriaJSON
 	PipelineModeSnapshot     string
 	PipelineModeSnapshotHash string
+	// ResolvedProgram/ResolvedModel/ExecutorSnapshotHash/ConfiguredProgram/
+	// ExecutorFallbackReason mirror ItemSession's ent schema fields of the
+	// same name — see their schema comments for the full "what ran"
+	// provenance discipline. Independent of PipelineModeSnapshot(Hash), which
+	// covers only content templates, not execution config.
+	ResolvedProgram        string
+	ResolvedModel          string
+	ExecutorSnapshotHash   string
+	ConfiguredProgram      string
+	ExecutorFallbackReason string
 	// BaseCommitSha is the worktree's pre-work HEAD, captured once at spawn —
 	// the base of the review gate's base..HEAD diff, and by construction always
 	// already an ancestor of main. Never use it as evidence that this session's
@@ -219,11 +229,15 @@ type ItemSessionSummary struct {
 	LastProgressAt        *time.Time
 	CreatedAt             time.Time
 	EstimatedCostUsd      float64
-	TriageResult          string // raw JSON stored in triage_result column
-	TriageResultSummary   string // summary field parsed from TriageResult
-	VerificationNotes     string // freeform verification evidence reported via request_review
-	OverallOutcome        string // from linked review_verdict (empty if none)
-	ReviewVerdict         *ReviewVerdictSummary
+	// CostPriced mirrors ItemSession.cost_priced — false when the most recent
+	// cost-contributing headless call could not produce a trustworthy dollar
+	// figure. See the ent schema field's comment for the full rationale.
+	CostPriced          bool
+	TriageResult        string // raw JSON stored in triage_result column
+	TriageResultSummary string // summary field parsed from TriageResult
+	VerificationNotes   string // freeform verification evidence reported via request_review
+	OverallOutcome      string // from linked review_verdict (empty if none)
+	ReviewVerdict       *ReviewVerdictSummary
 	// ClaimantHostID identifies the physical stapler-squad process/host that claimed or
 	// attached this session. See ItemSession.claimant_host_id's schema comment for the
 	// full disambiguation against STAPLER_SQUAD_INSTANCE and CloudContext.InstanceID.
@@ -333,6 +347,11 @@ type BacklogItemData struct {
 	// replacing (not adding to) the global value. See effectiveReworkCap in
 	// server/services/backlog_service_triage.go.
 	ReworkCapOverride *int
+	// CostBudgetThresholdUsd is a per-item, optional soft-budget-warning
+	// threshold in USD. Nil = no threshold configured, no warning ever fires
+	// for this item. Same single-pointer-presence convention as
+	// ReworkCapOverride. See session.EvaluateBudgetThreshold.
+	CostBudgetThresholdUsd *float64
 	// PipelineMode is the slug of the PipelineMode this item uses to drive
 	// triage/work/review content (see session/pipeline_engine.go). Empty
 	// string (PipelineModeDefault) means the built-in, hardcoded pipeline.
@@ -496,11 +515,39 @@ type BacklogItemSummary struct {
 // ItemSessionBacklogEntry is a lightweight join record linking a tmux session UUID
 // to its parent backlog item's metadata. Returned by GetAllItemSessionsWithBacklogInfo.
 type ItemSessionBacklogEntry struct {
-	SessionUUID string
-	SessionRole string
-	ItemID      string
-	ItemTitle   string
-	ItemStatus  string
+	ItemSessionID string // the item_sessions row's own ID
+	SessionUUID   string
+	// ConversationUUID is the Claude transcript UUID ("" if never recorded);
+	// it survives the session row's deletion, unlike SessionUUID's join target.
+	ConversationUUID string
+	SessionRole      string
+	ItemID           string
+	ItemTitle        string
+	ItemStatus       string
+	// EstimatedCostUsd, CostPriced, and CreatedAt mirror the underlying
+	// ItemSession row's own fields (session/ent/schema/item_session.go).
+	EstimatedCostUsd float64
+	CostPriced       bool
+	CreatedAt        time.Time
+}
+
+// DeletedItemSessionCostEntry is a ledger row preserving one deleted
+// ItemSession's cost attribution — written by DeleteBacklogItem just before
+// the item's ItemSession rows are hard-deleted. Returned by
+// GetDeletedItemSessionCostLedger. Field names mirror ItemSessionBacklogEntry
+// so callers can fold both shapes through the same SessionMeta path.
+type DeletedItemSessionCostEntry struct {
+	ConversationUUID string
+	SessionUUID      string
+	SessionRole      string
+	ItemID           string
+	ItemTitle        string
+	EstimatedCostUsd float64
+	CostPriced       bool
+	// CreatedAt is the original ItemSession's created_at (not this ledger
+	// row's deleted_at) — Insights' time-range filter needs the work's
+	// original timestamp.
+	CreatedAt time.Time
 }
 
 // BacklogItemFilter controls which items ListBacklogItems returns.
@@ -628,6 +675,13 @@ type BacklogItemUpdate struct {
 	// default" via this struct — a deliberate simplification; add a
 	// ClearReworkCapOverride bool alongside this if that's needed later.
 	ReworkCapOverride *int
+	// CostBudgetThresholdUsd follows the same single-pointer presence
+	// convention as ReworkCapOverride: nil means "leave untouched", a
+	// non-nil pointer sets the item's threshold (0.0 is a legitimate
+	// configured threshold, distinct from nil/"unset"). There is currently
+	// no way to explicitly clear a threshold back to "unset" via this
+	// struct — same deliberate simplification as ReworkCapOverride.
+	CostBudgetThresholdUsd *float64
 	// UserModifiedFields follows the same partial-update-presence convention:
 	// nil means "leave untouched", a non-nil pointer sets the stored
 	// JSON-encoded set of user-modified field names (e.g. `["title"]`). Build
@@ -701,6 +755,14 @@ type ShellRepository interface {
 	UpdateShellStatus(ctx context.Context, shellID, status string, exitCode *int) error
 	// DeleteShell removes the shell record with the given ID.
 	DeleteShell(ctx context.Context, shellID string) error
+}
+
+// InitialPromptRepository is the minimal persistence interface for recording when
+// Instance.InitialPrompt was actually sent. It is implemented by EntRepository;
+// pass nil to disable persistence (e.g., tests).
+type InitialPromptRepository interface {
+	// UpdateInitialPromptSentAt sets the initial_prompt_sent_at field for a session.
+	UpdateInitialPromptSentAt(ctx context.Context, title string, t time.Time) error
 }
 
 // RepositoryOption is a function that configures a repository

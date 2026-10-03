@@ -75,6 +75,7 @@ interface FormErrors {
   title?: string;
   repoPath?: string;
   acCriteria?: string;
+  costBudgetThreshold?: string;
 }
 
 const AC_STATUS_OPTIONS: { value: AcCriterionStatus; label: string }[] = [
@@ -103,6 +104,16 @@ export function BacklogItemForm({
   );
   const [pipelineMode, setPipelineMode] = useState(initialValues?.pipelineMode ?? "");
   const [category, setCategory] = useState(initialValues?.category ?? "");
+  const [costBudgetThreshold, setCostBudgetThreshold] = useState(
+    initialValues?.costBudgetThresholdUsd !== undefined ? String(initialValues.costBudgetThresholdUsd) : ""
+  );
+  // Same presence-gating rationale as categoryTouchedRef above: only send
+  // cost_budget_threshold_usd on an existing item's Update when the operator
+  // actually touched this session's input, so a possibly-stale
+  // initialValues.costBudgetThresholdUsd never overwrites the item's real
+  // stored threshold with itself (a no-op resend is harmless, but resending a
+  // stale value is not).
+  const costBudgetThresholdTouchedRef = useRef(false);
   // Guards the one-shot SDD default pre-selection below from ever re-firing
   // after either the user has manually touched the selector, or the
   // pre-selection has already applied once — see handlePipelineModeChange
@@ -307,8 +318,15 @@ export function BacklogItemForm({
     if (!initialValues?.id && !repoPath.trim()) {
       errs.repoPath = "Repository path is required for automated triage.";
     }
+    const trimmedThreshold = costBudgetThreshold.trim();
+    if (trimmedThreshold !== "") {
+      const parsed = Number(trimmedThreshold);
+      if (isNaN(parsed) || parsed < 0) {
+        errs.costBudgetThreshold = "Budget threshold must be zero or greater.";
+      }
+    }
     return errs;
-  }, [title, repoPath, initialValues?.id]);
+  }, [title, repoPath, initialValues?.id, costBudgetThreshold]);
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -338,6 +356,18 @@ export function BacklogItemForm({
         // Uncategorized).
         const categoryForSubmit =
           !initialValues?.id || categoryTouchedRef.current ? category : undefined;
+        // Same "only send if touched (or creating)" gating as categoryForSubmit
+        // above — see costBudgetThresholdTouchedRef's comment. An empty input
+        // is sent as `undefined` (omitted from the request), which the server
+        // treats as "leave the existing threshold untouched," not "clear it" —
+        // this control cannot yet clear an already-configured threshold back
+        // to unset, only set or change it (same limitation reworkCapOverride's
+        // single-pointer-presence convention already has for its own sentinel
+        // value).
+        const trimmedThreshold = costBudgetThreshold.trim();
+        const parsedThreshold = trimmedThreshold === "" ? undefined : Number(trimmedThreshold);
+        const costBudgetThresholdForSubmit =
+          !initialValues?.id || costBudgetThresholdTouchedRef.current ? parsedThreshold : undefined;
         await onSubmit({
           title: title.trim(),
           description: descriptionText || undefined,
@@ -352,6 +382,7 @@ export function BacklogItemForm({
           skipTriage: isVague,
           pipelineMode,
           category: categoryForSubmit,
+          costBudgetThresholdUsd: costBudgetThresholdForSubmit,
         });
       } finally {
         setSubmitting(false);
@@ -370,6 +401,7 @@ export function BacklogItemForm({
       acCriteria,
       pipelineMode,
       category,
+      costBudgetThreshold,
       initialValues?.id,
       onSubmit,
       validate,
@@ -673,6 +705,39 @@ export function BacklogItemForm({
             <Link href={routes.settingsPipelineModes} className={styles.pipelineModeEmptyHintLink}>
               Create one in Settings →
             </Link>
+          </span>
+        )}
+      </div>
+
+      {/* Per-item soft budget warning threshold (Epic 5.3, design/ux.md Surface D2) */}
+      <div className={styles.fieldGroup}>
+        <label htmlFor="backlog-cost-budget-threshold" className={styles.label}>
+          Budget threshold (USD)
+        </label>
+        <input
+          id="backlog-cost-budget-threshold"
+          type="number"
+          min="0"
+          step="0.01"
+          className={styles.input}
+          value={costBudgetThreshold}
+          onChange={(e) => {
+            costBudgetThresholdTouchedRef.current = true;
+            setCostBudgetThreshold(e.target.value);
+          }}
+          placeholder="No threshold configured"
+          aria-label="Budget threshold in USD for this item"
+          aria-invalid={!!errors.costBudgetThreshold}
+          aria-describedby={errors.costBudgetThreshold ? "backlog-cost-budget-threshold-error" : undefined}
+          disabled={busy}
+          data-testid="backlog-cost-budget-threshold-input"
+        />
+        <span className={styles.checkboxHint}>
+          Show a warning banner on this item once its total cost reaches this amount. Leave blank for no budget tracking.
+        </span>
+        {errors.costBudgetThreshold && (
+          <span id="backlog-cost-budget-threshold-error" className={styles.errorMessage} role="alert">
+            {errors.costBudgetThreshold}
           </span>
         )}
       </div>

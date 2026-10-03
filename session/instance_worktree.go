@@ -68,15 +68,26 @@ func (i *Instance) setupFirstTimeWorktree() error {
 		// bootstraps and then optionally worktrees off the fresh repo -- so
 		// this case's contract never needs a second, parallel bootstrap path.
 		log.Info("creating git worktree for instance", "session", i.Title, "path", i.Path)
-		gitWorktree, branchName, err := git.NewGitWorktreeWithBranch(i.Path, i.Title, i.Branch, git.WithCommandRunner(i.executionTarget().Runner()))
+		gitWorktree, branchName, err := i.newWorktreeFromResolvedBase()
 		if err != nil {
 			return fmt.Errorf("failed to create git worktree: %w", err)
 		}
 		i.gitManager.SetWorktree(gitWorktree)
-		if i.Branch == "" {
-			i.Branch = branchName
-		}
-		log.Info("git worktree created", "session", i.Title, "branch", i.Branch)
+		// i.mu guards this write and the buildSnapshot() read below against
+		// legacy setters (MarkViewed, ForceStatus, etc. -- see ForceStatus's
+		// doc comment) that bypass the actor and run on arbitrary caller
+		// goroutines; an unguarded write+read here raced with them under
+		// -race the same way ForceStatus's fix describes.
+		i.mu.Lock()
+		i.Branch = branchName
+		// Republish the snapshot so GetCreationWarning() (Snapshot()-backed, per
+		// instance-lock-free-reads.md) observes the CreationWarning set above by
+		// newWorktreeFromResolvedBase -- the initial snapshot published at
+		// construction predates this and is never otherwise refreshed.
+		snap := buildSnapshot(i)
+		i.mu.Unlock()
+		i.snapshot.Store(snap)
+		log.Info("git worktree created", "session", i.Title, "branch", branchName)
 	case SessionTypeExistingWorktree:
 		if i.ExistingWorktree == "" {
 			return fmt.Errorf("existing worktree path required for SessionTypeExistingWorktree")
@@ -120,19 +131,30 @@ func (i *Instance) setupFirstTimeWorktree() error {
 			// the same as a lookup failure -- it's a real string but not a
 			// meaningful branch name to persist or display.
 			if i.Branch == "" {
-				i.Branch = "unknown"
+				// Resolve into a local var BEFORE taking i.mu -- runner.Run is a
+				// blocking remote git subprocess bounded only by the 10s ctx timeout
+				// above; holding the actor lock across it would stall every other
+				// i.mu.Lock()/RLock() caller (including the legacy-writer setters
+				// documented in instance_actor_setters.go) for up to that long.
+				branch := "unknown"
 				if out, brErr := runner.Run(ctx, i.ExistingWorktree, "git", "rev-parse", "--abbrev-ref", "HEAD"); brErr == nil {
 					if br := strings.TrimSpace(string(out)); br != "" && br != "HEAD" {
-						i.Branch = br
+						branch = br
 					}
 				} else {
 					log.Warn("failed to resolve remote worktree branch name", "session", i.Title, "path", i.ExistingWorktree, "err", brErr)
 				}
+				i.mu.Lock()
+				i.Branch = branch
+				i.mu.Unlock()
 			}
 			cancel()
 			gitWorktree := git.NewGitWorktreeFromStorage(i.Path, i.ExistingWorktree, i.Title, i.Branch, baseCommitSHA, git.WithCommandRunner(runner))
+			i.mu.Lock()
 			i.gitManager.SetWorktree(gitWorktree)
-			log.Info("attached to remote git worktree", "session", i.Title, "path", i.ExistingWorktree, "branch", i.Branch)
+			attachedBranch := i.Branch
+			i.mu.Unlock()
+			log.Info("attached to remote git worktree", "session", i.Title, "path", i.ExistingWorktree, "branch", attachedBranch)
 			break
 		}
 		log.Info("connecting to existing worktree", "session", i.Title, "path", i.ExistingWorktree)
@@ -140,9 +162,12 @@ func (i *Instance) setupFirstTimeWorktree() error {
 		if err != nil {
 			return fmt.Errorf("failed to connect to existing worktree: %w", err)
 		}
+		i.mu.Lock()
 		i.gitManager.SetWorktree(gitWorktree)
-		i.Branch = gitWorktree.GetBranchName()
-		log.Info("connected to existing worktree", "session", i.Title, "branch", i.Branch)
+		connectedBranch := gitWorktree.GetBranchName()
+		i.Branch = connectedBranch
+		i.mu.Unlock()
+		log.Info("connected to existing worktree", "session", i.Title, "branch", connectedBranch)
 	case SessionTypeNewProject:
 		log.Info("new project session, initializing git repo", "session", i.Title, "path", i.Path)
 		// A remote instance's project directory was already git-initialized on the
@@ -172,15 +197,19 @@ func (i *Instance) setupFirstTimeWorktree() error {
 			if err != nil {
 				return fmt.Errorf("new_project worktree creation failed: %w", err)
 			}
+			i.mu.Lock()
 			i.gitManager.SetWorktree(gitWorktree)
 			i.Branch = branchName
-			log.Info("new project initialized with worktree", "path", i.Path, "branch", i.Branch)
-			return nil
+			i.mu.Unlock()
+			log.Info("new project initialized with worktree", "path", i.Path, "branch", branchName)
+		} else {
+			i.mu.Lock()
+			i.gitManager.SetWorktree(nil)
+			i.Branch = ""
+			i.mu.Unlock()
+			log.Info("new project initialized", "path", i.Path)
 		}
-		i.gitManager.SetWorktree(nil)
-		i.Branch = ""
-		log.Info("new project initialized", "path", i.Path)
-	default: // SessionTypeDirectory and unknown types → no worktree
+	case SessionTypeDirectory:
 		log.Info("directory session, no git worktree", "session", i.Title, "path", i.Path)
 		// EnsureDirectorySessionPath does local-filesystem os.Stat/git-init -- correct for
 		// a local Directory session, but i.Path names a REMOTE host path for a remote one,
@@ -194,10 +223,52 @@ func (i *Instance) setupFirstTimeWorktree() error {
 				return fmt.Errorf("failed to create directory for session: %w", err)
 			}
 		}
+		i.mu.Lock()
 		i.gitManager.SetWorktree(nil)
 		i.Branch = ""
+		i.mu.Unlock()
+	default:
+		return fmt.Errorf("setupFirstTimeWorktree: unrecognized session type %q for session %q", i.SessionType, i.Title)
 	}
+
+	// Shared republish for every case that doesn't already inline one (SessionTypeNewWorktree
+	// above republishes early so GetCreationWarning() sees CreationWarning immediately; this
+	// second store for that case is a harmless, idempotent extra atomic write).
+	i.mu.Lock()
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.snapshot.Store(snap)
 	return nil
+}
+
+// newWorktreeFromResolvedBase constructs the *git.GitWorktree for a
+// SessionTypeNewWorktree session, branching from the repo's resolved default
+// branch (git.ResolveWorktreeBaseCommit) instead of i.Path's ambient
+// checked-out HEAD, and records a divergence warning when they differ. Mirrors
+// CreateBacklogWorktree's resolve-then-construct pattern.
+func (i *Instance) newWorktreeFromResolvedBase() (*git.GitWorktree, string, error) {
+	branchName := git.ResolveBranchName(i.Branch, i.Title)
+	runner := i.executionTarget().Runner()
+
+	resolvedRepo, err := ResolveMainRepoRoot(i.Path)
+	if err != nil {
+		resolvedRepo = i.Path
+	}
+
+	defaultBranch, baseSHA, resolveErr := git.ResolveWorktreeBaseCommit(resolvedRepo)
+	if resolveErr != nil {
+		return nil, "", fmt.Errorf("resolve default branch: %w", resolveErr)
+	}
+	if baseSHA == "" {
+		// Unborn repo (IsUnbornRepo) -- no commits anywhere, so ambient HEAD
+		// carries no risk of branching from an unrelated branch's work.
+		return git.NewGitWorktreeWithBranch(i.Path, i.Title, branchName, git.WithCommandRunner(runner))
+	}
+	if diverged, ambientBranch := git.AmbientHEADDivergesFromBase(resolvedRepo, baseSHA); diverged {
+		i.CreationWarning = git.FormatAmbientDivergenceWarning(resolvedRepo, defaultBranch, ambientBranch)
+		log.Warn("new_worktree: ambient HEAD diverges from resolved default branch", "repoPath", resolvedRepo, "defaultBranch", defaultBranch, "ambientBranch", ambientBranch)
+	}
+	return git.NewGitWorktreeFromCommitSHA(i.Path, i.Title, branchName, baseSHA, git.WithCommandRunner(runner))
 }
 
 // EnsureDirectorySessionPath creates and git-inits path if it does not already exist —
@@ -417,6 +488,13 @@ func (i *Instance) ActiveDir() string {
 // accessor (the published atomic Snapshot) rather than the bare i.Path field.
 func (i *Instance) GetPath() string {
 	return i.Snapshot().Path
+}
+
+// GetCreationWarning returns the one-time base-branch-divergence warning set
+// by newWorktreeFromResolvedBase, if any, via the lock-free published
+// Snapshot() rather than the bare i.CreationWarning field.
+func (i *Instance) GetCreationWarning() string {
+	return i.Snapshot().CreationWarning
 }
 
 // Workspace returns every path concept this session has, named. See the

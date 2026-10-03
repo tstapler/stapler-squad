@@ -2,12 +2,14 @@ package mcp
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
@@ -42,6 +44,7 @@ func (e *liveSessionExecutor) Output(_ *exec.Cmd) ([]byte, error) {
 // behind) to a poller holding occupants, and returns lifecycleHandlers over it.
 func newWorktreeGuardHandlers(t *testing.T, occupants ...*session.Instance) *lifecycleHandlers {
 	t.Helper()
+	envtest.NewIsolatedStateDir(t)
 	storage := newTestBacklogStorage(t)
 	bus := events.NewEventBus(16)
 	svc := services.NewSessionService(storage, bus)
@@ -88,7 +91,15 @@ func newWorktreeTargetInstance(uuid, worktreePath string) *session.Instance {
 // behavior, which had no guard at all and let the worktree be removed.
 func TestRefuseIfWorktreeSharedWithOtherLiveSession_BlocksWhenSiblingStillRunning(t *testing.T) {
 	worktree := t.TempDir()
-	sibling := newLiveOccupant(t, "guard-sibling-"+t.Name(), filepath.Join(worktree, "web-app"))
+	// A real tmux pane's cwd always exists on disk; the production symlink-
+	// canonical comparison in OtherLiveSessionInsideWorktree (filepath.EvalSymlinks)
+	// silently falls back to the unresolved path when it doesn't, which would
+	// make this pass for the wrong reason on some hosts and fail outright on
+	// others (e.g. macOS, where t.TempDir()'s real path has a symlink hop:
+	// /var -> /private/var).
+	siblingCwd := filepath.Join(worktree, "web-app")
+	require.NoError(t, os.MkdirAll(siblingCwd, 0755))
+	sibling := newLiveOccupant(t, "guard-sibling-"+t.Name(), siblingCwd)
 	lh := newWorktreeGuardHandlers(t, sibling)
 
 	target := newWorktreeTargetInstance("uuid-guard-target", worktree)

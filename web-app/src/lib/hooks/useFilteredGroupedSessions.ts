@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { type Session, SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
-import { groupSessions, type GroupingStrategy, type GroupedSessions } from "@/lib/grouping/strategies";
+import { groupSessions, groupWithPinned, type GroupingStrategy, type GroupedSessions } from "@/lib/grouping/strategies";
 import { compareSessionsByCost } from "@/components/sessions/sessionCostSort";
 
 export type SortField = "lastActivity" | "name" | "createdAt" | "updatedAt" | "tokenCost";
@@ -161,9 +161,11 @@ export function useFilteredGroupedSessions({
   // tick a caller may drive — a session can cross the stale threshold with no change
   // to sortedSessions/groupingStrategy, and this is the only way to pick that up.
   const groupedSessionsResult = useMemo(() => {
-    return groupSessions(sortedSessions, groupingStrategy, {
-      thresholdMinutes: staleThresholdMinutes,
-    });
+    return groupWithPinned(sortedSessions, (rest) =>
+      groupSessions(rest, groupingStrategy, {
+        thresholdMinutes: staleThresholdMinutes,
+      })
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortedSessions, groupingStrategy, staleThresholdMinutes, staleRecomputeTick]);
 

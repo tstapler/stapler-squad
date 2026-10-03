@@ -22,7 +22,14 @@ const (
 	// ScrollGateNotAltScreen means the pane is not in the alternate screen
 	// buffer.
 	ScrollGateNotAltScreen
-	// ScrollGateUnsafeStatus means inst's DetectedStatus is not StatusIdle.
+	// ScrollGateNoActiveController means no ClaudeController/PiStatusSource is
+	// active for inst, so DetectedStatus carries no live signal at all --
+	// distinct from ScrollGateUnsafeStatus, where a controller is active but
+	// reported a specific unsafe status.
+	ScrollGateNoActiveController
+	// ScrollGateUnsafeStatus means inst's DetectedStatus, with a controller
+	// active, is not one of the idle-equivalent statuses AppScrollGate
+	// allowlists (see its doc comment).
 	ScrollGateUnsafeStatus
 	// ScrollGateUnsupportedPath means subscriberCount was the
 	// PathLegacyPerConnection sentinel (< 0), not a genuine multi-viewer
@@ -33,22 +40,25 @@ const (
 	ScrollGateTooManyViewers
 )
 
-// AppScrollGate reports whether it is currently safe to forward a scroll
-// keystroke to inst, composing four checks in order: (1) a ScrollAdapter
-// exists for inst's program, (2) the pane is in the alternate screen buffer,
-// (3) DetectedStatus is exactly StatusIdle, and (4) exactly one subscriber is
-// connected.
+// AppScrollGate reports whether it is safe to forward a scroll keystroke to
+// inst, composing four checks: (1) a ScrollAdapter exists for inst's program,
+// (2) the pane is in the alternate screen buffer, (3) a status controller is
+// active and its DetectedStatus is idle-equivalent, and (4) exactly one
+// subscriber is connected.
 //
-// Check (3) allowlists StatusIdle rather than denylisting unsafe statuses,
-// so a new DetectedStatus value is unsafe by default -- forwarding mid-turn
-// (StatusExecuting/NeedsApproval/InputRequired) is the highest-severity
-// concurrency race in research/pitfalls.md §1.
+// Check (3) allowlists idle-equivalent statuses -- isIdleStatus's
+// {StatusIdle, StatusReady, StatusSuccess} (session/autonomous_driver.go) --
+// plus StatusUnknown, rather than denylisting unsafe ones, so a new
+// DetectedStatus value is unsafe by default. StatusUnknown is ambiguous: it's
+// both MatchLines' ready-prompt catch-all (session/detection/pattern_set.go)
+// and what GetDetectedStatus returns when no controller is active at all.
+// This check disambiguates by reading GetDetectedStatusInfo's
+// controllerActive flag first and rejecting (ScrollGateNoActiveController)
+// when it's false, before StatusUnknown is ever treated as safe.
 //
 // subscriberCount is passed in (not queried internally) to keep this file
-// free of a streamhub import; PathLegacyPerConnection callers pass a -1
-// sentinel to force check (4) to fail as the distinct
-// ScrollGateUnsupportedPath reason rather than ScrollGateTooManyViewers, so a
-// solo legacy-path user never sees "another viewer connected" copy.
+// free of a streamhub import; a -1 sentinel (PathLegacyPerConnection) fails
+// check (4) as ScrollGateUnsupportedPath rather than ScrollGateTooManyViewers.
 //
 // reason is for logs only; branch on ScrollGateFailure instead.
 func AppScrollGate(inst *Instance, subscriberCount int) (ok bool, failure ScrollGateFailure, reason string) {
@@ -58,7 +68,11 @@ func AppScrollGate(inst *Instance, subscriberCount int) (ok bool, failure Scroll
 	if !inst.GetAltScreenActive() {
 		return false, ScrollGateNotAltScreen, "not in alternate screen buffer"
 	}
-	if status := inst.GetDetectedStatus(); status != detection.StatusIdle {
+	status, controllerActive := inst.GetDetectedStatusInfo()
+	if !controllerActive {
+		return false, ScrollGateNoActiveController, "no active status controller"
+	}
+	if !isIdleStatus(status) && status != detection.StatusUnknown {
 		return false, ScrollGateUnsafeStatus, "unsafe detected status: " + detectedStatusScrollGateLabel(status)
 	}
 	if subscriberCount != 1 {
@@ -71,17 +85,35 @@ func AppScrollGate(inst *Instance, subscriberCount int) (ok bool, failure Scroll
 }
 
 // detectedStatusScrollGateLabel maps a DetectedStatus to the lowercase,
-// snake_case-ish label used in AppScrollGate's rejection reasons.
+// snake_case-ish label used in AppScrollGate's rejection reasons. Every
+// non-safe DetectedStatus value gets its own explicit case so the log can
+// tell them apart -- StatusUnknown never reaches here (AppScrollGate
+// allowlists it), so "unknown" in the default case means a future
+// DetectedStatus value this function hasn't been updated for yet.
 func detectedStatusScrollGateLabel(status detection.DetectedStatus) string {
 	switch status {
+	case detection.StatusReady:
+		return "ready"
+	case detection.StatusProcessing:
+		return "processing"
 	case detection.StatusNeedsApproval:
 		return "needs_approval"
 	case detection.StatusInputRequired:
 		return "input_required"
-	case detection.StatusExecuting:
-		return "executing"
+	case detection.StatusError:
+		return "error"
+	case detection.StatusTestsFailing:
+		return "tests_failing"
 	case detection.StatusIdle:
 		return "idle"
+	case detection.StatusExecuting:
+		return "executing"
+	case detection.StatusSuccess:
+		return "success"
+	case detection.StatusWaitingForAgent:
+		return "waiting_for_agent"
+	case detection.StatusCompacting:
+		return "compacting"
 	default:
 		return "unknown"
 	}

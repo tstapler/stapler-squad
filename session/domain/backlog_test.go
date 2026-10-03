@@ -73,15 +73,31 @@ func TestStuckReasonReworkBlockedStale_should_beValid_When_Checked(t *testing.T)
 	}
 }
 
-// TestAllStuckReasons_should_contain20Entries_When_Enumerated is a regression
+// TestAllStuckReasons_should_contain23Entries_When_Enumerated is a regression
 // guard: catches an accidental removal from AllStuckReasons (which would
 // silently exclude a valid reason from every consumer that iterates the full
 // set, e.g. exhaustiveness tests) independent of IsValid's own switch. Bumped
-// from 19 to 20 by Epic 2.4's StuckReasonGateTimeout addition.
-func TestAllStuckReasons_should_contain20Entries_When_Enumerated(t *testing.T) {
+// from 20 to 21 by session-worktree-reconciliation's StuckReasonWorktreeInconsistent
+// addition (Architecture-A2), to 22 by cross-host-claim-dedup's
+// StuckReasonBlockedByClaim, and to 23 by StuckReasonRepeatedNoopDispatch.
+func TestAllStuckReasons_should_contain23Entries_When_Enumerated(t *testing.T) {
 	t.Parallel()
-	if len(AllStuckReasons) != 20 {
-		t.Errorf("len(AllStuckReasons) = %d, want 20", len(AllStuckReasons))
+	if len(AllStuckReasons) != 23 {
+		t.Errorf("len(AllStuckReasons) = %d, want 23", len(AllStuckReasons))
+	}
+}
+
+func TestStuckReasonBlockedByClaim_should_beValidAndListed_When_Checked(t *testing.T) {
+	t.Parallel()
+	if !StuckReasonBlockedByClaim.IsValid() {
+		t.Errorf("StuckReasonBlockedByClaim.IsValid() = false, want true")
+	}
+	found := false
+	for _, r := range AllStuckReasons {
+		found = found || r == StuckReasonBlockedByClaim
+	}
+	if !found {
+		t.Errorf("StuckReasonBlockedByClaim missing from AllStuckReasons")
 	}
 }
 

@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/memory"
 	"github.com/tstapler/stapler-squad/session/sshremote"
+	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/telemetry"
 
@@ -57,7 +58,7 @@ type Server struct {
 	tlsConfig                  *tls.Config                     // non-nil when TLS is enabled
 	authMiddleware             func(http.Handler) http.Handler // nil when auth is disabled
 	httpsURL                   string                          // set when remote access is enabled
-	hostnames                  []string                        // detected LAN hostnames
+	hostnames                  atomic.Pointer[[]string]        // detected LAN hostnames; published add-only via SetHostnames, read lock-free via GetHostnames
 	origins                    []string                        // allowed CORS origins
 	shutdownHooks              []func()                        // called before HTTP server stops
 	connCtxCancel              context.CancelFunc              // cancels BaseContext → closes active streams on shutdown
@@ -67,6 +68,7 @@ type Server struct {
 	slackInteractiveDisabled   bool                            // set in wireDepsIntoServer; see ServeHTTP's doc comment for why this can't be expressed as an s.mux registration
 	backgroundTasksWG          sync.WaitGroup                  // joined by Shutdown() — fork-pressure logger, zombie watcher, zombie reaper
 	backgroundTasksJoinTimeout time.Duration                   // bounds Shutdown's join of backgroundTasksWG; defaults to defaultBackgroundTasksJoinTimeout, overridable in tests
+	hookIPC                    *hookIPCState                   // resident instance-scoped PreToolUse classifier; started with the HTTP server
 }
 
 // ServeHTTP makes *Server an http.Handler wrapping s.mux. Beyond delegating,
@@ -170,6 +172,9 @@ const sessionHealthCheckInterval = 15 * time.Second
 // serverCtx (== connCtx from newServerBase) is cancelled by Shutdown() to signal
 // active streaming connections to close.
 func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context.Context) {
+	srv.hookIPC = newHookIPCState(deps)
+	srv.shutdownHooks = append(srv.shutdownHooks, srv.hookIPC.Close)
+
 	// Start background components
 	go deps.ReactiveQueueMgr.Start(serverCtx)
 	log.Info("ReactiveQueueManager started")
@@ -411,7 +416,18 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	log.Info("Registered CDP stream WebSocket handler at /api/sessions/{id}/cdp-stream")
 
 	// Register general ConnectRPC handler (unary calls)
-	path, handler := sessionv1connect.NewSessionServiceHandler(deps.SessionService, ConnectOptions(deps.ErrorRegistry)...)
+	sessionOpts := append(
+		ConnectOptions(deps.ErrorRegistry),
+		connect.WithInterceptors(interceptors.NewScopedFeatureFlagInterceptor(
+			"programs:cli-flag-probe",
+			services.ProgramCLIFlagProbeEnabled,
+			services.ProgramCLIFlagProbeGatedMethod,
+		)),
+	)
+	// Build the capture tap registry now so an env-enabled tap logs its ACTIVE warning at startup.
+	_ = streamhub.DefaultTapRegistry()
+	path, handler := sessionv1connect.NewSessionServiceHandler(deps.SessionService, sessionOpts...)
+	handler = services.WithRequestHost(handler)
 	apiPath := "/api" + path
 
 	// Register StreamingWSBridge for server-streaming Watch* RPCs so browsers use
@@ -497,19 +513,6 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered TymuxRolloutService handler", "path", tymuxRolloutAPIPath)
 	}
 
-	// Register NativeGitRolloutService handler (go-git-worktree-and-merge
-	// Epic 4.2: operator-facing controls for the staged native-worktree/
-	// native-merge rollout, mirroring TymuxRolloutService's registration).
-	// Config-backed with no external deps, so it's constructed inline rather
-	// than threaded through ServerDependencies.
-	{
-		nativeGitRolloutSvc := services.NewNativeGitRolloutService()
-		nativeGitRolloutPath, nativeGitRolloutHandler := sessionv1connect.NewNativeGitRolloutServiceHandler(nativeGitRolloutSvc, ConnectOptions(deps.ErrorRegistry)...)
-		nativeGitRolloutAPIPath := "/api" + nativeGitRolloutPath
-		srv.RegisterConnectHandler(nativeGitRolloutAPIPath, http.StripPrefix("/api", nativeGitRolloutHandler))
-		log.Info("Registered NativeGitRolloutService handler", "path", nativeGitRolloutAPIPath)
-	}
-
 	// Register GuidanceRequestService handler (durable-guidance-request Phase
 	// 2: create/answer/read a durable question/answer, mirroring
 	// TymuxRolloutService's registration). Storage-backed, so it's threaded
@@ -529,6 +532,25 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		guidanceRequestAPIPath := "/api" + guidanceRequestPath
 		srv.RegisterConnectHandler(guidanceRequestAPIPath, http.StripPrefix("/api", guidanceRequestHandler))
 		log.Info("Registered GuidanceRequestService handler", "path", guidanceRequestAPIPath)
+	}
+
+	// Register DiagnosticService handler ("Diagnose & Nudge", backlog item
+	// 68964304): AssembleDiagnosticBundle/DispatchDiagnose. deps.SessionService
+	// satisfies services.DiagnosticSpawner (SpawnDiagnosticSession); a nil
+	// *SessionService (same nil-interface-boxing hazard the GuidanceRequestService
+	// block above documents) is guarded by only assigning it when non-nil.
+	if deps.Storage != nil {
+		var diagnosticSpawner services.DiagnosticSpawner
+		if deps.SessionService != nil {
+			diagnosticSpawner = deps.SessionService
+		}
+		diagnosticSvc := services.NewDiagnosticService(deps.Storage, diagnosticSpawner)
+		diagnosticSvc.SetPoller(deps.ReviewQueuePoller)
+		diagnosticSvc.SetExternalDiscovery(deps.ExternalDiscovery)
+		diagnosticPath, diagnosticHandler := sessionv1connect.NewDiagnosticServiceHandler(diagnosticSvc, ConnectOptions(deps.ErrorRegistry)...)
+		diagnosticAPIPath := "/api" + diagnosticPath
+		srv.RegisterConnectHandler(diagnosticAPIPath, http.StripPrefix("/api", diagnosticHandler))
+		log.Info("Registered DiagnosticService handler", "path", diagnosticAPIPath)
 	}
 
 	// Register RemoteService handler (ssh-remote-workspaces Epic 3.3: TOFU
@@ -735,6 +757,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// PR bodies can link back to the backlog item instead of embedding a bare UUID.
 	if deps.BacklogLifecycleListener != nil {
 		deps.BacklogLifecycleListener.SetDashboardBaseURLFn(hookBaseURLFn)
+		deps.BacklogLifecycleListener.SetNoopDispatchThresholdFn(func() int {
+			return config.LoadConfig().NoopDispatchThresholdOrDefault()
+		})
 	}
 	// Wire the review queue poller for immediate queue checks on new approvals (Story 3, Task 3.1)
 	approvalHandler.SetQueueChecker(deps.ReviewQueuePoller)
@@ -1177,6 +1202,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		go orphanSweeper.Start(serverCtx)
 	}
 
+	// Start leaked-control-mode-client sweeper, the periodic counterpart to
+	// main.go's one-time startup cleanup — see StartLeakedControlModeSweeper's
+	// doc comment. Gated on IsIsolatedInstance like OrphanedTmuxSweeper: a
+	// named instance shares the real default tmux socket without its own, so
+	// this would otherwise kill the production instance's own live clients.
+	if !config.IsIsolatedInstance() {
+		go tmux.StartLeakedControlModeSweeper(serverCtx, "")
+	}
+
 	// Start session retention sweeper (deletes archived sessions past the retention
 	// window once they pass safety checks — see SessionRetentionSweeper doc comment).
 	if cfg.SessionRetention.EnabledOrDefault() {
@@ -1361,6 +1395,12 @@ func (d *dualStackListener) Addr() net.Addr {
 // Start starts the HTTP server with middleware chain.
 // This is a blocking call. Use Start() in a goroutine for concurrent operation.
 func (s *Server) Start(ctx context.Context) error {
+	if err := s.hookIPC.Start(); err != nil {
+		// The main server remains available; hook clients use verified cache/defer
+		// fallback until endpoint health is restored.
+		log.Warn("hook classifier endpoint unavailable", "err", err)
+	}
+
 	// Register health check endpoint
 	s.mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1371,12 +1411,8 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Build middleware chain:
 	// otelhttp -> logging -> CORS -> gzip -> [auth] -> mux
-	inner := http.Handler(s)
-	if s.authMiddleware != nil {
-		inner = s.authMiddleware(inner)
-	}
 	handler := otelhttp.NewHandler(
-		middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))),
+		s.localChain(),
 		"stapler-squad-http",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)
@@ -1513,14 +1549,45 @@ func (s *Server) SetHTTPSURL(url string) {
 	s.httpsURL = url
 }
 
-// SetHostnames records the detected LAN hostnames for this server.
+// SetHostnames merges hostnames into the previously published set and
+// atomically publishes the result. It never shrinks the set — a hostname
+// that drops out of a later detection cycle (e.g. a network interface goes
+// away) stays visible, since a stale-but-reachable hostname is safer than a
+// TLS SAN mismatch for a client that cached the old one. Order is
+// deterministic: previously published entries first, then new entries in
+// the order given.
 func (s *Server) SetHostnames(hostnames []string) {
-	s.hostnames = hostnames
+	var previous []string
+	if p := s.hostnames.Load(); p != nil {
+		previous = *p
+	}
+
+	seen := make(map[string]bool, len(previous)+len(hostnames))
+	merged := make([]string, 0, len(previous)+len(hostnames))
+	for _, h := range previous {
+		if !seen[h] {
+			seen[h] = true
+			merged = append(merged, h)
+		}
+	}
+	for _, h := range hostnames {
+		if !seen[h] {
+			seen[h] = true
+			merged = append(merged, h)
+		}
+	}
+
+	s.hostnames.Store(&merged)
 }
 
-// GetHostnames returns the detected LAN hostnames.
+// GetHostnames returns the currently published set of detected LAN
+// hostnames, or nil if SetHostnames has never been called.
 func (s *Server) GetHostnames() []string {
-	return s.hostnames
+	p := s.hostnames.Load()
+	if p == nil {
+		return nil
+	}
+	return *p
 }
 
 // SetOrigins records the allowed CORS origins.
@@ -1588,7 +1655,7 @@ func (s *Server) registerServerInfoHandler() {
 			CAPEMPath:  caPath,
 			HTTPSURL:   s.httpsURL,
 			TLSEnabled: tlsEnabled,
-			Hostnames:  s.hostnames,
+			Hostnames:  s.GetHostnames(),
 			Programs:   s.availablePrograms,
 			Version:    buildinfo.Version,
 			Branch:     buildinfo.Branch,
@@ -1604,17 +1671,51 @@ func (s *Server) registerServerInfoHandler() {
 	})
 }
 
+// probeProcedurePath is the full request path of ProbeProgram as seen by the
+// outer handler, before the mux strips the "/api" prefix.
+const probeProcedurePath = "/api" + sessionv1connect.SessionServiceProbeProgramProcedure
+
+// localChain is the :8543 middleware chain (inside otelhttp):
+// Logging -> CORS -> Compress -> [auth | ProbeGuard] -> mux.
+// The listener has no auth unless authMiddleware is set, so ProbeGuard is the
+// boundary for the one RPC that executes a program; with auth, auth is the boundary.
+func (s *Server) localChain() http.Handler {
+	inner := http.Handler(s)
+	if s.authMiddleware != nil {
+		inner = s.authMiddleware(inner)
+	} else {
+		inner = middleware.ProbeGuard(probeProcedurePath, s.probeGuardConfig())(inner)
+	}
+	return middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner)))
+}
+
+// remoteChain is the :8444 chain. It never carries ProbeGuard: auth is the
+// boundary there and its Host is a LAN/Tailscale name the guard would reject.
+func (s *Server) remoteChain(authMW func(http.Handler) http.Handler) http.Handler {
+	inner := http.Handler(s)
+	if authMW != nil {
+		inner = authMW(inner)
+	}
+	return middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner)))
+}
+
+// probeGuardConfig reads everything lazily: origins, hostnames and the bound
+// address are all set or resolved after construction.
+func (s *Server) probeGuardConfig() middleware.ProbeGuardConfig {
+	return middleware.ProbeGuardConfig{
+		LoopbackBound:  func() bool { return middleware.ListenAddrIsLoopback(s.GetAddr()) },
+		AllowedOrigins: s.GetOrigins,
+		AllowedHosts:   s.GetHostnames,
+	}
+}
+
 // StartRemote starts a second HTTPS server on remoteAddr, sharing the same
 // route mux as the local server but protected by TLS and auth middleware.
 // It binds eagerly (returns a bind error immediately if the port is in use),
 // then runs the server in a background goroutine until ctx is cancelled.
 func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls.Config, authMW func(http.Handler) http.Handler) error {
-	inner := http.Handler(s)
-	if authMW != nil {
-		inner = authMW(inner)
-	}
 	handler := otelhttp.NewHandler(
-		middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))),
+		s.remoteChain(authMW),
 		"stapler-squad-remote",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)
