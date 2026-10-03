@@ -116,6 +116,12 @@ func isGeneratedSlashCommandName(name string) bool {
 	return fixedSlashCommandNames[name] || perCriterionSlashCommandName.MatchString(name)
 }
 
+// Root cause of the wrong-item-ID report (backlog item 3fe1321c): a ~/.claude/commands/backlog/
+// written 2026-08-12 by an old build that used $HOME as the target held item b608ab1e's ID in every
+// file. Claude Code treats it as user-scope, so any session lacking project-level copies (triage
+// worktrees, or sessions started before the per-item files were written) listed those commands.
+// The per-worktree generator was correct; see also the $HOME guard in WriteSlashCommands.
+//
 // RemoveStaleUserLevelBacklogCommands deletes <home>/.claude/commands/backlog when it holds only
 // stapler-squad-generated command files. Per-item commands belong in the session worktree; a copy
 // at user scope (written by an old build that targeted $HOME) is loaded by every session lacking

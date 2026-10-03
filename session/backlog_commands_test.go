@@ -950,6 +950,14 @@ func TestWriteSlashCommands_should_RegenerateWithNewItemID_When_WorkspaceReusedF
 			t.Errorf("%s does not contain new item ID", name)
 		}
 	}
+	// help.md embeds no item ID; it must instead list only the new item's commands.
+	help, hErr := os.ReadFile(filepath.Join(cmdDir, "help.md"))
+	if hErr != nil {
+		t.Fatalf("help.md missing: %v", hErr)
+	}
+	if !strings.Contains(string(help), "/backlog/done-1") || strings.Contains(string(help), "/backlog/done-2") {
+		t.Errorf("help.md should list done-0..1 only, got:\n%s", help)
+	}
 	for _, e := range entries {
 		b, rErr := os.ReadFile(filepath.Join(cmdDir, e.Name()))
 		if rErr != nil {
