@@ -9,7 +9,10 @@ import React from "react";
 import { render } from "@testing-library/react";
 import { composeStories } from "@storybook/react";
 
-jest.mock("@/lib/hooks/useSessionRepoPaths", () => ({ useSessionRepoPaths: () => [] }));
+// DebugMenu fetches the server log level on open; jsdom has no fetch.
+global.fetch = jest.fn(() => Promise.resolve({ json: () => Promise.resolve({ level: "INFO" }) })) as jest.Mock;
+
+jest.mock("@/lib/hooks/useSessionRepoPaths",() => ({ useSessionRepoPaths: () => [] }));
 jest.mock("@/lib/hooks/useGitHubEnterpriseHosts", () => ({
   useGitHubEnterpriseHosts: () => ({ hosts: [] }),
 }));
@@ -17,36 +20,14 @@ jest.mock("@/lib/hooks/usePathCompletions", () => ({
   usePathCompletions: () => ({ entries: [], isLoading: false }),
 }));
 
+// jsdom lacks scrollIntoView; SlashCommandDropdown calls it on the selected row.
+Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? (() => {});
+
 const SRC = path.resolve(__dirname, "../../..");
 const DIRS = ["components/ui", "components/common"];
 
 // Follow-up: stories still to write (tracked in project_plans/audit-ux-component-library/audit.md).
 const UNCATALOGED: Record<string, string> = {
-  ActionBar: "follow-up: needs session fixtures",
-  AliasPalette: "follow-up: needs alias fixtures",
-  AppLink: "re-export of next/link, nothing to catalog",
-  AtCommandDropdown: "follow-up: omnibar-internal",
-  AutocompleteInput: "follow-up",
-  AvailableFlags: "follow-up: flag-picker internal",
-  Collapsible: "follow-up",
-  DebugMenu: "dev-only",
-  ErrorBoundary: "behavioral wrapper, no visual states",
-  EstimatedValue: "follow-up",
-  FlagCombobox: "follow-up",
-  FlagInfoButton: "follow-up",
-  KeyboardHint: "follow-up",
-  LiveRegion: "a11y utility, no visual states",
-  NavBadge: "follow-up: needs store",
-  Navigation: "follow-up: needs router",
-  NotificationItem: "follow-up: needs notification fixtures",
-  NotificationPanel: "follow-up: needs store",
-  NotificationToast: "follow-up: needs notification fixtures",
-  NotificationsNavBadge: "follow-up: needs store",
-  PathCompletionDropdown: "internal to RepoPathInput (covered by its stories)",
-  ProbeStatusBadge: "follow-up: needs probe fixtures",
-  SlashCommandDropdown: "follow-up: omnibar-internal",
-  SystemBanner: "follow-up: needs store",
-  UnknownFlagsWarning: "follow-up: flag-picker internal",
 };
 
 function componentFiles(dir: string): string[] {
@@ -74,8 +55,8 @@ describe("component library catalog", () => {
     expect(missing).toEqual([]);
   });
 
-  it("UNCATALOGED can only shrink (ratchet: lower this number when stories are added)", () => {
-    expect(Object.keys(UNCATALOGED).length).toBeLessThanOrEqual(25);
+  it("UNCATALOGED is empty: new components need a story (an exemption needs a reason and a raised cap)", () => {
+    expect(Object.keys(UNCATALOGED).length).toBeLessThanOrEqual(0);
   });
 
   it("UNCATALOGED has no stale entries", () => {

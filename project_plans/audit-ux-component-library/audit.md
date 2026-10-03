@@ -95,5 +95,8 @@ Skeleton, Tooltip, RadioGroup, ErrorState, Modal, RepoPathInput, InlineNotice (p
   `next lint` exits 1 with 5 `analytics/*` errors in `insights/session-detail/page.tsx`, `RestartWithSummaryButton.tsx`,
   `SessionBoard.tsx`, none touched by this branch.
 - Layer 4 / Playwright a11y specs: not run (needs the Go binary + browsers). Storybook dev server not launched.
-- Open against the backlog list: stories for *every* `components/ui` export with default/disabled/error/edge states (25 components still in
-  `UNCATALOGED`); bulk migration of raw button/input/modal (recorded above as follow-up); screenshots as before/after evidence.
+- Stories now exist for every component in `components/ui` + `components/common` (38 story files; `UNCATALOGED` is empty, cap 0).
+  Some stories are narrower than default/disabled/error/edge: Navigation has a Default story only (feature flag context not exported);
+  FlagCombobox/AutocompleteInput show the closed list state; null-rendering components carry a text label. Seen only under jest
+  and `build-storybook`, not in a browser.
+- Open against the backlog list: bulk migration of raw button/input/modal (recorded above as follow-up); screenshots as before/after evidence.
