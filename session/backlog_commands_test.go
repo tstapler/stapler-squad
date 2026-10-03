@@ -997,7 +997,9 @@ func TestRemoveStaleUserLevelBacklogCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, n := range []string{"status.md", "mine.md"} {
-		_ = os.WriteFile(filepath.Join(dir, n), []byte("x"), 0o600)
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("item_id=x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	removed, err = RemoveStaleUserLevelBacklogCommands(home)
 	if err != nil || removed {
@@ -1008,5 +1010,44 @@ func TestRemoveStaleUserLevelBacklogCommands(t *testing.T) {
 	}
 	if removed, err := RemoveStaleUserLevelBacklogCommands(t.TempDir()); removed || err != nil {
 		t.Fatalf("absent dir: removed=%v err=%v", removed, err)
+	}
+}
+
+func TestRemoveStaleUserLevelBacklogCommands_should_Skip_When_CommandsDirSymlinkedOutsideHome(t *testing.T) {
+	home := t.TempDir()
+	outside := t.TempDir() // stands in for a dotfiles repo
+	outBacklog := filepath.Join(outside, "commands", "backlog")
+	if err := os.MkdirAll(outBacklog, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outBacklog, "status.md"), []byte("item_id=old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "commands"), filepath.Join(home, ".claude", "commands")); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := RemoveStaleUserLevelBacklogCommands(home)
+	if err != nil || removed {
+		t.Fatalf("removed=%v err=%v", removed, err)
+	}
+	if _, err := os.Stat(filepath.Join(outBacklog, "status.md")); err != nil {
+		t.Fatal("file outside home must be untouched")
+	}
+}
+
+func TestRemoveStaleUserLevelBacklogCommands_should_Skip_When_FileLacksItemIDMarker(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, backlogCommandsDir)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "status.md"), []byte("my own command"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := RemoveStaleUserLevelBacklogCommands(home); removed || err != nil {
+		t.Fatalf("removed=%v err=%v", removed, err)
 	}
 }

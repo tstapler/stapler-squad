@@ -107,9 +107,25 @@ var generatedSlashCommandName = regexp.MustCompile(`^(status|review|ship|help|bl
 // stapler-squad-generated command files. Per-item commands belong in the session worktree; a copy
 // at user scope (written by an old build that targeted $HOME) is loaded by every session lacking
 // its own project-level copy and embeds one long-gone item's ID. A directory containing anything
-// else is left untouched. Returns whether the directory was removed.
+// else — or one that resolves outside home (e.g. ~/.claude/commands symlinked into a dotfiles
+// repo, where these files may be version-controlled) — is left untouched. Returns whether the
+// directory was removed.
 func RemoveStaleUserLevelBacklogCommands(home string) (bool, error) {
 	dir := filepath.Join(home, backlogCommandsDir)
+	realHome, errH := filepath.EvalSymlinks(home)
+	realDir, errD := filepath.EvalSymlinks(dir)
+	if errD != nil {
+		if os.IsNotExist(errD) {
+			return false, nil
+		}
+		return false, errD
+	}
+	if errH != nil {
+		return false, errH
+	}
+	if rel, err := filepath.Rel(realHome, realDir); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false, nil
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -118,11 +134,16 @@ func RemoveStaleUserLevelBacklogCommands(home string) (bool, error) {
 		return false, err
 	}
 	for _, e := range entries {
-		if e.IsDir() || !generatedSlashCommandName.MatchString(e.Name()) {
+		if !e.Type().IsRegular() || !generatedSlashCommandName.MatchString(e.Name()) {
+			return false, nil
+		}
+		// Name alone is a weak ownership signal; require the generator's item_id= marker.
+		b, rErr := os.ReadFile(filepath.Join(dir, e.Name())) // #nosec G304 -- name is a regexp-matched entry of the fixed user commands dir
+		if rErr != nil || !strings.Contains(string(b), "item_id=") {
 			return false, nil
 		}
 	}
-	if err := os.RemoveAll(dir); err != nil {
+	if err := os.RemoveAll(realDir); err != nil {
 		return false, err
 	}
 	return true, nil
