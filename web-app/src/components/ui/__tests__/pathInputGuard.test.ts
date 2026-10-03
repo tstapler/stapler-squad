@@ -33,7 +33,10 @@ function attrText(attr: ts.JsxAttribute, sf: ts.SourceFile): string {
 }
 
 function scan(file: string): Found[] {
-  const text = fs.readFileSync(file, "utf8");
+  return scanSource(file, fs.readFileSync(file, "utf8"));
+}
+
+function scanSource(file: string, text: string): Found[] {
   const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const out: Found[] = [];
   const visit = (node: ts.Node) => {
@@ -87,21 +90,14 @@ describe("path-like text fields use RepoPathInput", () => {
     expect(stale).toEqual([]);
   });
 
-  it("detects the shapes a regex scan missed (self-test)", () => {
-    const tmp = path.join(SRC, "__guard_selftest__.tsx");
+  it("detects the shapes a regex scan missed (self-test, in memory)", () => {
     const cases = [
       '<input onChange={(e) => set(e.target.value)} placeholder="Path" />',
       "<input value={repoPath} onChange={noop} />",
       '<Input aria-label="Working dir" />',
       "<textarea value={cwd} onChange={noop} />",
     ];
-    try {
-      for (const c of cases) {
-        fs.writeFileSync(tmp, `export const X = () => (${c});`);
-        expect(scan(tmp).length).toBe(1);
-      }
-    } finally {
-      fs.rmSync(tmp, { force: true });
-    }
+    for (const c of cases) expect(scanSource("selftest.tsx", `export const X = () => (${c});`).length).toBe(1);
+    expect(scanSource("selftest.tsx", '<input type="checkbox" placeholder="path" />').length).toBe(0);
   });
 });

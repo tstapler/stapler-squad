@@ -208,6 +208,7 @@ export function RepoPathInput({
         e.key === "Enter" &&
         onEnter &&
         !e.nativeEvent.isComposing &&
+        e.keyCode !== 229 && // Safari fires the IME-confirm Enter after compositionend with keyCode 229
         !(open && selectedIndex >= 0 && selectedIndex < allEntries.length)
       ) {
         e.preventDefault();

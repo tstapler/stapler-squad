@@ -9,7 +9,7 @@ browser; verification is jest + `tsc` + `build-storybook`.
 ## Fixed in this change (each with a local test)
 | Route | Problem | Fix | Test |
 |---|---|---|---|
-| `/help` | Docs fetch failure swallowed; page ended on "Select a topic" with no error (`app/help/page.tsx`). `loadDocs()` never rejects (`Promise.allSettled`), so the page treats zero loaded docs as the failure | `role=alert` error + Retry (button outside the alert) | `app/help/__tests__/page.test.tsx` |
+| `/help` | Docs fetch failure swallowed; page ended on "Select a topic" with no error (`app/help/page.tsx`). `loadDocs()` never rejects (`Promise.allSettled`), so the page treats zero loaded docs as the failure | `role=alert` error + Retry (button outside the alert). Limit: if only some docs fail, the rest load and no error shows | `app/help/__tests__/page.test.tsx` |
 | `/sessions/summary` | Missing `sessionId` rendered a blank page | Explanatory message | `app/sessions/summary/__tests__/page.test.tsx` |
 | `/account` | Add-device input had only a placeholder | `aria-label="Device name (optional)"` | `app/account/__tests__/page.test.tsx` |
 | `/history` | Error banner not announced | `role="alert"` | `app/history/__tests__/page.test.tsx` |
@@ -32,7 +32,7 @@ Guard: `components/ui/__tests__/pathInputGuard.test.ts` parses every `.tsx` with
 ## Shared-component adoption (AC4) — recorded as follow-up
 Counts from `grep` over `web-app/src` excluding tests/stories:
 - Counts from `grep -rl` over `web-app/src` excluding `.test.`/`.stories.`/`__tests__` (recounted 2026-10-03): `Button`: 1 importing file (`ReviewQueuePanel.tsx`) vs 221 files containing raw `<button`.
-- `Input`: 0 importing files vs 89 files containing `<input`.
+- `Input`: 0 importing files vs 90 files containing `<input`.
 - `Modal`: 3 users vs 37 files with hand-rolled `role="dialog"`/`aria-modal`; `/`, `/history`, `/backlog`, `/review-queue` hand-roll modals (focus trap/return inconsistent).
 - `ErrorState`: no page uses it. `Skeleton`: insights + one backlog component; most pages use a bare "Loading…" div.
 - Many error banners lack `role=alert` (`/errors`, `/login`, `/workflows`, `/insights`, `/settings/backlog-sources`, `/rules`, `/files`, `CallbackSettings`).
