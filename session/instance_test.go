@@ -837,7 +837,7 @@ func (forceWorktreeAddFailureTarget) executionTarget() {}
 func TestInstance_Start_should_FailBeforeSpawn_When_NewWorktreeResolvesToRepoRoot(t *testing.T) {
 	t.Parallel()
 
-	repoDir := t.TempDir()
+	repoDir := git.CanonicalizeWorktreePath(t.TempDir())
 	require.NoError(t, git.InitializeProjectDirectory(repoDir))
 
 	// A real branch, not checked out anywhere yet, so setupLocked's
