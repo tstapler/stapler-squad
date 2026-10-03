@@ -924,12 +924,22 @@ func TestOpenStandingStream_TearDownForReopen_ProceedsAnyway_WhenOldReaderIsWedg
 	}
 	transport.attachFn = func(ctx context.Context) attachStream { return wedged }
 
+	activeGenerations := func() int64 {
+		return sumForSubsystem(t, collectMetric(t, "session_lifecycle_active_generations"), "tymux_stream", "")
+	}
+	baseline := activeGenerations()
+
 	sess := NewTymuxGRPCSession(transport)
 	setTeardownWait(sess, 50*time.Millisecond)
 	require.NoError(t, sess.Start(dir))
 	t.Cleanup(func() { _ = sess.Close() })
 
-	before := sumForSubsystem(t, collectMetric(t, "session_lifecycle_active_generations"), "tymux_stream", "")
+	// StartGeneration runs in the reader goroutine, so Start() returning does not mean the
+	// first generation's gauge slot is registered yet; sampling earlier races with it.
+	wait.RequireEventually(t, func() bool {
+		return activeGenerations() == baseline+1
+	}, time.Second, time.Millisecond, "the first stream generation must register as active")
+	before := activeGenerations()
 
 	errCh := make(chan error, 1)
 	go func() {

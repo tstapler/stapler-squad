@@ -1186,7 +1186,7 @@ func (f *fakePtyFactory) StartWithSize(_ *exec.Cmd, _ *pty.Winsize) (*os.File, *
 	f.mu.Lock()
 	f.created = append(f.created, master)
 	f.mu.Unlock()
-	return master, exec.Command("true"), nil
+	return master, exec.Command("true"), nil //nolint:norawexec fake pty factory stub; the caller owns the cmd lifecycle
 }
 
 func (f *fakePtyFactory) Close() {

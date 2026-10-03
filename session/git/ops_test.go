@@ -186,7 +186,7 @@ func TestMergeMainIntoWorktree_should_ReturnError_When_MergeFailsForNonConflictR
 	assert.Equal(t, "uncommitted local edit\n", string(content))
 }
 
-// findRealGitBinary scans PATH for the first "git" candidate that is a real ELF binary,
+// findRealGitBinary scans PATH for the first "git" candidate that is a real compiled binary (ELF or Mach-O),
 // skipping any shell-script wrapper along the way (this dev environment's own `git`
 // resolves through ~/.local/bin/git, a git-ssh-fallback wrapper script that re-invokes
 // "git" via PATH internally — exec'ing that wrapper from installGitSubcommandLogger's own
@@ -201,7 +201,7 @@ func findRealGitBinary(t *testing.T) string {
 		if err != nil {
 			continue
 		}
-		if isELFBinary(resolved) {
+		if isNativeBinary(resolved) {
 			return resolved
 		}
 	}
@@ -209,18 +209,19 @@ func findRealGitBinary(t *testing.T) string {
 	return ""
 }
 
-// isELFBinary reports whether path's first 4 bytes are the ELF magic number.
-func isELFBinary(path string) bool {
+// isNativeBinary reports whether path is a compiled executable rather than a "#!" script.
+// Deliberately not an ELF-magic check: macOS git is Mach-O.
+func isNativeBinary(path string) bool {
 	f, err := os.Open(path)
 	if err != nil {
 		return false
 	}
 	defer func() { _ = f.Close() }()
-	var magic [4]byte
+	var magic [2]byte
 	if _, err := io.ReadFull(f, magic[:]); err != nil {
 		return false
 	}
-	return string(magic[:]) == "\x7fELF"
+	return string(magic[:]) != "#!"
 }
 
 // installGitSubcommandLogger prepends a fake "git" wrapper script to PATH that appends

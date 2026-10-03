@@ -57,7 +57,7 @@ func startHelper(t *testing.T, port int, ignoreTerm bool) *exec.Cmd {
 	// -test.run matches no actual Test function (TestMain is special-cased
 	// and always runs regardless of -run) — we only want TestMain's early
 	// env-var check below to fire, not the rest of the test suite.
-	cmd := exec.Command(os.Args[0], "-test.run=^NoSuchTest$")
+	cmd := exec.Command(os.Args[0], "-test.run=^NoSuchTest$") //nolint:norawexec test helper child; t.Cleanup kills and Waits it
 	cmd.Env = append(os.Environ(), "PORTGUARD_TEST_HELPER_PORT="+strconv.Itoa(port))
 	if ignoreTerm {
 		cmd.Env = append(cmd.Env, "PORTGUARD_TEST_HELPER_IGNORE_TERM=1")
