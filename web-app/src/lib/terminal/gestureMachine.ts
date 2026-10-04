@@ -16,6 +16,8 @@ export type GestureEvent =
       type: "touchend";
       elapsedMs: number;
       totalDy: number;
+      /** Horizontal travel; a horizontal drift past the tolerance is not a tap. Defaults to 0. */
+      totalDx?: number;
       longPressMs: number;
       tapTolerancePx: number;
       /** A SCROLLING release that starts momentum (decided by the hook's MomentumTracker). */
@@ -58,11 +60,15 @@ export interface GestureTransition {
 const NONE: readonly GestureEffect[] = [];
 
 const stay = (state: GestureState): GestureTransition => ({ state, effects: NONE });
-const abort = (): GestureTransition => ({ state: "IDLE", effects: ["abort"] });
+// A SELECTING abort must close the synthetic mouse selection first, or xterm keeps tracking a button that never releases.
+const abort = (from?: GestureState): GestureTransition => ({
+  state: "IDLE",
+  effects: from === "SELECTING" ? ["endSelecting", "abort"] : ["abort"],
+});
 
 function onTouchStart(state: GestureState, touchCount: number): GestureTransition {
   // Multi-touch parks the gesture in CANCELLED so the remaining fingers' moves are ignored until a lone touchstart.
-  if (touchCount !== 1) return { state: "CANCELLED", effects: ["abort"] };
+  if (touchCount !== 1) return { state: "CANCELLED", effects: state === "SELECTING" ? ["endSelecting", "abort"] : ["abort"] };
   // abort cancels momentum; no long-press timer, a touch-to-stop must not become a selection.
   if (state === "COASTING") return { state: "PENDING", effects: ["abort", "setConsumedByCoast"] };
   return { state: "PENDING", effects: ["startLongPressTimer"] };
@@ -72,12 +78,14 @@ function onTouchMove(
   state: GestureState,
   e: Extract<GestureEvent, { type: "touchmove" }>,
 ): GestureTransition {
-  if (e.touchCount !== 1) return state === "CANCELLED" ? stay(state) : abort();
+  if (e.touchCount !== 1) return state === "CANCELLED" ? stay(state) : abort(state);
   switch (state) {
     case "PENDING":
       if (e.absDx <= e.slopPx && e.absDy <= e.slopPx) return stay(state);
-      // Horizontal-first: leave the gesture to the browser (Android back-swipe), no scroll, no tap.
-      if (e.absDx > e.absDy) return { state: "CANCELLED", effects: ["abort"] };
+      // Horizontal-first: no scroll and no preventDefault (Android back-swipe stays with the browser). The
+      // long-press timer keeps running so a held touch with sideways drift still selects; a release is not a tap
+      // because the tap check below counts horizontal travel.
+      if (e.absDx > e.absDy) return stay(state);
       return { state: "SCROLLING", effects: ["clearLongPressTimer", "beginScroll", "preventDefault"] };
     case "SCROLLING":
       return { state, effects: ["continueScroll", "preventDefault"] };
@@ -94,7 +102,8 @@ function onTouchEnd(
 ): GestureTransition {
   if (state === "COASTING") return stay(state);
   if (state === "PENDING" && e.consumedByCoast) return { state: "IDLE", effects: ["abort", "preventDefault"] };
-  if (state === "PENDING" && e.totalDy < e.tapTolerancePx && e.elapsedMs < e.longPressMs) {
+  // Inclusive: PENDING persists while travel <= slop, so a release at exactly the slop is still a tap.
+  if (state === "PENDING" && Math.max(e.totalDy, e.totalDx ?? 0) <= e.tapTolerancePx && e.elapsedMs < e.longPressMs) {
     return { state: "IDLE", effects: ["clearLongPressTimer", e.selectionActive ? "clearSelection" : "tap"] };
   }
   if (state === "SELECTING") return { state: "IDLE", effects: ["endSelecting", "abort"] };
@@ -118,7 +127,7 @@ export function reduce(state: GestureState, event: GestureEvent): GestureTransit
     case "touchcancel":
       // Intentionally IDLE (not CANCELLED as in ux.md S9 for SCROLLING): plan AC 1.2.10 specifies IDLE, and
       // the next touchstart begins a fresh PENDING from either state, so the two are observably identical.
-      return abort();
+      return abort(state);
     case "longPress":
       return state === "PENDING" ? { state: "SELECTING", effects: ["enterSelecting"] } : stay(state);
     case "momentumEnd":
