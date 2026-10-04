@@ -908,8 +908,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const openScrollFullPanel = useCallback(() => setScrollPanel("full"), []);
   // Approximate panel heights in terminal rows (picker: 3 radios + 2 buttons; full: adds switch and notes).
   // Only used to decide inline vs overlay, so a rough constant is enough.
+  // terminalRows is re-measured after an inline panel shrinks the terminal, so the choice is latched on the
+  // row count seen when the panel opened (reset on close); re-deciding from the shrunken count flip-flops.
+  const panelOpenRowsRef = useRef<number | null>(null);
+  if (scrollPanel === null) panelOpenRowsRef.current = null;
+  else panelOpenRowsRef.current ??= terminalRows;
   const panelRowsEstimate = scrollPanel === "full" ? SCROLL_FULL_PANEL_ROWS : SCROLL_PICKER_PANEL_ROWS;
-  const panelAsOverlay = shouldRenderPanelAsOverlay(terminalRows - panelRowsEstimate);
+  const panelAsOverlay = shouldRenderPanelAsOverlay((panelOpenRowsRef.current ?? terminalRows) - panelRowsEstimate);
   const panelMaxHeight =
     panelAsOverlay && terminalRows > MIN_ROWS_FOR_OVERLAYS && containerSize.height > 0
       ? Math.round((containerSize.height * (terminalRows - MIN_ROWS_FOR_OVERLAYS)) / terminalRows)

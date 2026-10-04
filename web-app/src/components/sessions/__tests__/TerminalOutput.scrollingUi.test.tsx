@@ -215,6 +215,31 @@ describe("TerminalOutput scrolling chip, picker and panel (Story 1.2.5b3)", () =
     expect(screen.getByTestId("scrolling-picker").getAttribute("data-overlay")).toBe("true");
   });
 
+  it("terminalOutput_should_KeepPanelInline_When_TerminalShrinksAfterOpeningInline", async () => {
+    await renderTerminal({ terminal: makeTerminal({ rows: 16 }) });
+    fireEvent.click(chip());
+    expect(screen.getByTestId("scrolling-picker").getAttribute("data-overlay")).toBe("false");
+    // The inline panel takes its rows; the terminal re-fits and reports the smaller count (6 - 10 < 5 would flip it).
+    act(() => {
+      capturedXtermProps.onResize(80, 6);
+    });
+    expect(screen.getByTestId("scrolling-picker").getAttribute("data-overlay")).toBe("false");
+  });
+
+  it("terminalOutput_should_RedecidePlacement_When_PanelClosedAndReopened", async () => {
+    await renderTerminal({ terminal: makeTerminal({ rows: 16 }) });
+    fireEvent.click(chip());
+    act(() => {
+      capturedXtermProps.onResize(80, 6);
+    });
+    fireEvent.click(chip()); // close
+    act(() => {
+      capturedXtermProps.onResize(80, 12);
+    });
+    fireEvent.click(chip()); // reopen at 12 rows: 12 - 10 < 5
+    expect(screen.getByTestId("scrolling-picker").getAttribute("data-overlay")).toBe("true");
+  });
+
   it("terminalOutput_should_RenderPanelInline_When_PlentyOfRowsRemain", async () => {
     await renderTerminal({ terminal: makeTerminal({ rows: 60 }) });
     fireEvent.click(chip());
