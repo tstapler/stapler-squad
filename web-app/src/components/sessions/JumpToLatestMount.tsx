@@ -12,6 +12,8 @@ export interface JumpToLatestMountProps {
   netPagesUp: NetPagesUpTracker;
   connectionEpoch: number;
   sendData: (data: string) => void;
+  /** True while a chunked paste is in flight; forwarded to the button. */
+  isInputBusy?: () => boolean;
   gestureActive: boolean;
   /** The element the button is positioned inside; its rect locates the cursor row. */
   getContainer: () => HTMLElement | null;
