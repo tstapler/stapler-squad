@@ -642,7 +642,7 @@ Source: `research/qos.md` #18 (a reference recipe throttles wheel events to abou
 - Files: the two test files above
 
 ##### Task 1.2.10b: Implement in the state machine and the hook (green)
-- Add the CANCELLED transition for horizontal-first (`touchcancel` while SCROLLING goes to IDLE), set the tap threshold to `SLOP_PX`, and the selection-clear branch. Re-run the 1.2.4a anchors (the one intended anchor change is the widened tap tolerance, recorded in the PR).
+- Horizontal-first stays PENDING with the long-press timer kept (superseded the earlier CANCELLED transition; a quick release is still not a tap because the tap check counts dx); `touchcancel` while SCROLLING goes to IDLE, set the tap threshold to `SLOP_PX`, and the selection-clear branch. Re-run the 1.2.4a anchors (the one intended anchor change is the widened tap tolerance, recorded in the PR).
 - Files: `lib/terminal/gestureMachine.ts`, `lib/hooks/useTerminalGestures.ts`
 
 #### Story 1.2.3: Overscroll / pull-to-refresh hardening
@@ -1056,6 +1056,14 @@ Source: `research/qos.md` section 3 ranks 7-13 and survey table. These are recor
 | D5 | RTT indicator and RTT-adaptive server flush interval (rank 11; survey #3, #13) | Needs measurement first; qos.md's mosh constants are INFERRED, not fetched. No RTT signal exists client-side | Reuse the resync round trip; mosh heartbeat model |
 | D6 | Mosh-style predictive local echo (rank 12; survey #2) | **Rejected, not just deferred.** Our users read output and steer an agent TUI (Claude Code) whose input box redraws asynchronously, so a client-side prediction overlay is brittle there; neither requirement is about typing latency; cost is high (cell-level overlay plus validation). Revisit only if typing latency complaints appear at RTT above about 150 ms | n/a |
 | D7 | `permessage-deflate` (rank 13; survey #14) | **Out.** App-level gzip envelope compression already exists: `server/protocol/compression.go:35` `CompressEnvelopeIfLarge`. Client-side decompression and the threshold were not verified (qos.md section 2); verify those instead of adding a second layer | Check threshold and that the client decompresses |
+
+---
+
+## Release notes / behavior changes
+- Mobile key panel PgUp/PgDn now scroll local xterm history for normal-buffer sessions in auto mode (previously always sent PgUp/PgDn bytes); TUI/alternate-screen sessions and explicit overrides are unchanged.
+- The "Gesture scrolling" setting is now "Touch gestures (scroll, select)": Off disables the whole touch hook (drag scrolling, tap-to-focus, double-tap word selection, long-press selection), not only scrolling.
+- A tap that clears an active selection does not focus the terminal.
+- Toolbar PgUp/PgDn and the jump button drop their page keys on TUI routes while a chunked paste is in flight, matching the drag path.
 
 ---
 

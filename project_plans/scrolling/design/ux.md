@@ -51,7 +51,7 @@ Flow:
 
 Canonical momentum constants (one set, exported as `MOMENTUM_CONSTANTS` in `lib/terminal/scrollKinematics.ts`; starting values, tune on device): velocity window 100 ms; min fling velocity 0.3 px/ms; decay `v *= 0.95` per 16 ms frame; stop below 0.02 px/ms; velocity cap 8 px/ms; max 120 frames.
 
-**Scroll axis**: only vertical travel scrolls. The gesture locks to vertical when the first move past slop has |dy| >= |dx|; a drag that starts more horizontal than vertical (|dx| > |dy|) is ignored by the scroll path (no scroll, no tap, no selection) until touchend. Diagonal drags after a vertical lock scroll by dy only. Horizontal pan of wide output is not provided by this project: long lines wrap at the terminal width, and a horizontal drag near the left screen edge is left for Android's back-swipe (the handler does not `preventDefault` before the vertical lock). Wide-output reachability is an accepted gap, recorded in "Flows lacking an exit path".
+**Scroll axis**: only vertical travel scrolls. The gesture locks to vertical when the first move past slop has |dy| >= |dx|; a drag that starts more horizontal than vertical (|dx| > |dy|) is ignored by the scroll path (no scroll, no tap) until touchend; the long-press timer is not cancelled, so a held touch with sideways drift still selects. Diagonal drags after a vertical lock scroll by dy only. Horizontal pan of wide output is not provided by this project: long lines wrap at the terminal width, and a horizontal drag near the left screen edge is left for Android's back-swipe (the handler does not `preventDefault` before the vertical lock). Wide-output reachability is an accepted gap, recorded in "Flows lacking an exit path".
 
 **Pinch-zoom and `touch-action: none`**: `touch-action: none` on the terminal surface disables browser pinch-zoom there (WCAG 1.4.4 resize text, 1.4.10 reflow). Alternative that meets the criterion: the terminal font-size setting (XtermTerminal font-size prop) already scales text to 200% without browser zoom; the plan verifies it is reachable on mobile and offers at least a 200% step (device check D8). The **Gesture scrolling: Off** setting (S6) also restores `touch-action` and therefore browser pinch-zoom over the terminal. Pinch is not intercepted by the handler (multi-touch ignored), so pinch-zoom outside the terminal and the page-level zoom of the toolbar still work.
 
@@ -82,7 +82,7 @@ Interruptions: new touch cancels momentum (and is not a tap-to-focus). A keyboar
 | Two taps within 300 ms / 20 px | Double-tap word select (unchanged) |
 | Touch that scrolled | Never tap-to-focus; `touchend` calls `preventDefault` when cancelable so no click/focus is synthesized (verify on device) |
 | Touch that stopped momentum | Consumed; not a tap |
-| First move past slop with |dx| > |dy| | Horizontal: ignored for scrolling (see S1); no tap on release |
+| First move past slop with |dx| > |dy| | Horizontal: ignored for scrolling (see S1); stays PENDING with the long-press timer running (a held touch with sideways drift still selects); a quick release is not a tap |
 
 ## S9. Gesture state-transition table
 
@@ -93,7 +93,7 @@ States: `IDLE`, `PENDING` (touch down, under slop), `SCROLLING`, `COASTING` (mom
 | IDLE | touchstart (1 finger) | PENDING | Start long-press timer (400 ms); record start cell |
 | IDLE | touchstart (2+ fingers) | CANCELLED | Ignored; system/TalkBack gestures untouched |
 | PENDING | move > `SLOP_PX`, vertical | SCROLLING | Cancel long-press timer; seed accumulator with overshoot; `preventDefault` if cancelable |
-| PENDING | move > `SLOP_PX`, horizontal | CANCELLED | No scroll, no tap |
+| PENDING | move > `SLOP_PX`, horizontal | PENDING | No scroll, no `preventDefault`; long-press timer kept; release is not a tap (tap check counts dx and dy, inclusive of `SLOP_PX`) |
 | PENDING | move < `SLOP_PX` (any drift under the slop, no dead zone) then touchend < 400 ms | IDLE | Tap: focus and open keyboard, unless a selection is active (then clear the selection only, no focus); second tap within 300 ms/20 px: word select |
 | PENDING | hold 400 ms, movement < slop | SELECTING | Scroll disabled for this touch |
 | SCROLLING | touchend, velocity >= min fling, no reduced motion | COASTING | Start momentum; `touchend` `preventDefault` if cancelable |
