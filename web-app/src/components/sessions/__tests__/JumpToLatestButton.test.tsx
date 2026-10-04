@@ -322,6 +322,18 @@ describe("placement", () => {
     expect(corner()).toBe("bottom-right");
   });
 
+  it("jumpToLatest_should_StayTopRight_When_OverlapPersistsAcrossReEvaluations", () => {
+    mockButtonRect(rect(300, 344));
+    const h = harness({ getCursorRowRect: () => rect(310, 330) });
+    const { rerender } = render(<JumpToLatestButton {...h.props} />);
+    expect(corner()).toBe("top-right");
+    for (let i = 0; i < 2; i++) {
+      rerender(<JumpToLatestButton {...h.props} gestureActive />);
+      rerender(<JumpToLatestButton {...h.props} gestureActive={false} />);
+      expect(corner()).toBe("top-right");
+    }
+  });
+
   it("jumpToLatest_should_KeepCorner_When_GestureInProgress", () => {
     mockButtonRect(rect(300, 344));
     let cursor = rect(20, 40);

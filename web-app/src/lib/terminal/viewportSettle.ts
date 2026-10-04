@@ -32,7 +32,7 @@ export interface ViewportSettleOptions {
   stableFrames: number;
   maxWaitMs: number;
   onSettled: (snapshot: ViewportSnapshot) => void;
-  /** Used only when no visualViewport exists; defaults to the global window. */
+  /** Used only when no visualViewport exists; defaults to the global window when one exists. */
   win?: WindowLike;
 }
 
@@ -62,13 +62,19 @@ function windowFallbackSource(win: WindowLike): ViewportSource {
   };
 }
 
+function resolveFallbackWindow(win: WindowLike | undefined): WindowLike {
+  if (win) return win;
+  if (typeof window !== "undefined") return window as unknown as WindowLike;
+  throw new Error("createViewportSettle: no visualViewport and no window available; pass options.win");
+}
+
 /** Returns a dispose function that unsubscribes and cancels any pending frame. */
 export function createViewportSettle(
   vv: ViewportSource | null | undefined,
   scheduler: FrameScheduler,
   options: ViewportSettleOptions
 ): () => void {
-  const source = vv ?? windowFallbackSource(options.win ?? (window as unknown as WindowLike));
+  const source = vv ?? windowFallbackSource(resolveFallbackWindow(options.win));
   const { stableFrames, maxWaitMs, onSettled } = options;
 
   let frameHandle: number | null = null;

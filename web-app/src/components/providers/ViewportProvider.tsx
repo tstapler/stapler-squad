@@ -37,6 +37,7 @@ export function ViewportProvider({ children }: { children?: ReactNode }) {
     if (!vv) return;
 
     const logViewport = (event: 'resize' | 'scroll') => () => {
+      if (!mobileDebug.enabled()) return; // skip building the payload while the flag is off
       mobileDebug.log('viewport', { event, height: vv.height, offsetTop: vv.offsetTop });
     };
     const onResize = logViewport('resize');

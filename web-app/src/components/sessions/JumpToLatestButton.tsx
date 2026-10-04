@@ -117,8 +117,9 @@ export function JumpToLatestButton({
   const evaluatePlacement = useCallback(() => {
     const cursor = getCursorRowRect?.();
     const own = buttonRef.current?.getBoundingClientRect();
-    if (!cursor || !own || !overlaps(own, cursor)) return;
-    setCorner((c) => (c === "bottom-right" ? "top-right" : "bottom-right"));
+    if (!cursor || !own) return;
+    const next: Corner = overlaps(own, cursor) ? "top-right" : "bottom-right";
+    setCorner((c) => (c === next ? c : next));
   }, [getCursorRowRect]);
 
   useLayoutEffect(() => {
