@@ -154,6 +154,91 @@ describe("tap", () => {
   });
 });
 
+describe("queued page keys", () => {
+  const tuiHarness = (over: Partial<JumpToLatestButtonProps> = {}) => harness({ route: "tui-pgkeys", ...over });
+
+  it("jumpToLatest_should_ClampToFivePgDn_When_EstimateExceedsLimit", () => {
+    const tracker = createNetPagesUpTracker(50); // a tracker that tolerates >5 pages, so only the click clamp bounds the sequence
+    const h = tuiHarness({ netPagesUp: tracker });
+    render(<JumpToLatestButton {...h.props} />);
+    pageUp(tracker, 9);
+    fireEvent.click(button()!);
+    act(() => { jest.advanceTimersByTime(PAGE_RATE_LIMIT_MS * 20); });
+    expect(h.sendData).toHaveBeenCalledTimes(5);
+  });
+
+  it("jumpToLatest_should_CancelQueuedKeys_When_EstimateInvalidatedMidSequence", () => {
+    const h = tuiHarness();
+    render(<JumpToLatestButton {...h.props} />);
+    pageUp(h.tracker, 5);
+    fireEvent.click(button()!);
+    act(() => { jest.advanceTimersByTime(PAGE_RATE_LIMIT_MS); });
+    expect(h.sendData).toHaveBeenCalledTimes(2);
+    act(() => { h.tracker.invalidate("keystroke"); });
+    act(() => { jest.advanceTimersByTime(PAGE_RATE_LIMIT_MS * 10); });
+    expect(h.sendData).toHaveBeenCalledTimes(2);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it("jumpToLatest_should_CancelQueuedKeys_When_ConnectionEpochChangesMidSequence", () => {
+    const h = tuiHarness();
+    const { rerender } = render(<JumpToLatestButton {...h.props} />);
+    pageUp(h.tracker, 5);
+    fireEvent.click(button()!);
+    rerender(<JumpToLatestButton {...h.props} connectionEpoch={1} />);
+    act(() => { jest.advanceTimersByTime(PAGE_RATE_LIMIT_MS * 10); });
+    expect(h.sendData).toHaveBeenCalledTimes(1);
+  });
+
+  it("jumpToLatest_should_CancelQueuedKeys_When_RouteFlipsMidSequence", () => {
+    const h = tuiHarness();
+    const { rerender } = render(<JumpToLatestButton {...h.props} />);
+    pageUp(h.tracker, 5);
+    fireEvent.click(button()!);
+    rerender(<JumpToLatestButton {...h.props} route="xterm-local" />);
+    act(() => { jest.advanceTimersByTime(PAGE_RATE_LIMIT_MS * 10); });
+    expect(h.sendData).toHaveBeenCalledTimes(1);
+  });
+
+  it("jumpToLatest_should_LeaveNoPendingTimers_When_SequenceCompletes", () => {
+    const h = tuiHarness();
+    render(<JumpToLatestButton {...h.props} />);
+    pageUp(h.tracker, 5);
+    fireEvent.click(button()!);
+    act(() => { jest.advanceTimersByTime(PAGE_RATE_LIMIT_MS * 10); });
+    expect(h.sendData).toHaveBeenCalledTimes(5);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it("jumpToLatest_should_DoNothing_When_ChunkedPasteInFlightAtTap", () => {
+    const h = tuiHarness({ isInputBusy: () => true });
+    render(<JumpToLatestButton {...h.props} />);
+    pageUp(h.tracker, 3);
+    fireEvent.click(button()!);
+    act(() => { jest.advanceTimersByTime(PAGE_RATE_LIMIT_MS * 10); });
+    expect(h.sendData).not.toHaveBeenCalled();
+    expect(h.tracker.getState()).toEqual({ pages: 3, valid: true }); // estimate untouched
+  });
+
+  it("jumpToLatest_should_SkipQueuedKeys_When_PasteStartsMidSequence", () => {
+    let busy = false;
+    const h = tuiHarness({ isInputBusy: () => busy });
+    render(<JumpToLatestButton {...h.props} />);
+    pageUp(h.tracker, 4);
+    fireEvent.click(button()!);
+    busy = true;
+    act(() => { jest.advanceTimersByTime(PAGE_RATE_LIMIT_MS * 10); });
+    expect(h.sendData).toHaveBeenCalledTimes(1);
+  });
+
+  it("jumpToLatest_should_StillScrollLocalBuffer_When_ChunkedPasteInFlight", () => {
+    const h = harness({ isInputBusy: () => true });
+    render(<JumpToLatestButton {...h.props} />);
+    fireEvent.click(button()!);
+    expect(h.term.terminal.scrollToBottom).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("output while scrolled", () => {
   function renderWithTick() {
     const h = harness({ outputTick: 0 });

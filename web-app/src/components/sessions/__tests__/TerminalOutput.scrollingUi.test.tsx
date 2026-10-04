@@ -68,6 +68,7 @@ import { HINT_TEXT_LOCAL, HINT_TEXT_TUI, SCROLL_HINT_SEEN_KEY } from "../ScrollH
 
 function makeStreamMock(overrides: Record<string, unknown> = {}) {
   return {
+    isInputChunking: jest.fn().mockReturnValue(false),
     isConnected: true,
     error: null,
     output: "",
@@ -445,6 +446,17 @@ describe("TerminalOutput jump button and netPagesUp wiring (Story 1.2.7b)", () =
       delete (window as any).visualViewport;
       jest.useRealTimers();
     }
+  });
+
+  it("jumpToLatest_should_NotSendPageDown_When_ChunkedPasteInFlight", async () => {
+    await renderTui();
+    streamMock.sendInput.mockClear();
+    streamMock.isInputChunking.mockReturnValue(true);
+
+    fireEvent.click(screen.getByRole("button", tuiLabel));
+
+    expect(streamMock.sendInput).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", tuiLabel)).toBeTruthy(); // estimate untouched, still jumpable afterwards
   });
 
   it("jumpToLatest_should_NotInvalidateEstimate_When_ItsOwnPageDownIsSent", async () => {

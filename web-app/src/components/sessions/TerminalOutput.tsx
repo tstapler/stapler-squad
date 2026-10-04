@@ -975,6 +975,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       terminal.scrollPages(action.pages);
       return;
     }
+    // A chunked paste is still streaming: page-key bytes would splice into it, so drop the tap (as the drag does).
+    if (isInputChunking()) return;
     const bytes = action.type === "send-keys" ? action.bytes : direction === "up" ? PAGE_UP_BYTES : PAGE_DOWN_BYTES;
     const countsTowardNetPages = action.type === "send-keys" && action.countsTowardNetPages;
     if (countsTowardNetPages) {
@@ -982,7 +984,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       else netPagesUp.pageDown();
     }
     sendKey(bytes, countsTowardNetPages);
-  }, [effectiveScroll.target, scrollOverride, ctrlActive, altActive, shiftActive, sendKey, netPagesUp]);
+  }, [effectiveScroll.target, scrollOverride, ctrlActive, altActive, shiftActive, sendKey, netPagesUp, isInputChunking]);
 
   // Handle terminal resize with size stability detection
   const handleTerminalResize = useCallback((cols: number, rows: number) => {
@@ -2191,6 +2193,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             netPagesUp={netPagesUp}
             connectionEpoch={connectionEpoch}
             sendData={deliverTerminalData}
+            isInputBusy={isInputChunking}
             gestureActive={gestureActive}
             getContainer={getTouchSurface}
           />

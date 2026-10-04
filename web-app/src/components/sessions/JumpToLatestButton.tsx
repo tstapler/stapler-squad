@@ -36,6 +36,8 @@ export interface JumpToLatestButtonProps {
   /** A change invalidates the TUI estimate (reconnect or full snapshot). */
   connectionEpoch: number;
   sendData: (data: string) => void;
+  /** True while a chunked paste is in flight; TUI page keys are dropped (not queued) meanwhile. */
+  isInputBusy?: () => boolean;
   /** True while a finger is down or momentum runs; placement never changes meanwhile. */
   gestureActive?: boolean;
   /** Bumped on each output write; drives the "new output" dot and announcement. */
@@ -76,6 +78,7 @@ export function JumpToLatestButton({
   netPagesUp,
   connectionEpoch,
   sendData,
+  isInputBusy,
   gestureActive = false,
   outputTick = 0,
   getCursorRowRect,
@@ -165,26 +168,46 @@ export function JumpToLatestButton({
   }, [visible, clearAnnounceTimer]);
 
   // ---- Tap ----
-  const pageKeyTimersRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
+  const pageKeyTimersRef = useRef(new Set<ReturnType<typeof setTimeout>>());
+  const cancelPageKeyTimers = useCallback(() => {
+    pageKeyTimersRef.current.forEach(clearTimeout);
+    pageKeyTimersRef.current.clear();
+  }, []);
+
+  useEffect(() => () => {
+    cancelPageKeyTimers();
+    clearAnnounceTimer();
+  }, [cancelPageKeyTimers, clearAnnounceTimer]);
+
+  // Queued extra PgDn keys target a position that no longer holds once the estimate is invalidated
+  // (keystroke, resize, mode change, reconnect), the epoch bumps, or the route flips.
   useEffect(() => {
-    const timers = pageKeyTimersRef.current;
-    return () => {
-      timers.forEach(clearTimeout);
-      clearAnnounceTimer();
-    };
-  }, [clearAnnounceTimer]);
+    if (!estimate.valid) cancelPageKeyTimers();
+  }, [estimate.valid, cancelPageKeyTimers]);
+  useEffect(() => cancelPageKeyTimers, [route, connectionEpoch, cancelPageKeyTimers]);
 
   const handleClick = () => {
     if (isLocal) {
       terminal?.scrollToBottom();
       return;
     }
+    if (isInputBusy?.()) return;
     const count = Math.min(estimate.pages, NET_PAGES_UP_LIMIT);
     netPagesUp.markLive();
     for (let i = 0; i < count; i++) {
-      const send = () => sendData(encodePageKeys("newer"));
-      if (i === 0) send();
-      else pageKeyTimersRef.current.push(setTimeout(send, PAGE_RATE_LIMIT_MS * i));
+      const send = () => {
+        if (!isInputBusy?.()) sendData(encodePageKeys("newer"));
+      };
+      if (i === 0) {
+        send();
+        continue;
+      }
+      const timers = pageKeyTimersRef.current;
+      const id = setTimeout(() => {
+        timers.delete(id);
+        send();
+      }, PAGE_RATE_LIMIT_MS * i);
+      timers.add(id);
     }
   };
 

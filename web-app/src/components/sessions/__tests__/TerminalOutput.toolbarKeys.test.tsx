@@ -67,6 +67,7 @@ const PGUP = "\x1b[5~";
 const PGDN = "\x1b[6~";
 const CTRL_PGUP = "\x1b[5;5~";
 const sendInput = jest.fn();
+let isInputChunking: jest.Mock;
 
 async function renderTerminal() {
   render(<TerminalOutput sessionId="s1" baseUrl="/api" isVisible={false} />);
@@ -81,7 +82,9 @@ beforeEach(() => {
   jest.clearAllMocks();
   localStorage.clear();
   terminal.buffer.active = { viewportY: 50, baseY: 100, type: "normal" };
+  isInputChunking = jest.fn(() => false);
   (useTerminalStream as jest.Mock).mockReturnValue({
+    isInputChunking,
     isConnected: true, error: null, output: "", connect: jest.fn(), disconnect: jest.fn(), sendInput,
     resize: jest.fn(), scrollbackLoaded: false, requestScrollback: jest.fn(), sendFlowControl: jest.fn(),
     startRecording: jest.fn(), stopRecording: jest.fn(), terminalState: "CONNECTED", isHardFailed: false,
@@ -120,6 +123,26 @@ describe("toolbar PgUp/PgDn route awareness", () => {
     tap("Page down");
     expect(sendInput.mock.calls.map((c) => c[0])).toEqual([PGUP, PGDN]);
     expect(scrollPages).not.toHaveBeenCalled();
+  });
+
+  it("toolbarKeys_should_DropPageKeys_When_ChunkedPasteInFlightOnTuiRoute", async () => {
+    await renderTerminal();
+    await setMode({ bufferType: "alternate", mouseTrackingMode: "none" });
+    isInputChunking.mockReturnValue(true);
+    tap("Page up");
+    tap("Page down");
+    expect(sendInput).not.toHaveBeenCalled();
+    isInputChunking.mockReturnValue(false);
+    tap("Page up");
+    expect(sendInput).toHaveBeenCalledWith(PGUP);
+  });
+
+  it("toolbarKeys_should_StillScrollLocalHistory_When_ChunkedPasteInFlight", async () => {
+    await renderTerminal(); // xterm-local route
+    isInputChunking.mockReturnValue(true);
+    tap("Page up");
+    expect(scrollPages).toHaveBeenCalledWith(-1);
+    expect(sendInput).not.toHaveBeenCalled();
   });
 
   it("toolbarKeys_should_SendBytes_When_TuiOverrideChosenOnNormalBuffer", async () => {
