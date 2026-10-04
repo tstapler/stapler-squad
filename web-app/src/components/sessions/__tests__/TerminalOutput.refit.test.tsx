@@ -279,6 +279,23 @@ describe("TerminalOutput settle-driven bounce-hold bypass", () => {
   });
 });
 
+describe("TerminalOutput manual resize with stale dims", () => {
+  it("handleManualResize_should_NotForceResizeOrClearBuffer_When_FitReportsStaleDims", async () => {
+    await renderTerminal();
+    fireEvent.click(screen.getByLabelText("Redraw terminal (fixes a blank screen)"));
+    const { onFitted } = mockXtermHandle.refit.mock.calls.at(-1)![0];
+
+    streamMock.resize.mockClear();
+    mockXtermHandle.clear.mockClear();
+    act(() => onFitted({ cols: 80, rows: 24, stale: true }));
+    expect(streamMock.resize).not.toHaveBeenCalled();
+    expect(mockXtermHandle.clear).not.toHaveBeenCalled();
+
+    act(() => onFitted({ cols: 80, rows: 24 }));
+    expect(streamMock.resize).toHaveBeenCalledWith(80, 24, true);
+  });
+});
+
 describe("TerminalOutput Redraw button (Story 1.2.8)", () => {
   it("redrawButton_should_CallRefitWithManualResize_When_Tapped", async () => {
     await renderTerminal();

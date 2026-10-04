@@ -1702,8 +1702,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     console.log("[TerminalOutput] Manual resize triggered");
     xtermRef.current?.refit({
       reason: 'manual-resize',
-      onFitted: ({ cols, rows }) => {
+      onFitted: ({ cols, rows, stale }) => {
         const latest = manualResizeLatestRef.current;
+        // Forcing a resize (which also clears the local buffer) with pre-hide dims would redraw at a size the container no longer has.
+        if (stale) {
+          console.log(`[TerminalOutput] Manual resize skipped: container never became visible (stale ${cols}x${rows})`);
+          return;
+        }
         console.log(`[TerminalOutput] Terminal resized to ${cols}x${rows}`);
         if (!isMountedRef.current || !latest.isConnected) return;
         console.log(`[TerminalOutput] Forcing resize message to backend: ${cols}x${rows}`);

@@ -26,9 +26,10 @@ export interface RefitOptions {
   /**
    * Called once when the fit run ends, whichever way it ends (fit applied, dims already at rest,
    * sampler gave up, or zero-size retry exhausted), with the terminal's dims at that moment.
-   * Not called if the terminal is disposed first.
+   * Not called if the terminal is disposed first or the container is gone when refit() is requested.
+   * `stale` is true when the zero-size retry gave up: the dims are the pre-hide ones, not a fresh fit.
    */
-  onFitted?: (dims: { cols: number; rows: number }) => void;
+  onFitted?: (dims: { cols: number; rows: number; stale?: boolean }) => void;
 }
 
 /** Zero-size retry bounds: whichever limit is hit first ends the retry. */

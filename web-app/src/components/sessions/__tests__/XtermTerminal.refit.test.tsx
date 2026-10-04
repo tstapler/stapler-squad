@@ -188,7 +188,8 @@ describe("refit onFitted completion callback (Story 2.1.3b)", () => {
     expect(onFitted).not.toHaveBeenCalled();
     advance(1000);
     expect(onFitted).toHaveBeenCalledTimes(1);
-    expect(onFitted).toHaveBeenCalledWith({ cols: 80, rows: 24 });
+    // stale: nothing was fitted, so these are the pre-hide dims and callers must not act on them as a fresh fit
+    expect(onFitted).toHaveBeenCalledWith({ cols: 80, rows: 24, stale: true });
   });
 
   it("refit_should_InvokeEveryCoalescedOnFitted_When_RequestsOverlap", async () => {

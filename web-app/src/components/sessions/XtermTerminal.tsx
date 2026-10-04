@@ -1162,11 +1162,11 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
       // onFitted callbacks of requests coalesced into the current run; flushed once when it ends.
       let pendingFitCallbacks: NonNullable<RefitOptions["onFitted"]>[] = [];
-      const flushFitted = () => {
+      const flushFitted = (stale = false) => {
         if (pendingFitCallbacks.length === 0) return;
         const callbacks = pendingFitCallbacks;
         pendingFitCallbacks = [];
-        const dims = { cols: terminal.cols, rows: terminal.rows };
+        const dims = { cols: terminal.cols, rows: terminal.rows, ...(stale && { stale }) };
         callbacks.forEach((cb) => cb(dims));
       };
 
@@ -1321,7 +1321,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         logFit("fit-skipped", { reason: "zero-size-exhausted" });
         pendingRefit = true;
         if (opts) repaint(opts.reason); // never leave a canvas with valid dims stale
-        flushFitted();
+        flushFitted(true); // nothing was fitted: terminal.cols/rows are still the pre-hide dims
       };
 
       const retryAttempt = () => {
@@ -1343,9 +1343,9 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       requestFitRef.current = (requested) => {
         // Registered once here; the zero-size retry re-enters with the callback stripped.
         const { onFitted, ...opts } = requested;
-        if (onFitted) pendingFitCallbacks.push(onFitted);
         const el = containerRef.current;
-        if (!el) return;
+        if (!el) return; // before the push: a callback registered here would never be flushed
+        if (onFitted) pendingFitCallbacks.push(onFitted);
         if (!canFit(el)) {
           logFit("fit-skipped", { reason: "zero-size" });
           if (retryOpts) {
