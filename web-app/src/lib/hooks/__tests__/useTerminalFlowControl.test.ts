@@ -194,9 +194,13 @@ describe('useTerminalFlowControl', () => {
       expect(result.current.isInputChunking()).toBe(false);
     });
 
-    it('sendInput_should_KeepChunkingFlag_When_OneOfTwoOverlappingPastesAborts', () => {
+    it('sendInput_should_KeepChunkingFlag_When_OneOfTwoOverlappingPastesFinishesFirst', () => {
       const { options, pushMessageFn } = createTestOptions();
       const { result } = renderHook(() => useTerminalFlowControl(options));
+      // Sampled at each push: B's second chunk goes out right after A's final chunk finishes A,
+      // before B re-adds its own token, so it sees only what A's finish left behind.
+      const flagAtPush: boolean[] = [];
+      pushMessageFn.mockImplementation(() => { flagAtPush.push(result.current.isInputChunking()); });
       act(() => {
         result.current.sendInput('a'.repeat(1100)); // paste A: 3 chunks
       });
@@ -204,12 +208,9 @@ describe('useTerminalFlowControl', () => {
       act(() => {
         result.current.sendInput('b'.repeat(2000)); // paste B: 4 chunks, overlaps A
       });
-      expect(result.current.isInputChunking()).toBe(true);
-
-      // A's last chunk goes out; B is still in flight, so the flag must stay up.
-      act(() => { jest.advanceTimersByTime(10); });
-      expect(pushMessageFn.mock.calls.length).toBeGreaterThanOrEqual(4);
-      expect(result.current.isInputChunking()).toBe(true);
+      act(() => { jest.advanceTimersByTime(10); }); // pushes: A3 (finishes A), then B2
+      expect(flagAtPush).toHaveLength(5); // A1, A2, B1, A3, B2
+      expect(flagAtPush[4]).toBe(true);
 
       act(() => { jest.advanceTimersByTime(100); });
       expect(result.current.isInputChunking()).toBe(false);
