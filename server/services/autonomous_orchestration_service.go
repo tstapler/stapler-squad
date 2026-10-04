@@ -376,7 +376,7 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 							// synchronously, exactly like the review branch does, so the respawn
 							// below sees an accurately-closed session instead of racing its own
 							// stale liveness signal.
-							if endErr := concreteStorage.UpdateItemSessionEnded(ctx, is.ID, time.Now()); endErr != nil { //nolint:silenttransition best-effort tombstone; the stuck row and the "Autonomous fix stuck" notification already fired, and the respawn below re-checks liveness itself
+							if endErr := concreteStorage.UpdateItemSessionEnded(ctx, is.ID, time.Now()); endErr != nil { //nolint:silenttransition // logged below; a failed end is not silent downstream: AutoRespawnAutonomousWork re-runs tombstoneOrphanWorkSessions (ends the row if the pane is dead) and findActiveWorkSession blocks the respawn with notifyRespawnBlockedByActiveSession if it is still live
 								log.Warn("[AutonomousDriver] onAutonomousDriverComplete: UpdateItemSessionEnded(work, stuck) failed", "item", item.ID, "itemSession", is.ID, "err", endErr)
 							}
 							if a.autonomousStuckRespawner != nil {
