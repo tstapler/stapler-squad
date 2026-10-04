@@ -125,7 +125,13 @@ describe("ScrollingPanel", () => {
     render(<ScrollingPanel {...p} />);
     await user.click(screen.getByRole("switch"));
     expect(p.onGestureScrollChange).toHaveBeenCalledWith(false);
-    expect(screen.getByTestId("scrolling-announcer").textContent).toBe("Gesture scrolling: off");
+    expect(screen.getByTestId("scrolling-announcer").textContent).toBe("Touch gestures: off");
+  });
+
+  it("full panel switch is labelled as touch gestures and describes selection and tap-to-focus too", () => {
+    render(<ScrollingPanel {...props()} />);
+    const sw = screen.getByRole("switch", { name: /Touch gestures \(scroll, select\)/ });
+    expect(sw).toHaveAccessibleDescription(/disables all touch gestures.*tap to focus.*selection/);
   });
 
   it("overlay applies maxHeight and every control declares a 44px target", () => {

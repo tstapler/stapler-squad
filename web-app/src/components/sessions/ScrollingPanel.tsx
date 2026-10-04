@@ -39,7 +39,7 @@ export const SCROLL_OPTIONS: readonly OptionDef[] = [
 ];
 
 export const GESTURE_DESCRIPTION =
-  "Turn off if you use a screen reader (TalkBack). Dragging no longer scrolls; use the PgUp/PgDn keys.";
+  "Turn off if you use a screen reader (TalkBack). Off disables all touch gestures on the terminal: drag scrolling, tap to focus, double-tap and long-press selection. Use the PgUp/PgDn keys to scroll.";
 export const WIDE_OUTPUT_NOTE = "Long lines wrap; wide output cannot be panned sideways.";
 export const TMUX_NOTE =
   "In tmux, Page keys scroll tmux history. If typing seems ignored, tap PgDn until you reach the bottom. Esc is not offered because it interrupts a running Claude Code turn.";
@@ -128,13 +128,13 @@ export function ScrollingPanel(props: ScrollingPanelProps) {
               checked={gestureScrollEnabled}
               onChange={(e) => {
                 props.onGestureScrollChange(e.target.checked);
-                setAnnouncement(`Gesture scrolling: ${e.target.checked ? "on" : "off"}`);
+                setAnnouncement(`Touch gestures: ${e.target.checked ? "on" : "off"}`);
               }}
               aria-describedby={`${uid}-gesture-desc`}
               className={styles.optionInput}
             />
             <span className={styles.optionText}>
-              <span className={styles.optionLabel}>Gesture scrolling</span>
+              <span className={styles.optionLabel}>Touch gestures (scroll, select)</span>
               <span id={`${uid}-gesture-desc`} className={styles.description}>
                 {GESTURE_DESCRIPTION}
               </span>

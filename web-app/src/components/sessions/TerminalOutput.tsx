@@ -1788,7 +1788,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       icon: '↕️',
       label: 'Scrolling',
       ariaLabel: 'Scrolling settings',
-      title: 'How dragging scrolls, and gesture scrolling',
+      title: 'How dragging scrolls, and touch gestures',
       extraClass: '',
       handler: toggleScrollFullPanel,
     },

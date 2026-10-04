@@ -77,11 +77,11 @@ describe("ScrollModeChip content", () => {
   it("chip_should_NameRouteAndGestureState_InAccessibleName", () => {
     const { rerender } = render(<ScrollModeChip {...chipProps()} />);
     expect(screen.getByRole("button")).toHaveAccessibleName(
-      "Scroll mode: Terminal history. Gesture scrolling on. Opens scroll settings",
+      "Scroll mode: Terminal history. Touch gestures on. Opens scroll settings",
     );
     rerender(<ScrollModeChip {...chipProps({ effectiveTarget: "tui-pgkeys", gestureScrollEnabled: false })} />);
     expect(screen.getByRole("button")).toHaveAccessibleName(
-      "Scroll mode: Page keys. Gesture scrolling off. Opens scroll settings",
+      "Scroll mode: Page keys. Touch gestures off. Opens scroll settings",
     );
     expect(screen.getByRole("button").textContent).toBe("Page keys, gestures off");
   });

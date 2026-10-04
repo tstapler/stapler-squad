@@ -115,7 +115,7 @@ export function ScrollModeChip(props: ScrollModeChipProps) {
         ref={props.buttonRef}
         className={styles.chip}
         data-highlighted={props.highlighted ? "true" : "false"}
-        aria-label={`Scroll mode: ${label}. Gesture scrolling ${gestures}. Opens scroll settings`}
+        aria-label={`Scroll mode: ${label}. Touch gestures ${gestures}. Opens scroll settings`}
         onClick={props.onClick}
       >
         {text}
