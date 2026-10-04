@@ -66,8 +66,8 @@ Not in code by design (device/conditional, not expected): validation.md manual r
 | `gestureScroll_should_PersistAndDefaultOn_When_Unset` | lib/terminal/__tests__/scrollOverride.test.ts:66 |
 | `globalCss_should_SetOverscrollBehaviorNoneOnHtmlBody` | components/sessions/__tests__/XtermTerminal.overscroll.test.ts:12 |
 | `handleManualResize_should_CallRefit` | components/sessions/__tests__/TerminalOutput.refit.test.tsx:207 |
-| `handleTerminalResize_should_NotPassBypass_When_1500msAfterSettleRefit` | components/sessions/__tests__/TerminalOutput.refit.test.tsx:239 |
-| `handleTerminalResize_should_PassBypass_When_Within1000msOfSettleRefit` | components/sessions/__tests__/TerminalOutput.refit.test.tsx:225 |
+| `handleTerminalResize_should_BypassOnlyOnce_When_OscillatingBackWithinSeconds` | components/sessions/__tests__/TerminalOutput.refit.test.tsx |
+| `handleTerminalResize_should_PassBypass_When_ResizeFollowsSettleRefit` | components/sessions/__tests__/TerminalOutput.refit.test.tsx |
 | `hint_should_NotShow_When_SeenFlagSet` | components/sessions/__tests__/TerminalOutput.scrollingUi.test.tsx:247 |
 | `hint_should_SetSeenFlagOnDismissOnly` | components/sessions/__tests__/ScrollHint.test.tsx:60 |
 | `hint_should_ShowOnceOnFirstDragWithRouteText_And_NotOfferEscOrQ` | components/sessions/__tests__/ScrollHint.test.tsx:32 |
@@ -228,7 +228,7 @@ Status key: MET = implemented and covered by a passing jest test (device behavio
 | 1.2.2 | Fling continues then stops | MET | `momentum_should_DispatchDecayingScrollLinesAtMostOncePerFrame_*`, `..._NeverDispatchTwiceInOneFrame_*` |
 | 1.2.2 | Cancellation sources incl. buffer change, unmount | MET | `momentum_should_Cancel_When_BufferTypeChanges`, `..._VisualViewportResizeOrOrientationChangeOrUnmount`, `hook_should_DisposeBufferChangeSubscription_When_Unmounted` |
 | 1.2.2 | Touch-to-stop is not a tap (COASTING, `consumedByCoast`) | MET | `momentum_should_CancelAndSkipTapFocus_When_TouchstartDuringCoasting`, `momentum_should_ResetStateAndCoastFlag_When_TouchcancelDuringCoasting`; `gestureMachine.ts` has `COASTING`/`momentumEnd` |
-| 1.2.10 | `touchcancel` in SCROLLING resets, no coast | MET | `gestureMachine.ts:118-120` (-> IDLE via `abort()`); `touchcancel_should_ResetStateAndNotCoast_*`. Discrepancy with ux.md S9, see section 3 |
+| 1.2.10 | `touchcancel` in SCROLLING resets, no coast | MET | `gestureMachine.ts:118-120` (-> IDLE via `abort()`); `touchcancel_should_ResetStateAndNotCoast_*`. ux.md S9 agrees (IDLE), see section 3 |
 | 1.2.10 | Horizontal-first ignored, no `preventDefault` | MET | `gestureMachine.ts` (`absDx > absDy` -> stay PENDING, long-press timer kept; release is not a tap via the dx-aware tap check); `touchmove_should_NotScrollOrPreventDefault_When_HorizontalFirstPastSlop` |
 | 1.2.10 | Tap tolerance = slop | MET | `touchend_should_Tap_When_MovedUnderSlopAndReleasedBefore400ms` |
 | 1.2.10 | Tap with selection active clears only | MET | `touchend_should_ClearSelectionAndNotFocus_When_TapWhileSelectionActive` |
@@ -239,7 +239,7 @@ Status key: MET = implemented and covered by a passing jest test (device behavio
 | 1.2.5 | Panel never starves terminal (overlay under 5 rows) | MET | `shouldRenderPanelAsOverlay` imported at `TerminalOutput.tsx:65`; `panel_should_RenderAsOverlay_When_InlineWouldLeaveFewerThanFiveRows`. Real keyboard-up behavior not run on a device |
 | 1.2.5 | Misroute cue (heavier border, "!", 5 s, once per 30 s) | MET | `ScrollModeChip.tsx:10-12` (`MISROUTE_HIGHLIGHT_MS=5000`, `MISROUTE_ANNOUNCE_INTERVAL_MS=30000`); `chip_should_HighlightOnce_When_LocalDragMovedNothing`, `chip_should_NotHighlight_When_TuiRoute` |
 | 1.2.5 | Chip visibility rule (coarse pointer or touchstart; hidden under 5 rows) | MET | `ScrollModeChip.tsx:106`; `chip_should_BeHidden_When_NoCoarsePointerAndNoTouchSeen`, `chip_should_Render_When_TouchstartSeen`, `chip_should_BeHidden_When_FewerThanFiveRows` |
-| 1.2.5 | Gesture scrolling Off (no listeners, no `preventDefault`, default touch-action, PgUp/PgDn still scroll) | MET | 1.2.5c: `XtermTerminal.css.ts:60` `'&[data-gesture-scroll="on"]': { touchAction: "none" }`, `XtermTerminal.tsx:1573` sets `data-gesture-scroll`; `hook_should_RegisterNoTouchListeners_When_GestureScrollOff`, `..._NeverPreventDefault_*`, `..._ReRegisterListeners_*`, `terminalCss_should_RestoreDefaultTouchAction_*`. TalkBack must-pass (D8) UNVERIFIED |
+| 1.2.5 | Touch gestures (scroll, select) Off (no listeners, no `preventDefault`, default touch-action, PgUp/PgDn still scroll) | MET | 1.2.5c: `XtermTerminal.css.ts:60` `'&[data-gesture-scroll="on"]': { touchAction: "none" }`, `XtermTerminal.tsx:1573` sets `data-gesture-scroll`; `hook_should_RegisterNoTouchListeners_When_GestureScrollOff`, `..._NeverPreventDefault_*`, `..._ReRegisterListeners_*`, `terminalCss_should_RestoreDefaultTouchAction_*`. TalkBack must-pass (D8) UNVERIFIED |
 | 1.2.5 | Storage failure falls back to defaults | MET | `scrollOverride_should_FallBackToDefaults_When_LocalStorageThrows`, `gestureScroll_should_FallBackToOn_*` |
 | 1.2.5 | Targets and focus (44x44, 200% font) | PARTIAL | 44px CSS: `ScrollingPanel.css.ts:38-39,60,68-69`; `chip_should_HaveAtLeast44pxTarget`. 200% font-size usability (D8) UNVERIFIED |
 | 1.2.5 | First-use hint (status, "Got it", no timeout, seen flag on dismiss) | MET | `components/sessions/ScrollHint.tsx` mounted at `TerminalOutput.tsx:2095`; `hint_should_*` (4 tests) in `ScrollHint.test.tsx`. Note: tests live in `ScrollHint.test.tsx` not `ScrollingPanel.test.tsx` (validation.md named the latter) |
@@ -282,7 +282,7 @@ Status key: MET = implemented and covered by a passing jest test (device behavio
 | 2.1.4 | Decoupled from the gesture hook | MET | wiring in `TerminalOutput.tsx:1352-1358` (`createViewportSettle(window.visualViewport, createRafScheduler(), ...)`); settle stamp `:1356`. Not re-checked: absence of `lib/hooks` imports in `viewportSettle.ts` (not grepped) |
 | 2.1.5 | Bypass sends immediately on a bounce | MET | `useTerminalFlowControl.ts:324` (`bypassed`), `:348,362` logs; `resize_should_SendImmediatelyAndResetStreak_When_BypassBounceHoldAndDimsInHistory` |
 | 2.1.5 | Non-bypass unchanged; dedup kept | MET | `resize_should_HoldThreeThenSixSeconds_*`, `resize_should_StillDedupe_When_BypassAndDimsUnchanged` |
-| 2.1.5 | Only settle-driven resizes bypass (1000 ms window) | MET | `TerminalOutput.tsx:1086-1088`; `handleTerminalResize_should_PassBypass_When_Within1000msOfSettleRefit`, `..._NotPassBypass_When_1500msAfterSettleRefit` |
+| 2.1.5 | Only settle-driven resizes bypass (one-shot flag, no time window) | MET | `settleBypassPendingRef` in `TerminalOutput.tsx`; `handleTerminalResize_should_PassBypass_When_ResizeFollowsSettleRefit`, `..._BypassOnlyOnce_When_OscillatingBackWithinSeconds` |
 | 2.1.5 | Debug log `bypassed: true|false` | MET | `useTerminalFlowControl.ts:348,362` (`bypassed` field in `mobileDebug.log('resize', ...)`) |
 | 2.1.6 | Stale queue dropped when connected | SKIPPED (conditional) | Q5b not run; no `dropPendingWrites` in src |
 | 2.1.6 | Repaint after resume (`reason:'visibility'`) | SKIPPED (conditional) | no `reason: "visibility"` caller outside tests (grep empty) |
@@ -299,7 +299,7 @@ Recount: `70 + 4 + 3 + 3 + 1 = 81`.
 - (b) Story 1.2.5c: MET. `XtermTerminal.css.ts:60` keys `touchAction: "none"` on `[data-gesture-scroll="on"]`; `XtermTerminal.tsx:1573` emits the attribute. Other `touchAction` rules (`:31,133` manipulation; `:188,199,223` none) are overlays and were left alone per Task 1.2.3a.
 - (c) Story 1.2.7: MET. `JumpToLatestMount.tsx` mounted at `TerminalOutput.tsx:2183`; all five invalidations (keystroke, resize, mode/override, epoch, over 5) present (list in AC table).
 - (d) Story 1.2.8: MET. `onFitted` is a field of `RefitOptions` (`postFitRepaint.ts:31`); `XtermTerminal.tsx` queues callbacks while a sampler run is coalescing and flushes them after the fit; `TerminalOutput.tsx:1695` uses it to send the server resize after the fit.
-- (e) Story 1.2.10 S9: multi-touch `touchstart` -> CANCELLED is implemented (`gestureMachine.ts:64-65`, `:75`). SCROLLING `touchcancel` intentionally returns to IDLE (`gestureMachine.ts:118-120`, with an explanatory comment). **Plan/ux discrepancy**: plan.md Story 1.2.10 AC says IDLE; design/ux.md S9 says CANCELLED. The code follows the plan AC and argues the two are observably identical because the next `touchstart` starts a fresh PENDING from either state. The plan, ux.md and code were not reconciled; one of the two docs should be amended.
+- (e) Story 1.2.10 S9: multi-touch `touchstart` -> CANCELLED is implemented (`gestureMachine.ts:64-65`, `:75`). SCROLLING `touchcancel` intentionally returns to IDLE (`gestureMachine.ts:118-120`, with an explanatory comment). Resolved: plan.md Story 1.2.10 and design/ux.md S9 both say IDLE, matching the code.
 - (f) Story 1.2.6 paste guard: MET (details in AC table). Note the plan puts it in Tier B; it is implemented.
 - (g) Story 2.1.6: skipped (conditional on Q5b, device-gated). No code, no tests. Expected per plan.md:971 and :383.
 - (h) Story 3.1.2 e2e: not done (optional, plan.md:1003). `tests/e2e` has no diff on this branch.
@@ -329,7 +329,7 @@ Nothing below was run in this sweep or evidenced in the repo. Every row is NOT R
 | D5 toolbar equivalence and regression | plan.md:1023 | NOT RUN |
 | D6 reduced motion | plan.md:1028 | NOT RUN |
 | D7 keyboard open/close N cycles, 0 blanks; first-vv-event-to-refit median <= 400 ms; `bypassed:true` on close | plan.md:1029-1030 | NOT RUN (cannot be claimed; baseline also unmeasured) |
-| D8 200% font, TalkBack Off/On, must-pass focus-and-type with Gesture scrolling Off | plan.md:1024 | NOT RUN |
+| D8 200% font, TalkBack Off/On, must-pass focus-and-type with Touch gestures (scroll, select) Off | plan.md:1024 | NOT RUN |
 | D9 jank trace (no frame over 32 ms), SLOP_PX tuning, drifting tap 8-14 px | plan.md:1025 | NOT RUN |
 | D10 Redraw visible and >= 44x44 at 360 px, recovers a forced blank | plan.md:1026 | NOT RUN |
 | D11 landscape under 5 rows, reconnect while scrolled | plan.md:1027 | NOT RUN |
@@ -339,7 +339,7 @@ Nothing below was run in this sweep or evidenced in the repo. Every row is NOT R
 
 ## 5. Real gaps, ranked
 
-1. **Plan/ux.md S9 `touchcancel` mismatch is unresolved** (section 3e). Code is IDLE per plan; ux.md says CANCELLED. Doc fix needed (or code change), otherwise a reviewer reading ux.md will flag it.
+1. ~~Plan/ux.md S9 `touchcancel` mismatch~~ Resolved (section 3e): code, plan.md and ux.md S9 all say IDLE.
 2. **Empty-buffer drag no-op has no guard or test** (AC 1.2.7 last bullet; validation.md row `jumpToLatest_should_BeHiddenAndDragNoop_When_BufferEmpty`). Only the hide half is tested (renamed test). Likely harmless in xterm, but UNVERIFIED.
 3. **`netPagesUp` reset on epoch is not asserted at the hook level**; the validation.md-named `scrollDrag_should_CancelAndResetNetPagesUp_When_ConnectionEpochChanges` was replaced by a cancel-only test plus the button-level reset test. Implementation exists (`TerminalOutput.tsx:918-923`).
 4. **Story 2.1.6 (hidden-tab drop and visibility repaint) absent**: expected skip, but plan.md:383 says that if Q5b is never run the "drop and record why" step is also missing; no Spike Findings entry exists to justify the skip.
