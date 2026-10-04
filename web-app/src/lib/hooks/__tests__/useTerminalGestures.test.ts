@@ -698,6 +698,33 @@ describe('useTerminalGestures', () => {
       expect(terminalRef.current!.scrollLines).toHaveBeenCalledWith(2);
     });
 
+    const mouseEvents = (screen: { dispatchEvent: jest.Mock }) =>
+      screen.dispatchEvent.mock.calls.map((c) => c[0] as MouseEvent);
+
+    it('touchcancel_should_ReleaseMouseAtPressPoint_When_CancelledRightAfterLongPress', () => {
+      const screen = withScreen();
+      mount('none');
+      fireTouchStart(100, 120);
+      jest.advanceTimersByTime(400);
+      cancel(); // no touch, no drag point yet: falls back to the press point
+      const up = mouseEvents(screen).find((e) => e.type === 'mouseup')!;
+      expect([up.clientX, up.clientY]).toEqual([100, 120]);
+    });
+
+    it('touchend_should_FlushLastCoalescedSelectPoint_When_ReleasedBeforeTheFrameFires', () => {
+      const screen = withScreen();
+      mount('none');
+      fireTouchStart(100, 100);
+      jest.advanceTimersByTime(400);
+      move(100, 150);
+      move(100, 190); // coalesced; no frame has fired yet
+      expect(dispatchedTypes(screen)).toEqual(['mousedown']);
+      fireTouchEnd(100, 190);
+      const events = mouseEvents(screen);
+      expect(events.map((e) => e.type)).toEqual(['mousedown', 'mousemove', 'mouseup']);
+      expect(events[1].clientY).toBe(190);
+    });
+
     it('scrollFrame_should_NotAllocateDebugPayload_When_DebugFlagOff', () => {
       const logSpy = jest.spyOn(mobileDebug, 'log');
       try {

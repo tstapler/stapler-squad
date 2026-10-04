@@ -313,6 +313,9 @@ export function useTerminalGestures(options: GestureOptions): void {
       if (!t) { state = 'IDLE'; stopGesture(); syncActive(); return; }
 
       clearLongPressTimer();
+      // Release fallback for a cancel before any drag point arrives.
+      lastSelectX = startX;
+      lastSelectY = startY;
 
       // Haptic feedback if available (R4.3)
       navigator.vibrate?.(10);
