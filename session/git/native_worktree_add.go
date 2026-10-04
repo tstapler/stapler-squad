@@ -54,9 +54,9 @@ func AllocateAdminDirName(repoPath, name string) (string, error) {
 	return "", fmt.Errorf("AllocateAdminDirName: exhausted %d suffix attempts for %q under %q", maxAllocateAdminDirNameRetries, name, worktreesDir)
 }
 
-// nativeSetupNewWorktree is the pure-Go, go-git-based replacement for legacySetupNewWorktree's
+// nativeSetupNewWorktree is the pure-Go, go-git-based replacement for the former
 // subprocess `git worktree add -b <branch> <path> <commit>` (Epic 2.1, Stories 2.1.1 and
-// 2.1.2), dispatched from setupLockedWithNative via useNativeWorktree (Task 2.1.3b). It writes
+// 2.1.2), called directly from setupLocked (Task 2.1.3b). It writes
 // real git's exact `.git/worktrees/<name>/` admin-file set in crash-safe order (ADR-001)
 // — LockedMarker first, GitdirFile before CommondirFile, then HEAD, then the worktree's
 // own WorktreeRedirectFile — then populates the working tree via go-git's existing
@@ -101,8 +101,8 @@ func (g *GitWorktree) nativeSetupNewWorktree() error {
 }
 
 // resolveNativeAddBaseCommit returns g.baseCommitSHA if already set (a caller that
-// pre-selected a specific base commit, e.g. NewGitWorktreeFromCommitSHA — mirroring
-// legacySetupNewWorktree's identical precedent), otherwise resolves and caches repo's
+// pre-selected a specific base commit, e.g. NewGitWorktreeFromCommitSHA), otherwise
+// resolves and caches repo's
 // current HEAD commit. Errors if the resolved/pre-set SHA doesn't exist in repo, so a
 // bad base commit fails before any admin file is written.
 func (g *GitWorktree) resolveNativeAddBaseCommit(repo *git.Repository) (string, error) {

@@ -47,9 +47,8 @@ func resetForkMonitor(t *testing.T) {
 	// Reset alert state
 	forkMonitor.alertMu.Lock()
 	forkMonitor.lastAlertAt = time.Time{}
-	forkMonitor.lastAlertZombieCount = 0
-	forkMonitor.lastAlertFailureCount = 0
-	forkMonitor.lastAlertLevel = ForkPressureOK
+	forkMonitor.episodeActive = false
+	forkMonitor.peakLevel = ForkPressureOK
 	forkMonitor.alertFns = nil
 	forkMonitor.alertMu.Unlock()
 }
@@ -162,9 +161,13 @@ func TestCheckPressure_StableCount_NoRepeatAlert(t *testing.T) {
 	}
 }
 
-// TestCheckPressure_WorsenedCount_BypassesCooldown verifies that a strictly higher
-// zombie count fires a second alert immediately, even within the cooldown window (FR-1).
-func TestCheckPressure_WorsenedCount_BypassesCooldown(t *testing.T) {
+// TestCheckPressure_SustainedTrickle_FiresOnce is the regression test for the
+// flapping bug (AC1): a sustained-but-not-escalating condition (zombie count
+// stays at the Critical level, never clearing, never escalating further) must
+// fire exactly one alert for the whole episode, not one per occurrence. This
+// replaces the old ratchet-based test that asserted the opposite (a strictly
+// higher same-level count used to bypass the cooldown and re-fire).
+func TestCheckPressure_SustainedTrickle_FiresOnce(t *testing.T) {
 	resetForkMonitor(t)
 
 	var count atomic.Int64
@@ -172,23 +175,26 @@ func TestCheckPressure_WorsenedCount_BypassesCooldown(t *testing.T) {
 
 	t0 := time.Now()
 
-	// Inject 12 zombies — first alert fires. Use t0+1ns so events are strictly
-	// inside the window when we call checkPressure(t0+1ns).
+	// Inject 12 zombies — first (and, per this test, only) alert fires. Use
+	// t0+1ns so events are strictly inside the window at t0+1ns.
 	t0p := t0.Add(1 * time.Nanosecond)
 	injectZombies(12, t0p)
 	checkPressure(t0p)
 	waitAlertCount(t, &count, 1, 500*time.Millisecond)
 
-	// Advance 30 s (inside the 2-minute cooldown). Add 5 more zombies.
-	// At t1=t0+30s, the window cutoff is t1-30s = t0. Events at t0+1ns are
-	// still in the window (After(t0) == true), so ZombiesInWindow = 17 > 12.
-	t1 := t0.Add(30 * time.Second)
-	injectZombies(5, t1)
-	checkPressure(t1)
-	waitAlertCount(t, &count, 2, 500*time.Millisecond)
+	// Simulate a slow trickle: several more checkPressure calls, each with a
+	// slightly higher in-window zombie count (still Critical, never dropping
+	// below the clear threshold, never escalating to a higher level — there is
+	// none above Critical). None of these should re-fire.
+	for i, extra := range []int{5, 3, 4, 2} {
+		t1 := t0.Add(time.Duration(i+1) * 5 * time.Second)
+		injectZombies(extra, t1)
+		checkPressure(t1)
+	}
+	forkMonitor.alertWG.Wait()
 
-	if got := count.Load(); got != 2 {
-		t.Errorf("alert count = %d; want 2 (worsened count should bypass cooldown)", got)
+	if got := count.Load(); got != 1 {
+		t.Errorf("alert count = %d; want 1 (sustained trickle within the same episode must not re-fire)", got)
 	}
 }
 
@@ -238,50 +244,68 @@ func TestCheckPressure_LevelEscalation_BypassesCooldown(t *testing.T) {
 	}
 }
 
-// TestCheckPressure_ClearAndRearm verifies that after the condition clears (level OK),
-// the baseline resets and a fresh surge fires a new alert (FR-5).
+// TestCheckPressure_ClearAndRearm verifies that after the condition clears
+// (dropping below the clear thresholds), the episode state resets — firing an
+// explicit clear alert (FR-4/AC4) — and a fresh surge fires a new alert (FR-5).
 func TestCheckPressure_ClearAndRearm(t *testing.T) {
 	resetForkMonitor(t)
 
-	var count atomic.Int64
-	registerCountingAlert(&count)
+	var levelsMu sync.Mutex
+	var levels []ForkPressureLevel
+	forkMonitor.alertMu.Lock()
+	forkMonitor.alertFns = []AlertFunc{func(level ForkPressureLevel, _ ForkPressureStats) {
+		levelsMu.Lock()
+		levels = append(levels, level)
+		levelsMu.Unlock()
+	}}
+	forkMonitor.alertMu.Unlock()
 
 	t0 := time.Now()
 
-	// Inject 12 zombies — first alert fires.
+	// Inject 12 zombies — first alert fires (Critical).
 	injectZombies(12, t0)
 	checkPressure(t0)
-	waitAlertCount(t, &count, 1, 500*time.Millisecond)
+	waitLevels(t, &levelsMu, &levels, 1, 500*time.Millisecond)
 
 	// Advance 35 s so the ring entries at t0 fall outside the 30-second window.
-	// No new events injected — level should return to OK.
+	// No new events injected — level should return to OK, below every clear
+	// threshold, firing an explicit ForkPressureOK clear signal.
 	t1 := t0.Add(35 * time.Second)
-	checkPressure(t1) // triggers baseline reset (FR-5)
+	checkPressure(t1)
+	waitLevels(t, &levelsMu, &levels, 2, 500*time.Millisecond)
 
-	// Verify baseline was reset.
+	// Verify episode state was reset.
 	forkMonitor.alertMu.Lock()
-	if forkMonitor.lastAlertZombieCount != 0 {
-		t.Errorf("lastAlertZombieCount = %d; want 0 after clear", forkMonitor.lastAlertZombieCount)
+	if forkMonitor.episodeActive {
+		t.Error("episodeActive = true; want false after clear")
 	}
-	if forkMonitor.lastAlertLevel != ForkPressureOK {
-		t.Errorf("lastAlertLevel = %v; want OK after clear", forkMonitor.lastAlertLevel)
+	if forkMonitor.peakLevel != ForkPressureOK {
+		t.Errorf("peakLevel = %v; want OK after clear", forkMonitor.peakLevel)
 	}
 	forkMonitor.alertMu.Unlock()
 
-	// Inject 5 new zombies (above threshold of threshold=10... inject 12 to exceed it).
+	// Inject 12 new zombies (above the alert threshold of 10) — a fresh episode.
 	t2 := t1.Add(1 * time.Second)
 	injectZombies(12, t2)
 	checkPressure(t2)
-	waitAlertCount(t, &count, 2, 500*time.Millisecond)
+	waitLevels(t, &levelsMu, &levels, 3, 500*time.Millisecond)
 
-	if got := count.Load(); got != 2 {
-		t.Errorf("alert count = %d; want 2 (fresh alert after re-arm)", got)
+	levelsMu.Lock()
+	defer levelsMu.Unlock()
+	want := []ForkPressureLevel{ForkPressureCritical, ForkPressureOK, ForkPressureCritical}
+	if len(levels) != len(want) {
+		t.Fatalf("levels = %v; want %v", levels, want)
+	}
+	for i := range want {
+		if levels[i] != want[i] {
+			t.Errorf("levels[%d] = %v; want %v (full sequence %v)", i, levels[i], want[i], levels)
+		}
 	}
 }
 
-// TestCheckPressure_BaselineRecorded_AfterFiring verifies that the baseline fields
-// are updated to match the stats at the time of firing (FR-2).
-func TestCheckPressure_BaselineRecorded_AfterFiring(t *testing.T) {
+// TestCheckPressure_PeakLevelRecorded_AfterFiring verifies that peakLevel is
+// updated to match the level at the time of firing (FR-2).
+func TestCheckPressure_PeakLevelRecorded_AfterFiring(t *testing.T) {
 	resetForkMonitor(t)
 
 	var count atomic.Int64
@@ -297,25 +321,21 @@ func TestCheckPressure_BaselineRecorded_AfterFiring(t *testing.T) {
 	waitAlertCount(t, &count, 1, 500*time.Millisecond)
 
 	forkMonitor.alertMu.Lock()
-	gotZ := forkMonitor.lastAlertZombieCount
-	gotF := forkMonitor.lastAlertFailureCount
-	gotL := forkMonitor.lastAlertLevel
+	gotActive := forkMonitor.episodeActive
+	gotPeak := forkMonitor.peakLevel
 	forkMonitor.alertMu.Unlock()
 
-	if gotZ != zombies {
-		t.Errorf("lastAlertZombieCount = %d; want %d", gotZ, zombies)
+	if !gotActive {
+		t.Error("episodeActive = false; want true after firing")
 	}
-	if gotF != failures {
-		t.Errorf("lastAlertFailureCount = %d; want %d", gotF, failures)
-	}
-	if gotL != ForkPressureCritical {
-		t.Errorf("lastAlertLevel = %v; want Critical", gotL)
+	if gotPeak != ForkPressureCritical {
+		t.Errorf("peakLevel = %v; want Critical", gotPeak)
 	}
 }
 
-// TestCheckPressure_BaselineNotUpdated_WhenSuppressed verifies that a suppressed
-// (unchanged) call does not overwrite the recorded baseline (FR-2).
-func TestCheckPressure_BaselineNotUpdated_WhenSuppressed(t *testing.T) {
+// TestCheckPressure_PeakLevelNotUpdated_WhenSuppressed verifies that a
+// suppressed (same-level, non-escalating) call does not touch peakLevel (FR-2).
+func TestCheckPressure_PeakLevelNotUpdated_WhenSuppressed(t *testing.T) {
 	resetForkMonitor(t)
 
 	var count atomic.Int64
@@ -324,7 +344,7 @@ func TestCheckPressure_BaselineNotUpdated_WhenSuppressed(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		t0 := time.Now()
 
-		// Inject 12 zombies — first alert fires, baseline recorded as 12.
+		// Inject 12 zombies — first alert fires, peakLevel recorded as Critical.
 		injectZombies(12, t0)
 		checkPressure(t0)
 		// checkPressure fires alerts in a goroutine spawned inside this bubble;
@@ -335,34 +355,35 @@ func TestCheckPressure_BaselineNotUpdated_WhenSuppressed(t *testing.T) {
 			t.Fatalf("alert count = %d; want 1 after first alert", got)
 		}
 
-		// Advance 30 s; add 12 more zombies at t1 (same total in window: 12, not strictly greater).
+		// Advance 30 s; add 12 more zombies at t1 (still Critical, still above
+		// the clear threshold — a same-level trickle, not an escalation).
 		t1 := t0.Add(30 * time.Second)
 		injectZombies(12, t1)
 
-		// At t1 the window is [t1-30s, t1] = [t0, t1]. Events at t0 are on the boundary.
-		// The stable-count suppression path should leave baseline unchanged.
-		beforeZ := forkMonitor.lastAlertZombieCount
+		forkMonitor.alertMu.Lock()
+		beforePeak := forkMonitor.peakLevel
+		forkMonitor.alertMu.Unlock()
 		checkPressure(t1)
 		synctest.Wait()
 
 		forkMonitor.alertMu.Lock()
-		afterZ := forkMonitor.lastAlertZombieCount
+		afterPeak := forkMonitor.peakLevel
 		forkMonitor.alertMu.Unlock()
 
 		// Alert count must still be 1 (suppressed).
 		if got := count.Load(); got != 1 {
-			t.Errorf("alert count = %d; want 1 (stable count must be suppressed)", got)
+			t.Errorf("alert count = %d; want 1 (same-level trickle must be suppressed)", got)
 		}
-		// Baseline must not have changed during a suppressed call.
-		if afterZ != beforeZ {
-			t.Errorf("baseline was updated during a suppressed call: before=%d after=%d", beforeZ, afterZ)
+		// peakLevel must not have changed during a suppressed call.
+		if afterPeak != beforePeak {
+			t.Errorf("peakLevel changed during a suppressed call: before=%v after=%v", beforePeak, afterPeak)
 		}
 	})
 }
 
-// TestCheckPressure_BaselineResetOnClear verifies that transitioning to OK resets
-// all three baseline fields (FR-5).
-func TestCheckPressure_BaselineResetOnClear(t *testing.T) {
+// TestCheckPressure_EpisodeStateResetOnClear verifies that transitioning below
+// every clear threshold resets both episode-state fields (FR-5).
+func TestCheckPressure_EpisodeStateResetOnClear(t *testing.T) {
 	resetForkMonitor(t)
 
 	var count atomic.Int64
@@ -375,34 +396,44 @@ func TestCheckPressure_BaselineResetOnClear(t *testing.T) {
 	checkPressure(t0)
 	waitAlertCount(t, &count, 1, 500*time.Millisecond)
 
-	// Advance 35 s so events expire → level returns to OK.
+	// Advance 35 s so events expire → level returns to OK, well below every
+	// clear threshold.
 	t1 := t0.Add(35 * time.Second)
 	checkPressure(t1)
+	waitAlertCount(t, &count, 2, 500*time.Millisecond)
 
 	forkMonitor.alertMu.Lock()
-	gotZ := forkMonitor.lastAlertZombieCount
-	gotF := forkMonitor.lastAlertFailureCount
-	gotL := forkMonitor.lastAlertLevel
+	gotActive := forkMonitor.episodeActive
+	gotPeak := forkMonitor.peakLevel
 	forkMonitor.alertMu.Unlock()
 
-	if gotZ != 0 {
-		t.Errorf("lastAlertZombieCount = %d; want 0 after clear", gotZ)
+	if gotActive {
+		t.Error("episodeActive = true; want false after clear")
 	}
-	if gotF != 0 {
-		t.Errorf("lastAlertFailureCount = %d; want 0 after clear", gotF)
-	}
-	if gotL != ForkPressureOK {
-		t.Errorf("lastAlertLevel = %v; want ForkPressureOK after clear", gotL)
+	if gotPeak != ForkPressureOK {
+		t.Errorf("peakLevel = %v; want ForkPressureOK after clear", gotPeak)
 	}
 }
 
-// TestCheckPressure_NoAlertOnClear verifies that transitioning back to OK does NOT
-// fire an alert callback (the clear itself is not a user-visible event).
-func TestCheckPressure_NoAlertOnClear(t *testing.T) {
+// TestCheckPressure_ClearFiresAlert verifies that transitioning back to OK DOES
+// fire an alert callback with level ForkPressureOK — the explicit clear signal
+// AC4 requires so listeners (the notification record, the status banner) can
+// tell an episode ended instead of it lingering at its last elevated state.
+// This intentionally pins the opposite of the old behavior (see git history:
+// the clear used to be silent, which left AC4's banner with no way to know
+// when to stop showing an alert).
+func TestCheckPressure_ClearFiresAlert(t *testing.T) {
 	resetForkMonitor(t)
 
-	var count atomic.Int64
-	registerCountingAlert(&count)
+	var levelsMu sync.Mutex
+	var levels []ForkPressureLevel
+	forkMonitor.alertMu.Lock()
+	forkMonitor.alertFns = []AlertFunc{func(level ForkPressureLevel, _ ForkPressureStats) {
+		levelsMu.Lock()
+		levels = append(levels, level)
+		levelsMu.Unlock()
+	}}
+	forkMonitor.alertMu.Unlock()
 
 	synctest.Test(t, func(t *testing.T) {
 		t0 := time.Now()
@@ -411,8 +442,11 @@ func TestCheckPressure_NoAlertOnClear(t *testing.T) {
 		injectZombies(12, t0)
 		checkPressure(t0)
 		synctest.Wait()
-		if got := count.Load(); got != 1 {
-			t.Fatalf("alert count = %d; want 1 after first alert", got)
+		levelsMu.Lock()
+		gotLen := len(levels)
+		levelsMu.Unlock()
+		if gotLen != 1 {
+			t.Fatalf("alert count = %d; want 1 after first alert", gotLen)
 		}
 
 		// Advance 35 s so events expire → level returns to OK.
@@ -420,8 +454,13 @@ func TestCheckPressure_NoAlertOnClear(t *testing.T) {
 		checkPressure(t1)
 		synctest.Wait()
 
-		if got := count.Load(); got != 1 {
-			t.Errorf("alert count = %d; want 1 (clear must not fire alert callbacks)", got)
+		levelsMu.Lock()
+		defer levelsMu.Unlock()
+		if len(levels) != 2 {
+			t.Fatalf("alert count = %d; want 2 (clear must fire an explicit ForkPressureOK alert)", len(levels))
+		}
+		if levels[1] != ForkPressureOK {
+			t.Errorf("levels[1] = %v; want ForkPressureOK", levels[1])
 		}
 	})
 }

@@ -663,9 +663,13 @@ func ForSession(sessionID string) *slog.Logger {
 // PackageLevelHandler can resolve per-package overrides correctly (skip=3:
 // Callers, logAt, Info/Warn/Error/Debug, caller).
 // See also: https://pkg.go.dev/log/slog#hdr-Wrapping_output_methods.
-func logAt(level slog.Level, msg string, args ...any) {
+//
+// ctx is passed through to the handler chain (TraceIDHandler reads a span
+// out of it) -- callers that have a real request/RPC ctx in scope should use
+// the *Context variants below instead of Info/Warn/Error/Debug, or
+// TraceIDHandler can never find a span to correlate the log line with.
+func logAt(ctx context.Context, level slog.Level, msg string, args ...any) {
 	logger := slogDefault.Load()
-	ctx := context.Background()
 	if !logger.Enabled(ctx, level) {
 		return
 	}
@@ -678,18 +682,40 @@ func logAt(level slog.Level, msg string, args ...any) {
 
 // Info logs an info-level message through the default slog handler (async, no mutex hold).
 // args are alternating key-value pairs: log.Info("msg", "key", val, "key2", val2)
-func Info(msg string, args ...any) { logAt(slog.LevelInfo, msg, args...) }
+func Info(msg string, args ...any) { logAt(context.Background(), slog.LevelInfo, msg, args...) }
 
 // Warn logs a warning-level message through the default slog handler.
-func Warn(msg string, args ...any) { logAt(slog.LevelWarn, msg, args...) }
+func Warn(msg string, args ...any) { logAt(context.Background(), slog.LevelWarn, msg, args...) }
 
 // Error logs an error-level message through the default slog handler.
-func Error(msg string, args ...any) { logAt(slog.LevelError, msg, args...) }
+func Error(msg string, args ...any) { logAt(context.Background(), slog.LevelError, msg, args...) }
 
 // Debug logs a debug-level message through the default slog handler.
 // The handler drops debug records when the runtime level is above DEBUG, so
 // this is safe to call without an IsDebugEnabled() guard.
-func Debug(msg string, args ...any) { logAt(slog.LevelDebug, msg, args...) }
+func Debug(msg string, args ...any) { logAt(context.Background(), slog.LevelDebug, msg, args...) }
+
+// InfoContext logs an info-level message with ctx threaded to the handler
+// chain, so TraceIDHandler can inject trace_id/span_id when ctx carries a
+// live OTel span. Prefer this over Info inside a traced request/RPC path.
+func InfoContext(ctx context.Context, msg string, args ...any) {
+	logAt(ctx, slog.LevelInfo, msg, args...)
+}
+
+// WarnContext is Warn's ctx-threading counterpart. See InfoContext.
+func WarnContext(ctx context.Context, msg string, args ...any) {
+	logAt(ctx, slog.LevelWarn, msg, args...)
+}
+
+// ErrorContext is Error's ctx-threading counterpart. See InfoContext.
+func ErrorContext(ctx context.Context, msg string, args ...any) {
+	logAt(ctx, slog.LevelError, msg, args...)
+}
+
+// DebugContext is Debug's ctx-threading counterpart. See InfoContext.
+func DebugContext(ctx context.Context, msg string, args ...any) {
+	logAt(ctx, slog.LevelDebug, msg, args...)
+}
 
 // Global convenience functions for structured logging (legacy — prefer Info/Warn/Error/Debug)
 
@@ -979,7 +1005,10 @@ func initializeWithConfig(daemon bool, cfg *LogConfig) {
 	// Handler ordering: TraceIDHandler (outermost, captures trace IDs at call time)
 	// → PackageLevelHandler (per-package level overrides, see log/package_level.go)
 	// → AsyncHandler → JSONHandler (innermost, writes to combinedWriter).
-	// TraceIDHandler is a no-op identity handler until E2-S2 adds the real implementation.
+	// TraceIDHandler injects trace_id/span_id when the ctx passed into a log
+	// call carries a live OTel span -- which only happens via InfoContext/
+	// WarnContext/ErrorContext/DebugContext (Info/Warn/Error/Debug pass
+	// context.Background(), so it's a no-op for those callers).
 	jsonHandler := slog.NewJSONHandler(combinedWriter, &slog.HandlerOptions{Level: slog.LevelDebug})
 	asyncHandler := NewAsyncHandler(jsonHandler, defaultAsyncBufSize)
 	asyncHandler.StartDrain()

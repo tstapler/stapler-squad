@@ -33,6 +33,20 @@ const blockApprovalOnCIFailureFlagName = "review:block-approval-on-ci-failure"
 // where it's read.
 const workspacePeersNudgeFlagName = "session:workspace-peers-nudge"
 
+// programCLIFlagProbeFlagName is the kill switch for the ProbeProgram RPC.
+// Default on; read per request via ProgramCLIFlagProbeEnabled.
+const programCLIFlagProbeFlagName = "programs:cli-flag-probe"
+
+// ProgramCLIFlagProbeEnabled reports whether ProbeProgram is allowed. It reads
+// config on every call so a Settings toggle applies with no restart.
+func ProgramCLIFlagProbeEnabled() bool {
+	return config.LoadConfig().GetFeatureFlagWithDefault(
+		programCLIFlagProbeFlagName, featureFlagDefault(programCLIFlagProbeFlagName))
+}
+
+// ProgramCLIFlagProbeGatedMethod is the SessionService method the kill switch gates.
+const ProgramCLIFlagProbeGatedMethod = "ProbeProgram"
+
 // githubPriorityAdmissionFlagName gates github.rateLimitTransport.RoundTrip's
 // AdmitOrigin rejection branch (github/http_client.go). github cannot import
 // this package (server/services already imports github, so the reverse would
@@ -126,6 +140,13 @@ const terminalResyncBatchingFlagName = "terminal:resync-batching"
 
 const worktreeChangeDetectionFlagName = "vcs:worktree-change-detection"
 
+// terminalAppScrollForwardingClaudeFlagName mirrors
+// config.FeatureAppScrollForwardingClaude so knownFeatureFlags below doesn't
+// duplicate the literal -- see config/config.go for the flag's full
+// documentation and
+// project_plans/app-scrollback-forwarding/implementation/plan.md, Epic 1.5.
+const terminalAppScrollForwardingClaudeFlagName = config.FeatureAppScrollForwardingClaude
+
 // workspacePeersBlockFor is the single feature-flag gate for the workspace-peers nudge,
 // called by both SessionService.workspacePeersBlockFor (session_service.go) and
 // BacklogService.workspacePeersBlockFor (backlog_service_triage.go) so the two callers can't
@@ -150,6 +171,11 @@ var knownFeatureFlags = []struct {
 	description  string
 	defaultValue bool
 }{
+	{
+		name:         programCLIFlagProbeFlagName,
+		description:  "Check that a program exists on the server and read its --help flags (Program Config and session creation). Turn off to disable the ProbeProgram RPC immediately. Default: on.",
+		defaultValue: true,
+	},
 	{
 		name:        "backlog",
 		description: "Backlog management with external sync sources and AI-driven triage",
@@ -177,6 +203,10 @@ var knownFeatureFlags = []struct {
 	{
 		name:        workspacePeersNudgeFlagName,
 		description: "Auto-inject an 'Other Active Sessions In This Workspace' nudge into every new session's initial prompt. Off by default — use the list_workspace_peers MCP tool on demand instead. Default: off.",
+	},
+	{
+		name:        crossHostClaimDedupFlagName,
+		description: "Cross-host duplicate-work prevention: before importing a GitHub issue or creating an item with an external URL, and before dequeuing a queued item, check whether another stapler-squad host already claimed that URL. A blocked import offers 'Import anyway' with an audited reason; a blocked dequeue shows up as a stuck item with an override. Claims are always recorded regardless. Default: off.",
 	},
 	{
 		name:        handoffSummaryFlagName,
@@ -224,8 +254,20 @@ var knownFeatureFlags = []struct {
 		description: "Watch each session's .git dir via fsnotify and run a staggered 15s periodic cheap dirty/HEAD check to invalidate the diff-stats and VCS-status caches, letting both widen from a 15s to a 5-minute TTL. Applies to newly-created worktrees only; already-open sessions keep today's 15s pure-TTL behavior until restarted. Default: off.",
 	},
 	{
+		name:        terminalAppScrollForwardingClaudeFlagName,
+		description: "Forward Claude Code's own PageUp scroll keybinding into its fullscreen conversation view instead of tmux-native scrollback capture, for eligible sessions (AppScrollGate: adapter coverage, alt-screen active, idle status, exactly one connected viewer). Flag-off always falls through to the unchanged tmux-native scrollback path, regardless of AppScrollGate's verdict. Default: off.",
+	},
+	{
 		name:        piSupportFlagName,
 		description: "pi coding agent support: program picker entry, resume across restarts, and approval-rule enforcement parity with Claude Code. Default: off. Disabling does not remove an already-installed global pi approval extension — see the settings UI warning.",
+	},
+	{
+		name:        config.TriageGuidanceHaltFeatureFlag,
+		description: "Automated triage halts and asks a durable guidance request instead of guessing when a backlog item is genuinely ambiguous. Default: off — baseline guess-and-proceed triage behavior is unchanged until enabled.",
+	},
+	{
+		name:        config.DiagnoseNudgeFeatureFlag,
+		description: "Diagnose & Nudge: allow a dispatched diagnostic agent to autonomously send a redirect message (diagnose_nudge_session) to a linked stuck session. Read fresh at the write instant, so flipping this off blocks an already-dispatched agent too. Default: off — until enabled, a dispatch can still investigate and file a bug or post a note, but never nudge.",
 	},
 }
 

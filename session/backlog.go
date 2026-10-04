@@ -51,6 +51,17 @@ const (
 	SessionRoleTriage    = "triage"
 	SessionRoleReview    = "review"
 	SessionRoleJulesWork = "jules_work"
+	// SessionRoleDiagnose is the Diagnose & Nudge dispatched session's role
+	// (backlog item 68964304): a hidden, one-shot investigation agent, never
+	// a work/review/triage session. submit_diagnosis_result checks this role
+	// the same way submit_review_verdict checks SessionRoleReview.
+	SessionRoleDiagnose = "diagnose"
+	// SessionRoleExternal is never persisted to ItemSession.session_role — it's
+	// Insights' synthetic label (server/services/insights_service.go's
+	// groupUnattributed) for a session with no backlog attribution at all,
+	// distinct from the empty-string "" (never linked to an item, but still
+	// inside a stapler-squad worktree).
+	SessionRoleExternal = "external"
 )
 
 // IsTmuxBackedSessionRole reports whether role identifies a session that runs as a
@@ -239,6 +250,26 @@ var (
 // BacklogItemTransitionInput carries the fields needed by TransitionGuard.
 // Type alias — session.BacklogItemTransitionInput and domain.BacklogItemTransitionInput are identical types.
 type BacklogItemTransitionInput = domain.BacklogItemTransitionInput
+
+// NewBacklogItemTransitionInput builds a BacklogItemTransitionInput from item,
+// always setting ItemID alongside the fields every transition-guard call site
+// needs. ItemID must be set for ConfiguredWorkflowEngine's evaluateRecordedGate
+// to look up a persisted GateSatisfactionRecord for automated_review/custom
+// gates (session/configured_workflow_engine.go) — a hand-built literal that
+// forgets it silently and permanently blocks those gate kinds. status is the
+// item's current ("from") status; callers needing OverallOutcome,
+// OverrideReason, HasUnshippedCode, or HasUnresolvedBlockers set those on the
+// returned value afterward.
+func NewBacklogItemTransitionInput(item *BacklogItemData, status BacklogStatus) BacklogItemTransitionInput {
+	return BacklogItemTransitionInput{
+		ItemID:            item.ID,
+		Status:            status,
+		AcCriteria:        item.AcceptanceCriteria,
+		PlanApproved:      item.PlanApproved,
+		SkipPlanning:      item.SkipPlanning,
+		PlanArtifactsPath: item.PlanArtifactsPath,
+	}
+}
 
 // TransitionGuard validates business rules before a status transition.
 var TransitionGuard = domain.TransitionGuard

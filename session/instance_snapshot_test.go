@@ -272,6 +272,40 @@ func TestSnapshotRaceSurface(t *testing.T) {
 	wg.Wait()
 }
 
+// --- Story 3.1.1: RuleTagProvenance/SuppressedRuleTags deep copy ---
+
+func TestInstanceSnapshot_should_DeepCopyRuleTagProvenance_When_SnapshotTaken(t *testing.T) {
+	t.Parallel()
+	inst := minimalInstance(t)
+	inst.RuleTagProvenance = map[string]string{"Bugfix": "seed-bugfix"}
+	inst.snapshot.Store(buildSnapshot(inst))
+	snap := inst.Snapshot()
+
+	snap.RuleTagProvenance["Bugfix"] = "mutated"
+
+	if got := inst.RuleTagProvenance["Bugfix"]; got != "seed-bugfix" {
+		t.Fatalf("inst.RuleTagProvenance[\"Bugfix\"] = %q after mutating snapshot copy, want unchanged %q", got, "seed-bugfix")
+	}
+}
+
+func TestInstanceSnapshot_should_DeepCopySuppressedRuleTags_When_SnapshotTaken(t *testing.T) {
+	t.Parallel()
+	inst := minimalInstance(t)
+	inst.SuppressedRuleTags = map[string]bool{"Bugfix": true}
+	inst.snapshot.Store(buildSnapshot(inst))
+	snap := inst.Snapshot()
+
+	snap.SuppressedRuleTags["Bugfix"] = false
+	snap.SuppressedRuleTags["NewEntry"] = true
+
+	if got := inst.SuppressedRuleTags["Bugfix"]; got != true {
+		t.Fatalf("inst.SuppressedRuleTags[\"Bugfix\"] = %v after mutating snapshot copy, want unchanged true", got)
+	}
+	if _, ok := inst.SuppressedRuleTags["NewEntry"]; ok {
+		t.Fatal("inst.SuppressedRuleTags gained \"NewEntry\" after mutating snapshot copy — aliased map")
+	}
+}
+
 // minimalInstance builds a bare Instance safe for unit tests (no tmux, no disk I/O).
 func minimalInstance(t *testing.T) *Instance {
 	t.Helper()

@@ -43,12 +43,12 @@ type piExtension struct {
 	piSessionMu sync.Mutex
 
 	// piStatusSrc holds the status-only `pi --mode json` subprocess (Epic
-	// 5.2) for this instance. Set by startController, cleared by
-	// stopController. atomic.Pointer since StartController/StopController
+	// 5.2) for this instance. Set by StartController, cleared by
+	// StopController. atomic.Pointer since StartController/StopController
 	// can race concurrent GetController-style reads.
 	piStatusSrc atomic.Pointer[PiStatusSource]
 
-	// piStatusStartMu serializes startController's check-then-act sequence
+	// piStatusStartMu serializes StartController's check-then-act sequence
 	// (load piStatusSrc, and if nil construct+Start()+Store() a new
 	// PiStatusSource). Without it, two concurrent StartController calls for
 	// the same pi-backed instance can both observe a nil piStatusSrc, both
@@ -61,26 +61,26 @@ type piExtension struct {
 
 var _ programExtension = (*piExtension)(nil)
 
-// supported reports whether i's current Program/config should route through
+// Supported reports whether i's current Program/config should route through
 // this extension for a NEW StartController call: the program must resolve to
 // pi and the pi-support feature flag must be enabled. Checked only at
 // StartController (Bug 2 fix) -- StopController/stopControllerLocked instead
-// route on running() (live registration state), so a running PiStatusSource
+// route on Running() (live registration state), so a running PiStatusSource
 // always gets stopped regardless of a mid-flight flag flip. Re-checking this
 // flag at stop time was the bug: disabling pi-support while a pi session's
 // PiStatusSource was still running left it un-Stop()-ed, leaking its
 // subprocess/goroutines and racing Restart's unsynchronized piSession
 // access (see SetPiSessionID's doc comment).
-func (e *piExtension) supported(i *Instance) bool {
+func (e *piExtension) Supported(i *Instance) bool {
 	return isPi(i.Program) && config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport)
 }
 
-// running reports whether a PiStatusSource is currently registered.
-func (e *piExtension) running() bool {
+// Running reports whether a PiStatusSource is currently registered.
+func (e *piExtension) Running() bool {
 	return e.piStatusSrc.Load() != nil
 }
 
-// startController launches the status-only `pi --mode json` subprocess and
+// StartController launches the status-only `pi --mode json` subprocess and
 // registers it with the status manager, if one is set. A no-op if a source
 // is already registered (mirrors StartController's "don't recreate if
 // already exists" guard).
@@ -88,7 +88,7 @@ func (e *piExtension) running() bool {
 // piStatusStartMu is held for the entire check-then-act sequence (load,
 // then construct+Start()+Store()) -- see the field's doc comment for the
 // double-start race this closes.
-func (e *piExtension) startController(i *Instance) error {
+func (e *piExtension) StartController(i *Instance) error {
 	e.piStatusStartMu.Lock()
 	defer e.piStatusStartMu.Unlock()
 
@@ -120,10 +120,10 @@ func (e *piExtension) startController(i *Instance) error {
 	return nil
 }
 
-// stopController stops and unregisters the status-only pi subprocess, if
+// StopController stops and unregisters the status-only pi subprocess, if
 // one is running. Safe to call unconditionally (e.g. from a generic
 // StopController path) even when no source was ever started.
-func (e *piExtension) stopController(i *Instance) {
+func (e *piExtension) StopController(i *Instance) {
 	src := e.piStatusSrc.Swap(nil)
 	if src == nil {
 		return
@@ -138,10 +138,10 @@ func (e *piExtension) stopController(i *Instance) {
 }
 
 // piStatusSupported is a thin Instance-level alias for the promoted
-// piExtension.supported method, kept because this package's tests exercise
+// piExtension.Supported method, kept because this package's tests exercise
 // the Bug 2 fix directly by this name.
 func (i *Instance) piStatusSupported() bool {
-	return i.supported(i)
+	return i.Supported(i)
 }
 
 // piStatusCommandFactory builds the piCommandFactory used to (re)launch the

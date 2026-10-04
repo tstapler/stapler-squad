@@ -335,6 +335,25 @@ func (i *Instance) GetDetectedStatus() detection.DetectedStatus {
 	return statusInfo.ClaudeStatus
 }
 
+// GetDetectedStatusInfo returns both the raw DetectedStatus and whether a
+// status controller (ClaudeController or PiStatusSource) is actually active
+// for this instance. GetDetectedStatus alone can't distinguish "a controller
+// is active and genuinely reported StatusUnknown" from "no controller is
+// active at all" -- both collapse to the same StatusUnknown value, which
+// callers like AppScrollGate need told apart before treating StatusUnknown
+// as safe.
+func (i *Instance) GetDetectedStatusInfo() (status detection.DetectedStatus, controllerActive bool) {
+	mgr := i.GetStatusManager()
+	if mgr == nil {
+		return detection.StatusUnknown, false
+	}
+	statusInfo := mgr.GetStatus(i)
+	if !statusInfo.IsControllerActive {
+		return detection.StatusUnknown, false
+	}
+	return statusInfo.ClaudeStatus, true
+}
+
 // GetDetectedContext returns the human-readable context string from the terminal detection layer.
 // Returns an empty string when no controller is active or no context is available.
 func (i *Instance) GetDetectedContext() string {
@@ -489,6 +508,16 @@ func (i *Instance) IsHotRestoreRecoverable() bool {
 	default:
 		return false
 	}
+}
+
+// IsArchived reports whether the session has been archived (deliberately
+// retired, e.g. by archiveItemWorkSessions when a backlog rework round is
+// superseded). Archived sessions must never be auto-started, auto-revived or
+// auto-retried — see ADR-001 (superseded-rework-session-retirement).
+// Reads the published snapshot, not the raw i.ArchivedAt field
+// (.claude/rules/instance-lock-free-reads.md).
+func (i *Instance) IsArchived() bool {
+	return i.Snapshot().ArchivedAt != nil
 }
 
 // RecoverFromStopped resets a stale Stopped, PermanentlyFailed, or Failed

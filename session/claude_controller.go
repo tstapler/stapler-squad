@@ -248,6 +248,9 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 		// name) so escape_event rows can be correlated with the session identifier
 		// used everywhere else in the app (session selectors, RPCs, etc.).
 		rs.SetStableSessionID(cc.instance.GetStableID())
+		if project, ok := cc.instance.(interface{ GetPath() string }); ok {
+			rs.SetProjectPath(project.GetPath())
+		}
 
 		// Create status detector: prefer the per-program detector (built-in
 		// override or user plugin) registered in the live detector snapshot
@@ -443,7 +446,12 @@ func (cc *ClaudeController) Stop() error {
 	}
 	cancelFn() // Signal all background goroutines to stop.
 	if statusLoopDone != nil {
-		<-statusLoopDone // Join runStatusChangeLoop before returning.
+		select {
+		case <-statusLoopDone: // Join runStatusChangeLoop before returning.
+		case <-time.After(stopJoinTimeout):
+			log.Error("claude controller stop: runStatusChangeLoop did not exit within timeout",
+				"session", cc.sessionName, "timeout", stopJoinTimeout)
+		}
 	}
 
 	// Phase 2: swap out sub-components atomically. New callers see nil immediately;

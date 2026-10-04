@@ -178,15 +178,15 @@ func TestResolveCommitAuthorIdentity_UsesLocalConfigOverride(t *testing.T) {
 }
 
 // TestResolveCommitAuthorIdentity_FallsBackToGlobalConfig proves a repo with
-// no local user.name/user.email set (setupTestRepo never sets one) falls back
-// to the global ~/.gitconfig, matching real git's own local -> global
+// no local user.name/user.email set falls back to the global ~/.gitconfig,
+// matching real git's own local -> global
 // precedence chain.
 func TestResolveCommitAuthorIdentity_FallsBackToGlobalConfig(t *testing.T) {
 	home := gitConfigTestEnv(t)
 	require.NoError(t, os.WriteFile(filepath.Join(home, ".gitconfig"),
 		[]byte("[user]\n\tname = Global User\n\temail = global@example.com\n"), 0o644))
 
-	repoDir := setupTestRepo(t)
+	repoDir := setupTestRepoWithoutIdentity(t)
 	repo, err := OpenRepo(repoDir)
 	require.NoError(t, err)
 
@@ -241,7 +241,7 @@ func TestResolveCommitAuthorIdentity_PartialEnvVarFallsBackPerField(t *testing.T
 func TestResolveCommitAuthorIdentity_ErrorsWhenNothingConfigured(t *testing.T) {
 	gitConfigTestEnv(t)
 
-	repoDir := setupTestRepo(t)
+	repoDir := setupTestRepoWithoutIdentity(t)
 	repo, err := OpenRepo(repoDir)
 	require.NoError(t, err)
 

@@ -13,8 +13,9 @@ type EventBusNotifier struct {
 	Bus *events.EventBus
 }
 
-// Notify implements session.Notifier.
-func (n *EventBusNotifier) Notify(itemID, title, message string, notificationType, priority int32) {
+// Notify implements session.Notifier. urgent/important are converted to the stored
+// NotificationPriority via derivePriority — see that function's doc comment.
+func (n *EventBusNotifier) Notify(itemID, title, message string, notificationType int32, urgent, important bool) {
 	if n == nil || n.Bus == nil {
 		return
 	}
@@ -28,8 +29,25 @@ func (n *EventBusNotifier) Notify(itemID, title, message string, notificationTyp
 	// record was lost).
 	n.Bus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
-		notificationType, priority,
+		notificationType, derivePriority(urgent, important),
 		title, message,
 		map[string]string{"item_id": itemID},
+	))
+}
+
+// NotifySession implements session.Notifier for a session with no linked BacklogItem —
+// see that interface method's doc comment (session/backlog_lifecycle.go) for why this
+// must not reuse Notify. Metadata is deliberately left empty (no "item_id" key):
+// NotificationItem.tsx's "View Session" link renders exactly when metadata["item_id"] is
+// absent and sessionId is set.
+func (n *EventBusNotifier) NotifySession(sessionID, title, message string, notificationType int32, urgent, important bool) {
+	if n == nil || n.Bus == nil {
+		return
+	}
+	n.Bus.Publish(events.NewNotificationEvent(
+		sessionID, "", uuid.New().String(),
+		notificationType, derivePriority(urgent, important),
+		title, message,
+		map[string]string{},
 	))
 }

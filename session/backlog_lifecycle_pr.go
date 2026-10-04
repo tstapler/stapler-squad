@@ -73,9 +73,10 @@ type OneShotShipRunner interface {
 // next per taskProtocolBlock rules 8-9 (PASS -> run /backlog/ship), so we
 // invoke that same slash command directly: WriteSlashCommands
 // (session/backlog_commands.go) already wrote ship.md into this worktree at
-// session-spawn time, and nothing cleans it up before the item leaves
-// "review" (CleanupSlashCommands is not wired to fire on review exit — see
-// its call sites), so it is still present. ship.md's own instructions run
+// session-spawn time. CleanupSlashCommands does now also run from
+// cleanupItemWorktreesExcept (server/services/backlog_service.go), but that
+// path excludes worktrees with a live/EndedAt==nil work session, so ship.md
+// is still present here. ship.md's own instructions run
 // /github:pr-ship (local CI, code review, remote CI, and actual
 // merge-conflict resolution — the whole reason this path was added) and
 // already special-case "review already returned PASS" by skipping the
@@ -211,8 +212,8 @@ func (l *BacklogLifecycleListener) reconcilePRPendingWithoutPRItems(ctx context.
 		l.notify(item.ID,
 			"Backlog item stuck: pr_pending with no PR",
 			fmt.Sprintf("%s — this item is marked pr_pending but has no PR number or URL on record, so it cannot be polled or auto-recovered. Use /unfinished to retry it manually.", item.Title),
-			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+			8,          // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			true, true, // urgent, important — cannot be auto-recovered, needs manual retry
 		)
 		if _, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonPRPendingNoPR); notifyErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] reconcilePRPendingWithoutPRItems MarkStuckNotified item=%s: %v", item.ID, notifyErr)
@@ -543,7 +544,9 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 			// ship, so done was the correct terminal state — a failure here
 			// leaves the item stuck with no further signal.
 			l.notifyTransitionFailed(item.ID, item.Title, fmt.Sprintf("%s, so the item should have moved to done, but the transition failed", reason), transErr)
+			return
 		}
+		l.cleanupTerminalItemSync(ctx, item.ID)
 	}
 
 	wt, wtErr := l.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
@@ -602,7 +605,9 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 			} else {
 				drafted, draftCostUSD, draftErr := headless.DraftPRDescription(ctx, pool, item.Title, item.Description, diff, wt.BranchName)
 				if draftCostUSD > 0 {
-					if costErr := l.storage.UpdateItemSessionCost(ctx, is.ID, draftCostUSD); costErr != nil {
+					// DraftPRDescription is Claude-only today, so its cost is always
+					// authoritative.
+					if costErr := l.storage.UpdateItemSessionCost(ctx, is.ID, draftCostUSD, true); costErr != nil {
 						log.WarningLog().Printf("[BacklogLifecycle] pushAndCreatePR failed to persist PR-description cost item=%s: %v", item.ID, costErr)
 					}
 				}
@@ -655,8 +660,8 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		l.notify(item.ID,
 			"Auto-merge not enabled",
 			fmt.Sprintf("%s — PR #%d could not be set to auto-merge (%v). It will need to be merged manually once checks pass.", item.Title, prNumber, autoErr),
-			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-			2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
+			8,           // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			false, true, // urgent, important — needs eventual manual merge, but only once checks pass
 		)
 	} else {
 		log.InfoLog().Printf("[BacklogLifecycle] pushAndCreatePR item=%s PR #%d auto-merge enabled", item.ID, prNumber)
@@ -671,8 +676,8 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		l.notify(item.ID,
 			"Copilot review not requested",
 			fmt.Sprintf("%s — PR #%d could not get a Copilot review request (%v).", item.Title, prNumber, reviewErr),
-			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-			1, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW
+			8,            // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			false, false, // urgent, important — a missed nicety per the comment above, not a missed auto-merge path
 		)
 	} else {
 		log.InfoLog().Printf("[BacklogLifecycle] pushAndCreatePR item=%s PR #%d Copilot review requested", item.ID, prNumber)
@@ -704,8 +709,8 @@ func (l *BacklogLifecycleListener) stayInReviewAndNotify(ctx context.Context, it
 		l.notify(itemID,
 			"PR creation failed",
 			fmt.Sprintf("%s — %s: %v. Retry or investigate manually.", itemTitle, reason, err),
-			7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+			7,          // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+			true, true, // urgent, important
 		)
 	}
 
@@ -788,8 +793,8 @@ func (l *BacklogLifecycleListener) recoverDriftedPRItem(ctx context.Context, ite
 	l.notify(item.ID,
 		"Backlog item recovered from stuck state",
 		fmt.Sprintf("%s — had an open PR (#%d) but its status had drifted away from tracking; automatically recovered and resumed polling.", item.Title, item.PrNumber),
-		10, // sessionv1.NotificationType_NOTIFICATION_TYPE_INFO
-		1,  // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW
+		10,           // sessionv1.NotificationType_NOTIFICATION_TYPE_INFO
+		false, false, // urgent, important — good-news/informational, already resolved
 	)
 	return true
 }
@@ -975,8 +980,8 @@ func (l *BacklogLifecycleListener) retryPushFailedWithBackoffGate(ctx context.Co
 		l.notify(itemID,
 			"Auto-rework paused",
 			fmt.Sprintf("%s — automated push retry has been attempted %d times over an extended period without resolving. It now needs manual attention; use Reset to try again automatically.", itemTitle, MaxRemediationAttempts),
-			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+			8,          // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			true, true, // urgent, important — automated retry gave up; a genuine dead end
 		)
 	}
 	if !due {
@@ -1021,8 +1026,8 @@ func (l *BacklogLifecycleListener) attemptPushRemediation(ctx context.Context, i
 		l.notify(itemID,
 			"Automated push retry skipped",
 			fmt.Sprintf("%s — the recorded push failure (%s) doesn't look like something a fetch+merge retry can fix (looks like an auth/permission/branch-protection issue). Investigate manually, then use Reset to try again automatically.", itemTitle, failureContext),
-			7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+			7,          // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+			true, true, // urgent, important — a genuine dead end needing manual investigation
 		)
 		return
 	}
@@ -1074,8 +1079,8 @@ func (l *BacklogLifecycleListener) attemptPushRemediation(ctx context.Context, i
 		l.notify(itemID,
 			"Manual rebase needed",
 			fmt.Sprintf("%s — the remote branch has diverged in a way that conflicts with this item's committed work (%s). Automated retry cannot resolve real content conflicts; resolve manually and push, or use Reset to try again automatically after fixing it.", itemTitle, strings.Join(result.ConflictedFiles, ", ")),
-			7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+			7,          // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+			true, true, // urgent, important — a real content conflict needs a human
 		)
 		return
 	}
@@ -1310,8 +1315,8 @@ func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Con
 			l.notify(itemID,
 				"PR needs attention",
 				fmt.Sprintf("%s — the PR has failing CI, blocking reviews, or a merge conflict. An automated fix attempt will run on the standard backoff schedule.", itemTitle),
-				8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-				2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
+				8,           // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+				false, true, // urgent, important — automation is still trying, not yet a dead end
 			)
 			if _, notifyErr := er.MarkStuckNotified(ctx, itemID, domain.StuckReasonPRNeedsFix); notifyErr != nil {
 				log.WarningLog().Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate MarkStuckNotified item=%s: %v", itemID, notifyErr)
@@ -1346,8 +1351,8 @@ func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Con
 		l.notify(itemID,
 			"Auto-rework paused",
 			fmt.Sprintf("%s — automated PR-fix retry has been attempted %d times over an extended period without resolving. It now needs manual attention; use Reset to try again automatically.", itemTitle, MaxRemediationAttempts),
-			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+			8,          // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			true, true, // urgent, important — automated retry gave up; a genuine dead end
 		)
 	}
 	if !due {
@@ -1473,6 +1478,12 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 			l.notifyTransitionFailed(item.ID.String(), item.Title, fmt.Sprintf("PR #%d was confirmed merged but the item's transition to done failed", item.PrNumber), transErr)
 		} else {
 			log.InfoLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s → done (PR #%d merged)", item.ID, item.PrNumber)
+			// Synchronous cleanup so this internal (system-driven) done
+			// transition doesn't depend solely on the 60s
+			// reconcileTerminalItemSessions safety-net sweep — matches the
+			// manual TransitionBacklogItemStatus RPC path's existing
+			// behavior. See WorktreeCleaner's doc comment.
+			l.cleanupTerminalItemSync(ctx, item.ID.String())
 			// The item just reached done — resolve pr_ready_unmerged
 			// immediately (Task 2.1.5a) rather than waiting for the
 			// self-heal sweep's next tick.
@@ -1481,10 +1492,11 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 			// The PR is merged, so ship.md's "must still exist for a
 			// possible one-shot /backlog/ship re-invocation" constraint
 			// (see CleanupSlashCommands' doc comment) no longer applies —
-			// this is the first point in the lifecycle where scaffolding
-			// cleanup is safe. Best-effort: the worktree directory is
-			// often already gone by now (Instance.Kill/Pause deletes it
-			// independently), in which case these are no-ops.
+			// PR-merge is A safe point for scaffolding cleanup (see also
+			// cleanupItemWorktreesExcept's archive/reopen/tombstone call
+			// site). Best-effort: the worktree directory is often already
+			// gone by now (Instance.Kill/Pause deletes it independently),
+			// in which case these are no-ops.
 			if wt != nil && wt.WorktreePath != "" {
 				if cleanupErr := CleanupBacklogContextFile(wt.WorktreePath); cleanupErr != nil {
 					log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending CleanupBacklogContextFile item=%s: %v", item.ID, cleanupErr)
@@ -2011,12 +2023,13 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 		log.ErrorLog().Printf("[BacklogLifecycle] closeIfSupersededByMain done transition item=%s: %v", item.ID, transErr)
 		return false
 	}
+	l.cleanupTerminalItemSync(ctx, item.ID)
 
 	l.notify(item.ID,
 		"Backlog item already shipped — stale PR closed",
 		fmt.Sprintf("%s — PR #%d had fallen behind an already-shipped fix; closed as superseded and marked done automatically.", item.Title, closedPrNum),
-		10, // sessionv1.NotificationType_NOTIFICATION_TYPE_INFO
-		1,  // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW
+		10,           // sessionv1.NotificationType_NOTIFICATION_TYPE_INFO
+		false, false, // urgent, important — already resolved automatically, purely informational
 	)
 	return true
 }
@@ -2049,8 +2062,8 @@ func (l *BacklogLifecycleListener) markPRReadyUnmerged(ctx context.Context, er *
 	l.notify(itemID,
 		"PR ready to merge",
 		fmt.Sprintf("%s — PR #%d is green, mergeable, and has been ready to merge for over %s. Merge it on GitHub.", itemTitle, row.PrNumber, prReadyThreshold),
-		8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-		2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
+		8,          // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+		true, true, // urgent, important — green and mergeable but sitting past the ready threshold; a real, actionable nudge
 	)
 	if _, notifyErr := er.MarkStuckNotified(ctx, itemID, domain.StuckReasonPRReadyUnmerged); notifyErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] markPRReadyUnmerged MarkStuckNotified item=%s: %v", itemID, notifyErr)

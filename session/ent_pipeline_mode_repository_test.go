@@ -99,6 +99,90 @@ func TestEntPipelineModeRepository_Update_should_OnlyChangeSuppliedFields_When_P
 	assert.Equal(t, created.Enabled, updated.Enabled)
 }
 
+func TestEntPipelineModeRepository_should_RoundTripStageExecutorsJSON_When_CreatedWithTriageOverride(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	repo := NewEntPipelineModeRepository(storage.GetEntClient())
+
+	created, err := repo.Create(t.Context(), PipelineModeCreateInput{
+		Slug: "cheap-triage",
+		Name: "Cheap Triage",
+		StageExecutors: map[StageRole]PipelineStageExecutor{
+			StageRoleTriage: {Model: "claude-haiku-4-5"},
+		},
+	})
+	require.NoError(t, err)
+
+	parsed, err := ParseStageExecutors(created.StageExecutorsJSON)
+	require.NoError(t, err)
+	assert.Equal(t, "claude-haiku-4-5", parsed[StageRoleTriage].Model)
+	assert.Empty(t, parsed[StageRoleTriage].Program)
+
+	fetched, err := repo.GetBySlug(t.Context(), "cheap-triage")
+	require.NoError(t, err)
+	fetchedParsed, err := ParseStageExecutors(fetched.StageExecutorsJSON)
+	require.NoError(t, err)
+	assert.Equal(t, parsed, fetchedParsed)
+}
+
+func TestEntPipelineModeRepository_Update_should_ReplaceStageExecutors_When_StageExecutorsPointerNonNil(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	repo := NewEntPipelineModeRepository(storage.GetEntClient())
+
+	created, err := repo.Create(t.Context(), PipelineModeCreateInput{
+		Slug: "cheap-triage",
+		Name: "Cheap Triage",
+		StageExecutors: map[StageRole]PipelineStageExecutor{
+			StageRoleTriage: {Model: "claude-haiku-4-5"},
+		},
+	})
+	require.NoError(t, err)
+
+	newExecutors := map[StageRole]PipelineStageExecutor{
+		StageRoleReview: {Model: "claude-opus-4-5"},
+	}
+	updated, err := repo.Update(t.Context(), created.ID, PipelineModeUpdateInput{
+		StageExecutors: &newExecutors,
+	})
+	require.NoError(t, err)
+
+	parsed, err := ParseStageExecutors(updated.StageExecutorsJSON)
+	require.NoError(t, err)
+	assert.Equal(t, "claude-opus-4-5", parsed[StageRoleReview].Model)
+	_, hasTriage := parsed[StageRoleTriage]
+	assert.False(t, hasTriage, "Update with a non-nil StageExecutors pointer replaces the map entirely")
+}
+
+func TestEntPipelineModeRepository_Update_should_LeaveStageExecutorsUntouched_When_StageExecutorsPointerNil(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	repo := NewEntPipelineModeRepository(storage.GetEntClient())
+
+	created, err := repo.Create(t.Context(), PipelineModeCreateInput{
+		Slug: "cheap-triage",
+		Name: "Cheap Triage",
+		StageExecutors: map[StageRole]PipelineStageExecutor{
+			StageRoleTriage: {Model: "claude-haiku-4-5"},
+		},
+	})
+	require.NoError(t, err)
+
+	newName := "Cheap Triage Renamed"
+	updated, err := repo.Update(t.Context(), created.ID, PipelineModeUpdateInput{
+		Name: &newName,
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, created.StageExecutorsJSON, updated.StageExecutorsJSON)
+}
+
 func TestEntPipelineModeRepository_ListEnabled_should_ExcludeDisabledRows_When_MixedEnabledState(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)

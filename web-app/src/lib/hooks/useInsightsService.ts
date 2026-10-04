@@ -9,11 +9,13 @@ import type {
   GetInsightsSummaryResponse,
   SessionTokenSummary,
   TurnTokenStat,
+  FindingType,
 } from "@/gen/session/v1/insights_pb";
 import {
   GetInsightsSummaryRequestSchema,
   WatchInsightsRequestSchema,
   GetSessionTurnTimelineRequestSchema,
+  DismissFindingRequestSchema,
 } from "@/gen/session/v1/insights_pb";
 import { create } from "@bufbuild/protobuf";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
@@ -276,4 +278,31 @@ export function useSessionTurnTimeline(
   }, [conversationId, client]);
 
   return { turns, loading, error };
+}
+
+/**
+ * Hook that dismisses a WasteFinding by its stable finding_id (see
+ * ComputeFindingID, session/tokens/findings.go), so it's excluded from future
+ * GetInsightsSummary responses. The caller (FindingsPanel) is responsible for
+ * removing the card from its own rendered list — this hook only performs the
+ * RPC call.
+ */
+export function useDismissFinding() {
+  const client = useMemo(() => createClient(InsightsService, getConnectTransport()), []);
+
+  const dismissFinding = useCallback(
+    async (findingId: string, sessionId: string, conversationId: string, findingType: FindingType) => {
+      await client.dismissFinding(
+        create(DismissFindingRequestSchema, {
+          findingId,
+          sessionId,
+          conversationId,
+          findingType,
+        })
+      );
+    },
+    [client]
+  );
+
+  return { dismissFinding };
 }

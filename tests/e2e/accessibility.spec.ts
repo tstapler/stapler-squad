@@ -31,6 +31,7 @@ import {
 } from './pages/BacklogMutations';
 import { SessionClient } from './helpers/session-client';
 import { dismissNotificationInterference } from './pages/NotificationPanel';
+import { WindowTabStripPage } from './pages/WindowTabStripPage';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
 
@@ -1062,5 +1063,301 @@ test.describe('Accessibility — notification-revamp (WCAG 2.1 AA)', () => {
     const header = page.getByRole('button', { name: /Recent activity · \d+/ });
     await expect(header).toBeVisible();
     await expect(header).toHaveAttribute('aria-expanded', 'false');
+  });
+});
+
+// backlog-stage-execution-costs (implementation/validation.md UX row 16):
+// StageCostChart (Insights) and ItemBudgetWarning (backlog item detail) are
+// the two new surfaces this feature adds. Following this file's established
+// technique (see the describe blocks above) for pinning a "no new violations"
+// gate to a feature: scope Axe's color-contrast rule to only the elements the
+// feature introduces via `.include(...)`, in both themes, rather than scanning
+// the whole page (which would also flag pre-existing, out-of-scope issues).
+test.describe('Accessibility — backlog-stage-execution-costs (WCAG 2.1 AA)', () => {
+  test.setTimeout(120_000);
+
+  test('stage cost chart and item budget warning introduce no new axe color-contrast violations', async ({ page, context, request }) => {
+    await enableBacklogFeatureFlag(request);
+    try {
+      // Real item with a real, persisted, already-crossed budget threshold —
+      // set once via the actual UpdateBacklogItem RPC (threshold=0 crosses the
+      // strict `totalCostUsd < thresholdUsd` guard immediately against a
+      // freshly created item's real $0 totalEstimatedCostUsd, per
+      // item-budget-warning.spec.ts's identical technique) so every themed
+      // page load below sees the same server-side state.
+      const title = `e2e-axe-budget-warning-${Date.now()}`;
+      await createBacklogItemDirect(request, { title });
+
+      await page.addInitScript(() => {
+        localStorage.setItem('stapler-squad:backlog-onboarded', 'true');
+        localStorage.setItem('stapler-squad:onboarded', 'true');
+      });
+      const backlogPage = new BacklogPage(page);
+      await backlogPage.goto();
+      await backlogPage.waitForPageLoad();
+      await backlogPage.openItemDetail(title);
+      await page.getByTestId('backlog-detail-edit').click();
+      await page.getByTestId('backlog-cost-budget-threshold-input').fill('0');
+      await page.getByTestId('backlog-form-submit').click();
+      await expect(page.getByTestId('backlog-item-form')).toHaveCount(0);
+      await expect(page.getByTestId('item-budget-warning')).toBeVisible({ timeout: 10000 });
+
+      const now = new Date();
+      const year = now.getUTCFullYear();
+      const month = now.getUTCMonth();
+      const dailyBuckets = Array.from({ length: 7 }, (_, i) => ({
+        date: new Date(Date.UTC(year, month, i + 1)).toISOString(),
+        totalInputTokens: '1000',
+        totalOutputTokens: '500',
+        cacheReadTokens: '0',
+        estimatedCostUsd: 500,
+        sessionCount: 1,
+      }));
+
+      async function mockInsightsWithRoleBreakdown(p: import('@playwright/test').Page) {
+        await p.route('**/api/session.v1.InsightsService/GetInsightsSummary', async (route) => {
+          await route.fulfill({
+            json: {
+              sessions: [
+                {
+                  sessionId: 's-axe-stage-cost',
+                  conversationId: 'c-axe-stage-cost',
+                  primaryModel: 'claude-sonnet-4-6',
+                  totalInputTokens: '7000',
+                  totalOutputTokens: '3500',
+                  cacheReadTokens: '0',
+                  estimatedCostUsd: 3500,
+                  cacheHitRate: 0,
+                  messageCount: 10,
+                },
+              ],
+              totalCostUsd: 3500,
+              totalInputTokens: '7000',
+              totalOutputTokens: '3500',
+              totalCacheReadTokens: '0',
+              overallCacheHitRate: 0,
+              daily: dailyBuckets,
+              // StageCostChart's own palette is reused unchanged from
+              // ModelBreakdownChart (StageCostChart.tsx's PALETTE comment) —
+              // this fixture exists to get real bars/legend rendered at all,
+              // not to introduce new colors.
+              roleBreakdown: [
+                { sessionRole: 'work', estimatedCostUsd: 2000, sessionCount: 5 },
+                { sessionRole: 'review', estimatedCostUsd: 1000, sessionCount: 3 },
+                { sessionRole: 'triage', estimatedCostUsd: 500, sessionCount: 2 },
+              ],
+            },
+          });
+        });
+      }
+
+      for (const themeName of ['light', 'dark'] as const) {
+        // StageCostChart on /insights
+        const insightsPage = await context.newPage();
+        await mockInsightsWithRoleBreakdown(insightsPage);
+        await insightsPage.addInitScript((name) => {
+          localStorage.setItem('stapler-theme', name);
+        }, themeName);
+        await insightsPage.emulateMedia({ reducedMotion: 'reduce' });
+        await insightsPage.goto(`${BASE_URL}/insights`, { waitUntil: 'domcontentloaded' });
+        await expect(insightsPage.getByTestId('stage-cost-chart')).toBeVisible({ timeout: 15000 });
+
+        const chartResults = await new AxeBuilder({ page: insightsPage })
+          .include('[data-testid="stage-cost-chart"]')
+          .withRules(['color-contrast'])
+          .analyze();
+        expect(chartResults.violations, `StageCostChart color-contrast violations in ${themeName} theme`).toHaveLength(0);
+        await insightsPage.close();
+
+        // ItemBudgetWarning on the backlog item detail page
+        const detailPage = await context.newPage();
+        await detailPage.addInitScript((name) => {
+          localStorage.setItem('stapler-theme', name);
+          localStorage.setItem('stapler-squad:backlog-onboarded', 'true');
+          localStorage.setItem('stapler-squad:onboarded', 'true');
+        }, themeName);
+        const detailBacklogPage = new BacklogPage(detailPage);
+        await detailBacklogPage.goto();
+        await detailBacklogPage.waitForPageLoad();
+        await detailBacklogPage.openItemDetail(title);
+        await expect(detailPage.getByTestId('item-budget-warning')).toBeVisible({ timeout: 10000 });
+
+        const warningResults = await new AxeBuilder({ page: detailPage })
+          .include('[data-testid="item-budget-warning"]')
+          .withRules(['color-contrast'])
+          .analyze();
+        expect(warningResults.violations, `ItemBudgetWarning color-contrast violations in ${themeName} theme`).toHaveLength(0);
+        await detailPage.close();
+      }
+    } finally {
+      await disableBacklogFeatureFlag(request);
+    }
+  });
+});
+
+// multi-window (implementation/validation.md rows 9, 11, 12): WindowTabStrip
+// (top, always rendered) and MobilePaneTabStrip (narrow viewports only, once
+// 2+ panes exist) are two independently labelled role="tablist" regions
+// layered above PaneTilingContainer — following this file's own convention
+// of extending accessibility.spec.ts rather than a per-feature a11y suite.
+test.describe('Accessibility — multi-window (WCAG 2.1 AA)', () => {
+  test.setTimeout(120_000);
+
+  test.beforeEach(async ({ context }) => {
+    await context.addInitScript(() => {
+      localStorage.setItem('stapler-squad:onboarded', 'true');
+    });
+  });
+
+  test('multi-window tab strip and pane tab strip pass axe-core with distinct tablist labels', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto(BASE_URL, { waitUntil: 'load' });
+
+    const strip = new WindowTabStripPage(page);
+    await strip.waitForLoaded();
+    await strip.createWindow(); // 2 windows
+
+    // Ensure 2+ panes exist BEFORE narrowing the viewport: MobilePaneTabStrip
+    // (PaneSplitRenderer.tsx's showMobileTabStrip) only mounts once
+    // leaves.length > 1, but the split buttons themselves are only rendered
+    // at desktop/foldable widths (splitButtonVisible={!isMobile}). The fresh
+    // window created above may already start with 2+ leaves depending on
+    // seeded session data, so split only if needed rather than asserting an
+    // exact leaf count.
+    const leaves = page.locator('[data-testid^="pane-leaf-"]');
+    if ((await leaves.count()) < 2) {
+      const splitButton = page.getByTestId('pane-split-vertical-btn').first();
+      await expect(splitButton).toBeVisible();
+      await splitButton.click();
+    }
+    await expect.poll(() => leaves.count()).toBeGreaterThanOrEqual(2);
+
+    // Narrow below the isMobile threshold (600px) so MobilePaneTabStrip
+    // (role="tablist" aria-label="Pane switcher") mounts alongside
+    // WindowTabStrip's always-rendered "Window switcher".
+    await page.setViewportSize({ width: 390, height: 844 });
+
+    const windowTablist = page.getByRole('tablist', { name: 'Window switcher' });
+    const paneTablist = page.getByRole('tablist', { name: 'Pane switcher' });
+    await expect(windowTablist).toBeVisible();
+    await expect(paneTablist).toBeVisible();
+
+    const [windowLabel, paneLabel] = await Promise.all([
+      windowTablist.getAttribute('aria-label'),
+      paneTablist.getAttribute('aria-label'),
+    ]);
+    expect(windowLabel).toBe('Window switcher');
+    expect(paneLabel).toBe('Pane switcher');
+    expect(windowLabel).not.toBe(paneLabel);
+
+    const results = await new AxeBuilder({ page })
+      .exclude('pre, [class*="terminal"], [class*="Terminal"]')
+      // Pre-existing, out-of-scope issues predating the multi-window feature
+      // (verified via a standalone repro against this same viewport/markup
+      // before any multi-window change): MobilePaneTabStrip's own "+"
+      // button is a direct, non-"tab" child of its role="tablist"
+      // (aria-required-children) and its active-tab text/background pairing
+      // fails color-contrast; BottomNav's mobile-viewport label contrast
+      // also fails independently of anything here. Neither is
+      // WindowTabStrip or a component this sweep touches.
+      .exclude('[aria-label="Pane switcher"]')
+      .exclude('[aria-label="Bottom navigation"]')
+      // Each tab nests a real, focusable <button> ("×") inside its own
+      // role="tab" element, which axe's nested-interactive rule flags.
+      // WindowTabStrip.tsx's WindowTabButton doc comment covers why: it
+      // mirrors ShellTabLabel's identical tab-with-inline-actions structure
+      // (SessionDetailView.tsx's shell tabs), an established, pre-existing
+      // pattern in this codebase rather than a new tradeoff introduced by
+      // the multi-window feature.
+      .disableRules(['nested-interactive'])
+      .analyze();
+
+    const criticalViolations = results.violations.filter(
+      v => v.impact === 'critical' || v.impact === 'serious',
+    );
+    if (criticalViolations.length > 0) {
+      const messages = criticalViolations.map(v =>
+        `\n  [${v.impact?.toUpperCase()}] ${v.id}: ${v.description}\n    Affected: ${v.nodes.slice(0, 2).map(n => n.target.join(', ')).join('; ')}`,
+      );
+      console.error(`Accessibility violations found:${messages.join('')}`);
+    }
+    expect(criticalViolations).toHaveLength(0);
+  });
+
+  test('active window tab encodes state via aria-selected and non-color visual cues meeting contrast', async ({ page }) => {
+    await page.goto(BASE_URL, { waitUntil: 'load' });
+    const strip = new WindowTabStripPage(page);
+    await strip.waitForLoaded();
+    await strip.createWindow(); // Window 2 becomes active; Window 1 stays inactive
+
+    const activeTab = strip.getActiveTab();
+    const inactiveTab = strip.getTab('Window 1');
+    await expect(activeTab).toHaveAttribute('aria-selected', 'true');
+    await expect(inactiveTab).toHaveAttribute('aria-selected', 'false');
+
+    const [activeCue, inactiveCue] = await Promise.all([
+      activeTab.evaluate((el) => {
+        const cs = getComputedStyle(el);
+        return { fontWeight: cs.fontWeight, textDecorationLine: cs.textDecorationLine };
+      }),
+      inactiveTab.evaluate((el) => {
+        const cs = getComputedStyle(el);
+        return { fontWeight: cs.fontWeight, textDecorationLine: cs.textDecorationLine };
+      }),
+    ]);
+    // Non-color cues (WindowTabStrip.css.ts's `active: true` variant): bold
+    // weight + underline on the active tab, neither on the inactive one — a
+    // distinct signal beyond the background-color swap.
+    expect(activeCue.fontWeight).not.toBe(inactiveCue.fontWeight);
+    expect(activeCue.textDecorationLine).toBe('underline');
+    expect(inactiveCue.textDecorationLine).not.toBe('underline');
+
+    // Both states are rendered simultaneously in the strip (one active tab,
+    // one inactive), so a single scoped scan covers active + inactive contrast.
+    const results = await new AxeBuilder({ page })
+      .include('[role="tablist"][aria-label="Window switcher"]')
+      .withRules(['color-contrast'])
+      .analyze();
+    expect(results.violations).toHaveLength(0);
+  });
+
+  test('every control in the window tab strip has a distinct accessible name', async ({ page }) => {
+    await page.goto(BASE_URL, { waitUntil: 'load' });
+    const strip = new WindowTabStripPage(page);
+    await strip.waitForLoaded();
+    await strip.createWindow();
+    await strip.createWindow(); // 3 windows: "×" close buttons render for every tab
+
+    const tabListHandle = await strip.tabList.elementHandle();
+    expect(tabListHandle).not.toBeNull();
+    // interestingOnly defaults to true, which (per a known Playwright/CDP
+    // quirk) can make snapshot() return null when the tablist root itself
+    // isn't judged "interesting" — interestingOnly: false avoids that; the
+    // collect() walk below still filters to only tab/button/textbox roles.
+    const snapshot = await page.accessibility.snapshot({ root: tabListHandle!, interestingOnly: false });
+    expect(snapshot).not.toBeNull();
+
+    const names: string[] = [];
+    function collect(node: NonNullable<typeof snapshot>) {
+      if (['tab', 'button', 'textbox'].includes(node.role) && node.name) {
+        names.push(node.name);
+      }
+      for (const child of node.children ?? []) {
+        collect(child);
+      }
+    }
+    collect(snapshot!);
+
+    expect(names.length).toBeGreaterThan(0);
+    const uniqueNames = new Set(names);
+    expect(uniqueNames.size, `Duplicate accessible names found: ${names.join(', ')}`).toBe(names.length);
+
+    // Every per-tab close control must embed the window's own name, never a
+    // bare "Close" — that's what keeps them from colliding with each other.
+    const closeNames = names.filter((n) => n.startsWith('Close '));
+    expect(closeNames.length).toBeGreaterThan(0);
+    for (const n of closeNames) {
+      expect(n).not.toBe('Close');
+    }
   });
 });

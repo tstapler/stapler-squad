@@ -46,6 +46,19 @@ export const cardMessage = style({
   color: vars.color.textPrimary,
 });
 
+export const cardSessionLabel = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textSecondary,
+});
+
+export const cardActions = style({
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-end",
+  gap: vars.space[1],
+  flexShrink: 0,
+});
+
 export const cardImpact = style({
   fontSize: vars.fontSize.sm,
   fontWeight: vars.fontWeight.semibold,
@@ -73,6 +86,10 @@ export const cardAction = style({
     },
   },
 });
+
+// Reuses cardAction's bordered-button visual language, same rationale as
+// retryButton below.
+export const dismissButton = style([cardAction, { fontSize: vars.fontSize.xs }]);
 
 export const errorBoxContent = style({
   display: "flex",

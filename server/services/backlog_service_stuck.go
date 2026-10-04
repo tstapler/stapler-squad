@@ -67,6 +67,12 @@ func toProtoStuckReason(reason domain.StuckReason) sessionv1.StuckReason {
 		return sessionv1.StuckReason_STUCK_REASON_BOUNCE_CAP_EXHAUSTED
 	case domain.StuckReasonSteerFailed:
 		return sessionv1.StuckReason_STUCK_REASON_STEER_FAILED
+	case domain.StuckReasonBlockedByClaim:
+		return sessionv1.StuckReason_STUCK_REASON_BLOCKED_BY_CLAIM
+	case domain.StuckReasonWorktreeInconsistent:
+		return sessionv1.StuckReason_STUCK_REASON_WORKTREE_INCONSISTENT
+	case domain.StuckReasonRepeatedNoopDispatch:
+		return sessionv1.StuckReason_STUCK_REASON_REPEATED_NOOP_DISPATCH
 	default:
 		return sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED
 	}
@@ -116,6 +122,12 @@ func fromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason {
 		return domain.StuckReasonBounceCapExhausted
 	case sessionv1.StuckReason_STUCK_REASON_STEER_FAILED:
 		return domain.StuckReasonSteerFailed
+	case sessionv1.StuckReason_STUCK_REASON_BLOCKED_BY_CLAIM:
+		return domain.StuckReasonBlockedByClaim
+	case sessionv1.StuckReason_STUCK_REASON_WORKTREE_INCONSISTENT:
+		return domain.StuckReasonWorktreeInconsistent
+	case sessionv1.StuckReason_STUCK_REASON_REPEATED_NOOP_DISPATCH:
+		return domain.StuckReasonRepeatedNoopDispatch
 	default:
 		return ""
 	}
@@ -170,6 +182,14 @@ func (s *BacklogService) ListStuckBacklogItems(
 	items := make([]*sessionv1.StuckBacklogItem, len(rows))
 	for i, row := range rows {
 		items[i] = stuckBacklogItemToProto(row)
+		if row.ItemStatus == session.BacklogStatusReview {
+			if sessions, sessErr := s.storage.ListItemSessions(ctx, row.ItemID); sessErr == nil {
+				if ref := session.PendingDuplicateRef(sessions); ref != "" {
+					items[i].DuplicatePending = true
+					items[i].DuplicateRef = ref
+				}
+			}
+		}
 	}
 
 	return connect.NewResponse(&sessionv1.ListStuckBacklogItemsResponse{Items: items}), nil
@@ -295,7 +315,7 @@ func (s *BacklogService) notifyBulkResetParked(reasonFilter *domain.StuckReason,
 	s.eventBus.Publish(events.NewNotificationEvent(
 		sessionID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW),
+		derivePriority(false, false), // urgent, important — a bulk-reset confirmation, purely informational
 		"Parked items reset",
 		fmt.Sprintf("Reset %d parked item%s (%s) — they'll get automated attempts again.",
 			resetCount, pluralSuffix(resetCount), scope),

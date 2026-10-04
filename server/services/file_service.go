@@ -128,7 +128,7 @@ func (fs *FileService) ListFiles(
 		return nil, err
 	}
 
-	basePath := ws.EffectivePath
+	basePath := ws.ExistingDir
 	if basePath == "" {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session has no working directory"))
 	}
@@ -295,7 +295,7 @@ func (fs *FileService) GetFileContent(
 		return nil, err
 	}
 
-	basePath := ws.EffectivePath
+	basePath := ws.ExistingDir
 	if basePath == "" {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session has no working directory"))
 	}
@@ -457,7 +457,7 @@ func (fs *FileService) SearchFiles(
 		return nil, err
 	}
 
-	basePath := ws.EffectivePath
+	basePath := ws.ExistingDir
 	if basePath == "" {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session has no working directory"))
 	}
@@ -720,7 +720,7 @@ func (fs *FileService) ServeFileRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	basePath := ws.EffectivePath
+	basePath := ws.ExistingDir
 	if basePath == "" {
 		http.Error(w, "session has no working directory", http.StatusBadRequest)
 		return

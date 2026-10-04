@@ -143,7 +143,7 @@ func (ws *WorkspaceService) GetVCSStatus(
 		return nil, err
 	}
 
-	workDir := instance.Workspace().EffectivePath
+	workDir := instance.Workspace().ExistingDir
 	if workDir == "" {
 		return connect.NewResponse(&sessionv1.GetVCSStatusResponse{
 			Error: "session has no working directory",
@@ -361,7 +361,10 @@ func (ws *WorkspaceService) SwitchWorkspace(
 		return nil, err
 	}
 
-	preWorkDir := instance.Workspace().EffectivePath
+	// ExistingDir despite the "never compare it" rule on Workspace: this keys the
+	// VCS status cache, and that status is genuinely a property of the directory
+	// git actually ran in, not of which session asked.
+	preWorkDir := instance.Workspace().ExistingDir
 
 	var switchType session.WorkspaceSwitchType
 	switch req.Msg.SwitchType {

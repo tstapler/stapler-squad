@@ -129,6 +129,16 @@ func stripANSISimple(b []byte) []byte {
 // fresh (without --resume) so it does not loop forever on the same bad UUID.
 // Safe to call from a goroutine; uses startMu to serialise concurrent calls.
 func (i *Instance) recoverFromStaleResume() {
+	// An archived session is deliberately retired; a stale --resume on its way
+	// out is not a reason to spawn a brand-new (un-resumed) conversation
+	// (ADR-001, superseded-rework-session-retirement). KillTmuxPaneOnly closes
+	// the pane without stopping the controller, so the archive's own kill is
+	// what delivers the PTY EOF that gets here.
+	if i.IsArchived() {
+		log.Info("stale --resume uuid on an archived session; not restarting", "session", i.Title)
+		return
+	}
+
 	log.Info("stale --resume uuid detected, clearing and restarting fresh", "session", i.Title)
 	log.ForSession(i.Title).Info("stale --resume uuid detected, clearing conversation state and restarting fresh")
 
@@ -417,6 +427,22 @@ func (i *Instance) tryExtractConversationUUID() {
 		}
 		if info != nil {
 			log.Info("tryextractconversationuuid: found conversation via path fallback", "session", i.Title)
+		}
+		// Cross-session ownership guard (worktree-envvars-hijack Story 1.4.2):
+		// DetectByPath is a path-keyed, "most recently modified JSONL" scan with no
+		// per-session ownership check of its own -- if another live Instance already
+		// owns this exact conversation UUID at this exact effective path, adopting it
+		// here would silently attribute that sibling's conversation to this instance.
+		// i.conversationOwnershipGuard's own inst.UUID == selfUUID exclusion (see
+		// SessionService.ConversationOwnedByOtherLiveSession) means a session
+		// re-detecting its OWN conversation UUID during cold-restore self-recovery is
+		// never blocked -- only silently adopting a still-live sibling's UUID is.
+		if info != nil && i.conversationOwnershipGuard != nil {
+			if ownerUUID, ownedByOther := i.conversationOwnershipGuard(info.ConversationUUID, effectivePath); ownedByOther {
+				log.Warn("tryextractconversationuuid: conversation UUID owned by another live session, not adopting",
+					"session", i.Title, "path", effectivePath, "owner_uuid", ownerUUID)
+				info = nil
+			}
 		}
 	}
 

@@ -57,6 +57,27 @@ func RunRetentionSweep(ctx context.Context, entClient *ent.Client, workflowRepo 
 	runRetentionSweep(ctx, entClient, workflowRepo)
 }
 
+// archiveExcessSessions archives the keep_sessions overflow, re-applying the
+// same predicates the ID query already used. They are not redundant: the query
+// and this update are two separate round trips, so a session revived in between
+// (poller revival, boot hot-restore, a manual RetryNow) would otherwise be
+// archived while still Active — one of the two paths that produce the
+// Active + archived state ADR-001's load-time self-heal has to clean up.
+func archiveExcessSessions(ctx context.Context, entClient *ent.Client, excess []int, now time.Time) (int, error) {
+	return entClient.Session.Update().
+		Where(
+			entsession.IDIn(excess...),
+			entsession.ArchivedAtIsNil(),
+			entsession.StatusNotIn(
+				int(session.Active),
+				int(session.Creating),
+				int(session.Paused),
+			),
+		).
+		SetArchivedAt(now).
+		Save(ctx)
+}
+
 func runRetentionSweep(ctx context.Context, entClient *ent.Client, workflowRepo session.WorkflowRepository) {
 	workflows, err := workflowRepo.ListAll(ctx)
 	if err != nil {
@@ -121,10 +142,7 @@ func runRetentionSweep(ctx context.Context, entClient *ent.Client, workflowRepo 
 			// so archive everything except the last KeepSessions entries.
 			if len(ids) > wf.KeepSessions {
 				excess := ids[:len(ids)-wf.KeepSessions] // oldest entries
-				n, err := entClient.Session.Update().
-					Where(entsession.IDIn(excess...)).
-					SetArchivedAt(now).
-					Save(ctx)
+				n, err := archiveExcessSessions(ctx, entClient, excess, now)
 				if err != nil {
 					log.Warn("[workflows/retention] keep_sessions archive failed",
 						"workflow", wf.Slug, "err", err)

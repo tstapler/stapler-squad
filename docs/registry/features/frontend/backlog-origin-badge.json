@@ -1,0 +1,49 @@
+{
+  "id": "backlog-origin-badge",
+  "type": "frontend",
+  "name": "Badge linking a session back to the backlog item that dispatched it (work/review/triage automation)",
+  "component": "BacklogOriginBadge",
+  "path": "web-app/src/components/shared/BacklogOriginBadge.tsx",
+  "filePath": "web-app/src/components/shared/BacklogOriginBadge.tsx",
+  "markerLine": 2,
+  "alsoIn": [
+    {
+      "component": "SessionRow",
+      "path": "web-app/src/components/sessions/SessionRow.tsx",
+      "note": "Session list, default row view."
+    },
+    {
+      "component": "SessionCard",
+      "path": "web-app/src/components/sessions/SessionCard.tsx",
+      "note": "Session list, card/board view."
+    },
+    {
+      "component": "SessionDetailView",
+      "path": "web-app/src/components/sessions/SessionDetailView.tsx",
+      "note": "Non-embedded detail header, e.g. review-queue page."
+    },
+    {
+      "component": "PaneHeader",
+      "path": "web-app/src/components/pane/PaneHeader.tsx",
+      "note": "Pane-cockpit header (embedded mode, where SessionDetailView's own header is suppressed)."
+    },
+    {
+      "component": "SessionPeekModal",
+      "path": "web-app/src/components/sessions/SessionPeekModal.tsx",
+      "note": "Floating peek-modal header."
+    }
+  ],
+  "tested": true,
+  "testIds": [
+    "BacklogOriginBadge_should_renderNull_When_noEntry",
+    "BacklogOriginBadge_should_renderNull_When_entryHasNoItemId",
+    "BacklogOriginBadge_should_renderRoleLabel_When_linked",
+    "BacklogOriginBadge_should_linkToBacklogItem_When_linked",
+    "BacklogOriginBadge_should_fallBackToGenericLabel_When_sessionRoleIsUnexpected",
+    "SessionCard_should_RenderBacklogOriginBadge_When_backlogEntryProvided",
+    "SessionCard_should_NotRenderBacklogOriginBadge_When_noBacklogEntry",
+    "SessionRow_should_RenderBacklogOriginBadge_When_backlogEntryProvided",
+    "SessionRow_should_NotRenderBacklogOriginBadge_When_noBacklogEntry"
+  ],
+  "lastModified": "2026-09-23T00:00:00Z"
+}

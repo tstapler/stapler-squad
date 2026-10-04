@@ -243,15 +243,6 @@ func getGHToken(_ context.Context) string {
 	return tok
 }
 
-// newGHRequest creates an authenticated GET request to the github.com REST API.
-// Kept despite having no current caller: it is the constructor the norawghrequest
-// analyzer and .claude/rules/norawghrequest.md tell new call sites to use.
-//
-//nolint:unused // documented approved constructor, see above
-func newGHRequest(ctx context.Context, path string) (*http.Request, error) {
-	return newGHRequestForHostWithToken(ctx, "", path, getGHToken(ctx))
-}
-
 // newGHRequestForHost creates an authenticated GET request to host's REST API
 // (host "" means github.com), resolving the token via the same per-host
 // precedence as getGHTokenForAccount.
@@ -295,11 +286,27 @@ func newGHRequestForHostWithToken(ctx context.Context, host, path, token string)
 	return req, nil
 }
 
-// newGHGraphQLRequest creates an authenticated POST request to host's GraphQL
-// endpoint (graphQLURLForHost), body already JSON-encoded by the caller,
-// resolving a token via getGHToken(ctx) — the GraphQL sibling of newGHRequest.
-func newGHGraphQLRequest(ctx context.Context, host string, body []byte) (*http.Request, error) {
-	return newGHGraphQLRequestForHostWithToken(ctx, host, body, getGHToken(ctx))
+// newGHRequestForHostWithTokenAndBody is the method-and-body sibling of
+// newGHRequestForHostWithToken, for REST writes (e.g. POST an issue comment).
+// body, when non-nil, is sent as JSON. host "" means github.com.
+func newGHRequestForHostWithTokenAndBody(ctx context.Context, host, method, path, token string, body []byte) (*http.Request, error) {
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, RestBaseURLForHost(host)+path, reader)
+	if err != nil {
+		return nil, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	return req, nil
 }
 
 // newGHGraphQLRequestForHostWithToken creates a POST request to host's

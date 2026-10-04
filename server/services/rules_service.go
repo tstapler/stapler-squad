@@ -577,9 +577,14 @@ func (rs *RulesService) rebuildClassifier() {
 		userRules := rs.rulesStore.ToRules()
 		existing := rs.classifier.Rules()
 		rs.afterRebuildReadHook() // test-only: see field doc comment
-		nonUser := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceClaudeSettings)
+		nonUser := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceClaudeSettings, classifier.SourceConfig)
 		rs.classifier.ReplaceRules(append(nonUser, userRules...))
 	}()
+	if rs.rulesStore != nil && rs.rulesStore.storage != nil {
+		if err := ExportAntigravityRulesFromDB(context.Background(), rs.rulesStore.storage); err != nil {
+			log.Warn("[RulesService] failed to export rules to Antigravity", "err", err)
+		}
+	}
 	// Per ADR-004: reconciliation runs asynchronously, after rebuildMu releases, so the
 	// RPC that triggered this rebuild (UpsertApprovalRule/DeleteApprovalRule) returns
 	// before a large pending backlog finishes reconciling. Always the panic-recovering
@@ -597,7 +602,7 @@ func (rs *RulesService) rebuildClaudeSettingsRules(newClaudeRules []classifier.R
 
 		existing := rs.classifier.Rules()
 		rs.afterRebuildReadHook() // test-only: see field doc comment
-		kept := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceUser)
+		kept := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceUser, classifier.SourceConfig)
 		rs.classifier.ReplaceRules(append(kept, newClaudeRules...))
 	}()
 	// See rebuildClassifier's identical comment above — same ADR-004 rationale.

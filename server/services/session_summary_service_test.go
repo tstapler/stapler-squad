@@ -58,7 +58,7 @@ func (f *fakePoolClient) CallBlocking(ctx context.Context, _ headless.FeatureKey
 		<-ctx.Done()
 		return "", ctx.Err()
 	}
-	sink(0)
+	sink(0, true)
 	if f.err != nil {
 		return "", f.err
 	}

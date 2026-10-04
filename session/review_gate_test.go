@@ -1866,3 +1866,85 @@ func TestReviewGateRunner_should_SkipDiffWorktreeBranchDriftChecks_When_GateCont
 	require.NotNil(t, reviewEntry, "a review ItemSession must still be created")
 	assert.Equal(t, reviewInstance.UUID, reviewEntry.SessionUUID)
 }
+
+// TestReviewGateRunner_should_RecordGateSatisfaction_When_ConfiguredGateFailsClosed
+// covers this Epic's follow-up (gap #3): a configured automated_review gate's
+// terminal FAIL verdict — recorded here via the empty-committed-diff guard,
+// the simplest terminal path Run reaches synchronously with no spawned
+// session — must be persisted to GateSatisfactionRepository, not just left
+// implicit in the synthetic ItemSession+ReviewVerdict pair.
+func TestReviewGateRunner_should_RecordGateSatisfaction_When_ConfiguredGateFailsClosed(t *testing.T) {
+	t.Parallel()
+	_ = swapWarningLog(t)
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	client := storage.GetEntClient()
+
+	fromStage, err := client.BacklogStage.Create().SetSlug("rgr-from-" + uuid.NewString()).SetName("From").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	toStage, err := client.BacklogStage.Create().SetSlug("rgr-to-" + uuid.NewString()).SetName("To").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	transition, err := client.StageTransition.Create().SetFromStageID(fromStage.ID).SetToStageID(toStage.ID).SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	gate, err := client.TransitionGate.Create().
+		SetTransitionID(transition.ID).
+		SetKind(string(GateKindAutomatedReview)).
+		SetStateful(true).
+		SetEnabled(true).
+		Save(ctx)
+	require.NoError(t, err)
+
+	item, workIS := newEmptyDiffFixture(t, ctx, storage, "Configured automated-review gate FAIL test")
+
+	repo := NewEntGateSatisfactionRepository(client)
+	spawner := &mockReviewGateSpawner{}
+	runner := NewReviewGateRunner(storage, func() AutoReopenSpawner { return newFakeAutoReopenSpawner() }, func() Notifier { return nil }, func() ReviewGateSpawner { return spawner }, nil)
+	runner.SetGateSatisfactionRepository(repo)
+
+	gateContext := GateContext{GateID: gate.ID.String(), TargetTransition: BacklogStatus(toStage.Slug), RequiresDiff: true}
+	runner.Run(ctx, gateContext, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
+
+	require.Equal(t, 0, spawner.getCallCount(), "the empty-diff guard must block before ever spawning a review session")
+
+	record, getErr := repo.GetByItemAndGate(ctx, uuid.MustParse(item.ID), gate.ID)
+	require.NoError(t, getErr, "recordGateSatisfaction must have written a row for this (item, gate) pair")
+	assert.False(t, record.Satisfied)
+	assert.Contains(t, record.OutcomeDetail["detail"], "nothing to review")
+
+	// PendingGates must report the SAME outcome for this transition, replacing
+	// evaluateGate's pre-follow-up unconditional Satisfied:false placeholder.
+	stageRepo := NewEntStageConfigRepository(client)
+	engine, err := NewConfiguredWorkflowEngine(stageRepo, repo, nil)
+	require.NoError(t, err)
+
+	statuses, pgErr := engine.PendingGates(BacklogItemTransitionInput{ItemID: item.ID, Status: BacklogStatus(fromStage.Slug)}, BacklogStatus(toStage.Slug), nil)
+	require.NoError(t, pgErr)
+	require.Len(t, statuses, 1)
+	assert.False(t, statuses[0].Satisfied)
+	assert.Contains(t, statuses[0].Description, "nothing to review")
+}
+
+// TestReviewGateRunner_should_NotRecordGateSatisfaction_When_BuiltInGateContext
+// is the zero-regression guard: the built-in review->pr_pending call site
+// (GateID == "") must never write a GateSatisfactionRecord — there is no
+// persisted TransitionGate row to key one on.
+func TestReviewGateRunner_should_NotRecordGateSatisfaction_When_BuiltInGateContext(t *testing.T) {
+	t.Parallel()
+	_ = swapWarningLog(t)
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, workIS := newEmptyDiffFixture(t, ctx, storage, "Built-in gate context must not record satisfaction")
+
+	repo := NewEntGateSatisfactionRepository(storage.GetEntClient())
+	spawner := &mockReviewGateSpawner{}
+	runner := NewReviewGateRunner(storage, func() AutoReopenSpawner { return newFakeAutoReopenSpawner() }, func() Notifier { return nil }, func() ReviewGateSpawner { return spawner }, nil)
+	runner.SetGateSatisfactionRepository(repo)
+
+	runner.Run(ctx, builtInReviewGateContext, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
+
+	_, getErr := repo.GetByItemAndGate(ctx, uuid.MustParse(item.ID), uuid.New())
+	require.Error(t, getErr, "no row exists for any gate id since GateID==\"\" must never call Create/Update")
+}

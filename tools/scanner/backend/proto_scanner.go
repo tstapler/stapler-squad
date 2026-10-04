@@ -137,6 +137,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// Backlog RPCs (BacklogService in backlog.proto)
 	"CreateBacklogItem":           "backlog:create-item",
 	"CreateBacklogItemFromChat":   "backlog:create-item-from-chat",
+	"ParseBacklogItemIntent":      "backlog:parse-item-intent",
 	"GetBacklogItem":              "backlog:get-item",
 	"ListBacklogItems":            "backlog:list-items",
 	"UpdateBacklogItem":           "backlog:update-item",
@@ -198,11 +199,23 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"SearchGitHubRepos": "SearchGitHubRepos",
 	"ListGitHubIssues":  "ListGitHubIssues",
 	"ImportGitHubIssue": "ImportGitHubIssue",
+	// Cross-host claim RPCs (#893): identity ids, matching the committed fallback-id registry files.
+	"CheckCrossHostClaim": "CheckCrossHostClaim",
+	"ListForeignClaims":   "ListForeignClaims",
+	"OverrideClaimBlock":  "OverrideClaimBlock",
+	"RecordClaimOverride": "RecordClaimOverride",
+	"ResolveClaimDispute": "ResolveClaimDispute",
 	// Launcher presets RPCs
 	"GetLauncherPresets": "launcher_presets:get",
+	// Program config RPCs
+	"ListProgramsConfig":  "program_config:list",
+	"UpsertProgramConfig": "program_config:upsert",
+	"DeleteProgramConfig": "program_config:delete",
 	// Session lifecycle RPCs
 	"ArchiveSession":          "session:archive",
 	"UnarchiveSession":        "session:unarchive",
+	"PinSession":              "session:pin",
+	"UnpinSession":            "session:unpin",
 	"HibernateSession":        "session:hibernate",
 	"ResumeHibernatedSession": "session:resume-hibernated",
 	"ResumeCrashedSession":    "session:resume-crashed",
@@ -228,6 +241,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"ListWorkflows":  "workflow:list",
 	"UpdateWorkflow": "workflow:update",
 	"RunWorkflow":    "workflow:run",
+	"WatchWorkflows": "workflow:watch",
 	// Trigger fire audit trail RPC (webhook-triggers Epic 1.2, Task 1.2.1d)
 	"ListTriggerFireEvents": "workflow:list-trigger-fire-events",
 	// Outbound callback config RPCs (webhook-triggers Phase 5, FR7)
@@ -316,8 +330,15 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// remote.proto/headless.proto above, caught by TestMethodToIDCompleteness's
 	// glob. Wired fully (map entry + Makefile enumeration) like remote.proto,
 	// not left as a followup like headless.proto, since it was cheap here.
-	"GetHandoffSummary":     "handoff-summary:get",
-	"TriggerHandoffSummary": "handoff-summary:trigger",
+	// Tagging-classifier RPCs (tagging_classifier_service.go).
+	"GetTaggingClassifierConfig":    "tagging-classifier:get-config",
+	"UpdateTaggingClassifierConfig": "tagging-classifier:update-config",
+	"ReclassifySessionTags":         "tagging-classifier:reclassify-session",
+	"ListTaggingRules":              "tagging-rule:list",
+	"UpsertTaggingRule":             "tagging-rule:upsert",
+	"DeleteTaggingRule":             "tagging-rule:delete",
+	"GetHandoffSummary":             "handoff-summary:get",
+	"TriggerHandoffSummary":         "handoff-summary:trigger",
 	// LivenessDefinition CRUD RPCs (Epic 1.3 of backlog-custom-workflow-stages)
 	// -- pre-existing collateral debt found by TestMethodToIDCompleteness
 	// while wiring Epic 2.7's own methodToID entries below: these markers
@@ -353,6 +374,39 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"GetTransitionGate":     "backlog:get-transition-gate",
 	"ListTransitionGates":   "backlog:list-transition-gates",
 	"RecordGateApproval":    "backlog:record-gate-approval",
+	"GetPendingGates":       "backlog:get-pending-gates",
+	// Tmux client/server version mismatch RPCs (session.proto) -- pre-existing
+	// collateral debt found by TestMethodToIDCompleteness: must match the
+	// "// +api: tmux:*" markers in server/services/tmux_version_status_service.go
+	// verbatim, same failure mode as the SearchGitHubRepos comment above.
+	"GetTmuxVersionStatus": "tmux:version-status",
+	"RestartTmuxServer":    "tmux:restart-server",
+	// Durable guidance-request RPCs (GuidanceRequestService in
+	// guidance_request.proto, #809) -- must match the "// +api:
+	// guidance-request:*" markers in server/services/guidance_request_service.go
+	// verbatim, same failure mode as the SearchGitHubRepos comment above.
+	"CreateGuidanceRequest":          "guidance-request:create",
+	"AnswerGuidanceRequest":          "guidance-request:answer",
+	"GetGuidanceRequest":             "guidance-request:get",
+	"ListGuidanceRequests":           "guidance-request:list",
+	"ListAllPendingGuidanceRequests": "guidance-request:list-all-pending",
+	// DismissFinding (InsightsService in insights.proto) -- its
+	// "// +api: DismissFinding" marker in server/services/insights_service.go
+	// already uses the method-name-as-id convention (see the SearchGitHubRepos
+	// comment above), so match it verbatim rather than a kebab-case id.
+	"DismissFinding": "DismissFinding",
+	// Diagnose & Nudge RPCs (DiagnosticService in diagnose.proto, backlog item
+	// 68964304) -- must match the "// +api: session:diagnose-*" markers in
+	// server/services/diagnostic_service.go verbatim, same failure mode as
+	// the SearchGitHubRepos comment above.
+	"AssembleDiagnosticBundle": "session:diagnose-assemble-bundle",
+	"DispatchDiagnose":         "session:diagnose-dispatch",
+	// ProbeProgram (SessionService in session.proto) -- pre-existing gap found
+	// by TestMethodToIDCompleteness while adding the entries above (unrelated
+	// to Diagnose & Nudge). No "// +api:" marker exists on
+	// server/services/session_service.go's ProbeProgram handler, so
+	// markerFound stays false for this entry until one is added separately.
+	"ProbeProgram": "program:probe",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

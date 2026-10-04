@@ -75,14 +75,14 @@ const selectLocalRepos = createSelector([selectAllSessions], (sessions) => {
   const seen = new Set<string>();
   const results: GitHubRepo[] = [];
   for (const s of sessions) {
-    if (!s.path) continue;
-    const parts = s.path.split("/");
+    if (!s.repoRoot) continue;
+    const parts = s.repoRoot.split("/");
     const repo = parts[parts.length - 1] ?? "";
     const owner = parts[parts.length - 2] ?? "";
     const key = `${owner}/${repo}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    results.push({ owner, repo, isLocal: true, localPath: s.path, description: s.title ?? "", host: "" });
+    results.push({ owner, repo, isLocal: true, localPath: s.repoRoot, description: s.title ?? "", host: "" });
   }
   return results;
 });

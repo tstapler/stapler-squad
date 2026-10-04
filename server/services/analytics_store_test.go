@@ -2,12 +2,16 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"regexp"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/session"
 	"go.uber.org/goleak"
 )
 
@@ -95,14 +99,10 @@ func TestReclassifyGaps_should_reclassifyEntry_When_ruleNowCoversCommand(t *test
 	c := classifier.NewRuleBasedClassifier()
 	rules := []classifier.Rule{
 		{
-			ID:             "rule-git-push",
-			Name:           "Allow git push",
 			ToolName:       "Bash",
 			CommandPattern: mustCompileRe(t, "^git push"),
 			Decision:       classifier.AutoAllow,
-			Enabled:        true,
-			Priority:       100,
-			Source:         "user",
+			RuleMeta:       classifier.RuleMeta{ID: "rule-git-push", Name: "Allow git push", Enabled: true, Priority: 100, Source: "user"},
 		},
 	}
 	c.ReplaceRules(rules)
@@ -149,14 +149,10 @@ func TestReclassifyGaps_should_skipEntry_When_hasRuleID(t *testing.T) {
 	c := classifier.NewRuleBasedClassifier()
 	rules := []classifier.Rule{
 		{
-			ID:             "rule-git-push",
-			Name:           "Allow git push",
 			ToolName:       "Bash",
 			CommandPattern: mustCompileRe(t, "^git push"),
 			Decision:       classifier.AutoAllow,
-			Enabled:        true,
-			Priority:       100,
-			Source:         "user",
+			RuleMeta:       classifier.RuleMeta{ID: "rule-git-push", Name: "Allow git push", Enabled: true, Priority: 100, Source: "user"},
 		},
 	}
 	c.ReplaceRules(rules)
@@ -183,14 +179,10 @@ func TestReclassifyGaps_should_notMutateOriginalSlice(t *testing.T) {
 	c := classifier.NewRuleBasedClassifier()
 	rules := []classifier.Rule{
 		{
-			ID:             "rule-git-push",
-			Name:           "Allow git push",
 			ToolName:       "Bash",
 			CommandPattern: mustCompileRe(t, "^git push"),
 			Decision:       classifier.AutoAllow,
-			Enabled:        true,
-			Priority:       100,
-			Source:         "user",
+			RuleMeta:       classifier.RuleMeta{ID: "rule-git-push", Name: "Allow git push", Enabled: true, Priority: 100, Source: "user"},
 		},
 	}
 	c.ReplaceRules(rules)
@@ -223,15 +215,11 @@ func TestReclassifyGaps_should_handleCommandUnder200Chars(t *testing.T) {
 	c := classifier.NewRuleBasedClassifier()
 	rules := []classifier.Rule{
 		{
-			ID:   "rule-git-all",
-			Name: "Allow all git",
 			Criteria: &classifier.CommandCriteria{
 				Programs: []string{"git"},
 			},
 			Decision: classifier.AutoAllow,
-			Enabled:  true,
-			Priority: 100,
-			Source:   "user",
+			RuleMeta: classifier.RuleMeta{ID: "rule-git-all", Name: "Allow all git", Enabled: true, Priority: 100, Source: "user"},
 		},
 	}
 	c.ReplaceRules(rules)
@@ -313,14 +301,10 @@ func TestComputeSummary_should_showFewerGaps_After_ReclassifyGaps(t *testing.T) 
 	c := classifier.NewRuleBasedClassifier()
 	rules := []classifier.Rule{
 		{
-			ID:             "rule-git-push",
-			Name:           "Allow git push",
 			ToolName:       "Bash",
 			CommandPattern: mustCompileRe(t, "^git push"),
 			Decision:       classifier.AutoAllow,
-			Enabled:        true,
-			Priority:       100,
-			Source:         "user",
+			RuleMeta:       classifier.RuleMeta{ID: "rule-git-push", Name: "Allow git push", Enabled: true, Priority: 100, Source: "user"},
 		},
 	}
 	c.ReplaceRules(rules)
@@ -451,4 +435,120 @@ func TestAnalyticsStore_Record_AfterStop_NoPanic(t *testing.T) {
 	require.NotPanics(t, func() {
 		store.Record(AnalyticsEntry{SessionID: "sess-1", ToolName: "Bash"})
 	})
+}
+
+type recordingAnalyticsBatchSink struct {
+	mu      sync.Mutex
+	batches [][]session.AnalyticsData
+	called  chan struct{}
+	block   <-chan struct{}
+}
+
+func (s *recordingAnalyticsBatchSink) RecordAnalyticsBatch(ctx context.Context, batch []session.AnalyticsData) error {
+	if s.block != nil {
+		select {
+		case <-s.block:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	copied := append([]session.AnalyticsData(nil), batch...)
+	s.mu.Lock()
+	s.batches = append(s.batches, copied)
+	s.mu.Unlock()
+	select {
+	case s.called <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func TestAnalyticsStoreFlushesLowTrafficByDeadline(t *testing.T) {
+	t.Parallel()
+	sink := &recordingAnalyticsBatchSink{called: make(chan struct{}, 1)}
+	store := newAnalyticsStore(nil, sink)
+	store.Start(context.Background())
+	defer store.Stop()
+
+	store.Record(AnalyticsEntry{ID: "one", ToolName: "Bash"})
+	select {
+	case <-sink.called:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("single analytics event did not flush by deadline")
+	}
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	require.Len(t, sink.batches, 1)
+	require.Len(t, sink.batches[0], 1)
+}
+
+func TestAnalyticsStoreFlushesBurstByBatchSize(t *testing.T) {
+	t.Parallel()
+	sink := &recordingAnalyticsBatchSink{called: make(chan struct{}, 1)}
+	store := newAnalyticsStore(nil, sink)
+	store.Start(context.Background())
+	defer store.Stop()
+
+	for i := range analyticsBatchSize {
+		store.Record(AnalyticsEntry{ID: fmt.Sprintf("event-%d", i), ToolName: "Bash"})
+	}
+	select {
+	case <-sink.called:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("full analytics batch did not flush")
+	}
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	require.Len(t, sink.batches, 1)
+	require.Len(t, sink.batches[0], analyticsBatchSize)
+	for i, entry := range sink.batches[0] {
+		require.Equal(t, fmt.Sprintf("event-%d", i), entry.ID)
+	}
+}
+
+func TestAnalyticsStoreFullQueueDropsWithoutBlocking(t *testing.T) {
+	t.Parallel()
+	store := newAnalyticsStore(nil, nil)
+	for i := range analyticsBufferSize + 1 {
+		store.Record(AnalyticsEntry{ID: fmt.Sprintf("event-%d", i)})
+	}
+	require.Equal(t, int64(1), store.DroppedCount())
+}
+
+// ── Story 2.3.3: Tagging-rule fire-count analytics ──────────────────────────
+
+// TestAnalyticsStore_RecordTaggingRuleFire_should_PersistFire_When_Called covers the
+// fire-and-forget insert path: RecordTaggingRuleFire is async (spawns a goroutine, per its
+// doc comment), so the assertion polls via require.Eventually rather than sleeping.
+func TestAnalyticsStore_RecordTaggingRuleFire_should_PersistFire_When_Called(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	store := NewAnalyticsStore(storage)
+
+	store.RecordTaggingRuleFire("seed-bugfix")
+
+	require.Eventually(t, func() bool {
+		counts, err := store.GetTaggingRuleFireCounts(context.Background(), time.Now().Add(-time.Hour))
+		return err == nil && counts["seed-bugfix"] == 1
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
+// TestAnalyticsStore_GetTaggingRuleFireCounts_should_ExcludeFiresOlderThanWindow_When_TwoRecentAndOneStale
+// covers Story 2.3.3's second acceptance criterion: two fires within the last 7 days and one
+// fire 10 days ago must yield a count of 2, not 3.
+func TestAnalyticsStore_GetTaggingRuleFireCounts_should_ExcludeFiresOlderThanWindow_When_TwoRecentAndOneStale(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+
+	now := time.Now()
+	require.NoError(t, storage.RecordTaggingRuleFire(context.Background(), "seed-bugfix", now.Add(-1*time.Hour)))
+	require.NoError(t, storage.RecordTaggingRuleFire(context.Background(), "seed-bugfix", now.Add(-2*time.Hour)))
+	require.NoError(t, storage.RecordTaggingRuleFire(context.Background(), "seed-bugfix", now.Add(-10*24*time.Hour)))
+
+	store := NewAnalyticsStore(storage)
+	counts, err := store.GetTaggingRuleFireCounts(context.Background(), now.Add(-7*24*time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, 2, counts["seed-bugfix"])
 }

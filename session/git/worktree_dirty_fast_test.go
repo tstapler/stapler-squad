@@ -45,6 +45,33 @@ func TestWorktreeIsDirtyFast_MatchesWorktreeIsDirty_OnCleanUntrackedAndModified(
 	assert.True(t, dirty, "a modified tracked file must report dirty")
 }
 
+// TestWorktreeIsDirtyFast_DetectsSameSizeEditWithinIndexTimestampSecond guards the
+// full-precision mtime comparison for same-size tracked-file edits.
+func TestWorktreeIsDirtyFast_DetectsSameSizeEditWithinIndexTimestampSecond(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+	var cache gitignoreFSCache
+	var headCache headTreeHashCache
+
+	repo, err := OpenRepo(repoDir)
+	require.NoError(t, err)
+	idx, err := repo.Storer.Index()
+	require.NoError(t, err)
+	require.Len(t, idx.Entries, 1)
+
+	path := filepath.Join(repoDir, "README.md")
+	require.NoError(t, os.WriteFile(path, []byte("# Best"), 0o644))
+	mtime := idx.Entries[0].ModifiedAt.Truncate(time.Second).Add(123 * time.Millisecond)
+	if mtime.Equal(idx.Entries[0].ModifiedAt) {
+		mtime = mtime.Add(time.Millisecond)
+	}
+	require.NoError(t, os.Chtimes(path, mtime, mtime))
+
+	dirty, err := worktreeIsDirtyFast(repoDir, &cache, &headCache)
+	require.NoError(t, err)
+	assert.True(t, dirty, "a same-size edit within the index timestamp's second must report dirty")
+}
+
 // TestWorktreeIsDirtyFast_DetectsStagedAddition covers worktreeStagedDirty's "new or
 // modified staged file" branch directly (not reachable via untracked/unstaged alone).
 func TestWorktreeIsDirtyFast_DetectsStagedAddition(t *testing.T) {

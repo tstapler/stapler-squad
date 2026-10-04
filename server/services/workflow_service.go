@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -42,6 +43,10 @@ type WorkflowService struct {
 	// makes the RPC return an empty list rather than erroring, matching this file's
 	// other nil-degradation conventions (e.g. ListWorkflows with a nil repo).
 	fireEventRepo session.TriggerFireEventRepository
+	// eventBus backs WatchWorkflows (workflow_service_events.go). Optional — nil
+	// degrades gracefully: publishes become no-ops and WatchWorkflows returns
+	// CodeUnavailable, matching backlog_service_events.go's convention.
+	eventBus *events.EventBus
 }
 
 // NewWorkflowService creates a new WorkflowService.
@@ -61,6 +66,21 @@ func (ws *WorkflowService) SetPoller(p *session.ReviewQueuePoller) {
 // ListTriggerFireEvents. Optional — see fireEventRepo's doc comment.
 func (ws *WorkflowService) SetTriggerFireEventRepo(repo session.TriggerFireEventRepository) {
 	ws.fireEventRepo = repo
+}
+
+// SetEventBus wires the shared event bus backing WatchWorkflows. Optional —
+// see eventBus's doc comment.
+func (ws *WorkflowService) SetEventBus(bus *events.EventBus) {
+	ws.eventBus = bus
+}
+
+// publishWorkflowEvent publishes a workflow mutation/run event if an event bus is
+// wired. No-op otherwise (matches this file's other nil-degradation conventions).
+func (ws *WorkflowService) publishWorkflowEvent(payload *events.WorkflowEventPayload) {
+	if ws.eventBus == nil {
+		return
+	}
+	ws.eventBus.Publish(events.NewWorkflowChangedEvent(payload))
 }
 
 // entWorkflowToProto converts an ent.Workflow to its proto representation.
@@ -304,6 +324,8 @@ func (s *WorkflowService) CreateWorkflow(
 		}
 	}
 
+	s.publishWorkflowEvent(&events.WorkflowEventPayload{Kind: events.WorkflowChangeCreated, Workflow: wf})
+
 	return connect.NewResponse(&sessionv1.CreateWorkflowResponse{
 		Workflow: entWorkflowToProto(wf),
 	}), nil
@@ -461,6 +483,8 @@ func (s *WorkflowService) UpdateWorkflow(
 		}
 	}
 
+	s.publishWorkflowEvent(&events.WorkflowEventPayload{Kind: events.WorkflowChangeUpdated, Workflow: wf})
+
 	return connect.NewResponse(&sessionv1.UpdateWorkflowResponse{
 		Workflow: entWorkflowToProto(wf),
 	}), nil
@@ -491,6 +515,8 @@ func (s *WorkflowService) DeleteWorkflow(
 	if s.scheduler != nil {
 		_ = s.scheduler.Remove(req.Msg.Id)
 	}
+
+	s.publishWorkflowEvent(&events.WorkflowEventPayload{Kind: events.WorkflowChangeDeleted, WorkflowID: req.Msg.Id})
 
 	return connect.NewResponse(&sessionv1.DeleteWorkflowResponse{}), nil
 }
@@ -552,6 +578,12 @@ func (s *WorkflowService) RunWorkflow(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("run workflow: %w", err))
 	}
 
+	s.publishWorkflowEvent(&events.WorkflowEventPayload{
+		Kind:       events.WorkflowChangeRun,
+		WorkflowID: req.Msg.Id,
+		SessionID:  sessionID,
+	})
+
 	return connect.NewResponse(&sessionv1.RunWorkflowResponse{
 		SessionId: sessionID,
 	}), nil
@@ -605,6 +637,46 @@ func (s *WorkflowService) ListTriggerFireEvents(
 	}), nil
 }
 
+// archiveInstanceTimeout bounds each per-instance actor round-trip in
+// archiveMatchingInstances, mirroring the 2s budget review_queue_poller.go uses
+// for its own sendCtx calls.
+const archiveInstanceTimeout = 2 * time.Second
+
+// archiveMatchingInstances marks the in-memory instances of workflowID archived,
+// skipping the ones ArchiveWorkflowSessions' DB predicate also skips.
+//
+// The CAS in SetArchivedAtIfNilCtx makes the ArchivedAt write idempotent — it
+// does not make the whole check atomic: the status predicates below run on the
+// caller's goroutine, so an instance that turns Active mid-round-trip is still
+// archived while Active. That residual is by design, and is repaired by the
+// load-time self-heal in fromInstanceData (see ADR-001,
+// superseded-rework-session-retirement).
+func archiveMatchingInstances(ctx context.Context, instances []*session.Instance, workflowID string, now time.Time) {
+	for _, inst := range instances {
+		if inst == nil {
+			continue
+		}
+		snap := inst.Snapshot()
+		if snap.WorkflowID != workflowID || snap.ArchivedAt != nil {
+			continue
+		}
+		if inst.IsActive() || inst.IsCreating() || inst.IsPaused() {
+			continue
+		}
+		// Actor-routed, not a raw field write: IsArchived() reads the published
+		// snapshot, so a bare inst.ArchivedAt = &now stays invisible to every
+		// guard (ADR-001). Bounded per instance so one busy actor cannot stall
+		// this RPC.
+		archiveCtx, cancel := context.WithTimeout(ctx, archiveInstanceTimeout)
+		_, err := inst.SetArchivedAtIfNilCtx(archiveCtx, now)
+		cancel()
+		if err != nil {
+			log.Warn("[WorkflowService] in-memory archive timed out; DB row is already archived",
+				"session", snap.Title, "workflow_id", workflowID, "err", err)
+		}
+	}
+}
+
 // +api: session:archive-workflow-sessions
 // ArchiveWorkflowSessions archives all non-active sessions for a given workflow.
 // Active, Creating, and Paused sessions are silently skipped.
@@ -644,13 +716,7 @@ func (ws *WorkflowService) ArchiveWorkflowSessions(
 
 	// Update in-memory instances for any that are still in the poller.
 	if ws.poller != nil {
-		for _, inst := range ws.poller.GetInstances() {
-			if inst.WorkflowID == req.Msg.WorkflowId && inst.ArchivedAt == nil {
-				if !inst.IsActive() && !inst.IsCreating() && !inst.IsPaused() {
-					inst.ArchivedAt = &now
-				}
-			}
-		}
+		archiveMatchingInstances(ctx, ws.poller.GetInstances(), req.Msg.WorkflowId, now)
 	}
 
 	log.Info("[WorkflowService] ArchiveWorkflowSessions completed",

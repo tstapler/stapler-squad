@@ -628,6 +628,104 @@ func TestRunSessionDriver_fallsBackToStaticPromptWhenWhitespace(t *testing.T) {
 	}
 }
 
+// fakeInitialPromptRepo records UpdateInitialPromptSentAt calls for assertions,
+// without needing a real EntRepository/DB.
+type fakeInitialPromptRepo struct {
+	title string
+	sent  time.Time
+	calls int
+}
+
+func (f *fakeInitialPromptRepo) UpdateInitialPromptSentAt(_ context.Context, title string, t time.Time) error {
+	f.title = title
+	f.sent = t
+	f.calls++
+	return nil
+}
+
+// Bug: after a service restart, a fresh driver goroutine's local `sentInitial`
+// always starts false, so without a persisted record it would re-type
+// InitialPrompt into an already-completed session. SetInitialPromptSentAt is
+// the fix's persistence primitive: it must update both the in-memory
+// Instance/Snapshot (so this process's own driver can see it immediately) and
+// the injected repo (so the NEXT process's driver can see it after a restart).
+func TestSetInitialPromptSentAt_persistsAndIsReadableViaSnapshot(t *testing.T) {
+	t.Parallel()
+	inst, err := NewInstance(InstanceOptions{
+		Title:         "test-initial-prompt-sent-at",
+		Path:          t.TempDir(),
+		Program:       "echo",
+		InitialPrompt: "review this PR",
+	})
+	if err != nil {
+		t.Fatalf("NewInstance: %v", err)
+	}
+
+	if got := inst.GetInitialPromptSentAt(); !got.IsZero() {
+		t.Fatalf("GetInitialPromptSentAt() before any send = %v, want zero", got)
+	}
+
+	repo := &fakeInitialPromptRepo{}
+	inst.SetInitialPromptRepository(repo)
+
+	sentAt := time.Now()
+	inst.SetInitialPromptSentAt(sentAt)
+
+	if got := inst.GetInitialPromptSentAt(); !got.Equal(sentAt) {
+		t.Errorf("GetInitialPromptSentAt() = %v, want %v", got, sentAt)
+	}
+	if repo.calls != 1 {
+		t.Errorf("repo.calls = %d, want 1", repo.calls)
+	}
+	if repo.title != inst.Title {
+		t.Errorf("repo persisted title = %q, want %q", repo.title, inst.Title)
+	}
+	if !repo.sent.Equal(sentAt) {
+		t.Errorf("repo persisted time = %v, want %v", repo.sent, sentAt)
+	}
+}
+
+// Bug regression: runSessionDriverWithPrompt's startup selection logic must
+// treat a persisted InitialPromptSentAt as authoritative and skip re-sending
+// -- this is the exact restart scenario from the bug report (a completed
+// workflow session getting its prompt retyped after `make install-service`).
+func TestRunSessionDriver_persistedInitialPromptSentAt_skipsResend(t *testing.T) {
+	t.Parallel()
+	inst, err := NewInstance(InstanceOptions{
+		Title:         "test-persisted-sent-at",
+		Path:          t.TempDir(),
+		Program:       "echo",
+		InitialPrompt: "review this PR",
+	})
+	if err != nil {
+		t.Fatalf("NewInstance: %v", err)
+	}
+
+	sentAt := time.Now().Add(-45 * time.Minute) // e.g. sent 45m ago, before a restart
+	inst.SetInitialPromptSentAt(sentAt)
+
+	// Mirrors runSessionDriverWithPrompt's own startup selection logic
+	// (session_driver.go) -- a fresh driver goroutine's local sentInitial
+	// always starts false for a non-empty InitialPrompt, so it must fall
+	// through to GetInitialPromptSentAt() rather than re-deriving via the
+	// output/JSONL heuristics.
+	sentInitial := inst.InitialPrompt == ""
+	var initialPromptSentAt time.Time
+	if !sentInitial {
+		if persisted := inst.GetInitialPromptSentAt(); !persisted.IsZero() {
+			sentInitial = true
+			initialPromptSentAt = persisted
+		}
+	}
+
+	if !sentInitial {
+		t.Fatal("sentInitial = false, want true (persisted InitialPromptSentAt should short-circuit the heuristics)")
+	}
+	if !initialPromptSentAt.Equal(sentAt) {
+		t.Errorf("initialPromptSentAt = %v, want the persisted %v", initialPromptSentAt, sentAt)
+	}
+}
+
 // ─── U-GO-08: TestSanitizeInitialPromptForTmux_utf8BoundaryNotSplit ───────────
 
 func TestSanitizeInitialPromptForTmux_utf8BoundaryNotSplit(t *testing.T) {
@@ -1478,4 +1576,121 @@ func TestScanAndLinkPRURL_RepublishesSnapshot(t *testing.T) {
 	if gh.PRURL == "" {
 		t.Error("GitHub().PRURL is empty, want the linked PR URL (snapshot was not republished after the raw write)")
 	}
+}
+
+// If this fails, the pane kill that archiving performs arrives here looking
+// like a crash and the driver restarts the retired session (ADR-001,
+// superseded-rework-session-retirement). The guard is at handleDriverFailure's
+// entry, not inside restartForRetry, which is also manual RetryNow's choke
+// point. The archived row uses "tmux_exited" inside restartGraceWindow — the
+// arm that actually spawns a process.
+func TestHandleDriverFailure_should_NotRestartOrMarkFailed_When_InstanceArchived(t *testing.T) {
+	t.Parallel()
+	archivedAt := time.Now()
+
+	t.Run("archived_restart_grace_is_not_restarted", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockTmuxManager{}
+		inst := &Instance{Title: "archived-retry-test", Status: Stopped, ArchivedAt: &archivedAt}
+		inst.processManager = NewTmuxBackend(mock)
+
+		policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"tmux_exited"}}
+		shouldContinue, shouldReturn := handleDriverFailure(inst, "/tmp", policy, "tmux_exited", make(chan struct{}))
+
+		if shouldContinue || !shouldReturn {
+			t.Errorf("got (shouldContinue, shouldReturn) = (%v, %v), want (false, true)", shouldContinue, shouldReturn)
+		}
+		if mock.startCalls != 0 {
+			t.Errorf("expected no restart for an archived session, got %d Start() calls", mock.startCalls)
+		}
+		if got := inst.Snapshot().Status; got != Stopped {
+			t.Errorf("Status = %v, want Stopped (an archived session must not be marked PermanentlyFailed either)", got)
+		}
+		if inst.IsRetryPending() {
+			t.Error("expected no retry to be armed for an archived session")
+		}
+	})
+
+	t.Run("not_archived_still_schedules_a_retry", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockTmuxManager{}
+		inst := &Instance{Title: "live-retry-scheduled", Status: Stopped}
+		inst.processManager = NewTmuxBackend(mock)
+		inst.RetryAttempt = 0
+		inst.RetryMaxAttempts = 3
+
+		policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}, InitialDelay: time.Second, MaxDelay: time.Minute}
+		shouldContinue, shouldReturn := handleDriverFailure(inst, "/tmp", policy, "crashed", make(chan struct{}))
+
+		if !shouldContinue || shouldReturn {
+			t.Errorf("got (shouldContinue, shouldReturn) = (%v, %v), want (true, false)", shouldContinue, shouldReturn)
+		}
+		if !inst.IsRetryPending() {
+			t.Error("control: a live session's failure must still arm a scheduled retry")
+		}
+	})
+
+	t.Run("not_archived_still_marks_permanently_failed_when_exhausted", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockTmuxManager{}
+		inst := &Instance{Title: "live-retry-exhausted", Status: Stopped}
+		inst.processManager = NewTmuxBackend(mock)
+		inst.RetryAttempt = 1
+		inst.RetryMaxAttempts = 1 // already at cap
+
+		policy := RetryPolicy{Enabled: true, MaxAttempts: 1, RetryOn: []string{"crashed"}}
+		handleDriverFailure(inst, "/tmp", policy, "crashed", make(chan struct{}))
+
+		if got := inst.Snapshot().Status; got != PermanentlyFailed {
+			t.Errorf("control: Status = %v, want PermanentlyFailed for an exhausted live session", got)
+		}
+	})
+}
+
+// TestHandleRetryPendingTick_should_DropScheduledRetry_When_InstanceArchived
+// covers the other automated entry point into restartForRetry: a backoff-
+// scheduled retry armed *before* the archive landed must be dropped rather
+// than fired when its deadline arrives.
+func TestHandleRetryPendingTick_should_DropScheduledRetry_When_InstanceArchived(t *testing.T) {
+	t.Parallel()
+
+	t.Run("archived_pending_retry_is_dropped", func(t *testing.T) {
+		t.Parallel()
+		archivedAt := time.Now()
+		mock := &mockTmuxManager{}
+		inst := &Instance{Title: "archived-pending-retry", Status: Stopped, ArchivedAt: &archivedAt}
+		inst.processManager = NewTmuxBackend(mock)
+		inst.NextRetryAt = time.Now().Add(-time.Minute) // already elapsed
+
+		policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}}
+		shouldContinue, shouldReturn := handleRetryPendingTick(inst, "/tmp", policy, make(chan struct{}))
+
+		if shouldContinue || !shouldReturn {
+			t.Errorf("got (shouldContinue, shouldReturn) = (%v, %v), want (false, true)", shouldContinue, shouldReturn)
+		}
+		if mock.startCalls != 0 {
+			t.Errorf("expected no restart for an archived session, got %d Start() calls", mock.startCalls)
+		}
+		if inst.IsRetryPending() {
+			t.Error("expected the scheduled retry to be cleared for an archived session")
+		}
+	})
+
+	t.Run("not_archived_pending_but_not_elapsed_keeps_ticking", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockTmuxManager{}
+		inst := &Instance{Title: "live-pending-retry", Status: Stopped}
+		inst.processManager = NewTmuxBackend(mock)
+		inst.NextRetryAt = time.Now().Add(time.Hour) // not yet elapsed
+
+		policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}}
+		shouldContinue, shouldReturn := handleRetryPendingTick(inst, "/tmp", policy, make(chan struct{}))
+
+		if !shouldContinue || shouldReturn {
+			t.Errorf("got (shouldContinue, shouldReturn) = (%v, %v), want (true, false)", shouldContinue, shouldReturn)
+		}
+		if !inst.IsRetryPending() {
+			t.Error("control: a live session's not-yet-elapsed retry must stay pending")
+		}
+	})
 }

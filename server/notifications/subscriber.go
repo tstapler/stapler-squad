@@ -126,6 +126,47 @@ func StartSubscriberWithInterval(ctx context.Context, bus *events.EventBus, stor
 	}()
 }
 
+// UrgentTTL is how long a notification's urgent axis stays push-eligible after it first
+// fires — "a 1-hour-old notification is no longer urgent" even if it was originally
+// urgent+important. Shared with server/push/subscriber.go's shouldNotify, which is the
+// other half of this decay: this sweeper demotes the stored, already-delivered record so
+// it stops cluttering the in-app unread list; shouldNotify independently age-gates any
+// not-yet-evaluated live event against the same TTL.
+const UrgentTTL = 1 * time.Hour
+
+// StartUrgencyDecaySweeper periodically demotes URGENT notifications whose UrgentTTL has
+// elapsed (NotificationHistoryStore.DemoteExpiredUrgency) so a stale alert stops showing
+// as urgent in the /notifications page without being deleted or marked read — mirrors
+// session/tmux/fork_metrics.go's StartForkPressureLogger ticker shape. Exits when ctx is
+// canceled.
+func StartUrgencyDecaySweeper(ctx context.Context, store *NotificationHistoryStore, interval time.Duration, wg *sync.WaitGroup) {
+	if store == nil {
+		return
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				sweepExpiredUrgency(store)
+			}
+		}
+	}()
+}
+
+// sweepExpiredUrgency runs one DemoteExpiredUrgency pass and logs when it changed anything.
+func sweepExpiredUrgency(store *NotificationHistoryStore) {
+	demoted := store.DemoteExpiredUrgency(time.Now(), UrgentTTL)
+	if demoted > 0 {
+		log.Info("NotificationHistoryStore: demoted expired-urgency notifications", "count", demoted)
+	}
+}
+
 // coalesceKey builds the dedup key for the coalescing buffer.
 func coalesceKey(sessionID string, notifType int32) string {
 	return fmt.Sprintf("%s:%d", sessionID, notifType)

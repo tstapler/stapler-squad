@@ -1015,3 +1015,33 @@ func TestCreateWorkflow_WebhookSecret_FullHTTPRoundTrip(t *testing.T) {
 	require.NotNil(t, req)
 	assert.Contains(t, req.InitialPrompt, "Triage PROJ-1: fix it")
 }
+
+// If this fails, IsArchived() stays false for every session this RPC archives,
+// silently disabling every ADR-001 guard (poller, health checker, driver,
+// stale-resume) for that population. The assertion is on IsArchived(), not the
+// raw inst.ArchivedAt field: a raw field write sets the field too, so only the
+// snapshot read distinguishes fixed from broken.
+func TestArchiveWorkflowSessions_should_PublishSnapshotSoIsArchivedIsTrue_When_ArchivingInMemoryInstance(t *testing.T) {
+	t.Parallel()
+	_, svc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	workflowID := uuid.New().String()
+
+	stopped := &session.Instance{Title: "wf-archive-stopped", Status: session.Stopped, WorkflowID: workflowID}
+	active := &session.Instance{Title: "wf-archive-active", Status: session.Active, WorkflowID: workflowID}
+
+	poller := session.NewReviewQueuePoller(session.NewReviewQueue(), nil, nil)
+	poller.SetInstances([]*session.Instance{stopped, active})
+	svc.SetPoller(poller)
+
+	_, err := svc.ArchiveWorkflowSessions(ctx, connect.NewRequest(&sessionv1.ArchiveWorkflowSessionsRequest{
+		WorkflowId: workflowID,
+	}))
+	require.NoError(t, err)
+
+	assert.True(t, stopped.IsArchived(),
+		"IsArchived() must be true after ArchiveWorkflowSessions — a raw field write leaves the published snapshot stale")
+	assert.False(t, active.IsArchived(),
+		"control: an Active session is deliberately skipped by ArchiveWorkflowSessions")
+}

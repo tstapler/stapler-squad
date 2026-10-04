@@ -92,6 +92,17 @@ export interface GestureOptions {
   isInputBusy?: () => boolean;
   /** True while a finger is down or momentum runs; emitted only on change. */
   onGestureActiveChange?: (active: boolean) => void;
+  /**
+   * Story 1.4.0 — true when the terminal's alt-screen buffer is active. Consulted only on the
+   * `xterm-local` drag route (see onScrollFrame), where an alt screen has no xterm scrollback to move.
+   */
+  isAltScreenActive?: () => boolean;
+  /**
+   * Story 1.4.0 — receives the positive line count of an upward drag on the `xterm-local` route while
+   * isAltScreenActive() is true, instead of a local xterm scroll. TUI routes (`tui-pgkeys`/`tui-wheel`)
+   * never reach it, so the two scroll mechanisms cannot both fire for one drag.
+   */
+  onAltScreenScrollUp?: (lines: number) => void;
 }
 
 /**
@@ -470,7 +481,12 @@ export function useTerminalGestures(options: GestureOptions): void {
       const lines = lineAcc.push(-moveDy, cachedCellH);
       dragRoute = target;
       dragPostSlopLines += Math.abs(lines);
-      dispatchScroll(terminal, target, lines);
+      const o = optionsRef.current;
+      if (target === 'xterm-local' && lines < 0 && o.isAltScreenActive?.() && o.onAltScreenScrollUp) {
+        o.onAltScreenScrollUp(-lines);
+      } else {
+        dispatchScroll(terminal, target, lines);
+      }
       sampleViewportY();
       const active = terminal.buffer?.active;
       if (debugOn) {

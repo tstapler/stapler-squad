@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/testutil/gitfixture"
 )
 
 // setupTestRepo creates a temporary git repository with an initial commit and configured
@@ -23,12 +24,25 @@ import (
 // the `prefer-go-git-over-subshells` skill.
 func setupTestRepo(t *testing.T) string {
 	t.Helper()
+	return setupTestRepoWithIdentity(t, true)
+}
+
+func setupTestRepoWithoutIdentity(t *testing.T) string {
+	t.Helper()
+	return setupTestRepoWithIdentity(t, false)
+}
+
+func setupTestRepoWithIdentity(t *testing.T, configureIdentity bool) string {
+	t.Helper()
 	dir := t.TempDir()
 
 	repo, err := git.PlainInitWithOptions(dir, &git.PlainInitOptions{
 		InitOptions: git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
 	})
 	require.NoError(t, err)
+	if configureIdentity {
+		gitfixture.ConfigureGoGitIdentity(t, repo)
+	}
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test"), 0644))
 
@@ -37,7 +51,7 @@ func setupTestRepo(t *testing.T) string {
 	_, err = wt.Add(".")
 	require.NoError(t, err)
 	_, err = wt.Commit("Initial commit", &git.CommitOptions{
-		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
+		Author: &object.Signature{Name: gitfixture.UserName, Email: gitfixture.UserEmail, When: time.Now()},
 	})
 	require.NoError(t, err)
 
@@ -377,12 +391,12 @@ func TestNewGitWorktreeFromExisting_DetectsBranchAndBase(t *testing.T) {
 
 // TestNewGitWorktreeWithBranch_FreshPathMatchesGitRediscoveredPath verifies AC1: a
 // worktree path computed fresh via joinWithinDir(worktreeDir, sanitizedName) at creation
-// time, and the same directory rediscovered later via `git worktree list --porcelain`
-// (the "already checked out elsewhere" fallback in findExistingWorktreeForBranch), must
-// be byte-identical strings -- not merely equal after a test-side filepath.EvalSymlinks
-// normalization. On macOS this is only true because getWorktreeDirectory() resolves
-// symlinks on the base dir up front (see its doc comment) and the rediscovery path
-// canonicalizes git's porcelain output the same way before returning it.
+// time, and the same directory rediscovered later via nativeFindExistingWorktreeForBranch
+// (the "already checked out elsewhere" fallback), must be byte-identical strings -- not
+// merely equal after a test-side filepath.EvalSymlinks normalization. On macOS this is
+// only true because getWorktreeDirectory() resolves symlinks on the base dir up front (see
+// its doc comment) and the rediscovery path canonicalizes git's reported view the same way
+// before returning it.
 func TestNewGitWorktreeWithBranch_FreshPathMatchesGitRediscoveredPath(t *testing.T) {
 	repoDir := setupTestRepo(t)
 	const branch = "backlog/ac1-fresh-vs-rediscovered"
@@ -393,10 +407,8 @@ func TestNewGitWorktreeWithBranch_FreshPathMatchesGitRediscoveredPath(t *testing
 	freshPath := wt1.GetWorktreePath()
 	defer func() { _ = wt1.Cleanup() }()
 
-	// Rediscover the same worktree the way a second, independent construction would:
-	// findExistingWorktreeForBranch parses `git worktree list --porcelain`, which
-	// reports git's own realpath'd view of the directory.
-	rediscoveredPath, found := findExistingWorktreeForBranch(repoDir, branch)
+	// Rediscover the same worktree the way a second, independent construction would.
+	rediscoveredPath, found := nativeFindExistingWorktreeForBranch(repoDir, branch)
 	require.True(t, found, "git must report the worktree just created via Setup()")
 	rediscoveredPath = CanonicalizeWorktreePath(rediscoveredPath)
 

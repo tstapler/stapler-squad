@@ -1083,8 +1083,8 @@ func (g *GoGitVCSReader) hasUncommittedGoGitPhase(entry *cachedRepo, worktreePat
 // Strategy (no subprocess, low allocations):
 //  1. Staged changes: compare index entry hashes against HEAD tree hashes — O(n)
 //     hash comparisons, zero file I/O.
-//  2. Working-tree changes: stat each tracked file and compare mtime/size against
-//     the index record — O(n) stat calls, no file reads.
+//  2. Working-tree changes: stat each tracked file and compare full-precision
+//     mtime/size against the index record — O(n) stat calls, no file reads.
 //
 // This avoids the 1.85 GB allocation caused by wt.Status(), which hashes every
 // modified file in full.
@@ -1131,8 +1131,7 @@ func (g *GoGitVCSReader) HasUncommitted(worktreePath string) (bool, error) {
 				}
 				continue
 			}
-			if info.Size() != int64(tf.size) ||
-				!info.ModTime().Truncate(time.Second).Equal(tf.modifiedAt.Truncate(time.Second)) {
+			if info.Size() != int64(tf.size) || !info.ModTime().Equal(tf.modifiedAt) {
 				r := true
 				g.hasUncommittedCache.Store(worktreePath, hasUncommittedEntry{
 					result: r, expiry: time.Now().Add(diffStatCacheTTL),

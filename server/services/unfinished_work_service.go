@@ -102,7 +102,11 @@ func (s *UnfinishedWorkService) instanceIndexes() (map[string][]string, map[stri
 		return s.idxCache.pathIdx, s.idxCache.prIdx
 	}
 
-	data, err := s.storage.ListInstanceData()
+	// ListInstanceDataWithWorktree (not ListInstanceData/LoadMinimal) so
+	// ActiveDir() below can see Worktree.WorktreePath — the scanner keys results
+	// by WorktreePath (the resolved directory), so the index must key on the
+	// same resolved concept or worktree sessions never match.
+	data, err := s.storage.ListInstanceDataWithWorktree()
 	if err != nil {
 		if s.idxCache.pathIdx != nil {
 			// Serve the stale cache rather than an empty index on a transient error.
@@ -114,15 +118,16 @@ func (s *UnfinishedWorkService) instanceIndexes() (map[string][]string, map[stri
 	pathIdx := make(map[string][]string, len(data))
 	prIdx := make(map[string]worktreePRInfo, len(data))
 	for _, d := range data {
-		if d.Path != "" && d.UUID != "" {
-			pathIdx[d.Path] = append(pathIdx[d.Path], d.UUID)
+		activeDir := d.ActiveDir()
+		if activeDir != "" && d.UUID != "" {
+			pathIdx[activeDir] = append(pathIdx[activeDir], d.UUID)
 		}
-		if d.Path == "" || d.GitHubPRNumber == 0 {
+		if activeDir == "" || d.GitHubPRNumber == 0 {
 			continue
 		}
 		// Prefer the first (or best-priority) PR we find for a given path.
-		if _, exists := prIdx[d.Path]; !exists {
-			prIdx[d.Path] = worktreePRInfo{
+		if _, exists := prIdx[activeDir]; !exists {
+			prIdx[activeDir] = worktreePRInfo{
 				Number:   d.GitHubPRNumber,
 				URL:      d.GitHubPRURL,
 				State:    d.GitHubPRState,

@@ -134,6 +134,10 @@ func (BacklogItem) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("Per-item override for the auto-rework cap (MaxAutoReworkIterationsOrDefault). Nil = use the global default. 0 = unlimited for this item. >0 = this item's own cap, replacing (not adding to) the global value."),
+		field.Float("cost_budget_threshold_usd").
+			Optional().
+			Nillable().
+			Comment("Per-item soft-budget-warning threshold in USD. Nil = no threshold configured, no warning ever fires for this item. Mirrors rework_cap_override's single-pointer-presence convention."),
 		field.UUID("next_workflow_id", uuid.UUID{}).
 			Optional().
 			Nillable().
@@ -225,6 +229,16 @@ func (BacklogItem) Edges() []ent.Edge {
 			Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.To("blocked_by_dependencies", BacklogItemDependency.Type).
 			Annotations(entsql.OnDelete(entsql.Cascade)),
+		// Deliberately NOT cascade, unlike every other child edge above:
+		// BacklogItem supports genuine hard deletion (DeleteBacklogItem), and
+		// a cascade here would let a hard delete silently destroy a pending OR
+		// answered-but-undelivered GuidanceRequest row with no trace —
+		// contradicting the "no answer is ever silently lost" bar. A
+		// hard-deleted item's still-open rows go stale instead, and are
+		// caught by Phase 8's self-heal sweep. See
+		// project_plans/durable-guidance-request/implementation/plan.md
+		// Task 1.1.1b.
+		edge.To("guidance_requests", GuidanceRequest.Type),
 	}
 }
 

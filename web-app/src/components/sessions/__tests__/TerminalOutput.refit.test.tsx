@@ -66,6 +66,12 @@ jest.mock("@/components/providers/ViewportProvider", () =>
 
 // eslint-disable-next-line import/first
 import { TerminalOutput } from "../TerminalOutput";
+import { TerminalPoolProvider } from "@/lib/terminal/TerminalPool";
+
+// TerminalOutput sources its xterm instance from the pool (see TerminalPool.tsx); renders need the provider.
+function withPool(children: React.ReactNode) {
+  return <TerminalPoolProvider>{children}</TerminalPoolProvider>;
+}
 // eslint-disable-next-line import/first
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
 // eslint-disable-next-line import/first
@@ -115,7 +121,7 @@ let streamMock: ReturnType<typeof makeStreamMock>;
 
 // XtermTerminal is lazy-loaded; flush the Suspense boundary so xtermRef is populated.
 async function renderTerminal(isVisible = false) {
-  const utils = render(<TerminalOutput sessionId="s1" baseUrl="/api" isVisible={isVisible} />);
+  const utils = render(withPool(<TerminalOutput sessionId="s1" baseUrl="/api" isVisible={isVisible} />));
   await act(async () => {});
   return utils;
 }
@@ -197,7 +203,7 @@ describe("TerminalOutput refit wiring", () => {
     const { rerender } = await renderTerminal();
     expect(mockXtermHandle.refit).not.toHaveBeenCalled();
 
-    rerender(<TerminalOutput sessionId="s1" baseUrl="/api" isVisible={true} />);
+    rerender(withPool(<TerminalOutput sessionId="s1" baseUrl="/api" isVisible={true} />));
     act(() => { jest.advanceTimersByTime(200); });
 
     expect(mockXtermHandle.refit).toHaveBeenCalledWith({ reason: "visibility" });
@@ -226,7 +232,7 @@ describe("TerminalOutput settle-driven bounce-hold bypass", () => {
 
   it("handleTerminalResize_should_PassBypass_When_ResizeFollowsSettleRefit", async () => {
     const vv = installVisualViewport();
-    await renderTerminal();
+    await renderTerminal(true); // pool forwards resizes only while visible
     act(() => { capturedXtermProps.onResize(80, 24); }); // seed lastResizeRef
     settleOnce(vv);
     expect(lastRefitOptions()).toEqual(expect.objectContaining({ reason: "viewport-settle" }));
@@ -240,7 +246,7 @@ describe("TerminalOutput settle-driven bounce-hold bypass", () => {
 
   it("handleTerminalResize_should_BypassOnlyOnce_When_OscillatingBackWithinSeconds", async () => {
     const vv = installVisualViewport();
-    await renderTerminal();
+    await renderTerminal(true); // pool forwards resizes only while visible
     act(() => { capturedXtermProps.onResize(80, 24); });
     settleOnce(vv);
     streamMock.resize.mockClear();
@@ -257,7 +263,7 @@ describe("TerminalOutput settle-driven bounce-hold bypass", () => {
 
   it("handleTerminalResize_should_NotBypassAgain_When_SettleRearmsContinuouslyButFitProducedNoResize", async () => {
     const vv = installVisualViewport();
-    await renderTerminal();
+    await renderTerminal(true); // pool forwards resizes only while visible
     act(() => { capturedXtermProps.onResize(80, 24); });
     settleOnce(vv);
     // The settle fit finished without a size change.
@@ -273,7 +279,7 @@ describe("TerminalOutput settle-driven bounce-hold bypass", () => {
 
   it("handleTerminalResize_should_NotPassBypass_When_NoSettleHasHappened", async () => {
     installVisualViewport();
-    await renderTerminal();
+    await renderTerminal(true); // pool forwards resizes only while visible
     act(() => { capturedXtermProps.onResize(80, 24); });
     act(() => { capturedXtermProps.onResize(80, 20); });
 
@@ -283,7 +289,7 @@ describe("TerminalOutput settle-driven bounce-hold bypass", () => {
 
 describe("TerminalOutput manual resize with stale dims", () => {
   it("handleManualResize_should_NotForceResizeOrClearBuffer_When_FitReportsStaleDims", async () => {
-    await renderTerminal();
+    await renderTerminal(true); // pool forwards resizes only while visible
     fireEvent.click(screen.getByLabelText("Redraw terminal (fixes a blank screen)"));
     const { onFitted } = mockXtermHandle.refit.mock.calls.at(-1)![0];
 
@@ -300,14 +306,14 @@ describe("TerminalOutput manual resize with stale dims", () => {
 
 describe("TerminalOutput Redraw button (Story 1.2.8)", () => {
   it("redrawButton_should_CallRefitWithManualResize_When_Tapped", async () => {
-    await renderTerminal();
+    await renderTerminal(true); // pool forwards resizes only while visible
     fireEvent.click(screen.getByRole("button", { name: "Redraw terminal (fixes a blank screen)" }));
     expect(mockXtermHandle.refit).toHaveBeenCalledTimes(1);
     expect(mockXtermHandle.refit).toHaveBeenCalledWith(expect.objectContaining({ reason: "manual-resize" }));
   });
 
   it("redrawButton_should_BeRenderedWhenToolbarCollapsed", async () => {
-    await renderTerminal();
+    await renderTerminal(true); // pool forwards resizes only while visible
     expect(screen.queryByTestId("toolbar-actions")).toBeNull(); // collapsed by default
     const button = screen.getByRole("button", { name: "Redraw terminal (fixes a blank screen)" });
     expect(button.textContent).toContain("Redraw");
@@ -333,7 +339,7 @@ describe("TerminalOutput scroll settings plumbing (Stories 1.2.5e-g)", () => {
   }
 
   it("connectionEpoch_should_Increment_When_ReconnectOrFullSnapshot", async () => {
-    const { rerender } = await renderTerminal();
+    const { rerender } = await renderTerminal(true); // pool forwards resizes only while visible
     expect(epoch()).toBe(0);
 
     const onFullSnapshot = await attachTerminalAndOutput();
@@ -343,7 +349,7 @@ describe("TerminalOutput scroll settings plumbing (Stories 1.2.5e-g)", () => {
     // Hard failure: the banner's Retry goes through the hook reconnect.
     streamMock = makeStreamMock({ isConnected: false, isHardFailed: true });
     (useTerminalStream as jest.Mock).mockReturnValue(streamMock);
-    rerender(<TerminalOutput sessionId="s1" baseUrl="/api" isVisible={false} />);
+    rerender(withPool(<TerminalOutput sessionId="s1" baseUrl="/api" isVisible={false} />));
     act(() => { jest.advanceTimersByTime(2100); });
     fireEvent.click(screen.getByRole("button", { name: /Retry/i }));
     expect(epoch()).toBe(2);
@@ -352,7 +358,7 @@ describe("TerminalOutput scroll settings plumbing (Stories 1.2.5e-g)", () => {
 
   it("TerminalOutput_should_ThreadSettingsToXterm_And_FollowScrollModeChanges", async () => {
     localStorage.setItem("terminal-scroll-override", "tui");
-    await renderTerminal();
+    await renderTerminal(true); // pool forwards resizes only while visible
     expect(capturedXtermProps.scrollGesture).toEqual(
       expect.objectContaining({ scrollOverride: "tui", gestureScrollEnabled: true, connectionEpoch: 0 }),
     );

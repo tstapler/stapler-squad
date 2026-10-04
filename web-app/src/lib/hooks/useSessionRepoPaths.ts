@@ -11,7 +11,7 @@ export function useSessionRepoPaths(): string[] {
     const seen = new Set<string>();
     const paths: string[] = [];
     for (const s of sessions) {
-      const p = s.path;
+      const p = s.repoRoot;
       if (p && !seen.has(p)) {
         seen.add(p);
         paths.push(p);

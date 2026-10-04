@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { type Session, SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
-import { groupSessions, type GroupingStrategy, type GroupedSessions } from "@/lib/grouping/strategies";
+import { groupSessions, groupWithPinned, type GroupingStrategy, type GroupedSessions } from "@/lib/grouping/strategies";
 import { compareSessionsByCost } from "@/components/sessions/sessionCostSort";
 
 export type SortField = "lastActivity" | "name" | "createdAt" | "updatedAt" | "tokenCost";
@@ -71,7 +71,7 @@ export function useFilteredGroupedSessions({
         const query = searchQuery.toLowerCase();
         const matchesSearch =
           session.title.toLowerCase().includes(query) ||
-          session.path.toLowerCase().includes(query) ||
+          session.activeDir.toLowerCase().includes(query) ||
           session.branch.toLowerCase().includes(query) ||
           (session.category && session.category.toLowerCase().includes(query)) ||
           (session.tags && session.tags.some(tag => tag.toLowerCase().includes(query))) ||
@@ -161,9 +161,11 @@ export function useFilteredGroupedSessions({
   // tick a caller may drive — a session can cross the stale threshold with no change
   // to sortedSessions/groupingStrategy, and this is the only way to pick that up.
   const groupedSessionsResult = useMemo(() => {
-    return groupSessions(sortedSessions, groupingStrategy, {
-      thresholdMinutes: staleThresholdMinutes,
-    });
+    return groupWithPinned(sortedSessions, (rest) =>
+      groupSessions(rest, groupingStrategy, {
+        thresholdMinutes: staleThresholdMinutes,
+      })
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortedSessions, groupingStrategy, staleThresholdMinutes, staleRecomputeTick]);
 

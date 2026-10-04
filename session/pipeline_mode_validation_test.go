@@ -187,3 +187,166 @@ func TestValidatePipelineModeContent_should_Accept_When_ContentTemplateFieldsCon
 	})
 	assert.NoError(t, err)
 }
+
+// ─── Stage executors (Epic 1.3 of backlog-stage-execution-costs) ───────────
+
+// TestValidateStageExecutors_should_Accept_When_TriageProgramIsClaudeOrGemini
+// (plan Task 1.3.1f): both headless-capable programs are accepted for the
+// triage role.
+func TestValidateStageExecutors_should_Accept_When_TriageProgramIsClaudeOrGemini(t *testing.T) {
+	t.Parallel()
+	for _, program := range []string{"claude", "gemini"} {
+		t.Run(program, func(t *testing.T) {
+			t.Parallel()
+			err := ValidatePipelineModeContent(PipelineModeContentFields{
+				StageExecutors: map[StageRole]PipelineStageExecutor{
+					StageRoleTriage: {Program: program},
+				},
+			})
+			assert.NoError(t, err)
+		})
+	}
+}
+
+// TestValidateStageExecutors_should_RejectNamingProgramAndStage_When_AiderConfiguredForTriage
+// (plan.md Story 1.3.1 AC1): "aider" has no headless mode, so it's rejected
+// for the triage role, naming both the rejected program and the stage.
+func TestValidateStageExecutors_should_RejectNamingProgramAndStage_When_AiderConfiguredForTriage(t *testing.T) {
+	t.Parallel()
+	err := ValidatePipelineModeContent(PipelineModeContentFields{
+		StageExecutors: map[StageRole]PipelineStageExecutor{
+			StageRoleTriage: {Program: "aider"},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "aider")
+	assert.Contains(t, err.Error(), "triage")
+}
+
+// TestValidateStageExecutors_should_RejectNamingProgramAndStage_When_AiderConfiguredForReview
+// mirrors the triage case for the review role — the headless-only allow-list
+// applies to both non-work roles.
+func TestValidateStageExecutors_should_RejectNamingProgramAndStage_When_AiderConfiguredForReview(t *testing.T) {
+	t.Parallel()
+	err := ValidatePipelineModeContent(PipelineModeContentFields{
+		StageExecutors: map[StageRole]PipelineStageExecutor{
+			StageRoleReview: {Program: "aider"},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "aider")
+	assert.Contains(t, err.Error(), "review")
+}
+
+// TestValidateStageExecutors_should_Accept_When_AiderConfiguredForWorkStage
+// (plan.md Story 1.3.1 AC2): the work stage spawns an interactive Instance,
+// not a headless call, so it has no program allow-list.
+func TestValidateStageExecutors_should_Accept_When_AiderConfiguredForWorkStage(t *testing.T) {
+	t.Parallel()
+	err := ValidatePipelineModeContent(PipelineModeContentFields{
+		StageExecutors: map[StageRole]PipelineStageExecutor{
+			StageRoleWork: {Program: "aider"},
+		},
+	})
+	assert.NoError(t, err)
+}
+
+// TestValidateStageExecutors_should_Accept_When_ModelIsResolvableFamilyAlias
+// (plan.md Story 1.3.1 AC3, family-alias branch): a "family:"-prefixed alias
+// skips the pricing-table cross-check entirely.
+func TestValidateStageExecutors_should_Accept_When_ModelIsResolvableFamilyAlias(t *testing.T) {
+	t.Parallel()
+	err := ValidatePipelineModeContent(PipelineModeContentFields{
+		StageExecutors: map[StageRole]PipelineStageExecutor{
+			StageRoleReview: {Model: "family:opus"},
+		},
+	})
+	assert.NoError(t, err)
+}
+
+// TestValidateStageExecutors_should_Reject_When_ModelContainsShellMetacharacters
+// covers Task 1.3.1c's character-class guard (shared with
+// server/workflows.ValidateModel) independent of the pricing cross-check.
+func TestValidateStageExecutors_should_Reject_When_ModelContainsShellMetacharacters(t *testing.T) {
+	t.Parallel()
+	err := ValidatePipelineModeContent(PipelineModeContentFields{
+		StageExecutors: map[StageRole]PipelineStageExecutor{
+			StageRoleTriage: {Model: "claude; rm -rf /"},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "triage")
+}
+
+// TestValidateStageExecutors_should_RejectNamingModelAndOverride_When_ModelIsUnrecognized
+// (plan.md Story 1.3.1 AC3): a syntactically valid but unrecognized model ID
+// is rejected unless force_unknown_model is set — the whole point of this
+// story is catching a BUG-062-style typo a character-class check alone
+// cannot catch.
+func TestValidateStageExecutors_should_RejectNamingModelAndOverride_When_ModelIsUnrecognized(t *testing.T) {
+	t.Parallel()
+	err := ValidatePipelineModeContent(PipelineModeContentFields{
+		StageExecutors: map[StageRole]PipelineStageExecutor{
+			StageRoleReview: {Model: "claude-opus-9000"},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "claude-opus-9000")
+	assert.Contains(t, err.Error(), "force_unknown_model")
+}
+
+// TestValidateStageExecutors_should_Accept_When_UnrecognizedModelHasForceUnknownModelSet
+// is the override half of the same acceptance criterion.
+func TestValidateStageExecutors_should_Accept_When_UnrecognizedModelHasForceUnknownModelSet(t *testing.T) {
+	t.Parallel()
+	err := ValidatePipelineModeContent(PipelineModeContentFields{
+		StageExecutors: map[StageRole]PipelineStageExecutor{
+			StageRoleReview: {Model: "claude-opus-9000"},
+		},
+		ForceUnknownModel: true,
+	})
+	assert.NoError(t, err)
+}
+
+// TestValidateStageExecutors_should_Accept_When_ModelIsKnownPricingTableEntry
+// is the zero-regression companion: a real, recognized model ID (normalizes
+// to a known pricing-table family) is accepted with no override needed.
+func TestValidateStageExecutors_should_Accept_When_ModelIsKnownPricingTableEntry(t *testing.T) {
+	t.Parallel()
+	err := ValidatePipelineModeContent(PipelineModeContentFields{
+		StageExecutors: map[StageRole]PipelineStageExecutor{
+			StageRoleTriage: {Model: "claude-haiku-4-5"},
+		},
+	})
+	assert.NoError(t, err)
+}
+
+// TestValidateStageExecutors_should_RejectNamingKeyAndValidRoles_When_MapKeyIsInvalid
+// (plan.md Story 1.3.1 AC4): a typo'd map key ("wrok") is rejected rather
+// than silently round-tripping through JSON/proto and never being consulted
+// by ExecutorFor.
+func TestValidateStageExecutors_should_RejectNamingKeyAndValidRoles_When_MapKeyIsInvalid(t *testing.T) {
+	t.Parallel()
+	err := ValidatePipelineModeContent(PipelineModeContentFields{
+		StageExecutors: map[StageRole]PipelineStageExecutor{
+			StageRole("wrok"): {Model: "claude-haiku-4-5"},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "wrok")
+	assert.Contains(t, err.Error(), string(StageRoleTriage))
+	assert.Contains(t, err.Error(), string(StageRoleReview))
+	assert.Contains(t, err.Error(), string(StageRoleWork))
+}
+
+// TestValidateStageExecutors_should_Accept_When_ProgramAndModelAreBothEmpty
+// covers the "inherit default" case every stage-executor entry allows.
+func TestValidateStageExecutors_should_Accept_When_ProgramAndModelAreBothEmpty(t *testing.T) {
+	t.Parallel()
+	err := ValidatePipelineModeContent(PipelineModeContentFields{
+		StageExecutors: map[StageRole]PipelineStageExecutor{
+			StageRoleWork: {},
+		},
+	})
+	assert.NoError(t, err)
+}

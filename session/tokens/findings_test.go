@@ -330,6 +330,90 @@ func TestDetectOversizedStartContext_WhenFirstTurnModelUnpriced_ExpectNilNotZero
 	assert.Nil(t, f)
 }
 
+// --- #879: detectLowCacheROI ---
+
+func TestDetectLowCacheROI_WhenCacheWrittenButNeverRead_ExpectCriticalFindingWithNetLoss(t *testing.T) {
+	t.Parallel()
+	pt := pricedTable()
+	r := &ParseResult{
+		SessionUUID:   "sess-roi-1",
+		PrimaryModel:  "claude-sonnet-4",
+		CacheCreation: 500_000,
+		CacheRead:     0,
+	}
+	// roi = 0*(3.00-0.30)/1e6 - 500_000*3.75/1e6 = -1.875 (below lowCacheROICriticalUSD)
+
+	f := detectLowCacheROI(r, pt)
+	require.NotNil(t, f)
+	assert.Equal(t, FindingLowCacheROI, f.Type)
+	assert.Equal(t, SeverityCritical, f.Severity)
+	assert.InDelta(t, 1.875, float64(f.DollarImpact), 0.001)
+	assert.Contains(t, f.Message, "$1.88")
+	assert.Contains(t, f.Message, "500,000")
+}
+
+func TestDetectLowCacheROI_WhenSmallNetLoss_ExpectWarnSeverity(t *testing.T) {
+	t.Parallel()
+	pt := pricedTable()
+	r := &ParseResult{
+		SessionUUID:   "sess-roi-2",
+		PrimaryModel:  "claude-sonnet-4",
+		CacheCreation: 100_000,
+		CacheRead:     50_000,
+	}
+	// roi = 50_000*2.70/1e6 - 100_000*3.75/1e6 = 0.135 - 0.375 = -0.24 (above the -1.00 critical line)
+
+	f := detectLowCacheROI(r, pt)
+	require.NotNil(t, f)
+	assert.Equal(t, SeverityWarn, f.Severity)
+	assert.InDelta(t, 0.24, float64(f.DollarImpact), 0.001)
+}
+
+func TestDetectLowCacheROI_WhenCacheCreationBelowMinimum_ExpectNoFinding(t *testing.T) {
+	t.Parallel()
+	pt := pricedTable()
+	r := &ParseResult{
+		SessionUUID:   "sess-roi-3",
+		PrimaryModel:  "claude-sonnet-4",
+		CacheCreation: 10_000, // below minCacheCreationForROI (50_000)
+		CacheRead:     0,
+	}
+	// Would be a negative ROI on its own merits, but too little cache activity
+	// for that negative number to mean anything — must abstain, not fire.
+
+	f := detectLowCacheROI(r, pt)
+	assert.Nil(t, f)
+}
+
+func TestDetectLowCacheROI_WhenCacheWellUtilized_ExpectNoFinding(t *testing.T) {
+	t.Parallel()
+	pt := pricedTable()
+	r := &ParseResult{
+		SessionUUID:   "sess-roi-4",
+		PrimaryModel:  "claude-sonnet-4",
+		CacheCreation: 100_000,
+		CacheRead:     500_000,
+	}
+	// roi = 500_000*2.70/1e6 - 100_000*3.75/1e6 = 1.35 - 0.375 = +0.975 (positive, cache paid for itself)
+
+	f := detectLowCacheROI(r, pt)
+	assert.Nil(t, f)
+}
+
+func TestDetectLowCacheROI_WhenModelUnpriced_ExpectNilNotZeroImpactFinding(t *testing.T) {
+	t.Parallel()
+	pt := pricedTable()
+	r := &ParseResult{
+		SessionUUID:   "sess-roi-5",
+		PrimaryModel:  "claude-unknown-model",
+		CacheCreation: 500_000,
+		CacheRead:     0,
+	}
+
+	f := detectLowCacheROI(r, pt)
+	assert.Nil(t, f)
+}
+
 // --- Story 1.1.3: ComputeFindings aggregator + panic isolation ---
 
 func TestComputeFindings_WhenCleanSession_ExpectNoFindings(t *testing.T) {
@@ -354,7 +438,7 @@ func TestComputeFindings_WhenPanicIsolationWrapperUsed_ExpectPanicDoesNotEscapeA
 	// the test, which would race a parallel sibling's own log output.
 
 	// Task 1.1.3d: no constructible ParseResult reaches a panicking index/divide
-	// in any of the 4 shipped detectors (each guards its own precondition), so
+	// in any of the 5 shipped detectors (each guards its own precondition), so
 	// this test exercises the identical recover-wrapping closure against a
 	// test-local detector double that deliberately panics, rather than a real
 	// detector. No mutable package-level seam is added to findings.go for this.
@@ -434,4 +518,52 @@ func TestComputeWasteScore_WhenCleanSession_ExpectLowScore(t *testing.T) {
 	score := ComputeWasteScore(r, pt)
 	require.NotNil(t, score)
 	assert.Less(t, float64(*score), 30.0)
+}
+
+// --- ComputeFindingID ---
+
+func TestComputeFindingID_WhenSameInputs_ExpectSameID(t *testing.T) {
+	t.Parallel()
+	id1 := ComputeFindingID("sess-1", "conv-1", FindingCacheHitFloorBreach, "Cache hit rate 9% is below the 40% floor.")
+	id2 := ComputeFindingID("sess-1", "conv-1", FindingCacheHitFloorBreach, "Cache hit rate 9% is below the 40% floor.")
+	assert.Equal(t, id1, id2)
+	assert.NotEmpty(t, id1)
+}
+
+// A finished session's transcript is immutable, so ComputeFindings always
+// recomputes byte-identical Findings for it — this is the case ID stability
+// must hold for, so a dismissal actually sticks.
+func TestComputeFindingID_WhenRecomputedFromIdenticalFinishedSessionData_ExpectStableID(t *testing.T) {
+	t.Parallel()
+	msg := "Session used 3,000,000 tokens, over the 2,000,000 ceiling — estimated cost $12.34."
+	first := ComputeFindingID("sess-42", "conv-42", FindingSessionTokenCeiling, msg)
+	second := ComputeFindingID("sess-42", "conv-42", FindingSessionTokenCeiling, msg)
+	assert.Equal(t, first, second, "a finished session's identical recomputation must reproduce the same finding_id, or a dismissal would never stick")
+}
+
+// The core recurrence-vs-new-occurrence contract: a still-active session
+// whose underlying condition changes materially (here, the message's
+// embedded numbers change as the transcript grows) must NOT collide with
+// the old finding_id, so it can never be silently suppressed by dismissing
+// the earlier occurrence.
+func TestComputeFindingID_WhenMessageContentDiffers_ExpectDifferentID(t *testing.T) {
+	t.Parallel()
+	before := ComputeFindingID("sess-1", "conv-1", FindingCacheHitFloorBreach, "Cache hit rate 80% is below the 95% floor over 6 turns.")
+	after := ComputeFindingID("sess-1", "conv-1", FindingCacheHitFloorBreach, "Cache hit rate 60% is below the 95% floor over 20 turns.")
+	assert.NotEqual(t, before, after)
+}
+
+func TestComputeFindingID_WhenFindingTypeDiffers_ExpectDifferentID(t *testing.T) {
+	t.Parallel()
+	msg := "same message text"
+	a := ComputeFindingID("sess-1", "conv-1", FindingCacheHitFloorBreach, msg)
+	b := ComputeFindingID("sess-1", "conv-1", FindingSessionTokenCeiling, msg)
+	assert.NotEqual(t, a, b)
+}
+
+func TestComputeFindingID_WhenSessionIDEmpty_ExpectFallsBackToConversationID(t *testing.T) {
+	t.Parallel()
+	viaSessionID := ComputeFindingID("orphan-conv-1", "", FindingOversizedStartContext, "msg")
+	viaConversationID := ComputeFindingID("", "orphan-conv-1", FindingOversizedStartContext, "msg")
+	assert.Equal(t, viaSessionID, viaConversationID, "an orphan session (empty sessionID) must key identically whether the caller passes its conversationID as sessionID or conversationID")
 }

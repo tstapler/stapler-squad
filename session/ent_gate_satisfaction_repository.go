@@ -2,11 +2,13 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/gatesatisfactionrecord"
+	"github.com/tstapler/stapler-squad/session/ent/predicate"
 )
 
 // EntGateSatisfactionRepository implements GateSatisfactionRepository using
@@ -64,19 +66,23 @@ func (r *EntGateSatisfactionRepository) GetByItemAndGate(ctx context.Context, it
 	return dataFromEntGateSatisfactionRecord(row), nil
 }
 
-// Update applies a partial update to the row for (itemID, gateID).
+// Update applies a partial update to the row for (itemID, gateID) via a
+// single conditional bulk update, rather than a separate select-then-
+// UpdateOneID — the latter is a TOCTOU race between two concurrent callers
+// for the same (itemID, gateID) (ADR-006, Part A's Concurrency paragraph).
+// When in.ExpectedSatisfied is set, the update's WHERE clause additionally
+// requires satisfied == *in.ExpectedSatisfied, turning the write into a
+// compare-and-swap: the affected-row count tells us whether the CAS won.
 func (r *EntGateSatisfactionRepository) Update(ctx context.Context, itemID, gateID uuid.UUID, in GateSatisfactionUpdateInput) (*GateSatisfactionData, error) {
-	existing, err := r.client.GateSatisfactionRecord.Query().
-		Where(gatesatisfactionrecord.ItemID(itemID), gatesatisfactionrecord.GateID(gateID)).
-		Only(ctx)
-	if err != nil {
-		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: gate satisfaction record for item %s gate %s", ErrNotFound, itemID, gateID)
-		}
-		return nil, fmt.Errorf("get gate satisfaction record for item %s gate %s: %w", itemID, gateID, err)
+	preds := []predicate.GateSatisfactionRecord{
+		gatesatisfactionrecord.ItemID(itemID),
+		gatesatisfactionrecord.GateID(gateID),
+	}
+	if in.ExpectedSatisfied != nil {
+		preds = append(preds, gatesatisfactionrecord.Satisfied(*in.ExpectedSatisfied))
 	}
 
-	u := r.client.GateSatisfactionRecord.UpdateOneID(existing.ID)
+	u := r.client.GateSatisfactionRecord.Update().Where(preds...)
 	if in.Satisfied != nil {
 		u.SetSatisfied(*in.Satisfied)
 	}
@@ -90,14 +96,37 @@ func (r *EntGateSatisfactionRepository) Update(ctx context.Context, itemID, gate
 		u.SetOutcomeDetail(in.OutcomeDetail)
 	}
 
-	row, err := u.Save(ctx)
+	affected, err := u.Save(ctx)
 	if err != nil {
-		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: gate satisfaction record %s", ErrNotFound, existing.ID)
-		}
-		return nil, fmt.Errorf("update gate satisfaction record %s: %w", existing.ID, err)
+		return nil, fmt.Errorf("update gate satisfaction record for item %s gate %s: %w", itemID, gateID, err)
 	}
-	return dataFromEntGateSatisfactionRecord(row), nil
+	if affected == 0 {
+		return nil, r.zeroRowsUpdateError(ctx, itemID, gateID, in.ExpectedSatisfied)
+	}
+
+	row, err := r.GetByItemAndGate(ctx, itemID, gateID)
+	if err != nil {
+		return nil, fmt.Errorf("re-fetch updated gate satisfaction record for item %s gate %s: %w", itemID, gateID, err)
+	}
+	return row, nil
+}
+
+// zeroRowsUpdateError disambiguates Update's zero-affected-rows case: "row
+// doesn't exist" (ErrNotFound, today's exact pre-ADR-006 behavior) from
+// "another writer already changed Satisfied out from under this CAS"
+// (ErrConflict), via exactly one follow-up lookup — reached only on this
+// error path, never on Update's common success path.
+func (r *EntGateSatisfactionRepository) zeroRowsUpdateError(ctx context.Context, itemID, gateID uuid.UUID, expectedSatisfied *bool) error {
+	if _, lookupErr := r.GetByItemAndGate(ctx, itemID, gateID); lookupErr != nil {
+		if errors.Is(lookupErr, ErrNotFound) {
+			return fmt.Errorf("%w: gate satisfaction record for item %s gate %s", ErrNotFound, itemID, gateID)
+		}
+		return fmt.Errorf("get gate satisfaction record for item %s gate %s: %w", itemID, gateID, lookupErr)
+	}
+	if expectedSatisfied != nil {
+		return fmt.Errorf("%w: gate satisfaction record for item %s gate %s no longer has satisfied == %v", ErrConflict, itemID, gateID, *expectedSatisfied)
+	}
+	return fmt.Errorf("%w: gate satisfaction record for item %s gate %s", ErrNotFound, itemID, gateID)
 }
 
 // ListUnsatisfied returns every row with satisfied == false — the in-flight

@@ -2,11 +2,13 @@ package session
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	entsession "github.com/tstapler/stapler-squad/session/ent/session"
 )
 
@@ -64,4 +66,48 @@ func TestBackdateCreationProgress(t *testing.T, storage *Storage, uuid string, w
 	if n != 1 {
 		t.Fatalf("TestBackdateCreationProgress: expected to update 1 row, updated %d", n)
 	}
+}
+
+// TestBackdateItemSessionCreatedAt rewrites a persisted ItemSession's
+// created_at column directly to `when`. created_at is Immutable() in the ent
+// schema (session/ent/schema/itemsession.go), so there is no generated
+// setter for it -- unlike TestBackdateCreationProgress's field, it can't be
+// reached through client.ItemSession.Update() at all. Callers that need to
+// simulate an old rework round without a real sleep (the Superseded-Session
+// Sweeper's tests in server/services, seeding rounds "as if persisted before
+// the sweeper ever ran") instead open a second raw connection to the same
+// database and issue a plain UPDATE, using the identical DSN-building the
+// production connection uses so the write round-trips through the same
+// modernc.org/sqlite time-compat quirks (see WithEntTimeCompat's doc
+// comment) that later ent reads depend on.
+func TestBackdateItemSessionCreatedAt(t *testing.T, storage *Storage, itemSessionID string, when time.Time) error {
+	t.Helper()
+	if storage.repo == nil {
+		return fmt.Errorf("TestBackdateItemSessionCreatedAt: storage has no repository")
+	}
+
+	dsn := sqlitedsn.New(storage.repo.dbPath).
+		WithWAL().
+		WithBusyTimeout(5000 * time.Millisecond).
+		WithForeignKeysShort().
+		WithEntTimeCompat().
+		Build()
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return fmt.Errorf("TestBackdateItemSessionCreatedAt: open: %w", err)
+	}
+	defer db.Close()
+
+	res, err := db.ExecContext(context.Background(), "UPDATE item_sessions SET created_at = ? WHERE id = ?", when, itemSessionID)
+	if err != nil {
+		return fmt.Errorf("TestBackdateItemSessionCreatedAt: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("TestBackdateItemSessionCreatedAt: RowsAffected: %w", err)
+	}
+	if n != 1 {
+		return fmt.Errorf("TestBackdateItemSessionCreatedAt: expected to update 1 row, updated %d", n)
+	}
+	return nil
 }

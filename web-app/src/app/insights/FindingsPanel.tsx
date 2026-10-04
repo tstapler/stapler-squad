@@ -1,12 +1,15 @@
 // +feature: insights-findings-panel
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Badge } from "@/components/ui/Badge";
 import { EstimatedValue } from "@/components/ui/EstimatedValue";
 import { Severity } from "@/gen/session/v1/insights_pb";
 import type { WasteFinding, SessionTokenSummary } from "@/gen/session/v1/insights_pb";
+import { useDismissFinding } from "@/lib/hooks/useInsightsService";
+import { pathBasename } from "./insightsFormatters";
 import { errorBox, sectionTitle, section } from "./InsightsDashboard.css";
 import {
   panel,
@@ -17,6 +20,9 @@ import {
   cardMessage,
   cardImpact,
   cardAction,
+  cardActions,
+  cardSessionLabel,
+  dismissButton,
   skeletonList,
   cleanState,
   unpricedState,
@@ -64,6 +70,44 @@ function FindingsSkeleton() {
   );
 }
 
+/** Key a session the same way a finding is keyed: sessionId, falling back to conversationId for orphans. */
+function sessionKey(sessionId: string, conversationId: string): string {
+  return sessionId || conversationId;
+}
+
+function buildSessionMap(sessions: SessionTokenSummary[]): Map<string, SessionTokenSummary> {
+  const map = new Map<string, SessionTokenSummary>();
+  for (const s of sessions) {
+    map.set(sessionKey(s.sessionId, s.conversationId), s);
+  }
+  return map;
+}
+
+/**
+ * Tracks findings dismissed via the RPC during this render and exposes an
+ * optimistic dismiss handler. Not synced with a refetch — the next natural
+ * GetInsightsSummary call (WatchInsights' parse_complete refetch, or a manual
+ * Retry) already excludes dismissed findings server-side.
+ */
+function useOptimisticDismiss() {
+  const [dismissedLocally, setDismissedLocally] = useState<Set<string>>(new Set());
+  const { dismissFinding } = useDismissFinding();
+
+  const handleDismiss = (finding: WasteFinding) => {
+    setDismissedLocally((prev) => new Set(prev).add(finding.findingId));
+    dismissFinding(finding.findingId, finding.sessionId, finding.conversationId, finding.findingType).catch((err) => {
+      console.error("[FindingsPanel] dismissFinding failed:", err);
+      setDismissedLocally((prev) => {
+        const next = new Set(prev);
+        next.delete(finding.findingId);
+        return next;
+      });
+    });
+  };
+
+  return { dismissedLocally, handleDismiss };
+}
+
 /**
  * FindingsPanel renders the ranked waste-pattern verdicts computed server-side
  * by GetInsightsSummary. Four states, checked in this precedence order:
@@ -81,6 +125,10 @@ function FindingsSkeleton() {
  * design/ux.md §"Interaction flow" step 5.
  */
 export function FindingsPanel({ findings, sessions, loading, error, onRetry }: FindingsPanelProps) {
+  const { dismissedLocally, handleDismiss } = useOptimisticDismiss();
+  const sessionMap = buildSessionMap(sessions ?? []);
+  const visibleFindings = (findings ?? []).filter((f) => !dismissedLocally.has(f.findingId));
+
   return (
     <section className={section} data-testid="findings-panel">
       <h2 className={sectionTitle}>Waste Findings</h2>
@@ -100,13 +148,18 @@ export function FindingsPanel({ findings, sessions, loading, error, onRetry }: F
           </div>
         )}
 
-        {!loading && !error && renderResolvedState(findings ?? [], sessions ?? [])}
+        {!loading && !error && renderResolvedState(visibleFindings, sessions ?? [], sessionMap, handleDismiss)}
       </div>
     </section>
   );
 }
 
-function renderResolvedState(findings: WasteFinding[], sessions: SessionTokenSummary[]) {
+function renderResolvedState(
+  findings: WasteFinding[],
+  sessions: SessionTokenSummary[],
+  sessionMap: Map<string, SessionTokenSummary>,
+  onDismiss: (finding: WasteFinding) => void
+) {
   if (findings.length === 0) {
     // Checked BEFORE the clean-state fallback: an all-unpriced-model
     // dashboard also has findings.length === 0, and must never be mistaken
@@ -125,7 +178,12 @@ function renderResolvedState(findings: WasteFinding[], sessions: SessionTokenSum
   return (
     <ul className={list} role="list">
       {findings.map((f, i) => (
-        <FindingCard key={`${f.sessionId}-${f.conversationId}-${i}`} finding={f} />
+        <FindingCard
+          key={`${f.sessionId}-${f.conversationId}-${i}`}
+          finding={f}
+          session={sessionMap.get(sessionKey(f.sessionId, f.conversationId))}
+          onDismiss={onDismiss}
+        />
       ))}
     </ul>
   );
@@ -134,7 +192,17 @@ function renderResolvedState(findings: WasteFinding[], sessions: SessionTokenSum
 const dollarImpactTooltip =
   "Modeled from the detector's own heuristic (cache-hit rate, context ceiling, etc.), not a metered figure — see ADR-002 (findings are non-summable across sessions).";
 
-function FindingCard({ finding }: { finding: WasteFinding }) {
+interface FindingCardProps {
+  finding: WasteFinding;
+  // The finding's session, cross-referenced from the sessions array the
+  // parent FindingsPanel already receives — undefined only if the backend's
+  // findings/sessions lists ever disagree (never expected in practice, but
+  // FindingCard degrades to omitting the label rather than throwing).
+  session: SessionTokenSummary | undefined;
+  onDismiss: (finding: WasteFinding) => void;
+}
+
+function FindingCard({ finding, session, onDismiss }: FindingCardProps) {
   const { intent, label } = severityBadge[finding.severity] ?? severityBadge[Severity.UNSPECIFIED];
 
   // Every finding is a single-session finding (one WasteFinding per
@@ -158,10 +226,20 @@ function FindingCard({ finding }: { finding: WasteFinding }) {
           </EstimatedValue>
         </div>
         <span className={cardMessage}>{finding.message}</span>
+        {session?.projectPath && (
+          <span className={cardSessionLabel} title={session.projectPath}>
+            {pathBasename(session.projectPath)}
+          </span>
+        )}
       </div>
-      <Link href={href} className={cardAction}>
-        View session →
-      </Link>
+      <div className={cardActions}>
+        <Link href={href} className={cardAction}>
+          View session →
+        </Link>
+        <button type="button" className={dismissButton} onClick={() => onDismiss(finding)}>
+          Dismiss
+        </button>
+      </div>
     </li>
   );
 }

@@ -11,12 +11,62 @@
 | `service.log` / `service.log.old` | Raw stdout/stderr of the systemd/launchd-managed service — startup banners, panics that happen before logging is initialized, and anything written outside the `log` package. Check here first for crash-on-boot issues the structured log never saw. |
 | `debug-snapshot-*.json` | One-off diagnostic dumps (goroutine/heap snapshots), not part of the regular log stream — see `docs/how-to/profile-lockups.md`. |
 
+The path above is the **shared/default** location only. A named instance
+(`STAPLER_SQUAD_INSTANCE=<name>`) or workspace mode
+(`STAPLER_SQUAD_WORKSPACE_MODE=true` or a `SwitchDatabase`-set workspace
+preference) logs elsewhere instead — see `docs/reference/state-isolation.md`
+for the full priority list. If `~/.stapler-squad/logs/staplersquad.log` looks
+stale despite the service clearly being active, that's why: check
+`service.log`'s startup banner for the `Global log: <path>` line, which
+always names the file actually being written to for that run.
+
 Every line is a flat JSON object — pull specific fields with `jq` rather than `grep`ping text:
 
 ```bash
 jq -r 'select(.level=="ERROR")' ~/.stapler-squad/logs/staplersquad.log
 jq -r 'select(.session=="my-session-title")' ~/.stapler-squad/logs/staplersquad.log
 ```
+
+**Note:** the backlog/triage/review call sites (`server/services/backlog_service_triage.go`,
+`server/services/backlog_service_trigger_triage.go`, `session/backlog_lifecycle.go`,
+`session/backlog_lifecycle_triage.go`) used to log through the older
+`log.InfoLog()/ErrorLog().Printf(...)` API, which wrote a plain
+`[pid-...] LEVEL:timestamp file:line: [Tag] message key=val ...` line — not a
+JSON object, so `jq` silently skipped it. These four files were migrated to
+the structured API (2026-09-15); `tools/lint/nolegacylog` now fails the build
+if a legacy call is reintroduced into any of them. If you find a line from
+one of these files that `jq` can't see, it's a regression — file a bug rather
+than reaching for `grep` as the permanent workaround.
+
+## Filtering logs for one backlog/triage session
+
+Every `TriggerTriage`/`TriggerReReview`/`BacklogLifecycle` log line carries an
+`item` and/or `session` field with the item ID / `headless-triage-<uuid>` /
+`headless-re-review-<uuid>` session ID shown in the backlog item's Sessions
+list in the web UI:
+
+```bash
+jq -r 'select(.session=="headless-triage-34925c72-c4de-4036-8a17-249d25b7aab2")' ~/.stapler-squad/logs/staplersquad.log
+jq -r 'select(.item=="<item-id>")' ~/.stapler-squad/logs/staplersquad.log
+```
+
+Plain `grep` on the same ID still works too (and is the only option for any
+file that hasn't been migrated yet, or across gzipped rotated segments):
+
+```bash
+grep "headless-triage-34925c72-c4de-4036-8a17-249d25b7aab2" ~/.stapler-squad/logs/staplersquad.log
+# or, across rotated segments too:
+grep -h "<item-id-or-session-id>" ~/.stapler-squad/logs/staplersquad.log ~/.stapler-squad/logs/*.log.gz 2>/dev/null
+```
+
+This is the fastest way to answer "why did this triage/review fail" — it
+shows the start line, the raw LLM output on a parse failure (also durably
+saved under `~/.stapler-squad/headless-failures/`, and linked from the
+backlog item detail page's failure notice once `end_reason` is set — see
+`classifyHeadlessCallError` and the parse-failure branch in
+`server/services/backlog_service_trigger_triage.go`), and any
+`reconcileOrphanedTriageItems`/`AutoRespawnTriage` follow-up lines for the
+same item, all in one pass — no need to correlate timestamps by hand.
 
 ## Log levels: global and per-package
 

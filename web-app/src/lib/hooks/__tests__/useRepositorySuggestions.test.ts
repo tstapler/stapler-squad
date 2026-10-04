@@ -44,7 +44,7 @@ const DAY_S = BigInt(24 * 60 * 60);
 
 /** Build a minimal proto-like session object. */
 function makeSession(
-  path: string,
+  activeDir: string,
   opts: {
     updatedAtS?: bigint;
     createdAtS?: bigint;
@@ -52,7 +52,7 @@ function makeSession(
   } = {},
 ) {
   return {
-    path,
+    activeDir,
     updatedAt: opts.updatedAtS !== undefined ? { seconds: opts.updatedAtS, nanos: 0 } : undefined,
     createdAt: opts.createdAtS !== undefined ? { seconds: opts.createdAtS, nanos: 0 } : undefined,
     lastMeaningfulOutput: opts.lastOutputS !== undefined ? { seconds: opts.lastOutputS, nanos: 0 } : undefined,
@@ -145,9 +145,9 @@ describe("useRepositorySuggestions", () => {
     expect(result.current.isLoading).toBe(false);
   });
 
-  it("handles sessions with undefined path gracefully", async () => {
+  it("handles sessions with undefined activeDir gracefully", async () => {
     const sessions = [
-      { path: undefined, updatedAt: { seconds: NOW_S, nanos: 0 } },
+      { activeDir: undefined, updatedAt: { seconds: NOW_S, nanos: 0 } },
       makeSession("/repo/valid", { updatedAtS: NOW_S }),
     ];
     mockListSessions.mockResolvedValue({ sessions });

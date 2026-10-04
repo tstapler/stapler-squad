@@ -57,6 +57,12 @@ jest.mock("@/components/providers/ViewportProvider", () =>
 
 // eslint-disable-next-line import/first
 import { TerminalOutput } from "../TerminalOutput";
+import { TerminalPoolProvider } from "@/lib/terminal/TerminalPool";
+
+// TerminalOutput sources its xterm instance from the pool (see TerminalPool.tsx); renders need the provider.
+function withPool(children: React.ReactNode) {
+  return <TerminalPoolProvider>{children}</TerminalPoolProvider>;
+}
 // eslint-disable-next-line import/first
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
 // eslint-disable-next-line import/first
@@ -127,7 +133,7 @@ function makeTerminal(overrides: Record<string, unknown> = {}) {
 async function renderTerminal(opts: { coarse?: boolean; terminal?: any } = {}) {
   installMatchMedia(opts.coarse ?? true);
   mockXtermHandle.terminal = opts.terminal ?? makeTerminal();
-  const utils = render(<TerminalOutput sessionId="s1" baseUrl="/api" isVisible={false} />);
+  const utils = render(withPool(<TerminalOutput sessionId="s1" baseUrl="/api" isVisible={true} />));
   await act(async () => {});
   // Terminal reports its size once laid out; this is what reveals rows to the chip.
   act(() => {

@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -1536,6 +1537,88 @@ func TestAutoReopenAfterFailedReview_ActiveWorkSession_StillTransitionsToInProgr
 	assert.Equal(t, 1, workCount, "must not spawn a second work session when one is already active")
 }
 
+// TestAutoReopenAfterFailedReview_MapMissButTmuxAlive_ReusesInsteadOfRespawning
+// is AC0's regression test: a work session that is absent from the live
+// poller map (session.ReviewQueuePoller) but whose real tmux process is still
+// running. Before #804, SessionService.IsSessionLive was literally
+// `FindLiveInstance(uuid) != nil` — a map-only check — so
+// tombstoneOrphanWorkSessions would wrongly conclude this session was dead,
+// set its EndedAt, and let AutoReopenAfterFailedReview fall through to
+// spawning a duplicate work session into the same shared worktree the
+// original was still writing to (the 2026-09-12 incident). Wires a real
+// *SessionService (not mockSessionStopper) as the BacklogService's stopper,
+// exactly as production does, so this exercises the real
+// findConfirmedLiveInstance shadow-instance fallback end to end rather than a
+// mock's configured answer.
+func TestAutoReopenAfterFailedReview_MapMissButTmuxAlive_ReusesInsteadOfRespawning(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	// A real, detached tmux session — but the poller backing FindLiveInstance
+	// is empty, so this session is a map miss.
+	title := "map-miss-alive-" + fmt.Sprint(time.Now().UnixNano())
+	socket := startRealTmuxSession(t, title)
+	sessSvc := &SessionService{
+		storage:           storage,
+		concStorage:       storage,
+		reviewQueuePoller: newEmptyPoller(),
+	}
+	svc.SetSessionStopper(sessSvc)
+
+	const workUUID = "map-miss-alive-work-uuid"
+	require.NoError(t, storage.AddInstance(&session.Instance{
+		Title:            title,
+		UUID:             workUUID,
+		Path:             t.TempDir(),
+		Status:           session.Active,
+		TmuxServerSocket: socket,
+		TmuxPrefix:       tmux.TmuxPrefix,
+		Program:          "claude",
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
+	}))
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Item whose work session is alive in tmux but missing from the live poller map",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: workUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	// Sanity-check the premise directly: a naive map-only check would report
+	// this session dead, but the confirmed-liveness check must not.
+	require.True(t, sessSvc.IsSessionLive(workUUID),
+		"session is genuinely alive in tmux; a map-miss must not be mistaken for dead")
+
+	reopenErr := svc.AutoReopenAfterFailedReview(ctx, item.ID)
+	require.NoError(t, reopenErr, "reusing a confirmed-live work session is an expected outcome, not a failure")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusInProgress), fetched.Status)
+
+	sessions, err := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, err)
+	workSessions := 0
+	for _, is := range sessions {
+		if is.Role != session.SessionRoleWork {
+			continue
+		}
+		workSessions++
+		assert.Nil(t, is.EndedAt, "a session confirmed live via tmux/process truth must not be tombstoned")
+	}
+	assert.Equal(t, 1, workSessions, "no duplicate work session must be spawned for a confirmed-live session")
+	assert.Empty(t, creator.calls, "no new session should be spawned while the existing one is confirmed live")
+}
+
 // TestAutoReopenAfterFailedReview_CalledTwiceForSameItem_SecondCallFailsHarmlessly
 // is the regression guard for BUG-047 acceptance criterion 1: submit_review_verdict's
 // eager review->in_progress transition (server/mcp/tools_backlog.go) and
@@ -2750,6 +2833,214 @@ func TestCleanupItemWorktreesExcept_should_notTellScannerToStopWatching_When_Pat
 	assert.NoError(t, statErr, "sanity: the exempted worktree directory must still exist")
 }
 
+// TestCleanupItemWorktreesExcept_should_RemoveBacklogScaffolding_When_WorktreeCleanupSucceeds
+// is the call-site regression test for cleanupItemWorktreesExcept's own
+// CleanupSlashCommands/CleanupBacklogContextFile calls (archive/reopen/tombstone
+// paths) — mirroring session/backlog_lifecycle_test.go's
+// TestReconcilePRPending_CleansUpBacklogScaffolding_WhenPRMerged for the other call
+// site. The worktree removal itself already deletes these files as a side effect;
+// this pins that the explicit calls also run, not just that the directory disappears.
+func TestCleanupItemWorktreesExcept_should_RemoveBacklogScaffolding_When_WorktreeCleanupSucceeds(t *testing.T) {
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	const workBranch = "backlog/scaffolding-cleanup-test"
+	workWT := filepath.Join(t.TempDir(), "work-wt")
+	runGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
+
+	cmdDir := filepath.Join(workWT, ".claude", "commands", "backlog")
+	require.NoError(t, os.MkdirAll(cmdDir, 0o755))
+	statusPath := filepath.Join(cmdDir, "status.md")
+	require.NoError(t, os.WriteFile(statusPath, []byte("stale status"), 0o644))
+	contextPath := filepath.Join(workWT, ".backlog-context.md")
+	require.NoError(t, os.WriteFile(contextPath, []byte("stale context"), 0o644))
+
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+	svc.SetRepoWatchRemover(&fakeRepoWatchRemover{})
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "Scaffolding cleanup test item",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	attachPRFixWorkSession(t, storage, repo, item, "scaffolding-cleanup-work-uuid", repoPath, workWT, workBranch)
+
+	sessions, err := storage.ListItemSessions(context.Background(), item.ID)
+	require.NoError(t, err)
+
+	svc.cleanupItemWorktreesExcept(context.Background(), sessions, "")
+
+	_, statErr := os.Stat(statusPath)
+	assert.True(t, os.IsNotExist(statErr), "slash command scaffolding must be cleaned up")
+	_, statErr = os.Stat(contextPath)
+	assert.True(t, os.IsNotExist(statErr), ".backlog-context.md must be cleaned up")
+}
+
+// TestCleanupItemWorktreesExcept_should_KeepBacklogScaffolding_When_PathIsExempted
+// proves the exempted (still-in-use, reused across a rework round) worktree keeps its
+// scaffolding — cleanupItemWorktreesExcept must not reach into a worktree a brand-new
+// session is actively using.
+func TestCleanupItemWorktreesExcept_should_KeepBacklogScaffolding_When_PathIsExempted(t *testing.T) {
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	const workBranch = "backlog/scaffolding-except-test"
+	workWT := filepath.Join(t.TempDir(), "work-wt")
+	runGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
+
+	cmdDir := filepath.Join(workWT, ".claude", "commands", "backlog")
+	require.NoError(t, os.MkdirAll(cmdDir, 0o755))
+	shipPath := filepath.Join(cmdDir, "ship.md")
+	require.NoError(t, os.WriteFile(shipPath, []byte("ship instructions"), 0o644))
+	contextPath := filepath.Join(workWT, ".backlog-context.md")
+	require.NoError(t, os.WriteFile(contextPath, []byte("live context"), 0o644))
+
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+	svc.SetRepoWatchRemover(&fakeRepoWatchRemover{})
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "Scaffolding except-path test item",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	attachPRFixWorkSession(t, storage, repo, item, "scaffolding-except-work-uuid", repoPath, workWT, workBranch)
+
+	sessions, err := storage.ListItemSessions(context.Background(), item.ID)
+	require.NoError(t, err)
+
+	svc.cleanupItemWorktreesExcept(context.Background(), sessions, workWT)
+
+	_, statErr := os.Stat(shipPath)
+	assert.NoError(t, statErr, "ship.md must survive on the exempted, still-in-use worktree")
+	_, statErr = os.Stat(contextPath)
+	assert.NoError(t, statErr, ".backlog-context.md must survive on the exempted, still-in-use worktree")
+}
+
+// TestCleanupItemWorktreesExcept_should_NotifyAndLogWarning_When_WorktreeRowMissingButExpected
+// is Epic 2.1's regression test for the confirmed gap in cleanupItemWorktreesExcept
+// (plan.md's Epic B): a work session that should have a Worktree row
+// (SessionTypeNewWorktree with a Branch) but doesn't used to vanish with a silent
+// continue — no log, no notify, nothing for an operator to act on. It must now notify
+// with the real linked item ID (never the session UUID) in the itemID slot.
+func TestCleanupItemWorktreesExcept_should_NotifyAndLogWarning_When_WorktreeRowMissingButExpected(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	ctx := context.Background()
+
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Missing worktree row test item",
+		Status: string(session.BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	const sessionUUID = "missing-row-work-uuid"
+	now := time.Now()
+	require.NoError(t, storage.CreateInstanceData(ctx, session.InstanceData{
+		Title:       sessionUUID,
+		UUID:        sessionUUID,
+		Path:        t.TempDir(),
+		Branch:      "work/missing-row",
+		Status:      session.Paused,
+		Program:     "claude",
+		SessionType: session.SessionTypeNewWorktree,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		// Deliberately no Worktree field — reproduces the missing-row gap: a session
+		// that ExpectsWorktree but has no Worktree ent row at all.
+	}))
+
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	sessions, err := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, err)
+
+	svc.cleanupItemWorktreesExcept(ctx, sessions, "")
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, events.EventNotification, ev.Type)
+		assert.Equal(t, item.ID, ev.SessionID, "the real backlog item ID must land in the itemID slot, never the session UUID")
+		assert.Equal(t, item.ID, ev.NotificationMetadata["item_id"])
+		assert.Contains(t, ev.NotificationMessage, sessionUUID, "message must name the session so an operator knows what's missing")
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a notification for the missing-but-expected worktree row")
+	}
+}
+
+// TestCleanupItemWorktreesExcept_should_ContinueSilently_When_SessionDoesNotExpectWorktree
+// is the regression guard for Epic 2.1's healthy path: a SessionTypeDirectory session
+// (no branch, ExpectsWorktree == false) has no Worktree row by design, and must keep
+// the pre-existing silent continue — no notify, no log, no behavior change.
+func TestCleanupItemWorktreesExcept_should_ContinueSilently_When_SessionDoesNotExpectWorktree(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	ctx := context.Background()
+
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Directory session regression test item",
+		Status: string(session.BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	const sessionUUID = "directory-session-uuid"
+	now := time.Now()
+	require.NoError(t, storage.CreateInstanceData(ctx, session.InstanceData{
+		Title:       sessionUUID,
+		UUID:        sessionUUID,
+		Path:        t.TempDir(),
+		Status:      session.Paused,
+		Program:     "claude",
+		SessionType: session.SessionTypeDirectory,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}))
+
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	sessions, err := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, err)
+
+	svc.cleanupItemWorktreesExcept(ctx, sessions, "")
+
+	// cleanupItemWorktreesExcept is synchronous and EventBus.Publish sends synchronously
+	// into the subscriber channel, so any would-be event is already queued by the time
+	// the call above returns — no wait needed to prove none fired.
+	select {
+	case ev := <-ch:
+		t.Fatalf("expected no notification for a legitimately non-worktree session, got %+v", ev)
+	default:
+		// expected: no notification fired — unchanged silent continue.
+	}
+}
+
 // TestAutoReopenForPRFix_should_MergeAndPushMain_When_BranchIsStaleButMergesCleanly
 // verifies the preventive-sync path: a fix landed on main after the PR's branch was
 // created (drift unrelated to the PR's own diff). AutoReopenForPRFix must merge main
@@ -3098,6 +3389,121 @@ func spawnReadyItemWithActiveWorkSession(t *testing.T, svc *BacklogService, stor
 	return itemID, spawnResp.Msg.SessionUuid
 }
 
+// TestSpawnSessionFromItem_should_Refuse_When_WronglyTombstonedSessionIsConfirmedLive
+// is AC1's regression test for spawnSessionAfterGates' 8b2 guard
+// (findConfirmedLiveWorkSession): the scenario its own doc comment describes
+// — a work session whose ItemSession.EndedAt was already wrongly set (by a
+// past, unrelated tombstone sweep that itself hit a transient liveness-check
+// miss), so 8a's tombstone loop no-ops on it (EndedAt already non-nil) and
+// 8b's findActiveWorkSession doesn't see it as "active" either (same
+// EndedAt-based check) — yet sessionStopper.IsSessionLive confirms the real
+// tmux process is still running. 8b2 is the only remaining guard that can
+// catch this, and per AC1 the chosen behavior is refuse-with-clear-error
+// (not kill-then-spawn).
+func TestSpawnSessionFromItem_should_Refuse_When_WronglyTombstonedSessionIsConfirmedLive(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	svc.SetSessionStopper(stopper)
+	ctx := t.Context()
+
+	itemID, workUUID := spawnReadyItemWithActiveWorkSession(t, svc, storage, ctx)
+
+	// Simulate the wrongly-tombstoned record: EndedAt is set in storage even
+	// though the session is genuinely still alive. killIneffectiveUUIDs models
+	// that spawnSessionAfterGates' own killEndedWorkSessionPanes (8a2) will
+	// attempt — and fail — to kill it, exactly like a stuck/zombie pane in
+	// production: the whole point of this test is that a kill attempt does
+	// NOT reach this session.
+	sessions, err := storage.ListItemSessions(ctx, itemID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, sessions[0].ID, time.Now()))
+	stopper.liveUUIDs[workUUID] = true
+	stopper.killIneffectiveUUIDs = map[string]bool{workUUID: true}
+
+	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err, "a confirmed-live session must block a concurrent respawn even though its EndedAt column says otherwise")
+	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "already confirmed live")
+	assert.Contains(t, err.Error(), workUUID)
+	assert.Len(t, creator.calls, 1, "no duplicate work session may be spawned while the original is confirmed live — only the initial spawn from spawnReadyItemWithActiveWorkSession should be recorded")
+}
+
+// TestSpawnSessionFromItem_should_CapAtOneConfirmedLiveWorkSession_AcrossManyReworkRounds
+// is AC2's (1-indexed AC3) regression test: the concurrent-liveness cap must
+// find and block on the ONE confirmed-live session among many historical
+// rework rounds, independent of how many rounds exist. reworkCap
+// (effectiveReworkCap) is a historical-attempt-count cap enforced only by the
+// Auto* respawn paths (AutoReopenAfterFailedReview et al.) — SpawnSessionFromItem
+// itself never consults it (see effectiveReworkCap's four call sites, none in
+// spawnSessionAfterGates) — so this test calls SpawnSessionFromItem directly
+// with five historical rounds (well beyond any typical rework cap) to prove
+// the concurrent-liveness block fires independent of that mechanism entirely,
+// not merely under a cap it happens not to hit.
+func TestSpawnSessionFromItem_should_CapAtOneConfirmedLiveWorkSession_AcrossManyReworkRounds(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	svc.SetSessionStopper(stopper)
+	ctx := t.Context()
+
+	itemID, round1UUID := spawnReadyItemWithActiveWorkSession(t, svc, storage, ctx)
+
+	// Round 1 (the initial spawn) ends normally.
+	sessions, err := storage.ListItemSessions(ctx, itemID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, sessions[0].ID, time.Now()))
+	require.False(t, stopper.liveUUIDs[round1UUID], "round 1 must not be live")
+
+	// Rounds 2-4: further historical rework rounds, all ended normally and
+	// all genuinely dead — noise the cap must see through to find the one
+	// live round among several.
+	for i := 2; i <= 4; i++ {
+		is, createErr := storage.CreateItemSession(ctx, session.ItemSessionData{
+			ItemID:      itemID,
+			SessionUUID: fmt.Sprintf("round-%d-uuid", i),
+			SessionRole: session.SessionRoleWork,
+		})
+		require.NoError(t, createErr)
+		require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+	}
+
+	// Round 5: the current round, wrongly tombstoned in the DB but confirmed
+	// live via tmux/process truth — same shape as
+	// TestSpawnSessionFromItem_should_Refuse_When_WronglyTombstonedSessionIsConfirmedLive,
+	// just with several unrelated historical rounds also present.
+	const round5UUID = "round-5-uuid"
+	round5, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: round5UUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, round5.ID, time.Now()))
+	stopper.liveUUIDs[round5UUID] = true
+	// killIneffectiveUUIDs models killEndedWorkSessionPanes (8a2) attempting —
+	// and failing — to kill this round's pane, same as the single-round test
+	// above: the point is that a kill attempt does not reach it.
+	stopper.killIneffectiveUUIDs = map[string]bool{round5UUID: true}
+
+	allSessions, err := storage.ListItemSessions(ctx, itemID)
+	require.NoError(t, err)
+	require.Len(t, allSessions, 5, "five historical work-session rounds must be on record")
+
+	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err, "the one confirmed-live round among five must still block a concurrent respawn")
+	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), round5UUID, "the error must name the actually-live round, not an arbitrary or earlier one")
+	assert.NotContains(t, strings.ToLower(err.Error()), "cap", "the block must come from the concurrent-liveness check, not a rework-cap message")
+	assert.Len(t, creator.calls, 1, "no duplicate work session may be spawned while any round is confirmed live")
+}
+
 // TestSpawnSessionFromItem_should_ReportStalled_When_BlockedByActiveWorkSession
 // is the regression test for the 2026-07-31 finding in
 // docs/tasks/backlog-feature-improvement.md: before this fix, a blocked
@@ -3327,6 +3733,126 @@ func TestSpawnSessionFromItem_should_SnapshotEmptyHash_When_PipelineModeIsDefaul
 			assert.Empty(t, sessions[0].PipelineModeSnapshotHash)
 		})
 	}
+}
+
+// --- Epic 2.4: work-stage program threading ---
+
+// TestSpawnSessionFromItem_should_SetInstanceProgramViaInstanceOptions_When_WorkStageOverrideConfigured
+// (Story 2.4.1, validation.md's REQ-2 integration test) proves SpawnSessionFromItem
+// resolves the work-stage executor via PipelineEngine.ExecutorFor +
+// session.ResolveExecutorProgram BEFORE spawning, threading the result into
+// SessionCreator's programOverride argument in the SAME call that carries the
+// item's kickoff prompt — never via a later SwitchProgram/Restart call, which
+// would risk racing/dropping that prompt delivery (see Epic 2.4's design note).
+// The single-call assertion (creator.callCount() == 1) is the regression guard for
+// the rejected "resolve after spawn, then SwitchProgram" design: that design would
+// require this same mock to record a second, distinct call.
+func TestSpawnSessionFromItem_should_SetInstanceProgramViaInstanceOptions_When_WorkStageOverrideConfigured(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
+	_, err := pmRepo.Create(ctx, session.PipelineModeCreateInput{
+		Slug:                  "sonnet-work",
+		Name:                  "Sonnet Work",
+		Enabled:               true,
+		InitialPromptTemplate: "kickoff: {{item_title}}",
+		StageExecutors: map[session.StageRole]session.PipelineStageExecutor{
+			session.StageRoleWork: {Model: "family:sonnet"},
+		},
+	})
+	require.NoError(t, err)
+	engine, err := session.NewPipelineEngine(pmRepo)
+	require.NoError(t, err)
+	svc.pipelineEngine = engine
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:        "work-stage override item",
+		RepoPath:     repoPath,
+		PipelineMode: strPtr("sonnet-work"),
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipTriage:   true,
+		SkipPlanning: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	_, err = svc.TransitionBacklogItemStatus(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: "ready",
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+
+	require.Equal(t, 1, creator.callCount(),
+		"the override must reach instance creation via this single spawn call, never a follow-up SwitchProgram/Restart call")
+	call := creator.calls[0]
+	assert.Equal(t, "claude --model claude-sonnet-4-6", call.programOverride,
+		"family:sonnet must resolve to the concrete model ID via ResolveExecutorProgram, threaded as the programOverride argument")
+	assert.Equal(t, "claude --model claude-sonnet-4-6", call.inst.Program,
+		"the spawned Instance must actually run on the resolved program, proving InstanceOptions.Program (not a post-hoc call) carried it")
+	assert.Contains(t, call.prompt, "kickoff: work-stage override item",
+		"the item's kickoff prompt must still be delivered in the same call that carries the program override — not dropped or raced")
+
+	sessions, listErr := storage.ListItemSessions(ctx, itemID)
+	require.NoError(t, listErr)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "claude-sonnet-4-6", sessions[0].ResolvedModel)
+	assert.Empty(t, sessions[0].ResolvedProgram, "no program was explicitly configured on the stage executor, only a model")
+	assert.Equal(t, session.ComputeExecutorHash("", "family:sonnet"), sessions[0].ExecutorSnapshotHash,
+		"must hash the RAW pre-ResolveModel model value, never the resolved concrete model ID")
+}
+
+// TestSpawnSessionFromItem_should_LeaveInstanceProgramUnchanged_When_NoWorkStageOverrideConfigured
+// (Story 2.4.1's byte-identical-to-today AC) proves an item with no work-stage
+// executor override spawns exactly as it did before this project: an empty
+// programOverride, and mockSessionCreator's own default program unaffected.
+func TestSpawnSessionFromItem_should_LeaveInstanceProgramUnchanged_When_NoWorkStageOverrideConfigured(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    "default mode item",
+		RepoPath: repoPath,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipTriage:   true,
+		SkipPlanning: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	_, err = svc.TransitionBacklogItemStatus(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: "ready",
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+
+	require.Len(t, creator.calls, 1)
+	assert.Empty(t, creator.calls[0].programOverride,
+		"no pipelineEngine wired and no stage executor configured means no override — byte-identical to pre-Epic-2.4 behavior")
+	assert.Equal(t, "claude", creator.calls[0].inst.Program,
+		"unchanged fallback: mockSessionCreator's own default program when programOverride is empty")
 }
 
 // --- Epic 1.5: PipelineEngine wired into the 4 call sites ---
@@ -3638,6 +4164,7 @@ func TestTriggerTriage_should_PersistFullRawOutputToDurableFile_When_HeadlessRes
 	is := waitForTriageFailureCaptured(t, storage, item.ID)
 	t.Cleanup(func() { _ = os.Remove(is.FailureCapturePath) })
 
+	assert.Equal(t, "parse_error", is.EndReason, "end_reason must be classified so BlockedNotice.tsx can surface the capture path instead of a generic 'no diagnostic data' fallback")
 	require.True(t, filepath.IsAbs(is.FailureCapturePath), "failure_capture_path should be an absolute, directly-openable path")
 
 	content, readErr := os.ReadFile(is.FailureCapturePath)
@@ -3814,6 +4341,92 @@ func TestTriggerTriage_should_UseModeSpecificTriagePrompt_When_ItemHasNonDefault
 		"expected the mode-specific rendered triage prompt, got: %s", gotPrompt)
 	assert.NotContains(t, gotPrompt, "Perform pre-implementation triage",
 		"sanity: the default BuildHeadlessTriagePrompt's boilerplate must not appear when a non-default mode is wired")
+}
+
+// TestTriggerTriage_should_SetCallOptionsModel_When_PipelineModeConfiguresTriageOverride
+// (Story 2.3.2) proves TriggerTriage resolves the item's configured triage
+// executor through PipelineEngine.ExecutorFor and threads the resolved model
+// into the headless.CallOptions passed to CallBlocking — the plan's own
+// "cheap-triage" acceptance example (validation.md's Happy Path Scenario).
+func TestTriggerTriage_should_SetCallOptionsModel_When_PipelineModeConfiguresTriageOverride(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
+	_, err := pmRepo.Create(t.Context(), session.PipelineModeCreateInput{
+		Slug:    "cheap-triage",
+		Name:    "Cheap Triage",
+		Enabled: true,
+		StageExecutors: map[session.StageRole]session.PipelineStageExecutor{
+			session.StageRoleTriage: {Model: "claude-haiku-4-5"},
+		},
+	})
+	require.NoError(t, err)
+	engine, err := session.NewPipelineEngine(pmRepo)
+	require.NoError(t, err)
+	svc.pipelineEngine = engine
+
+	repoPath := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:        "cheap-triage item",
+		Status:       string(session.BacklogStatusIdea),
+		Priority:     3,
+		RepoPath:     repoPath,
+		PipelineMode: "cheap-triage",
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	wait.RequireEventually(t, func() bool {
+		return pool.callCount() == 1
+	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call")
+
+	sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, listErr)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "claude-haiku-4-5", sessions[0].ResolvedModel)
+	assert.Equal(t, session.ComputeExecutorHash("", "claude-haiku-4-5"), sessions[0].ExecutorSnapshotHash)
+	assert.Empty(t, sessions[0].ConfiguredProgram, "no fallback occurred for the claude program")
+	assert.Empty(t, sessions[0].ExecutorFallbackReason)
+}
+
+// TestTriggerTriage_should_LeaveCallOptionsModelEmpty_When_PipelineModeIsDefault
+// (Story 2.3.2) is the byte-identical-to-today counterpart: an item on
+// PipelineModeDefault (no stage executor override configured anywhere) must
+// resolve to an empty CallOptions.Model, unchanged from pre-Epic-2.3 behavior.
+func TestTriggerTriage_should_LeaveCallOptionsModelEmpty_When_PipelineModeIsDefault(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "default-mode item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	wait.RequireEventually(t, func() bool {
+		return pool.callCount() == 1
+	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call")
+
+	assert.Empty(t, pool.firstCall().model, "CallOptions.Model must stay empty when no stage executor override is configured")
 }
 
 // TestTriggerTriage_should_UseUnmodifiedRetriagePrompt_When_RetriagingRegardlessOfPipelineMode
@@ -4983,6 +5596,58 @@ func TestTriggerTriage_should_Succeed_When_RepoPathIsValidAbsoluteExistingDirect
 	assert.Equal(t, string(session.SessionRoleTriage), sessions[0].Role)
 }
 
+// TestTriggerTriage_should_EmitBudgetWarningLogLine_When_CostCrossesItemThreshold
+// (Story 4.2.2, validation.md REQ-7) verifies the inline soft-budget-warning
+// check fires from TriggerTriage's CostSink closure at the moment cost is
+// recorded: an item with cost_budget_threshold_usd=5.00 and $4.90 of prior
+// spend crosses to $5.05 once this $0.15 triage call completes, and the
+// crossing must not affect the triage call's own success.
+func TestTriggerTriage_should_EmitBudgetWarningLogLine_When_CostCrossesItemThreshold(t *testing.T) {
+	buf := swapWarningLog(t)
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON(), cost: 0.15}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	threshold := 5.00
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:                  "item crossing its cost budget threshold",
+		Status:                 string(session.BacklogStatusIdea),
+		Priority:               3,
+		RepoPath:               t.TempDir(),
+		CostBudgetThresholdUsd: &threshold,
+	})
+	require.NoError(t, err)
+
+	// Prior spend of $4.90 from an already-completed session for this item.
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:           item.ID,
+		SessionUUID:      "prior-triage-session",
+		SessionRole:      string(session.SessionRoleTriage),
+		EstimatedCostUsd: 4.90,
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr, "crossing the budget threshold must not affect the triage call's own success")
+
+	wait.RequireEventually(t, func() bool {
+		return pool.callCount() == 1
+	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call")
+
+	wait.RequireEventually(t, func() bool {
+		return strings.Contains(buf.String(), "[BudgetWarning]")
+	}, 5*time.Second, 50*time.Millisecond, "expected a [BudgetWarning] log line once the threshold was crossed")
+
+	logged := buf.String()
+	assert.Contains(t, logged, "item="+item.ID)
+	assert.Contains(t, logged, "stage=triage")
+	assert.Contains(t, logged, "threshold=5.00")
+	assert.Contains(t, logged, "spent=5.05")
+}
+
 // TestTriggerTriage_should_AutoApprovePlan_When_AutoApprovePlanSet is a
 // regression/coverage test for the opt-in "auto-approve plan" automation
 // setting: an item with AutoApprovePlan=true must have PlanApproved set true
@@ -5227,7 +5892,7 @@ func TestShouldSkipWorkTombstoneForRestartGrace_should_OnlySkipPreBootSessionsWi
 // Two items whose titles differ only in characters slugify() strips (punctuation)
 // collide on the exact same branch name, and — confirmed here — CreateBacklogWorktree
 // then hands the second item the exact same worktree directory as the first, via
-// findExistingWorktreeForBranch's (session/git/worktree.go) "branch already checked
+// nativeFindExistingWorktreeForBranch's (session/git/worktree.go) "branch already checked
 // out, reuse its worktree" path.
 //
 // This is a known limitation, not something this bug fix addresses (no tracked
@@ -5417,4 +6082,302 @@ func TestCountLiveBacklogWorkSessions_should_ExcludeJulesWorkRows_When_MixedRole
 	count, err := svc.countLiveBacklogWorkSessions(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 0, count, "an open jules_work row alone must not count toward MaxConcurrentBacklogWorkItems")
+}
+
+// TestCancelTriage_should_EndRunningSessionAndReportCancelled_When_TriageIsActive
+// covers CancelTriage's happy path (docs/registry/features/backend/backlog/cancel-triage.json
+// previously had no test coverage at all).
+func TestCancelTriage_should_EndRunningSessionAndReportCancelled_When_TriageIsActive(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	liveUUID := "cancel-triage-live"
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{liveUUID: true}}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetSessionStopper(stopper)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "item with a running triage session",
+		Status: string(session.BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: liveUUID,
+		SessionRole: string(session.SessionRoleTriage),
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.CancelTriage(t.Context(), connect.NewRequest(&sessionv1.CancelTriageRequest{ItemId: item.ID}))
+	require.NoError(t, err)
+	assert.True(t, resp.Msg.Cancelled)
+
+	sessions, err := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, is.ID, sessions[0].ID)
+	assert.NotNil(t, sessions[0].EndedAt, "CancelTriage must mark the triage session ended")
+}
+
+// TestCancelTriage_should_ReportNotCancelled_When_NoTriageSessionRunning covers the
+// no-op path: an item with no active triage session should not error, just report
+// that nothing was cancelled.
+func TestCancelTriage_should_ReportNotCancelled_When_NoTriageSessionRunning(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "item with no triage session",
+		Status: string(session.BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.CancelTriage(t.Context(), connect.NewRequest(&sessionv1.CancelTriageRequest{ItemId: item.ID}))
+	require.NoError(t, err)
+	assert.False(t, resp.Msg.Cancelled)
+}
+
+// TestFindSupersededSessions_should_KeepOnlyLatestPerRole_When_MultipleRoundsExist
+// is the table test for AC2/AC1's shared decision function: it must agree with
+// findMostRecentSessions' exact tie-break (latest CreatedAt wins per role) since
+// SupersededSessionSweeper and the archive-on-supersede spawn paths both rely on
+// this single source of truth for "which round is current" — see pitfalls.md #3.
+func TestFindSupersededSessions_should_KeepOnlyLatestPerRole_When_MultipleRoundsExist(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Now().Add(-3 * time.Hour)
+	t1 := t0.Add(time.Hour)
+	t2 := t1.Add(time.Hour)
+
+	work1 := session.ItemSessionSummary{SessionUUID: "work-r1", Role: session.SessionRoleWork, CreatedAt: t0}
+	work2 := session.ItemSessionSummary{SessionUUID: "work-r2", Role: session.SessionRoleWork, CreatedAt: t1}
+	work3 := session.ItemSessionSummary{SessionUUID: "work-r3", Role: session.SessionRoleWork, CreatedAt: t2}
+	review1 := session.ItemSessionSummary{SessionUUID: "review-r1", Role: session.SessionRoleReview, CreatedAt: t0}
+	review2 := session.ItemSessionSummary{SessionUUID: "review-r2", Role: session.SessionRoleReview, CreatedAt: t2}
+	nonTmux := session.ItemSessionSummary{SessionUUID: "jules-1", Role: session.SessionRoleJulesWork, CreatedAt: t0}
+
+	cases := []struct {
+		name           string
+		sessions       []session.ItemSessionSummary
+		wantSuperseded []string
+	}{
+		{
+			name:           "single round is never superseded",
+			sessions:       []session.ItemSessionSummary{work1},
+			wantSuperseded: nil,
+		},
+		{
+			name:           "three work rounds — only the latest survives",
+			sessions:       []session.ItemSessionSummary{work1, work2, work3},
+			wantSuperseded: []string{"work-r1", "work-r2"},
+		},
+		{
+			name:           "work and review rounds are judged independently",
+			sessions:       []session.ItemSessionSummary{work1, work2, review1, review2},
+			wantSuperseded: []string{"work-r1", "review-r1"},
+		},
+		{
+			name:           "non-tmux-backed role is never flagged",
+			sessions:       []session.ItemSessionSummary{work1, nonTmux},
+			wantSuperseded: nil,
+		},
+		{
+			name:           "near-simultaneous rounds tie-break identically to findMostRecentSessions",
+			sessions:       []session.ItemSessionSummary{{SessionUUID: "a", Role: session.SessionRoleWork, CreatedAt: t0}, {SessionUUID: "b", Role: session.SessionRoleWork, CreatedAt: t0}},
+			wantSuperseded: []string{"b"}, // findMostRecentSessions only replaces on strict After, so the first-seen wins ties
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := findSupersededSessions(tc.sessions)
+			gotUUIDs := make([]string, len(got))
+			for i, is := range got {
+				gotUUIDs[i] = is.SessionUUID
+			}
+			assert.ElementsMatch(t, tc.wantSuperseded, gotUUIDs)
+
+			// Cross-check against the existing tie-break truth source directly.
+			currentReview, currentWork := findMostRecentSessions(tc.sessions)
+			for _, is := range got {
+				if is.Role == session.SessionRoleWork {
+					require.NotNil(t, currentWork)
+					assert.NotEqual(t, currentWork.SessionUUID, is.SessionUUID)
+				}
+				if is.Role == session.SessionRoleReview {
+					require.NotNil(t, currentReview)
+					assert.NotEqual(t, currentReview.SessionUUID, is.SessionUUID)
+				}
+			}
+		})
+	}
+}
+
+// TestTriggerReReview_should_ArchivePriorReviewSession_When_SpawningTmuxBacked
+// is AC1's regression test: the tmux-backed re-review spawn path (no
+// headlessPool wired) previously never archived the prior review round's
+// session before spawning its replacement, leaving it Active forever (the
+// most likely concrete source of the 2026-09-14 mass-resurrection incident —
+// see research/architecture.md's "actual gap" finding).
+func TestTriggerReReview_should_ArchivePriorReviewSession_When_SpawningTmuxBacked(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{}
+	svc.SetSessionStopper(stopper)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := setupItemInReview(t, svc, repoPath)
+
+	// Simulates a prior abandoned-review round: an earlier TriggerReReview (or
+	// the original review) left this ItemSession+Instance behind, never ended.
+	priorReview, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "prior-review-uuid",
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.ItemSession)
+	assert.NotEqual(t, priorReview.SessionUUID, resp.Msg.ItemSession.SessionUuid,
+		"the new re-review session must be a distinct row from the prior round")
+
+	assert.Contains(t, stopper.archivedUUIDs, "prior-review-uuid",
+		"TriggerReReview must archive the prior review round before spawning its replacement")
+}
+
+// TestStopLiveWorkSessions_should_StopUnendedWorkAndReviewSessions_When_CalledDirectly
+// is Story 1.1.1's second AC (plan.md): item with two unended sessions
+// ("work-1" role work, "review-1" role review) and one already-ended session
+// ("work-0") — calling stopLiveWorkAndReviewSessions directly must stop only
+// the two unended sessions and mark both their EndedAt non-nil.
+func TestStopLiveWorkSessions_should_StopUnendedWorkAndReviewSessions_When_CalledDirectly(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{}
+	svc.SetSessionStopper(stopper)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "item with two unended sessions and one already-ended session",
+		Status:   string(session.BacklogStatusInProgress),
+		Priority: 3,
+	})
+	require.NoError(t, err)
+	itemID := item.ID
+
+	// Already-ended session — must be skipped, not stopped again.
+	endedSession, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "work-0",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), endedSession.ID, time.Now()))
+
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "work-1",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "review-1",
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	svc.stopLiveWorkAndReviewSessions(t.Context(), itemID)
+
+	assert.ElementsMatch(t, []string{"work-1", "review-1"}, stopper.stoppedUUIDs,
+		"only the two unended work/review sessions must be stopped; the already-ended one must be skipped")
+
+	sessions, err := storage.ListItemSessions(t.Context(), itemID)
+	require.NoError(t, err)
+	byUUID := make(map[string]session.ItemSessionSummary, len(sessions))
+	for _, is := range sessions {
+		byUUID[is.SessionUUID] = is
+	}
+	assert.NotNil(t, byUUID["work-1"].EndedAt, "work-1 must be marked ended")
+	assert.NotNil(t, byUUID["review-1"].EndedAt, "review-1 must be marked ended")
+}
+
+// TestStopLiveWorkSessions_should_LogAndContinue_When_SessionStopperReturnsError
+// covers stopLiveWorkAndReviewSessions' best-effort semantics (doc comment on
+// the method, backlog_service_triage.go): a StopSessionByUUID error must be
+// logged and not propagated — the row is still marked ended so the item
+// isn't left permanently blocked by hasActiveWorkSession.
+func TestStopLiveWorkSessions_should_LogAndContinue_When_SessionStopperReturnsError(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{stopperErr: errors.New("stop failed")}
+	svc.SetSessionStopper(stopper)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "item with a session whose stop errors",
+		Status:   string(session.BacklogStatusInProgress),
+		Priority: 3,
+	})
+	require.NoError(t, err)
+	itemID := item.ID
+
+	workSession, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "work-err-1",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	svc.stopLiveWorkAndReviewSessions(t.Context(), itemID)
+
+	assert.Contains(t, stopper.stoppedUUIDs, "work-err-1")
+
+	updated, err := storage.GetItemSession(t.Context(), workSession.ID)
+	require.NoError(t, err)
+	assert.NotNil(t, updated.EndedAt, "session must still be marked ended despite the stop error, matching best-effort semantics")
+}
+
+// A repeated_noop_dispatch row must stop any further work-session spawn; once
+// the row resolves, dispatch proceeds again.
+func TestSpawnSessionFromItem_should_Refuse_When_RepeatedNoopDispatchRowOpen(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+	createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "noop gate item", RepoPath: repoPath, SkipTriage: true, SkipPlanning: true,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{{Index: 0, Text: "test", Status: "pending"}},
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+	_, err = svc.TransitionBacklogItemStatus(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{ItemId: itemID, TargetStatus: "ready"}))
+	require.NoError(t, err)
+
+	applied, err := storage.MarkStuck(ctx, itemID, domain.StuckReasonRepeatedNoopDispatch, session.BacklogStatusReady, "3 no-op sessions")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "repeated_noop_dispatch")
+
+	_, err = storage.ResolveStuck(ctx, itemID, domain.StuckReasonRepeatedNoopDispatch)
+	require.NoError(t, err)
+	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
 }

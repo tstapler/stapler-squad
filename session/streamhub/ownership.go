@@ -94,9 +94,12 @@ func SetSessionOverrideLookup(lookup func(sessionName string) (forceHub bool, ok
 //
 // Story 3.3.1: before falling back to flagValue (the global default), Resolve
 // consults sessionOverrideLookup for this lock's own session name. A
-// recorded override forcing PathHubOwned wins regardless of flagValue — the
-// per-session canary mechanism — but never overrides an already-sticky
-// resolution, same as the global flag.
+// recorded override wins regardless of flagValue and regardless of its
+// direction — forceHub=true pins PathHubOwned (the original per-session
+// canary use case), forceHub=false pins PathLegacyPerConnection (added for
+// SetStreamHubSessionOverrideRequest's "false pins it onto the legacy path"
+// contract, proto/session/v1/session.proto) — but never overrides an
+// already-sticky resolution, same as the global flag.
 func (l *StreamOwnershipLock) Resolve(flagValue bool) StreamPath {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -111,8 +114,8 @@ func (l *StreamOwnershipLock) resolveLocked(flagValue bool) StreamPath {
 	if !l.resolved {
 		effective := flagValue
 		if lookup := sessionOverrideLookup.Load(); lookup != nil {
-			if forceHub, ok := (*lookup)(l.sessionName); ok && forceHub {
-				effective = true
+			if forceHub, ok := (*lookup)(l.sessionName); ok {
+				effective = forceHub
 			}
 		}
 		if effective {

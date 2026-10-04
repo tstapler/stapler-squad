@@ -1,6 +1,7 @@
 # ADR-002: Two feature flags (worktree, merge), and the merge flag's override key
 
-**Status**: Accepted
+**Status**: Superseded — both flags removed 2026-09-22, native is now the only
+implementation; kept as the historical rationale for the rollout design.
 **Date**: 2026-09-07
 **Project**: go-git-worktree-and-merge
 

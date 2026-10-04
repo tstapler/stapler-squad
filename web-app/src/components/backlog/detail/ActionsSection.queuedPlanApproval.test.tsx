@@ -61,6 +61,8 @@ describe("ActionsSection — queued status Approve Plan action", () => {
         onManualReviewSubmit={noop}
         onManualReviewCancel={noop}
         terminalState={null}
+        activeWorkSessionCount={0}
+        onSendBackWithFeedback={async () => {}}
       />
     );
     expect(screen.getByTestId("backlog-action-approve-plan")).toBeInTheDocument();
@@ -82,6 +84,8 @@ describe("ActionsSection — queued status Approve Plan action", () => {
         onManualReviewSubmit={noop}
         onManualReviewCancel={noop}
         terminalState={null}
+        activeWorkSessionCount={0}
+        onSendBackWithFeedback={async () => {}}
       />
     );
     fireEvent.click(screen.getByTestId("backlog-action-approve-plan"));
@@ -103,6 +107,8 @@ describe("ActionsSection — queued status Approve Plan action", () => {
         onManualReviewSubmit={noop}
         onManualReviewCancel={noop}
         terminalState={null}
+        activeWorkSessionCount={0}
+        onSendBackWithFeedback={async () => {}}
       />
     );
     expect(screen.queryByTestId("backlog-action-approve-plan")).not.toBeInTheDocument();
@@ -125,6 +131,8 @@ describe("ActionsSection — queued status Approve Plan action", () => {
         onManualReviewSubmit={noop}
         onManualReviewCancel={noop}
         terminalState={null}
+        activeWorkSessionCount={0}
+        onSendBackWithFeedback={async () => {}}
       />
     );
     fireEvent.click(screen.getByTestId("backlog-action-retry-triage"));
@@ -150,6 +158,8 @@ describe("ActionsSection — queued status Approve Plan action", () => {
         onManualReviewSubmit={noop}
         onManualReviewCancel={noop}
         terminalState={null}
+        activeWorkSessionCount={0}
+        onSendBackWithFeedback={async () => {}}
       />
     );
     expect(screen.queryByTestId("backlog-action-approve-plan")).not.toBeInTheDocument();
@@ -171,6 +181,8 @@ describe("ActionsSection — queued status Approve Plan action", () => {
         onManualReviewSubmit={noop}
         onManualReviewCancel={noop}
         terminalState={null}
+        activeWorkSessionCount={0}
+        onSendBackWithFeedback={async () => {}}
       />
     );
     expect(screen.queryByTestId("backlog-action-approve-plan")).not.toBeInTheDocument();
@@ -192,6 +204,8 @@ describe("ActionsSection — queued status Approve Plan action", () => {
         onManualReviewSubmit={noop}
         onManualReviewCancel={noop}
         terminalState={null}
+        activeWorkSessionCount={0}
+        onSendBackWithFeedback={async () => {}}
       />
     );
     expect(screen.queryByTestId("backlog-action-approve-plan")).not.toBeInTheDocument();

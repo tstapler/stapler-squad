@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -38,7 +37,7 @@ var EnsurePortsFreeCmd = &cobra.Command{
 			ports = append(ports, p)
 		}
 
-		err := portguard.EnsureReleased(context.Background(), portguard.Options{
+		err := portguard.EnsureReleased(cmd.Context(), portguard.Options{
 			Ports:               ports,
 			ProcessNameContains: ensurePortsFreePattern,
 			Timeout:             ensurePortsFreeTimeout,

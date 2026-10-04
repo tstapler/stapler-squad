@@ -1064,10 +1064,12 @@ func TestPool_CallBlocking_ZeroValueOptions_MatchesLegacyCallBlockingBehavior(t 
 	pool := newTestPool(PoolConfig{MaxCallsPerSession: 25}, runner)
 
 	var cost float64
-	result, err := pool.CallBlocking(context.Background(), "feat-zero", "system", "user prompt", CallOptions{}, func(usd float64) { cost = usd })
+	var priced bool
+	result, err := pool.CallBlocking(context.Background(), "feat-zero", "system", "user prompt", CallOptions{}, func(usd float64, p bool) { cost = usd; priced = p })
 	require.NoError(t, err)
 	assert.Equal(t, "hello", result)
 	assert.InDelta(t, 0.001, cost, 1e-9, "cost_usd from the JSON result must be forwarded")
+	assert.True(t, priced, "Claude's total_cost_usd is always authoritative, so sink must fire with priced=true")
 
 	pool.mu.Lock()
 	state := pool.sessions["feat-zero"]
@@ -1101,8 +1103,22 @@ func TestPool_CallBlocking_WithWorkDir_ReturnsCostAndUsesWorkDir(t *testing.T) {
 	pool := NewPoolWithRunner(PoolConfig{MaxCallsPerSession: 25, MaxConcurrentSessions: 2}, runner)
 
 	var cost float64
-	result, err := pool.CallBlocking(context.Background(), "feat-workdir", "sys", "prompt", CallOptions{WorkDir: workDir}, func(usd float64) { cost = usd })
+	var priced bool
+	result, err := pool.CallBlocking(context.Background(), "feat-workdir", "sys", "prompt", CallOptions{WorkDir: workDir}, func(usd float64, p bool) { cost = usd; priced = p })
 	require.NoError(t, err)
 	assert.Equal(t, workDir, result, "subprocess must run with cwd set to opts.WorkDir")
 	assert.InDelta(t, 0.0077, cost, 1e-9, "cost_usd must be returned for WorkDir calls too")
+	assert.True(t, priced, "Claude's total_cost_usd is always authoritative, so sink must fire with priced=true")
+}
+
+func TestPool_CallBlocking_ReportsConversationIDViaOnConversationID(t *testing.T) {
+	t.Parallel()
+	pool := newTestPool(PoolConfig{}, NewFakeRunner(firstCallJSON("conv-42", "ok")))
+
+	var got string
+	_, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt",
+		CallOptions{OnConversationID: func(id string) { got = id }}, DiscardCost)
+
+	require.NoError(t, err)
+	assert.Equal(t, "conv-42", got)
 }

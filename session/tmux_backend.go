@@ -42,12 +42,22 @@ func (b *TmuxBackend) GetCurrentWorkingDirectory() (string, error) {
 
 // --- Lifecycle ---
 
-func (b *TmuxBackend) Start(dir string) error            { return b.mgr.Start(dir) }
-func (b *TmuxBackend) RestoreWithWorkDir(w string) error { return b.mgr.RestoreWithWorkDir(w) }
-func (b *TmuxBackend) Close() error                      { return b.mgr.Close() }
-func (b *TmuxBackend) IsAlive() bool                     { return b.mgr.IsAlive() }
-func (b *TmuxBackend) HasLiveSessionNoCache() bool       { return b.mgr.DoesSessionExistNoCache() }
-func (b *TmuxBackend) HasSession() bool                  { return b.mgr.HasSession() }
+func (b *TmuxBackend) Start(dir string) error {
+	return withBackendOperationSpan(context.Background(), backendLabelTmux, "session.backend.start", func() error {
+		return b.mgr.Start(dir)
+	})
+}
+
+func (b *TmuxBackend) RestoreWithWorkDir(w string) error {
+	return withBackendOperationSpan(context.Background(), backendLabelTmux, "session.backend.restore", func() error {
+		return b.mgr.RestoreWithWorkDir(w)
+	})
+}
+
+func (b *TmuxBackend) Close() error                { return b.mgr.Close() }
+func (b *TmuxBackend) IsAlive() bool               { return b.mgr.IsAlive() }
+func (b *TmuxBackend) HasLiveSessionNoCache() bool { return b.mgr.DoesSessionExistNoCache() }
+func (b *TmuxBackend) HasSession() bool            { return b.mgr.HasSession() }
 
 // --- Terminal I/O ---
 
@@ -112,8 +122,17 @@ func (b *TmuxBackend) UnsubscribeFromControlModeUpdates(id string) {
 
 // --- Attach ---
 
-func (b *TmuxBackend) Attach() (chan struct{}, error) { return b.mgr.Attach() }
-func (b *TmuxBackend) DetachSafely() error            { return b.mgr.DetachSafely() }
+func (b *TmuxBackend) Attach() (chan struct{}, error) {
+	var ch chan struct{}
+	err := withBackendOperationSpan(context.Background(), backendLabelTmux, "session.backend.attach", func() error {
+		var attachErr error
+		ch, attachErr = b.mgr.Attach()
+		return attachErr
+	})
+	return ch, err
+}
+
+func (b *TmuxBackend) DetachSafely() error { return b.mgr.DetachSafely() }
 
 // --- Exit notifications ---
 

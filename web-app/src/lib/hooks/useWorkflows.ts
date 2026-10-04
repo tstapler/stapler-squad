@@ -4,7 +4,6 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { createClient } from "@connectrpc/connect";
 import {
   SessionService,
-  WorkflowProto,
   ListWorkflowsRequestSchema,
   CreateWorkflowRequestSchema,
   UpdateWorkflowRequestSchema,
@@ -12,9 +11,11 @@ import {
   ArchiveWorkflowSessionsRequestSchema,
   DeleteWorkflowFailedSessionsRequestSchema,
 } from "@/gen/session/v1/session_pb";
+import type { WorkflowProto } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
 import { getConnectTransport } from "@/lib/api/transport";
+import { useWatchWorkflows } from "@/lib/hooks/useWatchWorkflows";
 
 export interface WorkflowFormData {
   slug: string;
@@ -116,6 +117,52 @@ export function useWorkflows(): UseWorkflowsReturn {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Staleness backstop: WatchWorkflows (useWatchWorkflows.ts) can silently
+  // stall -- e.g. a proxy idle-timeout that never surfaces a stream error or
+  // close -- in which case its own reconnect-on-error logic never fires and
+  // a long-lived tab keeps serving an ever-stale list with no indication.
+  // A low-frequency re-fetch, plus one on tab refocus, catches that case
+  // without connection-state tracking; the workflow list is small enough
+  // that a full ListWorkflows call is cheap.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      void fetchWorkflows();
+    }, 90_000);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") void fetchWorkflows();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [fetchWorkflows]);
+
+  // Live updates from any client (MCP tool, another tab, a cron fire) via
+  // WatchWorkflows -- keeps `workflows` current without requiring a manual
+  // refresh. See useWatchWorkflows.ts's header for why this stays a plain
+  // upsert/remove against local state rather than a Redux-backed store.
+  const onWorkflowCreatedOrUpdated = useCallback((workflow: WorkflowProto) => {
+    setWorkflows((prev) => {
+      const idx = prev.findIndex((w) => w.id === workflow.id);
+      if (idx === -1) return [...prev, workflow];
+      const next = prev.slice();
+      next[idx] = workflow;
+      return next;
+    });
+  }, []);
+
+  const onWorkflowDeleted = useCallback((id: string) => {
+    setWorkflows((prev) => prev.filter((w) => w.id !== id));
+  }, []);
+
+  useWatchWorkflows({
+    onCreatedOrUpdated: onWorkflowCreatedOrUpdated,
+    onDeleted: onWorkflowDeleted,
+  });
 
   const createWorkflow = useCallback(
     async (data: WorkflowFormData) => {

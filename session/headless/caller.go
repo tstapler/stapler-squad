@@ -45,6 +45,10 @@ type CallOptions struct {
 	// AllowedTools as belt-and-suspenders — an explicit denylist of destructive
 	// Bash prefixes and write-capable tools on top of a scoped allowlist.
 	DisallowedTools string
+	// OnConversationID, if set, receives the call's Claude conversation (transcript)
+	// UUID once known, so a caller can persist it for later cost attribution. Not
+	// invoked when the call fails before producing a result.
+	OnConversationID func(conversationID string)
 }
 
 // firstCallJSONResult is the JSON schema of the terminal `"type":"result"` line
@@ -550,7 +554,7 @@ func (p *Pool) sendFirstCallSuccess(key FeatureKey, result firstCallJSONResult, 
 			return
 		}
 	}
-	cio.send(StreamChunk{Done: true, CostUSD: result.CostUSD})
+	cio.send(StreamChunk{Done: true, CostUSD: result.CostUSD, ConversationID: result.SessionID})
 }
 
 // finishFirstCall interprets a first call's scan result once the stream has
@@ -720,52 +724,64 @@ func (p *Pool) CallWithOptions(ctx context.Context, key FeatureKey, systemPrompt
 	return p.call(ctx, key, systemPrompt, userPrompt, opts.Model, p.runner)
 }
 
-// CostSink receives the USD cost of a completed CallBlocking call. Every call site
-// must supply one — see DiscardCost for the explicit, greppable opt-out for a call
-// with nowhere to persist cost. This replaced a `(string, float64, error)` return
-// shape that let several pipeline call sites silently drop real cost data via `_`.
-type CostSink func(usd float64)
+// CostSink receives the USD cost of a completed CallBlocking call, plus whether
+// that cost is trustworthy. priced is false when the adapter could not compute a
+// real dollar figure (e.g. an unpriced model family) — usd is 0 in that case, and
+// callers must not fold it into a running total as if it were a genuine free
+// call. Every call site must supply one — see DiscardCost for the explicit,
+// greppable opt-out for a call with nowhere to persist cost. This replaced a
+// `(string, float64, error)` return shape that let several pipeline call sites
+// silently drop real cost data via `_`.
+type CostSink func(usd float64, priced bool)
 
 // DiscardCost is the explicit opt-out for a CallBlocking call with nowhere to
 // persist cost (e.g. a capability self-check). Grep this name to find every call
 // site not wired into cost tracking.
-func DiscardCost(float64) {}
+func DiscardCost(float64, bool) {}
 
 // CallBlocking makes a single blocking headless call and returns the result text
 // and any error. opts is the single place to pass WorkDir/Model/AllowedTools/
 // PermissionMode; the zero value reproduces the simplest call shape. sink is
 // always invoked with the cost in USD reported by claude, parsed from the JSON
 // result at no extra cost — pass DiscardCost if the caller has nowhere to put it.
+// Claude's total_cost_usd is always authoritative when the CLI call completes, so
+// sink always fires with priced=true here; a false value only ever comes from a
+// non-Claude adapter (see GeminiCaller).
 func (p *Pool) CallBlocking(ctx context.Context, key FeatureKey, systemPrompt, userPrompt string, opts CallOptions, sink CostSink) (string, error) {
 	ch, err := p.CallWithOptions(ctx, key, systemPrompt, userPrompt, opts)
 	if err != nil {
 		return "", err
 	}
-	text, cost, err := drainChannelWithCost(ch)
+	text, cost, conversationID, err := drainChannelWithCost(ch)
 	if sink != nil {
-		sink(cost)
+		sink(cost, true)
+	}
+	if opts.OnConversationID != nil && conversationID != "" {
+		opts.OnConversationID(conversationID)
 	}
 	return text, err
 }
 
 // drainChannelWithCost collects all StreamChunk text from ch until Done=true or
-// Err!=nil, along with the CostUSD reported on the Done chunk.
-func drainChannelWithCost(ch <-chan StreamChunk) (string, float64, error) {
+// Err!=nil, along with the CostUSD and ConversationID reported on the Done chunk.
+func drainChannelWithCost(ch <-chan StreamChunk) (string, float64, string, error) {
 	var sb strings.Builder
 	var costUSD float64
+	var conversationID string
 	for chunk := range ch {
 		if chunk.Err != nil {
-			return sb.String(), costUSD, chunk.Err
+			return sb.String(), costUSD, conversationID, chunk.Err
 		}
 		if chunk.Text != "" {
 			sb.WriteString(chunk.Text)
 		}
 		if chunk.Done {
 			costUSD = chunk.CostUSD
+			conversationID = chunk.ConversationID
 			break
 		}
 	}
 	for range ch {
 	}
-	return sb.String(), costUSD, nil
+	return sb.String(), costUSD, conversationID, nil
 }

@@ -341,6 +341,16 @@ export const pipelineGroup = style({
   fontSize: vars.fontSize.xs,
   color: vars.color.textMuted,
   paddingLeft: vars.space["1"],
+  // Story 5.2.4: a row can now carry up to 3 badges (pipeline-mode/
+  // content-drift, executor fallback, executor drift) plus the branch/cost/
+  // ended badges above it — below this repo's standard mobile breakpoint,
+  // wrap onto additional lines rather than truncating or forcing horizontal
+  // scroll (ux.md's narrow-viewport treatment).
+  "@media": {
+    "(max-width: 480px)": {
+      flexWrap: "wrap",
+    },
+  },
 });
 
 export const pipelineLabel = style({
@@ -356,6 +366,39 @@ export const pipelineDriftBadge = style({
   alignItems: "center",
   padding: `1px ${vars.space["2"]}`,
   borderRadius: vars.radii.sm,
+  background: vars.color.warningBg,
+  color: vars.color.warningText,
+  border: `1px solid ${vars.color.warning}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.medium,
+  whiteSpace: "nowrap",
+});
+
+// Story 5.2.4: executor-provenance badges — same warning color family as
+// pipelineDriftBadge above (family resemblance, AC18) but each with its own
+// icon, label text, and a structurally distinct style (dashed vs. solid vs.
+// pill-radius border) so the three "something changed/differs" signals are
+// never pixel-identical when they co-occur in the same pipelineGroup row.
+export const executorFallbackBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "2px",
+  padding: `1px ${vars.space["2"]}`,
+  borderRadius: vars.radii.sm,
+  background: vars.color.warningBg,
+  color: vars.color.warningText,
+  border: `1px dashed ${vars.color.warning}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.medium,
+  whiteSpace: "nowrap",
+});
+
+export const executorDriftBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "2px",
+  padding: `1px ${vars.space["2"]}`,
+  borderRadius: vars.radii.full,
   background: vars.color.warningBg,
   color: vars.color.warningText,
   border: `1px solid ${vars.color.warning}`,

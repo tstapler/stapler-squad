@@ -1761,8 +1761,8 @@ func TestRebuildMu_ForcesSerialization_ConcurrentPathBlocksUntilFirstCompletes(t
 	go func() {
 		defer close(aDone)
 		svc.rebuildClaudeSettingsRules([]classifier.Rule{{
-			ID: "cs-a", ToolName: "Read", Decision: classifier.AutoAllow, Enabled: true,
-			Source: "claude-settings", Priority: 150,
+			RuleMeta: classifier.RuleMeta{ID: "cs-a", Enabled: true, Source: "claude-settings", Priority: 150},
+			ToolName: "Read", Decision: classifier.AutoAllow,
 		}})
 	}()
 	<-hookEntered // A is now paused mid-critical-section, holding rebuildMu.
@@ -1890,8 +1890,8 @@ func bashApproval(id, sessionID, command string, createdAt time.Time) *PendingAp
 // RPC path (upsertAllowRule below).
 func addBashRuleDirect(svc *RulesService, id, name, commandPattern string) {
 	rule := classifier.Rule{
-		ID: id, Name: name, ToolName: "Bash",
-		Decision: classifier.AutoAllow, Enabled: true, Source: "user", Priority: 999,
+		RuleMeta: classifier.RuleMeta{ID: id, Name: name, Enabled: true, Source: "user", Priority: 999},
+		ToolName: "Bash", Decision: classifier.AutoAllow,
 	}
 	if commandPattern != "" {
 		rule.CommandPattern = regexp.MustCompile(commandPattern)
@@ -2317,14 +2317,10 @@ func TestReconcilePendingApprovals_WorktreeSettingsChange_DoesNotTrigger(t *test
 	// there is no async reconciliation to wait for: if none of the production call sites
 	// that spawn reconcilePendingApprovalsSafe ran, nothing ever will.
 	rulesSvc.classifier.ReplaceRules(append(rulesSvc.classifier.Rules(), classifier.Rule{
-		ID:             "worktree-rule",
-		Name:           "Auto-allow safe git status checks",
+		RuleMeta:       classifier.RuleMeta{ID: "worktree-rule", Name: "Auto-allow safe git status checks", Enabled: true, Source: "user", Priority: 999},
 		ToolName:       "Bash",
 		CommandPattern: regexp.MustCompile("^git status$"),
 		Decision:       classifier.AutoAllow,
-		Enabled:        true,
-		Source:         "user",
-		Priority:       999,
 	}))
 
 	all := store.ListAll()

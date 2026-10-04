@@ -1,6 +1,8 @@
 .idea
 .aider*
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/*.lock
 stapler-squad
 stapler-squad.prev
 stapler-squad-otel
@@ -48,6 +50,7 @@ session/ent/*/
 /server/web/dist/
 /.playwright-mcp
 /tools/ci-gates/node_modules/
+/tools/scanner/frontend/node_modules/
 
 # worktrees
 worktrees/

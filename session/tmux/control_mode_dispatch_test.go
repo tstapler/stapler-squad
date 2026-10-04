@@ -268,7 +268,7 @@ func TestCMDispatch_OutputNotificationDuringCommandDoesNotCorruptQueue(t *testin
 	// Set up a subscriber to receive broadcast output.
 	subCh := make(chan []byte, 4)
 	sess.controlModeSubMu.Lock()
-	sess.controlModeSubscribers = map[string]chan []byte{"test-sub": subCh}
+	sess.controlModeSubscribers = map[string]*controlModeSubscriber{"test-sub": {ch: subCh, state: subscriberAttached}}
 	sess.controlModeSubMu.Unlock()
 
 	channels := enqueueChannels(sess, 1)

@@ -299,6 +299,21 @@ type Config struct {
 	// BacklogItemData.ReworkCapOverride (0 = unlimited for that item, >0 = that item's own
 	// cap) — see effectiveReworkCap in server/services/backlog_service_triage.go.
 	MaxAutoReworkIterations int `json:"max_auto_rework_iterations,omitempty"`
+	// AutonomousMaxTurns caps how many turns a single AutonomousDriver run gets before
+	// stopping without a DONE signal (session/autonomous_driver.go). 0 = use the default
+	// (60); values above autonomousMaxTurnsHardCeiling are clamped to it. Unlike
+	// MaxAutoReworkIterations (caps respawned sessions), this caps turns within one session.
+	AutonomousMaxTurns int `json:"autonomous_max_turns,omitempty"`
+	// DiagnoseNudgeMaxAttempts caps how many times the Diagnose & Nudge feature
+	// (BacklogStuckState.DiagnoseNudgeCount) will nudge the same stuck item before
+	// further automatic nudging stops and the dispatched agent's action space is
+	// narrowed to file-a-bug/post-a-note only. 0 = use the default (3); values
+	// above diagnoseNudgeMaxAttemptsHardCeiling are clamped to it.
+	DiagnoseNudgeMaxAttempts int `json:"diagnose_nudge_max_attempts,omitempty"`
+	// NoopDispatchThreshold is how many consecutive work sessions on one PASS-verdict
+	// item may end with no new commits before it is flagged repeated_noop_dispatch and
+	// further dispatch is blocked. 0 = use the default (3).
+	NoopDispatchThreshold int `json:"noop_dispatch_threshold,omitempty"`
 	// MaxConcurrentBacklogWorkItems caps how many distinct backlog items may be
 	// "in_progress" at the same time. 0 = use the default (2). Values above
 	// maxConcurrentBacklogWorkItemsHardCeiling are clamped to the ceiling.
@@ -363,6 +378,9 @@ type Config struct {
 	// OS keychain (see jules.KeyringTokenSource) — this struct only holds the
 	// opt-in flag, per-repo egress acknowledgements, and spend guard caps.
 	Jules JulesConfig `json:"jules,omitempty"`
+	// TaggingClassifier holds the LLM model hierarchy for session-tag
+	// classification (primary model plus ordered fallbacks).
+	TaggingClassifier TaggingClassifierConfig `json:"tagging_classifier,omitempty"`
 
 	// Escape analytics configuration
 
@@ -424,9 +442,10 @@ type Config struct {
 	// "reconnect cleanly under the legacy path"; tymux's rollback cannot mean
 	// that, since it means "new sessions honor the reverted default while
 	// existing tymux-backed sessions stay pinned to tymux for their
-	// lifetime". nil means "never completed". ResolveGlobalTymuxDefault
-	// refuses to let the *global* tymux default resolve to true until this
-	// is set. Set via RecordTymuxRollbackRehearsalCompleted.
+	// lifetime". nil means "never completed". Purely a historical record now
+	// — the global default no longer gates on it (see EffectiveTymuxEnabled;
+	// SetTymuxGlobalOverride sets the "tymux" feature flag unconditionally).
+	// Set via RecordTymuxRollbackRehearsalCompleted.
 	TymuxRollbackRehearsalCompletedAt *time.Time `json:"tymux_rollback_rehearsal_completed_at,omitempty"`
 	// TymuxSessionOverrides forces the tymux-bundled-integration project's
 	// process-manager backend for specific named tmux sessions, regardless of
@@ -437,24 +456,6 @@ type Config struct {
 	// comment above); consulted by ResolveSessionBackend
 	// (session/backend_resolution.go).
 	TymuxSessionOverrides map[string]bool `json:"tymux_session_overrides,omitempty"`
-	// NativeWorktreeSessionOverrides forces the go-git-worktree-and-merge
-	// project's native (go-git) worktree implementation for specific named
-	// tmux sessions, regardless of the global native_git_worktree feature
-	// flag default (ADR-002; Phase 4, Epic 4.1). Keys are tmux session names
-	// — GitWorktree already carries a sessionName field to key off of — an
-	// absent key means "no override, use the global default". Mirrors
-	// StreamHubSessionOverrides's shape exactly; consulted by
-	// session/git.useNativeWorktree.
-	NativeWorktreeSessionOverrides map[string]bool `json:"native_worktree_session_overrides,omitempty"`
-	// NativeMergeWorktreeOverrides forces the native (go-git) merge
-	// implementation for specific worktree paths, regardless of the global
-	// native_git_merge feature flag default (ADR-002; Phase 4, Epic 4.1).
-	// Keyed by worktreePath rather than sessionName: MergeMainIntoWorktree
-	// has no session-name parameter to key off of without a signature
-	// change or a new session/git reverse lookup, both rejected in ADR-002's
-	// Alternatives Considered. An absent key means "no override, use the
-	// global default". Consulted by session/git.useNativeMerge.
-	NativeMergeWorktreeOverrides map[string]bool `json:"native_merge_worktree_overrides,omitempty"`
 }
 
 // StreamHubFeatureFlag is the config.FeatureFlags key backing
@@ -469,38 +470,48 @@ const StreamHubFeatureFlag = "stream_hub"
 // still required, same as the STAPLER_SQUAD_USE_TYMUX env var it replaces.
 const TymuxFeatureFlag = "tymux"
 
-// NativeWorktreeFeatureFlag is the config.FeatureFlags key backing
-// EffectiveNativeWorktreeEnabled — the global native (go-git) worktree
-// implementation default. Defaults to off (ADR-002): this is
-// corruption-blast-radius code touching every session's git state, not a
-// transparent perf optimization, so rollout is opt-in.
-const NativeWorktreeFeatureFlag = "native_git_worktree"
+// TriageGuidanceHaltFeatureFlag is the config.FeatureFlags key backing
+// EffectiveTriageGuidanceHaltEnabled — gates whether automated triage halts
+// and asks via a durable GuidanceRequest instead of guessing on a genuinely
+// ambiguous item (durable-guidance-request AC2). Defaults to off: no rollback
+// rehearsal has vouched for this as the global default yet, same posture as
+// TymuxFeatureFlag.
+const TriageGuidanceHaltFeatureFlag = "triage_guidance_halt"
 
-// NativeMergeFeatureFlag is the config.FeatureFlags key backing
-// EffectiveNativeMergeEnabled — the global native (go-git) merge
-// implementation default. Defaults to off, same rationale as
-// NativeWorktreeFeatureFlag (ADR-002).
-const NativeMergeFeatureFlag = "native_git_merge"
-
-// EffectiveNativeWorktreeEnabled reports whether the global native-worktree
-// default is active. session/git.useNativeWorktree checks a session
-// override first and falls back to this for the global default (ADR-002).
-func EffectiveNativeWorktreeEnabled(cfg *Config) bool {
-	return cfg.GetFeatureFlagWithDefault(NativeWorktreeFeatureFlag, false)
+// EffectiveTriageGuidanceHaltEnabled reports whether automated triage should
+// halt and create a GuidanceRequest on ambiguity rather than guess. Callers
+// must read this fresh at the exact halt-decision instant, not cache it at
+// pass start — triage is a long-running background call, not a
+// request/response RPC, so staleness at the decision point is the risk that
+// matters (mirrors EffectiveTymuxEnabled's live-read contract).
+func EffectiveTriageGuidanceHaltEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(TriageGuidanceHaltFeatureFlag, false)
 }
 
-// EffectiveNativeMergeEnabled reports whether the global native-merge
-// default is active. session/git.useNativeMerge checks a worktree-path
-// override first and falls back to this for the global default (ADR-002).
-func EffectiveNativeMergeEnabled(cfg *Config) bool {
-	return cfg.GetFeatureFlagWithDefault(NativeMergeFeatureFlag, false)
+// DiagnoseNudgeFeatureFlag is the config.FeatureFlags key backing
+// EffectiveDiagnoseNudgeEnabled — the kill switch for autonomous
+// diagnose_nudge_session writes (Diagnose & Nudge, backlog item 68964304).
+// Shipped with no way to disable short of a code change/redeploy; this flag
+// closes that gap. Defaults to off, same posture as TymuxFeatureFlag/
+// TriageGuidanceHaltFeatureFlag: no rollback rehearsal has vouched for
+// autonomous nudging as the default yet.
+const DiagnoseNudgeFeatureFlag = "diagnose_nudge_enabled"
+
+// EffectiveDiagnoseNudgeEnabled reports whether a dispatched Diagnose & Nudge
+// agent may actually perform a nudge write. Callers must read this fresh at
+// the exact write instant (diagnose_nudge_session's MCP handler), not cache
+// it at dispatch start — an in-flight diagnostic session that already
+// decided to nudge before the flag flips off must still be blocked at the
+// write call site.
+func EffectiveDiagnoseNudgeEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(DiagnoseNudgeFeatureFlag, false)
 }
 
 // EffectiveTymuxEnabled reports whether the global tymux process-manager
-// backend default is active. Read once at process startup
-// (main.go's resolveStartupBackend) — deliberately not live-settable, so
-// switching the default backend for every new session stays a conscious
-// operator action rather than a live UI toggle.
+// backend default is active. Resolved fresh on every call (session.getSelectedBackend)
+// via SetTymuxGlobalOverride — live-settable, no process restart required.
+// main.go's own startup-time read of this (via ResolveSessionBackend) is only
+// for tymuxNeeded's supervision decision, not a cache of this value.
 func EffectiveTymuxEnabled(cfg *Config) bool {
 	return cfg.GetFeatureFlagWithDefault(TymuxFeatureFlag, false)
 }
@@ -509,8 +520,9 @@ func EffectiveTymuxEnabled(cfg *Config) bool {
 // TymuxRollbackRehearsalCompletedAt and saves the config — intended to be
 // called exactly once, after manually verifying a tymux rollback rehearsal
 // (new sessions honor the reverted default while existing tymux-backed
-// sessions stay pinned) passed against a real disposable session. Unblocks
-// ResolveGlobalTymuxDefault from refusing to enable the global default.
+// sessions stay pinned) passed against a real disposable session.
+// TymuxRollbackRehearsalCompletedAt's own doc comment covers why this is a
+// historical record only, not an enforced gate.
 func (c *Config) RecordTymuxRollbackRehearsalCompleted() error {
 	now := time.Now()
 	c.TymuxRollbackRehearsalCompletedAt = &now
@@ -645,121 +657,6 @@ func (c *Config) GetTymuxGlobalOverride() (value bool, ok bool) {
 	return c.GetFeatureFlagOverride(TymuxFeatureFlag)
 }
 
-// GetNativeWorktreeSessionOverride reports whether sessionName has a
-// per-session NativeWorktreeSessionOverrides entry recorded, and if so, what
-// it forces. Mirrors GetStreamHubSessionOverride's nil-safe shape: a nil
-// Config or nil map reports (false, false) — no override.
-func (c *Config) GetNativeWorktreeSessionOverride(sessionName string) (forceNative bool, ok bool) {
-	if c == nil || c.NativeWorktreeSessionOverrides == nil {
-		return false, false
-	}
-	forceNative, ok = c.NativeWorktreeSessionOverrides[sessionName]
-	return forceNative, ok
-}
-
-// SetNativeWorktreeSessionOverride sets or clears sessionName's per-session
-// native-worktree override and persists the config to disk. forceNative
-// follows this file's tri-state *bool convention (see
-// SetStreamHubSessionOverride): nil removes any override for sessionName
-// (falling back to the global default), a non-nil false explicitly pins the
-// session to the legacy implementation regardless of the global default,
-// and a non-nil true forces the native implementation.
-//
-// KNOWN GAP (PR #730 Gate 2 review): this load-mutate-save isn't fully locked
-// against a concurrent writer — a pre-existing pattern shared with
-// StreamHub/Tymux overrides; needs a shared fix across all three, not a
-// one-off here.
-func (c *Config) SetNativeWorktreeSessionOverride(sessionName string, forceNative *bool) error {
-	if forceNative == nil {
-		if c.NativeWorktreeSessionOverrides != nil {
-			delete(c.NativeWorktreeSessionOverrides, sessionName)
-		}
-		return SaveConfig(c)
-	}
-	if c.NativeWorktreeSessionOverrides == nil {
-		c.NativeWorktreeSessionOverrides = make(map[string]bool)
-	}
-	c.NativeWorktreeSessionOverrides[sessionName] = *forceNative
-	return SaveConfig(c)
-}
-
-// SetNativeWorktreeGlobalOverride sets or clears the "native_git_worktree"
-// feature flag and persists the config to disk. forceNative follows this
-// file's tri-state *bool convention: nil clears the flag (reverting to
-// GetFeatureFlagWithDefault's off-by-default), non-nil sets it explicitly
-// for every session resolved from now on. Mirrors SetStreamHubGlobalOverride
-// exactly.
-func (c *Config) SetNativeWorktreeGlobalOverride(forceNative *bool) error {
-	if forceNative == nil {
-		return c.DeleteFeatureFlag(NativeWorktreeFeatureFlag)
-	}
-	return c.SetFeatureFlag(NativeWorktreeFeatureFlag, *forceNative)
-}
-
-// GetNativeWorktreeGlobalOverride reports the explicitly-persisted
-// "native_git_worktree" feature flag value, if any. Mirrors
-// GetStreamHubGlobalOverride's (value, ok) shape.
-func (c *Config) GetNativeWorktreeGlobalOverride() (value bool, ok bool) {
-	return c.GetFeatureFlagOverride(NativeWorktreeFeatureFlag)
-}
-
-// GetNativeMergeWorktreeOverride reports whether worktreePath has a
-// per-worktree NativeMergeWorktreeOverrides entry recorded, and if so, what
-// it forces. Keyed by worktreePath, not sessionName, per ADR-002. Mirrors
-// GetStreamHubSessionOverride's nil-safe shape: a nil Config or nil map
-// reports (false, false) — no override.
-func (c *Config) GetNativeMergeWorktreeOverride(worktreePath string) (forceNative bool, ok bool) {
-	if c == nil || c.NativeMergeWorktreeOverrides == nil {
-		return false, false
-	}
-	forceNative, ok = c.NativeMergeWorktreeOverrides[worktreePath]
-	return forceNative, ok
-}
-
-// SetNativeMergeWorktreeOverride sets or clears worktreePath's per-worktree
-// native-merge override and persists the config to disk. forceNative
-// follows this file's tri-state *bool convention: nil removes any override
-// for worktreePath (falling back to the global default), a non-nil false
-// explicitly pins that worktree to the legacy implementation regardless of
-// the global default, and a non-nil true forces the native implementation.
-//
-// KNOWN GAP (PR #730 Gate 2 review): this load-mutate-save isn't fully locked
-// against a concurrent writer — see SetNativeWorktreeSessionOverride's
-// identical note.
-func (c *Config) SetNativeMergeWorktreeOverride(worktreePath string, forceNative *bool) error {
-	if forceNative == nil {
-		if c.NativeMergeWorktreeOverrides != nil {
-			delete(c.NativeMergeWorktreeOverrides, worktreePath)
-		}
-		return SaveConfig(c)
-	}
-	if c.NativeMergeWorktreeOverrides == nil {
-		c.NativeMergeWorktreeOverrides = make(map[string]bool)
-	}
-	c.NativeMergeWorktreeOverrides[worktreePath] = *forceNative
-	return SaveConfig(c)
-}
-
-// SetNativeMergeGlobalOverride sets or clears the "native_git_merge" feature
-// flag and persists the config to disk. forceNative follows this file's
-// tri-state *bool convention: nil clears the flag (reverting to
-// GetFeatureFlagWithDefault's off-by-default), non-nil sets it explicitly
-// for every merge resolved from now on. Mirrors SetStreamHubGlobalOverride
-// exactly.
-func (c *Config) SetNativeMergeGlobalOverride(forceNative *bool) error {
-	if forceNative == nil {
-		return c.DeleteFeatureFlag(NativeMergeFeatureFlag)
-	}
-	return c.SetFeatureFlag(NativeMergeFeatureFlag, *forceNative)
-}
-
-// GetNativeMergeGlobalOverride reports the explicitly-persisted
-// "native_git_merge" feature flag value, if any. Mirrors
-// GetStreamHubGlobalOverride's (value, ok) shape.
-func (c *Config) GetNativeMergeGlobalOverride() (value bool, ok bool) {
-	return c.GetFeatureFlagOverride(NativeMergeFeatureFlag)
-}
-
 // GetGitHubEnterpriseHosts returns the configured GHES hosts, or nil if c is nil.
 func (c *Config) GetGitHubEnterpriseHosts() []GitHubEnterpriseHost {
 	if c == nil {
@@ -867,6 +764,7 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	cfg.SessionDefaults.Tags = []string{}
 	cfg.SessionDefaults.DirectoryRules = []DirectoryRule{}
 	cfg.SessionDefaults.Aliases = []AliasConfig{}
+	cfg.SessionDefaults.Programs = []ProgramConfig{}
 	// Escape analytics defaults. LoadConfigFromPath applies the same defaults
 	// after JSON decode (for fields absent from an existing config.json);
 	// DefaultConfig must mirror them so the two code paths are equivalent.
@@ -978,6 +876,9 @@ func (c *Config) HeadlessFailureCaptureDirOrDefault() (string, error) {
 	return filepath.Join(configDir, "headless-failures"), nil
 }
 
+// BacklogAttachmentDirName is the attachments directory's name under GetConfigDir().
+const BacklogAttachmentDirName = "backlog-attachments"
+
 // BacklogAttachmentDirOrDefault returns the resolved backlog attachment directory.
 // Uploaded images referenced from backlog item descriptions are stored here,
 // durably (unlike the 24h temp paste dir) since they're linked from persisted
@@ -989,7 +890,7 @@ func (c *Config) BacklogAttachmentDirOrDefault() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve config dir: %w", err)
 	}
-	return filepath.Join(configDir, "backlog-attachments"), nil
+	return filepath.Join(configDir, BacklogAttachmentDirName), nil
 }
 
 // PromptCacheDirOrDefault returns the resolved directory for temp-file-backed
@@ -1036,6 +937,15 @@ func (c *Config) AnalyticsMaxRowsOrDefault() int {
 	return c.AnalyticsMaxRows
 }
 
+// NoopDispatchThresholdOrDefault returns the configured no-op dispatch threshold, or 3
+// if unset or c is nil.
+func (c *Config) NoopDispatchThresholdOrDefault() int {
+	if c == nil || c.NoopDispatchThreshold <= 0 {
+		return 3
+	}
+	return c.NoopDispatchThreshold
+}
+
 // MaxAutoReworkIterationsOrDefault returns the configured rework-cap ceiling, or 20
 // if not set (zero value) or c is nil (BacklogService's cfg is nil in some test setups).
 // Raised from 3 to 20: 3 was tripping routinely on real, ultimately-fixable items
@@ -1049,6 +959,50 @@ func (c *Config) MaxAutoReworkIterationsOrDefault() int {
 		return 20
 	}
 	return c.MaxAutoReworkIterations
+}
+
+// autonomousMaxTurnsDefault is used when the config value is unset (0 or negative).
+// Raised from the driver's own historical fallback of 20, which was observed cutting
+// off recoverable multi-round work. autonomousMaxTurnsHardCeiling guards against a
+// runaway config value burning billed turns on a non-converging run.
+const (
+	autonomousMaxTurnsDefault     = 60
+	autonomousMaxTurnsHardCeiling = 200
+)
+
+// AutonomousMaxTurnsOrDefault returns the configured autonomous-driver turn cap,
+// clamped to [1, autonomousMaxTurnsHardCeiling]. Falls back to the default (60)
+// if unset (<=0) or c is nil.
+func (c *Config) AutonomousMaxTurnsOrDefault() int {
+	if c == nil || c.AutonomousMaxTurns <= 0 {
+		return autonomousMaxTurnsDefault
+	}
+	if c.AutonomousMaxTurns > autonomousMaxTurnsHardCeiling {
+		return autonomousMaxTurnsHardCeiling
+	}
+	return c.AutonomousMaxTurns
+}
+
+// diagnoseNudgeMaxAttemptsDefault is used when the config value is unset (0 or
+// negative). diagnoseNudgeMaxAttemptsHardCeiling guards against a runaway
+// config value letting the Diagnose & Nudge feature nudge a stuck session
+// indefinitely.
+const (
+	diagnoseNudgeMaxAttemptsDefault     = 3
+	diagnoseNudgeMaxAttemptsHardCeiling = 10
+)
+
+// DiagnoseNudgeMaxAttemptsOrDefault returns the configured Diagnose & Nudge
+// attempt cap, clamped to [1, diagnoseNudgeMaxAttemptsHardCeiling]. Falls back
+// to the default (3) if unset (<=0) or c is nil.
+func (c *Config) DiagnoseNudgeMaxAttemptsOrDefault() int {
+	if c == nil || c.DiagnoseNudgeMaxAttempts <= 0 {
+		return diagnoseNudgeMaxAttemptsDefault
+	}
+	if c.DiagnoseNudgeMaxAttempts > diagnoseNudgeMaxAttemptsHardCeiling {
+		return diagnoseNudgeMaxAttemptsHardCeiling
+	}
+	return c.DiagnoseNudgeMaxAttempts
 }
 
 // maxConcurrentBacklogWorkItemsDefault is used when the config value is unset (0
@@ -1115,6 +1069,41 @@ func (c *Config) MaxJulesSessionsPerDayOrDefault() int {
 		return maxJulesSessionsPerDayHardCeiling
 	}
 	return c.Jules.MaxJulesSessionsPerDay
+}
+
+// taggingClassifierModelDefault is the primary classification model when
+// TaggingClassifierConfig.Model is unset.
+const taggingClassifierModelDefault = "haiku"
+
+// TaggingClassifierModelOrDefault returns the configured primary classification model,
+// falling back to "haiku" when unset or c is nil. Whitespace is trimmed; an empty result
+// also falls back to the default (an all-spaces model name would otherwise reach --model).
+func (c *Config) TaggingClassifierModelOrDefault() string {
+	if c == nil {
+		return taggingClassifierModelDefault
+	}
+	if model := strings.TrimSpace(c.TaggingClassifier.Model); model != "" {
+		return model
+	}
+	return taggingClassifierModelDefault
+}
+
+// TaggingClassifierFallbacks returns the configured fallback model hierarchy with blanks
+// dropped, or nil when none is configured. Never returns a slice containing the primary —
+// a fallback equal to the primary is silently dropped (retrying the identical model twice
+// in a row only doubles cost without new information).
+func (c *Config) TaggingClassifierFallbacks() []string {
+	if c == nil {
+		return nil
+	}
+	primary := c.TaggingClassifierModelOrDefault()
+	var out []string
+	for _, m := range c.TaggingClassifier.FallbackModels {
+		if m = strings.TrimSpace(m); m != "" && m != primary {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // AutoSpawnReadyItemsOrDefault reports whether "ready" items should be automatically
@@ -1235,7 +1224,7 @@ func (c *Config) GetAvailablePrograms() []string {
 		shell = "/bin/bash"
 	}
 
-	candidates := []string{"proxy-claude", "claude", "claude-code", "gemini", "agy"}
+	candidates := []string{"proxy-claude", "claude", "claude-code", "gemini", "agy", "aider"}
 
 	for _, candidate := range candidates {
 		var shellCmd string
@@ -1449,6 +1438,9 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	if cfg.SessionDefaults.Aliases == nil {
 		cfg.SessionDefaults.Aliases = []AliasConfig{}
 	}
+	if cfg.SessionDefaults.Programs == nil {
+		cfg.SessionDefaults.Programs = []ProgramConfig{}
+	}
 	if cfg.ConfigVersion == 0 {
 		cfg.ConfigVersion = 1
 	}
@@ -1646,6 +1638,17 @@ func (c *Config) SlackSigningSecretOverride() string {
 // See project_plans/pi-support/implementation/plan.md, Epic 2.1.
 const FeaturePiSupport = "pi-support"
 
+// FeatureAppScrollForwardingClaude gates forwarding Claude Code's own PageUp
+// scroll keybinding into its fullscreen conversation view (instead of relying
+// solely on tmux-native scrollback capture) for eligible Claude Code sessions
+// -- eligibility itself is AppScrollGate's job, this flag is the independent
+// kill switch on top of it. Off by default, live-settable, never an env var
+// (Risk Control's "Feature flags" bullet). See
+// project_plans/app-scrollback-forwarding/implementation/plan.md, Epic 1.5.
+// Scoped per-adapter deliberately: the future pi/agy equivalents
+// (":pi"/":agy") are separate flag keys, not covered by this one.
+const FeatureAppScrollForwardingClaude = "terminal:app-scrollback-forwarding:claude"
+
 // GetFeatureFlag returns the persisted enabled state of the named feature flag.
 // Absent key returns false — all feature flags default to disabled.
 // Currently recognized flags:
@@ -1658,6 +1661,8 @@ const FeaturePiSupport = "pi-support"
 //	  "webhook_triggers", but has no effect unless "webhook_triggers" is also enabled (that
 //	  flag gates whether the route is registered at all).
 //	"pi-support" (FeaturePiSupport) — pi-coding-agent support, off by default.
+//	"terminal:app-scrollback-forwarding:claude" (FeatureAppScrollForwardingClaude) —
+//	  app-scrollback forwarding for Claude Code sessions, off by default.
 func (c *Config) GetFeatureFlag(name string) bool {
 	if c == nil || c.FeatureFlags == nil {
 		return false

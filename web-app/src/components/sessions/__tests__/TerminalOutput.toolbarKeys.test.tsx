@@ -58,6 +58,12 @@ jest.mock("@/lib/terminal/mobileDebug", () => ({
 
 // eslint-disable-next-line import/first
 import { TerminalOutput } from "../TerminalOutput";
+import { TerminalPoolProvider } from "@/lib/terminal/TerminalPool";
+
+// TerminalOutput sources its xterm instance from the pool (see TerminalPool.tsx); renders need the provider.
+function withPool(children: React.ReactNode) {
+  return <TerminalPoolProvider>{children}</TerminalPoolProvider>;
+}
 // eslint-disable-next-line import/first
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
 // eslint-disable-next-line import/first
@@ -70,7 +76,7 @@ const sendInput = jest.fn();
 let isInputChunking: jest.Mock;
 
 async function renderTerminal() {
-  render(<TerminalOutput sessionId="s1" baseUrl="/api" isVisible={false} />);
+  render(withPool(<TerminalOutput sessionId="s1" baseUrl="/api" isVisible={false} />));
   await act(async () => {});
 }
 

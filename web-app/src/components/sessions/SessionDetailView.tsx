@@ -26,10 +26,13 @@ import { Modal, ModalContent, ModalTitle, ModalFooter } from "@/components/ui/Mo
 import { ResumeSessionModal } from "./ResumeSessionModal";
 import { TagEditor } from "./TagEditor";
 import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
+import { BacklogOriginBadge } from "@/components/shared/BacklogOriginBadge";
+import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 import { GoalPanel } from "./GoalPanel";
 import { NotePanel } from "./NotePanel";
 import { WorkspacePeersPanel } from "./WorkspacePeersPanel";
 import { HandoffSummarySection } from "./HandoffSummarySection";
+import { GuidanceRequestPanel } from "@/components/guidance/GuidanceRequestPanel";
 import { useShells } from "@/lib/hooks/useShells";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { ShellTabLabel } from "./ShellTab";
@@ -314,6 +317,8 @@ export interface SessionDetailViewProps {
   canGoBack?: boolean;
   /** Backlog item ID to display in right-side panel. If provided, shows BacklogItemPanel. */
   backlogItemId?: string;
+  /** Resolved backlog-origin index entry for this session, if dispatched by backlog automation. Drives the header badge. */
+  backlogEntry?: BacklogIndexEntry;
 }
 
 // Terminal per the SessionStatus doc comment: "Session has been stopped
@@ -375,6 +380,7 @@ export function SessionDetailView({
   onBack,
   canGoBack,
   backlogItemId,
+  backlogEntry,
 }: SessionDetailViewProps) {
   // activeTabId is either a static SessionDetailTab or a shell tab id "shell:<shellId>"
   const [activeTabId, setActiveTabId] = useState<string>(initialTab);
@@ -758,6 +764,7 @@ export function SessionDetailView({
           <span className={styles.statusBadge} data-testid="session-status-badge">
             {getStatusLabel(session.status)}
           </span>
+          <BacklogOriginBadge entry={backlogEntry} compact />
         </h2>
         <ActionBar gap="sm" justify="end" scroll className={`${styles.headerActions} ${isFullscreen ? styles.fullscreenMobileHeaderActions : ""}`}>
           {/* Fullscreen — most used when viewing terminal/diff/vcs */}
@@ -1651,6 +1658,10 @@ export function SessionDetailView({
                 if (!result) throw new Error("Failed to save note");
               }}
             />
+            {/* Durable guidance requests scoped to this session (AC3) — same
+                shared component also embedded in BacklogItemDetail and
+                TriageReviewPanel. */}
+            <GuidanceRequestPanel scope="session" scopeKey={session.id} />
             {/* Other sessions sharing this workspace — shown when peers exist */}
             <WorkspacePeersPanel session={session} />
             {/* Restart-handoff summary record (Story 3.3.1) — always rendered,

@@ -1,0 +1,12 @@
+{
+  "id": "backlog:get-pending-gates",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "GetPendingGates",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_gates.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-09-12T11:54:59.554990393-07:00"
+}

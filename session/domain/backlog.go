@@ -228,6 +228,25 @@ const (
 	// (session/backlog_lifecycle_gates.go), mirroring
 	// reconcileOrphanedTriageItems' LivenessEngine-consulting sweep pattern.
 	StuckReasonGateTimeout StuckReason = "gate_timeout"
+	// StuckReasonBlockedByClaim: DequeueNextQueuedItems skipped this item because
+	// a different host holds the cross-host claim for its ExternalURL
+	// (project_plans/cross-host-claim-dedup). Claims never expire, so a stale
+	// claim would otherwise starve the item silently; this makes the skip
+	// visible with an operator override (OverrideClaimBlock).
+	StuckReasonBlockedByClaim StuckReason = "blocked_by_claim"
+	// StuckReasonWorktreeInconsistent: the worktree consistency sweep flagged an
+	// inconsistency it declined to auto-repair. Dual-written alongside its
+	// notification when the session has a live linked BacklogItem.
+	StuckReasonWorktreeInconsistent StuckReason = "worktree_inconsistent"
+	// StuckReasonRepeatedNoopDispatch: an item with a PASS verdict, sitting in
+	// review/in_progress, has had N consecutive work sessions end with no new
+	// commits (session/stuck_decisions.go's isRepeatedNoopDispatch). Set by
+	// reconcileRepeatedNoopDispatch; while open, the dispatcher
+	// (BacklogService.spawnSessionAfterGates) refuses to spawn another work
+	// session so the loop cannot continue unattended. Resolved when the item
+	// leaves review/in_progress, a new commit lands, or the duplicate claim
+	// that usually explains it is confirmed/archived.
+	StuckReasonRepeatedNoopDispatch StuckReason = "repeated_noop_dispatch"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -252,6 +271,9 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonBounceCapExhausted,
 	StuckReasonSteerFailed,
 	StuckReasonGateTimeout,
+	StuckReasonBlockedByClaim,
+	StuckReasonWorktreeInconsistent,
+	StuckReasonRepeatedNoopDispatch,
 }
 
 // IsValid reports whether r is a known stuck reason value.
@@ -263,7 +285,51 @@ func (r StuckReason) IsValid() bool {
 		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale, StuckReasonPRNeedsFix,
 		StuckReasonRespawnBlockedActive, StuckReasonLikelyFlaky, StuckReasonBlockedByDependency,
 		StuckReasonMultipleReasons, StuckReasonBounceCapExhausted, StuckReasonSteerFailed,
-		StuckReasonGateTimeout:
+		StuckReasonGateTimeout, StuckReasonBlockedByClaim, StuckReasonWorktreeInconsistent, StuckReasonRepeatedNoopDispatch:
+		return true
+	}
+	return false
+}
+
+// RequestScope is a validated string-backed enum identifying what a
+// GuidanceRequest is attached to — matching the house StuckReason/
+// BacklogStatus style. Determines the ownership check and delivery branch
+// (see GuidanceRequestDeliveryService).
+type RequestScope string
+
+const (
+	// RequestScopeBacklogItem: attached to a BacklogItem via item_id.
+	RequestScopeBacklogItem RequestScope = "backlog-item"
+	// RequestScopeSession: attached to a live/paused session via session_uuid.
+	RequestScopeSession RequestScope = "session"
+	// RequestScopeStandalone: not attached to anything; human-only surface.
+	RequestScopeStandalone RequestScope = "standalone"
+)
+
+// IsValid reports whether s is a known request scope value.
+func (s RequestScope) IsValid() bool {
+	switch s {
+	case RequestScopeBacklogItem, RequestScopeSession, RequestScopeStandalone:
+		return true
+	}
+	return false
+}
+
+// QuestionType is a validated string-backed enum identifying a
+// GuidanceRequest's answer shape, driving which control the React component
+// renders.
+type QuestionType string
+
+const (
+	QuestionTypeYesNo          QuestionType = "yes-no"
+	QuestionTypeMultipleChoice QuestionType = "multiple-choice"
+	QuestionTypeShortAnswer    QuestionType = "short-answer"
+)
+
+// IsValid reports whether t is a known question type value.
+func (t QuestionType) IsValid() bool {
+	switch t {
+	case QuestionTypeYesNo, QuestionTypeMultipleChoice, QuestionTypeShortAnswer:
 		return true
 	}
 	return false

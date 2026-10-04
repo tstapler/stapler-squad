@@ -44,6 +44,8 @@ function renderActions(overrides: Partial<React.ComponentProps<typeof ActionsSec
       onManualReviewSubmit={noop}
       onManualReviewCancel={noop}
       terminalState={null}
+      activeWorkSessionCount={0}
+      onSendBackWithFeedback={async () => {}}
       {...overrides}
     />
   );

@@ -17,11 +17,14 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
+	"github.com/tstapler/stapler-squad/session/ent/dismissedfinding"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
 	"github.com/tstapler/stapler-squad/session/ent/project"
 	"github.com/tstapler/stapler-squad/session/ent/session"
 	entshell "github.com/tstapler/stapler-squad/session/ent/shell"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
+	"github.com/tstapler/stapler-squad/session/ent/taggingrule"
+	"github.com/tstapler/stapler-squad/session/ent/taggingrulefire"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
 
 	"entgo.io/ent/dialect"
@@ -249,7 +252,8 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 		SetAutoApprove(data.AutoApprove).
 		SetAutonomousMode(data.AutonomousMode).
 		SetProgram(data.Program).
-		SetIsExpanded(data.IsExpanded)
+		SetIsExpanded(data.IsExpanded).
+		SetPinned(data.Pinned)
 
 	// Set optional fields
 	if data.WorkingDir != "" {
@@ -275,6 +279,12 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	}
 	if data.Note != "" {
 		sessionCreate.SetNote(data.Note)
+	}
+	if len(data.RuleTagProvenance) > 0 {
+		sessionCreate.SetRuleTagProvenance(data.RuleTagProvenance)
+	}
+	if len(data.SuppressedRuleTags) > 0 {
+		sessionCreate.SetSuppressedRuleTags(suppressedRuleTagsToSlice(data.SuppressedRuleTags))
 	}
 	if data.SessionType != "" {
 		sessionCreate.SetSessionType(string(data.SessionType))
@@ -314,6 +324,9 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	}
 	if data.InitialPrompt != "" {
 		sessionCreate.SetInitialPrompt(data.InitialPrompt)
+	}
+	if !data.InitialPromptSentAt.IsZero() {
+		sessionCreate.SetInitialPromptSentAt(data.InitialPromptSentAt)
 	}
 	if data.OneShot {
 		sessionCreate.SetOneShot(data.OneShot)
@@ -483,7 +496,8 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 		SetAutoApprove(data.AutoApprove).
 		SetAutonomousMode(data.AutonomousMode).
 		SetProgram(data.Program).
-		SetIsExpanded(data.IsExpanded)
+		SetIsExpanded(data.IsExpanded).
+		SetPinned(data.Pinned)
 
 	// Update optional fields
 	if data.WorkingDir != "" {
@@ -511,6 +525,11 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	// meaningful, intentionally-reachable state ("cleared"), not an "unset" sentinel, so the
 	// guarded-update convention would silently prevent a user from ever clearing it.
 	sessionUpdate.SetNote(data.Note)
+	// RuleTagProvenance/SuppressedRuleTags are set unconditionally too: retracting the last
+	// rule-owned tag or un-suppressing the last tag are meaningful "cleared to empty" states
+	// (same rationale as Note above), not an "unset" sentinel a guarded update would preserve.
+	sessionUpdate.SetRuleTagProvenance(data.RuleTagProvenance)
+	sessionUpdate.SetSuppressedRuleTags(suppressedRuleTagsToSlice(data.SuppressedRuleTags))
 	if data.SessionType != "" {
 		sessionUpdate.SetSessionType(string(data.SessionType))
 	}
@@ -559,6 +578,9 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	}
 	if data.InitialPrompt != "" {
 		sessionUpdate.SetInitialPrompt(data.InitialPrompt)
+	}
+	if !data.InitialPromptSentAt.IsZero() {
+		sessionUpdate.SetInitialPromptSentAt(data.InitialPromptSentAt)
 	}
 	if data.PauseReason != "" {
 		sessionUpdate.SetPauseReason(data.PauseReason)
@@ -812,6 +834,12 @@ func (r *EntRepository) Delete(ctx context.Context, title string) error {
 	// Delete diff stats if exists
 	if _, err := tx.DiffStats.Delete().Where(diffstats.HasSessionWith(session.ID(sess.ID))).Exec(ctx); err != nil {
 		return fmt.Errorf("failed to delete diff stats: %w", err)
+	}
+
+	// Stamp the conversation UUID onto the session's item_sessions before the claude_sessions
+	// row is deleted, so Insights can still attribute the transcript afterward.
+	if err := stampItemSessionConversationUUID(ctx, tx, sess); err != nil {
+		return err
 	}
 
 	// Delete claude session and its metadata if exists
@@ -1128,6 +1156,24 @@ func (r *EntRepository) UpdateLastAddedToQueue(ctx context.Context, title string
 	return nil
 }
 
+// UpdateInitialPromptSentAt sets only the initial_prompt_sent_at field for a
+// session, via a direct UPDATE (no read round-trip) -- see Instance.InitialPromptSentAt's
+// doc comment for why this must survive a restart.
+func (r *EntRepository) UpdateInitialPromptSentAt(ctx context.Context, title string, t time.Time) error {
+	n, err := r.client.Session.Update().
+		Where(session.Title(title)).
+		SetInitialPromptSentAt(t).
+		SetUpdatedAt(time.Now()).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update initial_prompt_sent_at: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", title)
+	}
+	return nil
+}
+
 // UpdateLastAcknowledged sets only the last_acknowledged field for a session,
 // issuing a single UPDATE WHERE title=? without a prior SELECT.
 func (r *EntRepository) UpdateLastAcknowledged(ctx context.Context, title string, t time.Time) error {
@@ -1228,6 +1274,36 @@ func nilIfEmptyJSON(j AcCriteriaJSON) *string {
 	return &s
 }
 
+// suppressedRuleTagsToSlice converts Instance.SuppressedRuleTags' in-memory
+// map[string]bool representation to the []string set persisted in the
+// suppressed_rule_tags JSON column (session/ent/schema/session.go) — a simpler
+// on-disk shape than a bool-valued JSON object, per Task 3.1.2a.
+func suppressedRuleTagsToSlice(m map[string]bool) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(m))
+	for tag, suppressed := range m {
+		if suppressed {
+			out = append(out, tag)
+		}
+	}
+	return out
+}
+
+// suppressedRuleTagsFromSlice is suppressedRuleTagsToSlice's inverse, used when
+// loading a session back from the suppressed_rule_tags JSON column.
+func suppressedRuleTagsFromSlice(s []string) map[string]bool {
+	if len(s) == 0 {
+		return nil
+	}
+	out := make(map[string]bool, len(s))
+	for _, tag := range s {
+		out[tag] = true
+	}
+	return out
+}
+
 // sessionToInstanceData converts an Ent Session entity to InstanceData
 func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 	data := &InstanceData{
@@ -1257,6 +1333,7 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 		MCPServerURL:        sess.McpServerURL,
 		OneShot:             sess.OneShot,
 		Hidden:              sess.Hidden,
+		Pinned:              sess.Pinned,
 	}
 
 	// Set optional time fields
@@ -1283,6 +1360,9 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 	}
 	if sess.LastPromptDetected != nil {
 		data.LastPromptDetected = *sess.LastPromptDetected
+	}
+	if sess.InitialPromptSentAt != nil {
+		data.InitialPromptSentAt = *sess.InitialPromptSentAt
 	}
 	data.LastPromptSignature = sess.LastPromptSignature
 	data.PauseReason = sess.PauseReason
@@ -1331,6 +1411,12 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 			data.Tags[i] = t.Name
 		}
 	}
+
+	// RuleTagProvenance/SuppressedRuleTags (ADR-002). A pre-migration row lacking
+	// these JSON columns decodes both to nil maps via ent's Default(), never an
+	// error — same backward-compat shape as the Category->Tags shim above.
+	data.RuleTagProvenance = sess.RuleTagProvenance
+	data.SuppressedRuleTags = suppressedRuleTagsFromSlice(sess.SuppressedRuleTags)
 
 	// Populate project ID from project edge (stored as name for string compatibility)
 	if sess.Edges.Project != nil {
@@ -1595,7 +1681,158 @@ func (r *EntRepository) DeleteRule(ctx context.Context, id string) error {
 	return err
 }
 
+func (r *EntRepository) AllTaggingRules(ctx context.Context) ([]TaggingRuleData, error) {
+	//nolint:entfullscan tagging rules are a small, admin-configured table; the whole set is needed to evaluate rule precedence.
+	rules, err := r.client.TaggingRule.Query().
+		Order(ent.Asc(taggingrule.FieldPriority)).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]TaggingRuleData, len(rules))
+	for i, rule := range rules {
+		result[i] = TaggingRuleData{
+			RuleID:         rule.RuleID,
+			Name:           rule.Name,
+			NamePattern:    rule.NamePattern,
+			BranchPattern:  rule.BranchPattern,
+			PathPattern:    rule.PathPattern,
+			ProgramPattern: rule.ProgramPattern,
+			RequiredTags:   rule.RequiredTags,
+			OutputTag:      rule.OutputTag,
+			Priority:       rule.Priority,
+			Enabled:        rule.Enabled,
+			Source:         rule.Source,
+			CreatedAt:      rule.CreatedAt,
+			UpdatedAt:      rule.UpdatedAt,
+		}
+	}
+	return result, nil
+}
+
+func (r *EntRepository) UpsertTaggingRule(ctx context.Context, data TaggingRuleData) error {
+	requiredTags := data.RequiredTags
+	if requiredTags == nil {
+		requiredTags = []string{}
+	}
+	return r.client.TaggingRule.Create().
+		SetRuleID(data.RuleID).
+		SetName(data.Name).
+		SetNamePattern(data.NamePattern).
+		SetBranchPattern(data.BranchPattern).
+		SetPathPattern(data.PathPattern).
+		SetProgramPattern(data.ProgramPattern).
+		SetRequiredTags(requiredTags).
+		SetOutputTag(data.OutputTag).
+		SetPriority(data.Priority).
+		SetEnabled(data.Enabled).
+		SetSource(data.Source).
+		OnConflictColumns(taggingrule.FieldRuleID).
+		UpdateNewValues().
+		Exec(ctx)
+}
+
+// DismissFinding upserts a DismissedFinding row keyed by data.FindingID.
+// Idempotent — dismissing an already-dismissed finding_id just refreshes
+// session_id/conversation_id/finding_type (dismissed_at is immutable, so a
+// re-dismiss never resets it).
+func (r *EntRepository) DismissFinding(ctx context.Context, data DismissedFindingData) error {
+	dismissedAt := data.DismissedAt
+	if dismissedAt.IsZero() {
+		dismissedAt = time.Now()
+	}
+	return r.client.DismissedFinding.Create().
+		SetFindingID(data.FindingID).
+		SetSessionID(data.SessionID).
+		SetConversationID(data.ConversationID).
+		SetFindingType(data.FindingType).
+		SetDismissedAt(dismissedAt).
+		OnConflictColumns(dismissedfinding.FieldFindingID).
+		UpdateNewValues().
+		Exec(ctx)
+}
+
+func (r *EntRepository) DeleteTaggingRule(ctx context.Context, id string) error {
+	_, err := r.client.TaggingRule.Delete().
+		Where(taggingrule.RuleID(id)).
+		Exec(ctx)
+	return err
+}
+
+// RecordTaggingRuleFire inserts a fire record for ruleID at firedAt.
+func (r *EntRepository) RecordTaggingRuleFire(ctx context.Context, ruleID string, firedAt time.Time) error {
+	return r.client.TaggingRuleFire.Create().
+		SetRuleID(ruleID).
+		SetFiredAt(firedAt).
+		Exec(ctx)
+}
+
+// GetTaggingRuleFireCounts returns a rule_id -> count map of fires recorded at or after since.
+func (r *EntRepository) GetTaggingRuleFireCounts(ctx context.Context, since time.Time) (map[string]int, error) {
+	type fireCountRow struct {
+		RuleID string `json:"rule_id"`
+		Count  int    `json:"count"`
+	}
+	var rows []fireCountRow
+	err := r.client.TaggingRuleFire.Query().
+		Where(taggingrulefire.FiredAtGTE(since)).
+		GroupBy(taggingrulefire.FieldRuleID).
+		Aggregate(ent.Count()).
+		Scan(ctx, &rows)
+	if err != nil {
+		return nil, fmt.Errorf("get tagging rule fire counts since %s: %w", since.Format(time.RFC3339), err)
+	}
+
+	result := make(map[string]int, len(rows))
+	for _, row := range rows {
+		result[row.RuleID] = row.Count
+	}
+	return result, nil
+}
+
+// ListDismissedFindingIDs returns the set of currently-dismissed finding_id
+// values, for GetInsightsSummary to filter against.
+func (r *EntRepository) ListDismissedFindingIDs(ctx context.Context) (map[string]bool, error) {
+	//nolint:entfullscan dismissed findings are a small table (bounded by the
+	// findingsCap-capped panel's realistic dismissal volume); the whole set is
+	// needed to filter every request's freshly computed findings, same
+	// rationale as AllRules above.
+	rows, err := r.client.DismissedFinding.Query().
+		Select(dismissedfinding.FieldFindingID).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		ids[row.FindingID] = true
+	}
+	return ids, nil
+}
+
 func (r *EntRepository) RecordAnalytics(ctx context.Context, data AnalyticsData) error {
+	return r.analyticsCreate(data).Exec(ctx)
+}
+
+// RecordAnalyticsBatch persists the batch in one SQLite statement/transaction.
+// Exact duplicate analytics IDs are idempotent while every other validation or
+// persistence error rejects the whole statement.
+func (r *EntRepository) RecordAnalyticsBatch(ctx context.Context, batch []AnalyticsData) error {
+	if len(batch) == 0 {
+		return nil
+	}
+	builders := make([]*ent.ClassificationAnalyticsCreate, 0, len(batch))
+	for _, data := range batch {
+		builders = append(builders, r.analyticsCreate(data))
+	}
+	return r.client.ClassificationAnalytics.CreateBulk(builders...).
+		OnConflictColumns(classificationanalytics.FieldAnalyticsID).
+		DoNothing().
+		Exec(ctx)
+}
+
+func (r *EntRepository) analyticsCreate(data AnalyticsData) *ent.ClassificationAnalyticsCreate {
 	return r.client.ClassificationAnalytics.Create().
 		SetAnalyticsID(data.ID).
 		SetSessionID(data.SessionID).
@@ -1615,8 +1852,7 @@ func (r *EntRepository) RecordAnalytics(ctx context.Context, data AnalyticsData)
 		SetCommandSubcategory(data.CommandSubcategory).
 		SetPythonImports(data.PythonImports).
 		SetSource(data.Source).
-		SetCreatedAt(data.CreatedAt).
-		Exec(ctx)
+		SetCreatedAt(data.CreatedAt)
 }
 
 func (r *EntRepository) ListAnalytics(ctx context.Context, limit int) ([]AnalyticsData, error) {

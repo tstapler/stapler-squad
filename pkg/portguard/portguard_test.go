@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // TestMain re-execs this same test binary as a disposable "stuck server"
@@ -57,7 +59,7 @@ func startHelper(t *testing.T, port int, ignoreTerm bool) *exec.Cmd {
 	// -test.run matches no actual Test function (TestMain is special-cased
 	// and always runs regardless of -run) — we only want TestMain's early
 	// env-var check below to fire, not the rest of the test suite.
-	cmd := exec.Command(os.Args[0], "-test.run=^NoSuchTest$") //nolint:norawexec // test helper child; t.Cleanup kills and Waits it
+	cmd := safeexec.CommandContext(context.Background(), os.Args[0], "-test.run=^NoSuchTest$")
 	cmd.Env = append(os.Environ(), "PORTGUARD_TEST_HELPER_PORT="+strconv.Itoa(port))
 	if ignoreTerm {
 		cmd.Env = append(cmd.Env, "PORTGUARD_TEST_HELPER_IGNORE_TERM=1")
@@ -143,5 +145,25 @@ func TestEnsureReleased_NoHolderIsANoop(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 1*time.Second {
 		t.Fatalf("EnsureReleased took %v for an already-free port; want near-instant", elapsed)
+	}
+}
+
+func TestEnsureReleased_StopsWaitingWhenContextCanceled(t *testing.T) {
+	port := freePort(t)
+	startHelper(t, port, false)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	err := EnsureReleased(ctx, Options{
+		Ports:        []int{port},
+		Timeout:      10 * time.Second,
+		PollInterval: 20 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatal("EnsureReleased returned nil for a canceled context")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("EnsureReleased ignored cancellation for %v", elapsed)
 	}
 }

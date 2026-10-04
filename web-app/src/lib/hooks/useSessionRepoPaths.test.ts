@@ -48,19 +48,19 @@ describe("useSessionRepoPaths — recency-ordered paths", () => {
   it("returns deduplicated paths in selectActiveSessionsSortedByUpdatedAt order, excluding UNSPECIFIED sessions", () => {
     const s1 = create(SessionSchema, {
       id: "s1",
-      path: "/repo/a",
+      repoRoot: "/repo/a",
       status: SessionStatus.ACTIVE,
       updatedAt: { seconds: 300n, nanos: 0 },
     });
     const s2 = create(SessionSchema, {
       id: "s2",
-      path: "/repo/b",
+      repoRoot: "/repo/b",
       status: SessionStatus.ACTIVE,
       updatedAt: { seconds: 100n, nanos: 0 },
     });
     const s3 = create(SessionSchema, {
       id: "s3",
-      path: "/repo/c",
+      repoRoot: "/repo/c",
       status: SessionStatus.UNSPECIFIED,
     });
 

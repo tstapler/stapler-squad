@@ -12,8 +12,11 @@ import {
   SessionActionsOverflowHandle,
 } from "./SessionActionsOverflow";
 import { hasLostContext, RevivedContextBadge } from "./RevivedContextBadge";
+import { truncateWorkspacePath } from "@/lib/utils/truncateWorkspacePath";
 import { SubStatusChip } from "./SubStatusChip";
 import { GitHubBadge } from "@/components/shared/GitHubBadge";
+import { BacklogOriginBadge } from "@/components/shared/BacklogOriginBadge";
+import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 import { RemoteConnectionIndicator } from "./RemoteConnectionIndicator";
 import { isSessionStale } from "@/lib/session-staleness";
 import { staleBadge, hostBadge } from "./SessionCard.css";
@@ -28,8 +31,10 @@ import {
   agentIcon as agentIconStyle,
   path as pathStyle,
   pathLine as pathLineStyle,
+  chipsLine as chipsLineStyle,
   elapsed as elapsedStyle,
   elapsedIcon as elapsedIconStyle,
+  elapsedSecondLine as elapsedSecondLineStyle,
   actions as actionsStyle,
   primaryActionWrapper,
   inlineActionButton,
@@ -67,6 +72,7 @@ interface SessionRowProps {
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
+  onTogglePinned?: (sessionId: string, pinned: boolean) => void;
   onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
   onSteerAutonomousSession?: (sessionId: string, message: string) => Promise<boolean> | void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
@@ -88,10 +94,18 @@ interface SessionRowProps {
   isSelected?: boolean;
   /** Called when the checkbox is clicked; receives the native MouseEvent so the parent can inspect e.shiftKey. */
   onToggleSelect?: (e: React.MouseEvent) => void;
+  /** Backlog item this session was dispatched from (work/review/triage automation), if any. */
+  backlogEntry?: BacklogIndexEntry;
 }
 
 // Module-level constant avoids repeated BigInt(0) allocations in hot render paths.
 const BIGINT_ZERO = BigInt(0);
+
+// Name/path are never length-truncated — full text always renders, wrapping
+// via `overflowWrap: anywhere` (SessionRow.css.ts) as needed. `Infinity`
+// keeps `truncateWorkspacePath`'s home-dir "~" collapsing (not lossy) while
+// skipping its length-based truncation entirely.
+const ROW_PATH_MAX_LEN = Infinity;
 
 function getStatusDotValue(status: SessionStatus): string {
   switch (status) {
@@ -161,10 +175,6 @@ function getAgentEmoji(program: string): string {
   return "◇";
 }
 
-function abbreviatePath(p: string): string {
-  return p.replace(/^\/home\/[^/]+\//, "~/").replace(/^\/Users\/[^/]+\//, "~/");
-}
-
 function getLastActivity(
   session: Session,
 ): { seconds: bigint; nanos: number } | undefined {
@@ -174,6 +184,23 @@ function getLastActivity(
   return moSecs >= tuSecs
     ? session.lastMeaningfulOutput
     : session.lastTerminalUpdate;
+}
+
+// Builds the row's full-context aria-label (status + optional path/agent/memory/context
+// fields) as a single string so it stays screen-reader-accessible regardless of which
+// optional columns are visible in the grid — see instance-lock-free-reads-style
+// "name assumptions" note: relies on getStatusDotLabel already handling unknown statuses.
+function buildSessionRowAriaLabel(
+  session: Session,
+  dotStatus: string,
+  memMB: number,
+): string {
+  const parts = [`Session ${session.title}, status: ${getStatusDotLabel(dotStatus)}`];
+  if (session.existingDir) parts.push(`, path: ${session.existingDir}`);
+  if (session.program) parts.push(`, agent: ${session.program}`);
+  if (memMB > 0) parts.push(`, memory: ${memMB} MB`);
+  if (hasLostContext(session)) parts.push(", context: lost");
+  return parts.join("");
 }
 
 function SessionRowInner({
@@ -190,6 +217,7 @@ function SessionRowInner({
   onCreateCheckpoint,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
+  onTogglePinned,
   onToggleAutoApprove,
   onSteerAutonomousSession,
   onClearConversationState,
@@ -202,6 +230,7 @@ function SessionRowInner({
   selectMode = false,
   isSelected = false,
   onToggleSelect,
+  backlogEntry,
 }: SessionRowProps) {
   const overflowRef = useRef<SessionActionsOverflowHandle>(null);
   const sessionActions = useSessionActions(session.id);
@@ -298,12 +327,22 @@ function SessionRowInner({
       onContextMenu={handleContextMenu}
       onKeyDown={handleKeyDown}
       tabIndex={0}
-      aria-label={`Session ${session.title}, status: ${getStatusDotLabel(dotStatus)}, program: ${session.program}${session.path ? `, path: ${abbreviatePath(session.path)}` : ""}${hasLostContext(session) ? ", context: lost" : ""}`}
+      aria-label={buildSessionRowAriaLabel(session, dotStatus, memMB)}
     >
-      {/* Checkbox cell — always in DOM to keep the reserved grid column occupied */}
+      {/*
+        Checkbox cell — always in DOM to keep the reserved grid column
+        occupied. The cell itself (not just the 16px button) toggles
+        selection so the full reserved column is clickable; the button's own
+        handler stops propagation first, so a click on the button doesn't
+        double-toggle via this one.
+      */}
       <div
         className={checkboxCell}
         aria-hidden={!selectMode ? "true" : undefined}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleSelect?.(e);
+        }}
       >
         <button
           role="checkbox"
@@ -330,22 +369,32 @@ function SessionRowInner({
       </Tooltip>
 
       {/* Name + path stacked — always visible */}
-      <span className={nameCellStyle}>
+      <span className={nameCellStyle} data-testid="session-row-name-cell">
         <span className={nameStyle} title={displayName}>
           {displayName}
         </span>
         <span className={pathLineStyle}>
-          {session.path && (
-            <Tooltip label={session.path} side="bottom">
+          {session.existingDir && (
+            <Tooltip label={session.existingDir} side="bottom">
               <span
                 className={pathStyle}
                 role="img"
-                aria-label={`Path: ${session.path}`}
+                aria-label={`Path: ${session.existingDir}`}
+                data-testid="session-row-path"
               >
-                {abbreviatePath(session.path)}
+                {truncateWorkspacePath(session.existingDir, ROW_PATH_MAX_LEN)}
               </span>
             </Tooltip>
           )}
+        </span>
+        {/*
+          Status/GitHub/backlog chips — their own row, not sharing a flex
+          line with the path text. Path length is unbounded (wraps fully, no
+          truncation), so mixing chips into that line vertically centered
+          short chips against a possibly multi-line-tall path, leaving large
+          empty gaps around them.
+        */}
+        <span className={chipsLineStyle} data-testid="session-row-chips-line">
           {session.status === SessionStatus.ACTIVE &&
             session.subStatus !== SubStatus.UNSPECIFIED &&
             session.subStatus !== SubStatus.READY &&
@@ -411,6 +460,7 @@ function SessionRowInner({
             checkConclusion={session.githubCheckConclusion}
             compact={true}
           />
+          <BacklogOriginBadge entry={backlogEntry} compact={true} />
           {noteTooltip && (
             <Tooltip label={noteTooltip}>
               <span
@@ -438,18 +488,51 @@ function SessionRowInner({
             <span data-testid="failure-message">{failureMessage}</span>
           </span>
         )}
+        {visibleColumns.includes("elapsed") && (
+          <span className={elapsedSecondLineStyle}>
+            <time
+              className={elapsedStyle}
+              dateTime={
+                lastActivity
+                  ? new Date(Number(lastActivity.seconds) * 1000).toISOString()
+                  : undefined
+              }
+              title={
+                lastActivity
+                  ? new Date(Number(lastActivity.seconds) * 1000).toLocaleString()
+                  : undefined
+              }
+              aria-label={
+                elapsedText ? `Last active: ${elapsedText}` : "No recent activity"
+              }
+            >
+              {elapsedText ? (
+                <>
+                  <span className={elapsedIconStyle} aria-hidden="true">
+                    ⏱
+                  </span>
+                  {elapsedText}
+                </>
+              ) : (
+                <span style={{ opacity: 0.3 }}>—</span>
+              )}
+            </time>
+          </span>
+        )}
       </span>
 
-      {/* Agent icon — optional column */}
-      {visibleColumns.includes("agent") && (
-        <span
-          className={agentIconStyle}
-          role="img"
-          title={session.program}
-          aria-label={`Agent: ${session.program}`}
-        >
-          {getAgentEmoji(session.program)}
-        </span>
+      {/* Agent icon — optional column, only when there's a program to show */}
+      {visibleColumns.includes("agent") && session.program && (
+        <Tooltip label={session.program}>
+          <span
+            className={agentIconStyle}
+            role="img"
+            tabIndex={0}
+            aria-label={`Agent: ${session.program}`}
+          >
+            {getAgentEmoji(session.program)}
+          </span>
+        </Tooltip>
       )}
 
       {/* Diff stats — optional column */}
@@ -491,26 +574,20 @@ function SessionRowInner({
         </span>
       )}
 
-      {/* Memory usage — optional column, colored by severity */}
-      {visibleColumns.includes("memory") && (
-        <span
-          className={[memoryBadge, memorySeverityClass]
-            .filter(Boolean)
-            .join(" ")}
-          role="img"
-          title={memMB > 0 ? `Process RSS: ${memMB} MB` : undefined}
-          aria-label={memMB > 0 ? `${memMB} MB RAM` : "No memory data"}
-        >
-          {memMB > 0 ? (
-            memMB >= 1024 ? (
-              `${(memMB / 1024).toFixed(1)} GB`
-            ) : (
-              `${memMB} MB`
-            )
-          ) : (
-            <span style={{ opacity: 0.3 }}>—</span>
-          )}
-        </span>
+      {/* Memory usage — optional column, colored by severity, only when there's real RSS data */}
+      {visibleColumns.includes("memory") && memMB > 0 && (
+        <Tooltip label={`Process RSS: ${memMB} MB`}>
+          <span
+            className={[memoryBadge, memorySeverityClass]
+              .filter(Boolean)
+              .join(" ")}
+            role="img"
+            tabIndex={0}
+            aria-label={`${memMB} MB RAM`}
+          >
+            {memMB >= 1024 ? `${(memMB / 1024).toFixed(1)} GB` : `${memMB} MB`}
+          </span>
+        </Tooltip>
       )}
 
       {/* Branch — optional column */}
@@ -525,37 +602,6 @@ function SessionRowInner({
         >
           {session.branch || <span style={{ opacity: 0.3 }}>—</span>}
         </span>
-      )}
-
-      {/* Elapsed time — optional column */}
-      {visibleColumns.includes("elapsed") && (
-        <time
-          className={elapsedStyle}
-          dateTime={
-            lastActivity
-              ? new Date(Number(lastActivity.seconds) * 1000).toISOString()
-              : undefined
-          }
-          title={
-            lastActivity
-              ? new Date(Number(lastActivity.seconds) * 1000).toLocaleString()
-              : undefined
-          }
-          aria-label={
-            elapsedText ? `Last active: ${elapsedText}` : "No recent activity"
-          }
-        >
-          {elapsedText ? (
-            <>
-              <span className={elapsedIconStyle} aria-hidden="true">
-                ⏱
-              </span>
-              {elapsedText}
-            </>
-          ) : (
-            <span style={{ opacity: 0.3 }}>—</span>
-          )}
-        </time>
       )}
 
       {/* Actions: primary (hover-only unless needs attention) + overflow (always visible) */}
@@ -650,6 +696,7 @@ function SessionRowInner({
           onCreateCheckpoint={onCreateCheckpoint}
           onSetRateLimitEnabled={onSetRateLimitEnabled}
           onToggleAutonomousMode={onToggleAutonomousMode}
+          onTogglePinned={onTogglePinned}
           onToggleAutoApprove={onToggleAutoApprove}
           onSteerAutonomousSession={onSteerAutonomousSession}
           onClearConversationState={onClearConversationState}

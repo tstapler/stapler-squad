@@ -82,29 +82,38 @@ type AutonomousModeState struct {
 // through dedicated accessors or mailbox round-trips (Epic 3).
 type InstanceSnapshot struct {
 	// Identity / config
-	ID               string
-	UUID             string
-	Title            string
-	Path             string
-	WorkingDir       string
-	Branch           string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	Status           Status
-	Program          string
-	Height           int
-	Width            int
-	AutoYes          bool
-	AutoApprove      bool
-	IsExpanded       bool
-	Prompt           string
-	InitialPrompt    string
-	Category         string
-	Note             string
-	SessionType      SessionType
-	TmuxPrefix       string
-	TmuxServerSocket string
-	Tags             []string // defensive deep copy — see buildSnapshot
+	ID                    string
+	UUID                  string
+	Title                 string
+	Path                  string
+	WorkingDir            string
+	Branch                string
+	CreationWarning       string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	Status                Status
+	Program               string
+	AltScreenActive       bool
+	AltScreenBootstrapped bool
+	Height                int
+	Width                 int
+	AutoYes               bool
+	AutoApprove           bool
+	IsExpanded            bool
+	Prompt                string
+	InitialPrompt         string
+	InitialPromptSentAt   time.Time
+	Category              string
+	Note                  string
+	SessionType           SessionType
+	TmuxPrefix            string
+	TmuxServerSocket      string
+	Tags                  []string // defensive deep copy — see buildSnapshot
+
+	// RuleTagProvenance/SuppressedRuleTags mirror Instance's ADR-002 tag-provenance
+	// fields — both defensive deep copies, see buildSnapshot.
+	RuleTagProvenance  map[string]string
+	SuppressedRuleTags map[string]bool
 
 	// Autonomous mode (grouped — access as snap.Autonomous.AutonomousMode)
 	Autonomous AutonomousModeState
@@ -122,6 +131,7 @@ type InstanceSnapshot struct {
 	// Misc config
 	OneShot                    bool
 	Hidden                     bool
+	Pinned                     bool
 	ProjectID                  string
 	HistoryFilePath            string
 	EverHadConversationHistory bool
@@ -165,11 +175,14 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		Path:                      i.Path,
 		WorkingDir:                i.WorkingDir,
 		Branch:                    i.Branch,
+		CreationWarning:           i.CreationWarning,
 		CreatedAt:                 i.CreatedAt,
 		UpdatedAt:                 i.UpdatedAt,
 		Status:                    i.Status,
 		CreationProgressUpdatedAt: i.creationProgressUpdatedAt,
 		Program:                   i.Program,
+		AltScreenActive:           i.AltScreenActive,
+		AltScreenBootstrapped:     i.AltScreenBootstrapped,
 		Height:                    i.Height,
 		Width:                     i.Width,
 		AutoYes:                   i.AutoYes,
@@ -177,6 +190,7 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		IsExpanded:                i.IsExpanded,
 		Prompt:                    i.Prompt,
 		InitialPrompt:             i.InitialPrompt,
+		InitialPromptSentAt:       i.InitialPromptSentAt,
 		Category:                  i.Category,
 		Note:                      i.Note,
 		SessionType:               i.SessionType,
@@ -218,6 +232,7 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		RestartedFromSessionID:     i.RestartedFromSessionID,
 		OneShot:                    i.OneShot,
 		Hidden:                     i.Hidden,
+		Pinned:                     i.Pinned,
 		ProjectID:                  i.ProjectID,
 		HistoryFilePath:            i.HistoryFilePath,
 		EverHadConversationHistory: i.EverHadConversationHistory,
@@ -269,6 +284,23 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 	if i.ExternalMetadata != nil {
 		meta := *i.ExternalMetadata
 		s.ExternalMetadata = &meta
+	}
+
+	// Deep copy RuleTagProvenance map[string]string (ADR-002) — never alias the
+	// live Instance map, mirroring Tags' copy above (instance-lock-free-reads.md).
+	if i.RuleTagProvenance != nil {
+		s.RuleTagProvenance = make(map[string]string, len(i.RuleTagProvenance))
+		for k, v := range i.RuleTagProvenance {
+			s.RuleTagProvenance[k] = v
+		}
+	}
+
+	// Deep copy SuppressedRuleTags map[string]bool (ADR-002).
+	if i.SuppressedRuleTags != nil {
+		s.SuppressedRuleTags = make(map[string]bool, len(i.SuppressedRuleTags))
+		for k, v := range i.SuppressedRuleTags {
+			s.SuppressedRuleTags[k] = v
+		}
 	}
 
 	return s

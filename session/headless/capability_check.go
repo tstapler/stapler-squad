@@ -100,6 +100,17 @@ func (c *CodebaseReadCapabilitySelfCheck) Ensure(ctx context.Context, pool PoolC
 		return c.ok.Load()
 	}
 
+	// A nil pool means the caller (e.g. BacklogService, between construction
+	// and its later SetHeadlessPool call) isn't wired up yet, not that a real
+	// probe was attempted and failed. Caching that as a failure would poison
+	// DefaultCapabilitySelfCheck's shared 20-minute failure window for every
+	// other caller, including ones with a correctly-wired pool. Return false
+	// without recording a result so the next caller with a real pool gets a
+	// genuine probe attempt.
+	if pool == nil {
+		return false
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

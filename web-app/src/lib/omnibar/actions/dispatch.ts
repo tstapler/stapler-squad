@@ -3,6 +3,15 @@ import { OmnibarSessionData } from "@/components/sessions/Omnibar";
 import { ThemeName } from "@/lib/contexts/ThemeContext";
 import type { AnalyticsProvider } from "@/lib/analytics/types";
 
+// NOTE: dispatchOmnibarAction has no production caller — Omnibar.tsx's real
+// input/submit handling (including the "backlog: " trigger's ChatBacklogItem
+// branch) is implemented inline in Omnibar.tsx itself, not routed through
+// here. This module exists to satisfy the OmnibarAction registry checklist
+// (docs/reference/feature-testing-registry.md); its own tests
+// (dispatch.test.ts) verify this dispatcher's logic in isolation, not the
+// shipped omnibar's actual behavior — see Omnibar.backlogIntentReview.test.tsx
+// for that.
+
 export interface ActionDeps {
   navigate: (sessionId: string) => void;
   createSession: (data: OmnibarSessionData) => Promise<void>;

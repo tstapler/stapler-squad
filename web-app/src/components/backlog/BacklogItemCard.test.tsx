@@ -912,3 +912,40 @@ describe("BacklogBoard — multi-reason stuck items (BUG-105)", () => {
     expect(screen.getByTestId("blocker-chip-more")).toHaveTextContent("+3 more");
   });
 });
+
+describe("ClaimChip on cards (cross-host claim dedup)", () => {
+  const claim = (overrides = {}) => ({
+    externalUrl: "https://github.com/o/r/issues/1",
+    claimingHostId: "host_01K",
+    itemDeepLink: "ssq://hostA/backlog/v1/bl_1",
+    disputed: false,
+    ...overrides,
+  });
+
+  it("renders no chip without a claim", () => {
+    render(<BacklogItemCard item={makeItem()} onAction={jest.fn()} onClick={jest.fn()} />);
+    expect(screen.queryByTestId("claim-chip")).not.toBeInTheDocument();
+  });
+
+  it("renders 'Claimed: hostA' with a title, and 'Disputed' for a disputed claim", () => {
+    const { rerender } = render(<BacklogItemCard item={makeItem()} onAction={jest.fn()} onClick={jest.fn()} claim={claim()} />);
+    const chip = screen.getByTestId("claim-chip");
+    expect(chip).toHaveTextContent("Claimed: hostA");
+    expect(chip).toHaveAttribute("title", "Claimed by hostA");
+    rerender(<BacklogItemCard item={makeItem()} onAction={jest.fn()} onClick={jest.fn()} claim={claim({ disputed: true })} />);
+    expect(screen.getByTestId("claim-chip")).toHaveTextContent("Disputed");
+  });
+
+  it("BacklogBoard matches a foreign claim to its card by externalUrl only", () => {
+    const url = "https://github.com/o/r/issues/1";
+    mockUseWatchBacklogItems.mockReturnValue({
+      items: [
+        makeItem({ id: "item-1", title: "Claimed one", externalUrl: url }),
+        makeItem({ id: "item-2", title: "Other", externalUrl: "https://github.com/o/r/issues/2" }),
+      ],
+      connectionState: "live",
+    });
+    render(<BacklogBoard onAction={jest.fn()} onItemClick={jest.fn()} foreignClaims={[claim({ externalUrl: url })]} />);
+    expect(screen.getAllByTestId("claim-chip")).toHaveLength(1);
+  });
+});
