@@ -86,6 +86,11 @@ export class MobileDebugLog {
     };
   }
 
+  /** Current flag value, for callers that cache it to skip building log payloads while off. */
+  enabled(): boolean {
+    return this.isEnabled();
+  }
+
   log(type: string, data: unknown): void {
     if (!this.isEnabled()) return;
     const entry: DebugEntry = { t: this.now(), type, data };

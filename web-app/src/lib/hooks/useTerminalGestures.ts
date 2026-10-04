@@ -197,6 +197,12 @@ export function useTerminalGestures(options: GestureOptions): void {
       });
     };
 
+    // Release applies the rAF-coalesced last point (up to a frame of travel) before the gesture is summarized and torn down.
+    const flushAndReportScroll = () => {
+      if (state === 'SCROLLING') flushScrollThrottle?.();
+      reportScrollGesture();
+    };
+
     // Momentum (COASTING). The page accumulator is separate so only the fling is capped.
     const tracker = new MomentumTracker();
     let lastSampleAt = 0;
@@ -210,16 +216,24 @@ export function useTerminalGestures(options: GestureOptions): void {
     const MAX_FRAME_DT_MS = 50;
     let scrollThrottled: ((clientX: number, clientY: number) => void) | null = null;
     let cancelScrollThrottle: (() => void) | null = null;
+    let flushScrollThrottle: (() => void) | null = null;
     let selectThrottled: ((clientX: number, clientY: number) => void) | null = null;
     let cancelSelectThrottle: (() => void) | null = null;
+    let flushSelectThrottle: (() => void) | null = null;
+    let lastSelectX = 0;
+    let lastSelectY = 0;
+    // mobileDebug.isEnabled reads localStorage; sample it once per touch so per-frame logging allocates nothing when off.
+    let debugOn = false;
 
     const cancelPendingFrames = () => {
       cancelScrollThrottle?.();
       cancelSelectThrottle?.();
       scrollThrottled = null;
       cancelScrollThrottle = null;
+      flushScrollThrottle = null;
       selectThrottled = null;
       cancelSelectThrottle = null;
+      flushSelectThrottle = null;
     };
 
     const clearLongPressTimer = () => {
@@ -268,7 +282,7 @@ export function useTerminalGestures(options: GestureOptions): void {
     // SelectionService re-renders on every dispatched mousemove, which otherwise stacks
     // on top of our own per-event work.
     const beginSyntheticMouseSelection = () => {
-      [selectThrottled, cancelSelectThrottle] = rafThrottlePoint((clientX, clientY) => {
+      [selectThrottled, cancelSelectThrottle, flushSelectThrottle] = rafThrottlePoint((clientX, clientY) => {
         getScreenEl()?.dispatchEvent(new MouseEvent('mousemove', {
           clientX, clientY, bubbles: true, cancelable: true, button: 0, buttons: 1,
         }));
@@ -285,7 +299,7 @@ export function useTerminalGestures(options: GestureOptions): void {
     const beginDirectSelectDrag = (t: Terminal, el: HTMLElement) => {
       const { cellH, cellW } = getCellDimensions(t);
       cellGeometry = { rect: el.getBoundingClientRect(), cellW, cellH, maxCol: t.cols - 1, maxRow: t.rows - 1 };
-      [selectThrottled, cancelSelectThrottle] = rafThrottlePoint((clientX, clientY) => {
+      [selectThrottled, cancelSelectThrottle, flushSelectThrottle] = rafThrottlePoint((clientX, clientY) => {
         if (!cellGeometry) return;
         const { col: currentCol, row: currentRow } = pointToCell(clientX, clientY, cellGeometry);
         const length = Math.max(1, (currentRow - startRow) * t.cols + (currentCol - startCol) + 1);
@@ -333,7 +347,11 @@ export function useTerminalGestures(options: GestureOptions): void {
             scrollThrottled?.(0, touch?.clientY ?? lastY);
             break;
           case 'continueSelect':
-            if (touch) selectThrottled?.(touch.clientX, touch.clientY);
+            if (touch) {
+              lastSelectX = touch.clientX;
+              lastSelectY = touch.clientY;
+              selectThrottled?.(touch.clientX, touch.clientY);
+            }
             break;
           case 'preventDefault':
             preventDefaultIfCancelable(e);
@@ -452,16 +470,18 @@ export function useTerminalGestures(options: GestureOptions): void {
       dispatchScroll(terminal, target, lines);
       sampleViewportY();
       const active = terminal.buffer?.active;
-      mobileDebug.log('scroll', {
-        ...mode,
-        viewportY: active?.viewportY,
-        baseY: active?.baseY,
-        rows: terminal.rows,
-        cellH: cachedCellH,
-        moveDy,
-        lines,
-        target,
-      });
+      if (debugOn) {
+        mobileDebug.log('scroll', {
+          ...mode,
+          viewportY: active?.viewportY,
+          baseY: active?.baseY,
+          rows: terminal.rows,
+          cellH: cachedCellH,
+          moveDy,
+          lines,
+          target,
+        });
+      }
     };
 
     // ---- Momentum loop: one rAF per frame, one dispatch per frame ----
@@ -496,7 +516,7 @@ export function useTerminalGestures(options: GestureOptions): void {
         return;
       }
       dispatchScroll(terminal, target, lines, flingPageAcc);
-      mobileDebug.log('momentum', { target, lines, active: tracker.active });
+      if (debugOn) mobileDebug.log('momentum', { target, lines, active: tracker.active });
       if (!tracker.active || (target === 'tui-pgkeys' && flingPageAcc.capped)) {
         endMomentumOnItsOwn();
         return;
@@ -547,7 +567,7 @@ export function useTerminalGestures(options: GestureOptions): void {
       // dispatch per frame — same rationale as the SELECTING geometry cache.
       const t = terminalRef.current;
       cachedCellH = t ? getCellDimensions(t).cellH : 0;
-      [scrollThrottled, cancelScrollThrottle] = rafThrottlePoint(onScrollFrame);
+      [scrollThrottled, cancelScrollThrottle, flushScrollThrottle] = rafThrottlePoint(onScrollFrame);
       scrollThrottled(0, y); // one frame carries the seeded overshoot
 
       dragActive = true;
@@ -611,12 +631,14 @@ export function useTerminalGestures(options: GestureOptions): void {
       lastTapY = tapY;
     };
 
+    // `touch` is absent on touchcancel and timer-driven aborts; fall back to the last point the drag reported.
     const endSelecting = (touch: Touch | undefined) => {
       const t = terminalRef.current;
-      if (!isMouseTracking() && touch) {
+      flushSelectThrottle?.(); // apply the last coalesced point before the button releases
+      if (!isMouseTracking()) {
         getScreenEl()?.dispatchEvent(new MouseEvent('mouseup', {
-          clientX: touch.clientX,
-          clientY: touch.clientY,
+          clientX: touch?.clientX ?? lastSelectX,
+          clientY: touch?.clientY ?? lastSelectY,
           bubbles: true,
           cancelable: true,
           button: 0,
@@ -647,6 +669,8 @@ export function useTerminalGestures(options: GestureOptions): void {
       }
       // A stale coast-stop flag never survives a touchstart that is not itself a touch-to-stop.
       if (state !== 'COASTING') consumedByCoast = false;
+      debugOn = mobileDebug.enabled();
+      if (e.touches.length !== 1) reportScrollGesture();
       if (e.touches.length === 1) {
         reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
         const touch = e.touches[0];
@@ -674,6 +698,8 @@ export function useTerminalGestures(options: GestureOptions): void {
       const touch = e.touches[0];
       const absDy = touch ? Math.abs(touch.clientY - startY) : 0;
       const absDx = touch ? Math.abs(touch.clientX - startX) : 0;
+      // A second finger aborts the drag; report it while the state is still SCROLLING.
+      if (e.touches.length !== 1) reportScrollGesture();
       dispatch({ type: 'touchmove', touchCount: e.touches.length, absDx, absDy, slopPx: SLOP_PX }, e, touch);
       if (state === 'SCROLLING' && touch) {
         lastSampleAt = Date.now();
@@ -687,12 +713,13 @@ export function useTerminalGestures(options: GestureOptions): void {
       const t = terminalRef.current;
       const wasConsumedByCoast = consumedByCoast;
       consumedByCoast = false;
-      reportScrollGesture();
+      flushAndReportScroll();
       dispatch(
         {
           type: 'touchend',
           elapsedMs: Date.now() - startTime,
           totalDy: Math.abs((touch?.clientY ?? startY) - startY),
+          totalDx: Math.abs((touch?.clientX ?? startX) - startX),
           longPressMs: longPressMs(),
           tapTolerancePx: SLOP_PX,
           flinging: state === 'SCROLLING' && releaseStartsFling(),

@@ -17,6 +17,7 @@ import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, relative } from 'path';
 import { getCellDimensions } from '@/lib/terminal/cellDimensions';
 import { SLOP_PX } from '@/lib/terminal/scrollKinematics';
+import { mobileDebug } from '@/lib/terminal/mobileDebug';
 import { useTerminalGestures } from '../useTerminalGestures';
 
 // ---------------------------------------------------------------------------
@@ -403,15 +404,15 @@ describe('useTerminalGestures', () => {
       expect(terminalRef.current!.focus).toHaveBeenCalledTimes(1);
     });
 
-    it('touchend_should_NotTap_When_TotalDyIsSlopOrMore (boundary is SLOP_PX, not 8px)', () => {
+    it('touchend_should_NotTap_When_TotalDyExceedsSlop (boundary is SLOP_PX inclusive, not 8px)', () => {
       const { terminalRef } = mount('none');
       fireTouchStart(100, 100);
       jest.advanceTimersByTime(100);
-      fireTouchEnd(100, 100 + SLOP_PX);
+      fireTouchEnd(100, 100 + SLOP_PX + 1);
       expect(terminalRef.current!.focus).not.toHaveBeenCalled();
     });
 
-    // Deliberate change (Story 1.2.10): a horizontal-first drag past the slop is CANCELLED, so its release is not a tap.
+    // A horizontal-first drag past the slop stays PENDING (long-press still armed) but its quick release is not a tap.
     it('touchend_should_NotTap_When_HorizontalFirstDragPastSlop (was: dx not counted, tapped)', () => {
       const { terminalRef } = mount('none');
       fireTouchStart(100, 100);
@@ -620,6 +621,96 @@ describe('useTerminalGestures', () => {
       jest.advanceTimersByTime(400);
       cancel();
       expect(move(100, 200).preventDefault).not.toHaveBeenCalled();
+    });
+
+    // ---- review follow-ups: SELECTING abort paths, horizontal drift, tap boundary, release flush ----
+    const mouseupCount = (screen: { dispatchEvent: jest.Mock }) =>
+      dispatchedTypes(screen).filter((t) => t === 'mouseup').length;
+
+    it('touchcancel_should_ReleaseSyntheticMouseAndBlurTextarea_When_SelectingTouchCancelled', () => {
+      const screen = withScreen();
+      const { terminalRef } = mount('none');
+      const blur = jest.fn();
+      (terminalRef.current as any).textarea = { blur };
+      fireTouchStart(100, 100);
+      jest.advanceTimersByTime(400);
+      expect(dispatchedTypes(screen)).toEqual(['mousedown']);
+      cancel();
+      expect(mouseupCount(screen)).toBe(1);
+      expect(blur).toHaveBeenCalledTimes(1);
+    });
+
+    it('touchmove_should_ReleaseSyntheticMouse_When_SecondFingerAbortsSelecting', () => {
+      const screen = withScreen();
+      mount('none');
+      fireTouchStart(100, 100);
+      jest.advanceTimersByTime(400);
+      docHandlers['touchmove']?.(touchEventWith('touchmove', [[100, 120], [200, 220]]));
+      expect(mouseupCount(screen)).toBe(1);
+    });
+
+    it('touchmove_should_ReportScrollGesture_When_SecondFingerAbortsScrolling', () => {
+      const onScrollGesture = jest.fn();
+      const terminalRef = makeTerminalRef('none');
+      renderHook(() => useTerminalGestures({ containerRef, terminalRef: terminalRef as any, onSendData, onScrollGesture }));
+      fireTouchStart(100, 100);
+      move(100, 60); // PENDING -> SCROLLING
+      expect(onScrollGesture).not.toHaveBeenCalled();
+      docHandlers['touchmove']?.(touchEventWith('touchmove', [[100, 50], [200, 220]]));
+      expect(onScrollGesture).toHaveBeenCalledTimes(1);
+    });
+
+    it('longPress_should_StillSelect_When_TouchDriftsHorizontallyPastSlop', () => {
+      const screen = withScreen();
+      mount('none');
+      fireTouchStart(100, 100);
+      const ev = move(160, 102); // |dx| 60 > slop, |dy| 2
+      expect(ev.preventDefault).not.toHaveBeenCalled();
+      jest.advanceTimersByTime(400);
+      expect(dispatchedTypes(screen)).toEqual(['mousedown']);
+    });
+
+    it('touchend_should_NotTap_When_QuickReleaseAfterHorizontalDriftPastSlop', () => {
+      const { terminalRef } = mount('none');
+      fireTouchStart(100, 100);
+      move(160, 102);
+      jest.advanceTimersByTime(100);
+      fireTouchEnd(160, 102);
+      expect(terminalRef.current!.focus).not.toHaveBeenCalled();
+    });
+
+    it('touchend_should_Tap_When_ReleasedExactlyAtSlopDistance', () => {
+      const { terminalRef } = mount('none');
+      fireTouchStart(100, 100);
+      move(100, 115); // absDy == SLOP_PX: still PENDING
+      jest.advanceTimersByTime(100);
+      fireTouchEnd(100, 115);
+      expect(terminalRef.current!.focus).toHaveBeenCalledTimes(1);
+    });
+
+    it('touchend_should_ApplyLastCoalescedScrollPoint_When_ReleasedBeforeTheFrameFires', () => {
+      const { terminalRef } = mount('none');
+      fireTouchStart(100, 100);
+      move(100, 80); // enters SCROLLING; seed frame is pending
+      move(100, 40); // 40px up with 20px cells -> +2 lines, still unflushed
+      expect(terminalRef.current!.scrollLines).not.toHaveBeenCalled();
+      fireTouchEnd(100, 40); // no frame advance: release must flush instead of dropping the point
+      expect(terminalRef.current!.scrollLines).toHaveBeenCalledWith(2);
+    });
+
+    it('scrollFrame_should_NotAllocateDebugPayload_When_DebugFlagOff', () => {
+      const logSpy = jest.spyOn(mobileDebug, 'log');
+      try {
+        const { terminalRef } = mount('none');
+        fireTouchStart(100, 100);
+        move(100, 80);
+        move(100, 40);
+        flushFrame();
+        expect(terminalRef.current!.scrollLines).toHaveBeenCalled();
+        expect(logSpy.mock.calls.filter(([type]) => type === 'scroll')).toEqual([]);
+      } finally {
+        logSpy.mockRestore();
+      }
     });
 
     // ---- scroll / move semantics ----
