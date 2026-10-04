@@ -249,8 +249,10 @@ describe("TerminalOutput settle-driven bounce-hold bypass", () => {
     act(() => { jest.advanceTimersByTime(200); });
     act(() => { capturedXtermProps.onResize(80, 24); }); // B -> A, a real bounce: must be held
 
-    expect(streamMock.resize.mock.calls[0][3]).toEqual({ bypassBounceHold: true });
-    expect(streamMock.resize.mock.calls[1][3]).toBeUndefined();
+    const unforced = streamMock.resize.mock.calls.filter((c) => !c[2]);
+    expect(unforced).toHaveLength(2);
+    expect(unforced[0][3]).toEqual({ bypassBounceHold: true });
+    expect(unforced[1][3]).toBeUndefined();
   });
 
   it("handleTerminalResize_should_NotBypassAgain_When_SettleRearmsContinuouslyButFitProducedNoResize", async () => {
