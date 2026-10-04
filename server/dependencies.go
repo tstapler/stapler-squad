@@ -1365,6 +1365,16 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// the flag can be flipped live with no restart (matches quotaGate/julesDispatchSvc).
 	go session.StartWorktreeConsistencySweeper(context.Background(), storage, &services.EventBusNotifier{Bus: eventBus}, config.LoadConfig)
 
+	// Per-item /backlog/* commands live in session worktrees only; a user-scope copy is stale
+	// scaffolding from an old build and shadows the real ones with a wrong item ID.
+	if home, hErr := os.UserHomeDir(); hErr == nil {
+		if removed, rmErr := session.RemoveStaleUserLevelBacklogCommands(home); rmErr != nil {
+			log.WarningLog().Printf("failed to remove stale user-level backlog commands: %v", rmErr)
+		} else if removed {
+			log.InfoLog().Printf("removed stale user-level ~/.claude/commands/backlog (per-item commands belong in session worktrees)")
+		}
+	}
+
 	backlogSvc := services.NewBacklogService(storage, sessionService, cfg, workflowEngine, pipelineEngine, pipelineModeRepo)
 	backlogSvc.SetLivenessRepository(livenessRepo)
 	backlogSvc.SetLivenessEngine(livenessEngine)
