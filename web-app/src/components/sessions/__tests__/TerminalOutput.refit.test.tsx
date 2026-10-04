@@ -166,7 +166,7 @@ describe("TerminalOutput refit wiring", () => {
     act(() => { jest.advanceTimersByTime(SETTLE_MS); });
 
     expect(mockXtermHandle.refit).toHaveBeenCalledTimes(1);
-    expect(mockXtermHandle.refit).toHaveBeenCalledWith({ reason: "viewport-settle" });
+    expect(mockXtermHandle.refit).toHaveBeenCalledWith({ reason: "viewport-settle", onFitted: expect.any(Function) });
     // The old 300/400 ms pipeline must not also fit.
     act(() => { jest.advanceTimersByTime(1000); });
     expect(mockXtermHandle.fit).not.toHaveBeenCalled();
@@ -222,12 +222,14 @@ describe("TerminalOutput settle-driven bounce-hold bypass", () => {
     });
   }
 
-  it("handleTerminalResize_should_PassBypass_When_Within1000msOfSettleRefit", async () => {
+  const lastRefitOptions = () => mockXtermHandle.refit.mock.calls.at(-1)![0];
+
+  it("handleTerminalResize_should_PassBypass_When_ResizeFollowsSettleRefit", async () => {
     const vv = installVisualViewport();
     await renderTerminal();
     act(() => { capturedXtermProps.onResize(80, 24); }); // seed lastResizeRef
     settleOnce(vv);
-    act(() => { jest.advanceTimersByTime(300); });
+    expect(lastRefitOptions()).toEqual(expect.objectContaining({ reason: "viewport-settle" }));
 
     streamMock.resize.mockClear();
     act(() => { capturedXtermProps.onResize(80, 20); });
@@ -236,14 +238,31 @@ describe("TerminalOutput settle-driven bounce-hold bypass", () => {
     expect(streamMock.resize).toHaveBeenCalledWith(80, 20, false, { bypassBounceHold: true });
   });
 
-  it("handleTerminalResize_should_NotPassBypass_When_1500msAfterSettleRefit", async () => {
+  it("handleTerminalResize_should_BypassOnlyOnce_When_OscillatingBackWithinSeconds", async () => {
     const vv = installVisualViewport();
     await renderTerminal();
     act(() => { capturedXtermProps.onResize(80, 24); });
     settleOnce(vv);
-    act(() => { jest.advanceTimersByTime(1500); });
+    streamMock.resize.mockClear();
+
+    act(() => { capturedXtermProps.onResize(80, 20); }); // A -> B, produced by the settle fit
+    act(() => { jest.advanceTimersByTime(200); });
+    act(() => { capturedXtermProps.onResize(80, 24); }); // B -> A, a real bounce: must be held
+
+    expect(streamMock.resize.mock.calls[0][3]).toEqual({ bypassBounceHold: true });
+    expect(streamMock.resize.mock.calls[1][3]).toBeUndefined();
+  });
+
+  it("handleTerminalResize_should_NotBypassAgain_When_SettleRearmsContinuouslyButFitProducedNoResize", async () => {
+    const vv = installVisualViewport();
+    await renderTerminal();
+    act(() => { capturedXtermProps.onResize(80, 24); });
+    settleOnce(vv);
+    // The settle fit finished without a size change.
+    act(() => { lastRefitOptions().onFitted({ cols: 80, rows: 24 }); });
 
     streamMock.resize.mockClear();
+    act(() => { jest.advanceTimersByTime(100); });
     act(() => { capturedXtermProps.onResize(80, 20); });
 
     expect(streamMock.resize).toHaveBeenCalledTimes(1);

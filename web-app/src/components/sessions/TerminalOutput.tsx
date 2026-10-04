@@ -102,7 +102,6 @@ interface TerminalOutputProps {
 // resize event often fires at e.g. 10x6 before layout is complete; caching or
 // connecting at those dimensions produces a garbled terminal on the next view.
 // Equal to the XtermTerminal sampler's own bound (20 samples x 50 ms).
-const SETTLE_BYPASS_WINDOW_MS = 1000;
 const MIN_COLS = 30;
 const MIN_ROWS = 10;
 
@@ -140,9 +139,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const refreshCountRef = useRef(0);
   const isMountedRef = useRef(true);
-  // Wall-clock stamp of the last settle-driven refit(); handleTerminalResize bypasses the
-  // server bounce hold only for resizes this soon after it (Story 2.1.5).
-  const lastSettleRefitAtRef = useRef<number | null>(null);
+  // One-shot: set when a viewport settle triggers refit(); the single resize that fit produces bypasses the
+  // server bounce hold (Story 2.1.5) and consumes it. Any later resize, e.g. an A->B->A oscillation, is held.
+  const settleBypassPendingRef = useRef(false);
   const clearedAtRef = useRef<number | null>(null);
   const sizeStabilityTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const hasInitiatedConnectionRef = useRef(false);
@@ -1090,8 +1089,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
     console.log(`[TerminalOutput] Sending resize: ${cols}x${rows} (prev: ${lastResize?.cols || 'none'}x${lastResize?.rows || 'none'})`);
     clearBufferBeforeResize();
-    const sinceSettle = lastSettleRefitAtRef.current === null ? Infinity : Date.now() - lastSettleRefitAtRef.current;
-    if (sinceSettle <= SETTLE_BYPASS_WINDOW_MS) {
+    if (settleBypassPendingRef.current) {
+      settleBypassPendingRef.current = false;
       resize(cols, rows, false, { bypassBounceHold: true });
     } else {
       resize(cols, rows);
@@ -1360,10 +1359,14 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       stableFrames: DEFAULT_STABLE_FRAMES,
       maxWaitMs: DEFAULT_MAX_WAIT_MS,
       onSettled: (snapshot) => {
-        lastSettleRefitAtRef.current = Date.now();
+        settleBypassPendingRef.current = true;
         mobileDebug.log("vp-settle", snapshot);
         netPagesUp.invalidate("resize");
-        xtermRef.current?.refit({ reason: 'viewport-settle' });
+        xtermRef.current?.refit({
+          reason: 'viewport-settle',
+          // The fit ended without a size change (or exhausted retries): drop the unused bypass.
+          onFitted: () => { settleBypassPendingRef.current = false; },
+        });
       },
     });
   }, [netPagesUp]);
