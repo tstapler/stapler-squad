@@ -194,6 +194,27 @@ describe('useTerminalFlowControl', () => {
       expect(result.current.isInputChunking()).toBe(false);
     });
 
+    it('sendInput_should_KeepChunkingFlag_When_OneOfTwoOverlappingPastesAborts', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+      act(() => {
+        result.current.sendInput('a'.repeat(1100)); // paste A: 3 chunks
+      });
+      act(() => { jest.advanceTimersByTime(10); }); // A is on chunk 2
+      act(() => {
+        result.current.sendInput('b'.repeat(2000)); // paste B: 4 chunks, overlaps A
+      });
+      expect(result.current.isInputChunking()).toBe(true);
+
+      // A's last chunk goes out; B is still in flight, so the flag must stay up.
+      act(() => { jest.advanceTimersByTime(10); });
+      expect(pushMessageFn.mock.calls.length).toBeGreaterThanOrEqual(4);
+      expect(result.current.isInputChunking()).toBe(true);
+
+      act(() => { jest.advanceTimersByTime(100); });
+      expect(result.current.isInputChunking()).toBe(false);
+    });
+
     it('sendInput_should_NotSetChunkingFlag_When_512BytesOrFewer', () => {
       const { options } = createTestOptions();
       const { result } = renderHook(() => useTerminalFlowControl(options));

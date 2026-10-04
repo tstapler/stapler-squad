@@ -106,7 +106,8 @@ export function useTerminalFlowControl({
   const bounceStreakRef = useRef(0);
   const pendingResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Ref, not state: the gesture rAF callback must read the live value.
-  const inputChunkingRef = useRef(false);
+  // One token per in-flight chunked paste, so an overlapping or aborted paste never clears another's flag.
+  const activePastesRef = useRef(new Set<symbol>());
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
   const paneRequestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -274,6 +275,9 @@ export function useTerminalFlowControl({
     // pending chunks are aborted (sessionIdAtStart !== current sessionId).
     const sessionIdAtStart = sessionId;
     let offset = 0;
+    const pasteToken = Symbol("paste");
+    const activePastes = activePastesRef.current;
+    const finishPaste = () => { activePastes.delete(pasteToken); };
     const sendChunk = () => {
       // sessionIdRef, not the closed-over sessionId, which is always sessionIdAtStart.
       if (
@@ -282,7 +286,7 @@ export function useTerminalFlowControl({
         sessionIdRef.current !== sessionIdAtStart || // session changed; abort
         offset >= inputBytes.length
       ) {
-        inputChunkingRef.current = false;
+        finishPaste();
         return;
       }
       const chunk = inputBytes.slice(offset, offset + PASTE_CHUNK_SIZE);
@@ -298,26 +302,26 @@ export function useTerminalFlowControl({
           })
         );
       } catch (err) {
-        inputChunkingRef.current = false;
+        finishPaste();
         handleError(err);
         return;
       }
       if (offset < inputBytes.length) {
-        inputChunkingRef.current = true;
+        activePastes.add(pasteToken);
         setTimeout(sendChunk, CHUNK_DELAY_MS);
       } else {
-        inputChunkingRef.current = false;
+        finishPaste();
       }
     };
     sendChunk();
   }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError, ensureConnected]);
 
   // True from the first chunk of a >512 B paste until the last chunk is sent (or it aborts).
-  const isInputChunking = useCallback(() => inputChunkingRef.current, []);
+  const isInputChunking = useCallback(() => activePastesRef.current.size > 0, []);
 
   // A session switch aborts the pending chunks; clear eagerly rather than waiting for the next timer.
   useEffect(() => {
-    inputChunkingRef.current = false;
+    activePastesRef.current.clear();
   }, [sessionId]);
 
   const resize = useCallback((cols: number, rows: number, force: boolean = false, opts?: ResizeOptions) => {
