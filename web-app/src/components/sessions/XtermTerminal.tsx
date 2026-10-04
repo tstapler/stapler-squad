@@ -1344,7 +1344,10 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         // Registered once here; the zero-size retry re-enters with the callback stripped.
         const { onFitted, ...opts } = requested;
         const el = containerRef.current;
-        if (!el) return; // before the push: a callback registered here would never be flushed
+        if (!el) {
+          onFitted?.({ cols: terminal.cols, rows: terminal.rows, stale: true }); // nothing will fit; release the caller's pending state
+          return;
+        }
         if (onFitted) pendingFitCallbacks.push(onFitted);
         if (!canFit(el)) {
           logFit("fit-skipped", { reason: "zero-size" });

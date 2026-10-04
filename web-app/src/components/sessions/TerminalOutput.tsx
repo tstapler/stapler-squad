@@ -101,7 +101,6 @@ interface TerminalOutputProps {
 // from xterm.js before the CSS container has finished laying out. The first
 // resize event often fires at e.g. 10x6 before layout is complete; caching or
 // connecting at those dimensions produces a garbled terminal on the next view.
-// Equal to the XtermTerminal sampler's own bound (20 samples x 50 ms).
 const MIN_COLS = 30;
 const MIN_ROWS = 10;
 
@@ -907,13 +906,19 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const openScrollFullPanel = useCallback(() => setScrollPanel("full"), []);
   // Approximate panel heights in terminal rows (picker: 3 radios + 2 buttons; full: adds switch and notes).
   // Only used to decide inline vs overlay, so a rough constant is enough.
-  // terminalRows is re-measured after an inline panel shrinks the terminal, so the choice is latched on the
-  // row count seen when the panel opened (reset on close); re-deciding from the shrunken count flip-flops.
-  const panelOpenRowsRef = useRef<number | null>(null);
-  if (scrollPanel === null) panelOpenRowsRef.current = null;
-  else panelOpenRowsRef.current ??= terminalRows;
+  // terminalRows is re-measured after an inline panel shrinks the terminal, so the choice is latched when the
+  // panel opens (reset on close); re-deciding from the shrunken count flip-flops. The latch only upgrades
+  // inline -> overlay (e.g. the soft keyboard leaves too few rows); it never downgrades while open.
+  const panelOverlayLatchRef = useRef<boolean | null>(null);
   const panelRowsEstimate = scrollPanel === "full" ? SCROLL_FULL_PANEL_ROWS : SCROLL_PICKER_PANEL_ROWS;
-  const panelAsOverlay = shouldRenderPanelAsOverlay((panelOpenRowsRef.current ?? terminalRows) - panelRowsEstimate);
+  if (scrollPanel === null) panelOverlayLatchRef.current = null;
+  else if (panelOverlayLatchRef.current === null) {
+    panelOverlayLatchRef.current = shouldRenderPanelAsOverlay(terminalRows - panelRowsEstimate);
+  } else if (!panelOverlayLatchRef.current && shouldRenderPanelAsOverlay(terminalRows)) {
+    // An inline panel has already taken its rows out of terminalRows, so no estimate is subtracted.
+    panelOverlayLatchRef.current = true;
+  }
+  const panelAsOverlay = panelOverlayLatchRef.current ?? false;
   const panelMaxHeight =
     panelAsOverlay && terminalRows > MIN_ROWS_FOR_OVERLAYS && containerSize.height > 0
       ? Math.round((containerSize.height * (terminalRows - MIN_ROWS_FOR_OVERLAYS)) / terminalRows)
@@ -1359,10 +1364,12 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       stableFrames: DEFAULT_STABLE_FRAMES,
       maxWaitMs: DEFAULT_MAX_WAIT_MS,
       onSettled: (snapshot) => {
-        settleBypassPendingRef.current = true;
         mobileDebug.log("vp-settle", snapshot);
         netPagesUp.invalidate("resize");
-        xtermRef.current?.refit({
+        const xterm = xtermRef.current;
+        if (!xterm) return; // no refit issued, so no bypass to arm
+        settleBypassPendingRef.current = true;
+        xterm.refit({
           reason: 'viewport-settle',
           // The fit ended without a size change (or exhausted retries): drop the unused bypass.
           onFitted: () => { settleBypassPendingRef.current = false; },

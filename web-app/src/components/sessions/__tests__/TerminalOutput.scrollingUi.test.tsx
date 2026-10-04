@@ -227,6 +227,21 @@ describe("TerminalOutput scrolling chip, picker and panel (Story 1.2.5b3)", () =
     expect(screen.getByTestId("scrolling-picker").getAttribute("data-overlay")).toBe("false");
   });
 
+  it("terminalOutput_should_UpgradeInlinePanelToOverlay_When_KeyboardLeavesTooFewRows_AndNotFlipBack", async () => {
+    await renderTerminal({ terminal: makeTerminal({ rows: 40 }) });
+    fireEvent.click(chip());
+    expect(screen.getByTestId("scrolling-picker").getAttribute("data-overlay")).toBe("false");
+    // The inline panel already took its rows out of this count, so 4 is what is genuinely left.
+    act(() => {
+      capturedXtermProps.onResize(80, 4);
+    });
+    expect(screen.getByTestId("scrolling-picker").getAttribute("data-overlay")).toBe("true");
+    act(() => {
+      capturedXtermProps.onResize(80, 40);
+    });
+    expect(screen.getByTestId("scrolling-picker").getAttribute("data-overlay")).toBe("true");
+  });
+
   it("terminalOutput_should_RedecidePlacement_When_PanelClosedAndReopened", async () => {
     await renderTerminal({ terminal: makeTerminal({ rows: 16 }) });
     fireEvent.click(chip());
