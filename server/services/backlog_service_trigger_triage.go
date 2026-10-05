@@ -498,7 +498,7 @@ func (s *BacklogService) TriggerTriage(
 			// earlier), not a permission-mode gap. Do not add bypassPermissions here
 			// without a fresh empirical repro, per ADR-001's own "don't trust
 			// unverified CLI-behavior assumptions" precedent.
-			headless.CallOptions{WorkDir: triageWorkDir, Model: triageResolvedModel, OnConversationID: func(id string) { triageConversationID = id }},
+			triageCallOptions(s.cfg, item.PipelineMode, triageWorkDir, triageResolvedModel, func(id string) { triageConversationID = id }),
 			func(usd float64, priced bool) {
 				triageCostUSD = usd
 				triageCostPriced = priced
@@ -832,4 +832,16 @@ func applyTriageResultToUpdate(result *session.HeadlessTriageResult, update *ses
 		c := result.ItemCategory
 		update.Category = &c
 	}
+}
+
+// triageCallOptions builds the headless call options for a triage call. Only
+// sdd-mode triage gets the fan-out ceiling (ADR-029): default triage's single
+// 4-subagent wave showed no material waste, so it runs unbounded as before.
+func triageCallOptions(cfg *config.Config, pipelineMode, workDir, model string, onConversationID func(string)) headless.CallOptions {
+	opts := headless.CallOptions{WorkDir: workDir, Model: model, OnConversationID: onConversationID}
+	if pipelineMode == session.DefaultSDDPipelineModeSlug && cfg != nil {
+		opts.MaxTurns = cfg.HeadlessTriageMaxTurnsOrDefault()
+		opts.MaxSubagents = cfg.HeadlessTriageMaxSubagentsOrDefault()
+	}
+	return opts
 }

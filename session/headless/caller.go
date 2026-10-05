@@ -49,6 +49,11 @@ type CallOptions struct {
 	// UUID once known, so a caller can persist it for later cost attribution. Not
 	// invoked when the call fails before producing a result.
 	OnConversationID func(conversationID string)
+	// MaxTurns and MaxSubagents abort the call with ErrFanoutCeilingExceeded once
+	// the stream shows more than that many assistant turns / subagent launches.
+	// Zero disables the limit. Like AllowedTools, only applied when WorkDir is set.
+	MaxTurns     int
+	MaxSubagents int
 }
 
 // firstCallJSONResult is the JSON schema of the terminal `"type":"result"` line
@@ -473,6 +478,7 @@ type firstCallScanState struct {
 	allText    *strings.Builder
 	resultLine *string
 	drainLines func()
+	fanout     *fanoutCounter // nil when no ceiling is configured
 }
 
 // handleFirstCallLine processes one successfully-scanned line: resets the
@@ -490,6 +496,12 @@ func (p *Pool) handleFirstCallLine(state firstCallScanState, lr streamLine, cio 
 		// grow this buffer unbounded before idleTimeout would catch it.
 		terminateStream(cio, state.drainLines, ErrOutputCapExceeded)
 		return true
+	}
+	if state.fanout != nil {
+		if ceiling := state.fanout.observe(lr.text); ceiling != nil {
+			terminateStream(cio, state.drainLines, ceiling)
+			return true
+		}
 	}
 	if *state.resultLine == "" && isResultLine(lr.text) {
 		*state.resultLine = lr.text
@@ -509,6 +521,9 @@ func (p *Pool) scanFirstCallLines(ctx context.Context, key FeatureKey, stdout io
 	var allText strings.Builder
 	var resultLine string
 	state := firstCallScanState{idleTimer: time.NewTimer(idleTimeout), allText: &allText, resultLine: &resultLine, drainLines: drainLines}
+	if p.fanout.enabled() {
+		state.fanout = newFanoutCounter(p.fanout)
+	}
 	defer state.idleTimer.Stop()
 
 	for {
@@ -695,6 +710,7 @@ func (p *Pool) CallWithOptions(ctx context.Context, key FeatureKey, systemPrompt
 			dirRunner = dirRunner.WithToolAccess(opts.AllowedTools, opts.PermissionMode, opts.DisallowedTools)
 		}
 		oneShot := NewPoolWithRunner(PoolConfig{MaxCallsPerSession: 1, MaxConcurrentSessions: 1, DefaultModel: opts.Model}, dirRunner)
+		oneShot.fanout = FanoutLimits{MaxTurns: opts.MaxTurns, MaxSubagents: opts.MaxSubagents}
 		innerCh, err := oneShot.Call(ctx, key, systemPrompt, userPrompt)
 		if err != nil {
 			<-p.concurrencySem

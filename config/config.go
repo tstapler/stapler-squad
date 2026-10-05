@@ -227,6 +227,11 @@ type Config struct {
 	DaemonPollInterval int `json:"daemon_poll_interval"`
 	// BranchPrefix is the prefix used for git branches created by the application.
 	BranchPrefix string `json:"branch_prefix"`
+	// HeadlessTriageMaxTurns / HeadlessTriageMaxSubagents cap one sdd-mode headless
+	// triage call's assistant turns / subagent launches (ADR-029). 0 = use the
+	// default; negative = no limit. Read via the *OrDefault accessors.
+	HeadlessTriageMaxTurns     int `json:"headless_triage_max_turns,omitempty"`
+	HeadlessTriageMaxSubagents int `json:"headless_triage_max_subagents,omitempty"`
 	// DetectNewSessions is a flag to enable detection of new sessions from other windows
 	DetectNewSessions bool `json:"detect_new_sessions"`
 	// SessionDetectionInterval is the interval (ms) at which the daemon checks for new sessions
@@ -856,6 +861,36 @@ func (c *Config) TriageArtifactDirOrDefault() (string, error) {
 		return "", fmt.Errorf("resolve config dir: %w", err)
 	}
 	return filepath.Join(configDir, "triage-artifacts"), nil
+}
+
+// Defaults sit between a normal sdd triage call and the #882 incident (1,094
+// turns, 262 subagent completions); re-tune from the logged per-call counters.
+const (
+	DefaultHeadlessTriageMaxTurns     = 600
+	DefaultHeadlessTriageMaxSubagents = 120
+)
+
+// HeadlessTriageMaxTurnsOrDefault resolves the sdd triage turn ceiling; 0 means
+// no limit (the returned value feeds headless.CallOptions, where 0 disables).
+func (c *Config) HeadlessTriageMaxTurnsOrDefault() int {
+	return ceilingOrDefault(c.HeadlessTriageMaxTurns, DefaultHeadlessTriageMaxTurns)
+}
+
+// HeadlessTriageMaxSubagentsOrDefault resolves the sdd triage subagent ceiling;
+// 0 means no limit.
+func (c *Config) HeadlessTriageMaxSubagentsOrDefault() int {
+	return ceilingOrDefault(c.HeadlessTriageMaxSubagents, DefaultHeadlessTriageMaxSubagents)
+}
+
+func ceilingOrDefault(configured, def int) int {
+	switch {
+	case configured < 0:
+		return 0
+	case configured == 0:
+		return def
+	default:
+		return configured
+	}
 }
 
 // HeadlessFailureCaptureDirOrDefault returns the resolved directory for durable
