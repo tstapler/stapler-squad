@@ -63,6 +63,70 @@ const minCacheCreationForROI = 50_000
 // not-yet-empirically-calibrated caveat as minCacheCreationForROI.
 const lowCacheROICriticalUSD = -1.00
 
+// Context-growth-without-compaction thresholds. Not yet calibrated against the
+// real corpus (same caveat as minCacheCreationForROI): a first-pass estimate to
+// be revisited once the persisted context history shows the false-positive rate.
+const (
+	// contextGrowthMinTurns abstains on short sessions, where growth is expected.
+	contextGrowthMinTurns = 10
+	// contextGrowthFactor: peak context must reach this multiple of the first turn's.
+	contextGrowthFactor = 3
+	// contextGrowthMinDelta: and exceed the first turn's by at least this many tokens.
+	contextGrowthMinDelta = 100_000
+	// contextGrowthCriticalFloor escalates to SeverityCritical above this peak.
+	contextGrowthCriticalFloor = 180_000
+	// contextImplicitCompactionDrop treats a turn-over-turn context fall to under
+	// this fraction as a compaction even without a compact_boundary entry (older transcripts).
+	contextImplicitCompactionDrop = 0.5
+)
+
+// detectContextGrowthNoCompaction flags a session whose context grew by
+// contextGrowthFactor and contextGrowthMinDelta over its first turn without
+// ever being compacted. Complements detectOversizedStartContext, which only
+// sees turn one. Abstains for short sessions, sessions with a recorded or
+// implied compaction, and an unpriced peak-turn model. DollarImpact is zero:
+// the waste is risk of degradation, not a modeled spend, and must not add to
+// other findings' impacts (see DollarImpact).
+func detectContextGrowthNoCompaction(r *ParseResult, pt *PricingTable) *Finding {
+	if r == nil || pt == nil || len(r.CompactEvents) > 0 || len(r.TurnTimeline) < contextGrowthMinTurns {
+		return nil
+	}
+
+	start := r.TurnTimeline[0].ContextTokens()
+	peak, peakModel := start, r.TurnTimeline[0].Model
+	prev := start
+	for _, t := range r.TurnTimeline[1:] {
+		cur := t.ContextTokens()
+		if float64(cur) < float64(prev)*contextImplicitCompactionDrop {
+			return nil
+		}
+		if cur > peak {
+			peak, peakModel = cur, t.Model
+		}
+		prev = cur
+	}
+
+	if peak-start < contextGrowthMinDelta || peak < start*contextGrowthFactor {
+		return nil
+	}
+	if _, priced := pt.LookupByModel(peakModel); !priced {
+		return nil
+	}
+
+	severity := SeverityWarn
+	if peak > contextGrowthCriticalFloor {
+		severity = SeverityCritical
+	}
+	return &Finding{
+		Type:     FindingContextGrowthNoCompaction,
+		Severity: severity,
+		Message: fmt.Sprintf(
+			"Context grew from %s to %s tokens over %d turns with no /compact — consider compacting or starting a fresh session.",
+			formatInt(start), formatInt(peak), len(r.TurnTimeline),
+		),
+	}
+}
+
 // detectCacheHitFloorBreach flags a session whose cache-hit rate is below
 // cacheHitFloor. Abstains (returns nil) rather than firing a misleading
 // $0.00 finding when the session is too short to have a warmed-up cache, or
@@ -280,7 +344,7 @@ type detectorFunc func(r *ParseResult, pt *PricingTable) *Finding
 // caller's other sessions — matching the Observability Requirement that a
 // computation error shows up as an empty/error state, not a page.
 func ComputeFindings(r *ParseResult, pt *PricingTable) []Finding {
-	findings := make([]Finding, 0, 5)
+	findings := make([]Finding, 0, 6)
 
 	detectors := []struct {
 		name string
@@ -291,6 +355,7 @@ func ComputeFindings(r *ParseResult, pt *PricingTable) []Finding {
 		{"detectModelSwitchCacheBust", detectModelSwitchCacheBust},
 		{"detectOversizedStartContext", detectOversizedStartContext},
 		{"detectLowCacheROI", detectLowCacheROI},
+		{"detectContextGrowthNoCompaction", detectContextGrowthNoCompaction},
 	}
 
 	for _, d := range detectors {
