@@ -1,6 +1,6 @@
 # Requirements: sdd-triage-execution-model
 
-Item 6f262fa7. Decide whether "sdd" pipeline-mode triage should leave `claude -p` headless execution. Research + decision, not an implementation.
+Item 6f262fa7. Decide whether "sdd" pipeline-mode triage should leave `claude -p` headless execution. Research + decision (ADR-029), plus the small enforcement it calls for: a stream-observed turn/subagent ceiling.
 
 ## Problem
 Triage runs via headless `CallBlocking` (`server/services/backlog_service_trigger_triage.go`, gated by `triageSem`, cap 8, `backlog_service.go:567`). It cannot be observed or intervened on mid-flight. The #882 incident ($106.69, 1094 turns, 262 subagent completions) happened in sdd mode. Existing backstops: `headless.idleTimeout` (hung calls only) and `triageCallBudget` = 3h (`backlog_service_triage.go:411`; wall-clock only).
@@ -20,4 +20,4 @@ Triage runs via headless `CallBlocking` (`server/services/backlog_service_trigge
 - AC6: The decision names how it interacts with `triageSem` concurrency, `triageCallBudget`, and liveness/orphan reconciliation.
 
 ## Non-goals
-Migrating all triage to tmux; implementing code in this item.
+Migrating all triage to tmux; a dollar ceiling (shipped separately as #884/#918).

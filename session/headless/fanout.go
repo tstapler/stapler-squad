@@ -40,13 +40,14 @@ func (l FanoutLimits) enabled() bool { return l.MaxTurns > 0 || l.MaxSubagents >
 // a stream-format change must degrade to "no ceiling", never to a false abort.
 type fanoutCounter struct {
 	limits    FanoutLimits
-	seenIDs   map[string]struct{} // one entry per assistant message; bounded by the turn ceiling
+	seenIDs   map[string]struct{} // assistant message ids; only populated when MaxTurns > 0, so bounded by it
+	seenTools map[string]struct{} // tool_use ids; only populated when MaxSubagents > 0, so bounded by it
 	turns     int
 	subagents int
 }
 
 func newFanoutCounter(limits FanoutLimits) *fanoutCounter {
-	return &fanoutCounter{limits: limits, seenIDs: map[string]struct{}{}}
+	return &fanoutCounter{limits: limits, seenIDs: map[string]struct{}{}, seenTools: map[string]struct{}{}}
 }
 
 // streamAssistantLine is the subset of an assistant stream-json event we count.
@@ -59,6 +60,7 @@ type streamAssistantLine struct {
 }
 
 type streamContentBlock struct {
+	ID   string `json:"id"`
 	Type string `json:"type"`
 	Name string `json:"name"`
 }
@@ -78,18 +80,12 @@ func (c *fanoutCounter) observe(line string) *FanoutCeilingError {
 	if err := json.Unmarshal([]byte(line), &ev); err != nil || ev.Type != "assistant" {
 		return nil
 	}
-	// One assistant message may be split across several lines sharing an id.
-	if ev.Message.ID == "" {
-		c.turns++
-	} else if _, dup := c.seenIDs[ev.Message.ID]; !dup {
-		c.seenIDs[ev.Message.ID] = struct{}{}
-		c.turns++
-	}
+	c.countTurn(ev.Message.ID)
 	var blocks []streamContentBlock
 	if json.Unmarshal(ev.Message.Content, &blocks) == nil {
 		for _, b := range blocks {
 			if b.Type == "tool_use" && subagentToolNames[b.Name] {
-				c.subagents++
+				c.countSubagent(b.ID)
 			}
 		}
 	}
@@ -103,4 +99,31 @@ func (c *fanoutCounter) exceeded() *FanoutCeilingError {
 			MaxTurns: c.limits.MaxTurns, MaxSubagents: c.limits.MaxSubagents}
 	}
 	return nil
+}
+
+// countTurn counts a message id once (one message may be split across lines). A
+// missing id is unrecognized stream shape: skip it rather than count per line,
+// so a format change fails open instead of tripping the ceiling.
+func (c *fanoutCounter) countTurn(id string) {
+	if c.limits.MaxTurns <= 0 || id == "" {
+		return
+	}
+	if _, dup := c.seenIDs[id]; !dup {
+		c.seenIDs[id] = struct{}{}
+		c.turns++
+	}
+}
+
+// countSubagent counts a tool_use id once; an id-less block counts each time.
+func (c *fanoutCounter) countSubagent(toolUseID string) {
+	if c.limits.MaxSubagents <= 0 {
+		return
+	}
+	if toolUseID != "" {
+		if _, dup := c.seenTools[toolUseID]; dup {
+			return
+		}
+		c.seenTools[toolUseID] = struct{}{}
+	}
+	c.subagents++
 }

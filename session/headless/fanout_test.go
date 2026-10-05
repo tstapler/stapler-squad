@@ -20,12 +20,12 @@ func streamAssistantMsg(id string, toolNames ...string) string {
 
 func TestFanoutCounter_CountsDistinctTurnsAndSubagents(t *testing.T) {
 	t.Parallel()
-	c := newFanoutCounter(FanoutLimits{})
+	c := newFanoutCounter(FanoutLimits{MaxTurns: 1000, MaxSubagents: 1000})
 
 	for _, line := range []string{
 		`{"type":"system","subtype":"init"}`,
 		streamAssistantMsg("m1", "Agent", "Read"),
-		streamAssistantMsg("m1", "Agent"), // same message id split across lines: one turn, but a second launch block
+		streamAssistantMsg("m1", "Agent"), // same message id and tool_use id repeated: counted once
 		streamAssistantMsg("m2", "Task"),  // legacy subagent tool name
 		streamAssistantMsg("m3", "Bash"),
 		`{"type":"user","message":{"content":[{"type":"tool_result"}]}}`,
@@ -34,7 +34,17 @@ func TestFanoutCounter_CountsDistinctTurnsAndSubagents(t *testing.T) {
 		assert.Nil(t, c.observe(line))
 	}
 	assert.Equal(t, 3, c.turns)
-	assert.Equal(t, 3, c.subagents)
+	assert.Equal(t, 2, c.subagents, "m1 Agent (deduped by tool_use id) + m2 Task")
+}
+
+func TestFanoutCounter_FailsOpenOnMissingIDs(t *testing.T) {
+	t.Parallel()
+	c := newFanoutCounter(FanoutLimits{MaxTurns: 1})
+	for i := 0; i < 5; i++ {
+		assert.Nil(t, c.observe(`{"type":"assistant","message":{"content":[{"type":"text","text":"x"}]}}`),
+			"id-less assistant events are unrecognized shape and must not trip the ceiling")
+	}
+	assert.Equal(t, 0, c.turns)
 }
 
 func TestFanoutCounter_ExceededPerLimit(t *testing.T) {
