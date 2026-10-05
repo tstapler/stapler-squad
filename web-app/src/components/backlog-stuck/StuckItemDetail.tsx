@@ -142,6 +142,10 @@ export function StuckItemDetail({
     "idle"
   );
   const [diagnoseError, setDiagnoseError] = useState<string | null>(null);
+  // Computed once and reused for both aria-disabled and the click guard below
+  // so the two conditions can't drift apart.
+  const isSetCapDisabled =
+    overrideState === "pending" || !Number(moreRounds) || Number(moreRounds) <= 0;
 
   async function submitOverride(override: number) {
     // These buttons use aria-disabled instead of disabled (so they stay
@@ -232,9 +236,9 @@ export function StuckItemDetail({
               <button
                 type="button"
                 className={styles.overrideButton}
-                aria-disabled={overrideState === "pending" || !Number(moreRounds) || Number(moreRounds) <= 0}
+                aria-disabled={isSetCapDisabled}
                 onClick={() => {
-                  if (overrideState === "pending" || !Number(moreRounds) || Number(moreRounds) <= 0) return;
+                  if (isSetCapDisabled) return;
                   track({
                     name: "stuck_item_rework_cap_override",
                     category: "user_action",
@@ -252,6 +256,7 @@ export function StuckItemDetail({
                 className={styles.overrideUnlimitedButton}
                 aria-disabled={overrideState === "pending"}
                 onClick={() => {
+                  if (overrideState === "pending") return;
                   track({
                     name: "stuck_item_rework_cap_override",
                     category: "user_action",
