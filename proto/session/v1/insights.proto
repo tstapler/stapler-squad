@@ -27,6 +27,18 @@ service InsightsService {
   // finding_id, so future GetInsightsSummary calls exclude it — see
   // WasteFinding.finding_id's doc comment for the identity/recurrence contract.
   rpc DismissFinding(DismissFindingRequest) returns (DismissFindingResponse) {}
+
+  // GetContextHistory returns a session's persisted context-window series, its
+  // time-near-ceiling summary, and its compaction events.
+  rpc GetContextHistory(GetContextHistoryRequest) returns (GetContextHistoryResponse) {}
+
+  // ListSessionsByCeilingTime ranks sessions by the share of turns spent at or
+  // above 90% (then 75%) of their context window.
+  rpc ListSessionsByCeilingTime(ListSessionsByCeilingTimeRequest)
+      returns (ListSessionsByCeilingTimeResponse) {}
+
+  // GetCompactionStats aggregates compaction telemetry across sessions.
+  rpc GetCompactionStats(GetCompactionStatsRequest) returns (GetCompactionStatsResponse) {}
 }
 
 // Severity classifies how urgently a WasteFinding should be acted on.
@@ -48,6 +60,7 @@ enum FindingType {
   FINDING_TYPE_MODEL_SWITCH_CACHE_BUST  = 3;
   FINDING_TYPE_OVERSIZED_START_CONTEXT  = 4;
   FINDING_TYPE_LOW_CACHE_ROI            = 5;
+  FINDING_TYPE_CONTEXT_GROWTH_NO_COMPACTION = 6;
 }
 
 // ActivityType classifies the kind of work a session performed. Defined now
@@ -333,4 +346,64 @@ message DismissFindingRequest {
 // DismissFindingResponse confirms the dismissal was persisted.
 message DismissFindingResponse {
   bool success = 1;
+}
+
+// ContextSample is one turn's context-window occupancy.
+message ContextSample {
+  int32 turn_index = 1;
+  google.protobuf.Timestamp sampled_at = 2;
+  string model = 3;
+  int64 context_tokens = 4;
+  int64 context_max = 5; // 0 when the model's window is unknown
+}
+
+// CompactionEvent is one detected /compact or auto-compact.
+message CompactionEvent {
+  string conversation_id = 1;
+  int32 turn_index = 2;
+  google.protobuf.Timestamp occurred_at = 3;
+  string trigger = 4; // "manual", "auto", or empty
+  int64 tokens_before = 5;
+  int64 tokens_after = 6;
+  int64 tokens_freed = 7;
+}
+
+// ContextCeilingSummary is a session's time spent near its context ceiling.
+message ContextCeilingSummary {
+  string conversation_id = 1;
+  int32 turns = 2;
+  int64 peak_tokens = 3;
+  double fraction_at_or_above_75 = 4;
+  double fraction_at_or_above_90 = 5;
+}
+
+message GetContextHistoryRequest {
+  string conversation_id = 1;
+}
+
+message GetContextHistoryResponse {
+  repeated ContextSample samples = 1;
+  ContextCeilingSummary summary = 2;
+  repeated CompactionEvent compactions = 3;
+}
+
+message ListSessionsByCeilingTimeRequest {
+  int32 limit = 1; // <= 0 returns all
+}
+
+message ListSessionsByCeilingTimeResponse {
+  repeated ContextCeilingSummary sessions = 1;
+}
+
+message GetCompactionStatsRequest {
+  google.protobuf.Timestamp since = 1; // unset = all time
+}
+
+message GetCompactionStatsResponse {
+  int32 count = 1;
+  int32 manual_count = 2;
+  int32 auto_count = 3;
+  int64 total_tokens_freed = 4;
+  int64 average_tokens_freed = 5;
+  int32 sessions_with_compaction = 6;
 }
