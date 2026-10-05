@@ -4,7 +4,6 @@ package session
 // history file detection, UUID extraction, and conversation reattachment.
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -14,10 +13,6 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 )
-
-// staleResumePattern is the prefix Claude CLI emits when --resume is used with a
-// conversation ID that no longer exists in Claude's backend.
-const staleResumePattern = "No conversation found with session ID"
 
 // claudeExtension holds Claude Code conversation-resume session state.
 // Unlike piExtension (instance_pi_status.go), this is populated for a
@@ -71,14 +66,11 @@ const (
 	ReviveOutcomeFreshLostHistory ReviveOutcome = "fresh_lost_history"
 )
 
-// isStaleResumeExit returns true when the PTY exit tail contains the Claude CLI error
-// that indicates a stale or expired --resume argument.  ANSI escape sequences are
-// stripped before the check so colour output does not prevent matching.
-func isStaleResumeExit(exitContent []byte) bool {
-	if len(exitContent) == 0 {
-		return false
-	}
-	return bytes.Contains(stripANSISimple(exitContent), []byte(staleResumePattern))
+// isStaleResumeExit returns true when the PTY exit tail contains CLI errors
+// indicating a stale or expired resume argument for program.
+func isStaleResumeExit(program string, exitContent []byte) bool {
+	detector := resolveStaleResumeDetector(program)
+	return detector.IsStaleResumeExit(exitContent)
 }
 
 // stripANSISimple removes ANSI CSI/OSC/single-char escape sequences so that
