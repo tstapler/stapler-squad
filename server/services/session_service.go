@@ -832,6 +832,18 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		EventBus: eventBus,
 	})
 	capacityMonitor.RegisterClient("anthropic", NewAnthropicLimitsClient(credChain, ""))
+	if concStorage != nil {
+		capacityMonitor.roleResolver = func(ctx context.Context, sessionUUID string) string {
+			is, err := concStorage.GetItemSessionBySessionUUID(ctx, sessionUUID)
+			if err != nil {
+				return ""
+			}
+			return is.Role
+		}
+		capacityMonitor.terminator = func(ctx context.Context, inst *session.Instance, reason string) error {
+			return stopGuardrailSession(ctx, concStorage, inst, reason)
+		}
+	}
 	capacityMonitor.RegisterClient("google", NewGeminiLimitsClient(credChain, ""))
 
 	if anthropicClient, ok := aiClientImpl.(*AnthropicAIClient); ok {
@@ -1153,6 +1165,18 @@ func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID s
 	// DeleteSession's EventSessionDeleted publish below.
 	s.eventBus.Publish(events.NewSessionArchivedEvent(sessionUUID))
 	return nil
+}
+
+// stopGuardrailSession ends the backlog ItemSession with reason (so the
+// orchestrator's reconcilers see why it stopped and can respawn or flag the
+// item) and then kills the live session.
+func stopGuardrailSession(ctx context.Context, st *session.Storage, inst *session.Instance, reason string) error {
+	var endErr error
+	if is, err := st.GetItemSessionBySessionUUID(ctx, inst.Snapshot().UUID); err == nil {
+		endErr = st.UpdateItemSessionEndedWithReason(ctx, is.ID, time.Now(), reason)
+	}
+	// Kill even if the end-reason write failed; both errors reach the caller.
+	return errors.Join(endErr, inst.Kill())
 }
 
 // StopSessionByUUID satisfies the BacklogService.SessionStopper interface.

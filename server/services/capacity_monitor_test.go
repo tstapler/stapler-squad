@@ -513,10 +513,14 @@ func TestCapacityMonitor_IdleWaitLoop_RecurrenceAfterCompactEscalates(t *testing
 		t.Fatal("expected idle_wait_loop_escalation notification, but none received")
 	}
 
-	monitor.mu.RLock()
-	_, stillTracked := monitor.idleWaitState["sess-uuid-1"]
-	monitor.mu.RUnlock()
-	assert.False(t, stillTracked, "tracker should be cleared after escalating, to avoid repeat escalation spam")
+	// The loop persists: further polls must not re-notify or re-compact.
+	monitor.poll(context.Background())
+	assert.Equal(t, 1, compactor.callCount())
+	select {
+	case ev := <-ch:
+		t.Fatalf("unexpected repeat notification: %v", ev.NotificationMetadata["type"])
+	case <-time.After(100 * time.Millisecond):
+	}
 }
 
 func TestCapacityMonitor_IdleWaitLoop_RealWorkAfterCompactClearsTracker(t *testing.T) {
