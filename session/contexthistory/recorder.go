@@ -28,6 +28,9 @@ func NewRecorder(store *Store, maxFn func(model string) int, retention time.Dura
 	if retention <= 0 {
 		retention = DefaultRetention
 	}
+	if maxFn == nil {
+		maxFn = func(string) int { return 0 }
+	}
 	return &Recorder{store: store, maxFn: maxFn, retention: retention, now: time.Now}
 }
 
@@ -90,9 +93,8 @@ func (r *Recorder) Run(ctx context.Context, src tokens.TokenStoreReader) {
 	ch := src.Subscribe()
 	defer src.Unsubscribe(ch)
 
-	for _, res := range src.GetAll() {
-		r.recordLogged(ctx, res)
-	}
+	r.sweep(ctx, src)
+	r.prune(ctx)
 
 	prune := time.NewTicker(pruneInterval)
 	defer prune.Stop()
@@ -104,18 +106,39 @@ func (r *Recorder) Run(ctx context.Context, src tokens.TokenStoreReader) {
 			if !ok {
 				return
 			}
+			if res == nil {
+				// TokenStore's initial walk finished. Its notifications are
+				// non-blocking and may have been dropped while we were busy, so
+				// re-sweep; Record is incremental, making this cheap.
+				r.sweep(ctx, src)
+				continue
+			}
 			r.recordLogged(ctx, res)
 		case <-prune.C:
-			if n, err := r.store.Prune(ctx, r.now().Add(-r.retention)); err != nil {
-				log.Warn("[ContextHistory] prune failed", "err", err)
-			} else if n > 0 {
-				log.Info("[ContextHistory] pruned expired rows", "rows", n)
-			}
+			r.sweep(ctx, src)
+			r.prune(ctx)
 		}
 	}
 }
 
+func (r *Recorder) sweep(ctx context.Context, src tokens.TokenStoreReader) {
+	for _, res := range src.GetAll() {
+		r.recordLogged(ctx, res)
+	}
+}
+
+func (r *Recorder) prune(ctx context.Context) {
+	if n, err := r.store.Prune(ctx, r.now().Add(-r.retention)); err != nil {
+		log.Warn("[ContextHistory] prune failed", "err", err)
+	} else if n > 0 {
+		log.Info("[ContextHistory] pruned expired rows", "rows", n)
+	}
+}
+
 func (r *Recorder) recordLogged(ctx context.Context, res *tokens.ParseResult) {
+	if res == nil {
+		return
+	}
 	if err := r.Record(ctx, res); err != nil {
 		log.Warn("[ContextHistory] record failed", "session", res.SessionUUID, "err", err)
 	}

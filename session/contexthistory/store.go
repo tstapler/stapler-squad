@@ -151,7 +151,7 @@ func (s *Store) Series(ctx context.Context, sessionUUID string) ([]Sample, error
 	}
 	out := make([]Sample, len(rows))
 	for i, r := range rows {
-		out[i] = Sample{r.SessionUUID, r.TurnIndex, r.SampledAt, r.Model, r.ContextTokens, r.ContextMax}
+		out[i] = sampleFromRow(r)
 	}
 	return out, nil
 }
@@ -178,7 +178,7 @@ func (s *Store) RankByCeilingTime(ctx context.Context, limit int) ([]SessionSumm
 	bySession := map[string][]Sample{}
 	for _, r := range rows {
 		bySession[r.SessionUUID] = append(bySession[r.SessionUUID],
-			Sample{r.SessionUUID, r.TurnIndex, r.SampledAt, r.Model, r.ContextTokens, r.ContextMax})
+			sampleFromRow(r))
 	}
 	out := make([]SessionSummary, 0, len(bySession))
 	for id, series := range bySession {
@@ -265,11 +265,21 @@ func (s *Store) CompactionStats(ctx context.Context, since time.Time) (Compactio
 	return st, nil
 }
 
+func sampleFromRow(r *ent.ContextSample) Sample {
+	return Sample{
+		SessionUUID: r.SessionUUID, TurnIndex: r.TurnIndex, SampledAt: r.SampledAt,
+		Model: r.Model, ContextTokens: r.ContextTokens, ContextMax: r.ContextMax,
+	}
+}
+
 func toCompactions(rows []*ent.CompactionEvent) []Compaction {
 	out := make([]Compaction, len(rows))
 	for i, r := range rows {
-		out[i] = Compaction{r.SessionUUID, r.TurnIndex, r.OccurredAt, r.Trigger,
-			r.TokensBefore, r.TokensAfter, r.TokensFreed}
+		out[i] = Compaction{
+			SessionUUID: r.SessionUUID, TurnIndex: r.TurnIndex, OccurredAt: r.OccurredAt,
+			Trigger: r.Trigger, TokensBefore: r.TokensBefore, TokensAfter: r.TokensAfter,
+			TokensFreed: r.TokensFreed,
+		}
 	}
 	return out
 }
@@ -285,7 +295,7 @@ func (s *Store) Prune(ctx context.Context, cutoff time.Time) (int, error) {
 	n2, err := s.client.CompactionEvent.Delete().
 		Where(compactionevent.OccurredAtLT(cutoff)).Exec(ctx)
 	if err != nil {
-		return n1, fmt.Errorf("prune compaction events: %w", err)
+		return 0, fmt.Errorf("prune compaction events: %w", err)
 	}
 	return n1 + n2, nil
 }

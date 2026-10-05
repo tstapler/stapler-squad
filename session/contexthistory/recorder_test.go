@@ -3,6 +3,7 @@ package contexthistory
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -180,11 +181,22 @@ func TestRecord_NilOrUnidentifiedResultIsNoop(t *testing.T) {
 }
 
 type fakeSource struct {
+	mu       sync.Mutex
 	existing []*tokens.ParseResult
 	ch       chan *tokens.ParseResult
 }
 
-func (f *fakeSource) GetAll() []*tokens.ParseResult          { return f.existing }
+func (f *fakeSource) setExisting(r ...*tokens.ParseResult) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.existing = r
+}
+
+func (f *fakeSource) GetAll() []*tokens.ParseResult {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.existing
+}
 func (f *fakeSource) GetByUUID(string) *tokens.ParseResult   { return nil }
 func (f *fakeSource) IsLoading() bool                        { return false }
 func (f *fakeSource) Subscribe() <-chan *tokens.ParseResult  { return f.ch }
@@ -212,4 +224,32 @@ func TestRun_RecordsExistingAndStreamedResultsUntilCancelled(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return after cancel")
 	}
+}
+
+func TestRun_NilWalkCompleteSweepRecoversDroppedNotifications(t *testing.T) {
+	t.Parallel()
+	s := openStore(t, filepath.Join(t.TempDir(), "s.db"))
+	src := &fakeSource{ch: make(chan *tokens.ParseResult, 1)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go newRecorder(s).Run(ctx, src)
+
+	// Result becomes visible in the store but its notification was "dropped".
+	src.setExisting(result("missed", turn(0, 3)))
+	src.ch <- nil
+	require.Eventually(t, func() bool {
+		got, _ := s.Series(context.Background(), "missed")
+		return len(got) == 1
+	}, 5*time.Second, 10*time.Millisecond)
+}
+
+func TestNewRecorder_NilMaxFnDefaultsToUnknownWindow(t *testing.T) {
+	t.Parallel()
+	s := openStore(t, filepath.Join(t.TempDir(), "s.db"))
+	rec := NewRecorder(s, nil, 0)
+	require.NoError(t, rec.Record(context.Background(), result("a", tokens.TurnStats{Input: 1})))
+	got, err := s.Series(context.Background(), "a")
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Zero(t, got[0].ContextMax)
 }
