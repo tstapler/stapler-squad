@@ -575,7 +575,11 @@ func (s *WorkflowService) RunWorkflow(
 
 	sessionID, err := s.scheduler.FireNow(ctx, wf, req.Msg.Arg)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("run workflow: %w", err))
+		code := connect.CodeInternal
+		if connect.CodeOf(err) == connect.CodeAlreadyExists {
+			code = connect.CodeAlreadyExists
+		}
+		return nil, connect.NewError(code, fmt.Errorf("run workflow: %w", err))
 	}
 
 	s.publishWorkflowEvent(&events.WorkflowEventPayload{
