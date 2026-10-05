@@ -1,0 +1,40 @@
+# Adversarial Review: scrolling
+
+**Date**: 2026-10-01
+**Verdict**: CONCERNS (initial: BLOCKED; see Re-review)
+
+Verified against code: `useTerminalGestures.ts` (scroll branch uses `Math.round` and `lastY` reset per frame, `onSendData` already available in the hook), `TerminalOutput.tsx` L1160-1188 (50 ms `setTimeout(fit)` and the 400/300 ms `isFittingRef` path exist as described), `XtermTerminal.tsx` imperative handle `fit: () => fitAddonRef.current?.fit()` (~L1269), `lib/terminal/mouseTracking.ts` (only `isMouseTracking`; no mode/encoding helpers), existing `XtermTerminal.test.tsx` and `tests/e2e/terminal-resize.spec.ts`.
+
+## Blockers
+_Superseded wording note (round 2, 2026-10-01): the "mode matrix as hard gate" stance below was replaced by the user decision to ship default routing unverified; see plan.md "Routing Verification Statement" (formerly "Hard Merge Gate"). The tmux behavior described here is INFERRED copy-mode (PgUp enters tmux copy-mode and scrolls tmux history; bash ignores the key), not "PgUp goes to bash and does nothing"._
+
+- [ ] Routing keys on `bufferType === 'alternate'` to reach the TUI, but nothing in the plan or branch table covers Claude Code (or any TUI run in tmux/inline mode) rendering in the NORMAL buffer. In that case `decideScrollTarget` returns `'xterm-local'` and the drag still moves only xterm's scrollback, which is the exact original bug (requirements: "calls xterm's scrollLines(), which only moves xterm's own scrollback, not the TUI's"). The Q2 branch table has only "alt-buffer no-op"; it lacks a row for "Claude Code is in the normal buffer". Also, tmux itself normally uses the alternate screen, so a plain shell in a tmux session would route to PgUp/PgDn (sent to bash, doing nothing) while the plan's D1 expects 1:1 local scroll. Recommendation: before implementation, make the spike record `bufferType` for (a) plain shell in tmux and (b) Claude Code, add branch-table rows for "TUI in normal buffer" and "everything is alt because tmux", and define the router's behavior for each (for example a user-visible toggle or foreground-process/tmux-pane-mode detection rather than bufferType alone). Without this the core success metric can fail while all unit tests pass.
+
+## Concerns
+- [ ] `refit()` is described as "requests a fit through the sampler", but the sampler is driven by a ResizeObserver and a 1 px dedupe on container size (XtermTerminal ~L1112). If the container did not change (Chrome 108+ keyboard resizes only the visual viewport unless ViewportProvider drives container height), `refit()` has no defined path to actually fit; only the zero-restore case is forced (Task 2.1.2c). Specify the sampler entry point for a forced fit and verify, in the spike, that container size really changes when the keyboard opens (log already planned in 0.1.1c; add it as an explicit Q3 branch).
+- [ ] Page-key mode (`pgkeys`, the shipped default) is page-sized with `ceil` and a minimum of one page: any 1-line drag sends a full PgUp/PgDn, and momentum can flood pages. This contradicts the success metric "1:1 with finger movement" and the Story 1.2.1 intent. Define accumulation in page units (carry remainder, only emit once travel >= N lines) and a hard per-fling cap, and state explicitly in requirements/acceptance that TUI mode is non-1:1.
+- [ ] Wheel path emits SGR bytes with no way to know whether the app enabled 1006 encoding; if it did not, the bytes are injected as garbage keystrokes into Claude Code. Plan notes the risk but gates nothing. Require the spike to confirm encoding, and keep `pgkeys` default until then (it is, but make the invariant a test: wheel is never selected unless policy is explicitly `wheel`).
+- [ ] Settle signal (`createViewportSettle`) is built in 2.1.4 but the wiring point (who owns it, ViewportProvider vs TerminalOutput) and its interaction with the existing ViewportProvider rAF batching is not specified; 2.1.3a says "via the settle signal" with no task creating the subscription. Add an explicit wiring task and a timeout fallback (settle never fires if the height keeps changing, e.g. animated URL bar).
+- [ ] Q3 verdict may be "WebGL context loss / missed repaint", yet the plan's only proof is a desktop Chromium e2e with a pixel sample (cannot reproduce on-device; WebGL pixel reads in headless are flaky) plus a manual 50-cycle run. No automated regression truly pins the Android failure, and failure is intermittent. Add a bounded automated stress (many resize cycles in jest with mocked terminal asserting `postFitRepaint` after every confirmed fit) and mark the pixel-sample e2e as optional/non-blocking.
+- [ ] `refit()` retry "until canFit or 20 attempts" with no behavior on exhaustion (silent give-up leaves a stale canvas, the very bug). Specify a fallback (forced `refresh` plus log, or retry on next ResizeObserver tick).
+
+## Minors
+- Story 1.1.1 seed AC ("22 px minus 0") is garbled; current code resets `lastY` at the PENDING to SCROLLING transition, so the slop distance is dropped today; state the intended seed value plainly.
+- Slop reduction 15 to 10 px sits against the long-press timer rationale in the existing comment; keep at 15 unless the spike shows a problem. _Superseded (round 2): 10 px is now an explicit device-tuning candidate tested against 15 in D9 (plan.md Story 1.1.1, design/ux.md S1 criterion c); the default ships at 15 until D9 decides._
+- `html, body { overscroll-behavior: none }` is global; confirm no other mobile view relies on pull-to-refresh or scroll chaining (grep of `app/globals.css` found no existing `overscroll` rule, so this is purely additive).
+- `createViewportSettle` also "cancels momentum owner via callback" couples a viewport helper to the gesture hook; route through a prop or event instead.
+- Wheel report col/row source (cell under touch vs. fixed) is unspecified for Story 1.1.2; Task list gives col 10 / row 5 only as test values.
+
+## Re-review (2026-10-01, previously BLOCKED items only)
+
+**Blocker 1 (routing keyed only on `bufferType`): RESOLVED.** Checked against revised `plan.md`:
+- Glossary and Pattern Decisions replace the hardcoded check with a data-driven `ScrollRoutingPolicy` table plus an `'auto'|'local'|'tui'` override (persisted, toolbar toggle); `bufferType` is explicitly "a signal, not the verdict".
+- Story 1.1.2 ACs pin both failure cases: a normal-buffer TUI row must yield `'tui-*'` (not `xterm-local`), and a plain-shell-in-tmux row resolves per the spike, not to PgUp/PgDn by default. The override short-circuit has its own AC.
+- Task 0.1.2c now requires a mode matrix for plain shell in tmux and Claude Code in tmux (bare shell optional), and the 0.1.3 branch table has rows for normal-buffer TUI, tmux alt-screen shell, and distinguishable-by-tracking-mode.
+- Bonus: the `ceil`/min-one-page, wheel-encoding gating, `refit()` direct-start and settle-ownership concerns were also addressed (page accumulator with cap and rate limit, invariant test that `tui-wheel` only appears for explicit `'wheel'` policy, `requestFitRef`, hook-owned cancel listeners).
+
+**Remaining (non-blocking) concerns:**
+- ~~Task 1.1.2b's fallback rows (`alternate`+any -> `tui-pgkeys`) still misroute a plain shell in tmux (alt screen) if the spike is not run; the user toggle is the only escape. Make the Phase 0 mode matrix a hard prerequisite for merge, or default the fallback to `'auto'` with a visible indicator.~~ **Superseded (round 2)**: the mode matrix is deliberately not a merge prerequisite (user decision); the indicator part was adopted: the always-visible effective-mode chip, a first-use hint and route-aware toolbar keys (design/ux.md S6, S4), and the matrix runs in the week-1 device pass.
+- ~~Branch-table row for tmux alt-screen shell is conditional prose; record tmux copy-mode behavior explicitly.~~ **Addressed (round 2)**: the mode matrix has a tmux copy-mode column (plan.md Task 0.1.2c); the copy-mode behavior is stated as INFERRED from tmux defaults, and the client cannot detect copy-mode, so design/ux.md S6 covers it with a hint instead of an indicator.
+
+**Final verdict: CONCERNS** (no remaining blockers).

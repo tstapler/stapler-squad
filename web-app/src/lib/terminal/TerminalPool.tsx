@@ -69,9 +69,11 @@ import React, {
 } from "react";
 import { createPortal } from "react-dom";
 import type {
+  ScrollGestureProps,
   XtermTerminalHandle,
   XtermTerminalProps,
 } from "@/components/sessions/XtermTerminal";
+import type { ScrollMode } from "@/lib/terminal/scrollRouting";
 import * as styles from "./TerminalPool.css";
 
 const XtermTerminal = lazy(() =>
@@ -125,6 +127,14 @@ interface PoolEntry {
   stableOnResize: (cols: number, rows: number) => void;
   stableIsAltScreenActive: () => boolean;
   stableOnAltScreenScrollUp: (lines: number) => void;
+  // Scroll/gesture wiring (scrolling feature). The consumer's latest ScrollGestureProps and
+  // onScrollModeChange live in refs; `scrollGesture` is the object handed to <XtermTerminal>:
+  // its callbacks are stable delegates, and its primitives (override, enabled, epoch) are
+  // re-snapshotted by usePooledTerminalCallbacks, which bumps the pool to re-render the portal.
+  scrollGestureSourceRef: React.RefObject<ScrollGestureProps | null>;
+  onScrollModeChangeRef: React.RefObject<((mode: ScrollMode) => void) | null>;
+  scrollGesture: ScrollGestureProps;
+  stableOnScrollModeChange: (mode: ScrollMode) => void;
 }
 
 interface TerminalPoolContextValue {
@@ -166,6 +176,17 @@ function createEntry(sessionId: string): PoolEntry {
   const onResizeRef: React.RefObject<((cols: number, rows: number) => void) | null> = { current: null };
   const isAltScreenActiveRef: React.RefObject<(() => boolean) | null> = { current: null };
   const onAltScreenScrollUpRef: React.RefObject<((lines: number) => void) | null> = { current: null };
+  const scrollGestureSourceRef: React.RefObject<ScrollGestureProps | null> = { current: null };
+  const onScrollModeChangeRef: React.RefObject<((mode: ScrollMode) => void) | null> = { current: null };
+  const src = () => scrollGestureSourceRef.current;
+  const scrollGesture: ScrollGestureProps = {
+    onScrollStart: (route) => src()?.onScrollStart?.(route),
+    onScrollGesture: (info) => src()?.onScrollGesture?.(info),
+    onPageKeysSent: (direction, pages) => src()?.onPageKeysSent?.(direction, pages),
+    onGestureActiveChange: (active) => src()?.onGestureActiveChange?.(active),
+    isInputBusy: () => src()?.isInputBusy?.() ?? false,
+    onProgrammaticData: (data) => (src()?.onProgrammaticData ?? onDataRef.current)?.(data),
+  };
 
   return {
     sessionId,
@@ -186,6 +207,10 @@ function createEntry(sessionId: string): PoolEntry {
     stableOnResize: (cols, rows) => onResizeRef.current?.(cols, rows),
     stableIsAltScreenActive: () => isAltScreenActiveRef.current?.() ?? false,
     stableOnAltScreenScrollUp: (lines) => onAltScreenScrollUpRef.current?.(lines),
+    scrollGestureSourceRef,
+    onScrollModeChangeRef,
+    scrollGesture,
+    stableOnScrollModeChange: (mode) => onScrollModeChangeRef.current?.(mode),
   };
 }
 
@@ -334,6 +359,8 @@ export function TerminalPoolProvider({ children, maxSize = DEFAULT_TERMINAL_POOL
             theme="dark"
             fontSize={14}
             scrollback={POOLED_SCROLLBACK}
+            scrollGesture={entry.scrollGesture}
+            onScrollModeChange={entry.stableOnScrollModeChange}
             isAltScreenActive={entry.stableIsAltScreenActive}
             onAltScreenScrollUp={entry.stableOnAltScreenScrollUp}
           />
@@ -509,6 +536,9 @@ export interface PooledTerminalCallbacks {
   onResize: (cols: number, rows: number) => void;
   isAltScreenActive: () => boolean;
   onAltScreenScrollUp: (lines: number) => void;
+  /** Scroll/gesture settings + callbacks (see ScrollGestureProps). Primitive changes re-render the pooled terminal. */
+  scrollGesture?: ScrollGestureProps;
+  onScrollModeChange?: (mode: ScrollMode) => void;
 }
 
 /**
@@ -522,7 +552,7 @@ export interface PooledTerminalCallbacks {
 export function usePooledTerminalCallbacks(
   sessionId: string,
   isVisible: boolean,
-  { onData, onResize, isAltScreenActive, onAltScreenScrollUp }: PooledTerminalCallbacks
+  { onData, onResize, isAltScreenActive, onAltScreenScrollUp, scrollGesture, onScrollModeChange }: PooledTerminalCallbacks
 ): void {
   const pool = useTerminalPoolContext();
   // Entry must already exist -- usePooledTerminal (called earlier in the
@@ -550,4 +580,34 @@ export function usePooledTerminalCallbacks(
       if (entry.onAltScreenScrollUpRef.current === onAltScreenScrollUp) entry.onAltScreenScrollUpRef.current = null;
     };
   }, [entry, isVisible, onData, onResize, isAltScreenActive, onAltScreenScrollUp]);
+
+  useEffect(() => {
+    entry.onScrollModeChangeRef.current = onScrollModeChange ?? null;
+    return () => {
+      if (entry.onScrollModeChangeRef.current === onScrollModeChange) entry.onScrollModeChangeRef.current = null;
+    };
+  }, [entry, onScrollModeChange]);
+
+  // Callbacks flow through the source ref; only the primitives need a re-render of <XtermTerminal>.
+  const scrollOverride = scrollGesture?.scrollOverride;
+  const gestureScrollEnabled = scrollGesture?.gestureScrollEnabled;
+  const tuiScrollPolicy = scrollGesture?.tuiScrollPolicy;
+  const connectionEpoch = scrollGesture?.connectionEpoch;
+  useEffect(() => {
+    entry.scrollGestureSourceRef.current = scrollGesture ?? null;
+    return () => {
+      if (entry.scrollGestureSourceRef.current === scrollGesture) entry.scrollGestureSourceRef.current = null;
+    };
+  }, [entry, scrollGesture]);
+  useEffect(() => {
+    const cur = entry.scrollGesture;
+    if (
+      cur.scrollOverride === scrollOverride &&
+      cur.gestureScrollEnabled === gestureScrollEnabled &&
+      cur.tuiScrollPolicy === tuiScrollPolicy &&
+      cur.connectionEpoch === connectionEpoch
+    ) return;
+    entry.scrollGesture = { ...cur, scrollOverride, gestureScrollEnabled, tuiScrollPolicy, connectionEpoch };
+    pool.registerEntry();
+  }, [entry, pool, scrollOverride, gestureScrollEnabled, tuiScrollPolicy, connectionEpoch]);
 }

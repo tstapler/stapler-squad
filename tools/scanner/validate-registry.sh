@@ -52,7 +52,11 @@ TEMP_BACKEND="${TMPDIR_WORK}/backend"
 mkdir -p "${TEMP_BACKEND}"
 echo "Scanning backend features..."
 BACKEND_PROTOS_RAW="$("${SCRIPT_DIR}/list-backend-protos.sh")" || exit 2
-mapfile -t BACKEND_PROTOS <<< "${BACKEND_PROTOS_RAW}"
+# Avoid mapfile (bash 4+ only) — macOS ships bash 3.2; same pattern as prune-stale-backend.sh.
+BACKEND_PROTOS=()
+while IFS= read -r line; do
+  [ -n "${line}" ] && BACKEND_PROTOS+=("${line}")
+done <<< "${BACKEND_PROTOS_RAW}"
 for proto in "${BACKEND_PROTOS[@]}"; do
   if ! ./tools/scanner/backend/cmd/scanner \
         "${proto}" \
