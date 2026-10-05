@@ -16,4 +16,5 @@ Readiness gate: PASS — every AC maps to an artifact or a named test; no AC dep
 - Counter mis-parses a stream-format change → unknown lines are ignored (fail-open); tests pin both `Agent` and `Task`.
 - Seed is create-if-absent: the prompt-budget text only reaches fresh installs; the stream ceiling is the real enforcement.
 - Decision made on thin data → data gaps are listed explicitly; ADR schedules re-tuning from the new log fields.
+- Retry loop via shared remediation backoff (found by sdd:6-verify) → reconciler gate skips `fanout_ceiling`; tested.
 - Conflict with #884 → independent accumulators, documented.

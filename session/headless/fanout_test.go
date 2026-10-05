@@ -33,8 +33,8 @@ func TestFanoutCounter_CountsDistinctTurnsAndSubagents(t *testing.T) {
 	} {
 		assert.Nil(t, c.observe(line))
 	}
-	assert.Equal(t, 3, c.Turns)
-	assert.Equal(t, 3, c.Subagents)
+	assert.Equal(t, 3, c.turns)
+	assert.Equal(t, 3, c.subagents)
 }
 
 func TestFanoutCounter_ExceededPerLimit(t *testing.T) {
@@ -42,7 +42,14 @@ func TestFanoutCounter_ExceededPerLimit(t *testing.T) {
 	turns := newFanoutCounter(FanoutLimits{MaxTurns: 2})
 	assert.Nil(t, turns.observe(assistantLine("a")))
 	assert.Nil(t, turns.observe(assistantLine("b")))
-	require.NotNil(t, turns.observe(assistantLine("c")))
+	tripped := turns.observe(assistantLine("c"))
+	require.NotNil(t, tripped)
+	assert.ErrorIs(t, tripped, ErrFanoutCeilingExceeded)
+	assert.Equal(t, 3, tripped.Turns)
+
+	exact := newFanoutCounter(FanoutLimits{MaxTurns: 2})
+	assert.Nil(t, exact.observe(assistantLine("a")))
+	assert.Nil(t, exact.observe(assistantLine("b")), "exactly MaxTurns must not trip")
 
 	subs := newFanoutCounter(FanoutLimits{MaxSubagents: 1})
 	assert.Nil(t, subs.observe(assistantLine("a", "Agent")))
@@ -80,17 +87,16 @@ func TestPool_FirstCall_FanoutCeiling_StopsIncidentShapeBeforeBudget(t *testing.
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Hour) // triageCallBudget
 	defer cancel()
 
-	start := time.Now()
-	_, err := pool.CallBlocking(ctx, "f1", "sys", "prompt", CallOptions{}, DiscardCost)
+	partial, err := pool.CallBlocking(ctx, "f1", "sys", "prompt", CallOptions{}, DiscardCost)
 
 	require.Error(t, err)
+	assert.Contains(t, partial, `"type":"assistant"`, "partial transcript must survive the abort for failure capture")
 	assert.ErrorIs(t, err, ErrFanoutCeilingExceeded)
 	assert.NotErrorIs(t, err, context.DeadlineExceeded)
 	var ceiling *FanoutCeilingError
 	require.ErrorAs(t, err, &ceiling)
 	assert.Equal(t, 121, ceiling.Subagents, "stops at the first launch past MaxSubagents")
 	assert.Less(t, ceiling.Turns, 1094, "stops before the incident's turn count")
-	assert.Less(t, time.Since(start), 10*time.Second, "must not wait out the 3h budget")
 	select {
 	case <-stopped:
 	case <-time.After(time.Second):

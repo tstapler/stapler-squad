@@ -83,6 +83,10 @@ func latestTriageSession(sessions []ItemSessionSummary) *ItemSessionSummary {
 	return latest
 }
 
+// TriageEndReasonFanoutCeiling is the ItemSession.EndReason server/services'
+// classifyHeadlessCallError records for headless.ErrFanoutCeilingExceeded.
+const TriageEndReasonFanoutCeiling = "fanout_ceiling"
+
 // triageEndReasonOrUnknown formats a persisted ItemSession.EndReason (the
 // errType bucket TriggerTriage's classifyHeadlessCallError writes via
 // UpdateItemSessionEndedWithReason — server/services/backlog_service_triage.go)
@@ -385,6 +389,16 @@ func (l *BacklogLifecycleListener) retryOrphanedTriageWithBackoffGate(ctx contex
 	respawner := l.getTriageRespawner()
 	if respawner == nil {
 		return
+	}
+
+	// A fan-out-ceiling abort is deterministic evidence a retry overruns again
+	// (ADR-029): the shared backoff would re-spend up to the ceiling on every
+	// attempt and, once parked, on the cold heartbeat forever. Leave it for a human.
+	if sessions, sessErr := l.storage.ListItemSessions(ctx, itemID); sessErr == nil {
+		if latest := latestTriageSession(sessions); latest != nil && latest.EndReason == TriageEndReasonFanoutCeiling {
+			log.Info("[BacklogLifecycle] retryOrphanedTriageWithBackoffGate: latest triage hit its fan-out ceiling, not auto-retrying", "item", itemID)
+			return
+		}
 	}
 
 	due, justParked, gateErr := l.storage.RemediationDue(ctx, itemID, domain.StuckReasonOrphanedTriage)

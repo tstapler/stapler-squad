@@ -870,15 +870,21 @@ const (
 	DefaultHeadlessTriageMaxSubagents = 120
 )
 
-// HeadlessTriageMaxTurnsOrDefault resolves the sdd triage turn ceiling; 0 means
-// no limit (the returned value feeds headless.CallOptions, where 0 disables).
+// HeadlessTriageMaxTurnsOrDefault resolves the sdd triage turn ceiling: the
+// default when unset, 0 (disabled in headless.CallOptions) when configured < 0.
 func (c *Config) HeadlessTriageMaxTurnsOrDefault() int {
+	if c == nil {
+		return 0
+	}
 	return ceilingOrDefault(c.HeadlessTriageMaxTurns, DefaultHeadlessTriageMaxTurns)
 }
 
-// HeadlessTriageMaxSubagentsOrDefault resolves the sdd triage subagent ceiling;
-// 0 means no limit.
+// HeadlessTriageMaxSubagentsOrDefault resolves the sdd triage subagent ceiling
+// (launches, not completions) with the same semantics as the turn ceiling.
 func (c *Config) HeadlessTriageMaxSubagentsOrDefault() int {
+	if c == nil {
+		return 0
+	}
 	return ceilingOrDefault(c.HeadlessTriageMaxSubagents, DefaultHeadlessTriageMaxSubagents)
 }
 

@@ -1,10 +1,10 @@
 package headless
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // ErrFanoutCeilingExceeded is returned when a first-call stream crossed its
@@ -25,7 +25,7 @@ func (e *FanoutCeilingError) Error() string {
 		ErrFanoutCeilingExceeded, e.Turns, e.MaxTurns, e.Subagents, e.MaxSubagents)
 }
 
-func (e *FanoutCeilingError) Is(target error) bool { return target == ErrFanoutCeilingExceeded }
+func (e *FanoutCeilingError) Unwrap() error { return ErrFanoutCeilingExceeded }
 
 // FanoutLimits are per-call ceilings; a zero field disables that limit.
 type FanoutLimits struct {
@@ -40,9 +40,9 @@ func (l FanoutLimits) enabled() bool { return l.MaxTurns > 0 || l.MaxSubagents >
 // a stream-format change must degrade to "no ceiling", never to a false abort.
 type fanoutCounter struct {
 	limits    FanoutLimits
-	seenIDs   map[string]struct{}
-	Turns     int
-	Subagents int
+	seenIDs   map[string]struct{} // one entry per assistant message; bounded by the turn ceiling
+	turns     int
+	subagents int
 }
 
 func newFanoutCounter(limits FanoutLimits) *fanoutCounter {
@@ -67,11 +67,11 @@ type streamContentBlock struct {
 // current transcripts, "Task" in older ones.
 var subagentToolNames = map[string]bool{"Agent": true, "Task": true}
 
-// observe records one stream line and returns a non-nil error once a limit is
-// exceeded. The cheap substring check keeps non-assistant lines (the bulk of
+// observe records one stream line and returns a non-nil *FanoutCeilingError once a
+// limit is exceeded (concrete type on purpose: avoids a typed-nil error). The cheap substring check keeps non-assistant lines (the bulk of
 // tool_result traffic) off the JSON decoder.
 func (c *fanoutCounter) observe(line string) *FanoutCeilingError {
-	if !bytes.Contains([]byte(line), []byte(`"assistant"`)) {
+	if !strings.Contains(line, `"assistant"`) {
 		return nil
 	}
 	var ev streamAssistantLine
@@ -80,16 +80,16 @@ func (c *fanoutCounter) observe(line string) *FanoutCeilingError {
 	}
 	// One assistant message may be split across several lines sharing an id.
 	if ev.Message.ID == "" {
-		c.Turns++
+		c.turns++
 	} else if _, dup := c.seenIDs[ev.Message.ID]; !dup {
 		c.seenIDs[ev.Message.ID] = struct{}{}
-		c.Turns++
+		c.turns++
 	}
 	var blocks []streamContentBlock
 	if json.Unmarshal(ev.Message.Content, &blocks) == nil {
 		for _, b := range blocks {
 			if b.Type == "tool_use" && subagentToolNames[b.Name] {
-				c.Subagents++
+				c.subagents++
 			}
 		}
 	}
@@ -97,9 +97,9 @@ func (c *fanoutCounter) observe(line string) *FanoutCeilingError {
 }
 
 func (c *fanoutCounter) exceeded() *FanoutCeilingError {
-	if (c.limits.MaxTurns > 0 && c.Turns > c.limits.MaxTurns) ||
-		(c.limits.MaxSubagents > 0 && c.Subagents > c.limits.MaxSubagents) {
-		return &FanoutCeilingError{Turns: c.Turns, Subagents: c.Subagents,
+	if (c.limits.MaxTurns > 0 && c.turns > c.limits.MaxTurns) ||
+		(c.limits.MaxSubagents > 0 && c.subagents > c.limits.MaxSubagents) {
+		return &FanoutCeilingError{Turns: c.turns, Subagents: c.subagents,
 			MaxTurns: c.limits.MaxTurns, MaxSubagents: c.limits.MaxSubagents}
 	}
 	return nil

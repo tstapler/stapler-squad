@@ -463,6 +463,18 @@ func terminateStream(cio callIO, drainLines func(), err error) {
 	cio.sendFinal(StreamChunk{Err: fmt.Errorf("headless call ended: %w", err), Done: true})
 }
 
+// terminateStreamKeepingText is terminateStream for an abort that should leave
+// the partial transcript behind for captureHeadlessFailure (the only record of
+// what a runaway call did, since its cost never arrives).
+func terminateStreamKeepingText(cio callIO, drainLines func(), text string, err error) {
+	_ = cio.stop()
+	drainLines()
+	if trimmed := strings.TrimSpace(text); trimmed != "" {
+		cio.send(StreamChunk{Text: trimmed})
+	}
+	cio.sendFinal(StreamChunk{Err: fmt.Errorf("headless call ended: %w", err), Done: true})
+}
+
 // firstCallScanResult is what scanFirstCallLines collected before the stream
 // ended normally (not via idle timeout, ctx cancellation, or the output cap).
 type firstCallScanResult struct {
@@ -499,7 +511,7 @@ func (p *Pool) handleFirstCallLine(state firstCallScanState, lr streamLine, cio 
 	}
 	if state.fanout != nil {
 		if ceiling := state.fanout.observe(lr.text); ceiling != nil {
-			terminateStream(cio, state.drainLines, ceiling)
+			terminateStreamKeepingText(cio, state.drainLines, state.allText.String(), ceiling)
 			return true
 		}
 	}

@@ -27,8 +27,10 @@ Hybrid, cheapest-first:
 5. **Option 1 (tmux for sdd) is rejected for now.**
 
 Ceilings are `config.Config` fields (`HeadlessTriageMaxTurns`, `HeadlessTriageMaxSubagents`), applied to sdd-mode
-triage only by default; `0` disables. Defaults are deliberately generous (below the #882 shape of 1,094 turns / 262
-subagent completions, above a normal call) and are to be re-tuned from the new log fields.
+triage only by default. Config semantics: `0` = use the default, a negative value = no limit (the resolved value
+passed to `CallOptions` is `0` = disabled). Defaults are deliberately generous (below the #882 shape of 1,094 turns / 262
+subagent completions, above a normal call) and are to be re-tuned from the logged counters. The counter counts subagent *launches* (`Agent`/`Task` tool_use blocks),
+not the completions quoted for #882, so tune against launches.
 
 ## Rationale
 
@@ -55,11 +57,23 @@ subagent completions, above a normal call) and are to be re-tuned from the new l
   mode. The fan-out ceiling is an additional, earlier, orthogonal bound; whichever trips first wins and is distinguishable
   by `end_reason` (`fanout_ceiling` vs `timeout`).
 - **Liveness / orphan reconciliation:** an abort ends the `item_sessions` row with `end_reason=fanout_ceiling` through
-  the normal error path. `reconcileOrphanedTriageItems` only auto-respawns `end_reason=="shutdown"`; any other reason is
-  MarkStuck'd with backoff (`session/backlog_lifecycle_triage.go:260-305`), so the abort surfaces to the operator and
-  **cannot loop into repeat spend**. No reconciler change required.
-- **#884 (dollar ceiling):** same hook (`handleFirstCallLine`) and same classifier. Both are independent accumulators
-  with their own error values; whichever merges second adds its `case` beside this one. Expect a trivial textual merge.
+  the normal error path and the partial transcript is kept for `captureHeadlessFailure`. `reconcileOrphanedTriageItems`
+  MarkStuck's it (non-`shutdown` reason, `session/backlog_lifecycle_triage.go`), so it surfaces to the operator. **The
+  shared remediation backoff would otherwise retry it** (`retryOrphanedTriageWithBackoffGate`: 30m/2h/8h/24h/72h, then a
+  cold heartbeat forever — `session/backlog_remediation.go`), re-spending up to the ceiling each time for a
+  deterministic overrun. Found in sdd:6-verify; fixed by making that gate skip items whose latest triage ended
+  `fanout_ceiling` (`TriageEndReasonFanoutCeiling`, test
+  `TestReconcileOrphanedTriageRemediation_should_notRetry_When_LatestTriageHitFanoutCeiling`). A human re-trigger still works.
+- **#884 (dollar ceiling):** same hook (`handleFirstCallLine`) and same classifier. The branches conflict textually
+  (`CallOptions`, `firstCallScanState`, `handleFirstCallLine`, the classifier, the `CallOptions{...}` line in
+  `backlog_service_trigger_triage.go`) and carry per-call limits differently (here `Pool.fanout`; #884's plan threads a
+  parameter through `call()`/`callIO`). Whichever lands second should fold both into one per-call limits struct on
+  `callIO` and keep the text-preserving abort (`terminateStreamKeepingText`).
+
+## Known limits
+- Mode gating is by the seeded slug (`sdd`) only; a cloned/renamed mode running the same chain is unbounded.
+- Limits apply only to `WorkDir` calls (like `AllowedTools`); triage always sets one.
+- An aborted call's dollar cost is still not recorded (it arrives only on the final result event).
 
 ## Consequences
 

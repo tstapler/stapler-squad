@@ -546,6 +546,11 @@ func (s *BacklogService) TriggerTriage(
 			// answer "how often do we hit each failure mode" without parsing %v text.
 			errType := classifyHeadlessCallError(callErr, callElapsed, triageCallBudget)
 			capturePath := s.captureHeadlessFailure(triageSessionUUID, raw)
+			var fanoutErr *headless.FanoutCeilingError
+			if errors.As(callErr, &fanoutErr) {
+				log.Warn("[TriggerTriage] fan-out ceiling aborted triage", "item", itemID, "turns", fanoutErr.Turns, "subagents", fanoutErr.Subagents,
+					"maxTurns", fanoutErr.MaxTurns, "maxSubagents", fanoutErr.MaxSubagents)
+			}
 			log.Error("[TriggerTriage] headless triage failed",
 				"item", itemID, "elapsed", callElapsed.Round(time.Second), "errType", errType, "capture", capturePath, "error", callErr)
 			_ = s.storage.UpdateItemSessionEndedWithReason(cleanupCtx, isID, time.Now(), errType)

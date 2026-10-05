@@ -2644,7 +2644,7 @@ func classifyHeadlessCallError(err error, elapsed, budget time.Duration) string 
 	case errors.Is(err, headless.ErrIdleTimeout):
 		return "idle"
 	case errors.Is(err, headless.ErrFanoutCeilingExceeded):
-		return "fanout_ceiling"
+		return session.TriageEndReasonFanoutCeiling
 	case errors.Is(err, context.DeadlineExceeded), budget-elapsed < 5*time.Second:
 		return "timeout"
 	case errors.Is(err, context.Canceled):
