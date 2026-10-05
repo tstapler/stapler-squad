@@ -6,7 +6,10 @@
   "protoFile": "proto/session/v1/insights.proto",
   "markerFound": true,
   "handlerFile": "server/services/insights_service.go",
-  "tested": false,
-  "testIds": [],
+  "tested": true,
+  "testIds": [
+    "TestContextHistoryRPCs_ReturnSeriesRankingAndCompactionStats",
+    "TestContextHistoryRPCs_UnavailableAndInvalid"
+  ],
   "lastModified": "2026-10-05T09:51:26.780429813-07:00"
 }
