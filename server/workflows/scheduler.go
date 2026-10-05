@@ -268,8 +268,11 @@ func (s *Scheduler) FireNow(ctx context.Context, wf *ent.Workflow, arg string) (
 // short random suffix keep concurrent same-minute runs from colliding on the
 // session-title uniqueness check.
 func defaultWorkflowSessionTitle(wf *ent.Workflow) string {
-	return fmt.Sprintf("%s — %s %s", wf.Name, time.Now().Format("2006-01-02 15:04:05"), uuid.NewString()[:4])
+	return fmt.Sprintf("%s — %s %s", wf.Name, time.Now().Format("2006-01-02 15:04:05"), uuid.NewString()[:titleRandomSuffixLen])
 }
+
+// titleRandomSuffixLen is the hex-char length of the default title's random suffix.
+const titleRandomSuffixLen = 4
 
 // maxTitleDedupeAttempts bounds fireTrigger's already_exists retries.
 const maxTitleDedupeAttempts = 20
