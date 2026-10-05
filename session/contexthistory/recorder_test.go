@@ -253,3 +253,24 @@ func TestNewRecorder_NilMaxFnDefaultsToUnknownWindow(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Zero(t, got[0].ContextMax)
 }
+
+func TestRecord_BackToBackCompactionsSharingTurnIndexAreBothKept(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t, filepath.Join(t.TempDir(), "s.db"))
+	rec := newRecorder(s)
+	res := result("a", turn(0, 1))
+	res.CompactEvents = []tokens.CompactEvent{
+		{Timestamp: t0, Trigger: "manual", TurnIndex: 1, TokensBefore: 100, TokensAfter: 50},
+		{Timestamp: t0.Add(time.Second), Trigger: "auto", TurnIndex: 1, TokensBefore: 50, TokensAfter: 10},
+	}
+	for range 2 {
+		require.NoError(t, rec.Record(ctx, res))
+	}
+
+	evs, err := s.Compactions(ctx, "a")
+	require.NoError(t, err)
+	require.Len(t, evs, 2)
+	assert.Equal(t, "manual", evs[0].Trigger)
+	assert.Equal(t, "auto", evs[1].Trigger)
+}

@@ -68,12 +68,13 @@ func (r *Recorder) Record(ctx context.Context, result *tokens.ParseResult) error
 	}
 
 	var events []Compaction
-	for _, ev := range result.CompactEvents {
+	for ordinal, ev := range result.CompactEvents {
 		if !ev.Timestamp.IsZero() && ev.Timestamp.Before(cutoff) {
 			continue
 		}
 		events = append(events, Compaction{
 			SessionUUID:  result.SessionUUID,
+			Ordinal:      ordinal,
 			TurnIndex:    ev.TurnIndex,
 			OccurredAt:   ev.Timestamp,
 			Trigger:      ev.Trigger,

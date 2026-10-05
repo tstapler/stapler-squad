@@ -37,6 +37,7 @@ type Sample struct {
 // Compaction is one persisted compaction event.
 type Compaction struct {
 	SessionUUID  string
+	Ordinal      int // position among the session's compactions; the idempotency key
 	TurnIndex    int
 	OccurredAt   time.Time
 	Trigger      string
@@ -108,6 +109,7 @@ func (s *Store) UpsertCompactions(ctx context.Context, events []Compaction) erro
 		for _, ev := range events[start:end] {
 			creates = append(creates, s.client.CompactionEvent.Create().
 				SetSessionUUID(ev.SessionUUID).
+				SetOrdinal(ev.Ordinal).
 				SetTurnIndex(ev.TurnIndex).
 				SetOccurredAt(ev.OccurredAt).
 				SetTrigger(ev.Trigger).
@@ -116,8 +118,8 @@ func (s *Store) UpsertCompactions(ctx context.Context, events []Compaction) erro
 				SetTokensFreed(ev.TokensFreed))
 		}
 		err := s.client.CompactionEvent.CreateBulk(creates...).
-			OnConflictColumns(compactionevent.FieldSessionUUID, compactionevent.FieldTurnIndex).
-			UpdateTrigger().UpdateTokensBefore().UpdateTokensAfter().UpdateTokensFreed().
+			OnConflictColumns(compactionevent.FieldSessionUUID, compactionevent.FieldOrdinal).
+			UpdateTurnIndex().UpdateTrigger().UpdateTokensBefore().UpdateTokensAfter().UpdateTokensFreed().
 			Exec(ctx)
 		if err != nil {
 			return fmt.Errorf("upsert compaction events: %w", err)
@@ -228,7 +230,7 @@ func Summarize(sessionUUID string, series []Sample) SessionSummary {
 func (s *Store) Compactions(ctx context.Context, sessionUUID string) ([]Compaction, error) {
 	rows, err := s.client.CompactionEvent.Query().
 		Where(compactionevent.SessionUUIDEQ(sessionUUID)).
-		Order(ent.Asc(compactionevent.FieldTurnIndex)).All(ctx)
+		Order(ent.Asc(compactionevent.FieldOrdinal)).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("query compactions: %w", err)
 	}
@@ -276,7 +278,7 @@ func toCompactions(rows []*ent.CompactionEvent) []Compaction {
 	out := make([]Compaction, len(rows))
 	for i, r := range rows {
 		out[i] = Compaction{
-			SessionUUID: r.SessionUUID, TurnIndex: r.TurnIndex, OccurredAt: r.OccurredAt,
+			SessionUUID: r.SessionUUID, Ordinal: r.Ordinal, TurnIndex: r.TurnIndex, OccurredAt: r.OccurredAt,
 			Trigger: r.Trigger, TokensBefore: r.TokensBefore, TokensAfter: r.TokensAfter,
 			TokensFreed: r.TokensFreed,
 		}
