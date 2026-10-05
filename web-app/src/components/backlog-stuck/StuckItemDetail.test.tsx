@@ -491,5 +491,28 @@ describe("StuckItemDetail", () => {
         expect(screen.getByTestId("stuck-item-diagnose-error").textContent).toBe("dispatch failed")
       );
     });
+
+    it("calls onDiagnose only once when clicked repeatedly before the first call settles", async () => {
+      // The button uses aria-disabled (not disabled) so it stays focusable
+      // while busy, which doesn't block clicks on its own — this is what
+      // the onClick/submitDiagnose re-dispatch guards exist to prevent.
+      let resolveDiagnose!: () => void;
+      const onDiagnose = jest.fn(
+        () => new Promise<void>((resolve) => { resolveDiagnose = resolve; })
+      );
+      render(<StuckItemDetail item={makeItem()} onDiagnose={onDiagnose} />);
+      const button = screen.getByTestId("stuck-item-diagnose");
+
+      fireEvent.click(button);
+      fireEvent.click(button);
+      fireEvent.click(button);
+      expect(onDiagnose).toHaveBeenCalledTimes(1);
+      expect(button).toHaveAttribute("aria-disabled", "true");
+
+      resolveDiagnose();
+      await waitFor(() => expect(button).toHaveTextContent("Diagnostic session dispatched"));
+      fireEvent.click(button);
+      expect(onDiagnose).toHaveBeenCalledTimes(1);
+    });
   });
 });
