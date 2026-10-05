@@ -1805,3 +1805,11 @@ func TestGetAvailablePrograms_should_OmitAider_When_AiderNotOnPath(t *testing.T)
 
 	assert.Empty(t, programs)
 }
+
+func TestHeadlessTriageMaxCostUSDOrDefault(t *testing.T) {
+	var nilCfg *Config
+	assert.Equal(t, HeadlessTriageMaxCostUSDDefault, nilCfg.HeadlessTriageMaxCostUSDOrDefault())
+	assert.Equal(t, HeadlessTriageMaxCostUSDDefault, (&Config{}).HeadlessTriageMaxCostUSDOrDefault())
+	assert.Equal(t, 7.5, (&Config{HeadlessTriageMaxCostUSD: 7.5}).HeadlessTriageMaxCostUSDOrDefault())
+	assert.Zero(t, (&Config{HeadlessTriageMaxCostUSD: -1}).HeadlessTriageMaxCostUSDOrDefault(), "negative disables")
+}
