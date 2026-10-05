@@ -843,7 +843,7 @@ func applyTriageResultToUpdate(result *session.HeadlessTriageResult, update *ses
 // sdd-mode triage gets the fan-out ceiling (ADR-029): default triage's single
 // 4-subagent wave showed no material waste, so it runs unbounded as before.
 func triageCallOptions(cfg *config.Config, pipelineMode, workDir, model string, onConversationID func(string)) headless.CallOptions {
-	opts := headless.CallOptions{WorkDir: workDir, Model: model, OnConversationID: onConversationID}
+	opts := headless.CallOptions{WorkDir: workDir, Model: model, MaxCostUSD: cfg.HeadlessTriageMaxCostUSDOrDefault(), OnConversationID: onConversationID}
 	if pipelineMode == session.DefaultSDDPipelineModeSlug && cfg != nil {
 		opts.MaxTurns = cfg.HeadlessTriageMaxTurnsOrDefault()
 		opts.MaxSubagents = cfg.HeadlessTriageMaxSubagentsOrDefault()

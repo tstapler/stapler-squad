@@ -319,6 +319,10 @@ type Config struct {
 	// item may end with no new commits before it is flagged repeated_noop_dispatch and
 	// further dispatch is blocked. 0 = use the default (3).
 	NoopDispatchThreshold int `json:"noop_dispatch_threshold,omitempty"`
+	// HeadlessTriageMaxCostUSD aborts a headless triage call whose estimated spend
+	// exceeds this many USD, independent of elapsed time. 0 = use the default ($25);
+	// negative disables the ceiling.
+	HeadlessTriageMaxCostUSD float64 `json:"headless_triage_max_cost_usd,omitempty"`
 	// MaxConcurrentBacklogWorkItems caps how many distinct backlog items may be
 	// "in_progress" at the same time. 0 = use the default (2). Values above
 	// maxConcurrentBacklogWorkItemsHardCeiling are clamped to the ceiling.
@@ -976,6 +980,23 @@ func (c *Config) AnalyticsMaxRowsOrDefault() int {
 		return 100_000
 	}
 	return c.AnalyticsMaxRows
+}
+
+// HeadlessTriageMaxCostUSDDefault is the cost ceiling for one headless triage call
+// when unconfigured: well above a normal multi-subagent triage, well below the
+// $106.69 runaway that motivated it.
+const HeadlessTriageMaxCostUSDDefault = 25.0
+
+// HeadlessTriageMaxCostUSDOrDefault returns the triage cost ceiling in USD, or 0
+// when it is disabled (negative config value). Falls back to the default if unset or c is nil.
+func (c *Config) HeadlessTriageMaxCostUSDOrDefault() float64 {
+	switch {
+	case c == nil || c.HeadlessTriageMaxCostUSD == 0:
+		return HeadlessTriageMaxCostUSDDefault
+	case c.HeadlessTriageMaxCostUSD < 0:
+		return 0
+	}
+	return c.HeadlessTriageMaxCostUSD
 }
 
 // NoopDispatchThresholdOrDefault returns the configured no-op dispatch threshold, or 3

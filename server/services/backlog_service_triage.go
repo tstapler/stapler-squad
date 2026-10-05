@@ -2608,6 +2608,9 @@ func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string
 //   - "fanout_ceiling": an sdd-mode call crossed its configured turn/subagent ceiling
 //     (headless.ErrFanoutCeilingExceeded, ADR-029). Checked before "timeout" so an abort
 //     near the budget tail keeps its distinct reason.
+//   - "cost_ceiling": estimated spend crossed headless.CallOptions.MaxCostUSD/MaxTokens
+//     (headless.ErrCostCeilingExceeded) — a busy-but-wasteful call, caught regardless
+//     of elapsed time. Checked before "timeout" so it is never mislabeled as one.
 //   - "timeout": ctx deadline exceeded, or elapsed is within 5s of budget (covers a
 //     hang whose error got wrapped/lost before reaching context.DeadlineExceeded). With
 //     idle detection now the primary defense against a truly stuck call, this bucket
@@ -2645,6 +2648,8 @@ func classifyHeadlessCallError(err error, elapsed, budget time.Duration) string 
 		return "idle"
 	case errors.Is(err, headless.ErrFanoutCeilingExceeded):
 		return session.TriageEndReasonFanoutCeiling
+	case errors.Is(err, headless.ErrCostCeilingExceeded):
+		return session.TriageEndReasonCostCeiling
 	case errors.Is(err, context.DeadlineExceeded), budget-elapsed < 5*time.Second:
 		return "timeout"
 	case errors.Is(err, context.Canceled):

@@ -64,7 +64,7 @@ not the completions quoted for #882, so tune against launches.
   deterministic overrun. Found in sdd:6-verify; fixed by making that gate skip items whose latest triage ended
   `fanout_ceiling` (`TriageEndReasonFanoutCeiling`, test
   `TestReconcileOrphanedTriageRemediation_should_notRetry_When_LatestTriageHitFanoutCeiling`). A human re-trigger still works.
-- **#884 (dollar ceiling):** same hook (`handleFirstCallLine`) and same classifier. The branches conflict textually
+- **#884 (dollar ceiling, since merged as #918):** same hook (`handleFirstCallLine`) and same classifier. The branches conflict textually
   (`CallOptions`, `firstCallScanState`, `handleFirstCallLine`, the classifier, the `CallOptions{...}` line in
   `backlog_service_trigger_triage.go`) and carry per-call limits differently (here `Pool.fanout`; #884's plan threads a
   parameter through `call()`/`callIO`). Whichever lands second should fold both into one per-call limits struct on

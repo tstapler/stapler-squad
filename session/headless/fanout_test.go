@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func assistantLine(id string, toolNames ...string) string {
+func streamAssistantMsg(id string, toolNames ...string) string {
 	content := `{"type":"text","text":"working"}`
 	for _, n := range toolNames {
 		content += fmt.Sprintf(`,{"type":"tool_use","id":"tu_%s_%s","name":%q,"input":{}}`, id, n, n)
@@ -24,10 +24,10 @@ func TestFanoutCounter_CountsDistinctTurnsAndSubagents(t *testing.T) {
 
 	for _, line := range []string{
 		`{"type":"system","subtype":"init"}`,
-		assistantLine("m1", "Agent", "Read"),
-		assistantLine("m1", "Agent"), // same message id split across lines: one turn, but a second launch block
-		assistantLine("m2", "Task"),  // legacy subagent tool name
-		assistantLine("m3", "Bash"),
+		streamAssistantMsg("m1", "Agent", "Read"),
+		streamAssistantMsg("m1", "Agent"), // same message id split across lines: one turn, but a second launch block
+		streamAssistantMsg("m2", "Task"),  // legacy subagent tool name
+		streamAssistantMsg("m3", "Bash"),
 		`{"type":"user","message":{"content":[{"type":"tool_result"}]}}`,
 		`not json but mentions "assistant"`,
 	} {
@@ -40,20 +40,20 @@ func TestFanoutCounter_CountsDistinctTurnsAndSubagents(t *testing.T) {
 func TestFanoutCounter_ExceededPerLimit(t *testing.T) {
 	t.Parallel()
 	turns := newFanoutCounter(FanoutLimits{MaxTurns: 2})
-	assert.Nil(t, turns.observe(assistantLine("a")))
-	assert.Nil(t, turns.observe(assistantLine("b")))
-	tripped := turns.observe(assistantLine("c"))
+	assert.Nil(t, turns.observe(streamAssistantMsg("a")))
+	assert.Nil(t, turns.observe(streamAssistantMsg("b")))
+	tripped := turns.observe(streamAssistantMsg("c"))
 	require.NotNil(t, tripped)
 	assert.ErrorIs(t, tripped, ErrFanoutCeilingExceeded)
 	assert.Equal(t, 3, tripped.Turns)
 
 	exact := newFanoutCounter(FanoutLimits{MaxTurns: 2})
-	assert.Nil(t, exact.observe(assistantLine("a")))
-	assert.Nil(t, exact.observe(assistantLine("b")), "exactly MaxTurns must not trip")
+	assert.Nil(t, exact.observe(streamAssistantMsg("a")))
+	assert.Nil(t, exact.observe(streamAssistantMsg("b")), "exactly MaxTurns must not trip")
 
 	subs := newFanoutCounter(FanoutLimits{MaxSubagents: 1})
-	assert.Nil(t, subs.observe(assistantLine("a", "Agent")))
-	err := subs.observe(assistantLine("b", "Agent"))
+	assert.Nil(t, subs.observe(streamAssistantMsg("a", "Agent")))
+	err := subs.observe(streamAssistantMsg("b", "Agent"))
 	require.NotNil(t, err)
 	assert.ErrorIs(t, err, ErrFanoutCeilingExceeded)
 	assert.Equal(t, 2, err.Subagents)
@@ -67,9 +67,9 @@ func replay882Lines() []string {
 	for i := 0; i < 1094; i++ {
 		if subagents < 262 && i%4 == 0 {
 			subagents++
-			lines = append(lines, assistantLine(fmt.Sprintf("m%d", i), "Agent"))
+			lines = append(lines, streamAssistantMsg(fmt.Sprintf("m%d", i), "Agent"))
 		} else {
-			lines = append(lines, assistantLine(fmt.Sprintf("m%d", i), "Monitor"))
+			lines = append(lines, streamAssistantMsg(fmt.Sprintf("m%d", i), "Monitor"))
 		}
 	}
 	return append(lines, firstCallJSON("sess-882", "done"))

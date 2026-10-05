@@ -38,3 +38,11 @@ func TestTriageCallOptions_ConfigOverrides(t *testing.T) {
 	nilCfg := triageCallOptions(nil, session.DefaultSDDPipelineModeSlug, "/w", "m", nil)
 	assert.Zero(t, nilCfg.MaxTurns)
 }
+
+func TestTriageCallOptions_CostCeilingAppliesToEveryMode(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"", session.DefaultSDDPipelineModeSlug} {
+		got := triageCallOptions(&config.Config{}, mode, "/w", "m", nil)
+		assert.Equal(t, config.HeadlessTriageMaxCostUSDDefault, got.MaxCostUSD, "mode %q", mode)
+	}
+}

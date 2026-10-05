@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
 // CallOptions configures an individual pool call with overrides.
@@ -54,6 +56,14 @@ type CallOptions struct {
 	// Zero disables the limit. Like AllowedTools, only applied when WorkDir is set.
 	MaxTurns     int
 	MaxSubagents int
+	// MaxCostUSD aborts the call with ErrCostCeilingExceeded once the estimated
+	// spend (from assistant-line token usage, priced via tokens.PricingTable)
+	// exceeds it, regardless of elapsed time. Zero disables the check. Only
+	// enforced on a session's first (stream-json) call, which WorkDir calls always are.
+	MaxCostUSD float64
+	// MaxTokens is the same backstop in raw tokens (all four categories summed),
+	// robust to pricing-table drift. Zero disables it.
+	MaxTokens int64
 }
 
 // firstCallJSONResult is the JSON schema of the terminal `"type":"result"` line
@@ -275,12 +285,12 @@ func (p *Pool) decrementCallCount(key FeatureKey) {
 //
 // The caller should drain the channel until Done=true or Err!=nil.
 func (p *Pool) Call(ctx context.Context, key FeatureKey, systemPrompt, userPrompt string) (<-chan StreamChunk, error) {
-	return p.call(ctx, key, systemPrompt, userPrompt, p.cfg.DefaultModel, p.runner)
+	return p.call(ctx, key, systemPrompt, userPrompt, p.cfg.DefaultModel, p.runner, costCeiling{})
 }
 
 // call is the internal implementation shared by Call and CallWithOptions.
 // model is the effective model override; runner is the subprocess launcher to use.
-func (p *Pool) call(ctx context.Context, key FeatureKey, systemPrompt, userPrompt, model string, runner ClaudeRunner) (<-chan StreamChunk, error) {
+func (p *Pool) call(ctx context.Context, key FeatureKey, systemPrompt, userPrompt, model string, runner ClaudeRunner, ceiling costCeiling) (<-chan StreamChunk, error) {
 	isFirstCall, args := p.acquireSession(key, systemPrompt, model)
 
 	// Pass the user prompt via stdin so it does not appear in /proc/<pid>/cmdline.
@@ -350,7 +360,7 @@ func (p *Pool) call(ctx context.Context, key FeatureKey, systemPrompt, userPromp
 			}
 		}
 
-		cio := callIO{stop: stop, send: send, sendFinal: sendFinal}
+		cio := callIO{stop: stop, send: send, sendFinal: sendFinal, ceiling: ceiling}
 		if isFirstCall {
 			p.readFirstCallStream(ctx, key, stdout, cio)
 			return
@@ -368,6 +378,7 @@ type callIO struct {
 	stop      func() error
 	send      func(StreamChunk) bool
 	sendFinal func(StreamChunk)
+	ceiling   costCeiling
 }
 
 // streamLine is one line of subprocess stdout read by startLineScanner, or a
@@ -490,7 +501,8 @@ type firstCallScanState struct {
 	allText    *strings.Builder
 	resultLine *string
 	drainLines func()
-	fanout     *fanoutCounter // nil when no ceiling is configured
+	fanout     *fanoutCounter    // nil when no ceiling is configured
+	usage      *usageAccumulator // nil when no ceiling is set
 }
 
 // handleFirstCallLine processes one successfully-scanned line: resets the
@@ -518,6 +530,16 @@ func (p *Pool) handleFirstCallLine(state firstCallScanState, lr streamLine, cio 
 	if *state.resultLine == "" && isResultLine(lr.text) {
 		*state.resultLine = lr.text
 	}
+	if state.usage != nil {
+		state.usage.add(lr.text)
+		if cerr := state.usage.exceeded(cio.ceiling); cerr != nil {
+			// Keep the partial transcript so the caller can capture it for diagnosis.
+			_ = cio.stop()
+			state.drainLines()
+			sendAccumulatedTextThenErr(cio.send, state.allText.String(), fmt.Errorf("headless call ended: %w", cerr))
+			return true
+		}
+	}
 	return false
 }
 
@@ -537,6 +559,9 @@ func (p *Pool) scanFirstCallLines(ctx context.Context, key FeatureKey, stdout io
 		state.fanout = newFanoutCounter(p.fanout)
 	}
 	defer state.idleTimer.Stop()
+	if cio.ceiling.enabled() {
+		state.usage = newUsageAccumulator(tokens.DefaultPricingTable())
+	}
 
 	for {
 		select {
@@ -723,7 +748,7 @@ func (p *Pool) CallWithOptions(ctx context.Context, key FeatureKey, systemPrompt
 		}
 		oneShot := NewPoolWithRunner(PoolConfig{MaxCallsPerSession: 1, MaxConcurrentSessions: 1, DefaultModel: opts.Model}, dirRunner)
 		oneShot.fanout = FanoutLimits{MaxTurns: opts.MaxTurns, MaxSubagents: opts.MaxSubagents}
-		innerCh, err := oneShot.Call(ctx, key, systemPrompt, userPrompt)
+		innerCh, err := oneShot.call(ctx, key, systemPrompt, userPrompt, opts.Model, oneShot.runner, costCeiling{maxUSD: opts.MaxCostUSD, maxTokens: opts.MaxTokens})
 		if err != nil {
 			<-p.concurrencySem
 			return innerCh, err
@@ -749,7 +774,7 @@ func (p *Pool) CallWithOptions(ctx context.Context, key FeatureKey, systemPrompt
 	}
 
 	// No WorkDir override: use the pool's session reuse path, forwarding opts.Model.
-	return p.call(ctx, key, systemPrompt, userPrompt, opts.Model, p.runner)
+	return p.call(ctx, key, systemPrompt, userPrompt, opts.Model, p.runner, costCeiling{maxUSD: opts.MaxCostUSD, maxTokens: opts.MaxTokens})
 }
 
 // CostSink receives the USD cost of a completed CallBlocking call, plus whether
@@ -798,6 +823,11 @@ func drainChannelWithCost(ch <-chan StreamChunk) (string, float64, string, error
 	var conversationID string
 	for chunk := range ch {
 		if chunk.Err != nil {
+			var cerr *CostCeilingError
+			if errors.As(chunk.Err, &cerr) {
+				// The terminal chunk carries no cost; report the spend at abort.
+				costUSD = cerr.SpendUSD
+			}
 			return sb.String(), costUSD, conversationID, chunk.Err
 		}
 		if chunk.Text != "" {

@@ -1814,3 +1814,11 @@ func TestHeadlessTriageCeilings_DefaultOverrideDisable(t *testing.T) {
 	assert.Zero(t, (&Config{HeadlessTriageMaxSubagents: -1}).HeadlessTriageMaxSubagentsOrDefault())
 	assert.Zero(t, (*Config)(nil).HeadlessTriageMaxTurnsOrDefault())
 }
+
+func TestHeadlessTriageMaxCostUSDOrDefault(t *testing.T) {
+	var nilCfg *Config
+	assert.Equal(t, HeadlessTriageMaxCostUSDDefault, nilCfg.HeadlessTriageMaxCostUSDOrDefault())
+	assert.Equal(t, HeadlessTriageMaxCostUSDDefault, (&Config{}).HeadlessTriageMaxCostUSDOrDefault())
+	assert.Equal(t, 7.5, (&Config{HeadlessTriageMaxCostUSD: 7.5}).HeadlessTriageMaxCostUSDOrDefault())
+	assert.Zero(t, (&Config{HeadlessTriageMaxCostUSD: -1}).HeadlessTriageMaxCostUSDOrDefault(), "negative disables")
+}
