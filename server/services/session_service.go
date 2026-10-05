@@ -827,9 +827,28 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	}
 	credChain := NewDefaultChain(directCfg)
 
+	var capRoleResolver SessionRoleResolver
+	var capTerminator SessionTerminator
+	if concStorage != nil {
+		capRoleResolver = func(ctx context.Context, sessionUUID string) string {
+			is, err := concStorage.GetItemSessionBySessionUUID(ctx, sessionUUID)
+			if err != nil {
+				if !errors.Is(err, session.ErrNotFound) {
+					log.Warn("capacity: role lookup failed; applying default (non-pipeline) limits", "uuid", sessionUUID, "err", err)
+				}
+				return ""
+			}
+			return is.Role
+		}
+		capTerminator = func(ctx context.Context, inst *session.Instance, reason string) error {
+			return stopGuardrailSession(ctx, concStorage, inst, reason)
+		}
+	}
 	capacityMonitor := NewCapacityMonitor(CapacityMonitorParams{
-		Config:   capCfg,
-		EventBus: eventBus,
+		Config:       capCfg,
+		EventBus:     eventBus,
+		RoleResolver: capRoleResolver,
+		Terminator:   capTerminator,
 	})
 	capacityMonitor.RegisterClient("anthropic", NewAnthropicLimitsClient(credChain, ""))
 	capacityMonitor.RegisterClient("google", NewGeminiLimitsClient(credChain, ""))
@@ -1153,6 +1172,22 @@ func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID s
 	// DeleteSession's EventSessionDeleted publish below.
 	s.eventBus.Publish(events.NewSessionArchivedEvent(sessionUUID))
 	return nil
+}
+
+// stopGuardrailSession ends the backlog ItemSession with reason (so the
+// orchestrator's reconcilers see why it stopped and can respawn or flag the
+// item) and then kills the live session.
+func stopGuardrailSession(ctx context.Context, st *session.Storage, inst *session.Instance, reason string) error {
+	var endErr error
+	is, err := st.GetItemSessionBySessionUUID(ctx, inst.Snapshot().UUID)
+	switch {
+	case err == nil:
+		endErr = st.UpdateItemSessionEndedWithReason(ctx, is.ID, time.Now(), reason)
+	case !errors.Is(err, session.ErrNotFound): // not-found = not backlog-linked, nothing to end
+		endErr = err
+	}
+	// Kill even if the end-reason write failed; both errors reach the caller.
+	return errors.Join(endErr, inst.Kill())
 }
 
 // StopSessionByUUID satisfies the BacklogService.SessionStopper interface.
