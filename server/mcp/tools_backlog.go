@@ -2167,14 +2167,16 @@ func recordedDuplicateClosure(item *session.BacklogItemData, duplicateRef string
 }
 
 // reportDuplicate closes a backlog item as a duplicate of an existing GitHub
-// PR/issue/commit. Any caller may use it — a session linked in any role, or an
+// PR/issue/commit, or of another non-archived backlog item ("backlog:<uuid>"). Any caller may use it — a session linked in any role, or an
 // unlinked passerby — on an item in any non-terminal status. It archives
 // directly and never routes through the review gate: a work session that finds
 // its item already shipped has no diff to review, and an empty-diff review
 // would FAIL and reopen the item in a loop.
 //
 // Safety rails instead of a human review: duplicate_ref must verify on GitHub
-// (see resolveDuplicateRef); the archive is CAS-guarded on the status read;
+// (see resolveDuplicateRef) or, for a backlog: ref, name an existing
+// non-archived item (verifyBacklogDuplicateTarget — read before the archive, so
+// two items pointing at each other concurrently can both be archived); the archive is CAS-guarded on the status read;
 // and the call is refused while any session other than the caller still has an
 // open ItemSession on the item, so another session's active work is never
 // archived out from under it. The caller's own open link(s) are ended.
@@ -2213,6 +2215,12 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 	}
 	if len(reason) > 1000 {
 		return errResult(ErrInvalidArgument, "reason must be <= 1000 characters", ""), nil
+	}
+
+	// Lowercase a backlog: ref so idempotency matches the recorded note
+	// regardless of the UUID case the caller used.
+	if targetID, isBacklogRef := strings.CutPrefix(duplicateRef, backlogDuplicateRefPrefix); isBacklogRef {
+		duplicateRef = backlogDuplicateRefPrefix + strings.ToLower(targetID)
 	}
 
 	// Routed through the overridable getBacklogItemFor seam so tests can force
@@ -2325,11 +2333,10 @@ func (h *backlogHandlers) verifyBacklogDuplicateTarget(ctx context.Context, item
 }
 
 // resolveDuplicateRef parses and GitHub-verifies a report_duplicate
-// duplicate_ref. Shared by the linked-session path above (routes to review)
-// and reportDuplicateUnclaimed below (archives directly) so both apply the
-// identical evidence bar — a real, existing GitHub PR/issue/commit — before
-// touching the item. Returns a non-nil *mcpgo.CallToolResult (to return
-// verbatim) on any failure.
+// duplicate_ref (a real, existing GitHub PR/issue/commit) before reportDuplicate
+// touches the item; backlog: refs are checked by verifyBacklogDuplicateTarget
+// instead. Returns a non-nil *mcpgo.CallToolResult (to return verbatim) on any
+// failure.
 func (h *backlogHandlers) resolveDuplicateRef(ctx context.Context, duplicateRef string) (*githubpkg.ParsedGitHubRef, *mcpgo.CallToolResult) {
 	ref, parseErr := githubpkg.ParseGitHubRefWithHosts(duplicateRef, h.enterpriseHosts())
 	if parseErr != nil {

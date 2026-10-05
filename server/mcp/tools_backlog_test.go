@@ -4137,6 +4137,34 @@ func TestReportDuplicate_BacklogItemRef(t *testing.T) {
 	}
 }
 
+func TestReportDuplicate_BacklogItemRef_IdempotentAndRejectsDifferingRef(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	create := func(status session.BacklogStatus) *session.BacklogItemData {
+		item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "t", Status: string(status)})
+		require.NoError(t, err)
+		return item
+	}
+	dup, survivor, other := create(session.BacklogStatusReady), create(session.BacklogStatusDone), create(session.BacklogStatusReady)
+	handler := &backlogHandlers{storage: storage, verifyGitHubRef: failOnCallVerifyGitHubRef(t)}
+	report := func(ref string) string {
+		result, err := handler.reportDuplicate(WithSessionUUID(ctx, uuid.New().String()), makeToolReq(map[string]interface{}{
+			"item_id": dup.ID, "duplicate_ref": ref, "reason": "already covered",
+		}))
+		require.NoError(t, err)
+		text, ok := result.Content[0].(mcpgo.TextContent)
+		require.True(t, ok)
+		return text.Text
+	}
+
+	// A done survivor is accepted; the ref is recorded lowercased.
+	assert.Contains(t, report(backlogDuplicateRefPrefix+strings.ToUpper(survivor.ID)), "archived as a duplicate")
+	// Same survivor, different case: idempotent no-op rather than an error.
+	assert.Contains(t, report(backlogDuplicateRefPrefix+survivor.ID), "already archived as a duplicate")
+	// A differing second ref is rejected, not merged (ADR-004).
+	assert.Contains(t, report(backlogDuplicateRefPrefix+other.ID), "was not closed as a duplicate of")
+}
+
 func TestReportDuplicate_RejectsWhenDuplicateRefOrReasonTooLong(t *testing.T) {
 	cases := []struct {
 		name         string
