@@ -2142,6 +2142,11 @@ func (h *backlogHandlers) verifyGitHubRefExists(ctx context.Context, ref *github
 	}
 }
 
+// backlogDuplicateRefPrefix marks a duplicate_ref that names another backlog
+// item ("backlog:<uuid>") instead of a GitHub URL, to archive an item in favor
+// of a surviving twin.
+const backlogDuplicateRefPrefix = "backlog:"
+
 // duplicateClosureNotePrefix is the delimited head of the status-event note
 // reportDuplicate writes on archive. Idempotency matches on it exactly
 // (ref followed by ": ") so .../pull/27 never matches a recorded .../pull/272.
@@ -2162,14 +2167,16 @@ func recordedDuplicateClosure(item *session.BacklogItemData, duplicateRef string
 }
 
 // reportDuplicate closes a backlog item as a duplicate of an existing GitHub
-// PR/issue/commit. Any caller may use it — a session linked in any role, or an
+// PR/issue/commit, or of another non-archived backlog item ("backlog:<uuid>"). Any caller may use it — a session linked in any role, or an
 // unlinked passerby — on an item in any non-terminal status. It archives
 // directly and never routes through the review gate: a work session that finds
 // its item already shipped has no diff to review, and an empty-diff review
 // would FAIL and reopen the item in a loop.
 //
 // Safety rails instead of a human review: duplicate_ref must verify on GitHub
-// (see resolveDuplicateRef); the archive is CAS-guarded on the status read;
+// (see resolveDuplicateRef) or, for a backlog: ref, name an existing
+// non-archived item (verifyBacklogDuplicateTarget — read before the archive, so
+// two items pointing at each other concurrently can both be archived); the archive is CAS-guarded on the status read;
 // and the call is refused while any session other than the caller still has an
 // open ItemSession on the item, so another session's active work is never
 // archived out from under it. The caller's own open link(s) are ended.
@@ -2208,6 +2215,12 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 	}
 	if len(reason) > 1000 {
 		return errResult(ErrInvalidArgument, "reason must be <= 1000 characters", ""), nil
+	}
+
+	// Lowercase a backlog: ref so idempotency matches the recorded note
+	// regardless of the UUID case the caller used.
+	if targetID, isBacklogRef := strings.CutPrefix(duplicateRef, backlogDuplicateRefPrefix); isBacklogRef {
+		duplicateRef = backlogDuplicateRefPrefix + strings.ToLower(targetID)
 	}
 
 	// Routed through the overridable getBacklogItemFor seam so tests can force
@@ -2260,7 +2273,11 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 	}
 
 	// Verify before any mutation.
-	if _, errRes := h.resolveDuplicateRef(ctx, duplicateRef); errRes != nil {
+	if targetID, isBacklogRef := strings.CutPrefix(duplicateRef, backlogDuplicateRefPrefix); isBacklogRef {
+		if errRes := h.verifyBacklogDuplicateTarget(ctx, item, targetID); errRes != nil {
+			return errRes, nil
+		}
+	} else if _, errRes := h.resolveDuplicateRef(ctx, duplicateRef); errRes != nil {
 		return errRes, nil
 	}
 
@@ -2291,12 +2308,35 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 	)), nil
 }
 
+// verifyBacklogDuplicateTarget checks a "backlog:<uuid>" duplicate_ref names a
+// different, existing, non-archived item — the evidence bar for a backlog-to-
+// backlog duplicate, in place of GitHub existence. It does not move the
+// duplicate's dependencies, notes, or tags to the survivor.
+func (h *backlogHandlers) verifyBacklogDuplicateTarget(ctx context.Context, item *session.BacklogItemData, targetID string) *mcpgo.CallToolResult {
+	if err := validateUUID(targetID); err != nil {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref %q: %v", backlogDuplicateRefPrefix+targetID, err), "")
+	}
+	if strings.EqualFold(targetID, item.ID) {
+		return errResult(ErrInvalidArgument, "an item cannot be a duplicate of itself", "")
+	}
+	target, err := h.getBacklogItemFor(ctx, targetID)
+	if err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			return errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref target backlog item %q not found", targetID), "")
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("get duplicate_ref target: %v", err), "")
+	}
+	if session.BacklogStatus(target.Status) == session.BacklogStatusArchived {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref target %q is archived — point at the surviving item instead", targetID), "")
+	}
+	return nil
+}
+
 // resolveDuplicateRef parses and GitHub-verifies a report_duplicate
-// duplicate_ref. Shared by the linked-session path above (routes to review)
-// and reportDuplicateUnclaimed below (archives directly) so both apply the
-// identical evidence bar — a real, existing GitHub PR/issue/commit — before
-// touching the item. Returns a non-nil *mcpgo.CallToolResult (to return
-// verbatim) on any failure.
+// duplicate_ref (a real, existing GitHub PR/issue/commit) before reportDuplicate
+// touches the item; backlog: refs are checked by verifyBacklogDuplicateTarget
+// instead. Returns a non-nil *mcpgo.CallToolResult (to return verbatim) on any
+// failure.
 func (h *backlogHandlers) resolveDuplicateRef(ctx context.Context, duplicateRef string) (*githubpkg.ParsedGitHubRef, *mcpgo.CallToolResult) {
 	ref, parseErr := githubpkg.ParseGitHubRefWithHosts(duplicateRef, h.enterpriseHosts())
 	if parseErr != nil {
@@ -2824,10 +2864,10 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 				"Supported callers: a session linked to the item in ANY role (work, triage, review), or an unlinked session. "+
 				"Supported stages: any non-terminal status — idea, refining, ready, queued, in_progress, review, pr_pending. Items already done/archived are rejected, except a retry with the same duplicate_ref, which is a safe no-op. "+
 				"Your own open link to the item is ended by the closure. If ANY OTHER session still has an open link to the item, the call is refused with that session's role and UUID and nothing changes — do not archive an item another session is actively working. "+
-				"duplicate_ref must be a single full GitHub URL and is verified to exist BEFORE any state change; if it cannot be verified, nothing changes. "+
+				"duplicate_ref must be a single full GitHub URL, or \"backlog:<item-uuid>\" naming another existing, non-archived backlog item (this only archives the item — it does NOT move dependencies, notes, or tags to the survivor). It is verified BEFORE any state change; if it cannot be verified, nothing changes. "+
 				"If verifying duplicate_ref fails with INTERNAL_ERROR, this is transient — retry the call with the same arguments. "+
 				"If the result says this session has no configured GitHub credentials, that is not transient — do not retry. Leave the item as-is and note the missing-credentials issue in your summary so an operator can configure GitHub access for this session. "+
-				"This only confirms duplicate_ref exists on GitHub — it does not verify relevance to this item's work; that judgment is yours."),
+				"This only confirms duplicate_ref exists (on GitHub, or as a backlog item) — it does not verify relevance to this item's work; that judgment is yours."),
 			mcpgo.WithString("item_id",
 				mcpgo.Description("UUID of the backlog item"),
 				mcpgo.Required(),
