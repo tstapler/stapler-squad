@@ -144,14 +144,18 @@ export function StuckItemDetail({
   const [diagnoseError, setDiagnoseError] = useState<string | null>(null);
 
   async function submitOverride(override: number) {
-    if (!onReworkCapOverride) return;
+    // These buttons use aria-disabled instead of disabled (so they stay
+    // focusable while busy), which doesn't block clicks on its own — guard
+    // here against a rapid double click/Enter re-dispatching before the
+    // first request settles.
+    if (!onReworkCapOverride || overrideState === "pending") return;
     setOverrideState("pending");
     const ok = await onReworkCapOverride(item.itemId, override);
     setOverrideState(ok ? "idle" : "error");
   }
 
   async function submitApprovePlan() {
-    if (!onApprovePlan) return;
+    if (!onApprovePlan || approveState === "pending") return;
     setApproveState("pending");
     setApproveError(null);
     try {
@@ -164,7 +168,7 @@ export function StuckItemDetail({
   }
 
   async function submitDiagnose() {
-    if (!onDiagnose) return;
+    if (!onDiagnose || diagnoseState === "pending" || diagnoseState === "dispatched") return;
     setDiagnoseState("pending");
     setDiagnoseError(null);
     try {
@@ -228,8 +232,9 @@ export function StuckItemDetail({
               <button
                 type="button"
                 className={styles.overrideButton}
-                disabled={overrideState === "pending" || !Number(moreRounds) || Number(moreRounds) <= 0}
+                aria-disabled={overrideState === "pending" || !Number(moreRounds) || Number(moreRounds) <= 0}
                 onClick={() => {
+                  if (overrideState === "pending" || !Number(moreRounds) || Number(moreRounds) <= 0) return;
                   track({
                     name: "stuck_item_rework_cap_override",
                     category: "user_action",
@@ -245,7 +250,7 @@ export function StuckItemDetail({
               <button
                 type="button"
                 className={styles.overrideUnlimitedButton}
-                disabled={overrideState === "pending"}
+                aria-disabled={overrideState === "pending"}
                 onClick={() => {
                   track({
                     name: "stuck_item_rework_cap_override",
@@ -296,8 +301,9 @@ export function StuckItemDetail({
               <button
                 type="button"
                 className={styles.overrideButton}
-                disabled={approveState === "pending"}
+                aria-disabled={approveState === "pending"}
                 onClick={() => {
+                  if (approveState === "pending") return;
                   track({ name: "stuck_item_approve_plan", category: "user_action", component: "StuckItemDetail" });
                   void submitApprovePlan();
                 }}
@@ -359,8 +365,9 @@ export function StuckItemDetail({
           <button
             type="button"
             className={styles.overrideButton}
-            disabled={diagnoseState === "pending" || diagnoseState === "dispatched"}
+            aria-disabled={diagnoseState === "pending" || diagnoseState === "dispatched"}
             onClick={() => {
+              if (diagnoseState === "pending" || diagnoseState === "dispatched") return;
               track({
                 name: "stuck_item_diagnose",
                 category: "user_action",
