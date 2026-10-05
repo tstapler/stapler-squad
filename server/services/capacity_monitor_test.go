@@ -406,7 +406,7 @@ func (f *fakeCompactor) callCount() int {
 func idleTimeline(count int, startAt time.Time) []tokens.TurnStats {
 	timeline := make([]tokens.TurnStats, count)
 	for i := range timeline {
-		timeline[i] = tokens.TurnStats{Timestamp: startAt.Add(time.Duration(i) * time.Second)}
+		timeline[i] = tokens.TurnStats{Timestamp: startAt.Add(time.Duration(i) * time.Second), ToolNames: []string{"ListAgents"}}
 	}
 	return timeline
 }
@@ -433,6 +433,13 @@ func newIdleWaitTestMonitor(t *testing.T, ceiling int, parseRes *tokens.ParseRes
 		TokenStore: &fakeTokenStore{results: []*tokens.ParseResult{parseRes}},
 		Compactor:  compactor.compact,
 	})
+	// Clock tracks the newest turn so fixed-date fixtures count as live runs.
+	monitor.now = func() time.Time {
+		if n := len(parseRes.TurnTimeline); n > 0 {
+			return parseRes.TurnTimeline[n-1].Timestamp.Add(time.Minute)
+		}
+		return time.Now()
+	}
 	monitor.RegisterClient("anthropic", &mockLimitsClient{
 		contextWindow: 1_000_000,
 		limits:        ProviderLimits{Provider: "anthropic", Available: true, RequestsRemaining: 100},

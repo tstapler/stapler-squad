@@ -31,6 +31,7 @@ type CapacityMonitor struct {
 	pricing         *tokens.PricingTable
 	roleResolver    SessionRoleResolver
 	terminator      SessionTerminator
+	now             func() time.Time
 
 	mu              sync.RWMutex
 	current         map[string]ProviderLimits
@@ -108,6 +109,7 @@ func NewCapacityMonitor(p CapacityMonitorParams) *CapacityMonitor {
 		pricing:         tokens.DefaultPricingTable(),
 		roleResolver:    p.RoleResolver,
 		terminator:      p.Terminator,
+		now:             time.Now,
 		roleCache:       make(map[string]string),
 		handledOnce:     make(map[string]bool),
 		current:         make(map[string]ProviderLimits),
@@ -197,16 +199,42 @@ func (m *CapacityMonitor) evaluate(ctx context.Context) {
 	}
 
 	instances := m.poller.GetInstances()
+	active := make(map[string]bool, len(instances))
 	for _, inst := range instances {
 		if inst == nil {
 			continue
 		}
 		// Use a lock-free snapshot read instead of accessing inst.Status directly.
-		if inst.Snapshot().Status != session.Active {
+		snap := inst.Snapshot()
+		if snap.Status != session.Active {
 			continue
 		}
+		active[snap.UUID] = true
 
 		m.evaluateInstance(ctx, inst)
+	}
+	m.pruneSessionState(active)
+}
+
+// pruneSessionState drops per-session guardrail state for sessions that are no
+// longer active, bounding map growth and letting a resumed session re-arm.
+func (m *CapacityMonitor) pruneSessionState(active map[string]bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for uuid := range m.idleWaitState {
+		if !active[uuid] {
+			delete(m.idleWaitState, uuid)
+		}
+	}
+	for uuid := range m.roleCache {
+		if !active[uuid] {
+			delete(m.roleCache, uuid)
+		}
+	}
+	for key := range m.handledOnce {
+		if !active[key[strings.LastIndex(key, ":")+1:]] {
+			delete(m.handledOnce, key)
+		}
 	}
 }
 
@@ -295,7 +323,7 @@ func (m *CapacityMonitor) evaluateInstance(ctx context.Context, inst *session.In
 	// 4. Pipeline-role cost budget: stop and hand back instead of warning.
 	if pipelineRoles[role] && m.overCostBudget(limits, role) {
 		m.stopForGuardrail(ctx, inst, snap, "cost_budget_exceeded", "Cost Budget Exceeded",
-			fmt.Sprintf("%s (%s) reached $%.2f against its $%.2f budget and was stopped.", snap.Title, role, limits.EstimatedCostUSD, m.config.CostBudgetFor(role)))
+			fmt.Sprintf("%s (%s) reached $%.2f against its $%.2f budget; stopping it.", snap.Title, role, limits.EstimatedCostUSD, m.config.CostBudgetFor(role)))
 		return
 	}
 
@@ -349,23 +377,29 @@ func (m *CapacityMonitor) firstTime(key string) bool {
 // terminator is wired, stops the session so the orchestrator takes it back.
 // One-shot per (kind, session): it never re-arms.
 func (m *CapacityMonitor) stopForGuardrail(ctx context.Context, inst *session.Instance, snap *session.InstanceSnapshot, kind, title, msg string) {
-	if !m.firstTime(kind + ":" + snap.UUID) {
+	if !m.firstTime("stopped:" + kind + ":" + snap.UUID) {
 		return
 	}
 	log.Warn("CapacityMonitor: guardrail tripped", "session", snap.Title, "kind", kind)
-	m.eventBus.Publish(events.NewNotificationEvent(
-		snap.UUID, snap.Title,
-		fmt.Sprintf("%s-%d", kind, time.Now().Unix()),
-		8, // NOTIFICATION_TYPE_WARNING
-		3, // NOTIFICATION_PRIORITY_HIGH
-		title, msg,
-		map[string]string{"type": kind},
-	))
+	if m.firstTime("notified:" + kind + ":" + snap.UUID) {
+		m.eventBus.Publish(events.NewNotificationEvent(
+			snap.UUID, snap.Title,
+			fmt.Sprintf("%s-%d", kind, time.Now().Unix()),
+			8, // NOTIFICATION_TYPE_WARNING
+			3, // NOTIFICATION_PRIORITY_HIGH
+			title, msg,
+			map[string]string{"type": kind},
+		))
+	}
 	if m.terminator == nil {
 		return
 	}
 	if err := m.terminator(ctx, inst, kind); err != nil {
-		log.Error("CapacityMonitor: terminating session failed", "session", snap.Title, "kind", kind, "err", err)
+		log.Error("CapacityMonitor: terminating session failed, will retry next poll", "session", snap.Title, "kind", kind, "err", err)
+		// Un-mark so the next poll retries; the notification stays one-shot.
+		m.mu.Lock()
+		delete(m.handledOnce, "stopped:"+kind+":"+snap.UUID)
+		m.mu.Unlock()
 	}
 }
 
@@ -518,8 +552,8 @@ func isIdleWaitTurn(turn tokens.TurnStats) bool {
 // before it are excluded — used to count only the turns that happened after
 // a prior intervention, so a loop that never actually broke isn't merged
 // with the run that triggered the first compact.
-func idleWaitRun(timeline []tokens.TurnStats, since time.Time) (count int, span time.Duration) {
-	var first, last time.Time
+func idleWaitRun(timeline []tokens.TurnStats, since time.Time) idleRun {
+	var run idleRun
 	for i := len(timeline) - 1; i >= 0; i-- {
 		turn := timeline[i]
 		if !since.IsZero() && !turn.Timestamp.After(since) {
@@ -528,19 +562,33 @@ func idleWaitRun(timeline []tokens.TurnStats, since time.Time) (count int, span 
 		if !isIdleWaitTurn(turn) {
 			break
 		}
-		if count == 0 {
-			last = turn.Timestamp
+		if run.count == 0 {
+			run.last = turn.Timestamp
 		}
-		first = turn.Timestamp
-		count++
+		run.first = turn.Timestamp
+		run.count++
+		run.sawSignalTool = run.sawSignalTool || len(turn.ToolNames) > 0
 	}
-	return count, last.Sub(first)
+	return run
 }
+
+// idleRun describes a trailing run of idle-wait turns. sawSignalTool is true
+// when at least one turn used a wait tool (Monitor, ListAgents, ...), which
+// separates "waiting on background work" from a plain tool-less chat.
+type idleRun struct {
+	count         int
+	first, last   time.Time
+	sawSignalTool bool
+}
+
+// idleRunFreshness is how recent a run's last turn must be for the run to
+// count as live; a finished transcript tail from a parked session must not
+// trigger a /compact. Wake cadence in the #882 incident was a few minutes.
+const idleRunFreshness = 15 * time.Minute
 
 // consecutiveIdleWaitTurns is idleWaitRun's count alone.
 func consecutiveIdleWaitTurns(timeline []tokens.TurnStats, since time.Time) int {
-	count, _ := idleWaitRun(timeline, since)
-	return count
+	return idleWaitRun(timeline, since).count
 }
 
 // wallClockMinTurns is the fewest idle turns that can trip the wall-clock
@@ -551,12 +599,15 @@ const wallClockMinTurns = 3
 // idleWaitExceeded reports whether the trailing idle run trips the turn
 // ceiling or the wall-clock bound.
 func (m *CapacityMonitor) idleWaitExceeded(timeline []tokens.TurnStats, since time.Time, ceiling int) (int, bool) {
-	count, span := idleWaitRun(timeline, since)
-	if count >= ceiling {
-		return count, true
+	run := idleWaitRun(timeline, since)
+	if !run.sawSignalTool || m.now().Sub(run.last) > idleRunFreshness {
+		return run.count, false
+	}
+	if run.count >= ceiling {
+		return run.count, true
 	}
 	maxSpan := time.Duration(m.config.IdleWaitMaxMinutes) * time.Minute
-	return count, maxSpan > 0 && count >= wallClockMinTurns && span >= maxSpan
+	return run.count, maxSpan > 0 && run.count >= wallClockMinTurns && run.last.Sub(run.first) >= maxSpan
 }
 
 // checkIdleWaitLoop detects and responds to the idle-wait-loop pattern from
@@ -597,14 +648,11 @@ func (m *CapacityMonitor) checkIdleWaitLoop(ctx context.Context, inst *session.I
 // strictly after that compact, or clear the tracker if a real turn happened
 // since — the loop broke on its own, so a future run is fresh.
 func (m *CapacityMonitor) checkIdleWaitLoopPostIntervention(ctx context.Context, inst *session.Instance, snap *session.InstanceSnapshot, parseRes *tokens.ParseResult, tracker idleWaitTracker, ceiling int, role string) {
-	n := len(parseRes.TurnTimeline)
-	if n == 0 {
-		return
-	}
-	last := parseRes.TurnTimeline[n-1]
-	if last.Timestamp.After(tracker.lastInterventionAt) && !isIdleWaitTurn(last) {
+	if realWorkSince(parseRes.TurnTimeline, tracker.lastInterventionAt) {
 		m.mu.Lock()
 		delete(m.idleWaitState, snap.UUID)
+		delete(m.handledOnce, "stopped:idle_wait_loop_escalation:"+snap.UUID)
+		delete(m.handledOnce, "notified:idle_wait_loop_escalation:"+snap.UUID)
 		delete(m.handledOnce, "idle_wait_loop_escalation:"+snap.UUID)
 		m.mu.Unlock()
 		return
@@ -620,6 +668,16 @@ func (m *CapacityMonitor) checkIdleWaitLoopPostIntervention(ctx context.Context,
 		inst = nil
 	}
 	m.escalateIdleWaitLoop(ctx, inst, snap, postCount)
+}
+
+// realWorkSince reports whether any non-idle turn happened after since.
+func realWorkSince(timeline []tokens.TurnStats, since time.Time) bool {
+	for i := len(timeline) - 1; i >= 0 && timeline[i].Timestamp.After(since); i-- {
+		if !isIdleWaitTurn(timeline[i]) {
+			return true
+		}
+	}
+	return false
 }
 
 // compactIdleWaitLoop sends /compact to inst and publishes an informational
@@ -667,7 +725,7 @@ func (m *CapacityMonitor) escalateIdleWaitLoop(ctx context.Context, inst *sessio
 		))
 		return
 	}
-	m.stopForGuardrail(ctx, inst, snap, kind, "Idle-Wait Loop Stopped", msg+" The session was stopped and handed back to the orchestrator.")
+	m.stopForGuardrail(ctx, inst, snap, kind, "Idle-Wait Loop Stopped", msg+" The session is being stopped and handed back to the orchestrator.")
 }
 
 func (m *CapacityMonitor) queryGeminiUsageFromDB(uuid string) (input, output int64, lastInput int, err error) {

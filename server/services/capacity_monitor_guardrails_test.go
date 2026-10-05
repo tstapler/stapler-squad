@@ -135,25 +135,76 @@ func TestCapacityConfig_RoleDefaults(t *testing.T) {
 func TestCapacityMonitor_IdleWaitWallClockTrigger(t *testing.T) {
 	t.Parallel()
 	base := time.Date(2026, 9, 22, 17, 0, 0, 0, time.UTC)
+	wait := []string{"ListAgents"}
 	tests := []struct {
 		name        string
 		turns       int
 		step        time.Duration
+		tools       []string
+		staleBy     time.Duration // how long after the last turn the monitor polls
 		wantCompact int
 	}{
-		{"few turns spanning over 30 minutes compacts", 5, 10 * time.Minute, 1},
-		{"few turns within 30 minutes does not", 5, 5 * time.Minute, 0},
-		{"lone turn is never a loop", 2, 3 * time.Hour, 0},
+		{"few turns spanning over 30 minutes compacts", 5, 10 * time.Minute, wait, time.Minute, 1},
+		{"few turns within 30 minutes does not", 5, 5 * time.Minute, wait, time.Minute, 0},
+		{"lone turn is never a loop", 2, 3 * time.Hour, wait, time.Minute, 0},
+		{"tool-less chat is not waiting on background work", 5, 10 * time.Minute, nil, time.Minute, 0},
+		{"finished stale run is not live", 5, 10 * time.Minute, wait, 2 * time.Hour, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			parseRes := parseResultFrom(cacheReadTimeline(tt.turns, 1000, nil, base, tt.step))
+			parseRes := parseResultFrom(cacheReadTimeline(tt.turns, 1000, tt.tools, base, tt.step))
 			monitor, _, compactor, _ := newGuardrailMonitor(t, session.SessionRoleWork, config.CapacityConfig{IdleWaitTurnCeiling: 15}, parseRes)
+			lastTurn := parseRes.TurnTimeline[len(parseRes.TurnTimeline)-1].Timestamp
+			monitor.now = func() time.Time { return lastTurn.Add(tt.staleBy) }
 			monitor.poll(context.Background())
 			assert.Equal(t, tt.wantCompact, compactor.callCount())
 		})
 	}
+}
+
+func TestCapacityMonitor_FailedTerminatorRetriesWithoutRenotifying(t *testing.T) {
+	t.Parallel()
+	tl := cacheReadTimeline(100, 5_000_000, []string{"Edit"}, time.Date(2026, 9, 22, 17, 0, 0, 0, time.UTC), time.Minute)
+	monitor, bus, _, _ := newGuardrailMonitor(t, session.SessionRoleTriage, config.CapacityConfig{}, parseResultFrom(tl))
+	attempts := 0
+	monitor.terminator = func(context.Context, *session.Instance, string) error {
+		attempts++
+		if attempts == 1 {
+			return assert.AnError
+		}
+		return nil
+	}
+	ch, subID := bus.Subscribe(context.Background())
+	defer bus.Unsubscribe(subID)
+
+	for i := 0; i < 3; i++ {
+		monitor.poll(context.Background())
+	}
+	assert.Equal(t, 2, attempts, "retried after failure, then stopped")
+	var n int
+	for _, ty := range drainTypes(ch) {
+		if ty == "cost_budget_exceeded" {
+			n++
+		}
+	}
+	assert.Equal(t, 1, n, "one notification")
+}
+
+func TestCapacityMonitor_PrunesStateForInactiveSessions(t *testing.T) {
+	t.Parallel()
+	tl := cacheReadTimeline(100, 5_000_000, []string{"Edit"}, time.Date(2026, 9, 22, 17, 0, 0, 0, time.UTC), time.Minute)
+	monitor, _, _, _ := newGuardrailMonitor(t, session.SessionRoleTriage, config.CapacityConfig{}, parseResultFrom(tl))
+	monitor.poll(context.Background())
+	monitor.mu.RLock()
+	require.NotEmpty(t, monitor.handledOnce)
+	monitor.mu.RUnlock()
+
+	monitor.pruneSessionState(map[string]bool{})
+	monitor.mu.RLock()
+	defer monitor.mu.RUnlock()
+	assert.Empty(t, monitor.handledOnce)
+	assert.Empty(t, monitor.roleCache)
 }
 
 // Incident shape (#882): ListAgents / Monitor / text-only wake turns, seconds

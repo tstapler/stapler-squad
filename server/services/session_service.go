@@ -827,23 +827,27 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	}
 	credChain := NewDefaultChain(directCfg)
 
-	capacityMonitor := NewCapacityMonitor(CapacityMonitorParams{
-		Config:   capCfg,
-		EventBus: eventBus,
-	})
-	capacityMonitor.RegisterClient("anthropic", NewAnthropicLimitsClient(credChain, ""))
+	var capRoleResolver SessionRoleResolver
+	var capTerminator SessionTerminator
 	if concStorage != nil {
-		capacityMonitor.roleResolver = func(ctx context.Context, sessionUUID string) string {
+		capRoleResolver = func(ctx context.Context, sessionUUID string) string {
 			is, err := concStorage.GetItemSessionBySessionUUID(ctx, sessionUUID)
 			if err != nil {
 				return ""
 			}
 			return is.Role
 		}
-		capacityMonitor.terminator = func(ctx context.Context, inst *session.Instance, reason string) error {
+		capTerminator = func(ctx context.Context, inst *session.Instance, reason string) error {
 			return stopGuardrailSession(ctx, concStorage, inst, reason)
 		}
 	}
+	capacityMonitor := NewCapacityMonitor(CapacityMonitorParams{
+		Config:       capCfg,
+		EventBus:     eventBus,
+		RoleResolver: capRoleResolver,
+		Terminator:   capTerminator,
+	})
+	capacityMonitor.RegisterClient("anthropic", NewAnthropicLimitsClient(credChain, ""))
 	capacityMonitor.RegisterClient("google", NewGeminiLimitsClient(credChain, ""))
 
 	if anthropicClient, ok := aiClientImpl.(*AnthropicAIClient); ok {
