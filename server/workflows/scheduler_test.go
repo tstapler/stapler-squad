@@ -726,9 +726,10 @@ func TestFireNow_OverrideFile_ExpectNewLatestPickedUpWithoutCodeChange(t *testin
 // uniqueTitleSessionService mimics SessionService.CreateSession's title-uniqueness
 // check: a duplicate title returns CodeAlreadyExists.
 type uniqueTitleSessionService struct {
-	mu     sync.Mutex
-	titles map[string]bool
-	seq    int
+	mu      sync.Mutex
+	titles  map[string]bool
+	prompts map[string]string // title -> InitialPrompt of the created session
+	seq     int
 }
 
 func (f *uniqueTitleSessionService) CreateSession(_ context.Context, req *connect.Request[sessionv1.CreateSessionRequest]) (*connect.Response[sessionv1.CreateSessionResponse], error) {
@@ -741,6 +742,9 @@ func (f *uniqueTitleSessionService) CreateSession(_ context.Context, req *connec
 		return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("session with title '%s' already exists", req.Msg.Title))
 	}
 	f.titles[req.Msg.Title] = true
+	if f.prompts != nil {
+		f.prompts[req.Msg.Title] = req.Msg.InitialPrompt
+	}
 	f.seq++
 	return connect.NewResponse(&sessionv1.CreateSessionResponse{
 		Session: &sessionv1.Session{Id: fmt.Sprintf("sess-%d", f.seq)},
@@ -794,4 +798,20 @@ func TestFireNow_TitleCollision_AutoDeduped(t *testing.T) {
 	assert.True(t, fake.titles["corp/repo#42"])
 	assert.True(t, fake.titles["corp/repo#42 (2)"])
 	assert.True(t, fake.titles["corp/repo#42 (3)"])
+}
+
+// TestFireNow_TitleDedupe_DoesNotCorruptArgInPrompt guards the retry's prompt
+// rewrite: the derived title ("foo/bar") is a substring of the arg URL, which
+// must reach the agent unchanged while {{session_id}} follows the deduped title.
+func TestFireNow_TitleDedupe_DoesNotCorruptArgInPrompt(t *testing.T) {
+	fake := &uniqueTitleSessionService{titles: map[string]bool{"foo/bar": true}, prompts: map[string]string{}}
+	sched, wfRepo, _ := newTestScheduler(t, fake)
+	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+		Slug: "argcorrupt-wf", Name: "Repo Review", Command: "review {{input}} as {{session_id}}", TargetDirectory: "/tmp/test",
+	})
+	require.NoError(t, err)
+
+	_, err = sched.FireNow(context.Background(), wf, "https://github.com/foo/bar")
+	require.NoError(t, err)
+	assert.Equal(t, "review https://github.com/foo/bar as foo/bar (2)", fake.prompts["foo/bar (2)"])
 }

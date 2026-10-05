@@ -255,7 +255,11 @@ func (s *Scheduler) Remove(workflowID string) error {
 func (s *Scheduler) FireNow(ctx context.Context, wf *ent.Workflow, arg string) (string, error) {
 	title := deriveWorkflowSessionTitle(wf, arg)
 	prompt := buildTemplatedPrompt(wf, arg, title)
-	return s.fireTrigger(ctx, wf, fireParams{renderedPrompt: prompt, title: title})
+	return s.fireTrigger(ctx, wf, fireParams{
+		renderedPrompt: prompt,
+		title:          title,
+		rerender:       func(t string) string { return buildTemplatedPrompt(wf, arg, t) },
+	})
 }
 
 // defaultWorkflowSessionTitle is the timestamp-based title every workflow fire
@@ -399,6 +403,7 @@ func (s *Scheduler) FireTriggerChained(ctx context.Context, wf *ent.Workflow, pr
 		renderedPrompt: prompt,
 		chainDepth:     chainDepth,
 		title:          title,
+		rerender:       func(t string) string { return buildTemplatedPrompt(wf, priorItemSummary, t) },
 	})
 }
 
@@ -413,6 +418,9 @@ type fireParams struct {
 	// title is the session's starting title (see
 	// deriveWorkflowSessionTitle/defaultWorkflowSessionTitle).
 	title string
+	// rerender rebuilds the prompt for a deduped title; nil means the prompt
+	// doesn't embed the title and is reused as-is.
+	rerender func(title string) string
 }
 
 // fireTrigger is FireTrigger/FireTriggerChained's shared implementation —
@@ -493,12 +501,14 @@ func (s *Scheduler) fireTrigger(ctx context.Context, wf *ent.Workflow, p firePar
 	resp, err := s.sessionSvc.CreateSession(ctx, req)
 	// Auto-dedupe a title collision (e.g. re-running the same PR reference, or a
 	// racing sibling fire): retry with " (n)" appended. The prompt embeds the
-	// title via {{session_id}}, so rewrite it too to keep update_session targeting right.
-	baseTitle, basePrompt := title, renderedPrompt
+	// title via {{session_id}}, so re-render it to keep update_session targeting right.
+	baseTitle := title
 	for n := 2; n <= maxTitleDedupeAttempts && connect.CodeOf(err) == connect.CodeAlreadyExists; n++ {
 		title = dedupedTitle(baseTitle, n)
 		req.Msg.Title = title
-		req.Msg.InitialPrompt = strings.ReplaceAll(basePrompt, baseTitle, title)
+		if p.rerender != nil {
+			req.Msg.InitialPrompt = p.rerender(title)
+		}
 		resp, err = s.sessionSvc.CreateSession(ctx, req)
 	}
 	if err != nil {
