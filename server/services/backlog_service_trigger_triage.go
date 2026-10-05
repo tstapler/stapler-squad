@@ -498,7 +498,7 @@ func (s *BacklogService) TriggerTriage(
 			// earlier), not a permission-mode gap. Do not add bypassPermissions here
 			// without a fresh empirical repro, per ADR-001's own "don't trust
 			// unverified CLI-behavior assumptions" precedent.
-			headless.CallOptions{WorkDir: triageWorkDir, Model: triageResolvedModel, OnConversationID: func(id string) { triageConversationID = id }},
+			headless.CallOptions{WorkDir: triageWorkDir, Model: triageResolvedModel, MaxCostUSD: s.cfg.HeadlessTriageMaxCostUSDOrDefault(), OnConversationID: func(id string) { triageConversationID = id }},
 			func(usd float64, priced bool) {
 				triageCostUSD = usd
 				triageCostPriced = priced
