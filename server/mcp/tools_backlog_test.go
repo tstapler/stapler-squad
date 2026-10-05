@@ -4087,6 +4087,56 @@ func TestReportDuplicate_UnclaimedItem_ArchivesDirectly(t *testing.T) {
 	require.NotNil(t, reloaded.ArchivedAt)
 }
 
+func TestReportDuplicate_BacklogItemRef(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	create := func(status session.BacklogStatus) *session.BacklogItemData {
+		item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "t", Status: string(status)})
+		require.NoError(t, err)
+		return item
+	}
+	survivor := create(session.BacklogStatusReady)
+	archived := create(session.BacklogStatusArchived)
+
+	tests := []struct {
+		name        string
+		ref         func(self *session.BacklogItemData) string
+		wantArchive bool
+	}{
+		{"existing survivor archives item", func(*session.BacklogItemData) string { return backlogDuplicateRefPrefix + survivor.ID }, true},
+		{"self ref rejected", func(self *session.BacklogItemData) string { return backlogDuplicateRefPrefix + self.ID }, false},
+		{"uppercase self ref rejected", func(self *session.BacklogItemData) string {
+			return backlogDuplicateRefPrefix + strings.ToUpper(self.ID)
+		}, false},
+		{"archived target rejected", func(*session.BacklogItemData) string { return backlogDuplicateRefPrefix + archived.ID }, false},
+		{"unknown target rejected", func(*session.BacklogItemData) string { return backlogDuplicateRefPrefix + uuid.New().String() }, false},
+		{"malformed uuid rejected", func(*session.BacklogItemData) string { return backlogDuplicateRefPrefix + "nope" }, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dup := create(session.BacklogStatusReady)
+			handler := &backlogHandlers{storage: storage, verifyGitHubRef: failOnCallVerifyGitHubRef(t)}
+			result, err := handler.reportDuplicate(WithSessionUUID(ctx, uuid.New().String()), makeToolReq(map[string]interface{}{
+				"item_id":       dup.ID,
+				"duplicate_ref": tc.ref(dup),
+				"reason":        "already covered",
+			}))
+			require.NoError(t, err)
+			text, ok := result.Content[0].(mcpgo.TextContent)
+			require.True(t, ok)
+			assert.Equal(t, tc.wantArchive, strings.Contains(text.Text, "archived as a duplicate"))
+
+			reloaded, err := storage.GetBacklogItem(ctx, dup.ID)
+			require.NoError(t, err)
+			want := session.BacklogStatusReady
+			if tc.wantArchive {
+				want = session.BacklogStatusArchived
+			}
+			assert.Equal(t, string(want), reloaded.Status)
+		})
+	}
+}
+
 func TestReportDuplicate_RejectsWhenDuplicateRefOrReasonTooLong(t *testing.T) {
 	cases := []struct {
 		name         string
