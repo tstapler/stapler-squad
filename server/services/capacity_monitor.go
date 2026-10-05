@@ -346,9 +346,9 @@ func (m *CapacityMonitor) sessionRole(ctx context.Context, sessionUUID string) s
 	if m.roleResolver == nil || sessionUUID == "" {
 		return ""
 	}
-	m.mu.Lock()
+	m.mu.RLock()
 	cached, ok := m.roleCache[sessionUUID]
-	m.mu.Unlock()
+	m.mu.RUnlock()
 	if ok {
 		return cached
 	}
