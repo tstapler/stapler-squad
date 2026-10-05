@@ -51,6 +51,11 @@ type CallOptions struct {
 	// UUID once known, so a caller can persist it for later cost attribution. Not
 	// invoked when the call fails before producing a result.
 	OnConversationID func(conversationID string)
+	// MaxTurns and MaxSubagents abort the call with ErrFanoutCeilingExceeded once
+	// the stream shows more than that many assistant turns / subagent launches.
+	// Zero disables the limit. Like AllowedTools, only applied when WorkDir is set.
+	MaxTurns     int
+	MaxSubagents int
 	// MaxCostUSD aborts the call with ErrCostCeilingExceeded once the estimated
 	// spend (from assistant-line token usage, priced via tokens.PricingTable)
 	// exceeds it, regardless of elapsed time. Zero disables the check. Only
@@ -469,6 +474,18 @@ func terminateStream(cio callIO, drainLines func(), err error) {
 	cio.sendFinal(StreamChunk{Err: fmt.Errorf("headless call ended: %w", err), Done: true})
 }
 
+// terminateStreamKeepingText is terminateStream for an abort that should leave
+// the partial transcript behind for captureHeadlessFailure (the only record of
+// what a runaway call did, since its cost never arrives).
+func terminateStreamKeepingText(cio callIO, drainLines func(), text string, err error) {
+	_ = cio.stop()
+	drainLines()
+	if trimmed := strings.TrimSpace(text); trimmed != "" {
+		cio.send(StreamChunk{Text: trimmed})
+	}
+	cio.sendFinal(StreamChunk{Err: fmt.Errorf("headless call ended: %w", err), Done: true})
+}
+
 // firstCallScanResult is what scanFirstCallLines collected before the stream
 // ended normally (not via idle timeout, ctx cancellation, or the output cap).
 type firstCallScanResult struct {
@@ -484,6 +501,7 @@ type firstCallScanState struct {
 	allText    *strings.Builder
 	resultLine *string
 	drainLines func()
+	fanout     *fanoutCounter    // nil when no ceiling is configured
 	usage      *usageAccumulator // nil when no ceiling is set
 }
 
@@ -502,6 +520,12 @@ func (p *Pool) handleFirstCallLine(state firstCallScanState, lr streamLine, cio 
 		// grow this buffer unbounded before idleTimeout would catch it.
 		terminateStream(cio, state.drainLines, ErrOutputCapExceeded)
 		return true
+	}
+	if state.fanout != nil {
+		if ceiling := state.fanout.observe(lr.text); ceiling != nil {
+			terminateStreamKeepingText(cio, state.drainLines, state.allText.String(), ceiling)
+			return true
+		}
 	}
 	if *state.resultLine == "" && isResultLine(lr.text) {
 		*state.resultLine = lr.text
@@ -531,6 +555,9 @@ func (p *Pool) scanFirstCallLines(ctx context.Context, key FeatureKey, stdout io
 	var allText strings.Builder
 	var resultLine string
 	state := firstCallScanState{idleTimer: time.NewTimer(idleTimeout), allText: &allText, resultLine: &resultLine, drainLines: drainLines}
+	if p.fanout.enabled() {
+		state.fanout = newFanoutCounter(p.fanout)
+	}
 	defer state.idleTimer.Stop()
 	if cio.ceiling.enabled() {
 		state.usage = newUsageAccumulator(tokens.DefaultPricingTable())
@@ -720,6 +747,7 @@ func (p *Pool) CallWithOptions(ctx context.Context, key FeatureKey, systemPrompt
 			dirRunner = dirRunner.WithToolAccess(opts.AllowedTools, opts.PermissionMode, opts.DisallowedTools)
 		}
 		oneShot := NewPoolWithRunner(PoolConfig{MaxCallsPerSession: 1, MaxConcurrentSessions: 1, DefaultModel: opts.Model}, dirRunner)
+		oneShot.fanout = FanoutLimits{MaxTurns: opts.MaxTurns, MaxSubagents: opts.MaxSubagents}
 		innerCh, err := oneShot.call(ctx, key, systemPrompt, userPrompt, opts.Model, oneShot.runner, costCeiling{maxUSD: opts.MaxCostUSD, maxTokens: opts.MaxTokens})
 		if err != nil {
 			<-p.concurrencySem

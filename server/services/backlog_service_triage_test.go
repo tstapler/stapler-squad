@@ -47,6 +47,8 @@ func TestClassifyHeadlessCallError_should_BucketErrorsForLogGrepping(t *testing.
 		{"idle timeout (stream stalled)", headless.ErrIdleTimeout, 5 * time.Minute, "idle"},
 		{"wrapped idle timeout", fmt.Errorf("headless call ended: %w", headless.ErrIdleTimeout), 5 * time.Minute, "idle"},
 		{"idle timeout even with elapsed near budget must not fall into the timeout heuristic", headless.ErrIdleTimeout, triageCallBudget - time.Second, "idle"},
+		{"fan-out ceiling", &headless.FanoutCeilingError{Turns: 700, Subagents: 121, MaxTurns: 600, MaxSubagents: 120}, 40 * time.Minute, "fanout_ceiling"},
+		{"wrapped fan-out ceiling near budget must not fall into the timeout heuristic", fmt.Errorf("headless call ended: %w", &headless.FanoutCeilingError{}), triageCallBudget - time.Second, "fanout_ceiling"},
 		{"cost ceiling exceeded", fmt.Errorf("headless call ended: %w", &headless.CostCeilingError{SpendUSD: 30}), 5 * time.Minute, "cost_ceiling"},
 		{"cost ceiling even with elapsed near budget must not fall into the timeout heuristic", headless.ErrCostCeilingExceeded, triageCallBudget - time.Second, "cost_ceiling"},
 		{"ctx deadline exceeded", context.DeadlineExceeded, 5 * time.Minute, "timeout"},

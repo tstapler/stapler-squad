@@ -2605,6 +2605,9 @@ func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string
 //     headless.idleTimeout (session/headless/pool.go) — checked before
 //     "timeout" so a genuinely stalled call isn't indistinguishable from a
 //     legitimately long-but-active one.
+//   - "fanout_ceiling": an sdd-mode call crossed its configured turn/subagent ceiling
+//     (headless.ErrFanoutCeilingExceeded, ADR-029). Checked before "timeout" so an abort
+//     near the budget tail keeps its distinct reason.
 //   - "cost_ceiling": estimated spend crossed headless.CallOptions.MaxCostUSD/MaxTokens
 //     (headless.ErrCostCeilingExceeded) — a busy-but-wasteful call, caught regardless
 //     of elapsed time. Checked before "timeout" so it is never mislabeled as one.
@@ -2643,8 +2646,10 @@ func classifyHeadlessCallError(err error, elapsed, budget time.Duration) string 
 		return "pool_saturated"
 	case errors.Is(err, headless.ErrIdleTimeout):
 		return "idle"
+	case errors.Is(err, headless.ErrFanoutCeilingExceeded):
+		return session.TriageEndReasonFanoutCeiling
 	case errors.Is(err, headless.ErrCostCeilingExceeded):
-		return "cost_ceiling"
+		return session.TriageEndReasonCostCeiling
 	case errors.Is(err, context.DeadlineExceeded), budget-elapsed < 5*time.Second:
 		return "timeout"
 	case errors.Is(err, context.Canceled):

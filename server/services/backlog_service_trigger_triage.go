@@ -498,7 +498,7 @@ func (s *BacklogService) TriggerTriage(
 			// earlier), not a permission-mode gap. Do not add bypassPermissions here
 			// without a fresh empirical repro, per ADR-001's own "don't trust
 			// unverified CLI-behavior assumptions" precedent.
-			headless.CallOptions{WorkDir: triageWorkDir, Model: triageResolvedModel, MaxCostUSD: s.cfg.HeadlessTriageMaxCostUSDOrDefault(), OnConversationID: func(id string) { triageConversationID = id }},
+			triageCallOptions(s.cfg, item.PipelineMode, triageWorkDir, triageResolvedModel, func(id string) { triageConversationID = id }),
 			func(usd float64, priced bool) {
 				triageCostUSD = usd
 				triageCostPriced = priced
@@ -546,6 +546,11 @@ func (s *BacklogService) TriggerTriage(
 			// answer "how often do we hit each failure mode" without parsing %v text.
 			errType := classifyHeadlessCallError(callErr, callElapsed, triageCallBudget)
 			capturePath := s.captureHeadlessFailure(triageSessionUUID, raw)
+			var fanoutErr *headless.FanoutCeilingError
+			if errors.As(callErr, &fanoutErr) {
+				log.Warn("[TriggerTriage] fan-out ceiling aborted triage", "item", itemID, "turns", fanoutErr.Turns, "subagents", fanoutErr.Subagents,
+					"maxTurns", fanoutErr.MaxTurns, "maxSubagents", fanoutErr.MaxSubagents)
+			}
 			log.Error("[TriggerTriage] headless triage failed",
 				"item", itemID, "elapsed", callElapsed.Round(time.Second), "errType", errType, "capture", capturePath, "error", callErr)
 			_ = s.storage.UpdateItemSessionEndedWithReason(cleanupCtx, isID, time.Now(), errType)
@@ -832,4 +837,16 @@ func applyTriageResultToUpdate(result *session.HeadlessTriageResult, update *ses
 		c := result.ItemCategory
 		update.Category = &c
 	}
+}
+
+// triageCallOptions builds the headless call options for a triage call. Only
+// sdd-mode triage gets the fan-out ceiling (ADR-029): default triage's single
+// 4-subagent wave showed no material waste, so it runs unbounded as before.
+func triageCallOptions(cfg *config.Config, pipelineMode, workDir, model string, onConversationID func(string)) headless.CallOptions {
+	opts := headless.CallOptions{WorkDir: workDir, Model: model, MaxCostUSD: cfg.HeadlessTriageMaxCostUSDOrDefault(), OnConversationID: onConversationID}
+	if pipelineMode == session.DefaultSDDPipelineModeSlug && cfg != nil {
+		opts.MaxTurns = cfg.HeadlessTriageMaxTurnsOrDefault()
+		opts.MaxSubagents = cfg.HeadlessTriageMaxSubagentsOrDefault()
+	}
+	return opts
 }

@@ -44,6 +44,11 @@ type Pool struct {
 
 	// concurrencySem limits max simultaneous subprocess calls.
 	concurrencySem chan struct{}
+
+	// fanout is the per-call turn/subagent ceiling applied to first-call
+	// streams. Set only on the one-shot pool CallWithOptions builds for a
+	// WorkDir call, so it is immutable once the pool is serving.
+	fanout FanoutLimits
 }
 
 // defaultPoolMu protects the package-level default pool variable.
