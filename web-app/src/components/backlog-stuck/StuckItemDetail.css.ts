@@ -81,13 +81,9 @@ export const overrideButton = style({
   fontSize: vars.fontSize.sm,
   fontWeight: 600,
   cursor: "pointer",
-  ":disabled": {
-    opacity: 0.6,
-    cursor: "not-allowed",
-  },
   selectors: {
-    // These buttons use aria-disabled instead of disabled so they stay
-    // focusable while busy; mirror the same visual treatment here.
+    // This button uses aria-disabled instead of disabled so it stays
+    // focusable while busy.
     '&[aria-disabled="true"]': {
       opacity: 0.6,
       cursor: "not-allowed",
@@ -104,10 +100,6 @@ export const overrideUnlimitedButton = style({
   color: vars.color.textPrimary,
   fontSize: vars.fontSize.sm,
   cursor: "pointer",
-  ":disabled": {
-    opacity: 0.6,
-    cursor: "not-allowed",
-  },
   selectors: {
     '&[aria-disabled="true"]': {
       opacity: 0.6,
