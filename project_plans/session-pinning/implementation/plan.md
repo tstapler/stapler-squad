@@ -33,7 +33,7 @@ Small, additive CRUD-shaped feature on an existing entity (`Session`) — a sing
 | `Pinned` (Instance) | In-memory field on `session.Instance`, mirrors `pinned` | `session/instance.go` |
 | `Pinned` (InstanceSnapshot) | Read-only copy of `Instance.Pinned` for lock-free reads | `session/instance_snapshot.go` |
 | `Pinned` (InstanceData) | Serialization-layer field for JSON snapshot / ent round-trip | `session/storage.go` |
-| `pinned` (proto) | `bool pinned = 72;` on the `Session` message | `proto/session/v1/types.proto` |
+| `pinned` (proto) | `bool pinned = 76;` on the `Session` message | `proto/session/v1/types.proto` |
 | `PinSessionRequest`/`PinSessionResponse` | RPC request/response messages, mirror `ArchiveSessionRequest`/`Response` | `proto/session/v1/session.proto` |
 | `UnpinSessionRequest`/`UnpinSessionResponse` | RPC request/response messages, mirror `UnarchiveSessionRequest`/`Response` | `proto/session/v1/session.proto` |
 | `PinSession`/`UnpinSession` | ConnectRPC handler methods on `SessionService` | `server/services/session_service.go` |
@@ -46,8 +46,8 @@ Small, additive CRUD-shaped feature on an existing entity (`Session`) — a sing
 | `handleTogglePinned` | Page-level handler that calls `pinSession`/`unpinSession` based on the target boolean | `web-app/src/app/page.tsx` |
 | `session-pin-toggle` | `data-testid` on the menu item, per e2e locator convention | `SessionActionsOverflow.tsx` |
 | `pinnedSessions` | Derived array (`sortedSessions.filter(s => s.pinned)`) in `SessionList.tsx` | `SessionList.tsx` |
-| `PINNED_GROUP_KEY` | Sentinel constant (`"__pinned__"`) identifying the synthetic Pinned group/section, distinct from any real `groupKey` a `GroupingStrategy` could produce | `SessionList.tsx` |
-| Pinned section | The dedicated top-of-list UI region rendering all pinned, non-archived, non-hidden sessions | `SessionList.tsx` |
+| `renderSessionEntry` | Shared render helper used by both the Pinned section and the grouped-list loop, closing over every `SessionCard`/`SessionRowWrapper` handler prop in one place (Task 2.4.3a) | `SessionList.tsx` |
+| Pinned section | The dedicated top-of-list UI region rendering all pinned, non-archived, non-hidden sessions — a plain render block, not a synthetic `GroupedSessions[]` entry, so it has no group key | `SessionList.tsx` |
 | `Pin`/`PinOff` | lucide-react icons used for the menu item's decorative glyph | `SessionActionsOverflow.tsx` |
 | `menuitemcheckbox` | ARIA role used for the pin toggle menu item (matches the existing autonomous-mode toggle) | `SessionActionsOverflow.tsx` |
 | hidden-wins | The (already-free) invariant that a hidden+pinned session never reaches the frontend, because `ListSessions` excludes `Hidden` sessions by default and the frontend never sets `includeHidden` | `server/services/session_service.go:1140`, `web-app/src/gen/session/v1/session_pb.ts` |
@@ -60,11 +60,11 @@ Small, additive CRUD-shaped feature on an existing entity (`Session`) — a sing
 | Component | Pattern Chosen | Source | Alternative Rejected | Reason |
 |-----------|---------------|--------|---------------------|--------|
 | Schema shape | Plain `field.Bool("pinned").Default(false)` on `Session` | `hidden`/`auto_yes`/`is_expanded` (`session/ent/schema/session.go`) | Join table; magic tag (see Step 0.5) | No ownership/multi-value dimension exists in this schema; matches 5 existing identical-shaped fields |
-| RPC shape | Two-verb RPC pair `PinSession`/`UnpinSession` | `ArchiveSession`/`UnarchiveSession` (`session_service.go:4285-4327`) | Single `SetSessionPinned(bool)` RPC | Codebase's own convention for a boolean session flag is two verbs, not one setter+flag (confirmed: `ArchiveSession`/`UnarchiveSession`, not `SetArchived(bool)`) |
+| RPC shape | Two-verb RPC pair `PinSession`/`UnpinSession` | `ArchiveSession`/`UnarchiveSession` (`session_service.go:4876-4917`, corrected 2026-08-21 — re-verify at implementation time) | Single `SetSessionPinned(bool)` RPC | Codebase's own convention for a boolean session flag is two verbs, not one setter+flag (confirmed: `ArchiveSession`/`UnarchiveSession`, not `SetArchived(bool)`) |
 | Actor setter shape | Plain lock→mutate→snapshot→unlock→store, no CAS | `SetAutoYes` (`instance_actor_setters.go:317-334`) | `SetArchivedAtIfNil` CAS shape | Pin/unpin is a direct user toggle, not a race-guarded "first writer wins" transition; CAS would add complexity with no corresponding requirement |
 | Archived+pinned interaction | Auto-unpin enforced once, inside `setArchivedAtLocked` (single choke point covering every archive path: `ArchiveSession`, `ArchiveSessionByUUID`, `ArchiveWithStop`, workflow bulk-archive, any future sweep) | New for this feature | Ad hoc `SetPinned(false)` call duplicated in each RPC handler that can archive | Root-cause enforcement at the one function every archive path already funnels through, rather than N call-site patches that can drift out of sync |
 | Hidden+pinned interaction | No new code — rely on the existing `ListSessions` `IncludeHidden` gate (`session_service.go:1140`), which the frontend never sets | Existing behavior | New explicit filter in the Pinned section render | The invariant is already enforced at the RPC boundary; duplicating it client-side would be redundant and could silently diverge if the gate's semantics ever change |
-| Frontend section placement | Prepend a synthetic `GroupedSessions` entry (`groupKey: PINNED_GROUP_KEY`) ahead of `groupSessions()`'s output, over the *non-pinned* remainder | `groupSessions()`'s existing `GroupedSessions[]` shape (`web-app/src/lib/grouping/strategies.ts:36-40`) | New dedicated `PinnedSessionsSection` component with its own virtualizer wiring | Reuses 100% of existing `SessionCard`/`SessionRow`/virtualizer rendering with zero new plumbing; the array-of-groups shape already supports "one section on top, independent of the active sort/group choice" |
+| Frontend section placement | A separate, non-virtualized render block (`renderSessionEntry` mapped over `pinnedSessions`, Task 2.4.3a) rendered above `groupedSessions`'s virtualized output, over the *non-pinned* remainder | Reuses `SessionCard`/`SessionRow` and their existing handler-prop wiring via the shared `renderSessionEntry` helper | New dedicated `PinnedSessionsSection` component with its own virtualizer wiring; folding the Pinned section into `groupedSessions`'s existing `GroupedVirtuoso`/`useVirtualizer` flat item list as a synthetic leading group | **Correction (2026-08-21 triad review round 2)**: an earlier draft of this row claimed "zero new plumbing" via a synthetic virtualizer group — verified against the live `SessionList.tsx` that Task 2.4.3a does not actually do this; it renders a plain `.map()` outside both `GroupedVirtuoso` and `useVirtualizer`. This is now a **deliberate, documented v1 trade-off**, not an accident: folding into the virtualizer is real integration work (the virtualizer's flat-item-list shape isn't a small delta), and the "no pin cap" decision means a large pinned set is the one case where this trade-off has a visible cost (pre-mortem Failure #3, P2). Accepted for v1 because typical pin counts for a single-user tool are small; revisit only if real usage shows jank |
 | Pinned-section exclusion from normal group | Pinned sessions render **only** in the Pinned section, excluded from `groupSessions()`'s input | Recommended by architecture.md §4 | Duplicate pinned sessions in both the Pinned section and their normal group | Avoids duplicate rendering/virtualizer bookkeeping; matches every industry comparable in ux.md §1 (Slack, VS Code, browser tabs all reposition rather than duplicate) |
 | Pinned-section ordering | Reuse the list's existing `sortField`/`sortDir` state for the pinned subset — no new field | build-vs-buy.md §3, features.md §4 | New `pinned_at` timestamp for "most-recently-pinned-first" | Requirements explicitly scope out pin ordering/reordering; adding a timestamp field for an unrequested ordering guarantee would be a speculative field |
 | Optimistic UI | `pinSession`/`unpinSession` dispatch `upsertSession` optimistically before the RPC call, roll back to the prior session object on failure | ux.md §4 recommendation; existing `dispatch(upsertSession(...))`/`dispatch(setError(...))` calls already present in `useSessionService.ts` | Pessimistic (spinner, wait for RPC) | Every comparable product (Slack/VS Code/browser tabs/taskbar) treats pin/unpin as instant/local; this repo already dispatches `setError` on RPC failure in `archiveSession`, so adding a rollback dispatch alongside it is a small, consistent extension |
@@ -192,13 +192,14 @@ Read path (ListSessions / WatchSessions):
 #### Story 1.2.1: Add `pinned` field to `Session` message
 **Acceptance Criteria**:
 - `ListSessions` (and single-session reads) return the pin state (FR3).
-  - *Given* the `Session` proto message tops out at field 71 (`workspace_key`), *When* `bool pinned = 72;` is added, *Then* `make proto-gen` produces a `Session.pinned` field in both Go and TypeScript bindings with no field-number collision.
+  - *Given* the `Session` proto message's highest in-use field number **at implementation time** (verify with `awk '/^message Session {/,/^}/' proto/session/v1/types.proto | grep -E '= [0-9]+;'` — as of this correction, `subagent_count = 75` is highest, making 76 the next free number; this file changes independently of this plan's timeline, so re-verify rather than trusting the number below), *When* `bool pinned = 76;` is added, *Then* `make proto-gen` produces a `Session.pinned` field in both Go and TypeScript bindings with no field-number collision.
 **Files**: `proto/session/v1/types.proto`
 
 ##### Task 1.2.1a: Add the proto field (~2 min)
-- In `proto/session/v1/types.proto`, immediately after `string workspace_key = 71;` (line 239), add:
+- **Correction (pre-mortem P1, 2026-08-21)**: this plan originally specified field `72`, based on a stale claim that `workspace_key = 71` was the highest in-use field. Verified against the live proto file: `exit_reason = 72`, `note = 73`, `auto_approve = 74`, `subagent_count = 75` already exist — 72 is taken. Re-verify the true highest field number before running this task; 76 is correct as of this correction but may drift further.
+- In `proto/session/v1/types.proto`, immediately after the last field in the `Session` message (currently `int32 subagent_count = 75;`), add:
   ```protobuf
-  bool pinned = 72;
+  bool pinned = 76;
   ```
 - Files: `proto/session/v1/types.proto`
 
@@ -284,30 +285,44 @@ Read path (ListSessions / WatchSessions):
 **Goal**: Add the `SetPinned` actor setter and enforce the auto-unpin-on-archive invariant at its single choke point.
 
 #### Story 1.4.1: `SetPinned` actor setter
-**As a** backend developer, **I want** a `SetPinned(bool)` method on `Instance`, **so that** pin mutations are serialized through the actor like every other field.
+**As a** backend developer, **I want** a `SetPinned(bool) error` method on `Instance`, **so that** pin mutations are serialized through the actor like every other field, and the archived-guard invariant is enforced at the one choke point every caller goes through — not duplicated at each RPC/call site (architecture-review Concern 1: a bulk operation, workflow action, or future admin tool calling `SetPinned(true)` directly, bypassing the `PinSession` RPC handler, must not be able to produce `Pinned=true && ArchivedAt != nil`).
 **Acceptance Criteria**:
-- *Given* `Instance.Pinned` is false, *When* `inst.SetPinned(true)` is called, *Then* `inst.Snapshot().Pinned` returns true and no data race is possible (mutation runs inside `sendSyncErr`).
+- *Given* `Instance.Pinned` is false and the session is not archived, *When* `inst.SetPinned(true)` is called, *Then* `inst.Snapshot().Pinned` returns true, `err` is nil, and no data race is possible (mutation runs inside `sendSyncErr`).
+- *Given* the session has `ArchivedAt != nil`, *When* `inst.SetPinned(true)` is called (from ANY caller, not just the RPC handler), *Then* it returns `ErrCannotPinArchivedSession` and `Pinned` stays false — the check and the mutation share one actor-serialized critical section, closing the TOCTOU race pre-mortem.md Failure #1 identifies in the check-then-call-separately shape.
+- *Given* any archived state, *When* `inst.SetPinned(false)` is called (unpinning), *Then* it always succeeds — the guard only applies to pinning, never unpinning.
 **Files**: `session/instance_actor_setters.go`
 
-##### Task 1.4.1a: Add `setPinnedLocked` + `SetPinned` (~3 min)
+##### Task 1.4.1a: Add `setPinnedLocked` + `SetPinned` with the archived-guard inside the actor lock (~4 min)
 - In `session/instance_actor_setters.go`, add a new section (near `AutoYes`, e.g. immediately after its block, line ~334):
   ```go
   // ---- Pinned --------------------------------------------------------------------
 
-  func setPinnedLocked(s *instanceState, v bool) {
+  // ErrCannotPinArchivedSession is returned by SetPinned(true) when the
+  // session is already archived. Enforced here — inside the actor lock —
+  // rather than only at the PinSession RPC handler, so no caller (bulk
+  // operation, workflow action, future admin tool) can bypass it.
+  var ErrCannotPinArchivedSession = errors.New("cannot pin an archived session")
+
+  func setPinnedLocked(s *instanceState, v bool) error {
       s.inst.mu.Lock()
+      if v && s.inst.ArchivedAt != nil {
+          s.inst.mu.Unlock()
+          return ErrCannotPinArchivedSession
+      }
       s.inst.Pinned = v
       snap := buildSnapshot(s.inst)
       s.inst.mu.Unlock()
       s.inst.snapshot.Store(snap)
+      return nil
   }
 
   // SetPinned sets the Pinned flag. Pinned sessions surface in the dedicated
   // Pinned section of the session list regardless of status/sort/group order.
-  func (i *Instance) SetPinned(v bool) {
-      _ = i.sendSyncErr(func(s *instanceState) error {
-          setPinnedLocked(s, v)
-          return nil
+  // Returns ErrCannotPinArchivedSession if v is true and the session is
+  // already archived.
+  func (i *Instance) SetPinned(v bool) error {
+      return i.sendSyncErr(func(s *instanceState) error {
+          return setPinnedLocked(s, v)
       })
   }
   ```
@@ -408,14 +423,14 @@ Read path (ListSessions / WatchSessions):
   - *Given* a live, non-archived session `S`, *When* `PinSession({session_id: S})` is called, *Then* the response is `PinSessionResponse{}` with no error, and by the time it returns, `s.storage.SaveInstances` has already committed `pinned=true` to ent (matching `ArchiveSession`'s synchronous-durability guarantee).
 - Pin state is server-owned (FR2, FR5).
   - *Given* `PinSession` succeeded, *When* the process restarts and reloads from ent, *Then* `Instance.Pinned` is true (cold-start read-back via `fromInstanceData`).
-- Archived-guard (Resolved Decision #1).
-  - *Given* session `S` has `ArchivedAt != nil`, *When* `PinSession({session_id: S})` is called, *Then* the RPC returns `connect.CodeFailedPrecondition` and no `SaveInstances` call is made.
+- Archived-guard (Resolved Decision #1; enforced in the domain layer per Story 1.4.1, not re-checked here).
+  - *Given* session `S` has `ArchivedAt != nil`, *When* `PinSession({session_id: S})` is called, *Then* `inst.SetPinned(true)` returns `ErrCannotPinArchivedSession`, the handler translates it to `connect.CodeFailedPrecondition`, and no `SaveInstances` call is made.
 - Not-found handling.
   - *Given* `session_id` does not resolve to a live instance, *When* `PinSession`/`UnpinSession` is called, *Then* the RPC returns `connect.CodeNotFound`.
 **Files**: `server/services/session_service.go`
 
 ##### Task 1.7.1a: Implement `PinSession` (~4 min)
-- In `server/services/session_service.go`, immediately after the `UnarchiveSession` handler (after line 4327), add:
+- In `server/services/session_service.go`, immediately after the `UnarchiveSession` handler (after line 4917, corrected 2026-08-21 — re-verify at implementation time), add:
   ```go
   // +api: session:pin
   // PinSession pins a session so it surfaces in the dedicated Pinned section
@@ -434,10 +449,17 @@ Read path (ListSessions / WatchSessions):
       if inst == nil {
           return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
       }
-      if inst.ArchivedAt != nil {
-          return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("cannot pin an archived session: %s", req.Msg.SessionId))
+      // No separate inst.ArchivedAt check here (architecture-review Concern
+      // 1 / pre-mortem Failure #1): SetPinned enforces the archived-guard
+      // itself, inside the same actor-serialized critical section as the
+      // mutation, so a concurrent ArchiveSession landing between a
+      // check-here and the mutation can't produce an illegal state.
+      if err := inst.SetPinned(true); err != nil {
+          if errors.Is(err, session.ErrCannotPinArchivedSession) {
+              return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+          }
+          return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to pin session: %w", err))
       }
-      inst.SetPinned(true)
       if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
           return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
       }
@@ -463,7 +485,12 @@ Read path (ListSessions / WatchSessions):
       if inst == nil {
           return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
       }
-      inst.SetPinned(false)
+      // Unpinning never fails the archived-guard (SetPinned only rejects
+      // v=true against an archived session), but SetPinned's signature is
+      // uniformly `error` now — check it rather than silently discard.
+      if err := inst.SetPinned(false); err != nil {
+          return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to unpin session: %w", err))
+      }
       if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
           return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
       }
@@ -676,8 +703,8 @@ Read path (ListSessions / WatchSessions):
     () => sortedSessions.filter((s) => s.pinned),
     [sortedSessions]
   );
-  const PINNED_GROUP_KEY = "__pinned__";
   ```
+  (No `PINNED_GROUP_KEY` sentinel constant — an earlier planning draft introduced one for a synthetic-group approach that Task 2.4.3a doesn't actually use; the Pinned section is a separate render block, not a `GroupedSessions[]` entry, so there's no group key to key it by. Dropped here per the 2026-08-21 triad review's dead-code finding rather than left declared-but-unused.)
 - Modify the `groupedSessions` `useMemo` (line 648-650) to run `groupSessions()` only over the non-pinned remainder:
   ```ts
   const groupedSessions = useMemo(() => {
@@ -727,26 +754,49 @@ Read path (ListSessions / WatchSessions):
 - *Given* `pinnedSessions.length > 0`, *When* the list renders, *Then* a `role="region" aria-label="Pinned sessions"` container appears above the grouped list, reusing `SessionCard`/`SessionRow` for each pinned session with the same `onTogglePinned` wiring as the normal list.
 **Files**: `web-app/src/components/sessions/SessionList.tsx`
 
-##### Task 2.4.3a: Render the Pinned section (~5 min)
+##### Task 2.4.3a: Extract `renderSessionEntry` and render the Pinned section (~7 min)
+- **Addresses architecture-review Concern 2**: the Pinned section and the grouped-list loop must not be two independently-maintained JSX call sites hand-copying the same growing handler-prop list (an Open/Closed violation — a future prop added to one and forgotten in the other silently no-ops, since props are optional). Extract one render function used by both.
+- Immediately above the `groupedSessions` block, add a local helper closing over every handler prop `SessionList` already receives:
+  ```tsx
+  const renderSessionEntry = (session: Session) =>
+    viewMode === "card" ? (
+      <SessionCard
+        key={session.id}
+        session={session}
+        onSessionClick={onSessionClick}
+        onDeleteSession={onDeleteSession}
+        onPauseSession={onPauseSession}
+        onToggleAutonomousMode={onToggleAutonomousMode}
+        onTogglePinned={onTogglePinned}
+        /* ...every other existing SessionCard handler prop, unchanged... */
+      />
+    ) : (
+      <SessionRowWrapper
+        key={session.id}
+        session={session}
+        onSessionClick={onSessionClick}
+        onDeleteSession={onDeleteSession}
+        onPauseSession={onPauseSession}
+        onToggleAutonomousMode={onToggleAutonomousMode}
+        onTogglePinned={onTogglePinned}
+        /* ...every other existing SessionRowWrapper handler prop, unchanged... */
+      />
+    );
+  ```
+  (Enumerate the exact prop list from the existing grouped-list `<SessionCard>`/`<SessionRowWrapper>` render call sites at implementation time — copy it once, into this one function, rather than leaving two hand-copied call sites to drift.)
 - Add the `// +feature: session-pinned-section` marker to `SessionList.tsx`'s first 10 lines (line 2, currently blank).
-- Immediately before the existing grouped-list render block (~line 1421 for card mode / the row-mode equivalent), add a conditional render:
+- Immediately before the existing grouped-list render block (~line 1421 for card mode / the row-mode equivalent), add a conditional render that calls the shared helper:
   ```tsx
   {pinnedSessions.length > 0 && (
     <div className={pinnedSection} role="region" aria-label="Pinned sessions">
       <h2 className={pinnedSectionTitle}>Pinned</h2>
       <div className={pinnedSectionContent}>
-        {pinnedSessions.map((session) =>
-          viewMode === "card" ? (
-            <SessionCard key={session.id} session={session} /* ...same handler props as the grouped-list SessionCard render... */ onTogglePinned={onTogglePinned} />
-          ) : (
-            <SessionRowWrapper key={session.id} session={session} /* ...same handler props... */ onTogglePinned={onTogglePinned} />
-          )
-        )}
+        {pinnedSessions.map(renderSessionEntry)}
       </div>
     </div>
   )}
   ```
-  (Wire every other handler prop — `onSessionClick`, `onDeleteSession`, etc. — identically to how the grouped-list render passes them, so pinned-section cards/rows have full functionality, not just the pin toggle.)
+- Replace the existing grouped-list `<SessionCard>`/`<SessionRowWrapper>` render call sites (card-mode ~line 1421, row-mode equivalent) with calls to `renderSessionEntry(session)` as well, so there is exactly one place handler props are wired — not a second copy left in place alongside the new one.
 - Import `pinnedSection, pinnedSectionTitle, pinnedSectionContent` from `./SessionList.css`.
 - Files: `web-app/src/components/sessions/SessionList.tsx`
 
@@ -954,8 +1004,73 @@ Read path (ListSessions / WatchSessions):
 - Files: `web-app/src/components/sessions/__tests__/SessionList.pinned.test.tsx`
 
 ##### Task 3.3.2b: Mark frontend registry entry tested (~2 min)
-- Edit the generated `docs/registry/features/frontend/session-pinned-section.json` (and the pin-toggle entry if the scanner splits `session-change-program`/`session-pin-toggle` into separate files): set `"tested": true`, `"testIds"` listing the new describe/test names from Tasks 3.3.1a and 3.3.2a.
-- Files: `docs/registry/features/frontend/session-pinned-section.json` (and/or the `session-pin-toggle` equivalent)
+- Edit the generated `docs/registry/features/frontend/session-pinned-section.json` (and the pin-toggle entry if the scanner splits `session-change-program`/`session-pin-toggle` into separate files): set `"tested": true`, `"testIds"` listing the new describe/test names from Tasks 3.3.1a, 3.3.2a, and 3.3.3a.
+
+---
+
+#### Story 3.3.3: Optimistic-update rollback test (closes architecture-review Concern 3 / pre-mortem Failure #4)
+**As a** user, **I want** a failed pin/unpin RPC to roll the UI back to the pre-click state, **so that** the toggle never shows a state the server didn't actually persist.
+**Acceptance Criteria**:
+- *Given* `clientRef.current.pinSession` rejects, *When* `pinSession(id)` is called, *Then* the dispatched rollback session deep-equals the pre-optimistic `previous` object exactly (not just `pinned` flipped back) and `setError` fires with a message naming the failed action.
+- Mirror the same case for `unpinSession`.
+**Files**: `web-app/src/lib/hooks/__tests__/useSessionService.test.ts`
+
+##### Task 3.3.3a: Add the rollback test cases (~5 min)
+- **This is the one gap architecture-review Concern 3 called out explicitly**: Epic 2.1's optimistic dispatch-then-rollback logic (Task 2.1.1a) had zero test coverage anywhere in the original plan. Do not skip this task.
+- In `web-app/src/lib/hooks/__tests__/useSessionService.test.ts`, add (mirroring however `archiveSession`'s existing tests mock `clientRef.current` and assert dispatched actions):
+  ```tsx
+  describe("pinSession / unpinSession rollback", () => {
+    it("should roll back to the previous session when the pin RPC rejects", async () => {
+      const previous = makeSession({ id: "s1", pinned: false, title: "unchanged-title" });
+      mockClient.pinSession.mockRejectedValueOnce(new Error("cannot pin an archived session"));
+      const { result } = renderHookWithStore({ sessions: [previous] });
+
+      await act(() => result.current.pinSession("s1"));
+
+      // Assert the rollback dispatch restores the entire previous object, not
+      // just `pinned` — proves no other field is altered as a side effect.
+      expect(dispatchedUpsertSession()).toEqual(previous);
+      expect(dispatchedError()).toMatch(/failed to pin session/i);
+    });
+
+    it("should roll back to the previous session when the unpin RPC rejects", async () => {
+      const previous = makeSession({ id: "s1", pinned: true });
+      mockClient.unpinSession.mockRejectedValueOnce(new Error("internal error"));
+      const { result } = renderHookWithStore({ sessions: [previous] });
+
+      await act(() => result.current.unpinSession("s1"));
+
+      expect(dispatchedUpsertSession()).toEqual(previous);
+      expect(dispatchedError()).toMatch(/failed to unpin session/i);
+    });
+  });
+  ```
+- Run `cd web-app && npx jest --no-coverage --testPathPatterns="useSessionService.test"` to verify.
+- Files: `web-app/src/lib/hooks/__tests__/useSessionService.test.ts`
+
+---
+
+### Epic 3.2b: Backend Unit/Integration Tests for the Domain-Layer Guard and Persistence Round-Trip
+
+**Goal**: Cover the two backend layers validation.md specifies that Epic 3.2's RPC-level `session_pin_test.go` doesn't reach on its own: the actor-setter's archived-guard (now enforced inside `setPinnedLocked` per Story 1.4.1) and the ent round-trip.
+
+#### Story 3.2b.1: `SetPinned` domain-layer guard test
+**Acceptance Criteria**:
+- *Given* an `Instance` with `ArchivedAt != nil`, *When* `inst.SetPinned(true)` is called directly (not through the `PinSession` RPC), *Then* it returns `ErrCannotPinArchivedSession` and `Pinned` stays false — proves the guard holds for every caller, not just the RPC handler.
+**Files**: `session/instance_actor_setters_test.go`
+
+##### Task 3.2b.1a: Add `TestInstance_SetPinned_should_RejectPin_When_SessionIsArchived` (~4 min)
+- In `session/instance_actor_setters_test.go`, following the file's existing `Instance`-construction/fixture pattern for actor-setter tests (e.g. however `SetAutoYes`/`SetArchivedAt` are tested), add a test that constructs an `Instance` with a non-nil `ArchivedAt`, calls `SetPinned(true)`, and asserts `errors.Is(err, session.ErrCannotPinArchivedSession)` and `inst.Snapshot().Pinned == false`. Add a second case calling `SetPinned(false)` on the same archived instance and asserting it succeeds (unpin is never guarded).
+- Files: `session/instance_actor_setters_test.go`
+
+#### Story 3.2b.2: ent round-trip test
+**Acceptance Criteria**:
+- *Given* `Pinned: true` is saved via one ent client/repository instance, *When* a second, fresh client opens against the same DB file (simulating cold start), *Then* the reloaded `InstanceData.Pinned == true`.
+**Files**: `session/ent_repository_test.go`
+
+##### Task 3.2b.2a: Add `TestEntRepository_should_RoundTripPinnedTrue_When_ReloadedFromFreshClient` (~4 min)
+- In `session/ent_repository_test.go`, following the file's existing round-trip test pattern for other boolean fields (`Hidden`/`AutoYes`), save an `InstanceData{Pinned: true, ...}` via `Create`, open a second `ent_repository` against the same test DB file, read the row back, and assert `Pinned == true`.
+- Files: `session/ent_repository_test.go`
 
 ---
 
@@ -991,6 +1106,22 @@ Read path (ListSessions / WatchSessions):
       await page.getByRole("menuitemcheckbox", { name: /^unpin /i }).click();
       await expect(page.getByTestId("session-pin-toggle")).toHaveAttribute("aria-checked", "false");
     });
+
+    test("pin state survives a page reload", async ({ page }) => {
+      // Closes the coverage gap flagged by the 2026-08-21 cross-artifact consistency
+      // check: FR5/AC "Pin state persists across browser reloads" previously had no
+      // test exercising an actual client-side reload — Story 1.7.1's AC only covered
+      // a server-process restart, not this. Proves the state is server-owned (refetched
+      // via ListSessions on load), not held in component/localStorage state that a
+      // reload would silently reset.
+      // ...pin a session first...
+      await page.getByRole("button", { name: /more session actions/i }).first().click();
+      await page.getByRole("menuitemcheckbox", { name: /^pin /i }).click();
+      await expect(page.getByRole("region", { name: /pinned sessions/i })).toBeVisible();
+      await page.reload();
+      await expect(page.getByRole("region", { name: /pinned sessions/i })).toBeVisible();
+      await expect(page.getByTestId("session-pin-toggle")).toHaveAttribute("aria-checked", "true");
+    });
   });
   ```
   (No `waitForTimeout` anywhere; locators are `data-testid`/ARIA role only, per convention. Fill in the actual session-creation helper from `tests/e2e/pages/` used by neighboring specs — not fully specified here since the exact helper wasn't traced in this planning pass; the implementer should mirror whatever the nearest existing spec, e.g. one covering the autonomous-mode toggle, uses for session setup.)
@@ -1002,10 +1133,29 @@ Read path (ListSessions / WatchSessions):
 
 ---
 
+## Effort Rollup (added 2026-08-21 — triad review Engineering-lens gap)
+
+Per-task estimates above (2–7 min each) are edit-time estimates for a single, focused
+change — they don't include build/test iteration, context-switching between ~24 touched
+files across 6 architectural layers (ent → proto → actor → adapter → RPC → 6-layer
+frontend prop-drilling), or debugging. Rolling up to Story/Epic-level bands for
+scheduling purposes:
+
+| Phase | Epics | Task-time sum | Realistic band (incl. build/test/debug cycles) |
+|---|---|---|---|
+| 1 — Backend data model & persistence | 1.1–1.7 | ~25 min | 2–3h |
+| 2 — Frontend hook, wiring, UI | 2.1–2.4 | ~40 min | 3–4h |
+| 3 — Registry, tests, ship-readiness | 3.1–3.4 | ~50 min | 3–4h |
+| **Total** | | **~2h task-time** | **8–11h** (roughly 1–1.5 working days) |
+
+This is a small additive feature copying five existing identical field-shapes end to
+end (Step 0.5), not a novel one — the band above is still small relative to most
+features, just not the ~2h the raw per-task sum would literally suggest.
+
 ## Final Verification
 
-- `make build && make test` — full backend build + test suite, including `session_pin_test.go`.
+- `make build && make test` — full backend build + test suite, including `session_pin_test.go`, `instance_actor_setters_test.go`'s new case, and `ent_repository_test.go`'s new case.
 - `make quick-check` — build + test + lint.
-- `cd web-app && npx jest --no-coverage` — full frontend test suite, including the two new files.
-- `cd tests/e2e && npx playwright test session-pin.spec.ts` — e2e.
+- `cd web-app && npx jest --no-coverage` — full frontend test suite, including the three new/extended files (`SessionActionsOverflow.test.tsx`, `SessionList.pinned.test.tsx`, `useSessionService.test.ts`).
+- `cd tests/e2e && npx playwright test session-pin.spec.ts` — e2e, including the reload-persistence case.
 - `make registry-generate && git diff --exit-code docs/registry/features/` — confirms no registry drift (matches `build.yml`'s CI gate, pitfalls.md §4).

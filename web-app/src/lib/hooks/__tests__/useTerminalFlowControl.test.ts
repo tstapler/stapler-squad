@@ -130,6 +130,102 @@ describe('useTerminalFlowControl', () => {
     });
   });
 
+  describe('isInputChunking (Story 1.2.6)', () => {
+    it('sendInput_should_SetChunkingFlagUntilLastChunk_When_2000BytePaste', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+      expect(result.current.isInputChunking()).toBe(false);
+
+      act(() => {
+        result.current.sendInput('a'.repeat(2000)); // 4 chunks of <= 512 B
+      });
+      expect(pushMessageFn).toHaveBeenCalledTimes(1);
+      expect(result.current.isInputChunking()).toBe(true);
+
+      act(() => { jest.advanceTimersByTime(10); });
+      act(() => { jest.advanceTimersByTime(10); });
+      expect(pushMessageFn).toHaveBeenCalledTimes(3);
+      expect(result.current.isInputChunking()).toBe(true);
+
+      act(() => { jest.advanceTimersByTime(10); });
+      expect(pushMessageFn).toHaveBeenCalledTimes(4);
+      expect(result.current.isInputChunking()).toBe(false);
+    });
+
+    it('sendInput_should_ClearChunkingFlag_When_SessionChangesMidPaste', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result, rerender } = renderHook(
+        (props: { sessionId: string }) => useTerminalFlowControl({ ...options, sessionId: props.sessionId }),
+        { initialProps: { sessionId: 'test-session' } },
+      );
+      act(() => {
+        result.current.sendInput('a'.repeat(2000));
+      });
+      expect(result.current.isInputChunking()).toBe(true);
+
+      rerender({ sessionId: 'other-session' });
+      act(() => { jest.advanceTimersByTime(50); });
+
+      expect(result.current.isInputChunking()).toBe(false);
+      expect(pushMessageFn).toHaveBeenCalledTimes(1); // remaining chunks aborted
+    });
+
+    it('sendInput_should_ClearChunkingFlag_When_ConnectionDropsMidPaste', () => {
+      const { options, isConnectedRef } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+      act(() => {
+        result.current.sendInput('a'.repeat(2000));
+      });
+      expect(result.current.isInputChunking()).toBe(true);
+
+      isConnectedRef.current = false;
+      act(() => { jest.advanceTimersByTime(10); });
+      expect(result.current.isInputChunking()).toBe(false);
+    });
+
+    it('sendInput_should_ClearChunkingFlag_When_PushThrowsMidPaste', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+      act(() => {
+        result.current.sendInput('a'.repeat(2000));
+      });
+      pushMessageFn.mockImplementation(() => { throw new Error('boom'); });
+      act(() => { jest.advanceTimersByTime(10); });
+      expect(result.current.isInputChunking()).toBe(false);
+    });
+
+    it('sendInput_should_KeepChunkingFlag_When_OneOfTwoOverlappingPastesFinishesFirst', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+      // Sampled at each push: B's second chunk goes out right after A's final chunk finishes A,
+      // before B re-adds its own token, so it sees only what A's finish left behind.
+      const flagAtPush: boolean[] = [];
+      pushMessageFn.mockImplementation(() => { flagAtPush.push(result.current.isInputChunking()); });
+      act(() => {
+        result.current.sendInput('a'.repeat(1100)); // paste A: 3 chunks
+      });
+      act(() => { jest.advanceTimersByTime(10); }); // A is on chunk 2
+      act(() => {
+        result.current.sendInput('b'.repeat(2000)); // paste B: 4 chunks, overlaps A
+      });
+      act(() => { jest.advanceTimersByTime(10); }); // pushes: A3 (finishes A), then B2
+      expect(flagAtPush).toHaveLength(5); // A1, A2, B1, A3, B2
+      expect(flagAtPush[4]).toBe(true);
+
+      act(() => { jest.advanceTimersByTime(100); });
+      expect(result.current.isInputChunking()).toBe(false);
+    });
+
+    it('sendInput_should_NotSetChunkingFlag_When_512BytesOrFewer', () => {
+      const { options } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+      act(() => {
+        result.current.sendInput('a'.repeat(512));
+      });
+      expect(result.current.isInputChunking()).toBe(false);
+    });
+  });
+
   describe('resize', () => {
     it('should send resize message', () => {
       const { options, pushMessageFn } = createTestOptions();
@@ -542,6 +638,85 @@ describe('useTerminalFlowControl', () => {
           call.data.value.rows === 24
       );
       expect(staleResize).toBeUndefined();
+    });
+
+    // Story 2.1.5: settle-driven resizes skip only the bounce hold.
+    describe('bypassBounceHold', () => {
+      const resizeCalls = (fn: jest.Mock) => fn.mock.calls.filter(([m]) => m.data.case === 'resize');
+      const paneCalls = (fn: jest.Mock) => fn.mock.calls.filter(([m]) => m.data.case === 'currentPaneRequest');
+
+      // History [A, B], last sent C, so resizing back to A is a bounce.
+      function seedBounceState() {
+        const ctx = createTestOptions();
+        const hook = renderHook(() => useTerminalFlowControl(ctx.options));
+        for (const [c, r] of [[100, 30], [120, 40], [140, 50]]) {
+          act(() => { hook.result.current.resize(c, r); });
+          act(() => { jest.advanceTimersByTime(201); });
+        }
+        ctx.pushMessageFn.mockClear();
+        return { ...ctx, result: hook.result };
+      }
+
+      it('resize_should_SendImmediatelyAndResetStreak_When_BypassBounceHoldAndDimsInHistory', () => {
+        const { pushMessageFn, result } = seedBounceState();
+
+        act(() => { result.current.resize(100, 30, false, { bypassBounceHold: true }); });
+        expect(resizeCalls(pushMessageFn)).toHaveLength(1); // 0 ms, no timer
+        expect(paneCalls(pushMessageFn)).toHaveLength(0);
+
+        act(() => { jest.advanceTimersByTime(100); });
+        expect(paneCalls(pushMessageFn)).toHaveLength(1);
+
+        // Streak is 0: the next non-bypassed bounce (120x40 is in history) holds the base 3000 ms, not 6000.
+        pushMessageFn.mockClear();
+        act(() => { result.current.resize(120, 40); });
+        act(() => { jest.advanceTimersByTime(2999); });
+        expect(resizeCalls(pushMessageFn)).toHaveLength(0);
+        act(() => { jest.advanceTimersByTime(2); });
+        expect(resizeCalls(pushMessageFn)).toHaveLength(1);
+      });
+
+      it('resize_should_HoldThreeThenSixSeconds_When_NoBypassAndDimsInHistory', () => {
+        const { pushMessageFn, result } = seedBounceState();
+
+        act(() => { result.current.resize(100, 30); });
+        act(() => { jest.advanceTimersByTime(2999); });
+        expect(resizeCalls(pushMessageFn)).toHaveLength(0);
+        act(() => { jest.advanceTimersByTime(2); });
+        expect(resizeCalls(pushMessageFn)).toHaveLength(1);
+      });
+
+      it('resize_should_HoldSixSeconds_When_SecondConsecutiveBounceWithoutBypass', () => {
+        const { pushMessageFn, result } = seedBounceState();
+
+        act(() => { result.current.resize(100, 30); }); // streak 1: 3000 ms
+        act(() => { result.current.resize(120, 40); }); // replaces pending; streak 2: 6000 ms
+        act(() => { jest.advanceTimersByTime(5999); });
+        expect(resizeCalls(pushMessageFn)).toHaveLength(0);
+        act(() => { jest.advanceTimersByTime(2); });
+        expect(resizeCalls(pushMessageFn)).toHaveLength(1);
+      });
+
+      it('resize_should_StillDedupe_When_BypassAndDimsUnchanged', () => {
+        const { pushMessageFn, result } = seedBounceState();
+
+        act(() => { result.current.resize(140, 50, false, { bypassBounceHold: true }); });
+        act(() => { jest.advanceTimersByTime(10_000); });
+        expect(resizeCalls(pushMessageFn)).toHaveLength(0);
+      });
+
+      it('resize_should_StillThrottle_When_BypassWithin200msOfLastSend', () => {
+        const { pushMessageFn, result } = seedBounceState();
+
+        act(() => { result.current.resize(100, 30, false, { bypassBounceHold: true }); });
+        expect(resizeCalls(pushMessageFn)).toHaveLength(1);
+        pushMessageFn.mockClear();
+
+        act(() => { result.current.resize(120, 40, false, { bypassBounceHold: true }); });
+        expect(resizeCalls(pushMessageFn)).toHaveLength(0); // deferred by the 200 ms throttle
+        act(() => { jest.advanceTimersByTime(201); });
+        expect(resizeCalls(pushMessageFn)).toHaveLength(1);
+      });
     });
   });
 

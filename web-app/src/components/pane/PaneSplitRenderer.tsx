@@ -258,6 +258,7 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
     onForkFromCheckpoint: actions.onForkFromCheckpoint,
     onSetRateLimitEnabled: actions.onSetRateLimitEnabled,
     onToggleAutonomousMode: actions.onToggleAutonomousMode,
+    onTogglePinned: actions.onTogglePinned,
     onToggleAutoApprove: actions.onToggleAutoApprove,
     onSteerAutonomousSession: actions.onSteerAutonomousSession,
     onClearConversationState: actions.onClearConversationState,

@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/memory"
 	"github.com/tstapler/stapler-squad/session/sshremote"
+	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/telemetry"
 
@@ -423,7 +424,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			services.ProgramCLIFlagProbeGatedMethod,
 		)),
 	)
+	// Build the capture tap registry now so an env-enabled tap logs its ACTIVE warning at startup.
+	_ = streamhub.DefaultTapRegistry()
 	path, handler := sessionv1connect.NewSessionServiceHandler(deps.SessionService, sessionOpts...)
+	handler = services.WithRequestHost(handler)
 	apiPath := "/api" + path
 
 	// Register StreamingWSBridge for server-streaming Watch* RPCs so browsers use
@@ -528,6 +532,25 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		guidanceRequestAPIPath := "/api" + guidanceRequestPath
 		srv.RegisterConnectHandler(guidanceRequestAPIPath, http.StripPrefix("/api", guidanceRequestHandler))
 		log.Info("Registered GuidanceRequestService handler", "path", guidanceRequestAPIPath)
+	}
+
+	// Register DiagnosticService handler ("Diagnose & Nudge", backlog item
+	// 68964304): AssembleDiagnosticBundle/DispatchDiagnose. deps.SessionService
+	// satisfies services.DiagnosticSpawner (SpawnDiagnosticSession); a nil
+	// *SessionService (same nil-interface-boxing hazard the GuidanceRequestService
+	// block above documents) is guarded by only assigning it when non-nil.
+	if deps.Storage != nil {
+		var diagnosticSpawner services.DiagnosticSpawner
+		if deps.SessionService != nil {
+			diagnosticSpawner = deps.SessionService
+		}
+		diagnosticSvc := services.NewDiagnosticService(deps.Storage, diagnosticSpawner)
+		diagnosticSvc.SetPoller(deps.ReviewQueuePoller)
+		diagnosticSvc.SetExternalDiscovery(deps.ExternalDiscovery)
+		diagnosticPath, diagnosticHandler := sessionv1connect.NewDiagnosticServiceHandler(diagnosticSvc, ConnectOptions(deps.ErrorRegistry)...)
+		diagnosticAPIPath := "/api" + diagnosticPath
+		srv.RegisterConnectHandler(diagnosticAPIPath, http.StripPrefix("/api", diagnosticHandler))
+		log.Info("Registered DiagnosticService handler", "path", diagnosticAPIPath)
 	}
 
 	// Register RemoteService handler (ssh-remote-workspaces Epic 3.3: TOFU
@@ -734,6 +757,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// PR bodies can link back to the backlog item instead of embedding a bare UUID.
 	if deps.BacklogLifecycleListener != nil {
 		deps.BacklogLifecycleListener.SetDashboardBaseURLFn(hookBaseURLFn)
+		deps.BacklogLifecycleListener.SetNoopDispatchThresholdFn(func() int {
+			return config.LoadConfig().NoopDispatchThresholdOrDefault()
+		})
 	}
 	// Wire the review queue poller for immediate queue checks on new approvals (Story 3, Task 3.1)
 	approvalHandler.SetQueueChecker(deps.ReviewQueuePoller)
@@ -1176,16 +1202,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		go orphanSweeper.Start(serverCtx)
 	}
 
-	// Start leaked-control-mode-client sweeper (periodic counterpart to the
-	// one-time startup cleanup in main.go's runtime phase — see
-	// StartLeakedControlModeSweeper's doc comment and BUG-042's 2026-09-25
-	// recurrence for why the startup-only cleanup isn't sufficient on its own).
-	// Gated on config.IsIsolatedInstance() exactly like OrphanedTmuxSweeper:
-	// a named instance (STAPLER_SQUAD_INSTANCE set) shares the real default
-	// tmux socket with the production instance without getting its own socket
-	// (see IsNamedInstance's doc comment) — this sweeper's own-spawn-registry
-	// check would see the *production* process's legitimate control-mode
-	// clients as untracked and kill them, so it must not run there.
+	// Start leaked-control-mode-client sweeper, the periodic counterpart to
+	// main.go's one-time startup cleanup — see StartLeakedControlModeSweeper's
+	// doc comment. Gated on IsIsolatedInstance like OrphanedTmuxSweeper: a
+	// named instance shares the real default tmux socket without its own, so
+	// this would otherwise kill the production instance's own live clients.
 	if !config.IsIsolatedInstance() {
 		go tmux.StartLeakedControlModeSweeper(serverCtx, "")
 	}

@@ -47,6 +47,10 @@ func TestClassifyHeadlessCallError_should_BucketErrorsForLogGrepping(t *testing.
 		{"idle timeout (stream stalled)", headless.ErrIdleTimeout, 5 * time.Minute, "idle"},
 		{"wrapped idle timeout", fmt.Errorf("headless call ended: %w", headless.ErrIdleTimeout), 5 * time.Minute, "idle"},
 		{"idle timeout even with elapsed near budget must not fall into the timeout heuristic", headless.ErrIdleTimeout, triageCallBudget - time.Second, "idle"},
+		{"fan-out ceiling", &headless.FanoutCeilingError{Turns: 700, Subagents: 121, MaxTurns: 600, MaxSubagents: 120}, 40 * time.Minute, "fanout_ceiling"},
+		{"wrapped fan-out ceiling near budget must not fall into the timeout heuristic", fmt.Errorf("headless call ended: %w", &headless.FanoutCeilingError{}), triageCallBudget - time.Second, "fanout_ceiling"},
+		{"cost ceiling exceeded", fmt.Errorf("headless call ended: %w", &headless.CostCeilingError{SpendUSD: 30}), 5 * time.Minute, "cost_ceiling"},
+		{"cost ceiling even with elapsed near budget must not fall into the timeout heuristic", headless.ErrCostCeilingExceeded, triageCallBudget - time.Second, "cost_ceiling"},
 		{"ctx deadline exceeded", context.DeadlineExceeded, 5 * time.Minute, "timeout"},
 		{"wrapped ctx deadline exceeded", fmt.Errorf("headless call ended: %w", context.DeadlineExceeded), 5 * time.Minute, "timeout"},
 		{"elapsed within budget tail even without deadline error", errors.New("some other error"), 3*time.Hour - 4*time.Second, "timeout"},
@@ -6345,4 +6349,39 @@ func TestStopLiveWorkSessions_should_LogAndContinue_When_SessionStopperReturnsEr
 	updated, err := storage.GetItemSession(t.Context(), workSession.ID)
 	require.NoError(t, err)
 	assert.NotNil(t, updated.EndedAt, "session must still be marked ended despite the stop error, matching best-effort semantics")
+}
+
+// A repeated_noop_dispatch row must stop any further work-session spawn; once
+// the row resolves, dispatch proceeds again.
+func TestSpawnSessionFromItem_should_Refuse_When_RepeatedNoopDispatchRowOpen(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+	createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "noop gate item", RepoPath: repoPath, SkipTriage: true, SkipPlanning: true,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{{Index: 0, Text: "test", Status: "pending"}},
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+	_, err = svc.TransitionBacklogItemStatus(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{ItemId: itemID, TargetStatus: "ready"}))
+	require.NoError(t, err)
+
+	applied, err := storage.MarkStuck(ctx, itemID, domain.StuckReasonRepeatedNoopDispatch, session.BacklogStatusReady, "3 no-op sessions")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "repeated_noop_dispatch")
+
+	_, err = storage.ResolveStuck(ctx, itemID, domain.StuckReasonRepeatedNoopDispatch)
+	require.NoError(t, err)
+	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
 }

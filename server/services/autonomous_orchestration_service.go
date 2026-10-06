@@ -377,7 +377,7 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 							// synchronously, exactly like the review branch does, so the respawn
 							// below sees an accurately-closed session instead of racing its own
 							// stale liveness signal.
-							if endErr := concreteStorage.UpdateItemSessionEnded(ctx, is.ID, time.Now()); endErr != nil {
+							if endErr := concreteStorage.UpdateItemSessionEnded(ctx, is.ID, time.Now()); endErr != nil { //nolint:silenttransition // AutoRespawnAutonomousWork -> tombstoneOrphanWorkSessions/findActiveWorkSession blocks respawn with notifyRespawnBlockedByActiveSession
 								log.Warn("[AutonomousDriver] onAutonomousDriverComplete: UpdateItemSessionEnded(work, stuck) failed", "item", item.ID, "itemSession", is.ID, "err", endErr)
 								// Mirrors the SessionRoleReview branch's notifyStuckBookkeepingFailed
 								// call below: this bookkeeping write is what makes a stuck session visible

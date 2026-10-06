@@ -23,6 +23,12 @@ jest.mock("@/lib/hooks/useBacklogService", () => ({
   }),
 }));
 
+jest.mock("@/lib/hooks/useDiagnoseAction", () => ({
+  useDiagnoseAction: () => ({ dispatchDiagnose: jest.fn() }),
+}));
+
+jest.mock("@/lib/analytics", () => ({ useAnalytics: () => ({ track: jest.fn() }) }));
+
 import { StuckItemsSection } from "./StuckItemsSection";
 
 function makeItem(overrides: Partial<StuckBacklogItem> = {}): StuckBacklogItem {

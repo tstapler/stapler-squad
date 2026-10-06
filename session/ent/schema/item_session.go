@@ -112,6 +112,10 @@ func (ItemSession) Fields() []ent.Field {
 			Optional().
 			Default("").
 			Comment("Identifies the physical stapler-squad process/host that claimed this item (SpawnSessionFromItem) or attached this session (AttachSessionToItem, using the attaching process's own identity). A random UUID generated once and persisted via Config.GetOrCreateClaimantHostID, stable across restarts of the same process/config dir. Not STAPLER_SQUAD_INSTANCE (namespaces state on one machine) and not session/contexts.go's CloudContext.InstanceID (a cloud provider instance id, unpopulated locally). Purely descriptive; empty for rows created before this field existed."),
+		field.Time("diagnose_nudge_attempted_at").
+			Optional().
+			Nillable().
+			Comment("Set exactly once, atomically (EntRepository.ClaimDiagnoseNudgeAttempt's WHERE diagnose_nudge_attempted_at IS NULL), the moment a session_role=diagnose ItemSession's dispatched agent first attempts a diagnose_nudge_session write. Independent of the item-level diagnose_nudge_count/diagnose_next_eligible_at cap on BacklogStuckState (session/diagnose_nudge.go) — that bounds total nudges per item across many dispatches, this stops a SINGLE dispatch from writing twice if its own LLM retries after an ambiguous MCP tool response. Always empty for every other session_role."),
 	}
 }
 

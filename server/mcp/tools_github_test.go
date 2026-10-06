@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -254,4 +255,114 @@ func TestCreateSessionForPR_should_ReturnExistingSession_When_PRAlreadyHasOne(t 
 	require.True(t, ok, "expected a session in the short-circuit result")
 	assert.Equal(t, sessionTitle, sessionField["id"])
 	assert.Nil(t, m["still_creating"], "the short-circuit path must never set still_creating")
+}
+
+// newProgramTestGithubHandlers wires githubHandlers to a real, config-isolated
+// *services.SessionService (via newWorktreeGuardHandlers, defined in
+// tools_lifecycle_worktree_guard_test.go) and an empty PR cache, so
+// create_session_for_pr's PR-already-has-a-session short-circuit never
+// triggers and the call reaches svc.CreateSession for real.
+func newProgramTestGithubHandlers(t *testing.T) *githubHandlers {
+	t.Helper()
+	lh := newWorktreeGuardHandlers(t)
+	return &githubHandlers{cache: gh.NewUserPRCache(), store: lh.store, svc: lh.svc}
+}
+
+// createSessionForPRArgs builds a minimal create_session_for_pr request map
+// against a real git repo (create_session_for_pr always uses
+// SESSION_TYPE_NEW_WORKTREE, which needs a resolvable default branch to
+// branch the new worktree from — a bare t.TempDir() isn't a git repo at all).
+// owner/repo/pr_number are otherwise unused beyond the collision/short-circuit
+// checks, since the cache is empty.
+func createSessionForPRArgs(t *testing.T, title string, prNumber int, extra map[string]interface{}) map[string]interface{} {
+	t.Helper()
+	args := map[string]interface{}{
+		"owner":     "tstapler",
+		"repo":      "stapler-squad",
+		"branch":    fmt.Sprintf("feature/program-test-%d", prNumber),
+		"pr_number": float64(prNumber),
+		"path":      initGitRepo(t),
+		"title":     title,
+	}
+	for k, v := range extra {
+		args[k] = v
+	}
+	return args
+}
+
+// TestCreateSessionForPR_should_AcceptCustomProgram_When_RegisteredViaUpsertProgramConfig
+// pins AC2: create_session_for_pr must accept a custom program, for parity
+// with create_session's identical AC1 coverage.
+func TestCreateSessionForPR_should_AcceptCustomProgram_When_RegisteredViaUpsertProgramConfig(t *testing.T) {
+	resetCreateSessionLimiterForTest(t)
+	ghHandlers := newProgramTestGithubHandlers(t)
+	upsertTestCustomProgram(t, ghHandlers.svc)
+
+	res, err := ghHandlers.createSessionForPR(context.Background(), makeToolReq(createSessionForPRArgs(t, "program-pr-test-custom", 101, map[string]interface{}{
+		"program": testCustomProgramID,
+	})))
+	require.NoError(t, err)
+
+	m := parseResult(t, res)
+	require.True(t, m["success"].(bool), "expected success, got: %+v", m)
+	t.Cleanup(func() {
+		destroyMCPCreatedSession(t, &lifecycleHandlers{svc: ghHandlers.svc}, m["session"].(map[string]interface{})["id"].(string))
+	})
+	assert.Empty(t, m["program_warning"])
+}
+
+// TestCreateSessionForPR_should_AcceptAiderUnchanged_When_ProgramIsExplicitlyAider
+// is AC3's parity regression pin for create_session_for_pr.
+func TestCreateSessionForPR_should_AcceptAiderUnchanged_When_ProgramIsExplicitlyAider(t *testing.T) {
+	resetCreateSessionLimiterForTest(t)
+	ghHandlers := newProgramTestGithubHandlers(t)
+
+	res, err := ghHandlers.createSessionForPR(context.Background(), makeToolReq(createSessionForPRArgs(t, "program-pr-test-aider", 102, map[string]interface{}{
+		"program": "aider",
+	})))
+	require.NoError(t, err)
+
+	m := parseResult(t, res)
+	require.True(t, m["success"].(bool), "expected success, got: %+v", m)
+	t.Cleanup(func() {
+		destroyMCPCreatedSession(t, &lifecycleHandlers{svc: ghHandlers.svc}, m["session"].(map[string]interface{})["id"].(string))
+	})
+	assert.Empty(t, m["program_warning"])
+}
+
+// TestCreateSessionForPR_should_DefaultToClaudeProgram_When_ProgramOmitted
+// pins AC3's default-unchanged claim, parity with create_session.
+func TestCreateSessionForPR_should_DefaultToClaudeProgram_When_ProgramOmitted(t *testing.T) {
+	resetCreateSessionLimiterForTest(t)
+	ghHandlers := newProgramTestGithubHandlers(t)
+
+	res, err := ghHandlers.createSessionForPR(context.Background(), makeToolReq(createSessionForPRArgs(t, "program-pr-test-default", 103, nil)))
+	require.NoError(t, err)
+
+	m := parseResult(t, res)
+	require.True(t, m["success"].(bool), "expected success, got: %+v", m)
+	t.Cleanup(func() {
+		destroyMCPCreatedSession(t, &lifecycleHandlers{svc: ghHandlers.svc}, m["session"].(map[string]interface{})["id"].(string))
+	})
+	assert.Empty(t, m["program_warning"], "the default program must never itself warn")
+}
+
+// TestCreateSessionForPR_should_SetProgramWarning_When_ProgramNotInKnownList
+// pins AC4's non-fatal-warning mechanism, parity with create_session.
+func TestCreateSessionForPR_should_SetProgramWarning_When_ProgramNotInKnownList(t *testing.T) {
+	resetCreateSessionLimiterForTest(t)
+	ghHandlers := newProgramTestGithubHandlers(t)
+
+	res, err := ghHandlers.createSessionForPR(context.Background(), makeToolReq(createSessionForPRArgs(t, "program-pr-test-typo", 104, map[string]interface{}{
+		"program": "clade",
+	})))
+	require.NoError(t, err)
+
+	m := parseResult(t, res)
+	require.True(t, m["success"].(bool), "an unrecognized program must warn, not reject, got: %+v", m)
+	t.Cleanup(func() {
+		destroyMCPCreatedSession(t, &lifecycleHandlers{svc: ghHandlers.svc}, m["session"].(map[string]interface{})["id"].(string))
+	})
+	warning, _ := m["program_warning"].(string)
+	assert.Contains(t, warning, "clade")
 }

@@ -24,6 +24,9 @@
 //   - nolegacylog: forbids log.<Level>Log().Printf(...) (the legacy,
 //     non-JSON logging API) in files already migrated to the structured
 //     log.Info/Warn/Error/Debug API
+//   - novartestseam: detects a package-level var whose only reassignments
+//     live in _test.go files — should be a const injected as a function
+//     parameter instead of a mutated global test seam
 package main
 
 import (
@@ -37,6 +40,7 @@ import (
 	"github.com/tstapler/stapler-squad/tools/lint/norawexec"
 	"github.com/tstapler/stapler-squad/tools/lint/norawghrequest"
 	"github.com/tstapler/stapler-squad/tools/lint/norawgitopen"
+	"github.com/tstapler/stapler-squad/tools/lint/novartestseam"
 	"github.com/tstapler/stapler-squad/tools/lint/silenttransition"
 	"github.com/tstapler/stapler-squad/tools/lint/tmuxsocketscope"
 )
@@ -51,6 +55,7 @@ func main() {
 		norawexec.Analyzer,
 		norawghrequest.Analyzer,
 		norawgitopen.Analyzer,
+		novartestseam.Analyzer,
 		silenttransition.Analyzer,
 		tmuxsocketscope.Analyzer,
 	)

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -172,6 +173,14 @@ type BacklogService struct {
 	// the WIP cap by each computing freeSlots from their own stale snapshot
 	// (PR #199 review F2).
 	dequeueMu sync.Mutex
+
+	// claimWiring holds the cross_host_claim_dedup checker and dispute resolver
+	// (backlog_service_claim.go). It is atomic because SetClaimChecker runs at
+	// startup while RPCs and the dequeue sweep already read it. nil means
+	// unimplemented: everything reads as unclaimed. claimDedupFlag overrides the
+	// live feature-flag read (tests only).
+	claimWiring    atomic.Pointer[claimWiring]
+	claimDedupFlag func() bool
 
 	// spawnInFlight is a per-backlog-item "at most one work-session spawn in
 	// flight" set, keyed by item ID, storing struct{} — the same LoadOrStore/
@@ -1058,6 +1067,8 @@ func backlogItemToProto(item *session.BacklogItemData, engine session.WorkflowEn
 		CreatedAt:          timestamppb.New(item.CreatedAt),
 		UpdatedAt:          timestamppb.New(item.UpdatedAt),
 		AllowedTransitions: allowedTransitionStrings(engine, session.BacklogStatus(item.Status), session.BuildStageConfigSnapshotFallback(item)),
+		DuplicateRef:       duplicateRefPending(item),
+		DuplicatePending:   duplicateRefPending(item) != "",
 		PublicId:           item.PublicIDRaw,
 	}
 	if item.ExternalURL != "" {
@@ -1396,4 +1407,13 @@ func (s *BacklogService) checkWorkStageBudget(itemID string, thresholdUSD *float
 		return
 	}
 	log.WarningLog().Printf("[BudgetWarning] item=%s stage=work threshold=%.2f spent=%.2f", itemID, *thresholdUSD, totalCostUSD)
+}
+
+// duplicateRefPending returns the claimed duplicate_ref while item sits in
+// review awaiting confirmation, "" otherwise. Needs eagerly loaded ItemSessions.
+func duplicateRefPending(item *session.BacklogItemData) string {
+	if item.Status != string(session.BacklogStatusReview) {
+		return ""
+	}
+	return session.PendingDuplicateRef(item.ItemSessions)
 }

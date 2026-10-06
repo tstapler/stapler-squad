@@ -1859,6 +1859,40 @@ func TestReconcileOrphanedTriageRemediation_should_retryEndedWithoutTransitionRo
 	}
 }
 
+// TestReconcileOrphanedTriageRemediation_should_notRetry_When_LatestTriageHitFanoutCeiling
+// pins ADR-029: a deterministic fan-out overrun must not be auto-retried by the
+// shared backoff (30m..72h, then cold heartbeat), each attempt re-spending up to the ceiling.
+func TestReconcileOrphanedTriageRemediation_should_notRetry_When_LatestTriageHitFanoutCeiling(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "ceiling", AcceptanceCriteria: `[]`, Priority: 1, Status: string(BacklogStatusIdea)})
+	require.NoError(t, err)
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "headless-triage-" + uuid.New().String(), SessionRole: SessionRoleTriage})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEndedWithReason(ctx, is.ID, time.Now(), TriageEndReasonFanoutCeiling))
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	respawner := newFakeTriageRespawner()
+	listener.SetTriageRespawner(respawner)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "the abort still surfaces to the operator as a stuck row")
+	listener.reconcileOrphanedTriageRemediation(ctx, er)
+
+	select {
+	case <-respawner.calls:
+		t.Fatal("a fan-out-ceiling abort must not be auto-retried")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
 // fakeTriageRespawner is a test double implementing TriageRespawner, recording
 // every AutoRespawnTriage call on a buffered channel (not a plain counter)
 // because retryOrphanedTriageWithBackoffGate dispatches asynchronously —

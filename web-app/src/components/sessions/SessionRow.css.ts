@@ -204,10 +204,24 @@ export const elapsedSecondLine = style({
   marginTop: "2px",
 });
 
+// Below this row width, Resume/Pause + the ··· overflow no longer fit
+// alongside the name/path column without squeezing it — see the
+// session-list-wasted-space branch's screenshot. Wider than NARROW (200px)
+// since the actions need real room to render as a legible row of their own.
+const ACTIONS_NARROW = "(max-width: 340px)";
+
 export const actions = style({
   display: "flex",
   gap: vars.space["1"],
   alignItems: "center",
+  "@container": {
+    [`sessionRow ${ACTIONS_NARROW}`]: {
+      // Span every column so the grid's auto-placement bumps this item onto
+      // its own implicit row below name/path/chips, right-aligned there.
+      gridColumn: "1 / -1",
+      justifyContent: "flex-end",
+    },
+  },
 });
 
 /** Primary action button (Resume/Pause) — hidden unless hovering or session needs attention */

@@ -1328,25 +1328,10 @@ test.describe('Accessibility — multi-window (WCAG 2.1 AA)', () => {
     await strip.createWindow();
     await strip.createWindow(); // 3 windows: "×" close buttons render for every tab
 
-    const tabListHandle = await strip.tabList.elementHandle();
-    expect(tabListHandle).not.toBeNull();
-    // interestingOnly defaults to true, which (per a known Playwright/CDP
-    // quirk) can make snapshot() return null when the tablist root itself
-    // isn't judged "interesting" — interestingOnly: false avoids that; the
-    // collect() walk below still filters to only tab/button/textbox roles.
-    const snapshot = await page.accessibility.snapshot({ root: tabListHandle!, interestingOnly: false });
-    expect(snapshot).not.toBeNull();
-
-    const names: string[] = [];
-    function collect(node: NonNullable<typeof snapshot>) {
-      if (['tab', 'button', 'textbox'].includes(node.role) && node.name) {
-        names.push(node.name);
-      }
-      for (const child of node.children ?? []) {
-        collect(child);
-      }
-    }
-    collect(snapshot!);
+    // page.accessibility was removed in Playwright 1.5x; ariaSnapshot() yields
+    // YAML lines like `- tab "Window 1"` / `- button "Close Window 1"`.
+    const yaml = await strip.tabList.ariaSnapshot();
+    const names = [...yaml.matchAll(/^\s*- (?:tab|button|textbox) "((?:[^"\\]|\\.)*)"/gm)].map((m) => m[1]);
 
     expect(names.length).toBeGreaterThan(0);
     const uniqueNames = new Set(names);

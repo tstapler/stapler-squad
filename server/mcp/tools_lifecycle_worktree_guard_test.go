@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
@@ -43,6 +44,7 @@ func (e *liveSessionExecutor) Output(_ *exec.Cmd) ([]byte, error) {
 // behind) to a poller holding occupants, and returns lifecycleHandlers over it.
 func newWorktreeGuardHandlers(t *testing.T, occupants ...*session.Instance) *lifecycleHandlers {
 	t.Helper()
+	envtest.NewIsolatedStateDir(t)
 	storage := newTestBacklogStorage(t)
 	bus := events.NewEventBus(16)
 	svc := services.NewSessionService(storage, bus)

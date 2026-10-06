@@ -55,6 +55,8 @@ export interface LifecycleSummaryProps {
    * down, mirroring how `stuckItem` itself is resolved once and passed down.
    */
   onTriggerRemediationNow?: (itemId: string, reason: StuckReason) => Promise<void>;
+  /** Reason-gated claim-block override, threaded to BlockerChip. */
+  onOverrideClaimBlock?: (itemId: string, reason: string) => Promise<void>;
 }
 
 /** BlockerChip + "View in Unfinished" link, rendered only while the item is
@@ -64,11 +66,13 @@ function StuckBlock({
   stuckItem,
   otherStuckReasons,
   onTriggerRemediationNow,
+  onOverrideClaimBlock,
 }: {
   itemId: string;
   stuckItem: StuckBacklogItem;
   otherStuckReasons?: StuckReason[];
   onTriggerRemediationNow?: (itemId: string, reason: StuckReason) => Promise<void>;
+  onOverrideClaimBlock?: (itemId: string, reason: string) => Promise<void>;
 }) {
   return (
     <>
@@ -77,6 +81,7 @@ function StuckBlock({
         item={stuckItem}
         otherReasons={otherStuckReasons}
         onTriggerRemediationNow={onTriggerRemediationNow}
+        onOverrideClaimBlock={onOverrideClaimBlock}
       />
       <a href={routes.unfinishedItem(itemId)} className={styles.unfinishedLink} data-testid="lifecycle-unfinished-link">
         View in Unfinished
@@ -156,6 +161,7 @@ export function LifecycleSummary({
   stuckItem,
   otherStuckReasons,
   onTriggerRemediationNow,
+  onOverrideClaimBlock,
 }: LifecycleSummaryProps) {
   // Only a "resolved" mode with a non-default name is glanceable-worthy —
   // the common default-pipeline case renders no badge at all (Task 3.1.4g).
@@ -170,6 +176,7 @@ export function LifecycleSummary({
           stuckItem={stuckItem}
           otherStuckReasons={otherStuckReasons}
           onTriggerRemediationNow={onTriggerRemediationNow}
+          onOverrideClaimBlock={onOverrideClaimBlock}
         />
       )}
       {item.category && (

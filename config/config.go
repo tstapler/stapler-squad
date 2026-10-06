@@ -227,6 +227,11 @@ type Config struct {
 	DaemonPollInterval int `json:"daemon_poll_interval"`
 	// BranchPrefix is the prefix used for git branches created by the application.
 	BranchPrefix string `json:"branch_prefix"`
+	// HeadlessTriageMaxTurns / HeadlessTriageMaxSubagents cap one sdd-mode headless
+	// triage call's assistant turns / subagent launches (ADR-029). 0 = use the
+	// default; negative = no limit. Read via the *OrDefault accessors.
+	HeadlessTriageMaxTurns     int `json:"headless_triage_max_turns,omitempty"`
+	HeadlessTriageMaxSubagents int `json:"headless_triage_max_subagents,omitempty"`
 	// DetectNewSessions is a flag to enable detection of new sessions from other windows
 	DetectNewSessions bool `json:"detect_new_sessions"`
 	// SessionDetectionInterval is the interval (ms) at which the daemon checks for new sessions
@@ -304,6 +309,20 @@ type Config struct {
 	// (60); values above autonomousMaxTurnsHardCeiling are clamped to it. Unlike
 	// MaxAutoReworkIterations (caps respawned sessions), this caps turns within one session.
 	AutonomousMaxTurns int `json:"autonomous_max_turns,omitempty"`
+	// DiagnoseNudgeMaxAttempts caps how many times the Diagnose & Nudge feature
+	// (BacklogStuckState.DiagnoseNudgeCount) will nudge the same stuck item before
+	// further automatic nudging stops and the dispatched agent's action space is
+	// narrowed to file-a-bug/post-a-note only. 0 = use the default (3); values
+	// above diagnoseNudgeMaxAttemptsHardCeiling are clamped to it.
+	DiagnoseNudgeMaxAttempts int `json:"diagnose_nudge_max_attempts,omitempty"`
+	// NoopDispatchThreshold is how many consecutive work sessions on one PASS-verdict
+	// item may end with no new commits before it is flagged repeated_noop_dispatch and
+	// further dispatch is blocked. 0 = use the default (3).
+	NoopDispatchThreshold int `json:"noop_dispatch_threshold,omitempty"`
+	// HeadlessTriageMaxCostUSD aborts a headless triage call whose estimated spend
+	// exceeds this many USD, independent of elapsed time. 0 = use the default ($25);
+	// negative disables the ceiling.
+	HeadlessTriageMaxCostUSD float64 `json:"headless_triage_max_cost_usd,omitempty"`
 	// MaxConcurrentBacklogWorkItems caps how many distinct backlog items may be
 	// "in_progress" at the same time. 0 = use the default (2). Values above
 	// maxConcurrentBacklogWorkItemsHardCeiling are clamped to the ceiling.
@@ -476,6 +495,25 @@ const TriageGuidanceHaltFeatureFlag = "triage_guidance_halt"
 // matters (mirrors EffectiveTymuxEnabled's live-read contract).
 func EffectiveTriageGuidanceHaltEnabled(cfg *Config) bool {
 	return cfg.GetFeatureFlagWithDefault(TriageGuidanceHaltFeatureFlag, false)
+}
+
+// DiagnoseNudgeFeatureFlag is the config.FeatureFlags key backing
+// EffectiveDiagnoseNudgeEnabled — the kill switch for autonomous
+// diagnose_nudge_session writes (Diagnose & Nudge, backlog item 68964304).
+// Shipped with no way to disable short of a code change/redeploy; this flag
+// closes that gap. Defaults to off, same posture as TymuxFeatureFlag/
+// TriageGuidanceHaltFeatureFlag: no rollback rehearsal has vouched for
+// autonomous nudging as the default yet.
+const DiagnoseNudgeFeatureFlag = "diagnose_nudge_enabled"
+
+// EffectiveDiagnoseNudgeEnabled reports whether a dispatched Diagnose & Nudge
+// agent may actually perform a nudge write. Callers must read this fresh at
+// the exact write instant (diagnose_nudge_session's MCP handler), not cache
+// it at dispatch start — an in-flight diagnostic session that already
+// decided to nudge before the flag flips off must still be blocked at the
+// write call site.
+func EffectiveDiagnoseNudgeEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(DiagnoseNudgeFeatureFlag, false)
 }
 
 // EffectiveTymuxEnabled reports whether the global tymux process-manager
@@ -829,6 +867,42 @@ func (c *Config) TriageArtifactDirOrDefault() (string, error) {
 	return filepath.Join(configDir, "triage-artifacts"), nil
 }
 
+// Defaults sit between a normal sdd triage call and the #882 incident (1,094
+// turns, 262 subagent completions); re-tune from the logged per-call counters.
+const (
+	DefaultHeadlessTriageMaxTurns     = 600
+	DefaultHeadlessTriageMaxSubagents = 120
+)
+
+// HeadlessTriageMaxTurnsOrDefault resolves the sdd triage turn ceiling: the
+// default when unset, 0 (disabled in headless.CallOptions) when configured < 0.
+func (c *Config) HeadlessTriageMaxTurnsOrDefault() int {
+	if c == nil {
+		return 0
+	}
+	return ceilingOrDefault(c.HeadlessTriageMaxTurns, DefaultHeadlessTriageMaxTurns)
+}
+
+// HeadlessTriageMaxSubagentsOrDefault resolves the sdd triage subagent ceiling
+// (launches, not completions) with the same semantics as the turn ceiling.
+func (c *Config) HeadlessTriageMaxSubagentsOrDefault() int {
+	if c == nil {
+		return 0
+	}
+	return ceilingOrDefault(c.HeadlessTriageMaxSubagents, DefaultHeadlessTriageMaxSubagents)
+}
+
+func ceilingOrDefault(configured, def int) int {
+	switch {
+	case configured < 0:
+		return 0
+	case configured == 0:
+		return def
+	default:
+		return configured
+	}
+}
+
 // HeadlessFailureCaptureDirOrDefault returns the resolved directory for durable
 // headless (triage/review claude -p) failure captures — see
 // session.WriteHeadlessFailureCapture. "headless-failures" under GetConfigDir() —
@@ -908,6 +982,32 @@ func (c *Config) AnalyticsMaxRowsOrDefault() int {
 	return c.AnalyticsMaxRows
 }
 
+// HeadlessTriageMaxCostUSDDefault is the cost ceiling for one headless triage call
+// when unconfigured: well above a normal multi-subagent triage, well below the
+// $106.69 runaway that motivated it.
+const HeadlessTriageMaxCostUSDDefault = 25.0
+
+// HeadlessTriageMaxCostUSDOrDefault returns the triage cost ceiling in USD, or 0
+// when it is disabled (negative config value). Falls back to the default if unset or c is nil.
+func (c *Config) HeadlessTriageMaxCostUSDOrDefault() float64 {
+	switch {
+	case c == nil || c.HeadlessTriageMaxCostUSD == 0:
+		return HeadlessTriageMaxCostUSDDefault
+	case c.HeadlessTriageMaxCostUSD < 0:
+		return 0
+	}
+	return c.HeadlessTriageMaxCostUSD
+}
+
+// NoopDispatchThresholdOrDefault returns the configured no-op dispatch threshold, or 3
+// if unset or c is nil.
+func (c *Config) NoopDispatchThresholdOrDefault() int {
+	if c == nil || c.NoopDispatchThreshold <= 0 {
+		return 3
+	}
+	return c.NoopDispatchThreshold
+}
+
 // MaxAutoReworkIterationsOrDefault returns the configured rework-cap ceiling, or 20
 // if not set (zero value) or c is nil (BacklogService's cfg is nil in some test setups).
 // Raised from 3 to 20: 3 was tripping routinely on real, ultimately-fixable items
@@ -943,6 +1043,28 @@ func (c *Config) AutonomousMaxTurnsOrDefault() int {
 		return autonomousMaxTurnsHardCeiling
 	}
 	return c.AutonomousMaxTurns
+}
+
+// diagnoseNudgeMaxAttemptsDefault is used when the config value is unset (0 or
+// negative). diagnoseNudgeMaxAttemptsHardCeiling guards against a runaway
+// config value letting the Diagnose & Nudge feature nudge a stuck session
+// indefinitely.
+const (
+	diagnoseNudgeMaxAttemptsDefault     = 3
+	diagnoseNudgeMaxAttemptsHardCeiling = 10
+)
+
+// DiagnoseNudgeMaxAttemptsOrDefault returns the configured Diagnose & Nudge
+// attempt cap, clamped to [1, diagnoseNudgeMaxAttemptsHardCeiling]. Falls back
+// to the default (3) if unset (<=0) or c is nil.
+func (c *Config) DiagnoseNudgeMaxAttemptsOrDefault() int {
+	if c == nil || c.DiagnoseNudgeMaxAttempts <= 0 {
+		return diagnoseNudgeMaxAttemptsDefault
+	}
+	if c.DiagnoseNudgeMaxAttempts > diagnoseNudgeMaxAttemptsHardCeiling {
+		return diagnoseNudgeMaxAttemptsHardCeiling
+	}
+	return c.DiagnoseNudgeMaxAttempts
 }
 
 // maxConcurrentBacklogWorkItemsDefault is used when the config value is unset (0

@@ -28,6 +28,7 @@ import { render, act } from '@testing-library/react';
 const mockXtermHandle = {
   terminal: null as null,
   fit: jest.fn(),
+  refit: jest.fn(),
   // Pre-sizing (fix xterm theme flip and unpainted rows beyond 80x24): grows
   // the xterm buffer to preCols/preRows before connect() so capture-pane's
   // cursor-positioning sequences for rows beyond xterm's 80x24 default aren't

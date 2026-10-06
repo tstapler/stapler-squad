@@ -366,6 +366,9 @@ message Session {
   // Absent entries mean the tag was added manually. Mirrors
   // session.Instance's RuleTagProvenance field.
   map<string, string> rule_tag_provenance = 95;
+
+  // Server-owned pin flag: pinned sessions render in the Pinned section.
+  bool pinned = 96;
 }
 
 // PiExtensionHealth mirrors server/services.PiExtensionHealth: whether a pi
