@@ -64,7 +64,7 @@ func newRulesServiceWithAI(t *testing.T, aiClient AIClient) *RulesService {
 	analyticsStore.Start(context.Background())
 	t.Cleanup(analyticsStore.Stop)
 	c := classifier.NewRuleBasedClassifier()
-	return NewRulesService(rulesStore, nil, analyticsStore, c, &DefaultRulePromptBuilder{}, aiClient)
+	return withoutAntigravityExport(NewRulesService(rulesStore, nil, analyticsStore, c, &DefaultRulePromptBuilder{}, aiClient))
 }
 
 // fixture2ElementJSON is a valid 2-element JSON array matching the AI response format.
@@ -138,7 +138,7 @@ func TestGenerateSuggestedRule_NilAIClient_ReturnsUnimplemented(t *testing.T) {
 	require.NoError(t, err)
 	analyticsStore := NewAnalyticsStore(storage)
 	c := classifier.NewRuleBasedClassifier()
-	svc := NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil) // nil AI
+	svc := withoutAntigravityExport(NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil)) // nil AI
 
 	_, err = svc.GenerateSuggestedRule(context.Background(), connect.NewRequest(&sessionv1.GenerateSuggestedRuleRequest{
 		Source: sessionv1.SuggestionSource_SUGGESTION_SOURCE_ANALYTICS_GAPS,
@@ -194,7 +194,7 @@ func TestBuildPromptContext_IncludesRulesAndGaps(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond, "analytics entries must be persisted within 2s")
 
 	c := classifier.NewRuleBasedClassifier()
-	svc := NewRulesService(rulesStore, nil, analyticsStore, c, &DefaultRulePromptBuilder{}, &mockAIClient{response: "[]"})
+	svc := withoutAntigravityExport(NewRulesService(rulesStore, nil, analyticsStore, c, &DefaultRulePromptBuilder{}, &mockAIClient{response: "[]"}))
 
 	req := &sessionv1.GenerateSuggestedRuleRequest{
 		Source: sessionv1.SuggestionSource_SUGGESTION_SOURCE_ANALYTICS_GAPS,
@@ -403,7 +403,7 @@ func TestAttachConflictInfo_SeedRuleAtHigherPriority_ShadowsSuggestion(t *testin
 
 	analyticsStore := NewAnalyticsStore(storage)
 	c := classifier.NewRuleBasedClassifier()
-	svc := NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil)
+	svc := withoutAntigravityExport(NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil))
 
 	suggestion := &sessionv1.SuggestedRuleProto{
 		ToolName:       "Bash",
@@ -442,7 +442,7 @@ func newRulesServiceForCoverage(t *testing.T, specs []RuleSpec) *RulesService {
 	}
 	analyticsStore := NewAnalyticsStore(storage)
 	c := classifier.NewRuleBasedClassifier()
-	return NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil)
+	return withoutAntigravityExport(NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil))
 }
 
 // testProg is an arbitrary program name that has no seed rules, so seed-rule
@@ -659,7 +659,7 @@ func newSimpleRulesService(t *testing.T) *RulesService {
 	analyticsStore.Start(context.Background())
 	t.Cleanup(analyticsStore.Stop)
 	c := classifier.NewRuleBasedClassifier()
-	return NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil)
+	return withoutAntigravityExport(NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil))
 }
 
 const validYAML3Rules = `rules:
@@ -2326,4 +2326,9 @@ func TestReconcilePendingApprovals_WorktreeSettingsChange_DoesNotTrigger(t *test
 	all := store.ListAll()
 	require.Len(t, all, 1, "item must still be pending — reconciliation must never have run for a worktree-scoped settings change")
 	assert.Equal(t, "appr-worktree", all[0].ID)
+}
+
+func withoutAntigravityExport(rs *RulesService) *RulesService {
+	rs.exportAntigravity = nil
+	return rs
 }
