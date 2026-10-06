@@ -63,6 +63,8 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"ResolveApproval":           "approval:resolve",
 	"ListPendingApprovals":      "approval:list-pending",
 	"CreateDebugSnapshot":       "debug:create-snapshot",
+	"GetCaptureTap":             "debug:get-capture-tap",
+	"SetCaptureTap":             "debug:set-capture-tap",
 	"GetNotificationHistory":    "notification:get-history",
 	"MarkNotificationRead":      "notification:mark-read",
 	"ClearNotificationHistory":  "notification:clear-history",
