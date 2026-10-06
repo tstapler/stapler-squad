@@ -282,7 +282,7 @@ func TestRemediationDue_should_grantColdRetry_When_ParkedRowsHeartbeatDeadlineEl
 		due, justParked, gateErr := storage.RemediationDue(ctx, itemID, domain.StuckReasonOrphanedTriage)
 		require.NoError(t, gateErr, "cold retry %d", i)
 		assert.True(t, due, "cold retry %d: a parked row past its cold-retry deadline must become due automatically, with no manual reset", i)
-		assert.False(t, justParked, "cold retry %d: this is not a fresh park event, must not re-fire the exhausted notification", i)
+		assert.Equal(t, i == int(MaxRemediationColdRetries)-1, justParked, "cold retry %d: only the final cold retry signals permanent parking", i)
 
 		rows, findErr := storage.FindOpenStuckStates(ctx)
 		require.NoError(t, findErr)

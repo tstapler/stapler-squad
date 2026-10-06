@@ -295,13 +295,13 @@ func (s *Storage) RemediationDue(ctx context.Context, itemID string, reason doma
 	case remediationGrantedColdRetry:
 		// Parked and the cold-retry deadline is due (BUG-083). Count it past the
 		// cap so MaxRemediationColdRetries bounds the heartbeat, and push the
-		// deadline out another interval. justParked stays false: the caller must
-		// not re-send the one-time "exhausted" notification.
+		// deadline out another interval. justParked fires only on the final cold
+		// retry so the operator is told the item is now permanently parked.
 		coldAt := now.Add(remediationColdRetryInterval)
 		if _, recErr := s.RecordRemediationAttempt(ctx, itemID, reason, row.RemediationAttempts+1, &coldAt); recErr != nil {
 			return true, false, fmt.Errorf("remediation due %s/%s: record cold retry: %w", itemID, reason, recErr)
 		}
-		return true, false, nil
+		return true, row.RemediationAttempts+1 >= remediationAttemptCeiling(), nil
 	default: // remediationGranted
 		nextAttempt := row.RemediationAttempts + 1
 		if _, recErr := s.RecordRemediationAttempt(ctx, itemID, reason, nextAttempt, nextRemediationAtForAttempt(nextAttempt, now)); recErr != nil {
