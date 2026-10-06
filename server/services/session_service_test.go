@@ -3293,7 +3293,7 @@ func TestCreateDirectorySession_HonorsSessionNameOverrideMap(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
 		[]byte(`{"default_program": "claude", "feature_flags": {"tymux": true}, "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
 
-	inst, err := svc.CreateDirectorySession(context.Background(), title, t.TempDir(), "", nil, true, false, "")
+	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), SessionSpawnOptions{Title: title, OneShot: true})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
@@ -3317,7 +3317,7 @@ func TestCreateWorktreeSession_HonorsSessionNameOverrideMap(t *testing.T) {
 	worktreePath := t.TempDir()
 	initGitRepoWithCommit(t, worktreePath)
 
-	inst, err := svc.CreateWorktreeSession(context.Background(), title, t.TempDir(), worktreePath, "", nil, true, false, "")
+	inst, err := svc.CreateWorktreeSession(context.Background(), t.TempDir(), worktreePath, SessionSpawnOptions{Title: title, OneShot: true})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
@@ -3342,7 +3342,9 @@ func TestCreateDirectorySession_should_SetProgramFromOverride_When_ProgramOverri
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	inst, err := svc.CreateDirectorySession(context.Background(), "program-override-directory-session", t.TempDir(), "do the thing", nil, true, false, "claude --model claude-sonnet-4-6")
+	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), SessionSpawnOptions{
+		Title: "program-override-directory-session", Prompt: "do the thing", OneShot: true, ProgramOverride: "claude --model claude-sonnet-4-6",
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
@@ -3363,7 +3365,9 @@ func TestCreateDirectorySession_should_UseResolvedProgram_When_ProgramOverrideEm
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"), []byte(`{"default_program": "claude"}`), 0o644))
 
-	inst, err := svc.CreateDirectorySession(context.Background(), "no-override-directory-session", t.TempDir(), "do the thing", nil, true, false, "")
+	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), SessionSpawnOptions{
+		Title: "no-override-directory-session", Prompt: "do the thing", OneShot: true,
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
@@ -3380,7 +3384,9 @@ func TestCreateWorktreeSession_should_SetProgramFromOverride_When_ProgramOverrid
 	worktreePath := t.TempDir()
 	initGitRepoWithCommit(t, worktreePath)
 
-	inst, err := svc.CreateWorktreeSession(context.Background(), "program-override-worktree-session", t.TempDir(), worktreePath, "do the thing", nil, true, false, "claude --model claude-sonnet-4-6")
+	inst, err := svc.CreateWorktreeSession(context.Background(), t.TempDir(), worktreePath, SessionSpawnOptions{
+		Title: "program-override-worktree-session", Prompt: "do the thing", OneShot: true, ProgramOverride: "claude --model claude-sonnet-4-6",
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
@@ -3872,7 +3878,7 @@ func TestWireRateLimitCallbacks_SuppressesNotification_When_InstanceHidden(t *te
 		defer cancel()
 		ch, _ := eventBus.Subscribe(subCtx)
 
-		svc.onRateLimitRecovery(inst, inst.UUID, true, "")
+		svc.onRateLimitRecoverySucceeded(inst, inst.UUID)
 
 		notifs := drainNotificationEvents(ch)
 		assert.Empty(t, notifs, "a Hidden instance must never receive a rate-limit-recovery notification")
@@ -3946,7 +3952,7 @@ func TestWireRateLimitCallbacks_StillPublishesSessionUpdated_When_InstanceHidden
 		defer cancel()
 		ch, _ := eventBus.Subscribe(subCtx)
 
-		svc.onRateLimitRecovery(inst, inst.UUID, true, "")
+		svc.onRateLimitRecoverySucceeded(inst, inst.UUID)
 
 		all := drainAllEvents(ch)
 		notifs := filterEventsByType(all, events.EventNotification)

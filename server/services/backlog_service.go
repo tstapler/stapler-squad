@@ -32,16 +32,13 @@ import (
 
 // SessionCreator allows BacklogService to spawn sessions without importing handler internals.
 type SessionCreator interface {
-	// programOverride, when non-empty, replaces config.ResolveDefaults' resolved.Program
-	// as the spawned Instance's InstanceOptions.Program — set before session.NewInstance/
-	// instance.Start(true), never via a post-hoc SwitchProgram/Restart (see Epic 2.4's
-	// design note). Pass "" for callers unaffected by per-stage program overrides.
-	CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool, programOverride string) (*session.Instance, error)
+	// CreateDirectorySession creates a directory-type session at path. See
+	// SessionSpawnOptions.ProgramOverride's doc comment for how program overrides apply.
+	CreateDirectorySession(ctx context.Context, path string, opts SessionSpawnOptions) (*session.Instance, error)
 	// CreateWorktreeSession spawns a session inside an already-created git worktree at
 	// worktreePath. repoPath is the parent repo used for program resolution; worktreePath
-	// must already exist on disk before this is called. See programOverride's doc comment
-	// on CreateDirectorySession above.
-	CreateWorktreeSession(ctx context.Context, title, repoPath, worktreePath, prompt string, tags []string, oneShot bool, hidden bool, programOverride string) (*session.Instance, error)
+	// must already exist on disk before this is called.
+	CreateWorktreeSession(ctx context.Context, repoPath, worktreePath string, opts SessionSpawnOptions) (*session.Instance, error)
 }
 
 // AutonomousDriverStarter allows BacklogService to start an AutonomousDriver on an existing instance.
