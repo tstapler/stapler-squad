@@ -163,7 +163,7 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.11.4
-          args: --timeout=5m --max-issues-per-linter=0 --max-same-issues=0
+          args: --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
           skip-cache: false
           only-new-issues: false
 
