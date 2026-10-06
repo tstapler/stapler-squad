@@ -17,10 +17,11 @@ import (
 // so a test can script both the pre-Enter settle wait and the post-Enter
 // submit-confirmation poll independently.
 type fakePaneSubmitter struct {
-	sendCalls   []string
-	failOnCall  int // -1 (default) means never fail
-	updates     []bool
-	updateCalls int
+	sendCalls    []string
+	failOnCall   int // -1 (default) means never fail
+	updates      []bool
+	updateCalls  int
+	onHasUpdated func()
 }
 
 func (f *fakePaneSubmitter) SendKeys(keys string) error {
@@ -33,6 +34,9 @@ func (f *fakePaneSubmitter) SendKeys(keys string) error {
 }
 
 func (f *fakePaneSubmitter) HasUpdated() (bool, bool) {
+	if f.onHasUpdated != nil {
+		f.onHasUpdated()
+	}
 	if len(f.updates) == 0 {
 		return false, false
 	}
@@ -316,12 +320,18 @@ func TestSubmitDriverContent_ContextExpiresBeforeRetry_StopsBeforeRetryEnter(t *
 	t.Parallel()
 	inst := newFakePaneSubmitter()
 	inst.updates = []bool{false} // settles immediately; confirmation poll never sees a change
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	inst.onHasUpdated = func() {
+		if len(inst.sendCalls) >= 2 {
+			cancel()
+		}
+	}
+
 	err := SubmitDriverContent(ctx, inst, "content", time.Millisecond, 2*time.Millisecond)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("SubmitDriverContent error = %v, want wrapping context.DeadlineExceeded", err)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("SubmitDriverContent error = %v, want wrapping context.Canceled", err)
 	}
 	if len(inst.sendCalls) != 2 {
 		t.Fatalf("SendKeys called %d times, want exactly 2 (content, first Enter — no retry) — got %#v", len(inst.sendCalls), inst.sendCalls)
