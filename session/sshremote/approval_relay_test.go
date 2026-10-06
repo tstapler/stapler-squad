@@ -195,9 +195,20 @@ type approvalExchangeResult struct {
 
 func writeApprovalAndReadResponse(t *testing.T, socketPath string, payload relayedApprovalPayload) <-chan approvalExchangeResult {
 	t.Helper()
-	ln, err := net.Listen("unix", socketPath)
+	ch, _, err := listenApprovalExchange(socketPath, payload)
 	if err != nil {
 		t.Fatalf("listen unix %s: %v", socketPath, err)
+	}
+	return ch
+}
+
+// listenApprovalExchange is the non-fatal core of writeApprovalAndReadResponse;
+// the returned cancel closes the listener so a retrying caller can re-bind the
+// same path (safe to call after the exchange completed).
+func listenApprovalExchange(socketPath string, payload relayedApprovalPayload) (<-chan approvalExchangeResult, func(), error) {
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return nil, nil, err
 	}
 	resultCh := make(chan approvalExchangeResult, 1)
 	go func() {
@@ -223,7 +234,7 @@ func writeApprovalAndReadResponse(t *testing.T, socketPath string, payload relay
 		resp, err := io.ReadAll(conn)
 		resultCh <- approvalExchangeResult{response: resp, err: err}
 	}()
-	return resultCh
+	return resultCh, func() { _ = ln.Close() }, nil
 }
 
 func newTestPool(t *testing.T) *tmux.SSHClientPool {
@@ -649,11 +660,16 @@ func TestRemoteApprovalRelay_ReopensChannelAfterReconnect(t *testing.T) {
 				return
 			default:
 			}
-			resultCh := writeApprovalAndReadResponse(t, socketPath, relayedApprovalPayload{Token: token, Request: json.RawMessage(`{"tool_name":"in-flight"}`)})
+			resultCh, cancel, err := listenApprovalExchange(socketPath, relayedApprovalPayload{Token: token, Request: json.RawMessage(`{"tool_name":"in-flight"}`)})
+			if err != nil {
+				time.Sleep(50 * time.Millisecond)
+				continue
+			}
 			select {
 			case <-resultCh:
 				return
 			case <-time.After(500 * time.Millisecond):
+				cancel()
 			}
 		}
 	}()
