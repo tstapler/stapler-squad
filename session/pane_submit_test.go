@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/tstapler/stapler-squad/session/sendkeysguard"
 )
 
@@ -351,4 +353,28 @@ func TestSubmitDriverContent_ContextExpiresBeforeRetry_StopsBeforeRetryEnter(t *
 func TestSessionPackage_NoDirectSendKeysPlusEnterConcatenation(t *testing.T) {
 	t.Parallel()
 	sendkeysguard.CheckNoSingleWriteEnterConcatenation(t, ".", "pane_submit.go")
+}
+
+type ownerCheckedSubmitter struct {
+	*fakePaneSubmitter
+	ownerErr error
+}
+
+func (o *ownerCheckedSubmitter) VerifyPaneOwner(context.Context) error { return o.ownerErr }
+
+// ce71ad1a: a pane whose owner can't be confirmed must receive no bytes.
+func TestSubmitDriverContent_OwnerMismatch_WritesNothing(t *testing.T) {
+	sub := &ownerCheckedSubmitter{fakePaneSubmitter: newFakePaneSubmitter(), ownerErr: errors.New("pane ownership mismatch")}
+
+	err := SubmitDriverContent(context.Background(), sub, "review prompt", time.Millisecond, time.Millisecond)
+
+	require.ErrorContains(t, err, "pane owner not verified")
+	require.Empty(t, sub.sendCalls, "no content or Enter may be written to a pane with a mismatched owner")
+}
+
+func TestSubmitDriverContent_OwnerVerified_Writes(t *testing.T) {
+	sub := &ownerCheckedSubmitter{fakePaneSubmitter: newFakePaneSubmitter()}
+
+	require.NoError(t, SubmitDriverContent(context.Background(), sub, "review prompt", time.Millisecond, time.Millisecond))
+	require.Equal(t, "review prompt", sub.sendCalls[0])
 }
