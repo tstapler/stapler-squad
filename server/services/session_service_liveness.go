@@ -447,17 +447,24 @@ func isTmuxSessionAbsentText(text string) bool {
 // allowedOwnerUUIDs; a name match alone can hit an unrelated Instance's pane
 // (ce71ad1a). Otherwise it returns ErrTmuxKillRefused.
 func (s *SessionService) KillTmuxSessionByTitle(ctx context.Context, title string, allowedOwnerUUIDs ...string) error {
+	return killTmuxSessionByTitle(ctx, title, false, allowedOwnerUUIDs)
+}
+
+// killTmuxSessionByTitle is KillTmuxSessionByTitle with an opt-in for panes
+// that carry no owner marker at all (allowUnmarked). DeleteSession uses it:
+// the user explicitly deleted this session, and a pre-marker pane left under
+// its name would otherwise outlive it as an orphan. A marker naming a
+// different owner is refused regardless.
+func killTmuxSessionByTitle(ctx context.Context, title string, allowUnmarked bool, allowedOwnerUUIDs []string) error {
 	name := stapleSquadTmuxName(title)
 
-	if !tmuxSessionKillAllowed(ctx, name, allowedOwnerUUIDs) {
+	if !tmuxSessionKillAllowed(ctx, name, allowedOwnerUUIDs, allowUnmarked) {
 		return fmt.Errorf("%w: %q", ErrTmuxKillRefused, name)
 	}
 
 	killCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	args := tmux.ResolveSocket("").Args("kill-session", "-t", name)
-	cmd := safeexec.CommandContext(killCtx, tmux.Binary(), args...)
-	out, err := cmd.CombinedOutput()
+	out, err := runTmuxKillSession(killCtx, name)
 	if err != nil {
 		if isTmuxSessionAbsentText(string(out)) {
 			return nil // session already gone — not an error
@@ -467,17 +474,26 @@ func (s *SessionService) KillTmuxSessionByTitle(ctx context.Context, title strin
 	return nil
 }
 
+// runTmuxKillSession is a seam so tests can observe kills without a live tmux server.
+var runTmuxKillSession = func(ctx context.Context, name string) ([]byte, error) {
+	args := tmux.ResolveSocket("").Args("kill-session", "-t", name)
+	return safeexec.CommandContext(ctx, tmux.Binary(), args...).CombinedOutput()
+}
+
 // tmuxSessionKillAllowed reports whether the tmux session named `name`
-// either doesn't exist (nothing to protect -- kill-session below will hit
-// its own idempotent "already gone" handling), or its STAPLER_SESSION_UUID
-// marker is in allowedOwnerUUIDs. See KillTmuxSessionByTitle's doc comment
-// for the policy this implements.
-func tmuxSessionKillAllowed(ctx context.Context, name string, allowedOwnerUUIDs []string) bool {
+// either doesn't exist (nothing to protect -- kill-session will hit its own
+// idempotent "already gone" handling), or its STAPLER_SESSION_UUID marker is
+// in allowedOwnerUUIDs, or it has no marker and allowUnmarked is set.
+func tmuxSessionKillAllowed(ctx context.Context, name string, allowedOwnerUUIDs []string, allowUnmarked bool) bool {
 	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	marker, err := readSessionOwnerUUID(checkCtx, tmux.ResolveSocket(""), name)
 	if err != nil {
 		if isTmuxSessionAbsentText(err.Error()) {
+			return true
+		}
+		if allowUnmarked && strings.Contains(err.Error(), "unknown variable") {
+			log.Warn("KillTmuxSessionByTitle: killing tmux session with no owner marker (explicit delete)", "session", name)
 			return true
 		}
 		log.Warn("KillTmuxSessionByTitle: refusing to kill tmux session, could not verify owner",
