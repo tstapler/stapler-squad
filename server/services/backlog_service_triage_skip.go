@@ -19,7 +19,8 @@ const triageGateNoteAuthor = "Triage gate"
 // resolveTriageModel returns the concrete model for a triage call. A model pinned by the
 // pipeline mode always wins; otherwise the configured triage default applies, but only for
 // the claude program (a non-claude executor would receive a Claude model ID). A configured
-// value that fails to resolve falls back to the built-in default, never the account default.
+// default that fails to resolve falls back to the built-in default; a failed pipeline pin
+// resolves to "" (account default), as before.
 func resolveTriageModel(cfg *config.Config, families map[string]string, program, pinnedModel string) string {
 	if pinnedModel != "" {
 		resolved, err := session.ResolveModel(families, pinnedModel)
@@ -90,9 +91,21 @@ func unchangedRetriageSkipReason(item *session.BacklogItemData, sessions []sessi
 }
 
 // recordTriageSkip makes a skip visible on the item (activity note) and in the log.
+// Idempotent: the orphan sweeper can re-reach the same skip every tick, so an identical
+// latest gate note is not repeated.
 func (s *BacklogService) recordTriageSkip(ctx context.Context, itemID, reason string) {
 	log.Info("[TriageGate] triage skipped", "item", itemID, "reason", reason)
 	msg := "Triage skipped: " + reason + ". Trigger triage manually to override."
+	if notes, err := s.storage.ListActivityNotesForItem(ctx, itemID); err == nil {
+		for i := len(notes) - 1; i >= 0; i-- {
+			if notes[i].AuthorSessionTitle == triageGateNoteAuthor {
+				if notes[i].Message == msg {
+					return
+				}
+				break
+			}
+		}
+	}
 	if err := s.storage.AppendActivityNote(ctx, itemID, "", triageGateNoteAuthor, msg); err != nil {
 		log.Warn("[TriageGate] failed to record skip note", "item", itemID, "error", err)
 	}
@@ -107,4 +120,3 @@ func triageResultInputHash(item *session.BacklogItemData, result *session.Headle
 	}
 	return triageInputHash(item.Title, item.Description, criteria)
 }
-

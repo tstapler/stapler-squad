@@ -2515,6 +2515,9 @@ func (s *BacklogService) respawnTriage(ctx context.Context, itemID string, apply
 
 	if applyGate {
 		sessions, listErr := s.storage.ListItemSessions(ctx, itemID)
+		if listErr != nil {
+			log.Warn("[AutoRespawnTriage] list sessions failed; skipping unchanged-content gate", "item", itemID, "error", listErr)
+		}
 		if listErr == nil && (item.Status == string(session.BacklogStatusIdea) || item.Status == string(session.BacklogStatusQueued)) {
 			// Checked before the queued->idea reset below so a skipped item is not demoted.
 			if reason := unchangedRetriageSkipReason(item, sessions); reason != "" {
@@ -2737,6 +2740,13 @@ func (s *BacklogService) MaybeTriggerTriage(ctx context.Context, itemID string, 
 		if item, getErr := s.storage.GetBacklogItem(ctx, itemID); getErr == nil {
 			if reason := newItemTriageSkipReason(item); reason != "" {
 				s.recordTriageSkip(ctx, itemID, reason)
+				// Triage is what normally advances idea->ready; without it a skipped item
+				// would sit in idea forever, so advance it here (the note above is the visible record).
+				precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
+				if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, //nolint:silenttransition surfaced via the triage-gate activity note recorded just above
+					session.BacklogStatusReady, precondition, session.TriggeredBySystem); transErr != nil {
+					log.Warn("[MaybeTriggerTriage] failed to advance skipped item to ready", "item", itemID, "error", transErr)
+				}
 				return false
 			}
 		}

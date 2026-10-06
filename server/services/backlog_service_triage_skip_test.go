@@ -1,7 +1,6 @@
 package services
 
 import (
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -86,6 +85,13 @@ func TestMaybeTriggerTriage_SkipsItemWithACAndRecordsReason(t *testing.T) {
 	msgs := activityMessages(t, storage, item.ID)
 	require.Len(t, msgs, 1)
 	assert.Contains(t, msgs[0], "Triage skipped: item already has acceptance criteria")
+	got, err := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReady), got.Status, "skipped item advances out of idea")
+
+	// Repeating the same skip must not duplicate the note.
+	svc.recordTriageSkip(t.Context(), item.ID, "item already has acceptance criteria")
+	assert.Len(t, activityMessages(t, storage, item.ID), 1)
 }
 
 func TestMaybeTriggerTriage_SkipsApprovedPlan_RunsPlainItem(t *testing.T) {
@@ -144,22 +150,25 @@ func TestAutoRespawnTriage_UnchangedContentSkipped_ChangedRuns_ResumeBypasses(t 
 	wait.RequireEventually(t, func() bool { return pool.callCount() == 2 }, 5*time.Second, 20*time.Millisecond, "ResumeTriage must run despite unchanged content")
 }
 
-func TestTriageConcurrencyCapQueuesExcessRuns(t *testing.T) {
-	t.Parallel()
+// runBulkTriage creates 3 items under the given concurrency cap and returns the peak
+// number of simultaneously running triage calls. Concurrency is measured with a
+// decrement-on-return counter inside the fake pool, so there is no timer margin to flake on.
+func runBulkTriage(t *testing.T, cap int) int32 {
+	t.Helper()
 	storage := createTestStorage(t)
 	var active, maxActive int32
-	var mu sync.Mutex
-	pool := &fakeHeadlessPool{response: validTriageJSON(), delay: 80 * time.Millisecond}
+	pool := &fakeHeadlessPool{response: validTriageJSON(), delay: 100 * time.Millisecond}
 	pool.onEnter = func() {
 		n := atomic.AddInt32(&active, 1)
-		mu.Lock()
-		if n > maxActive {
-			maxActive = n
+		for {
+			cur := atomic.LoadInt32(&maxActive)
+			if n <= cur || atomic.CompareAndSwapInt32(&maxActive, cur, n) {
+				break
+			}
 		}
-		mu.Unlock()
-		time.AfterFunc(70*time.Millisecond, func() { atomic.AddInt32(&active, -1) })
 	}
-	svc := NewBacklogService(storage, nil, &config.Config{MaxConcurrentTriage: 1}, nil, nil, nil)
+	pool.onExit = func() { atomic.AddInt32(&active, -1) }
+	svc := NewBacklogService(storage, nil, &config.Config{MaxConcurrentTriage: cap}, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 
 	for i := 0; i < 3; i++ {
@@ -169,10 +178,14 @@ func TestTriageConcurrencyCapQueuesExcessRuns(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, svc.MaybeTriggerTriage(t.Context(), it.ID, false, it.RepoPath))
 	}
-	wait.RequireEventually(t, func() bool { return pool.callCount() == 3 }, 10*time.Second, 20*time.Millisecond, "queued runs all eventually execute")
-	mu.Lock()
-	defer mu.Unlock()
-	assert.Equal(t, int32(1), maxActive, "cap=1 must never run two triage calls at once")
+	wait.RequireEventually(t, func() bool { return pool.callCount() == 3 && atomic.LoadInt32(&active) == 0 }, 10*time.Second, 20*time.Millisecond, "all runs execute")
+	return atomic.LoadInt32(&maxActive)
+}
+
+func TestTriageConcurrencyCapQueuesExcessRuns(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, int32(1), runBulkTriage(t, 1), "cap=1 must never run two triage calls at once")
+	assert.Greater(t, runBulkTriage(t, 3), int32(1), "control: cap=3 does run in parallel, so the cap=1 result is not vacuous")
 }
 
 func TestTriageCallUsesConfiguredModel(t *testing.T) {
