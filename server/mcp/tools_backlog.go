@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -287,11 +288,16 @@ type ReviewTrigger interface {
 type backlogHandlers struct {
 	storage       *session.Storage
 	store         session.InstanceStore
-	eventBus      *events.EventBus              // optional; nil means notifications are disabled
-	reviewStopper ReviewCompletionSignaler      // optional; nil means no driver stop on review verdict
-	enabledCheck  func() bool                   // optional; nil means always-enabled (tests)
-	reviewTrigger ReviewTrigger                 // optional; nil means review gate waits for the next reconcile tick
-	liveCheck     func(sessionUUID string) bool // optional; nil means treat every EndedAt==nil ItemSession row as live (today's behavior); backs link_session_to_item's exclusivity check
+	eventBus      *events.EventBus         // optional; nil means notifications are disabled
+	reviewStopper ReviewCompletionSignaler // optional; nil means no driver stop on review verdict
+	enabledCheck  func() bool              // optional; nil means always-enabled (tests)
+	reviewTrigger ReviewTrigger            // optional; nil means review gate waits for the next reconcile tick
+	// waitTimeouts counts consecutive wait_for_backlog_event timeouts per
+	// session+item so a session that keeps re-waiting is parked; see waitCapKey.
+	waitMu       sync.Mutex
+	waitTimeouts map[string]int
+
+	liveCheck func(sessionUUID string) bool // optional; nil means treat every EndedAt==nil ItemSession row as live (today's behavior); backs link_session_to_item's exclusivity check
 
 	// backlogSvc backs createBacklogItem/importGitHubIssue's post-create auto-triage
 	// trigger (BUG-061; see BacklogService.MaybeTriggerTriage) and link_session_to_item's
@@ -501,7 +507,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("1. Work through each AC criterion\n")
 		sb.WriteString("2. After completing each criterion, call report_progress with criteria_index + status=pass\n")
 		sb.WriteString("3. When all criteria are done, call request_review with a summary of what you built\n")
-		fmt.Fprintf(&sb, "4. Do NOT end your session after request_review. Call wait_for_backlog_event(item_id, event_type=\"verdict_recorded\") instead of polling — it blocks until the verdict lands (or times out) and returns the outcome directly, or returns immediately if a verdict is already recorded. PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution) — shipping the PR is part of this task, do not stop here. FAIL/PARTIAL → fix the noted gaps yourself in this same session and call request_review again — its response tells you which attempt number you're on out of %d cycles allowed in this session; once you've hit that cap, run /backlog/ship anyway to hand the PR to a human instead of retrying indefinitely.\n", session.MaxSameSessionReviewAttempts)
+		fmt.Fprintf(&sb, "4. After request_review, end your turn and stay idle (do not exit). Do NOT poll, and do NOT use ScheduleWakeup or /loop to wait — every wake re-reads your whole context; the app sends you a message with the verdict as soon as it is recorded. PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution) — shipping the PR is part of this task, do not stop here. FAIL/PARTIAL → fix the noted gaps yourself in this same session and call request_review again — its response tells you which attempt number you're on out of %d cycles allowed in this session; once you've hit that cap, run /backlog/ship anyway to hand the PR to a human instead of retrying indefinitely.\n", session.MaxSameSessionReviewAttempts)
 		sb.WriteString("5. If you create the PR yourself (via /backlog/ship or a manual `gh pr create`) rather than letting the system create one for you, you MUST call report_pr_created with item_id, pr_url, pr_number, and a summary as the final step — otherwise the item never shows the PR and stays invisible to the reviewer/operator. If the PR's head branch differs from your tracked branch (e.g. you had to open it from a clean fallback branch), pass override_reason explaining why — do not just retry report_pr_created unchanged. This only works for a PR you opened yourself.\n")
 	case "review":
 		sb.WriteString("## Your Role: Review\n")
@@ -538,13 +544,51 @@ func latestReviewVerdict(ctx context.Context, storage *session.Storage, itemID s
 		log.WarningLog().Printf("get_backlog_item: failed to list item sessions for %s: %v", itemID, err)
 		return nil
 	}
+	return latestVerdictFromSessions(sessions)
+}
+
+// latestVerdictFromSessions picks the newest verdict by CreatedAt rather than by
+// session order, which a later-created session without a verdict can't skew.
+func latestVerdictFromSessions(sessions []session.ItemSessionSummary) *session.ReviewVerdictSummary {
 	var latest *session.ReviewVerdictSummary
 	for _, s := range sessions {
-		if s.ReviewVerdict != nil {
+		if s.ReviewVerdict != nil && (latest == nil || !s.ReviewVerdict.CreatedAt.Before(latest.CreatedAt)) {
 			latest = s.ReviewVerdict
 		}
 	}
 	return latest
+}
+
+// latestReviewEntryTime returns when item most recently entered review — the
+// moment of the latest request_review (or equivalent routing) — from its status
+// history. ok is false when the history holds no such transition.
+func latestReviewEntryTime(item *session.BacklogItemData) (t time.Time, ok bool) {
+	for _, ev := range item.StatusEvents {
+		if ev.ToStatus == string(session.BacklogStatusReview) && ev.CreatedAt.After(t) {
+			t, ok = ev.CreatedAt, true
+		}
+	}
+	return t, ok
+}
+
+// isStaleVerdict reports whether verdict was recorded before item's latest entry
+// into review, i.e. it answers an earlier review request, not the current one.
+func isStaleVerdict(item *session.BacklogItemData, verdict *session.ReviewVerdictSummary) bool {
+	if verdict == nil {
+		return false
+	}
+	entered, ok := latestReviewEntryTime(item)
+	return ok && verdict.CreatedAt.Before(entered)
+}
+
+// canRecoverFromReview reports whether an item sitting in review can be
+// re-requested: no reviewer is live and the latest verdict is missing, stale, or
+// not a PASS. A fresh PASS is awaiting ship and must not be re-reviewed.
+func canRecoverFromReview(item *session.BacklogItemData, sessions []session.ItemSessionSummary, verdict *session.ReviewVerdictSummary) bool {
+	if services.HasActiveReviewSession(sessions) {
+		return false
+	}
+	return verdict == nil || isStaleVerdict(item, verdict) || verdict.OverallOutcome != string(session.ReviewVerdictPass)
 }
 
 // resolveItemLink verifies that callerUUID is linked to itemID, returning the
@@ -724,11 +768,88 @@ func withTestAfterWaitSubscribeHook(ctx context.Context, hook func()) context.Co
 	return context.WithValue(ctx, testAfterWaitSubscribeHookKey{}, hook)
 }
 
+// maxWaitTimeoutsPerSession caps consecutive wait_for_backlog_event timeouts
+// for one session+item: each re-wait is another turn that re-reads the full
+// context, so past this the session is told to stop and wait for the app's
+// steer instead.
+const maxWaitTimeoutsPerSession = 3
+
+// maxWaitCapEntries bounds the in-memory counter map; hitting it only forgives
+// old counts, which is harmless.
+const maxWaitCapEntries = 4096
+
+func waitCapKey(ctx context.Context, itemID string) string {
+	sessionUUID, _ := sessionUUIDFromContext(ctx)
+	return sessionUUID + "|" + itemID
+}
+
+func (h *backlogHandlers) waitCapReached(ctx context.Context, itemID string) bool {
+	h.waitMu.Lock()
+	defer h.waitMu.Unlock()
+	return h.waitTimeouts[waitCapKey(ctx, itemID)] >= maxWaitTimeoutsPerSession
+}
+
+func (h *backlogHandlers) resetWaitTimeouts(ctx context.Context, itemID string) {
+	h.waitMu.Lock()
+	defer h.waitMu.Unlock()
+	delete(h.waitTimeouts, waitCapKey(ctx, itemID))
+}
+
+// waitTimeoutResult records a timeout and, on the one that reaches the cap,
+// raises an operator notification so the parked session is visible.
+func (h *backlogHandlers) waitTimeoutResult(ctx context.Context, itemID, eventTypeFilter string, timeoutSecs int) WaitForBacklogEventResult {
+	h.waitMu.Lock()
+	if h.waitTimeouts == nil || len(h.waitTimeouts) >= maxWaitCapEntries {
+		h.waitTimeouts = make(map[string]int)
+	}
+	key := waitCapKey(ctx, itemID)
+	h.waitTimeouts[key]++
+	n := h.waitTimeouts[key]
+	h.waitMu.Unlock()
+	if n >= maxWaitTimeoutsPerSession {
+		h.notifyWaitCapReached(ctx, itemID)
+		return h.waitCapResult(itemID)
+	}
+	return WaitForBacklogEventResult{
+		MCPResult: MCPResult{Success: true, Error: &MCPError{
+			Code:    "WAIT_TIMEOUT",
+			Message: fmt.Sprintf("no new %s event on item %s within %d seconds — end your turn and stay idle; the app messages this session when the event arrives. Do not poll, and do not use ScheduleWakeup or /loop to wait", eventTypeFilter, itemID, timeoutSecs),
+		}},
+		EventReceived: false,
+		ItemID:        itemID,
+	}
+}
+
+func (h *backlogHandlers) waitCapResult(itemID string) WaitForBacklogEventResult {
+	return WaitForBacklogEventResult{
+		MCPResult: MCPResult{Success: true, Error: &MCPError{
+			Code:    "WAIT_CAP_REACHED",
+			Message: fmt.Sprintf("this session has waited on item %s %d times without an event; further waits are refused — end your turn and stay idle, the app messages this session when the verdict lands. Do not poll, and do not use ScheduleWakeup or /loop", itemID, maxWaitTimeoutsPerSession),
+		}},
+		EventReceived: false,
+		ItemID:        itemID,
+	}
+}
+
+func (h *backlogHandlers) notifyWaitCapReached(ctx context.Context, itemID string) {
+	if h.eventBus == nil {
+		return
+	}
+	sessionUUID, _ := sessionUUIDFromContext(ctx)
+	h.eventBus.Publish(events.NewNotificationEvent(
+		sessionUUID, "", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
+		"Session parked after repeated waits",
+		fmt.Sprintf("Session %s waited %d times on backlog item %s with no event and was told to stop polling; it resumes when the app steers it with the verdict.", sessionUUID, maxWaitTimeoutsPerSession, itemID),
+		map[string]string{"item_id": itemID},
+	))
+}
+
 // waitForBacklogEvent blocks until a matching backlog item event fires (or
 // the current state already satisfies eventTypeFilter, or timeout_seconds
-// elapses). Replaces the ScheduleWakeup + get_backlog_item polling loop
-// sessions previously had to use to wait on a review verdict or status
-// change — see docs/registry N/A, project_plans/backlog-event-subscribe.
+// elapses). Short, bounded wait; post-request_review sessions should end their
+// turn and be steered by the app instead (BacklogService.StartVerdictSteering).
 func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	if r := featureDisabledResult(h.enabledCheck); r != nil {
 		return r, nil
@@ -778,21 +899,22 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", err), ""), nil
 	}
 	verdict := latestReviewVerdict(waitCtx, h.storage, itemID)
+	if isStaleVerdict(item, verdict) {
+		verdict = nil
+	}
 	if res := currentStateWaitResult(item, verdict, eventTypeFilter); res != nil {
+		h.resetWaitTimeouts(ctx, itemID)
 		return okResult(*res), nil
+	}
+	// After the current-state check so a capped session still sees a verdict that already exists.
+	if h.waitCapReached(ctx, itemID) {
+		return okResult(h.waitCapResult(itemID)), nil
 	}
 
 	for {
 		select {
 		case <-waitCtx.Done():
-			return okResult(WaitForBacklogEventResult{
-				MCPResult: MCPResult{Success: true, Error: &MCPError{
-					Code:    "WAIT_TIMEOUT",
-					Message: fmt.Sprintf("no new %s event on item %s within %d seconds — call ScheduleWakeup for a longer interval before checking again, or call wait_for_backlog_event again only if you intend to keep this session blocked", eventTypeFilter, itemID, timeoutSecs),
-				}},
-				EventReceived: false,
-				ItemID:        itemID,
-			}), nil
+			return okResult(h.waitTimeoutResult(ctx, itemID, eventTypeFilter, timeoutSecs)), nil
 		case evt, ok := <-eventCh:
 			if !ok {
 				return okResult(WaitForBacklogEventResult{
@@ -824,6 +946,7 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 			if eventTypeFilter != eventTypeAny && kind != eventTypeFilter {
 				continue
 			}
+			h.resetWaitTimeouts(ctx, itemID)
 			return okResult(buildMatchedWaitResult(itemID, payload)), nil
 		}
 	}
@@ -1195,6 +1318,8 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	if err := validateUUID(itemID); err != nil {
 		return errResult(ErrInvalidArgument, err.Error(), ""), nil
 	}
+	// A new review cycle starts a fresh wait budget.
+	h.resetWaitTimeouts(ctx, itemID)
 
 	message, ok := args["message"].(string)
 	if !ok || message == "" {
@@ -1256,6 +1381,23 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// precondition, so the CAS check is never trivially self-satisfying (FR1,
 	// FR9 — see validateSelfResolveSource).
 	validStatus, valErr := validateSelfResolveSource(item, "request_review")
+	recoverFromReview := false
+	if valErr != nil && session.BacklogStatus(item.Status) == session.BacklogStatusReview {
+		// A session stuck in review (stale/blocked verdict, no live reviewer) must be
+		// able to re-request. Fail closed on a lookup error, like the pr_pending guard.
+		itemSessions, lsErr := h.itemSessionsFor(ctx, itemID)
+		if lsErr != nil {
+			log.WarningLog().Printf("request_review: failed to list item sessions for %s: %v", itemID, lsErr)
+			return errResult(ErrInternalError, "could not verify active-reviewer state for this item — retry", ""), nil
+		}
+		if services.HasActiveReviewSession(itemSessions) {
+			return errResult(ErrInvalidArgument, "an active review session already exists for this item — wait for it to finish, or check get_backlog_item if this persists", ""), nil
+		}
+		if canRecoverFromReview(item, itemSessions, latestVerdictFromSessions(itemSessions)) {
+			recoverFromReview = true
+			validStatus, valErr = session.BacklogStatusInProgress, nil
+		}
+	}
 	if valErr != nil {
 		return errResult(ErrInvalidArgument, valErr.Error(), ""), nil
 	}
@@ -1268,7 +1410,8 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	if validStatus == session.BacklogStatusPRPending {
 		itemSessions, lsErr := h.itemSessionsFor(ctx, itemID)
 		if lsErr != nil {
-			return errResult(ErrInternalError, fmt.Sprintf("could not verify active-reviewer state for this item — retry: %v", lsErr), ""), nil
+			log.WarningLog().Printf("request_review: failed to list item sessions for %s: %v", itemID, lsErr)
+			return errResult(ErrInternalError, "could not verify active-reviewer state for this item — retry", ""), nil
 		}
 		if services.HasActiveReviewSession(itemSessions) {
 			return errResult(ErrInvalidArgument, "an active review session already exists for this item — wait for it to finish, or check get_backlog_item if this persists", ""), nil
@@ -1294,6 +1437,16 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	targetStatus := session.BacklogStatusReview
 	if item.SkipReviewGate {
 		targetStatus = session.BacklogStatusDone
+	}
+
+	// Recovery: reopen the stuck review first so the transition below writes a fresh
+	// review-entry event, making the earlier verdict stale to wait_for_backlog_event.
+	if recoverFromReview {
+		reopen := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview), Note: "request_review recovering stale/blocked review"}
+		if _, reopenErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, reopen, session.TriggeredByAgent); reopenErr != nil {
+			log.InfoLog().Printf("[mcp:request_review] recovery reopen failed: %v", reopenErr)
+			return errResult(ErrInternalError, "item state changed since your last read — call get_backlog_item to see its current status", ""), nil
+		}
 	}
 
 	// Transition item from its validated source status to the target status.
@@ -2142,6 +2295,11 @@ func (h *backlogHandlers) verifyGitHubRefExists(ctx context.Context, ref *github
 	}
 }
 
+// backlogDuplicateRefPrefix marks a duplicate_ref that names another backlog
+// item ("backlog:<uuid>") instead of a GitHub URL, to archive an item in favor
+// of a surviving twin.
+const backlogDuplicateRefPrefix = "backlog:"
+
 // duplicateClosureNotePrefix is the delimited head of the status-event note
 // reportDuplicate writes on archive. Idempotency matches on it exactly
 // (ref followed by ": ") so .../pull/27 never matches a recorded .../pull/272.
@@ -2162,14 +2320,16 @@ func recordedDuplicateClosure(item *session.BacklogItemData, duplicateRef string
 }
 
 // reportDuplicate closes a backlog item as a duplicate of an existing GitHub
-// PR/issue/commit. Any caller may use it — a session linked in any role, or an
+// PR/issue/commit, or of another non-archived backlog item ("backlog:<uuid>"). Any caller may use it — a session linked in any role, or an
 // unlinked passerby — on an item in any non-terminal status. It archives
 // directly and never routes through the review gate: a work session that finds
 // its item already shipped has no diff to review, and an empty-diff review
 // would FAIL and reopen the item in a loop.
 //
 // Safety rails instead of a human review: duplicate_ref must verify on GitHub
-// (see resolveDuplicateRef); the archive is CAS-guarded on the status read;
+// (see resolveDuplicateRef) or, for a backlog: ref, name an existing
+// non-archived item (verifyBacklogDuplicateTarget — read before the archive, so
+// two items pointing at each other concurrently can both be archived); the archive is CAS-guarded on the status read;
 // and the call is refused while any session other than the caller still has an
 // open ItemSession on the item, so another session's active work is never
 // archived out from under it. The caller's own open link(s) are ended.
@@ -2208,6 +2368,12 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 	}
 	if len(reason) > 1000 {
 		return errResult(ErrInvalidArgument, "reason must be <= 1000 characters", ""), nil
+	}
+
+	// Lowercase a backlog: ref so idempotency matches the recorded note
+	// regardless of the UUID case the caller used.
+	if targetID, isBacklogRef := strings.CutPrefix(duplicateRef, backlogDuplicateRefPrefix); isBacklogRef {
+		duplicateRef = backlogDuplicateRefPrefix + strings.ToLower(targetID)
 	}
 
 	// Routed through the overridable getBacklogItemFor seam so tests can force
@@ -2260,7 +2426,11 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 	}
 
 	// Verify before any mutation.
-	if _, errRes := h.resolveDuplicateRef(ctx, duplicateRef); errRes != nil {
+	if targetID, isBacklogRef := strings.CutPrefix(duplicateRef, backlogDuplicateRefPrefix); isBacklogRef {
+		if errRes := h.verifyBacklogDuplicateTarget(ctx, item, targetID); errRes != nil {
+			return errRes, nil
+		}
+	} else if _, errRes := h.resolveDuplicateRef(ctx, duplicateRef); errRes != nil {
 		return errRes, nil
 	}
 
@@ -2278,7 +2448,7 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 	// must not fail the call.
 	now := time.Now()
 	for _, is := range ownOpenLinks {
-		if endErr := h.storage.UpdateItemSessionEnded(ctx, is.ID, now); endErr != nil { //nolint:silenttransition best-effort bookkeeping after the item is already archived (see comment above)
+		if endErr := h.storage.UpdateItemSessionEnded(ctx, is.ID, now); endErr != nil { //nolint:silenttransition best-effort bookkeeping; the item is already archived and the caller is told so
 			log.WarningLog().Printf("[mcp:report_duplicate] failed to end own link session=%s item=%s: %v", callerUUID, itemID, endErr)
 		}
 	}
@@ -2291,12 +2461,35 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 	)), nil
 }
 
+// verifyBacklogDuplicateTarget checks a "backlog:<uuid>" duplicate_ref names a
+// different, existing, non-archived item — the evidence bar for a backlog-to-
+// backlog duplicate, in place of GitHub existence. It does not move the
+// duplicate's dependencies, notes, or tags to the survivor.
+func (h *backlogHandlers) verifyBacklogDuplicateTarget(ctx context.Context, item *session.BacklogItemData, targetID string) *mcpgo.CallToolResult {
+	if err := validateUUID(targetID); err != nil {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref %q: %v", backlogDuplicateRefPrefix+targetID, err), "")
+	}
+	if strings.EqualFold(targetID, item.ID) {
+		return errResult(ErrInvalidArgument, "an item cannot be a duplicate of itself", "")
+	}
+	target, err := h.getBacklogItemFor(ctx, targetID)
+	if err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			return errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref target backlog item %q not found", targetID), "")
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("get duplicate_ref target: %v", err), "")
+	}
+	if session.BacklogStatus(target.Status) == session.BacklogStatusArchived {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref target %q is archived — point at the surviving item instead", targetID), "")
+	}
+	return nil
+}
+
 // resolveDuplicateRef parses and GitHub-verifies a report_duplicate
-// duplicate_ref. Shared by the linked-session path above (routes to review)
-// and reportDuplicateUnclaimed below (archives directly) so both apply the
-// identical evidence bar — a real, existing GitHub PR/issue/commit — before
-// touching the item. Returns a non-nil *mcpgo.CallToolResult (to return
-// verbatim) on any failure.
+// duplicate_ref (a real, existing GitHub PR/issue/commit) before reportDuplicate
+// touches the item; backlog: refs are checked by verifyBacklogDuplicateTarget
+// instead. Returns a non-nil *mcpgo.CallToolResult (to return verbatim) on any
+// failure.
 func (h *backlogHandlers) resolveDuplicateRef(ctx context.Context, duplicateRef string) (*githubpkg.ParsedGitHubRef, *mcpgo.CallToolResult) {
 	ref, parseErr := githubpkg.ParseGitHubRefWithHosts(duplicateRef, h.enterpriseHosts())
 	if parseErr != nil {
@@ -2824,10 +3017,10 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 				"Supported callers: a session linked to the item in ANY role (work, triage, review), or an unlinked session. "+
 				"Supported stages: any non-terminal status — idea, refining, ready, queued, in_progress, review, pr_pending. Items already done/archived are rejected, except a retry with the same duplicate_ref, which is a safe no-op. "+
 				"Your own open link to the item is ended by the closure. If ANY OTHER session still has an open link to the item, the call is refused with that session's role and UUID and nothing changes — do not archive an item another session is actively working. "+
-				"duplicate_ref must be a single full GitHub URL and is verified to exist BEFORE any state change; if it cannot be verified, nothing changes. "+
+				"duplicate_ref must be a single full GitHub URL, or \"backlog:<item-uuid>\" naming another existing, non-archived backlog item (this only archives the item — it does NOT move dependencies, notes, or tags to the survivor). It is verified BEFORE any state change; if it cannot be verified, nothing changes. "+
 				"If verifying duplicate_ref fails with INTERNAL_ERROR, this is transient — retry the call with the same arguments. "+
 				"If the result says this session has no configured GitHub credentials, that is not transient — do not retry. Leave the item as-is and note the missing-credentials issue in your summary so an operator can configure GitHub access for this session. "+
-				"This only confirms duplicate_ref exists on GitHub — it does not verify relevance to this item's work; that judgment is yours."),
+				"This only confirms duplicate_ref exists (on GitHub, or as a backlog item) — it does not verify relevance to this item's work; that judgment is yours."),
 			mcpgo.WithString("item_id",
 				mcpgo.Description("UUID of the backlog item"),
 				mcpgo.Required(),
@@ -2905,7 +3098,7 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 
 	s.AddTool(
 		mcpgo.NewTool("wait_for_backlog_event",
-			mcpgo.WithDescription("Block until a backlog item changes (e.g. a review verdict lands), or until timeout. Returns the event directly — status, verdict outcome/summary, or archival/removal reason — so a follow-up get_backlog_item call is usually unnecessary. If the awaited condition (e.g. a verdict) is already true when this is called, returns immediately with from_current_state=true instead of waiting out the full timeout. On timeout, returns event_received=false with a message naming the next move (a longer ScheduleWakeup interval, or one more bounded wait) — this is an expected outcome, not an error. Use this instead of a ScheduleWakeup + get_backlog_item polling loop when waiting on a specific item's outcome, e.g. after request_review."),
+			mcpgo.WithDescription("Block until a backlog item changes (e.g. a review verdict lands), or until timeout. Returns the event directly — status, verdict outcome/summary, or archival/removal reason — so a follow-up get_backlog_item call is usually unnecessary. If the awaited condition (e.g. a verdict) is already true when this is called, returns immediately with from_current_state=true instead of waiting out the full timeout. On timeout, returns event_received=false telling the session to end its turn; after repeated timeouts for the same session+item further waits are refused (WAIT_CAP_REACHED). Not for waiting on a review verdict after request_review: end your turn instead and the app steers the session with the verdict. Never pair with ScheduleWakeup or /loop."),
 			mcpgo.WithString("item_id",
 				mcpgo.Description("UUID of the backlog item"),
 				mcpgo.Required(),

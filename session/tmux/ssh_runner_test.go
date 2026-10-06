@@ -439,9 +439,18 @@ func TestSSHRunner_Run_MaxSessionsRejection_DoesNotEvictSharedClient(t *testing.
 		t.Logf("wait() on the closed long-lived session returned: %v (expected)", err)
 	}
 
-	out, err := runner.Run(ctx, "", "echo", "-n", "still-works")
-	if err != nil {
-		t.Fatalf("Run() after freeing the slot on the same connection: %v", err)
+	// The server releases the slot asynchronously after the client closes the
+	// session, so retry the rejection until it frees (bounded by ctx).
+	var out []byte
+	for {
+		out, err = runner.Run(ctx, "", "echo", "-n", "still-works")
+		if err == nil {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("Run() after freeing the slot on the same connection: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if string(out) != "still-works" {
 		t.Errorf("Run() after freeing the slot = %q, want %q", out, "still-works")

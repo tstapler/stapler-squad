@@ -88,6 +88,8 @@ type fakeHeadlessPool struct {
 	// require.Eventually, which is a scheduler-contention-sensitive flake under
 	// full-suite parallel load (BUG-103).
 	onEnter func()
+	// onExit, if set, runs when CallBlocking returns on any path (pairs with onEnter to count live callers).
+	onExit func()
 }
 
 type fakePoolCall struct {
@@ -124,7 +126,11 @@ func (f *fakeHeadlessPool) CallBlocking(ctx context.Context, key headless.Featur
 	}
 	onCall := f.onCall
 	onEnter := f.onEnter
+	onExit := f.onExit
 	f.mu.Unlock()
+	if onExit != nil {
+		defer onExit()
+	}
 	if onEnter != nil {
 		onEnter()
 	}
@@ -341,6 +347,8 @@ func (m *mockSessionSteerer) SessionProgram(uuid string) (string, bool) {
 // IsReadyForSteer implements SessionSteerer. Defaults to true (ready) unless
 // uuid is explicitly marked in notReady — see that field's doc comment.
 func (m *mockSessionSteerer) IsReadyForSteer(uuid string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return !m.notReady[uuid]
 }
 
@@ -400,7 +408,8 @@ type mockCreateCall struct {
 	programOverride string
 }
 
-func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, path, prompt string, tags []string, oneShot bool, _ bool, programOverride string) (*session.Instance, error) {
+func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, path string, opts SessionSpawnOptions) (*session.Instance, error) {
+	title, prompt, tags, oneShot, programOverride := opts.Title, opts.Prompt, opts.Tags, opts.OneShot, opts.ProgramOverride
 	_, contextErr := os.Stat(filepath.Join(path, ".backlog-context.md"))
 	_, slashErr := os.Stat(filepath.Join(path, ".claude", "commands", "backlog", "status.md"))
 	m.mu.Lock()
@@ -445,7 +454,8 @@ func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, pa
 
 // CreateWorktreeSession records the call to the same calls slice as CreateDirectorySession,
 // using worktreePath as the session path (that's where files are written before spawn).
-func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, title, _, worktreePath, prompt string, tags []string, oneShot bool, _ bool, programOverride string) (*session.Instance, error) {
+func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, _, worktreePath string, opts SessionSpawnOptions) (*session.Instance, error) {
+	title, prompt, tags, oneShot, programOverride := opts.Title, opts.Prompt, opts.Tags, opts.OneShot, opts.ProgramOverride
 	_, contextErr := os.Stat(filepath.Join(worktreePath, ".backlog-context.md"))
 	_, slashErr := os.Stat(filepath.Join(worktreePath, ".claude", "commands", "backlog", "status.md"))
 	m.mu.Lock()
@@ -3772,11 +3782,11 @@ func TestItemSessionToProto_HandlesInvalidTriageResultJSON(t *testing.T) {
 // errSessionCreator always returns an error from CreateDirectorySession and CreateWorktreeSession.
 type errSessionCreator struct{ err error }
 
-func (e *errSessionCreator) CreateDirectorySession(_ context.Context, _, _, _ string, _ []string, _ bool, _ bool, _ string) (*session.Instance, error) {
+func (e *errSessionCreator) CreateDirectorySession(_ context.Context, _ string, _ SessionSpawnOptions) (*session.Instance, error) {
 	return nil, e.err
 }
 
-func (e *errSessionCreator) CreateWorktreeSession(_ context.Context, _, _, _, _ string, _ []string, _ bool, _ bool, _ string) (*session.Instance, error) {
+func (e *errSessionCreator) CreateWorktreeSession(_ context.Context, _, _ string, _ SessionSpawnOptions) (*session.Instance, error) {
 	return nil, e.err
 }
 

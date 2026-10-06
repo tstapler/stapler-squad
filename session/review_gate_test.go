@@ -1948,3 +1948,32 @@ func TestReviewGateRunner_should_NotRecordGateSatisfaction_When_BuiltInGateConte
 	_, getErr := repo.GetByItemAndGate(ctx, uuid.MustParse(item.ID), uuid.New())
 	require.Error(t, getErr, "no row exists for any gate id since GateID==\"\" must never call Create/Update")
 }
+
+func TestDiffFromMergeBaseWhenResumed(t *testing.T) {
+	dir := t.TempDir()
+	runGitOrFail(t, dir, "init", "-q", "-b", "main")
+	runGitOrFail(t, dir, "config", "user.email", "t@example.com")
+	runGitOrFail(t, dir, "config", "user.name", "t")
+	runGitOrFail(t, dir, "commit", "-q", "--allow-empty", "-m", "base")
+	runGitOrFail(t, dir, "checkout", "-q", "-b", "work")
+	r := &ReviewGateRunner{}
+	item := &BacklogItemData{RepoPath: dir}
+
+	// Zero commits ahead of main: still empty, so the no-changes gate holds.
+	tip := strings.TrimSpace(runGitOutputOrFail(t, dir, "rev-parse", "HEAD"))
+	diff, _ := r.diffFromMergeBaseWhenResumed(context.Background(), item, dir, "work", tip, "", false)
+	require.Empty(t, strings.TrimSpace(diff))
+
+	// Pre-existing commits ahead of main with recorded base == tip (resumed branch).
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "f.txt"), []byte("hello\n"), 0o644))
+	runGitOrFail(t, dir, "add", "f.txt")
+	runGitOrFail(t, dir, "commit", "-q", "-m", "feature")
+	tip = runGitOutputOrFail(t, dir, "rev-parse", "HEAD")
+	diff, _ = r.diffFromMergeBaseWhenResumed(context.Background(), item, dir, "work", tip, "", false)
+	require.Contains(t, diff, "+hello")
+}
+
+func TestBackfillLockFilePath_SkipsInMemoryDSN(t *testing.T) {
+	require.Empty(t, (&EntRepository{dbPath: ":memory:"}).backfillLockFilePath("x.lock"))
+	require.Equal(t, filepath.Join("/data", "x.lock"), (&EntRepository{dbPath: "/data/sessions.db"}).backfillLockFilePath("x.lock"))
+}

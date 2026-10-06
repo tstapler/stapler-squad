@@ -31,16 +31,13 @@ import (
 
 // SessionCreator allows BacklogService to spawn sessions without importing handler internals.
 type SessionCreator interface {
-	// programOverride, when non-empty, replaces config.ResolveDefaults' resolved.Program
-	// as the spawned Instance's InstanceOptions.Program — set before session.NewInstance/
-	// instance.Start(true), never via a post-hoc SwitchProgram/Restart (see Epic 2.4's
-	// design note). Pass "" for callers unaffected by per-stage program overrides.
-	CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool, programOverride string) (*session.Instance, error)
+	// CreateDirectorySession creates a directory-type session at path. See
+	// SessionSpawnOptions.ProgramOverride's doc comment for how program overrides apply.
+	CreateDirectorySession(ctx context.Context, path string, opts SessionSpawnOptions) (*session.Instance, error)
 	// CreateWorktreeSession spawns a session inside an already-created git worktree at
 	// worktreePath. repoPath is the parent repo used for program resolution; worktreePath
-	// must already exist on disk before this is called. See programOverride's doc comment
-	// on CreateDirectorySession above.
-	CreateWorktreeSession(ctx context.Context, title, repoPath, worktreePath, prompt string, tags []string, oneShot bool, hidden bool, programOverride string) (*session.Instance, error)
+	// must already exist on disk before this is called.
+	CreateWorktreeSession(ctx context.Context, repoPath, worktreePath string, opts SessionSpawnOptions) (*session.Instance, error)
 }
 
 // AutonomousDriverStarter allows BacklogService to start an AutonomousDriver on an existing instance.
@@ -128,12 +125,16 @@ type itemSourceBackend interface {
 
 // BacklogService handles Backlog RPCs.
 type BacklogService struct {
-	storage           *session.Storage
-	sourceBackend     itemSourceBackend
-	sessionCreator    SessionCreator
-	sessionStopper    SessionStopper
-	sessionSteerer    SessionSteerer
-	autonomousStarter AutonomousDriverStarter
+	storage        *session.Storage
+	sourceBackend  itemSourceBackend
+	sessionCreator SessionCreator
+	sessionStopper SessionStopper
+	sessionSteerer SessionSteerer
+	// verdictSteer* override the verdict-delivery readiness poll (zero = defaults); tests only.
+	verdictSteerPollInterval, verdictSteerReadyTimeout time.Duration
+	// verdictSteerLatest maps itemID -> latest verdict key (see dispatchVerdictSteer).
+	verdictSteerLatest sync.Map
+	autonomousStarter  AutonomousDriverStarter
 	// repoWatchRemover tells the unfinished-changes scanner to stop watching a
 	// worktree path once it's removed from disk (BUG-034). nil-safe — wired via
 	// SetRepoWatchRemover.
@@ -564,7 +565,7 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 		pipelineModeRepo:     pipelineModeRepo,
 		shutdownCtx:          ctx,
 		shutdownCancel:       cancel,
-		triageSem:            make(chan struct{}, 8),
+		triageSem:            make(chan struct{}, cfg.MaxConcurrentTriageOrDefault()),
 		triageCleanupTimeout: defaultTriageCleanupTimeout,
 		resolveGitHubInput:   session.ResolveGitHubInput,
 		capabilityCheck:      headless.DefaultCapabilitySelfCheck,

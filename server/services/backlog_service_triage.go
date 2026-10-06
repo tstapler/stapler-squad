@@ -1065,13 +1065,17 @@ func (s *BacklogService) spawnSessionAfterGates(
 	if autonomous {
 		spawnTags = append(spawnTags, session.TagAutonomous)
 	}
+	spawnOpts := SessionSpawnOptions{
+		Title:           title,
+		Prompt:          prompt,
+		Tags:            spawnTags,
+		ProgramOverride: programOverride,
+	}
 	var inst *session.Instance
 	if useWorktree {
-		inst, err = s.sessionCreator.CreateWorktreeSession(ctx, title, item.RepoPath, worktreePath, prompt,
-			spawnTags, false, false, programOverride)
+		inst, err = s.sessionCreator.CreateWorktreeSession(ctx, item.RepoPath, worktreePath, spawnOpts)
 	} else {
-		inst, err = s.sessionCreator.CreateDirectorySession(ctx, title, worktreePath, prompt,
-			spawnTags, false, false, programOverride)
+		inst, err = s.sessionCreator.CreateDirectorySession(ctx, worktreePath, spawnOpts)
 	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn session: %w", err))
@@ -2494,6 +2498,16 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 // transition) before triage can run again — this mirrors the manual recovery already
 // performed for be676dab exactly, just automated.
 func (s *BacklogService) AutoRespawnTriage(ctx context.Context, itemID string) error {
+	return s.respawnTriage(ctx, itemID, true)
+}
+
+// ResumeTriage re-triggers triage after an operator answered a guidance request. Unlike
+// AutoRespawnTriage it never applies the cost-skip gate: the answer is new input.
+func (s *BacklogService) ResumeTriage(ctx context.Context, itemID string) error {
+	return s.respawnTriage(ctx, itemID, false)
+}
+
+func (s *BacklogService) respawnTriage(ctx context.Context, itemID string, applyGate bool) error {
 	if s.storage == nil {
 		return fmt.Errorf("storage not available")
 	}
@@ -2501,6 +2515,20 @@ func (s *BacklogService) AutoRespawnTriage(ctx context.Context, itemID string) e
 	item, err := s.storage.GetBacklogItem(ctx, itemID)
 	if err != nil {
 		return fmt.Errorf("load item: %w", err)
+	}
+
+	if applyGate {
+		sessions, listErr := s.storage.ListItemSessions(ctx, itemID)
+		if listErr != nil {
+			log.Warn("[AutoRespawnTriage] list sessions failed; skipping unchanged-content gate", "item", itemID, "error", listErr)
+		}
+		if listErr == nil && (item.Status == string(session.BacklogStatusIdea) || item.Status == string(session.BacklogStatusQueued)) {
+			// Checked before the queued->idea reset below so a skipped item is not demoted.
+			if reason := unchangedRetriageSkipReason(item, sessions); reason != "" {
+				s.recordTriageSkip(ctx, itemID, reason+"; human action needed (approve the plan or edit the item)")
+				return nil
+			}
+		}
 	}
 
 	switch session.BacklogStatus(item.Status) {
@@ -2605,6 +2633,12 @@ func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string
 //     headless.idleTimeout (session/headless/pool.go) — checked before
 //     "timeout" so a genuinely stalled call isn't indistinguishable from a
 //     legitimately long-but-active one.
+//   - "fanout_ceiling": an sdd-mode call crossed its configured turn/subagent ceiling
+//     (headless.ErrFanoutCeilingExceeded, ADR-029). Checked before "timeout" so an abort
+//     near the budget tail keeps its distinct reason.
+//   - "cost_ceiling": estimated spend crossed headless.CallOptions.MaxCostUSD/MaxTokens
+//     (headless.ErrCostCeilingExceeded) — a busy-but-wasteful call, caught regardless
+//     of elapsed time. Checked before "timeout" so it is never mislabeled as one.
 //   - "timeout": ctx deadline exceeded, or elapsed is within 5s of budget (covers a
 //     hang whose error got wrapped/lost before reaching context.DeadlineExceeded). With
 //     idle detection now the primary defense against a truly stuck call, this bucket
@@ -2640,6 +2674,10 @@ func classifyHeadlessCallError(err error, elapsed, budget time.Duration) string 
 		return "pool_saturated"
 	case errors.Is(err, headless.ErrIdleTimeout):
 		return "idle"
+	case errors.Is(err, headless.ErrFanoutCeilingExceeded):
+		return session.TriageEndReasonFanoutCeiling
+	case errors.Is(err, headless.ErrCostCeilingExceeded):
+		return session.TriageEndReasonCostCeiling
 	case errors.Is(err, context.DeadlineExceeded), budget-elapsed < 5*time.Second:
 		return "timeout"
 	case errors.Is(err, context.Canceled):
@@ -2701,6 +2739,21 @@ func (s *BacklogService) captureHeadlessFailure(sessionUUID, raw string) string 
 func (s *BacklogService) MaybeTriggerTriage(ctx context.Context, itemID string, skipTriage bool, repoPath string) bool {
 	if skipTriage || repoPath == "" || s.headlessPool == nil {
 		return false
+	}
+	if s.storage != nil {
+		if item, getErr := s.storage.GetBacklogItem(ctx, itemID); getErr == nil {
+			if reason := newItemTriageSkipReason(item); reason != "" {
+				s.recordTriageSkip(ctx, itemID, reason)
+				// Triage is what normally advances idea->ready; without it a skipped item
+				// would sit in idea forever, so advance it here (the note above is the visible record).
+				precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
+				if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, //nolint:silenttransition surfaced via the triage-gate activity note recorded just above
+					session.BacklogStatusReady, precondition, session.TriggeredBySystem); transErr != nil {
+					log.Warn("[MaybeTriggerTriage] failed to advance skipped item to ready", "item", itemID, "error", transErr)
+				}
+				return false
+			}
+		}
 	}
 	// 30s gates only the synchronous path (item lookup + ItemSession creation).
 	// The headless LLM call itself runs in a goroutine under shutdownCtx (30-min cap).
@@ -3169,8 +3222,14 @@ Do not modify the code. Only write the review verdict.
 		s.archiveItemWorkSessions(ctx, []session.ItemSessionSummary{*mostRecentReviewSession})
 	}
 
-	inst, spawnErr := s.sessionCreator.CreateDirectorySession(ctx, title, item.RepoPath, reReviewPrompt,
-		[]string{"backlog:review"}, !useAutonomous /*oneShot*/, true /*hidden*/, "" /*programOverride: review-stage threading is out of Epic 2.4's scope*/)
+	inst, spawnErr := s.sessionCreator.CreateDirectorySession(ctx, item.RepoPath, SessionSpawnOptions{
+		Title:  title,
+		Prompt: reReviewPrompt,
+		Tags:   []string{"backlog:review"},
+		// review-stage program threading is out of Epic 2.4's scope, so ProgramOverride stays "".
+		OneShot: !useAutonomous,
+		Hidden:  true,
+	})
 	if spawnErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn re-review session: %w", spawnErr))
 	}

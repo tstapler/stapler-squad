@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/cdp"
+	"github.com/tstapler/stapler-squad/session/contexthistory"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/scrollback"
@@ -1282,6 +1283,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// (below), now reading these already-constructed outer-scope variables.
 	homeDir, homeDirErr := os.UserHomeDir()
 	var tokenStore *tokens.TokenStore
+	var ctxHistoryStore *contexthistory.Store
 	var historyDir string
 	if homeDirErr == nil {
 		// Under test isolation this resolves inside the isolated config dir
@@ -1296,6 +1298,13 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		tokenStore = tokens.NewTokenStore(historyDir)
 		historyLinker.RegisterFileCallback(tokenStore.OnHistoryFileChanged)
 		tokenStore.Start(context.Background())
+		// Persist context history off the parse/CapacityMonitor path: the recorder
+		// consumes TokenStore's notifications on its own goroutine.
+		if entClient := storage.GetEntClient(); entClient != nil {
+			ctxHistoryStore = contexthistory.NewStore(entClient)
+			go contexthistory.NewRecorder(ctxHistoryStore, services.AnthropicContextWindow, 0).
+				Run(context.Background(), tokenStore)
+		}
 	} else {
 		log.Warn("could not resolve Claude history dir for InsightsService token store", "err", homeDirErr)
 	}
@@ -1392,6 +1401,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogSvc.SetEventBus(eventBus)
 	backlogSvc.SetSessionStopper(sessionService)
 	backlogSvc.SetSessionSteerer(sessionService)
+	backlogSvc.StartVerdictSteering()
 	backlogSvc.SetAutonomousDriverStarter(sessionService)
 	if unfinishedScanner != nil {
 		backlogSvc.SetRepoWatchRemover(unfinishedScanner)
@@ -1607,6 +1617,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		associator := tokens.NewAssociator(storage)
 		insightsSvc = services.NewInsightsService(tokenStore, pricing, associator, storage)
 		insightsSvc.SetDismissedFindingsStore(storage)
+		insightsSvc.SetContextHistoryStore(ctxHistoryStore)
 		sessionService.SetTokenStoreReader(tokenStore)
 		backlogSvc.SetTokenStore(tokenStore, pricing)
 		if sessionSummaryGenerator != nil {

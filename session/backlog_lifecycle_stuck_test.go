@@ -1160,15 +1160,17 @@ func TestRemediateStaleWorkWithBackoffGate_should_parkAfterMaxAttempts_When_Rewo
 
 	assert.Contains(t, notifier.titles(), "Auto-rework paused", "the 5th attempt must fire the parked notification regardless of ReworkCapOverride=0")
 
-	// 6th call, well past backoff: must not consume another attempt — the
-	// unlimited rework cap does not un-park a MaxRemediationAttempts-exhausted row.
-	backdateNextRemediationAt(t, er, item.ID, domain.StuckReasonStaleWork, time.Now().Add(-time.Second))
-	listener.remediateStaleWorkWithBackoffGate(ctx, item.ID, item.Title)
+	// Past backoff the parked row gets only the bounded cold retries; the
+	// unlimited rework cap must not extend that budget.
+	for i := 0; i < int(MaxRemediationColdRetries)+2; i++ {
+		backdateNextRemediationAt(t, er, item.ID, domain.StuckReasonStaleWork, time.Now().Add(-time.Second))
+		listener.remediateStaleWorkWithBackoffGate(ctx, item.ID, item.Title)
+	}
 
 	rows, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, int32(5), rows[0].RemediationAttempts, "parked attempt count must not grow past the cap even with an unlimited rework override")
+	assert.Equal(t, MaxRemediationAttempts+MaxRemediationColdRetries, rows[0].RemediationAttempts, "attempt count must stop at the cold-retry ceiling even with an unlimited rework override")
 }
 
 // --- rework_blocked_stale: reconcileReworkBlockedStaleResolution orchestration
@@ -1856,6 +1858,40 @@ func TestReconcileOrphanedTriageRemediation_should_retryEndedWithoutTransitionRo
 		assert.Equal(t, item.ID, itemID)
 	case <-time.After(time.Second):
 		t.Fatal("expected AutoRespawnTriage to be dispatched for the ended-without-transition row")
+	}
+}
+
+// TestReconcileOrphanedTriageRemediation_should_notRetry_When_LatestTriageHitFanoutCeiling
+// pins ADR-029: a deterministic fan-out overrun must not be auto-retried by the
+// shared backoff (30m..72h, then cold heartbeat), each attempt re-spending up to the ceiling.
+func TestReconcileOrphanedTriageRemediation_should_notRetry_When_LatestTriageHitFanoutCeiling(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "ceiling", AcceptanceCriteria: `[]`, Priority: 1, Status: string(BacklogStatusIdea)})
+	require.NoError(t, err)
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "headless-triage-" + uuid.New().String(), SessionRole: SessionRoleTriage})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEndedWithReason(ctx, is.ID, time.Now(), TriageEndReasonFanoutCeiling))
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	respawner := newFakeTriageRespawner()
+	listener.SetTriageRespawner(respawner)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "the abort still surfaces to the operator as a stuck row")
+	listener.reconcileOrphanedTriageRemediation(ctx, er)
+
+	select {
+	case <-respawner.calls:
+		t.Fatal("a fan-out-ceiling abort must not be auto-retried")
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 

@@ -154,8 +154,10 @@ func TestStreamHub_should_ScheduleTeardownAfterGracePeriod_When_LastSubscriberDe
 	if !waitFor(t, 5*time.Second, func() bool { return controller.stopCalls.Load() == 1 }) {
 		t.Fatalf("expected StopControlMode called exactly once within grace period, got %d calls (hub state: %v)", controller.stopCalls.Load(), hub.State())
 	}
-	if got := hub.State(); got != streamhub.HubTornDown {
-		t.Fatalf("expected HubTornDown after grace period elapses, got %v", got)
+	// StopControlMode is called before the state flips (see above), so wait for the
+	// flip too rather than reading State() the instant stopCalls hits 1.
+	if !waitFor(t, 5*time.Second, func() bool { return hub.State() == streamhub.HubTornDown }) {
+		t.Fatalf("expected HubTornDown after grace period elapses, got %v", hub.State())
 	}
 }
 

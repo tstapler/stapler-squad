@@ -47,6 +47,10 @@ func TestClassifyHeadlessCallError_should_BucketErrorsForLogGrepping(t *testing.
 		{"idle timeout (stream stalled)", headless.ErrIdleTimeout, 5 * time.Minute, "idle"},
 		{"wrapped idle timeout", fmt.Errorf("headless call ended: %w", headless.ErrIdleTimeout), 5 * time.Minute, "idle"},
 		{"idle timeout even with elapsed near budget must not fall into the timeout heuristic", headless.ErrIdleTimeout, triageCallBudget - time.Second, "idle"},
+		{"fan-out ceiling", &headless.FanoutCeilingError{Turns: 700, Subagents: 121, MaxTurns: 600, MaxSubagents: 120}, 40 * time.Minute, "fanout_ceiling"},
+		{"wrapped fan-out ceiling near budget must not fall into the timeout heuristic", fmt.Errorf("headless call ended: %w", &headless.FanoutCeilingError{}), triageCallBudget - time.Second, "fanout_ceiling"},
+		{"cost ceiling exceeded", fmt.Errorf("headless call ended: %w", &headless.CostCeilingError{SpendUSD: 30}), 5 * time.Minute, "cost_ceiling"},
+		{"cost ceiling even with elapsed near budget must not fall into the timeout heuristic", headless.ErrCostCeilingExceeded, triageCallBudget - time.Second, "cost_ceiling"},
 		{"ctx deadline exceeded", context.DeadlineExceeded, 5 * time.Minute, "timeout"},
 		{"wrapped ctx deadline exceeded", fmt.Errorf("headless call ended: %w", context.DeadlineExceeded), 5 * time.Minute, "timeout"},
 		{"elapsed within budget tail even without deadline error", errors.New("some other error"), 3*time.Hour - 4*time.Second, "timeout"},
@@ -4397,11 +4401,10 @@ func TestTriggerTriage_should_SetCallOptionsModel_When_PipelineModeConfiguresTri
 	assert.Empty(t, sessions[0].ExecutorFallbackReason)
 }
 
-// TestTriggerTriage_should_LeaveCallOptionsModelEmpty_When_PipelineModeIsDefault
-// (Story 2.3.2) is the byte-identical-to-today counterpart: an item on
-// PipelineModeDefault (no stage executor override configured anywhere) must
-// resolve to an empty CallOptions.Model, unchanged from pre-Epic-2.3 behavior.
-func TestTriggerTriage_should_LeaveCallOptionsModelEmpty_When_PipelineModeIsDefault(t *testing.T) {
+// TestTriggerTriage_should_UseConfiguredTriageModel_When_PipelineModeIsDefault: an item on
+// PipelineModeDefault (no stage executor override) runs triage on the configured triage
+// model (default family:sonnet), not the account default — and an explicit "none" opts out.
+func TestTriggerTriage_should_UseConfiguredTriageModel_When_PipelineModeIsDefault(t *testing.T) {
 	t.Parallel()
 	storage := createTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
@@ -4426,7 +4429,7 @@ func TestTriggerTriage_should_LeaveCallOptionsModelEmpty_When_PipelineModeIsDefa
 		return pool.callCount() == 1
 	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call")
 
-	assert.Empty(t, pool.firstCall().model, "CallOptions.Model must stay empty when no stage executor override is configured")
+	assert.Equal(t, "claude-sonnet-4-6", pool.firstCall().model, "unpinned triage must use the configured default model, not the account default")
 }
 
 // TestTriggerTriage_should_UseUnmodifiedRetriagePrompt_When_RetriagingRegardlessOfPipelineMode
