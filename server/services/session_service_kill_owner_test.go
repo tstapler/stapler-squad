@@ -39,3 +39,20 @@ func TestTmuxSessionKillAllowed_OwnershipPolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestKillTmuxSessionByTitle_RefusedReturnsSentinel(t *testing.T) {
+	orig := readSessionOwnerUUID
+	t.Cleanup(func() { readSessionOwnerUUID = orig })
+	readSessionOwnerUUID = func(context.Context, tmux.Socket, string) (string, error) { return "uuid-other", nil }
+
+	err := (&SessionService{}).KillTmuxSessionByTitle(t.Context(), "some title", "uuid-a")
+	require.ErrorIs(t, err, ErrTmuxKillRefused)
+}
+
+func TestIsTmuxSessionAbsentText(t *testing.T) {
+	for _, s := range []string{"can't find session: x", "no such session: x", "no server running on /tmp/x", "error connecting to /tmp/x"} {
+		require.True(t, isTmuxSessionAbsentText(s), s)
+	}
+	require.True(t, isTmuxSessionAbsentText("No Server Running"))
+	require.False(t, isTmuxSessionAbsentText("permission denied"))
+}

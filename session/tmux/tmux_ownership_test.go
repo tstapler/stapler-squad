@@ -98,3 +98,80 @@ func TestEnsureSessionExistsLocked_OwnerMismatch_RecreatesInsteadOfReattaching(t
 	require.True(t, killed(), "stale session with mismatched owner marker must be killed, not reused")
 	require.True(t, recreated(), "a fresh session must be created after the mismatched stale session is killed")
 }
+
+// TestStart_OwnerMatch_ReusesWithoutKilling guards against an always-kill bug:
+// a pane whose marker matches our UUID must be reused as-is.
+func TestStart_OwnerMatch_ReusesWithoutKilling(t *testing.T) {
+	t.Parallel()
+	const uuid = "55555555-5555-5555-5555-555555555555"
+	cmdExec, killed, recreated := ownerMismatchFixture("staplersquad_owner-match-test", uuid, uuid)
+
+	session := newTmuxSessionWithSocket("owner-match-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, "", WithRegistry(nil))
+	session.SetExtraEnv([]string{"STAPLER_SESSION_UUID=" + uuid})
+
+	require.NoError(t, session.Start(t.TempDir()))
+	require.False(t, killed(), "a pane owned by this instance must not be killed")
+	require.False(t, recreated(), "a pane owned by this instance must be reused, not recreated")
+}
+
+func TestVerifyExistingSessionOwner(t *testing.T) {
+	t.Parallel()
+	const want = "66666666-6666-6666-6666-666666666666"
+	tests := []struct {
+		name    string
+		extra   []string
+		out     string
+		err     error
+		wantOK  bool
+		wantRun bool // whether show-environment should have been consulted
+	}{
+		{"no expected owner skips verification", nil, "", nil, true, false},
+		{"marker matches", []string{"STAPLER_SESSION_UUID=" + want}, "STAPLER_SESSION_UUID=" + want, nil, true, true},
+		{"marker differs", []string{"STAPLER_SESSION_UUID=" + want}, "STAPLER_SESSION_UUID=other", nil, false, true},
+		{"marker unreadable refuses", []string{"STAPLER_SESSION_UUID=" + want}, "", fmt.Errorf("unknown variable"), false, true},
+		{"transient error refuses", []string{"STAPLER_SESSION_UUID=" + want}, "", fmt.Errorf("context deadline exceeded"), false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			consulted := false
+			cmdExec := MockCmdExec{OutputFunc: func(*exec.Cmd) ([]byte, error) {
+				consulted = true
+				return []byte(tt.out), tt.err
+			}}
+			session := newTmuxSessionWithSocket("verify-owner-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, "", WithRegistry(nil))
+			session.SetExtraEnv(tt.extra)
+			require.Equal(t, tt.wantOK, session.verifyExistingSessionOwner(t.Context()))
+			require.Equal(t, tt.wantRun, consulted)
+		})
+	}
+}
+
+// A transient read failure must never kill a live pane.
+func TestStart_OwnerUnverifiable_DoesNotKill(t *testing.T) {
+	t.Parallel()
+	killed := false
+	cmdExec := MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			if strings.Contains(cmd.String(), "kill-session") {
+				killed = true
+			}
+			return nil
+		},
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			s := cmd.String()
+			switch {
+			case strings.Contains(s, "show-environment"):
+				return nil, fmt.Errorf("context deadline exceeded")
+			case strings.Contains(s, "list-sessions"):
+				return []byte("staplersquad_unverifiable-test"), nil
+			}
+			return []byte("output"), nil
+		},
+	}
+	session := newTmuxSessionWithSocket("unverifiable-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, "", WithRegistry(nil))
+	session.SetExtraEnv([]string{"STAPLER_SESSION_UUID=77777777-7777-7777-7777-777777777777"})
+
+	require.Error(t, session.Start(t.TempDir()))
+	require.False(t, killed, "an unverifiable pane must not be killed")
+}

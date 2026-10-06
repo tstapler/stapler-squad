@@ -3180,7 +3180,9 @@ Do not modify the code. Only write the review verdict.
 				ownUUIDs = append(ownUUIDs, is.SessionUUID)
 			}
 		}
-		_ = s.sessionStopper.KillTmuxSessionByTitle(ctx, title, ownUUIDs...)
+		if err := s.sessionStopper.KillTmuxSessionByTitle(ctx, title, ownUUIDs...); errors.Is(err, ErrTmuxKillRefused) {
+			log.Warn("re-review: stale tmux session not owned by this item, leaving it", "title", title, "err", err)
+		}
 	}
 
 	// Archive the prior review round's Instance before spawning its replacement —

@@ -9,7 +9,9 @@ package tmux
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -60,37 +62,65 @@ func (t *TmuxSession) expectedOwnerUUID() string {
 	return ""
 }
 
-// verifyExistingSessionOwner checks that a tmux session already confirmed to
-// exist under t.sanitizedName actually belongs to this TmuxSession's expected
-// owner, before a caller reattaches to or reuses it. Returns true when either
-// there's nothing to verify against (expectedOwnerUUID is empty) or the
-// pane's STAPLER_SESSION_UUID marker matches. A present-but-different or
-// altogether absent marker is treated as untrusted, not grandfathered in --
-// ce71ad1a's whole incident was exactly a name match without this check.
-//
-// Goes through t.cmdExec (not ReadSessionOwnerUUID's raw safeexec) so the
-// existing reuse-path unit tests can mock it without a real tmux binary.
-func (t *TmuxSession) verifyExistingSessionOwner(ctx context.Context) bool {
+type ownerVerdict int
+
+const (
+	ownerMatch        ownerVerdict = iota // reuse the pane
+	ownerForeign                          // marker absent or a different UUID: safe to replace
+	ownerUnverifiable                     // couldn't read the marker (timeout, tmux hiccup): don't touch the pane
+)
+
+// existingSessionOwner classifies the pane already living under t.sanitizedName.
+// An absent marker is foreign (ce71ad1a); only a failed read is unverifiable.
+func (t *TmuxSession) existingSessionOwner(ctx context.Context) ownerVerdict {
 	want := t.expectedOwnerUUID()
 	if want == "" {
-		return true
+		return ownerMatch
 	}
 	ctx, cancel := context.WithTimeout(ctx, ownerTmuxCmdTimeout)
 	defer cancel()
 	cmd := t.buildTmuxCommandContext(ctx, "show-environment", "-t", t.sanitizedName, "STAPLER_SESSION_UUID")
 	out, err := t.cmdExec.Output(cmd)
 	if err != nil {
-		log.Warn("verifyExistingSessionOwner: could not read pane owner marker, refusing to reuse",
-			"session", t.sanitizedName, "want", want, "err", err)
-		return false
+		detail := err.Error() + string(out)
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			detail += string(exitErr.Stderr)
+		}
+		if strings.Contains(detail, "unknown variable") {
+			log.Warn("existingSessionOwner: pane has no owner marker", "session", t.sanitizedName, "want", want)
+			return ownerForeign
+		}
+		log.Warn("existingSessionOwner: could not read pane owner marker", "session", t.sanitizedName, "want", want, "err", err)
+		return ownerUnverifiable
 	}
 	got := strings.TrimPrefix(strings.TrimSpace(string(out)), "STAPLER_SESSION_UUID=")
 	if got != want {
-		log.Warn("verifyExistingSessionOwner: pane owner mismatch, refusing to reuse stale session",
-			"session", t.sanitizedName, "want", want, "got", got)
-		return false
+		log.Warn("existingSessionOwner: pane owner mismatch", "session", t.sanitizedName, "want", want, "got", got)
+		return ownerForeign
 	}
-	return true
+	return ownerMatch
+}
+
+// verifyExistingSessionOwner reports whether the existing pane is safe to
+// attach to: true only on a confirmed match.
+func (t *TmuxSession) verifyExistingSessionOwner(ctx context.Context) bool {
+	return t.existingSessionOwner(ctx) == ownerMatch
+}
+
+// reuseOrReplaceExisting decides what to do with a pane found under our name:
+// reuse=true on a match; a foreign pane is killed so the caller recreates it;
+// an unverifiable one is left alone and returned as an error.
+func (t *TmuxSession) reuseOrReplaceExisting() (reuse bool, err error) {
+	switch t.existingSessionOwner(context.Background()) {
+	case ownerMatch:
+		return true, nil
+	case ownerForeign:
+		_ = t.killMismatchedOwnerSession() // failure surfaces as a duplicate-session error on recreate
+		return false, nil
+	default:
+		return false, fmt.Errorf("tmux session %q owner could not be verified; refusing to reuse or kill it", t.sanitizedName)
+	}
 }
 
 // killMismatchedOwnerSession kills a stale tmux session whose owner marker
