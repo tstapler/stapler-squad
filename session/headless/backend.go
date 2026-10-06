@@ -3,6 +3,7 @@ package headless
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 )
 
@@ -179,6 +180,11 @@ func (s BackendSettings) Validate() error {
 	if s.Default != "" && !known[s.Default] {
 		return fmt.Errorf("unknown default backend %q", s.Default)
 	}
+	for name, raw := range map[string]string{"consolette": s.ConsoletteBaseURL, "anthropic": s.AnthropicBaseURL} {
+		if err := validateBaseURL(raw); err != nil {
+			return fmt.Errorf("%s base URL: %w", name, err)
+		}
+	}
 	features := map[string]bool{}
 	for _, f := range OverridableFeatureKeys() {
 		features[f] = true
@@ -195,6 +201,19 @@ func (s BackendSettings) Validate() error {
 		if !known[b] {
 			return fmt.Errorf("model map for unknown backend %q", b)
 		}
+	}
+	return nil
+}
+
+// validateBaseURL accepts empty (use the default) or an absolute http(s) URL with a host.
+func validateBaseURL(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("%q must be an absolute http(s) URL", raw)
 	}
 	return nil
 }

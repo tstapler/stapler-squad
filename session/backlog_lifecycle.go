@@ -76,6 +76,9 @@ type BacklogLifecycleListener struct {
 	// poolMu guards headlessPool for concurrent Set/get access.
 	poolMu       sync.RWMutex
 	headlessPool *headless.Pool
+	// headlessClient, when set, takes precedence over headlessPool for gate and PR-draft
+	// calls so they honor the LLM backend selector. Guarded by poolMu.
+	headlessClient headless.PoolClient
 
 	// autoReopenMu guards autoReopener for concurrent Set/get access.
 	autoReopenMu sync.RWMutex
@@ -706,6 +709,27 @@ func (l *BacklogLifecycleListener) getSessionLivenessChecker() func(sessionUUID 
 	l.sessionLivenessCheckerMu.RLock()
 	defer l.sessionLivenessCheckerMu.RUnlock()
 	return l.sessionLivenessChecker
+}
+
+// SetHeadlessClient routes custom-gate and PR-description calls through c
+// (normally a headless.SelectingClient) instead of the raw claude pool.
+func (l *BacklogLifecycleListener) SetHeadlessClient(c headless.PoolClient) {
+	l.poolMu.Lock()
+	defer l.poolMu.Unlock()
+	l.headlessClient = c
+}
+
+// getHeadlessCaller returns the selector client if wired, else the raw pool, else nil.
+func (l *BacklogLifecycleListener) getHeadlessCaller() headless.PoolClient {
+	l.poolMu.RLock()
+	defer l.poolMu.RUnlock()
+	if l.headlessClient != nil {
+		return l.headlessClient
+	}
+	if l.headlessPool != nil {
+		return l.headlessPool
+	}
+	return nil
 }
 
 // getHeadlessPool returns the current headless pool under a read lock.

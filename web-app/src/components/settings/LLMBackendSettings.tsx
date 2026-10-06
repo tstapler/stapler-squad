@@ -23,6 +23,8 @@ import {
   actions,
   saveStatus,
   saveError as saveErrorClass,
+  inputTouch,
+  buttonTouch,
   featureRow,
   featureName,
   select,
@@ -59,10 +61,10 @@ export function LLMBackendSettings() {
 
   const clientRef = useRef<ReturnType<typeof createClient<typeof LLMBackendService>> | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (silent = false) => {
     if (!clientRef.current) return;
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       setLoadError(null);
       const resp = await clientRef.current.getLLMBackendSettings({});
       const s = resp.settings;
@@ -88,14 +90,16 @@ export function LLMBackendSettings() {
   }, [load]);
 
   function setOverride(feature: string, backend: string) {
-    const next = { ...perFeature };
-    if (backend === DEFAULT_OPTION) delete next[feature];
-    else next[feature] = backend;
-    setPerFeature(next);
+    setPerFeature((prev) => {
+      const next = { ...prev };
+      if (backend === DEFAULT_OPTION) delete next[feature];
+      else next[feature] = backend;
+      return next;
+    });
   }
 
   function setAlias(backend: string, alias: string, value: string) {
-    setModelMaps({ ...modelMaps, [backend]: { ...modelMaps[backend], [alias]: value } });
+    setModelMaps((prev) => ({ ...prev, [backend]: { ...prev[backend], [alias]: value } }));
   }
 
   async function handleSave() {
@@ -117,7 +121,7 @@ export function LLMBackendSettings() {
         },
       });
       setStatus("Saved — applies to the next call, no restart needed.");
-      await load();
+      await load(true);
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -138,9 +142,9 @@ export function LLMBackendSettings() {
     return (
       <div className={container}>
         <h2 className={heading}>LLM Backends</h2>
-        <div role="alert">{loadError}</div>
+        <div role="alert" className={saveErrorClass}>{loadError}</div>
         <div className={actions}>
-          <button type="button" className="btn btn-primary" onClick={load}>
+          <button type="button" className={`btn btn-primary ${buttonTouch}`} onClick={() => load()}>
             Retry
           </button>
         </div>
@@ -213,7 +217,7 @@ export function LLMBackendSettings() {
             id="llm-consolette-url"
             type="url"
             inputMode="url"
-            className={input}
+            className={`${input} ${inputTouch}`}
             value={consoletteUrl}
             onChange={(e) => setConsoletteUrl(e.target.value)}
             placeholder="http://127.0.0.1:47000"
@@ -230,7 +234,7 @@ export function LLMBackendSettings() {
             id="llm-anthropic-url"
             type="url"
             inputMode="url"
-            className={input}
+            className={`${input} ${inputTouch}`}
             value={anthropicUrl}
             onChange={(e) => setAnthropicUrl(e.target.value)}
             placeholder="https://api.anthropic.com"
@@ -250,7 +254,7 @@ export function LLMBackendSettings() {
                 <input
                   id={`llm-model-${b.name}-${alias}`}
                   type="text"
-                  className={input}
+                  className={`${input} ${inputTouch}`}
                   value={modelMaps[b.name]?.[alias] ?? ""}
                   onChange={(e) => setAlias(b.name, alias, e.target.value)}
                   placeholder="backend default"
@@ -269,7 +273,7 @@ export function LLMBackendSettings() {
         )}
 
         <div className={actions}>
-          <button type="button" className="btn btn-primary" onClick={handleSave} disabled={saving}>
+          <button type="button" className={`btn btn-primary ${buttonTouch}`} onClick={handleSave} disabled={saving}>
             {saving ? "Saving…" : "Save"}
           </button>
           {status && (

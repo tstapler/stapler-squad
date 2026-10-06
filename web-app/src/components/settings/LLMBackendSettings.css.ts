@@ -34,3 +34,7 @@ export const select = style({
   flex: "1 1 10rem",
   minHeight: "44px",
 });
+
+export const inputTouch = style({ minHeight: "44px" });
+
+export const buttonTouch = style({ minHeight: "44px" });

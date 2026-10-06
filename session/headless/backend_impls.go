@@ -86,7 +86,7 @@ func NewConsolettePool(cfg PoolConfig, baseURL string) (*Pool, error) {
 	homeDir, _ := os.UserHomeDir()
 	bin, err := findClaudeBinary(exec.LookPath, homeDir, claudeFallbackDirs)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrClaudeNotFound, err)
+		return nil, fmt.Errorf("%w: %w", ErrClaudeNotFound, err)
 	}
 	applyDefaults(&cfg)
 	runner := &ProcessRunner{claudeBin: bin, extraEnv: []string{"ANTHROPIC_BASE_URL=" + baseURL}}
@@ -103,14 +103,20 @@ func (c *ConsoletteBackend) baseURL() string { return c.settings().ConsoletteURL
 func (c *ConsoletteBackend) Available() bool {
 	url := c.baseURL()
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.probeURL == url && c.now().Sub(c.probeAt) < consoletteProbeTTL {
-		return c.probeOK
+		ok := c.probeOK
+		c.mu.Unlock()
+		return ok
 	}
+	c.mu.Unlock()
+	// Probe unlocked so a down router can't stall CallBlocking behind c.mu.
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
-	c.probeURL, c.probeAt, c.probeOK = url, c.now(), c.probe(ctx, url)
-	return c.probeOK
+	ok := c.probe(ctx, url)
+	c.mu.Lock()
+	c.probeURL, c.probeAt, c.probeOK = url, c.now(), ok
+	c.mu.Unlock()
+	return ok
 }
 
 // CallBlocking implements PoolClient against the pool for the current base URL.
@@ -141,7 +147,7 @@ func httpReachable(ctx context.Context, baseURL string) bool {
 	if err != nil {
 		return false
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := reachabilityClient.Do(req)
 	if err != nil {
 		return false
 	}
@@ -230,3 +236,6 @@ func runCLI(ctx context.Context, bin string, args []string, stdin io.Reader, dir
 	}
 	return executor.New(ctx, bin, args, opts...).Output()
 }
+
+// reachabilityClient doesn't follow redirects: any response means the router is up.
+var reachabilityClient = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
