@@ -538,13 +538,51 @@ func latestReviewVerdict(ctx context.Context, storage *session.Storage, itemID s
 		log.WarningLog().Printf("get_backlog_item: failed to list item sessions for %s: %v", itemID, err)
 		return nil
 	}
+	return latestVerdictFromSessions(sessions)
+}
+
+// latestVerdictFromSessions picks the newest verdict by CreatedAt rather than by
+// session order, which a later-created session without a verdict can't skew.
+func latestVerdictFromSessions(sessions []session.ItemSessionSummary) *session.ReviewVerdictSummary {
 	var latest *session.ReviewVerdictSummary
 	for _, s := range sessions {
-		if s.ReviewVerdict != nil {
+		if s.ReviewVerdict != nil && (latest == nil || !s.ReviewVerdict.CreatedAt.Before(latest.CreatedAt)) {
 			latest = s.ReviewVerdict
 		}
 	}
 	return latest
+}
+
+// latestReviewEntryTime returns when item most recently entered review — the
+// moment of the latest request_review (or equivalent routing) — from its status
+// history. ok is false when the history holds no such transition.
+func latestReviewEntryTime(item *session.BacklogItemData) (t time.Time, ok bool) {
+	for _, ev := range item.StatusEvents {
+		if ev.ToStatus == string(session.BacklogStatusReview) && ev.CreatedAt.After(t) {
+			t, ok = ev.CreatedAt, true
+		}
+	}
+	return t, ok
+}
+
+// isStaleVerdict reports whether verdict was recorded before item's latest entry
+// into review, i.e. it answers an earlier review request, not the current one.
+func isStaleVerdict(item *session.BacklogItemData, verdict *session.ReviewVerdictSummary) bool {
+	if verdict == nil {
+		return false
+	}
+	entered, ok := latestReviewEntryTime(item)
+	return ok && verdict.CreatedAt.Before(entered)
+}
+
+// canRecoverFromReview reports whether an item sitting in review can be
+// re-requested: no reviewer is live and the latest verdict is missing, stale, or
+// not a PASS. A fresh PASS is awaiting ship and must not be re-reviewed.
+func canRecoverFromReview(item *session.BacklogItemData, sessions []session.ItemSessionSummary, verdict *session.ReviewVerdictSummary) bool {
+	if services.HasActiveReviewSession(sessions) {
+		return false
+	}
+	return verdict == nil || isStaleVerdict(item, verdict) || verdict.OverallOutcome != string(session.ReviewVerdictPass)
 }
 
 // resolveItemLink verifies that callerUUID is linked to itemID, returning the
@@ -778,6 +816,9 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", err), ""), nil
 	}
 	verdict := latestReviewVerdict(waitCtx, h.storage, itemID)
+	if isStaleVerdict(item, verdict) {
+		verdict = nil
+	}
 	if res := currentStateWaitResult(item, verdict, eventTypeFilter); res != nil {
 		return okResult(*res), nil
 	}
@@ -1256,6 +1297,23 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// precondition, so the CAS check is never trivially self-satisfying (FR1,
 	// FR9 — see validateSelfResolveSource).
 	validStatus, valErr := validateSelfResolveSource(item, "request_review")
+	recoverFromReview := false
+	if valErr != nil && session.BacklogStatus(item.Status) == session.BacklogStatusReview {
+		// A session stuck in review (stale/blocked verdict, no live reviewer) must be
+		// able to re-request. Fail closed on a lookup error, like the pr_pending guard.
+		itemSessions, lsErr := h.itemSessionsFor(ctx, itemID)
+		if lsErr != nil {
+			log.WarningLog().Printf("request_review: failed to list item sessions for %s: %v", itemID, lsErr)
+			return errResult(ErrInternalError, "could not verify active-reviewer state for this item — retry", ""), nil
+		}
+		if services.HasActiveReviewSession(itemSessions) {
+			return errResult(ErrInvalidArgument, "an active review session already exists for this item — wait for it to finish, or check get_backlog_item if this persists", ""), nil
+		}
+		if canRecoverFromReview(item, itemSessions, latestVerdictFromSessions(itemSessions)) {
+			recoverFromReview = true
+			validStatus, valErr = session.BacklogStatusInProgress, nil
+		}
+	}
 	if valErr != nil {
 		return errResult(ErrInvalidArgument, valErr.Error(), ""), nil
 	}
@@ -1268,7 +1326,8 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	if validStatus == session.BacklogStatusPRPending {
 		itemSessions, lsErr := h.itemSessionsFor(ctx, itemID)
 		if lsErr != nil {
-			return errResult(ErrInternalError, fmt.Sprintf("could not verify active-reviewer state for this item — retry: %v", lsErr), ""), nil
+			log.WarningLog().Printf("request_review: failed to list item sessions for %s: %v", itemID, lsErr)
+			return errResult(ErrInternalError, "could not verify active-reviewer state for this item — retry", ""), nil
 		}
 		if services.HasActiveReviewSession(itemSessions) {
 			return errResult(ErrInvalidArgument, "an active review session already exists for this item — wait for it to finish, or check get_backlog_item if this persists", ""), nil
@@ -1294,6 +1353,16 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	targetStatus := session.BacklogStatusReview
 	if item.SkipReviewGate {
 		targetStatus = session.BacklogStatusDone
+	}
+
+	// Recovery: reopen the stuck review first so the transition below writes a fresh
+	// review-entry event, making the earlier verdict stale to wait_for_backlog_event.
+	if recoverFromReview {
+		reopen := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview), Note: "request_review recovering stale/blocked review"}
+		if _, reopenErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, reopen, session.TriggeredByAgent); reopenErr != nil {
+			log.InfoLog().Printf("[mcp:request_review] recovery reopen failed: %v", reopenErr)
+			return errResult(ErrInternalError, "item state changed since your last read — call get_backlog_item to see its current status", ""), nil
+		}
 	}
 
 	// Transition item from its validated source status to the target status.
