@@ -2494,6 +2494,16 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 // transition) before triage can run again — this mirrors the manual recovery already
 // performed for be676dab exactly, just automated.
 func (s *BacklogService) AutoRespawnTriage(ctx context.Context, itemID string) error {
+	return s.respawnTriage(ctx, itemID, true)
+}
+
+// ResumeTriage re-triggers triage after an operator answered a guidance request. Unlike
+// AutoRespawnTriage it never applies the cost-skip gate: the answer is new input.
+func (s *BacklogService) ResumeTriage(ctx context.Context, itemID string) error {
+	return s.respawnTriage(ctx, itemID, false)
+}
+
+func (s *BacklogService) respawnTriage(ctx context.Context, itemID string, applyGate bool) error {
 	if s.storage == nil {
 		return fmt.Errorf("storage not available")
 	}
@@ -2501,6 +2511,17 @@ func (s *BacklogService) AutoRespawnTriage(ctx context.Context, itemID string) e
 	item, err := s.storage.GetBacklogItem(ctx, itemID)
 	if err != nil {
 		return fmt.Errorf("load item: %w", err)
+	}
+
+	if applyGate {
+		sessions, listErr := s.storage.ListItemSessions(ctx, itemID)
+		if listErr == nil && (item.Status == string(session.BacklogStatusIdea) || item.Status == string(session.BacklogStatusQueued)) {
+			// Checked before the queued->idea reset below so a skipped item is not demoted.
+			if reason := unchangedRetriageSkipReason(item, sessions); reason != "" {
+				s.recordTriageSkip(ctx, itemID, reason+"; human action needed (approve the plan or edit the item)")
+				return nil
+			}
+		}
 	}
 
 	switch session.BacklogStatus(item.Status) {
@@ -2711,6 +2732,14 @@ func (s *BacklogService) captureHeadlessFailure(sessionUUID, raw string) string 
 func (s *BacklogService) MaybeTriggerTriage(ctx context.Context, itemID string, skipTriage bool, repoPath string) bool {
 	if skipTriage || repoPath == "" || s.headlessPool == nil {
 		return false
+	}
+	if s.storage != nil {
+		if item, getErr := s.storage.GetBacklogItem(ctx, itemID); getErr == nil {
+			if reason := newItemTriageSkipReason(item); reason != "" {
+				s.recordTriageSkip(ctx, itemID, reason)
+				return false
+			}
+		}
 	}
 	// 30s gates only the synchronous path (item lookup + ItemSession creation).
 	// The headless LLM call itself runs in a goroutine under shutdownCtx (30-min cap).

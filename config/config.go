@@ -323,6 +323,12 @@ type Config struct {
 	// exceeds this many USD, independent of elapsed time. 0 = use the default ($25);
 	// negative disables the ceiling.
 	HeadlessTriageMaxCostUSD float64 `json:"headless_triage_max_cost_usd,omitempty"`
+	// MaxConcurrentTriage caps simultaneous headless triage calls; extra runs queue.
+	// 0 = default (8), clamped to [1, MaxConcurrentTriageCeiling].
+	MaxConcurrentTriage int `json:"max_concurrent_triage,omitempty"`
+	// HeadlessTriageModel is the model for triage when the item's pipeline mode does
+	// not pin one: a concrete ID or "family:<alias>". "" = family:sonnet; "none" = account default.
+	HeadlessTriageModel string `json:"headless_triage_model,omitempty"`
 	// MaxConcurrentBacklogWorkItems caps how many distinct backlog items may be
 	// "in_progress" at the same time. 0 = use the default (2). Values above
 	// maxConcurrentBacklogWorkItemsHardCeiling are clamped to the ceiling.
@@ -997,6 +1003,39 @@ func (c *Config) HeadlessTriageMaxCostUSDOrDefault() float64 {
 		return 0
 	}
 	return c.HeadlessTriageMaxCostUSD
+}
+
+const (
+	DefaultMaxConcurrentTriage = 8
+	MaxConcurrentTriageCeiling = 64
+	// DefaultHeadlessTriageModel is a cheaper tier than the account default; triage
+	// output is structured planning, not deep code generation.
+	DefaultHeadlessTriageModel = "family:sonnet"
+	// HeadlessTriageModelAccountDefault opts out of the model pin.
+	HeadlessTriageModelAccountDefault = "none"
+)
+
+// MaxConcurrentTriageOrDefault returns the triage concurrency cap, nil-safe.
+func (c *Config) MaxConcurrentTriageOrDefault() int {
+	switch {
+	case c == nil || c.MaxConcurrentTriage <= 0:
+		return DefaultMaxConcurrentTriage
+	case c.MaxConcurrentTriage > MaxConcurrentTriageCeiling:
+		return MaxConcurrentTriageCeiling
+	}
+	return c.MaxConcurrentTriage
+}
+
+// HeadlessTriageModelOrDefault returns the configured triage model ("" when the
+// operator opted out via "none"), nil-safe.
+func (c *Config) HeadlessTriageModelOrDefault() string {
+	switch {
+	case c == nil || c.HeadlessTriageModel == "":
+		return DefaultHeadlessTriageModel
+	case c.HeadlessTriageModel == HeadlessTriageModelAccountDefault:
+		return ""
+	}
+	return c.HeadlessTriageModel
 }
 
 // NoopDispatchThresholdOrDefault returns the configured no-op dispatch threshold, or 3

@@ -564,7 +564,7 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 		pipelineModeRepo:     pipelineModeRepo,
 		shutdownCtx:          ctx,
 		shutdownCancel:       cancel,
-		triageSem:            make(chan struct{}, 8),
+		triageSem:            make(chan struct{}, cfg.MaxConcurrentTriageOrDefault()),
 		triageCleanupTimeout: defaultTriageCleanupTimeout,
 		resolveGitHubInput:   session.ResolveGitHubInput,
 		capabilityCheck:      headless.DefaultCapabilitySelfCheck,
