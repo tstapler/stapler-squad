@@ -5,11 +5,11 @@
   "method": "UnpinSession",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
-  "handlerFile": "server/services/session_service.go",
+  "handlerFile": "server/services/session_service_lifecycle.go",
   "tested": true,
   "testIds": [
     "TestPinSession_should_PersistPinnedTrue_When_RPCSucceeds",
     "TestPinSession_should_ReturnNotFoundOrInvalid_When_IDBad"
   ],
-  "lastModified": "2026-09-30T01:51:28.84815719-07:00"
+  "lastModified": "2026-10-05T01:20:41.649660747-07:00"
 }

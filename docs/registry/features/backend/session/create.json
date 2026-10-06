@@ -5,7 +5,7 @@
   "method": "CreateSession",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
-  "handlerFile": "server/services/session_service.go",
+  "handlerFile": "server/services/session_service_create.go",
   "tested": true,
   "testIds": [
     "TestCreateSession_should_RejectAutoApprove_When_ProgramUnsupported",
@@ -18,5 +18,5 @@
     "TestCreateSession_RemoteTarget_ConnectionDropDuringCleanup_SurfacesOrphanWarning",
     "remote-workspaces \u003e creates a session on the configured remote via the Omnibar remote selector and shows the host badge"
   ],
-  "lastModified": "2026-08-17T00:00:00Z"
+  "lastModified": "2026-10-05T01:20:41.649660747-07:00"
 }
