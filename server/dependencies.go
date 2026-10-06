@@ -757,6 +757,10 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		p, poolErr := headless.NewPool(headless.PoolConfig{
 			MaxCallsPerSession:    25,
 			MaxConcurrentSessions: 5,
+			// Fresh load per call so background_models edits apply live.
+			FeatureModel: func(k headless.FeatureKey) string {
+				return config.LoadConfig().BackgroundFeatureModel(string(k))
+			},
 		})
 		if poolErr != nil {
 			log.Warn("headless pool disabled: claude binary not found", "err", poolErr)
