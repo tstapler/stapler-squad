@@ -450,7 +450,10 @@ func TestSSHRunner_Run_MaxSessionsRejection_DoesNotEvictSharedClient(t *testing.
 		if ctx.Err() != nil {
 			t.Fatalf("Run() after freeing the slot on the same connection: %v", err)
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 	if string(out) != "still-works" {
 		t.Errorf("Run() after freeing the slot = %q, want %q", out, "still-works")
