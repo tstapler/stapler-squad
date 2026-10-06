@@ -72,3 +72,22 @@ func TestWaitForBacklogEvent_ParksSessionAfterRepeatedTimeouts(t *testing.T) {
 	other := WithSessionUUID(context.Background(), uuid.New().String())
 	require.False(t, handler.waitCapReached(other, itemID))
 }
+
+// A capped session can still read state that already satisfies the wait.
+func TestWaitForBacklogEvent_CappedSession_StillSeesExistingState(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:  "Already archived",
+		Status: string(session.BacklogStatusArchived),
+	})
+	require.NoError(t, err)
+	handler := &backlogHandlers{storage: storage, eventBus: events.NewEventBus(32)}
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+	handler.waitTimeouts = map[string]int{waitCapKey(ctx, item.ID): maxWaitTimeoutsPerSession}
+
+	result, err := handler.waitForBacklogEvent(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID, "timeout_seconds": float64(1)}))
+	require.NoError(t, err)
+	out := decodeWaitResult(t, result)
+	require.True(t, out.EventReceived)
+	require.True(t, out.FromCurrentState)
+}

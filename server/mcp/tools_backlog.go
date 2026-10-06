@@ -774,6 +774,10 @@ func withTestAfterWaitSubscribeHook(ctx context.Context, hook func()) context.Co
 // steer instead.
 const maxWaitTimeoutsPerSession = 3
 
+// maxWaitCapEntries bounds the in-memory counter map; hitting it only forgives
+// old counts, which is harmless.
+const maxWaitCapEntries = 4096
+
 func waitCapKey(ctx context.Context, itemID string) string {
 	sessionUUID, _ := sessionUUIDFromContext(ctx)
 	return sessionUUID + "|" + itemID
@@ -795,7 +799,7 @@ func (h *backlogHandlers) resetWaitTimeouts(ctx context.Context, itemID string) 
 // raises an operator notification so the parked session is visible.
 func (h *backlogHandlers) waitTimeoutResult(ctx context.Context, itemID, eventTypeFilter string, timeoutSecs int) WaitForBacklogEventResult {
 	h.waitMu.Lock()
-	if h.waitTimeouts == nil {
+	if h.waitTimeouts == nil || len(h.waitTimeouts) >= maxWaitCapEntries {
 		h.waitTimeouts = make(map[string]int)
 	}
 	key := waitCapKey(ctx, itemID)
@@ -877,10 +881,6 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 		return errResult(ErrEventStreamUnavailable, "backlog event stream is not available on this connection", "This session's MCP call is on the stdio fallback path (daemon unreachable). Fall back to get_backlog_item polling until the daemon is reachable again."), nil
 	}
 
-	if h.waitCapReached(ctx, itemID) {
-		return okResult(h.waitCapResult(itemID)), nil
-	}
-
 	waitCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSecs)*time.Second)
 	defer cancel()
 
@@ -905,6 +905,10 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 	if res := currentStateWaitResult(item, verdict, eventTypeFilter); res != nil {
 		h.resetWaitTimeouts(ctx, itemID)
 		return okResult(*res), nil
+	}
+	// After the current-state check so a capped session still sees a verdict that already exists.
+	if h.waitCapReached(ctx, itemID) {
+		return okResult(h.waitCapResult(itemID)), nil
 	}
 
 	for {
@@ -1314,6 +1318,8 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	if err := validateUUID(itemID); err != nil {
 		return errResult(ErrInvalidArgument, err.Error(), ""), nil
 	}
+	// A new review cycle starts a fresh wait budget.
+	h.resetWaitTimeouts(ctx, itemID)
 
 	message, ok := args["message"].(string)
 	if !ok || message == "" {

@@ -47,11 +47,31 @@ func (s *BacklogService) StartVerdictSteering() {
 					return
 				}
 				if p := verdictRecordedPayload(evt); p != nil {
-					go s.steerWorkSessionWithVerdict(s.shutdownCtx, p)
+					s.dispatchVerdictSteer(p)
 				}
 			}
 		}
 	}()
+}
+
+// dispatchVerdictSteer drops a repeat of the verdict already being (or already
+// was) delivered for the item and lets a newer verdict supersede an older
+// waiting one. Keeps one entry per item.
+func (s *BacklogService) dispatchVerdictSteer(p *events.BacklogItemEventPayload) {
+	key := verdictSteerKey(p.Verdict)
+	if prev, ok := s.verdictSteerLatest.Load(p.Item.ID); ok && prev == key {
+		return
+	}
+	s.verdictSteerLatest.Store(p.Item.ID, key)
+	go s.steerWorkSessionWithVerdict(s.shutdownCtx, p, key)
+}
+
+func verdictSteerKey(v *session.ReviewVerdictData) string {
+	override := ""
+	if v.OverrideAt != nil {
+		override = v.OverrideAt.UTC().Format(time.RFC3339Nano)
+	}
+	return v.ItemSessionID + "|" + string(v.OverallOutcome) + "|" + override
 }
 
 func verdictRecordedPayload(evt *events.Event) *events.BacklogItemEventPayload {
@@ -67,28 +87,35 @@ func verdictRecordedPayload(evt *events.Event) *events.BacklogItemEventPayload {
 
 // steerWorkSessionWithVerdict is a no-op when the item has no live work
 // session (e.g. it already exited and the lifecycle listener handles it).
-func (s *BacklogService) steerWorkSessionWithVerdict(ctx context.Context, p *events.BacklogItemEventPayload) {
+func (s *BacklogService) steerWorkSessionWithVerdict(ctx context.Context, p *events.BacklogItemEventPayload, key string) {
 	itemID, itemTitle := p.Item.ID, p.Item.Title
 	sessions, err := s.storage.ListItemSessions(ctx, itemID)
 	if err != nil {
 		log.WarningLog().Printf("[VerdictSteer] ListItemSessions item=%s: %v", itemID, err)
 		return
 	}
+	// Rows are oldest-first; take the newest work session that is actually live,
+	// so a stale unended row doesn't hide the real one.
 	var workUUID string
 	for i := range sessions {
-		if sessions[i].Role == session.SessionRoleWork && sessions[i].EndedAt == nil {
+		if sessions[i].Role != session.SessionRoleWork || sessions[i].EndedAt != nil {
+			continue
+		}
+		if _, live := s.sessionSteerer.SessionProgram(sessions[i].SessionUUID); live {
 			workUUID = sessions[i].SessionUUID
 		}
 	}
 	if workUUID == "" {
 		return
 	}
-	if _, live := s.sessionSteerer.SessionProgram(workUUID); !live {
-		return
-	}
 
 	if !s.waitForSteerReady(ctx, workUUID) {
 		s.notifyVerdictSteerFailed(itemID, itemTitle, workUUID, "session never went idle")
+		return
+	}
+	// A newer verdict may have landed during the wait; delivering this one
+	// after it would send the session stale instructions.
+	if latest, _ := s.verdictSteerLatest.Load(itemID); latest != key {
 		return
 	}
 	msg := buildVerdictSteerMessage(itemID, p.Verdict)

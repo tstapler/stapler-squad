@@ -135,7 +135,9 @@ type BacklogService struct {
 	sessionSteerer SessionSteerer
 	// verdictSteer* override the verdict-delivery readiness poll (zero = defaults); tests only.
 	verdictSteerPollInterval, verdictSteerReadyTimeout time.Duration
-	autonomousStarter                                  AutonomousDriverStarter
+	// verdictSteerLatest maps itemID -> latest verdict key (see dispatchVerdictSteer).
+	verdictSteerLatest sync.Map
+	autonomousStarter  AutonomousDriverStarter
 	// repoWatchRemover tells the unfinished-changes scanner to stop watching a
 	// worktree path once it's removed from disk (BUG-034). nil-safe — wired via
 	// SetRepoWatchRemover.

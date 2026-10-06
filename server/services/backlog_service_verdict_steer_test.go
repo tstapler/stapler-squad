@@ -129,3 +129,37 @@ func TestVerdictSteering_IgnoresNonVerdictEvents(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	assert.Empty(t, steerer.calls())
 }
+
+// The same verdict event delivered twice must steer once.
+func TestVerdictSteering_DuplicateEvent_SteersOnce(t *testing.T) {
+	svc, steerer, bus, item := newVerdictSteerFixture(t, true)
+	svc.StartVerdictSteering()
+
+	publishVerdict(bus, item, session.ReviewOutcomePass, "ok")
+	publishVerdict(bus, item, session.ReviewOutcomePass, "ok")
+
+	require.Eventually(t, func() bool { return len(steerer.calls()) >= 1 }, 3*time.Second, 10*time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+	assert.Len(t, steerer.calls(), 1)
+}
+
+// A newer verdict landing while an older one waits for idle must replace it.
+func TestVerdictSteering_NewerVerdictSupersedesWaitingOne(t *testing.T) {
+	svc, steerer, bus, item := newVerdictSteerFixture(t, true)
+	steerer.notReady = map[string]bool{verdictSteerSessionUUID: true}
+	svc.StartVerdictSteering()
+
+	publishVerdict(bus, item, session.ReviewOutcomeFail, "first")
+	time.Sleep(30 * time.Millisecond)
+	publishVerdict(bus, item, session.ReviewOutcomePass, "second")
+	time.Sleep(30 * time.Millisecond)
+
+	steerer.mu.Lock()
+	steerer.notReady[verdictSteerSessionUUID] = false
+	steerer.mu.Unlock()
+	require.Eventually(t, func() bool { return len(steerer.calls()) >= 1 }, 3*time.Second, 10*time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+	calls := steerer.calls()
+	require.Len(t, calls, 1)
+	assert.Contains(t, calls[0].message, "second")
+}
