@@ -1,5 +1,5 @@
 import { style } from "@vanilla-extract/css";
-import { recipe, type RecipeVariants } from "@vanilla-extract/recipes";
+import { recipe } from "@vanilla-extract/recipes";
 import { vars } from "@/styles/theme.css";
 
 // ── Card container ────────────────────────────────────────────────────────────
@@ -46,8 +46,6 @@ export const confidenceBadge = recipe({
     level: "medium",
   },
 });
-
-export type ConfidenceBadgeVariants = RecipeVariants<typeof confidenceBadge>;
 
 // ── Explanation block ─────────────────────────────────────────────────────────
 

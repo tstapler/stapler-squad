@@ -8,14 +8,10 @@ import (
 )
 
 // FakeRunner is a test double for ClaudeRunner. It returns scripted responses
-// and records call arguments for inspection.
-//
-// When the args contain "--output-format" followed by "json", the response must
-// be valid JSON matching firstCallJSONResult schema:
-//
-//	{"session_id":"...","result":"...","cost_usd":0.0}
-//
-// Otherwise the response is returned as plain text, line by line.
+// in order and records call arguments for inspection. For a first call
+// (stream-json), the response is scanned for a line whose top-level "type"
+// field is "result", matching firstCallJSONResult's schema; otherwise (a
+// resumed call) it's returned as plain text, line by line.
 type FakeRunner struct {
 	mu        sync.Mutex
 	responses []string
@@ -142,13 +138,16 @@ func (f *FakeRunner) ArgsContainSequence(n int, seq ...string) bool {
 	return false
 }
 
-// NewProcessRunnerForTesting constructs a ProcessRunner pointed at claudeBin (typically
-// a small fake shell script in a test). Exists because Pool.CallWithOptions's WorkDir
-// one-shot path type-asserts on the concrete *ProcessRunner type (a FakeRunner is
-// rejected — see TestPool_CallWithOptions_WorkDir_FakeRunner_ReturnsError), so tests in
-// other packages that need to exercise real WorkDir/AllowedTools/PermissionMode
-// propagation cannot use FakeRunner and have no other way to construct a ProcessRunner
-// (its fields are unexported).
-func NewProcessRunnerForTesting(claudeBin string) *ProcessRunner {
-	return &ProcessRunner{claudeBin: claudeBin}
+// NewShellWrappedProcessRunnerForTesting constructs a ProcessRunner that execs
+// scriptPath through "sh" instead of forking/exec'ing scriptPath directly.
+// Use this whenever a test writes its own fake-claude shell script to a
+// freshly-created temp file: direct exec-by-path
+// of a just-written, just-chmod'd script can be refused by OS-level exec
+// restrictions (Gatekeeper, TCC, or third-party endpoint security software) on
+// some platforms, even though the exec bit and shebang line are both correct.
+// Invoking through the pre-existing, already-trusted "sh" binary sidesteps
+// that restriction because the OS is never asked to approve a freshly-written
+// file for direct execution.
+func NewShellWrappedProcessRunnerForTesting(scriptPath string) *ProcessRunner {
+	return &ProcessRunner{claudeBin: scriptPath, interpreter: "sh"}
 }

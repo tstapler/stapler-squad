@@ -9,15 +9,24 @@ function parseDate(iso: string | undefined): Date | undefined {
 }
 
 /**
- * A session's own "most recent activity" timestamp. `LinkedSession` does not
- * carry `lastCommitAt` (that field exists on the wire proto but is not
- * mapped onto the frontend LinkedSession type by useBacklogService.ts's
- * mapItemSession — out of scope to add for this story's file list), so
- * `endedAt` (falling back to `startedAt`) is the closest available proxy for
- * session-level activity.
+ * A session's own "most recent activity" timestamp: the max of commit/
+ * file-touch telemetry and endedAt/startedAt (lifecycle timestamps),
+ * whichever is most recent. Falls back to undefined when none are set
+ * (older sessions predating this telemetry, or sessions with no activity yet).
  */
 function sessionActivity(session: LinkedSession): Date | undefined {
-  return parseDate(session.endedAt) ?? parseDate(session.startedAt);
+  const candidates: Array<Date | undefined> = [
+    parseDate(session.lastCommitAt),
+    parseDate(session.lastFileTouchAt),
+    parseDate(session.endedAt),
+    parseDate(session.startedAt),
+  ];
+
+  const known = candidates.filter((d): d is Date => d !== undefined);
+  if (known.length === 0) {
+    return undefined;
+  }
+  return known.reduce((max, d) => (d.getTime() > max.getTime() ? d : max));
 }
 
 export type LivenessSourceItem = Pick<

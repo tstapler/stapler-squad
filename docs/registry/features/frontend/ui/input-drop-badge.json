@@ -1,0 +1,21 @@
+{
+  "id": "input-drop-badge",
+  "type": "frontend",
+  "component": "InputDropBadge",
+  "path": "web-app/src/components/sessions/InputDropBadge.tsx",
+  "tested": true,
+  "testIds": [
+    "InputDropBadge > renders with role=\"alert\" and aria-live=\"assertive\"",
+    "InputDropBadge > shows singular text for count === 1",
+    "InputDropBadge > shows plural text with the exact count for count > 1",
+    "InputDropBadge > auto-dismisses the visual badge after DEFAULT_TOAST_MS",
+    "InputDropBadge > two consecutive episodes with an identical count each produce a distinct live-region text mutation",
+    "InputDropBadge > does not move document.activeElement when it appears",
+    "input-drop-badge > badge becomes visible with the correct singular/plural count text",
+    "input-drop-badge > coalesces a burst of drops into a single badge with the summed count",
+    "input-drop-badge > badge does not overlap the terminal cursor region (design/ux.md UX-AC-2)",
+    "input-drop-badge > badge auto-dismisses within the configured timeout",
+    "input-drop-badge > badge appearing does not steal focus (design/ux.md §3.1)"
+  ],
+  "lastModified": "2026-07-27T00:00:00Z"
+}

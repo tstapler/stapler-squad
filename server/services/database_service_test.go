@@ -20,6 +20,7 @@ import (
 // without error. The call reads the filesystem, so the result may be an empty
 // list; the important invariant is no error and a non-nil response.
 func TestListDatabases_ReturnsList(t *testing.T) {
+	t.Parallel()
 	svc := NewDatabaseService()
 
 	resp, err := svc.ListDatabases(context.Background(), connect.NewRequest(&sessionv1.ListDatabasesRequest{}))
@@ -39,6 +40,7 @@ func TestListDatabases_ReturnsList(t *testing.T) {
 // file is unlikely to exist, so the implementation falls back to building a
 // minimal DatabaseInfo from the config dir — the call must still succeed.
 func TestGetCurrentDatabase_ReturnsDatabase(t *testing.T) {
+	t.Parallel()
 	svc := NewDatabaseService()
 
 	resp, err := svc.GetCurrentDatabase(context.Background(), connect.NewRequest(&sessionv1.GetCurrentDatabaseRequest{}))
@@ -56,6 +58,7 @@ func TestGetCurrentDatabase_ReturnsDatabase(t *testing.T) {
 // TestSwitchDatabase_EmptyPath verifies that SwitchDatabase returns
 // CodeInvalidArgument when config_dir is empty.
 func TestSwitchDatabase_EmptyPath(t *testing.T) {
+	t.Parallel()
 	svc := NewDatabaseService()
 
 	_, err := svc.SwitchDatabase(context.Background(), connect.NewRequest(&sessionv1.SwitchDatabaseRequest{
@@ -71,6 +74,7 @@ func TestSwitchDatabase_EmptyPath(t *testing.T) {
 // TestSwitchDatabase_PathOutsideBaseDir verifies that SwitchDatabase returns
 // CodeInvalidArgument when the target path is not under the allowed base dir.
 func TestSwitchDatabase_PathOutsideBaseDir(t *testing.T) {
+	t.Parallel()
 	svc := NewDatabaseService()
 
 	_, err := svc.SwitchDatabase(context.Background(), connect.NewRequest(&sessionv1.SwitchDatabaseRequest{
@@ -90,6 +94,7 @@ func TestSwitchDatabase_PathOutsideBaseDir(t *testing.T) {
 // We construct a path that passes the base-dir security check but is not a
 // real directory.
 func TestSwitchDatabase_NonExistentDir(t *testing.T) {
+	t.Parallel()
 	svc := NewDatabaseService()
 
 	homeDir, err := os.UserHomeDir()
@@ -113,6 +118,7 @@ func TestSwitchDatabase_NonExistentDir(t *testing.T) {
 // TestMergeDatabase_EmptySource verifies that MergeDatabase returns
 // CodeInvalidArgument when config_dir is empty.
 func TestMergeDatabase_EmptySource(t *testing.T) {
+	t.Parallel()
 	svc := NewDatabaseService()
 
 	_, err := svc.MergeDatabase(context.Background(), connect.NewRequest(&sessionv1.MergeDatabaseRequest{
@@ -128,6 +134,7 @@ func TestMergeDatabase_EmptySource(t *testing.T) {
 // TestMergeDatabase_SourceOutsideBaseDir verifies that MergeDatabase returns
 // CodeInvalidArgument when the source path is not under the allowed base dir.
 func TestMergeDatabase_SourceOutsideBaseDir(t *testing.T) {
+	t.Parallel()
 	svc := NewDatabaseService()
 
 	_, err := svc.MergeDatabase(context.Background(), connect.NewRequest(&sessionv1.MergeDatabaseRequest{
@@ -143,6 +150,7 @@ func TestMergeDatabase_SourceOutsideBaseDir(t *testing.T) {
 // TestMergeDatabase_SourceDBNotFound verifies that MergeDatabase returns
 // CodeNotFound when the source workspace directory contains no sessions.db.
 func TestMergeDatabase_SourceDBNotFound(t *testing.T) {
+	t.Parallel()
 	svc := NewDatabaseService()
 
 	homeDir, err := os.UserHomeDir()

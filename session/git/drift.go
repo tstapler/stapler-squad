@@ -61,19 +61,19 @@ func EnsureBranchSyncedWithMain(worktreePath, branchName, mainBranch string, dri
 
 	behind, err := BehindOriginMain(worktreePath, mainBranch)
 	if err != nil {
-		log.WarningLog.Printf("[EnsureBranchSyncedWithMain] BehindOriginMain %s: %v — proceeding without a drift check", worktreePath, err)
+		log.WarningLog().Printf("[EnsureBranchSyncedWithMain] BehindOriginMain %s: %v — proceeding without a drift check", worktreePath, err)
 		return true, ""
 	}
 	if behind < driftThreshold {
 		return true, ""
 	}
 
-	log.InfoLog.Printf("[EnsureBranchSyncedWithMain] branch=%s worktree=%s is %d commits behind origin/%s (threshold %d) — attempting proactive sync before review",
+	log.InfoLog().Printf("[EnsureBranchSyncedWithMain] branch=%s worktree=%s is %d commits behind origin/%s (threshold %d) — attempting proactive sync before review",
 		branchName, worktreePath, behind, mainBranch, driftThreshold)
 
 	result, mergeErr := MergeMainIntoWorktree(worktreePath, mainBranch)
 	if mergeErr != nil {
-		log.WarningLog.Printf("[EnsureBranchSyncedWithMain] merge %s into branch=%s: %v — proceeding without sync", mainBranch, branchName, mergeErr)
+		log.WarningLog().Printf("[EnsureBranchSyncedWithMain] merge %s into branch=%s: %v — proceeding without sync", mainBranch, branchName, mergeErr)
 		return true, ""
 	}
 
@@ -92,7 +92,7 @@ func EnsureBranchSyncedWithMain(worktreePath, branchName, mainBranch string, dri
 					"Push the merge before this item can be reviewed: `git -C %s push origin %s`.",
 				branchName, behind, mainBranch, mainBranch, pushErr, worktreePath, branchName)
 		}
-		log.InfoLog.Printf("[EnsureBranchSyncedWithMain] branch=%s: synced and pushed %s (was %d commits behind)", branchName, mainBranch, behind)
+		log.InfoLog().Printf("[EnsureBranchSyncedWithMain] branch=%s: synced and pushed %s (was %d commits behind)", branchName, mainBranch, behind)
 		return true, ""
 	default: // UpToDate — shouldn't normally happen given behind >= threshold > 0, but harmless.
 		return true, ""

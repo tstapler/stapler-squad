@@ -3,6 +3,7 @@ package detection
 import "testing"
 
 func TestClaudeController_SharedDetectorEvents(t *testing.T) {
+	t.Parallel()
 	// Create a shared StatusDetector (simulating ClaudeController's sd)
 	sd := NewStatusDetector()
 	sd.SetSessionID("test-session")

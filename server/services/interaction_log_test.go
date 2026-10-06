@@ -26,6 +26,7 @@ func setupReviewQueueServiceWithT(t *testing.T) *ReviewQueueService {
 // TestLogInteraction_Success verifies that LogUserInteraction returns success
 // for a well-formed request with all optional fields populated.
 func TestLogInteraction_Success(t *testing.T) {
+	t.Parallel()
 	svc := setupReviewQueueServiceWithT(t)
 
 	sessionID := "test-session-id"
@@ -50,6 +51,7 @@ func TestLogInteraction_Success(t *testing.T) {
 // TestLogInteraction_NoSessionID verifies that LogUserInteraction succeeds when
 // session_id is not set (panel-level actions have no session context).
 func TestLogInteraction_NoSessionID(t *testing.T) {
+	t.Parallel()
 	svc := setupReviewQueueServiceWithT(t)
 
 	resp, err := svc.LogUserInteraction(
@@ -68,6 +70,7 @@ func TestLogInteraction_NoSessionID(t *testing.T) {
 // pointer (nil) returns a valid (possibly empty) response for the global log.
 // This exercises the "no session ID" code path in UtilityService.GetLogs.
 func TestGetLogs_EmptySessionID(t *testing.T) {
+	t.Parallel()
 	svc := setupUtilityService()
 
 	// Passing a nil session_id — exercises the global log path.

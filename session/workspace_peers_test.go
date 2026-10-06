@@ -25,12 +25,14 @@ func addTestInstance(t *testing.T, storage *Storage, inst *Instance) {
 // ─── WorkspaceKey derivation (AC1, AC2) ───────────────────────────────────────
 
 func TestWorkspaceKey_distinctForDifferentRepos(t *testing.T) {
+	t.Parallel()
 	keyA := WorkspaceKey("acme", "widgets", "", "")
 	keyB := WorkspaceKey("acme", "gadgets", "", "")
 	assert.NotEqual(t, keyA, keyB)
 }
 
 func TestWorkspaceKey_sameForDifferentWorktreesOfSameRepo(t *testing.T) {
+	t.Parallel()
 	// Same GitHub repo, different worktree paths — must produce the same key.
 	keyMain := WorkspaceKey("acme", "widgets", "/repos/widgets", "/repos/widgets")
 	keyWorktree := WorkspaceKey("acme", "widgets", "/repos/widgets", "/repos/widgets-feature-branch")
@@ -38,19 +40,23 @@ func TestWorkspaceKey_sameForDifferentWorktreesOfSameRepo(t *testing.T) {
 }
 
 func TestWorkspaceKey_isCaseInsensitiveOnGitHubOwnerRepo(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, WorkspaceKey("Acme", "Widgets", "", ""), WorkspaceKey("acme", "widgets", "", ""))
 }
 
 func TestWorkspaceKey_fallsBackToMainRepoPathWithoutGitHub(t *testing.T) {
+	t.Parallel()
 	key := WorkspaceKey("", "", "/repos/widgets", "/repos/widgets-worktree")
 	assert.Equal(t, "path:/repos/widgets", key)
 }
 
 func TestWorkspaceKey_emptyWhenNothingIsSet(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, "", WorkspaceKey("", "", "", ""))
 }
 
 func TestWorkspaceKey_fallsBackToBarePathWithoutGitHubOrMainRepoPath(t *testing.T) {
+	t.Parallel()
 	key := WorkspaceKey("", "", "", "/repos/widgets")
 	assert.Equal(t, "path:/repos/widgets", key)
 }
@@ -58,6 +64,7 @@ func TestWorkspaceKey_fallsBackToBarePathWithoutGitHubOrMainRepoPath(t *testing.
 // ─── ListWorkspacePeers (AC0, AC1, AC2, AC3, AC7) ─────────────────────────────
 
 func TestListWorkspacePeers_excludesCallerAndDifferentRepos(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -78,6 +85,7 @@ func TestListWorkspacePeers_excludesCallerAndDifferentRepos(t *testing.T) {
 }
 
 func TestListWorkspacePeers_includesDifferentBranchesAndWorktreesOfSameRepo(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -96,6 +104,7 @@ func TestListWorkspacePeers_includesDifferentBranchesAndWorktreesOfSameRepo(t *t
 }
 
 func TestListWorkspacePeers_emptyWorkspaceKeyReturnsNoPeers(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -105,6 +114,7 @@ func TestListWorkspacePeers_emptyWorkspaceKeyReturnsNoPeers(t *testing.T) {
 }
 
 func TestListWorkspacePeers_crashedSessionGoalStillVisible(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -124,6 +134,7 @@ func TestListWorkspacePeers_crashedSessionGoalStillVisible(t *testing.T) {
 }
 
 func TestListWorkspacePeers_scopedToOwnStorageInstance(t *testing.T) {
+	t.Parallel()
 	// Simulates two separate stapler-squad instances (state-isolation boundary, AC7):
 	// each has its own Storage/DB, and a session on the *same* repo. Peers from one
 	// instance's storage must never leak into the other's query results.
@@ -147,6 +158,7 @@ func TestListWorkspacePeers_scopedToOwnStorageInstance(t *testing.T) {
 }
 
 func TestListWorkspacePeers_clockSkewDoesNotReadAsFresh(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -172,6 +184,7 @@ func TestListWorkspacePeers_clockSkewDoesNotReadAsFresh(t *testing.T) {
 // ─── Lifecycle: two independent signals (AC6) ─────────────────────────────────
 
 func TestWorkspacePeer_Lifecycle_distinguishesDeadFromStuck(t *testing.T) {
+	t.Parallel()
 	dead := WorkspacePeer{InstanceLive: false, StaleGoal: true}
 	assert.Equal(t, "gone", dead.Lifecycle())
 
@@ -183,6 +196,7 @@ func TestWorkspacePeer_Lifecycle_distinguishesDeadFromStuck(t *testing.T) {
 }
 
 func TestApplyTmuxLiveness_confirmsDeathEvenWhenStatusSaysActive(t *testing.T) {
+	t.Parallel()
 	peers := []WorkspacePeer{
 		{SessionUUID: "live-uuid", InstanceLive: true, Goal: &SessionGoalData{UpdatedAt: time.Now().Add(-time.Hour)}},
 		{SessionUUID: "crashed-uuid", InstanceLive: true}, // Status said Active, but tmux disagrees
@@ -196,6 +210,7 @@ func TestApplyTmuxLiveness_confirmsDeathEvenWhenStatusSaysActive(t *testing.T) {
 }
 
 func TestApplyTmuxLiveness_staleGoalBoundaryIsExclusive(t *testing.T) {
+	t.Parallel()
 	// A 1s margin on each side of the threshold, not an exact boundary hit: time.Since is
 	// evaluated inside ApplyTmuxLiveness, strictly later than time.Now() here, so testing
 	// "elapsed == goalStaleThreshold exactly" is inherently racy against the wall clock.
@@ -212,6 +227,7 @@ func TestApplyTmuxLiveness_staleGoalBoundaryIsExclusive(t *testing.T) {
 }
 
 func TestApplyTmuxLiveness_leavesStaleGoalUnchangedForLivePeerWithNoGoal(t *testing.T) {
+	t.Parallel()
 	peers := []WorkspacePeer{
 		{SessionUUID: "live-no-goal", InstanceLive: false, StaleGoal: true, Goal: nil},
 	}
@@ -225,10 +241,12 @@ func TestApplyTmuxLiveness_leavesStaleGoalUnchangedForLivePeerWithNoGoal(t *test
 // ─── BuildWorkspacePeersBlock (AC5) ────────────────────────────────────────────
 
 func TestBuildWorkspacePeersBlock_emptyWhenNoPeers(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, "", BuildWorkspacePeersBlock(nil))
 }
 
 func TestBuildWorkspacePeersBlock_includesTitleAndGoal(t *testing.T) {
+	t.Parallel()
 	peers := []WorkspacePeer{
 		{Title: "other-session", Branch: "feature-x", InstanceLive: true, Goal: &SessionGoalData{Goal: "fix the bug"}},
 	}
@@ -240,6 +258,7 @@ func TestBuildWorkspacePeersBlock_includesTitleAndGoal(t *testing.T) {
 }
 
 func TestBuildWorkspacePeersBlock_capsAtMaxPeers(t *testing.T) {
+	t.Parallel()
 	var peers []WorkspacePeer
 	for i := 0; i < 15; i++ {
 		peers = append(peers, WorkspacePeer{Title: fmt.Sprintf("peer-%d", i), InstanceLive: true})
@@ -249,4 +268,48 @@ func TestBuildWorkspacePeersBlock_capsAtMaxPeers(t *testing.T) {
 		assert.Contains(t, block, fmt.Sprintf("peer-%d", i))
 	}
 	assert.Contains(t, block, "10 more")
+}
+
+func TestBuildWorkspacePeersBlock_livePeersSortBeforeGoneUnderCap(t *testing.T) {
+	t.Parallel()
+	// 6 gone peers followed by 1 live peer: a raw-order cap would drop the live peer
+	// entirely. It must survive the cap since live/stuck peers sort before gone ones.
+	var peers []WorkspacePeer
+	for i := 0; i < 6; i++ {
+		peers = append(peers, WorkspacePeer{Title: fmt.Sprintf("gone-%d", i), InstanceLive: false})
+	}
+	peers = append(peers, WorkspacePeer{Title: "live-peer", InstanceLive: true})
+
+	block := BuildWorkspacePeersBlock(peers)
+	assert.Contains(t, block, "live-peer")
+	assert.Contains(t, block, "2 more")
+}
+
+func TestBuildWorkspacePeersBlock_stuckPeersSortBeforeGoneUnderCap(t *testing.T) {
+	t.Parallel()
+	// Same as the live-peer case above, but for the "stuck" lifecycle (live with a stale
+	// goal) — the sort predicate groups both "active" and "stuck" ahead of "gone", so this
+	// exercises the branch the live-only case above can't reach.
+	var peers []WorkspacePeer
+	for i := 0; i < 6; i++ {
+		peers = append(peers, WorkspacePeer{Title: fmt.Sprintf("gone-%d", i), InstanceLive: false})
+	}
+	peers = append(peers, WorkspacePeer{Title: "stuck-peer", InstanceLive: true, StaleGoal: true})
+
+	block := BuildWorkspacePeersBlock(peers)
+	assert.Contains(t, block, "stuck-peer (stuck)")
+	assert.Contains(t, block, "2 more")
+}
+
+func TestBuildWorkspacePeersBlock_blankBranchOmitsDanglingField(t *testing.T) {
+	t.Parallel()
+	peers := []WorkspacePeer{
+		{Title: "gone-peer", Branch: "", InstanceLive: false},
+		{Title: "live-peer", Branch: "", InstanceLive: true},
+	}
+	block := BuildWorkspacePeersBlock(peers)
+	assert.NotContains(t, block, "(, gone)")
+	assert.NotContains(t, block, "(, active)")
+	assert.Contains(t, block, "gone-peer (gone)")
+	assert.Contains(t, block, "live-peer (active)")
 }

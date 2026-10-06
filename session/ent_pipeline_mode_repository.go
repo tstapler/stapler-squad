@@ -45,6 +45,14 @@ func (r *EntPipelineModeRepository) Create(ctx context.Context, m PipelineModeCr
 		c.SetDescription(m.Description)
 	}
 
+	if len(m.StageExecutors) > 0 {
+		stageExecutorsJSON, err := SerializeStageExecutors(m.StageExecutors)
+		if err != nil {
+			return nil, fmt.Errorf("serialize stage executors: %w", err)
+		}
+		c.SetStageExecutorsJSON(stageExecutorsJSON)
+	}
+
 	pm, err := c.Save(ctx)
 	if err != nil {
 		if ent.IsConstraintError(err) {
@@ -94,6 +102,13 @@ func (r *EntPipelineModeRepository) Update(ctx context.Context, id uuid.UUID, m 
 	}
 	if m.InitialPromptTemplate != nil {
 		u.SetInitialPromptTemplate(*m.InitialPromptTemplate)
+	}
+	if m.StageExecutors != nil {
+		stageExecutorsJSON, err := SerializeStageExecutors(*m.StageExecutors)
+		if err != nil {
+			return nil, fmt.Errorf("serialize stage executors: %w", err)
+		}
+		u.SetStageExecutorsJSON(stageExecutorsJSON)
 	}
 
 	pm, err := u.Save(ctx)
@@ -150,6 +165,7 @@ func (r *EntPipelineModeRepository) GetBySlug(ctx context.Context, slug string) 
 // ListAll returns all pipeline modes sorted ascending by created_at.
 // A safety cap of 1000 is applied to prevent runaway queries.
 func (r *EntPipelineModeRepository) ListAll(ctx context.Context) ([]*ent.PipelineMode, error) {
+	//nolint:entfullscan capped at Limit(1000) below; doc comment states this explicitly.
 	pms, err := r.client.PipelineMode.Query().
 		Order(ent.Asc(pipelinemode.FieldCreatedAt)).
 		Limit(1000).

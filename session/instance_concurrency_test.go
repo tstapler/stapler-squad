@@ -15,6 +15,7 @@ import (
 // absent, IsDirty() on an uninitialized GitWorktreeManager would return
 // "git worktree not initialized", which would propagate into the error chain.
 func TestPause_should_skipGitOps_When_IsWorktreeIsFalse(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title:       "test-non-worktree",
 		Status:      Active,
@@ -36,6 +37,7 @@ func TestPause_should_skipGitOps_When_IsWorktreeIsFalse(t *testing.T) {
 // that the IsWorktree=true path does attempt git operations. An uninitialized
 // GitWorktreeManager returns an error, confirming the guard condition is honored.
 func TestPause_should_returnGitError_When_IsWorktreeIsTrueAndGitUninitialized(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title:       "test-worktree-uninit",
 		Status:      Active,
@@ -54,6 +56,7 @@ func TestPause_should_returnGitError_When_IsWorktreeIsTrueAndGitUninitialized(t 
 }
 
 func TestTransitionTo_ConcurrentPause(t *testing.T) {
+	t.Parallel()
 	// Create an instance in Active status.
 	// Launch 10 goroutines all trying to transition to Paused simultaneously.
 	// Exactly one should succeed; the rest should get ErrInvalidTransition
@@ -100,6 +103,7 @@ func TestTransitionTo_ConcurrentPause(t *testing.T) {
 }
 
 func TestTransitionTo_ConcurrentApprove(t *testing.T) {
+	t.Parallel()
 	// Start from Paused — Paused→Active is valid.
 	// Launch goroutines all calling Approve() simultaneously.
 	// Exactly one should succeed; after that, Active→Active is invalid.
@@ -139,6 +143,7 @@ func TestTransitionTo_ConcurrentApprove(t *testing.T) {
 }
 
 func TestTransitionTo_ConcurrentMixed(t *testing.T) {
+	t.Parallel()
 	// Multiple goroutines concurrently calling Approve and Deny.
 	// Starting from Paused:
 	//   Approve = Paused→Active (valid once, then Active→Active invalid)
@@ -197,6 +202,7 @@ func TestTransitionTo_ConcurrentMixed(t *testing.T) {
 // Run with: go test -race ./session/ -run TestInstanceGetSetSessionGoal_threadSafe
 
 func TestInstanceGetSetSessionGoal_threadSafe(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title: "concurrency-goal-test",
 		UUID:  "test-uuid-concurrent-goal",

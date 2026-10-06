@@ -7,6 +7,7 @@ import (
 )
 
 func TestNewCircularBuffer(t *testing.T) {
+	t.Parallel()
 	buffer := NewCircularBuffer(10)
 	if buffer == nil {
 		t.Fatal("NewCircularBuffer returned nil")
@@ -20,6 +21,7 @@ func TestNewCircularBuffer(t *testing.T) {
 }
 
 func TestCircularBufferAppend(t *testing.T) {
+	t.Parallel()
 	buffer := NewCircularBuffer(3)
 
 	// Add first entry
@@ -72,6 +74,7 @@ func TestCircularBufferAppend(t *testing.T) {
 }
 
 func TestCircularBufferGetLastN(t *testing.T) {
+	t.Parallel()
 	buffer := NewCircularBuffer(5)
 
 	// Add some entries
@@ -100,6 +103,7 @@ func TestCircularBufferGetLastN(t *testing.T) {
 }
 
 func TestCircularBufferGetRange(t *testing.T) {
+	t.Parallel()
 	buffer := NewCircularBuffer(5)
 
 	// Add entries
@@ -128,6 +132,7 @@ func TestCircularBufferGetRange(t *testing.T) {
 }
 
 func TestCircularBufferOverflow(t *testing.T) {
+	t.Parallel()
 	buffer := NewCircularBuffer(3)
 
 	// Fill buffer beyond capacity
@@ -162,6 +167,7 @@ func TestCircularBufferOverflow(t *testing.T) {
 }
 
 func TestCircularBufferConcurrency(t *testing.T) {
+	t.Parallel()
 	buffer := NewCircularBuffer(1000)
 	numGoroutines := 10
 	entriesPerGoroutine := 100
@@ -198,6 +204,7 @@ func TestCircularBufferConcurrency(t *testing.T) {
 }
 
 func TestCircularBufferClear(t *testing.T) {
+	t.Parallel()
 	buffer := NewCircularBuffer(5)
 
 	buffer.Append([]byte("one"))
@@ -227,6 +234,7 @@ func TestCircularBufferClear(t *testing.T) {
 }
 
 func TestCircularBufferDirtyFlag(t *testing.T) {
+	t.Parallel()
 	buffer := NewCircularBuffer(5)
 
 	if buffer.IsDirty() {
@@ -250,6 +258,7 @@ func TestCircularBufferDirtyFlag(t *testing.T) {
 }
 
 func TestCircularBufferSequenceNumbers(t *testing.T) {
+	t.Parallel()
 	buffer := NewCircularBuffer(3)
 
 	if buffer.GetOldestSequence() != 0 {
@@ -282,6 +291,7 @@ func TestCircularBufferSequenceNumbers(t *testing.T) {
 }
 
 func TestCircularBufferDataIsolation(t *testing.T) {
+	t.Parallel()
 	buffer := NewCircularBuffer(5)
 
 	// Original data
@@ -299,6 +309,7 @@ func TestCircularBufferDataIsolation(t *testing.T) {
 }
 
 func TestCircularBufferTimestamps(t *testing.T) {
+	t.Parallel()
 	buffer := NewCircularBuffer(5)
 
 	before := time.Now()

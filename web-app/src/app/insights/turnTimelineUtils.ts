@@ -4,7 +4,12 @@ import type { TurnTokenStat } from "@/gen/session/v1/insights_pb";
 const OUTLIER_MULTIPLIER = 2;
 
 function totalTokens(turn: TurnTokenStat): number {
-  return Number(turn.inputTokens) + Number(turn.outputTokens);
+  return (
+    Number(turn.inputTokens) +
+    Number(turn.outputTokens) +
+    Number(turn.cacheCreationTokens) +
+    Number(turn.cacheReadTokens)
+  );
 }
 
 /** Sorts turns by total (input+output) tokens, descending — highest-token turn first. */

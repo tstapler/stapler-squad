@@ -6,7 +6,17 @@
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
   "handlerFile": "server/services/session_service.go",
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-06-26T08:55:46.608811477-07:00"
+  "tested": true,
+  "testIds": [
+    "TestCreateSession_should_RejectAutoApprove_When_ProgramUnsupported",
+    "TestCreateSession_should_SetAutoApprove_When_ProgramIsClaude",
+    "TestCreateSessionRequest_should_PreserveRemoteAndSessionTypeIndependently_When_RoundTrippedThroughProto",
+    "TestCreateSessionRequest_should_LeaveRemoteNil_When_NotSet",
+    "TestCreateSession_RemoteTarget_UnknownRemoteName_ReturnsInvalidArgument",
+    "TestCreateSession_RemoteTarget_CreatesRemoteWorktreeAndTmuxSession",
+    "TestCreateSession_RemoteTarget_TmuxSetupFails_CleansUpWorktree",
+    "TestCreateSession_RemoteTarget_ConnectionDropDuringCleanup_SurfacesOrphanWarning",
+    "remote-workspaces \u003e creates a session on the configured remote via the Omnibar remote selector and shows the host badge"
+  ],
+  "lastModified": "2026-08-17T00:00:00Z"
 }

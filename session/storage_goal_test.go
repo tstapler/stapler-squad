@@ -13,6 +13,7 @@ import (
 // ─── I-GO-01: TestSetGetSessionGoal_roundTrip ─────────────────────────────────
 
 func TestSetGetSessionGoal_roundTrip(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -41,6 +42,7 @@ func TestSetGetSessionGoal_roundTrip(t *testing.T) {
 // ─── I-GO-02: TestSetSessionGoal_upsertReplacesPrevious ───────────────────────
 
 func TestSetSessionGoal_upsertReplacesPrevious(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -61,6 +63,7 @@ func TestSetSessionGoal_upsertReplacesPrevious(t *testing.T) {
 // ─── I-GO-03: TestGetSessionGoal_returnsErrNotFoundWhenAbsent ────────────────
 
 func TestGetSessionGoal_returnsErrNotFoundWhenAbsent(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -72,6 +75,7 @@ func TestGetSessionGoal_returnsErrNotFoundWhenAbsent(t *testing.T) {
 // ─── I-GO-04: TestUpdateSessionTaskStatus_updatesCorrectTaskByID ─────────────
 
 func TestUpdateSessionTaskStatus_updatesCorrectTaskByID(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -93,6 +97,7 @@ func TestUpdateSessionTaskStatus_updatesCorrectTaskByID(t *testing.T) {
 // ─── I-GO-05: TestUpdateSessionTaskStatus_updatesNestedTaskByID ──────────────
 
 func TestUpdateSessionTaskStatus_updatesNestedTaskByID(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -116,6 +121,7 @@ func TestUpdateSessionTaskStatus_updatesNestedTaskByID(t *testing.T) {
 // ─── I-GO-06: TestUpdateSessionTaskStatus_returnsErrorWhenTaskIDNotFound ─────
 
 func TestUpdateSessionTaskStatus_returnsErrorWhenTaskIDNotFound(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -130,6 +136,7 @@ func TestUpdateSessionTaskStatus_returnsErrorWhenTaskIDNotFound(t *testing.T) {
 // ─── I-GO-07/08: TestInitialPromptPersistenceRoundTrip ───────────────────────
 
 func TestInitialPromptPersistenceRoundTrip(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -164,6 +171,7 @@ func TestInitialPromptPersistenceRoundTrip(t *testing.T) {
 // ─── I-GO-09: TestSessionGoalLoadedFromEntOnStartup ──────────────────────────
 
 func TestSessionGoalLoadedFromEntOnStartup(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -203,6 +211,7 @@ func TestSessionGoalLoadedFromEntOnStartup(t *testing.T) {
 // ─── I-GO-10/11: Validation in storage ───────────────────────────────────────
 
 func TestSetSessionGoal_validatesMaxTaskCount(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -215,6 +224,7 @@ func TestSetSessionGoal_validatesMaxTaskCount(t *testing.T) {
 }
 
 func TestSetSessionGoal_validatesMaxTaskDepth(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 

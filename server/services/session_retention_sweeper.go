@@ -74,7 +74,11 @@ func (s *SessionRetentionSweeper) sweep(ctx context.Context) {
 
 	cutoff := time.Now().AddDate(0, 0, -s.cfg.SessionRetention.RetentionDaysOrDefault())
 
-	dataSlice, err := s.storage.ListInstanceData()
+	// Worktree must be eager-loaded here: baseSafeToDelete's dirty-worktree check and
+	// sessionSafeToDelete's shared-worktree check both gate on d.Worktree.WorktreePath,
+	// which ListInstanceData (LoadMinimal) never populates -- that silently bypassed both
+	// safety checks (see git history for the regression this fixes).
+	dataSlice, err := s.storage.ListInstanceDataWithWorktree()
 	if err != nil {
 		log.Error("session retention sweeper: failed to list instances", "err", err)
 		return
@@ -157,7 +161,7 @@ func (s *SessionRetentionSweeper) baseSafeToDelete(d session.InstanceData, cutof
 
 // sessionSafeToDelete applies baseSafeToDelete plus the shared-worktree convergence
 // check: backlog rework/reopen reuses the same deterministic branch (and therefore the
-// same worktree directory — see session/git.findExistingWorktreeForBranch) across
+// same worktree directory — see session/git.nativeFindExistingWorktreeForBranch) across
 // rounds, so an old archived round's session can point at the exact directory another
 // round's session is using.
 //

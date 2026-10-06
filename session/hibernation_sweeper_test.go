@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 // TestSessionMemoryCache_should_returnCachedValue_When_WithinTTL verifies that
 // a second GetOrFetch call within the TTL does not invoke fetchFn again.
 func TestSessionMemoryCache_should_returnCachedValue_When_WithinTTL(t *testing.T) {
+	t.Parallel()
 	c := newSessionMemoryCache()
 	calls := 0
 	fetchFn := func() int64 { calls++; return 42 }
@@ -31,6 +33,7 @@ func TestSessionMemoryCache_should_returnCachedValue_When_WithinTTL(t *testing.T
 // TestSessionMemoryCache_should_callFetchFn_When_TTLExpired verifies that
 // after an entry expires, GetOrFetch calls fetchFn again.
 func TestSessionMemoryCache_should_callFetchFn_When_TTLExpired(t *testing.T) {
+	t.Parallel()
 	c := newSessionMemoryCache()
 
 	// Manually insert an expired entry.
@@ -52,6 +55,7 @@ func TestSessionMemoryCache_should_callFetchFn_When_TTLExpired(t *testing.T) {
 // TestSessionMemoryCache_should_callFetchFn_After_InvalidateCalled verifies that
 // Invalidate causes next GetOrFetch to re-fetch regardless of TTL.
 func TestSessionMemoryCache_should_callFetchFn_After_InvalidateCalled(t *testing.T) {
+	t.Parallel()
 	c := newSessionMemoryCache()
 	calls := 0
 	fetchFn := func() int64 { calls++; return 55 }
@@ -65,6 +69,7 @@ func TestSessionMemoryCache_should_callFetchFn_After_InvalidateCalled(t *testing
 
 // TestSessionMemoryCache_Get_should_returnZero_When_EntryAbsent verifies Get returns 0 for missing entries.
 func TestSessionMemoryCache_Get_should_returnZero_When_EntryAbsent(t *testing.T) {
+	t.Parallel()
 	c := newSessionMemoryCache()
 	assert.Equal(t, int64(0), c.Get("nonexistent"))
 }
@@ -111,6 +116,7 @@ func makeIdleInstance(t *testing.T, uuid, title string, idleFor time.Duration) *
 // TestSweeper_should_callSystemMemory_When_SweepRuns verifies that sweepResourcePressure
 // calls the memory reader when the threshold is configured.
 func TestSweeper_should_callSystemMemory_When_SweepRuns(t *testing.T) {
+	t.Parallel()
 	reader := &memorytest.FakeReader{SystemPct: 80}
 	sweeper, _, cleanup := makeTestSweeper(t, reader, 85)
 	defer cleanup()
@@ -125,6 +131,7 @@ func TestSweeper_should_callSystemMemory_When_SweepRuns(t *testing.T) {
 // TestSweeper_sweepResourcePressure_should_notHibernate_When_BelowThreshold verifies
 // that no hibernation occurs when memory is below the configured threshold.
 func TestSweeper_sweepResourcePressure_should_notHibernate_When_BelowThreshold(t *testing.T) {
+	t.Parallel()
 	reader := &memorytest.FakeReader{SystemPct: 80}
 	sweeper, _, cleanup := makeTestSweeper(t, reader, 85)
 	defer cleanup()
@@ -141,6 +148,7 @@ func TestSweeper_sweepResourcePressure_should_notHibernate_When_BelowThreshold(t
 // TestSweeper_sweepResourcePressure_should_skip_When_SystemPctIsZero verifies that
 // UsedPct=0 (macOS sentinel) skips pressure hibernation entirely.
 func TestSweeper_sweepResourcePressure_should_skip_When_SystemPctIsZero(t *testing.T) {
+	t.Parallel()
 	reader := &memorytest.FakeReader{SystemPct: 0}
 	sweeper, _, cleanup := makeTestSweeper(t, reader, 85)
 	defer cleanup()
@@ -154,6 +162,7 @@ func TestSweeper_sweepResourcePressure_should_skip_When_SystemPctIsZero(t *testi
 // TestSweeper_sweepResourcePressure_should_beSkipped_When_ThresholdIsZero verifies that
 // threshold=0 prevents the pressure block from running at all.
 func TestSweeper_sweepResourcePressure_should_beSkipped_When_ThresholdIsZero(t *testing.T) {
+	t.Parallel()
 	reader := &memorytest.FakeReader{SystemPct: 90}
 	sweeper, _, cleanup := makeTestSweeper(t, reader, 0)
 	defer cleanup()
@@ -171,6 +180,7 @@ func TestSweeper_sweepResourcePressure_should_beSkipped_When_ThresholdIsZero(t *
 // TestSweeper_sweepResourcePressure_should_notHibernate_When_NoEligibleIdleSessions verifies
 // that sessions with recent output (< 5 min) are not auto-hibernated for resource pressure.
 func TestSweeper_sweepResourcePressure_should_notHibernate_When_NoEligibleIdleSessions(t *testing.T) {
+	t.Parallel()
 	reader := &memorytest.FakeReader{SystemPct: 90}
 	sweeper, _, cleanup := makeTestSweeper(t, reader, 85)
 	defer cleanup()
@@ -187,6 +197,7 @@ func TestSweeper_sweepResourcePressure_should_notHibernate_When_NoEligibleIdleSe
 // Since Hibernate() requires tmux which is unavailable in unit tests, we assert that
 // candidate selection is correct (no panic, status unchanged because Hibernate fails).
 func TestSweeper_sweepResourcePressure_should_hibernateOnlyOne_When_MultipleEligible(t *testing.T) {
+	t.Parallel()
 	reader := &memorytest.FakeReader{SystemPct: 90}
 	sweeper, storage, cleanup := makeTestSweeper(t, reader, 85)
 	defer cleanup()
@@ -212,6 +223,7 @@ func TestSweeper_sweepResourcePressure_should_hibernateOnlyOne_When_MultipleElig
 // TestSweeper_sweepResourcePressure_should_setReasonResourcePressure_When_AutoHibernating verifies
 // structural integrity of the sweeper (fields wired correctly).
 func TestSweeper_sweepResourcePressure_should_setReasonResourcePressure_When_AutoHibernating(t *testing.T) {
+	t.Parallel()
 	reader := &memorytest.FakeReader{SystemPct: 90}
 	sweeper, _, cleanup := makeTestSweeper(t, reader, 85)
 	defer cleanup()
@@ -224,6 +236,7 @@ func TestSweeper_sweepResourcePressure_should_setReasonResourcePressure_When_Aut
 // TestSweeper_SystemMemoryPct_should_notCallReader_When_CacheIsWarm verifies that
 // the 5-second TTL cache prevents the underlying syscall on subsequent calls.
 func TestSweeper_SystemMemoryPct_should_notCallReader_When_CacheIsWarm(t *testing.T) {
+	t.Parallel()
 	reader := &memorytest.FakeReader{SystemPct: 55}
 	cfg := &appconfig.Config{
 		Hibernation: appconfig.HibernationConfig{
@@ -241,8 +254,9 @@ func TestSweeper_SystemMemoryPct_should_notCallReader_When_CacheIsWarm(t *testin
 }
 
 // TestSweeper_warmRSSCache_should_populateCache_When_ActiveSession verifies that
-// warmRSSCache calls SessionRSSMB for active sessions and stores the result.
+// warmRSSCache calls SessionsRSSMB for active sessions and stores the result.
 func TestSweeper_warmRSSCache_should_populateCache_When_ActiveSession(t *testing.T) {
+	t.Parallel()
 	reader := &memorytest.FakeReader{
 		SystemPct:    90,
 		RSSBySession: map[string]int64{"": 128}, // "" = zero-value GetTmuxSessionName()
@@ -253,13 +267,14 @@ func TestSweeper_warmRSSCache_should_populateCache_When_ActiveSession(t *testing
 	inst := makeIdleInstance(t, "uuid-rss", "rss-session", 10*time.Minute)
 	sweeper.warmRSSCache(context.Background(), []*Instance{inst})
 
-	assert.Equal(t, 1, reader.GetSessionRSSCalls(), "SessionRSSMB should be called for each active session")
+	assert.Equal(t, 1, reader.GetSessionRSSCalls(), "SessionsRSSMB should be called once for the batch")
 	assert.Equal(t, int64(128), sweeper.GetCachedRSSMB("uuid-rss"), "cache should be warm after warmRSSCache")
 }
 
 // TestSweeper_warmRSSCache_should_skipInactive_When_InstanceNotActive verifies that
 // inactive (paused/hibernated) sessions are not measured.
 func TestSweeper_warmRSSCache_should_skipInactive_When_InstanceNotActive(t *testing.T) {
+	t.Parallel()
 	reader := &memorytest.FakeReader{SystemPct: 90}
 	sweeper, _, cleanup := makeTestSweeper(t, reader, 85)
 	defer cleanup()
@@ -268,12 +283,69 @@ func TestSweeper_warmRSSCache_should_skipInactive_When_InstanceNotActive(t *test
 	inst.Status = Paused
 	sweeper.warmRSSCache(context.Background(), []*Instance{inst})
 
-	assert.Equal(t, 0, reader.GetSessionRSSCalls(), "SessionRSSMB should not be called for inactive sessions")
+	assert.Equal(t, 0, reader.GetSessionRSSCalls(), "SessionsRSSMB should not be called when there are no active sessions")
+}
+
+// TestSweeper_warmRSSCache_should_batchAllActiveSessions_When_Multiple verifies
+// warmRSSCache measures every active session through a single SessionsRSSMB call
+// rather than one call per session. This is the fix for the CPU hotspot where each
+// session independently re-enumerated the entire system process table (see
+// processSnapshot in session/memory/reader.go) -- a regression here would mean
+// GetSessionRSSCalls scales with instance count again instead of staying at 1
+// regardless of how many active sessions are being swept.
+func TestSweeper_warmRSSCache_should_batchAllActiveSessions_When_Multiple(t *testing.T) {
+	t.Parallel()
+	reader := &memorytest.FakeReader{
+		SystemPct: 90,
+		RSSBySession: map[string]int64{
+			"tmux-a": 50,
+			"tmux-b": 78,
+		},
+	}
+	sweeper, _, cleanup := makeTestSweeper(t, reader, 0)
+	defer cleanup()
+
+	// Give each instance a distinct tmux session name via the mock backend
+	// seam, not the zero-value GetTmuxSessionName() a bare Instance returns —
+	// otherwise every session collapses onto the same "" cache key and this
+	// test can't tell a correct name->UUID mapping from a broken one.
+	instA := makeIdleInstance(t, "uuid-a", "session-a", time.Minute)
+	instA.processManager = NewTmuxBackend(&mockTmuxManager{tmuxSessionName: "tmux-a"})
+	instB := makeIdleInstance(t, "uuid-b", "session-b", time.Minute)
+	instB.processManager = NewTmuxBackend(&mockTmuxManager{tmuxSessionName: "tmux-b"})
+	instC := makeIdleInstance(t, "uuid-c", "session-c", time.Minute)
+	instC.Status = Paused // inactive — should be excluded from the batch
+
+	sweeper.warmRSSCache(context.Background(), []*Instance{instA, instB, instC})
+
+	assert.Equal(t, 1, reader.GetSessionRSSCalls(), "all active sessions should be measured in a single batch call")
+	assert.ElementsMatch(t, []string{"tmux-a", "tmux-b"}, reader.LastRSSNames(), "only the two active sessions' names should be requested, not the inactive one")
+	assert.Equal(t, int64(50), sweeper.GetCachedRSSMB("uuid-a"))
+	assert.Equal(t, int64(78), sweeper.GetCachedRSSMB("uuid-b"))
+	assert.Equal(t, int64(0), sweeper.GetCachedRSSMB("uuid-c"), "inactive session should not be cached")
+}
+
+// TestSweeper_warmRSSCache_should_preserveStaleCache_When_BatchFails verifies
+// that a failed SessionsRSSMB call leaves existing cache entries untouched
+// rather than clobbering them with zero values — a transient measurement
+// failure should degrade to "last known value," not "no value."
+func TestSweeper_warmRSSCache_should_preserveStaleCache_When_BatchFails(t *testing.T) {
+	t.Parallel()
+	reader := &memorytest.FakeReader{RSSErr: errors.New("boom")}
+	sweeper, _, cleanup := makeTestSweeper(t, reader, 0)
+	defer cleanup()
+	sweeper.memCache.SetAll(map[string]int64{"uuid-a": 42}) // pre-existing warm value
+
+	inst := makeIdleInstance(t, "uuid-a", "session-a", time.Minute)
+	sweeper.warmRSSCache(context.Background(), []*Instance{inst})
+
+	assert.Equal(t, int64(42), sweeper.GetCachedRSSMB("uuid-a"), "a failed batch must not clobber the existing cached value")
 }
 
 // TestSweeper_GetCachedRSSMB_should_returnZero_When_Empty verifies that GetCachedRSSMB
 // returns 0 for unknown UUIDs (satisfies MemoryCacheReader interface).
 func TestSweeper_GetCachedRSSMB_should_returnZero_When_Empty(t *testing.T) {
+	t.Parallel()
 	reader := &memorytest.FakeReader{SystemPct: 80}
 	sweeper, _, cleanup := makeTestSweeper(t, reader, 85)
 	defer cleanup()
@@ -284,6 +356,7 @@ func TestSweeper_GetCachedRSSMB_should_returnZero_When_Empty(t *testing.T) {
 // TestSweeper_sweepResourcePressure_should_respectGracePeriod_When_SessionHadRecentOutput verifies
 // that a session idle 4m59s is skipped (grace period is 5 minutes).
 func TestSweeper_sweepResourcePressure_should_respectGracePeriod_When_SessionHadRecentOutput(t *testing.T) {
+	t.Parallel()
 	reader := &memorytest.FakeReader{SystemPct: 92}
 	sweeper, _, cleanup := makeTestSweeper(t, reader, 85)
 	defer cleanup()

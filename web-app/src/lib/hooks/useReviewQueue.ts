@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useCallback, useRef, useMemo } from "react";
+import { useEffect, useCallback, useRef, useMemo, useState } from "react";
 import type { AsyncResult } from "@/lib/types/asyncResult";
 import { createClient } from "@connectrpc/connect";
-import { createWatchTransport } from "@/lib/transport/watch-ws-transport";
+import { getWatchTransport } from "@/lib/api/transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import {
   ReviewQueue,
   ReviewItem,
@@ -34,23 +33,47 @@ import {
   selectReviewQueue,
   selectReviewQueueLoading,
   selectReviewQueueError,
+  selectReviewQueueLastUpdatedAt,
   selectReviewQueueItemsWithLiveStatus,
 } from "@/lib/store/reviewQueueSlice";
+import { isReviewQueueVisible } from "@/lib/utils/reviewQueueVisibility";
+import { useWatchStream } from "@/lib/hooks/useWatchStream";
+
+// How long a reconciled row stays visible-but-disabled (ux.md Surface 9) before the
+// deferred removeItem dispatch actually removes it from the store.
+const AUTO_RESOLVED_DISPLAY_WINDOW_MS = 5000;
 
 interface UseReviewQueueOptions {
-  baseUrl?: string;
   autoRefresh?: boolean;
   refreshInterval?: number; // in milliseconds
   priorityFilter?: Priority;
   reasonFilter?: AttentionReason;
   useWebSocketPush?: boolean; // Enable WebSocket push updates
   fallbackPollInterval?: number; // Fallback polling interval (default: 30000ms)
+  /**
+   * Called when an `item_removed` event carries `autoResolvedByRule` (Epic 2.3.1) —
+   * i.e. rule-reconciliation resolved this item while it may still be visible.
+   * Fires immediately, before the ~5s display window elapses and the item is
+   * actually removed (see `autoResolvedRules` below for the same information as
+   * hook state, which most consumers should prefer over this callback).
+   */
+  onAutoResolved?: (sessionId: string, ruleName: string) => void;
 }
 
 interface UseReviewQueueReturn extends AsyncResult {
   // State
   reviewQueue: ReviewQueue | null;
   items: ReviewItem[];
+  // Set on every successful fetch (GetReviewQueue or WatchReviewQueue's initial snapshot
+  // arriving via a later refresh); null means "never completed a successful fetch." Drives
+  // the staleness indicator / narrowed error-takeover condition (Task 3.2.1d, AC38).
+  lastUpdatedAt: number | null;
+  // Session ID -> rule display name, for any item currently in its ~5s
+  // "disable, don't hide" display window after a reconciliation-driven removal
+  // (Epic 2.3.2, ux.md Surface 9). The item stays present in `items` for the
+  // whole window; consumers use this map to render it disabled with a banner
+  // instead of removing the row immediately.
+  autoResolvedRules: Record<string, string>;
 
   // Statistics
   totalItems: number;
@@ -65,6 +88,7 @@ interface UseReviewQueueReturn extends AsyncResult {
   getByPriority: (priority: Priority) => Promise<ReviewQueue | null>;
   getByReason: (reason: AttentionReason) => Promise<ReviewQueue | null>;
   acknowledgeSession: (sessionId: string) => Promise<void>;
+  acknowledgeSessions: (sessionIds: string[]) => Promise<{ failed: string[] }>;
 }
 
 /**
@@ -104,40 +128,65 @@ export function useReviewQueue(
   options: UseReviewQueueOptions = {}
 ): UseReviewQueueReturn {
   const {
-    baseUrl = getApiBaseUrl(),
     autoRefresh = false,
     refreshInterval = 5000,
     priorityFilter,
     reasonFilter,
     useWebSocketPush = true, // Enable WebSocket push by default
     fallbackPollInterval = 30000, // 30 second fallback polling
+    onAutoResolved,
   } = options;
+
+  // Ref'd so the itemRemoved handler (set once, see handleReviewQueueEventRef below)
+  // always calls the latest callback without needing it in that effect's deps.
+  const onAutoResolvedRef = useRef(onAutoResolved);
+  useEffect(() => {
+    onAutoResolvedRef.current = onAutoResolved;
+  }, [onAutoResolved]);
+
+  // sessionId -> rule name for items in their post-reconciliation display window
+  // (ux.md Surface 9's "disable, don't hide"). See autoResolvedRules on the return type.
+  const [autoResolvedRules, setAutoResolvedRules] = useState<Record<string, string>>({});
+  // Pending deferred-removal timers, keyed by sessionId, so they can be cleared on unmount.
+  const autoResolveTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  useEffect(() => {
+    const timeouts = autoResolveTimeoutsRef.current;
+    return () => {
+      for (const id of Object.values(timeouts)) clearTimeout(id);
+    };
+  }, []);
 
   const dispatch = useAppDispatch();
   const reviewQueue = useAppSelector(selectReviewQueue);
   const liveItems = useAppSelector(selectReviewQueueItemsWithLiveStatus);
   const loading = useAppSelector(selectReviewQueueLoading);
   const errorStr = useAppSelector(selectReviewQueueError);
+  const lastUpdatedAt = useAppSelector(selectReviewQueueLastUpdatedAt);
+
+  // Always-fresh refs for fetchReviewQueue (declared with a stable [dispatch]
+  // dep array below) to read current queue/window state without a stale closure.
+  const reviewQueueRef = useRef(reviewQueue);
+  reviewQueueRef.current = reviewQueue;
+  const autoResolvedRulesRef = useRef(autoResolvedRules);
+  autoResolvedRulesRef.current = autoResolvedRules;
+
+  // Idle-reason items no longer occupy review-queue slots (Epic 3.2.2, ADR-002) — filtered
+  // once here so every consumer (ReviewQueuePanel, ReviewQueueNavBadge, BottomNav, DrawerNav)
+  // sees the same list, and totalItems (below) is derived from this same filtered array
+  // rather than the raw backend stat, avoiding a count-vs-list mismatch.
+  const filteredItems = useMemo(
+    () => liveItems.filter(isReviewQueueVisible),
+    [liveItems]
+  );
 
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
   const lastUpdateRef = useRef<number>(Date.now());
-  // Stream reconnect state — shared between the WebSocket effect and the fallback poll.
-  // streamDeadRef is set when MAX_RETRIES are exhausted; the fallback poll clears it
-  // and triggers a reconnect after a successful REST fetch.
-  const streamDeadRef = useRef<boolean>(false);
-  const streamRetriesRef = useRef<number>(0);
 
   // Initialize ConnectRPC client — uses HTTP for unary, WebSocket for streaming Watch* RPCs
   useEffect(() => {
-    const transport = createWatchTransport({
-      baseUrl,
-      interceptors: [createAuthInterceptor()],
-    });
-
-    clientRef.current = createClient(SessionService, transport);
-  }, [baseUrl]);
+    clientRef.current = createClient(SessionService, getWatchTransport());
+  }, []);
 
   // Fetch review queue with optional filters
   const fetchReviewQueue = useCallback(
@@ -163,7 +212,32 @@ export function useReviewQueue(
 
         const response = await clientRef.current.getReviewQueue(request);
 
-        dispatch(setReviewQueueAction(response.reviewQueue ?? null));
+        // A REST fetch (including the fallback poll) fully replaces the queue, but
+        // an item in its ~5s post-reconciliation display window (autoResolvedRules)
+        // has already been deleted backend-side — a poll landing mid-window would
+        // otherwise evict the row early while its banner lingers. Re-splice any such
+        // item back in from the current store state before replacing (finding #2).
+        let reviewQueueToStore = response.reviewQueue ?? null;
+        const preserveIds = Object.keys(autoResolvedRulesRef.current);
+        if (preserveIds.length > 0 && reviewQueueToStore) {
+          const existingItems = reviewQueueRef.current?.items ?? [];
+          const incomingIds = new Set(
+            reviewQueueToStore.items.map((item) => item.sessionId)
+          );
+          const toPreserve = existingItems.filter(
+            (item) =>
+              preserveIds.includes(item.sessionId) && !incomingIds.has(item.sessionId)
+          );
+          if (toPreserve.length > 0) {
+            reviewQueueToStore = {
+              ...reviewQueueToStore,
+              items: [...reviewQueueToStore.items, ...toPreserve],
+              totalItems: reviewQueueToStore.totalItems + toPreserve.length,
+            };
+          }
+        }
+
+        dispatch(setReviewQueueAction(reviewQueueToStore));
         dispatch(setError(null));
       } catch (err) {
         const error =
@@ -243,11 +317,34 @@ export function useReviewQueue(
           }
           break;
 
-        case "itemRemoved":
-          if (event.event.value.sessionId) {
-            dispatch(removeItem(event.event.value.sessionId));
+        case "itemRemoved": {
+          const sessionId = event.event.value.sessionId;
+          if (!sessionId) break;
+
+          const ruleName = event.event.value.autoResolvedByRule;
+          if (ruleName) {
+            // Reconciliation-driven removal (Epic 2.3.1): disable the row in place
+            // rather than removing it immediately (ux.md Surface 9) — surface the
+            // rule name now, defer the actual removeItem dispatch for ~5s so the
+            // disabled state + banner is visible first.
+            setAutoResolvedRules((prev) => ({ ...prev, [sessionId]: ruleName }));
+            onAutoResolvedRef.current?.(sessionId, ruleName);
+
+            const timeoutId = setTimeout(() => {
+              dispatch(removeItem(sessionId));
+              setAutoResolvedRules((prev) => {
+                const next = { ...prev };
+                delete next[sessionId];
+                return next;
+              });
+              delete autoResolveTimeoutsRef.current[sessionId];
+            }, AUTO_RESOLVED_DISPLAY_WINDOW_MS);
+            autoResolveTimeoutsRef.current[sessionId] = timeoutId;
+          } else {
+            dispatch(removeItem(sessionId));
           }
           break;
+        }
 
         case "itemUpdated":
           if (event.event.value.item && event.event.value.sessionId) {
@@ -271,87 +368,37 @@ export function useReviewQueue(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dispatch]);
 
-  // Setup WebSocket push updates with dedicated WatchReviewQueue stream
-  useEffect(() => {
-    if (!useWebSocketPush || !clientRef.current) return;
+  // Setup WebSocket push updates with dedicated WatchReviewQueue stream.
+  // Connection mechanics (backoff reconnect, idle-staleness watchdog) live in
+  // the shared useWatchStream.ts -- this only supplies the request shape and
+  // event dispatch. ReviewQueueEvent has no seq/afterSeq replay buffer (the
+  // review queue manager isn't built on pkg/events.EventBus like the other
+  // three Watch* streams), so getSeq is omitted; a stall or filter change
+  // just reconnects to a fresh initialSnapshot.
+  const subscribeReviewQueue = useCallback(
+    (_afterSeq: bigint, signal: AbortSignal) => {
+      const request = create(WatchReviewQueueRequestSchema, {
+        priorityFilter: priorityFilter !== undefined ? [priorityFilter] : [],
+        reasonFilter: reasonFilter !== undefined ? [reasonFilter] : [],
+        initialSnapshot: true,
+        includeStatistics: true,
+      });
+      return clientRef.current!.watchReviewQueue(request, { signal });
+    },
+    [priorityFilter, reasonFilter]
+  );
 
-    // Stop any existing watch
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
+  const onReviewQueueEvent = useCallback((event: ReviewQueueEvent) => {
+    handleReviewQueueEventRef.current?.(event);
+  }, []);
 
-    abortControllerRef.current = new AbortController();
-    const signal = abortControllerRef.current.signal;
-
-    // Reset reconnect state when the effect re-runs (e.g. filter change).
-    streamDeadRef.current = false;
-    streamRetriesRef.current = 0;
-    const MAX_RETRIES = 5;
-
-    const connect = async () => {
-      if (signal.aborted) return;
-      try {
-        const request = create(WatchReviewQueueRequestSchema, {
-          // Apply current filters
-          priorityFilter: priorityFilter !== undefined ? [priorityFilter] : [],
-          reasonFilter: reasonFilter !== undefined ? [reasonFilter] : [],
-          // Get initial snapshot for immediate UI sync
-          initialSnapshot: true,
-          // Include statistics for queue metrics
-          includeStatistics: true,
-        });
-
-        const stream = clientRef.current!.watchReviewQueue(request, { signal });
-
-        for await (const event of stream) {
-          handleReviewQueueEventRef.current?.(event);
-        }
-        // Clean close — reset retry counter
-        streamRetriesRef.current = 0;
-      } catch (err) {
-        // Ignore abort errors (intentional cleanup)
-        if (err instanceof Error && err.name === "AbortError") return;
-        if (signal.aborted) return;
-
-        console.error("WatchReviewQueue stream error:", err);
-
-        if (streamRetriesRef.current < MAX_RETRIES) {
-          const delay = Math.min(1000 * Math.pow(2, streamRetriesRef.current), 30000);
-          streamRetriesRef.current++;
-          setTimeout(() => {
-            // F5: Re-check the abort signal before reconnecting — the effect may
-            // have cleaned up (filter change, unmount) between the timer being
-            // scheduled and firing. Without this check the old closure's connect()
-            // would race against the new effect's connect() on the same signal.
-            if (signal.aborted) return;
-            void connect();
-          }, delay);
-        } else {
-          // Exhausted retries — fallback polling will handle consistency and
-          // attempt a reconnect after the next successful REST fetch (F4).
-          streamDeadRef.current = true;
-          console.warn("WatchReviewQueue: max reconnect attempts reached, relying on fallback poll");
-        }
-      }
-    };
-
-    // Expose reconnect for the fallback poll to call after a successful REST fetch
-    // when the stream has given up (streamDeadRef = true). The fallback poll resets
-    // streamDeadRef and streamRetriesRef before calling this.
-    streamReconnectRef.current = () => void connect();
-
-    void connect();
-
-    return () => {
-      streamReconnectRef.current = null;
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-        abortControllerRef.current = null;
-      }
-    };
-  // streamDeadRef, streamRetriesRef, and streamReconnectRef are stable refs — no need to list them.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [useWebSocketPush, priorityFilter, reasonFilter]);
+  useWatchStream<ReviewQueueEvent>({
+    subscribe: subscribeReviewQueue,
+    onEvent: onReviewQueueEvent,
+    isHeartbeat: (event) => event.heartbeat,
+    enabled: useWebSocketPush,
+    restartKey: `${priorityFilter ?? ""}:${reasonFilter ?? ""}`,
+  });
 
   // Keep a ref to the latest refresh so interval callbacks are always current
   // without needing refresh in the interval-setup effect's dep array.
@@ -369,34 +416,20 @@ export function useReviewQueue(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // intentionally empty -- run once on mount
 
-  // Ref to a reconnect function that the WebSocket effect exposes for the
-  // fallback poll to call when the stream is dead and REST confirms reachability.
-  const streamReconnectRef = useRef<(() => void) | null>(null);
-
   // Setup fallback polling or legacy auto-refresh.
   // Intentionally excludes `refresh` from deps; uses refreshRef.current instead
   // so that filter changes (which change `refresh` identity) don't cause an
   // immediate duplicate fetch -- the WatchReviewQueue stream re-connects on
-  // filter changes and delivers a fresh initialSnapshot.
+  // filter changes and delivers a fresh initialSnapshot. useWatchStream's own
+  // backoff + idle-staleness watchdog self-heal the stream independently, so
+  // this poll no longer needs to coordinate a reconnect -- it's just a REST
+  // consistency backstop (hybrid mode) or the sole refresh source (legacy).
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
 
     if (useWebSocketPush) {
-      // Hybrid mode: Use longer fallback polling interval.
-      // After a successful REST fetch, if the stream has given up (streamDeadRef),
-      // reset retry state and invoke the reconnect thunk (F4).
-      interval = setInterval(async () => {
-        try {
-          await refreshRef.current();
-          // REST succeeded — if the stream is dead, attempt reconnect now.
-          if (streamDeadRef.current) {
-            streamDeadRef.current = false;
-            streamRetriesRef.current = 0;
-            streamReconnectRef.current?.();
-          }
-        } catch {
-          // fetch error — stream recovery deferred to next poll
-        }
+      interval = setInterval(() => {
+        void refreshRef.current();
       }, fallbackPollInterval);
     } else if (autoRefresh) {
       // Legacy mode: Use original refresh interval
@@ -410,8 +443,6 @@ export function useReviewQueue(
         clearInterval(interval);
       }
     };
-  // streamDeadRef, streamRetriesRef, streamReconnectRef are stable refs.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [useWebSocketPush, autoRefresh, refreshInterval, fallbackPollInterval]);
 
   // Acknowledge session with optimistic update
@@ -443,9 +474,43 @@ export function useReviewQueue(
     [refresh, dispatch]
   );
 
+  // Acknowledges multiple sessions in parallel. Unlike acknowledgeSession, a per-item
+  // RPC failure does not dispatch the global queue error (which would blank the whole
+  // panel) — failures are collected and returned so the caller can show a scoped result
+  // instead.
+  const acknowledgeSessions = useCallback(
+    async (sessionIds: string[]): Promise<{ failed: string[] }> => {
+      if (!clientRef.current) return { failed: sessionIds };
+
+      sessionIds.forEach((id) => dispatch(removeItem(id)));
+
+      const results = await Promise.allSettled(
+        sessionIds.map((id) => {
+          const request = create(AcknowledgeSessionRequestSchema, { id });
+          return clientRef.current!.acknowledgeSession(request);
+        })
+      );
+
+      const failed = sessionIds.filter((_, i) => results[i].status === "rejected");
+      if (failed.length > 0) {
+        console.error(`Failed to acknowledge ${failed.length} of ${sessionIds.length} sessions`);
+        // Reconcile optimistic removals against real server state for the failed items.
+        await refresh();
+      }
+
+      return { failed };
+    },
+    [refresh, dispatch]
+  );
+
   // Extract statistics from review queue
   const statistics = {
-    totalItems: reviewQueue?.totalItems ?? 0,
+    // Filtered items.length, not the raw backend stat (reviewQueue?.totalItems counts ALL
+    // items including idle ones — session/queue/queue.go's TotalItems is deliberately
+    // unchanged per ADR-002's scope boundary). Every ReviewQueuePanel headline-count read
+    // sources totalItems from this hook, so fixing it here fixes every read site at once
+    // (adversarial-review.md Blocker 2).
+    totalItems: filteredItems.length,
     byPriority: new Map<Priority, number>(
       Object.entries(reviewQueue?.byPriority ?? {}).map(([key, value]) => [
         parseInt(key) as Priority,
@@ -469,7 +534,9 @@ export function useReviewQueue(
 
   return {
     reviewQueue,
-    items: liveItems,
+    items: filteredItems,
+    lastUpdatedAt,
+    autoResolvedRules,
     loading,
     error,
     ...statistics,
@@ -477,5 +544,6 @@ export function useReviewQueue(
     getByPriority,
     getByReason,
     acknowledgeSession,
+    acknowledgeSessions,
   };
 }

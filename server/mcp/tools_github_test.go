@@ -3,18 +3,33 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	gh "github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
+	"github.com/zalando/go-keyring"
 )
 
 // resetGhBaseURL is defined once for the package in tools_backlog_test.go
 // (it overrides githubpkg.GhBaseURL — same package as gh here, aliased
 // differently per file) and reused here rather than redeclared.
+
+// mustRepoRef builds a github.com gh.RepoRef for owner/repo, failing the
+// test immediately on the (owner=="" || repo=="") construction error rather
+// than threading that impossible-in-practice error through every call site.
+func mustRepoRef(t *testing.T, owner, repo string) gh.RepoRef {
+	t.Helper()
+	ref, err := gh.NewRepoRef(owner, repo)
+	require.NoError(t, err)
+	return ref
+}
 
 // --- NewPRVerification (gap: plan.md Task 2.1 describes this behavior but
 // names no dedicated test for it — see validation.md) ---
@@ -88,7 +103,7 @@ func TestVerifyPRMatchesBranch_should_ReturnMatchedTrue_When_HeadBranchEqualsExp
 	defer resetGhBaseURL(ts)()
 	t.Setenv("GITHUB_TOKEN", "fake-token")
 
-	v, err := VerifyPRMatchesBranch(context.Background(), "tstapler", "stapler-squad", 326, "feature/ci-status-diff-viewer")
+	v, err := VerifyPRMatchesBranch(context.Background(), mustRepoRef(t, "tstapler", "stapler-squad"), 326, "feature/ci-status-diff-viewer")
 	require.NoError(t, err)
 	assert.True(t, v.Exists)
 	assert.True(t, v.Matched)
@@ -109,7 +124,245 @@ func TestVerifyPRMatchesBranch_should_ReturnError_When_GetPRByNumberFails(t *tes
 	defer resetGhBaseURL(ts)()
 	t.Setenv("GITHUB_TOKEN", "fake-token")
 
-	v, err := VerifyPRMatchesBranch(context.Background(), "tstapler", "stapler-squad", 326, "feature/ci-status-diff-viewer")
+	v, err := VerifyPRMatchesBranch(context.Background(), mustRepoRef(t, "tstapler", "stapler-squad"), 326, "feature/ci-status-diff-viewer")
 	require.Error(t, err)
 	assert.Equal(t, PRVerification{}, v)
+}
+
+// --- create_session_for_pr existing-session short-circuit (async-session-
+// creation Epic 2.3, Story 2.3.2, Task 2.3.2c) ---
+
+// seedUserPRCacheWithOnePR drives a real githubpkg.UserPRCache.Refresh()
+// against an httptest-backed GitHub API (the /user login lookup and the
+// GraphQL PR-list query fetchUserPRsForToken issues), then Annotate()s the
+// resulting snapshot with sessionTitle as the PR's associated session --
+// producing exactly the cache state createSessionForPR's short-circuit
+// checks (pr.Owner/pr.Repo/pr.Number match + len(pr.SessionIDs) > 0),
+// without a mock/fake UserPRCache (there is no seam for one — cache is a
+// concrete *githubpkg.UserPRCache field).
+func seedUserPRCacheWithOnePR(t *testing.T, owner, repo string, prNumber int, branch, sessionTitle string) *gh.UserPRCache {
+	t.Helper()
+
+	// Isolate from any real GitHub account(s) configured in the OS keychain on
+	// the machine running this test: collectAllTokens() (github/user_pr_cache.go)
+	// reads GetAllKeychainTokens() unconditionally alongside GITHUB_TOKEN/GH_TOKEN,
+	// and a real account's token would fetch real PRs from its own (non-overridden)
+	// enterprise host, polluting this fixture's exactly-one-PR assumption -- see
+	// github/http_client_test.go's identical keyring.MockInit() usage.
+	keyring.MockInit()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/user":
+			_ = json.NewEncoder(w).Encode(map[string]any{"login": "tstapler"})
+		case r.Method == http.MethodPost && r.URL.Path == "/graphql":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"viewer": map[string]any{
+						"pullRequests": map[string]any{
+							"nodes": []map[string]any{
+								{
+									"number":      prNumber,
+									"title":       "test PR",
+									"url":         "https://github.com/" + owner + "/" + repo + "/pull/1",
+									"headRefName": branch,
+									"baseRefName": "main",
+									"state":       "OPEN",
+									"isDraft":     false,
+									"updatedAt":   "2026-01-01T00:00:00Z",
+									"repository": map[string]any{
+										"owner": map[string]any{"login": owner},
+										"name":  repo,
+									},
+								},
+							},
+						},
+					},
+				},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(ts.Close)
+	t.Cleanup(resetGhBaseURL(ts))
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+
+	// Start (not a bare Refresh off an unstarted cache -- c.ctx is nil until
+	// Start runs, and resolveAllLogins dereferences it) triggers loop()'s own
+	// unconditional initial fetch. Wait for that to land rather than also
+	// calling Refresh(): a second, independent fetch racing loop()'s could
+	// complete *after* Annotate() below and silently overwrite the annotated
+	// snapshot with a fresh, un-annotated one -- the default PollInterval
+	// (2 minutes) is comfortably longer than this whole test, so once the
+	// initial fetch is observed, no further background fetch will race
+	// Annotate().
+	cache := gh.NewUserPRCache()
+	cache.Start(context.Background())
+	t.Cleanup(cache.Stop)
+	wait.RequireEventually(t, func() bool { return len(cache.GetAll()) == 1 }, 5*time.Second, 10*time.Millisecond,
+		"fixture setup: initial fetch never populated exactly one PR from the mocked GraphQL response")
+
+	repoRef, err := gh.NewRepoRef(owner, repo)
+	require.NoError(t, err)
+	cache.Annotate([]gh.PRAnnotationSession{
+		{ID: sessionTitle, Branch: branch, Repo: repoRef, PRNumber: prNumber},
+	}, nil)
+
+	prs := cache.GetAll()
+	require.Len(t, prs, 1)
+	require.Equal(t, []string{sessionTitle}, prs[0].SessionIDs, "fixture setup: Annotate must have attached the session ID")
+
+	return cache
+}
+
+// TestCreateSessionForPR_should_ReturnExistingSession_When_PRAlreadyHasOne
+// pins Story 2.3.2's acceptance criterion: a PR that already has an
+// associated session must short-circuit before create_session_for_pr ever
+// reaches CreateSession -- the handler is constructed with svc: nil (which
+// createSessionForPR's post-short-circuit code path treats as "unavailable,"
+// see the "no SessionService wired" error branch below the short-circuit),
+// so if the short-circuit is bypassed the test observes that distinct error
+// rather than the short-circuit's own success result.
+func TestCreateSessionForPR_should_ReturnExistingSession_When_PRAlreadyHasOne(t *testing.T) {
+	// Not t.Parallel(): seedUserPRCacheWithOnePR uses t.Setenv, which forbids it.
+	const (
+		owner        = "tstapler"
+		repo         = "stapler-squad"
+		branch       = "feature/existing-pr-session"
+		prNumber     = 42
+		sessionTitle = "existing-pr-session-title"
+	)
+	cache := seedUserPRCacheWithOnePR(t, owner, repo, prNumber, branch, sessionTitle)
+
+	store := &stubStore{instances: []*session.Instance{
+		{Title: sessionTitle, Path: t.TempDir(), Status: session.Active, Program: "claude"},
+	}}
+	ghHandlers := &githubHandlers{cache: cache, store: store, svc: nil}
+
+	res, err := ghHandlers.createSessionForPR(context.Background(), makeToolReq(map[string]interface{}{
+		"owner":     owner,
+		"repo":      repo,
+		"branch":    branch,
+		"pr_number": float64(prNumber),
+	}))
+	require.NoError(t, err)
+
+	m := parseResult(t, res)
+	require.True(t, m["success"].(bool), "expected the short-circuit's success result, got: %+v", m)
+	sessionField, ok := m["session"].(map[string]interface{})
+	require.True(t, ok, "expected a session in the short-circuit result")
+	assert.Equal(t, sessionTitle, sessionField["id"])
+	assert.Nil(t, m["still_creating"], "the short-circuit path must never set still_creating")
+}
+
+// newProgramTestGithubHandlers wires githubHandlers to a real, config-isolated
+// *services.SessionService (via newWorktreeGuardHandlers, defined in
+// tools_lifecycle_worktree_guard_test.go) and an empty PR cache, so
+// create_session_for_pr's PR-already-has-a-session short-circuit never
+// triggers and the call reaches svc.CreateSession for real.
+func newProgramTestGithubHandlers(t *testing.T) *githubHandlers {
+	t.Helper()
+	lh := newWorktreeGuardHandlers(t)
+	return &githubHandlers{cache: gh.NewUserPRCache(), store: lh.store, svc: lh.svc}
+}
+
+// createSessionForPRArgs builds a minimal create_session_for_pr request map
+// against a real git repo (create_session_for_pr always uses
+// SESSION_TYPE_NEW_WORKTREE, which needs a resolvable default branch to
+// branch the new worktree from — a bare t.TempDir() isn't a git repo at all).
+// owner/repo/pr_number are otherwise unused beyond the collision/short-circuit
+// checks, since the cache is empty.
+func createSessionForPRArgs(t *testing.T, title string, prNumber int, extra map[string]interface{}) map[string]interface{} {
+	t.Helper()
+	args := map[string]interface{}{
+		"owner":     "tstapler",
+		"repo":      "stapler-squad",
+		"branch":    fmt.Sprintf("feature/program-test-%d", prNumber),
+		"pr_number": float64(prNumber),
+		"path":      initGitRepo(t),
+		"title":     title,
+	}
+	for k, v := range extra {
+		args[k] = v
+	}
+	return args
+}
+
+// TestCreateSessionForPR_should_AcceptCustomProgram_When_RegisteredViaUpsertProgramConfig
+// pins AC2: create_session_for_pr must accept a custom program, for parity
+// with create_session's identical AC1 coverage.
+func TestCreateSessionForPR_should_AcceptCustomProgram_When_RegisteredViaUpsertProgramConfig(t *testing.T) {
+	resetCreateSessionLimiterForTest(t)
+	ghHandlers := newProgramTestGithubHandlers(t)
+	upsertTestCustomProgram(t, ghHandlers.svc)
+
+	res, err := ghHandlers.createSessionForPR(context.Background(), makeToolReq(createSessionForPRArgs(t, "program-pr-test-custom", 101, map[string]interface{}{
+		"program": testCustomProgramID,
+	})))
+	require.NoError(t, err)
+
+	m := parseResult(t, res)
+	require.True(t, m["success"].(bool), "expected success, got: %+v", m)
+	t.Cleanup(func() {
+		destroyMCPCreatedSession(t, &lifecycleHandlers{svc: ghHandlers.svc}, m["session"].(map[string]interface{})["id"].(string))
+	})
+	assert.Empty(t, m["program_warning"])
+}
+
+// TestCreateSessionForPR_should_AcceptAiderUnchanged_When_ProgramIsExplicitlyAider
+// is AC3's parity regression pin for create_session_for_pr.
+func TestCreateSessionForPR_should_AcceptAiderUnchanged_When_ProgramIsExplicitlyAider(t *testing.T) {
+	resetCreateSessionLimiterForTest(t)
+	ghHandlers := newProgramTestGithubHandlers(t)
+
+	res, err := ghHandlers.createSessionForPR(context.Background(), makeToolReq(createSessionForPRArgs(t, "program-pr-test-aider", 102, map[string]interface{}{
+		"program": "aider",
+	})))
+	require.NoError(t, err)
+
+	m := parseResult(t, res)
+	require.True(t, m["success"].(bool), "expected success, got: %+v", m)
+	t.Cleanup(func() {
+		destroyMCPCreatedSession(t, &lifecycleHandlers{svc: ghHandlers.svc}, m["session"].(map[string]interface{})["id"].(string))
+	})
+	assert.Empty(t, m["program_warning"])
+}
+
+// TestCreateSessionForPR_should_DefaultToClaudeProgram_When_ProgramOmitted
+// pins AC3's default-unchanged claim, parity with create_session.
+func TestCreateSessionForPR_should_DefaultToClaudeProgram_When_ProgramOmitted(t *testing.T) {
+	resetCreateSessionLimiterForTest(t)
+	ghHandlers := newProgramTestGithubHandlers(t)
+
+	res, err := ghHandlers.createSessionForPR(context.Background(), makeToolReq(createSessionForPRArgs(t, "program-pr-test-default", 103, nil)))
+	require.NoError(t, err)
+
+	m := parseResult(t, res)
+	require.True(t, m["success"].(bool), "expected success, got: %+v", m)
+	t.Cleanup(func() {
+		destroyMCPCreatedSession(t, &lifecycleHandlers{svc: ghHandlers.svc}, m["session"].(map[string]interface{})["id"].(string))
+	})
+	assert.Empty(t, m["program_warning"], "the default program must never itself warn")
+}
+
+// TestCreateSessionForPR_should_SetProgramWarning_When_ProgramNotInKnownList
+// pins AC4's non-fatal-warning mechanism, parity with create_session.
+func TestCreateSessionForPR_should_SetProgramWarning_When_ProgramNotInKnownList(t *testing.T) {
+	resetCreateSessionLimiterForTest(t)
+	ghHandlers := newProgramTestGithubHandlers(t)
+
+	res, err := ghHandlers.createSessionForPR(context.Background(), makeToolReq(createSessionForPRArgs(t, "program-pr-test-typo", 104, map[string]interface{}{
+		"program": "clade",
+	})))
+	require.NoError(t, err)
+
+	m := parseResult(t, res)
+	require.True(t, m["success"].(bool), "an unrecognized program must warn, not reject, got: %+v", m)
+	t.Cleanup(func() {
+		destroyMCPCreatedSession(t, &lifecycleHandlers{svc: ghHandlers.svc}, m["session"].(map[string]interface{})["id"].(string))
+	})
+	warning, _ := m["program_warning"].(string)
+	assert.Contains(t, warning, "clade")
 }

@@ -32,7 +32,16 @@ func NewStartupScanner(statusManager StatusProvider, contentProvider ContentProv
 func (ss *StartupScanner) Scan(instances []*Instance, queue ReviewQueueWriter) int {
 	scanned, added := 0, 0
 	for _, inst := range instances {
-		if !inst.Started() || inst.Paused() {
+		// Mirrors ReviewQueuePoller.shouldSkipSession's ArchivedAt guard (Hidden
+		// is deliberately NOT checked here — Determine()'s reason-scoped Hidden
+		// gate handles that, see its comment and TestScan_SkipsHiddenInstance_
+		// ForSuppressedReasonsOnly). Without the ArchivedAt check, a soft-archived
+		// session with a long-dead tmux pane looks like a brand-new stale/idle
+		// session on every server restart (the startup scan runs once, before
+		// the poller's steady-state counterpart of this guard ever sees it) and
+		// gets re-added to the review queue, firing a "No activity for Xh Ym"
+		// notification for a session the user considers gone.
+		if inst.Snapshot().ArchivedAt != nil || !inst.Started() || inst.Paused() {
 			continue
 		}
 		scanned++
@@ -48,11 +57,11 @@ func (ss *StartupScanner) Scan(instances []*Instance, queue ReviewQueueWriter) i
 			item := buildStartupItem(inst, result)
 			queue.Add(item)
 			added++
-			log.InfoLog.Printf("[StartupScan] Session '%s': detected %s (status=%s)",
+			log.InfoLog().Printf("[StartupScan] Session '%s': detected %s (status=%s)",
 				inst.Title, result.Reason, result.ClaudeStatus)
 		}
 	}
-	log.InfoLog.Printf("[StartupScan] Scanned %d sessions, added %d to review queue", scanned, added)
+	log.InfoLog().Printf("[StartupScan] Scanned %d sessions, added %d to review queue", scanned, added)
 	return added
 }
 
@@ -63,21 +72,22 @@ func buildStartupItem(inst *Instance, result DetectionResult) *ReviewItem {
 		lastActivity = inst.CreatedAt
 	}
 	return &ReviewItem{
-		SessionID:    inst.Title,
-		SessionName:  inst.Title,
-		Reason:       result.Reason,
-		Priority:     result.Priority,
-		DetectedAt:   time.Now(),
-		Context:      result.Context,
-		Program:      inst.Program,
-		Branch:       inst.Branch,
-		Path:         inst.Path,
-		WorkingDir:   inst.WorkingDir,
-		Status:       inst.Status.String(),
-		Tags:         inst.Tags,
-		Category:     inst.Category,
-		DiffStats:    inst.GetDiffStats(),
-		LastActivity: lastActivity,
-		ClaudeStatus: result.ClaudeStatus,
+		SessionID:       inst.Title,
+		SessionName:     inst.Title,
+		Reason:          result.Reason,
+		Priority:        result.Priority,
+		DetectedAt:      time.Now(),
+		Context:         result.Context,
+		Program:         inst.Program,
+		Branch:          inst.Branch,
+		Path:            inst.Path,
+		WorkingDir:      inst.WorkingDir,
+		Status:          inst.Status.String(),
+		Tags:            inst.Tags,
+		Category:        inst.Category,
+		DiffStats:       inst.GetDiffStats(),
+		LastActivity:    lastActivity,
+		HasCommitsAhead: inst.GetHasCommitsAhead(),
+		ClaudeStatus:    result.ClaudeStatus,
 	}
 }

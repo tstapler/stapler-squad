@@ -55,24 +55,36 @@ its own.
 - No change to the `detachMutex`, `controlModeSubMu`, `controlModeStartMu`, `cmdSendMu`, or
   `recoveryMu` locks already in the file — new/reused locking must not create a new deadlock
   ordering against these.
+- Not fixing the check-then-act (TOCTOU) races in `AttachToExisting`/`RestoreWithWorkDir`'s
+  nil-check-then-install sequences — guarding each *individual* field access makes them
+  memory-safe but not atomic as a compound operation; `go test -race` cannot detect this class
+  of bug, and fixing it correctly (a generation-counter CAS) is a real behavioral change, not a
+  pure concurrency-safety fix. Identified during Phase 4 validation's pre-mortem and tracked as
+  backlog item `0f4b1300-d667-437b-b51f-89d81a668693`, not fixed inline here.
 
 ## Acceptance criteria
 
+Verbatim from the backlog item (authoritative — supersedes the earlier draft below the item
+was refined against; the earlier version of this section only differed by omitting the
+`ptmx-field-guard` Makefile target and the `TestSessionService_CreateThenImmediateDelete_NoDataRace`
+test, both now explicit requirements rather than implementation-detail suggestions):
+
 1. `t.ptmx`, `t.attachCmd`, and `t.attachCmdWaitOnce` are never read or written outside a
-   consistent synchronization mechanism (mutex or equivalent) in `session/tmux/tmux.go`.
-2. `go test -race ./session/... ./server/...` passes with no data race reported on these
-   fields, run at least 10x consecutively
-   (`go test -race ./session/... ./server/... -count=10`) to catch intermittency.
+   consistent synchronization mechanism (`ptmxMu` + 3 helper methods) anywhere in package
+   `tmux`, enforced by a `make ptmx-field-guard` CI target scanning `session/tmux/*.go`.
+2. `go test -race ./session/... ./server/... -count=10` passes with no data race reported on
+   these fields.
 3. `go test -race ./server/... -run TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort -count=20`
-   (the originally-flaky test) passes cleanly, including under concurrent load matching the
-   original repro conditions (concurrent `CreateSession`/`DeleteSession`).
-4. No new deadlocks introduced: existing `session/tmux` test suite
-   (`go test -race ./session/tmux/...`) passes, and lock acquisition order is documented if a
-   new mutex is added alongside existing ones (`detachMutex`, `controlModeSubMu`, etc.) that
-   could nest.
+   passes cleanly, plus a new `TestSessionService_CreateThenImmediateDelete_NoDataRace` test
+   that skips `waitForLiveInstance` to actually land inside the original repro window.
+4. No new deadlocks introduced: `go test -race ./session/tmux/...` passes, and `ptmxMu`'s lock
+   order relative to `detachMutex`/`controlModeSubMu`/`controlModeStartMu`/`cmdSendMu`/`recoveryMu`
+   is documented accurately (verified: `detachMutex` is held across `ptmxMu` critical sections
+   in both `Detach()` and `DetachSafely()`, leaf-lock, no reversal).
 5. `make quick-check` passes (build + test + lint) with no regressions attributable to this
    change.
-6. Fix does not alter observable PTY lifecycle behavior (existing retry/backoff, EIO
-   handling, orphan-process cleanup in `closePTYAndAttachCmd`) — verified by existing
-   `session/tmux` tests continuing to pass unmodified in intent (only synchronization is
-   added).
+6. Fix does not alter observable PTY lifecycle behavior (retry/backoff, EIO handling,
+   orphan-process cleanup) for the single-caller path or any external return value; the one
+   accepted internal side effect (concurrent `closePTYAndAttachCmd` callers now serialize,
+   reducing duplicate orphan-kill logging) is covered by a dedicated test and documented as
+   intentional, not a regression.

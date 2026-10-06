@@ -3,6 +3,7 @@ package session
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -343,7 +344,14 @@ var conversationScanBufPool = sync.Pool{
 // findConversationFilePath searches ~/.claude/projects/ for the JSONL file that
 // contains the given sessionID. It checks the first 5 lines of each file for a
 // reference to the sessionID, then stops the walk as soon as it finds a match.
-func findConversationFilePath(sessionID string) (string, error) {
+//
+// ctx is checked once per directory entry so a caller (e.g. the session driver
+// loop) can abort an in-flight walk instead of blocking until it finishes on
+// its own — under -count=20 stress, concurrent walks over a large
+// ~/.claude/projects/ tree could otherwise hold a driver goroutine past
+// StopSessionDriver's stop signal long enough to blow the test binary's
+// global timeout.
+func findConversationFilePath(ctx context.Context, sessionID string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get user home directory: %w", err)
@@ -353,6 +361,9 @@ func findConversationFilePath(sessionID string) (string, error) {
 	var conversationFile string
 
 	err = filepath.Walk(projectsDir, func(path string, info os.FileInfo, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil {
 			return nil // skip unreadable entries
 		}
@@ -360,7 +371,7 @@ func findConversationFilePath(sessionID string) (string, error) {
 			return nil
 		}
 
-		file, err := os.Open(path)
+		file, err := os.Open(path) // #nosec G304 -- path comes from filepath.Walk enumerating ~/.claude/projects, not external input
 		if err != nil {
 			return nil
 		}
@@ -391,8 +402,8 @@ func findConversationFilePath(sessionID string) (string, error) {
 
 // FindConversationFilePath is the exported wrapper for findConversationFilePath.
 // It searches ~/.claude/projects/ for the JSONL file containing sessionID.
-func FindConversationFilePath(sessionID string) (string, error) {
-	return findConversationFilePath(sessionID)
+func FindConversationFilePath(ctx context.Context, sessionID string) (string, error) {
+	return findConversationFilePath(ctx, sessionID)
 }
 
 // extractMsgContent converts a raw conversationMessage into a ClaudeConversationMessage.
@@ -434,7 +445,7 @@ func extractMsgContent(raw conversationMessage) (ClaudeConversationMessage, bool
 // readAllMessagesFromFile reads every user/assistant message from the JSONL file
 // at path in chronological order (oldest first).
 func readAllMessagesFromFile(path string) ([]ClaudeConversationMessage, error) {
-	file, err := os.Open(path)
+	file, err := os.Open(path) // #nosec G304 -- callers only ever pass a conversationFile resolved by findConversationFilePath's safe directory walk, or an internal HistoryFilePath, never external input
 	if err != nil {
 		return nil, fmt.Errorf("failed to open conversation file: %w", err)
 	}
@@ -474,7 +485,7 @@ func readLastNMessagesFromFile(path string, n int) ([]ClaudeConversationMessage,
 		return readAllMessagesFromFile(path)
 	}
 
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- callers only ever pass a conversationFile resolved by findConversationFilePath's safe directory walk, or an internal HistoryFilePath, never external input
 	if err != nil {
 		return nil, fmt.Errorf("failed to open conversation file: %w", err)
 	}
@@ -569,7 +580,7 @@ func isEOFErr(err error) bool {
 //
 // Results are always in chronological order (oldest first).
 func (sh *ClaudeSessionHistory) GetMessagesFromConversationFile(sessionID string, limit int) ([]ClaudeConversationMessage, error) {
-	conversationFile, err := findConversationFilePath(sessionID)
+	conversationFile, err := findConversationFilePath(context.Background(), sessionID)
 	if err != nil {
 		return nil, err
 	}

@@ -8,6 +8,7 @@ import (
 )
 
 func TestCircularBuffer_Write(t *testing.T) {
+	t.Parallel()
 	cb := NewCircularBuffer(10)
 
 	// Write some data
@@ -28,6 +29,7 @@ func TestCircularBuffer_Write(t *testing.T) {
 }
 
 func TestCircularBuffer_WriteOverflow(t *testing.T) {
+	t.Parallel()
 	cb := NewCircularBuffer(5)
 
 	// Write more data than buffer can hold
@@ -49,6 +51,7 @@ func TestCircularBuffer_WriteOverflow(t *testing.T) {
 }
 
 func TestCircularBuffer_WriteLargerThanBuffer(t *testing.T) {
+	t.Parallel()
 	cb := NewCircularBuffer(5)
 
 	// Write data larger than buffer
@@ -70,6 +73,7 @@ func TestCircularBuffer_WriteLargerThanBuffer(t *testing.T) {
 }
 
 func TestCircularBuffer_GetRecent(t *testing.T) {
+	t.Parallel()
 	cb := NewCircularBuffer(20)
 
 	// Write some data
@@ -97,6 +101,7 @@ func TestCircularBuffer_GetRecent(t *testing.T) {
 }
 
 func TestCircularBuffer_GetRecentAfterWrap(t *testing.T) {
+	t.Parallel()
 	cb := NewCircularBuffer(10)
 
 	// Write data that wraps around
@@ -118,6 +123,7 @@ func TestCircularBuffer_GetRecentAfterWrap(t *testing.T) {
 }
 
 func TestCircularBuffer_GetAll(t *testing.T) {
+	t.Parallel()
 	cb := NewCircularBuffer(10)
 
 	// Empty buffer
@@ -137,6 +143,7 @@ func TestCircularBuffer_GetAll(t *testing.T) {
 }
 
 func TestCircularBuffer_Len(t *testing.T) {
+	t.Parallel()
 	cb := NewCircularBuffer(10)
 
 	if cb.Len() != 0 {
@@ -156,6 +163,7 @@ func TestCircularBuffer_Len(t *testing.T) {
 }
 
 func TestCircularBuffer_Cap(t *testing.T) {
+	t.Parallel()
 	cb := NewCircularBuffer(100)
 	if cb.Cap() != 100 {
 		t.Errorf("Cap() should return 100, got %d", cb.Cap())
@@ -163,6 +171,7 @@ func TestCircularBuffer_Cap(t *testing.T) {
 }
 
 func TestCircularBuffer_Clear(t *testing.T) {
+	t.Parallel()
 	cb := NewCircularBuffer(10)
 
 	cb.Write([]byte("test"))
@@ -179,6 +188,7 @@ func TestCircularBuffer_Clear(t *testing.T) {
 }
 
 func TestCircularBuffer_ConcurrentWrites(t *testing.T) {
+	t.Parallel()
 	cb := NewCircularBuffer(1024)
 
 	const numGoroutines = 10
@@ -210,6 +220,7 @@ func TestCircularBuffer_ConcurrentWrites(t *testing.T) {
 }
 
 func TestCircularBuffer_ConcurrentReads(t *testing.T) {
+	t.Parallel()
 	cb := NewCircularBuffer(1024)
 
 	// Write some initial data
@@ -236,6 +247,7 @@ func TestCircularBuffer_ConcurrentReads(t *testing.T) {
 }
 
 func TestCircularBuffer_ConcurrentReadWrite(t *testing.T) {
+	t.Parallel()
 	cb := NewCircularBuffer(1024)
 
 	var wg sync.WaitGroup
@@ -266,6 +278,7 @@ func TestCircularBuffer_ConcurrentReadWrite(t *testing.T) {
 }
 
 func TestCircularBuffer_WriteTo(t *testing.T) {
+	t.Parallel()
 	cb := NewCircularBuffer(20)
 
 	// Write some data
@@ -287,6 +300,7 @@ func TestCircularBuffer_WriteTo(t *testing.T) {
 }
 
 func TestCircularBuffer_WriteToAfterWrap(t *testing.T) {
+	t.Parallel()
 	cb := NewCircularBuffer(10)
 
 	// Write data that wraps around
@@ -309,6 +323,7 @@ func TestCircularBuffer_WriteToAfterWrap(t *testing.T) {
 }
 
 func TestCircularBuffer_DiskFallback(t *testing.T) {
+	t.Parallel()
 	cb := NewCircularBuffer(10)
 
 	// Enable disk fallback
@@ -335,6 +350,7 @@ func TestCircularBuffer_DiskFallback(t *testing.T) {
 }
 
 func TestCircularBuffer_Close(t *testing.T) {
+	t.Parallel()
 	cb := NewCircularBuffer(10)
 
 	// Enable disk fallback
@@ -358,6 +374,7 @@ func TestCircularBuffer_Close(t *testing.T) {
 }
 
 func TestCircularBuffer_DefaultSize(t *testing.T) {
+	t.Parallel()
 	cb := NewCircularBuffer(0)
 	if cb.Cap() != DefaultBufferSize {
 		t.Errorf("Default buffer size should be %d, got %d", DefaultBufferSize, cb.Cap())

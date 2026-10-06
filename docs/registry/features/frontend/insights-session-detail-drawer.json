@@ -6,12 +6,16 @@
   "markerLine": 1,
   "tested": true,
   "testIds": [
-    "SessionDetailDrawer > SessionDetailDrawer_should_fetchTurnTimelineOnce_When_drawerOpensForSession > calls useSessionTurnTimeline with the session's conversationId exactly once per render",
-    "SessionDetailDrawer > SessionDetailDrawer_should_fetchTurnTimelineOnce_When_drawerOpensForSession > renders the Per-Turn Breakdown table when turns are present",
-    "SessionDetailDrawer > SessionDetailDrawer_should_showExactEmptyStateCopy_When_noTurnData",
-    "SessionDetailDrawer > SessionDetailDrawer_should_renderHighestTokenTurnFirst_When_turnsVarySize",
+    "SessionDetailDrawer > SessionDetailDrawer_should_fetchTurnTimelineByConversationId_when_drawerOpensForSession",
+    "SessionDetailDrawer > SessionDetailDrawer_should_returnNull_when_sessionIsNull",
+    "SessionDetailDrawer > SessionDetailDrawer_should_renderDialogChrome_when_sessionProvided",
+    "SessionDetailDrawer > SessionDetailDrawer_should_callOnClose_when_escapePressed",
+    "SessionDetailDrawer > SessionDetailDrawer_should_callOnClose_when_overlayClicked",
+    "SessionDetailDrawer > SessionDetailDrawer_should_moveFocusToCloseButton_when_mountedWithSession",
+    "SessionDetailDrawer > SessionDetailDrawer_should_restoreFocusToTrigger_when_sessionClosed",
+    "SessionDetailDrawer > SessionDetailDrawer_should_renderSessionDetailContent_when_sessionProvided",
     "turnTimelineUtils > sortTurnsByTokensDesc_should_orderTurnsByTotalTokensDescending_When_turnsVarySize",
     "turnTimelineUtils > isOutlierTurn_should_returnTrue_When_totalExceedsThreshold"
   ],
-  "lastModified": "2026-08-02T00:00:00.000Z"
+  "lastModified": "2026-09-03T00:00:00.000Z"
 }

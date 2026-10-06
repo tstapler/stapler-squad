@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // ReviewQueueService handles all review-queue-related RPC methods, extracted
@@ -217,6 +218,9 @@ func (rqs *ReviewQueueService) WatchReviewQueue(
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("reactive queue manager not initialized"))
 	}
 
+	done := TrackOpenStream("WatchReviewQueue")
+	defer done()
+
 	filters := &WatchReviewQueueFilters{
 		PriorityFilter:    convertProtoPriorities(req.Msg.PriorityFilter),
 		ReasonFilter:      convertProtoReasons(req.Msg.ReasonFilter),
@@ -228,10 +232,17 @@ func (rqs *ReviewQueueService) WatchReviewQueue(
 	eventCh, clientID := rqs.reactiveQueueMgr.AddStreamClient(ctx, filters)
 	defer rqs.reactiveQueueMgr.RemoveStreamClient(clientID)
 
+	heartbeat := time.NewTicker(events.HeartbeatInterval)
+	defer heartbeat.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-heartbeat.C:
+			if err := stream.Send(&sessionv1.ReviewQueueEvent{Timestamp: timestamppb.Now(), Heartbeat: true}); err != nil {
+				return fmt.Errorf("failed to send review queue heartbeat: %w", err)
+			}
 		case event, ok := <-eventCh:
 			if !ok {
 				return nil

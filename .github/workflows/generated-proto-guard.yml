@@ -1,0 +1,69 @@
+name: Generated Protobuf Guard
+
+# Hard CI backstop for generated protobuf/connect code getting committed. gen/ and
+# web-app/src/gen/ are gitignored (see .gitignore) — every make target that consumes
+# generated code (build, test, lint) already depends on proto-gen, and CI regenerates
+# fresh before every consuming step (see .github/workflows/lint.yml, .github/actions/
+# prepare/action.yml). Committing these files anyway has caused real breakage twice:
+# once when a stale/incomplete force-add (git add -f) shipped generated bindings that
+# didn't match proto/session/v1/import.proto's actual contents, and once when a CI
+# workflow step ran Jest before regenerating protos and only "worked" by accident
+# because most generated files happened to already be force-added (PR #445 fixed both;
+# see that PR's description for the full incident writeup). AI coding agents in
+# particular tend to `git add -f` a generated file to make a local build pass without
+# realizing the ignore is deliberate — this workflow catches that regardless of how it
+# happened (manual commit, agent-driven commit, a stray `git add -A`/`git add -f`, a
+# merge, etc).
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  guard:
+    name: no-checked-in-generated-protos
+    runs-on: ubuntu-latest
+    # Set deliberately tight relative to this guard's own 35.6m tail-latency outlier
+    # (baseline avg ~5m) so a recurrence is caught by this budget instead of silently
+    # tolerated. Backstop only — a timeout here is a real failure.
+    timeout-minutes: 10
+    steps:
+      # No checkout: this repo's .git pack data is ~16GB (see build.yml's
+      # detect-changes job for the root cause), so a `fetch-depth: 0`
+      # full-history clone just to list changed file paths cost minutes here
+      # for no reason -- this guard only ever needed a filename list. The
+      # compare API gives the same info with no clone at all. --diff-filter
+      # ACMR (added/copied/modified/renamed, excludes deletes) maps to the
+      # compare API's per-file `status` field, checked below instead.
+      - name: Check PR diff for committed generated protobuf files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          CHANGED=$(gh api "repos/${{ github.repository }}/compare/$BASE_SHA...$HEAD_SHA" --paginate --jq '.files[] | select(.status != "removed") | .filename')
+          if [ -z "$CHANGED" ]; then
+            echo "No added/modified files detected"
+            exit 0
+          fi
+
+          # Mirrors the "Generated protocol buffer code" block in .gitignore.
+          MATCHES=$(echo "$CHANGED" | grep -E '^gen/|^web/src/gen/|^web-app/src/gen/' || true)
+
+          if [ -n "$MATCHES" ]; then
+            echo "::error::This PR commits generated protobuf file(s) that must never be tracked:"
+            echo "$MATCHES"
+            echo ""
+            echo "These paths are gitignored (see .gitignore's \"Generated protocol buffer"
+            echo "code\" block) and are always regenerated fresh by make proto-gen / buf"
+            echo "generate proto before every consuming build/test/lint step — see"
+            echo ".github/workflows/lint.yml and .github/actions/prepare/action.yml."
+            echo ""
+            echo "Fix: git rm --cached <file> for each path above, commit, and re-push."
+            echo "If your change needs a NEW proto file's generated output to build/test"
+            echo "locally, run 'make proto-gen' — do not git add -f the result."
+            exit 1
+          fi
+
+          echo "No generated protobuf files in diff — OK"

@@ -1,0 +1,15 @@
+{
+  "id": "approval-analytics-risk-breakdown",
+  "type": "frontend",
+  "name": "Risk level breakdown table in the approval analytics panel",
+  "component": "ApprovalAnalyticsPanel",
+  "path": "web-app/src/components/sessions/ApprovalAnalyticsPanel.tsx",
+  "filePath": "web-app/src/components/sessions/ApprovalAnalyticsPanel.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "Risk Level Breakdown > ApprovalAnalyticsPanel_should_RenderRiskLevelBreakdownTable_When_SummaryHasRiskLevelCounts",
+    "Risk Level Breakdown > ApprovalAnalyticsPanel_should_RenderSharedEmptyState_When_AllRiskLevelCountsAreZero"
+  ],
+  "lastModified": "2026-08-10T00:00:00Z"
+}

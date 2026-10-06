@@ -41,3 +41,15 @@ export function classifySessionKind(session: Pick<LinkedSession, "role" | "sessi
   }
   return "work";
 }
+
+/**
+ * A LinkedSession is steerable iff it is Instance-backed ("work"/"review",
+ * per classifySessionKind) and has not ended. Synthetic session kinds
+ * (headless triage/review, blocked-guardrail, manual-review-marker) are
+ * never steerable — no session.Instance was ever created for them. See
+ * ADR-002 (project_plans/backlog-operator-feedback-loop/decisions/).
+ */
+export function isSteerable(session: Pick<LinkedSession, "role" | "sessionId" | "endedAt">): boolean {
+  const kind = classifySessionKind(session);
+  return (kind === "work" || kind === "review") && !session.endedAt;
+}

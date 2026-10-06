@@ -10,6 +10,7 @@ import (
 )
 
 func TestParseFile_WhenValidThreeTurnSession_ExpectCorrectTokenTotals(t *testing.T) {
+	t.Parallel()
 	p := NewParser()
 	result, err := p.ParseFile("testdata/valid_session.jsonl")
 	require.NoError(t, err)
@@ -25,6 +26,7 @@ func TestParseFile_WhenValidThreeTurnSession_ExpectCorrectTokenTotals(t *testing
 }
 
 func TestParseFile_WhenPartialLastLine_ExpectNoErrorAndPartialLineSkipped(t *testing.T) {
+	t.Parallel()
 	p := NewParser()
 	result, err := p.ParseFile("testdata/partial_write.jsonl")
 	require.NoError(t, err)
@@ -37,6 +39,7 @@ func TestParseFile_WhenPartialLastLine_ExpectNoErrorAndPartialLineSkipped(t *tes
 }
 
 func TestParseFile_WhenMalformedJsonLine_ExpectSkipsBadLineCountsRest(t *testing.T) {
+	t.Parallel()
 	p := NewParser()
 	result, err := p.ParseFile("testdata/malformed_line.jsonl")
 	require.NoError(t, err)
@@ -49,6 +52,7 @@ func TestParseFile_WhenMalformedJsonLine_ExpectSkipsBadLineCountsRest(t *testing
 }
 
 func TestParseFile_WhenMissingUsageField_ExpectZeroTokensForThatTurn(t *testing.T) {
+	t.Parallel()
 	jsonl := `{"parentUuid":null,"isSidechain":false,"type":"assistant","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"Hello."}],"stop_reason":"end_turn"},"uuid":"asst-1","timestamp":"2026-05-15T10:00:00.000Z","sessionId":"no-usage"}` + "\n"
 
 	p := NewParser()
@@ -62,6 +66,7 @@ func TestParseFile_WhenMissingUsageField_ExpectZeroTokensForThatTurn(t *testing.
 }
 
 func TestParseFile_WhenMultiTurnSession_ExpectTurnTimelineOrdered(t *testing.T) {
+	t.Parallel()
 	p := NewParser()
 	result, err := p.ParseFile("testdata/valid_session.jsonl")
 	require.NoError(t, err)
@@ -83,6 +88,7 @@ func TestParseFile_WhenMultiTurnSession_ExpectTurnTimelineOrdered(t *testing.T) 
 }
 
 func TestParseFile_WhenModelHasDateSuffix_ExpectPrimaryModelStoredAsIs(t *testing.T) {
+	t.Parallel()
 	jsonl := `{"parentUuid":null,"isSidechain":false,"type":"assistant","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-6-20250514","content":[{"type":"text","text":"Hello."}],"stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"uuid":"asst-1","timestamp":"2026-05-15T10:00:00.000Z","sessionId":"date-suffix"}` + "\n"
 
 	p := NewParser()
@@ -95,6 +101,7 @@ func TestParseFile_WhenModelHasDateSuffix_ExpectPrimaryModelStoredAsIs(t *testin
 }
 
 func TestParseFile_WhenEmptyFile_ExpectEmptyResultNoError(t *testing.T) {
+	t.Parallel()
 	p := NewParser()
 	result, err := p.ParseReader(strings.NewReader(""))
 	require.NoError(t, err)
@@ -105,6 +112,7 @@ func TestParseFile_WhenEmptyFile_ExpectEmptyResultNoError(t *testing.T) {
 }
 
 func TestParseFile_WhenToolUsePresent_ExpectToolUsageMapPopulated(t *testing.T) {
+	t.Parallel()
 	jsonl := `{"parentUuid":null,"isSidechain":false,"type":"assistant","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}],"stop_reason":"tool_use","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"uuid":"asst-1","timestamp":"2026-05-15T10:00:00.000Z","sessionId":"tool-test"}` + "\n"
 
 	p := NewParser()
@@ -117,6 +125,7 @@ func TestParseFile_WhenToolUsePresent_ExpectToolUsageMapPopulated(t *testing.T) 
 }
 
 func TestParseFile_WhenMCPToolUsePresent_ExpectMCPServerExtracted(t *testing.T) {
+	t.Parallel()
 	jsonl := `{"parentUuid":null,"isSidechain":false,"type":"assistant","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"tool_use","id":"t1","name":"mcp__datadog__search_logs","input":{}}],"stop_reason":"tool_use","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"uuid":"asst-1","timestamp":"2026-05-15T10:00:00.000Z","sessionId":"mcp-test"}` + "\n"
 
 	p := NewParser()
@@ -129,6 +138,7 @@ func TestParseFile_WhenMCPToolUsePresent_ExpectMCPServerExtracted(t *testing.T) 
 }
 
 func TestParseFile_WhenCacheHeavySession_ExpectCacheTokensSummedCorrectly(t *testing.T) {
+	t.Parallel()
 	p := NewParser()
 	result, err := p.ParseFile("testdata/cache_heavy.jsonl")
 	require.NoError(t, err)
@@ -142,6 +152,7 @@ func TestParseFile_WhenCacheHeavySession_ExpectCacheTokensSummedCorrectly(t *tes
 }
 
 func TestParseFile_WhenSyntheticModelTurn_ExpectExcludedFromTimelineAndModelCounts(t *testing.T) {
+	t.Parallel()
 	jsonl := `{"parentUuid":null,"isSidechain":false,"type":"assistant","message":{"id":"msg_01","type":"message","role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"synthetic turn"}],"stop_reason":"end_turn","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"uuid":"asst-1","timestamp":"2026-05-15T10:00:00.000Z","sessionId":"synthetic-turn"}` + "\n" +
 		`{"parentUuid":"asst-1","isSidechain":false,"type":"assistant","message":{"id":"msg_02","type":"message","role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"real turn"}],"stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"uuid":"asst-2","timestamp":"2026-05-15T10:00:01.000Z","sessionId":"synthetic-turn"}` + "\n"
 

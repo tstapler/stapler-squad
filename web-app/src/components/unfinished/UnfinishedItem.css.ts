@@ -45,6 +45,11 @@ export const path = style({
   fontSize: vars.fontSize.xs,
   color: vars.color.textMuted,
   flexGrow: 1,
+  // minWidth:0 overrides the flex item's default content-based automatic
+  // minimum size — without it, this can't shrink below its full text width
+  // to actually truncate, and instead forces .header (and every ancestor
+  // up to UnfinishedTab's .container) wider than the viewport.
+  minWidth: 0,
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",

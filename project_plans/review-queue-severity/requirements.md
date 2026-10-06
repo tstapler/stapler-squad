@@ -122,6 +122,33 @@ analog and is new work.
 7. Existing approval flow (approve/deny, expiry, auto-approval, secret scan
    auto-deny) is unaffected — this is additive metadata, not a behavior
    change to the classifier's Decision output.
+8. **(Added post-validate — consistency-check CONCERN)** `ApprovalCard`/
+   `ApprovalDrawer` (Path A, the other live consumer of `PendingApprovalProto`
+   alongside `ReviewQueuePanel`) render a severity badge and sort pending
+   approvals severity-first, mirroring AC3 for Path B — plan.md's Epic 5 was
+   already building this; this AC formalizes it as in-scope rather than
+   leaving it implied only by the narrative gap analysis above.
+9. **(Added post-validate — consistency-check CONCERN)** `ApprovalRulesPanel`
+   renders the already-stored `riskLevel` per rule (a pre-existing gap: the
+   field was already wired through `upsertRule` but never displayed) —
+   plan.md's Epic 7 was already building this; formalized here as in-scope.
+
+## Success Metric and Risky Assumption (added post-triad — PM lens)
+
+- **Success metric**: median time-to-first-action on Critical-severity queue items should
+  decrease relative to today's chronological-order baseline (no current instrumentation
+  captures this — add a log-timestamp delta between item-created and first
+  approve/deny/dismiss, bucketed by severity, as a lightweight follow-up; not blocking this
+  feature's initial ship since the UX acceptance criteria already give a testable proxy:
+  "highest-severity item visible in 1 glance, 0 clicks").
+- **Named risky assumption**: `classifier.RiskLevel` (rule-derived + pattern-derived) is
+  trustworthy enough to drive *human attention ordering*, not just rule-editing display and
+  analytics counts (its only two uses today). If the seed rule table under- or
+  over-classifies common commands, severity-first sort could bury a genuinely dangerous but
+  unmatched action below a falsely-Critical one — mitigated by, but not eliminated by, the
+  "unrecorded sorts as High" fail-safe (ADR-001), which only covers *un*classified items, not
+  *mis*classified ones. Flagged, not resolved, in this pass — misclassification-rate tuning is
+  the existing classifier's problem, unchanged by this feature.
 
 ## Open Questions for Research/Planning — resolved in Phase 2 research
 

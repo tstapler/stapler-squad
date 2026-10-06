@@ -15,12 +15,51 @@ export class BacklogItemDetailPage {
   readonly pane: Locator;
   readonly lifecycleSummary: Locator;
   readonly pipelineBadge: Locator;
+  readonly sendBackToggle: Locator;
+  readonly sendBackTextarea: Locator;
+  readonly sendBackSubmit: Locator;
+  /** The `role="form" aria-label="Send back for re-planning"` wrapper — scopes Cancel/error locators below so they never collide with PlanVerdictBox's own similarly-shaped form/Cancel/InlineError. */
+  readonly sendBackForm: Locator;
+  readonly sendBackCancel: Locator;
+  /** `InlineNotice` shown inside the form whenever `activeWorkSessionCount > 0` (SendBackFeedbackBox.tsx) — rendered WITHOUT an `onDismiss` prop, so unlike other InlineNotice usages in this app it has no dismiss button. */
+  readonly sendBackActiveSessionNotice: Locator;
+  /** The `InlineError` (`role="alert" aria-live="assertive"`) SendBackFeedbackBox renders on a failed submit. */
+  readonly sendBackError: Locator;
+  readonly sendBackErrorDismiss: Locator;
+  /** Only rendered for the one retryable failure case (triggerTriage's internal ready->idea CAS already committed) — see SendBackFeedbackBox.tsx's `retryable` branch. */
+  readonly sendBackErrorRetry: Locator;
+  /** PlanVerdictBox's "Regenerate Plan with This Feedback" button (existing ADR-002 flow) — the recovery affordance ux.md Surface 7 points at for the reject/triggerTriage-after-transition-succeeded failure case. */
+  readonly regeneratePlanButton: Locator;
+  /** The unrelated, unchanged "↩ Return to Triage" button (`send_back_idea`). */
+  readonly sendBackIdeaButton: Locator;
+  readonly toast: Locator;
+  /** PlanVerdictBox's `role="status" aria-label="Plan review status"` card (shared by plan-review.spec.ts and this file's send-back-feedback coverage). */
+  readonly planReviewStatus: Locator;
 
   constructor(page: Page) {
     this.page = page;
     this.pane = page.getByTestId("backlog-item-detail");
     this.lifecycleSummary = page.getByTestId("lifecycle-summary");
     this.pipelineBadge = page.getByTestId("lifecycle-pipeline-badge");
+    this.sendBackToggle = page.getByTestId("backlog-action-send-back-feedback");
+    this.sendBackTextarea = page.getByTestId("send-back-feedback-textarea");
+    this.sendBackSubmit = page.getByTestId("backlog-action-send-back-feedback-submit");
+    this.sendBackForm = page.getByRole("form", { name: "Send back for re-planning" });
+    this.sendBackCancel = this.sendBackForm.getByRole("button", { name: "Cancel" });
+    this.sendBackActiveSessionNotice = page.getByTestId("send-back-active-session-notice");
+    this.sendBackError = this.sendBackForm.getByRole("alert");
+    this.sendBackErrorDismiss = this.sendBackError.getByRole("button", { name: "Dismiss error" });
+    this.sendBackErrorRetry = this.sendBackError.getByRole("button", { name: "Retry send-back with this feedback" });
+    this.regeneratePlanButton = page.getByTestId("backlog-action-regenerate-plan");
+    this.sendBackIdeaButton = page.getByTestId("backlog-action-send-back-idea");
+    this.toast = page.getByTestId("toast");
+    this.planReviewStatus = page.getByRole("status", { name: "Plan review status" });
+  }
+
+  async submitSendBackFeedback(feedback: string) {
+    await this.sendBackToggle.click();
+    await this.sendBackTextarea.fill(feedback);
+    await this.sendBackSubmit.click();
   }
 
   /**
@@ -28,7 +67,7 @@ export class BacklogItemDetailPage {
    * `Accordion.Trigger`-backed `<button aria-expanded="true|false">`
    * (web-app/src/components/ui/Collapsible.tsx), located by its
    * `data-testid="collapsible-header-<sectionKey>"` (never by CSS class,
-   * per .claude/rules/e2e-test-conventions.md). `sectionKey` matches the
+   * per the `e2e-test-conventions` skill). `sectionKey` matches the
    * `sectionKey` prop each extracted section passes, e.g. "sessions",
    * "version-control", "description".
    */
@@ -81,6 +120,14 @@ export class BacklogItemDetailPage {
     return this.page.getByTestId("triage-review-panel");
   }
 
+  relatedWorkInput(): Locator {
+    return this.page.getByTestId("triage-related-work-input");
+  }
+
+  relatedWorkResults(): Locator {
+    return this.page.getByTestId("triage-related-work-results");
+  }
+
   async openItemByTitle(title: string) {
     const row = this.page.getByTestId("backlog-table-row").filter({ hasText: title });
     await row.first().click();
@@ -105,7 +152,7 @@ export class BacklogItemDetailPage {
  */
 export async function seedHeadlessTriageItem(
   request: APIRequestContext,
-  opts: { title: string; status?: string; summary?: string }
+  opts: { title: string; status?: string; summary?: string; ended?: boolean }
 ): Promise<{ itemId: string; sessionId: string }> {
   const resp = await request.post(`${BASE_URL}/api/debug/backlog/seed-headless-triage-session`, {
     headers: { "Content-Type": "application/json" },
@@ -113,6 +160,7 @@ export async function seedHeadlessTriageItem(
       title: opts.title,
       status: opts.status ?? "review",
       summary: opts.summary ?? "",
+      ended: opts.ended ?? false,
     },
   });
   if (!resp.ok()) {

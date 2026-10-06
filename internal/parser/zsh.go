@@ -61,7 +61,7 @@ func (p *ZshParser) Parse(ctx context.Context, r io.Reader) (<-chan *history.Eve
 		const maxCapacity = 10 * 1024 * 1024
 		buf := make([]byte, maxCapacity)
 		scanner.Buffer(buf, maxCapacity)
-		
+
 		// Zsh history commands can span multiple lines if there's a trailing backslash
 		// before a newline (or if inside quotes, but Zsh often escapes those newlines).
 		var currentCmd bytes.Buffer
@@ -100,7 +100,7 @@ func (p *ZshParser) Parse(ctx context.Context, r io.Reader) (<-chan *history.Eve
 					// Fallback for malformed or non-extended lines
 					currentCmd.Write(unmetafy(line))
 				}
-				
+
 				// Check for trailing backslash to see if command continues
 				if bytes.HasSuffix(currentCmd.Bytes(), []byte{'\\'}) {
 					inCmd = true
@@ -123,7 +123,7 @@ func (p *ZshParser) Parse(ctx context.Context, r io.Reader) (<-chan *history.Eve
 			} else if inCmd {
 				unmetafiedCmd := unmetafy(line)
 				currentCmd.Write(unmetafiedCmd)
-				
+
 				if bytes.HasSuffix(currentCmd.Bytes(), []byte{'\\'}) {
 					currentCmd.Truncate(currentCmd.Len() - 1)
 					currentCmd.WriteByte('\n')

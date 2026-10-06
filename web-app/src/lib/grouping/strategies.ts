@@ -1,4 +1,5 @@
 import { Session, SessionStatus } from "@/gen/session/v1/types_pb";
+import { isSessionStale } from "../session-staleness";
 
 /**
  * Grouping strategy options for organizing sessions.
@@ -14,6 +15,7 @@ export enum GroupingStrategy {
   SessionType = "session_type",
   Project = "project",
   Workflow = "workflow",
+  Stale = "stale",
   None = "none",
 }
 
@@ -27,6 +29,7 @@ export const GroupingStrategyLabels: Partial<Record<GroupingStrategy, string>> =
   [GroupingStrategy.SessionType]: "Session Type",
   [GroupingStrategy.Project]: "Project",
   [GroupingStrategy.Workflow]: "Workflow",
+  [GroupingStrategy.Stale]: "Stale",
   [GroupingStrategy.None]: "None (Flat List)",
 };
 
@@ -37,6 +40,27 @@ export interface GroupedSessions {
   groupKey: string;
   displayName: string;
   sessions: Session[];
+}
+
+export const PINNED_GROUP_KEY = "__pinned__";
+
+/**
+ * Groups sessions by strategy, with pinned sessions lifted into a leading
+ * "Pinned" group (above every strategy) and removed from their normal groups.
+ * Groups left empty by the removal are dropped.
+ */
+export function groupWithPinned(
+  sessions: Session[],
+  group: (rest: Session[]) => GroupedSessions[]
+): GroupedSessions[] {
+  const isPinned = (s: Session) => s.pinned && !s.archivedAt;
+  const pinned = sessions.filter(isPinned);
+  if (pinned.length === 0) return group(sessions);
+  const rest = sessions.filter((s) => !isPinned(s));
+  return [
+    { groupKey: PINNED_GROUP_KEY, displayName: "Pinned", sessions: pinned },
+    ...group(rest),
+  ];
 }
 
 /**
@@ -64,6 +88,8 @@ export interface GroupedSessions {
 export interface GroupSessionsOptions {
   /** Map from workflow UUID to workflow name, used by GroupingStrategy.Workflow */
   workflowIdToName?: Map<string, string>;
+  /** Idle-time threshold (minutes) used by GroupingStrategy.Stale; defaults to 30 */
+  thresholdMinutes?: number;
 }
 
 export function groupSessions(
@@ -115,8 +141,9 @@ export function groupSessions(
         break;
 
       case GroupingStrategy.Path:
-        // Single-membership: One path per session
-        groupKeys = [session.path || "No Path"];
+        // Single-membership: One path per session. activeDir, not path, so
+        // worktree sessions group by where they actually run.
+        groupKeys = [session.activeDir || "No Path"];
         break;
 
       case GroupingStrategy.Program:
@@ -147,6 +174,13 @@ export function groupSessions(
         } else {
           groupKeys = ["Manual Sessions"];
         }
+        break;
+
+      case GroupingStrategy.Stale:
+        // Single-membership: "Stale" only for ACTIVE sessions past the idle threshold;
+        // everything else (including non-ACTIVE sessions) falls into "Not Stale" rather
+        // than a misleading "Active" bucket.
+        groupKeys = [isSessionStale(session, options?.thresholdMinutes ?? 30) ? "Stale" : "Not Stale"];
         break;
 
       default:
@@ -216,6 +250,8 @@ function getStatusDisplayName(status: number): string {
     case SessionStatus.CREATING:       return "Creating"; // 6
     case SessionStatus.STOPPED:        return "Stopped";  // 7
     case SessionStatus.HIBERNATED:     return "Hibernated"; // 8
+    case SessionStatus.CRASHED:        return "Crashed";  // 10
+    case SessionStatus.PERMANENTLY_FAILED: return "Failed"; // 11
     default:                           return "Unknown";
   }
 }

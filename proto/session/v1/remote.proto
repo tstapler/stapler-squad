@@ -1,0 +1,209 @@
+syntax = "proto3";
+
+package session.v1;
+
+option go_package = "github.com/tstapler/stapler-squad/gen/proto/go/session/v1";
+
+// RemoteService validates SSH connectivity to a configured remote host and
+// drives the app's TOFU (trust-on-first-use) host-key confirmation flow
+// (ssh-remote-workspaces Epic 3.3). Kept as its own proto file, separate
+// from session.proto: a remote is a distinct resource, not an extension of
+// CreateSessionRequest.
+service RemoteService {
+  // TestRemoteConnection attempts to dial a configured remote by name. If
+  // the remote's host key has never been seen before, this does NOT fail
+  // with an opaque RPC error -- it returns a structured response with
+  // host_key_unknown=true and the key's fingerprint, for the frontend to
+  // render as an explicit "Trust and connect" / "Cancel" confirmation
+  // dialog (see project_plans/ssh-remote-workspaces/research/ux.md §1). No
+  // session-creation capability is unlocked for the remote until the user
+  // calls TrustRemoteHostKey with that exact fingerprint.
+  rpc TestRemoteConnection(TestRemoteConnectionRequest) returns (TestRemoteConnectionResponse) {}
+
+  // TrustRemoteHostKey commits the TOFU decision the user made after seeing
+  // TestRemoteConnection's fingerprint. It independently re-verifies the
+  // remote's CURRENTLY presented host key and rejects the request if its
+  // fingerprint doesn't exactly match the one supplied -- defense against
+  // trusting a different key than the one actually displayed to the user
+  // (e.g. a stale fingerprint from an earlier call, or a key that changed
+  // in between).
+  rpc TrustRemoteHostKey(TrustRemoteHostKeyRequest) returns (TrustRemoteHostKeyResponse) {}
+
+  // GenerateRemoteIdentity generates (or, if one already exists under this
+  // name, idempotently re-describes) an Ed25519 SSH identity for a remote
+  // that has NOT yet been saved to config.json -- the Add Remote form
+  // (ssh-remote-workspaces Phase 6, Epic 6.1) calls this on the first "Test
+  // connection" click, before the remote exists in config.Remotes at all.
+  // Idempotent by design: a user who clicks "Test connection" more than once
+  // (e.g. after adding the returned authorized_keys line to the remote host)
+  // must keep seeing the SAME key material, not a silently rotated one.
+  rpc GenerateRemoteIdentity(GenerateRemoteIdentityRequest) returns (GenerateRemoteIdentityResponse) {}
+
+  // ListRemotes returns every configured remote (config.Config.Remotes), for
+  // the Settings -> Remotes list view.
+  rpc ListRemotes(ListRemotesRequest) returns (ListRemotesResponse) {}
+
+  // CreateRemote persists a new RemoteConfig to config.json. Requires an
+  // identity already generated for `name` via GenerateRemoteIdentity (one is
+  // generated on demand as a fallback if missing, but the intended onboarding
+  // flow always calls GenerateRemoteIdentity first via "Test connection").
+  // Called once TestRemoteConnection/TrustRemoteHostKey (in draft mode) have
+  // confirmed the remote is reachable -- never called for a remote the user
+  // never successfully tested. NOTE: this precondition is enforced only by
+  // caller/frontend flow discipline -- CreateRemote itself does not verify
+  // the host is already trusted in known_hosts (see the handler's doc
+  // comment in server/services/remote_service.go for why, and why this is
+  // safe: an untrusted host still fails at actual dial time).
+  rpc CreateRemote(CreateRemoteRequest) returns (CreateRemoteResponse) {}
+
+  // DeleteRemote removes a remote's config.json entry (if present) and its
+  // stored SSH identity (if present) -- at least one of the two existing is
+  // enough for success. Serves two callers: the Remotes list's row-level
+  // "Delete" action (an existing, saved remote), and the Add Remote form's
+  // "Cancel" cleanup path (an identity generated via GenerateRemoteIdentity
+  // for a draft remote that was never saved -- see that RPC's doc comment).
+  // The on-disk known_hosts trust record is deliberately left untouched (see
+  // ux.md Surface 1's interaction flow) -- only the config entry and keychain
+  // identity are removed.
+  rpc DeleteRemote(DeleteRemoteRequest) returns (DeleteRemoteResponse) {}
+}
+
+// RemoteConfigProto mirrors config.RemoteConfig for RPC transport. Port is
+// carried as a separate field here for form-friendliness even though
+// config.RemoteConfig itself folds a non-default port into Host as
+// "host:port" (see RemoteConfig.Host's doc comment and remoteAddr) --
+// CreateRemote/ListRemotes do that folding/splitting server-side so the
+// frontend never has to parse "host:port" strings itself.
+message RemoteConfigProto {
+  string name = 1;
+  string host = 2;
+  string user = 3;
+  // port is 0 when the remote uses the default (22).
+  int32 port = 4;
+  string base_path = 5;
+  // has_identity reports whether an SSH identity is registered for this
+  // remote (RemoteConfig.IdentityRef != ""), without exposing any key
+  // material.
+  bool has_identity = 6;
+}
+
+// RemoteConnectionState mirrors session/sshremote.RemoteConnectionState for
+// wire transport (Epic 6.2's RemoteHealthChangedEvent). Kept as a proto enum
+// rather than a bare string so frontend switch/exhaustiveness checks catch a
+// state the client doesn't yet handle, instead of silently falling through
+// on an unrecognized string value.
+enum RemoteConnectionState {
+  REMOTE_CONNECTION_STATE_UNSPECIFIED = 0;
+  REMOTE_CONNECTION_STATE_CONNECTED = 1;
+  REMOTE_CONNECTION_STATE_RECONNECTING = 2;
+  REMOTE_CONNECTION_STATE_DISCONNECTED = 3;
+}
+
+// DraftRemoteTarget supplies inline connection coordinates for a remote that
+// has NOT yet been saved to config.json -- used by TestRemoteConnectionRequest
+// and TrustRemoteHostKeyRequest's draft field (the Add Remote form's flow,
+// before the user has confirmed trust/save). name must match the name passed
+// to GenerateRemoteIdentity, since identity lookup is keyed by that name.
+message DraftRemoteTarget {
+  string name = 1;
+  string host = 2;
+  string user = 3;
+  // port is 0 for the default (22).
+  int32 port = 4;
+}
+
+message TestRemoteConnectionRequest {
+  // remote_name is the RemoteConfig.Name of an already-saved remote (see
+  // config.Config.RemoteByName). Mutually exclusive with draft -- exactly
+  // one of the two must be set.
+  string remote_name = 1;
+  // draft supplies inline connection coordinates for a remote not yet saved
+  // to config.json (the Add Remote form, before Trust/save). Mutually
+  // exclusive with remote_name.
+  DraftRemoteTarget draft = 5;
+}
+
+message TestRemoteConnectionResponse {
+  // success is true only when the full SSH connection -- host-key trust AND
+  // authentication -- succeeded.
+  bool success = 1;
+  // host_key_unknown is true when this attempt failed specifically because
+  // the remote's host key has never been trusted before. When true,
+  // fingerprint is populated and the frontend should offer
+  // TrustRemoteHostKey; success is always false in this case.
+  bool host_key_unknown = 2;
+  // fingerprint is the SHA256 host-key fingerprint (OpenSSH's "SHA256:..."
+  // display format) to show the user, populated whenever host_key_unknown
+  // is true. Empty otherwise.
+  string fingerprint = 3;
+  // error_message is populated for any other failure: a trusted host whose
+  // key just changed (a possible MITM signal -- deliberately reported here,
+  // never as host_key_unknown=true), auth rejected, network unreachable, no
+  // such remote configured, etc.
+  string error_message = 4;
+}
+
+message TrustRemoteHostKeyRequest {
+  // remote_name is the RemoteConfig.Name to trust a host key for. Mutually
+  // exclusive with draft -- exactly one of the two must be set.
+  string remote_name = 1;
+  // fingerprint must exactly match the fingerprint the remote is currently
+  // presenting (re-verified server-side, not merely echoed back) -- a
+  // mismatch is rejected rather than silently trusting a different key than
+  // the one shown to the user.
+  string fingerprint = 2;
+  // draft supplies inline connection coordinates for a remote not yet saved
+  // to config.json (the Add Remote form's host-key trust dialog). Mutually
+  // exclusive with remote_name.
+  DraftRemoteTarget draft = 3;
+}
+
+message TrustRemoteHostKeyResponse {
+  bool success = 1;
+  // error_message is populated when success is false, e.g. a fingerprint
+  // mismatch or an unreachable remote.
+  string error_message = 2;
+}
+
+message GenerateRemoteIdentityRequest {
+  // name keys the generated identity in the OS keychain -- must match the
+  // name the remote will ultimately be saved under (DraftRemoteTarget.name /
+  // CreateRemoteRequest.name).
+  string name = 1;
+}
+
+message GenerateRemoteIdentityResponse {
+  // public_key_text is the bare authorized_keys-format public key line
+  // ("ssh-ed25519 AAAA...", no options).
+  string public_key_text = 1;
+  // authorized_keys_line is public_key_text prefixed with the ADR-004
+  // recommended command=/restrict/pty scoping options -- copy-paste text for
+  // the remote's ~/.ssh/authorized_keys, per
+  // ADR-004-authorized-keys-scoping-is-recommendation-not-enforcement.
+  string authorized_keys_line = 2;
+}
+
+message ListRemotesRequest {}
+
+message ListRemotesResponse {
+  repeated RemoteConfigProto remotes = 1;
+}
+
+message CreateRemoteRequest {
+  string name = 1;
+  string host = 2;
+  string user = 3;
+  // port is 0 for the default (22).
+  int32 port = 4;
+  string base_path = 5;
+}
+
+message CreateRemoteResponse {
+  RemoteConfigProto remote = 1;
+}
+
+message DeleteRemoteRequest {
+  string name = 1;
+}
+
+message DeleteRemoteResponse {}

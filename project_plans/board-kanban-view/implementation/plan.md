@@ -64,15 +64,18 @@ one new proto-adjacent Go method (`Instance.StopByUser`) and no `.proto` file ch
 | `SessionViewMode` | `"list" \| "board"` — the new page-level List/Board toggle state. | **Not** the same as `SessionList`'s existing `viewMode?: "card"\|"row"` density prop (`SessionList.tsx:96`) — different concept, different name, to avoid the collision stack.md explicitly flagged. |
 | `BoardColumnKey` | `"running" \| "needs_review" \| "paused" \| "complete"` — the 4 fixed status-based board columns. | Not a 1:1 mirror of `SessionStatus`; `"paused"` covers 2 statuses, `"needs_review"` covers zero statuses (it's a `SubStatus`-derived bucket). |
 | `getBoardColumnKey(session)` | Pure function: `Session → BoardColumnKey`. | New file `web-app/src/lib/board/columns.ts`. See §"Column membership" below for the exact branching logic. |
-| `legalBoardTransitions` | `Record<BoardColumnKey, BoardColumnKey[]>` — client-side pre-check of which column-to-column drags are attempted-legal, checked *before* firing any RPC. | New file `web-app/src/lib/board/transitions.ts`. Derived from (but not identical to) `session/state_machine.go`'s `transitionDefs`, because board columns aren't 1:1 with `SessionStatus`. |
+| `legalBoardTransitions` | `Record<BoardColumnKey, BoardColumnKey[]>` — a coarse, column-level table of which column-to-column drags are ever attempted-legal. **Not** by itself sufficient to decide legality for a specific drag: `isLegalBoardDragForSession(session, from, to)` layers a status-aware guard on top (rejecting `CREATING`/`RESTORING` sessions outright, since their real backend edges are narrower than the column they render in), and it's *that* function `onDragEnd`/`MoveToMenu` actually call, checked *before* firing any RPC. | New file `web-app/src/lib/board/transitions.ts`. Derived from (but not identical to) `session/state_machine.go`'s `transitionDefs`, because board columns aren't 1:1 with `SessionStatus`. Two-tier design added to close architecture-review.md's "conflates board-column granularity with backend-status granularity" blocker. |
+| `isLegalBoardDragForSession` | `(session: Session, from: BoardColumnKey, to: BoardColumnKey) => boolean` — the status-aware legality check actually used by drag/menu code; `false` for any `CREATING`/`RESTORING` session regardless of what `legalBoardTransitions[from]` says. | New export in `web-app/src/lib/board/transitions.ts`, Task 1.3.1b. |
+| `rowKey` | String identifying which swimlane row a rendered `BoardColumn`/`BoardCard` instance belongs to; used only to scope dnd-kit's `useDroppable`/`useDraggable` ids uniquely (`` `${rowKey}:${column.key}` `` / `` `${rowKey}:${session.id}` ``) — never used for drag semantics, since dragging never mutates row/tag membership, only column/status. `"__default__"` sentinel when board view has no swimlane grouping active (Phase 2 onward); the real `GroupedSessions.key` once Phase 6 swimlanes render (Task 6.1.1b). | Introduced at Task 3.1.1c (Phase 3) so the id scheme is uniform from the start rather than retrofitted in Phase 6 — closes adversarial-review.md blocker #1. |
 | `SessionBoard` | Top-level board component; owns `DndContext`, column/swimlane derivation, and renders one `BoardColumn` per group. | New file `web-app/src/components/sessions/SessionBoard.tsx`, sibling to `SessionList.tsx`. |
 | `BoardColumn` | A single column: header (label + count badge), drop-target wiring, scrollable/virtualized card list. | New file `web-app/src/components/sessions/BoardColumn.tsx`. |
 | `BoardCard` | Thin wrapper around `SessionCard` adding a drag handle and the `MoveToMenu` fallback trigger — does not fork `SessionCard`'s rendering. | New file `web-app/src/components/sessions/BoardCard.tsx`. |
 | `useFilteredGroupedSessions` | Extracted hook: `(sessions, filterState, groupingStrategy) → { filteredSessions, sortedSessions, groupedSessions, filteredSessionIds }`. | New file `web-app/src/lib/hooks/useFilteredGroupedSessions.ts`, extracted from `SessionList.tsx:530-656`. Both `SessionList` and `SessionBoard` call it — the single "second real call site" that justifies the extraction per the interface-pollution checklist's concrete-type-first rule. |
-| `DragOutcome` | Discriminated union: `{type:"moved"} \| {type:"rejected", reason:string} \| {type:"network_error"} \| {type:"cancelled"}` — result of one completed drag or `MoveToMenu` action. | New type in `web-app/src/lib/board/dragOutcome.ts`. Drives the toast/snap-back UI (pitfalls.md §1's "distinguish rejected from changed-elsewhere"). |
+| `DragOutcome` | Discriminated union: `{type:"moved"} \| {type:"rejected_illegal", from:BoardColumnKey, to:BoardColumnKey} \| {type:"rejected_by_server", reason:string} \| {type:"network_error"} \| {type:"cancelled"}` — result of one completed drag or `MoveToMenu` action. | New type in `web-app/src/lib/board/dragOutcome.ts` (see Task 3.2.1a for the canonical definition — this row previously listed a stale, simpler shape; corrected to match). Drives the toast/snap-back UI (pitfalls.md §1's "distinguish rejected from changed-elsewhere") — the illegal/server split exists precisely to keep that distinction. |
+| `BatchDragOutcome` | `{ succeeded: string[]; failed: {sessionId: string; reason: string}[] }` — the multi-select analogue of `DragOutcome`, produced when a drag fans out to more than one session (Task 6.3.1c). | New export in `web-app/src/lib/board/dragOutcome.ts`. Drives the aggregate toast ("N of M sessions moved... (K failed)") plus independent per-ID snap-back for `failed` entries. |
 | `MoveToMenu` | The non-drag fallback control on `BoardCard` (WCAG SC 2.5.7 requirement) — also the keyboard-operable path, per ux.md §3's "one implementation serves both". | New file `web-app/src/components/sessions/MoveToMenu.tsx`, modeled on the existing overflow-menu pattern already used in `web-app/src/components/sessions/` for per-card actions. |
 | `ApprovalResolution` | The distinct drag-out-of-Needs-Review action path: calls `ResolveApproval` (approve/deny), not `updateSession`. | Implemented inline in `SessionBoard.tsx`'s drop handler — no new RPC, `ResolveApproval` already exists (`proto/session/v1/session.proto:122`). |
-| `inFlightDragSessionId` | Local `SessionBoard` state: the session ID currently mid-drag (or mid-`MoveToMenu`-action). Suppresses `watchSessions`-driven column reassignment for that ID until the drag/action resolves. | Addresses pitfalls.md §2's "live push racing an in-progress drag." |
+| `inFlightDragSessionIds` | Local `SessionBoard` state: `ReadonlySet<string>` of session IDs currently mid-drag (a single-card drag = one member; Phase 6's multi-select fan-out, Task 6.3.1c, adds every selected session's ID) or mid-`MoveToMenu`-action. Suppresses `watchSessions`-driven column reassignment for any member ID until its drag/action resolves *or is cancelled*. | Addresses pitfalls.md §2's "live push racing an in-progress drag." Specced as a `Set` (not a single `string \| null`) from Phase 3 onward so Phase 6's multi-select fan-out is additive, not a breaking refactor — closes architecture-review.md blocker #2. Cleared via `onDragEnd` *or* `onDragCancel` (Task 3.1.1b) — closes adversarial-review.md blocker #3. |
 | `swimlaneGroupingStrategy` | The existing `GroupingStrategy` value (from `web-app/src/lib/grouping/strategies.ts`) selected as the **row** axis when board view is not using the default status-only layout. | Reuses `groupSessions()` unmodified; status columns are always present as the column axis (see Pattern Decision #7). |
 | `ViewModeStorageKey` | `` `ws-${currentWorkspaceId}.stapler-squad-session-view-mode` `` — workspace-scoped localStorage key for AC9. | `currentWorkspaceId` sourced from `useDatabases().currentId` (`web-app/src/lib/hooks/useDatabase.ts`), mirroring the *shape* of `SessionList`'s existing `pane-${pane.id}.` prefix convention (`makeStorageKeys`, `SessionList.tsx:238-242`) but keyed by workspace, not pane. |
 | `StopByUser` | New `Instance` method, `session/instance.go`, mirroring `pauseLocked`'s cleanup (stop controller, commit-if-dirty, kill tmux, remove worktree if present) but calling `transitionToLocked(ctx, Stopped)` instead of `Paused`. | Backs the new `→ Stopped` branch in `UpdateSession`. See Pattern Decision #5. |
@@ -248,9 +251,12 @@ just a visual reorder).
     `Creating`... actually `Creating→Stopped` *is* valid, so use a genuinely illegal case:
     `Restoring→Stopped`, which has no entry in `transitionDefs`), *Then* `StopByUser` returns
     `session.ErrInvalidTransition{From: Restoring, To: Stopped}`, `classifyStopErr` maps it to
-    `connect.CodeFailedPrecondition`, and no partial state change is persisted.
-**Files**: `session/instance.go`, `session/state_machine.go` (read-only reference, no changes
-needed — `Active/Paused/Hibernated → Stopped` are all already valid edges), `server/services/session_service.go`
+    `connect.CodeFailedPrecondition`, and no partial state change is persisted — and, per the
+    pre-mortem P1 fix above, the session's tmux pane is still alive and (if it's a worktree
+    session) its worktree directory still exists after the rejected call, since the legality
+    check now runs before any cleanup.
+**Files**: `session/instance.go`, `session/state_machine.go` (extract/reuse a side-effect-free
+`canTransitionLocked` predicate — see Task 0.1.1a), `server/services/session_service.go`
 
 ##### Task 0.1.1a: Add `Instance.StopByUser()` (~5 min)
 - In `session/instance.go`, immediately after `Resume()` (ends at line ~1508, before
@@ -272,6 +278,17 @@ needed — `Active/Paused/Hibernated → Stopped` are all already valid edges), 
   	}
   	if i.Status == Stopped {
   		return fmt.Errorf("instance is already stopped")
+  	}
+  	// Validate the transition BEFORE any destructive side effect (kill tmux, remove
+  	// worktree). Pre-mortem finding #1 (P1): the original draft of this function ran
+  	// cleanup first and validated last, so a rejected drag (e.g. Restoring→Stopped,
+  	// which has no entry in transitionDefs) still destroyed the tmux session and
+  	// worktree even though the caller got an error and the UI showed a rejection —
+  	// architecture-review.md had already flagged this ordering as a "Concern" once.
+  	// canTransitionLocked performs the same lookup transitionToLocked does internally,
+  	// without mutating state, so this call is side-effect-free.
+  	if !canTransitionLocked(s, Stopped) {
+  		return &ErrInvalidTransition{From: i.Status, To: Stopped}
   	}
   	stopControllerLocked(s)
   	var errs []error
@@ -302,6 +319,8 @@ needed — `Active/Paused/Hibernated → Stopped` are all already valid edges), 
   		return err
   	}
   	if err := transitionToLocked(s, context.Background(), Stopped); err != nil {
+  		// Should not happen — canTransitionLocked already validated this above — but
+  		// keep the check as defense-in-depth against the two functions' logic diverging.
   		return fmt.Errorf("failed to transition to Stopped: %w", err)
   	}
   	i.gitManager.InvalidateDirtyCache()
@@ -309,7 +328,13 @@ needed — `Active/Paused/Hibernated → Stopped` are all already valid edges), 
   	return nil
   }
   ```
-- Files: `session/instance.go`
+  If `session/state_machine.go` has no standalone side-effect-free `canTransitionLocked`
+  predicate yet (confirm via `grep -n "func canTransitionLocked\|func.*isValidTransition" session/state_machine.go`
+  at implementation time), extract one from `transitionDefs` alongside this task rather
+  than duplicating the edge table inline — `transitionToLocked`'s existing legality check
+  should be refactored to call the same predicate, so the two can never drift apart.
+- Files: `session/instance.go`, `session/state_machine.go` (add/reuse `canTransitionLocked`
+  if not already present as a standalone predicate)
 
 ##### Task 0.1.1b: Add `classifyStopErr` and wire the new branch in `UpdateSession` (~4 min)
 - In `server/services/session_service.go`, add `classifyStopErr` right after
@@ -340,6 +365,12 @@ needed — `Active/Paused/Hibernated → Stopped` are all already valid edges), 
 - In `session/instance_state_test.go` (or nearest existing state-machine test file), add
   `TestStopByUser_should_KillTmuxAndTransitionToStopped_When_SessionIsActive`, following the
   existing `Pause()`/`Resume()` test pattern for constructing a test `Instance`.
+- Add `TestStopByUser_should_RejectTransition_When_SessionIsRestoring` (pre-mortem P1 fix
+  verification): construct a `Restoring`-status test `Instance` with a live tmux session and,
+  for a worktree instance, a worktree directory on disk; call `StopByUser()`; assert it returns
+  `ErrInvalidTransition` AND that the tmux session is still alive (`IsSessionAlive()`-equivalent)
+  AND the worktree directory still exists (`os.Stat` succeeds) — i.e. no cleanup ran before the
+  now-reordered legality check rejected the call.
 - Files: `session/instance_state_test.go` (or confirmed equivalent)
 
 ---
@@ -431,6 +462,13 @@ client-side before firing any RPC (AC5).
   edge, but "Complete" is a terminal *board* column with no defined outbound drag per Pattern
   Decision "Needs Review column semantics" and requirements' Non-Goals framing — dragging out
   of Complete is out of scope for this plan; only *into* Complete is wired).
+- `isLegalBoardDragForSession` rejects any drag for a `CREATING` or `RESTORING` session
+  regardless of column-level legality (status-aware pre-check, not just column-aware).
+  - *Given* a session with `status = SessionStatus.CREATING` (board column `"running"`), *When*
+    `isLegalBoardDragForSession(session, "running", "paused")` is called, *Then* it returns
+    `false` even though `legalBoardTransitions["running"]` includes `"paused"` — `Creating`'s
+    real backend edges (`session/state_machine.go:40-41`) are `Active`/`Stopped` only, and
+    `Restoring` has zero outbound edges at all.
 **Files**: `web-app/src/lib/board/columns.ts` (new), `web-app/src/lib/board/transitions.ts` (new),
 `web-app/src/lib/board/columns.test.ts` (new), `web-app/src/lib/board/transitions.test.ts` (new)
 
@@ -456,13 +494,38 @@ client-side before firing any RPC (AC5).
     return legalBoardTransitions[from]?.includes(to) ?? false;
   }
   ```
+- `legalBoardTransitions` alone is flat across an entire column, so it would incorrectly call a
+  `CREATING`/`RESTORING` session's drag out of "Running" legal — those statuses have narrower
+  real backend edges than `ACTIVE` (confirmed against `session/state_machine.go:38-56`:
+  `Creating` has no `Paused` edge, `Restoring` has zero outbound edges at all). Add a
+  status-aware wrapper in the same file:
+  ```ts
+  export function isLegalBoardDragForSession(
+    session: Session,
+    fromColumn: BoardColumnKey,
+    toColumn: BoardColumnKey
+  ): boolean {
+    if (session.status === SessionStatus.CREATING || session.status === SessionStatus.RESTORING) {
+      return false; // no legal outbound board drag while transient — same treatment as the
+                    // needs_review/complete columns' own special-casing
+    }
+    return isLegalBoardDrag(fromColumn, toColumn);
+  }
+  ```
+  `onDragEnd` (Task 3.2.1b) and `MoveToMenu` (Task 4.1.1b) call this function, not the raw
+  `isLegalBoardDrag`, so the client-side pre-check is status-aware everywhere it's used — closes
+  architecture-review.md's "conflates board-column granularity with backend-status granularity"
+  blocker.
 - Files: `web-app/src/lib/board/transitions.ts`
 
 ##### Task 1.3.1c: Unit tests for both modules (~5 min)
 - `columns.test.ts`: one test per `BoardColumnKey` branch (5 cases: needs_review, running via
   ACTIVE, running via CREATING, paused via HIBERNATED, complete).
 - `transitions.test.ts`: table-driven test asserting `isLegalBoardDrag` for every
-  `(from, to)` pair in `BOARD_COLUMNS`, matching the table above exactly.
+  `(from, to)` pair in `BOARD_COLUMNS`, matching the table above exactly, plus 2 cases for
+  `isLegalBoardDragForSession`'s `CREATING`/`RESTORING` guard overriding an otherwise-legal
+  column pair (e.g. `isLegalBoardDragForSession(creatingSession, "running", "paused")` must be
+  `false` even though `isLegalBoardDrag("running", "paused")` is `true`).
 - Run `cd web-app && npx jest --no-coverage --testPathPatterns="lib/board"`.
 - Files: `web-app/src/lib/board/columns.test.ts`, `web-app/src/lib/board/transitions.test.ts`
 
@@ -541,7 +604,8 @@ Complete columns, **so that** I can scan workflow state at a glance (AC2, AC3).
 **Files**: `web-app/src/components/sessions/SessionBoard.tsx` (new),
 `web-app/src/components/sessions/SessionBoard.css.ts` (new),
 `web-app/src/components/sessions/BoardColumn.tsx` (new),
-`web-app/src/components/sessions/BoardColumn.css.ts` (new)
+`web-app/src/components/sessions/BoardColumn.css.ts` (new),
+`web-app/src/lib/utils/mergeRefs.ts` (new)
 
 ##### Task 2.1.1a: Scaffold `SessionBoard.tsx` (no DnD yet) (~5 min)
 - Create `SessionBoard.tsx` accepting the same `sessions: Session[]` +
@@ -579,6 +643,31 @@ Complete columns, **so that** I can scan workflow state at a glance (AC2, AC3).
   text matches expectation, and that the "Complete" column renders its empty-state message
   when it has zero matching sessions.
 - Files: `web-app/src/components/sessions/SessionBoard.test.tsx`
+
+##### Task 2.1.1e: Wire per-column virtualization (~6 min)
+- The Pattern Decisions table's "Column-level virtualization" row commits to reusing
+  `SessionList.tsx`'s existing virtualization approach, scoped per `BoardColumn` — this task is
+  that implementation (architecture-review.md blocker #1: the decision previously had no task).
+  `BoardColumn` is a flat list of cards with no internal grouping (swimlane rows are separate
+  `BoardColumn` instances, not virtualizer groups), so use the same `useVirtualizer` approach
+  `SessionList.tsx`'s row mode uses (`SessionList.tsx:698`, `@tanstack/react-virtual`) rather
+  than `GroupedVirtuoso` (which exists specifically for List view's grouping-strategy rows, a
+  concern `BoardColumn` doesn't have). One virtualizer instance per `BoardColumn`, never a
+  single board-wide instance — per pitfalls.md §5's DOM-node-count jank risk and §7's dnd-kit
+  cross-column-collision-detection rough edge against off-screen/unmounted virtualized cards.
+- Ref-composition: `BoardColumn`'s scrollable card-list container is the *same* DOM node that
+  Task 3.1.1c's `useDroppable({ id })` will later attach `setNodeRef` to. Add a small
+  `mergeRefs(...refs)` helper (`web-app/src/lib/utils/mergeRefs.ts`, new) that composes multiple
+  ref callbacks into one, and apply it now as `ref={mergeRefs(virtualizerScrollRef)}` on the
+  container — building this in during Phase 2, before drag exists, means Task 3.1.1c only has
+  to *add* `setNodeRef` into the existing `mergeRefs(...)` call rather than retrofitting
+  ref-composition after `useDroppable`/`useDraggable`, drag-handle DOM structure, and column CSS
+  already exist.
+- Add a basic render test in `SessionBoard.test.tsx` asserting the column renders only a subset
+  of DOM nodes for a large synthetic session list (e.g. 200 sessions in one column) — smoke
+  coverage that virtualization is actually wired, not exhaustive virtualizer behavior testing
+  (that's `SessionList`'s existing virtualizer tests' job).
+- Files: `web-app/src/components/sessions/BoardColumn.tsx`, `web-app/src/lib/utils/mergeRefs.ts`
 
 ### Epic 2.2: `BoardCard` wrapper
 
@@ -634,6 +723,32 @@ rendering logic.
 `web-app/src/components/sessions/BoardCard.tsx`,
 `web-app/src/lib/board/statusForColumnMove.ts` (new)
 
+##### Task 3.1.0: Confirmation step before a drop/move into "Complete" (AC12, ~5 min)
+- **UX-lens triad review BLOCKER fix (2026-08-07)**: dropping (or `MoveToMenu`-ing) a card
+  into "Complete" calls `StopByUser`, which kills the session's tmux pane and can remove its
+  worktree — `legalBoardTransitions["complete"] = []` means there is no in-board drag-based
+  undo. Require an explicit confirmation before this specific mutation fires (every other
+  column-to-column move stays a single continuous gesture per Story 3.1.1 — this is the one
+  deliberate exception).
+- In `attemptColumnMove` (Task 3.2.1c), before calling `updateSession(id, {status: STOPPED})`
+  for a `targetColumn === "complete"` drop, resolve a confirmation via a small
+  `<ConfirmDialog>` (reuse an existing confirm-dialog primitive if one exists in
+  `web-app/src/components/ui/` — confirm via `grep -rl "ConfirmDialog\|useConfirm" web-app/src/components/ui/`
+  at implementation time; only build a new one if genuinely absent). Copy: "Stop
+  '{session.title}'? This ends its session." with Confirm/Cancel. On Cancel, produce
+  `DragOutcome {type: "cancelled"}` (no RPC, card returns to origin — same treatment as an
+  Escape-cancelled drag) and do not fire the mutation. On Confirm, proceed with the existing
+  Task 3.2.1c flow unchanged.
+- This applies identically whether the move was initiated by drag-drop (Task 3.1.1b/3.2.1)
+  or by `MoveToMenu` (Task 4.1.1a) — both route through the same `attemptColumnMove`, so
+  wiring the confirmation there (not in either input method separately) keeps the two paths
+  identical per Pattern Decision "Non-drag fallback vs. keyboard-drag sensor."
+- Add `AC12: dropping into Complete shows a confirmation dialog; Cancel leaves the session
+  unchanged and the card in its original column` to `SessionBoard.dragdrop.test.tsx`.
+- Files: `web-app/src/components/sessions/SessionBoard.tsx`,
+  `web-app/src/components/sessions/BoardCompleteConfirmDialog.tsx` (new, or reuse an existing
+  primitive)
+
 ##### Task 3.1.1a: Add `statusForColumnMove` mapping (~4 min)
 - Create `web-app/src/lib/board/statusForColumnMove.ts` exporting
   `statusForColumnMove(session: Session, targetColumn: BoardColumnKey): SessionStatus | null`
@@ -650,28 +765,54 @@ rendering logic.
 
 ##### Task 3.1.1b: Add `DndContext` + sensors to `SessionBoard` (~5 min)
 - Wrap `SessionBoard`'s column row in `<DndContext sensors={sensors} onDragStart={...}
-  onDragEnd={...}>` using `useSensors(useSensor(PointerSensor), useSensor(TouchSensor, {
-  activationConstraint: { delay: 200, tolerance: 8 } }))` per pitfalls.md §4's touch-hold
-  guidance. `onDragStart` sets `inFlightDragSessionId`.
+  onDragEnd={...} onDragCancel={...}>` using `useSensors(useSensor(PointerSensor),
+  useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 8 } }))` per
+  pitfalls.md §4's touch-hold guidance. `onDragStart` sets `inFlightDragSessionIds` to a
+  `ReadonlySet<string>` containing the dragged session's ID (Task 6.3.1c later adds the rest of
+  the active multi-select to this same set when the dragged card is part of it). `onDragCancel`
+  resets `inFlightDragSessionIds` to an empty set and produces `DragOutcome`
+  `{type: "cancelled"}` — dnd-kit fires `onDragCancel`, not `onDragEnd`, for an Escape-key or
+  otherwise-interrupted drag; without wiring it, Story 3.2.2's freeze would never release for a
+  cancelled drag (closes adversarial-review.md blocker #3).
 - Files: `web-app/src/components/sessions/SessionBoard.tsx`
 
-##### Task 3.1.1c: Make `BoardColumn` a `useDroppable` target and `BoardCard` a `useDraggable` source (~5 min)
-- `BoardColumn`: wrap its card-list container with `useDroppable({ id: column.key })`.
-- `BoardCard`: wrap the drag-handle element with `useDraggable({ id: session.id })`, applying
-  the returned `transform` via `CSS.Translate.toString(transform)` (from
+##### Task 3.1.1c: Make `BoardColumn` a `useDroppable` target and `BoardCard` a `useDraggable` source, scoped by row (~6 min)
+- dnd-kit requires unique ids for every draggable/droppable within one `DndContext`. Once Phase
+  6 renders multiple swimlane rows (each containing the same 4 column keys) and `Tag` grouping
+  renders one session's `BoardCard` in multiple rows simultaneously, a raw `column.key`/
+  `session.id` id scheme collides. Scope both ids by `rowKey` from this task onward — a new
+  required prop on `BoardColumn` and `BoardCard`, `"__default__"` at every call site until
+  Phase 6 wires real swimlane keys (Task 6.1.1b) — so the scheme is uniform from Phase 3, not
+  retrofitted later (closes adversarial-review.md blocker #1).
+- `BoardColumn`: wrap its card-list container with `useDroppable({ id: `${rowKey}:${column.key}` })`,
+  attaching the returned `setNodeRef` via the `mergeRefs` helper Task 2.1.1e already introduced
+  for the per-column virtualizer's scroll ref: `ref={mergeRefs(virtualizerScrollRef, setNodeRef)}`.
+- `BoardCard`: wrap the drag-handle element with `useDraggable({ id: `${rowKey}:${session.id}` })`,
+  applying the returned `transform` via `CSS.Translate.toString(transform)` (from
   `@dnd-kit/utilities`) as an inline style — the one sanctioned "CSS custom property bridge"
   runtime-dynamic-value pattern per `.claude/rules/css-architecture.md`.
+- Add `web-app/src/lib/board/compositeId.ts` exporting `parseCompositeId(id: string): { rowKey:
+  string; entityId: string }`, splitting on the first `:` (session IDs and `BoardColumnKey`
+  values never contain `:`, so this is unambiguous even if a future `rowKey` — e.g. a branch
+  name — did).
 - Files: `web-app/src/components/sessions/BoardColumn.tsx`,
-  `web-app/src/components/sessions/BoardCard.tsx`
+  `web-app/src/components/sessions/BoardCard.tsx`, `web-app/src/lib/board/compositeId.ts` (new)
 
 ##### Task 3.1.1d: Implement `onDragEnd` — call `statusForColumnMove` + fire the mutation (~5 min)
-- In `SessionBoard.tsx`'s `onDragEnd(event)`: resolve the dragged session and target column
-  key from `event.active`/`event.over`; if `!isLegalBoardDrag(fromColumn, toColumn)`, treat as
-  a rejection (Phase 3.2) with no RPC call; otherwise resolve the target `SessionStatus` via
+- In `SessionBoard.tsx`'s `onDragEnd(event)`: `event.active.id`/`event.over.id` are composite
+  `${rowKey}:${entityId}` strings — resolve the dragged session and target column key by running
+  each through `parseCompositeId` and using only the `entityId` half; which row either side
+  happened to be rendered under is irrelevant to the drag's meaning (dragging never mutates
+  row/swimlane membership — see the "Swimlane axis vs. status columns" and "Tag grouping
+  multi-membership" Pattern Decisions — only the column each side's `entityId` encodes matters),
+  so both sides' `rowKey` components are discarded after parsing. If
+  `!isLegalBoardDragForSession(session, fromColumn, toColumn)` (Task 1.3.1b), treat as a
+  rejection (Phase 3.2) with no RPC call; otherwise resolve the target `SessionStatus` via
   `statusForColumnMove`, optimistically re-bucket the session locally (a small local
   `Map<sessionId, BoardColumnKey override>` state, cleared once the real `sessions` prop
-  reflects the change), then call `updateSession`/`resumeHibernatedSession` as appropriate,
-  and clear `inFlightDragSessionId`.
+  reflects the change), then call `updateSession`/`resumeHibernatedSession` as appropriate, and
+  clear `inFlightDragSessionIds` back to an empty set (or, for a multi-select fan-out per Task
+  6.3.1c, once every fanned-out call has settled).
 - Files: `web-app/src/components/sessions/SessionBoard.tsx`
 
 ##### Task 3.1.1e: Component test for a legal drag firing the correct RPC call (~5 min)
@@ -696,13 +837,19 @@ I understand why my action didn't take effect instead of it looking like a silen
 - A server-rejected (but client-legal-looking) drag also snaps back with a *different*
   message, distinguishing "your action failed" from "the system changed it."
   - *Given* session `sess-789` (`status = ACTIVE`, column `"running"`) is dragged to
-    `"complete"`, and the `UpdateSession` RPC call rejects with
+    `"complete"`, and the underlying `UpdateSession` RPC call fails server-side with
     `connect.CodeFailedPrecondition` (e.g. it transitioned to `STOPPED` via tmux-exit-detection
     microseconds before the drop, making the RPC's own state-machine check now see
-    `Stopped→Stopped`), *When* the rejection response arrives, *Then* `DragOutcome` resolves
-    to `{type: "rejected", reason: "..."}`, the card re-renders in its *actual current*
-    server-confirmed column (not necessarily its pre-drag column), and a toast reads "Session
-    sess-789 already changed state — showing its current status."
+    `Stopped→Stopped`), *When* `updateSession()` (`useSessionService.ts:301-337`) catches that
+    error internally, dispatches it into the `sessions` Redux slice via `setError(...)`, and
+    resolves to `null` — it never rejects its returned promise (confirmed by reading the hook;
+    adversarial-review.md blocker #2) — *Then* `attemptColumnMove` reads that `null` return
+    value as the failure signal (not a caught rejection), `DragOutcome` resolves to
+    `{type: "rejected_by_server", reason: "..."}` with the reason read from the same Redux slice
+    `PaneSplitRenderer.tsx:152,155` already surfaces via `useSessionServiceContext().error`, the
+    card re-renders in its *actual current* server-confirmed column (not necessarily its
+    pre-drag column), and a toast reads "Session sess-789 already changed state — showing its
+    current status."
 **Files**: `web-app/src/components/sessions/SessionBoard.tsx`,
 `web-app/src/lib/board/dragOutcome.ts` (new), `web-app/src/components/sessions/BoardToast.tsx` (new, or reuse existing toast primitive if one exists)
 
@@ -719,18 +866,64 @@ I understand why my action didn't take effect instead of it looking like a silen
 - Files: `web-app/src/lib/board/dragOutcome.ts`
 
 ##### Task 3.2.1b: Client-side illegal-drag short-circuit in `onDragEnd` (~3 min)
-- Before calling any RPC in `onDragEnd`, check `isLegalBoardDrag`; if false, produce
+- Before calling any RPC in `onDragEnd`, check `isLegalBoardDragForSession(session, from, to)`
+  (Task 1.3.1b — status-aware, not just column-aware); if false, produce
   `{type: "rejected_illegal", from, to}`, skip the optimistic re-bucket entirely (card never
   visually leaves its column), and surface the toast.
 - Files: `web-app/src/components/sessions/SessionBoard.tsx`
 
-##### Task 3.2.1c: Reconcile a server-rejected drag against the session's actual current state (~5 min)
-- Catch the `updateSession`/`resumeHibernatedSession` promise rejection in `onDragEnd`;
-  clear the optimistic override for that session ID (letting it re-derive its column from the
-  latest `sessions` prop — the pitfalls.md-mandated "return the authoritative value, not the
-  stale one" discipline), produce `{type: "rejected_by_server", reason}`, and surface a toast
-  whose copy is visibly distinct from the illegal-drag toast (per ux.md §4's table).
-- Files: `web-app/src/components/sessions/SessionBoard.tsx`
+##### Task 3.2.1c: Reconcile a server-rejected drag against the session's actual current state, and preserve enough error detail to distinguish `network_error` from `rejected_by_server` (~7 min)
+- **Cross-artifact-consistency BLOCKER fix (Finding F)**: as originally drafted, this task read
+  only `sessions.error` (a plain `string`), which cannot distinguish a transport-level failure
+  (timeout, offline, 5xx) from a business-rule rejection (`FailedPrecondition`) — both would
+  produce `rejected_by_server`, making `DragOutcome`'s `network_error` variant (and ux.md
+  Surface 10's promise of visually-distinct network-error messaging) unreachable in practice.
+  Fix: extend `sessionsSlice`'s error state to carry the ConnectRPC error code alongside the
+  message, and classify on that.
+  - In `web-app/src/lib/store/sessionsSlice.ts`: add `errorCode?: number` next to the existing
+    `error: string | null` field; extend the `setError` reducer's payload to
+    `{ message: string | null; code?: number }` (or add a sibling `setErrorCode` reducer if
+    changing `setError`'s signature would touch too many existing call sites — prefer the
+    additive sibling-reducer if `setError(string)` is called from more than ~3 places elsewhere
+    in the codebase; confirm via `grep -rn "dispatch(setError(" web-app/src` at implementation
+    time).
+  - In `useSessionService.ts`'s `updateSession` catch block (`:330-333`) and
+    `resumeHibernatedSession`'s equivalent catch block: when `err instanceof ConnectError`
+    (already imported at the top of the file), also dispatch the code
+    (`err.code` — one of the `Code` enum values also already imported), so the classification
+    below has real data to read, not just a message string.
+  - `attemptColumnMove`:
+    ```ts
+    const result = await updateSession(session.id, { status });
+    if (!result) {
+      const state = store.getState().sessions;
+      const message = state.error ?? "Failed to update session";
+      const isNetworkish = state.errorCode !== undefined && [
+        Code.Unavailable, Code.DeadlineExceeded, Code.Unknown, Code.Internal,
+      ].includes(state.errorCode);
+      return isNetworkish
+        ? { type: "network_error" }
+        : { type: "rejected_by_server", reason: message };
+    }
+    return { type: "moved" };
+    ```
+  Read via the same Redux slice `PaneSplitRenderer.tsx:152,155` already surfaces today
+  (`state.sessions.error`) plus the new `errorCode` sibling, rather than inventing a wholly new
+  error-plumbing path — import the `store` singleton (`@/lib/store/store`) and read
+  `store.getState().sessions` immediately after the awaited call, since `updateSession`'s
+  `dispatch(...)` happens synchronously before it resolves. Known limitation this reuse
+  inherits (acceptable for v1, matches the existing pane-level `ErrorState` swap's own
+  limitation, not solved here): `sessions.error`/`errorCode` is one shared slot for the whole
+  sessions context, so a second concurrent mutation can overwrite it before this read — a
+  pre-existing race this task does not newly introduce, since the same slot was already shared
+  before this fix.
+- Clear the optimistic override for that session ID either way (success, `rejected_by_server`,
+  or `network_error`), letting it re-derive its column from the latest `sessions` prop — the
+  pitfalls.md-mandated "return the authoritative value, not the stale one" discipline — and
+  surface a toast whose copy is visibly distinct per outcome type (per ux.md §4/Surface 10's
+  table: illegal / server-rejected / network-error all read differently).
+- Files: `web-app/src/components/sessions/SessionBoard.tsx`,
+  `web-app/src/lib/store/sessionsSlice.ts`, `web-app/src/lib/hooks/useSessionService.ts`
 
 ##### Task 3.2.1d: Add a minimal toast surface if none exists (~5 min)
 - Grep for an existing toast/notification primitive (`web-app/src/components/ui/NotificationToast.css.ts`
@@ -740,10 +933,15 @@ I understand why my action didn't take effect instead of it looking like a silen
 - Files: `web-app/src/components/sessions/SessionBoard.tsx` (wired to whichever toast
   mechanism is found/confirmed)
 
-##### Task 3.2.1e: Tests for both rejection paths (~5 min)
+##### Task 3.2.1e: Tests for all three rejection paths (~7 min)
 - `SessionBoard.dragdrop.test.tsx` (extend): one test for the illegal-drag short-circuit (no
-  RPC call, card stays put), one for the server-rejection path (RPC called, promise rejected,
-  card re-renders from the (mocked) authoritative `sessions` prop, distinct toast text).
+  RPC call, card stays put); one for the server-rejection path — mock `updateSession` to
+  *resolve* to `null` (not reject), mock `sessions.error`/`errorCode` to a business-rule code
+  (e.g. `Code.FailedPrecondition`), then assert the outcome is `rejected_by_server` and the card
+  re-renders from the (mocked) authoritative `sessions` prop with the toast text matching the
+  mocked error message; one for the network-error path — same `null`-resolve mock but
+  `errorCode` set to `Code.Unavailable`, assert the outcome is `network_error` and its toast copy
+  differs from the server-rejection toast (closes cross-artifact-consistency Finding F).
 - Files: `web-app/src/components/sessions/SessionBoard.dragdrop.test.tsx`
 
 #### Story 3.2.2: Freeze the dragged card's column during live pushes
@@ -908,11 +1106,20 @@ that fits what I'm doing right now (AC1).
 
 ##### Task 5.1.1a: Lift view-mode state into `SessionListPaneBody` (~5 min)
 - In `PaneSplitRenderer.tsx`'s `SessionListPaneBody` (lines ~150-195), call
-  `useSessionViewMode()`, add a small toggle control (two buttons or a segmented control:
-  "List" / "Board") above the existing `<div className={sessionListScroll}>`, and
-  conditionally render `<SessionList ...>` or `<SessionBoard ...>` with the *same* props
-  object (both components accept the same `sessions` + mutation-callback shape by
-  construction, per Task 2.1.1a).
+  `useSessionViewMode()`, add a small toggle control (`role="group"` wrapping two
+  `<button aria-pressed={...}>` — UX-lens triad review gap fix, ux.md "Toggle control
+  accessible state": match whatever existing `aria-pressed` convention this codebase already
+  uses, confirm via `grep -rn "aria-pressed" web-app/src/components/` at implementation time)
+  above the existing `<div className={sessionListScroll}>`, and conditionally render
+  `<SessionList ...>` or `<SessionBoard ...>` with the *same* props object (both components
+  accept the same `sessions` + mutation-callback shape by construction, per Task 2.1.1a). Fire
+  one live-region announcement ("Board view, showing N sessions" / "List view, showing N
+  sessions") on every switch, reusing the same `aria-live` region Task 4.2.1a wires for drag
+  outcomes rather than adding a second region (UX AC33).
+- While `SessionBoard` awaits the first `watchSessions()` payload, render its 4 column shells
+  with a skeleton/shimmer body (reuse `SessionList`'s existing loading treatment — grep for it
+  before building a new one) instead of the empty-state copy, so first-load never looks
+  identical to "genuinely empty" (UX AC31; ux.md "Loading state").
 - Files: `web-app/src/components/pane/PaneSplitRenderer.tsx`
 
 ##### Task 5.1.1b: Component test for the toggle preserving filter state (~5 min)
@@ -921,6 +1128,14 @@ that fits what I'm doing right now (AC1).
   state mechanism Phase 1's extraction produced) and no additional `listSessions` mock call
   fired.
 - Files: `web-app/src/components/pane/__tests__/PaneSplitRenderer.viewToggle.test.tsx` (new)
+
+##### Task 5.1.1c: Tests for `aria-pressed`, loading skeleton, and switch announcement (~5 min)
+- Extend the same test file: assert the active view's button has `aria-pressed="true"` and the
+  inactive one `"false"`; assert the live region's text updates to the expected copy on switch
+  (UX AC32/AC33); assert `SessionBoard` renders skeleton placeholders (not the empty-state
+  message) when rendered with an empty `sessions` array and a `isLoading`/equivalent flag set
+  (UX AC31).
+- Files: `web-app/src/components/pane/__tests__/PaneSplitRenderer.viewToggle.test.tsx`
 
 ### Epic 5.2: `b` keyboard shortcut
 

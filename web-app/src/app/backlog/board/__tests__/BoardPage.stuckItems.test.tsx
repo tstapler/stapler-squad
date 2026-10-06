@@ -19,6 +19,14 @@ jest.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
+// BacklogFilterBar (now rendered above the board, see AC 3/4 — shared
+// filter state) calls useAnalytics() for chip-toggle tracking, which
+// requires an AnalyticsContextProvider we don't want to stand up for this
+// focused test. Mock it the same way BacklogItemDetail.test.tsx does.
+jest.mock("@/lib/analytics", () => ({
+  useAnalytics: () => ({ track: jest.fn() }),
+}));
+
 function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
   return {
     id: "item-1",
@@ -29,11 +37,13 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     skipReviewGate: false,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     planApproved: false,
     acCriteria: [],
     linkedSessions: [],
     statusEvents: [],
     progressNotes: [],
+    activityNotes: [],
     totalEstimatedCostUsd: 0,
     ...overrides,
   };
@@ -54,6 +64,9 @@ function makeStuckItem(overrides: Partial<StuckBacklogItem> = {}): StuckBacklogI
   } as StuckBacklogItem;
 }
 
+// Stable identity: the page effect depends on it, like the real memoized hook.
+const mockListForeignClaims = jest.fn().mockResolvedValue([]);
+
 jest.mock("@/lib/hooks/useBacklogService", () => {
   const actual = jest.requireActual("@/lib/hooks/useBacklogService");
   return {
@@ -63,6 +76,7 @@ jest.mock("@/lib/hooks/useBacklogService", () => {
       triggerTriage: jest.fn(),
       spawnSessionFromItem: jest.fn(),
       cancelTriage: jest.fn(),
+      listForeignClaims: mockListForeignClaims,
     }),
   };
 });

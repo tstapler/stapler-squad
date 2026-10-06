@@ -125,6 +125,7 @@ func (e *SearchEngine) BuildIndex(history *session.ClaudeSessionHistory) error {
 			tokenPositions := e.tokenizer.TokenizeWithPositions(msg.Content)
 			positions := make(map[string][]int32)
 			for _, tp := range tokenPositions {
+				// #nosec G115 -- tp.Start is a byte offset into a single chat/scrollback message string; reaching 2^31 would require a single message over 2GB, far beyond any realistic message size
 				positions[tp.Token] = append(positions[tp.Token], int32(tp.Start))
 			}
 
@@ -175,6 +176,7 @@ func (e *SearchEngine) IndexMessage(sessionID string, msgIdx int, role, content 
 	tokenPositions := e.tokenizer.TokenizeWithPositions(content)
 	positions := make(map[string][]int32)
 	for _, tp := range tokenPositions {
+		// #nosec G115 -- tp.Start is a byte offset into a single chat/scrollback message string; reaching 2^31 would require a single message over 2GB, far beyond any realistic message size
 		positions[tp.Token] = append(positions[tp.Token], int32(tp.Start))
 	}
 
@@ -561,6 +563,7 @@ func (e *SearchEngine) indexSessionLocked(history *session.ClaudeSessionHistory,
 		tokenPositions := e.tokenizer.TokenizeWithPositions(msg.Content)
 		positions := make(map[string][]int32)
 		for _, tp := range tokenPositions {
+			// #nosec G115 -- tp.Start is a byte offset into a single chat/scrollback message string; reaching 2^31 would require a single message over 2GB, far beyond any realistic message size
 			positions[tp.Token] = append(positions[tp.Token], int32(tp.Start))
 		}
 

@@ -41,6 +41,10 @@ type AnalyticsEntry struct {
 	CommandSubcategory string `json:"command_subcommand,omitempty"`
 	// PythonImports lists top-level module names imported in inline Python (-c) invocations.
 	PythonImports []string `json:"python_imports,omitempty"`
+	// Source identifies which agent's hook produced this request ("claude" or "pi").
+	// Defaulted to "claude" by the caller (ApprovalHandler.HandlePermissionRequest) when
+	// the wire payload omits it — see pi-support Epic 4.3.
+	Source string `json:"source,omitempty"`
 }
 
 // ToolStat is a tool name with a count.
@@ -116,47 +120,75 @@ type AnalyticsSummary struct {
 	// EscalationReasonCounts breaks down escalations by category (classifier.EscalationCategory
 	// string values) — no-match, explicit-rule, domain-age, secret-scan, unclassifiable.
 	EscalationReasonCounts map[string]int `json:"escalation_reason_counts"`
+
+	// RiskLevelCounts breaks down escalations by classifier.RiskLevel string value
+	// ("low"/"medium"/"high"/"critical"), scoped to escalated decisions only — same scope as
+	// EscalationReasonCounts, so the two breakdowns share a denominator.
+	RiskLevelCounts map[string]int `json:"risk_level_counts"`
 }
 
-// AnalyticsStore writes AnalyticsEntry records asynchronously to SQLite
-// via session.Storage and provides aggregations.
+// AnalyticsBatchSink is the consumer-owned storage port used by the actor.
+// Implementations must commit a batch atomically and treat duplicate IDs as
+// idempotent.
+type AnalyticsBatchSink interface {
+	RecordAnalyticsBatch(context.Context, []session.AnalyticsData) error
+}
+
+// AnalyticsStore writes AnalyticsEntry records asynchronously to SQLite and
+// provides aggregations. One actor owns batching and is the only hook-analytics
+// writer, keeping persistence completely off the classification response path.
 type AnalyticsStore struct {
 	storage *session.Storage
+	sink    AnalyticsBatchSink
 	ch      chan AnalyticsEntry
-	dropped int64 // atomic counter for dropped entries
+	dropped int64 // atomic counter for dropped or unflushed entries
+	stopped atomic.Bool
 
 	cancel   context.CancelFunc
 	done     chan struct{}
 	stopOnce sync.Once
 }
 
-const analyticsBufferSize = 1000
+const (
+	analyticsBufferSize    = 1000
+	analyticsBatchSize     = 128
+	analyticsFlushDelay    = 2 * time.Millisecond
+	analyticsWriteTimeout  = time.Second
+	analyticsShutdownLimit = time.Second
+)
 
 // NewAnalyticsStore creates an AnalyticsStore backed by the given storage.
 // Call Start() to begin the background flush goroutine.
 func NewAnalyticsStore(storage *session.Storage) *AnalyticsStore {
+	return newAnalyticsStore(storage, storage)
+}
+
+func newAnalyticsStore(storage *session.Storage, sink AnalyticsBatchSink) *AnalyticsStore {
 	return &AnalyticsStore{
 		storage: storage,
+		sink:    sink,
 		ch:      make(chan AnalyticsEntry, analyticsBufferSize),
 	}
 }
 
-// Start launches the background goroutine that flushes entries to disk.
-// It stops when Stop is called or ctx is canceled.
+// Start launches the background actor that coalesces entries by size or
+// deadline. It stops when Stop is called or ctx is canceled.
 func (s *AnalyticsStore) Start(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
 	s.done = make(chan struct{})
 	go func() {
 		defer close(s.done)
+		defer s.stopped.Store(true)
 		s.flush(ctx)
 	}()
 }
 
-// Stop cancels the background flush goroutine and waits for it to drain and
-// exit. Idempotent — safe to call multiple times or before Start.
+// Stop stops accepting records, requests a bounded drain, and joins the actor.
+// Idempotent — safe to call multiple times or before Start.
 func (s *AnalyticsStore) Stop() {
 	s.stopOnce.Do(func() {
+		s.stopped.Store(true)
 		if s.cancel == nil {
 			return
 		}
@@ -168,6 +200,9 @@ func (s *AnalyticsStore) Stop() {
 // Record enqueues an analytics entry for async write. Non-blocking.
 // If the buffer is full, the entry is dropped and the dropped counter incremented.
 func (s *AnalyticsStore) Record(entry AnalyticsEntry) {
+	if s == nil || s.stopped.Load() {
+		return
+	}
 	if entry.ID == "" {
 		entry.ID = uuid.New().String()
 	}
@@ -178,12 +213,15 @@ func (s *AnalyticsStore) Record(entry AnalyticsEntry) {
 	case s.ch <- entry:
 	default:
 		atomic.AddInt64(&s.dropped, 1)
-		log.Warn("[AnalyticsStore] buffer full; dropped entry", "session", entry.SessionID, "tool", entry.ToolName)
+		log.Warn("[AnalyticsStore] buffer full; dropped entry")
 	}
 }
 
 // RecordFromResult builds and records an AnalyticsEntry from classification output.
-func (s *AnalyticsStore) RecordFromResult(payload classifier.PermissionRequestPayload, result classifier.ClassificationResult, sessionID, approvalID string, durationMs int64) {
+// source identifies which agent's hook produced payload ("claude" or "pi") — callers are
+// expected to have already defaulted it to "claude" when the wire payload omitted the field
+// (see ApprovalHandler.HandlePermissionRequest), so this function never re-defaults it.
+func (s *AnalyticsStore) RecordFromResult(payload classifier.PermissionRequestPayload, result classifier.ClassificationResult, sessionID, approvalID string, durationMs int64, source string) {
 	cmd, _ := payload.ToolInput["command"].(string)
 	filePath, _ := payload.ToolInput["file_path"].(string)
 	preview := cmd
@@ -207,6 +245,7 @@ func (s *AnalyticsStore) RecordFromResult(payload classifier.PermissionRequestPa
 		Alternative:    result.Alternative,
 		DurationMs:     durationMs,
 		ApprovalID:     approvalID,
+		Source:         source,
 	}
 
 	// For Bash tool calls, extract which programs are being invoked.
@@ -241,6 +280,26 @@ func (s *AnalyticsStore) DroppedCount() int64 {
 	return atomic.LoadInt64(&s.dropped)
 }
 
+// RecordTaggingRuleFire asynchronously records that a tagging rule matched, independent of
+// whether the resulting tag survives suppression filtering. Fire-and-forget like
+// RecordFromResult — callers (the tagging pipeline, holding an Instance's actor lock) must
+// never block on this. Backed by a dedicated TaggingRuleFire table (not the buffered
+// AnalyticsEntry channel/table, whose fields are approval/command-decision-specific), so
+// writes go straight to storage in a detached goroutine rather than through s.ch/flush.
+func (s *AnalyticsStore) RecordTaggingRuleFire(ruleID string) {
+	go func() {
+		if err := s.storage.RecordTaggingRuleFire(context.Background(), ruleID, time.Now()); err != nil {
+			log.Warn("[AnalyticsStore] failed to record tagging rule fire", "rule_id", ruleID, "err", err)
+		}
+	}()
+}
+
+// GetTaggingRuleFireCounts returns the number of recorded fires per rule ID since the given
+// instant (e.g. 7 days ago for the "Fires(7d)" UX column).
+func (s *AnalyticsStore) GetTaggingRuleFireCounts(ctx context.Context, since time.Time) (map[string]int, error) {
+	return s.storage.GetTaggingRuleFireCounts(ctx, since)
+}
+
 // analyticsDataToEntry maps a session.AnalyticsData row to an AnalyticsEntry.
 func analyticsDataToEntry(d session.AnalyticsData) AnalyticsEntry {
 	return AnalyticsEntry{
@@ -267,8 +326,8 @@ func analyticsDataToEntry(d session.AnalyticsData) AnalyticsEntry {
 
 // LoadWindow reads entries from DB with timestamps >= since.
 // Uses a DB-level WHERE clause via ListAnalyticsSince (AC-1).
-func (s *AnalyticsStore) LoadWindow(since time.Time) ([]AnalyticsEntry, error) {
-	data, err := s.storage.ListAnalyticsSince(context.Background(), since, 0)
+func (s *AnalyticsStore) LoadWindow(ctx context.Context, since time.Time) ([]AnalyticsEntry, error) {
+	data, err := s.storage.ListAnalyticsSince(ctx, since, 0)
 	if err != nil {
 		return nil, fmt.Errorf("list analytics since %s from DB: %w", since.Format(time.RFC3339), err)
 	}
@@ -366,6 +425,9 @@ func ComputeSummary(entries []AnalyticsEntry) AnalyticsSummary {
 	subcommandStats := make(map[string]SubcommandStat)
 	// escalation-reason breakdown: category → count
 	escalationReasonCounts := make(map[string]int)
+	// risk-level breakdown: classifier.RiskLevel string → count (same scope as
+	// escalationReasonCounts, so both tables share a denominator)
+	riskLevelCounts := make(map[string]int)
 
 	for _, e := range entries {
 		summary.TotalDecisions++
@@ -442,6 +504,9 @@ func ComputeSummary(entries []AnalyticsEntry) AnalyticsSummary {
 		if e.Decision == "escalate" || (e.Decision == "auto_deny" && e.RuleID == classifier.RuleIDSecretScan) {
 			cat := classifier.CategorizeEscalationRuleID(e.RuleID)
 			escalationReasonCounts[string(cat)]++
+			if e.RiskLevel != "" {
+				riskLevelCounts[e.RiskLevel]++
+			}
 		}
 	}
 
@@ -476,6 +541,7 @@ func ComputeSummary(entries []AnalyticsEntry) AnalyticsSummary {
 	}
 
 	summary.EscalationReasonCounts = escalationReasonCounts
+	summary.RiskLevelCounts = riskLevelCounts
 
 	return summary
 }
@@ -535,51 +601,111 @@ func ComputeDailyBuckets(entries []AnalyticsEntry) []DailyBucket {
 	return buckets
 }
 
-// flush drains the channel and writes to the DB.
-func (s *AnalyticsStore) flush(ctx interface{ Done() <-chan struct{} }) {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
+// flush owns the size-or-deadline batch loop. Producers only perform a
+// non-blocking channel send and never wait for SQLite.
+func (s *AnalyticsStore) flush(ctx context.Context) {
+	batch := make([]session.AnalyticsData, 0, analyticsBatchSize)
+	timer := time.NewTimer(analyticsFlushDelay)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	defer timer.Stop()
+	var timerC <-chan time.Time
 
-	flushEntry := func(e AnalyticsEntry) {
-		data := session.AnalyticsData{
-			ID:                 e.ID,
-			SessionID:          e.SessionID,
-			ToolName:           e.ToolName,
-			CommandPreview:     e.CommandPreview,
-			Cwd:                e.Cwd,
-			Decision:           e.Decision,
-			RiskLevel:          e.RiskLevel,
-			RuleID:             e.RuleID,
-			RuleName:           e.RuleName,
-			Reason:             e.Reason,
-			Alternative:        e.Alternative,
-			DurationMs:         e.DurationMs,
-			ApprovalID:         e.ApprovalID,
-			CommandProgram:     e.CommandProgram,
-			CommandCategory:    e.CommandCategory,
-			CommandSubcategory: e.CommandSubcategory,
-			PythonImports:      e.PythonImports,
-			CreatedAt:          e.Timestamp,
+	flushBatch := func(writeCtx context.Context) {
+		if len(batch) == 0 {
+			return
 		}
-		_ = s.storage.RecordAnalytics(context.Background(), data)
+		pending := batch
+		batch = make([]session.AnalyticsData, 0, analyticsBatchSize)
+		if s.sink == nil {
+			atomic.AddInt64(&s.dropped, int64(len(pending)))
+			return
+		}
+		if err := s.sink.RecordAnalyticsBatch(writeCtx, pending); err != nil {
+			atomic.AddInt64(&s.dropped, int64(len(pending)))
+			log.Warn("[AnalyticsStore] batch write failed", "count", len(pending), "err", err)
+		}
+	}
+	stopTimer := func() {
+		if timerC == nil {
+			return
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timerC = nil
+	}
+	armTimer := func() {
+		if timerC != nil {
+			return
+		}
+		timer.Reset(analyticsFlushDelay)
+		timerC = timer.C
 	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			// Drain remaining
+			stopTimer()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), analyticsShutdownLimit)
+			defer cancel()
 			for {
 				select {
-				case e := <-s.ch:
-					flushEntry(e)
+				case entry := <-s.ch:
+					batch = append(batch, analyticsEntryToData(entry))
+					if len(batch) == analyticsBatchSize {
+						flushBatch(shutdownCtx)
+					}
 				default:
+					flushBatch(shutdownCtx)
 					return
 				}
 			}
-		case e := <-s.ch:
-			flushEntry(e)
-		case <-ticker.C:
+		case entry := <-s.ch:
+			batch = append(batch, analyticsEntryToData(entry))
+			if len(batch) == 1 {
+				armTimer()
+			}
+			if len(batch) == analyticsBatchSize {
+				stopTimer()
+				writeCtx, cancel := context.WithTimeout(context.Background(), analyticsWriteTimeout)
+				flushBatch(writeCtx)
+				cancel()
+			}
+		case <-timerC:
+			timerC = nil
+			writeCtx, cancel := context.WithTimeout(context.Background(), analyticsWriteTimeout)
+			flushBatch(writeCtx)
+			cancel()
 		}
+	}
+}
+
+func analyticsEntryToData(e AnalyticsEntry) session.AnalyticsData {
+	return session.AnalyticsData{
+		ID:                 e.ID,
+		SessionID:          e.SessionID,
+		ToolName:           e.ToolName,
+		CommandPreview:     e.CommandPreview,
+		Cwd:                e.Cwd,
+		Decision:           e.Decision,
+		RiskLevel:          e.RiskLevel,
+		RuleID:             e.RuleID,
+		RuleName:           e.RuleName,
+		Reason:             e.Reason,
+		Alternative:        e.Alternative,
+		DurationMs:         e.DurationMs,
+		ApprovalID:         e.ApprovalID,
+		CommandProgram:     e.CommandProgram,
+		CommandCategory:    e.CommandCategory,
+		CommandSubcategory: e.CommandSubcategory,
+		PythonImports:      e.PythonImports,
+		Source:             e.Source,
+		CreatedAt:          e.Timestamp,
 	}
 }
 

@@ -3,12 +3,16 @@ package unfinished_test
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	gitutil "github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
 
@@ -24,58 +28,60 @@ func initRepo(t *testing.T) string {
 		t.Fatalf("EvalSymlinks: %v", err)
 	}
 
-	run := func(args ...string) {
-		t.Helper()
-		cmd := safeexec.CommandContext(context.Background(), "git", args...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
-			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
+	// Uses go-git directly rather than shelling out — see
+	// the `prefer-go-git-over-subshells` skill.
+	repo, err := git.PlainInitWithOptions(dir, &git.PlainInitOptions{
+		InitOptions: git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
+	})
+	if err != nil {
+		t.Fatalf("PlainInitWithOptions: %v", err)
 	}
-
-	run("init", "-b", "main")
-	run("config", "user.email", "test@test.com")
-	run("config", "user.name", "Test")
 
 	// Initial commit.
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	run("add", ".")
-	run("commit", "-m", "initial commit")
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	if _, err := wt.Add("."); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if _, err := wt.Commit("initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+	}); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
 
 	return dir
 }
 
 // addCommit adds a file and commits it, returning the short hash.
+//
+// Uses go-git directly rather than shelling out — see
+// the `prefer-go-git-over-subshells` skill.
 func addCommit(t *testing.T, repoPath, filename, message string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(repoPath, filename), []byte(message), 0644); err != nil {
 		t.Fatal(err)
 	}
-	run := func(args ...string) {
-		t.Helper()
-		cmd := safeexec.CommandContext(context.Background(), "git", args...)
-		cmd.Dir = repoPath
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
-			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
+	repo, err := gitutil.OpenRepo(repoPath)
+	if err != nil {
+		t.Fatalf("PlainOpen: %v", err)
 	}
-	run("add", ".")
-	run("commit", "-m", message)
-}
-
-// TestVCSReaderContractGit verifies the CLI-git reader satisfies the interface contract.
-func TestVCSReaderContractGit(t *testing.T) {
-	testVCSReaderContract(t, &unfinished.GitVCSReader{})
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	if _, err := wt.Add("."); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if _, err := wt.Commit(message, &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+	}); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
 }
 
 // TestVCSReaderContractGoGit verifies the go-git reader satisfies the interface contract.
@@ -132,6 +138,41 @@ func testVCSReaderContract(t *testing.T, r unfinished.VCSReader) {
 		}
 		if !dirty {
 			t.Error("expected dirty repo to have uncommitted changes")
+		}
+	})
+
+	t.Run("HasUncommitted_true_for_same_size_edit_within_index_timestamp_second", func(t *testing.T) {
+		repoPath := initRepo(t)
+		repo, err := gitutil.OpenRepo(repoPath)
+		if err != nil {
+			t.Fatalf("OpenRepo: %v", err)
+		}
+		idx, err := repo.Storer.Index()
+		if err != nil {
+			t.Fatalf("Index: %v", err)
+		}
+		if len(idx.Entries) != 1 {
+			t.Fatalf("index entries = %d, want 1", len(idx.Entries))
+		}
+
+		path := filepath.Join(repoPath, "README.md")
+		if err := os.WriteFile(path, []byte("world\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		mtime := idx.Entries[0].ModifiedAt.Truncate(time.Second).Add(123 * time.Millisecond)
+		if mtime.Equal(idx.Entries[0].ModifiedAt) {
+			mtime = mtime.Add(time.Millisecond)
+		}
+		if err := os.Chtimes(path, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+
+		dirty, err := r.HasUncommitted(repoPath)
+		if err != nil {
+			t.Fatalf("HasUncommitted: %v", err)
+		}
+		if !dirty {
+			t.Error("expected a same-size edit within the index timestamp's second to be uncommitted")
 		}
 	})
 
@@ -370,10 +411,18 @@ func TestGoGitVCSReader_HasUncommitted_StagedChange(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "staged.txt"), []byte("staged content\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	cmd := safeexec.CommandContext(context.Background(), "git", "add", "staged.txt")
-	cmd.Dir = repo
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git add: %v\n%s", err, out)
+	// Uses go-git directly rather than shelling out — see
+	// the `prefer-go-git-over-subshells` skill.
+	repo2, err := gitutil.OpenRepo(repo)
+	if err != nil {
+		t.Fatalf("PlainOpen: %v", err)
+	}
+	wt, err := repo2.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	if _, err := wt.Add("staged.txt"); err != nil {
+		t.Fatalf("Add: %v", err)
 	}
 
 	dirty, err := r.HasUncommitted(repo)
@@ -392,10 +441,18 @@ func TestGoGitVCSReader_HasUncommitted_StagedDeletion(t *testing.T) {
 	r := &unfinished.GoGitVCSReader{}
 
 	// Stage a deletion of the initial README.md.
-	cmd := safeexec.CommandContext(context.Background(), "git", "rm", "README.md")
-	cmd.Dir = repo
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git rm: %v\n%s", err, out)
+	// Uses go-git directly rather than shelling out — see
+	// the `prefer-go-git-over-subshells` skill.
+	repo2, err := gitutil.OpenRepo(repo)
+	if err != nil {
+		t.Fatalf("PlainOpen: %v", err)
+	}
+	wt, err := repo2.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	if _, err := wt.Remove("README.md"); err != nil {
+		t.Fatalf("Remove: %v", err)
 	}
 
 	dirty, err := r.HasUncommitted(repo)
@@ -513,125 +570,6 @@ func (f *fakeVCSReader) CommitMessages(worktreePath, base string, max int) ([]st
 
 func (f *fakeVCSReader) DiffShortstat(worktreePath string) (unfinished.DiffStat, error) {
 	return unfinished.DiffStat{Files: f.diffStatFiles[worktreePath]}, nil
-}
-
-// ---------------------------------------------------------------------------
-// JJ tests
-// ---------------------------------------------------------------------------
-
-// initJJRepo creates a jj-backed git repo at a temp dir with one change.
-func initJJRepo(t *testing.T) string {
-	t.Helper()
-	if _, err := exec.LookPath("jj"); err != nil {
-		t.Skip("jj not installed")
-	}
-
-	raw := t.TempDir()
-	dir, err := filepath.EvalSymlinks(raw)
-	if err != nil {
-		t.Fatalf("EvalSymlinks: %v", err)
-	}
-
-	run := func(args ...string) {
-		t.Helper()
-		cmd := safeexec.CommandContext(context.Background(), args[0], args[1:]...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
-			"JJ_USER=Test User",
-			"JJ_EMAIL=test@test.com",
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("%v: %v\n%s", args, err, out)
-		}
-	}
-
-	run("jj", "git", "init")
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	run("jj", "describe", "-m", "initial commit")
-	run("jj", "new") // move to a new empty change on top
-	return dir
-}
-
-// TestVCSReaderContractJJ runs the shared contract suite against JJVCSReader.
-func TestVCSReaderContractJJ(t *testing.T) {
-	if _, err := exec.LookPath("jj"); err != nil {
-		t.Skip("jj not installed")
-	}
-	testVCSReaderContractJJ(t, &unfinished.JJVCSReader{})
-}
-
-// testVCSReaderContractJJ is a jj-specific variant of the contract suite.
-// jj's model differs enough (no linked worktrees, change-based rather than
-// branch-based) that it gets its own focused suite.
-func testVCSReaderContractJJ(t *testing.T, r *unfinished.JJVCSReader) {
-	t.Helper()
-
-	t.Run("ListWorktrees_returns_single_entry", func(t *testing.T) {
-		repo := initJJRepo(t)
-		wts, err := r.ListWorktrees(repo)
-		if err != nil {
-			t.Fatalf("ListWorktrees: %v", err)
-		}
-		if len(wts) != 1 {
-			t.Fatalf("expected exactly 1 worktree for jj repo, got %d", len(wts))
-		}
-		if wts[0].Path != repo {
-			t.Errorf("worktree path = %q, want %q", wts[0].Path, repo)
-		}
-	})
-
-	t.Run("HasUncommitted_false_on_empty_change", func(t *testing.T) {
-		repo := initJJRepo(t)
-		// jj new creates a fresh empty change — no uncommitted files.
-		dirty, err := r.HasUncommitted(repo)
-		if err != nil {
-			t.Fatalf("HasUncommitted: %v", err)
-		}
-		if dirty {
-			t.Error("expected empty jj change to have no uncommitted files")
-		}
-	})
-
-	t.Run("HasUncommitted_true_when_file_modified", func(t *testing.T) {
-		repo := initJJRepo(t)
-		if err := os.WriteFile(filepath.Join(repo, "dirty.txt"), []byte("dirty"), 0644); err != nil {
-			t.Fatal(err)
-		}
-		dirty, err := r.HasUncommitted(repo)
-		if err != nil {
-			t.Fatalf("HasUncommitted: %v", err)
-		}
-		if !dirty {
-			t.Error("expected dirty jj change to be detected")
-		}
-	})
-
-	t.Run("DiffShortstat_zero_on_empty_change", func(t *testing.T) {
-		repo := initJJRepo(t)
-		d, err := r.DiffShortstat(repo)
-		if err != nil {
-			t.Fatalf("DiffShortstat: %v", err)
-		}
-		if d.Files != 0 {
-			t.Errorf("expected 0 changed files on empty change, got %d", d.Files)
-		}
-	})
-
-	t.Run("DiffShortstat_detects_change", func(t *testing.T) {
-		repo := initJJRepo(t)
-		if err := os.WriteFile(filepath.Join(repo, "new.txt"), []byte("alpha\nbeta\n"), 0644); err != nil {
-			t.Fatal(err)
-		}
-		d, err := r.DiffShortstat(repo)
-		if err != nil {
-			t.Fatalf("DiffShortstat: %v", err)
-		}
-		if d.Files == 0 {
-			t.Error("expected at least 1 changed file")
-		}
-	})
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,18 @@
+{
+  "id": "backlog:dispatch-to-jules",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "DispatchToJules",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_jules.go",
+  "tested": true,
+  "testIds": [
+    "TestBacklogService_DispatchToJules_should_ReturnItemSessionWithJulesWorkRole_When_RequestValid",
+    "TestBacklogService_DispatchToJules_should_ReturnInvalidArgument_When_BranchEmpty",
+    "TestBacklogService_DispatchToJules_should_ReturnFailedPrecondition_When_ConcurrencyCeilingReached",
+    "TestBacklogService_DispatchToJules_should_ReturnFailedPreconditionPointingAtSettings_When_JulesDisabled",
+    "TestBacklogService_DispatchToJules_should_ReturnFailedPreconditionDirectingToDispatchDialog_When_RepoNotAcknowledged"
+  ],
+  "lastModified": "2026-09-01T23:20:39-07:00"
+}

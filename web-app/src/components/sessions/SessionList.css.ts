@@ -324,14 +324,6 @@ export const clearButton = style({
   },
 });
 
-export const emptyActions = style({
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "center",
-  gap: vars.space["4"],
-  marginTop: vars.space["2"],
-});
-
 export const emptyHint = style({
   margin: 0,
   fontSize: "0.9375rem",
@@ -357,31 +349,6 @@ export const newSessionHeaderButton = style({
   selectors: {
     "&:hover": { background: vars.color.primaryHover, opacity: 0.9 },
     "&:active": { background: vars.color.primaryActive },
-  },
-});
-
-export const newSessionButtonLarge = style({
-  display: "flex",
-  alignItems: "center",
-  gap: vars.space["2"],
-  padding: `14px 28px`,
-  borderRadius: vars.radii.lg,
-  fontSize: "1rem",
-  fontWeight: 600,
-  color: vars.color.primaryText,
-  background: vars.color.primary,
-  textDecoration: "none",
-  transition: "all 0.2s ease",
-  boxShadow: `0 2px 4px ${vars.color.glowSecondary}`,
-  border: "none",
-  cursor: "pointer",
-  selectors: {
-    "&:hover": {
-      background: vars.color.primaryHover,
-      transform: "translateY(-2px)",
-      boxShadow: `0 6px 12px ${vars.color.glowPrimary}`,
-    },
-    "&:active": { transform: "translateY(0)" },
   },
 });
 

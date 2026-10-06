@@ -31,6 +31,18 @@ export function isActionable(type: NotificationData["notificationType"]): boolea
 }
 
 /**
+ * Default (non-actionable, non-error) toast auto-close duration in ms.
+ * Named separately from `toastAutoCloseMs`'s default branch so callers that
+ * have no `NotificationData["notificationType"]` to pass — e.g.
+ * `InputDropBadge` (Story 2.3), which is a terminal-local transient UI
+ * signal, not a session `NotificationData` member — can reference this
+ * value directly instead of forcing an unrelated/misleading type argument
+ * just to extract a millisecond constant. `toastAutoCloseMs`'s default case
+ * references this constant so the two values can't silently drift.
+ */
+export const DEFAULT_TOAST_MS = 8_000;
+
+/**
  * How long (ms) before a toast auto-closes via the component timer.
  * Actionable types use the full ACTIONABLE_TOAST_STALE_MS so they remain
  * visible until resolved, or until the 6-minute fallback fires.
@@ -38,7 +50,7 @@ export function isActionable(type: NotificationData["notificationType"]): boolea
 export function toastAutoCloseMs(type: NotificationData["notificationType"]): number {
   if (isActionable(type)) return ACTIONABLE_TOAST_STALE_MS;
   if (type === "error" || type === "task_failed") return 12_000;
-  return 8_000;
+  return DEFAULT_TOAST_MS;
 }
 
 /** Auto-close delay for high/urgent native (OS) notifications (FR-3). */

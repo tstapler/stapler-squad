@@ -16,7 +16,11 @@
     "unfinished-work > Commit & Push button opens commit modal",
     "unfinished-work > Dismiss button calls DismissWorktree RPC",
     "unfinished-work > scan completed event updates last-scanned timestamp",
-    "unfinished-work > nav badge links to unfinished page"
+    "unfinished-work > nav badge links to unfinished page",
+    "UnfinishedTab_should_expandAndFocusItem_When_ItemQueryParamMatches",
+    "UnfinishedTab_should_behaveAsBefore_When_ItemQueryParamAbsentOrUnmatched",
+    "deep-links from /unfinished?item=<id> to an auto-expanded stuck item card",
+    "ignores an unknown ?item= id and renders the section normally"
   ],
-  "lastModified": "2026-04-28T00:00:00Z"
+  "lastModified": "2026-08-15T00:00:00Z"
 }

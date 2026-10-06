@@ -1,0 +1,16 @@
+{
+  "id": "session-trigger-attribution-badge",
+  "type": "frontend",
+  "name": "Session detail — \"Triggered by: {slug} ({trigger_type})\" attribution badge linking to Triggers",
+  "component": "SessionDetailView",
+  "path": "web-app/src/components/sessions/SessionDetailView.tsx",
+  "filePath": "web-app/src/components/sessions/SessionDetailView.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "shows the attribution badge for a session created by an automated (webhook) trigger",
+    "does not show the attribution badge for a plain manual (@slug) workflow session",
+    "does not show the attribution badge for a session with no workflowId"
+  ],
+  "lastModified": "2026-08-06T00:00:00Z"
+}

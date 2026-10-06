@@ -1,7 +1,8 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { SessionsSection } from "./SessionsSection";
-import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
+import type { SessionsSectionProps } from "./SessionsSection";
+import type { BacklogItem, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
 
 jest.mock("../SessionMonitor", () => ({ SessionMonitor: () => null }));
 
@@ -29,12 +30,14 @@ function makeItem(linkedSessions: LinkedSession[], overrides: Partial<BacklogIte
     skipReviewGate: false,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     planApproved: false,
     acCriteria: [],
     linkedSessions,
     notes: "",
     statusEvents: [],
     progressNotes: [],
+    activityNotes: [],
     totalEstimatedCostUsd: 0,
     ...overrides,
   };
@@ -67,6 +70,8 @@ describe("SessionsSection", () => {
         deletingSessionId={null}
         defaultExpanded={true}
         onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
       />
     );
 
@@ -106,6 +111,8 @@ describe("SessionsSection", () => {
         deletingSessionId={null}
         defaultExpanded={true}
         onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
       />
     );
 
@@ -113,9 +120,9 @@ describe("SessionsSection", () => {
     expect(screen.queryByTestId("sessions-show-more")).not.toBeInTheDocument();
   });
 
-  it("renders nothing when there are no linked sessions", () => {
+  it("SessionsSection_should_RenderExplicitEmptyState_When_ThereAreNoLinkedSessions", () => {
     const item = makeItem([]);
-    const { container } = render(
+    render(
       <SessionsSection
         item={item}
         pipelineModes={[]}
@@ -123,10 +130,52 @@ describe("SessionsSection", () => {
         deletingSessionId={null}
         defaultExpanded={true}
         onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
       />
     );
 
-    expect(container).toBeEmptyDOMElement();
+    expect(screen.getByRole("status")).toHaveTextContent("No sessions yet for this item.");
+  });
+
+  it("SessionsSection_should_ReplaceListWithEmptyState_When_LinkedSessionsTransitionFromPopulatedToEmpty", () => {
+    // Simulates a live event overwriting a previously-populated item with an
+    // empty itemSessions snapshot (the WatchBacklogItems root cause this bug
+    // report is about) — the empty state must cleanly replace the list, with
+    // no crash or stale leftover session rows.
+    const session = makeSession({ sessionId: "work-live-transition", role: "work" });
+    const populatedItem = makeItem([session]);
+    const { rerender } = render(
+      <SessionsSection
+        item={populatedItem}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
+      />
+    );
+
+    expect(screen.getByText("work-live-transition")).toBeInTheDocument();
+
+    const emptiedItem = makeItem([]);
+    rerender(
+      <SessionsSection
+        item={emptiedItem}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
+      />
+    );
+
+    expect(screen.queryByText("work-live-transition")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("No sessions yet for this item.");
   });
 
   it("SessionsSection_should_RenderAnchorLinkUnchanged_When_SessionKindIsWork", () => {
@@ -139,6 +188,8 @@ describe("SessionsSection", () => {
         deletingSessionId={null}
         defaultExpanded={true}
         onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
       />
     );
 
@@ -162,6 +213,8 @@ describe("SessionsSection", () => {
         deletingSessionId={null}
         defaultExpanded={true}
         onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
       />
     );
 
@@ -188,6 +241,8 @@ describe("SessionsSection", () => {
         deletingSessionId={null}
         defaultExpanded={true}
         onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
       />
     );
 
@@ -240,6 +295,8 @@ describe("SessionsSection", () => {
         deletingSessionId={null}
         defaultExpanded={true}
         onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
       />
     );
 
@@ -266,5 +323,469 @@ describe("SessionsSection", () => {
 
     fireEvent.click(manualHeader);
     expect(screen.getByText("Verified manually.")).toBeInTheDocument();
+  });
+});
+
+/** Renders SessionsSection with sensible defaults, overridable per test. */
+function renderSteerSection(
+  linkedSessions: LinkedSession[],
+  overrides: Partial<SessionsSectionProps> = {}
+) {
+  const onSteerSession = overrides.onSteerSession ?? jest.fn().mockResolvedValue(undefined);
+  const props: SessionsSectionProps = {
+    item: makeItem(linkedSessions),
+    pipelineModes: [],
+    latestWorkSession: undefined,
+    deletingSessionId: null,
+    defaultExpanded: true,
+    onDeleteSession: jest.fn(),
+    onSteerSession,
+    steeringSessionId: null,
+    ...overrides,
+  };
+  const view = render(<SessionsSection {...props} />);
+  return { ...view, onSteerSession };
+}
+
+describe("SessionsSection steer control (Story 2.2.2, ADR-002)", () => {
+  it("SessionsSection_should_NotRenderSteerControl_When_SessionIsHeadlessTriage", () => {
+    const session = makeSession({
+      sessionId: "headless-triage-a1b2c3d4",
+      role: "triage",
+      entityId: "e-headless",
+    });
+    renderSteerSection([session]);
+
+    expect(screen.queryByTestId("session-steer-toggle-headless-triage-a1b2c3d4")).not.toBeInTheDocument();
+  });
+
+  it("SessionsSection_should_RenderEnabledSteerControl_When_SessionIsLiveWork", () => {
+    const session = makeSession({ sessionId: "work-live-1", role: "work" });
+    renderSteerSection([session]);
+
+    const toggle = screen.getByTestId("session-steer-toggle-work-live-1");
+    expect(toggle).toBeInTheDocument();
+    expect(toggle).not.toBeDisabled();
+  });
+
+  it("SessionsSection_should_RenderEnabledSteerControl_When_SessionIsLiveReview", () => {
+    // Mirrors the LiveWork case above — classifySessionKind maps role
+    // "review" to kind "review", and isSteerable() treats "work"/"review"
+    // identically (sessionKind.ts:52-55), so a live review session must get
+    // the same enabled Steer control as a live work session.
+    const session = makeSession({ sessionId: "review-live-1", role: "review" });
+    renderSteerSection([session]);
+
+    const toggle = screen.getByTestId("session-steer-toggle-review-live-1");
+    expect(toggle).toBeInTheDocument();
+    expect(toggle).not.toBeDisabled();
+  });
+
+  it("SessionsSection_should_RenderDisabledSteerControlWithTitle_When_WorkSessionHasEnded", () => {
+    const session = makeSession({
+      sessionId: "work-ended-1",
+      role: "work",
+      endedAt: new Date().toISOString(),
+    });
+    renderSteerSection([session]);
+
+    const toggle = screen.getByTestId("session-steer-toggle-work-ended-1");
+    expect(toggle).toBeDisabled();
+    expect(toggle).toHaveAttribute("aria-disabled", "true");
+    expect(toggle).toHaveAttribute("title", "Session has ended — steering is unavailable");
+  });
+
+  it("SessionsSection_should_CallOnSteerSessionWithTrimmedMessage_When_SendClicked", async () => {
+    const session = makeSession({ sessionId: "work-live-2", role: "work" });
+    const { onSteerSession } = renderSteerSection([session]);
+
+    fireEvent.click(screen.getByTestId("session-steer-toggle-work-live-2"));
+    const input = screen.getByTestId("session-steer-input-work-live-2");
+    fireEvent.change(input, { target: { value: "  please pause and check X  " } });
+    fireEvent.click(screen.getByTestId("session-steer-submit-work-live-2"));
+
+    await waitFor(() => {
+      expect(onSteerSession).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: "work-live-2" }),
+        "please pause and check X"
+      );
+    });
+
+    // Composer closes and clears on success.
+    await waitFor(() => {
+      expect(screen.queryByTestId("session-steer-input-work-live-2")).not.toBeInTheDocument();
+    });
+  });
+
+  it("SessionsSection_should_SubmitOnEnterKey_When_ComposerOpen", async () => {
+    const session = makeSession({ sessionId: "work-live-3", role: "work" });
+    const { onSteerSession } = renderSteerSection([session]);
+
+    fireEvent.click(screen.getByTestId("session-steer-toggle-work-live-3"));
+    const input = screen.getByTestId("session-steer-input-work-live-3");
+    fireEvent.change(input, { target: { value: "steer via enter" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(onSteerSession).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: "work-live-3" }),
+        "steer via enter"
+      );
+    });
+  });
+
+  it("SessionsSection_should_CancelAndReturnFocusToToggle_When_EscapePressed", () => {
+    const session = makeSession({ sessionId: "work-live-4", role: "work" });
+    renderSteerSection([session]);
+
+    const toggle = screen.getByTestId("session-steer-toggle-work-live-4");
+    fireEvent.click(toggle);
+    const input = screen.getByTestId("session-steer-input-work-live-4");
+    fireEvent.change(input, { target: { value: "draft to discard" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect(screen.queryByTestId("session-steer-input-work-live-4")).not.toBeInTheDocument();
+    expect(toggle).toHaveFocus();
+  });
+
+  it("SessionsSection_should_DisableSendWithoutClosingComposer_When_SessionEndsWhileComposerOpen", () => {
+    // Pre-mortem failure #2 (P2): the Send button must re-derive
+    // isSteerable(s) from the current `s` prop on every render, not close
+    // over the value from when the composer was opened.
+    const session = makeSession({ sessionId: "work-live-5", role: "work" });
+    const { rerender } = renderSteerSection([session]);
+
+    fireEvent.click(screen.getByTestId("session-steer-toggle-work-live-5"));
+    const input = screen.getByTestId("session-steer-input-work-live-5");
+    fireEvent.change(input, { target: { value: "in-flight steer" } });
+
+    const submitBtn = screen.getByTestId("session-steer-submit-work-live-5");
+    expect(submitBtn).not.toBeDisabled();
+
+    // Same session object, now ended — simulate a poll/refresh landing while
+    // the composer is still open.
+    const endedSession: LinkedSession = { ...session, endedAt: new Date().toISOString() };
+    const item = makeItem([endedSession]);
+    rerender(
+      <SessionsSection
+        item={item}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn().mockResolvedValue(undefined)}
+        steeringSessionId={null}
+      />
+    );
+
+    // Composer stays mounted (no close/reopen required)...
+    expect(screen.getByTestId("session-steer-input-work-live-5")).toBeInTheDocument();
+    // ...but Send is now disabled.
+    expect(screen.getByTestId("session-steer-submit-work-live-5")).toBeDisabled();
+  });
+
+  it("SessionsSection_should_KeepComposerOpenAndShowError_When_OnSteerSessionRejects", async () => {
+    const session = makeSession({ sessionId: "work-live-6", role: "work" });
+    const onSteerSession = jest.fn().mockRejectedValue(new Error("steer failed: session busy"));
+    renderSteerSection([session], { onSteerSession });
+
+    fireEvent.click(screen.getByTestId("session-steer-toggle-work-live-6"));
+    const input = screen.getByTestId("session-steer-input-work-live-6");
+    fireEvent.change(input, { target: { value: "retry me" } });
+    fireEvent.click(screen.getByTestId("session-steer-submit-work-live-6"));
+
+    await waitFor(() => {
+      expect(screen.getByText("steer failed: session busy")).toBeInTheDocument();
+    });
+    // Composer remains open on failure — not closed optimistically.
+    expect(screen.getByTestId("session-steer-input-work-live-6")).toBeInTheDocument();
+  });
+
+  it("SessionsSection_should_NotLeakDraftAcrossSessions_When_SwitchingSteerTargetWithoutSending", () => {
+    // Regression test for PR #457 code review finding: steerDraft was a
+    // single component-level string, not keyed per-session, so an unsent
+    // draft typed for session A survived into session B's composer when the
+    // operator switched Steer targets without sending — risking A's message
+    // being sent to session B instead.
+    const sessionA = makeSession({ sessionId: "work-live-a", role: "work" });
+    const sessionB = makeSession({ sessionId: "work-live-b", role: "work" });
+    renderSteerSection([sessionA, sessionB]);
+
+    // Open session A's composer and type a partial, unsent message.
+    fireEvent.click(screen.getByTestId("session-steer-toggle-work-live-a"));
+    const inputA = screen.getByTestId("session-steer-input-work-live-a");
+    fireEvent.change(inputA, { target: { value: "A's still-unsent message" } });
+
+    // Switch to session B's composer without sending A's message.
+    fireEvent.click(screen.getByTestId("session-steer-toggle-work-live-b"));
+
+    // A's composer is closed; B's composer must open empty, not pre-filled
+    // with A's draft.
+    expect(screen.queryByTestId("session-steer-input-work-live-a")).not.toBeInTheDocument();
+    const inputB = screen.getByTestId("session-steer-input-work-live-b");
+    expect(inputB).toHaveValue("");
+  });
+
+  it("SessionsSection_should_ShowCommitCountAndLastMessage_When_SessionHasCommits", () => {
+    const item = makeItem([
+      makeSession({
+        sessionId: "work-with-commits",
+        role: "work",
+        commitCountSinceSpawn: 3,
+        lastCommitMessage: "fix(session): handle nil pointer\n\nLonger body text here.",
+      }),
+    ]);
+    render(
+      <SessionsSection
+        item={item}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
+      />
+    );
+
+    const detail = screen.getByText("3 commits — fix(session): handle nil pointer");
+    expect(detail).toHaveAttribute(
+      "title",
+      "fix(session): handle nil pointer\n\nLonger body text here."
+    );
+  });
+
+  it("SessionsSection_should_UseSingularCommitLabel_When_ExactlyOneCommit", () => {
+    const item = makeItem([
+      makeSession({
+        sessionId: "work-one-commit",
+        role: "work",
+        commitCountSinceSpawn: 1,
+        lastCommitMessage: "chore: bump version",
+      }),
+    ]);
+    render(
+      <SessionsSection
+        item={item}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
+      />
+    );
+
+    expect(screen.getByText("1 commit — chore: bump version")).toBeInTheDocument();
+  });
+
+  it("SessionsSection_should_NotRenderCommitDetail_When_SessionHasNoCommits", () => {
+    const item = makeItem([makeSession({ sessionId: "work-no-commits", role: "work" })]);
+    render(
+      <SessionsSection
+        item={item}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
+      />
+    );
+
+    expect(screen.queryByText(/\d+ commits? —/)).not.toBeInTheDocument();
+  });
+
+  it("SessionsSection_should_ShowCommitCountWithoutDash_When_LastCommitMessageMissing", () => {
+    const item = makeItem([
+      makeSession({
+        sessionId: "work-commit-no-message",
+        role: "work",
+        commitCountSinceSpawn: 2,
+        lastCommitMessage: undefined,
+      }),
+    ]);
+    render(
+      <SessionsSection
+        item={item}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+        onSteerSession={jest.fn()}
+        steeringSessionId={null}
+      />
+    );
+
+    expect(screen.getByText("2 commits")).toBeInTheDocument();
+    expect(screen.queryByText(/—/)).not.toBeInTheDocument();
+  });
+});
+
+// ─── Story 5.2.4: executor provenance badges ───────────────────────────────
+
+function makeMode(overrides: Partial<PipelineMode> = {}): PipelineMode {
+  return {
+    id: "mode-1",
+    slug: "custom-mode",
+    name: "Custom Mode",
+    description: "",
+    enabled: true,
+    statusCommandTemplate: "",
+    doneCommandTemplate: "",
+    failCommandTemplate: "",
+    reviewCommandTemplate: "",
+    shipCommandTemplate: "",
+    helpCommandTemplate: "",
+    triagePromptTemplate: "",
+    reviewPromptTemplate: "",
+    initialPromptTemplate: "",
+    contentHash: "hash-a",
+    stageExecutorHashes: {},
+    ...overrides,
+  };
+}
+
+function renderSection(item: BacklogItem, pipelineModes: PipelineMode[] = []) {
+  render(
+    <SessionsSection
+      item={item}
+      pipelineModes={pipelineModes}
+      latestWorkSession={undefined}
+      deletingSessionId={null}
+      defaultExpanded={true}
+      onDeleteSession={jest.fn()}
+      onSteerSession={jest.fn()}
+      steeringSessionId={null}
+    />
+  );
+}
+
+describe("SessionsSection — Story 5.2.4: executor provenance badges", () => {
+  it("SessionsSection_should_ShowFallbackBadgeOnly_When_FallbackReasonSetAndHashesMatch", () => {
+    const session = makeSession({
+      sessionId: "sess-fallback",
+      role: "triage",
+      configuredProgram: "gemini",
+      executorFallbackReason: "gemini_unavailable",
+      executorSnapshotHash: "hash-a",
+    });
+    const mode = makeMode({ slug: "custom-mode", stageExecutorHashes: { triage: "hash-a" } });
+    renderSection(makeItem([session], { pipelineMode: "custom-mode" }), [mode]);
+
+    expect(screen.getByLabelText("Fell back to Claude: gemini_unavailable")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Executor config changed since this session ran")).not.toBeInTheDocument();
+  });
+
+  it("SessionsSection_should_ShowDriftIndicatorOnly_When_HashMismatchAndNoFallbackReason", () => {
+    const session = makeSession({
+      sessionId: "sess-drift",
+      role: "triage",
+      pipelineModeSnapshot: "custom-mode",
+      executorSnapshotHash: "hash-old",
+    });
+    const mode = makeMode({ slug: "custom-mode", stageExecutorHashes: { triage: "hash-new" } });
+    renderSection(makeItem([session], { pipelineMode: "custom-mode" }), [mode]);
+
+    expect(screen.getByLabelText("Executor config changed since this session ran")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Fell back to Claude/)).not.toBeInTheDocument();
+  });
+
+  it("SessionsSection_should_ShowNoBadges_When_HashesMatchAndNoFallback", () => {
+    const session = makeSession({
+      sessionId: "sess-clean",
+      role: "triage",
+      executorSnapshotHash: "hash-a",
+    });
+    const mode = makeMode({ slug: "custom-mode", stageExecutorHashes: { triage: "hash-a" } });
+    renderSection(makeItem([session], { pipelineMode: "custom-mode" }), [mode]);
+
+    expect(screen.queryByLabelText(/Fell back to Claude/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Executor config changed since this session ran")).not.toBeInTheDocument();
+  });
+
+  // Regression test for the dense-hash fix (Task 5.2.4a/5.2.4b): a role with
+  // no configured override on the mode must never read as drifted just
+  // because it was never explicitly configured — both sides hash the same
+  // zero-value ComputeExecutorHash("", "") by construction.
+  it("SessionsSection_should_ShowNoDrift_When_RoleIsUnconfiguredAndBothHashesAreTheDenseDefault", () => {
+    const defaultHash = "default-hash-0000";
+    const session = makeSession({
+      sessionId: "sess-default-review",
+      role: "review",
+      pipelineModeSnapshot: "custom-mode",
+      executorSnapshotHash: defaultHash,
+    });
+    // review has no configured override on this mode — Task 5.2.4a's dense
+    // map still gives it an entry, equal to the session's own default hash.
+    const mode = makeMode({ slug: "custom-mode", stageExecutorHashes: { review: defaultHash, triage: "other-hash" } });
+    renderSection(makeItem([session], { pipelineMode: "custom-mode" }), [mode]);
+
+    expect(screen.queryByLabelText("Executor config changed since this session ran")).not.toBeInTheDocument();
+  });
+
+  // Regression test for the case-priority fix (Task 5.2.4b): both facts must
+  // render simultaneously, with distinct classNames/label text from each
+  // other and from the pre-existing content-drift badge.
+  it("SessionsSection_should_ShowBothFallbackAndDriftBadges_When_BothFactsPresentSimultaneously", () => {
+    const session = makeSession({
+      sessionId: "sess-both",
+      role: "triage",
+      pipelineModeSnapshot: "custom-mode",
+      pipelineModeSnapshotHash: "content-hash-old",
+      configuredProgram: "gemini",
+      executorFallbackReason: "gemini_unavailable",
+      executorSnapshotHash: "exec-hash-old",
+    });
+    const mode = makeMode({
+      slug: "custom-mode",
+      contentHash: "content-hash-new",
+      stageExecutorHashes: { triage: "exec-hash-new" },
+    });
+    renderSection(makeItem([session], { pipelineMode: "custom-mode" }), [mode]);
+
+    const fallbackBadge = screen.getByLabelText("Fell back to Claude: gemini_unavailable");
+    const driftBadge = screen.getByLabelText("Executor config changed since this session ran");
+    const contentDriftBadge = screen.getByText("(content since changed)");
+
+    expect(fallbackBadge).toBeInTheDocument();
+    expect(driftBadge).toBeInTheDocument();
+    expect(contentDriftBadge).toBeInTheDocument();
+
+    // All 3 must be mutually distinguishable at a glance — own icon and own
+    // label text apiece, never sharing a glyph or wording (verified here via
+    // visible text/icon content, since jsdom's className reflection for
+    // vanilla-extract's mocked style objects isn't a reliable test signal —
+    // see "Distinguishable badge treatments" in design/ux.md).
+    expect(fallbackBadge).toHaveTextContent("↩");
+    expect(fallbackBadge).toHaveTextContent("Ran on different program");
+    expect(driftBadge).toHaveTextContent("⚙");
+    expect(driftBadge).toHaveTextContent("(executor config since changed)");
+    expect(contentDriftBadge).toHaveTextContent("(content since changed)");
+    const texts = [fallbackBadge.textContent, driftBadge.textContent, contentDriftBadge.textContent];
+    expect(new Set(texts).size).toBe(3);
+  });
+
+  // Regression test for the family-alias hash fix: a family:opus-configured
+  // review stage must show no drift when unedited, since both sides hash
+  // the same raw pre-resolution string — the comparison here is a plain
+  // opaque string match, unaffected by what the alias resolves to.
+  it("SessionsSection_should_ShowNoDrift_When_FamilyAliasHashUneditedEvenThoughResolvedModelDiffers", () => {
+    const rawAliasHash = "family-opus-raw-hash";
+    const session = makeSession({
+      sessionId: "sess-family-alias",
+      role: "review",
+      pipelineModeSnapshot: "custom-mode",
+      executorSnapshotHash: rawAliasHash,
+      resolvedModel: "claude-opus-4-8",
+    });
+    const mode = makeMode({ slug: "custom-mode", stageExecutorHashes: { review: rawAliasHash } });
+    renderSection(makeItem([session], { pipelineMode: "custom-mode" }), [mode]);
+
+    expect(screen.queryByLabelText("Executor config changed since this session ran")).not.toBeInTheDocument();
   });
 });

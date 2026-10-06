@@ -27,6 +27,7 @@ func setupSearchService() *SearchService {
 // exist.  The RPC must not return an error — a missing ~/.claude/history.jsonl
 // is treated as empty history.
 func TestListClaudeHistory_EmptyDir(t *testing.T) {
+	t.Parallel()
 	svc := setupSearchService()
 
 	resp, err := svc.ListClaudeHistory(
@@ -43,6 +44,7 @@ func TestListClaudeHistory_EmptyDir(t *testing.T) {
 // TestGetHistoryDetail_EmptyID verifies that GetClaudeHistoryDetail with an
 // empty session ID returns CodeNotFound.
 func TestGetHistoryDetail_EmptyID(t *testing.T) {
+	t.Parallel()
 	svc := setupSearchService()
 
 	_, err := svc.GetClaudeHistoryDetail(
@@ -61,6 +63,7 @@ func TestGetHistoryDetail_EmptyID(t *testing.T) {
 // TestGetHistoryMessages_EmptyID verifies that GetClaudeHistoryMessages with
 // an empty ID returns CodeNotFound.
 func TestGetHistoryMessages_EmptyID(t *testing.T) {
+	t.Parallel()
 	svc := setupSearchService()
 
 	_, err := svc.GetClaudeHistoryMessages(
@@ -79,6 +82,7 @@ func TestGetHistoryMessages_EmptyID(t *testing.T) {
 // TestSearchHistory_EmptyQuery verifies that SearchClaudeHistory with an empty
 // query string returns CodeInvalidArgument (query is required).
 func TestSearchHistory_EmptyQuery(t *testing.T) {
+	t.Parallel()
 	svc := setupSearchService()
 
 	_, err := svc.SearchClaudeHistory(

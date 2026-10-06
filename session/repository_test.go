@@ -13,6 +13,7 @@ import (
 // fields: setting ShippedCheckConclusion and ShippedApprovedCount persists those two
 // fields while leaving every other field on the row unchanged (Story 3.1.3).
 func TestUpdateBacklogItem_ShouldPersistShippedCheckConclusionAndApprovedCount_WhenPartialUpdateApplied(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -54,6 +55,7 @@ func TestUpdateBacklogItem_ShouldPersistShippedCheckConclusionAndApprovedCount_W
 // at its prior/zero value — the architecture-review BLOCKER fix that keeps a capture
 // failure from ever being smuggled into the CI-conclusion field (Story 3.1.3).
 func TestUpdateBacklogItem_ShouldLeaveCheckConclusionUnchanged_WhenOnlySnapshotCaptureFailedSet(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()

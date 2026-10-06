@@ -7,6 +7,7 @@ import (
 // TestClaude_AsterismActive_SingleLine verifies that spinner-frame + Verb... lines are
 // classified as StatusExecuting across all known frame characters.
 func TestClaude_AsterismActive_SingleLine(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	cases := []struct {
 		name  string
@@ -49,6 +50,7 @@ func TestClaude_AsterismActive_SingleLine(t *testing.T) {
 
 // TestClaude_AsteriskActive_NoRegression verifies the existing * prefix still works.
 func TestClaude_AsteriskActive_NoRegression(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	cases := []string{
 		"* Moonwalking... (4m 18s · ↓ 2.0k tokens · thinking)",
@@ -65,6 +67,7 @@ func TestClaude_AsteriskActive_NoRegression(t *testing.T) {
 // TestClaude_SpinnerFrame_NoFalsePositive verifies that spinner-like chars in
 // non-active contexts don't trigger the pattern.
 func TestClaude_SpinnerFrame_NoFalsePositive(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	cases := []struct {
 		name  string
@@ -89,6 +92,7 @@ func TestClaude_SpinnerFrame_NoFalsePositive(t *testing.T) {
 
 // TestClaude_AsterismCompletion_IsSuccess verifies that ✻ PastTenseVerb for N → StatusSuccess (AC-2).
 func TestClaude_AsterismCompletion_IsSuccess(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	cases := []string{
 		"✻ Perambulated for 1h 5m",
@@ -107,6 +111,7 @@ func TestClaude_AsterismCompletion_IsSuccess(t *testing.T) {
 
 // TestClaude_AsterismCompletion_NotActive verifies completion lines are never Active (AC-3 variant).
 func TestClaude_AsterismCompletion_NotActive(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	cases := []string{
 		"✻ Perambulated for 1h 5m",
@@ -123,6 +128,7 @@ func TestClaude_AsterismCompletion_NotActive(t *testing.T) {
 // TestClaude_ScrollbackFalsePositive_ActiveThenIdle verifies that old spinner lines
 // in scrollback don't override a current idle prompt (AC-3).
 func TestClaude_ScrollbackFalsePositive_ActiveThenIdle(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	lines := []string{
 		"✻ Perambulating... (5m 12s · ↑ 3.2k tokens)",
@@ -143,6 +149,7 @@ func TestClaude_ScrollbackFalsePositive_ActiveThenIdle(t *testing.T) {
 // produce unexpected results for Aider-style bullet output.
 // The real regression guard is snapshot_test.go/aider_active.txt.
 func TestClaude_AsterismPattern_NoAiderFalsePositive(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	aiderOutputs := []string{
 		" Updating /path/to/file...",

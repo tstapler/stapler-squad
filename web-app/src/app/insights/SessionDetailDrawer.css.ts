@@ -45,7 +45,7 @@ export const drawerTitle = style({
   display: "flex",
   alignItems: "center",
   gap: vars.space[2],
-  fontSize: vars.fontSize.sm,
+  fontSize: vars.fontSize.xl,
   fontWeight: vars.fontWeight.semibold,
   color: vars.color.textPrimary,
 });
@@ -188,6 +188,12 @@ export const srOnly = style({
   clip: "rect(0, 0, 0, 0)",
   whiteSpace: "nowrap",
   border: 0,
+});
+
+export const openFullPageLink = style({
+  fontSize: vars.fontSize.xs,
+  whiteSpace: "nowrap",
+  textDecoration: "none",
 });
 
 export const backlogLink = style({

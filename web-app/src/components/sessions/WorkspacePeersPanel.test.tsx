@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { Provider } from "react-redux";
 import { configureStore } from "@reduxjs/toolkit";
 import { WorkspacePeersPanel, peerLifecycle, GOAL_STALE_THRESHOLD_MS } from "./WorkspacePeersPanel";
@@ -14,7 +14,8 @@ function makeSession(overrides: Partial<Session>): Session {
     id: "id",
     title: "title",
     status: SessionStatus.ACTIVE,
-    workspaceKey: "gh:acme/widgets",
+    activeDir: "/home/user/repo",
+    existingDir: "/home/user/repo",
     ...overrides,
   } as unknown as Session;
 }
@@ -38,6 +39,7 @@ function renderWithStore(session: Session, peers: Session[]) {
         ids: peers.map((p) => p.id),
         entities: Object.fromEntries(peers.map((p) => [p.id, p])),
         loading: false,
+        hasLoadedOnce: false,
         error: null,
         connectionState: "connected" as const,
         detectedStatusMap: {},
@@ -53,8 +55,12 @@ function renderWithStore(session: Session, peers: Session[]) {
 }
 
 describe("WorkspacePeersPanel", () => {
-  it("renders nothing when the session has no workspace key", () => {
-    const self = makeSession({ id: "self", workspaceKey: "" });
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("renders nothing when the session has no active dir", () => {
+    const self = makeSession({ id: "self", activeDir: "" });
     renderWithStore(self, []);
     expect(screen.queryByTestId("workspace-peers-panel")).toBeNull();
   });
@@ -65,14 +71,82 @@ describe("WorkspacePeersPanel", () => {
     expect(screen.queryByTestId("workspace-peers-panel")).toBeNull();
   });
 
-  it("excludes the caller's own session and sessions on other workspaces", () => {
+  it("excludes the caller's own session and sessions with a different active dir", () => {
     const self = makeSession({ id: "self" });
     const samePeer = makeSession({ id: "peer-1", title: "peer one" });
-    const otherRepo = makeSession({ id: "peer-2", workspaceKey: "gh:other/repo" });
-    renderWithStore(self, [self, samePeer, otherRepo]);
+    const otherDirectory = makeSession({ id: "peer-2", activeDir: "/home/user/other-repo" });
+    renderWithStore(self, [self, samePeer, otherDirectory]);
     const items = screen.getAllByTestId("workspace-peer-item");
     expect(items).toHaveLength(1);
     expect(screen.getByText("peer one")).toBeInTheDocument();
+  });
+
+  it("does not flag two sessions in their own separate worktrees of the same repo as peers", () => {
+    const self = makeSession({ id: "self", activeDir: "/home/user/repo-worktrees/self" });
+    const otherWorktree = makeSession({
+      id: "peer-1",
+      title: "peer one",
+      activeDir: "/home/user/repo-worktrees/peer-1",
+    });
+    renderWithStore(self, [self, otherWorktree]);
+    expect(screen.queryByTestId("workspace-peers-panel")).toBeNull();
+  });
+
+  it("flags two sessions genuinely sharing one worktree directory as peers", () => {
+    const self = makeSession({ id: "self", activeDir: "/home/user/repo-worktrees/shared" });
+    const samePeer = makeSession({
+      id: "peer-1",
+      title: "peer one",
+      activeDir: "/home/user/repo-worktrees/shared",
+    });
+    renderWithStore(self, [self, samePeer]);
+    const items = screen.getAllByTestId("workspace-peer-item");
+    expect(items).toHaveLength(1);
+    expect(screen.getByText("peer one")).toBeInTheDocument();
+  });
+
+  // Regression fixture for the stopped-session gap PR #801's effectiveSessionPath()
+  // fallback did not cover: session.gitWorktree is gated on i.started, so a stopped
+  // session has no gitWorktree submessage. activeDir is populated by the backend
+  // regardless of session state (session/types.go's Workspace()), so comparing on it
+  // directly — with no gitWorktree fallback — catches this case the old helper missed.
+  it("flags a stopped session sharing activeDir with a live session as a peer", () => {
+    const self = makeSession({ id: "self", activeDir: "/home/user/repo-worktrees/shared" });
+    const stoppedPeer = makeSession({
+      id: "peer-1",
+      title: "peer one",
+      status: SessionStatus.STOPPED,
+      activeDir: "/home/user/repo-worktrees/shared",
+    });
+    renderWithStore(self, [self, stoppedPeer]);
+    const items = screen.getAllByTestId("workspace-peer-item");
+    expect(items).toHaveLength(1);
+    expect(screen.getByText("peer one")).toBeInTheDocument();
+  });
+
+  // Regression fixture for the false-positive collision bug this item's own domain
+  // refactor exists to fix: two stopped sessions with independently cleaned-up
+  // worktrees collapse onto the same existingDir (which falls back to the shared repo
+  // root once a worktree directory no longer exists on disk) but keep distinct
+  // activeDir values (no disk-existence fallback) — the pre-fix effectiveSessionPath()
+  // helper compared on the equivalent of existingDir and would have flagged these as
+  // peers; comparing on activeDir must not.
+  it("does not flag two stopped sessions sharing existingDir but not activeDir as peers", () => {
+    const self = makeSession({
+      id: "self",
+      status: SessionStatus.STOPPED,
+      activeDir: "/home/user/repo-worktrees/self",
+      existingDir: "/home/user/repo",
+    });
+    const otherStopped = makeSession({
+      id: "peer-1",
+      title: "peer one",
+      status: SessionStatus.STOPPED,
+      activeDir: "/home/user/repo-worktrees/peer-1",
+      existingDir: "/home/user/repo",
+    });
+    renderWithStore(self, [self, otherStopped]);
+    expect(screen.queryByTestId("workspace-peers-panel")).toBeNull();
   });
 
   it("shows the peer's goal text when set", () => {
@@ -83,6 +157,18 @@ describe("WorkspacePeersPanel", () => {
     });
     renderWithStore(self, [self, peer]);
     expect(screen.getByText("fix the bug")).toBeInTheDocument();
+  });
+
+  it("hides itself when dismissed, and remembers the dismissal for this session", () => {
+    const self = makeSession({ id: "self" });
+    const peer = makeSession({ id: "peer-1" });
+    const { unmount } = renderWithStore(self, [self, peer]);
+    fireEvent.click(screen.getByTestId("workspace-peers-dismiss"));
+    expect(screen.queryByTestId("workspace-peers-panel")).toBeNull();
+    unmount();
+
+    renderWithStore(self, [self, peer]);
+    expect(screen.queryByTestId("workspace-peers-panel")).toBeNull();
   });
 });
 

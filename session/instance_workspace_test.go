@@ -21,12 +21,15 @@ import (
 // Because this returns before any tmux interaction, the test requires no live
 // tmux session and will not reach NewHistoryFileDetectorWithRealInspector.
 func TestTryExtractConversationUUID_SkipsWhenAlreadyHasID(t *testing.T) {
+	t.Parallel()
 	const existingID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 
 	inst := &Instance{
 		Title: "test-skip-existing-id",
-		claudeSession: &ClaudeSessionData{
-			ConversationUUID: existingID,
+		claudeExtension: claudeExtension{
+			claudeSession: &ClaudeSessionData{
+				ConversationUUID: existingID,
+			},
 		},
 		// tmuxManager.session is nil — DoesSessionExist() would return false,
 		// but the guard fires before we ever reach the tmux check.
@@ -46,6 +49,7 @@ func TestTryExtractConversationUUID_SkipsWhenAlreadyHasID(t *testing.T) {
 // TmuxProcessManager.DoesSessionExist() returns false when session == nil,
 // so the function logs a debug message and returns early.
 func TestTryExtractConversationUUID_SkipsWhenTmuxNotRunning(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title: "test-no-tmux",
 		// claudeSession is nil — we have no ID yet.
@@ -68,10 +72,13 @@ func TestTryExtractConversationUUID_SkipsWhenTmuxNotRunning(t *testing.T) {
 // check, leaving SessionID empty.  This validates that the guard condition
 // requires BOTH non-nil claudeSession AND non-empty SessionID.
 func TestTryExtractConversationUUID_EmptySessionIDTriesTmux(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title: "test-empty-session-id",
-		claudeSession: &ClaudeSessionData{
-			ConversationUUID: "", // Explicitly empty — guard should NOT fire.
+		claudeExtension: claudeExtension{
+			claudeSession: &ClaudeSessionData{
+				ConversationUUID: "", // Explicitly empty — guard should NOT fire.
+			},
 		},
 		// tmuxManager.session is nil — DoesSessionExist() returns false.
 	}
@@ -95,12 +102,15 @@ func TestTryExtractConversationUUID_EmptySessionIDTriesTmux(t *testing.T) {
 // This test confirms the guard logic directly using tryExtractConversationUUID,
 // which is what SwitchWorkspace delegates to after the guard check.
 func TestSwitchWorkspace_GuardPreventsExtractionWhenIDPopulated(t *testing.T) {
+	t.Parallel()
 	const preexistingID = "550e8400-e29b-41d4-a716-446655440000"
 
 	inst := &Instance{
 		Title: "test-guard-at-call-site",
-		claudeSession: &ClaudeSessionData{
-			ConversationUUID: preexistingID,
+		claudeExtension: claudeExtension{
+			claudeSession: &ClaudeSessionData{
+				ConversationUUID: preexistingID,
+			},
 		},
 	}
 
@@ -121,9 +131,11 @@ func TestSwitchWorkspace_GuardPreventsExtractionWhenIDPopulated(t *testing.T) {
 // returns without setting anything, but the important thing is that the call
 // was not blocked by the guard.
 func TestSwitchWorkspace_GuardAllowsExtractionWhenIDMissing(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
-		Title:         "test-guard-allows-call",
-		claudeSession: nil, // Triggers the guard condition.
+		Title: "test-guard-allows-call",
+		// claudeSession (via embedded claudeExtension) defaults to nil,
+		// triggering the guard condition.
 	}
 
 	// tryExtractConversationUUID is reachable when guard condition fires.
@@ -149,6 +161,7 @@ func TestSwitchWorkspace_GuardAllowsExtractionWhenIDMissing(t *testing.T) {
 // unrelated lazy caller (ClaudeAdapter.Import, SwitchWorkspace, ...) would
 // lose resumability entirely if the process crashed a second time first.
 func TestTryExtractConversationUUID_PathFallbackRepopulatesAfterClear(t *testing.T) {
+	t.Parallel()
 	tempHome := t.TempDir()
 	projectPath := "/fake/project/path"
 	const conversationUUID = "550e8400-e29b-41d4-a716-446655440000"
@@ -164,7 +177,7 @@ func TestTryExtractConversationUUID_PathFallbackRepopulatesAfterClear(t *testing
 		historyDetector: NewHistoryFileDetectorWithHomeDir(nil, tempHome),
 		// Simulates the state right after a cold restore clears the old ID —
 		// no live tmux pane, so the fast path is skipped and DetectByPath runs.
-		claudeSession: &ClaudeSessionData{ConversationUUID: ""},
+		claudeExtension: claudeExtension{claudeSession: &ClaudeSessionData{ConversationUUID: ""}},
 	}
 
 	inst.tryExtractConversationUUID()
@@ -192,6 +205,7 @@ func TestTryExtractConversationUUID_PathFallbackRepopulatesAfterClear(t *testing
 // SwitchWorkspace takes the SessionTypeDirectory fallback path, exercising the
 // startLocked call inside switchWorkspaceLocked.
 func TestSwitchWorkspace_DoesNotDeadlockOnStartCall(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts a (mocked) tmux session")
 	}

@@ -65,6 +65,42 @@ type Detector struct {
 	resetBufferSecs  int
 
 	onDetection func(Detection)
+
+	// canaryLogged guards the undetected-wording canary (see maybeLogUndetectedWording)
+	// so it fires at most once per session, not once per scan.
+	canaryLogged bool
+}
+
+// quotaKeywords are generic terms that plausibly indicate a rate-limit/usage-limit
+// message, used only as a drift canary — never to feed detection itself, since a
+// false-positive keyword hit here must never trigger a real rate-limit action.
+var quotaKeywords = []string{"usage limit", "rate limit", "quota"}
+
+// maybeLogUndetectedWording logs a warning, once per session, if output contains a
+// generic quota/limit keyword that none of the configured rate-limit regex patterns
+// matched. Downstream consumers (e.g. server/services/quota_gate.go's hard/reactive
+// override signal) depend entirely on this package's regex set to observe rate-limit
+// events — a wording variant Anthropic ships later that the regex set misses would
+// otherwise silently defeat that dependent behavior with no signal anything is wrong.
+// Must be called with d.mu held.
+func (d *Detector) maybeLogUndetectedWording(output string) {
+	if d.canaryLogged {
+		return
+	}
+	lower := strings.ToLower(output)
+	for _, kw := range quotaKeywords {
+		if idx := strings.Index(lower, kw); idx != -1 {
+			d.canaryLogged = true
+			// Deliberately never logs the raw matched output: terminal
+			// output routinely contains secrets (API keys, tokens pasted or
+			// printed alongside an unrelated quota/rate-limit message), and
+			// this canary's whole purpose — flagging a detector-wording gap
+			// — only needs the matched keyword and where it occurred, not
+			// the surrounding text.
+			log.Warn("ratelimit: possible undetected quota/limit wording", "session", d.sessionID, "keyword", kw, "byte_offset", idx, "output_len", len(output))
+			return
+		}
+	}
 }
 
 var defaultRateLimitPatterns = []*regexp.Regexp{
@@ -206,6 +242,8 @@ func (d *Detector) ProcessOutput(data []byte) {
 		if d.onDetection != nil {
 			go d.onDetection(*detection)
 		}
+	} else {
+		d.maybeLogUndetectedWording(output)
 	}
 }
 
@@ -341,7 +379,7 @@ func (d *Detector) parseTimestamp(input string) time.Time {
 	retryMatchNumber := regexp.MustCompile(`^(\d+)$`).FindStringSubmatch(input)
 	if len(retryMatchNumber) == 2 {
 		var amount int
-		fmt.Sscanf(retryMatchNumber[1], "%d", &amount)
+		_, _ = fmt.Sscanf(retryMatchNumber[1], "%d", &amount) // regex guarantees a valid digit string
 		return baseTime.Add(time.Duration(amount) * time.Second)
 	}
 
@@ -349,7 +387,7 @@ func (d *Detector) parseTimestamp(input string) time.Time {
 	if len(retryMatch) > 2 {
 		var duration time.Duration
 		var amount int
-		fmt.Sscanf(retryMatch[1], "%d", &amount)
+		_, _ = fmt.Sscanf(retryMatch[1], "%d", &amount) // regex guarantees a valid digit string
 		switch strings.ToLower(retryMatch[2]) {
 		case "second", "seconds":
 			duration = time.Duration(amount) * time.Second
@@ -365,7 +403,7 @@ func (d *Detector) parseTimestamp(input string) time.Time {
 	if len(retryMatchFull) > 2 {
 		var duration time.Duration
 		var amount int
-		fmt.Sscanf(retryMatchFull[1], "%d", &amount)
+		_, _ = fmt.Sscanf(retryMatchFull[1], "%d", &amount) // regex guarantees a valid digit string
 		switch strings.ToLower(retryMatchFull[2]) {
 		case "second", "seconds":
 			duration = time.Duration(amount) * time.Second

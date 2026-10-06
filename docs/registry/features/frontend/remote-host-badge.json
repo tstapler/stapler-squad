@@ -1,0 +1,24 @@
+{
+  "id": "remote-host-badge",
+  "type": "frontend",
+  "name": "Session host badge for remote-backed sessions (row mode, the default view, and card mode)",
+  "component": "SessionRow",
+  "path": "web-app/src/components/sessions/SessionRow.tsx",
+  "filePath": "web-app/src/components/sessions/SessionRow.tsx",
+  "markerLine": 2,
+  "alsoIn": [
+    {
+      "component": "SessionCard",
+      "path": "web-app/src/components/sessions/SessionCard.tsx",
+      "markerLine": 2,
+      "note": "SessionList.tsx's \"card\" display mode (reached via the list header's view toggle) -- SessionRow above is the default \"row\" mode. Both files carry a // +feature: remote-host-badge marker; the frontend scanner only keeps whichever file it walks first and warn-skips the duplicate id from the other. `alsoIn` is a new convention introduced by this feature, not an existing repo pattern (checked: no other entry under docs/registry/features/frontend/ uses it, and no tooling reads it) -- this per-feature JSON file, not the scanner's pick, is the source of truth for which paths belong to this feature. The repo's actual existing precedent for a genuinely multi-file feature (e.g. ui:local-file-browser) is to document only one file and say nothing about the other; this entry deliberately documents both instead, since silently omitting SessionRow (the default view) understated coverage."
+    }
+  ],
+  "tested": true,
+  "testIds": [
+    "SessionCard_should_RenderHostBadge_When_SessionRemoteNameIsSet",
+    "SessionCard_should_NotRenderHostBadge_When_SessionIsLocal",
+    "remote-workspaces > creates a session on the configured remote via the Omnibar remote selector and shows the host badge"
+  ],
+  "lastModified": "2026-08-17T00:00:00Z"
+}

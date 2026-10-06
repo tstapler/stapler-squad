@@ -1,0 +1,16 @@
+{
+  "id": "session-notes-panel",
+  "type": "frontend",
+  "description": "NotePanel — attach/edit/render a markdown note on a session",
+  "component": "NotePanel",
+  "path": "web-app/src/components/sessions/NotePanel.tsx",
+  "markerLine": 3,
+  "tested": true,
+  "testIds": [
+    "NotePanel_should_CallOnSaveWithTypedValue_When_SaveClicked",
+    "NotePanel_should_PreserveTextareaAndShowAssertiveError_When_OnSaveRejects",
+    "NotePanel_should_RenderMarkdownElements_When_NoteContainsGfmSyntax",
+    "NotePanel_should_RemapHeadingToNonPageLevelTag_When_NoteContainsH1Syntax"
+  ],
+  "lastModified": "2026-08-10T05:53:16Z"
+}

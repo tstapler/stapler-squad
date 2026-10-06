@@ -11,6 +11,7 @@ import (
 )
 
 func TestNormalizeModelFamily_WhenDateSuffixedID_ExpectStripped(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		input    string
 		expected string
@@ -31,7 +32,77 @@ func TestNormalizeModelFamily_WhenDateSuffixedID_ExpectStripped(t *testing.T) {
 	}
 }
 
+// TestNormalizeModelFamily_WhenGeminiSnapshotSuffix_ExpectStripped is Task
+// 3.2.1b's acceptance case: a dated or numbered Gemini snapshot suffix must
+// normalize to the same family as the bare model ID, mirroring the existing
+// claude-* variant/date handling, without merging a distinctly-priced sibling
+// (flash-lite) into gemini-2.5-flash.
+func TestNormalizeModelFamily_WhenGeminiSnapshotSuffix_ExpectStripped(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		input    string
+		expected string
+	}{
+		{"gemini-2.5-pro", "gemini-2.5-pro"},
+		{"gemini-2.5-flash", "gemini-2.5-flash"},
+		{"gemini-2.5-pro-20250619", "gemini-2.5-pro"},
+		{"gemini-2.5-flash-002", "gemini-2.5-flash"},
+		{"gemini-2.5-flash-lite", "gemini-2.5-flash-lite"},
+		{"gemini-2.5-flash-lite-002", "gemini-2.5-flash-lite-002"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.input, func(t *testing.T) {
+			got := NormalizeModelFamily(c.input)
+			assert.Equal(t, c.expected, got)
+		})
+	}
+}
+
+// TestDefaultPricingTable_WhenGeminiModel_ExpectPopulatedPricingWithSourceDate
+// is Story 3.2.1's literal AC: LookupByModel("gemini-2.5-pro") must return a
+// populated ModelPricing with a source-dated EffectiveDate, the same
+// dated/sourced convention every other DefaultPricingTable() entry follows.
+func TestDefaultPricingTable_WhenGeminiModel_ExpectPopulatedPricingWithSourceDate(t *testing.T) {
+	t.Parallel()
+	pt := DefaultPricingTable()
+
+	for _, family := range []string{"gemini-2.5-pro", "gemini-2.5-flash"} {
+		t.Run(family, func(t *testing.T) {
+			entry, ok := pt.LookupByModel(family)
+			require.True(t, ok, "expected %q entry in DefaultPricingTable()", family)
+			assert.Greater(t, entry.InputPricePerMTok, 0.0)
+			assert.Greater(t, entry.OutputPricePerMTok, 0.0)
+			assert.Equal(t, family, entry.ModelFamily)
+
+			_, err := time.Parse("2006-01-02", entry.EffectiveDate)
+			assert.NoError(t, err, "EffectiveDate must parse as YYYY-MM-DD")
+		})
+	}
+}
+
+// TestEstimateCost_WhenGeminiProModel_ExpectExactPrice exercises the same
+// EstimateCost path GeminiCaller's cost computation ultimately validates
+// against, at $1.25/1M input + $10.00/1M output for gemini-2.5-pro.
+func TestEstimateCost_WhenGeminiProModel_ExpectExactPrice(t *testing.T) {
+	t.Parallel()
+	pt := DefaultPricingTable()
+
+	result := &ParseResult{
+		PrimaryModel: "gemini-2.5-pro",
+		TurnTimeline: []TurnStats{
+			{Model: "gemini-2.5-pro", Input: 1_000_000, Output: 1_000_000},
+		},
+	}
+
+	cost, unpriced := pt.EstimateCost(result)
+	// gemini-2.5-pro: $1.25/MTok input + $10.00/MTok output = $11.25/MTok for 1M each.
+	assert.InDelta(t, 11.25, cost, 0.0001)
+	assert.Empty(t, unpriced)
+}
+
 func TestEstimateCost_WhenKnownModel_ExpectExactPrice(t *testing.T) {
+	t.Parallel()
 	pt := DefaultPricingTable()
 
 	result := &ParseResult{
@@ -54,6 +125,7 @@ func TestEstimateCost_WhenKnownModel_ExpectExactPrice(t *testing.T) {
 // family with no PricingTable entry must be flagged unpriced, not silently
 // reported as $0 indistinguishable from genuinely-free usage.
 func TestEstimateCost_WhenUnknownModel_ExpectZeroCostAndFamilyFlaggedUnpriced(t *testing.T) {
+	t.Parallel()
 	pt := DefaultPricingTable()
 
 	result := &ParseResult{
@@ -69,6 +141,7 @@ func TestEstimateCost_WhenUnknownModel_ExpectZeroCostAndFamilyFlaggedUnpriced(t 
 }
 
 func TestEstimateCost_WhenCacheReadTokens_ExpectCacheRateIncluded(t *testing.T) {
+	t.Parallel()
 	pt := DefaultPricingTable()
 
 	result := &ParseResult{
@@ -85,6 +158,7 @@ func TestEstimateCost_WhenCacheReadTokens_ExpectCacheRateIncluded(t *testing.T) 
 }
 
 func TestEstimateCost_WhenSonnet5Model_ExpectExactPrice(t *testing.T) {
+	t.Parallel()
 	pt := DefaultPricingTable()
 
 	result := &ParseResult{
@@ -119,6 +193,7 @@ func TestEstimateCost_WhenSonnet5Model_ExpectExactPrice(t *testing.T) {
 }
 
 func TestDefaultPricingTable_WhenSonnet5EntryPresent_ExpectAllRateFieldsPopulated(t *testing.T) {
+	t.Parallel()
 	pt := DefaultPricingTable()
 
 	entry, ok := pt.Prices["claude-sonnet-5"]
@@ -140,6 +215,7 @@ func TestDefaultPricingTable_WhenSonnet5EntryPresent_ExpectAllRateFieldsPopulate
 // result — the gap adversarial-review.md flagged: no prior test covered a
 // mix of priced and unpriced families in one TurnTimeline.
 func TestModelFamilyCost_WhenMixedKnownAndUnknownFamilies_ExpectKnownPricedAndUnknownFlagged(t *testing.T) {
+	t.Parallel()
 	pt := DefaultPricingTable()
 
 	result := &ParseResult{
@@ -160,6 +236,62 @@ func TestModelFamilyCost_WhenMixedKnownAndUnknownFamilies_ExpectKnownPricedAndUn
 	assert.False(t, unpriced["claude-sonnet-4"])
 }
 
+// TestEstimateCostByCategory_WhenVariedUsage_ExpectEachCategoryPricedIndependently
+// covers the per-category split EstimateCost's existing tests never assert on
+// directly (they only ever check the summed Total()).
+func TestEstimateCostByCategory_WhenVariedUsage_ExpectEachCategoryPricedIndependently(t *testing.T) {
+	t.Parallel()
+	pt := DefaultPricingTable()
+
+	t.Run("priced family with distinct per-category token counts", func(t *testing.T) {
+		t.Parallel()
+		result := &ParseResult{
+			TurnTimeline: []TurnStats{
+				{
+					Model:         "claude-sonnet-4",
+					Input:         1_000_000,
+					Output:        1_000_000,
+					CacheCreation: 1_000_000,
+					CacheRead:     1_000_000,
+				},
+			},
+		}
+
+		costs, unpriced := pt.EstimateCostByCategory(result)
+
+		// claude-sonnet-4 rates: $3/MTok input, $15/MTok output, $3.75/MTok
+		// cache-write, $0.30/MTok cache-read (DefaultPricingTable()).
+		assert.InDelta(t, 3.0, costs.Input, 0.0001)
+		assert.InDelta(t, 15.0, costs.Output, 0.0001)
+		assert.InDelta(t, 3.75, costs.CacheCreation, 0.0001)
+		assert.InDelta(t, 0.30, costs.CacheRead, 0.0001)
+		assert.Empty(t, unpriced)
+	})
+
+	t.Run("unpriced family reports zero on every category and is flagged", func(t *testing.T) {
+		t.Parallel()
+		result := &ParseResult{
+			TurnTimeline: []TurnStats{
+				{
+					Model:         "gpt-99-turbo",
+					Input:         500_000,
+					Output:        500_000,
+					CacheCreation: 500_000,
+					CacheRead:     500_000,
+				},
+			},
+		}
+
+		costs, unpriced := pt.EstimateCostByCategory(result)
+
+		assert.Zero(t, costs.Input)
+		assert.Zero(t, costs.Output)
+		assert.Zero(t, costs.CacheCreation)
+		assert.Zero(t, costs.CacheRead)
+		assert.Equal(t, []string{"gpt-99-turbo"}, unpriced)
+	})
+}
+
 // knownActiveClaudeFamilies is maintained independently of DefaultPricingTable()'s keys —
 // deliberately a second source of truth, so a maintainer must touch both this list and
 // the pricing table when a new Claude model family becomes active, giving this test a
@@ -171,6 +303,7 @@ var knownActiveClaudeFamilies = []string{
 }
 
 func TestDefaultPricingTable_WhenKnownActiveFamily_ExpectPricingEntryExists(t *testing.T) {
+	t.Parallel()
 	pt := DefaultPricingTable()
 	for _, family := range knownActiveClaudeFamilies {
 		_, ok := pt.Prices[family]
@@ -179,6 +312,7 @@ func TestDefaultPricingTable_WhenKnownActiveFamily_ExpectPricingEntryExists(t *t
 }
 
 func TestPricingTable_WhenIsStale_Expect31DaysReturnTrue(t *testing.T) {
+	t.Parallel()
 	pt := DefaultPricingTable()
 	// Override all effective dates to 31 days ago.
 	oldDate := time.Now().AddDate(0, 0, -31).Format("2006-01-02")
@@ -193,6 +327,7 @@ func TestPricingTable_WhenIsStale_Expect31DaysReturnTrue(t *testing.T) {
 }
 
 func TestPricingTable_WhenIsStale_Expect29DaysReturnFalse(t *testing.T) {
+	t.Parallel()
 	pt := DefaultPricingTable()
 	// Override all effective dates to 29 days ago.
 	recentDate := time.Now().UTC().AddDate(0, 0, -29).Format("2006-01-02")
@@ -207,6 +342,7 @@ func TestPricingTable_WhenIsStale_Expect29DaysReturnFalse(t *testing.T) {
 }
 
 func TestDefaultPricingTable_WhenVerifiedAsOfDate_ExpectNoEntryAlreadyStale(t *testing.T) {
+	t.Parallel()
 	// Regression guard: DefaultPricingTable()'s own entries must not ship
 	// already past IsStale()'s 30-day window, or the startup warning becomes
 	// permanent noise instead of a signal (this bit us once — see
@@ -231,6 +367,7 @@ func TestDefaultPricingTable_WhenVerifiedAsOfDate_ExpectNoEntryAlreadyStale(t *t
 }
 
 func TestLoadPricingOverride_WhenValidConfigJSON_ExpectOverridesApplied(t *testing.T) {
+	t.Parallel()
 	// Write a temp override file.
 	override := map[string]ModelPricing{
 		"claude-sonnet-4": {
@@ -262,6 +399,7 @@ func TestLoadPricingOverride_WhenValidConfigJSON_ExpectOverridesApplied(t *testi
 }
 
 func TestLoadPricingOverride_WhenMalformedJSON_ExpectErrorReturnedDefaultsUntouched(t *testing.T) {
+	t.Parallel()
 	// Write a temp override file containing malformed JSON (trailing comma).
 	malformed := []byte(`{"claude-sonnet-5": {"InputPricePerMTok": 2.00,},}`)
 
@@ -281,4 +419,170 @@ func TestLoadPricingOverride_WhenMalformedJSON_ExpectErrorReturnedDefaultsUntouc
 	assert.Error(t, err)
 	assert.Nil(t, table)
 	assert.Equal(t, 3.0, defaults.Prices["claude-sonnet-4"].InputPricePerMTok)
+}
+
+// unitCostPricingTable prices "unit-model" at $1,000,000/MTok input so that
+// InputTokens count reads directly as USD cost (input/1e6 * 1e6 == input) —
+// keeps fixture turn costs at clean, readable dollar figures.
+func unitCostPricingTable() *PricingTable {
+	return &PricingTable{
+		Prices: map[string]ModelPricing{
+			"unit-model": {ModelFamily: "unit-model", InputPricePerMTok: 1_000_000},
+		},
+	}
+}
+
+func TestEstimateTurnCost_WhenModelPriced_ExpectExactPrice(t *testing.T) {
+	t.Parallel()
+	pt := unitCostPricingTable()
+
+	cost, priced := pt.EstimateTurnCost(TurnStats{Model: "unit-model", Input: 3})
+
+	assert.True(t, priced)
+	assert.InDelta(t, 3.0, cost, 0.0001)
+}
+
+func TestEstimateTurnCost_WhenModelUnpriced_ExpectZeroCostNotPriced(t *testing.T) {
+	t.Parallel()
+	pt := unitCostPricingTable()
+
+	cost, priced := pt.EstimateTurnCost(TurnStats{Model: "no-such-model", Input: 3})
+
+	assert.False(t, priced)
+	assert.Equal(t, 0.0, cost)
+}
+
+// TestAttributeToolCosts_WhenMultiToolTurn_ExpectCostAddedOncePerDistinctToolAndDoubleCountedFlagSet
+// is the literal Story 1.2.1 AC example: turn 1 has one tool (Read, $1.00);
+// turn 2 has two Read calls plus one Grep call ($2.00) — the $2.00 must land
+// on Read once (not twice, per-call) and once on Grep, and both must be
+// flagged doubleCounted since they co-occurred in the same turn.
+func TestAttributeToolCosts_WhenMultiToolTurn_ExpectCostAddedOncePerDistinctToolAndDoubleCountedFlagSet(t *testing.T) {
+	t.Parallel()
+	pt := unitCostPricingTable()
+	r := &ParseResult{
+		TurnTimeline: []TurnStats{
+			{Model: "unit-model", Input: 1, ToolNames: []string{"Read"}},
+			{Model: "unit-model", Input: 2, ToolNames: []string{"Read", "Read", "Grep"}},
+		},
+	}
+
+	costs, doubleCounted, unpriced := AttributeToolCosts(r, pt)
+
+	assert.InDelta(t, 3.0, costs["Read"], 0.0001)
+	assert.InDelta(t, 2.0, costs["Grep"], 0.0001)
+	assert.True(t, doubleCounted["Read"])
+	assert.True(t, doubleCounted["Grep"])
+	assert.Empty(t, unpriced)
+}
+
+func TestAttributeToolCosts_WhenSingleToolTurn_ExpectNoDoubleCountFlag(t *testing.T) {
+	t.Parallel()
+	pt := unitCostPricingTable()
+	r := &ParseResult{
+		TurnTimeline: []TurnStats{
+			{Model: "unit-model", Input: 5, ToolNames: []string{"Read"}},
+		},
+	}
+
+	costs, doubleCounted, unpriced := AttributeToolCosts(r, pt)
+
+	assert.InDelta(t, 5.0, costs["Read"], 0.0001)
+	assert.False(t, doubleCounted["Read"])
+	assert.Empty(t, unpriced)
+}
+
+// TestAttributeToolCosts_WhenTurnModelUnpriced_ExpectTurnSkippedContributesZero
+// is the Story 1.2.1 abstain-path AC: a turn on a model with no PricingTable
+// entry must not contribute a misleading $0.00 to costs — its tools land only
+// in unpriced.
+func TestAttributeToolCosts_WhenTurnModelUnpriced_ExpectTurnSkippedContributesZero(t *testing.T) {
+	t.Parallel()
+	pt := unitCostPricingTable()
+	r := &ParseResult{
+		TurnTimeline: []TurnStats{
+			{Model: "no-such-model", Input: 10, ToolNames: []string{"Bash"}},
+		},
+	}
+
+	costs, doubleCounted, unpriced := AttributeToolCosts(r, pt)
+
+	_, hasCost := costs["Bash"]
+	assert.False(t, hasCost)
+	assert.False(t, doubleCounted["Bash"])
+	assert.True(t, unpriced["Bash"])
+}
+
+// TestAttributeToolCosts_WhenMixedPricedAndUnpricedTurns_ExpectToolInBothCostsAndUnpriced
+// covers a tool with some priced turns and some unpriced turns — it must not
+// be treated as "unpriced overall" by callers, since it has a real costs entry.
+func TestAttributeToolCosts_WhenMixedPricedAndUnpricedTurns_ExpectToolInBothCostsAndUnpriced(t *testing.T) {
+	t.Parallel()
+	pt := unitCostPricingTable()
+	r := &ParseResult{
+		TurnTimeline: []TurnStats{
+			{Model: "unit-model", Input: 4, ToolNames: []string{"Read"}},
+			{Model: "no-such-model", Input: 10, ToolNames: []string{"Read"}},
+		},
+	}
+
+	costs, _, unpriced := AttributeToolCosts(r, pt)
+
+	assert.InDelta(t, 4.0, costs["Read"], 0.0001)
+	assert.True(t, unpriced["Read"])
+}
+
+// TestComputeCacheROI_WhenModelUnpriced_ExpectOkFalseNotZero is Story 1.3.1's
+// abstain-not-guess acceptance criterion: an unpriced session's ROI must be
+// reported as undefined (ok=false), never a misleading $0.00.
+func TestComputeCacheROI_WhenModelUnpriced_ExpectOkFalseNotZero(t *testing.T) {
+	t.Parallel()
+	pt := DefaultPricingTable()
+
+	r := &ParseResult{
+		PrimaryModel: "gpt-99-turbo",
+		CacheRead:    1_000_000,
+	}
+
+	roi, ok := ComputeCacheROI(r, pt)
+	assert.False(t, ok)
+	assert.Equal(t, 0.0, roi)
+}
+
+// TestComputeCacheROI_WhenCacheWriteNeverReadBack_ExpectNegativeROI covers
+// the case where a session paid to write a cache entry that was never read
+// back — a real, expected outcome (not an error), and must sort/render as a
+// signed negative dollar amount rather than being clamped to zero.
+func TestComputeCacheROI_WhenCacheWriteNeverReadBack_ExpectNegativeROI(t *testing.T) {
+	t.Parallel()
+	pt := DefaultPricingTable()
+
+	r := &ParseResult{
+		PrimaryModel:  "claude-sonnet-4",
+		CacheCreation: 1_000_000,
+		CacheRead:     0,
+	}
+
+	roi, ok := ComputeCacheROI(r, pt)
+	require.True(t, ok)
+	// claude-sonnet-4 cache write rate: $3.75/MTok, 1M written, 0 read back.
+	assert.InDelta(t, -3.75, roi, 0.0001)
+}
+
+// TestComputeCacheROI_WhenCacheReadWithoutWrite_ExpectPositiveROI is the
+// happy-path counterpart: cache reads with no offsetting write cost this
+// pass should show a clean net-positive savings figure.
+func TestComputeCacheROI_WhenCacheReadWithoutWrite_ExpectPositiveROI(t *testing.T) {
+	t.Parallel()
+	pt := DefaultPricingTable()
+
+	r := &ParseResult{
+		PrimaryModel: "claude-sonnet-4",
+		CacheRead:    1_000_000,
+	}
+
+	roi, ok := ComputeCacheROI(r, pt)
+	require.True(t, ok)
+	// claude-sonnet-4: (input $3.00 - cacheRead $0.30) * 1M/1e6 = $2.70 saved.
+	assert.InDelta(t, 2.70, roi, 0.0001)
 }

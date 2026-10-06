@@ -1,0 +1,12 @@
+{
+  "name": "ci-gates",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Pure decision-logic modules for gating GitHub Actions PR comments on actionable findings, plus a workflow-YAML invariant test for AC #7's blocking checks.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "js-yaml": "^4.1.0"
+  }
+}

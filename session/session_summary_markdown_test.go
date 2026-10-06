@@ -7,6 +7,7 @@ import (
 )
 
 func TestRenderSessionSummaryMarkdown_should_RenderEmptyStateText_When_AllSnapshotsZero(t *testing.T) {
+	t.Parallel()
 	md := RenderSessionSummaryMarkdown(
 		"empty-session",
 		"This session ended before any work was recorded.",
@@ -33,6 +34,7 @@ func TestRenderSessionSummaryMarkdown_should_RenderEmptyStateText_When_AllSnapsh
 }
 
 func TestRenderSessionSummaryMarkdown_should_ShowSubSecondDuration_When_DurationRoundsToZero(t *testing.T) {
+	t.Parallel()
 	start := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
 	stop := start.Add(400 * time.Millisecond)
 
@@ -53,6 +55,7 @@ func TestRenderSessionSummaryMarkdown_should_ShowSubSecondDuration_When_Duration
 }
 
 func TestRenderSessionSummaryMarkdown_should_RenderAllSectionsAndCorrectPercentages_When_Populated(t *testing.T) {
+	t.Parallel()
 	start := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
 	stop := start.Add(10 * time.Minute)
 

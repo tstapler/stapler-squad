@@ -1,0 +1,23 @@
+{
+  "id": "session:preview-destination-path",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "PreviewDestinationPath",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service.go",
+  "tested": true,
+  "testIds": [
+    "TestPreviewDestinationPath_GitHubURL_ReturnsExactPath",
+    "TestPreviewDestinationPath_GitHubURL_EnterpriseHostViaCachedAccount_ReturnsExactPath",
+    "TestPreviewDestinationPath_GitHubURL_UnrecognizedInput_ReturnsUnresolvedReason",
+    "TestPreviewDestinationPath_NewWorktree_ReturnsApproximatePrefix",
+    "TestPreviewDestinationPath_NewWorktree_MissingParams_ReturnsUnresolvedReason",
+    "TestPreviewDestinationPath_UnknownMode_ReturnsInvalidArgument",
+    "TestPreviewWorktreePath_ReturnsPrefixWithoutRandomSuffix",
+    "TestPreviewWorktreePath_ErrorsOnNonGitRepo",
+    "TestPreviewWorktreePath_DoesNotCreateRepoWhenPathIsMissing",
+    "TestPreviewWorktreePath_SanitizesSessionNameConsistently"
+  ],
+  "lastModified": "2026-08-06T11:19:57.834459239-07:00"
+}

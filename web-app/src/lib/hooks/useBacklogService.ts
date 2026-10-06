@@ -2,10 +2,11 @@
 
 import { useCallback, useRef, useEffect, useState, useMemo } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
+import { getErrorMessage } from "@/lib/utils/connectError";
+import { useAbortableEffect } from "@/lib/hooks/useAbortableEffect";
 import {
   BacklogService,
   BacklogItem as BacklogItemProto,
@@ -14,7 +15,9 @@ import {
   TriageTask as TriageTaskProto,
   BacklogStatusEvent as BacklogStatusEventProto,
   BacklogProgressNote as BacklogProgressNoteProto,
+  BacklogActivityNote as BacklogActivityNoteProto,
   PipelineMode as PipelineModeProto,
+  PipelineStageExecutor as PipelineStageExecutorProto,
 } from "@/gen/session/v1/backlog_pb";
 
 // ---------------------------------------------------------------------------
@@ -64,6 +67,14 @@ export interface LinkedSession {
   role: string;
   startedAt?: string;
   endedAt?: string;
+  /** Number of commits made since this session was spawned; 0 if none yet. */
+  commitCountSinceSpawn?: number;
+  /** Timestamp of the session's most recent commit, if it has made one. */
+  lastCommitAt?: string;
+  /** Full text (possibly multi-line) of the session's most recent commit message. */
+  lastCommitMessage?: string;
+  /** Timestamp of the session's most recent file modification, if any. */
+  lastFileTouchAt?: string;
   reviewVerdict?: {
     overallOutcome?: "PASS" | "PARTIAL" | "FAIL" | "PENDING" | "UNVERIFIABLE";
     summary?: string;
@@ -89,10 +100,62 @@ export interface LinkedSession {
    * current PipelineMode.contentHash to detect content drift.
    */
   pipelineModeSnapshotHash?: string;
+  /**
+   * Set alongside endedAt for a headless (triage/review) call: a coarse
+   * failure bucket ("shutdown", "timeout", "subprocess_start_error", "claude_not_found",
+   * "other"), or "" for a successful end. See classifyHeadlessCallError
+   * (server/services/backlog_service_triage.go) for the bucketing logic.
+   */
+  endReason?: string;
+  /**
+   * Absolute (server-local) path to a durable capture of the raw LLM output
+   * for a headless triage/review call that errored or failed to parse — see
+   * session.WriteHeadlessFailureCapture. "" when the call succeeded and
+   * parsed cleanly, or nothing was captured.
+   */
+  failureCapturePath?: string;
+  /**
+   * Concrete program/model this stage actually ran on (never the raw
+   * `family:sonnet`-style alias, never "" for a session that ran) — see
+   * ItemSession.resolved_program/resolved_model (Epic 2.1). Empty for
+   * sessions that predate this field.
+   */
+  resolvedProgram?: string;
+  resolvedModel?: string;
+  /**
+   * SHA-256 (hex, truncated 16 chars) of ComputeExecutorHash(program, model)
+   * for the RAW, pre-resolution (program, model) pair this stage was
+   * configured with at spawn time — "" for a session that predates this
+   * field. Compared against the mode's dense
+   * PipelineMode.stageExecutorHashes[role] to detect executor-config drift —
+   * see resolveExecutorProvenance (pipelineModeDisplay.ts).
+   */
+  executorSnapshotHash?: string;
+  /**
+   * The program this stage was actually configured to run on at spawn time
+   * (before any availability fallback) — "" when no headless-caller
+   * substitution could occur (e.g. a work-stage session). Paired with
+   * executorFallbackReason below.
+   */
+  configuredProgram?: string;
+  /**
+   * Non-empty only when resolveHeadlessCaller fell back away from
+   * configuredProgram at call time (e.g. "gemini_unavailable") — a
+   * persisted, UI-visible fallback marker (Story 2.3.1), never only a log
+   * line.
+   */
+  executorFallbackReason?: string;
 }
 
 export interface BacklogItem {
   id: string;
+  /**
+   * Externally-shareable identifier (a "bl_"-prefixed ULID). Empty for rows
+   * created before the public_id backfill (see
+   * session/storage_backlog.go's BackfillBacklogItemPublicIDs) — callers
+   * must fall back to `id` in that case.
+   */
+  publicId?: string;
   title: string;
   description?: string;
   status: BacklogItemStatus;
@@ -105,8 +168,21 @@ export interface BacklogItem {
   autoSpawnSession: boolean;
   /** When true, a PR is created automatically (same one-shot prompt as the manual Review Queue "Create PR" button) once a work session reaches TASK_COMPLETE — no manual click required. */
   autoCreatePR: boolean;
+  /** When true, a plan TriggerTriage produces is approved automatically (mirroring a manual "Approve Plan" click) once its artifacts exist on disk — no manual click required. */
+  autoApprovePlan: boolean;
   planApproved: boolean;
   planArtifactsPath?: string;
+  /**
+   * Free-text reason from the most recent RejectPlan call. Cleared on
+   * ApprovePlan, on the next TriggerTriage completion (fresh or
+   * feedback-driven), and on any backward transition to idea/refining.
+   * Undefined/"" means "no outstanding rejection" — see
+   * derivePlanReviewStatus (web-app/src/lib/backlog/planReviewStatus.ts)
+   * and project_plans/plan-approval-ux/decisions/ADR-001.
+   */
+  planRejectionReason?: string;
+  /** Timestamp of the most recent RejectPlan call, paired with planRejectionReason above. */
+  planRejectedAt?: string;
   acCriteria: AcCriterion[];
   linkedSessions: LinkedSession[];
   notes?: string;
@@ -135,6 +211,8 @@ export interface BacklogItem {
   statusEvents: StatusEvent[];
   /** Implementer's report_progress audit trail (audit log) */
   progressNotes: ProgressNote[];
+  /** Free-form, timestamped, attributed notes posted via post_backlog_update (ungated audit log — see ADR-001, backlog-item-activity-log). */
+  activityNotes: ActivityNote[];
   /** Sum of estimated USD cost across all linked sessions */
   totalEstimatedCostUsd: number;
   /** GitHub PR URL when item is in pr_pending status */
@@ -171,6 +249,16 @@ export interface BacklogItem {
    */
   reworkCapOverride?: number;
   /**
+   * Per-item, optional soft-budget-warning threshold in USD. Undefined means
+   * no threshold is configured and no warning ever fires for this item — 0
+   * is a legitimate configured threshold, distinct from unset. See
+   * ItemBudgetWarning.tsx and session.EvaluateBudgetThreshold.
+   */
+  costBudgetThresholdUsd?: number;
+  /** A report_duplicate claim awaits operator confirmation (item is in review). */
+  duplicatePending?: boolean;
+  duplicateRef?: string;
+  /**
    * Live-update generation counter (Epic 6.1, backlog-event-driven-updates).
    * Populated only by `useWatchBacklogItems` — incremented once per genuine
    * live (non-snapshot) `BacklogItemEvent` for this item, so
@@ -204,6 +292,25 @@ export interface PipelineMode {
   initialPromptTemplate: string;
   /** SHA-256 (hex, truncated to 16 chars) over the 9 content-template fields, computed server-side. */
   contentHash: string;
+  /**
+   * Per-stage {program, model} override, keyed by StageRole ("triage",
+   * "review", "work"). A missing key or empty program/model means "inherit
+   * the default executor for that role" — see session.PipelineStageExecutor.
+   * Optional so pre-existing call sites that construct a PipelineMode
+   * without it (older tests, fixtures) keep compiling.
+   */
+  stageExecutors?: Record<string, { program: string; model: string }>;
+  /**
+   * DERIVED, server-computed: session.ComputeExecutorHash(program, model)
+   * for every StageRole ("triage"/"review"/"work"), including roles with no
+   * configured override — a DENSE map, never sparse. An unconfigured role's
+   * entry equals ComputeExecutorHash("", ""), the same value an
+   * unconfigured session's own executorSnapshotHash computes. See
+   * resolveExecutorProvenance (pipelineModeDisplay.ts) — comparing a
+   * session's executorSnapshotHash against a sparse map would falsely flag
+   * every ordinary default-executor session as drifted.
+   */
+  stageExecutorHashes?: Record<string, string>;
 }
 
 /**
@@ -225,6 +332,15 @@ export interface PipelineModeInput {
   triagePromptTemplate?: string;
   reviewPromptTemplate?: string;
   initialPromptTemplate?: string;
+  /** Per-stage {program, model} override — see PipelineMode.stageExecutors. */
+  stageExecutors?: Record<string, { program: string; model: string }>;
+  /**
+   * Bypasses the save-time pricing-table cross-check for an unrecognized
+   * literal model ID (Story 1.3.1's CodeInvalidArgument rejection) — set
+   * when the operator confirms via PipelineModeForm's "use it anyway"
+   * override (Task 5.1.1h).
+   */
+  forceUnknownModel?: boolean;
 }
 
 /**
@@ -255,6 +371,15 @@ export interface ProgressNote {
   createdAt?: string;
 }
 
+/** A single post_backlog_update call — an ungated, free-form, attributed note. */
+export interface ActivityNote {
+  id: string;
+  message: string;
+  authorSessionUuid: string;
+  authorSessionTitle: string;
+  createdAt?: string;
+}
+
 export interface BacklogItemInput {
   title: string;
   description?: string;
@@ -264,6 +389,7 @@ export interface BacklogItemInput {
   skipReviewGate?: boolean;
   autoSpawnSession?: boolean;
   autoCreatePR?: boolean;
+  autoApprovePlan?: boolean;
   acCriteria?: AcCriterion[];
   notes?: string;
   skipTriage?: boolean;
@@ -273,6 +399,8 @@ export interface BacklogItemInput {
   category?: string;
   /** Per-item rework-cap override. 0 = unlimited for this item, >0 = this item's own cap. See BacklogItem.reworkCapOverride. */
   reworkCapOverride?: number;
+  /** Per-item soft-budget-warning threshold in USD. Undefined = not configured. See BacklogItem.costBudgetThresholdUsd. */
+  costBudgetThresholdUsd?: number;
   /**
    * Manually associate an existing PR with this item (the "escape hatch" for
    * a PR that shipped via an out-of-band worktree). Must be set together
@@ -281,6 +409,14 @@ export interface BacklogItemInput {
    */
   prUrl?: string;
   prNumber?: number;
+}
+
+/** LLM-structured read of a free-text message — see ParseBacklogItemIntent. */
+export interface ParsedBacklogItemDraft {
+  title: string;
+  description: string;
+  acceptanceCriteria: string[];
+  confidence: number;
 }
 
 export interface ListBacklogItemsFilter {
@@ -316,11 +452,22 @@ function mapItemSession(s: ItemSessionProto): LinkedSession {
     role: s.sessionRole,
     startedAt: s.startedAt ? new Date(Number(s.startedAt.seconds) * 1000).toISOString() : undefined,
     endedAt: s.endedAt ? new Date(Number(s.endedAt.seconds) * 1000).toISOString() : undefined,
+    commitCountSinceSpawn: s.commitCountSinceSpawn ?? 0,
+    lastCommitAt: s.lastCommitAt ? timestampDate(s.lastCommitAt).toISOString() : undefined,
+    lastCommitMessage: s.lastCommitMessage || undefined,
+    lastFileTouchAt: s.lastFileTouchAt ? timestampDate(s.lastFileTouchAt).toISOString() : undefined,
     estimatedCostUsd: s.estimatedCostUsd ?? 0,
     worktreeBranch: s.worktreeBranch || undefined,
     worktreePath: s.worktreePath || undefined,
     pipelineModeSnapshot: s.pipelineModeSnapshot ?? "",
     pipelineModeSnapshotHash: s.pipelineModeSnapshotHash ?? "",
+    endReason: s.endReason || undefined,
+    failureCapturePath: s.failureCapturePath || undefined,
+    resolvedProgram: s.resolvedProgram || undefined,
+    resolvedModel: s.resolvedModel || undefined,
+    executorSnapshotHash: s.executorSnapshotHash ?? "",
+    configuredProgram: s.configuredProgram || undefined,
+    executorFallbackReason: s.executorFallbackReason || undefined,
   };
 
   // Map review verdict if present
@@ -386,6 +533,28 @@ function mapProgressNote(n: BacklogProgressNoteProto): ProgressNote {
   };
 }
 
+function mapActivityNote(n: BacklogActivityNoteProto): ActivityNote {
+  return {
+    id: n.id,
+    message: n.message,
+    authorSessionUuid: n.authorSessionUuid,
+    authorSessionTitle: n.authorSessionTitle,
+    createdAt: n.createdAt ? new Date(Number(n.createdAt.seconds) * 1000).toISOString() : undefined,
+  };
+}
+
+/** Strips the protobuf Message<> wrapper down to the plain {program, model} shape PipelineModeForm consumes. */
+function mapStageExecutors(
+  raw: { [key: string]: PipelineStageExecutorProto } | undefined
+): Record<string, { program: string; model: string }> {
+  const result: Record<string, { program: string; model: string }> = {};
+  if (!raw) return result;
+  for (const [role, executor] of Object.entries(raw)) {
+    result[role] = { program: executor.program, model: executor.model };
+  }
+  return result;
+}
+
 function mapPipelineMode(p: PipelineModeProto): PipelineMode {
   return {
     id: p.id,
@@ -403,6 +572,8 @@ function mapPipelineMode(p: PipelineModeProto): PipelineMode {
     reviewPromptTemplate: p.reviewPromptTemplate,
     initialPromptTemplate: p.initialPromptTemplate,
     contentHash: p.contentHash,
+    stageExecutors: mapStageExecutors(p.stageExecutors),
+    stageExecutorHashes: { ...p.stageExecutorHashes },
   };
 }
 
@@ -459,6 +630,7 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
 
   return {
     id: p.id,
+    publicId: p.publicId || undefined,
     title: p.title,
     description: p.description || undefined,
     status: (p.status || "idea") as BacklogItemStatus,
@@ -468,8 +640,13 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     skipReviewGate: p.skipReviewGate,
     autoSpawnSession: p.autoSpawnSession,
     autoCreatePR: p.autoCreatePr,
+    autoApprovePlan: p.autoApprovePlan,
     planApproved: p.planApproved,
     planArtifactsPath: p.planArtifactsPath || undefined,
+    planRejectionReason: p.planRejectionReason || undefined,
+    // timestampDate, not a hand-rolled `Number(seconds) * 1000` — see the
+    // createdAt/updatedAt comment above for why.
+    planRejectedAt: p.planRejectedAt ? timestampDate(p.planRejectedAt).toISOString() : undefined,
     acCriteria: (p.acceptanceCriteria ?? []).map(mapAcCriterion),
     linkedSessions,
     notes: p.notes || undefined,
@@ -488,12 +665,16 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     triageResult,
     statusEvents: (p.statusEvents ?? []).map(mapStatusEvent),
     progressNotes: (p.progressNotes ?? []).map(mapProgressNote),
+    activityNotes: (p.activityNotes ?? []).map(mapActivityNote),
     totalEstimatedCostUsd: p.totalEstimatedCostUsd ?? 0,
     prUrl: p.prUrl || undefined,
     prNumber: p.prNumber || undefined,
     pipelineMode: p.pipelineMode || undefined,
     category: p.category || undefined,
     reworkCapOverride: p.reworkCapOverride,
+    costBudgetThresholdUsd: p.costBudgetThresholdUsd,
+    duplicatePending: p.duplicatePending,
+    duplicateRef: p.duplicateRef,
     externalId: p.externalId || undefined,
     externalUrl: p.externalUrl || undefined,
     labels: p.labels ?? [],
@@ -518,12 +699,57 @@ function toProtoAcCriteria(criteria: AcCriterion[]): AcCriterionProto[] {
 // GitHub picker domain types
 // ---------------------------------------------------------------------------
 
+function toClaimedElsewhere(claim: { externalUrl: string; claimingHostId: string; itemDeepLink: string; disputed: boolean }): ClaimedElsewhere {
+  return {
+    externalUrl: claim.externalUrl,
+    claimingHostId: claim.claimingHostId,
+    itemDeepLink: claim.itemDeepLink,
+    disputed: claim.disputed,
+  };
+}
+
+export interface ImportGitHubIssueOptions {
+  repoPath?: string;
+  skipPlanning?: boolean;
+  /**
+   * Set to import even though another host already claimed the issue. The
+   * server rejects a reason under 5 characters and audit-logs it.
+   */
+  overrideReason?: string;
+}
+
+/** Another host already claimed the issue (cross_host_claim_dedup); no item was created. */
+export interface ClaimedElsewhere {
+  externalUrl: string;
+  claimingHostId: string;
+  /** The claiming host's ssq:// deep link to its item. */
+  itemDeepLink: string;
+  disputed: boolean;
+}
+
+/** Result of a CheckCrossHostClaim call. `claim` is set only when another host holds the URL. */
+export interface CrossHostClaimStatus {
+  /** False while cross_host_claim_dedup is off: render nothing. */
+  enabled: boolean;
+  /** True when the answer is definitive; enabled && !checked means "could not confirm". */
+  checked: boolean;
+  claim?: ClaimedElsewhere;
+  /** Unix seconds of the claim, 0 when unknown. */
+  claimedAtUnix: number;
+}
+
+export type ImportGitHubIssueResult =
+  | { item: BacklogItem; triageTriggered: boolean; alreadyExisted: boolean; alreadyClaimedElsewhere?: undefined }
+  | { alreadyClaimedElsewhere: ClaimedElsewhere; item?: undefined; triageTriggered?: undefined; alreadyExisted?: undefined };
+
 export interface GitHubRepo {
   owner: string;
   repo: string;
   isLocal: boolean;
   localPath: string;
   description: string;
+  /** GitHub host this repo lives on ("" means github.com). */
+  host: string;
 }
 
 export interface GitHubIssue {
@@ -537,6 +763,8 @@ export interface GitHubIssue {
   createdAt?: string;
   updatedAt?: string;
   isPR: boolean;
+  /** GitHub host this issue lives on ("" means github.com). */
+  host: string;
 }
 
 export class GitHubAuthError extends Error {
@@ -554,11 +782,28 @@ interface UseBacklogServiceReturn {
   listBacklogItems: (filter?: ListBacklogItemsFilter) => Promise<BacklogItem[]>;
   getBacklogItem: (id: string) => Promise<BacklogItem | null>;
   createBacklogItem: (data: BacklogItemInput) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
-  importGitHubIssue: (issueUrl: string, options?: { repoPath?: string; skipPlanning?: boolean }) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
+  /** One turn of chat-based backlog creation/refinement. Empty existingItemId creates a new item (delegates to createBacklogItem); a set existingItemId delegates to TriggerTriage's feedback-driven refine path. */
+  createBacklogItemFromChat: (message: string, existingItemId?: string) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
+  /**
+   * Runs a free-text message through an LLM to produce a structured draft
+   * (title/description/acceptance criteria) for the caller to review/edit —
+   * does NOT create anything. Returns null on any failure (call error, or a
+   * set response.error) so the caller can fall back to raw-text creation via
+   * createBacklogItemFromChat — never throws.
+   */
+  parseBacklogItemIntent: (message: string) => Promise<ParsedBacklogItemDraft | null>;
+  importGitHubIssue: (issueUrl: string, options?: ImportGitHubIssueOptions) => Promise<ImportGitHubIssueResult | null>;
+  /** Null on any RPC failure: the claim banner degrades to nothing. */
+  checkCrossHostClaim: (externalUrl: string, options?: { localOnly?: boolean }) => Promise<CrossHostClaimStatus | null>;
+  /** Claims other hosts hold in the local index; empty on failure or when the feature is off. */
+  listForeignClaims: () => Promise<ClaimedElsewhere[]>;
+  /** Clears the disputed flag for externalUrl. Throws on failure so the form can show it. */
+  resolveClaimDispute: (externalUrl: string, reason: string) => Promise<void>;
   searchGitHubRepos: (query: string, limit?: number) => Promise<GitHubRepo[]>;
-  listGitHubIssues: (owner: string, repo: string, options?: { state?: string; search?: string; limit?: number }) => Promise<GitHubIssue[]>;
+  listGitHubIssues: (owner: string, repo: string, options?: { state?: string; search?: string; limit?: number; host?: string }) => Promise<GitHubIssue[]>;
   updateBacklogItem: (id: string, data: Partial<BacklogItemInput>) => Promise<BacklogItem | null>;
   archiveBacklogItem: (id: string) => Promise<boolean>;
+  unarchiveBacklogItem: (id: string) => Promise<boolean>;
   deleteBacklogItem: (id: string) => Promise<boolean>;
   transitionStatus: (
     id: string,
@@ -589,6 +834,13 @@ interface UseBacklogServiceReturn {
   triggerTriage: (id: string, feedback?: string) => Promise<{ itemSessionId: string } | null>;
   cancelTriage: (id: string) => Promise<boolean>;
   approvePlan: (id: string) => Promise<BacklogItem | null>;
+  /**
+   * Persists a rejection reason only — does not itself trigger regeneration.
+   * See project_plans/plan-approval-ux/decisions/ADR-002: the frontend
+   * closes the "feedback should be actionable" gap with a separate, explicit
+   * "Regenerate Plan with This Feedback" button that calls triggerTriage.
+   */
+  rejectPlan: (id: string, reason: string) => Promise<BacklogItem | null>;
   overrideVerdict: (id: string, overrideReason: string, toStatus?: string) => Promise<boolean>;
   triggerReReview: (id: string) => Promise<boolean>;
   /** Self-service "Ship PR" action — runs the one-shot PR-creation prompt for an item in review with no PR yet. */
@@ -627,11 +879,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
   const clearError = useCallback(() => setLastError(null), []);
 
   useEffect(() => {
-    const transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-      interceptors: [createAuthInterceptor()],
-    });
-    clientRef.current = createClient(BacklogService, transport);
+    clientRef.current = createClient(BacklogService, getConnectTransport());
   }, []);
 
   const listBacklogItems = useCallback(
@@ -688,6 +936,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           skipReviewGate: data.skipReviewGate ?? false,
           autoSpawnSession: data.autoSpawnSession ?? false,
           autoCreatePr: data.autoCreatePR ?? false,
+          autoApprovePlan: data.autoApprovePlan ?? false,
           acceptanceCriteria: toProtoAcCriteria(data.acCriteria ?? []),
           notes: data.notes ?? "",
           skipTriage: data.skipTriage ?? false,
@@ -699,7 +948,51 @@ export function useBacklogService(): UseBacklogServiceReturn {
           : null;
       } catch (err) {
         console.error("[useBacklogService] createBacklogItem:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to create backlog item.")));
+        return null;
+      }
+    },
+    []
+  );
+
+  const createBacklogItemFromChat = useCallback(
+    async (message: string, existingItemId?: string): Promise<{ item: BacklogItem; triageTriggered: boolean } | null> => {
+      if (!clientRef.current) return null;
+      try {
+        setLastError(null);
+        const resp = await clientRef.current.createBacklogItemFromChat({
+          message,
+          existingItemId: existingItemId ?? "",
+        });
+        return resp.item
+          ? { item: mapBacklogItem(resp.item), triageTriggered: resp.triageTriggered }
+          : null;
+      } catch (err) {
+        console.error("[useBacklogService] createBacklogItemFromChat:", err);
+        setLastError(new Error(getErrorMessage(err, "Failed to create backlog item from chat.")));
+        return null;
+      }
+    },
+    []
+  );
+
+  const parseBacklogItemIntent = useCallback(
+    // repo_path is intentionally omitted: the omnibar has no "current repo"
+    // context available before parsing, and the request field is optional
+    // (see its proto doc) — the LLM parses from message text alone.
+    async (message: string): Promise<ParsedBacklogItemDraft | null> => {
+      if (!clientRef.current) return null;
+      try {
+        const resp = await clientRef.current.parseBacklogItemIntent({ message });
+        if (resp.error || !resp.draft) return null;
+        return {
+          title: resp.draft.title,
+          description: resp.draft.description,
+          acceptanceCriteria: resp.draft.acceptanceCriteria,
+          confidence: resp.draft.confidence,
+        };
+      } catch (err) {
+        console.error("[useBacklogService] parseBacklogItemIntent:", err);
         return null;
       }
     },
@@ -721,18 +1014,20 @@ export function useBacklogService(): UseBacklogServiceReturn {
           skipReviewGate: data.skipReviewGate,
           autoSpawnSession: data.autoSpawnSession,
           autoCreatePr: data.autoCreatePR,
+          autoApprovePlan: data.autoApprovePlan,
           acceptanceCriteria: data.acCriteria ? toProtoAcCriteria(data.acCriteria) : undefined,
           notes: data.notes,
           pipelineMode: data.pipelineMode,
           category: data.category,
           reworkCapOverride: data.reworkCapOverride,
+          costBudgetThresholdUsd: data.costBudgetThresholdUsd,
           prUrl: data.prUrl,
           prNumber: data.prNumber,
         });
         return resp.item ? mapBacklogItem(resp.item) : null;
       } catch (err) {
         console.error("[useBacklogService] updateBacklogItem:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to update backlog item.")));
         return null;
       }
     },
@@ -746,7 +1041,19 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return true;
     } catch (err) {
       console.error("[useBacklogService] archiveBacklogItem:", err);
-      setLastError(err instanceof Error ? err : new Error(String(err)));
+      setLastError(new Error(getErrorMessage(err, "Failed to archive backlog item.")));
+      throw err;
+    }
+  }, []);
+
+  const unarchiveBacklogItem = useCallback(async (id: string): Promise<boolean> => {
+    if (!clientRef.current) return false;
+    try {
+      await clientRef.current.unarchiveBacklogItem({ itemId: id });
+      return true;
+    } catch (err) {
+      console.error("[useBacklogService] unarchiveBacklogItem:", err);
+      setLastError(new Error(getErrorMessage(err, "Failed to unarchive backlog item.")));
       throw err;
     }
   }, []);
@@ -758,7 +1065,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return true;
     } catch (err) {
       console.error("[useBacklogService] deleteBacklogItem:", err);
-      setLastError(err instanceof Error ? err : new Error(String(err)));
+      setLastError(new Error(getErrorMessage(err, "Failed to delete backlog item.")));
       throw err;
     }
   }, []);
@@ -788,7 +1095,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
         return resp.item ? mapBacklogItem(resp.item) : null;
       } catch (err) {
         console.error("[useBacklogService] transitionStatus:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to transition backlog item status.")));
         throw err;
       }
     },
@@ -808,7 +1115,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
         return { sessionUuid: resp.sessionUuid, queued: resp.queued };
       } catch (err) {
         console.error("[useBacklogService] spawnSessionFromItem:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to spawn session from item.")));
         throw err;
       }
     },
@@ -823,7 +1130,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
         return { itemSessionId: resp.itemSession?.id ?? "" };
       } catch (err) {
         console.error("[useBacklogService] triggerTriage:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to trigger triage.")));
         throw err;
       }
     },
@@ -837,7 +1144,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return resp.cancelled;
     } catch (err) {
       console.error("[useBacklogService] cancelTriage:", err);
-      setLastError(err instanceof Error ? err : new Error(String(err)));
+      setLastError(new Error(getErrorMessage(err, "Failed to cancel triage.")));
       throw err;
     }
   }, []);
@@ -849,7 +1156,19 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return resp.item ? mapBacklogItem(resp.item) : null;
     } catch (err) {
       console.error("[useBacklogService] approvePlan:", err);
-      setLastError(err instanceof Error ? err : new Error(String(err)));
+      setLastError(new Error(getErrorMessage(err, "Failed to approve plan.")));
+      throw err;
+    }
+  }, []);
+
+  const rejectPlan = useCallback(async (id: string, reason: string): Promise<BacklogItem | null> => {
+    if (!clientRef.current) return null;
+    try {
+      const resp = await clientRef.current.rejectPlan({ itemId: id, reason });
+      return resp.item ? mapBacklogItem(resp.item) : null;
+    } catch (err) {
+      console.error("[useBacklogService] rejectPlan:", err);
+      setLastError(new Error(getErrorMessage(err, "Failed to reject plan.")));
       throw err;
     }
   }, []);
@@ -866,7 +1185,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
         return true;
       } catch (err) {
         console.error("[useBacklogService] overrideVerdict:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to override verdict.")));
         throw err;
       }
     },
@@ -880,7 +1199,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return true;
     } catch (err) {
       console.error("[useBacklogService] triggerReReview:", err);
-      setLastError(err instanceof Error ? err : new Error(String(err)));
+      setLastError(new Error(getErrorMessage(err, "Failed to trigger re-review.")));
       throw err;
     }
   }, []);
@@ -901,7 +1220,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return { prUrl: resp.prUrl };
     } catch (err) {
       console.error("[useBacklogService] triggerShipPR:", err);
-      setLastError(err instanceof Error ? err : new Error(String(err)));
+      setLastError(new Error(getErrorMessage(err, "Failed to ship PR.")));
       throw err;
     }
   }, []);
@@ -915,7 +1234,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
         return resp.item ? mapBacklogItem(resp.item) : null;
       } catch (err) {
         console.error("[useBacklogService] submitManualReview:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to submit manual review.")));
         throw err;
       }
     },
@@ -961,6 +1280,8 @@ export function useBacklogService(): UseBacklogServiceReturn {
         triagePromptTemplate: data.triagePromptTemplate ?? "",
         reviewPromptTemplate: data.reviewPromptTemplate ?? "",
         initialPromptTemplate: data.initialPromptTemplate ?? "",
+        stageExecutors: data.stageExecutors ?? {},
+        forceUnknownModel: data.forceUnknownModel ?? false,
       });
       if (!resp.item) throw new Error("createPipelineMode: server returned no item");
       return mapPipelineMode(resp.item);
@@ -988,6 +1309,9 @@ export function useBacklogService(): UseBacklogServiceReturn {
           triagePromptTemplate: data.triagePromptTemplate,
           reviewPromptTemplate: data.reviewPromptTemplate,
           initialPromptTemplate: data.initialPromptTemplate,
+          // undefined = leave stage executors untouched; present (even {}) = replace.
+          stageExecutors: data.stageExecutors !== undefined ? { values: data.stageExecutors } : undefined,
+          forceUnknownModel: data.forceUnknownModel,
         });
         if (!resp.item) throw new Error("updatePipelineMode: server returned no item");
         return mapPipelineMode(resp.item);
@@ -1010,11 +1334,47 @@ export function useBacklogService(): UseBacklogServiceReturn {
     }
   }, []);
 
+  const checkCrossHostClaim = useCallback(
+    async (externalUrl: string, options?: { localOnly?: boolean }): Promise<CrossHostClaimStatus | null> => {
+      if (!clientRef.current) return null;
+      try {
+        const resp = await clientRef.current.checkCrossHostClaim({ externalUrl, localOnly: options?.localOnly ?? false });
+        return {
+          enabled: resp.enabled,
+          checked: resp.checked,
+          claim: resp.claim ? toClaimedElsewhere(resp.claim) : undefined,
+          claimedAtUnix: Number(resp.claimedAtUnix),
+        };
+      } catch (err) {
+        console.warn("[useBacklogService] checkCrossHostClaim:", err);
+        return null;
+      }
+    },
+    []
+  );
+
+  const listForeignClaims = useCallback(async (): Promise<ClaimedElsewhere[]> => {
+    if (!clientRef.current) return [];
+    try {
+      const resp = await clientRef.current.listForeignClaims({});
+      return resp.enabled ? resp.claims.map(toClaimedElsewhere) : [];
+    } catch (err) {
+      console.warn("[useBacklogService] listForeignClaims:", err);
+      return [];
+    }
+  }, []);
+
+  const resolveClaimDispute = useCallback(async (externalUrl: string, reason: string): Promise<void> => {
+    if (!clientRef.current) throw new Error("Backlog service unavailable.");
+    try {
+      await clientRef.current.resolveClaimDispute({ externalUrl, reason });
+    } catch (err) {
+      throw new Error(getErrorMessage(err, "Failed to resolve claim dispute."));
+    }
+  }, []);
+
   const importGitHubIssue = useCallback(
-    async (
-      issueUrl: string,
-      options?: { repoPath?: string; skipPlanning?: boolean }
-    ): Promise<{ item: BacklogItem; triageTriggered: boolean } | null> => {
+    async (issueUrl: string, options?: ImportGitHubIssueOptions): Promise<ImportGitHubIssueResult | null> => {
       if (!clientRef.current) return null;
       try {
         setLastError(null);
@@ -1022,13 +1382,30 @@ export function useBacklogService(): UseBacklogServiceReturn {
           issueUrl,
           repoPath: options?.repoPath ?? "",
           skipPlanning: options?.skipPlanning ?? false,
+          override: options?.overrideReason !== undefined,
+          overrideReason: options?.overrideReason ?? "",
         });
+        if (resp.alreadyClaimedElsewhere) {
+          const claim = resp.alreadyClaimedElsewhere;
+          return {
+            alreadyClaimedElsewhere: {
+              externalUrl: claim.externalUrl,
+              claimingHostId: claim.claimingHostId,
+              itemDeepLink: claim.itemDeepLink,
+              disputed: claim.disputed,
+            },
+          };
+        }
         return resp.item
-          ? { item: mapBacklogItem(resp.item), triageTriggered: resp.triageTriggered }
+          ? {
+              item: mapBacklogItem(resp.item),
+              triageTriggered: resp.triageTriggered,
+              alreadyExisted: resp.alreadyExisted,
+            }
           : null;
       } catch (err) {
         console.error("[useBacklogService] importGitHubIssue:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to import GitHub issue.")));
         return null;
       }
     },
@@ -1046,6 +1423,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           isLocal: r.isLocal,
           localPath: r.localPath,
           description: r.description,
+          host: r.host,
         }));
       } catch (err) {
         if (err instanceof Error && err.message.toLowerCase().includes("token")) {
@@ -1061,7 +1439,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
     async (
       owner: string,
       repo: string,
-      options?: { state?: string; search?: string; limit?: number }
+      options?: { state?: string; search?: string; limit?: number; host?: string }
     ): Promise<GitHubIssue[]> => {
       if (!clientRef.current) return [];
       try {
@@ -1071,6 +1449,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           state: options?.state ?? "open",
           search: options?.search ?? "",
           limit: options?.limit ?? 30,
+          host: options?.host ?? "",
         });
         return resp.issues.map((i) => ({
           number: i.number,
@@ -1083,6 +1462,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           createdAt: i.createdAt ? new Date(Number(i.createdAt.seconds) * 1000).toISOString() : undefined,
           updatedAt: i.updatedAt ? new Date(Number(i.updatedAt.seconds) * 1000).toISOString() : undefined,
           isPR: i.isPr ?? false,
+          host: i.host,
         }));
       } catch (err) {
         if (err instanceof Error && err.message.toLowerCase().includes("token")) {
@@ -1102,17 +1482,24 @@ export function useBacklogService(): UseBacklogServiceReturn {
       listBacklogItems,
       getBacklogItem,
       createBacklogItem,
+      createBacklogItemFromChat,
+      parseBacklogItemIntent,
       importGitHubIssue,
+      checkCrossHostClaim,
+      listForeignClaims,
+      resolveClaimDispute,
       searchGitHubRepos,
       listGitHubIssues,
       updateBacklogItem,
       archiveBacklogItem,
+      unarchiveBacklogItem,
       deleteBacklogItem,
       transitionStatus,
       spawnSessionFromItem,
       triggerTriage,
       cancelTriage,
       approvePlan,
+      rejectPlan,
       overrideVerdict,
       triggerReReview,
       triggerShipPR,
@@ -1154,41 +1541,34 @@ export function useBacklogSessionIndex(): UseBacklogSessionIndexReturn {
   const [index, setIndex] = useState<Map<string, BacklogIndexEntry>>(new Map());
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-      interceptors: [createAuthInterceptor()],
-    });
-    const client = createClient(BacklogService, transport);
+  useAbortableEffect(async (signal) => {
+    const client = createClient(BacklogService, getConnectTransport());
 
-    let cancelled = false;
-    client
-      .getSessionBacklogIndex({})
-      .then((resp) => {
-        if (cancelled) return;
-        const map = new Map<string, BacklogIndexEntry>();
-        for (const e of resp.entries ?? []) {
-          if (e.sessionUuid) {
-            map.set(e.sessionUuid, {
-              itemId: e.itemId,
-              itemTitle: e.itemTitle,
-              itemStatus: e.itemStatus,
-              sessionRole: e.sessionRole,
-            });
-          }
+    try {
+      const resp = await client.getSessionBacklogIndex({}, { signal });
+      if (signal.aborted) return;
+      // Entries are ordered newest-first (see GetAllItemSessionsWithBacklogInfo's doc
+      // comment in ent_repository_backlog.go) — keep only the first entry seen per
+      // session UUID so a re-parented session (e.g. triage -> work) resolves to its
+      // current role, not a stale one from an earlier row.
+      const map = new Map<string, BacklogIndexEntry>();
+      for (const e of resp.entries ?? []) {
+        if (e.sessionUuid && !map.has(e.sessionUuid)) {
+          map.set(e.sessionUuid, {
+            itemId: e.itemId,
+            itemTitle: e.itemTitle,
+            itemStatus: e.itemStatus,
+            sessionRole: e.sessionRole,
+          });
         }
-        setIndex(map);
-      })
-      .catch((err) => {
-        console.error("[useBacklogSessionIndex] failed:", err);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
+      }
+      setIndex(map);
+    } catch (err) {
+      if (signal.aborted) return;
+      console.error("[useBacklogSessionIndex] failed:", err);
+    } finally {
+      if (!signal.aborted) setLoading(false);
+    }
   }, []);
 
   return { index, loading };

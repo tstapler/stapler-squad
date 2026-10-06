@@ -6,7 +6,14 @@ export const container = style({
   height: "100%",
   overflow: "hidden",
   background: vars.color.terminalBackground,
+  containerType: "inline-size",
+  containerName: "filesTab",
 });
+
+// Narrow-pane breakpoint. Uses a container query against `container` above so this
+// activates based on the session card's own width, not the browser viewport — a
+// pane can be "mobile-narrow" inside a wide desktop window.
+const NARROW = "(max-width: 767px)";
 
 export const treePane = style({
   display: "flex",
@@ -14,8 +21,8 @@ export const treePane = style({
   flexShrink: 0,
   borderRight: `1px solid ${vars.color.borderColor}`,
   overflow: "hidden",
-  "@media": {
-    "(max-width: 767px)": {
+  "@container": {
+    [`filesTab ${NARROW}`]: {
       // Inline width (panel.width px) would leave a black gap — override to fill.
       width: "100% !important",
       borderRight: "none",
@@ -31,16 +38,16 @@ export const treePaneCollapsed = style({
 });
 
 export const mobilePaneHidden = style({
-  "@media": {
-    "(max-width: 767px)": {
+  "@container": {
+    [`filesTab ${NARROW}`]: {
       display: "none !important",
     },
   },
 });
 
 export const mobilePaneVisible = style({
-  "@media": {
-    "(max-width: 767px)": {
+  "@container": {
+    [`filesTab ${NARROW}`]: {
       display: "flex !important",
       flex: 1,
       width: "100%",
@@ -51,8 +58,8 @@ export const mobilePaneVisible = style({
 
 export const mobileBackButton = style({
   display: "none",
-  "@media": {
-    "(max-width: 767px)": {
+  "@container": {
+    [`filesTab ${NARROW}`]: {
       display: "flex",
       alignItems: "center",
       gap: 4,
@@ -170,8 +177,8 @@ export const treeWrapper = style({
 
 // Fix 2: hide collapse/expand panel buttons on mobile — toolbar has too many buttons
 export const toolbarButtonMobileHidden = style({
-  "@media": {
-    "(max-width: 767px)": {
+  "@container": {
+    [`filesTab ${NARROW}`]: {
       display: "none",
     },
   },
@@ -180,8 +187,8 @@ export const toolbarButtonMobileHidden = style({
 // Fix 5: search icon button shown only on mobile, in the content pane header
 export const mobileSearchButton = style({
   display: "none",
-  "@media": {
-    "(max-width: 767px)": {
+  "@container": {
+    [`filesTab ${NARROW}`]: {
       display: "flex",
       alignItems: "center",
       justifyContent: "center",

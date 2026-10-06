@@ -26,7 +26,7 @@ echo "  2. Open browser console (F12)"
 echo "  3. Watch for [FlowControl] logs"
 echo ""
 echo "Press Enter to start..."
-read
+read -r
 
 # Test 1: Plain Text Volume (500KB)
 echo ""
@@ -200,7 +200,7 @@ for round in {1..5}; do
             2) echo "Plain text line $i: $(printf 'x%.0s' {1..50})" ;;
             3) printf "\x1b[%d;10H*\n" "$((i % 20 + 1))" ;;
             4) echo -e "\x1b[1m\x1b[4mBold $i\x1b[0m" ;;
-            5) printf "\x1b]0;Title $i\x07"; echo "Title update" ;;
+            5) printf '\x1b]0;Title %s\x07' "$i"; echo "Title update" ;;
         esac
     done
 

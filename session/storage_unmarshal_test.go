@@ -6,6 +6,7 @@ import (
 )
 
 func TestClaudeSessionData_UnmarshalJSON_LegacyConversationID(t *testing.T) {
+	t.Parallel()
 	// Persisted state written before SquadSessionID was renamed from
 	// ConversationID. The legacy "conversation_id" key must map onto the
 	// new SquadSessionID field so existing sessions hydrate correctly.
@@ -28,6 +29,7 @@ func TestClaudeSessionData_UnmarshalJSON_LegacyConversationID(t *testing.T) {
 }
 
 func TestClaudeSessionData_UnmarshalJSON_NewKeyTakesPrecedence(t *testing.T) {
+	t.Parallel()
 	// When both keys are present (transitional state), the new
 	// squad_session_id key wins over the legacy conversation_id key.
 	payload := []byte(`{"squad_session_id":"new-id","conversation_id":"old-id"}`)
@@ -42,6 +44,7 @@ func TestClaudeSessionData_UnmarshalJSON_NewKeyTakesPrecedence(t *testing.T) {
 }
 
 func TestClaudeSessionData_UnmarshalJSON_NewFormatOnly(t *testing.T) {
+	t.Parallel()
 	// Newly written state has no conversation_id key; the new
 	// squad_session_id key is used directly.
 	payload := []byte(`{"session_id":"sess-2","squad_session_id":"squad-2"}`)

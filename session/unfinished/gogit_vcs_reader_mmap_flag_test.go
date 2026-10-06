@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 )
 
 // TestOpenRepoEntry_MmapIndexFlag_TogglesLiveWithoutRestart proves the flag
@@ -21,7 +22,7 @@ import (
 // documented on Registry.UseMmapIndex) must change gogitstore's behavior
 // without recreating the GoGitVCSReader or its Registry.
 func TestOpenRepoEntry_MmapIndexFlag_TogglesLiveWithoutRestart(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	repoA := initRepoInternal(t)
 	repoB := initRepoInternal(t)
@@ -71,7 +72,7 @@ func TestOpenRepoEntry_MmapIndexFlag_TogglesLiveWithoutRestart(t *testing.T) {
 // absent/misspelled flag name must resolve to false, matching
 // config.GetFeatureFlag's documented "absent key returns false" contract.
 func TestSyncMmapIndexFlag_UnknownFlagDefaultsFalse(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	g := &GoGitVCSReader{}
 	reg := g.gogitstoreRegistry()

@@ -12,6 +12,7 @@ import (
 )
 
 func TestNewCommandExecutor(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -41,6 +42,7 @@ func TestNewCommandExecutor(t *testing.T) {
 }
 
 func TestNewCommandExecutorWithOptions(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -73,6 +75,7 @@ func TestNewCommandExecutorWithOptions(t *testing.T) {
 }
 
 func TestCommandExecutor_StartAndStop(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -122,6 +125,7 @@ func TestCommandExecutor_StartAndStop(t *testing.T) {
 }
 
 func TestCommandExecutor_DoubleStart(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -154,6 +158,7 @@ func TestCommandExecutor_DoubleStart(t *testing.T) {
 }
 
 func TestCommandExecutor_ExecuteSimpleCommand(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -224,6 +229,7 @@ func TestCommandExecutor_ExecuteSimpleCommand(t *testing.T) {
 }
 
 func TestCommandExecutor_GetCurrentCommand(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -246,6 +252,7 @@ func TestCommandExecutor_GetCurrentCommand(t *testing.T) {
 }
 
 func TestCommandExecutor_SetResultCallback(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -271,6 +278,7 @@ func TestCommandExecutor_SetResultCallback(t *testing.T) {
 }
 
 func TestCommandExecutor_SetOptions(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -302,6 +310,7 @@ func TestCommandExecutor_SetOptions(t *testing.T) {
 }
 
 func TestCommandExecutor_ExecuteImmediate(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -354,6 +363,7 @@ func TestCommandExecutor_ExecuteImmediate(t *testing.T) {
 }
 
 func TestCommandExecutor_ExecuteImmediateNotStarted(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -378,6 +388,7 @@ func TestCommandExecutor_ExecuteImmediateNotStarted(t *testing.T) {
 }
 
 func TestCommandExecutor_Timeout(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -443,6 +454,7 @@ func TestCommandExecutor_Timeout(t *testing.T) {
 }
 
 func TestCommandExecutor_GetSessionName(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -464,6 +476,7 @@ func TestCommandExecutor_GetSessionName(t *testing.T) {
 }
 
 func TestDefaultExecutionOptions(t *testing.T) {
+	t.Parallel()
 	opts := DefaultExecutionOptions()
 
 	if opts.Timeout <= 0 {
@@ -484,6 +497,7 @@ func TestDefaultExecutionOptions(t *testing.T) {
 }
 
 func TestCommandExecutor_StopWithoutStart(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -506,6 +520,7 @@ func TestCommandExecutor_StopWithoutStart(t *testing.T) {
 }
 
 func TestCommandExecutor_StatusDetection(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -572,6 +587,7 @@ func TestCommandExecutor_StatusDetection(t *testing.T) {
 }
 
 func TestCommandExecutor_NilResponseStream(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -594,6 +610,7 @@ func TestCommandExecutor_NilResponseStream(t *testing.T) {
 }
 
 func TestCommandExecutor_ContextCancellation(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)

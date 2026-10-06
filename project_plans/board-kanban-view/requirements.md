@@ -16,6 +16,43 @@ competing agent-orchestration tools (Vibe-Kanban, Agent-Kanban, Dorothy per the 
 competitive scan) and would give users a second, complementary mental model over the
 same underlying session data.
 
+## Target User
+
+The solo/small-team developer running many concurrent Claude Code / Aider agent sessions
+via this dashboard (this project's only user population today — see `list_workspace_peers`
+for the multi-peer case). Specifically: a user who currently has to either scan a long
+flat/grouped list or open the separate Review Queue panel to answer "how many sessions
+need my attention right now, and of what kind" — the person this feature is *for* is
+whoever asks that question more than a few times per session.
+
+## Success Metrics
+
+Added during triad review (2026-08-07) — requirements.md previously had no measurable
+success criteria, which the PM-lens triad pass flagged. Since this is a solo-developer
+tool with no analytics/experimentation platform, metrics are self-reportable rather than
+instrumented:
+1. **Adoption**: the user voluntarily keeps Board as their persisted per-workspace default
+   (AC9) rather than reverting to List within the first week of availability — a signal
+   read informally (no telemetry required), not a hard KPI.
+2. **Task success**: a user can answer "how many sessions need my attention" by glancing at
+   the Needs Review column's count badge alone, with zero clicks, matching the Problem
+   statement's stated gap.
+3. **No regression**: List view's existing test suite and manual workflows are unaffected
+   (AC11) — a strictly additive feature must not cost anything to the users who never touch
+   Board view.
+
+## Risky Assumption
+
+The core bet this feature makes is that a kanban board is a genuinely better mental model
+for *this specific* tool's session-management task, not just a pattern borrowed because
+competitors (Vibe-Kanban, Agent-Kanban, Dorothy) have it. That assumption is untested
+against this app's actual users — the Competitive Context in the source item is a feature
+inventory, not user research. If the assumption is wrong, the mitigation is already
+structural: Board ships as a strictly additive, reversible-per-session toggle (Non-Goal:
+does not replace or regress List view), so a wrong bet costs implementation effort but not
+a forced migration — the "Adoption" success metric above is the intended fast feedback
+signal for whether the bet paid off.
+
 ## Goals
 
 1. Add a "Board" view as an alternative to the existing "List" view, toggleable from
@@ -39,8 +76,13 @@ same underlying session data.
 - Custom/user-defined columns beyond the status-based default and the existing
   grouping-strategy axes (e.g. no free-form "add a column" builder).
 - Cross-workspace board layouts or shared/team board customization.
-- Changing what a session status transition is allowed to do on the backend beyond
-  wiring the existing update-session status mutation to a drag gesture.
+- Adding new session-state-machine edges or new backend permission models. Planning
+  surfaced one narrow, in-scope backend addition that does *not* violate this Non-Goal:
+  `Instance.StopByUser()` (plan.md Phase 0) exposes the drag-into-"Complete" gesture via
+  a new `UpdateSession` branch, but it only reaches `Active/Paused/Hibernated → Stopped`,
+  an edge already valid in `session/state_machine.go` today — no new state-machine edge,
+  no new permission field (reuses `CanPause`). Anything beyond wiring an already-valid
+  edge to a drag gesture remains out of scope.
 
 ## Acceptance Criteria
 
@@ -52,9 +94,13 @@ same underlying session data.
    / Paused / Complete.
 3. Each column header shows a count badge of the sessions currently in it.
 4. Dragging a session card from one column to another triggers the corresponding
-   session status/state mutation via the existing session-update RPC, and the card
-   moves to reflect the new state (optimistically or on confirmed response — decided in
-   planning).
+   session status/state mutation via the existing session-mutation RPCs — `UpdateSession`
+   for status changes, plus `ResolveApproval` (Needs Review → Running) and
+   `ResumeHibernatedSession` (Hibernated → Running) for the two transitions that are not
+   plain status writes on the backend (see plan.md's Domain Glossary/`ApprovalResolution`
+   and Task 3.1.1a) — and the card moves to reflect the new state (optimistically or on
+   confirmed response — decided in planning). No new RPC is added other than the
+   `StopByUser`-backed `→ Stopped` branch on the existing `UpdateSession` handler.
 5. Dragging a card to a column that does not represent a valid state transition for
    that session is rejected (card returns to its original column) with a visible error
    indication.
@@ -73,6 +119,13 @@ same underlying session data.
     have a viable non-drag fallback on touch devices (e.g. a per-card "move to..."
     action) since drag-and-drop UX on mobile is unreliable.
 11. Existing list view and its own tests/behavior are unaffected (no regression).
+12. Dragging (or using "Move to...") a session into the "Complete" column requires an
+    explicit confirmation step before the stop mutation fires — added 2026-08-07 per the
+    UX-lens triad review BLOCKER: stopping a session (killing its tmux pane, potentially
+    removing its worktree) via a single accidental drag gesture, with
+    `legalBoardTransitions["complete"] = []` giving no in-board way to undo it, violates
+    error-prevention/user-control expectations for a materially more costly action than
+    every other column-to-column move this feature supports.
 
 ## Open Questions (for research/planning phases)
 

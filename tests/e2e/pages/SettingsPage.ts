@@ -4,10 +4,10 @@ export class SettingsPage {
   constructor(private page: Page) {}
 
   async goto() {
-    await this.page.goto(
-      (process.env.BASE_URL ?? "http://localhost:8544") + "/settings?tab=general",
-      { waitUntil: "domcontentloaded", timeout: 15000 }
-    );
+    await this.page.goto("/settings?tab=general", {
+      waitUntil: "domcontentloaded",
+      timeout: 15000,
+    });
   }
 
   async selectTab(tab: string) {

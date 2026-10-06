@@ -8,7 +8,9 @@
   "tested": true,
   "testIds": [
     "TestComputeSummary_EscalationReasonCounts",
-    "TestGetApprovalAnalytics_IncludesEscalationReasonCounts"
+    "TestGetApprovalAnalytics_IncludesEscalationReasonCounts",
+    "TestComputeSummary_should_PopulateRiskLevelCounts_When_EntriesSpanAllFourRiskLevels",
+    "TestComputeSummary_should_ReturnEmptyRiskLevelCounts_When_NoEntriesInWindow"
   ],
-  "lastModified": "2026-08-02T00:00:00Z"
+  "lastModified": "2026-08-10T00:00:00Z"
 }

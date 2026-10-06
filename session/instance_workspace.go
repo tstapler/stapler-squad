@@ -141,7 +141,7 @@ func switchWorkspaceLocked(s *instanceState, req WorkspaceSwitchRequest) (*Works
 		return nil, fmt.Errorf("cannot determine repository path for session")
 	}
 
-	if err := os.MkdirAll(repoPath, 0755); err != nil {
+	if err := os.MkdirAll(repoPath, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create repository directory: %w", err)
 	}
 	log.Info("ensured directory exists", "path", repoPath)
@@ -487,7 +487,7 @@ func (i *Instance) ListAvailableTargets() (*AvailableTargets, error) {
 	}
 
 	// Ensure directory exists before VCS detection
-	if err := os.MkdirAll(repoPath, 0755); err != nil {
+	if err := os.MkdirAll(repoPath, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create repository directory: %w", err)
 	}
 

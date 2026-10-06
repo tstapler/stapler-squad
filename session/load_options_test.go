@@ -9,15 +9,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestGetWithOptions verifies that GetWithOptions loads session data correctly.
-// EntRepository always loads all data regardless of LoadOptions.
+// TestGetWithOptions verifies that GetWithOptions respects LoadOptions: core
+// fields (title, path, status, worktree.RepoPath, diff stats) are always
+// populated directly from the session row, but child-relation fields gated by
+// a LoadOptions flag (e.g. Tags, gated by LoadTags) are only populated when
+// that flag — or an option preset that implies it — is set. See
+// applyLoadOptions in ent_repository.go.
 func TestSelectiveLoading(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
 	repo, err := NewEntRepository(WithDatabasePath(dbPath))
 	require.NoError(t, err)
-	defer repo.Close()
+	// t.Cleanup, not defer: subtests below are t.Parallel(), so the parent
+	// function body returns (running any defer immediately) before they
+	// actually execute — a plain defer here would close the DB out from
+	// under them. t.Cleanup runs only after all subtests, including
+	// parallel ones, have finished.
+	t.Cleanup(func() { repo.Close() })
 
 	ctx := context.Background()
 
@@ -62,21 +71,35 @@ func TestSelectiveLoading(t *testing.T) {
 		{"LoadDiffOnly", LoadDiffOnly},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			session, err := repo.GetWithOptions(ctx, "test-session", tc.opts)
 			require.NoError(t, err)
 
+			// Core fields are always populated regardless of LoadOptions.
 			assert.Equal(t, "test-session", session.Title)
 			assert.Equal(t, "/tmp/test", session.Path)
 			assert.Equal(t, Ready, session.Status)
-			assert.Equal(t, "/tmp/repo", session.Worktree.RepoPath)
-			assert.Equal(t, 100, session.DiffStats.Added)
-			assert.ElementsMatch(t, []string{"Frontend", "Urgent"}, session.Tags)
-			assert.Equal(t, "claude-123", session.ClaudeSession.ConversationUUID)
+
+			// Child-relation fields are only populated when their gating
+			// LoadOptions flag is set — see applyLoadOptions.
+			if tc.opts.LoadWorktree {
+				assert.Equal(t, "/tmp/repo", session.Worktree.RepoPath)
+			}
+			if tc.opts.LoadDiffStats || tc.opts.LoadDiffContent {
+				assert.Equal(t, 100, session.DiffStats.Added)
+			}
+			if tc.opts.LoadTags {
+				assert.ElementsMatch(t, []string{"Frontend", "Urgent"}, session.Tags)
+			}
+			if tc.opts.LoadClaudeSession {
+				assert.Equal(t, "claude-123", session.ClaudeSession.ConversationUUID)
+			}
 		})
 	}
 
 	// Verify Get and List also return correct data
 	t.Run("Get returns full data", func(t *testing.T) {
+		t.Parallel()
 		session, err := repo.Get(ctx, "test-session")
 		require.NoError(t, err)
 		assert.Equal(t, "test-session", session.Title)
@@ -85,6 +108,7 @@ func TestSelectiveLoading(t *testing.T) {
 	})
 
 	t.Run("List returns all sessions", func(t *testing.T) {
+		t.Parallel()
 		sessions, err := repo.List(ctx)
 		require.NoError(t, err)
 		require.Len(t, sessions, 1)
@@ -94,6 +118,7 @@ func TestSelectiveLoading(t *testing.T) {
 
 // TestBuilderMethods verifies the fluent builder methods work correctly
 func TestBuilderMethods(t *testing.T) {
+	t.Parallel()
 	// Start with LoadMinimal and add what we need
 	options := LoadMinimal.WithTags().WithDiffContent()
 

@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // newTestHandlerWithAnalytics creates an ApprovalHandler with an in-memory AnalyticsStore.
@@ -55,6 +56,7 @@ func postPermissionRequestWithCommand(t *testing.T, h *ApprovalHandler, sessionI
 // Fires an approval with a command containing a GitHub token and asserts that
 // RecordFromResult was called with the command replaced by [REDACTED: secret detected].
 func TestApprovalHandler_SecretNotPersistedToAnalytics(t *testing.T) {
+	t.Parallel()
 	h, analyticsStore := newTestHandlerWithAnalytics(t)
 
 	secretCmd := `curl -H "Authorization: Bearer ghp_AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHH1234" https://api.example.com`
@@ -69,8 +71,8 @@ func TestApprovalHandler_SecretNotPersistedToAnalytics(t *testing.T) {
 	assert.Equal(t, "deny", resp.HookSpecificOutput.Decision.Behavior, "secret command must be denied")
 
 	// Wait for the async analytics write to complete.
-	require.Eventually(t, func() bool {
-		entries, err := analyticsStore.LoadWindow(time.Now().Add(-1 * time.Hour))
+	wait.RequireEventually(t, func() bool {
+		entries, err := analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1*time.Hour))
 		if err != nil {
 			return false
 		}
@@ -83,7 +85,7 @@ func TestApprovalHandler_SecretNotPersistedToAnalytics(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond, "analytics entry for session-1 must be persisted within 2s")
 
 	// Load all analytics entries from the window.
-	entries, err := analyticsStore.LoadWindow(time.Now().Add(-1 * time.Hour))
+	entries, err := analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1*time.Hour))
 	require.NoError(t, err)
 
 	// Find the entry from this test.
@@ -102,6 +104,7 @@ func TestApprovalHandler_SecretNotPersistedToAnalytics(t *testing.T) {
 
 // T-INTEG-002: analytics query after approval with secret command contains no secret.
 func TestApprovalHandler_LoadWindow_ContainsNoSecret(t *testing.T) {
+	t.Parallel()
 	h, analyticsStore := newTestHandlerWithAnalytics(t)
 
 	secretCmd := "ANTHROPIC_API_KEY=sk-ant-test123abc curl https://api.anthropic.com"
@@ -109,8 +112,8 @@ func TestApprovalHandler_LoadWindow_ContainsNoSecret(t *testing.T) {
 	_ = postPermissionRequestWithCommand(t, h, "session-2", "Bash", secretCmd)
 
 	// Wait for the async analytics write to complete.
-	require.Eventually(t, func() bool {
-		entries, err := analyticsStore.LoadWindow(time.Now().Add(-1 * time.Hour))
+	wait.RequireEventually(t, func() bool {
+		entries, err := analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1*time.Hour))
 		if err != nil {
 			return false
 		}
@@ -122,7 +125,7 @@ func TestApprovalHandler_LoadWindow_ContainsNoSecret(t *testing.T) {
 		return false
 	}, 2*time.Second, 10*time.Millisecond, "analytics entry for session-2 must be persisted within 2s")
 
-	entries, err := analyticsStore.LoadWindow(time.Now().Add(-1 * time.Hour))
+	entries, err := analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1*time.Hour))
 	require.NoError(t, err)
 
 	for _, e := range entries {

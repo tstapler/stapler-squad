@@ -12,6 +12,7 @@ import (
 // TestSessionResumption tests the new behavior where existing sessions are reused
 // instead of failing with "tmux session already exists" error
 func TestSessionResumption(t *testing.T) {
+	t.Parallel()
 	t.Run("ExistingSession_ShouldReuse_NotFail", func(t *testing.T) {
 		testExistingSessionReuse(t)
 	})
@@ -158,6 +159,7 @@ func testNewSessionCreation(t *testing.T) {
 
 // TestSessionResumptionBehaviorComparison compares old vs new behavior
 func TestSessionResumptionBehaviorComparison(t *testing.T) {
+	t.Parallel()
 	t.Run("OLD_Behavior_Would_Fail", func(t *testing.T) {
 		// This test documents what the OLD behavior would have been
 		// Before the fix: session.Start() would return an error like:
@@ -210,6 +212,7 @@ func TestSessionResumptionBehaviorComparison(t *testing.T) {
 // TestSessionResumptionIntegration tests the complete integration scenario
 // that reproduces the original user-reported issue
 func TestSessionResumptionIntegration(t *testing.T) {
+	t.Parallel()
 	ptyFactory := NewMockPtyFactory(t)
 
 	// Simulate the exact scenario from the error logs:

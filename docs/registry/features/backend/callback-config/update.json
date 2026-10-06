@@ -1,0 +1,17 @@
+{
+  "id": "callback-config:update",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "UpdateCallbackConfig",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service.go",
+  "tested": true,
+  "testIds": [
+    "TestUpdateCallbackConfig_RejectsSSRFTarget",
+    "TestUpdateCallbackConfig_PersistsValidURL_MaskedOnRead",
+    "TestUpdateCallbackConfig_UnsetFieldLeavesExistingValueUnchanged",
+    "TestUpdateCallbackConfig_EmptyStringClearsURL"
+  ],
+  "lastModified": "2026-08-06T22:39:19.053409246-07:00"
+}

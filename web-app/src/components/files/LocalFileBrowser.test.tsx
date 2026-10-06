@@ -20,13 +20,17 @@ jest.mock("next/navigation", () => ({
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
 }));
 
-// RepoPathInput pulls in useSessionRepoPaths (Redux) and usePathCompletions (RPC).
-// Stub both so this test doesn't need a Redux store or ConnectRPC transport.
+// RepoPathInput pulls in useSessionRepoPaths (Redux), usePathCompletions (RPC),
+// and useGitHubEnterpriseHosts (RPC). Stub all three so this test doesn't need
+// a Redux store or ConnectRPC transport.
 jest.mock("@/lib/hooks/useSessionRepoPaths", () => ({
   useSessionRepoPaths: () => [],
 }));
 jest.mock("@/lib/hooks/usePathCompletions", () => ({
   usePathCompletions: () => ({ entries: [], isLoading: false }),
+}));
+jest.mock("@/lib/hooks/useGitHubEnterpriseHosts", () => ({
+  useGitHubEnterpriseHosts: () => ({ hosts: [], refetch: jest.fn() }),
 }));
 
 const createSession = jest.fn();
@@ -147,7 +151,9 @@ describe("LocalFileBrowser — truncation notice", () => {
 
     render(<LocalFileBrowser />);
 
-    const notice = await screen.findByTestId("file-browser-truncation-notice");
+    // Rendering 2000 entries can exceed the default 5000ms waitFor budget under
+    // full-suite parallel-worker contention (flaky, not functional) — widen it.
+    const notice = await screen.findByTestId("file-browser-truncation-notice", {}, { timeout: 15000 });
     expect(notice).toHaveTextContent("Showing first 2000 of 2001 entries");
-  });
+  }, 20000);
 });

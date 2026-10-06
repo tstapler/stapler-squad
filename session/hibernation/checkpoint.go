@@ -43,7 +43,7 @@ func NewWriter(checkpointDir string) *Writer {
 // If srcScrollbackPath is empty the scrollback copy step is skipped silently.
 func (w *Writer) Write(ctx context.Context, c Checkpoint, srcScrollbackPath string) error {
 	dir := filepath.Join(w.checkpointDir, c.SessionID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("hibernation: create checkpoint dir: %w", err)
 	}
 
@@ -53,7 +53,7 @@ func (w *Writer) Write(ctx context.Context, c Checkpoint, srcScrollbackPath stri
 		return fmt.Errorf("hibernation: marshal checkpoint: %w", err)
 	}
 	checkpointPath := filepath.Join(dir, "checkpoint.json")
-	if err := os.WriteFile(checkpointPath, data, 0o644); err != nil {
+	if err := os.WriteFile(checkpointPath, data, 0o600); err != nil {
 		return fmt.Errorf("hibernation: write checkpoint.json: %w", err)
 	}
 
@@ -81,7 +81,7 @@ func (w *Writer) Delete(sessionID string) error {
 // The copy is self-contained — symlinks are not used so the checkpoint remains
 // valid even if the original scrollback file is rotated or deleted.
 func copyFile(src, dst string) error {
-	srcF, err := os.Open(src)
+	srcF, err := os.Open(src) // #nosec G304 -- src is Instance.scrollbackPath(), internally derived from server-managed state, not caller-supplied
 	if err != nil {
 		if os.IsNotExist(err) {
 			// No scrollback yet — not an error
@@ -91,7 +91,7 @@ func copyFile(src, dst string) error {
 	}
 	defer srcF.Close()
 
-	dstF, err := os.Create(dst)
+	dstF, err := os.Create(dst) // #nosec G304 -- dst is checkpointDir/<sessionID>/scrollback.txt, built from config-resolved checkpointDir and the internal session UUID
 	if err != nil {
 		return fmt.Errorf("create dest: %w", err)
 	}

@@ -1,60 +1,18 @@
-import { style, keyframes } from "@vanilla-extract/css";
+import { style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
+import {
+  animatedOverlay,
+  animatedModal,
+  animatedHeader,
+  animatedTitle,
+  animatedSubtitleBase,
+} from "@/styles/modalChrome.css";
 
-const fadeIn = keyframes({
-  from: { opacity: 0 },
-  to: { opacity: 1 },
-});
-
-const slideUp = keyframes({
-  from: { transform: "translateY(20px)", opacity: 0 },
-  to: { transform: "translateY(0)", opacity: 1 },
-});
-
-export const overlay = style({
-  position: "fixed",
-  top: 0,
-  left: 0,
-  right: 0,
-  bottom: 0,
-  background: vars.color.overlayBackground,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  zIndex: 1000,
-  animation: `${fadeIn} 0.2s ease`,
-});
-
-export const modal = style({
-  background: vars.color.modalBackground,
-  borderRadius: "12px",
-  padding: 0,
-  maxWidth: "520px",
-  width: "90%",
-  maxHeight: "80vh",
-  display: "flex",
-  flexDirection: "column",
-  boxShadow: "0 20px 60px rgba(0, 0, 0, 0.3)",
-  animation: `${slideUp} 0.3s ease`,
-});
-
-export const header = style({
-  padding: "24px 24px 16px 24px",
-  borderBottom: `1px solid ${vars.color.modalBorder}`,
-});
-
-export const title = style({
-  margin: "0 0 4px 0",
-  fontSize: "20px",
-  fontWeight: 600,
-  color: vars.color.textPrimary,
-});
-
-export const subtitle = style({
-  margin: 0,
-  fontSize: "14px",
-  color: vars.color.textSecondary,
-});
+export const overlay = animatedOverlay;
+export const modal = animatedModal;
+export const header = animatedHeader;
+export const title = animatedTitle;
+export const subtitle = animatedSubtitleBase;
 
 export const body = style({
   padding: "24px",

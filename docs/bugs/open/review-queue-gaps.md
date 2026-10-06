@@ -116,7 +116,7 @@ the notification card shows a persistent "Timed out — check terminal" message.
 
 ## GAP-002 (LOW): No Risk-Weighted Sorting Within APPROVAL_PENDING Tier
 
-### Status: Open / Won't Fix (MVP)
+### Status: ✅ Fixed (review-queue-severity feature)
 
 ### Description
 
@@ -131,6 +131,14 @@ Users must visually scan the command preview `<pre>` block to assess risk.
 After the rule-based classifier escalates an approval, include the classifier's
 `RiskLevel` in the `ReviewItem.Metadata`. The queue sorter can use this as a
 tiebreaker within the same priority tier.
+
+### Resolution
+
+Went further than the suggested tiebreaker: `RiskLevel` is now the review queue's
+**primary** default sort key (highest risk first), not just a same-tier tiebreaker —
+see `web-app/src/components/sessions/ReviewQueuePanel.tsx`'s `"severity"` `SortField`
+and `project_plans/review-queue-severity/`. `ReviewItem.Metadata["risk_level"]` is
+populated by `session/review_queue_poller.go`'s enrichment step exactly as suggested.
 
 ---
 
@@ -154,7 +162,7 @@ events are also surfaced via the `useApprovals` polling hook.
 
 ## GAP-004 (VERY LOW): Multi-Approval Session Shows Only First Approval
 
-### Status: Open / Edge Case
+### Status: ✅ Fixed (review-queue-severity feature)
 
 ### Description
 
@@ -168,3 +176,16 @@ the first is surfaced in the queue UI. The second is accessible only via the
 
 If multiple approvals exist, surface the oldest (most urgent) one. Consider showing
 a count badge ("2 approvals") on the queue item.
+
+### Resolution
+
+The line reference above is stale — this logic actually lives in
+`session/review_queue_poller.go` (confirmed via `grep -rln "GetApprovalMetadataBySession"`;
+no such selection logic exists in a `review_queue_service.go`). Fixed by
+`highestRiskApproval()` in that file: when a session has multiple concurrent pending
+approvals, the queue now surfaces the one with the highest classifier `RiskLevel` (not
+"oldest" as originally suggested — most-dangerous is a stronger signal than most-urgent
+for triage), ties broken by earliest/first-inserted. See
+`TestHighestRiskApproval_*` in `session/review_queue_poller_test.go`. The "count badge"
+half of the suggested fix was not implemented — left as a smaller follow-up if it turns
+out to matter in practice.

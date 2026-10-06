@@ -1,0 +1,22 @@
+{
+  "id": "session-board-view",
+  "type": "frontend",
+  "component": "SessionBoard",
+  "path": "web-app/src/components/sessions/SessionBoard.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "attemptColumnMove_should_ReturnMoved_When_LegalActiveToPausedDragSucceeds",
+    "attemptColumnMove_should_ReturnRejectedByServer_When_UpdateSessionResolvesNull",
+    "attemptColumnMove_should_ReturnNetworkError_When_UpdateSessionResolvesNullWithNetworkishCode",
+    "attemptColumnMove_should_ShowConfirmDialogAndSkipMutation_When_TargetIsComplete",
+    "attemptColumnMove_should_ResolveApproval_When_DraggingFromNeedsReviewToRunning",
+    "onDragEnd_should_CallUpdateSessionWithPausedStatus_When_DraggingActiveCardToPausedColumn",
+    "onDragEnd_should_SkipRpcAndBounceCardBack_When_DropTargetIsIllegal",
+    "dragFreeze_should_KeepCardInPreDragColumn_When_LivePushChangesStatusMidDrag",
+    "SessionBoard_should_RenderOneSwimlaneRowPerBranch_When_GroupingStrategyIsBranch",
+    "SessionBoard_should_RenderCardInBothMatchingTagRows_When_SessionHasTwoTags",
+    "tests/e2e/session-board-view.spec.ts"
+  ],
+  "lastModified": "2026-08-27T00:00:00Z"
+}

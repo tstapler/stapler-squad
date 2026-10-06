@@ -14,6 +14,7 @@ describe("deriveWorkingState — SubStatus.PROCESSING group", () => {
     SubStatus.TESTS_FAILING,
     SubStatus.RATE_LIMITED,
     SubStatus.WAITING_FOR_AGENT,
+    SubStatus.COMPACTING,
   ];
 
   for (const subStatus of processingStates) {
@@ -56,6 +57,15 @@ describe("deriveWorkingState — detectedStatus fallback (SubStatus.UNSPECIFIED)
       deriveWorkingState({
         subStatus: SubStatus.UNSPECIFIED,
         detectedStatus: DetectedStatus.WAITING_FOR_AGENT,
+      })
+    ).toBe(WorkingState.ACTIVE);
+  });
+
+  it("deriveWorkingState_should_returnACTIVE_When_detectedStatus_is_COMPACTING", () => {
+    expect(
+      deriveWorkingState({
+        subStatus: SubStatus.UNSPECIFIED,
+        detectedStatus: DetectedStatus.COMPACTING,
       })
     ).toBe(WorkingState.ACTIVE);
   });

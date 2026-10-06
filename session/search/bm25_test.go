@@ -24,6 +24,7 @@ func setupTestIndex() *InvertedIndex {
 }
 
 func TestNewBM25Scorer(t *testing.T) {
+	t.Parallel()
 	idx := setupTestIndex()
 	scorer := NewBM25Scorer(idx)
 
@@ -41,6 +42,7 @@ func TestNewBM25Scorer(t *testing.T) {
 }
 
 func TestNewBM25ScorerWithParams(t *testing.T) {
+	t.Parallel()
 	idx := setupTestIndex()
 	scorer := NewBM25ScorerWithParams(idx, 2.0, 0.5)
 
@@ -54,6 +56,7 @@ func TestNewBM25ScorerWithParams(t *testing.T) {
 }
 
 func TestBM25Score_SingleTerm(t *testing.T) {
+	t.Parallel()
 	idx := setupTestIndex()
 	scorer := NewBM25Scorer(idx)
 
@@ -71,6 +74,7 @@ func TestBM25Score_SingleTerm(t *testing.T) {
 }
 
 func TestBM25Score_TermFrequencyImpact(t *testing.T) {
+	t.Parallel()
 	idx := setupTestIndex()
 	scorer := NewBM25Scorer(idx)
 
@@ -93,6 +97,7 @@ func TestBM25Score_TermFrequencyImpact(t *testing.T) {
 }
 
 func TestBM25Score_MultipleTerms(t *testing.T) {
+	t.Parallel()
 	idx := setupTestIndex()
 	scorer := NewBM25Scorer(idx)
 
@@ -110,6 +115,7 @@ func TestBM25Score_MultipleTerms(t *testing.T) {
 }
 
 func TestBM25Score_EmptyQuery(t *testing.T) {
+	t.Parallel()
 	idx := setupTestIndex()
 	scorer := NewBM25Scorer(idx)
 
@@ -120,6 +126,7 @@ func TestBM25Score_EmptyQuery(t *testing.T) {
 }
 
 func TestBM25Score_NonExistentDocument(t *testing.T) {
+	t.Parallel()
 	idx := setupTestIndex()
 	scorer := NewBM25Scorer(idx)
 
@@ -130,6 +137,7 @@ func TestBM25Score_NonExistentDocument(t *testing.T) {
 }
 
 func TestBM25Score_NonExistentTerm(t *testing.T) {
+	t.Parallel()
 	idx := setupTestIndex()
 	scorer := NewBM25Scorer(idx)
 
@@ -140,6 +148,7 @@ func TestBM25Score_NonExistentTerm(t *testing.T) {
 }
 
 func TestBM25ScoreAll(t *testing.T) {
+	t.Parallel()
 	idx := setupTestIndex()
 	scorer := NewBM25Scorer(idx)
 
@@ -164,6 +173,7 @@ func TestBM25ScoreAll(t *testing.T) {
 }
 
 func TestBM25ScoreAll_MultipleTerms(t *testing.T) {
+	t.Parallel()
 	idx := setupTestIndex()
 	scorer := NewBM25Scorer(idx)
 
@@ -184,6 +194,7 @@ func TestBM25ScoreAll_MultipleTerms(t *testing.T) {
 }
 
 func TestBM25ScoreAll_EmptyQuery(t *testing.T) {
+	t.Parallel()
 	idx := setupTestIndex()
 	scorer := NewBM25Scorer(idx)
 
@@ -194,6 +205,7 @@ func TestBM25ScoreAll_EmptyQuery(t *testing.T) {
 }
 
 func TestBM25ScoreAll_NoMatches(t *testing.T) {
+	t.Parallel()
 	idx := setupTestIndex()
 	scorer := NewBM25Scorer(idx)
 
@@ -204,6 +216,7 @@ func TestBM25ScoreAll_NoMatches(t *testing.T) {
 }
 
 func TestBM25ScoreAllWithLimit(t *testing.T) {
+	t.Parallel()
 	idx := setupTestIndex()
 	scorer := NewBM25Scorer(idx)
 
@@ -215,6 +228,7 @@ func TestBM25ScoreAllWithLimit(t *testing.T) {
 }
 
 func TestBM25ScoreAllWithLimit_NoLimit(t *testing.T) {
+	t.Parallel()
 	idx := setupTestIndex()
 	scorer := NewBM25Scorer(idx)
 
@@ -227,6 +241,7 @@ func TestBM25ScoreAllWithLimit_NoLimit(t *testing.T) {
 }
 
 func TestBM25CalculateIDF(t *testing.T) {
+	t.Parallel()
 	idx := setupTestIndex()
 	scorer := NewBM25Scorer(idx)
 
@@ -245,6 +260,7 @@ func TestBM25CalculateIDF(t *testing.T) {
 }
 
 func TestBM25ExplainScore(t *testing.T) {
+	t.Parallel()
 	idx := setupTestIndex()
 	scorer := NewBM25Scorer(idx)
 
@@ -281,6 +297,7 @@ func TestBM25ExplainScore(t *testing.T) {
 }
 
 func TestBM25SetParams(t *testing.T) {
+	t.Parallel()
 	idx := setupTestIndex()
 	scorer := NewBM25Scorer(idx)
 
@@ -306,6 +323,7 @@ func TestBM25SetParams(t *testing.T) {
 }
 
 func TestBM25UpdateAvgDocLength(t *testing.T) {
+	t.Parallel()
 	idx := NewInvertedIndex()
 	scorer := NewBM25Scorer(idx)
 
@@ -328,6 +346,7 @@ func TestBM25UpdateAvgDocLength(t *testing.T) {
 }
 
 func TestBM25_LengthNormalization(t *testing.T) {
+	t.Parallel()
 	// Create index with documents of very different lengths
 	idx := NewInvertedIndex()
 

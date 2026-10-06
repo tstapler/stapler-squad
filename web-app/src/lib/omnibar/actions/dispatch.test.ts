@@ -10,6 +10,7 @@ function makeDeps(): jest.Mocked<ActionDeps> {
     deleteSession: jest.fn().mockResolvedValue(undefined),
     close: jest.fn(),
     setTheme: jest.fn(),
+    createBacklogItemFromChat: jest.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -272,6 +273,16 @@ describe("dispatchOmnibarAction", () => {
       expect(deps.createSession).toHaveBeenCalledWith(
         expect.objectContaining({ aliasName: "myproj" })
       );
+      expect(deps.close).toHaveBeenCalled();
+    });
+  });
+
+  describe("chat_backlog_item", () => {
+    it("dispatchOmnibarAction_should_callCreateBacklogItemFromChat_When_chatBacklogItemAction", () => {
+      const deps = makeDeps();
+      const action: OmnibarAction = { type: "chat_backlog_item", text: "Add dark mode support" };
+      dispatchOmnibarAction(action, deps);
+      expect(deps.createBacklogItemFromChat).toHaveBeenCalledWith("Add dark mode support");
       expect(deps.close).toHaveBeenCalled();
     });
   });

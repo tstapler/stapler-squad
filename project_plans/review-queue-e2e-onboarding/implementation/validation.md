@@ -2,6 +2,12 @@
 
 **Date**: 2026-08-03
 
+> **Corrected post-implementation (2026-08-03)**: see `requirements.md`'s
+> "Root cause (corrected)" section — the onboarding modal was not the actual
+> cause of the failures this plan targets. Coverage below still holds (same
+> test file, same 0-failed bar), it's just backed by a different fix than
+> originally planned.
+
 ## Happy Path Scenario
 Given a fresh browser context that has never dismissed the first-run onboarding modal, when a `review-queue.spec.ts` test calls `page.goto(...)` followed immediately by `await dismissOnboardingIfPresent(page)`, then the modal (if present) is clicked away within 5000ms and the test's own assertions/`waitForSelector` calls proceed unobstructed to a pass.
 

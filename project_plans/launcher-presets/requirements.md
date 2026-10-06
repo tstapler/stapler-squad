@@ -50,8 +50,7 @@ commands.
   (`OmnibarCreationPanel.tsx`). Selecting a preset pre-fills the creation form fields it maps
   to (program, argv-derived flags, default path if present) using the existing 7-touchpoint
   session-creation flow — see Constraints below.
-- **argv-based launch, not shell strings** — presets are stored and transmitted as string
-  arrays; no shell interpolation of preset-supplied strings at any point in the pipeline.
+- **argv-based launch, not shell strings** — arguments are preserved as an argv array through the system and individually shell-quoted only at the tmux boundary; no unquoted interpolation or ad-hoc shell parsing of preset-supplied strings.
 
 ### Nice to Have
 

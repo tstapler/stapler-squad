@@ -118,6 +118,14 @@ func (i *Instance) sendCtx(ctx context.Context, fn func(*instanceState)) error {
 // commands (single-goroutine confinement already does that) but it does
 // serialize against the legacy direct-lock writers. Caught by -race via a
 // concurrent MarkViewed()/ForceStatus() call during CreateSession.
+//
+// Not migrated to lifecycle.Reason (session-lifecycle-state-machine project,
+// though named as a starting candidate in that project's requirements.md):
+// this select is single-signal (li.ctx.Done() vs. mailbox receive) with
+// nothing to misclassify. The real risk here is a command closure blocking
+// this goroutine indefinitely — a liveness/preemption gap in the actor's
+// execution contract, not a classification problem — tracked separately, see
+// tstapler/stapler-squad#715.
 func runActor(li *LiveInstance) {
 	defer close(li.done)
 	for {

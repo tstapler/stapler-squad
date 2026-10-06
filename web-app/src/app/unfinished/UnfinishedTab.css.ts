@@ -2,6 +2,13 @@ import { style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
 
 export const container = style({
+  // Explicit width is required: this is a flex item inside <main>'s
+  // flex-direction:column, and without it, width falls back to
+  // shrink-to-fit/content-based sizing instead of stretching to fill —
+  // letting deeply nested nowrap content (e.g. worktree paths) push this
+  // out to maxWidth regardless of viewport, silently clipped by
+  // overflowX:hidden instead of shrinking on mobile.
+  width: "100%",
   height: "100%",
   overflowY: "auto",
   overflowX: "hidden",
@@ -83,10 +90,21 @@ export const btn = style({
   },
 });
 
+// Horizontal scroll strip (matches LevelFilterChips.css.ts /
+// StuckItemsSection.css.ts) instead of flexWrap — contains the row's width
+// on mobile regardless of ancestor flex sizing.
 export const filterRow = style({
   display: "flex",
   gap: vars.space["2"],
-  flexWrap: "wrap",
+  flexWrap: "nowrap",
+  overflowX: "auto",
+  scrollbarWidth: "none",
+  WebkitOverflowScrolling: "touch",
+  selectors: {
+    "&::-webkit-scrollbar": {
+      display: "none",
+    },
+  },
 });
 
 export const chip = style({
@@ -98,6 +116,8 @@ export const chip = style({
   background: "transparent",
   color: vars.color.textSecondary,
   transition: "background 0.12s, color 0.12s",
+  whiteSpace: "nowrap",
+  flexShrink: 0,
   ":hover": {
     background: vars.color.hoverBackground,
     color: vars.color.textPrimary,

@@ -1,10 +1,16 @@
 import { style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
 
+// flex/minHeight/overflowY: the app shell (CockpitShell) wraps every page in
+// nested `overflow: hidden` containers pinned to the viewport height — a page
+// only scrolls if it opts in itself. Mirrors SessionDetail.css.ts's `content`.
 export const container = style({
   maxWidth: "900px",
   margin: "0 auto",
   padding: "2rem 1.5rem",
+  flex: 1,
+  minHeight: 0,
+  overflowY: "auto",
 });
 
 export const title = style({

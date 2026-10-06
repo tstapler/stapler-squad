@@ -112,6 +112,10 @@ export function useDatabases(): UseDatabasesReturn {
       while (attempts < maxAttempts) {
         try {
           const tempClient = createClient(SessionService, getConnectTransport());
+          // Health-check poll after triggering a server restart — meant to
+          // keep retrying until the server is back or the attempt budget
+          // is spent, not tied to a mount/effect.
+          // abort-signal-exempt
           await tempClient.getCurrentDatabase(create(GetCurrentDatabaseRequestSchema, {}));
           serverBack = true;
           break;

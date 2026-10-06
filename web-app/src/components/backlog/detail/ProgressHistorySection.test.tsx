@@ -27,12 +27,14 @@ function makeItem(progressNotes: ProgressNote[]): BacklogItem {
     skipReviewGate: false,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     planApproved: false,
     acCriteria: [],
     linkedSessions: [],
     notes: "",
     statusEvents: [],
     progressNotes,
+    activityNotes: [],
     totalEstimatedCostUsd: 0,
   };
 }

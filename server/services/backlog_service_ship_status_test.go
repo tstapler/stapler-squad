@@ -54,6 +54,7 @@ func attachWorkSessionWithCommit(t *testing.T, storage *session.Storage, repo *s
 // covers the "committed directly to main, no PR" case — the shipped_via must read
 // "direct", and since the branch is main itself, ahead/behind must both be 0.
 func TestGetBacklogItemShipStatus_should_ReportShippedDirect_When_CommitOnMainNoPrURL(t *testing.T) {
+	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
 	sha := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
@@ -81,6 +82,7 @@ func TestGetBacklogItemShipStatus_should_ReportShippedDirect_When_CommitOnMainNo
 // covers the "opened a PR, it got merged" case — shipped_via must read "pr", and the
 // branch (now merged into main) must report zero ahead, since main already contains it.
 func TestGetBacklogItemShipStatus_should_ReportShippedViaPr_When_PrUrlSetAndMerged(t *testing.T) {
+	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
 
 	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
@@ -118,6 +120,7 @@ func TestGetBacklogItemShipStatus_should_ReportShippedViaPr_When_PrUrlSetAndMerg
 // TestGetBacklogItemShipStatus_should_ReportNotShipped_When_BranchNeverMerged covers
 // the exact regression case: a PR URL is set but the branch was never actually merged.
 func TestGetBacklogItemShipStatus_should_ReportNotShipped_When_BranchNeverMerged(t *testing.T) {
+	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
 
 	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
@@ -153,6 +156,7 @@ func TestGetBacklogItemShipStatus_should_ReportNotShipped_When_BranchNeverMerged
 // TestGetBacklogItemShipStatus_should_ReturnErrorField_When_NoWorkSessionEverCommitted
 // verifies the no-code case reports a descriptive error rather than a false "shipped".
 func TestGetBacklogItemShipStatus_should_ReturnErrorField_When_NoWorkSessionEverCommitted(t *testing.T) {
+	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
 	storage, _ := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -174,6 +178,7 @@ func TestGetBacklogItemShipStatus_should_ReturnErrorField_When_NoWorkSessionEver
 // covers Tyler's ask: identifying which commits actually shipped, like a PR's
 // commits tab, so newest-first ordering and content must both be right.
 func TestGetBacklogItemShipStatus_should_ListShippedCommits_When_MultipleCommitsInRange(t *testing.T) {
+	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
 	baseSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
@@ -225,6 +230,7 @@ func snapshotBacklogItemUpdate(checkConclusion string, approvedCount, changesReq
 // BacklogItem's 6 new columns must flow straight into the response, with the
 // JSON-encoded file stats decoded into ShippedFileStat entries.
 func TestGetBacklogItemShipStatus_ShouldPopulateSnapshotFields_WhenShippedSnapshotAtNonNil(t *testing.T) {
+	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
 	sha := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
@@ -316,6 +322,7 @@ func TestGetBacklogItemShipStatus_ShouldDegradeGracefully_WhenShippedFileStatsJs
 // ent-backed Storage, then read through the actual connect RPC handler — confirming the
 // full storage-to-RPC mapping path, not just handler logic against an in-memory value.
 func TestGetBacklogItemShipStatus_ShouldReturnDurableSnapshot_WhenCalledAgainstRealEntStorage(t *testing.T) {
+	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
 	sha := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
@@ -371,6 +378,7 @@ func TestGetBacklogItemShipStatus_ShouldReturnDurableSnapshot_WhenCalledAgainstR
 // the base SHA (no work commit recorded on top) and asserts the RPC refuses to
 // claim the item shipped.
 func TestGetBacklogItemShipStatus_should_NotReportShipped_When_OnlySpawnTimeBaseShaIsRecorded(t *testing.T) {
+	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
 	baseSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 

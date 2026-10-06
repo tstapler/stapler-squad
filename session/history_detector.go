@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/tstapler/stapler-squad/session/procinfo"
 )
@@ -15,6 +16,10 @@ type HistoryFileInfo struct {
 	ConversationUUID string
 	HistoryFilePath  string
 	ProjectDir       string
+	// ModTime is the on-disk mtime of the winning candidate. Populated by
+	// DetectByPath; left zero by Detect() since the PID-based fast path is
+	// process ground truth and doesn't need mtime gating.
+	ModTime time.Time
 }
 
 // ProcessFileInspector is the interface used by HistoryFileDetector.
@@ -69,6 +74,18 @@ func (d *HistoryFileDetector) Detect(pid int32) (*HistoryFileInfo, error) {
 	}
 
 	claudeProjects := filepath.Join(homeDir, ".claude", "projects")
+	// Resolve symlinks in claudeProjects too (e.g. macOS /tmp -> /private/tmp,
+	// or a symlinked $HOME) so it can be compared against the OS-reported,
+	// already-resolved open file paths on equal footing. Discovered via the
+	// Story 1.1.2b correlation-feasibility spike: a bare filepath.Join
+	// comparison silently failed to match PID-exact candidates whose homeDir
+	// was reached through a symlink, causing the PID path to fall through to
+	// the (still-correct, but less precise) path-heuristic fallback instead
+	// of ConfidencePIDExact.
+	resolvedClaudeProjects, err := filepath.EvalSymlinks(claudeProjects)
+	if err != nil {
+		resolvedClaudeProjects = claudeProjects // dir may not exist yet
+	}
 
 	for _, path := range files {
 		// Normalize symlinks
@@ -77,7 +94,7 @@ func (d *HistoryFileDetector) Detect(pid int32) (*HistoryFileInfo, error) {
 			resolved = path // use original if symlink resolution fails
 		}
 
-		if !strings.HasPrefix(resolved, claudeProjects) {
+		if !strings.HasPrefix(resolved, claudeProjects) && !strings.HasPrefix(resolved, resolvedClaudeProjects) {
 			continue
 		}
 
@@ -195,6 +212,7 @@ func (d *HistoryFileDetector) DetectByPath(projectPath string) (*HistoryFileInfo
 		ConversationUUID: best.uuid,
 		HistoryFilePath:  best.path,
 		ProjectDir:       projectDir,
+		ModTime:          time.Unix(0, best.modTime),
 	}, nil
 }
 
@@ -202,4 +220,93 @@ func (d *HistoryFileDetector) DetectByPath(projectPath string) (*HistoryFileInfo
 // the real gopsutil-based ProcessInspector on darwin.
 func NewHistoryFileDetectorWithRealInspector() *HistoryFileDetector {
 	return NewHistoryFileDetector(procinfo.NewProcessInspector())
+}
+
+// ResolveFilePath reconstructs the on-disk JSONL path for a known
+// (projectPath, conversationUUID) pair, using the same home-dir resolution
+// (including the test override) and path-encoding convention as
+// Detect/DetectByPath/DetectAllByPath. Used by callers that already know
+// the UUID (e.g. a Resolved CorrelationResult from CorrelateCandidate) and
+// need the file path without re-scanning the directory.
+func (d *HistoryFileDetector) ResolveFilePath(projectPath, conversationUUID string) (string, error) {
+	homeDir, err := d.resolveHomeDir()
+	if err != nil {
+		return "", err
+	}
+	projectDir := ClaudeProjectDirName(projectPath)
+	return filepath.Join(homeDir, ".claude", "projects", projectDir, conversationUUID+".jsonl"), nil
+}
+
+// DetectAllByPath scans ~/.claude/projects/<encoded-path>/ and returns every
+// valid conversation JSONL file found, sorted most-recently-modified first.
+// Unlike DetectByPath, it does not silently collapse multiple candidates down
+// to "most recent" — callers that need to detect ambiguity (e.g. import
+// correlation) use this variant; DetectByPath's existing single-result
+// contract and callers (HistoryLinker) are unchanged.
+//
+// Returns nil, nil if the project directory does not exist or contains no
+// valid conversation files.
+func (d *HistoryFileDetector) DetectAllByPath(projectPath string) ([]HistoryFileInfo, error) {
+	homeDir, err := d.resolveHomeDir()
+	if err != nil {
+		return nil, err
+	}
+
+	projectDir := ClaudeProjectDirName(projectPath)
+	dir := filepath.Join(homeDir, ".claude", "projects", projectDir)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		// Directory doesn't exist — not an error.
+		return nil, nil //nolint:nilnil
+	}
+
+	type candidate struct {
+		info    HistoryFileInfo
+		modTime int64
+	}
+	var candidates []candidate
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".jsonl") {
+			continue
+		}
+		basename := strings.TrimSuffix(name, ".jsonl")
+		if strings.HasPrefix(basename, "agent-") {
+			continue
+		}
+		if !isValidUUID(basename) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		candidates = append(candidates, candidate{
+			info: HistoryFileInfo{
+				ConversationUUID: basename,
+				HistoryFilePath:  filepath.Join(dir, name),
+				ProjectDir:       projectDir,
+			},
+			modTime: info.ModTime().UnixNano(),
+		})
+	}
+
+	if len(candidates) == 0 {
+		return nil, nil //nolint:nilnil
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].modTime > candidates[j].modTime
+	})
+
+	result := make([]HistoryFileInfo, 0, len(candidates))
+	for _, c := range candidates {
+		result = append(result, c.info)
+	}
+	return result, nil
 }

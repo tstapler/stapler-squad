@@ -7,6 +7,7 @@ import (
 // ─── U-GO-08: TestValidateTaskDepth_acceptsValidTree ─────────────────────────
 
 func TestValidateTaskDepth_acceptsValidTree(t *testing.T) {
+	t.Parallel()
 	tasks := []TaskNode{
 		{ID: "1", Title: "Task 1", Status: TaskStatusPending, Children: []TaskNode{
 			{ID: "1.1", Title: "Sub 1.1", Status: TaskStatusInProgress},
@@ -21,6 +22,7 @@ func TestValidateTaskDepth_acceptsValidTree(t *testing.T) {
 // ─── U-GO-09: TestValidateTaskDepth_rejectsDepthExceeded ──────────────────────
 
 func TestValidateTaskDepth_rejectsDepthExceeded(t *testing.T) {
+	t.Parallel()
 	tasks := []TaskNode{
 		{ID: "1", Title: "L1", Status: TaskStatusPending, Children: []TaskNode{
 			{ID: "2", Title: "L2", Status: TaskStatusPending, Children: []TaskNode{
@@ -38,6 +40,7 @@ func TestValidateTaskDepth_rejectsDepthExceeded(t *testing.T) {
 // ─── U-GO-10: TestValidateTaskDepth_rejectsCountExceeded ──────────────────────
 
 func TestValidateTaskDepth_rejectsCountExceeded(t *testing.T) {
+	t.Parallel()
 	tasks := make([]TaskNode, 51)
 	for i := range tasks {
 		tasks[i] = TaskNode{ID: "t", Title: "task", Status: TaskStatusPending}
@@ -50,6 +53,7 @@ func TestValidateTaskDepth_rejectsCountExceeded(t *testing.T) {
 // ─── U-GO-11: TestValidateTaskDepth_rejectsInvalidTaskStatus ──────────────────
 
 func TestValidateTaskDepth_rejectsInvalidTaskStatus(t *testing.T) {
+	t.Parallel()
 	tasks := []TaskNode{
 		{ID: "1", Title: "Task 1", Status: "invalid_status"},
 	}
@@ -61,6 +65,7 @@ func TestValidateTaskDepth_rejectsInvalidTaskStatus(t *testing.T) {
 // ─── U-GO-12: TestEncodeDecodeTasks_roundTrip ──────────────────────────────────
 
 func TestEncodeDecodeTasks_roundTrip(t *testing.T) {
+	t.Parallel()
 	tasks := []TaskNode{
 		{ID: "a", Title: "Alpha", Status: TaskStatusPending, Children: []TaskNode{
 			{ID: "a1", Title: "Alpha Child", Status: TaskStatusInProgress},
@@ -89,6 +94,7 @@ func TestEncodeDecodeTasks_roundTrip(t *testing.T) {
 // ─── U-GO-13: TestEncodeDecodeTasks_emptySlice ────────────────────────────────
 
 func TestEncodeDecodeTasks_emptySlice(t *testing.T) {
+	t.Parallel()
 	encoded, err := EncodeTasks([]TaskNode{})
 	if err != nil {
 		t.Fatalf("EncodeTasks: %v", err)
@@ -108,6 +114,7 @@ func TestEncodeDecodeTasks_emptySlice(t *testing.T) {
 // ─── U-GO-14: TestSessionGoalData_TasksTotal_countsRecursively ────────────────
 
 func TestSessionGoalData_TasksTotal_countsRecursively(t *testing.T) {
+	t.Parallel()
 	g := &SessionGoalData{
 		Tasks: []TaskNode{
 			{ID: "1", Title: "T1", Status: TaskStatusPending, Children: []TaskNode{
@@ -127,6 +134,7 @@ func TestSessionGoalData_TasksTotal_countsRecursively(t *testing.T) {
 // ─── U-GO-15: TestSessionGoalData_TasksDone_countsOnlyDone ────────────────────
 
 func TestSessionGoalData_TasksDone_countsOnlyDone(t *testing.T) {
+	t.Parallel()
 	g := &SessionGoalData{
 		Tasks: []TaskNode{
 			{ID: "1", Title: "T1", Status: TaskStatusDone, Children: []TaskNode{

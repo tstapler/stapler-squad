@@ -104,6 +104,7 @@ func (f *shellsFixture) addStorageOnlySession(t *testing.T, title string) {
 // --------------------------------------------------------------------------
 
 func TestSpawnShell_EmptySessionId(t *testing.T) {
+	t.Parallel()
 	fix := setupShellsFixture(t)
 
 	_, err := fix.svc.SpawnShell(context.Background(), connect.NewRequest(&sessionv1.SpawnShellRequest{
@@ -115,6 +116,7 @@ func TestSpawnShell_EmptySessionId(t *testing.T) {
 }
 
 func TestSpawnShell_SessionNotFound(t *testing.T) {
+	t.Parallel()
 	fix := setupShellsFixture(t)
 
 	_, err := fix.svc.SpawnShell(context.Background(), connect.NewRequest(&sessionv1.SpawnShellRequest{
@@ -126,6 +128,7 @@ func TestSpawnShell_SessionNotFound(t *testing.T) {
 }
 
 func TestSpawnShell_SessionNotRunning(t *testing.T) {
+	t.Parallel()
 	fix := setupShellsFixture(t)
 	// Session exists in DB but is not registered with the poller (no live instance).
 	fix.addStorageOnlySession(t, "paused-session")
@@ -143,6 +146,7 @@ func TestSpawnShell_SessionNotRunning(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestStopShell_SessionNotFound(t *testing.T) {
+	t.Parallel()
 	fix := setupShellsFixture(t)
 
 	_, err := fix.svc.StopShell(context.Background(), connect.NewRequest(&sessionv1.StopShellRequest{
@@ -154,6 +158,7 @@ func TestStopShell_SessionNotFound(t *testing.T) {
 }
 
 func TestStopShell_Success(t *testing.T) {
+	t.Parallel()
 	fix := setupShellsFixture(t)
 	inst := fix.addLiveSession(t, "stop-test-session")
 
@@ -176,6 +181,7 @@ func TestStopShell_Success(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestRestartShell_SessionNotFound(t *testing.T) {
+	t.Parallel()
 	fix := setupShellsFixture(t)
 
 	_, err := fix.svc.RestartShell(context.Background(), connect.NewRequest(&sessionv1.RestartShellRequest{
@@ -190,6 +196,7 @@ func TestRestartShell_SessionNotFound(t *testing.T) {
 // the shell ID is not found in the live instance (the Instance method returns an error
 // which the handler wraps as CodeInternal).
 func TestRestartShell_ShellNotFound(t *testing.T) {
+	t.Parallel()
 	fix := setupShellsFixture(t)
 	fix.addLiveSession(t, "restart-test-session")
 
@@ -207,6 +214,7 @@ func TestRestartShell_ShellNotFound(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestListShells_EmptySession(t *testing.T) {
+	t.Parallel()
 	fix := setupShellsFixture(t)
 	fix.addLiveSession(t, "list-empty-session")
 
@@ -220,6 +228,7 @@ func TestListShells_EmptySession(t *testing.T) {
 }
 
 func TestListShells_ReturnsAll(t *testing.T) {
+	t.Parallel()
 	fix := setupShellsFixture(t)
 	inst := fix.addLiveSession(t, "list-populated-session")
 
@@ -247,6 +256,7 @@ func TestListShells_ReturnsAll(t *testing.T) {
 // The handler intentionally returns [] rather than an error to support frontend
 // polling during session startup.
 func TestListShells_SessionNotRunning(t *testing.T) {
+	t.Parallel()
 	fix := setupShellsFixture(t)
 	fix.addStorageOnlySession(t, "list-not-running")
 
@@ -264,6 +274,7 @@ func TestListShells_SessionNotRunning(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestDeleteShell_SessionNotFound(t *testing.T) {
+	t.Parallel()
 	fix := setupShellsFixture(t)
 
 	_, err := fix.svc.DeleteShell(context.Background(), connect.NewRequest(&sessionv1.DeleteShellRequest{
@@ -275,6 +286,7 @@ func TestDeleteShell_SessionNotFound(t *testing.T) {
 }
 
 func TestDeleteShell_Success(t *testing.T) {
+	t.Parallel()
 	fix := setupShellsFixture(t)
 	inst := fix.addLiveSession(t, "delete-test-session")
 

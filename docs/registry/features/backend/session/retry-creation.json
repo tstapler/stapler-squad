@@ -1,0 +1,16 @@
+{
+  "id": "session:retry-creation",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "RetrySessionCreation",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service.go",
+  "tested": true,
+  "testIds": [
+    "TestRetrySessionCreation_should_TransitionFailedToCreating_When_SameInstanceRetried",
+    "TestRetrySessionCreation_should_ReturnFailedPrecondition_When_StatusIsNotFailed",
+    "TestRetrySessionCreation_should_SpawnExactlyOnePipeline_When_CalledConcurrently"
+  ],
+  "lastModified": "2026-08-27T01:50:21.805937893-07:00"
+}

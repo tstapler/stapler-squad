@@ -119,6 +119,19 @@ export const chipWaitingForAgent = style([
   },
 ]);
 
+// Calm, self-managing framing — same accentBg/primary token pair as chipProcessing
+// (foreground activity, not a background wait), but fontWeight normal like
+// chipWaitingForAgent to read slightly quieter than Processing's semibold "Thinking…".
+export const chipCompacting = style([
+  chip,
+  {
+    background: vars.color.accentBg,
+    color: vars.color.primary,
+    border: `1px solid ${vars.color.primary}`,
+    fontWeight: vars.fontWeight.normal,
+  },
+]);
+
 export const spinner = style({
   display: "inline-block",
   width: "10px",

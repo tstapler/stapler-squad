@@ -21,6 +21,15 @@ the full evidence trail. This cannot be reproduced or verified on this
 (Linux) machine; the fix must be correct by inspection and root-cause
 reasoning, then confirmed on macOS post-merge (acceptance criterion 6).
 
+This has to touch production code (`ProcessRunner`) rather than living
+entirely in test doubles because `Pool.CallWithOptions`'s WorkDir one-shot
+path type-asserts on the concrete `*ProcessRunner` instead of programming to
+the `ClaudeRunner` interface — a `FakeRunner` that correctly implements
+`ClaudeRunner` is rejected there. That pre-existing type-assertion is
+inherited structural debt, not introduced by this fix; out of scope to
+correct here (complexity-1 bugfix), but worth naming as a candidate follow-up
+if `Pool.CallWithOptions` is ever revisited.
+
 Three shapes were considered for the fix (full comparison in
 `implementation/plan.md`'s Step 0.5 write-up, repeated in the Pattern
 Decisions table below). The chosen shape: give `ProcessRunner` an opt-in,
@@ -61,10 +70,8 @@ site.
   Verification is deferred to a human running the affected tests on macOS
   post-merge — tracked as its own task (see `implementation/plan.md` Story
   for AC6).
-- **The `interpreter` field is a private escape hatch, not a public API**:
-  it is unexported and reachable only through `fake_runner.go`'s test
-  constructors, so it cannot leak into production wiring by accident without
-  a deliberate, reviewable code change to `runner.go` itself.
+- **The `interpreter` field boundary is convention-based**:
+  `fake_runner.go` is an exported test-helper file; constructor boundaries are enforced by naming conventions and code review rather than compiler-enforced build-tag isolation.
 
 ## Alternatives rejected
 

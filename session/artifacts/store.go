@@ -25,6 +25,9 @@ type ArtifactExtractor struct {
 	queue    chan string
 	inflight sync.Map // key: filePath, value: struct{}
 
+	// droppedCount tracks total queue-full drops for rate-limited logging.
+	droppedCount log.DropCounter
+
 	// offsets tracks the last scanned byte offset per file.
 	offsetsMu sync.Mutex
 	offsets   map[string]int64
@@ -77,13 +80,6 @@ func (ae *ArtifactExtractor) Start(ctx context.Context, historyDir string) {
 	go ae.walkAndEnqueue(ctx, historyDir)
 }
 
-// Stop cancels background goroutines.
-func (ae *ArtifactExtractor) Stop() {
-	if ae.cancelFunc != nil {
-		ae.cancelFunc()
-	}
-}
-
 // OnHistoryFileChanged is the HistoryLinker callback — filters and enqueues.
 func (ae *ArtifactExtractor) OnHistoryFileChanged(filePath string) {
 	if !strings.HasSuffix(filePath, ".jsonl") {
@@ -103,7 +99,9 @@ func (ae *ArtifactExtractor) enqueue(filePath string) {
 	case ae.queue <- filePath:
 	default:
 		ae.inflight.Delete(filePath)
-		log.Warn("[ArtifactExtractor] queue full, dropping", "path", filePath)
+		if n, shouldLog := ae.droppedCount.Hit(); shouldLog {
+			log.Warn("[ArtifactExtractor] queue full, dropping", "path", filePath, "total_dropped", n)
+		}
 	}
 }
 

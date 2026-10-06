@@ -16,6 +16,7 @@ func addTestMessages(e *SearchEngine, sessionID string, messages []struct {
 }
 
 func TestNewSearchEngine(t *testing.T) {
+	t.Parallel()
 	engine := NewSearchEngine()
 	if engine == nil {
 		t.Fatal("NewSearchEngine returned nil")
@@ -28,6 +29,7 @@ func TestNewSearchEngine(t *testing.T) {
 }
 
 func TestSearchEngine_IndexMessage(t *testing.T) {
+	t.Parallel()
 	engine := NewSearchEngine()
 
 	err := engine.IndexMessage("session-1", 0, "user", "hello world", time.Now())
@@ -42,6 +44,7 @@ func TestSearchEngine_IndexMessage(t *testing.T) {
 }
 
 func TestSearchEngine_Search_SingleResult(t *testing.T) {
+	t.Parallel()
 	engine := NewSearchEngine()
 
 	addTestMessages(engine, "session-1", []struct {
@@ -71,6 +74,7 @@ func TestSearchEngine_Search_SingleResult(t *testing.T) {
 }
 
 func TestSearchEngine_Search_MultipleResults(t *testing.T) {
+	t.Parallel()
 	engine := NewSearchEngine()
 
 	addTestMessages(engine, "session-1", []struct {
@@ -92,6 +96,7 @@ func TestSearchEngine_Search_MultipleResults(t *testing.T) {
 }
 
 func TestSearchEngine_Search_NoResults(t *testing.T) {
+	t.Parallel()
 	engine := NewSearchEngine()
 
 	addTestMessages(engine, "session-1", []struct {
@@ -112,6 +117,7 @@ func TestSearchEngine_Search_NoResults(t *testing.T) {
 }
 
 func TestSearchEngine_Search_EmptyQuery(t *testing.T) {
+	t.Parallel()
 	engine := NewSearchEngine()
 
 	addTestMessages(engine, "session-1", []struct {
@@ -132,6 +138,7 @@ func TestSearchEngine_Search_EmptyQuery(t *testing.T) {
 }
 
 func TestSearchEngine_Search_Pagination(t *testing.T) {
+	t.Parallel()
 	engine := NewSearchEngine()
 
 	// Add 5 messages all containing "test"
@@ -174,6 +181,7 @@ func TestSearchEngine_Search_Pagination(t *testing.T) {
 }
 
 func TestSearchEngine_Search_FilterBySession(t *testing.T) {
+	t.Parallel()
 	engine := NewSearchEngine()
 
 	// Add messages to different sessions
@@ -195,6 +203,7 @@ func TestSearchEngine_Search_FilterBySession(t *testing.T) {
 }
 
 func TestSearchEngine_Search_Ranking(t *testing.T) {
+	t.Parallel()
 	engine := NewSearchEngine()
 
 	// Add messages with different term frequencies
@@ -217,6 +226,7 @@ func TestSearchEngine_Search_Ranking(t *testing.T) {
 }
 
 func TestSearchEngine_RemoveSession(t *testing.T) {
+	t.Parallel()
 	engine := NewSearchEngine()
 
 	engine.IndexMessage("session-1", 0, "user", "hello world", time.Now())
@@ -248,6 +258,7 @@ func TestSearchEngine_RemoveSession(t *testing.T) {
 }
 
 func TestSearchEngine_Clear(t *testing.T) {
+	t.Parallel()
 	engine := NewSearchEngine()
 
 	engine.IndexMessage("session-1", 0, "user", "hello world", time.Now())
@@ -267,6 +278,7 @@ func TestSearchEngine_Clear(t *testing.T) {
 }
 
 func TestSearchEngine_GetDocument(t *testing.T) {
+	t.Parallel()
 	engine := NewSearchEngine()
 
 	engine.IndexMessage("session-1", 0, "user", "hello world", time.Now())
@@ -281,6 +293,7 @@ func TestSearchEngine_GetDocument(t *testing.T) {
 }
 
 func TestSearchEngine_MultiWordQuery(t *testing.T) {
+	t.Parallel()
 	engine := NewSearchEngine()
 
 	engine.IndexMessage("session-1", 0, "user", "docker container error troubleshooting", time.Now())
@@ -306,6 +319,7 @@ func TestSearchEngine_MultiWordQuery(t *testing.T) {
 }
 
 func TestSearchEngine_QueryTime(t *testing.T) {
+	t.Parallel()
 	engine := NewSearchEngine()
 
 	// Add some documents
@@ -329,6 +343,7 @@ func TestSearchEngine_QueryTime(t *testing.T) {
 }
 
 func TestSearchEngine_Persistence(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	indexStore, err := NewIndexStoreWithDir(tmpDir)
 	if err != nil {
@@ -361,6 +376,58 @@ func TestSearchEngine_Persistence(t *testing.T) {
 
 	if results.TotalMatches != 2 {
 		t.Errorf("TotalMatches after load = %d, want 2", results.TotalMatches)
+	}
+}
+
+// TestSearchEngine_Persistence_LoadsSyncMetadata exercises the same
+// NewIndexStoreWithDir -> NewSearchEngineWithPersistence -> LoadIndex ->
+// GetSyncMetadata sequence NewSessionService runs at startup
+// (server/services/session_service.go). TestSearchEngine_Persistence already
+// covers the index/doc-store round trip but never touches sync metadata, so
+// a regression in SaveSyncMetadata/LoadSyncMetadata's wiring into
+// LoadIndex/GetSyncMetadata would go undetected.
+func TestSearchEngine_Persistence_LoadsSyncMetadata(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	indexStore, err := NewIndexStoreWithDir(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create index store: %v", err)
+	}
+
+	engine := NewSearchEngineWithPersistence(indexStore)
+	engine.IndexMessage("session-1", 0, "user", "hello world", time.Now())
+
+	meta := NewIndexSyncMetadata()
+	meta.Sessions["session-1"] = &SessionIndexMetadata{
+		SessionID:    "session-1",
+		MessageCount: 1,
+		DocCount:     1,
+	}
+	meta.TotalSessions = 1
+	meta.TotalDocuments = 1
+	engine.syncMetadata = meta
+
+	if err := engine.SaveIndex(); err != nil {
+		t.Fatalf("SaveIndex failed: %v", err)
+	}
+	if err := engine.SaveSyncMetadata(); err != nil {
+		t.Fatalf("SaveSyncMetadata failed: %v", err)
+	}
+
+	loaded := NewSearchEngineWithPersistence(indexStore)
+	if err := loaded.LoadIndex(); err != nil {
+		t.Fatalf("LoadIndex failed: %v", err)
+	}
+
+	got := loaded.GetSyncMetadata()
+	if got == nil {
+		t.Fatal("GetSyncMetadata() = nil after LoadIndex, want persisted metadata")
+	}
+	if got.TotalSessions != 1 || got.TotalDocuments != 1 {
+		t.Errorf("GetSyncMetadata() = %+v, want TotalSessions=1 TotalDocuments=1", got)
+	}
+	if _, ok := got.Sessions["session-1"]; !ok {
+		t.Errorf("GetSyncMetadata().Sessions missing %q: %+v", "session-1", got.Sessions)
 	}
 }
 

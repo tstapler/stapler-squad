@@ -5,7 +5,10 @@
   "method": "ListPendingApprovals",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": false,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-06-26T08:55:46.608811477-07:00"
+  "tested": true,
+  "testIds": [
+    "TestListPendingApprovals_should_IncludeRiskLevelInProto_When_ApprovalHasClassifiedRisk",
+    "TestListPendingApprovals_should_ReturnEmptyRiskLevel_When_ApprovalPredatesFeature"
+  ],
+  "lastModified": "2026-08-10T00:00:00Z"
 }

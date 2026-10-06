@@ -108,7 +108,8 @@ get_session_id() {
 
     # Try to detect from tmux session name (stapler-squad managed sessions)
     if [[ -n "${TMUX:-}" ]]; then
-        local tmux_session=$(tmux display-message -p '#S' 2>/dev/null || echo "")
+        local tmux_session
+        tmux_session=$(tmux display-message -p '#S' 2>/dev/null || echo "")
         if [[ -n "$tmux_session" ]]; then
             echo "$tmux_session"
             return
@@ -161,10 +162,12 @@ detect_source_app() {
         # Find IntelliJ process - look for parent processes
         local ppid=$$
         while [[ $ppid -gt 1 ]]; do
-            local pname=$(ps -p "$ppid" -o comm= 2>/dev/null || echo "")
+            local pname
+            pname=$(ps -p "$ppid" -o comm= 2>/dev/null || echo "")
             if [[ "$pname" == *"idea"* ]] || [[ "$pname" == *"java"* ]]; then
                 # Check if this java process is IntelliJ
-                local cmdline=$(ps -p "$ppid" -o args= 2>/dev/null || echo "")
+                local cmdline
+                cmdline=$(ps -p "$ppid" -o args= 2>/dev/null || echo "")
                 if [[ "$cmdline" == *"idea"* ]] || [[ "$cmdline" == *"jetbrains"* ]]; then
                     APP_PID="$ppid"
                     break
@@ -237,7 +240,8 @@ detect_source_app() {
         # macOS: use ps to get parent app
         local ppid=$$
         while [[ $ppid -gt 1 ]]; do
-            local pname=$(ps -p "$ppid" -o comm= 2>/dev/null || echo "")
+            local pname
+            pname=$(ps -p "$ppid" -o comm= 2>/dev/null || echo "")
             case "$pname" in
                 *idea*|*jetbrains*)
                     APP_NAME="IntelliJ IDEA"
@@ -291,7 +295,8 @@ detect_git_context() {
 
     # Fallback to directory name if no remote
     if [[ -z "$GIT_REPO" ]]; then
-        local git_root=$(git rev-parse --show-toplevel 2>/dev/null)
+        local git_root
+        git_root=$(git rev-parse --show-toplevel 2>/dev/null)
         if [[ -n "$git_root" ]]; then
             GIT_REPO=$(basename "$git_root")
         fi

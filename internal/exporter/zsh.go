@@ -39,7 +39,7 @@ func (e *ZshExporter) Export(events []*history.Event) error {
 		// Target Zsh extended format: : 1600000000:0;command
 		ts := ev.Timestamp.Unix()
 		cmd := string(e.metafy(ev.Command))
-		
+
 		fmt.Fprintf(&buf, ": %d:0;%s\n", ts, cmd)
 	}
 

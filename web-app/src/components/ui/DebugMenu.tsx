@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, RefObject } from "react";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import {
   getNotificationPreference,
@@ -51,9 +51,10 @@ import {
 interface DebugMenuProps {
   isOpen: boolean;
   onClose: () => void;
+  triggerRef?: RefObject<HTMLElement | null>;
 }
 
-export function DebugMenu({ isOpen, onClose }: DebugMenuProps) {
+export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
   const [terminalDebug, setTerminalDebug] = useState(false);
   const [serverDebugLog, setServerDebugLog] = useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
@@ -71,7 +72,7 @@ export function DebugMenu({ isOpen, onClose }: DebugMenuProps) {
 
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(menuRef, isOpen);
+  useFocusTrap(menuRef, isOpen, triggerRef);
 
   useEffect(() => {
     const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });

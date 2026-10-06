@@ -1,5 +1,5 @@
 import type { VcsWidgetData, GithubSummary } from "./types";
-import { deriveMergeabilityState } from "./mergeability";
+import { deriveMergeabilityState, deriveBlockingReasons } from "./mergeability";
 
 function githubSummary(overrides: Partial<GithubSummary> = {}): GithubSummary {
   return {
@@ -12,6 +12,9 @@ function githubSummary(overrides: Partial<GithubSummary> = {}): GithubSummary {
     checkConclusion: "",
     approvedCount: 0,
     changesReqCount: 0,
+    mergeable: "unknown",
+    checks: [],
+    reviewFeedback: [],
     ...overrides,
   };
 }
@@ -54,6 +57,13 @@ describe("deriveMergeabilityState", () => {
       fileChanges: [{ path: "src/foo.ts", status: "conflict", additions: 1, deletions: 1, section: "conflict" }],
     });
     expect(deriveMergeabilityState(data)).toBe("conflicted");
+  });
+
+  it("deriveMergeabilityState_should_ReturnDiverged_When_GithubMergeableConflictingWithNoLocalConflictFiles", () => {
+    const data = liveData({
+      github: githubSummary({ mergeable: "conflicting", checkConclusion: "success" }),
+    });
+    expect(deriveMergeabilityState(data)).toBe("diverged");
   });
 
   it("deriveMergeabilityState_should_ReturnChangesRequested_When_GithubChangesReqCountPositive", () => {
@@ -108,5 +118,34 @@ describe("deriveMergeabilityState", () => {
 
     expect(deriveMergeabilityState(withNullGithub)).toBe("snapshot_unavailable");
     expect(deriveMergeabilityState(withPartialGithub)).toBe("snapshot_unavailable");
+  });
+});
+
+describe("deriveBlockingReasons", () => {
+  it("deriveBlockingReasons_should_ReturnAllThreeReasons_When_DraftAndChangesRequestedAndCiFailingCoOccur", () => {
+    const data = liveData({
+      github: githubSummary({ isDraft: true, changesReqCount: 1, checkConclusion: "failure" }),
+    });
+    const reasons = deriveBlockingReasons(data);
+    expect(reasons).toHaveLength(3);
+    expect(reasons.map((r) => r.key)).toEqual(["draft", "changes_requested", "ci_failing"]);
+  });
+
+  it("deriveBlockingReasons_should_ReturnEmptyArray_When_ShippedTrueEvenWithOtherwiseBlockingConditions", () => {
+    const data = liveData({
+      shipped: true,
+      github: githubSummary({ isDraft: true, changesReqCount: 1, checkConclusion: "failure" }),
+    });
+    expect(deriveBlockingReasons(data)).toEqual([]);
+  });
+
+  it("deriveBlockingReasons_should_ReturnGithubDiverged_When_GithubMergeableConflictingWithNoLocalConflictFiles", () => {
+    const data = liveData({
+      fileChanges: [],
+      github: githubSummary({ mergeable: "conflicting" }),
+    });
+    const reasons = deriveBlockingReasons(data);
+    expect(reasons.map((r) => r.key)).toContain("github_diverged");
+    expect(reasons.map((r) => r.key)).not.toContain("conflicted");
   });
 });

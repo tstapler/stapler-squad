@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import type { MouseEvent } from "react";
 import { Check, Copy, FolderOpen, GitBranch, Users } from "lucide-react";
 import type { VcsWidgetData, VcsWidgetMode } from "@/lib/vcs/types";
 import * as styles from "./VcsWidgetHeader.css";
@@ -16,7 +17,7 @@ interface VcsWidgetHeaderProps {
    * the heuristic itself is unchanged, only its ambiguity becomes visible.
    */
   activeSessionCount?: number;
-  onBrowseFiles?: () => void;
+  onBrowseFiles?: (event: MouseEvent<HTMLButtonElement>) => void;
 }
 
 export function VcsWidgetHeader({

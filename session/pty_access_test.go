@@ -18,6 +18,7 @@ func mockPTY() (*os.File, *os.File, error) {
 }
 
 func TestPTYAccess_Write(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -49,6 +50,7 @@ func TestPTYAccess_Write(t *testing.T) {
 }
 
 func TestPTYAccess_Read(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -81,6 +83,7 @@ func TestPTYAccess_Read(t *testing.T) {
 }
 
 func TestPTYAccess_ConcurrentWrites(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -127,6 +130,7 @@ func TestPTYAccess_ConcurrentWrites(t *testing.T) {
 }
 
 func TestPTYAccess_ConcurrentReads(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -176,6 +180,7 @@ func TestPTYAccess_ConcurrentReads(t *testing.T) {
 }
 
 func TestPTYAccess_GetBuffer(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -198,6 +203,7 @@ func TestPTYAccess_GetBuffer(t *testing.T) {
 }
 
 func TestPTYAccess_GetRecentOutput(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -221,6 +227,7 @@ func TestPTYAccess_GetRecentOutput(t *testing.T) {
 }
 
 func TestPTYAccess_UpdatePTY(t *testing.T) {
+	t.Parallel()
 	reader1, writer1, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create first mock PTY: %v", err)
@@ -266,6 +273,7 @@ func TestPTYAccess_UpdatePTY(t *testing.T) {
 }
 
 func TestPTYAccess_Close(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -300,6 +308,7 @@ func TestPTYAccess_Close(t *testing.T) {
 }
 
 func TestPTYAccess_ClosedUpdate(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -325,6 +334,7 @@ func TestPTYAccess_ClosedUpdate(t *testing.T) {
 }
 
 func TestPTYAccess_NilPTY(t *testing.T) {
+	t.Parallel()
 	buffer := NewCircularBuffer(1024)
 	ptyAccess := NewPTYAccess("test-session", nil, buffer)
 
@@ -342,6 +352,7 @@ func TestPTYAccess_NilPTY(t *testing.T) {
 }
 
 func TestPTYAccess_GetSessionName(t *testing.T) {
+	t.Parallel()
 	buffer := NewCircularBuffer(1024)
 	ptyAccess := NewPTYAccess("test-session", nil, buffer)
 

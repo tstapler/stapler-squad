@@ -5,15 +5,58 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
+// TestPortSessionHistory_UnresolvedAdapterPair_ReturnsSentinel verifies that a program pair
+// with no matching HistoryAdapter on either side returns the explicit ErrNoHistoryAdapter
+// sentinel rather than a bare, unexplained nil — covering both a pair where neither side has a
+// canonical history format (opencode/bash) and gemini specifically (the real Gemini CLI, whose
+// history format is not the Antigravity storage AgyAdapter reads/writes, so it must resolve as
+// unmatched rather than being silently misrouted through AgyAdapter).
+func TestPortSessionHistory_UnresolvedAdapterPair_ReturnsSentinel(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		old, new_ string
+	}{
+		{"opencode_to_bash", "opencode", "bash"},
+		{"claude_to_bash", "claude", "bash"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			inst := &Instance{Title: "test-session"}
+			err := PortSessionHistory(context.Background(), tt.old, tt.new_, inst)
+			if !errors.Is(err, ErrNoHistoryAdapter) {
+				t.Fatalf("PortSessionHistory(%q, %q) = %v, want ErrNoHistoryAdapter", tt.old, tt.new_, err)
+			}
+		})
+	}
+}
+
+// Not t.Parallel(): this test (and its siblings below —
+// TestPortSessionHistory_AgyToClaude, _LiveClaude, _LiveAgy,
+// TestPortClaudeToAgy_SchemaMatchesRealDB,
+// TestPortSessionHistory_WithInhibitionEngineRedaction) all override the
+// process-global HOME env var via a raw os.Setenv rather than t.Setenv
+// (t.Setenv panics when combined with t.Parallel(), so someone worked around
+// that by reaching for os.Setenv directly — which reintroduces exactly the
+// race t.Setenv's restriction exists to prevent: HOME is one process-wide
+// value, so whichever of these tests' HOME happens to be active when another
+// resolves its Claude/Antigravity projects directory wins). Confirmed by
+// reproduction: a full `go test ./session/...` run failed
+// TestPortSessionHistory_WithInhibitionEngineRedaction looking for its
+// transcript inside TestPortClaudeToAgy_SchemaMatchesRealDB's t.TempDir() —
+// this test's HOME was still active when that one's path-resolution ran.
 func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
 	// Create temporary directory for home
 	tempHome := t.TempDir()
@@ -94,8 +137,10 @@ func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
 	inst := &Instance{
 		Title: "test-session",
 		Path:  workspace,
-		claudeSession: &ClaudeSessionData{
-			ConversationUUID: uuid,
+		claudeExtension: claudeExtension{
+			claudeSession: &ClaudeSessionData{
+				ConversationUUID: uuid,
+			},
 		},
 	}
 
@@ -168,7 +213,7 @@ func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
 		t.Fatalf("sqlite database file does not exist")
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatalf("failed to open sqlite DB: %v", err)
 	}
@@ -193,6 +238,100 @@ func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
 	}
 }
 
+func TestPortSessionHistory_ClaudeToOpencode(t *testing.T) {
+	tempHome := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tempHome)
+	defer os.Setenv("HOME", origHome)
+
+	uuid := "550e8400-e29b-41d4-a716-446655440001"
+	workspace := "/home/test/opencode_project"
+
+	claudeProjectDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(workspace))
+	err := os.MkdirAll(claudeProjectDir, 0700)
+	if err != nil {
+		t.Fatalf("failed to create claude projects dir: %v", err)
+	}
+
+	claudeLogPath := filepath.Join(claudeProjectDir, uuid+".jsonl")
+	f, err := os.Create(claudeLogPath)
+	if err != nil {
+		t.Fatalf("failed to create claude log file: %v", err)
+	}
+
+	mockClaudeTurns := []map[string]interface{}{
+		{
+			"type":      "user",
+			"timestamp": "2026-06-25T20:00:00Z",
+			"message": map[string]interface{}{
+				"role":    "user",
+				"content": "hello opencode port",
+			},
+		},
+		{
+			"type":      "assistant",
+			"timestamp": "2026-06-25T20:01:00Z",
+			"message": map[string]interface{}{
+				"role": "assistant",
+				"content": []interface{}{
+					map[string]interface{}{
+						"type": "text",
+						"text": "ported response",
+					},
+				},
+			},
+		},
+	}
+
+	for _, turn := range mockClaudeTurns {
+		data, err := json.Marshal(turn)
+		if err != nil {
+			t.Fatalf("failed to marshal turn: %v", err)
+		}
+		f.Write(data)
+		f.Write([]byte("\n"))
+	}
+	f.Close()
+
+	inst := &Instance{
+		Title: "test-opencode-port",
+		Path:  workspace,
+		claudeExtension: claudeExtension{
+			claudeSession: &ClaudeSessionData{
+				ConversationUUID: uuid,
+			},
+		},
+	}
+
+	ctx := context.Background()
+	err = PortSessionHistory(ctx, "claude", "opencode", inst)
+	if err != nil {
+		t.Fatalf("PortSessionHistory failed: %v", err)
+	}
+
+	dbPath := filepath.Join(tempHome, ".local", "share", "opencode", "opencode.db")
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		t.Fatalf("opencode db file does not exist")
+	}
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("failed to open opencode DB: %v", err)
+	}
+	defer db.Close()
+
+	var msgCount int
+	err = db.QueryRow("SELECT COUNT(*) FROM message WHERE session_id = ?", uuid).Scan(&msgCount)
+	if err != nil {
+		t.Fatalf("failed to query opencode messages: %v", err)
+	}
+	if msgCount != 2 {
+		t.Errorf("expected 2 messages, got %d", msgCount)
+	}
+}
+
+// Not t.Parallel(): mutates process-global HOME. See
+// TestPortSessionHistory_ClaudeToAgy's doc comment for the full rationale.
 func TestPortSessionHistory_AgyToClaude(t *testing.T) {
 	// Create temporary directory for home
 	tempHome := t.TempDir()
@@ -323,6 +462,8 @@ func TestPortSessionHistory_AgyToClaude(t *testing.T) {
 	}
 }
 
+// Not t.Parallel(): mutates process-global HOME. See
+// TestPortSessionHistory_ClaudeToAgy's doc comment for the full rationale.
 func TestPortSessionHistory_LiveClaude(t *testing.T) {
 	// Parse actual real Claude JSONL session if present in the home directory.
 	home, err := os.UserHomeDir()
@@ -372,8 +513,10 @@ func TestPortSessionHistory_LiveClaude(t *testing.T) {
 	inst := &Instance{
 		Title: "live-port-test",
 		Path:  instWorkspacePath,
-		claudeSession: &ClaudeSessionData{
-			ConversationUUID: liveSessionUUID,
+		claudeExtension: claudeExtension{
+			claudeSession: &ClaudeSessionData{
+				ConversationUUID: liveSessionUUID,
+			},
 		},
 	}
 
@@ -388,7 +531,7 @@ func TestPortSessionHistory_LiveClaude(t *testing.T) {
 		t.Fatalf("target SQLite DB was not created at %s", dbPath)
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatalf("failed to open SQLite DB: %v", err)
 	}
@@ -404,6 +547,8 @@ func TestPortSessionHistory_LiveClaude(t *testing.T) {
 	}
 }
 
+// Not t.Parallel(): mutates process-global HOME. See
+// TestPortSessionHistory_ClaudeToAgy's doc comment for the full rationale.
 func TestPortSessionHistory_LiveAgy(t *testing.T) {
 	// Parse actual real Antigravity JSONL session if present in the home directory.
 	home, err := os.UserHomeDir()
@@ -476,8 +621,10 @@ func TestPortSessionHistory_LiveAgy(t *testing.T) {
 	inst := &Instance{
 		Title: "live-port-test-agy",
 		Path:  workspace,
-		claudeSession: &ClaudeSessionData{
-			ConversationUUID: liveSessionUUID,
+		claudeExtension: claudeExtension{
+			claudeSession: &ClaudeSessionData{
+				ConversationUUID: liveSessionUUID,
+			},
 		},
 	}
 
@@ -521,6 +668,8 @@ func TestPortSessionHistory_LiveAgy(t *testing.T) {
 // produced by portClaudeToAgy has all tables and indexes present in real
 // Antigravity conversation databases (verified from live .db files).
 // Without the full schema, Antigravity may fail on first open.
+// Not t.Parallel(): mutates process-global HOME. See
+// TestPortSessionHistory_ClaudeToAgy's doc comment for the full rationale.
 func TestPortClaudeToAgy_SchemaMatchesRealDB(t *testing.T) {
 	tempHome := t.TempDir()
 	origHome := os.Getenv("HOME")
@@ -555,7 +704,7 @@ func TestPortClaudeToAgy_SchemaMatchesRealDB(t *testing.T) {
 		Title:           "schema-test-session",
 		Path:            workspace,
 		WorkingDir:      workspace,
-		claudeSession:   &ClaudeSessionData{ConversationUUID: uuid},
+		claudeExtension: claudeExtension{claudeSession: &ClaudeSessionData{ConversationUUID: uuid}},
 		HistoryFilePath: claudeLogPath,
 	}
 	if err := portClaudeToAgy(inst); err != nil {
@@ -564,7 +713,7 @@ func TestPortClaudeToAgy_SchemaMatchesRealDB(t *testing.T) {
 
 	// Open the produced DB and inspect sqlite_master.
 	dbPath := filepath.Join(tempHome, ".gemini", "antigravity-cli", "conversations", uuid+".db")
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -613,6 +762,8 @@ func TestPortClaudeToAgy_SchemaMatchesRealDB(t *testing.T) {
 	t.Logf("Schema OK: found %d objects (%v)", len(got), got)
 }
 
+// Not t.Parallel(): mutates process-global HOME. See
+// TestPortSessionHistory_ClaudeToAgy's doc comment for the full rationale.
 func TestPortSessionHistory_WithInhibitionEngineRedaction(t *testing.T) {
 	tempHome := t.TempDir()
 	origHome := os.Getenv("HOME")
@@ -657,7 +808,7 @@ func TestPortSessionHistory_WithInhibitionEngineRedaction(t *testing.T) {
 		Title:           "secret-test-session",
 		Path:            workspace,
 		WorkingDir:      workspace,
-		claudeSession:   &ClaudeSessionData{ConversationUUID: uuid},
+		claudeExtension: claudeExtension{claudeSession: &ClaudeSessionData{ConversationUUID: uuid}},
 		HistoryFilePath: claudeLogPath,
 	}
 

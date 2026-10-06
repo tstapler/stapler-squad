@@ -101,11 +101,6 @@ globalStyle(`${table} th`, {
   fontSize: "0.75rem",
 });
 
-export const colTimestamp = style({ width: "130px" });
-export const colLevel = style({ width: "80px" });
-export const colSource = style({ width: "160px" });
-export const colMessage = style({ flex: 1 });
-
 export const row = style({
   borderBottom: `1px solid ${vars.color.borderSubtle}`,
   transition: "background-color 0.1s",
@@ -128,12 +123,6 @@ export const level = style({
   whiteSpace: "nowrap",
 });
 
-export const source = style({
-  padding: "0.4rem 0.75rem",
-  color: vars.color.textMuted,
-  fontSize: "0.8rem",
-});
-
 export const message = style({
   padding: "0.4rem 0.75rem",
   wordBreak: "break-word",
@@ -143,7 +132,6 @@ export const levelDebug = style({ color: vars.color.textMuted });
 export const levelInfo = style({ color: vars.color.primary });
 export const levelWarning = style({ color: vars.color.warning });
 export const levelError = style({ color: vars.color.error });
-export const levelFatal = style({ color: vars.color.error });
 
 export const loadMoreButton = style({
   display: "block",

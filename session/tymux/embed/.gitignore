@@ -1,0 +1,6 @@
+# Fetched tymuxd binaries are populated locally via: make fetch-tymuxd
+# (see scripts/fetch-tymuxd.sh, ADR-001). They are NOT committed — each
+# developer/CI fetches the pinned release binary, mirroring
+# session/tmux/embed/.gitignore's policy for the compiled tmux binary.
+tymuxd
+tymuxd_*

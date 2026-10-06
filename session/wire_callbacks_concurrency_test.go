@@ -14,6 +14,7 @@ import (
 // After the stateMutex→mu rename + ControllerManager.mu split, GetController()
 // uses controllerManager.mu instead of i.mu, so no self-deadlock is possible.
 func TestWireRateLimitCallbacks_NoDeadlock(t *testing.T) {
+	t.Parallel()
 	i := &Instance{}
 
 	done := make(chan bool)

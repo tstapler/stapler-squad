@@ -2,7 +2,7 @@
 
 import { useEffect, useCallback, useRef, useMemo, useState } from "react";
 import { createClient, ConnectError, Code } from "@connectrpc/connect";
-import { createWatchTransport } from "@/lib/transport/watch-ws-transport";
+import { createSessionWatchTransport } from "@/lib/transport/watch-ws-transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { Session, SessionStatus, Shell, NotificationPriority } from "@/gen/session/v1/types_pb";
 import {
@@ -10,32 +10,59 @@ import {
   UpdateSessionRequest,
   PromptHistoryEntry,
   RunOneShotResponse,
+  DraftPullRequestResponse,
+  CreatePullRequestResponse,
   SpawnShellRequest,
   RunWorkflowRequestSchema,
   ArchiveSessionRequestSchema,
   UnarchiveSessionRequestSchema,
+  PinSessionRequestSchema,
+  UnpinSessionRequestSchema,
   ListSessionsRequestSchema,
 } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
+import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { SessionEvent, NotificationEvent } from "@/gen/session/v1/events_pb";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
-import { BackoffState, getWsCloseCode, isRetriableCloseCode } from "@/lib/utils/backoff";
+import { getWsCloseCode, isNonRetriableConnectError } from "@/lib/utils/backoff";
+import { RefreshCoordinator } from "@/lib/utils/refreshCoordinator";
+import { useWatchStream, type WatchConnectionState } from "@/lib/hooks/useWatchStream";
+import type { ListSessionsResponse } from "@/gen/session/v1/session_pb";
 import { createRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
+import { getErrorMessage } from "@/lib/utils/connectError";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
+import { useNotifications, getFailureReasonToastMessage } from "@/lib/contexts/NotificationContext";
 import { useAppDispatch, useAppSelector } from "@/lib/store";
+// NOTE (backlog #488, 2026-08-17): this file's other `dispatch(setError(...))`
+// sites are deliberately NOT converted to the getErrorMessage() helper
+// (web-app/src/lib/utils/connectError.ts) used everywhere in components/backlog/**.
+// `setError` here writes to the shared sessionsSlice Redux store, consumed by
+// non-backlog surfaces (the general session list/terminal views) — stripping the
+// ConnectRPC `[code]` prefix there is a behavior change with a materially larger
+// blast radius than the local useState catch-block conversions this PR made, and
+// is out of scope for a backlog-toast presentation fix. Tracked as a follow-up,
+// not fixed here.
+//
+// updateSession()'s setError call below is the one exception: BacklogItemDetail.tsx's
+// handleSteerSession reads this exact value back via selectSessionsError() and
+// re-throws it into a backlog action toast, so it IS a backlog-facing surface
+// this PR touches — stripped here to match.
 import {
   setSessions,
   upsertSession,
   removeSession,
   setLoading,
   setError,
+  setErrorCode,
   setConnectionState,
   selectAllSessions,
   selectSessionsLoading,
   selectSessionsError,
   selectConnectionState,
   removeDetectedStatus,
+  type ConnectionState,
 } from "@/lib/store/sessionsSlice";
+import { remoteHealthChanged } from "@/lib/store/remotesSlice";
 
 // ponytail: stable empty array so non-watching callers (e.g. useSessionActions
 // in each SessionCard) don't subscribe to the full sessions list. Without this,
@@ -51,6 +78,15 @@ import { removeItem as removeReviewQueueItem } from "@/lib/store/reviewQueueSlic
 // server's own createSessionTimeout (150s in session_service.go); if that
 // value changes, update this one too.
 const CREATE_SESSION_TIMEOUT_MS = 160_000;
+
+// Bounds every ListSessions RPC (all 4 call sites share refreshCoordinatorRef,
+// see below) so a hung/slow backend can't wedge the coordinator's single
+// in-flight slot forever — adversarial-review Blocker 1. A read-only list
+// call is expected to be fast; well above typical latency but far below
+// CREATE_SESSION_TIMEOUT_MS since no backend work (tmux/clone) is involved.
+export const LIST_SESSIONS_TIMEOUT_MS = 15_000;
+
+const DISCONNECTED: ConnectionState = "disconnected";
 
 interface UseSessionServiceOptions {
   baseUrl?: string;
@@ -93,13 +129,24 @@ interface UseSessionServiceReturn {
   updateSession: (id: string, updates: Partial<UpdateSessionRequest>) => Promise<Session | null>;
   deleteSession: (id: string, force?: boolean) => Promise<boolean>;
   runOneShot: (sessionId: string, prompt: string, timeoutSeconds?: number) => Promise<RunOneShotResponse | null>;
+  draftPullRequest: (sessionId: string) => Promise<DraftPullRequestResponse | null>;
+  createPullRequest: (req: {
+    sessionId: string;
+    title: string;
+    body: string;
+    baseBranch: string;
+  }) => Promise<CreatePullRequestResponse | null>;
   listPromptHistory: (limit?: number) => Promise<PromptHistoryEntry[]>;
   pauseSession: (id: string) => Promise<Session | null>;
   resumeSession: (id: string, updates?: { title?: string; tags?: string[] }) => Promise<Session | null>;
   hibernateSession: (id: string) => Promise<Session | null>;
   resumeHibernatedSession: (id: string) => Promise<Session | null>;
+  resumeCrashedSession: (id: string) => Promise<Session | null>;
   renameSession: (id: string, newTitle: string) => Promise<boolean>;
   restartSession: (id: string) => Promise<boolean>;
+  retrySession: (id: string) => Promise<boolean>;
+  cancelSessionCreation: (id: string) => Promise<{ success: boolean; lostRace: boolean }>;
+  retrySessionCreation: (id: string) => Promise<boolean>;
   clearConversationState: (id: string) => Promise<boolean>;
   acknowledgeSession: (id: string) => Promise<boolean>;
   createCheckpoint: (sessionId: string, label: string) => Promise<boolean>;
@@ -109,6 +156,8 @@ interface UseSessionServiceReturn {
   // Archive methods
   archiveSession: (id: string) => Promise<boolean>;
   unarchiveSession: (id: string) => Promise<boolean>;
+  pinSession: (id: string) => Promise<boolean>;
+  unpinSession: (id: string) => Promise<boolean>;
   listSessionsByWorkflow: (workflowId: string, includeArchived?: boolean) => Promise<Session[]>;
 
   // Workflow methods
@@ -161,44 +210,91 @@ export function useSessionService(
   }, [onSessionDeleted]);
 
   const dispatch = useAppDispatch();
+  const { addNotification } = useNotifications();
   const [systemMemoryPct, setSystemMemoryPct] = useState<number>(0);
   const [reconnectAttemptCount, setReconnectAttemptCount] = useState(0);
   const sessions = useAppSelector(autoWatch ? selectAllSessions : selectNoSessions);
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   const loading = useAppSelector(selectSessionsLoading);
   const errorStr = useAppSelector(selectSessionsError);
 
-  const abortControllerRef = useRef<AbortController | null>(null);
+  // Async-session-creation Epic 5.3 (Surface 4): fire a global failure toast
+  // exactly once per Creating -> Failed transition, regardless of which
+  // page/session the user is currently viewing. This reads Redux `sessions`
+  // state (populated by both the WatchSessions stream and ListSessions
+  // snapshots via the same upsertSession/setSessions actions) rather than
+  // hooking the raw stream event directly, so it fires identically whichever
+  // path delivered the transition.
+  //
+  // `lastKnownStatusRef` is the dedup guard: a session's id is only ever
+  // recorded here on a render where it was already present with a
+  // *different* status, so (a) a session's first-ever appearance (including
+  // one that is already Failed on initial load, e.g. after a page refresh)
+  // never fires a toast, and (b) once fired, subsequent renders with the
+  // same Failed status never re-fire — a status transition notifies exactly
+  // once, not once per re-render or redundant stream event.
+  const lastKnownStatusRef = useRef<Map<string, SessionStatus>>(new Map());
+  useEffect(() => {
+    if (!enabled || !autoWatch) return;
+    const seen = lastKnownStatusRef.current;
+    for (const s of sessions) {
+      const prevStatus = seen.get(s.id);
+      if (
+        prevStatus !== undefined &&
+        prevStatus !== SessionStatus.FAILED &&
+        s.status === SessionStatus.FAILED
+      ) {
+        addNotification({
+          sessionId: s.id,
+          sessionName: s.title || s.id,
+          title: "Session creation failed",
+          message: getFailureReasonToastMessage(s.failureReason),
+          notificationType: "task_failed",
+          priority: "high",
+          metadata: { failure_reason: s.failureReason },
+        });
+      }
+      seen.set(s.id, s.status);
+    }
+    // Prune ids no longer present so a deleted-then-recreated session (same
+    // title reused) is treated as a fresh first-appearance, not a transition.
+    const currentIds = new Set(sessions.map((s) => s.id));
+    for (const id of seen.keys()) {
+      if (!currentIds.has(id)) seen.delete(id);
+    }
+  }, [sessions, enabled, autoWatch, addNotification]);
+
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
 
-  // Reconnect control: true while watchSessions is active (user did not explicitly stop)
-  const shouldReconnectRef = useRef(false);
-  // Jittered exponential backoff state
-  const backoffRef = useRef(new BackoffState(1000, 30_000));
-  // Timestamp of last received stream event, used to detect staleness
-  const lastEventTimeRef = useRef<number | null>(null);
+  // Coalesces concurrent ListSessions fetches across all 4 call sites in
+  // this hook (listSessions, watch-stream initial snapshot, backwards-jump
+  // resync ×2) — see refreshCoordinator.ts.
+  const refreshCoordinatorRef = useRef(new RefreshCoordinator<ListSessionsResponse>());
   // Last seen event sequence number — passed as after_seq on reconnect so the
   // server replays any events missed during the disconnect window (up to 1 hour).
+  // Kept separately from useWatchStream's own internal afterSeq bookkeeping
+  // because this copy is also used for backwards-jump detection (below).
   const lastSeqRef = useRef<bigint>(0n);
   // Stores current watch options so reconnects use the latest options without stale closure
   const watchOptionsRef = useRef<{ categoryFilter?: string; statusFilter?: SessionStatus } | undefined>(undefined);
-  // Monotonically-increasing stream generation counter; checked at every await checkpoint
-  const streamGenerationRef = useRef(0);
-  // Whether isConnected — synced directly (not via useEffect) to avoid render-cycle lag
-  const isConnectedRef = useRef(false);
-  // Ref to current watchSessions function — updated every render for stable event handler indirection
-  const watchSessionsRef = useRef<((opts?: { categoryFilter?: string; statusFilter?: SessionStatus }) => void) | undefined>(undefined);
+  // True once watchSessions() has been called (autoWatch, or a manual call) and
+  // stopWatching() hasn't run since — gates useWatchStream's connection effect.
+  const [isWatching, setIsWatching] = useState(false);
+  const isWatchingRef = useRef(false);
+  // True once the current stream has delivered at least one message.
+  const isLiveRef = useRef(false);
+  // Timestamp of the last received event, used only by the bespoke
+  // visibility/online handler below (staleThresholdMs's own periodic
+  // watchdog inside useWatchStream already covers heartbeat-driven
+  // liveness on a slower cadence).
+  const lastActivityRef = useRef<number>(Date.now());
   // Debounce timer for visibilitychange/online handlers
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Tracks whether seq backwards-jump was detected, triggering full resync
-  const needsFullResyncRef = useRef(false);
-  // Tracks whether the backstop interval has already triggered a reconnect
-  const backstopTriggeredRef = useRef(false);
-  // Stable ref to dispatch so visibility/online handler can use [] deps
-  const dispatchRef = useRef(dispatch);
 
   // Initialize ConnectRPC client — uses HTTP for unary, WebSocket for streaming Watch* RPCs
   useEffect(() => {
-    const transport = createWatchTransport({
+    const transport = createSessionWatchTransport({
       baseUrl,
       interceptors: [createAuthInterceptor(), createRpcTimingInterceptor(analytics)],
     });
@@ -217,22 +313,36 @@ export function useSessionService(
       dispatch(setError(null));
 
       try {
-        const response = await clientRef.current.listSessions({
-          category: listOptions?.category,
-          status: listOptions?.status,
-          includeArchived: listOptions?.includeArchived,
-        });
-
-        dispatch(setSessions(response.sessions));
-        dispatch(setError(null)); // Clear any previous errors
-        if (response.systemMemoryPct > 0) {
-          setSystemMemoryPct(response.systemMemoryPct);
-        }
+        await refreshCoordinatorRef.current.request(
+          () =>
+            clientRef.current!.listSessions(
+              {
+                category: listOptions?.category,
+                status: listOptions?.status,
+                includeArchived: listOptions?.includeArchived,
+              },
+              { timeoutMs: LIST_SESSIONS_TIMEOUT_MS }
+            ),
+          (response) => {
+            dispatch(setSessions(response.sessions));
+            dispatch(setError(null)); // Clear any previous errors
+            if (response.systemMemoryPct > 0) {
+              setSystemMemoryPct(response.systemMemoryPct);
+            }
+          }
+        );
       } catch (err) {
         const error = err instanceof Error ? err : new Error("Failed to list sessions");
         dispatch(setError(error.message));
         console.error("Failed to list sessions:", error);
       } finally {
+        // Known limitation (sdd:6-verify follow-up, not fixed here): this
+        // clears as soon as THIS call's own request() settles, even if it
+        // got coalesced behind a still-in-flight rerun whose data hasn't
+        // landed yet — `loading` can briefly read false mid-refresh. A
+        // correct fix needs a site-scoped "is my own work done" signal, not
+        // the coordinator's shared busy state (which also reflects unrelated
+        // background stream reconnects from sites #2/#3/#3b).
         dispatch(setLoading(false));
       }
     },
@@ -270,14 +380,22 @@ export function useSessionService(
             category: request.category,
             prompt: request.prompt,
             autoYes: request.autoYes,
+            autoApprove: request.autoApprove ?? false,
             existingWorktree: request.existingWorktree,
             sessionType: request.sessionType,
             createIfMissing: request.createIfMissing ?? false,
             initialPrompt: request.initialPrompt,
             autonomousMode: request.autonomousMode ?? false,
+            // No default (unlike autonomousMode) -- an omitted remote must stay omitted on
+            // the wire, not coerced to a zero-value RemoteTarget, so local session creation
+            // is byte-identical to pre-change behavior (ADR-001: remote-as-orthogonal-flag).
+            remote: request.remote,
             permissionMode: request.permissionMode ?? "",
             aliasName: request.aliasName ?? "",
             cliFlags: request.cliFlags ?? "",
+            extraArgs: request.extraArgs ?? [],
+            restartFromSessionId: request.restartFromSessionId,
+            confirmRestartWithLiveSource: request.confirmRestartWithLiveSource,
           },
           { timeoutMs: CREATE_SESSION_TIMEOUT_MS }
         );
@@ -290,7 +408,24 @@ export function useSessionService(
         return response.session ?? null;
       } catch (err) {
         const wrappedErr = err instanceof Error ? err : new Error("Failed to create session");
-        dispatch(setError(wrappedErr.message));
+        // Deliberately NOT dispatch(setError(...)) here: `sessions.error` is what
+        // PaneSplitRenderer's SessionListPaneBody checks to decide whether to render
+        // the whole session list or replace it with a full-screen "Failed to Load
+        // Sessions / Unable to connect to the server" state (see PaneSplitRenderer.tsx).
+        // That's meant for list-load/watch-stream connectivity failures (listSessions'
+        // and watchSessions' own catch blocks set it correctly). A createSession
+        // rejection -- including an expected, synchronous validation failure like a
+        // duplicate title -- is neither: the list loaded fine and the server is
+        // reachable, it just refused this one request. Setting the same flag here
+        // blanked the entire (already-populated) session list behind a misleading
+        // connectivity error for as long as nothing else happened to clear it, which
+        // is exactly what session-creation-async.spec.ts's "duplicate title keeps the
+        // omnibar open with inline error" test was hitting: the omnibar's own
+        // `omnibar-create-error` correctly showed the rejection, but the session card
+        // it was asserting on had vanished behind this unrelated global error state.
+        // The thrown error already reaches the caller (OmnibarContext/Omnibar.tsx),
+        // which surfaces it via its own local, create-scoped error state -- no need
+        // for a second, differently-scoped copy here.
         throw wrappedErr;
       }
     },
@@ -312,12 +447,14 @@ export function useSessionService(
           id,
           status: updates.status,
           category: updates.category,
+          note: updates.note,
           title: updates.title,
           program: updates.program,
           tags: updates.tags ?? [],
           workingDir: updates.workingDir,
           rateLimitEnabled: updates.rateLimitEnabled,
           autonomousMode: updates.autonomousMode,
+          autoApprove: updates.autoApprove,
           steerMessage: updates.steerMessage,
         });
 
@@ -329,7 +466,13 @@ export function useSessionService(
         return response.session ?? null;
       } catch (err) {
         console.error("[useSessionService] updateSession failed:", err);
-        dispatch(setError(err instanceof Error ? err.message : "Failed to update session"));
+        dispatch(setError(getErrorMessage(err, "Failed to update session")));
+        // Board drag-rejection reconciliation (SessionBoard's attemptColumnMove) needs the
+        // ConnectRPC code to distinguish a transport failure from a business-rule rejection —
+        // see sessionsSlice.ts's errorCode doc comment.
+        if (err instanceof ConnectError) {
+          dispatch(setErrorCode(err.code));
+        }
         return null;
       }
     },
@@ -412,12 +555,34 @@ export function useSessionService(
       } catch (err) {
         console.error("[useSessionService] resumeHibernatedSession failed:", err);
         dispatch(setError(err instanceof Error ? err.message : "Failed to resume hibernated session"));
+        if (err instanceof ConnectError) {
+          dispatch(setErrorCode(err.code));
+        }
         return null;
       }
     },
     [dispatch]
   );
 
+  // Resume a crashed session (Crashed → Active). Server-side resume of a dead
+  // tmux pane detected by SessionHealthChecker — threads --resume automatically
+  // when a conversation UUID is known, no manual copy/paste required.
+  const resumeCrashedSession = useCallback(
+    async (id: string): Promise<Session | null> => {
+      if (!clientRef.current) return null;
+      dispatch(setError(null));
+      try {
+        const response = await clientRef.current.resumeCrashedSession({ id });
+        if (response.session) dispatch(upsertSession(response.session));
+        return response.session ?? null;
+      } catch (err) {
+        console.error("[useSessionService] resumeCrashedSession failed:", err);
+        dispatch(setError(err instanceof Error ? err.message : "Failed to resume crashed session"));
+        return null;
+      }
+    },
+    [dispatch]
+  );
 
   // Rename session
   const renameSession = useCallback(
@@ -464,6 +629,90 @@ export function useSessionService(
         return response.success;
       } catch (err) {
         dispatch(setError(err instanceof Error ? err.message : "Failed to restart session"));
+        return false;
+      }
+    },
+    [dispatch]
+  );
+
+  // Retry a session immediately, bypassing any pending backoff delay —
+  // including from PERMANENTLY_FAILED (session-retry-backoff, AC6).
+  const retrySession = useCallback(
+    async (id: string): Promise<boolean> => {
+      if (!clientRef.current) return false;
+
+      dispatch(setError(null));
+
+      try {
+        const response = await clientRef.current.retrySession({ id });
+
+        if (response.success && response.session) {
+          dispatch(upsertSession(response.session));
+        }
+
+        return response.success;
+      } catch (err) {
+        dispatch(setError(err instanceof Error ? err.message : "Failed to retry session"));
+        return false;
+      }
+    },
+    [dispatch]
+  );
+
+  // Cancel an in-progress (Creating) session's creation pipeline. Epic 5.4
+  // (async-session-creation). Success means the instance was removed
+  // server-side (session_service.go's CancelSessionCreation deletes it) --
+  // the caller should remove the card from the list. A FailedPrecondition
+  // means cancel lost the race with the pipeline's own terminal write (the
+  // session is already Active/Failed); the normal watchSessions stream
+  // event already carries that real status, so this just reports the loss
+  // without touching the store -- no stale optimistic removal.
+  const cancelSessionCreation = useCallback(
+    async (id: string): Promise<{ success: boolean; lostRace: boolean }> => {
+      if (!clientRef.current) return { success: false, lostRace: false };
+
+      dispatch(setError(null));
+
+      try {
+        const response = await clientRef.current.cancelSessionCreation({ id });
+        if (response.success) {
+          dispatch(removeSession(id));
+        }
+        return { success: response.success, lostRace: false };
+      } catch (err) {
+        if (err instanceof ConnectError && err.code === Code.FailedPrecondition) {
+          // Pipeline won the race -- leave the store alone, the stream's
+          // own status update (Active/Failed) is already on its way.
+          return { success: false, lostRace: true };
+        }
+        dispatch(setError(err instanceof Error ? err.message : "Failed to cancel session creation"));
+        return { success: false, lostRace: false };
+      }
+    },
+    [dispatch]
+  );
+
+  // Retry a Failed session creation in place. Epic 5.4. The RPC itself only
+  // returns a bool -- the same instance's status flips Failed -> Creating
+  // server-side and the existing watchSessions stream delivers that update,
+  // so this wrapper doesn't need to (and must not) synthesize a session
+  // update itself. A FailedPrecondition means the instance was no longer
+  // Failed by the time the retry command ran (e.g. a concurrent retry already
+  // won); treated as a no-op failure, not an error toast.
+  const retrySessionCreation = useCallback(
+    async (id: string): Promise<boolean> => {
+      if (!clientRef.current) return false;
+
+      dispatch(setError(null));
+
+      try {
+        const response = await clientRef.current.retrySessionCreation({ id });
+        return response.success;
+      } catch (err) {
+        if (err instanceof ConnectError && err.code === Code.FailedPrecondition) {
+          return false;
+        }
+        dispatch(setError(err instanceof Error ? err.message : "Failed to retry session creation"));
         return false;
       }
     },
@@ -581,6 +830,47 @@ export function useSessionService(
     [dispatch]
   );
 
+  // Fetch the pre-filled draft (title/body/base branch) for a session's PR (AC4)
+  const draftPullRequest = useCallback(
+    async (sessionId: string): Promise<DraftPullRequestResponse | null> => {
+      if (!clientRef.current) return null;
+
+      dispatch(setError(null));
+
+      try {
+        const response = await clientRef.current.draftPullRequest({ sessionId });
+        return response;
+      } catch (err) {
+        dispatch(setError(err instanceof Error ? err.message : "Failed to draft pull request"));
+        return null;
+      }
+    },
+    [dispatch]
+  );
+
+  // Create the pull request for a session (AC3/AC7)
+  const createPullRequest = useCallback(
+    async (req: { sessionId: string; title: string; body: string; baseBranch: string }): Promise<CreatePullRequestResponse | null> => {
+      if (!clientRef.current) return null;
+
+      dispatch(setError(null));
+
+      try {
+        const response = await clientRef.current.createPullRequest({
+          sessionId: req.sessionId,
+          title: req.title,
+          body: req.body,
+          baseBranch: req.baseBranch,
+        });
+        return response;
+      } catch (err) {
+        dispatch(setError(err instanceof Error ? err.message : "Failed to create pull request"));
+        return null;
+      }
+    },
+    [dispatch]
+  );
+
   // List prompt history entries (S1)
   const listPromptHistory = useCallback(
     async (limit?: number): Promise<PromptHistoryEntry[]> => {
@@ -624,6 +914,32 @@ export function useSessionService(
     },
     [dispatch]
   );
+
+  // Optimistic pin toggle: flips the store immediately, restores the exact
+  // previous session object if the RPC fails.
+  const setPinned = useCallback(
+    async (id: string, pinned: boolean): Promise<boolean> => {
+      if (!clientRef.current) return false;
+      const previous = sessionsRef.current.find((s) => s.id === id);
+      // New updatedAt so the store's unchanged-updatedAt dedup doesn't drop the optimistic write.
+      if (previous) dispatch(upsertSession({ ...previous, pinned, updatedAt: timestampFromDate(new Date()) }));
+      try {
+        if (pinned) {
+          await clientRef.current.pinSession(create(PinSessionRequestSchema, { sessionId: id }));
+        } else {
+          await clientRef.current.unpinSession(create(UnpinSessionRequestSchema, { sessionId: id }));
+        }
+        return true;
+      } catch (err) {
+        if (previous) dispatch(upsertSession(previous));
+        dispatch(setError(err instanceof Error ? err.message : `Failed to ${pinned ? "pin" : "unpin"} session`));
+        return false;
+      }
+    },
+    [dispatch]
+  );
+  const pinSession = useCallback((id: string) => setPinned(id, true), [setPinned]);
+  const unpinSession = useCallback((id: string) => setPinned(id, false), [setPinned]);
 
   const listSessionsByWorkflow = useCallback(
     async (workflowId: string, includeArchived = true): Promise<Session[]> => {
@@ -742,17 +1058,20 @@ export function useSessionService(
 
   // Handle session events from watch stream
   const handleSessionEvent = useCallback((event: SessionEvent) => {
+    lastActivityRef.current = Date.now();
+
     // Advance the sequence cursor so reconnects can request a targeted replay.
     const prevSeq = lastSeqRef.current;
     if (event.seq > prevSeq) {
       lastSeqRef.current = event.seq;
     }
 
-    // Seq backwards-jump detection: indicates server restart → request full snapshot
+    // Seq backwards-jump detection: indicates a server restart. No separate
+    // full-resync flag needed -- subscribeSessions (above) already runs a
+    // guarded ListSessions snapshot before every single (re)connect attempt.
     if (event.seq > 0n && event.seq < prevSeq) {
       console.warn("[reconnect] seq backwards-jump detected — resetting afterSeq to 0");
       lastSeqRef.current = 0n;
-      needsFullResyncRef.current = true;
     }
 
     // Handle different event types based on oneof case
@@ -806,209 +1125,142 @@ export function useSessionService(
         }
         break;
       }
+      case "remoteHealthChanged": {
+        // ssh-remote-workspaces Epic 6.2: a configured remote's SSH connection
+        // health transitioned (session/sshremote.RemoteHealthProber, pushed
+        // over this same WatchSessions stream -- no separate subscription or
+        // polling). Routed into remotesSlice so RemoteConnectionIndicator can
+        // read it via selectRemoteConnectionState.
+        const remoteHealth = event.event.value;
+        if (remoteHealth.remoteName) {
+          dispatch(remoteHealthChanged({
+            remoteName: remoteHealth.remoteName,
+            state: remoteHealth.state,
+            previousState: remoteHealth.previousState,
+          }));
+        }
+        break;
+      }
     }
   }, [dispatch]);
 
+  // Subscribes to WatchSessions. Connection mechanics (backoff reconnect,
+  // idle-staleness watchdog incl. tab-refocus/online, afterSeq bookkeeping)
+  // live in the shared useWatchStream.ts; this closure supplies the
+  // session-specific request shape plus the guarded ListSessions snapshot
+  // flush that must precede every (re)connect attempt so a client that
+  // missed events during a gap never renders stale data. Deliberately
+  // ignores useWatchStream's own afterSeq parameter in favor of this hook's
+  // own lastSeqRef, which handleSessionEvent also uses for backwards-jump
+  // detection (see there).
+  const subscribeSessions = useCallback(
+    async function* (_afterSeq: bigint, signal: AbortSignal): AsyncGenerator<SessionEvent> {
+      await refreshCoordinatorRef.current.request(
+        () =>
+          clientRef.current!.listSessions(
+            {
+              category: watchOptionsRef.current?.categoryFilter,
+              status: watchOptionsRef.current?.statusFilter,
+            },
+            { timeoutMs: LIST_SESSIONS_TIMEOUT_MS }
+          ),
+        (response) => {
+          if (!signal.aborted) dispatch(setSessions(response.sessions));
+        },
+        { guarded: true }
+      );
+      yield* clientRef.current!.watchSessions(
+        {
+          categoryFilter: watchOptionsRef.current?.categoryFilter,
+          statusFilter: watchOptionsRef.current?.statusFilter,
+          afterSeq: lastSeqRef.current,
+        },
+        { signal }
+      );
+    },
+    [dispatch]
+  );
+
+  const onWatchConnectionStateChange = useCallback(
+    (next: WatchConnectionState) => {
+      isLiveRef.current = next === "live";
+      switch (next) {
+        case "live":
+          setReconnectAttemptCount(0);
+          dispatch(setConnectionState("connected"));
+          break;
+        case "stale":
+          dispatch(setConnectionState("stale"));
+          break;
+        case "reconnecting":
+          setReconnectAttemptCount((n) => n + 1);
+          onReconnectRef.current?.();
+          dispatch(setConnectionState(DISCONNECTED));
+          break;
+        case "exhausted":
+          // Non-retriable failure (see isFatalError below) -- give up until
+          // something calls watchSessions() again.
+          dispatch(setConnectionState(DISCONNECTED));
+          isWatchingRef.current = false;
+          setIsWatching(false);
+          break;
+        case "connecting":
+          break;
+      }
+    },
+    [dispatch]
+  );
+
+  // A WS-bridge close code, or the equivalent ConnectError code on the
+  // native transport (no ws-close-code header exists there) -- see
+  // isNonRetriableConnectError. Reported as "exhausted" with no backoff
+  // retry, unlike a transient network error.
+  const isFatalError = useCallback((err: unknown): boolean => {
+    if (!isNonRetriableConnectError(err)) return false;
+    const wsCode = getWsCloseCode(err);
+    const reason = wsCode !== null ? `close code=${wsCode}` : `connect code=${err.code}`;
+    console.warn(`[reconnect] stream=watch non-retriable ${reason}, stopping reconnect`);
+    return true;
+  }, []);
+
+  const { reconnect: reconnectStream } = useWatchStream<SessionEvent>({
+    subscribe: subscribeSessions,
+    onEvent: handleSessionEvent,
+    isHeartbeat: (event) => event.heartbeat,
+    onConnectionStateChange: onWatchConnectionStateChange,
+    isFatalError,
+    staleThresholdMs: 30_000,
+    // Sessions registers its own visibility/online handler below (env-flag
+    // gated, and active even before the first watchSessions() call) rather
+    // than using useWatchStream's built-in one.
+    enableVisibilityWatchdog: false,
+    enabled: isWatching,
+  });
+
   // Watch sessions for real-time updates with automatic reconnect on failure.
-  // On reconnect, ListSessions is called first to flush any state missed while disconnected.
+  // A first call starts the (otherwise disabled) stream; a call while
+  // already watching forces an immediate fresh reconnect with the latest
+  // options (e.g. the manual retry button, or the staleness backstop).
   const watchSessions = useCallback(
     (watchOptions?: { categoryFilter?: string; statusFilter?: SessionStatus }) => {
       if (!clientRef.current) return;
-
-      // Store options in ref so reconnects use them without stale closure
       watchOptionsRef.current = watchOptions;
-
-      // Stop any existing watch
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
+      if (isWatchingRef.current) {
+        reconnectStream();
+      } else {
+        isWatchingRef.current = true;
+        setIsWatching(true);
       }
-
-      shouldReconnectRef.current = true;
-      backoffRef.current.reset(); // Reset backoff when explicitly (re)started
-      setReconnectAttemptCount(0);
-      ++streamGenerationRef.current; // Invalidate any in-flight startStream from prior call
-
-      const startStream = async () => {
-        if (!shouldReconnectRef.current || !clientRef.current) return;
-        const myGeneration = ++streamGenerationRef.current;
-
-        abortControllerRef.current = new AbortController();
-        lastEventTimeRef.current = Date.now(); // Treat stream start as an activity timestamp
-
-        try {
-          // Initial snapshot before stream starts (pass active filters so the snapshot matches the stream)
-          const initialResponse = await clientRef.current.listSessions({
-            category: watchOptionsRef.current?.categoryFilter,
-            status: watchOptionsRef.current?.statusFilter,
-          });
-          if (!shouldReconnectRef.current || streamGenerationRef.current !== myGeneration) return;
-          dispatch(setSessions(initialResponse.sessions));
-
-          const stream = clientRef.current.watchSessions(
-            {
-              categoryFilter: watchOptionsRef.current?.categoryFilter,
-              statusFilter: watchOptionsRef.current?.statusFilter,
-              afterSeq: lastSeqRef.current,
-            },
-            { signal: abortControllerRef.current.signal }
-          );
-
-          let firstEvent = true;
-          for await (const event of stream) {
-            if (firstEvent) {
-              firstEvent = false;
-              isConnectedRef.current = true;
-              backstopTriggeredRef.current = false; // Reset backstop flag on successful stream
-              dispatch(setConnectionState("connected"));
-            }
-            lastEventTimeRef.current = Date.now();
-            handleSessionEvent(event);
-          }
-
-          // Stream ended normally (server-side close). Reconnect if still desired.
-          if (shouldReconnectRef.current && streamGenerationRef.current === myGeneration) {
-            dispatch(setConnectionState("disconnected"));
-            isConnectedRef.current = false;
-
-            // Handle backwards-jump: do a full resync
-            if (needsFullResyncRef.current) {
-              needsFullResyncRef.current = false;
-              void clientRef.current?.listSessions({
-                category: watchOptionsRef.current?.categoryFilter,
-                status: watchOptionsRef.current?.statusFilter,
-              }).then(r => {
-                if (shouldReconnectRef.current && streamGenerationRef.current === myGeneration) {
-                  dispatch(setSessions(r.sessions));
-                }
-              });
-            }
-
-            onReconnectRef.current?.();
-            const delay = backoffRef.current.next();
-            setReconnectAttemptCount(backoffRef.current.attempt);
-            console.info(`[reconnect] stream=watch trigger=close attempt=${backoffRef.current.attempt} delay=${delay}ms`);
-            await new Promise(r => setTimeout(r, delay));
-            if (streamGenerationRef.current !== myGeneration || !shouldReconnectRef.current) return;
-            startStream();
-          }
-        } catch (err) {
-          if (err instanceof Error && err.name === "AbortError") {
-            return; // Intentional stop via stopWatching()
-          }
-          if (err instanceof ConnectError && err.code === Code.Canceled) {
-            return; // ConnectRPC abort (e.g. AbortController signal)
-          }
-
-          // Check for non-retriable WS close codes
-          const wsCode = getWsCloseCode(err);
-          if (wsCode !== null && !isRetriableCloseCode(wsCode)) {
-            console.warn(`[reconnect] stream=watch non-retriable close code=${wsCode}, stopping reconnect`);
-            shouldReconnectRef.current = false;
-            isConnectedRef.current = false;
-            dispatch(setConnectionState("disconnected"));
-            return;
-          }
-
-          // Unexpected network error — log, then reconnect
-          dispatch(setError(err instanceof Error ? err.message : "Watch stream error"));
-          if (shouldReconnectRef.current && streamGenerationRef.current === myGeneration) {
-            dispatch(setConnectionState("disconnected"));
-            isConnectedRef.current = false;
-
-            // Handle backwards-jump: do a full resync
-            if (needsFullResyncRef.current) {
-              needsFullResyncRef.current = false;
-              void clientRef.current?.listSessions({
-                category: watchOptionsRef.current?.categoryFilter,
-                status: watchOptionsRef.current?.statusFilter,
-              }).then(r => {
-                if (shouldReconnectRef.current && streamGenerationRef.current === myGeneration) {
-                  dispatch(setSessions(r.sessions));
-                }
-              });
-            }
-
-            onReconnectRef.current?.();
-            const delay = backoffRef.current.next();
-            setReconnectAttemptCount(backoffRef.current.attempt);
-            console.info(`[reconnect] stream=watch trigger=error attempt=${backoffRef.current.attempt} delay=${delay}ms`);
-            await new Promise(r => setTimeout(r, delay));
-            if (streamGenerationRef.current !== myGeneration || !shouldReconnectRef.current) return;
-            startStream();
-          }
-        }
-      };
-
-      startStream();
     },
-    [handleSessionEvent, dispatch]
+    [reconnectStream]
   );
 
   // Stop watching sessions
   const stopWatching = useCallback(() => {
-    shouldReconnectRef.current = false;
-    isConnectedRef.current = false;
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    dispatch(setConnectionState("disconnected"));
+    isWatchingRef.current = false;
+    setIsWatching(false);
+    dispatch(setConnectionState(DISCONNECTED));
   }, [dispatch]);
-
-  // Backstop staleness detector: 30s interval for always-visible tabs
-  useEffect(() => {
-    if (!enabled) return;
-    const interval = setInterval(() => {
-      if (
-        shouldReconnectRef.current &&
-        !isConnectedRef.current &&
-        lastEventTimeRef.current !== null &&
-        Date.now() - lastEventTimeRef.current > 30_000
-      ) {
-        dispatch(setConnectionState("stale"));
-        if (!backstopTriggeredRef.current) {
-          backstopTriggeredRef.current = true;
-          watchSessionsRef.current?.(watchOptionsRef.current);
-        }
-      }
-    }, 30_000);
-    return () => clearInterval(interval);
-  }, [enabled, dispatch]);
-
-  // Keep refs current on every render (for stable event handler indirection)
-  watchSessionsRef.current = watchSessions;
-  dispatchRef.current = dispatch;
-
-  // Browser lifecycle listeners: reconnect on tab visibility restore or network online.
-  // Empty deps + dispatchRef indirection keeps the function reference stable across renders
-  // so removeEventListener correctly deregisters the exact same handler instance.
-  const handleVisibilityOrOnline = useCallback((ev: Event) => {
-    if (document.visibilityState !== "visible" && ev.type !== "online") return;
-    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-    debounceTimerRef.current = setTimeout(() => {
-      debounceTimerRef.current = null;
-      if (!shouldReconnectRef.current) return;
-      const isStale = lastEventTimeRef.current !== null && lastEventTimeRef.current < Date.now() - 15_000;
-      if (!isConnectedRef.current || isStale) {
-        if (isStale) {
-          dispatchRef.current(setConnectionState("stale"));
-        }
-        backoffRef.current.reset();
-        watchSessionsRef.current?.(watchOptionsRef.current);
-      }
-    }, 200);
-  }, []);
-
-  useEffect(() => {
-    if (!enabled || process.env.NEXT_PUBLIC_RECONNECT_V2 !== "true") return;
-    document.addEventListener("visibilitychange", handleVisibilityOrOnline);
-    window.addEventListener("online", handleVisibilityOrOnline);
-    return () => {
-      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-      document.removeEventListener("visibilitychange", handleVisibilityOrOnline);
-      window.removeEventListener("online", handleVisibilityOrOnline);
-    };
-  }, [enabled, handleVisibilityOrOnline]);
 
   // Auto-watch on mount if enabled and authenticated
   useEffect(() => {
@@ -1021,6 +1273,42 @@ export function useSessionService(
       stopWatching();
     };
   }, [enabled, autoWatch, watchSessions, stopWatching]);
+
+  // Browser lifecycle listeners: reconnect on tab visibility restore or
+  // network online. Behind NEXT_PUBLIC_RECONNECT_V2 and, unlike every other
+  // watcher's shared useWatchStream-driven watchdog, active even before the
+  // first watchSessions() call (in which case it starts watching, rather
+  // than reconnecting an existing stream).
+  const handleVisibilityOrOnline = useCallback(
+    (ev: Event) => {
+      if (document.visibilityState !== "visible" && ev.type !== "online") return;
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = setTimeout(() => {
+        debounceTimerRef.current = null;
+        if (!isWatchingRef.current) {
+          watchSessions(watchOptionsRef.current);
+          return;
+        }
+        const stale = Date.now() - lastActivityRef.current > 15_000;
+        if (!isLiveRef.current || stale) {
+          if (stale) dispatch(setConnectionState("stale"));
+          reconnectStream();
+        }
+      }, 200);
+    },
+    [dispatch, reconnectStream, watchSessions]
+  );
+
+  useEffect(() => {
+    if (!enabled || process.env.NEXT_PUBLIC_RECONNECT_V2 !== "true") return;
+    document.addEventListener("visibilitychange", handleVisibilityOrOnline);
+    window.addEventListener("online", handleVisibilityOrOnline);
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+      document.removeEventListener("visibilitychange", handleVisibilityOrOnline);
+      window.removeEventListener("online", handleVisibilityOrOnline);
+    };
+  }, [enabled, handleVisibilityOrOnline]);
 
   // Initial load — only for the watching instance (autoWatch: true).
   // Non-watching callers (useSessionActions, OmnibarContext, etc.) should read
@@ -1094,19 +1382,27 @@ export function useSessionService(
     resumeSession,
     hibernateSession,
     resumeHibernatedSession,
+    resumeCrashedSession,
     renameSession,
     restartSession,
+    retrySession,
+    cancelSessionCreation,
+    retrySessionCreation,
     clearConversationState,
     acknowledgeSession,
     createCheckpoint,
     listCheckpoints,
     forkSession,
     runOneShot,
+    draftPullRequest,
+    createPullRequest,
     listPromptHistory,
     watchSessions,
     stopWatching,
     archiveSession,
     unarchiveSession,
+    pinSession,
+    unpinSession,
     listSessionsByWorkflow,
     runWorkflow,
     spawnShell,

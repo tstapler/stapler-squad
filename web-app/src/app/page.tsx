@@ -18,14 +18,24 @@ import { useKeyboard } from "@/lib/hooks/useKeyboard";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import { PaneTilingContainer } from "@/components/pane/PaneTilingContainer";
+import type { PaneAction } from "@/lib/pane/paneTypes";
+import { useWindowManager } from "@/lib/window/useWindowManager";
+import { useWindowUrlSync } from "@/lib/window/useWindowUrlSync";
+import { useWindowShortcuts } from "@/lib/window/useWindowShortcuts";
+import type { WindowId } from "@/lib/window/windowTypes";
+import { WindowTabStrip, type WindowTabStripHandle } from "@/components/window/WindowTabStrip";
 import { CockpitActionsProvider } from "@/lib/contexts/CockpitActionsContext";
+import { SessionViewModeProvider } from "@/lib/contexts/SessionViewModeContext";
+import { useSessionViewMode } from "@/lib/hooks/useSessionViewMode";
 import { usePageView } from "@/lib/analytics/usePageView";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
+import { useNotifications } from "@/lib/contexts/NotificationContext";
 import * as styles from "./page.css";
 
 function HomeContent() {
   usePageView();
   const { track } = useAnalytics();
+  const { addNotification } = useNotifications();
   const searchParams = useSearchParams();
   const router = useRouter();
   const { openInCreationMode, openOmnibar } = useOmnibar();
@@ -35,6 +45,11 @@ function HomeContent() {
   const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
   // j/k keyboard navigation index within the session list
   const [focusedSessionIndex, setFocusedSessionIndex] = useState<number>(-1);
+
+  // List/Board view mode — lifted here (rather than called again deep in the pane
+  // tree) so the 'b' shortcut below and SessionListPaneBody's render both observe
+  // the same state instead of two independent useSessionViewMode() instances.
+  const [viewMode, setViewMode] = useSessionViewMode();
 
   // Tiling: tracks the most-recently-clicked session to route to the focused pane.
   // Using a counter-based key so that clicking the same session again still triggers.
@@ -50,6 +65,8 @@ function HomeContent() {
   const sessionTriggerRef = useRef<HTMLElement | null>(null);
   const deleteDialogRef = useRef<HTMLDivElement>(null);
   const lastFocusBeforeDelete = useRef<HTMLElement | null>(null);
+  const resumeTriggerRef = useRef<HTMLElement | null>(null);
+  const windowTabStripRef = useRef<WindowTabStripHandle>(null);
 
   // Tracks the last URL params that were routed to a pane. Prevents the URL-watching
   // effect from re-triggering pane assignment on every sessions stream update (which
@@ -67,13 +84,7 @@ function HomeContent() {
   }, [selectedSession]);
 
   // Trap focus inside delete confirmation dialog; return focus on close
-  useFocusTrap(deleteDialogRef, !!deleteConfirmTarget);
-  useEffect(() => {
-    if (!deleteConfirmTarget && lastFocusBeforeDelete.current) {
-      lastFocusBeforeDelete.current.focus();
-      lastFocusBeforeDelete.current = null;
-    }
-  }, [deleteConfirmTarget]);
+  useFocusTrap(deleteDialogRef, !!deleteConfirmTarget, lastFocusBeforeDelete);
 
 
   const {
@@ -85,16 +96,43 @@ function HomeContent() {
     resumeSession,
     renameSession,
     restartSession,
+    pinSession,
+    unpinSession,
+    retrySession,
     clearConversationState,
     createCheckpoint,
     listCheckpoints,
     forkSession,
-    runOneShot,
     listSessions,
     updateSession,
     getSession,
   } = useSessionServiceContext();
 
+  // Multi-window layer (Epic 2.2): useWindowManager owns the windows array/persistence;
+  // useWindowUrlSync resolves which window this tab is showing from `?window=`. Neither
+  // hook has a notion of "the active window" on its own (ADR-001) — currentWindow is
+  // derived here by looking up currentWindowId in the windows array.
+  // createWindow/closeWindow/renameWindow have no UI to call them from yet — WindowTabStrip
+  // (Task 2.2.2b) is deferred to Epic 3.1, where it doesn't exist yet.
+  const { windows, isRestored: isWindowsRestored, dispatchPane, createWindow, closeWindow, renameWindow } =
+    useWindowManager(sessions);
+  const { currentWindowId, switchToWindow } = useWindowUrlSync(windows, isWindowsRestored);
+  const currentWindow = windows.find((w) => w.id === currentWindowId) ?? windows[0];
+  const paneDispatch = useCallback(
+    (action: PaneAction) => dispatchPane(currentWindow.id, action),
+    [dispatchPane, currentWindow.id]
+  );
+  // Bridges useWindowShortcuts' "," leader follow-up (which only knows a
+  // window id) to WindowTabStrip's imperative beginEdit(id, name) — the same
+  // inline editor double-click/F2 already open, not a separate native prompt.
+  const handleWindowRenameRequest = useCallback(
+    (id: WindowId) => {
+      const target = windows.find((w) => w.id === id);
+      if (target) windowTabStripRef.current?.beginEdit(id, target.name);
+    },
+    [windows]
+  );
+  useWindowShortcuts(windows, currentWindow.id, switchToWindow, handleWindowRenameRequest);
   // Helper function to find a session by ID with fuzzy matching for external sessions
   const findSessionById = useCallback((sessionId: string): Session | undefined => {
     let session = sessions.find((s) => s.id === sessionId);
@@ -103,8 +141,8 @@ function HomeContent() {
     session = sessions.find((s) => {
       if (s.id.startsWith(sessionId)) return true;
       if (s.externalMetadata?.tmuxSessionName === sessionId) return true;
-      if (sessionId.includes("/") && s.path && s.path.includes(sessionId)) return true;
-      if (s.path && s.path.endsWith(`/${sessionId}`)) return true;
+      if (sessionId.includes("/") && s.existingDir && s.existingDir.includes(sessionId)) return true;
+      if (s.existingDir && s.existingDir.endsWith(`/${sessionId}`)) return true;
       return false;
     });
 
@@ -117,7 +155,7 @@ function HomeContent() {
       const searchLower = sessionId.toLowerCase();
       session = sessions.find((s) => {
         if (s.title.toLowerCase() === searchLower) return true;
-        const pathBasename = s.path?.split("/").pop()?.toLowerCase();
+        const pathBasename = s.existingDir?.split("/").pop()?.toLowerCase();
         if (pathBasename === searchLower) return true;
         return false;
       });
@@ -125,7 +163,7 @@ function HomeContent() {
 
     if (!session) {
       console.warn(`[findSessionById] No session found for ID: ${sessionId}`, {
-        availableSessions: sessions.map(s => ({ id: s.id, title: s.title, path: s.path }))
+        availableSessions: sessions.map(s => ({ id: s.id, title: s.title, path: s.existingDir }))
       });
     }
 
@@ -215,7 +253,7 @@ function HomeContent() {
       router.replace("/", { scroll: false });
       track({ name: "session_duplicate_initiated", category: "user_action" });
       getSession(duplicateId).then((session) => {
-        openOmnibar(session?.path);
+        openOmnibar(session?.repoRoot);
       }).catch(() => {
         openOmnibar();
       });
@@ -251,7 +289,7 @@ function HomeContent() {
   const handleNewWorkspaceSession = (sessionId: string) => {
     track({ name: "session_new_workspace_initiated", category: "user_action" });
     getSession(sessionId).then((session) => {
-      openOmnibar(session?.path);
+      openOmnibar(session?.repoRoot);
     }).catch(() => {
       openOmnibar();
     });
@@ -286,16 +324,37 @@ function HomeContent() {
     }
   }, [updateSession, track]);
 
-  const handleSteerAutonomousSession = useCallback(async (sessionId: string, message: string): Promise<void> => {
-    track({ name: "session_autonomous_steer", category: "user_action" });
-    await updateSession(sessionId, { steerMessage: message });
+  const handleTogglePinned = useCallback(async (sessionId: string, pinned: boolean): Promise<void> => {
+    track({ name: "session_pinned_updated", category: "user_action" });
+    await (pinned ? pinSession(sessionId) : unpinSession(sessionId));
+  }, [pinSession, unpinSession, track]);
+
+  const handleToggleAutoApprove = useCallback(async (sessionId: string, enabled: boolean): Promise<void> => {
+    track({ name: "session_auto_approve_updated", category: "user_action" });
+    try {
+      await updateSession(sessionId, { autoApprove: enabled });
+    } catch (err) {
+      console.error("[page] toggleAutoApprove failed:", err);
+    }
   }, [updateSession, track]);
 
-  const handleRunOneShot = useCallback(async (sessionId: string): Promise<void> => {
-    await runOneShot(sessionId, "Create a pull request for the changes in this session.", 0);
-  }, [runOneShot]);
+  const handleSteerAutonomousSession = useCallback(async (sessionId: string, message: string): Promise<boolean> => {
+    track({ name: "session_autonomous_steer", category: "user_action" });
+    const result = await updateSession(sessionId, { steerMessage: message });
+    if (result === null) {
+      addNotification({
+        message: "Failed to send steering message — the session may not be running.",
+        notificationType: "error",
+        sessionId,
+        sessionName: "",
+      });
+      return false;
+    }
+    return true;
+  }, [updateSession, track, addNotification]);
 
   const handleResumeRequest = useCallback((session: Session) => {
+    resumeTriggerRef.current = document.activeElement as HTMLElement;
     setResumeTarget(session);
   }, []);
 
@@ -374,6 +433,12 @@ function HomeContent() {
         sessions.length === 0 ? -1 : Math.min(prev + 1, sessions.length - 1)
       );
     },
+    // List/Board view toggle. useKeyboard's default ignoreElements (INPUT/TEXTAREA/SELECT)
+    // already covers the instant-search box, so this never fires while typing "b" into it.
+    "b": () => {
+      if (deleteConfirmTarget || resumeTarget) return;
+      setViewMode(viewMode === "board" ? "list" : "board");
+    },
     "k": () => {
       if (deleteConfirmTarget || resumeTarget) return;
       setFocusedSessionIndex(prev =>
@@ -400,7 +465,13 @@ function HomeContent() {
     },
     "d": () => {
       if (selectedSession && !deleteConfirmTarget) {
-        lastFocusBeforeDelete.current = document.activeElement as HTMLElement;
+        // document.activeElement is unreliable here: the effect above focuses
+        // sessionDetailRef (the cockpit container) whenever selectedSession is
+        // set, so by the time this fires, activeElement is that container, not
+        // the row that was actually clicked. sessionTriggerRef still holds the
+        // real opener; fall back to activeElement only for the deep-link case
+        // where a session was selected without a click (no captured trigger).
+        lastFocusBeforeDelete.current = sessionTriggerRef.current ?? (document.activeElement as HTMLElement);
         setDeleteConfirmTarget(selectedSession);
       }
     },
@@ -422,45 +493,63 @@ function HomeContent() {
     onNewWorkspaceSession: handleNewWorkspaceSession,
     onRenameSession: renameSession,
     onRestartSession: restartSession,
+    onRetryNowSession: retrySession,
     onUpdateTags: handleUpdateTags,
     onNewSession: handleNewSession,
     onCreateCheckpoint: createCheckpoint,
     onListCheckpoints: listCheckpoints,
     onForkFromCheckpoint: forkSession,
-    onRunOneShot: handleRunOneShot,
     onSetRateLimitEnabled: handleSetRateLimitEnabled,
     onToggleAutonomousMode: handleToggleAutonomousMode,
+    onTogglePinned: handleTogglePinned,
+    onToggleAutoApprove: handleToggleAutoApprove,
     onSteerAutonomousSession: handleSteerAutonomousSession,
     onClearConversationState: clearConversationState,
     onListSessions: listSessions,
   }), [
     handleSessionClick, handleDeleteSession, pauseSession, handleResumeRequest,
     handleDirectResume, handleCloneSession, handleNewWorkspaceSession, renameSession,
-    restartSession, handleUpdateTags, handleNewSession, createCheckpoint,
-    listCheckpoints, forkSession, handleRunOneShot, handleSetRateLimitEnabled,
-    handleToggleAutonomousMode, handleSteerAutonomousSession, clearConversationState, listSessions,
+    restartSession, retrySession, handleUpdateTags, handleNewSession, createCheckpoint,
+    listCheckpoints, forkSession, handleSetRateLimitEnabled,
+    handleToggleAutonomousMode, handleTogglePinned, handleToggleAutoApprove, handleSteerAutonomousSession, clearConversationState, listSessions,
   ]);
 
   return (
     <div className={styles.page}>
       {/* Unified tiling cockpit — session list and detail panels are both pane views */}
       <CockpitActionsProvider value={cockpitActions}>
-        <div
-          ref={sessionDetailRef}
-          className={styles.cockpitContainer}
-          tabIndex={-1}
-          role="region"
-          aria-label="Session cockpit"
-          data-context="cockpit"
-        >
-          <PaneTilingContainer
-            sessions={sessions}
-            externalSessionAssign={externalAssignSession ? {
-              ...externalAssignSession,
-              version: externalAssignCounter,
-            } : null}
+        <SessionViewModeProvider value={{ viewMode, setViewMode }}>
+          <WindowTabStrip
+            ref={windowTabStripRef}
+            windows={windows}
+            currentWindowId={currentWindow.id}
+            onSwitch={switchToWindow}
+            onCreate={() => switchToWindow(createWindow())}
+            onClose={(id) => {
+              const next = closeWindow(id);
+              if (id === currentWindow.id && next) switchToWindow(next);
+            }}
+            onRename={renameWindow}
           />
-        </div>
+          <div
+            ref={sessionDetailRef}
+            className={styles.cockpitContainer}
+            tabIndex={-1}
+            role="region"
+            aria-label="Session cockpit"
+            data-context="cockpit"
+          >
+            <PaneTilingContainer
+              sessions={sessions}
+              paneState={currentWindow.paneState}
+              dispatch={paneDispatch}
+              externalSessionAssign={externalAssignSession ? {
+                ...externalAssignSession,
+                version: externalAssignCounter,
+              } : null}
+            />
+          </div>
+        </SessionViewModeProvider>
       </CockpitActionsProvider>
 
       {/* Resume session modal */}
@@ -471,6 +560,7 @@ function HomeContent() {
           sessions={sessions}
           onConfirm={handleResumeConfirm}
           onCancel={handleResumeCancel}
+          triggerRef={resumeTriggerRef}
         />
       )}
 

@@ -2,8 +2,12 @@ package mcp
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
+	"connectrpc.com/connect"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
@@ -19,9 +23,7 @@ func newTestWorkflowHandlers(t *testing.T) *workflowHandlers {
 
 	storage := newTestBacklogStorage(t)
 
-	repo, err := session.NewEntRepository(session.WithDatabasePath(t.TempDir() + "/workflow_test.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { repo.Close() })
+	repo := session.NewTestEntRepository(t)
 
 	workflowRepo := session.NewEntWorkflowRepository(repo.GetEntClient())
 	workflowSvc := services.NewWorkflowService(workflowRepo, nil, storage)
@@ -121,6 +123,63 @@ func TestUpdateWorkflow_should_UpdateName_When_WorkflowExists(t *testing.T) {
 	updatedWorkflow := out["workflow"].(map[string]interface{})
 	if updatedWorkflow["name"] != "Updated name" {
 		t.Errorf("expected name=Updated name, got %v", updatedWorkflow["name"])
+	}
+}
+
+// TestCreateWorkflow_should_SetEnabledFalse_When_EnabledArgProvided and
+// TestUpdateWorkflow_should_UpdateEnabled_When_EnabledArgProvided close a coverage gap
+// found during sdd:6-verify's testing review: the enabled MCP arg (create + update) had
+// no round-trip test.
+func TestCreateWorkflow_should_SetEnabledFalse_When_EnabledArgProvided(t *testing.T) {
+	h := newTestWorkflowHandlers(t)
+
+	res, err := h.createWorkflow(context.Background(), makeToolReq(map[string]interface{}{
+		"slug":             "disabled-on-create",
+		"name":             "Disabled On Create",
+		"command":          "do something",
+		"target_directory": t.TempDir(),
+		"enabled":          false,
+	}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	if success, _ := out["success"].(bool); !success {
+		t.Fatalf("expected success=true, got: %+v", out)
+	}
+	workflow := out["workflow"].(map[string]interface{})
+	if workflow["enabled"] != false {
+		t.Errorf("expected enabled=false, got %v", workflow["enabled"])
+	}
+}
+
+func TestUpdateWorkflow_should_UpdateEnabled_When_EnabledArgProvided(t *testing.T) {
+	h := newTestWorkflowHandlers(t)
+
+	created, err := h.createWorkflow(context.Background(), makeToolReq(map[string]interface{}{
+		"slug":             "enabled-update-me",
+		"name":             "Original",
+		"command":          "original command",
+		"target_directory": t.TempDir(),
+	}))
+	require.NoError(t, err)
+	createdOut := parseResult(t, created)
+	workflow := createdOut["workflow"].(map[string]interface{})
+	id := workflow["id"].(string)
+	if workflow["enabled"] != true {
+		t.Fatalf("expected create to default enabled=true, got %v", workflow["enabled"])
+	}
+
+	res, err := h.updateWorkflow(context.Background(), makeToolReq(map[string]interface{}{
+		"id":      id,
+		"enabled": false,
+	}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	if success, _ := out["success"].(bool); !success {
+		t.Fatalf("expected success=true, got: %+v", out)
+	}
+	updatedWorkflow := out["workflow"].(map[string]interface{})
+	if updatedWorkflow["enabled"] != false {
+		t.Errorf("expected enabled=false, got %v", updatedWorkflow["enabled"])
 	}
 }
 
@@ -261,4 +320,11 @@ func TestRunWorkflow_should_ReturnInvalidArgument_When_IdMissing(t *testing.T) {
 	if success, _ := out["success"].(bool); success {
 		t.Fatalf("expected success=false when id is missing, got: %+v", out)
 	}
+}
+
+func TestWorkflowServiceErrResult_AlreadyExistsIsConflict(t *testing.T) {
+	res, err := workflowServiceErrResult(connect.NewError(connect.CodeAlreadyExists, errors.New("session with title 'x' already exists")))
+	require.NoError(t, err)
+	assert.Contains(t, fmt.Sprint(res.Content), ErrConflict)
+	assert.NotContains(t, fmt.Sprint(res.Content), ErrInternalError)
 }

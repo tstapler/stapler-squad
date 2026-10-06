@@ -43,6 +43,22 @@ const nextConfig: NextConfig = {
       };
     }
 
+    // Redirect webpack's persistent filesystem cache outside the worktree so
+    // multiple git worktrees of this repo can share compiled module cache
+    // entries instead of each starting cold. The Makefile's web-app/out
+    // target sets this to ~/.stapler-squad/nextjs-webpack-cache by default.
+    // webpack's cache pack files are content-hashed and written atomically
+    // (temp file + rename), so concurrent builds sharing this directory are
+    // safe — a race just means last-writer-wins on a pack file, not
+    // corruption. Verified with concurrent builds across two worktrees.
+    const sharedCacheDir = process.env.NEXTJS_SHARED_CACHE_DIR;
+    if (sharedCacheDir && config.cache && typeof config.cache === 'object') {
+      config.cache = {
+        ...config.cache,
+        cacheDirectory: sharedCacheDir,
+      };
+    }
+
     // Consolidate CSS chunks to prevent preload warnings
     // This forces all CSS into fewer chunks that load together
     if (!isServer && !dev) {

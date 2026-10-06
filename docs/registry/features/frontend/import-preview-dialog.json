@@ -1,0 +1,13 @@
+{
+  "id": "import-preview-dialog",
+  "type": "frontend",
+  "component": "ImportPreviewDialog",
+  "path": "web-app/src/components/sessions/ImportPreviewDialog.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "web-app/src/components/sessions/ImportPreviewDialog.test.tsx",
+    "tests/e2e/import-external-session.spec.ts"
+  ],
+  "lastModified": "2026-07-27T00:00:00Z"
+}

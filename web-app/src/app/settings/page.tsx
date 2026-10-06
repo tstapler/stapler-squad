@@ -8,8 +8,11 @@ import { GlobalDefaultsForm } from "@/components/settings/GlobalDefaultsForm";
 import { ProfilesManager } from "@/components/settings/ProfilesManager";
 import { DirectoryRulesManager } from "@/components/settings/DirectoryRulesManager";
 import { AliasesManager } from "@/components/settings/AliasesManager";
+import { ProgramsManager } from "@/components/settings/ProgramsManager";
 import { PushNotificationSettings } from "@/components/settings/PushNotificationSettings";
+import { SlackNotificationSettings } from "@/components/settings/SlackNotificationSettings";
 import { ThemePicker } from "@/components/settings/ThemePicker";
+import { InputModeSetting } from "@/components/settings/InputModeSetting";
 import { ConfigPageContent } from "@/app/config/ConfigPageContent";
 import { KeyboardShortcutsTab } from "./KeyboardShortcutsTab";
 import { usePageView } from "@/lib/analytics/usePageView";
@@ -77,6 +80,9 @@ function SettingsPageInner() {
             <section className={styles.section}>
               <AliasesManager />
             </section>
+            <section className={styles.section}>
+              <ProgramsManager />
+            </section>
             {flags["backlog"] && (
               <section className={styles.section}>
                 <Link href={routes.settingsBacklogSources} className={styles.helpLink}>
@@ -87,6 +93,30 @@ function SettingsPageInner() {
             <section className={styles.section}>
               <Link href={routes.settingsPipelineModes} className={styles.helpLink}>
                 Pipeline Modes →
+              </Link>
+            </section>
+            <section className={styles.section}>
+              <Link
+                href={routes.settingsBacklogStages}
+                className={styles.helpLink}
+                data-testid="settings-backlog-stages-link"
+              >
+                Backlog Stages →
+              </Link>
+            </section>
+            <section className={styles.section}>
+              <Link href={routes.settingsRemotes} className={styles.helpLink} data-testid="settings-remotes-link">
+                Remotes (SSH hosts) →
+              </Link>
+            </section>
+            <section className={styles.section}>
+              <Link href={routes.settingsJules} className={styles.helpLink} data-testid="settings-jules-link">
+                Jules (Google cloud agent) →
+              </Link>
+            </section>
+            <section className={styles.section}>
+              <Link href={routes.settingsTaggingClassifier} className={styles.helpLink} data-testid="settings-tagging-classifier-link">
+                Tag Classification (AI tagging model) →
               </Link>
             </section>
             {/* Help subsection */}
@@ -123,7 +153,13 @@ function SettingsPageInner() {
               <ThemePicker />
             </section>
             <section className={styles.section}>
+              <InputModeSetting />
+            </section>
+            <section className={styles.section}>
               <PushNotificationSettings />
+            </section>
+            <section className={styles.section}>
+              <SlackNotificationSettings />
             </section>
           </div>
         </Tabs.Content>

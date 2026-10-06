@@ -15,6 +15,8 @@
 
 **Chosen**: Option 1 (dedicated `deadlock.Mutex` + helper methods). Recorded in the Pattern Decisions table below, alongside two finer-grained implementation-shape decisions (helper-method count, and struct-vs-separate-fields for the triple's storage).
 
+**Known limitation, deliberately not fixed here (pre-mortem finding #1)**: guarding each individual read/write of the PTY triple makes every *single* field access memory-safe, but `AttachToExisting` (Task 1.1.2a) and `RestoreWithWorkDir` (Task 1.1.2b) each still do an unguarded check-then-act (`if lockedPTMX() == nil { ...install... }`) across two independent lock/unlock cycles — a TOCTOU, not a data race, so `go test -race` cannot catch it. Confirmed real via `session/instance_tmux.go:87-94` (the `pmMu` there only guards lazy-init of the process-manager reference, not calls through it) and `TmuxSession.Close()` never taking `detachMutex` — so a concurrent `AttachToExisting()`/`RestoreWithWorkDir()` and `Close()` on the same session can genuinely interleave. Fixing it correctly needs a generation-counter compare-and-swap (release the lock around the blocking `ptyFactory.Start()` call, then only install if no concurrent winner appeared, discarding the loser's PTY/process) — a real behavioral change, which conflicts with this item's own non-goal of "no behavior change to PTY lifecycle semantics" and would expand the diff well beyond a pure concurrency-safety fix. Filed as backlog item `0f4b1300-d667-437b-b51f-89d81a668693` instead of leaving it implicit; Tasks 1.1.2a/1.1.2b add a short inline comment pointing at it.
+
 ---
 
 ## Domain Glossary
@@ -35,7 +37,7 @@
 | Component | Pattern Chosen | Source | Alternative Rejected | Reason |
 |-----------|---------------|--------|---------------------|--------|
 | PTY triple synchronization primitive | Dedicated `deadlock.Mutex` (`ptmxMu`) guarding the lockstep triple | research/stack.md, research/build-vs-buy.md; ADR-011's own guideline table ("Complex State Transitions → sync.Mutex or Channels") | Per-field `atomic.Pointer[T]` (3 independent atomics) | Three independent atomics give no cross-field atomicity — a reader could observe `ptmx` from generation N+1 paired with `attachCmd` from generation N (a "torn triple"). ADR-011 itself classifies this as a "Complex State Transition," for which it recommends `sync.Mutex`/channels, not lock-free CAS. |
-| PTY triple synchronization primitive | `deadlock.Mutex`, new field, not reused | research/pitfalls.md | Reuse `detachMutex` or `controlModeStartMu` | `detachMutex`: `DetachSafely` holds it, then calls `Restore()` → `RestoreWithWorkDir()`, one of the 3 triple-write sites — reusing it would self-deadlock (non-reentrant lock). `controlModeStartMu`: orthogonal subsystem, never touches `t.ptmx` — reuse would add false contention and an unjustified coupling. |
+| PTY triple synchronization primitive | `deadlock.Mutex`, new field, not reused | research/pitfalls.md | Reuse `detachMutex` or `controlModeStartMu` | `detachMutex`: `DetachSafely`/`Detach` hold it across calls to `closePTYAndAttachCmd()` and (in `Detach`) `Restore()` → `RestoreWithWorkDir()` — three of the PTY-triple write sites — so reusing it as the triple's own lock would self-deadlock the first time those call `ptmxMu.Lock()` reentrantly (non-reentrant lock). Keeping `ptmxMu` separate makes this a safe, consistently-ordered nesting (`detachMutex` outer → `ptmxMu` inner) instead. `controlModeStartMu`: orthogonal subsystem, never touches `t.ptmx` — reuse would add false contention and an unjustified coupling. |
 | `closePTYAndAttachCmd` cleanup ordering | Snapshot-then-release-then-I/O: capture the triple into locals under the lock, release, then `Close()`/`Kill()`/`Wait()` against the locals | research/pitfalls.md #1, #2 | Hold `ptmxMu` across `Close()`/`Kill()`/`Wait()` | Those calls can block on process teardown/OS scheduling; holding the lock across them would stall every concurrent `GetPTY`/`TapEnter`/`SendKeys`/resize call for the duration. `os.File`'s own `internal/poll` fdMutex already makes concurrent `Write`/`Close` on a captured local `*os.File` memory-safe, so releasing early costs nothing in safety — it also incidentally serializes concurrent `closePTYAndAttachCmd` callers against each other, since only one caller can ever receive a non-nil snapshot. |
 | PTY triple storage shape | Keep the 3 existing named fields (`ptmx`, `attachCmd`, `attachCmdWaitOnce`) unchanged; add `setPTYTriple`/`clearPTYTriple` helpers that always touch all 3 together | This plan's Step 3 evaluation, informed by pitfalls.md #5 | Unify into one unexported `ptyState{file, cmd, waitOnce}` struct field | A struct would turn the "clear all 3 atomically" case into one assignment, but it renames the field at 10+ call sites for the rename's own sake, discards each field's individually-written doc comment, and inflates the diff for a bugfix whose own requirements flag blast radius as the reason it wasn't fixed inline. The two helper methods give the same "can't forget a field" guarantee (both fields are always read/written together inside one function body) without the rename tax. Revisit only if a second PTY-triple-shaped field group appears elsewhere in the file. |
 | Read-site access | Locked accessor helper (`lockedPTMX`, and `GetPTY` built on top of it) as a thin Facade over `ptmxMu` | research/pitfalls.md #5; GoF Facade (encapsulating a subsystem — here, "lock + field read" — behind one call) | Hand-rolled `t.ptmxMu.Lock()`/`Unlock()` at each of the 6+ read call sites | Hand-rolling at every site is exactly the "a future call site forgets the lock" risk pitfalls.md warns about. A single accessor is the smallest surface that can be wrong, and every read site already funnels through `GetPTY`, `lockedPTMX`, or (for the resize path) `updateWindowSize`'s own single snapshot. |
@@ -107,12 +109,28 @@ Epic 1.2: Read sites + tests
   ```go
   // ptmxMu guards the PTY triple: ptmx, attachCmd, and attachCmdWaitOnce, which must
   // always be read/written together (all three describe one attach "generation").
-  // Leaf lock: never acquire ptmxMu while already holding detachMutex, controlModeSubMu,
-  // controlModeStartMu, cmdSendMu, or recoveryMu. detachMutex → ptmxMu is fine (used
-  // sequentially by DetachSafely → Restore → RestoreWithWorkDir, never nested); the
-  // reverse order must never occur.
+  // Leaf lock: never acquire ptmxMu while already holding controlModeSubMu,
+  // controlModeStartMu, cmdSendMu, or recoveryMu. detachMutex IS held across ptmxMu
+  // critical sections in both Detach() and DetachSafely() (both call
+  // closePTYAndAttachCmd(), and Detach() also calls Restore() → RestoreWithWorkDir(),
+  // while still holding detachMutex) — that nesting is fine because the order is
+  // always detachMutex (outer) → ptmxMu (inner/leaf) and never reversed; ptmxMu's own
+  // critical sections never call back into detachMutex.
   ptmxMu deadlock.Mutex
   ```
+- Cross-package callers (pre-mortem finding #4): `GetPTY()` is also reached externally via
+  `TmuxProcessManager.GetPTY()` → `TmuxBackend.GetPTY()` → `Instance.GetPTYReader()`
+  (`session/instance_tmux.go:438-443`). Verified `Instance.Destroy()` (which reaches
+  `TmuxSession.Close()`) and `Instance.Start()`'s async flow (which reaches
+  `RestoreWithWorkDir()`) do not hold `Instance.mu` while making those calls — `Instance.pmMu`
+  (`session/instance_tmux.go:87-94`) only guards lazy-initialization of the process-manager
+  reference itself, not calls made through it. Since `ptmxMu`'s own critical sections never
+  call back into any `Instance`-level lock (`session/tmux` has no reference to `session`'s
+  `Instance` type), no reversed-order deadlock is structurally possible regardless of what
+  `Instance`/backend-layer locking does around its calls into these methods — the analysis in
+  this doc comment only needs to cover locks declared inside `tmux.go` because a two-lock cycle
+  requires both locks to appear in both call orders, and `ptmxMu` never appears in the
+  `Instance`-holds-lock-then-calls-in direction from the other side.
 - Files: `session/tmux/tmux.go`
 
 ##### Task 1.1.1b: Add `lockedPTMX`, `setPTYTriple`, `clearPTYTriple` helper methods (~5 min)
@@ -173,6 +191,12 @@ Epic 1.2: Read sites + tests
   ```
   with:
   ```go
+  // Check-then-act: this is not atomic with respect to a concurrent AttachToExisting()
+  // or RestoreWithWorkDir() call on the same session — each individual field access is
+  // now memory-safe, but two concurrent callers can still both observe nil and both
+  // install a PTY (the second setPTYTriple silently wins). Known limitation, not a
+  // data race (go test -race cannot catch it); tracked separately as backlog item
+  // 0f4b1300-d667-437b-b51f-89d81a668693.
   if t.lockedPTMX() == nil {
       ptmx, cmd, err := t.ptyFactory.Start(t.buildAttachCommand())
       if err != nil {
@@ -192,8 +216,12 @@ Epic 1.2: Read sites + tests
   }
   if t.ptmx == nil {
   ```
-  with:
+  with (same known check-then-act limitation as Task 1.1.2a — tracked as backlog item
+  `0f4b1300-d667-437b-b51f-89d81a668693`, not fixed here):
   ```go
+  // Check-then-act: see AttachToExisting's identical comment above (backlog item
+  // 0f4b1300-d667-437b-b51f-89d81a668693) — not atomic against a concurrent
+  // AttachToExisting()/RestoreWithWorkDir()/Close() call on the same session.
   if t.lockedPTMX() != nil {
       _ = t.closePTYAndAttachCmd()
   }
@@ -326,6 +354,14 @@ Epic 1.2: Read sites + tests
   }()
   ```
 - Do NOT re-fetch inside the goroutine or loop — `io.Copy` blocks on one reader for its whole call, exactly like the pre-fix code implicitly did via the closure.
+- **Pre-existing limitation, not newly introduced (pre-mortem finding #5)**: this goroutine
+  pins to whichever PTY generation was live at `Attach()`-call time for its whole (blocking)
+  lifetime — unchanged from the pre-fix code, where the argument to `io.Copy` was already a
+  one-time read. If a `Restore()`/second `AttachToExisting()` installs a new generation while
+  this goroutine is still blocked reading the old one, the old fd is never closed by anything
+  and the goroutine leaks. Out of scope here (same non-goal as pre-mortem finding #1: no PTY
+  lifecycle behavior change) — noted explicitly rather than left implicit so it isn't mistaken
+  for something this fix was supposed to close.
 - Files: `session/tmux/tmux.go`
 
 ##### Task 1.2.1e: Convert `Attach()` goroutine 2 (stdin-forward loop) — re-snapshot every iteration (~3 min)
@@ -353,6 +389,8 @@ Epic 1.2: Read sites + tests
   - *Given* the fix applied, *When* running `go test -race ./session/tmux/...`, *Then* it passes with no `deadlock.Mutex` timeout/`"POTENTIAL DEADLOCK"` output and no test failures.
 - AC5 (requirements.md #5): `make quick-check` passes.
   - *Given* the fix applied, *When* running `make quick-check`, *Then* build, test, and lint all succeed with no regressions attributable to this change.
+- AC6 (requirements.md #6, test-coverage clause): the accepted serialization side effect is covered by a dedicated test.
+  - *Given* `TestGetPTY_ClosePTYAndAttachCmd_ConcurrentAccessIsSerialized` (Task 1.2.2a), *When* it runs, *Then* it exercises exactly the accepted side effect (concurrent `closePTYAndAttachCmd` callers serializing on `ptmxMu`) and asserts the documented-intentional outcome, not a regression.
 - AC2/AC3 intent (deterministic proof, not just probabilistic): the concrete scenario from requirements.md's own framing.
   - *Given* a `TmuxSession` constructed with a real `*os.File` pair from `os.Pipe()` assigned directly to `t.ptmx` (same-package test, no exported seam needed) and `t.attachCmd` left nil, *When* the test goroutine holds `t.ptmxMu.Lock()`, spawns one goroutine calling `t.GetPTY()` and another calling `t.closePTYAndAttachCmd()`, then unlocks, *Then* both goroutines complete (via a `select`+`time.After` deadlock guard matching the existing `TestDoesSessionExist_LockReleasedBeforeRecovery`/`TestRecoverFromServerFailure_ConcurrentGuard` idiom in this file) and `GetPTY()`'s result is exactly one of: the valid `*os.File`, or the `"PTY not initialized..."` error — asserted via `require.True(t, err == nil || strings.Contains(err.Error(), "not initialized"))` — never a panic, a corrupted pointer, or a hang.
 **Files**: `session/tmux/tmux_test.go`
@@ -421,5 +459,165 @@ Epic 1.2: Read sites + tests
   4. `make quick-check`
 - If any command fails, do not mark this story or the PR complete — return to the relevant Epic 1.1/1.2 task, fix, and re-run all four commands (not just the one that failed, since a fix to one site can affect lock ordering elsewhere).
 - Files: none (verification only — no source changes in this task).
+
+---
+
+### Epic 1.3: CI enforcement and the direct repro test
+
+**Goal**: Added after the backlog item's acceptance criteria were refined post-plan — this
+epic closes the two gaps between the original plan (Epics 1.1/1.2, which satisfy AC2, AC4,
+AC5, AC6, and AC1's *mechanism*) and the current AC text: AC1's requirement for CI
+*enforcement* (not just correct code), and AC3's requirement for a second, purpose-built
+regression test that races `CreateSession`/`DeleteSession` directly rather than relying on
+`TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort`'s incidental exposure of
+the same interleave.
+
+#### Story 1.3.1: `make ptmx-field-guard` CI target
+**As a** maintainer, **I want** a CI target that fails the build if a future change reads or
+writes `t.ptmx`/`t.attachCmd`/`t.attachCmdWaitOnce` outside the three helper methods, **so
+that** the invariant Epic 1.1/1.2 establish can't silently erode later.
+**Acceptance Criteria**:
+- AC1 (backlog item #1): *Given* the guard target, *When* run against the post-fix
+  `session/tmux/tmux.go` (only `lockedPTMX`/`setPTYTriple`/`clearPTYTriple` touch the fields
+  directly), *Then* it exits 0. *Given* a hypothetical future diff that adds a fourth direct
+  `t.ptmx = ...` call site outside those three methods, *When* the guard runs, *Then* it exits
+  1 with a message naming the violation.
+**Files**: `Makefile`, `session/tmux/tmux.go`
+
+##### Task 1.3.1a: Mark the 3 helper methods' direct field-access lines (~2 min)
+- Precedent: `actor-field-guard` (Makefile:758) is a pure grep over caller files — it works
+  there because the guarded field writes are supposed to live in *different* files than the
+  scan targets. Here the 3 permitted call sites live in the *same* file being scanned, so file
+  exclusion doesn't discriminate; instead, mark each direct-access line inside `lockedPTMX`,
+  `setPTYTriple`, and `clearPTYTriple` (added in Task 1.1.1b) with a trailing
+  `// allow-direct-ptmx-access` comment, e.g.:
+  ```go
+  func (t *TmuxSession) lockedPTMX() *os.File {
+      t.ptmxMu.Lock()
+      defer t.ptmxMu.Unlock()
+      return t.ptmx // allow-direct-ptmx-access
+  }
+  ```
+  Apply the same trailing marker to every `t.ptmx`/`t.attachCmd`/`t.attachCmdWaitOnce`
+  reference inside all three helpers' bodies (both reads and writes).
+- Files: `session/tmux/tmux.go`
+
+##### Task 1.3.1b: Add the `ptmx-field-guard` Makefile target (~3 min)
+- Add to `Makefile`, following the `actor-field-guard` target's shape (grep-based, comment
+  lines excluded, marker-annotated lines excluded):
+  ```makefile
+  ptmx-field-guard: ## tmux-ptmx-race-fix guard: fail if ptmx/attachCmd/attachCmdWaitOnce are touched outside the ptmxMu helpers
+  	@echo "ptmx-field-guard: scanning session/tmux/*.go for direct PTY-triple field access..."
+  	@if grep -nE '\bt\.(ptmx|attachCmd|attachCmdWaitOnce)\b' session/tmux/*.go \
+  	    | grep -v '^session/tmux/shell_handle.go:' \
+  	    | grep -vE ':[0-9]+:[[:space:]]*//' \
+  	    | grep -v 'allow-direct-ptmx-access' ; then \
+  	    echo "❌ ptmx-field-guard: direct PTY-triple field access found outside lockedPTMX/setPTYTriple/clearPTYTriple — route through the ptmxMu helpers (session/tmux/tmux.go)"; \
+  	    exit 1; \
+  	fi
+  	@echo "✅ ptmx-field-guard: no direct PTY-triple field access outside the guarded helpers"
+  ```
+  Kept as a `session/tmux/*.go` package-wide scan per requirements.md AC1's literal wording, but
+  with `shell_handle.go` explicitly excluded by path (pre-mortem finding #2): that file declares
+  an unrelated `ShellTmuxHandle` struct with its own, differently-guarded `ptmx`/`attachCmd`
+  fields under a receiver named `h`, guarded by its own `spawnMu`, not `ptmxMu` — without the
+  exclusion, a future unrelated edit to that file (e.g. a receiver rename to `t` for style
+  consistency) would fail this guard for a mutex it doesn't even use. Any *other* file added to
+  the package later is still scanned. The residual gap this doesn't close — a real
+  `TmuxSession` violation written with a receiver name other than `t` (e.g. copy-pasted test
+  setup like Task 1.2.2a's own `session.ptmx = r` line, which uses a `session` receiver and is
+  a legitimate pre-test direct assignment, not a violation, but illustrates the pattern the
+  guard can't see) — is accepted for this bugfix's scope, matching `actor-field-guard`'s
+  equally receiver-name-coupled precedent; worth revisiting with an `ast-grep`/gritql rule
+  scoped to methods on `*TmuxSession` if this class of guard becomes more common in the repo.
+- Add `ptmx-field-guard` to the `.PHONY` line and to the `ci:` target's prerequisite list
+  (alongside `actor-field-guard`, the direct precedent for a field-discipline guard gating CI).
+  Not added to `quick-check` — matches `actor-field-guard`'s placement (CI-only, not part of
+  the fast local loop), and AC5 only requires `quick-check` to keep passing, not to grow a new
+  prerequisite.
+- Verify: `make ptmx-field-guard` exits 0 on the fixed tree; temporarily add a throwaway
+  `t.ptmx = nil` outside the helpers and confirm the target exits 1, then revert the throwaway
+  line.
+- Files: `Makefile`
+
+#### Story 1.3.2: Direct `CreateSession`/`DeleteSession` race repro test
+**As a** maintainer, **I want** a test that races `CreateSession` and `DeleteSession` without
+waiting for the instance to go live, **so that** the exact interleave from the original
+`-race` report (async controller-start goroutine's `GetPTY()` vs. the delete cleanup
+goroutine's `closePTYAndAttachCmd()`) is exercised directly and deterministically by CI, not
+just incidentally by a hook-URL test that happens to share the same timing window.
+**Acceptance Criteria**:
+- AC3 (backlog item #3): *Given* `TestSessionService_CreateThenImmediateDelete_NoDataRace`,
+  *When* run under `go test -race ./server/...`, *Then* it passes with no data race reported,
+  and it does not call `waitForLiveInstance` before issuing `DeleteSession` (that wait is
+  exactly what makes the existing hook-URL test's exposure of this race incidental/rare rather
+  than reliable).
+**Files**: `server/server_integration_test.go`
+
+##### Task 1.3.2a: Add `TestSessionService_CreateThenImmediateDelete_NoDataRace` (~8 min)
+- **Best-effort, not deterministic (pre-mortem finding #3)**: unlike Task 1.2.2a's unit test
+  (which forces the exact interleave by holding `ptmxMu` before spawning either goroutine),
+  this test relies on real scheduler timing to land `DeleteSession`'s cleanup goroutine inside
+  `CreateSession`'s async controller-start window. A production test-hook that blocks the real
+  controller-start goroutine mid-`GetPTY()` would make this deterministic too, but was rejected
+  as disproportionate blast-radius for this PR (it would add a test-only synchronization seam
+  to `server/services/session_service.go`'s async goroutine, outside `session/tmux`).
+- **Course-correction found during implementation**: the first attempt mitigated the
+  non-determinism by racing 8 concurrent create/delete pairs within one test invocation.
+  `go test -race -count=20` showed this introduces its own, unrelated flake — "database is
+  locked" from the session store's SQLite connection, whose 5s busy_timeout
+  (`session/ent_repository.go`'s `_timeout=5000`) 8-way concurrent writes can exceed once
+  `-race`'s slowdown is factored in. Reverted to a single sequential create/delete pair per
+  invocation; probabilistic coverage comes from `-count=20`'s outer repetition (Task 1.3.2b),
+  not in-test concurrency — verified clean across 20 consecutive `-race` runs with zero data
+  races and zero DB-lock failures. This test's role is a realistic, close-to-production repro;
+  the deterministic correctness proof is Task 1.2.2a.
+- In `server/server_integration_test.go`, alongside
+  `TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort`, add:
+  ```go
+  // TestSessionService_CreateThenImmediateDelete_NoDataRace deliberately does NOT call
+  // waitForLiveInstance before deleting: CreateSession's async controller-start goroutine
+  // (which calls GetPTY()) is very likely still in flight when DeleteSession's cleanup
+  // goroutine runs closePTYAndAttachCmd(). This is the exact interleave from the original
+  // -race report. This test is a realistic, best-effort repro under real scheduler timing
+  // (relying on -count=N outer repetition, not in-test concurrency, to raise the odds of
+  // landing in the window across runs -- an earlier version raced several concurrent
+  // create/delete pairs within one run, but that tripped the session store's SQLite
+  // busy_timeout under -race's slowdown, an unrelated flake this test must not introduce).
+  // The deterministic proof that the fix is correct is
+  // TestGetPTY_ClosePTYAndAttachCmd_ConcurrentAccessIsSerialized in session/tmux/tmux_test.go,
+  // which forces the interleave directly instead of relying on timing.
+  func TestSessionService_CreateThenImmediateDelete_NoDataRace(t *testing.T) {
+      installFakeClaudeBinary(t)
+      deps, err := BuildDependencies()
+      if err != nil {
+          t.Fatalf("BuildDependencies: %v", err)
+      }
+
+      title := fmt.Sprintf("ptmx-race-repro-%d", time.Now().UnixNano())
+      resp, err := deps.SessionService.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+          Title:   title,
+          Path:    t.TempDir(),
+          Program: "claude",
+      }))
+      if err != nil {
+          t.Fatalf("CreateSession: %v", err)
+      }
+
+      if _, err := deps.SessionService.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{Id: resp.Msg.Session.Id})); err != nil {
+          t.Fatalf("DeleteSession: %v", err)
+      }
+  }
+  ```
+- No new imports needed — `fmt`, `context`, `time`, `connect`, `sessionv1` are already
+  imported by this file for the neighboring test.
+- Files: `server/server_integration_test.go`
+
+##### Task 1.3.2b: Re-run the full verification suite including the new pieces (~5 min, no new code)
+- Re-run Task 1.2.2b's four commands, plus:
+  5. `make ptmx-field-guard`
+  6. `go test -race ./server/... -run TestSessionService_CreateThenImmediateDelete_NoDataRace -count=20`
+- All six must be green before requesting review.
+- Files: none (verification only).
 
 ---

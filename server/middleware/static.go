@@ -50,6 +50,10 @@ func StaticFileServer(fileSystem fs.FS, indexFile string) http.Handler {
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
 				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 				w.WriteHeader(http.StatusOK)
+				// #nosec G705 -- dirIndexContent is read from the embedded build-time fs.FS via
+				// a path derived from path.Clean(r.URL.Path); io/fs rejects ".." segments outright,
+				// so this can only ever return bytes that were embedded at build time, never
+				// attacker-supplied content. Not a taint sink.
 				_, _ = w.Write(dirIndexContent)
 				return
 			}

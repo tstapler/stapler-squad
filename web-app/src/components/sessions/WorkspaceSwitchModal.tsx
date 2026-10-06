@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback, RefObject } from "react";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
@@ -25,6 +25,7 @@ interface WorkspaceSwitchModalProps {
   baseUrl: string;
   onClose: () => void;
   onSwitched?: () => void;
+  triggerRef?: RefObject<HTMLElement | null>;
 }
 
 function getVcsIcon(type: VCSType): string {
@@ -68,6 +69,7 @@ export function WorkspaceSwitchModal({
   baseUrl,
   onClose,
   onSwitched,
+  triggerRef,
 }: WorkspaceSwitchModalProps) {
   const [targets, setTargets] = useState<AvailableWorkspaceTargets | null>(null);
   const [vcsInfo, setVcsInfo] = useState<VCSInfo | null>(null);
@@ -86,7 +88,7 @@ export function WorkspaceSwitchModal({
   const [switchSuccess, setSwitchSuccess] = useState(false);
 
   const modalRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(modalRef, true);
+  useFocusTrap(modalRef, true, triggerRef);
 
   const client = useMemo(
     () =>

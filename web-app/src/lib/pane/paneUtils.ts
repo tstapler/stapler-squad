@@ -4,12 +4,23 @@ export const MIN_RATIO = 0.1;
 export const MAX_RATIO = 0.9;
 export const MAX_DEPTH = 8;
 
-/** Generate a unique pane ID */
-export function generatePaneId(): PaneId {
+/**
+ * Generate an opaque, sufficiently-unique ID string using crypto.randomUUID()
+ * where available, falling back to Math.random() outside secure contexts
+ * (e.g. non-HTTPS dev servers). Not cryptographically significant — used for
+ * client-side correlation (pane IDs, resync correlation IDs), never for
+ * security-sensitive purposes.
+ */
+export function generateSecureId(): string {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
-    return crypto.randomUUID().slice(0, 8);
+    return crypto.randomUUID();
   }
   return Math.random().toString(36).slice(2, 10);
+}
+
+/** Generate a unique pane ID */
+export function generatePaneId(): PaneId {
+  return generateSecureId().slice(0, 8);
 }
 
 /** Create a new empty leaf pane */

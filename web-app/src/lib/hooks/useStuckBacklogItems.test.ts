@@ -5,7 +5,7 @@
  * blanking the last-known list, and refetch()/snooze().
  */
 import { renderHook, act, waitFor } from "@testing-library/react";
-import { useStuckBacklogItems } from "./useStuckBacklogItems";
+import { useStuckBacklogItems, StuckBacklogItemsProvider } from "./useStuckBacklogItems";
 import { StuckReason } from "@/gen/session/v1/backlog_pb";
 
 const mockListStuckBacklogItems = jest.fn();
@@ -163,6 +163,29 @@ describe("useStuckBacklogItems", () => {
     expect(mockListStuckBacklogItems).toHaveBeenCalledTimes(1);
   });
 
+  it("bulkResetParkedRemediation(reason) scopes the request to that reason", async () => {
+    mockListStuckBacklogItems.mockResolvedValue({ items: [] });
+    mockBulkResetStuckRemediation.mockResolvedValue({ resetCount: 1 });
+
+    const { result } = renderHook(() => useStuckBacklogItems(60_000));
+    await waitFor(() => expect(result.current.lastFetched).not.toBeNull());
+    mockListStuckBacklogItems.mockClear();
+
+    let count = 0;
+    await act(async () => {
+      count = await result.current.bulkResetParkedRemediation(StuckReason.STALE_WORK);
+    });
+
+    expect(count).toBe(1);
+    expect(mockBulkResetStuckRemediation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyParked: true,
+        onlyParkedExplicitlySet: true,
+        reason: StuckReason.STALE_WORK,
+      })
+    );
+  });
+
   it("triggerRemediationNow() calls TriggerRemediationNow, refetches, and rethrows on failure", async () => {
     mockListStuckBacklogItems.mockResolvedValue({ items: [] });
     mockTriggerRemediationNow.mockRejectedValue(new Error("already parked"));
@@ -178,5 +201,49 @@ describe("useStuckBacklogItems", () => {
     expect(mockTriggerRemediationNow).toHaveBeenCalledWith(
       expect.objectContaining({ itemId: "a", reason: StuckReason.BOUNCING })
     );
+  });
+});
+
+describe("StuckBacklogItemsProvider", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("shares a single poll across multiple consumers instead of each polling independently", async () => {
+    mockListStuckBacklogItems.mockResolvedValue({ items: [makeItem("a")] });
+
+    const { result } = renderHook(
+      () => ({ a: useStuckBacklogItems(), b: useStuckBacklogItems() }),
+      { wrapper: StuckBacklogItemsProvider }
+    );
+
+    await waitFor(() => expect(result.current.a.items).toHaveLength(1));
+    expect(result.current.b.items).toHaveLength(1);
+    expect(mockListStuckBacklogItems).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates a refetch from one consumer to every other consumer without waiting for the poll interval", async () => {
+    mockListStuckBacklogItems.mockResolvedValueOnce({ items: [] });
+    const { result } = renderHook(
+      () => ({ a: useStuckBacklogItems(), b: useStuckBacklogItems() }),
+      { wrapper: StuckBacklogItemsProvider }
+    );
+    await waitFor(() => expect(result.current.a.lastFetched).not.toBeNull());
+
+    mockListStuckBacklogItems.mockResolvedValueOnce({ items: [makeItem("a")] });
+    await act(async () => {
+      await result.current.a.refetch();
+    });
+
+    expect(result.current.b.items).toHaveLength(1);
+  });
+
+  it("falls back to an independent standalone poll per instance when there is no provider ancestor", async () => {
+    mockListStuckBacklogItems.mockResolvedValue({ items: [makeItem("a")] });
+
+    renderHook(() => useStuckBacklogItems());
+    renderHook(() => useStuckBacklogItems());
+
+    await waitFor(() => expect(mockListStuckBacklogItems).toHaveBeenCalledTimes(2));
   });
 });

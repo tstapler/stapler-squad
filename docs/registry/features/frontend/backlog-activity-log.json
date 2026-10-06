@@ -1,0 +1,11 @@
+{
+  "id": "backlog:activity-log",
+  "type": "frontend",
+  "description": "Ungated activity log section on the backlog item detail page, rendering notes posted by post_backlog_update (any session, gated or not) alongside the existing progress-history and status-history sections",
+  "component": "ActivityLogSection",
+  "path": "web-app/src/components/backlog/detail/ActivityLogSection.tsx",
+  "markerLine": 3,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-08-18T22:08:27Z"
+}

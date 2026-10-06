@@ -31,6 +31,7 @@ func makeAcknowledgedInstance(title string) *Instance {
 // the DetectedAt timestamp is only updated when the session's meaningful status changes,
 // not on every poll cycle.
 func TestReviewQueuePoller_PreservesTimestampWhenStatusUnchanged(t *testing.T) {
+	t.Parallel()
 	// Create review queue
 	queue := NewReviewQueue()
 
@@ -149,6 +150,7 @@ func TestReviewQueuePoller_PreservesTimestampWhenStatusUnchanged(t *testing.T) {
 // TestReviewQueuePoller_ContextChangeUpdatesTimestamp verifies that
 // changes to the Context field also trigger a timestamp update.
 func TestReviewQueuePoller_ContextChangeUpdatesTimestamp(t *testing.T) {
+	t.Parallel()
 	// Create review queue
 	queue := NewReviewQueue()
 
@@ -208,6 +210,7 @@ func TestReviewQueuePoller_ContextChangeUpdatesTimestamp(t *testing.T) {
 // TestReviewQueue_SortsByLastActivity verifies that review items are sorted
 // by LastActivity timestamp, with most recent activity first (within same priority).
 func TestReviewQueue_SortsByLastActivity(t *testing.T) {
+	t.Parallel()
 	// Create review queue
 	queue := NewReviewQueue()
 
@@ -321,6 +324,7 @@ func newTestPollerInstance(title, uuid string) *Instance {
 // TestReviewQueuePoller_SetInstances_ReplacesAll verifies that SetInstances replaces
 // all previously tracked instances with the provided slice.
 func TestReviewQueuePoller_SetInstances_ReplacesAll(t *testing.T) {
+	t.Parallel()
 	poller := newSimpleTestPoller()
 
 	first := newTestPollerInstance("session-a", "uuid-a")
@@ -342,6 +346,7 @@ func TestReviewQueuePoller_SetInstances_ReplacesAll(t *testing.T) {
 // TestReviewQueuePoller_AddInstance_AppendsWithoutReplacing verifies that AddInstance
 // appends a new instance without removing existing ones.
 func TestReviewQueuePoller_AddInstance_AppendsWithoutReplacing(t *testing.T) {
+	t.Parallel()
 	poller := newSimpleTestPoller()
 
 	first := newTestPollerInstance("session-a", "uuid-a")
@@ -359,6 +364,7 @@ func TestReviewQueuePoller_AddInstance_AppendsWithoutReplacing(t *testing.T) {
 // TestReviewQueuePoller_RemoveInstance_ByTitle verifies that RemoveInstance removes
 // the instance matching the given title and leaves others intact.
 func TestReviewQueuePoller_RemoveInstance_ByTitle(t *testing.T) {
+	t.Parallel()
 	poller := newSimpleTestPoller()
 
 	a := newTestPollerInstance("session-a", "uuid-a")
@@ -379,6 +385,7 @@ func TestReviewQueuePoller_RemoveInstance_ByTitle(t *testing.T) {
 // TestReviewQueuePoller_RemoveInstance_NotFound_NoError verifies that calling
 // RemoveInstance with an unknown ID does not panic and leaves the list unchanged.
 func TestReviewQueuePoller_RemoveInstance_NotFound_NoError(t *testing.T) {
+	t.Parallel()
 	poller := newSimpleTestPoller()
 
 	a := newTestPollerInstance("session-a", "uuid-a")
@@ -396,6 +403,7 @@ func TestReviewQueuePoller_RemoveInstance_NotFound_NoError(t *testing.T) {
 // TestReviewQueuePoller_GetMonitoredCount verifies that GetMonitoredCount returns
 // the number of currently tracked instances.
 func TestReviewQueuePoller_GetMonitoredCount(t *testing.T) {
+	t.Parallel()
 	poller := newSimpleTestPoller()
 
 	if poller.GetMonitoredCount() != 0 {
@@ -416,6 +424,7 @@ func TestReviewQueuePoller_GetMonitoredCount(t *testing.T) {
 // TestReviewQueuePoller_FindInstance_ByTitle verifies that FindInstance returns
 // the correct instance when looked up by title.
 func TestReviewQueuePoller_FindInstance_ByTitle(t *testing.T) {
+	t.Parallel()
 	poller := newSimpleTestPoller()
 
 	a := newTestPollerInstance("session-a", "uuid-a")
@@ -434,6 +443,7 @@ func TestReviewQueuePoller_FindInstance_ByTitle(t *testing.T) {
 // TestReviewQueuePoller_FindInstance_ByUUID verifies that FindInstance returns
 // the correct instance when looked up by UUID.
 func TestReviewQueuePoller_FindInstance_ByUUID(t *testing.T) {
+	t.Parallel()
 	poller := newSimpleTestPoller()
 
 	a := newTestPollerInstance("session-a", "uuid-a")
@@ -452,6 +462,7 @@ func TestReviewQueuePoller_FindInstance_ByUUID(t *testing.T) {
 // TestReviewQueuePoller_FindInstance_NotFound verifies that FindInstance returns
 // nil when the given ID does not match any tracked instance.
 func TestReviewQueuePoller_FindInstance_NotFound(t *testing.T) {
+	t.Parallel()
 	poller := newSimpleTestPoller()
 
 	poller.SetInstances([]*Instance{
@@ -469,6 +480,7 @@ func TestReviewQueuePoller_FindInstance_NotFound(t *testing.T) {
 // TestReviewQueuePoller_IsRunning_InitiallyFalse verifies that a newly created
 // poller reports IsRunning() == false before Start is called.
 func TestReviewQueuePoller_IsRunning_InitiallyFalse(t *testing.T) {
+	t.Parallel()
 	poller := newSimpleTestPoller()
 
 	if poller.IsRunning() {
@@ -484,6 +496,7 @@ func TestReviewQueuePoller_IsRunning_InitiallyFalse(t *testing.T) {
 // value so a future edit can't silently drift it again without updating the
 // ADR.
 func TestDefaultReviewQueuePollerConfig_should_return5MinStalenessThreshold_When_Called(t *testing.T) {
+	t.Parallel()
 	cfg := DefaultReviewQueuePollerConfig()
 	if cfg.StalenessThreshold != 5*time.Minute {
 		t.Errorf("DefaultReviewQueuePollerConfig().StalenessThreshold = %s, want 5m", cfg.StalenessThreshold)
@@ -493,6 +506,7 @@ func TestDefaultReviewQueuePollerConfig_should_return5MinStalenessThreshold_When
 // TestReviewQueuePoller_StartStop verifies that Start() transitions the poller to
 // running and Stop() cleanly shuts it down.
 func TestReviewQueuePoller_StartStop(t *testing.T) {
+	t.Parallel()
 	// Use a fast poll interval so the goroutine does minimal work during the test.
 	queue := NewReviewQueue()
 	statusMgr := NewInstanceStatusManager()
@@ -528,6 +542,7 @@ func TestReviewQueuePoller_StartStop(t *testing.T) {
 // TestReviewQueuePoller_Start_Idempotent verifies that calling Start() twice does
 // not spawn a second goroutine or panic.
 func TestReviewQueuePoller_Start_Idempotent(t *testing.T) {
+	t.Parallel()
 	queue := NewReviewQueue()
 	statusMgr := NewInstanceStatusManager()
 	cfg := DefaultReviewQueuePollerConfig()
@@ -551,6 +566,7 @@ func TestReviewQueuePoller_Start_Idempotent(t *testing.T) {
 // acknowledged after its last meaningful output is removed from the queue on the next poll.
 // This is the regression test for the "skip button wipes list but doesn't remove status" bug.
 func TestReviewQueuePoller_AcknowledgedSession_RemovedOnNextPoll(t *testing.T) {
+	t.Parallel()
 	queue := NewReviewQueue()
 	statusManager := NewInstanceStatusManager()
 	poller := NewReviewQueuePollerWithConfig(queue, statusManager, nil, ReviewQueuePollerConfig{
@@ -584,6 +600,7 @@ func TestReviewQueuePoller_AcknowledgedSession_RemovedOnNextPoll(t *testing.T) {
 // TestReviewQueuePoller_AcknowledgedSession_ResurfacesAfterNewOutput verifies that
 // a snoozed session re-enters the queue once new meaningful output arrives.
 func TestReviewQueuePoller_AcknowledgedSession_ResurfacesAfterNewOutput(t *testing.T) {
+	t.Parallel()
 	inst := makeAcknowledgedInstance("resurface-session")
 
 	// Simulate new output arriving AFTER the acknowledgment.
@@ -596,6 +613,75 @@ func TestReviewQueuePoller_AcknowledgedSession_ResurfacesAfterNewOutput(t *testi
 	}
 }
 
+// TestReviewQueuePoller_SkipIdleSession_StaysSuppressedAcrossPolls is the integration-level
+// regression test for review_queue_determiner.go's suppressedByAck helper (wrapping
+// IsAcknowledgedAfterOutput()): a session the user has "Skip"ped must not reappear in the
+// review queue on the very next poll tick, or any subsequent tick, as long as no new
+// terminal output arrives. Mirrors
+// TestDefaultStatusDeterminer_IdleAckSuppression_StaysOutUntilNewOutput's scenario but
+// drives it through a real ReviewQueuePoller + Instance across multiple checkSessionsSafe()
+// ticks instead of calling Determine() directly — this is the actual "doesn't reappear on
+// the very next poll tick" success metric, not just the pure-function unit test.
+func TestReviewQueuePoller_SkipIdleSession_StaysSuppressedAcrossPolls(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+
+	inst := &Instance{
+		Title:  "skip-idle-session",
+		UUID:   "uuid-skip-idle",
+		Status: Running,
+	}
+	inst.started.Store(true)
+
+	// Idle long enough to cross the no-controller basicIdleThreshold (5s), but recent
+	// enough to stay well under the default StalenessThreshold (5m) so ReasonStale never fires.
+	past := time.Now().Add(-10 * time.Second)
+	inst.CreatedAt = past
+	inst.UpdatedAt = past
+	inst.LastMeaningfulOutput = past
+	inst.SyncAtomicTimestamps()
+
+	// Pre-warm the content cache so GetContent() returns "" without needing a live tmux
+	// session — same pattern as makeStaleInstance.
+	poller.injectCachedContent(inst.Title, "")
+
+	poller.AddInstance(inst)
+
+	// Tick 1: the session is genuinely idle with no acknowledgment — must be added.
+	if err := poller.checkSessionsSafe(); err != nil {
+		t.Fatalf("checkSessionsSafe (tick 1) returned error: %v", err)
+	}
+	item, exists := poller.queue.Get(inst.Title)
+	if !exists {
+		t.Fatal("expected idle session to be added to the review queue on tick 1")
+	}
+	if item.Reason != ReasonIdle {
+		t.Errorf("expected ReasonIdle on tick 1, got %v", item.Reason)
+	}
+
+	// Simulate the user clicking "Skip". The real skip handler
+	// (server/services/review_queue_service.go's AcknowledgeSession) calls exactly this
+	// method on the live instance — reuse it rather than reinventing the acknowledgment
+	// mechanism by poking timestamp fields directly.
+	inst.MarkAcknowledged()
+
+	// Tick 2 (the very next poll after Skip): must not reappear.
+	if err := poller.checkSessionsSafe(); err != nil {
+		t.Fatalf("checkSessionsSafe (tick 2) returned error: %v", err)
+	}
+	if _, exists := poller.queue.Get(inst.Title); exists {
+		t.Error("session must not reappear in the queue on the very next poll tick after Skip")
+	}
+
+	// Tick 3: still no new output — must remain suppressed.
+	if err := poller.checkSessionsSafe(); err != nil {
+		t.Fatalf("checkSessionsSafe (tick 3) returned error: %v", err)
+	}
+	if _, exists := poller.queue.Get(inst.Title); exists {
+		t.Error("session must remain suppressed across a second subsequent poll tick with no new output")
+	}
+}
+
 // TestReviewQueuePoller_ControllerSession_NotStarted_WithApproval_AddsToQueue verifies
 // that sessions with GetController() != nil (controller wired but not yet started) are
 // evaluated by the poller rather than skipped. When approval-prompt content is present in
@@ -604,6 +690,7 @@ func TestReviewQueuePoller_AcknowledgedSession_ResurfacesAfterNewOutput(t *testi
 // This is the regression test for the bug where the early-return guard prevented any
 // queue update for sessions with a non-nil controller, regardless of their actual state.
 func TestReviewQueuePoller_ControllerSession_NotStarted_WithApproval_AddsToQueue(t *testing.T) {
+	t.Parallel()
 	poller := newSimpleTestPoller()
 
 	inst := &Instance{
@@ -649,6 +736,7 @@ func TestReviewQueuePoller_ControllerSession_NotStarted_WithApproval_AddsToQueue
 // the dead-paned session sat in the queue forever as a false ATTENTION_REASON_STALE entry.
 // See docs/tasks/backlog-feature-improvement.md, 2026-08-02 entry.
 func TestReviewQueuePoller_ArchivedSession_ExcludedFromQueue(t *testing.T) {
+	t.Parallel()
 	poller := newSimpleTestPoller()
 
 	inst := &Instance{
@@ -685,6 +773,7 @@ func TestReviewQueuePoller_ArchivedSession_ExcludedFromQueue(t *testing.T) {
 // sessions with an active (started) ClaudeController that reports StatusNeedsApproval are
 // added to the review queue via the controller-based detection path (lines 696-828).
 func TestReviewQueuePoller_ControllerSession_Started_NeedsApproval_AddsToQueue(t *testing.T) {
+	t.Parallel()
 	poller, statusMgr := newSimpleTestPollerWithManager()
 
 	// Use a mock InstanceContext so GetCurrentStatus() returns StatusNeedsApproval
@@ -724,6 +813,7 @@ func TestReviewQueuePoller_ControllerSession_Started_NeedsApproval_AddsToQueue(t
 // TestReviewQueuePoller_AcknowledgmentSnooze_ConditionLogic documents the bypass that
 // caused the bug and asserts the corrected condition applies universally.
 func TestReviewQueuePoller_AcknowledgmentSnooze_ConditionLogic(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name               string
 		shouldAdd          bool
@@ -756,6 +846,7 @@ func TestReviewQueuePoller_AcknowledgmentSnooze_ConditionLogic(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			// Reproduce the old condition that caused the bypass.
 			// oldCondition=true  → snooze block is entered (not bypassed)
 			// oldCondition=false → snooze block is skipped (bypassed = the bug)
@@ -842,6 +933,7 @@ func BenchmarkCheckSessionsConcurrent(b *testing.B) {
 // both genuinely alive on their own socket. Under the old single-socket assumption,
 // whichever socket was NOT picked would see its instance falsely marked Stopped.
 func TestReviewQueuePoller_ReconcileSessions_ActiveInstancesOnDifferentSockets_StayIndependent(t *testing.T) {
+	t.Parallel()
 	poller := newSimpleTestPoller()
 	querier := newFakeTmuxSocketQuerier()
 	poller.tmuxSocket = querier
@@ -869,10 +961,76 @@ func TestReviewQueuePoller_ReconcileSessions_ActiveInstancesOnDifferentSockets_S
 	}
 }
 
+// TestReviewQueuePoller_ReconcileSessions_TymuxBackend_NeverQueriedOrFlipped is
+// the regression test for a real incident (tymux-validation-test,
+// 2026-09-06/07): a tymux-backed instance has no tmux server socket at all,
+// so it can never appear in a ListSessions result — reconcileSessions used to
+// treat that as "not found in live sessions" and transition every tymux
+// session to Stopped within one poll cycle, moments after creation. tymux
+// liveness is push-based instead (the standing Attach stream's
+// exit/reconnect-exhaustion callback), so reconcileSessions must skip tymux
+// instances entirely — not just leave them Active, but never even query a
+// socket on their behalf.
+func TestReviewQueuePoller_ReconcileSessions_TymuxBackend_NeverQueriedOrFlipped(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	tymuxInst := makeSocketTestInstance("tymux-session", "session-tymux", "tymux-only-socket", Active)
+	tymuxInst.Backend = BackendTymux
+	poller.SetInstances([]*Instance{tymuxInst})
+
+	// Deliberately do NOT call querier.setLiveSessions for "tymux-only-socket"
+	// — if reconcileSessions ever queries it, ListSessions returns an empty
+	// live set and the old bug (flip to Stopped) would reproduce immediately.
+
+	poller.reconcileSessions()
+
+	if tymuxInst.Status != Active {
+		t.Errorf("tymux instance: got status %v, want Active (untouched — tymux liveness isn't polled here)", tymuxInst.Status)
+	}
+	if sockets := querier.socketsQueried(); len(sockets) != 0 {
+		t.Errorf("expected reconcileSessions to never query a tymux-backed instance's socket, got %v", sockets)
+	}
+}
+
+// TestReviewQueuePoller_ReconcileSessions_MixedBackends_TmuxStillReconciled
+// covers the actual rollout scenario the all-tymux test above doesn't:
+// tmux and tymux instances coexisting, including sharing a socket string.
+// The tymux instance must never be queried/flipped and the tmux instance
+// must still be reconciled normally against its own real socket data.
+func TestReviewQueuePoller_ReconcileSessions_MixedBackends_TmuxStillReconciled(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	tmuxInst := makeSocketTestInstance("tmux-session", "session-tmux", "shared-socket", Active)
+	tymuxInst := makeSocketTestInstance("tymux-session", "session-tymux-name", "shared-socket", Active)
+	tymuxInst.Backend = BackendTymux
+	poller.SetInstances([]*Instance{tmuxInst, tymuxInst})
+
+	// tmux session genuinely alive; the tymux instance's name is deliberately
+	// absent -- if it leaked into the query, this socket's live set wouldn't
+	// contain it and it would wrongly flip to Stopped.
+	querier.setLiveSessions("shared-socket", "session-tmux")
+
+	poller.reconcileSessions()
+
+	if tmuxInst.Status != Active {
+		t.Errorf("tmux instance: got status %v, want Active", tmuxInst.Status)
+	}
+	if tymuxInst.Status != Active {
+		t.Errorf("tymux instance: got status %v, want Active (never touched)", tymuxInst.Status)
+	}
+}
+
 // TestReviewQueuePoller_ReconcileSessions_StoppedInstancesOnDifferentSockets_ReviveIndependently
 // covers the Stopped→Active direction: only the instance actually alive on its own
 // socket should revive; the other must stay Stopped.
 func TestReviewQueuePoller_ReconcileSessions_StoppedInstancesOnDifferentSockets_ReviveIndependently(t *testing.T) {
+	t.Parallel()
 	poller := newSimpleTestPoller()
 	querier := newFakeTmuxSocketQuerier()
 	poller.tmuxSocket = querier
@@ -895,10 +1053,86 @@ func TestReviewQueuePoller_ReconcileSessions_StoppedInstancesOnDifferentSockets_
 	}
 }
 
+// TestReviewQueuePoller_ReconcileSessions_StoppedWithDeadPane_StaysStopped is the
+// regression test for the 2026-09-06 incident: remain-on-exit keeps a tmux pane
+// object alive as a "Pane is dead (signal N, ...)" placeholder after the wrapped
+// program exits, so liveSessions[name] alone cannot distinguish "pane exists with
+// a live process" from "pane exists, program already dead". Blindly reviving on
+// pane existence alone left sessions stuck showing Active with no live process
+// behind them -- frozen terminal, no response to input or resize.
+func TestReviewQueuePoller_ReconcileSessions_StoppedWithDeadPane_StaysStopped(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	mock := &mockTmuxManager{
+		tmuxSessionName:  "session-dead-pane",
+		isAliveReturn:    true,
+		hasSessionReturn: true,
+		paneExitDead:     true, // remain-on-exit placeholder: wrapped program already exited
+		paneExitCode:     1,
+		paneExitSignal:   "",
+	}
+	inst := &Instance{
+		Title:            "dead-pane-session",
+		Status:           Stopped,
+		IsManaged:        true,
+		TmuxServerSocket: "",
+	}
+	inst.processManager = NewTmuxBackend(mock)
+	inst.started.Store(true)
+	poller.SetInstances([]*Instance{inst})
+
+	querier.setLiveSessions("", "session-dead-pane")
+
+	poller.reconcileSessions()
+
+	if inst.Status != Stopped {
+		t.Errorf("got status %v, want Stopped (pane object exists but wrapped program has exited -- must not be reported Active)", inst.Status)
+	}
+}
+
+// TestReviewQueuePoller_ReconcileSessions_StoppedWithLivePane_RevivesToActive proves
+// the companion positive case still works: a genuinely live process (not just a
+// live pane object) does revive to Active, so the dead-pane check above isn't
+// blocking legitimate revival.
+func TestReviewQueuePoller_ReconcileSessions_StoppedWithLivePane_RevivesToActive(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	mock := &mockTmuxManager{
+		tmuxSessionName:  "session-live-pane",
+		isAliveReturn:    true,
+		hasSessionReturn: true,
+		paneExitDead:     false, // wrapped program still running
+	}
+	inst := &Instance{
+		Title:            "live-pane-session",
+		Status:           Stopped,
+		IsManaged:        true,
+		TmuxServerSocket: "",
+	}
+	inst.processManager = NewTmuxBackend(mock)
+	inst.started.Store(true)
+	poller.SetInstances([]*Instance{inst})
+
+	querier.setLiveSessions("", "session-live-pane")
+
+	poller.reconcileSessions()
+
+	if inst.Status != Active {
+		t.Errorf("got status %v, want Active (pane's wrapped program is genuinely still running)", inst.Status)
+	}
+}
+
 // TestReviewQueuePoller_ReconcileSessions_ServerDownOnOneSocket_DoesNotAffectOthers
 // verifies that a down tmux server on one socket only skips reconciliation for
 // instances on that socket, not for instances on other, healthy sockets.
 func TestReviewQueuePoller_ReconcileSessions_ServerDownOnOneSocket_DoesNotAffectOthers(t *testing.T) {
+	t.Parallel()
 	poller := newSimpleTestPoller()
 	querier := newFakeTmuxSocketQuerier()
 	poller.tmuxSocket = querier
@@ -919,6 +1153,90 @@ func TestReviewQueuePoller_ReconcileSessions_ServerDownOnOneSocket_DoesNotAffect
 	// must NOT be marked Stopped just because its socket happened to be unreachable.
 	if instCustom.Status != Active {
 		t.Errorf("custom-socket instance: got status %v, want Active (server-down must skip, not falsely mark Stopped)", instCustom.Status)
+	}
+}
+
+// TestReviewQueuePoller_ReconcileSessions_CrashedButTmuxAlive_RevivesToActive is the
+// regression test for the Crashed defensive-symmetry case mirroring the existing
+// Hibernated-but-alive handling: a Crashed session normally has no live tmux session
+// (MarkCrashed kills it before setting the status), but if one is found alive anyway
+// (e.g. an external `tmux new-session` reused the same name), reconcileSessions must
+// bring it back in sync rather than leaving it stuck showing the Crashed banner over
+// a live pane.
+func TestReviewQueuePoller_ReconcileSessions_CrashedButTmuxAlive_RevivesToActive(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	instCrashed := makeSocketTestInstance("crashed-session", "session-crashed", "", Crashed)
+	poller.SetInstances([]*Instance{instCrashed})
+
+	querier.setLiveSessions("", "session-crashed")
+
+	poller.reconcileSessions()
+
+	if instCrashed.Status != Active {
+		t.Errorf("crashed instance found alive in tmux: got status %v, want Active (revived)", instCrashed.Status)
+	}
+}
+
+// TestReviewQueuePoller_ReconcileSessions_CrashedAndTmuxGone_StaysUntouched verifies the
+// expected steady state: a Crashed session with no live tmux session (the normal case,
+// since MarkCrashed already killed it) is left alone -- not silently resurrected.
+func TestReviewQueuePoller_ReconcileSessions_CrashedAndTmuxGone_StaysUntouched(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	instCrashed := makeSocketTestInstance("crashed-session", "session-crashed", "", Crashed)
+	poller.SetInstances([]*Instance{instCrashed})
+
+	querier.setLiveSessions("") // nothing alive
+
+	poller.reconcileSessions()
+
+	if instCrashed.Status != Crashed {
+		t.Errorf("crashed instance with no live tmux session: got status %v, want Crashed (untouched)", instCrashed.Status)
+	}
+}
+
+// TestReviewQueuePoller_ShouldSkipSession_SkipsCrashed pins shouldSkipSession's Crashed
+// exclusion: a Crashed session must not be checked for review-queue attention reasons --
+// it already surfaces via its own distinct status/banner, and MarkCrashed already killed
+// its tmux session, so there is no live pane content to inspect.
+func TestReviewQueuePoller_ShouldSkipSession_SkipsCrashed(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	inst := makeSocketTestInstance("crashed-session", "session-crashed", "", Crashed)
+	inst.started.Store(true)
+
+	if !poller.shouldSkipSession(inst) {
+		t.Error("expected shouldSkipSession(Crashed instance) to be true")
+	}
+}
+
+// TestReviewQueuePoller_ShouldSkipSession_SkipsHibernatedAndPermanentlyFailed pins the
+// gap closed by switching shouldSkipSession to Status.IsSuspended(): Hibernated and
+// PermanentlyFailed sessions have no live tmux pane either (hibernation explicitly kills
+// the tmux session; PermanentlyFailed is terminal, awaiting an explicit Retry), so they
+// must be excluded from review-queue attention-reason checks exactly like
+// Stopped/Paused/Crashed already were.
+func TestReviewQueuePoller_ShouldSkipSession_SkipsHibernatedAndPermanentlyFailed(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+
+	hibernated := makeSocketTestInstance("hibernated-session", "session-hibernated", "", Hibernated)
+	hibernated.started.Store(true)
+	if !poller.shouldSkipSession(hibernated) {
+		t.Error("expected shouldSkipSession(Hibernated instance) to be true")
+	}
+
+	permFailed := makeSocketTestInstance("perm-failed-session", "session-perm-failed", "", PermanentlyFailed)
+	permFailed.started.Store(true)
+	if !poller.shouldSkipSession(permFailed) {
+		t.Error("expected shouldSkipSession(PermanentlyFailed instance) to be true")
 	}
 }
 
@@ -943,6 +1261,7 @@ func (s *stubApprovalMetadataProvider) GetApprovalMetadataBySession(sessionID st
 // under the UUID key — pre-fix, the first (and only) lookup by Title would find nothing and
 // the escalation-reason fields would be absent from item.Metadata.
 func TestReviewQueuePoller_EnrichesApprovalMetadata_ByUUID(t *testing.T) {
+	t.Parallel()
 	poller, statusMgr := newSimpleTestPollerWithManager()
 
 	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
@@ -966,6 +1285,7 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByUUID(t *testing.T) {
 				ToolName:           "Bash",
 				EscalationReason:   "No matching rule; escalated for manual review.",
 				EscalationCategory: "no-match",
+				RiskLevel:          "medium",
 			}},
 		},
 	}
@@ -987,6 +1307,160 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByUUID(t *testing.T) {
 	if got := item.Metadata["escalation_reason_category"]; got != "no-match" {
 		t.Errorf("escalation_reason_category = %q, want %q", got, "no-match")
 	}
+	if got := item.Metadata["risk_level"]; got != "medium" {
+		t.Errorf("risk_level = %q, want %q", got, "medium")
+	}
+}
+
+// TestReviewQueuePoller_should_SetRiskLevelMetadataKey_When_ApprovalMetadataHasClassifiedRisk
+// and TestReviewQueuePoller_should_OmitRiskLevelMetadataKey_When_ApprovalMetadataRiskLevelEmpty
+// cover plan.md Task 2.2.2: item.Metadata["risk_level"] is set only when the underlying
+// ApprovalMetadata.RiskLevel is non-empty -- an absent key (not an empty-string value) is the
+// frontend's "not recorded" signal, mirroring the existing escalation_reason guard pattern.
+func TestReviewQueuePoller_should_SetRiskLevelMetadataKey_When_ApprovalMetadataHasClassifiedRisk(t *testing.T) {
+	t.Parallel()
+	poller, statusMgr := newSimpleTestPollerWithManager()
+
+	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
+	ctrl, _ := newControllerWithMock(approvalContent)
+
+	inst := &Instance{Title: "session-risk-set", UUID: "session-risk-set-uuid", Status: Running}
+	inst.started.Store(true)
+	ctrl.sessionName = inst.Title
+	ctrl.lifecycle.Write(func(l *controllerLifecycle) { l.ctx = t.Context() })
+	inst.controllerManager.SetController(ctrl)
+	statusMgr.RegisterController(inst.Title, ctrl)
+
+	provider := &stubApprovalMetadataProvider{
+		bySessionID: map[string][]ApprovalMetadata{
+			inst.UUID: {{ApprovalID: "approval-risk-set", RiskLevel: "critical"}},
+		},
+	}
+	poller.SetApprovalProvider(provider)
+	poller.AddInstance(inst)
+	poller.checkSession(inst, nil)
+
+	item, exists := poller.queue.Get(inst.Title)
+	if !exists {
+		t.Fatal("session with active controller reporting NeedsApproval must be in the review queue")
+	}
+	if got := item.Metadata["risk_level"]; got != "critical" {
+		t.Errorf("risk_level = %q, want %q", got, "critical")
+	}
+}
+
+func TestReviewQueuePoller_should_OmitRiskLevelMetadataKey_When_ApprovalMetadataRiskLevelEmpty(t *testing.T) {
+	t.Parallel()
+	poller, statusMgr := newSimpleTestPollerWithManager()
+
+	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
+	ctrl, _ := newControllerWithMock(approvalContent)
+
+	inst := &Instance{Title: "session-risk-empty", UUID: "session-risk-empty-uuid", Status: Running}
+	inst.started.Store(true)
+	ctrl.sessionName = inst.Title
+	ctrl.lifecycle.Write(func(l *controllerLifecycle) { l.ctx = t.Context() })
+	inst.controllerManager.SetController(ctrl)
+	statusMgr.RegisterController(inst.Title, ctrl)
+
+	provider := &stubApprovalMetadataProvider{
+		bySessionID: map[string][]ApprovalMetadata{
+			inst.UUID: {{ApprovalID: "approval-risk-empty", RiskLevel: ""}},
+		},
+	}
+	poller.SetApprovalProvider(provider)
+	poller.AddInstance(inst)
+	poller.checkSession(inst, nil)
+
+	item, exists := poller.queue.Get(inst.Title)
+	if !exists {
+		t.Fatal("session with active controller reporting NeedsApproval must be in the review queue")
+	}
+	if _, ok := item.Metadata["risk_level"]; ok {
+		t.Errorf("risk_level key must be absent (not empty-string) when RiskLevel is not recorded, got %q", item.Metadata["risk_level"])
+	}
+}
+
+// TestHighestRiskApproval_should_ReturnCriticalItem_When_SessionHasConcurrentApprovalsAtMixedRisk
+// covers GAP-004 (docs/bugs/open/review-queue-gaps.md): when a session has multiple concurrent
+// pending approvals, the queue must surface the most dangerous one, not just the first.
+func TestHighestRiskApproval_should_ReturnCriticalItem_When_SessionHasConcurrentApprovalsAtMixedRisk(t *testing.T) {
+	t.Parallel()
+	approvals := []ApprovalMetadata{
+		{ApprovalID: "a-medium", RiskLevel: "medium"},
+		{ApprovalID: "b-critical", RiskLevel: "critical"},
+		{ApprovalID: "c-low", RiskLevel: "low"},
+	}
+	got := highestRiskApproval(approvals)
+	if got.ApprovalID != "b-critical" {
+		t.Errorf("highestRiskApproval() = %q, want %q", got.ApprovalID, "b-critical")
+	}
+}
+
+// TestHighestRiskApproval_should_KeepEarliestOnTie_When_MultipleApprovalsShareTopRisk covers
+// the tiebreak rule: ties keep the earliest (first-inserted) approval.
+func TestHighestRiskApproval_should_KeepEarliestOnTie_When_MultipleApprovalsShareTopRisk(t *testing.T) {
+	t.Parallel()
+	approvals := []ApprovalMetadata{
+		{ApprovalID: "first-high"},
+		{ApprovalID: "second-high"},
+	}
+	approvals[0].RiskLevel = "high"
+	approvals[1].RiskLevel = "high"
+	got := highestRiskApproval(approvals)
+	if got.ApprovalID != "first-high" {
+		t.Errorf("highestRiskApproval() = %q, want %q (tie must keep the earliest)", got.ApprovalID, "first-high")
+	}
+}
+
+// TestHighestRiskApproval_should_TreatUnrecordedAsHigh_When_MixedWithMedium covers the
+// fail-safe rank: "" (not recorded) must rank alongside "high", never sort below "medium".
+func TestHighestRiskApproval_should_TreatUnrecordedAsHigh_When_MixedWithMedium(t *testing.T) {
+	t.Parallel()
+	approvals := []ApprovalMetadata{
+		{ApprovalID: "medium-item", RiskLevel: "medium"},
+		{ApprovalID: "unrecorded-item", RiskLevel: ""},
+	}
+	got := highestRiskApproval(approvals)
+	if got.ApprovalID != "unrecorded-item" {
+		t.Errorf("highestRiskApproval() = %q, want %q (unrecorded must outrank medium)", got.ApprovalID, "unrecorded-item")
+	}
+}
+
+// TestRiskLevelRank_MatchesTypeScriptMirror pins the exact rank values so a one-sided edit
+// to either this map or web-app/src/lib/sessions/riskLevel.ts's RISK_LEVEL_RANK fails loudly
+// here instead of silently desyncing default sort order between the Go-side GAP-004
+// tie-break and the frontend's default severity sort (sdd:6-verify Layer 2 finding,
+// review-queue-severity). If this test ever needs to change, the TS mirror must change too.
+func TestRiskLevelRank_MatchesTypeScriptMirror(t *testing.T) {
+	t.Parallel()
+	want := map[string]int{
+		"critical": 4,
+		"high":     3,
+		"":         3,
+		"medium":   2,
+		"low":      1,
+	}
+	for level, wantRank := range want {
+		if got := riskLevelRank(level); got != wantRank {
+			t.Errorf("riskLevelRank(%q) = %d, want %d", level, got, wantRank)
+		}
+	}
+	if len(riskLevelRankTable) != len(want) {
+		t.Errorf("riskLevelRankTable has %d entries, want %d — update this test's `want` map and riskLevel.ts's RISK_LEVEL_RANK together", len(riskLevelRankTable), len(want))
+	}
+}
+
+// TestRiskLevelRank_should_FallBackToUnrecordedRank_When_ValueIsUnrecognized covers a PR
+// review finding (github.com/tstapler/stapler-squad/pull/411): a plain map lookup returns
+// Go's zero value (0) for a key absent from riskLevelRankTable, which would rank a future/
+// unrecognized RiskLevel string *below* "low" (rank 1) — the opposite of the fail-safe intent
+// applied everywhere else. riskLevelRank() must fall back to the unrecorded rank instead.
+func TestRiskLevelRank_should_FallBackToUnrecordedRank_When_ValueIsUnrecognized(t *testing.T) {
+	t.Parallel()
+	if got, want := riskLevelRank("some-future-risk-level"), riskLevelRank(""); got != want {
+		t.Errorf("riskLevelRank(unrecognized) = %d, want %d (the unrecorded/fail-safe rank)", got, want)
+	}
 }
 
 // TestReviewQueuePoller_EnrichesApprovalMetadata_ByTitleFallback covers the second half of
@@ -995,6 +1469,7 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByUUID(t *testing.T) {
 // way are found. Seeds the stub ONLY under the Title key — pre-fix (or if this fallback were
 // ever removed) the UUID-only lookup would miss and no metadata would be attached.
 func TestReviewQueuePoller_EnrichesApprovalMetadata_ByTitleFallback(t *testing.T) {
+	t.Parallel()
 	poller, statusMgr := newSimpleTestPollerWithManager()
 
 	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
@@ -1031,5 +1506,111 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByTitleFallback(t *testing.T
 	}
 	if got := item.Metadata["pending_approval_id"]; got != "approval-title-fallback" {
 		t.Errorf("pending_approval_id = %q, want %q (queried keys: %v)", got, "approval-title-fallback", provider.queried)
+	}
+}
+
+// If this fails, an archived session whose pane outlived its archive-time kill
+// is ratcheted back off Stopped on every poll tick (ADR-001,
+// superseded-rework-session-retirement). reconcileSessions never calls
+// shouldSkipSession, the file's only other ArchivedAt reader, so the guard has
+// to live here.
+func TestReviewQueuePoller_ReconcileSessions_ArchivedStoppedWithLivePane_StaysStopped(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	mock := &mockTmuxManager{
+		tmuxSessionName:  "session-archived-live-pane",
+		isAliveReturn:    true,
+		hasSessionReturn: true,
+		paneExitDead:     false, // wrapped program still running — the incident's shape
+	}
+	archivedAt := time.Now()
+	inst := &Instance{
+		Title:      "archived-live-pane-session",
+		Status:     Stopped,
+		IsManaged:  true,
+		ArchivedAt: &archivedAt,
+	}
+	inst.processManager = NewTmuxBackend(mock)
+	inst.started.Store(true)
+	poller.SetInstances([]*Instance{inst})
+
+	querier.setLiveSessions("", "session-archived-live-pane")
+
+	poller.reconcileSessions()
+
+	if got := inst.Snapshot().Status; got != Stopped {
+		t.Errorf("got status %v, want Stopped (an archived session must never be revived to Active)", got)
+	}
+}
+
+// TestReviewQueuePoller_ReconcileSessions_ArchivedActiveWithNoPane_StillTransitionsToStopped
+// proves guard 3 did not over-apply: the Active → Stopped correction arm is
+// deliberately left unguarded, so an archived row that is still Active with no
+// tmux session must keep converging to Stopped rather than being stranded.
+func TestReviewQueuePoller_ReconcileSessions_ArchivedActiveWithNoPane_StillTransitionsToStopped(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	archivedAt := time.Now()
+	inst := makeSocketTestInstance("archived-active-no-pane", "session-archived-gone", "", Active)
+	inst.ArchivedAt = &archivedAt
+	inst.started.Store(true)
+	poller.SetInstances([]*Instance{inst})
+
+	// No live sessions on this socket at all.
+	querier.setLiveSessions("")
+
+	poller.reconcileSessions()
+
+	if got := inst.Snapshot().Status; got != Stopped {
+		t.Errorf("got status %v, want Stopped (archived rows must still converge when their pane is gone)", got)
+	}
+}
+
+// If this fails, warnArchivedLivePaneOnce's sync.Map throttle is not holding and
+// every poll tick re-runs its tmux probe for the same archived session.
+func TestReviewQueuePoller_WarnArchivedLivePane_ThrottledPerProcess(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	mock := &mockTmuxManager{
+		tmuxSessionName:  "session-archived-warn-once",
+		isAliveReturn:    true,
+		hasSessionReturn: true,
+		paneExitDead:     false,
+	}
+	archivedAt := time.Now()
+	inst := &Instance{
+		Title:      "archived-warn-once-session",
+		Status:     Stopped,
+		IsManaged:  true,
+		ArchivedAt: &archivedAt,
+	}
+	inst.processManager = NewTmuxBackend(mock)
+	inst.started.Store(true)
+	poller.SetInstances([]*Instance{inst})
+	querier.setLiveSessions("", "session-archived-warn-once")
+
+	poller.reconcileSessions()
+	poller.reconcileSessions()
+
+	if mock.paneExitStatusCalls != 1 {
+		t.Errorf("got %d PaneExitStatus() probes across two ticks, want 1 (the warning is throttled per process)", mock.paneExitStatusCalls)
+	}
+
+	// RemoveInstance prunes the entry, so a re-added session warns again.
+	poller.RemoveInstance(inst.Title)
+	poller.SetInstances([]*Instance{inst})
+	poller.reconcileSessions()
+
+	if mock.paneExitStatusCalls != 2 {
+		t.Errorf("got %d PaneExitStatus() probes after RemoveInstance, want 2 (removal must prune the throttle entry)", mock.paneExitStatusCalls)
 	}
 }

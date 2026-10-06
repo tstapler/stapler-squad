@@ -1,5 +1,6 @@
 "use client";
 
+import type { MouseEvent } from "react";
 import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
 import { CollapsibleSection } from "@/components/ui/Collapsible";
 import { GateVerdictBox } from "../GateVerdictBox";
@@ -11,7 +12,10 @@ export interface ReviewingSectionProps {
   workSession: LinkedSession | undefined;
   actionLoading: string | null;
   defaultExpanded: boolean;
-  onViewChanges: () => void;
+  /** Receives the click event so the caller can capture `event.currentTarget`
+   * as the focus-restoration trigger — reading `document.activeElement`
+   * doesn't work on Safari, which doesn't focus buttons on click. */
+  onViewChanges: (event: MouseEvent<HTMLButtonElement>) => void;
   onGateApprove: () => Promise<void>;
   onGateReopen: (feedback: string) => Promise<void>;
   onGateOverride: (reason: string) => Promise<void>;

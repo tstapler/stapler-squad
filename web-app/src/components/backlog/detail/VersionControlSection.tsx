@@ -1,5 +1,6 @@
 "use client";
 
+import type { MouseEvent } from "react";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 import type { VcsWidgetData } from "@/lib/vcs/types";
 import { CollapsibleSection } from "@/components/ui/Collapsible";
@@ -12,8 +13,11 @@ export interface VersionControlSectionProps {
   activeSessionCount: number;
   worktreePath: string | undefined;
   defaultExpanded: boolean;
-  onViewDiff: () => void;
-  onBrowseFiles: () => void;
+  /** Receives the click event so the caller can capture `event.currentTarget`
+   * as the focus-restoration trigger — reading `document.activeElement`
+   * doesn't work on Safari, which doesn't focus buttons on click. */
+  onViewDiff: (event: MouseEvent<HTMLButtonElement>) => void;
+  onBrowseFiles: (event: MouseEvent<HTMLButtonElement>) => void;
 }
 
 /**

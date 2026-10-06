@@ -28,6 +28,7 @@
 import { test, expect } from '@playwright/test';
 import { SessionClient } from './helpers/session-client';
 import type { ReviewQueue } from './helpers/session-client';
+import { dismissOnboardingIfPresent } from './pages/OnboardingPage';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
 
@@ -177,14 +178,10 @@ test.describe('escalation-reasoning', () => {
 
       // A fresh browser context (no prior localStorage) shows the first-run
       // onboarding modal on top of the page — it can appear a moment after
-      // navigation (not synchronously), so wait for it rather than a single
-      // isVisible() check, and dismiss it so it doesn't intercept clicks on
-      // the review-queue card/buttons below. Timeout is short: on a context
-      // that has already seen onboarding, the modal never appears at all.
-      await page
-        .getByRole('button', { name: 'Skip onboarding' })
-        .click({ timeout: 5000 })
-        .catch(() => {});
+      // navigation (not synchronously), so this dismisses it before it can
+      // intercept clicks on the review-queue card/buttons below. No-op on a
+      // context that has already seen onboarding (modal never appears).
+      await dismissOnboardingIfPresent(page);
 
       const card = page.getByTestId(`review-item-${title}`);
       await expect(card).toBeVisible({ timeout: 10000 });

@@ -50,6 +50,8 @@ export function EscapeEventTable({
             <th className={styles.th} scope="col">Stage</th>
             <th className={styles.th} scope="col">Sequence Type</th>
             <th className={styles.th} scope="col">Subtype</th>
+            <th className={styles.th} scope="col">Signature</th>
+            <th className={styles.th} scope="col">Project</th>
             <th className={styles.th} scope="col">Byte Length</th>
             <th className={styles.th} scope="col">Mangled</th>
             <th className={styles.th} scope="col">Mangle Type</th>
@@ -78,6 +80,8 @@ export function EscapeEventTable({
               <td className={styles.td}>
                 <span className={styles.codeCell}>{event.sequenceSubtype || "—"}</span>
               </td>
+              <td className={styles.td}><span className={styles.codeCell}>{event.sequenceSignature || "—"}</span></td>
+              <td className={styles.td}><span className={styles.codeCell}>{event.projectPath || "—"}</span></td>
               <td className={styles.td}>{event.byteLength}</td>
               <td className={styles.td}>
                 {event.mangled ? (

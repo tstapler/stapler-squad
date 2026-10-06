@@ -11,6 +11,7 @@ import (
 )
 
 func TestSocketRegistry_SetGet_Roundtrip(t *testing.T) {
+	t.Parallel()
 	reg := NewSocketRegistry(t.TempDir())
 
 	entry := RegistryEntry{
@@ -28,12 +29,14 @@ func TestSocketRegistry_SetGet_Roundtrip(t *testing.T) {
 }
 
 func TestSocketRegistry_Get_Missing(t *testing.T) {
+	t.Parallel()
 	reg := NewSocketRegistry(t.TempDir())
 	_, ok := reg.Get("does-not-exist")
 	assert.False(t, ok)
 }
 
 func TestSocketRegistry_Delete(t *testing.T) {
+	t.Parallel()
 	reg := NewSocketRegistry(t.TempDir())
 	reg.Set("sess", RegistryEntry{SocketPath: "/tmp/x.sock", SessionName: "sess", LastSeen: time.Now()})
 	reg.Delete("sess")
@@ -42,6 +45,7 @@ func TestSocketRegistry_Delete(t *testing.T) {
 }
 
 func TestSocketRegistry_LoadSave_Roundtrip(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	reg1 := NewSocketRegistry(dir)
 	reg1.Set("a", RegistryEntry{SocketPath: "/tmp/a.sock", SessionName: "a", LastSeen: time.Now().UTC().Truncate(time.Second)})
@@ -60,11 +64,13 @@ func TestSocketRegistry_LoadSave_Roundtrip(t *testing.T) {
 }
 
 func TestSocketRegistry_Load_MissingFile_NoError(t *testing.T) {
+	t.Parallel()
 	reg := NewSocketRegistry(t.TempDir())
 	require.NoError(t, reg.Load())
 }
 
 func TestSocketRegistry_PruneStale_RemovesOldMissingSocket(t *testing.T) {
+	t.Parallel()
 	reg := NewSocketRegistry(t.TempDir())
 	// Stale entry — socket does not exist on disk.
 	reg.Set("stale", RegistryEntry{
@@ -80,6 +86,7 @@ func TestSocketRegistry_PruneStale_RemovesOldMissingSocket(t *testing.T) {
 }
 
 func TestSocketRegistry_PruneStale_KeepsEntryWithExistingSocket(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	// Create an actual socket file so PruneStale won't remove it.
 	socketPath := filepath.Join(dir, "live.sock")

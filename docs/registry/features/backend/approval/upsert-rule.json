@@ -8,7 +8,8 @@
   "tested": true,
   "testIds": [
     "rule-builder-ci-passing \u003e RuleBuilder_should_SubmitRequireCiPassingTrue_When_CheckboxCheckedAndSaved",
-    "rule-builder-ci-passing \u003e RuleBuilder_should_RevertCheckboxState_When_FormCancelled"
+    "rule-builder-ci-passing \u003e RuleBuilder_should_RevertCheckboxState_When_FormCancelled",
+    "TestMinSessionIdleMinutes_SurvivesRoundTrip"
   ],
-  "lastModified": "2026-08-03T00:00:00Z"
+  "lastModified": "2026-08-15T00:00:00Z"
 }

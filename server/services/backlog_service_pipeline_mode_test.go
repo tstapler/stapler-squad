@@ -7,10 +7,8 @@ package services
 // "Story 2.2.x" rows.
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	stdlog "log"
 	"sync"
 	"testing"
 	"time"
@@ -23,18 +21,14 @@ import (
 	tslog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // swapWarningLog redirects tslog.WarningLog to a buffer for the duration of
-// the calling test, restoring the original on cleanup. Mirrors the
-// established pattern in session/pipeline_engine_test.go.
-func swapWarningLog(t *testing.T) *bytes.Buffer {
+// the calling test, restoring the original on cleanup.
+func swapWarningLog(t *testing.T) *tslog.SyncBuffer {
 	t.Helper()
-	var buf bytes.Buffer
-	orig := tslog.WarningLog
-	tslog.WarningLog = stdlog.New(&buf, "WARNING: ", 0)
-	t.Cleanup(func() { tslog.WarningLog = orig })
-	return &buf
+	return tslog.RedirectLogger(t, tslog.WarningLog(), "WARNING: ")
 }
 
 // failAfterNListEnabledRepo wraps a real session.PipelineModeRepository,
@@ -85,6 +79,7 @@ func newPipelineModeTestService(t *testing.T) (*BacklogService, session.Pipeline
 // proves content_hash is derived on read from the row's live 9
 // content-template fields (proto field 17), not left as "".
 func TestGetPipelineMode_should_ReturnDerivedContentHash_When_ModeHasNonEmptyTemplates(t *testing.T) {
+	t.Parallel()
 	svc, _, _ := newPipelineModeTestService(t)
 	ctx := t.Context()
 
@@ -119,6 +114,7 @@ func TestGetPipelineMode_should_ReturnDerivedContentHash_When_ModeHasNonEmptyTem
 // mode's TriagePromptFor (no restart, no explicit invalidate call from the
 // test) reflects the new mode's content.
 func TestCreatePipelineMode_should_PersistAndInvalidateCacheSynchronously_When_ValidInput(t *testing.T) {
+	t.Parallel()
 	svc, _, engine := newPipelineModeTestService(t)
 	ctx := t.Context()
 
@@ -137,6 +133,130 @@ func TestCreatePipelineMode_should_PersistAndInvalidateCacheSynchronously_When_V
 		"expected the new mode's rendered prompt with no stale-cache window")
 }
 
+// TestCreatePipelineMode_should_PersistStageExecutorsAndReturnInResponse_When_ValidTriageOverrideProvided
+// (Story 1.2.2) proves stage_executors round-trips through the full Create
+// RPC -> repository -> response path.
+func TestCreatePipelineMode_should_PersistStageExecutorsAndReturnInResponse_When_ValidTriageOverrideProvided(t *testing.T) {
+	t.Parallel()
+	svc, _, _ := newPipelineModeTestService(t)
+	ctx := t.Context()
+
+	createResp, err := svc.CreatePipelineMode(ctx, connect.NewRequest(&sessionv1.CreatePipelineModeRequest{
+		Slug: "cheap-triage",
+		Name: "Cheap Triage",
+		StageExecutors: map[string]*sessionv1.PipelineStageExecutor{
+			"triage": {Model: "claude-haiku-4-5"},
+		},
+	}))
+	require.NoError(t, err)
+	require.Contains(t, createResp.Msg.Item.StageExecutors, "triage")
+	assert.Equal(t, "claude-haiku-4-5", createResp.Msg.Item.StageExecutors["triage"].Model)
+	assert.Empty(t, createResp.Msg.Item.StageExecutors["triage"].Program)
+
+	getResp, err := svc.GetPipelineMode(ctx, connect.NewRequest(&sessionv1.GetPipelineModeRequest{Slug: "cheap-triage"}))
+	require.NoError(t, err)
+	require.Contains(t, getResp.Msg.Item.StageExecutors, "triage")
+	assert.Equal(t, "claude-haiku-4-5", getResp.Msg.Item.StageExecutors["triage"].Model)
+}
+
+// TestCreatePipelineMode_should_ReturnDenseStageExecutorHashesForAllThreeRoles_When_OnlyTriageIsConfigured
+// is the Task 5.2.4a regression test for the sparse-vs-dense hash mismatch
+// bug named in plan.md's Engineering-lens design note: stage_executor_hashes
+// must carry an entry for every StageRole, including unconfigured ones,
+// computed identically to session.ComputeExecutorHash("", "") — otherwise a
+// session that ran an unconfigured role's ordinary default would be
+// impossible to distinguish, on the frontend, from a genuinely drifted one.
+func TestCreatePipelineMode_should_ReturnDenseStageExecutorHashesForAllThreeRoles_When_OnlyTriageIsConfigured(t *testing.T) {
+	t.Parallel()
+	svc, _, _ := newPipelineModeTestService(t)
+	ctx := t.Context()
+
+	createResp, err := svc.CreatePipelineMode(ctx, connect.NewRequest(&sessionv1.CreatePipelineModeRequest{
+		Slug: "cheap-triage-dense",
+		Name: "Cheap Triage Dense",
+		StageExecutors: map[string]*sessionv1.PipelineStageExecutor{
+			"triage": {Model: "claude-haiku-4-5"},
+		},
+	}))
+	require.NoError(t, err)
+
+	hashes := createResp.Msg.Item.StageExecutorHashes
+	require.Len(t, hashes, 3, "stage_executor_hashes must have an entry for all 3 roles, not just configured ones")
+	require.Contains(t, hashes, "triage")
+	require.Contains(t, hashes, "review")
+	require.Contains(t, hashes, "work")
+
+	assert.Equal(t, session.ComputeExecutorHash("", "claude-haiku-4-5"), hashes["triage"])
+	// review/work have no configured override — each must hash as the
+	// zero-value PipelineStageExecutor{}, identical to what an unconfigured
+	// session's own executor_snapshot_hash computes.
+	defaultHash := session.ComputeExecutorHash("", "")
+	assert.Equal(t, defaultHash, hashes["review"])
+	assert.Equal(t, defaultHash, hashes["work"])
+	assert.NotEqual(t, defaultHash, hashes["triage"], "a configured role must not collide with the default hash")
+}
+
+// TestUpdatePipelineMode_should_ReplaceStageExecutors_When_StageExecutorsUpdateProvided
+// proves UpdatePipelineMode's StageExecutorsUpdate wrapper replaces the
+// existing map entirely when present, distinguishing that from "untouched"
+// (nil, covered by the round trip already exercised elsewhere in this file).
+func TestUpdatePipelineMode_should_ReplaceStageExecutors_When_StageExecutorsUpdateProvided(t *testing.T) {
+	t.Parallel()
+	svc, _, _ := newPipelineModeTestService(t)
+	ctx := t.Context()
+
+	createResp, err := svc.CreatePipelineMode(ctx, connect.NewRequest(&sessionv1.CreatePipelineModeRequest{
+		Slug: "cheap-triage",
+		Name: "Cheap Triage",
+		StageExecutors: map[string]*sessionv1.PipelineStageExecutor{
+			"triage": {Model: "claude-haiku-4-5"},
+		},
+	}))
+	require.NoError(t, err)
+	id := createResp.Msg.Item.Id
+
+	updateResp, err := svc.UpdatePipelineMode(ctx, connect.NewRequest(&sessionv1.UpdatePipelineModeRequest{
+		Id: id,
+		StageExecutors: &sessionv1.StageExecutorsUpdate{
+			Values: map[string]*sessionv1.PipelineStageExecutor{
+				"review": {Model: "claude-opus-4-5"},
+			},
+		},
+	}))
+	require.NoError(t, err)
+	require.Contains(t, updateResp.Msg.Item.StageExecutors, "review")
+	assert.Equal(t, "claude-opus-4-5", updateResp.Msg.Item.StageExecutors["review"].Model)
+	assert.NotContains(t, updateResp.Msg.Item.StageExecutors, "triage",
+		"a present StageExecutorsUpdate must replace the map entirely, not merge")
+}
+
+// TestUpdatePipelineMode_should_LeaveStageExecutorsUntouched_When_StageExecutorsFieldOmitted
+// proves an omitted (nil) StageExecutors field on UpdatePipelineModeRequest
+// leaves existing overrides alone.
+func TestUpdatePipelineMode_should_LeaveStageExecutorsUntouched_When_StageExecutorsFieldOmitted(t *testing.T) {
+	t.Parallel()
+	svc, _, _ := newPipelineModeTestService(t)
+	ctx := t.Context()
+
+	createResp, err := svc.CreatePipelineMode(ctx, connect.NewRequest(&sessionv1.CreatePipelineModeRequest{
+		Slug: "cheap-triage",
+		Name: "Cheap Triage",
+		StageExecutors: map[string]*sessionv1.PipelineStageExecutor{
+			"triage": {Model: "claude-haiku-4-5"},
+		},
+	}))
+	require.NoError(t, err)
+	id := createResp.Msg.Item.Id
+
+	updateResp, err := svc.UpdatePipelineMode(ctx, connect.NewRequest(&sessionv1.UpdatePipelineModeRequest{
+		Id:   id,
+		Name: strPtr("Cheap Triage Renamed"),
+	}))
+	require.NoError(t, err)
+	require.Contains(t, updateResp.Msg.Item.StageExecutors, "triage")
+	assert.Equal(t, "claude-haiku-4-5", updateResp.Msg.Item.StageExecutors["triage"].Model)
+}
+
 // ─── TestUpdatePipelineMode ─────────────────────────────────────────────────
 
 // TestUpdatePipelineMode_should_ReturnSuccessWithWarnLog_When_CacheInvalidationFailsAfterSuccessfulDBWrite
@@ -147,6 +267,15 @@ func TestCreatePipelineMode_should_PersistAndInvalidateCacheSynchronously_When_V
 // success response containing the updated row's data, and log a
 // [PipelineEngine] Warn line naming the failure.
 func TestUpdatePipelineMode_should_ReturnSuccessWithWarnLog_When_CacheInvalidationFailsAfterSuccessfulDBWrite(t *testing.T) {
+	// Not t.Parallel(): swapWarningLog below redirects the package-level
+	// tslog.WarningLog var, which any other test's Warn call — including
+	// another t.Parallel() test in this same package — would also write to
+	// (or restore out from under) while this one is running. Go runs every
+	// non-parallel top-level test in a package to completion before the
+	// parallel ones start, so this ordering is what keeps the swap from
+	// racing a concurrent Warn call — same fix as
+	// TestResolveAndValidateCallbackHost_RejectsMixedSafetyResultSet's
+	// sibling comment in webhook_ssrf_test.go.
 	storage := createTestStorage(t)
 	realRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
 	// failAfter=2: call 1 is the engine's construction-time Load (must
@@ -191,6 +320,7 @@ func TestUpdatePipelineMode_should_ReturnSuccessWithWarnLog_When_CacheInvalidati
 // ListEnabled — the management UI must see disabled modes too (e.g. to
 // re-enable them), unlike PipelineEngine's cache.
 func TestListPipelineModes_should_IncludeDisabledModes_When_CalledForManagementUI(t *testing.T) {
+	t.Parallel()
 	svc, _, _ := newPipelineModeTestService(t)
 	ctx := t.Context()
 
@@ -225,6 +355,7 @@ func TestListPipelineModes_should_IncludeDisabledModes_When_CalledForManagementU
 // PipelineEngine's fail-closed resolution (Story 1.3.3) instead of
 // referential-integrity enforcement.
 func TestDeletePipelineMode_should_SucceedAndInvalidateCache_When_ModeStillReferencedByBacklogItem(t *testing.T) {
+	t.Parallel()
 	svc, repo, engine := newPipelineModeTestService(t)
 	ctx := t.Context()
 
@@ -264,6 +395,7 @@ func TestDeletePipelineMode_should_SucceedAndInvalidateCache_When_ModeStillRefer
 // invalidation instead of a test fixture: create mode -> select on item ->
 // delete mode -> trigger triage -> assert default-mode output + Warn log.
 func TestTriggerTriage_should_FallBackToDefaultWithWarnLog_When_ReferencedModeDeletedBeforeTriage(t *testing.T) {
+	// Not t.Parallel() — see TestUpdatePipelineMode_should_ReturnSuccessWithWarnLog_When_CacheInvalidationFailsAfterSuccessfulDBWrite.
 	svc, _, _ := newPipelineModeTestService(t)
 	ctx := t.Context()
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
@@ -295,7 +427,7 @@ func TestTriggerTriage_should_FallBackToDefaultWithWarnLog_When_ReferencedModeDe
 	_, trigErr := svc.TriggerTriage(ctx, connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: item.ID}))
 	require.NoError(t, trigErr)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return pool.callCount() == 1
 	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call")
 
@@ -318,6 +450,7 @@ func TestTriggerTriage_should_FallBackToDefaultWithWarnLog_When_ReferencedModeDe
 // matches expected state, including that content_hash changes when a
 // content-template field is updated.
 func TestPipelineModeCRUD_should_RoundTripCreateGetUpdateDelete_When_CalledSequentially(t *testing.T) {
+	t.Parallel()
 	svc, _, _ := newPipelineModeTestService(t)
 	ctx := t.Context()
 
@@ -380,6 +513,7 @@ func TestPipelineModeCRUD_should_RoundTripCreateGetUpdateDelete_When_CalledSeque
 // called, Then it returns connect.CodeInvalidArgument with a message naming
 // the invalid field, and no row is written.
 func TestCreatePipelineMode_should_ReturnCodeInvalidArgumentNamingInvalidField_When_SlugInvalid(t *testing.T) {
+	t.Parallel()
 	svc, repo, _ := newPipelineModeTestService(t)
 	ctx := t.Context()
 
@@ -405,6 +539,7 @@ func TestCreatePipelineMode_should_ReturnCodeInvalidArgumentNamingInvalidField_W
 // connect.CodeInvalidArgument naming triage_prompt_template and the
 // unrecognized token made_up_placeholder, and no row is written.
 func TestCreatePipelineMode_should_ReturnCodeInvalidArgumentNamingFieldAndToken_When_UnrecognizedPlaceholderUsed(t *testing.T) {
+	t.Parallel()
 	svc, repo, _ := newPipelineModeTestService(t)
 	ctx := t.Context()
 
@@ -429,6 +564,7 @@ func TestCreatePipelineMode_should_ReturnCodeInvalidArgumentNamingFieldAndToken_
 // "Fix {{item_id}}: {{item_title}}.", ...} (all recognized placeholders),
 // When CreatePipelineMode is called, Then it succeeds.
 func TestCreatePipelineMode_should_Succeed_When_AllPlaceholdersAreRecognized(t *testing.T) {
+	t.Parallel()
 	svc, repo, _ := newPipelineModeTestService(t)
 	ctx := t.Context()
 
@@ -444,4 +580,40 @@ func TestCreatePipelineMode_should_Succeed_When_AllPlaceholdersAreRecognized(t *
 	all, listErr := repo.ListAll(ctx)
 	require.NoError(t, listErr)
 	assert.Len(t, all, 1, "the row should be written when validation passes")
+}
+
+// ─── Epic 3.3: Aider save-time rejection (ADR-002) ─────────────────────────
+
+// TestCreatePipelineMode_should_ReturnCodeInvalidArgumentAndPersistNothing_When_TriageProgramIsAider
+// (plan.md Story 3.3.1) is the end-to-end RPC-level confirmation that
+// ADR-002's exclusion holds through the full BacklogService surface, not
+// just session.ValidatePipelineModeContent in isolation (already covered by
+// pipeline_mode_validation_test.go's
+// TestValidateStageExecutors_should_RejectNamingProgramAndStage_When_AiderConfiguredForTriage):
+// Given a live BacklogService test harness, When CreatePipelineMode is
+// called with stage_executors["triage"].program = "aider", Then the RPC
+// returns CodeInvalidArgument and no PipelineMode row is created, confirmed
+// via a subsequent ListPipelineModes call showing the mode absent.
+func TestCreatePipelineMode_should_ReturnCodeInvalidArgumentAndPersistNothing_When_TriageProgramIsAider(t *testing.T) {
+	t.Parallel()
+	svc, _, _ := newPipelineModeTestService(t)
+	ctx := t.Context()
+
+	_, err := svc.CreatePipelineMode(ctx, connect.NewRequest(&sessionv1.CreatePipelineModeRequest{
+		Slug: "aider-triage",
+		Name: "Aider Triage",
+		StageExecutors: map[string]*sessionv1.PipelineStageExecutor{
+			"triage": {Program: "aider"},
+		},
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "aider")
+	assert.Contains(t, err.Error(), "triage")
+
+	listResp, listErr := svc.ListPipelineModes(ctx, connect.NewRequest(&sessionv1.ListPipelineModesRequest{}))
+	require.NoError(t, listErr)
+	for _, item := range listResp.Msg.Items {
+		assert.NotEqual(t, "aider-triage", item.Slug, "no PipelineMode row should be persisted when save-time validation rejects the aider triage executor")
+	}
 }

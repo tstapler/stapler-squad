@@ -364,6 +364,14 @@ func TestRegistry_ConcurrentOpenClose_NeverEvictsInUseStore(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git binary not available")
 	}
+	if testing.Short() {
+		// Builds two 30-commit packed fixtures via buildPackedFixture (the same
+		// slow git-subprocess-heavy helper gogitstore_test.go's -short guards
+		// already skip, see TestSharedIndex_SecondAndLaterWorktreesCostLessThanFirst
+		// above) then runs a sustained concurrent Open/Close pressure loop on
+		// top — together this can exceed Go's 10-minute default test timeout.
+		t.Skip("skipped under -short: too slow for make test/quick-check")
+	}
 	dir := t.TempDir()
 
 	pinnedRepo := filepath.Join(dir, "pinned")

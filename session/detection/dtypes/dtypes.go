@@ -23,6 +23,7 @@ type StatusPatterns struct {
 	Active          []StatusPattern `yaml:"active"`            // Actively executing commands
 	Success         []StatusPattern `yaml:"success"`           // Task completed successfully
 	WaitingForAgent []StatusPattern `yaml:"waiting_for_agent"` // Waiting for background agent(s)
+	Compacting      []StatusPattern `yaml:"compacting"`        // Actively compacting/summarizing conversation history
 }
 
 // BinaryDetector provides per-binary pattern sets and optional content filtering.
@@ -31,3 +32,14 @@ type BinaryDetector interface {
 	Patterns() StatusPatterns
 	FilterContent(content string) string
 }
+
+// OSCStatus represents the classification of a Claude Code OSC window-title
+// payload (see session/detection/binaries.ClassifyOSCTitle), independent of
+// and prior to mapping into a DetectedStatus/IdleState by the caller.
+type OSCStatus int
+
+const (
+	OSCStatusNone      OSCStatus = iota // no recognizable spinner/idle marker
+	OSCStatusExecuting                  // Braille spinner (U+2800-U+28FF) present
+	OSCStatusIdle                       // ✳ (U+2733) present
+)

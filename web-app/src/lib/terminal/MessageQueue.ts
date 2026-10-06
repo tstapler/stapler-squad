@@ -37,7 +37,7 @@ export class MessageQueue {
   }
 
   async *[Symbol.asyncIterator]() {
-    while (!this.closed || this.queue.length > 0) {
+    while (!this.closed) {
       if (this.queue.length > 0) {
         yield this.queue.shift()!;
       } else {
@@ -52,7 +52,16 @@ export class MessageQueue {
     }
   }
 
-  close() {
+  /**
+   * Closes the queue. Any messages still buffered in `this.queue` (pushed but
+   * not yet delivered to an awaiting iterator) are discarded, not drained —
+   * the async iterator will yield nothing further for them. Returns the
+   * number of messages dropped, so callers can surface a user-facing signal
+   * (see `useTerminalStream`'s `onInputDropped`).
+   */
+  close(): number {
+    const droppedCount = this.queue.length;
+    this.queue = [];
     this.closed = true;
     if (this.resolve) {
       // Force unblock the iterator with a sentinel message
@@ -60,6 +69,7 @@ export class MessageQueue {
       this.resolve(create(TerminalDataSchema, { sessionId: "", data: { case: undefined } }));
       this.resolve = null;
     }
+    return droppedCount;
   }
 
   isClosed(): boolean {

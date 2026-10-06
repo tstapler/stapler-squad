@@ -36,7 +36,10 @@ func NewParser() *Parser {
 // Malformed or truncated lines are skipped without returning an error.
 // The caller must not retain message content — ParseResult only holds aggregates.
 func (p *Parser) ParseFile(filePath string) (*ParseResult, error) {
-	f, err := os.Open(filePath) //nolint:gosec
+	// filePath is enqueued by TokenStore.walkAndEnqueue's filepath.WalkDir over
+	// its own configured historyDir, or from the file-watcher that observes
+	// that same directory (session/tokens/store.go) -- never raw user/RPC input.
+	f, err := os.Open(filePath) // #nosec G304 -- filePath comes from an internal directory walk over historyDir, not user input
 	if err != nil {
 		return nil, err
 	}
@@ -108,11 +111,15 @@ func (p *Parser) ParseReader(r io.Reader) (*ParseResult, error) {
 		case "user":
 			p.processUserEntry(entry, result, humanTurnIndex)
 			humanTurnIndex++
+		case "system":
+			p.processSystemEntry(entry, result)
 		}
 	}
 
 	// Ignore scanner errors for partial writes (EOF mid-line).
 	_ = scanner.Err()
+
+	resolveCompactTokensAfter(result)
 
 	// Determine primary model (most frequently used).
 	result.PrimaryModel = primaryModel(modelCounts)
@@ -192,6 +199,42 @@ func (p *Parser) processAssistantEntry(entry jsonlEntry, result *ParseResult, mo
 	if msg.Model != syntheticModelSentinel {
 		result.TurnTimeline = append(result.TurnTimeline, turn)
 	}
+}
+
+// processSystemEntry records compact_boundary entries as CompactEvents.
+// When postTokens is absent, TokensAfter is left zero and resolved by
+// resolveCompactTokensAfter once the following turn is known.
+func (p *Parser) processSystemEntry(entry jsonlEntry, result *ParseResult) {
+	if entry.Subtype != "compact_boundary" || entry.CompactMetadata == nil {
+		return
+	}
+	ev := CompactEvent{
+		Trigger:      entry.CompactMetadata.Trigger,
+		TurnIndex:    len(result.TurnTimeline),
+		TokensBefore: entry.CompactMetadata.PreTokens,
+		TokensAfter:  entry.CompactMetadata.PostTokens,
+	}
+	ev.Timestamp = parseTimestamp(entry.Timestamp)
+	result.CompactEvents = append(result.CompactEvents, ev)
+}
+
+// resolveCompactTokensAfter fills TokensAfter from the first post-compaction
+// turn's context size for events whose transcript had no postTokens.
+func resolveCompactTokensAfter(result *ParseResult) {
+	for i := range result.CompactEvents {
+		ev := &result.CompactEvents[i]
+		if ev.TokensAfter == 0 && ev.TurnIndex < len(result.TurnTimeline) {
+			ev.TokensAfter = result.TurnTimeline[ev.TurnIndex].ContextTokens()
+		}
+	}
+}
+
+// parseTimestamp parses an RFC3339 (optionally nano) timestamp; zero time on failure.
+func parseTimestamp(s string) time.Time {
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t
+	}
+	return time.Time{}
 }
 
 // processUserEntry detects skill activations and /commands in user turns.

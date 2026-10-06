@@ -11,7 +11,7 @@ interface BulkActionsProps {
   onPauseAll: () => void;
   onResumeAll: () => void;
   onDeleteAll: () => void;
-  onAddTagAll: () => void;
+  onAddTagAll: (e: React.MouseEvent<HTMLButtonElement>) => void;
   onSelectAll: () => void;
   onClearSelection: () => void;
   totalCount: number;

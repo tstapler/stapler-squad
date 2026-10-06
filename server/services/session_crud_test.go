@@ -23,6 +23,7 @@ func newCRUDService(t *testing.T) *SessionService {
 // ─── CreateSession ────────────────────────────────────────────────────────────
 
 func TestCreateSession_MissingTitle(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
 	t.Cleanup(func() { svc.Shutdown() })
@@ -38,6 +39,7 @@ func TestCreateSession_MissingTitle(t *testing.T) {
 }
 
 func TestCreateSession_MissingPath(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
 	t.Cleanup(func() { svc.Shutdown() })
@@ -55,6 +57,7 @@ func TestCreateSession_MissingPath(t *testing.T) {
 // ─── GetSession ───────────────────────────────────────────────────────────────
 
 func TestGetSession_MissingID(t *testing.T) {
+	t.Parallel()
 	svc := newCRUDService(t)
 
 	_, err := svc.GetSession(context.Background(), connect.NewRequest(&sessionv1.GetSessionRequest{
@@ -67,6 +70,7 @@ func TestGetSession_MissingID(t *testing.T) {
 }
 
 func TestGetSession_UnknownID(t *testing.T) {
+	t.Parallel()
 	svc := newCRUDService(t)
 
 	_, err := svc.GetSession(context.Background(), connect.NewRequest(&sessionv1.GetSessionRequest{
@@ -81,6 +85,7 @@ func TestGetSession_UnknownID(t *testing.T) {
 // ─── ListSessions ─────────────────────────────────────────────────────────────
 
 func TestListSessions_EmptyStorage(t *testing.T) {
+	t.Parallel()
 	svc := newCRUDService(t)
 
 	resp, err := svc.ListSessions(context.Background(), connect.NewRequest(&sessionv1.ListSessionsRequest{}))
@@ -91,6 +96,7 @@ func TestListSessions_EmptyStorage(t *testing.T) {
 // ─── RenameSession ────────────────────────────────────────────────────────────
 
 func TestRenameSession_MissingSessionID(t *testing.T) {
+	t.Parallel()
 	svc := newCRUDService(t)
 
 	_, err := svc.RenameSession(context.Background(), connect.NewRequest(&sessionv1.RenameSessionRequest{
@@ -104,6 +110,7 @@ func TestRenameSession_MissingSessionID(t *testing.T) {
 }
 
 func TestRenameSession_MissingNewTitle(t *testing.T) {
+	t.Parallel()
 	svc := newCRUDService(t)
 
 	_, err := svc.RenameSession(context.Background(), connect.NewRequest(&sessionv1.RenameSessionRequest{
@@ -117,6 +124,7 @@ func TestRenameSession_MissingNewTitle(t *testing.T) {
 }
 
 func TestRenameSession_DuplicateTitle(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -136,6 +144,7 @@ func TestRenameSession_DuplicateTitle(t *testing.T) {
 }
 
 func TestRenameSession_SessionNotFound(t *testing.T) {
+	t.Parallel()
 	svc := newCRUDService(t)
 
 	_, err := svc.RenameSession(context.Background(), connect.NewRequest(&sessionv1.RenameSessionRequest{

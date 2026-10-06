@@ -9,6 +9,7 @@ import (
 )
 
 func TestNewRegistry(t *testing.T) {
+	t.Parallel()
 	config := DefaultRegistryConfig()
 	registry := NewRegistry(config)
 
@@ -26,6 +27,7 @@ func TestNewRegistry(t *testing.T) {
 }
 
 func TestRegistryRegisterAndGet(t *testing.T) {
+	t.Parallel()
 	registry := NewRegistry(DefaultRegistryConfig())
 	defer registry.Close()
 
@@ -64,6 +66,7 @@ func TestRegistryRegisterAndGet(t *testing.T) {
 }
 
 func TestRegistryList(t *testing.T) {
+	t.Parallel()
 	registry := NewRegistry(DefaultRegistryConfig())
 	defer registry.Close()
 
@@ -120,6 +123,7 @@ func TestRegistryList(t *testing.T) {
 }
 
 func TestRegistryFilter(t *testing.T) {
+	t.Parallel()
 	registry := NewRegistry(DefaultRegistryConfig())
 	defer registry.Close()
 
@@ -172,6 +176,7 @@ func TestRegistryFilter(t *testing.T) {
 }
 
 func TestRegistryUnregister(t *testing.T) {
+	t.Parallel()
 	registry := NewRegistry(DefaultRegistryConfig())
 	defer registry.Close()
 
@@ -203,6 +208,7 @@ func TestRegistryUnregister(t *testing.T) {
 }
 
 func TestRegistryMarkOrphaned(t *testing.T) {
+	t.Parallel()
 	registry := NewRegistry(DefaultRegistryConfig())
 	defer registry.Close()
 

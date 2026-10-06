@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -194,13 +195,21 @@ const maxPeersInInitialPrompt = 5
 
 // BuildWorkspacePeersBlock renders a one-time "other active sessions in this workspace"
 // nudge for a new session's initial prompt. Returns "" when there are no peers, so callers
-// can unconditionally append the result without an empty-state noise check (AC5).
+// can unconditionally append the result without an empty-state noise check.
 func BuildWorkspacePeersBlock(peers []WorkspacePeer) string {
 	if len(peers) == 0 {
 		return ""
 	}
 
-	shown := peers
+	// Sort live/stuck peers before "gone" ones (stable, so within each group the original
+	// DB order is preserved) so the cap below can't hide a live peer behind stale entries.
+	sorted := make([]WorkspacePeer, len(peers))
+	copy(sorted, peers)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].Lifecycle() != "gone" && sorted[j].Lifecycle() == "gone"
+	})
+
+	shown := sorted
 	if len(shown) > maxPeersInInitialPrompt {
 		shown = shown[:maxPeersInInitialPrompt]
 	}
@@ -210,26 +219,31 @@ func BuildWorkspacePeersBlock(peers []WorkspacePeer) string {
 	sb.WriteString("These sessions share your repo (possibly a different branch/worktree). ")
 	sb.WriteString("Call the `list_workspace_peers` MCP tool before touching shared files (migrations, generated code, config) to avoid conflicting with them.\n")
 	for _, p := range shown {
-		fmt.Fprintf(&sb, "- %s (%s, %s)", p.Title, p.Branch, p.Lifecycle())
+		if p.Branch != "" {
+			fmt.Fprintf(&sb, "- %s (%s, %s)", p.Title, p.Branch, p.Lifecycle())
+		} else {
+			fmt.Fprintf(&sb, "- %s (%s)", p.Title, p.Lifecycle())
+		}
 		if p.Goal != nil && p.Goal.Goal != "" {
 			fmt.Fprintf(&sb, ": %s", p.Goal.Goal)
 		}
 		sb.WriteString("\n")
 	}
-	if len(peers) > len(shown) {
-		fmt.Fprintf(&sb, "- ...and %d more\n", len(peers)-len(shown))
+	if len(sorted) > len(shown) {
+		fmt.Fprintf(&sb, "- ...and %d more\n", len(sorted)-len(shown))
 	}
 	sb.WriteString("\n")
 	return sb.String()
 }
 
 // WorkspacePeersBlockForPath resolves repoPath's workspace identity, looks up its peers
-// with authoritative tmux liveness applied, and renders the one-time initial-prompt nudge
-// (AC5/AC6). Shared by both SessionService.CreateSession and BacklogService's
-// initialPromptFor so the two callers can't drift on how the nudge is built. Returns "" on
-// any detection/lookup failure, when storage is nil, or when repoPath is empty — this is a
-// best-effort convenience nudge, not required session context, so failures are logged and
-// swallowed rather than blocking session creation.
+// with authoritative tmux liveness applied, and renders the one-time initial-prompt nudge.
+// Shared by both SessionService.CreateSession and BacklogService's initialPromptFor (both
+// gated behind the workspacePeersNudgeFlagName feature flag) so the two callers can't drift
+// on how the nudge is built. Returns "" on any detection/lookup failure, when storage is
+// nil, or when repoPath is empty — this is a best-effort convenience nudge, not required
+// session context, so failures are logged and swallowed rather than blocking session
+// creation.
 func WorkspacePeersBlockForPath(ctx context.Context, storage *Storage, repoPath string) string {
 	if repoPath == "" || storage == nil {
 		return ""

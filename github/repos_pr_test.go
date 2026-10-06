@@ -60,6 +60,7 @@ func TestGetPR(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			resetRateLimiterForTest(t)
 			var gotPath string
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				gotPath = r.URL.Path
@@ -78,7 +79,8 @@ func TestGetPR(t *testing.T) {
 			defer resetGhBaseURL(ts)()
 			t.Setenv("GITHUB_TOKEN", "fake-token")
 
-			result, err := GetPR(context.Background(), "tstapler", "stapler-squad", 272)
+			repo, _ := NewRepoRef("tstapler", "stapler-squad")
+			result, err := GetPR(context.Background(), AccountRef{}, repo, 272)
 
 			if gotPath != "/repos/tstapler/stapler-squad/pulls/272" {
 				t.Errorf("request path = %q, want %q (must hit the REST API, not shell out to gh)", gotPath, "/repos/tstapler/stapler-squad/pulls/272")

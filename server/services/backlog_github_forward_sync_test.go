@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // fakeForwardSyncCloserPlugin implements session.ItemSourcePlugin plus the
@@ -104,12 +104,7 @@ func (p *fakeNonCloserPlugin) MapToBacklogItem(_ session.ExternalItem, _ string)
 // backlog_item_event_publisher_test.go.
 func newForwardSyncTestStorage(t *testing.T) *session.Storage {
 	t.Helper()
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, fmt.Sprintf("forward-sync-%d.db", time.Now().UnixNano()))
-
-	repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
-	require.NoError(t, err)
-	t.Cleanup(func() { repo.Close() })
+	repo := session.NewTestEntRepository(t)
 
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
@@ -151,6 +146,7 @@ func createForwardSyncTestItem(t *testing.T, storage *session.Storage, sourceID,
 // BacklogChangeStatusTransition(done) event, and the subscriber calls
 // CloseIssue (and the follow-up PostIssueComment) on the source's plugin.
 func TestForwardSyncSubscriber_ClosesIssueOnDoneTransition_WhenEnabled(t *testing.T) {
+	t.Parallel()
 	storage := newForwardSyncTestStorage(t)
 	sourceID := createForwardSyncTestSource(t, storage, "fake_closer", true, "shipped")
 	item := createForwardSyncTestItem(t, storage, sourceID, "42", []string{"bug"})
@@ -175,19 +171,20 @@ func TestForwardSyncSubscriber_ClosesIssueOnDoneTransition_WhenEnabled(t *testin
 		NewStatus: string(session.BacklogStatusDone),
 	}))
 
-	require.Eventually(t, func() bool { return fake.closeCallCount() == 1 }, 2*time.Second, 10*time.Millisecond, "expected CloseIssue to be called")
+	wait.RequireEventually(t, func() bool { return fake.closeCallCount() == 1 }, 2*time.Second, 10*time.Millisecond, "expected CloseIssue to be called")
 	call := fake.lastCloseCall()
 	require.Equal(t, "42", call.externalID)
 	require.Equal(t, []string{"bug"}, call.existingLabels)
 	require.Equal(t, "shipped", call.closeLabel)
 
-	require.Eventually(t, func() bool { return fake.commentCallCount() == 1 }, 2*time.Second, 10*time.Millisecond, "expected PostIssueComment to be called")
+	wait.RequireEventually(t, func() bool { return fake.commentCallCount() == 1 }, 2*time.Second, 10*time.Millisecond, "expected PostIssueComment to be called")
 }
 
 // TestForwardSyncSubscriber_NoOpWhenForwardSyncDisabled is the integration
 // guard-path test (AC3): ForwardSyncEnabled=false must result in no GitHub
 // call at all, even though the event fires.
 func TestForwardSyncSubscriber_NoOpWhenForwardSyncDisabled(t *testing.T) {
+	t.Parallel()
 	storage := newForwardSyncTestStorage(t)
 	sourceID := createForwardSyncTestSource(t, storage, "fake_closer", false, "")
 	item := createForwardSyncTestItem(t, storage, sourceID, "42", nil)
@@ -222,6 +219,7 @@ func TestForwardSyncSubscriber_NoOpWhenForwardSyncDisabled(t *testing.T) {
 // CloseIssue/PostIssueComment) must cause handleForwardSyncClose's type
 // assertion to fail cleanly — no panic, no error.
 func TestForwardSyncSubscriber_NoOpWhenPluginDoesNotImplementCloser(t *testing.T) {
+	t.Parallel()
 	storage := newForwardSyncTestStorage(t)
 	sourceID := createForwardSyncTestSource(t, storage, "fake_non_closer", true, "")
 	item := createForwardSyncTestItem(t, storage, sourceID, "42", nil)
@@ -245,6 +243,7 @@ func TestForwardSyncSubscriber_NoOpWhenPluginDoesNotImplementCloser(t *testing.T
 // GitHubSyncedIssueUpdatedAt watermark must equal CloseIssue's returned
 // timestamp, not the time handleForwardSyncClose happened to run.
 func TestForwardSyncSubscriber_UsesCloseIssueResponseTimestampForWatermark(t *testing.T) {
+	t.Parallel()
 	storage := newForwardSyncTestStorage(t)
 	sourceID := createForwardSyncTestSource(t, storage, "fake_closer", true, "")
 	item := createForwardSyncTestItem(t, storage, sourceID, "42", nil)
@@ -272,6 +271,7 @@ func TestForwardSyncSubscriber_UsesCloseIssueResponseTimestampForWatermark(t *te
 // already succeeded by that point. Previously untested — fakeCloserPlugin
 // already had commentErr for exactly this, but no test exercised it.
 func TestForwardSyncSubscriber_PersistsWatermarkWhenPostCommentFails(t *testing.T) {
+	t.Parallel()
 	storage := newForwardSyncTestStorage(t)
 	sourceID := createForwardSyncTestSource(t, storage, "fake_closer", true, "")
 	item := createForwardSyncTestItem(t, storage, sourceID, "42", nil)
@@ -304,6 +304,7 @@ func TestForwardSyncSubscriber_PersistsWatermarkWhenPostCommentFails(t *testing.
 // done. This exercises handleForwardSyncClose's
 // `current.SourceID == "" || current.ExternalID == ""` early return.
 func TestForwardSyncSubscriber_NoOpForLocallyCreatedItem(t *testing.T) {
+	t.Parallel()
 	storage := newForwardSyncTestStorage(t)
 
 	// A plain, locally-created backlog item — no source, no external ID.
@@ -335,6 +336,7 @@ func TestForwardSyncSubscriber_NoOpForLocallyCreatedItem(t *testing.T) {
 // storage.RecordSourceSyncFailure so it's queryable (Story 4.3.2's row-level
 // warning), not just logged.
 func TestForwardSyncSubscriber_RecordsFailureOnCloseError(t *testing.T) {
+	t.Parallel()
 	storage := newForwardSyncTestStorage(t)
 	sourceID := createForwardSyncTestSource(t, storage, "fake_closer", true, "")
 	item := createForwardSyncTestItem(t, storage, sourceID, "42", nil)

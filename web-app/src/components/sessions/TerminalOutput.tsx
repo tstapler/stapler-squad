@@ -1,7 +1,8 @@
 "use client";
 // +feature: terminal-pre-sizing terminal-dimension-cache terminal-image-upload
 
-import { useEffect, useRef, useCallback, useState, lazy, Suspense } from "react";
+import { useEffect, useRef, useCallback, useState, useMemo } from "react";
+import { createPortal } from "react-dom";
 
 // xterm modifier key sequences (CSI parameter convention: modifier 5=Ctrl, 3=Alt).
 // Defined at module level to avoid per-render allocation inside sendKey.
@@ -46,15 +47,38 @@ import { useVisibilityResync } from "./useVisibilityResync";
 import { useBrowserLogStream } from "@/lib/hooks/useBrowserLogStream";
 import { useHandedness } from "@/lib/hooks/useHandedness";
 import { useSplitContainerSize } from "@/lib/hooks/useSplitContainerSize";
-import type { XtermTerminalHandle, XtermTerminalProps } from "./XtermTerminal";
-import type { ForwardRefExoticComponent, RefAttributes } from "react";
-const XtermTerminal = lazy(() => import("./XtermTerminal").then((m) => ({ default: m.XtermTerminal }))) as ForwardRefExoticComponent<XtermTerminalProps & RefAttributes<XtermTerminalHandle>>;
-import { TerminalStreamManager } from "@/lib/terminal/TerminalStreamManager";
+import type { ScrollGestureProps } from "./XtermTerminal";
+import { usePooledTerminal, usePooledTerminalCallbacks } from "@/lib/terminal/TerminalPool";
+import * as poolStyles from "@/lib/terminal/TerminalPool.css";
+import { InputDropBadge } from "./InputDropBadge";
+import { ConnectionCountIndicator } from "./ConnectionCountIndicator";
+import { useDropEpisodeCoalescer } from "./useDropEpisodeCoalescer";
+import { TerminalStreamManager, type AppScrollbackFrame } from "@/lib/terminal/TerminalStreamManager";
+import { ScrollForwardOutcome, ScrollBlockedReason } from "@/gen/session/v1/events_pb";
+import { ScrollLoadingPill } from "./ScrollLoadingPill";
+import { ScrollSourceIndicator } from "./ScrollSourceIndicator";
+import { DEFAULT_TOAST_MS } from "@/lib/notification-policy";
+import { createViewportSettle, createRafScheduler, DEFAULT_STABLE_FRAMES, DEFAULT_MAX_WAIT_MS } from "@/lib/terminal/viewportSettle";
+import { mobileDebug } from "@/lib/terminal/mobileDebug";
+import { toolbarPageAction, PAGE_UP_BYTES, PAGE_DOWN_BYTES, type ScrollMode, type ScrollOverride } from "@/lib/terminal/scrollRouting";
+import { createNetPagesUpTracker, MIN_ROWS_FOR_OVERLAYS } from "@/lib/terminal/scrollPosition";
+import { scrollSettings } from "@/lib/terminal/scrollOverride";
+import { srOnly } from "@/components/ui/LiveRegion.css";
+import { JumpToLatestMount } from "./JumpToLatestMount";
+import type { JumpTerminal } from "./JumpToLatestButton";
+import { ScrollHint, useScrollHint } from "./ScrollHint";
+import { ScrollingPanel, ScrollModeChip, SCROLL_OPTIONS, shouldRenderPanelAsOverlay, useMisrouteCue } from "./ScrollingPanel";
+import { useEffectiveScrollMode, useScrollSettings } from "@/lib/hooks/useEffectiveScrollMode";
 import { getCachedDimensions, saveDimensions, validateCellDimensions } from "@/lib/terminal/TerminalDimensionCache";
 import { DEFAULT_TERMINAL_CONFIG } from "@/lib/config/terminalConfig";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import { useViewport } from "@/components/providers/ViewportProvider";
+import { useInputModeOverride } from "@/lib/hooks/useInputModeOverride";
+import { isWorktreeMissingError } from "@/lib/utils/backoff";
+import { createClient } from "@connectrpc/connect";
+import { createConnectTransport } from "@connectrpc/connect-web";
+import { SessionService } from "@/gen/session/v1/session_pb";
 import * as styles from "./TerminalOutput.css";
 
 interface TerminalOutputProps {
@@ -67,6 +91,15 @@ interface TerminalOutputProps {
   shellId?: string;
   /** Callback invoked when a ShellStatusUpdate is received for this shell. */
   onShellStatusChange?: (status: "running" | "stopped" | "error", exitCode?: number) => void;
+  /**
+   * Epic 6.1 (terminal:resync-stagger) — passed straight through to
+   * `useVisibilityResync`'s identically-named param. When
+   * `SessionDetailView.tsx` wires this in (flag on), it routes this
+   * instance's visibility/focus-triggered resync through its per-view
+   * stagger queue instead of firing immediately. Omitted (flag off)
+   * preserves exact pre-Epic-6.1 behavior — see useVisibilityResync.ts.
+   */
+  scheduleResync?: (fire: () => void, opts: { preempt: boolean }) => void;
 }
 
 // Minimum dimensions considered "real" — anything smaller is a transient value
@@ -82,12 +115,61 @@ const MIN_ROWS = 10;
 const XTERM_DEFAULT_COLS = 80;
 const XTERM_DEFAULT_ROWS = 24;
 
-export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSessionName, isVisible, shellId, onShellStatusChange }: TerminalOutputProps) {
+// Story 2.3 — coalescing window for InputDropBadge drop episodes (design/ux.md §2.2).
+const DROP_EPISODE_COALESCE_WINDOW_MS = 400;
+
+// Matches XtermTerminal's assumed first scroll mode, so only real changes are reported.
+const INITIAL_SCROLL_MODE: ScrollMode = { bufferType: "normal", mouseTrackingMode: "none" };
+
+const SCROLL_PICKER_PANEL_ROWS = 10;
+const SCROLL_FULL_PANEL_ROWS = 20;
+
+/**
+ * Story 1.4.3 — the exact toast copy for a BLOCKED outcome, keyed on
+ * ScrollBlockedReason. Three distinct strings, not one generic "blocked"
+ * catch-all (adversarial-review BLOCKER: a solo user on
+ * PathLegacyPerConnection, which is unconditionally BLOCKED regardless of
+ * actual viewer count, must never see the "another viewer is connected"
+ * claim). Copy matches design/ux.md Surface 3 / plan.md Story 1.4.3 verbatim.
+ */
+function blockedToastCopy(reason: ScrollBlockedReason, program: string): string {
+  const label = program || "this session";
+  switch (reason) {
+    case ScrollBlockedReason.UNSUPPORTED_STREAMING_PATH:
+      return "Scroll-forwarding isn't available for this session yet";
+    case ScrollBlockedReason.LEASE_CONTENTION:
+      return "Still loading — try again in a moment";
+    case ScrollBlockedReason.MULTIPLE_VIEWERS:
+    case ScrollBlockedReason.SCROLL_BLOCKED_REASON_UNSPECIFIED:
+    default:
+      return `Can't browse ${label}'s history right now — another viewer is connected. Close other tabs or sessions viewing this session to enable it.`;
+  }
+}
+
+export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSessionName, isVisible, shellId, onShellStatusChange, scheduleResync }: TerminalOutputProps) {
   const { track } = useAnalytics();
   const { clearForSession, refresh: refreshApprovals, pendingCount } = useApprovalsContext();
   const { leftHanded, toggleHandedness } = useHandedness();
-  const xtermRef = useRef<XtermTerminalHandle | null>(null);
   const terminalContainerRef = useRef<HTMLDivElement>(null);
+  // Story 3 (Task 3.4) — anchor <div> the pooled terminal docks into. A
+  // plain, otherwise-childless node (see TerminalPool.tsx's module doc
+  // comment for why it must never receive JSX children of its own): the
+  // pool imperatively appends/removes its host node here, which would race
+  // with React's own reconciliation if this div had other React-managed
+  // children.
+  const dockRef = useRef<HTMLDivElement | null>(null);
+  // Computed early (needs only props) so it's available to usePooledTerminal
+  // below, which must itself run early -- see that hook's call site comment.
+  const effectiveSessionId = isExternal && tmuxSessionName ? tmuxSessionName : sessionId;
+  // Story 3 (Task 3.4/3.5) — replaces a locally-owned
+  // `useRef<XtermTerminalHandle | null>(null)` + directly-rendered
+  // `<XtermTerminal>`. Returns a stable ref into a pool-owned, possibly
+  // already-warm Terminal instance that survives this component's own
+  // remounts (e.g. a pane's assigned session changing -- see
+  // TerminalPool.tsx's module doc comment for why that matters here).
+  // isVisible defaults to visible (`!== false`) to match this file's other
+  // isVisible-optional call sites (e.g. the loading overlay below).
+  const { xtermRef, warmRef } = usePooledTerminal(effectiveSessionId, dockRef, isVisible !== false);
   // Track actual rendered pane dimensions via ResizeObserver. Fires after CSS layout
   // has constrained the container to its real pane width (not the full browser window).
   // Used to guard connect() and pre-sizing so we never send wrong dimensions in the handshake.
@@ -95,13 +177,19 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const [connectionAttempts, setConnectionAttempts] = useState(0);
   const [showReconnectButton, setShowReconnectButton] = useState(false);
   const [isWaitingForStableSize, setIsWaitingForStableSize] = useState(true);
-  const [isLoadingInitialContent, setIsLoadingInitialContent] = useState(true);
+  // Story 3 (Task 3.4) — a warm pool entry (already showing content from a
+  // prior mount) skips the loading overlay entirely; only a genuinely cold
+  // entry starts in the loading state. See PoolEntry.warmRef's doc comment.
+  const [isLoadingInitialContent, setIsLoadingInitialContent] = useState(() => !warmRef.current);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const previousConnectionStateRef = useRef(false);
   const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const refreshCountRef = useRef(0);
   const isMountedRef = useRef(true);
-  const isFittingRef = useRef(false);
+  // One-shot: set when a viewport settle triggers refit(); the single resize that fit produces bypasses the
+  // server bounce hold (Story 2.1.5) and consumes it. Any later resize, e.g. an A->B->A oscillation, is held.
+  const settleBypassPendingRef = useRef(false);
+  const clearedAtRef = useRef<number | null>(null);
   const sizeStabilityTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const hasInitiatedConnectionRef = useRef(false);
   const hasCachedDimensionsRef = useRef(false);
@@ -146,9 +234,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     resizeCount: 0,
   });
 
-  // Preload xterm.js chunk eagerly so it is browser-cached before the user opens
-  // the terminal pane, eliminating the lazy-load delay on first interaction.
-  useEffect(() => { void import("./XtermTerminal"); }, []);
+  // xterm.js preload moved to TerminalPoolProvider (Story 3) -- it's now the
+  // sole mount point for <XtermTerminal>, so the preload only needs to run
+  // once app-wide rather than per TerminalOutput mount.
 
   const logTerminalMetrics = useCallback(() => {
     const m = metricsRef.current;
@@ -248,7 +336,14 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   }, [keyboardStorageKey]);
 
   // Mobile detection — use shared ViewportProvider hook for consistency
-  const { isMobile } = useViewport();
+  const { isMobile, hasFinePointer } = useViewport();
+
+  // User-overridable detection for a real mouse+keyboard attached to a phone/tablet —
+  // see Settings > Appearance > Terminal Input Mode.
+  const { inputModeOverride } = useInputModeOverride();
+  const compactToolbar =
+    inputModeOverride === 'desktop' ||
+    (inputModeOverride === 'auto' && isMobile && hasFinePointer);
 
   // Toolbar collapsed/expanded state — persisted in localStorage; collapsed by default
   const [toolbarExpanded, setToolbarExpanded] = useState(() => {
@@ -261,6 +356,25 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
   });
   const [mobileOverflowOpen, setMobileOverflowOpen] = useState(false);
+
+  // The first time a mouse+physical keyboard is detected on this mobile session,
+  // collapse the toolbar and hide the on-screen keyboard row by default so they
+  // don't eat screen space — but only if the user hasn't already made an explicit
+  // choice for either. Runs once per session mount; manual toggles afterward are
+  // fully respected.
+  const appliedCompactDefaultsRef = useRef(false);
+  useEffect(() => {
+    if (!compactToolbar || appliedCompactDefaultsRef.current) return;
+    appliedCompactDefaultsRef.current = true;
+    setToolbarExpanded(false);
+    try {
+      if (localStorage.getItem(keyboardStorageKey) === null) {
+        setIsKeyboardVisible(false);
+      }
+    } catch {
+      // localStorage unavailable — leave the on-screen keyboard row visible
+    }
+  }, [compactToolbar, keyboardStorageKey]);
 
   // Dev tools panel — persisted in localStorage; collapsed by default
   const [devGroupOpen, setDevGroupOpen] = useState(() => {
@@ -317,8 +431,262 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // the app's selectable UI theme. xterm.js must match that fixed palette —
   // deriving it from prefers-color-scheme instead caused the terminal canvas
   // to render solid white whenever the OS/browser preference was light while
-  // the surrounding chrome stayed dark.
-  const theme = "dark" as const;
+  // the surrounding chrome stayed dark. (Story 3: the pooled <XtermTerminal>
+  // itself now hardcodes theme="dark" directly -- see TerminalPool.tsx --
+  // for the same reason; no local `theme` binding is needed here anymore.)
+
+  // Paging state for on-demand scrollback loading (Task 2.3.1 / 2.3.2)
+  const isFetchingScrollbackRef = useRef(false);
+  const hasMoreScrollbackRef = useRef(false);
+  const oldestSequenceReceivedRef = useRef(0);
+
+  // Story 1.4.0 — client-local mirror of TerminalStreamManager's altScreenActive,
+  // read by the wheel listener and passed to useTerminalGestures as
+  // isAltScreenActive. A ref (not state) since it's read from event-handler
+  // closures, not rendered directly.
+  const altScreenActiveRef = useRef(false);
+
+  // Story 1.4.4 (Task 1.4.4b) — "no more app-forwarded history" flag, distinct
+  // from hasMoreScrollbackRef above: the tmux-native path owns that ref
+  // exclusively and this feature never reads or writes it, so a plain-shell /
+  // flag-off / non-Claude session's exhaustion behavior can't be affected even
+  // indirectly through shared state (plan.md Story 1.4.4 Scope correction).
+  const hasMoreAppScrollbackRef = useRef(true);
+
+  // Story 1.4.2 — cached from the last AppScrollbackResponse.program this
+  // session has seen (any outcome), so the loading pill can show a
+  // program-specific label for a *subsequent* app-forwarded request within
+  // the same session even though the program name itself only ever arrives
+  // in the response, never known ahead of the request that triggers it.
+  const lastKnownAppProgramRef = useRef<string | undefined>(undefined);
+
+  // ---- Story 1.4.5 — scroll-forward loading pill state ----
+  // Shared by BOTH the tmux-native paged-scrollback trigger and Story 1.4.0's
+  // app-forwarded alt-screen triggers (design/ux.md Surface 1) — every
+  // requestScrollback call site funnels through requestScrollbackWithPill
+  // below so the pill can't drift out of sync with which trigger fired.
+  const [pillState, setPillState] = useState<{ visible: boolean; stalled: boolean; program?: string }>({
+    visible: false,
+    stalled: false,
+  });
+  const pillShowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pillStallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearScrollLoadingTimers = useCallback(() => {
+    if (pillShowTimerRef.current) {
+      clearTimeout(pillShowTimerRef.current);
+      pillShowTimerRef.current = null;
+    }
+    if (pillStallTimerRef.current) {
+      clearTimeout(pillStallTimerRef.current);
+      pillStallTimerRef.current = null;
+    }
+  }, []);
+
+  // Unconditionally clears the pill + its timers — called from every response
+  // handler (tmux-native ScrollbackResponse and every AppScrollbackResponse
+  // outcome) so the pill never persists past outcome delivery (Task 1.4.5b).
+  const clearScrollLoadingState = useCallback(() => {
+    clearScrollLoadingTimers();
+    setPillState({ visible: false, stalled: false });
+  }, [clearScrollLoadingTimers]);
+
+  // Starts the 150ms show-delay / 8s stalled timers, then lets the caller send
+  // the actual request. `program`, if known (Story 1.4.2's lastKnownAppProgramRef),
+  // drives the pill's app-forwarded copy; omitted entirely for the tmux-native path.
+  const startScrollLoadingTimers = useCallback((program?: string) => {
+    clearScrollLoadingTimers();
+    pillShowTimerRef.current = setTimeout(() => {
+      setPillState({ visible: true, stalled: false, program });
+    }, 150);
+    pillStallTimerRef.current = setTimeout(() => {
+      setPillState({ visible: true, stalled: true, program });
+    }, 8000);
+  }, [clearScrollLoadingTimers]);
+
+  // Task 1.4.5b — Cancel resets local fetch-in-flight state and clears the
+  // pill without cancelling the in-flight server request (design/ux.md: a
+  // late response is simply ignored once this state has been reset).
+  const handleCancelScrollLoading = useCallback(() => {
+    clearScrollLoadingState();
+    isFetchingScrollbackRef.current = false;
+  }, [clearScrollLoadingState]);
+
+  // ---- Story 1.4.2 — ScrollSourceIndicator banner state ----
+  const [appScrollbackState, setAppScrollbackState] = useState<{ active: boolean; program: string }>({
+    active: false,
+    program: "",
+  });
+  // Ref mirror read by handleOutput (Task 1.4.2b) — kept out of handleOutput's
+  // own dependency array so a banner mount/unmount can't recreate that
+  // callback's identity, which useTerminalStream's connection effect depends
+  // on (recreating it there would spuriously re-run connection setup).
+  const appScrollbackActiveRef = useRef(false);
+  useEffect(() => {
+    appScrollbackActiveRef.current = appScrollbackState.active;
+  }, [appScrollbackState.active]);
+
+  // ForwardScroll's PageUp send (session/instance_scroll_forward.go) causes
+  // a real redraw that echoes back through the same output stream as a
+  // normal frame, indistinguishable by itself from a genuine live-resume
+  // (Ctrl+L) -- without filtering it, handleOutput's "any normal frame
+  // clears the banner" rule below killed the ScrollSourceIndicator banner
+  // right after DELIVERED/AT_TOP. Content comparison, not a time window or
+  // frame count, is what's invariant: the echo's arrival timing relative to
+  // the outcome frame isn't guaranteed (some redraws never echo at all), but
+  // the echo always redraws the same pane content captureViaRedrawQuiescence
+  // just captured.
+  const lastForwardedContentSignatureRef = useRef<string | null>(null);
+  const contentSignature = useCallback((raw: string): string => {
+    // Strip ANSI CSI/OSC sequences (full ECMA-48 grammar, not just
+    // digits/semicolons -- narrower patterns miss e.g. DECSTR's `\x1b[!p`)
+    // and whitespace entirely (not collapsed) so two redraws of the same
+    // pane compare equal despite differing line-wrap columns. Not truncated
+    // to a fixed prefix either: with no alt-screen scrollback, the server's
+    // capture can start at a different offset into the same content than
+    // the live PTY echo's full bytes.
+    return raw
+      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+      .replace(/\x1b\][^\x07]*(\x07|\x1b\\)/g, "")
+      .replace(/\s+/g, "");
+  }, []);
+  // Accumulates output-frame signatures since the last
+  // recordForwardedContentSignature call, plus how much of the recorded
+  // signature has matched so far -- a redraw echo can legally arrive split
+  // across more than one output frame, where no single frame alone is a
+  // substring match but their concatenation is. Progress must strictly
+  // increase each frame to keep accumulating; a frame that doesn't extend
+  // the match is judged on its own content and the buffer resets, so a
+  // stale partial match can't "stick" and misclassify a later genuine live
+  // resume.
+  const recentEchoBufferRef = useRef<string>("");
+  const matchedEchoPrefixLenRef = useRef<number>(0);
+  const MAX_ECHO_BUFFER = 20000; // generous headroom over any real single-pane capture
+  const recordForwardedContentSignature = useCallback((content: string) => {
+    lastForwardedContentSignatureRef.current = content ? contentSignature(content) : null;
+    recentEchoBufferRef.current = "";
+    matchedEchoPrefixLenRef.current = 0;
+  }, [contentSignature]);
+  // Longest N such that signature.slice(0, N) is a contiguous substring of
+  // haystack. Monotonic in N (a shorter prefix of a contained string is
+  // trivially also contained, at the same offset), so a binary search finds
+  // it in O(log N) haystack.includes() calls instead of an O(N^2) manual
+  // character scan.
+  const longestSignaturePrefixContained = useCallback((signature: string, haystack: string): number => {
+    let lo = 0;
+    let hi = signature.length;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (haystack.includes(signature.slice(0, mid))) {
+        lo = mid;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return lo;
+  }, []);
+  // Whether output (a normal, non-app-scrollback frame) is recognizable as
+  // the redraw echo of our own last DELIVERED/AT_TOP forward, vs. genuinely
+  // different (and therefore a real live resume). See
+  // recentEchoBufferRef's doc comment for why this accumulates across
+  // frames with a strictly-increasing-progress requirement rather than
+  // comparing each frame to the signature in isolation.
+  const isSelfEchoOfLastForward = useCallback((output: string): boolean => {
+    const signature = lastForwardedContentSignatureRef.current;
+    if (!signature) return false;
+    const outSig = contentSignature(output);
+    if (outSig.length === 0) return true; // no content to judge either way; assume still mid-echo
+
+    const buffered = (recentEchoBufferRef.current + outSig).slice(-MAX_ECHO_BUFFER);
+    const matchedLen = longestSignaturePrefixContained(signature, buffered);
+
+    if (matchedLen >= signature.length) {
+      // The whole recorded signature has now been seen -- fully resolved,
+      // so the next frame is judged fresh rather than against this one.
+      recentEchoBufferRef.current = "";
+      matchedEchoPrefixLenRef.current = 0;
+      return true;
+    }
+    if (matchedLen > matchedEchoPrefixLenRef.current) {
+      // This frame advanced how much of the recorded signature we've seen --
+      // genuine progress toward completing the same multi-frame echo.
+      recentEchoBufferRef.current = buffered;
+      matchedEchoPrefixLenRef.current = matchedLen;
+      return true;
+    }
+    // No progress: judge this frame on its own content rather than the
+    // (now-stale) accumulated buffer.
+    const isEchoAlone = outSig.includes(signature) || signature.includes(outSig);
+    recentEchoBufferRef.current = isEchoAlone ? outSig : "";
+    matchedEchoPrefixLenRef.current = isEchoAlone ? longestSignaturePrefixContained(signature, outSig) : 0;
+    return isEchoAlone;
+  }, [contentSignature, longestSignaturePrefixContained]);
+
+  // ---- Story 1.4.3 — Blocked outcome toast state ----
+  const [blockedToast, setBlockedToast] = useState<{ reason: ScrollBlockedReason; program: string; seq: number } | null>(null);
+  const blockedToastSeqRef = useRef(0);
+  const blockedToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [connectionPulse, setConnectionPulse] = useState(false);
+  const connectionPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const dismissBlockedToast = useCallback(() => {
+    if (blockedToastTimerRef.current) {
+      clearTimeout(blockedToastTimerRef.current);
+      blockedToastTimerRef.current = null;
+    }
+    setBlockedToast(null);
+  }, []);
+
+  // ---- Story 1.4.4 — "No more history available" (AT_TOP) affordance state ----
+  const [atTopVisible, setAtTopVisible] = useState(false);
+
+  // Resets scrollback paging so a subsequent scroll-up re-fetches history fresh from
+  // the server (which re-derives it width-agnostically via `tmux capture-pane -J`,
+  // see handleScrollbackRequest in connectrpc_websocket.go) instead of assuming
+  // whatever paging cursor was left over from before the terminal was last cleared.
+  // Registered as TerminalStreamManager's onFullSnapshot callback below — the manager
+  // itself owns detecting a full-pane replacement snapshot and clearing the xterm
+  // buffer for it (ANSI_SNAPSHOT_PREFIX in TerminalStreamManager.ts); this only resets
+  // the paging refs the manager doesn't know about.
+  // Gesture-cancel / netPagesUp-reset trigger (ux.md S7/S9): bumped on every reconnect
+  // and on every full-snapshot write.
+  const [connectionEpoch, setConnectionEpoch] = useState(0);
+  const bumpConnectionEpoch = useCallback(() => setConnectionEpoch((e) => e + 1), []);
+
+  const resetScrollbackPaging = useCallback(() => {
+    hasMoreScrollbackRef.current = true;
+    hasMoreAppScrollbackRef.current = true;
+    oldestSequenceReceivedRef.current = 0;
+    isFetchingScrollbackRef.current = false;
+
+    // A full-pane replacement snapshot (reconnect, resize resync) means any
+    // forwarded-history state from before it is now stale — design/ux.md
+    // Surface 2's edge case: "reconnection resets to the live tail... a stale
+    // 'Viewing history' banner never survives a reconnect."
+    clearScrollLoadingState();
+    setAppScrollbackState({ active: false, program: "" });
+    setAtTopVisible(false);
+    dismissBlockedToast();
+    lastForwardedContentSignatureRef.current = null;
+  }, [clearScrollLoadingState, dismissBlockedToast]);
+
+  // Ref-mirror for handleAppScrollbackFrame (Story 1.4.1-1.4.4, defined further
+  // below) — same temporal-dead-zone reason as notifyResyncOutputReceivedRef:
+  // getOrCreateStreamManager registers it with the manager before the real
+  // handler (which needs pill/banner/toast state declared later) exists.
+  const handleAppScrollbackFrameRef = useRef<(frame: AppScrollbackFrame) => void>(() => {});
+
+  // Proactively clears the terminal and resets scrollback paging before a resize RPC
+  // is sent — used only by the resize triggers below (auto-fit and the manual Resize
+  // button), so the screen goes blank immediately rather than showing stale,
+  // differently-wrapped content for the ~100-400ms round trip until the server's
+  // post-resize snapshot arrives and TerminalStreamManager clears it again anyway.
+  const clearBufferBeforeResize = useCallback(() => {
+    clearedAtRef.current = Date.now();
+    mobileDebug.log("clear-before-resize", {});
+    xtermRef.current?.clear();
+    resetScrollbackPaging();
+  }, [resetScrollbackPaging, xtermRef]);
 
   // Lazily create or get the TerminalStreamManager
   const getOrCreateStreamManager = useCallback((): TerminalStreamManager | null => {
@@ -331,6 +699,31 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       terminal,
       (paused, watermark) => sendFlowControlRef.current?.(paused, watermark)
     );
+
+    // Detect + clear on a full-pane replacement snapshot (ANSI_SNAPSHOT_PREFIX) — the
+    // single spot this is handled; every write() call site (live output, the RESIZING
+    // queue flush) benefits without needing its own check.
+    manager.setOnFullSnapshot(() => {
+      resetScrollbackPaging();
+      bumpConnectionEpoch();
+      if (clearedAtRef.current !== null) {
+        mobileDebug.log("snapshot-after-clear", { elapsedMs: Date.now() - clearedAtRef.current });
+        clearedAtRef.current = null;
+      }
+    });
+
+    // Story 1.4.0 (Task 1.4.0a) — mirror the manager's altScreenActive locally
+    // so the wheel listener / useTerminalGestures can read it synchronously.
+    manager.setOnAltScreenChange((active) => {
+      altScreenActiveRef.current = active;
+    });
+
+    // Story 1.4.1 (Task 1.4.1a) — route a captured AppScrollbackResponse frame
+    // to this component's outcome-rendering logic, defined further below.
+    // Indirected through a ref (same temporal-dead-zone reason as
+    // notifyResyncOutputReceivedRef above handleOutput) since
+    // handleAppScrollbackFrame is defined after getOrCreateStreamManager.
+    manager.setOnAppScrollback((frame) => handleAppScrollbackFrameRef.current(frame));
 
     // Inject SerializeAddon so prependScrollbackBatch can serialize the current buffer
     // before clearing it (enables correct history order without losing live content).
@@ -351,6 +744,10 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           : totalLoadTime;
         track({ name: "stream_terminal_first_byte", category: "performance", durationMs: connectionDuration, sessionId });
         setIsLoadingInitialContent(false);
+        // Story 3 (Task 3.4) — mark this pool entry warm so a future
+        // TerminalOutput remount for the same session skips the loading
+        // overlay (see isLoadingInitialContent's lazy initializer above).
+        warmRef.current = true;
       }
     });
 
@@ -359,20 +756,133 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
     streamManagerRef.current = manager;
     return manager;
-  }, [logTerminalMetrics, sessionId, track]);
+  }, [logTerminalMetrics, sessionId, track, resetScrollbackPaging, bumpConnectionEpoch, xtermRef, warmRef]);
+
+  // Story 1.4.3 (Task 1.4.3a/1.4.3c) — outcome handling for a BLOCKED
+  // response, keyed on blocked_reason. UNSPECIFIED (a gate failure the client
+  // should never actually attempt a request for, per Epic 1.1's eligibility
+  // check) falls back to the MULTIPLE_VIEWERS copy as the least-wrong default
+  // rather than showing no message — a deliberate P2 tradeoff (pre-mortem.md
+  // Failure #2), accepted since UNSPECIFIED should be unreachable in
+  // practice. Factored out of handleAppScrollbackFrame below purely to keep
+  // that function's body short; no behavior boundary implied by the split.
+  const handleBlockedOutcome = useCallback((frame: AppScrollbackFrame) => {
+    blockedToastSeqRef.current += 1;
+    setBlockedToast({ reason: frame.blockedReason, program: frame.program, seq: blockedToastSeqRef.current });
+    if (blockedToastTimerRef.current) clearTimeout(blockedToastTimerRef.current);
+    blockedToastTimerRef.current = setTimeout(() => setBlockedToast(null), DEFAULT_TOAST_MS);
+
+    // Pulse ConnectionCountIndicator only for the reason that actually has
+    // connected-viewer state to point to (and its UNSPECIFIED fallback,
+    // which renders the same copy).
+    if (
+      frame.blockedReason === ScrollBlockedReason.MULTIPLE_VIEWERS ||
+      frame.blockedReason === ScrollBlockedReason.SCROLL_BLOCKED_REASON_UNSPECIFIED
+    ) {
+      if (connectionPulseTimerRef.current) clearTimeout(connectionPulseTimerRef.current);
+      setConnectionPulse(true);
+      connectionPulseTimerRef.current = setTimeout(() => setConnectionPulse(false), 600);
+    }
+  }, []);
+
+  const handleAppScrollbackFrame = useCallback((frame: AppScrollbackFrame) => {
+    // Task 1.4.5b — the pill never persists past outcome delivery.
+    clearScrollLoadingState();
+    isFetchingScrollbackRef.current = false;
+
+    if (frame.program) {
+      lastKnownAppProgramRef.current = frame.program;
+    }
+
+    switch (frame.outcome) {
+      case ScrollForwardOutcome.DELIVERED: {
+        const manager = getOrCreateStreamManager();
+        if (manager && frame.content) {
+          void manager.prependScrollbackBatch(frame.content);
+        }
+        appScrollbackActiveRef.current = true;
+        setAppScrollbackState({ active: true, program: frame.program });
+        dismissBlockedToast();
+        recordForwardedContentSignature(frame.content);
+        break;
+      }
+      case ScrollForwardOutcome.AT_TOP: {
+        // Task 1.4.4b — a distinct flag from hasMoreScrollbackRef, which
+        // this feature never reads or writes (plan.md Story 1.4.4's Scope
+        // correction). Does NOT touch appScrollbackState — a banner already
+        // showing stays up alongside this affordance (design/ux.md Surface
+        // 2's "banner does not flicker off between pages" edge case).
+        hasMoreAppScrollbackRef.current = false;
+        setAtTopVisible(true);
+        recordForwardedContentSignature(frame.content);
+        break;
+      }
+      case ScrollForwardOutcome.NO_CAPABILITY:
+        // Task 1.4.4a — defensive baseline: today's pre-existing silent
+        // no-op, not a new user-facing affordance. Not reachable in practice
+        // for a registered adapter (AppScrollGate refuses to attempt
+        // forwarding first) but handled so an unhandled enum value can't crash.
+        break;
+      case ScrollForwardOutcome.BLOCKED:
+      default:
+        handleBlockedOutcome(frame);
+        break;
+    }
+  }, [clearScrollLoadingState, getOrCreateStreamManager, dismissBlockedToast, handleBlockedOutcome, recordForwardedContentSignature]);
+
+  useEffect(() => {
+    handleAppScrollbackFrameRef.current = handleAppScrollbackFrame;
+  }, [handleAppScrollbackFrame]);
+
+  // Story 1.4.1 (Task 1.4.1a) — decode useTerminalStream's raw
+  // AppScrollbackResponse fields and dispatch through TerminalStreamManager,
+  // mirroring how handleOutput routes through manager.write().
+  const handleAppScrollbackReceived = useCallback((
+    content: string,
+    outcome: ScrollForwardOutcome,
+    program: string,
+    forwardId: string,
+    blockedReason: ScrollBlockedReason,
+  ) => {
+    const manager = getOrCreateStreamManager();
+    manager?.handleAppScrollback({ content, outcome, program, forwardId, blockedReason });
+  }, [getOrCreateStreamManager]);
+
+  // Story 1.4.0 bug fix — see TerminalStreamManager.setAltScreenActive()'s
+  // doc comment: a capture-pane-derived initial/resize snapshot can never
+  // carry the DECSET 1049h marker, so this server-authoritative hint (not
+  // content-scanning) is what lets a client connecting to an already
+  // alt-screen-active session learn that state at all.
+  const handleAltScreenActiveHint = useCallback((active: boolean) => {
+    const manager = getOrCreateStreamManager();
+    if (active) {
+      manager?.setAltScreenActive();
+    } else {
+      manager?.setAltScreenInactive();
+    }
+  }, [getOrCreateStreamManager]);
+
+  // Cleanup blocked-toast/connection-pulse/scroll-loading-pill timers on unmount.
+  useEffect(() => {
+    return () => {
+      if (blockedToastTimerRef.current) clearTimeout(blockedToastTimerRef.current);
+      if (connectionPulseTimerRef.current) clearTimeout(connectionPulseTimerRef.current);
+      clearScrollLoadingTimers();
+    };
+  }, [clearScrollLoadingTimers]);
 
   // Ref to track whether the initial scrollback has been written (Task 2.3.2)
   const isInitialScrollbackDoneRef = useRef(false);
-  // Paging state for on-demand scrollback loading (Task 2.3.1 / 2.3.2)
-  const isFetchingScrollbackRef = useRef(false);
-  const hasMoreScrollbackRef = useRef(false);
-  const oldestSequenceReceivedRef = useRef(0);
 
   // Callback to write initial pane content to terminal.
   // Metadata guard removed (R2.7): all scrollback — both initial and historical —
   // is now allowed to proceed. Initial load calls writeInitialContent(); paged
   // loads (subsequent calls with metadata) call prependScrollbackBatch().
   const handleScrollbackReceived = useCallback(async (scrollback: string, metadata?: { hasMore: boolean; oldestSequence: number; newestSequence: number; totalLines: number }) => {
+    // Task 1.4.5b — the pill never persists past outcome delivery, for any
+    // outcome including the unchanged tmux-native path.
+    clearScrollLoadingState();
+
     if (!xtermRef.current?.terminal) return;
 
     const manager = getOrCreateStreamManager();
@@ -404,7 +914,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
 
     setIsLoadingInitialContent(false);
-  }, [getOrCreateStreamManager]);
+  }, [getOrCreateStreamManager, clearScrollLoadingState, xtermRef]);
 
   // Ref to access current terminalState inside the handleOutput callback
   // (useCallback can't take terminalState as a dep without recreating on every state change)
@@ -418,42 +928,134 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // values) — referencing it directly in this dependency array would be a
   // temporal-dead-zone error. Same ref-mirror idiom used throughout this file
   // (e.g. sendFlowControlRef) and in useTerminalStream.ts (connectRef).
-  const notifyResyncOutputReceivedRef = useRef<() => void>(() => {});
+  const notifyResyncOutputReceivedRef = useRef<(resyncId?: string) => void>(() => {});
+
+  // Epic 3.1, Task 3.1.2.1 — shared between useTerminalStream (which forwards
+  // it to useTerminalFlowControl, where both the visibility- and
+  // resize-triggered resync paths register their resync_id) and this
+  // component's own handleOutput below (which checks/clears membership on
+  // each incoming TerminalOutput.resync_id). Lets either resync flow's stall
+  // watchdog be reset when a match arrives on ANY tracked request, without
+  // merging useVisibilityResync and useTerminalFlowControl into one hook.
+  //
+  // Task 3.1.2.4a — a plain `Set<string>` only records *membership*, not
+  // *when* an ID was added, so a resync whose own response silently hangs
+  // has no way to notice it's been outstanding too long if sibling resync
+  // traffic keeps resetting the shared stall watchdog. Map<resyncId, addedAtMs>
+  // keeps the same membership semantics (`.has`/`.delete` used by
+  // handleOutput below are unchanged) while letting useVisibilityResync's
+  // resetStallWatchdog (Task 3.1.2.4b) compute a specific ID's elapsed
+  // outstanding time and escalate past a 2x-timeout ceiling instead of
+  // resetting indefinitely.
+  const outstandingResyncIdsRef = useRef<Map<string, number>>(new Map());
+
+  // Ref-mirror for resetStallWatchdog (Epic 3.1, Task 3.1.2.2) — same
+  // temporal-dead-zone reason as notifyResyncOutputReceivedRef above:
+  // useVisibilityResync isn't called until after this handleOutput
+  // definition and the useTerminalStream call that consumes it.
+  const resetStallWatchdogRef = useRef<() => void>(() => {});
 
   // Callback to write output directly to terminal via TerminalStreamManager.
   // Task 4.2.2: Output is queued during RESIZING to prevent bytes at the old column width
   // from being written before the post-resize snapshot.
-  const handleOutput = useCallback((output: string) => {
+  const handleOutput = useCallback((output: string, resyncId?: string) => {
     if (!xtermRef.current) return;
+
+    // Epic 3.1 (AC2) — if this output is the reply to a correlation-ID-
+    // tagged resync request tracked via EITHER hook's resync flow (resize or
+    // visibility/focus), clear it here and reconcile the visibility hook's
+    // stall watchdog too, so a resize-triggered resync response doesn't
+    // leave a concurrently-pending visibility resync looking stalled.
+    if (resyncId && outstandingResyncIdsRef.current.has(resyncId)) {
+      outstandingResyncIdsRef.current.delete(resyncId);
+      resetStallWatchdogRef.current();
+    }
 
     // Signal resync receipt regardless of whether this output is written
     // immediately or queued for post-resize flush — a concurrent resize
     // (plausible on backgrounded-tab wakeup) must not make a pending
     // visibility/focus resync look stalled just because its response
     // arrived while RESIZING.
-    notifyResyncOutputReceivedRef.current();
+    notifyResyncOutputReceivedRef.current(resyncId);
+
+    // Task 1.4.2b — a normal (non-app-scrollback) output frame means the
+    // server has resumed live streaming, i.e. the scroll lease was released —
+    // the banner is cleared on such a frame, unless it's recognizable as the
+    // redraw echo of our own last DELIVERED/AT_TOP forward -- see
+    // isSelfEchoOfLastForward's doc comment.
+    if (appScrollbackActiveRef.current && !isSelfEchoOfLastForward(output)) {
+      appScrollbackActiveRef.current = false;
+      setAppScrollbackState({ active: false, program: "" });
+    }
 
     if (terminalStateRef.current === 'RESIZING') {
       pendingOutputDuringResizeRef.current.push(output);
       return;
     }
 
+    // TerminalStreamManager.write() itself detects a full-pane replacement snapshot
+    // (ANSI_SNAPSHOT_PREFIX) and clears the buffer for it — see setOnFullSnapshot in
+    // getOrCreateStreamManager above.
     const manager = getOrCreateStreamManager();
     if (manager) {
       manager.write(output);
     }
-  }, [getOrCreateStreamManager]);
+  }, [getOrCreateStreamManager, isSelfEchoOfLastForward, xtermRef]);
 
-  // Unified WebSocket streaming
-  const effectiveSessionId = isExternal && tmuxSessionName ? tmuxSessionName : sessionId;
+  // Unified WebSocket streaming (effectiveSessionId computed near the top of
+  // this component -- see usePooledTerminal's call site comment for why).
 
   // Stable callbacks
-  const getTerminal = useCallback(() => xtermRef.current?.terminal || null, []);
+  const getTerminal = useCallback(() => xtermRef.current?.terminal || null, [xtermRef]);
   const handleStreamError = useCallback((err: Error) => {
     console.error(`Terminal stream error (${isExternal ? 'external' : 'managed'}):`, err);
     setConnectionAttempts((prev) => prev + 1);
+    // A stream error (e.g. a malformed/aborted response while the initial
+    // content fetch was in flight) doesn't necessarily flip isConnected —
+    // Connect-Web's underlying WebSocket transport can stay nominally
+    // connected even though this specific RPC stream errored out. Without
+    // this, neither the wasConnected-&&-!isConnected disconnect handler nor
+    // the connectionAttempts>=5 fallback (both further down this file) ever
+    // fires for a lone error like this, leaving the user staring at an
+    // infinite "Loading terminal content..." spinner with no path to the
+    // reconnect banner/retry button. Clear it here too, same as the
+    // disconnect branch does, so a single early error still surfaces a
+    // recoverable state instead of a permanent stall.
+    setIsLoadingInitialContent(false);
   }, [isExternal]);
-  const { isConnected, error, sendInput, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived } = useTerminalStream({
+  // Story 2.3 — InputDropBadge: dropped-keystroke count + a monotonic
+  // per-episode sequence number (so two consecutive episodes with an
+  // identical count still produce a distinct announcement, see
+  // InputDropBadge.tsx's `episodeSeq` doc comment).
+  const [dropEpisode, setDropEpisode] = useState({ count: 0, seq: 0 });
+  const handleDropEpisodeFlush = useCallback((count: number) => {
+    if (count <= 0) return; // design/ux.md §3.3 — defensive no-op
+    setDropEpisode((prev) => ({ count, seq: prev.seq + 1 }));
+  }, []);
+  const reportDroppedInput = useDropEpisodeCoalescer(handleDropEpisodeFlush, DROP_EPISODE_COALESCE_WINDOW_MS);
+
+  // Task 2.3.5 — e2e test-only trigger. Reproducing a genuine WebSocket
+  // reconnect race (the real trigger for onInputDropped) inside Playwright
+  // proved impractical for this pass (it would require deterministically
+  // racing a server-side connection teardown against a client keystroke),
+  // so tests/e2e/input-drop-badge.spec.ts exercises the badge's rendering/
+  // announcement/dismiss behavior via this harmless, additive test seam
+  // instead of the full reconnect path (Stories 2.1/2.2 already have direct
+  // Jest coverage of the drop mechanism itself). Gated on NODE_ENV (matching
+  // the existing dev-only-hook convention in WebVitalsReporter.tsx /
+  // rpcTiming.ts) so this unauthenticated, script-callable surface is never
+  // attached in a production bundle — Next.js statically inlines
+  // `process.env.NODE_ENV` at build time, so the production build tree-shakes
+  // this block out entirely rather than merely no-op'ing it at runtime.
+  useEffect(() => {
+    if (typeof window === "undefined" || process.env.NODE_ENV === "production") return;
+    (window as unknown as { __e2eTriggerInputDropped?: (count: number) => void }).__e2eTriggerInputDropped = reportDroppedInput;
+    return () => {
+      delete (window as unknown as { __e2eTriggerInputDropped?: (count: number) => void }).__e2eTriggerInputDropped;
+    };
+  }, [reportDroppedInput]);
+
+  const { isConnected, error, sendInput, isInputChunking, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived, connectionCount } = useTerminalStream({
     baseUrl,
     sessionId: effectiveSessionId,
     shellId,
@@ -464,13 +1066,57 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     onError: handleStreamError,
     onScrollbackReceived: handleScrollbackReceived,
     onOutput: handleOutput,
+    onAppScrollback: handleAppScrollbackReceived,
+    onAltScreenActiveHint: handleAltScreenActiveHint,
     initialCols: lastResizeRef.current?.cols,
     initialRows: lastResizeRef.current?.rows,
     isExternal: isExternal,
+    onInputDropped: reportDroppedInput,
+    foreground: isVisible,
+    outstandingResyncIdsRef,
   });
 
-  const { notifyResyncOutputReceived } = useVisibilityResync({
+  // Lightweight, single-purpose RPC client for the worktree-missing hard-fail
+  // banner's "Retry now" button — mirrors the pattern used throughout this
+  // codebase (e.g. useLogViewer.ts) for a one-off unary call, rather than
+  // pulling in the full useSessionService hook (which sets up its own
+  // session-list watch stream and Redux wiring — too heavy to instantiate
+  // per open terminal pane).
+  const retrySessionClientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
+  if (!retrySessionClientRef.current) {
+    retrySessionClientRef.current = createClient(SessionService, createConnectTransport({ baseUrl }));
+  }
+  const reconnectViaHook = useCallback(() => {
+    bumpConnectionEpoch();
+    handleHookReconnect();
+  }, [bumpConnectionEpoch, handleHookReconnect]);
+  const [isRetryingSession, setIsRetryingSession] = useState(false);
+  const handleRetryNow = useCallback(async () => {
+    setIsRetryingSession(true);
+    try {
+      // Errors are surfaced to the user via the banner remaining visible
+      // (a fresh connect attempt below will just fail again) — no separate
+      // error UI needed for this action itself.
+      await retrySessionClientRef.current?.retrySession({ id: effectiveSessionId });
+    } finally {
+      setIsRetryingSession(false);
+      reconnectViaHook();
+    }
+  }, [effectiveSessionId, reconnectViaHook]);
+
+  const { notifyResyncOutputReceived, resetStallWatchdog } = useVisibilityResync({
     sessionId: effectiveSessionId,
+    // TerminalOutputProps.isVisible is optional (external callers may omit
+    // it entirely); useVisibilityResync's isVisible is required since its
+    // visibility-scoped resync gating (Task 6.1.1.3) needs a concrete
+    // boolean, not undefined. Default to false — matching the "external
+    // caller opted out of visibility awareness" behavior other isVisible
+    // call sites in this component already fall back to (e.g. line ~1785's
+    // `isVisible !== false` treats undefined as visible for rendering, but
+    // for resync-gating purposes treating "unknown" as "not visible" is the
+    // safer default: it defers resync-on-focus rather than risking one
+    // firing for a caller that never intended to opt in).
+    isVisible: isVisible ?? false,
     isConnected,
     terminalState,
     connect,
@@ -480,10 +1126,15 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     markPaneResponseReceived,
     setShowReconnectButton,
     setShowReconnectBanner,
+    scheduleResync,
+    outstandingResyncIdsRef,
   });
   useEffect(() => {
     notifyResyncOutputReceivedRef.current = notifyResyncOutputReceived;
   }, [notifyResyncOutputReceived]);
+  useEffect(() => {
+    resetStallWatchdogRef.current = resetStallWatchdog;
+  }, [resetStallWatchdog]);
 
   // Sync terminalState into a ref so handleOutput can read it without recreating the callback.
   // Also flushes queued output when transitioning from RESIZING to STABLE (Task 4.2.2).
@@ -495,6 +1146,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       const manager = streamManagerRef.current;
       if (manager) {
         const pending = pendingOutputDuringResizeRef.current.splice(0);
+        // manager.write() itself detects and clears for a full-pane snapshot — see
+        // setOnFullSnapshot in getOrCreateStreamManager above.
         for (const chunk of pending) {
           manager.write(chunk);
         }
@@ -563,8 +1216,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     };
   }, []);
 
-  // Handle terminal data input
-  const handleTerminalData = useCallback((data: string) => {
+  // TUI page-key estimate (declared early: every input path below can invalidate it).
+  const [netPagesUp] = useState(createNetPagesUpTracker);
+
+  // Delivers bytes to the session without touching the page-key estimate. Programmatic page
+  // keys (drag, momentum, toolbar PgUp/PgDn, the jump button) use this directly; user input
+  // goes through handleTerminalData, which also invalidates the estimate.
+  const deliverTerminalData = useCallback((data: string) => {
     sendInput(data);
 
     // Optimistic clear on Enter only — reduces false-positive flicker
@@ -582,11 +1240,123 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
   }, [sendInput, clearForSession, sessionId, refreshApprovals, pendingCount]);
 
+  // User keystrokes and pastes move the app's own position, so the estimate no longer holds.
+  const handleTerminalData = useCallback((data: string) => {
+    netPagesUp.invalidate("keystroke");
+    deliverTerminalData(data);
+  }, [netPagesUp, deliverTerminalData]);
+
+  // Scroll route shared by the toolbar PgUp/PgDn (and later the chip and jump button).
+  // XtermTerminal reports the live mode upward only when it changes.
+  const { override: scrollOverride, gestureScrollEnabled } = useScrollSettings();
+  const [scrollMode, setScrollMode] = useState<ScrollMode>(INITIAL_SCROLL_MODE);
+  const handleScrollModeChange = useCallback((next: ScrollMode) => {
+    setScrollMode((prev) =>
+      prev.bufferType === next.bufferType && prev.mouseTrackingMode === next.mouseTrackingMode ? prev : next,
+    );
+  }, []);
+  const effectiveScroll = useEffectiveScrollMode(scrollMode, scrollOverride, gestureScrollEnabled);
+
+  // Scrolling chip / picker / full panel (ux.md S6). Rows come from the terminal's own resize report.
+  const [scrollPanel, setScrollPanel] = useState<"picker" | "full" | null>(null);
+  const [terminalRows, setTerminalRows] = useState(0);
+  // The xterm instance is created inside XtermTerminal's effect; the first resize report reveals it.
+  const [jumpTerminal, setJumpTerminal] = useState<JumpTerminal | null>(null);
+  const [gestureActive, setGestureActive] = useState(false);
+  // Host-owned live region: the picker unmounts on select, so its own announcement would be lost.
+  const [scrollAnnouncement, setScrollAnnouncement] = useState("");
+  const scrollChipRef = useRef<HTMLButtonElement>(null);
+  const misrouteCue = useMisrouteCue();
+  const scrollHint = useScrollHint();
+  const notifyScrollStart = scrollHint.notifyScrollStart;
+  const markScrollHintSeen = scrollHint.markSeenOnPanelOpen;
+  const getTouchSurface = useCallback(() => terminalContainerRef.current, []);
+  const reportMisroute = misrouteCue.report;
+  // Drag/momentum page keys keep the estimate current instead of invalidating it.
+  const handlePageKeysSent = useCallback(
+    (direction: "up" | "down", pages: number) => {
+      for (let i = 0; i < pages; i++) {
+        if (direction === "up") netPagesUp.pageUp();
+        else netPagesUp.pageDown();
+      }
+    },
+    [netPagesUp],
+  );
+  const scrollGestureProps = useMemo<ScrollGestureProps>(
+    () => ({
+      scrollOverride,
+      gestureScrollEnabled,
+      connectionEpoch,
+      onScrollGesture: reportMisroute,
+      onScrollStart: notifyScrollStart,
+      onPageKeysSent: handlePageKeysSent,
+      onGestureActiveChange: setGestureActive,
+      onProgrammaticData: deliverTerminalData,
+      isInputBusy: isInputChunking,
+    }),
+    [scrollOverride, gestureScrollEnabled, connectionEpoch, reportMisroute, notifyScrollStart, handlePageKeysSent, deliverTerminalData, isInputChunking],
+  );
+  const handleScrollOverrideChange = useCallback(
+    (value: ScrollOverride) => {
+      scrollSettings.setOverride(value);
+      if (scrollPanel === "picker") {
+        const label = SCROLL_OPTIONS.find((o) => o.value === value)?.announce ?? value;
+        setScrollAnnouncement(`Scroll mode: ${label}`);
+      }
+    },
+    [scrollPanel],
+  );
+  const closeScrollPanel = useCallback(() => setScrollPanel(null), []);
+  const openScrollPicker = useCallback(() => {
+    markScrollHintSeen();
+    setScrollPanel((p) => (p === "picker" ? null : "picker"));
+  }, [markScrollHintSeen]);
+  const toggleScrollFullPanel = useCallback(() => {
+    markScrollHintSeen();
+    setScrollPanel((p) => (p === "full" ? null : "full"));
+  }, [markScrollHintSeen]);
+  const openScrollFullPanel = useCallback(() => setScrollPanel("full"), []);
+  // Approximate panel heights in terminal rows (picker: 3 radios + 2 buttons; full: adds switch and notes).
+  // Only used to decide inline vs overlay, so a rough constant is enough.
+  // terminalRows is re-measured after an inline panel shrinks the terminal, so the choice is latched when the
+  // panel opens (reset on close); re-deciding from the shrunken count flip-flops. The latch only upgrades
+  // inline -> overlay (e.g. the soft keyboard leaves too few rows); it never downgrades while open.
+  const panelOverlayLatchRef = useRef<boolean | null>(null);
+  const panelRowsEstimate = scrollPanel === "full" ? SCROLL_FULL_PANEL_ROWS : SCROLL_PICKER_PANEL_ROWS;
+  if (scrollPanel === null) panelOverlayLatchRef.current = null;
+  else if (panelOverlayLatchRef.current === null) {
+    panelOverlayLatchRef.current = shouldRenderPanelAsOverlay(terminalRows - panelRowsEstimate);
+  } else if (!panelOverlayLatchRef.current && shouldRenderPanelAsOverlay(terminalRows)) {
+    // An inline panel has already taken its rows out of terminalRows, so no estimate is subtracted.
+    panelOverlayLatchRef.current = true;
+  }
+  const panelAsOverlay = panelOverlayLatchRef.current ?? false;
+  const panelMaxHeight =
+    panelAsOverlay && terminalRows > MIN_ROWS_FOR_OVERLAYS && containerSize.height > 0
+      ? Math.round((containerSize.height * (terminalRows - MIN_ROWS_FOR_OVERLAYS)) / terminalRows)
+      : undefined;
+
+  const lastEpochRef = useRef(connectionEpoch);
+  useEffect(() => {
+    if (lastEpochRef.current === connectionEpoch) return;
+    lastEpochRef.current = connectionEpoch;
+    netPagesUp.invalidate("reconnect");
+  }, [connectionEpoch, netPagesUp]);
+
+  // A buffer switch, mouse-mode change or override change reroutes scrolling; skip the initial mount.
+  const modeKey = `${scrollMode.bufferType}|${scrollMode.mouseTrackingMode}|${scrollOverride}`;
+  const lastModeKeyRef = useRef(modeKey);
+  useEffect(() => {
+    if (lastModeKeyRef.current === modeKey) return;
+    lastModeKeyRef.current = modeKey;
+    netPagesUp.invalidate("mode-change");
+  }, [modeKey, netPagesUp]);
+
   // Send a key sequence, applying any active sticky modifier (CTRL or ALT) first.
   // Modifier sequences follow xterm's parameter convention:
   //   modifier 3 = Alt (escape prefix or CSI param ;3)
   //   modifier 5 = Ctrl (CSI param ;5)
-  const sendKey = useCallback((keyData: string) => {
+  const sendKey = useCallback((keyData: string, programmatic = false) => {
     let data = keyData;
 
     if (ctrlActive) {
@@ -600,12 +1370,44 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       setShiftActive(false);
     }
 
-    handleTerminalData(data);
-  }, [ctrlActive, altActive, shiftActive, handleTerminalData]);
+    (programmatic ? deliverTerminalData : handleTerminalData)(data);
+  }, [ctrlActive, altActive, shiftActive, handleTerminalData, deliverTerminalData]);
+
+  // Route-aware PgUp/PgDn (ux.md S4): the same route as the drag, so the keys are an
+  // equivalent single-pointer alternative. TUI-route bytes are unchanged from before.
+  const sendToolbarPageKey = useCallback((direction: "up" | "down") => {
+    mobileDebug.toolbarKey(direction === "up" ? "PageUp" : "PageDown");
+    const terminal = xtermRef.current?.terminal ?? null;
+    const buffer = terminal?.buffer?.active;
+    const canScroll = !!buffer && (direction === "up" ? buffer.viewportY > 0 : buffer.viewportY < buffer.baseY);
+    const action = toolbarPageAction({
+      route: effectiveScroll.target,
+      direction,
+      modifiers: { ctrl: ctrlActive, alt: altActive, shift: shiftActive },
+      canScroll,
+      override: scrollOverride,
+    });
+    if (action.type === "scroll-pages" && terminal) {
+      terminal.scrollPages(action.pages);
+      return;
+    }
+    // A chunked paste is still streaming: page-key bytes would splice into it, so drop the tap (as the drag does).
+    if (isInputChunking()) return;
+    const bytes = action.type === "send-keys" ? action.bytes : direction === "up" ? PAGE_UP_BYTES : PAGE_DOWN_BYTES;
+    const countsTowardNetPages = action.type === "send-keys" && action.countsTowardNetPages;
+    if (countsTowardNetPages) {
+      if (direction === "up") netPagesUp.pageUp();
+      else netPagesUp.pageDown();
+    }
+    sendKey(bytes, countsTowardNetPages);
+  }, [effectiveScroll.target, scrollOverride, ctrlActive, altActive, shiftActive, sendKey, netPagesUp, isInputChunking]);
 
   // Handle terminal resize with size stability detection
   const handleTerminalResize = useCallback((cols: number, rows: number) => {
     console.log(`[TerminalOutput] Terminal resized to ${cols}x${rows}`);
+    setTerminalRows(rows);
+    setJumpTerminal(xtermRef.current?.terminal ?? null);
+    netPagesUp.invalidate("resize");
 
     const lastResize = lastResizeRef.current;
     const sizeChanged = !lastResize || lastResize.cols !== cols || lastResize.rows !== rows;
@@ -703,8 +1505,14 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
 
     console.log(`[TerminalOutput] Sending resize: ${cols}x${rows} (prev: ${lastResize?.cols || 'none'}x${lastResize?.rows || 'none'})`);
-    resize(cols, rows);
-  }, [isConnected, resize, connect, error, sessionId]);
+    clearBufferBeforeResize();
+    if (settleBypassPendingRef.current) {
+      settleBypassPendingRef.current = false;
+      resize(cols, rows, false, { bypassBounceHold: true });
+    } else {
+      resize(cols, rows);
+    }
+  }, [isConnected, resize, connect, error, sessionId, clearBufferBeforeResize, netPagesUp, xtermRef]);
 
   // Monitor connection state changes
   useEffect(() => {
@@ -758,9 +1566,10 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       }, 250);
     } else if (wasConnected && !isConnected) {
       console.log("[TerminalOutput] Connection lost, will attempt reconnection");
-      // If connection drops while still loading, content won't arrive — clear the overlay
-      // so the user sees the terminal pane and "Disconnected" status instead of a stuck spinner.
-      setIsLoadingInitialContent(false);
+      // New session: don't drop the spinner before first content arrives.
+      if (isInitialScrollbackDoneRef.current) {
+        setIsLoadingInitialContent(false);
+      }
       if (process.env.NEXT_PUBLIC_RECONNECT_V2 !== "true") {
         reconnectTimeoutRef.current = setTimeout(() => {
           if (!isConnected) {
@@ -778,7 +1587,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         clearTimeout(reconnectTimeoutRef.current);
       }
     };
-  }, [isConnected, resize]);
+    // showReconnectBanner is a pre-existing missing dependency: adding it
+    // would re-run this effect on every banner toggle, and its cleanup
+    // clears reconnectTimeoutRef.current without nulling the ref -- that
+    // would silently cancel the "show reconnect button after 5s" timer
+    // mid-countdown. Left alone rather than fixed as a drive-by.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConnected, resize, xtermRef]);
 
   // Story 3.2.1 — reconnecting banner: show after 2s of disconnection (if was ever connected)
   useEffect(() => {
@@ -824,11 +1639,58 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         setTimeout(() => terminal.scrollToBottom(), 100);
       });
     }
-  }, [isLoadingInitialContent]);
+  }, [isLoadingInitialContent, xtermRef]);
+
+  // Task 1.4.5b — every requestScrollback call site (the tmux-native trigger
+  // below and Story 1.4.0's alt-screen wheel/touch triggers) funnels through
+  // this one wrapper so the loading pill can't drift out of sync with which
+  // trigger actually fired.
+  const requestScrollbackWithPill = useCallback((fromSequence: number, limit: number) => {
+    startScrollLoadingTimers(altScreenActiveRef.current ? lastKnownAppProgramRef.current : undefined);
+    requestScrollback(fromSequence, limit);
+  }, [requestScrollback, startScrollLoadingTimers]);
+
+  // Story 1.4.0 (Task 1.4.0c) — shared guard-and-call body for the alt-screen
+  // wheel (Task 1.4.0b) and touch (via useTerminalGestures) triggers, so the
+  // two paths can't drift apart. For an alt-screen session the "more
+  // available" guard is hasMoreAppScrollbackRef (Task 1.4.4b) — this feature's
+  // own flag — never hasMoreScrollbackRef, which a pure alt-screen session's
+  // tmux-native path never touches and so would never flip false.
+  const triggerAltScreenScrollUp = useCallback(() => {
+    if (isFetchingScrollbackRef.current || !hasMoreAppScrollbackRef.current || !isConnected) {
+      return;
+    }
+    isFetchingScrollbackRef.current = true;
+    requestScrollbackWithPill(oldestSequenceReceivedRef.current, 500);
+  }, [isConnected, requestScrollbackWithPill]);
+
+  // Stable accessor for useTerminalGestures's isAltScreenActive option
+  // (Task 1.4.0c) — reads the same ref the wheel listener above holds.
+  const isAltScreenActive = useCallback(() => altScreenActiveRef.current, []);
+  // useTerminalGestures calls this with a line count (Task 1.4.0c); the
+  // trigger itself doesn't scale by drag magnitude, matching the wheel
+  // trigger's deltaY-direction-only behavior.
+  const onAltScreenScrollUp = useCallback(() => triggerAltScreenScrollUp(), [triggerAltScreenScrollUp]);
+
+  // Story 3 (Task 3.4) — part 2 of usePooledTerminal (see that hook's call
+  // site near the top of this component and its own doc comment for why
+  // this is a separate call, made here once all four callbacks it needs
+  // exist).
+  usePooledTerminalCallbacks(effectiveSessionId, isVisible !== false, {
+    onData: handleTerminalData,
+    onResize: handleTerminalResize,
+    isAltScreenActive,
+    onAltScreenScrollUp,
+    scrollGesture: scrollGestureProps,
+    onScrollModeChange: handleScrollModeChange,
+  });
 
   // Task 2.3.1 — DOM scroll listener to detect near-top-of-buffer and trigger paged history load.
   // Uses DOM 'scroll' event on terminal.element (NOT terminal.onScroll, which only fires on buffer
   // writes, not user scroll gestures — see xterm.js issues #3201, #3864).
+  // Task 1.4.0b — a `wheel` listener lives in this same effect: alt-screen
+  // sessions (the case this whole feature exists for) never move viewportY,
+  // so the 'scroll' listener above never fires for them (research/architecture.md §3).
   useEffect(() => {
     if (isLoadingInitialContent) return; // Don't attach until initial content is loaded
 
@@ -849,29 +1711,51 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       ) {
         isFetchingScrollbackRef.current = true;
         console.log(`[TerminalOutput] Near top of buffer (viewportY=${viewportY}), requesting older scrollback from seq ${oldestSequenceReceivedRef.current}`);
-        requestScrollback(oldestSequenceReceivedRef.current, 500);
+        requestScrollbackWithPill(oldestSequenceReceivedRef.current, 500);
+      }
+    };
+
+    // Task 1.4.0b — when altScreenActive, viewportY-gated 'scroll' never fires
+    // (or is meaningless), so a wheel scroll-up gesture is the trigger instead.
+    // No conflict with existing handlers: nothing else registers a 'wheel'
+    // listener on this element (confirmed by grep across XtermTerminal.tsx).
+    const onWheel = (e: Event) => {
+      const deltaY = (e as WheelEvent).deltaY;
+      if (altScreenActiveRef.current && deltaY < 0) {
+        triggerAltScreenScrollUp();
       }
     };
 
     scrollEl?.addEventListener('scroll', onScroll, { passive: true });
-    return () => scrollEl?.removeEventListener('scroll', onScroll);
-  }, [isLoadingInitialContent, isConnected, requestScrollback]);
+    scrollEl?.addEventListener('wheel', onWheel, { passive: true });
+    return () => {
+      scrollEl?.removeEventListener('scroll', onScroll);
+      scrollEl?.removeEventListener('wheel', onWheel);
+    };
+  }, [isLoadingInitialContent, isConnected, requestScrollbackWithPill, triggerAltScreenScrollUp, xtermRef]);
 
   // Auto-reconnect with exponential backoff
   useEffect(() => {
     if (process.env.NEXT_PUBLIC_RECONNECT_V2 === "true") return; // hook-level reconnect handles it
+    // Must not fire once the hook has hard-failed (e.g. a non-retriable WS
+    // close code): the hook already set shouldReconnectRef.current = false
+    // in that case, but calling connect() below unconditionally resets it
+    // back to true (see useTerminalStream.ts's connect()), silently
+    // reconnecting right through the hard-fail and hiding the Retry banner.
+    if (isHardFailed) return;
     if (!isConnected && error && connectionAttempts > 0 && connectionAttempts < 5) {
       const backoffDelay = Math.min(1000 * Math.pow(2, connectionAttempts - 1), 10000);
       console.log(`[TerminalOutput] Auto-reconnecting in ${backoffDelay}ms (attempt ${connectionAttempts})`);
 
       const timeout = setTimeout(() => {
         console.log("[TerminalOutput] Attempting reconnection...");
+        bumpConnectionEpoch();
         connect();
       }, backoffDelay);
 
       return () => clearTimeout(timeout);
     }
-  }, [isConnected, error, connectionAttempts, connect]);
+  }, [isConnected, error, connectionAttempts, connect, isHardFailed, bumpConnectionEpoch]);
 
   // Initialize with cached dimensions on mount.
   // When cell pixel metrics are also cached, pre-calculate cols/rows from the
@@ -945,36 +1829,37 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, containerSize.width]);
 
-  // When terminal becomes visible (e.g. session switch in pool), trigger fit+focus
+  // When terminal becomes visible (e.g. session switch in pool), refit through the sampler + focus.
+  // Story 3 (Task 3.5) — usePooledTerminal's docking effect also fits+focuses on dock; this is a
+  // harmless second attempt (both idempotent).
   useEffect(() => {
     if (isVisible && xtermRef.current) {
-      setTimeout(() => {
-        xtermRef.current?.fit();
-        xtermRef.current?.terminal?.focus();
-      }, 50);
+      xtermRef.current.refit({ reason: 'visibility' });
+      xtermRef.current.terminal?.focus();
     }
-  }, [isVisible]);
+  }, [isVisible, xtermRef]);
 
-  // visualViewport resize listener — re-fits terminal when the on-screen keyboard
-  // appears/disappears on mobile (visualViewport changes don't fire window resize).
-  // isFittingRef guard prevents resize loops on iOS where fit() triggers another resize event.
+  // On-screen keyboard / URL bar: refit once visualViewport height and offsetTop stop changing.
+  // Sole viewport-driven fit path; the sampler in XtermTerminal owns the actual fit
+  // (ADR-002: a direct fit() off visualViewport raced that sampler, so we only call refit()).
   useEffect(() => {
-    const vp = window.visualViewport;
-    if (!vp) return;
-
-    const onVpResize = () => {
-      if (isFittingRef.current) return;
-      isFittingRef.current = true;
-      // Increase debounce on mobile (400ms) to wait for keyboard animation to finish
-      setTimeout(() => {
-        xtermRef.current?.fit();
-        requestAnimationFrame(() => { isFittingRef.current = false; });
-      }, isMobile ? 400 : 300);
-    };
-
-    vp.addEventListener('resize', onVpResize);
-    return () => vp.removeEventListener('resize', onVpResize);
-  }, [isMobile]);
+    return createViewportSettle(window.visualViewport, createRafScheduler(), {
+      stableFrames: DEFAULT_STABLE_FRAMES,
+      maxWaitMs: DEFAULT_MAX_WAIT_MS,
+      onSettled: (snapshot) => {
+        mobileDebug.log("vp-settle", snapshot);
+        netPagesUp.invalidate("resize");
+        const xterm = xtermRef.current;
+        if (!xterm) return; // no refit issued, so no bypass to arm
+        settleBypassPendingRef.current = true;
+        xterm.refit({
+          reason: 'viewport-settle',
+          // The fit ended without a size change (or exhausted retries): drop the unused bypass.
+          onFitted: () => { settleBypassPendingRef.current = false; },
+        });
+      },
+    });
+  }, [netPagesUp]);
 
   // Reset loading state when switching sessions and trigger reconnect
   useEffect(() => {
@@ -1064,8 +1949,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     console.log("[TerminalOutput] Manual reconnect requested");
     setConnectionAttempts(0);
     setShowReconnectButton(false);
+    bumpConnectionEpoch();
     connect();
-  }, [connect]);
+  }, [connect, bumpConnectionEpoch]);
 
   const handleToggleDebug = useCallback(() => {
     const newDebugMode = !debugMode;
@@ -1294,25 +2180,49 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
   };
 
+  // The fit completes asynchronously (sampler, rAF), so the forced resize message is sent from
+  // onFitted with the post-fit dims. The latest connection state is read when it fires, not when
+  // the button was tapped.
+  const manualResizeLatestRef = useRef({ isConnected, resize, clearBufferBeforeResize });
+  useEffect(() => {
+    manualResizeLatestRef.current = { isConnected, resize, clearBufferBeforeResize };
+  });
+
   const handleManualResize = () => {
     console.log("[TerminalOutput] Manual resize triggered");
-    if (xtermRef.current) {
-      xtermRef.current.fit();
-
-      const terminal = xtermRef.current.terminal;
-      if (terminal) {
-        const cols = terminal.cols;
-        const rows = terminal.rows;
-        console.log(`[TerminalOutput] Terminal resized to ${cols}x${rows}`);
-
-        if (isConnected) {
-          console.log(`[TerminalOutput] Forcing resize message to backend: ${cols}x${rows}`);
-          lastResizeRef.current = { cols, rows };
-          resize(cols, rows, true);
+    xtermRef.current?.refit({
+      reason: 'manual-resize',
+      onFitted: ({ cols, rows, stale }) => {
+        const latest = manualResizeLatestRef.current;
+        // Forcing a resize (which also clears the local buffer) with pre-hide dims would redraw at a size the container no longer has.
+        if (stale) {
+          console.log(`[TerminalOutput] Manual resize skipped: container never became visible (stale ${cols}x${rows})`);
+          return;
         }
-      }
-    }
+        console.log(`[TerminalOutput] Terminal resized to ${cols}x${rows}`);
+        if (!isMountedRef.current || !latest.isConnected) return;
+        console.log(`[TerminalOutput] Forcing resize message to backend: ${cols}x${rows}`);
+        lastResizeRef.current = { cols, rows };
+        latest.clearBufferBeforeResize();
+        latest.resize(cols, rows, true);
+      },
+    });
   };
+
+  // Epic 4.2, Story 4.2.2 (Task 4.2.2b) — best-effort resize-mismatch signal
+  // for ConnectionCountIndicator's tooltip. No wire field carries "did this
+  // tab's ResizeVote win the hub's negotiation" (out of this UI-only epic's
+  // scope), so this compares what this tab last asked to resize to
+  // (lastResizeRef, set in handleTerminalResize) against xterm's actual
+  // applied dimensions — if they differ, another connection's vote is
+  // constraining this tab's pane size. Never shown speculatively: both refs
+  // must have resolved values before a mismatch is reported (UX-AC-10).
+  const appliedTerminal = xtermRef.current?.terminal;
+  const hasResizeSizeMismatch = !!(
+    lastResizeRef.current &&
+    appliedTerminal &&
+    (appliedTerminal.cols !== lastResizeRef.current.cols || appliedTerminal.rows !== lastResizeRef.current.rows)
+  );
 
   const secondaryActions = [
     {
@@ -1364,6 +2274,15 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       },
     },
     {
+      key: 'scrolling',
+      icon: '↕️',
+      label: 'Scrolling',
+      ariaLabel: 'Scrolling settings',
+      title: 'How dragging scrolls, and touch gestures',
+      extraClass: '',
+      handler: toggleScrollFullPanel,
+    },
+    {
       key: 'mouse',
       icon: '🖱️',
       label: mouseMode === 'none' ? 'Mouse' : 'Mouse ON',
@@ -1377,6 +2296,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     },
   ];
 
+  const isConnectingState = terminalState === "CONNECTING" || terminalState === "LOADING";
+
   return (
     <div className={styles.container}>
       <div className={styles.toolbar}>
@@ -1388,11 +2309,21 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           )}
           <span
             className={`${styles.statusIndicator} ${
-              isConnected ? styles.connected : isWaitingForStableSize ? styles.stabilizing : styles.disconnected
+              isConnected
+                ? styles.connected
+                : isWaitingForStableSize || isConnectingState
+                  ? styles.stabilizing
+                  : styles.disconnected
             }`}
           />
           <span className={styles.statusText}>
-            {isConnected ? "Connected" : isWaitingForStableSize ? "Initializing..." : "Disconnected"}
+            {isConnected
+              ? "Connected"
+              : isWaitingForStableSize
+                ? "Initializing..."
+                : isConnectingState
+                  ? "Connecting..."
+                  : "Disconnected"}
           </span>
           {!isConnected && connectionAttempts > 0 && connectionAttempts < 5 && (
             <span className={styles.statusText}>
@@ -1405,6 +2336,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           {isHardFailed && (
             <span className={styles.errorText}> • Terminal unavailable</span>
           )}
+          {/* Epic 4.2, Story 4.2.2 — renders only when connectionCount > 1 */}
+          <ConnectionCountIndicator count={connectionCount} sizeMismatch={hasResizeSizeMismatch} pulse={connectionPulse} />
         </div>
         <div className={styles.actions}>
           {/* Toolbar toggle — always visible on mobile; hidden on desktop via CSS */}
@@ -1438,11 +2371,40 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
               🔄 Reconnect
             </button>
           )}
+          {/* Redraw (formerly "Resize") — always visible so a blank screen is recoverable with the toolbar collapsed */}
+          <button
+            className={styles.toolbarButton}
+            onClick={() => {
+              track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "resize" } });
+              handleManualResize();
+            }}
+            aria-label="Redraw terminal (fixes a blank screen)"
+            title="Redraw terminal (fixes a blank screen)"
+          >
+            ↔️ Redraw
+          </button>
+          {/* Scroll mode chip — outside the toolbarExpanded conditional so it is reachable with the toolbar collapsed */}
+          <ScrollModeChip
+            effectiveTarget={effectiveScroll.target}
+            gestureScrollEnabled={gestureScrollEnabled}
+            onClick={openScrollPicker}
+            visibleRows={terminalRows}
+            highlighted={misrouteCue.highlighted}
+            announcement={misrouteCue.announcement}
+            suppressAnnouncements={scrollPanel !== null}
+            getTouchSurface={getTouchSurface}
+            buttonRef={scrollChipRef}
+          />
+          <div role="status" aria-live="polite" className={srOnly} data-testid="scroll-mode-announcer">
+            {scrollAnnouncement}
+          </div>
           {toolbarExpanded && (
             <div className={styles.toolbarActions} data-testid="toolbar-actions">
               {/* Secondary actions (Copy, Paste, Bottom, Clear, Mouse) — inline on desktop, hidden on mobile */}
               <div className={styles.secondaryGroup} data-testid="toolbar-secondary">
                 {secondaryActions.map((action) => (
+                  // action.handler (defined in secondaryActions above) always calls track() itself
+                  // analytics-exempt
                   <button
                     key={action.key}
                     className={`${styles.toolbarButton}${action.extraClass ? ` ${action.extraClass}` : ''}`}
@@ -1511,18 +2473,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
               >
                 {uploadingCount > 0 ? `⏳ ${uploadingCount}…` : "📁 Files"}
               </button>
-              {/* Resize — always visible, needed to re-fit terminal after layout changes */}
-              <button
-                className={styles.toolbarButton}
-                onClick={() => {
-                  track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "resize" } });
-                  handleManualResize();
-                }}
-                aria-label="Resize terminal to fit container"
-                title="Resize terminal to fit container"
-              >
-                ↔️ Resize
-              </button>
               {/* Camera button — hidden on desktop (pointer: fine = mouse), visible on touch */}
               <button
                 className={`${styles.toolbarButton} ${styles.mobileOnlyUpload}`}
@@ -1579,11 +2529,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
                         track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "log-stream", state: logStreamEnabled ? "off" : "on" } });
                         handleToggleLogStream();
                       }}
-                      title={logStreamEnabled ? "Stop forwarding verbose debug logs to server (info/warn/error always stream)" : "Also forward verbose debug logs to server (info/warn/error already stream automatically)"}
-                      aria-label={logStreamEnabled ? "Disable verbose debug log streaming" : "Enable verbose debug log streaming"}
+                      title={logStreamEnabled ? "Stop forwarding verbose per-frame debug traces to server (info/warn/error always stream)" : "Also forward verbose per-frame debug traces to server (info/warn/error always stream automatically)"}
+                      aria-label={logStreamEnabled ? "Disable verbose debug trace streaming" : "Enable verbose debug trace streaming"}
                       style={logStreamEnabled ? { backgroundColor: '#2a4', color: 'white', fontWeight: 'bold' } : {}}
                     >
-                      📡 {logStreamEnabled ? 'Debug Log Stream ON' : 'Debug Log Stream'}
+                      📡 {logStreamEnabled ? 'Debug Traces ON' : 'Debug Traces'}
                     </button>
                     <button
                       className={`${styles.toolbarButton} ${styles.devOnly}`}
@@ -1637,6 +2587,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       {mobileOverflowOpen && toolbarExpanded && (
         <div className={styles.mobileOverflowRow} data-testid="toolbar-overflow-row">
           {secondaryActions.map((action) => (
+            // action.handler (defined in secondaryActions above) always calls track() itself
+            // analytics-exempt
             <button
               key={action.key}
               className={`${styles.toolbarButton}${action.extraClass ? ` ${action.extraClass}` : ''}`}
@@ -1649,22 +2601,57 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           ))}
         </div>
       )}
+      <ScrollHint visible={scrollHint.visible} route={scrollHint.route} onDismiss={scrollHint.dismiss} />
+      {scrollPanel && (
+        <ScrollingPanel
+          variant={scrollPanel}
+          override={scrollOverride}
+          onOverrideChange={handleScrollOverrideChange}
+          effectiveTarget={effectiveScroll.target}
+          gestureScrollEnabled={gestureScrollEnabled}
+          onGestureScrollChange={scrollSettings.setGestureScroll}
+          onClose={closeScrollPanel}
+          onOpenFull={openScrollFullPanel}
+          openerRef={scrollChipRef}
+          renderAsOverlay={panelAsOverlay}
+          maxHeight={panelMaxHeight}
+        />
+      )}
       <div className={styles.terminal} ref={terminalContainerRef}>
         {showReconnectBanner && !isHardFailed && (
-          <div className={styles.reconnectingBanner}>
+          <div
+            className={styles.reconnectingBanner}
+            role="status"
+            aria-live="polite"
+            aria-label="Reconnecting"
+          >
             Reconnecting terminal…
           </div>
         )}
         {showReconnectBanner && isHardFailed && (
-          <div className={styles.hardFailedBanner}>
-            Connection lost — <button onClick={handleHookReconnect}>Retry</button>
+          <div className={styles.hardFailedBanner} role="alert">
+            {isWorktreeMissingError(error) ? (
+              <>
+                This session&apos;s working directory no longer exists (its git worktree may
+                have been deleted).{" "}
+                <button onClick={handleRetryNow} disabled={isRetryingSession}>
+                  {isRetryingSession ? "Retrying…" : "Retry now"}
+                </button>
+              </>
+            ) : (
+              <>Connection lost — <button onClick={reconnectViaHook}>Retry</button></>
+            )}
           </div>
         )}
         {isVisible !== false && isLoadingInitialContent && (
           <div className={styles.loadingOverlay}>
             <div className={styles.loadingSpinner} />
             <div className={styles.loadingText}>
-              {isWaitingForStableSize ? "Initializing terminal..." : "Loading terminal content..."}
+              {isWaitingForStableSize
+                ? "Initializing terminal..."
+                : !isConnected && !isInitialScrollbackDoneRef.current
+                  ? "Starting session..."
+                  : "Loading terminal content..."}
             </div>
           </div>
         )}
@@ -1687,19 +2674,77 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             <span className={styles.resizingSpinner} />
           </div>
         )}
-{/* fallback={null}: the loadingOverlay above covers the terminal area while
-    isLoadingInitialContent=true, which spans the entire xterm.js lazy-load period. */}
-<Suspense fallback={null}>
-  <XtermTerminal
-    ref={xtermRef}
-    onData={handleTerminalData}
-    onResize={handleTerminalResize}
-    theme={theme}
-    fontSize={14}
-    scrollback={5000}
-  />
-</Suspense>
+        {/* Story 1.4.5 — loading pill unconditionally clears before any outcome
+            renders below, so it never overlaps the banner/no-more-history line. */}
+        <ScrollLoadingPill
+          visible={pillState.visible}
+          stalled={pillState.stalled}
+          program={pillState.program}
+          onCancel={handleCancelScrollLoading}
+        />
+        {/* Story 1.4.2 */}
+        <ScrollSourceIndicator program={appScrollbackState.program} visible={appScrollbackState.active} />
+        {/* Story 1.4.4 (Task 1.4.4b) — scoped to the AT_TOP outcome only; the
+            pre-existing tmux-native exhaustion case renders nothing, unchanged. */}
+        {atTopVisible && (
+          <div
+            className={styles.noMoreHistoryLine}
+            role="status"
+            aria-live="polite"
+            data-testid="no-more-app-history"
+          >
+            No more history available
+          </div>
+        )}
+        {/* Story 3 (Task 3.4) — the pooled terminal instance docks here; keep it a plain,
+            otherwise-childless node (the pool appends/removes its host imperatively). The
+            loadingOverlay above covers this area while isLoadingInitialContent=true. */}
+        <div ref={dockRef} className={poolStyles.dockAnchor} />
+        {jumpTerminal?.buffer?.active && (
+          <JumpToLatestMount
+            terminal={jumpTerminal}
+            route={effectiveScroll.target}
+            netPagesUp={netPagesUp}
+            connectionEpoch={connectionEpoch}
+            sendData={deliverTerminalData}
+            isInputBusy={isInputChunking}
+            gestureActive={gestureActive}
+            getContainer={getTouchSurface}
+          />
+        )}
       </div>
+      {/* Story 2.3 — InputDropBadge is `position: fixed` and portal-rendered
+          to document.body (modeled on XtermTerminal's `copiedToast`), unlike
+          the absolutely-positioned overlays above that live inside
+          styles.terminal — rendering it as a sibling here (not nested inside
+          that container) avoids clipping/mispositioning it. See design/ux.md
+          §Step 4 item 1. */}
+      <InputDropBadge count={dropEpisode.count} episodeSeq={dropEpisode.seq} />
+      {/* Story 1.4.3 — Blocked-outcome toast (design/ux.md Surface 3). Portal-
+          rendered to document.body, matching InputDropBadge's fixed-position
+          toast pattern, since it's meant to sit at the bottom of the viewport
+          regardless of the terminal pane's own overflow/positioning context. */}
+      {blockedToast && typeof document !== "undefined" && createPortal(
+        <div
+          key={blockedToast.seq}
+          className={styles.blockedToast}
+          role="status"
+          aria-live="polite"
+          data-testid="scroll-blocked-toast"
+          data-blocked-reason={ScrollBlockedReason[blockedToast.reason]}
+        >
+          <span>⚠ {blockedToastCopy(blockedToast.reason, blockedToast.program)}</span>
+          <button
+            type="button"
+            className={styles.blockedToastButton}
+            onClick={dismissBlockedToast}
+            data-testid="scroll-blocked-toast-dismiss"
+          >
+            Got it
+          </button>
+        </div>,
+        document.body
+      )}
       {/* Mobile keyboard toolbar — Termux-compatible extra-keys layout.
           Row 1: ESC / - HOME ↑ END PGUP
           Row 2: TAB CTRL ALT ← ↓ → PGDN
@@ -1714,7 +2759,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[H'); }} aria-label="Home" data-testid="mobile-key">Home</button>
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[A'); }} aria-label="Up arrow" data-testid="mobile-key">↑</button>
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[F'); }} aria-label="End" data-testid="mobile-key">End</button>
-            <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[5~'); }} aria-label="Page up" data-testid="mobile-key">PgUp</button>
+            <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendToolbarPageKey("up"); }} aria-label="Page up" data-testid="mobile-key">PgUp</button>
           </div>
           <div className={styles.mobileKeyRow}>
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\t'); }} aria-label="Tab" data-testid="mobile-key">Tab</button>
@@ -1748,7 +2793,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[D'); }} aria-label="Left arrow" data-testid="mobile-key">←</button>
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[B'); }} aria-label="Down arrow" data-testid="mobile-key">↓</button>
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[C'); }} aria-label="Right arrow" data-testid="mobile-key">→</button>
-            <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[6~'); }} aria-label="Page down" data-testid="mobile-key">PgDn</button>
+            <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendToolbarPageKey("down"); }} aria-label="Page down" data-testid="mobile-key">PgDn</button>
           </div>
           <div className={styles.mobileKeyRow}>
             <button className={`${styles.mobileKey} ${styles.mobileKeyCtrlC}`} onPointerDown={(e) => { e.preventDefault(); setCtrlActive(false); setAltActive(false); handleTerminalData('\x03'); }} aria-label="Ctrl+C (interrupt)" title="Interrupt (Ctrl+C)" data-testid="mobile-key">^C</button>

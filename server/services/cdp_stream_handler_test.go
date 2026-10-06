@@ -50,6 +50,7 @@ func buildCDPRequest(sessionID string) *http.Request {
 }
 
 func TestCDPStreamHandler_MissingSessionID_Returns400(t *testing.T) {
+	t.Parallel()
 	finder := &fakeInstanceFinder{inst: nil}
 	handler := NewCDPStreamHandler(finder)
 
@@ -66,6 +67,7 @@ func TestCDPStreamHandler_MissingSessionID_Returns400(t *testing.T) {
 }
 
 func TestCDPStreamHandler_UnknownSessionID_Returns404(t *testing.T) {
+	t.Parallel()
 	// FindInstance returns nil → 404.
 	finder := &fakeInstanceFinder{inst: nil}
 	handler := NewCDPStreamHandler(finder)
@@ -81,6 +83,7 @@ func TestCDPStreamHandler_UnknownSessionID_Returns404(t *testing.T) {
 }
 
 func TestCDPStreamHandler_CDPPortZero_Returns503(t *testing.T) {
+	t.Parallel()
 	// A real *session.Instance with a noop CDPManager (Port()=0) triggers 503.
 	inst := newTestInstance(t)
 

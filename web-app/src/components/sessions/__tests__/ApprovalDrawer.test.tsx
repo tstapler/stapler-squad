@@ -48,7 +48,8 @@ jest.mock("@/lib/store", () => ({
 function makeApproval(
   id: string,
   secondsRemaining: number,
-  sessionId = "session-1"
+  sessionId = "session-1",
+  riskLevel = ""
 ): PendingApprovalProto {
   return {
     id,
@@ -57,6 +58,7 @@ function makeApproval(
     toolInput: {},
     cwd: "/",
     secondsRemaining,
+    riskLevel,
   } as unknown as PendingApprovalProto;
 }
 
@@ -104,7 +106,7 @@ describe("ApprovalDrawer — approval count", () => {
 });
 
 describe("ApprovalDrawer — sort order", () => {
-  it("renders most urgent approval (lowest secondsRemaining) first", () => {
+  it("renders most urgent approval (lowest secondsRemaining) first when severity ties", () => {
     mockApprovals = [
       makeApproval("slow", 120),
       makeApproval("urgent", 5),
@@ -115,6 +117,33 @@ describe("ApprovalDrawer — sort order", () => {
     expect(cards[0].getAttribute("data-testid")).toBe("approval-card-urgent");
     expect(cards[1].getAttribute("data-testid")).toBe("approval-card-medium");
     expect(cards[2].getAttribute("data-testid")).toBe("approval-card-slow");
+  });
+
+  it("ApprovalDrawer_should_SortBySeverityThenExpiry_When_MultipleApprovalsPending", () => {
+    // A(low, 30s) B(critical, 200s) C(medium, 10s) -> B (Critical) -> C (Medium) -> A (Low),
+    // severity primary, secondsRemaining ascending as the tiebreaker within equal severity.
+    mockApprovals = [
+      makeApproval("A", 30, "session-1", "low"),
+      makeApproval("B", 200, "session-1", "critical"),
+      makeApproval("C", 10, "session-1", "medium"),
+    ];
+    render(<ApprovalDrawer isOpen={true} onClose={jest.fn()} />);
+    const cards = document.querySelectorAll("[data-testid^='approval-card-']");
+    expect(cards[0].getAttribute("data-testid")).toBe("approval-card-B");
+    expect(cards[1].getAttribute("data-testid")).toBe("approval-card-C");
+    expect(cards[2].getAttribute("data-testid")).toBe("approval-card-A");
+  });
+
+  it("ApprovalDrawer_should_RankUnrecordedSeverityAsHigh_When_RiskLevelIsEmpty", () => {
+    // Unrecorded ("") must sort adjacent to/above High, never below Medium/last.
+    mockApprovals = [
+      makeApproval("medium-item", 30, "session-1", "medium"),
+      makeApproval("unrecorded-item", 30, "session-1", ""),
+    ];
+    render(<ApprovalDrawer isOpen={true} onClose={jest.fn()} />);
+    const cards = document.querySelectorAll("[data-testid^='approval-card-']");
+    expect(cards[0].getAttribute("data-testid")).toBe("approval-card-unrecorded-item");
+    expect(cards[1].getAttribute("data-testid")).toBe("approval-card-medium-item");
   });
 });
 

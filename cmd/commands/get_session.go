@@ -19,7 +19,10 @@ var GetSessionCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := sessionv1connect.NewSessionServiceClient(
 			http.DefaultClient,
-			"http://localhost:8080", // Assuming the server runs on localhost:8080
+			// Assuming the server runs on localhost:8080; /api is where server.go
+			// mounts the ConnectRPC handler (see RegisterConnectHandler callers in
+			// server/server.go), not the bare procedure path.
+			"http://localhost:8080/api",
 		)
 		req := &connect.Request[sessionv1.GetSessionRequest]{
 			Msg: &sessionv1.GetSessionRequest{

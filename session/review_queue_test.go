@@ -8,6 +8,7 @@ import (
 )
 
 func TestReviewQueue_AddAndGet(t *testing.T) {
+	t.Parallel()
 	rq := NewReviewQueue()
 
 	item := &ReviewItem{
@@ -37,6 +38,7 @@ func TestReviewQueue_AddAndGet(t *testing.T) {
 }
 
 func TestReviewQueue_Remove(t *testing.T) {
+	t.Parallel()
 	rq := NewReviewQueue()
 
 	item := &ReviewItem{
@@ -67,6 +69,7 @@ func TestReviewQueue_Remove(t *testing.T) {
 }
 
 func TestReviewQueue_Has(t *testing.T) {
+	t.Parallel()
 	rq := NewReviewQueue()
 
 	if rq.Has("session-1") {
@@ -93,6 +96,7 @@ func TestReviewQueue_Has(t *testing.T) {
 }
 
 func TestReviewQueue_List_SortsByPriority(t *testing.T) {
+	t.Parallel()
 	rq := NewReviewQueue()
 
 	// Add items with different priorities
@@ -124,6 +128,7 @@ func TestReviewQueue_List_SortsByPriority(t *testing.T) {
 }
 
 func TestReviewQueue_List_SortsByTime(t *testing.T) {
+	t.Parallel()
 	rq := NewReviewQueue()
 
 	now := time.Now()
@@ -154,6 +159,7 @@ func TestReviewQueue_List_SortsByTime(t *testing.T) {
 }
 
 func TestReviewQueue_Count(t *testing.T) {
+	t.Parallel()
 	rq := NewReviewQueue()
 
 	if rq.Count() != 0 {
@@ -175,6 +181,7 @@ func TestReviewQueue_Count(t *testing.T) {
 }
 
 func TestReviewQueue_CountByPriority(t *testing.T) {
+	t.Parallel()
 	rq := NewReviewQueue()
 
 	rq.Add(&ReviewItem{SessionID: "s1", Priority: PriorityHigh})
@@ -195,6 +202,7 @@ func TestReviewQueue_CountByPriority(t *testing.T) {
 }
 
 func TestReviewQueue_CountByReason(t *testing.T) {
+	t.Parallel()
 	rq := NewReviewQueue()
 
 	rq.Add(&ReviewItem{SessionID: "s1", Reason: ReasonApprovalPending})
@@ -212,6 +220,7 @@ func TestReviewQueue_CountByReason(t *testing.T) {
 }
 
 func TestReviewQueue_Next(t *testing.T) {
+	t.Parallel()
 	rq := NewReviewQueue()
 
 	// Empty queue
@@ -251,6 +260,7 @@ func TestReviewQueue_Next(t *testing.T) {
 }
 
 func TestReviewQueue_Previous(t *testing.T) {
+	t.Parallel()
 	rq := NewReviewQueue()
 
 	// Add items
@@ -278,6 +288,7 @@ func TestReviewQueue_Previous(t *testing.T) {
 }
 
 func TestReviewQueue_Clear(t *testing.T) {
+	t.Parallel()
 	rq := NewReviewQueue()
 
 	rq.Add(&ReviewItem{SessionID: "s1", Priority: PriorityHigh})
@@ -291,6 +302,7 @@ func TestReviewQueue_Clear(t *testing.T) {
 }
 
 func TestReviewQueue_Update(t *testing.T) {
+	t.Parallel()
 	rq := NewReviewQueue()
 
 	item1 := &ReviewItem{
@@ -327,6 +339,7 @@ func TestReviewQueue_Update(t *testing.T) {
 }
 
 func TestReviewQueue_GetStatistics(t *testing.T) {
+	t.Parallel()
 	rq := NewReviewQueue()
 
 	now := time.Now()
@@ -351,6 +364,7 @@ func TestReviewQueue_GetStatistics(t *testing.T) {
 }
 
 func TestReviewQueue_GetStatistics_OldestTimeCalculation(t *testing.T) {
+	t.Parallel()
 	rq := NewReviewQueue()
 
 	now := time.Now()
@@ -404,6 +418,7 @@ func TestReviewQueue_GetStatistics_OldestTimeCalculation(t *testing.T) {
 }
 
 func TestReviewQueue_GetStatistics_WithZeroTimestamp(t *testing.T) {
+	t.Parallel()
 	rq := NewReviewQueue()
 
 	now := time.Now()
@@ -450,6 +465,7 @@ func TestReviewQueue_GetStatistics_WithZeroTimestamp(t *testing.T) {
 }
 
 func TestReviewQueue_GetStatistics_WithInvalidTimestamp(t *testing.T) {
+	t.Parallel()
 	rq := NewReviewQueue()
 
 	now := time.Now()
@@ -491,6 +507,7 @@ func TestReviewQueue_GetStatistics_WithInvalidTimestamp(t *testing.T) {
 }
 
 func TestReviewQueue_GetStatistics_AllInvalidTimestamps(t *testing.T) {
+	t.Parallel()
 	rq := NewReviewQueue()
 
 	// Add items with only invalid timestamps - all should be reset to now
@@ -527,6 +544,7 @@ func TestReviewQueue_GetStatistics_AllInvalidTimestamps(t *testing.T) {
 }
 
 func TestReviewQueue_GetStatistics_EmptyQueue(t *testing.T) {
+	t.Parallel()
 	rq := NewReviewQueue()
 
 	stats := rq.GetStatistics()
@@ -550,6 +568,7 @@ func TestReviewQueue_GetStatistics_EmptyQueue(t *testing.T) {
 }
 
 func TestReviewQueue_Observer(t *testing.T) {
+	t.Parallel()
 	rq := NewReviewQueue()
 
 	// Create observer
@@ -561,7 +580,7 @@ func TestReviewQueue_Observer(t *testing.T) {
 		onAdd: func(item *ReviewItem) {
 			addedCount++
 		},
-		onRemove: func(sessionID string) {
+		onRemove: func(sessionID string, info RemovalInfo) {
 			removedCount++
 		},
 		onUpdate: func(items []*ReviewItem) {
@@ -599,10 +618,65 @@ func TestReviewQueue_Observer(t *testing.T) {
 	}
 }
 
+func TestReviewQueue_RemoveWithInfo_CarriesRuleName(t *testing.T) {
+	t.Parallel()
+	rq := NewReviewQueue()
+	rq.Add(&ReviewItem{SessionID: "s1", Priority: PriorityHigh})
+
+	var gotSessionID string
+	var gotInfo RemovalInfo
+	observer := &testObserver{
+		onRemove: func(sessionID string, info RemovalInfo) {
+			gotSessionID = sessionID
+			gotInfo = info
+		},
+	}
+	rq.Subscribe(observer)
+
+	removed := rq.RemoveWithInfo("s1", AutoResolvedByRuleRemoval("some rule"))
+	if !removed {
+		t.Fatal("Expected RemoveWithInfo to return true")
+	}
+	if gotSessionID != "s1" {
+		t.Errorf("Expected sessionID %q, got %q", "s1", gotSessionID)
+	}
+	if gotInfo.Reason() != "auto_resolved_by_rule" {
+		t.Errorf("Expected reason %q, got %q", "auto_resolved_by_rule", gotInfo.Reason())
+	}
+	if gotInfo.RuleName() != "some rule" {
+		t.Errorf("Expected rule name %q, got %q", "some rule", gotInfo.RuleName())
+	}
+}
+
+func TestReviewQueue_Remove_StillReportsUserAction(t *testing.T) {
+	t.Parallel()
+	rq := NewReviewQueue()
+	rq.Add(&ReviewItem{SessionID: "s1", Priority: PriorityHigh})
+
+	var gotInfo RemovalInfo
+	observer := &testObserver{
+		onRemove: func(sessionID string, info RemovalInfo) {
+			gotInfo = info
+		},
+	}
+	rq.Subscribe(observer)
+
+	removed := rq.Remove("s1")
+	if !removed {
+		t.Fatal("Expected Remove to return true")
+	}
+	if gotInfo.Reason() != "user_action" {
+		t.Errorf("Expected reason %q, got %q", "user_action", gotInfo.Reason())
+	}
+	if gotInfo.RuleName() != "" {
+		t.Errorf("Expected empty rule name, got %q", gotInfo.RuleName())
+	}
+}
+
 // testObserver is a test implementation of ReviewQueueObserver
 type testObserver struct {
 	onAdd    func(*ReviewItem)
-	onRemove func(string)
+	onRemove func(string, RemovalInfo)
 	onUpdate func([]*ReviewItem)
 }
 
@@ -612,9 +686,9 @@ func (o *testObserver) OnItemAdded(item *ReviewItem) {
 	}
 }
 
-func (o *testObserver) OnItemRemoved(sessionID string) {
+func (o *testObserver) OnItemRemoved(sessionID string, info RemovalInfo) {
 	if o.onRemove != nil {
-		o.onRemove(sessionID)
+		o.onRemove(sessionID, info)
 	}
 }
 
@@ -625,6 +699,7 @@ func (o *testObserver) OnQueueUpdated(items []*ReviewItem) {
 }
 
 func TestDeterminePriority(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		reason      AttentionReason
@@ -661,6 +736,7 @@ func TestDeterminePriority(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			priority := DeterminePriority(tt.reason, tt.status, tt.age)
 			if priority < tt.expectedMin || priority > tt.expectedMax {
 				t.Errorf("Expected priority between %v and %v, got %v",
@@ -671,6 +747,7 @@ func TestDeterminePriority(t *testing.T) {
 }
 
 func TestAttentionReason_String(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		reason   AttentionReason
 		expected string
@@ -690,6 +767,7 @@ func TestAttentionReason_String(t *testing.T) {
 }
 
 func TestPriority_String(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		priority Priority
 		expected string
@@ -708,6 +786,7 @@ func TestPriority_String(t *testing.T) {
 }
 
 func TestPriority_Emoji(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		priority Priority
 		expected string

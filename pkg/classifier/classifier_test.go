@@ -5,6 +5,54 @@ import (
 	"testing"
 )
 
+// TestRule_should_KeepFieldSelectorSyntax_When_RuleMetaEmbedded proves the RuleMeta
+// extraction (Task 1.1.1a/b) preserves Rule's external field-selector syntax: embedding
+// promotes ID/Name/Priority/Enabled/Source so existing call sites reading rule.ID etc. need
+// no changes, even though constructing a Rule literal now requires the RuleMeta{...} wrapper.
+func TestRule_should_KeepFieldSelectorSyntax_When_RuleMetaEmbedded(t *testing.T) {
+	rule := Rule{RuleMeta: RuleMeta{ID: "r1", Name: "Test Rule", Priority: 10, Enabled: true, Source: "user"}}
+
+	if rule.ID != "r1" {
+		t.Errorf("rule.ID = %q, want %q", rule.ID, "r1")
+	}
+	if rule.Name != "Test Rule" {
+		t.Errorf("rule.Name = %q, want %q", rule.Name, "Test Rule")
+	}
+	if rule.Priority != 10 {
+		t.Errorf("rule.Priority = %d, want %d", rule.Priority, 10)
+	}
+	if !rule.Enabled {
+		t.Error("rule.Enabled = false, want true")
+	}
+	if rule.Source != "user" {
+		t.Errorf("rule.Source = %q, want %q", rule.Source, "user")
+	}
+}
+
+// TestClassify_ExistingSuite_should_PassWithZeroAssertionChanges_When_RuleMetaLands is the
+// Success Metric's zero-regression checkpoint: it exercises Classify end to end through a
+// seed rule (not just a struct literal) to confirm RuleMeta's promoted fields (ID, Source)
+// still flow correctly into ClassificationResult after the embedding. The full pre-existing
+// TestClassify_* suite in this file is the actual regression net; this test is the named
+// sentinel validation.md maps to that guard.
+func TestClassify_ExistingSuite_should_PassWithZeroAssertionChanges_When_RuleMetaLands(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	payload := PermissionRequestPayload{
+		ToolName:  "Write",
+		ToolInput: map[string]interface{}{"file_path": ".env"},
+	}
+	result := c.Classify(payload, ClassificationContext{})
+	if result.Decision != AutoDeny {
+		t.Fatalf("expected AutoDeny for .env write, got %v", result.Decision)
+	}
+	if result.RuleID != "seed-deny-env-write" {
+		t.Errorf("result.RuleID = %q, want %q", result.RuleID, "seed-deny-env-write")
+	}
+	if result.Source != "seed" {
+		t.Errorf("result.Source = %q, want %q", result.Source, "seed")
+	}
+}
+
 func TestClassify_ReadTools_AutoAllow(t *testing.T) {
 	c := NewRuleBasedClassifier()
 	ctx := ClassificationContext{}
@@ -221,15 +269,11 @@ func TestClassify_ReplaceRules_Atomic(t *testing.T) {
 
 	// Replace with a single custom allow-all rule.
 	custom := Rule{
-		ID:          "test-allow-all",
-		Name:        "Allow everything",
 		ToolPattern: regexp.MustCompile(`.*`),
 		Decision:    AutoAllow,
 		RiskLevel:   RiskLow,
 		Reason:      "test",
-		Priority:    999,
-		Enabled:     true,
-		Source:      "user",
+		RuleMeta:    RuleMeta{ID: "test-allow-all", Name: "Allow everything", Priority: 999, Enabled: true, Source: "user"},
 	}
 	c.ReplaceRules([]Rule{custom})
 
@@ -250,15 +294,11 @@ func TestClassify_AddRules_HighPriorityFirst(t *testing.T) {
 	// Add a high-priority deny for Read tool.
 	c.AddRules([]Rule{
 		{
-			ID:          "test-deny-read",
-			Name:        "Deny Read",
 			ToolPattern: regexp.MustCompile(`(?i)^Read$`),
 			Decision:    AutoDeny,
 			RiskLevel:   RiskCritical,
 			Reason:      "test",
-			Priority:    9999, // higher than seed AutoAllow at 100
-			Enabled:     true,
-			Source:      "user",
+			RuleMeta:    RuleMeta{ID: "test-deny-read", Name: "Deny Read", Priority: 9999, Enabled: true, Source: "user"}, // higher than seed AutoAllow at 100
 		},
 	})
 
@@ -1392,14 +1432,11 @@ func TestClassify_ToolCategory_Builtin_Matches_AgentSubcategory(t *testing.T) {
 	// A rule targeting ToolCategoryBuiltin should match both plain builtins AND agent tools.
 	c := NewRuleBasedClassifier()
 	c.ReplaceRules([]Rule{{
-		ID:           "test-allow-all-builtins",
 		ToolCategory: ToolCategoryBuiltin,
 		Decision:     AutoAllow,
 		RiskLevel:    RiskLow,
 		Reason:       "test",
-		Priority:     100,
-		Enabled:      true,
-		Source:       "user",
+		RuleMeta:     RuleMeta{ID: "test-allow-all-builtins", Priority: 100, Enabled: true, Source: "user"},
 	}})
 	ctx := ClassificationContext{}
 
@@ -1416,14 +1453,11 @@ func TestClassify_ToolCategory_MCPRead_DoesNotMatchMCPWrite(t *testing.T) {
 	// mcp-read category rules must NOT match MCP write tools.
 	c := NewRuleBasedClassifier()
 	c.ReplaceRules([]Rule{{
-		ID:           "test-mcp-read-only",
 		ToolCategory: ToolCategoryMCPRead,
 		Decision:     AutoAllow,
 		RiskLevel:    RiskLow,
 		Reason:       "test",
-		Priority:     100,
-		Enabled:      true,
-		Source:       "user",
+		RuleMeta:     RuleMeta{ID: "test-mcp-read-only", Priority: 100, Enabled: true, Source: "user"},
 	}})
 	ctx := ClassificationContext{}
 
@@ -2813,6 +2847,24 @@ func TestClassify_CmdSubst_ExplicitEscalation(t *testing.T) {
 }
 
 // TestExpandEnvVars verifies the standalone ExpandEnvVars helper.
+func TestReferencedEnvironment_should_SelectOnlyReferencedValues_When_CommandContainsVariables(t *testing.T) {
+	environment := map[string]string{
+		"RUSTC": "rustc",
+		"HOME":  "/home/user",
+		"TOKEN": "secret",
+	}
+	got := ReferencedEnvironment("$RUSTC --version && ls ${HOME}/src", func(name string) (string, bool) {
+		value, ok := environment[name]
+		return value, ok
+	})
+	if len(got) != 2 || got["RUSTC"] != "rustc" || got["HOME"] != "/home/user" {
+		t.Fatalf("ReferencedEnvironment = %#v", got)
+	}
+	if _, exists := got["TOKEN"]; exists {
+		t.Fatal("unreferenced TOKEN was selected")
+	}
+}
+
 func TestExpandEnvVars(t *testing.T) {
 	env := map[string]string{
 		"BRANCH":      "main",
@@ -3274,15 +3326,11 @@ func TestClassify_RequireCIPassing_Success_AutoAllow(t *testing.T) {
 	c := NewRuleBasedClassifier()
 	c.ReplaceRules([]Rule{
 		{
-			ID:               "test-ci-passing",
-			Name:             "Require CI passing",
 			ToolName:         "Bash",
 			RequireCIPassing: true,
 			Decision:         AutoAllow,
 			RiskLevel:        RiskLow,
-			Priority:         100,
-			Enabled:          true,
-			Source:           "user",
+			RuleMeta:         RuleMeta{ID: "test-ci-passing", Name: "Require CI passing", Priority: 100, Enabled: true, Source: "user"},
 		},
 	})
 
@@ -3297,15 +3345,11 @@ func TestClassify_RequireCIPassing_Failure_Escalate(t *testing.T) {
 	c := NewRuleBasedClassifier()
 	c.ReplaceRules([]Rule{
 		{
-			ID:               "test-ci-passing",
-			Name:             "Require CI passing",
 			ToolName:         "Bash",
 			RequireCIPassing: true,
 			Decision:         AutoAllow,
 			RiskLevel:        RiskLow,
-			Priority:         100,
-			Enabled:          true,
-			Source:           "user",
+			RuleMeta:         RuleMeta{ID: "test-ci-passing", Name: "Require CI passing", Priority: 100, Enabled: true, Source: "user"},
 		},
 	})
 
@@ -3320,15 +3364,11 @@ func TestClassify_RequireCIPassing_NoPR_Escalate(t *testing.T) {
 	c := NewRuleBasedClassifier()
 	c.ReplaceRules([]Rule{
 		{
-			ID:               "test-ci-passing",
-			Name:             "Require CI passing",
 			ToolName:         "Bash",
 			RequireCIPassing: true,
 			Decision:         AutoAllow,
 			RiskLevel:        RiskLow,
-			Priority:         100,
-			Enabled:          true,
-			Source:           "user",
+			RuleMeta:         RuleMeta{ID: "test-ci-passing", Name: "Require CI passing", Priority: 100, Enabled: true, Source: "user"},
 		},
 	})
 
@@ -3346,17 +3386,13 @@ func TestClassify_RequireCIPassing_CommandPatternAnd_BothMustMatch(t *testing.T)
 	c := NewRuleBasedClassifier()
 	c.ReplaceRules([]Rule{
 		{
-			ID:       "test-npm-publish-ci-gated",
-			Name:     "Allow npm publish only with green CI",
 			ToolName: "Bash",
 			//nolint:commandpattern this test deliberately exercises the CommandPattern+RequireCIPassing AND combination (AC6); Criteria matching is not what's under test here
 			CommandPattern:   regexp.MustCompile(`^npm publish`),
 			RequireCIPassing: true,
 			Decision:         AutoAllow,
 			RiskLevel:        RiskMedium,
-			Priority:         100,
-			Enabled:          true,
-			Source:           "user",
+			RuleMeta:         RuleMeta{ID: "test-npm-publish-ci-gated", Name: "Allow npm publish only with green CI", Priority: 100, Enabled: true, Source: "user"},
 		},
 	})
 
@@ -3378,5 +3414,111 @@ func TestClassify_RequireCIPassing_CommandPatternAnd_BothMustMatch(t *testing.T)
 				t.Errorf("cmd=%q ciStatus=%q: expected %v, got %v (rule=%s)", tt.cmd, tt.ciStatus, tt.want, result.Decision, result.RuleID)
 			}
 		})
+	}
+}
+
+func TestClassify_MinSessionIdleMinutes_Matches_WhenIdleExceedsThreshold(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	c.ReplaceRules([]Rule{
+		{
+			ToolName:              "Bash",
+			MinSessionIdleMinutes: 60,
+			Decision:              AutoAllow,
+			RiskLevel:             RiskLow,
+			RuleMeta:              RuleMeta{ID: "test-min-idle", Name: "Require session idle", Priority: 100, Enabled: true, Source: "user"},
+		},
+	})
+
+	payload := PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "echo hi"}}
+	result := c.Classify(payload, ClassificationContext{SessionIdleMinutes: 75})
+	if result.Decision != AutoAllow {
+		t.Errorf("expected AutoAllow when idle (75) exceeds threshold (60), got %v (rule=%s)", result.Decision, result.RuleID)
+	}
+}
+
+func TestClassify_MinSessionIdleMinutes_DoesNotMatch_WhenIdleBelowThreshold(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	c.ReplaceRules([]Rule{
+		{
+			ToolName:              "Bash",
+			MinSessionIdleMinutes: 60,
+			Decision:              AutoAllow,
+			RiskLevel:             RiskLow,
+			RuleMeta:              RuleMeta{ID: "test-min-idle", Name: "Require session idle", Priority: 100, Enabled: true, Source: "user"},
+		},
+	})
+
+	payload := PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "echo hi"}}
+	result := c.Classify(payload, ClassificationContext{SessionIdleMinutes: 10})
+	if result.Decision != Escalate {
+		t.Errorf("expected Escalate when idle (10) is below threshold (60), got %v (rule=%s)", result.Decision, result.RuleID)
+	}
+}
+
+// TestClassify_MinSessionIdleMinutes_ANDsWithOtherConditions_WhenCombinedWithRequireCIPassing
+// proves AND, not OR: even though CIStatus is "success" (satisfying RequireCIPassing), the
+// idle condition alone must still block the match.
+func TestClassify_MinSessionIdleMinutes_ANDsWithOtherConditions_WhenCombinedWithRequireCIPassing(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	c.ReplaceRules([]Rule{
+		{
+			ToolName:              "Bash",
+			RequireCIPassing:      true,
+			MinSessionIdleMinutes: 60,
+			Decision:              AutoAllow,
+			RiskLevel:             RiskLow,
+			RuleMeta:              RuleMeta{ID: "test-min-idle-and-ci", Name: "Require CI passing and session idle", Priority: 100, Enabled: true, Source: "user"},
+		},
+	})
+
+	payload := PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "echo hi"}}
+	result := c.Classify(payload, ClassificationContext{CIStatus: "success", SessionIdleMinutes: 5})
+	if result.Decision != Escalate {
+		t.Errorf("expected Escalate: CI passing but idle (5) below threshold (60) should still block the match, got %v (rule=%s)", result.Decision, result.RuleID)
+	}
+}
+
+// TestClassify_MinSessionIdleMinutes_FailsClosed_WhenContextIdleUnset is the critical
+// fail-closed test: a zero/unset ClassificationContext.SessionIdleMinutes (as if the caller
+// never populated it) must never accidentally satisfy a MinSessionIdleMinutes > 0 condition.
+func TestClassify_MinSessionIdleMinutes_FailsClosed_WhenContextIdleUnset(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	c.ReplaceRules([]Rule{
+		{
+			ToolName:              "Bash",
+			MinSessionIdleMinutes: 60,
+			Decision:              AutoAllow,
+			RiskLevel:             RiskLow,
+			RuleMeta:              RuleMeta{ID: "test-min-idle-unset", Name: "Require session idle", Priority: 100, Enabled: true, Source: "user"},
+		},
+	})
+
+	payload := PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "echo hi"}}
+	result := c.Classify(payload, ClassificationContext{})
+	if result.Decision != Escalate {
+		t.Errorf("expected Escalate (fail-closed) when ctx.SessionIdleMinutes is unset, got %v (rule=%s)", result.Decision, result.RuleID)
+	}
+}
+
+// TestRiskLevel_ValuesAreStableForPersistence guards RiskLevel's iota block against
+// reordering/insertion — the values are persisted as an int column
+// (ApprovalRule.risk_level, session/ent/schema/approvalrule.go) and depended on by the
+// string conversions in server/services (riskLevelString/parseRiskLevel). See the WARNING
+// comment on the RiskLevel type declaration (review-queue-severity, sdd:6-verify Layer 2
+// architecture finding). A future edit that reorders this block would pass every other test
+// in this package but silently corrupt already-persisted rule risk levels; this test exists
+// so that specific failure mode fails loudly here instead.
+func TestRiskLevel_ValuesAreStableForPersistence(t *testing.T) {
+	if RiskLow != 0 {
+		t.Errorf("RiskLow = %d, want 0", RiskLow)
+	}
+	if RiskMedium != 1 {
+		t.Errorf("RiskMedium = %d, want 1", RiskMedium)
+	}
+	if RiskHigh != 2 {
+		t.Errorf("RiskHigh = %d, want 2", RiskHigh)
+	}
+	if RiskCritical != 3 {
+		t.Errorf("RiskCritical = %d, want 3", RiskCritical)
 	}
 }

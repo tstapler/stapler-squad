@@ -5,6 +5,7 @@ import (
 )
 
 func TestAiderDetector_Name(t *testing.T) {
+	t.Parallel()
 	d := NewAiderDetector()
 	if d.Name() != "aider" {
 		t.Errorf("Name() = %q, want %q", d.Name(), "aider")
@@ -12,6 +13,7 @@ func TestAiderDetector_Name(t *testing.T) {
 }
 
 func TestAiderDetector_Patterns_should_havePermissionPattern(t *testing.T) {
+	t.Parallel()
 	d := NewAiderDetector()
 	p := d.Patterns()
 	if len(p.NeedsApproval) == 0 {
@@ -23,6 +25,7 @@ func TestAiderDetector_Patterns_should_havePermissionPattern(t *testing.T) {
 }
 
 func TestAiderDetector_FilterContent_should_returnUnchanged(t *testing.T) {
+	t.Parallel()
 	d := NewAiderDetector()
 	input := "aider output"
 	if got := d.FilterContent(input); got != input {

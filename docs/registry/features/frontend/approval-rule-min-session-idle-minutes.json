@@ -1,0 +1,19 @@
+{
+  "id": "approval-rule-min-session-idle-minutes",
+  "type": "frontend",
+  "name": "Minimum session idle minutes condition in the approval rule builder",
+  "component": "RuleBuilderForm",
+  "path": "web-app/src/components/rules/RuleBuilderForm.tsx",
+  "filePath": "web-app/src/components/rules/RuleBuilderForm.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "RuleBuilderForm minSessionIdleMinutes > RuleBuilderForm_should_ShowSavedValueOnReopen_When_EditingRuleAgain",
+    "RuleBuilderForm minSessionIdleMinutes > RuleBuilderForm_should_RequireOnlyOneFieldFill_When_AddingIdleMinutesCondition",
+    "RuleBuilderForm minSessionIdleMinutes > RuleBuilderForm_should_IncludeMinSessionIdleMinutesInSavePayload_When_UserEditsAndSaves",
+    "RuleBuilderForm minSessionIdleMinutes > RuleBuilderForm_should_RenderHelperTextWithZeroAndFailClosedContract_When_FieldRendered",
+    "RuleBuilderForm minSessionIdleMinutes > RuleBuilderForm_should_KeepModalOpenAndInputIntact_When_SaveRuleFails",
+    "RuleBuilderForm minSessionIdleMinutes > RuleBuilderForm_should_AssociateLabelsWithNativeInputs_When_Rendered"
+  ],
+  "lastModified": "2026-08-15T00:00:00Z"
+}

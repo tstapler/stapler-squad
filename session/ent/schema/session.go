@@ -45,6 +45,9 @@ func (Session) Fields() []ent.Field {
 			UpdateDefault(time.Now),
 		field.Bool("auto_yes").
 			Default(false),
+		field.Bool("auto_approve").
+			Default(false).
+			Comment("Independent of auto_yes: injects a per-agent CLI flag (--dangerously-skip-permissions for Claude, --yes-always for Aider) that skips permission prompts entirely. See auto_yes for the separate TapEnter/daemon keystroke mechanism."),
 		field.Bool("autonomous_mode").
 			Default(false).
 			Comment("Crew autonomy mode — when true, the Fixer injects correction prompts without user confirmation."),
@@ -62,6 +65,10 @@ func (Session) Fields() []ent.Field {
 			Optional(),
 		field.String("tmux_prefix").
 			Optional(),
+		field.String("backend").
+			Optional().
+			Default("").
+			Comment("Per-session ProcessManager backend pin (e.g. \"tymux\"); empty means no pin, falls through to the process-wide default."),
 		field.Time("last_terminal_update").
 			Optional().
 			Nillable(),
@@ -84,6 +91,10 @@ func (Session) Fields() []ent.Field {
 		field.String("initial_prompt").
 			Optional().
 			Comment("Prompt typed into the session terminal once the session reaches Ready state."),
+		field.Time("initial_prompt_sent_at").
+			Optional().
+			Nillable().
+			Comment("When InitialPrompt was actually typed into the terminal. Persisted so a service restart's fresh driver goroutine doesn't re-derive (and get wrong) whether it was already sent via fragile terminal-output/JSONL heuristics -- see outputShowsConversationStarted's doc comment."),
 		field.Bool("one_shot").
 			Default(false).
 			Comment("When true, runs claude in -p mode; session exits after task completes."),
@@ -102,9 +113,15 @@ func (Session) Fields() []ent.Field {
 		field.Bool("hidden").
 			Default(false).
 			Comment("When true, session is excluded from the default session list and review queue."),
+		field.Bool("pinned").
+			Default(false).
+			Comment("When true, session surfaces in the dedicated Pinned section. Cleared automatically on archive."),
 		field.String("pause_reason").
 			Optional().
 			Comment("Reason the session was paused: manual, auto:inactivity, auto:session_limit, auto:resource. Empty when never paused."),
+		field.String("exit_reason").
+			Optional().
+			Comment("Reason the session's pane crashed (status == Crashed), e.g. 'signal SIGKILL (exit code 137)'. Empty when the session has never crashed."),
 		field.String("workflow_id").
 			Optional().
 			Comment("UUID of the Workflow that spawned this session, if any."),
@@ -119,16 +136,48 @@ func (Session) Fields() []ent.Field {
 			Optional().
 			Default(0).
 			Comment("GitHub PR number discovered by PRStatusPoller or extracted from push output. 0 = not yet discovered."),
+		field.Bool("github_pr_status_terminal").
+			Optional().
+			Default(false).
+			Comment("True once PRStatusPoller observes the PR merged/closed; polling then stops. Persisted so SessionRetentionSweeper's PR-safety check survives a restart instead of resetting to false and blocking deletion forever (session-retention-cleanup)."),
 		field.String("github_owner").
 			Optional().
 			Comment("GitHub repository owner (user or org) associated with this session."),
 		field.String("github_repo").
 			Optional().
 			Comment("GitHub repository name associated with this session."),
+		field.String("github_host").
+			Optional().
+			Comment("GitHub Enterprise host owning github_owner/github_repo, or empty for github.com."),
 		field.String("session_artifacts").
 			Optional().
 			Default("").
 			Comment("JSON-encoded SessionArtifactsBlob: PRURLs, CommitSHAs, ExternalURLs, scan offset."),
+		field.Text("note").
+			Optional().
+			Default("").
+			MaxLen(10000).
+			Comment("User-authored free-form markdown note attached to this session. Capped at 10,000 bytes — see session.MaxNoteLength cross-reference in session/instance.go."),
+		field.Time("creation_progress_updated_at").
+			Optional().
+			Nillable().
+			Comment("Last time the async creation pipeline's progress message was updated (session.Instance.creationProgressUpdatedAt). Lets the Stale-Creation Sweeper (Epic 4.1) judge a Creating row's actual progress after a restart, not just its Creating-onset time."),
+		field.Uint64("creation_epoch").
+			Optional().
+			Default(0).
+			Comment("Fencing counter bumped exactly once per cancel/retry of the async creation pipeline (session.Instance.creationEpoch, Epic 1.2/ADR-002). UpdateInstanceIfEpoch conditions its UPDATE on this column so a stale background writer can never win a terminal status transition."),
+		field.String("failure_reason").
+			Optional().
+			Default("").
+			Comment("Human-readable reason the async creation pipeline failed (session.Instance.failureReason, Epic 1.2). Meaningful only when status == Failed."),
+		field.JSON("rule_tag_provenance", map[string]string{}).
+			Optional().
+			Default(map[string]string{}).
+			Comment("session.Instance.RuleTagProvenance: tag value -> the TaggingRule.ID (or the \"llm\" sentinel) that most recently applied it (ADR-002)."),
+		field.JSON("suppressed_rule_tags", []string{}).
+			Optional().
+			Default([]string{}).
+			Comment("session.Instance.SuppressedRuleTags, persisted as a []string set (converted to/from map[string]bool in Go): tags a user explicitly removed while they had rule provenance (ADR-002)."),
 	}
 }
 
@@ -168,6 +217,7 @@ func (Session) Edges() []ent.Edge {
 func (Session) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("title"),
+		index.Fields("uuid"),
 		index.Fields("status"),
 		index.Fields("category"),
 		index.Fields("last_meaningful_output"),

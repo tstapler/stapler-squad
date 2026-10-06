@@ -13,60 +13,70 @@ import (
 // --- isGitCommitOrPushCommand -------------------------------------------------
 
 func TestIsGitCommitOrPushCommand_should_MatchSimpleCommit(t *testing.T) {
+	t.Parallel()
 	if !isGitCommitOrPushCommand(`git commit -m "fix: something"`) {
 		t.Error("expected match on plain git commit")
 	}
 }
 
 func TestIsGitCommitOrPushCommand_should_MatchSimplePush(t *testing.T) {
+	t.Parallel()
 	if !isGitCommitOrPushCommand("git push origin backlog/my-branch") {
 		t.Error("expected match on plain git push")
 	}
 }
 
 func TestIsGitCommitOrPushCommand_should_MatchAmend(t *testing.T) {
+	t.Parallel()
 	if !isGitCommitOrPushCommand("git commit --amend --no-edit") {
 		t.Error("expected match on git commit --amend")
 	}
 }
 
 func TestIsGitCommitOrPushCommand_should_MatchWithGlobalDashCFlag(t *testing.T) {
+	t.Parallel()
 	if !isGitCommitOrPushCommand(`git -C /worktree commit -m "x"`) {
 		t.Error("expected match with -C <path> global flag")
 	}
 }
 
 func TestIsGitCommitOrPushCommand_should_MatchWithConfigFlag(t *testing.T) {
+	t.Parallel()
 	if !isGitCommitOrPushCommand(`git -c user.name=agent commit -m "x"`) {
 		t.Error("expected match with -c key=value global flag")
 	}
 }
 
 func TestIsGitCommitOrPushCommand_should_MatchSecondSegmentOfChain(t *testing.T) {
+	t.Parallel()
 	if !isGitCommitOrPushCommand(`git add -A && git commit -m "x" && git push`) {
 		t.Error("expected match on a chained command containing git commit")
 	}
 }
 
 func TestIsGitCommitOrPushCommand_should_MatchAfterSemicolon(t *testing.T) {
+	t.Parallel()
 	if !isGitCommitOrPushCommand(`git add -A; git commit -m "x"`) {
 		t.Error("expected match after a semicolon-separated segment")
 	}
 }
 
 func TestIsGitCommitOrPushCommand_should_NotMatchStatus(t *testing.T) {
+	t.Parallel()
 	if isGitCommitOrPushCommand("git status") {
 		t.Error("did not expect match on git status")
 	}
 }
 
 func TestIsGitCommitOrPushCommand_should_NotMatchDiff(t *testing.T) {
+	t.Parallel()
 	if isGitCommitOrPushCommand("git diff --stat") {
 		t.Error("did not expect match on git diff")
 	}
 }
 
 func TestIsGitCommitOrPushCommand_should_NotMatchLogWithCommitAsGrepValue(t *testing.T) {
+	t.Parallel()
 	// "commit" appears in the command line, but not as git's subcommand — it's an
 	// argument to --grep on the "log" subcommand. Must not false-positive.
 	if isGitCommitOrPushCommand(`git log --grep=commit`) {
@@ -75,12 +85,14 @@ func TestIsGitCommitOrPushCommand_should_NotMatchLogWithCommitAsGrepValue(t *tes
 }
 
 func TestIsGitCommitOrPushCommand_should_NotMatchUnrelatedCommand(t *testing.T) {
+	t.Parallel()
 	if isGitCommitOrPushCommand(`echo "remember to commit and push later"`) {
 		t.Error("did not expect match on a command that merely mentions commit/push in a string, not as git's own subcommand")
 	}
 }
 
 func TestIsGitCommitOrPushCommand_should_NotMatchEmptyString(t *testing.T) {
+	t.Parallel()
 	if isGitCommitOrPushCommand("") {
 		t.Error("did not expect match on empty command")
 	}
@@ -109,6 +121,7 @@ func postDriftHook(t *testing.T, h *HookReceiver, payload map[string]interface{}
 }
 
 func TestHandlePostToolUseDriftCheck_should_StaySilent_When_ToolIsNotBash(t *testing.T) {
+	t.Parallel()
 	h := newDriftTestReceiver()
 	h.SetDriftCheckFn(func(string, string) (int, error) {
 		t.Fatal("drift check must not run for a non-Bash tool call")
@@ -128,6 +141,7 @@ func TestHandlePostToolUseDriftCheck_should_StaySilent_When_ToolIsNotBash(t *tes
 }
 
 func TestHandlePostToolUseDriftCheck_should_StaySilent_When_BashCommandIsNotGitCommitOrPush(t *testing.T) {
+	t.Parallel()
 	h := newDriftTestReceiver()
 	h.SetDriftCheckFn(func(string, string) (int, error) {
 		t.Fatal("drift check must not run for an unrelated Bash command")
@@ -147,6 +161,7 @@ func TestHandlePostToolUseDriftCheck_should_StaySilent_When_BashCommandIsNotGitC
 }
 
 func TestHandlePostToolUseDriftCheck_should_StaySilent_When_UnderThreshold(t *testing.T) {
+	t.Parallel()
 	h := newDriftTestReceiver()
 	var called bool
 	h.SetDriftCheckFn(func(worktreePath, mainBranch string) (int, error) {
@@ -170,6 +185,7 @@ func TestHandlePostToolUseDriftCheck_should_StaySilent_When_UnderThreshold(t *te
 }
 
 func TestHandlePostToolUseDriftCheck_should_FailOpenSilently_When_DriftCheckErrors(t *testing.T) {
+	t.Parallel()
 	h := newDriftTestReceiver()
 	h.SetDriftCheckFn(func(string, string) (int, error) {
 		return 0, errors.New("fetch failed: network unreachable")
@@ -190,6 +206,7 @@ func TestHandlePostToolUseDriftCheck_should_FailOpenSilently_When_DriftCheckErro
 // --- HandlePostToolUseDriftCheck: actionable path ------------------------------
 
 func TestHandlePostToolUseDriftCheck_should_InjectAdditionalContext_When_OverThreshold(t *testing.T) {
+	t.Parallel()
 	h := newDriftTestReceiver()
 	var gotWorktree, gotBranch string
 	h.SetDriftCheckFn(func(worktreePath, mainBranch string) (int, error) {
@@ -228,6 +245,7 @@ func TestHandlePostToolUseDriftCheck_should_InjectAdditionalContext_When_OverThr
 }
 
 func TestHandlePostToolUseDriftCheck_should_RateLimitRepeatChecks_When_CalledWithinInterval(t *testing.T) {
+	t.Parallel()
 	h := NewHookReceiver()
 	h.SetDriftCheckMinInterval(time.Hour) // long interval: second call within test must be skipped
 	h.SetDriftThreshold(1)
@@ -258,6 +276,7 @@ func TestHandlePostToolUseDriftCheck_should_RateLimitRepeatChecks_When_CalledWit
 }
 
 func TestHandlePostToolUseDriftCheck_should_CheckIndependently_When_DifferentWorktrees(t *testing.T) {
+	t.Parallel()
 	h := NewHookReceiver()
 	h.SetDriftCheckMinInterval(time.Hour)
 	h.SetDriftThreshold(1)
