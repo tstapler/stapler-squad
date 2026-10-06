@@ -85,7 +85,9 @@ const backlogItemPublicIDBackfillLockTimeout = 5 * time.Second
 // "" as "skip locking" — there is no filesystem location to coordinate on,
 // and no plausible second OS process to race against in either case.
 func (r *EntRepository) backfillLockFilePath(name string) string {
-	if r.dbPath == "" || strings.HasPrefix(r.dbPath, "file:") {
+	// A bare ":memory:" DSN has no directory; filepath.Dir would resolve it to the
+	// process cwd and litter the working tree with a lock file.
+	if r.dbPath == "" || r.dbPath == ":memory:" || strings.HasPrefix(r.dbPath, "file:") {
 		return ""
 	}
 	return filepath.Join(filepath.Dir(r.dbPath), name)

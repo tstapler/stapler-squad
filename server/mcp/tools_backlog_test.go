@@ -1799,7 +1799,6 @@ func TestRequestReview_RejectsWhenSourceStatusNotAllowed(t *testing.T) {
 	statuses := []string{
 		string(session.BacklogStatusDone),
 		string(session.BacklogStatusIdea),
-		string(session.BacklogStatusReview),
 		string(session.BacklogStatusArchived),
 	}
 
@@ -7478,4 +7477,83 @@ func TestResumeWork_ResetsBlockedCycleCounter(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, string(session.BacklogStatusReady), fetched.Status,
 		"blocked-cycle count must reset on each resume, so this single post-resume block should not escalate to review")
+}
+
+func reviewEntryItem(entered time.Time) *session.BacklogItemData {
+	return &session.BacklogItemData{StatusEvents: []session.BacklogStatusEventData{
+		{ToStatus: string(session.BacklogStatusInProgress), CreatedAt: entered.Add(-time.Hour)},
+		{ToStatus: string(session.BacklogStatusReview), CreatedAt: entered},
+	}}
+}
+
+func TestIsStaleVerdict(t *testing.T) {
+	entered := time.Now()
+	item := reviewEntryItem(entered)
+	old := &session.ReviewVerdictSummary{OverallOutcome: "FAIL", CreatedAt: entered.Add(-time.Minute)}
+	fresh := &session.ReviewVerdictSummary{OverallOutcome: "PASS", CreatedAt: entered.Add(time.Minute)}
+	assert.True(t, isStaleVerdict(item, old))
+	assert.False(t, isStaleVerdict(item, fresh))
+	assert.False(t, isStaleVerdict(item, nil))
+	assert.False(t, isStaleVerdict(&session.BacklogItemData{}, old), "no review-entry event means nothing to be stale against")
+}
+
+func TestCanRecoverFromReview(t *testing.T) {
+	entered := time.Now()
+	item := reviewEntryItem(entered)
+	stale := &session.ReviewVerdictSummary{OverallOutcome: "PASS", CreatedAt: entered.Add(-time.Minute)}
+	freshFail := &session.ReviewVerdictSummary{OverallOutcome: "FAIL", CreatedAt: entered.Add(time.Minute)}
+	freshPass := &session.ReviewVerdictSummary{OverallOutcome: "PASS", CreatedAt: entered.Add(time.Minute)}
+	live := []session.ItemSessionSummary{{Role: session.SessionRoleReview}}
+
+	assert.True(t, canRecoverFromReview(item, nil, stale))
+	assert.True(t, canRecoverFromReview(item, nil, freshFail))
+	assert.True(t, canRecoverFromReview(item, nil, nil))
+	assert.False(t, canRecoverFromReview(item, nil, freshPass), "a fresh PASS awaits ship")
+	assert.False(t, canRecoverFromReview(item, live, stale), "a live reviewer blocks recovery")
+}
+
+func TestRequestReview_RecoversFromStuckReview(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "Stuck in review", Status: string(session.BacklogStatusReview)})
+	require.NoError(t, err)
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: session.SessionRoleWork})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	result, err := handler.requestReview(WithSessionUUID(ctx, sessionUUID), makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Re-requesting after a stale verdict.",
+	}))
+	require.NoError(t, err)
+	require.NotContains(t, result.Content[0].(mcpgo.TextContent).Text, "only allowed from")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReview), fetched.Status)
+	_, ok := latestReviewEntryTime(fetched)
+	require.True(t, ok)
+}
+
+func TestRequestReview_RejectsRecoveryWhileReviewerLive(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "Reviewer live", Status: string(session.BacklogStatusReview)})
+	require.NoError(t, err)
+	workUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: workUUID, SessionRole: session.SessionRoleWork})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: uuid.New().String(), SessionRole: session.SessionRoleReview})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	result, err := handler.requestReview(WithSessionUUID(ctx, workUUID), makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Should be refused.",
+	}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	require.Contains(t, m["error"].(map[string]interface{})["message"], "active review session")
 }
