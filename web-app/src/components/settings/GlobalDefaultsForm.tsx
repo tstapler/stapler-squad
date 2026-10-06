@@ -35,7 +35,7 @@ export function GlobalDefaultsForm() {
   const [tagInput, setTagInput] = useState("");
   const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([]);
   const [cliFlags, setCliFlags] = useState("");
-  const [maxAutoReworkIterations, setMaxAutoReworkIterations] = useState(3);
+  const [maxAutoReworkIterations, setMaxAutoReworkIterations] = useState(0); // set from the server-resolved default on load
   const [maxConcurrentBacklogWorkItems, setMaxConcurrentBacklogWorkItems] = useState(2);
   const [staleSessionThresholdMinutes, setStaleSessionThresholdMinutes] = useState(30);
   const [staleSessionNotifyEnabled, setStaleSessionNotifyEnabled] = useState(true);
@@ -59,7 +59,7 @@ export function GlobalDefaultsForm() {
         setNewProjectBaseDir(defaults.newProjectBaseDir);
         setTags([...defaults.tags]);
         setCliFlags(defaults.cliFlags);
-        setMaxAutoReworkIterations(defaults.maxAutoReworkIterations || 3);
+        setMaxAutoReworkIterations(defaults.maxAutoReworkIterations);
         setMaxConcurrentBacklogWorkItems(defaults.maxConcurrentBacklogWorkItems || 2);
         setStaleSessionThresholdMinutes(defaults.staleSessionThresholdMinutes || 30);
         setStaleSessionNotifyEnabled(defaults.staleSessionNotifyEnabled);

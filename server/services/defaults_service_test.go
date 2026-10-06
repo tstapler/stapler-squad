@@ -207,6 +207,18 @@ func TestGetSessionDefaults_ResolvesStaleSessionDefaults(t *testing.T) {
 	assert.True(t, resp.Msg.Defaults.StaleSessionNotifyEnabled)
 }
 
+// TestGetSessionDefaults_ServesRuntimeReworkCapDefault pins the settings form's
+// value to the cap the server enforces (single source of truth).
+func TestGetSessionDefaults_ServesRuntimeReworkCapDefault(t *testing.T) {
+	svc := newIsolatedDefaultsService(t)
+
+	resp, err := svc.GetSessionDefaults(context.Background(), connect.NewRequest(&sessionv1.GetSessionDefaultsRequest{}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Defaults)
+	assert.Equal(t, int32(config.DefaultMaxAutoReworkIterations), resp.Msg.Defaults.MaxAutoReworkIterations)
+	assert.Equal(t, config.DefaultMaxAutoReworkIterations, (*config.Config)(nil).MaxAutoReworkIterationsOrDefault())
+}
+
 // TestUpdateGlobalDefaults_ZeroStaleSessionThreshold_UsesServerDefault verifies the
 // "0 means use the server default" convention (matching max_auto_rework_iterations
 // and max_concurrent_backlog_work_items): sending 0 leaves the persisted config.json

@@ -1425,6 +1425,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogSvc.SetEventBus(eventBus)
 	backlogSvc.SetSessionStopper(sessionService)
 	backlogSvc.SetSessionSteerer(sessionService)
+	backlogSvc.StartVerdictSteering()
 	backlogSvc.SetAutonomousDriverStarter(sessionService)
 	if unfinishedScanner != nil {
 		backlogSvc.SetRepoWatchRemover(unfinishedScanner)
