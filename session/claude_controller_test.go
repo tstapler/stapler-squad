@@ -1176,7 +1176,11 @@ func TestClaudeController_StatusChangeListener_SuppressedOnNoChange(t *testing.T
 		callCount <- struct{}{}
 	})
 
-	go cc.runStatusChangeLoop(ctx, make(chan struct{}))
+	loopDone := make(chan struct{})
+	go func() {
+		defer close(loopDone)
+		cc.runStatusChangeLoop(ctx, make(chan struct{}))
+	}()
 
 	// Send two signals with the same preview content (same status both times).
 	cc.statusCheckCh <- struct{}{}
@@ -1194,20 +1198,17 @@ func TestClaudeController_StatusChangeListener_SuppressedOnNoChange(t *testing.T
 	// Wait for the goroutine to consume the second signal from the channel (without sleeping a
 	// fixed duration). Once the channel is empty the goroutine has processed the signal and
 	// decided — correctly — not to call the listener again.
-	deadline := time.After(2 * time.Second)
-	for len(cc.statusCheckCh) > 0 {
-		select {
-		case <-deadline:
-			// Timed out waiting for channel to drain — fall through to the assertion below.
-			goto checkResult
-		default:
-			time.Sleep(1 * time.Millisecond)
-		}
+	wait.RequireEventually(t, func() bool { return len(cc.statusCheckCh) == 0 }, 2*time.Second, time.Millisecond,
+		"status loop never consumed the second signal")
+	// The loop is a single goroutine, so once it has exited after cancel() the
+	// dequeued second signal is guaranteed to have been fully processed.
+	cancel()
+	select {
+	case <-loopDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("status loop did not exit after cancel")
 	}
-	// Give the goroutine a brief window (10ms) to potentially call the listener after draining.
-	time.Sleep(10 * time.Millisecond)
 
-checkResult:
 	select {
 	case <-callCount:
 		t.Error("StatusChangeListener fired a second time for the same status")

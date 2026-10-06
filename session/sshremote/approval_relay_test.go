@@ -23,6 +23,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/tmux"
 	testutil "github.com/tstapler/stapler-squad/testutil/socket"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // streamLocalOpenMsg mirrors golang.org/x/crypto/ssh's unexported
@@ -195,9 +196,20 @@ type approvalExchangeResult struct {
 
 func writeApprovalAndReadResponse(t *testing.T, socketPath string, payload relayedApprovalPayload) <-chan approvalExchangeResult {
 	t.Helper()
-	ln, err := net.Listen("unix", socketPath)
+	ch, _, err := listenApprovalExchange(socketPath, payload)
 	if err != nil {
 		t.Fatalf("listen unix %s: %v", socketPath, err)
+	}
+	return ch
+}
+
+// listenApprovalExchange is the non-fatal core of writeApprovalAndReadResponse;
+// the returned cancel closes the listener so a retrying caller can re-bind the
+// same path (safe to call after the exchange completed).
+func listenApprovalExchange(socketPath string, payload relayedApprovalPayload) (<-chan approvalExchangeResult, func(), error) {
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return nil, nil, err
 	}
 	resultCh := make(chan approvalExchangeResult, 1)
 	go func() {
@@ -223,7 +235,7 @@ func writeApprovalAndReadResponse(t *testing.T, socketPath string, payload relay
 		resp, err := io.ReadAll(conn)
 		resultCh <- approvalExchangeResult{response: resp, err: err}
 	}()
-	return resultCh
+	return resultCh, func() { _ = ln.Close() }, nil
 }
 
 func newTestPool(t *testing.T) *tmux.SSHClientPool {
@@ -483,8 +495,9 @@ func TestRemoteApprovalRelay_RejectsExpiredBearerToken(t *testing.T) {
 	relay.Start(ctx)
 	defer relay.Stop()
 
-	token, _ := relay.BearerToken()
-	time.Sleep(50 * time.Millisecond) // let the short TTL elapse
+	token, expiresAt := relay.BearerToken()
+	wait.RequireEventually(t, func() bool { return time.Now().After(expiresAt) }, 5*time.Second, 5*time.Millisecond,
+		"short bearer-token TTL never elapsed")
 
 	socketPath := RemoteApprovalSocketPath(basePath, "session-key")
 	payload := relayedApprovalPayload{Token: token, Request: json.RawMessage(`{"tool_name":"Bash"}`)}
@@ -618,13 +631,10 @@ func TestRemoteApprovalRelay_ReopensChannelAfterReconnect(t *testing.T) {
 
 	// Simulate the connection dropping.
 	_ = client1.Close()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, ok := pool.Peek(target.Name); !ok {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	wait.RequireEventually(t, func() bool {
+		_, ok := pool.Peek(target.Name)
+		return !ok
+	}, 5*time.Second, 5*time.Millisecond, "pool entry was not evicted after the connection died")
 	if _, ok := pool.Peek(target.Name); ok {
 		t.Fatal("pool entry was not evicted after the connection died")
 	}
@@ -649,11 +659,16 @@ func TestRemoteApprovalRelay_ReopensChannelAfterReconnect(t *testing.T) {
 				return
 			default:
 			}
-			resultCh := writeApprovalAndReadResponse(t, socketPath, relayedApprovalPayload{Token: token, Request: json.RawMessage(`{"tool_name":"in-flight"}`)})
+			resultCh, cancel, err := listenApprovalExchange(socketPath, relayedApprovalPayload{Token: token, Request: json.RawMessage(`{"tool_name":"in-flight"}`)})
+			if err != nil {
+				time.Sleep(50 * time.Millisecond)
+				continue
+			}
 			select {
 			case <-resultCh:
 				return
 			case <-time.After(500 * time.Millisecond):
+				cancel()
 			}
 		}
 	}()

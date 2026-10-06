@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -287,11 +288,16 @@ type ReviewTrigger interface {
 type backlogHandlers struct {
 	storage       *session.Storage
 	store         session.InstanceStore
-	eventBus      *events.EventBus              // optional; nil means notifications are disabled
-	reviewStopper ReviewCompletionSignaler      // optional; nil means no driver stop on review verdict
-	enabledCheck  func() bool                   // optional; nil means always-enabled (tests)
-	reviewTrigger ReviewTrigger                 // optional; nil means review gate waits for the next reconcile tick
-	liveCheck     func(sessionUUID string) bool // optional; nil means treat every EndedAt==nil ItemSession row as live (today's behavior); backs link_session_to_item's exclusivity check
+	eventBus      *events.EventBus         // optional; nil means notifications are disabled
+	reviewStopper ReviewCompletionSignaler // optional; nil means no driver stop on review verdict
+	enabledCheck  func() bool              // optional; nil means always-enabled (tests)
+	reviewTrigger ReviewTrigger            // optional; nil means review gate waits for the next reconcile tick
+	// waitTimeouts counts consecutive wait_for_backlog_event timeouts per
+	// session+item so a session that keeps re-waiting is parked; see waitCapKey.
+	waitMu       sync.Mutex
+	waitTimeouts map[string]int
+
+	liveCheck func(sessionUUID string) bool // optional; nil means treat every EndedAt==nil ItemSession row as live (today's behavior); backs link_session_to_item's exclusivity check
 
 	// backlogSvc backs createBacklogItem/importGitHubIssue's post-create auto-triage
 	// trigger (BUG-061; see BacklogService.MaybeTriggerTriage) and link_session_to_item's
@@ -501,7 +507,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("1. Work through each AC criterion\n")
 		sb.WriteString("2. After completing each criterion, call report_progress with criteria_index + status=pass\n")
 		sb.WriteString("3. When all criteria are done, call request_review with a summary of what you built\n")
-		fmt.Fprintf(&sb, "4. Do NOT end your session after request_review. Call wait_for_backlog_event(item_id, event_type=\"verdict_recorded\") instead of polling — it blocks until the verdict lands (or times out) and returns the outcome directly, or returns immediately if a verdict is already recorded. PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution) — shipping the PR is part of this task, do not stop here. FAIL/PARTIAL → fix the noted gaps yourself in this same session and call request_review again — its response tells you which attempt number you're on out of %d cycles allowed in this session; once you've hit that cap, run /backlog/ship anyway to hand the PR to a human instead of retrying indefinitely.\n", session.MaxSameSessionReviewAttempts)
+		fmt.Fprintf(&sb, "4. After request_review, end your turn and stay idle (do not exit). Do NOT poll, and do NOT use ScheduleWakeup or /loop to wait — every wake re-reads your whole context; the app sends you a message with the verdict as soon as it is recorded. PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution) — shipping the PR is part of this task, do not stop here. FAIL/PARTIAL → fix the noted gaps yourself in this same session and call request_review again — its response tells you which attempt number you're on out of %d cycles allowed in this session; once you've hit that cap, run /backlog/ship anyway to hand the PR to a human instead of retrying indefinitely.\n", session.MaxSameSessionReviewAttempts)
 		sb.WriteString("5. If you create the PR yourself (via /backlog/ship or a manual `gh pr create`) rather than letting the system create one for you, you MUST call report_pr_created with item_id, pr_url, pr_number, and a summary as the final step — otherwise the item never shows the PR and stays invisible to the reviewer/operator. If the PR's head branch differs from your tracked branch (e.g. you had to open it from a clean fallback branch), pass override_reason explaining why — do not just retry report_pr_created unchanged. This only works for a PR you opened yourself.\n")
 	case "review":
 		sb.WriteString("## Your Role: Review\n")
@@ -762,11 +768,88 @@ func withTestAfterWaitSubscribeHook(ctx context.Context, hook func()) context.Co
 	return context.WithValue(ctx, testAfterWaitSubscribeHookKey{}, hook)
 }
 
+// maxWaitTimeoutsPerSession caps consecutive wait_for_backlog_event timeouts
+// for one session+item: each re-wait is another turn that re-reads the full
+// context, so past this the session is told to stop and wait for the app's
+// steer instead.
+const maxWaitTimeoutsPerSession = 3
+
+// maxWaitCapEntries bounds the in-memory counter map; hitting it only forgives
+// old counts, which is harmless.
+const maxWaitCapEntries = 4096
+
+func waitCapKey(ctx context.Context, itemID string) string {
+	sessionUUID, _ := sessionUUIDFromContext(ctx)
+	return sessionUUID + "|" + itemID
+}
+
+func (h *backlogHandlers) waitCapReached(ctx context.Context, itemID string) bool {
+	h.waitMu.Lock()
+	defer h.waitMu.Unlock()
+	return h.waitTimeouts[waitCapKey(ctx, itemID)] >= maxWaitTimeoutsPerSession
+}
+
+func (h *backlogHandlers) resetWaitTimeouts(ctx context.Context, itemID string) {
+	h.waitMu.Lock()
+	defer h.waitMu.Unlock()
+	delete(h.waitTimeouts, waitCapKey(ctx, itemID))
+}
+
+// waitTimeoutResult records a timeout and, on the one that reaches the cap,
+// raises an operator notification so the parked session is visible.
+func (h *backlogHandlers) waitTimeoutResult(ctx context.Context, itemID, eventTypeFilter string, timeoutSecs int) WaitForBacklogEventResult {
+	h.waitMu.Lock()
+	if h.waitTimeouts == nil || len(h.waitTimeouts) >= maxWaitCapEntries {
+		h.waitTimeouts = make(map[string]int)
+	}
+	key := waitCapKey(ctx, itemID)
+	h.waitTimeouts[key]++
+	n := h.waitTimeouts[key]
+	h.waitMu.Unlock()
+	if n >= maxWaitTimeoutsPerSession {
+		h.notifyWaitCapReached(ctx, itemID)
+		return h.waitCapResult(itemID)
+	}
+	return WaitForBacklogEventResult{
+		MCPResult: MCPResult{Success: true, Error: &MCPError{
+			Code:    "WAIT_TIMEOUT",
+			Message: fmt.Sprintf("no new %s event on item %s within %d seconds — end your turn and stay idle; the app messages this session when the event arrives. Do not poll, and do not use ScheduleWakeup or /loop to wait", eventTypeFilter, itemID, timeoutSecs),
+		}},
+		EventReceived: false,
+		ItemID:        itemID,
+	}
+}
+
+func (h *backlogHandlers) waitCapResult(itemID string) WaitForBacklogEventResult {
+	return WaitForBacklogEventResult{
+		MCPResult: MCPResult{Success: true, Error: &MCPError{
+			Code:    "WAIT_CAP_REACHED",
+			Message: fmt.Sprintf("this session has waited on item %s %d times without an event; further waits are refused — end your turn and stay idle, the app messages this session when the verdict lands. Do not poll, and do not use ScheduleWakeup or /loop", itemID, maxWaitTimeoutsPerSession),
+		}},
+		EventReceived: false,
+		ItemID:        itemID,
+	}
+}
+
+func (h *backlogHandlers) notifyWaitCapReached(ctx context.Context, itemID string) {
+	if h.eventBus == nil {
+		return
+	}
+	sessionUUID, _ := sessionUUIDFromContext(ctx)
+	h.eventBus.Publish(events.NewNotificationEvent(
+		sessionUUID, "", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
+		"Session parked after repeated waits",
+		fmt.Sprintf("Session %s waited %d times on backlog item %s with no event and was told to stop polling; it resumes when the app steers it with the verdict.", sessionUUID, maxWaitTimeoutsPerSession, itemID),
+		map[string]string{"item_id": itemID},
+	))
+}
+
 // waitForBacklogEvent blocks until a matching backlog item event fires (or
 // the current state already satisfies eventTypeFilter, or timeout_seconds
-// elapses). Replaces the ScheduleWakeup + get_backlog_item polling loop
-// sessions previously had to use to wait on a review verdict or status
-// change — see docs/registry N/A, project_plans/backlog-event-subscribe.
+// elapses). Short, bounded wait; post-request_review sessions should end their
+// turn and be steered by the app instead (BacklogService.StartVerdictSteering).
 func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	if r := featureDisabledResult(h.enabledCheck); r != nil {
 		return r, nil
@@ -820,20 +903,18 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 		verdict = nil
 	}
 	if res := currentStateWaitResult(item, verdict, eventTypeFilter); res != nil {
+		h.resetWaitTimeouts(ctx, itemID)
 		return okResult(*res), nil
+	}
+	// After the current-state check so a capped session still sees a verdict that already exists.
+	if h.waitCapReached(ctx, itemID) {
+		return okResult(h.waitCapResult(itemID)), nil
 	}
 
 	for {
 		select {
 		case <-waitCtx.Done():
-			return okResult(WaitForBacklogEventResult{
-				MCPResult: MCPResult{Success: true, Error: &MCPError{
-					Code:    "WAIT_TIMEOUT",
-					Message: fmt.Sprintf("no new %s event on item %s within %d seconds — call ScheduleWakeup for a longer interval before checking again, or call wait_for_backlog_event again only if you intend to keep this session blocked", eventTypeFilter, itemID, timeoutSecs),
-				}},
-				EventReceived: false,
-				ItemID:        itemID,
-			}), nil
+			return okResult(h.waitTimeoutResult(ctx, itemID, eventTypeFilter, timeoutSecs)), nil
 		case evt, ok := <-eventCh:
 			if !ok {
 				return okResult(WaitForBacklogEventResult{
@@ -865,6 +946,7 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 			if eventTypeFilter != eventTypeAny && kind != eventTypeFilter {
 				continue
 			}
+			h.resetWaitTimeouts(ctx, itemID)
 			return okResult(buildMatchedWaitResult(itemID, payload)), nil
 		}
 	}
@@ -1236,6 +1318,8 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	if err := validateUUID(itemID); err != nil {
 		return errResult(ErrInvalidArgument, err.Error(), ""), nil
 	}
+	// A new review cycle starts a fresh wait budget.
+	h.resetWaitTimeouts(ctx, itemID)
 
 	message, ok := args["message"].(string)
 	if !ok || message == "" {
@@ -3014,7 +3098,7 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 
 	s.AddTool(
 		mcpgo.NewTool("wait_for_backlog_event",
-			mcpgo.WithDescription("Block until a backlog item changes (e.g. a review verdict lands), or until timeout. Returns the event directly — status, verdict outcome/summary, or archival/removal reason — so a follow-up get_backlog_item call is usually unnecessary. If the awaited condition (e.g. a verdict) is already true when this is called, returns immediately with from_current_state=true instead of waiting out the full timeout. On timeout, returns event_received=false with a message naming the next move (a longer ScheduleWakeup interval, or one more bounded wait) — this is an expected outcome, not an error. Use this instead of a ScheduleWakeup + get_backlog_item polling loop when waiting on a specific item's outcome, e.g. after request_review."),
+			mcpgo.WithDescription("Block until a backlog item changes (e.g. a review verdict lands), or until timeout. Returns the event directly — status, verdict outcome/summary, or archival/removal reason — so a follow-up get_backlog_item call is usually unnecessary. If the awaited condition (e.g. a verdict) is already true when this is called, returns immediately with from_current_state=true instead of waiting out the full timeout. On timeout, returns event_received=false telling the session to end its turn; after repeated timeouts for the same session+item further waits are refused (WAIT_CAP_REACHED). Not for waiting on a review verdict after request_review: end your turn instead and the app steers the session with the verdict. Never pair with ScheduleWakeup or /loop."),
 			mcpgo.WithString("item_id",
 				mcpgo.Description("UUID of the backlog item"),
 				mcpgo.Required(),

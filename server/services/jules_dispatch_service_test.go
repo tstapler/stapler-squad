@@ -83,7 +83,7 @@ func (f *fakeJulesSessionCreator) CreateSession(_ context.Context, _ jules.Creat
 		f.beforeCreate()
 	}
 	if f.delay > 0 {
-		time.Sleep(f.delay)
+		time.Sleep(f.delay) //nolint:notimesleeptest simulates a slow Jules API call whose wall-clock duration is under test
 	}
 	if f.err != nil {
 		return nil, f.err

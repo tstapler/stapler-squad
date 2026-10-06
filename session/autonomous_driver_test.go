@@ -852,7 +852,7 @@ func TestAutonomousDriver_PanicRecovery(t *testing.T) {
 }
 
 func TestAutonomousDriver_Stop_CancelsLoop(t *testing.T) {
-	pool := &fakeHeadlessPool{}
+	pool := &fakeHeadlessPool{firstCallCh: make(chan struct{})}
 
 	inst := &Instance{Title: "test-stop", UUID: "abcdefgh-stop0"}
 	cc, _ := NewClaudeController(inst)
@@ -877,7 +877,11 @@ func TestAutonomousDriver_Stop_CancelsLoop(t *testing.T) {
 		t.Fatalf("Start() failed: %v", err)
 	}
 
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-pool.firstCallCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("driver never reached its first LLM call")
+	}
 	driver.Stop()
 
 	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -948,9 +952,17 @@ func TestAutonomousDriver_Stop_CancelsLoop_DuringNudgeSuppression(t *testing.T) 
 // cancelled, letting a test hold the driver's run() goroutine open for as
 // long as it wants — used to prove Wait() actually blocks on goroutine exit
 // rather than returning as soon as it's called.
-type blockingPool struct{}
+type blockingPool struct {
+	// entered, if non-nil, is closed on the first CallBlocking — a readiness
+	// signal for "the driver is now parked inside its first LLM call".
+	entered     chan struct{}
+	enteredOnce sync.Once
+}
 
 func (p *blockingPool) CallBlocking(ctx context.Context, _ headless.FeatureKey, _, _ string, _ headless.CallOptions, _ headless.CostSink) (string, error) {
+	if p.entered != nil {
+		p.enteredOnce.Do(func() { close(p.entered) })
+	}
 	<-ctx.Done()
 	return "", ctx.Err()
 }
@@ -960,7 +972,7 @@ func (p *blockingPool) CallBlocking(ctx context.Context, _ headless.FeatureKey, 
 // must not report the driver stopped until well after Stop() is called, and
 // only once run() has actually finished.
 func TestAutonomousDriver_Wait_BlocksUntilRunExits(t *testing.T) {
-	pool := &blockingPool{}
+	pool := &blockingPool{entered: make(chan struct{})}
 
 	inst := &Instance{Title: "test-wait-blocks", UUID: "abcdefgh-wait0"}
 	cc, _ := NewClaudeController(inst)
@@ -989,7 +1001,11 @@ func TestAutonomousDriver_Wait_BlocksUntilRunExits(t *testing.T) {
 	// run() goroutine actually exits — record how long it took and confirm
 	// Wait() didn't return instantly (which would indicate it isn't really
 	// synchronizing on goroutine exit).
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-pool.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("driver never reached its first LLM call")
+	}
 	stopStart := time.Now()
 	driver.Stop()
 
@@ -1238,11 +1254,8 @@ func TestWaitForIdle_should_requireSustainedIdle_When_SettleWindowIsSet(t *testi
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	go func() {
-		time.Sleep(settleWindow / 2)
-		// Now go genuinely idle and stay there.
-		statusCh <- detection.StatusIdle
-	}()
+	// Now go genuinely idle and stay there.
+	statusCh <- detection.StatusIdle
 
 	start := time.Now()
 	ok := waitForIdle(ctx, statusCh, cc, settleWindow, testIdleSettlePollInterval)

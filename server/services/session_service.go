@@ -265,6 +265,9 @@ type SessionService struct {
 	// headlessPool is the shared LLM pool for non-interactive AI calls (RunOneShot, etc.).
 	// May be nil when the claude binary is not found at startup.
 	headlessPool *headless.Pool
+	// headlessClient routes RunOneShot's custom-prompt calls through the backend
+	// selector; nil falls back to headlessPool.
+	headlessClient headless.PoolClient
 
 	// autonomousSvc manages the lifecycle of AutonomousDriver instances.
 	autonomousSvc *AutonomousOrchestrationService
@@ -779,7 +782,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 			log.Info("[SessionService] AI rule generation unavailable: set ANTHROPIC_API_KEY or install claude/gemini/opencode CLI")
 		}
 	}
-	rulesSvc := NewRulesService(rulesStore, nil, analyticsStore, classifierObj, promptBuilder, aiClientImpl)
+	rulesSvc := NewRulesService(rulesStore, nil, analyticsStore, classifierObj, promptBuilder, WrapRulesAIClient(aiClientImpl))
 
 	// Wire the claude-settings file watcher: fsnotify-driven or manually-triggered
 	// (ReloadClaudeSettingsRules RPC) reloads both flow through this one callback, which

@@ -101,7 +101,7 @@ func newRulesService(t *testing.T) *RulesService {
 	require.NoError(t, err)
 	analyticsStore := NewAnalyticsStore(storage)
 	c := classifier.NewRuleBasedClassifier()
-	return NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil)
+	return withoutAntigravityExport(NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil))
 }
 
 // ─── ListPendingApprovals ────────────────────────────────────────────────────
@@ -394,7 +394,7 @@ func TestGetApprovalAnalytics_IncludesEscalationReasonCounts(t *testing.T) {
 	analyticsStore.Start(context.Background())
 	t.Cleanup(analyticsStore.Stop)
 	c := classifier.NewRuleBasedClassifier()
-	svc := NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil)
+	svc := withoutAntigravityExport(NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil))
 
 	entries := []AnalyticsEntry{
 		{SessionID: "s1", ToolName: "Bash", Decision: "escalate", RiskLevel: "medium", RuleID: "", CommandPreview: "totally-unmatched-cmd-xyz123"},

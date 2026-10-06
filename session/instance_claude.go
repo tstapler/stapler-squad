@@ -6,12 +6,14 @@ package session
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/headless"
 )
 
 // claudeExtension holds Claude Code conversation-resume session state.
@@ -504,6 +506,13 @@ func (i *Instance) RunWithResume(ctx context.Context, message string) (string, e
 
 	cmd := safeexec.CommandContext(ctx, claudePath, "-p", "--resume", uuid, "--output-format", "json", message)
 	cmd.Dir = i.GetEffectiveRootDir()
+	// Resume is a claude-CLI conversation; the selector may only keep it on a
+	// backend that declares Resume (claude, or consolette via ANTHROPIC_BASE_URL).
+	if env, err := headless.ResumeEnv(headless.FeatureKeyInstanceResume); err != nil {
+		return "", err
+	} else if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 
 	out, runErr := cmd.Output()
 	output := string(out)

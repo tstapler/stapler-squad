@@ -653,7 +653,7 @@ func TestDequeueNextQueuedItems_SpawnsOldestQueuedItemFirst(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resp.Msg.Queued)
 
-	time.Sleep(5 * time.Millisecond)
+	waitClockPast(t, time.Now(), 5*time.Millisecond)
 
 	newerID := createReadyItemForSpawn(t, svc, repoPath, "newer queued")
 	resp, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: newerID}))
@@ -999,7 +999,7 @@ func TestDequeueNextQueuedItems_should_SpawnHigherPriorityReadyItemFirst_When_On
 	// pure FIFO/creation-order dequeue would pick the P5 one; priority order must
 	// pick the P1 one instead.
 	p5ID := createReadyItemWithPriority(t, svc, repoPath, "low priority", 5)
-	time.Sleep(5 * time.Millisecond)
+	waitClockPast(t, time.Now(), 5*time.Millisecond)
 	p1ID := createReadyItemWithPriority(t, svc, repoPath, "high priority", 1)
 
 	sessions, err := storage.ListItemSessions(t.Context(), inProgressIDs[0])

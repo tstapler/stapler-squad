@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"go.uber.org/goleak"
+
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // TestStartZombieReaper_GoroutineFullyExits_When_WaitGroupIsJoined proves
@@ -51,14 +53,10 @@ func TestStartZombieReaper_GoroutineFullyExits_When_WaitGroupIsJoined(t *testing
 
 	// Allow the runtime a brief window to reclaim the exited goroutine's stack
 	// bookkeeping before sampling NumGoroutine again.
-	deadline := time.Now().Add(2 * time.Second)
-	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+	wait.RequireEventually(t, func() bool {
 		runtime.Gosched()
-		time.Sleep(time.Millisecond)
-	}
-	if got := runtime.NumGoroutine(); got > before {
-		t.Fatalf("goroutine count did not return to baseline after wg join (before=%d after=%d) — goroutine did not fully exit", before, got)
-	}
+		return runtime.NumGoroutine() <= before
+	}, 2*time.Second, time.Millisecond, "goroutine count did not return to baseline after wg join (before=%d) — goroutine did not fully exit", before)
 }
 
 // TestReapZombieChildren_ReturnsZero_When_NoZombieChildrenExist documents
@@ -93,7 +91,7 @@ func TestStartZombieReaper_JoinsOnCtxCancel(t *testing.T) {
 		var wg sync.WaitGroup
 		StartZombieReaper(ctx, time.Millisecond, func(string, ...any) {}, &wg)
 
-		time.Sleep(20 * time.Millisecond) // let several ticks fire
+		time.Sleep(20 * time.Millisecond) //nolint:notimesleeptest synctest bubble: fake clock advances instantly, no wall time; lets several ticks fire
 		cancel()
 
 		// wg.Wait() durably blocks until the reaper goroutine exits; synctest's

@@ -60,6 +60,14 @@ describe("GlobalDefaultsForm", () => {
     expect(input).toHaveValue(2);
   });
 
+  it("shows the server-resolved Max Auto-Rework Iterations default, not a client constant", async () => {
+    mockGetSessionDefaults.mockResolvedValue({
+      defaults: { ...sampleDefaults, maxAutoReworkIterations: 5 },
+    });
+    render(<GlobalDefaultsForm />);
+    expect(await screen.findByLabelText("Max Auto-Rework Iterations")).toHaveValue(5);
+  });
+
   it("submits the loaded maxConcurrentBacklogWorkItems value unchanged", async () => {
     render(<GlobalDefaultsForm />);
     await screen.findByLabelText("Max Concurrent Backlog Work Items");

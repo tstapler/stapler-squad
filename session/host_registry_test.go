@@ -13,6 +13,7 @@ import (
 	"time"
 
 	ssqlog "github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // fakeClock is a controllable Clock for deterministic TTL/prune tests --
@@ -551,13 +552,8 @@ func TestPruneTickerLoop_should_ContinueRunning_When_PruneReturnsError(t *testin
 	ticks <- clock.Now() // fails
 	// The send returns on receipt, not on Prune finishing; wait for the failure log
 	// before restoring the dir or the first Prune could succeed.
-	deadline := time.Now().Add(5 * time.Second)
-	for !strings.Contains(buf.String(), "host_registry.prune_failed") {
-		if time.Now().After(deadline) {
-			t.Fatalf("first Prune never logged host_registry.prune_failed, got: %s", buf.String())
-		}
-		time.Sleep(time.Millisecond)
-	}
+	wait.RequireEventually(t, func() bool { return strings.Contains(buf.String(), "host_registry.prune_failed") },
+		5*time.Second, time.Millisecond, "first Prune never logged host_registry.prune_failed")
 	if err := os.MkdirAll(stateDir, 0750); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}

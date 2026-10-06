@@ -350,6 +350,8 @@ func (m *mockSessionSteerer) SessionProgram(uuid string) (string, bool) {
 // IsReadyForSteer implements SessionSteerer. Defaults to true (ready) unless
 // uuid is explicitly marked in notReady — see that field's doc comment.
 func (m *mockSessionSteerer) IsReadyForSteer(uuid string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return !m.notReady[uuid]
 }
 

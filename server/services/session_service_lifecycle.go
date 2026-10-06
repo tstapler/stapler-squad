@@ -765,7 +765,11 @@ func (s *SessionService) RunOneShot(
 			sink = session.CostSinkForSessionUUID(concreteStorage, inst.UUID)
 		}
 		var callErr error
-		outputStr, callErr = s.headlessPool.CallBlocking(runCtx, headless.FeatureKeyCustom, "", req.Msg.Prompt, headless.CallOptions{WorkDir: workDir}, sink)
+		var oneShot headless.PoolClient = s.headlessPool
+		if s.headlessClient != nil {
+			oneShot = s.headlessClient
+		}
+		outputStr, callErr = oneShot.CallBlocking(runCtx, headless.FeatureKeyCustom, "", req.Msg.Prompt, headless.CallOptions{WorkDir: workDir}, sink)
 		if callErr != nil {
 			errMsg = callErr.Error()
 			exitCode = 1
