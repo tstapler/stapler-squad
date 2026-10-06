@@ -52,9 +52,9 @@ var MaxRemediationAttempts = int32(len(remediationBackoffSchedule))
 
 // remediationColdRetryInterval is the heartbeat period for a "parked" row
 // (remediation_attempts >= MaxRemediationAttempts): once parked, the row is
-// retried again every remediationColdRetryInterval, indefinitely, without
-// ever needing an operator to call ResetStuckRemediation/
-// BulkResetStuckRemediation — see evaluateRemediation's
+// retried again every remediationColdRetryInterval, a bounded number of times, without
+// needing an operator call to ResetStuckRemediation/
+// BulkResetStuckRemediation, up to MaxRemediationColdRetries times — see evaluateRemediation's
 // remediationGrantedColdRetry case and RemediationDue's handling of it.
 //
 // Root cause this closes (BUG-083, docs/bugs/fixed/BUG-083-...): a park was
@@ -83,6 +83,15 @@ var MaxRemediationAttempts = int32(len(remediationBackoffSchedule))
 // deliberately unconfigurable constant rather than a new knob, matching
 // remediationBackoffSchedule's own un-configurable style.
 const remediationColdRetryInterval = 7 * 24 * time.Hour
+
+// MaxRemediationColdRetries bounds the cold-retry heartbeat: a parked row gets
+// this many extra automatic attempts (attempts counts past the cap), then stays
+// parked until an operator resets it, so one broken item cannot respawn forever.
+const MaxRemediationColdRetries = 2
+
+// remediationAttemptCeiling is the attempt count at which a row is permanently
+// parked (fast schedule plus bounded cold retries).
+func remediationAttemptCeiling() int32 { return MaxRemediationAttempts + MaxRemediationColdRetries }
 
 // serverStartTime approximates this process's boot time, for the
 // restart-grace check in evaluateRemediation. Evaluated at package init,
@@ -128,11 +137,11 @@ const (
 	// remediationGrantedColdRetry: remediation_attempts is already at the
 	// cap (parked), AND next_remediation_at (repurposed, while parked, as the
 	// cold-retry deadline — see RemediationDue) is due. The caller should
-	// invoke its remediation action; the resulting write pins
-	// remediation_attempts at the cap (does not increment further) and pushes
+	// invoke its remediation action; the resulting write increments
+	// remediation_attempts past the cap and pushes
 	// next_remediation_at another remediationColdRetryInterval into the
-	// future, so this repeats indefinitely — a slow heartbeat, not a one-shot
-	// reprieve — until the row resolves or an operator explicitly resets it.
+	// future, repeating until the row resolves, an operator resets it, or
+	// MaxRemediationColdRetries is spent.
 	remediationGrantedColdRetry
 )
 
@@ -157,6 +166,9 @@ func evaluateRemediation(row OpenStuckStateData, now, bootTime time.Time) remedi
 		// this field always being set on the parking attempt (see
 		// RemediationDue) — treat that as "not yet due" rather than panicking
 		// or treating a missing deadline as "always due."
+		if row.RemediationAttempts >= remediationAttemptCeiling() {
+			return remediationSkippedParked
+		}
 		if row.NextRemediationAt != nil && !now.Before(*row.NextRemediationAt) {
 			return remediationGrantedColdRetry
 		}
@@ -281,20 +293,12 @@ func (s *Storage) RemediationDue(ctx context.Context, itemID string, reason doma
 		}
 		return true, false, nil
 	case remediationGrantedColdRetry:
-		// Already parked (remediation_attempts == MaxRemediationAttempts) and
-		// the cold-retry heartbeat is due (BUG-083). Grant exactly one more
-		// attempt WITHOUT incrementing remediation_attempts past the cap —
-		// staying pinned at the cap is what keeps this row eligible for the
-		// next cold retry too (a normal increment would just re-park it
-		// identically, so there is nothing to gain by moving the counter),
-		// and push next_remediation_at another remediationColdRetryInterval
-		// out so the heartbeat repeats indefinitely rather than firing once.
-		// justParked is deliberately false here: this is not a fresh park
-		// event, so the caller must not re-send the one-time "auto-
-		// remediation exhausted" notification for a row that already got it
-		// the first time it parked.
+		// Parked and the cold-retry deadline is due (BUG-083). Count it past the
+		// cap so MaxRemediationColdRetries bounds the heartbeat, and push the
+		// deadline out another interval. justParked stays false: the caller must
+		// not re-send the one-time "exhausted" notification.
 		coldAt := now.Add(remediationColdRetryInterval)
-		if _, recErr := s.RecordRemediationAttempt(ctx, itemID, reason, row.RemediationAttempts, &coldAt); recErr != nil {
+		if _, recErr := s.RecordRemediationAttempt(ctx, itemID, reason, row.RemediationAttempts+1, &coldAt); recErr != nil {
 			return true, false, fmt.Errorf("remediation due %s/%s: record cold retry: %w", itemID, reason, recErr)
 		}
 		return true, false, nil
