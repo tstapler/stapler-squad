@@ -88,10 +88,16 @@ func TestAnthropicHTTPClientBaseURLConfigurableButProbeIsNot(t *testing.T) {
 	}
 
 	// Capacity monitor probe must keep targeting the real Anthropic endpoint
-	// no matter what backend settings say.
-	src := mustReadFile(t, "anthropic_limits_client.go")
-	if !strings.Contains(src, "http.MethodPost, anthropicAPIURL,") || strings.Contains(src, "anthropicMessagesURL") {
-		t.Error("AnthropicLimitsClient must use the fixed anthropicAPIURL constant, not the configurable URL")
+	// no matter what backend settings say: record where it actually sends.
+	var probedURL string
+	probe := NewAnthropicLimitsClient(NewChain(staticAnthropicSource{}), "")
+	probe.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		probedURL = r.URL.String()
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("{}")), Request: r}, nil
+	})}
+	_, _ = probe.QueryLimits(context.Background())
+	if probedURL != anthropicAPIURL {
+		t.Errorf("capacity probe hit %q, want fixed %q (backend base URL is %q)", probedURL, anthropicAPIURL, srv.URL)
 	}
 	if !strings.HasPrefix(anthropicAPIURL, "https://api.anthropic.com/") {
 		t.Errorf("anthropicAPIURL = %q", anthropicAPIURL)
@@ -143,4 +149,15 @@ func mustReadFile(t *testing.T, name string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type staticAnthropicSource struct{}
+
+func (staticAnthropicSource) Name() string { return "static-test" }
+func (staticAnthropicSource) Resolve(context.Context, string) (Credential, bool, error) {
+	return Credential{APIKey: "k"}, true, nil
 }
