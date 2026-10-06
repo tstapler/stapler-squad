@@ -4,8 +4,11 @@
   "service": "LLMBackendService",
   "method": "GetLLMBackendSettings",
   "protoFile": "proto/session/v1/llm_backend.proto",
-  "markerFound": false,
-  "tested": false,
-  "testIds": [],
+  "markerFound": true,
+  "handlerFile": "server/services/llm_backend_service.go",
+  "tested": true,
+  "testIds": [
+    "TestLLMBackendServiceGetReturnsDefaults"
+  ],
   "lastModified": "2026-10-05T22:28:51.752498882-07:00"
 }

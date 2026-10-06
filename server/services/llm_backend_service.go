@@ -34,7 +34,7 @@ func BackendSettingsFromConfig(c config.LLMBackendsConfig) headless.BackendSetti
 	}
 }
 
-// +api: llm-backend:get
+// +api: GetLLMBackendSettings
 func (s *LLMBackendService) GetLLMBackendSettings(
 	_ context.Context, _ *connect.Request[sessionv1.GetLLMBackendSettingsRequest],
 ) (*connect.Response[sessionv1.GetLLMBackendSettingsResponse], error) {
@@ -55,7 +55,7 @@ func (s *LLMBackendService) GetLLMBackendSettings(
 	return connect.NewResponse(resp), nil
 }
 
-// +api: llm-backend:update
+// +api: UpdateLLMBackendSettings
 func (s *LLMBackendService) UpdateLLMBackendSettings(
 	_ context.Context, req *connect.Request[sessionv1.UpdateLLMBackendSettingsRequest],
 ) (*connect.Response[sessionv1.UpdateLLMBackendSettingsResponse], error) {

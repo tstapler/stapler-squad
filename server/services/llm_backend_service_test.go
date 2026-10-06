@@ -151,3 +151,15 @@ func (staticAnthropicSource) Name() string { return "static-test" }
 func (staticAnthropicSource) Resolve(context.Context, string) (Credential, bool, error) {
 	return Credential{APIKey: "k"}, true, nil
 }
+
+func TestLLMBackendServiceGetReturnsDefaults(t *testing.T) {
+	isolateLLMConfig(t)
+	svc := NewLLMBackendService(nil)
+	resp, err := svc.GetLLMBackendSettings(context.Background(), connect.NewRequest(&sessionv1.GetLLMBackendSettingsRequest{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Msg.Settings == nil {
+		t.Fatal("settings must be present")
+	}
+}
