@@ -4401,11 +4401,10 @@ func TestTriggerTriage_should_SetCallOptionsModel_When_PipelineModeConfiguresTri
 	assert.Empty(t, sessions[0].ExecutorFallbackReason)
 }
 
-// TestTriggerTriage_should_LeaveCallOptionsModelEmpty_When_PipelineModeIsDefault
-// (Story 2.3.2) is the byte-identical-to-today counterpart: an item on
-// PipelineModeDefault (no stage executor override configured anywhere) must
-// resolve to an empty CallOptions.Model, unchanged from pre-Epic-2.3 behavior.
-func TestTriggerTriage_should_LeaveCallOptionsModelEmpty_When_PipelineModeIsDefault(t *testing.T) {
+// TestTriggerTriage_should_UseConfiguredTriageModel_When_PipelineModeIsDefault: an item on
+// PipelineModeDefault (no stage executor override) runs triage on the configured triage
+// model (default family:sonnet), not the account default — and an explicit "none" opts out.
+func TestTriggerTriage_should_UseConfiguredTriageModel_When_PipelineModeIsDefault(t *testing.T) {
 	t.Parallel()
 	storage := createTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
@@ -4430,7 +4429,7 @@ func TestTriggerTriage_should_LeaveCallOptionsModelEmpty_When_PipelineModeIsDefa
 		return pool.callCount() == 1
 	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call")
 
-	assert.Empty(t, pool.firstCall().model, "CallOptions.Model must stay empty when no stage executor override is configured")
+	assert.Equal(t, "claude-sonnet-4-6", pool.firstCall().model, "unpinned triage must use the configured default model, not the account default")
 }
 
 // TestTriggerTriage_should_UseUnmodifiedRetriagePrompt_When_RetriagingRegardlessOfPipelineMode

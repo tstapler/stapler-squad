@@ -42,9 +42,13 @@ interface StuckItemDetailProps {
    * 68964304), scoped to this card's own StuckReason so the nudge
    * cap/cooldown gate (AC4) and the dispatched agent's action space key off
    * the right BacklogStuckState row. Omitted disables the control entirely.
-   * Rejects (throws) on failure, mirroring onApprovePlan above.
+   * Resolves with the dispatched diagnostic session's UUID, which this
+   * component links to directly once dispatched — the session runs hidden
+   * from the main list, so that link is the only way to open its transcript
+   * and see what it actually did. Rejects (throws) on failure, mirroring
+   * onApprovePlan above.
    */
-  onDiagnose?: (itemId: string, reason: StuckReason) => Promise<void>;
+  onDiagnose?: (itemId: string, reason: StuckReason) => Promise<string>;
 }
 
 /** Read-only "Repo auto-merge: on/off/unknown" line (Story 4.1.4). `allowAutoMerge` is
@@ -148,6 +152,11 @@ export function StuckItemDetail({
   const isSetCapDisabled = isOverridePending || !Number(moreRounds) || Number(moreRounds) <= 0;
   const isApprovePending = approveState === "pending";
   const isDiagnosePending = diagnoseState === "pending" || diagnoseState === "dispatched";
+  // The dispatched diagnostic session's UUID (onDiagnose's resolved value),
+  // used to render a direct "View diagnostic session" link below — see
+  // onDiagnose's doc comment for why this link matters (the session is
+  // hidden from the main session list).
+  const [dispatchedSessionUuid, setDispatchedSessionUuid] = useState<string | null>(null);
 
   async function submitOverride(override: number) {
     // These buttons use aria-disabled instead of disabled (so they stay
@@ -178,7 +187,8 @@ export function StuckItemDetail({
     setDiagnoseState("pending");
     setDiagnoseError(null);
     try {
-      await onDiagnose(item.itemId, item.reason);
+      const uuid = await onDiagnose(item.itemId, item.reason);
+      setDispatchedSessionUuid(uuid);
       setDiagnoseState("dispatched");
     } catch (err) {
       setDiagnoseState("error");
@@ -394,6 +404,20 @@ export function StuckItemDetail({
           {diagnoseState === "error" && (
             <span className={styles.overrideStatus} role="alert" data-testid="stuck-item-diagnose-error">
               {diagnoseError}
+            </span>
+          )}
+          {diagnoseState === "dispatched" && dispatchedSessionUuid && (
+            <span className={styles.overrideStatus} data-testid="stuck-item-diagnose-dispatched-detail">
+              <Link
+                className={styles.prLink}
+                href={routes.sessionDetail(dispatchedSessionUuid)}
+                data-testid="stuck-item-diagnose-session-link"
+                aria-label="Open the dispatched diagnostic session's transcript"
+              >
+                View diagnostic session →
+              </Link>{" "}
+              for its live log. Its conclusion (bug filed, note, or nudge) posts to this
+              item&apos;s Activity Log — see &quot;Open item detail&quot; below.
             </span>
           )}
         </div>

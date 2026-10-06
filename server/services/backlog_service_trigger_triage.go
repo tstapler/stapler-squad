@@ -332,11 +332,7 @@ func (s *BacklogService) TriggerTriage(
 	}
 	triageExecutorHash := session.ComputeExecutorHash(triageExecProgram, triageExecModel)
 	triageCaller, triageConfiguredProgram, triageFallbackReason := s.resolveHeadlessCaller(triageExecProgram, item.ID, "triage")
-	triageResolvedModel, modelErr := session.ResolveModel(s.modelFamilies, triageExecModel)
-	if modelErr != nil {
-		log.Warn("[PipelineEngine] failed to resolve triage model family alias, using empty model", "item", item.ID, "model", triageExecModel, "err", modelErr)
-		triageResolvedModel = ""
-	}
+	triageResolvedModel := resolveTriageModel(s.cfg, s.modelFamilies, triageExecProgram, triageExecModel)
 
 	is, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
 		ItemID:                   item.ID,
@@ -373,7 +369,7 @@ func (s *BacklogService) TriggerTriage(
 		// goroutine exits, so the item is never left permanently un-retriggerable.
 		defer s.triageInFlight.Delete(itemID)
 
-		// Acquire concurrency semaphore (max 8 concurrent triage calls).
+		// Acquire concurrency semaphore (cfg.MaxConcurrentTriageOrDefault; excess runs queue here).
 		select {
 		case s.triageSem <- struct{}{}:
 		case <-s.shutdownCtx.Done():
@@ -583,6 +579,7 @@ func (s *BacklogService) TriggerTriage(
 			return
 		}
 		result.Iteration = iteration
+		result.InputHash = triageResultInputHash(item, &result)
 		result.Feedback = feedback
 
 		// result.Title is LLM-controlled (ParseHeadlessTriageResult never
