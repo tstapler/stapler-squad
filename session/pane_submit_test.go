@@ -17,24 +17,11 @@ import (
 // so a test can script both the pre-Enter settle wait and the post-Enter
 // submit-confirmation poll independently.
 type fakePaneSubmitter struct {
-<<<<<<< HEAD
-	sendCalls    []string
-	failOnCall   int // -1 (default) means never fail
-	updates      []bool
-	updateCalls  int
-	onHasUpdated func()
-||||||| f56f6f9c9
-	sendCalls   []string
-	failOnCall  int // -1 (default) means never fail
-	updates     []bool
-	updateCalls int
-=======
 	sendCalls   []string
 	failOnCall  int // -1 (default) means never fail
 	updates     []bool
 	updateCalls int
 	onSend      func(int)
->>>>>>> origin/main
 }
 
 func (f *fakePaneSubmitter) SendKeys(keys string) error {
@@ -50,9 +37,6 @@ func (f *fakePaneSubmitter) SendKeys(keys string) error {
 }
 
 func (f *fakePaneSubmitter) HasUpdated() (bool, bool) {
-	if f.onHasUpdated != nil {
-		f.onHasUpdated()
-	}
 	if len(f.updates) == 0 {
 		return false, false
 	}
