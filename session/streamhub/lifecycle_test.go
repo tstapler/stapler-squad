@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
 	"github.com/tstapler/stapler-squad/session/streamhub"
@@ -175,7 +176,6 @@ func TestStreamHub_should_CancelPendingTeardown_When_SubscriberReattachesDuringG
 	}
 
 	// Reattach well within the grace period.
-	time.Sleep(20 * time.Millisecond)
 	secondTransport := newMemoryTransport()
 	secondID := hub.AttachSubscriber(secondTransport, streamhub.SubscriberCapability{})
 
@@ -183,12 +183,10 @@ func TestStreamHub_should_CancelPendingTeardown_When_SubscriberReattachesDuringG
 		t.Fatalf("expected HubActive immediately after reattach, got %v", got)
 	}
 
-	// Wait past the original grace deadline; the pending teardown must never fire.
-	time.Sleep(200 * time.Millisecond)
-
-	if got := hub.State(); got != streamhub.HubActive {
-		t.Fatalf("expected HubActive to persist past the original grace deadline, got %v", got)
-	}
+	// Watch past the original grace deadline; the pending teardown must never fire.
+	require.Never(t, func() bool {
+		return hub.State() != streamhub.HubActive || controller.stopCalls.Load() != 0
+	}, 200*time.Millisecond, 5*time.Millisecond, "expected HubActive to persist past the original grace deadline with no StopControlMode call")
 	if calls := controller.stopCalls.Load(); calls != 0 {
 		t.Fatalf("expected StopControlMode to never fire, got %d calls", calls)
 	}
@@ -293,7 +291,10 @@ func TestStreamHub_should_CallStopControlModeExactlyOnce_When_ForceTeardownRaces
 
 	controller := newFakeSessionController()
 	release := make(chan struct{})
+	inStopControlMode := make(chan struct{})
+	var inStopOnce sync.Once
 	controller.stopFn = func() error {
+		inStopOnce.Do(func() { close(inStopControlMode) })
 		<-release
 		return nil
 	}
@@ -305,18 +306,24 @@ func TestStreamHub_should_CallStopControlModeExactlyOnce_When_ForceTeardownRaces
 
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
-	for i := range errs {
+	run := func(i int) {
 		wg.Add(1)
-		go func(i int) {
+		go func() {
 			defer wg.Done()
 			errs[i] = hub.ForceTeardown()
-		}(i)
+		}()
 	}
-	// Give both goroutines a chance to reach ForceTeardown's guard before
-	// releasing StopControlMode — without this, the second call could run
-	// entirely before the first even starts, which wouldn't exercise the
-	// teardownInFlight branch at all.
-	time.Sleep(20 * time.Millisecond)
+	// Start the first call and wait until it is parked inside StopControlMode,
+	// so the second call deterministically hits the teardownInFlight guard
+	// (which returns immediately) instead of racing the first for the claim.
+	run(0)
+	<-inStopControlMode
+	secondDone := make(chan struct{})
+	go func() {
+		errs[1] = hub.ForceTeardown()
+		close(secondDone)
+	}()
+	<-secondDone
 	close(release)
 	wg.Wait()
 

@@ -318,9 +318,10 @@ func TestScanner_pruneMissingRepos_should_keepRepo_When_PathStillExists(t *testi
 	ctx, cancel := context.WithCancel(context.Background())
 	go s.pruneMissingRepos(ctx)
 
-	time.Sleep(50 * time.Millisecond) // let a few ticks fire
+	// A few 10ms prune ticks fire during this window; the repo must stay tracked throughout.
+	require.Never(t, func() bool {
+		_, tracked := s.repoSet.Load(repoPath)
+		return !tracked
+	}, 50*time.Millisecond, 5*time.Millisecond, "an existing repo must survive prune ticks")
 	cancel()
-
-	_, stillTracked := s.repoSet.Load(repoPath)
-	assert.True(t, stillTracked, "an existing repo must survive prune ticks")
 }

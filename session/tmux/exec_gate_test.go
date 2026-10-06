@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -142,7 +143,7 @@ func TestAcquireResyncExecSlot_should_LogWaitTimeInMilliseconds_When_SlotAcquire
 	require.NoError(t, err)
 
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond) //nolint:notimesleeptest the test asserts a nonzero measured wall-clock waitMs, which needs a real elapsed delay while the slot is held
 		releaseFirst()
 	}()
 
@@ -268,6 +269,7 @@ func TestExecGate_BoundsPeakConcurrency(t *testing.T) {
 
 	var current atomic.Int32
 	var peak atomic.Int32
+	var saturated atomic.Bool
 	var wg sync.WaitGroup
 	wg.Add(workers)
 	for i := 0; i < workers; i++ {
@@ -285,7 +287,17 @@ func TestExecGate_BoundsPeakConcurrency(t *testing.T) {
 					break
 				}
 			}
-			time.Sleep(10 * time.Millisecond)
+			if cur == n {
+				saturated.Store(true)
+			}
+			// Hold until the gate has been seen full, then yield a while so
+			// later holders overlap too; no wall-clock wait needed.
+			for !saturated.Load() {
+				runtime.Gosched()
+			}
+			for i := 0; i < 200; i++ {
+				runtime.Gosched()
+			}
 			current.Add(-1)
 		}()
 	}
@@ -392,7 +404,7 @@ func runExecGateCrossProcessHelper() {
 	if err := os.WriteFile(markerPath, nil, 0o600); err != nil {
 		os.Exit(1)
 	}
-	time.Sleep(time.Duration(holdMS) * time.Millisecond)
+	time.Sleep(time.Duration(holdMS) * time.Millisecond) //nolint:notimesleeptest helper subprocess must hold its flock slot for a real duration so the parent can observe cross-process contention
 	_ = os.Remove(markerPath)
 	release()
 	os.Exit(0)

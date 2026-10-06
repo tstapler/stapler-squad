@@ -1011,7 +1011,7 @@ func runBoundedDialogAnswerScenario(t *testing.T, title string, fakePM *stuckDia
 	inst.started.Store(true)
 
 	StartSessionDriver(inst, "/tmp")
-	time.Sleep(driverPollInterval*6 + 500*time.Millisecond)
+	time.Sleep(driverPollInterval*6 + 500*time.Millisecond) //nolint:notimesleeptest driverPollInterval is a production const driving a real ticker; bounding resends over 6 real ticks cannot be observed without changing production code
 
 	count := fakePM.sendKeysCount.Load()
 	t.Logf(logMsg, count)
@@ -1455,7 +1455,6 @@ func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineL
 
 	StartSessionDriver(inst, t.TempDir())
 	waitForDriverRunning(t, inst)
-	time.Sleep(10 * time.Millisecond)
 
 	stopSessionDriverConcurrently(t, inst)
 
@@ -1465,8 +1464,9 @@ func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineL
 
 	// A StartSessionDriver call arriving after Destroy() must be refused —
 	// driverDestroyed (set by StopSessionDriver) must permanently block it.
+	// A refused start returns synchronously without spawning; if it did spawn,
+	// the deferred goleak.VerifyNone below catches the leaked goroutine.
 	StartSessionDriver(inst, t.TempDir())
-	time.Sleep(20 * time.Millisecond)
 	if inst.driverRunning.Load() {
 		t.Fatal("StartSessionDriver spawned a new driver goroutine after the instance was destroyed")
 	}

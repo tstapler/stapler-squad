@@ -304,7 +304,7 @@ func TestGetLinkedItem_should_ReturnMostRecentLink_When_NoItemIdProvided(t *test
 		ItemID: olderItem.ID, SessionUUID: callerUUID, SessionRole: session.SessionRoleWork,
 	})
 	require.NoError(t, err)
-	time.Sleep(2 * time.Millisecond) // ensure distinct created_at ordering
+	time.Sleep(2 * time.Millisecond) //nolint:notimesleeptest storage stamps created_at from the real clock with no injection point; ordering needs distinct timestamps
 	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
 		ItemID: newerItem.ID, SessionUUID: callerUUID, SessionRole: session.SessionRoleWork,
 	})
@@ -5369,14 +5369,8 @@ func TestWaitForBacklogEvent_ReturnsImmediatelyWhenItemAlreadyArchived(t *testin
 // tests rule's "prefer a synchronization primitive" guidance.
 func waitSubscriberCount(t *testing.T, bus *events.EventBus, want int) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if bus.SubscriberCount() == want {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for SubscriberCount() == %d (got %d)", want, bus.SubscriberCount())
+	wait.RequireEventually(t, func() bool { return bus.SubscriberCount() == want },
+		3*time.Second, 5*time.Millisecond, "waiting for SubscriberCount() == %d", want)
 }
 
 func TestWaitForBacklogEvent_ReturnsMatchedEventOnLiveVerdict(t *testing.T) {

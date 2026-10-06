@@ -48,7 +48,6 @@ func TestAwaitCreationTerminal_should_ReturnActiveOutcome_When_InstanceTransitio
 	epoch := inst.CreationEpoch()
 
 	go func() {
-		time.Sleep(30 * time.Millisecond)
 		applied := inst.TryForceStatusIfEpoch(epoch, session.Active, "")
 		assert.True(t, applied)
 	}()
@@ -109,7 +108,7 @@ func TestAwaitCreationTerminal_should_ReturnErrCreationVanished_When_InstanceIsR
 	newAwaitTestInstance(t, svc, "await-vanish")
 
 	go func() {
-		time.Sleep(30 * time.Millisecond)
+		time.Sleep(30 * time.Millisecond) //nolint:notimesleeptest removal must land after the awaiter first observed the instance alive; no signal for that exists
 		svc.reviewQueuePoller.RemoveInstance("await-vanish")
 	}()
 
@@ -133,10 +132,7 @@ func TestAwaitCreationTerminal_should_ReturnCtxErr_When_CallerContextEndsFirst(t
 	newAwaitTestInstance(t, svc, "await-ctx-done")
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(20 * time.Millisecond)
-		cancel()
-	}()
+	go cancel()
 
 	outcome, err := svc.awaitCreationTerminal(ctx, "await-ctx-done", 5*time.Second, 10*time.Millisecond)
 

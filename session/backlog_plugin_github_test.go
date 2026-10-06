@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -464,7 +465,12 @@ func TestGitHubPRsPlugin_Fetch_ConcurrentCIFetchPreservesPerPRLabels(t *testing.
 					break
 				}
 			}
-			time.Sleep(20 * time.Millisecond) // widen the overlap window so concurrent requests actually coincide
+			// Hold this request open until the bounded pool is saturated (or a
+			// safety deadline passes) so concurrent requests actually coincide.
+			deadline := time.Now().Add(2 * time.Second)
+			for atomic.LoadInt32(&maxInFlight) < int32(githubCILabelConcurrency) && time.Now().Before(deadline) {
+				runtime.Gosched()
+			}
 
 			var num int
 			fmt.Sscanf(r.URL.Path, "/repos/acme/widgets/commits/sha-%d/check-runs", &num)

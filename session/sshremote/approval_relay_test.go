@@ -23,6 +23,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/tmux"
 	testutil "github.com/tstapler/stapler-squad/testutil/socket"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // streamLocalOpenMsg mirrors golang.org/x/crypto/ssh's unexported
@@ -483,8 +484,9 @@ func TestRemoteApprovalRelay_RejectsExpiredBearerToken(t *testing.T) {
 	relay.Start(ctx)
 	defer relay.Stop()
 
-	token, _ := relay.BearerToken()
-	time.Sleep(50 * time.Millisecond) // let the short TTL elapse
+	token, expiresAt := relay.BearerToken()
+	wait.RequireEventually(t, func() bool { return time.Now().After(expiresAt) }, 5*time.Second, 5*time.Millisecond,
+		"short bearer-token TTL never elapsed")
 
 	socketPath := RemoteApprovalSocketPath(basePath, "session-key")
 	payload := relayedApprovalPayload{Token: token, Request: json.RawMessage(`{"tool_name":"Bash"}`)}
@@ -618,13 +620,10 @@ func TestRemoteApprovalRelay_ReopensChannelAfterReconnect(t *testing.T) {
 
 	// Simulate the connection dropping.
 	_ = client1.Close()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, ok := pool.Peek(target.Name); !ok {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	wait.RequireEventually(t, func() bool {
+		_, ok := pool.Peek(target.Name)
+		return !ok
+	}, 5*time.Second, 5*time.Millisecond, "pool entry was not evicted after the connection died")
 	if _, ok := pool.Peek(target.Name); ok {
 		t.Fatal("pool entry was not evicted after the connection died")
 	}

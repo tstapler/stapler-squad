@@ -2278,7 +2278,7 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 	// must not fail the call.
 	now := time.Now()
 	for _, is := range ownOpenLinks {
-		if endErr := h.storage.UpdateItemSessionEnded(ctx, is.ID, now); endErr != nil {
+		if endErr := h.storage.UpdateItemSessionEnded(ctx, is.ID, now); endErr != nil { //nolint:silenttransition best-effort bookkeeping after the item is already archived (see comment above)
 			log.WarningLog().Printf("[mcp:report_duplicate] failed to end own link session=%s item=%s: %v", callerUUID, itemID, endErr)
 		}
 	}

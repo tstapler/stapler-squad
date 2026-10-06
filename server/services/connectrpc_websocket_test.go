@@ -2746,7 +2746,7 @@ type slowCursorPositioner struct {
 }
 
 func (s slowCursorPositioner) GetPaneCursorPosition() (int, int, error) {
-	time.Sleep(s.delay)
+	time.Sleep(s.delay) //nolint:notimesleeptest simulates a degraded lookup that must outlast withCursorSyncTimeout
 	if s.calledCh != nil {
 		close(s.calledCh)
 	}
@@ -2790,7 +2790,8 @@ func TestWithCursorSync_should_ReturnWithinTimeout_When_PositionLookupIsSlow(t *
 func TestWaitForEvent_should_ReturnTrue_When_MatchingEventArrivesDuringWait(t *testing.T) {
 	bus := events.NewEventBus(1)
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		// Publish only once waitForEvent has subscribed, so the event arrives mid-wait.
+		wait.RequireEventually(t, func() bool { return bus.SubscriberCount() >= 1 }, 2*time.Second, time.Millisecond, "waitForEvent never subscribed")
 		bus.Publish(&events.Event{Type: events.EventSessionUpdated})
 	}()
 
@@ -2840,7 +2841,7 @@ func TestWaitForInstanceStartedEvent_should_Ignore_UnrelatedUpdateOnSameInstance
 	inst := &session.Instance{UUID: "same-uuid"}
 	bus := events.NewEventBus(1)
 	go func() {
-		time.Sleep(20 * time.Millisecond)
+		wait.RequireEventually(t, func() bool { return bus.SubscriberCount() >= 1 }, 2*time.Second, time.Millisecond, "waitForInstanceStartedEvent never subscribed")
 		bus.Publish(events.NewSessionUpdatedEvent(inst, []string{"title"}))
 	}()
 

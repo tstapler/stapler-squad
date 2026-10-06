@@ -132,10 +132,8 @@ func TestCallbackDispatcher_Dispatch_DropsBeyondCapacity(t *testing.T) {
 		return received.Load() == int32(cap)
 	}, 2*time.Second, 10*time.Millisecond, "expected exactly cap in-flight requests")
 
-	// Give the dropped goroutines (there are none — they never spawned) or any
-	// hypothetical late arrivals a window to show up before asserting the count
-	// never grows past cap.
-	time.Sleep(200 * time.Millisecond)
+	// Over-capacity dispatches are dropped synchronously inside Dispatch (no
+	// goroutine ever spawned for them), so no late arrival is possible.
 	assert.Equal(t, int32(cap), received.Load(), "over-capacity dispatches must be dropped, not queued for later delivery")
 
 	close(block) // release the held requests so the goroutines can exit cleanly
@@ -393,7 +391,7 @@ func TestCallbackDispatcher_Dispatch_NoopWhenFeatureFlagOff(t *testing.T) {
 	}
 
 	d.Dispatch("session_complete", map[string]any{"event": "session_complete"})
-	time.Sleep(100 * time.Millisecond)
+	// Dispatch returns synchronously when the flag is off; no goroutine is spawned.
 	assert.Equal(t, int32(0), received.Load(), "Dispatch must no-op when the feature flag is off")
 }
 

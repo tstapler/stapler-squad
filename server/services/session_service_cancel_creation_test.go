@@ -240,7 +240,7 @@ func TestCancelSessionCreation_should_ResolveAwaitCreationTerminalPromptly_When_
 	// Give the awaiter time to actually start polling before cancel fires --
 	// this is what makes it a race against a LIVE wait, not a wait started
 	// after the deletion already happened.
-	time.Sleep(30 * time.Millisecond)
+	time.Sleep(30 * time.Millisecond) //nolint:notimesleeptest no signal exists for the awaiter having begun polling
 
 	resp, err := svc.CancelSessionCreation(context.Background(), connect.NewRequest(&sessionv1.CancelSessionCreationRequest{
 		Id: "cancel-await-race",

@@ -291,8 +291,6 @@ func TestManagedProcess_ScanLines_ctxCancellation_stops(t *testing.T) {
 		scanDone <- p.ScanLines(ctx, func(_ string) {})
 	}()
 
-	// Cancel context after a brief moment.
-	time.Sleep(50 * time.Millisecond)
 	cancel()
 
 	select {

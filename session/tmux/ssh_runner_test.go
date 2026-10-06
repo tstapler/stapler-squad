@@ -290,9 +290,10 @@ func TestSSHRunner_Dial_HungHandshake_TimesOutWithinBudget(t *testing.T) {
 		t.Errorf("Dial() took %v, want well under ctx's 1s budget plus scheduling slack", elapsed)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for liveConns() != 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+	liveTick := time.NewTicker(10 * time.Millisecond)
+	defer liveTick.Stop()
+	for deadline := time.Now().Add(2 * time.Second); liveConns() != 0 && time.Now().Before(deadline); {
+		<-liveTick.C
 	}
 	if n := liveConns(); n != 0 {
 		t.Errorf("live stalling connections = %d after Dial timeout, want 0 (connection not force-closed)", n)

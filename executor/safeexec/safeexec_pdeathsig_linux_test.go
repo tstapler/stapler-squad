@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // This test reproduces the exact failure mode that leaked ~460 orphaned tmux
@@ -50,7 +52,7 @@ func runPdeathsigHelperProcess() {
 	}
 	fmt.Println(cmd.Process.Pid)
 	os.Stdout.Sync()
-	time.Sleep(time.Hour) // block until SIGKILLed by the test; not a Go-level deadlock
+	time.Sleep(time.Hour) //nolint:notimesleeptest helper subprocess blocks until SIGKILLed by the test; not a Go-level deadlock
 }
 
 func TestEnsurePdeathsig_GrandchildDiesWhenMiddleIsSigkilled(t *testing.T) {
@@ -90,12 +92,12 @@ func TestEnsurePdeathsig_GrandchildDiesWhenMiddleIsSigkilled(t *testing.T) {
 	}
 	_ = middle.Wait()
 
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if !processAlive(grandchildPID) {
-			return // kernel reaped it via Pdeathsig — this is the fix working
-		}
-		time.Sleep(50 * time.Millisecond)
+	if err := wait.WaitForCondition(func() bool { return !processAlive(grandchildPID) }, wait.WaitConfig{
+		Timeout:      3 * time.Second,
+		PollInterval: 50 * time.Millisecond,
+		Description:  "grandchild reaped via Pdeathsig",
+	}); err == nil {
+		return // kernel reaped it via Pdeathsig — this is the fix working
 	}
 
 	// Don't leave a real leak behind just because the assertion failed.
@@ -137,18 +139,16 @@ func TestProcessAlive_ReturnsFalseForZombie(t *testing.T) {
 	pid := cmd.Process.Pid
 	t.Cleanup(func() { _ = cmd.Wait() })
 
-	deadline := time.Now().Add(2 * time.Second)
-	for {
+	if err := wait.WaitForCondition(func() bool {
 		stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-		if err == nil {
-			if i := bytes.LastIndexByte(stat, ')'); i >= 0 && i+2 < len(stat) && stat[i+2] == 'Z' {
-				break // process has exited but we haven't reaped it — genuine zombie
-			}
+		if err != nil {
+			return false
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("pid %d never reached zombie state before reaping", pid)
-		}
-		time.Sleep(2 * time.Millisecond)
+		// process has exited but we haven't reaped it — genuine zombie
+		i := bytes.LastIndexByte(stat, ')')
+		return i >= 0 && i+2 < len(stat) && stat[i+2] == 'Z'
+	}, wait.WaitConfig{Timeout: 2 * time.Second, PollInterval: 2 * time.Millisecond, Description: "zombie state"}); err != nil {
+		t.Fatalf("pid %d never reached zombie state before reaping: %v", pid, err)
 	}
 
 	if syscall.Kill(pid, 0) != nil {

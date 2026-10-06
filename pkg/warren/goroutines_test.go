@@ -2,6 +2,7 @@ package warren_test
 
 import (
 	"context"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -35,9 +36,11 @@ func TestGoroutineGroup_GoAndWait(t *testing.T) {
 }
 
 func TestGoroutineGroup_LeakDetected(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
 	g := warren.NewGoroutineGroup(context.Background())
 	g.Go("stubborn", func(ctx context.Context) {
-		time.Sleep(10 * time.Second) // ignores context
+		<-release // ignores context
 	})
 
 	leaks := g.Wait(50 * time.Millisecond)
@@ -55,9 +58,7 @@ func TestGoroutineGroup_ActiveNamesAlphabetical(t *testing.T) {
 	g.Go("alpha", func(ctx context.Context) { <-ctx.Done() })
 	g.Go("mango", func(ctx context.Context) { <-ctx.Done() })
 
-	// Give goroutines a moment to register
-	time.Sleep(10 * time.Millisecond)
-
+	// Go registers names synchronously, so ActiveNames is already populated.
 	names := g.ActiveNames()
 	for i := 1; i < len(names); i++ {
 		if names[i-1] > names[i] {
@@ -76,14 +77,17 @@ func TestGoroutineGroup_CountDecrementsAfterExit(t *testing.T) {
 		<-done
 	})
 
-	time.Sleep(10 * time.Millisecond)
+	// Go registers synchronously; no wait needed before the first check.
 	if g.Active()["counter"] != 1 {
 		t.Error("goroutine should be active before done signal")
 	}
 
 	close(done)
-	time.Sleep(50 * time.Millisecond)
 
+	deadline := time.Now().Add(5 * time.Second)
+	for g.Active()["counter"] != 0 && time.Now().Before(deadline) {
+		runtime.Gosched()
+	}
 	if g.Active()["counter"] != 0 {
 		t.Error("goroutine should not be active after returning")
 	}

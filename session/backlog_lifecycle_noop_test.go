@@ -124,7 +124,7 @@ func TestReconcileRepeatedNoopDispatch_should_resolve_When_NewCommitLands(t *tes
 	listener.reconcileRepeatedNoopDispatch(ctx, er)
 
 	// A newer work session that committed breaks the no-op run.
-	time.Sleep(10 * time.Millisecond)
+	waitForClockDelta(t, 10*time.Millisecond)
 	is, err := storage.CreateItemSession(ctx, ItemSessionData{
 		ItemID: item.ID, SessionUUID: "work-" + uuid.New().String(), SessionRole: SessionRoleWork,
 	})

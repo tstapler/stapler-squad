@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // fakeClock is a manually-advanced clock for deterministic backoff timing
@@ -224,12 +226,8 @@ func TestSSHRunner_CircuitOpen_SurfacesWithoutBlocking(t *testing.T) {
 // bounded so a stuck watcher goroutine fails the test instead of hanging it.
 func waitForPoolEviction(t *testing.T, pool *SSHClientPool, name string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, ok := pool.Peek(name); !ok {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("pool entry for %q was not evicted within the deadline", name)
+	wait.RequireEventually(t, func() bool {
+		_, ok := pool.Peek(name)
+		return !ok
+	}, 5*time.Second, 10*time.Millisecond, "pool entry for %q was not evicted within the deadline", name)
 }

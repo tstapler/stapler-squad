@@ -40,7 +40,7 @@ func TestExpectInfrastructure(t *testing.T) {
 		require.NoError(t, err)
 
 		// Give TUI time to initialize
-		time.Sleep(500 * time.Millisecond)
+		awaitRunning(t, session)
 
 		// Try sending a key
 		err = session.SendKeys("?")
@@ -55,7 +55,7 @@ func TestExpectInfrastructure(t *testing.T) {
 		require.NoError(t, err)
 
 		// Wait for TUI to be ready
-		time.Sleep(500 * time.Millisecond)
+		awaitRunning(t, session)
 
 		// Send quit command
 		err = session.SendKeys("q")
@@ -73,7 +73,7 @@ func TestExpectInfrastructure(t *testing.T) {
 		require.NoError(t, err)
 
 		// Give TUI time to render
-		time.Sleep(1 * time.Second)
+		awaitRunning(t, session)
 
 		// Get output
 		output, err := session.GetOutput()
@@ -88,7 +88,7 @@ func TestExpectInfrastructure(t *testing.T) {
 		session, err := StartExpectSession(t, config)
 		require.NoError(t, err)
 
-		time.Sleep(500 * time.Millisecond)
+		awaitRunning(t, session)
 
 		// Test various special keys
 		keys := []struct {
@@ -104,7 +104,6 @@ func TestExpectInfrastructure(t *testing.T) {
 		for _, key := range keys {
 			err := key.fn()
 			assert.NoError(t, err, "Should send %s without error", key.name)
-			time.Sleep(100 * time.Millisecond)
 		}
 	})
 }
@@ -193,4 +192,10 @@ func BuildTestBinary(t *testing.T) {
 	// This avoids rebuilding on every test
 	// For now, we'll just skip the build and assume it exists
 	// In real scenarios, you might want to build conditionally
+}
+
+// awaitRunning blocks until the TUI process is up, replacing fixed startup sleeps (ADR-003).
+func awaitRunning(t *testing.T, s *TUISession) {
+	t.Helper()
+	require.NoError(t, s.WaitForCondition(s.IsRunning, 5*time.Second, 10*time.Millisecond))
 }

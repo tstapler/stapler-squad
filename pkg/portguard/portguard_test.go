@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // TestMain re-execs this same test binary as a disposable "stuck server"
@@ -40,7 +42,7 @@ func runHelperProcess(portStr string) {
 		os.Exit(2)
 	}
 	defer func() { _ = ln.Close() }()
-	time.Sleep(30 * time.Second)
+	time.Sleep(30 * time.Second) //nolint:notimesleeptest helper subprocess holds the port until killed by the test; not a timing wait
 }
 
 func freePort(t *testing.T) int {
@@ -72,11 +74,12 @@ func startHelper(t *testing.T, port int, ignoreTerm bool) *exec.Cmd {
 		_ = cmd.Wait()
 	})
 
-	for i := 0; i < 250 && PortFree(port); i++ {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if PortFree(port) {
-		t.Fatalf("helper process never bound port %d", port)
+	if err := wait.WaitForCondition(func() bool { return !PortFree(port) }, wait.WaitConfig{
+		Timeout:      5 * time.Second,
+		PollInterval: 20 * time.Millisecond,
+		Description:  "helper process binding port",
+	}); err != nil {
+		t.Fatalf("helper process never bound port %d: %v", port, err)
 	}
 	return cmd
 }
