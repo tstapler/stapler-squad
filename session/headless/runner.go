@@ -79,6 +79,9 @@ type ProcessRunner struct {
 	// prepended to argv. Opt-in, test-only — see NewShellWrappedProcessRunnerForTesting
 	// in fake_runner.go. Zero value for every production ProcessRunner.
 	interpreter string
+	// extraEnv is appended to the filtered environment (later entries win), e.g.
+	// ANTHROPIC_BASE_URL for the consolette backend. Empty for the claude backend.
+	extraEnv []string
 }
 
 // WithWorkDir returns a copy of this ProcessRunner that sets the subprocess working
@@ -150,7 +153,7 @@ func (r *ProcessRunner) Run(ctx context.Context, args []string, stdin io.Reader)
 	var stderrBuf bytes.Buffer
 	opts := []executor.ProcessOption{
 		executor.WithNewSession(),
-		executor.WithProcessReplaceEnv(filteredEnv()),
+		executor.WithProcessReplaceEnv(append(filteredEnv(), r.extraEnv...)),
 		executor.WithConsumeStderr(&stderrBuf),
 	}
 	if r.workDir != "" {

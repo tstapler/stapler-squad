@@ -280,6 +280,9 @@ type SessionService struct {
 	// headlessPool is the shared LLM pool for non-interactive AI calls (RunOneShot, etc.).
 	// May be nil when the claude binary is not found at startup.
 	headlessPool *headless.Pool
+	// headlessClient routes RunOneShot's custom-prompt calls through the backend
+	// selector; nil falls back to headlessPool.
+	headlessClient headless.PoolClient
 
 	// autonomousSvc manages the lifecycle of AutonomousDriver instances.
 	autonomousSvc *AutonomousOrchestrationService
@@ -781,7 +784,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 			log.Info("[SessionService] AI rule generation unavailable: set ANTHROPIC_API_KEY or install claude/gemini/opencode CLI")
 		}
 	}
-	rulesSvc := NewRulesService(rulesStore, nil, analyticsStore, classifierObj, promptBuilder, aiClientImpl)
+	rulesSvc := NewRulesService(rulesStore, nil, analyticsStore, classifierObj, promptBuilder, WrapRulesAIClient(aiClientImpl))
 
 	// Wire the claude-settings file watcher: fsnotify-driven or manually-triggered
 	// (ReloadClaudeSettingsRules RPC) reloads both flow through this one callback, which
@@ -1957,6 +1960,14 @@ func (s *SessionService) SetHeadlessPool(pool *headless.Pool) {
 	s.headlessPool = pool
 	s.autonomousSvc.SetPool(pool)
 	s.prCreationSvc.SetHeadlessPool(pool)
+}
+
+// SetHeadlessClient routes non-interactive AI features (custom prompts, PR
+// drafting, autonomous drivers) through c, normally a headless.SelectingClient.
+func (s *SessionService) SetHeadlessClient(c headless.PoolClient) {
+	s.headlessClient = c
+	s.autonomousSvc.SetClient(c)
+	s.prCreationSvc.SetHeadlessClient(c)
 }
 
 // SetLifecycleContext binds the server's root context to the service.
@@ -5788,7 +5799,11 @@ func (s *SessionService) RunOneShot(
 			sink = session.CostSinkForSessionUUID(concreteStorage, inst.UUID)
 		}
 		var callErr error
-		outputStr, callErr = s.headlessPool.CallBlocking(runCtx, headless.FeatureKeyCustom, "", req.Msg.Prompt, headless.CallOptions{WorkDir: workDir}, sink)
+		var oneShot headless.PoolClient = s.headlessPool
+		if s.headlessClient != nil {
+			oneShot = s.headlessClient
+		}
+		outputStr, callErr = oneShot.CallBlocking(runCtx, headless.FeatureKeyCustom, "", req.Msg.Prompt, headless.CallOptions{WorkDir: workDir}, sink)
 		if callErr != nil {
 			errMsg = callErr.Error()
 			exitCode = 1

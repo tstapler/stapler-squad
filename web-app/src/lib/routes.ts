@@ -25,6 +25,7 @@ export const routes = {
   settingsRemotes: "/settings/remotes",
   settingsJules: "/settings/jules",
   settingsTaggingClassifier: "/settings/tagging-classifier",
+  settingsLlmBackends: "/settings/llm-backends",
   backlog: "/backlog",
   backlogBoard: "/backlog/board",
   sessionsImport: "/sessions/import",

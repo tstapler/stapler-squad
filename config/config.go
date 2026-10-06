@@ -357,6 +357,10 @@ type Config struct {
 	// Keys are machine names (e.g. "backlog"); values are booleans.
 	// Absent key == disabled (false is the safe default for all flags).
 	FeatureFlags map[string]bool `json:"feature_flags,omitempty"`
+	// LLMBackends selects which backend serves headless (non-interactive) LLM
+	// calls: a global default plus per-feature overrides. Edited live through the
+	// LLM backend settings RPC; no environment variables.
+	LLMBackends LLMBackendsConfig `json:"llm_backends,omitempty"`
 	// Hibernation holds configuration for the session hibernation feature.
 	Hibernation HibernationConfig `json:"hibernation,omitempty"`
 	// Capacity holds configuration for the provider capacity monitoring and transition feature.

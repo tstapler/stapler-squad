@@ -1,0 +1,11 @@
+{
+  "id": "UpdateLLMBackendSettings",
+  "type": "backend",
+  "service": "LLMBackendService",
+  "method": "UpdateLLMBackendSettings",
+  "protoFile": "proto/session/v1/llm_backend.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-10-05T22:28:51.752498882-07:00"
+}
