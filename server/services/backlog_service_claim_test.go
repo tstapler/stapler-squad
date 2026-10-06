@@ -439,6 +439,37 @@ func TestResolveClaimDispute_should_DelegateToResolverAndRequireURL(t *testing.T
 	assert.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
 }
 
+func TestRecordClaimOverride_should_LogOverrideWithClaimingHost_When_ClaimHeldByOther(t *testing.T) {
+	logs := captureClaimLogs(t)
+	checker := &fakeClaimChecker{verdict: heldByHostA(t)}
+	svc := claimEnabledService(t, checker)
+
+	_, err := svc.RecordClaimOverride(context.Background(), connect.NewRequest(&sessionv1.RecordClaimOverrideRequest{
+		ExternalUrl: claimIssueURL,
+		Reason:      "host A is gone",
+	}))
+
+	require.NoError(t, err)
+	assert.Contains(t, logs.String(), "banner.claim_override")
+	assert.Contains(t, logs.String(), "host A is gone")
+	assert.EqualValues(t, 1, checker.localCalls.Load(), "banner override must use the local index only")
+	assert.Zero(t, checker.liveCalls.Load())
+}
+
+func TestRecordClaimOverride_should_ReturnInvalidArgument_When_URLEmptyOrReasonTooShort(t *testing.T) {
+	svc := NewBacklogService(nil, nil, nil, nil, nil, nil)
+
+	for name, req := range map[string]*sessionv1.RecordClaimOverrideRequest{
+		"empty url":    {Reason: "long enough reason"},
+		"short reason": {ExternalUrl: claimIssueURL, Reason: "no"},
+	} {
+		_, err := svc.RecordClaimOverride(context.Background(), connect.NewRequest(req))
+		var connectErr *connect.Error
+		require.ErrorAs(t, err, &connectErr, name)
+		assert.Equal(t, connect.CodeInvalidArgument, connectErr.Code(), name)
+	}
+}
+
 func TestStuckReasonBlockedByClaim_should_RoundTripProtoEnum_When_Marshaled(t *testing.T) {
 	assert.True(t, domain.StuckReasonBlockedByClaim.IsValid())
 	assert.Equal(t, sessionv1.StuckReason_STUCK_REASON_BLOCKED_BY_CLAIM, toProtoStuckReason(domain.StuckReasonBlockedByClaim))
