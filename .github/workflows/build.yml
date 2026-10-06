@@ -373,7 +373,12 @@ jobs:
             echo "Registry out of date — run: make registry-generate"
             exit 1
           }
-          NEW_FILES=$(git diff --name-only origin/main -- 'docs/registry/features/backend/**' 2>/dev/null || true)
+          # --diff-filter=A: only files *added* relative to origin/main are a new RPC.
+          # Without it, a refactor that only moves a handler to a different file (and so
+          # only bumps handlerFile/lastModified on an existing, already-untested feature
+          # file) is indistinguishable from a brand-new untested RPC, and blocks on
+          # pre-existing debt this PR didn't create.
+          NEW_FILES=$(git diff --name-only --diff-filter=A origin/main -- 'docs/registry/features/backend/**' 2>/dev/null || true)
           for f in $NEW_FILES; do
             if [ -f "$f" ] && jq -e '.tested == false' "$f" > /dev/null 2>&1; then
               echo "ERROR: New RPC $f has no test (tested: false). Add a test and set tested: true."
