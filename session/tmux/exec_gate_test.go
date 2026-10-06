@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -269,7 +268,8 @@ func TestExecGate_BoundsPeakConcurrency(t *testing.T) {
 
 	var current atomic.Int32
 	var peak atomic.Int32
-	var saturated atomic.Bool
+	saturated := make(chan struct{})
+	var saturatedOnce sync.Once
 	var wg sync.WaitGroup
 	wg.Add(workers)
 	for i := 0; i < workers; i++ {
@@ -288,15 +288,14 @@ func TestExecGate_BoundsPeakConcurrency(t *testing.T) {
 				}
 			}
 			if cur == n {
-				saturated.Store(true)
+				saturatedOnce.Do(func() { close(saturated) })
 			}
-			// Hold until the gate has been seen full, then yield a while so
-			// later holders overlap too; no wall-clock wait needed.
-			for !saturated.Load() {
-				runtime.Gosched()
-			}
-			for i := 0; i < 200; i++ {
-				runtime.Gosched()
+			// Hold until some holder has seen the gate full; an extra admission
+			// before that point lifts peak above n and fails the assertion below.
+			select {
+			case <-saturated:
+			case <-time.After(10 * time.Second):
+				t.Error("gate never reached full saturation: fewer than n holders admitted")
 			}
 			current.Add(-1)
 		}()

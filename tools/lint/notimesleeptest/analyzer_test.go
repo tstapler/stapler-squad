@@ -10,5 +10,5 @@ import (
 
 func TestAnalyzer(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), notimesleeptest.Analyzer,
-		"a", "tests/realtime")
+		"a", "tests/realtime", "example.com/tests/realtimefoo", "example.com/tests/realtime/sub")
 }

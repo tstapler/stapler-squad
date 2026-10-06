@@ -7,9 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -440,6 +440,8 @@ func TestGitHubPRsPlugin_Fetch_ParsesPRsWithReviewRequestedAndCILabels(t *testin
 func TestGitHubPRsPlugin_Fetch_ConcurrentCIFetchPreservesPerPRLabels(t *testing.T) {
 	const prCount = 12
 	var inFlight, maxInFlight int32
+	saturated := make(chan struct{})
+	var saturatedOnce sync.Once
 	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/repos/acme/widgets/pulls":
@@ -467,9 +469,12 @@ func TestGitHubPRsPlugin_Fetch_ConcurrentCIFetchPreservesPerPRLabels(t *testing.
 			}
 			// Hold this request open until the bounded pool is saturated (or a
 			// safety deadline passes) so concurrent requests actually coincide.
-			deadline := time.Now().Add(2 * time.Second)
-			for atomic.LoadInt32(&maxInFlight) < int32(githubCILabelConcurrency) && time.Now().Before(deadline) {
-				runtime.Gosched()
+			if atomic.LoadInt32(&maxInFlight) >= int32(githubCILabelConcurrency) {
+				saturatedOnce.Do(func() { close(saturated) })
+			}
+			select {
+			case <-saturated:
+			case <-time.After(2 * time.Second):
 			}
 
 			var num int

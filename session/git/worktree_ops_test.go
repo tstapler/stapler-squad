@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // corruptPackedRefs overwrites repoDir's .git/packed-refs with malformed content, forcing
@@ -424,14 +424,13 @@ func TestBranchExistsAfterAddFailure_IncrementsRetryCounter_When_ItRetries(t *te
 	// Create the branch only once the loop has recorded its first retry (so the
 	// attempt-0 check has already seen "not found"); this test is not parallel,
 	// so the counter only moves on this loop's own retries.
+	var racer sync.WaitGroup
+	racer.Add(1)
+	defer racer.Wait()
 	go func() {
-		deadline := time.Now().Add(10 * time.Second)
-		for time.Now().Before(deadline) {
-			if sumGitCounter(t, collectGitMetric(t, "git_worktree_retry_total")) > baseline {
-				break
-			}
-			runtime.Gosched()
-		}
+		defer racer.Done()
+		retried := func() bool { return sumGitCounter(t, collectGitMetric(t, "git_worktree_retry_total")) > baseline }
+		_ = wait.WaitForCondition(retried, wait.WaitConfig{Timeout: 10 * time.Second, PollInterval: 10 * time.Millisecond, Description: "first retry recorded"})
 		cmd := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", branchName)
 		_ = cmd.Run()
 	}()

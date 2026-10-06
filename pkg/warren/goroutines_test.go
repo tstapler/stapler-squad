@@ -2,12 +2,12 @@ package warren_test
 
 import (
 	"context"
-	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/tstapler/stapler-squad/pkg/warren"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 func TestGoroutineGroup_GoAndWait(t *testing.T) {
@@ -84,13 +84,8 @@ func TestGoroutineGroup_CountDecrementsAfterExit(t *testing.T) {
 
 	close(done)
 
-	deadline := time.Now().Add(5 * time.Second)
-	for g.Active()["counter"] != 0 && time.Now().Before(deadline) {
-		runtime.Gosched()
-	}
-	if g.Active()["counter"] != 0 {
-		t.Error("goroutine should not be active after returning")
-	}
+	wait.RequireEventually(t, func() bool { return g.Active()["counter"] == 0 }, 5*time.Second, time.Millisecond,
+		"goroutine should not be active after returning")
 
 	g.Stop()
 }

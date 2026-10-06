@@ -11,6 +11,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"slices"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
@@ -38,30 +39,24 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	return nil, nil
 }
 
+// checkFile reports on identifiers only: pass.TypesInfo.Uses holds the Sel of
+// time.Sleep (direct, aliased, func value) and the bare Sleep of a dot-import alike.
 func checkFile(pass *analysis.Pass, f *ast.File) {
 	file := pass.Fset.File(f.Pos())
+	firstNode := firstNodePosByLine(file, f)
 	ast.Inspect(f, func(n ast.Node) bool {
-		var id *ast.Ident
-		skipChildren := false
-		switch x := n.(type) {
-		case *ast.SelectorExpr: // time.Sleep(...) and the func value `time.Sleep`
-			id, skipChildren = x.Sel, true // children would re-report Sel as a bare Ident
-		case *ast.Ident: // dot-import: Sleep(...)
-			id = x
-		default:
+		id, ok := n.(*ast.Ident)
+		if !ok || id.Name != "Sleep" || !isTimeSleep(pass, id) {
 			return true
 		}
-		if id.Name != "Sleep" || !isTimeSleep(pass, id) {
-			return !skipChildren
-		}
-		switch reason := nolintReason(f, file, id.Pos()); reason {
+		switch nolintFor(f, file, firstNode, id.Pos()) {
 		case reasonOK:
 		case reasonMissing:
 			pass.Reportf(id.Pos(), "//nolint:%s requires a reason, e.g. //nolint:%s waits on real subprocess exit", directive, directive)
 		default:
 			pass.Reportf(id.Pos(), "time.Sleep in a test (ADR-003): use a fake clock, channels, or require.Eventually; move genuinely wall-clock tests to tests/realtime/ or add //nolint:%s <reason>", directive)
 		}
-		return !skipChildren
+		return true
 	})
 }
 
@@ -70,8 +65,12 @@ func isTimeSleep(pass *analysis.Pass, id *ast.Ident) bool {
 	return ok && fn.Pkg() != nil && fn.Pkg().Path() == "time" && fn.Name() == "Sleep"
 }
 
+// isRealtimePackage matches the tests/realtime package and its subpackages by
+// path segment, including the external "_test" variant.
 func isRealtimePackage(path string) bool {
-	return strings.Contains(path, "/tests/realtime") || strings.HasPrefix(path, "tests/realtime")
+	path = strings.TrimSuffix(path, "_test")
+	return path == "tests/realtime" || strings.HasSuffix(path, "/tests/realtime") ||
+		strings.HasPrefix(path, "tests/realtime/") || strings.Contains(path, "/tests/realtime/")
 }
 
 type nolintResult int
@@ -82,27 +81,54 @@ const (
 	reasonOK
 )
 
-// nolintReason looks for //nolint:notimesleeptest <reason> on pos's line or the one above.
-func nolintReason(f *ast.File, file *token.File, pos token.Pos) nolintResult {
+// firstNodePosByLine maps each line to the earliest AST node start on it, so a
+// trailing comment can be told apart from a standalone one.
+func firstNodePosByLine(file *token.File, f *ast.File) map[int]token.Pos {
+	first := map[int]token.Pos{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		if n == nil {
+			return false
+		}
+		if _, isFile := n.(*ast.File); isFile {
+			return true
+		}
+		l := file.Line(n.Pos())
+		if p, ok := first[l]; !ok || n.Pos() < p {
+			first[l] = n.Pos()
+		}
+		return true
+	})
+	return first
+}
+
+// nolintFor finds //nolint:<list> <reason> on pos's line, or on a standalone
+// comment line directly above (a trailing comment never covers the next line).
+func nolintFor(f *ast.File, file *token.File, firstNode map[int]token.Pos, pos token.Pos) nolintResult {
 	line := file.Line(pos)
+	result := reasonNone
 	for _, cg := range f.Comments {
 		for _, c := range cg.List {
-			if cl := file.Line(c.Pos()); cl != line && cl != line-1 {
+			cl := file.Line(c.Pos())
+			sameLine := cl == line
+			prevStandalone := cl == line-1 && !hasCodeBefore(firstNode, cl, c.Pos())
+			if !sameLine && !prevStandalone {
 				continue
 			}
 			text := strings.TrimSpace(strings.TrimPrefix(c.Text, "//"))
-			if !strings.HasPrefix(text, "nolint") {
+			list, reason, _ := strings.Cut(strings.TrimPrefix(text, "nolint:"), " ")
+			if !strings.HasPrefix(text, "nolint:") || !slices.Contains(strings.Split(list, ","), directive) {
 				continue
 			}
-			_, after, found := strings.Cut(text, directive)
-			if !found {
-				continue
+			if strings.TrimSpace(reason) != "" {
+				return reasonOK
 			}
-			if strings.TrimSpace(after) == "" {
-				return reasonMissing
-			}
-			return reasonOK
+			result = reasonMissing
 		}
 	}
-	return reasonNone
+	return result
+}
+
+func hasCodeBefore(firstNode map[int]token.Pos, line int, commentPos token.Pos) bool {
+	p, ok := firstNode[line]
+	return ok && p < commentPos
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -40,6 +41,11 @@ type stuckDialogProcessManager struct {
 
 	// failCount, when > 0, makes the first failCount SendKeys calls return an error.
 	failCount int
+
+	// pollEntered, when non-nil, is closed on the first pane capture so a test
+	// can wait until a driver poll is genuinely in flight.
+	pollEntered     chan struct{}
+	pollEnteredOnce sync.Once
 }
 
 const trustDialogText = `Quick safety check: Is this a project you created or one you trust?
@@ -83,6 +89,9 @@ func (m *stuckDialogProcessManager) SendInputViaControlMode(ctx context.Context,
 const growBaseReps = 500
 
 func (m *stuckDialogProcessManager) content() string {
+	if m.pollEntered != nil {
+		m.pollEnteredOnce.Do(func() { close(m.pollEntered) })
+	}
 	if !m.growPerCall {
 		return m.dialogText
 	}
@@ -1442,7 +1451,7 @@ func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineL
 	baseline := goleak.IgnoreCurrent()
 	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)
 
-	fakePM := &stuckDialogProcessManager{}
+	fakePM := &stuckDialogProcessManager{pollEntered: make(chan struct{})}
 
 	inst := &Instance{
 		Title:          "concurrent-stop-test",
@@ -1455,6 +1464,12 @@ func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineL
 
 	StartSessionDriver(inst, t.TempDir())
 	waitForDriverRunning(t, inst)
+
+	select {
+	case <-fakePM.pollEntered:
+	case <-time.After(driverPollInterval + 5*time.Second):
+		t.Fatal("driver never entered a poll")
+	}
 
 	stopSessionDriverConcurrently(t, inst)
 

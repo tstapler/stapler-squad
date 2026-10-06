@@ -2,10 +2,9 @@ package analytics
 
 import (
 	"encoding/json"
+	"runtime"
 	"sync"
 	"testing"
-
-	"runtime"
 )
 
 func TestNewEscapeCodeStore(t *testing.T) {

@@ -91,12 +91,12 @@ func TestPiStatusSource_IdleAfterAgentEndAndGracePeriod(t *testing.T) {
 // new event arriving before the grace period elapses cancels the pending
 // idle transition, per Story 5.2.1's AC.
 func TestPiStatusSource_NewEventCancelsPendingIdleTransition(t *testing.T) {
+	t.Parallel()
 	src := NewPiStatusSource("test-session", nil)
 	src.handleEvent(PiAgentEndEvent{Type: "agent_end"})
 	// A new turn starts before the grace period elapses.
 	src.handleEvent(PiAgentStartEvent{Type: "agent_start"})
 
-	// The new event must have cancelled the pending idle timer outright.
 	src.mu.Lock()
 	pendingTimer := src.idleTimer
 	src.mu.Unlock()
@@ -104,8 +104,12 @@ func TestPiStatusSource_NewEventCancelsPendingIdleTransition(t *testing.T) {
 		t.Error("idleTimer still pending after agent_start; the new event should have cancelled it")
 	}
 
-	if got := src.CurrentStatus(); got == detection.StatusIdle {
-		t.Errorf("CurrentStatus() = %v, want the pending idle transition to have been canceled by the new agent_start", got)
+	// piIdleGracePeriod is a package const, so a leaked timer can only be ruled out by
+	// outlasting it and observing that the status never flips to Idle.
+	time.Sleep(piIdleGracePeriod + 500*time.Millisecond) //nolint:notimesleeptest absence check: must outlast the real const piIdleGracePeriod to prove the cancelled idle transition never fires
+
+	if got := src.CurrentStatus(); got != detection.StatusProcessing {
+		t.Errorf("CurrentStatus() = %v, want StatusProcessing: the pending idle transition should have been canceled by the new agent_start", got)
 	}
 }
 

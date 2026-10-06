@@ -194,8 +194,10 @@ func BuildTestBinary(t *testing.T) {
 	// In real scenarios, you might want to build conditionally
 }
 
-// awaitRunning blocks until the TUI process is up, replacing fixed startup sleeps (ADR-003).
+// awaitRunning blocks until the TUI has rendered a recognizable prompt, not merely
+// until the process exists (IsRunning is true from spawn), replacing fixed startup sleeps (ADR-003).
 func awaitRunning(t *testing.T, s *TUISession) {
 	t.Helper()
-	require.NoError(t, s.WaitForCondition(s.IsRunning, 5*time.Second, 10*time.Millisecond))
+	require.True(t, s.IsRunning(), "TUI process should be running")
+	require.NoError(t, s.WaitForPrompt(5*time.Second))
 }

@@ -153,7 +153,7 @@ func TestCheckGHAuth_JoinerUnaffectedByLeaderContextCancellation(t *testing.T) {
 
 	joinerDone := make(chan error, 1)
 	go func() { joinerDone <- CheckGHAuth(context.Background()) }()
-	time.Sleep(20 * time.Millisecond) //nolint:notimesleeptest singleflight exposes no signal that a joiner is waiting; // let the joiner actually enter ghAuthGroup.Do and start waiting
+	time.Sleep(20 * time.Millisecond) //nolint:notimesleeptest singleflight exposes no signal that a joiner is waiting, so this lets the joiner actually enter ghAuthGroup.Do and start waiting
 
 	leaderCancel() // leader's own context is canceled while the shared request is still in flight
 	close(release) // now let the fake server respond
