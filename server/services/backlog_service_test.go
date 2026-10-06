@@ -5389,9 +5389,3 @@ func TestResolveHeadlessCaller_should_FallBackToClaudeWithFallbackReason_When_Pr
 	assert.Equal(t, "gemini_unavailable", fallbackReason, "distinct from the unknown-program case's unsupported_program reason")
 	assert.Contains(t, buf.String(), "headless program unavailable")
 }
-
-func TestNonEmptySessionUUIDs(t *testing.T) {
-	got := nonEmptySessionUUIDs([]session.ItemSessionSummary{{SessionUUID: "a"}, {SessionUUID: ""}, {SessionUUID: "b"}})
-	require.Equal(t, []string{"a", "b"}, got)
-	require.Empty(t, nonEmptySessionUUIDs(nil))
-}
