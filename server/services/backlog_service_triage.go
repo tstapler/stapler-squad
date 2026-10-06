@@ -2386,6 +2386,8 @@ func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, 
 	return nil
 }
 
+var errReviewInFlight = errors.New("a review for this item is already in flight")
+
 // AutoRespawnReview implements session.ReviewRespawner. It re-triggers the review gate
 // for a backlog item abandoned in review with no active session — closing the gap where
 // StuckReasonAbandonedReview was previously only detected and notified, never acted on,
@@ -2464,6 +2466,9 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 	}
 
 	if _, reviewErr := s.TriggerReReview(ctx, connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID})); reviewErr != nil {
+		if connect.CodeOf(reviewErr) == connect.CodeAlreadyExists {
+			return nil // another review spawn won the reservation; already logged
+		}
 		return fmt.Errorf("trigger re-review: %w", reviewErr)
 	}
 	log.Info("[AutoRespawnReview] re-review triggered", "item", itemID)
@@ -2792,6 +2797,17 @@ func (s *BacklogService) TriggerReReview(
 	if item.RepoPath == "" {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("set repo_path before triggering re-review"))
+	}
+
+	// 3b. One in-flight review per item, shared with the lifecycle listener's
+	// spawn paths. Held for the whole (synchronous) re-review.
+	if s.reviewGuard != nil {
+		release, ok := s.reviewGuard.TryReserve(item.ID, nil)
+		if !ok {
+			log.Info("[TriggerReReview] skipping: review already in flight", "item", item.ID)
+			return nil, connect.NewError(connect.CodeAlreadyExists, errReviewInFlight)
+		}
+		defer release()
 	}
 
 	// 4. Find the most recent review and work ItemSessions for this item.

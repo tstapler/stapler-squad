@@ -1430,6 +1430,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogLifecycleListener.SetAutoReopener(backlogSvc)
 	backlogLifecycleListener.SetPRFixSpawner(backlogSvc)
 	backlogLifecycleListener.SetReviewRespawner(backlogSvc)
+	backlogSvc.SetReviewSpawnGuard(backlogLifecycleListener.ReviewSpawnGuard())
 	// Wires reconcileCustomGateChecks' scan for overdue custom-check
 	// invocations (Epic 2.4, Task 2.4.4c) — same gateSatisfactionRepo instance
 	// already wired into backlogSvc above, guarded nil-safe by both consumers.
