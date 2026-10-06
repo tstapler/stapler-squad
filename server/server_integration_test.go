@@ -112,10 +112,7 @@ func TestServer_should_NegotiateALPNHTTP2_When_StartRemoteServesOverRealTLS(t *t
 	var err error
 	wait.RequireEventually(t, func() bool {
 		resp, err = client.Get(url) //nolint:noctx
-		if err == nil {
-			return true
-		}
-		return false
+		return err == nil
 	}, 5*time.Second, 10*time.Millisecond, "server did not become reachable")
 	require.NoError(t, err, "expected StartRemote's TLS listener to become reachable")
 	defer resp.Body.Close()
