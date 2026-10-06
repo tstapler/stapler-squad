@@ -205,6 +205,11 @@ jobs:
           skip-cache: false
           only-new-issues: false
 
+      # Project-specific go/analysis passes in tools/lint (norawexec, notimesleeptest, ...).
+      # Not covered by golangci-lint; also runs under `make lint` and `make ci`.
+      - name: Custom lint (tools/lint analyzers)
+        run: make lint-custom
+
       - name: Import cycle check
         run: go build ./...
 

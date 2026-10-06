@@ -765,7 +765,7 @@ func TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil(t *testing.T) {
 	var mu sync.Mutex
 	finished := false
 	svc.trackCleanup(func() {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond) //nolint:notimesleeptest simulated in-flight cleanup Shutdown must block on
 		mu.Lock()
 		finished = true
 		mu.Unlock()
@@ -822,7 +822,7 @@ func TestShutdown_WaitsForDeleteSessionCleanup_LiveInstancePresent(t *testing.T)
 	var mu sync.Mutex
 	finished := false
 	svc.trackCleanup(func() {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond) //nolint:notimesleeptest simulated in-flight cleanup Shutdown must block on
 		mu.Lock()
 		finished = true
 		mu.Unlock()
@@ -855,7 +855,7 @@ func TestShutdown_BlocksUntilTrackedCleanupCompletes(t *testing.T) {
 	var mu sync.Mutex
 	finished := false
 	svc.trackCleanup(func() {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond) //nolint:notimesleeptest simulated in-flight cleanup Shutdown must block on
 		mu.Lock()
 		finished = true
 		mu.Unlock()
@@ -885,7 +885,7 @@ func TestDestroyWithTimeout_ReturnsTimeoutError_When_WorkExceedsTimeout(t *testi
 	workDone := make(chan struct{})
 	start := time.Now()
 	err := destroyWithTimeout(func() error {
-		time.Sleep(workDuration)
+		time.Sleep(workDuration) //nolint:notimesleeptest simulated slow work whose wall-clock timeout handling is under test
 		close(workDone)
 		return nil
 	}, testTimeout)
@@ -921,7 +921,7 @@ func TestWaitForDestroyLoggingSlowCleanup_DoesNotAbandonWorkAfterTimeout(t *test
 	workDone := make(chan struct{})
 	start := time.Now()
 	err := waitForDestroyLoggingSlowCleanup(func() error {
-		time.Sleep(workDuration)
+		time.Sleep(workDuration) //nolint:notimesleeptest simulated slow work whose wall-clock timeout handling is under test
 		close(workDone)
 		return nil
 	}, testTimeout, func() {
@@ -2543,7 +2543,7 @@ func TestResumeHibernatedSession_DoesNotTouchOtherSessions(t *testing.T) {
 	// effect. Best-effort clean it up so repeated test runs don't leave orphaned tmux
 	// sessions, mirroring TestResumeCrashedSession_TransitionsCrashedToActive.
 	t.Cleanup(func() {
-		time.Sleep(100 * time.Millisecond)
+		_ = wait.WaitForCondition(hibernated.Started, wait.WaitConfig{Timeout: time.Second, PollInterval: 10 * time.Millisecond, Description: "relaunch goroutine to start tmux"})
 		_ = hibernated.KillSession()
 	})
 
@@ -2662,7 +2662,7 @@ func TestResumeCrashedSession_TransitionsCrashedToActive(t *testing.T) {
 	// test runs don't leave orphaned tmux sessions on the machine; the goroutine
 	// isn't awaited, so this is a short grace delay, not a guarantee.
 	t.Cleanup(func() {
-		time.Sleep(100 * time.Millisecond)
+		_ = wait.WaitForCondition(testInstance.Started, wait.WaitConfig{Timeout: time.Second, PollInterval: 10 * time.Millisecond, Description: "relaunch goroutine to start tmux"})
 		_ = testInstance.KillSession()
 	})
 

@@ -50,7 +50,7 @@ func runHelperMode(mode string) {
 		signal.Ignore(syscall.SIGTERM)
 		fmt.Printf("pid=%d\n", os.Getpid())
 		_ = os.Stdout.Sync()
-		time.Sleep(time.Hour)
+		time.Sleep(time.Hour) //nolint:notimesleeptest helper subprocess must block until killed by the test; not a timing wait
 	case "orphan":
 		cmd := safeexec.CommandContext(context.Background(), os.Args[0], "-test.run=^$")
 		cmd.Env = append(os.Environ(), helperEnv+"=hang")
@@ -58,7 +58,7 @@ func runHelperMode(mode string) {
 		if err := cmd.Start(); err != nil {
 			os.Exit(4)
 		}
-		time.Sleep(200 * time.Millisecond) // let the grandchild print its pid before we exit
+		time.Sleep(200 * time.Millisecond) //nolint:notimesleeptest helper subprocess: grandchild's stdout is the parent's own fd, so there is no pipe to read a ready signal from
 	case "printenv":
 		env := os.Environ()
 		sort.Strings(env)

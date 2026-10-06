@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/sessionsummary"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // newTestSessionSummaryEntClient constructs a fresh in-memory sqlite-backed
@@ -107,23 +108,21 @@ func getRow(t *testing.T, client *ent.Client, sessionID string) *ent.SessionSumm
 // waitForNewGeneratedRow for the "regenerating an already-READY row" case.
 func waitForStatus(t *testing.T, client *ent.Client, sessionID string, timeout time.Duration, want ...session.SessionSummaryStatus) *ent.SessionSummary {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	var lastErr error
-	for {
+	var found *ent.SessionSummary
+	wait.RequireEventually(t, func() bool {
 		row, err := client.SessionSummary.Query().Where(sessionsummary.SessionID(sessionID)).Only(context.Background())
-		lastErr = err
-		if err == nil {
-			for _, w := range want {
-				if row.Status == string(w) {
-					return row
-				}
+		if err != nil {
+			return false
+		}
+		for _, w := range want {
+			if row.Status == string(w) {
+				found = row
+				return true
 			}
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for session %s to reach status %v (last err=%v)", sessionID, want, lastErr)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return false
+	}, timeout, 10*time.Millisecond, "timed out waiting for session %s to reach status %v", sessionID, want)
+	return found
 }
 
 // waitForNewGeneratedRow polls until sessionID's row reaches READY with a
@@ -133,17 +132,16 @@ func waitForStatus(t *testing.T, client *ent.Client, sessionID string, timeout t
 // immediately instead of waiting for the new write.
 func waitForNewGeneratedRow(t *testing.T, client *ent.Client, sessionID string, after time.Time, timeout time.Duration) *ent.SessionSummary {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for {
+	var found *ent.SessionSummary
+	wait.RequireEventually(t, func() bool {
 		row, err := client.SessionSummary.Query().Where(sessionsummary.SessionID(sessionID)).Only(context.Background())
 		if err == nil && row.Status == string(session.SessionSummaryStatusReady) && row.GeneratedAt != nil && row.GeneratedAt.After(after) {
-			return row
+			found = row
+			return true
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for session %s to produce a new generated row after %v (last err=%v)", sessionID, after, err)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return false
+	}, timeout, 10*time.Millisecond, "timed out waiting for session %s to produce a new generated row after %v", sessionID, after)
+	return found
 }
 
 // ---- GetSessionSummary ----
@@ -296,7 +294,7 @@ func TestRegenerateSessionSummary_should_NotTriggerSecondPipeline_When_AlreadyGe
 
 	// Give the dispatched (and, per the dedup guard, immediately-rejected) second
 	// goroutine a moment to run and confirm it never reached the LLM call.
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond) //nolint:notimesleeptest negative assertion: the rejected goroutine has no completion signal
 	require.Equal(t, 1, pool.callCount(), "expected the dedup guard to reject the second GenerateAndPersist call")
 
 	cancel()

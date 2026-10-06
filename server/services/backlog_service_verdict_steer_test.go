@@ -80,7 +80,7 @@ func TestVerdictSteering_WaitsUntilSessionIdle(t *testing.T) {
 	svc.StartVerdictSteering()
 
 	publishVerdict(bus, item, session.ReviewOutcomePass, "ok")
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond) //nolint:notimesleeptest negative assertion: nothing is emitted on the steerer so there is no completion signal to await
 	require.Empty(t, steerer.calls(), "must not write into a busy pane")
 
 	steerer.mu.Lock()
@@ -115,7 +115,7 @@ func TestVerdictSteering_NoLiveWorkSession_NoSteer(t *testing.T) {
 	svc.StartVerdictSteering()
 
 	publishVerdict(bus, item, session.ReviewOutcomePass, "ok")
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond) //nolint:notimesleeptest negative assertion: nothing is emitted on the steerer so there is no completion signal to await
 	assert.Empty(t, steerer.calls())
 }
 
@@ -126,7 +126,7 @@ func TestVerdictSteering_IgnoresNonVerdictEvents(t *testing.T) {
 	bus.Publish(events.NewBacklogItemChangedEvent(&events.BacklogItemEventPayload{
 		Kind: events.BacklogChangeStatusTransition, Item: item, NewStatus: "review",
 	}))
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond) //nolint:notimesleeptest negative assertion: nothing is emitted on the steerer so there is no completion signal to await
 	assert.Empty(t, steerer.calls())
 }
 
@@ -139,7 +139,7 @@ func TestVerdictSteering_DuplicateEvent_SteersOnce(t *testing.T) {
 	publishVerdict(bus, item, session.ReviewOutcomePass, "ok")
 
 	require.Eventually(t, func() bool { return len(steerer.calls()) >= 1 }, 3*time.Second, 10*time.Millisecond)
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond) //nolint:notimesleeptest negative assertion: nothing is emitted on the steerer so there is no completion signal to await
 	assert.Len(t, steerer.calls(), 1)
 }
 
@@ -150,15 +150,13 @@ func TestVerdictSteering_NewerVerdictSupersedesWaitingOne(t *testing.T) {
 	svc.StartVerdictSteering()
 
 	publishVerdict(bus, item, session.ReviewOutcomeFail, "first")
-	time.Sleep(30 * time.Millisecond)
 	publishVerdict(bus, item, session.ReviewOutcomePass, "second")
-	time.Sleep(30 * time.Millisecond)
 
 	steerer.mu.Lock()
 	steerer.notReady[verdictSteerSessionUUID] = false
 	steerer.mu.Unlock()
 	require.Eventually(t, func() bool { return len(steerer.calls()) >= 1 }, 3*time.Second, 10*time.Millisecond)
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond) //nolint:notimesleeptest negative assertion: nothing is emitted on the steerer so there is no completion signal to await
 	calls := steerer.calls()
 	require.Len(t, calls, 1)
 	assert.Contains(t, calls[0].message, "second")

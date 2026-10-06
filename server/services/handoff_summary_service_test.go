@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/handoffsummary"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // newTestHandoffSummaryEntClient constructs a fresh in-memory sqlite-backed
@@ -220,7 +221,7 @@ func TestTriggerHandoffSummary_DispatchesAsyncAndReturnsGeneratingRow(t *testing
 
 	// The dedup guard inside GenerateAndPersist must have rejected the second
 	// (TriggerHandoffSummary-dispatched) goroutine outright — no second pool call.
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond) //nolint:notimesleeptest negative assertion: the rejected goroutine has no completion signal
 	require.Equal(t, 1, pool.callCount(), "expected the dedup guard to reject the second GenerateAndPersist call")
 
 	cancel()
@@ -267,15 +268,8 @@ func TestTriggerHandoffSummary_ReturnsGeneratingResponse_When_NoRowExistsYet(t *
 	require.Equal(t, sessionID, resp.Msg.Summary.SessionId)
 	require.Equal(t, sessionv1.HandoffSummaryStatus_HANDOFF_SUMMARY_STATUS_GENERATING, resp.Msg.Summary.Status)
 
-	deadline := time.Now().Add(2 * time.Second)
-	for {
+	wait.RequireEventually(t, func() bool {
 		row, findErr := gen.FindRowBySessionID(context.Background(), sessionID)
-		if findErr == nil && row.Status == string(session.HandoffSummaryStatusError) {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for the dispatched generation to reach a terminal state (last err=%v)", findErr)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return findErr == nil && row.Status == string(session.HandoffSummaryStatusError)
+	}, 2*time.Second, 10*time.Millisecond, "timed out waiting for the dispatched generation to reach a terminal state")
 }
