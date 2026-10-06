@@ -5,7 +5,7 @@
   "method": "UpdateCallbackConfig",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
-  "handlerFile": "server/services/session_service.go",
+  "handlerFile": "server/services/session_service_delegates.go",
   "tested": true,
   "testIds": [
     "TestUpdateCallbackConfig_RejectsSSRFTarget",
@@ -13,5 +13,5 @@
     "TestUpdateCallbackConfig_UnsetFieldLeavesExistingValueUnchanged",
     "TestUpdateCallbackConfig_EmptyStringClearsURL"
   ],
-  "lastModified": "2026-08-06T22:39:19.053409246-07:00"
+  "lastModified": "2026-10-05T20:13:49.662443066-07:00"
 }
