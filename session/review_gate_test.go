@@ -1960,7 +1960,7 @@ func TestDiffFromMergeBaseWhenResumed(t *testing.T) {
 	item := &BacklogItemData{RepoPath: dir}
 
 	// Zero commits ahead of main: still empty, so the no-changes gate holds.
-	tip := runGitOutputOrFail(t, dir, "rev-parse", "HEAD")
+	tip := strings.TrimSpace(runGitOutputOrFail(t, dir, "rev-parse", "HEAD"))
 	diff, _ := r.diffFromMergeBaseWhenResumed(context.Background(), item, dir, "work", tip, "", false)
 	require.Empty(t, strings.TrimSpace(diff))
 

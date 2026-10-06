@@ -1303,7 +1303,8 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 		// able to re-request. Fail closed on a lookup error, like the pr_pending guard.
 		itemSessions, lsErr := h.itemSessionsFor(ctx, itemID)
 		if lsErr != nil {
-			return errResult(ErrInternalError, fmt.Sprintf("could not verify active-reviewer state for this item — retry: %v", lsErr), ""), nil
+			log.WarningLog().Printf("request_review: failed to list item sessions for %s: %v", itemID, lsErr)
+			return errResult(ErrInternalError, "could not verify active-reviewer state for this item — retry", ""), nil
 		}
 		if services.HasActiveReviewSession(itemSessions) {
 			return errResult(ErrInvalidArgument, "an active review session already exists for this item — wait for it to finish, or check get_backlog_item if this persists", ""), nil
@@ -1325,7 +1326,8 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	if validStatus == session.BacklogStatusPRPending {
 		itemSessions, lsErr := h.itemSessionsFor(ctx, itemID)
 		if lsErr != nil {
-			return errResult(ErrInternalError, fmt.Sprintf("could not verify active-reviewer state for this item — retry: %v", lsErr), ""), nil
+			log.WarningLog().Printf("request_review: failed to list item sessions for %s: %v", itemID, lsErr)
+			return errResult(ErrInternalError, "could not verify active-reviewer state for this item — retry", ""), nil
 		}
 		if services.HasActiveReviewSession(itemSessions) {
 			return errResult(ErrInvalidArgument, "an active review session already exists for this item — wait for it to finish, or check get_backlog_item if this persists", ""), nil

@@ -726,7 +726,8 @@ func (r *ReviewGateRunner) diffFromMergeBaseWhenResumed(ctx context.Context, ite
 		dir = worktreePath
 	}
 	mergeBase, err := RecoverBaseCommitSHA(ctx, dir, branch)
-	if err != nil || mergeBase == "" || mergeBase == recordedBase {
+	mergeBase = strings.TrimSpace(mergeBase)
+	if err != nil || mergeBase == "" || mergeBase == strings.TrimSpace(recordedBase) {
 		return diff, truncated
 	}
 	mbDiff, mbTruncated, err := GetGitDiffRef(ctx, dir, mergeBase, branch)
