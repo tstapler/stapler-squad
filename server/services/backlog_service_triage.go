@@ -1065,13 +1065,17 @@ func (s *BacklogService) spawnSessionAfterGates(
 	if autonomous {
 		spawnTags = append(spawnTags, session.TagAutonomous)
 	}
+	spawnOpts := SessionSpawnOptions{
+		Title:           title,
+		Prompt:          prompt,
+		Tags:            spawnTags,
+		ProgramOverride: programOverride,
+	}
 	var inst *session.Instance
 	if useWorktree {
-		inst, err = s.sessionCreator.CreateWorktreeSession(ctx, title, item.RepoPath, worktreePath, prompt,
-			spawnTags, false, false, programOverride)
+		inst, err = s.sessionCreator.CreateWorktreeSession(ctx, item.RepoPath, worktreePath, spawnOpts)
 	} else {
-		inst, err = s.sessionCreator.CreateDirectorySession(ctx, title, worktreePath, prompt,
-			spawnTags, false, false, programOverride)
+		inst, err = s.sessionCreator.CreateDirectorySession(ctx, worktreePath, spawnOpts)
 	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn session: %w", err))
@@ -3234,8 +3238,14 @@ Do not modify the code. Only write the review verdict.
 		s.archiveItemWorkSessions(ctx, []session.ItemSessionSummary{*mostRecentReviewSession})
 	}
 
-	inst, spawnErr := s.sessionCreator.CreateDirectorySession(ctx, title, item.RepoPath, reReviewPrompt,
-		[]string{"backlog:review"}, !useAutonomous /*oneShot*/, true /*hidden*/, "" /*programOverride: review-stage threading is out of Epic 2.4's scope*/)
+	inst, spawnErr := s.sessionCreator.CreateDirectorySession(ctx, item.RepoPath, SessionSpawnOptions{
+		Title:  title,
+		Prompt: reReviewPrompt,
+		Tags:   []string{"backlog:review"},
+		// review-stage program threading is out of Epic 2.4's scope, so ProgramOverride stays "".
+		OneShot: !useAutonomous,
+		Hidden:  true,
+	})
 	if spawnErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn re-review session: %w", spawnErr))
 	}

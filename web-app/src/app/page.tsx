@@ -2,7 +2,6 @@
 // +feature: session-list session-search session-filter session-groupby session-list-collapse-groups
 
 import React, { useState, useEffect, useRef, Suspense, useCallback, useMemo } from "react";
-import { createPortal } from "react-dom";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Session } from "@/gen/session/v1/types_pb";
 import { SessionListSkeleton } from "@/components/sessions/SessionListSkeleton";
@@ -30,6 +29,10 @@ import { useSessionViewMode } from "@/lib/hooks/useSessionViewMode";
 import { usePageView } from "@/lib/analytics/usePageView";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
+import { findSessionById as findSessionByIdIn } from "./findSessionById";
+import { useOmnibarQueryParamLaunch } from "./useOmnibarQueryParamLaunch";
+import { DeleteSessionConfirmModal } from "./DeleteSessionConfirmModal";
+import { useResumeSessionFlow } from "./useResumeSessionFlow";
 import * as styles from "./page.css";
 
 function HomeContent() {
@@ -56,22 +59,21 @@ function HomeContent() {
   const [externalAssignCounter, setExternalAssignCounter] = useState(0);
   const [externalAssignSession, setExternalAssignSession] = useState<{ sessionId: string; tab: SessionDetailTab; forceNewPane?: boolean } | null>(null);
 
-
-  // Resume modal state
-  const [resumeTarget, setResumeTarget] = useState<Session | null>(null);
-
   // Focus management: modal containers (tabIndex={-1}) and trigger element refs
   const sessionDetailRef = useRef<HTMLDivElement>(null);
   const sessionTriggerRef = useRef<HTMLElement | null>(null);
   const deleteDialogRef = useRef<HTMLDivElement>(null);
   const lastFocusBeforeDelete = useRef<HTMLElement | null>(null);
-  const resumeTriggerRef = useRef<HTMLElement | null>(null);
   const windowTabStripRef = useRef<WindowTabStripHandle>(null);
 
   // Tracks the last URL params that were routed to a pane. Prevents the URL-watching
   // effect from re-triggering pane assignment on every sessions stream update (which
   // changes the `sessions` dependency but not the URL itself).
   const lastUrlRoutedRef = useRef<{ sessionId: string | null; tab: string | null }>({ sessionId: null, tab: null });
+
+  // Guards the hidden-session fallback fetch (below) so it fires once per
+  // sessionId instead of refiring on every `sessions` stream update.
+  const hiddenSessionFallbackRef = useRef<string | null>(null);
 
   // Focus detail panel when session opens; return focus on close
   useEffect(() => {
@@ -85,7 +87,6 @@ function HomeContent() {
 
   // Trap focus inside delete confirmation dialog; return focus on close
   useFocusTrap(deleteDialogRef, !!deleteConfirmTarget, lastFocusBeforeDelete);
-
 
   const {
     sessions,
@@ -107,6 +108,15 @@ function HomeContent() {
     updateSession,
     getSession,
   } = useSessionServiceContext();
+
+  const {
+    resumeTarget,
+    resumeTriggerRef,
+    handleResumeRequest,
+    handleDirectResume,
+    handleResumeConfirm,
+    handleResumeCancel,
+  } = useResumeSessionFlow(resumeSession, track);
 
   // Multi-window layer (Epic 2.2): useWindowManager owns the windows array/persistence;
   // useWindowUrlSync resolves which window this tab is showing from `?window=`. Neither
@@ -134,41 +144,10 @@ function HomeContent() {
   );
   useWindowShortcuts(windows, currentWindow.id, switchToWindow, handleWindowRenameRequest);
   // Helper function to find a session by ID with fuzzy matching for external sessions
-  const findSessionById = useCallback((sessionId: string): Session | undefined => {
-    let session = sessions.find((s) => s.id === sessionId);
-    if (session) return session;
-
-    session = sessions.find((s) => {
-      if (s.id.startsWith(sessionId)) return true;
-      if (s.externalMetadata?.tmuxSessionName === sessionId) return true;
-      if (sessionId.includes("/") && s.existingDir && s.existingDir.includes(sessionId)) return true;
-      if (s.existingDir && s.existingDir.endsWith(`/${sessionId}`)) return true;
-      return false;
-    });
-
-    if (!session && sessionId.includes("_")) {
-      const withoutPrefix = sessionId.split("_").slice(1).join("_");
-      session = sessions.find((s) => s.id === withoutPrefix || s.title === withoutPrefix);
-    }
-
-    if (!session) {
-      const searchLower = sessionId.toLowerCase();
-      session = sessions.find((s) => {
-        if (s.title.toLowerCase() === searchLower) return true;
-        const pathBasename = s.existingDir?.split("/").pop()?.toLowerCase();
-        if (pathBasename === searchLower) return true;
-        return false;
-      });
-    }
-
-    if (!session) {
-      console.warn(`[findSessionById] No session found for ID: ${sessionId}`, {
-        availableSessions: sessions.map(s => ({ id: s.id, title: s.title, path: s.existingDir }))
-      });
-    }
-
-    return session;
-  }, [sessions]);
+  const findSessionById = useCallback(
+    (sessionId: string): Session | undefined => findSessionByIdIn(sessions, sessionId),
+    [sessions]
+  );
 
   // Update URL with session and tab parameters
   const updateUrl = useCallback((sessionId: string | null, tab: SessionDetailTab | null) => {
@@ -198,74 +177,80 @@ function HomeContent() {
     }
   }, [pendingSessionId, sessions, findSessionById, updateUrl]);
 
+  // Routes to a resolved session — shared by the in-list (findSessionById)
+  // and hidden-session (getSession fallback) paths below so both apply the
+  // exact same tab/pane wiring.
+  const routeToResolvedSession = useCallback(
+    (session: Session, sessionId: string, tabParam: string | null, newPaneParam: string | null) => {
+      setSelectedSession(session);
+      const resolvedTab = isValidTab(tabParam) ? tabParam : "terminal";
+      setActiveTab(resolvedTab);
+      // Only route to pane when URL params actually changed. The `sessions` dependency
+      // causes this effect to re-run on every stream update; without this guard the
+      // picker would re-appear after every session status change.
+      if (lastUrlRoutedRef.current.sessionId !== sessionId || lastUrlRoutedRef.current.tab !== tabParam) {
+        lastUrlRoutedRef.current = { sessionId, tab: tabParam };
+        setExternalAssignCounter((c) => c + 1);
+        setExternalAssignSession({
+          sessionId: session.id,
+          tab: resolvedTab,
+          forceNewPane: newPaneParam === "true",
+        });
+      }
+      // Clean up newPane param from URL after consuming it
+      if (newPaneParam === "true") {
+        const params = new URLSearchParams();
+        params.set("session", sessionId);
+        if (tabParam) params.set("tab", tabParam);
+        router.replace(`/?${params.toString()}`, { scroll: false });
+      }
+    },
+    [router]
+  );
+
+  // Not in the locally-fetched list — e.g. a Diagnose & Nudge diagnostic
+  // session, dispatched with hidden=true so it doesn't clutter the main
+  // session list (server/services/session_service.go's
+  // SpawnDiagnosticSession). ListSessions excludes hidden sessions by
+  // default and this component never passes includeHidden, so such a
+  // session can never appear in `sessions` — without this fallback, its
+  // "View diagnostic session" deep link (StuckItemDetail.tsx) would silently
+  // no-op. GetSession, unlike ListSessions, doesn't filter on Hidden, so a
+  // direct-by-UUID lookup still resolves it. Guarded by
+  // hiddenSessionFallbackRef so it fires once per sessionId, not on every
+  // `sessions` stream update.
+  const fetchHiddenSessionFallback = useCallback(
+    (sessionId: string, tabParam: string | null, newPaneParam: string | null) => {
+      if (hiddenSessionFallbackRef.current === sessionId) return;
+      hiddenSessionFallbackRef.current = sessionId;
+      getSession(sessionId).then((fetched) => {
+        if (!fetched) {
+          console.warn(`[URL] Session not found: ${sessionId}`);
+          return;
+        }
+        routeToResolvedSession(fetched, sessionId, tabParam, newPaneParam);
+      });
+    },
+    [getSession, routeToResolvedSession]
+  );
+
   // Handle direct session selection from URL
   useEffect(() => {
     const sessionId = searchParams.get("session");
     const tabParam = searchParams.get("tab");
     const newPaneParam = searchParams.get("newPane");
-    if (sessionId && sessions.length > 0) {
-      const session = findSessionById(sessionId);
-      if (session) {
-        setSelectedSession(session);
-        const resolvedTab = isValidTab(tabParam) ? tabParam : "terminal";
-        setActiveTab(resolvedTab);
-        // Only route to pane when URL params actually changed. The `sessions` dependency
-        // causes this effect to re-run on every stream update; without this guard the
-        // picker would re-appear after every session status change.
-        if (lastUrlRoutedRef.current.sessionId !== sessionId || lastUrlRoutedRef.current.tab !== tabParam) {
-          lastUrlRoutedRef.current = { sessionId, tab: tabParam };
-          setExternalAssignCounter((c) => c + 1);
-          setExternalAssignSession({
-            sessionId: session.id,
-            tab: resolvedTab,
-            forceNewPane: newPaneParam === "true",
-          });
-        }
-        // Clean up newPane param from URL after consuming it
-        if (newPaneParam === "true") {
-          const params = new URLSearchParams();
-          params.set("session", sessionId);
-          if (tabParam) params.set("tab", tabParam);
-          router.replace(`/?${params.toString()}`, { scroll: false });
-        }
-      } else {
-        console.warn(`[URL] Session not found: ${sessionId}`);
-      }
+    if (!sessionId || sessions.length === 0) return;
+
+    const session = findSessionById(sessionId);
+    if (session) {
+      routeToResolvedSession(session, sessionId, tabParam, newPaneParam);
+      return;
     }
-  }, [searchParams, sessions, findSessionById, router]);
+    fetchHiddenSessionFallback(sessionId, tabParam, newPaneParam);
+  }, [searchParams, sessions, findSessionById, routeToResolvedSession, fetchHiddenSessionFallback]);
 
   // Detect ?new=true, ?pr=<url>, ?duplicate=<id>, or ?worktree=<path>&branch=<branch> query params
-  useEffect(() => {
-    const newParam = searchParams.get("new");
-    const prUrl = searchParams.get("pr");
-    const duplicateId = searchParams.get("duplicate");
-    const worktreePath = searchParams.get("worktree");
-    const worktreeBranch = searchParams.get("branch");
-    const title = searchParams.get("title");
-
-    if (prUrl) {
-      router.replace("/", { scroll: false });
-      openOmnibar(prUrl);
-    } else if (newParam === "true") {
-      router.replace("/", { scroll: false });
-      openOmnibar();
-    } else if (duplicateId) {
-      router.replace("/", { scroll: false });
-      track({ name: "session_duplicate_initiated", category: "user_action" });
-      getSession(duplicateId).then((session) => {
-        openOmnibar(session?.repoRoot);
-      }).catch(() => {
-        openOmnibar();
-      });
-    } else if (worktreePath) {
-      router.replace("/", { scroll: false });
-      // Pass path@branch so the PathWithBranch detector pre-fills both fields
-      openOmnibar(
-        worktreeBranch ? `${worktreePath}@${worktreeBranch}` : worktreePath,
-        title || undefined
-      );
-    }
-  }, [searchParams, getSession, openOmnibar, router, track]);
+  useOmnibarQueryParamLaunch(searchParams, router, openOmnibar, track, getSession);
 
   // Close session and clear URL query parameter
   const closeSession = () => {
@@ -353,31 +338,6 @@ function HomeContent() {
     return true;
   }, [updateSession, track, addNotification]);
 
-  const handleResumeRequest = useCallback((session: Session) => {
-    resumeTriggerRef.current = document.activeElement as HTMLElement;
-    setResumeTarget(session);
-  }, []);
-
-  const handleDirectResume = useCallback((session: Session) => {
-    track({ name: "session_resumed", category: "user_action" });
-    resumeSession(session.id, { title: session.title, tags: [...(session.tags || [])] });
-  }, [resumeSession, track]);
-
-  const handleResumeConfirm = useCallback(async (updates: { title: string; tags: string[] }) => {
-    if (!resumeTarget) return;
-    try {
-      track({ name: "session_resumed", category: "user_action" });
-      await resumeSession(resumeTarget.id, updates);
-      setResumeTarget(null);
-    } catch {
-      // resumeSession dispatches to Redux error state; modal stays open for retry
-    }
-  }, [resumeTarget, resumeSession, track]);
-
-  const handleResumeCancel = useCallback(() => {
-    setResumeTarget(null);
-  }, []);
-
   const handleSessionClick = (session: Session) => {
     sessionTriggerRef.current = document.activeElement as HTMLElement;
     if (typeof performance !== "undefined") {
@@ -415,7 +375,7 @@ function HomeContent() {
       if (deleteConfirmTarget) {
         setDeleteConfirmTarget(null);
       } else if (resumeTarget) {
-        setResumeTarget(null);
+        handleResumeCancel();
       } else if (selectedSession) {
         closeSession();
       }
@@ -565,42 +525,13 @@ function HomeContent() {
       )}
 
       {/* Delete confirmation modal (triggered by 'd' keyboard shortcut) */}
-      {deleteConfirmTarget && createPortal(
-        <div className={styles.modal} onClick={() => setDeleteConfirmTarget(null)}>
-          <div
-            ref={deleteDialogRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="deleteConfirmTitle"
-            tabIndex={-1}
-            className={styles.modalContent}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => { if (e.key === "Escape") setDeleteConfirmTarget(null); }}
-          >
-            <div className={styles.modalHeader}>
-              <h2 id="deleteConfirmTitle">Delete Session</h2>
-              <button className={styles.closeButton} onClick={() => setDeleteConfirmTarget(null)} aria-label="Close">✕</button>
-            </div>
-            <div className={styles.modalBody}>
-              <p>Delete &quot;{deleteConfirmTarget.title}&quot;?</p>
-              <p style={{ color: "var(--error, #ef4444)", fontSize: "0.875rem", marginTop: "0.5rem" }}>This action cannot be undone.</p>
-              <div className={styles.deleteConfirmActions}>
-                <button autoFocus className={styles.cancelButton} onClick={() => setDeleteConfirmTarget(null)}>Cancel</button>
-                <button
-                  className={styles.dangerButton}
-                  onClick={async () => {
-                    const target = deleteConfirmTarget;
-                    setDeleteConfirmTarget(null);
-                    await handleDeleteSession(target.id);
-                  }}
-                >
-                  Delete
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>,
-        document.body
+      {deleteConfirmTarget && (
+        <DeleteSessionConfirmModal
+          target={deleteConfirmTarget}
+          dialogRef={deleteDialogRef}
+          onCancel={() => setDeleteConfirmTarget(null)}
+          onConfirm={handleDeleteSession}
+        />
       )}
     </div>
   );
