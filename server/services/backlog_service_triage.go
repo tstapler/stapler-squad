@@ -3174,13 +3174,7 @@ Do not modify the code. Only write the review verdict.
 	// (ce71ad1a) -- a stale pane under this exact title belonging to an unrelated
 	// item is refused, not silently killed.
 	if s.sessionStopper != nil {
-		ownUUIDs := make([]string, 0, len(sessions))
-		for _, is := range sessions {
-			if is.SessionUUID != "" {
-				ownUUIDs = append(ownUUIDs, is.SessionUUID)
-			}
-		}
-		if err := s.sessionStopper.KillTmuxSessionByTitle(ctx, title, ownUUIDs...); errors.Is(err, ErrTmuxKillRefused) {
+		if err := s.sessionStopper.KillTmuxSessionByTitle(ctx, title, nonEmptySessionUUIDs(sessions)...); errors.Is(err, ErrTmuxKillRefused) {
 			log.Warn("re-review: stale tmux session not owned by this item, leaving it", "title", title, "err", err)
 		}
 	}
@@ -3590,4 +3584,16 @@ func resolveACSnapshot(workSession *session.ItemSessionSummary, itemAC session.A
 		}
 	}
 	return live
+}
+
+// nonEmptySessionUUIDs lists the session UUIDs an item owns, skipping rows
+// that never got one.
+func nonEmptySessionUUIDs(sessions []session.ItemSessionSummary) []string {
+	uuids := make([]string, 0, len(sessions))
+	for _, is := range sessions {
+		if is.SessionUUID != "" {
+			uuids = append(uuids, is.SessionUUID)
+		}
+	}
+	return uuids
 }

@@ -1443,17 +1443,9 @@ func isTmuxSessionAbsentText(text string) bool {
 // prefix). This handles the case where the Instance is no longer tracked in memory
 // but the underlying tmux session is still alive.
 //
-// allowedOwnerUUIDs are the Instance UUID(s) the caller believes it's safe to
-// kill under this title (e.g. the Instance being deleted, or an item's own
-// prior review/work session UUIDs before a re-review respawn). Before
-// killing, the pane's STAPLER_SESSION_UUID marker is read back and compared
-// against this list -- a name match alone isn't enough, since a stale pane
-// left under this exact name can belong to a completely different, unrelated
-// Instance (ce71ad1a). A present-but-unlisted marker refuses the kill with a
-// loud log line instead of silently acting on someone else's pane; an
-// unreadable marker on a session that does exist (e.g. "unknown variable" --
-// a pre-fix session with no marker at all) is treated the same way, not
-// grandfathered in.
+// The kill only proceeds if the pane's STAPLER_SESSION_UUID is in
+// allowedOwnerUUIDs; a name match alone can hit an unrelated Instance's pane
+// (ce71ad1a). Otherwise it returns ErrTmuxKillRefused.
 func (s *SessionService) KillTmuxSessionByTitle(ctx context.Context, title string, allowedOwnerUUIDs ...string) error {
 	name := stapleSquadTmuxName(title)
 

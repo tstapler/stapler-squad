@@ -19,22 +19,10 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 )
 
-// ReadSessionOwnerUUID reads back the STAPLER_SESSION_UUID env var stamped on
-// a tmux session at creation (instance_tmux.go's buildExtraEnv) via `tmux
-// show-environment`, the same read-back mechanism orphan_sweep.go and
-// workspace_peers.go already use to identify sessions. For callers with no
-// TmuxSession object to hand (e.g. server/services' KillTmuxSessionByTitle,
-// which only has a title/name).
-//
-// Returns ("", err) whenever the marker can't be confirmed present: no such
-// session, no server running, or the variable was simply never set on an
-// existing session (a normal tmux exit-1 case, not evidence of anything).
-// Callers must treat any non-nil err as "ownership unverifiable" and act
-// conservatively -- never as an implicit "no owner, safe to proceed."
-//
-// socket should come from ResolveSocket (or Socket("") for the default
-// server), matching every other package-level tmux invocation's socket
-// handling.
+// ReadSessionOwnerUUID reads back the STAPLER_SESSION_UUID stamped on a tmux
+// session at creation, for callers with only a name. Any non-nil err means
+// ownership is unverifiable and must be treated conservatively, never as
+// "no owner".
 func ReadSessionOwnerUUID(ctx context.Context, socket Socket, name string) (string, error) {
 	args := socket.Args("show-environment", "-t", name, "STAPLER_SESSION_UUID")
 	out, err := safeexec.CommandContext(ctx, ResolveClientForSocket(socket.String()), args...).CombinedOutput()

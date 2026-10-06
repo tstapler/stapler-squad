@@ -208,10 +208,12 @@ type mockSessionCreator struct {
 
 // mockSessionStopper implements SessionStopper for tests.
 type mockSessionStopper struct {
-	liveUUIDs         map[string]bool
-	killedPaneUUIDs   []string
-	archivedUUIDs     []string
-	archiveErrForUUID map[string]error
+	liveUUIDs       map[string]bool
+	killedPaneUUIDs []string
+	// killByTitleAllowed records the allowedOwnerUUIDs of each KillTmuxSessionByTitle call.
+	killByTitleAllowed [][]string
+	archivedUUIDs      []string
+	archiveErrForUUID  map[string]error
 	// stoppedUUIDs records every UUID passed to StopSessionByUUID.
 	stoppedUUIDs []string
 	// stopperErr, if non-nil, is returned by StopSessionByUUID (default nil —
@@ -277,7 +279,8 @@ func (m *mockSessionStopper) StopSessionByUUID(_ context.Context, uuid string) e
 	return m.stopperErr
 }
 
-func (m *mockSessionStopper) KillTmuxSessionByTitle(_ context.Context, _ string, _ ...string) error {
+func (m *mockSessionStopper) KillTmuxSessionByTitle(_ context.Context, _ string, allowedOwnerUUIDs ...string) error {
+	m.killByTitleAllowed = append(m.killByTitleAllowed, allowedOwnerUUIDs)
 	return nil
 }
 
@@ -5385,4 +5388,10 @@ func TestResolveHeadlessCaller_should_FallBackToClaudeWithFallbackReason_When_Pr
 	assert.Equal(t, "gemini", configuredProgram)
 	assert.Equal(t, "gemini_unavailable", fallbackReason, "distinct from the unknown-program case's unsupported_program reason")
 	assert.Contains(t, buf.String(), "headless program unavailable")
+}
+
+func TestNonEmptySessionUUIDs(t *testing.T) {
+	got := nonEmptySessionUUIDs([]session.ItemSessionSummary{{SessionUUID: "a"}, {SessionUUID: ""}, {SessionUUID: "b"}})
+	require.Equal(t, []string{"a", "b"}, got)
+	require.Empty(t, nonEmptySessionUUIDs(nil))
 }
