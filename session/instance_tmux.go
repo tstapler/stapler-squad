@@ -75,7 +75,13 @@ type launchCommandBuilder interface {
 // checks before falling back to the default (shell-quote-and-run-as-is) path.
 // A future program's builder is appended here, never a new case in
 // buildLaunchCommand itself.
-var launchBuilders = []launchCommandBuilder{&claudeLaunchBuilder{}, &piLaunchBuilder{}}
+var launchBuilders = []launchCommandBuilder{
+	&claudeLaunchBuilder{},
+	&piLaunchBuilder{},
+	&opencodeLaunchBuilder{},
+	&agyLaunchBuilder{},
+	&geminiLaunchBuilder{},
+}
 
 // claudeLaunchBuilder implements launchCommandBuilder for the claude binary.
 type claudeLaunchBuilder struct{}
@@ -140,6 +146,89 @@ func piStderrLogPath(i *Instance) (string, error) {
 		return '-'
 	}, i.Title)
 	return filepath.Join(logDir, fmt.Sprintf("pi-stderr_%s.log", safeTitle)), nil
+}
+
+// opencodeLaunchBuilder implements launchCommandBuilder for OpenCode.
+type opencodeLaunchBuilder struct{}
+
+func (b *opencodeLaunchBuilder) Matches(program string) bool { return isOpencode(program) }
+
+func (b *opencodeLaunchBuilder) Build(i *Instance, base, resumeSessionID string) string {
+	parts := []string{base}
+	if resumeSessionID != "" {
+		parts = append(parts, "--session", shellQuote(resumeSessionID))
+	}
+	if i.AutoYes {
+		parts = append(parts, "--auto")
+	}
+	return strings.Join(parts, " ")
+}
+
+func (b *opencodeLaunchBuilder) StderrRedirect(i *Instance) string { return "" }
+
+// agyLaunchBuilder implements launchCommandBuilder for Antigravity (agy).
+type agyLaunchBuilder struct{}
+
+func (b *agyLaunchBuilder) Matches(program string) bool { return isAgy(program) }
+
+func (b *agyLaunchBuilder) Build(i *Instance, base, resumeSessionID string) string {
+	parts := []string{base}
+	if resumeSessionID != "" {
+		parts = append(parts, "--resume", shellQuote(resumeSessionID))
+	}
+	if i.AutoYes {
+		parts = append(parts, "--auto")
+	}
+	return strings.Join(parts, " ")
+}
+
+func (b *agyLaunchBuilder) StderrRedirect(i *Instance) string { return "" }
+
+// geminiLaunchBuilder implements launchCommandBuilder for Gemini CLI.
+type geminiLaunchBuilder struct{}
+
+func (b *geminiLaunchBuilder) Matches(program string) bool { return isGemini(program) }
+
+func (b *geminiLaunchBuilder) Build(i *Instance, base, resumeSessionID string) string {
+	parts := []string{base}
+	if resumeSessionID != "" {
+		parts = append(parts, "--resume", shellQuote(resumeSessionID))
+	}
+	if i.AutoYes {
+		parts = append(parts, "--auto")
+	}
+	return strings.Join(parts, " ")
+}
+
+func (b *geminiLaunchBuilder) StderrRedirect(i *Instance) string { return "" }
+
+// isOpencode reports whether the program command invokes the opencode binary.
+func isOpencode(program string) bool {
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
+		program = res.Command
+	}
+	return strings.Contains(strings.ToLower(program), "opencode")
+}
+
+// isAgy reports whether the program command invokes the agy / antigravity binary.
+func isAgy(program string) bool {
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
+		program = res.Command
+	}
+	p := strings.ToLower(program)
+	return strings.Contains(p, "agy") || strings.Contains(p, "antigravity")
+}
+
+// isGemini reports whether the program command invokes the gemini binary (excluding agy/antigravity).
+func isGemini(program string) bool {
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
+		program = res.Command
+	}
+	p := strings.ToLower(program)
+	return strings.Contains(p, "gemini") && !strings.Contains(p, "agy") && !strings.Contains(p, "antigravity")
 }
 
 // isClaude reports whether the program command invokes the claude binary.

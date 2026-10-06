@@ -92,7 +92,7 @@ func (i *Instance) StartController() error {
 		})
 		i.fireLifecycleEvent(EventExited, "pty-eof")
 
-		if isStaleResumeExit(exitContent) {
+		if isStaleResumeExit(i.Program, exitContent) {
 			go i.recoverFromStaleResume()
 		}
 	})
