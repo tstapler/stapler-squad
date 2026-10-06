@@ -5,7 +5,7 @@
   "method": "CancelSessionCreation",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
-  "handlerFile": "server/services/session_service_lifecycle.go",
+  "handlerFile": "server/services/session_service.go",
   "tested": true,
   "testIds": [
     "TestCancelSessionCreation_should_RemoveInstanceAndCleanUp_When_StatusIsCreating",
@@ -15,5 +15,5 @@
     "TestCancelSessionCreation_should_ReturnNotFound_When_SessionDoesNotExist",
     "TestCancelSessionCreation_should_ReturnInvalidArgument_When_IdIsEmpty"
   ],
-  "lastModified": "2026-10-05T20:13:49.662443066-07:00"
+  "lastModified": "2026-08-27T01:50:21.805937893-07:00"
 }

@@ -5,8 +5,8 @@
   "method": "ListWorkspaceTargets",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
-  "handlerFile": "server/services/session_service_delegates.go",
+  "handlerFile": "server/services/session_service.go",
   "tested": false,
   "testIds": [],
-  "lastModified": "2026-10-05T20:13:49.662443066-07:00"
+  "lastModified": "2026-06-26T08:55:46.608811477-07:00"
 }
