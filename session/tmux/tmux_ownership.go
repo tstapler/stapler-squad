@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
@@ -41,6 +42,10 @@ func ReadSessionOwnerUUID(ctx context.Context, socket Socket, name string) (stri
 	return strings.TrimPrefix(strings.TrimSpace(string(out)), "STAPLER_SESSION_UUID="), nil
 }
 
+// ownerTmuxCmdTimeout bounds the tmux calls on the start/reattach path so a
+// hung tmux server can't stall session creation or restore.
+const ownerTmuxCmdTimeout = 5 * time.Second
+
 // expectedOwnerUUID returns the STAPLER_SESSION_UUID this TmuxSession was
 // configured to own (set via SetExtraEnv by instance_tmux.go's
 // wireTmuxSession), or "" when this TmuxSession has no owner expectation to
@@ -70,6 +75,8 @@ func (t *TmuxSession) verifyExistingSessionOwner(ctx context.Context) bool {
 	if want == "" {
 		return true
 	}
+	ctx, cancel := context.WithTimeout(ctx, ownerTmuxCmdTimeout)
+	defer cancel()
 	cmd := t.buildTmuxCommandContext(ctx, "show-environment", "-t", t.sanitizedName, "STAPLER_SESSION_UUID")
 	out, err := t.cmdExec.Output(cmd)
 	if err != nil {
@@ -89,11 +96,15 @@ func (t *TmuxSession) verifyExistingSessionOwner(ctx context.Context) bool {
 // killMismatchedOwnerSession kills a stale tmux session whose owner marker
 // didn't match ours, so the subsequent recreateMissingSession's `new-session`
 // doesn't collide with it (ce71ad1a).
-func (t *TmuxSession) killMismatchedOwnerSession() {
-	cmd := t.buildTmuxCommand("kill-session", "-t", t.sanitizedName)
-	if err := t.cmdExec.Run(cmd); err != nil {
+func (t *TmuxSession) killMismatchedOwnerSession() error {
+	ctx, cancel := context.WithTimeout(context.Background(), ownerTmuxCmdTimeout)
+	defer cancel()
+	cmd := t.buildTmuxCommandContext(ctx, "kill-session", "-t", t.sanitizedName)
+	err := t.cmdExec.Run(cmd)
+	if err != nil {
 		log.Warn("killMismatchedOwnerSession: failed to kill stale tmux session before recreate",
 			"session", t.sanitizedName, "err", err)
 	}
 	t.invalidateExistsCache()
+	return err
 }

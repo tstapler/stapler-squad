@@ -201,7 +201,7 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 		// Owner mismatch (ce71ad1a): this pane belongs to a different Instance.
 		// Kill it and fall through to the normal creation path below instead of
 		// reattaching.
-		t.killMismatchedOwnerSession()
+		_ = t.killMismatchedOwnerSession() // failure surfaces as a duplicate-session error on recreate
 	}
 
 	if err := ValidateWorkDir(workDir); err != nil {
@@ -557,7 +557,7 @@ func (t *TmuxSession) ensureSessionExistsLocked(workDir string) error {
 		}
 		// Owner mismatch (ce71ad1a): this pane belongs to a different
 		// Instance. Kill it and recreate instead of reattaching.
-		t.killMismatchedOwnerSession()
+		_ = t.killMismatchedOwnerSession() // failure surfaces as a duplicate-session error on recreate
 		return t.recreateMissingSession(workDir)
 	}
 
@@ -570,7 +570,7 @@ func (t *TmuxSession) ensureSessionExistsLocked(workDir string) error {
 			log.Info("found existing tmux session on final non-cached check (cache was stale), will reattach", "session", t.sanitizedName)
 			return nil
 		}
-		t.killMismatchedOwnerSession()
+		_ = t.killMismatchedOwnerSession() // failure surfaces as a duplicate-session error on recreate
 		return t.recreateMissingSession(workDir)
 	}
 

@@ -1420,6 +1420,23 @@ func (s *SessionService) KillTmuxPaneOnly(ctx context.Context, sessionUUID strin
 	return nil
 }
 
+// ErrTmuxKillRefused is returned by KillTmuxSessionByTitle when the pane's
+// owner couldn't be verified as one of the allowed UUIDs. Callers that treat
+// a refused kill as non-fatal can check it with errors.Is.
+var ErrTmuxKillRefused = errors.New("tmux kill refused: pane owner not verified")
+
+// isTmuxSessionAbsentText reports whether tmux output/error text means the
+// session (or its server) no longer exists.
+func isTmuxSessionAbsentText(text string) bool {
+	text = strings.ToLower(text)
+	for _, marker := range []string{"can't find session", "no such session", "no server running", "error connecting to"} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // KillTmuxSessionByTitle satisfies the BacklogService.SessionStopper interface.
 // It kills the tmux session whose name is derived from title using the same sanitization
 // as initTmuxSession (whitespace stripped, "." and ":" replaced with "_", "staplersquad_"
@@ -1441,7 +1458,7 @@ func (s *SessionService) KillTmuxSessionByTitle(ctx context.Context, title strin
 	name := stapleSquadTmuxName(title)
 
 	if !tmuxSessionKillAllowed(ctx, name, allowedOwnerUUIDs) {
-		return nil
+		return fmt.Errorf("%w: %q", ErrTmuxKillRefused, name)
 	}
 
 	killCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -1450,11 +1467,7 @@ func (s *SessionService) KillTmuxSessionByTitle(ctx context.Context, title strin
 	cmd := safeexec.CommandContext(killCtx, tmux.Binary(), args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		combined := strings.ToLower(string(out))
-		if strings.Contains(combined, "can't find session") ||
-			strings.Contains(combined, "no such session") ||
-			strings.Contains(combined, "no server running") ||
-			strings.Contains(combined, "error connecting to") {
+		if isTmuxSessionAbsentText(string(out)) {
 			return nil // session already gone — not an error
 		}
 		return fmt.Errorf("tmux kill-session %q: %w (output: %s)", name, err, out)
@@ -1472,12 +1485,7 @@ func tmuxSessionKillAllowed(ctx context.Context, name string, allowedOwnerUUIDs 
 	defer cancel()
 	marker, err := readSessionOwnerUUID(checkCtx, tmux.ResolveSocket(""), name)
 	if err != nil {
-		errText := strings.ToLower(err.Error())
-		sessionAbsent := strings.Contains(errText, "can't find session") ||
-			strings.Contains(errText, "no such session") ||
-			strings.Contains(errText, "no server running") ||
-			strings.Contains(errText, "error connecting to")
-		if sessionAbsent {
+		if isTmuxSessionAbsentText(err.Error()) {
 			return true
 		}
 		log.Warn("KillTmuxSessionByTitle: refusing to kill tmux session, could not verify owner",
