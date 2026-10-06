@@ -1822,3 +1822,15 @@ func TestHeadlessTriageMaxCostUSDOrDefault(t *testing.T) {
 	assert.Equal(t, 7.5, (&Config{HeadlessTriageMaxCostUSD: 7.5}).HeadlessTriageMaxCostUSDOrDefault())
 	assert.Zero(t, (&Config{HeadlessTriageMaxCostUSD: -1}).HeadlessTriageMaxCostUSDOrDefault(), "negative disables")
 }
+
+func TestTriageConcurrencyAndModelAccessors(t *testing.T) {
+	assert.Equal(t, 8, (*Config)(nil).MaxConcurrentTriageOrDefault())
+	assert.Equal(t, 8, (&Config{}).MaxConcurrentTriageOrDefault())
+	assert.Equal(t, 2, (&Config{MaxConcurrentTriage: 2}).MaxConcurrentTriageOrDefault())
+	assert.Equal(t, MaxConcurrentTriageCeiling, (&Config{MaxConcurrentTriage: 9999}).MaxConcurrentTriageOrDefault())
+
+	assert.Equal(t, "family:sonnet", (*Config)(nil).HeadlessTriageModelOrDefault())
+	assert.Equal(t, "family:sonnet", (&Config{}).HeadlessTriageModelOrDefault())
+	assert.Equal(t, "family:haiku", (&Config{HeadlessTriageModel: "family:haiku"}).HeadlessTriageModelOrDefault())
+	assert.Empty(t, (&Config{HeadlessTriageModel: "none"}).HeadlessTriageModelOrDefault(), "none opts out")
+}

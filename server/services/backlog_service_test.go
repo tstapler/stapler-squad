@@ -88,6 +88,8 @@ type fakeHeadlessPool struct {
 	// require.Eventually, which is a scheduler-contention-sensitive flake under
 	// full-suite parallel load (BUG-103).
 	onEnter func()
+	// onExit, if set, runs when CallBlocking returns on any path (pairs with onEnter to count live callers).
+	onExit func()
 }
 
 type fakePoolCall struct {
@@ -124,7 +126,11 @@ func (f *fakeHeadlessPool) CallBlocking(ctx context.Context, key headless.Featur
 	}
 	onCall := f.onCall
 	onEnter := f.onEnter
+	onExit := f.onExit
 	f.mu.Unlock()
+	if onExit != nil {
+		defer onExit()
+	}
 	if onEnter != nil {
 		onEnter()
 	}
