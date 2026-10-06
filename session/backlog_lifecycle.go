@@ -732,13 +732,6 @@ func (l *BacklogLifecycleListener) getHeadlessCaller() headless.PoolClient {
 	return nil
 }
 
-// getHeadlessPool returns the current headless pool under a read lock.
-func (l *BacklogLifecycleListener) getHeadlessPool() *headless.Pool {
-	l.poolMu.RLock()
-	defer l.poolMu.RUnlock()
-	return l.headlessPool
-}
-
 func (l *BacklogLifecycleListener) getDashboardBaseURL() string {
 	l.dashboardBaseURLFnMu.RLock()
 	defer l.dashboardBaseURLFnMu.RUnlock()

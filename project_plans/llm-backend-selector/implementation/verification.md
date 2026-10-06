@@ -16,4 +16,5 @@ Remaining direct `CallBlocking` callers audited: approval handler (`LLMClient`),
 (`BacklogService.headlessPool` is a `SelectingClient`), RunOneShot, unfinished_work, rules generation, gates, drafts, drivers.
 
 Gate: `go test` config, session/headless, session, server/services all ok; `golangci-lint --new-from-rev=origin/main` 0 issues.
-`make ci` cannot run here (tmux submodule not initialised; /tmp full).
+`make ci` run in this worktree: all test phases pass (3849 + 8090 tests, 0 failures); its one lint failure (`unused` `getHeadlessPool` in session/backlog_lifecycle.go, orphaned by the selector routing) is removed and `make lint` now reports 0 issues.
+Precedence/fallback matrix tests with fake backends: session/headless/backend_selector_test.go.
