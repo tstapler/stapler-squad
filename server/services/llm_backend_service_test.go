@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
@@ -140,15 +139,6 @@ func TestRulesAIClientRoutesByFeatureSetting(t *testing.T) {
 	if fb.called || err == nil {
 		t.Fatalf("overridden feature must go through selector (no backends registered -> ErrNoBackend); called=%v err=%v", fb.called, err)
 	}
-}
-
-func mustReadFile(t *testing.T, name string) string {
-	t.Helper()
-	b, err := os.ReadFile(name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(b)
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
