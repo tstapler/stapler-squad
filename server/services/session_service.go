@@ -69,6 +69,9 @@ var _ SessionSteerer = (*SessionService)(nil)
 // SSH dial/worktree setup) can still be slow.
 const createSessionTimeout = 150 * time.Second
 
+// readSessionOwnerUUID is a seam so tests don't need a live tmux server.
+var readSessionOwnerUUID = tmux.ReadSessionOwnerUUID
+
 var resumeIDRe = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // testTmuxServerSocketCounter gives each SessionService created within a test binary run a
@@ -1467,7 +1470,7 @@ func (s *SessionService) KillTmuxSessionByTitle(ctx context.Context, title strin
 func tmuxSessionKillAllowed(ctx context.Context, name string, allowedOwnerUUIDs []string) bool {
 	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	marker, err := tmux.ReadSessionOwnerUUID(checkCtx, tmux.ResolveSocket(""), name)
+	marker, err := readSessionOwnerUUID(checkCtx, tmux.ResolveSocket(""), name)
 	if err != nil {
 		errText := strings.ToLower(err.Error())
 		sessionAbsent := strings.Contains(errText, "can't find session") ||
