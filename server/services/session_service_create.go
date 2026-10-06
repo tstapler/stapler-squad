@@ -183,6 +183,53 @@ func (s *SessionService) dispatchForkSource(ctx context.Context, msg *sessionv1.
 // or resolvedPath was already set) alongside the resolved program/autoYes/
 // env/CLI-flags and the alias's own session-type override (config.SessionTypeDefault
 // when none applies).
+func (s *SessionService) resolveAliasSessionDefaults(
+	cfg *config.Config,
+	msg *sessionv1.CreateSessionRequest,
+	resolvedPath string,
+	remoteRequested bool,
+	program string,
+	autoYes bool,
+	instanceEnvVars map[string]string,
+) (outProgram string, outAutoYes bool, outCLIFlags string, outResolvedPath string, aliasSessionType config.SessionType, err error) {
+	aliasSessionType = config.SessionTypeDefault
+	resolved, aliasErr := config.ResolveAlias(cfg, msg.AliasName, msg.Branch, msg.Title, "")
+	if aliasErr != nil {
+		if errors.Is(aliasErr, config.ErrAliasNotFound) {
+			return "", false, "", "", "", connect.NewError(connect.CodeNotFound, fmt.Errorf("alias %q not found: %w", msg.AliasName, aliasErr))
+		}
+		return "", false, "", "", "", connect.NewError(connect.CodeInternal, fmt.Errorf("failed to resolve alias %q: %w", msg.AliasName, aliasErr))
+	}
+	if program == "" {
+		program = resolved.Program
+	}
+	if !autoYes && resolved.AutoYes {
+		autoYes = true
+	}
+	for k, v := range resolved.EnvVars {
+		instanceEnvVars[k] = v
+	}
+	if resolvedPath == "" && resolved.Path != "" {
+		var aliasResolvedPath string
+		var aliasTildeErr error
+		if remoteRequested {
+			aliasResolvedPath, aliasTildeErr = rejectRemoteTildePath(resolved.Path)
+		} else {
+			aliasResolvedPath, aliasTildeErr = expandLocalTildePath(resolved.Path)
+		}
+		if aliasTildeErr != nil {
+			return "", false, "", "", "", connect.NewError(connect.CodeInvalidArgument, aliasTildeErr)
+		}
+		resolvedPath = aliasResolvedPath
+	}
+	// Read session type directly from the alias config — it is an alias-specific
+	// property, not a cascading default, so it is not part of ResolvedDefaults.
+	if alias := config.FindAlias(cfg, msg.AliasName); alias != nil {
+		aliasSessionType = alias.SessionType
+	}
+	return program, autoYes, resolved.CLIFlags, resolvedPath, aliasSessionType, nil
+}
+
 func (s *SessionService) resolveSessionDefaults(cfg *config.Config, msg *sessionv1.CreateSessionRequest, resolvedPath string, remoteRequested bool) (
 	program string, autoYes bool, instanceEnvVars map[string]string, instanceCLIFlags string, aliasSessionType config.SessionType, outPath string, err error,
 ) {
@@ -192,40 +239,11 @@ func (s *SessionService) resolveSessionDefaults(cfg *config.Config, msg *session
 	aliasSessionType = config.SessionTypeDefault // session type from alias config (empty = no override)
 	if !msg.SkipDefaults {
 		if msg.AliasName != "" {
-			resolved, aliasErr := config.ResolveAlias(cfg, msg.AliasName, msg.Branch, msg.Title, "")
+			var aliasErr error
+			program, autoYes, instanceCLIFlags, resolvedPath, aliasSessionType, aliasErr =
+				s.resolveAliasSessionDefaults(cfg, msg, resolvedPath, remoteRequested, program, autoYes, instanceEnvVars)
 			if aliasErr != nil {
-				if errors.Is(aliasErr, config.ErrAliasNotFound) {
-					return "", false, nil, "", "", "", connect.NewError(connect.CodeNotFound, fmt.Errorf("alias %q not found: %w", msg.AliasName, aliasErr))
-				}
-				return "", false, nil, "", "", "", connect.NewError(connect.CodeInternal, fmt.Errorf("failed to resolve alias %q: %w", msg.AliasName, aliasErr))
-			}
-			if program == "" {
-				program = resolved.Program
-			}
-			if !autoYes && resolved.AutoYes {
-				autoYes = true
-			}
-			for k, v := range resolved.EnvVars {
-				instanceEnvVars[k] = v
-			}
-			instanceCLIFlags = resolved.CLIFlags
-			if resolvedPath == "" && resolved.Path != "" {
-				var aliasResolvedPath string
-				var aliasTildeErr error
-				if remoteRequested {
-					aliasResolvedPath, aliasTildeErr = rejectRemoteTildePath(resolved.Path)
-				} else {
-					aliasResolvedPath, aliasTildeErr = expandLocalTildePath(resolved.Path)
-				}
-				if aliasTildeErr != nil {
-					return "", false, nil, "", "", "", connect.NewError(connect.CodeInvalidArgument, aliasTildeErr)
-				}
-				resolvedPath = aliasResolvedPath
-			}
-			// Read session type directly from the alias config — it is an alias-specific
-			// property, not a cascading default, so it is not part of ResolvedDefaults.
-			if alias := config.FindAlias(cfg, msg.AliasName); alias != nil {
-				aliasSessionType = alias.SessionType
+				return "", false, nil, "", "", "", aliasErr
 			}
 		} else {
 			workingDir := msg.WorkingDir
@@ -315,6 +333,53 @@ func remapSessionTypeForSpecialCases(msg *sessionv1.CreateSessionRequest, branch
 	}
 
 	return sessionType, requestedNewWorktree, nil
+}
+
+// createRemoteNewWorktree creates the branch and worktree for a remote
+// SessionTypeNewWorktree session. The base commit is resolved from resolvedPath
+// rather than ambient HEAD (see Instance.newWorktreeFromResolvedBase).
+func (s *SessionService) createRemoteNewWorktree(
+	ctx context.Context,
+	msg *sessionv1.CreateSessionRequest,
+	cfg *config.Config,
+	resolvedRemote *session.RemoteTarget,
+	runner tmux.CommandRunner,
+	resolvedPath string,
+	branch string,
+) (remoteWorkingPath string, worktreeOps *git.RemoteWorktreeOps, remoteWT git.RemoteWorktree, warning string, outBranch string, err error) {
+	if branch == "" {
+		branch = cfg.BranchPrefix + git.SanitizeBranchName(msg.Title)
+	}
+	remoteWorkingPath = path.Join(resolvedRemote.BasePath, git.SanitizeBranchName(msg.Title))
+	worktreeOps = git.NewRemoteWorktreeOps(runner)
+	remoteWT = git.RemoteWorktree{RepoPath: resolvedPath, WorktreePath: remoteWorkingPath, Branch: branch}
+
+	// baseSHA == "" with a nil error means an unborn repo, the one case ambient HEAD is safe to use.
+	defaultBranch, baseSHA, resolveErr := git.ResolveRemoteWorktreeBaseCommit(ctx, runner, resolvedPath)
+	if resolveErr != nil {
+		return "", nil, git.RemoteWorktree{}, "", "", connect.NewError(connect.CodeInternal,
+			fmt.Errorf("failed to resolve default branch on remote %q: %w", resolvedRemote.Name, resolveErr))
+	}
+	branchArgs := []string{"branch", branch}
+	if baseSHA != "" {
+		branchArgs = append(branchArgs, baseSHA)
+		if diverged, ambientBranch := git.RemoteAmbientHEADDivergesFromBase(ctx, runner, resolvedPath, baseSHA); diverged {
+			warning = git.FormatAmbientDivergenceWarning(resolvedPath, defaultBranch, ambientBranch)
+		}
+	}
+
+	// Best-effort: "git branch <name> [sha]" failing because the branch already exists is expected.
+	if out, branchErr := runner.Run(ctx, resolvedPath, "git", branchArgs...); branchErr != nil &&
+		!strings.Contains(string(out), "already exists") {
+		return "", nil, git.RemoteWorktree{}, "", "", connect.NewError(connect.CodeInternal,
+			fmt.Errorf("failed to create branch %q on remote %q: %s (%w)",
+				branch, resolvedRemote.Name, strings.TrimSpace(string(out)), branchErr))
+	}
+	if createErr := worktreeOps.CreateWorktree(ctx, remoteWT); createErr != nil {
+		return "", nil, git.RemoteWorktree{}, "", "", connect.NewError(connect.CodeInternal,
+			fmt.Errorf("failed to create remote worktree on %q: %w", resolvedRemote.Name, createErr))
+	}
+	return remoteWorkingPath, worktreeOps, remoteWT, warning, branch, nil
 }
 
 // setupRemoteSessionTarget implements the remote-target mode-specific block
@@ -436,51 +501,11 @@ func (s *SessionService) setupRemoteSessionTarget(
 	)
 	switch sessionType {
 	case session.SessionTypeNewWorktree:
-		if branch == "" {
-			branch = cfg.BranchPrefix + git.SanitizeBranchName(msg.Title)
-		}
-		remoteWorkingPath = path.Join(resolvedRemote.BasePath, git.SanitizeBranchName(msg.Title))
-		worktreeOps = git.NewRemoteWorktreeOps(runner)
-		remoteWT = git.RemoteWorktree{RepoPath: resolvedPath, WorktreePath: remoteWorkingPath, Branch: branch}
-
-		// Resolve the base commit the same way the local path does
-		// (git.ResolveWorktreeBaseCommit) instead of branching off
-		// resolvedPath's ambient checked-out HEAD -- see
-		// Instance.newWorktreeFromResolvedBase's doc comment for the
-		// misattribution bug this avoids. baseSHA == "" (err == nil) means
-		// an unborn repo, the one case ambient HEAD is safe to use.
-		defaultBranch, baseSHA, resolveErr := git.ResolveRemoteWorktreeBaseCommit(ctx, runner, resolvedPath)
-		if resolveErr != nil {
-			return nil, "", "", "", "", connect.NewError(connect.CodeInternal,
-				fmt.Errorf("failed to resolve default branch on remote %q: %w", resolvedRemote.Name, resolveErr))
-		}
-		branchArgs := []string{"branch", branch}
-		if baseSHA != "" {
-			branchArgs = append(branchArgs, baseSHA)
-			if diverged, ambientBranch := git.RemoteAmbientHEADDivergesFromBase(ctx, runner, resolvedPath, baseSHA); diverged {
-				remoteCreationWarning = git.FormatAmbientDivergenceWarning(resolvedPath, defaultBranch, ambientBranch)
-			}
-		}
-
-		// RemoteWorktreeOps.CreateWorktree (Phase 2, session/git/remote_worktree.go)
-		// mirrors the local "attach to an already-existing branch" `git worktree add
-		// <path> <branch>` shape deliberately, with no -b -- so a session that wants
-		// a fresh branch on the remote (the common case, mirroring local
-		// SessionTypeNewWorktree's own branch auto-creation) needs it created first,
-		// from baseSHA rather than ambient HEAD (see above).
-		// Best-effort: "git branch <name> [sha]" failing because the branch already
-		// exists is expected and ignored; any other failure (unreachable repo,
-		// invalid resolvedPath) is surfaced immediately rather than deferred to a
-		// more confusing failure from CreateWorktree itself.
-		if out, branchErr := runner.Run(ctx, resolvedPath, "git", branchArgs...); branchErr != nil &&
-			!strings.Contains(string(out), "already exists") {
-			return nil, "", "", "", "", connect.NewError(connect.CodeInternal,
-				fmt.Errorf("failed to create branch %q on remote %q: %s (%w)",
-					branch, resolvedRemote.Name, strings.TrimSpace(string(out)), branchErr))
-		}
-		if createErr := worktreeOps.CreateWorktree(ctx, remoteWT); createErr != nil {
-			return nil, "", "", "", "", connect.NewError(connect.CodeInternal,
-				fmt.Errorf("failed to create remote worktree on %q: %w", resolvedRemote.Name, createErr))
+		var newWTErr error
+		remoteWorkingPath, worktreeOps, remoteWT, remoteCreationWarning, branch, newWTErr =
+			s.createRemoteNewWorktree(ctx, msg, cfg, resolvedRemote, runner, resolvedPath, branch)
+		if newWTErr != nil {
+			return nil, "", "", "", "", newWTErr
 		}
 		createdWorktree = true
 	case session.SessionTypeExistingWorktree:
