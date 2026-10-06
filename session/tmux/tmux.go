@@ -635,11 +635,55 @@ func (s Socket) String() string { return string(s) }
 // forgotten at any new call site. Resolving centrally, once, at the boundary where a
 // caller-supplied socket turns into a real tmux invocation means every existing and
 // future caller is isolated automatically, with no per-call-site action required.
+//
+// Precedence: explicit argument > STAPLER_SQUAD_TMUX_SOCKET > test-mode private
+// socket > default. The env var lets a production binary (e.g. a manual dev
+// instance) use its own `-L` server instead of the live service's; an invalid
+// value is ignored here (ResolveSocket cannot fail) and rejected at startup by
+// LogEnvSocket.
 func ResolveSocket(explicit string) Socket {
+	return resolveSocket(explicit, os.Getenv, config.IsTestMode())
+}
+
+// EnvSocketVar names the env var that selects a private tmux server by -L name.
+const EnvSocketVar = "STAPLER_SQUAD_TMUX_SOCKET"
+
+const maxEnvSocketLen = 64
+
+var envSocketPattern = regexp.MustCompile(`^[A-Za-z0-9._][A-Za-z0-9._-]*$`)
+
+// ValidateEnvSocket reports whether name is usable as a tmux -L socket name:
+// 1-64 chars of [A-Za-z0-9._-], not starting with "-", and not "." or ".." (never a path or a flag).
+func ValidateEnvSocket(name string) error {
+	if len(name) == 0 || len(name) > maxEnvSocketLen || !envSocketPattern.MatchString(name) || name == "." || name == ".." {
+		return fmt.Errorf("invalid %s %q: want 1-%d chars of [A-Za-z0-9._-]", EnvSocketVar, name, maxEnvSocketLen)
+	}
+	return nil
+}
+
+// LogEnvSocket makes env-var isolation visible at startup. It returns an error
+// for an invalid value so the caller can refuse to start rather than silently
+// fall back to the live default server.
+func LogEnvSocket() error {
+	name := os.Getenv(EnvSocketVar)
+	if name == "" {
+		return nil
+	}
+	if err := ValidateEnvSocket(name); err != nil {
+		return err
+	}
+	log.Info("Using private tmux socket", "socket", name, "env", EnvSocketVar)
+	return nil
+}
+
+func resolveSocket(explicit string, getenv func(string) string, testMode bool) Socket {
 	if explicit != "" {
 		return Socket(explicit)
 	}
-	if config.IsTestMode() {
+	if envName := getenv(EnvSocketVar); envName != "" && ValidateEnvSocket(envName) == nil {
+		return Socket(envName)
+	}
+	if testMode {
 		return Socket(testSocketOnce())
 	}
 	return ""
