@@ -1160,15 +1160,17 @@ func TestRemediateStaleWorkWithBackoffGate_should_parkAfterMaxAttempts_When_Rewo
 
 	assert.Contains(t, notifier.titles(), "Auto-rework paused", "the 5th attempt must fire the parked notification regardless of ReworkCapOverride=0")
 
-	// 6th call, well past backoff: must not consume another attempt — the
-	// unlimited rework cap does not un-park a MaxRemediationAttempts-exhausted row.
-	backdateNextRemediationAt(t, er, item.ID, domain.StuckReasonStaleWork, time.Now().Add(-time.Second))
-	listener.remediateStaleWorkWithBackoffGate(ctx, item.ID, item.Title)
+	// Past backoff the parked row gets only the bounded cold retries; the
+	// unlimited rework cap must not extend that budget.
+	for i := 0; i < int(MaxRemediationColdRetries)+2; i++ {
+		backdateNextRemediationAt(t, er, item.ID, domain.StuckReasonStaleWork, time.Now().Add(-time.Second))
+		listener.remediateStaleWorkWithBackoffGate(ctx, item.ID, item.Title)
+	}
 
 	rows, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, int32(5), rows[0].RemediationAttempts, "parked attempt count must not grow past the cap even with an unlimited rework override")
+	assert.Equal(t, MaxRemediationAttempts+MaxRemediationColdRetries, rows[0].RemediationAttempts, "attempt count must stop at the cold-retry ceiling even with an unlimited rework override")
 }
 
 // --- rework_blocked_stale: reconcileReworkBlockedStaleResolution orchestration

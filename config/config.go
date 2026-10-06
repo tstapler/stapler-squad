@@ -300,13 +300,13 @@ type Config struct {
 	ClaimantHostID string `json:"claimant_host_id,omitempty"`
 	// MaxAutoReworkIterations caps how many automated work sessions the backlog auto-reopen
 	// loop will spawn for a single item before leaving it for manual review. 0 = use the
-	// default (20). Individual items can also override this via
+	// default (DefaultMaxAutoReworkIterations). Individual items can also override this via
 	// BacklogItemData.ReworkCapOverride (0 = unlimited for that item, >0 = that item's own
 	// cap) — see effectiveReworkCap in server/services/backlog_service_triage.go.
 	MaxAutoReworkIterations int `json:"max_auto_rework_iterations,omitempty"`
 	// AutonomousMaxTurns caps how many turns a single AutonomousDriver run gets before
 	// stopping without a DONE signal (session/autonomous_driver.go). 0 = use the default
-	// (60); values above autonomousMaxTurnsHardCeiling are clamped to it. Unlike
+	// (30); values above autonomousMaxTurnsHardCeiling are clamped to it. Unlike
 	// MaxAutoReworkIterations (caps respawned sessions), this caps turns within one session.
 	AutonomousMaxTurns int `json:"autonomous_max_turns,omitempty"`
 	// DiagnoseNudgeMaxAttempts caps how many times the Diagnose & Nudge feature
@@ -1047,32 +1047,35 @@ func (c *Config) NoopDispatchThresholdOrDefault() int {
 	return c.NoopDispatchThreshold
 }
 
-// MaxAutoReworkIterationsOrDefault returns the configured rework-cap ceiling, or 20
-// if not set (zero value) or c is nil (BacklogService's cfg is nil in some test setups).
-// Raised from 3 to 20: 3 was tripping routinely on real, ultimately-fixable items
-// (e.g. a multi-round diff/review-harness flake, or a straightforward merge conflict)
-// well before the work was actually stuck, forcing manual "Reopen for Revision" clicks
-// for otherwise-recoverable items. Genuinely stuck items still get caught — just
-// later — and per-item overrides (BacklogItemData.ReworkCapOverride) exist for cases
-// that need to go further still.
+// DefaultMaxAutoReworkIterations is the rework cap applied when unset. It is
+// served to the settings form via GetSessionDefaults, so the UI shows the value
+// the server enforces. 20 never fired on live data (max 9 work sessions on any
+// item, mostly zero-commit) while costing real spend; per-item ReworkCapOverride
+// covers items that need more.
+const DefaultMaxAutoReworkIterations = 5
+
+// MaxAutoReworkIterationsOrDefault returns the configured rework-cap ceiling, or
+// DefaultMaxAutoReworkIterations if not set (zero value) or c is nil
+// (BacklogService's cfg is nil in some test setups).
 func (c *Config) MaxAutoReworkIterationsOrDefault() int {
 	if c == nil || c.MaxAutoReworkIterations <= 0 {
-		return 20
+		return DefaultMaxAutoReworkIterations
 	}
 	return c.MaxAutoReworkIterations
 }
 
 // autonomousMaxTurnsDefault is used when the config value is unset (0 or negative).
-// Raised from the driver's own historical fallback of 20, which was observed cutting
-// off recoverable multi-round work. autonomousMaxTurnsHardCeiling guards against a
+// 30 is ~1.8x the highest turn count seen in live driver logs (17); 60 was a
+// generous ceiling that let non-converging runs burn billed turns.
+// autonomousMaxTurnsHardCeiling guards against a
 // runaway config value burning billed turns on a non-converging run.
 const (
-	autonomousMaxTurnsDefault     = 60
+	autonomousMaxTurnsDefault     = 30
 	autonomousMaxTurnsHardCeiling = 200
 )
 
 // AutonomousMaxTurnsOrDefault returns the configured autonomous-driver turn cap,
-// clamped to [1, autonomousMaxTurnsHardCeiling]. Falls back to the default (60)
+// clamped to [1, autonomousMaxTurnsHardCeiling]. Falls back to the default (30)
 // if unset (<=0) or c is nil.
 func (c *Config) AutonomousMaxTurnsOrDefault() int {
 	if c == nil || c.AutonomousMaxTurns <= 0 {
