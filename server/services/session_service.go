@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +39,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/session/sshremote"
+	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tokens"
 
@@ -96,6 +99,10 @@ type SessionService struct {
 	statusManager     *session.InstanceStatusManager
 	reviewQueuePoller *session.ReviewQueuePoller
 
+	// tapRegistry backs SetCaptureTap/GetCaptureTap. nil means the process-wide
+	// streamhub.DefaultTapRegistry, which is what the terminal streams use.
+	tapRegistry *streamhub.TapRegistry
+
 	// sessionTagPoller drives the Phase 4 LLM fallback tag classification
 	// (session-classifier-pipeline Epic 4.4). nil when HeadlessPool is nil (no
 	// claude binary found) — every AddInstance/RemoveInstance call site below
@@ -106,6 +113,13 @@ type SessionService struct {
 	// ListWorkspacePeers) not part of the InstanceStore interface. nil when storage is a
 	// fake InstanceStore (tests) — callers must nil-check.
 	concStorage *session.Storage
+
+	// inFlightWorktreeSpawns claims a canonicalized worktree path (-> claiming session
+	// UUID) for the duration of startLocked's check-through-spawn window, closing the
+	// TOCTOU race between two concurrent CreateSession calls resolving the same
+	// worktree path before either has spawned (worktree-envvars-hijack Story 3.3.2c).
+	// Wired into each Instance via SetWorktreeSpawnReservation in wireCallbacks.
+	inFlightWorktreeSpawns sync.Map
 
 	// Extracted domain services.
 	reviewQueueSvc  *ReviewQueueService
@@ -788,6 +802,13 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	})
 	rulesSvc.SetClaudeSettingsWatcher(claudeSettingsWatcher)
 	rulesSvc.SetApprovalService(approvalSvc)
+	// Started after SetApprovalService: the first load reconciles pending approvals, which reads
+	// rs.approvalSvc unsynchronised.
+	// Hot-reload shared_rules.yaml (gated on IsTestMode like the claude-settings load above, so
+	// tests never read the developer's real home directory).
+	if home, homeErr := os.UserHomeDir(); homeErr == nil && !config.IsTestMode() {
+		rulesSvc.StartConfigFileRulesReload(context.Background(), classifier.ConfigFileRulesPath(home), configFileRulesPollInterval)
+	}
 
 	// Initialize capacity monitor.
 	var capCfg config.CapacityConfig
@@ -806,7 +827,29 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	}
 	credChain := NewDefaultChain(directCfg)
 
-	capacityMonitor := NewCapacityMonitor(capCfg, eventBus, nil, nil, nil)
+	var capRoleResolver SessionRoleResolver
+	var capTerminator SessionTerminator
+	if concStorage != nil {
+		capRoleResolver = func(ctx context.Context, sessionUUID string) string {
+			is, err := concStorage.GetItemSessionBySessionUUID(ctx, sessionUUID)
+			if err != nil {
+				if !errors.Is(err, session.ErrNotFound) {
+					log.Warn("capacity: role lookup failed; applying default (non-pipeline) limits", "uuid", sessionUUID, "err", err)
+				}
+				return ""
+			}
+			return is.Role
+		}
+		capTerminator = func(ctx context.Context, inst *session.Instance, reason string) error {
+			return stopGuardrailSession(ctx, concStorage, inst, reason)
+		}
+	}
+	capacityMonitor := NewCapacityMonitor(CapacityMonitorParams{
+		Config:       capCfg,
+		EventBus:     eventBus,
+		RoleResolver: capRoleResolver,
+		Terminator:   capTerminator,
+	})
 	capacityMonitor.RegisterClient("anthropic", NewAnthropicLimitsClient(credChain, ""))
 	capacityMonitor.RegisterClient("google", NewGeminiLimitsClient(credChain, ""))
 
@@ -925,13 +968,6 @@ func (s *SessionService) loadInstancesWithWiring() ([]*session.Instance, error) 
 			inst.SetStatusManager(s.statusManager)
 		}
 		s.wireCallbacks(inst)
-		// Backfill MCP server URL for sessions created before MCP integration was
-		// wired up. Without this, buildLaunchCommand omits --mcp-config entirely and
-		// the Claude process restarts without a session UUID or MCP connection.
-		// Only applied in-memory; the DB value is updated lazily via SaveInstances.
-		if mcpURL := s.resolveMCPServerURL(); inst.MCPServerURL == "" && mcpURL != "" {
-			inst.SetMCPServerURL(mcpURL)
-		}
 	}
 
 	return instances, nil
@@ -1032,29 +1068,20 @@ func (s *SessionService) SessionProgram(sessionUUID string) (string, bool) {
 	return inst.Program, true
 }
 
-// safeIdleStatusContexts allowlists the exact detection.StatusIdle pattern
-// descriptions (session/detection/binaries/claude.go's Idle group) that are
-// unambiguously Claude Code's own idle prompt, as opposed to a raw shell/vim/
-// editor prompt that also reports StatusIdle. Pinned verbatim against the
-// actual pattern set by TestSafeIdleStatusContexts_MatchClaudeIdlePatternDescriptions
-// so a future wording change in claude.go fails this test loudly instead of
-// silently disabling the gate. insert_mode is deliberately excluded: its
-// regex/description aren't distinguishable from a real vim INSERT-mode
-// status line.
-var safeIdleStatusContexts = map[string]bool{
-	"Claude Code readline input prompt":                                                              true, // claude_readline_prompt
-	"Claude Code idle prompt showing ? for shortcuts":                                                true, // claude_shortcuts_prompt
-	"Claude Code 'accept edits' review mode — session completed turn, user reviews proposed changes": true, // claude_accept_edits
-}
+// safeIdleStatusContexts re-exports session.SafeIdleStatusContexts under its
+// original package-local name so this file's own
+// TestSafeIdleStatusContexts_MatchClaudeIdlePatternDescriptions (which pins
+// it against claude.go's actual pattern descriptions) needs no change. The
+// allowlist itself now lives in the session package so
+// session/nudge_gate.go's CheckNudgeEligible can share it instead of
+// maintaining a second copy — see session.SafeIdleStatusContexts's doc
+// comment.
+var safeIdleStatusContexts = session.SafeIdleStatusContexts
 
 // isSafeSteerStatus reports whether a detection result is safe for an
-// unattended PTY write: StatusIdle with a description on the Claude-specific
-// safeIdleStatusContexts allowlist. StatusIdle alone is NOT sufficient —
-// command_prompt/vim_normal_mode/bracket_insert_mode share the same
-// DetectedStatus value but mean a raw shell or editor prompt, exactly the
-// state where injected text would be misread as a literal command.
+// unattended PTY write — see session.IsSafeSteerStatus's doc comment.
 func isSafeSteerStatus(status detection.DetectedStatus, statusContext string) bool {
-	return status == detection.StatusIdle && safeIdleStatusContexts[statusContext]
+	return session.IsSafeSteerStatus(status, statusContext)
 }
 
 // IsReadyForSteer implements SessionSteerer. It gates an unattended PTY
@@ -1147,6 +1174,22 @@ func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID s
 	return nil
 }
 
+// stopGuardrailSession ends the backlog ItemSession with reason (so the
+// orchestrator's reconcilers see why it stopped and can respawn or flag the
+// item) and then kills the live session.
+func stopGuardrailSession(ctx context.Context, st *session.Storage, inst *session.Instance, reason string) error {
+	var endErr error
+	is, err := st.GetItemSessionBySessionUUID(ctx, inst.Snapshot().UUID)
+	switch {
+	case err == nil:
+		endErr = st.UpdateItemSessionEndedWithReason(ctx, is.ID, time.Now(), reason)
+	case !errors.Is(err, session.ErrNotFound): // not-found = not backlog-linked, nothing to end
+		endErr = err
+	}
+	// Kill even if the end-reason write failed; both errors reach the caller.
+	return errors.Join(endErr, inst.Kill())
+}
+
 // StopSessionByUUID satisfies the BacklogService.SessionStopper interface.
 // It kills the live tmux session identified by UUID (best-effort; errors are non-fatal).
 func (s *SessionService) StopSessionByUUID(ctx context.Context, sessionUUID string) error {
@@ -1228,6 +1271,19 @@ func (s *SessionService) TimeSinceLastMeaningfulOutput(sessionUUID string) (time
 	return inst.GetTimeSinceLastMeaningfulOutput(), true
 }
 
+// canonicalizeAbsPath resolves path to an absolute, symlink-canonicalized form
+// (e.g. macOS's /var -> /private/var) so path comparisons aren't fooled by two
+// spellings of the same directory. Shared by
+// OtherLiveSessionInsideWorktree, ConversationOwnedByOtherLiveSession, and
+// wireCallbacks' spawn-reservation closure.
+func canonicalizeAbsPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return git.CanonicalizeWorktreePath(abs), nil
+}
+
 // OtherLiveSessionInsideWorktree reports whether some OTHER currently-live
 // session (any UUID besides excludeUUID) has its actual runtime working
 // directory — Instance.GetCurrentWorkingDirectory(), a live pane/process
@@ -1244,18 +1300,10 @@ func (s *SessionService) OtherLiveSessionInsideWorktree(excludeUUID, worktreePat
 	if s.reviewQueuePoller == nil || worktreePath == "" {
 		return "", false
 	}
-	cleanTarget, err := filepath.Abs(worktreePath)
+	cleanTarget, err := canonicalizeAbsPath(worktreePath)
 	if err != nil {
 		return "", false
 	}
-	// CanonicalizeWorktreePath resolves symlinks (e.g. macOS's /var ->
-	// /private/var) so this comparison isn't fooled by the same directory
-	// having two spellings -- one from a target worktree path already
-	// canonicalized when loaded from storage (git.NewGitWorktreeFromStorage),
-	// the other from a sibling's live pane cwd that may not be. See the /var
-	// vs /private/var path-inconsistency bug class already documented in
-	// backlog_service_test.go.
-	cleanTarget = git.CanonicalizeWorktreePath(cleanTarget)
 	for _, inst := range s.reviewQueuePoller.GetInstances() {
 		if inst == nil || inst.UUID == excludeUUID || !inst.IsBackendProcessAlive() {
 			continue
@@ -1264,12 +1312,48 @@ func (s *SessionService) OtherLiveSessionInsideWorktree(excludeUUID, worktreePat
 		if cwdErr != nil || cwd == "" {
 			continue
 		}
-		cleanCwd, absErr := filepath.Abs(cwd)
+		cleanCwd, absErr := canonicalizeAbsPath(cwd)
 		if absErr != nil {
 			continue
 		}
-		cleanCwd = git.CanonicalizeWorktreePath(cleanCwd)
 		if cleanCwd == cleanTarget || strings.HasPrefix(cleanCwd, cleanTarget+string(os.PathSeparator)) {
+			return inst.UUID, true
+		}
+	}
+	return "", false
+}
+
+// ConversationOwnedByOtherLiveSession reports whether conversationUUID is
+// already the ConversationUUID of some OTHER currently-live,
+// backend-process-alive Instance (any UUID besides selfUUID) whose own
+// GetCurrentWorkingDirectory() resolves to path. Unlike
+// OtherLiveSessionInsideWorktree, path overlap alone is not enough to block --
+// the sibling must also already own this exact UUID -- so a session detecting
+// its OWN first conversation is never blocked, only silently adopting a sibling's.
+func (s *SessionService) ConversationOwnedByOtherLiveSession(selfUUID, conversationUUID, path string) (ownerUUID string, ownedByOther bool) {
+	if s.reviewQueuePoller == nil || conversationUUID == "" || path == "" {
+		return "", false
+	}
+	cleanTarget, err := canonicalizeAbsPath(path)
+	if err != nil {
+		return "", false
+	}
+	for _, inst := range s.reviewQueuePoller.GetInstances() {
+		if inst == nil || inst.UUID == selfUUID || !inst.IsBackendProcessAlive() {
+			continue
+		}
+		if inst.GetClaudeConversationUUID() != conversationUUID {
+			continue
+		}
+		cwd, cwdErr := inst.GetCurrentWorkingDirectory()
+		if cwdErr != nil || cwd == "" {
+			continue
+		}
+		cleanCwd, absErr := canonicalizeAbsPath(cwd)
+		if absErr != nil {
+			continue
+		}
+		if cleanCwd == cleanTarget {
 			return inst.UUID, true
 		}
 	}
@@ -1656,9 +1740,12 @@ func (s *SessionService) WireInstanceCallbacks(inst *session.LiveInstance) {
 	s.wireClaudeSessionIDCallback(inst.Instance)
 	s.wireAutoArchiveCallback(inst.Instance)
 	s.wireSessionExitedPublisher(inst.Instance)
-	if mcpURL := s.resolveMCPServerURL(); inst.MCPServerURL == "" && mcpURL != "" {
-		inst.SetMCPServerURL(mcpURL)
-	}
+	// A provider, not a one-shot backfill: buildClaudeCommand re-resolves this
+	// on every claude launch (session/instance_tmux.go), so a relaunch
+	// (workspace switch, crash/hibernate resume) always observes the current
+	// server address instead of staying permanently stuck at whatever
+	// MCPServerURL happened to be at construction time.
+	inst.SetMCPServerURLProvider(s.resolveMCPServerURL)
 }
 
 // SetBacklogLifecycleListener wires the listener to all sessions created via
@@ -1716,11 +1803,61 @@ func (s *SessionService) SpawnReviewSession(ctx context.Context, item *session.B
 	return inst, nil
 }
 
+// diagnosticSessionAllowedTools restricts a dispatched Diagnose & Nudge
+// session (server/mcp's diagnoseHandlers) to the minimal MCP tool surface its
+// buildDiagnosePrompt action space actually offers: investigate the repo with
+// Claude Code's own read/search tools, then conclude via exactly one of
+// create_backlog_item (file a bug), post_backlog_update (a note),
+// submit_diagnosis_result (always, to close out), or diagnose_nudge_session
+// (redirect a stalled linked session). Deliberately excludes
+// write_to_session/steer_session/send_control/run_command/resume_session —
+// this session has no legitimate reason to touch another session's terminal
+// except through the narrow, gated diagnose_nudge_session path.
+//
+// This is defense-in-depth, not the real enforcement: --allowedTools has been
+// proven to provide no real technical enforcement in this codebase (see
+// session/backlog_review.go's BuildReviewCallOptions doc comment and ADR-001's
+// 2026-07-15 addendum). The actual gate is server-side — see
+// server/mcp/diagnose_role_gate.go's denyIfDiagnoseCaller, which the
+// restricted tools above check independent of what a client honors here.
+const diagnosticSessionAllowedTools = "Read,Grep,Glob,Bash," +
+	"mcp__stapler-squad__create_backlog_item," +
+	"mcp__stapler-squad__post_backlog_update," +
+	"mcp__stapler-squad__get_backlog_item," +
+	"mcp__stapler-squad__submit_diagnosis_result," +
+	"mcp__stapler-squad__diagnose_nudge_session"
+
+// SpawnDiagnosticSession creates a hidden, one-shot Diagnose & Nudge session
+// for item, carrying prompt (the assembled context bundle plus dispatch
+// instructions — see server/services/diagnostic_service.go's
+// buildDiagnosePrompt). Mirrors SpawnReviewSession's shape; satisfies
+// services.DiagnosticSpawner. Unlike SpawnReviewSession, restricts the
+// session's MCP tool surface via diagnosticSessionAllowedTools — see that
+// constant's doc comment for why this alone isn't the real enforcement.
+func (s *SessionService) SpawnDiagnosticSession(ctx context.Context, item *session.BacklogItemData, prompt string) (*session.Instance, error) {
+	inst, err := s.createDirectorySessionWithAllowedTools(ctx, "diagnose:"+item.ID[:8], item.RepoPath, prompt, []string{"backlog:diagnose"}, true, true, "", diagnosticSessionAllowedTools)
+	if err != nil {
+		return nil, err
+	}
+	inst.SetCategory(session.CategoryBacklog)
+	return inst, nil
+}
+
 // CreateDirectorySession satisfies the services.SessionCreator interface so that
 // BacklogService can spawn sessions without importing SessionService directly.
 // It creates a directory-type session with the given title, path, initial prompt,
 // tags, and oneShot flag, wires it into the live poller, and returns the Instance.
 func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool, programOverride string) (*session.Instance, error) {
+	return s.createDirectorySessionWithAllowedTools(ctx, title, path, prompt, tags, oneShot, hidden, programOverride, "")
+}
+
+// createDirectorySessionWithAllowedTools is CreateDirectorySession's real
+// implementation, parameterized on an extra allowedTools value (see
+// diagnosticSessionAllowedTools) so SpawnDiagnosticSession can restrict its
+// dispatched session's tool surface without duplicating the wire-up below.
+// allowedTools == "" (CreateDirectorySession's own callers) preserves the
+// pre-existing unrestricted behavior.
+func (s *SessionService) createDirectorySessionWithAllowedTools(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool, programOverride, allowedTools string) (*session.Instance, error) {
 	cfg := config.LoadConfig()
 	resolved := config.ResolveDefaults(cfg, path, "")
 	program := resolved.Program
@@ -1740,6 +1877,7 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 		MCPServerURL:     s.resolveMCPServerURL(),
 		CreateIfMissing:  true,
 		TmuxServerSocket: s.testTmuxServerSocket,
+		AllowedTools:     allowedTools,
 		// Backend consults the session-name override map (tymux-bundled-integration
 		// Epic 4.4.2) so a canary override applies through this entry point too;
 		// there's no per-request override concept for this internal creator.
@@ -1889,6 +2027,42 @@ func (s *SessionService) wireCallbacks(inst *session.Instance) {
 	// instance loaded at startup via loadInstancesWithWiring) already calls, so
 	// reclassifyTagsLocked has a real engine/recorder on every session, not just some paths.
 	inst.SetTaggingEngine(s.taggingEngine)
+	// Pre-spawn worktree-collision guards: wired here, before every Start() call
+	// this codebase makes, so startLocked's firstTimeSetup branch never spawns
+	// into a directory another live session already owns, and two concurrent
+	// CreateSession calls resolving the same worktree path can't both win the race.
+	inst.SetWorktreeSpawnReservation(func(worktreePath string) (func(), error) {
+		cleanTarget, err := canonicalizeAbsPath(worktreePath)
+		if err != nil {
+			// filepath.Abs only fails if os.Getwd() fails -- vanishingly rare, but
+			// silently skipping here would leave the TOCTOU-closing reservation
+			// unclaimed with no trace, so warn instead. Returns a no-op release
+			// (not nil, nil) so success always carries a real, callable release value.
+			log.Warn("SetWorktreeSpawnReservation: failed to resolve worktree path, spawn reservation skipped", "session", inst.Title, "path", worktreePath, "err", err)
+			return func() {}, nil
+		}
+		if _, loaded := s.inFlightWorktreeSpawns.LoadOrStore(cleanTarget, inst.UUID); loaded {
+			return nil, fmt.Errorf("%w: claimed by an in-flight spawn", session.ErrDirectoryCollision)
+		}
+		return func() { s.inFlightWorktreeSpawns.Delete(cleanTarget) }, nil
+	})
+	inst.SetPreSpawnCollisionGuard(func(worktreePath string) error {
+		if s.reviewQueuePoller == nil {
+			log.Warn("SetPreSpawnCollisionGuard: reviewQueuePoller is nil, allowing spawn without a collision check", "session", inst.Title)
+			return nil
+		}
+		blockingUUID, blocked := s.OtherLiveSessionInsideWorktree(inst.UUID, worktreePath)
+		if !blocked {
+			return nil
+		}
+		return fmt.Errorf("%w: blocked by session %s", session.ErrDirectoryCollision, blockingUUID)
+	})
+	// Cross-session conversation-ownership guard (worktree-envvars-hijack Story 1.4.2):
+	// prevents tryExtractConversationUUID's DetectByPath fallback from silently
+	// attributing another live session's conversation UUID to this instance.
+	inst.SetConversationOwnershipGuard(func(candidateUUID, path string) (string, bool) {
+		return s.ConversationOwnedByOtherLiveSession(inst.UUID, candidateUUID, path)
+	})
 	if analyticsStore := s.GetAnalyticsStore(); analyticsStore != nil {
 		// Guard against the typed-nil-interface gotcha: passing a nil *AnalyticsStore
 		// straight into the session.TagFireRecorder interface parameter would make
@@ -1915,6 +2089,11 @@ func (s *SessionService) wireCallbacks(inst *session.Instance) {
 	if s.historyLinker != nil {
 		s.historyLinker.AddInstance(inst)
 	}
+	// Wired here (not a one-shot MCPServerURL field) so every caller of this
+	// chokepoint -- CreateSession, CreateDirectorySession, CreateWorktreeSession,
+	// loadInstancesWithWiring -- re-resolves the MCP URL fresh on every claude
+	// relaunch instead of staying stuck at whatever it was at construction time.
+	inst.SetMCPServerURLProvider(s.resolveMCPServerURL)
 }
 
 // StopDriverForSession stops the AutonomousDriver registered under sessionTitle.
@@ -2365,6 +2544,22 @@ func (s *SessionService) CreateSession(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("path is required"))
 	}
 
+	// Diagnostic-only: log the wire-level request shape so a future isolation-bug
+	// report doesn't need a fresh repro to see what the server actually received
+	// (worktree-envvars-hijack Story 1.3.1). env_var_keys logs KEY NAMES ONLY --
+	// never values, since env vars can carry secrets like API base URLs/tokens.
+	log.Debug("[CreateSession] request shape",
+		"session_type", req.Msg.SessionType,
+		"branch", req.Msg.Branch,
+		"working_dir", req.Msg.WorkingDir,
+		"env_var_keys", slices.Collect(maps.Keys(req.Msg.EnvVars)),
+		"profile", req.Msg.Profile,
+		"skip_defaults", req.Msg.SkipDefaults,
+		"restart_from_session_id", req.Msg.RestartFromSessionId,
+		"existing_worktree", req.Msg.ExistingWorktree,
+		"alias_name", req.Msg.AliasName,
+	)
+
 	// Check if session with this title already exists.
 	// Use ListInstanceData (raw DB rows) rather than LoadInstances to avoid
 	// the side-effect of FromInstanceData calling Start() on every session.
@@ -2583,7 +2778,14 @@ func (s *SessionService) CreateSession(
 	// Determine session type - use explicit session_type if provided, otherwise infer from fields.
 	// If the session was created via alias and the alias specifies a session type,
 	// use it as the fallback when the request itself didn't set one.
-	sessionType := resolveSessionType(req.Msg, branch)
+	sessionType, sessionTypeErr := resolveSessionType(req.Msg, branch)
+	if sessionTypeErr != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, sessionTypeErr)
+	}
+	// Captured before any of the remaps below (alias fallback, one-off, deferred-
+	// GitHub-URL, resume-forced-directory, remote-target remap) run, so it names the
+	// wire-level request itself -- feeds startLocked's Epic 1.5 invariant check.
+	requestedNewWorktree := req.Msg.SessionType == sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE
 	if aliasSessionType != config.SessionTypeDefault && req.Msg.SessionType == sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED {
 		sessionType = aliasSessionType
 	}
@@ -2882,32 +3084,33 @@ func (s *SessionService) CreateSession(
 
 	// Build instance options
 	instanceOpts := session.InstanceOptions{
-		Title:            req.Msg.Title,
-		Path:             resolvedPath,
-		WorkingDir:       req.Msg.WorkingDir,
-		Branch:           branch,
-		Program:          program,
-		AutoYes:          autoYes,
-		AutoApprove:      req.Msg.AutoApprove,
-		Prompt:           req.Msg.Prompt,
-		InitialPrompt:    initialPrompt,
-		ExistingWorktree: existingWorktreeOverride,
-		CreationWarning:  remoteCreationWarning,
-		Category:         req.Msg.Category,
-		SessionType:      sessionType,
-		TmuxPrefix:       "", // Use default from config
-		ResumeId:         req.Msg.ResumeId,
-		OneShot:          req.Msg.OneShot,
-		ProjectID:        req.Msg.ProjectId,
-		MCPServerURL:     s.resolveMCPServerURL(),
-		CreateIfMissing:  req.Msg.CreateIfMissing,
-		AllowedTools:     req.Msg.AllowedTools,
-		PermissionMode:   req.Msg.PermissionMode,
-		AutonomousMode:   req.Msg.AutonomousMode,
-		WorkflowID:       req.Msg.WorkflowId,
-		EnvVars:          instanceEnvVars,
-		CLIFlags:         instanceCLIFlags,
-		TmuxServerSocket: s.testTmuxServerSocket,
+		Title:                req.Msg.Title,
+		Path:                 resolvedPath,
+		WorkingDir:           req.Msg.WorkingDir,
+		Branch:               branch,
+		Program:              program,
+		AutoYes:              autoYes,
+		AutoApprove:          req.Msg.AutoApprove,
+		Prompt:               req.Msg.Prompt,
+		InitialPrompt:        initialPrompt,
+		ExistingWorktree:     existingWorktreeOverride,
+		CreationWarning:      remoteCreationWarning,
+		Category:             req.Msg.Category,
+		SessionType:          sessionType,
+		TmuxPrefix:           "", // Use default from config
+		ResumeId:             req.Msg.ResumeId,
+		OneShot:              req.Msg.OneShot,
+		ProjectID:            req.Msg.ProjectId,
+		MCPServerURL:         s.resolveMCPServerURL(),
+		CreateIfMissing:      req.Msg.CreateIfMissing,
+		AllowedTools:         req.Msg.AllowedTools,
+		PermissionMode:       req.Msg.PermissionMode,
+		AutonomousMode:       req.Msg.AutonomousMode,
+		WorkflowID:           req.Msg.WorkflowId,
+		RequestedNewWorktree: requestedNewWorktree,
+		EnvVars:              instanceEnvVars,
+		CLIFlags:             instanceCLIFlags,
+		TmuxServerSocket:     s.testTmuxServerSocket,
 		// ExtraArgs is a direct passthrough of req.Msg.ExtraArgs — unlike CLIFlags, it has no
 		// defaults-resolution concept to merge with. It composes with instanceCLIFlags at
 		// launch time in buildLaunchCommand: CLIFlags-derived tokens first, ExtraArgs last —
@@ -3154,30 +3357,34 @@ func resolveRemoteTarget(msg *sessionv1.CreateSessionRequest, cfg *config.Config
 // Priority: explicit session_type > inference from branch/existing_worktree.
 // ONE_OFF is returned as SessionTypeOneOff; callers are responsible for converting it to
 // SessionTypeDirectory after the one-off directory has been generated.
-func resolveSessionType(msg *sessionv1.CreateSessionRequest, branch string) session.SessionType {
+func resolveSessionType(msg *sessionv1.CreateSessionRequest, branch string) (session.SessionType, error) {
 	if msg.SessionType != sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED {
 		switch msg.SessionType {
 		case sessionv1.SessionType_SESSION_TYPE_DIRECTORY:
-			return session.SessionTypeDirectory
+			return session.SessionTypeDirectory, nil
 		case sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE:
-			return session.SessionTypeNewWorktree
+			return session.SessionTypeNewWorktree, nil
 		case sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE:
-			return session.SessionTypeExistingWorktree
+			return session.SessionTypeExistingWorktree, nil
 		case sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT:
-			return session.SessionTypeNewProject
+			return session.SessionTypeNewProject, nil
 		case sessionv1.SessionType_SESSION_TYPE_ONE_OFF:
-			return session.SessionTypeOneOff
+			return session.SessionTypeOneOff, nil
 		default:
-			return session.SessionTypeDirectory
+			// Fail loudly instead of silently downgrading an unrecognized enum value
+			// to SessionTypeDirectory -- this exact silent-substitution shape has
+			// already caused prior incidents in this repo (see plan's Pattern
+			// Decisions table / research/pitfalls.md §1).
+			return "", fmt.Errorf("unrecognized session_type %v", msg.SessionType)
 		}
 	}
 	if msg.ExistingWorktree != "" {
-		return session.SessionTypeExistingWorktree
+		return session.SessionTypeExistingWorktree, nil
 	}
 	if branch != "" {
-		return session.SessionTypeNewWorktree
+		return session.SessionTypeNewWorktree, nil
 	}
-	return session.SessionTypeDirectory
+	return session.SessionTypeDirectory, nil
 }
 
 // enterpriseHosts unions statically-configured GitHub Enterprise hosts with hosts
@@ -3729,6 +3936,13 @@ func (s *SessionService) ResumeHibernatedSession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
 
+	// This instance was loaded raw from storage above, bypassing
+	// Registry.Acquire/WireInstanceCallbacks entirely, so it has no
+	// MCPServerURL provider wired yet — without this, the relaunch below
+	// would omit --mcp-config and the resumed session could never call
+	// session-scoped MCP tools again.
+	instance.SetMCPServerURLProvider(s.resolveMCPServerURL)
+
 	if err := instance.ResumeFromHibernation(ctx); err != nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 	}
@@ -3773,6 +3987,11 @@ func (s *SessionService) ResumeCrashedSession(
 	if instance == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
+
+	// See the matching comment in ResumeHibernatedSession: this instance was
+	// loaded raw from storage above and needs its MCPServerURL provider
+	// wired explicitly before relaunch.
+	instance.SetMCPServerURLProvider(s.resolveMCPServerURL)
 
 	if err := instance.ResumeFromCrash(ctx); err != nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
@@ -4314,11 +4533,18 @@ func (s *SessionService) WatchSessions(
 	}
 
 	// Stream events until client disconnects or context is canceled
+	heartbeat := time.NewTicker(events.HeartbeatInterval)
+	defer heartbeat.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			// Client disconnected or context canceled
 			return nil
+		case <-heartbeat.C:
+			if err := stream.Send(&sessionv1.SessionEvent{Timestamp: timestamppb.Now(), Heartbeat: true}); err != nil {
+				return fmt.Errorf("failed to send session heartbeat: %w", err)
+			}
 		case event, ok := <-eventCh:
 			if !ok {
 				// Event channel closed (should not happen with proper cleanup)
@@ -5069,6 +5295,12 @@ func (s *SessionService) ForkSession(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 	}
+	// ForkFromCheckpoint builds newInst via NewInstance, which never sets
+	// MCPServerURL or a provider (unlike CreateWorktreeSession/CreateDirectorySession,
+	// which pass MCPServerURL in InstanceOptions) -- without this, a forked
+	// session would launch with no --mcp-config at all, same failure class as
+	// backlog e6c2a88e.
+	newInst.SetMCPServerURLProvider(s.resolveMCPServerURL)
 
 	if err := s.storage.AddInstance(newInst); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("persist forked session: %w", err))
@@ -6351,6 +6583,53 @@ func (s *SessionService) UnarchiveSession(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
 	}
 	return connect.NewResponse(&sessionv1.UnarchiveSessionResponse{}), nil
+}
+
+// +api: session:pin
+// PinSession pins a session so it surfaces in the dedicated Pinned section.
+// Idempotent. Archived sessions are rejected (archiving always auto-unpins).
+func (s *SessionService) PinSession(
+	ctx context.Context,
+	req *connect.Request[sessionv1.PinSessionRequest],
+) (*connect.Response[sessionv1.PinSessionResponse], error) {
+	if err := s.setPinned(req.Msg.SessionId, true); err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&sessionv1.PinSessionResponse{}), nil
+}
+
+// +api: session:unpin
+// UnpinSession clears the pinned flag, restoring normal grouped position. Idempotent.
+func (s *SessionService) UnpinSession(
+	ctx context.Context,
+	req *connect.Request[sessionv1.UnpinSessionRequest],
+) (*connect.Response[sessionv1.UnpinSessionResponse], error) {
+	if err := s.setPinned(req.Msg.SessionId, false); err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&sessionv1.UnpinSessionResponse{}), nil
+}
+
+func (s *SessionService) setPinned(sessionID string, pinned bool) error {
+	if sessionID == "" {
+		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
+	}
+	inst := s.FindLiveInstance(sessionID)
+	if inst == nil {
+		return connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", sessionID))
+	}
+	if err := inst.SetPinned(pinned); err != nil {
+		if errors.Is(err, session.ErrCannotPinArchivedSession) {
+			return connect.NewError(connect.CodeFailedPrecondition, err)
+		}
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update pin: %w", err))
+	}
+	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
+	}
+	// Push to other browsers' WatchSessions streams so a pin made in one appears in all.
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"pinned"}))
+	return nil
 }
 
 // +api: session:archive-workflow-sessions

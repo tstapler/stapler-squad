@@ -1,0 +1,14 @@
+{
+  "id": "ListSessionsByCeilingTime",
+  "type": "backend",
+  "service": "InsightsService",
+  "method": "ListSessionsByCeilingTime",
+  "protoFile": "proto/session/v1/insights.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/insights_service.go",
+  "tested": true,
+  "testIds": [
+    "TestContextHistoryRPCs_ReturnSeriesRankingAndCompactionStats"
+  ],
+  "lastModified": "2026-10-05T09:51:26.780429813-07:00"
+}

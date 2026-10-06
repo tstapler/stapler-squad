@@ -9,6 +9,11 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 )
 
+// maxHostAdvertisementBody caps an advertisement POST body. The endpoint is
+// exempt from the passkey wall (see middleware.exemptPeerPaths), so it must not
+// read unbounded input.
+const maxHostAdvertisementBody = 64 << 10
+
 // RegisterHostAdvertisementRoute registers the gossip-style host
 // advertisement endpoint (ADR-002, plan.md Story 3.2) on mux.
 //
@@ -29,6 +34,7 @@ import (
 func RegisterHostAdvertisementRoute(mux *http.ServeMux, identity session.HostIdentity, registry *session.HostRegistry, advertiser *session.HostAdvertiser, addresses []string) {
 	mux.HandleFunc("POST "+session.AdvertisementEndpointPath, func(w http.ResponseWriter, r *http.Request) {
 		var record session.AdvertisementRecord
+		r.Body = http.MaxBytesReader(w, r.Body, maxHostAdvertisementBody)
 		if err := json.NewDecoder(r.Body).Decode(&record); err != nil {
 			log.Debug("host_advertisement.received", "err", err)
 			http.Error(w, "malformed advertisement payload", http.StatusBadRequest)

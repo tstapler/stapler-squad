@@ -196,7 +196,7 @@ describe("toolbar analytics", () => {
 
   it("fires track with button:resize when Resize clicked (in dev panel)", () => {
     renderTerminal();
-    fireEvent.click(screen.getByRole("button", { name: /resize terminal/i }));
+    fireEvent.click(screen.getByRole("button", { name: /redraw terminal/i }));
     expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({
       name: "toolbar_button_click",
       category: "user_action",

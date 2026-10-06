@@ -428,6 +428,22 @@ func (i *Instance) tryExtractConversationUUID() {
 		if info != nil {
 			log.Info("tryextractconversationuuid: found conversation via path fallback", "session", i.Title)
 		}
+		// Cross-session ownership guard (worktree-envvars-hijack Story 1.4.2):
+		// DetectByPath is a path-keyed, "most recently modified JSONL" scan with no
+		// per-session ownership check of its own -- if another live Instance already
+		// owns this exact conversation UUID at this exact effective path, adopting it
+		// here would silently attribute that sibling's conversation to this instance.
+		// i.conversationOwnershipGuard's own inst.UUID == selfUUID exclusion (see
+		// SessionService.ConversationOwnedByOtherLiveSession) means a session
+		// re-detecting its OWN conversation UUID during cold-restore self-recovery is
+		// never blocked -- only silently adopting a still-live sibling's UUID is.
+		if info != nil && i.conversationOwnershipGuard != nil {
+			if ownerUUID, ownedByOther := i.conversationOwnershipGuard(info.ConversationUUID, effectivePath); ownedByOther {
+				log.Warn("tryextractconversationuuid: conversation UUID owned by another live session, not adopting",
+					"session", i.Title, "path", effectivePath, "owner_uuid", ownerUUID)
+				info = nil
+			}
+		}
 	}
 
 	if info == nil {

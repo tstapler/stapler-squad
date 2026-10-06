@@ -1,5 +1,5 @@
 {
-  "id": "ProbeProgram",
+  "id": "program:probe",
   "type": "backend",
   "service": "SessionService",
   "method": "ProbeProgram",

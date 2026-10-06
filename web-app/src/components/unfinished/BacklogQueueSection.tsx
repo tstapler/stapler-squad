@@ -98,13 +98,19 @@ export function BacklogQueueSection() {
     async (owner: string, repo: string, issues: GitHubIssue[]) => {
       setShowImport(false);
       let successCount = 0;
+      let claimedCount = 0;
       for (const issue of issues) {
         const url = issue.url || `https://${issue.host || "github.com"}/${owner}/${repo}/issues/${issue.number}`;
         const result = await importGitHubIssue(url);
-        if (result) successCount++;
+        if (result?.alreadyClaimedElsewhere) claimedCount++;
+        else if (result) successCount++;
       }
       if (successCount > 0) await load();
-      if (successCount < issues.length) {
+      if (claimedCount > 0) {
+        setError(
+          `${claimedCount} issue${claimedCount === 1 ? " is" : "s are"} already claimed by another host. Use Backlog › Import from GitHub Issue to import anyway.`
+        );
+      } else if (successCount < issues.length) {
         const failed = issues.length - successCount;
         setError(
           issues.length === 1

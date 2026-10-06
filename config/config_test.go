@@ -1805,3 +1805,20 @@ func TestGetAvailablePrograms_should_OmitAider_When_AiderNotOnPath(t *testing.T)
 
 	assert.Empty(t, programs)
 }
+
+func TestHeadlessTriageCeilings_DefaultOverrideDisable(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, DefaultHeadlessTriageMaxTurns, (&Config{}).HeadlessTriageMaxTurnsOrDefault())
+	assert.Equal(t, DefaultHeadlessTriageMaxSubagents, (&Config{}).HeadlessTriageMaxSubagentsOrDefault())
+	assert.Equal(t, 5, (&Config{HeadlessTriageMaxTurns: 5}).HeadlessTriageMaxTurnsOrDefault())
+	assert.Zero(t, (&Config{HeadlessTriageMaxSubagents: -1}).HeadlessTriageMaxSubagentsOrDefault())
+	assert.Zero(t, (*Config)(nil).HeadlessTriageMaxTurnsOrDefault())
+}
+
+func TestHeadlessTriageMaxCostUSDOrDefault(t *testing.T) {
+	var nilCfg *Config
+	assert.Equal(t, HeadlessTriageMaxCostUSDDefault, nilCfg.HeadlessTriageMaxCostUSDOrDefault())
+	assert.Equal(t, HeadlessTriageMaxCostUSDDefault, (&Config{}).HeadlessTriageMaxCostUSDOrDefault())
+	assert.Equal(t, 7.5, (&Config{HeadlessTriageMaxCostUSD: 7.5}).HeadlessTriageMaxCostUSDOrDefault())
+	assert.Zero(t, (&Config{HeadlessTriageMaxCostUSD: -1}).HeadlessTriageMaxCostUSDOrDefault(), "negative disables")
+}

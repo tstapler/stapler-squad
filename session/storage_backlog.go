@@ -85,7 +85,9 @@ const backlogItemPublicIDBackfillLockTimeout = 5 * time.Second
 // "" as "skip locking" — there is no filesystem location to coordinate on,
 // and no plausible second OS process to race against in either case.
 func (r *EntRepository) backfillLockFilePath(name string) string {
-	if r.dbPath == "" || strings.HasPrefix(r.dbPath, "file:") {
+	// A bare ":memory:" DSN has no directory; filepath.Dir would resolve it to the
+	// process cwd and litter the working tree with a lock file.
+	if r.dbPath == "" || r.dbPath == ":memory:" || strings.HasPrefix(r.dbPath, "file:") {
 		return ""
 	}
 	return filepath.Join(filepath.Dir(r.dbPath), name)
@@ -388,6 +390,30 @@ func (r *EntRepository) GetItemSessionBySessionUUID(ctx context.Context, session
 		return ItemSessionSummary{}, fmt.Errorf("failed to get item session by session uuid: %w", err)
 	}
 	return itemSessionToSummary(is), nil
+}
+
+// ClaimDiagnoseNudgeAttempt atomically marks the diagnose-role ItemSession
+// identified by sessionUUID as having attempted its one nudge write —
+// a single UPDATE ... WHERE diagnose_nudge_attempted_at IS NULL statement, so
+// the read-and-check-then-write a caller would otherwise do in Go can't race
+// against the caller's own retry. Returns claimed=false (not an error) when
+// no such row exists (not a diagnose-role session, or storage.CreateItemSession
+// hasn't landed yet) or the row already has a claim — the caller must refuse
+// the write in either case. See session/diagnose_nudge.go for why this is a
+// separate concept from the item-level diagnose_nudge_count cap.
+func (r *EntRepository) ClaimDiagnoseNudgeAttempt(ctx context.Context, sessionUUID string) (claimed bool, err error) {
+	n, err := r.client.ItemSession.Update().
+		Where(
+			itemsession.SessionUUID(sessionUUID),
+			itemsession.SessionRoleEQ(SessionRoleDiagnose),
+			itemsession.DiagnoseNudgeAttemptedAtIsNil(),
+		).
+		SetDiagnoseNudgeAttemptedAt(time.Now()).
+		Save(ctx)
+	if err != nil {
+		return false, fmt.Errorf("claim diagnose nudge attempt for session %s: %w", sessionUUID, err)
+	}
+	return n > 0, nil
 }
 
 // GetItemSessionBySessionAndItem looks up an ItemSession by both sessionUUID and backlog item ID.
@@ -1172,21 +1198,23 @@ func (r *EntRepository) BackfillMissingPRNumbers(ctx context.Context) (int, erro
 // boundary — callers never need to re-check ResolvedAt/SnoozedUntil
 // nullability themselves (parse-don't-validate at the repository boundary).
 type OpenStuckStateData struct {
-	ID                  string
-	ItemID              string
-	Reason              domain.StuckReason
-	FirstDetectedAt     time.Time
-	LastCheckedAt       time.Time
-	NotifiedAt          *time.Time
-	Context             string
-	ItemTitle           string
-	ItemStatus          BacklogStatus
-	PrNumber            int
-	PrURL               string
-	RemediationAttempts int32
-	NextRemediationAt   *time.Time
-	GraceBootTime       *time.Time
-	PlanArtifactsPath   string
+	ID                     string
+	ItemID                 string
+	Reason                 domain.StuckReason
+	FirstDetectedAt        time.Time
+	LastCheckedAt          time.Time
+	NotifiedAt             *time.Time
+	Context                string
+	ItemTitle              string
+	ItemStatus             BacklogStatus
+	PrNumber               int
+	PrURL                  string
+	RemediationAttempts    int32
+	NextRemediationAt      *time.Time
+	GraceBootTime          *time.Time
+	PlanArtifactsPath      string
+	DiagnoseNudgeCount     int32
+	DiagnoseNextEligibleAt *time.Time
 }
 
 // FindOpenStuckStates returns every BacklogStuckState row that is currently
@@ -1213,16 +1241,18 @@ func (r *EntRepository) FindOpenStuckStates(ctx context.Context) ([]OpenStuckSta
 	result := make([]OpenStuckStateData, 0, len(rows))
 	for _, row := range rows {
 		data := OpenStuckStateData{
-			ID:                  row.ID.String(),
-			ItemID:              row.ItemID.String(),
-			Reason:              domain.StuckReason(row.Reason),
-			FirstDetectedAt:     row.FirstDetectedAt,
-			LastCheckedAt:       row.LastCheckedAt,
-			NotifiedAt:          row.NotifiedAt,
-			Context:             row.Context,
-			RemediationAttempts: row.RemediationAttempts,
-			NextRemediationAt:   row.NextRemediationAt,
-			GraceBootTime:       row.GraceBootTime,
+			ID:                     row.ID.String(),
+			ItemID:                 row.ItemID.String(),
+			Reason:                 domain.StuckReason(row.Reason),
+			FirstDetectedAt:        row.FirstDetectedAt,
+			LastCheckedAt:          row.LastCheckedAt,
+			NotifiedAt:             row.NotifiedAt,
+			Context:                row.Context,
+			RemediationAttempts:    row.RemediationAttempts,
+			NextRemediationAt:      row.NextRemediationAt,
+			GraceBootTime:          row.GraceBootTime,
+			DiagnoseNudgeCount:     row.DiagnoseNudgeCount,
+			DiagnoseNextEligibleAt: row.DiagnoseNextEligibleAt,
 		}
 		if item := row.Edges.Item; item != nil {
 			data.ItemTitle = item.Title

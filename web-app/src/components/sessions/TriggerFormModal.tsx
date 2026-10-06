@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { Modal, ModalContent, ModalTitle, ModalClose } from "@/components/ui/Modal";
 import { WorkflowProto } from "@/gen/session/v1/session_pb";
+import { RepoPathInput } from "@/components/ui/RepoPathInput";
 import { WorkflowFormData } from "@/lib/hooks/useWorkflows";
 import {
   ruleModalContent, modalHeader, modalTitleRow, modalBody, modalCloseButton,
@@ -355,11 +356,11 @@ export function TriggerFormModal({ open, editTrigger, onSave, onClose }: Trigger
                 </label>
                 <label className={labelClass}>
                   Target directory *
-                  <input
-                    className={inputClass}
+                  <RepoPathInput
+                    aria-label="Target directory"
                     data-testid="trigger-target-directory-input"
                     value={formData.targetDirectory}
-                    onChange={(e) => setField("targetDirectory", e.target.value)}
+                    onChange={(v) => setField("targetDirectory", v)}
                     placeholder="/home/user/projects/repo"
                   />
                   {fieldErrors.targetDirectory && <span className={fieldError}>{fieldErrors.targetDirectory}</span>}

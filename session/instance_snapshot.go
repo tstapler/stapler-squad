@@ -102,6 +102,7 @@ type InstanceSnapshot struct {
 	IsExpanded            bool
 	Prompt                string
 	InitialPrompt         string
+	InitialPromptSentAt   time.Time
 	Category              string
 	Note                  string
 	SessionType           SessionType
@@ -130,6 +131,7 @@ type InstanceSnapshot struct {
 	// Misc config
 	OneShot                    bool
 	Hidden                     bool
+	Pinned                     bool
 	ProjectID                  string
 	HistoryFilePath            string
 	EverHadConversationHistory bool
@@ -188,6 +190,7 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		IsExpanded:                i.IsExpanded,
 		Prompt:                    i.Prompt,
 		InitialPrompt:             i.InitialPrompt,
+		InitialPromptSentAt:       i.InitialPromptSentAt,
 		Category:                  i.Category,
 		Note:                      i.Note,
 		SessionType:               i.SessionType,
@@ -229,6 +232,7 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		RestartedFromSessionID:     i.RestartedFromSessionID,
 		OneShot:                    i.OneShot,
 		Hidden:                     i.Hidden,
+		Pinned:                     i.Pinned,
 		ProjectID:                  i.ProjectID,
 		HistoryFilePath:            i.HistoryFilePath,
 		EverHadConversationHistory: i.EverHadConversationHistory,

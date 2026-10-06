@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/cdp"
+	"github.com/tstapler/stapler-squad/session/contexthistory"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/scrollback"
@@ -1027,8 +1028,10 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// After a service restart, drivers are not automatically restarted for loaded sessions.
 		// Sessions created by the workflow scheduler that never had their prompt injected
 		// (e.g., service restarted within 30 s of session creation) need the driver resumed.
-		// The driver itself checks for an existing JSONL conversation file and skips the send
-		// if the prompt was already delivered in a previous run.
+		// This restarts the driver for every session with a non-empty InitialPrompt, not just
+		// ones from the last 30s — safe because the driver itself checks Instance.InitialPromptSentAt
+		// (persisted; set the moment a send actually happens) before falling back to the
+		// output/JSONL heuristics, and skips re-sending if it's already set.
 		for _, inst := range instances {
 			if inst.InitialPrompt == "" {
 				continue
@@ -1280,6 +1283,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// (below), now reading these already-constructed outer-scope variables.
 	homeDir, homeDirErr := os.UserHomeDir()
 	var tokenStore *tokens.TokenStore
+	var ctxHistoryStore *contexthistory.Store
 	var historyDir string
 	if homeDirErr == nil {
 		// Under test isolation this resolves inside the isolated config dir
@@ -1294,6 +1298,13 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		tokenStore = tokens.NewTokenStore(historyDir)
 		historyLinker.RegisterFileCallback(tokenStore.OnHistoryFileChanged)
 		tokenStore.Start(context.Background())
+		// Persist context history off the parse/CapacityMonitor path: the recorder
+		// consumes TokenStore's notifications on its own goroutine.
+		if entClient := storage.GetEntClient(); entClient != nil {
+			ctxHistoryStore = contexthistory.NewStore(entClient)
+			go contexthistory.NewRecorder(ctxHistoryStore, services.AnthropicContextWindow, 0).
+				Run(context.Background(), tokenStore)
+		}
 	} else {
 		log.Warn("could not resolve Claude history dir for InsightsService token store", "err", homeDirErr)
 	}
@@ -1356,6 +1367,22 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			recoverAndLog("quota gate reconcile ticker", func() { quotaGate.Reconcile(ctx) })
 		}
 	}()
+
+	// Worktree consistency sweeper: reconciles missing/incorrect Worktree ent rows
+	// against live `git worktree` state, gated by FeatureFlagWorktreeConsistencySweep
+	// (default off). config.LoadConfig is passed directly, not a closure over cfg, so
+	// the flag can be flipped live with no restart (matches quotaGate/julesDispatchSvc).
+	go session.StartWorktreeConsistencySweeper(context.Background(), storage, &services.EventBusNotifier{Bus: eventBus}, config.LoadConfig)
+
+	// Per-item /backlog/* commands live in session worktrees only; a user-scope copy is stale
+	// scaffolding from an old build and shadows the real ones with a wrong item ID.
+	if home, hErr := os.UserHomeDir(); hErr == nil {
+		if removed, rmErr := session.RemoveStaleUserLevelBacklogCommands(home); rmErr != nil {
+			log.WarningLog().Printf("failed to remove stale user-level backlog commands: %v", rmErr)
+		} else if removed {
+			log.InfoLog().Printf("removed stale user-level ~/.claude/commands/backlog (per-item commands belong in session worktrees)")
+		}
+	}
 
 	backlogSvc := services.NewBacklogService(storage, sessionService, cfg, workflowEngine, pipelineEngine, pipelineModeRepo)
 	backlogSvc.SetLivenessRepository(livenessRepo)
@@ -1589,6 +1616,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		associator := tokens.NewAssociator(storage)
 		insightsSvc = services.NewInsightsService(tokenStore, pricing, associator, storage)
 		insightsSvc.SetDismissedFindingsStore(storage)
+		insightsSvc.SetContextHistoryStore(ctxHistoryStore)
 		sessionService.SetTokenStoreReader(tokenStore)
 		backlogSvc.SetTokenStore(tokenStore, pricing)
 		if sessionSummaryGenerator != nil {

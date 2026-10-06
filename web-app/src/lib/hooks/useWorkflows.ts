@@ -118,6 +118,29 @@ export function useWorkflows(): UseWorkflowsReturn {
     refresh();
   }, [refresh]);
 
+  // Staleness backstop: WatchWorkflows (useWatchWorkflows.ts) can silently
+  // stall -- e.g. a proxy idle-timeout that never surfaces a stream error or
+  // close -- in which case its own reconnect-on-error logic never fires and
+  // a long-lived tab keeps serving an ever-stale list with no indication.
+  // A low-frequency re-fetch, plus one on tab refocus, catches that case
+  // without connection-state tracking; the workflow list is small enough
+  // that a full ListWorkflows call is cheap.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      void fetchWorkflows();
+    }, 90_000);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") void fetchWorkflows();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [fetchWorkflows]);
+
   // Live updates from any client (MCP tool, another tab, a cron fire) via
   // WatchWorkflows -- keeps `workflows` current without requiring a manual
   // refresh. See useWatchWorkflows.ts's header for why this stays a plain

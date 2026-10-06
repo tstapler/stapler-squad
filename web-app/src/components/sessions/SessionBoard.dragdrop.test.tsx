@@ -8,6 +8,9 @@ import { attemptColumnMove, SessionBoard } from "./SessionBoard";
 import { store } from "@/lib/store/store";
 import { setError, setErrorCode } from "@/lib/store/sessionsSlice";
 
+const mockTrack = jest.fn();
+jest.mock("@/lib/contexts/AnalyticsContext", () => ({ useAnalytics: () => ({ track: mockTrack }) }));
+
 // SessionCard pulls in a lot of machinery irrelevant to drag/drop wiring -- same stub
 // strategy as SessionBoard.test.tsx. Renders a selection toggle button when selectMode is
 // active so the multi-select drag fan-out tests (Task 6.3.1c-d) can select cards through the

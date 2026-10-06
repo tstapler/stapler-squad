@@ -798,7 +798,11 @@ func KillOrphanedControlModeClients(serverSocket string) (int, error) {
 	defer cancel()
 	out, err := (LocalRunner{}).Run(ctx, "", ResolveClientForSocket(serverSocket), args...)
 	if err != nil {
-		// No server running yet, or no clients at all -- nothing to clean up.
+		// Indistinguishable from "no server yet" without more, so this can't
+		// escalate to a hard failure -- but must stay visible, since silently
+		// swallowing this is exactly how BUG-042 recurred (a degraded server
+		// refusing even this cleanup's own connection, unreconciled for days).
+		log.Warn("[tmux] KillOrphanedControlModeClients: list-clients failed (no server yet, or server too degraded to enumerate clients)", "err", err)
 		return 0, nil
 	}
 

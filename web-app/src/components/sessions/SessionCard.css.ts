@@ -27,6 +27,11 @@ export const card = style({
   transition: "border-color 0.2s ease, box-shadow 0.2s ease, opacity 0.3s ease, transform 0.3s ease, max-height 0.3s ease",
   position: "relative",
   WebkitTapHighlightColor: "transparent",
+  // Container query basis for the narrow-layout overrides below (e.g.
+  // `infoRow`/`value`) — sized against the card's own width, not the
+  // browser viewport, since a Board column can be narrow inside a wide window.
+  containerType: "inline-size",
+  containerName: "sessionCard",
   animationName: cardFadeSlideIn,
   animationDuration: "0.35s",
   animationTimingFunction: "ease",
@@ -81,11 +86,19 @@ export const cardPaused = style({
   },
 });
 
+// Hit target is intentionally bigger than the visible 20px checkbox (padding,
+// not a larger box) so the checkbox is easy to click without landing on the
+// card behind it — 20px alone was too small to hit reliably. `left` is offset
+// by the same amount as CHECKBOX_HIT_PADDING so the visible checkbox doesn't
+// shift; both must stay in sync, hence the shared constant.
+const CHECKBOX_HIT_PADDING = "8px";
 export const checkbox = style({
   position: "absolute",
-  left: vars.space["4"],
+  left: `calc(${vars.space["4"]} - ${CHECKBOX_HIT_PADDING})`,
   top: "50%",
   transform: "translateY(-50%)",
+  padding: CHECKBOX_HIT_PADDING,
+  cursor: "pointer",
 });
 
 globalStyle(`${checkbox} input[type='checkbox']`, { width: "20px", height: "20px", cursor: "pointer" });
@@ -398,10 +411,21 @@ export const info = style({
   gap: "6px",
 });
 
+// Narrow-card breakpoint. Uses a container query against `card`'s
+// containerName above, so this activates based on the card's own width
+// (e.g. a narrow Board column), not the browser viewport.
+const CARD_NARROW = "(max-width: 260px)";
+
 export const infoRow = style({
   display: "flex",
   gap: vars.space["2"],
   fontSize: "0.875rem",
+  "@container": {
+    [`sessionCard ${CARD_NARROW}`]: {
+      flexDirection: "column",
+      gap: "2px",
+    },
+  },
 });
 
 export const label = style({
@@ -415,6 +439,13 @@ export const value = style({
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
+  "@container": {
+    [`sessionCard ${CARD_NARROW}`]: {
+      whiteSpace: "normal",
+      overflowWrap: "anywhere",
+      textOverflow: "clip",
+    },
+  },
 });
 
 export const githubLink = style({
@@ -507,6 +538,7 @@ export const overflowButton = style({
   letterSpacing: "2px",
   lineHeight: 1,
   minHeight: "44px",
+  minWidth: "44px",
   transition: "background 0.2s ease",
   selectors: {
     "&:hover": { background: vars.color.hoverBackground },
@@ -545,6 +577,13 @@ export const overflowMenuItem = style({
   selectors: {
     "&:hover": { background: vars.color.hoverBackground },
     "&:disabled": { opacity: 0.5, cursor: "not-allowed" },
+  },
+});
+
+// WCAG 2.5.5 / mobile: 44px minimum touch target for coarse pointers.
+export const overflowMenuItemTouch = style({
+  "@media": {
+    "(pointer: coarse), (max-width: 768px)": { minHeight: "44px" },
   },
 });
 

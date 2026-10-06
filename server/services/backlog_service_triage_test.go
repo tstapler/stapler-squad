@@ -47,6 +47,10 @@ func TestClassifyHeadlessCallError_should_BucketErrorsForLogGrepping(t *testing.
 		{"idle timeout (stream stalled)", headless.ErrIdleTimeout, 5 * time.Minute, "idle"},
 		{"wrapped idle timeout", fmt.Errorf("headless call ended: %w", headless.ErrIdleTimeout), 5 * time.Minute, "idle"},
 		{"idle timeout even with elapsed near budget must not fall into the timeout heuristic", headless.ErrIdleTimeout, triageCallBudget - time.Second, "idle"},
+		{"fan-out ceiling", &headless.FanoutCeilingError{Turns: 700, Subagents: 121, MaxTurns: 600, MaxSubagents: 120}, 40 * time.Minute, "fanout_ceiling"},
+		{"wrapped fan-out ceiling near budget must not fall into the timeout heuristic", fmt.Errorf("headless call ended: %w", &headless.FanoutCeilingError{}), triageCallBudget - time.Second, "fanout_ceiling"},
+		{"cost ceiling exceeded", fmt.Errorf("headless call ended: %w", &headless.CostCeilingError{SpendUSD: 30}), 5 * time.Minute, "cost_ceiling"},
+		{"cost ceiling even with elapsed near budget must not fall into the timeout heuristic", headless.ErrCostCeilingExceeded, triageCallBudget - time.Second, "cost_ceiling"},
 		{"ctx deadline exceeded", context.DeadlineExceeded, 5 * time.Minute, "timeout"},
 		{"wrapped ctx deadline exceeded", fmt.Errorf("headless call ended: %w", context.DeadlineExceeded), 5 * time.Minute, "timeout"},
 		{"elapsed within budget tail even without deadline error", errors.New("some other error"), 3*time.Hour - 4*time.Second, "timeout"},
@@ -2918,6 +2922,127 @@ func TestCleanupItemWorktreesExcept_should_KeepBacklogScaffolding_When_PathIsExe
 	assert.NoError(t, statErr, "ship.md must survive on the exempted, still-in-use worktree")
 	_, statErr = os.Stat(contextPath)
 	assert.NoError(t, statErr, ".backlog-context.md must survive on the exempted, still-in-use worktree")
+}
+
+// TestCleanupItemWorktreesExcept_should_NotifyAndLogWarning_When_WorktreeRowMissingButExpected
+// is Epic 2.1's regression test for the confirmed gap in cleanupItemWorktreesExcept
+// (plan.md's Epic B): a work session that should have a Worktree row
+// (SessionTypeNewWorktree with a Branch) but doesn't used to vanish with a silent
+// continue — no log, no notify, nothing for an operator to act on. It must now notify
+// with the real linked item ID (never the session UUID) in the itemID slot.
+func TestCleanupItemWorktreesExcept_should_NotifyAndLogWarning_When_WorktreeRowMissingButExpected(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	ctx := context.Background()
+
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Missing worktree row test item",
+		Status: string(session.BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	const sessionUUID = "missing-row-work-uuid"
+	now := time.Now()
+	require.NoError(t, storage.CreateInstanceData(ctx, session.InstanceData{
+		Title:       sessionUUID,
+		UUID:        sessionUUID,
+		Path:        t.TempDir(),
+		Branch:      "work/missing-row",
+		Status:      session.Paused,
+		Program:     "claude",
+		SessionType: session.SessionTypeNewWorktree,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		// Deliberately no Worktree field — reproduces the missing-row gap: a session
+		// that ExpectsWorktree but has no Worktree ent row at all.
+	}))
+
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	sessions, err := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, err)
+
+	svc.cleanupItemWorktreesExcept(ctx, sessions, "")
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, events.EventNotification, ev.Type)
+		assert.Equal(t, item.ID, ev.SessionID, "the real backlog item ID must land in the itemID slot, never the session UUID")
+		assert.Equal(t, item.ID, ev.NotificationMetadata["item_id"])
+		assert.Contains(t, ev.NotificationMessage, sessionUUID, "message must name the session so an operator knows what's missing")
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a notification for the missing-but-expected worktree row")
+	}
+}
+
+// TestCleanupItemWorktreesExcept_should_ContinueSilently_When_SessionDoesNotExpectWorktree
+// is the regression guard for Epic 2.1's healthy path: a SessionTypeDirectory session
+// (no branch, ExpectsWorktree == false) has no Worktree row by design, and must keep
+// the pre-existing silent continue — no notify, no log, no behavior change.
+func TestCleanupItemWorktreesExcept_should_ContinueSilently_When_SessionDoesNotExpectWorktree(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	ctx := context.Background()
+
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Directory session regression test item",
+		Status: string(session.BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	const sessionUUID = "directory-session-uuid"
+	now := time.Now()
+	require.NoError(t, storage.CreateInstanceData(ctx, session.InstanceData{
+		Title:       sessionUUID,
+		UUID:        sessionUUID,
+		Path:        t.TempDir(),
+		Status:      session.Paused,
+		Program:     "claude",
+		SessionType: session.SessionTypeDirectory,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}))
+
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	sessions, err := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, err)
+
+	svc.cleanupItemWorktreesExcept(ctx, sessions, "")
+
+	// cleanupItemWorktreesExcept is synchronous and EventBus.Publish sends synchronously
+	// into the subscriber channel, so any would-be event is already queued by the time
+	// the call above returns — no wait needed to prove none fired.
+	select {
+	case ev := <-ch:
+		t.Fatalf("expected no notification for a legitimately non-worktree session, got %+v", ev)
+	default:
+		// expected: no notification fired — unchanged silent continue.
+	}
 }
 
 // TestAutoReopenForPRFix_should_MergeAndPushMain_When_BranchIsStaleButMergesCleanly
@@ -6224,4 +6349,39 @@ func TestStopLiveWorkSessions_should_LogAndContinue_When_SessionStopperReturnsEr
 	updated, err := storage.GetItemSession(t.Context(), workSession.ID)
 	require.NoError(t, err)
 	assert.NotNil(t, updated.EndedAt, "session must still be marked ended despite the stop error, matching best-effort semantics")
+}
+
+// A repeated_noop_dispatch row must stop any further work-session spawn; once
+// the row resolves, dispatch proceeds again.
+func TestSpawnSessionFromItem_should_Refuse_When_RepeatedNoopDispatchRowOpen(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+	createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "noop gate item", RepoPath: repoPath, SkipTriage: true, SkipPlanning: true,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{{Index: 0, Text: "test", Status: "pending"}},
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+	_, err = svc.TransitionBacklogItemStatus(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{ItemId: itemID, TargetStatus: "ready"}))
+	require.NoError(t, err)
+
+	applied, err := storage.MarkStuck(ctx, itemID, domain.StuckReasonRepeatedNoopDispatch, session.BacklogStatusReady, "3 no-op sessions")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "repeated_noop_dispatch")
+
+	_, err = storage.ResolveStuck(ctx, itemID, domain.StuckReasonRepeatedNoopDispatch)
+	require.NoError(t, err)
+	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
 }

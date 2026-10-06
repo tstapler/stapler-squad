@@ -5,6 +5,9 @@ import { SessionBoard } from "./SessionBoard";
 import { SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
 
+const mockTrack = jest.fn();
+jest.mock("@/lib/contexts/AnalyticsContext", () => ({ useAnalytics: () => ({ track: mockTrack }) }));
+
 // SessionCard pulls in a lot of machinery (terminal snapshots, tooltips, session actions)
 // that's irrelevant to board bucketing/virtualization — replace it with a lightweight stub,
 // same strategy SessionList's own tests use for the same component. Renders a selection
@@ -345,6 +348,9 @@ describe("SessionBoard — cross-column bulk select (Task 6.3.1a-b, AC8)", () =>
     await waitFor(() => expect(updateSessionMock).toHaveBeenCalledTimes(2));
     expect(updateSessionMock).toHaveBeenCalledWith("sess-1", { status: SessionStatus.PAUSED });
     expect(updateSessionMock).toHaveBeenCalledWith("sess-2", { status: SessionStatus.PAUSED });
+    expect(mockTrack).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "board_bulk_pause", labels: { count: "2" } }),
+    );
   });
 
   it("onPauseAll_should_ReportPartialFailure_When_OneOfTwoSelectedSessionsFailsToPause", async () => {

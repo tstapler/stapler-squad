@@ -19,6 +19,7 @@ import { useFilteredGroupedSessions } from "@/lib/hooks/useFilteredGroupedSessio
 import { usePersistedViewState, type PersistedFieldsConfig } from "@/lib/hooks/usePersistedViewState";
 import { useSessionService } from "@/lib/hooks/useSessionService";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
+import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { store } from "@/lib/store/store";
 import { BOARD_COLUMNS, getBoardColumnKey, type BoardColumnKey } from "@/lib/board/columns";
 import { isLegalBoardDragForSession } from "@/lib/board/transitions";
@@ -206,6 +207,7 @@ export function SessionBoard({
   storageKeyPrefix,
 }: SessionBoardProps) {
   const { updateSession, resumeHibernatedSession } = useSessionService();
+  const { track } = useAnalytics();
   const { approvals, approve } = useApprovalsContext();
 
   // Search + swimlane grouping-strategy state (Task 6.1.1a, 6.2.1a). Persisted under the same
@@ -305,6 +307,7 @@ export function SessionBoard({
   const handlePauseAll = useCallback(() => {
     const ids = Array.from(activeSelection);
     if (ids.length === 0) return;
+    track({ name: "board_bulk_pause", category: "user_action", component: "SessionBoard", labels: { count: String(ids.length) } });
     setSelectedSessions(new Set());
     setSelectMode(false);
     void (async () => {
@@ -328,11 +331,12 @@ export function SessionBoard({
         announceLive(message);
       }
     })();
-  }, [activeSelection, sessionById, updateSession, announceLive, showToast]);
+  }, [activeSelection, sessionById, updateSession, announceLive, showToast, track]);
 
   const handleResumeAll = useCallback(() => {
     const ids = Array.from(activeSelection);
     if (ids.length === 0) return;
+    track({ name: "board_bulk_resume", category: "user_action", component: "SessionBoard", labels: { count: String(ids.length) } });
     setSelectedSessions(new Set());
     setSelectMode(false);
     void (async () => {
@@ -361,7 +365,7 @@ export function SessionBoard({
         announceLive(message);
       }
     })();
-  }, [activeSelection, sessionById, updateSession, resumeHibernatedSession, announceLive, showToast]);
+  }, [activeSelection, sessionById, updateSession, resumeHibernatedSession, announceLive, showToast, track]);
 
   const handleDeleteAll = useCallback(() => {
     if (!onDeleteSession) return;

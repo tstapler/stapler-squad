@@ -36,12 +36,13 @@ export function pointToCell(
  * Wraps a per-point handler so it runs at most once per animation frame,
  * always with the most recent point — intermediate touchmove events are
  * coalesced instead of each one forcing an immediate xterm redraw.
- * Returns [throttled handler, cancel] — call cancel() on gesture end/cleanup
- * to drop any frame still pending from the last point before teardown.
+ * Returns [throttled handler, cancel, flush] — call cancel() on gesture end/cleanup
+ * to drop any frame still pending from the last point before teardown, or
+ * flush() to apply that point immediately first.
  */
 export function rafThrottlePoint(
   handler: (clientX: number, clientY: number) => void
-): [(clientX: number, clientY: number) => void, () => void] {
+): [(clientX: number, clientY: number) => void, () => void, () => void] {
   let rafId: number | null = null;
   let latestX = 0;
   let latestY = 0;
@@ -63,5 +64,13 @@ export function rafThrottlePoint(
     }
   };
 
-  return [throttled, cancel];
+  /** Runs the handler now with the latest point if a frame is pending, so release does not drop the last travel. */
+  const flush = () => {
+    if (rafId === null) return;
+    cancelAnimationFrame(rafId);
+    rafId = null;
+    handler(latestX, latestY);
+  };
+
+  return [throttled, cancel, flush];
 }

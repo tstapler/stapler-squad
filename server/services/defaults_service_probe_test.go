@@ -100,7 +100,8 @@ func TestProbeProgram_should_FlagWrapperAndNotRun_When_EnvCommand(t *testing.T) 
 }
 
 func TestNewDefaultsService_should_SpawnNoProcessAndNoGoroutine_When_Constructed(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	baseline := goleak.IgnoreCurrent()
+	defer goleak.VerifyNone(t, baseline)
 	d := NewDefaultsService()
 	require.NotNil(t, d.prober)
 	_ = probe(t, d, "definitely-not-a-real-command-xyz")

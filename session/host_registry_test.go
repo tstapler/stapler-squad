@@ -2,8 +2,12 @@ package session
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -462,5 +466,146 @@ func TestAdvertisementRecord_Verify_should_ReturnFalse_When_PublicKeyMissing(t *
 	}
 	if record.Verify() {
 		t.Fatalf("record.Verify() = true, want false for a record with no public key")
+	}
+}
+
+func TestPruneTickerLoop_should_RemoveStaleHostRegistryEntry_When_TTLElapsesWithNoRefresh(t *testing.T) {
+	stateDir := t.TempDir()
+	clock := &fakeClock{now: time.Now()}
+	registry, err := NewHostRegistryWithClock(stateDir, DefaultHostRegistryTTL, clock)
+	if err != nil {
+		t.Fatalf("NewHostRegistryWithClock() error = %v, want nil", err)
+	}
+	identity, err := LoadOrCreateHostIdentity(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadOrCreateHostIdentity() error = %v, want nil", err)
+	}
+	if _, _, err := registry.Advertise(newTestAdvertisement(t, identity, []string{"peer-a:8444"}, clock.Now())); err != nil {
+		t.Fatalf("Advertise() error = %v, want nil", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ticks := make(chan time.Time)
+	done := make(chan struct{})
+	go func() {
+		registry.RunPruneLoop(ctx, ticks)
+		close(done)
+	}()
+
+	clock.Advance(DefaultHostRegistryTTL + time.Second)
+	ticks <- clock.Now()
+	// The loop only receives this second tick after finishing the first
+	// Prune, so it synchronizes without a sleep.
+	ticks <- clock.Now()
+	cancel()
+	<-done
+
+	if _, ok := registry.Lookup(identity.ID); ok {
+		t.Fatalf("Lookup() after prune tick past TTL = found, want pruned")
+	}
+	reloaded, err := NewHostRegistryWithClock(stateDir, DefaultHostRegistryTTL, clock)
+	if err != nil {
+		t.Fatalf("reopen registry: %v", err)
+	}
+	if _, ok := reloaded.Lookup(identity.ID); ok {
+		t.Fatalf("pruned entry still present in host_registry.json after reload")
+	}
+}
+
+func TestPruneTickerLoop_should_ContinueRunning_When_PruneReturnsError(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	if err := os.MkdirAll(stateDir, 0750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	clock := &fakeClock{now: time.Now()}
+	registry, err := NewHostRegistryWithClock(stateDir, DefaultHostRegistryTTL, clock)
+	if err != nil {
+		t.Fatalf("NewHostRegistryWithClock() error = %v, want nil", err)
+	}
+	identity, err := LoadOrCreateHostIdentity(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadOrCreateHostIdentity() error = %v, want nil", err)
+	}
+	if _, _, err := registry.Advertise(newTestAdvertisement(t, identity, []string{"peer-a:8444"}, clock.Now())); err != nil {
+		t.Fatalf("Advertise() error = %v, want nil", err)
+	}
+	clock.Advance(DefaultHostRegistryTTL + time.Second)
+
+	var buf lockedBuffer
+	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(prev) })
+
+	// Removing the state dir makes the flock acquire inside Prune's persist fail.
+	if err := os.RemoveAll(stateDir); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ticks := make(chan time.Time)
+	done := make(chan struct{})
+	go func() {
+		registry.RunPruneLoop(ctx, ticks)
+		close(done)
+	}()
+
+	ticks <- clock.Now() // fails
+	// The send returns on receipt, not on Prune finishing; wait for the failure log
+	// before restoring the dir or the first Prune could succeed.
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(buf.String(), "host_registry.prune_failed") {
+		if time.Now().After(deadline) {
+			t.Fatalf("first Prune never logged host_registry.prune_failed, got: %s", buf.String())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := os.MkdirAll(stateDir, 0750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	ticks <- clock.Now() // must be received: loop survived the error
+	ticks <- clock.Now() // synchronizes on the second Prune finishing
+	cancel()
+	<-done
+
+	if !strings.Contains(buf.String(), "host_registry.prune_failed") {
+		t.Fatalf("expected host_registry.prune_failed log line, got: %s", buf.String())
+	}
+	if _, ok := registry.Lookup(identity.ID); ok {
+		t.Fatalf("entry still present after a successful retry tick, want pruned")
+	}
+}
+
+var (
+	adr002Mention   = regexp.MustCompile(`ADR-002`)
+	adr002FullPaths = regexp.MustCompile(`docs/adr/ADR-002-workspace-host-registry-gossip\.md|project_plans/backlog-deep-linking/decisions/ADR-002-gossip-based-host-registry\.md`)
+)
+
+func TestADR002References_should_PointToCanonicalPath_When_CodeCommentsGrepped(t *testing.T) {
+	for _, file := range []string{"host_registry.go", "host_advertiser.go"} {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		bare := adr002FullPaths.ReplaceAll(data, nil)
+		if adr002Mention.Match(bare) {
+			t.Errorf("%s has a bare ADR-002 reference that does not name a full path", file)
+		}
+		if !adr002FullPaths.Match(data) {
+			t.Errorf("%s has no ADR-002 path reference at all", file)
+		}
+	}
+}
+
+func TestADR002PointerFile_should_ExistAtDocsAdrPath_When_RepoChecked(t *testing.T) {
+	pointer := filepath.Join("..", "docs", "adr", "ADR-002-workspace-host-registry-gossip.md")
+	data, err := os.ReadFile(pointer)
+	if err != nil {
+		t.Fatalf("pointer file missing: %v", err)
+	}
+	canonical := "project_plans/backlog-deep-linking/decisions/ADR-002-gossip-based-host-registry.md"
+	if !strings.Contains(string(data), canonical) {
+		t.Errorf("pointer file does not link to %s", canonical)
+	}
+	if _, err := os.Stat(filepath.Join("..", canonical)); err != nil {
+		t.Errorf("canonical decision record missing: %v", err)
 	}
 }
