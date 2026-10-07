@@ -69,8 +69,9 @@ func (s *GitHubUserService) ListUserPRs(
 	authState := s.resolveAuthState(ctx)
 	prs := s.cache.GetAll()
 	return connect.NewResponse(&sessionv1.ListUserPRsResponse{
-		Prs:       userPRsToProto(prs),
-		AuthState: authState,
+		Prs:             userPRsToProto(prs),
+		AuthState:       authState,
+		AccountStatuses: accountStatusesToProto(s.cache.AccountStatuses()),
 	}), nil
 }
 
@@ -87,9 +88,10 @@ func (s *GitHubUserService) WatchUserPRs(
 	// 1. Send initial snapshot.
 	initial := s.cache.GetAll()
 	if err := stream.Send(&sessionv1.UserPREvent{
-		EventType: "snapshot",
-		Prs:       userPRsToProto(initial),
-		AuthState: authState,
+		EventType:       "snapshot",
+		Prs:             userPRsToProto(initial),
+		AuthState:       authState,
+		AccountStatuses: accountStatusesToProto(s.cache.AccountStatuses()),
 	}); err != nil {
 		return err
 	}
@@ -110,9 +112,10 @@ func (s *GitHubUserService) WatchUserPRs(
 				return nil
 			}
 			if err := stream.Send(&sessionv1.UserPREvent{
-				EventType: "snapshot",
-				Prs:       userPRsToProto(prs),
-				AuthState: authState,
+				EventType:       "snapshot",
+				Prs:             userPRsToProto(prs),
+				AuthState:       authState,
+				AccountStatuses: accountStatusesToProto(s.cache.AccountStatuses()),
 			}); err != nil {
 				return err
 			}
@@ -436,6 +439,18 @@ func userPRsToProto(prs []githubpkg.UserPR) []*sessionv1.UserPR {
 			ChangesReqCount:   int32(pr.ChangesReqCount),
 			SessionIds:        pr.SessionIDs,
 			LocalWorktreePath: pr.LocalWorktreePath,
+
+			FailingChecks:              failingChecksToProto(pr.FailingChecks),
+			HasMergeConflict:           pr.HasMergeConflict,
+			DetailsLoaded:              pr.DetailsLoaded,
+			Host:                       defaultHostIfEmpty(pr.Host),
+			AccountLogin:               pr.AccountLogin,
+			UnresolvedThreadsTruncated: pr.UnresolvedThreadsTruncated,
+		}
+		if pr.UnresolvedThreadCount != nil {
+			// #nosec G115 -- capped at 50 by the poll query.
+			n := int32(*pr.UnresolvedThreadCount)
+			p.UnresolvedThreadCount = &n
 		}
 		if !pr.UpdatedAt.IsZero() {
 			p.UpdatedAt = timestamppb.New(pr.UpdatedAt)
@@ -447,6 +462,51 @@ func userPRsToProto(prs []githubpkg.UserPR) []*sessionv1.UserPR {
 			p.MergedAt = timestamppb.New(pr.MergedAt)
 		}
 		out[i] = p
+	}
+	return out
+}
+
+func defaultHostIfEmpty(host string) string {
+	if host == "" {
+		return "github.com"
+	}
+	return host
+}
+
+func failingChecksToProto(checks []githubpkg.FailingCheck) []*sessionv1.FailingCheck {
+	if len(checks) == 0 {
+		return nil
+	}
+	out := make([]*sessionv1.FailingCheck, len(checks))
+	for i, c := range checks {
+		out[i] = &sessionv1.FailingCheck{Name: c.Name, Url: c.URL, Conclusion: c.Conclusion}
+	}
+	return out
+}
+
+func accountStatusesToProto(statuses []githubpkg.AccountPollStatus) []*sessionv1.AccountPollStatus {
+	if len(statuses) == 0 {
+		return nil
+	}
+	out := make([]*sessionv1.AccountPollStatus, len(statuses))
+	for i, st := range statuses {
+		var state sessionv1.AccountPollState
+		switch st.State {
+		case githubpkg.AccountPollOK:
+			state = sessionv1.AccountPollState_ACCOUNT_POLL_STATE_OK
+		case githubpkg.AccountPollUnauthorized:
+			state = sessionv1.AccountPollState_ACCOUNT_POLL_STATE_UNAUTHORIZED
+		case githubpkg.AccountPollRateLimited:
+			state = sessionv1.AccountPollState_ACCOUNT_POLL_STATE_RATE_LIMITED
+		case githubpkg.AccountPollError:
+			state = sessionv1.AccountPollState_ACCOUNT_POLL_STATE_ERROR
+		}
+		out[i] = &sessionv1.AccountPollStatus{
+			Host:         defaultHostIfEmpty(st.Host),
+			AccountLogin: st.AccountLogin,
+			State:        state,
+			Detail:       st.Detail,
+		}
 	}
 	return out
 }

@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,7 +38,49 @@ type UserPR struct {
 	CheckConclusion   string // "success" / "failure" / "pending" / ""
 	SessionIDs        []string
 	LocalWorktreePath string
+
+	Host         string // never empty; "github.com" for github.com
+	AccountLogin string // login name of the account whose poll returned this PR; never a token
+	// FailingChecks is capped at maxFailingChecks, CheckRuns first.
+	FailingChecks []FailingCheck
+	// UnresolvedThreadCount is nil when unknown (degraded mode, legacy query,
+	// or a host that omitted reviewThreads), which is distinct from 0.
+	UnresolvedThreadCount      *int
+	UnresolvedThreadsTruncated bool  // count was capped at maxReviewThreads
+	HasMergeConflict           *bool // nil = GitHub mergeable UNKNOWN (computed lazily)
+	DetailsLoaded              bool  // true only when reviewThreads came back
 }
+
+// FailingCheck is one failing CheckRun or StatusContext on a PR's head commit.
+type FailingCheck struct {
+	Name       string
+	URL        string
+	Conclusion string
+}
+
+// AccountPollState is the outcome of one account's last poll.
+type AccountPollState int
+
+const (
+	AccountPollOK AccountPollState = iota + 1
+	AccountPollUnauthorized
+	AccountPollRateLimited
+	AccountPollError
+)
+
+// AccountPollStatus reports one account's last poll outcome so the UI can tell
+// an expired or failing account from "not connected".
+type AccountPollStatus struct {
+	Host         string
+	AccountLogin string
+	State        AccountPollState
+	Detail       string // short sanitized reason; never contains a token
+}
+
+const (
+	maxFailingChecks = 10
+	maxReviewThreads = 50 // matches reviewThreads(first: 50) in the widened query
+)
 
 // PRAnnotationSession carries session data needed to annotate UserPR entries.
 // Defined here (not in the session package) to avoid an import cycle:
@@ -61,8 +104,9 @@ type PRAnnotationWorktree struct {
 
 // userPRSnapshot is an immutable snapshot stored in atomic.Value (COW pattern).
 type userPRSnapshot struct {
-	prs        []UserPR
-	capturedAt time.Time
+	prs             []UserPR
+	accountStatuses []AccountPollStatus
+	capturedAt      time.Time
 }
 
 // loginResult is an immutable auth state stored in atomic.Value (single-account compat).
@@ -90,6 +134,10 @@ type UserPRCacheConfig struct {
 	PollInterval time.Duration
 	// LoginCacheTTL controls how long the authenticated login is cached.
 	LoginCacheTTL time.Duration
+	// DegradedDetails drops reviewThreads from the poll (ADR-001 degraded
+	// mode, selected when the measured query cost exceeds budget): thread
+	// counts stay unknown while check names and mergeable are still fetched.
+	DegradedDetails bool
 }
 
 // DefaultUserPRCacheConfig returns sensible defaults.
@@ -122,7 +170,10 @@ type UserPRCache struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	startOnce    sync.Once
-	done         chan struct{} // closed when loop() returns; nil until Start
+	// widenedUnsupported records hosts that rejected the widened query, so
+	// later polls skip the doomed first attempt. Keyed by normalized host.
+	widenedUnsupported sync.Map
+	done               chan struct{} // closed when loop() returns; nil until Start
 }
 
 // NewUserPRCache creates a cache with default configuration.
@@ -187,6 +238,18 @@ func (c *UserPRCache) GetAll() []UserPR {
 	snap := v.(*userPRSnapshot)
 	out := make([]UserPR, len(snap.prs))
 	copy(out, snap.prs)
+	return out
+}
+
+// AccountStatuses returns the per-account outcome of the last poll (nil before the first).
+func (c *UserPRCache) AccountStatuses() []AccountPollStatus {
+	v := c.snapshot.Load()
+	if v == nil {
+		return nil
+	}
+	snap := v.(*userPRSnapshot)
+	out := make([]AccountPollStatus, len(snap.accountStatuses))
+	copy(out, snap.accountStatuses)
 	return out
 }
 
@@ -312,7 +375,7 @@ func (c *UserPRCache) Annotate(sessions []PRAnnotationSession, worktrees []PRAnn
 		pr.LocalWorktreePath = worktreeByKey[branchKey]
 		annotated[i] = pr
 	}
-	c.snapshot.Store(&userPRSnapshot{prs: annotated, capturedAt: old.capturedAt})
+	c.snapshot.Store(&userPRSnapshot{prs: annotated, accountStatuses: old.accountStatuses, capturedAt: old.capturedAt})
 }
 
 // Refresh triggers an immediate fetch from GitHub, coalescing concurrent calls.
@@ -370,18 +433,21 @@ func (c *UserPRCache) fetch() error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			prs, fetchErr := c.fetchUserPRsForToken(acc.host, acc.token)
+			prs, fetchErr := c.fetchUserPRsForToken(acc.host, acc.login, acc.token)
 			results[i] = prResult{prs: prs, err: fetchErr}
 		}()
 	}
 	wg.Wait()
 
 	// Merge and dedup by URL (same PR can appear via multiple account tokens, e.g. org members).
+	// First account in resolveAllLogins order wins.
 	seen := make(map[string]bool)
 	var merged []UserPR
-	for _, r := range results {
+	statuses := make([]AccountPollStatus, 0, len(accounts))
+	for i, r := range results {
+		statuses = append(statuses, accountPollStatus(accounts[i], r.err))
 		if r.err != nil {
-			log.Warn("UserPRCache: fetch failed for account", "err", r.err)
+			log.Warn("UserPRCache: fetch failed for account", "host", accounts[i].host, "login", accounts[i].login, "err", r.err)
 			continue
 		}
 		for _, pr := range r.prs {
@@ -392,7 +458,7 @@ func (c *UserPRCache) fetch() error {
 		}
 	}
 
-	snap := &userPRSnapshot{prs: merged, capturedAt: time.Now()}
+	snap := &userPRSnapshot{prs: merged, accountStatuses: statuses, capturedAt: time.Now()}
 	c.snapshot.Store(snap)
 
 	out := make([]UserPR, len(merged))
@@ -511,8 +577,8 @@ func collectAllTokens() []AccountToken {
 	return tokens
 }
 
-// userPRGraphQLQuery fetches the authenticated user's open pull requests.
-const userPRGraphQLQuery = `
+// userPRQueryPrefix/Suffix wrap the per-mode field selections below.
+const userPRQueryPrefix = `
 query UserPRs {
   viewer {
     pullRequests(first: 100, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) {
@@ -535,17 +601,56 @@ query UserPRs {
         reviews(last: 20, states: [APPROVED, CHANGES_REQUESTED]) {
           nodes { state }
         }
-        commits(last: 1) {
+`
+
+const userPRQuerySuffix = `      }
+    }
+  }
+}`
+
+const (
+	userPRMergeableField = `        mergeable
+`
+	userPRReviewThreadsField = `        reviewThreads(first: 50) {
+          totalCount
+          nodes { isResolved isOutdated }
+        }
+`
+	userPRCommitsLegacy = `        commits(last: 1) {
           nodes {
             commit {
               statusCheckRollup { state }
             }
           }
         }
-      }
-    }
-  }
-}`
+`
+	userPRCommitsWithContexts = `        commits(last: 1) {
+          nodes {
+            commit {
+              statusCheckRollup {
+                state
+                contexts(first: 25) {
+                  nodes {
+                    __typename
+                    ... on CheckRun { name conclusion detailsUrl }
+                    ... on StatusContext { context state targetUrl }
+                  }
+                }
+              }
+            }
+          }
+        }
+`
+)
+
+// The three query shapes (ADR-001). Widened = mergeable + review threads +
+// check contexts; degraded drops review threads; legacy is the pre-widening
+// query, used when a host rejects the widened one.
+const (
+	userPRGraphQLQuery         = userPRQueryPrefix + userPRMergeableField + userPRReviewThreadsField + userPRCommitsWithContexts + userPRQuerySuffix
+	userPRGraphQLQueryDegraded = userPRQueryPrefix + userPRMergeableField + userPRCommitsWithContexts + userPRQuerySuffix
+	userPRGraphQLQueryLegacy   = userPRQueryPrefix + userPRCommitsLegacy + userPRQuerySuffix
+)
 
 // graphQLResponse is the top-level GraphQL response envelope.
 type graphQLResponse struct {
@@ -554,6 +659,7 @@ type graphQLResponse struct {
 }
 
 type graphQLError struct {
+	Type    string `json:"type"`
 	Message string `json:"message"`
 }
 
@@ -563,6 +669,25 @@ type graphQLData struct {
 			Nodes []graphQLPRNode `json:"nodes"`
 		} `json:"pullRequests"`
 	} `json:"viewer"`
+}
+
+type graphQLReviewThreads struct {
+	TotalCount int `json:"totalCount"`
+	Nodes      []struct {
+		IsResolved bool `json:"isResolved"`
+		IsOutdated bool `json:"isOutdated"`
+	} `json:"nodes"`
+}
+
+// graphQLContext is a CheckRun or StatusContext, discriminated by TypeName.
+type graphQLContext struct {
+	TypeName   string `json:"__typename"`
+	Name       string `json:"name"`
+	Conclusion string `json:"conclusion"`
+	DetailsURL string `json:"detailsUrl"`
+	Context    string `json:"context"`
+	State      string `json:"state"`
+	TargetURL  string `json:"targetUrl"`
 }
 
 type graphQLPRNode struct {
@@ -576,6 +701,7 @@ type graphQLPRNode struct {
 	UpdatedAt   string `json:"updatedAt"`
 	ClosedAt    string `json:"closedAt"`
 	MergedAt    string `json:"mergedAt"`
+	Mergeable   string `json:"mergeable"`
 	Repository  struct {
 		Owner struct {
 			Login string `json:"login"`
@@ -588,55 +714,189 @@ type graphQLPRNode struct {
 			State string `json:"state"`
 		} `json:"nodes"`
 	} `json:"reviews"`
-	Commits struct {
+	ReviewThreads *graphQLReviewThreads `json:"reviewThreads"`
+	Commits       struct {
 		Nodes []struct {
 			Commit struct {
 				StatusCheckRollup *struct {
-					State string `json:"state"`
+					State    string `json:"state"`
+					Contexts struct {
+						Nodes []graphQLContext `json:"nodes"`
+					} `json:"contexts"`
 				} `json:"statusCheckRollup"`
 			} `json:"commit"`
 		} `json:"nodes"`
 	} `json:"commits"`
 }
 
-func (c *UserPRCache) fetchUserPRsForToken(host, token string) ([]UserPR, error) {
-	body, err := json.Marshal(map[string]string{"query": userPRGraphQLQuery})
+// errAccountUnauthorized marks an HTTP 401/403 (non-rate-limit) poll response.
+var errAccountUnauthorized = errors.New("GitHub rejected the account's token")
+
+// errAccountRateLimited marks a rate-limited poll response (HTTP or GraphQL).
+var errAccountRateLimited = errors.New("GitHub rate limit exceeded")
+
+// accountPollStatus classifies one account's fetch outcome. Detail is a fixed
+// short string per state, never the raw error, so it cannot leak a token.
+func accountPollStatus(acc connectedAccount, err error) AccountPollStatus {
+	st := AccountPollStatus{Host: NormalizeHost(acc.host), AccountLogin: acc.login, State: AccountPollOK}
+	switch {
+	case err == nil:
+	case errors.Is(err, errAccountUnauthorized):
+		st.State, st.Detail = AccountPollUnauthorized, "sign-in expired or token rejected"
+	case errors.Is(err, errAccountRateLimited):
+		st.State, st.Detail = AccountPollRateLimited, "rate limited"
+	default:
+		st.State, st.Detail = AccountPollError, "poll failed"
+	}
+	return st
+}
+
+// mapFailingChecks returns failing CheckRuns first, then failing legacy
+// StatusContexts, capped at maxFailingChecks. Pending/successful ones are dropped.
+func mapFailingChecks(nodes []graphQLContext) []FailingCheck {
+	var runs, statuses []FailingCheck
+	for _, n := range nodes {
+		switch n.TypeName {
+		case "CheckRun":
+			switch strings.ToUpper(n.Conclusion) {
+			case "FAILURE", "TIMED_OUT", "STARTUP_FAILURE":
+				runs = append(runs, FailingCheck{Name: n.Name, URL: n.DetailsURL, Conclusion: strings.ToLower(n.Conclusion)})
+			}
+		case "StatusContext":
+			switch strings.ToUpper(n.State) {
+			case "FAILURE", "ERROR":
+				statuses = append(statuses, FailingCheck{Name: n.Context, URL: n.TargetURL, Conclusion: strings.ToLower(n.State)})
+			}
+		}
+	}
+	out := append(runs, statuses...)
+	if len(out) > maxFailingChecks {
+		out = out[:maxFailingChecks]
+	}
+	return out
+}
+
+// countUnresolved counts threads that are neither resolved nor outdated,
+// capped at maxReviewThreads. truncated is true when GitHub reports more
+// threads than the page fetched, so the true count may be higher.
+func countUnresolved(rt *graphQLReviewThreads) (count int, truncated bool) {
+	for _, t := range rt.Nodes {
+		if !t.IsResolved && !t.IsOutdated {
+			count++
+		}
+	}
+	if count > maxReviewThreads {
+		count = maxReviewThreads
+	}
+	return count, rt.TotalCount > maxReviewThreads
+}
+
+// mergeConflict maps GitHub's lazily computed mergeable enum to a tri-state;
+// UNKNOWN (or absent) is nil so the conflict chip does not flap.
+func mergeConflict(mergeable string) *bool {
+	var v bool
+	switch strings.ToUpper(mergeable) {
+	case "CONFLICTING":
+		v = true
+	case "MERGEABLE":
+		v = false
+	default:
+		return nil
+	}
+	return &v
+}
+
+// isRateLimitedGraphQL reports whether a GraphQL errors array signals rate
+// limiting; any other errors-only response means the host rejected the query shape.
+func isRateLimitedGraphQL(errs []graphQLError) bool {
+	for _, e := range errs {
+		if e.Type == "RATE_LIMITED" || strings.Contains(strings.ToLower(e.Message), "rate limit") {
+			return true
+		}
+	}
+	return false
+}
+
+func graphQLErrorsToError(errs []graphQLError) error {
+	if isRateLimitedGraphQL(errs) {
+		return errAccountRateLimited
+	}
+	msgs := make([]string, len(errs))
+	for i, e := range errs {
+		msgs[i] = e.Message
+	}
+	return fmt.Errorf("GraphQL errors: %s", strings.Join(msgs, "; "))
+}
+
+// runUserPRQuery posts one query and decodes the envelope. A 401/403 or
+// rate-limited response comes back as errAccountUnauthorized/errAccountRateLimited.
+func (c *UserPRCache) runUserPRQuery(host, token, query string) (*graphQLResponse, error) {
+	body, err := json.Marshal(map[string]string{"query": query})
 	if err != nil {
 		return nil, fmt.Errorf("marshal GraphQL query: %w", err)
 	}
-
 	req, err := newGHGraphQLRequestForHostWithToken(c.ctx, host, body, token)
 	if err != nil {
 		return nil, fmt.Errorf("build GraphQL request: %w", err)
 	}
-
 	resp, err := ghHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("GraphQL request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if isGHRateLimited(resp) {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, errAccountRateLimited
+	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, nil
+		return nil, errAccountUnauthorized
 	}
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		return nil, fmt.Errorf("GraphQL API returned status %d", resp.StatusCode)
 	}
-
 	var gqlResp graphQLResponse
 	if err := json.NewDecoder(resp.Body).Decode(&gqlResp); err != nil {
 		return nil, fmt.Errorf("decode GraphQL response: %w", err)
 	}
-	if len(gqlResp.Errors) > 0 {
-		msgs := make([]string, len(gqlResp.Errors))
-		for i, e := range gqlResp.Errors {
-			msgs[i] = e.Message
+	return &gqlResp, nil
+}
+
+// fetchUserPRsForToken polls one account with exactly one request, plus one
+// legacy-query retry when the host rejects the widened query (cached per host).
+func (c *UserPRCache) fetchUserPRsForToken(host, login, token string) ([]UserPR, error) {
+	host = NormalizeHost(host)
+	query := userPRGraphQLQuery
+	if c.config.DegradedDetails {
+		query = userPRGraphQLQueryDegraded
+	}
+	widened := true
+	if _, unsupported := c.widenedUnsupported.Load(host); unsupported {
+		query, widened = userPRGraphQLQueryLegacy, false
+	}
+
+	gqlResp, err := c.runUserPRQuery(host, token, query)
+	if err != nil {
+		return nil, err
+	}
+	if gqlResp.Data == nil && len(gqlResp.Errors) > 0 && widened && !isRateLimitedGraphQL(gqlResp.Errors) {
+		c.widenedUnsupported.Store(host, struct{}{})
+		log.Warn("UserPRCache: host rejected widened PR query, falling back to legacy", "host", host)
+		widened = false
+		if gqlResp, err = c.runUserPRQuery(host, token, userPRGraphQLQueryLegacy); err != nil {
+			return nil, err
 		}
-		return nil, fmt.Errorf("GraphQL errors: %s", strings.Join(msgs, "; "))
 	}
 	if gqlResp.Data == nil {
+		if len(gqlResp.Errors) > 0 {
+			return nil, graphQLErrorsToError(gqlResp.Errors)
+		}
 		return nil, nil
+	}
+	if len(gqlResp.Errors) > 0 {
+		// Data plus partial errors (e.g. one inaccessible node) is a usable result.
+		log.Warn("UserPRCache: GraphQL returned partial errors", "host", host, "count", len(gqlResp.Errors))
 	}
 
 	nodes := gqlResp.Data.Viewer.PullRequests.Nodes
@@ -652,27 +912,41 @@ func (c *UserPRCache) fetchUserPRsForToken(host, token string) ([]UserPR, error)
 			}
 		}
 		checkState := ""
+		var contexts []graphQLContext
 		if len(n.Commits.Nodes) > 0 && n.Commits.Nodes[0].Commit.StatusCheckRollup != nil {
-			checkState = normalizeCheckState(n.Commits.Nodes[0].Commit.StatusCheckRollup.State)
+			rollup := n.Commits.Nodes[0].Commit.StatusCheckRollup
+			checkState = normalizeCheckState(rollup.State)
+			contexts = rollup.Contexts.Nodes
 		}
 
-		prs = append(prs, UserPR{
-			Owner:           n.Repository.Owner.Login,
-			Repo:            n.Repository.Name,
-			Number:          n.Number,
-			Title:           n.Title,
-			URL:             n.URL,
-			HeadRef:         n.HeadRefName,
-			BaseRef:         n.BaseRefName,
-			State:           strings.ToLower(n.State),
-			IsDraft:         n.IsDraft,
-			UpdatedAt:       parseGitHubTime(n.UpdatedAt),
-			ClosedAt:        parseGitHubTime(n.ClosedAt),
-			MergedAt:        parseGitHubTime(n.MergedAt),
-			ApprovedCount:   approved,
-			ChangesReqCount: changesReq,
-			CheckConclusion: checkState,
-		})
+		pr := UserPR{
+			Owner:            n.Repository.Owner.Login,
+			Repo:             n.Repository.Name,
+			Number:           n.Number,
+			Title:            n.Title,
+			URL:              n.URL,
+			HeadRef:          n.HeadRefName,
+			BaseRef:          n.BaseRefName,
+			State:            strings.ToLower(n.State),
+			IsDraft:          n.IsDraft,
+			UpdatedAt:        parseGitHubTime(n.UpdatedAt),
+			ClosedAt:         parseGitHubTime(n.ClosedAt),
+			MergedAt:         parseGitHubTime(n.MergedAt),
+			ApprovedCount:    approved,
+			ChangesReqCount:  changesReq,
+			CheckConclusion:  checkState,
+			Host:             host,
+			AccountLogin:     login,
+			FailingChecks:    mapFailingChecks(contexts),
+			HasMergeConflict: mergeConflict(n.Mergeable),
+		}
+		if n.ReviewThreads != nil {
+			count, truncated := countUnresolved(n.ReviewThreads)
+			pr.UnresolvedThreadCount = &count
+			pr.UnresolvedThreadsTruncated = truncated
+			pr.DetailsLoaded = true
+		}
+		prs = append(prs, pr)
 	}
 	return prs, nil
 }
