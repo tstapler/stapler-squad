@@ -138,12 +138,34 @@ jobs:
           # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
           args=(-tags=integration -timeout=1200s -v)
           if [ -n "$RACE" ]; then args+=("$RACE"); fi
+          out=$(mktemp)
           rc=0
-          timeout 25m go test "${args[@]}" "$PACKAGES" || rc=$?
-          # Only a real timeout (124) is a budget breach; a plain test failure must not
-          # carry the marker or the auto-fix webhook would skip it as "slow, not broken".
-          if [ "$rc" -eq 124 ]; then
+          timeout 25m go test "${args[@]}" "$PACKAGES" 2>&1 | tee "$out" || true
+          rc=${PIPESTATUS[0]}
+          # Only a budget breach carries the marker, not a plain test failure (the auto-fix
+          # webhook would skip it as "slow, not broken"): the outer `timeout` firing (124), or
+          # go test's own -timeout (20m, shorter than the 25m wrapper) killing the binary.
+          if [ "$rc" -eq 124 ] || grep -q 'panic: test timed out' "$out"; then
             echo "::error::CI-BUDGET-EXCEEDED: 'mcp-integration (${{ matrix.suite }})' exceeded its 25m budget"
             echo "CI-BUDGET-EXCEEDED: 'mcp-integration (${{ matrix.suite }})' exceeded its 25m budget" >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$rc"
+
+  # Stable aggregate check: keeps the "MCP Integration Tests" status name that
+  # the comment above (and any branch protection) refers to, now that the real
+  # work is a two-leg matrix. A skipped matrix (detect-changes found nothing
+  # relevant) reports success here, matching the old skipped-job behavior.
+  mcp-integration-result:
+    name: MCP Integration Tests
+    runs-on: ubuntu-latest
+    needs: mcp-integration
+    if: always()
+    steps:
+      - name: Require every matrix leg to pass or be skipped
+        env:
+          RESULT: ${{ needs.mcp-integration.result }}
+        run: |
+          if [ "$RESULT" != "success" ] && [ "$RESULT" != "skipped" ]; then
+            echo "::error::mcp-integration matrix result: $RESULT"
+            exit 1
+          fi
