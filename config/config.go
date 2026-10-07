@@ -396,6 +396,8 @@ type Config struct {
 	// TaggingClassifier holds the LLM model hierarchy for session-tag
 	// classification (primary model plus ordered fallbacks).
 	TaggingClassifier TaggingClassifierConfig `json:"tagging_classifier,omitempty"`
+	// BackgroundModels pins model/effort for unattended LLM work (see background_models.go).
+	BackgroundModels BackgroundModelsConfig `json:"background_models,omitempty"`
 
 	// Escape analytics configuration
 

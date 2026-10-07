@@ -285,7 +285,7 @@ func (p *Pool) decrementCallCount(key FeatureKey) {
 //
 // The caller should drain the channel until Done=true or Err!=nil.
 func (p *Pool) Call(ctx context.Context, key FeatureKey, systemPrompt, userPrompt string) (<-chan StreamChunk, error) {
-	return p.call(ctx, key, systemPrompt, userPrompt, p.cfg.DefaultModel, p.runner, costCeiling{})
+	return p.call(ctx, key, systemPrompt, userPrompt, p.modelFor(key, ""), p.runner, costCeiling{})
 }
 
 // call is the internal implementation shared by Call and CallWithOptions.
@@ -716,6 +716,8 @@ func (p *Pool) readResumedCallStream(ctx context.Context, key FeatureKey, stdout
 // When opts.WorkDir is empty, opts.Model is forwarded to the pool's acquireSession
 // so the correct model is used for the first-call (session-initialisation) request.
 func (p *Pool) CallWithOptions(ctx context.Context, key FeatureKey, systemPrompt, userPrompt string, opts CallOptions) (<-chan StreamChunk, error) {
+	// Resolved here, not in call(): the WorkDir branch's one-shot pool has no FeatureModel.
+	opts.Model = p.modelFor(key, opts.Model)
 	if opts.WorkDir != "" {
 		pr, ok := p.runner.(*ProcessRunner)
 		if !ok {
