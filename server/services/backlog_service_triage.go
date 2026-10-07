@@ -19,6 +19,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
@@ -1047,10 +1048,12 @@ func (s *BacklogService) spawnSessionAfterGates(
 		workExecProgram, workExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleWork)
 	}
 	workExecutorHash := session.ComputeExecutorHash(workExecProgram, workExecModel)
+	// Pin after hashing: the hash must stay the raw mode-side pair (see above).
+	workExecModel = pinnedWorkStageModel(item.RepoPath, workExecProgram, workExecModel)
 	var programOverride, workResolvedModel string
 	if workExecProgram != "" || workExecModel != "" {
 		var resolveErr error
-		programOverride, resolveErr = session.ResolveExecutorProgram(workExecProgram, workExecModel, s.modelFamilies)
+		programOverride, resolveErr = session.ResolveExecutorProgramWithEffort(workExecProgram, workExecModel, config.LoadConfig().BackgroundEffort(), s.modelFamilies)
 		if resolveErr != nil {
 			log.Warn("[SpawnSessionFromItem] failed to resolve work-stage executor program, falling back to default", "item", item.ID, "program", workExecProgram, "model", workExecModel, "err", resolveErr)
 			programOverride = ""
@@ -3025,6 +3028,7 @@ Do not modify the code. Only write the review verdict.
 			reviewExecProgram, reviewExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleReview)
 		}
 		reviewExecutorHash := session.ComputeExecutorHash(reviewExecProgram, reviewExecModel)
+		reviewExecModel = pinnedStageModel(session.StageRoleReview, reviewExecProgram, reviewExecModel)
 		reviewCaller, reviewConfiguredProgram, reviewFallbackReason := s.resolveHeadlessCaller(reviewExecProgram, item.ID, "review")
 		reviewResolvedModel, reviewModelErr := session.ResolveModel(s.modelFamilies, reviewExecModel)
 		if reviewModelErr != nil {
