@@ -661,7 +661,7 @@ func TestRemoteApprovalRelay_ReopensChannelAfterReconnect(t *testing.T) {
 			}
 			resultCh, cancel, err := listenApprovalExchange(socketPath, relayedApprovalPayload{Token: token, Request: json.RawMessage(`{"tool_name":"in-flight"}`)})
 			if err != nil {
-				time.Sleep(50 * time.Millisecond)
+				time.Sleep(50 * time.Millisecond) //nolint:notimesleeptest simulates the agent script's retry backoff between attempts while the relay connection is down; no hook exposes redial progress
 				continue
 			}
 			select {

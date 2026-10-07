@@ -377,7 +377,7 @@ func (s *SessionService) DeleteSession(
 		// its deterministic name so the Claude process inside it doesn't survive as
 		// an orphan after the DB record is gone.
 		s.trackCleanup(func() {
-			if err := s.KillTmuxSessionByTitle(context.Background(), sessionTitle); err != nil {
+			if err := killTmuxSessionByTitle(context.Background(), sessionTitle, true, []string{sessionUUID}); err != nil {
 				log.Warn("failed to kill tmux session for non-live instance", "session", req.Msg.Id, "err", err)
 			}
 			// See the liveInst-present branch's comment above: release any

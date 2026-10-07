@@ -55,7 +55,10 @@ type SessionStopper interface {
 	// KillTmuxSessionByTitle kills a tmux session by its title, regardless of
 	// whether the Instance is still tracked in memory. Used to clear stale tmux
 	// sessions before re-triggering so the fresh session gets its --append-system-prompt.
-	KillTmuxSessionByTitle(ctx context.Context, title string) error
+	// allowedOwnerUUIDs are the Instance UUID(s) the caller trusts to be
+	// killed under this title -- see the implementation's doc comment
+	// (ce71ad1a: a name match alone isn't enough to prove ownership).
+	KillTmuxSessionByTitle(ctx context.Context, title string, allowedOwnerUUIDs ...string) error
 	// IsSessionLive returns true if the session UUID is currently tracked in the
 	// live in-memory poller. Used to distinguish genuinely-running sessions from
 	// sessions that exited but whose DB records were not closed (e.g. after a
