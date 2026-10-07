@@ -1,9 +1,10 @@
 import { style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
+import { MIN_TOUCH_TARGET } from "@/lib/unfinished/prTouchTokens";
 import { CHIP_TOKEN_PAIRS, type ChipTokenPair } from "@/lib/unfinished/prChipTokens";
 
 const NARROW = "screen and (max-width: 480px)";
-const INTERACTIVE_MIN = "44px";
+const INTERACTIVE_MIN = MIN_TOUCH_TARGET;
 
 export const prCard = style({
   background: vars.color.cardBackground,

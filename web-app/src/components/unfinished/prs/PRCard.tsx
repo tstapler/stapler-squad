@@ -10,6 +10,8 @@ import {
 } from "@/gen/session/v1/types_pb";
 import { prAttention, type PRAttention } from "@/lib/unfinished/prAttention";
 import { prKey } from "@/lib/unfinished/prOrdering";
+import type { NudgeClient } from "@/lib/hooks/useNudgePR";
+import { NudgeButton } from "./NudgeButton";
 import * as styles from "./PRCard.css";
 
 const cx = (...names: string[]) => names.join(" ");
@@ -117,9 +119,11 @@ interface PRCardProps {
   pr: UserPR;
   /** True when the list spans more than one host or account, so cards must disambiguate. */
   showHostAccount?: boolean;
+  /** Test seam for the nudge RPC; defaults to the shared Connect client. */
+  nudgeClient?: NudgeClient;
 }
 
-export function PRCard({ pr, showHostAccount = false }: PRCardProps) {
+export function PRCard({ pr, showHostAccount = false, nudgeClient }: PRCardProps) {
   const a = prAttention(pr);
   const sessions = linkedSessionsOf(pr);
   const conflictChip = a.mergeConflict
@@ -200,6 +204,9 @@ export function PRCard({ pr, showHostAccount = false }: PRCardProps) {
             </li>
           ))}
         </ul>
+      )}
+      {pr.linkedSessions.length > 0 && (
+        <NudgeButton pr={pr} sessions={sessions} nudgeable={a.nudgeable} client={nudgeClient} />
       )}
       <div className={styles.prActions}>
         {a.needsAttention && !a.nudgeable && a.changesRequested && (
