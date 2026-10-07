@@ -54,6 +54,8 @@ interface PRGroupedListProps {
   stateKey: string;
   /** Where focus lands after "Refresh list" when the previously focused card is gone. */
   fallbackFocusRef?: React.RefObject<HTMLElement | null>;
+  /** Refetch PR data when a card learns there is nothing left to fix. */
+  onNothingToFix?: () => void;
 }
 
 /**
@@ -61,7 +63,7 @@ interface PRGroupedListProps {
  * MEMBERSHIP are frozen so the list does not shuffle under the user; card content still
  * updates in place, and a status line offers "Refresh list" to apply the new order.
  */
-export function PRGroupedList({ prs, sortBy, stateKey, fallbackFocusRef }: PRGroupedListProps) {
+export function PRGroupedList({ prs, sortBy, stateKey, fallbackFocusRef, onNothingToFix }: PRGroupedListProps) {
   const liveGroups = useMemo(() => orderPRs(prs, sortBy), [prs, sortBy]);
   const liveByKey = useMemo(() => new Map(prs.map((p) => [prKey(p), p])), [prs]);
   const showHostAccount = useMemo(() => spansMultipleHostsOrAccounts(prs), [prs]);
@@ -120,7 +122,7 @@ export function PRGroupedList({ prs, sortBy, stateKey, fallbackFocusRef }: PRGro
           {groups.length > 1 && <div className={styles.repoGroupHeader}>{groupTitle(group.key)}</div>}
           {group.prs.map((frozenPR) => {
             const key = prKey(frozenPR);
-            return <PRCard key={key} pr={liveByKey.get(key) ?? frozenPR} showHostAccount={showHostAccount} />;
+            return <PRCard key={key} pr={liveByKey.get(key) ?? frozenPR} showHostAccount={showHostAccount} onNothingToFix={onNothingToFix} />;
           })}
         </div>
       ))}

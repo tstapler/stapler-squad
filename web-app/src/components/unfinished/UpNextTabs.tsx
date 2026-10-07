@@ -72,7 +72,7 @@ export function UpNextTabs({
             >
               {TAB_LABELS[tab]}
               {count > 0 && (
-                <span className={styles.badge} aria-hidden="true">
+                <span className={styles.badge} aria-hidden="true" data-testid={`up-next-tab-badge-${tab}`}>
                   {count}
                   {isDegraded ? "+" : ""}
                 </span>

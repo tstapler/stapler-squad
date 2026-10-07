@@ -86,7 +86,7 @@ Up Next
 
 **List freeze (replaces pointer/focus tracking):** after first paint of a given filter/sort/search state the rendered ORDER and membership are frozen. Card content (chips, counts, tab badge, header counts) keeps updating in place. When a poll would change order or membership, a `role="status"` line (the live region exists before it is filled) says "N PRs changed." with a "Refresh list" button. Pressing it, changing filter/sort/search, or leaving and re-entering the tab applies the new order; focus stays on the same card (by PR key) if it still exists, otherwise on the panel heading. No pointer or focus tracking, so touch behaves the same and nothing is deferred forever (the user, or a tab switch, is always one action from applying it). The button uses `aria-disabled` while applying, not `disabled`.
 
-**Relative times:** "Updated N min ago" re-renders on one shared 30-second ticker (cleared on unmount); wording is "just now" under 60 s, then "1 min ago", never frozen. "Requested just now" on the nudge button reverts at 60 s on its own, so it cannot go stale.
+**Relative times:** "Updated N min ago" re-renders on one shared 30-second ticker (cleared on unmount); wording is "just now" under 60 s, then "1 min ago", never frozen. "Sent" on the nudge button reverts at 60 s on its own, so it cannot go stale.
 
 **First paint:** with no URL param the stored tab is read in a layout effect (`useLayoutEffect`) so the browser never paints the PRs panel before switching to the stored tab (no skeleton flash, no layout shift for users whose last tab was not PRs). The hook still returns `"prs"` on the very first render pass for hydration safety; the statically exported HTML shows the PRs panel until JS hydrates (accepted).
 
@@ -184,24 +184,24 @@ Idle, many sessions:      Session: [fix-ci v]  [ Ask fix-ci to fix ]
                           | review-bot (paused - resume) | <- disabled
                           +------------------------------+
 Pending:                  [ Sending... ] (aria-disabled, aria-busy; "Still sending..." after 3 s)
-Delivered (60s):          [ Requested just now ]  (aria-disabled)  + status line
-Status line (role=status): Fix request sent to fix-ci. Open session
+Delivered (60s):          [ Sent ]  (aria-disabled)  + status line
+Status line (role=status): Request sent to fix-ci. Open session
 ```
 
 - Visible only when `nudgeable` (failing checks, unresolved threads or merge conflict; a changes-requested-only PR counts toward the badge via `needsAttention` but is not nudgeable) and a non-paused linked session exists (plan 4.3.1c). Visible text is "Ask fix-ci to fix"; the accessible name **starts with and contains that visible text contiguously** (WCAG 2.5.3 Label in Name, so speech-input "click Ask fix-ci to fix" works): `Ask fix-ci to fix CI on PR #42`; the noun after "fix" reflects reasons (CI, comments, conflicts; combined: "Ask fix-ci to fix PR #42"). The select is shown whenever the PR has 2+ LINKED sessions (paused ones included, listed disabled).
 - **`aria-disabled`, never `disabled`:** pending, delivered, duplicate and busy-cooldown states set `aria-disabled="true"` and ignore activation, so the focused button keeps keyboard focus (native `disabled` drops focus to `body` in several browsers and removes the control from the tab order). Only native `<option disabled>` is used (paused sessions), with the reason also rendered as visible text outside the select whenever any linked session is paused (disabled option text is announced unreliably).
-- The selected session is component state keyed by PR key: it survives polls; if it becomes paused or unlinked the selection resets to the default and the label follows. After a `BUSY` outcome the button stays `aria-disabled` for 5 s with visible text "Try again in a few seconds".
+- The selected session is component state keyed by PR key: it survives polls; if it becomes paused or unlinked the selection resets to the default and the label follows. After a `BUSY` outcome the button stays enabled (no cooldown, no retry framing; double clicks are already blocked while the request is pending).
 - Primary targets the default session (most recently active runnable one). With more than one linked session, a visible labelled control sits beside the button: `<label>Session</label>` plus a native `<select>` (not a split-button caret overlay, so there is no nested-interactive pattern and no iOS/Safari caret quirk; the select is a plain labelled form control, tested in Safari/WebKit via the Playwright WebKit project or manually on iOS if WebKit is unavailable). Selecting a session changes the target but does not send, and the button label updates to the selected session (**P2**, Task 4.3.1b, plan Story 4.3.1 AC).
 - **Copy:** user-facing label is "Ask <session> to fix" (not "Nudge", which is internal jargon). Tooltip and a visible `aria-describedby` line state what will be sent: "Sends this session a message listing the failing checks, unresolved review threads and merge conflict for this PR, as links. Comment text is not included." Names of RPC/components keep "Nudge".
 - Targets: all interactive controls on the card (button, select, disclosure, Open session links) are at least 44x44 CSS px (padding counts) for touch.
-- **Focus landing:** the button is hidden when the PR stops being nudgeable (refresh, `NOTHING_TO_FIX`): focus moves to the card's status message region (`tabindex="-1"`, programmatic focus) if the hidden button had focus, otherwise it is left alone. After a `DELIVERED`, focus stays on the same button (now `aria-disabled`, label "Requested just now"), never on `body`; this is why `aria-disabled` is used. Retry and "Show all stuck items" move focus to the panel `h2` heading (`tabindex="-1"`) after the content updates; "Clear filters" moves focus to the search box.
+- **Focus landing:** the button is hidden when the PR stops being nudgeable (refresh, `NOTHING_TO_FIX`): focus moves to the card's status message region (`tabindex="-1"`, programmatic focus) if the hidden button had focus, otherwise it is left alone. After a `DELIVERED`, focus stays on the same button (now `aria-disabled`, label "Sent"), never on `body`; this is why `aria-disabled` is used. Retry and "Show all stuck items" move focus to the panel `h2` heading (`tabindex="-1"`) after the content updates; "Clear filters" moves focus to the search box.
 - No confirmation dialog, no undo (research section 4: a delivered keystroke cannot be recalled; guarded by the 60s duplicate window).
 
 ### Flow
 1. User clicks the primary button.
 2. System sets `aria-disabled` and `aria-busy`, label "Sending..." (focus stays on the button).
 3. Server returns an outcome; UI shows the matching message below the button (S4 table) and re-enables per rules.
-4. On `DELIVERED`: status line "Fix request sent to fix-ci" with "Open session" link; button reads "Requested just now" and stays `aria-disabled` for 60s, then returns to normal. Opening the session is optional.
+4. On `DELIVERED`: status line "Request sent to fix-ci" with "Open session" link; button reads "Sent" and stays `aria-disabled` for 60s, then returns to normal. Opening the session is optional.
 5. Exit: user can ignore the message (persistence rule below), open the session, or ask a different session via the Session select.
 
 ### Outcome table (every `NudgeOutcome` plus transport failures)
@@ -209,11 +209,11 @@ Every "disabled" in this table means `aria-disabled="true"` with the button stil
 
 | Outcome | Message | ARIA | Button after | Exit action |
 |---------|---------|------|--------------|-------------|
-| `DELIVERED` | "Fix request sent to <session>" + Open session link | `role="status"` (polite) | "Requested just now", disabled 60s | Open session |
-| `BUSY` | Server `detail` verbatim, e.g. "Session is busy. Try again when it is idle." (client falls back to "Session is working, try again when idle" if `detail` is empty) | `role="status"` | `aria-disabled` for 5 s ("Try again in a few seconds"), then re-enabled | Retry later, pick another session, or Open session |
+| `DELIVERED` | "Request sent to <session>" + Open session link | `role="status"` (polite) | "Sent", disabled 60s | Open session |
+| `BUSY` | Server `detail` verbatim, e.g. "Session is busy. Try again when it is idle." (client falls back to "Session can't take a request right now. Open it to continue." if `detail` is empty) | `role="status"` | Button stays enabled | Pick another session or Open session |
 | `BUSY` (no controller / status source) | Server `detail`: "Session isn't being monitored, so it can't safely take a request. Open it to restart it." (distinct from generic busy) | `role="status"` | Disabled for that target; others selectable | Open session link (restart it there); pick another session |
 | `PAUSED` | "Session paused. Open it to resume" | `role="status"` | Disabled for that target; others selectable | Resume link to the session page; pick another session |
-| `DUPLICATE` | "Already requested recently" | `role="status"` | Disabled until the 60s window ends | Open session; wait |
+| `DUPLICATE` | "Already requested in the last minute" | `role="status"` | Disabled until the 60s window ends | Open session; wait |
 | `NOTHING_TO_FIX` | "Nothing to fix right now" and the card refreshes | `role="status"` | Hidden after refresh if no longer actionable | None needed; card updates itself |
 | `SESSION_NOT_LINKED` | "Session no longer linked" and the card refreshes | `role="status"` | Re-targets to the next linked session or becomes "+ Session" | Pick another session, or "+ Session" |
 | `PR_NOT_FOUND` | "PR not found (closed or moved?)" | `role="status"` | Disabled | Refresh the list; open PR on GitHub |
@@ -227,7 +227,7 @@ Messages render inline under the button (not a toast that disappears), so screen
 
 **Alert vs status:** `role="status"` for non-urgent outcomes (`DELIVERED`, `BUSY` both variants, `PAUSED`, `DUPLICATE`, `NOTHING_TO_FIX`, `SESSION_NOT_LINKED`, `PR_NOT_FOUND`); `role="alert"` only for errors that need action (rate limit, `FailedPrecondition`, network/other).
 
-**After reload:** nudge messages and the "Requested just now" state are client-memory only and are not persisted. The server is the source of truth: after a reload a repeat click on a recently nudged session returns `DUPLICATE` ("Already requested recently") within the 60s window, and past it the nudge is simply allowed. No localStorage state, no extra proto field.
+**After reload:** nudge messages and the "Sent" state are client-memory only and are not persisted. The server is the source of truth: after a reload a repeat click on a recently nudged session returns `DUPLICATE` ("Already requested in the last minute") within the 60s window, and past it the nudge is simply allowed. No localStorage state, no extra proto field.
 
 **PLAN GAP (P3, resolved in plan Story 4.3.1):** the plan's `PAUSED` row says "with Resume affordance" but defines no resume mechanism in the PR card. Minimum: a link to the session page (existing resume UI). "Resume and nudge" in one click is out of scope.
 
@@ -354,9 +354,9 @@ PRs tab states
 16. UX-16: Every linked session appears on the card (not just the first), the default is labelled in text, and each has an "Open session" link.
 
 Nudge
-17. UX-17: Asking the default session from a failing PR takes one click (no dialog) and shows "Fix request sent to <session>" with an Open session link.
+17. UX-17: Asking the default session from a failing PR takes one click (no dialog) and shows "Request sent to <session>" with an Open session link.
 18. UX-18: The nudge button is absent on green/approved/draft PRs and shown only when something is fixable.
-19. UX-19: While a nudge is pending the button is disabled; after delivery it reads "Requested just now" and cannot send again for 60 seconds.
+19. UX-19: While a nudge is pending the button is disabled; after delivery it reads "Sent" and cannot send again for 60 seconds.
 20. UX-20: With multiple sessions, choosing a different session in the labelled Session select retargets the button label and accessible name before sending; paused sessions are listed disabled with their reason.
 21. UX-21: Each outcome (BUSY, PAUSED, DUPLICATE, NOTHING_TO_FIX, SESSION_NOT_LINKED, PR_NOT_FOUND, rate limit, unsupported program, network error) shows its specified message and a next action; none leaves the button permanently disabled without a stated reason.
 22. UX-22: Paused-only sessions show the disabled nudge, the text "Session paused. Open it to resume", and a working link to the session.

@@ -121,9 +121,11 @@ interface PRCardProps {
   showHostAccount?: boolean;
   /** Test seam for the nudge RPC; defaults to the shared Connect client. */
   nudgeClient?: NudgeClient;
+  /** Called when the server reports nothing left to fix, so the owner can refetch PR data. */
+  onNothingToFix?: () => void;
 }
 
-export function PRCard({ pr, showHostAccount = false, nudgeClient }: PRCardProps) {
+export function PRCard({ pr, showHostAccount = false, nudgeClient, onNothingToFix }: PRCardProps) {
   const a = prAttention(pr);
   const sessions = linkedSessionsOf(pr);
   const conflictChip = a.mergeConflict
@@ -206,7 +208,7 @@ export function PRCard({ pr, showHostAccount = false, nudgeClient }: PRCardProps
         </ul>
       )}
       {pr.linkedSessions.length > 0 && (
-        <NudgeButton pr={pr} sessions={sessions} nudgeable={a.nudgeable} client={nudgeClient} />
+        <NudgeButton pr={pr} sessions={sessions} nudgeable={a.nudgeable} client={nudgeClient} onNothingToFix={onNothingToFix} />
       )}
       <div className={styles.prActions}>
         {a.needsAttention && !a.nudgeable && a.changesRequested && (

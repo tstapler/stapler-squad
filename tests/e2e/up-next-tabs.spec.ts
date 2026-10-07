@@ -122,7 +122,7 @@ test.describe('Up Next tabs', () => {
     await expect(page.getByTestId('github-add-account-panel')).toBeVisible();
     // No count means no badge, so the accessible name carries no "need attention" suffix.
     await expect(upNext.tab('prs')).not.toHaveAccessibleName(/need attention/);
-    await expect(upNext.tab('prs').locator('span[aria-hidden="true"]')).toHaveCount(0);
+    await expect(page.getByTestId('up-next-tab-badge-prs')).toHaveCount(0);
 
     await upNext.selectTab('worktrees');
     await expect(upNext.tab('worktrees')).toHaveAttribute('aria-selected', 'true');

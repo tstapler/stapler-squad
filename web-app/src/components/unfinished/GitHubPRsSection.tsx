@@ -949,6 +949,7 @@ export function GitHubPRsSection({
                       sortBy={sortBy}
                       stateKey={`${filterStatus}|${sortBy}|${searchQuery}`}
                       fallbackFocusRef={headingRef}
+                      onNothingToFix={refresh}
                     />
                   )}
                 </>

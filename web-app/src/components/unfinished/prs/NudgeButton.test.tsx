@@ -5,7 +5,7 @@ import { NudgeOutcome } from "@/gen/session/v1/github_user_pb";
 import { LinkedSessionStatus, type UserPR } from "@/gen/session/v1/types_pb";
 import { MIN_TOUCH_TARGET_PX } from "@/lib/unfinished/prTouchTokens";
 import type { NudgeClient } from "@/lib/hooks/useNudgePR";
-import { BUSY_COOLDOWN_MS, NudgeButton, SLOW_SEND_MS } from "./NudgeButton";
+import { NudgeButton, SLOW_SEND_MS } from "./NudgeButton";
 import { failingPR, fakeNudgeClient, makePR, session } from "./prTestFixtures";
 
 jest.mock("./NudgeButton.css", () => new Proxy({}, { get: (_t, prop) => (typeof prop === "string" ? prop : "") }));
@@ -41,9 +41,9 @@ describe("NudgeButton", () => {
     await click(button());
     await click(button()); // ignored: aria-disabled
     expect(client.calls).toHaveLength(1);
-    expect(within(status()).getByText("Fix request sent to fix-ci")).toBeInTheDocument();
+    expect(within(status()).getByText("Request sent to fix-ci")).toBeInTheDocument();
     expect(within(status()).getByRole("link", { name: "Open session fix-ci" })).toHaveAttribute("href", "/?session=fix-ci");
-    expect(button()).toHaveTextContent("Requested just now");
+    expect(button()).toHaveTextContent("Sent");
     expect(button()).toHaveAttribute("aria-disabled", "true");
     expect(screen.queryByRole("dialog")).toBeNull();
   });
@@ -78,20 +78,20 @@ describe("NudgeButton", () => {
     expect(calls).toHaveLength(1);
 
     await act(async () => release());
-    expect(button()).toHaveTextContent("Requested just now");
+    expect(button()).toHaveTextContent("Sent");
     act(() => void jest.advanceTimersByTime(60_000));
     expect(button()).toHaveTextContent("Ask fix-ci to fix");
     expect(button()).not.toHaveAttribute("aria-disabled");
   });
 
   const outcomes: Array<[string, NudgeOutcome, string, string, "status" | "alert"]> = [
-    ["delivered", NudgeOutcome.DELIVERED, "", "Fix request sent to fix-ci", "status"],
+    ["delivered", NudgeOutcome.DELIVERED, "", "Request sent to fix-ci", "status"],
     ["generic busy", NudgeOutcome.BUSY, "Session is busy. Try again when it is idle.", "Session is busy. Try again when it is idle.", "status"],
     ["no-controller busy", NudgeOutcome.BUSY, "Session isn't being monitored, so it can't safely take a request. Open it to restart it.", "Session isn't being monitored, so it can't safely take a request. Open it to restart it.", "status"],
-    ["empty-detail busy", NudgeOutcome.BUSY, "", "Session is working, try again when idle", "status"],
+    ["empty-detail busy", NudgeOutcome.BUSY, "", "Session can't take a request right now. Open it to continue.", "status"],
     ["paused", NudgeOutcome.PAUSED, "", "Session paused. Open it to resume", "status"],
     ["not tracked", NudgeOutcome.PAUSED, "Session is not running or not tracked. Open its page to restart it.", "Session is not running or not tracked. Open its page to restart it.", "status"],
-    ["duplicate", NudgeOutcome.DUPLICATE, "", "Already requested recently", "status"],
+    ["duplicate", NudgeOutcome.DUPLICATE, "", "Already requested in the last minute", "status"],
     ["nothing to fix", NudgeOutcome.NOTHING_TO_FIX, "", "Nothing to fix right now", "status"],
     ["not linked", NudgeOutcome.SESSION_NOT_LINKED, "", "Session no longer linked", "status"],
     ["pr not found", NudgeOutcome.PR_NOT_FOUND, "", "PR not found (closed or moved?)", "status"],
@@ -150,7 +150,8 @@ describe("NudgeButton", () => {
     expect(button()).toHaveTextContent("Ask fix-ci to fix");
     expect(button()).toHaveAttribute("aria-label", "Ask fix-ci to fix CI on PR #42");
     const hint = "Sends this session a message listing the failing checks, unresolved review threads and merge conflict for this PR, as links. Comment text is not included.";
-    expect(button()).toHaveAttribute("title", hint);
+    expect(button()).not.toHaveAttribute("title");
+    expect(screen.getAllByText(hint)).toHaveLength(1);
     expect(button()).toHaveAccessibleDescription(hint);
     expect(container.textContent).not.toMatch(/nudge/i);
     expect(MIN_TOUCH_TARGET_PX).toBeGreaterThanOrEqual(44);
@@ -202,12 +203,12 @@ describe("NudgeButton", () => {
     }
     expect(seen[0]).toContain(generic);
     expect(seen[1]).toContain(noController);
-    expect(seen[2]).toContain("Session is working, try again when idle");
+    expect(seen[2]).toContain("Session can't take a request right now. Open it to continue.");
     expect(seen[0]).not.toEqual(seen[1]);
   });
 
-  it("nudgeButton_should_ContainVisibleLabelInAccessibleNameAndUseAriaDisabledKeepingFocus_When_PendingDeliveredDuplicateBusy", async () => {
-    for (const outcome of [NudgeOutcome.DELIVERED, NudgeOutcome.DUPLICATE, NudgeOutcome.BUSY]) {
+  it("nudgeButton_should_ContainVisibleLabelInAccessibleNameAndUseAriaDisabledKeepingFocus_When_PendingDeliveredDuplicate", async () => {
+    for (const outcome of [NudgeOutcome.DELIVERED, NudgeOutcome.DUPLICATE]) {
       const { unmount } = mount(failingPR(), fakeNudgeClient({ outcome }));
       expect(button().getAttribute("aria-label")).toMatch(/^Ask fix-ci to fix/);
       act(() => button().focus());
@@ -219,7 +220,7 @@ describe("NudgeButton", () => {
     }
   });
 
-  it("nudgeButton_should_KeepSelectionAcrossPollsResetWhenPausedAndCooldown5sAfterBusy_When_Rerendered", async () => {
+  it("nudgeButton_should_KeepSelectionAcrossPollsAndResetWhenPaused_When_Rerendered", async () => {
     const client = fakeNudgeClient({ outcome: NudgeOutcome.BUSY });
     const pr = twoSessions();
     const { rerender } = mount(pr, client);
@@ -228,15 +229,32 @@ describe("NudgeButton", () => {
     expect(button()).toHaveAccessibleName("Ask b to fix CI on PR #42");
 
     await click(button());
-    expect(button()).toHaveTextContent("Try again in a few seconds");
-    expect(button()).toHaveAttribute("aria-disabled", "true");
-    act(() => void jest.advanceTimersByTime(BUSY_COOLDOWN_MS));
+    // BUSY is not a retry-later state: no cooldown, no retry framing, button stays usable.
     expect(button()).toHaveTextContent("Ask b to fix");
     expect(button()).not.toHaveAttribute("aria-disabled");
+    expect(status().textContent).not.toMatch(/try again/i);
 
     rerender(ui(failingPR({ linkedSessions: [session("a", RUN, 200), session("b", PAUSE, 100)] }), client));
     expect(button()).toHaveAccessibleName("Ask a to fix CI on PR #42");
     expect(screen.getByTestId("nudge-blocked-reason")).toHaveTextContent("b: Session paused. Open it to resume");
+  });
+
+  it("nudgeButton_should_NameTheWindowOnButton_When_Duplicate", async () => {
+    mount(failingPR(), fakeNudgeClient({ outcome: NudgeOutcome.DUPLICATE }));
+    await click(button());
+    expect(button()).toHaveTextContent("Already requested in the last minute");
+    expect(button()).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("nudgeButton_should_StayHiddenAcrossPollsUntilAttentionChanges_When_NothingToFix", async () => {
+    const client = fakeNudgeClient({ outcome: NudgeOutcome.NOTHING_TO_FIX });
+    const { rerender } = mount(failingPR(), client);
+    await click(button());
+    expect(screen.queryByTestId("pr-nudge-42")).toBeNull();
+    rerender(ui(failingPR(), client)); // poll: fresh object, same attention signature
+    expect(screen.queryByTestId("pr-nudge-42")).toBeNull();
+    rerender(ui(failingPR({ unresolvedThreadCount: 2 }), client)); // attention changed
+    expect(screen.getByTestId("pr-nudge-42")).toBeInTheDocument();
   });
 
   it("nudgeButton_should_NotOfferPromptEditing_When_Rendered", () => {

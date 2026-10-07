@@ -12,7 +12,7 @@ import * as styles from "./NudgeButton.css";
 export const NUDGE_HINT =
   "Sends this session a message listing the failing checks, unresolved review threads and merge conflict for this PR, as links. Comment text is not included.";
 const PAUSED_TEXT = "Session paused. Open it to resume";
-export const BUSY_COOLDOWN_MS = 5_000;
+const BUSY_FALLBACK_TEXT = "Session can't take a request right now. Open it to continue.";
 export const SLOW_SEND_MS = 3_000;
 
 export interface NudgeSession {
@@ -52,13 +52,13 @@ export function outcomeMessage(outcome: NudgeOutcome, detail: string, sessionId:
   });
   switch (outcome) {
     case NudgeOutcome.DELIVERED:
-      return status(`Fix request sent to ${sessionId}`, true);
+      return status(`Request sent to ${sessionId}`, true);
     case NudgeOutcome.BUSY:
-      return status(detail || "Session is working, try again when idle", true);
+      return status(detail || BUSY_FALLBACK_TEXT, true);
     case NudgeOutcome.PAUSED:
       return status(detail || PAUSED_TEXT, true);
     case NudgeOutcome.DUPLICATE:
-      return status("Already requested recently", true);
+      return status("Already requested in the last minute", true);
     case NudgeOutcome.NOTHING_TO_FIX:
       return status("Nothing to fix right now");
     case NudgeOutcome.SESSION_NOT_LINKED:
@@ -94,7 +94,6 @@ export function NudgeButton({ pr, sessions, nudgeable, client, onNothingToFix }:
   const [selected, setSelected] = useState<string | undefined>();
   const [blockedIds, setBlockedIds] = useState<ReadonlyMap<string, string>>(new Map());
   const block = (id: string, reason: string) => setBlockedIds((prev) => new Map(prev).set(id, reason));
-  const [cooldown, setCooldown] = useState(false);
   const [slow, setSlow] = useState(false);
   const [hiddenByNothingToFix, setHiddenByNothingToFix] = useState(false);
   const [landingNote, setLandingNote] = useState(false);
@@ -103,13 +102,10 @@ export function NudgeButton({ pr, sessions, nudgeable, client, onNothingToFix }:
   const hintId = useId();
   const selectId = useId();
 
-  // A refreshed PR may be nudgeable again.
-  useEffect(() => setHiddenByNothingToFix(false), [pr]);
-  useEffect(() => {
-    if (!cooldown) return;
-    const t = setTimeout(() => setCooldown(false), BUSY_COOLDOWN_MS);
-    return () => clearTimeout(t);
-  }, [cooldown]);
+  // A poll hands over a fresh `pr` object each time; only a change in what needs attention may unhide.
+  const attention = prAttention(pr);
+  const attentionSignature = `${pr.checkConclusion}|${attention.failingChecks}|${attention.unresolvedThreads}|${attention.mergeConflict}`;
+  useEffect(() => setHiddenByNothingToFix(false), [attentionSignature]);
   const pending = state.status === "pending";
   useEffect(() => {
     if (!pending) {
@@ -143,7 +139,7 @@ export function NudgeButton({ pr, sessions, nudgeable, client, onNothingToFix }:
   const holdsOff =
     forTarget && (outcome === NudgeOutcome.DELIVERED || outcome === NudgeOutcome.DUPLICATE);
   const disabled =
-    pending || holdsOff || cooldown || !target || outcome === NudgeOutcome.PR_NOT_FOUND;
+    pending || holdsOff || !target || outcome === NudgeOutcome.PR_NOT_FOUND;
 
   let visibleText = label ? `Ask ${label.sessionId} to fix` : "";
   let accessibleName: string | undefined = label ? `${visibleText} ${fixNoun(pr)}` : undefined;
@@ -151,10 +147,10 @@ export function NudgeButton({ pr, sessions, nudgeable, client, onNothingToFix }:
     visibleText = slow ? "Still sending..." : "Sending...";
     accessibleName = undefined;
   } else if (forTarget && outcome === NudgeOutcome.DELIVERED) {
-    visibleText = "Requested just now";
+    visibleText = "Sent";
     accessibleName = undefined;
-  } else if (cooldown) {
-    visibleText = "Try again in a few seconds";
+  } else if (forTarget && outcome === NudgeOutcome.DUPLICATE) {
+    visibleText = "Already requested in the last minute";
     accessibleName = undefined;
   }
 
@@ -168,8 +164,6 @@ export function NudgeButton({ pr, sessions, nudgeable, client, onNothingToFix }:
         block(result.sessionId, result.detail || PAUSED_TEXT);
       } else if (result.outcome === NudgeOutcome.SESSION_NOT_LINKED) {
         block(result.sessionId, "No longer linked");
-      } else if (result.outcome === NudgeOutcome.BUSY) {
-        setCooldown(true);
       } else if (result.outcome === NudgeOutcome.NOTHING_TO_FIX) {
         setHiddenByNothingToFix(true);
         onNothingToFix?.();
@@ -179,7 +173,6 @@ export function NudgeButton({ pr, sessions, nudgeable, client, onNothingToFix }:
 
   const onSelect = (sessionId: string) => {
     dismiss();
-    setCooldown(false);
     setSelected(sessionId);
   };
 
@@ -227,7 +220,6 @@ export function NudgeButton({ pr, sessions, nudgeable, client, onNothingToFix }:
               aria-disabled={disabled || undefined}
               aria-busy={pending || undefined}
               aria-describedby={hintId}
-              title={NUDGE_HINT}
               data-testid={`pr-nudge-${pr.number}`}
               onFocus={() => {
                 hadFocus.current = true;
