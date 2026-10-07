@@ -313,13 +313,15 @@ jobs:
           # 8m0s" (confirmed twice in a row, PR #735 CI runs 34164579438 attempts
           # 1-2 -- each kill caught an unrelated, normally-fast subtest still
           # "running", not a hang/deadlock, ruling out a real code regression).
-          # 12m keeps meaningful margin below the 22m full-suite fallback while
-          # covering this wide-but-not-__ALL__ blast-radius case.
+          # 15m (was 12m): PR #927 (session/tmux) hit "test timed out after 12m0s"
+          # on a normal -race run while only fast tests were still in flight --
+          # the same runner-speed tipping point, not a hang. Still below the 22m
+          # full-suite fallback and within this job's 30m timeout-minutes.
           # PKGS is deliberately unquoted below: it's a space-separated list
           # of package paths that must word-split into separate `go test`
           # arguments, not one quoted string.
           # shellcheck disable=SC2086
-          TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions -- -race -short -timeout=12m \
+          TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions -- -race -short -timeout=15m \
             -coverprofile=coverage.affected.out -covermode=atomic $PKGS
 
       # Advisory only -- a global-threshold-style gate doesn't make sense
