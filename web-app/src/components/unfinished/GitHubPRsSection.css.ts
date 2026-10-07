@@ -438,3 +438,9 @@ export const authTabActive = style([
 
 // --- Session action buttons ---
 
+
+export const attentionNote = style({
+  margin: `0 ${vars.space["3"]} ${vars.space["2"]}`,
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+});

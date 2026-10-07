@@ -53,3 +53,19 @@ export function prAttention(pr: PRAttentionInput): PRAttention {
     nudgeable,
   };
 }
+
+export const DEGRADED_ATTENTION_TEXT =
+  "Review-thread counts are not loaded yet, so the real number may be higher.";
+
+export interface AttentionSummary {
+  count: number;
+  /** Count is a lower bound because some PRs have no detail data yet. */
+  degraded: boolean;
+}
+
+export function summarizeAttention(prs: readonly (PRAttentionInput & Pick<UserPR, "detailsLoaded">)[]): AttentionSummary {
+  return {
+    count: prs.filter((pr) => prAttention(pr).needsAttention).length,
+    degraded: prs.some((pr) => pr.detailsLoaded === false),
+  };
+}

@@ -4,7 +4,10 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { type UserPR } from "@/gen/session/v1/types_pb";
-import { useGitHubPRs } from "@/lib/hooks/useGitHubPRs";
+import { type UseGitHubPRsReturn } from "@/lib/hooks/useGitHubPRs";
+import { type FilterStatus, type SortBy, type PRListFilters } from "@/lib/hooks/usePRListFilters";
+import { DEGRADED_ATTENTION_TEXT } from "@/lib/unfinished/prAttention";
+import { emitTabEvent } from "@/lib/unfinished/tabStats";
 import {
   GitHubUserService,
   type GitHubAccount,
@@ -574,15 +577,6 @@ function TokenAuthForm({ onAuthComplete, onCancel }: TokenAuthFormProps) {
 
 // --- Filter / sort bar ---
 
-type FilterStatus =
-  | "all"
-  | "ci-failing"
-  | "changes-requested"
-  | "with-session"
-  | "draft";
-
-type SortBy = "updated-desc" | "updated-asc" | "repo" | "ci-status";
-
 const STATUS_FILTERS: { value: FilterStatus; label: string }[] = [
   { value: "all", label: "All" },
   { value: "ci-failing", label: "CI failing" },
@@ -609,6 +603,7 @@ function FilterBar({ filter, sort, search, onFilter, onSort, onSearch }: FilterB
             key={f.value}
             className={filter === f.value ? styles.filterChipActive : styles.filterChip}
             onClick={() => onFilter(f.value)}
+            aria-pressed={filter === f.value}
             data-testid={`filter-chip-${f.value}`}
           >
             {f.label}
@@ -643,94 +638,34 @@ function FilterBar({ filter, sort, search, onFilter, onSort, onSearch }: FilterB
   );
 }
 
-function applyFilterSort(
-  prs: UserPR[],
-  filter: FilterStatus,
-  sort: SortBy,
-  search: string
-): UserPR[] {
-  let result = prs;
-
-  if (search.trim()) {
-    const q = search.trim().toLowerCase();
-    result = result.filter(
-      (p) =>
-        p.title.toLowerCase().includes(q) ||
-        p.headRef.toLowerCase().includes(q) ||
-        `${p.owner}/${p.repo}`.toLowerCase().includes(q) ||
-        String(p.number).includes(q)
-    );
-  }
-
-  switch (filter) {
-    case "ci-failing":
-      result = result.filter(
-        (p) => p.checkConclusion === "failure" || p.checkConclusion === "error"
-      );
-      break;
-    case "changes-requested":
-      result = result.filter((p) => p.changesReqCount > 0);
-      break;
-    case "with-session":
-      result = result.filter((p) => p.sessionIds.length > 0);
-      break;
-    case "draft":
-      result = result.filter((p) => p.isDraft);
-      break;
-  }
-
-  const sorted = [...result];
-  switch (sort) {
-    case "updated-desc":
-      sorted.sort(
-        (a, b) =>
-          Number(b.updatedAt?.seconds ?? 0n) - Number(a.updatedAt?.seconds ?? 0n)
-      );
-      break;
-    case "updated-asc":
-      sorted.sort(
-        (a, b) =>
-          Number(a.updatedAt?.seconds ?? 0n) - Number(b.updatedAt?.seconds ?? 0n)
-      );
-      break;
-    case "repo":
-      sorted.sort((a, b) =>
-        `${a.owner}/${a.repo}`.localeCompare(`${b.owner}/${b.repo}`)
-      );
-      break;
-    case "ci-status": {
-      const rank = (p: UserPR) => {
-        if (p.checkConclusion === "failure" || p.checkConclusion === "error") return 0;
-        if (p.changesReqCount > 0) return 1;
-        if (p.checkConclusion === "success") return 3;
-        return 2;
-      };
-      sorted.sort((a, b) => rank(a) - rank(b));
-      break;
-    }
-  }
-  return sorted;
-}
-
 // --- Main section ---
+
+export interface GitHubPRsSectionProps extends UseGitHubPRsReturn {
+  filters: PRListFilters;
+  /** Cards needing attention; `degraded` means the count is a lower bound. */
+  attention: { count: number; degraded: boolean };
+}
 
 /**
  * Displays the authenticated GitHub user's open pull requests.
  * Shows connected accounts, aggregated stats, and PRs grouped by repo.
  */
-export function GitHubPRsSection() {
-  const { prs, authState, refresh } = useGitHubPRs();
+export function GitHubPRsSection({ prs, authState, refresh, filters, attention }: GitHubPRsSectionProps) {
   const client = useGitHubUserClient();
   const [isOpen, setIsOpen] = useState(true);
   const [addingAccount, setAddingAccount] = useState(false);
-  const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
-  const [sortBy, setSortBy] = useState<SortBy>("updated-desc");
-  const [searchQuery, setSearchQuery] = useState("");
+  const { filterStatus, sortBy, searchQuery, setFilterStatus, setSortBy, setSearchQuery } = filters;
+  const mountedAtRef = useRef(performance.now());
+  const firstCardEmittedRef = useRef(false);
 
-  const visiblePRs = useMemo(
-    () => applyFilterSort(prs, filterStatus, sortBy, searchQuery),
-    [prs, filterStatus, sortBy, searchQuery]
-  );
+  const visiblePRs = useMemo(() => filters.apply(prs), [filters, prs]);
+
+  useEffect(() => {
+    if (!firstCardEmittedRef.current && isOpen && visiblePRs.length > 0) {
+      firstCardEmittedRef.current = true;
+      emitTabEvent({ type: "firstPrCard", ms: Math.round(performance.now() - mountedAtRef.current) });
+    }
+  }, [isOpen, visiblePRs.length]);
 
   const toggleOpen = useCallback(() => setIsOpen((v) => !v), []);
 
@@ -787,6 +722,14 @@ export function GitHubPRsSection() {
         <span className={styles.sectionTitle}>GitHub Pull Requests</span>
         <span className={styles.badge}>{prs.length}</span>
       </div>
+
+      {attention.count > 0 && (
+        <p className={styles.attentionNote} data-testid="github-prs-attention">
+          {attention.count}
+          {attention.degraded ? "+" : ""} need attention
+          {attention.degraded && ` ${DEGRADED_ATTENTION_TEXT}`}
+        </p>
+      )}
 
       {isOpen && (
         <div id="github-prs-list">

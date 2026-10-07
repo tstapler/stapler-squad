@@ -43,13 +43,27 @@ const mockRevokeGitHubToken = jest.fn();
 let mockAuthState: { available: boolean; errorMessage?: string; accounts: unknown[] } | undefined;
 const mockRefresh = jest.fn();
 
-jest.mock("@/lib/hooks/useGitHubPRs", () => ({
-  useGitHubPRs: () => ({
-    prs: [],
-    authState: mockAuthState,
-    refresh: mockRefresh,
-  }),
-}));
+const noopFilters = {
+  filterStatus: "all" as const,
+  sortBy: "updated-desc" as const,
+  searchQuery: "",
+  setFilterStatus: jest.fn(),
+  setSortBy: jest.fn(),
+  setSearchQuery: jest.fn(),
+  apply: (prs: unknown[]) => prs as never[],
+};
+
+function renderSection() {
+  return render(
+    <GitHubPRsSection
+      prs={[]}
+      authState={mockAuthState as never}
+      refresh={mockRefresh}
+      filters={noopFilters}
+      attention={{ count: 0, degraded: false }}
+    />
+  );
+}
 
 describe("GitHubPRsSection add-account UX", () => {
   beforeEach(() => {
@@ -58,14 +72,14 @@ describe("GitHubPRsSection add-account UX", () => {
   });
 
   it("renders both the device-flow and personal-access-token tabs when auth is unavailable", () => {
-    render(<GitHubPRsSection />);
+    renderSection();
 
     expect(screen.getByTestId("github-auth-tab-device")).toBeInTheDocument();
     expect(screen.getByTestId("github-auth-tab-token")).toBeInTheDocument();
   });
 
   it("switches to the token form when the token tab is clicked", () => {
-    render(<GitHubPRsSection />);
+    renderSection();
 
     fireEvent.click(screen.getByTestId("github-auth-tab-token"));
 
@@ -74,7 +88,7 @@ describe("GitHubPRsSection add-account UX", () => {
 
   it("submits a token and completes auth on success", async () => {
     mockAddGitHubAccountWithToken.mockResolvedValueOnce({});
-    render(<GitHubPRsSection />);
+    renderSection();
 
     fireEvent.click(screen.getByTestId("github-auth-tab-token"));
     fireEvent.change(screen.getByTestId("github-token-host-input"), {
@@ -96,7 +110,7 @@ describe("GitHubPRsSection add-account UX", () => {
     mockAddGitHubAccountWithToken.mockRejectedValueOnce(
       new Error("[unauthenticated] token was rejected — check the token and host")
     );
-    render(<GitHubPRsSection />);
+    renderSection();
 
     fireEvent.click(screen.getByTestId("github-auth-tab-token"));
     fireEvent.change(screen.getByTestId("github-token-input"), {
