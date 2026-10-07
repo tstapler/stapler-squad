@@ -106,6 +106,11 @@ type SessionSteerer interface {
 	// never default to true here).
 	IsReadyForSteer(sessionUUID string) bool
 	SteerActiveSession(ctx context.Context, sessionUUID, message string) error
+	// SteerSessionGuarded delivers message under the per-session nudge guard
+	// shared with the manual PR nudge: sig is the reason signature used for
+	// the duplicate window, and a guard-caused outcome (SteerGuardBusy,
+	// SteerDuplicate) is not a delivery failure.
+	SteerSessionGuarded(ctx context.Context, sessionUUID, sig, message string) (SteerOutcome, error)
 }
 
 // RepoWatchRemover lets BacklogService tell the background unfinished-changes

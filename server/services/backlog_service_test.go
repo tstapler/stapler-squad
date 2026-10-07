@@ -335,6 +335,10 @@ type mockSessionSteerer struct {
 	// production's TestAutoReopenForPRFix_ActiveWorkSession_* fixture
 	// default (see requirement to keep those tests unchanged).
 	notReady map[string]bool
+	// guardedOutcome overrides SteerSessionGuarded's result for a uuid (no
+	// write is recorded). Absent uuids delegate to SteerActiveSession.
+	guardedOutcome map[string]SteerOutcome
+	guardedSigs    []string
 }
 
 type mockSteerCall struct {
@@ -360,6 +364,23 @@ func (m *mockSessionSteerer) SteerActiveSession(_ context.Context, uuid, message
 	defer m.mu.Unlock()
 	m.steerCalls = append(m.steerCalls, mockSteerCall{uuid: uuid, message: message})
 	return m.steerErr[uuid]
+}
+
+// SteerSessionGuarded implements SessionSteerer. Without a guardedOutcome
+// override it behaves like the unguarded path, so tests written against
+// SteerActiveSession keep their meaning.
+func (m *mockSessionSteerer) SteerSessionGuarded(ctx context.Context, uuid, sig, message string) (SteerOutcome, error) {
+	m.mu.Lock()
+	m.guardedSigs = append(m.guardedSigs, sig)
+	override, ok := m.guardedOutcome[uuid]
+	m.mu.Unlock()
+	if ok {
+		return override, nil
+	}
+	if err := m.SteerActiveSession(ctx, uuid, message); err != nil {
+		return SteerFailed, err
+	}
+	return SteerDelivered, nil
 }
 
 // calls returns a snapshot copy of steerCalls, safe to read concurrently with
