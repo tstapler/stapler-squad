@@ -85,6 +85,14 @@ func (g *sessionNudgeGuard) TryBegin(id, sig string) (release func(success bool)
 	}, GuardOK
 }
 
+// abandon releases id's in-flight claim without recording anything, for a
+// claim that never reached the PTY (not ready). The holder must not also call release.
+func (g *sessionNudgeGuard) abandon(id string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.inflight, id)
+}
+
 func (g *sessionNudgeGuard) finish(id, sig string, success bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()

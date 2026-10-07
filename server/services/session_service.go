@@ -84,6 +84,10 @@ type SessionService struct {
 	statusManager     *session.InstanceStatusManager
 	reviewQueuePoller *session.ReviewQueuePoller
 
+	// guardedSteer holds the per-session nudge guard and its test seams; see
+	// session_service_guarded_steer.go. The zero value is production-ready.
+	guardedSteer guardedSteerState
+
 	// tapRegistry backs SetCaptureTap/GetCaptureTap. nil means the process-wide
 	// streamhub.DefaultTapRegistry, which is what the terminal streams use.
 	tapRegistry *streamhub.TapRegistry
