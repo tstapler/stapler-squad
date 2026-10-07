@@ -55,6 +55,11 @@ func (r reasonSignature) hasHeader(header string) bool {
 	return false
 }
 
+// key is the guard's signature string: the ordered headers, joined.
+func (r reasonSignature) key() string {
+	return strings.Join(r.headers, "|")
+}
+
 const conflictHeader = "## Merge conflict"
 
 // buildReasonSignature extracts fixContext's ordered "## " headers — their
@@ -307,7 +312,17 @@ func (s *BacklogService) steerActiveSessionForPRFix(ctx context.Context, itemID,
 	}
 
 	message := buildSteerMessage(program, fixContext)
-	deliverErr := s.sessionSteerer.SteerActiveSession(ctx, activeSessionUUID, message)
+	outcome, deliverErr := s.sessionSteerer.SteerSessionGuarded(ctx, activeSessionUUID, candidate.key(), message)
+	switch outcome {
+	case SteerGuardBusy, SteerDuplicate:
+		// A manual nudge is in flight or just landed; not a failure, retry next tick.
+		log.InfoLog().Printf("[AutoReopenForPRFix] steer for item=%s skipped by nudge guard (outcome=%d); retrying next tick", itemID, outcome)
+		return
+	case SteerBusy, SteerNoStatusSource, SteerNotTracked:
+		// Session stopped being safely writable after the IsReadyForSteer check above.
+		s.degradeToRespawnBlocked(ctx, itemID, itemTitle, currentStatus, activeSessionUUID)
+		return
+	}
 	s.steerDedup.Store(itemID, nextLastSteerReason(last, candidate, activeSessionUUID, deliverErr == nil))
 	s.notifyActiveSessionSteered(ctx, itemID, itemTitle, currentStatus, activeSessionUUID, message, program, candidate, deliverErr)
 }

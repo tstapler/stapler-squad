@@ -702,3 +702,124 @@ func TestSteerActiveSessionForPRFix_should_NotWriteAndDegradeToRespawnBlocked_Wh
 	assert.True(t, reasons[domain.StuckReasonRespawnBlockedActive])
 	assert.False(t, reasons[domain.StuckReasonSteerFailed])
 }
+
+// ---------------------------------------------------------------------------
+// Guarded steering (Story 2.2.1)
+// ---------------------------------------------------------------------------
+
+// guardBackedSteerer is a mockSessionSteerer whose SteerSessionGuarded runs a
+// real sessionNudgeGuard, standing in for SessionService's shared guard.
+type guardBackedSteerer struct {
+	*mockSessionSteerer
+	guard *sessionNudgeGuard
+}
+
+func (g *guardBackedSteerer) SteerSessionGuarded(ctx context.Context, uuid, sig, message string) (SteerOutcome, error) {
+	release, outcome := g.guard.TryBegin(uuid, sig)
+	switch outcome {
+	case GuardBusy:
+		return SteerGuardBusy, nil
+	case GuardDuplicate:
+		return SteerDuplicate, nil
+	}
+	err := g.SteerActiveSession(ctx, uuid, message)
+	release(err == nil)
+	if err != nil {
+		return SteerFailed, err
+	}
+	return SteerDelivered, nil
+}
+
+func TestSteerActiveSessionForPRFix_should_ReturnWithoutDegradingOrMarkingFailed_When_GuardDuplicateFromJustDeliveredManualNudge(t *testing.T) {
+	svc, steerer, bus := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
+	subCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+	itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
+	steerer.guardedOutcome = map[string]SteerOutcome{activeSessionUUIDPrimary: SteerDuplicate}
+
+	pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
+
+	assert.Empty(t, steerer.calls())
+	assert.Empty(t, openStuckReasons(t, svc), "neither respawn_blocked_active nor steer_failed")
+	assert.Empty(t, drainNotifications(ch))
+}
+
+func TestSteerActiveSessionForPRFix_should_NotCallDegradeAndKeepItemUnblocked_When_GuardBusyOrDuplicate(t *testing.T) {
+	for name, outcome := range map[string]SteerOutcome{"busy": SteerGuardBusy, "duplicate": SteerDuplicate} {
+		t.Run(name, func(t *testing.T) {
+			svc, steerer, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
+			itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
+			steerer.guardedOutcome = map[string]SteerOutcome{activeSessionUUIDPrimary: outcome}
+
+			pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
+
+			assert.Empty(t, openStuckReasons(t, svc))
+			requireItemStatus(t, svc.storage, itemID, string(session.BacklogStatusPRPending))
+
+			// Not recorded as delivered: the next tick, once the guard clears, delivers.
+			steerer.guardedOutcome = nil
+			pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
+			assert.Len(t, steerer.calls(), 1)
+		})
+	}
+}
+
+func TestSteerActiveSessionForPRFix_should_PassFullReasonSignatureToGuard_When_Called(t *testing.T) {
+	svc, steerer, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
+	itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
+
+	pinnedBaselineSteer(t, svc, itemID, "## Failing CI checks\n- lint\n\n## Reviewer comments\n- nit\n")
+
+	require.Equal(t, []string{"## Failing CI checks|## Reviewer comments"}, steerer.guardedSigs)
+}
+
+func TestSteerActiveSessionForPRFix_should_ReturnWithoutDegradingOrMarkingFailed_When_ManualNudgeInFlight(t *testing.T) {
+	svc, steerer, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
+	guard := &sessionNudgeGuard{}
+	svc.SetSessionSteerer(&guardBackedSteerer{mockSessionSteerer: steerer, guard: guard})
+	itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
+	release, outcome := guard.TryBegin(activeSessionUUIDPrimary, "manual")
+	require.Equal(t, GuardOK, outcome)
+
+	pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
+
+	assert.Empty(t, steerer.calls())
+	assert.Empty(t, openStuckReasons(t, svc))
+
+	release(false)
+	steerer.guardedSigs = nil
+	pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
+	assert.Len(t, steerer.calls(), 1, "retried on the next tick after the manual nudge finished")
+}
+
+func TestSteerActiveSessionForPRFix_should_DeliverBothSignatures_When_FailingChecksThenMergeConflictWithin30s(t *testing.T) {
+	svc, steerer, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
+	clk := &fakeGuardClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	svc.SetSessionSteerer(&guardBackedSteerer{mockSessionSteerer: steerer, guard: &sessionNudgeGuard{now: clk.Now}})
+	itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
+
+	pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
+	clk.Advance(30 * time.Second)
+	// A newly seen conflict needs two confirming ticks before it is steered.
+	pinnedBaselineSteer(t, svc, itemID, conflictOnlyFixContext)
+	pinnedBaselineSteer(t, svc, itemID, conflictOnlyFixContext)
+
+	calls := steerer.calls()
+	require.Len(t, calls, 2)
+	assert.Contains(t, calls[0].message, "## Failing CI checks")
+	assert.Contains(t, calls[1].message, "## Merge conflict")
+}
+
+func TestGuardKey_should_Match_When_GetStableIDEqualsActiveSessionUUID(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+	inst := &session.Instance{UUID: "stable-uuid-1", Title: "guard-key-session", Program: "claude", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	addInstanceToPoller(fix.poller, inst)
+	active := &session.ItemSessionSummary{SessionUUID: inst.UUID, Role: session.SessionRoleWork}
+
+	live := fix.svc.FindLiveInstance(active.SessionUUID)
+
+	require.NotNil(t, live, "backlog path resolves the instance by active.SessionUUID")
+	assert.Equal(t, active.SessionUUID, live.GetStableID(), "manual (GetStableID) and automatic (SessionUUID) paths share one guard key")
+}
