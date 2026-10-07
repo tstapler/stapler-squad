@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,9 +36,13 @@ type UserPR struct {
 	MergedAt          time.Time
 	ApprovedCount     int
 	ChangesReqCount   int
-	CheckConclusion   string // "success" / "failure" / "pending" / ""
-	SessionIDs        []string
+	CheckConclusion   string   // "success" / "failure" / "pending" / ""
+	SessionIDs        []string // titles of LinkedSessions, kept for compat
 	LocalWorktreePath string
+	// LinkedSessions lists every session on the PR's branch, most recently
+	// active first. Entries with LegacyFallback set matched only the old
+	// owner-only key; the nudge path must ignore them.
+	LinkedSessions []LinkedSession
 
 	Host         string // never empty; "github.com" for github.com
 	AccountLogin string // login name of the account whose poll returned this PR; never a token
@@ -82,6 +87,25 @@ const (
 	maxReviewThreads = 50 // matches reviewThreads(first: 50) in the widened query
 )
 
+// LinkedSessionStatus is the coarse lifecycle state of a linked session.
+type LinkedSessionStatus string
+
+const (
+	LinkedSessionUnknown LinkedSessionStatus = ""
+	LinkedSessionRunning LinkedSessionStatus = "running"
+	LinkedSessionPaused  LinkedSessionStatus = "paused"
+	LinkedSessionStopped LinkedSessionStatus = "stopped"
+)
+
+// LinkedSession is a local session linked to a UserPR.
+type LinkedSession struct {
+	SessionID    string // session title
+	Status       LinkedSessionStatus
+	LastActiveAt time.Time // zero when unknown
+	// LegacyFallback marks a link made only by the owner-only legacy index.
+	LegacyFallback bool
+}
+
 // PRAnnotationSession carries session data needed to annotate UserPR entries.
 // Defined here (not in the session package) to avoid an import cycle:
 // session imports github, so github cannot import session.
@@ -89,10 +113,12 @@ const (
 // Repo is a typed value object: holding a valid RepoRef proves owner and repo
 // are non-empty. Sessions without a resolvable GitHub repo are skipped.
 type PRAnnotationSession struct {
-	ID       string
-	Branch   string
-	Repo     RepoRef
-	PRNumber int // fallback: match by PR number when branch name doesn't match headRef
+	ID           string
+	Branch       string
+	Repo         RepoRef
+	PRNumber     int // fallback: match by PR number when branch name doesn't match headRef
+	Status       LinkedSessionStatus
+	LastActiveAt time.Time // zero when unknown
 }
 
 // PRAnnotationWorktree carries worktree data for annotation.
@@ -329,53 +355,173 @@ func (c *UserPRCache) GetCachedAccounts() []CachedAccount {
 	return out
 }
 
-// Annotate enriches the current snapshot with session IDs and worktree paths.
-// It performs a COW update: load → copy → mutate → store.
-// No-op if the snapshot hasn't been populated yet.
-func (c *UserPRCache) Annotate(sessions []PRAnnotationSession, worktrees []PRAnnotationWorktree) {
+// AnnotateStats reports link-quality counters from one Annotate pass.
+type AnnotateStats struct {
+	LegacyFallbackLinks int // session-PR links made only by the legacy index
+	UnmatchedSessions   int // sessions with a branch that link to no PR
+}
+
+// Annotate enriches the current snapshot with linked sessions and worktree
+// paths. It performs a COW update: load, copy, mutate, store. No-op if the
+// snapshot hasn't been populated yet.
+//
+// Sessions match on host+owner+repo+branch (or PR number). The legacy
+// owner-only index is consulted only when the strict key misses, and only for
+// same-host sessions whose repo is not itself a repo in the PR list, so it can
+// keep pre-existing links alive without cross-linking known-different repos.
+func (c *UserPRCache) Annotate(sessions []PRAnnotationSession, worktrees []PRAnnotationWorktree) AnnotateStats {
 	v := c.snapshot.Load()
 	if v == nil {
-		return
+		return AnnotateStats{}
 	}
 	old := v.(*userPRSnapshot)
 
-	// Primary index: keyed by RepoRef.BranchKey(branch) = "owner/branch".
-	sessionsByBranch := make(map[string][]string, len(sessions))
-	// Secondary index: keyed by RepoRef.PRKey(number) = "owner/#number".
-	sessionsByNum := make(map[string][]string, len(sessions))
-	for _, s := range sessions {
-		if !s.Repo.IsValid() {
-			continue
-		}
-		if s.Branch != "" {
-			k := s.Repo.BranchKey(s.Branch)
-			sessionsByBranch[k] = append(sessionsByBranch[k], s.ID)
-		}
-		if s.PRNumber > 0 {
-			k := s.Repo.PRKey(s.PRNumber)
-			sessionsByNum[k] = append(sessionsByNum[k], s.ID)
-		}
-	}
-	worktreeByKey := make(map[string]string, len(worktrees))
+	idx := newSessionIndex(sessions)
+	worktreeByKey := make(map[LinkKey]string, len(worktrees))
 	for _, wt := range worktrees {
 		if wt.Branch == "" || !wt.Repo.IsValid() {
 			continue
 		}
 		worktreeByKey[wt.Repo.BranchKey(wt.Branch)] = wt.WorktreePath
 	}
+	prRepos := make(map[string]bool, len(old.prs))
+	prRefs := make([]RepoRef, len(old.prs))
+	for i, pr := range old.prs {
+		prRefs[i], _ = NewRepoRefWithHost(pr.Owner, pr.Repo, pr.Host)
+		if prRefs[i].IsValid() {
+			prRepos[prRefs[i].repoKey()] = true
+		}
+	}
 
+	var stats AnnotateStats
+	linked := make(map[string]bool, len(sessions))
 	annotated := make([]UserPR, len(old.prs))
 	for i, pr := range old.prs {
-		branchKey := pr.Owner + "/" + pr.HeadRef
-		ids := sessionsByBranch[branchKey]
-		if len(ids) == 0 && pr.Number > 0 {
-			ids = sessionsByNum[pr.Owner+"/#"+strconv.Itoa(pr.Number)]
+		ref := prRefs[i]
+		if ref.IsValid() {
+			ls := idx.strict(ref, pr.HeadRef, pr.Number)
+			if len(ls) == 0 {
+				ls = idx.legacy(ref, pr.HeadRef, pr.Number, prRepos)
+				stats.LegacyFallbackLinks += len(ls)
+			}
+			sortLinkedSessions(ls)
+			pr.LinkedSessions = ls
+			pr.SessionIDs = linkedSessionIDs(ls)
+			for _, l := range ls {
+				linked[l.SessionID] = true
+			}
+			pr.LocalWorktreePath = worktreeByKey[ref.BranchKey(pr.HeadRef)]
 		}
-		pr.SessionIDs = ids
-		pr.LocalWorktreePath = worktreeByKey[branchKey]
 		annotated[i] = pr
 	}
+	for _, s := range sessions {
+		if s.Branch != "" && s.Repo.IsValid() && !linked[s.ID] {
+			stats.UnmatchedSessions++
+		}
+	}
+	if stats.LegacyFallbackLinks > 0 {
+		log.Info("UserPRCache: sessions linked via legacy owner-only key", "count", stats.LegacyFallbackLinks)
+	}
+	log.Debug("UserPRCache: sessions with a branch but no matching PR", "count", stats.UnmatchedSessions)
 	c.snapshot.Store(&userPRSnapshot{prs: annotated, accountStatuses: old.accountStatuses, capturedAt: old.capturedAt})
+	return stats
+}
+
+// sessionIndex holds the strict (host/owner/repo) and legacy (owner-only)
+// lookup tables for one Annotate pass.
+type sessionIndex struct {
+	byBranch, byNum             map[LinkKey][]PRAnnotationSession
+	legacyByBranch, legacyByNum map[LinkKey][]PRAnnotationSession
+}
+
+func newSessionIndex(sessions []PRAnnotationSession) sessionIndex {
+	idx := sessionIndex{
+		byBranch:       make(map[LinkKey][]PRAnnotationSession, len(sessions)),
+		byNum:          make(map[LinkKey][]PRAnnotationSession),
+		legacyByBranch: make(map[LinkKey][]PRAnnotationSession, len(sessions)),
+		legacyByNum:    make(map[LinkKey][]PRAnnotationSession),
+	}
+	for _, s := range sessions {
+		if !s.Repo.IsValid() {
+			continue
+		}
+		if s.Branch != "" {
+			k := s.Repo.BranchKey(s.Branch)
+			idx.byBranch[k] = append(idx.byBranch[k], s)
+			lk := s.Repo.LegacyBranchKey(s.Branch)
+			idx.legacyByBranch[lk] = append(idx.legacyByBranch[lk], s)
+		}
+		if s.PRNumber > 0 {
+			k := s.Repo.PRKey(s.PRNumber)
+			idx.byNum[k] = append(idx.byNum[k], s)
+			lk := s.Repo.LegacyPRKey(s.PRNumber)
+			idx.legacyByNum[lk] = append(idx.legacyByNum[lk], s)
+		}
+	}
+	return idx
+}
+
+// strict matches on the full host/owner/repo key: branch first, then PR number.
+func (x sessionIndex) strict(ref RepoRef, headRef string, number int) []LinkedSession {
+	ss := x.byBranch[ref.BranchKey(headRef)]
+	if len(ss) == 0 && number > 0 {
+		ss = x.byNum[ref.PRKey(number)]
+	}
+	return toLinkedSessions(ss, false)
+}
+
+// legacy matches the old owner-only key, restricted to same-host sessions
+// whose repo is not one of the PR list's repos (those are known-different).
+func (x sessionIndex) legacy(ref RepoRef, headRef string, number int, prRepos map[string]bool) []LinkedSession {
+	ss := x.legacyByBranch[ref.LegacyBranchKey(headRef)]
+	if len(ss) == 0 && number > 0 {
+		ss = x.legacyByNum[ref.LegacyPRKey(number)]
+	}
+	var kept []PRAnnotationSession
+	for _, s := range ss {
+		if NormalizeHost(s.Repo.Host()) != NormalizeHost(ref.Host()) || prRepos[s.Repo.repoKey()] {
+			continue
+		}
+		kept = append(kept, s)
+	}
+	return toLinkedSessions(kept, true)
+}
+
+func toLinkedSessions(ss []PRAnnotationSession, legacy bool) []LinkedSession {
+	if len(ss) == 0 {
+		return nil
+	}
+	out := make([]LinkedSession, len(ss))
+	for i, s := range ss {
+		out[i] = LinkedSession{SessionID: s.ID, Status: s.Status, LastActiveAt: s.LastActiveAt, LegacyFallback: legacy}
+	}
+	return out
+}
+
+func linkedSessionIDs(ls []LinkedSession) []string {
+	if len(ls) == 0 {
+		return nil
+	}
+	ids := make([]string, len(ls))
+	for i, l := range ls {
+		ids[i] = l.SessionID
+	}
+	return ids
+}
+
+// sortLinkedSessions orders most recently active first; sessions with no
+// timestamp sort last, and ties break by session title.
+func sortLinkedSessions(ls []LinkedSession) {
+	sort.SliceStable(ls, func(i, j int) bool {
+		a, b := ls[i], ls[j]
+		if a.LastActiveAt.IsZero() != b.LastActiveAt.IsZero() {
+			return !a.LastActiveAt.IsZero()
+		}
+		if !a.LastActiveAt.Equal(b.LastActiveAt) {
+			return a.LastActiveAt.After(b.LastActiveAt)
+		}
+		return a.SessionID < b.SessionID
+	})
 }
 
 // Refresh triggers an immediate fetch from GitHub, coalescing concurrent calls.
