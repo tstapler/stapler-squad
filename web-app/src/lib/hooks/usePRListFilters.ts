@@ -1,24 +1,25 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { type UserPR } from "@/gen/session/v1/types_pb";
+import { prAttention } from "@/lib/unfinished/prAttention";
+import { type PRSortBy } from "@/lib/unfinished/prOrdering";
 
 export type FilterStatus =
   | "all"
   | "ci-failing"
   | "changes-requested"
   | "with-session"
-  | "draft";
+  | "draft"
+  | "needs-attention";
 
-export type SortBy = "updated-desc" | "updated-asc" | "repo" | "ci-status";
+export type SortBy = PRSortBy;
 
+export const DEFAULT_FILTER: FilterStatus = "all";
+export const DEFAULT_SORT: SortBy = "attention-first";
 
-export function applyFilterSort(
-  prs: UserPR[],
-  filter: FilterStatus,
-  sort: SortBy,
-  search: string
-): UserPR[] {
+/** Filters and searches only; ordering is `orderPRs`' job so the list can freeze it. */
+export function applyFilter(prs: UserPR[], filter: FilterStatus, search: string): UserPR[] {
   let result = prs;
 
   if (search.trim()) {
@@ -42,44 +43,16 @@ export function applyFilterSort(
       result = result.filter((p) => p.changesReqCount > 0);
       break;
     case "with-session":
-      result = result.filter((p) => p.sessionIds.length > 0);
+      result = result.filter((p) => p.sessionIds.length > 0 || p.linkedSessions.length > 0);
       break;
     case "draft":
       result = result.filter((p) => p.isDraft);
       break;
+    case "needs-attention":
+      result = result.filter((p) => prAttention(p).needsAttention);
+      break;
   }
-
-  const sorted = [...result];
-  switch (sort) {
-    case "updated-desc":
-      sorted.sort(
-        (a, b) =>
-          Number(b.updatedAt?.seconds ?? 0n) - Number(a.updatedAt?.seconds ?? 0n)
-      );
-      break;
-    case "updated-asc":
-      sorted.sort(
-        (a, b) =>
-          Number(a.updatedAt?.seconds ?? 0n) - Number(b.updatedAt?.seconds ?? 0n)
-      );
-      break;
-    case "repo":
-      sorted.sort((a, b) =>
-        `${a.owner}/${a.repo}`.localeCompare(`${b.owner}/${b.repo}`)
-      );
-      break;
-    case "ci-status": {
-      const rank = (p: UserPR) => {
-        if (p.checkConclusion === "failure" || p.checkConclusion === "error") return 0;
-        if (p.changesReqCount > 0) return 1;
-        if (p.checkConclusion === "success") return 3;
-        return 2;
-      };
-      sorted.sort((a, b) => rank(a) - rank(b));
-      break;
-    }
-  }
-  return sorted;
+  return result;
 }
 
 export interface PRListFilters {
@@ -89,6 +62,10 @@ export interface PRListFilters {
   setFilterStatus: (f: FilterStatus) => void;
   setSortBy: (s: SortBy) => void;
   setSearchQuery: (q: string) => void;
+  /** Resets filter, sort and search to their defaults. */
+  clear: () => void;
+  /** Any of filter, sort or search differs from its default. */
+  isActive: boolean;
   apply: (prs: UserPR[]) => UserPR[];
 }
 
@@ -97,9 +74,14 @@ export interface PRListFilters {
  * switches. Deliberately component state, not URL state: lost on reload and not shareable.
  */
 export function usePRListFilters(): PRListFilters {
-  const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
-  const [sortBy, setSortBy] = useState<SortBy>("updated-desc");
+  const [filterStatus, setFilterStatus] = useState<FilterStatus>(DEFAULT_FILTER);
+  const [sortBy, setSortBy] = useState<SortBy>(DEFAULT_SORT);
   const [searchQuery, setSearchQuery] = useState("");
+  const clear = useCallback(() => {
+    setFilterStatus(DEFAULT_FILTER);
+    setSortBy(DEFAULT_SORT);
+    setSearchQuery("");
+  }, []);
   return useMemo(
     () => ({
       filterStatus,
@@ -108,8 +90,11 @@ export function usePRListFilters(): PRListFilters {
       setFilterStatus,
       setSortBy,
       setSearchQuery,
-      apply: (prs) => applyFilterSort(prs, filterStatus, sortBy, searchQuery),
+      clear,
+      isActive:
+        filterStatus !== DEFAULT_FILTER || sortBy !== DEFAULT_SORT || searchQuery.trim() !== "",
+      apply: (prs) => applyFilter(prs, filterStatus, searchQuery),
     }),
-    [filterStatus, sortBy, searchQuery]
+    [filterStatus, sortBy, searchQuery, clear]
   );
 }

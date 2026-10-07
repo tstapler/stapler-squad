@@ -1,15 +1,19 @@
 // +feature: unfinished-github-prs
 "use client";
 
-import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { useState, useCallback, useRef, useEffect, useId, useMemo } from "react";
 import Link from "next/link";
 import { type UserPR } from "@/gen/session/v1/types_pb";
 import { type UseGitHubPRsReturn } from "@/lib/hooks/useGitHubPRs";
 import { type FilterStatus, type SortBy, type PRListFilters } from "@/lib/hooks/usePRListFilters";
+import { useNowTicker } from "@/lib/hooks/useNowTicker";
 import { DEGRADED_ATTENTION_TEXT } from "@/lib/unfinished/prAttention";
+import { formatRelativeTime } from "@/lib/unfinished/relativeTime";
 import { emitTabEvent } from "@/lib/unfinished/tabStats";
 import {
   GitHubUserService,
+  type AccountPollStatus,
+  AccountPollState,
   type GitHubAccount,
   type GitHubCLIHost,
   StartGitHubDeviceAuthRequestSchema,
@@ -221,7 +225,7 @@ function DeviceAuthBanner({ errorMessage, onAuthComplete, onCancel }: DeviceAuth
     return (
       <div className={styles.authBanner} data-testid="github-auth-banner">
         <span className={styles.authBannerText}>
-          {errorMessage || "GitHub authentication not yet configured."}
+          {errorMessage || "Connect GitHub to see your open PRs"}
         </span>
         <input
           className={styles.hostInput}
@@ -583,24 +587,38 @@ const STATUS_FILTERS: { value: FilterStatus; label: string }[] = [
   { value: "changes-requested", label: "Changes req" },
   { value: "with-session", label: "Has session" },
   { value: "draft", label: "Draft" },
+  { value: "needs-attention", label: "Needs attention" },
+];
+
+const SORT_OPTIONS: { value: SortBy; label: string }[] = [
+  { value: "updated-desc", label: "Updated down" },
+  { value: "updated-asc", label: "Updated up" },
+  { value: "repo", label: "Repo A-Z" },
+  { value: "ci-status", label: "CI status" },
+  { value: "attention-first", label: "Attention first" },
 ];
 
 interface FilterBarProps {
   filter: FilterStatus;
   sort: SortBy;
   search: string;
+  searchRef: React.RefObject<HTMLInputElement | null>;
+  clearActive: boolean;
   onFilter: (f: FilterStatus) => void;
   onSort: (s: SortBy) => void;
   onSearch: (q: string) => void;
+  onClear: () => void;
 }
 
-function FilterBar({ filter, sort, search, onFilter, onSort, onSearch }: FilterBarProps) {
+function FilterBar({ filter, sort, search, searchRef, clearActive, onFilter, onSort, onSearch, onClear }: FilterBarProps) {
+  const sortId = useId();
   return (
     <div className={styles.filterBar} data-testid="github-prs-filter-bar">
-      <div className={styles.filterChipGroup}>
+      <div className={styles.filterChipGroup} role="group" aria-label="Filter PRs">
         {STATUS_FILTERS.map((f) => (
           <button
             key={f.value}
+            type="button"
             className={filter === f.value ? styles.filterChipActive : styles.filterChip}
             onClick={() => onFilter(f.value)}
             aria-pressed={filter === f.value}
@@ -612,6 +630,7 @@ function FilterBar({ filter, sort, search, onFilter, onSort, onSearch }: FilterB
       </div>
       <div className={styles.sortGroup}>
         <input
+          ref={searchRef}
           type="search"
           className={styles.searchInput}
           placeholder="Search PRs…"
@@ -620,21 +639,76 @@ function FilterBar({ filter, sort, search, onFilter, onSort, onSearch }: FilterB
           aria-label="Search pull requests"
           data-testid="github-prs-search"
         />
-        <span className={styles.sortLabel}>Sort:</span>
+        <label className={styles.sortLabel} htmlFor={sortId}>
+          Sort
+        </label>
         <select
+          id={sortId}
           className={styles.sortSelect}
           value={sort}
           onChange={(e) => onSort(e.target.value as SortBy)}
-          aria-label="Sort pull requests"
           data-testid="github-prs-sort"
         >
-          <option value="updated-desc">Updated ↓</option>
-          <option value="updated-asc">Updated ↑</option>
-          <option value="repo">Repo A–Z</option>
-          <option value="ci-status">CI status</option>
+          {SORT_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
         </select>
+        {clearActive && (
+          <button type="button" className={styles.panelButton} onClick={onClear} data-testid="clear-filters">
+            Clear filters
+          </button>
+        )}
       </div>
     </div>
+  );
+}
+
+// --- Account status banners ---
+
+const accountLabel = (st: AccountPollStatus) => `${st.accountLogin} on ${st.host}`;
+
+interface AccountBannersProps {
+  statuses: AccountPollStatus[];
+  onReconnect: () => void;
+}
+
+/** One banner per failed account; healthy accounts' cards still render. Never the "not connected" state. */
+function AccountBanners({ statuses, onReconnect }: AccountBannersProps) {
+  const failed = statuses.filter(
+    (st) => st.state !== AccountPollState.OK && st.state !== AccountPollState.UNSPECIFIED
+  );
+  if (failed.length === 0) return null;
+  return (
+    <>
+      {failed.map((st) => (
+        <div
+          key={`${st.host}|${st.accountLogin}`}
+          role="status"
+          className={styles.banner}
+          data-testid="github-account-banner"
+        >
+          {st.state === AccountPollState.UNAUTHORIZED && (
+            <>
+              <span>GitHub sign-in expired for {accountLabel(st)}. </span>
+              <button type="button" className={styles.panelButton} onClick={onReconnect}>
+                Reconnect
+              </button>
+            </>
+          )}
+          {st.state === AccountPollState.RATE_LIMITED && (
+            <span>GitHub rate limit reached for {accountLabel(st)}.</span>
+          )}
+          {st.state === AccountPollState.ERROR && (
+            <span>
+              Could not refresh {accountLabel(st)}
+              {st.detail ? `: ${st.detail}` : "."}
+            </span>
+          )}
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -650,11 +724,25 @@ export interface GitHubPRsSectionProps extends UseGitHubPRsReturn {
  * Displays the authenticated GitHub user's open pull requests.
  * Shows connected accounts, aggregated stats, and PRs grouped by repo.
  */
-export function GitHubPRsSection({ prs, authState, refresh, filters, attention }: GitHubPRsSectionProps) {
+export function GitHubPRsSection({
+  prs,
+  authState,
+  accountStatuses,
+  lastUpdatedAt,
+  error,
+  refreshing,
+  refresh,
+  filters,
+  attention,
+}: GitHubPRsSectionProps) {
   const client = useGitHubUserClient();
   const [isOpen, setIsOpen] = useState(true);
   const [addingAccount, setAddingAccount] = useState(false);
   const { filterStatus, sortBy, searchQuery, setFilterStatus, setSortBy, setSearchQuery } = filters;
+  const now = useNowTicker();
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const retryPendingRef = useRef(false);
   const mountedAtRef = useRef(performance.now());
   const firstCardEmittedRef = useRef(false);
 
@@ -666,6 +754,28 @@ export function GitHubPRsSection({ prs, authState, refresh, filters, attention }
       emitTabEvent({ type: "firstPrCard", ms: Math.round(performance.now() - mountedAtRef.current) });
     }
   }, [isOpen, visiblePRs.length]);
+
+  // Retry succeeded (error cleared) => land on the list heading, never on <body>.
+  useEffect(() => {
+    if (!error && retryPendingRef.current) {
+      retryPendingRef.current = false;
+      headingRef.current?.focus();
+    }
+  }, [error]);
+
+  const handleRefresh = useCallback(() => {
+    if (!refreshing) refresh();
+  }, [refreshing, refresh]);
+
+  const handleRetry = useCallback(() => {
+    retryPendingRef.current = true;
+    refresh();
+  }, [refresh]);
+
+  const handleClearFilters = useCallback(() => {
+    filters.clear();
+    searchRef.current?.focus();
+  }, [filters]);
 
   const toggleOpen = useCallback(() => setIsOpen((v) => !v), []);
 
@@ -740,6 +850,51 @@ export function GitHubPRsSection({ prs, authState, refresh, filters, attention }
             />
           ) : (
             <>
+              <div className={styles.panelHeader}>
+                <h2 className={styles.panelHeading} tabIndex={-1} ref={headingRef}>
+                  Open pull requests
+                </h2>
+                {lastUpdatedAt !== undefined && (
+                  <span className={styles.freshness} data-testid="github-prs-updated">
+                    Updated {formatRelativeTime(lastUpdatedAt, now)}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className={styles.panelButton}
+                  aria-disabled={refreshing}
+                  aria-busy={refreshing}
+                  onClick={handleRefresh}
+                  data-testid="github-prs-refresh"
+                >
+                  {refreshing ? "Refreshing..." : "Refresh"}
+                </button>
+              </div>
+
+              {error && prs.length === 0 && lastUpdatedAt === undefined && (
+                <div role="alert" className={`${styles.banner} ${styles.bannerError}`} data-testid="github-prs-error">
+                  <span>Could not load PRs: {error}</span>
+                  <button type="button" className={styles.panelButton} onClick={handleRetry}>
+                    Retry
+                  </button>
+                </div>
+              )}
+              {error && (prs.length > 0 || lastUpdatedAt !== undefined) && (
+                <div role="status" className={`${styles.banner} ${styles.bannerError}`} data-testid="github-prs-error">
+                  <span>
+                    {lastUpdatedAt !== undefined
+                      ? `Showing data from ${formatRelativeTime(lastUpdatedAt, now)}. `
+                      : ""}
+                    Could not refresh: {error}
+                  </span>
+                  <button type="button" className={styles.panelButton} onClick={handleRetry}>
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              <AccountBanners statuses={accountStatuses} onReconnect={handleAddAccount} />
+
               {accounts.length > 0 && (
                 <AccountsBar
                   accounts={accounts}
@@ -757,11 +912,11 @@ export function GitHubPRsSection({ prs, authState, refresh, filters, attention }
               )}
 
               {prs.length === 0 && !addingAccount ? (
-                <div className={styles.empty}>
-                  {authState === undefined
-                    ? "Connecting to GitHub…"
-                    : "No open pull requests found."}
-                </div>
+                authState === undefined && !error ? (
+                  <div className={styles.empty}>Connecting to GitHub…</div>
+                ) : authState === undefined ? null : (
+                  <div className={styles.empty}>No open PRs</div>
+                )
               ) : prs.length > 0 ? (
                 <>
                   <StatsBar prs={prs} />
@@ -769,14 +924,32 @@ export function GitHubPRsSection({ prs, authState, refresh, filters, attention }
                     filter={filterStatus}
                     sort={sortBy}
                     search={searchQuery}
+                    searchRef={searchRef}
+                    clearActive={filters.isActive}
                     onFilter={setFilterStatus}
                     onSort={setSortBy}
                     onSearch={setSearchQuery}
+                    onClear={handleClearFilters}
                   />
                   {visiblePRs.length === 0 ? (
-                    <div className={styles.empty}>No PRs match the current filter.</div>
+                    <div className={styles.emptyState}>
+                      <span>No PRs match your filters</span>
+                      <button
+                        type="button"
+                        className={styles.panelButton}
+                        onClick={handleClearFilters}
+                        data-testid="clear-filters-empty"
+                      >
+                        Clear filters
+                      </button>
+                    </div>
                   ) : (
-                    <PRGroupedList prs={visiblePRs} />
+                    <PRGroupedList
+                      prs={visiblePRs}
+                      sortBy={sortBy}
+                      stateKey={`${filterStatus}|${sortBy}|${searchQuery}`}
+                      fallbackFocusRef={headingRef}
+                    />
                   )}
                 </>
               ) : null}

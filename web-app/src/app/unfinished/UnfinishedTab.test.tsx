@@ -81,7 +81,7 @@ import type { UserPR } from "@/gen/session/v1/types_pb";
 
 function streamPRs(prs: UserPR[]) {
   mockWatchUserPRs.mockImplementation(async function* () {
-    yield { authState: { available: true, accounts: [] }, prs };
+    yield { eventType: "snapshot", authState: { available: true, accounts: [] }, prs, accountStatuses: [] };
   });
 }
 

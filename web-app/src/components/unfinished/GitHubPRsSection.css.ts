@@ -312,10 +312,12 @@ export const filterBar = style({
 export const filterChipGroup = style({
   display: "flex",
   alignItems: "center",
+  flexWrap: "wrap",
   gap: vars.space["1"],
 });
 
 const filterChipBase = style({
+  minHeight: "44px",
   padding: `2px ${vars.space["2"]}`,
   borderRadius: vars.radii.full,
   fontSize: vars.fontSize.xs,
@@ -347,6 +349,7 @@ export const filterChipActive = style([
 export const sortGroup = style({
   display: "flex",
   alignItems: "center",
+  flexWrap: "wrap",
   gap: vars.space["1"],
   marginLeft: "auto",
 });
@@ -358,6 +361,7 @@ export const sortLabel = style({
 });
 
 export const sortSelect = style({
+  minHeight: "44px",
   padding: `2px ${vars.space["2"]}`,
   borderRadius: vars.radii.sm,
   fontSize: vars.fontSize.xs,
@@ -375,6 +379,8 @@ export const sortSelect = style({
 });
 
 export const searchInput = style({
+  minHeight: "44px",
+  maxWidth: "100%",
   padding: `2px ${vars.space["3"]}`,
   borderRadius: vars.radii.sm,
   fontSize: vars.fontSize.xs,
@@ -443,4 +449,77 @@ export const attentionNote = style({
   margin: `0 ${vars.space["3"]} ${vars.space["2"]}`,
   fontSize: vars.fontSize.xs,
   color: vars.color.textMuted,
+});
+
+// --- PRs panel header, banners, empty states ---
+
+export const panelHeader = style({
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: vars.space["3"],
+  padding: `${vars.space["2"]} ${vars.space["4"]}`,
+});
+
+export const panelHeading = style({
+  margin: 0,
+  fontSize: vars.fontSize.sm,
+  fontWeight: 600,
+  color: vars.color.textPrimary,
+  ":focus-visible": { outline: `2px solid ${vars.color.inputFocusBorder}`, outlineOffset: "2px" },
+});
+
+export const freshness = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  marginLeft: "auto",
+  minWidth: 0,
+  overflowWrap: "anywhere",
+});
+
+export const panelButton = style({
+  minHeight: "44px",
+  padding: `${vars.space["1"]} ${vars.space["3"]}`,
+  background: "transparent",
+  color: vars.color.textSecondary,
+  border: `1px solid ${vars.color.borderMuted}`,
+  borderRadius: vars.radii.sm,
+  fontSize: vars.fontSize.xs,
+  fontWeight: 600,
+  cursor: "pointer",
+  selectors: {
+    '&[aria-disabled="true"]': { cursor: "progress", opacity: 0.7 },
+  },
+  ":focus-visible": { outline: `2px solid ${vars.color.inputFocusBorder}`, outlineOffset: "2px" },
+});
+
+export const banner = style({
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: vars.space["2"],
+  margin: `${vars.space["1"]} ${vars.space["4"]}`,
+  padding: `${vars.space["2"]} ${vars.space["3"]}`,
+  borderRadius: vars.radii.md,
+  fontSize: vars.fontSize.sm,
+  color: vars.color.warningText,
+  background: vars.color.warningBg,
+  border: `1px solid ${vars.color.warning}`,
+  overflowWrap: "anywhere",
+});
+
+export const bannerError = style({
+  color: vars.color.errorText,
+  background: vars.color.errorBg,
+  border: `1px solid ${vars.color.error}`,
+});
+
+export const emptyState = style({
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: vars.space["3"],
+  padding: `${vars.space["4"]} ${vars.space["4"]}`,
+  color: vars.color.textSecondary,
+  fontSize: vars.fontSize.sm,
 });
