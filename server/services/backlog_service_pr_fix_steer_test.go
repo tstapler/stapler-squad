@@ -641,3 +641,64 @@ func requireNotificationEvent(t *testing.T, ch <-chan *events.Event) *events.Eve
 		return &events.Event{}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Characterization ("PinnedBaseline") of steerActiveSessionForPRFix, captured
+// on the code BEFORE the per-session nudge guard (Task 2.2.1c). They must stay
+// green and unedited after the guarded call-site swap (Task 2.2.1e).
+// ---------------------------------------------------------------------------
+
+func pinnedBaselineSteer(t *testing.T, svc *BacklogService, itemID, fixContext string) {
+	t.Helper()
+	svc.steerActiveSessionForPRFix(context.Background(), itemID, "pinned item", session.BacklogStatusPRPending,
+		&session.ItemSessionSummary{SessionUUID: activeSessionUUIDPrimary, Role: session.SessionRoleWork}, fixContext)
+}
+
+func TestSteerActiveSessionForPRFix_should_DeliverWhenReady_When_PinnedBaseline(t *testing.T) {
+	svc, steerer, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
+	itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
+
+	pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
+
+	calls := steerer.calls()
+	require.Len(t, calls, 1)
+	assert.Equal(t, activeSessionUUIDPrimary, calls[0].uuid)
+	assert.Contains(t, calls[0].message, "## Failing CI checks")
+	assert.Empty(t, openStuckReasons(t, svc))
+}
+
+func TestSteerActiveSessionForPRFix_should_DedupByItem_When_SameSignatureTwice_PinnedBaseline(t *testing.T) {
+	svc, steerer, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
+	itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
+
+	pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
+	pinnedBaselineSteer(t, svc, itemID, "## Failing CI checks\n- a different check name\n")
+
+	assert.Len(t, steerer.calls(), 1, "same reason signature within the cooldown must be delivered once")
+}
+
+func TestSteerActiveSessionForPRFix_should_MarkSteerFailedNotRespawnBlocked_When_GenuineDeliveryError_PinnedBaseline(t *testing.T) {
+	svc, steerer, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
+	itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
+	steerer.steerErr[activeSessionUUIDPrimary] = fmt.Errorf("SendKeys failed: pty closed")
+
+	pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
+
+	assert.Len(t, steerer.calls(), 1)
+	reasons := openStuckReasons(t, svc)
+	assert.True(t, reasons[domain.StuckReasonSteerFailed])
+	assert.False(t, reasons[domain.StuckReasonRespawnBlockedActive])
+}
+
+func TestSteerActiveSessionForPRFix_should_NotWriteAndDegradeToRespawnBlocked_When_SessionNotReady_PinnedBaseline(t *testing.T) {
+	svc, steerer, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
+	itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
+	steerer.notReady = map[string]bool{activeSessionUUIDPrimary: true}
+
+	pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
+
+	assert.Empty(t, steerer.calls())
+	reasons := openStuckReasons(t, svc)
+	assert.True(t, reasons[domain.StuckReasonRespawnBlockedActive])
+	assert.False(t, reasons[domain.StuckReasonSteerFailed])
+}
