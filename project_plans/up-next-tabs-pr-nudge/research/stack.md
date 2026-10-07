@@ -6,7 +6,7 @@ All paths relative to `web-app/` unless noted. Confidence: VERIFIED = file opene
 - next 15.3.2, react/react-dom ^19, typescript ^5.9.3
 - @vanilla-extract/css ^1.20.1, @vanilla-extract/recipes ^0.5.7, @vanilla-extract/next-plugin ^2.5.1
 - jest ^30.2.0, @testing-library/react ^16.3.0, user-event ^14.5.2, jest-dom ^6.9.1
-- **No new dependencies needed.** No tabs library (Radix etc.) is installed; the repo hand-rolls tabs.
+- **No new dependencies needed.** Radix Tabs is already installed (`web-app/package.json:77`); the shell reuses it (see ADR-003). Older tab strips in the repo are hand-rolled.
 
 ## Next.js constraint that shapes the design
 `next.config.*` sets `output: "export"` and `trailingSlash: true` (VERIFIED). The app is a static export served by the Go binary: no server components reading `searchParams`, no middleware, no route handlers.
@@ -22,7 +22,7 @@ Hand-rolled `role="tablist"` / `role="tab"` / `aria-selected` exist in:
 - `src/components/window/WindowTabStrip.tsx:244,392-415` (best reference: roving tabindex, ArrowLeft/ArrowRight wraparound in `handleTabListKeyDown`; comment notes `role="tablist"` must contain ONLY `role="tab"` children for axe `aria-required-children`)
 - `src/components/pane/MobilePaneTabStrip.tsx:27-39`
 Axe Core blocks CI on WCAG AA, so the new strip should follow WAI-ARIA APG tabs: `tablist` > `tab` (`id`, `aria-selected`, `aria-controls`, `tabIndex` roving 0/-1), panels `role="tabpanel"` with `aria-labelledby`, Arrow/Home/End keys. Badge counts inside a tab should be part of the accessible name (e.g. `aria-label="PRs, 3 need attention"`) and tests/e2e should use `getByRole("tab", {name})` / `data-testid` (e2e convention: no CSS-class locators).
-Recommend extracting a small reusable `<TabStrip>` (generic over a tab-id union) rather than a fifth copy; keeps jscpd (0.12% threshold) happy.
+Recommend extracting a small reusable `<TabStrip>` (generic over a tab-id union) rather than a fifth copy; keeps jscpd (0.14% threshold) happy.
 
 ## State persistence (localStorage) precedent
 No shared `useLocalStorage`/`usePersistedState` hook exists (grep VERIFIED: none). Existing idioms are ad hoc raw calls:
