@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -367,34 +368,44 @@ func (s *UnfinishedWorkService) GetWorktreeAISummary(
 	}
 	defer func() { <-aiSemaphore }()
 
-	// Find claude CLI.
-	claudePath, err := exec.LookPath("claude")
-	if err != nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("claude CLI not found: %w", err))
-	}
+	const summaryPrompt = "Summarize these git changes in 2-4 sentences for a developer picking up where they left off."
 
-	// Run: git diff HEAD | claude -p "Summarize these git changes in 2-4 sentences."
 	subCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	gitCmd := safeexec.CommandContext(subCtx, "git", "-C", r.WorktreePath, "diff", "HEAD")
-	claudeCmd := safeexec.CommandContext(subCtx, claudePath, "-p",
-		"Summarize these git changes in 2-4 sentences for a developer picking up where they left off.")
-
 	gitOut, gitErr := gitCmd.Output()
 	if gitErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("git diff HEAD: %w", gitErr))
 	}
 
-	claudeCmd.Stdin = strings.NewReader(string(gitOut))
-	summaryOut, claudeErr := claudeCmd.Output()
-	if claudeErr != nil {
-		if subCtx.Err() != nil {
-			return nil, connect.NewError(connect.CodeDeadlineExceeded,
-				fmt.Errorf("AI summary timed out after 30s"))
+	var summaryOut []byte
+	if client := headless.DefaultClient(); client != nil {
+		out, callErr := client.CallBlocking(subCtx, headless.FeatureKeyUnfinishedWorkSummary, summaryPrompt, string(gitOut), headless.CallOptions{}, headless.DiscardCost)
+		if callErr != nil {
+			if subCtx.Err() != nil {
+				return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("AI summary timed out after 30s"))
+			}
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("AI summary: %w", callErr))
 		}
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("claude CLI error: %w", claudeErr))
+		summaryOut = []byte(out)
+	} else {
+		claudePath, err := exec.LookPath("claude")
+		if err != nil {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("claude CLI not found: %w", err))
+		}
+		claudeCmd := safeexec.CommandContext(subCtx, claudePath, "-p", summaryPrompt)
+		claudeCmd.Stdin = strings.NewReader(string(gitOut))
+		var claudeErr error
+		summaryOut, claudeErr = claudeCmd.Output()
+		if claudeErr != nil {
+			if subCtx.Err() != nil {
+				return nil, connect.NewError(connect.CodeDeadlineExceeded,
+					fmt.Errorf("AI summary timed out after 30s"))
+			}
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("claude CLI error: %w", claudeErr))
+		}
 	}
 
 	summary := strings.TrimSpace(string(summaryOut))

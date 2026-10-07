@@ -171,7 +171,7 @@ func TestUpdateCallbackConfig_TakesEffectOnDispatchWithoutRestart(t *testing.T) 
 
 	// Sanity: before any update, Dispatch has nowhere to send.
 	d.Dispatch("session_complete", map[string]any{"phase": "before"})
-	time.Sleep(50 * time.Millisecond)
+	require.Empty(t, d.inFlight, "no delivery slot may be reserved when no URL is configured")
 	require.Empty(t, rt.urls(), "no URL configured yet — nothing should be delivered")
 
 	_, err := c.UpdateCallbackConfig(context.Background(), connect.NewRequest(&sessionv1.UpdateCallbackConfigRequest{

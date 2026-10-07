@@ -704,7 +704,7 @@ func TestWorkspaceService_GetVCSStatus_CacheHit_ReturnsSameStatusAsOf(t *testing
 	// A short sleep so a wrongly-recomputed second call would produce a
 	// detectably different time.Now() value, not one that happens to match
 	// by coincidence.
-	time.Sleep(5 * time.Millisecond)
+	waitClockPast(t, entry1.cachedAt, 5*time.Millisecond)
 
 	resp2, err := fix.svc.GetVCSStatus(context.Background(), req)
 	require.NoError(t, err)

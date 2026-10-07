@@ -6,6 +6,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // staticSource is a test implementation of WorktreeSource that returns a fixed
@@ -69,6 +70,9 @@ func TestWorktreePRPoller_SkipsEmptyRepoPath(t *testing.T) {
 	poller.SetSource(src)
 	ctx := t.Context()
 	poller.Start(ctx)
-	time.Sleep(50 * time.Millisecond)
+	// The loop seeds from the source at start; one more scan-done pass being
+	// consumed proves the first pass finished. Stop then joins the loop.
+	src.done <- time.Now()
+	wait.RequireEventually(t, func() bool { return len(src.done) == 0 }, 5*time.Second, time.Millisecond)
 	poller.Stop()
 }

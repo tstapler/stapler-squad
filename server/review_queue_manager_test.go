@@ -42,7 +42,7 @@ func TestOnControllerStatusChange_NilContextBeforeStart_DoesNotPanic(t *testing.
 	// OnControllerStatusChange dispatches to a background goroutine; give it a moment to
 	// run so a reintroduced nil-pointer panic surfaces in this test rather than crashing
 	// the process asynchronously during an unrelated later test.
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond) //nolint:notimesleeptest negative check on a fire-and-forget goroutine with no completion signal or observable effect
 }
 
 // TestReactiveQueueManagerIntegration tests the full reactive queue workflow

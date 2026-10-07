@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // newBidiStreamTestServer creates a TLS+HTTP/2 httptest server. Connect's
@@ -92,17 +93,12 @@ func TestStreamTerminal_SendsRawOutput(t *testing.T) {
 	// Poll until the session has actually started a real tmux PTY, or skip if
 	// tmux is unavailable in this environment (mirrors
 	// TestCreateSession_StatusManagerWiredBeforeDriver's convention).
-	var started bool
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
-		if inst.Started() {
-			started = true
-			break
-		}
-		if session.Status(inst.GetStatus()) == session.Stopped {
-			t.Skip("tmux not available; skipping StreamTerminal raw-output assertion")
-		}
-		time.Sleep(100 * time.Millisecond)
+	_ = wait.WaitForCondition(func() bool {
+		return inst.Started() || session.Status(inst.GetStatus()) == session.Stopped
+	}, wait.WaitConfig{Timeout: 60 * time.Second, PollInterval: 100 * time.Millisecond, Description: "session started or stopped"})
+	started := inst.Started()
+	if !started && session.Status(inst.GetStatus()) == session.Stopped {
+		t.Skip("tmux not available; skipping StreamTerminal raw-output assertion")
 	}
 	require.True(t, started, "session never started within 60s")
 	if session.Status(inst.GetStatus()) == session.Stopped {

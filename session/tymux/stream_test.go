@@ -458,9 +458,9 @@ func TestReconnectLoop_DoesNotFire_OnDeliberateDetach(t *testing.T) {
 	sess, _, transport := startedSessionWithStream(t)
 
 	require.NoError(t, sess.DetachSafely())
-	time.Sleep(20 * time.Millisecond) // let any (incorrect) reconnect attempt start
-
-	assert.EqualValues(t, 1, transport.attachCalls, "DetachSafely must not trigger ReconnectLoop — no second Attach call")
+	// Watch for any (incorrect) reconnect attempt.
+	require.Never(t, func() bool { return atomic.LoadInt32(&transport.attachCalls) != 1 },
+		20*time.Millisecond, time.Millisecond, "DetachSafely must not trigger ReconnectLoop — no second Attach call")
 }
 
 func TestReconnectLoop_Fires_OnTransportErrorNotPrecededByDetach(t *testing.T) {
@@ -754,11 +754,12 @@ func TestReconnectLoop_OrdinaryDrop_DoesNotSetBackendRestarted(t *testing.T) {
 	wait.RequireEventually(t, func() bool {
 		return atomic.LoadInt32(&transport.attachCalls) >= 2
 	}, time.Second, time.Millisecond)
-	time.Sleep(50 * time.Millisecond)
 
 	concrete := sess.(*tymuxGRPCSession)
-	restarted, _ := concrete.BackendRestarted()
-	assert.False(t, restarted, "an ordinary transport blip must not be surfaced as a daemon restart")
+	require.Never(t, func() bool {
+		restarted, _ := concrete.BackendRestarted()
+		return restarted
+	}, 50*time.Millisecond, time.Millisecond, "an ordinary transport blip must not be surfaced as a daemon restart")
 }
 
 // --- Phase 2 (session-lifecycle-state-machine): classifyStreamEnd, lifecycle wiring ---

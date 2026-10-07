@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,16 +32,13 @@ import (
 
 // SessionCreator allows BacklogService to spawn sessions without importing handler internals.
 type SessionCreator interface {
-	// programOverride, when non-empty, replaces config.ResolveDefaults' resolved.Program
-	// as the spawned Instance's InstanceOptions.Program — set before session.NewInstance/
-	// instance.Start(true), never via a post-hoc SwitchProgram/Restart (see Epic 2.4's
-	// design note). Pass "" for callers unaffected by per-stage program overrides.
-	CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool, programOverride string) (*session.Instance, error)
+	// CreateDirectorySession creates a directory-type session at path. See
+	// SessionSpawnOptions.ProgramOverride's doc comment for how program overrides apply.
+	CreateDirectorySession(ctx context.Context, path string, opts SessionSpawnOptions) (*session.Instance, error)
 	// CreateWorktreeSession spawns a session inside an already-created git worktree at
 	// worktreePath. repoPath is the parent repo used for program resolution; worktreePath
-	// must already exist on disk before this is called. See programOverride's doc comment
-	// on CreateDirectorySession above.
-	CreateWorktreeSession(ctx context.Context, title, repoPath, worktreePath, prompt string, tags []string, oneShot bool, hidden bool, programOverride string) (*session.Instance, error)
+	// must already exist on disk before this is called.
+	CreateWorktreeSession(ctx context.Context, repoPath, worktreePath string, opts SessionSpawnOptions) (*session.Instance, error)
 }
 
 // AutonomousDriverStarter allows BacklogService to start an AutonomousDriver on an existing instance.
@@ -57,7 +55,10 @@ type SessionStopper interface {
 	// KillTmuxSessionByTitle kills a tmux session by its title, regardless of
 	// whether the Instance is still tracked in memory. Used to clear stale tmux
 	// sessions before re-triggering so the fresh session gets its --append-system-prompt.
-	KillTmuxSessionByTitle(ctx context.Context, title string) error
+	// allowedOwnerUUIDs are the Instance UUID(s) the caller trusts to be
+	// killed under this title -- see the implementation's doc comment
+	// (ce71ad1a: a name match alone isn't enough to prove ownership).
+	KillTmuxSessionByTitle(ctx context.Context, title string, allowedOwnerUUIDs ...string) error
 	// IsSessionLive returns true if the session UUID is currently tracked in the
 	// live in-memory poller. Used to distinguish genuinely-running sessions from
 	// sessions that exited but whose DB records were not closed (e.g. after a
@@ -128,12 +129,16 @@ type itemSourceBackend interface {
 
 // BacklogService handles Backlog RPCs.
 type BacklogService struct {
-	storage           *session.Storage
-	sourceBackend     itemSourceBackend
-	sessionCreator    SessionCreator
-	sessionStopper    SessionStopper
-	sessionSteerer    SessionSteerer
-	autonomousStarter AutonomousDriverStarter
+	storage        *session.Storage
+	sourceBackend  itemSourceBackend
+	sessionCreator SessionCreator
+	sessionStopper SessionStopper
+	sessionSteerer SessionSteerer
+	// verdictSteer* override the verdict-delivery readiness poll (zero = defaults); tests only.
+	verdictSteerPollInterval, verdictSteerReadyTimeout time.Duration
+	// verdictSteerLatest maps itemID -> latest verdict key (see dispatchVerdictSteer).
+	verdictSteerLatest sync.Map
+	autonomousStarter  AutonomousDriverStarter
 	// repoWatchRemover tells the unfinished-changes scanner to stop watching a
 	// worktree path once it's removed from disk (BUG-034). nil-safe — wired via
 	// SetRepoWatchRemover.
@@ -242,6 +247,9 @@ type BacklogService struct {
 	// Populated incrementally as dependencies.go wires each caller in, since
 	// GeminiCaller (Epic 3.1) is constructed after backlogSvc itself.
 	headlessCallers map[string]headless.PoolClient
+	// backendSelector, when set, routes stage programs and the default headless
+	// client through the live backend selection (nil in tests).
+	backendSelector *headless.Selector
 
 	// modelFamilies resolves a stage executor's "family:<alias>" Model value
 	// (e.g. "family:opus") to a concrete model ID via session.ResolveModel,
@@ -590,6 +598,17 @@ func (s *BacklogService) SetHeadlessPool(pool headless.PoolClient) {
 	s.headlessCallers["claude"] = pool
 }
 
+// SetBackendSelector routes the default headless client (empty stage program)
+// and every known backend name through sel, so per-feature settings and
+// capability/availability fallback apply. headlessCallers["claude"] keeps the
+// raw pool so a stage explicitly configured "claude" is never re-routed.
+func (s *BacklogService) SetBackendSelector(sel *headless.Selector) {
+	s.backendSelector = sel
+	if sel != nil {
+		s.headlessPool = &headless.SelectingClient{Selector: sel}
+	}
+}
+
 // SetGeminiCaller registers caller in headlessCallers under "gemini" so a
 // PipelineMode stage executor configured with program="gemini" resolves to it
 // (Epic 3.1/2.3). Takes the concrete *headless.GeminiCaller type rather than
@@ -627,8 +646,22 @@ type availabilityChecker interface {
 // entirely). itemID/stage are for the log line and are not otherwise
 // interpreted.
 func (s *BacklogService) resolveHeadlessCaller(program, itemID, stage string) (caller headless.PoolClient, configuredProgram, fallbackReason string) {
+	if program == "claude" {
+		if raw, ok := s.headlessCallers["claude"]; ok {
+			return raw, "", ""
+		}
+	}
 	if program == "" || program == "claude" {
 		return s.headlessPool, "", ""
+	}
+	if s.backendSelector != nil && slices.Contains(headless.KnownBackendNames(), program) {
+		_, res := s.backendSelector.Resolve(headless.FeatureKey(stage), program, headless.Caps{})
+		reason := res.FallbackReason
+		if reason != "" {
+			log.Warn("[PipelineEngine] headless program fell back", "program", program, "item", itemID, "stage", stage, "reason", reason)
+			return &headless.SelectingClient{Selector: s.backendSelector}, program, reason
+		}
+		return &headless.SelectingClient{Selector: s.backendSelector, StageProgram: program}, "", ""
 	}
 	found, ok := s.headlessCallers[program]
 	if !ok {

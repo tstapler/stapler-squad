@@ -765,7 +765,7 @@ func TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil(t *testing.T) {
 	var mu sync.Mutex
 	finished := false
 	svc.trackCleanup(func() {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond) //nolint:notimesleeptest simulated in-flight cleanup Shutdown must block on
 		mu.Lock()
 		finished = true
 		mu.Unlock()
@@ -822,7 +822,7 @@ func TestShutdown_WaitsForDeleteSessionCleanup_LiveInstancePresent(t *testing.T)
 	var mu sync.Mutex
 	finished := false
 	svc.trackCleanup(func() {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond) //nolint:notimesleeptest simulated in-flight cleanup Shutdown must block on
 		mu.Lock()
 		finished = true
 		mu.Unlock()
@@ -855,7 +855,7 @@ func TestShutdown_BlocksUntilTrackedCleanupCompletes(t *testing.T) {
 	var mu sync.Mutex
 	finished := false
 	svc.trackCleanup(func() {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond) //nolint:notimesleeptest simulated in-flight cleanup Shutdown must block on
 		mu.Lock()
 		finished = true
 		mu.Unlock()
@@ -885,7 +885,7 @@ func TestDestroyWithTimeout_ReturnsTimeoutError_When_WorkExceedsTimeout(t *testi
 	workDone := make(chan struct{})
 	start := time.Now()
 	err := destroyWithTimeout(func() error {
-		time.Sleep(workDuration)
+		time.Sleep(workDuration) //nolint:notimesleeptest simulated slow work whose wall-clock timeout handling is under test
 		close(workDone)
 		return nil
 	}, testTimeout)
@@ -921,7 +921,7 @@ func TestWaitForDestroyLoggingSlowCleanup_DoesNotAbandonWorkAfterTimeout(t *test
 	workDone := make(chan struct{})
 	start := time.Now()
 	err := waitForDestroyLoggingSlowCleanup(func() error {
-		time.Sleep(workDuration)
+		time.Sleep(workDuration) //nolint:notimesleeptest simulated slow work whose wall-clock timeout handling is under test
 		close(workDone)
 		return nil
 	}, testTimeout, func() {
@@ -2543,7 +2543,7 @@ func TestResumeHibernatedSession_DoesNotTouchOtherSessions(t *testing.T) {
 	// effect. Best-effort clean it up so repeated test runs don't leave orphaned tmux
 	// sessions, mirroring TestResumeCrashedSession_TransitionsCrashedToActive.
 	t.Cleanup(func() {
-		time.Sleep(100 * time.Millisecond)
+		_ = wait.WaitForCondition(hibernated.Started, wait.WaitConfig{Timeout: time.Second, PollInterval: 10 * time.Millisecond, Description: "relaunch goroutine to start tmux"})
 		_ = hibernated.KillSession()
 	})
 
@@ -2662,7 +2662,7 @@ func TestResumeCrashedSession_TransitionsCrashedToActive(t *testing.T) {
 	// test runs don't leave orphaned tmux sessions on the machine; the goroutine
 	// isn't awaited, so this is a short grace delay, not a guarantee.
 	t.Cleanup(func() {
-		time.Sleep(100 * time.Millisecond)
+		_ = wait.WaitForCondition(testInstance.Started, wait.WaitConfig{Timeout: time.Second, PollInterval: 10 * time.Millisecond, Description: "relaunch goroutine to start tmux"})
 		_ = testInstance.KillSession()
 	})
 
@@ -3293,7 +3293,7 @@ func TestCreateDirectorySession_HonorsSessionNameOverrideMap(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
 		[]byte(`{"default_program": "claude", "feature_flags": {"tymux": true}, "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
 
-	inst, err := svc.CreateDirectorySession(context.Background(), title, t.TempDir(), "", nil, true, false, "")
+	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), SessionSpawnOptions{Title: title, OneShot: true})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
@@ -3317,7 +3317,7 @@ func TestCreateWorktreeSession_HonorsSessionNameOverrideMap(t *testing.T) {
 	worktreePath := t.TempDir()
 	initGitRepoWithCommit(t, worktreePath)
 
-	inst, err := svc.CreateWorktreeSession(context.Background(), title, t.TempDir(), worktreePath, "", nil, true, false, "")
+	inst, err := svc.CreateWorktreeSession(context.Background(), t.TempDir(), worktreePath, SessionSpawnOptions{Title: title, OneShot: true})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
@@ -3342,7 +3342,9 @@ func TestCreateDirectorySession_should_SetProgramFromOverride_When_ProgramOverri
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	inst, err := svc.CreateDirectorySession(context.Background(), "program-override-directory-session", t.TempDir(), "do the thing", nil, true, false, "claude --model claude-sonnet-4-6")
+	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), SessionSpawnOptions{
+		Title: "program-override-directory-session", Prompt: "do the thing", OneShot: true, ProgramOverride: "claude --model claude-sonnet-4-6",
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
@@ -3363,7 +3365,9 @@ func TestCreateDirectorySession_should_UseResolvedProgram_When_ProgramOverrideEm
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"), []byte(`{"default_program": "claude"}`), 0o644))
 
-	inst, err := svc.CreateDirectorySession(context.Background(), "no-override-directory-session", t.TempDir(), "do the thing", nil, true, false, "")
+	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), SessionSpawnOptions{
+		Title: "no-override-directory-session", Prompt: "do the thing", OneShot: true,
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
@@ -3380,7 +3384,9 @@ func TestCreateWorktreeSession_should_SetProgramFromOverride_When_ProgramOverrid
 	worktreePath := t.TempDir()
 	initGitRepoWithCommit(t, worktreePath)
 
-	inst, err := svc.CreateWorktreeSession(context.Background(), "program-override-worktree-session", t.TempDir(), worktreePath, "do the thing", nil, true, false, "claude --model claude-sonnet-4-6")
+	inst, err := svc.CreateWorktreeSession(context.Background(), t.TempDir(), worktreePath, SessionSpawnOptions{
+		Title: "program-override-worktree-session", Prompt: "do the thing", OneShot: true, ProgramOverride: "claude --model claude-sonnet-4-6",
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
@@ -3872,7 +3878,7 @@ func TestWireRateLimitCallbacks_SuppressesNotification_When_InstanceHidden(t *te
 		defer cancel()
 		ch, _ := eventBus.Subscribe(subCtx)
 
-		svc.onRateLimitRecovery(inst, inst.UUID, true, "")
+		svc.onRateLimitRecoverySucceeded(inst, inst.UUID)
 
 		notifs := drainNotificationEvents(ch)
 		assert.Empty(t, notifs, "a Hidden instance must never receive a rate-limit-recovery notification")
@@ -3946,7 +3952,7 @@ func TestWireRateLimitCallbacks_StillPublishesSessionUpdated_When_InstanceHidden
 		defer cancel()
 		ch, _ := eventBus.Subscribe(subCtx)
 
-		svc.onRateLimitRecovery(inst, inst.UUID, true, "")
+		svc.onRateLimitRecoverySucceeded(inst, inst.UUID)
 
 		all := drainAllEvents(ch)
 		notifs := filterEventsByType(all, events.EventNotification)

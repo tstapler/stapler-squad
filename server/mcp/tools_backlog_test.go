@@ -304,7 +304,7 @@ func TestGetLinkedItem_should_ReturnMostRecentLink_When_NoItemIdProvided(t *test
 		ItemID: olderItem.ID, SessionUUID: callerUUID, SessionRole: session.SessionRoleWork,
 	})
 	require.NoError(t, err)
-	time.Sleep(2 * time.Millisecond) // ensure distinct created_at ordering
+	time.Sleep(2 * time.Millisecond) //nolint:notimesleeptest storage stamps created_at from the real clock with no injection point; ordering needs distinct timestamps
 	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
 		ItemID: newerItem.ID, SessionUUID: callerUUID, SessionRole: session.SessionRoleWork,
 	})
@@ -4938,6 +4938,65 @@ func TestReportDuplicate_StatusRoleOtherSessionsMatrix(t *testing.T) {
 	}
 }
 
+// An open link whose session is no longer live must not block closure; a live
+// one still must. Headless sessions have synthetic UUIDs and no tmux session,
+// so their liveness comes from the service's in-flight record, not liveCheck.
+func TestReportDuplicate_IgnoresOtherLinksWhoseSessionIsDead(t *testing.T) {
+	const ref = "https://github.com/tstapler/stapler-squad/pull/272"
+	tests := []struct {
+		name        string
+		uuidPrefix  string
+		tmuxLive    bool
+		wantArchive bool
+	}{
+		{"dead tmux session link is ignored", "", false, true},
+		{"live tmux session link still blocks", "", true, false},
+		{"headless triage not in flight is ignored", services.HeadlessTriageUUIDPrefix, false, true},
+		{"headless re-review always blocks", services.HeadlessReReviewUUIDPrefix, false, false},
+		{"jules link (non-tmux role) always blocks", "jules-", false, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			storage := newTestBacklogStorage(t)
+			ctx := context.Background()
+			item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "dup", Status: string(session.BacklogStatusReady)})
+			require.NoError(t, err)
+			otherUUID := tc.uuidPrefix + uuid.New().String()
+			role := session.SessionRoleTriage
+			if tc.uuidPrefix == "jules-" {
+				role = session.SessionRoleJulesWork
+			}
+			_, err = storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: otherUUID, SessionRole: role})
+			require.NoError(t, err)
+
+			// Zero-value service: no triage call is in flight for any item. The
+			// in-flight-still-blocks branch is IsTriageLive's own contract, tested in server/services.
+			svc := &services.BacklogService{}
+			handler := &backlogHandlers{
+				storage:         storage,
+				backlogSvc:      svc,
+				verifyGitHubRef: func(context.Context, *githubpkg.ParsedGitHubRef) error { return nil },
+				liveCheck:       func(sessionUUID string) bool { return tc.tmuxLive && sessionUUID == otherUUID },
+			}
+			result, err := handler.reportDuplicate(WithSessionUUID(ctx, uuid.New().String()), makeToolReq(map[string]interface{}{
+				"item_id": item.ID, "duplicate_ref": ref, "reason": "already shipped",
+			}))
+			require.NoError(t, err)
+			text, ok := result.Content[0].(mcpgo.TextContent)
+			require.True(t, ok)
+			assert.Equal(t, tc.wantArchive, strings.Contains(text.Text, "archived as a duplicate"))
+
+			fetched, err := storage.GetBacklogItem(ctx, item.ID)
+			require.NoError(t, err)
+			want := session.BacklogStatusReady
+			if tc.wantArchive {
+				want = session.BacklogStatusArchived
+			}
+			assert.Equal(t, string(want), fetched.Status)
+		})
+	}
+}
+
 // AC 7: done items are rejected with no mutation (archived-with-different-ref
 // is covered by TestReportDuplicate_RejectsDifferentRefAfterAlreadyResolved).
 func TestReportDuplicate_RejectsDoneItem(t *testing.T) {
@@ -5446,14 +5505,8 @@ func TestWaitForBacklogEvent_ReturnsImmediatelyWhenItemAlreadyArchived(t *testin
 // tests rule's "prefer a synchronization primitive" guidance.
 func waitSubscriberCount(t *testing.T, bus *events.EventBus, want int) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if bus.SubscriberCount() == want {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for SubscriberCount() == %d (got %d)", want, bus.SubscriberCount())
+	wait.RequireEventually(t, func() bool { return bus.SubscriberCount() == want },
+		3*time.Second, 5*time.Millisecond, "waiting for SubscriberCount() == %d", want)
 }
 
 func TestWaitForBacklogEvent_ReturnsMatchedEventOnLiveVerdict(t *testing.T) {

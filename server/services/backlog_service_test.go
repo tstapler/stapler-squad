@@ -214,10 +214,12 @@ type mockSessionCreator struct {
 
 // mockSessionStopper implements SessionStopper for tests.
 type mockSessionStopper struct {
-	liveUUIDs         map[string]bool
-	killedPaneUUIDs   []string
-	archivedUUIDs     []string
-	archiveErrForUUID map[string]error
+	liveUUIDs       map[string]bool
+	killedPaneUUIDs []string
+	// killByTitleAllowed records the allowedOwnerUUIDs of each KillTmuxSessionByTitle call.
+	killByTitleAllowed [][]string
+	archivedUUIDs      []string
+	archiveErrForUUID  map[string]error
 	// stoppedUUIDs records every UUID passed to StopSessionByUUID.
 	stoppedUUIDs []string
 	// stopperErr, if non-nil, is returned by StopSessionByUUID (default nil —
@@ -283,7 +285,8 @@ func (m *mockSessionStopper) StopSessionByUUID(_ context.Context, uuid string) e
 	return m.stopperErr
 }
 
-func (m *mockSessionStopper) KillTmuxSessionByTitle(_ context.Context, _ string) error {
+func (m *mockSessionStopper) KillTmuxSessionByTitle(_ context.Context, _ string, allowedOwnerUUIDs ...string) error {
+	m.killByTitleAllowed = append(m.killByTitleAllowed, allowedOwnerUUIDs)
 	return nil
 }
 
@@ -347,6 +350,8 @@ func (m *mockSessionSteerer) SessionProgram(uuid string) (string, bool) {
 // IsReadyForSteer implements SessionSteerer. Defaults to true (ready) unless
 // uuid is explicitly marked in notReady — see that field's doc comment.
 func (m *mockSessionSteerer) IsReadyForSteer(uuid string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return !m.notReady[uuid]
 }
 
@@ -406,7 +411,8 @@ type mockCreateCall struct {
 	programOverride string
 }
 
-func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, path, prompt string, tags []string, oneShot bool, _ bool, programOverride string) (*session.Instance, error) {
+func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, path string, opts SessionSpawnOptions) (*session.Instance, error) {
+	title, prompt, tags, oneShot, programOverride := opts.Title, opts.Prompt, opts.Tags, opts.OneShot, opts.ProgramOverride
 	_, contextErr := os.Stat(filepath.Join(path, ".backlog-context.md"))
 	_, slashErr := os.Stat(filepath.Join(path, ".claude", "commands", "backlog", "status.md"))
 	m.mu.Lock()
@@ -451,7 +457,8 @@ func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, pa
 
 // CreateWorktreeSession records the call to the same calls slice as CreateDirectorySession,
 // using worktreePath as the session path (that's where files are written before spawn).
-func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, title, _, worktreePath, prompt string, tags []string, oneShot bool, _ bool, programOverride string) (*session.Instance, error) {
+func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, _, worktreePath string, opts SessionSpawnOptions) (*session.Instance, error) {
+	title, prompt, tags, oneShot, programOverride := opts.Title, opts.Prompt, opts.Tags, opts.OneShot, opts.ProgramOverride
 	_, contextErr := os.Stat(filepath.Join(worktreePath, ".backlog-context.md"))
 	_, slashErr := os.Stat(filepath.Join(worktreePath, ".claude", "commands", "backlog", "status.md"))
 	m.mu.Lock()
@@ -1752,6 +1759,33 @@ func TestSpawnSessionFromItem_AutonomousBypassesPlanningGate(t *testing.T) {
 	}))
 	require.NoError(t, err, "autonomous spawn must succeed without plan approval")
 	require.Len(t, starter.calls, 1, "autonomous driver start hook must fire")
+}
+
+// TestSpawnSessionFromItem_TitleIncludesItemIDSuffix guards against ce71ad1a:
+// two different backlog items with the same repo and short title used to
+// produce the exact same tmux session name (no per-item uniquifying suffix),
+// so a stale pane from one item's earlier session could be silently
+// reattached to when spawning the other item's session. baseTitle now
+// mirrors SpawnReviewSession's "review:"+item.ID[:8] convention.
+func TestSpawnSessionFromItem_TitleIncludesItemIDSuffix(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "same short title")
+
+	_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
+		ItemId: itemID,
+	}))
+	require.NoError(t, err)
+	require.Len(t, creator.calls, 1)
+
+	require.Contains(t, creator.calls[0].title, itemID[:8],
+		"session title must include the item's ID prefix so two items with the same repo+short-title can't collide on the same tmux session name")
 }
 
 // TestSpawnSessionFromItem_Reopen_SetsBacklogCategory verifies that a
@@ -3778,11 +3812,11 @@ func TestItemSessionToProto_HandlesInvalidTriageResultJSON(t *testing.T) {
 // errSessionCreator always returns an error from CreateDirectorySession and CreateWorktreeSession.
 type errSessionCreator struct{ err error }
 
-func (e *errSessionCreator) CreateDirectorySession(_ context.Context, _, _, _ string, _ []string, _ bool, _ bool, _ string) (*session.Instance, error) {
+func (e *errSessionCreator) CreateDirectorySession(_ context.Context, _ string, _ SessionSpawnOptions) (*session.Instance, error) {
 	return nil, e.err
 }
 
-func (e *errSessionCreator) CreateWorktreeSession(_ context.Context, _, _, _, _ string, _ []string, _ bool, _ bool, _ string) (*session.Instance, error) {
+func (e *errSessionCreator) CreateWorktreeSession(_ context.Context, _, _ string, _ SessionSpawnOptions) (*session.Instance, error) {
 	return nil, e.err
 }
 
