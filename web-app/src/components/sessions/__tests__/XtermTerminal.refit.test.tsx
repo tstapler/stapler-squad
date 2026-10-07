@@ -286,6 +286,37 @@ describe("zero-size, restore, renderer and viewport handling", () => {
     expect(terminal.refresh).toHaveBeenCalledTimes(1);
   });
 
+  describe("visibilitychange", () => {
+    const setVisibility = (state: "visible" | "hidden") => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: state });
+      act(() => void document.dispatchEvent(new Event("visibilitychange")));
+    };
+    afterEach(() => {
+      delete (document as any).visibilityState;
+    });
+
+    it("visibilitychange_should_ClearAtlasAndRefresh_When_DocumentBecomesVisible", async () => {
+      const { terminal } = await mount();
+      setVisibility("visible");
+      expect(terminal.clearTextureAtlas).toHaveBeenCalledTimes(1);
+      expect(terminal.refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it("visibilitychange_should_NotRepaint_When_DocumentHidden", async () => {
+      const { terminal } = await mount();
+      setVisibility("hidden");
+      expect(terminal.clearTextureAtlas).not.toHaveBeenCalled();
+      expect(terminal.refresh).not.toHaveBeenCalled();
+    });
+
+    it("visibilitychange_should_NotRepaint_When_Unmounted", async () => {
+      const { terminal, unmount } = await mount();
+      unmount();
+      setVisibility("visible");
+      expect(terminal.clearTextureAtlas).not.toHaveBeenCalled();
+    });
+  });
+
   it("refit_should_LogViewportVsContainerMismatch_When_ContainerDoesNotTrackVisualViewport", async () => {
     const { ref } = await mount();
     Object.defineProperty(window, "visualViewport", {
