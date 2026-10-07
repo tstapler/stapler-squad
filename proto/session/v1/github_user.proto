@@ -55,6 +55,14 @@ service GitHubUserService {
   // the keychain on success — the same outcome as AddGitHubAccountWithToken
   // but without the user needing to locate/paste the token by hand.
   rpc AddGitHubAccountFromCLI(AddGitHubAccountFromCLIRequest) returns (AddGitHubAccountWithTokenResponse) {}
+
+  // NudgeSessionForPR asks one linked local session to fix what is currently
+  // wrong with a PR (failing checks, unresolved threads, merge conflict). The
+  // server re-fetches fresh PR state with the PR's owning account, builds the
+  // prompt (link, path and author only; never third-party comment bodies) and
+  // delivers it through the per-session guard. Outcomes are typed in
+  // NudgeOutcome; unsupported programs return FailedPrecondition.
+  rpc NudgeSessionForPR(NudgeSessionForPRRequest) returns (NudgeSessionForPRResponse) {}
 }
 
 // GitHubAccount is a single connected GitHub account.
@@ -184,4 +192,44 @@ message ListGitHubCLIHostsResponse {
 
 message AddGitHubAccountFromCLIRequest {
   string host = 1; // host to import, as returned by ListGitHubCLIHosts
+}
+
+// PRKey identifies one pull request. An empty host means github.com.
+message PRKey {
+  string host   = 1;
+  string owner  = 2;
+  string repo   = 3;
+  int32  number = 4;
+}
+
+// NudgeOutcome is the typed result of NudgeSessionForPR.
+enum NudgeOutcome {
+  NUDGE_OUTCOME_UNSPECIFIED        = 0;
+  NUDGE_OUTCOME_DELIVERED          = 1;
+  NUDGE_OUTCOME_BUSY               = 2;
+  NUDGE_OUTCOME_PAUSED             = 3;
+  NUDGE_OUTCOME_DUPLICATE          = 4;
+  NUDGE_OUTCOME_NOTHING_TO_FIX     = 5;
+  NUDGE_OUTCOME_SESSION_NOT_LINKED = 6;
+  NUDGE_OUTCOME_PR_NOT_FOUND       = 7;
+}
+
+// NudgeReason is one kind of problem a nudge prompt covers.
+enum NudgeReason {
+  NUDGE_REASON_UNSPECIFIED        = 0;
+  NUDGE_REASON_FAILING_CHECKS     = 1;
+  NUDGE_REASON_UNRESOLVED_THREADS = 2;
+  NUDGE_REASON_MERGE_CONFLICT     = 3;
+}
+
+message NudgeSessionForPRRequest {
+  PRKey  pr         = 1;
+  string session_id = 2; // title of a session linked to the PR
+}
+
+message NudgeSessionForPRResponse {
+  NudgeOutcome outcome = 1;
+  repeated NudgeReason reasons = 2; // what the delivered prompt covered
+  string session_id = 3;
+  string detail     = 4; // human-readable, sanitized; never a token
 }
