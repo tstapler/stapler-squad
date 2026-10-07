@@ -4953,6 +4953,7 @@ func TestReportDuplicate_IgnoresOtherLinksWhoseSessionIsDead(t *testing.T) {
 		{"live tmux session link still blocks", "", true, false},
 		{"headless triage not in flight is ignored", services.HeadlessTriageUUIDPrefix, false, true},
 		{"headless re-review always blocks", services.HeadlessReReviewUUIDPrefix, false, false},
+		{"jules link (non-tmux role) always blocks", "jules-", false, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -4961,7 +4962,11 @@ func TestReportDuplicate_IgnoresOtherLinksWhoseSessionIsDead(t *testing.T) {
 			item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "dup", Status: string(session.BacklogStatusReady)})
 			require.NoError(t, err)
 			otherUUID := tc.uuidPrefix + uuid.New().String()
-			_, err = storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: otherUUID, SessionRole: session.SessionRoleTriage})
+			role := session.SessionRoleTriage
+			if tc.uuidPrefix == "jules-" {
+				role = session.SessionRoleJulesWork
+			}
+			_, err = storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: otherUUID, SessionRole: role})
 			require.NoError(t, err)
 
 			// Zero-value service: no triage call is in flight for any item. The

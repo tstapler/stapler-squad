@@ -2465,11 +2465,12 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 	)), nil
 }
 
-// linkedSessionLive reports whether is still owns work on itemID. Headless
-// sessions have a synthetic UUID and no tmux session, so the tmux liveCheck
-// would call a running one dead: headless triage is checked against the
-// service's in-flight record, and headless re-review (no liveness signal) is
-// always treated as live. With no liveCheck/backlogSvc wired it fails closed.
+// linkedSessionLive reports whether is still owns work on itemID. Only roles
+// whose sessions are tmux-backed (work, review, diagnose) can be judged dead by
+// the tmux liveCheck. Headless triage has a synthetic UUID and no tmux session,
+// so it is checked against the service's in-flight record; headless re-review
+// has no liveness signal; and any other role (e.g. Jules, which runs remotely)
+// is treated as live. With no liveCheck/backlogSvc wired it fails closed.
 func (h *backlogHandlers) linkedSessionLive(itemID string, is session.ItemSessionSummary) bool {
 	switch {
 	case strings.HasPrefix(is.SessionUUID, services.HeadlessTriageUUIDPrefix):
@@ -2477,7 +2478,11 @@ func (h *backlogHandlers) linkedSessionLive(itemID string, is session.ItemSessio
 	case strings.HasPrefix(is.SessionUUID, services.HeadlessReReviewUUIDPrefix):
 		return true
 	}
-	return h.liveCheck == nil || h.liveCheck(is.SessionUUID)
+	switch is.Role {
+	case session.SessionRoleWork, session.SessionRoleReview, session.SessionRoleDiagnose, session.SessionRoleTriage:
+		return h.liveCheck == nil || h.liveCheck(is.SessionUUID)
+	}
+	return true
 }
 
 // verifyBacklogDuplicateTarget checks a "backlog:<uuid>" duplicate_ref names a
