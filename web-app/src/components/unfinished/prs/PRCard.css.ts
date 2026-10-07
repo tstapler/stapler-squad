@@ -1,5 +1,9 @@
 import { style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
+import { CHIP_TOKEN_PAIRS, type ChipTokenPair } from "@/lib/unfinished/prChipTokens";
+
+const NARROW = "screen and (max-width: 480px)";
+const INTERACTIVE_MIN = "44px";
 
 export const prCard = style({
   background: vars.color.cardBackground,
@@ -18,7 +22,9 @@ export const prCard = style({
 export const prHeader = style({
   display: "flex",
   alignItems: "flex-start",
+  flexWrap: "wrap",
   gap: vars.space["3"],
+  "@media": { [NARROW]: { flexDirection: "column" } },
 });
 
 export const prTitle = style({
@@ -66,6 +72,8 @@ export const chips = style({
   alignItems: "center",
   flexWrap: "wrap",
   marginLeft: "auto",
+  minWidth: 0,
+  "@media": { [NARROW]: { marginLeft: 0 } },
 });
 
 const chipBase = style({
@@ -79,32 +87,93 @@ const chipBase = style({
   whiteSpace: "nowrap",
 });
 
-export const chipDraft = style([
-  chipBase,
-  {
-    background: vars.color.surfaceSubtle,
-    color: vars.color.textMuted,
-    border: `1px solid ${vars.color.borderColor}`,
-  },
-]);
+const chipVariant = (pair: ChipTokenPair) =>
+  style([
+    chipBase,
+    {
+      background: vars.color[pair.bg],
+      color: vars.color[pair.fg],
+      border: `1px solid ${vars.color[pair.fg]}`,
+    },
+  ]);
 
-export const chipSuccess = style([
-  chipBase,
-  {
-    background: vars.color.successBg,
-    color: vars.color.success,
-    border: `1px solid ${vars.color.success}`,
-  },
-]);
+export const chipDraft = chipVariant(CHIP_TOKEN_PAIRS.draft);
+export const chipNeutral = chipVariant(CHIP_TOKEN_PAIRS.neutral);
+export const chipSuccess = chipVariant(CHIP_TOKEN_PAIRS.success);
+export const chipWarning = chipVariant(CHIP_TOKEN_PAIRS.warning);
+export const chipError = chipVariant(CHIP_TOKEN_PAIRS.error);
 
-export const chipError = style([
-  chipBase,
-  {
-    background: vars.color.errorBg,
-    color: vars.color.errorText,
-    border: `1px solid ${vars.color.error}`,
-  },
-]);
+/** Chip that is a button or link: needs a 44px target (WCAG 2.5.5) and may wrap. */
+export const chipInteractive = style({
+  minHeight: INTERACTIVE_MIN,
+  cursor: "pointer",
+  textDecoration: "none",
+  whiteSpace: "normal",
+  ":focus-visible": { outline: `2px solid ${vars.color.inputFocusBorder}`, outlineOffset: "2px" },
+});
+
+export const checkList = style({
+  listStyle: "none",
+  margin: 0,
+  padding: 0,
+  display: "flex",
+  flexDirection: "column",
+});
+
+export const checkLink = style({
+  display: "inline-flex",
+  alignItems: "center",
+  minHeight: INTERACTIVE_MIN,
+  minWidth: 0,
+  overflowWrap: "anywhere",
+  fontSize: vars.fontSize.xs,
+  color: vars.color.primary,
+});
+
+export const sessionList = style({
+  listStyle: "none",
+  margin: 0,
+  padding: 0,
+  display: "flex",
+  flexDirection: "column",
+});
+
+export const sessionRow = style({
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: vars.space["2"],
+  minHeight: INTERACTIVE_MIN,
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textSecondary,
+});
+
+export const sessionName = style({
+  fontFamily: vars.font.mono,
+  minWidth: 0,
+  overflowWrap: "anywhere",
+});
+
+export const sessionStatus = style({ color: vars.color.textSecondary });
+
+export const noSessionText = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textSecondary,
+});
+
+export const changesRequestedNote = style({
+  margin: 0,
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textSecondary,
+  overflowWrap: "break-word",
+});
+
+export const hostAccountLabel = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  minWidth: 0,
+  overflowWrap: "anywhere",
+});
 
 export const worktreeLink = style({
   fontFamily: vars.font.mono,
@@ -119,11 +188,14 @@ export const worktreeLink = style({
 export const prActions = style({
   display: "flex",
   alignItems: "center",
+  flexWrap: "wrap",
   gap: vars.space["2"],
   marginTop: vars.space["1"],
+  "@media": { [NARROW]: { flexDirection: "column", alignItems: "stretch" } },
 });
 
 export const openSessionButton = style({
+  minHeight: INTERACTIVE_MIN,
   padding: `${vars.space["1"]} ${vars.space["3"]}`,
   background: vars.color.accentBg,
   color: vars.color.inputFocusBorder,
@@ -142,6 +214,7 @@ export const openSessionButton = style({
 });
 
 export const createSessionButton = style({
+  minHeight: INTERACTIVE_MIN,
   padding: `${vars.space["1"]} ${vars.space["3"]}`,
   background: "transparent",
   color: vars.color.textSecondary,
