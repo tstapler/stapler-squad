@@ -6384,3 +6384,33 @@ func TestSpawnSessionFromItem_should_Refuse_When_RepeatedNoopDispatchRowOpen(t *
 	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
 	require.NoError(t, err)
 }
+
+// TestReReview_BlockedByInFlightListenerReservation verifies the headless
+// re-review paths honor the lifecycle listener's per-item review reservation.
+func TestReReview_BlockedByInFlightListenerReservation(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, &config.Config{}, nil, nil, nil)
+	guard := session.NewReviewSpawnGuard()
+	svc.SetReviewSpawnGuard(guard)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title: "in-flight review", RepoPath: repoPath, Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	release, ok := guard.TryReserve(item.ID, nil)
+	require.True(t, ok)
+	defer release()
+
+	_, reviewErr := svc.TriggerReReview(context.Background(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: item.ID}))
+	require.Error(t, reviewErr)
+	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(reviewErr))
+
+	require.NoError(t, svc.AutoRespawnReview(context.Background(), item.ID), "auto respawn skips quietly")
+	sessions, err := storage.ListItemSessions(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Empty(t, sessions, "no review row created while another spawn is in flight")
+}

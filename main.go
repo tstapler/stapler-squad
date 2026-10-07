@@ -219,6 +219,10 @@ var (
 				log.Close()
 			}()
 
+			if err := tmux.LogEnvSocket(); err != nil {
+				return err
+			}
+
 			// Keep the launchd/systemd-captured raw stdout/stderr log bounded
 			// even when the process runs for a long time between installs --
 			// scripts/install-service.sh's own rotation only fires at

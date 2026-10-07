@@ -274,31 +274,40 @@ func (l *BacklogLifecycleListener) TriggerReviewForSession(workSessionUUID strin
 	if l.getSessionCreator() == nil {
 		return
 	}
-	go func() {
-		select {
-		case l.reviewSem <- struct{}{}:
-		case <-l.shutdownCtx.Done():
-			return
-		}
-		defer func() { <-l.reviewSem }()
+	go l.triggerReviewForSession(workSessionUUID)
+}
 
-		ctx := l.shutdownCtx
-		is, err := l.storage.GetItemSessionBySessionUUID(ctx, workSessionUUID)
-		if err != nil {
-			log.ErrorLog().Printf("[BacklogLifecycle] TriggerReviewForSession GetItemSessionBySessionUUID(%s): %v", workSessionUUID, err)
-			return
-		}
-		item, err := l.storage.GetBacklogItem(ctx, is.BacklogItemID)
-		if err != nil {
-			log.ErrorLog().Printf("[BacklogLifecycle] TriggerReviewForSession GetBacklogItem session=%s item=%s: %v", workSessionUUID, is.BacklogItemID, err)
-			return
-		}
-		if item.SkipReviewGate {
-			return
-		}
-		log.InfoLog().Printf("[BacklogLifecycle] TriggerReviewForSession: spawning immediate review gate item=%s session=%s", item.ID, workSessionUUID)
-		l.spawnReviewGate(builtInReviewGateContext, item, is)
-	}()
+// triggerReviewForSession is TriggerReviewForSession's synchronous body.
+// No-ops unless the item is still in review; spawnReviewGate's reservation
+// then covers an already-open or in-flight reviewer.
+func (l *BacklogLifecycleListener) triggerReviewForSession(workSessionUUID string) {
+	select {
+	case l.reviewSem <- struct{}{}:
+	case <-l.shutdownCtx.Done():
+		return
+	}
+	defer func() { <-l.reviewSem }()
+
+	ctx := l.shutdownCtx
+	is, err := l.storage.GetItemSessionBySessionUUID(ctx, workSessionUUID)
+	if err != nil {
+		log.ErrorLog().Printf("[BacklogLifecycle] TriggerReviewForSession GetItemSessionBySessionUUID(%s): %v", workSessionUUID, err)
+		return
+	}
+	item, err := l.storage.GetBacklogItem(ctx, is.BacklogItemID)
+	if err != nil {
+		log.ErrorLog().Printf("[BacklogLifecycle] TriggerReviewForSession GetBacklogItem session=%s item=%s: %v", workSessionUUID, is.BacklogItemID, err)
+		return
+	}
+	if item.SkipReviewGate {
+		return
+	}
+	if BacklogStatus(item.Status) != BacklogStatusReview {
+		log.InfoLog().Printf("[BacklogLifecycle] TriggerReviewForSession: skipping item=%s status=%s (not in review)", item.ID, item.Status)
+		return
+	}
+	log.InfoLog().Printf("[BacklogLifecycle] TriggerReviewForSession: spawning immediate review gate item=%s session=%s", item.ID, workSessionUUID)
+	l.spawnReviewGate(builtInReviewGateContext, item, is)
 }
 
 // applyVerdictsToACs updates the acceptance criteria status fields on a backlog
@@ -364,7 +373,17 @@ func applyVerdictsToACs(ctx context.Context, storage *Storage, item *BacklogItem
 // transition this review is for (Epic 2.4, Story 2.4.3) — the built-in
 // review->pr_pending call site (onSessionExited, session/backlog_lifecycle.go)
 // always passes RequiresDiff: true, since it reviews a code change.
+//
+// Every automatic spawn path funnels through here, so this is where the
+// per-item check-then-reserve lives. The reservation is held until Run
+// returns, i.e. past the review ItemSession row being persisted.
 func (l *BacklogLifecycleListener) spawnReviewGate(gateContext GateContext, item *BacklogItemData, is ItemSessionSummary) {
+	release, ok := l.ReserveReview(l.shutdownCtx, item.ID)
+	if !ok {
+		log.InfoLog().Printf("[BacklogLifecycle] spawnReviewGate: skipping duplicate review spawn item=%s (reviewer already in flight or open)", item.ID)
+		return
+	}
+	defer release()
 	l.runner.Run(l.shutdownCtx, gateContext, item, is, l.pushAndCreatePR)
 }
 
@@ -799,4 +818,30 @@ func (l *BacklogLifecycleListener) reconcileRespawnBlockedActiveResolution(ctx c
 		}
 		l.resolveStuckLogged(ctx, er, row.ItemID, domain.StuckReasonRespawnBlockedActive, "reconcileRespawnBlockedActiveResolution")
 	}
+}
+
+// ReviewSpawnGuard exposes the process-wide guard so other packages' review
+// spawn paths (headless re-review) can honor the same in-flight reservation.
+func (l *BacklogLifecycleListener) ReviewSpawnGuard() *ReviewSpawnGuard {
+	return l.reviewGuard
+}
+
+// ReserveReview reserves itemID for one review spawn unless a reservation is
+// already held or the item has an open (EndedAt nil) review session. The
+// caller must defer the returned release. A storage error falls back to the
+// in-memory reservation alone rather than blocking review.
+func (l *BacklogLifecycleListener) ReserveReview(ctx context.Context, itemID string) (release func(), ok bool) {
+	return l.reviewGuard.TryReserve(itemID, func() bool {
+		sessions, err := l.storage.ListItemSessions(ctx, itemID)
+		if err != nil {
+			log.WarningLog().Printf("[BacklogLifecycle] ReserveReview ListItemSessions item=%s: %v", itemID, err)
+			return false
+		}
+		for _, s := range sessions {
+			if s.Role == SessionRoleReview && s.EndedAt == nil {
+				return true
+			}
+		}
+		return false
+	})
 }
