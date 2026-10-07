@@ -84,6 +84,146 @@ test.describe('Up Next tabs', () => {
     expect(results.passes.some((p) => p.id === 'color-contrast')).toBe(true);
   });
 
+  test('upNext_should_LeavePage_When_BackAfterThreeTabSwitches', async ({ page }) => {
+    const upNext = new UpNextPage(page);
+    await page.goto(`${BASE_URL}/`, { waitUntil: 'domcontentloaded' });
+    await upNext.goto();
+    await expect(upNext.tab('prs')).toHaveAttribute('aria-selected', 'true');
+
+    for (const id of ['stuck', 'worktrees', 'queue'] as const) {
+      await upNext.selectTab(id);
+      await expect(upNext.tab(id)).toHaveAttribute('aria-selected', 'true');
+    }
+
+    // Tab changes use router.replace, so Back skips them and leaves /unfinished.
+    await page.goBack({ waitUntil: 'domcontentloaded' });
+    await expect(page).not.toHaveURL(/\/unfinished/);
+  });
+
+  test('upNext_should_ShowConnectBannerAndHideBadge_When_NoGitHubToken', async ({ page }) => {
+    const consoleErrors: string[] = [];
+    page.on('pageerror', (err) => consoleErrors.push(err.message));
+
+    // The isolated e2e server registers no WebSocket bridge for WatchUserPRs, so the real stream
+    // fails with "WebSocket connection failed". Serve the no-token snapshot the server would send
+    // instead: UserPREvent{event_type:"snapshot", auth_state:{available:false}} in a Connect envelope.
+    await page.routeWebSocket(/WatchUserPRs/, (ws) => {
+      ws.onMessage(() => {
+        const payload = Buffer.concat([Buffer.from([0x0a, 0x08]), Buffer.from('snapshot'), Buffer.from([0x1a, 0x00])]);
+        const header = Buffer.alloc(5);
+        header.writeUInt32BE(payload.length, 1);
+        ws.send(Buffer.concat([header, payload]));
+      });
+    });
+
+    const upNext = new UpNextPage(page);
+    await upNext.goto('prs');
+
+    await expect(page.getByTestId('github-add-account-panel')).toBeVisible();
+    // No count means no badge, so the accessible name carries no "need attention" suffix.
+    await expect(upNext.tab('prs')).not.toHaveAccessibleName(/need attention/);
+    await expect(upNext.tab('prs').locator('span[aria-hidden="true"]')).toHaveCount(0);
+
+    await upNext.selectTab('worktrees');
+    await expect(upNext.tab('worktrees')).toHaveAttribute('aria-selected', 'true');
+    await upNext.selectTab('queue');
+    await expect(upNext.tab('queue')).toHaveAttribute('aria-selected', 'true');
+    expect(consoleErrors).toEqual([]);
+  });
+
+  test('upNext_should_ShowNotFoundNoticeAndShowAllAction_When_ItemMissing', async ({ page, request }) => {
+    await enableBacklogFeatureFlag(request);
+    await page.goto(`${BASE_URL}/unfinished?item=gone-1`, { waitUntil: 'domcontentloaded' });
+
+    await expect(page.getByRole('tab', { name: /Stuck/ })).toHaveAttribute('aria-selected', 'true');
+    const notice = page.getByRole('status').filter({ hasText: 'Item gone-1 was not found' });
+    await expect(notice).toBeVisible();
+
+    await notice.getByRole('button', { name: 'Show all stuck items' }).click();
+    await expect(page).not.toHaveURL(/[?&]item=/);
+    await expect(page).toHaveURL(/[?&]tab=stuck/);
+    await expect(notice).toHaveCount(0);
+    await expect(page.getByRole('tab', { name: /Stuck/ })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  test('upNext_should_RestoreQueueAndShowTabParam_When_ClickedThenReloaded', async ({ page }) => {
+    const upNext = new UpNextPage(page);
+    await upNext.goto();
+    await upNext.selectTab('queue');
+    await expect(page).toHaveURL(/tab=queue/);
+
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(upNext.tab('queue')).toHaveAttribute('aria-selected', 'true');
+    await expect(page).toHaveURL(/tab=queue/);
+  });
+
+  test('upNext_should_SelectStuckAndKeepStoredTab_When_ItemDeepLinkThenWorktreesClickedAndReloaded', async ({ page, request }) => {
+    await enableBacklogFeatureFlag(request);
+    const title = `fix: deep link keeps stored tab seed ${Date.now()}`;
+    const itemId = await seedStuckItem(request, {
+      itemId: 'e2e-deeplink-1',
+      title,
+      reason: 'rework_cap',
+      context: 'cap hit',
+    });
+
+    // Runs after resetStorage's script; the session flag keeps reloads from re-seeding.
+    await page.addInitScript(() => {
+      if (!sessionStorage.getItem('e2e-seeded-worktrees')) {
+        sessionStorage.setItem('e2e-seeded-worktrees', '1');
+        localStorage.setItem('up-next-tab', 'worktrees');
+        (window as unknown as { __prsSkeletonSeen: boolean }).__prsSkeletonSeen = false;
+      }
+      new MutationObserver((records) => {
+        for (const r of records) {
+          r.addedNodes.forEach((n) => {
+            if (n instanceof HTMLElement && (n.matches('[data-testid="prs-skeleton"]') || n.querySelector('[data-testid="prs-skeleton"]'))) {
+              (window as unknown as { __prsSkeletonSeen: boolean }).__prsSkeletonSeen = true;
+            }
+          });
+        }
+      }).observe(document, { childList: true, subtree: true });
+    });
+
+    const upNext = new UpNextPage(page);
+    await page.goto(`${BASE_URL}/unfinished?item=${itemId}`, { waitUntil: 'domcontentloaded' });
+
+    await expect(upNext.tab('stuck')).toHaveAttribute('aria-selected', 'true');
+    const card = page.locator(`[data-testid="stuck-item"][data-item-id="${itemId}"]`);
+    await expect(card).toHaveAttribute('aria-expanded', 'true');
+    expect(await page.evaluate(() => (window as unknown as { __prsSkeletonSeen: boolean }).__prsSkeletonSeen)).toBe(false);
+    expect(await page.evaluate(() => localStorage.getItem('up-next-tab'))).toBe('worktrees');
+
+    await upNext.selectTab('worktrees');
+    await expect(upNext.tab('worktrees')).toHaveAttribute('aria-selected', 'true');
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(upNext.tab('worktrees')).toHaveAttribute('aria-selected', 'true');
+  });
+
+  test('upNext_should_MoveFocusByArrowHomeEndAndSelectOnEnter_When_TabListFocused', async ({ page }) => {
+    const upNext = new UpNextPage(page);
+    await upNext.goto();
+    await expect(upNext.tab('prs')).toHaveAttribute('aria-selected', 'true');
+
+    await upNext.tab('prs').focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(upNext.tab('stuck')).toBeFocused();
+    await expect(upNext.tab('prs')).toHaveAttribute('aria-selected', 'true');
+
+    await page.keyboard.press('Enter');
+    await expect(upNext.tab('stuck')).toHaveAttribute('aria-selected', 'true');
+    await expect(page).toHaveURL(/[?&]tab=stuck/);
+    await expect(upNext.tab('stuck')).toBeFocused();
+
+    await page.keyboard.press('End');
+    await expect(upNext.tab('queue')).toBeFocused();
+    await expect(upNext.tab('stuck')).toHaveAttribute('aria-selected', 'true');
+
+    await page.keyboard.press('Home');
+    await expect(upNext.tab('prs')).toBeFocused();
+    await expect(upNext.tab('stuck')).toHaveAttribute('aria-selected', 'true');
+  });
+
   test.describe('narrow screen', () => {
     test.use({ viewport: { width: 320, height: 800 } });
 
