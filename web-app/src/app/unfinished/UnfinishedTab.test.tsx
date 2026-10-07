@@ -287,22 +287,41 @@ describe("UnfinishedTab", () => {
   });
 
   it("unfinishedTab_should_LeaveUnfinishedNavBadgeUntouched_When_TabBadgeDegraded", async () => {
+    mockWorktrees = [
+      { repoName: "r", repoPath: "/r", branch: "a", hasUncommitted: true, commitsAhead: 0, commitsBehind: 0 },
+      { repoName: "r", repoPath: "/r", branch: "b", hasUncommitted: true, commitsAhead: 0, commitsBehind: 0 },
+    ];
     streamPRs(makeAttentionPRs({ detailsLoaded: false, unresolvedThreadCount: undefined }));
-    render(<UnfinishedTab />);
-    await screen.findByRole("tab", { name: "PRs, 3 or more need attention" });
-    // Tab-level degradation never reaches the sidebar badge component.
     const { UnfinishedNavBadge } = jest.requireActual("@/components/unfinished/UnfinishedNavBadge");
-    expect(typeof UnfinishedNavBadge).toBe("function");
+    render(
+      <>
+        <UnfinishedNavBadge />
+        <UnfinishedTab />
+      </>
+    );
+    await screen.findByRole("tab", { name: "PRs, 3 or more need attention" });
+    // The sidebar badge keeps counting worktrees: no PR count, no "+" suffix leaks into it.
+    const navBadge = screen.getByTestId("unfinished-nav-badge");
+    expect(navBadge).toHaveTextContent(/^2$/);
+    expect(navBadge).toHaveAttribute("aria-label", "2 unfinished items");
   });
 
   it("unfinishedTab_should_ShowSkeletonAndAllowTabSwitch_When_PRsLoading", () => {
     // authState undefined means the WatchUserPRs stream has not delivered yet.
     mockWatchUserPRs.mockImplementation(() => (async function* () { await new Promise(() => {}); })());
-    render(<UnfinishedTab />);
-    expect(screen.getByText("Connecting to GitHub…")).toBeInTheDocument();
+    const { rerender } = render(<UnfinishedTab />);
+    // The shell is interactive while the PR stream is pending: all four tabs and the PRs panel render.
+    expect(screen.getAllByRole("tab")).toHaveLength(4);
+    expect(within(screen.getByTestId("up-next-panel-prs")).getByText("Connecting to GitHub…")).toBeInTheDocument();
     fireEvent.mouseDown(tab(/^Queue/));
     fireEvent.click(tab(/^Queue/));
     expect(mockReplace).toHaveBeenCalledWith("?tab=queue", { scroll: false });
+
+    // Once the URL follows, the Queue panel mounts and the pending PRs placeholder is gone.
+    mockUseSearchParams.mockReturnValue(new URLSearchParams("tab=queue"));
+    rerender(<UnfinishedTab />);
+    expect(screen.getByTestId("backlog-queue-section")).toBeInTheDocument();
+    expect(screen.queryByText("Connecting to GitHub…")).not.toBeInTheDocument();
   });
 
   it("unfinishedTab_should_EmitFirstPrCardOnce_When_PRsArrive", async () => {

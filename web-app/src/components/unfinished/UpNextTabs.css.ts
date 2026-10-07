@@ -26,8 +26,11 @@ export const tab = style({
   transition: vars.transition.fast,
   selectors: {
     "&:hover": { color: vars.color.textPrimary },
+    // textPrimary, not primary: primary on the page background is 3.58:1 in the default
+    // dark theme (caught by the scoped Axe run in tests/e2e/up-next-tabs.spec.ts).
     '&[aria-selected="true"]': {
-      color: vars.color.primary,
+      color: vars.color.textPrimary,
+      fontWeight: vars.fontWeight.semibold,
       borderBottomColor: vars.color.primary,
     },
     "&:focus-visible": {
