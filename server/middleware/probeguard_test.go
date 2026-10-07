@@ -165,3 +165,38 @@ func TestProbeGuard_should_NotReachService_When_WrongHostPostAgainstRealConnectH
 	assert.Equal(t, http.StatusOK, post("localhost:8543"))
 	assert.Equal(t, 1, svc.calls)
 }
+
+const testNudgePath = "/api" + sessionv1connect.GitHubUserServiceNudgeSessionForPRProcedure
+
+func TestProbeGuard_should_Reject403OnForeignOriginOrRebindHostAndGet405_When_NudgeProcedurePath(t *testing.T) {
+	reached := 0
+	guarded := ProbeGuardPaths([]string{testProbePath, testNudgePath}, ProbeGuardConfig{
+		LoopbackBound: func() bool { return true },
+	})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached++
+		w.WriteHeader(http.StatusOK)
+	}))
+	do := func(method, path, host, origin string) int {
+		r := httptest.NewRequest(method, path, strings.NewReader("{}"))
+		r.Host = host
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		w := httptest.NewRecorder()
+		guarded.ServeHTTP(w, r)
+		return w.Code
+	}
+
+	assert.Equal(t, http.StatusForbidden, do(http.MethodPost, testNudgePath, "localhost:8543", "https://evil.example"))
+	assert.Equal(t, http.StatusForbidden, do(http.MethodPost, testNudgePath, "rebind.example", ""))
+	assert.Equal(t, http.StatusMethodNotAllowed, do(http.MethodGet, testNudgePath, "localhost:8543", ""))
+	assert.Zero(t, reached, "handler must not run for any rejected request")
+
+	assert.Equal(t, http.StatusOK, do(http.MethodPost, testNudgePath, "localhost:8543", ""))
+	assert.Equal(t, http.StatusOK, do(http.MethodPost, testNudgePath, "127.0.0.1:8543", "http://localhost:8543"))
+	assert.Equal(t, http.StatusOK, do(http.MethodPost, testProbePath, "localhost:8543", ""), "ProbeProgram stays guarded by the same set")
+	assert.Equal(t, 3, reached)
+
+	other := "/api/session.v1.GitHubUserService/ListUserPRs"
+	assert.Equal(t, http.StatusOK, do(http.MethodGet, other, "evil.example", "https://evil.example"), "other paths are untouched")
+}
