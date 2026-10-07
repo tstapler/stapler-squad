@@ -155,7 +155,7 @@ func TestFetchPRNudgeDetail_should_RequestOnlyAuthorLoginUrlPathForThreadComment
 	// The decode target has no body-like field either.
 	var walk func(rt reflect.Type)
 	walk = func(rt reflect.Type) {
-		for rt.Kind() == reflect.Ptr || rt.Kind() == reflect.Slice {
+		for rt.Kind() == reflect.Pointer || rt.Kind() == reflect.Slice {
 			rt = rt.Elem()
 		}
 		if rt.Kind() != reflect.Struct {

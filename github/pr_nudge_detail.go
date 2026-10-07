@@ -16,10 +16,6 @@ import (
 // knows the token is limited) refuses the call; callers should retry later.
 var ErrRateLimited = errors.New("github: rate limited")
 
-// nudgeThreadPage is how many review threads one fetch reads. Threads beyond
-// it are reported through PRNudgeDetail.MoreThreadsUnseen.
-const nudgeThreadPage = 20
-
 // PRThreadRef is one unresolved review thread, reduced to what a nudge may
 // quote: who, where and a link. The comment body is never fetched.
 type PRThreadRef struct {
@@ -38,8 +34,8 @@ type PRNudgeDetail struct {
 	HeadRef           string
 	IsCrossRepository bool
 	FailingChecks     []FailingCheck // at most maxFailingChecks, CheckRuns first
-	UnresolvedThreads []PRThreadRef  // not resolved, not outdated; at most nudgeThreadPage
-	// MoreThreadsUnseen is true when GitHub holds more threads than were read,
+	UnresolvedThreads []PRThreadRef  // not resolved, not outdated; first page only (20 threads)
+	// MoreThreadsUnseen is true when GitHub holds more threads than the 20 read,
 	// so the unresolved list may be incomplete.
 	MoreThreadsUnseen bool
 	HasMergeConflict  *bool // nil = GitHub mergeable UNKNOWN

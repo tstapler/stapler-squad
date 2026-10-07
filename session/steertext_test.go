@@ -31,7 +31,7 @@ func TestSanitizeUntrusted_should_StripC0C1CSIAndOSCAndCollapseNewlines_When_Tab
 		{"newline run collapses", "a\n\n\r\n\nb", "a b"},
 		{"tab and unicode line seps", "a\tb c d", "a b c d"},
 		{"leading and trailing whitespace", "\n  x  \r\n", "x"},
-		{"bidi override", "a‮b", "ab"},
+		{"bidi override", "a\u202eb", "ab"},
 		{"invalid utf8", "a\xff\x9bb", "ab"},
 		{"multibyte kept", "héllo 世界 🙂", "héllo 世界 🙂"},
 		{"empty", "", ""},
