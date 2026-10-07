@@ -197,6 +197,8 @@ type BacklogLifecycleListener struct {
 
 	// reviewSem limits concurrent review gate goroutines.
 	reviewSem chan struct{}
+	// reviewGuard keeps at most one review spawn per item in flight (see ReviewSpawnGuard).
+	reviewGuard *ReviewSpawnGuard
 
 	// customCheckSem limits concurrent custom-gate-check goroutines
 	// (runCustomGateCheck, session/backlog_lifecycle_gates.go), same pattern
@@ -755,6 +757,7 @@ func newListenerBase(storage *Storage, pipelineEngine PipelineEngine, livenessEn
 		pipelineEngine:          pipelineEngine,
 		livenessEngine:          livenessEngine,
 		reviewSem:               make(chan struct{}, maxConcurrentReviewGates),
+		reviewGuard:             NewReviewSpawnGuard(),
 		customCheckSem:          make(chan struct{}, maxConcurrentCustomGateChecks),
 		shutdownCtx:             ctx,
 		shutdownCancel:          cancel,
