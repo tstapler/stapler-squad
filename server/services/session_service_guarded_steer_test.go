@@ -170,3 +170,33 @@ func TestSteerSessionGuarded_should_ReturnNotTrackedWithoutWrite_When_FindLiveIn
 	assert.Equal(t, SteerNotTracked, out)
 	assert.Zero(t, rec.writes)
 }
+
+func TestSteerInstanceGuarded_should_ReleaseClaim_When_WritePanics(t *testing.T) {
+	svc, inst, _, _ := newGuardedSteerFixture(t, notReadyNone)
+	svc.guardedSteer.write = func(context.Context, *session.Instance, string) error { panic("boom") }
+
+	require.Panics(t, func() {
+		_, _ = svc.SteerInstanceGuarded(context.Background(), inst, "sigA", "msg")
+	})
+
+	svc.guardedSteer.write = func(context.Context, *session.Instance, string) error { return nil }
+	out, err := svc.SteerInstanceGuarded(context.Background(), inst, "sigB", "msg")
+	require.NoError(t, err)
+	assert.Equal(t, SteerDelivered, out, "a panic must not leave the session GuardBusy")
+}
+
+func TestSteerOutcome_should_NotBeDelivered_When_ZeroValue(t *testing.T) {
+	var o SteerOutcome
+	assert.Equal(t, SteerUnspecified, o)
+	assert.NotEqual(t, SteerDelivered, o)
+}
+
+func TestSteerOutcome_String_should_NameEveryOutcome(t *testing.T) {
+	for o, want := range map[SteerOutcome]string{
+		SteerUnspecified: "unspecified", SteerDelivered: "delivered", SteerGuardBusy: "guard_busy",
+		SteerDuplicate: "duplicate", SteerBusy: "busy", SteerNoStatusSource: "no_status_source",
+		SteerNotTracked: "not_tracked", SteerFailed: "failed", SteerOutcome(99): "SteerOutcome(99)",
+	} {
+		assert.Equal(t, want, o.String())
+	}
+}

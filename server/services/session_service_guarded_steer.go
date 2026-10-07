@@ -28,7 +28,9 @@ const (
 type SteerOutcome int
 
 const (
-	SteerDelivered SteerOutcome = iota
+	// SteerUnspecified is the zero value so an unset outcome never reads as delivered.
+	SteerUnspecified SteerOutcome = iota
+	SteerDelivered
 	// SteerGuardBusy: another delivery to the session is in flight.
 	SteerGuardBusy
 	// SteerDuplicate: the same reason signature was delivered or failed moments ago.
@@ -42,6 +44,29 @@ const (
 	// SteerFailed: the write or the pre-write pane-ownership check failed; see the error.
 	SteerFailed
 )
+
+func (o SteerOutcome) String() string {
+	switch o {
+	case SteerUnspecified:
+		return "unspecified"
+	case SteerDelivered:
+		return "delivered"
+	case SteerGuardBusy:
+		return "guard_busy"
+	case SteerDuplicate:
+		return "duplicate"
+	case SteerBusy:
+		return "busy"
+	case SteerNoStatusSource:
+		return "no_status_source"
+	case SteerNotTracked:
+		return "not_tracked"
+	case SteerFailed:
+		return "failed"
+	default:
+		return fmt.Sprintf("SteerOutcome(%d)", int(o))
+	}
+}
 
 // guardedSteerState is SessionService's single field for guarded steering.
 // The nil hooks are production behavior; tests inject fakes and a clock.
@@ -95,13 +120,25 @@ func (s *SessionService) SteerInstanceGuarded(ctx context.Context, inst *session
 	case GuardDuplicate:
 		return SteerDuplicate, nil
 	}
+	// A panic in ready/verify/write must not leave the session GuardBusy
+	// forever. release is once-guarded, so this is a no-op after a normal
+	// release; the not-ready paths abandon instead and set abandoned so no
+	// failure cooldown is recorded for a claim that never reached the PTY.
+	abandoned := false
+	defer func() {
+		if !abandoned {
+			release(false)
+		}
+	}()
 
 	switch s.instanceReadyForSteer(inst) {
 	case notReadyNoStatusSource:
 		s.guardedSteer.guard.abandon(id)
+		abandoned = true
 		return SteerNoStatusSource, nil
 	case notReadyBusy:
 		s.guardedSteer.guard.abandon(id)
+		abandoned = true
 		return SteerBusy, nil
 	}
 

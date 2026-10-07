@@ -8,6 +8,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -316,12 +317,17 @@ func (s *BacklogService) steerActiveSessionForPRFix(ctx context.Context, itemID,
 	switch outcome {
 	case SteerGuardBusy, SteerDuplicate:
 		// A manual nudge is in flight or just landed; not a failure, retry next tick.
-		log.InfoLog().Printf("[AutoReopenForPRFix] steer for item=%s skipped by nudge guard (outcome=%d); retrying next tick", itemID, outcome)
+		log.InfoLog().Printf("[AutoReopenForPRFix] steer for item=%s skipped by nudge guard (outcome=%s); retrying next tick", itemID, outcome)
 		return
 	case SteerBusy, SteerNoStatusSource, SteerNotTracked:
 		// Session stopped being safely writable after the IsReadyForSteer check above.
 		s.degradeToRespawnBlocked(ctx, itemID, itemTitle, currentStatus, activeSessionUUID)
 		return
+	case SteerUnspecified:
+		// An unset outcome must never read as delivered.
+		if deliverErr == nil {
+			deliverErr = errors.New("guarded steer returned an unspecified outcome")
+		}
 	}
 	s.steerDedup.Store(itemID, nextLastSteerReason(last, candidate, activeSessionUUID, deliverErr == nil))
 	s.notifyActiveSessionSteered(ctx, itemID, itemTitle, currentStatus, activeSessionUUID, message, program, candidate, deliverErr)

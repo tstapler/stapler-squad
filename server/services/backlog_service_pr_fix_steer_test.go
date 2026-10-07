@@ -722,7 +722,7 @@ func (g *guardBackedSteerer) SteerSessionGuarded(ctx context.Context, uuid, sig,
 	case GuardDuplicate:
 		return SteerDuplicate, nil
 	}
-	err := g.SteerActiveSession(ctx, uuid, message)
+	err := g.recordSteer(ctx, uuid, message)
 	release(err == nil)
 	if err != nil {
 		return SteerFailed, err

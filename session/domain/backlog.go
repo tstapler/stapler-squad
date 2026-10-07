@@ -205,7 +205,7 @@ const (
 	StuckReasonBounceCapExhausted StuckReason = "bounce_cap_exhausted"
 	// StuckReasonSteerFailed: AutoReopenForPRFix attempted to steer an
 	// already-active session with a PR-fix problem description
-	// (SessionSteerer.SteerActiveSession) and the delivery itself failed —
+	// (SessionSteerer.SteerSessionGuarded) and the delivery itself failed —
 	// distinct from StuckReasonRespawnBlockedActive, which covers the
 	// degrade paths where a steer was never attempted at all (nil-safe
 	// SessionSteerer, session not live, or dedup/debounce suppression). See

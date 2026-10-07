@@ -262,7 +262,7 @@ func newNudgeFixture(t *testing.T) *nudgeFixture {
 	t.Helper()
 	inst := &session.Instance{Title: "fix-ci", UUID: "uuid-fix-ci", Program: "claude"}
 	f := &nudgeFixture{
-		nudger:  &fakeNudger{insts: []*session.Instance{inst}},
+		nudger:  &fakeNudger{insts: []*session.Instance{inst}, outcome: SteerDelivered},
 		fetcher: &fakeFetcher{detail: failingLintDetail(t, "github.com", "acme", "api", 42)},
 		prs: &fakePRs{
 			prs: []githubpkg.UserPR{linkedPR("github.com", "acme", "api", 42, "alice",
@@ -601,7 +601,21 @@ func TestNudgeSessionForPR_should_ReturnInternalWithoutDelivered_When_WriteFails
 
 	requireCode(t, err, connect.CodeInternal)
 	assert.NotContains(t, err.Error(), "tmux write failed", "internal errors are not echoed to the client")
+	logged := f.logs.byMsg("nudge_steer_failed")
+	require.Len(t, logged, 1)
+	assert.Equal(t, "tmux write failed", logged[0].fields["err"], "the underlying error is logged server-side")
 	assert.Empty(t, f.prs.recorded)
+}
+
+func TestNudgeSessionForPR_should_ReturnInternalAndLogErr_When_OutcomeUnspecified(t *testing.T) {
+	f := newNudgeFixture(t)
+	f.nudger.outcome = SteerUnspecified
+
+	_, err := f.call("fix-ci")
+
+	requireCode(t, err, connect.CodeInternal)
+	assert.Empty(t, f.prs.recorded, "an unspecified outcome is not a delivery")
+	require.Len(t, f.logs.byMsg("nudge_steer_unexpected"), 1)
 }
 
 func TestNudgeSessionForPR_should_ReturnPRNotFoundOrResourceExhausted_When_FetcherNotFoundOrErrRateLimited(t *testing.T) {
@@ -611,12 +625,12 @@ func TestNudgeSessionForPR_should_ReturnPRNotFoundOrResourceExhausted_When_Fetch
 	require.NoError(t, err)
 	assert.Equal(t, sessionv1.NudgeOutcome_NUDGE_OUTCOME_PR_NOT_FOUND, resp.Outcome)
 
-	resume := time.Date(2026, 1, 1, 13, 45, 0, 0, time.Local)
+	resume := time.Date(2026, 1, 1, 13, 45, 0, 0, time.UTC)
 	f.svc.nudge.rateLimitResume = func() (bool, time.Time) { return true, resume }
 	f.fetcher.err = fmt.Errorf("wrapped: %w", githubpkg.ErrRateLimited)
 	_, err = f.call("fix-ci")
 	requireCode(t, err, connect.CodeResourceExhausted)
-	assert.Contains(t, err.Error(), "13:45")
+	assert.Contains(t, err.Error(), "2026-01-01T13:45:00Z")
 	assert.Zero(t, f.nudger.steerCount())
 }
 

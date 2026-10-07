@@ -108,6 +108,15 @@ func (s *GitHubUserService) nudgeLogf(msg string, args ...any) {
 	log.Info(msg, args...)
 }
 
+// nudgeWarnf is nudgeLogf at warn level; tests capture both through nudge.logf.
+func (s *GitHubUserService) nudgeWarnf(msg string, args ...any) {
+	if s.nudge.logf != nil {
+		s.nudge.logf(msg, args...)
+		return
+	}
+	log.Warn(msg, args...)
+}
+
 func (s *GitHubUserService) tokenResolver() PRTokenResolver {
 	if s.nudge.tokens != nil {
 		return s.nudge.tokens
@@ -309,12 +318,15 @@ func (s *GitHubUserService) freshPrompt(ctx context.Context, call *nudgeCall) (p
 func (s *GitHubUserService) fetchFailure(fetchCtx context.Context, call *nudgeCall, err error) (*sessionv1.NudgeSessionForPRResponse, error) {
 	switch {
 	case errors.Is(err, githubpkg.ErrRateLimited):
+		s.nudgeWarnf("nudge_fetch_failed", "pr", call.pr, "session_id", call.sessionID, "kind", "rate_limited", "err", err.Error())
 		return nil, connect.NewError(connect.CodeResourceExhausted, errors.New(s.rateLimitMessage()))
 	case errors.Is(err, githubpkg.ErrGitHubRefNotFound):
 		return nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_PR_NOT_FOUND, nil, call.sessionID, nudgePRNotFoundDetail), nil
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(context.Cause(fetchCtx), context.DeadlineExceeded):
+		s.nudgeWarnf("nudge_fetch_failed", "pr", call.pr, "session_id", call.sessionID, "kind", "timeout", "err", err.Error())
 		return nil, connect.NewError(connect.CodeDeadlineExceeded, errors.New("GitHub did not answer in time; try again"))
 	default:
+		s.nudgeWarnf("nudge_fetch_failed", "pr", call.pr, "session_id", call.sessionID, "kind", "other", "err", err.Error())
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("could not read the PR from GitHub; try again"))
 	}
 }
@@ -325,7 +337,7 @@ func (s *GitHubUserService) rateLimitMessage() string {
 		resume = githubpkg.DefaultRateLimiter.IsLimited
 	}
 	if limited, at := resume(); limited && !at.IsZero() {
-		return "GitHub rate limited until " + at.Local().Format("15:04")
+		return "GitHub rate limited until " + at.UTC().Format(time.RFC3339)
 	}
 	return nudgeRateLimitedFallback
 }
@@ -350,12 +362,14 @@ func (s *GitHubUserService) deliver(ctx context.Context, call *nudgeCall, inst *
 	case SteerNotTracked:
 		return nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_PAUSED, reasons, call.sessionID, nudgeNotTrackedDetail), nil
 	case SteerFailed:
+		s.nudgeWarnf("nudge_steer_failed", "pr", call.pr, "session_id", call.sessionID, "err", fmt.Sprint(err))
 		if errors.Is(err, ErrSteerPaneOwnership) {
 			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("the session's terminal could not be verified, so nothing was sent"))
 		}
 		return nil, connect.NewError(connect.CodeInternal, errors.New("could not deliver the request to the session"))
-	default:
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("unexpected steer outcome %d", outcome))
+	default: // includes SteerUnspecified: never treated as delivered
+		s.nudgeWarnf("nudge_steer_unexpected", "pr", call.pr, "session_id", call.sessionID, "outcome", outcome.String(), "err", fmt.Sprint(err))
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("unexpected steer outcome %s", outcome))
 	}
 }
 

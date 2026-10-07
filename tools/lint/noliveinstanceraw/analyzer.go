@@ -21,7 +21,7 @@
 // This analyzer deliberately watches a named list of methods
 // (monitoredFuncNames) rather than banning the `FindLiveInstance(...) == /
 // != nil` idiom everywhere in server/services: most of FindLiveInstance's
-// callers (SteerActiveSession, ArchiveSessionByUUID, SessionProgram,
+// callers (SteerSessionGuarded, ArchiveSessionByUUID, SessionProgram,
 // IsReadyForSteer, TimeSinceLastMeaningfulOutput, IsRetryPending)
 // legitimately need "is there an operable in-memory instance to act on right
 // now" — a different question findConfirmedLiveInstance's shadow-instance
