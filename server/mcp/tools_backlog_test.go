@@ -4939,16 +4939,20 @@ func TestReportDuplicate_StatusRoleOtherSessionsMatrix(t *testing.T) {
 }
 
 // An open link whose session is no longer live must not block closure; a live
-// one still must (liveCheck is the same seam link_session_to_item uses).
+// one still must. Headless sessions have synthetic UUIDs and no tmux session,
+// so their liveness comes from the service's in-flight record, not liveCheck.
 func TestReportDuplicate_IgnoresOtherLinksWhoseSessionIsDead(t *testing.T) {
 	const ref = "https://github.com/tstapler/stapler-squad/pull/272"
 	tests := []struct {
 		name        string
-		live        bool
+		uuidPrefix  string
+		tmuxLive    bool
 		wantArchive bool
 	}{
-		{"dead session link is ignored", false, true},
-		{"live session link still blocks", true, false},
+		{"dead tmux session link is ignored", "", false, true},
+		{"live tmux session link still blocks", "", true, false},
+		{"headless triage not in flight is ignored", services.HeadlessTriageUUIDPrefix, false, true},
+		{"headless re-review always blocks", services.HeadlessReReviewUUIDPrefix, false, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -4956,14 +4960,18 @@ func TestReportDuplicate_IgnoresOtherLinksWhoseSessionIsDead(t *testing.T) {
 			ctx := context.Background()
 			item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "dup", Status: string(session.BacklogStatusReady)})
 			require.NoError(t, err)
-			otherUUID := uuid.New().String()
+			otherUUID := tc.uuidPrefix + uuid.New().String()
 			_, err = storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: otherUUID, SessionRole: session.SessionRoleTriage})
 			require.NoError(t, err)
 
+			// Zero-value service: no triage call is in flight for any item. The
+			// in-flight-still-blocks branch is IsTriageLive's own contract, tested in server/services.
+			svc := &services.BacklogService{}
 			handler := &backlogHandlers{
 				storage:         storage,
+				backlogSvc:      svc,
 				verifyGitHubRef: func(context.Context, *githubpkg.ParsedGitHubRef) error { return nil },
-				liveCheck:       func(sessionUUID string) bool { return tc.live && sessionUUID == otherUUID },
+				liveCheck:       func(sessionUUID string) bool { return tc.tmuxLive && sessionUUID == otherUUID },
 			}
 			result, err := handler.reportDuplicate(WithSessionUUID(ctx, uuid.New().String()), makeToolReq(map[string]interface{}{
 				"item_id": item.ID, "duplicate_ref": ref, "reason": "already shipped",
