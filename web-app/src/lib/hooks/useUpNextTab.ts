@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import {
   readStoredTab,
   tabFromUrl,
@@ -24,11 +24,13 @@ export interface UseUpNextTab {
  * Only user clicks write storage; deep links never do.
  */
 export function useUpNextTab(now: () => number = () => performance.now()): UseUpNextTab {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const urlTab = tabFromUrl({ item: searchParams.get("item"), tab: searchParams.get("tab") });
   const [storedTab, setStoredTab] = useState<UpNextTab | null>(null);
-  const tab = urlTab ?? storedTab ?? "prs";
+  // A click wins over the URL until the URL itself changes: history.replaceState does not always
+  // re-render useSearchParams on the static export.
+  const [clickedTab, setClickedTab] = useState<UpNextTab | null>(null);
+  const tab = clickedTab ?? urlTab ?? storedTab ?? "prs";
 
   const tabRef = useRef(tab);
   tabRef.current = tab;
@@ -44,6 +46,8 @@ export function useUpNextTab(now: () => number = () => performance.now()): UseUp
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => setClickedTab(null), [urlTab]);
+
   const setTab = useCallback(
     (next: UpNextTab) => {
       emitTabEvent({
@@ -56,12 +60,15 @@ export function useUpNextTab(now: () => number = () => performance.now()): UseUp
       clickedRef.current = true;
       writeStoredTab(next);
       setStoredTab(next);
+      setClickedTab(next);
       const params = new URLSearchParams(searchParams.toString());
       params.delete("item");
       params.set("tab", next);
-      router.replace(`?${params.toString()}`, { scroll: false });
+      // history.replaceState (Next 15 syncs useSearchParams) instead of router.replace: on the static
+      // export router.replace hard-reloads the document, which drops keyboard focus and all state.
+      window.history.replaceState(window.history.state, "", `?${params.toString()}`);
     },
-    [router, searchParams, now],
+    [searchParams, now],
   );
 
   return { tab, setTab };

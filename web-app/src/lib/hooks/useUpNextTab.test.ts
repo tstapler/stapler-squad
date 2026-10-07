@@ -1,14 +1,13 @@
 import { act, renderHook } from "@testing-library/react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useUpNextTab } from "./useUpNextTab";
 import { UP_NEXT_TAB_STORAGE_KEY } from "@/lib/unfinished/upNextTab";
 
 jest.mock("next/navigation", () => ({
-  useRouter: jest.fn(),
   useSearchParams: jest.fn(),
 }));
 
-const replace = jest.fn();
+const replace = jest.spyOn(window.history, "replaceState").mockImplementation(() => {});
 const setParams = (qs: string) => (useSearchParams as jest.Mock).mockReturnValue(new URLSearchParams(qs));
 const fixedNow = () => 1000;
 
@@ -26,7 +25,6 @@ function renderRecorded() {
 beforeEach(() => {
   window.localStorage.clear();
   replace.mockClear();
-  (useRouter as jest.Mock).mockReturnValue({ replace });
   setParams("");
 });
 
@@ -51,7 +49,7 @@ describe("useUpNextTab", () => {
     const { result } = renderHook(() => useUpNextTab(fixedNow));
     act(() => result.current.setTab("queue"));
     expect(window.localStorage.getItem(UP_NEXT_TAB_STORAGE_KEY)).toBe("queue");
-    expect(replace).toHaveBeenCalledWith("?foo=1&tab=queue", { scroll: false });
+    expect(replace).toHaveBeenCalledWith(window.history.state, "", "?foo=1&tab=queue");
   });
 
   it("useUpNextTab_should_NotWriteStorage_When_ResolvedFromItemDeepLink", () => {

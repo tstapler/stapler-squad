@@ -4,6 +4,7 @@ import { makeAttentionPRs, makePR } from "./testFixtures";
 
 const mockUseSearchParams = jest.fn();
 const mockReplace = jest.fn();
+const mockHistoryReplace = jest.spyOn(window.history, "replaceState").mockImplementation(() => {});
 
 jest.mock("next/navigation", () => ({
   useSearchParams: () => mockUseSearchParams(),
@@ -128,7 +129,7 @@ describe("UnfinishedTab", () => {
     const { rerender } = render(<UnfinishedTab />);
     fireEvent.mouseDown(tab(/^Worktrees/));
     fireEvent.click(tab(/^Worktrees/));
-    expect(mockReplace).toHaveBeenCalledWith("?tab=worktrees", { scroll: false });
+    expect(mockHistoryReplace).toHaveBeenCalledWith(window.history.state, "", "?tab=worktrees");
 
     mockUseSearchParams.mockReturnValue(new URLSearchParams({ tab: "worktrees" }));
     rerender(<UnfinishedTab />);
@@ -268,6 +269,7 @@ describe("UnfinishedTab", () => {
     fireEvent.change(await screen.findByRole("searchbox"), { target: { value: "api" } });
     fireEvent.click(screen.getByRole("button", { name: "Draft" }));
     expect(mockReplace).not.toHaveBeenCalled();
+    expect(mockHistoryReplace).not.toHaveBeenCalled();
   });
 
   it("unfinishedTab_should_ExplainTabVsNavBadgeAndRenderPlusInHeaderCount_When_Degraded", async () => {
@@ -315,7 +317,7 @@ describe("UnfinishedTab", () => {
     expect(within(screen.getByTestId("up-next-panel-prs")).getByText("Connecting to GitHub…")).toBeInTheDocument();
     fireEvent.mouseDown(tab(/^Queue/));
     fireEvent.click(tab(/^Queue/));
-    expect(mockReplace).toHaveBeenCalledWith("?tab=queue", { scroll: false });
+    expect(mockHistoryReplace).toHaveBeenCalledWith(window.history.state, "", "?tab=queue");
 
     // Once the URL follows, the Queue panel mounts and the pending PRs placeholder is gone.
     mockUseSearchParams.mockReturnValue(new URLSearchParams("tab=queue"));
