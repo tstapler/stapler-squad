@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os/exec"
 	"strings"
 	"testing"
@@ -15,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/envtest"
 	githubpkg "github.com/tstapler/stapler-squad/github"
+	logpkg "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
@@ -541,4 +544,37 @@ func TestAnnotateUserPRCache_should_PopulateStatusAndLastActiveFromSnapshot_When
 	paused.Status = session.Paused
 	assert.Equal(t, githubpkg.LinkedSessionPaused, linkedStatusFor(paused.Status))
 	assert.Equal(t, githubpkg.LinkedSessionStopped, linkedStatusFor(session.Crashed))
+}
+
+func TestAnnotateUserPRCache_should_LogUnmatchedSessionCount_When_SessionsHaveBranchButNoPR(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	var buf bytes.Buffer
+	prev := logpkg.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { logpkg.SetSlogDefaultForTest(prev) })
+
+	cache := githubpkg.NewUserPRCache()
+	cache.SeedPRsForTest([]githubpkg.UserPR{{Owner: "acme", Repo: "api", Number: 1, HeadRef: "has-pr"}})
+
+	poller := session.NewPRStatusPoller(nil)
+	var instances []*session.Instance
+	for _, title := range []string{"no-pr-one", "no-pr-two"} {
+		inst, err := session.NewInstance(session.InstanceOptions{
+			Title:       title,
+			Path:        t.TempDir(),
+			Program:     "echo",
+			Branch:      "branch-" + title,
+			GitHubOwner: "acme",
+			GitHubRepo:  "api",
+		})
+		require.NoError(t, err)
+		instances = append(instances, inst)
+	}
+	poller.SetInstances(instances)
+
+	annotateUserPRCache(cache, poller, nil)
+
+	out := buf.String()
+	assert.Contains(t, out, "sessions with a branch but no matching PR")
+	assert.Contains(t, out, "count=2")
 }
