@@ -399,6 +399,12 @@ func (s *BacklogService) notifyManualOverride(itemID, itemTitle, message string)
 const (
 	headlessTriageUUIDPrefix   = "headless-triage-"
 	headlessReReviewUUIDPrefix = "headless-re-review-"
+
+	// HeadlessTriageUUIDPrefix / HeadlessReReviewUUIDPrefix are the exported
+	// forms for callers outside this package that must not treat a synthetic
+	// headless ItemSession UUID as a tmux session.
+	HeadlessTriageUUIDPrefix   = headlessTriageUUIDPrefix
+	HeadlessReReviewUUIDPrefix = headlessReReviewUUIDPrefix
 )
 
 // triageCallBudget bounds a single headless triage LLM call — now a backstop
