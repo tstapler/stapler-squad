@@ -2,10 +2,16 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/tstapler/stapler-squad/session"
 )
+
+// ErrSteerPaneOwnership marks a SteerFailed caused by the pre-write pane
+// ownership check (the tmux target no longer belongs to the session), as
+// opposed to a failed write. Nothing was written.
+var ErrSteerPaneOwnership = errors.New("pane ownership verification failed")
 
 // notReadyReason says why an instance cannot take an unattended PTY write.
 type notReadyReason int
@@ -105,7 +111,7 @@ func (s *SessionService) SteerInstanceGuarded(ctx context.Context, inst *session
 	}
 	if err := verify(ctx, inst); err != nil {
 		release(false)
-		return SteerFailed, fmt.Errorf("verify pane ownership before steering session %q: %w", id, err)
+		return SteerFailed, fmt.Errorf("verify pane ownership before steering session %q: %w: %w", id, ErrSteerPaneOwnership, err)
 	}
 
 	write := s.guardedSteer.write

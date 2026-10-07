@@ -278,6 +278,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// GitHub user RPCs
 	"ListUserPRs":               "github-user:list-prs",
 	"WatchUserPRs":              "github-user:watch-prs",
+	"NudgeSessionForPR":         "github-user:nudge-session-for-pr",
 	"GetGitHubAuthState":        "github-user:get-auth-state",
 	"AddGitHubAccountWithToken": "github-user:add-account-with-token",
 	"ListGitHubCLIHosts":        "github-user:list-cli-hosts",

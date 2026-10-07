@@ -1,0 +1,12 @@
+{
+  "id": "github-user:nudge-session-for-pr",
+  "type": "backend",
+  "service": "GitHubUserService",
+  "method": "NudgeSessionForPR",
+  "protoFile": "proto/session/v1/github_user.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/github_user_nudge.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-10-07T12:58:21.182757326-07:00"
+}
