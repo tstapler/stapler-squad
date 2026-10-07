@@ -703,7 +703,7 @@ func TestBroadcastApprovalNotification_InvokesNotifyApprovalPending_When_SlackNo
 
 	// Give any accidental second dispatch a moment to land, then assert the
 	// count settled at exactly one call.
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond) //nolint:notimesleeptest negative assertion on a fire-and-forget dispatch with no completion signal
 	require.EqualValues(t, 1, requestCount.Load(), "NotifyApprovalPending should be invoked exactly once")
 }
 

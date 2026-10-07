@@ -20,7 +20,6 @@ func Test_WaitWithTimeout_should_ReturnTrue_When_WaitGroupReachesZeroBeforeTimeo
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
-		time.Sleep(10 * time.Millisecond)
 		wg.Done()
 	}()
 

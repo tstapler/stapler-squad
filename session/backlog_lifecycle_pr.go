@@ -598,7 +598,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		dashboardBaseURL := l.getDashboardBaseURL()
 		prTitle := item.Title
 		prBody := buildFallbackPRBody(item, dashboardBaseURL)
-		if pool := l.getHeadlessPool(); pool != nil {
+		if pool := l.getHeadlessCaller(); pool != nil {
 			diff, _, diffErr := GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
 			if diffErr != nil {
 				log.WarningLog().Printf("[BacklogLifecycle] pushAndCreatePR GetGitDiff for description item=%s: %v; using fallback body", item.ID, diffErr)

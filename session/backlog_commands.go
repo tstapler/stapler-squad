@@ -230,9 +230,9 @@ func buildDefaultSlashCommandSet(item *BacklogItemData) (map[string]string, erro
 
 	// review.md
 	files["review.md"] = fmt.Sprintf("Call request_review with item_id=%s and a 2-3 sentence summary of what was built.\n\n"+
-		"Do NOT end your session after this. Call wait_for_backlog_event(item_id, event_type=\"verdict_recorded\") "+
-		"instead of polling — it blocks until the verdict lands (or times out) and returns the outcome directly, "+
-		"or returns immediately if a verdict is already recorded.\n\n"+
+		"Then end your turn and stay idle (do not exit). Do NOT poll, and do NOT use ScheduleWakeup or /loop to "+
+		"wait: every wake re-reads your whole context. The app sends you a message with the verdict as soon as it "+
+		"is recorded.\n\n"+
 		"PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local "+
 		"CI, code review, remote CI, and merge-conflict resolution) — do not stop here; shipping the PR is part "+
 		"of this task, not a separate step someone else does.\n\n"+

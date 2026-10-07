@@ -185,17 +185,24 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 	// from a crashed/restarted server would not be in the registry and DoesSessionExist()
 	// would return false, causing new-session to fail with "duplicate session".
 	if t.DoesSessionExistNoCache() {
-		// Session already exists - we can reuse it
-		log.Info("tmux session already exists, reusing", "session", t.sanitizedName)
-
-		// Set up cleanup if requested
-		if setupCleanup && cleanup != nil {
-			*cleanup = func() error {
-				return t.Close()
-			}
+		reuse, err := t.reuseOrReplaceExisting()
+		if err != nil {
+			return err
 		}
+		if reuse {
+			// Session already exists - we can reuse it
+			log.Info("tmux session already exists, reusing", "session", t.sanitizedName)
 
-		return nil
+			// Set up cleanup if requested
+			if setupCleanup && cleanup != nil {
+				*cleanup = func() error {
+					return t.Close()
+				}
+			}
+
+			return nil
+		}
+		// Foreign pane was killed (ce71ad1a); fall through to normal creation.
 	}
 
 	if err := ValidateWorkDir(workDir); err != nil {
@@ -545,17 +552,31 @@ func (t *TmuxSession) ensureSessionExistsLocked(workDir string) error {
 	// ponytail: caller already ran DoesSessionExistNoCache() and got false — cache is stale, flush it.
 	t.invalidateExistsCache()
 	if t.probeSessionExistsWithRetries() {
-		log.Info("found existing tmux session, will reattach to preserve history", "session", t.sanitizedName)
-		return nil
+		reuse, err := t.reuseOrReplaceExisting()
+		if err != nil {
+			return err
+		}
+		if reuse {
+			log.Info("found existing tmux session, will reattach to preserve history", "session", t.sanitizedName)
+			return nil
+		}
+		return t.recreateMissingSession(workDir)
 	}
 
 	// Session doesn't exist after multiple retries
 	// CRITICAL: One final check without cache before recreating to prevent accidental destruction
 	log.Info("tmux session not found, performing final non-cached verification", "session", t.sanitizedName, "cachedChecks", sessionExistsMaxRetries)
 	if t.DoesSessionExistNoCache() {
-		// Session actually exists - cache was stale or timing issue
-		log.Info("found existing tmux session on final non-cached check (cache was stale), will reattach", "session", t.sanitizedName)
-		return nil
+		reuse, err := t.reuseOrReplaceExisting()
+		if err != nil {
+			return err
+		}
+		if reuse {
+			// Session actually exists - cache was stale or timing issue
+			log.Info("found existing tmux session on final non-cached check (cache was stale), will reattach", "session", t.sanitizedName)
+			return nil
+		}
+		return t.recreateMissingSession(workDir)
 	}
 
 	// Session truly doesn't exist after all checks - safe to create new one,

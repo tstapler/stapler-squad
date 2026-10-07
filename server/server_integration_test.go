@@ -110,14 +110,10 @@ func TestServer_should_NegotiateALPNHTTP2_When_StartRemoteServesOverRealTLS(t *t
 	url := fmt.Sprintf("https://%s/health", remoteAddr)
 	var resp *http.Response
 	var err error
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	wait.RequireEventually(t, func() bool {
 		resp, err = client.Get(url) //nolint:noctx
-		if err == nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return err == nil
+	}, 5*time.Second, 10*time.Millisecond, "server did not become reachable")
 	require.NoError(t, err, "expected StartRemote's TLS listener to become reachable")
 	defer resp.Body.Close()
 
@@ -160,14 +156,13 @@ func TestServer_should_RejectHTTP2PriorKnowledge_When_StartServesOverPlainHTTP(t
 	}()
 
 	var addr string
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	wait.RequireEventually(t, func() bool {
 		addr = srv.GetAddr()
 		if addr != "" && addr != "localhost:0" {
-			break
+			return true
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "server did not become reachable")
 	require.NotEmpty(t, addr, "expected Start() to resolve a real bound address")
 
 	// h2c "prior knowledge" dial: send the HTTP/2 client preface directly over
@@ -222,20 +217,19 @@ func TestServer_should_ServeHealthCheck_When_StartedWithPortZero(t *testing.T) {
 	}()
 
 	// Wait for the real bound address to be resolved and reachable.
-	deadline := time.Now().Add(5 * time.Second)
 	var addr string
 	var resp *http.Response
 	var lastErr error
-	for time.Now().Before(deadline) {
+	wait.RequireEventually(t, func() bool {
 		addr = srv.GetAddr()
 		if addr != "" && addr != "localhost:0" {
 			resp, lastErr = http.Get("http://" + addr + "/health")
 			if lastErr == nil {
-				break
+				return true
 			}
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "server did not become reachable")
 
 	if lastErr != nil || resp == nil {
 		t.Fatalf("expected /health to become reachable on the resolved address %q, last error: %v", addr, lastErr)
@@ -292,26 +286,25 @@ func TestServer_should_AllowCrossOriginRequest_When_ExtraOriginConfiguredViaEnvV
 	}()
 
 	// Wait for the real bound address to be resolved and reachable.
-	deadline := time.Now().Add(5 * time.Second)
 	var addr string
 	var resp *http.Response
 	var lastErr error
-	for time.Now().Before(deadline) {
+	wait.RequireEventually(t, func() bool {
 		addr = srv.GetAddr()
 		if addr != "" && addr != "localhost:0" {
 			req, reqErr := http.NewRequest(http.MethodGet, "http://"+addr+"/health", nil)
 			if reqErr != nil {
 				lastErr = reqErr
-				break
+				return true
 			}
 			req.Header.Set("Origin", extraOrigin)
 			resp, lastErr = http.DefaultClient.Do(req)
 			if lastErr == nil {
-				break
+				return true
 			}
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "server did not become reachable")
 
 	if lastErr != nil || resp == nil {
 		t.Fatalf("expected /health to become reachable on the resolved address %q, last error: %v", addr, lastErr)
@@ -367,26 +360,25 @@ func TestServer_should_KeepSingleOriginAllowlist_When_ExtraOriginsEnvVarUnset(t 
 	}()
 
 	// Wait for the real bound address to be resolved and reachable.
-	deadline := time.Now().Add(5 * time.Second)
 	var addr string
 	var resp *http.Response
 	var lastErr error
-	for time.Now().Before(deadline) {
+	wait.RequireEventually(t, func() bool {
 		addr = srv.GetAddr()
 		if addr != "" && addr != "localhost:0" {
 			req, reqErr := http.NewRequest(http.MethodGet, "http://"+addr+"/health", nil)
 			if reqErr != nil {
 				lastErr = reqErr
-				break
+				return true
 			}
 			req.Header.Set("Origin", "http://localhost:54212") // not in the allowlist
 			resp, lastErr = http.DefaultClient.Do(req)
 			if lastErr == nil {
-				break
+				return true
 			}
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "server did not become reachable")
 
 	if lastErr != nil || resp == nil {
 		t.Fatalf("expected /health to become reachable on the resolved address %q, last error: %v", addr, lastErr)
