@@ -1440,8 +1440,18 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
       resizeObserver.observe(containerRef.current!);
 
+      // A backgrounded tab can lose WebGL glyph-atlas contents without a context-loss event,
+      // leaving garbled glyphs over intact buffer text; repaint (clears the atlas) on return.
+      const onDocumentVisible = () => {
+        if (document.visibilityState === "visible") {
+          requestFitRef.current({ forceRepaint: true, reason: "visibility" });
+        }
+      };
+      document.addEventListener("visibilitychange", onDocumentVisible);
+
       // Cleanup
       return () => {
+        document.removeEventListener("visibilitychange", onDocumentVisible);
         cancelled = true;
         if (resizeTimeout) {
           clearTimeout(resizeTimeout);

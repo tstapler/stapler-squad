@@ -227,6 +227,9 @@ jobs:
           # ESLint step needs it (see that file's comment on this exact
           # gotcha with a shallow default checkout).
           fetch-depth: 0
+          # Blobless: full commit/tree history (merge-base and origin/main resolve)
+          # without the ~16GB of historical blobs; blobs for diffed files fetch lazily.
+          filter: blob:none
 
       - name: Set up Go
         uses: actions/setup-go@v5
