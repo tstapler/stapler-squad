@@ -22,6 +22,10 @@ import { createConnectTransport } from "@connectrpc/connect-web";
 import { create } from "@bufbuild/protobuf";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import * as styles from "./GitHubPRsSection.css";
+import { PRGroupedList } from "./prs/PRGroupedList";
+
+export { PRCard } from "./prs/PRCard";
+export { PRGroupedList };
 
 function useGitHubUserClient() {
   return useMemo(() => {
@@ -31,98 +35,6 @@ function useGitHubUserClient() {
     });
     return createClient(GitHubUserService, transport);
   }, []);
-}
-
-function prCheckChip(pr: UserPR): React.ReactNode {
-  if (pr.isDraft) {
-    return <span className={styles.chipDraft}>Draft</span>;
-  }
-  const conclusion = pr.checkConclusion;
-  if (conclusion === "success" || conclusion === "completed") {
-    return <span className={styles.chipSuccess}>✓ CI</span>;
-  }
-  if (conclusion === "failure" || conclusion === "error") {
-    return <span className={styles.chipError}>✗ CI</span>;
-  }
-  return null;
-}
-
-function prReviewChip(pr: UserPR): React.ReactNode {
-  if (pr.changesReqCount > 0) {
-    return (
-      <span className={styles.chipError}>
-        {pr.changesReqCount} change{pr.changesReqCount > 1 ? "s" : ""} req
-      </span>
-    );
-  }
-  if (pr.approvedCount > 0) {
-    return (
-      <span className={styles.chipSuccess}>
-        {pr.approvedCount} approved
-      </span>
-    );
-  }
-  return null;
-}
-
-interface PRCardProps {
-  pr: UserPR;
-}
-
-function PRCard({ pr }: PRCardProps) {
-  const hasSession = pr.sessionIds.length > 0;
-
-  return (
-    <div className={styles.prCard} data-testid="github-pr-card">
-      <div className={styles.prHeader}>
-        <a
-          className={styles.prTitle}
-          href={pr.htmlUrl}
-          target="_blank"
-          rel="noreferrer"
-          aria-label={`PR #${pr.number}: ${pr.title}`}
-        >
-          {pr.title}
-        </a>
-        <div className={styles.chips}>
-          {prCheckChip(pr)}
-          {prReviewChip(pr)}
-        </div>
-      </div>
-      <div className={styles.prMeta}>
-        <span className={styles.prRepo}>
-          #{pr.number}
-        </span>
-        <span className={styles.prBranch}>
-          {pr.headRef} → {pr.baseRef}
-        </span>
-        {pr.localWorktreePath && (
-          <span className={styles.worktreeLink} title={pr.localWorktreePath}>
-            {pr.localWorktreePath.split("/").slice(-2).join("/")}
-          </span>
-        )}
-      </div>
-      <div className={styles.prActions}>
-        {hasSession ? (
-          <Link
-            href={`/?session=${encodeURIComponent(pr.sessionIds[0])}`}
-            className={styles.openSessionButton}
-            data-testid="open-session-button"
-          >
-            Open Session
-          </Link>
-        ) : (
-          <Link
-            href={`/?pr=${encodeURIComponent(pr.htmlUrl)}`}
-            className={styles.createSessionButton}
-            data-testid="create-session-button"
-          >
-            + Session
-          </Link>
-        )}
-      </div>
-    </div>
-  );
 }
 
 // --- Stats bar ---
@@ -798,50 +710,6 @@ function applyFilterSort(
     }
   }
   return sorted;
-}
-
-// --- PR list grouped by owner/repo ---
-
-interface PRGroupedListProps {
-  prs: UserPR[];
-}
-
-function PRGroupedList({ prs }: PRGroupedListProps) {
-  const groups = useMemo(() => {
-    const map = new Map<string, UserPR[]>();
-    for (const pr of prs) {
-      const key = `${pr.owner}/${pr.repo}`;
-      const group = map.get(key) ?? [];
-      group.push(pr);
-      map.set(key, group);
-    }
-    return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
-  }, [prs]);
-
-  if (groups.length === 0) return null;
-
-  if (groups.length === 1) {
-    return (
-      <div className={styles.repoGroupSection}>
-        {groups[0][1].map((pr) => (
-          <PRCard key={`${pr.owner}/${pr.repo}#${pr.number}`} pr={pr} />
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <>
-      {groups.map(([repoKey, repoPRs]) => (
-        <div key={repoKey} className={styles.repoGroupSection}>
-          <div className={styles.repoGroupHeader}>{repoKey}</div>
-          {repoPRs.map((pr) => (
-            <PRCard key={`${pr.owner}/${pr.repo}#${pr.number}`} pr={pr} />
-          ))}
-        </div>
-      ))}
-    </>
-  );
 }
 
 // --- Main section ---
