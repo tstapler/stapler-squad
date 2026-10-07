@@ -3,7 +3,7 @@ import { APIRequestContext, Page, Locator } from "@playwright/test";
 const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
 
 /**
- * Page object for the "Stuck Backlog Items" section on /unfinished
+ * Page object for the "Stuck Backlog Items" section on the /unfinished Stuck tab
  * (backlog-stuck-item-visibility, Epic 4.1).
  */
 export class StuckItemsPage {
@@ -30,7 +30,8 @@ export class StuckItemsPage {
   }
 
   async goto() {
-    await this.page.goto(`${BASE_URL}/unfinished`, { waitUntil: "domcontentloaded" });
+    // Stuck items live on the Stuck tab, which is not the default (PRs).
+    await this.page.goto(`${BASE_URL}/unfinished?tab=stuck`, { waitUntil: "domcontentloaded" });
     await this.page.waitForSelector('[data-testid="stuck-items-section"]', { timeout: 15000 });
   }
 

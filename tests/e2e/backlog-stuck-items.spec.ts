@@ -56,6 +56,8 @@ test.describe("stuck items", () => {
     // convention in triggers-panel.spec.ts / rule-builder-ci-passing.spec.ts.
     await page.addInitScript(() => {
       localStorage.setItem("stapler-squad:onboarded", "true");
+      // A tab persisted by an earlier test must not hide the Stuck panel.
+      localStorage.removeItem("up-next-tab");
     });
   });
 
@@ -267,6 +269,7 @@ test.describe("stuck items", () => {
 
     await page.goto(`${BASE_URL}/unfinished?item=${itemId}`, { waitUntil: "domcontentloaded" });
     const stuckPage = new StuckItemsPage(page);
+    await expect(page.getByRole("tab", { name: /Stuck/ })).toHaveAttribute("aria-selected", "true");
     await expect(stuckPage.section).toBeVisible();
 
     // The linked item auto-expands without a manual click.

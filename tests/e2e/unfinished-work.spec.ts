@@ -15,7 +15,8 @@ import * as os from 'os';
 import * as path from 'path';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
-const UNFINISHED_URL = `${BASE_URL}/unfinished`;
+// Worktree content lives on the Worktrees tab; the default tab is PRs.
+const UNFINISHED_URL = `${BASE_URL}/unfinished?tab=worktrees`;
 
 // ── Test data setup ──────────────────────────────────────────────────────────
 // We create a real bare git repo + worktree with uncommitted changes AND a
