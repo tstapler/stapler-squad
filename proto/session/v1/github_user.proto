@@ -77,6 +77,23 @@ message ListUserPRsRequest {}
 message ListUserPRsResponse {
   repeated UserPR    prs        = 1;
   GitHubAuthState    auth_state = 2;
+  repeated AccountPollStatus account_statuses = 3;
+}
+
+enum AccountPollState {
+  ACCOUNT_POLL_STATE_UNSPECIFIED  = 0;
+  ACCOUNT_POLL_STATE_OK           = 1;
+  ACCOUNT_POLL_STATE_UNAUTHORIZED = 2;
+  ACCOUNT_POLL_STATE_RATE_LIMITED = 3;
+  ACCOUNT_POLL_STATE_ERROR        = 4;
+}
+
+// AccountPollStatus is the per-account outcome of the last PR poll.
+message AccountPollStatus {
+  string           host          = 1;
+  string           account_login = 2;
+  AccountPollState state         = 3;
+  string           detail        = 4; // short sanitized reason, never a token
 }
 
 message WatchUserPRsRequest {}
@@ -86,6 +103,7 @@ message UserPREvent {
   string          event_type = 1;
   repeated UserPR prs        = 2; // full list for "snapshot"; changed PRs otherwise
   GitHubAuthState auth_state = 3;
+  repeated AccountPollStatus account_statuses = 4;
 }
 
 message GetGitHubAuthStateRequest {}
