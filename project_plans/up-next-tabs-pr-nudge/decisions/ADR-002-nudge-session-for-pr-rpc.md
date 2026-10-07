@@ -44,7 +44,25 @@ Tab usage counters (browser console on `/unfinished`; counters only, never PR co
 const s = JSON.parse(localStorage["up-next-tab-stats"] ?? "null");
 s && { ...s, prsLeaveRate: s.visits ? +(s.leftPrsWithin5s / s.visits).toFixed(2) : null };
 ```
-`leftPrsWithin5s / visits` is the PRs-tab leave rate. `nudge_followup` and `nudge_outcome` log queries ship with PR B (the log lines do not exist in PR A).
+`leftPrsWithin5s / visits` is the PRs-tab leave rate. Nudge log queries. The log (`~/.stapler-squad/logs/staplersquad.log`, JSON lines) carries one `nudge_outcome` line per RPC call (`server/services/github_user_nudge.go`, `logNudgeExit`: `pr`, `host`, `account`, `session_id`, `outcome`, `reasons`, `latency_ms`, `prompt_bytes`, and `attention_age_s` only when the poll had seen the PR needing attention) and one `nudge_followup` line per settled nudge (`github/user_pr_nudge_track.go`, `trackNudges`: `pr`, `host`, `state` of `resolved|closed|expired`, `resolved_after_s`). Nudges per ISO week, outcome mix, and median attention age (save as `nudge.jq`, run `jq -c -s -f nudge.jq ~/.stapler-squad/logs/staplersquad.log`; the week is taken from the first 19 characters of `time`, so a non-UTC offset shifts a line near a week boundary):
+```jq
+[ .[] | select(.msg == "nudge_outcome")
+  | . + {week: ((.time[0:19] + "Z") | fromdateiso8601 | strftime("%G-W%V"))} ]
+| group_by(.week)[]
+| { week: .[0].week, total: length,
+    by_outcome: (group_by(.outcome) | map({(.[0].outcome): length}) | add),
+    median_attention_age_s: ([.[].attention_age_s | numbers] | sort
+        | if length == 0 then null
+          elif length % 2 == 1 then .[length / 2 | floor]
+          else (.[length / 2 - 1] + .[length / 2]) / 2 end) }
+```
+Share of nudges resolved within 24 h:
+```sh
+jq -c -s '[.[] | select(.msg == "nudge_followup")]
+  | {total: length, resolved_within_24h: ([.[] | select(.state == "resolved" and .resolved_after_s <= 86400)] | length)}
+  | . + {share: (.resolved_within_24h / .total)}' ~/.stapler-squad/logs/staplersquad.log
+```
+Self-test (measurementRecipe_should_CountOutcomesPerWeekAndMedianAge_When_RunAgainstSampleLog, run 2026-10-07 with jq 1.7): three fabricated `nudge_outcome` lines (2026-10-05 `DELIVERED` age 100, 2026-10-06 `DELIVERED` age 300, 2026-10-14 `DUPLICATE` no age) plus one `nudge_request` distractor gave `{"week":"2026-W41","total":2,"by_outcome":{"DELIVERED":2},"median_attention_age_s":200}` and `{"week":"2026-W42","total":1,"by_outcome":{"DUPLICATE":1},"median_attention_age_s":null}`; three fabricated `nudge_followup` lines (resolved 3600 s, resolved 172800 s, expired) gave `{"total":3,"resolved_within_24h":1,"share":0.333...}`. Not yet run against a real log: no `nudge_*` lines exist before PR B ships.
 
 5-minute self-test, first two weeks: (1) open `/unfinished` cold and note which tab lands and whether the first PR card is visible without scrolling; (2) find a PR with failing CI and open its linked session from the card; (3) reload and confirm the tab and filters persist; (4) note anything confusing, and tally how often you still hand-type a PR-fix instruction into a session. Feed the notes into the hypothesis review.
 
