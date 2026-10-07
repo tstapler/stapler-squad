@@ -557,8 +557,9 @@ func TestAnnotateUserPRCache_should_LogUnmatchedSessionCount_When_SessionsHaveBr
 	cache.SeedPRsForTest([]githubpkg.UserPR{{Owner: "acme", Repo: "api", Number: 1, HeadRef: "has-pr"}})
 
 	poller := session.NewPRStatusPoller(nil)
-	var instances []*session.Instance
-	for _, title := range []string{"no-pr-one", "no-pr-two"} {
+	titles := []string{"no-pr-one", "no-pr-two"}
+	instances := make([]*session.Instance, 0, len(titles))
+	for _, title := range titles {
 		inst, err := session.NewInstance(session.InstanceOptions{
 			Title:       title,
 			Path:        t.TempDir(),
