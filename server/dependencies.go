@@ -2006,6 +2006,9 @@ func annotateUserPRCache(cache *githubpkg.UserPRCache, poller *session.PRStatusP
 				Branch:   snap.Branch,
 				Repo:     repoRef,
 				PRNumber: prNumber,
+
+				Status:       linkedStatusFor(snap.Status),
+				LastActiveAt: snap.UpdatedAt,
 			})
 		}
 	}
@@ -2026,6 +2029,23 @@ func annotateUserPRCache(cache *githubpkg.UserPRCache, poller *session.PRStatusP
 	}
 
 	cache.Annotate(annSessions, annWorktrees)
+}
+
+// linkedStatusFor maps a session lifecycle status to the coarse status shown
+// on a PR's linked-session list. LastActiveAt uses InstanceSnapshot.UpdatedAt:
+// last-meaningful-output time is not published in the snapshot, and reading
+// it would need a lock outside the lock-free path.
+func linkedStatusFor(st session.Status) githubpkg.LinkedSessionStatus {
+	switch st {
+	case session.Paused, session.Hibernated:
+		return githubpkg.LinkedSessionPaused
+	case session.Stopped, session.Crashed, session.PermanentlyFailed, session.Failed:
+		return githubpkg.LinkedSessionStopped
+	case session.Creating, session.Active, session.Restoring:
+		return githubpkg.LinkedSessionRunning
+	default:
+		return githubpkg.LinkedSessionUnknown
+	}
 }
 
 // scannerSource adapts *unfinished.Scanner to session.WorktreeSource, bridging

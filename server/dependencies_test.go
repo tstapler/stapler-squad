@@ -14,6 +14,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/envtest"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
@@ -524,4 +525,20 @@ func TestWireDepsIntoServer_should_StartPollerExactlyOnce_When_HeadlessPoolPrese
 	})
 
 	assert.True(t, deps.SessionTagClassificationPoller.Running(), "wireDepsIntoServer must start the poller")
+}
+
+func TestAnnotateUserPRCache_should_PopulateStatusAndLastActiveFromSnapshot_When_RunningAndPausedInstances(t *testing.T) {
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "s-run", Path: t.TempDir(), Program: "true", SessionType: session.SessionTypeDirectory,
+	})
+	require.NoError(t, err)
+	snap := inst.Snapshot()
+	assert.Equal(t, githubpkg.LinkedSessionRunning, linkedStatusFor(snap.Status))
+	assert.False(t, snap.UpdatedAt.IsZero(), "LastActiveAt source (snapshot UpdatedAt) must be populated")
+
+	// A paused session (worktree removed, branch kept) still reports a status.
+	paused := *snap
+	paused.Status = session.Paused
+	assert.Equal(t, githubpkg.LinkedSessionPaused, linkedStatusFor(paused.Status))
+	assert.Equal(t, githubpkg.LinkedSessionStopped, linkedStatusFor(session.Crashed))
 }

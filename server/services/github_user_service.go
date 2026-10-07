@@ -447,6 +447,7 @@ func userPRsToProto(prs []githubpkg.UserPR) []*sessionv1.UserPR {
 			AccountLogin:               pr.AccountLogin,
 			UnresolvedThreadsTruncated: pr.UnresolvedThreadsTruncated,
 		}
+		p.LinkedSessions = linkedSessionsToProto(pr.LinkedSessions)
 		if pr.UnresolvedThreadCount != nil {
 			// #nosec G115 -- capped at 50 by the poll query.
 			n := int32(*pr.UnresolvedThreadCount)
@@ -464,6 +465,34 @@ func userPRsToProto(prs []githubpkg.UserPR) []*sessionv1.UserPR {
 		out[i] = p
 	}
 	return out
+}
+
+func linkedSessionsToProto(ls []githubpkg.LinkedSession) []*sessionv1.LinkedSession {
+	if len(ls) == 0 {
+		return nil
+	}
+	out := make([]*sessionv1.LinkedSession, len(ls))
+	for i, l := range ls {
+		p := &sessionv1.LinkedSession{SessionId: l.SessionID, Status: linkedSessionStatusToProto(l.Status)}
+		if !l.LastActiveAt.IsZero() {
+			p.LastActiveAt = timestamppb.New(l.LastActiveAt)
+		}
+		out[i] = p
+	}
+	return out
+}
+
+func linkedSessionStatusToProto(s githubpkg.LinkedSessionStatus) sessionv1.LinkedSessionStatus {
+	switch s {
+	case githubpkg.LinkedSessionRunning:
+		return sessionv1.LinkedSessionStatus_LINKED_SESSION_STATUS_RUNNING
+	case githubpkg.LinkedSessionPaused:
+		return sessionv1.LinkedSessionStatus_LINKED_SESSION_STATUS_PAUSED
+	case githubpkg.LinkedSessionStopped:
+		return sessionv1.LinkedSessionStatus_LINKED_SESSION_STATUS_STOPPED
+	default:
+		return sessionv1.LinkedSessionStatus_LINKED_SESSION_STATUS_UNSPECIFIED
+	}
 }
 
 func defaultHostIfEmpty(host string) string {
