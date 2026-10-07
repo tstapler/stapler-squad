@@ -200,6 +200,9 @@ type UserPRCache struct {
 	// later polls skip the doomed first attempt. Keyed by normalized host.
 	widenedUnsupported sync.Map
 	done               chan struct{} // closed when loop() returns; nil until Start
+
+	nudges nudgeTracker     // success-metric state; see user_pr_nudge_track.go
+	now    func() time.Time // injected in tests; nil means time.Now
 }
 
 // NewUserPRCache creates a cache with default configuration.
@@ -609,6 +612,7 @@ func (c *UserPRCache) fetch() error {
 
 	out := make([]UserPR, len(merged))
 	copy(out, merged)
+	c.trackNudges(out)
 	c.subscribers.Range(func(_, v any) bool {
 		ch := v.(chan []UserPR)
 		select {
