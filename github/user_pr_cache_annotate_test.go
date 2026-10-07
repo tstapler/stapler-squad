@@ -1,6 +1,9 @@
 package github
 
 import (
+	"encoding/json"
+	"fmt"
+	"os"
 	"testing"
 	"time"
 )
@@ -194,7 +197,7 @@ func TestSortLinkedSessions_should_OrderByLastActiveDescThenTitleWithZeroLast_Wh
 			{ID: "new", Branch: "b", Repo: ref, LastActiveAt: base.Add(5 * time.Minute)},
 			{ID: "also-new", Branch: "b", Repo: ref, LastActiveAt: base.Add(5 * time.Minute)},
 		}, nil)
-	var got []string
+	got := make([]string, 0, len(pr.LinkedSessions))
 	for _, l := range pr.LinkedSessions {
 		got = append(got, l.SessionID)
 	}
@@ -250,4 +253,97 @@ func TestAnnotate_should_NotWidenMatches_When_LegacyFallbackWouldCrossLinkDiffer
 	if len(prs[0].LinkedSessions) != 0 {
 		t.Fatalf("api PR must not link s-web/s-ghe via fallback, got %+v", prs[0].LinkedSessions)
 	}
+}
+
+type snapshotFixture struct {
+	GHEHosts []string `json:"ghe_hosts"`
+	PRs      []struct {
+		Host    string `json:"host"`
+		Owner   string `json:"owner"`
+		Repo    string `json:"repo"`
+		Number  int    `json:"number"`
+		HeadRef string `json:"head_ref"`
+	} `json:"prs"`
+	Sessions []struct {
+		ID       string `json:"id"`
+		Branch   string `json:"branch"`
+		Remote   string `json:"remote"`
+		PRNumber int    `json:"pr_number"`
+	} `json:"sessions"`
+}
+
+// Task 6.1.1d step 1: the owner-only key linked each fixture session to a PR;
+// the host+repo key (with its legacy fallback) must keep every one of them.
+func TestAnnotate_should_LinkSameSessionsBeforeAndAfterKeyChange_When_SessionSnapshotReplayed(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("testdata/session_snapshot.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fx snapshotFixture
+	if err := json.Unmarshal(raw, &fx); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions := make([]PRAnnotationSession, 0, len(fx.Sessions))
+	for _, s := range fx.Sessions {
+		parsed, err := ParseGitHubRefWithHosts(s.Remote, fx.GHEHosts)
+		if err != nil {
+			t.Fatalf("session %s remote %q: %v", s.ID, s.Remote, err)
+		}
+		ref, err := NewRepoRefWithHost(parsed.Owner, parsed.Repo, parsed.Host)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sessions = append(sessions, PRAnnotationSession{ID: s.ID, Branch: s.Branch, PRNumber: s.PRNumber, Repo: ref})
+	}
+
+	prs := make([]UserPR, 0, len(fx.PRs))
+	for _, p := range fx.PRs {
+		prs = append(prs, UserPR{Host: p.Host, Owner: p.Owner, Repo: p.Repo, Number: p.Number, HeadRef: p.HeadRef})
+	}
+
+	// Before: the owner-only key function (branch first, then PR number).
+	before := map[string]bool{}
+	for _, pr := range prs {
+		ref := mustRef(t, pr.Owner, pr.Repo, pr.Host)
+		bySession := map[LinkKey][]string{}
+		for _, s := range sessions {
+			if s.Branch != "" {
+				k := s.Repo.LegacyBranchKey(s.Branch)
+				bySession[k] = append(bySession[k], s.ID)
+			}
+			if s.PRNumber > 0 {
+				k := s.Repo.LegacyPRKey(s.PRNumber)
+				bySession[k] = append(bySession[k], s.ID)
+			}
+		}
+		ids := bySession[ref.LegacyBranchKey(pr.HeadRef)]
+		if len(ids) == 0 {
+			ids = bySession[ref.LegacyPRKey(pr.Number)]
+		}
+		for _, id := range ids {
+			before[fmt.Sprintf("%d:%s", pr.Number, id)] = true
+		}
+	}
+	if len(before) == 0 {
+		t.Fatal("fixture produced no legacy links; replay would be vacuous")
+	}
+
+	// After: the host+owner+repo key function used by Annotate.
+	c := seedPRs(t, prs...)
+	c.Annotate(sessions, nil)
+	after := map[string]bool{}
+	for _, pr := range c.GetAll() {
+		for _, id := range pr.SessionIDs {
+			after[fmt.Sprintf("%d:%s", pr.Number, id)] = true
+		}
+	}
+
+	for link := range before {
+		if !after[link] {
+			t.Errorf("link %s existed with the owner-only key and was lost by the key change", link)
+		}
+	}
+	t.Logf("links before=%d after=%d", len(before), len(after))
 }

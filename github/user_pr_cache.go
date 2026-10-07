@@ -1029,7 +1029,6 @@ func (c *UserPRCache) fetchUserPRsForToken(host, login, token string) ([]UserPR,
 	if gqlResp.Data == nil && len(gqlResp.Errors) > 0 && widened && !isRateLimitedGraphQL(gqlResp.Errors) {
 		c.widenedUnsupported.Store(host, struct{}{})
 		log.Warn("UserPRCache: host rejected widened PR query, falling back to legacy", "host", host)
-		widened = false
 		if gqlResp, err = c.runUserPRQuery(host, token, userPRGraphQLQueryLegacy); err != nil {
 			return nil, err
 		}

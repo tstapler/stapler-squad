@@ -32,3 +32,18 @@ Seed path for "+ Session": decided in Phase 1 Task 1.4.2a (timeboxed 15 min; at 
 **Measurement (7 sessions linked to an open PR):** Hibernated 5 (corp-compute-nop-pr-534, compute-docs-pr-226, pr-619, pr-579, traffic-capacitron pr-456), PermanentlyFailed 1 (pr-487), Active 1 (stapler-squad-terminal-corruption, PR 937). Upper bound on the idle pass rate: 1/7 = 14% (and only if that one is idle at click time). Failing for `NoStatusSource` specifically (live but no controller): 0 observed; all 6 failures are non-live sessions (would surface as PAUSED, not BUSY-no-controller). Caveats: n=7, one developer instance, snapshot only, idle state of the Active session unmeasured. Branch-linked PRs without `existing_session_id` (e.g. #932/#933/#936) were not counted.
 
 **Decision: below the 70% gate, choose (b).** Widening the manual gate (a) would not help: CheckNudgeEligible still needs a live controller/pane, and the dominant failure is a hibernated/paused session with no pane at all. So keep the single shared gate unchanged and add an in-card "Open session" (resume/open) action for non-live linked sessions, keeping the distinct PAUSED/BUSY-no-controller `detail` copy (Story 4.3.1). Task 2.2.1b's gate step stays as written; Story 2.3.1's parity AC is unchanged; the UI must surface PAUSED prominently since it is the common outcome, not an edge case.
+
+### Link-stability replay (Task 6.1.1d step 1, PR A, 2026-10-07)
+**Result: passed.** `TestAnnotate_should_LinkSameSessionsBeforeAndAfterKeyChange_When_SessionSnapshotReplayed` (`github/user_pr_cache_annotate_test.go`) links `github/testdata/session_snapshot.json` with the old owner-only key and with the host+owner+repo key (legacy fallback index on): 8 links before, 8 after, none lost. **Gap:** the fixture is synthetic and real-shaped (https, ssh, `.git`, GHE, PR-number-only sessions), not an export of the live `list_sessions` (the stapler-squad MCP was unreachable when this was written), so it does not cover every real remote. The manual live-instance confirmation is still open; the legacy owner-only fallback index must stay until it is recorded here.
+
+### Measurement recipe (Task 6.1.1f, PR A part)
+No pre-ship baseline exists (see `requirements.md` Baseline); the first two weeks after ship are the baseline. Revisit at 2 weeks, kill-criterion check at 4 weeks (Core Value Hypothesis).
+
+Tab usage counters (browser console on `/unfinished`; counters only, never PR content):
+```js
+const s = JSON.parse(localStorage["up-next-tab-stats"] ?? "null");
+s && { ...s, prsLeaveRate: s.visits ? +(s.leftPrsWithin5s / s.visits).toFixed(2) : null };
+```
+`leftPrsWithin5s / visits` is the PRs-tab leave rate. `nudge_followup` and `nudge_outcome` log queries ship with PR B (the log lines do not exist in PR A).
+
+5-minute self-test, first two weeks: (1) open `/unfinished` cold and note which tab lands and whether the first PR card is visible without scrolling; (2) find a PR with failing CI and open its linked session from the card; (3) reload and confirm the tab and filters persist; (4) note anything confusing, and tally how often you still hand-type a PR-fix instruction into a session. Feed the notes into the hypothesis review.
