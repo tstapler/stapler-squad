@@ -128,9 +128,11 @@ func TestPipelineModeCache_Get_should_ReturnStableImmutableSnapshot_When_Concurr
 		}()
 	}
 
+	invalidatorDone := make(chan struct{})
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer close(invalidatorDone)
 		for i := 0; i < 20; i++ {
 			if err := cache.Invalidate(context.Background(), repo); err != nil {
 				t.Errorf("Invalidate: %v", err)
@@ -138,7 +140,7 @@ func TestPipelineModeCache_Get_should_ReturnStableImmutableSnapshot_When_Concurr
 		}
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	<-invalidatorDone
 	close(stop)
 	wg.Wait()
 
@@ -173,18 +175,25 @@ func TestPipelineModeCache_Get_should_ReturnFalse_When_SlugNotPresent(t *testing
 func TestPipelineModeCache_Invalidate_should_ReflectLastStartedCallResult_When_ConcurrentInvalidateCallsRaceWithAsymmetricLatency(t *testing.T) {
 	t.Parallel()
 	cache := &pipelineModeCache{}
+	aStarted := make(chan struct{})
+	bRead := make(chan struct{})
 
 	repoA := &fakePipelineModeRepository{
 		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			// A starts first and is slow — a plain atomic.Pointer (no writer
 			// mutex) would let A's Store land after B's, reverting the cache
 			// to stale v1 data. The writer mutex must prevent that.
-			time.Sleep(50 * time.Millisecond)
+			close(aStarted)
+			select {
+			case <-bRead: // only reachable if B's read overlaps A's (the lost-update bug)
+			case <-time.After(100 * time.Millisecond): // correct impl: B is blocked on writeMu until A returns
+			}
 			return []*ent.PipelineMode{{Slug: "marker-mode", Name: "v1"}}, nil
 		},
 	}
 	repoB := &fakePipelineModeRepository{
 		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+			close(bRead)
 			return []*ent.PipelineMode{{Slug: "marker-mode", Name: "v2"}}, nil
 		},
 	}
@@ -197,7 +206,7 @@ func TestPipelineModeCache_Invalidate_should_ReflectLastStartedCallResult_When_C
 			t.Errorf("A Invalidate: %v", err)
 		}
 	}()
-	time.Sleep(5 * time.Millisecond)
+	<-aStarted
 	go func() {
 		defer wg.Done()
 		if err := cache.Invalidate(context.Background(), repoB); err != nil {

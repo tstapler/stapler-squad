@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -40,6 +41,11 @@ type stuckDialogProcessManager struct {
 
 	// failCount, when > 0, makes the first failCount SendKeys calls return an error.
 	failCount int
+
+	// pollEntered, when non-nil, is closed on the first pane capture so a test
+	// can wait until a driver poll is genuinely in flight.
+	pollEntered     chan struct{}
+	pollEnteredOnce sync.Once
 }
 
 const trustDialogText = `Quick safety check: Is this a project you created or one you trust?
@@ -83,6 +89,9 @@ func (m *stuckDialogProcessManager) SendInputViaControlMode(ctx context.Context,
 const growBaseReps = 500
 
 func (m *stuckDialogProcessManager) content() string {
+	if m.pollEntered != nil {
+		m.pollEnteredOnce.Do(func() { close(m.pollEntered) })
+	}
 	if !m.growPerCall {
 		return m.dialogText
 	}
@@ -1011,7 +1020,7 @@ func runBoundedDialogAnswerScenario(t *testing.T, title string, fakePM *stuckDia
 	inst.started.Store(true)
 
 	StartSessionDriver(inst, "/tmp")
-	time.Sleep(driverPollInterval*6 + 500*time.Millisecond)
+	time.Sleep(driverPollInterval*6 + 500*time.Millisecond) //nolint:notimesleeptest driverPollInterval is a production const driving a real ticker; bounding resends over 6 real ticks cannot be observed without changing production code
 
 	count := fakePM.sendKeysCount.Load()
 	t.Logf(logMsg, count)
@@ -1442,7 +1451,7 @@ func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineL
 	baseline := goleak.IgnoreCurrent()
 	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)
 
-	fakePM := &stuckDialogProcessManager{}
+	fakePM := &stuckDialogProcessManager{pollEntered: make(chan struct{})}
 
 	inst := &Instance{
 		Title:          "concurrent-stop-test",
@@ -1455,7 +1464,12 @@ func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineL
 
 	StartSessionDriver(inst, t.TempDir())
 	waitForDriverRunning(t, inst)
-	time.Sleep(10 * time.Millisecond)
+
+	select {
+	case <-fakePM.pollEntered:
+	case <-time.After(driverPollInterval + 5*time.Second):
+		t.Fatal("driver never entered a poll")
+	}
 
 	stopSessionDriverConcurrently(t, inst)
 
@@ -1465,8 +1479,9 @@ func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineL
 
 	// A StartSessionDriver call arriving after Destroy() must be refused —
 	// driverDestroyed (set by StopSessionDriver) must permanently block it.
+	// A refused start returns synchronously without spawning; if it did spawn,
+	// the deferred goleak.VerifyNone below catches the leaked goroutine.
 	StartSessionDriver(inst, t.TempDir())
-	time.Sleep(20 * time.Millisecond)
 	if inst.driverRunning.Load() {
 		t.Fatal("StartSessionDriver spawned a new driver goroutine after the instance was destroyed")
 	}

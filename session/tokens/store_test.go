@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // syncBuffer wraps bytes.Buffer with a mutex, matching the pattern already used in
@@ -65,15 +66,11 @@ func TestTokenStore_WhenFileNotCached_ExpectParseOnGetAll(t *testing.T) {
 	store.enqueue("testdata/valid_session.jsonl")
 
 	// Wait for the worker to process it.
-	deadline := time.Now().Add(5 * time.Second)
 	var results []*ParseResult
-	for time.Now().Before(deadline) {
+	wait.RequireEventually(t, func() bool {
 		results = store.GetAll()
-		if len(results) > 0 {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+		return len(results) > 0
+	}, 5*time.Second, 10*time.Millisecond)
 
 	require.Len(t, results, 1)
 	assert.Greater(t, results[0].TotalInput, int64(0))
@@ -89,13 +86,7 @@ func TestTokenStore_WhenFileCached_ExpectCacheHitSkipsReparse(t *testing.T) {
 	// Parse and cache a file.
 	store.enqueue("testdata/valid_session.jsonl")
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(store.GetAll()) > 0 {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	wait.RequireEventually(t, func() bool { return len(store.GetAll()) > 0 }, 5*time.Second, 10*time.Millisecond)
 
 	// Get the cached result pointer.
 	results1 := store.GetAll()
@@ -104,7 +95,11 @@ func TestTokenStore_WhenFileCached_ExpectCacheHitSkipsReparse(t *testing.T) {
 
 	// Enqueue again — modtime hasn't changed, so cache should not be reparsed.
 	store.enqueue("testdata/valid_session.jsonl")
-	time.Sleep(200 * time.Millisecond)
+	// enqueue marks the path in-flight synchronously; the worker clears it once it has processed (and skipped) the file.
+	wait.RequireEventually(t, func() bool {
+		_, inflight := store.inflight.Load("testdata/valid_session.jsonl")
+		return !inflight
+	}, 5*time.Second, time.Millisecond)
 
 	results2 := store.GetAll()
 	require.NotEmpty(t, results2)
@@ -124,13 +119,7 @@ func TestTokenStore_WhenGetByUUID_ExpectDirectLookup(t *testing.T) {
 	// Parse a file with known session UUID (from filename).
 	store.enqueue("testdata/valid_session.jsonl")
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(store.GetAll()) > 0 {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	wait.RequireEventually(t, func() bool { return len(store.GetAll()) > 0 }, 5*time.Second, 10*time.Millisecond)
 
 	// The UUID comes from the filename.
 	result := store.GetByUUID("valid_session")
@@ -151,13 +140,7 @@ func TestTokenStore_WhenConcurrentRequests_ExpectNoDataRace(t *testing.T) {
 	store.enqueue("testdata/valid_session.jsonl")
 
 	// Wait for initial parse.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(store.GetAll()) > 0 {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	wait.RequireEventually(t, func() bool { return len(store.GetAll()) > 0 }, 5*time.Second, 10*time.Millisecond)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {

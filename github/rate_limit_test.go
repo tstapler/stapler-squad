@@ -360,7 +360,7 @@ func TestRateLimiterSnapshot_Concurrent(t *testing.T) {
 		}()
 	}
 
-	time.Sleep(time.Second)
+	time.Sleep(time.Second) //nolint:notimesleeptest stress window: the test's purpose is ~1s of sustained concurrent hammering under -race
 	close(stop)
 	wg.Wait()
 }

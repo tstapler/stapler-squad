@@ -226,6 +226,22 @@ func (s *SessionService) SetHeadlessPool(pool *headless.Pool) {
 	s.prCreationSvc.SetHeadlessPool(pool)
 }
 
+// SetHeadlessClient routes non-interactive AI features (custom prompts, PR
+// drafting, autonomous drivers) through c, normally a headless.SelectingClient.
+func (s *SessionService) SetHeadlessClient(c headless.PoolClient) {
+	s.headlessClient = c
+	s.autonomousSvc.SetClient(c)
+	s.prCreationSvc.SetHeadlessClient(c)
+}
+
+// autonomousDriverClient prefers the selector-backed client over the raw claude pool.
+func (s *SessionService) autonomousDriverClient() session.HeadlessPoolClient {
+	if s.headlessClient != nil {
+		return s.headlessClient
+	}
+	return s.headlessPool
+}
+
 // SetLifecycleContext binds the server's root context to the service.
 // Must be called once during server startup, before any sessions are created.
 func (s *SessionService) SetLifecycleContext(ctx context.Context) {

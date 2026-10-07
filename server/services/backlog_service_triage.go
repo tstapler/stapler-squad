@@ -987,8 +987,12 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// 9. Generate session title.
 	// On reopen, append a revision number (r2, r3…) based on how many work sessions
 	// already exist so the session list shows distinct, human-readable names.
+	// item.ID[:8] suffix matches SpawnReviewSession's "review:"+item.ID[:8]
+	// convention -- without it, two different items with the same repo and
+	// short title collide on the exact same tmux session name (ce71ad1a: the
+	// "stapler-squad-backlog-devbug" incident had no such suffix).
 	shortTitle := triageShortTitle(priorSessions, item.Title)
-	baseTitle := slugify(filepath.Base(item.RepoPath)) + "-" + shortTitle
+	baseTitle := slugify(filepath.Base(item.RepoPath)) + "-" + shortTitle + "-" + item.ID[:8]
 	title := buildRevisionTitle(baseTitle, isReopen, priorSessions)
 
 	// 10. Create a dedicated git worktree for this work session. The branch slug
@@ -3225,8 +3229,13 @@ Do not modify the code. Only write the review verdict.
 	// Kill any stale tmux session with this title so the new session gets a fresh
 	// pane and the autonomous driver can deliver its prompt without attaching to an
 	// old, idle session that was left behind from a previous (possibly crashed) attempt.
+	// Only allowed to kill a pane owned by one of this item's own prior sessions
+	// (ce71ad1a) -- a stale pane under this exact title belonging to an unrelated
+	// item is refused, not silently killed.
 	if s.sessionStopper != nil {
-		_ = s.sessionStopper.KillTmuxSessionByTitle(ctx, title)
+		if err := s.sessionStopper.KillTmuxSessionByTitle(ctx, title, nonEmptySessionUUIDs(sessions)...); errors.Is(err, ErrTmuxKillRefused) {
+			log.Warn("re-review: stale tmux session not owned by this item, leaving it", "title", title, "err", err)
+		}
 	}
 
 	// Archive the prior review round's Instance before spawning its replacement —

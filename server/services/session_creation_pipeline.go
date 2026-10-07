@@ -343,7 +343,7 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 		if concreteStorage := s.GetStorage(); concreteStorage != nil {
 			costOpt = session.WithCostSink(session.CostSinkForSessionUUID(concreteStorage, p.instance.UUID))
 		}
-		driver := session.NewAutonomousDriver(p.instance, s.headlessPool, p.instance.Prompt, config.LoadConfig().AutonomousMaxTurnsOrDefault(), costOpt)
+		driver := session.NewAutonomousDriver(p.instance, s.autonomousDriverClient(), p.instance.Prompt, config.LoadConfig().AutonomousMaxTurnsOrDefault(), costOpt)
 		driver.RegisterCompletionCallback(s.autonomousSvc.onAutonomousDriverComplete)
 		if driverErr := driver.Start(s.autonomousSvc.driverCtx()); driverErr != nil {
 			log.Warn("[session pipeline] failed to start autonomous driver", "session", p.instanceTitle, "err", driverErr)

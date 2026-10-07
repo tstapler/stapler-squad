@@ -17,6 +17,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // ---------------------------------------------------------------------------
@@ -642,15 +643,9 @@ func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
 	// GetStatusManager uses atomic.Pointer.Load(), so polling is race-free.
 	// We avoid testify's Eventually here because its condition runs in a goroutine,
 	// which prevents t.Skip from working correctly.
-	var managerWired bool
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		if inst.GetStatusManager() != nil {
-			managerWired = true
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	managerWired := wait.WaitForCondition(func() bool {
+		return inst.GetStatusManager() != nil
+	}, wait.WaitConfig{Timeout: 30 * time.Second, PollInterval: 100 * time.Millisecond, Description: "status manager wired"}) == nil
 
 	if !managerWired {
 		// When tmux is absent the goroutine sets Status=Stopped and returns early,

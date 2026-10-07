@@ -99,7 +99,7 @@ func TestCheckNudgeEligibleWithSettleWindow_RejectsWhenStatusFlipsDuringWindow(t
 	flipAfter := settleWindow / 4
 
 	go func() {
-		time.Sleep(flipAfter)
+		time.Sleep(flipAfter) //nolint:notimesleeptest flips the pane mid-way through the production wall-clock settle-window poll loop; the window itself is real time
 		_, _ = buf.Write([]byte("\ntstapler@dev-box:~/stapler-squad$ "))
 	}()
 

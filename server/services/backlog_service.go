@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -54,7 +55,10 @@ type SessionStopper interface {
 	// KillTmuxSessionByTitle kills a tmux session by its title, regardless of
 	// whether the Instance is still tracked in memory. Used to clear stale tmux
 	// sessions before re-triggering so the fresh session gets its --append-system-prompt.
-	KillTmuxSessionByTitle(ctx context.Context, title string) error
+	// allowedOwnerUUIDs are the Instance UUID(s) the caller trusts to be
+	// killed under this title -- see the implementation's doc comment
+	// (ce71ad1a: a name match alone isn't enough to prove ownership).
+	KillTmuxSessionByTitle(ctx context.Context, title string, allowedOwnerUUIDs ...string) error
 	// IsSessionLive returns true if the session UUID is currently tracked in the
 	// live in-memory poller. Used to distinguish genuinely-running sessions from
 	// sessions that exited but whose DB records were not closed (e.g. after a
@@ -246,6 +250,9 @@ type BacklogService struct {
 	// Populated incrementally as dependencies.go wires each caller in, since
 	// GeminiCaller (Epic 3.1) is constructed after backlogSvc itself.
 	headlessCallers map[string]headless.PoolClient
+	// backendSelector, when set, routes stage programs and the default headless
+	// client through the live backend selection (nil in tests).
+	backendSelector *headless.Selector
 
 	// modelFamilies resolves a stage executor's "family:<alias>" Model value
 	// (e.g. "family:opus") to a concrete model ID via session.ResolveModel,
@@ -594,6 +601,17 @@ func (s *BacklogService) SetHeadlessPool(pool headless.PoolClient) {
 	s.headlessCallers["claude"] = pool
 }
 
+// SetBackendSelector routes the default headless client (empty stage program)
+// and every known backend name through sel, so per-feature settings and
+// capability/availability fallback apply. headlessCallers["claude"] keeps the
+// raw pool so a stage explicitly configured "claude" is never re-routed.
+func (s *BacklogService) SetBackendSelector(sel *headless.Selector) {
+	s.backendSelector = sel
+	if sel != nil {
+		s.headlessPool = &headless.SelectingClient{Selector: sel}
+	}
+}
+
 // SetGeminiCaller registers caller in headlessCallers under "gemini" so a
 // PipelineMode stage executor configured with program="gemini" resolves to it
 // (Epic 3.1/2.3). Takes the concrete *headless.GeminiCaller type rather than
@@ -631,8 +649,22 @@ type availabilityChecker interface {
 // entirely). itemID/stage are for the log line and are not otherwise
 // interpreted.
 func (s *BacklogService) resolveHeadlessCaller(program, itemID, stage string) (caller headless.PoolClient, configuredProgram, fallbackReason string) {
+	if program == "claude" {
+		if raw, ok := s.headlessCallers["claude"]; ok {
+			return raw, "", ""
+		}
+	}
 	if program == "" || program == "claude" {
 		return s.headlessPool, "", ""
+	}
+	if s.backendSelector != nil && slices.Contains(headless.KnownBackendNames(), program) {
+		_, res := s.backendSelector.Resolve(headless.FeatureKey(stage), program, headless.Caps{})
+		reason := res.FallbackReason
+		if reason != "" {
+			log.Warn("[PipelineEngine] headless program fell back", "program", program, "item", itemID, "stage", stage, "reason", reason)
+			return &headless.SelectingClient{Selector: s.backendSelector}, program, reason
+		}
+		return &headless.SelectingClient{Selector: s.backendSelector, StageProgram: program}, "", ""
 	}
 	found, ok := s.headlessCallers[program]
 	if !ok {

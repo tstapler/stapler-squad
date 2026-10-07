@@ -214,10 +214,12 @@ type mockSessionCreator struct {
 
 // mockSessionStopper implements SessionStopper for tests.
 type mockSessionStopper struct {
-	liveUUIDs         map[string]bool
-	killedPaneUUIDs   []string
-	archivedUUIDs     []string
-	archiveErrForUUID map[string]error
+	liveUUIDs       map[string]bool
+	killedPaneUUIDs []string
+	// killByTitleAllowed records the allowedOwnerUUIDs of each KillTmuxSessionByTitle call.
+	killByTitleAllowed [][]string
+	archivedUUIDs      []string
+	archiveErrForUUID  map[string]error
 	// stoppedUUIDs records every UUID passed to StopSessionByUUID.
 	stoppedUUIDs []string
 	// stopperErr, if non-nil, is returned by StopSessionByUUID (default nil —
@@ -283,7 +285,8 @@ func (m *mockSessionStopper) StopSessionByUUID(_ context.Context, uuid string) e
 	return m.stopperErr
 }
 
-func (m *mockSessionStopper) KillTmuxSessionByTitle(_ context.Context, _ string) error {
+func (m *mockSessionStopper) KillTmuxSessionByTitle(_ context.Context, _ string, allowedOwnerUUIDs ...string) error {
+	m.killByTitleAllowed = append(m.killByTitleAllowed, allowedOwnerUUIDs)
 	return nil
 }
 
@@ -1756,6 +1759,33 @@ func TestSpawnSessionFromItem_AutonomousBypassesPlanningGate(t *testing.T) {
 	}))
 	require.NoError(t, err, "autonomous spawn must succeed without plan approval")
 	require.Len(t, starter.calls, 1, "autonomous driver start hook must fire")
+}
+
+// TestSpawnSessionFromItem_TitleIncludesItemIDSuffix guards against ce71ad1a:
+// two different backlog items with the same repo and short title used to
+// produce the exact same tmux session name (no per-item uniquifying suffix),
+// so a stale pane from one item's earlier session could be silently
+// reattached to when spawning the other item's session. baseTitle now
+// mirrors SpawnReviewSession's "review:"+item.ID[:8] convention.
+func TestSpawnSessionFromItem_TitleIncludesItemIDSuffix(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "same short title")
+
+	_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
+		ItemId: itemID,
+	}))
+	require.NoError(t, err)
+	require.Len(t, creator.calls, 1)
+
+	require.Contains(t, creator.calls[0].title, itemID[:8],
+		"session title must include the item's ID prefix so two items with the same repo+short-title can't collide on the same tmux session name")
 }
 
 // TestSpawnSessionFromItem_Reopen_SetsBacklogCategory verifies that a
