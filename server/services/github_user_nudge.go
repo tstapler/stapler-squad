@@ -553,6 +553,15 @@ func hasMergeConflict(pr githubpkg.UserPR) bool {
 	return pr.HasMergeConflict != nil && *pr.HasMergeConflict
 }
 
+// needsAttention mirrors the web badge rule (prAttention.ts).
+func needsAttention(pr *sessionv1.UserPR) bool {
+	if pr.GetIsDraft() {
+		return false
+	}
+	return len(pr.GetFailingChecks()) > 0 || pr.GetCheckConclusion() == "failure" ||
+		pr.GetUnresolvedThreadCount() > 0 || pr.GetHasMergeConflict() || pr.GetChangesReqCount() > 0
+}
+
 // funnelCounts is the up_next_funnel payload; logUpNextFunnel logs only when it changes.
 type funnelCounts struct{ attention, linked, live int }
 
@@ -566,8 +575,7 @@ type funnelCounts struct{ attention, linked, live int }
 func (s *GitHubUserService) logUpNextFunnel(prs []*sessionv1.UserPR) {
 	var c funnelCounts
 	for _, pr := range prs {
-		if pr.GetIsDraft() || !(len(pr.GetFailingChecks()) > 0 || pr.GetCheckConclusion() == "failure" ||
-			pr.GetUnresolvedThreadCount() > 0 || pr.GetHasMergeConflict() || pr.GetChangesReqCount() > 0) {
+		if !needsAttention(pr) {
 			continue
 		}
 		c.attention++
