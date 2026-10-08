@@ -1,7 +1,8 @@
 /**
- * Caps live WebGL contexts across terminals. Browsers evict the oldest context past ~16 per page,
- * which blanks those panes; evicting deliberately lets us choose the victim (hidden, then least
- * recently used) and swap it to another renderer before the browser does.
+ * Caps live WebGL contexts across terminals. Browsers drop the oldest context past a per-page
+ * limit (commonly cited as ~16, lower on some GPUs; not verified here), which can blank those
+ * panes; evicting deliberately lets us choose the victim (hidden, then least recently used) and
+ * swap it to another renderer first. An evicted pane stays on that renderer for its lifetime.
  */
 export const MAX_WEBGL_CONTEXTS = 8;
 
@@ -23,7 +24,12 @@ export function claimWebglSlot(slot: WebglSlot, max = MAX_WEBGL_CONTEXTS): void 
     const victim = others.find((s) => !s.isVisible()) ?? others[0];
     if (!victim) return;
     slots.delete(victim);
-    victim.release();
+    try {
+      victim.release();
+    } catch (err) {
+      // A victim failing to swap must not abort the newcomer's own setup.
+      console.error("[webglBudget] failed to release evicted WebGL slot", err);
+    }
   }
 }
 

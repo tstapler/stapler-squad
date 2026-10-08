@@ -615,16 +615,9 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
     // Shared by the fallback latch and by WebGL-budget eviction (webglBudget.ts).
     const swapWebglForCanvas = () => {
+      webglFallbackTriggered = true; // eviction must also arm the latch, or a later mismatch loads a second CanvasAddon
       releaseWebglSlot(webglSlot);
 
-      // @xterm/addon-webgl resolved to 0.18.0 (confirmed in package-lock.json /
-      // node_modules). This postdates the historical WebglAddon.dispose()
-      // no-op bug (xterm.js #2254, fixed via #2548, a 2019-era fix long since
-      // released). The GPU-memory-leak-on-dispose fix (#3889, fixed via
-      // #3890) is also merged upstream, but a lightweight web search could not
-      // definitively pin the exact release/version boundary where #3890
-      // landed relative to 0.18.0 — noting that explicitly rather than
-      // asserting an unverified claim (Task 3.0.2).
       forgetWebglTerminal(terminal);
       webglAddonRef.current?.dispose();
       webglAddonRef.current = null;
@@ -738,14 +731,15 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           webglAddonRef.current = new WebglAddon();
           terminal.loadAddon(webglAddonRef.current);
           rendererRef.current = "webgl";
-          trackWebglTerminal(terminal);
-          claimWebglSlot(webglSlot);
           mobileDebug.log("renderer", { renderer: "webgl" });
           webglAddonRef.current.onContextLoss(() => {
             console.warn('[XtermTerminal] WebGL context lost, falling back to canvas renderer');
             mobileDebug.log("context-loss", { renderer: rendererRef.current });
             triggerCanvasFallback();
           });
+          // After onContextLoss is attached: claiming may evict a peer synchronously.
+          trackWebglTerminal(terminal);
+          claimWebglSlot(webglSlot);
           console.log("[XtermTerminal] WebGL renderer enabled");
         } catch (e) {
           console.warn("[XtermTerminal] WebGL failed to load:", e);
@@ -1472,7 +1466,8 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
       // A focused pane is the one in use: evict it last.
       const onFocusIn = () => touchWebglSlot(webglSlot);
-      containerRef.current?.addEventListener("focusin", onFocusIn);
+      const focusContainer = containerRef.current; // React may null the ref before cleanup runs
+      focusContainer?.addEventListener("focusin", onFocusIn);
 
       // Cleanup
       return () => {
@@ -1499,7 +1494,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         handleCleanupFns.forEach(fn => fn());
         forgetWebglTerminal(terminal);
         releaseWebglSlot(webglSlot);
-        containerRef.current?.removeEventListener("focusin", onFocusIn);
+        focusContainer?.removeEventListener("focusin", onFocusIn);
         terminal.dispose();
         terminalRef.current = null;
         fitAddonRef.current = null;

@@ -9,8 +9,23 @@ const makeTerminal = (rows = 30) => ({
   clearTextureAtlas: jest.fn(),
 });
 
+const NEXT_FRAME_MS = 20;
+
 describe("postFitRepaint", () => {
-  beforeEach(() => jest.clearAllMocks());
+  const tracked: ReturnType<typeof makeTerminal>[] = [];
+  const track = (t: ReturnType<typeof makeTerminal>) => {
+    tracked.push(t);
+    trackWebglTerminal(t);
+  };
+
+  // One fake clock for the whole suite: it stays monotonic, unlike a clock re-installed per test.
+  beforeAll(() => jest.useFakeTimers());
+  afterAll(() => jest.useRealTimers());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.advanceTimersByTime(NEXT_FRAME_MS); // open the shared-atlas clear window left by earlier tests
+  });
+  afterEach(() => tracked.splice(0).forEach(forgetWebglTerminal));
 
   it("postFitRepaint_should_RefreshAllRowsAndClearAtlasOnce_When_WebglActive", () => {
     const term = makeTerminal(30);
@@ -45,24 +60,33 @@ describe("postFitRepaint", () => {
   it("postFitRepaint_should_ClearAndRefreshTrackedPeers_When_WebglAtlasIsShared", () => {
     const a = makeTerminal(30);
     const b = makeTerminal(20);
-    trackWebglTerminal(a);
-    trackWebglTerminal(b);
+    track(a);
+    track(b);
     postFitRepaint(a, "webgl", "manual-resize");
     expect(b.clearTextureAtlas).toHaveBeenCalledTimes(1);
     expect(b.refresh).toHaveBeenCalledWith(0, 19);
     expect(a.refresh).toHaveBeenCalledTimes(1);
     forgetWebglTerminal(b);
+    jest.advanceTimersByTime(NEXT_FRAME_MS);
     postFitRepaint(a, "webgl", "manual-resize");
     expect(b.refresh).toHaveBeenCalledTimes(1);
-    forgetWebglTerminal(a);
+  });
+
+  it("postFitRepaint_should_ClearSharedAtlasOnce_When_ManyPanesRepaintInOneFrame", () => {
+    const panes = Array.from({ length: 4 }, () => makeTerminal(10));
+    panes.forEach(track);
+    panes.forEach((p) => postFitRepaint(p, "webgl", "visibility"));
+    panes.forEach((p) => expect(p.clearTextureAtlas).toHaveBeenCalledTimes(1));
+    jest.advanceTimersByTime(NEXT_FRAME_MS);
+    postFitRepaint(panes[0], "webgl", "visibility");
+    expect(panes[1].clearTextureAtlas).toHaveBeenCalledTimes(2);
   });
 
   it("postFitRepaint_should_NotTouchPeers_When_RendererIsNotWebgl", () => {
     const peer = makeTerminal(30);
-    trackWebglTerminal(peer);
+    track(peer);
     postFitRepaint(makeTerminal(30), "canvas", "manual-resize");
     expect(peer.refresh).not.toHaveBeenCalled();
-    forgetWebglTerminal(peer);
   });
 
   it("postFitRepaint_should_NotThrow_When_ClearTextureAtlasMissingUnderWebgl", () => {

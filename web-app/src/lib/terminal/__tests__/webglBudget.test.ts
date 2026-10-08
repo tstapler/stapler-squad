@@ -50,6 +50,19 @@ describe("webglBudget", () => {
     expect(a.release).toHaveBeenCalledTimes(1);
   });
 
+  it("claim_should_StillEvictRemainingAndNotThrow_When_VictimReleaseThrows", () => {
+    const spy = jest.spyOn(console, "error").mockImplementation(() => {});
+    const [a, b, c] = [makeSlot(), makeSlot(), makeSlot()];
+    a.release.mockImplementation(() => {
+      throw new Error("dispose failed");
+    });
+    claim(a, 2);
+    claim(b, 2);
+    expect(() => claim(c, 2)).not.toThrow();
+    expect(a.release).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
   it("release_should_FreeBudget_When_SlotReleasedByOwner", () => {
     const [a, b, c] = [makeSlot(), makeSlot(), makeSlot()];
     claim(a, 2);
