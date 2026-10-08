@@ -950,7 +950,7 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 				ClarifyingQuestions: clarifying,
 				Tasks:               tasks,
 				// #nosec G115 -- triage rework iteration counter, bounded by the small
-				// configurable rework cap (config.MaxAutoReworkIterationsOrDefault, default 3).
+				// configurable rework cap (config.MaxAutoReworkIterationsOrDefault, default 5).
 				Iteration: int32(tr.Iteration),
 				Feedback:  tr.Feedback,
 			}
