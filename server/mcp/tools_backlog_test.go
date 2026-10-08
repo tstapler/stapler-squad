@@ -1066,6 +1066,10 @@ func TestRequestReview_TransitionsItemToReview(t *testing.T) {
 	tc, ok := result.Content[0].(mcpgo.TextContent)
 	require.True(t, ok)
 	require.Contains(t, tc.Text, "review")
+	require.Contains(t, tc.Text, "End your turn now and stay idle")
+	require.Contains(t, tc.Text, "Do NOT call wait_for_backlog_event, ScheduleWakeup, or /loop")
+	require.Contains(t, tc.Text, "to poll")
+	require.NotContains(t, tc.Text, "use ScheduleWakeup to")
 
 	// Verify item is now in review status.
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
@@ -5516,7 +5520,7 @@ func TestWaitForBacklogEvent_ReturnsMatchedEventOnLiveVerdict(t *testing.T) {
 
 	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
 		Title:  "Awaiting verdict",
-		Status: string(session.BacklogStatusReview),
+		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
@@ -5563,12 +5567,12 @@ func TestWaitForBacklogEvent_FiltersByEventType(t *testing.T) {
 
 	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
 		Title:  "Filtered wait",
-		Status: string(session.BacklogStatusReview),
+		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 	otherItem, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
 		Title:  "Different item",
-		Status: string(session.BacklogStatusReview),
+		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
@@ -5636,7 +5640,7 @@ func TestWaitForBacklogEvent_TimesOutWithNoEvent(t *testing.T) {
 
 	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
 		Title:  "Never verdicted",
-		Status: string(session.BacklogStatusReview),
+		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
@@ -5663,7 +5667,7 @@ func TestWaitForBacklogEvent_ConcurrentWaitersBothReceiveEvent(t *testing.T) {
 
 	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
 		Title:  "Two waiters",
-		Status: string(session.BacklogStatusReview),
+		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
@@ -5725,7 +5729,7 @@ func TestWaitForBacklogEvent_NoGoroutineLeak(t *testing.T) {
 	// Timeout-exit path.
 	timeoutItem, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
 		Title:  "Leak check: timeout",
-		Status: string(session.BacklogStatusReview),
+		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 	_, err = handler.waitForBacklogEvent(ctx, makeToolReq(map[string]interface{}{
@@ -5737,7 +5741,7 @@ func TestWaitForBacklogEvent_NoGoroutineLeak(t *testing.T) {
 	// Matched-event-exit path.
 	matchedItem, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
 		Title:  "Leak check: matched",
-		Status: string(session.BacklogStatusReview),
+		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 	resultCh := make(chan waitCallOutcome, 1)
@@ -5783,7 +5787,7 @@ func TestWaitForBacklogEvent_SubscribeBeforeReadClosesRace(t *testing.T) {
 
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
 		Title:  "Race window",
-		Status: string(session.BacklogStatusReview),
+		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
@@ -5825,7 +5829,7 @@ func TestWaitForBacklogEvent_ReturnsWhenEventBusClosedWhileWaiting(t *testing.T)
 
 	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
 		Title:  "Bus closes mid-wait",
-		Status: string(session.BacklogStatusReview),
+		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
