@@ -820,6 +820,18 @@ func (h *backlogHandlers) waitTimeoutResult(ctx context.Context, itemID, eventTy
 	}
 }
 
+// reviewWaitRefusedResult reuses WAIT_CAP_REACHED so existing clients already treat it as "stop waiting".
+func (h *backlogHandlers) reviewWaitRefusedResult(itemID string) WaitForBacklogEventResult {
+	return WaitForBacklogEventResult{
+		MCPResult: MCPResult{Success: true, Error: &MCPError{
+			Code:    "WAIT_CAP_REACHED",
+			Message: fmt.Sprintf("item %s is in review; waiting is refused — end your turn and stay idle, the app messages this session when the verdict lands. Do not poll, and do not use ScheduleWakeup or /loop", itemID),
+		}},
+		EventReceived: false,
+		ItemID:        itemID,
+	}
+}
+
 func (h *backlogHandlers) waitCapResult(itemID string) WaitForBacklogEventResult {
 	return WaitForBacklogEventResult{
 		MCPResult: MCPResult{Success: true, Error: &MCPError{
@@ -905,6 +917,12 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 	if res := currentStateWaitResult(item, verdict, eventTypeFilter); res != nil {
 		h.resetWaitTimeouts(ctx, itemID)
 		return okResult(*res), nil
+	}
+	// A verdict wait on a review-status item never needs polling: the app steers the work session when
+	// the verdict lands. After the current-state check so an existing verdict is still returned; skips
+	// the cap counter on purpose. Other filters (archived, status_changed, ...) get no steer, so they still wait.
+	if item.Status == string(session.BacklogStatusReview) && (eventTypeFilter == eventTypeAny || eventTypeFilter == eventTypeVerdictRecorded) {
+		return okResult(h.reviewWaitRefusedResult(itemID)), nil
 	}
 	// After the current-state check so a capped session still sees a verdict that already exists.
 	if h.waitCapReached(ctx, itemID) {
@@ -1492,7 +1510,9 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	}
 
 	return mcpgo.NewToolResultText(fmt.Sprintf(
-		"Review requested for item %s. The item has been moved to review status.", itemID,
+		"Review requested for item %s. The item has been moved to review status.\n\n"+
+			"End your turn now and stay idle. Do NOT call wait_for_backlog_event, ScheduleWakeup, or /loop to poll — "+
+			"every wake re-reads your whole context. The app messages this session as soon as the verdict is recorded.", itemID,
 	)), nil
 }
 
@@ -3122,7 +3142,7 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 
 	s.AddTool(
 		mcpgo.NewTool("wait_for_backlog_event",
-			mcpgo.WithDescription("Block until a backlog item changes (e.g. a review verdict lands), or until timeout. Returns the event directly — status, verdict outcome/summary, or archival/removal reason — so a follow-up get_backlog_item call is usually unnecessary. If the awaited condition (e.g. a verdict) is already true when this is called, returns immediately with from_current_state=true instead of waiting out the full timeout. On timeout, returns event_received=false telling the session to end its turn; after repeated timeouts for the same session+item further waits are refused (WAIT_CAP_REACHED). Not for waiting on a review verdict after request_review: end your turn instead and the app steers the session with the verdict. Never pair with ScheduleWakeup or /loop."),
+			mcpgo.WithDescription("Block until a backlog item changes (e.g. a review verdict lands), or until timeout. Returns the event directly — status, verdict outcome/summary, or archival/removal reason — so a follow-up get_backlog_item call is usually unnecessary. If the awaited condition (e.g. a verdict) is already true when this is called, returns immediately with from_current_state=true instead of waiting out the full timeout. On timeout, returns event_received=false telling the session to end its turn; after repeated timeouts for the same session+item further waits are refused (WAIT_CAP_REACHED). Not for waiting on a review verdict after request_review: a wait on an item in review status is refused immediately (WAIT_CAP_REACHED); end your turn instead and the app steers the session with the verdict. Never pair with ScheduleWakeup or /loop."),
 			mcpgo.WithString("item_id",
 				mcpgo.Description("UUID of the backlog item"),
 				mcpgo.Required(),
