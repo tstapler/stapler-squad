@@ -1068,7 +1068,8 @@ func TestRequestReview_TransitionsItemToReview(t *testing.T) {
 	require.Contains(t, tc.Text, "review")
 	require.Contains(t, tc.Text, "End your turn now and stay idle")
 	require.Contains(t, tc.Text, "Do NOT call wait_for_backlog_event, ScheduleWakeup, or /loop")
-	require.NotContains(t, tc.Text, "call ScheduleWakeup for")
+	require.Contains(t, tc.Text, "to poll")
+	require.NotContains(t, tc.Text, "use ScheduleWakeup to")
 
 	// Verify item is now in review status.
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)

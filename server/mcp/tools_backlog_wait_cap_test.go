@@ -12,7 +12,8 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 )
 
-func newWaitingItem(t *testing.T, storage *session.Storage) string {
+// newInProgressItem is not a review item because waits on review items are refused immediately.
+func newInProgressItem(t *testing.T, storage *session.Storage) string {
 	t.Helper()
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
 		Title:  "Waiting for event",
@@ -35,7 +36,7 @@ func newReviewItem(t *testing.T, storage *session.Storage) string {
 // Pins the timeout text: it must tell the session to stop, not to poll.
 func TestWaitForBacklogEvent_TimeoutMessage_NoPollingAdvice(t *testing.T) {
 	storage := newTestBacklogStorage(t)
-	itemID := newWaitingItem(t, storage)
+	itemID := newInProgressItem(t, storage)
 	handler := &backlogHandlers{storage: storage, eventBus: events.NewEventBus(32)}
 
 	result, err := handler.waitForBacklogEvent(context.Background(), makeToolReq(map[string]interface{}{"item_id": itemID, "timeout_seconds": float64(1)}))
@@ -50,7 +51,7 @@ func TestWaitForBacklogEvent_TimeoutMessage_NoPollingAdvice(t *testing.T) {
 
 func TestWaitForBacklogEvent_ParksSessionAfterRepeatedTimeouts(t *testing.T) {
 	storage := newTestBacklogStorage(t)
-	itemID := newWaitingItem(t, storage)
+	itemID := newInProgressItem(t, storage)
 	bus := events.NewEventBus(32)
 	notifCh, subID := bus.Subscribe(context.Background())
 	defer bus.Unsubscribe(subID)
@@ -109,7 +110,7 @@ func TestWaitForBacklogEvent_ItemInReview_ImmediateCap(t *testing.T) {
 	handler := &backlogHandlers{storage: storage, eventBus: events.NewEventBus(32)}
 
 	start := time.Now()
-	result, err := handler.waitForBacklogEvent(context.Background(), makeToolReq(map[string]interface{}{"item_id": itemID, "timeout_seconds": float64(30)}))
+	result, err := handler.waitForBacklogEvent(context.Background(), makeToolReq(map[string]interface{}{"item_id": itemID, "timeout_seconds": float64(1)}))
 	require.NoError(t, err)
 	out := decodeWaitResult(t, result)
 
@@ -117,4 +118,17 @@ func TestWaitForBacklogEvent_ItemInReview_ImmediateCap(t *testing.T) {
 	require.Equal(t, "WAIT_CAP_REACHED", out.Error.Code)
 	require.False(t, out.EventReceived)
 	require.Contains(t, out.Error.Message, "end your turn and stay idle")
+	require.Contains(t, out.Error.Message, "Do not poll, and do not use ScheduleWakeup or /loop")
+	require.Empty(t, handler.waitTimeouts, "a refused review wait must not touch the cap counter")
+}
+
+// Only verdict waits are refused; the steer covers nothing else, so other filters still wait.
+func TestWaitForBacklogEvent_ItemInReview_NonVerdictFilterStillWaits(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	itemID := newReviewItem(t, storage)
+	handler := &backlogHandlers{storage: storage, eventBus: events.NewEventBus(32)}
+
+	result, err := handler.waitForBacklogEvent(context.Background(), makeToolReq(map[string]interface{}{"item_id": itemID, "event_type": "item_archived", "timeout_seconds": float64(1)}))
+	require.NoError(t, err)
+	require.Equal(t, "WAIT_TIMEOUT", decodeWaitResult(t, result).Error.Code)
 }

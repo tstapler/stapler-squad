@@ -820,6 +820,7 @@ func (h *backlogHandlers) waitTimeoutResult(ctx context.Context, itemID, eventTy
 	}
 }
 
+// reviewWaitRefusedResult reuses WAIT_CAP_REACHED so existing clients already treat it as "stop waiting".
 func (h *backlogHandlers) reviewWaitRefusedResult(itemID string) WaitForBacklogEventResult {
 	return WaitForBacklogEventResult{
 		MCPResult: MCPResult{Success: true, Error: &MCPError{
@@ -917,9 +918,10 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 		h.resetWaitTimeouts(ctx, itemID)
 		return okResult(*res), nil
 	}
-	// A review-status item never needs polling: the app steers the session when the
-	// verdict lands. Placed after the current-state check so an existing verdict is still returned.
-	if item.Status == string(session.BacklogStatusReview) {
+	// A verdict wait on a review-status item never needs polling: the app steers the work session when
+	// the verdict lands. After the current-state check so an existing verdict is still returned; skips
+	// the cap counter on purpose. Other filters (archived, status_changed, ...) get no steer, so they still wait.
+	if item.Status == string(session.BacklogStatusReview) && (eventTypeFilter == eventTypeAny || eventTypeFilter == eventTypeVerdictRecorded) {
 		return okResult(h.reviewWaitRefusedResult(itemID)), nil
 	}
 	// After the current-state check so a capped session still sees a verdict that already exists.
