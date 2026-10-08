@@ -49,6 +49,12 @@ type EntRepository struct {
 	dbPath        string
 	migrationMode bool // When true, enables dual-write mode for migration
 
+	// seedURI, when set (tests only, via withSeedURI), names a fully migrated
+	// shared-cache in-memory database that NewEntRepository copies into its own
+	// database instead of running schema creation and startup migrations — see
+	// NewTestEntRepository.
+	seedURI string
+
 	// itemChangePublisher is nil-safe — every hooked backlog mutation method
 	// nil-checks before calling it (publish is best-effort and never blocks
 	// or fails the underlying mutation). Wired via SetItemChangePublisher,
@@ -167,6 +173,10 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(time.Hour)
+
+	if repo.seedURI != "" {
+		return newSeededEntRepository(db, repo)
+	}
 
 	// Must be read BEFORE client.Schema.Create() below, which is what adds the
 	// enabled column this signal depends on being absent — see
