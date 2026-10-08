@@ -51,7 +51,14 @@ export function UnfinishedTab() {
   const { items: stuckItems, lastFetched: stuckLastFetched } = useStuckBacklogItems();
   // routes.unfinishedItem(itemId) deep link — pre-expands/filters the
   // matching Stuck Backlog Items card (see StuckItemsSection's focusItemId).
-  const focusItemId = searchParams.get("item") ?? undefined;
+  const urlItemId = searchParams.get("item") ?? undefined;
+  // history.replaceState does not always re-render useSearchParams on the static export, so
+  // "Show all stuck items" records the item it dismissed instead of waiting for the URL to update.
+  const [dismissedItemId, setDismissedItemId] = useState<string | undefined>();
+  const focusItemId = urlItemId === dismissedItemId ? undefined : urlItemId;
+  useEffect(() => {
+    if (urlItemId !== dismissedItemId) setDismissedItemId(undefined);
+  }, [urlItemId, dismissedItemId]);
 
   const transport = useMemo(
     () =>
@@ -135,8 +142,9 @@ export function UnfinishedTab() {
     // history.replaceState, like useUpNextTab.setTab: router.replace hard-reloads the static export,
     // which would drop the focus moved below.
     window.history.replaceState(window.history.state, "", `?${params.toString()}`);
+    setDismissedItemId(urlItemId);
     document.querySelector<HTMLElement>('[data-testid="up-next-panel-stuck"] h2')?.focus();
-  }, [searchParams]);
+  }, [searchParams, urlItemId]);
 
   const prsDescription = attention.degraded
     ? `At least ${attention.count} PRs need attention. ${DEGRADED_ATTENTION_TEXT} ${PR_TAB_DESCRIPTION}`

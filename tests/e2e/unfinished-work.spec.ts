@@ -237,6 +237,10 @@ test.describe('unfinished-work', () => {
       await addPinnedRepoViaApi([testSeedDir, noSessionSeedDir]);
       await triggerScanAndWaitForBranch('main');
 
+      // Pre-seed the first-visit onboarding dialog as dismissed so it can't cover the omnibar.
+      await page.addInitScript(() => {
+        localStorage.setItem('stapler-squad:onboarded', 'true');
+      });
       await page.goto(UNFINISHED_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
 
       const repoName = path.basename(noSessionSeedDir);
@@ -252,8 +256,11 @@ test.describe('unfinished-work', () => {
       await expect(openBtn).toBeVisible({ timeout: 5000 });
 
       await openBtn.click();
-      // Should navigate to home with ?worktree= param to pre-fill wizard
-      await expect(page).toHaveURL(/[?&]worktree=/, { timeout: 5000 });
+      // The ?worktree= param is cleared right after it is read, so assert the outcome:
+      // the omnibar opens with path@branch prefilled.
+      const sourceInput = page.locator('[aria-label="Session source input"]');
+      await expect(sourceInput).toBeVisible({ timeout: 10000 });
+      await expect(sourceInput).toHaveValue(new RegExp(`${repoName}.*@main$`));
     } finally {
       await addPinnedRepoViaApi(testSeedDir);
       fs.rmSync(noSessionRepoDir, { recursive: true, force: true });
