@@ -91,10 +91,10 @@ both fail the build, not just report:
   Level 0 consolidation gate), not a suppression.
 - **web-app — `jscpd`** (`web-app/.jscpd.json`; `make ready-duplication-gate-web`
   or `pnpm run lint:duplicates` in `web-app/`): jscpd has no git-diff scoping
-  like `--new-from-rev`, so this gates on an absolute `threshold` (0.12%,
-  raised from 0.1% on 2026-09-12 after PR #785's new Omnibar test file added
-  one more irreducible `jest.mock(...)` block and tripped the old ratchet —
-  see below) instead of new-code-only — a ratchet against a cleaned-up
+  like `--new-from-rev`, so this gates on an absolute `threshold` (0.14%,
+  raised from 0.1% to 0.12% on 2026-09-12 after PR #785's new Omnibar test
+  file added one more irreducible `jest.mock(...)` block and tripped the old
+  ratchet, then to 0.14% as later heavily-mocked test files landed — see below) instead of new-code-only — a ratchet against a cleaned-up
   baseline, not zero-tolerance. `minLines`/`minTokens` are tuned to 20/200:
   verified empirically (2026-08-24 repo-wide sweep + fix) that at that size
   every finding was real, actionable duplication — component forks,

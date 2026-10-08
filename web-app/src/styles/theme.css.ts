@@ -547,7 +547,7 @@ export const wh40kTheme = createTheme(vars, {
     warningText: "#e4c840",
     error: "#8b1a1a",
     errorBg: "#1a0808",
-    errorText: "#c45050",
+    errorText: "#cc5656", /* was #c45050 = 4.26:1 on errorBg; #cc5656 = 4.65:1 (chipContrast.test.ts) */
     errorDark: "#6b1010",
     critical: "#6b3d8b",
     criticalBg: "#1a0808",

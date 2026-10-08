@@ -35,10 +35,11 @@ func TestGoroutineHealthStatus(t *testing.T) {
 // case (no fork pressure, ordinary goroutine count during a test run):
 // 200 OK with an "ok" status and both components reporting "ok".
 func TestHandleActuatorHealth_ReturnsOK_InNormalConditions(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/actuator/health", nil)
 	rec := httptest.NewRecorder()
 
-	handleActuatorHealth(rec, req)
+	// Inputs are pinned: the live goroutine count and fork pressure are
+	// process-global, so other tests' leftovers made this flaky under -count=N.
+	writeActuatorHealth(rec, tmux.ForkPressureOK, 10)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)

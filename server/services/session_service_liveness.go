@@ -78,17 +78,7 @@ func isSafeSteerStatus(status detection.DetectedStatus, statusContext string) bo
 // rather than assuming ready.
 func (s *SessionService) IsReadyForSteer(sessionUUID string) bool {
 	inst := s.FindLiveInstance(sessionUUID)
-	if inst == nil || s.statusManager == nil {
-		return false
-	}
-	info := s.statusManager.GetStatus(inst)
-	if !info.IsControllerActive || info.QueuedCommands > 0 {
-		return false
-	}
-	if ctrl, ok := s.statusManager.GetController(inst.Title); ok && ctrl != nil && ctrl.GetCurrentCommand() != nil {
-		return false
-	}
-	return isSafeSteerStatus(info.ClaudeStatus, info.StatusContext)
+	return inst != nil && s.instanceReadyForSteer(inst) == notReadyNone
 }
 
 // SteerActiveSession implements SessionSteerer, delegating to the same

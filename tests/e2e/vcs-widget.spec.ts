@@ -103,6 +103,13 @@ test.describe("vcs-widget", () => {
       await waitForBacklogRPCsEnabled(request);
     });
 
+    test.beforeEach(async ({ page }) => {
+      // Pre-seed the first-visit onboarding dialog as dismissed so it can't cover the page.
+      await page.addInitScript(() => {
+        localStorage.setItem("stapler-squad:onboarded", "true");
+      });
+    });
+
     test.afterAll(async ({ request }) => {
       await request.post(`${BASE_URL}/api/session.v1.SessionService/UpdateFeatureFlag`, {
         headers: { "Content-Type": "application/json" },
@@ -223,7 +230,7 @@ test.describe("vcs-widget", () => {
     let branchName: string;
 
     async function rpc(service: string, method: string, body: object): Promise<Response> {
-      return fetch(`${BASE_URL}/${service}/${method}`, {
+      return fetch(`${BASE_URL}/api/${service}/${method}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -276,7 +283,8 @@ test.describe("vcs-widget", () => {
       // the compact aggregate stat line.
       fs.writeFileSync(path.join(testWorktreeDir, "README.md"), "init\nwork in progress\n");
 
-      await addPinnedRepoViaApi(testRepoDir);
+      // Pin the non-bare clone: a bare repo has no .git dir and is rejected.
+      await addPinnedRepoViaApi(seedDir);
       await triggerScanAndWait();
     });
 
@@ -296,7 +304,7 @@ test.describe("vcs-widget", () => {
     test("VcsWidget_should_RenderAggregateStatsAndCommitsWithNoPerFileRows_When_CompactModeExpanded", async ({
       page,
     }) => {
-      await page.goto(`${BASE_URL}/unfinished`, { waitUntil: "domcontentloaded", timeout: 15000 });
+      await page.goto(`${BASE_URL}/unfinished?tab=worktrees`, { waitUntil: "domcontentloaded", timeout: 15000 });
 
       const item = page.locator('[data-testid="unfinished-item"]').filter({ hasText: branchName });
       await expect(item).toBeVisible({ timeout: 10000 });

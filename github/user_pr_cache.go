@@ -3,10 +3,12 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,9 +36,74 @@ type UserPR struct {
 	MergedAt          time.Time
 	ApprovedCount     int
 	ChangesReqCount   int
-	CheckConclusion   string // "success" / "failure" / "pending" / ""
-	SessionIDs        []string
+	CheckConclusion   string   // "success" / "failure" / "pending" / ""
+	SessionIDs        []string // titles of LinkedSessions, kept for compat
 	LocalWorktreePath string
+	// LinkedSessions lists every session on the PR's branch, most recently
+	// active first. Entries with LegacyFallback set matched only the old
+	// owner-only key; the nudge path must ignore them.
+	LinkedSessions []LinkedSession
+
+	Host         string // never empty; "github.com" for github.com
+	AccountLogin string // login name of the account whose poll returned this PR; never a token
+	// FailingChecks is capped at maxFailingChecks, CheckRuns first.
+	FailingChecks []FailingCheck
+	// UnresolvedThreadCount is nil when unknown (degraded mode, legacy query,
+	// or a host that omitted reviewThreads), which is distinct from 0.
+	UnresolvedThreadCount      *int
+	UnresolvedThreadsTruncated bool  // count was capped at maxReviewThreads
+	HasMergeConflict           *bool // nil = GitHub mergeable UNKNOWN (computed lazily)
+	DetailsLoaded              bool  // true only when reviewThreads came back
+}
+
+// FailingCheck is one failing CheckRun or StatusContext on a PR's head commit.
+type FailingCheck struct {
+	Name       string
+	URL        string
+	Conclusion string
+}
+
+// AccountPollState is the outcome of one account's last poll.
+type AccountPollState int
+
+const (
+	AccountPollOK AccountPollState = iota + 1
+	AccountPollUnauthorized
+	AccountPollRateLimited
+	AccountPollError
+)
+
+// AccountPollStatus reports one account's last poll outcome so the UI can tell
+// an expired or failing account from "not connected".
+type AccountPollStatus struct {
+	Host         string
+	AccountLogin string
+	State        AccountPollState
+	Detail       string // short sanitized reason; never contains a token
+}
+
+const (
+	maxFailingChecks = 10
+	maxReviewThreads = 50 // matches reviewThreads(first: 50) in the widened query
+)
+
+// LinkedSessionStatus is the coarse lifecycle state of a linked session.
+type LinkedSessionStatus string
+
+const (
+	LinkedSessionUnknown LinkedSessionStatus = ""
+	LinkedSessionRunning LinkedSessionStatus = "running"
+	LinkedSessionPaused  LinkedSessionStatus = "paused"
+	LinkedSessionStopped LinkedSessionStatus = "stopped"
+)
+
+// LinkedSession is a local session linked to a UserPR.
+type LinkedSession struct {
+	SessionID    string // session title
+	Status       LinkedSessionStatus
+	LastActiveAt time.Time // zero when unknown
+	// LegacyFallback marks a link made only by the owner-only legacy index.
+	LegacyFallback bool
 }
 
 // PRAnnotationSession carries session data needed to annotate UserPR entries.
@@ -46,10 +113,17 @@ type UserPR struct {
 // Repo is a typed value object: holding a valid RepoRef proves owner and repo
 // are non-empty. Sessions without a resolvable GitHub repo are skipped.
 type PRAnnotationSession struct {
-	ID       string
-	Branch   string
-	Repo     RepoRef
-	PRNumber int // fallback: match by PR number when branch name doesn't match headRef
+	ID           string
+	Branch       string
+	Repo         RepoRef
+	PRNumber     int // fallback: match by PR number when branch name doesn't match headRef
+	Status       LinkedSessionStatus
+	LastActiveAt time.Time // zero when unknown
+	// HostUnrecorded marks a session whose host could not be determined (a GHE
+	// session stored before hosts were recorded). Only such sessions may link
+	// across hosts via the legacy index; an empty Repo.Host() otherwise means
+	// github.com.
+	HostUnrecorded bool
 }
 
 // PRAnnotationWorktree carries worktree data for annotation.
@@ -61,8 +135,9 @@ type PRAnnotationWorktree struct {
 
 // userPRSnapshot is an immutable snapshot stored in atomic.Value (COW pattern).
 type userPRSnapshot struct {
-	prs        []UserPR
-	capturedAt time.Time
+	prs             []UserPR
+	accountStatuses []AccountPollStatus
+	capturedAt      time.Time
 }
 
 // loginResult is an immutable auth state stored in atomic.Value (single-account compat).
@@ -90,6 +165,10 @@ type UserPRCacheConfig struct {
 	PollInterval time.Duration
 	// LoginCacheTTL controls how long the authenticated login is cached.
 	LoginCacheTTL time.Duration
+	// DegradedDetails drops reviewThreads from the poll (ADR-001 degraded
+	// mode, selected when the measured query cost exceeds budget): thread
+	// counts stay unknown while check names and mergeable are still fetched.
+	DegradedDetails bool
 }
 
 // DefaultUserPRCacheConfig returns sensible defaults.
@@ -122,7 +201,21 @@ type UserPRCache struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	startOnce    sync.Once
-	done         chan struct{} // closed when loop() returns; nil until Start
+	// widenedUnsupported records hosts that rejected the widened query, so
+	// later polls skip the doomed first attempt. Keyed by normalized host.
+	widenedUnsupported sync.Map
+	done               chan struct{} // closed when loop() returns; nil until Start
+
+	// annMu serializes every snapshot store (fetch and Annotate) and guards the
+	// last annotation inputs, so a slow Annotate can never overwrite a newer
+	// fetch and a fetch always republishes with the latest links applied.
+	annMu        sync.Mutex
+	annSessions  []PRAnnotationSession
+	annWorktrees []PRAnnotationWorktree
+	annSource    func() ([]PRAnnotationSession, []PRAnnotationWorktree) // optional; read before each publish
+
+	nudges nudgeTracker     // success-metric state; see user_pr_nudge_track.go
+	now    func() time.Time // injected in tests; nil means time.Now
 }
 
 // NewUserPRCache creates a cache with default configuration.
@@ -166,6 +259,17 @@ func (c *UserPRCache) Stop() {
 	}
 }
 
+// SetAnnotationSource registers where each poll reads the sessions and
+// worktrees to link, so a poll is annotated before it reaches subscribers.
+// Call before Start. The function runs outside the cache's annotation lock but
+// on the poll goroutine, so it should be reasonably quick and must not call back
+// into the cache.
+func (c *UserPRCache) SetAnnotationSource(fn func() ([]PRAnnotationSession, []PRAnnotationWorktree)) {
+	c.annMu.Lock()
+	c.annSource = fn
+	c.annMu.Unlock()
+}
+
 // SetOnUpdated atomically registers a callback invoked after every successful
 // refresh. Pass nil to clear. The callback receives the current PR slice.
 // Safe to call at any time, including after Start.
@@ -187,6 +291,18 @@ func (c *UserPRCache) GetAll() []UserPR {
 	snap := v.(*userPRSnapshot)
 	out := make([]UserPR, len(snap.prs))
 	copy(out, snap.prs)
+	return out
+}
+
+// AccountStatuses returns the per-account outcome of the last poll (nil before the first).
+func (c *UserPRCache) AccountStatuses() []AccountPollStatus {
+	v := c.snapshot.Load()
+	if v == nil {
+		return nil
+	}
+	snap := v.(*userPRSnapshot)
+	out := make([]AccountPollStatus, len(snap.accountStatuses))
+	copy(out, snap.accountStatuses)
 	return out
 }
 
@@ -266,53 +382,234 @@ func (c *UserPRCache) GetCachedAccounts() []CachedAccount {
 	return out
 }
 
-// Annotate enriches the current snapshot with session IDs and worktree paths.
-// It performs a COW update: load → copy → mutate → store.
-// No-op if the snapshot hasn't been populated yet.
-func (c *UserPRCache) Annotate(sessions []PRAnnotationSession, worktrees []PRAnnotationWorktree) {
+// AnnotateStats reports link-quality counters from one Annotate pass.
+type AnnotateStats struct {
+	LegacyFallbackLinks int // session-PR links made only by the legacy index
+	UnmatchedSessions   int // sessions with a branch that link to no PR
+}
+
+// Annotate enriches the current snapshot with linked sessions and worktree
+// paths and remembers the inputs so every later fetch republishes annotated.
+// It holds annMu across load, build and store, so it cannot overwrite a newer
+// fetch snapshot. No-op on the snapshot until it has been populated.
+//
+// Sessions match on host+owner+repo+branch (or PR number). The legacy
+// owner-only index is consulted only when the strict key misses, and only for
+// same-host sessions whose repo is not itself a repo in the PR list, so it can
+// keep pre-existing links alive without cross-linking known-different repos.
+func (c *UserPRCache) Annotate(sessions []PRAnnotationSession, worktrees []PRAnnotationWorktree) AnnotateStats {
+	c.annMu.Lock()
+	defer c.annMu.Unlock()
+	c.annSessions, c.annWorktrees = sessions, worktrees
+
 	v := c.snapshot.Load()
 	if v == nil {
-		return
+		return AnnotateStats{}
 	}
 	old := v.(*userPRSnapshot)
+	annotated, stats := annotatePRs(old.prs, sessions, worktrees)
+	c.snapshot.Store(&userPRSnapshot{prs: annotated, accountStatuses: old.accountStatuses, capturedAt: old.capturedAt})
+	return stats
+}
 
-	// Primary index: keyed by RepoRef.BranchKey(branch) = "owner/branch".
-	sessionsByBranch := make(map[string][]string, len(sessions))
-	// Secondary index: keyed by RepoRef.PRKey(number) = "owner/#number".
-	sessionsByNum := make(map[string][]string, len(sessions))
+// annotatePRs returns a copy of prs with linked sessions and worktree paths set.
+func annotatePRs(prs []UserPR, sessions []PRAnnotationSession, worktrees []PRAnnotationWorktree) ([]UserPR, AnnotateStats) {
+	idx := newSessionIndex(sessions)
+	wtIdx := newWorktreeIndex(worktrees)
+	prRepos := make(map[string]bool, len(prs))
+	prRefs := make([]RepoRef, len(prs))
+	for i, pr := range prs {
+		prRefs[i], _ = NewRepoRefWithHost(pr.Owner, pr.Repo, pr.Host)
+		if prRefs[i].IsValid() {
+			prRepos[prRefs[i].repoKey()] = true
+		}
+	}
+
+	var stats AnnotateStats
+	linked := make(map[string]bool, len(sessions))
+	annotated := make([]UserPR, len(prs))
+	for i, pr := range prs {
+		ref := prRefs[i]
+		if ref.IsValid() {
+			ls := idx.strict(ref, pr.HeadRef, pr.Number)
+			viaLegacy := false
+			if len(ls) == 0 {
+				ls = idx.legacy(ref, pr.HeadRef, pr.Number, prRepos)
+				stats.LegacyFallbackLinks += len(ls)
+				viaLegacy = len(ls) > 0
+			}
+			// SessionIDs keep match (insertion) order: MCP consumers take
+			// SessionIDs[0]. Only LinkedSessions are sorted for display.
+			pr.SessionIDs = linkedSessionIDs(ls)
+			sortLinkedSessions(ls)
+			pr.LinkedSessions = ls
+			for _, l := range ls {
+				linked[l.SessionID] = true
+			}
+			pr.LocalWorktreePath = wtIdx.path(ref, pr.HeadRef, prRepos, viaLegacy)
+		}
+		annotated[i] = pr
+	}
+	for _, s := range sessions {
+		if s.Branch != "" && s.Repo.IsValid() && !linked[s.ID] {
+			stats.UnmatchedSessions++
+		}
+	}
+	if stats.LegacyFallbackLinks > 0 {
+		log.Info("UserPRCache: sessions linked via legacy owner-only key", "count", stats.LegacyFallbackLinks)
+	}
+	log.Debug("UserPRCache: sessions with a branch but no matching PR", "count", stats.UnmatchedSessions)
+	return annotated, stats
+}
+
+// worktreeIndex resolves a PR's local worktree with the same strict-then-legacy
+// rule as session links.
+type worktreeIndex struct {
+	strictPaths map[LinkKey]string
+	legacy      map[LinkKey][]PRAnnotationWorktree
+}
+
+func newWorktreeIndex(worktrees []PRAnnotationWorktree) worktreeIndex {
+	x := worktreeIndex{
+		strictPaths: make(map[LinkKey]string, len(worktrees)),
+		legacy:      make(map[LinkKey][]PRAnnotationWorktree),
+	}
+	for _, wt := range worktrees {
+		if wt.Branch == "" || !wt.Repo.IsValid() {
+			continue
+		}
+		x.strictPaths[wt.Repo.BranchKey(wt.Branch)] = wt.WorktreePath
+		lk := wt.Repo.LegacyBranchKey(wt.Branch)
+		x.legacy[lk] = append(x.legacy[lk], wt)
+	}
+	return x
+}
+
+// path prefers the strict key. The owner-only legacy key is consulted only when
+// the PR's sessions themselves linked through it (viaLegacy), mirroring session
+// links: a PR with no legacy-era data never picks up a same-owner worktree.
+func (x worktreeIndex) path(ref RepoRef, headRef string, prRepos map[string]bool, viaLegacy bool) string {
+	if p, ok := x.strictPaths[ref.BranchKey(headRef)]; ok {
+		return p
+	}
+	if !viaLegacy {
+		return ""
+	}
+	for _, wt := range x.legacy[ref.LegacyBranchKey(headRef)] {
+		if legacyCompatible(wt.Repo, false, ref, prRepos) {
+			return wt.WorktreePath
+		}
+	}
+	return ""
+}
+
+// legacyCompatible reports whether a repo found only by the owner-only legacy
+// key may still be linked to a PR in ref: it must not be a known-different PR
+// repo, and its host must match. Only a genuinely unrecorded host
+// (hostUnrecorded: a GHE session stored before hosts were recorded) is a
+// wildcard; an empty RepoRef host otherwise means github.com. Legacy links never
+// grant nudge linkage.
+func legacyCompatible(candidate RepoRef, hostUnrecorded bool, ref RepoRef, prRepos map[string]bool) bool {
+	if !hostUnrecorded && NormalizeHost(candidate.Host()) != NormalizeHost(ref.Host()) {
+		return false
+	}
+	return !prRepos[candidate.repoKey()]
+}
+
+// sessionIndex holds the strict (host/owner/repo) and legacy (owner-only)
+// lookup tables for one Annotate pass.
+type sessionIndex struct {
+	byBranch, byNum             map[LinkKey][]PRAnnotationSession
+	legacyByBranch, legacyByNum map[LinkKey][]PRAnnotationSession
+}
+
+func newSessionIndex(sessions []PRAnnotationSession) sessionIndex {
+	idx := sessionIndex{
+		byBranch:       make(map[LinkKey][]PRAnnotationSession, len(sessions)),
+		byNum:          make(map[LinkKey][]PRAnnotationSession),
+		legacyByBranch: make(map[LinkKey][]PRAnnotationSession, len(sessions)),
+		legacyByNum:    make(map[LinkKey][]PRAnnotationSession),
+	}
 	for _, s := range sessions {
 		if !s.Repo.IsValid() {
 			continue
 		}
 		if s.Branch != "" {
 			k := s.Repo.BranchKey(s.Branch)
-			sessionsByBranch[k] = append(sessionsByBranch[k], s.ID)
+			idx.byBranch[k] = append(idx.byBranch[k], s)
+			lk := s.Repo.LegacyBranchKey(s.Branch)
+			idx.legacyByBranch[lk] = append(idx.legacyByBranch[lk], s)
 		}
 		if s.PRNumber > 0 {
 			k := s.Repo.PRKey(s.PRNumber)
-			sessionsByNum[k] = append(sessionsByNum[k], s.ID)
+			idx.byNum[k] = append(idx.byNum[k], s)
+			lk := s.Repo.LegacyPRKey(s.PRNumber)
+			idx.legacyByNum[lk] = append(idx.legacyByNum[lk], s)
 		}
 	}
-	worktreeByKey := make(map[string]string, len(worktrees))
-	for _, wt := range worktrees {
-		if wt.Branch == "" || !wt.Repo.IsValid() {
-			continue
-		}
-		worktreeByKey[wt.Repo.BranchKey(wt.Branch)] = wt.WorktreePath
-	}
+	return idx
+}
 
-	annotated := make([]UserPR, len(old.prs))
-	for i, pr := range old.prs {
-		branchKey := pr.Owner + "/" + pr.HeadRef
-		ids := sessionsByBranch[branchKey]
-		if len(ids) == 0 && pr.Number > 0 {
-			ids = sessionsByNum[pr.Owner+"/#"+strconv.Itoa(pr.Number)]
-		}
-		pr.SessionIDs = ids
-		pr.LocalWorktreePath = worktreeByKey[branchKey]
-		annotated[i] = pr
+// strict matches on the full host/owner/repo key: branch first, then PR number.
+func (x sessionIndex) strict(ref RepoRef, headRef string, number int) []LinkedSession {
+	ss := x.byBranch[ref.BranchKey(headRef)]
+	if len(ss) == 0 && number > 0 {
+		ss = x.byNum[ref.PRKey(number)]
 	}
-	c.snapshot.Store(&userPRSnapshot{prs: annotated, capturedAt: old.capturedAt})
+	return toLinkedSessions(ss, false)
+}
+
+// legacy matches the old owner-only key, restricted to same-host (or host-unrecorded)
+// sessions whose repo is not one of the PR list's repos (known-different).
+func (x sessionIndex) legacy(ref RepoRef, headRef string, number int, prRepos map[string]bool) []LinkedSession {
+	ss := x.legacyByBranch[ref.LegacyBranchKey(headRef)]
+	if len(ss) == 0 && number > 0 {
+		ss = x.legacyByNum[ref.LegacyPRKey(number)]
+	}
+	var kept []PRAnnotationSession
+	for _, s := range ss {
+		if legacyCompatible(s.Repo, s.HostUnrecorded, ref, prRepos) {
+			kept = append(kept, s)
+		}
+	}
+	return toLinkedSessions(kept, true)
+}
+
+func toLinkedSessions(ss []PRAnnotationSession, legacy bool) []LinkedSession {
+	if len(ss) == 0 {
+		return nil
+	}
+	out := make([]LinkedSession, len(ss))
+	for i, s := range ss {
+		out[i] = LinkedSession{SessionID: s.ID, Status: s.Status, LastActiveAt: s.LastActiveAt, LegacyFallback: legacy}
+	}
+	return out
+}
+
+func linkedSessionIDs(ls []LinkedSession) []string {
+	if len(ls) == 0 {
+		return nil
+	}
+	ids := make([]string, len(ls))
+	for i, l := range ls {
+		ids[i] = l.SessionID
+	}
+	return ids
+}
+
+// sortLinkedSessions orders most recently active first; sessions with no
+// timestamp sort last, and ties break by session title.
+func sortLinkedSessions(ls []LinkedSession) {
+	sort.SliceStable(ls, func(i, j int) bool {
+		a, b := ls[i], ls[j]
+		if a.LastActiveAt.IsZero() != b.LastActiveAt.IsZero() {
+			return !a.LastActiveAt.IsZero()
+		}
+		if !a.LastActiveAt.Equal(b.LastActiveAt) {
+			return a.LastActiveAt.After(b.LastActiveAt)
+		}
+		return a.SessionID < b.SessionID
+	})
 }
 
 // Refresh triggers an immediate fetch from GitHub, coalescing concurrent calls.
@@ -370,18 +667,21 @@ func (c *UserPRCache) fetch() error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			prs, fetchErr := c.fetchUserPRsForToken(acc.host, acc.token)
+			prs, fetchErr := c.fetchUserPRsForToken(acc.host, acc.login, acc.token)
 			results[i] = prResult{prs: prs, err: fetchErr}
 		}()
 	}
 	wg.Wait()
 
 	// Merge and dedup by URL (same PR can appear via multiple account tokens, e.g. org members).
+	// First account in resolveAllLogins order wins.
 	seen := make(map[string]bool)
 	var merged []UserPR
-	for _, r := range results {
+	statuses := make([]AccountPollStatus, 0, len(accounts))
+	for i, r := range results {
+		statuses = append(statuses, accountPollStatus(accounts[i], r.err))
 		if r.err != nil {
-			log.Warn("UserPRCache: fetch failed for account", "err", r.err)
+			log.Warn("UserPRCache: fetch failed for account", "host", accounts[i].host, "login", accounts[i].login, "err", r.err)
 			continue
 		}
 		for _, pr := range r.prs {
@@ -392,11 +692,38 @@ func (c *UserPRCache) fetch() error {
 		}
 	}
 
-	snap := &userPRSnapshot{prs: merged, capturedAt: time.Now()}
-	c.snapshot.Store(snap)
+	c.publish(merged, statuses)
+	return nil
+}
+
+// publish annotates merged with the latest session/worktree links, stores it,
+// and only then fans it out, so subscribers and WatchUserPRs never see PRs
+// that are momentarily missing their linked sessions.
+func (c *UserPRCache) publish(merged []UserPR, statuses []AccountPollStatus) {
+	// Build inputs before taking annMu: the source reads config, sessions and
+	// git remotes, and holding the lock across that would stall Annotate.
+	c.annMu.Lock()
+	src := c.annSource
+	c.annMu.Unlock()
+	var sessions []PRAnnotationSession
+	var worktrees []PRAnnotationWorktree
+	if src != nil {
+		sessions, worktrees = src()
+	}
+
+	c.annMu.Lock()
+	if src != nil {
+		c.annSessions, c.annWorktrees = sessions, worktrees
+	}
+	if c.annSessions != nil || c.annWorktrees != nil {
+		merged, _ = annotatePRs(merged, c.annSessions, c.annWorktrees)
+	}
+	c.snapshot.Store(&userPRSnapshot{prs: merged, accountStatuses: statuses, capturedAt: time.Now()})
+	c.annMu.Unlock()
 
 	out := make([]UserPR, len(merged))
 	copy(out, merged)
+	c.trackNudges(out)
 	c.subscribers.Range(func(_, v any) bool {
 		ch := v.(chan []UserPR)
 		select {
@@ -411,7 +738,6 @@ func (c *UserPRCache) fetch() error {
 			cb(out)
 		}
 	}
-	return nil
 }
 
 // resolveAllLogins returns all connected (token, login) pairs, refreshing if stale.
@@ -511,8 +837,8 @@ func collectAllTokens() []AccountToken {
 	return tokens
 }
 
-// userPRGraphQLQuery fetches the authenticated user's open pull requests.
-const userPRGraphQLQuery = `
+// userPRQueryPrefix/Suffix wrap the per-mode field selections below.
+const userPRQueryPrefix = `
 query UserPRs {
   viewer {
     pullRequests(first: 100, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) {
@@ -535,17 +861,56 @@ query UserPRs {
         reviews(last: 20, states: [APPROVED, CHANGES_REQUESTED]) {
           nodes { state }
         }
-        commits(last: 1) {
+`
+
+const userPRQuerySuffix = `      }
+    }
+  }
+}`
+
+const (
+	userPRMergeableField = `        mergeable
+`
+	userPRReviewThreadsField = `        reviewThreads(first: 50) {
+          totalCount
+          nodes { isResolved isOutdated }
+        }
+`
+	userPRCommitsLegacy = `        commits(last: 1) {
           nodes {
             commit {
               statusCheckRollup { state }
             }
           }
         }
-      }
-    }
-  }
-}`
+`
+	userPRCommitsWithContexts = `        commits(last: 1) {
+          nodes {
+            commit {
+              statusCheckRollup {
+                state
+                contexts(first: 25) {
+                  nodes {
+                    __typename
+                    ... on CheckRun { name conclusion detailsUrl }
+                    ... on StatusContext { context state targetUrl }
+                  }
+                }
+              }
+            }
+          }
+        }
+`
+)
+
+// The three query shapes (ADR-001). Widened = mergeable + review threads +
+// check contexts; degraded drops review threads; legacy is the pre-widening
+// query, used when a host rejects the widened one.
+const (
+	userPRGraphQLQuery         = userPRQueryPrefix + userPRMergeableField + userPRReviewThreadsField + userPRCommitsWithContexts + userPRQuerySuffix
+	userPRGraphQLQueryDegraded = userPRQueryPrefix + userPRMergeableField + userPRCommitsWithContexts + userPRQuerySuffix
+	userPRGraphQLQueryLegacy   = userPRQueryPrefix + userPRCommitsLegacy + userPRQuerySuffix
+)
 
 // graphQLResponse is the top-level GraphQL response envelope.
 type graphQLResponse struct {
@@ -554,6 +919,7 @@ type graphQLResponse struct {
 }
 
 type graphQLError struct {
+	Type    string `json:"type"`
 	Message string `json:"message"`
 }
 
@@ -563,6 +929,25 @@ type graphQLData struct {
 			Nodes []graphQLPRNode `json:"nodes"`
 		} `json:"pullRequests"`
 	} `json:"viewer"`
+}
+
+type graphQLReviewThreads struct {
+	TotalCount int `json:"totalCount"`
+	Nodes      []struct {
+		IsResolved bool `json:"isResolved"`
+		IsOutdated bool `json:"isOutdated"`
+	} `json:"nodes"`
+}
+
+// graphQLContext is a CheckRun or StatusContext, discriminated by TypeName.
+type graphQLContext struct {
+	TypeName   string `json:"__typename"`
+	Name       string `json:"name"`
+	Conclusion string `json:"conclusion"`
+	DetailsURL string `json:"detailsUrl"`
+	Context    string `json:"context"`
+	State      string `json:"state"`
+	TargetURL  string `json:"targetUrl"`
 }
 
 type graphQLPRNode struct {
@@ -576,6 +961,7 @@ type graphQLPRNode struct {
 	UpdatedAt   string `json:"updatedAt"`
 	ClosedAt    string `json:"closedAt"`
 	MergedAt    string `json:"mergedAt"`
+	Mergeable   string `json:"mergeable"`
 	Repository  struct {
 		Owner struct {
 			Login string `json:"login"`
@@ -588,55 +974,188 @@ type graphQLPRNode struct {
 			State string `json:"state"`
 		} `json:"nodes"`
 	} `json:"reviews"`
-	Commits struct {
+	ReviewThreads *graphQLReviewThreads `json:"reviewThreads"`
+	Commits       struct {
 		Nodes []struct {
 			Commit struct {
 				StatusCheckRollup *struct {
-					State string `json:"state"`
+					State    string `json:"state"`
+					Contexts struct {
+						Nodes []graphQLContext `json:"nodes"`
+					} `json:"contexts"`
 				} `json:"statusCheckRollup"`
 			} `json:"commit"`
 		} `json:"nodes"`
 	} `json:"commits"`
 }
 
-func (c *UserPRCache) fetchUserPRsForToken(host, token string) ([]UserPR, error) {
-	body, err := json.Marshal(map[string]string{"query": userPRGraphQLQuery})
+// errAccountUnauthorized marks an HTTP 401/403 (non-rate-limit) poll response.
+var errAccountUnauthorized = errors.New("GitHub rejected the account's token")
+
+// errAccountRateLimited marks a rate-limited poll response (HTTP or GraphQL).
+var errAccountRateLimited = errors.New("GitHub rate limit exceeded")
+
+// accountPollStatus classifies one account's fetch outcome. Detail is a fixed
+// short string per state, never the raw error, so it cannot leak a token.
+func accountPollStatus(acc connectedAccount, err error) AccountPollStatus {
+	st := AccountPollStatus{Host: NormalizeHost(acc.host), AccountLogin: acc.login, State: AccountPollOK}
+	switch {
+	case err == nil:
+	case errors.Is(err, errAccountUnauthorized):
+		st.State, st.Detail = AccountPollUnauthorized, "sign-in expired or token rejected"
+	case errors.Is(err, errAccountRateLimited):
+		st.State, st.Detail = AccountPollRateLimited, "rate limited"
+	default:
+		st.State, st.Detail = AccountPollError, "poll failed"
+	}
+	return st
+}
+
+// mapFailingChecks returns failing CheckRuns first, then failing legacy
+// StatusContexts, capped at maxFailingChecks. Pending/successful ones are dropped.
+func mapFailingChecks(nodes []graphQLContext) []FailingCheck {
+	var runs, statuses []FailingCheck
+	for _, n := range nodes {
+		switch n.TypeName {
+		case "CheckRun":
+			switch strings.ToUpper(n.Conclusion) {
+			case "FAILURE", "TIMED_OUT", "STARTUP_FAILURE":
+				runs = append(runs, FailingCheck{Name: n.Name, URL: n.DetailsURL, Conclusion: strings.ToLower(n.Conclusion)})
+			}
+		case "StatusContext":
+			switch strings.ToUpper(n.State) {
+			case "FAILURE", "ERROR":
+				statuses = append(statuses, FailingCheck{Name: n.Context, URL: n.TargetURL, Conclusion: strings.ToLower(n.State)})
+			}
+		}
+	}
+	out := append(runs, statuses...)
+	if len(out) > maxFailingChecks {
+		out = out[:maxFailingChecks]
+	}
+	return out
+}
+
+// countUnresolved counts threads that are neither resolved nor outdated,
+// capped at maxReviewThreads. truncated is true when GitHub reports more
+// threads than the page fetched, so the true count may be higher.
+func countUnresolved(rt *graphQLReviewThreads) (count int, truncated bool) {
+	for _, t := range rt.Nodes {
+		if !t.IsResolved && !t.IsOutdated {
+			count++
+		}
+	}
+	if count > maxReviewThreads {
+		count = maxReviewThreads
+	}
+	return count, rt.TotalCount > maxReviewThreads
+}
+
+// mergeConflict maps GitHub's lazily computed mergeable enum to a tri-state;
+// UNKNOWN (or absent) is nil so the conflict chip does not flap.
+func mergeConflict(mergeable string) *bool {
+	var v bool
+	switch strings.ToUpper(mergeable) {
+	case "CONFLICTING":
+		v = true
+	case "MERGEABLE":
+		v = false
+	default:
+		return nil
+	}
+	return &v
+}
+
+// isRateLimitedGraphQL reports whether a GraphQL errors array signals rate
+// limiting; any other errors-only response means the host rejected the query shape.
+func isRateLimitedGraphQL(errs []graphQLError) bool {
+	for _, e := range errs {
+		if e.Type == "RATE_LIMITED" || strings.Contains(strings.ToLower(e.Message), "rate limit") {
+			return true
+		}
+	}
+	return false
+}
+
+func graphQLErrorsToError(errs []graphQLError) error {
+	if isRateLimitedGraphQL(errs) {
+		return errAccountRateLimited
+	}
+	msgs := make([]string, len(errs))
+	for i, e := range errs {
+		msgs[i] = e.Message
+	}
+	return fmt.Errorf("GraphQL errors: %s", strings.Join(msgs, "; "))
+}
+
+// runUserPRQuery posts one query and decodes the envelope. A 401/403 or
+// rate-limited response comes back as errAccountUnauthorized/errAccountRateLimited.
+func (c *UserPRCache) runUserPRQuery(host, token, query string) (*graphQLResponse, error) {
+	body, err := json.Marshal(map[string]string{"query": query})
 	if err != nil {
 		return nil, fmt.Errorf("marshal GraphQL query: %w", err)
 	}
-
 	req, err := newGHGraphQLRequestForHostWithToken(c.ctx, host, body, token)
 	if err != nil {
 		return nil, fmt.Errorf("build GraphQL request: %w", err)
 	}
-
 	resp, err := ghHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("GraphQL request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if isGHRateLimited(resp) {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, errAccountRateLimited
+	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, nil
+		return nil, errAccountUnauthorized
 	}
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		return nil, fmt.Errorf("GraphQL API returned status %d", resp.StatusCode)
 	}
-
 	var gqlResp graphQLResponse
 	if err := json.NewDecoder(resp.Body).Decode(&gqlResp); err != nil {
 		return nil, fmt.Errorf("decode GraphQL response: %w", err)
 	}
-	if len(gqlResp.Errors) > 0 {
-		msgs := make([]string, len(gqlResp.Errors))
-		for i, e := range gqlResp.Errors {
-			msgs[i] = e.Message
+	return &gqlResp, nil
+}
+
+// fetchUserPRsForToken polls one account with exactly one request, plus one
+// legacy-query retry when the host rejects the widened query (cached per host).
+func (c *UserPRCache) fetchUserPRsForToken(host, login, token string) ([]UserPR, error) {
+	host = NormalizeHost(host)
+	query := userPRGraphQLQuery
+	if c.config.DegradedDetails {
+		query = userPRGraphQLQueryDegraded
+	}
+	widened := true
+	if _, unsupported := c.widenedUnsupported.Load(host); unsupported {
+		query, widened = userPRGraphQLQueryLegacy, false
+	}
+
+	gqlResp, err := c.runUserPRQuery(host, token, query)
+	if err != nil {
+		return nil, err
+	}
+	if gqlResp.Data == nil && len(gqlResp.Errors) > 0 && widened && !isRateLimitedGraphQL(gqlResp.Errors) {
+		c.widenedUnsupported.Store(host, struct{}{})
+		log.Warn("UserPRCache: host rejected widened PR query, falling back to legacy", "host", host)
+		if gqlResp, err = c.runUserPRQuery(host, token, userPRGraphQLQueryLegacy); err != nil {
+			return nil, err
 		}
-		return nil, fmt.Errorf("GraphQL errors: %s", strings.Join(msgs, "; "))
 	}
 	if gqlResp.Data == nil {
+		if len(gqlResp.Errors) > 0 {
+			return nil, graphQLErrorsToError(gqlResp.Errors)
+		}
 		return nil, nil
+	}
+	if len(gqlResp.Errors) > 0 {
+		// Data plus partial errors (e.g. one inaccessible node) is a usable result.
+		log.Warn("UserPRCache: GraphQL returned partial errors", "host", host, "count", len(gqlResp.Errors))
 	}
 
 	nodes := gqlResp.Data.Viewer.PullRequests.Nodes
@@ -652,27 +1171,41 @@ func (c *UserPRCache) fetchUserPRsForToken(host, token string) ([]UserPR, error)
 			}
 		}
 		checkState := ""
+		var contexts []graphQLContext
 		if len(n.Commits.Nodes) > 0 && n.Commits.Nodes[0].Commit.StatusCheckRollup != nil {
-			checkState = normalizeCheckState(n.Commits.Nodes[0].Commit.StatusCheckRollup.State)
+			rollup := n.Commits.Nodes[0].Commit.StatusCheckRollup
+			checkState = normalizeCheckState(rollup.State)
+			contexts = rollup.Contexts.Nodes
 		}
 
-		prs = append(prs, UserPR{
-			Owner:           n.Repository.Owner.Login,
-			Repo:            n.Repository.Name,
-			Number:          n.Number,
-			Title:           n.Title,
-			URL:             n.URL,
-			HeadRef:         n.HeadRefName,
-			BaseRef:         n.BaseRefName,
-			State:           strings.ToLower(n.State),
-			IsDraft:         n.IsDraft,
-			UpdatedAt:       parseGitHubTime(n.UpdatedAt),
-			ClosedAt:        parseGitHubTime(n.ClosedAt),
-			MergedAt:        parseGitHubTime(n.MergedAt),
-			ApprovedCount:   approved,
-			ChangesReqCount: changesReq,
-			CheckConclusion: checkState,
-		})
+		pr := UserPR{
+			Owner:            n.Repository.Owner.Login,
+			Repo:             n.Repository.Name,
+			Number:           n.Number,
+			Title:            n.Title,
+			URL:              n.URL,
+			HeadRef:          n.HeadRefName,
+			BaseRef:          n.BaseRefName,
+			State:            strings.ToLower(n.State),
+			IsDraft:          n.IsDraft,
+			UpdatedAt:        parseGitHubTime(n.UpdatedAt),
+			ClosedAt:         parseGitHubTime(n.ClosedAt),
+			MergedAt:         parseGitHubTime(n.MergedAt),
+			ApprovedCount:    approved,
+			ChangesReqCount:  changesReq,
+			CheckConclusion:  checkState,
+			Host:             host,
+			AccountLogin:     login,
+			FailingChecks:    mapFailingChecks(contexts),
+			HasMergeConflict: mergeConflict(n.Mergeable),
+		}
+		if n.ReviewThreads != nil {
+			count, truncated := countUnresolved(n.ReviewThreads)
+			pr.UnresolvedThreadCount = &count
+			pr.UnresolvedThreadsTruncated = truncated
+			pr.DetailsLoaded = true
+		}
+		prs = append(prs, pr)
 	}
 	return prs, nil
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -38,4 +39,16 @@ func TestAuth_should_RedirectToLogin_When_UnauthenticatedRequestHitsOtherInterna
 	code, reached := serveThroughAuth(http.MethodPost, "/internal/claim-advertisement/extra")
 	assert.False(t, reached, "exemption must be exact-match, not a prefix")
 	assert.Equal(t, http.StatusFound, code)
+}
+
+func TestAuth_should_Return401WithoutCookieOrBearer_When_NudgeProcedurePathAndValidatorRejects(t *testing.T) {
+	path := "/api" + sessionv1connect.GitHubUserServiceNudgeSessionForPRProcedure
+	w := httptest.NewRecorder()
+	reached := false
+	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true })
+	Auth(rejectAllValidator{})(next).ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, nil))
+
+	assert.False(t, reached, "handler must not run without a valid session")
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.JSONEq(t, `{"error":"unauthorized"}`, w.Body.String())
 }

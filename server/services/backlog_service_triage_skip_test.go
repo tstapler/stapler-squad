@@ -1,6 +1,7 @@
 package services
 
 import (
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -152,14 +153,27 @@ func TestAutoRespawnTriage_UnchangedContentSkipped_ChangedRuns_ResumeBypasses(t 
 
 // runBulkTriage creates 3 items under the given concurrency cap and returns the peak
 // number of simultaneously running triage calls. Concurrency is measured with a
-// decrement-on-return counter inside the fake pool, so there is no timer margin to flake on.
-func runBulkTriage(t *testing.T, cap int) int32 {
+// decrement-on-return counter inside the fake pool. With rendezvous, each call blocks on entry
+// until a second one is in flight (or 5s passes), so overlap never depends on how fast the
+// test creates items.
+func runBulkTriage(t *testing.T, cap int, rendezvous bool) int32 {
 	t.Helper()
 	storage := createTestStorage(t)
 	var active, maxActive int32
+	overlapped := make(chan struct{})
+	var overlapOnce sync.Once
 	pool := &fakeHeadlessPool{response: validTriageJSON(), delay: 100 * time.Millisecond}
 	pool.onEnter = func() {
 		n := atomic.AddInt32(&active, 1)
+		if n >= 2 {
+			overlapOnce.Do(func() { close(overlapped) })
+		}
+		if rendezvous {
+			select {
+			case <-overlapped:
+			case <-time.After(5 * time.Second):
+			}
+		}
 		for {
 			cur := atomic.LoadInt32(&maxActive)
 			if n <= cur || atomic.CompareAndSwapInt32(&maxActive, cur, n) {
@@ -184,8 +198,8 @@ func runBulkTriage(t *testing.T, cap int) int32 {
 
 func TestTriageConcurrencyCapQueuesExcessRuns(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, int32(1), runBulkTriage(t, 1), "cap=1 must never run two triage calls at once")
-	assert.Greater(t, runBulkTriage(t, 3), int32(1), "control: cap=3 does run in parallel, so the cap=1 result is not vacuous")
+	assert.Equal(t, int32(1), runBulkTriage(t, 1, false), "cap=1 must never run two triage calls at once")
+	assert.Greater(t, runBulkTriage(t, 3, true), int32(1), "control: cap=3 does run in parallel, so the cap=1 result is not vacuous")
 }
 
 func TestTriageCallUsesConfiguredModel(t *testing.T) {

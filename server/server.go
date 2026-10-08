@@ -1693,22 +1693,32 @@ func (s *Server) registerServerInfoHandler() {
 // outer handler, before the mux strips the "/api" prefix.
 const probeProcedurePath = "/api" + sessionv1connect.SessionServiceProbeProgramProcedure
 
+// nudgeProcedurePath is the full request path of the write-capable
+// NudgeSessionForPR, guarded like ProbeProgram on the unauthenticated listener.
+const nudgeProcedurePath = "/api" + sessionv1connect.GitHubUserServiceNudgeSessionForPRProcedure
+
+var guardedProcedurePaths = []string{probeProcedurePath, nudgeProcedurePath}
+
 // localChain is the :8543 middleware chain (inside otelhttp):
 // Logging -> CORS -> Compress -> [auth | ProbeGuard] -> mux.
 // The listener has no auth unless authMiddleware is set, so ProbeGuard is the
-// boundary for the one RPC that executes a program; with auth, auth is the boundary.
+// boundary for the RPCs that execute a program or write to a session's terminal
+// (ProbeProgram, NudgeSessionForPR); with auth, auth is the boundary.
 func (s *Server) localChain() http.Handler {
 	inner := http.Handler(s)
 	if s.authMiddleware != nil {
 		inner = s.authMiddleware(inner)
 	} else {
-		inner = middleware.ProbeGuard(probeProcedurePath, s.probeGuardConfig())(inner)
+		inner = middleware.ProbeGuardPaths(guardedProcedurePaths, s.probeGuardConfig())(inner)
 	}
 	return middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner)))
 }
 
 // remoteChain is the :8444 chain. It never carries ProbeGuard: auth is the
 // boundary there and its Host is a LAN/Tailscale name the guard would reject.
+// A nil authMW leaves the chain open (existing posture, pinned by
+// TestRemoteChain_should_LeaveNudgeReachable_When_AuthMiddlewareNil); main.go
+// always passes middleware.Auth, so nil only occurs in tests.
 func (s *Server) remoteChain(authMW func(http.Handler) http.Handler) http.Handler {
 	inner := http.Handler(s)
 	if authMW != nil {

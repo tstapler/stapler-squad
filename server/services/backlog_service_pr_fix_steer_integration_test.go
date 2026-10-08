@@ -197,7 +197,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_SteersWhenReady(t *testing.T) {
 // reported busy/not-ready must never receive the raw, unauthenticated
 // fixContext PTY write — steering must degrade to the same notify-only
 // fallback used for a not-live session, without ever calling
-// SteerActiveSession.
+// SteerSessionGuarded.
 func TestAutoReopenForPRFix_ActiveWorkSession_DegradesToNotifyOnly_When_NotReadyForSteer(t *testing.T) {
 	t.Parallel()
 	storage := createTestStorage(t)
@@ -521,7 +521,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_SteerInFlight_PreventsDuplicateCon
 	close(start)
 	wg.Wait()
 
-	assert.Len(t, steerer.calls(), 1, "steerInFlight must let exactly one concurrent tick reach SteerActiveSession")
+	assert.Len(t, steerer.calls(), 1, "steerInFlight must let exactly one concurrent tick reach SteerSessionGuarded")
 }
 
 // TestAutoReopenForPRFix_ActiveWorkSession_SteerInFlight_PreventsDuplicateConcurrentDegrade

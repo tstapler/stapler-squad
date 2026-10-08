@@ -316,7 +316,7 @@ func (m *mockSessionStopper) ArchiveSessionByUUID(_ context.Context, uuid string
 
 // mockSessionSteerer implements SessionSteerer for tests, mirroring
 // mockSessionStopper's shape. mu guards steerCalls against concurrent
-// SteerActiveSession calls (needed by the steerInFlight race test,
+// recordSteer calls (needed by the steerInFlight race test,
 // server/services/backlog_service_pr_fix_steer_integration_test.go). programs
 // and steerErr are unguarded — no write to them ever races a concurrent
 // read in the current tests, but that's because those writes happen between
@@ -327,7 +327,7 @@ func (m *mockSessionStopper) ArchiveSessionByUUID(_ context.Context, uuid string
 type mockSessionSteerer struct {
 	mu         sync.Mutex
 	programs   map[string]string // uuid -> program; absent = not live
-	steerErr   map[string]error  // uuid -> error SteerActiveSession returns
+	steerErr   map[string]error  // uuid -> error recordSteer returns
 	steerCalls []mockSteerCall
 	// notReady marks uuids whose IsReadyForSteer must return false. Absent
 	// (or a uuid not in the set) defaults to true — every existing test's
@@ -335,6 +335,10 @@ type mockSessionSteerer struct {
 	// production's TestAutoReopenForPRFix_ActiveWorkSession_* fixture
 	// default (see requirement to keep those tests unchanged).
 	notReady map[string]bool
+	// guardedOutcome overrides SteerSessionGuarded's result for a uuid (no
+	// write is recorded). Absent uuids delegate to recordSteer.
+	guardedOutcome map[string]SteerOutcome
+	guardedSigs    []string
 }
 
 type mockSteerCall struct {
@@ -355,15 +359,36 @@ func (m *mockSessionSteerer) IsReadyForSteer(uuid string) bool {
 	return !m.notReady[uuid]
 }
 
-func (m *mockSessionSteerer) SteerActiveSession(_ context.Context, uuid, message string) error {
+func (m *mockSessionSteerer) recordSteer(_ context.Context, uuid, message string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.steerCalls = append(m.steerCalls, mockSteerCall{uuid: uuid, message: message})
 	return m.steerErr[uuid]
 }
 
+// SteerSessionGuarded implements SessionSteerer. Without a guardedOutcome
+// override it behaves like the unguarded path, so tests written against
+// the unguarded recording path keep their meaning.
+func (m *mockSessionSteerer) SteerActiveSession(ctx context.Context, uuid, message string) error {
+	return m.recordSteer(ctx, uuid, message)
+}
+
+func (m *mockSessionSteerer) SteerSessionGuarded(ctx context.Context, uuid, sig, message string) (SteerOutcome, error) {
+	m.mu.Lock()
+	m.guardedSigs = append(m.guardedSigs, sig)
+	override, ok := m.guardedOutcome[uuid]
+	m.mu.Unlock()
+	if ok {
+		return override, nil
+	}
+	if err := m.recordSteer(ctx, uuid, message); err != nil {
+		return SteerFailed, err
+	}
+	return SteerDelivered, nil
+}
+
 // calls returns a snapshot copy of steerCalls, safe to read concurrently with
-// in-flight SteerActiveSession calls.
+// in-flight recordSteer calls.
 func (m *mockSessionSteerer) calls() []mockSteerCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()

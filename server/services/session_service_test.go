@@ -2241,12 +2241,12 @@ func TestSteerInstance_AutonomousSendCommandImmediateHangs_TimesOutRatherThanBlo
 }
 
 // --------------------------------------------------------------------------
-// SessionSteerer (Story 1.2.1) — SessionProgram / SteerActiveSession
+// SessionSteerer (Story 1.2.1) — SessionProgram
 // --------------------------------------------------------------------------
 //
 // validation.md flags these as a coverage gap: plan.md's Tasks 1.2.1a-d name
 // only a compile-time interface assertion (var _ SessionSteerer =
-// (*SessionService)(nil)) for SessionProgram/SteerActiveSession, with no
+// (*SessionService)(nil)) for SessionProgram, with no
 // direct Test... function for their own return-value behavior. Added here
 // per validation.md's explicit recommendation.
 
@@ -2282,18 +2282,6 @@ func TestSessionService_SessionProgram_ReturnsNotOkForUnknownUUID(t *testing.T) 
 	program, ok := fix.svc.SessionProgram("no-such-session")
 	assert.False(t, ok)
 	assert.Empty(t, program)
-}
-
-// TestSessionService_SteerActiveSession_ReturnsErrorForUnknownUUID verifies
-// SteerActiveSession returns a non-nil error (and does not panic) when no
-// live instance is tracked for the given UUID.
-func TestSessionService_SteerActiveSession_ReturnsErrorForUnknownUUID(t *testing.T) {
-	t.Parallel()
-	fix := setupForkTestFixture(t)
-	t.Cleanup(fix.cleanup)
-
-	err := fix.svc.SteerActiveSession(context.Background(), "missing-uuid", "hello")
-	require.Error(t, err)
 }
 
 // --------------------------------------------------------------------------
