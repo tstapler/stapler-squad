@@ -2298,15 +2298,14 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
   const isConnectingState = terminalState === "CONNECTING" || terminalState === "LOADING";
 
-  // Rendered in both the desktop toolbar and the mobile overflow row; the hidden file <input>s stay in toolbarActions.
-  const renderUploadButtons = (afterClick?: () => void) => (
+  // Rendered in both the desktop toolbar and the mobile overflow row; the hidden file <input>s stay in toolbarActions. The overflow row stays open on click so upload status on the Gallery label remains visible.
+  const renderUploadButtons = () => (
     <>
       <button
         className={styles.toolbarButton}
         onClick={() => {
           track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "gallery" } });
           handleGalleryButtonClick();
-          afterClick?.();
         }}
         disabled={uploadingCount > 0}
         title="Attach image(s) from gallery — multi-select supported"
@@ -2319,7 +2318,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         onClick={() => {
           track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "files" } });
           handleFilesButtonClick();
-          afterClick?.();
         }}
         disabled={uploadingCount > 0}
         title="Attach any file(s) — multi-select, all types accepted"
@@ -2333,7 +2331,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         onClick={() => {
           track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "camera" } });
           handleCameraButtonClick();
-          afterClick?.();
         }}
         disabled={uploadingCount > 0}
         title="Take a photo — opens camera directly"
@@ -2608,7 +2605,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
               {action.icon} {action.label}
             </button>
           ))}
-          {renderUploadButtons(() => setMobileOverflowOpen(false))}
+          {renderUploadButtons()}
         </div>
       )}
       <ScrollHint visible={scrollHint.visible} route={scrollHint.route} onDismiss={scrollHint.dismiss} />
