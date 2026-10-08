@@ -49,6 +49,7 @@ func migratedTemplateDBURI() (string, error) {
 			templateDBErr = err
 			return
 		}
+		_ = templateKeeper // held, not read: the open connection is what keeps the database alive
 		templateDBURI = dsn
 	})
 	return templateDBURI, templateDBErr
