@@ -5,7 +5,7 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -419,5 +419,27 @@ describe("compact toolbar auto-collapse", () => {
     renderTerminal();
     expect(screen.getByTestId("toolbar-toggle")).toHaveAttribute("aria-expanded", "true");
     expect(screen.queryAllByTestId("mobile-key").length).toBeGreaterThan(0);
+  });
+});
+
+describe("TerminalOutput — mobile overflow row upload buttons", () => {
+  it("renders Gallery and Files in the overflow row once More is opened", () => {
+    renderTerminal();
+    expect(screen.queryByTestId("toolbar-overflow-row")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("toolbar-more-button"));
+
+    const row = within(screen.getByTestId("toolbar-overflow-row"));
+    expect(row.getByLabelText("Attach images from gallery")).toBeInTheDocument();
+    expect(row.getByLabelText("Attach files")).toBeInTheDocument();
+    expect(row.getByLabelText("Take photo with camera")).toBeInTheDocument();
+  });
+
+  it("keeps aria-label and title on the Redraw button", () => {
+    renderTerminal();
+    expect(screen.getByLabelText("Redraw terminal (fixes a blank screen)")).toHaveAttribute(
+      "title",
+      "Redraw terminal (fixes a blank screen)"
+    );
   });
 });
