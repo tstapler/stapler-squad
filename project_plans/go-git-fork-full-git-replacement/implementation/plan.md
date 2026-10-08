@@ -2,9 +2,20 @@
 
 **Feature**: Replace the `git` CLI in the stapler-squad server process with in-process go-git, backed by a long-lived private fork (`github.com/tstapler/go-git`, v5 line) that carries only the patches public go-git API cannot support, behind a per-cohort CLI fallback.
 **Date**: 2026-10-08
-**Status**: Revision 6 (Phase 4 patch pass from `pre-mortem.md`, `consistency.md`, `validation.md`; see "Revision 6 change log"; **planning freeze: no Revision 7 until shipped code exists, further review findings go to a backlog list in `gates.md`**); before that Revision 5 (Re-review 3 concerns R3-1 to R3-6 applied, see "Revision 5 change log"; before that Revision 4, Phase 3 repair pass 3: adversarial blockers N3/N4 and concerns C-a to C-d, architecture concerns C3 to C6 resolved, see "Revision 4 change log" below; Revision 3 and 2 logs retained under it). Spikes first. Every epic after Phase 0 is conditional on a named gate. ADR-003 and ADR-006 are still NEEDS USER DECISION (O-1, O-2); Epic 1.1's router bakes in their recommended defaults, and Epics 1.1/1.3 may start before G7 on that explicit assumption.
+**Status**: Revision 7 (user decisions of 2026-10-08 recorded: O-1, O-4, O-5, O-6, O-9, O-13 RESOLVED; new open decisions O-14 and O-15; see "Revision 7 change log"; **planning freeze: no Revision 8 until shipped code exists, further review findings go to a backlog list in `gates.md`**). **The original "Large, 3 to 6 weeks" appetite no longer covers the scope now in the product; the calendar in section 0.3.1 is stale and must be re-cut after spikes S1 to S7 report (Story 0.2.9). No new duration is stated here.** Before that Revision 6 (Phase 4 patch pass from `pre-mortem.md`, `consistency.md`, `validation.md`; see "Revision 6 change log"); before that Revision 5 (Re-review 3 concerns R3-1 to R3-6 applied, see "Revision 5 change log"; before that Revision 4, Phase 3 repair pass 3: adversarial blockers N3/N4 and concerns C-a to C-d, architecture concerns C3 to C6 resolved, see "Revision 4 change log" below; Revision 3 and 2 logs retained under it). Spikes first. Every epic after Phase 0 is conditional on a named gate. ADR-003 is Accepted for the meaning of "no git" (O-1); its carve-out list is under review (O-14). ADR-006 is still NEEDS USER DECISION (O-2); Epic 1.1's router bakes in its recommended default, and Epics 1.1/1.3 may start before G7 on that explicit assumption.
 
-> **Plain statement of the likely end state (adversarial C1)**: the in-repo fixes now designed for locking (operation-scoped lock, Story 0.2.4/2.3.1) and repack (public `ObjectStorage.Reindex()`, `storage/filesystem/object.go:74`) are wrapper-level, and the former F3 (index v3) premise was wrong (go-git v5.19.2 decodes and encodes index v2 to v4: `plumbing/format/index/decoder.go:19`, `encoder.go:17`). Gates G4 and G6 will therefore most likely return "wrapper works", and the most probable end state is **an empty pinned fork F0** (a `tstapler/go-git` fork at the upstream tag, consumed by `replace`, carrying zero patches). The user chose a fork at 3 to 6 weeks; that choice is honoured, but **O-6 (keep an empty pinned fork, or drop the fork and use stock go-git v5) is an explicit decision point for Tyler at checkpoint G7a, before Epic 1.2 and before any Phase 2+ work**. What evidence would justify a fork patch: a failing test against public API that no wrapper can fix (the fork-only test, 0.3) or a measured G3 perf gap in a hot go-git path fixable in under 200 lines. A no-patch result is a successful outcome of the spikes, not a failed plan.
+> **Plain statement of the likely end state (adversarial C1)**: the in-repo fixes now designed for locking (operation-scoped lock, Story 0.2.4/2.3.1) and repack (public `ObjectStorage.Reindex()`, `storage/filesystem/object.go:74`) are wrapper-level, and the former F3 (index v3) premise was wrong (go-git v5.19.2 decodes and encodes index v2 to v4: `plumbing/format/index/decoder.go:19`, `encoder.go:17`). Gates G4 and G6 will therefore most likely return "wrapper works", and the most probable end state is **an empty pinned fork F0** (a `tstapler/go-git` fork at the upstream tag, consumed by `replace`, carrying zero patches). **O-6 is RESOLVED (user, 2026-10-08): keep an empty pinned fork (F0) as the baseline deliverable.** Patches are added only when a spike proves a wrapper cannot do the job; dropping to stock go-git is no longer the default, and G7a is a confirm-only checkpoint. What evidence would justify a fork patch: a failing test against public API that no wrapper can fix (the fork-only test, 0.3) or a measured G3 perf gap in a hot go-git path fixable in under 200 lines. A no-patch result is a successful outcome of the spikes, not a failed plan.
+
+## Revision 7 change log (user decisions, 2026-10-08)
+Source for every row: Tyler's message of 2026-10-08 ("I want all the stretch product; no git means in the stapler-squad server, we don't shell out to git; public fork; the fallback is a feature; keep an empty fork, for sure"). No code or spike result changed; these are scope and policy decisions.
+| Decision | Resolution in this plan |
+|---|---|
+| O-13 all stretch scope is in the product | `localwrite` (Epic 2.3), network and credentials (Epics 3.1, 3.2) and resolver v2 (Story 1.3.4) are product scope; the "STRETCH / outside appetite" framing is removed. Gates GL, GS and tripwire T3 stay, but T3 and the drop order now trigger a **re-plan checkpoint with Tyler**, not a silent cut. The original 3 to 6 week appetite no longer covers this scope; Story 0.2.9 re-bakes the calendar after S1 to S7. Pre-mortem protections (`live_session`, per-repo `localwrite` opt-in, destructive-intent CLI confirmation, required-CI race tests) are kept as safety, not scope. The rule "`localwrite` never default-flips in the first release" does not conflict with shipping `localwrite`, so it stays |
+| O-1 "no git" = the server process does not shell out to git | ADR-003 tier 1/2 meaning Accepted. Carve-outs kept in the list but marked by whether they conflict with that rule; whether each must also be eliminated is new open decision O-14 |
+| O-9 reworded success metric | Confirmed (server-process scope) |
+| O-4 public fork | ADR-002 and Story 1.2.2: no `GOPRIVATE` or token plumbing in workflows or goreleaser. New Story 1.2.0: ask Tyler to confirm the repo owner and name before creating the public repo |
+| O-5 HTTPS-to-SSH fallback is a product feature | ADR-005 and Story 3.1.3 record it as a supported feature with tests and docs; default-on versus opt-in is new open decision O-15 |
+| O-6 empty pinned fork | F0 is the baseline deliverable; patches only on spike proof; G7a is confirm-only; "drop to hybrid" is no longer the default |
 
 ## Revision 6 change log (Phase 4 patch pass)
 | Source item | Resolution in this plan |
@@ -77,7 +88,7 @@
 | Adv 4: gate misses spawns outside `safeexec` | Two-layer gate (PATH shim + counters); 10 test `exec.Command("git")` sites, `gh`, `exec.LookPath("git")` added as scope/carve-outs with owners |
 | C2/Claims 4, 8, 9 | F3 removed; histogram name corrected; O-8 closed |
 | C1 | Stated above; O-6 promoted to G7a |
-**ADRs**: [ADR-001](../decisions/ADR-001-fork-v5-not-v6.md) fork v5 not v6 · [ADR-002](../decisions/ADR-002-consume-fork-via-replace-directive.md) `replace` directive · [ADR-003](../decisions/ADR-003-meaning-of-no-git-and-permanent-lock-compatibility.md) meaning of "no git" and permanent CLI-compatible locking (NEEDS USER DECISION) · [ADR-004](../decisions/ADR-004-per-operation-backend-seam-and-cohort-switch.md) backend seam and cohort switch · [ADR-005](../decisions/ADR-005-credentials-and-ssh-live-outside-the-fork.md) credentials outside the fork · [ADR-006](../decisions/ADR-006-repo-capability-preflight-and-hooks-signing-policy.md) capability preflight and hooks policy (NEEDS USER DECISION)
+**ADRs**: [ADR-001](../decisions/ADR-001-fork-v5-not-v6.md) fork v5 not v6 · [ADR-002](../decisions/ADR-002-consume-fork-via-replace-directive.md) `replace` directive · [ADR-003](../decisions/ADR-003-meaning-of-no-git-and-permanent-lock-compatibility.md) meaning of "no git" and permanent CLI-compatible locking (Accepted for the meaning of "no git", O-1; carve-out list under review, O-14) · [ADR-004](../decisions/ADR-004-per-operation-backend-seam-and-cohort-switch.md) backend seam and cohort switch · [ADR-005](../decisions/ADR-005-credentials-and-ssh-live-outside-the-fork.md) credentials outside the fork · [ADR-006](../decisions/ADR-006-repo-capability-preflight-and-hooks-signing-policy.md) capability preflight and hooks policy (NEEDS USER DECISION)
 
 Evidence labels: VERIFIED (command run or file opened; cited) vs INFERRED. Sources are the research files under `../research/`.
 
@@ -120,35 +131,35 @@ A patch lands in the fork only if it passes the **fork-only test**: a spike demo
 | F4 | Checkout/Status perf patches | Only if measured regression | S3 / G3 |
 | F5 | Cherry-picked security fixes ahead of upstream releases | Only on demand | Runbook 6.3 |
 
-**Fork patch constraint (adversarial C3)**: fork patches must be behaviour-only: no new exported symbol that app code calls, or the call is isolated behind a build tag with a stock-go-git fallback, so deleting the `replace` line still compiles. Each fork tag's acceptance criteria include the rollback test (Story 1.2.3). A private fork needs `GOPRIVATE` plus a token, and GitHub Actions secrets are not exposed to PRs from forks, so external-contributor CI and Dependabot break; this favours a public fork (O-4).
+**Fork patch constraint (adversarial C3)**: fork patches must be behaviour-only: no new exported symbol that app code calls, or the call is isolated behind a build tag with a stock-go-git fallback, so deleting the `replace` line still compiles. Each fork tag's acceptance criteria include the rollback test (Story 1.2.3). The fork is **public** (O-4 RESOLVED, user 2026-10-08), so no `GOPRIVATE` or token plumbing is needed and external-contributor CI and Dependabot are unaffected.
 
-**Honest sizing**: see the end-state statement at the top. The fork is expected to be an empty pinned F0, or at most one small patch. Most of the 3 to 6 weeks is the backend seam, the credential client, diff/status work, test migration and rollout. If at the end of Phase 0 no patch passes the fork-only test, O-6 goes to Tyler at G7a before Epic 1.2. The no-fork hybrid (stock go-git, no `replace`) remains the fallback at every gate.
+**Honest sizing**: see the end-state statement at the top. The fork is expected to be an empty pinned F0, or at most one small patch (O-6 RESOLVED: the empty fork is kept). The original 3 to 6 week appetite assumed the MVP only; with all stretch scope now in the product (O-13) it is no longer a valid bound, and the calendar below is re-cut by Story 0.2.9. The no-fork hybrid (stock go-git, no `replace`) is no longer a default; it would be reopened only by a new user decision.
 
 ### 0.3.1 Calendar and cut line (adversarial C6)
-Appetite is 3 to 6 weeks and the stated rule is "cut scope, do not move the deadline". Windows below run in parallel unless noted; dogfood windows (7 days shadow, 14 days default-clean) overlap with development of the next cohort, they are not sequential.
+**STALE AFTER REVISION 7.** The table below is the Revision 6 calendar for the MVP slice only, kept as the sequencing skeleton. The "3 to 6 weeks, cut scope, do not move the deadline" rule no longer applies because Tyler put all stretch scope in the product (O-13); the re-baselined calendar is produced by Story 0.2.9 after spikes S1 to S7 report. Windows below run in parallel unless noted; dogfood windows (7 days shadow, 14 days default-clean) overlap with development of the next cohort, they are not sequential.
 | Week | Work |
 |---|---|
-| 1 | Phase 0: Story 0.1.1 audit (including the destructive-call-site list, Task 0.1.1c), Story 0.1.2 baseline, spikes S1, S2, S3, S6, S7 (1 to 2 days each, two agents in parallel); **S4 is reduced to its go/no-go core** (lost-update and partial-read reproduction plus a `WithIndexLock` prototype; the rest of its criteria belong to Story 2.3.1 and are stretch); S5 is stretch. **Epic 5.1 starts now** (Story 5.1.1 helpers, 5.1.2 batch 1). G7a checkpoint end of week 1 |
+| 1 | Phase 0: Story 0.1.1 audit (including the destructive-call-site list, Task 0.1.1c), Story 0.1.2 baseline, spikes S1, S2, S3, S6, S7 (1 to 2 days each, two agents in parallel); **S4 is reduced to its go/no-go core** (lost-update and partial-read reproduction plus a `WithIndexLock` prototype; the rest of its criteria belong to Story 2.3.1); S5 also runs in Phase 0 now, because the re-baselined calendar (Story 0.2.9) needs S1 to S7 to have reported. **Epic 5.1 starts now** (Story 5.1.1 helpers, 5.1.2 batch 1). G7a checkpoint end of week 1 |
 | 2 | Epic 1.1 (topology, interface, router), Epic 1.3 (redactor, counters, **resolver v1**, oracle harness); fixture batches 2 to 4; `refs` enters `shadow` end of week. **Gate GS-1 report** (spawn count and wall time vs Story 0.1.2) |
 | 3 | `refs` shadow window runs (7 days and at least 500 shadowed calls per operation family) while Epic 2.2 (`diffstatus`) and Epic 4.1 (worktree residue, already-native code) are built; fixture batches continue. **Tripwire T3 at end of week 3** |
 | 4 | `refs` flips; `diffstatus` enters `shadow`; zero-spawn gate Layer 1 in report-only mode |
 | 5 | `diffstatus` flips only if `false_clean` is 0 over its window (Story 2.2.1); worktree residue flips; Epic 5.2 soak (read, worktree and fixture variants) |
 | 6 | Rollout evidence, gate Layer 1 graduation check, nightly SLO check wired (Story 5.2.1) |
-| Stretch (outside the 3 to 6 weeks, own go/no-go **GL**) | Epic 2.3 `localwrite` (including the lock layer, journal and reflog writer), Epic 3.1/3.2 network and credential client, resolver v2 (full git-compatible resolver, Story 1.3.4). Not scheduled; entered only on an explicit Tyler decision at GL after the MVP shipped |
-**MVP cut (what ships)**: seam + router + `refs` + `diffstatus` (reads, destructive intents CLI-confirmed) + `worktree` residue (already-native code) + in-process test fixtures + zero-spawn gate (Layer 1 first). **`localwrite`, `network` and resolver v2 are not part of this project's appetite** (they were the first two drop-order items before; they are now explicit stretch, so the appetite is not blown by default).
+| Phase 2 to 3 product scope (formerly "stretch"; **in the product since Revision 7**, O-13) | Epic 2.3 `localwrite` (including the lock layer, journal and reflog writer), Epic 3.1/3.2 network, credentials and local-transport handling, resolver v2 (full git-compatible resolver, Story 1.3.4). Sequenced after the MVP slice and gated by **GL**; durations are not estimated here, Story 0.2.9 re-cuts them after S1 to S7 |
+**MVP slice (ships first)**: seam + router + `refs` + `diffstatus` (reads, destructive intents CLI-confirmed) + `worktree` residue (already-native code) + in-process test fixtures + zero-spawn gate (Layer 1 first). `localwrite`, `network` and resolver v2 follow it as product scope, not optional extras.
 
-**Tripwire T3 (scope freeze, recorded in `gates.md` at end of week 3)**: if any of (a) resolver v1 is not green, (b) `refs` has not entered `shadow`, (c) gate GS-1 shows no reduction in `session` package spawn count against the Story 0.1.2 baseline, then scope freezes at seam + `refs` + test fixtures and the drop order below applies immediately, in this order, first dropped first: (1) Layer 2 of the zero-spawn gate (Story 5.3.1; Layer 1 stays), (2) Epic 4.1 worktree residue (stays CLI), (3) Story 2.2.2 diff text and numstat (keep `IsDirty`/`Status`), (4) Epic 2.2 `diffstatus` altogether (stays CLI). Never dropped: seam, router, `refs`, fixture migration. Epic 6.2 (one release later) is outside the appetite regardless.
+**Tripwire T3 (re-plan checkpoint, recorded in `gates.md` at end of week 3)**: if any of (a) resolver v1 is not green, (b) `refs` has not entered `shadow`, (c) gate GS-1 shows no reduction in `session` package spawn count against the Story 0.1.2 baseline, then **work stops at seam + `refs` + test fixtures and the plan goes to Tyler for a re-plan decision** (Revision 7: nothing is cut silently). The re-plan menu, in the order the plan would propose deferring items, first proposed first: (1) Layer 2 of the zero-spawn gate (Story 5.3.1; Layer 1 stays), (2) Epic 4.1 worktree residue (stays CLI), (3) Story 2.2.2 diff text and numstat (keep `IsDirty`/`Status`), (4) Epic 2.2 `diffstatus` altogether (stays CLI). Tyler may accept, reorder or reject any deferral, or extend the calendar instead. Never proposed for deferral: seam, router, `refs`, fixture migration. Because all stretch scope is now in the product, any deferral of a stretch item (`localwrite`, `network`, resolver v2) is also a Tyler decision, never a default. Epic 6.2 (one release later) follows its own schedule.
 
-**Gate GS (spawn-reduction checkpoint)**: a weekly line in `gates.md` with the `session` package spawn count and wall time against Story 0.1.2. Provisional targets (Tyler may reset them after Story 0.1.2 gives the fixture-versus-product split): spawns down at least 30% by end of week 3 (GS-1) and at least 60% by end of week 5 (GS-2). No stretch work (GL) may start before GS-2 is met.
+**Gate GS (spawn-reduction checkpoint)**: a weekly line in `gates.md` with the `session` package spawn count and wall time against Story 0.1.2. Provisional targets (Tyler may reset them after Story 0.1.2 gives the fixture-versus-product split): spawns down at least 30% by end of week 3 (GS-1) and at least 60% by end of week 5 (GS-2). The week numbers belong to the stale calendar and are re-cut by Story 0.2.9. Phase 2.3/3 work (formerly stretch) may not start before GS-2 is met.
 
-**Gate GL (stretch go/no-go)**: Tyler decides whether to open the `localwrite`/`network`/resolver-v2 stretch phase, with evidence: MVP shipped, GS-2 met, the share of the maintainer's repos routed to the CLI by resolver v1 (Story 1.3.4), and S4/S5 outcomes.
+**Gate GL (go/no-go for Phase 2.3/3 start; no longer a scope-inclusion decision)**: scope inclusion is decided (O-13). GL now only confirms readiness to start `localwrite`/`network`/resolver v2, with evidence: MVP slice shipped, GS-2 met, the share of the maintainer's repos routed to the CLI by resolver v1 (Story 1.3.4), and S4/S5 outcomes. A "no-go" at GL means a re-plan conversation with Tyler, not removal of the scope.
 
 ### 0.4 Creative pass: three approaches considered
 | Approach | Key strength | Key weakness |
 |---|---|---|
 | A. Deep fork: rewrite go-git storage for per-worktree HEAD/index/commondir, CLI locking, perf | Total control; one dependency | Rebase against upstream's active worktree/storage work (#2336, #1956, #1896 touched the same layer within 6 weeks); duplicates validated native code |
 | **B. Thin-patch fork plus out-of-tree adapters (chosen)** | Honours the user's fork direction, keeps rebase cost bounded, reuses native worktree code | The fork may turn out nearly empty; adapters live in the app, not the fork |
-| C. No fork: hybrid plus Option 4 CLI-cost levers (the research recommendation) | Least maintenance, stays on stable v5 | Contradicts the user's explicit choice; kept as the fallback at every gate |
+| C. No fork: hybrid plus Option 4 CLI-cost levers (the research recommendation) | Least maintenance, stays on stable v5 | Contradicts the user's explicit choice; no longer a default fallback after O-6 (user: keep an empty fork); reopened only by a new user decision |
 
 ---
 
@@ -264,19 +275,21 @@ Resolved from research (recorded so nobody re-asks):
 - **ssh-fallback wrapper?** A dotfiles convenience at `~/.local/bin/git` (`stapler-scripts/git-ssh-fallback`), not product behaviour (build-vs-buy.md, pitfalls.md 3.3, VERIFIED).
 
 Still unresolved:
-- [ ] **O-1 What does "no git" mean** (ADR-003 tiers)? Server-process only, with agents/remote/credential helpers carved out. — blocks Story 5.3.2 wording and the final success metric — owner: Tyler
+- [x] **O-1 RESOLVED (user, 2026-10-08)**: "no git" means the stapler-squad **server process** does not shell out to git. Agents, `gh`, IDEs and remote hosts running git in their own processes are out of scope. ADR-003 default confirmed (status Accepted for that part). Which allow-listed carve-outs also violate the rule is open decision O-14.
 - [ ] **O-2 Hooks and signing policy** (ADR-006): route hooked/signed repos to CLI (default) versus implement in-process? — blocks Epic 2.3 — owner: Tyler
 - [ ] **O-3 go-git performance on the largest managed repos** (status, diff, worktree add vs CLI). Unmeasured. — blocks Epics 2.2, 2.3, 4.1 flips — owner: spike S3 (Story 0.2.3)
-- [ ] **O-4 Public or private fork** (ADR-002; private needs `GOPRIVATE` and CI token plumbing). — blocks Story 1.2.2 — owner: Tyler (default private)
-- [ ] **O-5 Is HTTPS-to-SSH fallback a product feature** or only the maintainer's wrapper? Default off, opt-in setting. — blocks Story 3.1.3 — owner: Tyler
-- [ ] **O-6 DECISION POINT FOR TYLER (not hidden): if no patch passes the fork-only test, keep an empty pinned fork, or drop the fork and use stock go-git v5 (the research-recommended hybrid)?** The plan's expectation is that no patch will be needed (see the end-state statement at the top). Asked at G7a (end of week 1), before Epic 1.2 and before Phase 2 work. Default if silent: keep the empty pinned fork (the user's original direction), no fork patch epics run. Evidence that would justify a patch: a failing test against public API no wrapper can fix, or a G3 perf gap fixable in under 200 lines. — blocks Epics 1.2 and 4.2 — owner: Tyler, informed by G3, G4, G6
+- [x] **O-4 RESOLVED (user, 2026-10-08): the fork is public.** No `GOPRIVATE`/token plumbing (ADR-002, Story 1.2.2). Creating the public repo is outward-facing: Story 1.2.0 asks Tyler to confirm owner and name first.
+- [x] **O-5 RESOLVED (user, 2026-10-08): the HTTPS-to-SSH fallback is a product feature** (ADR-005, Story 3.1.3). Whether it is default-on or opt-in was not stated: see O-15.
+- [x] **O-6 RESOLVED (user, 2026-10-08): keep an empty pinned fork (F0) "for sure".** F0 is the baseline deliverable; patches only when a spike proves a wrapper cannot do the job (a failing test against public API no wrapper can fix, or a G3 perf gap fixable in under 200 lines). G7a is a confirm-only checkpoint; "drop to stock go-git" is no longer the default.
 - [ ] **O-7 Realistic rebase burden per upstream release** (research gives cadence only: releases every 2 to 3 months, about 12 advisories in 18 months, INFERRED-grade). — blocks Story 6.3.2 — owner: spike S1
 - [x] **O-8 RESOLVED**: `defaultPlainOpenOptions` sets `EnableDotGitCommonDir: true` (`session/git/util.go:36`). Story 0.1.1 only records it.
 - [ ] **O-10 Does `gh pr create` (`worktree_git.go:581`) stay?** `gh` runs git internally and fails in the no-git container. Default: named ADR-003 carve-out (tier 2); alternative: replace with the GitHub REST API via the existing native `github` package. — blocks Story 5.3.2 wording — owner: Tyler
 - [ ] **O-11 `session/vc` vs `session/vcs`**: delete the dead layer or name an owner per operation (Story 0.1.3). — blocks Epic 2.1 migration — owner: Story 0.1.3
-- [ ] **O-9 Success-metric rewording**: "zero spawns" becomes "zero `git` spawns in `ServerProcess` except allow-listed carve-outs". — blocks Story 5.3.1 — owner: Tyler (follows O-1)
+- [x] **O-9 RESOLVED (user, 2026-10-08)**: the success metric is "zero `git` spawns in `ServerProcess`" with the allow-list limited to carve-outs that survive O-14. Confirmed as the server-process scope.
 - [ ] **O-12 Provisional thresholds introduced in Revision 6** (all are proposals, none user-agreed): GS-1 30% and GS-2 60% spawn reduction; resolver v2 trigger at 10% of repos over-detected by v1; 500 shadowed calls per operation family; 20 shadowed status calls per repo and the 30-day repo list; gate graduation after 10 green `main` runs; 14-day write-cohort dogfood window. — blocks nothing; reviewed at G7 — owner: Tyler
-- [ ] **O-13 Stretch scope** (gate GL): are `localwrite`, `network` and resolver v2 wanted at all after the MVP ships? Default if silent: not built. — owner: Tyler
+- [x] **O-13 RESOLVED (user, 2026-10-08): "I want all the stretch product."** `localwrite`, network/credentials/local-transport handling, and resolver v2 are all in scope. Consequences: the 3 to 6 week appetite no longer covers the scope; Story 0.2.9 re-bakes the calendar after S1 to S7; T3 and the drop order are re-plan checkpoints with Tyler. Pre-mortem safety rules are unchanged.
+- [ ] **O-14 Must the carve-outs that still spawn `git` from the server also be eliminated?** (new, raised by the O-1 decision). Under "the server does not shell out to git", the ADR-003 carve-outs split as follows. **Conflict (server spawns `git` locally)**: (a) `Checkout`, `Reset(Hard|Merge)`, `Restore(Worktree)`, `Remove`, `RemoveGlob`, `Move` routed `unsafe_worktree_write` (including the resume/review flows at `session/vcs/git.go:243-310`); (b) local-path and `file://` remotes (`capability_local_transport`); (c) hooked, `gpgsign`, LFS, filter and split-index repos routed by the capability preflight (ADR-006 `FC*`); (d) the `torn_read`/`object_missing` CLI route; (e) `Commit(Amend)`, `BranchRename` and ref deletes held on the CLI until reflog parity tests pass. **No literal conflict (the server spawns no `git`)**: (f) remote-host worktrees over SSH (the runner spawns `ssh`; git runs on the remote host, which O-1 puts out of scope); (g) `gh pr create` (server spawns `gh`; `gh` runs git itself; also open as O-10); (h) third-party credential-helper binaries. Question for Tyler per item: eliminate it (extra in-process work, in the order a-e, may exceed what go-git can do safely and would need new spikes) or keep it permitted and listed? Until answered the plan keeps (a) to (e) as allow-listed carve-outs, counted and ratcheted down, and does not drop any. — blocks the final shape of Story 5.3.1/5.3.2 and ADR-003 tier 3 — owner: Tyler
+- [ ] **O-15 Is the HTTPS-to-SSH fallback default-on or opt-in?** (new). "The fallback is a feature" (O-5) does not say which. The plan keeps the setting `git_https_to_ssh_fallback` and, until Tyler answers, ships it **default off** because that was the researched default and it changes the transport (and the credential-exposure surface) on auth failure; Tyler's day-to-day behaviour today is "on" via the wrapper. — blocks the default value in Story 3.1.3 — owner: Tyler
 
 ### INFERRED claims the spikes must verify before dependent work starts
 | Claim (source) | Spike |
@@ -308,19 +321,19 @@ Phase 0  (all spikes first; each ends in a gate)
   0.1 baseline+audit+vc/vcs decision ─G0─┐
   0.2 S1 fork+replace ─G1┤   S2 v5 vs v6 ─G2
       S3 perf ───────G3  │   S4 locking ──G4   S5 credentials ─G5   S6 repack ─G6
-      S7 refs/linked-wt HEAD ─G8      G7a user checkpoint (O-6) ─ end of week 1
-      G7 full user checkpoint (O-1, O-2, O-4, O-5, O-10)      T3 tripwire ─ end of week 3
+      S7 refs/linked-wt HEAD ─G8      G7a confirm-only checkpoint (O-6 resolved) ─ end of week 1
+      G7 full user checkpoint (O-2, O-10, O-12, O-14, O-15)   T3 re-plan checkpoint ─ end of week 3 (stale calendar, Story 0.2.9)
                          ▼
 Phase 1  1.1.0 package topology ─► 1.1 Backend seam ──► 1.3 observability+redaction+oracle harness+resolver v1
          1.2 fork repo+replace (needs G1, G2, G7a)        5.1 fixtures start week 1 (GS-1, GS-2)
                          │
-Phase 2  2.1 refs cohort (G8) ─► 2.2 diffstatus (G3) ─ ─ GL ─ ─► 2.3 localwrite (STRETCH: G3,G4,O-2,GL)
+Phase 2  2.1 refs cohort (G8) ─► 2.2 diffstatus (G3) ─ ─ GL ─ ─► 2.3 localwrite (in product since Rev 7; G3,G4,O-2,GL)
                          │
-Phase 3  (STRETCH, after GL) 3.1 credentials (G5) ─► 3.2 network cohort
+Phase 3  (in product since Rev 7; after GL) 3.1 credentials (G5) ─► 3.2 network cohort
                          │
-Phase 4  4.1 worktree residue (G3 and G4)    4.2 fork patches (G4/G6/G3 + O-6) ─┐
+Phase 4  4.1 worktree residue (G3 and G4)    4.2 fork patches (only on spike proof; G4/G6/G3) ─┐
                          │                                               │
-Phase 5  5.1 fixtures ─► 5.2 concurrency soak (reads+worktree; 2.3 variants only if stretch ran) ─► 5.3 zero-spawn + no-git container (O-1)
+Phase 5  5.1 fixtures ─► 5.2 concurrency soak (reads+worktree; 2.3 variants once Epic 2.3 has shipped) ─► 5.3 zero-spawn + no-git container (O-1)
                          │
 Phase 6  6.1 staged rollout ─► 6.2 flag/fallback removal, cli backend stays (+1 release) ; 6.3 fork runbook (parallel from 1.2)
 ```
@@ -398,18 +411,18 @@ Phase 6  6.1 staged rollout ─► 6.2 flag/fallback removal, cli backend stays 
 **Files**: external repo `github.com/tstapler/go-git`; scratch branch of `go.mod`, `go.sum`; `implementation/gates.md`
 
 ##### Task 0.2.1a: Fork upstream and tag (~5 min)
-- `gh repo fork go-git/go-git --clone=false --fork-name go-git`, set private per O-4 default; branch `ssq/v5` from tag `v5.19.2`; tag `v5.19.2-ssq.0`; then rebase onto `v5.19.3` as the first rebase-cost measurement.
+- `gh repo fork go-git/go-git --clone=false --fork-name go-git`, create it in the repository confirmed by Story 1.2.0 (public, O-4); branch `ssq/v5` from tag `v5.19.2`; tag `v5.19.2-ssq.0`; then rebase onto `v5.19.3` as the first rebase-cost measurement.
 - Files: external
 
 ##### Task 0.2.1b: Wire the replace on a scratch branch and build (~5 min)
 - Add the `replace`; run `go mod tidy`, `go mod verify`, `go build ./...`; check `tools/lint/go.mod` for go-git imports and add a replace there only if present.
 - Files: `go.mod`, `go.sum`, `tools/lint/go.mod`
 
-##### Task 0.2.1c: Private-fork CI access check (~5 min)
-- Set `GOPRIVATE=github.com/tstapler/go-git` and a token in one workflow (`.github/workflows/build.yml`) on a scratch branch; confirm module download. Record what the other four workflows and goreleaser need.
+##### Task 0.2.1c: Public-fork CI access check (~5 min)
+- On a scratch branch confirm that `go mod download` of the public fork works in `.github/workflows/build.yml` with no `GOPRIVATE` and no token, and that the other four workflows and goreleaser need nothing either (O-4 resolved: public).
 - Files: `.github/workflows/build.yml`, `.goreleaser.yaml`
 
-**Gate G1**: Go if the build and tests pass with identical types. If `replace` fails but a rename works, record the identity break and reopen ADR-002. **No-go on the fork** if neither works; fall back to the hybrid and tell the user.
+**Gate G1**: Go if the build and tests pass with identical types. If `replace` fails but a rename works, record the identity break and reopen ADR-002. **No-go on the fork** if neither works: stop and take it to the user, because O-6 settled on keeping the fork and falling back to stock go-git is now a user decision, not an automatic step.
 
 ### Story 0.2.2: S2 v5 versus v6 confirmation
 **As the** maintainer, **I want** the v6 migration size measured, **so that** ADR-001's choice is evidence-based.
@@ -446,7 +459,7 @@ Phase 6  6.1 staged rollout ─► 6.2 flag/fallback removal, cli backend stays 
 
 ### Story 0.2.4: S4 CLI-compatible locking
 **As the** maintainer, **I want** to reproduce lost writes between CLI and go-git and test an operation-scoped lock, **so that** we know whether fork patch F1 is needed.
-**Appetite note (Revision 6)**: `localwrite` is stretch, so inside the 3 to 6 weeks only the go/no-go core of S4 runs (failure reproduced; operation-scoped lock evaluated for lost updates; CLI reader never sees a partial index; the F1 question answered for O-6). The remaining criteria below (read-your-writes matrix, census, crash leftovers, abort consistency, no-fallback-in-lock, refs) are the acceptance bar of Story 2.3.1 and run only if gate GL opens the stretch phase. The matrix rows below that include `Remove`, `RemoveGlob`, `Move`, `Reset(Hard)` and `Checkout` are **spike-only feasibility probes**: those operations are CLI-routed (`unsafe_worktree_write`) in production and become promotable only through the fault-injection test.
+**Spike scope note (Revision 7)**: `localwrite` is in the product (O-13), but the spike stays time-boxed: only the go/no-go core of S4 runs inside Phase 0 (failure reproduced; operation-scoped lock evaluated for lost updates; CLI reader never sees a partial index; the F1 question answered for O-6). The remaining criteria below (read-your-writes matrix, census, crash leftovers, abort consistency, no-fallback-in-lock, refs) are the acceptance bar of Story 2.3.1 and run as the acceptance bar of Epic 2.3 once gate GL confirms readiness. The matrix rows below that include `Remove`, `RemoveGlob`, `Move`, `Reset(Hard)` and `Checkout` are **spike-only feasibility probes**: those operations are CLI-routed (`unsafe_worktree_write`) in production and become promotable only through the fault-injection test.
 **Design under test** (replaces the earlier `Storer` decorator, which could not work): go-git's `Worktree.Add`/`Commit`/`Remove` call `Storer.Index()`, mutate in memory, then call `Storer.SetIndex()` separately (`worktree_status.go:134,390`, `worktree_commit.go:62,125`), and the stock `SetIndex` truncates the index in place (`storage/filesystem/index.go`, `dotgit.go:237` `IndexWriter` = `fs.Create`). A lock taken inside `SetIndex` makes the replace atomic but still loses the update (read happened before the lock); a lock taken in `Index()` and released in `SetIndex()` leaks on read-only calls and error paths. So: `WithIndexLock(repo, fn)` takes `<GitDir>/index.lock` with `O_EXCL` **before** invoking `fn` (which performs the whole go-git `Add`/`Commit`), `fn` runs against a scoped `Storer` (wrapping `filesystem.Storage`, passed to `git.Open(storer, fs)`, which is public API): before the first `SetIndex()` its `Index()` reads the real `index`; `SetIndex()` rewrites the held lock file (never `index`); **after the first `SetIndex()`, `Index()` decodes the lock file's current content**, so every later read in the same scope sees the scope's own writes (read-your-writes). Decoding from the file, not caching a pointer, means a caller that mutates a returned `*index.Index` and then errors without calling `SetIndex` cannot corrupt the pending state. On success the lock file is fsynced and renamed over `index`; on error it is removed only if we created it. **Why read-your-writes is required (VERIFIED, go-git v5.19.2)**: `Commit` first runs `autoAddModifiedAndDeleted` when `All` is set (`worktree_commit.go:40-44`), which ends in `SetIndex` (`:109-125`), and only then reads `Storer.Index()` at `:62` to build the tree. A scope whose `Index()` returned the stale on-disk index there would commit a tree that silently omits the auto-added changes while returning success. Read-only operations (`Status`) take no lock. Refs: `<ref>.lock` created O_EXCL, new value written, renamed (go-git's stock `setRefRwfs` locks the ref inode in place while the CLI replaces by rename, so the two do not exclude each other); delete and compare-and-set follow git's order, `<ref>.lock` then `packed-refs.lock` (Story 2.3.1). `GitDir` is the resolved per-worktree dir (`<CommonDir>/worktrees/<name>` for a linked worktree), not `.git`; with `EnableDotGitCommonDir` go-git resolves `index` and `HEAD` to it and `refs`, `packed-refs`, `config`, `logs`, `objects` to `CommonDir` (adversarial re-review, `repository_filesystem.go`).
 
 **Census of every `Index()`/`SetIndex()` sequence in go-git v5.19.2** (VERIFIED by `grep -rn 'Storer.Index()\|SetIndex' --include='*.go'` over the module, excluding tests; outside `worktree*.go` only `submodule.go:61,259,394` read the index and are not used by this repo): reads only: `worktree_status.go:134` (`diffStagingWithWorktree`, reached from `Status`), `:250` (`diffTreeWithStaging`), `worktree_commit.go:62` (`Commit` tree build), `submodule.go`. Read-modify-write pairs: `worktree_status.go:354/390` (`doAdd`: reads at `:354`, then calls `Status` unless `skipStatus` on a plain file, which reads again at `:134`, then one `SetIndex` at `:390`), `:412/441` (`AddGlob`), `:586/603` (`Remove`), `:682/708` (`RemoveGlob`), `:723/741` (`Move`), `worktree.go:375/436` (`resetIndex`, via `Reset` and `Checkout`), `:452/484` (`resetWorktree`, via `Reset(Hard)` and `Checkout`), `worktree_commit.go:109/125` (`autoAddModifiedAndDeleted`). Composite sequences that cross two of these inside one public call: `Commit(All)` (`:109/125` then `:62`), `Commit(All+Amend)`, `Add` (`:354`, nested `:134`, then `:390`), `Checkout`/`Reset(Hard)` (`:375/436` then `:452/484`), `AddWithOptions(All)`, `Pull` (`Checkout`). The set is pinned by a **census test** (Task 0.2.4c) so a go-git or fork upgrade that adds a call site fails CI instead of silently escaping the lock.
@@ -549,9 +562,21 @@ Phase 6  6.1 staged rollout ─► 6.2 flag/fallback removal, cli backend stays 
 ##### Task 0.2.7a: Write the gates file and stop for user confirmation (~5 min)
 - Files: `project_plans/go-git-fork-full-git-replacement/implementation/gates.md`
 
-**Gate G7a (early user checkpoint, end of week 1, before Epic 1.2 and any Phase 2 work)**: Tyler decides **O-6** (keep an empty pinned fork or drop to stock go-git) with `gates.md` evidence in hand, and confirms the end-state expectation stated at the top of this plan. Epics 1.1 and 1.3 may already be running; they do not depend on the fork.
+**Gate G7a (confirm-only checkpoint, end of week 1, before Epic 1.2 and any Phase 2 work)**: O-6 is already decided (keep an empty pinned fork, F0). Tyler only confirms, with `gates.md` evidence in hand, the end-state expectation at the top of this plan and any patch the fork-only test proposes; "drop to stock go-git" is not offered as the default. Epics 1.1 and 1.3 may already be running; they do not depend on the fork.
 
-**Gate G7 (full user checkpoint)**: Tyler confirms O-1 (ADR-003), O-2 (ADR-006), O-4, O-5, O-10. Epics 1.1 and 1.3 may start before G7 on the explicit assumption that the recommended defaults of ADR-003 and ADR-006 hold (the `Router`'s capability routing and carve-outs encode them); if Tyler picks differently, Story 1.1.3 and Story 1.3.4 are revised.
+### Story 0.2.9: Re-baselined calendar (Revision 7, O-13)
+**As the** maintainer, **I want** a new calendar for the full scope after the spikes report, **so that** Tyler decides on real evidence now that the 3 to 6 week appetite no longer covers the product.
+**Acceptance Criteria**:
+- A re-cut calendar exists, derived from spike evidence, with no invented durations.
+  - *Given* gates G1 to G8 (spikes S1 to S7) are recorded in `gates.md`, *When* this story runs, *Then* `gates.md` gains a "Re-baselined calendar" section that replaces section 0.3.1's table for Phases 1 to 6 including Epics 2.3, 3.1, 3.2 and resolver v2, each estimate cites the spike result or measurement it comes from (or says "no evidence yet"), the gates GS, GL and T3 are re-dated, and it ends with the question "accept this calendar, or re-plan scope?" for Tyler.
+- It is not started early.
+  - *Given* any of S1 to S7 has not reported, *When* someone drafts this calendar, *Then* it is marked provisional and no gate date in it is binding.
+**Files**: `project_plans/go-git-fork-full-git-replacement/implementation/gates.md`
+
+##### Task 0.2.9a: Draft the re-baselined calendar from `gates.md` evidence and stop for Tyler (~5 min)
+- Files: `project_plans/go-git-fork-full-git-replacement/implementation/gates.md`
+
+**Gate G7 (full user checkpoint)**: Tyler confirms O-2 (ADR-006), O-10, O-12, O-14 and O-15 (O-1, O-4, O-5, O-6, O-9, O-13 are already resolved). Epics 1.1 and 1.3 may start before G7 on the explicit assumption that the recommended defaults of ADR-003 and ADR-006 hold (the `Router`'s capability routing and carve-outs encode them); if Tyler picks differently, Story 1.1.3 and Story 1.3.4 are revised.
 
 ---
 
@@ -736,7 +761,19 @@ Verified facts (2026-10-08, `git grep` and reading each site; the Revision 3 tex
 - Files: `session/instance_worktree.go`, `session/execution_target.go`, `server/services/session_service_create.go`
 
 ## Epic 1.2: Fork repository and `replace` wiring (needs G1, G2; ADR-001, ADR-002)
-**Goal**: A pinned, CI-verified fork consumed by the app, rollbackable by deleting one line. Runs only after G7a (O-6). If Tyler chooses the hybrid, this epic and Epic 4.2 are dropped and the plan continues on stock go-git.
+**Goal**: A pinned, CI-verified fork consumed by the app, rollbackable by deleting one line. Runs after G7a (confirm-only; O-6 resolved: the empty pinned fork is kept). The fork is public (O-4).
+
+### Story 1.2.0: Confirm and create the public fork repository (O-4)
+**As the** maintainer, **I want** Tyler to confirm the fork's owner and name before anything public is created, **so that** no outward-facing repository appears without his approval.
+**Acceptance Criteria**:
+- Confirmation precedes creation.
+  - *Given* Tyler has decided the fork is public (O-4), *When* this story starts, *Then* the implementer first asks Tyler to confirm the GitHub owner and repository name (the plan's working name is `tstapler/go-git`, a placeholder, not a decision), and runs `gh repo fork` (or equivalent) only after he replies; the confirmed name is recorded in `gates.md`.
+- The result is public and empty.
+  - *Given* the repo exists, *When* `gh repo view <owner>/<name> --json visibility,isFork` runs, *Then* it reports public and a fork of `go-git/go-git`, and the fork carries zero patches (F0) at tag `v5.19.2-ssq.0`.
+**Files**: none in this repo (external); name recorded in `project_plans/go-git-fork-full-git-replacement/implementation/gates.md`
+
+##### Task 1.2.0a: Ask Tyler for owner/name; create only after confirmation (~5 min)
+- Files: external
 
 ### Story 1.2.1: Fork repo hygiene
 **As the** maintainer, **I want** the fork to track upstream with CI, **so that** rebases are routine.
@@ -752,14 +789,14 @@ Verified facts (2026-10-08, `git grep` and reading each site; the Revision 3 tex
 **As the** maintainer, **I want** the app to build against `v5.19.3-ssq.1`, **so that** the fork is the real dependency.
 **Acceptance Criteria**:
 - Build, tidy and verify pass in CI.
-  - *Given* `replace ... => github.com/tstapler/go-git/v5 v5.19.3-ssq.N` and `GOPRIVATE` set (private per O-4), *When* `make ci` and the goreleaser-check workflow run, *Then* both pass, and `go mod graph` shows one go-git.
+  - *Given* `replace ... => github.com/<owner>/go-git/v5 v5.19.3-ssq.N` (public fork, O-4; owner confirmed in Story 1.2.0) and no `GOPRIVATE`, *When* `make ci` and the goreleaser-check workflow run, *Then* both pass, and `go mod graph` shows one go-git.
 **Files**: `go.mod`, `go.sum`, `.github/workflows/build.yml`, `.github/workflows/lint.yml`, `.github/workflows/release.yml`, `.github/workflows/goreleaser-check.yml`, `.github/workflows/mcp-integration.yml`, `.goreleaser.yaml`
 
 ##### Task 1.2.2a: go.mod replace; bump to v5.19.3 base only after S1 passed at v5.19.2 (~3 min)
 - Files: `go.mod`, `go.sum`
 
-##### Task 1.2.2b: CI credentials and `GOPRIVATE` in each workflow (~5 min per 2-3 workflows)
-- Files: `.github/workflows/*.yml`, `.goreleaser.yaml`
+##### Task 1.2.2b: Confirm no CI credentials or `GOPRIVATE` are needed (public fork) (~5 min)
+- Files: none expected; if any workflow or `.goreleaser.yaml` fails to fetch the module, record it in `gates.md` instead of adding token plumbing.
 
 ### Story 1.2.3: Prove rollback of the fork
 **As the** maintainer, **I want** a documented and tested rollback, **so that** a bad fork tag is recoverable in minutes.
@@ -822,7 +859,7 @@ Verified facts (2026-10-08, `git grep` and reading each site; the Revision 3 tex
 ### Story 1.3.4: Capability preflight (ADR-006, redesigned)
 **As the** maintainer, **I want** repos with unsupported features routed to the CLI, **so that** hooks, signing and LFS behaviour never silently change.
 
-**Scope split (Revision 6, pre-mortem P1#1)**: only **resolver v1** is inside the appetite. The design below ((b) to (c4), the tokenizer contract, pass A/B `hasconfig`, the `FC` set, the oracle matrix) is **resolver v2**, the full git-compatible resolver, and is stretch behind gate GL. Hooks (d), signing (f), expensive facts (g) and the router integration are shared by both.
+**Scope split (Revision 6, pre-mortem P1#1)**: **resolver v1** ships first (MVP slice). The design below ((b) to (c4), the tokenizer contract, pass A/B `hasconfig`, the `FC` set, the oracle matrix) is **resolver v2**, the full git-compatible resolver, and is in the product since Revision 7 (O-13), sequenced after v1 behind gate GL. Hooks (d), signing (f), expensive facts (g) and the router integration are shared by both.
 **Resolver v1 (ships first; conservative superset, route to CLI when unsure)**:
 - Reads, in git's file order, system candidates (union), XDG, `~/.gitconfig`, `<CommonDir>/config`, `<GitDir>/config.worktree` when `extensions.worktreeConfig` is set, with a minimal line tokenizer that tracks `[section "sub"]` and `key = value` (no value semantics beyond include paths, booleans spelled `true/yes/on/1`, and presence of a key). It records capabilities by **key presence anywhere in the closure**.
 - **Every `include.path` and every `includeIf.<cond>.path` target is read regardless of its condition** (depth 10, missing target skipped, relative to the including file, `~/` expanded). A key reached only through a conditional include therefore counts as present: v1 over-detects (errs toward the CLI) and never evaluates `gitdir:`, `onbranch:`, `hasconfig:` or wildmatch. This is deliberate: the literal rule "any include routes to the CLI" would route **every** repo on the maintainer's machine, because both of his config files contain includes (VERIFIED 2026-10-08: `grep -c 'includeIf\|^\[include' ~/.gitconfig ~/.config/git/config` returns 1 and 2 matching lines), turning every cohort and the shadow window into a no-op.
@@ -1020,9 +1057,9 @@ Verified facts (2026-10-08, `git grep` and reading each site; the Revision 3 tex
 - Every call passes an explicit `Intent`; the sites listed as `destructive-sites` in `audit.md` (Task 0.1.1c) pass `Destructive`, and a test fails if a listed site passes `Display`.
 - Files: those
 
-## Epic 2.3: `localwrite` cohort (STRETCH, outside the 3 to 6 week appetite; add, restore, commit, branch, config set, push -u upstream config; features.md C1-C6; conditional on G3, G4, O-2 and gate GL)
+## Epic 2.3: `localwrite` cohort (in the product since Revision 7, O-13; sequenced after the MVP slice behind gate GL; add, restore, commit, branch, config set, push -u upstream config; features.md C1-C6; conditional on G3, G4, O-2 and gate GL)
 **Goal**: In-process local mutations that interoperate with CLI writers.
-**Stretch conditions (Revision 6, pre-mortem P1#1, P1#2)**: this epic starts only when gate GL opens it (section 0.3.1). Even then: (1) `localwrite` is **opt-in per repository** (`git_backend_localwrite_repos`, default empty) and never default-flips in the first release; (2) it applies only when no running session uses the repository (`live_session` routing, Story 1.1.3); (3) every race, partial-read, abort-consistency, `pack-refs`/`branch -D` stress and CLI-commit-in-gap test in Story 2.3.1 is **required CI** on any PR touching `session/git/backend/gogit/`, not soak-only; (4) `Commit(Amend)`, `BranchRename` and ref deletes stay on the CLI until their reflog parity and fault-injection tests are green.
+**Start conditions and safety rules (Revision 6 pre-mortem P1#1, P1#2; kept in Revision 7 as safety, not scope)**: this epic starts when gate GL confirms readiness (section 0.3.1). The following always hold: (1) `localwrite` is **opt-in per repository** (`git_backend_localwrite_repos`, default empty) and never default-flips in the first release; (2) it applies only when no running session uses the repository (`live_session` routing, Story 1.1.3); (3) every race, partial-read, abort-consistency, `pack-refs`/`branch -D` stress and CLI-commit-in-gap test in Story 2.3.1 is **required CI** on any PR touching `session/git/backend/gogit/`, not soak-only; (4) `Commit(Amend)`, `BranchRename` and ref deletes stay on the CLI until their reflog parity and fault-injection tests are green.
 
 ### Story 2.3.1: Operation-scoped CLI-compatible lock layer in-repo (only if G4 passes)
 **As the** maintainer, **I want** every in-process repo write to hold the CLI's lock files across its whole read-modify-write, **so that** an agent's concurrent `git add` cannot lose writes and a CLI reader never sees a partial index.
@@ -1099,7 +1136,7 @@ Verified facts (2026-10-08, `git grep` and reading each site; the Revision 3 tex
 
 # Phase 3: Network (conditional on G5)
 
-## Epic 3.1: Credential provider and transport (ADR-005; STRETCH, outside the appetite, gate GL)
+## Epic 3.1: Credential provider and transport (ADR-005; in the product since Revision 7, O-13; after gate GL)
 **Goal**: Reproduce enough of `git credential` to fetch/push/clone to github.com and GHE in-process.
 
 ### Story 3.1.1: Credential provider chain
@@ -1127,24 +1164,31 @@ Verified facts (2026-10-08, `git grep` and reading each site; the Revision 3 tex
 ##### Task 3.1.2a: Custom `http.Client` and `client.InstallProtocol` (~5 min)
 - Files: `session/git/backend/gogit/credential/transport.go`
 
-### Story 3.1.3: `insteadOf` and opt-in HTTPS-to-SSH fallback (O-5)
-**As the** maintainer, **I want** URL rewriting handled before go-git is called, **so that** HTTPS-to-SSH setups still work.
+### Story 3.1.3: `insteadOf` and the HTTPS-to-SSH fallback (a supported product feature, O-5 resolved; default is open decision O-15)
+**As the** maintainer, **I want** URL rewriting handled before go-git is called and a supported HTTPS-to-SSH fallback, **so that** HTTPS-to-SSH setups keep working in-process.
 **Acceptance Criteria**:
 - `insteadOf` applied.
   - *Given* `url."git@github.com:".insteadOf=https://github.com/` in `~/.gitconfig`, *When* `Fetch` runs for `https://github.com/o/r.git`, *Then* the SSH URL is used with agent auth.
-- Fallback is opt-in.
-  - *Given* setting `git_https_to_ssh_fallback=false` (default), *When* HTTPS auth fails, *Then* no SSH retry happens and the error is returned; with `true` one retry via SSH agent happens and is counted.
+- The fallback is a supported feature controlled by one setting.
+  - *Given* setting `git_https_to_ssh_fallback=false`, *When* HTTPS auth fails, *Then* no SSH retry happens and the error is returned; *Given* `true`, *Then* exactly one retry via the SSH agent happens, is counted (`git_https_to_ssh_fallback_total`) and logged with the redacted host. The shipped default is **off until O-15 is answered**; flipping it is a one-line change plus the docs line below.
+- The fallback never leaks credentials.
+  - *Given* an HTTPS failure with a token for host A, *When* the SSH retry runs, *Then* no HTTPS token or `Authorization` header is sent to the SSH host and the retry uses only agent auth.
+- Docs.
+  - *Given* the feature, *When* docs are built, *Then* `docs/how-to/https-to-ssh-fallback.md` states what it does, the setting, its default (per O-15) and the credential-exposure behaviour, and the Observability counters are listed in `docs/reference/`.
 - ssh_config limits route to CLI.
   - *Given* a host with `ProxyJump` in `~/.ssh/config`, *When* `Fetch` runs, *Then* the CLI is used (reason `capability_ssh_proxy`).
-**Files**: `session/git/backend/gogit/credential/urlrewrite.go`, `urlrewrite_test.go`, `config/config.go`
+**Files**: `session/git/backend/gogit/credential/urlrewrite.go`, `urlrewrite_test.go`, `config/config.go`, `docs/how-to/https-to-ssh-fallback.md`
+
+##### Task 3.1.3c: Fallback docs page and reference entry (~5 min)
+- Files: `docs/how-to/https-to-ssh-fallback.md`
 
 ##### Task 3.1.3a: `insteadOf` resolver over the `gitconfig` `EffectiveConfig` (Story 1.3.4; not go-git `ConfigScoped`, which misses `~/.config/git/config` when `~/.gitconfig` exists and follows no include) (~5 min)
 - Files: `session/git/backend/gogit/credential/urlrewrite.go`
 
-##### Task 3.1.3b: Opt-in fallback and the setting (~5 min)
+##### Task 3.1.3b: Fallback implementation, the setting and its counter (~5 min)
 - Files: `config/config.go`, `session/git/backend/gogit/credential/urlrewrite.go`
 
-## Epic 3.2: `network` cohort (STRETCH, outside the appetite, gate GL; clone, fetch, push, pull; features.md E1-E7)
+## Epic 3.2: `network` cohort (in the product since Revision 7, O-13; after gate GL; clone, fetch, push, pull; features.md E1-E7)
 
 ### Story 3.2.1: Refactor `repo_path.go` clone/fetch into the backend (Refactor-first)
 **As the** maintainer, **I want** tokens kept out of argv and `.git/config`, **so that** the clone path no longer leaks credentials.
@@ -1245,7 +1289,7 @@ Verified facts (2026-10-08, `git grep` and reading each site; the Revision 3 tex
 - Files: `executor/safeexec/spawn_allowlist.go`
 
 ## Epic 4.2: Fork patches (each conditional on its spike gate and O-6; each passes the fork-only test)
-**Goal**: Carry only patches whose need was demonstrated by a failing test against public API. Runs only if O-6 resolved to keep the fork and a gate produced a patch; expected to be empty (see top of plan). Patches must be behaviour-only (0.3).
+**Goal**: Carry only patches whose need was demonstrated by a failing test against public API. Runs only if a gate produced a patch (O-6 resolved: the fork is kept regardless); expected to be empty (see top of plan). Patches must be behaviour-only (0.3).
 
 ### Story 4.2.1: F1 operation-level lock API (only if G4 = "public API cannot reach the index write")
 **As the** maintainer, **I want** go-git to hold `index.lock` across the read-modify-write (not just replace the file in `SetIndex`), **so that** concurrent CLI writers are safe.
@@ -1404,9 +1448,9 @@ Verified facts (2026-10-08, `git grep` and reading each site; the Revision 3 tex
 **As the** maintainer, **I want** the server proven to run without `git` installed, **so that** tier 1 is verified.
 **Acceptance Criteria**:
 - Container run.
-  - *Given* a minimal container (`debian:stable-slim` pinned by digest, no `git`, no `gh`) with the built binary and a pre-cloned local repo on a volume, *When* the server starts and a session on a non-git-using program is created, worked on (file edits), paused and cleaned up through the API, *Then* every call succeeds and the backend spawn counters are 0. The container flow never clones from or pushes to a local-path or `file://` remote (those are tier-3 carve-outs, `capability_local_transport`, and cannot succeed with no `git` on `PATH`; consistency B1); where the flow needs a remote it uses `git://` served by a `git daemon --export-all --enable=receive-pack` that runs **on the host side** of the container boundary (the daemon is a `gitoracle`-tier test helper, not part of the server), or an HTTP remote, and the clone/push steps run only if `network=gogit` (stretch, Epic 3.2); until then the container flow starts from a pre-cloned volume and skips clone and push. The doc states explicitly that git-using agents inside sessions, `gh`, hooked/signed/LFS repos and remote hosts still need git (ADR-003 tiers 2 and 3), so "no git" means the server-process tier only.
+  - *Given* a minimal container (`debian:stable-slim` pinned by digest, no `git`, no `gh`) with the built binary and a pre-cloned local repo on a volume, *When* the server starts and a session on a non-git-using program is created, worked on (file edits), paused and cleaned up through the API, *Then* every call succeeds and the backend spawn counters are 0. The container flow never clones from or pushes to a local-path or `file://` remote (those are tier-3 carve-outs, `capability_local_transport`, and cannot succeed with no `git` on `PATH`; consistency B1; whether this carve-out is eliminated is open decision O-14(b)); where the flow needs a remote it uses `git://` served by a `git daemon --export-all --enable=receive-pack` that runs **on the host side** of the container boundary (the daemon is a `gitoracle`-tier test helper, not part of the server), or an HTTP remote, and the clone/push steps run only if `network=gogit` (Epic 3.2); until then the container flow starts from a pre-cloned volume and skips clone and push. The doc states explicitly that git-using agents inside sessions, `gh`, hooked/signed/LFS repos and remote hosts still need git (ADR-003 tiers 2 and 3), so "no git" means the server-process tier only.
 - The hand-picked flow is not the only coverage; the gap is measured, not assumed.
-  - *Given* the container flow extended to also exercise diff (staged and unstaged), merge-main-into-worktree, `Commit` and push (both only when `localwrite`/`network` are enabled, i.e. stretch; push goes to the host-side `git://` remote above, never a local bare path), PR-info (native `github` package, no git), branch rename and the backlog-lifecycle create-to-terminal-cleanup path through the ConnectRPC API, *When* it finishes, *Then* `run.sh` reads the per-`OperationName` counters (`git_backend_cli_spawn_total` and the gogit-implementation counts of `git_operation_duration_ms`) and writes a coverage table of every `Backend` method with its hit count; `what-no-git-means.md` embeds the list of methods with zero hits as "not exercised by the container run" (so a surviving spawn in them is acknowledged as invisible to this layer; it is still caught by the PATH-shim layer over `./...`, Story 5.3.1). The container run does not drive the Playwright suite (`tests/e2e/global-setup.ts` always starts its own local server, so it cannot target a container without a separate change); that limit is stated in the doc.
+  - *Given* the container flow extended to also exercise diff (staged and unstaged), merge-main-into-worktree, `Commit` and push (both only when `localwrite`/`network` are enabled, i.e. the Phase 2.3/3 cohorts; push goes to the host-side `git://` remote above, never a local bare path), PR-info (native `github` package, no git), branch rename and the backlog-lifecycle create-to-terminal-cleanup path through the ConnectRPC API, *When* it finishes, *Then* `run.sh` reads the per-`OperationName` counters (`git_backend_cli_spawn_total` and the gogit-implementation counts of `git_operation_duration_ms`) and writes a coverage table of every `Backend` method with its hit count; `what-no-git-means.md` embeds the list of methods with zero hits as "not exercised by the container run" (so a surviving spawn in them is acknowledged as invisible to this layer; it is still caught by the PATH-shim layer over `./...`, Story 5.3.1). The container run does not drive the Playwright suite (`tests/e2e/global-setup.ts` always starts its own local server, so it cannot target a container without a separate change); that limit is stated in the doc.
 **Files**: `tests/no-git-container/Dockerfile`, `tests/no-git-container/run.sh`, `docs/explanation/what-no-git-means.md`
 
 ##### Task 5.3.2a: Remove the `exec.LookPath("git")` pre-check from `session/vcs/detect.go:123` (~5 min)
@@ -1431,10 +1475,10 @@ Verified facts (2026-10-08, `git grep` and reading each site; the Revision 3 tex
 **Acceptance Criteria**:
 - Promotion criteria are checked.
   - *Given* a **read** cohort (`refs`, `diffstatus`, the read half of `network`) at stage `shadow`, *When* promoted to `gogit` on the maintainer's instance, *Then* these hold: 7 days and at least 500 shadowed calls per operation family with zero `shadow_mismatch_total{class="real"|"false_clean"}` (racy mismatches reported, not blocking); G8 passed for `refs` (outcome A, B or C recorded); for `diffstatus`, the Story 2.2.1 repo-coverage and zero-`false_clean` criteria; oracle and soak green (including the `torn_read`/`object_missing` and `detect_error` ceilings); G3 p50 not worse than CLI (and the nightly SLO check of Task 5.2.1c green after the flip); **summed mutex delay not above the Story 0.1.2 baseline** (consistency C2); no `fallback_total{reason="error"}`; and the result is recorded in `gates.md` with the counter values.
-- Write cohorts never shadow, so they have their own evidence (consistency C4): `localwrite` (stretch), the write halves of `network` (`push`, `clone`) and the write half of `worktree` (`AddWorktreeForExistingBranch`, self-heal remove).
+- Write cohorts never shadow, so they have their own evidence (consistency C4): `localwrite`, the write halves of `network` (`push`, `clone`) and the write half of `worktree` (`AddWorktreeForExistingBranch`, self-heal remove).
   - *Given* a write cohort, *When* promoted to `gogit` on the maintainer's instance, *Then* all of these hold and are recorded in `gates.md`: (1) the cohort's oracle suite is green (`fsck --strict` clean, `git worktree list`, reflog and tree equality against the CLI twin); (2) for `localwrite`, the required-CI lock tests of Story 2.3.1 are green; (3) a **dogfood window of 14 days** during which each in-process write is followed by **post-write CLI verification** (a `git fsck --connectivity-only` plus `git status --porcelain` comparison on the written repo, sampled at 100% for the first 7 days and 10% after, behind a dogfood-only flag and counted `git_backend_postwrite_verify_total{operation,outcome}`; the verification spawn is excluded from the gate by that flag), with zero failed verifications; (4) the soak (Epic 5.2) is green, including the `SIGKILL`-and-restart variant; (5) no `fallback_total{reason="error"}` and no `ErrLocked{Journaled:true}` (the journal gap of the previous order no longer exists); (6) `localwrite` is enabled only per listed repo, never by default, in the first release.
 - Default flips in order.
-  - *Given* cohorts promoted in order refs, diffstatus, network (stretch), worktree, *When* release N ships, *Then* the default for each cohort with 14 days clean is `gogit` and `cli` stays selectable via config and `STAPLER_SQUAD_GIT_BACKEND=cli`. **`localwrite` is excluded from default flips in the first release** (opt-in per repo, Epic 2.3 stretch conditions).
+  - *Given* cohorts promoted in order refs, diffstatus, network, worktree, *When* release N ships, *Then* the default for each cohort with 14 days clean is `gogit` and `cli` stays selectable via config and `STAPLER_SQUAD_GIT_BACKEND=cli`. **`localwrite` is excluded from default flips in the first release** (opt-in per repo, Epic 2.3 stretch conditions).
 **Files**: `config/git_backend.go`, `docs/how-to/flip-git-backend-cohort.md`, `implementation/gates.md`
 
 ##### Task 6.1.1a: Default-flip code change per cohort (~3 min each)

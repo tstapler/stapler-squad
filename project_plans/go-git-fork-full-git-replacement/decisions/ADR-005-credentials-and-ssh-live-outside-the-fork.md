@@ -1,6 +1,6 @@
 # ADR-005: Credential-helper client and HTTPS-to-SSH fallback are out-of-tree `transport.AuthMethod`s
 
-**Status**: Proposed (validated by spike S5 / gate G5)
+**Status**: Proposed (validated by spike S5 / gate G5). HTTPS-to-SSH fallback Accepted as a product feature (O-5, user 2026-10-08: "the fallback is a feature"); its default is open decision O-15.
 **Date**: 2026-10-08
 
 ## Context
@@ -12,7 +12,7 @@
 
 ## Decision
 - Implement the `git credential fill/approve/reject` protocol client in a repo package (`session/git/backend/gogit/credential`), exec'ing the configured helper binary directly (never `git credential`), with a Go-native macOS keychain path and `gh` token reuse tried first, and the configured helper binary as an **always-on fallback** (Revision 6, consistency C9: the requirements Constraints require the user's system credential helpers to keep working, so the fallback cannot be opt-in; plan Story 3.1.1 agrees). Host-scoped token lookup is injected as a `TokenSource` by `session/gitwiring`, which adapts `github.GetKeychainTokenForHost` (`github/keychain.go:131`); the credential package never imports `github`, because `go list -deps ./github` pulls in `config`, `executor/safeexec`, `session/git`, `session/tmux` and `session/lifecycle` (VERIFIED 2026-10-08) and would break the plan's Story 1.1.0 dependency check. Result is a `transport.AuthMethod`.
-- HTTPS-to-SSH fallback is an application-level retry in the network backend, not a transport patch: on HTTPS auth failure, rewrite to the SSH URL and use agent auth. It reproduces the maintainer's wrapper only as an opt-in setting; default off because the wrapper is not product behaviour (open decision O-5).
+- HTTPS-to-SSH fallback is an application-level retry in the network backend, not a transport patch: on HTTPS auth failure, rewrite to the SSH URL and use agent auth. It reproduces the maintainer's wrapper as a **supported product feature** (O-5 RESOLVED) behind the setting `git_https_to_ssh_fallback`, with tests (single retry, no HTTPS token sent to the SSH host, counted) and a how-to doc (plan Story 3.1.3). Whether it is default-on or opt-in was not stated by the user; until open decision O-15 is answered it ships default off, which is a one-line change either way. The earlier reasoning that the wrapper is only a dotfiles convenience remains true as history (build-vs-buy.md) but no longer decides the question.
 - Install a custom HTTP client via `client.InstallProtocol` with an explicit `CheckRedirect` that refuses to forward credentials across hosts.
 - `insteadOf` rewriting is applied by our own resolver before calling go-git.
 - Nothing here is placed in the fork. The fork only receives a patch if S5 proves a public hook is missing.

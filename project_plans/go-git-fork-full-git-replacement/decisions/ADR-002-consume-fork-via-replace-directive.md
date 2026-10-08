@@ -1,6 +1,6 @@
 # ADR-002: Consume the fork with a `replace` directive, not a module-path rename
 
-**Status**: Proposed (validated by spike S1 / gate G1)
+**Status**: Proposed (validated by spike S1 / gate G1). Fork visibility Accepted: **public** (O-4, user 2026-10-08).
 **Date**: 2026-10-08
 
 ## Context
@@ -11,7 +11,7 @@
 ## Decision
 `replace github.com/go-git/go-git/v5 => github.com/tstapler/go-git/v5 v5.19.3-ssq.N` in the root `go.mod` (and in `tools/lint/go.mod` only if S1 shows it imports go-git). Import paths in source stay `github.com/go-git/go-git/v5`. Fork tags use the form `vX.Y.Z-ssq.N`, never branch pseudo-versions, so `make tidy`/`verify` is reproducible.
 
-The fork repo is **private** per the user's direction. That requires `GOPRIVATE=github.com/tstapler/go-git` and a read token in `.github/workflows/{build,lint,release,goreleaser-check,mcp-integration}.yml` and goreleaser. Making it public removes all of that and is the cheaper option; flagged to the user as an open decision (O-4 in plan.md), default private.
+The fork repo is **public** (O-4 RESOLVED by the user on 2026-10-08, superseding the earlier private default). No `GOPRIVATE` and no read token are needed in `.github/workflows/{build,lint,release,goreleaser-check,mcp-integration}.yml` or goreleaser, and external-contributor CI and Dependabot are unaffected. Creating the public repository is outward-facing, so plan Story 1.2.0 requires Tyler to confirm owner and name before it is created; `tstapler/go-git` in this ADR is a working name.
 
 Rollback is deleting the `replace` line.
 
