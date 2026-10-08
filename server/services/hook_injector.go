@@ -8,7 +8,9 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/localtoken"
 )
 
 // HookName is a typed constant for the built-in hooks that can be injected.
@@ -376,9 +378,13 @@ func buildHookCommand(remoteTargeted bool, cfg injectHookOptions, url, sessionTi
 	if remoteTargeted {
 		return remoteApprovalHookCommand(*cfg.remote)
 	}
+	authArg := ""
+	if dir, err := config.GetConfigDir(); err == nil {
+		authArg = " " + localtoken.CurlHeaderArg(localtoken.Path(dir))
+	}
 	return fmt.Sprintf(
-		"curl -s --max-time %d -X POST '%s' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s' -d @-",
-		hookTimeout, url, sessionTitle,
+		"curl -s --max-time %d -X POST '%s' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s'%s -d @-",
+		hookTimeout, url, sessionTitle, authArg,
 	)
 }
 

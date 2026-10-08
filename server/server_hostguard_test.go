@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -12,6 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/envtest"
+	"github.com/tstapler/stapler-squad/server/auth"
+	"github.com/tstapler/stapler-squad/server/middleware"
 )
 
 // registeredPatterns lists every pattern registered on mux by walking the
@@ -116,4 +119,54 @@ func TestLocalChain_should_Reject_ForeignOrigin_And_ExemptHealthOnly(t *testing.
 	w := httptest.NewRecorder()
 	chain.ServeHTTP(w, r)
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// require_local_auth: a loopback request with a valid Host but no credential is
+// rejected, the local API token and a login-code session cookie are accepted.
+func TestLocalChain_should_RequireCredential_When_LocalAuthMiddlewareSet(t *testing.T) {
+	srv, reached := newChainTestServer(t, "localhost:8543")
+	sessions := auth.NewSessionManager("")
+	t.Cleanup(sessions.Close)
+	validator := auth.NewLocalValidator(sessions, "local-token")
+	auth.RegisterLocalLoginRoutes(srv.Mux(), auth.NewLocalLogin(sessions, validator))
+	srv.SetupAuth(middleware.Auth(validator))
+	chain := srv.localChain()
+
+	call := func(mutate func(*http.Request)) int {
+		r := httptest.NewRequest(http.MethodPost, probeProcedurePath, strings.NewReader("{}"))
+		r.Host = "localhost:8543"
+		mutate(r)
+		w := httptest.NewRecorder()
+		chain.ServeHTTP(w, r)
+		return w.Code
+	}
+	assert.Equal(t, http.StatusUnauthorized, call(func(*http.Request) {}))
+	assert.Zero(t, *reached)
+	assert.Equal(t, http.StatusUnauthorized, call(func(r *http.Request) { r.Header.Set("Authorization", "Bearer wrong") }))
+	assert.Equal(t, http.StatusOK, call(func(r *http.Request) { r.Header.Set("Authorization", "Bearer local-token") }))
+
+	// Mint a code with the token, exchange it for a cookie, and use the cookie.
+	mintReq := httptest.NewRequest(http.MethodPost, "/auth/local-login/code", nil)
+	mintReq.Host = "localhost:8543"
+	mintReq.Header.Set("Authorization", "Bearer local-token")
+	mintRec := httptest.NewRecorder()
+	chain.ServeHTTP(mintRec, mintReq)
+	require.Equal(t, http.StatusOK, mintRec.Code)
+	var body struct{ Code string }
+	require.NoError(t, json.Unmarshal(mintRec.Body.Bytes(), &body))
+
+	exReq := httptest.NewRequest(http.MethodGet, "/auth/local-login?code="+body.Code, nil)
+	exReq.Host = "localhost:8543"
+	exRec := httptest.NewRecorder()
+	chain.ServeHTTP(exRec, exReq)
+	require.Equal(t, http.StatusFound, exRec.Code)
+	cookies := exRec.Result().Cookies()
+	require.Len(t, cookies, 1)
+	assert.Equal(t, http.StatusOK, call(func(r *http.Request) { r.AddCookie(cookies[0]) }))
+
+	// A rebinding Host is still rejected even with the token.
+	assert.Equal(t, http.StatusForbidden, call(func(r *http.Request) {
+		r.Host = "evil.example"
+		r.Header.Set("Authorization", "Bearer local-token")
+	}))
 }

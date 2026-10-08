@@ -2,11 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"runtime"
+	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/pkg/localtoken"
 	"github.com/tstapler/stapler-squad/session/deeplink"
 )
 
@@ -73,8 +79,48 @@ func runOpenURL(ctx context.Context, raw string) error {
 	if err != nil {
 		return fmt.Errorf("open-url: invalid deep link %q: %w", raw, err)
 	}
+	targetURL = withLocalLogin(ctx, targetURL)
 	if err := osOpenerFunc(ctx, targetURL); err != nil {
 		return fmt.Errorf("open-url: failed to open %q: %w", targetURL, err)
 	}
 	return nil
+}
+
+// withLocalLogin wraps targetURL in a one-time login URL when the server runs
+// with require_local_auth, so the browser gets a session cookie without the
+// token ever appearing in a URL. Falls back to targetURL unchanged when no
+// token file exists or the server has no login endpoint (auth off).
+func withLocalLogin(ctx context.Context, targetURL string) string {
+	dir, err := config.GetConfigDir()
+	if err != nil {
+		return targetURL
+	}
+	token := localtoken.FromConfigDir(dir)
+	if token == "" {
+		return targetURL
+	}
+	target, err := url.Parse(targetURL)
+	if err != nil {
+		return targetURL
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, localWebAppBaseURL+"/auth/local-login/code", nil)
+	if err != nil {
+		return targetURL
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return targetURL
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Code string `json:"code"`
+	}
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&body) != nil || body.Code == "" {
+		return targetURL
+	}
+	q := url.Values{"code": {body.Code}, "next": {target.RequestURI()}}
+	return localWebAppBaseURL + "/auth/local-login?" + q.Encode()
 }

@@ -12,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/pkg/localtoken"
 )
 
 // TestInjectHooksConfigAllTypes (U-3.7): InjectHooksConfig injects all five hook types
@@ -579,9 +581,15 @@ func Test_InjectHooksConfig_should_ProduceByteIdenticalLocalCommand_When_NoRemot
 		t.Fatalf("expected exactly one PermissionRequest hook group/entry, got groups=%+v", groups)
 	}
 
+	// The only addition to the pre-Phase-5 command is the run-time token-file
+	// Authorization header (require_local_auth); it never embeds the secret.
+	cfgDir, err := config.GetConfigDir()
+	if err != nil {
+		t.Fatalf("GetConfigDir: %v", err)
+	}
 	want := fmt.Sprintf(
-		"curl -s --max-time %d -X POST '%s' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s' -d @-",
-		hookTimeout, hookApprovalURL(), "local-sess",
+		"curl -s --max-time %d -X POST '%s' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s' %s -d @-",
+		hookTimeout, hookApprovalURL(), "local-sess", localtoken.CurlHeaderArg(localtoken.Path(cfgDir)),
 	)
 	got := groups[0].Hooks[0].Command
 	if got != want {
