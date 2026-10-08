@@ -1551,7 +1551,7 @@ func commitOnRepo(t *testing.T, dir string, n int, prefix string) {
 	t.Helper()
 	// In-process go-git: 2n git subprocesses per call contended on the fork lock
 	// and made the BranchDrift tests the slowest in the package.
-	repo, err := gogit.PlainOpen(dir)
+	repo, err := git.OpenRepo(dir)
 	require.NoError(t, err)
 	wt, err := repo.Worktree()
 	require.NoError(t, err)
