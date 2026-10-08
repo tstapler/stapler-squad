@@ -19,6 +19,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
@@ -399,6 +400,12 @@ func (s *BacklogService) notifyManualOverride(itemID, itemTitle, message string)
 const (
 	headlessTriageUUIDPrefix   = "headless-triage-"
 	headlessReReviewUUIDPrefix = "headless-re-review-"
+
+	// HeadlessTriageUUIDPrefix / HeadlessReReviewUUIDPrefix are the exported
+	// forms for callers outside this package that must not treat a synthetic
+	// headless ItemSession UUID as a tmux session.
+	HeadlessTriageUUIDPrefix   = headlessTriageUUIDPrefix
+	HeadlessReReviewUUIDPrefix = headlessReReviewUUIDPrefix
 )
 
 // triageCallBudget bounds a single headless triage LLM call — now a backstop
@@ -1041,10 +1048,12 @@ func (s *BacklogService) spawnSessionAfterGates(
 		workExecProgram, workExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleWork)
 	}
 	workExecutorHash := session.ComputeExecutorHash(workExecProgram, workExecModel)
+	// Pin after hashing: the hash must stay the raw mode-side pair (see above).
+	workExecModel = pinnedWorkStageModel(item.RepoPath, workExecProgram, workExecModel)
 	var programOverride, workResolvedModel string
 	if workExecProgram != "" || workExecModel != "" {
 		var resolveErr error
-		programOverride, resolveErr = session.ResolveExecutorProgram(workExecProgram, workExecModel, s.modelFamilies)
+		programOverride, resolveErr = session.ResolveExecutorProgramWithEffort(workExecProgram, workExecModel, config.LoadConfig().BackgroundEffort(), s.modelFamilies)
 		if resolveErr != nil {
 			log.Warn("[SpawnSessionFromItem] failed to resolve work-stage executor program, falling back to default", "item", item.ID, "program", workExecProgram, "model", workExecModel, "err", resolveErr)
 			programOverride = ""
@@ -2394,6 +2403,8 @@ func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, 
 	return nil
 }
 
+var errReviewInFlight = errors.New("a review for this item is already in flight")
+
 // AutoRespawnReview implements session.ReviewRespawner. It re-triggers the review gate
 // for a backlog item abandoned in review with no active session — closing the gap where
 // StuckReasonAbandonedReview was previously only detected and notified, never acted on,
@@ -2472,6 +2483,9 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 	}
 
 	if _, reviewErr := s.TriggerReReview(ctx, connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID})); reviewErr != nil {
+		if connect.CodeOf(reviewErr) == connect.CodeAlreadyExists {
+			return nil // another review spawn won the reservation; already logged
+		}
 		return fmt.Errorf("trigger re-review: %w", reviewErr)
 	}
 	log.Info("[AutoRespawnReview] re-review triggered", "item", itemID)
@@ -2802,6 +2816,17 @@ func (s *BacklogService) TriggerReReview(
 			fmt.Errorf("set repo_path before triggering re-review"))
 	}
 
+	// 3b. One in-flight review per item, shared with the lifecycle listener's
+	// spawn paths. Held for the whole (synchronous) re-review.
+	if s.reviewGuard != nil {
+		release, ok := s.reviewGuard.TryReserve(item.ID, nil)
+		if !ok {
+			log.Info("[TriggerReReview] skipping: review already in flight", "item", item.ID)
+			return nil, connect.NewError(connect.CodeAlreadyExists, errReviewInFlight)
+		}
+		defer release()
+	}
+
 	// 4. Find the most recent review and work ItemSessions for this item.
 	sessions, err := s.storage.ListItemSessions(ctx, item.ID)
 	if err != nil {
@@ -3003,6 +3028,7 @@ Do not modify the code. Only write the review verdict.
 			reviewExecProgram, reviewExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleReview)
 		}
 		reviewExecutorHash := session.ComputeExecutorHash(reviewExecProgram, reviewExecModel)
+		reviewExecModel = pinnedStageModel(session.StageRoleReview, reviewExecProgram, reviewExecModel)
 		reviewCaller, reviewConfiguredProgram, reviewFallbackReason := s.resolveHeadlessCaller(reviewExecProgram, item.ID, "review")
 		reviewResolvedModel, reviewModelErr := session.ResolveModel(s.modelFamilies, reviewExecModel)
 		if reviewModelErr != nil {

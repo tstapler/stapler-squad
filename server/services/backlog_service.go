@@ -156,6 +156,9 @@ type BacklogService struct {
 	julesDispatcher JulesDispatcher
 	cfg             *config.Config
 	engine          session.WorkflowEngine
+	// reviewGuard is the listener's process-wide review-spawn reservation, so
+	// headless re-review honors the same one-reviewer-per-item rule. nil-safe.
+	reviewGuard *session.ReviewSpawnGuard
 	// worktreeMu serializes context-file writes to the same worktree path so that
 	// concurrent SpawnSessionFromItem / AttachSessionToItem calls cannot produce
 	// a partially-written .claude/backlog-context.md.
@@ -1449,4 +1452,10 @@ func duplicateRefPending(item *session.BacklogItemData) string {
 		return ""
 	}
 	return session.PendingDuplicateRef(item.ItemSessions)
+}
+
+// SetReviewSpawnGuard wires the lifecycle listener's review-spawn guard into the
+// headless re-review paths (TriggerReReview, AutoRespawnReview).
+func (s *BacklogService) SetReviewSpawnGuard(g *session.ReviewSpawnGuard) {
+	s.reviewGuard = g
 }
