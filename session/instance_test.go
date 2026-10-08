@@ -881,6 +881,7 @@ func TestInstance_Start_should_FailBeforeSpawn_When_NewWorktreeResolvesToRepoRoo
 // above: a normal SessionTypeNewWorktree session, with no forced failure,
 // must still resolve a genuinely distinct worktree and reach Active.
 func TestInstance_Start_should_ProceedToSpawn_When_WorktreeResolvesCorrectly(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
@@ -958,6 +959,7 @@ func TestInstance_Start_should_FailBeforeSpawn_When_PreSpawnCollisionGuardReturn
 // wiring for a session with no colliding sibling) must not block a normal
 // SessionTypeExistingWorktree session from reaching Active.
 func TestInstance_Start_should_ProceedToSpawn_When_NoCollisionDetected(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}

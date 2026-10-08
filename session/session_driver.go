@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -39,6 +40,23 @@ var spinnerTimeRe = regexp.MustCompile(`\(\d+[hms]`)
 // a work session, e.g. "✻ Perambulated for 1h 5m", "✽ Roosted for 9m", or
 // "* Moonwalked for 30s". Matches any leading symbol variant.
 var completionVerbRe = regexp.MustCompile(`[✻✽\*] \w+ed for \d+`)
+
+// driverTiming is the pair of driver timings tests need to shrink.
+type driverTiming struct {
+	pollInterval, readyTimeout time.Duration
+}
+
+// testDriverTiming overrides the production timings; nil means defaults. It is
+// an atomic pointer read once per driver start so leaked goroutines from other
+// tests cannot race a test that swaps it.
+var testDriverTiming atomic.Pointer[driverTiming]
+
+func currentDriverTiming() driverTiming {
+	if t := testDriverTiming.Load(); t != nil {
+		return *t
+	}
+	return driverTiming{pollInterval: driverPollInterval, readyTimeout: driverReadyTimeout}
+}
 
 const (
 	driverPollInterval  = 2 * time.Second
@@ -303,10 +321,11 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		}
 	}()
 
-	readyDeadline := time.Now().Add(driverReadyTimeout)
+	timing := currentDriverTiming()
+	readyDeadline := time.Now().Add(timing.readyTimeout)
 	totalDeadline := time.Now().Add(driverTotalTimeout)
 
-	ticker := time.NewTicker(driverPollInterval)
+	ticker := time.NewTicker(timing.pollInterval)
 	defer ticker.Stop()
 
 	// Once a PR URL is found in terminal output we stop scanning.

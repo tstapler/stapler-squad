@@ -82,6 +82,7 @@ func (f *reviewGuardFixture) reviewRows(t *testing.T) (total, open int) {
 // funnel into spawnReviewGate, and nothing stopped a second caller from
 // spawning while the first was still inside SpawnReviewSession.
 func TestReviewGate_ConcurrentTriggers_SingleSpawn(t *testing.T) {
+	t.Parallel()
 	spawner := newBlockingReviewSpawner()
 	f := newReviewGuardFixture(t, spawner, BacklogStatusReview)
 
@@ -124,6 +125,7 @@ func TestReviewGate_ConcurrentTriggers_SingleSpawn(t *testing.T) {
 }
 
 func TestReviewGate_ReleasedAfterSpawnError_AllowsRetry(t *testing.T) {
+	t.Parallel()
 	spawner := &mockReviewGateSpawner{err: assert.AnError}
 	f := newReviewGuardFixture(t, spawner, BacklogStatusReview)
 
@@ -159,6 +161,7 @@ func TestReviewSpawnGuard_ReleasedOnPanicAndIdempotent(t *testing.T) {
 }
 
 func TestReviewGate_ReservationHeldUntilItemSessionPersisted(t *testing.T) {
+	t.Parallel()
 	spawner := newBlockingReviewSpawner()
 	f := newReviewGuardFixture(t, spawner, BacklogStatusReview)
 
@@ -178,6 +181,7 @@ func TestReviewGate_ReservationHeldUntilItemSessionPersisted(t *testing.T) {
 }
 
 func TestTriggerReviewForSession_NoopWhenReviewOpenOrNotInReview(t *testing.T) {
+	t.Parallel()
 	t.Run("not in review", func(t *testing.T) {
 		spawner := &mockReviewGateSpawner{}
 		f := newReviewGuardFixture(t, spawner, BacklogStatusInProgress)
@@ -206,6 +210,7 @@ func TestTriggerReviewForSession_NoopWhenReviewOpenOrNotInReview(t *testing.T) {
 }
 
 func TestReviewGate_ReReviewAllowedAfterPriorEnded(t *testing.T) {
+	t.Parallel()
 	spawner := &mockReviewGateSpawner{}
 	f := newReviewGuardFixture(t, spawner, BacklogStatusReview)
 	prior, err := f.storage.CreateItemSession(context.Background(), ItemSessionData{

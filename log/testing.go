@@ -2,8 +2,10 @@ package log
 
 import (
 	"bytes"
+	"io"
 	stdlog "log"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -65,16 +67,16 @@ func (b *SyncBuffer) Reset() {
 // which fires after the test function returns — the second redirect's Lock
 // call would block forever). Per-logger scoping avoids both.
 var (
-	redirectLocksMu sync.Mutex                         //nolint:gochecknoglobals
-	redirectLocks   = map[*stdlog.Logger]*sync.Mutex{} //nolint:gochecknoglobals
+	redirectLocksMu sync.Mutex                           //nolint:gochecknoglobals
+	redirectLocks   = map[*stdlog.Logger]*sync.RWMutex{} //nolint:gochecknoglobals
 )
 
-func redirectLockFor(logger *stdlog.Logger) *sync.Mutex {
+func redirectLockFor(logger *stdlog.Logger) *sync.RWMutex {
 	redirectLocksMu.Lock()
 	defer redirectLocksMu.Unlock()
 	mu, ok := redirectLocks[logger]
 	if !ok {
-		mu = &sync.Mutex{}
+		mu = &sync.RWMutex{}
 		redirectLocks[logger] = mu
 	}
 	return mu
@@ -105,6 +107,115 @@ func RedirectLogger(t *testing.T, logger *stdlog.Logger, prefix string) *SyncBuf
 		logger.SetPrefix(origPrefix)
 		logger.SetFlags(origFlags)
 		mu.Unlock()
+	})
+	return buf
+}
+
+// QuietLogger keeps logger's output from being redirected for the rest of the
+// calling test, without capturing anything itself. Use it in a test that
+// writes to logger but never asserts on it. Any number of quiet tests and
+// CaptureLogger tests run concurrently, so a quiet test's writes DO land in
+// concurrent capturers' buffers (which is why capturers must assert only on text
+// unique to themselves); only RedirectLogger callers wait for quiet tests.
+// Never take a second QuietLogger/CaptureLogger/RedirectLogger on the same
+// logger in one test (including parallel subtests of it): the read lock is held
+// until cleanup, and a pending RedirectLogger writer would deadlock the second
+// acquisition.
+func QuietLogger(t *testing.T, logger *stdlog.Logger) {
+	t.Helper()
+	mu := redirectLockFor(logger)
+	mu.RLock()
+	t.Cleanup(mu.RUnlock)
+}
+
+// logFanout is installed as a logger's output while at least one CaptureLogger
+// subscriber exists. Write copies each line to every subscriber without taking
+// a lock (subscribers live in a copy-on-write slice behind an atomic pointer),
+// or to the original writer when nobody is subscribed.
+type logFanout struct {
+	orig io.Writer
+	subs atomic.Pointer[[]*SyncBuffer]
+}
+
+func (f *logFanout) Write(p []byte) (int, error) {
+	subs := f.subs.Load()
+	if subs == nil || len(*subs) == 0 {
+		return f.orig.Write(p)
+	}
+	for _, b := range *subs {
+		_, _ = b.Write(p)
+	}
+	return len(p), nil
+}
+
+// update swaps in a new subscriber slice; callers hold redirectLocksMu, which
+// serializes writers so the load-modify-store below cannot lose an update.
+func (f *logFanout) update(modify func([]*SyncBuffer) []*SyncBuffer) {
+	var cur []*SyncBuffer
+	if p := f.subs.Load(); p != nil {
+		cur = *p
+	}
+	next := modify(append([]*SyncBuffer(nil), cur...))
+	f.subs.Store(&next)
+}
+
+type fanoutState struct {
+	fanout     *logFanout
+	refs       int
+	origOut    io.Writer
+	origPrefix string
+	origFlags  int
+}
+
+var fanouts = map[*stdlog.Logger]*fanoutState{} //nolint:gochecknoglobals // guarded by redirectLocksMu
+
+// CaptureLogger gives the calling test its own buffer of logger's output
+// without excluding other tests: every concurrent capturer receives every line
+// written to logger while it is subscribed (an aggregated stream, not an
+// isolated one), so assertions must match on something unique to the test
+// (an item ID, a title) rather than on the buffer being empty or exact. Use
+// RedirectLogger instead when a test needs isolation. Capturers and quiet tests
+// share the logger's read lock; only RedirectLogger callers wait for them. All
+// capturers of one logger must pass the same prefix — the first one wins.
+func CaptureLogger(t *testing.T, logger *stdlog.Logger, prefix string) *SyncBuffer {
+	t.Helper()
+	rw := redirectLockFor(logger)
+	rw.RLock()
+	buf := &SyncBuffer{}
+	redirectLocksMu.Lock()
+	st := fanouts[logger]
+	if st == nil {
+		st = &fanoutState{}
+		fanouts[logger] = st
+	}
+	if st.refs == 0 {
+		st.origOut, st.origPrefix, st.origFlags = logger.Writer(), logger.Prefix(), logger.Flags()
+		st.fanout = &logFanout{orig: st.origOut}
+		logger.SetOutput(st.fanout)
+		logger.SetPrefix(prefix)
+		logger.SetFlags(0)
+	}
+	st.refs++
+	st.fanout.update(func(s []*SyncBuffer) []*SyncBuffer { return append(s, buf) })
+	redirectLocksMu.Unlock()
+	t.Cleanup(func() {
+		redirectLocksMu.Lock()
+		st.fanout.update(func(s []*SyncBuffer) []*SyncBuffer {
+			for i, b := range s {
+				if b == buf {
+					return append(s[:i], s[i+1:]...)
+				}
+			}
+			return s
+		})
+		st.refs--
+		if st.refs == 0 {
+			logger.SetOutput(st.origOut)
+			logger.SetPrefix(st.origPrefix)
+			logger.SetFlags(st.origFlags)
+		}
+		redirectLocksMu.Unlock()
+		rw.RUnlock()
 	})
 	return buf
 }

@@ -338,7 +338,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	// another's buffer (or arrive after it's already been read), leaving the
 	// read-back empty.
 	t.Run("SlashCommandSet", func(t *testing.T) {
-		buf := swapWarningLog(t)
+		buf := captureWarningLog(t)
 
 		got, err := engine.SlashCommandSet(item)
 		if err != nil {
@@ -355,7 +355,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	})
 
 	t.Run("TriagePromptFor", func(t *testing.T) {
-		buf := swapWarningLog(t)
+		buf := captureWarningLog(t)
 
 		got := engine.TriagePromptFor(item, "/tmp/plan.md")
 		want := BuildHeadlessTriagePrompt(item, "/tmp/plan.md")
@@ -366,7 +366,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	})
 
 	t.Run("ReviewPromptFor", func(t *testing.T) {
-		buf := swapWarningLog(t)
+		buf := captureWarningLog(t)
 
 		got := engine.ReviewPromptFor(item, nil, "diff content", false, "notes", ReviewContextExtras{})
 		want := BuildHeadlessReviewPrompt(item, nil, "diff content", false, "notes", ReviewContextExtras{})
@@ -377,7 +377,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	})
 
 	t.Run("InteractiveReviewPromptFor", func(t *testing.T) {
-		buf := swapWarningLog(t)
+		buf := captureWarningLog(t)
 
 		got := engine.InteractiveReviewPromptFor(item, nil, "diff content", false, "review-session-id", "notes")
 		want := BuildReviewPrompt(item, nil, "diff content", false, "review-session-id", "notes")
@@ -388,7 +388,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	})
 
 	t.Run("InitialPromptFor", func(t *testing.T) {
-		buf := swapWarningLog(t)
+		buf := captureWarningLog(t)
 
 		got := engine.InitialPromptFor(item, nil)
 		want := BuildTokenBudgetedPrompt(item, nil)
@@ -408,20 +408,21 @@ func TestCachingPipelineEngine_ContentHashFor_should_ReturnEmptyAndFalse_When_Mo
 		t.Fatalf("default mode: got (%q, %v), want (\"\", false)", hash, ok)
 	}
 
-	buf := swapWarningLog(t)
+	buf := captureWarningLog(t)
 
-	hash, ok = engine.ContentHashFor("missing")
+	const missingSlug = "missing-slug-contenthash-exemption"
+	hash, ok = engine.ContentHashFor(missingSlug)
 	if hash != "" || ok {
 		t.Fatalf("missing mode: got (%q, %v), want (\"\", false)", hash, ok)
 	}
-	if buf.Len() != 0 {
+	if strings.Contains(buf.String(), missingSlug) {
 		t.Fatalf("ContentHashFor must not emit a Warn log for an unresolved slug (documented exemption), got: %q", buf.String())
 	}
 }
 
 func TestNewPipelineEngine_should_ReturnUsableEngineWithEmptyCacheAndWarnLog_When_InitialCacheLoadFails(t *testing.T) {
 	t.Parallel()
-	buf := swapWarningLog(t)
+	buf := captureWarningLog(t)
 
 	repo := &fakePipelineModeRepository{
 		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
@@ -643,7 +644,7 @@ func TestPipelineEngine_should_FallBackToDefaultNotCrash_When_UnresolvableSlugIn
 		t.Fatalf("NewPipelineEngine: %v", err)
 	}
 
-	buf := swapWarningLog(t)
+	buf := captureWarningLog(t)
 
 	// Must not panic/crash and must fall back to default-mode output.
 	gotFiles, err := engine.SlashCommandSet(created)
@@ -673,14 +674,14 @@ func TestPipelineEngine_should_FallBackToDefaultNotCrash_When_UnresolvableSlugIn
 func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmpty_When_ModeIsDefault(t *testing.T) {
 	t.Parallel()
 	engine := &CachingPipelineEngine{cache: &pipelineModeCache{}}
-	item := &BacklogItemData{ID: "item-default", PipelineMode: ""}
+	item := &BacklogItemData{ID: "item-default-no-warn", PipelineMode: ""}
 
-	buf := swapWarningLog(t)
+	buf := captureWarningLog(t)
 	program, model := engine.ExecutorFor(item, StageRoleWork)
 	if program != "" || model != "" {
 		t.Fatalf("got (%q, %q), want (\"\", \"\")", program, model)
 	}
-	if buf.Len() != 0 {
+	if strings.Contains(buf.String(), item.ID) {
 		t.Fatalf("expected no Warn log for PipelineModeDefault, got: %q", buf.String())
 	}
 }
@@ -699,7 +700,7 @@ func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmptyAndWarnLog_When_Pip
 	engine := &CachingPipelineEngine{repo: repo, cache: cache}
 	item := &BacklogItemData{ID: "item-unresolved", PipelineMode: "does-not-exist"}
 
-	buf := swapWarningLog(t)
+	buf := captureWarningLog(t)
 	program, model := engine.ExecutorFor(item, StageRoleTriage)
 	if program != "" || model != "" {
 		t.Fatalf("got (%q, %q), want (\"\", \"\")", program, model)

@@ -68,6 +68,7 @@ func TestReclassifyTagsLocked_should_NotRace_When_SetterAndGetTagsRunConcurrentl
 // Start() (which runs setupFirstTimeWorktree() then ReclassifyTagsAfterCreate()) races against
 // a separate goroutine hammering GetTags()/Snapshot() throughout. `-race` must report clean.
 func TestReclassifyTagsAfterCreate_should_AcquireOwnLock_When_CalledConcurrentlyWithGetTags(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}

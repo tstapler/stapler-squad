@@ -13,6 +13,8 @@ import (
 	"unicode/utf8"
 
 	"go.uber.org/goleak"
+
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // stuckDialogProcessManager implements ProcessManager. CapturePaneContent always
@@ -31,6 +33,7 @@ import (
 type stuckDialogProcessManager struct {
 	sendKeysCount atomic.Int32
 	callCount     atomic.Int32
+	contentCalls  atomic.Int32 // every content() call: one per driver poll tick
 	dialogText    string
 
 	// growPerCall, when true, prepends growing unrelated content to each
@@ -89,6 +92,7 @@ func (m *stuckDialogProcessManager) SendInputViaControlMode(ctx context.Context,
 const growBaseReps = 500
 
 func (m *stuckDialogProcessManager) content() string {
+	m.contentCalls.Add(1)
 	if m.pollEntered != nil {
 		m.pollEnteredOnce.Do(func() { close(m.pollEntered) })
 	}
@@ -1009,6 +1013,17 @@ func TestScanTerminalForPRURL(t *testing.T) {
 // waits 6 poll ticks (double Phase 0's original 3-tick reproduction window),
 // and asserts SendKeys("1\n") never exceeds maxDialogAnswerAttempts — the
 // shared body of the stuck-buffer and growing-buffer regression tests below.
+// shrinkDriverTiming makes driver goroutines started after this call tick fast
+// so tests observe real poll/ready-timeout behaviour in milliseconds. Callers
+// are non-parallel (they use t.Setenv), so no other test is mid-start.
+func shrinkDriverTiming(t *testing.T) driverTiming {
+	t.Helper()
+	fast := &driverTiming{pollInterval: 50 * time.Millisecond, readyTimeout: 500 * time.Millisecond}
+	testDriverTiming.Store(fast)
+	t.Cleanup(func() { testDriverTiming.Store(nil) })
+	return *fast
+}
+
 func runBoundedDialogAnswerScenario(t *testing.T, title string, fakePM *stuckDialogProcessManager, logMsg string) {
 	t.Helper()
 	inst := &Instance{
@@ -1019,8 +1034,12 @@ func runBoundedDialogAnswerScenario(t *testing.T, title string, fakePM *stuckDia
 	}
 	inst.started.Store(true)
 
+	timing := shrinkDriverTiming(t)
 	StartSessionDriver(inst, "/tmp")
-	time.Sleep(driverPollInterval*6 + 500*time.Millisecond) //nolint:notimesleeptest driverPollInterval is a production const driving a real ticker; bounding resends over 6 real ticks cannot be observed without changing production code
+	// Wait for the 6 poll ticks themselves rather than a fixed sleep, so a starved
+	// scheduler cannot let the bound pass vacuously with fewer ticks than intended.
+	wait.RequireEventually(t, func() bool { return fakePM.contentCalls.Load() >= 6 },
+		timing.pollInterval*6+10*time.Second, 5*time.Millisecond, "driver never reached 6 poll ticks")
 
 	count := fakePM.sendKeysCount.Load()
 	t.Logf(logMsg, count)
@@ -1387,6 +1406,7 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 
 	// startSessionDriverForTest exists because StartSessionDriver always
 	// resolves RetryPolicy fresh from config — see its doc comment for why.
+	timing := shrinkDriverTiming(t)
 	startSessionDriverForTest(inst, "/tmp", driverInitialPrompt, policy)
 	defer StopSessionDriver(inst)
 
@@ -1395,7 +1415,7 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	// `continue`. It only fires via the timedOut fallback once
 	// driverReadyTimeout elapses; the 3x margin absorbs scheduler contention
 	// under -race (confirmed flaky at tighter budgets).
-	deadline := time.After(3*driverReadyTimeout + driverPollInterval*3 + time.Second)
+	deadline := time.After(3*timing.readyTimeout + timing.pollInterval*3 + time.Second)
 	waitForSendKeysCountAbove(t, fakePM, maxDialogAnswerAttempts, deadline,
 		"SendKeys count never exceeded the dialog-answer cap — the dialogGaveUp fall-through never reached the initial-prompt-send step (stuck in the continue trap)")
 }
