@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.1.0](https://github.com/tstapler/stapler-squad/compare/v2.0.0...v2.1.0) (2026-10-08)
+
+
+### Features
+
+* **cost:** pin cheaper models and effort for background LLM work ([#950](https://github.com/tstapler/stapler-squad/issues/950)) ([fdd1d8d](https://github.com/tstapler/stapler-squad/commit/fdd1d8dde6d6fe45479243bded6df1a432c39cd6))
+* **settings:** expose autonomous max turns in global defaults ([#949](https://github.com/tstapler/stapler-squad/issues/949)) ([20955ea](https://github.com/tstapler/stapler-squad/commit/20955ea6580b07444a0faec2bd4cb1d72ab7c4d1))
+* **unfinished:** tabbed Up Next with PR session linking and ask-to-fix ([#947](https://github.com/tstapler/stapler-squad/issues/947)) ([ed4cf10](https://github.com/tstapler/stapler-squad/commit/ed4cf100682eb44d55af1e415d379c0dc9ae17c7))
+
+
+### Bug Fixes
+
+* **mcp:** stop idle review polling after request_review ([#948](https://github.com/tstapler/stapler-squad/issues/948)) ([0138562](https://github.com/tstapler/stapler-squad/commit/01385626926d6fdb19e23416eea1b2a78f07c6f8))
+* **server:** bridge WatchWorkflows and WatchUserPRs over WebSocket ([#945](https://github.com/tstapler/stapler-squad/issues/945)) ([264e989](https://github.com/tstapler/stapler-squad/commit/264e9892e2d746e66bfce14ddf9899fac6e5e33e))
+* **terminal:** repaint all webgl panes on atlas clear and cap live WebGL contexts ([#944](https://github.com/tstapler/stapler-squad/issues/944)) ([81a91a3](https://github.com/tstapler/stapler-squad/commit/81a91a3ed5669f0b9eb1cd259a13755cf5af0114))
+* **web:** raise the Omnibar "Create directory?" dialog above the Omnibar overlay ([af41ed5](https://github.com/tstapler/stapler-squad/commit/af41ed5ae67051b6ed4d512e8a6279864e77ca33))
+
+
+### Performance Improvements
+
+* **test:** seed NewTestEntRepository from a migrated template database ([#943](https://github.com/tstapler/stapler-squad/issues/943)) ([d059393](https://github.com/tstapler/stapler-squad/commit/d0593932c8c4926e8ced78405e351d14982d97da))
+
 ## [2.0.0](https://github.com/tstapler/stapler-squad/compare/v1.55.0...v2.0.0) (2026-10-07)
 
 
