@@ -10,3 +10,6 @@
 
 ## Design
 Add `config.ModelPolicy` (map feature-key -> {model, effort}) with built-in defaults, one `ResolveFeatureModel(cfg, families, feature, program)` helper (generalizing resolveTriageModel, claude-only guard), consumed by: default-pipeline ExecutorFor fallback (work/review), headless feature call sites via CallOptions.Model, and pool DefaultModel as safety net. Opus gated: only accepted when explicitly set.
+
+## Update 2026-10-07 (gap audit after origin/main d0593932c)
+Upstream #930 (`config/background_models.go`) already shipped: feature/stage defaults, work/review pin, `--effort` on work programs, drift hash untouched. Verified remaining gaps: (AC4) no panel/RPC, only config.json; (AC7) no warning on invalid model values; (AC8) no CLAUDE_CODE_SUBAGENT_MODEL evaluation; (AC9) pool built with `FeatureModel` but empty `DefaultModel`. `claude --help` 2.1.293 lists `--effort <level>`; CLAUDE_CODE_SUBAGENT_MODEL confirmed in https://code.claude.com/docs/en/model-config (VERIFIED, fetched).

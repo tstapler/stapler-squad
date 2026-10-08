@@ -76,6 +76,9 @@ type BacklogLifecycleListener struct {
 	// poolMu guards headlessPool for concurrent Set/get access.
 	poolMu       sync.RWMutex
 	headlessPool *headless.Pool
+	// headlessClient, when set, takes precedence over headlessPool for gate and PR-draft
+	// calls so they honor the LLM backend selector. Guarded by poolMu.
+	headlessClient headless.PoolClient
 
 	// autoReopenMu guards autoReopener for concurrent Set/get access.
 	autoReopenMu sync.RWMutex
@@ -194,6 +197,8 @@ type BacklogLifecycleListener struct {
 
 	// reviewSem limits concurrent review gate goroutines.
 	reviewSem chan struct{}
+	// reviewGuard keeps at most one review spawn per item in flight (see ReviewSpawnGuard).
+	reviewGuard *ReviewSpawnGuard
 
 	// customCheckSem limits concurrent custom-gate-check goroutines
 	// (runCustomGateCheck, session/backlog_lifecycle_gates.go), same pattern
@@ -708,11 +713,25 @@ func (l *BacklogLifecycleListener) getSessionLivenessChecker() func(sessionUUID 
 	return l.sessionLivenessChecker
 }
 
-// getHeadlessPool returns the current headless pool under a read lock.
-func (l *BacklogLifecycleListener) getHeadlessPool() *headless.Pool {
+// SetHeadlessClient routes custom-gate and PR-description calls through c
+// (normally a headless.SelectingClient) instead of the raw claude pool.
+func (l *BacklogLifecycleListener) SetHeadlessClient(c headless.PoolClient) {
+	l.poolMu.Lock()
+	defer l.poolMu.Unlock()
+	l.headlessClient = c
+}
+
+// getHeadlessCaller returns the selector client if wired, else the raw pool, else nil.
+func (l *BacklogLifecycleListener) getHeadlessCaller() headless.PoolClient {
 	l.poolMu.RLock()
 	defer l.poolMu.RUnlock()
-	return l.headlessPool
+	if l.headlessClient != nil {
+		return l.headlessClient
+	}
+	if l.headlessPool != nil {
+		return l.headlessPool
+	}
+	return nil
 }
 
 func (l *BacklogLifecycleListener) getDashboardBaseURL() string {
@@ -738,6 +757,7 @@ func newListenerBase(storage *Storage, pipelineEngine PipelineEngine, livenessEn
 		pipelineEngine:          pipelineEngine,
 		livenessEngine:          livenessEngine,
 		reviewSem:               make(chan struct{}, maxConcurrentReviewGates),
+		reviewGuard:             NewReviewSpawnGuard(),
 		customCheckSem:          make(chan struct{}, maxConcurrentCustomGateChecks),
 		shutdownCtx:             ctx,
 		shutdownCancel:          cancel,

@@ -436,9 +436,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	wsBridge := services.NewStreamingWSBridge(handler)
 	watchSessionsPath := "/api" + sessionv1connect.SessionServiceWatchSessionsProcedure
 	watchReviewQueuePath := "/api" + sessionv1connect.SessionServiceWatchReviewQueueProcedure
+	watchWorkflowsPath := "/api" + sessionv1connect.SessionServiceWatchWorkflowsProcedure
 	srv.mux.Handle(watchSessionsPath, wsBridge.Handler("/api"))
 	srv.mux.Handle(watchReviewQueuePath, wsBridge.Handler("/api"))
-	log.Info("Registered StreamingWSBridge", "watchSessions", watchSessionsPath, "watchReviewQueue", watchReviewQueuePath)
+	srv.mux.Handle(watchWorkflowsPath, wsBridge.Handler("/api"))
+	log.Info("Registered StreamingWSBridge", "watchSessions", watchSessionsPath, "watchReviewQueue", watchReviewQueuePath, "watchWorkflows", watchWorkflowsPath)
 
 	srv.RegisterConnectHandler(apiPath, http.StripPrefix("/api", handler))
 
@@ -498,6 +500,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		ghAPIPath := "/api" + ghPath
 		srv.RegisterConnectHandler(ghAPIPath, http.StripPrefix("/api", ghHandler))
 		log.Info("Registered GitHubUserService handler", "path", ghAPIPath)
+
+		// Bridge WatchUserPRs over WebSocket too — the browser sends every Watch*
+		// call through the WS transport (see createSessionWatchTransport), so an
+		// unbridged one fails to connect.
+		watchUserPRsPath := "/api" + sessionv1connect.GitHubUserServiceWatchUserPRsProcedure
+		srv.mux.Handle(watchUserPRsPath, services.NewStreamingWSBridge(ghHandler).Handler("/api"))
+		log.Info("Registered StreamingWSBridge", "watchUserPRs", watchUserPRsPath)
 	}
 
 	// Register TymuxRolloutService handler (tymux-bundled-integration Epic
@@ -676,6 +685,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered HeadlessService handler", "path", hlAPIPath)
 	}
 
+	// LLMBackendService: live-editable headless backend selection (always registered;
+	// the selector's backends report their own availability).
+	{
+		llmPath, llmHandler := sessionv1connect.NewLLMBackendServiceHandler(
+			services.NewLLMBackendService(deps.LLMSelector), ConnectOptions(deps.ErrorRegistry)...)
+		srv.RegisterConnectHandler("/api"+llmPath, http.StripPrefix("/api", llmHandler))
+		log.Info("Registered LLMBackendService handler", "path", "/api"+llmPath)
+	}
+
 	// Register ImportService handler (import-external-session, Phase 1).
 	// Gated behind STAPLER_SQUAD_ENABLE_SESSION_IMPORT: only the three
 	// mutating RPCs (CommitImportExternalSession, ConfirmKillExternalSession,
@@ -787,8 +805,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		approvalHandler.SetAutoApprovalLogger(notifStore)
 	}
 	// Wire LLM approval for autonomous sessions (E5)
-	if deps.HeadlessPool != nil {
-		approvalHandler.SetHeadlessPool(deps.HeadlessPool)
+	if deps.LLMClient != nil {
+		approvalHandler.SetHeadlessPool(deps.LLMClient)
 	}
 	approvalHandler.SetAutonomousChecker(func(sessionID string) bool {
 		inst := deps.SessionService.FindLiveInstance(sessionID)

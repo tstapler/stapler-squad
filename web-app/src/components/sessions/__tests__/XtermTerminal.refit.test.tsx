@@ -26,8 +26,15 @@ type RO = { callback: (entries: Array<{ contentRect: { width: number; height: nu
 let observers: RO[];
 const size = { w: 320, h: 400 };
 
+// postFitRepaint keeps module-level clear-window state; a fresh fake clock per test would replay
+// the same timestamps and land inside the previous test's 16ms window, so make the clock monotonic.
+const CLOCK_STEP_MS = 10_000;
+let clockOffsetMs = 0;
+
 beforeEach(() => {
   jest.useFakeTimers();
+  clockOffsetMs += CLOCK_STEP_MS;
+  jest.advanceTimersByTime(clockOffsetMs);
   jest.spyOn(console, "log").mockImplementation(() => {});
   jest.spyOn(console, "warn").mockImplementation(() => {});
   jest.spyOn(console, "error").mockImplementation(() => {});
@@ -64,6 +71,7 @@ async function mount(props: Partial<XtermTerminalProps> = {}) {
     jest.advanceTimersByTime(200);
     await Promise.resolve();
     await Promise.resolve();
+    jest.advanceTimersByTime(100); // settle the post-load repaint, then clear postFitRepaint's 16ms atlas window
   });
   const terminal = created.terminals[created.terminals.length - 1];
   const fit = created.fits[created.fits.length - 1];
@@ -284,6 +292,37 @@ describe("zero-size, restore, renderer and viewport handling", () => {
     act(() => ref.current!.refit());
     expect(terminal.clearTextureAtlas).toHaveBeenCalledTimes(1);
     expect(terminal.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  describe("visibilitychange", () => {
+    const setVisibility = (state: "visible" | "hidden") => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: state });
+      act(() => void document.dispatchEvent(new Event("visibilitychange")));
+    };
+    afterEach(() => {
+      delete (document as any).visibilityState;
+    });
+
+    it("visibilitychange_should_ClearAtlasAndRefresh_When_DocumentBecomesVisible", async () => {
+      const { terminal } = await mount();
+      setVisibility("visible");
+      expect(terminal.clearTextureAtlas).toHaveBeenCalledTimes(1);
+      expect(terminal.refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it("visibilitychange_should_NotRepaint_When_DocumentHidden", async () => {
+      const { terminal } = await mount();
+      setVisibility("hidden");
+      expect(terminal.clearTextureAtlas).not.toHaveBeenCalled();
+      expect(terminal.refresh).not.toHaveBeenCalled();
+    });
+
+    it("visibilitychange_should_NotRepaint_When_Unmounted", async () => {
+      const { terminal, unmount } = await mount();
+      unmount();
+      setVisibility("visible");
+      expect(terminal.clearTextureAtlas).not.toHaveBeenCalled();
+    });
   });
 
   it("refit_should_LogViewportVsContainerMismatch_When_ContainerDoesNotTrackVisualViewport", async () => {

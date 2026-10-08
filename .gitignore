@@ -129,3 +129,4 @@ benchmarks/
 
 # Runtime session-data artifacts leaked into the repo root by local dev runs
 /session/*/scrollback.jsonl.zst
+/server/services/backlog_item_public_id_backfill.lock

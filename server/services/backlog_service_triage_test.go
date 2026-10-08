@@ -653,7 +653,7 @@ func TestDequeueNextQueuedItems_SpawnsOldestQueuedItemFirst(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resp.Msg.Queued)
 
-	time.Sleep(5 * time.Millisecond)
+	waitClockPast(t, time.Now(), 5*time.Millisecond)
 
 	newerID := createReadyItemForSpawn(t, svc, repoPath, "newer queued")
 	resp, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: newerID}))
@@ -999,7 +999,7 @@ func TestDequeueNextQueuedItems_should_SpawnHigherPriorityReadyItemFirst_When_On
 	// pure FIFO/creation-order dequeue would pick the P5 one; priority order must
 	// pick the P1 one instead.
 	p5ID := createReadyItemWithPriority(t, svc, repoPath, "low priority", 5)
-	time.Sleep(5 * time.Millisecond)
+	waitClockPast(t, time.Now(), 5*time.Millisecond)
 	p1ID := createReadyItemWithPriority(t, svc, repoPath, "high priority", 1)
 
 	sessions, err := storage.ListItemSessions(t.Context(), inProgressIDs[0])
@@ -6385,53 +6385,32 @@ func TestSpawnSessionFromItem_should_Refuse_When_RepeatedNoopDispatchRowOpen(t *
 	require.NoError(t, err)
 }
 
-// TestSpawnSessionFromItem_should_PinConfiguredModel_When_DefaultPipeline covers the background
-// model policy: the default pipeline pins nothing, so work sessions get the policy model and
-// effort, while the stored executor hash stays derived from the (empty) pipeline values.
-func TestSpawnSessionFromItem_should_PinConfiguredModel_When_DefaultPipeline(t *testing.T) {
+// TestReReview_BlockedByInFlightListenerReservation verifies the headless
+// re-review paths honor the lifecycle listener's per-item review reservation.
+func TestReReview_BlockedByInFlightListenerReservation(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		name        string
-		policy      map[string]string
-		wantProgram string
-		wantModel   string
-	}{
-		{"default is sonnet", nil, "claude --model claude-sonnet-4-6 --effort medium", "claude-sonnet-4-6"},
-		{"explicit opus opt-in", map[string]string{config.ModelPolicyWork: "family:opus"}, "claude --model claude-opus-4-8 --effort medium", "claude-opus-4-8"},
-		{"none keeps account default but still sets effort", map[string]string{config.ModelPolicyWork: "none"}, "claude --effort medium", ""},
-		{"bad value falls back to default", map[string]string{config.ModelPolicyWork: "family:nope"}, "claude --model claude-sonnet-4-6 --effort medium", "claude-sonnet-4-6"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			storage := createTestStorage(t)
-			creator := &mockSessionCreator{}
-			svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-			svc.liveConfigFn = func() *config.Config {
-				return &config.Config{DefaultProgram: "claude", ModelPolicy: tc.policy}
-			}
-			ctx := t.Context()
-			repoPath := t.TempDir()
-			initGitRepoWithCommit(t, repoPath)
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, &config.Config{}, nil, nil, nil)
+	guard := session.NewReviewSpawnGuard()
+	svc.SetReviewSpawnGuard(guard)
 
-			createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
-				Title: "policy item", RepoPath: repoPath,
-				AcceptanceCriteria: []*sessionv1.AcCriterion{{Index: 0, Text: "test", Status: "pending"}},
-				SkipTriage:         true, SkipPlanning: true,
-			}))
-			require.NoError(t, err)
-			itemID := createResp.Msg.Item.Id
-			_, err = svc.TransitionBacklogItemStatus(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{ItemId: itemID, TargetStatus: "ready"}))
-			require.NoError(t, err)
-			_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
-			require.NoError(t, err)
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title: "in-flight review", RepoPath: repoPath, Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
 
-			require.Len(t, creator.calls, 1)
-			assert.Equal(t, tc.wantProgram, creator.calls[0].programOverride)
-			sessions, err := storage.ListItemSessions(ctx, itemID)
-			require.NoError(t, err)
-			require.Len(t, sessions, 1)
-			assert.Equal(t, tc.wantModel, sessions[0].ResolvedModel)
-			assert.Equal(t, session.ComputeExecutorHash("", ""), sessions[0].ExecutorSnapshotHash, "hash must ignore the policy fallback")
-		})
-	}
+	release, ok := guard.TryReserve(item.ID, nil)
+	require.True(t, ok)
+	defer release()
+
+	_, reviewErr := svc.TriggerReReview(context.Background(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: item.ID}))
+	require.Error(t, reviewErr)
+	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(reviewErr))
+
+	require.NoError(t, svc.AutoRespawnReview(context.Background(), item.ID), "auto respawn skips quietly")
+	sessions, err := storage.ListItemSessions(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Empty(t, sessions, "no review row created while another spawn is in flight")
 }

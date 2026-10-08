@@ -142,6 +142,10 @@ linters:
             # production API has no way to construct otherwise. The production
             # file (github_webhook_pr_fix.go) does NOT need this exclusion.
             - "!**/server/services/github_webhook_pr_fix_test.go"
+            # session_service.go's *ent.Client usage (SetAnalyticsClient) moved here
+            # verbatim in the session_service_*.go file-size split (2026-10) — same
+            # already-grandfathered exclusion, not newly introduced.
+            - "!**/server/services/session_service_wiring.go"
           deny:
             - pkg: "github.com/tstapler/stapler-squad/session/ent"
               desc: "server/services must not import session/ent directly; use domain DTOs from session package"
@@ -252,6 +256,12 @@ linters:
         linters: [forbidigo]
         text: "LoadInstances"
       - path: "server/services/session_service\\.go"
+        linters: [forbidigo]
+        text: "LoadInstances"
+      # Same intentional LoadInstances uses as session_service.go above, moved
+      # verbatim into these files by the session_service_*.go file-size split
+      # (2026-10) — not newly introduced.
+      - path: "server/services/session_service_(crud|lifecycle)\\.go"
         linters: [forbidigo]
         text: "LoadInstances"
       # MCP tools have their own per-tool LoadInstances calls that are aware of the

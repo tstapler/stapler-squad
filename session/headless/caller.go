@@ -177,15 +177,6 @@ func newPoolWithRunner(cfg PoolConfig, runner ClaudeRunner, claudeBin string) *P
 // IMPORTANT: the per-key mutex is held only long enough to read/write state —
 // it is NOT held during subprocess execution to avoid deadlocks.
 func (p *Pool) acquireSession(key FeatureKey, systemPrompt, model string) (isFirstCall bool, args []string) {
-	// Resolved before taking p.mu: ModelForFeature may read config from disk.
-	effectiveModel := model
-	if effectiveModel == "" && p.cfg.ModelForFeature != nil {
-		effectiveModel = p.cfg.ModelForFeature(key)
-	}
-	if effectiveModel == "" {
-		effectiveModel = p.cfg.DefaultModel
-	}
-
 	p.mu.Lock()
 	keyMu := p.acquireKeyMu(key)
 	if _, ok := p.sessions[key]; !ok {
@@ -200,8 +191,7 @@ func (p *Pool) acquireSession(key FeatureKey, systemPrompt, model string) (isFir
 	state := p.sessions[key]
 
 	// Determine if we need a fresh session (first call or rotation due to errors/max calls).
-	// A resumed session keeps its original model, so a live model change forces a fresh one.
-	needsRotation := state.sessionID == "" || state.model != effectiveModel ||
+	needsRotation := state.sessionID == "" ||
 		state.callCount >= p.cfg.MaxCallsPerSession ||
 		state.consecutiveErrors >= maxConsecutiveErrors
 
@@ -212,10 +202,15 @@ func (p *Pool) acquireSession(key FeatureKey, systemPrompt, model string) (isFir
 		state.consecutiveErrors = 0
 	}
 
-	state.model = effectiveModel
 	sessionID := state.sessionID
 	state.callCount++
 	p.mu.Unlock()
+
+	// Effective model: per-call override > pool default.
+	effectiveModel := model
+	if effectiveModel == "" {
+		effectiveModel = p.cfg.DefaultModel
+	}
 
 	if sessionID == "" {
 		// First call: stream-json output (one JSON object per line — system init,
@@ -232,11 +227,6 @@ func (p *Pool) acquireSession(key FeatureKey, systemPrompt, model string) (isFir
 		args = []string{"-p", "--output-format", "stream-json", "--verbose", "--system-prompt", systemPrompt, "--exclude-dynamic-system-prompt-sections"}
 		if effectiveModel != "" {
 			args = append(args, "--model", effectiveModel)
-		}
-		if p.cfg.Effort != nil {
-			if effort := p.cfg.Effort(); effort != "" {
-				args = append(args, "--effort", effort)
-			}
 		}
 	} else {
 		// Resumed call: plain output (line-at-a-time streaming).
@@ -295,7 +285,7 @@ func (p *Pool) decrementCallCount(key FeatureKey) {
 //
 // The caller should drain the channel until Done=true or Err!=nil.
 func (p *Pool) Call(ctx context.Context, key FeatureKey, systemPrompt, userPrompt string) (<-chan StreamChunk, error) {
-	return p.call(ctx, key, systemPrompt, userPrompt, p.cfg.DefaultModel, p.runner, costCeiling{})
+	return p.call(ctx, key, systemPrompt, userPrompt, p.modelFor(key, ""), p.runner, costCeiling{})
 }
 
 // call is the internal implementation shared by Call and CallWithOptions.
@@ -726,6 +716,8 @@ func (p *Pool) readResumedCallStream(ctx context.Context, key FeatureKey, stdout
 // When opts.WorkDir is empty, opts.Model is forwarded to the pool's acquireSession
 // so the correct model is used for the first-call (session-initialisation) request.
 func (p *Pool) CallWithOptions(ctx context.Context, key FeatureKey, systemPrompt, userPrompt string, opts CallOptions) (<-chan StreamChunk, error) {
+	// Resolved here, not in call(): the WorkDir branch's one-shot pool has no FeatureModel.
+	opts.Model = p.modelFor(key, opts.Model)
 	if opts.WorkDir != "" {
 		pr, ok := p.runner.(*ProcessRunner)
 		if !ok {

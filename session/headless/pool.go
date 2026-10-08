@@ -14,7 +14,6 @@ type sessionState struct {
 	sessionID         string
 	callCount         int
 	consecutiveErrors int
-	model             string // model the live session was started with
 }
 
 // PoolConfig configures a Pool.
@@ -30,12 +29,23 @@ type PoolConfig struct {
 	// DefaultModel overrides the claude model used when no model is specified per-call.
 	DefaultModel string
 
-	// ModelForFeature, when set, supplies a live per-feature model consulted on every call
-	// (per-call override > ModelForFeature > DefaultModel). "" falls through to DefaultModel.
-	ModelForFeature func(FeatureKey) string
+	// FeatureModel, if set, is consulted on every call (so config edits apply live) for
+	// the model pinned to a feature key. Precedence: per-call opts.Model > FeatureModel
+	// > DefaultModel. The pool only launches claude, so a pin cannot reach another program.
+	FeatureModel func(FeatureKey) string
+}
 
-	// Effort, when set, supplies the live `--effort` level for first-call sessions ("" = none).
-	Effort func() string
+// modelFor resolves the --model for a call: explicit > per-feature pin > DefaultModel.
+func (p *Pool) modelFor(key FeatureKey, explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if p.cfg.FeatureModel != nil {
+		if m := p.cfg.FeatureModel(key); m != "" {
+			return m
+		}
+	}
+	return p.cfg.DefaultModel
 }
 
 // Pool manages a map of named LLM feature sessions, providing session reuse

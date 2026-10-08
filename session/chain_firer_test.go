@@ -300,6 +300,15 @@ func TestChainFirer_Fire_should_createSessionAndMarkChainFired_When_ValidChainCo
 	assert.True(t, final.ChainFired)
 }
 
+// waitChainFirerIdle blocks until every goroutine spawned by Dispatch has
+// finished: Dispatch reserves its inFlight slot synchronously and releases it
+// only when the fire goroutine exits, so an empty semaphore means quiescence.
+func waitChainFirerIdle(t *testing.T, cf *ChainFirer) {
+	t.Helper()
+	wait.RequireEventually(t, func() bool { return len(cf.inFlight) == 0 }, 5*time.Second, 5*time.Millisecond,
+		"ChainFirer dispatch goroutines never drained")
+}
+
 // TestTriggerChainReconciler_should_completeInterruptedChain_When_DoneItemHasUnfiredChain
 // simulates the AC5 restart-recovery scenario: a done item with
 // NextWorkflowID set and ChainFired still false (as if the process crashed
@@ -343,7 +352,7 @@ func TestTriggerChainReconciler_should_completeInterruptedChain_When_DoneItemHas
 
 	// A second reconcile tick must be a no-op — the chain already fired.
 	reconciler.ReconcileChains(ctx, fx.repo)
-	time.Sleep(100 * time.Millisecond)
+	waitChainFirerIdle(t, cf)
 	assert.Equal(t, 1, firer.callCount(), "an already-fired chain must never be re-fired by a later reconcile tick")
 }
 
@@ -461,9 +470,10 @@ func TestChainFirer_should_fireExactlyOnce_When_DispatchAndReconcilerRaceOnSameI
 		return firer.callCount() >= 1
 	}, 2*time.Second, 10*time.Millisecond)
 
-	// Give any losing goroutine a chance to (incorrectly) also fire, if the
-	// claim-before-fire CAS weren't actually closing the race.
-	time.Sleep(300 * time.Millisecond)
+	// Wait for every goroutine (including would-be losers that would
+	// incorrectly also fire if the claim-before-fire CAS weren't closing the
+	// race) to finish.
+	waitChainFirerIdle(t, cf)
 
 	assert.Equal(t, 1, firer.callCount(), "exactly one concurrent Dispatch may ever reach FireTriggerChained for a given item")
 
@@ -498,7 +508,7 @@ func TestChainFirer_Dispatch_should_noOp_When_FeatureFlagDisabled(t *testing.T) 
 	require.NoError(t, err)
 
 	cf.Dispatch(latest)
-	time.Sleep(200 * time.Millisecond)
+	waitChainFirerIdle(t, cf)
 	assert.Equal(t, 0, firer.callCount())
 
 	final, err := fx.repo.GetBacklogItem(ctx, item.ID)

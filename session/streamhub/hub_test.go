@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
 	"github.com/tstapler/stapler-squad/session/streamhub"
@@ -96,10 +97,8 @@ func TestStreamHub_should_SuppressBroadcast_When_ResizeIsInProgress(t *testing.T
 
 	// Raw output arriving mid-resize must not be broadcast.
 	hub.OnRawOutput([]byte("mid-resize-noise"))
-	time.Sleep(20 * time.Millisecond)
-	if got := transport.receivedCount(); got != 0 {
-		t.Fatalf("expected 0 frames delivered while resize is in progress, got %d", got)
-	}
+	require.Never(t, func() bool { return transport.receivedCount() != 0 },
+		20*time.Millisecond, time.Millisecond, "expected 0 frames delivered while resize is in progress")
 
 	<-resizeDone
 
@@ -269,7 +268,10 @@ func TestStreamHub_should_StayAliveAndRetryLater_When_CapturePaneContentErrorsWi
 	// Give applyNegotiatedSize's goroutine time to run and (incorrectly, pre-fix)
 	// tear the hub down; then assert it's still alive and neither subscriber was
 	// sent the stream-ended sentinel.
-	time.Sleep(100 * time.Millisecond)
+	require.Never(t, func() bool {
+		return hub.State() == streamhub.HubTornDown || transport1.receivedCount() != 0 || transport2.receivedCount() != 0
+	}, 100*time.Millisecond, 5*time.Millisecond,
+		"hub torn down (or sentinel sent) after a session-not-started capture error — this exact transient condition must not kill the hub")
 	if got := hub.State(); got == streamhub.HubTornDown {
 		t.Fatalf("hub torn down after a session-not-started capture error — this exact transient condition must not kill the hub")
 	}

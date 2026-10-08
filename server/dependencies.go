@@ -116,6 +116,11 @@ type ServerDependencies struct {
 	// HeadlessPool manages headless LLM calls. Nil when the claude binary is not found.
 	HeadlessPool *headless.Pool
 
+	// LLMSelector and LLMClient route headless calls through the live backend
+	// selection (config llm_backends). LLMClient is an untyped nil when HeadlessPool is nil.
+	LLMSelector *headless.Selector
+	LLMClient   headless.PoolClient
+
 	// GeminiCaller is a headless.PoolClient adapter shelling out to the `gemini`
 	// CLI (backlog-stage-execution-costs Epic 3.1). Nil when the gemini binary is
 	// not found at startup. Registered into BacklogService's headlessCallers
@@ -199,6 +204,8 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		VNCDeps:                        rt.VNCDeps,
 		CDPDeps:                        rt.CDPDeps,
 		HeadlessPool:                   rt.HeadlessPool,
+		LLMSelector:                    rt.LLMSelector,
+		LLMClient:                      rt.LLMClient,
 		GeminiCaller:                   rt.GeminiCaller,
 		WorkflowRepo:                   rt.WorkflowRepo,
 		WorkflowScheduler:              rt.WorkflowScheduler,
@@ -518,6 +525,10 @@ type RuntimeDeps struct {
 	// HeadlessPool manages headless LLM calling. Nil when claude binary is not found.
 	HeadlessPool *headless.Pool
 
+	// LLMSelector/LLMClient: see Deps.LLMSelector.
+	LLMSelector *headless.Selector
+	LLMClient   headless.PoolClient
+
 	// GeminiCaller is a headless.PoolClient adapter shelling out to the `gemini`
 	// CLI (backlog-stage-execution-costs Epic 3.1). Nil when the gemini binary is
 	// not found at startup — see the identical field's doc comment on
@@ -754,10 +765,15 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// the claude binary is not found.
 	var headlessPool *headless.Pool
 	{
-		p, poolErr := headless.NewPool(headlessPoolModelConfig(headless.PoolConfig{
+		p, poolErr := headless.NewPool(headless.PoolConfig{
 			MaxCallsPerSession:    25,
 			MaxConcurrentSessions: 5,
-		}))
+			DefaultModel:          config.HeadlessPoolDefaultModel,
+			// Fresh load per call so background_models edits apply live.
+			FeatureModel: func(k headless.FeatureKey) string {
+				return config.LoadConfig().BackgroundFeatureModel(string(k))
+			},
+		})
 		if poolErr != nil {
 			log.Warn("headless pool disabled: claude binary not found", "err", poolErr)
 		} else {
@@ -766,6 +782,16 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			sessionService.SetHeadlessPool(p)
 			log.Info("headless LLM pool initialized")
 		}
+	}
+
+	// Backend selector: routes headless calls by live config (llm_backends), with
+	// claude as the always-registered fallback. llmClient stays an untyped nil
+	// when claude is missing so downstream `== nil` guards keep working.
+	llmSelector := buildLLMSelector(headlessPool)
+	var llmClient headless.PoolClient
+	if headlessPool != nil {
+		llmClient = &headless.SelectingClient{Selector: llmSelector}
+		sessionService.SetHeadlessClient(llmClient)
 	}
 
 	// SessionTagClassificationPoller (session-classifier-pipeline Epic 4.4) — LLM fallback
@@ -779,7 +805,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		tagModel, tagFallbacks := services.TaggingClassifierModelHierarchy(cfg)
 		tagPollerCfg.Model = tagModel
 		tagPollerCfg.FallbackModels = tagFallbacks
-		sessionTagPoller = session.NewSessionTagClassificationPollerWithConfig(headlessPool, sessionService.GetTaggingEngine(), tagPollerCfg)
+		sessionTagPoller = session.NewSessionTagClassificationPollerWithConfig(llmClient, sessionService.GetTaggingEngine(), tagPollerCfg)
 		// Wire into SessionService so every session-creation path (CreateSession,
 		// CreateDirectorySession, CreateWorktreeSession, ForkSession) registers new
 		// sessions with the poller too, not just the boot-time instance list set via
@@ -802,7 +828,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	if entClient := storage.GetEntClient(); entClient != nil {
 		sessionSummaryGenerator = session.NewSessionSummaryGenerator(
 			entClient,
-			headlessPool,
+			llmClient,
 			nil, // NotificationDecisionLister — wired later via SetNotificationLister
 			nil, // TokenStoreReader — wired later via SetTokenStore
 			&reviewQueueLookupAdapter{storage: storage},
@@ -819,7 +845,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// it's only triggered on demand via HandoffSummaryService's RPC handlers.
 	var handoffSummaryGenerator *session.HandoffSummaryGenerator
 	if entClient := storage.GetEntClient(); entClient != nil {
-		handoffSummaryGenerator = session.NewHandoffSummaryGenerator(entClient, headlessPool)
+		handoffSummaryGenerator = session.NewHandoffSummaryGenerator(entClient, llmClient)
 	} else {
 		log.Warn("handoff summary generation unavailable: storage is not ent-backed")
 	}
@@ -829,6 +855,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// SetHeadlessPool was called hundreds of lines after instance wiring.
 	backlogLifecycleListener := session.NewBacklogLifecycleListenerWithPool(storage, headlessPool, pipelineEngine, livenessEngine)
 	backlogLifecycleListener.SetNotifier(&services.EventBusNotifier{Bus: eventBus})
+	if llmClient != nil {
+		backlogLifecycleListener.SetHeadlessClient(llmClient)
+	}
 	// Wires the ItemChangePublisher adapter into the concrete *EntRepository
 	// (via Storage's forwarding setter, session/storage.go) so its 9 hooked
 	// backlog mutation methods (Phase 2) can publish BacklogItemChanged
@@ -1401,6 +1430,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogSvc.SetEventBus(eventBus)
 	backlogSvc.SetSessionStopper(sessionService)
 	backlogSvc.SetSessionSteerer(sessionService)
+	backlogSvc.StartVerdictSteering()
 	backlogSvc.SetAutonomousDriverStarter(sessionService)
 	if unfinishedScanner != nil {
 		backlogSvc.SetRepoWatchRemover(unfinishedScanner)
@@ -1412,6 +1442,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogSvc.SetOneShotRunner(sessionService)
 	if headlessPool != nil {
 		backlogSvc.SetHeadlessPool(headlessPool)
+		backlogSvc.SetBackendSelector(llmSelector)
 	}
 	backlogSvc.SetScrollbackManager(scrollbackManager)
 	// Reuse the same registry/keyFunc backlogCtrl's periodic SyncLoop uses, so a
@@ -1430,6 +1461,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogLifecycleListener.SetAutoReopener(backlogSvc)
 	backlogLifecycleListener.SetPRFixSpawner(backlogSvc)
 	backlogLifecycleListener.SetReviewRespawner(backlogSvc)
+	backlogSvc.SetReviewSpawnGuard(backlogLifecycleListener.ReviewSpawnGuard())
 	// Wires reconcileCustomGateChecks' scan for overdue custom-check
 	// invocations (Epic 2.4, Task 2.4.4c) — same gateSatisfactionRepo instance
 	// already wired into backlogSvc above, guarded nil-safe by both consumers.
@@ -1608,6 +1640,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		if _, lookErr := exec.LookPath("gemini"); lookErr == nil {
 			geminiCaller = headless.NewGeminiCaller("gemini", pricing, 5)
 			backlogSvc.SetGeminiCaller(geminiCaller)
+			llmSelector.Register(headless.NewGeminiBackend(geminiCaller))
 			log.Info("gemini headless caller initialized", "maxConcurrent", 5)
 		} else {
 			log.Warn("gemini headless caller disabled: gemini binary not found", "err", lookErr)
@@ -1826,6 +1859,8 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 	return &RuntimeDeps{
 		HeadlessPool:                   headlessPool,
+		LLMSelector:                    llmSelector,
+		LLMClient:                      llmClient,
 		GeminiCaller:                   geminiCaller,
 		ServiceDeps:                    svc,
 		Instances:                      instances,

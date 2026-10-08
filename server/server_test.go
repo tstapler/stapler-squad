@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 	"go.uber.org/goleak"
 )
 
@@ -65,13 +66,13 @@ func tempDirTolerantOfStragglers(t *testing.T) string {
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		var lastErr error
-		for i := 0; i < 5; i++ {
-			if lastErr = os.RemoveAll(dir); lastErr == nil {
-				return
-			}
-			time.Sleep(20 * time.Millisecond)
+		_ = wait.WaitForCondition(func() bool {
+			lastErr = os.RemoveAll(dir)
+			return lastErr == nil
+		}, wait.WaitConfig{Timeout: 100 * time.Millisecond, PollInterval: 20 * time.Millisecond, Description: "temp dir removal"})
+		if lastErr != nil {
+			t.Logf("tempDirTolerantOfStragglers: cleanup of %s did not converge: %v", dir, lastErr)
 		}
-		t.Logf("tempDirTolerantOfStragglers: cleanup of %s did not converge: %v", dir, lastErr)
 	})
 	return dir
 }
@@ -116,15 +117,14 @@ func Test_Start_should_BindOSAssignedPort_And_UpdateAddr_When_ListenAddressEndsI
 	}()
 
 	// Poll for the address to be updated away from the requested ":0" address.
-	deadline := time.Now().Add(5 * time.Second)
 	var addr string
-	for time.Now().Before(deadline) {
+	wait.RequireEventually(t, func() bool {
 		addr = srv.GetAddr()
 		if addr != "localhost:0" && addr != "" {
-			break
+			return true
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "server did not become reachable")
 
 	if addr == "localhost:0" || addr == "" {
 		t.Fatalf("expected GetAddr() to reflect a real bound port, got %q", addr)
@@ -179,15 +179,14 @@ func Test_Start_should_BindExplicitPort_When_PortIsAlreadyKnown(t *testing.T) {
 		errCh <- srv.Start(ctx)
 	}()
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	wait.RequireEventually(t, func() bool {
 		resp, gerr := http.Get("http://" + addr + "/")
 		if gerr == nil {
 			resp.Body.Close()
-			break
+			return true
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "server did not become reachable")
 
 	if got := srv.GetAddr(); got != addr {
 		t.Fatalf("expected GetAddr() to remain %q, got %q", addr, got)
@@ -256,7 +255,7 @@ func Test_Shutdown_should_BlockUntilBackgroundTasksExit_When_BackgroundTaskIsRun
 	go func() {
 		defer srv.backgroundTasksWG.Done()
 		// Simulate a background task still mid-tick when shutdown begins.
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond) //nolint:notimesleeptest simulated in-flight task must outlast Shutdown's synchronous cancel to prove the join blocks; no observable signal exists
 		exited.Store(true)
 	}()
 
@@ -399,7 +398,7 @@ func TestServer_Shutdown_JoinsBackgroundTickers(t *testing.T) {
 	tmux.StartZombieWatcher(serverCtx, time.Millisecond, noop, &srv.backgroundTasksWG)
 	tmux.StartZombieReaper(serverCtx, time.Millisecond, noop, &srv.backgroundTasksWG)
 
-	time.Sleep(20 * time.Millisecond) // let several ticks fire
+	time.Sleep(20 * time.Millisecond) //nolint:notimesleeptest ticks of the production tickers are unobservable (noop log fn); the wall-clock lets them be mid-run when Shutdown joins
 
 	if err := srv.Shutdown(); err != nil {
 		t.Fatalf("Shutdown() returned unexpected error: %v", err)
@@ -486,12 +485,9 @@ func Test_runGoleakTolerant_should_SkipInsteadOfCrash_When_GoleakHitsElidedStack
 		deepRecurse(150, func() { close(ready) }, block)
 	}()
 	<-ready
-	// Not load-bearing: deepRecurse's done() callback (which closes ready)
-	// only fires once the goroutine has already reached full depth and is
-	// about to block on <-block, so the happens-before edge from closing
-	// ready already guarantees full depth here. This sleep is a defensive
-	// margin, not a synchronization point.
-	time.Sleep(10 * time.Millisecond)
+	// deepRecurse's done() callback (which closes ready) only fires once the
+	// goroutine has reached full depth and is about to block on <-block, so
+	// the happens-before edge from closing ready guarantees full depth here.
 
 	// Unblock and wait for the deep goroutine to fully exit before this test
 	// returns — otherwise it can still be mid-unwind (a still-deep, still-live

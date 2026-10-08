@@ -269,7 +269,7 @@ func TestClaudeSettingsWatcher_Start_DebouncesRapidWrites(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		writeSettingsFile(t, settingsPath, `{"permissions":{"allow":["Bash(git *)","Read"]}}`)
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //nolint:notimesleeptest spacing between writes must fall inside the wall-clock debounce window under test
 	}
 
 	// Debounce window is 250ms; wait past it for the coalesced reload to fire.
@@ -387,7 +387,7 @@ func TestClaudeSettingsWatcher_Start_IgnoresUnrelatedFileInWatchedDirectory(t *t
 
 	// Give the debounce window (250ms) more than enough time to have fired if the write were
 	// (incorrectly) treated as relevant, then confirm no additional reload happened.
-	time.Sleep(400 * time.Millisecond)
+	time.Sleep(400 * time.Millisecond) //nolint:notimesleeptest negative assertion spanning the real 250ms debounce window
 	assert.Equal(t, 1, spy.count(), "a write to an unrelated file in the same directory must not trigger a reload")
 }
 

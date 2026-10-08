@@ -197,11 +197,13 @@ service SessionService {
   // classification. Takes effect on the next classification with no restart.
   rpc UpdateTaggingClassifierConfig(UpdateTaggingClassifierConfigRequest) returns (UpdateTaggingClassifierConfigResponse) {}
 
-  // GetModelPolicy returns the effective per-feature model/effort settings for background LLM work.
-  rpc GetModelPolicy(GetModelPolicyRequest) returns (GetModelPolicyResponse) {}
+  // GetBackgroundModels returns the model/effort pins for unattended LLM work (overrides
+  // plus built-in defaults).
+  rpc GetBackgroundModels(GetBackgroundModelsRequest) returns (GetBackgroundModelsResponse) {}
 
-  // UpdateModelPolicy sets per-feature model/effort overrides; empty values reset to the default.
-  rpc UpdateModelPolicy(UpdateModelPolicyRequest) returns (UpdateModelPolicyResponse) {}
+  // UpdateBackgroundModels replaces the model/effort overrides. Applies on the next call
+  // with no restart.
+  rpc UpdateBackgroundModels(UpdateBackgroundModelsRequest) returns (UpdateBackgroundModelsResponse) {}
 
   // GetApprovalAnalytics returns aggregated analytics for classification decisions.
   rpc GetApprovalAnalytics(GetApprovalAnalyticsRequest) returns (GetApprovalAnalyticsResponse) {}
@@ -1902,29 +1904,32 @@ message UpdateTaggingClassifierConfigResponse {
   TaggingClassifierConfigProto config = 1;
 }
 
-// ModelPolicyProto maps policy keys (work, review, completion_narrative, handoff_summary,
-// intent_parse, pr_description, background_effort) to "family:<alias>", a concrete model ID,
-// an effort level, or "none" (account default / no effort flag).
-message ModelPolicyProto {
-  map<string, string> values = 1;
+message BackgroundModelsProto {
+  // Headless feature key -> model alias/ID override.
+  map<string, string> features = 1;
+  // Backlog stage role ("work", "review") -> model alias/ID override.
+  map<string, string> stages = 2;
+  // --effort level for background work sessions; empty = unset.
+  string effort = 3;
 }
 
-message GetModelPolicyRequest {}
+message GetBackgroundModelsRequest {}
 
-message GetModelPolicyResponse {
-  // Effective values (overrides merged over defaults).
-  ModelPolicyProto effective = 1;
-  // Built-in defaults, for the UI's reset/placeholder text.
-  ModelPolicyProto defaults = 2;
+message GetBackgroundModelsResponse {
+  BackgroundModelsProto settings = 1;
+  // Built-in defaults, keyed like settings; a blank override resolves to these.
+  map<string, string> feature_defaults = 2;
+  map<string, string> stage_defaults = 3;
+  // Accepted --effort values.
+  repeated string effort_levels = 4;
 }
 
-message UpdateModelPolicyRequest {
-  // Only the given keys change; an empty value resets that key to its default.
-  ModelPolicyProto policy = 1;
+message UpdateBackgroundModelsRequest {
+  BackgroundModelsProto settings = 1;
 }
 
-message UpdateModelPolicyResponse {
-  ModelPolicyProto effective = 1;
+message UpdateBackgroundModelsResponse {
+  BackgroundModelsProto settings = 1;
 }
 
 message GetApprovalAnalyticsRequest {

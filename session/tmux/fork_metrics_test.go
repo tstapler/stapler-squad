@@ -92,11 +92,13 @@ func registerCountingAlert(count *atomic.Int64) {
 func waitAlertCount(t *testing.T, count *atomic.Int64, expected int64, maxWait time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(maxWait)
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
 	for time.Now().Before(deadline) {
 		if count.Load() >= expected {
 			return
 		}
-		time.Sleep(5 * time.Millisecond)
+		<-tick.C
 	}
 	if got := count.Load(); got < expected {
 		t.Errorf("alert count: got %d, want >= %d after %v", got, expected, maxWait)
@@ -107,6 +109,8 @@ func waitAlertCount(t *testing.T, count *atomic.Int64, expected int64, maxWait t
 func waitLevels(t *testing.T, mu *sync.Mutex, levels *[]ForkPressureLevel, wantCount int, maxWait time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(maxWait)
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
 	for time.Now().Before(deadline) {
 		mu.Lock()
 		n := len(*levels)
@@ -114,7 +118,7 @@ func waitLevels(t *testing.T, mu *sync.Mutex, levels *[]ForkPressureLevel, wantC
 		if n >= wantCount {
 			return
 		}
-		time.Sleep(5 * time.Millisecond)
+		<-tick.C
 	}
 	mu.Lock()
 	n := len(*levels)
@@ -499,6 +503,8 @@ func TestCheckPressure_ApprovalsUnaffected(t *testing.T) {
 	checkPressure(t0)
 
 	deadline := time.Now().Add(500 * time.Millisecond)
+	statsTick := time.NewTicker(5 * time.Millisecond)
+	defer statsTick.Stop()
 	for time.Now().Before(deadline) {
 		mu.Lock()
 		n := len(receivedStats)
@@ -506,7 +512,7 @@ func TestCheckPressure_ApprovalsUnaffected(t *testing.T) {
 		if n >= 1 {
 			break
 		}
-		time.Sleep(5 * time.Millisecond)
+		<-statsTick.C
 	}
 
 	mu.Lock()
@@ -562,15 +568,16 @@ func TestStartForkPressureLogger_GoroutineFullyExits_When_WaitGroupIsJoined(t *t
 		// Record a spawn so the logger has something to log every tick.
 		recordSpawn(time.Now())
 
+		twoTicks := make(chan struct{})
+		var twoTicksOnce sync.Once
 		StartForkPressureLogger(ctx, time.Millisecond, func(string, ...any) {
-			tickCount.Add(1)
+			if tickCount.Add(1) >= 2 {
+				twoTicksOnce.Do(func() { close(twoTicks) })
+			}
 		}, &wg)
 
-		// Let a few ticks fire before signaling shutdown. Bubble time advances
-		// deterministically here instead of racing the real clock.
-		for tickCount.Load() < 2 {
-			time.Sleep(time.Millisecond)
-		}
+		// Let a few ticks fire before signaling shutdown.
+		<-twoTicks
 
 		cancel()
 
@@ -583,7 +590,7 @@ func TestStartForkPressureLogger_GoroutineFullyExits_When_WaitGroupIsJoined(t *t
 		// tickCount on its 1ms ticker. Advancing bubble time several ticks' worth
 		// and confirming no further increments proves it actually exited, not just
 		// that ctx.Done() fired.
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //nolint:notimesleeptest synctest bubble: fake clock advances instantly, no wall time
 		if got := tickCount.Load(); got != countAtJoin {
 			t.Fatalf("tickCount kept increasing after wg join (from %d to %d) — goroutine did not fully exit", countAtJoin, got)
 		}
@@ -603,7 +610,7 @@ func TestStartForkPressureLogger_JoinsOnCtxCancel(t *testing.T) {
 		var wg sync.WaitGroup
 		StartForkPressureLogger(ctx, time.Millisecond, func(string, ...any) {}, &wg)
 
-		time.Sleep(20 * time.Millisecond) // let several ticks fire
+		time.Sleep(20 * time.Millisecond) //nolint:notimesleeptest synctest bubble: fake clock advances instantly, no wall time; lets several ticks fire
 		cancel()
 
 		// wg.Wait() durably blocks until the logger goroutine exits; synctest's

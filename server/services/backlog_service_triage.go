@@ -400,6 +400,12 @@ func (s *BacklogService) notifyManualOverride(itemID, itemTitle, message string)
 const (
 	headlessTriageUUIDPrefix   = "headless-triage-"
 	headlessReReviewUUIDPrefix = "headless-re-review-"
+
+	// HeadlessTriageUUIDPrefix / HeadlessReReviewUUIDPrefix are the exported
+	// forms for callers outside this package that must not treat a synthetic
+	// headless ItemSession UUID as a tmux session.
+	HeadlessTriageUUIDPrefix   = headlessTriageUUIDPrefix
+	HeadlessReReviewUUIDPrefix = headlessReReviewUUIDPrefix
 )
 
 // triageCallBudget bounds a single headless triage LLM call — now a backstop
@@ -988,8 +994,12 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// 9. Generate session title.
 	// On reopen, append a revision number (r2, r3…) based on how many work sessions
 	// already exist so the session list shows distinct, human-readable names.
+	// item.ID[:8] suffix matches SpawnReviewSession's "review:"+item.ID[:8]
+	// convention -- without it, two different items with the same repo and
+	// short title collide on the exact same tmux session name (ce71ad1a: the
+	// "stapler-squad-backlog-devbug" incident had no such suffix).
 	shortTitle := triageShortTitle(priorSessions, item.Title)
-	baseTitle := slugify(filepath.Base(item.RepoPath)) + "-" + shortTitle
+	baseTitle := slugify(filepath.Base(item.RepoPath)) + "-" + shortTitle + "-" + item.ID[:8]
 	title := buildRevisionTitle(baseTitle, isReopen, priorSessions)
 
 	// 10. Create a dedicated git worktree for this work session. The branch slug
@@ -1038,10 +1048,12 @@ func (s *BacklogService) spawnSessionAfterGates(
 		workExecProgram, workExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleWork)
 	}
 	workExecutorHash := session.ComputeExecutorHash(workExecProgram, workExecModel)
+	// Pin after hashing: the hash must stay the raw mode-side pair (see above).
+	workExecModel = pinnedWorkStageModel(item.RepoPath, workExecProgram, workExecModel)
 	var programOverride, workResolvedModel string
 	if workExecProgram != "" || workExecModel != "" {
 		var resolveErr error
-		programOverride, resolveErr = session.ResolveExecutorProgram(workExecProgram, workExecModel, s.modelFamilies)
+		programOverride, resolveErr = session.ResolveExecutorProgramWithEffort(workExecProgram, workExecModel, config.LoadConfig().BackgroundEffort(), s.modelFamilies)
 		if resolveErr != nil {
 			log.Warn("[SpawnSessionFromItem] failed to resolve work-stage executor program, falling back to default", "item", item.ID, "program", workExecProgram, "model", workExecModel, "err", resolveErr)
 			programOverride = ""
@@ -1058,17 +1070,6 @@ func (s *BacklogService) spawnSessionAfterGates(
 		}
 	}
 
-	// No pipeline-pinned executor: apply the background model policy to the default program.
-	// The hash above stays computed from the pipeline's raw values so drift detection is unaffected.
-	if programOverride == "" && workExecProgram == "" && workExecModel == "" {
-		cfg := s.liveConfig()
-		base := config.ResolveDefaults(cfg, item.RepoPath, "").Program
-		if p := session.ApplyModelPolicyToProgram(cfg, s.modelFamilies, config.ModelPolicyWork, base); p != "" {
-			programOverride = p
-			workResolvedModel = session.ResolveFeatureModel(cfg, s.modelFamilies, config.ModelPolicyWork, "claude")
-		}
-	}
-
 	// 11. Spawn session first so we have the real UUID before creating the ItemSession record.
 	spawnTags := []string{session.TagBacklogWork}
 	if isReopen {
@@ -1077,13 +1078,17 @@ func (s *BacklogService) spawnSessionAfterGates(
 	if autonomous {
 		spawnTags = append(spawnTags, session.TagAutonomous)
 	}
+	spawnOpts := SessionSpawnOptions{
+		Title:           title,
+		Prompt:          prompt,
+		Tags:            spawnTags,
+		ProgramOverride: programOverride,
+	}
 	var inst *session.Instance
 	if useWorktree {
-		inst, err = s.sessionCreator.CreateWorktreeSession(ctx, title, item.RepoPath, worktreePath, prompt,
-			spawnTags, false, false, programOverride)
+		inst, err = s.sessionCreator.CreateWorktreeSession(ctx, item.RepoPath, worktreePath, spawnOpts)
 	} else {
-		inst, err = s.sessionCreator.CreateDirectorySession(ctx, title, worktreePath, prompt,
-			spawnTags, false, false, programOverride)
+		inst, err = s.sessionCreator.CreateDirectorySession(ctx, worktreePath, spawnOpts)
 	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn session: %w", err))
@@ -2398,6 +2403,8 @@ func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, 
 	return nil
 }
 
+var errReviewInFlight = errors.New("a review for this item is already in flight")
+
 // AutoRespawnReview implements session.ReviewRespawner. It re-triggers the review gate
 // for a backlog item abandoned in review with no active session — closing the gap where
 // StuckReasonAbandonedReview was previously only detected and notified, never acted on,
@@ -2476,6 +2483,9 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 	}
 
 	if _, reviewErr := s.TriggerReReview(ctx, connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID})); reviewErr != nil {
+		if connect.CodeOf(reviewErr) == connect.CodeAlreadyExists {
+			return nil // another review spawn won the reservation; already logged
+		}
 		return fmt.Errorf("trigger re-review: %w", reviewErr)
 	}
 	log.Info("[AutoRespawnReview] re-review triggered", "item", itemID)
@@ -2806,6 +2816,17 @@ func (s *BacklogService) TriggerReReview(
 			fmt.Errorf("set repo_path before triggering re-review"))
 	}
 
+	// 3b. One in-flight review per item, shared with the lifecycle listener's
+	// spawn paths. Held for the whole (synchronous) re-review.
+	if s.reviewGuard != nil {
+		release, ok := s.reviewGuard.TryReserve(item.ID, nil)
+		if !ok {
+			log.Info("[TriggerReReview] skipping: review already in flight", "item", item.ID)
+			return nil, connect.NewError(connect.CodeAlreadyExists, errReviewInFlight)
+		}
+		defer release()
+	}
+
 	// 4. Find the most recent review and work ItemSessions for this item.
 	sessions, err := s.storage.ListItemSessions(ctx, item.ID)
 	if err != nil {
@@ -3007,15 +3028,12 @@ Do not modify the code. Only write the review verdict.
 			reviewExecProgram, reviewExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleReview)
 		}
 		reviewExecutorHash := session.ComputeExecutorHash(reviewExecProgram, reviewExecModel)
+		reviewExecModel = pinnedStageModel(session.StageRoleReview, reviewExecProgram, reviewExecModel)
 		reviewCaller, reviewConfiguredProgram, reviewFallbackReason := s.resolveHeadlessCaller(reviewExecProgram, item.ID, "review")
 		reviewResolvedModel, reviewModelErr := session.ResolveModel(s.modelFamilies, reviewExecModel)
 		if reviewModelErr != nil {
 			log.Warn("[PipelineEngine] failed to resolve review model family alias, using empty model", "item", item.ID, "model", reviewExecModel, "err", reviewModelErr)
 			reviewResolvedModel = ""
-		}
-		if reviewExecModel == "" {
-			// Pipeline pinned nothing: apply the review policy (claude callers only).
-			reviewResolvedModel = session.ResolveFeatureModel(s.liveConfig(), s.modelFamilies, config.ModelPolicyReview, reviewExecProgram)
 		}
 		callOpts.Model = reviewResolvedModel
 		// callStart is recorded immediately before the headless call sequence
@@ -3221,8 +3239,13 @@ Do not modify the code. Only write the review verdict.
 	// Kill any stale tmux session with this title so the new session gets a fresh
 	// pane and the autonomous driver can deliver its prompt without attaching to an
 	// old, idle session that was left behind from a previous (possibly crashed) attempt.
+	// Only allowed to kill a pane owned by one of this item's own prior sessions
+	// (ce71ad1a) -- a stale pane under this exact title belonging to an unrelated
+	// item is refused, not silently killed.
 	if s.sessionStopper != nil {
-		_ = s.sessionStopper.KillTmuxSessionByTitle(ctx, title)
+		if err := s.sessionStopper.KillTmuxSessionByTitle(ctx, title, nonEmptySessionUUIDs(sessions)...); errors.Is(err, ErrTmuxKillRefused) {
+			log.Warn("re-review: stale tmux session not owned by this item, leaving it", "title", title, "err", err)
+		}
 	}
 
 	// Archive the prior review round's Instance before spawning its replacement —
@@ -3234,8 +3257,14 @@ Do not modify the code. Only write the review verdict.
 		s.archiveItemWorkSessions(ctx, []session.ItemSessionSummary{*mostRecentReviewSession})
 	}
 
-	inst, spawnErr := s.sessionCreator.CreateDirectorySession(ctx, title, item.RepoPath, reReviewPrompt,
-		[]string{"backlog:review"}, !useAutonomous /*oneShot*/, true /*hidden*/, "" /*programOverride: review-stage threading is out of Epic 2.4's scope*/)
+	inst, spawnErr := s.sessionCreator.CreateDirectorySession(ctx, item.RepoPath, SessionSpawnOptions{
+		Title:  title,
+		Prompt: reReviewPrompt,
+		Tags:   []string{"backlog:review"},
+		// review-stage program threading is out of Epic 2.4's scope, so ProgramOverride stays "".
+		OneShot: !useAutonomous,
+		Hidden:  true,
+	})
 	if spawnErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn re-review session: %w", spawnErr))
 	}

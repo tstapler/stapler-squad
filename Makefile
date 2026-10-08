@@ -811,9 +811,9 @@ LINTER_BIN := $(CURDIR)/bin/linter
 # running a stale binary that predates the change forever.
 LINTER_SRC := $(shell find $(CURDIR)/tools/lint -name '*.go' -not -path '*/testdata/*')
 
-lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (entfullscan, hotpolllog, nocommandpattern, nolegacylog, noliveinstanceraw, norawexec, norawghrequest, norawgitopen, novartestseam, silenttransition, tmuxsocketscope) in a single pass
+lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (entfullscan, hotpolllog, nocommandpattern, nolegacylog, noliveinstanceraw, norawexec, norawghrequest, norawgitopen, notimesleeptest, novartestseam, silenttransition, tmuxsocketscope) in a single pass
 	@echo "Running custom lint..."
-	@$(LINTER_BIN) $(shell go list ./... | grep -v "^github.com/tstapler/stapler-squad$$")
+	@$(LINTER_BIN) ./...
 	@echo "custom lint: ok"
 
 $(LINTER_BIN): $(LINTER_SRC)
@@ -845,17 +845,6 @@ test-shell: ## Run shell-script regression tests (*.test.sh) — currently: dev-
 actor-lint: ## Detect actor self-deadlock patterns using ast-grep (sg)
 	@which sg >/dev/null 2>&1 || (echo "sg (ast-grep) not installed; run: cargo install ast-grep" && exit 1)
 	sg scan --rule session/.sg-rules/actor-lint.yml session/
-
-lint-no-sleep-tests: ## ADR-003 audit: count time.Sleep calls in test files outside testutil/ (target: 0)
-	@violations=$$(grep -rn 'time\.Sleep(' --include='*_test.go' . \
-	  | grep -v 'vendor\|web-app\|third_party\|bin/\|testutil/' \
-	  | grep -v ':[[:space:]]*//' \
-	  | wc -l | tr -d ' '); \
-	echo "⏱  time.Sleep in test files (excluding testutil/): $$violations (target: 0, per ADR-003)"; \
-	if [ "$$violations" -gt 0 ]; then \
-	  grep -rn 'time\.Sleep(' --include='*_test.go' . | grep -v 'vendor\|web-app\|third_party\|bin/\|testutil/' | grep -v ':[[:space:]]*//' ; \
-	  exit 1; \
-	fi
 
 lint-css-tokens: ## Fail if any component .css.ts file uses hardcoded hex colors instead of vars.color.*
 	@echo "Checking for hardcoded colors in component .css.ts files..."
