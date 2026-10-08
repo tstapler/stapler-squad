@@ -131,6 +131,13 @@ test.afterAll(() => {
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 test.describe('unfinished-work', () => {
+  // Mark the first-visit onboarding dialog dismissed so its overlay can't intercept clicks.
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('stapler-squad:onboarded', 'true');
+    });
+  });
+
   test('unfinished-work > page loads with title and filter controls', async ({ page }) => {
     await page.goto(UNFINISHED_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
 
@@ -237,10 +244,6 @@ test.describe('unfinished-work', () => {
       await addPinnedRepoViaApi([testSeedDir, noSessionSeedDir]);
       await triggerScanAndWaitForBranch('main');
 
-      // Pre-seed the first-visit onboarding dialog as dismissed so it can't cover the omnibar.
-      await page.addInitScript(() => {
-        localStorage.setItem('stapler-squad:onboarded', 'true');
-      });
       await page.goto(UNFINISHED_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
 
       const repoName = path.basename(noSessionSeedDir);

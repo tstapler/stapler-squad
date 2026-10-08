@@ -68,7 +68,30 @@ func (r reasonSignature) key(pr githubpkg.LinkKey) string {
 	for _, h := range r.headers {
 		names = append(names, canonicalReasonForHeader(h))
 	}
-	return guardSignature(pr, reasonSetSignature(names...))
+	return guardSignature(pr, reasonSetSignature(dropSubsumedChangesRequested(names)...))
+}
+
+// dropSubsumedChangesRequested removes CHANGES_REQUESTED when UNRESOLVED_THREADS
+// is also present: the manual nudge has no changes-requested reason and its
+// thread prompt carries the same actionable content, so keeping the name would
+// key the same fix differently on the two paths and send it twice.
+func dropSubsumedChangesRequested(names []string) []string {
+	hasThreads := false
+	for _, n := range names {
+		if n == reasonNameUnresolvedThreads {
+			hasThreads = true
+		}
+	}
+	if !hasThreads {
+		return names
+	}
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if n != reasonNameChangesRequested {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 func canonicalReasonForHeader(h string) string {
