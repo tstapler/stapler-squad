@@ -126,3 +126,17 @@ func TestLocalChainAndRemoteChain_should_AlwaysWrapNudgePathWithAuthOrGuard_When
 		assert.Zero(t, *reached)
 	})
 }
+
+// Pins the existing posture: the remote chain's only boundary is the auth
+// middleware passed to StartRemote. main.go always supplies one; with nil the
+// nudge path is reachable, so callers must never pass nil outside tests.
+func TestRemoteChain_should_LeaveNudgeReachable_When_AuthMiddlewareNil(t *testing.T) {
+	srv, _ := newChainTestServer(t, "localhost:8543")
+	reached := 0
+	srv.mux.HandleFunc(nudgeProcedurePath, func(w http.ResponseWriter, _ *http.Request) {
+		reached++
+		w.WriteHeader(http.StatusOK)
+	})
+	assert.Equal(t, http.StatusOK, postNudge(srv.remoteChain(nil), http.MethodPost, "onyx.lan:8444", ""))
+	assert.Equal(t, 1, reached)
+}

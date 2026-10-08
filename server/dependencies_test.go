@@ -14,6 +14,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/zalando/go-keyring"
 
+	"connectrpc.com/connect"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/envtest"
 	githubpkg "github.com/tstapler/stapler-squad/github"
@@ -578,4 +581,35 @@ func TestAnnotateUserPRCache_should_LogUnmatchedSessionCount_When_SessionsHaveBr
 	out := buf.String()
 	assert.Contains(t, out, "sessions with a branch but no matching PR")
 	assert.Contains(t, out, "count=2")
+}
+
+// Dropping any of SetPRNudger/SetPRDetailFetcher/SetPRTokenResolver in
+// BuildDependencies would make every nudge answer Unavailable with no compile
+// error; an unknown PR instead reaches PR_NOT_FOUND only when all are wired.
+func TestBuildDependencies_should_WireNudgeCollaborators_When_DepsBuilt(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+	require.NotNil(t, deps.GitHubUserService)
+
+	resp, err := deps.GitHubUserService.NudgeSessionForPR(context.Background(), connect.NewRequest(&sessionv1.NudgeSessionForPRRequest{
+		Pr:        &sessionv1.PRKey{Owner: "acme", Repo: "api", Number: 1},
+		SessionId: "s",
+	}))
+
+	if err != nil {
+		assert.NotEqual(t, connect.CodeUnavailable, connect.CodeOf(err), "nudge collaborators are not wired: %v", err)
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assert.Equal(t, sessionv1.NudgeOutcome_NUDGE_OUTCOME_PR_NOT_FOUND, resp.Msg.GetOutcome())
+}
+
+func TestUserPRCacheConfigFromEnv_should_SelectDegradedDetails_When_EnvSet(t *testing.T) {
+	t.Setenv(prPollDegradedEnv, "")
+	assert.False(t, userPRCacheConfigFromEnv().DegradedDetails)
+	t.Setenv(prPollDegradedEnv, "true")
+	assert.True(t, userPRCacheConfigFromEnv().DegradedDetails)
+	t.Setenv(prPollDegradedEnv, "1")
+	assert.True(t, userPRCacheConfigFromEnv().DegradedDetails)
 }

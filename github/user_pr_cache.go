@@ -201,6 +201,14 @@ type UserPRCache struct {
 	widenedUnsupported sync.Map
 	done               chan struct{} // closed when loop() returns; nil until Start
 
+	// annMu serializes every snapshot store (fetch and Annotate) and guards the
+	// last annotation inputs, so a slow Annotate can never overwrite a newer
+	// fetch and a fetch always republishes with the latest links applied.
+	annMu        sync.Mutex
+	annSessions  []PRAnnotationSession
+	annWorktrees []PRAnnotationWorktree
+	annSource    func() ([]PRAnnotationSession, []PRAnnotationWorktree) // optional; read before each publish
+
 	nudges nudgeTracker     // success-metric state; see user_pr_nudge_track.go
 	now    func() time.Time // injected in tests; nil means time.Now
 }
@@ -244,6 +252,16 @@ func (c *UserPRCache) Stop() {
 	if c.done != nil {
 		<-c.done
 	}
+}
+
+// SetAnnotationSource registers where each poll reads the sessions and
+// worktrees to link, so a poll is annotated before it reaches subscribers.
+// Call before Start. The function runs under the cache's annotation lock, so it
+// must be quick and must not call back into the cache.
+func (c *UserPRCache) SetAnnotationSource(fn func() ([]PRAnnotationSession, []PRAnnotationWorktree)) {
+	c.annMu.Lock()
+	c.annSource = fn
+	c.annMu.Unlock()
 }
 
 // SetOnUpdated atomically registers a callback invoked after every successful
@@ -365,31 +383,36 @@ type AnnotateStats struct {
 }
 
 // Annotate enriches the current snapshot with linked sessions and worktree
-// paths. It performs a COW update: load, copy, mutate, store. No-op if the
-// snapshot hasn't been populated yet.
+// paths and remembers the inputs so every later fetch republishes annotated.
+// It holds annMu across load, build and store, so it cannot overwrite a newer
+// fetch snapshot. No-op on the snapshot until it has been populated.
 //
 // Sessions match on host+owner+repo+branch (or PR number). The legacy
 // owner-only index is consulted only when the strict key misses, and only for
 // same-host sessions whose repo is not itself a repo in the PR list, so it can
 // keep pre-existing links alive without cross-linking known-different repos.
 func (c *UserPRCache) Annotate(sessions []PRAnnotationSession, worktrees []PRAnnotationWorktree) AnnotateStats {
+	c.annMu.Lock()
+	defer c.annMu.Unlock()
+	c.annSessions, c.annWorktrees = sessions, worktrees
+
 	v := c.snapshot.Load()
 	if v == nil {
 		return AnnotateStats{}
 	}
 	old := v.(*userPRSnapshot)
+	annotated, stats := annotatePRs(old.prs, sessions, worktrees)
+	c.snapshot.Store(&userPRSnapshot{prs: annotated, accountStatuses: old.accountStatuses, capturedAt: old.capturedAt})
+	return stats
+}
 
+// annotatePRs returns a copy of prs with linked sessions and worktree paths set.
+func annotatePRs(prs []UserPR, sessions []PRAnnotationSession, worktrees []PRAnnotationWorktree) ([]UserPR, AnnotateStats) {
 	idx := newSessionIndex(sessions)
-	worktreeByKey := make(map[LinkKey]string, len(worktrees))
-	for _, wt := range worktrees {
-		if wt.Branch == "" || !wt.Repo.IsValid() {
-			continue
-		}
-		worktreeByKey[wt.Repo.BranchKey(wt.Branch)] = wt.WorktreePath
-	}
-	prRepos := make(map[string]bool, len(old.prs))
-	prRefs := make([]RepoRef, len(old.prs))
-	for i, pr := range old.prs {
+	wtIdx := newWorktreeIndex(worktrees)
+	prRepos := make(map[string]bool, len(prs))
+	prRefs := make([]RepoRef, len(prs))
+	for i, pr := range prs {
 		prRefs[i], _ = NewRepoRefWithHost(pr.Owner, pr.Repo, pr.Host)
 		if prRefs[i].IsValid() {
 			prRepos[prRefs[i].repoKey()] = true
@@ -398,22 +421,26 @@ func (c *UserPRCache) Annotate(sessions []PRAnnotationSession, worktrees []PRAnn
 
 	var stats AnnotateStats
 	linked := make(map[string]bool, len(sessions))
-	annotated := make([]UserPR, len(old.prs))
-	for i, pr := range old.prs {
+	annotated := make([]UserPR, len(prs))
+	for i, pr := range prs {
 		ref := prRefs[i]
 		if ref.IsValid() {
 			ls := idx.strict(ref, pr.HeadRef, pr.Number)
+			viaLegacy := false
 			if len(ls) == 0 {
 				ls = idx.legacy(ref, pr.HeadRef, pr.Number, prRepos)
 				stats.LegacyFallbackLinks += len(ls)
+				viaLegacy = len(ls) > 0
 			}
+			// SessionIDs keep match (insertion) order: MCP consumers take
+			// SessionIDs[0]. Only LinkedSessions are sorted for display.
+			pr.SessionIDs = linkedSessionIDs(ls)
 			sortLinkedSessions(ls)
 			pr.LinkedSessions = ls
-			pr.SessionIDs = linkedSessionIDs(ls)
 			for _, l := range ls {
 				linked[l.SessionID] = true
 			}
-			pr.LocalWorktreePath = worktreeByKey[ref.BranchKey(pr.HeadRef)]
+			pr.LocalWorktreePath = wtIdx.path(ref, pr.HeadRef, prRepos, viaLegacy)
 		}
 		annotated[i] = pr
 	}
@@ -426,8 +453,60 @@ func (c *UserPRCache) Annotate(sessions []PRAnnotationSession, worktrees []PRAnn
 		log.Info("UserPRCache: sessions linked via legacy owner-only key", "count", stats.LegacyFallbackLinks)
 	}
 	log.Debug("UserPRCache: sessions with a branch but no matching PR", "count", stats.UnmatchedSessions)
-	c.snapshot.Store(&userPRSnapshot{prs: annotated, accountStatuses: old.accountStatuses, capturedAt: old.capturedAt})
-	return stats
+	return annotated, stats
+}
+
+// worktreeIndex resolves a PR's local worktree with the same strict-then-legacy
+// rule as session links.
+type worktreeIndex struct {
+	strictPaths map[LinkKey]string
+	legacy      map[LinkKey][]PRAnnotationWorktree
+}
+
+func newWorktreeIndex(worktrees []PRAnnotationWorktree) worktreeIndex {
+	x := worktreeIndex{
+		strictPaths: make(map[LinkKey]string, len(worktrees)),
+		legacy:      make(map[LinkKey][]PRAnnotationWorktree),
+	}
+	for _, wt := range worktrees {
+		if wt.Branch == "" || !wt.Repo.IsValid() {
+			continue
+		}
+		x.strictPaths[wt.Repo.BranchKey(wt.Branch)] = wt.WorktreePath
+		lk := wt.Repo.LegacyBranchKey(wt.Branch)
+		x.legacy[lk] = append(x.legacy[lk], wt)
+	}
+	return x
+}
+
+// path prefers the strict key. The owner-only legacy key is consulted only when
+// the PR's sessions themselves linked through it (viaLegacy), mirroring session
+// links: a PR with no legacy-era data never picks up a same-owner worktree.
+func (x worktreeIndex) path(ref RepoRef, headRef string, prRepos map[string]bool, viaLegacy bool) string {
+	if p, ok := x.strictPaths[ref.BranchKey(headRef)]; ok {
+		return p
+	}
+	if !viaLegacy {
+		return ""
+	}
+	for _, wt := range x.legacy[ref.LegacyBranchKey(headRef)] {
+		if legacyCompatible(wt.Repo, ref, prRepos) {
+			return wt.WorktreePath
+		}
+	}
+	return ""
+}
+
+// legacyCompatible reports whether a repo found only by the owner-only legacy
+// key may still be linked to a PR in ref: it must not be a known-different PR
+// repo, and its host must match. An unset host (stored before hosts were
+// recorded) is a wildcard, because a GHE session with no stored host would
+// otherwise lose its link. Legacy links never grant nudge linkage.
+func legacyCompatible(candidate, ref RepoRef, prRepos map[string]bool) bool {
+	if candidate.Host() != "" && NormalizeHost(candidate.Host()) != NormalizeHost(ref.Host()) {
+		return false
+	}
+	return !prRepos[candidate.repoKey()]
 }
 
 // sessionIndex holds the strict (host/owner/repo) and legacy (owner-only)
@@ -473,8 +552,8 @@ func (x sessionIndex) strict(ref RepoRef, headRef string, number int) []LinkedSe
 	return toLinkedSessions(ss, false)
 }
 
-// legacy matches the old owner-only key, restricted to same-host sessions
-// whose repo is not one of the PR list's repos (those are known-different).
+// legacy matches the old owner-only key, restricted to same-host (or unset-host)
+// sessions whose repo is not one of the PR list's repos (known-different).
 func (x sessionIndex) legacy(ref RepoRef, headRef string, number int, prRepos map[string]bool) []LinkedSession {
 	ss := x.legacyByBranch[ref.LegacyBranchKey(headRef)]
 	if len(ss) == 0 && number > 0 {
@@ -482,10 +561,9 @@ func (x sessionIndex) legacy(ref RepoRef, headRef string, number int, prRepos ma
 	}
 	var kept []PRAnnotationSession
 	for _, s := range ss {
-		if NormalizeHost(s.Repo.Host()) != NormalizeHost(ref.Host()) || prRepos[s.Repo.repoKey()] {
-			continue
+		if legacyCompatible(s.Repo, ref, prRepos) {
+			kept = append(kept, s)
 		}
-		kept = append(kept, s)
 	}
 	return toLinkedSessions(kept, true)
 }
@@ -607,8 +685,23 @@ func (c *UserPRCache) fetch() error {
 		}
 	}
 
-	snap := &userPRSnapshot{prs: merged, accountStatuses: statuses, capturedAt: time.Now()}
-	c.snapshot.Store(snap)
+	c.publish(merged, statuses)
+	return nil
+}
+
+// publish annotates merged with the latest session/worktree links, stores it,
+// and only then fans it out, so subscribers and WatchUserPRs never see PRs
+// that are momentarily missing their linked sessions.
+func (c *UserPRCache) publish(merged []UserPR, statuses []AccountPollStatus) {
+	c.annMu.Lock()
+	if c.annSource != nil {
+		c.annSessions, c.annWorktrees = c.annSource()
+	}
+	if c.annSessions != nil || c.annWorktrees != nil {
+		merged, _ = annotatePRs(merged, c.annSessions, c.annWorktrees)
+	}
+	c.snapshot.Store(&userPRSnapshot{prs: merged, accountStatuses: statuses, capturedAt: time.Now()})
+	c.annMu.Unlock()
 
 	out := make([]UserPR, len(merged))
 	copy(out, merged)
@@ -627,7 +720,6 @@ func (c *UserPRCache) fetch() error {
 			cb(out)
 		}
 	}
-	return nil
 }
 
 // resolveAllLogins returns all connected (token, login) pairs, refreshing if stale.

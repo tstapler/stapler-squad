@@ -9,6 +9,7 @@ import (
 // SanitizeUntrusted makes third-party text (GitHub check names, logins, file
 // paths) safe to type into a terminal: it drops invalid UTF-8, ANSI/OSC/DCS
 // escape sequences, C0/C1 control characters and bidi overrides, collapses
+// zero-width/format (Cf), private-use (Co) and tag characters, collapses
 // each run of newlines (and tabs, U+0085, U+2028/9) into one space, trims, and
 // truncates to maxBytes on a rune boundary. It cannot stop semantic prompt
 // injection; callers must also keep untrusted text out of instruction
@@ -35,7 +36,7 @@ func SanitizeUntrusted(s string, maxBytes int) string {
 				continue // the pending space already stands for this run
 			}
 			b.WriteRune(r)
-		case unicode.IsControl(r), isBidiControl(r):
+		case unicode.IsControl(r), isBidiControl(r), isInvisibleFormat(r):
 			// dropped
 		default:
 			if pendingSpace && b.Len() > 0 {
@@ -54,6 +55,14 @@ func isLineBreakLike(r rune) bool {
 		return true
 	}
 	return false
+}
+
+// isInvisibleFormat covers characters that render as nothing yet can smuggle
+// text past a human reader: Cf (zero-width U+200B-200D, U+2060, U+FEFF, ...),
+// Co (private use) and the Unicode tag block U+E0000-E007F (U+E0000 is
+// unassigned, so it needs the explicit range).
+func isInvisibleFormat(r rune) bool {
+	return unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Co, r) || (r >= 0xe0000 && r <= 0xe007f)
 }
 
 func isBidiControl(r rune) bool {

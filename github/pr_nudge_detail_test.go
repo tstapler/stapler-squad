@@ -171,3 +171,35 @@ func TestFetchPRNudgeDetail_should_RequestOnlyAuthorLoginUrlPathForThreadComment
 	walk(reflect.TypeOf(prNudgeNode{}))
 	walk(reflect.TypeOf(PRNudgeDetail{}))
 }
+
+func TestFetchPRNudgeDetail_should_NotReportNotFound_When_ErrorsOnlyAreNotNotFound(t *testing.T) {
+	key := mustPRKey(t, "github.com", "acme", "api", 42)
+	for name, body := range map[string]string{
+		"sso":    `{"data":{"repository":{"pullRequest":null}},"errors":[{"type":"FORBIDDEN","message":"Resource protected by organization SAML enforcement"}]}`,
+		"scope":  `{"data":null,"errors":[{"type":"INSUFFICIENT_SCOPES","message":"missing scope"}]}`,
+		"outage": `{"errors":[{"message":"Something went wrong"}]}`,
+	} {
+		startGitHubCom(t, &authRecorder{body: body})
+		_, err := FetchPRNudgeDetail(t.Context(), key, "tok")
+		require.Error(t, err, name)
+		require.False(t, errors.Is(err, ErrGitHubRefNotFound), name)
+		require.False(t, errors.Is(err, ErrRateLimited), name)
+	}
+}
+
+func TestFetchPRNudgeDetail_should_FailInsteadOfOmitReasons_When_PartialResponseHasErrors(t *testing.T) {
+	key := mustPRKey(t, "github.com", "acme", "api", 42)
+	startGitHubCom(t, &authRecorder{body: `{"data":{"repository":{"pullRequest":{"url":"u","state":"OPEN","commits":{"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]}}}},"errors":[{"type":"SERVICE_UNAVAILABLE","message":"threads timed out"}]}`})
+	_, err := FetchPRNudgeDetail(t.Context(), key, "tok")
+	require.Error(t, err)
+	require.False(t, errors.Is(err, ErrGitHubRefNotFound))
+}
+
+func TestFetchPRNudgeDetail_should_FlagMoreChecksUnseen_When_ContextsExceedPage(t *testing.T) {
+	key := mustPRKey(t, "github.com", "acme", "api", 42)
+	body := strings.Replace(nudgeDetailOK, `"statusCheckRollup":{"contexts":{"nodes"`, `"statusCheckRollup":{"contexts":{"totalCount":130,"nodes"`, 1)
+	startGitHubCom(t, &authRecorder{body: body})
+	d, err := FetchPRNudgeDetail(t.Context(), key, "tok")
+	require.NoError(t, err)
+	require.True(t, d.MoreChecksUnseen)
+}

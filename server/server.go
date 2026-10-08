@@ -1707,6 +1707,9 @@ func (s *Server) localChain() http.Handler {
 
 // remoteChain is the :8444 chain. It never carries ProbeGuard: auth is the
 // boundary there and its Host is a LAN/Tailscale name the guard would reject.
+// A nil authMW leaves the chain open (existing posture, pinned by
+// TestRemoteChain_should_LeaveNudgeReachable_When_AuthMiddlewareNil); main.go
+// always passes middleware.Auth, so nil only occurs in tests.
 func (s *Server) remoteChain(authMW func(http.Handler) http.Handler) http.Handler {
 	inner := http.Handler(s)
 	if authMW != nil {

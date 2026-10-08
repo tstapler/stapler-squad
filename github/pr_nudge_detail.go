@@ -34,7 +34,10 @@ type PRNudgeDetail struct {
 	HeadRef           string
 	IsCrossRepository bool
 	FailingChecks     []FailingCheck // at most maxFailingChecks, CheckRuns first
-	UnresolvedThreads []PRThreadRef  // not resolved, not outdated; first page only (20 threads)
+	// MoreChecksUnseen is true when the PR has more check contexts than the 100
+	// read, so FailingChecks may be incomplete.
+	MoreChecksUnseen  bool
+	UnresolvedThreads []PRThreadRef // not resolved, not outdated; first page only (20 threads)
 	// MoreThreadsUnseen is true when GitHub holds more threads than the 20 read,
 	// so the unresolved list may be incomplete.
 	MoreThreadsUnseen bool
@@ -60,7 +63,7 @@ func (GraphQLPRDetailFetcher) FetchPRNudgeDetail(ctx context.Context, key PRKey,
 const prNudgeDetailQuery = `query($owner:String!,$repo:String!,$number:Int!){
 repository(owner:$owner,name:$repo){pullRequest(number:$number){
 url state isDraft headRefName isCrossRepository mergeable
-commits(last:1){nodes{commit{statusCheckRollup{state contexts(first:100){nodes{
+commits(last:1){nodes{commit{statusCheckRollup{state contexts(first:100){totalCount nodes{
 __typename
 ... on CheckRun{name conclusion detailsUrl}
 ... on StatusContext{context state targetUrl}
@@ -89,7 +92,8 @@ type prNudgeNode struct {
 			Commit struct {
 				StatusCheckRollup *struct {
 					Contexts struct {
-						Nodes []graphQLContext `json:"nodes"`
+						TotalCount int              `json:"totalCount"`
+						Nodes      []graphQLContext `json:"nodes"`
 					} `json:"contexts"`
 				} `json:"statusCheckRollup"`
 			} `json:"commit"`
@@ -170,11 +174,21 @@ func FetchPRNudgeDetail(ctx context.Context, key PRKey, token string) (PRNudgeDe
 	if out.Data != nil && out.Data.Repository != nil {
 		node = out.Data.Repository.PullRequest
 	}
+	if isRateLimitedGraphQL(out.Errors) {
+		return PRNudgeDetail{}, ErrRateLimited
+	}
 	if node == nil {
-		if isRateLimitedGraphQL(out.Errors) {
-			return PRNudgeDetail{}, ErrRateLimited
+		// Only an explicit NOT_FOUND (or no errors at all) means the PR is gone;
+		// anything else (SSO, scope, outage) must not read as "PR not found".
+		if len(out.Errors) == 0 || hasGraphQLErrorType(out.Errors, "NOT_FOUND") {
+			return PRNudgeDetail{}, fmt.Errorf("%w: %s", ErrGitHubRefNotFound, key)
 		}
-		return PRNudgeDetail{}, fmt.Errorf("%w: %s", ErrGitHubRefNotFound, key)
+		return PRNudgeDetail{}, fmt.Errorf("PR detail query failed: %w", graphQLErrorsToError(out.Errors))
+	}
+	if len(out.Errors) > 0 {
+		// A partial response may have dropped checks or threads; nudging from it
+		// would silently omit reasons.
+		return PRNudgeDetail{}, fmt.Errorf("PR detail query returned partial data: %w", graphQLErrorsToError(out.Errors))
 	}
 	log.Debug("PR nudge detail fetched", "host", key.Host(), "pr", key.String())
 	return mapPRNudgeDetail(key, node), nil
@@ -192,7 +206,9 @@ func mapPRNudgeDetail(key PRKey, n *prNudgeNode) PRNudgeDetail {
 		MoreThreadsUnseen: n.ReviewThreads.TotalCount > len(n.ReviewThreads.Nodes),
 	}
 	if len(n.Commits.Nodes) > 0 && n.Commits.Nodes[0].Commit.StatusCheckRollup != nil {
-		d.FailingChecks = mapFailingChecks(n.Commits.Nodes[0].Commit.StatusCheckRollup.Contexts.Nodes)
+		ctxs := n.Commits.Nodes[0].Commit.StatusCheckRollup.Contexts
+		d.FailingChecks = mapFailingChecks(ctxs.Nodes)
+		d.MoreChecksUnseen = ctxs.TotalCount > len(ctxs.Nodes)
 	}
 	for _, t := range n.ReviewThreads.Nodes {
 		if t.IsResolved || t.IsOutdated {
@@ -209,4 +225,13 @@ func mapPRNudgeDetail(key PRKey, n *prNudgeNode) PRNudgeDetail {
 		d.UnresolvedThreads = append(d.UnresolvedThreads, ref)
 	}
 	return d
+}
+
+func hasGraphQLErrorType(errs []graphQLError, typ string) bool {
+	for _, e := range errs {
+		if e.Type == typ {
+			return true
+		}
+	}
+	return false
 }

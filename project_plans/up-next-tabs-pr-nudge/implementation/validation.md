@@ -52,7 +52,7 @@ Conventions: Go in `github/`, `server/services/`, `session/` with table-driven t
 | REQ-3 | `web-app/src/app/unfinished/UnfinishedTab.test.tsx` | unfinishedTab_should_ShowPRsBadge3_When_FailingCIAndConflictAndQueueActive | Unit | 4 PRs, 2 failing CI + 1 conflict, Queue tab active |
 | REQ-3 | `web-app/src/app/unfinished/UnfinishedTab.test.tsx` | unfinishedTab_should_AppendPlusToBadge_When_DetailsNotLoaded | Unit | Degraded mode `3+`, name "PRs, 3 or more need attention" |
 | REQ-14 | `web-app/src/components/unfinished/UpNextTabs.test.tsx` | upNextTabs_should_RenderPlusSuffixAndOrMoreAccessibleName_When_BadgeDegraded | Unit | `getByRole("tab",{name:"PRs, 3 or more need attention"})`; visible text `3+` is `aria-hidden` |
-| REQ-14 | `web-app/src/lib/unfinished/prAttention.test.ts` | prAttention_should_CountOnlyCIConflictChangesRequestedAndFlagDegraded_When_DetailsLoadedFalse | Unit | Unknown threads add nothing; failing check still `nudgeable=true`; unknown threads alone `nudgeable=false` |
+| REQ-14 | `web-app/src/lib/unfinished/prAttention.test.ts` | prAttention_should_CountOnlyCIConflictChangesRequestedAndFlagDegraded_When_DetailsLoadedFalse | Unit | Unknown threads add nothing; an itemised failing check is `nudgeable=true`; a failing rollup with no itemised check counts for attention but `nudgeable=false` (`checksFailingUnlisted`); unknown threads alone `nudgeable=false` |
 | REQ-14 | `web-app/src/app/unfinished/UnfinishedTab.test.tsx` | unfinishedTab_should_DropPlusSuffix_When_DetailsLoadedTrueAfterRefresh | Unit | Badge returns to plain `3` with name "PRs, 3 need attention" |
 | REQ-11 | `web-app/src/lib/unfinished/prAttention.test.ts` | prAttention_should_SeparateNeedsAttentionFromNudgeable_When_ChangesRequestedOnly | Unit | `needsAttention=true`, `nudgeable=false`; conflict alone `nudgeable=true`; unknown conflict alone false; draft false |
 | REQ-3 | `web-app/src/app/unfinished/UnfinishedTab.test.tsx` | unfinishedTab_should_SubscribeOnceAndNotFlashZero_When_TabsSwitch | Integration | Single `WatchUserPRs` stream shared by badge and panel |
@@ -321,3 +321,17 @@ E2E server has no GitHub, so Playwright covers tab/persistence/deep-link/not-con
 - **G14**: Tab-usage counters (REQ-17) live in one browser's localStorage, so they measure one user's one browser; they are a self-report aid, not telemetry. `nudge_followup` correlates, it does not prove the agent (rather than the human) fixed the PR.
 - **G15**: Server-side p95 < 100 ms is asserted only by the handler-only CPU test with instant fakes; real-world latency including GitHub (5 s fetch timeout, 8 s RPC deadline) is observed in the manual run via `nudge_outcome.latency_ms`.
 - **G16**: The access-guard tests prove middleware wiring on the two chains; they do not prove DNS-rebinding resistance end to end against a real browser (loopback Host/Origin checks mirror `ProbeProgram`'s accepted model).
+
+## Review follow-up coverage (2026-10-07)
+| Concern | Test |
+|---|---|
+| One failing rule (web vs server) | `prAttention_should_NotBeNudgeable_When_RollupFailsButNoCheckIsItemised`, `prCard_should_SayChecksNotListedAndHideNudge_When_RollupFailsWithNoItemisedCheck`, `TestLogUpNextFunnel_should_CountFailingRollupWithoutItemisedCheck_When_WebBadgeWould` |
+| Failed steer is not DUPLICATE | `TestRelease_should_Record10sCooldownNot60s_When_WriteFailed`, `TestSteerInstanceGuarded_should_ReleaseWithFailureAndSkipDuplicateRecord_When_PaneOwnershipMismatch` |
+| Deadline re-check | `TestNudgeSessionForPR_should_ReturnDeadlineExceededWithoutWriting_When_DeadlineLapsesDuringFetch`, `..._When_SteerFailsAfterDeadline` |
+| Partial/errors-only detail fetch | `TestFetchPRNudgeDetail_should_NotReportNotFound_When_ErrorsOnlyAreNotNotFound`, `..._FailInsteadOfOmitReasons_When_PartialResponseHasErrors`, `..._FlagMoreChecksUnseen_When_ContextsExceedPage` |
+| NOT_RUNNING outcome | `TestNudgeSessionForPR_should_ReturnPausedWithDistinctCopyForPausedVsNotTracked_...`, NudgeButton "not running" rows |
+| GHE empty host / worktree legacy / SessionIDs order | `TestAnnotate_should_LinkViaLegacyOnly_When_GHESessionHasUnsetStoredHost`, `..._ResolveWorktreeViaLegacy_...`, `..._KeepSessionIDsInMatchOrderAndSortOnlyLinkedSessions` |
+| Shared dedupe key, both orders | `TestSharedGuard_should_DedupeAutoSteerAfterManualNudgeAndViceVersa`, `TestReasonSignatureKey_should_MatchManualNudgeSignature_When_SameProblemSet` |
+| Annotate vs fetch interleaving (`-race`) | `TestAnnotateAndPublish_should_NeverClobberNewerFetch_When_Interleaved`, `TestPublish_should_ReapplyLatestAnnotationsAndFanOutAnnotated_...` |
+| Invisible characters / URLs | `TestSanitizeUntrusted_...` (Cf, Co, tag rows), `TestSafeNudgeURL_...`, `TestBuildPRNudgePrompt_should_ContainOnlyNewlinesAsControlRunes_...` |
+| Wiring / posture | `TestBuildDependencies_should_WireNudgeCollaborators_When_DepsBuilt`, `TestUserPRCacheConfigFromEnv_should_SelectDegradedDetails_When_EnvSet`, `TestRemoteChain_should_LeaveNudgeReachable_When_AuthMiddlewareNil` |

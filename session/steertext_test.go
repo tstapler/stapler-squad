@@ -35,6 +35,15 @@ func TestSanitizeUntrusted_should_StripC0C1CSIAndOSCAndCollapseNewlines_When_Tab
 		{"invalid utf8", "a\xff\x9bb", "ab"},
 		{"multibyte kept", "héllo 世界 🙂", "héllo 世界 🙂"},
 		{"empty", "", ""},
+		{"zero width space", "a\u200bb", "ab"},
+		{"zero width joiner and non-joiner", "a\u200cb\u200dc", "abc"},
+		{"word joiner", "a\u2060b", "ab"},
+		{"bom zero width no-break space", "\ufeffab", "ab"},
+		{"tag characters hide ascii", "ok" + string(rune(0xe0001)) + string(rune(0xe0041)) + string(rune(0xe007f)), "ok"},
+		{"unassigned tag block start", "a" + string(rune(0xe0000)) + "b", "ab"},
+		{"private use bmp", "a\ue000b", "ab"},
+		{"private use plane 15", "a" + string(rune(0xf0000)) + "b", "ab"},
+		{"soft hyphen", "a\u00adb", "ab"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

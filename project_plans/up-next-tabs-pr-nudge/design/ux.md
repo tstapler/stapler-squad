@@ -137,7 +137,7 @@ Up Next
 ### Chips (color is never the only signal; each has text)
 | Condition | Chip |
 |-----------|------|
-| `checkConclusion` failure/timed_out/action_required | "CI: N failing" (expandable list of check names as links; tooltip alone is not enough for keyboard users, so use a disclosure `<button aria-expanded>`) |
+| Server-itemised failing checks | "CI: N failing" (expandable list of check names as links; tooltip alone is not enough for keyboard users, so use a disclosure `<button aria-expanded>`) |
 | CI pending | "CI pending" (not an attention reason) |
 | `changesReqCount > 0` | "Changes requested" |
 | `detailsLoaded` and count > 0 | "N unresolved" ("50+" when truncated); the chip is a link to the PR conversation page (`pr.url`, new tab, `rel="noopener noreferrer"`; GitHub has no stable anchor for unresolved-only threads), so a user can read the comments themselves |
@@ -213,6 +213,7 @@ Every "disabled" in this table means `aria-disabled="true"` with the button stil
 | `DELIVERED` | "Request sent to <session>" + Open session link | `role="status"` (polite) | "Sent", disabled 60s | Open session |
 | `BUSY` | Server `detail` verbatim, e.g. "Session is busy. Try again when it is idle." (client falls back to "Session can't take a request right now. Open it to continue." if `detail` is empty) | `role="status"` | Button stays enabled | Pick another session or Open session |
 | `BUSY` (no controller / status source) | Server `detail`: "Session isn't being monitored, so it can't safely take a request. Open it to restart it." (distinct from generic busy) | `role="status"` | Disabled for that target; others selectable | Open session link (restart it there); pick another session |
+| `NOT_RUNNING` | "Session is not running or was deleted. Open it to restart it." | `role="status"` | Disabled for that target | Open session (restart) |
 | `PAUSED` | "Session paused. Open it to resume" | `role="status"` | Disabled for that target; others selectable | Resume link to the session page; pick another session |
 | `DUPLICATE` | "Already requested in the last minute" | `role="status"` | Disabled until the 60s window ends | Open session; wait |
 | `NOTHING_TO_FIX` | "Nothing to fix right now" and the card refreshes | `role="status"` | Hidden after refresh if no longer actionable | None needed; card updates itself |
@@ -226,7 +227,7 @@ Messages render inline under the button (not a toast that disappears), so screen
 
 **Persistence rule (single rule for every outcome message):** a message stays until the user's next action on that card (any click on its nudge button, target select, or "+ Session") or 60 seconds after it appeared, whichever comes first. Alerts (`role="alert"`: rate limit, `FailedPrecondition`, network error) are never auto-cleared; they stay until the next action on that card. A data refresh never clears a message by itself.
 
-**Alert vs status:** `role="status"` for non-urgent outcomes (`DELIVERED`, `BUSY` both variants, `PAUSED`, `DUPLICATE`, `NOTHING_TO_FIX`, `SESSION_NOT_LINKED`, `PR_NOT_FOUND`); `role="alert"` only for errors that need action (rate limit, `FailedPrecondition`, network/other).
+**Alert vs status:** `role="status"` for non-urgent outcomes (`DELIVERED`, `BUSY` all variants including "last request failed", `PAUSED`, `NOT_RUNNING`, `DUPLICATE`, `NOTHING_TO_FIX`, `SESSION_NOT_LINKED`, `PR_NOT_FOUND`); `role="alert"` only for errors that need action (rate limit, `FailedPrecondition`, network/other).
 
 **After reload:** nudge messages and the "Sent" state are client-memory only and are not persisted. The server is the source of truth: after a reload a repeat click on a recently nudged session returns `DUPLICATE` ("Already requested in the last minute") within the 60s window, and past it the nudge is simply allowed. No localStorage state, no extra proto field.
 

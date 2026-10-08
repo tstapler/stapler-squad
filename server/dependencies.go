@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -1269,9 +1270,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}
 
 	// UserPRCache fetches all open PRs authored by the authenticated GitHub user.
-	userPRCache = githubpkg.NewUserPRCache()
-	userPRCache.SetOnUpdated(func(prs []githubpkg.UserPR) {
-		annotateUserPRCache(userPRCache, svc.PRStatusPoller, unfinishedScanner)
+	userPRCache = githubpkg.NewUserPRCacheWithConfig(userPRCacheConfigFromEnv())
+	// The cache annotates each poll before it publishes, so streams never carry
+	// PRs with missing session links.
+	userPRCache.SetAnnotationSource(func() ([]githubpkg.PRAnnotationSession, []githubpkg.PRAnnotationWorktree) {
+		return buildPRAnnotations(svc.PRStatusPoller, unfinishedScanner)
 	})
 	githubUserSvc := services.NewGitHubUserService(userPRCache, cfg.GetGitHubEnterpriseHosts())
 	githubUserSvc.SetPRNudger(sessionService)
@@ -1957,10 +1960,16 @@ func newSessionLivenessChecker(findLive func(sessionUUID string) *session.Instan
 // "pr-<number>-..." naming convention (e.g. "pr-1255-actions-spring-boot").
 var prNumFromTitle = regexp.MustCompile(`(?i)^pr-(\d+)-`)
 
-// annotateUserPRCache populates session IDs and worktree paths on the cached
-// UserPR list. Called in the UserPRCache onUpdated callback. Lives here (not
+// annotateUserPRCache annotates the cached UserPR list now. The cache itself
+// re-reads buildPRAnnotations (SetAnnotationSource) before every publish, so
+// production code only needs this for an out-of-band refresh. Lives here (not
 // in the github package) to avoid an import cycle: github → session → github.
 func annotateUserPRCache(cache *githubpkg.UserPRCache, poller *session.PRStatusPoller, scanner *unfinished.Scanner) {
+	cache.Annotate(buildPRAnnotations(poller, scanner))
+}
+
+// buildPRAnnotations collects the live sessions and worktrees a PR can link to.
+func buildPRAnnotations(poller *session.PRStatusPoller, scanner *unfinished.Scanner) ([]githubpkg.PRAnnotationSession, []githubpkg.PRAnnotationWorktree) {
 	ghHosts := config.LoadConfig().GetGitHubEnterpriseHosts()
 	enterpriseHosts := make([]string, 0, len(ghHosts))
 	for _, h := range ghHosts {
@@ -2031,7 +2040,7 @@ func annotateUserPRCache(cache *githubpkg.UserPRCache, poller *session.PRStatusP
 		}
 	}
 
-	cache.Annotate(annSessions, annWorktrees)
+	return annSessions, annWorktrees
 }
 
 // linkedStatusFor maps a session lifecycle status to the coarse status shown
@@ -2073,4 +2082,17 @@ func (a *scannerSource) GetWorktrees() []session.WorktreeScanItem {
 		})
 	}
 	return items
+}
+
+// prPollDegradedEnv selects ADR-001's degraded poll (no reviewThreads) when
+// "1" or "true"; the default is the full widened poll.
+const prPollDegradedEnv = "STAPLER_SQUAD_PR_POLL_DEGRADED"
+
+func userPRCacheConfigFromEnv() githubpkg.UserPRCacheConfig {
+	cfg := githubpkg.DefaultUserPRCacheConfig()
+	switch strings.ToLower(os.Getenv(prPollDegradedEnv)) {
+	case "1", "true":
+		cfg.DegradedDetails = true
+	}
+	return cfg
 }

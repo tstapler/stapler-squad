@@ -296,7 +296,7 @@ test.describe("vcs-widget", () => {
     test("VcsWidget_should_RenderAggregateStatsAndCommitsWithNoPerFileRows_When_CompactModeExpanded", async ({
       page,
     }) => {
-      await page.goto(`${BASE_URL}/unfinished`, { waitUntil: "domcontentloaded", timeout: 15000 });
+      await page.goto(`${BASE_URL}/unfinished?tab=worktrees`, { waitUntil: "domcontentloaded", timeout: 15000 });
 
       const item = page.locator('[data-testid="unfinished-item"]').filter({ hasText: branchName });
       await expect(item).toBeVisible({ timeout: 10000 });

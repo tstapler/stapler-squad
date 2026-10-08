@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -56,7 +57,11 @@ func BuildPRNudgePrompt(d githubpkg.PRNudgeDetail) (prompt string, reasons []ses
 		b.WriteString("- Merge conflict: the branch conflicts with its base branch. Update it from the base branch and resolve the conflicts.\n")
 	}
 	if n := len(d.FailingChecks); n > 0 {
-		fmt.Fprintf(&b, "- Failing checks (%d): find out why each failed and fix the cause.\n", n)
+		more := ""
+		if d.MoreChecksUnseen {
+			more = " or more"
+		}
+		fmt.Fprintf(&b, "- Failing checks (%d%s): find out why each failed and fix the cause.\n", n, more)
 	}
 	if n := len(d.UnresolvedThreads); n > 0 {
 		more := ""
@@ -70,17 +75,20 @@ func BuildPRNudgePrompt(d githubpkg.PRNudgeDetail) (prompt string, reasons []ses
 	if len(d.FailingChecks) > 0 {
 		b.WriteString("Failing checks:\n")
 		for _, c := range capped(d.FailingChecks) {
-			fmt.Fprintf(&b, "- %s %s\n", session.SanitizeUntrusted(c.Name, nudgeMaxCheckName), session.SanitizeUntrusted(c.URL, nudgeMaxURL))
+			fmt.Fprintf(&b, "- %s\n", strings.TrimSpace(session.SanitizeUntrusted(c.Name, nudgeMaxCheckName)+" "+safeNudgeURL(c.URL, "")))
 		}
 		writeMore(&b, len(d.FailingChecks))
 	}
 	if len(d.UnresolvedThreads) > 0 {
 		b.WriteString("Unresolved review threads:\n")
 		for _, t := range capped(d.UnresolvedThreads) {
-			fmt.Fprintf(&b, "- %s by %s: %s\n",
+			line := fmt.Sprintf("%s by %s",
 				session.SanitizeUntrusted(t.Path, nudgeMaxPath),
-				session.SanitizeUntrusted(t.AuthorLogin, nudgeMaxAuthor),
-				session.SanitizeUntrusted(t.URL, nudgeMaxURL))
+				session.SanitizeUntrusted(t.AuthorLogin, nudgeMaxAuthor))
+			if link := safeNudgeURL(t.URL, d.Key.Host()); link != "" {
+				line += ": " + link
+			}
+			fmt.Fprintf(&b, "- %s\n", line)
 		}
 		writeMore(&b, len(d.UnresolvedThreads))
 	}
@@ -98,6 +106,25 @@ func writeMore(b *strings.Builder, total int) {
 	if total > nudgeMaxListed {
 		fmt.Fprintf(b, "...and %d more\n", total-nudgeMaxListed)
 	}
+}
+
+// safeNudgeURL returns raw only when it is a plain https URL (no credentials,
+// within nudgeMaxURL) and, when wantHost is set, on that host; otherwise "".
+// A GitHub-supplied link is attacker-influenced text typed into an agent, so an
+// unexpected scheme or host is dropped rather than quoted.
+func safeNudgeURL(raw, wantHost string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
+		return ""
+	}
+	if wantHost != "" && !strings.EqualFold(u.Hostname(), wantHost) {
+		return ""
+	}
+	clean := session.SanitizeUntrusted(u.String(), nudgeMaxURL+1)
+	if clean != u.String() || len(clean) > nudgeMaxURL {
+		return ""
+	}
+	return clean
 }
 
 // nudgePRLink builds the PR URL from the key rather than trusting a
