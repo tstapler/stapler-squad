@@ -2424,7 +2424,7 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 		), ""), nil
 	}
 
-	// Refuse while any other session still has an open link; fail closed on a
+	// Refuse while any other live session still has an open link; fail closed on a
 	// lookup error. The caller's own links are collected to end after archive.
 	itemSessions, lsErr := h.itemSessionsFor(ctx, itemID)
 	if lsErr != nil {
@@ -2437,6 +2437,10 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 		}
 		if is.SessionUUID == callerUUID {
 			ownOpenLinks = append(ownOpenLinks, is)
+			continue
+		}
+		// An unended link whose session is stopped, failed, or paused owns no work to protect.
+		if !h.linkedSessionLive(itemID, is) {
 			continue
 		}
 		return errResult(ErrInvalidArgument, fmt.Sprintf(
@@ -2479,6 +2483,26 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 		"Item %s (status %q) archived as a duplicate of %s. No review needed; this is logged on the item's status history. You can end your session.",
 		itemID, item.Status, duplicateRef,
 	)), nil
+}
+
+// linkedSessionLive reports whether is still owns work on itemID. Only roles
+// whose sessions are tmux-backed (work, review, diagnose) can be judged dead by
+// the tmux liveCheck. Headless triage has a synthetic UUID and no tmux session,
+// so it is checked against the service's in-flight record; headless re-review
+// has no liveness signal; and any other role (e.g. Jules, which runs remotely)
+// is treated as live. With no liveCheck/backlogSvc wired it fails closed.
+func (h *backlogHandlers) linkedSessionLive(itemID string, is session.ItemSessionSummary) bool {
+	switch {
+	case strings.HasPrefix(is.SessionUUID, services.HeadlessTriageUUIDPrefix):
+		return h.backlogSvc == nil || h.backlogSvc.IsTriageLive(itemID)
+	case strings.HasPrefix(is.SessionUUID, services.HeadlessReReviewUUIDPrefix):
+		return true
+	}
+	switch is.Role {
+	case session.SessionRoleWork, session.SessionRoleReview, session.SessionRoleDiagnose, session.SessionRoleTriage:
+		return h.liveCheck == nil || h.liveCheck(is.SessionUUID)
+	}
+	return true
 }
 
 // verifyBacklogDuplicateTarget checks a "backlog:<uuid>" duplicate_ref names a
@@ -3036,7 +3060,7 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			mcpgo.WithDescription("Close a backlog item as a duplicate of an already-existing GitHub PR/issue/commit by archiving it directly (never via the review gate, no diff needed). "+
 				"Supported callers: a session linked to the item in ANY role (work, triage, review), or an unlinked session. "+
 				"Supported stages: any non-terminal status — idea, refining, ready, queued, in_progress, review, pr_pending. Items already done/archived are rejected, except a retry with the same duplicate_ref, which is a safe no-op. "+
-				"Your own open link to the item is ended by the closure. If ANY OTHER session still has an open link to the item, the call is refused with that session's role and UUID and nothing changes — do not archive an item another session is actively working. "+
+				"Your own open link to the item is ended by the closure. If ANY OTHER live session still has an open link to the item (links whose session is stopped, failed, or paused/hibernated — no live tmux session, and no in-flight headless triage — are ignored), the call is refused with that session's role and UUID and nothing changes — do not archive an item another session is actively working. "+
 				"duplicate_ref must be a single full GitHub URL, or \"backlog:<item-uuid>\" naming another existing, non-archived backlog item (this only archives the item — it does NOT move dependencies, notes, or tags to the survivor). It is verified BEFORE any state change; if it cannot be verified, nothing changes. "+
 				"If verifying duplicate_ref fails with INTERNAL_ERROR, this is transient — retry the call with the same arguments. "+
 				"If the result says this session has no configured GitHub credentials, that is not transient — do not retry. Leave the item as-is and note the missing-credentials issue in your summary so an operator can configure GitHub access for this session. "+

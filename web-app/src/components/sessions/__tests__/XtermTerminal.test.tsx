@@ -584,6 +584,55 @@ describe("XtermTerminal WebGL->Canvas fallback (mocked renderer, not real WebGL)
     expect(webglInstance.dispose).toHaveBeenCalledTimes(1);
     expect(MockCanvasAddon.instances).toHaveLength(1);
   });
+
+  describe("WebGL context budget (webglBudget.ts wiring)", () => {
+    const BUDGET = 8; // MAX_WEBGL_CONTEXTS
+
+    async function mountPanes(count: number) {
+      const utils = render(
+        <div>
+          {Array.from({ length: count }, (_, i) => (
+            <XtermTerminal key={i} />
+          ))}
+        </div>
+      );
+      await act(async () => {
+        jest.advanceTimersByTime(200);
+        // One dynamic import() microtask chain per pane.
+        for (let i = 0; i < count * 2; i++) await Promise.resolve();
+      });
+      return utils;
+    }
+
+    it("budget_should_MoveOldestPaneToCanvas_When_PaneBeyondBudgetMounts", async () => {
+      await mountPanes(BUDGET + 1);
+      expect(MockWebglAddon.instances).toHaveLength(BUDGET + 1);
+      expect(MockWebglAddon.instances[0].dispose).toHaveBeenCalledTimes(1);
+      expect(MockCanvasAddon.instances).toHaveLength(1);
+      expect(MockTerminal.instances[0].loadedAddons).toContain(MockCanvasAddon.instances[0]);
+      MockWebglAddon.instances.slice(1).forEach((a) => expect(a.dispose).not.toHaveBeenCalled());
+    });
+
+    it("budget_should_NotEvict_When_EarlierPanesUnmountedBeforeNextMount", async () => {
+      const first = await mountPanes(BUDGET);
+      first.unmount();
+      await mountPanes(BUDGET);
+      expect(MockCanvasAddon.instances).toHaveLength(0);
+    });
+
+    it("budget_should_NotLoadSecondCanvas_When_EvictedPaneLaterSamplesMismatch", async () => {
+      await mountPanes(BUDGET + 1);
+      const evicted = MockTerminal.instances[0];
+      const fit = MockFitAddon.instances[0];
+      fit.fit.mockImplementation(() => {
+        const proposed = fit.proposeDimensions();
+        if (proposed) Object.assign(evicted, proposed);
+      });
+      setMismatch(evicted, 9.2, 8.0);
+      [81, 82, 83].forEach((cols, i) => driveConvergentResize(capturedResizeObservers[0], fit, cols, 24, 800 + i * 100));
+      expect(MockCanvasAddon.instances).toHaveLength(1);
+    });
+  });
 });
 
 describe("XtermTerminal cross-instance perturbation (multi-mount, bounded settling)", () => {

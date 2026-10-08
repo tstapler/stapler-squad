@@ -768,6 +768,10 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		p, poolErr := headless.NewPool(headless.PoolConfig{
 			MaxCallsPerSession:    25,
 			MaxConcurrentSessions: 5,
+			// Fresh load per call so background_models edits apply live.
+			FeatureModel: func(k headless.FeatureKey) string {
+				return config.LoadConfig().BackgroundFeatureModel(string(k))
+			},
 		})
 		if poolErr != nil {
 			log.Warn("headless pool disabled: claude binary not found", "err", poolErr)
@@ -1456,6 +1460,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogLifecycleListener.SetAutoReopener(backlogSvc)
 	backlogLifecycleListener.SetPRFixSpawner(backlogSvc)
 	backlogLifecycleListener.SetReviewRespawner(backlogSvc)
+	backlogSvc.SetReviewSpawnGuard(backlogLifecycleListener.ReviewSpawnGuard())
 	// Wires reconcileCustomGateChecks' scan for overdue custom-check
 	// invocations (Epic 2.4, Task 2.4.4c) — same gateSatisfactionRepo instance
 	// already wired into backlogSvc above, guarded nil-safe by both consumers.
