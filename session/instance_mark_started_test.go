@@ -126,6 +126,7 @@ func TestMarkStartedIfTmuxAlive_should_NotOverride_When_StatusIsPausedStoppedOrP
 // *Instance's sendSyncErr runs fn synchronously with no mailbox at all —
 // the very case that would let the two interleave.
 func TestMarkStartedIfTmuxAlive_should_SerializeWithConcurrentStart_When_BothCalledTogether(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}

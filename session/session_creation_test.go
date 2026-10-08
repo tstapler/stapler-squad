@@ -211,7 +211,8 @@ func TestSessionCreationWithWorktree(t *testing.T) {
 	elapsed := time.Since(startTime)
 
 	require.NoError(t, err, "Worktree session should start successfully")
-	require.Less(t, elapsed, 10*time.Second, "Worktree session should start within 10 seconds, took %v", elapsed)
+	// Hang guard, not a latency SLO: a real git worktree plus tmux start measured 12.5s under -race with ~2000 parallel tests.
+	require.Less(t, elapsed, 60*time.Second, "Worktree session should start within 60 seconds, took %v", elapsed)
 
 	defer func() {
 		if err := startCleanup(); err != nil {
