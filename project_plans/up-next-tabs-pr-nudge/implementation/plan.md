@@ -766,8 +766,14 @@ Totals (recomputed with a script over this table): **PR A 61.5 h, PR B 57.5 h, w
 - Uses `aria-disabled` (never `disabled`) for pending/delivered/duplicate/busy-cooldown so focus is kept; accessible name starts with the visible label (WCAG 2.5.3); "Still sending..." after 3 s; 5 s BUSY cooldown with an injected clock; selection state keyed by PR key. Button plus labelled `Session` `<select>` (shown only with 2+ sessions); button label updates when the select changes the target (UX P2); label "Ask <session> to fix", tooltip/description text, 44px targets, focus landing rule; Safari/WebKit check of the select (Playwright WebKit project if configured, else manual on Safari/iOS in Task 6.1.1d); exhaustive `outcomeMessage(outcome)`; `data-testid="pr-nudge-<number>"`; live region.
 - Files: `web-app/src/components/unfinished/prs/NudgeButton.tsx`, `.css.ts`
 
+##### Task 4.3.1d: Readiness-led primary action (decided 2026-10-07)
+- Proto: additive `LinkedSession.steer_ready` (field 4). Server: `GitHubUserService.userPRsToProto` sets it per strictly linked session via `linkedSessionSteerReady` (live, title match, not suspended, `CanSteer`, and `SessionService.InstanceReadyForSteer`, the gate `SteerInstanceGuarded` uses). Unknown is false.
+- UI: no steer-ready session => "Open session" primary link (`pr-open-session-<n>`), nudge button `aria-disabled` and de-emphasized with `NOT_IDLE_HINT`; any ready session => nudge primary as before. Sent/answered sessions stay ready for the card.
+- Metrics: `nudge_outcome` gains `session_live`; each snapshot sent to a client logs `up_next_funnel` (`prs_needing_attention`, `with_linked_session`, `with_live_session`); "Open session" clicks increment `openSessionClicks` in `up-next-tab-stats`.
+- Files: `proto/session/v1/types.proto`, `server/services/github_user_nudge.go`, `web-app/src/components/unfinished/prs/NudgeButton.tsx`, `web-app/src/lib/unfinished/tabStats.ts`.
+
 ##### Task 4.3.1c: Wire into `PRCard` (~3 min)
-- Render only when `prAttention(pr).nudgeable` and at least one non-paused linked session; paused-only shows a disabled button with tooltip and an "Open session" link (UX P3).
+- Render only when `prAttention(pr).nudgeable` and at least one linked session; when none is steer-ready (paused, stopped, not idle or unknown) "Open session" is the primary action and the ask button is disabled with the reason (UX P3, Task 4.3.1d).
 - Files: `web-app/src/components/unfinished/prs/PRCard.tsx`
 
 #### Story 4.3.2: "+ Session" seeded with the fix prompt
@@ -942,3 +948,4 @@ Verified before encoding: `server/server.go:1678-1700` (local chain: auth if con
 42. Product: requirements split into findability vs actionability with falsifiers, job story, thresholds labelled guesses with rationale, hand-typed-prompt tally for the baseline, outcome metric (`nudge_followup`, Task 2.3.1h), findability metric (tab-usage counters, Task 3.1.1d), manual-vs-pr-fix-steering rationale, product fallback if the cost gate fails, merge-conflict Rabbit Hole fixed, Complexity 3, appetite statement.
 43. Not changed on purpose (low value or out of scope): persistent "last asked at" on the card beyond the server's 60 s DUPLICATE window; extra "where it lands" sentence in the tooltip (the transcript already shows the sent text); no-GitHub-at-all first-visit flow beyond the connect banner.
 44. Recount (grep/awk over headings): 16 epics, 22 stories, 66 tasks, 25 glossary terms; `validation.md`: 17 requirements, 198 mapping rows (94 Go / 85 Jest-TS / 19 other, 15 CONDITIONAL), 41 UX criteria rows (`ux.md` now has 41 criteria).
+45. Readiness-led primary action (user decision 2026-10-07): added Task 4.3.1d, UX-42/UX-43, REQ-12 funnel row; nudge success metric denominator is now live-session nudges. validation.md copy rows UX-5/19/20 corrected to shipped behavior; UX criteria count is 43.

@@ -188,6 +188,7 @@ Delivered (60s):          [ Sent ]  (aria-disabled)  + status line
 Status line (role=status): Request sent to fix-ci. Open session
 ```
 
+- Primary action depends on readiness (UX-42): `steer_ready` comes from the server with every `LinkedSession`, computed with the same idle gate the nudge uses; it is as fresh as the last poll, so a click can still return `BUSY`.
 - Visible only when `nudgeable` (failing checks, unresolved threads or merge conflict; a changes-requested-only PR counts toward the badge via `needsAttention` but is not nudgeable) and a non-paused linked session exists (plan 4.3.1c). Visible text is "Ask fix-ci to fix"; the accessible name **starts with and contains that visible text contiguously** (WCAG 2.5.3 Label in Name, so speech-input "click Ask fix-ci to fix" works): `Ask fix-ci to fix CI on PR #42`; the noun after "fix" reflects reasons (CI, comments, conflicts; combined: "Ask fix-ci to fix PR #42"). The select is shown whenever the PR has 2+ LINKED sessions (paused ones included, listed disabled).
 - **`aria-disabled`, never `disabled`:** pending, delivered, duplicate and busy-cooldown states set `aria-disabled="true"` and ignore activation, so the focused button keeps keyboard focus (native `disabled` drops focus to `body` in several browsers and removes the control from the tab order). Only native `<option disabled>` is used (paused sessions), with the reason also rendered as visible text outside the select whenever any linked session is paused (disabled option text is announced unreliably).
 - The selected session is component state keyed by PR key: it survives polls; if it becomes paused or unlinked the selection resets to the default and the label follows. After a `BUSY` outcome the button stays enabled (no cooldown, no retry framing; double clicks are already blocked while the request is pending).
@@ -338,7 +339,7 @@ Navigation and state
 2. UX-2: After clicking Queue and reloading, Queue is still selected; the URL shows `?tab=queue`.
 3. UX-3: Opening `/unfinished?item=<id>` selects Stuck, expands and scrolls to the item, and does not overwrite the stored tab; clicking Worktrees then reloading stays on Worktrees.
 4. UX-4: Browser Back after switching tabs three times leaves `/unfinished` (tab changes do not create history entries).
-5. UX-5: A user can switch to any tab in one click, or with Arrow (focus) then Enter/Space (activation); Home and End move focus to the first and last tab.
+5. UX-5: A user can switch to any tab in one click, or with Arrow (moves focus only) then Enter/Space (activates); Home and End move focus, not selection, to the first and last tab. Verified by `upNext_should_MoveFocusByArrowHomeEndAndSelectOnEnter_When_TabListFocused`.
 6. UX-6: Tab accessible names include counts ("PRs, 3 need attention"); zero-count tabs show no badge; screen reader reads the same.
 7. UX-7: PR search text and filters persist after switching to another tab and back.
 8. UX-8: `?item=<missing-id>` shows "Item <id> was not found" with a "Show all stuck items" action; no blank tab.
@@ -387,7 +388,10 @@ Added after the triad review
 40. UX-40: At 320 CSS px and with text-spacing overrides the PRs panel has no horizontal scroll or clipped text; chips wrap and select/button stack.
 41. UX-41: With PRs from 2+ hosts or accounts every card shows a `host - account` label; the "N unresolved" chip links to the PR conversation.
 
-(41 criteria)
+42. UX-42: When no linked session is confirmed idle (`LinkedSession.steer_ready` false for all, including "unknown"), "Open session" is the primary action (first in DOM order, primary styling) and "Ask <session> to fix" is rendered disabled (`aria-disabled`) and de-emphasized, with one visible line saying why. If any session is steer-ready, the ask button stays primary and targets the most recent ready session; not-idle sessions are listed disabled in the select with their reason.
+43. UX-43: A send in flight or already answered keeps its session treated as ready for that card, so a poll that reports the session busy after `DELIVERED` does not swap the "Sent" button for "Open session".
+
+(43 criteria)
 
 ## 14. Flow exit-path and error-state audit
 

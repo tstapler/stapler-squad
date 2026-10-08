@@ -44,9 +44,9 @@ Tab usage counters (browser console on `/unfinished`; counters only, never PR co
 const s = JSON.parse(localStorage["up-next-tab-stats"] ?? "null");
 s && { ...s, prsLeaveRate: s.visits ? +(s.leftPrsWithin5s / s.visits).toFixed(2) : null };
 ```
-`leftPrsWithin5s / visits` is the PRs-tab leave rate. Nudge log queries. The log (`~/.stapler-squad/logs/staplersquad.log`, JSON lines) carries one `nudge_outcome` line per RPC call (`server/services/github_user_nudge.go`, `logNudgeExit`: `pr`, `host`, `account`, `session_id`, `outcome`, `reasons`, `latency_ms`, `prompt_bytes`, and `attention_age_s` only when the poll had seen the PR needing attention) and one `nudge_followup` line per settled nudge (`github/user_pr_nudge_track.go`, `trackNudges`: `pr`, `host`, `state` of `resolved|closed|expired`, `resolved_after_s`). Nudges per ISO week, outcome mix, and median attention age (save as `nudge.jq`, run `jq -c -s -f nudge.jq ~/.stapler-squad/logs/staplersquad.log`; the week is taken from the first 19 characters of `time`, so a non-UTC offset shifts a line near a week boundary):
+`leftPrsWithin5s / visits` is the PRs-tab leave rate. Nudge log queries. The log (`~/.stapler-squad/logs/staplersquad.log`, JSON lines) carries one `nudge_outcome` line per RPC call (`server/services/github_user_nudge.go`, `logNudgeExit`: `pr`, `host`, `account`, `session_id`, `outcome`, `reasons`, `latency_ms`, `prompt_bytes`, `session_live`, and `attention_age_s` only when the poll had seen the PR needing attention) and one `nudge_followup` line per settled nudge (`github/user_pr_nudge_track.go`, `trackNudges`: `pr`, `host`, `state` of `resolved|closed|expired`, `resolved_after_s`). Nudges per ISO week, outcome mix, and median attention age (save as `nudge.jq`, run `jq -c -s -f nudge.jq ~/.stapler-squad/logs/staplersquad.log`; the week is taken from the first 19 characters of `time`, so a non-UTC offset shifts a line near a week boundary):
 ```jq
-[ .[] | select(.msg == "nudge_outcome")
+[ .[] | select(.msg == "nudge_outcome" and .session_live == true)
   | . + {week: ((.time[0:19] + "Z") | fromdateiso8601 | strftime("%G-W%V"))} ]
 | group_by(.week)[]
 | { week: .[0].week, total: length,
@@ -56,6 +56,8 @@ s && { ...s, prsLeaveRate: s.visits ? +(s.leftPrsWithin5s / s.visits).toFixed(2)
           elif length % 2 == 1 then .[length / 2 | floor]
           else (.[length / 2 - 1] + .[length / 2]) / 2 end) }
 ```
+Funnel (counts per snapshot sent; read ratios): `jq -c 'select(.msg == "up_next_funnel")' ~/.stapler-squad/logs/staplersquad.log` gives `prs_needing_attention`, `with_linked_session`, `with_live_session`; clicks are `nudge_request` lines and deliveries are `nudge_outcome` with `outcome == "DELIVERED"`. "Open session" clicks are in the browser counter (`openSessionClicks` in the `up-next-tab-stats` snippet above).
+
 Share of nudges resolved within 24 h:
 ```sh
 jq -c -s '[.[] | select(.msg == "nudge_followup")]
@@ -78,3 +80,7 @@ Evidence (read in this worktree):
 - Seeding therefore needs (1) an additive PR-identity field on `CreateSessionRequest`, (2) a `PRFixSeeder` port wired into `SessionService`, (3) Omnibar changes so the `?pr=` flow carries host/owner/repo/number instead of only a URL (new session-creation mode touchpoints, see `docs/reference/session-creation-registry.md`), (4) a re-check for an existing linked session at create time and a "created, nothing to fix" response flag. That is wider than "one additive optional field plus a call to a small port", which is the plan's gate for (a)/(b).
 
 Consequence: Story 4.3.2 drops its CONDITIONAL rows and keeps only `prCard_should_ShipPlainPlusSession_When_Task142aOutcomeC`; the "Open session" action for non-live linked sessions (readiness spike above) is unaffected. Revisit as a follow-up only if the post-ship hypothesis review shows people hand-typing the fix instruction into new sessions.
+
+## Decision update (2026-10-07, user decision): readiness-led primary action
+The nudge gate stays strict, but the card no longer offers the nudge to sessions the server cannot confirm idle. `LinkedSession.steer_ready` (additive proto field 4) is computed per snapshot with the same gate `SteerInstanceGuarded` applies (live, linked by title, not suspended, steerable program, idle via `instanceReadyForSteer`); unknown is false. When no linked session is steer-ready, "Open session" is the primary action and the ask button is disabled and de-emphasized. Readiness is as fresh as the last poll, so a click may still return `BUSY`; the typed outcomes are unchanged.
+Metrics follow: the `nudge_outcome` denominator is nudges attempted on live sessions (`session_live=true`, set once the session resolves to a live unsuspended instance); each client snapshot logs `up_next_funnel`; "Open session" clicks count as a success signal in the existing `up-next-tab-stats` counter. Revisit and kill criteria in `requirements.md` were updated to match.
