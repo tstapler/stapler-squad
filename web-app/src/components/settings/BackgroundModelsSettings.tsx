@@ -44,10 +44,10 @@ export function BackgroundModelsSettings() {
     typeof createClient<typeof SessionService>
   > | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (quiet = false) => {
     if (!clientRef.current) return;
     try {
-      setLoading(true);
+      if (!quiet) setLoading(true);
       setLoadError(null);
       const resp = await clientRef.current.getBackgroundModels({});
       setFeatures({ ...resp.settings?.features });
@@ -79,7 +79,7 @@ export function BackgroundModelsSettings() {
         settings: { features, stages, effort },
       });
       setStatus("Saved — applies to the next call, no restart needed.");
-      await load();
+      await load(true);
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -127,7 +127,7 @@ export function BackgroundModelsSettings() {
         <h2 className={heading}>Background Models</h2>
         <div role="alert">{loadError}</div>
         <div className={actions}>
-          <button type="button" className="btn btn-primary" onClick={load}>
+          <button type="button" className="btn btn-primary" onClick={() => load()}>
             Retry
           </button>
         </div>

@@ -23,7 +23,7 @@ func usableModel(kind, key, m string) string {
 	if m == "" {
 		return ""
 	}
-	if len(m) > maxBackgroundModelLength || !validModelName.MatchString(m) {
+	if !ValidBackgroundModelName(m) {
 		log.Warn("ignoring invalid background model; using built-in default", "kind", kind, "key", key, "value", m)
 		return ""
 	}
@@ -44,16 +44,27 @@ type BackgroundModelsConfig struct {
 	Effort string `json:"effort,omitempty"`
 }
 
-// backgroundFeatureModelDefaults: haiku for short extraction/summary calls, sonnet
-// where a wrong answer costs a rework loop or an unsafe approval. Opus is never a
-// default. See docs/reference/background-model-defaults.md.
+// backgroundFeatureDefaults: haiku for short extraction/summary calls, sonnet where a wrong
+// answer costs a rework loop or an unsafe approval and for open-ended prompts. Opus is never
+// a default. Single source for the defaults and the panel's key list. See
+// docs/reference/background-model-defaults.md.
+func backgroundFeatureDefaults() []struct{ key, model string } {
+	return []struct{ key, model string }{
+		{"session-completion-summary", "haiku"}, {"handoff-summary", "haiku"},
+		{"backlog-intent-parse", "haiku"}, {"pr-description", "haiku"},
+		{"commit-message", "haiku"}, {"summarize", "haiku"}, {"acceptance-criteria", "haiku"},
+		{"unfinished-work-summary", "haiku"}, {"session-tagging", "haiku"},
+		{"autonomous_fix", "sonnet"}, {"autonomous_approval", "sonnet"},
+		{"review", "sonnet"}, {"triage", "sonnet"}, {"custom", "sonnet"},
+		{"rules-generation", "sonnet"}, {"instance-resume", "sonnet"},
+	}
+}
+
 func backgroundFeatureModelDefault(feature string) string {
-	switch feature {
-	case "session-completion-summary", "handoff-summary", "backlog-intent-parse",
-		"pr-description", "commit-message", "summarize", "acceptance-criteria":
-		return "haiku"
-	case "autonomous_fix", "autonomous_approval":
-		return "sonnet"
+	for _, d := range backgroundFeatureDefaults() {
+		if d.key == feature {
+			return d.model
+		}
 	}
 	return ""
 }
@@ -122,17 +133,22 @@ func (c *Config) BackgroundEffort() string {
 }
 
 // BackgroundFeatureKeys lists the headless feature keys with a built-in default.
-var BackgroundFeatureKeys = []string{
-	"session-completion-summary", "handoff-summary", "backlog-intent-parse",
-	"pr-description", "commit-message", "summarize", "acceptance-criteria",
-	"autonomous_fix", "autonomous_approval",
+func BackgroundFeatureKeys() []string {
+	defs := backgroundFeatureDefaults()
+	keys := make([]string, len(defs))
+	for i, d := range defs {
+		keys[i] = d.key
+	}
+	return keys
 }
 
 // BackgroundStageRoles lists the backlog stage roles that take a default pin.
-var BackgroundStageRoles = []string{"work", "review"}
+func BackgroundStageRoles() []string { return []string{"work", "review"} }
 
 // BackgroundEffortLevels lists the accepted --effort values.
-var BackgroundEffortLevels = []string{"low", "medium", "high", "xhigh", "max"}
+func BackgroundEffortLevels() []string {
+	return []string{"low", "medium", "high", "xhigh", "max"}
+}
 
 // BackgroundFeatureDefault exposes the built-in default for a feature key ("" if none).
 func BackgroundFeatureDefault(feature string) string { return backgroundFeatureModelDefault(feature) }

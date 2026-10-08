@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"connectrpc.com/connect"
@@ -26,15 +27,29 @@ func (s *SessionService) GetBackgroundModels(
 		Settings:        backgroundModelsToProto(config.LoadConfig().BackgroundModels),
 		FeatureDefaults: map[string]string{},
 		StageDefaults:   map[string]string{},
-		EffortLevels:    config.BackgroundEffortLevels,
+		EffortLevels:    config.BackgroundEffortLevels(),
 	}
-	for _, k := range config.BackgroundFeatureKeys {
+	for _, k := range config.BackgroundFeatureKeys() {
 		resp.FeatureDefaults[k] = config.BackgroundFeatureDefault(k)
 	}
-	for _, r := range config.BackgroundStageRoles {
+	for _, r := range config.BackgroundStageRoles() {
 		resp.StageDefaults[r] = config.BackgroundStageDefault(r)
 	}
 	return connect.NewResponse(resp), nil
+}
+
+// keepUnlisted copies entries of old whose key is not in listed into next.
+func keepUnlisted(next, old map[string]string, listed []string) map[string]string {
+	for k, v := range old {
+		if slices.Contains(listed, k) {
+			continue
+		}
+		if next == nil {
+			next = map[string]string{}
+		}
+		next[k] = v
+	}
+	return next
 }
 
 // cleanModelOverrides trims, drops blanks, and rejects unknown keys or unsafe names.
@@ -45,11 +60,7 @@ func cleanModelOverrides(kind string, in map[string]string, allowed []string) (m
 		if v == "" {
 			continue
 		}
-		known := false
-		for _, a := range allowed {
-			known = known || a == k
-		}
-		if !known {
+		if !slices.Contains(allowed, k) {
 			return nil, fmt.Errorf("unknown %s %q", kind, k)
 		}
 		if !config.ValidBackgroundModelName(v) {
@@ -74,11 +85,11 @@ func (s *SessionService) UpdateBackgroundModels(
 	if in == nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("settings is required"))
 	}
-	features, err := cleanModelOverrides("feature", in.GetFeatures(), config.BackgroundFeatureKeys)
+	features, err := cleanModelOverrides("feature", in.GetFeatures(), config.BackgroundFeatureKeys())
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
-	stages, err := cleanModelOverrides("stage", in.GetStages(), config.BackgroundStageRoles)
+	stages, err := cleanModelOverrides("stage", in.GetStages(), config.BackgroundStageRoles())
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -88,6 +99,9 @@ func (s *SessionService) UpdateBackgroundModels(
 	}
 
 	cfg := config.LoadConfig()
+	// Keep hand-set pins on keys the panel doesn't list so a save never wipes them.
+	features = keepUnlisted(features, cfg.BackgroundModels.Features, config.BackgroundFeatureKeys())
+	stages = keepUnlisted(stages, cfg.BackgroundModels.Stages, config.BackgroundStageRoles())
 	cfg.BackgroundModels = config.BackgroundModelsConfig{Features: features, Stages: stages, Effort: effort}
 	if err := config.SaveConfig(cfg); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("save background models: %w", err))

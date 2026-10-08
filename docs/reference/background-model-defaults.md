@@ -19,6 +19,8 @@ Precedence per call: explicit `CallOptions.Model` > `background_models.features[
 | `session-tagging` | haiku | Own setting: `tagging_classifier.model` |
 | `autonomous_approval` | sonnet | A wrong APPROVE is unsafe; Haiku is too weak for a security judgement |
 | `autonomous_fix` | sonnet | Code-writing; a bad fix costs a rework loop |
+| `review`, `triage`, `custom`, `rules-generation`, `instance-resume` | sonnet | Judgement-heavy or open-ended; pinned so the haiku pool default does not apply to them |
+| `unfinished-work-summary` | haiku | Short summarisation |
 
 The pool only launches `claude`, so these pins never reach agy/gemini/proxy-claude.
 A reused session keeps its model until it rotates (25 calls or errors).

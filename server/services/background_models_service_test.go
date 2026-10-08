@@ -55,4 +55,21 @@ func TestUpdateBackgroundModels_ValidatesAndPersists(t *testing.T) {
 	if err != nil || resp.Msg.FeatureDefaults["handoff-summary"] != "haiku" || resp.Msg.StageDefaults["work"] != "sonnet" {
 		t.Errorf("get = %v, %v", resp, err)
 	}
+
+	// Blank clears a listed pin; a hand-set pin on an unlisted key survives the save.
+	c := config.LoadConfig()
+	c.BackgroundModels.Features["hand-set"] = "sonnet"
+	if err := config.SaveConfig(c); err != nil {
+		t.Fatal(err)
+	}
+	if err := upd(&sessionv1.BackgroundModelsProto{Features: map[string]string{"handoff-summary": ""}}); err != nil {
+		t.Fatal(err)
+	}
+	c = config.LoadConfig()
+	if _, ok := c.BackgroundModels.Features["handoff-summary"]; ok {
+		t.Error("blank field should clear the pin")
+	}
+	if c.BackgroundModels.Features["hand-set"] != "sonnet" {
+		t.Errorf("unlisted pin dropped: %v", c.BackgroundModels.Features)
+	}
 }
