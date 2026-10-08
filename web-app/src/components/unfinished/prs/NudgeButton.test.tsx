@@ -5,7 +5,8 @@ import { NudgeOutcome } from "@/gen/session/v1/github_user_pb";
 import { LinkedSessionStatus, type UserPR } from "@/gen/session/v1/types_pb";
 import { MIN_TOUCH_TARGET_PX } from "@/lib/unfinished/prTouchTokens";
 import type { NudgeClient } from "@/lib/hooks/useNudgePR";
-import { NudgeButton, SLOW_SEND_MS } from "./NudgeButton";
+import { NOT_IDLE_HINT, NudgeButton, SLOW_SEND_MS } from "./NudgeButton";
+import { readStats, TAB_STATS_STORAGE_KEY } from "@/lib/unfinished/tabStats";
 import { failingPR, fakeNudgeClient, makePR, session } from "./prTestFixtures";
 
 jest.mock("./NudgeButton.css", () => new Proxy({}, { get: (_t, prop) => (typeof prop === "string" ? prop : "") }));
@@ -21,7 +22,7 @@ function ui(pr: UserPR, client?: NudgeClient) {
       pr={pr}
       client={client}
       nudgeable
-      sessions={pr.linkedSessions.map((s) => ({ sessionId: s.sessionId, status: s.status }))}
+      sessions={pr.linkedSessions.map((s) => ({ sessionId: s.sessionId, status: s.status, steerReady: s.steerReady }))}
     />
   );
 }
@@ -279,7 +280,7 @@ describe("NudgeButton", () => {
       <NudgeButton
         pr={failingPR()}
         nudgeable
-        sessions={[{ sessionId: "fix-ci", status: RUN }]}
+        sessions={[{ sessionId: "fix-ci", status: RUN, steerReady: true }]}
         client={fakeNudgeClient({ outcome: NudgeOutcome.NOTHING_TO_FIX })}
         onNothingToFix={onNothing}
       />
@@ -292,7 +293,53 @@ describe("NudgeButton", () => {
   });
 
   it("nudgeButton_should_NotRender_When_NotNudgeable", () => {
-    render(<NudgeButton pr={makePR()} nudgeable={false} sessions={[{ sessionId: "x", status: RUN }]} />);
+    render(<NudgeButton pr={makePR()} nudgeable={false} sessions={[{ sessionId: "x", status: RUN, steerReady: true }]} />);
     expect(screen.queryByTestId("pr-nudge-42")).toBeNull();
+  });
+
+  describe("when no linked session is confirmed idle", () => {
+    const notIdlePR = (...ids: string[]) =>
+      failingPR({ linkedSessions: ids.map((id, i) => session(id, RUN, 200 - i, false)) });
+
+    beforeEach(() => window.localStorage.removeItem(TAB_STATS_STORAGE_KEY));
+
+    it("nudgeButton_should_LeadWithOpenSessionAndDisableNudge_When_NoSessionSteerReady", async () => {
+      const client = fakeNudgeClient({ outcome: NudgeOutcome.DELIVERED });
+      mount(notIdlePR("fix-ci"), client);
+      expect(screen.getByTestId("pr-open-session-42")).toHaveAttribute("href", "/?session=fix-ci");
+      expect(button()).toHaveAttribute("aria-disabled", "true");
+      expect(button()).toHaveAttribute("aria-describedby");
+      expect(screen.getByText(NOT_IDLE_HINT)).toBeInTheDocument();
+      await click(button());
+      expect(client.calls).toHaveLength(0);
+    });
+
+    it("nudgeButton_should_CountOpenSessionClick_When_PrimaryLinkClicked", async () => {
+      mount(notIdlePR("fix-ci"));
+      expect(readStats().openSessionClicks).toBe(0);
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("pr-open-session-42"));
+      });
+      expect(readStats().openSessionClicks).toBe(1);
+    });
+
+    it("nudgeButton_should_OfferNudgeAsPrimaryAndSkipPrimaryOpenLink_When_AnySessionSteerReady", async () => {
+      const pr = failingPR({ linkedSessions: [session("busy", RUN, 300, false), session("idle", RUN, 100, true)] });
+      const client = fakeNudgeClient({ outcome: NudgeOutcome.DELIVERED });
+      mount(pr, client);
+      expect(screen.queryByTestId("pr-open-session-42")).toBeNull();
+      expect(button()).toHaveAccessibleName("Ask idle to fix CI on PR #42");
+      await click(button());
+      expect(client.calls.map((c) => c.sessionId)).toEqual(["idle"]);
+    });
+
+    it("nudgeButton_should_KeepSentState_When_PollThenReportsSessionNotIdle", async () => {
+      const client = fakeNudgeClient({ outcome: NudgeOutcome.DELIVERED });
+      const { rerender } = mount(failingPR(), client);
+      await click(button());
+      rerender(ui(notIdlePR("fix-ci"), client));
+      expect(button()).toHaveTextContent("Sent");
+      expect(screen.queryByTestId("pr-open-session-42")).toBeNull();
+    });
   });
 });

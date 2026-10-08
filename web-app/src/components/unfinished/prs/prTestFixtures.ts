@@ -32,10 +32,11 @@ export function makePR(over: MessageInitShape<typeof UserPRSchema> = {}): UserPR
   });
 }
 
-export const session = (id: string, status: LinkedSessionStatus, epoch: number) =>
+export const session = (id: string, status: LinkedSessionStatus, epoch: number, steerReady = true) =>
   create(LinkedSessionSchema, {
     sessionId: id,
     status,
+    steerReady,
     lastActiveAt: timestampFromDate(new Date(epoch * 1000)),
   });
 

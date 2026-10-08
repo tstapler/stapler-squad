@@ -104,7 +104,7 @@ function sessionStatusText(status: LinkedSessionStatus): string {
 const lastActive = (s: LinkedSession) => Number(s.lastActiveAt?.seconds ?? 0n);
 
 /** Server-linked sessions, most recently active first; falls back to bare `sessionIds`. */
-function linkedSessionsOf(pr: UserPR): Pick<LinkedSession, "sessionId" | "status" | "lastActiveAt">[] {
+function linkedSessionsOf(pr: UserPR): Pick<LinkedSession, "sessionId" | "status" | "lastActiveAt" | "steerReady">[] {
   if (pr.linkedSessions.length > 0) {
     return [...pr.linkedSessions].sort((x, y) => lastActive(y) - lastActive(x));
   }
@@ -112,6 +112,7 @@ function linkedSessionsOf(pr: UserPR): Pick<LinkedSession, "sessionId" | "status
     sessionId,
     status: LinkedSessionStatus.UNSPECIFIED,
     lastActiveAt: undefined,
+    steerReady: false,
   }));
 }
 

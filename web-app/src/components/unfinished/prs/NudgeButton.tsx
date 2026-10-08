@@ -6,18 +6,24 @@ import Link from "next/link";
 import { NudgeOutcome } from "@/gen/session/v1/github_user_pb";
 import { LinkedSessionStatus, type UserPR } from "@/gen/session/v1/types_pb";
 import { prAttention } from "@/lib/unfinished/prAttention";
+import { emitTabEvent } from "@/lib/unfinished/tabStats";
 import { useNudgePR, type NudgeClient, type NudgeState } from "@/lib/hooks/useNudgePR";
 import * as styles from "./NudgeButton.css";
 
 export const NUDGE_HINT =
   "Sends this session a message listing the failing checks, unresolved review threads and merge conflict for this PR, as links. Comment text is not included.";
 const PAUSED_TEXT = "Session paused. Open it to resume";
+const NOT_IDLE_TEXT = "Session isn't idle, so it can't take a request. Open it to continue.";
 const BUSY_FALLBACK_TEXT = "Session can't take a request right now. Open it to continue.";
+export const NOT_IDLE_HINT =
+  "None of this PR's sessions are confirmed idle, so a request could interrupt them. Open the session to continue.";
 export const SLOW_SEND_MS = 3_000;
 
 export interface NudgeSession {
   sessionId: string;
   status: LinkedSessionStatus;
+  /** Server-confirmed idle and able to take a request; false when unknown. */
+  steerReady: boolean;
 }
 
 interface NudgeButtonProps {
@@ -116,11 +122,16 @@ export function NudgeButton({ pr, sessions, nudgeable, client, onNothingToFix }:
     return () => clearTimeout(t);
   }, [pending]);
 
-  const isBlocked = (s: NudgeSession) => blockedIds.has(s.sessionId) || blockedReason(s.status) !== undefined;
-  const reasonFor = (s: NudgeSession) => blockedReason(s.status) ?? blockedIds.get(s.sessionId) ?? PAUSED_TEXT;
+  // A send in flight or finished keeps its session ready even if the next poll reports it busy.
+  const isReady = (s: NudgeSession) => s.steerReady || (state.status !== "idle" && state.sessionId === s.sessionId);
+  const isBlocked = (s: NudgeSession) =>
+    blockedIds.has(s.sessionId) || blockedReason(s.status) !== undefined || !isReady(s);
+  const reasonFor = (s: NudgeSession) =>
+    blockedReason(s.status) ?? blockedIds.get(s.sessionId) ?? (isReady(s) ? PAUSED_TEXT : NOT_IDLE_TEXT);
   const runnable = sessions.filter((s) => !isBlocked(s));
   const target = runnable.find((s) => s.sessionId === selected) ?? runnable[0];
   const label = target ?? sessions[0];
+  const openTarget = sessions.find((s) => s.sessionId === selected) ?? sessions[0];
   const showControls = nudgeable && sessions.length > 0 && !hiddenByNothingToFix;
 
   // The focused button is removed when the PR stops being nudgeable: keep focus in the card.
@@ -184,12 +195,14 @@ export function NudgeButton({ pr, sessions, nudgeable, client, onNothingToFix }:
       href={`/?session=${encodeURIComponent(id)}`}
       className={styles.openSessionLink}
       aria-label={`Open session ${id}`}
+      onClick={() => emitTabEvent({ type: "openSession" })}
     >
       Open session
     </Link>
   );
   const blockedList = sessions.filter(isBlocked);
   const allBlocked = showControls && runnable.length === 0;
+  const allNotIdle = allBlocked && sessions.every((s) => !isReady(s));
 
   return (
     <div className={styles.nudge}>
@@ -213,9 +226,20 @@ export function NudgeButton({ pr, sessions, nudgeable, client, onNothingToFix }:
                 </select>
               </label>
             )}
+            {allNotIdle && (
+              <Link
+                href={`/?session=${encodeURIComponent(openTarget.sessionId)}`}
+                className={styles.primaryOpenLink}
+                aria-label={`Open session ${openTarget.sessionId}`}
+                data-testid={`pr-open-session-${pr.number}`}
+                onClick={() => emitTabEvent({ type: "openSession" })}
+              >
+                Open session
+              </Link>
+            )}
             <button
               type="button"
-              className={styles.askButton}
+              className={allNotIdle ? styles.askButtonSecondary : styles.askButton}
               aria-label={accessibleName}
               aria-disabled={disabled || undefined}
               aria-busy={pending || undefined}
@@ -233,11 +257,12 @@ export function NudgeButton({ pr, sessions, nudgeable, client, onNothingToFix }:
             </button>
           </div>
           <p id={hintId} className={styles.hint}>
-            {NUDGE_HINT}
+            {allNotIdle ? NOT_IDLE_HINT : NUDGE_HINT}
           </p>
           {blockedList.map((s) => (
             <p key={s.sessionId} className={styles.hint} data-testid="nudge-blocked-reason">
-              {s.sessionId}: {reasonFor(s)} {allBlocked && blockedList.length === 1 && openSessionLink(s.sessionId)}
+              {s.sessionId}: {reasonFor(s)}{" "}
+              {allBlocked && !allNotIdle && blockedList.length === 1 && openSessionLink(s.sessionId)}
             </p>
           ))}
         </>

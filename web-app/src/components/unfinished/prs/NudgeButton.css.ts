@@ -56,6 +56,17 @@ export const askButton = style({
   },
 });
 
+export const askButtonSecondary = style([
+  askButton,
+  {
+    background: "transparent",
+    color: vars.color.textSecondary,
+    border: `1px solid ${vars.color.textSecondary}`,
+    fontWeight: 400,
+    opacity: 0.7,
+  },
+]);
+
 export const hint = style({
   margin: 0,
   fontSize: vars.fontSize.xs,
@@ -87,3 +98,8 @@ export const openSessionLink = style({
   color: vars.color.inputFocusBorder,
   fontWeight: 600,
 });
+
+export const primaryOpenLink = style([
+  askButton,
+  { display: "inline-flex", alignItems: "center", textDecoration: "none" },
+]);

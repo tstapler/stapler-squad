@@ -8,12 +8,15 @@ export interface TabStats {
   landed: Record<UpNextTab, number>;
   leftPrsWithin5s: number;
   firstPrCardMs: number | null;
+  /** "Open session" clicks from a PR card: a success signal alongside DELIVERED nudges. */
+  openSessionClicks: number;
 }
 
 export type TabEvent =
   | { type: "visit"; landedOn: UpNextTab }
   | { type: "click"; from: UpNextTab; to: UpNextTab; msSinceVisit: number; firstClickOfVisit: boolean }
-  | { type: "firstPrCard"; ms: number };
+  | { type: "firstPrCard"; ms: number }
+  | { type: "openSession" };
 
 export function emptyTabStats(): TabStats {
   return {
@@ -21,6 +24,7 @@ export function emptyTabStats(): TabStats {
     landed: { prs: 0, stuck: 0, worktrees: 0, queue: 0 },
     leftPrsWithin5s: 0,
     firstPrCardMs: null,
+    openSessionClicks: 0,
   };
 }
 
@@ -43,6 +47,8 @@ export function recordTabEvent(stats: TabStats, event: TabEvent): TabStats {
     }
     case "firstPrCard":
       return { ...stats, firstPrCardMs: event.ms };
+    case "openSession":
+      return { ...stats, openSessionClicks: stats.openSessionClicks + 1 };
   }
 }
 
@@ -56,6 +62,7 @@ export function readStats(): TabStats {
         landed: { ...base.landed, ...(parsed.landed ?? {}) },
         leftPrsWithin5s: Number(parsed.leftPrsWithin5s) || 0,
         firstPrCardMs: typeof parsed.firstPrCardMs === "number" ? parsed.firstPrCardMs : null,
+        openSessionClicks: Number(parsed.openSessionClicks) || 0,
       };
     }
   } catch {

@@ -20,6 +20,8 @@ describe("recordTabEvent", () => {
       { type: "click", from: "queue", to: "prs", msSinceVisit: 100, firstClickOfVisit: true },
       { type: "visit", landedOn: "prs" },
       { type: "click", from: "prs", to: "worktrees", msSinceVisit: 5001, firstClickOfVisit: true },
+      { type: "openSession" },
+      { type: "openSession" },
     ];
     const stats = events.reduce(recordTabEvent, emptyTabStats());
     expect(stats).toEqual({
@@ -27,6 +29,7 @@ describe("recordTabEvent", () => {
       landed: { prs: 2, stuck: 0, worktrees: 0, queue: 1 },
       leftPrsWithin5s: 1,
       firstPrCardMs: 1234,
+      openSessionClicks: 2,
     });
   });
 
