@@ -128,6 +128,7 @@ type itemSourceBackend interface {
 
 // BacklogService handles Backlog RPCs.
 type BacklogService struct {
+	liveConfigFn      func() *config.Config // test seam for liveConfig; nil = config.LoadConfig
 	storage           *session.Storage
 	sourceBackend     itemSourceBackend
 	sessionCreator    SessionCreator

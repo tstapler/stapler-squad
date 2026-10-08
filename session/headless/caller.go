@@ -177,6 +177,15 @@ func newPoolWithRunner(cfg PoolConfig, runner ClaudeRunner, claudeBin string) *P
 // IMPORTANT: the per-key mutex is held only long enough to read/write state —
 // it is NOT held during subprocess execution to avoid deadlocks.
 func (p *Pool) acquireSession(key FeatureKey, systemPrompt, model string) (isFirstCall bool, args []string) {
+	// Resolved before taking p.mu: ModelForFeature may read config from disk.
+	effectiveModel := model
+	if effectiveModel == "" && p.cfg.ModelForFeature != nil {
+		effectiveModel = p.cfg.ModelForFeature(key)
+	}
+	if effectiveModel == "" {
+		effectiveModel = p.cfg.DefaultModel
+	}
+
 	p.mu.Lock()
 	keyMu := p.acquireKeyMu(key)
 	if _, ok := p.sessions[key]; !ok {
@@ -191,7 +200,8 @@ func (p *Pool) acquireSession(key FeatureKey, systemPrompt, model string) (isFir
 	state := p.sessions[key]
 
 	// Determine if we need a fresh session (first call or rotation due to errors/max calls).
-	needsRotation := state.sessionID == "" ||
+	// A resumed session keeps its original model, so a live model change forces a fresh one.
+	needsRotation := state.sessionID == "" || state.model != effectiveModel ||
 		state.callCount >= p.cfg.MaxCallsPerSession ||
 		state.consecutiveErrors >= maxConsecutiveErrors
 
@@ -202,15 +212,10 @@ func (p *Pool) acquireSession(key FeatureKey, systemPrompt, model string) (isFir
 		state.consecutiveErrors = 0
 	}
 
+	state.model = effectiveModel
 	sessionID := state.sessionID
 	state.callCount++
 	p.mu.Unlock()
-
-	// Effective model: per-call override > pool default.
-	effectiveModel := model
-	if effectiveModel == "" {
-		effectiveModel = p.cfg.DefaultModel
-	}
 
 	if sessionID == "" {
 		// First call: stream-json output (one JSON object per line — system init,
@@ -227,6 +232,11 @@ func (p *Pool) acquireSession(key FeatureKey, systemPrompt, model string) (isFir
 		args = []string{"-p", "--output-format", "stream-json", "--verbose", "--system-prompt", systemPrompt, "--exclude-dynamic-system-prompt-sections"}
 		if effectiveModel != "" {
 			args = append(args, "--model", effectiveModel)
+		}
+		if p.cfg.Effort != nil {
+			if effort := p.cfg.Effort(); effort != "" {
+				args = append(args, "--effort", effort)
+			}
 		}
 	} else {
 		// Resumed call: plain output (line-at-a-time streaming).

@@ -119,6 +119,11 @@ function SettingsPageInner() {
                 Tag Classification (AI tagging model) →
               </Link>
             </section>
+            <section className={styles.section}>
+              <Link href={routes.settingsModelPolicy} className={styles.helpLink} data-testid="settings-model-policy-link">
+                Model Policy (background model and effort) →
+              </Link>
+            </section>
             {/* Help subsection */}
             <section className={styles.section}>
               <div className={styles.helpSection}>

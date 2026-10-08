@@ -120,3 +120,12 @@ func triageResultInputHash(item *session.BacklogItemData, result *session.Headle
 	}
 	return triageInputHash(item.Title, item.Description, criteria)
 }
+
+// liveConfig reads the persisted config fresh so model-policy edits apply without a restart
+// (same approach as the feature-flag reads); liveConfigFn lets tests pin one.
+func (s *BacklogService) liveConfig() *config.Config {
+	if s.liveConfigFn != nil {
+		return s.liveConfigFn()
+	}
+	return config.LoadConfig()
+}

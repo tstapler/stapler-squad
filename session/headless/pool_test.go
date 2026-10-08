@@ -1122,3 +1122,38 @@ func TestPool_CallBlocking_ReportsConversationIDViaOnConversationID(t *testing.T
 	require.NoError(t, err)
 	assert.Equal(t, "conv-42", got)
 }
+
+func TestPool_ModelForFeature_OverridesDefault_AndPerCallWins(t *testing.T) {
+	t.Parallel()
+	runner := NewFakeRunner(firstCallJSON("s1", "ok"), firstCallJSON("s2", "ok"))
+	pool := newTestPool(PoolConfig{
+		DefaultModel:    "default-m",
+		ModelForFeature: func(k FeatureKey) string { return map[FeatureKey]string{"f1": "feature-m"}[k] },
+		Effort:          func() string { return "medium" },
+	}, runner)
+
+	_, err := pool.CallBlocking(context.Background(), "f1", "sys", "p", CallOptions{}, DiscardCost)
+	require.NoError(t, err)
+	assert.True(t, runner.ArgsContainSequence(0, "--model", "feature-m"), "got %v", runner.ArgsForCall(0))
+	assert.True(t, runner.ArgsContainSequence(0, "--effort", "medium"), "got %v", runner.ArgsForCall(0))
+
+	_, err = pool.CallBlocking(context.Background(), "f2", "sys", "p", CallOptions{}, DiscardCost)
+	require.NoError(t, err)
+	assert.True(t, runner.ArgsContainSequence(1, "--model", "default-m"), "unmapped feature uses pool default")
+}
+
+func TestPool_LiveModelChange_RotatesSession(t *testing.T) {
+	t.Parallel()
+	runner := NewFakeRunner(firstCallJSON("s1", "ok"), firstCallJSON("s2", "ok"))
+	model := "m1"
+	pool := newTestPool(PoolConfig{ModelForFeature: func(FeatureKey) string { return model }}, runner)
+
+	_, err := pool.CallBlocking(context.Background(), "f1", "sys", "p", CallOptions{}, DiscardCost)
+	require.NoError(t, err)
+	model = "m2"
+	_, err = pool.CallBlocking(context.Background(), "f1", "sys", "p", CallOptions{}, DiscardCost)
+	require.NoError(t, err)
+
+	assert.NotContains(t, runner.ArgsForCall(1), "--resume", "a model change must start a fresh session")
+	assert.True(t, runner.ArgsContainSequence(1, "--model", "m2"))
+}

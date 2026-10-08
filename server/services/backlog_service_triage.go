@@ -19,6 +19,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
@@ -1054,6 +1055,17 @@ func (s *BacklogService) spawnSessionAfterGates(
 				log.Warn("[SpawnSessionFromItem] failed to resolve work model family alias, using empty model", "item", item.ID, "model", workExecModel, "err", modelErr)
 				workResolvedModel = ""
 			}
+		}
+	}
+
+	// No pipeline-pinned executor: apply the background model policy to the default program.
+	// The hash above stays computed from the pipeline's raw values so drift detection is unaffected.
+	if programOverride == "" && workExecProgram == "" && workExecModel == "" {
+		cfg := s.liveConfig()
+		base := config.ResolveDefaults(cfg, item.RepoPath, "").Program
+		if p := session.ApplyModelPolicyToProgram(cfg, s.modelFamilies, config.ModelPolicyWork, base); p != "" {
+			programOverride = p
+			workResolvedModel = session.ResolveFeatureModel(cfg, s.modelFamilies, config.ModelPolicyWork, "claude")
 		}
 	}
 
@@ -3000,6 +3012,10 @@ Do not modify the code. Only write the review verdict.
 		if reviewModelErr != nil {
 			log.Warn("[PipelineEngine] failed to resolve review model family alias, using empty model", "item", item.ID, "model", reviewExecModel, "err", reviewModelErr)
 			reviewResolvedModel = ""
+		}
+		if reviewExecModel == "" {
+			// Pipeline pinned nothing: apply the review policy (claude callers only).
+			reviewResolvedModel = session.ResolveFeatureModel(s.liveConfig(), s.modelFamilies, config.ModelPolicyReview, reviewExecProgram)
 		}
 		callOpts.Model = reviewResolvedModel
 		// callStart is recorded immediately before the headless call sequence

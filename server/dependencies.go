@@ -754,10 +754,10 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// the claude binary is not found.
 	var headlessPool *headless.Pool
 	{
-		p, poolErr := headless.NewPool(headless.PoolConfig{
+		p, poolErr := headless.NewPool(headlessPoolModelConfig(headless.PoolConfig{
 			MaxCallsPerSession:    25,
 			MaxConcurrentSessions: 5,
-		})
+		}))
 		if poolErr != nil {
 			log.Warn("headless pool disabled: claude binary not found", "err", poolErr)
 		} else {

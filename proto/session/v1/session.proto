@@ -197,6 +197,12 @@ service SessionService {
   // classification. Takes effect on the next classification with no restart.
   rpc UpdateTaggingClassifierConfig(UpdateTaggingClassifierConfigRequest) returns (UpdateTaggingClassifierConfigResponse) {}
 
+  // GetModelPolicy returns the effective per-feature model/effort settings for background LLM work.
+  rpc GetModelPolicy(GetModelPolicyRequest) returns (GetModelPolicyResponse) {}
+
+  // UpdateModelPolicy sets per-feature model/effort overrides; empty values reset to the default.
+  rpc UpdateModelPolicy(UpdateModelPolicyRequest) returns (UpdateModelPolicyResponse) {}
+
   // GetApprovalAnalytics returns aggregated analytics for classification decisions.
   rpc GetApprovalAnalytics(GetApprovalAnalyticsRequest) returns (GetApprovalAnalyticsResponse) {}
 
@@ -1894,6 +1900,31 @@ message UpdateTaggingClassifierConfigRequest {
 
 message UpdateTaggingClassifierConfigResponse {
   TaggingClassifierConfigProto config = 1;
+}
+
+// ModelPolicyProto maps policy keys (work, review, completion_narrative, handoff_summary,
+// intent_parse, pr_description, background_effort) to "family:<alias>", a concrete model ID,
+// an effort level, or "none" (account default / no effort flag).
+message ModelPolicyProto {
+  map<string, string> values = 1;
+}
+
+message GetModelPolicyRequest {}
+
+message GetModelPolicyResponse {
+  // Effective values (overrides merged over defaults).
+  ModelPolicyProto effective = 1;
+  // Built-in defaults, for the UI's reset/placeholder text.
+  ModelPolicyProto defaults = 2;
+}
+
+message UpdateModelPolicyRequest {
+  // Only the given keys change; an empty value resets that key to its default.
+  ModelPolicyProto policy = 1;
+}
+
+message UpdateModelPolicyResponse {
+  ModelPolicyProto effective = 1;
 }
 
 message GetApprovalAnalyticsRequest {

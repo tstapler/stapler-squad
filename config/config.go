@@ -396,6 +396,9 @@ type Config struct {
 	// TaggingClassifier holds the LLM model hierarchy for session-tag
 	// classification (primary model plus ordered fallbacks).
 	TaggingClassifier TaggingClassifierConfig `json:"tagging_classifier,omitempty"`
+	// ModelPolicy overrides the per-feature model/effort for background LLM work, keyed by
+	// the ModelPolicy* constants (see model_policy.go). Absent keys use the built-in default.
+	ModelPolicy map[string]string `json:"model_policy,omitempty"`
 
 	// Escape analytics configuration
 
