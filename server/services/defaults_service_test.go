@@ -230,17 +230,30 @@ func TestGetSessionDefaults_ServesRuntimeAutonomousMaxTurnsDefault(t *testing.T)
 }
 
 func TestUpdateGlobalDefaults_AutonomousMaxTurns(t *testing.T) {
-	t.Run("ZeroResetsToDefault", func(t *testing.T) {
-		svc := newIsolatedDefaultsService(t)
-		resp, err := svc.UpdateGlobalDefaults(context.Background(), connect.NewRequest(&sessionv1.UpdateGlobalDefaultsRequest{}))
+	update := func(t *testing.T, svc *DefaultsService, turns int32) int32 {
+		t.Helper()
+		_, err := svc.UpdateGlobalDefaults(context.Background(), connect.NewRequest(&sessionv1.UpdateGlobalDefaultsRequest{AutonomousMaxTurns: turns}))
 		require.NoError(t, err)
-		assert.Equal(t, int32((*config.Config)(nil).AutonomousMaxTurnsOrDefault()), resp.Msg.Defaults.AutonomousMaxTurns)
+		// Re-read via the getter so persistence, not just the response echo, is asserted.
+		got, err := svc.GetSessionDefaults(context.Background(), connect.NewRequest(&sessionv1.GetSessionDefaultsRequest{}))
+		require.NoError(t, err)
+		return got.Msg.Defaults.AutonomousMaxTurns
+	}
+	def := int32((*config.Config)(nil).AutonomousMaxTurnsOrDefault())
+
+	t.Run("ExplicitValuePersists", func(t *testing.T) {
+		assert.Equal(t, int32(50), update(t, newIsolatedDefaultsService(t), 50))
 	})
-	t.Run("ExplicitValueRoundTrips", func(t *testing.T) {
+	t.Run("ZeroResetsPreviouslySetValue", func(t *testing.T) {
 		svc := newIsolatedDefaultsService(t)
-		resp, err := svc.UpdateGlobalDefaults(context.Background(), connect.NewRequest(&sessionv1.UpdateGlobalDefaultsRequest{AutonomousMaxTurns: 50}))
-		require.NoError(t, err)
-		assert.Equal(t, int32(50), resp.Msg.Defaults.AutonomousMaxTurns)
+		require.Equal(t, int32(50), update(t, svc, 50))
+		assert.Equal(t, def, update(t, svc, 0))
+	})
+	t.Run("AboveCeilingClampsTo200", func(t *testing.T) {
+		assert.Equal(t, int32(200), update(t, newIsolatedDefaultsService(t), 500))
+	})
+	t.Run("NegativeFallsBackToDefault", func(t *testing.T) {
+		assert.Equal(t, def, update(t, newIsolatedDefaultsService(t), -5))
 	})
 }
 

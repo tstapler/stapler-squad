@@ -77,6 +77,24 @@ describe("GlobalDefaultsForm", () => {
     expect(await screen.findByLabelText("Max Autonomous Session Turns")).toHaveValue(45);
   });
 
+  it("lets the turn cap be cleared and retyped, clamping to [1, 200] on blur and save", async () => {
+    render(<GlobalDefaultsForm />);
+    const input = await screen.findByLabelText("Max Autonomous Session Turns");
+
+    fireEvent.change(input, { target: { value: "" } });
+    expect(input).toHaveValue(null);
+    fireEvent.change(input, { target: { value: "450" } });
+    fireEvent.blur(input);
+    expect(input).toHaveValue(200);
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(mockUpdateGlobalDefaults).toHaveBeenCalledWith(
+        expect.objectContaining({ autonomousMaxTurns: 200 })
+      );
+    });
+  });
+
   it("submits the loaded maxConcurrentBacklogWorkItems value unchanged", async () => {
     render(<GlobalDefaultsForm />);
     await screen.findByLabelText("Max Concurrent Backlog Work Items");
