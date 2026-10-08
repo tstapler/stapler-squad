@@ -197,6 +197,14 @@ service SessionService {
   // classification. Takes effect on the next classification with no restart.
   rpc UpdateTaggingClassifierConfig(UpdateTaggingClassifierConfigRequest) returns (UpdateTaggingClassifierConfigResponse) {}
 
+  // GetBackgroundModels returns the model/effort pins for unattended LLM work (overrides
+  // plus built-in defaults).
+  rpc GetBackgroundModels(GetBackgroundModelsRequest) returns (GetBackgroundModelsResponse) {}
+
+  // UpdateBackgroundModels replaces the model/effort overrides. Applies on the next call
+  // with no restart.
+  rpc UpdateBackgroundModels(UpdateBackgroundModelsRequest) returns (UpdateBackgroundModelsResponse) {}
+
   // GetApprovalAnalytics returns aggregated analytics for classification decisions.
   rpc GetApprovalAnalytics(GetApprovalAnalyticsRequest) returns (GetApprovalAnalyticsResponse) {}
 
@@ -1894,6 +1902,34 @@ message UpdateTaggingClassifierConfigRequest {
 
 message UpdateTaggingClassifierConfigResponse {
   TaggingClassifierConfigProto config = 1;
+}
+
+message BackgroundModelsProto {
+  // Headless feature key -> model alias/ID override.
+  map<string, string> features = 1;
+  // Backlog stage role ("work", "review") -> model alias/ID override.
+  map<string, string> stages = 2;
+  // --effort level for background work sessions; empty = server default ("medium"); "off" = no --effort flag.
+  string effort = 3;
+}
+
+message GetBackgroundModelsRequest {}
+
+message GetBackgroundModelsResponse {
+  BackgroundModelsProto settings = 1;
+  // Built-in defaults, keyed like settings; a blank override resolves to these.
+  map<string, string> feature_defaults = 2;
+  map<string, string> stage_defaults = 3;
+  // Accepted --effort values.
+  repeated string effort_levels = 4;
+}
+
+message UpdateBackgroundModelsRequest {
+  BackgroundModelsProto settings = 1;
+}
+
+message UpdateBackgroundModelsResponse {
+  BackgroundModelsProto settings = 1;
 }
 
 message GetApprovalAnalyticsRequest {

@@ -3801,9 +3801,9 @@ func TestSpawnSessionFromItem_should_SetInstanceProgramViaInstanceOptions_When_W
 	require.Equal(t, 1, creator.callCount(),
 		"the override must reach instance creation via this single spawn call, never a follow-up SwitchProgram/Restart call")
 	call := creator.calls[0]
-	assert.Equal(t, "claude --model claude-sonnet-4-6", call.programOverride,
+	assert.Equal(t, "claude --model claude-sonnet-4-6 --effort medium", call.programOverride,
 		"family:sonnet must resolve to the concrete model ID via ResolveExecutorProgram, threaded as the programOverride argument")
-	assert.Equal(t, "claude --model claude-sonnet-4-6", call.inst.Program,
+	assert.Equal(t, "claude --model claude-sonnet-4-6 --effort medium", call.inst.Program,
 		"the spawned Instance must actually run on the resolved program, proving InstanceOptions.Program (not a post-hoc call) carried it")
 	assert.Contains(t, call.prompt, "kickoff: work-stage override item",
 		"the item's kickoff prompt must still be delivered in the same call that carries the program override — not dropped or raced")

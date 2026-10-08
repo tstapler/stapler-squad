@@ -335,6 +335,8 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// Tagging-classifier RPCs (tagging_classifier_service.go).
 	"GetTaggingClassifierConfig":    "tagging-classifier:get-config",
 	"UpdateTaggingClassifierConfig": "tagging-classifier:update-config",
+	"GetBackgroundModels":           "background-models:get",
+	"UpdateBackgroundModels":        "background-models:update",
 	"ReclassifySessionTags":         "tagging-classifier:reclassify-session",
 	"ListTaggingRules":              "tagging-rule:list",
 	"UpsertTaggingRule":             "tagging-rule:upsert",
