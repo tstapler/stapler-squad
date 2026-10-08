@@ -296,12 +296,13 @@ export const mobileOverflowRow = style({
     ":root[data-left-handed] &": {
       flexDirection: "row",
     },
-    // Scroll instead of shrinking: shrunk buttons wrap their labels and drop below the 44px target.
-    "& > button": {
-      flexShrink: 0,
-      whiteSpace: "nowrap",
-    },
   },
+});
+
+// Scroll instead of shrinking: shrunk buttons wrap their labels and drop below the 44px target.
+globalStyle(`${mobileOverflowRow} > button`, {
+  flexShrink: 0,
+  whiteSpace: "nowrap",
 });
 
 // Always visible — keyboard toggle and mouse mode toggle are useful on all screen sizes.
