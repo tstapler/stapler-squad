@@ -5,7 +5,7 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -429,12 +429,13 @@ describe("TerminalOutput — mobile overflow row upload buttons", () => {
 
     fireEvent.click(screen.getByTestId("toolbar-more-button"));
 
-    const row = screen.getByTestId("toolbar-overflow-row");
-    expect(row).toContainElement(screen.getAllByLabelText("Attach images from gallery")[1]);
-    expect(row).toContainElement(screen.getAllByLabelText("Attach files")[1]);
+    const row = within(screen.getByTestId("toolbar-overflow-row"));
+    expect(row.getByLabelText("Attach images from gallery")).toBeInTheDocument();
+    expect(row.getByLabelText("Attach files")).toBeInTheDocument();
+    expect(row.getByLabelText("Take photo with camera")).toBeInTheDocument();
   });
 
-  it("keeps the Redraw accessible name when its text label is CSS-hidden on phones", () => {
+  it("keeps aria-label and title on the Redraw button", () => {
     renderTerminal();
     expect(screen.getByLabelText("Redraw terminal (fixes a blank screen)")).toHaveAttribute(
       "title",

@@ -135,7 +135,7 @@ export const toolbarButton = style({
       minWidth: "var(--min-touch-target, 44px)",
     },
     "screen and (max-width: 480px)": {
-      padding: "0.4rem 0.4rem",
+      padding: "0.4rem",
     },
   },
 });
@@ -295,6 +295,11 @@ export const mobileOverflowRow = style({
   selectors: {
     ":root[data-left-handed] &": {
       flexDirection: "row",
+    },
+    // Scroll instead of shrinking: shrunk buttons wrap their labels and drop below the 44px target.
+    "& > button": {
+      flexShrink: 0,
+      whiteSpace: "nowrap",
     },
   },
 });
