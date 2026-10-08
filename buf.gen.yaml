@@ -12,7 +12,7 @@ plugins:
       - paths=source_relative
 
   # Go ConnectRPC generation
-  - remote: buf.build/connectrpc/go
+  - remote: buf.build/connectrpc/go:v1.20.0
     out: gen/proto/go
     opt:
       - paths=source_relative
