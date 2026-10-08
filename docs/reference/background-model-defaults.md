@@ -46,7 +46,7 @@ hash still covers only the raw pipeline-mode pair, so pinning does not flag drif
 `claude --help` (2.1.290) lists `--effort <level>` with `low, medium, high, xhigh, max`.
 `background_models.effort` is appended to work-session programs as `--effort <level>`,
 only on a `claude --model ...` program and only for those five values; agy, gemini and
-proxy-claude are unchanged. Unset by default. Not applied to headless calls: the pool
+proxy-claude are unchanged. Defaults to `medium` when unset or invalid (`config.DefaultBackgroundEffort`); set `"off"` to leave the CLI default. Not applied to headless calls: the pool
 launches `claude -p`, and effort there is left to the CLI default.
 
 ## Setting values

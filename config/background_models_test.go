@@ -49,10 +49,10 @@ func TestBackgroundStageModel_AliasesAndOverride(t *testing.T) {
 func TestBackgroundEffort_ValidatesLevels(t *testing.T) {
 	t.Parallel()
 	c := &Config{}
-	if c.BackgroundEffort() != "" {
-		t.Error("unset effort must be empty")
+	if c.BackgroundEffort() != "medium" {
+		t.Error("unset effort must default to medium")
 	}
-	for in, want := range map[string]string{"High": "high", "xhigh": "xhigh", "bogus; rm": "", "": ""} {
+	for in, want := range map[string]string{"High": "high", "xhigh": "xhigh", "bogus; rm": "medium", "": "medium", "off": ""} {
 		c.BackgroundModels.Effort = in
 		if got := c.BackgroundEffort(); got != want {
 			t.Errorf("%q: got %q want %q", in, got, want)

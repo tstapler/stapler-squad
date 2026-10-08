@@ -158,7 +158,8 @@ export function BackgroundModelsSettings() {
             value={effort}
             onChange={(e) => setEffort(e.target.value)}
           >
-            <option value="">unset (CLI default)</option>
+            <option value="">default (medium)</option>
+            <option value="off">off (CLI default)</option>
             {effortLevels.map((l) => (
               <option key={l} value={l}>
                 {l}

@@ -40,7 +40,7 @@ type BackgroundModelsConfig struct {
 	// Stages maps a backlog stage role ("work" or "review"; triage uses headless_triage_model) to a model alias
 	// ("sonnet") or ID, used when the item's pipeline mode does not pin one.
 	Stages map[string]string `json:"stages,omitempty"`
-	// Effort is the --effort level for background work sessions; empty = unset.
+	// Effort is the --effort level for background work sessions; empty = DefaultBackgroundEffort, "off" = none.
 	Effort string `json:"effort,omitempty"`
 }
 
@@ -115,21 +115,31 @@ func (c *Config) BackgroundStageModel(role string) string {
 	return m
 }
 
-// BackgroundEffort returns the configured effort level, or "" when unset or not a
-// level the claude CLI accepts (never forward an unvalidated value to argv).
+// DefaultBackgroundEffort is applied to claude work sessions when no effort is configured:
+// thinking tokens bill as output, so unattended work should not run at the CLI default.
+const DefaultBackgroundEffort = "medium"
+
+// BackgroundEffortOff is the configured value that opts out of the effort pin.
+const BackgroundEffortOff = "off"
+
+// BackgroundEffort returns the --effort level for background work sessions: the configured
+// level, DefaultBackgroundEffort when unset or invalid (warned), or "" for "off". Never
+// forwards an unvalidated value to argv.
 func (c *Config) BackgroundEffort() string {
-	if c == nil {
-		return ""
+	e := ""
+	if c != nil {
+		e = strings.ToLower(strings.TrimSpace(c.BackgroundModels.Effort))
 	}
-	e := strings.ToLower(strings.TrimSpace(c.BackgroundModels.Effort))
-	if e == "" {
+	switch {
+	case e == "":
+		return DefaultBackgroundEffort
+	case e == BackgroundEffortOff:
 		return ""
+	case isValidEffortLevel(e):
+		return e
 	}
-	if !isValidEffortLevel(e) {
-		log.Warn("ignoring invalid background effort level; leaving unset", "value", e)
-		return ""
-	}
-	return e
+	log.Warn("ignoring invalid background effort level; using default", "value", e, "default", DefaultBackgroundEffort)
+	return DefaultBackgroundEffort
 }
 
 // BackgroundFeatureKeys lists the headless feature keys with a built-in default.
@@ -162,4 +172,4 @@ func ValidBackgroundModelName(m string) bool {
 }
 
 // ValidBackgroundEffort reports whether e is an accepted effort level.
-func ValidBackgroundEffort(e string) bool { return isValidEffortLevel(e) }
+func ValidBackgroundEffort(e string) bool { return isValidEffortLevel(e) || e == BackgroundEffortOff }
