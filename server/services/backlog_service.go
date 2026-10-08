@@ -105,6 +105,8 @@ type SessionSteerer interface {
 	// *SessionService.IsReadyForSteer's doc comment for why "unknown" must
 	// never default to true here).
 	IsReadyForSteer(sessionUUID string) bool
+	// SteerActiveSession writes message to the session unguarded (verdict steering).
+	SteerActiveSession(ctx context.Context, sessionUUID, message string) error
 	// SteerSessionGuarded delivers message under the per-session nudge guard
 	// shared with the manual PR nudge: sig is the reason signature used for
 	// the duplicate window, and a guard-caused outcome (SteerGuardBusy,

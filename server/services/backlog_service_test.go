@@ -369,6 +369,10 @@ func (m *mockSessionSteerer) recordSteer(_ context.Context, uuid, message string
 // SteerSessionGuarded implements SessionSteerer. Without a guardedOutcome
 // override it behaves like the unguarded path, so tests written against
 // the unguarded recording path keep their meaning.
+func (m *mockSessionSteerer) SteerActiveSession(ctx context.Context, uuid, message string) error {
+	return m.recordSteer(ctx, uuid, message)
+}
+
 func (m *mockSessionSteerer) SteerSessionGuarded(ctx context.Context, uuid, sig, message string) (SteerOutcome, error) {
 	m.mu.Lock()
 	m.guardedSigs = append(m.guardedSigs, sig)
