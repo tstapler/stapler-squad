@@ -197,7 +197,7 @@ export function PRCard({ pr, showHostAccount = false, nudgeClient, onNothingToFi
       {sessions.length > 0 && (
         <ul className={styles.sessionList} aria-label="Linked sessions">
           {sessions.map((s, i) => (
-            <li key={s.sessionId} className={styles.sessionRow}>
+            <li key={`${i}-${s.sessionId}`} className={styles.sessionRow}>
               <span className={styles.sessionName}>{s.sessionId}</span>
               <span className={styles.sessionStatus}>
                 ({sessionStatusText(s.status)}

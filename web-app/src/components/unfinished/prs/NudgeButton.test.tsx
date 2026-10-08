@@ -275,6 +275,18 @@ describe("NudgeButton", () => {
     expect(button()).toHaveAttribute("aria-disabled", "true");
   });
 
+  it("nudgeButton_should_UnblockSession_When_ItsStatusChangesAfterAPausedOutcome", async () => {
+    const client = fakeNudgeClient({ outcome: NudgeOutcome.PAUSED });
+    const { rerender } = mount(twoSessions(), client);
+    await click(button());
+    rerender(ui(twoSessions(), client)); // same status and readiness: still blocked
+    expect(button()).toHaveAccessibleName("Ask b to fix CI on PR #42");
+
+    rerender(ui(failingPR({ linkedSessions: [session("a", PAUSE, 200), session("b", RUN, 100)] }), client));
+    rerender(ui(twoSessions(), client)); // the user resumed a
+    expect(button()).toHaveAccessibleName("Ask a to fix CI on PR #42");
+  });
+
   it("nudgeButton_should_RenderNoControlsAndCallRefresh_When_NothingToFix", async () => {
     const onNothing = jest.fn();
     render(

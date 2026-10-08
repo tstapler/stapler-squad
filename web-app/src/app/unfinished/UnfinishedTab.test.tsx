@@ -186,7 +186,8 @@ describe("UnfinishedTab", () => {
     expect(screen.getByTestId("stuck-items-section")).toBeInTheDocument();
 
     fireEvent.click(within(notice).getByRole("button", { name: "Show all stuck items" }));
-    expect(mockReplace).toHaveBeenCalledWith("?tab=stuck", { scroll: false });
+    expect(mockHistoryReplace).toHaveBeenCalledWith(null, "", "?tab=stuck");
+    expect(mockReplace).not.toHaveBeenCalled();
 
     mockUseSearchParams.mockReturnValue(new URLSearchParams({ tab: "stuck" }));
     rerender(<UnfinishedTab />);

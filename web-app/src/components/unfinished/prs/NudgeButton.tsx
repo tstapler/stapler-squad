@@ -37,6 +37,16 @@ interface NudgeButtonProps {
   onNothingToFix?: () => void;
 }
 
+interface BlockedEntry {
+  reason: string;
+  /** `sessionSignature` of the session when it was blocked. */
+  sig: string;
+}
+
+function sessionSignature(s: NudgeSession): string {
+  return `${s.status}|${s.steerReady}`;
+}
+
 interface Message {
   text: string;
   role: "status" | "alert";
@@ -101,8 +111,27 @@ function fixNoun(pr: UserPR): string {
 export function NudgeButton({ pr, sessions, nudgeable, client, onNothingToFix }: NudgeButtonProps) {
   const { state, nudge, dismiss } = useNudgePR({ client });
   const [selected, setSelected] = useState<string | undefined>();
-  const [blockedIds, setBlockedIds] = useState<ReadonlyMap<string, string>>(new Map());
-  const block = (id: string, reason: string) => setBlockedIds((prev) => new Map(prev).set(id, reason));
+  const [blockedIds, setBlockedIds] = useState<ReadonlyMap<string, BlockedEntry>>(new Map());
+  const block = (id: string, reason: string) => {
+    const s = sessions.find((x) => x.sessionId === id);
+    setBlockedIds((prev) => new Map(prev).set(id, { reason, sig: s ? sessionSignature(s) : "" }));
+  };
+  // A block reflects the state the session was in when the server refused; once its status or
+  // readiness changes (e.g. the user resumed it) the refusal is stale, so let the poll decide again.
+  useEffect(() => {
+    setBlockedIds((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const [id, entry] of prev) {
+        const s = sessions.find((x) => x.sessionId === id);
+        if (!s || sessionSignature(s) !== entry.sig) {
+          next.delete(id);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [sessions]);
   const [slow, setSlow] = useState(false);
   const [hiddenByNothingToFix, setHiddenByNothingToFix] = useState(false);
   const [landingNote, setLandingNote] = useState(false);
@@ -130,7 +159,7 @@ export function NudgeButton({ pr, sessions, nudgeable, client, onNothingToFix }:
   const isBlocked = (s: NudgeSession) =>
     blockedIds.has(s.sessionId) || blockedReason(s.status) !== undefined || !isReady(s);
   const reasonFor = (s: NudgeSession) =>
-    blockedReason(s.status) ?? blockedIds.get(s.sessionId) ?? (isReady(s) ? PAUSED_TEXT : NOT_IDLE_TEXT);
+    blockedReason(s.status) ?? blockedIds.get(s.sessionId)?.reason ?? (isReady(s) ? PAUSED_TEXT : NOT_IDLE_TEXT);
   const runnable = sessions.filter((s) => !isBlocked(s));
   const target = runnable.find((s) => s.sessionId === selected) ?? runnable[0];
   const label = target ?? sessions[0];
