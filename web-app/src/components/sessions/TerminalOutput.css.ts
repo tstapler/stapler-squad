@@ -281,14 +281,11 @@ export const mobileOverflowRow = style({
     "screen and (max-width: 768px)": {
       display: "flex",
       flexDirection: "row-reverse",
+      flexWrap: "wrap",
       gap: "0.25rem",
       padding: "0.3rem 0.75rem 0.4rem",
       background: vars.color.cardBackground,
       borderBottom: `1px solid ${vars.color.borderColor}`,
-      overflowX: "auto",
-      WebkitOverflowScrolling: "touch" as "auto",
-      scrollbarWidth: "none",
-      msOverflowStyle: "none",
       flexShrink: 0,
     },
   },
@@ -299,7 +296,7 @@ export const mobileOverflowRow = style({
   },
 });
 
-// Scroll instead of shrinking: shrunk buttons wrap their labels and drop below the 44px target.
+// Keep each button at natural width: shrunk buttons wrap their labels and drop below the 44px target.
 globalStyle(`${mobileOverflowRow} > button`, {
   flexShrink: 0,
   whiteSpace: "nowrap",
