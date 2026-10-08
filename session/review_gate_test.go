@@ -454,12 +454,8 @@ func newNonEmptyDiffGitRepo(t *testing.T) string {
 	t.Helper()
 	repoDir := t.TempDir()
 	initConfiguredRepo(t, repoDir, "main")
-	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("base\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "README.md")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial")
-	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "change.txt"), []byte("change\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "change.txt")
-	runGitOrFail(t, repoDir, "commit", "-m", "add change")
+	commitFile(t, repoDir, "README.md", "base\n", "initial")
+	commitFile(t, repoDir, "change.txt", "change\n", "add change")
 	return repoDir
 }
 
@@ -667,7 +663,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *t
 
 	repoDir := t.TempDir()
 	initialCommitRepo(t, repoDir, "main")
-	headSHA := strings.TrimSpace(runGitOutputOrFail(t, repoDir, "rev-parse", "HEAD"))
+	headSHA := headSHA(t, repoDir)
 
 	itemData := BacklogItemData{
 		Title:              "Empty committed diff test",
@@ -734,7 +730,7 @@ func newEmptyDiffFixture(t *testing.T, ctx context.Context, storage *Storage, ti
 	t.Helper()
 	repoDir := t.TempDir()
 	initialCommitRepo(t, repoDir, "main")
-	headSHA := strings.TrimSpace(runGitOutputOrFail(t, repoDir, "rev-parse", "HEAD"))
+	headSHA := headSHA(t, repoDir)
 
 	itemData := BacklogItemData{
 		Title:              title,
@@ -915,9 +911,7 @@ func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(
 
 	repoDir := t.TempDir()
 	initConfiguredRepo(t, repoDir, "main")
-	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("base\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "README.md")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+	commitFile(t, repoDir, "README.md", "base\n", "initial")
 
 	// Real feature branch with real committed work, checked out in its own dedicated
 	// worktree directory — the same shape as ae1e2070's stelekit worktree, which had a
@@ -1006,9 +1000,7 @@ func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBloc
 
 	repoDir := t.TempDir()
 	initConfiguredRepo(t, repoDir, "main")
-	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("base\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "README.md")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+	commitFile(t, repoDir, "README.md", "base\n", "initial")
 	// Deliberately no divergent branch: "main" is the only branch and repoPath's own
 	// checked-out HEAD already sits on it, so merge-base(HEAD, "main") collapses to
 	// HEAD itself and the "recovered" diff against it is empty.
@@ -1185,9 +1177,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict
 
 	repoDir := t.TempDir()
 	initConfiguredRepo(t, repoDir, "main")
-	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("base\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "README.md")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+	commitFile(t, repoDir, "README.md", "base\n", "initial")
 
 	// The path this session's worktree row will claim — but it's checked out on
 	// "other-item-branch" (a later, unrelated item's work), not this session's own
@@ -1274,9 +1264,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_RepeatedFailure_StillDedupsViaI
 
 	repoDir := t.TempDir()
 	initConfiguredRepo(t, repoDir, "main")
-	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("base\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "README.md")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+	commitFile(t, repoDir, "README.md", "base\n", "initial")
 
 	recycledPath := t.TempDir()
 	runGitOrFail(t, repoDir, "worktree", "add", "-b", "other-item-branch", recycledPath, "main")
@@ -1346,9 +1334,7 @@ func TestReviewGateRunner_WorktreeDirectoryGone_FallsBackToRepoPath_DoesNotHardB
 
 	repoDir := t.TempDir()
 	initConfiguredRepo(t, repoDir, "main")
-	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("base\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "README.md")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+	commitFile(t, repoDir, "README.md", "base\n", "initial")
 	baseSHA := strings.TrimSpace(runGitCapture(t, repoDir, "rev-parse", "main"))
 
 	// A real worktree, with real committed work, that is then fully torn down —
@@ -1431,9 +1417,7 @@ func TestReviewGateRunner_WorktreeGoneAndBaseSHACorrupted_RecoversViaRepoPath(t 
 
 	repoDir := t.TempDir()
 	initConfiguredRepo(t, repoDir, "main")
-	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("base\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "README.md")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+	commitFile(t, repoDir, "README.md", "base\n", "initial")
 
 	// A real worktree, with real committed work, then fully torn down — same as the
 	// test above, except the recorded base_commit_sha below is corrupted/unreachable
@@ -1506,9 +1490,7 @@ func TestWorktreeIdentityMismatch(t *testing.T) {
 
 	repoDir := t.TempDir()
 	initConfiguredRepo(t, repoDir, "main")
-	require.NoError(t, os.WriteFile(repoDir+"/f.txt", []byte("x"), 0o644))
-	runGitOrFail(t, repoDir, "add", "f.txt")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+	commitFile(t, repoDir, "f.txt", "x", "initial")
 	detachedSHA := strings.TrimSpace(runGitCapture(t, repoDir, "rev-parse", "HEAD"))
 	runGitOrFail(t, repoDir, "checkout", detachedSHA)
 
@@ -1587,23 +1569,17 @@ func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoS
 
 	origin := t.TempDir()
 	initConfiguredRepo(t, origin, "main")
-	require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("# base\n"), 0o644))
-	runGitOrFail(t, origin, "add", "README.md")
-	runGitOrFail(t, origin, "commit", "-m", "initial commit")
+	commitFile(t, origin, "README.md", "# base\n", "initial commit")
 
 	work := cloneWithOrigin(t, origin)
 	runGitOrFail(t, work, "checkout", "-b", "feature")
 	baseSHA := strings.TrimSpace(runGitCapture(t, work, "rev-parse", "HEAD"))
 
 	// The feature branch makes its own real edit to README.md.
-	require.NoError(t, os.WriteFile(filepath.Join(work, "README.md"), []byte("# Feature Edit\n"), 0o644))
-	runGitOrFail(t, work, "add", "README.md")
-	runGitOrFail(t, work, "commit", "-m", "feature: edit README")
+	commitFile(t, work, "README.md", "# Feature Edit\n", "feature: edit README")
 
 	// Main diverges on the same line AND drifts well past the default threshold (50).
-	require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("# Main Edit\n"), 0o644))
-	runGitOrFail(t, origin, "add", "README.md")
-	runGitOrFail(t, origin, "commit", "-m", "main: edit README")
+	commitFile(t, origin, "README.md", "# Main Edit\n", "main: edit README")
 	commitOnRepo(t, origin, 55, "upstream")
 
 	itemData := BacklogItemData{
@@ -1684,18 +1660,14 @@ func TestReviewGateRunner_BranchDrift_SyncsAutomaticallyAndProceeds_When_NoConfl
 
 	origin := t.TempDir()
 	initConfiguredRepo(t, origin, "main")
-	require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("# base\n"), 0o644))
-	runGitOrFail(t, origin, "add", "README.md")
-	runGitOrFail(t, origin, "commit", "-m", "initial commit")
+	commitFile(t, origin, "README.md", "# base\n", "initial commit")
 
 	work := cloneWithOrigin(t, origin)
 	runGitOrFail(t, work, "checkout", "-b", "feature")
 	baseSHA := strings.TrimSpace(runGitCapture(t, work, "rev-parse", "HEAD"))
 
 	// The feature branch's own unrelated change.
-	require.NoError(t, os.WriteFile(filepath.Join(work, "feature.txt"), []byte("feature work\n"), 0o644))
-	runGitOrFail(t, work, "add", "feature.txt")
-	runGitOrFail(t, work, "commit", "-m", "feature work")
+	commitFile(t, work, "feature.txt", "feature work\n", "feature work")
 
 	// Main drifts well past the threshold, but on unrelated files.
 	commitOnRepo(t, origin, 55, "upstream")
@@ -1927,7 +1899,7 @@ func TestDiffFromMergeBaseWhenResumed(t *testing.T) {
 	item := &BacklogItemData{RepoPath: dir}
 
 	// Zero commits ahead of main: still empty, so the no-changes gate holds.
-	tip := strings.TrimSpace(runGitOutputOrFail(t, dir, "rev-parse", "HEAD"))
+	tip := headSHA(t, dir)
 	diff, _ := r.diffFromMergeBaseWhenResumed(context.Background(), item, dir, "work", tip, "", false)
 	require.Empty(t, strings.TrimSpace(diff))
 

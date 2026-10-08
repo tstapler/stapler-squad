@@ -6,8 +6,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/session/git"
 )
 
 // gitTemplateRepos caches one committed repo per branch name. Copying it replaces
@@ -66,4 +71,31 @@ func removeGitTemplateRepos() {
 	for _, dir := range gitTemplateRepos.dirs {
 		_ = os.RemoveAll(dir)
 	}
+}
+
+// commitFile writes content to dir/name and commits it in-process with go-git
+// (no git subprocesses). Use it on ordinary repos only: dir must not be a linked
+// worktree, whose per-worktree index/HEAD go-git handles less faithfully than the CLI.
+func commitFile(t *testing.T, dir, name, content, msg string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644))
+	repo, err := git.OpenRepo(dir)
+	require.NoError(t, err)
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	_, err = wt.Add(name)
+	require.NoError(t, err)
+	sig := &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()}
+	_, err = wt.Commit(msg, &gogit.CommitOptions{Author: sig, Committer: sig})
+	require.NoError(t, err)
+}
+
+// headSHA returns dir's HEAD commit in-process; same linked-worktree caveat as commitFile.
+func headSHA(t *testing.T, dir string) string {
+	t.Helper()
+	repo, err := git.OpenRepo(dir)
+	require.NoError(t, err)
+	ref, err := repo.Head()
+	require.NoError(t, err)
+	return ref.Hash().String()
 }
