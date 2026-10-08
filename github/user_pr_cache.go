@@ -119,6 +119,11 @@ type PRAnnotationSession struct {
 	PRNumber     int // fallback: match by PR number when branch name doesn't match headRef
 	Status       LinkedSessionStatus
 	LastActiveAt time.Time // zero when unknown
+	// HostUnrecorded marks a session whose host could not be determined (a GHE
+	// session stored before hosts were recorded). Only such sessions may link
+	// across hosts via the legacy index; an empty Repo.Host() otherwise means
+	// github.com.
+	HostUnrecorded bool
 }
 
 // PRAnnotationWorktree carries worktree data for annotation.
@@ -256,8 +261,9 @@ func (c *UserPRCache) Stop() {
 
 // SetAnnotationSource registers where each poll reads the sessions and
 // worktrees to link, so a poll is annotated before it reaches subscribers.
-// Call before Start. The function runs under the cache's annotation lock, so it
-// must be quick and must not call back into the cache.
+// Call before Start. The function runs outside the cache's annotation lock but
+// on the poll goroutine, so it should be reasonably quick and must not call back
+// into the cache.
 func (c *UserPRCache) SetAnnotationSource(fn func() ([]PRAnnotationSession, []PRAnnotationWorktree)) {
 	c.annMu.Lock()
 	c.annSource = fn
@@ -490,7 +496,7 @@ func (x worktreeIndex) path(ref RepoRef, headRef string, prRepos map[string]bool
 		return ""
 	}
 	for _, wt := range x.legacy[ref.LegacyBranchKey(headRef)] {
-		if legacyCompatible(wt.Repo, ref, prRepos) {
+		if legacyCompatible(wt.Repo, false, ref, prRepos) {
 			return wt.WorktreePath
 		}
 	}
@@ -499,11 +505,12 @@ func (x worktreeIndex) path(ref RepoRef, headRef string, prRepos map[string]bool
 
 // legacyCompatible reports whether a repo found only by the owner-only legacy
 // key may still be linked to a PR in ref: it must not be a known-different PR
-// repo, and its host must match. An unset host (stored before hosts were
-// recorded) is a wildcard, because a GHE session with no stored host would
-// otherwise lose its link. Legacy links never grant nudge linkage.
-func legacyCompatible(candidate, ref RepoRef, prRepos map[string]bool) bool {
-	if candidate.Host() != "" && NormalizeHost(candidate.Host()) != NormalizeHost(ref.Host()) {
+// repo, and its host must match. Only a genuinely unrecorded host
+// (hostUnrecorded: a GHE session stored before hosts were recorded) is a
+// wildcard; an empty RepoRef host otherwise means github.com. Legacy links never
+// grant nudge linkage.
+func legacyCompatible(candidate RepoRef, hostUnrecorded bool, ref RepoRef, prRepos map[string]bool) bool {
+	if !hostUnrecorded && NormalizeHost(candidate.Host()) != NormalizeHost(ref.Host()) {
 		return false
 	}
 	return !prRepos[candidate.repoKey()]
@@ -552,7 +559,7 @@ func (x sessionIndex) strict(ref RepoRef, headRef string, number int) []LinkedSe
 	return toLinkedSessions(ss, false)
 }
 
-// legacy matches the old owner-only key, restricted to same-host (or unset-host)
+// legacy matches the old owner-only key, restricted to same-host (or host-unrecorded)
 // sessions whose repo is not one of the PR list's repos (known-different).
 func (x sessionIndex) legacy(ref RepoRef, headRef string, number int, prRepos map[string]bool) []LinkedSession {
 	ss := x.legacyByBranch[ref.LegacyBranchKey(headRef)]
@@ -561,7 +568,7 @@ func (x sessionIndex) legacy(ref RepoRef, headRef string, number int, prRepos ma
 	}
 	var kept []PRAnnotationSession
 	for _, s := range ss {
-		if legacyCompatible(s.Repo, ref, prRepos) {
+		if legacyCompatible(s.Repo, s.HostUnrecorded, ref, prRepos) {
 			kept = append(kept, s)
 		}
 	}
@@ -693,9 +700,20 @@ func (c *UserPRCache) fetch() error {
 // and only then fans it out, so subscribers and WatchUserPRs never see PRs
 // that are momentarily missing their linked sessions.
 func (c *UserPRCache) publish(merged []UserPR, statuses []AccountPollStatus) {
+	// Build inputs before taking annMu: the source reads config, sessions and
+	// git remotes, and holding the lock across that would stall Annotate.
 	c.annMu.Lock()
-	if c.annSource != nil {
-		c.annSessions, c.annWorktrees = c.annSource()
+	src := c.annSource
+	c.annMu.Unlock()
+	var sessions []PRAnnotationSession
+	var worktrees []PRAnnotationWorktree
+	if src != nil {
+		sessions, worktrees = src()
+	}
+
+	c.annMu.Lock()
+	if src != nil {
+		c.annSessions, c.annWorktrees = sessions, worktrees
 	}
 	if c.annSessions != nil || c.annWorktrees != nil {
 		merged, _ = annotatePRs(merged, c.annSessions, c.annWorktrees)

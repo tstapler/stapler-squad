@@ -576,7 +576,7 @@ func TestAnnotateUserPRCache_should_LogUnmatchedSessionCount_When_SessionsHaveBr
 	}
 	poller.SetInstances(instances)
 
-	annotateUserPRCache(cache, poller, nil)
+	cache.Annotate(buildPRAnnotations(poller, nil))
 
 	out := buf.String()
 	assert.Contains(t, out, "sessions with a branch but no matching PR")

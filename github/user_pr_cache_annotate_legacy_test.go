@@ -9,11 +9,28 @@ import (
 func TestAnnotate_should_LinkViaLegacyOnly_When_GHESessionHasUnsetStoredHost(t *testing.T) {
 	t.Parallel()
 	c := seedPRs(t, UserPR{Owner: "acme", Repo: "api", Number: 7, HeadRef: "fix", Host: "ghe.corp"})
-	c.Annotate([]PRAnnotationSession{{ID: "ghe-unset", Branch: "fix", Repo: mustRef(t, "acme", "api", "")}}, nil)
+	c.Annotate([]PRAnnotationSession{{ID: "ghe-unset", Branch: "fix", Repo: mustRef(t, "acme", "api", ""), HostUnrecorded: true}}, nil)
 
 	pr := c.GetAll()[0]
 	if len(pr.LinkedSessions) != 1 || !pr.LinkedSessions[0].LegacyFallback {
 		t.Fatalf("want one legacy-fallback link, got %+v", pr.LinkedSessions)
+	}
+}
+
+func TestAnnotate_should_NotLegacyLinkGHEPR_When_Github_com_SessionHostIsEmptyButRecorded(t *testing.T) {
+	t.Parallel()
+	// Empty RepoRef host means github.com: org/repoA@fix-ci must not reach a GHE
+	// PR in org/repoB@fix-ci through the owner-only legacy index.
+	c := seedPRs(t, UserPR{Owner: "org", Repo: "repoB", Number: 9, HeadRef: "fix-ci", Host: "ghe.corp"})
+	c.Annotate([]PRAnnotationSession{{ID: "dotcom", Branch: "fix-ci", Repo: mustRef(t, "org", "repoA", "")}}, nil)
+	if got := c.GetAll()[0].LinkedSessions; len(got) != 0 {
+		t.Fatalf("github.com session legacy-linked a GHE PR: %+v", got)
+	}
+
+	c2 := seedPRs(t, UserPR{Owner: "org", Repo: "repoB", Number: 9, HeadRef: "fix-ci", Host: "ghe.corp"})
+	c2.Annotate([]PRAnnotationSession{{ID: "unknown", Branch: "fix-ci", Repo: mustRef(t, "org", "repoA", ""), HostUnrecorded: true}}, nil)
+	if got := c2.GetAll()[0].LinkedSessions; len(got) != 1 {
+		t.Fatalf("host-unrecorded session should still legacy-link: %+v", got)
 	}
 }
 
@@ -30,8 +47,8 @@ func TestAnnotate_should_ResolveWorktreeViaLegacy_When_SessionsLinkedViaLegacy(t
 	t.Parallel()
 	c := seedPRs(t, UserPR{Owner: "acme", Repo: "api", Number: 7, HeadRef: "fix", Host: "ghe.corp"})
 	c.Annotate(
-		[]PRAnnotationSession{{ID: "s", Branch: "fix", Repo: mustRef(t, "acme", "api", "")}},
-		[]PRAnnotationWorktree{{Branch: "fix", Repo: mustRef(t, "acme", "api", ""), WorktreePath: "/wt/api"}},
+		[]PRAnnotationSession{{ID: "s", Branch: "fix", Repo: mustRef(t, "acme", "api", ""), HostUnrecorded: true}},
+		[]PRAnnotationWorktree{{Branch: "fix", Repo: mustRef(t, "acme", "other", "ghe.corp"), WorktreePath: "/wt/api"}},
 	)
 	if got := c.GetAll()[0].LocalWorktreePath; got != "/wt/api" {
 		t.Fatalf("LocalWorktreePath = %q, want /wt/api", got)

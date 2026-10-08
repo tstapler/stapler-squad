@@ -16,15 +16,9 @@ import (
 // "pr-<number>-..." naming convention (e.g. "pr-1255-actions-spring-boot").
 var prNumFromTitle = regexp.MustCompile(`(?i)^pr-(\d+)-`)
 
-// annotateUserPRCache annotates the cached UserPR list now. The cache itself
-// re-reads buildPRAnnotations (SetAnnotationSource) before every publish, so
-// production code only needs this for an out-of-band refresh. Lives here (not
-// in the github package) to avoid an import cycle: github → session → github.
-func annotateUserPRCache(cache *githubpkg.UserPRCache, poller *session.PRStatusPoller, scanner *unfinished.Scanner) {
-	cache.Annotate(buildPRAnnotations(poller, scanner))
-}
-
 // buildPRAnnotations collects the live sessions and worktrees a PR can link to.
+// The cache re-reads it (SetAnnotationSource) before every publish. Lives here,
+// not in the github package, to avoid an import cycle: github → session → github.
 func buildPRAnnotations(poller *session.PRStatusPoller, scanner *unfinished.Scanner) ([]githubpkg.PRAnnotationSession, []githubpkg.PRAnnotationWorktree) {
 	ghHosts := config.LoadConfig().GetGitHubEnterpriseHosts()
 	enterpriseHosts := make([]string, 0, len(ghHosts))
@@ -43,7 +37,7 @@ func annotationSessions(poller *session.PRStatusPoller, enterpriseHosts []string
 		// Use Snapshot() — actor-based writes (SetGitHubPRNumber etc.) do not hold
 		// mu, so direct field reads would race with concurrent poller updates.
 		snap := inst.Snapshot()
-		repoRef, prNumber := resolveSessionRepo(snap, enterpriseHosts)
+		repoRef, prNumber, hostUnrecorded := resolveSessionRepo(snap, enterpriseHosts)
 		if !repoRef.IsValid() {
 			continue
 		}
@@ -54,12 +48,13 @@ func annotationSessions(poller *session.PRStatusPoller, enterpriseHosts []string
 			}
 		}
 		out = append(out, githubpkg.PRAnnotationSession{
-			ID:           inst.Title,
-			Branch:       snap.Branch,
-			Repo:         repoRef,
-			PRNumber:     prNumber,
-			Status:       linkedStatusFor(snap.Status),
-			LastActiveAt: snap.UpdatedAt,
+			ID:             inst.Title,
+			Branch:         snap.Branch,
+			Repo:           repoRef,
+			PRNumber:       prNumber,
+			Status:         linkedStatusFor(snap.Status),
+			LastActiveAt:   snap.UpdatedAt,
+			HostUnrecorded: hostUnrecorded,
 		})
 	}
 	return out
@@ -69,11 +64,24 @@ func annotationSessions(poller *session.PRStatusPoller, enterpriseHosts []string
 // 1. Direct from DB fields (new sessions written since schema migration).
 // 2. Parse from stored PR URL (which may also supply the PR number).
 // 3. Infer from git remote.
-func resolveSessionRepo(snap *session.InstanceSnapshot, enterpriseHosts []string) (githubpkg.RepoRef, int) {
-	prNumber := snap.GitHub.GitHubPRNumber
+//
+// hostUnrecorded is true only when tier 1 stored no host and the git remote
+// cannot confirm one: an empty stored host is also what github.com sessions
+// carry, so the remote is the only way to tell a legacy GHE session apart.
+func resolveSessionRepo(snap *session.InstanceSnapshot, enterpriseHosts []string) (_ githubpkg.RepoRef, prNumber int, hostUnrecorded bool) {
+	prNumber = snap.GitHub.GitHubPRNumber
 	var repoRef githubpkg.RepoRef
 	if snap.GitHub.GitHubOwner != "" && snap.GitHub.GitHubRepo != "" {
 		repoRef, _ = githubpkg.NewRepoRefWithHost(snap.GitHub.GitHubOwner, snap.GitHub.GitHubRepo, snap.GitHub.GitHubHost)
+		if snap.GitHub.GitHubHost == "" {
+			hostUnrecorded = true
+			if remote, ok := remoteRepo(snap.Path, enterpriseHosts); ok {
+				hostUnrecorded = false
+				if strings.EqualFold(remote.Owner(), repoRef.Owner()) && strings.EqualFold(remote.Repo(), repoRef.Repo()) {
+					repoRef = remote
+				}
+			}
+		}
 	}
 	if !repoRef.IsValid() && snap.GitHub.GitHubPRURL != "" {
 		if parsed, err := session.ParseGitHubURLWithHosts(snap.GitHub.GitHubPRURL, enterpriseHosts); err == nil {
@@ -86,7 +94,15 @@ func resolveSessionRepo(snap *session.InstanceSnapshot, enterpriseHosts []string
 	if !repoRef.IsValid() && snap.Path != "" {
 		repoRef, _ = githubpkg.GetOwnerRepoFromRemote(snap.Path, enterpriseHosts)
 	}
-	return repoRef, prNumber
+	return repoRef, prNumber, hostUnrecorded && repoRef.IsValid()
+}
+
+func remoteRepo(path string, enterpriseHosts []string) (githubpkg.RepoRef, bool) {
+	if path == "" {
+		return githubpkg.RepoRef{}, false
+	}
+	ref, err := githubpkg.GetOwnerRepoFromRemote(path, enterpriseHosts)
+	return ref, err == nil && ref.IsValid()
 }
 
 func annotationWorktrees(scanner *unfinished.Scanner, enterpriseHosts []string) []githubpkg.PRAnnotationWorktree {
