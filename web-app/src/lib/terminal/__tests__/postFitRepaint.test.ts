@@ -1,4 +1,4 @@
-import { postFitRepaint, canFit } from "../postFitRepaint";
+import { postFitRepaint, canFit, trackWebglTerminal, forgetWebglTerminal } from "../postFitRepaint";
 import { mobileDebug } from "../mobileDebug";
 
 jest.mock("../mobileDebug", () => ({ mobileDebug: { log: jest.fn() } }));
@@ -40,6 +40,29 @@ describe("postFitRepaint", () => {
       renderer: "canvas",
       reason: "context-loss",
     });
+  });
+
+  it("postFitRepaint_should_ClearAndRefreshTrackedPeers_When_WebglAtlasIsShared", () => {
+    const a = makeTerminal(30);
+    const b = makeTerminal(20);
+    trackWebglTerminal(a);
+    trackWebglTerminal(b);
+    postFitRepaint(a, "webgl", "manual-resize");
+    expect(b.clearTextureAtlas).toHaveBeenCalledTimes(1);
+    expect(b.refresh).toHaveBeenCalledWith(0, 19);
+    expect(a.refresh).toHaveBeenCalledTimes(1);
+    forgetWebglTerminal(b);
+    postFitRepaint(a, "webgl", "manual-resize");
+    expect(b.refresh).toHaveBeenCalledTimes(1);
+    forgetWebglTerminal(a);
+  });
+
+  it("postFitRepaint_should_NotTouchPeers_When_RendererIsNotWebgl", () => {
+    const peer = makeTerminal(30);
+    trackWebglTerminal(peer);
+    postFitRepaint(makeTerminal(30), "canvas", "manual-resize");
+    expect(peer.refresh).not.toHaveBeenCalled();
+    forgetWebglTerminal(peer);
   });
 
   it("postFitRepaint_should_NotThrow_When_ClearTextureAtlasMissingUnderWebgl", () => {

@@ -55,8 +55,29 @@ export interface FitContainer {
 export function postFitRepaint(terminal: RepaintTerminal, renderer: RendererKind, reason: RefitReason): void {
   const rows = terminal.rows;
   mobileDebug.log("forced-refresh", { event: "forced-refresh", rows, renderer, reason });
-  if (renderer === "webgl") terminal.clearTextureAtlas?.();
+  if (renderer === "webgl") {
+    // addon-webgl shares one atlas texture across terminals with the same font config, but
+    // clearTextureAtlas() only resets the caller's glyph model; peers would draw stale glyph
+    // indices (garbled text) until repainted. Clear and repaint every live webgl terminal.
+    for (const t of new Set([terminal, ...webglTerminals])) {
+      t.clearTextureAtlas?.();
+      t.refresh(0, Math.max(0, t.rows - 1));
+    }
+    return;
+  }
   terminal.refresh(0, Math.max(0, rows - 1));
+}
+
+const webglTerminals = new Set<RepaintTerminal>();
+
+/** Drop a terminal from the shared-atlas repaint set (dispose, or fallback off webgl). */
+export function forgetWebglTerminal(terminal: RepaintTerminal): void {
+  webglTerminals.delete(terminal);
+}
+
+/** Track a terminal that loaded the webgl addon so peers repaint when it clears the shared atlas. */
+export function trackWebglTerminal(terminal: RepaintTerminal): void {
+  webglTerminals.add(terminal);
 }
 
 /** FitGuard: false when the container has no layout box, so `fit()` would size to 0. */

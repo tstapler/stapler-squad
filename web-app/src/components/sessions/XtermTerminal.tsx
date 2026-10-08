@@ -33,6 +33,8 @@ import { isMouseTracking } from "@/lib/terminal/mouseTracking";
 import { mobileDebug } from "@/lib/terminal/mobileDebug";
 import {
   postFitRepaint,
+  trackWebglTerminal,
+  forgetWebglTerminal,
   canFit,
   FIT_RETRY_MAX_ATTEMPTS,
   FIT_RETRY_TIMEOUT_MS,
@@ -41,6 +43,7 @@ import {
   type RefitReason,
   type RequestFitOptions,
 } from "@/lib/terminal/postFitRepaint";
+import { claimWebglSlot, releaseWebglSlot, touchWebglSlot, type WebglSlot } from "@/lib/terminal/webglBudget";
 
 const DEFAULT_SCROLLBACK_SIZE = 5000;
 
@@ -594,10 +597,25 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     // unmount if the component tears down before the RAF fires.
     let postFallbackRafId: number | null = null;
 
+    const webglSlot: WebglSlot = {
+      isVisible: () => document.visibilityState === "visible" && (containerRef.current?.clientWidth ?? 0) > 0,
+      release: () => {
+        if (cancelled || rendererRef.current !== "webgl") return;
+        console.log("[XtermTerminal] WebGL budget exceeded, moving this pane to the canvas renderer");
+        swapWebglForCanvas();
+      },
+    };
+
     const triggerCanvasFallback = () => {
       if (webglFallbackTriggered || cancelled) return; // one-directional latch, never re-arms (pitfalls §4)
       webglFallbackTriggered = true;
       console.warn('[XtermTerminal] WebGL cell-measurement mismatch exceeded threshold, falling back to canvas renderer');
+      swapWebglForCanvas();
+    };
+
+    // Shared by the fallback latch and by WebGL-budget eviction (webglBudget.ts).
+    const swapWebglForCanvas = () => {
+      releaseWebglSlot(webglSlot);
 
       // @xterm/addon-webgl resolved to 0.18.0 (confirmed in package-lock.json /
       // node_modules). This postdates the historical WebglAddon.dispose()
@@ -607,6 +625,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       // definitively pin the exact release/version boundary where #3890
       // landed relative to 0.18.0 — noting that explicitly rather than
       // asserting an unverified claim (Task 3.0.2).
+      forgetWebglTerminal(terminal);
       webglAddonRef.current?.dispose();
       webglAddonRef.current = null;
 
@@ -719,6 +738,8 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           webglAddonRef.current = new WebglAddon();
           terminal.loadAddon(webglAddonRef.current);
           rendererRef.current = "webgl";
+          trackWebglTerminal(terminal);
+          claimWebglSlot(webglSlot);
           mobileDebug.log("renderer", { renderer: "webgl" });
           webglAddonRef.current.onContextLoss(() => {
             console.warn('[XtermTerminal] WebGL context lost, falling back to canvas renderer');
@@ -1449,6 +1470,10 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       };
       document.addEventListener("visibilitychange", onDocumentVisible);
 
+      // A focused pane is the one in use: evict it last.
+      const onFocusIn = () => touchWebglSlot(webglSlot);
+      containerRef.current?.addEventListener("focusin", onFocusIn);
+
       // Cleanup
       return () => {
         document.removeEventListener("visibilitychange", onDocumentVisible);
@@ -1472,6 +1497,9 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         writeParsedDisposable?.dispose();
         bufferChangeDisposable?.dispose();
         handleCleanupFns.forEach(fn => fn());
+        forgetWebglTerminal(terminal);
+        releaseWebglSlot(webglSlot);
+        containerRef.current?.removeEventListener("focusin", onFocusIn);
         terminal.dispose();
         terminalRef.current = null;
         fitAddonRef.current = null;
