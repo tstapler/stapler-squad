@@ -14,10 +14,20 @@ export interface PRAttention {
   needsAttention: boolean;
   /** Shows the Nudge button. Changes-requested-only is visible but not nudgeable. */
   nudgeable: boolean;
+  /**
+   * GitHub's rollup says CI failed but no failing check was itemised (beyond
+   * the polled page, or a cancelled/action-required run). Counts toward
+   * attention but is not nudgeable: the server builds the prompt from the same
+   * itemised list and would answer "nothing to fix".
+   */
+  checksFailingUnlisted: boolean;
 }
 
-// Pending/in-progress is deliberately absent: it is not failing.
-const FAILING_CONCLUSIONS = new Set(["failure", "timed_out", "action_required"]);
+// Rollup states come from normalizeCheckState (github/user_pr_cache.go), which
+// folds FAILURE and ERROR into "failure"; pending is deliberately not failing.
+// Per-check failure is whatever the server itemised (mapFailingChecks), so the
+// button never promises more than the nudge prompt will contain.
+const ROLLUP_FAILING = "failure";
 
 type PRAttentionInput = Pick<
   UserPR,
@@ -30,8 +40,8 @@ type PRAttentionInput = Pick<
 >;
 
 export function prAttention(pr: PRAttentionInput): PRAttention {
-  const conclusionFailing = FAILING_CONCLUSIONS.has(pr.checkConclusion);
-  const failingChecks = Math.max(pr.failingChecks.length, conclusionFailing ? 1 : 0);
+  const failingChecks = pr.failingChecks.length;
+  const checksFailingUnlisted = failingChecks === 0 && pr.checkConclusion === ROLLUP_FAILING;
   const changesRequested = pr.changesReqCount > 0;
   const threadsUnknown = pr.unresolvedThreadCount === undefined;
   const unresolvedThreads = pr.unresolvedThreadCount ?? 0;
@@ -40,7 +50,7 @@ export function prAttention(pr: PRAttentionInput): PRAttention {
 
   const nudgeable =
     !pr.isDraft && (failingChecks > 0 || unresolvedThreads > 0 || mergeConflict);
-  const needsAttention = !pr.isDraft && (nudgeable || changesRequested);
+  const needsAttention = !pr.isDraft && (nudgeable || changesRequested || checksFailingUnlisted);
 
   return {
     failingChecks,
@@ -51,6 +61,7 @@ export function prAttention(pr: PRAttentionInput): PRAttention {
     conflictUnknown,
     needsAttention,
     nudgeable,
+    checksFailingUnlisted,
   };
 }
 

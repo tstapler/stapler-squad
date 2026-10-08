@@ -1,12 +1,16 @@
 import { create, type MessageInitShape } from "@bufbuild/protobuf";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
-import { UserPRSchema, type UserPR } from "@/gen/session/v1/types_pb";
+import { FailingCheckSchema, UserPRSchema, type UserPR } from "@/gen/session/v1/types_pb";
 import { orderPRs, severityRank, type PRSortBy } from "./prOrdering";
 
 let n = 0;
 function pr(over: MessageInitShape<typeof UserPRSchema> & { updated?: number }): UserPR {
   const { updated = 0, ...rest } = over;
   return create(UserPRSchema, {
+    failingChecks:
+      rest.checkConclusion === "failure"
+        ? [create(FailingCheckSchema, { name: "lint", url: "", conclusion: "failure" })]
+        : [],
     owner: "acme",
     repo: "web",
     number: ++n,

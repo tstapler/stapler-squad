@@ -105,7 +105,7 @@ func TestRelease_should_Record10sCooldownNot60s_When_WriteFailed(t *testing.T) {
 
 	clk.Advance(5 * time.Second)
 	_, out := g.TryBegin("uuid-1", "sigA")
-	assert.Equal(t, GuardDuplicate, out, "inside the 10s cooldown")
+	assert.Equal(t, GuardCoolingDown, out, "a failed write is retry-later, never a duplicate")
 
 	clk.Advance(6 * time.Second)
 	_, out = g.TryBegin("uuid-1", "sigA")
@@ -158,4 +158,9 @@ func TestTryBegin_should_SweepRecordOlderThan10Minutes_When_NextTryBegin(t *test
 	defer g.mu.Unlock()
 	_, stillThere := g.last["uuid-1"]
 	assert.False(t, stillThere)
+}
+
+func TestReasonSetSignature_should_BeOrderAndDuplicateInsensitive(t *testing.T) {
+	assert.Equal(t, reasonSetSignature("A", "B"), reasonSetSignature("B", "A", "A"))
+	assert.NotEqual(t, reasonSetSignature("A"), reasonSetSignature("A", "B"))
 }

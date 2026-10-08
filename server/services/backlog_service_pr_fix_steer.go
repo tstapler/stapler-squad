@@ -56,9 +56,29 @@ func (r reasonSignature) hasHeader(header string) bool {
 	return false
 }
 
-// key is the guard's signature string: the ordered headers, joined.
+// key is the guard's duplicate-window signature. Known headers map onto the
+// canonical reason names the manual nudge uses (reasonSetSignature), so a manual
+// nudge and an auto-steer for the same problem set dedupe each other; unknown
+// header text stays distinct.
 func (r reasonSignature) key() string {
-	return strings.Join(r.headers, "|")
+	names := make([]string, 0, len(r.headers))
+	for _, h := range r.headers {
+		names = append(names, canonicalReasonForHeader(h))
+	}
+	return reasonSetSignature(names...)
+}
+
+func canonicalReasonForHeader(h string) string {
+	switch {
+	case h == conflictHeader:
+		return reasonNameMergeConflict
+	case h == "## Failing CI checks":
+		return reasonNameFailingChecks
+	case strings.HasPrefix(h, "## Review: changes requested"), h == "## Reviewer comments", h == "## PR comments":
+		return reasonNameUnresolvedThreads
+	default:
+		return "other:" + h
+	}
 }
 
 const conflictHeader = "## Merge conflict"
@@ -315,8 +335,8 @@ func (s *BacklogService) steerActiveSessionForPRFix(ctx context.Context, itemID,
 	message := buildSteerMessage(program, fixContext)
 	outcome, deliverErr := s.sessionSteerer.SteerSessionGuarded(ctx, activeSessionUUID, candidate.key(), message)
 	switch outcome {
-	case SteerGuardBusy, SteerDuplicate:
-		// A manual nudge is in flight or just landed; not a failure, retry next tick.
+	case SteerGuardBusy, SteerDuplicate, SteerCoolingDown:
+		// A manual nudge is in flight, just landed, or a just-failed write is cooling down; not a failure, retry next tick.
 		log.InfoLog().Printf("[AutoReopenForPRFix] steer for item=%s skipped by nudge guard (outcome=%s); retrying next tick", itemID, outcome)
 		return
 	case SteerBusy, SteerNoStatusSource, SteerNotTracked:

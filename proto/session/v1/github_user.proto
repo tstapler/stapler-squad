@@ -212,6 +212,9 @@ enum NudgeOutcome {
   NUDGE_OUTCOME_NOTHING_TO_FIX     = 5;
   NUDGE_OUTCOME_SESSION_NOT_LINKED = 6;
   NUDGE_OUTCOME_PR_NOT_FOUND       = 7;
+  // The linked session no longer exists or is not running (deleted or crashed),
+  // as opposed to PAUSED, which Open session can resume.
+  NUDGE_OUTCOME_NOT_RUNNING        = 8;
 }
 
 // NudgeReason is one kind of problem a nudge prompt covers.

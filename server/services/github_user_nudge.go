@@ -23,7 +23,8 @@ const (
 	nudgeBusyDetail          = "Session is busy. Try again when it is idle."
 	nudgeNoControllerDetail  = "Session isn't being monitored, so it can't safely take a request. Open it to restart it."
 	nudgePausedDetail        = "Session paused. Open it to resume"
-	nudgeNotTrackedDetail    = "Session is not running or not tracked. Open its page to restart it."
+	nudgeNotTrackedDetail    = "Session is not running or was deleted. Open its page to restart it."
+	nudgeCoolingDownDetail   = "The last request to this session failed. Try again in a few seconds."
 	nudgeNoAccountDetail     = "The GitHub account for this PR is no longer connected."
 	nudgeNothingToFixDetail  = "Nothing to fix right now."
 	nudgeNotLinkedDetail     = "Session is not linked to this PR."
@@ -266,12 +267,19 @@ func (s *GitHubUserService) runNudge(ctx context.Context, call *nudgeCall, req *
 		return early, err
 	}
 
+	if err := ctxDoneError(ctx); err != nil {
+		return nil, err
+	}
 	prompt, reasons, early, err := s.freshPrompt(ctx, call)
 	if err != nil || early != nil {
 		return early, err
 	}
 	call.reasons = reasons
 	call.promptBytes = len(prompt)
+	// The deadline may have lapsed during the GitHub read; do not write after it.
+	if err := ctxDoneError(ctx); err != nil {
+		return nil, err
+	}
 	return s.deliver(ctx, call, inst, prompt)
 }
 
@@ -280,7 +288,7 @@ func (s *GitHubUserService) runNudge(ctx context.Context, call *nudgeCall, req *
 func (s *GitHubUserService) resolveSession(call *nudgeCall, sessionID string) (inst *session.Instance, early *sessionv1.NudgeSessionForPRResponse, err error) {
 	inst = s.nudge.nudger.FindLiveInstance(sessionID)
 	if inst == nil {
-		return nil, nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_PAUSED, nil, "", nudgeNotTrackedDetail), nil
+		return nil, nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOT_RUNNING, nil, "", nudgeNotTrackedDetail), nil
 	}
 	snap := inst.Snapshot()
 	if snap.Title != sessionID {
@@ -337,6 +345,19 @@ func (s *GitHubUserService) fetchFailure(fetchCtx context.Context, call *nudgeCa
 	}
 }
 
+// ctxDoneError maps an expired or cancelled ctx to the matching Connect code,
+// so a lapsed deadline is never reported as an internal error.
+func ctxDoneError(ctx context.Context) error {
+	switch err := ctx.Err(); {
+	case err == nil:
+		return nil
+	case errors.Is(err, context.DeadlineExceeded):
+		return connect.NewError(connect.CodeDeadlineExceeded, errors.New("the request timed out before it was sent; try again"))
+	default:
+		return connect.NewError(connect.CodeCanceled, errors.New("the request was cancelled before it was sent"))
+	}
+}
+
 func (s *GitHubUserService) rateLimitMessage() string {
 	resume := s.nudge.rateLimitResume
 	if resume == nil {
@@ -352,7 +373,10 @@ func (s *GitHubUserService) rateLimitMessage() string {
 // SteerOutcome to a typed response or Connect error.
 func (s *GitHubUserService) deliver(ctx context.Context, call *nudgeCall, inst *session.Instance, prompt string) (*sessionv1.NudgeSessionForPRResponse, error) {
 	key, reasons := call.key, call.reasons
-	outcome, err := s.nudge.nudger.SteerInstanceGuarded(ctx, inst, nudgeSignature(key, reasons), prompt)
+	if err := ctxDoneError(ctx); err != nil {
+		return nil, err
+	}
+	outcome, err := s.nudge.nudger.SteerInstanceGuarded(ctx, inst, nudgeSignature(reasons), prompt)
 	switch outcome {
 	case SteerDelivered:
 		if t := s.nudgeTracker(); t != nil {
@@ -361,14 +385,19 @@ func (s *GitHubUserService) deliver(ctx context.Context, call *nudgeCall, inst *
 		return nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_DELIVERED, reasons, call.sessionID, "Request sent to the session."), nil
 	case SteerDuplicate:
 		return nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_DUPLICATE, reasons, call.sessionID, "Already requested recently."), nil
+	case SteerCoolingDown:
+		return nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, reasons, call.sessionID, nudgeCoolingDownDetail), nil
 	case SteerGuardBusy, SteerBusy:
 		return nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, reasons, call.sessionID, nudgeBusyDetail), nil
 	case SteerNoStatusSource:
 		return nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, reasons, call.sessionID, nudgeNoControllerDetail), nil
 	case SteerNotTracked:
-		return nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_PAUSED, reasons, call.sessionID, nudgeNotTrackedDetail), nil
+		return nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOT_RUNNING, reasons, call.sessionID, nudgeNotTrackedDetail), nil
 	case SteerFailed:
 		s.nudgeWarnf("nudge_steer_failed", "pr", call.pr, "session_id", call.sessionID, "err", fmt.Sprint(err))
+		if ctxErr := ctxDoneError(ctx); ctxErr != nil {
+			return nil, ctxErr
+		}
 		if errors.Is(err, ErrSteerPaneOwnership) {
 			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("the session's terminal could not be verified, so nothing was sent"))
 		}
@@ -405,9 +434,21 @@ func linkedStrictly(pr githubpkg.UserPR, sessionID string) bool {
 	return false
 }
 
-// nudgeSignature keys the duplicate window: one PR and one reason set per session.
-func nudgeSignature(key githubpkg.PRKey, reasons []sessionv1.NudgeReason) string {
-	return "nudge|" + key.String() + "|" + nudgeReasonNames(reasons)
+// Canonical reason names shared with PR-fix auto-steer's duplicate key.
+const (
+	reasonNameFailingChecks     = "FAILING_CHECKS"
+	reasonNameUnresolvedThreads = "UNRESOLVED_THREADS"
+	reasonNameMergeConflict     = "MERGE_CONFLICT"
+)
+
+// nudgeSignature keys the duplicate window by the canonical reason set, the
+// same key PR-fix auto-steer derives, so the two paths dedupe each other.
+func nudgeSignature(reasons []sessionv1.NudgeReason) string {
+	names := make([]string, 0, len(reasons))
+	for _, r := range reasons {
+		names = append(names, strings.TrimPrefix(r.String(), "NUDGE_REASON_"))
+	}
+	return reasonSetSignature(names...)
 }
 
 func nudgeReasonNames(reasons []sessionv1.NudgeReason) string {
@@ -480,40 +521,72 @@ func (s *GitHubUserService) linkedSessionSteerReady(sessionID string) bool {
 
 // userPRsToProto converts PRs and marks each strictly linked session with its
 // steer readiness. Readiness is as of this snapshot; a poll or click may find
-// the session busy by then, which the nudge reports as BUSY.
+// the session busy by then, which the nudge reports as BUSY. Only PRs the
+// nudge could act on are probed, and each session is probed once per call.
 func (s *GitHubUserService) userPRsToProto(prs []githubpkg.UserPR) []*sessionv1.UserPR {
 	out := userPRsToProto(prs)
+	ready := make(map[string]bool)
 	for i, pr := range prs {
+		if pr.IsDraft || (len(pr.FailingChecks) == 0 && !hasUnresolvedThreads(pr) && !hasMergeConflict(pr)) {
+			continue
+		}
 		for j, ls := range pr.LinkedSessions {
-			if !ls.LegacyFallback && j < len(out[i].LinkedSessions) {
-				out[i].LinkedSessions[j].SteerReady = s.linkedSessionSteerReady(ls.SessionID)
+			if ls.LegacyFallback || j >= len(out[i].LinkedSessions) {
+				continue
 			}
+			r, seen := ready[ls.SessionID]
+			if !seen {
+				r = s.linkedSessionSteerReady(ls.SessionID)
+				ready[ls.SessionID] = r
+			}
+			out[i].LinkedSessions[j].SteerReady = r
 		}
 	}
 	return out
 }
 
-// logUpNextFunnel emits one up_next_funnel line per snapshot handed to a
-// client: how many PRs need attention, how many have a linked session, and
-// how many of those have a steer-ready one. Clicks and deliveries are the
-// nudge_request and nudge_outcome lines.
+func hasUnresolvedThreads(pr githubpkg.UserPR) bool {
+	return pr.UnresolvedThreadCount != nil && *pr.UnresolvedThreadCount > 0
+}
+
+func hasMergeConflict(pr githubpkg.UserPR) bool {
+	return pr.HasMergeConflict != nil && *pr.HasMergeConflict
+}
+
+// funnelCounts is the up_next_funnel payload; logUpNextFunnel logs only when it changes.
+type funnelCounts struct{ attention, linked, live int }
+
+// logUpNextFunnel emits an up_next_funnel line when the counts change: how many
+// PRs need attention, how many have a linked session, and how many of those
+// have a steer-ready one. "Needs attention" is the same rule as the web badge
+// (prAttention.ts): non-draft with an itemised failing check, a failing CI
+// rollup, unresolved threads, a merge conflict or changes requested. Clicks and
+// deliveries are the nudge_request and nudge_outcome lines. Logging only on
+// change keeps one line per state, not one per client poll.
 func (s *GitHubUserService) logUpNextFunnel(prs []*sessionv1.UserPR) {
-	var attention, linked, live int
+	var c funnelCounts
 	for _, pr := range prs {
-		if pr.GetIsDraft() || (len(pr.GetFailingChecks()) == 0 && pr.GetUnresolvedThreadCount() == 0 && !pr.GetHasMergeConflict()) {
+		if pr.GetIsDraft() || !(len(pr.GetFailingChecks()) > 0 || pr.GetCheckConclusion() == "failure" ||
+			pr.GetUnresolvedThreadCount() > 0 || pr.GetHasMergeConflict() || pr.GetChangesReqCount() > 0) {
 			continue
 		}
-		attention++
+		c.attention++
 		if len(pr.GetLinkedSessions()) == 0 {
 			continue
 		}
-		linked++
+		c.linked++
 		for _, ls := range pr.GetLinkedSessions() {
 			if ls.GetSteerReady() {
-				live++
+				c.live++
 				break
 			}
 		}
 	}
-	s.nudgeLogf("up_next_funnel", "prs_needing_attention", attention, "with_linked_session", linked, "with_live_session", live)
+	s.funnelMu.Lock()
+	changed := !s.funnelLogged || s.funnelLast != c
+	s.funnelLast, s.funnelLogged = c, true
+	s.funnelMu.Unlock()
+	if changed {
+		s.nudgeLogf("up_next_funnel", "prs_needing_attention", c.attention, "with_linked_session", c.linked, "with_live_session", c.live)
+	}
 }

@@ -721,6 +721,8 @@ func (g *guardBackedSteerer) SteerSessionGuarded(ctx context.Context, uuid, sig,
 		return SteerGuardBusy, nil
 	case GuardDuplicate:
 		return SteerDuplicate, nil
+	case GuardCoolingDown:
+		return SteerCoolingDown, nil
 	}
 	err := g.recordSteer(ctx, uuid, message)
 	release(err == nil)
@@ -771,7 +773,7 @@ func TestSteerActiveSessionForPRFix_should_PassFullReasonSignatureToGuard_When_C
 
 	pinnedBaselineSteer(t, svc, itemID, "## Failing CI checks\n- lint\n\n## Reviewer comments\n- nit\n")
 
-	require.Equal(t, []string{"## Failing CI checks|## Reviewer comments"}, steerer.guardedSigs)
+	require.Equal(t, []string{"FAILING_CHECKS,UNRESOLVED_THREADS"}, steerer.guardedSigs)
 }
 
 func TestSteerActiveSessionForPRFix_should_ReturnWithoutDegradingOrMarkingFailed_When_ManualNudgeInFlight(t *testing.T) {
@@ -822,4 +824,32 @@ func TestGuardKey_should_Match_When_GetStableIDEqualsActiveSessionUUID(t *testin
 
 	require.NotNil(t, live, "backlog path resolves the instance by active.SessionUUID")
 	assert.Equal(t, active.SessionUUID, live.GetStableID(), "manual (GetStableID) and automatic (SessionUUID) paths share one guard key")
+}
+
+func TestReasonSignatureKey_should_MatchManualNudgeSignature_When_SameProblemSet(t *testing.T) {
+	auto := buildReasonSignature("## Merge conflict\nx\n## Failing CI checks\n- lint\n").key()
+	manual := nudgeSignature([]sessionv1.NudgeReason{
+		sessionv1.NudgeReason_NUDGE_REASON_FAILING_CHECKS,
+		sessionv1.NudgeReason_NUDGE_REASON_MERGE_CONFLICT,
+	})
+	require.Equal(t, manual, auto)
+}
+
+func TestSharedGuard_should_DedupeAutoSteerAfterManualNudgeAndViceVersa(t *testing.T) {
+	manual := nudgeSignature([]sessionv1.NudgeReason{sessionv1.NudgeReason_NUDGE_REASON_FAILING_CHECKS})
+	auto := buildReasonSignature("## Failing CI checks\n- lint\n").key()
+
+	g := &sessionNudgeGuard{}
+	rel, out := g.TryBegin("s", manual)
+	require.Equal(t, GuardOK, out)
+	rel(true)
+	_, out = g.TryBegin("s", auto)
+	assert.Equal(t, GuardDuplicate, out, "auto-steer after a delivered manual nudge")
+
+	g2 := &sessionNudgeGuard{}
+	rel, out = g2.TryBegin("s", auto)
+	require.Equal(t, GuardOK, out)
+	rel(true)
+	_, out = g2.TryBegin("s", manual)
+	assert.Equal(t, GuardDuplicate, out, "manual nudge after a delivered auto-steer")
 }

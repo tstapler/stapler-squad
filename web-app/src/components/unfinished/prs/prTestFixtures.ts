@@ -6,6 +6,7 @@ import {
   type NudgeSessionForPRRequest,
 } from "@/gen/session/v1/github_user_pb";
 import {
+  FailingCheckSchema,
   LinkedSessionSchema,
   LinkedSessionStatus,
   UserPRSchema,
@@ -13,8 +14,12 @@ import {
 } from "@/gen/session/v1/types_pb";
 import type { NudgeClient } from "@/lib/hooks/useNudgePR";
 
+/** A failing rollup is itemised like the server does, so the PR is nudgeable unless failingChecks is given. */
+export const itemisedFailure = () => [create(FailingCheckSchema, { name: "lint", url: "", conclusion: "failure" })];
+
 export function makePR(over: MessageInitShape<typeof UserPRSchema> = {}): UserPR {
   return create(UserPRSchema, {
+    failingChecks: over.checkConclusion === "failure" ? itemisedFailure() : [],
     owner: "acme",
     repo: "api",
     number: 42,

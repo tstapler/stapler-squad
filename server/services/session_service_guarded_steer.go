@@ -33,8 +33,10 @@ const (
 	SteerDelivered
 	// SteerGuardBusy: another delivery to the session is in flight.
 	SteerGuardBusy
-	// SteerDuplicate: the same reason signature was delivered or failed moments ago.
+	// SteerDuplicate: the same reason signature was delivered moments ago.
 	SteerDuplicate
+	// SteerCoolingDown: the same reason signature just failed to deliver; retry shortly.
+	SteerCoolingDown
 	// SteerBusy: the session is not idle.
 	SteerBusy
 	// SteerNoStatusSource: no active controller/status source to confirm idleness.
@@ -55,6 +57,8 @@ func (o SteerOutcome) String() string {
 		return "guard_busy"
 	case SteerDuplicate:
 		return "duplicate"
+	case SteerCoolingDown:
+		return "cooling_down"
 	case SteerBusy:
 		return "busy"
 	case SteerNoStatusSource:
@@ -125,6 +129,8 @@ func (s *SessionService) SteerInstanceGuarded(ctx context.Context, inst *session
 		return SteerGuardBusy, nil
 	case GuardDuplicate:
 		return SteerDuplicate, nil
+	case GuardCoolingDown:
+		return SteerCoolingDown, nil
 	}
 	// A panic in ready/verify/write must not leave the session GuardBusy
 	// forever. release is once-guarded, so this is a no-op after a normal

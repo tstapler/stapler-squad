@@ -20,6 +20,13 @@ const EXTERNAL = { target: "_blank", rel: "noopener noreferrer" } as const;
 function ciChip(pr: UserPR, a: PRAttention): React.ReactNode {
   if (pr.isDraft) return null;
   if (a.failingChecks > 0) return null; // rendered by FailingChecks
+  if (a.checksFailingUnlisted) {
+    return (
+      <span className={styles.chipError} data-testid="ci-failing-unlisted">
+        CI failing (checks not listed)
+      </span>
+    );
+  }
   const conclusion = pr.checkConclusion;
   if (conclusion === "success" || conclusion === "completed") {
     return <span className={styles.chipSuccess}>✓ CI passing</span>;

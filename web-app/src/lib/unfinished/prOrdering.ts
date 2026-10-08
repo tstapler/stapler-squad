@@ -26,7 +26,7 @@ export function repoKey(pr: Pick<UserPR, "host" | "owner" | "repo">): string {
 export function severityRank(pr: UserPR): 0 | 1 | 2 | 3 {
   if (pr.isDraft) return 0;
   const a = prAttention(pr);
-  if (a.failingChecks > 0 || a.mergeConflict) return 3;
+  if (a.failingChecks > 0 || a.checksFailingUnlisted || a.mergeConflict) return 3;
   if (a.unresolvedThreads > 0) return 2;
   if (a.changesRequested) return 1;
   return 0;

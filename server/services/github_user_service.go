@@ -38,6 +38,10 @@ type GitHubUserService struct {
 	// Nudge ports (see github_user_nudge.go). Set once at wiring time, before
 	// the service serves requests; nil ports fall back to cache where it fits.
 	nudge nudgeDeps
+
+	funnelMu     sync.Mutex
+	funnelLast   funnelCounts
+	funnelLogged bool
 }
 
 // NewGitHubUserService creates a new service backed by the given cache.

@@ -65,6 +65,8 @@ func (f *fakeNudger) SteerInstanceGuarded(_ context.Context, inst *session.Insta
 			return SteerGuardBusy, nil
 		case GuardDuplicate:
 			return SteerDuplicate, nil
+		case GuardCoolingDown:
+			return SteerCoolingDown, nil
 		}
 		release = rel
 	}
@@ -246,7 +248,8 @@ type nudgeFixture struct {
 }
 
 func linkedPR(host, owner, repo string, number int, account string, links ...githubpkg.LinkedSession) githubpkg.UserPR {
-	return githubpkg.UserPR{Host: host, Owner: owner, Repo: repo, Number: number, AccountLogin: account, LinkedSessions: links}
+	return githubpkg.UserPR{Host: host, Owner: owner, Repo: repo, Number: number, AccountLogin: account, LinkedSessions: links,
+		FailingChecks: []githubpkg.FailingCheck{{Name: "lint", Conclusion: "failure"}}}
 }
 
 func failingLintDetail(t *testing.T, host, owner, repo string, number int) githubpkg.PRNudgeDetail {
@@ -404,8 +407,8 @@ func TestNudgeSessionForPR_should_ReturnPausedWithDistinctCopyForPausedVsNotTrac
 	f.nudger.insts = nil
 	untracked, err := f.call("fix-ci")
 	require.NoError(t, err)
-	assert.Equal(t, sessionv1.NudgeOutcome_NUDGE_OUTCOME_PAUSED, untracked.Outcome)
-	assert.Equal(t, "Session is not running or not tracked. Open its page to restart it.", untracked.Detail)
+	assert.Equal(t, sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOT_RUNNING, untracked.Outcome)
+	assert.Equal(t, "Session is not running or was deleted. Open its page to restart it.", untracked.Detail)
 	assert.NotEqual(t, paused.Detail, untracked.Detail)
 	assert.Zero(t, f.nudger.steerCount())
 	assert.Zero(t, f.fetcher.callCount())
@@ -421,7 +424,8 @@ func TestNudgeSessionForPR_should_MapBusyPausedUntrackedAndNoControllerToDistinc
 		{"queued command or non-idle", SteerBusy, sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, "Session is busy. Try again when it is idle."},
 		{"another delivery in flight", SteerGuardBusy, sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, "Session is busy. Try again when it is idle."},
 		{"no controller", SteerNoStatusSource, sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, "Session isn't being monitored, so it can't safely take a request. Open it to restart it."},
-		{"not tracked at steer time", SteerNotTracked, sessionv1.NudgeOutcome_NUDGE_OUTCOME_PAUSED, "Session is not running or not tracked. Open its page to restart it."},
+		{"not tracked at steer time", SteerNotTracked, sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOT_RUNNING, "Session is not running or was deleted. Open its page to restart it."},
+		{"last write failed, cooling down", SteerCoolingDown, sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, "The last request to this session failed. Try again in a few seconds."},
 		{"duplicate", SteerDuplicate, sessionv1.NudgeOutcome_NUDGE_OUTCOME_DUPLICATE, "Already requested recently."},
 	}
 	for _, tt := range tests {
@@ -553,8 +557,7 @@ func TestNudgeSessionForPR_should_WriteExactlyOnceThroughRealGuard_When_RealSess
 	}
 
 	assert.Equal(t, 1, f.nudger.steerCount())
-	assert.Contains(t, f.nudger.steers[0].sig, "FAILING_CHECKS")
-	assert.Contains(t, f.nudger.steers[0].sig, "github.com/acme/api#42")
+	assert.Equal(t, "FAILING_CHECKS", f.nudger.steers[0].sig)
 }
 
 func TestNudgeSessionForPR_should_ReturnFailedPreconditionWithZeroWrites_When_PaneOwnershipMismatch(t *testing.T) {
@@ -772,4 +775,36 @@ func TestNudgeSessionForPR_should_ReturnUnavailable_When_PortsNotWired(t *testin
 	svc := &GitHubUserService{}
 	_, err := svc.NudgeSessionForPR(context.Background(), nudgeReq("", "acme", "api", 42, "fix-ci"))
 	requireCode(t, err, connect.CodeUnavailable)
+}
+
+func TestNudgeSessionForPR_should_ReturnDeadlineExceededWithoutWriting_When_DeadlineLapsesDuringFetch(t *testing.T) {
+	f := newNudgeFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	f.svc.nudge.fetcher = fetcherFunc(func(fctx context.Context, key githubpkg.PRKey, token string) (githubpkg.PRNudgeDetail, error) {
+		cancel()
+		return f.fetcher.detail, nil
+	})
+
+	_, err := f.svc.NudgeSessionForPR(ctx, nudgeReq("", "acme", "api", 42, "fix-ci"))
+
+	require.Error(t, err)
+	assert.NotEqual(t, connect.CodeInternal, connect.CodeOf(err))
+	assert.Zero(t, f.nudger.steerCount(), "nothing written after the deadline")
+}
+
+func TestNudgeSessionForPR_should_ReturnDeadlineExceededNotInternal_When_SteerFailsAfterDeadline(t *testing.T) {
+	f := newNudgeFixture(t)
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	f.nudger.outcome, f.nudger.err = SteerFailed, context.DeadlineExceeded
+
+	_, err := f.svc.NudgeSessionForPR(ctx, nudgeReq("", "acme", "api", 42, "fix-ci"))
+
+	requireCode(t, err, connect.CodeDeadlineExceeded)
+}
+
+type fetcherFunc func(ctx context.Context, key githubpkg.PRKey, token string) (githubpkg.PRNudgeDetail, error)
+
+func (f fetcherFunc) FetchPRNudgeDetail(ctx context.Context, key githubpkg.PRKey, token string) (githubpkg.PRNudgeDetail, error) {
+	return f(ctx, key, token)
 }

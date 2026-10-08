@@ -13,6 +13,16 @@ jest.mock("./PRCard.css", () => new Proxy({}, { get: (_t, prop) => (typeof prop 
 jest.mock("./NudgeButton.css", () => new Proxy({}, { get: (_t, prop) => (typeof prop === "string" ? prop : "") }));
 
 describe("PRCard chips", () => {
+  it("prCard_should_SayChecksNotListedAndHideNudge_When_RollupFailsWithNoItemisedCheck", () => {
+    render(
+      <PRCard
+        pr={makePR({ checkConclusion: "failure", failingChecks: [], linkedSessions: failingPR().linkedSessions })}
+      />,
+    );
+    expect(screen.getByTestId("ci-failing-unlisted")).toHaveTextContent("CI failing (checks not listed)");
+    expect(screen.queryByRole("button", { name: /ask .* to fix/i })).toBeNull();
+  });
+
   it("prCard_should_RenderChipsFromDetail_When_FailingChecksThreadsConflictPresent", () => {
     const pr = makePR({
       checkConclusion: "failure",

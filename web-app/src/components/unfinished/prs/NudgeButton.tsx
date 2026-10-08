@@ -13,6 +13,7 @@ import * as styles from "./NudgeButton.css";
 export const NUDGE_HINT =
   "Sends this session a message listing the failing checks, unresolved review threads and merge conflict for this PR, as links. Comment text is not included.";
 const PAUSED_TEXT = "Session paused. Open it to resume";
+const NOT_RUNNING_TEXT = "Session is not running or was deleted. Open it to restart it.";
 const NOT_IDLE_TEXT = "Session isn't idle, so it can't take a request. Open it to continue.";
 const BUSY_FALLBACK_TEXT = "Session can't take a request right now. Open it to continue.";
 export const NOT_IDLE_HINT =
@@ -63,6 +64,8 @@ export function outcomeMessage(outcome: NudgeOutcome, detail: string, sessionId:
       return status(detail || BUSY_FALLBACK_TEXT, true);
     case NudgeOutcome.PAUSED:
       return status(detail || PAUSED_TEXT, true);
+    case NudgeOutcome.NOT_RUNNING:
+      return status(detail || NOT_RUNNING_TEXT, true);
     case NudgeOutcome.DUPLICATE:
       return status("Already requested in the last minute", true);
     case NudgeOutcome.NOTHING_TO_FIX:
@@ -173,6 +176,8 @@ export function NudgeButton({ pr, sessions, nudgeable, client, onNothingToFix }:
     } else if (result.status === "done") {
       if (result.outcome === NudgeOutcome.PAUSED) {
         block(result.sessionId, result.detail || PAUSED_TEXT);
+      } else if (result.outcome === NudgeOutcome.NOT_RUNNING) {
+        block(result.sessionId, result.detail || NOT_RUNNING_TEXT);
       } else if (result.outcome === NudgeOutcome.SESSION_NOT_LINKED) {
         block(result.sessionId, "No longer linked");
       } else if (result.outcome === NudgeOutcome.NOTHING_TO_FIX) {

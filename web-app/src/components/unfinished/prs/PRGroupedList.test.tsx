@@ -2,7 +2,7 @@ import React from "react";
 import { render, screen, fireEvent, act, within } from "@testing-library/react";
 import { create, type MessageInitShape } from "@bufbuild/protobuf";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
-import { UserPRSchema, type UserPR } from "@/gen/session/v1/types_pb";
+import { FailingCheckSchema, UserPRSchema, type UserPR } from "@/gen/session/v1/types_pb";
 import { PRGroupedList } from "./PRGroupedList";
 
 jest.mock("./PRCard.css", () => new Proxy({}, { get: (_t, prop) => (typeof prop === "string" ? prop : "") }));
@@ -10,6 +10,10 @@ jest.mock("./PRGroupedList.css", () => new Proxy({}, { get: (_t, prop) => (typeo
 
 function makePR(number: number, over: MessageInitShape<typeof UserPRSchema> = {}): UserPR {
   return create(UserPRSchema, {
+    failingChecks:
+      over.checkConclusion === "failure"
+        ? [create(FailingCheckSchema, { name: "lint", url: "", conclusion: "failure" })]
+        : [],
     owner: "acme",
     repo: "web",
     number,

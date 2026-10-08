@@ -1,6 +1,8 @@
 package services
 
 import (
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -13,8 +15,11 @@ const (
 	GuardOK GuardOutcome = iota
 	// GuardBusy means another delivery is in flight for the session.
 	GuardBusy
-	// GuardDuplicate means the same signature was delivered (or just failed) recently.
+	// GuardDuplicate means the same signature was delivered recently.
 	GuardDuplicate
+	// GuardCoolingDown means the same signature just failed to deliver. Nothing
+	// was confirmed delivered, so callers must report "retry shortly", never "already requested".
+	GuardCoolingDown
 )
 
 const (
@@ -29,11 +34,30 @@ type nudgeRecord struct {
 	sig    string
 	at     time.Time
 	window time.Duration
+	failed bool
+}
+
+// reasonSetSignature is the shared duplicate-window key: the sorted, de-duplicated
+// canonical reason names. The guard is already per session, and a session works
+// one branch (one PR), so the PR key adds nothing; both the manual nudge and
+// PR-fix auto-steer map their own reason vocabulary onto these names so the same
+// problem set dedupes across the two paths.
+func reasonSetSignature(names ...string) string {
+	seen := make(map[string]struct{}, len(names))
+	uniq := make([]string, 0, len(names))
+	for _, n := range names {
+		if _, dup := seen[n]; !dup {
+			seen[n] = struct{}{}
+			uniq = append(uniq, n)
+		}
+	}
+	sort.Strings(uniq)
+	return strings.Join(uniq, ",")
 }
 
 // sessionNudgeGuard serializes PTY nudges per session and suppresses repeats
-// of the same reason signature, shared by the manual nudge RPC and PR-fix
-// auto-steer. State is in memory only: after a server restart the duplicate
+// of the same reason-set signature (see reasonSetSignature), shared by the
+// manual nudge RPC and PR-fix auto-steer. State is in memory only: after a server restart the duplicate
 // window is empty, so a nudge delivered just before a restart can repeat once
 // (accepted for a single-user tool).
 //
@@ -57,7 +81,7 @@ func (g *sessionNudgeGuard) clock() time.Time {
 // TryBegin atomically claims id for a delivery of sig. On GuardOK the caller
 // must call release exactly once: release(true) records the delivery for the
 // 60s duplicate window, release(false) records only a 10s failure cooldown.
-// For GuardBusy and GuardDuplicate, release is a safe no-op. id is
+// For GuardBusy, GuardDuplicate and GuardCoolingDown, release is a safe no-op. id is
 // Instance.GetStableID() on every call path so the manual and automatic
 // callers share one key.
 func (g *sessionNudgeGuard) TryBegin(id, sig string) (release func(success bool), outcome GuardOutcome) {
@@ -71,6 +95,9 @@ func (g *sessionNudgeGuard) TryBegin(id, sig string) (release func(success bool)
 		return func(bool) {}, GuardBusy
 	}
 	if rec, ok := g.last[id]; ok && rec.sig == sig && now.Sub(rec.at) < rec.window {
+		if rec.failed {
+			return func(bool) {}, GuardCoolingDown
+		}
 		return func(bool) {}, GuardDuplicate
 	}
 
@@ -105,7 +132,7 @@ func (g *sessionNudgeGuard) finish(id, sig string, success bool) {
 	if g.last == nil {
 		g.last = make(map[string]nudgeRecord)
 	}
-	g.last[id] = nudgeRecord{sig: sig, at: g.clock(), window: window}
+	g.last[id] = nudgeRecord{sig: sig, at: g.clock(), window: window, failed: !success}
 }
 
 // evictLocked drops records past their TTL, then the oldest records beyond the hard cap.

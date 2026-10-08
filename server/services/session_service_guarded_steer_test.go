@@ -108,7 +108,7 @@ func TestSteerInstanceGuarded_should_ReleaseWithFailureAndSkipDuplicateRecord_Wh
 
 	clk.Advance(5 * time.Second)
 	out, _ := svc.SteerInstanceGuarded(context.Background(), inst, "sigA", "msg")
-	assert.Equal(t, SteerDuplicate, out, "inside the 10s failure cooldown")
+	assert.Equal(t, SteerCoolingDown, out, "inside the 10s failure cooldown; must not read as already delivered")
 
 	clk.Advance(6 * time.Second)
 	out, err = svc.SteerInstanceGuarded(context.Background(), inst, "sigA", "msg")
@@ -194,7 +194,7 @@ func TestSteerOutcome_should_NotBeDelivered_When_ZeroValue(t *testing.T) {
 func TestSteerOutcome_String_should_NameEveryOutcome(t *testing.T) {
 	for o, want := range map[SteerOutcome]string{
 		SteerUnspecified: "unspecified", SteerDelivered: "delivered", SteerGuardBusy: "guard_busy",
-		SteerDuplicate: "duplicate", SteerBusy: "busy", SteerNoStatusSource: "no_status_source",
+		SteerDuplicate: "duplicate", SteerCoolingDown: "cooling_down", SteerBusy: "busy", SteerNoStatusSource: "no_status_source",
 		SteerNotTracked: "not_tracked", SteerFailed: "failed", SteerOutcome(99): "SteerOutcome(99)",
 	} {
 		assert.Equal(t, want, o.String())

@@ -91,7 +91,8 @@ describe("NudgeButton", () => {
     ["no-controller busy", NudgeOutcome.BUSY, "Session isn't being monitored, so it can't safely take a request. Open it to restart it.", "Session isn't being monitored, so it can't safely take a request. Open it to restart it.", "status"],
     ["empty-detail busy", NudgeOutcome.BUSY, "", "Session can't take a request right now. Open it to continue.", "status"],
     ["paused", NudgeOutcome.PAUSED, "", "Session paused. Open it to resume", "status"],
-    ["not tracked", NudgeOutcome.PAUSED, "Session is not running or not tracked. Open its page to restart it.", "Session is not running or not tracked. Open its page to restart it.", "status"],
+    ["not running", NudgeOutcome.NOT_RUNNING, "", "Session is not running or was deleted. Open it to restart it.", "status"],
+    ["not running with server detail", NudgeOutcome.NOT_RUNNING, "Session is not running or was deleted. Open its page to restart it.", "Session is not running or was deleted. Open its page to restart it.", "status"],
     ["duplicate", NudgeOutcome.DUPLICATE, "", "Already requested in the last minute", "status"],
     ["nothing to fix", NudgeOutcome.NOTHING_TO_FIX, "", "Nothing to fix right now", "status"],
     ["not linked", NudgeOutcome.SESSION_NOT_LINKED, "", "Session no longer linked", "status"],
@@ -105,7 +106,7 @@ describe("NudgeButton", () => {
       await click(button());
       const region = role === "status" ? status() : alert();
       expect(region).toHaveTextContent(text);
-      const hasLink = [NudgeOutcome.DELIVERED, NudgeOutcome.BUSY, NudgeOutcome.PAUSED, NudgeOutcome.DUPLICATE].includes(outcome);
+      const hasLink = [NudgeOutcome.DELIVERED, NudgeOutcome.BUSY, NudgeOutcome.PAUSED, NudgeOutcome.NOT_RUNNING, NudgeOutcome.DUPLICATE].includes(outcome);
       expect(within(region).queryAllByRole("link")).toHaveLength(hasLink ? 1 : 0);
     }
   );

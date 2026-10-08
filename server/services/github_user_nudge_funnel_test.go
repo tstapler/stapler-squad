@@ -51,6 +51,7 @@ func TestLogUpNextFunnel_should_CountAttentionLinkedAndLive_When_MixedPRs(t *tes
 	unlinked := linkedPR("github.com", "acme", "api", 43, "alice")
 	unlinked.FailingChecks = failing
 	healthy := linkedPR("github.com", "acme", "api", 44, "alice", githubpkg.LinkedSession{SessionID: "fix-ci"})
+	healthy.FailingChecks = nil
 	draft := linkedPR("github.com", "acme", "api", 45, "alice", githubpkg.LinkedSession{SessionID: "fix-ci"})
 	draft.FailingChecks, draft.IsDraft = failing, true
 
@@ -74,4 +75,37 @@ func TestNudgeOutcomeLog_should_FlagSessionLive_When_SessionResolvesVsNotTracked
 	_, err = f.call("fix-ci")
 	require.NoError(t, err)
 	assert.Equal(t, false, f.logs.byMsg("nudge_outcome")[0].fields["session_live"])
+}
+
+func TestLogUpNextFunnel_should_LogOnlyOnChange_When_SameSnapshotServedRepeatedly(t *testing.T) {
+	f := newNudgeFixture(t)
+	protoPRs := f.svc.userPRsToProto(f.prs.prs)
+
+	f.svc.logUpNextFunnel(protoPRs)
+	f.svc.logUpNextFunnel(protoPRs)
+	require.Len(t, f.logs.byMsg("up_next_funnel"), 1)
+
+	f.prs.prs[0].FailingChecks = nil
+	f.svc.logUpNextFunnel(f.svc.userPRsToProto(f.prs.prs))
+	assert.Len(t, f.logs.byMsg("up_next_funnel"), 2, "counts changed")
+}
+
+func TestLogUpNextFunnel_should_CountFailingRollupWithoutItemisedCheck_When_WebBadgeWould(t *testing.T) {
+	f := newNudgeFixture(t)
+	pr := linkedPR("github.com", "acme", "api", 42, "alice")
+	pr.FailingChecks, pr.CheckConclusion = nil, "failure"
+	f.svc.logUpNextFunnel(f.svc.userPRsToProto([]githubpkg.UserPR{pr}))
+	assert.EqualValues(t, 1, f.logs.byMsg("up_next_funnel")[0].fields["prs_needing_attention"])
+}
+
+func TestUserPRsToProto_should_NotProbeSessions_When_PRIsNotNudgeableOrSessionRepeats(t *testing.T) {
+	f := newNudgeFixture(t)
+	healthy := linkedPR("github.com", "acme", "api", 44, "alice", githubpkg.LinkedSession{SessionID: "fix-ci"})
+	healthy.FailingChecks = nil
+	a := linkedPR("github.com", "acme", "api", 42, "alice", githubpkg.LinkedSession{SessionID: "fix-ci"})
+	b := linkedPR("github.com", "acme", "api", 43, "alice", githubpkg.LinkedSession{SessionID: "fix-ci"})
+
+	f.nudger.finds = 0
+	f.svc.userPRsToProto([]githubpkg.UserPR{healthy, a, b})
+	assert.Equal(t, 1, f.nudger.finds, "healthy PR skipped; the shared session probed once")
 }
