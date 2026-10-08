@@ -459,7 +459,7 @@ func TestNewPipelineEngine_should_ReturnUsableEngineWithEmptyCacheAndWarnLog_Whe
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("expected fallback to default output")
 	}
-	if !strings.Contains(buf.String(), "unresolved pipeline_mode") {
+	if !strings.Contains(buf.String(), "unresolved pipeline_mode") || !strings.Contains(buf.String(), nonDefaultItem.ID) {
 		t.Fatalf("expected the normal unresolved-slug fallback Warn log, got: %q", buf.String())
 	}
 }

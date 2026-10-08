@@ -1038,7 +1038,11 @@ func runBoundedDialogAnswerScenario(t *testing.T, title string, fakePM *stuckDia
 	StartSessionDriver(inst, "/tmp")
 	// Wait for the 6 poll ticks themselves rather than a fixed sleep, so a starved
 	// scheduler cannot let the bound pass vacuously with fewer ticks than intended.
-	wait.RequireEventually(t, func() bool { return fakePM.contentCalls.Load() >= 6 },
+	// contentCalls also counts non-tick previews, so also require 6 poll intervals of wall time.
+	started := time.Now()
+	wait.RequireEventually(t, func() bool {
+		return fakePM.contentCalls.Load() >= 6 && time.Since(started) >= timing.pollInterval*6
+	},
 		timing.pollInterval*6+10*time.Second, 5*time.Millisecond, "driver never reached 6 poll ticks")
 
 	count := fakePM.sendKeysCount.Load()
