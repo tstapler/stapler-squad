@@ -663,7 +663,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *t
 
 	repoDir := t.TempDir()
 	initialCommitRepo(t, repoDir, "main")
-	headSHA := headSHA(t, repoDir)
+	headSHA := headCommitSHA(t, repoDir)
 
 	itemData := BacklogItemData{
 		Title:              "Empty committed diff test",
@@ -730,7 +730,7 @@ func newEmptyDiffFixture(t *testing.T, ctx context.Context, storage *Storage, ti
 	t.Helper()
 	repoDir := t.TempDir()
 	initialCommitRepo(t, repoDir, "main")
-	headSHA := headSHA(t, repoDir)
+	headSHA := headCommitSHA(t, repoDir)
 
 	itemData := BacklogItemData{
 		Title:              title,
@@ -1899,7 +1899,7 @@ func TestDiffFromMergeBaseWhenResumed(t *testing.T) {
 	item := &BacklogItemData{RepoPath: dir}
 
 	// Zero commits ahead of main: still empty, so the no-changes gate holds.
-	tip := headSHA(t, dir)
+	tip := headCommitSHA(t, dir)
 	diff, _ := r.diffFromMergeBaseWhenResumed(context.Background(), item, dir, "work", tip, "", false)
 	require.Empty(t, strings.TrimSpace(diff))
 

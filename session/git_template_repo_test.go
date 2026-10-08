@@ -90,8 +90,8 @@ func commitFile(t *testing.T, dir, name, content, msg string) {
 	require.NoError(t, err)
 }
 
-// headSHA returns dir's HEAD commit in-process; same linked-worktree caveat as commitFile.
-func headSHA(t *testing.T, dir string) string {
+// headCommitSHA returns dir's HEAD commit in-process; same linked-worktree caveat as commitFile.
+func headCommitSHA(t *testing.T, dir string) string {
 	t.Helper()
 	repo, err := git.OpenRepo(dir)
 	require.NoError(t, err)
