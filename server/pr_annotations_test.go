@@ -29,13 +29,29 @@ func legacySnap(path, owner, repo, prURL string) *session.InstanceSnapshot {
 	}
 }
 
-func TestResolveSessionRepo_LegacyForkOnGHERemote_CarriesRemoteHost(t *testing.T) {
+// A remote naming a different repo (fork/rename) must not stamp its host onto the
+// stored owner/repo: the stored PR may live elsewhere.
+func TestResolveSessionRepo_LegacyForkOnGHERemote_NoPRURL_StaysUnrecorded(t *testing.T) {
 	dir := repoWithOrigin(t, "https://ghe.example.com/upstream/renamed.git")
 	ref, _, unrecorded := resolveSessionRepo(legacySnap(dir, "me", "fork", ""), testGHEHosts)
-	assert.False(t, unrecorded)
-	assert.Equal(t, "ghe.example.com", ref.Host())
+	assert.True(t, unrecorded)
+	assert.Equal(t, "", ref.Host())
 	assert.Equal(t, "me", ref.Owner())
 	assert.Equal(t, "fork", ref.Repo())
+}
+
+func TestResolveSessionRepo_LegacyForkOnGHERemote_PRURLOnGitHubCom_UsesPRURLHost(t *testing.T) {
+	dir := repoWithOrigin(t, "https://ghe.example.com/upstream/renamed.git")
+	ref, _, unrecorded := resolveSessionRepo(legacySnap(dir, "me", "fork", "https://github.com/me/fork/pull/9"), testGHEHosts)
+	assert.False(t, unrecorded)
+	assert.NotEqual(t, "ghe.example.com", ref.Host())
+}
+
+func TestResolveSessionRepo_LegacyForkOnGHERemote_PRURLOnGHE_UsesPRURLHost(t *testing.T) {
+	dir := repoWithOrigin(t, "https://ghe.example.com/upstream/renamed.git")
+	ref, _, unrecorded := resolveSessionRepo(legacySnap(dir, "me", "fork", "https://ghe.example.com/me/fork/pull/9"), testGHEHosts)
+	assert.False(t, unrecorded)
+	assert.Equal(t, "ghe.example.com", ref.Host())
 }
 
 func TestResolveSessionRepo_LegacyMatchingRemote_UsesRemote(t *testing.T) {
