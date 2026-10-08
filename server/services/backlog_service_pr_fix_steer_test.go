@@ -894,3 +894,22 @@ func TestLinkKeyFromPRURL_should_MatchPRKeyKey(t *testing.T) {
 	assert.Equal(t, testPRKey(t, 7).Key(), linkKeyFromPRURL("https://github.com/Acme/API/pull/7"))
 	assert.Equal(t, githubpkg.LinkKey(""), linkKeyFromPRURL("not a url"))
 }
+
+func TestReasonSignatureKey_ChangesRequestedWithThreads_MatchesManualNudgeKey(t *testing.T) {
+	prk, err := githubpkg.NewPRKey("github.com", "o", "r", 1)
+	require.NoError(t, err)
+	pr := prk.Key()
+	manual := guardSignature(pr, reasonSetSignature(reasonNameUnresolvedThreads))
+	cr := "## Review: changes requested by @a"
+	for _, headers := range [][]string{{cr, "## Reviewer comments"}, {"## Reviewer comments", cr}} {
+		require.Equal(t, manual, reasonSignature{headers: headers}.key(pr))
+	}
+}
+
+func TestReasonSignatureKey_ChangesRequestedOnly_DoesNotMatchManualThreadKey(t *testing.T) {
+	prk, err := githubpkg.NewPRKey("github.com", "o", "r", 1)
+	require.NoError(t, err)
+	pr := prk.Key()
+	manual := guardSignature(pr, reasonSetSignature(reasonNameUnresolvedThreads))
+	require.NotEqual(t, manual, reasonSignature{headers: []string{"## Review: changes requested by @a"}}.key(pr))
+}

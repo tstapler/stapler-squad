@@ -2,6 +2,7 @@ package github
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -138,5 +139,44 @@ func TestPublish_should_PullFreshAnnotationsFromSource_When_SourceRegistered(t *
 
 	if got := <-ch; len(got[0].LinkedSessions) != 1 || got[0].LinkedSessions[0].SessionID != "live" {
 		t.Fatalf("first fan-out not annotated: %+v", got[0])
+	}
+}
+
+// Run under -race: a publisher whose annotation source is slow must not
+// overwrite the snapshot or annotations stored by a publisher that started later.
+func TestPublish_should_DropStaleResult_When_NewerPublishStoredFirst(t *testing.T) {
+	t.Parallel()
+	repo := mustRef(t, "acme", "api", "github.com")
+	c := NewUserPRCache()
+	inSlowSource := make(chan struct{})
+	releaseSlow := make(chan struct{})
+	var calls atomic.Int32
+	c.SetAnnotationSource(func() ([]PRAnnotationSession, []PRAnnotationWorktree) {
+		if calls.Add(1) == 1 {
+			close(inSlowSource)
+			<-releaseSlow
+			return []PRAnnotationSession{{ID: "old", Branch: "fix", Repo: repo}}, nil
+		}
+		return []PRAnnotationSession{{ID: "new", Branch: "fix", Repo: repo}}, nil
+	})
+	pr := UserPR{Owner: "acme", Repo: "api", Number: 7, HeadRef: "fix", Host: "github.com"}
+
+	slowDone := make(chan struct{})
+	go func() {
+		defer close(slowDone)
+		stale := pr
+		stale.Title = "stale"
+		c.publish([]UserPR{stale}, nil)
+	}()
+	<-inSlowSource
+	fresh := pr
+	fresh.Title = "fresh"
+	c.publish([]UserPR{fresh}, nil)
+	close(releaseSlow)
+	<-slowDone
+
+	got := c.GetAll()[0]
+	if got.Title != "fresh" || len(got.LinkedSessions) != 1 || got.LinkedSessions[0].SessionID != "new" {
+		t.Fatalf("stale publisher overwrote newer result: %+v", got)
 	}
 }

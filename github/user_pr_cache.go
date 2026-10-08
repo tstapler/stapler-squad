@@ -84,7 +84,7 @@ type AccountPollStatus struct {
 
 const (
 	maxFailingChecks = 10
-	maxReviewThreads = 50 // matches reviewThreads(first: 50) in the widened query
+	maxReviewThreads = 50 // poll query only; the on-click nudge fetch reads first:20 and flags MoreThreadsUnseen
 )
 
 // LinkedSessionStatus is the coarse lifecycle state of a linked session.
@@ -213,6 +213,10 @@ type UserPRCache struct {
 	annSessions  []PRAnnotationSession
 	annWorktrees []PRAnnotationWorktree
 	annSource    func() ([]PRAnnotationSession, []PRAnnotationWorktree) // optional; read before each publish
+	// publishSeq numbers publishes in start order; storedSeq is the newest one
+	// stored. A publisher whose annotation source returns after a newer
+	// publisher stored is stale and drops its result. Both guarded by annMu.
+	publishSeq, storedSeq uint64
 
 	nudges nudgeTracker     // success-metric state; see user_pr_nudge_track.go
 	now    func() time.Time // injected in tests; nil means time.Now
@@ -704,6 +708,8 @@ func (c *UserPRCache) publish(merged []UserPR, statuses []AccountPollStatus) {
 	// git remotes, and holding the lock across that would stall Annotate.
 	c.annMu.Lock()
 	src := c.annSource
+	c.publishSeq++
+	seq := c.publishSeq
 	c.annMu.Unlock()
 	var sessions []PRAnnotationSession
 	var worktrees []PRAnnotationWorktree
@@ -712,6 +718,11 @@ func (c *UserPRCache) publish(merged []UserPR, statuses []AccountPollStatus) {
 	}
 
 	c.annMu.Lock()
+	if seq < c.storedSeq {
+		c.annMu.Unlock()
+		return
+	}
+	c.storedSeq = seq
 	if src != nil {
 		c.annSessions, c.annWorktrees = sessions, worktrees
 	}

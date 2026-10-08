@@ -65,22 +65,20 @@ func annotationSessions(poller *session.PRStatusPoller, enterpriseHosts []string
 // 2. Parse from stored PR URL (which may also supply the PR number).
 // 3. Infer from git remote.
 //
-// hostUnrecorded is true only when tier 1 stored no host and the git remote
-// cannot confirm one: an empty stored host is also what github.com sessions
-// carry, so the remote is the only way to tell a legacy GHE session apart.
+// hostUnrecorded is true only when tier 1 stored no host and neither the git
+// remote nor the stored PR URL can confirm one: an empty stored host is also
+// what github.com sessions carry, so those are the only ways to tell a legacy
+// GHE session apart. Residual: a github.com session with no resolvable remote
+// (e.g. a paused session whose worktree is gone) and no PR URL stays
+// unrecorded and may legacy-link a same-owner, same-branch GHE PR; legacy
+// links are flagged LegacyFallback and never grant nudge linkage.
 func resolveSessionRepo(snap *session.InstanceSnapshot, enterpriseHosts []string) (_ githubpkg.RepoRef, prNumber int, hostUnrecorded bool) {
 	prNumber = snap.GitHub.GitHubPRNumber
 	var repoRef githubpkg.RepoRef
 	if snap.GitHub.GitHubOwner != "" && snap.GitHub.GitHubRepo != "" {
 		repoRef, _ = githubpkg.NewRepoRefWithHost(snap.GitHub.GitHubOwner, snap.GitHub.GitHubRepo, snap.GitHub.GitHubHost)
 		if snap.GitHub.GitHubHost == "" {
-			hostUnrecorded = true
-			if remote, ok := remoteRepo(snap.Path, enterpriseHosts); ok {
-				hostUnrecorded = false
-				if strings.EqualFold(remote.Owner(), repoRef.Owner()) && strings.EqualFold(remote.Repo(), repoRef.Repo()) {
-					repoRef = remote
-				}
-			}
+			repoRef, hostUnrecorded = confirmLegacyHost(snap, repoRef, enterpriseHosts)
 		}
 	}
 	if !repoRef.IsValid() && snap.GitHub.GitHubPRURL != "" {
@@ -95,6 +93,26 @@ func resolveSessionRepo(snap *session.InstanceSnapshot, enterpriseHosts []string
 		repoRef, _ = githubpkg.GetOwnerRepoFromRemote(snap.Path, enterpriseHosts)
 	}
 	return repoRef, prNumber, hostUnrecorded && repoRef.IsValid()
+}
+
+// confirmLegacyHost resolves the host of a session that stored owner/repo but
+// no host. The remote's host wins (carried onto the stored owner/repo when a
+// fork or rename makes them differ); the stored PR URL's host is the fallback.
+func confirmLegacyHost(snap *session.InstanceSnapshot, stored githubpkg.RepoRef, enterpriseHosts []string) (_ githubpkg.RepoRef, hostUnrecorded bool) {
+	if remote, ok := remoteRepo(snap.Path, enterpriseHosts); ok {
+		if strings.EqualFold(remote.Owner(), stored.Owner()) && strings.EqualFold(remote.Repo(), stored.Repo()) {
+			return remote, false
+		}
+		withHost, _ := githubpkg.NewRepoRefWithHost(stored.Owner(), stored.Repo(), remote.Host())
+		return withHost, false
+	}
+	if snap.GitHub.GitHubPRURL != "" {
+		if parsed, err := session.ParseGitHubURLWithHosts(snap.GitHub.GitHubPRURL, enterpriseHosts); err == nil {
+			withHost, _ := githubpkg.NewRepoRefWithHost(stored.Owner(), stored.Repo(), parsed.Host)
+			return withHost, false
+		}
+	}
+	return stored, true
 }
 
 func remoteRepo(path string, enterpriseHosts []string) (githubpkg.RepoRef, bool) {
