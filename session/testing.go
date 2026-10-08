@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,6 +14,30 @@ import (
 )
 
 var testEntRepoCounter int64
+
+var (
+	templateDBOnce sync.Once
+	templateDBURI  string
+	templateDBErr  error
+)
+
+// migratedTemplateDBURI returns the DSN of a shared-cache in-memory database that
+// already has the full schema and every startup migration applied, built once per
+// test process and kept open (never closed) so the in-memory database survives for
+// every later copy. Schema creation (ent/Atlas) is ~70% of NewEntRepository's CPU
+// and runs under a process-wide mutex, so repeating it for every test is the
+// dominant cost of storage-backed tests; copying this template skips it.
+func migratedTemplateDBURI() (string, error) {
+	templateDBOnce.Do(func() {
+		dsn := fmt.Sprintf("file:testentrepotemplate%d?mode=memory&cache=shared", atomic.AddInt64(&testEntRepoCounter, 1))
+		if _, err := NewEntRepository(WithDatabasePath(dsn)); err != nil {
+			templateDBErr = err
+			return
+		}
+		templateDBURI = dsn
+	})
+	return templateDBURI, templateDBErr
+}
 
 // NewTestEntRepository returns an EntRepository backed by a uniquely-named
 // shared-cache in-memory SQLite database, closed automatically via
@@ -30,7 +55,11 @@ func NewTestEntRepository(t testing.TB) *EntRepository {
 	t.Helper()
 	id := atomic.AddInt64(&testEntRepoCounter, 1)
 	dsn := fmt.Sprintf("file:testentrepo%d?mode=memory&cache=shared", id)
-	repo, err := NewEntRepository(WithDatabasePath(dsn))
+	seedURI, seedErr := migratedTemplateDBURI()
+	if seedErr != nil {
+		t.Fatalf("NewTestEntRepository: build template database: %v", seedErr)
+	}
+	repo, err := NewEntRepository(WithDatabasePath(dsn), withSeedURI(seedURI))
 	if err != nil {
 		t.Fatalf("NewTestEntRepository: %v", err)
 	}
