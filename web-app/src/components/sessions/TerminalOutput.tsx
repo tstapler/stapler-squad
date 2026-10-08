@@ -2298,6 +2298,52 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
   const isConnectingState = terminalState === "CONNECTING" || terminalState === "LOADING";
 
+  // Rendered in both the desktop toolbar and the mobile overflow row; the hidden file <input>s stay in toolbarActions.
+  const renderUploadButtons = (afterClick?: () => void) => (
+    <>
+      <button
+        className={styles.toolbarButton}
+        onClick={() => {
+          track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "gallery" } });
+          handleGalleryButtonClick();
+          afterClick?.();
+        }}
+        disabled={uploadingCount > 0}
+        title="Attach image(s) from gallery — multi-select supported"
+        aria-label={uploadingCount > 0 ? `Uploading ${uploadingCount} file(s)...` : "Attach images from gallery"}
+      >
+        {uploadSuccess ? `✅ ${uploadSuccess}` : uploadError ? `⚠️ ${uploadError}` : uploadingCount > 0 ? `⏳ ${uploadingCount}…` : "🖼️ Gallery"}
+      </button>
+      <button
+        className={styles.toolbarButton}
+        onClick={() => {
+          track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "files" } });
+          handleFilesButtonClick();
+          afterClick?.();
+        }}
+        disabled={uploadingCount > 0}
+        title="Attach any file(s) — multi-select, all types accepted"
+        aria-label={uploadingCount > 0 ? `Uploading ${uploadingCount} file(s)...` : "Attach files"}
+      >
+        {uploadingCount > 0 ? `⏳ ${uploadingCount}…` : "📁 Files"}
+      </button>
+      {/* Camera — hidden on fine-pointer devices, visible on touch */}
+      <button
+        className={`${styles.toolbarButton} ${styles.mobileOnlyUpload}`}
+        onClick={() => {
+          track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "camera" } });
+          handleCameraButtonClick();
+          afterClick?.();
+        }}
+        disabled={uploadingCount > 0}
+        title="Take a photo — opens camera directly"
+        aria-label={uploadingCount > 0 ? `Uploading ${uploadingCount} file(s)...` : "Take photo with camera"}
+      >
+        {uploadingCount > 0 ? `⏳ ${uploadingCount}…` : "📷"}
+      </button>
+    </>
+  );
+
   return (
     <div className={styles.container}>
       <div className={styles.toolbar}>
@@ -2381,7 +2427,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             aria-label="Redraw terminal (fixes a blank screen)"
             title="Redraw terminal (fixes a blank screen)"
           >
-            ↔️ Redraw
+            ↔️<span className={styles.toolbarButtonLabel}> Redraw</span>
           </button>
           {/* Scroll mode chip — outside the toolbarExpanded conditional so it is reachable with the toolbar collapsed */}
           <ScrollModeChip
@@ -2447,45 +2493,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
                 onChange={handleFilesUpload}
                 aria-hidden="true"
               />
-              {/* Gallery button — always visible */}
-              <button
-                className={styles.toolbarButton}
-                onClick={() => {
-                  track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "gallery" } });
-                  handleGalleryButtonClick();
-                }}
-                disabled={uploadingCount > 0}
-                title="Attach image(s) from gallery — multi-select supported"
-                aria-label={uploadingCount > 0 ? `Uploading ${uploadingCount} file(s)...` : "Attach images from gallery"}
-              >
-                {uploadSuccess ? `✅ ${uploadSuccess}` : uploadError ? `⚠️ ${uploadError}` : uploadingCount > 0 ? `⏳ ${uploadingCount}…` : "🖼️ Gallery"}
-              </button>
-              {/* Files button — any file type, always visible */}
-              <button
-                className={styles.toolbarButton}
-                onClick={() => {
-                  track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "files" } });
-                  handleFilesButtonClick();
-                }}
-                disabled={uploadingCount > 0}
-                title="Attach any file(s) — multi-select, all types accepted"
-                aria-label={uploadingCount > 0 ? `Uploading ${uploadingCount} file(s)...` : "Attach files"}
-              >
-                {uploadingCount > 0 ? `⏳ ${uploadingCount}…` : "📁 Files"}
-              </button>
-              {/* Camera button — hidden on desktop (pointer: fine = mouse), visible on touch */}
-              <button
-                className={`${styles.toolbarButton} ${styles.mobileOnlyUpload}`}
-                onClick={() => {
-                  track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "camera" } });
-                  handleCameraButtonClick();
-                }}
-                disabled={uploadingCount > 0}
-                title="Take a photo — opens camera directly"
-                aria-label={uploadingCount > 0 ? `Uploading ${uploadingCount} file(s)...` : "Take photo with camera"}
-              >
-                {uploadingCount > 0 ? `⏳ ${uploadingCount}…` : "📷"}
-              </button>
+              {/* Inline on desktop; on mobile the same buttons render in the overflow row */}
+              <span className={styles.desktopOnlyUploads}>{renderUploadButtons()}</span>
               {/* Dev tools toggle */}
               <button
                 ref={devToggleRef}
@@ -2599,6 +2608,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
               {action.icon} {action.label}
             </button>
           ))}
+          {renderUploadButtons(() => setMobileOverflowOpen(false))}
         </div>
       )}
       <ScrollHint visible={scrollHint.visible} route={scrollHint.route} onDismiss={scrollHint.dismiss} />

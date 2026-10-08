@@ -421,3 +421,24 @@ describe("compact toolbar auto-collapse", () => {
     expect(screen.queryAllByTestId("mobile-key").length).toBeGreaterThan(0);
   });
 });
+
+describe("TerminalOutput — mobile overflow row upload buttons", () => {
+  it("renders Gallery and Files in the overflow row once More is opened", () => {
+    renderTerminal();
+    expect(screen.queryByTestId("toolbar-overflow-row")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("toolbar-more-button"));
+
+    const row = screen.getByTestId("toolbar-overflow-row");
+    expect(row).toContainElement(screen.getAllByLabelText("Attach images from gallery")[1]);
+    expect(row).toContainElement(screen.getAllByLabelText("Attach files")[1]);
+  });
+
+  it("keeps the Redraw accessible name when its text label is CSS-hidden on phones", () => {
+    renderTerminal();
+    expect(screen.getByLabelText("Redraw terminal (fixes a blank screen)")).toHaveAttribute(
+      "title",
+      "Redraw terminal (fixes a blank screen)"
+    );
+  });
+});

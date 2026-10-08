@@ -134,10 +134,33 @@ export const toolbarButton = style({
       minHeight: "var(--min-touch-target, 44px)",
       minWidth: "var(--min-touch-target, 44px)",
     },
+    "screen and (max-width: 480px)": {
+      padding: "0.4rem 0.4rem",
+    },
   },
 });
 
 export const debugActive = style({});
+
+// Text half of a toolbar button; drops to icon-only on portrait phones.
+export const toolbarButtonLabel = style({
+  "@media": {
+    "screen and (max-width: 480px)": {
+      display: "none",
+    },
+  },
+});
+
+// Wraps the inline Gallery/Files/Camera buttons: transparent to layout on desktop,
+// gone on mobile where the same buttons render in mobileOverflowRow instead.
+export const desktopOnlyUploads = style({
+  display: "contents",
+  "@media": {
+    "screen and (max-width: 768px)": {
+      display: "none",
+    },
+  },
+});
 
 // Camera button — hidden on fine-pointer devices (mouse/trackpad), visible on touch screens.
 // @media (pointer: fine) targets mice; touch-only devices have pointer: coarse.
