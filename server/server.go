@@ -436,9 +436,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	wsBridge := services.NewStreamingWSBridge(handler)
 	watchSessionsPath := "/api" + sessionv1connect.SessionServiceWatchSessionsProcedure
 	watchReviewQueuePath := "/api" + sessionv1connect.SessionServiceWatchReviewQueueProcedure
+	watchWorkflowsPath := "/api" + sessionv1connect.SessionServiceWatchWorkflowsProcedure
 	srv.mux.Handle(watchSessionsPath, wsBridge.Handler("/api"))
 	srv.mux.Handle(watchReviewQueuePath, wsBridge.Handler("/api"))
-	log.Info("Registered StreamingWSBridge", "watchSessions", watchSessionsPath, "watchReviewQueue", watchReviewQueuePath)
+	srv.mux.Handle(watchWorkflowsPath, wsBridge.Handler("/api"))
+	log.Info("Registered StreamingWSBridge", "watchSessions", watchSessionsPath, "watchReviewQueue", watchReviewQueuePath, "watchWorkflows", watchWorkflowsPath)
 
 	srv.RegisterConnectHandler(apiPath, http.StripPrefix("/api", handler))
 
@@ -498,6 +500,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		ghAPIPath := "/api" + ghPath
 		srv.RegisterConnectHandler(ghAPIPath, http.StripPrefix("/api", ghHandler))
 		log.Info("Registered GitHubUserService handler", "path", ghAPIPath)
+
+		// Bridge WatchUserPRs over WebSocket too — the browser sends every Watch*
+		// call through the WS transport (see createSessionWatchTransport), so an
+		// unbridged one fails to connect.
+		watchUserPRsPath := "/api" + sessionv1connect.GitHubUserServiceWatchUserPRsProcedure
+		srv.mux.Handle(watchUserPRsPath, services.NewStreamingWSBridge(ghHandler).Handler("/api"))
+		log.Info("Registered StreamingWSBridge", "watchUserPRs", watchUserPRsPath)
 	}
 
 	// Register TymuxRolloutService handler (tymux-bundled-integration Epic
