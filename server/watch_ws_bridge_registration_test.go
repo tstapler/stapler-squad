@@ -18,6 +18,11 @@ import (
 // with a StreamingWSBridge in server.go or the page logs "WebSocket connection
 // ... failed" and the live view silently goes stale. WatchWorkflows and
 // WatchUserPRs were missed that way.
+//
+// This is a source check, not a route check: it proves server.go references each
+// procedure constant (so a new Watch RPC with no registration fails here), not
+// that the reference reaches a mux.Handle call. It only covers session.v1 and
+// server.go.
 func TestEveryServerStreamingWatchRPCHasAWebSocketBridge(t *testing.T) {
 	src, err := os.ReadFile("server.go")
 	require.NoError(t, err)
