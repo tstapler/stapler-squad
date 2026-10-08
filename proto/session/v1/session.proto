@@ -1909,7 +1909,7 @@ message BackgroundModelsProto {
   map<string, string> features = 1;
   // Backlog stage role ("work", "review") -> model alias/ID override.
   map<string, string> stages = 2;
-  // --effort level for background work sessions; empty = unset.
+  // --effort level for background work sessions; empty = server default ("medium"); "off" = no --effort flag.
   string effort = 3;
 }
 

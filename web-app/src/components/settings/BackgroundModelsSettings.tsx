@@ -69,6 +69,10 @@ export function BackgroundModelsSettings() {
     load();
   }, [load]);
 
+  // Unlisted pins (hand-set in config.json) are kept server-side; sending them back is rejected.
+  const onlyListed = (o: Overrides, listed: Overrides): Overrides =>
+    Object.fromEntries(Object.entries(o).filter(([k]) => k in listed));
+
   async function handleSave() {
     if (!clientRef.current) return;
     setSaving(true);
@@ -76,7 +80,11 @@ export function BackgroundModelsSettings() {
     setStatus(null);
     try {
       await clientRef.current.updateBackgroundModels({
-        settings: { features, stages, effort },
+        settings: {
+          features: onlyListed(features, featureDefaults),
+          stages: onlyListed(stages, stageDefaults),
+          effort,
+        },
       });
       setStatus("Saved — applies to the next call, no restart needed.");
       await load(true);

@@ -45,6 +45,19 @@ test("shows defaults as placeholders and saves overrides live", async () => {
   expect(await screen.findByRole("status")).toHaveTextContent(/no restart/);
 });
 
+test("does not send hand-set pins on unlisted keys back on save", async () => {
+  mockGet.mockResolvedValue({
+    ...loaded,
+    settings: { features: { "legacy-feature": "opus" }, stages: { retired: "opus" }, effort: "" },
+  });
+  render(<BackgroundModelsSettings />);
+  await screen.findByLabelText("handoff-summary");
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  await waitFor(() => expect(mockUpdate).toHaveBeenCalled());
+  expect(mockUpdate.mock.calls[0][0].settings).toEqual({ features: {}, stages: {}, effort: "" });
+});
+
 test("shows a retryable error when load fails", async () => {
   mockGet.mockRejectedValueOnce(new Error("boom"));
   render(<BackgroundModelsSettings />);

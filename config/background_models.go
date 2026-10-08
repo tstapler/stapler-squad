@@ -3,6 +3,7 @@ package config
 import (
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -17,6 +18,16 @@ const maxBackgroundModelLength = 128
 // context suffixes ("sonnet[1m]"); it rejects whitespace and a leading "-" (argv injection).
 var validModelName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:\[\]-]*$`)
 
+// warnedInvalid dedupes warnings: config is reloaded on every headless call, so an
+// invalid value would otherwise log once per call.
+var warnedInvalid sync.Map //nolint:gochecknoglobals
+
+func warnInvalidOnce(id, msg string, args ...any) {
+	if _, seen := warnedInvalid.LoadOrStore(id, struct{}{}); !seen {
+		log.Warn(msg, args...)
+	}
+}
+
 // usableModel returns m when it is safe to forward as a --model value; otherwise it
 // warns and returns "" so the caller falls back to the built-in default.
 func usableModel(kind, key, m string) string {
@@ -24,7 +35,7 @@ func usableModel(kind, key, m string) string {
 		return ""
 	}
 	if !ValidBackgroundModelName(m) {
-		log.Warn("ignoring invalid background model; using built-in default", "kind", kind, "key", key, "value", m)
+		warnInvalidOnce("model|"+kind+"|"+key+"|"+m, "ignoring invalid background model; using built-in default", "kind", kind, "key", key, "value", m)
 		return ""
 	}
 	return m
@@ -138,7 +149,7 @@ func (c *Config) BackgroundEffort() string {
 	case isValidEffortLevel(e):
 		return e
 	}
-	log.Warn("ignoring invalid background effort level; using default", "value", e, "default", DefaultBackgroundEffort)
+	warnInvalidOnce("effort|"+e, "ignoring invalid background effort level; using default", "value", e, "default", DefaultBackgroundEffort)
 	return DefaultBackgroundEffort
 }
 
