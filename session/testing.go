@@ -16,6 +16,7 @@ import (
 var testEntRepoCounter int64
 
 var (
+	templateKeeper *sql.Conn // never closed: pins the template in memory for the process lifetime
 	templateDBOnce sync.Once
 	templateDBURI  string
 	templateDBErr  error
@@ -31,6 +32,20 @@ func migratedTemplateDBURI() (string, error) {
 	templateDBOnce.Do(func() {
 		dsn := fmt.Sprintf("file:testentrepotemplate%d?mode=memory&cache=shared", atomic.AddInt64(&testEntRepoCounter, 1))
 		if _, err := NewEntRepository(WithDatabasePath(dsn)); err != nil {
+			templateDBErr = err
+			return
+		}
+		// An in-memory database lives only while a connection to it stays open, and
+		// NewEntRepository's pool recycles its connection after an hour
+		// (SetConnMaxLifetime). Pin a second connection with no lifetime limit so the
+		// template survives a long-running test process.
+		keeper, err := sql.Open("sqlite", dsn)
+		if err != nil {
+			templateDBErr = err
+			return
+		}
+		keeper.SetConnMaxLifetime(0)
+		if templateKeeper, err = keeper.Conn(context.Background()); err != nil {
 			templateDBErr = err
 			return
 		}
