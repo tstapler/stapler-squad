@@ -71,9 +71,10 @@ func (s *GitHubUserService) ListUserPRs(
 	_ *connect.Request[sessionv1.ListUserPRsRequest],
 ) (*connect.Response[sessionv1.ListUserPRsResponse], error) {
 	authState := s.resolveAuthState(ctx)
-	prs := s.cache.GetAll()
+	protoPRs := s.userPRsToProto(s.cache.GetAll())
+	s.logUpNextFunnel(protoPRs)
 	return connect.NewResponse(&sessionv1.ListUserPRsResponse{
-		Prs:             userPRsToProto(prs),
+		Prs:             protoPRs,
 		AuthState:       authState,
 		AccountStatuses: accountStatusesToProto(s.cache.AccountStatuses()),
 	}), nil
@@ -90,10 +91,11 @@ func (s *GitHubUserService) WatchUserPRs(
 	authState := s.resolveAuthState(ctx)
 
 	// 1. Send initial snapshot.
-	initial := s.cache.GetAll()
+	initial := s.userPRsToProto(s.cache.GetAll())
+	s.logUpNextFunnel(initial)
 	if err := stream.Send(&sessionv1.UserPREvent{
 		EventType:       "snapshot",
-		Prs:             userPRsToProto(initial),
+		Prs:             initial,
 		AuthState:       authState,
 		AccountStatuses: accountStatusesToProto(s.cache.AccountStatuses()),
 	}); err != nil {
@@ -117,7 +119,7 @@ func (s *GitHubUserService) WatchUserPRs(
 			}
 			if err := stream.Send(&sessionv1.UserPREvent{
 				EventType:       "snapshot",
-				Prs:             userPRsToProto(prs),
+				Prs:             s.userPRsToProto(prs),
 				AuthState:       authState,
 				AccountStatuses: accountStatusesToProto(s.cache.AccountStatuses()),
 			}); err != nil {

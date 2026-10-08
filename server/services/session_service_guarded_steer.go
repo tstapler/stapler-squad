@@ -102,6 +102,12 @@ func (s *SessionService) instanceReadyForSteer(inst *session.Instance) notReadyR
 	return notReadyNone
 }
 
+// InstanceReadyForSteer implements PRNudger: true only when the shared idle
+// gate confirms inst is safe to write to.
+func (s *SessionService) InstanceReadyForSteer(inst *session.Instance) bool {
+	return s.instanceReadyForSteer(inst) == notReadyNone
+}
+
 // SteerInstanceGuarded delivers msg to inst under the per-session nudge guard
 // shared by the manual nudge RPC and PR-fix auto-steer. Order: guard ->
 // idle gate -> pane-ownership verification -> write. Pane ownership is

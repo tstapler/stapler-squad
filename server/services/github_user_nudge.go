@@ -36,6 +36,8 @@ const (
 type PRNudger interface {
 	FindLiveInstance(id string) *session.Instance
 	SteerInstanceGuarded(ctx context.Context, inst *session.Instance, sig, msg string) (SteerOutcome, error)
+	// InstanceReadyForSteer is the idle gate SteerInstanceGuarded applies.
+	InstanceReadyForSteer(inst *session.Instance) bool
 }
 
 var _ PRNudger = (*SessionService)(nil)
@@ -187,6 +189,9 @@ type nudgeCall struct {
 	reasons     []sessionv1.NudgeReason
 	promptBytes int
 	attention   *int64
+	// live is true once the session resolved to a live, unpaused instance;
+	// it is the denominator for the nudge delivery rate (see requirements).
+	live bool
 }
 
 // attentionAge is the whole seconds since firstSeen, or false when the poll
@@ -283,6 +288,7 @@ func (s *GitHubUserService) resolveSession(call *nudgeCall, sessionID string) (i
 		return nil, nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_SESSION_NOT_LINKED, nil, "", nudgeNotLinkedDetail), nil
 	}
 	call.sessionID = inst.GetStableID()
+	call.live = true
 	if snap.Status.IsSuspended() {
 		return nil, nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_PAUSED, nil, call.sessionID, nudgePausedDetail), nil
 	}
@@ -446,9 +452,68 @@ func (s *GitHubUserService) logNudgeExit(call *nudgeCall, resp *sessionv1.NudgeS
 		"outcome", outcome,
 		"reasons", nudgeReasonNames(call.reasons),
 		"latency_ms", s.nudgeClock().Now().Sub(call.startedAt).Milliseconds(),
-		"prompt_bytes", call.promptBytes)
+		"prompt_bytes", call.promptBytes,
+		"session_live", call.live)
 	if call.attention != nil {
 		args = append(args, "attention_age_s", *call.attention)
 	}
 	s.nudgeLogf("nudge_outcome", args...)
+}
+
+// linkedSessionSteerReady reports whether the nudge could be delivered to the
+// linked session right now. It mirrors resolveSession's checks and then asks
+// the shared idle gate; anything unconfirmed is false.
+func (s *GitHubUserService) linkedSessionSteerReady(sessionID string) bool {
+	if s.nudge.nudger == nil {
+		return false
+	}
+	inst := s.nudge.nudger.FindLiveInstance(sessionID)
+	if inst == nil {
+		return false
+	}
+	snap := inst.Snapshot()
+	if snap.Title != sessionID || snap.Status.IsSuspended() || !CanSteer(snap.Program) {
+		return false
+	}
+	return s.nudge.nudger.InstanceReadyForSteer(inst)
+}
+
+// userPRsToProto converts PRs and marks each strictly linked session with its
+// steer readiness. Readiness is as of this snapshot; a poll or click may find
+// the session busy by then, which the nudge reports as BUSY.
+func (s *GitHubUserService) userPRsToProto(prs []githubpkg.UserPR) []*sessionv1.UserPR {
+	out := userPRsToProto(prs)
+	for i, pr := range prs {
+		for j, ls := range pr.LinkedSessions {
+			if !ls.LegacyFallback && j < len(out[i].LinkedSessions) {
+				out[i].LinkedSessions[j].SteerReady = s.linkedSessionSteerReady(ls.SessionID)
+			}
+		}
+	}
+	return out
+}
+
+// logUpNextFunnel emits one up_next_funnel line per snapshot handed to a
+// client: how many PRs need attention, how many have a linked session, and
+// how many of those have a steer-ready one. Clicks and deliveries are the
+// nudge_request and nudge_outcome lines.
+func (s *GitHubUserService) logUpNextFunnel(prs []*sessionv1.UserPR) {
+	var attention, linked, live int
+	for _, pr := range prs {
+		if pr.GetIsDraft() || (len(pr.GetFailingChecks()) == 0 && pr.GetUnresolvedThreadCount() == 0 && !pr.GetHasMergeConflict()) {
+			continue
+		}
+		attention++
+		if len(pr.GetLinkedSessions()) == 0 {
+			continue
+		}
+		linked++
+		for _, ls := range pr.GetLinkedSessions() {
+			if ls.GetSteerReady() {
+				live++
+				break
+			}
+		}
+	}
+	s.nudgeLogf("up_next_funnel", "prs_needing_attention", attention, "with_linked_session", linked, "with_live_session", live)
 }

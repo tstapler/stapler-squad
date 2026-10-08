@@ -39,6 +39,7 @@ type fakeNudger struct {
 	inWrite  chan struct{} // closed on first write entry when non-nil
 	holdOpen chan struct{} // writes block until closed when non-nil
 	onSteer  func()
+	notIdle  bool // InstanceReadyForSteer reports false
 }
 
 func (f *fakeNudger) FindLiveInstance(id string) *session.Instance {
@@ -52,6 +53,8 @@ func (f *fakeNudger) FindLiveInstance(id string) *session.Instance {
 	}
 	return nil
 }
+
+func (f *fakeNudger) InstanceReadyForSteer(*session.Instance) bool { return !f.notIdle }
 
 func (f *fakeNudger) SteerInstanceGuarded(_ context.Context, inst *session.Instance, sig, msg string) (SteerOutcome, error) {
 	release := func(bool) {}
