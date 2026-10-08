@@ -34,13 +34,16 @@ type actuatorComponent struct {
 }
 
 func handleActuatorHealth(w http.ResponseWriter, _ *http.Request) {
-	fp := tmux.ForkPressureSnapshot()
-	goroutines := runtime.NumGoroutine()
+	writeActuatorHealth(w, tmux.ForkPressureSnapshot().Level, runtime.NumGoroutine())
+}
 
+// writeActuatorHealth takes the process-global inputs as parameters so tests can
+// pin them instead of depending on package-wide goroutine count or fork pressure.
+func writeActuatorHealth(w http.ResponseWriter, forkLevel tmux.ForkPressureLevel, goroutines int) {
 	components := map[string]actuatorComponent{
 		"fork_pressure": {
-			Status: forkPressureHealthStatus(fp.Level),
-			Detail: fp.Level.String(),
+			Status: forkPressureHealthStatus(forkLevel),
+			Detail: forkLevel.String(),
 		},
 		"runtime": {
 			Status: goroutineHealthStatus(goroutines),
