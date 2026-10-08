@@ -219,6 +219,31 @@ func TestGetSessionDefaults_ServesRuntimeReworkCapDefault(t *testing.T) {
 	assert.Equal(t, config.DefaultMaxAutoReworkIterations, (*config.Config)(nil).MaxAutoReworkIterationsOrDefault())
 }
 
+// TestGetSessionDefaults_ServesRuntimeAutonomousMaxTurnsDefault pins the settings
+// form's turn-cap value to the cap the server enforces.
+func TestGetSessionDefaults_ServesRuntimeAutonomousMaxTurnsDefault(t *testing.T) {
+	svc := newIsolatedDefaultsService(t)
+
+	resp, err := svc.GetSessionDefaults(context.Background(), connect.NewRequest(&sessionv1.GetSessionDefaultsRequest{}))
+	require.NoError(t, err)
+	assert.Equal(t, int32((*config.Config)(nil).AutonomousMaxTurnsOrDefault()), resp.Msg.Defaults.AutonomousMaxTurns)
+}
+
+func TestUpdateGlobalDefaults_AutonomousMaxTurns(t *testing.T) {
+	t.Run("ZeroResetsToDefault", func(t *testing.T) {
+		svc := newIsolatedDefaultsService(t)
+		resp, err := svc.UpdateGlobalDefaults(context.Background(), connect.NewRequest(&sessionv1.UpdateGlobalDefaultsRequest{}))
+		require.NoError(t, err)
+		assert.Equal(t, int32((*config.Config)(nil).AutonomousMaxTurnsOrDefault()), resp.Msg.Defaults.AutonomousMaxTurns)
+	})
+	t.Run("ExplicitValueRoundTrips", func(t *testing.T) {
+		svc := newIsolatedDefaultsService(t)
+		resp, err := svc.UpdateGlobalDefaults(context.Background(), connect.NewRequest(&sessionv1.UpdateGlobalDefaultsRequest{AutonomousMaxTurns: 50}))
+		require.NoError(t, err)
+		assert.Equal(t, int32(50), resp.Msg.Defaults.AutonomousMaxTurns)
+	})
+}
+
 // TestUpdateGlobalDefaults_ZeroStaleSessionThreshold_UsesServerDefault verifies the
 // "0 means use the server default" convention (matching max_auto_rework_iterations
 // and max_concurrent_backlog_work_items): sending 0 leaves the persisted config.json

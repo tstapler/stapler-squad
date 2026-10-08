@@ -2198,7 +2198,7 @@ message SessionDefaultsConfig {
   string new_project_base_dir = 9;
   // Max automated rework iterations before a backlog item's auto-reopen loop
   // leaves it in review for manual action. 0 in a request means "use the
-  // server default (3)"; the response always echoes the resolved value.
+  // server default (5)"; the response always echoes the resolved value.
   int32 max_auto_rework_iterations = 10;
   // Max backlog items that may be in_progress at once. 0 in a request means
   // "use the server default (2)"; the response always echoes the resolved value.
@@ -2211,6 +2211,9 @@ message SessionDefaultsConfig {
   // Global default configurable crash/stall retry policy
   // (session-retry-backoff). Always the resolved value in responses.
   RetryPolicyConfig retry_policy = 14;
+  // Max turns one autonomous-driver session may run. The response always echoes the
+  // resolved value (default 30, bounded [1, 200]).
+  int32 autonomous_max_turns = 15;
 }
 
 // RetryPolicyConfig describes the automated crash/stall retry policy: how
@@ -2279,7 +2282,7 @@ message UpdateGlobalDefaultsRequest {
   string one_off_base_dir = 6;
   // Base directory where new project folders are created. Defaults to ~/Projects.
   string new_project_base_dir = 7;
-  // 0 = use the server default (3). See SessionDefaultsConfig.max_auto_rework_iterations.
+  // 0 = use the server default (5). See SessionDefaultsConfig.max_auto_rework_iterations.
   int32 max_auto_rework_iterations = 8;
   // 0 = use the server default (2). See SessionDefaultsConfig.max_concurrent_backlog_work_items.
   int32 max_concurrent_backlog_work_items = 9;
@@ -2290,6 +2293,8 @@ message UpdateGlobalDefaultsRequest {
   // (session-retry-backoff). Applies to newly-started retry episodes only —
   // a session already mid-backoff keeps the policy it started with.
   RetryPolicyConfig retry_policy = 12;
+  // 0 = use the server default (30). See SessionDefaultsConfig.autonomous_max_turns.
+  int32 autonomous_max_turns = 13;
 }
 
 message UpdateGlobalDefaultsResponse {

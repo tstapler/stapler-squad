@@ -148,6 +148,7 @@ func (d *DefaultsService) UpdateGlobalDefaults(
 	cfg.OneOffBaseDir = req.Msg.OneOffBaseDir
 	cfg.NewProjectBaseDir = req.Msg.NewProjectBaseDir
 	cfg.MaxAutoReworkIterations = int(req.Msg.MaxAutoReworkIterations)
+	cfg.AutonomousMaxTurns = int(req.Msg.AutonomousMaxTurns)
 	cfg.MaxConcurrentBacklogWorkItems = int(req.Msg.MaxConcurrentBacklogWorkItems)
 	cfg.StaleSession.ThresholdMinutes = int(req.Msg.StaleSessionThresholdMinutes)
 	notifyEnabled := req.Msg.StaleSessionNotifyEnabled
@@ -551,7 +552,9 @@ func sessionDefaultsToProto(cfg *config.Config) *sessionv1.SessionDefaultsConfig
 		MaxConcurrentBacklogWorkItems: int32(cfg.MaxConcurrentBacklogWorkItemsOrDefault()),
 		// #nosec G115 -- see MaxAutoReworkIterations above.
 		StaleSessionThresholdMinutes: int32(cfg.StaleSession.ThresholdMinutesOrDefault()),
-		StaleSessionNotifyEnabled:    cfg.StaleSession.NotifyEnabledOrDefault(),
+		// #nosec G115 -- see MaxAutoReworkIterations above.
+		AutonomousMaxTurns:        int32(cfg.AutonomousMaxTurnsOrDefault()),
+		StaleSessionNotifyEnabled: cfg.StaleSession.NotifyEnabledOrDefault(),
 		RetryPolicy: &sessionv1.RetryPolicyConfig{
 			Enabled: cfg.RetryPolicy.EnabledOrDefault(),
 			// #nosec G115 -- small local retry-policy config knobs (attempt

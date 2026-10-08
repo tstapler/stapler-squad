@@ -36,6 +36,7 @@ export function GlobalDefaultsForm() {
   const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([]);
   const [cliFlags, setCliFlags] = useState("");
   const [maxAutoReworkIterations, setMaxAutoReworkIterations] = useState(0); // set from the server-resolved default on load
+  const [autonomousMaxTurns, setAutonomousMaxTurns] = useState(0); // set from the server-resolved default on load
   const [maxConcurrentBacklogWorkItems, setMaxConcurrentBacklogWorkItems] = useState(2);
   const [staleSessionThresholdMinutes, setStaleSessionThresholdMinutes] = useState(30);
   const [staleSessionNotifyEnabled, setStaleSessionNotifyEnabled] = useState(true);
@@ -60,6 +61,7 @@ export function GlobalDefaultsForm() {
         setTags([...defaults.tags]);
         setCliFlags(defaults.cliFlags);
         setMaxAutoReworkIterations(defaults.maxAutoReworkIterations);
+        setAutonomousMaxTurns(defaults.autonomousMaxTurns);
         setMaxConcurrentBacklogWorkItems(defaults.maxConcurrentBacklogWorkItems || 2);
         setStaleSessionThresholdMinutes(defaults.staleSessionThresholdMinutes || 30);
         setStaleSessionNotifyEnabled(defaults.staleSessionNotifyEnabled);
@@ -102,6 +104,7 @@ export function GlobalDefaultsForm() {
         envVars: envVarsMap,
         cliFlags,
         maxAutoReworkIterations,
+        autonomousMaxTurns,
         maxConcurrentBacklogWorkItems,
         staleSessionThresholdMinutes,
         staleSessionNotifyEnabled,
@@ -326,6 +329,28 @@ export function GlobalDefaultsForm() {
           <p className={hint}>
             How many times a backlog item can be auto-reopened for rework after a failed
             review before it&apos;s left in review for manual action.
+          </p>
+        </div>
+
+        {/* Max Autonomous Session Turns */}
+        <div className={field}>
+          <label className={labelClass} htmlFor="global-autonomous-max-turns">
+            Max Autonomous Session Turns
+          </label>
+          <input
+            id="global-autonomous-max-turns"
+            type="number"
+            min={1}
+            max={200}
+            className={input}
+            value={autonomousMaxTurns}
+            onChange={(e) =>
+              setAutonomousMaxTurns(Math.min(200, Math.max(1, parseInt(e.target.value, 10) || 1)))
+            }
+          />
+          <p className={hint}>
+            How many turns a single autonomous session may run before it stops. Default 30,
+            maximum 200. Too low cuts work off mid-task; too high risks runaway cost.
           </p>
         </div>
 

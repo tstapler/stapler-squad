@@ -37,6 +37,7 @@ const sampleDefaults = {
   envVars: {},
   cliFlags: "",
   maxAutoReworkIterations: 3,
+  autonomousMaxTurns: 30,
   maxConcurrentBacklogWorkItems: 2,
   staleSessionThresholdMinutes: 30,
   staleSessionNotifyEnabled: true,
@@ -66,6 +67,14 @@ describe("GlobalDefaultsForm", () => {
     });
     render(<GlobalDefaultsForm />);
     expect(await screen.findByLabelText("Max Auto-Rework Iterations")).toHaveValue(5);
+  });
+
+  it("shows the server-resolved Max Autonomous Session Turns default, not a client constant", async () => {
+    mockGetSessionDefaults.mockResolvedValue({
+      defaults: { ...sampleDefaults, autonomousMaxTurns: 45 },
+    });
+    render(<GlobalDefaultsForm />);
+    expect(await screen.findByLabelText("Max Autonomous Session Turns")).toHaveValue(45);
   });
 
   it("submits the loaded maxConcurrentBacklogWorkItems value unchanged", async () => {
