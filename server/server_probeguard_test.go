@@ -66,10 +66,14 @@ func TestStartChain_should_AcceptPublishedHostname_When_SetHostnamesCalledLater(
 	assert.Equal(t, http.StatusOK, postProbe(chain, "onyx.lan:8543", ""))
 }
 
-func TestStartChain_should_NotInstallGuard_When_AuthMiddlewareSet(t *testing.T) {
+// ProbeGuard's POST/loopback-bound checks are replaced by auth, but the Host
+// guard stays: auth alone doesn't stop a same-box proxy or rebinding Host.
+func TestStartChain_should_KeepHostGuard_When_AuthMiddlewareSet(t *testing.T) {
 	srv, reached := newChainTestServer(t, "localhost:8543")
 	srv.authMiddleware = func(next http.Handler) http.Handler { return next }
-	assert.Equal(t, http.StatusOK, postProbe(srv.localChain(), "evil.example:8543", ""))
+	assert.Equal(t, http.StatusForbidden, postProbe(srv.localChain(), "evil.example:8543", ""))
+	assert.Zero(t, *reached)
+	assert.Equal(t, http.StatusOK, postProbe(srv.localChain(), "localhost:8543", ""))
 	assert.Equal(t, 1, *reached)
 }
 
