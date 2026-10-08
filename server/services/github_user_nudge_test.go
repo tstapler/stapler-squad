@@ -557,7 +557,7 @@ func TestNudgeSessionForPR_should_WriteExactlyOnceThroughRealGuard_When_RealSess
 	}
 
 	assert.Equal(t, 1, f.nudger.steerCount())
-	assert.Equal(t, "FAILING_CHECKS", f.nudger.steers[0].sig)
+	assert.Equal(t, "github.com/acme/api#42|FAILING_CHECKS", f.nudger.steers[0].sig)
 }
 
 func TestNudgeSessionForPR_should_ReturnFailedPreconditionWithZeroWrites_When_PaneOwnershipMismatch(t *testing.T) {

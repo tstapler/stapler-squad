@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"strings"
 	"testing"
 	"time"
@@ -773,7 +774,7 @@ func TestSteerActiveSessionForPRFix_should_PassFullReasonSignatureToGuard_When_C
 
 	pinnedBaselineSteer(t, svc, itemID, "## Failing CI checks\n- lint\n\n## Reviewer comments\n- nit\n")
 
-	require.Equal(t, []string{"FAILING_CHECKS,UNRESOLVED_THREADS"}, steerer.guardedSigs)
+	require.Equal(t, []string{"|FAILING_CHECKS,UNRESOLVED_THREADS"}, steerer.guardedSigs, "item has no PR URL, so the PR part is empty")
 }
 
 func TestSteerActiveSessionForPRFix_should_ReturnWithoutDegradingOrMarkingFailed_When_ManualNudgeInFlight(t *testing.T) {
@@ -826,18 +827,27 @@ func TestGuardKey_should_Match_When_GetStableIDEqualsActiveSessionUUID(t *testin
 	assert.Equal(t, active.SessionUUID, live.GetStableID(), "manual (GetStableID) and automatic (SessionUUID) paths share one guard key")
 }
 
-func TestReasonSignatureKey_should_MatchManualNudgeSignature_When_SameProblemSet(t *testing.T) {
-	auto := buildReasonSignature("## Merge conflict\nx\n## Failing CI checks\n- lint\n").key()
-	manual := nudgeSignature([]sessionv1.NudgeReason{
+func testPRKey(t *testing.T, n int) githubpkg.PRKey {
+	t.Helper()
+	k, err := githubpkg.NewPRKey("github.com", "acme", "api", n)
+	require.NoError(t, err)
+	return k
+}
+
+func TestReasonSignatureKey_should_MatchManualNudgeSignature_When_SameProblemSetAndPR(t *testing.T) {
+	pr := testPRKey(t, 7)
+	auto := buildReasonSignature("## Merge conflict\nx\n## Failing CI checks\n- lint\n").key(pr.Key())
+	manual := nudgeSignature(pr, []sessionv1.NudgeReason{
 		sessionv1.NudgeReason_NUDGE_REASON_FAILING_CHECKS,
 		sessionv1.NudgeReason_NUDGE_REASON_MERGE_CONFLICT,
 	})
 	require.Equal(t, manual, auto)
 }
 
-func TestSharedGuard_should_DedupeAutoSteerAfterManualNudgeAndViceVersa(t *testing.T) {
-	manual := nudgeSignature([]sessionv1.NudgeReason{sessionv1.NudgeReason_NUDGE_REASON_FAILING_CHECKS})
-	auto := buildReasonSignature("## Failing CI checks\n- lint\n").key()
+func TestSharedGuard_should_DedupeAutoSteerAfterManualNudgeAndViceVersa_ForSamePR(t *testing.T) {
+	pr := testPRKey(t, 7)
+	manual := nudgeSignature(pr, []sessionv1.NudgeReason{sessionv1.NudgeReason_NUDGE_REASON_FAILING_CHECKS})
+	auto := buildReasonSignature("## Failing CI checks\n- lint\n").key(pr.Key())
 
 	g := &sessionNudgeGuard{}
 	rel, out := g.TryBegin("s", manual)
@@ -852,4 +862,35 @@ func TestSharedGuard_should_DedupeAutoSteerAfterManualNudgeAndViceVersa(t *testi
 	rel(true)
 	_, out = g2.TryBegin("s", manual)
 	assert.Equal(t, GuardDuplicate, out, "manual nudge after a delivered auto-steer")
+}
+
+func TestSharedGuard_should_NotDedupe_When_SessionIsLinkedToTwoPRs(t *testing.T) {
+	reasons := []sessionv1.NudgeReason{sessionv1.NudgeReason_NUDGE_REASON_FAILING_CHECKS}
+	g := &sessionNudgeGuard{}
+	rel, out := g.TryBegin("s", nudgeSignature(testPRKey(t, 7), reasons))
+	require.Equal(t, GuardOK, out)
+	rel(true)
+	_, out = g.TryBegin("s", nudgeSignature(testPRKey(t, 8), reasons))
+	assert.Equal(t, GuardOK, out, "a nudge for the second PR is not a repeat of the first")
+	_, out = g.TryBegin("s", buildReasonSignature("## Failing CI checks\n").key(testPRKey(t, 8).Key()))
+	assert.Equal(t, GuardBusy, out, "second claim is still in flight")
+}
+
+func TestCanonicalReasonForHeader_should_KeepChangesRequestedSeparateFromThreads(t *testing.T) {
+	pr := testPRKey(t, 7).Key()
+	changes := buildReasonSignature("## Review: changes requested by @bob\nx\n").key(pr)
+	threads := nudgeSignature(testPRKey(t, 7), []sessionv1.NudgeReason{sessionv1.NudgeReason_NUDGE_REASON_UNRESOLVED_THREADS})
+	assert.NotEqual(t, threads, changes)
+
+	g := &sessionNudgeGuard{}
+	rel, out := g.TryBegin("s", changes)
+	require.Equal(t, GuardOK, out)
+	rel(true)
+	_, out = g.TryBegin("s", threads)
+	assert.Equal(t, GuardOK, out, "changes-requested steer must not suppress a thread nudge")
+}
+
+func TestLinkKeyFromPRURL_should_MatchPRKeyKey(t *testing.T) {
+	assert.Equal(t, testPRKey(t, 7).Key(), linkKeyFromPRURL("https://github.com/Acme/API/pull/7"))
+	assert.Equal(t, githubpkg.LinkKey(""), linkKeyFromPRURL("not a url"))
 }

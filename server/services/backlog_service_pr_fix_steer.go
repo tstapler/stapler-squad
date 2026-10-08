@@ -10,12 +10,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -60,12 +63,12 @@ func (r reasonSignature) hasHeader(header string) bool {
 // canonical reason names the manual nudge uses (reasonSetSignature), so a manual
 // nudge and an auto-steer for the same problem set dedupe each other; unknown
 // header text stays distinct.
-func (r reasonSignature) key() string {
+func (r reasonSignature) key(pr githubpkg.LinkKey) string {
 	names := make([]string, 0, len(r.headers))
 	for _, h := range r.headers {
 		names = append(names, canonicalReasonForHeader(h))
 	}
-	return reasonSetSignature(names...)
+	return guardSignature(pr, reasonSetSignature(names...))
 }
 
 func canonicalReasonForHeader(h string) string {
@@ -74,7 +77,9 @@ func canonicalReasonForHeader(h string) string {
 		return reasonNameMergeConflict
 	case h == "## Failing CI checks":
 		return reasonNameFailingChecks
-	case strings.HasPrefix(h, "## Review: changes requested"), h == "## Reviewer comments", h == "## PR comments":
+	case strings.HasPrefix(h, "## Review: changes requested"):
+		return reasonNameChangesRequested
+	case h == "## Reviewer comments", h == "## PR comments":
 		return reasonNameUnresolvedThreads
 	default:
 		return "other:" + h
@@ -333,7 +338,7 @@ func (s *BacklogService) steerActiveSessionForPRFix(ctx context.Context, itemID,
 	}
 
 	message := buildSteerMessage(program, fixContext)
-	outcome, deliverErr := s.sessionSteerer.SteerSessionGuarded(ctx, activeSessionUUID, candidate.key(), message)
+	outcome, deliverErr := s.sessionSteerer.SteerSessionGuarded(ctx, activeSessionUUID, candidate.key(s.prLinkKeyForItem(ctx, itemID)), message)
 	switch outcome {
 	case SteerGuardBusy, SteerDuplicate, SteerCoolingDown:
 		// A manual nudge is in flight, just landed, or a just-failed write is cooling down; not a failure, retry next tick.
@@ -351,6 +356,41 @@ func (s *BacklogService) steerActiveSessionForPRFix(ctx context.Context, itemID,
 	}
 	s.steerDedup.Store(itemID, nextLastSteerReason(last, candidate, activeSessionUUID, deliverErr == nil))
 	s.notifyActiveSessionSteered(ctx, itemID, itemTitle, currentStatus, activeSessionUUID, message, program, candidate, deliverErr)
+}
+
+// prLinkKeyForItem is the item's PR in the key form the manual nudge uses, or ""
+// when the item has no parseable PR URL (then the cross-path dedupe is skipped,
+// never wrongly merged).
+func (s *BacklogService) prLinkKeyForItem(ctx context.Context, itemID string) githubpkg.LinkKey {
+	if s.storage == nil {
+		return ""
+	}
+	item, err := s.storage.GetBacklogItem(ctx, itemID)
+	if err != nil || item == nil {
+		return ""
+	}
+	return linkKeyFromPRURL(item.PrURL)
+}
+
+// linkKeyFromPRURL parses "https://<host>/<owner>/<repo>/pull/<n>" host-agnostically.
+func linkKeyFromPRURL(raw string) githubpkg.LinkKey {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) < 4 || parts[2] != "pull" {
+		return ""
+	}
+	n, err := strconv.Atoi(parts[3])
+	if err != nil {
+		return ""
+	}
+	key, err := githubpkg.NewPRKey(u.Hostname(), parts[0], parts[1], n)
+	if err != nil {
+		return ""
+	}
+	return key.Key()
 }
 
 // degradeToRespawnBlocked is steerActiveSessionForPRFix's shared exit for

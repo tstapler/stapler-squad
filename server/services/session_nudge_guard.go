@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	githubpkg "github.com/tstapler/stapler-squad/github"
 )
 
 // GuardOutcome is the result of sessionNudgeGuard.TryBegin.
@@ -37,11 +39,10 @@ type nudgeRecord struct {
 	failed bool
 }
 
-// reasonSetSignature is the shared duplicate-window key: the sorted, de-duplicated
-// canonical reason names. The guard is already per session, and a session works
-// one branch (one PR), so the PR key adds nothing; both the manual nudge and
-// PR-fix auto-steer map their own reason vocabulary onto these names so the same
-// problem set dedupes across the two paths.
+// reasonSetSignature is the sorted, de-duplicated canonical reason names. Both
+// the manual nudge and PR-fix auto-steer map their own reason vocabulary onto
+// these names; guardSignature adds the PR so the same problem set dedupes across
+// the two paths only for the same PR.
 func reasonSetSignature(names ...string) string {
 	seen := make(map[string]struct{}, len(names))
 	uniq := make([]string, 0, len(names))
@@ -53,6 +54,13 @@ func reasonSetSignature(names ...string) string {
 	}
 	sort.Strings(uniq)
 	return strings.Join(uniq, ",")
+}
+
+// guardSignature is the duplicate-window key: the PR (empty when unknown) plus
+// the reason set. A session linked to two PRs must not treat a nudge for the
+// second PR as a repeat of the first.
+func guardSignature(pr githubpkg.LinkKey, reasonSet string) string {
+	return string(pr) + "|" + reasonSet
 }
 
 // sessionNudgeGuard serializes PTY nudges per session and suppresses repeats
