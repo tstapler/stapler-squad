@@ -210,7 +210,8 @@ type Config struct {
 	// serialized since the field is unexported; read via SlackSigningSecretOverride().
 	slackSigningSecretOverride string
 	// ListenAddress is the address the HTTP server listens on.
-	// Default: "localhost:8543". Set to "0.0.0.0:8543" for remote access.
+	// Must be loopback (localhost, 127.0.0.1, ::1); startup rejects anything else.
+	// Default: "localhost:8543". Remote access uses the separate HTTPS listener.
 	ListenAddress string `json:"listen_address"`
 	// PasskeyRPID is the WebAuthn Relying Party ID (effective domain, no scheme/port).
 	// Example: "192.168.1.42" or "myhost.local". Must match the hostname clients use.
@@ -219,6 +220,12 @@ type Config struct {
 	// PasskeyEnabled controls whether passkey authentication is enforced.
 	// Automatically set to true when non-localhost listen address is used.
 	PasskeyEnabled bool `json:"passkey_enabled"`
+	// RequireLocalAuth makes the :8543 listener demand credentials (a passkey
+	// session cookie or the local API token) instead of trusting loopback
+	// RemoteAddr. Off by default: a same-box reverse proxy or other local
+	// process otherwise reaches every route. Non-browser clients read the token
+	// from <config dir>/auth/local-api-token.
+	RequireLocalAuth bool `json:"require_local_auth,omitempty"`
 	// DefaultProgram is the default program to run in new instances
 	DefaultProgram string `json:"default_program"`
 	// AutoYes is a flag to automatically accept all prompts.

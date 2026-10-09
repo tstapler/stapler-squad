@@ -328,11 +328,8 @@ var (
 				address = listenAddrFlag
 			}
 
-			// Warn when binding to non-localhost
-			host, _, _ := net.SplitHostPort(address)
-			if host != "localhost" && host != "127.0.0.1" && host != "::1" {
-				log.Warn("WARNING: Binding to non-localhost address. Ensure firewall rules are configured.", "address", address)
-				fmt.Fprintf(os.Stderr, "\nWARNING: stapler-squad is listening on %s (all interfaces).\nEnsure this is intentional and your network is secured.\n\n", address)
+			if err := requireLoopbackListenAddr(address); err != nil {
+				return err
 			}
 
 			// --rp-id flag overrides config
@@ -478,6 +475,10 @@ var (
 						srv.SetOrigins(append(srv.GetOrigins(), validExtraOrigins...))
 					}
 					log.Info("CORS trusted origins", "origins", srv.GetOrigins())
+				}
+
+				if err := setupLocalAuth(srv, cfg, !remoteAccessFlag && !cfg.PasskeyEnabled); err != nil {
+					return err
 				}
 
 				// Start a second HTTPS server with passkey auth for remote access.
@@ -868,7 +869,7 @@ func init() {
 
 	// Remote access and passkey flags
 	rootCmd.Flags().StringVar(&listenAddrFlag, "listen", "",
-		"Address to listen on (e.g. '0.0.0.0:8543'). Overrides config listen_address.")
+		"Loopback address to listen on (e.g. '127.0.0.1:8543'); non-loopback is rejected. Overrides config listen_address.")
 	rootCmd.Flags().BoolVar(&remoteAccessFlag, "remote-access", false,
 		"Enable remote access: starts a second HTTPS server with passkey auth on --remote-port (default 8444). "+
 			"Local server on localhost remains unchanged.")
@@ -1387,7 +1388,7 @@ type remoteAuthSetup struct {
 // gate -- this block is a self-contained "auth subsystem bring-up" unit with
 // no branching into the surrounding TLS/hostname-detection logic, so it can
 // be named and tested independently.
-func initRemoteAuth(ctx context.Context, srv *server.Server, allRPIDs, origins []string, hostnameValidator func(string) bool, caFile, displayHost string, remotePort int) (*remoteAuthSetup, error) {
+func initRemoteAuth(ctx context.Context, srv *server.Server, allRPIDs, origins []string, hostnameValidator func(string) bool, caFile, displayHost string, remotePort int, requireLocalAuth bool) (*remoteAuthSetup, error) {
 	store, err := serverauth.NewCredentialStore()
 	if err != nil {
 		return nil, fmt.Errorf("create credential store: %w", err)
@@ -1398,8 +1399,7 @@ func initRemoteAuth(ctx context.Context, srv *server.Server, allRPIDs, origins [
 	if err != nil {
 		return nil, fmt.Errorf("get config dir: %w", err)
 	}
-	sessionsPath := filepath.Join(configDir, "auth-sessions.json")
-	sessions := serverauth.NewSessionManager(sessionsPath)
+	sessions := sharedAuthSessions(configDir)
 
 	waHandler, err := serverauth.NewHandler(allRPIDs, origins, store, sessions, hostnameValidator)
 	if err != nil {
@@ -1419,7 +1419,7 @@ func initRemoteAuth(ctx context.Context, srv *server.Server, allRPIDs, origins [
 	go setupMgr.WatchFile(ctx, setupTokenPath)
 
 	// Register auth routes on the shared mux (accessible via both servers).
-	serverauth.RegisterRoutes(srv.Mux(), waHandler, sessions, store, setupMgr, inviteMgr, caFile, displayHost, remotePort)
+	serverauth.RegisterRoutes(srv.Mux(), waHandler, sessions, store, setupMgr, inviteMgr, caFile, displayHost, remotePort, serverauth.RequireLocalAuth(requireLocalAuth))
 
 	return &remoteAuthSetup{
 		ConfigDir: configDir,
@@ -1602,7 +1602,7 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 
 	srv.SetOrigins(append(srv.GetOrigins(), origins...))
 
-	auth, err := initRemoteAuth(ctx, srv, allRPIDs, origins, hostnameValidator, caFile, displayHost, remotePort)
+	auth, err := initRemoteAuth(ctx, srv, allRPIDs, origins, hostnameValidator, caFile, displayHost, remotePort, cfg.RequireLocalAuth)
 	if err != nil {
 		return nil, err
 	}

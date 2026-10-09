@@ -191,10 +191,14 @@ type ReviewVerdictSummary struct {
 //   - OverallOutcome: from the review_verdicts table (populated via ReviewVerdict edge)
 //   - ReviewVerdict: eagerly loaded when the query uses WithReviewVerdict()
 type ItemSessionSummary struct {
-	ID                       string
-	BacklogItemID            string
-	SessionUUID              string
-	Role                     string
+	ID            string
+	BacklogItemID string
+	SessionUUID   string
+	Role          string
+	// BranchName is the work session's git branch, stamped once at spawn
+	// time — see ItemSession.branch_name's schema comment. Empty for rows
+	// created before this field existed, or for a non-work role.
+	BranchName               string
 	AcSnapshot               AcCriteriaJSON
 	PipelineModeSnapshot     string
 	PipelineModeSnapshotHash string

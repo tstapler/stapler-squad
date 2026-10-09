@@ -90,6 +90,8 @@ export const chip = style({
   borderRadius: vars.radii.full,
   fontSize: vars.fontSize.sm,
   cursor: "pointer",
+  whiteSpace: "nowrap",
+  flexShrink: 0,
   selectors: {
     "&:focus-visible": focusRing,
     // Misroute cue: heavier border plus a leading "!" in the text, never colour alone.

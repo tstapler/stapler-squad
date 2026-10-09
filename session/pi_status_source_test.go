@@ -73,6 +73,7 @@ func TestPiStatusSource_MultipleOutstandingToolCalls(t *testing.T) {
 // second AC bullet: after agent_end and piIdleGracePeriod elapses with no
 // further events, status becomes StatusIdle.
 func TestPiStatusSource_IdleAfterAgentEndAndGracePeriod(t *testing.T) {
+	// Serial: asserts real-time budgets (5s grace period, fork/exec relaunch backoff) that parallel load can blow.
 	src := NewPiStatusSource("test-session", nil)
 	src.handleEvent(PiAgentStartEvent{Type: "agent_start"})
 	src.handleEvent(PiAgentEndEvent{Type: "agent_end"})
@@ -261,6 +262,7 @@ func TestPiStatusSource_SessionEventPropagatesToInstance(t *testing.T) {
 // stopped flag, because Stop()'s wg.Wait() now blocks until that resolution
 // either way.
 func TestPiStatusSource_StopWaitsOutPendingRelaunchAndPreventsIt(t *testing.T) {
+	// Serial: asserts real-time budgets (5s grace period, fork/exec relaunch backoff) that parallel load can blow.
 	var launches atomic.Int32
 	factory := func() *exec.Cmd {
 		launches.Add(1)
@@ -300,6 +302,7 @@ func TestPiStatusSource_StopWaitsOutPendingRelaunchAndPreventsIt(t *testing.T) {
 }
 
 func TestPiStatusSource_ExhaustedRetriesReportUnavailable(t *testing.T) {
+	// Serial: asserts real-time budgets (5s grace period, fork/exec relaunch backoff) that parallel load can blow.
 	factory := func() *exec.Cmd {
 		// Every launch dies immediately -- retries never succeed.
 		return safeexec.CommandContext(context.Background(), "/bin/sh", "-c", "exit 1")
@@ -342,6 +345,7 @@ func TestPiStatusSource_ExhaustedRetriesReportUnavailable(t *testing.T) {
 // iterations finish -- a leaked "sleep 100" would still be alive and
 // answer signal(0) successfully.
 func TestPiStatusSource_StopConcurrentWithRelaunchStress(t *testing.T) {
+	t.Parallel()
 	const iterations = 200
 
 	var mu sync.Mutex

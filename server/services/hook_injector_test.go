@@ -12,7 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/pkg/localtoken"
 )
 
 // TestInjectHooksConfigAllTypes (U-3.7): InjectHooksConfig injects all five hook types
@@ -579,9 +582,11 @@ func Test_InjectHooksConfig_should_ProduceByteIdenticalLocalCommand_When_NoRemot
 		t.Fatalf("expected exactly one PermissionRequest hook group/entry, got groups=%+v", groups)
 	}
 
+	// The only addition to the pre-Phase-5 command is the run-time token-file
+	// Authorization header (require_local_auth); it never embeds the secret.
 	want := fmt.Sprintf(
-		"curl -s --max-time %d -X POST '%s' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s' -d @-",
-		hookTimeout, hookApprovalURL(), "local-sess",
+		"curl -s --max-time %d -X POST '%s' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s'%s -d @-",
+		hookTimeout, hookApprovalURL(), "local-sess", hookAuthArg(),
 	)
 	got := groups[0].Hooks[0].Command
 	if got != want {
@@ -757,5 +762,36 @@ func TestRemoteApprovalHookCommand_QuotesSocketPathAgainstShellInjection(t *test
 
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatalf("shell injection succeeded: marker file %s was created by the malicious SocketPath", marker)
+	}
+}
+
+// Hooks injected before require_local_auth existed are upgraded in place with the
+// header file argument instead of being duplicated or left unauthenticated.
+func Test_InjectHooksConfig_should_UpgradeExistingHookWithAuthHeader_When_HeaderFileAppears(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	tmpDir := t.TempDir()
+	if err := InjectHooksConfig(tmpDir, "sess", nil); err != nil {
+		t.Fatalf("first inject: %v", err)
+	}
+	cfgDir, err := config.GetConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := localtoken.LoadOrCreate(localtoken.Path(cfgDir)); err != nil {
+		t.Fatal(err)
+	}
+	if err := InjectHooksConfig(tmpDir, "sess", nil); err != nil {
+		t.Fatalf("second inject: %v", err)
+	}
+	top := readSettings(t, tmpDir)
+	var hooksMap map[string]json.RawMessage
+	_ = json.Unmarshal(top["hooks"], &hooksMap)
+	var groups []hookMatcherGroup
+	_ = json.Unmarshal(hooksMap["PermissionRequest"], &groups)
+	if len(groups) != 1 || len(groups[0].Hooks) != 1 {
+		t.Fatalf("hook duplicated or lost: %+v", groups)
+	}
+	if want := localtoken.CurlHeaderArg(cfgDir); !strings.Contains(groups[0].Hooks[0].Command, want) {
+		t.Errorf("command not upgraded with %q: %s", want, groups[0].Hooks[0].Command)
 	}
 }

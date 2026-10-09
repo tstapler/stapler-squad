@@ -91,10 +91,10 @@ both fail the build, not just report:
   Level 0 consolidation gate), not a suppression.
 - **web-app — `jscpd`** (`web-app/.jscpd.json`; `make ready-duplication-gate-web`
   or `pnpm run lint:duplicates` in `web-app/`): jscpd has no git-diff scoping
-  like `--new-from-rev`, so this gates on an absolute `threshold` (0.12%,
-  raised from 0.1% on 2026-09-12 after PR #785's new Omnibar test file added
-  one more irreducible `jest.mock(...)` block and tripped the old ratchet —
-  see below) instead of new-code-only — a ratchet against a cleaned-up
+  like `--new-from-rev`, so this gates on an absolute `threshold` (0.14%,
+  raised from 0.1% to 0.12% on 2026-09-12 after PR #785's new Omnibar test
+  file added one more irreducible `jest.mock(...)` block and tripped the old
+  ratchet, then to 0.14% as later heavily-mocked test files landed — see below) instead of new-code-only — a ratchet against a cleaned-up
   baseline, not zero-tolerance. `minLines`/`minTokens` are tuned to 20/200:
   verified empirically (2026-08-24 repo-wide sweep + fix) that at that size
   every finding was real, actionable duplication — component forks,
@@ -358,6 +358,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | GitHub webhook (`/webhooks/github`, incl. PR-fix events) public reachability | `docs/how-to/expose-github-webhook-endpoint.md` |
 | Log debugging: file locations, global/per-package log levels, reducing log volume, pattern-clustering tool | `docs/how-to/debug-with-logs.md` |
 | `gh pr merge` needs `--repo owner/repo` | `docs/how-to/merge-prs-with-gh-cli.md` |
+| Up Next PR tab, "Ask to fix" button, `STAPLER_SQUAD_PR_POLL_DEGRADED`, nudge/funnel log lines | `docs/how-to/use-up-next-pr-tabs-and-ask-to-fix.md` |
 | Capture the terminal stream (raw output, drops, resizes) to diagnose garbled terminals — records secrets | `docs/how-to/capture-terminal-stream-tap.md` |
 | Playwright Chromium install hangs during extraction | `docs/how-to/fix-playwright-chromium-install-stall.md` |
 | Dispatch backlog work to Google Jules (prerequisites, badge states, escape hatch) | `docs/how-to/dispatch-work-to-google-jules.md` |

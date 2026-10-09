@@ -316,7 +316,7 @@ func (m *mockSessionStopper) ArchiveSessionByUUID(_ context.Context, uuid string
 
 // mockSessionSteerer implements SessionSteerer for tests, mirroring
 // mockSessionStopper's shape. mu guards steerCalls against concurrent
-// SteerActiveSession calls (needed by the steerInFlight race test,
+// recordSteer calls (needed by the steerInFlight race test,
 // server/services/backlog_service_pr_fix_steer_integration_test.go). programs
 // and steerErr are unguarded — no write to them ever races a concurrent
 // read in the current tests, but that's because those writes happen between
@@ -327,7 +327,7 @@ func (m *mockSessionStopper) ArchiveSessionByUUID(_ context.Context, uuid string
 type mockSessionSteerer struct {
 	mu         sync.Mutex
 	programs   map[string]string // uuid -> program; absent = not live
-	steerErr   map[string]error  // uuid -> error SteerActiveSession returns
+	steerErr   map[string]error  // uuid -> error recordSteer returns
 	steerCalls []mockSteerCall
 	// notReady marks uuids whose IsReadyForSteer must return false. Absent
 	// (or a uuid not in the set) defaults to true — every existing test's
@@ -335,6 +335,10 @@ type mockSessionSteerer struct {
 	// production's TestAutoReopenForPRFix_ActiveWorkSession_* fixture
 	// default (see requirement to keep those tests unchanged).
 	notReady map[string]bool
+	// guardedOutcome overrides SteerSessionGuarded's result for a uuid (no
+	// write is recorded). Absent uuids delegate to recordSteer.
+	guardedOutcome map[string]SteerOutcome
+	guardedSigs    []string
 }
 
 type mockSteerCall struct {
@@ -355,15 +359,36 @@ func (m *mockSessionSteerer) IsReadyForSteer(uuid string) bool {
 	return !m.notReady[uuid]
 }
 
-func (m *mockSessionSteerer) SteerActiveSession(_ context.Context, uuid, message string) error {
+func (m *mockSessionSteerer) recordSteer(_ context.Context, uuid, message string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.steerCalls = append(m.steerCalls, mockSteerCall{uuid: uuid, message: message})
 	return m.steerErr[uuid]
 }
 
+// SteerSessionGuarded implements SessionSteerer. Without a guardedOutcome
+// override it behaves like the unguarded path, so tests written against
+// the unguarded recording path keep their meaning.
+func (m *mockSessionSteerer) SteerActiveSession(ctx context.Context, uuid, message string) error {
+	return m.recordSteer(ctx, uuid, message)
+}
+
+func (m *mockSessionSteerer) SteerSessionGuarded(ctx context.Context, uuid, sig, message string) (SteerOutcome, error) {
+	m.mu.Lock()
+	m.guardedSigs = append(m.guardedSigs, sig)
+	override, ok := m.guardedOutcome[uuid]
+	m.mu.Unlock()
+	if ok {
+		return override, nil
+	}
+	if err := m.recordSteer(ctx, uuid, message); err != nil {
+		return SteerFailed, err
+	}
+	return SteerDelivered, nil
+}
+
 // calls returns a snapshot copy of steerCalls, safe to read concurrently with
-// in-flight SteerActiveSession calls.
+// in-flight recordSteer calls.
 func (m *mockSessionSteerer) calls() []mockSteerCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -4484,12 +4509,16 @@ func TestCreateBacklogItem_should_SpawnSDDSession_When_PipelineModeSDDAndAutoSpa
 func TestTriggerTriage_PersistFailurePublishesNotification(t *testing.T) {
 	t.Parallel()
 	storage := createTestStorage(t)
-	// Delay the fake LLM call so the test can race a status change in underneath it,
-	// deterministically forcing the final TransitionBacklogItemStatus precondition to fail.
-	pool := &fakeHeadlessPool{response: validTriageJSON(), delay: 200 * time.Millisecond}
+	// Hold the fake LLM call open on a gate (not a wall-clock delay) so the status change
+	// below is guaranteed to land before the final TransitionBacklogItemStatus runs.
+	gate := make(chan struct{})
+	var releaseGate sync.Once
+	release := func() { releaseGate.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+	pool := &fakeHeadlessPool{response: validTriageJSON(), onCall: func(string) { <-gate }}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
-	eventBus := events.NewEventBus(4)
+	eventBus := events.NewEventBus(64)
 	svc.SetEventBus(eventBus)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
@@ -4512,19 +4541,22 @@ func TestTriggerTriage_PersistFailurePublishesNotification(t *testing.T) {
 	// Move the item off 'idea' while the delayed headless call is still in flight.
 	_, err = storage.TransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusReview, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
+	release()
 
+	// The completion goroutine's latency under full-suite load is unbounded (a fixed 3s
+	// per-event timeout here flaked ~26% under CPU contention), so wait on the event
+	// itself with a generous ceiling that only matters when the code is actually broken.
 	var notif *events.Event
-	for i := 0; i < 5; i++ {
+	deadline := time.After(60 * time.Second)
+wait:
+	for notif == nil {
 		select {
 		case ev := <-ch:
 			if ev.Type == events.EventNotification {
 				notif = ev
 			}
-		case <-time.After(3 * time.Second):
-			i = 5
-		}
-		if notif != nil {
-			break
+		case <-deadline:
+			break wait
 		}
 	}
 	require.NotNil(t, notif, "a persistence failure during triage completion must publish an operator notification")

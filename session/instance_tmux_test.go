@@ -923,7 +923,7 @@ func assertStaplerSquadMCPEntry(t *testing.T, val, wantURL, wantUUID string) {
 }
 
 func TestClaudeMCPConfigArgs_HTTPFormat(t *testing.T) {
-	t.Parallel()
+	envtest.NewIsolatedStateDir(t) // no local token => inline JSON, independent of the dev machine's config dir
 	inst := &Instance{
 		Program: "claude",
 		UUID:    "test-uuid-123",
@@ -941,7 +941,7 @@ func TestClaudeMCPConfigArgs_HTTPFormat(t *testing.T) {
 // buildClaudeCommand now resolves through the provider on every call instead
 // of trusting a one-shot-backfilled field.
 func TestBuildClaudeCommand_ReResolvesMCPServerURL_OnRelaunch(t *testing.T) {
-	t.Parallel()
+	envtest.NewIsolatedStateDir(t)
 	inst := &Instance{
 		Program: "claude",
 		UUID:    "test-uuid-456",
@@ -1335,4 +1335,33 @@ func TestBuildLaunchCommand_should_ApplyCustomProgramFlagsOnce_When_ProgramIsCus
 	inst.snapshot.Store(buildSnapshot(inst))
 
 	assert.Equal(t, 1, strings.Count(inst.buildLaunchCommand(""), "--unique-flag-xyz"))
+}
+
+// With a local API token the config moves to a 0600 file so the token never
+// reaches argv; the argument carries only the path.
+func TestClaudeMCPConfigArgs_should_KeepTokenOutOfArgv_When_TokenPresent(t *testing.T) {
+	dir := envtest.NewIsolatedStateDir(t)
+	inst := &Instance{Program: "claude", UUID: "uuid-tok"}
+	flag, val := inst.claudeMCPConfigArgsWithToken("http://localhost:8543/mcp", dir, "s3cret-token")
+	if flag != "--mcp-config" {
+		t.Fatalf("flag = %q", flag)
+	}
+	if strings.Contains(val, "s3cret-token") {
+		t.Fatalf("token leaked into argv value: %q", val)
+	}
+	path := strings.Trim(val, "'")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("config file not written: %v", err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Errorf("mode = %o, want 0600", info.Mode().Perm())
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "Bearer s3cret-token") || !strings.Contains(string(data), "uuid-tok") {
+		t.Errorf("file missing Authorization/UUID headers: %s", data)
+	}
 }

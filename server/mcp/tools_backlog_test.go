@@ -4859,12 +4859,16 @@ func TestReportDuplicate_StatusRoleOtherSessionsMatrix(t *testing.T) {
 	callerRoles := []string{session.SessionRoleWork, session.SessionRoleTriage, "none"}
 	otherRoles := []string{"none", session.SessionRoleWork, session.SessionRoleTriage, session.SessionRoleReview}
 
+	// One storage for every case: each case seeds its own item, so cases are isolated by
+	// item rather than by database, and the cases can run in parallel.
+	storage := newTestBacklogStorage(t)
+
 	for _, status := range statuses {
 		for _, callerRole := range callerRoles {
 			for _, otherRole := range otherRoles {
 				status, callerRole, otherRole := status, callerRole, otherRole
 				t.Run(fmt.Sprintf("%s/caller=%s/other=%s", status, callerRole, otherRole), func(t *testing.T) {
-					storage := newTestBacklogStorage(t)
+					t.Parallel()
 					ctx := context.Background()
 					item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "dup", Status: string(status)})
 					require.NoError(t, err)

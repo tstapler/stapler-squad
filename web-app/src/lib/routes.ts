@@ -43,6 +43,7 @@ export const routes = {
     return `/?${params.toString()}`;
   },
   unfinishedItem: (itemId: string) => `/unfinished?item=${encodeURIComponent(itemId)}`,
+  unfinishedTab: (tab: string) => `/unfinished?tab=${encodeURIComponent(tab)}`,
 } as const;
 
 export type Route = typeof routes;
