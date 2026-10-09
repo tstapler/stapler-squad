@@ -38,6 +38,10 @@ func (ItemSession) Fields() []ent.Field {
 			Optional().
 			Default("").
 			Comment("Set only alongside ended_at for a headless (triage/review) call: classifyHeadlessCallError's bucket (\"shutdown\", \"timeout\", \"subprocess_start_error\", \"claude_not_found\", \"other\") or \"\" for a successful end / not yet classified. Lets orphan-recovery sweeps distinguish a call killed by our own graceful shutdown (retry immediately, no penalty) from a call that actually failed on its own merits (apply the normal backoff)."),
+		field.String("error_detail").
+			Optional().
+			Default("").
+			Comment("For end_reason \"other\": the Go error chain text (err.Error(), truncated to 500 runes) from classifyHeadlessCallError's catch-all, so a post-incident DB query recovers it after log rotation. Never holds raw subprocess output (that is failure_capture_path). Empty for every other end_reason and for successful sessions."),
 		field.String("failure_capture_path").
 			Optional().
 			Default("").

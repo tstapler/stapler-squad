@@ -5621,3 +5621,68 @@ func TestReconcileBouncingItems_should_NotMarkStuckForSddModeItemButStillMarkDef
 	assert.False(t, sddFlagged, "sdd-mode item with 4 cycles must not be flagged under the per-item CycleThreshold=5 override")
 	assert.True(t, defaultFlagged, "default-mode sibling with the identical 4-cycles-in-30h shape must still be flagged via the unconfigured pair's DefaultLivenessEngine fallback (bounceThreshold=3) — proving per-item, not package-level, resolution")
 }
+
+func TestReconcileOrphanedTriageItems_should_includeErrorDetailInContext_When_EndReasonOther(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Other-ended triage test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-triage-" + uuid.New().String(),
+		SessionRole: SessionRoleTriage,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEndedWithDetail(ctx, is.ID, time.Now(), "other", "dial tcp: connection refused"))
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	listener.reconcileOrphanedTriageItems(ctx, storage.repo)
+
+	open, err := storage.repo.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Contains(t, open[0].Context, "ended (other: dial tcp: connection refused)")
+}
+
+func TestRecordTriageParkAndMaybeEscalate_should_notifyOnce_When_ThresholdParksWithinWindow(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	base := time.Now()
+	listener.recordTriageParkAndMaybeEscalate(base)
+	listener.recordTriageParkAndMaybeEscalate(base.Add(time.Minute))
+	assert.Empty(t, notifier.calls, "below threshold must not escalate")
+
+	listener.recordTriageParkAndMaybeEscalate(base.Add(2 * time.Minute))
+	require.Len(t, notifier.calls, 1)
+	assert.Equal(t, "Multiple auto-triage retries exhausted", notifier.calls[0].Title)
+	assert.Contains(t, notifier.calls[0].Message, "3 items")
+}
+
+func TestRecordTriageParkAndMaybeEscalate_should_notNotify_When_ParksSpreadBeyondWindow(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	base := time.Now()
+	for i := 0; i < 5; i++ {
+		listener.recordTriageParkAndMaybeEscalate(base.Add(time.Duration(i) * (batchParkWindow + time.Minute)))
+	}
+	assert.Empty(t, notifier.calls)
+}

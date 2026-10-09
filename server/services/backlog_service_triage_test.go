@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
@@ -6413,4 +6414,38 @@ func TestReReview_BlockedByInFlightListenerReservation(t *testing.T) {
 	sessions, err := storage.ListItemSessions(context.Background(), item.ID)
 	require.NoError(t, err)
 	assert.Empty(t, sessions, "no review row created while another spawn is in flight")
+}
+
+func TestTriggerTriage_should_PersistErrorDetail_When_HeadlessCallFailsWithUnclassifiedError(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: "partial", err: errors.New("dial tcp: connection refused")}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "triage-error-detail item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: item.ID}))
+	require.NoError(t, trigErr)
+
+	is := waitForTriageFailureCaptured(t, storage, item.ID)
+	t.Cleanup(func() { _ = os.Remove(is.FailureCapturePath) })
+
+	assert.Equal(t, "other", is.EndReason)
+	assert.Contains(t, is.ErrorDetail, "dial tcp: connection refused")
+}
+
+func TestTruncateErrorDetail_should_CutOnRuneBoundary_When_ErrorExceedsLimit(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "", truncateErrorDetail(nil, 500))
+	got := truncateErrorDetail(errors.New(strings.Repeat("é", 600)), maxErrorDetailRunes)
+	assert.Equal(t, maxErrorDetailRunes, utf8.RuneCountInString(got))
+	assert.True(t, utf8.ValidString(got))
+	assert.Equal(t, "short", truncateErrorDetail(errors.New("short"), maxErrorDetailRunes))
 }

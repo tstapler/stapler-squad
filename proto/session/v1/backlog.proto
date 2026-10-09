@@ -143,6 +143,11 @@ message ItemSession {
   // model family) — see headless.CostSink's priced signal. True for all
   // pre-existing rows (Claude-only cost data was always priced).
   bool cost_priced = 26;
+  // error_detail is the truncated (<=500 runes) Go error text behind
+  // end_reason "other" — the catch-all bucket that otherwise carries no
+  // diagnostic signal once the log rotates. Empty for every other end_reason
+  // and for successful sessions. (Field 19 is failure_capture_path.)
+  string error_detail = 27;
 }
 
 // BacklogStatusEvent records a single status transition for a backlog item.

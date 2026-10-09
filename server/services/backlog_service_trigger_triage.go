@@ -549,7 +549,7 @@ func (s *BacklogService) TriggerTriage(
 			}
 			log.Error("[TriggerTriage] headless triage failed",
 				"item", itemID, "elapsed", callElapsed.Round(time.Second), "errType", errType, "capture", capturePath, "error", callErr)
-			_ = s.storage.UpdateItemSessionEndedWithReason(cleanupCtx, isID, time.Now(), errType)
+			s.endItemSessionForCallError(cleanupCtx, isID, errType, callErr)
 			if capturePath != "" {
 				_ = s.storage.UpdateItemSessionFailureCapture(cleanupCtx, isID, capturePath)
 			}

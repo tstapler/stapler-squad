@@ -1440,6 +1440,12 @@ func (s *Storage) UpdateItemSessionConversationUUID(ctx context.Context, id stri
 	return s.repo.UpdateItemSessionConversationUUID(ctx, id, conversationUUID)
 }
 
+// UpdateItemSessionEndedWithDetail is UpdateItemSessionEndedWithReason plus the
+// truncated error text for end_reason "other". See EntRepository.UpdateItemSessionEndedWithDetail.
+func (s *Storage) UpdateItemSessionEndedWithDetail(ctx context.Context, id string, endedAt time.Time, reason, detail string) error {
+	return s.repo.UpdateItemSessionEndedWithDetail(ctx, id, endedAt, reason, detail)
+}
+
 // UpdateItemSessionFailureCapture records the absolute path to a durable raw-output
 // capture file for a headless triage/review call that errored or produced
 // unparseable output. See EntRepository.UpdateItemSessionFailureCapture.

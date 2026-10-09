@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -2686,6 +2687,10 @@ func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string
 // budget is the caller's own call timeout (e.g. triageCallBudget for TriggerTriage,
 // callTimeout for TriggerReReview) — the same classifier is shared across both headless
 // call sites, so it takes budget as a parameter rather than hardcoding one.
+//
+// Callers MUST log the underlying error ("error", callErr) in the same structured log
+// call as errType — the bucket alone is undiagnosable — and persist the ItemSession end
+// via endItemSessionForCallError so "other" also records error_detail.
 func classifyHeadlessCallError(err error, elapsed, budget time.Duration) string {
 	switch {
 	case errors.Is(err, headless.ErrPoolSaturated):
@@ -2707,6 +2712,32 @@ func classifyHeadlessCallError(err error, elapsed, budget time.Duration) string 
 	default:
 		return "other"
 	}
+}
+
+// maxErrorDetailRunes bounds ItemSession.error_detail.
+const maxErrorDetailRunes = 500
+
+// truncateErrorDetail returns err.Error() cut to at most maxRunes runes (never splitting a
+// multi-byte rune), or "" for a nil error.
+func truncateErrorDetail(err error, maxRunes int) string {
+	if err == nil {
+		return ""
+	}
+	s := err.Error()
+	if utf8.RuneCountInString(s) <= maxRunes {
+		return s
+	}
+	return string([]rune(s)[:maxRunes])
+}
+
+// endItemSessionForCallError closes an ItemSession after a failed headless call,
+// recording error_detail only for the unclassified "other" bucket. Best-effort.
+func (s *BacklogService) endItemSessionForCallError(ctx context.Context, itemSessionID, errType string, callErr error) {
+	if errType == "other" {
+		_ = s.storage.UpdateItemSessionEndedWithDetail(ctx, itemSessionID, time.Now(), errType, truncateErrorDetail(callErr, maxErrorDetailRunes))
+		return
+	}
+	_ = s.storage.UpdateItemSessionEndedWithReason(ctx, itemSessionID, time.Now(), errType)
 }
 
 // captureHeadlessFailure best-effort writes raw (the accumulated stdout of a
@@ -3126,7 +3157,7 @@ Do not modify the code. Only write the review verdict.
 			}); failCreateErr != nil {
 				log.Warn("[TriggerReReview] failed to record audit ItemSession for failed call", "item", item.ID, "error", failCreateErr)
 			} else {
-				_ = s.storage.UpdateItemSessionEndedWithReason(failCleanupCtx, failIS.ID, time.Now(), errType)
+				s.endItemSessionForCallError(failCleanupCtx, failIS.ID, errType, callErr)
 				if capturePath != "" {
 					_ = s.storage.UpdateItemSessionFailureCapture(failCleanupCtx, failIS.ID, capturePath)
 				}

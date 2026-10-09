@@ -96,6 +96,17 @@ describe("BlockedNotice_should_RenderHeadlessFailureDetail_When_EndReasonIsPopul
     expect(screen.queryByText("No diagnostic data recorded.")).not.toBeInTheDocument();
   });
 
+  it("includes the persisted error detail for the unclassified 'other' bucket", () => {
+    render(
+      <BlockedNotice
+        kind="missing_diagnostic_data"
+        session={{ endReason: "other", errorDetail: "dial tcp: connection refused" }}
+      />
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("Headless call failed (other: dial tcp: connection refused).");
+  });
+
   it("renders the failure reason alone when no capture path was recorded", () => {
     render(<BlockedNotice kind="missing_diagnostic_data" session={{ endReason: "claude_not_found" }} />);
 
