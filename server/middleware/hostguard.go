@@ -1,7 +1,10 @@
 package middleware
 
 import (
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -36,7 +39,7 @@ func HostGuard(cfg HostGuardConfig) func(http.Handler) http.Handler {
 			switch {
 			case !hostAllowed(hostnameOf(r.Host), cfg.AllowedHosts):
 				reason = "host_not_allowed"
-			case origin != "" && !originAllowed(origin, cfg.AllowedOrigins):
+			case origin != "" && !hostGuardOriginOK(origin, r.Host, cfg.AllowedOrigins):
 				reason = "origin_not_allowed"
 			}
 			if reason != "" {
@@ -48,4 +51,34 @@ func HostGuard(cfg HostGuardConfig) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// hostGuardOriginOK accepts an exactly allow-listed origin (e.g. a dev UI from
+// STAPLER_SQUAD_EXTRA_ORIGINS), or a loopback origin on the same port the request
+// was sent to. A page served from another localhost port is a different origin
+// and must not be able to drive this listener.
+func hostGuardOriginOK(origin, requestHost string, allowed func() []string) bool {
+	if allowed != nil {
+		for _, a := range allowed() {
+			if strings.EqualFold(a, origin) {
+				return true
+			}
+		}
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" || !IsLoopbackHostname(u.Hostname()) {
+		return false
+	}
+	return portOf(u.Host, u.Scheme) == portOf(requestHost, u.Scheme)
+}
+
+// portOf returns hostport's port, defaulting to the scheme's well-known port.
+func portOf(hostport, scheme string) string {
+	if _, p, err := net.SplitHostPort(hostport); err == nil && p != "" {
+		return p
+	}
+	if scheme == "https" {
+		return "443"
+	}
+	return "80"
 }

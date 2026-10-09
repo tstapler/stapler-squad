@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/localtoken"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -635,12 +636,47 @@ func (i *Instance) cleanupPromptFile() {
 // session UUID passed as a request header. The server middleware at /mcp extracts
 // X-Stapler-Session-UUID and injects it into the request context for tool handlers.
 // Both "http" and "streamable-http" are accepted by the Claude CLI for --mcp-config.
+//
+// When the local API token exists (require_local_auth), the config carries an
+// Authorization header and is written to a 0600 file whose path is passed instead
+// of the JSON, so the token never appears in the process's argv.
 func (i *Instance) claudeMCPConfigArgs(mcpURL string) (string, string) {
-	cfg := fmt.Sprintf(
-		`{"mcpServers":{"stapler-squad":{"type":"http","url":%q,"headers":{"X-Stapler-Session-UUID":%q}}}}`,
-		mcpURL, i.UUID,
-	)
-	return "--mcp-config", shellQuote(cfg)
+	dir, err := config.GetConfigDir()
+	if err != nil {
+		dir = ""
+	}
+	token := ""
+	if dir != "" {
+		token = localtoken.FromConfigDir(dir)
+	}
+	return i.claudeMCPConfigArgsWithToken(mcpURL, dir, token)
+}
+
+func (i *Instance) claudeMCPConfigArgsWithToken(mcpURL, configDir, token string) (string, string) {
+	headers := map[string]string{"X-Stapler-Session-UUID": i.UUID}
+	if token != "" {
+		headers["Authorization"] = "Bearer " + token
+	}
+	cfg, err := json.Marshal(map[string]any{"mcpServers": map[string]any{"stapler-squad": map[string]any{
+		"type": "http", "url": mcpURL, "headers": headers,
+	}}})
+	if err != nil { // unreachable: only strings
+		return "--mcp-config", shellQuote("{}")
+	}
+	if token == "" || configDir == "" {
+		return "--mcp-config", shellQuote(string(cfg))
+	}
+	dir := filepath.Join(configDir, "mcp")
+	path := filepath.Join(dir, i.UUID+".json")
+	if err := os.MkdirAll(dir, 0700); err == nil {
+		if err = os.WriteFile(path, cfg, 0600); err == nil {
+			return "--mcp-config", shellQuote(path)
+		}
+	}
+	log.Warn("mcp config: could not write token-bearing config file; launching without Authorization", "path", path)
+	delete(headers, "Authorization")
+	cfg, _ = json.Marshal(map[string]any{"mcpServers": map[string]any{"stapler-squad": map[string]any{"type": "http", "url": mcpURL, "headers": headers}}})
+	return "--mcp-config", shellQuote(string(cfg))
 }
 
 // resolveMCPServerURLFrom returns the MCP server URL to pass to claude for

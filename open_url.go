@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -122,5 +125,35 @@ func withLocalLogin(ctx context.Context, targetURL string) string {
 		return targetURL
 	}
 	q := url.Values{"code": {body.Code}, "next": {target.RequestURI()}}
-	return localWebAppBaseURL + "/auth/local-login?" + q.Encode()
+	loginURL := localWebAppBaseURL + "/auth/local-login?" + q.Encode()
+	// Hand the browser a 0600 redirect page instead of the URL itself, so the
+	// one-time code is never in the opener's argv (visible to other local users).
+	if page, err := writeLoginRedirectPage(loginURL); err == nil {
+		return (&url.URL{Scheme: "file", Path: page}).String()
+	}
+	return loginURL
+}
+
+// writeLoginRedirectPage writes a tiny meta-refresh page (mode 0600) that
+// forwards to loginURL, and prunes stale pages from earlier runs. The embedded
+// code is single-use and expires in 60s, so a leftover page is inert.
+func writeLoginRedirectPage(loginURL string) (string, error) {
+	const prefix = "ssq-login-"
+	if old, err := filepath.Glob(filepath.Join(os.TempDir(), prefix+"*.html")); err == nil {
+		for _, f := range old {
+			if info, statErr := os.Stat(f); statErr == nil && time.Since(info.ModTime()) > 10*time.Minute {
+				_ = os.Remove(f) //nolint:errcheck
+			}
+		}
+	}
+	f, err := os.CreateTemp("", prefix+"*.html") // 0600
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	page := `<!doctype html><meta http-equiv="refresh" content="0;url=` + html.EscapeString(loginURL) + `">`
+	if _, err := f.WriteString(page); err != nil {
+		return "", err
+	}
+	return f.Name(), nil
 }

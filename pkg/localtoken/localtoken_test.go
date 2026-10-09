@@ -39,8 +39,31 @@ func TestRead_should_WrapNotExist_When_FileMissing(t *testing.T) {
 	assert.Empty(t, FromConfigDir(t.TempDir()))
 }
 
-func TestCurlHeaderArg_should_QuotePathAndNeverEmbedToken(t *testing.T) {
-	arg := CurlHeaderArg("/tmp/it's/token")
-	assert.Contains(t, arg, `$(cat '/tmp/it'\''s/token' 2>/dev/null)`)
-	assert.True(t, strings.HasPrefix(arg, "-H "))
+func TestCurlHeaderArg_should_ReferenceHeaderFileAndNeverEmbedToken(t *testing.T) {
+	dir := t.TempDir()
+	assert.Empty(t, CurlHeaderArg(dir), "no header file yet")
+
+	tok, err := LoadOrCreate(Path(dir))
+	require.NoError(t, err)
+	arg := CurlHeaderArg(dir)
+	assert.True(t, strings.HasPrefix(arg, "-H @'"))
+	assert.NotContains(t, arg, tok)
+
+	info, err := os.Stat(HeaderPath(dir))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+	data, err := os.ReadFile(HeaderPath(dir))
+	require.NoError(t, err)
+	assert.Equal(t, "Authorization: Bearer "+tok+"\n", string(data))
+}
+
+func TestLoadOrCreate_should_RepairMissingHeaderFile(t *testing.T) {
+	dir := t.TempDir()
+	tok, err := LoadOrCreate(Path(dir))
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(HeaderPath(dir)))
+	again, err := LoadOrCreate(Path(dir))
+	require.NoError(t, err)
+	assert.Equal(t, tok, again)
+	assert.NotEmpty(t, CurlHeaderArg(dir))
 }

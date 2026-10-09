@@ -766,3 +766,62 @@ func waitForTmuxTeardown(t *testing.T, inst *session.Instance, timeout time.Dura
 		t.Logf("tmux session for %q still reported alive %s after DeleteSession; teardown may still be in flight: %v", inst.Title, timeout, err)
 	}
 }
+
+// The real Start() handler (not just localChain) must reject a rebinding Host on
+// registered and unregistered paths alike, so no route can bypass the guard by
+// being served from a different chain.
+func TestServer_should_RejectRebindingHost_When_StartedOnRealListener(t *testing.T) {
+	srv, _ := newServerBase("localhost:0")
+	srv.mux.HandleFunc("/api/registered", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Start(ctx) }()
+	defer func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(5 * time.Second):
+			t.Errorf("server did not shut down within 5s")
+		}
+	}()
+
+	var addr string
+	wait.RequireEventually(t, func() bool {
+		addr = srv.GetAddr()
+		if addr == "" || addr == "localhost:0" {
+			return false
+		}
+		resp, err := http.Get("http://" + addr + "/health")
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return true
+	}, 5*time.Second, 10*time.Millisecond, "server did not become reachable")
+
+	status := func(path, host string) int {
+		req, err := http.NewRequest(http.MethodGet, "http://"+addr+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Host = host
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET %s Host %s: %v", path, host, err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+	for _, host := range []string{"evil.example", "8543--main--ws--user.coder.prod.netflix.net"} {
+		for _, path := range []string{"/api/registered", "/api/not-registered", "/", "/mcp"} {
+			if got := status(path, host); got != http.StatusForbidden {
+				t.Errorf("GET %s with Host %q = %d, want 403", path, host, got)
+			}
+		}
+	}
+	if got := status("/api/registered", addr); got != http.StatusOK {
+		t.Errorf("GET /api/registered with loopback Host = %d, want 200", got)
+	}
+}

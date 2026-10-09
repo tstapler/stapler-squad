@@ -477,7 +477,7 @@ var (
 					log.Info("CORS trusted origins", "origins", srv.GetOrigins())
 				}
 
-				if err := setupLocalAuth(srv, cfg); err != nil {
+				if err := setupLocalAuth(srv, cfg, !remoteAccessFlag && !cfg.PasskeyEnabled); err != nil {
 					return err
 				}
 

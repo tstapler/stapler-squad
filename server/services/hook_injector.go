@@ -307,6 +307,11 @@ func InjectHooksConfig(rootDir, sessionTitle string, hooks []HookName, opts ...I
 		curlCmd := buildHookCommand(remoteTargeted, cfg, url, sessionTitle)
 
 		if hookAlreadyPresent(hooksMap[eventKey], remoteTargeted, cfg.remote, url) {
+			if !remoteTargeted {
+				if upgraded, changed := upgradeHookAuth(hooksMap[eventKey], url); changed {
+					hooksMap[eventKey] = upgraded
+				}
+			}
 			continue
 		}
 
@@ -378,14 +383,59 @@ func buildHookCommand(remoteTargeted bool, cfg injectHookOptions, url, sessionTi
 	if remoteTargeted {
 		return remoteApprovalHookCommand(*cfg.remote)
 	}
-	authArg := ""
-	if dir, err := config.GetConfigDir(); err == nil {
-		authArg = " " + localtoken.CurlHeaderArg(localtoken.Path(dir))
-	}
 	return fmt.Sprintf(
 		"curl -s --max-time %d -X POST '%s' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s'%s -d @-",
-		hookTimeout, url, sessionTitle, authArg,
+		hookTimeout, url, sessionTitle, hookAuthArg(),
 	)
+}
+
+// hookAuthArg is " -H @'<header file>'" (leading space) when the local token
+// header file exists, else "".
+func hookAuthArg() string {
+	dir, err := config.GetConfigDir()
+	if err != nil {
+		return ""
+	}
+	if a := localtoken.CurlHeaderArg(dir); a != "" {
+		return " " + a
+	}
+	return ""
+}
+
+// upgradeHookAuth adds the Authorization header argument to an already-injected
+// local hook for url whose command predates it (hooks written before
+// require_local_auth existed), in place, so the hook is neither duplicated nor
+// left unauthenticated. Reports whether anything changed.
+func upgradeHookAuth(existingRaw json.RawMessage, url string) (json.RawMessage, bool) {
+	authArg := hookAuthArg()
+	if existingRaw == nil || authArg == "" {
+		return existingRaw, false
+	}
+	var groups []hookMatcherGroup
+	if err := json.Unmarshal(existingRaw, &groups); err != nil {
+		return existingRaw, false
+	}
+	changed := false
+	for gi := range groups {
+		for hi := range groups[gi].Hooks {
+			h := &groups[gi].Hooks[hi]
+			if h.Type != "command" || !hookCommandReferencesURL(h.Command, url) || strings.Contains(h.Command, authArg) {
+				continue
+			}
+			if before, after, ok := strings.Cut(h.Command, " -d @-"); ok {
+				h.Command = before + authArg + " -d @-" + after
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return existingRaw, false
+	}
+	out, err := json.Marshal(groups)
+	if err != nil {
+		return existingRaw, false
+	}
+	return json.RawMessage(out), true
 }
 
 // hookAlreadyPresent reports whether existingRaw (one event's current hookMatcherGroup list, or

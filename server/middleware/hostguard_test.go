@@ -48,3 +48,24 @@ func TestHostGuard_should_ExemptOnlyExactPaths(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, hostGuardStatus("evil.example", "", "/health/x"))
 	assert.Equal(t, http.StatusForbidden, hostGuardStatus("evil.example", "", "//health"))
 }
+
+func TestHostGuard_should_PinLoopbackOriginToRequestPort(t *testing.T) {
+	assert.Equal(t, http.StatusOK, hostGuardStatus("localhost:8543", "http://127.0.0.1:8543", "/api/x"))
+	assert.Equal(t, http.StatusForbidden, hostGuardStatus("localhost:8543", "http://localhost:9999", "/api/x"), "other localhost port is a different origin")
+	assert.Equal(t, http.StatusForbidden, hostGuardStatus("localhost:8543", "http://localhost", "/api/x"))
+}
+
+func TestHostGuard_should_AllowExactlyListedOrigin_OnAnyPort(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	h := HostGuard(HostGuardConfig{AllowedOrigins: func() []string { return []string{"http://localhost:3000"} }})(next)
+	do := func(origin string) int {
+		r := httptest.NewRequest(http.MethodGet, "/api/x", nil)
+		r.Host = "localhost:8543"
+		r.Header.Set("Origin", origin)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w.Code
+	}
+	assert.Equal(t, http.StatusOK, do("http://localhost:3000"))
+	assert.Equal(t, http.StatusForbidden, do("http://localhost:3001"))
+}

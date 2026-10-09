@@ -12,6 +12,9 @@ import (
 
 const (
 	loginCodeTTL = 60 * time.Second
+	// localLoginSessionTTL is deliberately short: this cookie is host-scoped, so
+	// other localhost:<port> servers receive it, and a stolen copy should age out.
+	localLoginSessionTTL = 12 * time.Hour
 	// maxPendingLoginCodes bounds memory if something spams the code endpoint.
 	maxPendingLoginCodes = 64
 )
@@ -54,10 +57,30 @@ func NewLocalLogin(sessions *SessionManager, validator *LocalValidator) *LocalLo
 	return &LocalLogin{validator: validator, sessions: sessions, codes: map[string]time.Time{}, now: time.Now}
 }
 
-// RegisterLocalLoginRoutes registers the code mint and exchange endpoints.
-func RegisterLocalLoginRoutes(mux *http.ServeMux, l *LocalLogin) {
+// RegisterLocalLoginRoutes registers the code mint and exchange endpoints. With
+// withStatus it also registers a minimal /auth/status for the UI; leave it false
+// when RegisterRoutes (remote access) already owns that path.
+func RegisterLocalLoginRoutes(mux *http.ServeMux, l *LocalLogin, withStatus bool) {
 	mux.HandleFunc("POST /auth/local-login/code", l.mintCode)
 	mux.HandleFunc("GET /auth/local-login", l.exchange)
+	if withStatus {
+		mux.HandleFunc("GET /auth/status", l.status)
+	}
+}
+
+// status reports auth state to the UI when no passkey subsystem is running.
+func (l *LocalLogin) status(w http.ResponseWriter, r *http.Request) {
+	authenticated := false
+	if c, err := r.Cookie(AuthCookieName); err == nil {
+		authenticated = l.validator.ValidateAuthSession(c.Value)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+		"auth_enabled":    true,
+		"has_credentials": false,
+		"authenticated":   authenticated,
+		"setup_active":    false,
+	})
 }
 
 func (l *LocalLogin) mintCode(w http.ResponseWriter, r *http.Request) {
@@ -105,7 +128,7 @@ func (l *LocalLogin) exchange(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid or expired code", http.StatusUnauthorized)
 		return
 	}
-	tok, err := l.sessions.CreateAuthSession()
+	tok, err := l.sessions.CreateAuthSessionTTL(localLoginSessionTTL)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -114,7 +137,7 @@ func (l *LocalLogin) exchange(w http.ResponseWriter, r *http.Request) {
 		Name:     AuthCookieName,
 		Value:    tok,
 		Path:     "/",
-		MaxAge:   int(authTokenTTL.Seconds()),
+		MaxAge:   int(localLoginSessionTTL.Seconds()),
 		HttpOnly: true,
 		Secure:   r.TLS != nil, // the local listener is plain HTTP on loopback
 		SameSite: http.SameSiteLaxMode,

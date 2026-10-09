@@ -162,3 +162,47 @@ func TestStatus_should_NotTrustLoopbackRemoteAddr_When_RequireLocalAuth(t *testi
 	assert.Equal(t, true, on["auth_enabled"])
 	assert.Equal(t, false, on["authenticated"], "loopback RemoteAddr must not imply authenticated")
 }
+
+func TestLocalLogin_should_ServeMinimalStatus_When_RegisteredWithoutPasskeySubsystem(t *testing.T) {
+	l, sessions := newLoginHarness(t)
+	mux := http.NewServeMux()
+	RegisterLocalLoginRoutes(mux, l, true)
+
+	get := func(cookie string) map[string]interface{} {
+		r := httptest.NewRequest(http.MethodGet, "/auth/status", nil)
+		r.RemoteAddr = "127.0.0.1:1"
+		if cookie != "" {
+			r.AddCookie(&http.Cookie{Name: AuthCookieName, Value: cookie})
+		}
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		require.Equal(t, http.StatusOK, w.Code)
+		var out map[string]interface{}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
+		return out
+	}
+	assert.Equal(t, false, get("")["authenticated"])
+	assert.Equal(t, true, get("")["auth_enabled"])
+	sess, err := sessions.CreateAuthSession()
+	require.NoError(t, err)
+	assert.Equal(t, true, get(sess)["authenticated"])
+
+	// Without the flag the route is left to RegisterRoutes.
+	bare := http.NewServeMux()
+	RegisterLocalLoginRoutes(bare, l, false)
+	w := httptest.NewRecorder()
+	bare.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/auth/status", nil))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestLocalLogin_should_IssueShortLivedSessionCookie(t *testing.T) {
+	l, sessions := newLoginHarness(t)
+	var body struct{ Code string }
+	require.NoError(t, json.Unmarshal(mint(l, "tok").Body.Bytes(), &body))
+	rec := httptest.NewRecorder()
+	l.exchange(rec, httptest.NewRequest(http.MethodGet, "/auth/local-login?code="+body.Code, nil))
+	cookies := rec.Result().Cookies()
+	require.Len(t, cookies, 1)
+	assert.Equal(t, int(localLoginSessionTTL.Seconds()), cookies[0].MaxAge)
+	assert.True(t, sessions.ValidateAuthSession(cookies[0].Value))
+}

@@ -309,7 +309,9 @@ func processExists(pid int) bool {
 func permissionRequestHookCommand(sessionID string) string {
 	authArg := ""
 	if dir, err := config.GetConfigDir(); err == nil {
-		authArg = " " + localtoken.CurlHeaderArg(localtoken.Path(dir))
+		if a := localtoken.CurlHeaderArg(dir); a != "" {
+			authArg = " " + a
+		}
 	}
 	return fmt.Sprintf("curl -s --max-time 300 -X POST 'http://localhost:8543/api/hooks/permission-request' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s'%s -d @-",
 		strings.ReplaceAll(sessionID, "'", ""), authArg)

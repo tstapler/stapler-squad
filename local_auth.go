@@ -33,21 +33,23 @@ func sharedAuthSessions(configDir string) *serverauth.SessionManager {
 // cfg.RequireLocalAuth is set: passkey session cookie or the local API token as
 // a Bearer, plus the one-time-code login routes used by --open-url. No-op when
 // the flag is off.
-func setupLocalAuth(srv *server.Server, cfg *config.Config) error {
-	if !cfg.RequireLocalAuth {
-		return nil
-	}
+func setupLocalAuth(srv *server.Server, cfg *config.Config, withStatusRoute bool) error {
 	configDir, err := config.GetConfigDir()
 	if err != nil {
 		return fmt.Errorf("local auth: get config dir: %w", err)
 	}
+	// Always materialize the token and its curl header file so hook commands
+	// generated while require_local_auth is off keep working if it is turned on later.
 	token, err := localtoken.LoadOrCreate(localtoken.Path(configDir))
 	if err != nil {
 		return fmt.Errorf("local auth: %w", err)
 	}
+	if !cfg.RequireLocalAuth {
+		return nil
+	}
 	sessions := sharedAuthSessions(configDir)
 	validator := serverauth.NewLocalValidator(sessions, token)
-	serverauth.RegisterLocalLoginRoutes(srv.Mux(), serverauth.NewLocalLogin(sessions, validator))
+	serverauth.RegisterLocalLoginRoutes(srv.Mux(), serverauth.NewLocalLogin(sessions, validator), withStatusRoute)
 	srv.SetupAuth(middleware.Auth(validator))
 	log.Info("local listener auth enabled", "token_file", localtoken.Path(configDir))
 	return nil
