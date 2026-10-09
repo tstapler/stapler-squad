@@ -45,6 +45,10 @@ type FileScrollbackStorage struct {
 	locksGuard       sync.Mutex
 	zstdEncoder      *zstd.Encoder // Reusable zstd encoder
 	zstdDecoder      *zstd.Decoder // Reusable zstd decoder
+
+	// openTempFile creates Truncate's temp file; a field so tests can inject a
+	// deterministic write failure instead of racing an OS-level FIFO close.
+	openTempFile func(path string) (io.WriteCloser, error)
 }
 
 // storedEntry represents the JSON format for stored scrollback entries.
@@ -61,6 +65,7 @@ func NewFileScrollbackStorage(basePath string, compressionType string, compressi
 		compressionType:  compressionType,
 		compressionLevel: compressionLevel,
 		fileLocks:        make(map[string]*sync.Mutex),
+		openTempFile:     openTempFileOS,
 	}
 
 	// Initialize zstd encoder/decoder if using zstd
@@ -396,7 +401,7 @@ func (s *FileScrollbackStorage) Truncate(sessionID string, keepBytes int64) erro
 
 	// Write truncated file
 	tempPath := filePath + ".tmp"
-	tempFile, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600) // #nosec G304 -- tempPath derives from filePath, already contained under s.basePath
+	tempFile, err := s.openTempFile(tempPath)
 	if err != nil {
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}
@@ -450,6 +455,10 @@ func (s *FileScrollbackStorage) Truncate(sessionID string, keepBytes int64) erro
 	}
 
 	return nil
+}
+
+func openTempFileOS(path string) (io.WriteCloser, error) {
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600) // #nosec G304 -- path derives from a filePath already contained under basePath
 }
 
 // Delete removes the scrollback file for the session.
