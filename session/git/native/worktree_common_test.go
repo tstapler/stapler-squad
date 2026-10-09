@@ -3,6 +3,7 @@ package native
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -63,6 +64,22 @@ func TestResolveWorktreeIndexPath_LinkedWorktree(t *testing.T) {
 
 	assert.Equal(t, filepath.Join(adminDir, "index"), got)
 	assert.Contains(t, got, filepath.Join(repoPath, ".git", "worktrees"))
+}
+
+// TestResolveWorktreeIndexPath_CLICreatedWorktree resolves the index path of a worktree
+// created by the real git CLI (not the native code under test) and checks it against
+// `git rev-parse --git-path index`.
+func TestResolveWorktreeIndexPath_CLICreatedWorktree(t *testing.T) {
+	repoPath := setupTestRepo(t)
+	worktreePath := filepath.Join(t.TempDir(), "cli-created-wt")
+	runGit(t, repoPath, "worktree", "add", "-b", "cli-created-wt", worktreePath)
+
+	got, err := ResolveWorktreeIndexPath(worktreePath)
+	require.NoError(t, err)
+
+	want := strings.TrimSpace(runGit(t, worktreePath, "rev-parse", "--path-format=absolute", "--git-path", "index"))
+	assert.Equal(t, CanonicalizeWorktreePath(want), CanonicalizeWorktreePath(got))
+	assert.Contains(t, got, filepath.Join(".git", "worktrees"))
 }
 
 // TestResolveWorktreeIndexPath_MainWorktree covers Story 1.2.2's second acceptance
