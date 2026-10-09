@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/envtest"
 )
 
 func TestLocalValidator_should_AcceptTokenOrSession_And_RejectOthers(t *testing.T) {
@@ -92,4 +94,71 @@ func TestSafeNextPath_should_OnlyAllowSameOriginPaths(t *testing.T) {
 		assert.Equal(t, "/", safeNextPath(bad), bad)
 	}
 	assert.Equal(t, "/backlog?item=1", safeNextPath("/backlog?item=1"))
+}
+
+func TestLocalLogin_should_FallBackToRoot_When_NextIsOffOrigin(t *testing.T) {
+	l, _ := newLoginHarness(t)
+	var body struct{ Code string }
+	require.NoError(t, json.Unmarshal(mint(l, "tok").Body.Bytes(), &body))
+	rec := httptest.NewRecorder()
+	l.exchange(rec, httptest.NewRequest(http.MethodGet, "/auth/local-login?code="+body.Code+"&next=//evil.example", nil))
+	require.Equal(t, http.StatusFound, rec.Code)
+	assert.Equal(t, "/", rec.Header().Get("Location"))
+}
+
+func TestLocalLogin_should_NotConsumeCode_When_MethodIsHEAD(t *testing.T) {
+	l, _ := newLoginHarness(t)
+	var body struct{ Code string }
+	require.NoError(t, json.Unmarshal(mint(l, "tok").Body.Bytes(), &body))
+	rec := httptest.NewRecorder()
+	l.exchange(rec, httptest.NewRequest(http.MethodHead, "/auth/local-login?code="+body.Code, nil))
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+	rec = httptest.NewRecorder()
+	l.exchange(rec, httptest.NewRequest(http.MethodGet, "/auth/local-login?code="+body.Code, nil))
+	assert.Equal(t, http.StatusFound, rec.Code)
+}
+
+func TestLocalLogin_should_Reject_Mint_When_ValidatorHasNoToken(t *testing.T) {
+	sessions := NewSessionManager("")
+	t.Cleanup(sessions.Close)
+	l := NewLocalLogin(sessions, NewLocalValidator(sessions, ""))
+	assert.Equal(t, http.StatusUnauthorized, mint(l, "").Code)
+	r := httptest.NewRequest(http.MethodPost, "/auth/local-login/code", nil)
+	r.Header.Set("Authorization", "Bearer ")
+	w := httptest.NewRecorder()
+	l.mintCode(w, r)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestLocalLogin_should_CapPendingCodes(t *testing.T) {
+	l, _ := newLoginHarness(t)
+	for i := 0; i < maxPendingLoginCodes; i++ {
+		require.Equal(t, http.StatusOK, mint(l, "tok").Code)
+	}
+	assert.Equal(t, http.StatusTooManyRequests, mint(l, "tok").Code)
+}
+
+func TestStatus_should_NotTrustLoopbackRemoteAddr_When_RequireLocalAuth(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	store, err := NewCredentialStore()
+	require.NoError(t, err)
+	sessions := NewSessionManager("")
+	t.Cleanup(sessions.Close)
+
+	status := func(requireAuth bool) map[string]interface{} {
+		h := &httpHandlers{store: store, setup: NewSetupManager(), sessions: sessions, requireLocalAuth: requireAuth}
+		r := httptest.NewRequest(http.MethodGet, "/auth/status", nil)
+		r.RemoteAddr = "127.0.0.1:5555"
+		w := httptest.NewRecorder()
+		h.status(w, r)
+		var out map[string]interface{}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
+		return out
+	}
+	off := status(false)
+	assert.Equal(t, false, off["auth_enabled"])
+	assert.Equal(t, true, off["authenticated"])
+	on := status(true)
+	assert.Equal(t, true, on["auth_enabled"])
+	assert.Equal(t, false, on["authenticated"], "loopback RemoteAddr must not imply authenticated")
 }

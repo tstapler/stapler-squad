@@ -91,6 +91,11 @@ func (l *LocalLogin) mintCode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (l *LocalLogin) exchange(w http.ResponseWriter, r *http.Request) {
+	// The "GET" mux pattern also routes HEAD; a prefetch must not burn the code.
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	code := r.URL.Query().Get("code")
 	l.mu.Lock()
 	exp, ok := l.codes[code]

@@ -328,11 +328,8 @@ var (
 				address = listenAddrFlag
 			}
 
-			// Warn when binding to non-localhost
-			host, _, _ := net.SplitHostPort(address)
-			if host != "localhost" && host != "127.0.0.1" && host != "::1" {
-				log.Warn("WARNING: Binding to non-localhost address. Ensure firewall rules are configured.", "address", address)
-				fmt.Fprintf(os.Stderr, "\nWARNING: stapler-squad is listening on %s (all interfaces).\nEnsure this is intentional and your network is secured.\n\n", address)
+			if err := requireLoopbackListenAddr(address); err != nil {
+				return err
 			}
 
 			// --rp-id flag overrides config
@@ -872,7 +869,7 @@ func init() {
 
 	// Remote access and passkey flags
 	rootCmd.Flags().StringVar(&listenAddrFlag, "listen", "",
-		"Address to listen on (e.g. '0.0.0.0:8543'). Overrides config listen_address.")
+		"Loopback address to listen on (e.g. '127.0.0.1:8543'); non-loopback is rejected. Overrides config listen_address.")
 	rootCmd.Flags().BoolVar(&remoteAccessFlag, "remote-access", false,
 		"Enable remote access: starts a second HTTPS server with passkey auth on --remote-port (default 8444). "+
 			"Local server on localhost remains unchanged.")

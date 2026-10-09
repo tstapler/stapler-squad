@@ -210,7 +210,8 @@ type Config struct {
 	// serialized since the field is unexported; read via SlackSigningSecretOverride().
 	slackSigningSecretOverride string
 	// ListenAddress is the address the HTTP server listens on.
-	// Default: "localhost:8543". Set to "0.0.0.0:8543" for remote access.
+	// Must be loopback (localhost, 127.0.0.1, ::1); startup rejects anything else.
+	// Default: "localhost:8543". Remote access uses the separate HTTPS listener.
 	ListenAddress string `json:"listen_address"`
 	// PasskeyRPID is the WebAuthn Relying Party ID (effective domain, no scheme/port).
 	// Example: "192.168.1.42" or "myhost.local". Must match the hostname clients use.

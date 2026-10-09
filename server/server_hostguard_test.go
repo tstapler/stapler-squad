@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,7 +27,7 @@ func registeredPatterns(mux *http.ServeMux) []string {
 	seen := map[string]struct{}{}
 	var walk func(n reflect.Value)
 	walk = func(n reflect.Value) {
-		if n.Kind() == reflect.Ptr {
+		if n.Kind() == reflect.Pointer {
 			if n.IsNil() {
 				return
 			}
@@ -95,7 +97,9 @@ func TestLocalChain_should_Reject_RebindingAndProxyHosts_OnEveryRegisteredRoute(
 			continue
 		}
 		for _, host := range badHosts {
-			r := httptest.NewRequest(method, path, strings.NewReader("{}"))
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			r := httptest.NewRequestWithContext(ctx, method, path, strings.NewReader("{}"))
+			defer cancel()
 			r.Host = host
 			w := httptest.NewRecorder()
 			chain.ServeHTTP(w, r)
@@ -169,4 +173,28 @@ func TestLocalChain_should_RequireCredential_When_LocalAuthMiddlewareSet(t *test
 		r.Host = "evil.example"
 		r.Header.Set("Authorization", "Bearer local-token")
 	}))
+}
+
+// The exempt list is a security boundary: widening it silently opens routes.
+func TestLocalExemptPaths_should_BeExactlyHealth(t *testing.T) {
+	assert.Equal(t, []string{"/health"}, localExemptPaths)
+}
+
+// HostGuard's own Origin check, on a non-probe route so ProbeGuard can't mask it.
+func TestLocalChain_should_Reject_ForeignOrigin_OnNonProbeRoute(t *testing.T) {
+	srv, _ := newChainTestServer(t, "localhost:8543")
+	srv.mux.HandleFunc("/api/anything", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	do := func(origin string) int {
+		r := httptest.NewRequest(http.MethodGet, "/api/anything", nil)
+		r.Host = "localhost:8543"
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		w := httptest.NewRecorder()
+		srv.localChain().ServeHTTP(w, r)
+		return w.Code
+	}
+	assert.Equal(t, http.StatusForbidden, do("https://evil.example"))
+	assert.Equal(t, http.StatusOK, do("http://localhost:8543"))
+	assert.Equal(t, http.StatusOK, do(""))
 }

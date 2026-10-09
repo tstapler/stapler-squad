@@ -52,3 +52,13 @@ func setupLocalAuth(srv *server.Server, cfg *config.Config) error {
 	log.Info("local listener auth enabled", "token_file", localtoken.Path(configDir))
 	return nil
 }
+
+// requireLoopbackListenAddr rejects any :8543 listen address that is not
+// loopback. The listener is unauthenticated by default, so binding it to a LAN
+// interface would expose every route; remote access belongs on the HTTPS listener.
+func requireLoopbackListenAddr(addr string) error {
+	if !middleware.ListenAddrIsLoopback(addr) {
+		return fmt.Errorf("listen address %q is not loopback: the local listener only binds localhost, 127.0.0.1 or ::1 (use --remote-access for LAN access)", addr)
+	}
+	return nil
+}

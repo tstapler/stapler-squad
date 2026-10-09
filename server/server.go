@@ -1723,7 +1723,6 @@ var localExemptPaths = []string{"/health"}
 func (s *Server) hostGuardConfig() middleware.HostGuardConfig {
 	return middleware.HostGuardConfig{
 		AllowedOrigins: s.GetOrigins,
-		AllowedHosts:   s.GetHostnames,
 		ExemptPaths:    localExemptPaths,
 	}
 }

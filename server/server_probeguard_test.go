@@ -58,12 +58,12 @@ func TestStartChain_should_HonorOriginsSetAfterConstruction_When_SetOriginsCalle
 	assert.Equal(t, http.StatusOK, postProbe(chain, "localhost:8543", "https://ui.example"))
 }
 
-func TestStartChain_should_AcceptPublishedHostname_When_SetHostnamesCalledLater(t *testing.T) {
+// The local listener is loopback-only, so a detected LAN hostname is never a
+// legitimate Host on it: it could only arrive via a same-box proxy or rebinding.
+func TestStartChain_should_Reject_PublishedLANHostname_When_SetHostnamesCalled(t *testing.T) {
 	srv, _ := newChainTestServer(t, "localhost:8543")
-	chain := srv.localChain()
-	assert.Equal(t, http.StatusForbidden, postProbe(chain, "onyx.lan:8543", ""))
 	srv.SetHostnames([]string{"onyx.lan"})
-	assert.Equal(t, http.StatusOK, postProbe(chain, "onyx.lan:8543", ""))
+	assert.Equal(t, http.StatusForbidden, postProbe(srv.localChain(), "onyx.lan:8543", ""))
 }
 
 // ProbeGuard's POST/loopback-bound checks are replaced by auth, but the Host
