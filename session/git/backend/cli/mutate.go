@@ -19,7 +19,7 @@ func (b *Backend) ListBranches(ctx context.Context, loc backend.RepoLocation, re
 		}
 		args = append(args, "--contains", string(req.Contains))
 	}
-	args = append(args, "--format=%(refname:short)%1f%(objectname:short)%1f%(upstream:short)")
+	args = append(args, "--format=%(refname:lstrip=2)%1f%(objectname:short)%1f%(upstream:lstrip=2)")
 	res, err := b.git(ctx, loc, backend.OpListBranches, args...)
 	if err != nil {
 		return nil, err
@@ -58,13 +58,16 @@ func (b *Backend) RenameCurrentBranch(ctx context.Context, loc backend.RepoLocat
 	return err
 }
 
+// SwitchBranch uses `git switch`, not `git checkout`: checkout falls back to treating its
+// argument as a path, so Branch "." or a file name would silently discard uncommitted changes.
+// switch only ever takes a branch.
 func (b *Backend) SwitchBranch(ctx context.Context, loc backend.RepoLocation, req backend.SwitchRequest) error {
 	if err := optArg("branch", string(req.Branch)); err != nil {
 		return err
 	}
-	args := []string{"checkout"}
+	args := []string{"switch"}
 	if req.Create {
-		args = append(args, "-b")
+		args = append(args, "-c")
 	}
 	args = append(args, string(req.Branch))
 	if req.Create && req.Base != "" {
@@ -74,6 +77,37 @@ func (b *Backend) SwitchBranch(ctx context.Context, loc backend.RepoLocation, re
 		args = append(args, string(req.Base))
 	}
 	_, err := b.git(ctx, loc, backend.OpSwitchBranch, args...)
+	return err
+}
+
+func (b *Backend) CheckoutCommit(ctx context.Context, loc backend.RepoLocation, sha backend.CommitSHA) error {
+	if err := optArg("sha", string(sha)); err != nil {
+		return err
+	}
+	_, err := b.git(ctx, loc, backend.OpCheckoutCommit, "switch", "--detach", string(sha))
+	return err
+}
+
+func (b *Backend) DeleteBranch(ctx context.Context, loc backend.RepoLocation, req backend.DeleteBranchRequest) error {
+	if err := optArg("name", string(req.Name)); err != nil {
+		return err
+	}
+	flag := "-d"
+	if req.Force {
+		flag = "-D"
+	}
+	_, err := b.git(ctx, loc, backend.OpDeleteBranch, "branch", flag, string(req.Name))
+	return err
+}
+
+func (b *Backend) SetUpstream(ctx context.Context, loc backend.RepoLocation, req backend.SetUpstreamRequest) error {
+	if err := optArg("branch", string(req.Branch)); err != nil {
+		return err
+	}
+	if err := optArg("upstream", string(req.Upstream)); err != nil {
+		return err
+	}
+	_, err := b.git(ctx, loc, backend.OpSetUpstream, "branch", "--set-upstream-to="+string(req.Upstream), string(req.Branch))
 	return err
 }
 
@@ -142,8 +176,47 @@ func (b *Backend) Restore(ctx context.Context, loc backend.RepoLocation, req bac
 	return err
 }
 
-func (b *Backend) ResetIndex(ctx context.Context, loc backend.RepoLocation) error {
-	_, err := b.git(ctx, loc, backend.OpResetIndex, "reset", "HEAD")
+func (b *Backend) Reset(ctx context.Context, loc backend.RepoLocation, req backend.ResetRequest) error {
+	if req.Mode > backend.ResetHard {
+		return fmt.Errorf("%w: unknown reset mode %d", backend.ErrInvalidArgument, req.Mode)
+	}
+	target := "HEAD"
+	if req.Target != "" {
+		if err := optArg("target", string(req.Target)); err != nil {
+			return err
+		}
+		target = string(req.Target)
+	}
+	modeFlag := [...]string{"--mixed", "--soft", "--hard"}[req.Mode]
+	_, err := b.git(ctx, loc, backend.OpReset, "reset", modeFlag, target)
+	return err
+}
+
+func (b *Backend) RemoveFiles(ctx context.Context, loc backend.RepoLocation, req backend.RemoveFilesRequest) error {
+	if len(req.Paths) == 0 {
+		return fmt.Errorf("%w: rm needs at least one path", backend.ErrInvalidArgument)
+	}
+	args := []string{"rm"}
+	if req.Cached {
+		args = append(args, "--cached")
+	}
+	if req.Recursive {
+		args = append(args, "-r")
+	}
+	if req.Force {
+		args = append(args, "-f")
+	}
+	args = append(args, "--")
+	args = append(args, paths(req.Paths)...)
+	_, err := b.git(ctx, loc, backend.OpRemoveFiles, args...)
+	return err
+}
+
+func (b *Backend) MoveFile(ctx context.Context, loc backend.RepoLocation, req backend.MoveFileRequest) error {
+	if req.From == "" || req.To == "" {
+		return fmt.Errorf("%w: mv needs a source and a destination", backend.ErrInvalidArgument)
+	}
+	_, err := b.git(ctx, loc, backend.OpMoveFile, "mv", "--", string(req.From), string(req.To))
 	return err
 }
 
@@ -181,7 +254,7 @@ func (b *Backend) Fetch(ctx context.Context, loc backend.RepoLocation, req backe
 		if req.Remote == "" {
 			return fmt.Errorf("%w: fetch of a branch needs a remote", backend.ErrInvalidArgument)
 		}
-		if err := optArg("branch", string(req.Branch)); err != nil {
+		if err := refspecArg("branch", string(req.Branch)); err != nil {
 			return err
 		}
 		args = append(args, "--", string(req.Branch))
@@ -203,7 +276,7 @@ func remoteBranchArgs(args []string, remote backend.RemoteName, branch backend.B
 	}
 	args = append(args, string(remote))
 	if branch != "" {
-		if err := optArg("branch", string(branch)); err != nil {
+		if err := refspecArg("branch", string(branch)); err != nil {
 			return nil, err
 		}
 		args = append(args, string(branch))
@@ -250,4 +323,37 @@ func (b *Backend) Clone(ctx context.Context, loc backend.RepoLocation, req backe
 	t.dir = ""
 	_, err = t.git(ctx, backend.OpClone, "clone", "--", string(req.URL), dest)
 	return err
+}
+
+func (b *Backend) ListRemote(ctx context.Context, loc backend.RepoLocation, req backend.ListRemoteRequest) ([]backend.RemoteRef, error) {
+	if err := optArg("remote", string(req.Remote)); err != nil {
+		return nil, err
+	}
+	args := []string{"ls-remote"}
+	if req.HeadsOnly {
+		args = append(args, "--heads")
+	}
+	if req.TagsOnly {
+		args = append(args, "--tags")
+	}
+	args = append(args, string(req.Remote))
+	if req.Pattern != "" {
+		if err := optArg("pattern", string(req.Pattern)); err != nil {
+			return nil, err
+		}
+		args = append(args, string(req.Pattern))
+	}
+	res, err := b.git(ctx, loc, backend.OpListRemote, args...)
+	if err != nil {
+		return nil, err
+	}
+	var out []backend.RemoteRef
+	for _, ln := range nonEmptyLines(res.text()) {
+		sha, name, ok := strings.Cut(ln, "\t")
+		if !ok {
+			return nil, fmt.Errorf("git ls-remote: malformed line %q", ln)
+		}
+		out = append(out, backend.RemoteRef{SHA: backend.CommitSHA(sha), Name: backend.RefName(name)})
+	}
+	return out, nil
 }

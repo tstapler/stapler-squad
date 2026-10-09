@@ -14,7 +14,7 @@ func (b *Backend) ListWorktrees(ctx context.Context, loc backend.RepoLocation) (
 	if err != nil {
 		return nil, err
 	}
-	return parseWorktreeList(res.text()), nil
+	return parseWorktreeList(string(res.out)), nil
 }
 
 // parseWorktreeList parses `worktree list --porcelain`: blank-line separated blocks of

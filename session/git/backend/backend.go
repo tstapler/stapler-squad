@@ -22,8 +22,10 @@ type Backend interface {
 	// HeadRef returns the ref HEAD points at (symbolic-ref), e.g. refs/heads/main, which is
 	// valid on an unborn branch. ErrDetachedHead when HEAD is not symbolic.
 	HeadRef(ctx context.Context, loc RepoLocation) (RefName, error)
-	// ResolveRef resolves a revision to a commit. ErrUnborn when ref is HEAD of an unborn
-	// branch, ErrRefNotFound otherwise.
+	// ResolveRef resolves a revision to a commit (it peels tags). Commit-only: tree-ish and blob
+	// expressions such as "HEAD:path" are rejected with ErrInvalidArgument. ErrUnborn when ref
+	// is HEAD of an unborn branch (and then not ErrRefNotFound), ErrRefNotFound when the
+	// revision does not exist; any other failure (ssh down, dubious ownership) is a *CommandError.
 	ResolveRef(ctx context.Context, loc RepoLocation, ref RefName) (CommitSHA, error)
 	RefExists(ctx context.Context, loc RepoLocation, ref RefName) (bool, error)
 	RepoRoot(ctx context.Context, loc RepoLocation) (RepoRoot, error)
@@ -39,6 +41,11 @@ type Backend interface {
 
 	// GetConfig returns the effective value. ErrConfigUnset when the key has none.
 	GetConfig(ctx context.Context, loc RepoLocation, key ConfigKey) (string, error)
+	// SetConfig and SetRemoteURL trust their caller: keys such as core.sshCommand,
+	// core.hooksPath or credential.helper make git run programs, so only code the server itself
+	// controls may pass keys or values. They are not allow-listed because the legitimate key set
+	// is open-ended; the Router's capability preflight (ADR-006) re-reads hooks and signing
+	// config before every mutating call, which bounds what a written key can change.
 	SetConfig(ctx context.Context, loc RepoLocation, req SetConfigRequest) error
 	SetRemoteURL(ctx context.Context, loc RepoLocation, req SetRemoteURLRequest) error
 
@@ -55,6 +62,11 @@ type Backend interface {
 	ListBranches(ctx context.Context, loc RepoLocation, req ListBranchesRequest) ([]BranchInfo, error)
 	CreateBranch(ctx context.Context, loc RepoLocation, req CreateBranchRequest) error
 	RenameCurrentBranch(ctx context.Context, loc RepoLocation, to BranchName) error
+	// DeleteBranch deletes a local branch (refuses an unmerged one unless Force).
+	DeleteBranch(ctx context.Context, loc RepoLocation, req DeleteBranchRequest) error
+	SetUpstream(ctx context.Context, loc RepoLocation, req SetUpstreamRequest) error
+	// CheckoutCommit detaches HEAD at a commit.
+	CheckoutCommit(ctx context.Context, loc RepoLocation, sha CommitSHA) error
 	SwitchBranch(ctx context.Context, loc RepoLocation, req SwitchRequest) error
 	// DiscardChanges drops every uncommitted change (reset HEAD, checkout ., clean -fd).
 	// Irreversible; the caller owns the decision.
@@ -66,8 +78,12 @@ type Backend interface {
 
 	Add(ctx context.Context, loc RepoLocation, req AddRequest) error
 	Restore(ctx context.Context, loc RepoLocation, req RestoreRequest) error
-	// ResetIndex unstages everything (reset HEAD) without touching the working tree.
-	ResetIndex(ctx context.Context, loc RepoLocation) error
+	// Reset is `git reset`. ResetHard discards uncommitted changes; the caller owns that decision.
+	Reset(ctx context.Context, loc RepoLocation, req ResetRequest) error
+	// RemoveFiles is `git rm`; Paths are pathspecs (globs included).
+	RemoveFiles(ctx context.Context, loc RepoLocation, req RemoveFilesRequest) error
+	MoveFile(ctx context.Context, loc RepoLocation, req MoveFileRequest) error
+	// Commit records the index. ErrNothingToCommit when there is nothing to record.
 	Commit(ctx context.Context, loc RepoLocation, req CommitRequest) error
 
 	// --- network (fetch, pull, push, clone) ---
@@ -75,6 +91,8 @@ type Backend interface {
 	Fetch(ctx context.Context, loc RepoLocation, req FetchRequest) error
 	Pull(ctx context.Context, loc RepoLocation, req PullRequest) error
 	Push(ctx context.Context, loc RepoLocation, req PushRequest) error
+	// ListRemote is `git ls-remote`: refs of a remote without fetching.
+	ListRemote(ctx context.Context, loc RepoLocation, req ListRemoteRequest) ([]RemoteRef, error)
 	// Clone clones req.URL into loc (the destination directory, which must not exist yet).
 	Clone(ctx context.Context, loc RepoLocation, req CloneRequest) error
 

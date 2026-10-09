@@ -3,6 +3,7 @@ package backend
 import (
 	"errors"
 	"fmt"
+	"time"
 )
 
 // Sentinel errors every Backend implementation maps its failures onto, so callers (and the
@@ -27,12 +28,60 @@ var (
 	ErrNoRemoteRunner = errors.New("git backend: remote location has no runner")
 	// ErrNoLocalRunner means a Local location was used on a backend built without a local Runner.
 	ErrNoLocalRunner = errors.New("git backend: backend has no local runner")
-	// ErrLocked means another process holds a git lock the operation needs.
-	ErrLocked = errors.New("git backend: repository is locked")
+	// ErrNothingToCommit means Commit found an empty index (or, with Amend, nothing to amend).
+	ErrNothingToCommit = errors.New("git backend: nothing to commit")
 	// ErrInvalidArgument means a typed argument could not be passed to git safely (empty, or
 	// starting with "-" where git would parse it as an option).
 	ErrInvalidArgument = errors.New("git backend: invalid argument")
 )
+
+// ErrLocked means another process holds a git lock file the operation needs. Match it with
+// errors.Is(err, backend.ErrLocked{}) and read the details with errors.As. Age and Journaled
+// are filled by the in-process lock layer (plan Story 2.3.1); the CLI backend only knows Path.
+type ErrLocked struct {
+	Path      string        // the lock file, e.g. <git dir>/index.lock; empty when git did not name it
+	Age       time.Duration // how long the lock has existed; zero when unknown
+	Journaled bool          // true when the lock journal says this server created it
+}
+
+func (e ErrLocked) Error() string {
+	if e.Path == "" {
+		return "git backend: repository is locked"
+	}
+	return fmt.Sprintf("git backend: repository is locked: %s", e.Path)
+}
+
+// Is makes errors.Is(err, ErrLocked{}) true for any ErrLocked, whatever its fields.
+func (ErrLocked) Is(target error) bool {
+	_, ok := target.(ErrLocked)
+	return ok
+}
+
+// ErrFallbackEligible is returned by a non-CLI backend for a failure the Router may retry on
+// the CLI. Wrote reports whether the failed call already changed a ref, the index or config:
+// when true the Router must not replay the operation (plan Story 1.1.3). It lives here so the
+// shape is fixed before any such backend exists.
+type ErrFallbackEligible struct {
+	Wrote bool
+	Err   error
+}
+
+func (e ErrFallbackEligible) Error() string {
+	return fmt.Sprintf("git backend: fallback eligible (wrote=%t): %v", e.Wrote, e.Err)
+}
+
+func (e ErrFallbackEligible) Unwrap() error { return e.Err }
+
+// Is makes errors.Is(err, ErrFallbackEligible{}) true for any ErrFallbackEligible.
+func (ErrFallbackEligible) Is(target error) bool {
+	_, ok := target.(ErrFallbackEligible)
+	return ok
+}
+
+// ErrNoisyOutput means output that cannot be parsed reliably because a combined-output Runner
+// (no StdoutRunner) may have mixed stderr into NUL-delimited data. Returned instead of data
+// that could silently be wrong; use a Runner that implements StdoutRunner.
+var ErrNoisyOutput = errors.New("git backend: output may contain stderr noise; use a StdoutRunner")
 
 // CommandError is the failure of one git invocation: which operation, the (credential-scrubbed)
 // output git printed, and the underlying runner error. It unwraps to Err, so exit-status checks

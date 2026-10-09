@@ -1,9 +1,13 @@
 package backend_test
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"reflect"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -74,4 +78,41 @@ func TestIntentZeroValueIsDestructive(t *testing.T) {
 func TestLocationDir(t *testing.T) {
 	assert.Equal(t, "/r", backend.Local{Root: "/r"}.Dir())
 	assert.Equal(t, "/p", backend.Remote{Host: "h", Path: "/p"}.Dir())
+}
+
+func TestRequiredGitEnv(t *testing.T) {
+	env := backend.RequiredGitEnv()
+	assert.Contains(t, env, "LC_ALL=C")
+	assert.Contains(t, env, "GIT_TERMINAL_PROMPT=0")
+	env[0] = "mutated"
+	assert.NotEqual(t, "mutated", backend.RequiredGitEnv()[0], "a fresh slice per call")
+}
+
+func TestErrLockedCarriesDetailAndMatchesByType(t *testing.T) {
+	err := fmt.Errorf("wrapped: %w", backend.ErrLocked{Path: "/r/.git/index.lock", Age: time.Minute, Journaled: true})
+	assert.ErrorIs(t, err, backend.ErrLocked{})
+	var l backend.ErrLocked
+	require.ErrorAs(t, err, &l)
+	assert.Equal(t, "/r/.git/index.lock", l.Path)
+	assert.Equal(t, time.Minute, l.Age)
+	assert.True(t, l.Journaled)
+	assert.NotErrorIs(t, errors.New("other"), backend.ErrLocked{})
+}
+
+func TestErrFallbackEligibleShape(t *testing.T) {
+	cause := errors.New("object missing")
+	err := fmt.Errorf("op: %w", backend.ErrFallbackEligible{Wrote: true, Err: cause})
+	assert.ErrorIs(t, err, backend.ErrFallbackEligible{})
+	assert.ErrorIs(t, err, cause)
+	var fe backend.ErrFallbackEligible
+	require.ErrorAs(t, err, &fe)
+	assert.True(t, fe.Wrote)
+}
+
+func TestCallStateIsCallLevel(t *testing.T) {
+	assert.Nil(t, backend.CallStateFrom(context.Background()))
+	ctx, st := backend.WithCallState(context.Background())
+	assert.False(t, st.Wrote())
+	backend.CallStateFrom(ctx).MarkWrote() // a nested scope marks the shared call state
+	assert.True(t, st.Wrote())
 }

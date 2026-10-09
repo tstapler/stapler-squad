@@ -19,21 +19,35 @@ func (b *Backend) IsDirty(ctx context.Context, loc backend.RepoLocation, _ backe
 }
 
 func (b *Backend) Status(ctx context.Context, loc backend.RepoLocation, _ backend.Intent) (backend.StatusResult, error) {
-	res, err := b.git(ctx, loc, backend.OpStatus, "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all")
+	res, err := b.gitZ(ctx, loc, backend.OpStatus, "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all")
 	if err != nil {
 		return backend.StatusResult{}, err
 	}
-	return parseStatusV2(res.out)
+	out := res.out
+	if res.combined {
+		// The first record is always "# branch.oid"; anything before it is stderr banner.
+		if i := strings.Index(string(out), "# branch.oid "); i > 0 {
+			out = out[i:]
+		}
+	}
+	if err := checkZ(result{out: out, combined: res.combined}, backend.OpStatus, false); err != nil {
+		return backend.StatusResult{}, err
+	}
+	return parseStatusV2(out)
 }
 
 func (b *Backend) ListUntracked(ctx context.Context, loc backend.RepoLocation) ([]backend.RepoPath, error) {
-	res, err := b.git(ctx, loc, backend.OpListUntracked, "ls-files", "--others", "--exclude-standard", "-z")
+	res, err := b.gitZ(ctx, loc, backend.OpListUntracked, "ls-files", "--others", "--exclude-standard", "-z")
 	if err != nil {
+		return nil, err
+	}
+	// Records carry no marker, so a leading banner cannot be told from a file named "hint: x".
+	if err := checkZ(res, backend.OpListUntracked, true); err != nil {
 		return nil, err
 	}
 	var out []backend.RepoPath
 	for _, p := range strings.Split(string(res.out), "\x00") {
-		if p = strings.TrimSpace(p); p != "" {
+		if p != "" { // names may begin or end with spaces or newlines: no trimming
 			out = append(out, backend.RepoPath(p))
 		}
 	}
@@ -41,7 +55,8 @@ func (b *Backend) ListUntracked(ctx context.Context, loc backend.RepoLocation) (
 }
 
 func diffArgs(spec backend.DiffSpec, extra ...string) ([]string, error) {
-	args := append([]string{"diff"}, extra...)
+	// Pinned against user config: no color escapes, external diff drivers or textconv filters.
+	args := append([]string{"diff", "--no-color", "--no-ext-diff", "--no-textconv"}, extra...)
 	if spec.Staged {
 		args = append(args, "--cached")
 	}
@@ -77,7 +92,7 @@ func diffArgs(spec backend.DiffSpec, extra ...string) ([]string, error) {
 }
 
 func (b *Backend) Diff(ctx context.Context, loc backend.RepoLocation, spec backend.DiffSpec) (string, error) {
-	args, err := diffArgs(spec)
+	args, err := diffArgs(spec, "--src-prefix=a/", "--dst-prefix=b/") // ignore diff.noprefix / mnemonicPrefix
 	if err != nil {
 		return "", err
 	}
@@ -93,8 +108,13 @@ func (b *Backend) DiffNumstat(ctx context.Context, loc backend.RepoLocation, spe
 	if err != nil {
 		return nil, err
 	}
-	res, err := b.git(ctx, loc, backend.OpDiffNumstat, args...)
+	res, err := b.gitZ(ctx, loc, backend.OpDiffNumstat, args...)
 	if err != nil {
+		return nil, err
+	}
+	// A banner would corrupt the first record's counts (a loud parse error); an unterminated
+	// tail is the same signal at the other end.
+	if err := checkZ(res, backend.OpDiffNumstat, false); err != nil {
 		return nil, err
 	}
 	return parseNumstatZ(res.out)
@@ -106,7 +126,7 @@ func parseNumstatZ(out []byte) ([]backend.NumstatRow, error) {
 	recs := strings.Split(string(out), "\x00")
 	var rows []backend.NumstatRow
 	for i := 0; i < len(recs); i++ {
-		rec := strings.TrimLeft(recs[i], "\n")
+		rec := recs[i]
 		if rec == "" {
 			continue
 		}
@@ -142,7 +162,7 @@ func parseStatusV2(out []byte) (backend.StatusResult, error) {
 	var st backend.StatusResult
 	recs := strings.Split(string(out), "\x00")
 	for i := 0; i < len(recs); i++ {
-		rec := strings.TrimLeft(recs[i], "\n")
+		rec := recs[i]
 		if rec == "" {
 			continue
 		}

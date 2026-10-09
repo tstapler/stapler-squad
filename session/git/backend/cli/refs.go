@@ -24,6 +24,18 @@ func parseSHA(op backend.OperationName, s string) (backend.CommitSHA, error) {
 func isHEAD(ref backend.RefName) bool { return ref == "HEAD" || ref == "@" }
 
 // commitish peels ref to a commit unless the caller already wrote a peel expression.
+// commitRef validates a revision for the commit-only methods: no option lookalikes and no
+// "rev:path" tree-ish expressions, which name trees and blobs, not commits.
+func commitRef(ref backend.RefName) error {
+	if err := optArg("ref", string(ref)); err != nil {
+		return err
+	}
+	if strings.Contains(string(ref), ":") {
+		return fmt.Errorf("%w: ref %q is a tree-ish expression, not a commit", backend.ErrInvalidArgument, ref)
+	}
+	return nil
+}
+
 func commitish(ref backend.RefName) string {
 	if strings.Contains(string(ref), "^{") {
 		return string(ref)
@@ -36,7 +48,13 @@ func commitish(ref backend.RefName) string {
 // from a dropped connection, which is why the symbolic-ref probe exists.
 func (b *Backend) unbornOr(ctx context.Context, loc backend.RepoLocation, fallback error) error {
 	if _, err := b.git(ctx, loc, backend.OpHeadRef, "symbolic-ref", "-q", "HEAD"); err == nil {
-		return fmt.Errorf("%w: %w", backend.ErrUnborn, fallback)
+		// Wrap only the command error: fallback may carry ErrRefNotFound ("unknown revision"),
+		// which must not also be true for an unborn HEAD.
+		var cerr *backend.CommandError
+		if errors.As(fallback, &cerr) {
+			return fmt.Errorf("%w: %w", backend.ErrUnborn, cerr)
+		}
+		return backend.ErrUnborn
 	}
 	return fallback
 }
@@ -71,16 +89,13 @@ func (b *Backend) HeadRef(ctx context.Context, loc backend.RepoLocation) (backen
 }
 
 func (b *Backend) ResolveRef(ctx context.Context, loc backend.RepoLocation, ref backend.RefName) (backend.CommitSHA, error) {
-	if err := optArg("ref", string(ref)); err != nil {
+	if err := commitRef(ref); err != nil {
 		return "", err
 	}
 	res, err := b.git(ctx, loc, backend.OpResolveRef, "rev-parse", "--verify", commitish(ref))
 	if err != nil {
-		if isHEAD(ref) {
+		if isHEAD(ref) && !errors.Is(err, backend.ErrObjectNotFound) {
 			return "", b.unbornOr(ctx, loc, err)
-		}
-		if exitCode(err) > 0 && !errors.Is(err, backend.ErrNotARepo) && !errors.Is(err, backend.ErrObjectNotFound) && !errors.Is(err, backend.ErrRefNotFound) {
-			return "", fmt.Errorf("%w: %w", backend.ErrRefNotFound, err)
 		}
 		return "", err
 	}
@@ -88,7 +103,7 @@ func (b *Backend) ResolveRef(ctx context.Context, loc backend.RepoLocation, ref 
 }
 
 func (b *Backend) RefExists(ctx context.Context, loc backend.RepoLocation, ref backend.RefName) (bool, error) {
-	if err := optArg("ref", string(ref)); err != nil {
+	if err := commitRef(ref); err != nil {
 		return false, err
 	}
 	_, err := b.git(ctx, loc, backend.OpRefExists, "rev-parse", "--verify", "--quiet", commitish(ref))
@@ -126,7 +141,7 @@ func (b *Backend) CommonDir(ctx context.Context, loc backend.RepoLocation) (back
 }
 
 func (b *Backend) ListRefs(ctx context.Context, loc backend.RepoLocation, req backend.ListRefsRequest) ([]backend.RefName, error) {
-	args := []string{"for-each-ref", "--format=%(refname:short)"}
+	args := []string{"for-each-ref", "--format=%(refname)"}
 	if req.Limit > 0 {
 		args = append(args, "--count="+strconv.Itoa(req.Limit))
 	}
@@ -242,6 +257,9 @@ func (b *Backend) GetConfig(ctx context.Context, loc backend.RepoLocation, key b
 
 func (b *Backend) SetConfig(ctx context.Context, loc backend.RepoLocation, req backend.SetConfigRequest) error {
 	if err := optArg("key", string(req.Key)); err != nil {
+		return err
+	}
+	if err := optArg("value", req.Value); err != nil && req.Value != "" {
 		return err
 	}
 	_, err := b.git(ctx, loc, backend.OpSetConfig, "config", string(req.Key), req.Value)

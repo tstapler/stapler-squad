@@ -61,7 +61,8 @@ func (b *Backend) resolve(loc backend.RepoLocation) (target, error) {
 
 // result is one finished invocation.
 type result struct {
-	out []byte // stdout, or combined output with warning/hint noise stripped
+	out      []byte // stdout, or combined output with warning/hint noise stripped
+	combined bool   // out came from a runner without StdoutRunner
 }
 
 func (r result) text() string { return strings.TrimSpace(string(r.out)) }
@@ -78,6 +79,13 @@ func (b *Backend) git(ctx context.Context, loc backend.RepoLocation, op backend.
 }
 
 func (t target) git(ctx context.Context, op backend.OperationName, args ...string) (result, error) {
+	return t.exec(ctx, op, true, args)
+}
+
+// exec runs git. When the runner has no StdoutRunner, combined output is noise-stripped only if
+// stripNoise is set; NUL-delimited (-z) callers pass false because stripping lines would eat or
+// invent records, and validate the raw bytes themselves.
+func (t target) exec(ctx context.Context, op backend.OperationName, strip bool, args []string) (result, error) {
 	var (
 		out []byte
 		err error
@@ -86,15 +94,55 @@ func (t target) git(ctx context.Context, op backend.OperationName, args ...strin
 		out, err = sr.RunStdout(ctx, t.dir, "git", args...)
 	} else {
 		out, err = t.runner.Run(ctx, t.dir, "git", args...)
-		out = stripNoise(out)
+		if strip {
+			out = stripNoise(out)
+		}
 	}
 	if err != nil {
 		return result{out: out}, classify(op, out, err)
 	}
-	return result{out: out}, nil
+	return result{out: out, combined: !isStdoutRunner(t.runner)}, nil
+}
+
+func isStdoutRunner(r backend.Runner) bool {
+	_, ok := r.(backend.StdoutRunner)
+	return ok
+}
+
+// gitZ runs a command whose output is NUL-delimited. See checkZ for what it guarantees.
+func (b *Backend) gitZ(ctx context.Context, loc backend.RepoLocation, op backend.OperationName, args ...string) (result, error) {
+	t, err := b.resolve(loc)
+	if err != nil {
+		return result{}, err
+	}
+	return t.exec(ctx, op, false, args)
+}
+
+// checkZ rejects combined output that cannot be a clean NUL-terminated record stream: git ends
+// every -z record with NUL, so output that does not (a trailing stderr banner) is suspect, and
+// with leadingNoiseIsAmbiguous a leading warning:/hint: line could be a real file name. Both
+// become ErrNoisyOutput instead of silently wrong data. A StdoutRunner is always trusted.
+func checkZ(res result, op backend.OperationName, leadingNoiseIsAmbiguous bool) error {
+	if !res.combined || len(res.out) == 0 {
+		return nil
+	}
+	if res.out[len(res.out)-1] != 0 || (leadingNoiseIsAmbiguous && hasNoisePrefix(string(res.out))) {
+		return fmt.Errorf("%w: git %s", backend.ErrNoisyOutput, op)
+	}
+	return nil
 }
 
 var noisePrefixes = []string{"warning:", "hint:", "advice:"}
+
+func hasNoisePrefix(s string) bool {
+	lower := strings.ToLower(s)
+	for _, p := range noisePrefixes {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
+	}
+	return false
+}
 
 // stripNoise drops warning:/hint: lines git (or an ssh banner) wrote to stderr into combined output.
 func stripNoise(out []byte) []byte {
@@ -104,26 +152,27 @@ func stripNoise(out []byte) []byte {
 	lines := strings.Split(string(out), "\n")
 	kept := lines[:0]
 	for _, ln := range lines {
-		lower := strings.ToLower(strings.TrimSpace(ln))
-		noisy := false
-		for _, p := range noisePrefixes {
-			if strings.HasPrefix(lower, p) {
-				noisy = true
-				break
-			}
-		}
-		if !noisy {
+		if !hasNoisePrefix(strings.TrimSpace(ln)) {
 			kept = append(kept, ln)
 		}
 	}
 	return []byte(strings.Join(kept, "\n"))
 }
 
-var credentialInURL = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^/@\s]+@`)
+// credentialInURL matches scheme://userinfo@ through the LAST '@' of the token, so a password
+// containing '@' or '/' is hidden entirely. scpCredential covers scp-style user:token@host:path.
+var (
+	credentialInURL = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^\s'"]*@`)
+	scpCredential   = regexp.MustCompile(`\b[A-Za-z0-9._~-]+:[^\s@'"/]+@`)
+	lockPath        = regexp.MustCompile(`Unable to create '([^']+\.lock)'`)
+)
 
 // scrub hides URL userinfo (tokens, passwords) before output reaches an error message.
 // Stand-in for session/git/redact.Git until that package exists (plan Story 1.3.1).
-func scrub(s string) string { return credentialInURL.ReplaceAllString(s, "${1}***@") }
+func scrub(s string) string {
+	s = credentialInURL.ReplaceAllString(s, "${1}***@")
+	return scpCredential.ReplaceAllString(s, "***@")
+}
 
 // classify turns a runner error into *CommandError, additionally wrapping a sentinel the
 // output identifies. The raw runner error stays reachable through errors.As/Unwrap.
@@ -135,24 +184,32 @@ func classify(op backend.OperationName, out []byte, err error) error {
 	}
 	text = strings.TrimSpace(text)
 	lower := strings.ToLower(text)
-	if len(text) > maxErrorOutput {
-		text = text[:maxErrorOutput] + "..."
+	shown := scrub(text) // scrub first: truncating before could cut a credential in half
+	if len(shown) > maxErrorOutput {
+		shown = strings.ToValidUTF8(shown[:maxErrorOutput], "") + "..."
 	}
-	cerr := &backend.CommandError{Operation: op, Output: scrub(text), Err: err}
-	if s := sentinelFor(lower); s != nil {
+	cerr := &backend.CommandError{Operation: op, Output: shown, Err: err}
+	if s := sentinelFor(lower, text); s != nil {
 		return fmt.Errorf("%w: %w", s, cerr)
 	}
 	return cerr
 }
 
-func sentinelFor(lower string) error {
+func sentinelFor(lower, original string) error {
 	switch {
 	case strings.Contains(lower, "not a git repository"):
 		return backend.ErrNotARepo
 	case strings.Contains(lower, "does not have any commits yet"):
 		return backend.ErrUnborn
 	case strings.Contains(lower, ".lock': file exists"), strings.Contains(lower, "another git process seems to be running"):
-		return backend.ErrLocked
+		l := backend.ErrLocked{}
+		if m := lockPath.FindStringSubmatch(original); m != nil {
+			l.Path = m[1]
+		}
+		return l
+	case strings.Contains(lower, "nothing to commit"), strings.Contains(lower, "nothing added to commit"),
+		strings.Contains(lower, "no changes added to commit"):
+		return backend.ErrNothingToCommit
 	case strings.Contains(lower, "bad object"), strings.Contains(lower, "unable to read tree"), strings.Contains(lower, "missing object"):
 		return backend.ErrObjectNotFound
 	case strings.Contains(lower, "unknown revision"), strings.Contains(lower, "needed a single revision"),
@@ -189,6 +246,18 @@ func optArg(name, v string) error {
 	}
 	if strings.HasPrefix(v, "-") {
 		return fmt.Errorf("%w: %s %q starts with '-'", backend.ErrInvalidArgument, name, v)
+	}
+	return nil
+}
+
+// refspecArg is optArg plus the characters that turn a "branch name" into a refspec when given
+// to push, pull or fetch: ':' (":main" deletes the remote branch) and a leading '+' (force).
+func refspecArg(name, v string) error {
+	if err := optArg(name, v); err != nil {
+		return err
+	}
+	if strings.HasPrefix(v, "+") || strings.Contains(v, ":") {
+		return fmt.Errorf("%w: %s %q looks like a refspec", backend.ErrInvalidArgument, name, v)
 	}
 	return nil
 }

@@ -23,13 +23,21 @@ type execRunner struct{ home string }
 
 type execStdoutRunner struct{ execRunner }
 
+// hermeticEnv drops every inherited GIT_* variable (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, ...)
+// so a test run from inside a hook or worktree cannot leak into the temp repos.
 func hermeticEnv(home string) []string {
-	return append(os.Environ(),
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "GIT_") {
+			env = append(env, kv)
+		}
+	}
+	env = append(env, backend.RequiredGitEnv()...)
+	return append(env,
 		"HOME="+home, "XDG_CONFIG_HOME="+filepath.Join(home, "xdg"),
-		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0",
+		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
 		"GIT_AUTHOR_NAME=T", "GIT_AUTHOR_EMAIL=t@example.com",
 		"GIT_COMMITTER_NAME=T", "GIT_COMMITTER_EMAIL=t@example.com",
-		"LC_ALL=C",
 	)
 }
 
@@ -181,7 +189,7 @@ func TestRealGitRefsAndIdentity(t *testing.T) {
 
 		refs, err := b.ListRefs(ctx, loc, backend.ListRefsRequest{Pattern: "refs/heads"})
 		require.NoError(t, err)
-		assert.Equal(t, []backend.RefName{"main"}, refs)
+		assert.Equal(t, []backend.RefName{"refs/heads/main"}, refs)
 
 		mustGit(t, repo, "checkout", "-q", "-b", "feat")
 		require.NoError(t, os.WriteFile(filepath.Join(repo, "b.txt"), []byte("two\n"), 0o600))
@@ -279,7 +287,7 @@ func TestRealGitWorkingTree(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, untracked, 1)
 
-		require.NoError(t, b.ResetIndex(ctx, loc))
+		require.NoError(t, b.Reset(ctx, loc, backend.ResetRequest{}))
 		require.NoError(t, b.Add(ctx, loc, backend.AddRequest{All: true}))
 		require.NoError(t, b.Commit(ctx, loc, backend.CommitRequest{Message: "second"}))
 		dirty, err = b.IsDirty(ctx, loc, backend.IntentDestructive)

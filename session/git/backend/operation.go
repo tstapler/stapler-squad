@@ -34,7 +34,13 @@ const (
 	OpStashPop                     OperationName = "StashPop"                     // stash pop
 	OpAdd                          OperationName = "Add"                          // add
 	OpRestore                      OperationName = "Restore"                      // restore
-	OpResetIndex                   OperationName = "ResetIndex"                   // reset HEAD
+	OpReset                        OperationName = "Reset"                        // reset --mixed|--soft|--hard
+	OpDeleteBranch                 OperationName = "DeleteBranch"                 // branch -d / -D
+	OpSetUpstream                  OperationName = "SetUpstream"                  // branch --set-upstream-to
+	OpCheckoutCommit               OperationName = "CheckoutCommit"               // switch --detach
+	OpListRemote                   OperationName = "ListRemote"                   // ls-remote
+	OpRemoveFiles                  OperationName = "RemoveFiles"                  // rm
+	OpMoveFile                     OperationName = "MoveFile"                     // mv
 	OpCommit                       OperationName = "Commit"                       // commit
 	OpFetch                        OperationName = "Fetch"                        // fetch
 	OpPull                         OperationName = "Pull"                         // pull
@@ -52,14 +58,14 @@ var allOperations = []OperationName{
 	OpListRefs, OpMergeBase, OpCountCommits, OpLog, OpGetConfig, OpSetConfig, OpSetRemoteURL,
 	OpIsDirty, OpStatus, OpListUntracked, OpDiff, OpDiffNumstat, OpListBranches, OpCreateBranch,
 	OpRenameCurrentBranch, OpSwitchBranch, OpDiscardChanges, OpStashPush, OpStashPop, OpAdd,
-	OpRestore, OpResetIndex, OpCommit, OpFetch, OpPull, OpPush, OpClone, OpListWorktrees,
+	OpRestore, OpReset, OpDeleteBranch, OpSetUpstream, OpCheckoutCommit, OpListRemote, OpRemoveFiles, OpMoveFile, OpCommit, OpFetch, OpPull, OpPush, OpClone, OpListWorktrees,
 	OpAddWorktree, OpAddWorktreeForExistingBranch, OpRemoveWorktree, OpPruneWorktrees,
 }
 
 var mutating = map[OperationName]bool{
 	OpSetConfig: true, OpSetRemoteURL: true, OpCreateBranch: true, OpRenameCurrentBranch: true,
 	OpSwitchBranch: true, OpDiscardChanges: true, OpStashPush: true, OpStashPop: true,
-	OpAdd: true, OpRestore: true, OpResetIndex: true, OpCommit: true, OpFetch: true,
+	OpAdd: true, OpRestore: true, OpReset: true, OpDeleteBranch: true, OpSetUpstream: true, OpCheckoutCommit: true, OpRemoveFiles: true, OpMoveFile: true, OpCommit: true, OpFetch: true,
 	OpPull: true, OpPush: true, OpClone: true, OpAddWorktree: true,
 	OpAddWorktreeForExistingBranch: true, OpRemoveWorktree: true, OpPruneWorktrees: true,
 }

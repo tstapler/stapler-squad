@@ -105,7 +105,7 @@ func argvCases() []struct {
 		{"ListRefs", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			_, e := b.ListRefs(c, l, backend.ListRefsRequest{Pattern: "refs/heads", Limit: 1})
 			return e
-		}, "for-each-ref --format=%(refname:short) --count=1 refs/heads", "main\n"},
+		}, "for-each-ref --format=%(refname) --count=1 refs/heads", "main\n"},
 		{"MergeBase", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			_, e := b.MergeBase(c, l, backend.MergeBaseRequest{Left: "HEAD", Right: "origin/main"})
 			return e
@@ -143,27 +143,27 @@ func argvCases() []struct {
 		{"DiffWorktree", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			_, e := b.Diff(c, l, backend.DiffSpec{Base: "HEAD"})
 			return e
-		}, "diff HEAD", ""},
+		}, "diff --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ HEAD", ""},
 		{"DiffStagedPath", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			_, e := b.Diff(c, l, backend.DiffSpec{Staged: true, Paths: []backend.RepoPath{"a.go"}})
 			return e
-		}, "diff --cached -- a.go", ""},
+		}, "diff --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ --cached -- a.go", ""},
 		{"DiffRange", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			_, e := b.Diff(c, l, backend.DiffSpec{Base: sha1, Head: "feat"})
 			return e
-		}, "diff " + sha1 + "..feat", ""},
+		}, "diff --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ " + sha1 + "..feat", ""},
 		{"DiffMergeBase", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			_, e := b.Diff(c, l, backend.DiffSpec{Base: "main", FromMergeBase: true})
 			return e
-		}, "diff main...HEAD", ""},
+		}, "diff --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ main...HEAD", ""},
 		{"DiffNumstat", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			_, e := b.DiffNumstat(c, l, backend.DiffSpec{Staged: true})
 			return e
-		}, "diff --numstat -z --cached", ""},
+		}, "diff --no-color --no-ext-diff --no-textconv --numstat -z --cached", ""},
 		{"ListBranches", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			_, e := b.ListBranches(c, l, backend.ListBranchesRequest{IncludeRemote: true, Contains: sha1})
 			return e
-		}, "branch -a --contains " + sha1 + " --format=%(refname:short)%1f%(objectname:short)%1f%(upstream:short)", ""},
+		}, "branch -a --contains " + sha1 + " --format=%(refname:lstrip=2)%1f%(objectname:short)%1f%(upstream:lstrip=2)", ""},
 		{"CreateBranch", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			return b.CreateBranch(c, l, backend.CreateBranchRequest{Name: "n", Base: "main"})
 		}, "branch n main", ""},
@@ -172,10 +172,10 @@ func argvCases() []struct {
 		}, "branch -m new", ""},
 		{"SwitchBranchCreate", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			return b.SwitchBranch(c, l, backend.SwitchRequest{Branch: "t", Create: true, Base: "main"})
-		}, "checkout -b t main", ""},
+		}, "switch -c t main", ""},
 		{"SwitchBranch", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			return b.SwitchBranch(c, l, backend.SwitchRequest{Branch: "t"})
-		}, "checkout t", ""},
+		}, "switch t", ""},
 		{"StashPush", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			return b.StashPush(c, l, backend.StashRequest{Message: "wip"})
 		}, "stash push -m wip", ""},
@@ -189,7 +189,37 @@ func argvCases() []struct {
 		{"RestoreStaged", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			return b.Restore(c, l, backend.RestoreRequest{Staged: true, Paths: []backend.RepoPath{"a"}})
 		}, "restore --staged -- a", ""},
-		{"ResetIndex", func(c context.Context, b backend.Backend, l backend.RepoLocation) error { return b.ResetIndex(c, l) }, "reset HEAD", ""},
+		{"ResetMixed", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
+			return b.Reset(c, l, backend.ResetRequest{})
+		}, "reset --mixed HEAD", ""},
+		{"ResetHardTarget", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
+			return b.Reset(c, l, backend.ResetRequest{Mode: backend.ResetHard, Target: "origin/main"})
+		}, "reset --hard origin/main", ""},
+		{"ResetSoft", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
+			return b.Reset(c, l, backend.ResetRequest{Mode: backend.ResetSoft})
+		}, "reset --soft HEAD", ""},
+		{"DeleteBranch", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
+			return b.DeleteBranch(c, l, backend.DeleteBranchRequest{Name: "old"})
+		}, "branch -d old", ""},
+		{"DeleteBranchForce", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
+			return b.DeleteBranch(c, l, backend.DeleteBranchRequest{Name: "old", Force: true})
+		}, "branch -D old", ""},
+		{"SetUpstream", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
+			return b.SetUpstream(c, l, backend.SetUpstreamRequest{Branch: "b", Upstream: "origin/b"})
+		}, "branch --set-upstream-to=origin/b b", ""},
+		{"CheckoutCommit", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
+			return b.CheckoutCommit(c, l, sha1)
+		}, "switch --detach " + sha1, ""},
+		{"ListRemote", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
+			_, e := b.ListRemote(c, l, backend.ListRemoteRequest{Remote: "origin", HeadsOnly: true, Pattern: "refs/heads/main"})
+			return e
+		}, "ls-remote --heads origin refs/heads/main", sha1 + "\trefs/heads/main\n"},
+		{"RemoveFiles", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
+			return b.RemoveFiles(c, l, backend.RemoveFilesRequest{Paths: []backend.RepoPath{"*.log"}, Cached: true, Recursive: true})
+		}, "rm --cached -r -- *.log", ""},
+		{"MoveFile", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
+			return b.MoveFile(c, l, backend.MoveFileRequest{From: "a", To: "b"})
+		}, "mv -- a b", ""},
 		{"Commit", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			return b.Commit(c, l, backend.CommitRequest{Message: "m"})
 		}, "commit -m m", ""},
@@ -319,7 +349,7 @@ func TestWarningNoiseTolerance(t *testing.T) {
 			func(b backend.Backend, l backend.RepoLocation) (any, error) {
 				return b.HeadRef(context.Background(), l)
 			}, backend.RefName("refs/heads/main")},
-		{"for-each-ref", "for-each-ref --format=%(refname:short) refs/heads", noise + "a\nb\n",
+		{"for-each-ref", "for-each-ref --format=%(refname) refs/heads", noise + "a\nb\n",
 			func(b backend.Backend, l backend.RepoLocation) (any, error) {
 				return b.ListRefs(context.Background(), l, backend.ListRefsRequest{Pattern: "refs/heads"})
 			}, []backend.RefName{"a", "b"}},
@@ -385,7 +415,10 @@ func TestExitStatusMapping(t *testing.T) {
 	assert.ErrorIs(t, err, backend.ErrNotARepo)
 
 	err = cli.New(nil).Add(ctx, loc(newFake().on("add -A", "fatal: Unable to create '/r/.git/index.lock': File exists.\n", exitErr{128})), backend.AddRequest{All: true})
-	assert.ErrorIs(t, err, backend.ErrLocked)
+	assert.ErrorIs(t, err, backend.ErrLocked{})
+	var locked backend.ErrLocked
+	require.ErrorAs(t, err, &locked)
+	assert.Equal(t, "/r/.git/index.lock", locked.Path)
 
 	_, err = cli.New(nil).Log(ctx, loc(newFake().on("log --format=%H%x1f%s HEAD", "fatal: your current branch 'main' does not have any commits yet\n", exitErr{128})), backend.LogRequest{})
 	assert.ErrorIs(t, err, backend.ErrUnborn)
@@ -441,7 +474,7 @@ func TestParseOutputs(t *testing.T) {
 
 	t.Run("numstat", func(t *testing.T) {
 		z := "3\t1\ta.go\x00-\t-\timg.png\x002\t0\t\x00old.go\x00new.go\x00"
-		fake := newFake().on("diff --numstat -z", z, nil)
+		fake := newFake().on("diff --no-color --no-ext-diff --no-textconv --numstat -z", z, nil)
 		rows, err := cli.New(nil).DiffNumstat(ctx, remoteAt(fake), backend.DiffSpec{})
 		require.NoError(t, err)
 		assert.Equal(t, []backend.NumstatRow{
@@ -466,7 +499,7 @@ func TestParseOutputs(t *testing.T) {
 	t.Run("log and branches", func(t *testing.T) {
 		fake := newFake().
 			on("log --format=%H%x1f%s HEAD", sha1+"\x1ffix: a thing\n", nil).
-			on("branch --format=%(refname:short)%1f%(objectname:short)%1f%(upstream:short)", "main\x1fabc1234\x1forigin/main\n(HEAD detached at abc)\x1fabc\x1f\n", nil)
+			on("branch --format=%(refname:lstrip=2)%1f%(objectname:short)%1f%(upstream:lstrip=2)", "main\x1fabc1234\x1forigin/main\n(HEAD detached at abc)\x1fabc\x1f\n", nil)
 		entries, err := cli.New(nil).Log(ctx, remoteAt(fake), backend.LogRequest{})
 		require.NoError(t, err)
 		assert.Equal(t, []backend.LogEntry{{SHA: sha1, Subject: "fix: a thing"}}, entries)

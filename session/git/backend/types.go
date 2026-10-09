@@ -14,7 +14,7 @@ type (
 	RemoteHost   string // SSH host a Remote location runs on (identity for logs only)
 	RemotePath   string // repository path on the remote host
 	WorktreePath string // filesystem path of a linked worktree
-	RepoPath     string // path relative to the repository root
+	RepoPath     string // path relative to the repository root; not trimmed or normalised (names may start or end with spaces)
 	ConfigKey    string // dotted git config key, e.g. "remote.origin.url"
 	RefPattern   string // for-each-ref pattern, e.g. "refs/heads/"
 )
@@ -123,7 +123,8 @@ type LogEntry struct {
 	Subject string
 }
 
-// ListRefsRequest limits a for-each-ref listing. Limit 0 means no limit.
+// ListRefsRequest limits a for-each-ref listing; results are full ref names (refs/heads/x), never
+// shortened, so a branch and a tag of the same name stay distinct. Limit 0 means no limit.
 type ListRefsRequest struct {
 	Pattern RefPattern
 	Limit   int
@@ -159,6 +160,63 @@ type SwitchRequest struct {
 type AddRequest struct {
 	Paths []RepoPath
 	All   bool
+}
+
+// ResetMode is the `git reset` mode.
+type ResetMode uint8
+
+const (
+	ResetMixed ResetMode = iota // move HEAD, reset the index, keep the working tree
+	ResetSoft                   // move HEAD only
+	ResetHard                   // move HEAD, reset index and working tree (discards changes)
+)
+
+// ResetRequest is `git reset <mode> <target>`. Zero Target means HEAD.
+type ResetRequest struct {
+	Mode   ResetMode
+	Target RefName
+}
+
+// DeleteBranchRequest deletes a local branch; Force allows deleting an unmerged one (-D).
+type DeleteBranchRequest struct {
+	Name  BranchName
+	Force bool
+}
+
+// SetUpstreamRequest points Branch at Upstream (`branch --set-upstream-to`).
+type SetUpstreamRequest struct {
+	Branch   BranchName
+	Upstream RefName
+}
+
+// ListRemoteRequest is `git ls-remote`. Remote is a configured remote name or a URL.
+// Pattern limits the listing (e.g. "refs/heads/main"); zero lists everything.
+type ListRemoteRequest struct {
+	Remote    RemoteName
+	Pattern   RefPattern
+	HeadsOnly bool
+	TagsOnly  bool
+}
+
+// RemoteRef is one line of ls-remote output.
+type RemoteRef struct {
+	SHA  CommitSHA
+	Name RefName // full ref name, e.g. refs/heads/main
+}
+
+// RemoveFilesRequest is `git rm`. Paths are pathspecs, so globs (the plan's RemoveGlob) are
+// the same call. Cached removes from the index only.
+type RemoveFilesRequest struct {
+	Paths     []RepoPath
+	Cached    bool
+	Recursive bool
+	Force     bool // -f: remove even with staged or local modifications
+}
+
+// MoveFileRequest is `git mv From To`.
+type MoveFileRequest struct {
+	From RepoPath
+	To   RepoPath
 }
 
 // RestoreRequest unstages (Staged) and/or discards (Worktree) changes to Paths.
