@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/git/internal/obstest"
+
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
@@ -411,16 +413,16 @@ func TestNativeMergeMainIntoWorktree_IncrementsConflictOutcomeCounter(t *testing
 	runGit(t, origin, "add", "README.md")
 	runGit(t, origin, "commit", "-m", "main edits README")
 
-	before := collectGitMetric(t, "git_merge_outcome_total")
-	baseline := sumGitCounterForAttr(t, before, "outcome", mergeOutcomeConflicted)
+	before := obstest.CollectMetric(t, "git_merge_outcome_total")
+	baseline := obstest.SumCounterForAttr(t, before, "outcome", mergeOutcomeConflicted)
 
 	result, err := nativeMergeMainIntoWorktree(work, "main")
 	require.NoError(t, err)
 	require.True(t, result.Conflicted)
 
-	after := collectGitMetric(t, "git_merge_outcome_total")
+	after := obstest.CollectMetric(t, "git_merge_outcome_total")
 	require.NotNil(t, after)
-	assert.Equal(t, baseline+1, sumGitCounterForAttr(t, after, "outcome", mergeOutcomeConflicted))
+	assert.Equal(t, baseline+1, obstest.SumCounterForAttr(t, after, "outcome", mergeOutcomeConflicted))
 }
 
 // TestNativeMerge_And_NativeSetup_SerializeThroughSameLock proves a native merge and a

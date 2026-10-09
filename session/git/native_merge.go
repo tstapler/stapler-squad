@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/tstapler/stapler-squad/session/git/native"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -34,7 +35,7 @@ const (
 // mergeOutcomeTotal is the conflict-rate counter named in plan.md's Observability Plan
 // (Task 4.4.2b) — proves requirements.md's Observability Requirements are measurable, not
 // just assumed. telemetry.GetMeter() is safe to call before telemetry.Initialize.
-var mergeOutcomeTotal = mustInt64CounterGit(telemetry.GetMeter(), "git_merge_outcome_total",
+var mergeOutcomeTotal = native.MustInt64Counter(telemetry.GetMeter(), "git_merge_outcome_total",
 	metric.WithDescription("Count of native merge pipeline outcomes: uptodate, fastforward, cleanmerge, conflicted"))
 
 func recordMergeOutcome(outcome string) {
