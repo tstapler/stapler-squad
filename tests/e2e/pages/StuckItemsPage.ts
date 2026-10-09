@@ -54,6 +54,22 @@ export class StuckItemsPage {
   }
 }
 
+const seededItemIds: string[] = [];
+
+/** Deletes every item seeded since the last call so tests sharing one server don't see each other's rows. */
+export async function deleteSeededStuckItems(request: APIRequestContext): Promise<void> {
+  for (const itemId of seededItemIds.splice(0)) {
+    const resp = await request.post(`${BASE_URL}/api/session.v1.BacklogService/DeleteBacklogItem`, {
+      headers: { "Content-Type": "application/json" },
+      data: { itemId },
+    });
+    // 404 = backlog feature disabled by the test itself; its rows are not served while disabled.
+    if (!resp.ok() && resp.status() !== 404) {
+      throw new Error(`deleteSeededStuckItems failed for ${itemId} (${resp.status()}): ${await resp.text().catch(() => "")}`);
+    }
+  }
+}
+
 /**
  * Seeds an open BacklogStuckState row for a backlog item, bypassing the
  * reconciler/detectors entirely (validation.md's own note for the UX
@@ -105,6 +121,7 @@ export async function seedStuckItem(
     );
   }
   const body = (await resp.json()) as { itemId: string };
+  seededItemIds.push(body.itemId);
   return body.itemId;
 }
 

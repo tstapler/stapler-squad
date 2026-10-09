@@ -21,6 +21,7 @@ import { test, expect, APIRequestContext } from "@playwright/test";
 import {
   StuckItemsPage,
   seedStuckItem,
+  deleteSeededStuckItems,
   enableBacklogFeatureFlag,
   disableBacklogFeatureFlag,
 } from "./pages/StuckItemsPage";
@@ -50,12 +51,18 @@ test.describe("stuck items", () => {
     await disableBacklogFeatureFlag(request);
   });
 
+  test.afterEach(async ({ request }) => {
+    await deleteSeededStuckItems(request);
+  });
+
   test.beforeEach(async ({ page }) => {
     // Skip the first-run onboarding modal (shows on any fresh browser context after
     // 800ms — see web-app/src/components/onboarding/useOnboarding.ts), matching the
     // convention in triggers-panel.spec.ts / rule-builder-ci-passing.spec.ts.
     await page.addInitScript(() => {
       localStorage.setItem("stapler-squad:onboarded", "true");
+      // The backlog page auto-opens its own tour, which covers the detail pane.
+      localStorage.setItem("stapler-squad:backlog-onboarded", "true");
       // A tab persisted by an earlier test must not hide the Stuck panel.
       localStorage.removeItem("up-next-tab");
     });
@@ -108,7 +115,7 @@ test.describe("stuck items", () => {
     const stuckPage = new StuckItemsPage(page);
     await stuckPage.goto();
 
-    const prChip = page.getByRole("button", { name: /PR ready to merge/ });
+    const prChip = stuckPage.filterChip("1");
     await prChip.click();
     await expect(prChip).toHaveAttribute("aria-pressed", "true");
     await expect(stuckPage.cardByTitle("fix: filter test pr-ready")).toBeVisible();
@@ -144,8 +151,8 @@ test.describe("stuck items", () => {
     const stuckPage = new StuckItemsPage(page);
     await stuckPage.goto();
 
-    // pr_ready_unmerged has 0 items in this scenario.
-    await stuckPage.filterChip("1").click(); // STUCK_REASON_PR_READY_UNMERGED = 1
+    // No spec seeds "bouncing" (keep it that way), so this reason is always empty.
+    await stuckPage.filterChip("5").click(); // STUCK_REASON_BOUNCING = 5
     await expect(stuckPage.filteredEmptyState).toBeVisible();
     await expect(stuckPage.clearFilterButton).toBeVisible();
 
@@ -164,7 +171,7 @@ test.describe("stuck items", () => {
 
     const stuckPage = new StuckItemsPage(page);
     await stuckPage.goto();
-    await stuckPage.filterChip("1").click(); // 0-count reason
+    await stuckPage.filterChip("5").click(); // STUCK_REASON_BOUNCING: 0-count, never seeded
     await expect(stuckPage.clearFilterButton).toBeVisible();
     await stuckPage.clearFilterButton.click();
     await expect(stuckPage.filterChip("all")).toHaveAttribute("aria-pressed", "true");
@@ -182,7 +189,7 @@ test.describe("stuck items", () => {
     const stuckPage = new StuckItemsPage(page);
     await stuckPage.goto();
 
-    const chip = page.getByRole("button", { name: /PR ready to merge/ });
+    const chip = stuckPage.filterChip("1");
     await chip.focus();
     await page.keyboard.press("Space");
     await expect(chip).toHaveAttribute("aria-pressed", "true");
@@ -235,6 +242,17 @@ test.describe("stuck items", () => {
       context: "no activity for 4 days",
     });
 
+    // Stub the RPC and hold it: the pending state is transient, and the real action would spawn a
+    // session (failing on the seeded item's missing repo_path) and park the reason for later runs.
+    let releaseRetry!: () => void;
+    const retryHeld = new Promise<void>((resolve) => (releaseRetry = resolve));
+    let retryCalls = 0;
+    await page.route("**/*BacklogService/TriggerRemediationNow", async (route) => {
+      retryCalls++;
+      await retryHeld;
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+
     const backlogPage = new BacklogPage(page);
     await backlogPage.goto();
     await backlogPage.waitForPageLoad();
@@ -247,15 +265,15 @@ test.describe("stuck items", () => {
     await expect(retryButton).toBeEnabled();
     await retryButton.click();
 
-    // Pending state fires synchronously on click.
     await expect(retryButton).toBeDisabled();
-    await expect(lifecycleSummary.getByTestId("blocker-chip-duration")).toHaveTextContent("Retrying…");
+    await expect(lifecycleSummary.getByTestId("blocker-chip-duration")).toHaveText("Retrying…");
+    releaseRetry();
 
-    // "stale_work" is a wired remediation reason (server/services/backlog_service_stuck.go),
-    // so it resolves to idle (no inline error) rather than CodeUnimplemented.
+    // A successful response returns the chip to idle with no inline error.
     await expect(retryButton).toBeEnabled({ timeout: 10_000 });
     await expect(lifecycleSummary.getByTestId("blocker-chip-error")).not.toBeVisible();
 
+    expect(retryCalls).toBe(1);
     expect(itemId).toBeTruthy();
   });
 

@@ -18,6 +18,7 @@ import AxeBuilder from '@axe-core/playwright';
 import {
   StuckItemsPage,
   seedStuckItem,
+  deleteSeededStuckItems,
   enableBacklogFeatureFlag,
   disableBacklogFeatureFlag,
 } from './pages/StuckItemsPage';
@@ -34,6 +35,11 @@ import { dismissNotificationInterference } from './pages/NotificationPanel';
 import { WindowTabStripPage } from './pages/WindowTabStripPage';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+
+// Seeded stuck items persist on the shared test server; remove them so other specs don't see them.
+test.afterEach(async ({ request }) => {
+  await deleteSeededStuckItems(request);
+});
 
 test.describe('Accessibility (WCAG 2.1 AA)', () => {
   // Axe scans are CPU-heavy; give each test 2 minutes to avoid browser-crash flakes.

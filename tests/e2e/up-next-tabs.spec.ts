@@ -7,9 +7,14 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { UpNextPage } from './pages/UpNextPage';
-import { enableBacklogFeatureFlag, seedStuckItem } from './pages/StuckItemsPage';
+import { deleteSeededStuckItems, enableBacklogFeatureFlag, seedStuckItem } from './pages/StuckItemsPage';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+
+// Seeded stuck items persist on the shared test server; remove them so other specs don't see them.
+test.afterEach(async ({ request }) => {
+  await deleteSeededStuckItems(request);
+});
 
 test.describe('Up Next tabs', () => {
   test.beforeEach(async ({ page }) => {

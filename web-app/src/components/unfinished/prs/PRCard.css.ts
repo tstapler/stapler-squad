@@ -38,9 +38,11 @@ export const prTitle = style({
   // minimum size; overflowWrap lets long unbreakable tokens (e.g.
   // "cache_read_input_tokens/cache_creation_input_tokens") wrap instead of
   // forcing this row (and every ancestor up to UnfinishedTab's .container)
-  // wider than the viewport on mobile.
+  // wider than the viewport on mobile. "anywhere" (not "break-word") because
+  // only it shrinks min-content, which the narrow column layout's
+  // align-items:flex-start sizes this link by.
   minWidth: 0,
-  overflowWrap: "break-word",
+  overflowWrap: "anywhere",
   lineHeight: 1.4,
   ":hover": {
     textDecoration: "underline",
@@ -59,12 +61,16 @@ export const prRepo = style({
   fontFamily: vars.font.mono,
   fontSize: vars.fontSize.xs,
   color: vars.color.textMuted,
+  minWidth: 0,
+  overflowWrap: "anywhere",
 });
 
 export const prBranch = style({
   fontFamily: vars.font.mono,
   fontSize: vars.fontSize.xs,
   color: vars.color.textSecondary,
+  minWidth: 0,
+  overflowWrap: "anywhere",
 });
 
 export const chips = style({
@@ -239,9 +245,11 @@ export const repoGroupSection = style({
   flexDirection: "column",
   gap: vars.space["2"],
   paddingLeft: vars.space["4"],
+  minWidth: 0,
 });
 
 export const repoGroupHeader = style({
+  overflowWrap: "anywhere",
   fontSize: vars.fontSize.xs,
   fontFamily: vars.font.mono,
   color: vars.color.textMuted,
