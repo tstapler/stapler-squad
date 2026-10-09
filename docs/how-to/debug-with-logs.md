@@ -217,21 +217,22 @@ text appears in the stuck-state context (`triage session … ended (other:
 <error_detail>) …`), the item's Sessions panel failure notice, and
 `ItemSession.error_detail` (proto field 27).
 
-Find recent `other` failures and group by shared cause (a common prefix across
-many items in one batch points at infrastructure, not the items):
+Find `other` failures and group by shared cause (a common prefix across many
+items in one batch points at infrastructure, not the items). `<config-dir>` is
+where your instance keeps state — see `docs/reference/state-isolation.md`:
 
 ```bash
-sqlite3 ~/.stapler-squad/workspaces/<hash>/sessions.db \
+sqlite3 <config-dir>/sessions.db \
   "SELECT error_detail, COUNT(*) FROM item_sessions
    WHERE end_reason='other' AND error_detail != ''
-   GROUP BY error_detail ORDER BY COUNT(*) DESC;"
+   GROUP BY substr(error_detail,1,60) ORDER BY COUNT(*) DESC;"
 ```
 
 Find items parked at the retry cap (the same rows the per-item "Auto-triage
 paused" notification refers to):
 
 ```bash
-sqlite3 ~/.stapler-squad/workspaces/<hash>/sessions.db \
+sqlite3 <config-dir>/sessions.db \
   "SELECT item_id, remediation_attempts, context FROM backlog_stuck_states
    WHERE reason='orphaned_triage' AND resolved_at IS NULL AND remediation_attempts >= 5;"
 ```

@@ -13,6 +13,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -2710,12 +2711,25 @@ func classifyHeadlessCallError(err error, elapsed, budget time.Duration) string 
 	case errors.Is(err, headless.ErrSubprocessStart):
 		return "subprocess_start_error"
 	default:
-		return "other"
+		return headlessErrOther
 	}
 }
 
+// headlessErrOther is classifyHeadlessCallError's catch-all bucket name.
+const headlessErrOther = "other"
+
 // maxErrorDetailRunes bounds ItemSession.error_detail.
 const maxErrorDetailRunes = 500
+
+// errorDetailSecretPattern matches common credential shapes that could ride along in a
+// wrapped exec/network error (API keys, bearer tokens, key=value secrets).
+var errorDetailSecretPattern = regexp.MustCompile(`(?i)(sk-[a-z0-9_-]{8,}|bearer\s+[a-z0-9._~+/=-]{8,}|(?:api[_-]?key|token|secret|password)=\S+)`)
+
+// redactErrorDetail masks credential-shaped substrings. Best-effort: error_detail outlives
+// log rotation and is shown in the UI, so it must not become a durable secret store.
+func redactErrorDetail(s string) string {
+	return errorDetailSecretPattern.ReplaceAllString(s, "[REDACTED]")
+}
 
 // truncateErrorDetail returns err.Error() cut to at most maxRunes runes (never splitting a
 // multi-byte rune), or "" for a nil error.
@@ -2723,7 +2737,7 @@ func truncateErrorDetail(err error, maxRunes int) string {
 	if err == nil {
 		return ""
 	}
-	s := err.Error()
+	s := redactErrorDetail(strings.Join(strings.Fields(err.Error()), " ")) // one line: it is embedded in a one-line stuck context
 	if utf8.RuneCountInString(s) <= maxRunes {
 		return s
 	}
@@ -2733,11 +2747,15 @@ func truncateErrorDetail(err error, maxRunes int) string {
 // endItemSessionForCallError closes an ItemSession after a failed headless call,
 // recording error_detail only for the unclassified "other" bucket. Best-effort.
 func (s *BacklogService) endItemSessionForCallError(ctx context.Context, itemSessionID, errType string, callErr error) {
-	if errType == "other" {
-		_ = s.storage.UpdateItemSessionEndedWithDetail(ctx, itemSessionID, time.Now(), errType, truncateErrorDetail(callErr, maxErrorDetailRunes))
-		return
+	var err error
+	if errType == headlessErrOther {
+		err = s.storage.UpdateItemSessionEndedWithDetail(ctx, itemSessionID, time.Now(), errType, truncateErrorDetail(callErr, maxErrorDetailRunes))
+	} else {
+		err = s.storage.UpdateItemSessionEndedWithReason(ctx, itemSessionID, time.Now(), errType)
 	}
-	_ = s.storage.UpdateItemSessionEndedWithReason(ctx, itemSessionID, time.Now(), errType)
+	if err != nil {
+		log.Warn("failed to record headless call failure on item session", "itemSession", itemSessionID, "errType", errType, "error", err)
+	}
 }
 
 // captureHeadlessFailure best-effort writes raw (the accumulated stdout of a

@@ -126,33 +126,44 @@ const (
 	batchParkWindow    = 10 * time.Minute
 )
 
-// parkBurstTracker counts recent events inside a sliding window. In-memory only:
-// a restart resets it, which is acceptable for a best-effort heads-up.
+// parkBurstTracker counts distinct items parked inside a sliding window and fires at most
+// once per window. In-memory only: a restart resets it, acceptable for a best-effort heads-up.
 type parkBurstTracker struct {
-	mu    sync.Mutex
-	times []time.Time
+	mu          sync.Mutex
+	parkedAt    map[string]time.Time // itemID -> latest park time
+	lastFiredAt time.Time
 }
 
-// record adds an event at now, drops events older than window, and returns the count in window.
-func (p *parkBurstTracker) record(now time.Time, window time.Duration) int {
+// record notes itemID parked at now, drops items older than window, and reports how many
+// distinct items are in the window and whether the caller should escalate (threshold reached
+// and nothing fired within the last window).
+func (p *parkBurstTracker) record(itemID string, now time.Time, window time.Duration, threshold int) (count int, fire bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.parkedAt == nil {
+		p.parkedAt = make(map[string]time.Time)
+	}
 	cutoff := now.Add(-window)
-	kept := p.times[:0]
-	for _, t := range p.times {
-		if t.After(cutoff) {
-			kept = append(kept, t)
+	for id, t := range p.parkedAt {
+		if !t.After(cutoff) {
+			delete(p.parkedAt, id)
 		}
 	}
-	p.times = append(kept, now)
-	return len(p.times)
+	p.parkedAt[itemID] = now
+	count = len(p.parkedAt)
+	if count >= threshold && now.Sub(p.lastFiredAt) >= window {
+		p.lastFiredAt = now
+		return count, true
+	}
+	return count, false
 }
 
 // recordTriageParkAndMaybeEscalate emits one aggregated notification, on top of the
-// per-item ones, each time the batchParkThreshold-th or later parking lands in the window.
-func (l *BacklogLifecycleListener) recordTriageParkAndMaybeEscalate(now time.Time) {
-	count := l.triageParks.record(now, batchParkWindow)
-	if count < batchParkThreshold {
+// per-item ones, when batchParkThreshold distinct items have parked within the window; it fires at
+// most once per window so a 10-item import yields one batch alert, not eight.
+func (l *BacklogLifecycleListener) recordTriageParkAndMaybeEscalate(itemID string, now time.Time) {
+	count, fire := l.triageParks.record(itemID, now, batchParkWindow, batchParkThreshold)
+	if !fire {
 		return
 	}
 	l.notify("",
@@ -466,7 +477,7 @@ func (l *BacklogLifecycleListener) retryOrphanedTriageWithBackoffGate(ctx contex
 		due = true // fail open — see retryPushFailedWithBackoffGate's identical rationale
 	}
 	if justParked {
-		l.recordTriageParkAndMaybeEscalate(time.Now())
+		l.recordTriageParkAndMaybeEscalate(itemID, time.Now())
 		l.notify(itemID,
 			"Auto-triage paused",
 			fmt.Sprintf("%s — automated triage retry has been attempted %d times over an extended period without resolving. It now needs manual attention; use Reset to try again automatically.", itemTitle, MaxRemediationAttempts),

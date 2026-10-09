@@ -90,7 +90,7 @@ In the `ItemSession` message, after field 18 (`end_reason`):
 // error_detail carries the truncated underlying Go error text when end_reason is "other" —
 // the catch-all bucket that previously gave no further diagnostic signal after log rotation.
 // Empty for all other end_reason values and for successful sessions.
-string error_detail = 19;
+string error_detail = 27; // 19 is already failure_capture_path
 ```
 
 Run `make proto-gen`.

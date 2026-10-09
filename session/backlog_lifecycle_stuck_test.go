@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -5662,14 +5663,44 @@ func TestRecordTriageParkAndMaybeEscalate_should_notifyOnce_When_ThresholdParksW
 	listener.SetNotifier(notifier)
 
 	base := time.Now()
-	listener.recordTriageParkAndMaybeEscalate(base)
-	listener.recordTriageParkAndMaybeEscalate(base.Add(time.Minute))
+	listener.recordTriageParkAndMaybeEscalate("a", base)
+	listener.recordTriageParkAndMaybeEscalate("b", base.Add(time.Minute))
 	assert.Empty(t, notifier.calls, "below threshold must not escalate")
 
-	listener.recordTriageParkAndMaybeEscalate(base.Add(2 * time.Minute))
+	listener.recordTriageParkAndMaybeEscalate("c", base.Add(2*time.Minute))
 	require.Len(t, notifier.calls, 1)
 	assert.Equal(t, "Multiple auto-triage retries exhausted", notifier.calls[0].Title)
 	assert.Contains(t, notifier.calls[0].Message, "3 items")
+}
+
+func TestRecordTriageParkAndMaybeEscalate_should_notifyOnlyOnce_When_BurstContinuesPastThreshold(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	base := time.Now()
+	for i := 0; i < 10; i++ {
+		listener.recordTriageParkAndMaybeEscalate(fmt.Sprintf("item-%d", i), base.Add(time.Duration(i)*time.Second))
+	}
+	assert.Len(t, notifier.calls, 1)
+}
+
+func TestRecordTriageParkAndMaybeEscalate_should_countDistinctItems_When_SameItemParksRepeatedly(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	base := time.Now()
+	for i := 0; i < 5; i++ {
+		listener.recordTriageParkAndMaybeEscalate("same-item", base.Add(time.Duration(i)*time.Second))
+	}
+	assert.Empty(t, notifier.calls)
 }
 
 func TestRecordTriageParkAndMaybeEscalate_should_notNotify_When_ParksSpreadBeyondWindow(t *testing.T) {
@@ -5682,7 +5713,7 @@ func TestRecordTriageParkAndMaybeEscalate_should_notNotify_When_ParksSpreadBeyon
 
 	base := time.Now()
 	for i := 0; i < 5; i++ {
-		listener.recordTriageParkAndMaybeEscalate(base.Add(time.Duration(i) * (batchParkWindow + time.Minute)))
+		listener.recordTriageParkAndMaybeEscalate(fmt.Sprintf("item-%d", i), base.Add(time.Duration(i)*(batchParkWindow+time.Minute)))
 	}
 	assert.Empty(t, notifier.calls)
 }

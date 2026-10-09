@@ -6448,4 +6448,6 @@ func TestTruncateErrorDetail_should_CutOnRuneBoundary_When_ErrorExceedsLimit(t *
 	assert.Equal(t, maxErrorDetailRunes, utf8.RuneCountInString(got))
 	assert.True(t, utf8.ValidString(got))
 	assert.Equal(t, "short", truncateErrorDetail(errors.New("short"), maxErrorDetailRunes))
+	assert.Equal(t, "dial failed [REDACTED] end", truncateErrorDetail(errors.New("dial failed sk-abcdef123456 end"), maxErrorDetailRunes))
+	assert.Equal(t, "a b c", truncateErrorDetail(errors.New("a\n  b\tc"), maxErrorDetailRunes), "whitespace collapsed to one line")
 }
