@@ -2723,7 +2723,7 @@ const maxErrorDetailRunes = 500
 
 // errorDetailSecretPattern matches common credential shapes that could ride along in a
 // wrapped exec/network error (API keys, bearer tokens, key=value secrets).
-var errorDetailSecretPattern = regexp.MustCompile(`(?i)(sk-[a-z0-9_-]{8,}|bearer\s+[a-z0-9._~+/=-]{8,}|(?:api[_-]?key|token|secret|password)=\S+)`)
+var errorDetailSecretPattern = regexp.MustCompile(`(?i)(\bsk-[a-z0-9_-]{8,}|\bbearer\s+[a-z0-9._~+/=-]{8,}|\b(?:api[_-]?key|token|secret|password)=\S+)`)
 
 // redactErrorDetail masks credential-shaped substrings. Best-effort: error_detail outlives
 // log rotation and is shown in the UI, so it must not become a durable secret store.

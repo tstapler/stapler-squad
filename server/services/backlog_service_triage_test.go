@@ -6450,4 +6450,7 @@ func TestTruncateErrorDetail_should_CutOnRuneBoundary_When_ErrorExceedsLimit(t *
 	assert.Equal(t, "short", truncateErrorDetail(errors.New("short"), maxErrorDetailRunes))
 	assert.Equal(t, "dial failed [REDACTED] end", truncateErrorDetail(errors.New("dial failed sk-abcdef123456 end"), maxErrorDetailRunes))
 	assert.Equal(t, "a b c", truncateErrorDetail(errors.New("a\n  b\tc"), maxErrorDetailRunes), "whitespace collapsed to one line")
+	assert.Equal(t, "auth [REDACTED] failed", truncateErrorDetail(errors.New("auth Bearer abcdefgh12 failed"), maxErrorDetailRunes))
+	assert.Equal(t, "x [REDACTED]", truncateErrorDetail(errors.New("x api_key=hunter2"), maxErrorDetailRunes))
+	assert.Equal(t, "task-management-x", truncateErrorDetail(errors.New("task-management-x"), maxErrorDetailRunes), "no redaction inside ordinary words")
 }
