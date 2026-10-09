@@ -1450,13 +1450,10 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		// Story 6 guard (adversarial-review.md's Blocker): re-verify, via a
 		// live GitHub lookup, that PR #item.PrNumber's head branch still
 		// matches this item's currently-tracked branch before treating the
-		// merge as this item's own and auto-completing it. wt == nil (no
-		// work session, or a GetWorktreeDataBySessionUUID failure above) is
-		// treated identically to a definitive mismatch — fail closed.
-		var trackedBranch string
-		if wt != nil {
-			trackedBranch = wt.BranchName
-		}
+		// merge as this item's own and auto-completing it. No resolvable
+		// tracked branch (neither lastWork.BranchName nor wt) is treated
+		// identically to a definitive mismatch — fail closed.
+		trackedBranch := trackedBranchFor(lastWork, wt)
 		if matches, verifyErr := l.verifyPRHeadBranchMatchesTracked(ctx, item.RepoPath, trackedBranch, item.PrNumber); verifyErr != nil || !matches {
 			log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s: PR #%d head branch no longer verifiably matches the tracked branch — skipping auto-done transition (was this item's PR attached via report_pr_created's override_reason path?)", item.ID, item.PrNumber)
 			return
@@ -1835,6 +1832,26 @@ func (l *BacklogLifecycleListener) verifyPRHeadBranchMatchesTracked(ctx context.
 	return info.HeadRef == trackedBranch, nil
 }
 
+// trackedBranchFor resolves the branch to verify a merged/closed PR against,
+// for verifyPRHeadBranchMatchesTracked's trackedBranch argument. Prefers
+// lastWork.BranchName — stamped once at work-session spawn time directly onto
+// the durable ItemSession row — over wt (the legacy sessions/worktrees-table
+// lookup via GetWorktreeDataBySessionUUID), which reads back empty once the
+// underlying Session row is gone (see EntRepository.Delete, which already
+// anticipates exactly this "Session row is ephemeral, ItemSession survives it"
+// shape for ConversationUUID). wt remains the fallback for ItemSession rows
+// created before branch_name existed. Returns "" (fail closed, per
+// verifyPRHeadBranchMatchesTracked's contract) when neither source has it.
+func trackedBranchFor(lastWork *ItemSessionSummary, wt *GitWorktreeData) string {
+	if lastWork != nil && lastWork.BranchName != "" {
+		return lastWork.BranchName
+	}
+	if wt != nil {
+		return wt.BranchName
+	}
+	return ""
+}
+
 // unverifiedPRAssociationDisclaimer is prepended (Task 6.3a) to a spawned
 // fix session's context whenever verifyPRAssociationForFixSpawn can't
 // confirm a PR's head branch still matches the item's tracked branch —
@@ -1876,7 +1893,8 @@ func (l *BacklogLifecycleListener) verifyPRAssociationForFixSpawn(ctx context.Co
 	if wtErr != nil {
 		return false
 	}
-	matches, verifyErr := l.verifyPRHeadBranchMatchesTracked(ctx, repoPath, wt.BranchName, prNumber)
+	trackedBranch := trackedBranchFor(lastWork, &wt)
+	matches, verifyErr := l.verifyPRHeadBranchMatchesTracked(ctx, repoPath, trackedBranch, prNumber)
 	return verifyErr == nil && matches
 }
 
@@ -1991,7 +2009,8 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 		log.WarningLog().Printf("[BacklogLifecycle] closeIfSupersededByMain item=%s: PR #%d head branch no longer verifiably matches the tracked branch — skipping auto-close (was this item's PR attached via report_pr_created's override_reason path?)", item.ID, item.PrNumber)
 		return false
 	}
-	if matches, verifyErr := l.verifyPRHeadBranchMatchesTracked(ctx, item.RepoPath, wt.BranchName, item.PrNumber); verifyErr != nil || !matches {
+	trackedBranch := trackedBranchFor(lastWork, &wt)
+	if matches, verifyErr := l.verifyPRHeadBranchMatchesTracked(ctx, item.RepoPath, trackedBranch, item.PrNumber); verifyErr != nil || !matches {
 		log.WarningLog().Printf("[BacklogLifecycle] closeIfSupersededByMain item=%s: PR #%d head branch no longer verifiably matches the tracked branch — skipping auto-close (was this item's PR attached via report_pr_created's override_reason path?)", item.ID, item.PrNumber)
 		return false
 	}

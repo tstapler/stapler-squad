@@ -1023,8 +1023,9 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// "branch already exists" failure (session/git/worktree_ops.go's setupNewWorktree
 	// self-heals that specific error, but serializing here closes the race at the
 	// source instead of just recovering from it after the fact).
+	workBranchSlug := backlogWorkBranchSlug(item.RepoPath, shortTitle)
 	s.worktreeMu.Lock()
-	worktreePath, useWorktree, resolveErr := resolveSessionPath(item.RepoPath, backlogWorkBranchSlug(item.RepoPath, shortTitle), item.BaseBranch)
+	worktreePath, useWorktree, resolveErr := resolveSessionPath(item.RepoPath, workBranchSlug, item.BaseBranch)
 	if resolveErr != nil {
 		s.worktreeMu.Unlock()
 		return nil, resolveErr
@@ -1143,10 +1144,15 @@ func (s *BacklogService) spawnSessionAfterGates(
 	if s.pipelineEngine != nil {
 		pipelineModeSnapshotHash, _ = s.pipelineEngine.ContentHashFor(session.PipelineMode(item.PipelineMode))
 	}
+	var workSessionBranchName string
+	if useWorktree {
+		workSessionBranchName = workBranchSlug
+	}
 	is, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
 		ItemID:                   item.ID,
 		SessionUUID:              inst.UUID,
 		SessionRole:              session.SessionRoleWork,
+		BranchName:               workSessionBranchName,
 		AcSnapshot:               acSnapshot,
 		PipelineModeSnapshot:     item.PipelineMode,
 		PipelineModeSnapshotHash: pipelineModeSnapshotHash,

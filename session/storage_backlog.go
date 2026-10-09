@@ -201,7 +201,12 @@ type ItemSessionData struct {
 	// (a headless call that has finished); "" otherwise — see EntRepository.Delete
 	// and UpdateItemSessionConversationUUID for the other ways it gets recorded.
 	ConversationUUID string
-	AcSnapshot       AcCriteriaJSON
+	// BranchName is the work session's git branch, stamped once at spawn
+	// time — see ItemSession.branch_name's schema comment for why this
+	// needs to outlive the Session/Worktree rows it would otherwise be
+	// read from.
+	BranchName string
+	AcSnapshot AcCriteriaJSON
 	// PipelineModeSnapshot/PipelineModeSnapshotHash freeze the resolved
 	// PipelineMode slug and its content hash at the moment this session
 	// first starts — see ItemSessionSummary.PipelineModeSnapshot(Hash).
@@ -259,6 +264,7 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionD
 		SetSessionUUID(data.SessionUUID).
 		SetSessionRole(data.SessionRole).
 		SetConversationUUID(data.ConversationUUID).
+		SetBranchName(data.BranchName).
 		SetBacklogItemID(parsedItemID).
 		SetNillableAcSnapshot(nilIfEmpty(string(data.AcSnapshot))).
 		SetPipelineModeSnapshot(data.PipelineModeSnapshot).

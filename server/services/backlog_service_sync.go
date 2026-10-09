@@ -71,6 +71,10 @@ func (s *BacklogService) AttachSessionToItem(
 	// shared main checkout, used by countless other things), so a re-review
 	// computed its diff against whatever unrelated commits had landed there
 	// between review rounds — a wrong verdict, not a stuck one.
+	// attachedBranchName feeds the ItemSession's branch_name (step 5 below) — see
+	// ItemSession.branch_name's schema comment for why this needs to be captured
+	// at attach time rather than read back later from the Session/Worktree rows.
+	var attachedBranchName string
 	if instances, loadErr := s.storage.LoadInstances(); loadErr == nil {
 		for _, inst := range instances {
 			if inst.UUID != req.Msg.SessionUuid {
@@ -82,6 +86,7 @@ func (s *BacklogService) AttachSessionToItem(
 					fmt.Errorf("session %q's working directory is the item's shared repo checkout (%q) — attach requires a dedicated worktree or directory so review diffs, reopen, and ship stay scoped to this item's own work",
 						req.Msg.SessionUuid, item.RepoPath))
 			}
+			attachedBranchName = inst.Snapshot().Branch
 			break
 		}
 	}
@@ -104,6 +109,7 @@ func (s *BacklogService) AttachSessionToItem(
 		ItemID:         item.ID,
 		SessionUUID:    req.Msg.SessionUuid,
 		SessionRole:    session.SessionRoleWork,
+		BranchName:     attachedBranchName,
 		AcSnapshot:     acSnapshot,
 		ClaimantHostID: s.claimantHostID(),
 	})

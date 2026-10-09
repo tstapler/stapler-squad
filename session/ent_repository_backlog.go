@@ -224,6 +224,7 @@ func itemSessionToSummary(is *ent.ItemSession) ItemSessionSummary {
 		BacklogItemID:            backlogItemID,
 		SessionUUID:              is.SessionUUID,
 		Role:                     is.SessionRole,
+		BranchName:               is.BranchName,
 		AcSnapshot:               AcCriteriaJSON(is.AcSnapshot),
 		PipelineModeSnapshot:     is.PipelineModeSnapshot,
 		PipelineModeSnapshotHash: is.PipelineModeSnapshotHash,

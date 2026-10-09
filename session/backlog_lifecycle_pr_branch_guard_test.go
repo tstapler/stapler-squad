@@ -47,6 +47,27 @@ func newTrackedWorkSession(t *testing.T, storage *Storage, itemID, repoPath, bra
 	}
 }
 
+// newUntrackedWorkSessionWithBranchName creates an ItemSession (SessionRoleWork)
+// with branchName stamped directly onto the row, but — unlike
+// newTrackedWorkSession — WITHOUT any backing Session+Worktree row. This is
+// the shape a work session has once its underlying Session row is gone (see
+// EntRepository.Delete, called by both the "Mark done manually"/DeleteSession
+// RPC path and the retention sweeper): GetWorktreeDataBySessionUUID then
+// resolves to an empty GitWorktreeData, and only ItemSession.BranchName
+// (trackedBranchFor's preferred source) can still answer Story 6's guard.
+func newUntrackedWorkSessionWithBranchName(t *testing.T, storage *Storage, itemID, branchName string) {
+	t.Helper()
+	ctx := context.Background()
+
+	_, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: uuid.New().String(),
+		SessionRole: SessionRoleWork,
+		BranchName:  branchName,
+	})
+	require.NoError(t, err)
+}
+
 // stubMatchingPRByNumberFinder installs a PRByNumberFinder on listener that
 // reports headBranch as the head ref of whatever PR number is looked up —
 // the "verified" stub shape a pre-existing mutation-path test needs so
@@ -247,6 +268,38 @@ func TestReconcilePRPending_should_NotTransitionToDone_When_HeadBranchMismatchDe
 	require.NoError(t, err)
 	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status,
 		"a merged PR whose head branch no longer matches the tracked branch must not auto-complete the item")
+}
+
+// TestReconcilePRPending_should_TransitionToDone_When_WorkSessionRowAlreadyDeleted
+// is the regression test for the bug found 2026-10-08 on item bl_01M4D1MTJ0A9RH0KCQ7Y65WZX1
+// (PR #951): a merged PR was never auto-completed because its work session's
+// Session+Worktree rows were already gone by the time ReconcilePRPending ran
+// (e.g. after DeleteSession/the retention sweeper, or — per EntRepository.Delete's
+// own ConversationUUID-stamping precedent — any other path that outlives the
+// Session row), leaving GetWorktreeDataBySessionUUID unable to resolve any
+// tracked branch and the Story 6 guard failing closed forever. ItemSession.BranchName
+// (trackedBranchFor's preferred source) fixes this by surviving the Session row's
+// deletion.
+func TestReconcilePRPending_should_TransitionToDone_When_WorkSessionRowAlreadyDeleted(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 951)
+	newUntrackedWorkSessionWithBranchName(t, storage, item.ID, "backlog/stapler-squad-terminal-bar-layout-fix")
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	stubMatchingPRByNumberFinder(listener, "backlog/stapler-squad-terminal-bar-layout-fix")
+
+	er := storage.repo
+	listener.ReconcilePRPending(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusDone), fetched.Status,
+		"a merged PR must still auto-complete the item when the work session's Session/Worktree rows are already gone, as long as ItemSession.BranchName records the tracked branch")
 }
 
 // TestReconcileBouncingItems_should_NotTransitionToDone_When_HeadBranchMismatchDetected
