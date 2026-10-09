@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.1.1](https://github.com/tstapler/stapler-squad/compare/v2.1.0...v2.1.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* **e2e:** stop vcs-widget and backlog-stuck-items failing on main; wrap long PR repo text ([#958](https://github.com/tstapler/stapler-squad/issues/958)) ([7f9b82a](https://github.com/tstapler/stapler-squad/commit/7f9b82a768fe7725020fe3ba8040fbbd711dde1e))
+* **nudge:** post-merge review follow-ups for tabbed Up Next ([#954](https://github.com/tstapler/stapler-squad/issues/954)) ([09c64a7](https://github.com/tstapler/stapler-squad/commit/09c64a79749e2ba9a31615e3706ae3b5f9b0ebe1))
+* **security:** Host guard on every :8543 route + opt-in require_local_auth ([#957](https://github.com/tstapler/stapler-squad/issues/957)) ([a04ea9f](https://github.com/tstapler/stapler-squad/commit/a04ea9f7aedda6f3a64295e34884bac79f466956))
+
+
+### Performance Improvements
+
+* **test:** cut session package wall time ~2.5-3x by removing test-infra serialization ([#955](https://github.com/tstapler/stapler-squad/issues/955)) ([08dcd83](https://github.com/tstapler/stapler-squad/commit/08dcd83aa8b8b4f48a9a69282ac0fca33acf440d))
+* **test:** strip the handshake binary and share one storage across the duplicate matrix ([#952](https://github.com/tstapler/stapler-squad/issues/952)) ([41ec4db](https://github.com/tstapler/stapler-squad/commit/41ec4db4db073bd25b1880f7af99e49c281b8e99))
+
 ## [2.1.0](https://github.com/tstapler/stapler-squad/compare/v2.0.0...v2.1.0) (2026-10-08)
 
 
