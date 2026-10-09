@@ -3,9 +3,12 @@ package gitwiring
 import (
 	"bytes"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 )
@@ -88,12 +91,25 @@ func TestParseCohortMap_EnvOverrideForcesCLI(t *testing.T) {
 	}
 }
 
-func TestParseCohortMap_InvalidEnvOverrideWarnsAndIsIgnored(t *testing.T) {
-	warns := captureWarns(t)
-	got := parseCohortMap(map[string]string{"refs": "gogit"}, "gogit")
-	assertModes(t, got, map[backend.Cohort]backend.BackendMode{backend.CohortRefs: backend.BackendGoGit})
-	if !strings.Contains(warns.String(), EnvGitBackend) {
-		t.Errorf("want a WARN naming %s, got %q", EnvGitBackend, warns)
+func TestParseCohortMap_EnvOverrideFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		env      string
+		wantWarn bool
+	}{
+		{"cli", false}, {"CLI", false}, {" cli ", false},
+		{"off", true}, {"0", true}, {"gogit", true},
+	} {
+		t.Run(tc.env, func(t *testing.T) {
+			warns := captureWarns(t)
+			got := parseCohortMap(map[string]string{"refs": "gogit"}, tc.env)
+			assertModes(t, got, nil)
+			if tc.wantWarn != strings.Contains(warns.String(), EnvGitBackend) {
+				t.Errorf("wantWarn=%v naming %s, got %q", tc.wantWarn, EnvGitBackend, warns)
+			}
+			if tc.wantWarn && !strings.Contains(warns.String(), tc.env) {
+				t.Errorf("WARN should name the bad value %q, got %q", tc.env, warns)
+			}
+		})
 	}
 }
 
@@ -101,4 +117,27 @@ func TestParseCohortMap_InvalidEnvOverrideWarnsAndIsIgnored(t *testing.T) {
 func TestParseCohortMap_ReadsEnvVar(t *testing.T) {
 	t.Setenv(EnvGitBackend, "cli")
 	assertModes(t, ParseCohortMap(map[string]string{"refs": "gogit"}), nil)
+}
+
+// A malformed cohort value must not fail the whole config load (which would reset every
+// other setting to defaults); it must reach ParseCohortMap, which WARNs naming the key.
+func TestParseCohortMap_MalformedConfigValueKeepsOtherSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	body := `{"listen_address":"localhost:9999","git_backend_cohorts":{"refs":1,"diffstatus":"gogit"}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadConfigFromPath(path)
+	if err != nil {
+		t.Fatalf("LoadConfigFromPath: %v", err)
+	}
+	if cfg.ListenAddress != "localhost:9999" {
+		t.Errorf("ListenAddress = %q, other settings were dropped", cfg.ListenAddress)
+	}
+	warns := captureWarns(t)
+	got := ParseCohortMap(cfg.GitBackendCohorts)
+	assertModes(t, got, map[backend.Cohort]backend.BackendMode{backend.CohortDiffStatus: backend.BackendGoGit})
+	if !strings.Contains(warns.String(), "refs") {
+		t.Errorf("want a WARN naming refs, got %q", warns)
+	}
 }

@@ -1,5 +1,7 @@
 package backend
 
+import "fmt"
+
 // Cohort is a group of git operations that flip backend together (ADR-004).
 // The zero value is CohortRefs; use ParseCohort at the config boundary, never a raw string.
 type Cohort uint8
@@ -48,6 +50,15 @@ func (c Cohort) String() string {
 // enforcement inside a mixed cohort (network, worktree) belongs to the router.
 func (c Cohort) HasReadOperations() bool {
 	return c != CohortLocalWrite
+}
+
+// ValidateMode reports why mode is illegal for c, or nil. It is the single owner of the
+// shadow-needs-read-operations rule, shared by CohortMap.With (coercion) and config parsing (WARN).
+func (c Cohort) ValidateMode(mode BackendMode) error {
+	if mode == BackendShadow && !c.HasReadOperations() {
+		return fmt.Errorf("shadow mode is not allowed for the %s cohort (no read operations)", c)
+	}
+	return nil
 }
 
 // BackendMode selects the implementation serving a cohort. The zero value is BackendCLI,
@@ -104,7 +115,7 @@ func (m CohortMap) With(c Cohort, mode BackendMode) CohortMap {
 	if int(c) >= cohortCount {
 		return m
 	}
-	if int(mode) >= backendModeCount || (mode == BackendShadow && !c.HasReadOperations()) {
+	if int(mode) >= backendModeCount || c.ValidateMode(mode) != nil {
 		mode = BackendCLI
 	}
 	m.modes[c] = mode

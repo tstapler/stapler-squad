@@ -9,25 +9,25 @@ import (
 	"github.com/tstapler/stapler-squad/session/git/backend"
 )
 
-// EnvGitBackend set to "cli" forces every cohort to the CLI (emergency rollback, ADR-004).
+// EnvGitBackend forces every cohort to the CLI when set to any non-empty value (emergency rollback, ADR-004; it can only disable gogit).
 const EnvGitBackend = "STAPLER_SQUAD_GIT_BACKEND"
 
 // ParseCohortMap is the single parse-at-boundary owner of config.GitBackendCohorts.
 // It is total: every invalid key or value logs a WARN naming the key and resolves to the
-// CLI, and every unspecified cohort is the CLI. STAPLER_SQUAD_GIT_BACKEND=cli overrides all.
+// CLI, and every unspecified cohort is the CLI. A non-empty STAPLER_SQUAD_GIT_BACKEND overrides all.
 func ParseCohortMap(raw map[string]string) backend.CohortMap {
 	return parseCohortMap(raw, os.Getenv(EnvGitBackend))
 }
 
 func parseCohortMap(raw map[string]string, envOverride string) backend.CohortMap {
 	var cohorts backend.CohortMap
-	switch envOverride {
-	case "":
-	case "cli":
+	if v := strings.TrimSpace(envOverride); v != "" {
+		// Fail closed: the env var can only disable gogit, so any non-empty value forces the CLI.
+		if !strings.EqualFold(v, "cli") {
+			log.Warn("unrecognised git backend env override, forcing every cohort to cli (only \"cli\" is documented)",
+				"env", EnvGitBackend, "value", envOverride)
+		}
 		return cohorts
-	default:
-		log.Warn("ignoring invalid git backend env override (only \"cli\" is accepted)",
-			"env", EnvGitBackend, "value", envOverride)
 	}
 
 	keys := make([]string, 0, len(raw))
@@ -48,8 +48,8 @@ func parseCohortMap(raw map[string]string, envOverride string) backend.CohortMap
 			log.Warn("invalid git backend mode, using cli", "key", key, "value", value)
 			continue
 		}
-		if mode == backend.BackendShadow && !cohort.HasReadOperations() {
-			log.Warn("shadow mode is not allowed for a write-only cohort, using cli", "key", key, "value", value)
+		if err := cohort.ValidateMode(mode); err != nil {
+			log.Warn("illegal git backend mode, using cli", "key", key, "value", value, "reason", err)
 			continue
 		}
 		cohorts = cohorts.With(cohort, mode)
