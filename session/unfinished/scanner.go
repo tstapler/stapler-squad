@@ -208,6 +208,11 @@ type Scanner struct {
 	// state file every minute forever.
 	cacheDirty atomic.Bool
 
+	// maintenanceDone is closed once the maintenance goroutine (including its
+	// shutdown flush) has exited, so tests can wait before their temp dirs are
+	// removed. Set by Start; nil before Start.
+	maintenanceDone chan struct{}
+
 	mu deadlock.RWMutex
 }
 
@@ -288,7 +293,10 @@ func (s *Scanner) Start(ctx context.Context) {
 	// Runs unconditionally (not gated on reader type) so cache persistence
 	// works with any VCSReader; the repo-cache pruning below only applies
 	// when the reader is the real GoGitVCSReader.
+	done := make(chan struct{})
+	s.maintenanceDone = done
 	go func() {
+		defer close(done)
 		s.mu.RLock()
 		maintenanceInterval := s.maintenanceTickInterval
 		s.mu.RUnlock()
