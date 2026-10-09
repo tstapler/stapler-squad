@@ -1,4 +1,4 @@
-package git
+package native
 
 import (
 	"context"
@@ -17,7 +17,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
-	"github.com/tstapler/stapler-squad/session/git/native"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -35,7 +34,7 @@ const (
 // mergeOutcomeTotal is the conflict-rate counter named in plan.md's Observability Plan
 // (Task 4.4.2b) — proves requirements.md's Observability Requirements are measurable, not
 // just assumed. telemetry.GetMeter() is safe to call before telemetry.Initialize.
-var mergeOutcomeTotal = native.MustInt64Counter(telemetry.GetMeter(), "git_merge_outcome_total",
+var mergeOutcomeTotal = MustInt64Counter(telemetry.GetMeter(), "git_merge_outcome_total",
 	metric.WithDescription("Count of native merge pipeline outcomes: uptodate, fastforward, cleanmerge, conflicted"))
 
 func recordMergeOutcome(outcome string) {
@@ -53,12 +52,41 @@ const (
 	mergeModeFile = "MERGE_MODE"
 )
 
+// MergeDeps are the collaborators the merge pipeline needs from outside this package, so
+// native never imports session/git, config or executor/safeexec and never starts a process
+// itself.
+type MergeDeps struct {
+	// WorktreeLock serializes fn against every other worktree/merge operation on repoPath.
+	WorktreeLock func(repoPath string, fn func() error) error
+	// HeadSHA resolves path's HEAD commit SHA (callers keep their CLI fallback).
+	HeadSHA func(path string) (string, error)
+	// Fetch fetches branch from origin into the repo at repoPath.
+	Fetch func(repoPath, branch string) error
+}
+
+// MergeMainResult describes the outcome of MergeMainIntoWorktree.
+type MergeMainResult struct {
+	// UpToDate is true when the worktree's branch already contained everything
+	// from mainBranch — nothing was merged in.
+	UpToDate bool
+	// Merged is true when the merge (including a fast-forward) brought in new
+	// commits from mainBranch.
+	Merged bool
+	// Conflicted is true when merging mainBranch produced conflicts. The merge is
+	// always aborted before returning, so the worktree is left clean either way —
+	// callers never have to clean up a half-merged tree.
+	Conflicted bool
+	// ConflictedFiles lists the paths that conflicted. Populated only when
+	// Conflicted is true.
+	ConflictedFiles []string
+}
+
 // WorktreePath and BranchName exist to eliminate this file's internal same-typed-string
 // parameter pairs (primitive-obsession-checklist skill) — worktreePath/mainBranch,
 // worktreePath/theirsCommitSHA, and mainBranch/refPath pairs used to compile a silent
 // argument swap with no error. Deliberately NOT applied to the file's two true external
-// boundaries — nativeMergeMainIntoWorktreeLocked (called from ops.go) and
-// nativeMergeMainIntoWorktree (called from native_merge_differential_test.go) — both stay
+// boundaries — MergeMainIntoWorktree (called from session/git/ops.go) and
+// mergeMainIntoWorktree (called from merge_differential_test.go) — both stay
 // plain strings so callers outside this file need no changes; each converts to these types
 // internally on its very first line instead.
 type (
@@ -87,7 +115,7 @@ type threeWayMergeContext struct {
 // same directory resolveWorktreeIndexPath resolves the index file into, minus the
 // "index" filename itself.
 func worktreeGitDir(worktreePath WorktreePath) (string, error) {
-	indexPath, err := resolveWorktreeIndexPath(string(worktreePath))
+	indexPath, err := ResolveWorktreeIndexPath(string(worktreePath))
 	if err != nil {
 		return "", fmt.Errorf("worktreeGitDir: %w", err)
 	}
@@ -357,7 +385,7 @@ func restoreWorkingTreeFile(worktreePath WorktreePath, path string, content []by
 	return os.WriteFile(fullPath, content, mode)
 }
 
-// nativeMergeMainIntoWorktreeLocked wraps nativeMergeMainIntoWorktree in
+// MergeMainIntoWorktree wraps nativeMergeMainIntoWorktree in
 // WithRepoWorktreeLock, keyed on the same repo path Setup()/removeLocked()/pruneLocked()
 // already serialize their own dispatch through (worktree_ops.go). Without this,
 // nativeMergeMainIntoWorktree ran with zero synchronization against a concurrent
@@ -369,16 +397,16 @@ func restoreWorkingTreeFile(worktreePath WorktreePath, path string, content []by
 // KNOWN GAP (PR #730 Gate 2 review): a conflicted merge re-opens the repo (openWorktreeRepo)
 // several times across this call tree instead of threading one already-open
 // *git.Repository through — real but a larger refactor, tracked as a follow-up.
-func nativeMergeMainIntoWorktreeLocked(worktreePath, mainBranch string) (*MergeMainResult, error) {
+func MergeMainIntoWorktree(deps MergeDeps, worktreePath, mainBranch string) (*MergeMainResult, error) {
 	repoPath, err := repoPathForWorktree(WorktreePath(worktreePath))
 	if err != nil {
 		return nil, fmt.Errorf("nativeMergeMainIntoWorktreeLocked: %w", err)
 	}
 
 	var result *MergeMainResult
-	lockErr := WithRepoWorktreeLock(repoPath, func() error {
+	lockErr := deps.WorktreeLock(repoPath, func() error {
 		var mergeErr error
-		result, mergeErr = nativeMergeMainIntoWorktree(worktreePath, mainBranch)
+		result, mergeErr = mergeMainIntoWorktree(deps, worktreePath, mainBranch)
 		return mergeErr
 	})
 	return result, lockErr
@@ -407,12 +435,12 @@ func repoPathForWorktree(worktreePath WorktreePath) (string, error) {
 // (Task 3.4.1c), so every real call site (drift.go, backlog_service_triage.go,
 // session.backlog_lifecycle.go's branchReconciler) sees the same MergeMainResult
 // semantics.
-func nativeMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainResult, error) {
-	if err := FetchBranch(worktreePath, mainBranch); err != nil {
+func mergeMainIntoWorktree(deps MergeDeps, worktreePath, mainBranch string) (*MergeMainResult, error) {
+	if err := deps.Fetch(worktreePath, mainBranch); err != nil {
 		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to fetch %s: %w", mainBranch, err)
 	}
 
-	repo, ours, theirs, err := resolveMergeEndpoints(WorktreePath(worktreePath), BranchName(mainBranch))
+	repo, ours, theirs, err := resolveMergeEndpoints(deps, WorktreePath(worktreePath), BranchName(mainBranch))
 	if err != nil {
 		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: %w", err)
 	}
@@ -473,13 +501,13 @@ func nativeMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainRes
 // nativeMergeMainIntoWorktree compares: ours (the checked-out HEAD) and theirs (mainBranch's
 // freshly-fetched origin tip). Split out of nativeMergeMainIntoWorktree purely to keep that
 // function's own body under this repo's long-function guideline — no behavioral change.
-func resolveMergeEndpoints(worktreePath WorktreePath, mainBranch BranchName) (repo *git.Repository, ours, theirs *object.Commit, err error) {
+func resolveMergeEndpoints(deps MergeDeps, worktreePath WorktreePath, mainBranch BranchName) (repo *git.Repository, ours, theirs *object.Commit, err error) {
 	repo, err = openWorktreeRepo(string(worktreePath))
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to open repo at %s: %w", worktreePath, err)
 	}
 
-	oursSHA, err := getHeadCommitSHA(string(worktreePath))
+	oursSHA, err := deps.HeadSHA(string(worktreePath))
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to resolve HEAD: %w", err)
 	}

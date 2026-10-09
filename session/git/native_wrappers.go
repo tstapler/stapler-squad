@@ -66,8 +66,6 @@ func resolveWorktreeIndexPath(path string) (string, error) {
 	return native.ResolveWorktreeIndexPath(path)
 }
 
-func openWorktreeRepo(path string) (*git.Repository, error) { return native.OpenRepo(path) }
-
 // nativeSetupNewWorktree runs native.SetupNewWorktree for g and caches the resolved base
 // commit SHA on g, as the pre-extraction method did.
 func (g *GitWorktree) nativeSetupNewWorktree() error {
@@ -114,4 +112,14 @@ func worktreeStagedDirty(idx *index.Index, headHashes map[string]plumbing.Hash) 
 // session.WorktreeChangeDetector's periodic tick, which needs a fresh per-tick answer.
 func (g *GitWorktree) IsDirtyUncached() (bool, error) {
 	return native.IsDirtyFast(g.GetWorktreePath(), &g.gitignoreFS, &g.headTreeCache)
+}
+
+// --- merge wrappers (Story 1.1.0a group iv) ---
+
+// nativeMergeDeps injects the session/git collaborators native's merge pipeline needs.
+// After Epic 3.2, Fetch is replaced by the routed Backend.Fetch.
+var nativeMergeDeps = native.MergeDeps{ //nolint:gochecknoglobals // immutable function table
+	WorktreeLock: WithRepoWorktreeLock,
+	HeadSHA:      getHeadCommitSHA,
+	Fetch:        FetchBranch,
 }

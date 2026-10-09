@@ -15,7 +15,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/tmux"
-	"github.com/tstapler/stapler-squad/testutil/gitfixture"
 )
 
 // runGit runs a git command in dir and fails the test on error.
@@ -30,13 +29,7 @@ func runGit(t *testing.T, dir string, args ...string) string {
 // worktree, which always starts from the shared repo's checked-out branch.
 func cloneTestRepo(t *testing.T, originDir string) string {
 	t.Helper()
-	workDir := t.TempDir()
-	// t.TempDir() already creates the directory; `git clone` requires an empty or
-	// missing target, so clone into a subdirectory instead.
-	cloneDir := filepath.Join(workDir, "clone")
-	runGit(t, workDir, "clone", originDir, cloneDir)
-	gitfixture.ConfigureNativeIdentity(t, cloneDir)
-	return cloneDir
+	return gittest.CloneTestRepo(t, originDir)
 }
 
 // TestMergeMainIntoWorktree_should_ReportUpToDate_When_BranchAlreadyHasLatestMain

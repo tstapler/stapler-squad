@@ -95,3 +95,17 @@ func SetupBenchRepo(b *testing.B) string {
 	}
 	return dir
 }
+
+// CloneTestRepo clones originDir into a fresh temp directory, giving the clone an
+// "origin" remote that MergeMainIntoWorktree can fetch from. The clone starts on "main"
+// (SetupTestRepo's default branch).
+func CloneTestRepo(t *testing.T, originDir string) string {
+	t.Helper()
+	workDir := t.TempDir()
+	// t.TempDir() already creates the directory; `git clone` requires an empty or
+	// missing target, so clone into a subdirectory instead.
+	cloneDir := filepath.Join(workDir, "clone")
+	RunGit(t, workDir, "clone", originDir, cloneDir)
+	gitfixture.ConfigureNativeIdentity(t, cloneDir)
+	return cloneDir
+}

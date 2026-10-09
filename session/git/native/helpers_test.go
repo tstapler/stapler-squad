@@ -1,9 +1,12 @@
 package native
 
 import (
+	"context"
 	"fmt"
+	"sync"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/git/internal/gittest"
 )
 
@@ -68,3 +71,42 @@ func worktreeIsDirtyWithFS(path string, cache *GitignoreFSCache) (bool, error) {
 	}
 	return !status.IsClean(), nil
 }
+
+// testMergeDeps wires the real git CLI fetch, a plain go-git HEAD read and a process-local
+// mutex per repo path, standing in for session/git's production MergeDeps.
+var testMergeDeps = MergeDeps{ //nolint:gochecknoglobals // immutable test function table
+	WorktreeLock: testWorktreeLock,
+	HeadSHA: func(path string) (string, error) {
+		repo, err := OpenRepo(path)
+		if err != nil {
+			return "", err
+		}
+		ref, err := repo.Head()
+		if err != nil {
+			return "", err
+		}
+		return ref.Hash().String(), nil
+	},
+	Fetch: func(repoPath, branch string) error {
+		cmd := safeexec.CommandContext(context.Background(), "git", "-C", repoPath, "fetch", "origin", "--", branch)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to fetch branch: %s", out)
+		}
+		return nil
+	},
+}
+
+var testWorktreeLocks sync.Map //nolint:gochecknoglobals // per-repo test mutexes
+
+func testWorktreeLock(repoPath string, fn func() error) error {
+	mu, _ := testWorktreeLocks.LoadOrStore(repoPath, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	defer mu.(*sync.Mutex).Unlock()
+	return fn()
+}
+
+func nativeMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainResult, error) {
+	return mergeMainIntoWorktree(testMergeDeps, worktreePath, mainBranch)
+}
+
+func cloneTestRepo(t *testing.T, originDir string) string { return gittest.CloneTestRepo(t, originDir) }

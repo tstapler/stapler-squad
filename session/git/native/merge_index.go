@@ -1,4 +1,4 @@
-package git
+package native
 
 import (
 	"bytes"
@@ -104,7 +104,7 @@ func writeIndexEntries(worktreePath string, touchedPaths map[string]bool, newEnt
 }
 
 // encodeAndWriteIndex encodes idx via index.NewEncoder and writes it atomically through
-// AdminFileWriter at resolveWorktreeIndexPath(worktreePath) — the shared final step for
+// AdminFileWriter at ResolveWorktreeIndexPath(worktreePath) — the shared final step for
 // every index write in this package.
 func encodeAndWriteIndex(worktreePath string, idx *index.Index) error {
 	if idx.Version == 0 {
@@ -116,7 +116,7 @@ func encodeAndWriteIndex(worktreePath string, idx *index.Index) error {
 		return fmt.Errorf("encodeAndWriteIndex: encode: %w", err)
 	}
 
-	indexPath, err := resolveWorktreeIndexPath(worktreePath)
+	indexPath, err := ResolveWorktreeIndexPath(worktreePath)
 	if err != nil {
 		return fmt.Errorf("encodeAndWriteIndex: %w", err)
 	}
