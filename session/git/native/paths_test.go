@@ -32,3 +32,20 @@ func TestCanonicalizeWorktreePath_should_ReturnInput_When_EmptyOrRootless(t *tes
 	assert.Equal(t, "", CanonicalizeWorktreePath(""))
 	assert.Equal(t, filepath.Clean("no-such-rel-dir/x"), CanonicalizeWorktreePath("no-such-rel-dir/x"))
 }
+
+// "lnk/../y" must resolve physically (through the symlink), as git records it,
+// not lexically to a sibling of lnk.
+func TestCanonicalizeWorktreePath_should_ResolveSymlinkPhysically_When_PathContainsDotDot(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	target := filepath.Join(root, "target", "deep")
+	require.NoError(t, os.MkdirAll(target, 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "target", "y"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "y"), 0o755))
+	link := filepath.Join(root, "lnk")
+	require.NoError(t, os.Symlink(target, link))
+
+	want, err := filepath.EvalSymlinks(filepath.Join(root, "target", "y"))
+	require.NoError(t, err)
+	assert.Equal(t, want, CanonicalizeWorktreePath(link+"/../y"))
+}

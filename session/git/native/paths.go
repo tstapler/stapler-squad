@@ -26,11 +26,13 @@ func CanonicalizeWorktreePath(path string) string {
 	if path == "" {
 		return path
 	}
-	cleaned := filepath.Clean(path)
-	resolved, err := filepath.EvalSymlinks(cleaned)
+	// EvalSymlinks on the raw input: Clean would collapse "lnk/../y" lexically,
+	// while git records the physical resolution.
+	resolved, err := filepath.EvalSymlinks(path)
 	if err == nil {
 		return resolved
 	}
+	cleaned := filepath.Clean(path)
 	if !errors.Is(err, fs.ErrNotExist) {
 		return cleaned
 	}
