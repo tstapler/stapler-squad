@@ -114,6 +114,8 @@ export interface LinkedSession {
    * parsed cleanly, or nothing was captured.
    */
   failureCapturePath?: string;
+  /** Truncated Go error text behind endReason "other"; see ItemSession.error_detail. */
+  errorDetail?: string;
   /**
    * Concrete program/model this stage actually ran on (never the raw
    * `family:sonnet`-style alias, never "" for a session that ran) — see
@@ -463,6 +465,7 @@ function mapItemSession(s: ItemSessionProto): LinkedSession {
     pipelineModeSnapshotHash: s.pipelineModeSnapshotHash ?? "",
     endReason: s.endReason || undefined,
     failureCapturePath: s.failureCapturePath || undefined,
+    errorDetail: s.errorDetail || undefined,
     resolvedProgram: s.resolvedProgram || undefined,
     resolvedModel: s.resolvedModel || undefined,
     executorSnapshotHash: s.executorSnapshotHash ?? "",

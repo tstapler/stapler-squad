@@ -13,9 +13,11 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -2692,6 +2694,10 @@ func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string
 // budget is the caller's own call timeout (e.g. triageCallBudget for TriggerTriage,
 // callTimeout for TriggerReReview) — the same classifier is shared across both headless
 // call sites, so it takes budget as a parameter rather than hardcoding one.
+//
+// Callers MUST log the underlying error ("error", callErr) in the same structured log
+// call as errType — the bucket alone is undiagnosable — and persist the ItemSession end
+// via endItemSessionForCallError so "other" also records error_detail.
 func classifyHeadlessCallError(err error, elapsed, budget time.Duration) string {
 	switch {
 	case errors.Is(err, headless.ErrPoolSaturated):
@@ -2711,7 +2717,61 @@ func classifyHeadlessCallError(err error, elapsed, budget time.Duration) string 
 	case errors.Is(err, headless.ErrSubprocessStart):
 		return "subprocess_start_error"
 	default:
-		return "other"
+		return session.TriageEndReasonOther
+	}
+}
+
+// maxErrorDetailRunes bounds ItemSession.error_detail.
+const maxErrorDetailRunes = 500
+
+// errorDetailSecretPattern matches common credential shapes that could ride along in a
+// wrapped exec/network error: vendor token prefixes, JWTs, bearer/basic auth, and
+// key/value or --flag secrets with =, :, quoted-JSON or (for --flags) space separators.
+var errorDetailSecretPattern = regexp.MustCompile(`(?i)(` +
+	`\bsk-[a-z0-9_-]{8,}` +
+	`|\b(?:gh[pousr]|github_pat)_[a-z0-9_]{20,}` +
+	`|\bxox[abpr]-[a-z0-9-]{8,}` +
+	`|\b(?:akia|asia)[a-z0-9]{16}\b` +
+	`|\beyj[a-z0-9_-]+\.[a-z0-9_-]+\.[a-z0-9_-]*` +
+	`|\b(?:bearer|basic)\s+[a-z0-9._~+/=-]{8,}` +
+	`|(?:api[_-]?key|token|secret|passw(?:or)?d|authorization)\b["']?\s*[:=]\s*["']?(?:(?:bearer|basic)\s+)?[^\s"',;&]+` +
+	`|--(?:api[_-]?key|token|secret|passw(?:or)?d)\s+[^\s"',;&]+` +
+	`)`)
+
+// errorDetailURLUserinfoPattern captures a URL's scheme so only its user:pass@ part is masked.
+var errorDetailURLUserinfoPattern = regexp.MustCompile(`(?i)(\b[a-z][a-z0-9+.-]*://)[^\s/@]+@`)
+
+// redactErrorDetail masks credential-shaped substrings. Best-effort: error_detail outlives
+// log rotation and is shown in the UI, so it must not become a durable secret store.
+func redactErrorDetail(s string) string {
+	s = errorDetailURLUserinfoPattern.ReplaceAllString(s, "${1}[REDACTED]@")
+	return errorDetailSecretPattern.ReplaceAllString(s, "[REDACTED]")
+}
+
+// truncateErrorDetail returns err.Error() cut to at most maxRunes runes (never splitting a
+// multi-byte rune), or "" for a nil error.
+func truncateErrorDetail(err error, maxRunes int) string {
+	if err == nil {
+		return ""
+	}
+	s := redactErrorDetail(strings.Join(strings.Fields(err.Error()), " ")) // one line: it is embedded in a one-line stuck context
+	if utf8.RuneCountInString(s) <= maxRunes {
+		return s
+	}
+	return string([]rune(s)[:maxRunes])
+}
+
+// endItemSessionForCallError closes an ItemSession after a failed headless call,
+// recording error_detail only for the unclassified "other" bucket. Best-effort.
+func (s *BacklogService) endItemSessionForCallError(ctx context.Context, itemSessionID, errType string, callErr error) {
+	var err error
+	if errType == session.TriageEndReasonOther {
+		err = s.storage.UpdateItemSessionEndedWithDetail(ctx, itemSessionID, time.Now(), errType, truncateErrorDetail(callErr, maxErrorDetailRunes))
+	} else {
+		err = s.storage.UpdateItemSessionEndedWithReason(ctx, itemSessionID, time.Now(), errType)
+	}
+	if err != nil {
+		log.Warn("failed to record headless call failure on item session", "itemSession", itemSessionID, "errType", errType, "error", err)
 	}
 }
 
@@ -3132,7 +3192,7 @@ Do not modify the code. Only write the review verdict.
 			}); failCreateErr != nil {
 				log.Warn("[TriggerReReview] failed to record audit ItemSession for failed call", "item", item.ID, "error", failCreateErr)
 			} else {
-				_ = s.storage.UpdateItemSessionEndedWithReason(failCleanupCtx, failIS.ID, time.Now(), errType)
+				s.endItemSessionForCallError(failCleanupCtx, failIS.ID, errType, callErr)
 				if capturePath != "" {
 					_ = s.storage.UpdateItemSessionFailureCapture(failCleanupCtx, failIS.ID, capturePath)
 				}

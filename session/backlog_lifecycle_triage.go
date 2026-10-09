@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -90,6 +91,10 @@ const TriageEndReasonFanoutCeiling = "fanout_ceiling"
 // TriageEndReasonCostCeiling is the end_reason for headless.ErrCostCeilingExceeded.
 const TriageEndReasonCostCeiling = "cost_ceiling"
 
+// TriageEndReasonOther is the catch-all end_reason for unclassified headless failures;
+// only this bucket carries ItemSession.ErrorDetail.
+const TriageEndReasonOther = "other"
+
 // triageEndReasonOrUnknown formats a persisted ItemSession.EndReason (the
 // errType bucket TriggerTriage's classifyHeadlessCallError writes via
 // UpdateItemSessionEndedWithReason — server/services/backlog_service_triage.go)
@@ -105,6 +110,72 @@ func triageEndReasonOrUnknown(endReason string) string {
 		return "unknown"
 	}
 	return endReason
+}
+
+// triageEndReasonWithDetail is triageEndReasonOrUnknown plus, for the unclassified
+// "other" bucket, the persisted error_detail — so the stuck context names the actual
+// failure instead of just the bucket.
+func triageEndReasonWithDetail(endReason, errorDetail string) string {
+	out := triageEndReasonOrUnknown(endReason)
+	if endReason == TriageEndReasonOther && errorDetail != "" {
+		out += ": " + errorDetail
+	}
+	return out
+}
+
+const (
+	// batchParkThreshold parkings within batchParkWindow suggest a shared root cause
+	// (e.g. a bulk import hitting one infrastructure fault) rather than independent failures.
+	batchParkThreshold = 3
+	batchParkWindow    = 10 * time.Minute
+)
+
+// parkBurstTracker counts distinct items parked inside a sliding window and fires at most
+// once per window. In-memory only: a restart resets it, acceptable for a best-effort heads-up.
+type parkBurstTracker struct {
+	mu          sync.Mutex
+	parkedAt    map[string]time.Time // itemID -> latest park time
+	lastFiredAt time.Time
+}
+
+// record notes itemID parked at now, drops items older than window, and reports how many
+// distinct items are in the window and whether the caller should escalate (threshold reached
+// and nothing fired within the last window).
+func (p *parkBurstTracker) record(itemID string, now time.Time, window time.Duration, threshold int) (count int, fire bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.parkedAt == nil {
+		p.parkedAt = make(map[string]time.Time)
+	}
+	cutoff := now.Add(-window)
+	for id, t := range p.parkedAt {
+		if !t.After(cutoff) {
+			delete(p.parkedAt, id)
+		}
+	}
+	p.parkedAt[itemID] = now
+	count = len(p.parkedAt)
+	if count >= threshold && now.Sub(p.lastFiredAt) >= window {
+		p.lastFiredAt = now
+		return count, true
+	}
+	return count, false
+}
+
+// recordTriageParkAndMaybeEscalate emits one aggregated notification, on top of the
+// per-item ones, when batchParkThreshold distinct items have parked within the window.
+// It fires at most once per window so a bulk import yields one batch alert.
+func (l *BacklogLifecycleListener) recordTriageParkAndMaybeEscalate(itemID string, now time.Time) {
+	count, fire := l.triageParks.record(itemID, now, batchParkWindow, batchParkThreshold)
+	if !fire {
+		return
+	}
+	l.notify("",
+		"Multiple auto-triage retries exhausted",
+		fmt.Sprintf("%d items hit the auto-triage retry cap within %d minutes — they may share a root cause. Check item_sessions.error_detail for end_reason='other' (see docs/how-to/debug-with-logs.md), then Reset the items.", count, int(batchParkWindow.Minutes())),
+		8,
+		true, true,
+	)
 }
 
 // reconcileOrphanedTriageItems flags items gated on plan approval (no
@@ -295,7 +366,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 				// diagnostic value. See triageEndReasonOrUnknown's doc comment for
 				// why an empty EndReason still renders instead of being omitted.
 				reasonDetail = fmt.Sprintf("triage session %s ended (%s) without moving the item out of idea",
-					latestTriage.SessionUUID, triageEndReasonOrUnknown(latestTriage.EndReason))
+					latestTriage.SessionUUID, triageEndReasonWithDetail(latestTriage.EndReason, latestTriage.ErrorDetail))
 			} else {
 				// Shape 3 (generalized): item advanced past idea (queued) but is
 				// still gated on plan approval, and its most recent triage session
@@ -410,6 +481,7 @@ func (l *BacklogLifecycleListener) retryOrphanedTriageWithBackoffGate(ctx contex
 		due = true // fail open — see retryPushFailedWithBackoffGate's identical rationale
 	}
 	if justParked {
+		l.recordTriageParkAndMaybeEscalate(itemID, time.Now())
 		l.notify(itemID,
 			"Auto-triage paused",
 			fmt.Sprintf("%s — automated triage retry has been attempted %d times over an extended period without resolving. It now needs manual attention; use Reset to try again automatically.", itemTitle, MaxRemediationAttempts),

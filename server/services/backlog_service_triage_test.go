@@ -12,8 +12,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
@@ -6413,4 +6415,122 @@ func TestReReview_BlockedByInFlightListenerReservation(t *testing.T) {
 	sessions, err := storage.ListItemSessions(context.Background(), item.ID)
 	require.NoError(t, err)
 	assert.Empty(t, sessions, "no review row created while another spawn is in flight")
+}
+
+func TestTriggerTriage_should_PersistErrorDetail_When_HeadlessCallFailsWithUnclassifiedError(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: "partial", err: errors.New("dial tcp: connection refused")}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "triage-error-detail item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: item.ID}))
+	require.NoError(t, trigErr)
+
+	is := waitForTriageFailureCaptured(t, storage, item.ID)
+	t.Cleanup(func() { _ = os.Remove(is.FailureCapturePath) })
+
+	assert.Equal(t, "other", is.EndReason)
+	assert.Contains(t, is.ErrorDetail, "dial tcp: connection refused")
+}
+
+func TestTruncateErrorDetail_should_RedactAndNormalize_When_ErrorHasSecretsOrWhitespace(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"sk- key", "dial failed sk-abcdef123456 end", "dial failed [REDACTED] end"},
+		{"bearer", "auth Bearer abcdefgh12 failed", "auth [REDACTED] failed"},
+		{"token=", "x token=abc123 y", "x [REDACTED] y"},
+		{"case-insensitive PASSWORD=", "x PASSWORD=hunter2", "x [REDACTED]"},
+		{"api_key=", "x api_key=hunter2", "x [REDACTED]"},
+		{"URL userinfo keeps scheme and host", "GET https://user:pa55@example.com/repo.git failed", "GET https://[REDACTED]@example.com/repo.git failed"},
+		{"ghp_ token", "push ghp_" + strings.Repeat("a1", 12) + " denied", "push [REDACTED] denied"},
+		{"github_pat_ token", "x github_pat_" + strings.Repeat("A1", 15), "x [REDACTED]"},
+		{"slack token", "x xoxb-1234567890-abcdef", "x [REDACTED]"},
+		{"AWS access key", "x AKIAIOSFODNN7EXAMPLE y", "x [REDACTED] y"},
+		{"JWT", "x eyJhbGciOiJI.eyJzdWIiOiIx.sig_-abc y", "x [REDACTED] y"},
+		{"Authorization Basic", "Authorization: Basic dXNlcjpwYXNz", "[REDACTED]"},
+		{"colon form", "token: s3cr3tvalue now", "[REDACTED] now"},
+		{"JSON form", `body {"token":"s3cr3t","ok":1}`, `body {"[REDACTED]","ok":1}`},
+		{"--flag with space", "run --api-key s3cr3t --verbose", "run [REDACTED] --verbose"},
+		{"no false positive in ordinary words", "task-management-x", "task-management-x"},
+		{"no false positive on bare word token", "token expired for user", "token expired for user"},
+		{"whitespace collapsed", "a\n  b\tc", "a b c"},
+		{"short passthrough", "short", "short"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, truncateErrorDetail(errors.New(tt.in), maxErrorDetailRunes))
+		})
+	}
+
+	t.Run("secret straddling the cut is redacted before truncation", func(t *testing.T) {
+		t.Parallel()
+		in := strings.Repeat("a", maxErrorDetailRunes-5) + " sk-abcdef123456789"
+		got := truncateErrorDetail(errors.New(in), maxErrorDetailRunes)
+		assert.NotContains(t, got, "sk-")
+		assert.Equal(t, maxErrorDetailRunes, utf8.RuneCountInString(got))
+	})
+}
+
+func TestTruncateErrorDetail_should_CutOnRuneBoundary_When_ErrorExceedsLimit(t *testing.T) {
+	t.Parallel()
+	got := truncateErrorDetail(errors.New(strings.Repeat("é", 600)), maxErrorDetailRunes)
+	assert.Equal(t, maxErrorDetailRunes, utf8.RuneCountInString(got))
+	assert.True(t, utf8.ValidString(got))
+}
+
+func TestTruncateErrorDetail_should_ReturnEmpty_When_ErrorIsNil(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "", truncateErrorDetail(nil, maxErrorDetailRunes))
+}
+
+func TestEndItemSessionForCallError_should_RecordDetailOnlyForOtherBucket(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		callErr    error
+		wantReason string
+		wantDetail string
+	}{
+		{"unclassified error records detail", errors.New("dial tcp: connection refused"), session.TriageEndReasonOther, "dial tcp: connection refused"},
+		{"classified pool saturation leaves detail empty", headless.ErrPoolSaturated, "pool_saturated", ""},
+		{"classified idle timeout leaves detail empty", headless.ErrIdleTimeout, "idle", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			storage := createTestStorage(t)
+			svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+			item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+				Title: "end-session item", Status: string(session.BacklogStatusIdea), Priority: 3, RepoPath: t.TempDir(),
+			})
+			require.NoError(t, err)
+			is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+				ItemID: item.ID, SessionUUID: "headless-triage-" + uuid.New().String(), SessionRole: session.SessionRoleTriage,
+			})
+			require.NoError(t, err)
+
+			errType := classifyHeadlessCallError(tt.callErr, time.Minute, triageCallBudget)
+			svc.endItemSessionForCallError(t.Context(), is.ID, errType, tt.callErr)
+
+			sessions, err := storage.ListItemSessions(t.Context(), item.ID)
+			require.NoError(t, err)
+			require.Len(t, sessions, 1)
+			assert.Equal(t, tt.wantReason, sessions[0].EndReason)
+			assert.Equal(t, tt.wantDetail, sessions[0].ErrorDetail)
+		})
+	}
 }

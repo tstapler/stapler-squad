@@ -879,6 +879,7 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 		CostPriced:               is.CostPriced,
 		EndReason:                is.EndReason,
 		FailureCapturePath:       is.FailureCapturePath,
+		ErrorDetail:              is.ErrorDetail,
 		ClaimantHostId:           is.ClaimantHostID,
 	}
 	if is.StartedAt != nil {

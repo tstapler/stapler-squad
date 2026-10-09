@@ -65,6 +65,10 @@ type QueueDequeuer interface {
 type BacklogLifecycleListener struct {
 	storage *Storage
 
+	// triageParks tracks recent orphaned-triage retry-cap parkings so a burst can
+	// escalate as one batch notification; see recordTriageParkAndMaybeEscalate.
+	triageParks parkBurstTracker
+
 	// sessionCreatorMu guards sessionCreator for concurrent Set/get access, same
 	// pattern as autoReopener/notifier/prFixSpawner below. Needed because
 	// production wiring (server/dependencies.go) constructs this listener before

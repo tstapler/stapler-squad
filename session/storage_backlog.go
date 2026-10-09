@@ -528,6 +528,27 @@ func (r *EntRepository) UpdateItemSessionEndedWithReason(ctx context.Context, id
 	return nil
 }
 
+// UpdateItemSessionEndedWithDetail is UpdateItemSessionEndedWithReason plus the
+// error_detail column — used only for classifyHeadlessCallError's "other" bucket so the
+// underlying error text survives log rotation. A separate method keeps the many
+// detail-less callers of UpdateItemSessionEndedWithReason unchanged.
+func (r *EntRepository) UpdateItemSessionEndedWithDetail(ctx context.Context, id string, endedAt time.Time, reason, detail string) error {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid id %q: %w", id, err)
+	}
+
+	_, err = r.client.ItemSession.UpdateOneID(parsedID).
+		SetEndedAt(endedAt).
+		SetEndReason(reason).
+		SetErrorDetail(detail).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to set ended_at/error_detail on item session %s: %w", id, err)
+	}
+	return nil
+}
+
 // UpdateItemSessionFailureCapture records the absolute path to a durable raw-output
 // capture file (session.WriteHeadlessFailureCapture) for a headless triage/review
 // call that errored or produced unparseable output — see the failure_capture_path
