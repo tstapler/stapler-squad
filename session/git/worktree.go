@@ -9,6 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/git/native"
 	"github.com/tstapler/stapler-squad/session/tmux"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -47,11 +48,9 @@ func getWorktreeDirectory() (string, error) {
 // InvalidateDirtyCache() is called after commits/pushes so critical paths remain snappy.
 const IsDirtyCacheTTL = 30 * time.Second
 
-// IsDirtyCleanCacheTTL is the TTL when the worktree is known to be clean.
-// Clean worktrees won't change unless Claude commits or a user modifies files;
-// InvalidateDirtyCache() is called on those code paths, so 5 min is safe and
-// cuts subprocess calls by ~10x vs dirty-path TTL for quiescent sessions.
-const IsDirtyCleanCacheTTL = 5 * time.Minute
+// IsDirtyCleanCacheTTL is the TTL when the worktree is known to be clean (see
+// native.CleanCacheTTL for the rationale).
+const IsDirtyCleanCacheTTL = native.CleanCacheTTL
 
 // IsDirtyErrorCacheTTL is the TTL applied when `git status` itself fails (e.g. the
 // worktree directory is missing — a stale path left behind by a rework/reopen cycle).

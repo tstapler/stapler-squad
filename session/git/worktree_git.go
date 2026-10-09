@@ -398,8 +398,8 @@ func (g *GitWorktree) PrimeDirtyCacheAt(t time.Time) {
 // manual commit, after running git operations, or in tests after writing files directly).
 func (g *GitWorktree) InvalidateDirtyCache() {
 	g.isDirtyCache.Store(dirtyCacheState{}) // zero time signals "cache invalid"
-	g.gitignoreFS.reset()
-	g.headTreeCache.v.Store(headTreeCacheEntry{}) //nolint:exhaustruct // zero entry, defensive reset — see headTreeCache's doc comment
+	g.gitignoreFS.Reset()
+	g.headTreeCache.Reset() // defensive reset — see headTreeCache's doc comment
 }
 
 // IsDirty checks if the worktree has uncommitted changes.

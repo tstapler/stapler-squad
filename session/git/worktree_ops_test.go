@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/git/internal/obstest"
+
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/storage"
@@ -418,8 +420,8 @@ func TestBranchExistsAfterAddFailure_IncrementsRetryCounter_When_ItRetries(t *te
 	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-retry-counter-fixture", branchName)
 	require.NoError(t, err)
 
-	before := collectGitMetric(t, "git_worktree_retry_total")
-	baseline := sumGitCounter(t, before)
+	before := obstest.CollectMetric(t, "git_worktree_retry_total")
+	baseline := obstest.SumCounter(t, before)
 
 	// Create the branch only once the loop has recorded its first retry (so the
 	// attempt-0 check has already seen "not found"); this test is not parallel,
@@ -429,7 +431,9 @@ func TestBranchExistsAfterAddFailure_IncrementsRetryCounter_When_ItRetries(t *te
 	defer racer.Wait()
 	go func() {
 		defer racer.Done()
-		retried := func() bool { return sumGitCounter(t, collectGitMetric(t, "git_worktree_retry_total")) > baseline }
+		retried := func() bool {
+			return obstest.SumCounter(t, obstest.CollectMetric(t, "git_worktree_retry_total")) > baseline
+		}
 		_ = wait.WaitForCondition(retried, wait.WaitConfig{Timeout: 10 * time.Second, PollInterval: 10 * time.Millisecond, Description: "first retry recorded"})
 		cmd := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", branchName)
 		_ = cmd.Run()
@@ -438,9 +442,9 @@ func TestBranchExistsAfterAddFailure_IncrementsRetryCounter_When_ItRetries(t *te
 	assert.True(t, wt.branchExistsAfterAddFailure(plumbing.NewBranchReferenceName(branchName)),
 		"must self-heal once the delayed race winner's branch appears within the retry window")
 
-	after := collectGitMetric(t, "git_worktree_retry_total")
+	after := obstest.CollectMetric(t, "git_worktree_retry_total")
 	require.NotNil(t, after)
-	assert.Greater(t, sumGitCounter(t, after), baseline, "expected at least one Ground-Truth Re-Query retry to be recorded")
+	assert.Greater(t, obstest.SumCounter(t, after), baseline, "expected at least one Ground-Truth Re-Query retry to be recorded")
 }
 
 // TestBranchExistsAfterAddFailure_ReturnsFalse_When_BranchNeverAppears is Story 1.1.1's
