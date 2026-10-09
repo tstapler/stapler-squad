@@ -1,4 +1,4 @@
-package git
+package native
 
 import (
 	"fmt"

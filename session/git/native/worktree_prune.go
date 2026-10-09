@@ -1,4 +1,4 @@
-package git
+package native
 
 import (
 	"errors"
@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 )
 
-// nativeWorktreePrune is the pure-Go replacement for `git worktree prune` (Epic 2.4,
-// Story 2.4.1). It reuses nativeListWorktrees' Prunable classification rather than
+// PruneWorktrees is the pure-Go replacement for `git worktree prune` (Epic 2.4,
+// Story 2.4.1). It reuses ListWorktrees' Prunable classification rather than
 // reimplementing prunability logic here, so List and Prune can never disagree about what
 // counts as prunable — removing exactly the admin dirs classified Prunable=true and
 // leaving every locked or live entry untouched.
@@ -16,8 +16,8 @@ import (
 // A single entry's os.RemoveAll failure does not abort the rest: every other
 // independently-prunable entry is still worth cleaning up in the same pass, so failures
 // are accumulated via errors.Join and the loop continues.
-func nativeWorktreePrune(repoPath string) error {
-	entries, err := nativeListWorktrees(repoPath)
+func PruneWorktrees(repoPath string) error {
+	entries, err := ListWorktrees(repoPath)
 	if err != nil {
 		return fmt.Errorf("nativeWorktreePrune: failed to list worktrees for %q: %w", repoPath, err)
 	}

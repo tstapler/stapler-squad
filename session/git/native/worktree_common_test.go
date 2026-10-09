@@ -1,4 +1,4 @@
-package git
+package native
 
 import (
 	"os"
@@ -10,7 +10,7 @@ import (
 )
 
 // newRealWorktreeFixture builds a real repo (setupTestRepo) plus a real, git-CLI-created
-// linked worktree (via GitWorktree.Setup, the existing legacy subprocess path) — a
+// linked worktree (via SetupNewWorktree) — a
 // minimal local stand-in for plan.md's WorktreeAdminFixture (Epic 5.1), used here per
 // Task 1.2.2c's "implemented early here as a minimal local helper if Epic 5.1 hasn't
 // landed yet" instruction. Returns the main repo path, the worktree path, and the base
@@ -18,13 +18,12 @@ import (
 func newRealWorktreeFixture(t *testing.T) (repoPath, worktreePath, baseCommitSHA string) {
 	t.Helper()
 	repoPath = setupTestRepo(t)
+	worktreePath = filepath.Join(t.TempDir(), "native-worktree-common-fixture")
 
-	wt, _, err := NewGitWorktree(repoPath, "native-worktree-common-fixture")
-	require.NoError(t, err)
-	require.NoError(t, wt.Setup())
-	t.Cleanup(func() { _ = wt.Cleanup() })
+	wt := newTestWorktree(repoPath, worktreePath, "native-worktree-common-fixture", "native-worktree-common-fixture", "")
+	require.NoError(t, wt.nativeSetupNewWorktree())
 
-	return repoPath, wt.GetWorktreePath(), wt.GetBaseCommitSHA()
+	return repoPath, worktreePath, wt.GetBaseCommitSHA()
 }
 
 // TestOpenWorktreeRepo_LinkedWorktree_ResolvesCorrectHead covers Epic 1.2's Story 1.2.2
@@ -49,7 +48,7 @@ func TestOpenWorktreeRepo_LinkedWorktree_ResolvesCorrectHead(t *testing.T) {
 func TestResolveWorktreeIndexPath_LinkedWorktree(t *testing.T) {
 	repoPath, worktreePath, _ := newRealWorktreeFixture(t)
 
-	got, err := resolveWorktreeIndexPath(worktreePath)
+	got, err := ResolveWorktreeIndexPath(worktreePath)
 	require.NoError(t, err)
 
 	content, err := os.ReadFile(filepath.Join(worktreePath, ".git"))
@@ -72,7 +71,7 @@ func TestResolveWorktreeIndexPath_LinkedWorktree(t *testing.T) {
 func TestResolveWorktreeIndexPath_MainWorktree(t *testing.T) {
 	repoPath := setupTestRepo(t)
 
-	got, err := resolveWorktreeIndexPath(repoPath)
+	got, err := ResolveWorktreeIndexPath(repoPath)
 	require.NoError(t, err)
 
 	assert.Equal(t, filepath.Join(repoPath, ".git", "index"), got)
@@ -85,6 +84,6 @@ func TestResolveWorktreeIndexPath_should_ReturnError_When_GitFileIsMalformed(t *
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"), []byte("not a gitdir line\n"), 0644))
 
-	_, err := resolveWorktreeIndexPath(dir)
+	_, err := ResolveWorktreeIndexPath(dir)
 	require.Error(t, err)
 }

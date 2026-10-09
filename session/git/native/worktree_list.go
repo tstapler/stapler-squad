@@ -1,4 +1,4 @@
-package git
+package native
 
 import (
 	"errors"
@@ -8,10 +8,10 @@ import (
 	"strings"
 )
 
-// NativeWorktreeEntry describes one worktree found under a repo's `.git/worktrees/`
-// admin directory (plan.md's Domain Glossary), as produced by nativeListWorktrees — the
+// WorktreeEntry describes one worktree found under a repo's `.git/worktrees/`
+// admin directory (plan.md's Domain Glossary), as produced by ListWorktrees — the
 // pure-Go replacement for parsing `git worktree list --porcelain` output.
-type NativeWorktreeEntry struct {
+type WorktreeEntry struct {
 	// Name is the admin dir's own name under .git/worktrees/ (WorktreeAdminDir's leaf
 	// component), not necessarily the branch name — AllocateAdminDirName names it after
 	// the target directory's basename, and a collision can suffix it further.
@@ -31,13 +31,13 @@ type NativeWorktreeEntry struct {
 	Prunable bool
 }
 
-// nativeListWorktrees is the pure-Go replacement for parsing `git worktree list
+// ListWorktrees is the pure-Go replacement for parsing `git worktree list
 // --porcelain` output (Epic 2.3, Story 2.3.1): it reads repoPath's `.git/worktrees/`
 // admin directory directly and classifies each entry's liveness per this project's
 // scoped-down prunability rule. A repo with no linked worktrees yet (no
 // `.git/worktrees/` directory) returns an empty, non-error result — only a genuine
 // read failure (e.g. permission denied) is an error.
-func nativeListWorktrees(repoPath string) ([]NativeWorktreeEntry, error) {
+func ListWorktrees(repoPath string) ([]WorktreeEntry, error) {
 	worktreesDir := filepath.Join(repoPath, ".git", "worktrees")
 	dirEntries, err := os.ReadDir(worktreesDir)
 	if err != nil {
@@ -47,7 +47,7 @@ func nativeListWorktrees(repoPath string) ([]NativeWorktreeEntry, error) {
 		return nil, fmt.Errorf("nativeListWorktrees: failed to read %q: %w", worktreesDir, err)
 	}
 
-	entries := make([]NativeWorktreeEntry, 0, len(dirEntries))
+	entries := make([]WorktreeEntry, 0, len(dirEntries))
 	for _, dirEntry := range dirEntries {
 		if !dirEntry.IsDir() {
 			continue
@@ -62,48 +62,40 @@ func nativeListWorktrees(repoPath string) ([]NativeWorktreeEntry, error) {
 	return entries, nil
 }
 
-// ListWorktrees is the exported wrapper around nativeListWorktrees for callers outside
-// this package (e.g. the worktree consistency sweep, session/worktree_consistency_sweep.go)
-// that need on-disk git-worktree truth without a second parsing implementation
-// (plan.md's Domain Glossary, project_plans/session-worktree-reconciliation).
-func ListWorktrees(repoPath string) ([]NativeWorktreeEntry, error) {
-	return nativeListWorktrees(repoPath)
-}
-
 // buildNativeWorktreeEntry reads adminDir's GitdirFile, HEAD, and LockedMarker to build
-// one NativeWorktreeEntry (Task 2.3.1a), then classifies it per Task 2.3.1b's rule:
+// one WorktreeEntry (Task 2.3.1a), then classifies it per Task 2.3.1b's rule:
 // Prunable = (WorktreePath missing) && !Locked.
 //
 // A missing/unreadable GitdirFile is not treated as an error: this project's own write
-// order (native_worktree_add.go's writeNativeWorktreeAdminFiles writes LockedMarker
+// order (native_worktree_add.go's WriteAdminFiles writes LockedMarker
 // before GitdirFile) means a crash between those two writes is real git's own
 // well-defined, tolerable partial state (research/pitfalls.md, citing
 // GitoxideLabs/gitoxide#2959) — every read path over `.git/worktrees/*` must tolerate it,
 // not abort. Such an entry is unparseable and classified Prunable so
-// nativeWorktreePrune can clean it up, the same outcome real git's own `worktree
+// PruneWorktrees can clean it up, the same outcome real git's own `worktree
 // list`/`worktree prune` give this exact partial state.
 //
 // A genuine stat error (e.g. EACCES) checking "locked" or WorktreePath, in contrast, IS
 // surfaced as an error here rather than folded into "doesn't exist" — fileExistsOnDisk/
 // dirExistsOnDisk distinguish the two so a permission-denied path is never misclassified
 // as prunable.
-func buildNativeWorktreeEntry(name, adminDir string) (NativeWorktreeEntry, error) {
+func buildNativeWorktreeEntry(name, adminDir string) (WorktreeEntry, error) {
 	worktreePath, err := readWorktreePathFromGitdirFile(adminDir)
 	if err != nil {
-		return NativeWorktreeEntry{Name: name, Prunable: true}, nil
+		return WorktreeEntry{Name: name, Prunable: true}, nil
 	}
 
 	locked, err := fileExistsOnDisk(filepath.Join(adminDir, "locked"))
 	if err != nil {
-		return NativeWorktreeEntry{}, fmt.Errorf("buildNativeWorktreeEntry: failed to check locked marker: %w", err)
+		return WorktreeEntry{}, fmt.Errorf("buildNativeWorktreeEntry: failed to check locked marker: %w", err)
 	}
 	worktreeDirExists, err := dirExistsOnDisk(worktreePath)
 	if err != nil {
-		return NativeWorktreeEntry{}, fmt.Errorf("buildNativeWorktreeEntry: failed to check worktree directory: %w", err)
+		return WorktreeEntry{}, fmt.Errorf("buildNativeWorktreeEntry: failed to check worktree directory: %w", err)
 	}
 	prunable := !locked && !worktreeDirExists
 
-	return NativeWorktreeEntry{
+	return WorktreeEntry{
 		Name:         name,
 		WorktreePath: worktreePath,
 		BranchRef:    readWorktreeHEADRef(adminDir),

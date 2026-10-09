@@ -6,15 +6,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/tstapler/stapler-squad/session/git/internal/gittest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
-	"github.com/tstapler/stapler-squad/testutil/gitfixture"
 )
 
 // setupTestRepo creates a temporary git repository with an initial commit and configured
@@ -34,28 +31,7 @@ func setupTestRepoWithoutIdentity(t *testing.T) string {
 
 func setupTestRepoWithIdentity(t *testing.T, configureIdentity bool) string {
 	t.Helper()
-	dir := t.TempDir()
-
-	repo, err := git.PlainInitWithOptions(dir, &git.PlainInitOptions{
-		InitOptions: git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
-	})
-	require.NoError(t, err)
-	if configureIdentity {
-		gitfixture.ConfigureGoGitIdentity(t, repo)
-	}
-
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test"), 0644))
-
-	wt, err := repo.Worktree()
-	require.NoError(t, err)
-	_, err = wt.Add(".")
-	require.NoError(t, err)
-	_, err = wt.Commit("Initial commit", &git.CommitOptions{
-		Author: &object.Signature{Name: gitfixture.UserName, Email: gitfixture.UserEmail, When: time.Now()},
-	})
-	require.NoError(t, err)
-
-	return dir
+	return gittest.SetupTestRepoWithIdentity(t, configureIdentity)
 }
 
 // TestNewGitWorktreeWithBranch_should_Error_When_RepoPathIsEmpty guards against a

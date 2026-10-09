@@ -1,4 +1,4 @@
-package git
+package native
 
 import (
 	"errors"
@@ -18,7 +18,7 @@ func TestNativeListWorktrees_LiveWorktree(t *testing.T) {
 	branchName := "feature-x"
 	repoPath, worktreePath := newNativeRemoveFixture(t, branchName)
 
-	entries, err := nativeListWorktrees(repoPath)
+	entries, err := ListWorktrees(repoPath)
 	require.NoError(t, err)
 
 	require.Len(t, entries, 1)
@@ -32,14 +32,14 @@ func TestNativeListWorktrees_LiveWorktree(t *testing.T) {
 // TestListWorktrees_should_ReturnSameEntries_When_ComparedToNativeListWorktrees covers
 // Story 1.1.1's acceptance criterion (project_plans/session-worktree-reconciliation): the
 // exported ListWorktrees wrapper must return the same entries the unexported
-// nativeListWorktrees parser returns for the same repo path.
+// ListWorktrees parser returns for the same repo path.
 func TestListWorktrees_should_ReturnSameEntries_When_ComparedToNativeListWorktrees(t *testing.T) {
 	t.Parallel()
 	branchName := "work/b8ccca59"
 	repoPath, _ := newNativeRemoveFixture(t, branchName)
 
 	wrapped, wrappedErr := ListWorktrees(repoPath)
-	direct, directErr := nativeListWorktrees(repoPath)
+	direct, directErr := ListWorktrees(repoPath)
 
 	require.NoError(t, wrappedErr)
 	require.NoError(t, directErr)
@@ -68,22 +68,6 @@ func TestListWorktrees_should_ReturnError_When_WorktreesDirUnreadable(t *testing
 	assert.True(t, errors.Is(err, fs.ErrPermission), "expected a permission-denied error (wrapped), got: %v", err)
 }
 
-// TestNativeFindExistingWorktreeForBranch_FindsLiveWorktree_ReportsNotFoundForOtherBranch
-// covers PR #730 Gate 2's noted gap: nativeFindExistingWorktreeForBranch (worktree.go),
-// called from worktree.go's findOrCreateWorktree, had no direct test of its own.
-func TestNativeFindExistingWorktreeForBranch_FindsLiveWorktree_ReportsNotFoundForOtherBranch(t *testing.T) {
-	t.Parallel()
-	branchName := "feature-native-find-existing"
-	repoPath, worktreePath := newNativeRemoveFixture(t, branchName)
-
-	path, found := nativeFindExistingWorktreeForBranch(repoPath, branchName)
-	require.True(t, found)
-	assert.Equal(t, CanonicalizeWorktreePath(worktreePath), CanonicalizeWorktreePath(path))
-
-	_, found = nativeFindExistingWorktreeForBranch(repoPath, "some-other-branch")
-	assert.False(t, found, "a branch with no registered worktree must report not-found, not a stale match")
-}
-
 // TestNativeListWorktrees_DeletedWorkingDir_IsPrunable covers Story 2.3.1's second
 // acceptance criterion: a worktree whose target directory was deleted out from under git
 // is classified Prunable=true, per this project's directory-exists-only scope cut
@@ -95,7 +79,7 @@ func TestNativeListWorktrees_DeletedWorkingDir_IsPrunable(t *testing.T) {
 
 	require.NoError(t, os.RemoveAll(worktreePath))
 
-	entries, err := nativeListWorktrees(repoPath)
+	entries, err := ListWorktrees(repoPath)
 	require.NoError(t, err)
 
 	require.Len(t, entries, 1)
@@ -116,7 +100,7 @@ func TestNativeListWorktrees_LockedWorktree_NeverPrunable(t *testing.T) {
 	adminDir := filepath.Join(repoPath, ".git", "worktrees", branchName)
 	require.NoError(t, os.WriteFile(filepath.Join(adminDir, "locked"), []byte("locked for testing"), 0644))
 
-	entries, err := nativeListWorktrees(repoPath)
+	entries, err := ListWorktrees(repoPath)
 	require.NoError(t, err)
 
 	require.Len(t, entries, 1)
@@ -139,7 +123,7 @@ func TestNativeListWorktrees_should_ReturnError_When_WorktreesDirUnreadable(t *t
 	require.NoError(t, os.Chmod(worktreesDir, 0o000))
 	t.Cleanup(func() { _ = os.Chmod(worktreesDir, 0o755) })
 
-	_, err := nativeListWorktrees(repoPath)
+	_, err := ListWorktrees(repoPath)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nativeListWorktrees")
 }
@@ -151,18 +135,18 @@ func TestNativeListWorktrees_NoWorktreesDir_ReturnsEmptyNoError(t *testing.T) {
 	t.Parallel()
 	repoPath := setupTestRepo(t)
 
-	entries, err := nativeListWorktrees(repoPath)
+	entries, err := ListWorktrees(repoPath)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 }
 
 // TestNativeListWorktrees_CrashPartialAdminDir_IsPrunableAlongsideHealthyEntries covers
 // the fix for a crash between this project's own "locked" and "gitdir" admin-file writes
-// (native_worktree_add.go's writeNativeWorktreeAdminFiles) — research/pitfalls.md (citing
+// (native_worktree_add.go's WriteAdminFiles) — research/pitfalls.md (citing
 // GitoxideLabs/gitoxide#2959) documents this as real git's own well-defined, tolerable
 // partial state. A single such entry must not abort the whole repo's listing: healthy
 // entries must still list correctly, the broken one must be classified Prunable, and
-// nativeWorktreePrune must be able to clean it up afterward.
+// PruneWorktrees must be able to clean it up afterward.
 func TestNativeListWorktrees_CrashPartialAdminDir_IsPrunableAlongsideHealthyEntries(t *testing.T) {
 	t.Parallel()
 	branchName := "feature-healthy"
@@ -173,11 +157,11 @@ func TestNativeListWorktrees_CrashPartialAdminDir_IsPrunableAlongsideHealthyEntr
 	require.NoError(t, os.WriteFile(filepath.Join(brokenAdminDir, "locked"), []byte("initializing"), 0o644))
 	// Deliberately no "gitdir" file — this is the crash-partial state under test.
 
-	entries, err := nativeListWorktrees(repoPath)
+	entries, err := ListWorktrees(repoPath)
 	require.NoError(t, err, "one crash-partial admin dir must not abort the whole repo's listing")
 	require.Len(t, entries, 2)
 
-	var healthy, broken *NativeWorktreeEntry
+	var healthy, broken *WorktreeEntry
 	for i := range entries {
 		switch entries[i].Name {
 		case branchName:
@@ -195,7 +179,7 @@ func TestNativeListWorktrees_CrashPartialAdminDir_IsPrunableAlongsideHealthyEntr
 	assert.True(t, broken.Prunable, "an admin dir with no gitdir file must be classified prunable")
 	assert.Empty(t, broken.WorktreePath)
 
-	require.NoError(t, nativeWorktreePrune(repoPath), "prune must be able to clean up the crash-partial entry")
+	require.NoError(t, PruneWorktrees(repoPath), "prune must be able to clean up the crash-partial entry")
 	_, statErr := os.Stat(brokenAdminDir)
 	assert.True(t, os.IsNotExist(statErr), "nativeWorktreePrune must remove the crash-partial admin dir")
 

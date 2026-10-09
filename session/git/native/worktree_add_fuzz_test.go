@@ -1,4 +1,4 @@
-package git
+package native
 
 import (
 	"context"
@@ -51,7 +51,7 @@ func FuzzNativeWorktreeAdd(f *testing.F) {
 			t.Skip("sanitized name escaped the temp worktree root")
 		}
 
-		wt := NewGitWorktreeFromStorageWithExecutor(repoPath, worktreePath, "fuzz-worktree-add", name, "")
+		wt := newTestWorktree(repoPath, worktreePath, "fuzz-worktree-add", name, "")
 		if err := wt.nativeSetupNewWorktree(); err != nil {
 			// Real git itself rejects plenty of ref/path names outright (leading '-',
 			// "..", a trailing ".lock", embedded spaces, a name that collides with an

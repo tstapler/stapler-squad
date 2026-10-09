@@ -1,7 +1,6 @@
-package git
+package native
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,7 +11,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // TestAllocateAdminDirName_FreshName covers Epic 1.2's Story 1.2.1 first acceptance
@@ -123,18 +121,6 @@ func newNativeAddTarget(t *testing.T, branchName string) (repoPath, worktreePath
 	return repoPath, worktreePath
 }
 
-// runRealGit shells to real git for differential comparison (Epic 2.1's acceptance
-// criteria explicitly require this, not a skip), mirroring this package's existing
-// safeexec.CommandContext usage in worktree_ops_test.go/worktree_git_test.go.
-func runRealGit(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := safeexec.CommandContext(context.Background(), "git", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "real git command failed: %s", string(out))
-	return string(out)
-}
-
 // TestNativeSetupNewWorktree_WritesRealGitCompatibleAdminFiles covers Story 2.1.1's first
 // acceptance criterion: all five admin files exist with real-git-compatible content, and
 // locked is absent on success.
@@ -143,7 +129,7 @@ func TestNativeSetupNewWorktree_WritesRealGitCompatibleAdminFiles(t *testing.T) 
 	branchName := "feature-x"
 	repoPath, worktreePath := newNativeAddTarget(t, branchName)
 
-	wt := NewGitWorktreeFromStorageWithExecutor(repoPath, worktreePath, "native-add-admin-files", branchName, "")
+	wt := newTestWorktree(repoPath, worktreePath, "native-add-admin-files", branchName, "")
 	require.NoError(t, wt.nativeSetupNewWorktree())
 
 	adminDir := filepath.Join(repoPath, ".git", "worktrees", branchName)
@@ -215,7 +201,7 @@ func TestNativeSetupNewWorktree_CheckoutMatchesRealGit(t *testing.T) {
 	branchName := "feature-checkout"
 	repoPath, worktreePath := newNativeAddTarget(t, branchName)
 
-	wt := NewGitWorktreeFromStorageWithExecutor(repoPath, worktreePath, "native-add-checkout", branchName, "")
+	wt := newTestWorktree(repoPath, worktreePath, "native-add-checkout", branchName, "")
 	require.NoError(t, wt.nativeSetupNewWorktree())
 
 	statusOutput := runRealGit(t, worktreePath, "status", "--porcelain")
@@ -244,7 +230,7 @@ func TestNativeSetupNewWorktree_should_ReturnError_When_BaseCommitSHADoesNotExis
 	branchName := "feature-bad-sha"
 	repoPath, worktreePath := newNativeAddTarget(t, branchName)
 
-	wt := NewGitWorktreeFromStorageWithExecutor(repoPath, worktreePath, "native-add-bad-sha", branchName, strings.Repeat("a", 40))
+	wt := newTestWorktree(repoPath, worktreePath, "native-add-bad-sha", branchName, strings.Repeat("a", 40))
 	err := wt.nativeSetupNewWorktree()
 	require.Error(t, err)
 
@@ -264,7 +250,7 @@ func TestNativeSetupNewWorktree_should_ReturnError_When_BranchNameAlreadyChecked
 	repoPath, worktreePath := newNativeAddTarget(t, branchName)
 	runRealGit(t, repoPath, "branch", branchName)
 
-	wt := NewGitWorktreeFromStorageWithExecutor(repoPath, worktreePath, "native-add-branch-taken", branchName, "")
+	wt := newTestWorktree(repoPath, worktreePath, "native-add-branch-taken", branchName, "")
 	err := wt.nativeSetupNewWorktree()
 	require.Error(t, err)
 
@@ -279,12 +265,12 @@ func TestNativeUnlockWorktree_RemovesLockedMarker(t *testing.T) {
 	t.Parallel()
 	repoPath, worktreePath, _ := newRealWorktreeFixture(t)
 
-	indexPath, err := resolveWorktreeIndexPath(worktreePath)
+	indexPath, err := ResolveWorktreeIndexPath(worktreePath)
 	require.NoError(t, err)
 	adminDir := filepath.Dir(indexPath)
 	require.NoError(t, os.WriteFile(filepath.Join(adminDir, "locked"), []byte("initializing"), 0644))
 
-	require.NoError(t, nativeUnlockWorktree(repoPath, worktreePath))
+	require.NoError(t, UnlockWorktree(repoPath, worktreePath))
 
 	_, statErr := os.Stat(filepath.Join(adminDir, "locked"))
 	assert.True(t, os.IsNotExist(statErr))
@@ -296,13 +282,13 @@ func TestNativeUnlockWorktree_NoMarkerPresent_NoOp(t *testing.T) {
 	t.Parallel()
 	repoPath, worktreePath, _ := newRealWorktreeFixture(t)
 
-	indexPath, err := resolveWorktreeIndexPath(worktreePath)
+	indexPath, err := ResolveWorktreeIndexPath(worktreePath)
 	require.NoError(t, err)
 	adminDir := filepath.Dir(indexPath)
 	_, statErr := os.Stat(filepath.Join(adminDir, "locked"))
 	require.True(t, os.IsNotExist(statErr), "fixture must not already have a locked marker")
 
-	require.NoError(t, nativeUnlockWorktree(repoPath, worktreePath))
+	require.NoError(t, UnlockWorktree(repoPath, worktreePath))
 
 	_, err = os.Stat(filepath.Join(adminDir, "gitdir"))
 	assert.NoError(t, err, "admin dir must otherwise be unchanged")

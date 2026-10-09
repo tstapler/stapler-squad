@@ -1,4 +1,4 @@
-package git
+package native
 
 import (
 	"fmt"
@@ -25,13 +25,13 @@ func openWorktreeRepo(path string) (*git.Repository, error) {
 // redirect file (WorktreeRedirectFile in plan.md's Domain Glossary): "gitdir: <path>".
 const gitdirFileLinePrefix = "gitdir: "
 
-// resolveWorktreeIndexPath returns the on-disk path of the `index` file that applies to
+// ResolveWorktreeIndexPath returns the on-disk path of the `index` file that applies to
 // the worktree (or main working copy) at path: "<path>/.git/index" when path's `.git`
 // is a real directory, or "<gitdir>/index" — the linked worktree's own
 // WorktreeAdminDir, read from the `.git` redirect file's "gitdir: <path>" line —
 // when it's a file. Needed because MergeMainIntoWorktree's native path may run against
 // either kind of worktree (plan.md's Domain Glossary).
-func resolveWorktreeIndexPath(path string) (string, error) {
+func ResolveWorktreeIndexPath(path string) (string, error) {
 	gitPath := filepath.Join(path, ".git")
 	info, err := os.Stat(gitPath)
 	if err != nil {

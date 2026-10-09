@@ -1,4 +1,4 @@
-package git
+package native
 
 import (
 	"fmt"
@@ -7,14 +7,14 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 )
 
-// nativeRemoveWorktree is the pure-Go replacement for removeLocked's former subprocess
+// RemoveWorktree is the pure-Go replacement for removeLocked's former subprocess
 // `git worktree remove -f` + admin-file cleanup (Epic 2.2, Story 2.2.1), called directly
 // from removeLocked (Task 2.2.2a). It removes worktreePath's working
 // directory and its WorktreeAdminDir but never touches refs/heads/<branch> — branch
 // deletion is not this function's job, matching Cleanup()'s existing doc comment and
 // guarding against the previously-fixed "stop_session silently deletes the git branch"
 // bug class (Story 2.2.1's "As a" line).
-func nativeRemoveWorktree(repoPath, worktreePath string) error {
+func RemoveWorktree(repoPath, worktreePath string) error {
 	adminDir := worktreeAdminDirFor(repoPath, worktreePath)
 
 	// Explicit Stat before removal (Task 2.2.1b) rather than relying on os.RemoveAll's

@@ -1,4 +1,4 @@
-package git
+package native
 
 import (
 	"os"
@@ -19,16 +19,16 @@ func TestNativeWorktreePrune_RemovesOnlyPrunableEntries(t *testing.T) {
 
 	liveBranch := "feature-x"
 	liveWorktreePath := filepath.Join(t.TempDir(), liveBranch)
-	liveWt := NewGitWorktreeFromStorageWithExecutor(repoPath, liveWorktreePath, "native-prune-live", liveBranch, "")
+	liveWt := newTestWorktree(repoPath, liveWorktreePath, "native-prune-live", liveBranch, "")
 	require.NoError(t, liveWt.nativeSetupNewWorktree())
 
 	prunableBranch := "feature-y"
 	prunableWorktreePath := filepath.Join(t.TempDir(), prunableBranch)
-	prunableWt := NewGitWorktreeFromStorageWithExecutor(repoPath, prunableWorktreePath, "native-prune-prunable", prunableBranch, "")
+	prunableWt := newTestWorktree(repoPath, prunableWorktreePath, "native-prune-prunable", prunableBranch, "")
 	require.NoError(t, prunableWt.nativeSetupNewWorktree())
 	require.NoError(t, os.RemoveAll(prunableWorktreePath))
 
-	require.NoError(t, nativeWorktreePrune(repoPath))
+	require.NoError(t, PruneWorktrees(repoPath))
 
 	liveAdminDir := filepath.Join(repoPath, ".git", "worktrees", liveBranch)
 	_, err := os.Stat(liveAdminDir)
@@ -40,7 +40,7 @@ func TestNativeWorktreePrune_RemovesOnlyPrunableEntries(t *testing.T) {
 }
 
 // TestNativeWorktreePrune_should_ReturnError_When_ListingFails covers validation.md's
-// error case: when nativeListWorktrees fails, nativeWorktreePrune must propagate the
+// error case: when ListWorktrees fails, PruneWorktrees must propagate the
 // error rather than silently pruning nothing (or partially pruning).
 func TestNativeWorktreePrune_should_ReturnError_When_ListingFails(t *testing.T) {
 	if os.Geteuid() == 0 {
@@ -54,13 +54,13 @@ func TestNativeWorktreePrune_should_ReturnError_When_ListingFails(t *testing.T) 
 	require.NoError(t, os.Chmod(worktreesDir, 0o000))
 	t.Cleanup(func() { _ = os.Chmod(worktreesDir, 0o755) })
 
-	err := nativeWorktreePrune(repoPath)
+	err := PruneWorktrees(repoPath)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nativeWorktreePrune")
 }
 
 // TestNativeWorktreePrune_ContinuesPastOneFailure_RemovesOtherPrunableEntries covers the
-// fix for nativeWorktreePrune aborting entirely on the first os.RemoveAll failure: two
+// fix for PruneWorktrees aborting entirely on the first os.RemoveAll failure: two
 // independently-prunable entries, one whose admin dir can't be removed (permission
 // denied), must still both be attempted — the failure is reported, but the other entry
 // is still cleaned up in the same pass.
@@ -73,13 +73,13 @@ func TestNativeWorktreePrune_ContinuesPastOneFailure_RemovesOtherPrunableEntries
 
 	blockedBranch := "feature-blocked"
 	blockedWorktreePath := filepath.Join(t.TempDir(), blockedBranch)
-	blockedWt := NewGitWorktreeFromStorageWithExecutor(repoPath, blockedWorktreePath, "native-prune-blocked", blockedBranch, "")
+	blockedWt := newTestWorktree(repoPath, blockedWorktreePath, "native-prune-blocked", blockedBranch, "")
 	require.NoError(t, blockedWt.nativeSetupNewWorktree())
 	require.NoError(t, os.RemoveAll(blockedWorktreePath))
 
 	prunableBranch := "feature-prunable"
 	prunableWorktreePath := filepath.Join(t.TempDir(), prunableBranch)
-	prunableWt := NewGitWorktreeFromStorageWithExecutor(repoPath, prunableWorktreePath, "native-prune-prunable", prunableBranch, "")
+	prunableWt := newTestWorktree(repoPath, prunableWorktreePath, "native-prune-prunable", prunableBranch, "")
 	require.NoError(t, prunableWt.nativeSetupNewWorktree())
 	require.NoError(t, os.RemoveAll(prunableWorktreePath))
 
@@ -87,7 +87,7 @@ func TestNativeWorktreePrune_ContinuesPastOneFailure_RemovesOtherPrunableEntries
 	require.NoError(t, os.Chmod(blockedAdminDir, 0o555))
 	t.Cleanup(func() { _ = os.Chmod(blockedAdminDir, 0o755) })
 
-	err := nativeWorktreePrune(repoPath)
+	err := PruneWorktrees(repoPath)
 	require.Error(t, err, "the blocked entry's removal failure must still be reported")
 	assert.Contains(t, err.Error(), "nativeWorktreePrune")
 

@@ -1,4 +1,4 @@
-package git
+package native
 
 import (
 	"os"
@@ -11,11 +11,11 @@ import (
 
 // newNativeRemoveFixture creates a real native-created worktree for branchName (reusing
 // newNativeAddTarget/nativeSetupNewWorktree from native_worktree_add_test.go), ready for
-// nativeRemoveWorktree to tear down.
+// RemoveWorktree to tear down.
 func newNativeRemoveFixture(t *testing.T, branchName string) (repoPath, worktreePath string) {
 	t.Helper()
 	repoPath, worktreePath = newNativeAddTarget(t, branchName)
-	wt := NewGitWorktreeFromStorageWithExecutor(repoPath, worktreePath, "native-remove-fixture-"+branchName, branchName, "")
+	wt := newTestWorktree(repoPath, worktreePath, "native-remove-fixture-"+branchName, branchName, "")
 	require.NoError(t, wt.nativeSetupNewWorktree())
 	return repoPath, worktreePath
 }
@@ -28,7 +28,7 @@ func TestNativeRemoveWorktree_RemovesAdminDirAndWorkingTree_PreservesBranch(t *t
 	repoPath, worktreePath := newNativeRemoveFixture(t, branchName)
 	adminDir := filepath.Join(repoPath, ".git", "worktrees", branchName)
 
-	require.NoError(t, nativeRemoveWorktree(repoPath, worktreePath))
+	require.NoError(t, RemoveWorktree(repoPath, worktreePath))
 
 	_, err := os.Stat(worktreePath)
 	assert.True(t, os.IsNotExist(err), "working directory must be removed")
@@ -51,7 +51,7 @@ func TestNativeRemoveWorktree_MissingWorkingDirectory_NonFatal(t *testing.T) {
 
 	require.NoError(t, os.RemoveAll(worktreePath))
 
-	require.NoError(t, nativeRemoveWorktree(repoPath, worktreePath))
+	require.NoError(t, RemoveWorktree(repoPath, worktreePath))
 
 	_, err := os.Stat(adminDir)
 	assert.True(t, os.IsNotExist(err), "admin dir must still be removed even when the working directory was already gone")
@@ -73,7 +73,7 @@ func TestNativeRemoveWorktree_should_ReturnError_When_AdminDirIsReadOnly(t *test
 	require.NoError(t, os.Chmod(worktreesDir, 0o555))
 	t.Cleanup(func() { _ = os.Chmod(worktreesDir, 0o755) })
 
-	err := nativeRemoveWorktree(repoPath, worktreePath)
+	err := RemoveWorktree(repoPath, worktreePath)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nativeRemoveWorktree")
 }

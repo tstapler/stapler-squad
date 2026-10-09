@@ -1,4 +1,4 @@
-package git
+package native
 
 import (
 	"errors"
@@ -54,7 +54,16 @@ func AllocateAdminDirName(repoPath, name string) (string, error) {
 	return "", fmt.Errorf("AllocateAdminDirName: exhausted %d suffix attempts for %q under %q", maxAllocateAdminDirNameRetries, name, worktreesDir)
 }
 
-// nativeSetupNewWorktree is the pure-Go, go-git-based replacement for the former
+// SetupParams are the inputs to SetupNewWorktree. BaseCommitSHA is optional: when empty,
+// the repository's current HEAD commit is used.
+type SetupParams struct {
+	RepoPath      string
+	WorktreePath  string
+	BranchName    string
+	BaseCommitSHA string
+}
+
+// SetupNewWorktree is the pure-Go, go-git-based replacement for the former
 // subprocess `git worktree add -b <branch> <path> <commit>` (Epic 2.1, Stories 2.1.1 and
 // 2.1.2), called directly from setupLocked (Task 2.1.3b). It writes
 // real git's exact `.git/worktrees/<name>/` admin-file set in crash-safe order (ADR-001)
@@ -64,53 +73,56 @@ func AllocateAdminDirName(repoPath, name string) (string, error) {
 // LockedMarker last, only on success (Task 2.1.1d). Any earlier failure leaves
 // LockedMarker in place — matching real git's own "a failed Add stays locked/prunable"
 // behavior — nothing here rolls back partial admin-file state on error.
-func (g *GitWorktree) nativeSetupNewWorktree() error {
-	repo, err := OpenRepo(g.repoPath)
+//
+// The resolved base SHA is returned even on a post-resolution failure so the caller can
+// cache it exactly as the pre-extraction method did; it is "" if resolution itself failed.
+func SetupNewWorktree(p SetupParams) (baseSHA string, err error) {
+	repo, err := OpenRepo(p.RepoPath)
 	if err != nil {
-		return fmt.Errorf("nativeSetupNewWorktree: failed to open repository %q: %w", g.repoPath, err)
+		return "", fmt.Errorf("nativeSetupNewWorktree: failed to open repository %q: %w", p.RepoPath, err)
 	}
 
-	baseCommitSHA, err := g.resolveNativeAddBaseCommit(repo)
+	baseCommitSHA, err := resolveNativeAddBaseCommit(repo, p)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	// Real git names a worktree's admin dir after the target directory's own basename,
 	// not the branch name — confirmed against git 2.53.0's `git worktree add -b <branch>
 	// <path>` output (the admin dir under .git/worktrees/ takes <path>'s leaf component).
-	adminDir, err := AllocateAdminDirName(g.repoPath, filepath.Base(g.worktreePath))
+	adminDir, err := AllocateAdminDirName(p.RepoPath, filepath.Base(p.WorktreePath))
 	if err != nil {
-		return fmt.Errorf("nativeSetupNewWorktree: failed to allocate admin dir: %w", err)
+		return baseCommitSHA, fmt.Errorf("nativeSetupNewWorktree: failed to allocate admin dir: %w", err)
 	}
 
-	if err := writeNativeWorktreeAdminFiles(adminDir, g.worktreePath, g.branchName); err != nil {
-		return err
+	if err := WriteAdminFiles(adminDir, p.WorktreePath, p.BranchName); err != nil {
+		return baseCommitSHA, err
 	}
-	if err := writeNativeWorktreeRedirectFile(g.worktreePath, adminDir); err != nil {
-		return err
+	if err := writeNativeWorktreeRedirectFile(p.WorktreePath, adminDir); err != nil {
+		return baseCommitSHA, err
 	}
-	if err := checkoutNativeWorktree(g.worktreePath, g.branchName, baseCommitSHA); err != nil {
-		return err
+	if err := Checkout(p.WorktreePath, p.BranchName, baseCommitSHA); err != nil {
+		return baseCommitSHA, err
 	}
 
 	if err := os.Remove(filepath.Join(adminDir, "locked")); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("nativeSetupNewWorktree: failed to remove locked marker after successful checkout: %w", err)
+		return baseCommitSHA, fmt.Errorf("nativeSetupNewWorktree: failed to remove locked marker after successful checkout: %w", err)
 	}
 
-	return nil
+	return baseCommitSHA, nil
 }
 
-// resolveNativeAddBaseCommit returns g.baseCommitSHA if already set (a caller that
+// resolveNativeAddBaseCommit returns p.BaseCommitSHA if already set (a caller that
 // pre-selected a specific base commit, e.g. NewGitWorktreeFromCommitSHA), otherwise
 // resolves and caches repo's
 // current HEAD commit. Errors if the resolved/pre-set SHA doesn't exist in repo, so a
 // bad base commit fails before any admin file is written.
-func (g *GitWorktree) resolveNativeAddBaseCommit(repo *git.Repository) (string, error) {
-	sha := g.baseCommitSHA
+func resolveNativeAddBaseCommit(repo *git.Repository, p SetupParams) (string, error) {
+	sha := p.BaseCommitSHA
 	if sha == "" {
 		head, err := repo.Head()
 		if err != nil {
-			return "", fmt.Errorf("nativeSetupNewWorktree: failed to resolve HEAD of %q: %w", g.repoPath, err)
+			return "", fmt.Errorf("nativeSetupNewWorktree: failed to resolve HEAD of %q: %w", p.RepoPath, err)
 		}
 		sha = head.Hash().String()
 	}
@@ -119,16 +131,15 @@ func (g *GitWorktree) resolveNativeAddBaseCommit(repo *git.Repository) (string, 
 		return "", fmt.Errorf("nativeSetupNewWorktree: base commit %q does not exist: %w", sha, err)
 	}
 
-	g.baseCommitSHA = sha
 	return sha, nil
 }
 
-// writeNativeWorktreeAdminFiles writes LockedMarker, GitdirFile, CommondirFile, and HEAD
+// WriteAdminFiles writes LockedMarker, GitdirFile, CommondirFile, and HEAD
 // into adminDir in real git's crash-safe order (Tasks 2.1.1a-b): locked first (content
 // "initializing"), then gitdir (absolute path to worktreePath's own WorktreeRedirectFile),
 // then commondir (always "../.."), then HEAD (a symbolic ref to branchName — the branch
-// itself doesn't need to exist yet; checkoutNativeWorktree creates it).
-func writeNativeWorktreeAdminFiles(adminDir, worktreePath, branchName string) error {
+// itself doesn't need to exist yet; Checkout creates it).
+func WriteAdminFiles(adminDir, worktreePath, branchName string) error {
 	w := NewAdminFileWriter(adminDir)
 
 	if err := w.WriteFile("locked", []byte("initializing")); err != nil {
@@ -162,11 +173,11 @@ func writeNativeWorktreeRedirectFile(worktreePath, adminDir string) error {
 	return nil
 }
 
-// checkoutNativeWorktree populates worktreePath's working tree and stage-0 index by
+// Checkout populates worktreePath's working tree and stage-0 index by
 // reusing go-git's own, already-correct Worktree.Checkout (Story 2.1.2) rather than
 // hand-rolling an index writer — the clean-add path needs no bespoke tree-population
 // logic at all.
-func checkoutNativeWorktree(worktreePath, branchName, baseCommitSHA string) error {
+func Checkout(worktreePath, branchName, baseCommitSHA string) error {
 	repo, err := openWorktreeRepo(worktreePath)
 	if err != nil {
 		return fmt.Errorf("nativeSetupNewWorktree: failed to open new worktree %q: %w", worktreePath, err)
@@ -185,14 +196,14 @@ func checkoutNativeWorktree(worktreePath, branchName, baseCommitSHA string) erro
 	return nil
 }
 
-// nativeUnlockWorktree is the pure-Go replacement for setupFromExistingBranch's `git
+// UnlockWorktree is the pure-Go replacement for setupFromExistingBranch's `git
 // worktree unlock` subprocess call (Story 2.1.4): it clears a stale LockedMarker left
 // behind by an interrupted Add so a subsequent force-remove+re-add of worktreePath isn't
 // refused. Removing an absent marker is a no-op, not an error, matching today's "ignore
 // error if not locked" handling of the subprocess call it replaces. Deletion via
 // os.Remove is already an atomic unlink, so no AdminFileWriter temp+rename step applies
 // here — that primitive exists for content writes, not removals.
-func nativeUnlockWorktree(repoPath, worktreePath string) error {
+func UnlockWorktree(repoPath, worktreePath string) error {
 	adminDir := worktreeAdminDirFor(repoPath, worktreePath)
 
 	if err := os.Remove(filepath.Join(adminDir, "locked")); err != nil && !os.IsNotExist(err) {
@@ -202,17 +213,17 @@ func nativeUnlockWorktree(repoPath, worktreePath string) error {
 }
 
 // worktreeAdminDirFor resolves worktreePath's WorktreeAdminDir the same way
-// resolveWorktreeIndexPath (Task 1.2.2b) locates it — by reading worktreePath's own
+// ResolveWorktreeIndexPath (Task 1.2.2b) locates it — by reading worktreePath's own
 // `.git` redirect file — falling back to the deterministic repoPath/.git/worktrees/
 // <basename> convention AllocateAdminDirName uses when that redirect file itself is
-// unreadable. The fallback matters here specifically: nativeUnlockWorktree's whole
+// unreadable. The fallback matters here specifically: UnlockWorktree's whole
 // purpose is clearing a marker left by an interrupted Add, which can leave worktreePath's
 // own `.git` file missing or malformed.
 //
-// Returns a bare string, not (string, error): resolveWorktreeIndexPath's own error is
+// Returns a bare string, not (string, error): ResolveWorktreeIndexPath's own error is
 // exactly what triggers the fallback, so both branches always succeed.
 func worktreeAdminDirFor(repoPath, worktreePath string) string {
-	if indexPath, err := resolveWorktreeIndexPath(worktreePath); err == nil {
+	if indexPath, err := ResolveWorktreeIndexPath(worktreePath); err == nil {
 		return filepath.Dir(indexPath)
 	}
 	return filepath.Join(repoPath, ".git", "worktrees", filepath.Base(worktreePath))
