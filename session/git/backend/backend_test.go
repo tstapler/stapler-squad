@@ -19,8 +19,9 @@ func TestOperationsMatchBackendMethods(t *testing.T) {
 	for i := 0; i < typ.NumMethod(); i++ {
 		methods = append(methods, typ.Method(i).Name)
 	}
-	var ops []string
-	for _, op := range backend.AllOperations() {
+	all := backend.AllOperations()
+	ops := make([]string, 0, len(all))
+	for _, op := range all {
 		assert.True(t, op.Known())
 		ops = append(ops, string(op))
 	}
