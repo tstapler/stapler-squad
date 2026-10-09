@@ -4252,22 +4252,28 @@ func TestReviewGateSpawn_should_FireForReviewToPrPending_When_AutomatedReviewGat
 	}()
 	waitWithTimeout(t, done)
 
+	// The spawner's call count is bumped before spawnReviewGate inserts the
+	// review ItemSession, so wait on the row itself, not the count.
+	var reviewEntry *ItemSessionSummary
 	wait.RequireEventually(t, func() bool {
-		return spawner.getCallCount() == 1
-	}, 2*time.Second, 20*time.Millisecond, "the built-in review->pr_pending gate must still spawn a review session")
+		sessions, listErr := storage.ListItemSessions(ctx, createdItem.ID)
+		if listErr != nil {
+			return false
+		}
+		reviewEntry = nil
+		for i := range sessions {
+			if sessions[i].Role == SessionRoleReview {
+				reviewEntry = &sessions[i]
+			}
+		}
+		return reviewEntry != nil
+	}, 2*time.Second, 20*time.Millisecond, "the built-in review->pr_pending gate must still spawn a review session and record its ItemSession")
+	require.Equal(t, 1, spawner.getCallCount())
 
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
 	require.NoError(t, err)
 	require.Equal(t, string(BacklogStatusReview), fetchedItem.Status)
 
-	sessions, err := storage.ListItemSessions(ctx, createdItem.ID)
-	require.NoError(t, err)
-	var reviewEntry *ItemSessionSummary
-	for i := range sessions {
-		if sessions[i].Role == SessionRoleReview {
-			reviewEntry = &sessions[i]
-		}
-	}
 	require.NotNil(t, reviewEntry, "a review ItemSession must be created")
 	assert.Equal(t, reviewInstance.UUID, reviewEntry.SessionUUID)
 }
