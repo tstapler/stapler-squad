@@ -751,7 +751,7 @@ func TestSsqApprovalExtensionContent_ReSendsHealthPingPeriodically(t *testing.T)
 func TestPatchPiExtension_NewFile(t *testing.T) {
 	dir := t.TempDir()
 	extPath := filepath.Join(dir, "extensions", "ssq-approval.ts")
-	err := patchPiExtension(extPath, "http://localhost:8543/api/hooks/permission-request", "http://localhost:8543/api/hooks/pi-extension-loaded")
+	err := patchPiExtension(extPath, "http://localhost:8543/api/hooks/permission-request", "http://localhost:8543/api/hooks/pi-extension-loaded", "")
 	require.NoError(t, err)
 	raw, err := os.ReadFile(extPath)
 	require.NoError(t, err)
@@ -765,10 +765,10 @@ func TestPatchPiExtension_NewFile(t *testing.T) {
 func TestPatchPiExtension_Idempotent(t *testing.T) {
 	dir := t.TempDir()
 	extPath := filepath.Join(dir, "extensions", "ssq-approval.ts")
-	require.NoError(t, patchPiExtension(extPath, "http://localhost:8543/api/hooks/permission-request", "http://localhost:8543/api/hooks/pi-extension-loaded"))
+	require.NoError(t, patchPiExtension(extPath, "http://localhost:8543/api/hooks/permission-request", "http://localhost:8543/api/hooks/pi-extension-loaded", ""))
 	content1, err := os.ReadFile(extPath)
 	require.NoError(t, err)
-	require.NoError(t, patchPiExtension(extPath, "http://localhost:8543/api/hooks/permission-request", "http://localhost:8543/api/hooks/pi-extension-loaded"))
+	require.NoError(t, patchPiExtension(extPath, "http://localhost:8543/api/hooks/permission-request", "http://localhost:8543/api/hooks/pi-extension-loaded", ""))
 	content2, err := os.ReadFile(extPath)
 	require.NoError(t, err)
 	assert.Equal(t, string(content1), string(content2))
@@ -795,7 +795,7 @@ func TestPatchPiExtension_LogsErrorWithTargetPath_WhenWriteFails(t *testing.T) {
 	prev := log.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
 	t.Cleanup(func() { log.SetSlogDefaultForTest(prev) })
 
-	err := patchPiExtension(extPath, "http://localhost:8543/api/hooks/permission-request", "http://localhost:8543/api/hooks/pi-extension-loaded")
+	err := patchPiExtension(extPath, "http://localhost:8543/api/hooks/permission-request", "http://localhost:8543/api/hooks/pi-extension-loaded", "")
 	require.Error(t, err)
 
 	logged := buf.String()

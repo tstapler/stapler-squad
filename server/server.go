@@ -1700,7 +1700,9 @@ const nudgeProcedurePath = "/api" + sessionv1connect.GitHubUserServiceNudgeSessi
 var guardedProcedurePaths = []string{probeProcedurePath, nudgeProcedurePath}
 
 // localChain is the :8543 middleware chain (inside otelhttp):
-// Logging -> CORS -> Compress -> [auth | ProbeGuard] -> mux.
+// Logging -> CORS -> Compress -> HostGuard -> [auth | ProbeGuard] -> mux.
+// HostGuard covers every route (and WebSocket upgrade), so a rebinding or
+// reverse-proxy Host never reaches a handler.
 // The listener has no auth unless authMiddleware is set, so ProbeGuard is the
 // boundary for the RPCs that execute a program or write to a session's terminal
 // (ProbeProgram, NudgeSessionForPR); with auth, auth is the boundary.
@@ -1711,7 +1713,18 @@ func (s *Server) localChain() http.Handler {
 	} else {
 		inner = middleware.ProbeGuardPaths(guardedProcedurePaths, s.probeGuardConfig())(inner)
 	}
+	inner = middleware.HostGuard(s.hostGuardConfig())(inner)
 	return middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner)))
+}
+
+// localExemptPaths skip the Host guard on :8543.
+var localExemptPaths = []string{"/health"}
+
+func (s *Server) hostGuardConfig() middleware.HostGuardConfig {
+	return middleware.HostGuardConfig{
+		AllowedOrigins: s.GetOrigins,
+		ExemptPaths:    localExemptPaths,
+	}
 }
 
 // remoteChain is the :8444 chain. It never carries ProbeGuard: auth is the

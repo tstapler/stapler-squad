@@ -4509,12 +4509,16 @@ func TestCreateBacklogItem_should_SpawnSDDSession_When_PipelineModeSDDAndAutoSpa
 func TestTriggerTriage_PersistFailurePublishesNotification(t *testing.T) {
 	t.Parallel()
 	storage := createTestStorage(t)
-	// Delay the fake LLM call so the test can race a status change in underneath it,
-	// deterministically forcing the final TransitionBacklogItemStatus precondition to fail.
-	pool := &fakeHeadlessPool{response: validTriageJSON(), delay: 200 * time.Millisecond}
+	// Hold the fake LLM call open on a gate (not a wall-clock delay) so the status change
+	// below is guaranteed to land before the final TransitionBacklogItemStatus runs.
+	gate := make(chan struct{})
+	var releaseGate sync.Once
+	release := func() { releaseGate.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+	pool := &fakeHeadlessPool{response: validTriageJSON(), onCall: func(string) { <-gate }}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
-	eventBus := events.NewEventBus(4)
+	eventBus := events.NewEventBus(64)
 	svc.SetEventBus(eventBus)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
@@ -4537,19 +4541,22 @@ func TestTriggerTriage_PersistFailurePublishesNotification(t *testing.T) {
 	// Move the item off 'idea' while the delayed headless call is still in flight.
 	_, err = storage.TransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusReview, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
+	release()
 
+	// The completion goroutine's latency under full-suite load is unbounded (a fixed 3s
+	// per-event timeout here flaked ~26% under CPU contention), so wait on the event
+	// itself with a generous ceiling that only matters when the code is actually broken.
 	var notif *events.Event
-	for i := 0; i < 5; i++ {
+	deadline := time.After(60 * time.Second)
+wait:
+	for notif == nil {
 		select {
 		case ev := <-ch:
 			if ev.Type == events.EventNotification {
 				notif = ev
 			}
-		case <-time.After(3 * time.Second):
-			i = 5
-		}
-		if notif != nil {
-			break
+		case <-deadline:
+			break wait
 		}
 	}
 	require.NotNil(t, notif, "a persistence failure during triage completion must publish an operator notification")
