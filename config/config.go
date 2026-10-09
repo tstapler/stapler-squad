@@ -213,6 +213,10 @@ type Config struct {
 	// Must be loopback (localhost, 127.0.0.1, ::1); startup rejects anything else.
 	// Default: "localhost:8543". Remote access uses the separate HTTPS listener.
 	ListenAddress string `json:"listen_address"`
+	// GitBackendCohorts maps a git backend cohort name (refs, diffstatus, localwrite,
+	// network, worktree) to a mode (cli, gogit, shadow). Raw on purpose: validation and
+	// defaulting happen in session/gitwiring.ParseCohortMap. Absent key means cli.
+	GitBackendCohorts GitBackendCohortsConfig `json:"git_backend_cohorts,omitempty"`
 	// PasskeyRPID is the WebAuthn Relying Party ID (effective domain, no scheme/port).
 	// Example: "192.168.1.42" or "myhost.local". Must match the hostname clients use.
 	// Required when remote access is enabled.
@@ -1519,6 +1523,32 @@ func saveConfigLocked(config *Config, configPath string) error {
 // SaveConfig exports the saveConfig function for use by other packages.
 func SaveConfig(config *Config) error {
 	return saveConfig(config)
+}
+
+// GitBackendCohortsConfig is the raw cohort-name -> mode map from config.json. Decoding is
+// tolerant so one malformed entry cannot fail the whole config load (which would reset
+// every other setting to defaults): non-string values keep their key with the raw JSON text
+// as the value, which session/gitwiring.ParseCohortMap rejects with a WARN naming the key,
+// and a null or non-object value decodes to an empty map.
+type GitBackendCohortsConfig map[string]string
+
+// UnmarshalJSON implements json.Unmarshaler; it never returns an error.
+func (g *GitBackendCohortsConfig) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil || len(raw) == 0 {
+		*g = nil
+		return nil
+	}
+	out := make(GitBackendCohortsConfig, len(raw))
+	for k, v := range raw {
+		var str string
+		if err := json.Unmarshal(v, &str); err != nil {
+			str = string(v)
+		}
+		out[k] = str
+	}
+	*g = out
+	return nil
 }
 
 // LoadConfigFromPath loads and parses a config file from an explicit path.

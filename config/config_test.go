@@ -1834,3 +1834,27 @@ func TestTriageConcurrencyAndModelAccessors(t *testing.T) {
 	assert.Equal(t, "family:haiku", (&Config{HeadlessTriageModel: "family:haiku"}).HeadlessTriageModelOrDefault())
 	assert.Empty(t, (&Config{HeadlessTriageModel: "none"}).HeadlessTriageModelOrDefault(), "none opts out")
 }
+
+func TestGitBackendCohortsConfig_TolerantDecodeAndStableRoundTrip(t *testing.T) {
+	for _, body := range []string{`{"git_backend_cohorts":null}`, `{"git_backend_cohorts":"x"}`, `{"git_backend_cohorts":[1]}`} {
+		var cfg Config
+		if err := json.Unmarshal([]byte(body), &cfg); err != nil || len(cfg.GitBackendCohorts) != 0 {
+			t.Errorf("%s: err=%v cohorts=%v, want no error and empty", body, err, cfg.GitBackendCohorts)
+		}
+	}
+	var cfg Config
+	if err := json.Unmarshal([]byte(`{"git_backend_cohorts":{"refs":1,"network":"gogit","x":{"a":1}}}`), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GitBackendCohorts["network"] != "gogit" || cfg.GitBackendCohorts["refs"] != "1" || cfg.GitBackendCohorts["x"] != `{"a":1}` {
+		t.Errorf("unexpected decode: %v", cfg.GitBackendCohorts)
+	}
+	valid, _ := json.Marshal(Config{GitBackendCohorts: GitBackendCohortsConfig{"refs": "gogit"}})
+	if !strings.Contains(string(valid), `"git_backend_cohorts":{"refs":"gogit"}`) {
+		t.Errorf("valid map did not round-trip: %s", valid)
+	}
+	empty, _ := json.Marshal(Config{})
+	if strings.Contains(string(empty), "git_backend_cohorts") {
+		t.Errorf("omitempty lost: %s", empty)
+	}
+}
