@@ -78,13 +78,15 @@ func (s StatusResult) Dirty() bool {
 
 // DiffSpec selects what a diff compares. Zero Base and Head with Staged unset means working
 // tree against the index; Staged compares index against HEAD; Base alone means Base against
-// the working tree; Base and Head together mean Base..Head.
+// the working tree; Base and Head together mean Base..Head. FromMergeBase switches to
+// Base...Head (Head, default HEAD, against its merge-base with Base).
 type DiffSpec struct {
-	Base   RefName
-	Head   RefName
-	Staged bool
-	Paths  []RepoPath
-	Intent Intent
+	Base          RefName
+	Head          RefName
+	Staged        bool
+	FromMergeBase bool
+	Paths         []RepoPath
+	Intent        Intent
 }
 
 // NumstatRow is one line of `git diff --numstat`.

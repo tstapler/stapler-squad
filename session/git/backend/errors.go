@@ -16,6 +16,8 @@ var (
 	ErrRefNotFound = errors.New("git backend: ref not found")
 	// ErrObjectNotFound means a SHA is well-formed but its object is missing from the object database.
 	ErrObjectNotFound = errors.New("git backend: object not found")
+	// ErrNoMergeBase means the two revisions share no common ancestor.
+	ErrNoMergeBase = errors.New("git backend: no merge base")
 	// ErrNotARepo means the location is not inside a git repository.
 	ErrNotARepo = errors.New("git backend: not a git repository")
 	// ErrConfigUnset means the requested config key has no value.
