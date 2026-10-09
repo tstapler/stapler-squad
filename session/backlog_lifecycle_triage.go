@@ -91,6 +91,10 @@ const TriageEndReasonFanoutCeiling = "fanout_ceiling"
 // TriageEndReasonCostCeiling is the end_reason for headless.ErrCostCeilingExceeded.
 const TriageEndReasonCostCeiling = "cost_ceiling"
 
+// TriageEndReasonOther is the catch-all end_reason for unclassified headless failures;
+// only this bucket carries ItemSession.ErrorDetail.
+const TriageEndReasonOther = "other"
+
 // triageEndReasonOrUnknown formats a persisted ItemSession.EndReason (the
 // errType bucket TriggerTriage's classifyHeadlessCallError writes via
 // UpdateItemSessionEndedWithReason — server/services/backlog_service_triage.go)
@@ -113,7 +117,7 @@ func triageEndReasonOrUnknown(endReason string) string {
 // failure instead of just the bucket.
 func triageEndReasonWithDetail(endReason, errorDetail string) string {
 	out := triageEndReasonOrUnknown(endReason)
-	if endReason == "other" && errorDetail != "" {
+	if endReason == TriageEndReasonOther && errorDetail != "" {
 		out += ": " + errorDetail
 	}
 	return out
@@ -159,8 +163,8 @@ func (p *parkBurstTracker) record(itemID string, now time.Time, window time.Dura
 }
 
 // recordTriageParkAndMaybeEscalate emits one aggregated notification, on top of the
-// per-item ones, when batchParkThreshold distinct items have parked within the window; it fires at
-// most once per window so a 10-item import yields one batch alert, not eight.
+// per-item ones, when batchParkThreshold distinct items have parked within the window.
+// It fires at most once per window so a bulk import yields one batch alert.
 func (l *BacklogLifecycleListener) recordTriageParkAndMaybeEscalate(itemID string, now time.Time) {
 	count, fire := l.triageParks.record(itemID, now, batchParkWindow, batchParkThreshold)
 	if !fire {
@@ -168,7 +172,7 @@ func (l *BacklogLifecycleListener) recordTriageParkAndMaybeEscalate(itemID strin
 	}
 	l.notify("",
 		"Multiple auto-triage retries exhausted",
-		fmt.Sprintf("%d items hit the auto-triage retry cap within %v — they may share a root cause. Check item_sessions.error_detail for end_reason='other' (see docs/how-to/debug-with-logs.md), then Reset the items.", count, batchParkWindow),
+		fmt.Sprintf("%d items hit the auto-triage retry cap within %d minutes — they may share a root cause. Check item_sessions.error_detail for end_reason='other' (see docs/how-to/debug-with-logs.md), then Reset the items.", count, int(batchParkWindow.Minutes())),
 		8,
 		true, true,
 	)
