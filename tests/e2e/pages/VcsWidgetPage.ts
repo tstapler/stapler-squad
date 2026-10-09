@@ -25,6 +25,7 @@ export class VcsWidgetPage {
     if ((await toggle.getAttribute('aria-expanded')) !== 'true') {
       await toggle.click();
     }
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   }
 
   async waitForLoaded(timeout = 10000) {

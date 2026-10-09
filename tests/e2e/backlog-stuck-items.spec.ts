@@ -151,7 +151,7 @@ test.describe("stuck items", () => {
     const stuckPage = new StuckItemsPage(page);
     await stuckPage.goto();
 
-    // No spec seeds "bouncing", so it stays empty even while parallel workers seed other reasons.
+    // No spec seeds "bouncing" (keep it that way), so this reason is always empty.
     await stuckPage.filterChip("5").click(); // STUCK_REASON_BOUNCING = 5
     await expect(stuckPage.filteredEmptyState).toBeVisible();
     await expect(stuckPage.clearFilterButton).toBeVisible();
@@ -246,7 +246,9 @@ test.describe("stuck items", () => {
     // session (failing on the seeded item's missing repo_path) and park the reason for later runs.
     let releaseRetry!: () => void;
     const retryHeld = new Promise<void>((resolve) => (releaseRetry = resolve));
+    let retryCalls = 0;
     await page.route("**/*BacklogService/TriggerRemediationNow", async (route) => {
+      retryCalls++;
       await retryHeld;
       await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
     });
@@ -271,6 +273,7 @@ test.describe("stuck items", () => {
     await expect(retryButton).toBeEnabled({ timeout: 10_000 });
     await expect(lifecycleSummary.getByTestId("blocker-chip-error")).not.toBeVisible();
 
+    expect(retryCalls).toBe(1);
     expect(itemId).toBeTruthy();
   });
 

@@ -54,6 +54,21 @@ export class StuckItemsPage {
   }
 }
 
+const seededItemIds: string[] = [];
+
+/** Deletes every item seeded since the last call so tests sharing one server don't see each other's rows. */
+export async function deleteSeededStuckItems(request: APIRequestContext): Promise<void> {
+  for (const itemId of seededItemIds.splice(0)) {
+    const resp = await request.post(`${BASE_URL}/api/session.v1.BacklogService/DeleteBacklogItem`, {
+      headers: { "Content-Type": "application/json" },
+      data: { itemId },
+    });
+    if (!resp.ok()) {
+      throw new Error(`deleteSeededStuckItems failed for ${itemId} (${resp.status()}): ${await resp.text().catch(() => "")}`);
+    }
+  }
+}
+
 /**
  * Seeds an open BacklogStuckState row for a backlog item, bypassing the
  * reconciler/detectors entirely (validation.md's own note for the UX
@@ -71,18 +86,6 @@ export class StuckItemsPage {
  * — `opts.itemId` is not used as the DB id, only as a human-readable label;
  * locate seeded cards by title (see `cardByTitle` above), not itemId.
  */
-const seededItemIds: string[] = [];
-
-/** Deletes every item seeded since the last call so tests sharing one server don't see each other's rows. */
-export async function deleteSeededStuckItems(request: APIRequestContext): Promise<void> {
-  for (const itemId of seededItemIds.splice(0)) {
-    await request.post(`${BASE_URL}/api/session.v1.BacklogService/DeleteBacklogItem`, {
-      headers: { "Content-Type": "application/json" },
-      data: { itemId },
-    });
-  }
-}
-
 export async function seedStuckItem(
   request: APIRequestContext,
   opts: {
