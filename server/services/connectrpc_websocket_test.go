@@ -368,6 +368,7 @@ func TestWaitForQuiescenceReturnsOnTimeout(t *testing.T) {
 	// Continuously send updates from a goroutine to prevent quiescence.
 	// stopSender is closed by the outer function; the goroutine exits when it sees the signal.
 	stopSender := make(chan struct{})
+	t.Cleanup(func() { close(stopSender) }) // also runs when runWithHangGuard fails the test
 	go func() {
 		for {
 			select {
@@ -387,7 +388,6 @@ func TestWaitForQuiescenceReturnsOnTimeout(t *testing.T) {
 	// The hour-long quiet window means only the deadline can end the wait.
 	timeout := 60 * time.Millisecond
 	elapsed := runWithHangGuard(t, func() { waitForQuiescence(updates, timeout, time.Hour) })
-	close(stopSender) // signal the sender goroutine to stop
 
 	if elapsed < timeout {
 		t.Errorf("waitForQuiescence returned before timeout (%v < %v)", elapsed, timeout)
@@ -2687,13 +2687,8 @@ func TestWaitForQuiescenceReturnsAfterQuietForWhenNoProducer(t *testing.T) {
 	t.Parallel()
 	ch := make(chan struct{}, 16) // no producer, mirroring the initial-nudge call site
 
-	start := time.Now()
-	waitForQuiescence(ch, 500*time.Millisecond, 50*time.Millisecond)
-	elapsed := time.Since(start)
-
-	if elapsed >= 400*time.Millisecond {
-		t.Errorf("waited %v — expected to return after quietFor (~50ms), not the 500ms timeout", elapsed)
-	}
+	// The hour-long timeout means only the quiet window can end the wait.
+	elapsed := runWithHangGuard(t, func() { waitForQuiescence(ch, time.Hour, 50*time.Millisecond) })
 	if elapsed < 40*time.Millisecond {
 		t.Errorf("returned after %v — expected to wait at least quietFor (~50ms)", elapsed)
 	}
