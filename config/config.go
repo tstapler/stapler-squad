@@ -213,6 +213,10 @@ type Config struct {
 	// Must be loopback (localhost, 127.0.0.1, ::1); startup rejects anything else.
 	// Default: "localhost:8543". Remote access uses the separate HTTPS listener.
 	ListenAddress string `json:"listen_address"`
+	// GitBackendCohorts maps a git backend cohort name (refs, diffstatus, localwrite,
+	// network, worktree) to a mode (cli, gogit, shadow). Raw on purpose: validation and
+	// defaulting happen in session/gitwiring.ParseCohortMap. Absent key means cli.
+	GitBackendCohorts map[string]string `json:"git_backend_cohorts,omitempty"`
 	// PasskeyRPID is the WebAuthn Relying Party ID (effective domain, no scheme/port).
 	// Example: "192.168.1.42" or "myhost.local". Must match the hostname clients use.
 	// Required when remote access is enabled.
