@@ -170,6 +170,7 @@ test.describe("vcs-widget", () => {
         await page.waitForSelector('[data-testid="backlog-item-detail"]', { timeout: 10000 });
 
         const widget = new VcsWidgetPage(page);
+        await widget.expandBacklogSection();
         await widget.waitForLoaded();
 
         await expect(widget.getMergeabilityPill()).toBeVisible();
@@ -215,6 +216,7 @@ test.describe("vcs-widget", () => {
         await page.waitForSelector('[data-testid="backlog-item-detail"]', { timeout: 10000 });
 
         const widget = new VcsWidgetPage(page);
+        await widget.expandBacklogSection();
         await widget.waitForLoaded();
 
         await expect(widget.getNoHistoryMessage()).toBeVisible();

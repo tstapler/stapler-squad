@@ -71,6 +71,18 @@ export class StuckItemsPage {
  * — `opts.itemId` is not used as the DB id, only as a human-readable label;
  * locate seeded cards by title (see `cardByTitle` above), not itemId.
  */
+const seededItemIds: string[] = [];
+
+/** Deletes every item seeded since the last call so tests sharing one server don't see each other's rows. */
+export async function deleteSeededStuckItems(request: APIRequestContext): Promise<void> {
+  for (const itemId of seededItemIds.splice(0)) {
+    await request.post(`${BASE_URL}/api/session.v1.BacklogService/DeleteBacklogItem`, {
+      headers: { "Content-Type": "application/json" },
+      data: { itemId },
+    });
+  }
+}
+
 export async function seedStuckItem(
   request: APIRequestContext,
   opts: {
@@ -105,6 +117,7 @@ export async function seedStuckItem(
     );
   }
   const body = (await resp.json()) as { itemId: string };
+  seededItemIds.push(body.itemId);
   return body.itemId;
 }
 
