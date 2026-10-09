@@ -323,24 +323,39 @@ func TestSanitizeInitialContentRealWorldCapture(t *testing.T) {
 
 // --- waitForQuiescence ---
 
+// runWithHangGuard runs fn and returns how long it took, failing if it has not
+// returned after 5s. Tests pair it with an hour-long window on the path that must
+// NOT end the wait, so the 5s bound only detects a hang and never asserts latency
+// that scheduler load could stretch.
+func runWithHangGuard(t *testing.T, fn func()) time.Duration {
+	t.Helper()
+	start := time.Now()
+	done := make(chan struct{})
+	go func() {
+		fn()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("waitForQuiescence did not return")
+	}
+	return time.Since(start)
+}
+
 // TestWaitForQuiescenceReturnsAfterQuietPeriod verifies that waitForQuiescence
 // returns once no updates arrive for the quietFor duration.
 func TestWaitForQuiescenceReturnsAfterQuietPeriod(t *testing.T) {
 	t.Parallel()
 	updates := make(chan struct{}, 1)
-	start := time.Now()
 
 	// Send one update, then stop; quiescence should be detected after quietFor.
 	updates <- struct{}{}
 
-	waitForQuiescence(updates, 200*time.Millisecond, 30*time.Millisecond)
-
-	elapsed := time.Since(start)
+	// The hour-long timeout means only the quiet window can end the wait.
+	elapsed := runWithHangGuard(t, func() { waitForQuiescence(updates, time.Hour, 30*time.Millisecond) })
 	if elapsed < 30*time.Millisecond {
 		t.Errorf("waitForQuiescence returned too quickly (%v); expected >= 30ms quiet window", elapsed)
-	}
-	if elapsed > 150*time.Millisecond {
-		t.Errorf("waitForQuiescence took too long (%v); expected ~30ms quiet period after last update", elapsed)
 	}
 }
 
@@ -369,23 +384,13 @@ func TestWaitForQuiescenceReturnsOnTimeout(t *testing.T) {
 		}
 	}()
 
-	start := time.Now()
+	// The hour-long quiet window means only the deadline can end the wait.
 	timeout := 60 * time.Millisecond
-	waitForQuiescence(updates, timeout, 500*time.Millisecond)
-	elapsed := time.Since(start)
+	elapsed := runWithHangGuard(t, func() { waitForQuiescence(updates, timeout, time.Hour) })
 	close(stopSender) // signal the sender goroutine to stop
 
 	if elapsed < timeout {
 		t.Errorf("waitForQuiescence returned before timeout (%v < %v)", elapsed, timeout)
-	}
-	// Tolerance is generous (150ms, vs. a 60ms timeout) because this only needs to
-	// prove waitForQuiescence returned at the deadline rather than blocking for the
-	// full 500ms quietFor window — not that scheduling is sub-50ms precise. A tight
-	// 50ms margin flaked under CPU contention from concurrent test/build load on a
-	// shared machine (goroutine wasn't scheduled promptly after the deadline fired),
-	// even though 5 isolated re-runs of this test alone all passed comfortably.
-	if elapsed > timeout+150*time.Millisecond {
-		t.Errorf("waitForQuiescence took too long after timeout (%v)", elapsed)
 	}
 }
 
@@ -396,13 +401,8 @@ func TestWaitForQuiescenceReturnsOnChannelClose(t *testing.T) {
 	updates := make(chan struct{})
 	close(updates)
 
-	start := time.Now()
-	waitForQuiescence(updates, time.Second, time.Second)
-	elapsed := time.Since(start)
-
-	if elapsed > 20*time.Millisecond {
-		t.Errorf("waitForQuiescence did not return promptly on closed channel (took %v)", elapsed)
-	}
+	// An hour-long window means only the closed channel can end the wait.
+	runWithHangGuard(t, func() { waitForQuiescence(updates, time.Hour, time.Hour) })
 }
 
 // TestWaitForQuiescenceResetsTimerOnUpdates verifies that each incoming update
