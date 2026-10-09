@@ -117,9 +117,9 @@ When writing, reviewing, or refactoring Go code, invoke the relevant skill(s):
 
 | Task | Skill |
 |---|---|
-| General idioms, error handling, interfaces, naming, project structure | `/go-development` |
-| Concurrency primitive selection (mutex vs atomic vs channel vs lock-free) | `/go-concurrency` |
-| pprof profiling — CPU, memory, goroutine, mutex profiles | `/go-profiling` |
+| General idioms, error handling, interfaces, naming, project structure | `/golang-development` |
+| Concurrency primitive selection (mutex vs atomic vs channel vs lock-free) | `/golang-concurrency` |
+| pprof profiling — CPU, memory, goroutine, mutex profiles | `/golang-profiling` |
 | Fix a specific pprof hotspot (atomic shadow, RWMutex, TTL cache, etc.) | `/go:optimize` |
 
 Invoke proactively — do not wait to be asked. If a task involves any `.go` file, load the appropriate skill before starting.

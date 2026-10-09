@@ -1303,9 +1303,10 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_WorkStuck_Res
 	outcome := session.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
 	svc.autonomousSvc.onAutonomousDriverComplete(title, outcome)
 
+	// The respawn runs in a goroutine and takes ~1s under -race when idle; the bound is a hang guard, not a latency assertion.
 	wait.RequireEventually(t, func() bool {
 		return creator.callCount() == 1
-	}, 2*time.Second, 10*time.Millisecond, "the stuck work session must be closed out before the respawn dispatch, so AutoRespawnAutonomousWork spawns a fresh session instead of self-blocking on the very session that just reported stuck")
+	}, 30*time.Second, 10*time.Millisecond, "the stuck work session must be closed out before the respawn dispatch, so AutoRespawnAutonomousWork spawns a fresh session instead of self-blocking on the very session that just reported stuck")
 
 	open, err := storage.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
