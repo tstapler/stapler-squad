@@ -63,7 +63,8 @@ export async function deleteSeededStuckItems(request: APIRequestContext): Promis
       headers: { "Content-Type": "application/json" },
       data: { itemId },
     });
-    if (!resp.ok()) {
+    // 404 = backlog feature disabled by the test itself; its rows are not served while disabled.
+    if (!resp.ok() && resp.status() !== 404) {
       throw new Error(`deleteSeededStuckItems failed for ${itemId} (${resp.status()}): ${await resp.text().catch(() => "")}`);
     }
   }
