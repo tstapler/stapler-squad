@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -243,9 +244,16 @@ func TestSessionCreationWithWorktree(t *testing.T) {
 // that orphan has since died but its socket file lingers. See
 // testSocketOnce in session/tmux/tmux.go for the same PID-based pattern
 // used for the shared "" -> isolated-socket case.
+//
+// t.Name() is hashed, not embedded: the socket is a Unix domain socket path
+// (/private/tmp/tmux-<uid>/<name>) limited to ~104 bytes on macOS, and a nested subtest
+// name such as TestSessionRestartWithConversationContinuity/RestartWithValidClaudeSession
+// overflowed it ("File name too long"). Keeps the "test_" prefix testutil/tmuxreap sweeps.
 func testTmuxSocket(t *testing.T) string {
 	t.Helper()
-	return fmt.Sprintf("test_%s_%d", strings.ReplaceAll(t.Name(), "/", "_"), os.Getpid())
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(t.Name()))
+	return fmt.Sprintf("test_ssq_%08x_%d", h.Sum32(), os.Getpid())
 }
 
 // commandExists checks if a command is available in PATH

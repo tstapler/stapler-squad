@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,23 +30,43 @@ func TestNativeListWorktrees_LiveWorktree(t *testing.T) {
 	assert.Equal(t, CanonicalizeWorktreePath(worktreePath), CanonicalizeWorktreePath(entry.WorktreePath))
 }
 
-// TestListWorktrees_should_ReturnSameEntries_When_ComparedToNativeListWorktrees covers
-// Story 1.1.1's acceptance criterion (project_plans/session-worktree-reconciliation): the
-// exported ListWorktrees wrapper must return the same entries the unexported
-// ListWorktrees parser returns for the same repo path.
-func TestListWorktrees_should_ReturnSameEntries_When_ComparedToNativeListWorktrees(t *testing.T) {
+// TestListWorktrees_should_ReturnSameEntries_When_ComparedToGitWorktreeList compares
+// ListWorktrees against `git worktree list --porcelain` run by the real git CLI on a
+// worktree the CLI itself created, so the parser is checked against git, not itself.
+func TestListWorktrees_should_ReturnSameEntries_When_ComparedToGitWorktreeList(t *testing.T) {
 	t.Parallel()
+	repoPath := setupTestRepo(t)
 	branchName := "work/b8ccca59"
-	repoPath, _ := newNativeRemoveFixture(t, branchName)
+	worktreePath := filepath.Join(t.TempDir(), "cli-created-wt")
+	runGit(t, repoPath, "worktree", "add", "-b", branchName, worktreePath)
 
-	wrapped, wrappedErr := ListWorktrees(repoPath)
-	direct, directErr := ListWorktrees(repoPath)
+	got, err := ListWorktrees(repoPath)
+	require.NoError(t, err)
 
-	require.NoError(t, wrappedErr)
-	require.NoError(t, directErr)
-	assert.Equal(t, direct, wrapped)
-	require.Len(t, wrapped, 1)
-	assert.Equal(t, "refs/heads/"+branchName, wrapped[0].BranchRef)
+	// Porcelain records are blank-line separated; the first is the main worktree.
+	type cliEntry struct{ path, branch string }
+	var linked []cliEntry
+	for i, rec := range strings.Split(strings.TrimSpace(runGit(t, repoPath, "worktree", "list", "--porcelain")), "\n\n") {
+		if i == 0 {
+			continue
+		}
+		var e cliEntry
+		for _, line := range strings.Split(rec, "\n") {
+			switch {
+			case strings.HasPrefix(line, "worktree "):
+				e.path = strings.TrimPrefix(line, "worktree ")
+			case strings.HasPrefix(line, "branch "):
+				e.branch = strings.TrimPrefix(line, "branch ")
+			}
+		}
+		linked = append(linked, e)
+	}
+
+	require.Len(t, linked, 1)
+	require.Len(t, got, len(linked))
+	assert.Equal(t, CanonicalizeWorktreePath(linked[0].path), CanonicalizeWorktreePath(got[0].WorktreePath))
+	assert.Equal(t, linked[0].branch, got[0].BranchRef)
+	assert.Equal(t, "refs/heads/"+branchName, got[0].BranchRef)
 }
 
 // TestListWorktrees_should_ReturnError_When_WorktreesDirUnreadable covers
