@@ -1,4 +1,4 @@
-package git
+package native
 
 import (
 	"errors"
@@ -18,13 +18,13 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
-// headTreeHashes walks repo's HEAD tree and returns a path -> blob hash map, without
+// HeadTreeHashes walks repo's HEAD tree and returns a path -> blob hash map, without
 // loading any blob content. object.NewTreeWalker visits tree objects only; the more
 // obvious object.Tree.Files()/FileIter alternative calls GetBlob() per entry and loads
 // full file content, which is exactly the generic-tree-diff cost this file exists to
-// avoid (see worktreeIsDirtyFast's doc comment). Returns (nil, nil) for an unborn HEAD
+// avoid (see IsDirtyFast's doc comment). Returns (nil, nil) for an unborn HEAD
 // (no commits yet) — a valid "empty tree" result, not an error.
-func headTreeHashes(repo *git.Repository) (map[string]plumbing.Hash, error) {
+func HeadTreeHashes(repo *git.Repository) (map[string]plumbing.Hash, error) {
 	headRef, err := repo.Head()
 	if err != nil {
 		if errors.Is(err, plumbing.ErrReferenceNotFound) {
@@ -60,11 +60,11 @@ func headTreeHashes(repo *git.Repository) (map[string]plumbing.Hash, error) {
 	return hashes, nil
 }
 
-// headTreeHashCache memoizes headTreeHashes' result, keyed by HEAD's own
+// HeadTreeHashCache memoizes HeadTreeHashes' result, keyed by HEAD's own
 // commit hash. No TTL is needed — the cached map stays exactly as correct as
 // HEAD itself, so a cache hit can never serve stale data (unlike the TTL
 // caches elsewhere in this package). Zero value is ready to use.
-type headTreeHashCache struct {
+type HeadTreeHashCache struct {
 	v atomic.Value // stores headTreeCacheEntry
 }
 
@@ -73,19 +73,19 @@ type headTreeCacheEntry struct {
 	hashes   map[string]plumbing.Hash
 }
 
-// cachedHeadTreeHashes is headTreeHashes with cache reuse across repeated
+// CachedHeadTreeHashes is HeadTreeHashes with cache reuse across repeated
 // calls against an unchanged HEAD. IsDirtyWithHint's own 30s/5min TTL cache
 // is bypassed entirely while claudeActive (see worktree_git.go), so without
 // this, every poll tick against an active session re-walks the full HEAD
-// tree from scratch — measured as headTreeHashes' single largest cost
+// tree from scratch — measured as HeadTreeHashes' single largest cost
 // (12.23% of process allocations, 2026-09-10 profiling session). repo.Head()
 // is one ref-file read, cheap enough to call unconditionally as the
 // cache-validity check.
-func cachedHeadTreeHashes(repo *git.Repository, cache *headTreeHashCache) (map[string]plumbing.Hash, error) {
+func CachedHeadTreeHashes(repo *git.Repository, cache *HeadTreeHashCache) (map[string]plumbing.Hash, error) {
 	headRef, err := repo.Head()
 	if err != nil {
 		if errors.Is(err, plumbing.ErrReferenceNotFound) {
-			return nil, nil //nolint:nilnil // unborn HEAD, matches headTreeHashes' own sentinel
+			return nil, nil //nolint:nilnil // unborn HEAD, matches HeadTreeHashes' own sentinel
 		}
 		return nil, fmt.Errorf("head: %w", err)
 	}
@@ -96,7 +96,7 @@ func cachedHeadTreeHashes(repo *git.Repository, cache *headTreeHashCache) (map[s
 		}
 	}
 
-	hashes, err := headTreeHashes(repo)
+	hashes, err := HeadTreeHashes(repo)
 	if err != nil {
 		return nil, err
 	}
@@ -104,12 +104,12 @@ func cachedHeadTreeHashes(repo *git.Repository, cache *headTreeHashCache) (map[s
 	return hashes, nil
 }
 
-// worktreeStagedDirty reports whether the index differs from HEAD -- a staged
+// StagedDirty reports whether the index differs from HEAD -- a staged
 // addition, modification, deletion, or an unresolved merge conflict stage.
 // O(index size) hash comparisons, zero file I/O. headHashes == nil (unborn HEAD)
 // is treated as "nothing to compare against yet", matching
 // session/unfinished.GoGitVCSReader.hasUncommittedGoGitPhase's identical rule.
-func worktreeStagedDirty(idx *index.Index, headHashes map[string]plumbing.Hash) bool {
+func StagedDirty(idx *index.Index, headHashes map[string]plumbing.Hash) bool {
 	if headHashes == nil {
 		return false
 	}
@@ -192,7 +192,7 @@ func worktreeHasUntrackedFilesRec(root, dir string, indexed map[string]struct{},
 	return false, nil
 }
 
-// worktreeIsDirtyFast reports whether the worktree at path has any staged or unstaged
+// IsDirtyFast reports whether the worktree at path has any staged or unstaged
 // change, via the same mtime/hash short-circuit strategy as
 // session/unfinished.GoGitVCSReader.HasUncommitted, instead of go-git's
 // Worktree.Status(). Status() always computes a *full* tree diff -- building
@@ -200,16 +200,16 @@ func worktreeHasUntrackedFilesRec(root, dir string, indexed map[string]struct{},
 // comparing every node via package merkletrie -- to answer a question this function
 // only needs as a boolean. Live production profiling (Pyroscope, 30min window) showed
 // merkletrie.DiffTree/diffNodes at 16.58% cum CPU inside worktreeIsDirtyWithFS, larger
-// than the gitignore-pattern cost gitignoreFSCache already fixed. session/git can't
+// than the gitignore-pattern cost GitignoreFSCache already fixed. session/git can't
 // import session/unfinished's GoGitVCSReader directly (its test files already import
 // session/git, which would make that direction a cycle), so this is a self-contained
 // reimplementation of the same proven, tested algorithm rather than a shared import.
 //
 // cache (may be nil) is reused for the gitignore-pattern filesystem reads the
-// untracked-files walk needs — see gitignoreFSCache's doc comment. headCache
+// untracked-files walk needs — see GitignoreFSCache's doc comment. headCache
 // (may be nil) memoizes the HEAD tree hash walk itself — see
-// headTreeHashCache's doc comment.
-func worktreeIsDirtyFast(path string, cache *gitignoreFSCache, headCache *headTreeHashCache) (bool, error) {
+// HeadTreeHashCache's doc comment.
+func IsDirtyFast(path string, cache *GitignoreFSCache, headCache *HeadTreeHashCache) (bool, error) {
 	repo, err := OpenRepo(path)
 	if err != nil {
 		return false, fmt.Errorf("failed to open git repo at %s: %w", path, err)
@@ -222,15 +222,15 @@ func worktreeIsDirtyFast(path string, cache *gitignoreFSCache, headCache *headTr
 
 	var headHashes map[string]plumbing.Hash
 	if headCache != nil {
-		headHashes, err = cachedHeadTreeHashes(repo, headCache)
+		headHashes, err = CachedHeadTreeHashes(repo, headCache)
 	} else {
-		headHashes, err = headTreeHashes(repo)
+		headHashes, err = HeadTreeHashes(repo)
 	}
 	if err != nil {
 		return false, fmt.Errorf("resolve head tree at %s: %w", path, err)
 	}
 
-	if worktreeStagedDirty(idx, headHashes) {
+	if StagedDirty(idx, headHashes) {
 		return true, nil
 	}
 
@@ -253,8 +253,8 @@ func worktreeIsDirtyFast(path string, cache *gitignoreFSCache, headCache *headTr
 // to skip ignored files/subtrees. Returns nil (matches nothing) if patterns can't be
 // read, matching worktreeIsDirty's existing tolerance for a missing/unreadable
 // .gitignore rather than failing the whole dirty check over it.
-func worktreeUntrackedMatcher(path string, cache *gitignoreFSCache) gitignore.Matcher {
-	fs := newCachedFilesystem(osfs.New(path), cache)
+func worktreeUntrackedMatcher(path string, cache *GitignoreFSCache) gitignore.Matcher {
+	fs := NewCachedFilesystem(osfs.New(path), cache)
 	patterns, err := gitignore.ReadPatterns(fs, nil)
 	if err != nil {
 		return nil
@@ -262,21 +262,17 @@ func worktreeUntrackedMatcher(path string, cache *gitignoreFSCache) gitignore.Ma
 	return gitignore.NewMatcher(patterns)
 }
 
-// IsDirtyUncached reports whether the worktree has uncommitted changes,
-// bypassing IsDirtyWithHint's own TTL cache (IsDirtyCacheTTL/IsDirtyCleanCacheTTL)
-// -- but still reusing g.gitignoreFS/g.headTreeCache, the per-GitWorktree
-// allocation-avoidance caches worktreeIsDirtyFast itself needs. Those two are
-// safe to share here without reintroducing staleness: headTreeCache is keyed
-// by HEAD's own commit hash (a hit can never be stale) and gitignoreFS has its
-// own independent invalidation (InvalidateDirtyCache) unrelated to the
-// 30s/5min TTL-staleness problem this method's cache bypass exists to fix.
-// Used by session.WorktreeChangeDetector's periodic tick, which needs a fresh
-// per-tick answer to compare against the previous tick -- reusing
-// IsDirtyWithHint's cached *answer* here would just relocate the staleness
-// problem this feature exists to fix, but discarding the inner caches too
-// would reintroduce the exact CPU/allocation cost (full HEAD-tree walk +
-// gitignore-pattern re-read on every 15s tick, across up to 134 worktrees)
-// this session's own commit 4cd1d384a and gitignoreFSCache eliminated.
-func (g *GitWorktree) IsDirtyUncached() (bool, error) {
-	return worktreeIsDirtyFast(g.GetWorktreePath(), &g.gitignoreFS, &g.headTreeCache)
+// Reset discards the cached entry, e.g. after a commit/push moved HEAD.
+func (c *HeadTreeHashCache) Reset() {
+	c.v.Store(headTreeCacheEntry{}) //nolint:exhaustruct // zero entry, defensive reset
+}
+
+// CachedHashes returns the memoized tree-hash map, or ok=false if the cache is empty.
+// Exposed so callers' tests can assert cache reuse by map identity.
+func (c *HeadTreeHashCache) CachedHashes() (hashes map[string]plumbing.Hash, ok bool) {
+	entry, ok := c.v.Load().(headTreeCacheEntry)
+	if !ok {
+		return nil, false
+	}
+	return entry.hashes, true
 }

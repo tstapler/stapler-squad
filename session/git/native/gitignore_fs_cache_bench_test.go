@@ -1,45 +1,10 @@
-package git
+package native
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
-
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
 )
-
-// setupBenchRepo is setupTestRepo's *testing.B counterpart — testing.T-only helpers
-// can't be called from a benchmark, so this duplicates the same go-git-only setup.
-func setupBenchRepo(b *testing.B) string {
-	b.Helper()
-	dir := b.TempDir()
-
-	repo, err := git.PlainInitWithOptions(dir, &git.PlainInitOptions{
-		InitOptions: git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
-	})
-	if err != nil {
-		b.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test"), 0o600); err != nil {
-		b.Fatal(err)
-	}
-	wt, err := repo.Worktree()
-	if err != nil {
-		b.Fatal(err)
-	}
-	if _, err := wt.Add("."); err != nil {
-		b.Fatal(err)
-	}
-	if _, err := wt.Commit("Initial commit", &git.CommitOptions{
-		Author: &object.Signature{Name: "Bench User", Email: "bench@example.com", When: time.Now()},
-	}); err != nil {
-		b.Fatal(err)
-	}
-	return dir
-}
 
 // nestedDirsForBench creates n nested subdirectories, each holding a .gitignore file,
 // so gitignore.ReadPatterns has real recursive work to do — this is what makes the
@@ -60,7 +25,7 @@ func nestedDirsForBench(b *testing.B, root string, n int) {
 }
 
 // BenchmarkWorktreeIsDirty_RepeatedCalls_CachedFS is PerfFix-1's enforcement: repeated
-// worktreeIsDirtyWithFS calls against the same gitignoreFSCache must not re-pay the
+// worktreeIsDirtyWithFS calls against the same GitignoreFSCache must not re-pay the
 // full directory-listing/.gitignore-read cost on every call. Run with -benchmem and
 // compare against BenchmarkWorktreeIsDirty_RepeatedCalls_Uncached via benchstat — a
 // regression that drops the cache shows allocs/op collapsing back to the uncached
@@ -69,7 +34,7 @@ func BenchmarkWorktreeIsDirty_RepeatedCalls_CachedFS(b *testing.B) {
 	repoDir := setupBenchRepo(b)
 	nestedDirsForBench(b, repoDir, 25)
 
-	var cache gitignoreFSCache
+	var cache GitignoreFSCache
 	// Warm the cache once outside the timed loop, matching production usage where
 	// IsDirtyWithHint's 30s/5min TTL means most calls land on an already-warm cache.
 	if _, err := worktreeIsDirtyWithFS(repoDir, &cache); err != nil {

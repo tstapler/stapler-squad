@@ -11,3 +11,5 @@ func runRealGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	return gittest.RunGit(t, dir, args...)
 }
+
+func setupBenchRepo(b *testing.B) string { return gittest.SetupBenchRepo(b) }

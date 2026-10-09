@@ -1,4 +1,4 @@
-package git
+package native
 
 import (
 	"bytes"
@@ -12,7 +12,7 @@ import (
 )
 
 // gitignoreCacheTTL bounds how long a cached directory listing or ignore-file read
-// (from gitignoreFSCache) may be reused. Deliberately longer than IsDirtyCacheTTL
+// (from GitignoreFSCache) may be reused. Deliberately longer than IsDirtyCacheTTL
 // (30s): a repo the poller has just found dirty gets rechecked every 30s by
 // IsDirtyWithHint's own cache, so a gitignoreCacheTTL of the *same* 30s would expire
 // in lockstep with it — every outer cache-miss would also be an inner cache-miss,
@@ -20,16 +20,22 @@ import (
 // gitignoreCacheTTL == IsDirtyCacheTTL). Matching IsDirtyCleanCacheTTL instead means an
 // outer recheck usually lands on a still-warm inner cache. InvalidateDirtyCache clears
 // both together, so a commit/push still forces a fully fresh read regardless of this TTL.
-const gitignoreCacheTTL = IsDirtyCleanCacheTTL
+const gitignoreCacheTTL = CleanCacheTTL
 
-// readDirEntry is a cached result of one gitignoreFSCache.dirs entry.
+// CleanCacheTTL is the TTL when a worktree is known to be clean; session/git re-exports
+// it as IsDirtyCleanCacheTTL. Clean worktrees won't change unless Claude commits or a
+// user modifies files; InvalidateDirtyCache() is called on those code paths, so 5 min is
+// safe and cuts subprocess calls by ~10x vs dirty-path TTL for quiescent sessions.
+const CleanCacheTTL = 5 * time.Minute
+
+// readDirEntry is a cached result of one GitignoreFSCache.dirs entry.
 type readDirEntry struct {
 	infos  []os.FileInfo
 	err    error
 	expiry time.Time
 }
 
-// openEntry is a cached result of one gitignoreFSCache.files entry. Only small files
+// openEntry is a cached result of one GitignoreFSCache.files entry. Only small files
 // (.gitignore, .git/info/exclude) are ever read through this path, so buffering the
 // full content is safe.
 type openEntry struct {
@@ -38,7 +44,7 @@ type openEntry struct {
 	expiry  time.Time
 }
 
-// gitignoreFSCache memoizes the ReadDir/Open calls go-git's
+// GitignoreFSCache memoizes the ReadDir/Open calls go-git's
 // gitignore.ReadPatterns issues while recursively walking a worktree, scoped to a
 // single GitWorktree instance and cleared by InvalidateDirtyCache.
 //
@@ -49,7 +55,7 @@ type openEntry struct {
 // worktreeIsDirty, called from IsDirtyWithHint's cache-miss path). The zero value is
 // ready to use (sync.Map requires no init), so this is embedded by value in
 // GitWorktree rather than lazily constructed.
-type gitignoreFSCache struct {
+type GitignoreFSCache struct {
 	dirs  sync.Map // path -> readDirEntry
 	files sync.Map // path -> openEntry
 }
@@ -58,7 +64,7 @@ type gitignoreFSCache struct {
 // (which can add/remove/edit .gitignore files or the files they cover) is reflected on
 // the very next status check, matching the freshness guarantee already documented on
 // IsDirtyCacheTTL/IsDirtyCleanCacheTTL.
-func (c *gitignoreFSCache) reset() {
+func (c *GitignoreFSCache) Reset() {
 	c.dirs.Range(func(k, _ interface{}) bool {
 		c.dirs.Delete(k)
 		return true
@@ -75,12 +81,12 @@ func (c *gitignoreFSCache) reset() {
 // embedded interface.
 type cachedFilesystem struct {
 	billy.Filesystem
-	cache *gitignoreFSCache
+	cache *GitignoreFSCache
 }
 
-// newCachedFilesystem returns fs wrapped with cache. Passing a nil cache disables
+// NewCachedFilesystem returns fs wrapped with cache. Passing a nil cache disables
 // caching (ReadDir/Open pass straight through).
-func newCachedFilesystem(fs billy.Filesystem, cache *gitignoreFSCache) billy.Filesystem {
+func NewCachedFilesystem(fs billy.Filesystem, cache *GitignoreFSCache) billy.Filesystem {
 	if cache == nil {
 		return fs
 	}

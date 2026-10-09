@@ -65,3 +65,33 @@ func RunGit(t *testing.T, dir string, args ...string) string {
 	require.NoError(t, err, "git %s failed: %s", strings.Join(args, " "), out)
 	return string(out)
 }
+
+// SetupBenchRepo is SetupTestRepo's *testing.B counterpart — testing.T-only helpers
+// can't be called from a benchmark, so this duplicates the same go-git-only setup.
+func SetupBenchRepo(b *testing.B) string {
+	b.Helper()
+	dir := b.TempDir()
+
+	repo, err := git.PlainInitWithOptions(dir, &git.PlainInitOptions{
+		InitOptions: git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test"), 0o600); err != nil {
+		b.Fatal(err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := wt.Add("."); err != nil {
+		b.Fatal(err)
+	}
+	if _, err := wt.Commit("Initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Bench User", Email: "bench@example.com", When: time.Now()},
+	}); err != nil {
+		b.Fatal(err)
+	}
+	return dir
+}

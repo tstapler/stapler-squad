@@ -1,4 +1,4 @@
-package git
+package native
 
 import (
 	"context"
@@ -19,28 +19,28 @@ import (
 
 // TestWorktreeIsDirtyFast_MatchesWorktreeIsDirty_OnCleanUntrackedAndModified is the
 // direct regression test for the algorithm swap in dirtyCheckerFunc (worktree.go):
-// worktreeIsDirtyFast must agree with the go-git Worktree.Status()-backed
+// IsDirtyFast must agree with the go-git Worktree.Status()-backed
 // worktreeIsDirty on the same scenarios TestWorktreeIsDirty_DetectsUntrackedAndModifiedFiles
 // already covers, since it now runs in worktreeIsDirty's place on every production
 // IsDirty()/HasStagedChanges() call.
 func TestWorktreeIsDirtyFast_MatchesWorktreeIsDirty_OnCleanUntrackedAndModified(t *testing.T) {
 	t.Parallel()
 	repoDir := setupTestRepo(t)
-	var cache gitignoreFSCache
-	var headCache headTreeHashCache
+	var cache GitignoreFSCache
+	var headCache HeadTreeHashCache
 
-	dirty, err := worktreeIsDirtyFast(repoDir, &cache, &headCache)
+	dirty, err := IsDirtyFast(repoDir, &cache, &headCache)
 	require.NoError(t, err)
 	assert.False(t, dirty, "freshly committed repo must report clean")
 
 	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "untracked.txt"), []byte("new"), 0o644))
-	dirty, err = worktreeIsDirtyFast(repoDir, &cache, &headCache)
+	dirty, err = IsDirtyFast(repoDir, &cache, &headCache)
 	require.NoError(t, err)
 	assert.True(t, dirty, "an untracked file must report dirty")
 
 	require.NoError(t, os.Remove(filepath.Join(repoDir, "untracked.txt")))
 	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("changed"), 0o644))
-	dirty, err = worktreeIsDirtyFast(repoDir, &cache, &headCache)
+	dirty, err = IsDirtyFast(repoDir, &cache, &headCache)
 	require.NoError(t, err)
 	assert.True(t, dirty, "a modified tracked file must report dirty")
 }
@@ -50,8 +50,8 @@ func TestWorktreeIsDirtyFast_MatchesWorktreeIsDirty_OnCleanUntrackedAndModified(
 func TestWorktreeIsDirtyFast_DetectsSameSizeEditWithinIndexTimestampSecond(t *testing.T) {
 	t.Parallel()
 	repoDir := setupTestRepo(t)
-	var cache gitignoreFSCache
-	var headCache headTreeHashCache
+	var cache GitignoreFSCache
+	var headCache HeadTreeHashCache
 
 	repo, err := OpenRepo(repoDir)
 	require.NoError(t, err)
@@ -67,18 +67,18 @@ func TestWorktreeIsDirtyFast_DetectsSameSizeEditWithinIndexTimestampSecond(t *te
 	}
 	require.NoError(t, os.Chtimes(path, mtime, mtime))
 
-	dirty, err := worktreeIsDirtyFast(repoDir, &cache, &headCache)
+	dirty, err := IsDirtyFast(repoDir, &cache, &headCache)
 	require.NoError(t, err)
 	assert.True(t, dirty, "a same-size edit within the index timestamp's second must report dirty")
 }
 
-// TestWorktreeIsDirtyFast_DetectsStagedAddition covers worktreeStagedDirty's "new or
+// TestWorktreeIsDirtyFast_DetectsStagedAddition covers StagedDirty's "new or
 // modified staged file" branch directly (not reachable via untracked/unstaged alone).
 func TestWorktreeIsDirtyFast_DetectsStagedAddition(t *testing.T) {
 	t.Parallel()
 	repoDir := setupTestRepo(t)
-	var cache gitignoreFSCache
-	var headCache headTreeHashCache
+	var cache GitignoreFSCache
+	var headCache HeadTreeHashCache
 
 	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "staged.txt"), []byte("new"), 0o644))
 	repo, err := OpenRepo(repoDir)
@@ -88,37 +88,37 @@ func TestWorktreeIsDirtyFast_DetectsStagedAddition(t *testing.T) {
 	_, err = wt.Add("staged.txt")
 	require.NoError(t, err)
 
-	dirty, err := worktreeIsDirtyFast(repoDir, &cache, &headCache)
+	dirty, err := IsDirtyFast(repoDir, &cache, &headCache)
 	require.NoError(t, err)
 	assert.True(t, dirty, "a newly-staged file must report dirty")
 }
 
-// TestWorktreeIsDirtyFast_DetectsStagedDeletion covers worktreeStagedDirty's "staged
+// TestWorktreeIsDirtyFast_DetectsStagedDeletion covers StagedDirty's "staged
 // deletion" branch: a file present in HEAD but removed from the index (via `git rm
 // --cached`), with the working-tree copy still present unmodified.
 func TestWorktreeIsDirtyFast_DetectsStagedDeletion(t *testing.T) {
 	t.Parallel()
 	repoDir := setupTestRepo(t)
-	var cache gitignoreFSCache
-	var headCache headTreeHashCache
+	var cache GitignoreFSCache
+	var headCache HeadTreeHashCache
 
 	out, err := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "rm", "--cached", "README.md").CombinedOutput()
 	require.NoError(t, err, "git rm --cached failed: %s", out)
 
-	dirty, err := worktreeIsDirtyFast(repoDir, &cache, &headCache)
+	dirty, err := IsDirtyFast(repoDir, &cache, &headCache)
 	require.NoError(t, err)
 	assert.True(t, dirty, "a staged deletion must report dirty even though the worktree copy is untouched")
 }
 
-// TestWorktreeIsDirtyFast_DetectsMergeConflictStage covers worktreeStagedDirty's
+// TestWorktreeIsDirtyFast_DetectsMergeConflictStage covers StagedDirty's
 // unresolved-merge-conflict branch (index.Entry.Stage != 0), which the mtime/hash
 // short-circuit can't detect any other way since a conflicted entry has no single
 // well-defined hash to compare against HEAD.
 func TestWorktreeIsDirtyFast_DetectsMergeConflictStage(t *testing.T) {
 	t.Parallel()
 	repoDir := setupTestRepo(t)
-	var cache gitignoreFSCache
-	var headCache headTreeHashCache
+	var cache GitignoreFSCache
+	var headCache HeadTreeHashCache
 
 	run := func(args ...string) {
 		out, err := safeexec.CommandContext(context.Background(), "git", append([]string{"-C", repoDir}, args...)...).CombinedOutput()
@@ -132,17 +132,17 @@ func TestWorktreeIsDirtyFast_DetectsMergeConflictStage(t *testing.T) {
 	run("commit", "-am", "main change")
 	_, _ = safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "merge", "conflict-branch").CombinedOutput() //nolint:errcheck // a merge conflict is the expected, non-error-checked outcome here
 
-	dirty, err := worktreeIsDirtyFast(repoDir, &cache, &headCache)
+	dirty, err := IsDirtyFast(repoDir, &cache, &headCache)
 	require.NoError(t, err)
 	assert.True(t, dirty, "an unresolved merge conflict must report dirty")
 }
 
 // TestWorktreeIsDirtyFast_UnbornHEAD_ReportsCleanRegardlessOfIndex documents
-// worktreeStagedDirty's existing, deliberately-preserved behavior for an unborn HEAD
+// StagedDirty's existing, deliberately-preserved behavior for an unborn HEAD
 // (headHashes == nil): it treats the staged-vs-HEAD comparison as a no-op rather than
 // as "everything in the index is newly staged", matching
 // session/unfinished.GoGitVCSReader.hasUncommittedGoGitPhase's identical rule exactly
-// (see worktreeStagedDirty's doc comment) rather than introducing a new interpretation.
+// (see StagedDirty's doc comment) rather than introducing a new interpretation.
 func TestWorktreeIsDirtyFast_UnbornHEAD_ReportsCleanRegardlessOfIndex(t *testing.T) {
 	t.Parallel()
 	repoDir := t.TempDir()
@@ -157,16 +157,16 @@ func TestWorktreeIsDirtyFast_UnbornHEAD_ReportsCleanRegardlessOfIndex(t *testing
 	_, err = repo.Head()
 	require.ErrorIs(t, err, plumbing.ErrReferenceNotFound, "sanity check: repo must genuinely have no HEAD yet")
 
-	var cache gitignoreFSCache
-	var headCache headTreeHashCache
-	dirty, err := worktreeIsDirtyFast(repoDir, &cache, &headCache)
+	var cache GitignoreFSCache
+	var headCache HeadTreeHashCache
+	dirty, err := IsDirtyFast(repoDir, &cache, &headCache)
 	require.NoError(t, err)
 	assert.False(t, dirty)
 }
 
 // TestCachedHeadTreeHashes_ReusesCacheUntilHeadMoves is PerfFix-4's
 // enforcement: a second call against an unchanged HEAD must return the
-// exact same cached map (proving headTreeHashes was not re-walked), and a
+// exact same cached map (proving HeadTreeHashes was not re-walked), and a
 // call after HEAD moves must return a freshly computed, correctly updated
 // map (proving the cache doesn't serve stale data across a commit).
 func TestCachedHeadTreeHashes_ReusesCacheUntilHeadMoves(t *testing.T) {
@@ -174,14 +174,14 @@ func TestCachedHeadTreeHashes_ReusesCacheUntilHeadMoves(t *testing.T) {
 	repoDir := setupTestRepo(t)
 	repo, err := OpenRepo(repoDir)
 	require.NoError(t, err)
-	var cache headTreeHashCache
+	var cache HeadTreeHashCache
 
-	first, err := cachedHeadTreeHashes(repo, &cache)
+	first, err := CachedHeadTreeHashes(repo, &cache)
 	require.NoError(t, err)
 	_, hasNewFile := first["new.txt"]
 	assert.False(t, hasNewFile, "new.txt must not exist in the tree yet")
 
-	second, err := cachedHeadTreeHashes(repo, &cache)
+	second, err := CachedHeadTreeHashes(repo, &cache)
 	require.NoError(t, err)
 	assert.Equal(t, fmt.Sprintf("%p", first), fmt.Sprintf("%p", second),
 		"an unchanged HEAD must return the cached map, not recompute it")
@@ -197,7 +197,7 @@ func TestCachedHeadTreeHashes_ReusesCacheUntilHeadMoves(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	third, err := cachedHeadTreeHashes(repo, &cache)
+	third, err := CachedHeadTreeHashes(repo, &cache)
 	require.NoError(t, err)
 	assert.NotEqual(t, fmt.Sprintf("%p", first), fmt.Sprintf("%p", third),
 		"a moved HEAD must invalidate the cache and recompute")
@@ -232,31 +232,31 @@ func setupLargeTreeBenchRepo(b *testing.B, dirs, filesPerDir int) string {
 	return repoDir
 }
 
-// BenchmarkWorktreeIsDirty_FastVsGoGit quantifies the algorithm swap: worktreeIsDirtyFast
+// BenchmarkWorktreeIsDirty_FastVsGoGit quantifies the algorithm swap: IsDirtyFast
 // (mtime/hash short-circuit) against worktreeIsDirtyWithFS (go-git Worktree.Status(),
 // full merkletrie tree-diff) on a repo with a wide tracked tree. Run with -benchmem; live
 // production profiling found merkletrie.DiffTree/diffNodes at 16.58% cum CPU inside the
-// go-git path even with gitignoreFSCache already warm.
+// go-git path even with GitignoreFSCache already warm.
 func BenchmarkWorktreeIsDirty_FastVsGoGit(b *testing.B) {
 	repoDir := setupLargeTreeBenchRepo(b, 40, 20)
 
 	b.Run("Fast", func(b *testing.B) {
-		var cache gitignoreFSCache
-		var headCache headTreeHashCache
-		if _, err := worktreeIsDirtyFast(repoDir, &cache, &headCache); err != nil {
+		var cache GitignoreFSCache
+		var headCache HeadTreeHashCache
+		if _, err := IsDirtyFast(repoDir, &cache, &headCache); err != nil {
 			b.Fatal(err)
 		}
 		b.ResetTimer()
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			if _, err := worktreeIsDirtyFast(repoDir, &cache, &headCache); err != nil {
+			if _, err := IsDirtyFast(repoDir, &cache, &headCache); err != nil {
 				b.Fatal(err)
 			}
 		}
 	})
 
 	b.Run("GoGit", func(b *testing.B) {
-		var cache gitignoreFSCache
+		var cache GitignoreFSCache
 		if _, err := worktreeIsDirtyWithFS(repoDir, &cache); err != nil {
 			b.Fatal(err)
 		}

@@ -1,6 +1,7 @@
 package native
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/git/internal/gittest"
@@ -44,3 +45,26 @@ func (w *testWorktree) nativeSetupNewWorktree() error {
 }
 
 func (w *testWorktree) GetBaseCommitSHA() string { return w.baseCommitSHA }
+
+func setupBenchRepo(b *testing.B) string { return gittest.SetupBenchRepo(b) }
+
+// worktreeIsDirty is the go-git Worktree.Status() reference implementation the fast dirty
+// check is compared against; it mirrors session/git's worktreeIsDirty/worktreeIsDirtyWithFS.
+func worktreeIsDirty(path string) (bool, error) { return worktreeIsDirtyWithFS(path, nil) }
+
+func worktreeIsDirtyWithFS(path string, cache *GitignoreFSCache) (bool, error) {
+	repo, err := OpenRepo(path)
+	if err != nil {
+		return false, fmt.Errorf("failed to open git repo at %s: %w", path, err)
+	}
+	worktree, err := repo.Worktree()
+	if err != nil {
+		return false, fmt.Errorf("failed to get worktree at %s: %w", path, err)
+	}
+	worktree.Filesystem = NewCachedFilesystem(worktree.Filesystem, cache)
+	status, err := worktree.Status()
+	if err != nil {
+		return false, fmt.Errorf("failed to get worktree status at %s: %w", path, err)
+	}
+	return !status.IsClean(), nil
+}

@@ -5,7 +5,10 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/format/index"
 	"github.com/tstapler/stapler-squad/session/git/native"
 )
 
@@ -78,4 +81,37 @@ func (g *GitWorktree) nativeSetupNewWorktree() error {
 		g.baseCommitSHA = sha
 	}
 	return err
+}
+
+// --- dirty-check wrappers (Story 1.1.0a group iii) ---
+
+type (
+	gitignoreFSCache  = native.GitignoreFSCache
+	headTreeHashCache = native.HeadTreeHashCache
+)
+
+func newCachedFilesystem(fs billy.Filesystem, cache *gitignoreFSCache) billy.Filesystem {
+	return native.NewCachedFilesystem(fs, cache)
+}
+
+func worktreeIsDirtyFast(path string, cache *gitignoreFSCache, headCache *headTreeHashCache) (bool, error) {
+	return native.IsDirtyFast(path, cache, headCache)
+}
+
+func cachedHeadTreeHashes(repo *git.Repository, cache *headTreeHashCache) (map[string]plumbing.Hash, error) {
+	return native.CachedHeadTreeHashes(repo, cache)
+}
+
+func worktreeStagedDirty(idx *index.Index, headHashes map[string]plumbing.Hash) bool {
+	return native.StagedDirty(idx, headHashes)
+}
+
+// IsDirtyUncached reports whether the worktree has uncommitted changes, bypassing
+// IsDirtyWithHint's own TTL cache but still reusing g.gitignoreFS/g.headTreeCache, the
+// per-GitWorktree allocation-avoidance caches native.IsDirtyFast needs. Those two are
+// safe to share without reintroducing staleness: headTreeCache is keyed by HEAD's own
+// commit hash and gitignoreFS has its own invalidation (InvalidateDirtyCache). Used by
+// session.WorktreeChangeDetector's periodic tick, which needs a fresh per-tick answer.
+func (g *GitWorktree) IsDirtyUncached() (bool, error) {
+	return native.IsDirtyFast(g.GetWorktreePath(), &g.gitignoreFS, &g.headTreeCache)
 }
