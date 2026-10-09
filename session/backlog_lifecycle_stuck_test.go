@@ -5717,3 +5717,120 @@ func TestRecordTriageParkAndMaybeEscalate_should_notNotify_When_ParksSpreadBeyon
 	}
 	assert.Empty(t, notifier.calls)
 }
+
+func TestParkBurstTracker_should_refireForSecondBurst_When_WindowElapsed(t *testing.T) {
+	t.Parallel()
+	var tr parkBurstTracker
+	base := time.Now()
+	for i, id := range []string{"a", "b", "c"} {
+		_, fire := tr.record(id, base.Add(time.Duration(i)*time.Second), batchParkWindow, batchParkThreshold)
+		assert.Equal(t, i == 2, fire, "first burst fires only at the threshold")
+	}
+
+	second := base.Add(2*time.Second + batchParkWindow + time.Second) // past the last first-burst park + window
+	for i, id := range []string{"d", "e", "f"} {
+		count, fire := tr.record(id, second.Add(time.Duration(i)*time.Second), batchParkWindow, batchParkThreshold)
+		assert.Equal(t, i == 2, fire, "second burst fires once at the threshold")
+		assert.Equal(t, i+1, count, "first-burst items must have aged out of the window")
+	}
+}
+
+func TestParkBurstTracker_should_pinWindowBoundary_When_RecordingAtExactOffsets(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		offset    time.Duration // second park, relative to the first park that already fired
+		wantFire  bool
+		wantCount int
+	}{
+		{"just inside window: suppressed, both parks counted", batchParkWindow - time.Second, false, 2},
+		{"exactly +window: re-fires and the first park has aged out", batchParkWindow, true, 1},
+		{"after window", batchParkWindow + time.Second, true, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var tr parkBurstTracker
+			base := time.Now()
+			_, fire := tr.record("a", base, batchParkWindow, 1)
+			require.True(t, fire)
+			count, fire := tr.record("b", base.Add(tt.offset), batchParkWindow, 1)
+			assert.Equal(t, tt.wantFire, fire)
+			assert.Equal(t, tt.wantCount, count)
+		})
+	}
+}
+
+func TestRetryOrphanedTriageWithBackoffGate_should_escalateOnceForBatch_And_NotForSinglePark(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	parkable := func(title string) string {
+		item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: title, AcceptanceCriteria: `[]`, Priority: 1, Status: string(BacklogStatusIdea)})
+		require.NoError(t, err)
+		_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatusIdea, "orphaned triage")
+		require.NoError(t, err)
+		// One attempt short of the cap, due now: the next gate call parks it.
+		applied, err := er.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonOrphanedTriage, MaxRemediationAttempts-1, timePtr(time.Now().Add(-time.Minute)))
+		require.NoError(t, err)
+		require.True(t, applied)
+		return item.ID
+	}
+	newListener := func() (*BacklogLifecycleListener, *fakeNotifier) {
+		l := NewBacklogLifecycleListener(storage)
+		n := &fakeNotifier{}
+		l.SetNotifier(n)
+		l.SetTriageRespawner(newFakeTriageRespawner())
+		return l, n
+	}
+	countTitle := func(n *fakeNotifier, title string) int {
+		c := 0
+		for _, call := range n.calls {
+			if call.Title == title {
+				c++
+			}
+		}
+		return c
+	}
+
+	t.Run("single parked item gets only the per-item notification", func(t *testing.T) {
+		l, n := newListener()
+		l.retryOrphanedTriageWithBackoffGate(ctx, parkable("single"), "single")
+		assert.Equal(t, 1, countTitle(n, "Auto-triage paused"))
+		assert.Equal(t, 0, countTitle(n, "Multiple auto-triage retries exhausted"))
+	})
+
+	t.Run("three distinct parked items fire the aggregate exactly once", func(t *testing.T) {
+		l, n := newListener()
+		for _, name := range []string{"one", "two", "three"} {
+			l.retryOrphanedTriageWithBackoffGate(ctx, parkable(name), name)
+		}
+		assert.Equal(t, 3, countTitle(n, "Auto-triage paused"))
+		assert.Equal(t, 1, countTitle(n, "Multiple auto-triage retries exhausted"))
+	})
+}
+
+func TestTriageEndReasonWithDetail(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name, reason, detail, want string
+	}{
+		{"other with empty detail has no colon", TriageEndReasonOther, "", "other"},
+		{"other with detail appends it", TriageEndReasonOther, "dial failed", "other: dial failed"},
+		{"non-other ignores detail", "idle", "dial failed", "idle"},
+		{"empty reason falls back to unknown", "", "dial failed", triageEndReasonOrUnknown("")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := triageEndReasonWithDetail(tt.reason, tt.detail)
+			assert.Equal(t, tt.want, got)
+			if tt.reason != TriageEndReasonOther {
+				assert.NotContains(t, got, tt.detail)
+			}
+		})
+	}
+}
