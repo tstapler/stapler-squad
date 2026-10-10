@@ -91,8 +91,9 @@ test.describe('toast stack (desktop)', () => {
 
     await expect(deck.toasts).toHaveCount(0);
     await expect(deck.undoBar).toContainText('Moved 7 to tray');
+    // The server persists history asynchronously; wait for all seven rows.
+    await expect.poll(async () => (await historyFor(request, prefix)).length, { timeout: 10_000 }).toBe(7);
     const rows = await historyFor(request, prefix);
-    expect(rows).toHaveLength(7);
     const approval = rows.find((r) => r.sessionId === `${prefix}-approval`);
     expect(approval?.isRead ?? false).toBe(false);
     expect(approval?.isPendingDecision).toBe(true);

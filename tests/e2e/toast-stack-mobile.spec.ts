@@ -17,7 +17,8 @@ const ONBOARDED_KEY = 'stapler-squad:onboarded';
 async function openSessionAndSeed(page: Page, request: Parameters<typeof sendNotification>[0], count: number) {
   const client = new SessionClient(BASE_URL);
   const title = `toast-mobile-${Date.now()}`;
-  const session = await client.createSession({ title, path: '/tmp', program: 'bash' });
+  // Fill the screen first so the prompt sits at the bottom, as it does in a long Claude Code session.
+  const session = await client.createSession({ title, path: '/tmp', program: "bash -c 'seq 1 300; exec bash'" });
   await page.addInitScript((key) => localStorage.setItem(key, 'true'), ONBOARDED_KEY);
   await page.goto(`${BASE_URL}/?session=${session.id}`, { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('textbox', { name: 'Terminal input' })).toBeAttached({ timeout: 20_000 });
