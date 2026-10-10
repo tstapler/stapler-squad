@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/buildinfo"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/analytics"
+	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/handlers"
 	"github.com/tstapler/stapler-squad/server/interceptors"
@@ -69,6 +70,7 @@ type Server struct {
 	startedAt                  time.Time                       // set once in newServerBase; used to gate orphan notification pruning until instance data has had time to load
 	approvalHandler            *services.ApprovalHandler       // set in wireDepsIntoServer; exposed only for wiring regression tests (same-package field access, e.g. TestWireDepsIntoServer_SharesSingleSlackNotifierInstance...)
 	slackInteractiveDisabled   bool                            // set in wireDepsIntoServer; see ServeHTTP's doc comment for why this can't be expressed as an s.mux registration
+	finalStatsFlush            func()                          // delivery-gate stats flush; deferred at the top of Shutdown
 	backgroundTasksWG          sync.WaitGroup                  // joined by Shutdown() — fork-pressure logger, zombie watcher, zombie reaper
 	backgroundTasksJoinTimeout time.Duration                   // bounds Shutdown's join of backgroundTasksWG; defaults to defaultBackgroundTasksJoinTimeout, overridable in tests
 	hookIPC                    *hookIPCState                   // resident instance-scoped PreToolUse classifier; started with the HTTP server
@@ -331,6 +333,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if gate := deps.SessionService.DeliveryGate(); gate != nil {
 		gate.StartFlagReloader(serverCtx, 5*time.Second)
 		srv.shutdownHooks = append(srv.shutdownHooks, gate.Stop)
+		srv.startGateStatsWriter(serverCtx, deps, gate, configDir, configErr)
 	}
 
 	// Initialize push notification service.
@@ -1526,6 +1529,13 @@ const defaultBackgroundTasksJoinTimeout = 10 * time.Second
 
 // Shutdown gracefully shuts down the HTTP server.
 func (s *Server) Shutdown() error {
+	// Deferred so the stats flush runs after httpServer.Shutdown returns, on its
+	// error path too (an early return there must not skip it). Hooks and the
+	// background join run before handlers stop, so a flush placed in either
+	// would miss the last publishes.
+	if s.finalStatsFlush != nil {
+		defer s.finalStatsFlush()
+	}
 	// Cancel the server's BaseContext first so active streaming connections
 	// (ConnectRPC terminal streams) see a done context and close themselves,
 	// preventing context deadline exceeded on the graceful shutdown below.
@@ -2055,4 +2065,22 @@ func ConnectOptions(registry interceptors.ErrorRecorder) []connect.HandlerOption
 			otelInterceptor,
 		),
 	}
+}
+
+// startGateStatsWriter persists the delivery gate's hourly buckets once a
+// minute and registers the bounded final flush. A config-dir failure leaves the
+// writer unstarted, which makes enabling the gate refuse (Task 2.8g).
+func (s *Server) startGateStatsWriter(ctx context.Context, deps *ServerDependencies, gate *deliverygate.Gate, configDir string, configErr error) {
+	if configErr != nil {
+		log.Warn("delivery gate stats writer not started: no config dir", "err", configErr)
+		return
+	}
+	store := services.NewFileStatsStore(configDir)
+	writer := services.NewStatsWriter(gate.Stats(), store, nil, nil, nil)
+	ticker := time.NewTicker(time.Minute)
+	writer.Start(ctx, ticker.C, &s.backgroundTasksWG)
+	deps.SessionService.SetGateStatsFileStatus(store.Status)
+	s.shutdownHooks = append(s.shutdownHooks, ticker.Stop)
+	s.finalStatsFlush = writer.FlushFinal
+	gate.WarnIfEnabledWithoutStats()
 }

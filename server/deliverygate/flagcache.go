@@ -69,6 +69,11 @@ type FlagCache struct {
 	// betweenLoadAndSwap is a test seam: nil in production.
 	betweenLoadAndSwap func()
 
+	// swapHook runs inside reloadMu after each successful swap, so the stats
+	// accumulator sees every change in the order it was published. Set once by
+	// NewGate before the cache is shared.
+	swapHook func(FlagSettings)
+
 	stopOnce sync.Once
 	stop     chan struct{}
 	done     chan struct{}
@@ -95,6 +100,9 @@ func (c *FlagCache) Reload() {
 		return
 	}
 	c.snapshot.Store(&s)
+	if c.swapHook != nil {
+		c.swapHook(s)
+	}
 }
 
 // OnFlagChanged implements FlagObserver.

@@ -1037,6 +1037,11 @@ func (s *SessionService) DeliveryGate() *deliverygate.Gate {
 	return s.deliveryGate
 }
 
+// SetGateStatsFileStatus wires the stats file status behind GetDeliveryGateStats.
+func (s *SessionService) SetGateStatsFileStatus(fn func() deliverygate.StatsFileStatus) {
+	s.notificationSvc.SetGateStatsFileStatus(fn)
+}
+
 // NewSessionServiceWithEntClient creates a SessionService from a pre-existing *ent.Client.
 // Use this when the caller already opened a database (e.g. in tests or when sharing a
 // connection) and wants to bypass the config-based path discovery in NewSessionServiceFromConfig.

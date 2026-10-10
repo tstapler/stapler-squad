@@ -36,6 +36,7 @@ type NotificationService struct {
 	reviewQueuePoller       *session.ReviewQueuePoller
 	storage                 session.InstanceStore
 	deliveryGate            *deliverygate.Gate // optional: counters for legacy checks and unversioned requests
+	statsFileStatus         func() deliverygate.StatsFileStatus
 }
 
 // SetDeliveryGate wires the delivery gate used for legacy-check and
@@ -378,14 +379,32 @@ func (ns *NotificationService) PruneHiddenSessionNotifications(
 		errors.New("PruneHiddenSessionNotifications is not implemented yet"))
 }
 
-// GetDeliveryGateStats is a contract-PR stub; the handler lands with the stats
-// story.
+// SetGateStatsFileStatus wires the persisted stats file's status (loaded,
+// quarantined, writable) into GetDeliveryGateStats.
+func (ns *NotificationService) SetGateStatsFileStatus(fn func() deliverygate.StatsFileStatus) {
+	ns.statsFileStatus = fn
+}
+
+// GetDeliveryGateStats reports the hidden-session delivery gate's counters, the
+// persisted hourly buckets and the server-computed soak evidence. It returns
+// aggregate counters only (no session id, title or reply text), which is why it
+// is reachable on :8543 without auth and on :8444 behind it; it has no MCP tool.
 func (ns *NotificationService) GetDeliveryGateStats(
 	_ context.Context,
 	_ *connect.Request[sessionv1.GetDeliveryGateStatsRequest],
 ) (*connect.Response[sessionv1.GetDeliveryGateStatsResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented,
-		errors.New("GetDeliveryGateStats is not implemented yet"))
+	if ns.deliveryGate == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, errors.New("delivery gate is not configured"))
+	}
+	view := gateStatsView{
+		Snapshot:    ns.deliveryGate.StatsSnapshot(),
+		Series:      ns.deliveryGate.Metrics().Series(),
+		ExplicitOff: explicitOffScopes(),
+	}
+	if ns.statsFileStatus != nil {
+		view.File = ns.statsFileStatus()
+	}
+	return connect.NewResponse(buildGateStatsResponse(view)), nil
 }
 
 // ---------------------------------------------------------------------------

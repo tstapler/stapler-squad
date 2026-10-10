@@ -35,6 +35,8 @@ const (
 	CounterFilterPanic         = "notification_gate_filter_panic_total"         // (none)
 	CounterLegacySuppressed    = "notification_legacy_hidden_suppressed_total"  // site,type,class
 	CounterRPCUnversioned      = "notification_rpc_unversioned_total"           // (none)
+	CounterAuditDegraded       = "hidden_session_audit_degraded_total"          // mode
+	CounterCrashCoalesced      = "notification_crash_coalesced_total"           // (none)
 	histogramFilterDurationSec = "notification_gate_filter_duration_seconds"    // OTel only
 	counterLabelSeparator      = "|"
 )
@@ -55,6 +57,7 @@ var counterLabelKeys = map[string][]string{
 	CounterUnresolved:       {"class"},
 	CounterIndexRefresh:     {"result"},
 	CounterLegacySuppressed: {"site", "type", "class"},
+	CounterAuditDegraded:    {"mode"},
 }
 
 // maxLabels is the widest counter label set (suppressed: channel, type, reason, kind).
@@ -100,7 +103,7 @@ func otelInstrument(name string) metric.Int64Counter {
 				otelCounters.Store(n, c)
 			}
 		}
-		for _, n := range []string{CounterIndexMiss, CounterResolvedLater, CounterFilterPanic, CounterRPCUnversioned} {
+		for _, n := range []string{CounterIndexMiss, CounterResolvedLater, CounterFilterPanic, CounterRPCUnversioned, CounterCrashCoalesced} {
 			if c, err := meter.Int64Counter(n); err == nil {
 				otelCounters.Store(n, c)
 			}
@@ -224,4 +227,51 @@ func (m *Metrics) Snapshot() map[string]uint64 {
 		out[key] = c.n.Load()
 	}
 	return out
+}
+
+// Series is one in-process counter series with its label values keyed by label name.
+type Series struct {
+	Name   string
+	Labels map[string]string
+	Count  uint64
+}
+
+// Series lists every counter series (the since-process-start view).
+func (m *Metrics) Series() []Series {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]Series, 0, len(m.counts))
+	for k, c := range m.counts {
+		s := Series{Name: k.name, Labels: map[string]string{}, Count: c.n.Load()}
+		for i, key := range counterLabelKeys[k.name] {
+			if i < len(k.labels) {
+				s.Labels[key] = k.labels[i]
+			}
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+var counterShortNames = map[string]string{
+	CounterSuppressed:       "suppressed",
+	CounterWouldSuppress:    "would_suppress",
+	CounterHiddenDelivered:  "hidden_delivered",
+	CounterUnresolved:       "unresolved",
+	CounterIndexMiss:        "index_miss",
+	CounterIndexRefresh:     "index_refresh",
+	CounterResolvedLater:    "unresolved_resolved_later",
+	CounterFilterPanic:      "filter_panic",
+	CounterLegacySuppressed: "legacy_hidden_suppressed",
+	CounterRPCUnversioned:   "rpc_unversioned",
+	CounterAuditDegraded:    "audit_degraded",
+	CounterCrashCoalesced:   "crash_coalesced",
+}
+
+// ShortCounterName is the name the stats RPC reports for a counter.
+func ShortCounterName(name string) string {
+	if s, ok := counterShortNames[name]; ok {
+		return s
+	}
+	return name
 }

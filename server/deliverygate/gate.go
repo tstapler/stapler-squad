@@ -3,6 +3,7 @@ package deliverygate
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,6 +20,7 @@ type Gate struct {
 	index    *VisibilityIndex
 	resolver *Resolver
 	flags    *FlagCache
+	stats    *Stats
 	metrics  *Metrics
 	logger   *slog.Logger
 	limiter  *rateLimitedLogger
@@ -83,14 +85,37 @@ func NewGate(opts ...Option) *Gate {
 	if cfg.lister != nil {
 		res.SetLister(cfg.lister)
 	}
-	return &Gate{
+	g := &Gate{
 		index:    index,
 		resolver: res,
 		flags:    NewFlagCache(cfg.loader, cfg.logger),
+		stats:    NewStats(cfg.now),
 		metrics:  cfg.metrics,
 		logger:   cfg.logger,
 		limiter:  newRateLimitedLogger(cfg.logger, cfg.now),
 		now:      cfg.now,
+	}
+	g.flags.swapHook = func(s FlagSettings) {
+		if g.stats.onSwap(s) {
+			g.WarnIfEnabledWithoutStats()
+		}
+	}
+	return g
+}
+
+// Stats returns the hourly-bucket accumulator behind GetDeliveryGateStats.
+func (g *Gate) Stats() *Stats { return g.stats }
+
+// StatsSnapshot is Stats().Snapshot on the gate's clock.
+func (g *Gate) StatsSnapshot() StatsSnapshot { return g.stats.Snapshot(g.now()) }
+
+// WarnIfEnabledWithoutStats logs WARN delivery_gate_enabled_without_stats when
+// the global gate is on while no stats writer runs (a hand-edited config.json
+// or a mis-wired server): the soak would not be recorded.
+func (g *Gate) WarnIfEnabledWithoutStats() {
+	if g.flags.Enabled() && !g.stats.WriterRunning() {
+		g.logger.Warn("delivery_gate_enabled_without_stats",
+			"hint", "hidden_session_gate is on but no stats writer is running; the soak is not recorded")
 	}
 }
 
@@ -184,7 +209,8 @@ func (g *Gate) PublishFilter() func(*events.Event) bool {
 				g.metrics.ObserveFilterDuration(time.Since(start))
 			}
 		}()
-		return g.decide(ChannelBus, ev.SessionID, ev.NotificationMetadata, sessionv1.NotificationType(ev.NotificationType))
+		probe := strings.HasPrefix(ev.NotificationTitle, ProbeTitlePrefix)
+		return g.decide(ChannelBus, ev.SessionID, ev.NotificationMetadata, sessionv1.NotificationType(ev.NotificationType), probe)
 	}
 }
 
@@ -213,7 +239,7 @@ func (g *Gate) decideFailOpen(ch Channel, sessionID string, t sessionv1.Notifica
 				limiterKey{event: "filter_panic", typ: string(ch)}, "panic", r)
 		}
 	}()
-	return g.decide(ch, sessionID, nil, t)
+	return g.decide(ch, sessionID, nil, t, false)
 }
 
 // typeNames caches NotificationType.String() so the hot path allocates nothing.
@@ -234,7 +260,7 @@ func typeName(t sessionv1.NotificationType) string {
 
 // decide resolves visibility, applies the policy and the flag, and records
 // counters and rate-limited logs. It returns whether to deliver.
-func (g *Gate) decide(ch Channel, sessionID string, metadata map[string]string, t sessionv1.NotificationType) bool {
+func (g *Gate) decide(ch Channel, sessionID string, metadata map[string]string, t sessionv1.NotificationType, probe bool) bool {
 	res := g.resolver.Resolve(sessionID, metadata)
 	hint, hintOK := ParseClassHint(metadata)
 	if !hintOK {
@@ -247,23 +273,27 @@ func (g *Gate) decide(ch Channel, sessionID string, metadata map[string]string, 
 	case VisibilityUnresolved:
 		class := ClassOf(t).String()
 		g.metrics.Add(CounterUnresolved, class)
+		g.stats.recordUnresolved(class)
 		if since, ok := g.limiter.permit(limiterKey{event: "unresolved", session: sessionID, typ: typeName(t), reason: string(ReasonUnresolvedFailOpen)}); ok {
 			g.logger.Warn("delivery_unresolved_fail_open", "channel", string(ch), "session_id", sessionID,
 				"notification_type", typeName(t), "class", class, "suppressed_since_last", since)
 		}
 		return true
 	case VisibilityHidden:
-		return g.decideHidden(ch, res, ShouldDeliver(res.Visibility, Facts{Type: t, Hint: hint}), t, sessionID)
+		return g.decideHidden(ch, res, ShouldDeliver(res.Visibility, Facts{Type: t, Hint: hint}), t, sessionID, probe)
 	default:
 		return true
 	}
 }
 
-func (g *Gate) decideHidden(ch Channel, res Resolution, d Decision, t sessionv1.NotificationType, sessionID string) bool {
+func (g *Gate) decideHidden(ch Channel, res Resolution, d Decision, t sessionv1.NotificationType, sessionID string, probe bool) bool {
 	kind := string(res.Kind)
+	on := g.flags.EnabledFor(res.Kind)
+	rec := hiddenDecision{Kind: kind, Class: d.Class.String(), On: on, Probe: probe}
 	name := typeName(t)
 	key := limiterKey{session: sessionID, typ: name, reason: string(d.Reason)}
 	if d.Outcome == OutcomeDeliver {
+		g.stats.recordHidden(rec)
 		g.metrics.Add(CounterHiddenDelivered, string(ch), d.Class.String(), kind)
 		key.event = "hidden_delivery_allowed"
 		if since, ok := g.limiter.permit(key); ok {
@@ -272,7 +302,9 @@ func (g *Gate) decideHidden(ch Channel, res Resolution, d Decision, t sessionv1.
 		}
 		return true
 	}
-	if g.flags.EnabledFor(res.Kind) {
+	if on {
+		rec.Outcome = hiddenSuppressed
+		g.stats.recordHidden(rec)
 		g.metrics.Add(CounterSuppressed, string(ch), name, string(d.Reason), kind)
 		key.event = "delivery_suppressed"
 		if since, ok := g.limiter.permit(key); ok {
@@ -281,6 +313,8 @@ func (g *Gate) decideHidden(ch Channel, res Resolution, d Decision, t sessionv1.
 		}
 		return false
 	}
+	rec.Outcome = hiddenWouldSuppress
+	g.stats.recordHidden(rec)
 	g.metrics.Add(CounterWouldSuppress, string(ch), name, string(d.Reason), kind)
 	key.event = "delivery_would_suppress"
 	if since, ok := g.limiter.permit(key); ok {

@@ -18,6 +18,10 @@ const (
 // Clock is the injected time source (tests use a fake; production time.Now).
 type Clock func() time.Time
 
+// NewRepoLogger returns a logger that routes to the repo's logging package, so
+// callers never touch the global slog default.
+func NewRepoLogger() *slog.Logger { return slog.New(repoLogHandler{}) }
+
 // repoLogHandler routes slog records to the repo's logging package so a Gate
 // built without an injected logger never touches the global slog default.
 type repoLogHandler struct{ attrs []slog.Attr }
