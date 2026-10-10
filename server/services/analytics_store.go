@@ -143,6 +143,9 @@ type AnalyticsStore struct {
 	ch      chan AnalyticsEntry
 	dropped int64 // atomic counter for dropped or unflushed entries
 	stopped atomic.Bool
+	// flushDelay is the deadline after the first buffered entry; tests that
+	// assert size-triggered batching raise it so a slow producer can't trip it.
+	flushDelay time.Duration
 
 	cancel   context.CancelFunc
 	done     chan struct{}
@@ -168,6 +171,8 @@ func newAnalyticsStore(storage *session.Storage, sink AnalyticsBatchSink) *Analy
 		storage: storage,
 		sink:    sink,
 		ch:      make(chan AnalyticsEntry, analyticsBufferSize),
+
+		flushDelay: analyticsFlushDelay,
 	}
 }
 
@@ -605,7 +610,7 @@ func ComputeDailyBuckets(entries []AnalyticsEntry) []DailyBucket {
 // non-blocking channel send and never wait for SQLite.
 func (s *AnalyticsStore) flush(ctx context.Context) {
 	batch := make([]session.AnalyticsData, 0, analyticsBatchSize)
-	timer := time.NewTimer(analyticsFlushDelay)
+	timer := time.NewTimer(s.flushDelay)
 	if !timer.Stop() {
 		<-timer.C
 	}
@@ -643,7 +648,7 @@ func (s *AnalyticsStore) flush(ctx context.Context) {
 		if timerC != nil {
 			return
 		}
-		timer.Reset(analyticsFlushDelay)
+		timer.Reset(s.flushDelay)
 		timerC = timer.C
 	}
 
