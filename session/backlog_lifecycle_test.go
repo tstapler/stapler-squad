@@ -2818,6 +2818,7 @@ func TestPushAndCreatePR_AppendsBacklogLink_ToAgentDraftedBody(t *testing.T) {
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetHeadlessPool(pool)
 	listener.SetDashboardBaseURLFn(func() string { return "https://ssq.example.com" })
+	listener.SetHostRefFn(func() (HostID, string) { return testHostID, "onyx.lan" })
 	fakeCreator := &fakePRCreator{
 		createURL:    "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/321",
 		createNumber: 321,
@@ -2834,7 +2835,8 @@ func TestPushAndCreatePR_AppendsBacklogLink_ToAgentDraftedBody(t *testing.T) {
 		"the agent-drafted body content must be used, not the fallback body")
 	assert.Contains(t, fakeCreator.createdBody, wantLink,
 		"the drafted-body path must still append the backlog item deep link")
-	assert.True(t, strings.HasSuffix(fakeCreator.createdBody, wantLink+"\n"),
+	assert.Contains(t, fakeCreator.createdBody, testHostID.String(), "the footer must name the creating host")
+	assert.Less(t, strings.Index(fakeCreator.createdBody, "This change adds"), strings.Index(fakeCreator.createdBody, wantLink),
 		"the backlog link must be appended after the drafted body, not embedded mid-content")
 }
 

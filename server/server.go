@@ -771,12 +771,20 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// InjectHookConfig's PermissionRequest URL and InjectHooksConfig's stop/pre-tool-use/
 	// post-tool-use/prompt-submit endpoints resolve through this single shared mechanism.
 	services.SetHookBaseURLFn(hookBaseURLFn)
-	// PR bodies are published on GitHub, so they must never carry the loopback listen
-	// address hookBaseURLFn returns; resolve a reviewer-reachable base URL instead.
+	// PR-body footers identify this instance from any of the owner's machines, so they
+	// must never carry the loopback listen address hookBaseURLFn returns.
 	if deps.BacklogLifecycleListener != nil {
 		deps.BacklogLifecycleListener.SetDashboardBaseURLFn(func() string {
-			return resolvePRBodyBaseURL(config.LoadConfig().Slack.DashboardBaseURL, srv.GetHTTPSURL())
+			return resolvePRBodyBaseURL(prBaseURLSources{
+				configured:     config.LoadConfig().Slack.DashboardBaseURL,
+				remoteHTTPSURL: srv.GetHTTPSURL(),
+				listenAddr:     srv.GetAddr(),
+				hostnames:      srv.GetHostnames(),
+			})
 		})
+		if cfgDir, cfgDirErr := config.GetConfigDir(); cfgDirErr == nil {
+			deps.BacklogLifecycleListener.SetHostRefFn(newHostRefResolver(cfgDir, srv.GetHostnames))
+		}
 		deps.BacklogLifecycleListener.SetNoopDispatchThresholdFn(func() int {
 			return config.LoadConfig().NoopDispatchThresholdOrDefault()
 		})

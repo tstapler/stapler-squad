@@ -374,21 +374,18 @@ func (l *BacklogLifecycleListener) mostRecentWorkCommitShippedToMain(ctx context
 	return sha, onMain
 }
 
-// backlogItemLink returns a clickable deep link to itemID's detail view in
-// the web UI (see web-app/src/components/backlog/BacklogItemPanel.tsx's
-// `/backlog?item=` href), so a PR body can point a reviewer at the backlog
-// item instead of making them paste a bare UUID into a search box. baseURL
-// comes from BacklogLifecycleListener.getDashboardBaseURL(); callers go
-// through backlogItemFooter so an unknown base URL omits the link.
+// backlogItemLink returns the web-UI link to itemID's detail view (see
+// web-app/src/components/backlog/BacklogItemPanel.tsx's `/backlog?item=`
+// href) on the instance at baseURL.
 func backlogItemLink(baseURL, itemID string) string {
 	return baseURL + "/backlog?item=" + itemID
 }
 
-// ReviewerReachableBaseURL returns raw (trailing slash trimmed) if it is an
-// absolute http(s) URL whose host is not a loopback address, else "". PR
-// bodies land on GitHub, where a 127.0.0.1/localhost link is useless to every
-// reviewer, so no configuration is allowed to publish one.
-func ReviewerReachableBaseURL(raw string) string {
+// NonLoopbackBaseURL returns raw (trailing slash trimmed) if it is an absolute
+// http(s) URL whose host is not a loopback or unspecified address, else "".
+// A loopback link clicked from another machine opens that machine's own
+// instance rather than the one that created the PR, so it is never emitted.
+func NonLoopbackBaseURL(raw string) string {
 	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
@@ -403,25 +400,44 @@ func ReviewerReachableBaseURL(raw string) string {
 	return raw
 }
 
-// backlogItemFooter returns the "Backlog item: <link>" PR-body footer, or ""
-// when baseURL is empty (no reviewer-reachable dashboard address is known), in
-// which case the footer is omitted rather than pointing at a dead link.
-func backlogItemFooter(baseURL, itemID string) string {
-	if baseURL == "" {
-		return ""
+// PRFooterOrigin identifies the Stapler Squad instance that created a PR, so
+// the owner can tell from any machine which instance and backlog item a PR
+// belongs to. Every field may be empty when unknown.
+type PRFooterOrigin struct {
+	// BaseURL is a non-loopback http(s) address of the instance's web UI.
+	BaseURL string
+	// HostID is the instance's opaque host identity.
+	HostID HostID
+	// Hostname is the name peers can use for this instance in an ssq:// link.
+	Hostname string
+}
+
+// prFooter renders the PR-body footer. It always names the item; when a
+// non-loopback BaseURL is known it leads with a clickable https link,
+// otherwise with the plain item ID. The provenance block (marker, ssq:// link
+// and host ID) matches FormatPRProvenanceComment, so ParsePRProvenanceComment
+// can read it back.
+func prFooter(origin PRFooterOrigin, item *BacklogItemData) string {
+	var sb strings.Builder
+	if origin.BaseURL != "" {
+		fmt.Fprintf(&sb, "Backlog item: %s (ID %s)\n", backlogItemLink(origin.BaseURL, item.ID), item.ID)
+	} else {
+		fmt.Fprintf(&sb, "Backlog item: %s\n", item.ID)
 	}
-	return "Backlog item: " + backlogItemLink(baseURL, itemID)
+	host := origin.Hostname
+	if host == "" {
+		host = origin.HostID.String()
+	}
+	if host != "" && origin.HostID.String() != "" {
+		sb.WriteString(FormatPRProvenanceComment(origin.HostID, "ssq://"+host+BacklogItemDeepLinkPath(item)))
+	}
+	return sb.String()
 }
 
 // appendBacklogFooter returns the LLM-drafted body with exactly one trailing
-// newline, followed by the backlog item footer when a reviewer-reachable base
-// URL is known.
-func appendBacklogFooter(drafted, baseURL, itemID string) string {
-	body := strings.TrimRight(drafted, "\n") + "\n"
-	if footer := backlogItemFooter(baseURL, itemID); footer != "" {
-		body += "\n" + footer + "\n"
-	}
-	return body
+// newline, followed by the item footer.
+func appendBacklogFooter(drafted string, origin PRFooterOrigin, item *BacklogItemData) string {
+	return strings.TrimRight(drafted, "\n") + "\n\n" + prFooter(origin, item)
 }
 
 // buildFallbackPRBody composes a PR body from the backlog item's own data —
@@ -433,12 +449,10 @@ func appendBacklogFooter(drafted, baseURL, itemID string) string {
 // item's own problem statement (the "why"); the item's acceptance criteria
 // double as a test plan checklist since they are the only verification steps
 // this code path has available without an LLM call.
-func buildFallbackPRBody(item *BacklogItemData, dashboardBaseURL string) string {
+func buildFallbackPRBody(item *BacklogItemData, origin PRFooterOrigin) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "## Summary\n%s\n", sanitizeField(item.Description, 1000))
-	if footer := backlogItemFooter(dashboardBaseURL, item.ID); footer != "" {
-		sb.WriteString("\n" + footer + "\n")
-	}
+	sb.WriteString("\n" + prFooter(origin, item))
 
 	if criteria, _ := ParseAcCriteria(item.AcceptanceCriteria); len(criteria) > 0 {
 		sb.WriteString("\n## Test plan\n")
@@ -641,9 +655,9 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 			return
 		}
 
-		dashboardBaseURL := l.getDashboardBaseURL()
+		origin := l.getPRFooterOrigin()
 		prTitle := item.Title
-		prBody := buildFallbackPRBody(item, dashboardBaseURL)
+		prBody := buildFallbackPRBody(item, origin)
 		if pool := l.getHeadlessCaller(); pool != nil {
 			diff, _, diffErr := GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
 			if diffErr != nil {
@@ -660,7 +674,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 				if draftErr != nil {
 					log.WarningLog().Printf("[BacklogLifecycle] pushAndCreatePR DraftPRDescription item=%s: %v; using fallback body", item.ID, draftErr)
 				} else if drafted != "" {
-					prBody = appendBacklogFooter(drafted, dashboardBaseURL, item.ID)
+					prBody = appendBacklogFooter(drafted, origin, item)
 				}
 			}
 		}
