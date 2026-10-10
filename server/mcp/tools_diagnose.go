@@ -263,6 +263,24 @@ func (dh *diagnoseHandlers) resolveNudgeTarget(ctx context.Context, a nudgeSessi
 	return target, nil
 }
 
+// writeNudge takes the target's write lease BEFORE claiming the dispatch's one
+// nudge attempt, so a busy lease (a driver key, a steer) never consumes the
+// attempt and the diagnostic agent may retry (Story 5.0).
+func (dh *diagnoseHandlers) writeNudge(ctx context.Context, callerUUID string, target *session.Instance, message string) *mcpgo.CallToolResult {
+	lease, busy := acquireMCPWriteLease(target, session.LeaseWriterNudge)
+	if busy != nil {
+		return busy
+	}
+	if errRes := dh.claimNudgeAttemptForWrite(ctx, callerUUID); errRes != nil {
+		lease.Release()
+		return errRes
+	}
+	if submitErr := session.SubmitContentWithEnter(ctx, target, lease, message); submitErr != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("nudge write failed: %v", submitErr), "")
+	}
+	return nil
+}
+
 func (dh *diagnoseHandlers) performNudge(ctx context.Context, callerUUID string, a nudgeSessionArgs) (*mcpgo.CallToolResult, error) {
 	// Kill switch (AC3): read fresh at the write instant, not cached from
 	// dispatch time, so flipping the flag off mid-flight still blocks an
@@ -280,12 +298,8 @@ func (dh *diagnoseHandlers) performNudge(ctx context.Context, callerUUID string,
 		return errRes, nil
 	}
 
-	if errRes := dh.claimNudgeAttemptForWrite(ctx, callerUUID); errRes != nil {
+	if errRes := dh.writeNudge(ctx, callerUUID, target, a.message); errRes != nil {
 		return errRes, nil
-	}
-
-	if submitErr := session.SubmitContentWithEnter(ctx, target, a.message); submitErr != nil {
-		return errResult(ErrInternalError, fmt.Sprintf("nudge write failed: %v", submitErr), ""), nil
 	}
 
 	if _, recErr := dh.storage.RecordDiagnoseNudgeAttempt(ctx, a.itemID, domain.StuckReason(a.stuckReason)); recErr != nil {

@@ -121,11 +121,18 @@ func (ts *TerminalService) WriteToSession(
 	// travel as two separate SendKeys writes (session.SubmitDriverContent),
 	// never concatenated into one. Both branches are timeout-bounded so a
 	// wedged PTY write can't hang this handler indefinitely.
+	//
+	// This handler is the chain's acquirer (Story 5.0): the primitives only
+	// receive the lease and release it in the goroutine that writes.
+	lease, ok := inst.TryTerminalWriteLease(session.LeaseWriterOther)
+	if !ok {
+		return nil, submitErrToConnectError(session.ErrLeaseBusy)
+	}
 	var err error
 	if req.Msg.PressEnter {
-		err = session.SubmitContentWithEnter(ctx, inst, req.Msg.Input)
+		err = session.SubmitContentWithEnter(ctx, inst, lease, req.Msg.Input)
 	} else {
-		err = session.SendKeysWithTimeout(ctx, inst, req.Msg.Input, session.DefaultSendKeysTimeout)
+		err = session.SendKeysWithTimeout(ctx, inst, lease, req.Msg.Input, session.DefaultSendKeysTimeout)
 	}
 	if err != nil {
 		return nil, submitErrToConnectError(err)
@@ -137,11 +144,16 @@ func (ts *TerminalService) WriteToSession(
 // submitErrToConnectError maps an error from session.SubmitContentWithEnter/
 // SendKeysWithTimeout to the matching connect error: ErrSubmitNotConfirmed
 // (BUG-031's swallowed-submit case) becomes CodeAborted, a context deadline
-// becomes CodeDeadlineExceeded, anything else is CodeInternal. Mirrors
+// becomes CodeDeadlineExceeded, a held write lease (session.ErrLeaseBusy) is a
+// retryable CodeFailedPrecondition, anything else is CodeInternal. Mirrors
 // server/mcp/tools_terminal.go's submitErrResult, which does the same
 // three-way mapping for the MCP error-result shape instead of a connect
 // error.
 func submitErrToConnectError(err error) error {
+	if errors.Is(err, session.ErrLeaseBusy) {
+		// Retryable: another writer (a driver key, a steer, a nudge) holds the pane.
+		return connect.NewError(connect.CodeFailedPrecondition, err)
+	}
 	if errors.Is(err, session.ErrSubmitNotConfirmed) {
 		return connect.NewError(connect.CodeAborted, err)
 	}

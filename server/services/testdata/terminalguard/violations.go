@@ -30,3 +30,6 @@ func badConstruct() (TerminalWriter, TerminalWriter, TerminalWriter) {
 	_ = zero
 	return &paneWriter{}, new(paneWriter), (*paneWriter)(nil)
 }
+
+// badLease builds the lease capability outside its defining file (check (a)).
+func badLease() *HeldLease { return &HeldLease{owner: "forged"} }

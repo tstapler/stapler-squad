@@ -57,6 +57,7 @@ func realGuardConfig() guardConfig {
 		writerTypes: map[string]bool{"TerminalWriter": true, "paneWriter": true},
 		capabilityTypes: map[string]string{
 			"paneWriter": "terminal_access.go",
+			"HeldLease":  "instance_write_lease.go",
 		},
 		primitiveMethods: map[string]bool{
 			"WriteToPTY": true, "SendInputViaControlMode": true, "ResizePTY": true, "ResizePTYContext": true,
@@ -484,8 +485,11 @@ func TestGuardChecks_ShouldFail_WhenFixtureHasAUiFunctionThatIgnoresOrLacksTheWr
 			t.Errorf("check (a) did not flag a %s outside the defining file; findings: %v", how, lits)
 		}
 	}
+	if !containsSubstring(lits, "composite literal of HeldLease in") {
+		t.Errorf("check (a) did not flag a HeldLease literal outside instance_write_lease.go; findings: %v", lits)
+	}
 	for _, f := range lits {
-		if strings.HasSuffix(f, "/terminal_access.go") {
+		if strings.HasSuffix(f, "/terminal_access.go") || strings.HasSuffix(f, "/instance_write_lease.go") {
 			t.Errorf("check (a) flagged the defining file: %s", f)
 		}
 	}

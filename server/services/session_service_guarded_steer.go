@@ -168,6 +168,13 @@ func (s *SessionService) SteerInstanceGuarded(ctx context.Context, inst *session
 		write = s.steerInstance
 	}
 	if err := write(ctx, inst, msg); err != nil {
+		if errors.Is(err, session.ErrLeaseBusy) {
+			// Another writer holds the pane: nothing reached it, so no failure
+			// cooldown (same as the not-ready paths above).
+			s.guardedSteer.guard.abandon(id)
+			abandoned = true
+			return SteerBusy, nil
+		}
 		release(false)
 		return SteerFailed, err
 	}

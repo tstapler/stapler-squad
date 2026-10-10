@@ -370,9 +370,24 @@ func (s *SessionService) UpdateSession(
 // SteerActiveSession calls this in-process from BacklogService; UpdateSession
 // is the sole caller that translates the error into a connect.Code.
 func (s *SessionService) steerInstance(ctx context.Context, instance *session.Instance, message string) error {
+	// steerInstance is the chain's one acquirer (Story 5.0): UpdateSession,
+	// SteerActiveSession and the guarded-steer family all come through here,
+	// and the lease is handed down to the write below.
+	lease, ok := instance.TryTerminalWriteLease(session.LeaseWriterSteer)
+	if !ok {
+		return fmt.Errorf("steer session %q: %w", instance.Title, session.ErrLeaseBusy)
+	}
+	return s.steerWithLease(ctx, instance, lease, message)
+}
+
+// steerWithLease is steerInstance's body: it receives the held lease and
+// releases it exactly once on every path (the autonomous branch's writing
+// goroutine, or SubmitContentWithEnter's).
+func (s *SessionService) steerWithLease(ctx context.Context, instance *session.Instance, lease *session.HeldLease, message string) error {
 	if instance.AutonomousMode {
 		controller := instance.GetController()
 		if controller == nil {
+			lease.Release()
 			return fmt.Errorf("steer autonomous session %q: controller not started", instance.Title)
 		}
 
@@ -381,6 +396,7 @@ func (s *SessionService) steerInstance(ctx context.Context, instance *session.In
 		// steerActiveSessionForPRFix's steerInFlight guard forever.
 		errCh := make(chan error, 1)
 		go func() {
+			defer lease.Release()
 			_, sendErr := controller.SendCommandImmediate(message + "\r")
 			errCh <- sendErr
 		}()
@@ -406,7 +422,7 @@ func (s *SessionService) steerInstance(ctx context.Context, instance *session.In
 	// wedged/dead session can't hang this goroutine forever) — content and
 	// the submit keystroke travel as two separate SendKeys writes (BUG-031),
 	// never concatenated.
-	if err := session.SubmitContentWithEnter(ctx, instance, message); err != nil {
+	if err := session.SubmitContentWithEnter(ctx, instance, lease, message); err != nil {
 		return fmt.Errorf("steer session %q: %w", instance.Title, err)
 	}
 	s.notifySteerSent(instance, message)
