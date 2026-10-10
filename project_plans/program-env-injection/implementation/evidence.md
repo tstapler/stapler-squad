@@ -223,3 +223,58 @@ $ golangci-lint run ./server/services/...                       -> 0 issues.
   - `go test ./server/services ./session ./session/tmux -count=1`: all three `ok` (162s / 97s / 45s); `go build ./...` rc=0; `go vet` clean; `gofmt -l` empty.
   - Both real-tmux tests `--- PASS` with no SKIP; custom linter `./server/services ./session ./session/tmux` rc=0.
 - AC4b remains UNVERIFIED (E9 not run). E4b not re-run.
+
+## E4b (executed by coordinator, 2026-10-10): original regression test on the real pre-fix commit
+
+Tree: `git worktree add --detach <scratch> cdfd4e5cf2^` = `4dbbe7b40`. At this commit `session/instance_tmux.go:579` is
+`session.SetExtraEnv([]string{"STAPLER_SESSION_UUID=" + i.UUID})` and no `buildExtraEnv`/`wireTmuxSession` exist.
+Test: the landed function body from `aac276425` (pre-lint-conversion) appended as a scratch `_test.go`. Setup needed at that
+commit: protos regenerated with the connect-go plugin pinned to v1.19.1 (go.mod pins connect v1), ent regenerated with
+`--feature sql/upsert`, `server/web/dist` stub. tmux 3.6a, `STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30`.
+Command: `go test ./server/services -run '^TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession$' -count=1 -v`
+
+```
+=== RUN   TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession
+    zz_redgreen_test.go:86: 
+        	Error:      	"CLAUDECODE=\nDISPLAY=:1\n-KRB5CCNAME\n-SSH_AGENT_PID\n-SSH_ASKPASS\nSSH_AUTH_SOCK=/home/tstapler/.1password/agent.sock\n-SSH_CONNECTION\nSTAPLER_SESSION_UUID=083b086d-0468-43cc-b91b-807d6b25fb64\n-WINDOWID\nXAUTHORITY=/run/user/1000/xauth_aPQnmU\n" does not contain "ANTHROPIC_BASE_URL=http://127.0.0.1:47000"
+        	Messages:   	tmux show-environment must carry the program's env
+    zz_redgreen_test.go:101: 
+        	Error:      	"\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nPane is dead (status 127, Sat Oct 10 11:59:37 2026)\n" does not contain "ENVPROBE_http://127.0.0.1:47000_END"
+        	Messages:   	printenv inside the pane must show the program's env
+--- FAIL: TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession (15.39s)
+FAIL
+FAIL	github.com/tstapler/stapler-squad/server/services	15.488s
+FAIL
+```
+
+Reading: AC2 fails (tmux table has only `STAPLER_SESSION_UUID`, no `ANTHROPIC_BASE_URL`) - the bug. The AC1 assertion also fails,
+but there with `Pane is dead (status 127)` because at this commit the custom program ID is not resolved to a command at all, so
+that second failure is a different, same-family symptom (not a clean AC1 red). HEAD run of the same test: see E1/E5 (PASS).
+
+## E9 (executed by coordinator, 2026-10-10): AC4b precedence, real `claude` 2.1.296
+
+Method: scratch `CLAUDE_CONFIG_DIR` whose `settings.json` is `{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:47101"}}`; three
+local HTTP listeners on 47101 (GLOBAL), 47102 (PROGRAM), 47103 (AMBIENT) that log each request and answer 401; `env -i` with
+`HOME`/`CLAUDE_CONFIG_DIR` pointing at scratch, `ANTHROPIC_API_KEY=sk-probe`; `timeout 60 claude -p hi`. The `--settings` value
+has the same `{"env":{...}}` shape `claudeSettingsEnvOverrideArgs()` emits. Which listener receives the request shows which
+base URL the process used. No Anthropic credentials or network were involved.
+
+```
+== A settings.json only (expect GLOBAL):
+   GLOBAL HEAD /api/hello
+   GLOBAL POST /v1/messages?beta=true
+== B settings.json + --settings program env (expect PROGRAM):
+   PROGRAM HEAD /api/hello
+   PROGRAM POST /v1/messages?beta=true
+== C ambient env + settings.json, no --settings (#852 shape; expect GLOBAL):
+   GLOBAL HEAD /api/hello
+   GLOBAL POST /v1/messages?beta=true
+== D ambient env + settings.json + --settings (expect PROGRAM):
+   PROGRAM HEAD /api/hello
+   PROGRAM POST /v1/messages?beta=true
+```
+
+Result: C reproduces #852 (a global settings.json `env` beats an inherited process env var, so the tmux `-e` injection alone
+loses). B and D show `--settings` `env` beats settings.json `env`. **AC4b: VERIFIED for `claude` 2.1.296 on this host**, with
+two limits: it ran the CLI flag directly, not through `claudeSettingsEnvOverrideArgs()` + a real tmux launch (that delivery
+half is AC4a / E8), and org-managed settings (highest precedence per the docs) were not present here.

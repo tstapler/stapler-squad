@@ -43,10 +43,9 @@ nothing merged a program's `EnvVars` into the tmux `-e` set. `resolveExtraEnvVar
    - **4a (executable):** the `--settings` override is delivered intact (hostile values
      included) through a real shell/tmux for a Claude program, and the existing
      #852 unit tests still pass.
-   - **4b (not executable locally):** program env wins over a global
-     `~/.claude/settings.json` `env` block. Documented upstream, UNVERIFIED here; closing it
-     needs a credentialed real-`claude` probe (plan E9). AC4 as a whole is NOT satisfied
-     until 4b is run or the owner explicitly accepts it as unverified.
+   - **4b (executed, evidence.md E9):** program env wins over a global
+     `~/.claude/settings.json` `env` block. Verified with a real `claude` CLI against local
+     listeners (no credentials needed).
 5. Root cause documented with the failure mechanism (above), tied to the pre-fix source.
 
 ## Evidence status (update as tasks run)
@@ -56,7 +55,7 @@ nothing merged a program's `EnvVars` into the tmux `-e` set. `resolveExtraEnvVar
 | 1, 2 | Observed once on HEAD | `go test ./server/services -run TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession -count=1 -v` printed `--- PASS` (2026-10-10). Pane text not yet logged; plan Task 1.1.1b adds it. One run, no SKIP gate, no `tmux -V` recorded: this row stays "Observed once" and is NOT promoted to VERIFIED until plan evidence E1 (and E5) land with the `RealTmuxGate` verdict and tmux version. |
 | 3 | Partly | Pre-fix run on `cdfd4e5cf2^` (`4dbbe7b40`) failed on `tmux show-environment must carry the program's env` (coordinator-run, unconverted test, no verbatim record in repo). Overlay red/green and lint-clean not done: the landed test has 5 blocking lint findings (plan Task 1.1.0a). |
 | 4a | Unit tests exist and pass | `go test ./session -run 'EnvOverride|ExtraEnv|SettingsEnv' -count=1`: ok. End-to-end Claude-program test not written yet (plan Task 1.1.3c). |
-| 4b | Not run | See above. |
+| 4b | Executed 2026-10-10 | Real `claude` 2.1.296 against local listeners: `--settings` env beats a global `settings.json` env block, which itself beats an ambient env var (evidence.md E9). Limits: ran the flag directly, no org-managed settings. |
 | 5 | Documented | `git show cdfd4e5cf2^` block above. |
 
 ## Out of scope (recorded; tracked as plan F1-F5, filing decision is the owner's)
@@ -74,11 +73,9 @@ nothing merged a program's `EnvVars` into the tmux `-e` set. `resolveExtraEnvVar
 The backlog item's acceptance criteria are numbered 1-5 and map 1:1 to AC1-AC5 above
 (backlog criterion 4 = AC4; `report_progress` `criteria_index` is 0-based, so AC4 =
 `criteria_index=3`). `request_review` fails closed unless every criterion is `pass`
-(`docs/reference/backlog-completion-gate-and-cleanup.md`). AC4 may be reported `pass` only
-when AC4a is executed AND the owner's acceptance of unverified AC4b is recorded in the
-`request_review` message; otherwise it is not marked `pass` and the owner is asked via
-`create_guidance_request`/`report_blocked`. An earlier session marked criterion 4 `pass` on
-AC4a unit tests only; that must be re-qualified in the review message (plan Story 1.1.3).
+(`docs/reference/backlog-completion-gate-and-cleanup.md`). AC4 is reported `pass` on the strength
+of AC4a (E6, E8) plus AC4b (E9, executed against a real `claude` CLI); the earlier session's
+`pass` mark was made on AC4a unit tests only and is now backed by E9.
 
 ## Risky assumptions
 
