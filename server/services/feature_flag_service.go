@@ -292,6 +292,11 @@ var knownFeatureFlags = []struct {
 		description:  "Per-session terminal write lease: the driver's prompt and answer keys, steers, nudges, MCP writes and rate-limit recovery take turns writing to a session's terminal instead of interleaving. Turn off only to restore the pre-lease behavior if the lease misbehaves (every write then proceeds unserialized). Applies at once; global only. Default: on.",
 		defaultValue: true,
 	},
+	{
+		name:         hiddenSessionReadonlyGuardsFlagName,
+		description:  "Hidden-session write guards: the UI's write RPCs (terminal input, steer, restart, workspace switch, program and auto-approve changes) refuse a hidden (background) session, except the backlog Steer of a live review session, which stays audited. Turn off only to restore the previous behavior if a guard blocks a legitimate action; every write allowed while off is recorded in the audit log. Applies at once; global only. Default: on.",
+		defaultValue: true,
+	},
 }
 
 // featureFlagDefault looks up name's defaultValue in knownFeatureFlags — the single

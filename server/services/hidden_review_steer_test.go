@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/session"
@@ -37,6 +38,7 @@ type steerTarget struct {
 
 func newSteerEnv(t *testing.T) *steerEnv {
 	t.Helper()
+	envtest.NewIsolatedStateDir(t) // flag flips persist to the config file
 	fix := setupForkTestFixture(t)
 	lg, warns := newLogCapture()
 	mfs := newMemFS()
@@ -109,6 +111,12 @@ func (e *steerEnv) steer(ctx context.Context, id, msg string) error {
 func (e *steerEnv) auditLines() []AuditLine {
 	e.t.Helper()
 	e.sink.Close()
+	return e.readLines()
+}
+
+// readLines returns the lines written so far.
+func (e *steerEnv) readLines() []AuditLine {
+	e.t.Helper()
 	raw, ok := e.mfs.get(auditTestFile)
 	if !ok || len(bytes.TrimSpace(raw)) == 0 {
 		return nil

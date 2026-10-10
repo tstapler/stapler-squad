@@ -74,6 +74,9 @@ func (s *SessionService) decideUpdateAccess(ctx context.Context, req *connect.Re
 // runSteer sends msg by the path decideSteerAccess chose: the audited backlog
 // writer for the O7 path, the lease-taking visible acquirer otherwise.
 func (s *SessionService) runSteer(ctx context.Context, d steerDecision, inst *session.Instance, msg string) error {
+	if d.bypass {
+		return s.runBypassSteer(ctx, d, inst, msg)
+	}
 	if !d.typed {
 		return s.steerUnderLease(ctx, d.auth, inst, msg)
 	}
@@ -96,4 +99,20 @@ func steerErrorToConnect(err error) error {
 	default:
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	}
+}
+
+// runBypassSteer is the guards-off steer of a non-qualifying hidden target: the
+// guard_bypass line is durable before the write, and a result line follows.
+func (s *SessionService) runBypassSteer(ctx context.Context, d steerDecision, inst *session.Instance, msg string) error {
+	line, err := s.auditGuardBypass(ctx, d, inst, msg)
+	if err != nil {
+		return err
+	}
+	outcome := steerOutcomeSent
+	err = s.steerUnderLease(ctx, d.auth, inst, msg)
+	if err != nil {
+		outcome = steerOutcomeFailed
+	}
+	s.appendSteerResult(line, outcome)
+	return err
 }

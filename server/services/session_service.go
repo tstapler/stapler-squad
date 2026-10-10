@@ -92,6 +92,8 @@ type SessionService struct {
 	// guards is the live hidden_session_readonly_guards value the unary handlers
 	// read through AccessForUnary; the zero value is "on".
 	guards *UnaryGuardsFlag
+	// guardBypass counts and rate-limits the guards-off bypass writes.
+	guardBypass guardBypassState
 	// backlogLinks decides whether a hidden session is a live backlog review
 	// session (the O7 steer exemption).
 	backlogLinks BacklogLinkResolver
@@ -1049,6 +1051,7 @@ func newGatedSessionService(storage session.InstanceStore) *SessionService {
 	svc.autonomousSvc.SetLegacyHiddenCounter(gate.CountLegacySuppressedType)
 	svc.wireGateFlag(gate)
 	svc.wireLeaseFlag()
+	svc.wireGuardsFlag()
 	return svc
 }
 
@@ -1080,6 +1083,7 @@ func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
 	ff.SetAudit(sink, map[string]FlagAuditPolicy{
 		config.HiddenSessionGateFeatureFlag: {}, // every gate flip takes the non-blocking path
 		terminalWriteLeaseFlagName:          terminalWriteLeaseAuditPolicy,
+		hiddenSessionReadonlyGuardsFlagName: guardsFlagAuditPolicy,
 	})
 }
 

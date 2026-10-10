@@ -8,6 +8,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -70,10 +71,11 @@ func backlogLinkAuthorization(link BacklogReviewLink) steerAuthorization {
 
 // steerDecision is what the access-decision block hands the steer branch.
 type steerDecision struct {
-	auth  steerAuthorization
-	link  BacklogReviewLink // zero unless the O7 path was chosen
-	typed bool              // the O7 backlog path: audited, through BacklogSteerWriter
-	facts steerRequestFacts // what the audit lines record about the request
+	auth   steerAuthorization
+	link   BacklogReviewLink // zero unless the O7 path was chosen
+	typed  bool              // the O7 backlog path: audited, through BacklogSteerWriter
+	bypass bool              // hidden, non-qualifying, guards flag off: audited guard_bypass
+	facts  steerRequestFacts // what the audit lines record about the request
 }
 
 // Outcome labels of hidden_session_backlog_steer_total and of the steer audit
@@ -88,10 +90,21 @@ const (
 	steerOutcomeFailed      = "failed"
 )
 
+// requestFactsOf records the request's raw facts without evaluating a verdict.
+func requestFactsOf(ctx context.Context, req connect.AnyRequest) steerRequestFacts {
+	peer := req.Peer().Addr
+	f := LocalWriteRefusal{Peer: peer, PeerLoopback: middleware.PeerIsLoopback(peer)}
+	if rec, ok := RequestRecordFrom(ctx); ok {
+		f.Listener, f.AuthMode, f.Host, f.Origin, f.Proxied = rec.Listener, rec.AuthMode, rec.Host, rec.Origin, rec.Proxied
+	}
+	return steerRequestFacts{refusal: f, userAgent: req.Header().Get("User-Agent")}
+}
+
 // decideSteerAccess is the one constructor of the visible and backlog_link
 // kinds. It runs in the access-decision block of UpdateSession, before any
 // mutation. A hidden target qualifies only through a live BacklogReviewLink
-// (never a tag).
+// (never a tag); with the guards flag off a non-qualifying hidden target is
+// allowed as on main, marked bypass so the caller audits it.
 func (s *SessionService) decideSteerAccess(ctx context.Context, req connect.AnyRequest, inst *session.Instance) (steerDecision, error) {
 	if !inst.Snapshot().Hidden {
 		return steerDecision{auth: steerAuthorization{kind: steerAuthVisible, instanceUUID: inst.LeaseOwnerUUID()}}, nil
@@ -109,6 +122,14 @@ func (s *SessionService) decideSteerAccess(ctx context.Context, req connect.AnyR
 		return steerDecision{
 			auth: backlogLinkAuthorization(link), link: link, typed: true,
 			facts: steerRequestFacts{refusal: refusal, userAgent: req.Header().Get("User-Agent")},
+		}, nil
+	}
+	if AccessForUnary(inst, s.guards) == TerminalReadWrite {
+		// Guards off: allowed as on main, but audited (guard_bypass) before the write.
+		return steerDecision{
+			auth:   steerAuthorization{kind: steerAuthVisible, instanceUUID: inst.LeaseOwnerUUID()},
+			bypass: true,
+			facts:  requestFactsOf(ctx, req),
 		}, nil
 	}
 	s.countBacklogSteer(steerOutcomeNoLink)
