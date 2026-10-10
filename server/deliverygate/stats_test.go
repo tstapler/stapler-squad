@@ -24,7 +24,7 @@ func newStatsEnv(t *testing.T, flagOn bool) *statsEnv {
 	// Start on an hour boundary so bucket arithmetic in the tests is exact.
 	clk.Advance(time.Hour - clk.Now().Sub(clk.Now().Truncate(time.Hour)))
 	g.stats = NewStats(clk.Now)
-	g.flags.swapHook = func(s FlagSettings) { g.stats.onSwap(s) }
+	g.flags.swapHook = func(s FlagSettings, m map[string]string) { g.stats.onSwap(s, m) }
 	g.Flags().Reload() // first swap: primes the accumulator, not a flip
 	return &statsEnv{t: t, g: g, clk: clk, flags: flags, f: g.PublishFilter()}
 }

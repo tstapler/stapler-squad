@@ -31,6 +31,7 @@ const (
 type matrixSinks struct {
 	mu       sync.Mutex
 	history  map[string]int // notification type name -> hidden-session records
+	bySess   map[string]int // session id + "|" + type name -> records, every session
 	pushed   map[string]int // notification id -> deliveries
 	watched  map[string]int // notification type name -> events
 	sentinel [3]chan struct{}
@@ -44,6 +45,7 @@ type appender struct{ m *matrixSinks }
 func (a appender) Append(r *notifications.NotificationRecord) error {
 	a.m.mu.Lock()
 	defer a.m.mu.Unlock()
+	a.m.bySess[r.SessionID+"|"+sessionv1.NotificationType(r.NotificationType).String()]++
 	if r.SessionID == hiddenTitle {
 		a.m.history[sessionv1.NotificationType(r.NotificationType).String()]++
 	}
@@ -76,19 +78,24 @@ type matrixEnv struct {
 
 func newMatrixEnv(t *testing.T, flagOn bool) *matrixEnv {
 	t.Helper()
+	return newMatrixEnvWith(t, deliverygate.FlagSettings{Global: flagOn},
+		deliverygate.Entry{UUID: "u-h", Title: hiddenTitle, Hidden: true, Kind: deliverygate.KindReview})
+}
+
+// newMatrixEnvWith builds the matrix over arbitrary flag settings and hidden
+// entries; the visible sentinel session is always added.
+func newMatrixEnvWith(t *testing.T, settings deliverygate.FlagSettings, hidden ...deliverygate.Entry) *matrixEnv {
+	t.Helper()
 	bus := events.NewEventBus(256)
 	t.Cleanup(bus.Close)
 	gate := deliverygate.NewGate(deliverygate.WithFlagLoader(func() (deliverygate.FlagSettings, error) {
-		return deliverygate.FlagSettings{Global: flagOn}, nil
+		return settings, nil
 	}))
 	gate.Flags().Reload()
-	gate.Index().Replace([]deliverygate.Entry{
-		{UUID: "u-h", Title: hiddenTitle, Hidden: true, Kind: deliverygate.KindReview},
-		{UUID: "u-v", Title: visibleTitle},
-	})
+	gate.Index().Replace(append(hidden, deliverygate.Entry{UUID: "u-v", Title: visibleTitle}))
 	bus.SetPublishFilter(gate.PublishFilter())
 
-	s := &matrixSinks{history: map[string]int{}, pushed: map[string]int{}, watched: map[string]int{}}
+	s := &matrixSinks{history: map[string]int{}, bySess: map[string]int{}, pushed: map[string]int{}, watched: map[string]int{}}
 	for i := range s.sentinel {
 		s.sentinel[i] = make(chan struct{})
 	}
@@ -243,4 +250,38 @@ func TestMatrix_ShouldYieldZeroRoutineOnAutoApprovedSink_WhenHiddenReviewSession
 	}
 	assert.Equal(t, 0, allow, "hidden auto-allow row must not be recorded")
 	assert.Equal(t, 1, deny, "hidden auto-deny row is the audit trail and is kept")
+}
+
+// T-MX-04: a review override on with global off suppresses routine events of
+// review sessions only; the inheriting hidden kinds (triage, diagnose) are
+// delivered and counted as would-suppress. A needs-human event is delivered in
+// every sink for every kind.
+func TestMatrix_ShouldSuppressOnlyOverriddenKind_WhenReviewOverrideOnAndTriageInherits(t *testing.T) {
+	t.Parallel()
+	env := newMatrixEnvWith(t,
+		deliverygate.FlagSettings{KindOverrides: map[deliverygate.HiddenKind]bool{deliverygate.KindReview: true}},
+		deliverygate.Entry{UUID: "u-r", Title: "review:r", Hidden: true, Kind: deliverygate.KindReview},
+		deliverygate.Entry{UUID: "u-t", Title: "triage:t", Hidden: true, Kind: deliverygate.KindTriage},
+		deliverygate.Entry{UUID: "u-d", Title: "diagnose:d", Hidden: true, Kind: deliverygate.KindDiagnose},
+	)
+	done := sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE
+	ask := sessionv1.NotificationType_NOTIFICATION_TYPE_APPROVAL_NEEDED
+	for _, title := range []string{"review:r", "triage:t", "diagnose:d"} {
+		env.bus.Publish(notifEvent(title, done, "done-"+title))
+		env.bus.Publish(notifEvent(title, ask, "ask-"+title))
+	}
+	env.bus.Publish(notifEvent(visibleTitle, sessionv1.NotificationType_NOTIFICATION_TYPE_INFO, sentinelID))
+	env.waitSentinel(t)
+	env.done()
+
+	env.sinks.mu.Lock()
+	defer env.sinks.mu.Unlock()
+	assert.Equal(t, 0, env.sinks.bySess["review:r|"+done.String()], "review routine suppressed")
+	assert.Equal(t, 1, env.sinks.bySess["triage:t|"+done.String()], "inheriting triage delivered")
+	assert.Equal(t, 1, env.sinks.bySess["diagnose:d|"+done.String()], "inheriting diagnose delivered")
+	for _, title := range []string{"review:r", "triage:t", "diagnose:d"} {
+		assert.Equal(t, 1, env.sinks.bySess[title+"|"+ask.String()], "needs-human delivered for %s", title)
+	}
+	assert.EqualValues(t, 1, env.gate.Metrics().Total(deliverygate.CounterSuppressed))
+	assert.EqualValues(t, 2, env.gate.Metrics().Total(deliverygate.CounterWouldSuppress))
 }

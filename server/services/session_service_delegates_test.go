@@ -10,7 +10,9 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 )
 
-// T-CT-08: contract-PR stubs fail loudly instead of ignoring new fields.
+// T-CT-08: scope and mutation combinations that make no sense are refused
+// (Story 2.11 replaced the contract-PR Unimplemented stub) and never fall
+// through to the legacy global write.
 func TestContractStubs_ShouldReturnUnimplementedOrReject_WhenScopeMutationStatsOrReplyCalledBeforeTheirStories(t *testing.T) {
 	cases := []struct {
 		name string
@@ -21,7 +23,7 @@ func TestContractStubs_ShouldReturnUnimplementedOrReject_WhenScopeMutationStatsO
 		{"mutation_set_enabled", &sessionv1.UpdateFeatureFlagRequest{Name: "backlog", Mutation: sessionv1.FlagMutation_FLAG_MUTATION_SET_ENABLED}},
 		{"mutation_set_disabled", &sessionv1.UpdateFeatureFlagRequest{Name: "backlog", Mutation: sessionv1.FlagMutation_FLAG_MUTATION_SET_DISABLED}},
 		{"mutation_clear_scope", &sessionv1.UpdateFeatureFlagRequest{Name: "backlog", Mutation: sessionv1.FlagMutation_FLAG_MUTATION_CLEAR_SCOPE}},
-		{"mutation_reset_global", &sessionv1.UpdateFeatureFlagRequest{Name: "backlog", Mutation: sessionv1.FlagMutation_FLAG_MUTATION_RESET_GLOBAL}},
+		{"mutation_reset_global_with_scope", &sessionv1.UpdateFeatureFlagRequest{Name: "backlog", Mutation: sessionv1.FlagMutation_FLAG_MUTATION_RESET_GLOBAL, Scope: "kind:review"}},
 		{"unknown_enum_value", &sessionv1.UpdateFeatureFlagRequest{Name: "backlog", Mutation: sessionv1.FlagMutation(99)}},
 	}
 	for _, tc := range cases {
@@ -31,10 +33,10 @@ func TestContractStubs_ShouldReturnUnimplementedOrReject_WhenScopeMutationStatsO
 
 			_, err := svc.UpdateFeatureFlag(context.Background(), connect.NewRequest(tc.req))
 			require.Error(t, err)
-			require.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+			require.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 
 			require.Equal(t, before, config.LoadConfig().GetFeatureFlag(tc.req.Name),
-				"a stub must not fall through to the legacy global write")
+				"a refused request must not fall through to the legacy global write")
 		})
 	}
 
@@ -58,7 +60,7 @@ func TestFeatureFlags_ShouldNotChangeBehavior_WhenRequestOmitsScope(t *testing.T
 	require.NoError(t, err)
 	require.True(t, resp.Msg.Flag.Enabled)
 	require.True(t, config.LoadConfig().GetFeatureFlag("backlog"))
-	require.Empty(t, resp.Msg.Flag.Scopes, "scopes stay empty until the per-kind story lands")
+	require.Empty(t, resp.Msg.Flag.Scopes, "a non-scopable flag never reports scopes")
 
 	resp, err = svc.UpdateFeatureFlag(context.Background(), connect.NewRequest(
 		&sessionv1.UpdateFeatureFlagRequest{Name: "backlog", Enabled: false}))

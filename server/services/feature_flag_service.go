@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -178,6 +177,8 @@ var knownFeatureFlags = []struct {
 	name         string
 	description  string
 	defaultValue bool
+	// scopes lists the per-scope overrides the flag accepts (nil: global only).
+	scopes []string
 }{
 	{
 		name:         programCLIFlagProbeFlagName,
@@ -283,7 +284,8 @@ var knownFeatureFlags = []struct {
 	},
 	{
 		name:        config.HiddenSessionGateFeatureFlag,
-		description: "Hidden-session delivery gate: a hidden session (review, diagnose, triage) notifies only for failures and needs-human events; routine completions are dropped on every channel. Off keeps today's behavior and only counts what would have been suppressed (see the status line). Can be enabled only while the stats writer runs, so the soak is recorded. Default: off.",
+		description: "Hidden-session delivery gate: a hidden session (review, diagnose) notifies only for failures and needs-human events; routine completions are dropped on every channel. Off keeps today's behavior and only counts what would have been suppressed (see the status line). Can be enabled only while the stats writer runs, so the soak is recorded. Can be overridden per hidden-session kind (review, diagnose, other). Default: off.",
+		scopes:      gateFlagScopes(),
 	},
 }
 
@@ -292,6 +294,15 @@ var knownFeatureFlags = []struct {
 // site (e.g. currentResyncOptions' UseFastLane) resolve against, so the two can never
 // drift on what "default" means for a given flag. Returns false for an unregistered
 // name, matching GetFeatureFlag's own "absent means false" convention.
+func featureFlagScopes(name string) []string {
+	for _, kf := range knownFeatureFlags {
+		if kf.name == name {
+			return kf.scopes
+		}
+	}
+	return nil
+}
+
 func featureFlagDefault(name string) bool {
 	for _, kf := range knownFeatureFlags {
 		if kf.name == name {
@@ -436,6 +447,7 @@ func (f *FeatureFlagService) GetFeatureFlags(
 			Enabled:      enabled,
 			Description:  kf.description,
 			StatusDetail: f.statusDetailFor(kf.name),
+			Scopes:       flagScopeReadback(cfg, kf.name, kf.scopes),
 		})
 	}
 
@@ -443,28 +455,24 @@ func (f *FeatureFlagService) GetFeatureFlags(
 }
 
 // +api: feature-flags:update
-// UpdateFeatureFlag enables or disables a named feature flag and persists the change.
+// UpdateFeatureFlag applies one validated mutation to a named feature flag and
+// persists it: a global set (the legacy shape), a per-scope set, a scope clear
+// or a reset of the explicit global value to the registry default.
 func (f *FeatureFlagService) UpdateFeatureFlag(
 	ctx context.Context,
 	req *connect.Request[sessionv1.UpdateFeatureFlagRequest],
 ) (*connect.Response[sessionv1.UpdateFeatureFlagResponse], error) {
-	// Contract-PR stub: a scoped or mutation request must fail loudly, never fall
-	// through to the legacy global write below.
-	if req.Msg.GetScope() != "" || req.Msg.GetMutation() != sessionv1.FlagMutation_FLAG_MUTATION_UNSPECIFIED {
-		return nil, connect.NewError(connect.CodeUnimplemented,
-			errors.New("UpdateFeatureFlag scope and mutation are not implemented yet"))
-	}
-
 	name := req.Msg.GetName()
-	enabled := req.Msg.GetEnabled()
 
 	// Validate that the flag name is known.
 	known := false
 	var description string
+	var scopes []string
 	for _, kf := range knownFeatureFlags {
 		if kf.name == name {
 			known = true
 			description = kf.description
+			scopes = kf.scopes
 			break
 		}
 	}
@@ -478,8 +486,14 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 				return names
 			}()))
 	}
+	op, err := parseFlagOp(req.Msg, scopes)
+	if err != nil {
+		return nil, err
+	}
 
-	if enabled {
+	// Only the way on is guarded: disabling, clearing a scope and resetting the
+	// global value are never refused by a precondition.
+	if op.enabling() {
 		if guard, ok := f.enableGuards[name]; ok {
 			if reason := guard(); reason != "" {
 				return nil, connect.NewError(connect.CodeFailedPrecondition,
@@ -492,7 +506,7 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 	// update mutex so a stalled fsync cannot queue a kill switch behind it. The
 	// deferred `result` line is registered before the lock, so it runs after
 	// the unlock.
-	audit, err := f.auditBegin(ctx, name, enabled, flagRequestFields(ctx, req.Peer().Addr, req.Header()))
+	audit, err := f.auditBegin(ctx, op, flagRequestFields(ctx, req.Peer().Addr, req.Header()))
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("flag change not audited, nothing persisted: %w", err))
 	}
@@ -505,27 +519,40 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 	f.updateMu.Lock()
 	defer f.updateMu.Unlock()
 
-	if err := f.persistAndApply(ctx, name, enabled, audit); err != nil {
+	if op.scope != "" {
+		err = f.persistScoped(ctx, op, audit)
+	} else {
+		err = f.persistAndApply(ctx, op, audit)
+	}
+	if err != nil {
 		return nil, err
 	}
 
-	log.Info("feature flag updated", "feature", name, "enabled", enabled)
+	cfg := config.LoadConfig()
+	enabled := cfg.GetFeatureFlagWithDefault(name, featureFlagDefault(name))
+	if op.scope == "" && op.isSet() {
+		enabled = op.enabled // the controller-backed state, as before this change
+	}
+	log.Info("feature flag updated", "feature", name, "enabled", enabled, "scope", op.auditScope(), "mutation", op.mutationName())
 	return connect.NewResponse(&sessionv1.UpdateFeatureFlagResponse{
 		Flag: &sessionv1.FeatureFlag{
 			Name:         name,
 			Enabled:      enabled,
 			Description:  description,
 			StatusDetail: f.statusDetailFor(name),
+			Scopes:       flagScopeReadback(cfg, name, scopes),
 		},
 	}), nil
 }
 
-// persistAndApply persists the global value, toggles the controller and rolls
-// back on its failure. The caller holds updateMu. It records the true previous
-// value (an absent key is the registered default, not an explicit false) and,
-// when the key was absent, rolls back by deleting it so a default-on flag never
-// ends a failed flip as an explicit false.
-func (f *FeatureFlagService) persistAndApply(ctx context.Context, name string, enabled bool, audit *flagAudit) error {
+// persistAndApply persists the global value (a set, or the deletion of the
+// explicit key for RESET_GLOBAL), toggles the controller and rolls back on its
+// failure. The caller holds updateMu. It records the true previous value (an
+// absent key is the registered default, not an explicit false) and, when the key
+// was absent, rolls back by deleting it so a default-on flag never ends a failed
+// flip as an explicit false.
+func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, audit *flagAudit) error {
+	name, enabled := op.name, op.enabled
 	cfg := config.LoadConfig()
 	previous, hadKey := cfg.GetFeatureFlagOverride(name)
 	if !hadKey {
@@ -535,12 +562,18 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, name string, e
 		f.flagSeq++
 		audit.seq, audit.previous = f.flagSeq, previous
 	}
-	if err := cfg.SetFeatureFlag(name, enabled); err != nil {
+	var err error
+	if op.isSet() {
+		err = cfg.SetFeatureFlag(name, enabled)
+	} else {
+		err = cfg.DeleteFeatureFlag(name)
+	}
+	if err != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to persist feature flag: %w", err))
 	}
 	ctrl, ok := f.featureControllers[name]
 	if !ok {
-		f.finishApplied(name, audit)
+		f.finishApplied(op, audit)
 		return nil
 	}
 	// A failed toggle must not leave disk config and in-memory state disagreeing
@@ -553,7 +586,7 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, name string, e
 		ctrlErr = ctrl.Disable()
 	}
 	if ctrlErr == nil {
-		f.finishApplied(name, audit)
+		f.finishApplied(op, audit)
 		return nil
 	}
 	log.Error("feature controller toggle failed, rolling back persisted flag",
@@ -581,11 +614,17 @@ func rollbackFlag(cfg *config.Config, name string, previous, hadKey bool) error 
 	return cfg.DeleteFeatureFlag(name)
 }
 
-func (f *FeatureFlagService) finishApplied(name string, audit *flagAudit) {
+// finishApplied records the applied outcome and tells the observer which scope
+// and mutation changed, so history can tell a clear or reset from a set false.
+func (f *FeatureFlagService) finishApplied(op flagOp, audit *flagAudit) {
 	if audit.active() {
 		audit.outcome = flagOutcomeApplied
 	}
-	f.notifyObserver(name)
+	if mo, ok := f.observer.(deliverygate.FlagMutationObserver); ok {
+		mo.OnFlagMutation(op.name, op.auditScope(), op.mutationName())
+		return
+	}
+	f.notifyObserver(op.name)
 }
 
 func (f *FeatureFlagService) notifyObserver(name string) {

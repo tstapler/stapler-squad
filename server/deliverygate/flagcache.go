@@ -24,6 +24,29 @@ const (
 	KindUnresolved HiddenKind = "unresolved" // metrics label only
 )
 
+// ScopableKinds is the closed set of hidden kinds a flag override may name.
+// kind:triage is absent on purpose: Spike 1.3h found no producer that creates a
+// triage-tagged hidden session, so an override for it would be inert.
+var ScopableKinds = []HiddenKind{KindReview, KindDiagnose, KindOther}
+
+// ScopeOf is the persisted scope key of a kind ("kind:review").
+func ScopeOf(k HiddenKind) string { return "kind:" + string(k) }
+
+// ScopableKindFromScope parses a scope key and reports whether it names a
+// member of ScopableKinds.
+func ScopableKindFromScope(scope string) (HiddenKind, bool) {
+	k, ok := KindFromScope(scope)
+	if !ok {
+		return "", false
+	}
+	for _, s := range ScopableKinds {
+		if s == k {
+			return k, true
+		}
+	}
+	return "", false
+}
+
 // FlagSettings is one immutable reading of the gate flag.
 type FlagSettings struct {
 	Global        bool
@@ -37,6 +60,29 @@ type FlagLoader func() (FlagSettings, error)
 // stale ticker read can never outlive an operator rollback.
 type FlagObserver interface {
 	OnFlagChanged(name string)
+}
+
+// FlagSettingsFromConfig reads the gate flag and its per-kind overrides from a
+// loaded config. A scope key outside ScopableKinds (a hand edit) is ignored.
+func FlagSettingsFromConfig(cfg *config.Config) FlagSettings {
+	s := FlagSettings{Global: cfg.GetFeatureFlagWithDefault(config.HiddenSessionGateFeatureFlag, false)}
+	for scope, v := range cfg.FeatureFlagScopeOverrides(config.HiddenSessionGateFeatureFlag) {
+		if k, ok := ScopableKindFromScope(scope); ok {
+			if s.KindOverrides == nil {
+				s.KindOverrides = make(map[HiddenKind]bool)
+			}
+			s.KindOverrides[k] = v
+		}
+	}
+	return s
+}
+
+// FlagMutationObserver is the richer form of FlagObserver: it also names the
+// scope and mutation, so the stats history can tell a clear or reset from a
+// set. A service holding only a FlagObserver falls back to OnFlagChanged.
+type FlagMutationObserver interface {
+	FlagObserver
+	OnFlagMutation(name, scope, mutation string)
 }
 
 // ConfigFlagLoader reads hidden_session_gate from config.json. A missing file
@@ -54,7 +100,7 @@ func ConfigFlagLoader() (FlagSettings, error) {
 		}
 		return FlagSettings{}, err
 	}
-	return FlagSettings{Global: cfg.GetFeatureFlagWithDefault(config.HiddenSessionGateFeatureFlag, false)}, nil
+	return FlagSettingsFromConfig(cfg), nil
 }
 
 // FlagCache serves the flag with no I/O on read. Reload is the only swapper:
@@ -72,7 +118,7 @@ type FlagCache struct {
 	// swapHook runs inside reloadMu after each successful swap, so the stats
 	// accumulator sees every change in the order it was published. Set once by
 	// NewGate before the cache is shared.
-	swapHook func(FlagSettings)
+	swapHook func(next FlagSettings, mutations map[string]string)
 
 	stopOnce sync.Once
 	stop     chan struct{}
@@ -88,7 +134,12 @@ func NewFlagCache(loader FlagLoader, logger *slog.Logger) *FlagCache {
 }
 
 // Reload re-reads the flag and swaps the snapshot. A read error keeps the last good one.
-func (c *FlagCache) Reload() {
+func (c *FlagCache) Reload() { c.reload(nil) }
+
+// reload is the only swapper. mutations (scope to FlagMutation name) are
+// applied inside the same critical section as the swap, so the history entry of
+// an operator change is never attributed to a concurrent ticker reload.
+func (c *FlagCache) reload(mutations map[string]string) {
 	c.reloadMu.Lock()
 	defer c.reloadMu.Unlock()
 	s, err := c.loader()
@@ -101,7 +152,7 @@ func (c *FlagCache) Reload() {
 	}
 	c.snapshot.Store(&s)
 	if c.swapHook != nil {
-		c.swapHook(s)
+		c.swapHook(s, mutations)
 	}
 }
 
@@ -112,10 +163,17 @@ func (c *FlagCache) OnFlagChanged(name string) {
 	}
 }
 
+// OnFlagMutation implements FlagMutationObserver.
+func (c *FlagCache) OnFlagMutation(name, scope, mutation string) {
+	if name == config.HiddenSessionGateFeatureFlag {
+		c.reload(map[string]string{scope: mutation})
+	}
+}
+
 // Enabled is the global value (no I/O).
 func (c *FlagCache) Enabled() bool { return c.snapshot.Load().Global }
 
-// EnabledFor applies kind override > global (Story 2.11 fills the overrides).
+// EnabledFor applies kind override > global (the global value already folds in the registry default).
 func (c *FlagCache) EnabledFor(kind HiddenKind) bool {
 	s := c.snapshot.Load()
 	if v, ok := s.KindOverrides[kind]; ok {

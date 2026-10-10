@@ -95,8 +95,8 @@ func NewGate(opts ...Option) *Gate {
 		limiter:  newRateLimitedLogger(cfg.logger, cfg.now),
 		now:      cfg.now,
 	}
-	g.flags.swapHook = func(s FlagSettings) {
-		if g.stats.onSwap(s) {
+	g.flags.swapHook = func(s FlagSettings, mutations map[string]string) {
+		if g.stats.onSwap(s, mutations) {
 			g.WarnIfEnabledWithoutStats()
 		}
 	}
@@ -116,6 +116,19 @@ func (g *Gate) WarnIfEnabledWithoutStats() {
 	if g.flags.Enabled() && !g.stats.WriterRunning() {
 		g.logger.Warn("delivery_gate_enabled_without_stats",
 			"hint", "hidden_session_gate is on but no stats writer is running; the soak is not recorded")
+	}
+}
+
+// WarnExplicitOffKinds logs one WARN hidden_session_gate_explicit_false per
+// kind whose persisted override is false: a kind the gate will never cover
+// after the default flips on. Call once at startup after the first Reload.
+func (g *Gate) WarnExplicitOffKinds() {
+	snap := g.flags.snapshot.Load()
+	for _, k := range ScopableKinds {
+		if v, ok := snap.KindOverrides[k]; ok && !v {
+			g.logger.Warn("hidden_session_gate_explicit_false", "scope", ScopeOf(k),
+				"hint", "hidden "+string(k)+" sessions deliver everything; clear the override to follow the global value")
+		}
 	}
 }
 

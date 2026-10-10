@@ -111,3 +111,23 @@ func TestUpdateFeatureFlag_ShouldAppendFlagChangeLineForEveryHiddenSessionGateFl
 	assert.Equal(t, []bool{false, true, false}, prevs, "true previous values: default off, then on, then off")
 	assert.True(t, bytes.HasSuffix(raw, []byte("\n")))
 }
+
+// T-FL-20 (clear and reset halves): with the stats writer down only enabling is
+// refused; scope clears, resets and disables always go through.
+func TestGateFlag_ShouldNeverRefuseDisablingClearScopeOrResetGlobal_WhenStatsWriterNotRunningAndRefuseEnablingAKind(t *testing.T) {
+	svc := newGatedFlagService(t)
+	ff := svc.featureFlagSvc
+	require.NoError(t, config.LoadConfig().SetFeatureFlagScope(config.HiddenSessionGateFeatureFlag, "kind:review", true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(config.HiddenSessionGateFeatureFlag, true))
+
+	_, err := mutateFlag(ff, config.HiddenSessionGateFeatureFlag, setOn, "kind:diagnose")
+	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	for _, m := range []struct {
+		m     sessionv1.FlagMutation
+		scope string
+	}{{setOff, "kind:review"}, {clearScope, "kind:review"}, {setOff, "global"}, {resetGlob, ""}} {
+		_, err := mutateFlag(ff, config.HiddenSessionGateFeatureFlag, m.m, m.scope)
+		require.NoError(t, err, "%v %q", m.m, m.scope)
+	}
+	assert.False(t, svc.DeliveryGate().Flags().Enabled())
+}

@@ -64,6 +64,7 @@ type AuditLine struct {
 	ChangeID  string `json:"change_id,omitempty"`
 	Flag      string `json:"flag,omitempty"`
 	Scope     string `json:"scope,omitempty"`
+	Mutation  string `json:"mutation,omitempty"`
 	Previous  *bool  `json:"previous,omitempty"`
 	New       *bool  `json:"new,omitempty"`
 	Outcome   string `json:"outcome,omitempty"`

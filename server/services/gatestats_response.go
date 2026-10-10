@@ -22,12 +22,18 @@ type gateStatsView struct {
 }
 
 // explicitOffScopes lists the scopes with a persisted explicit false for the
-// gate flag (Stage 3 prerequisite 1). Per-kind scopes join it with Story 2.11.
+// gate flag ("global" first, then "kind:<name>" in registry order): Stage 3
+// prerequisite 1.
 func explicitOffScopes() []string {
-	if v, ok := config.LoadConfig().GetFeatureFlagOverride(config.HiddenSessionGateFeatureFlag); ok && !v {
-		return []string{"global"}
+	cfg := config.LoadConfig()
+	var out []string
+	if v, ok := cfg.GetFeatureFlagOverride(config.HiddenSessionGateFeatureFlag); ok && !v {
+		out = append(out, "global")
 	}
-	return nil
+	for _, k := range explicitOffKinds(cfg) {
+		out = append(out, deliverygate.ScopeOf(k))
+	}
+	return out
 }
 
 func gateCounterProto(s deliverygate.Series) *sessionv1.DeliveryGateCounter {

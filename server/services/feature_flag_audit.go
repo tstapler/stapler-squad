@@ -44,14 +44,16 @@ func boolRef(b bool) *bool { return &b }
 // update mutex is taken (bounded, so a stalled fsync cannot queue the kill
 // switch behind it). It returns ErrAuditFailed or ErrAuditTimeout when the flip
 // must be refused.
-func (f *FeatureFlagService) auditBegin(ctx context.Context, name string, enabled bool, fields AuditLine) (*flagAudit, error) {
+func (f *FeatureFlagService) auditBegin(ctx context.Context, op flagOp, fields AuditLine) (*flagAudit, error) {
+	name, enabled := op.name, op.enabled
 	policy, audited := f.auditPolicies[name]
 	if f.audit == nil || !audited {
 		return &flagAudit{}, nil // inactive: no sink or no policy for this flag
 	}
 	a := &flagAudit{sink: f.audit, enabled: enabled, outcome: flagOutcomePersistFailed}
 	a.base = fields
-	a.base.Kind, a.base.Flag, a.base.Scope, a.base.ChangeID = auditKindFlagChg, name, "global", uuid.NewString()
+	a.base.Kind, a.base.Flag, a.base.Scope, a.base.ChangeID = auditKindFlagChg, name, op.auditScope(), uuid.NewString()
+	a.base.Mutation = op.mutationName()
 	if policy.Loosening == nil || !policy.Loosening(enabled) {
 		return a, nil
 	}

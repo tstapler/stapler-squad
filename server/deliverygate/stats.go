@@ -161,7 +161,10 @@ func (s *Stats) pruneLocked() {
 // onSwap is the FlagCache swap hook: credit the interval to the old snapshot,
 // then record any change. It runs on every reload, so a hand edit picked up by
 // the ticker is recorded like an RPC flip.
-func (s *Stats) onSwap(next FlagSettings) (enabledNow bool) {
+// mutations names the operator mutation behind this swap per scope ("global",
+// "kind:review"); an entry is recorded as given, even when the effective value
+// did not move (a reset of an explicit false to a default-off flag).
+func (s *Stats) onSwap(next FlagSettings, mutations map[string]string) (enabledNow bool) {
 	now := s.now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -172,16 +175,22 @@ func (s *Stats) onSwap(next FlagSettings) (enabledNow bool) {
 		s.primed = true
 		return false
 	}
-	if prev.Global != next.Global {
+	if m, hinted := mutations["global"]; hinted {
+		s.recordChangeLocked("global", m == mutationSetEnabled, now, m)
+	} else if prev.Global != next.Global {
 		s.recordChangeLocked("global", next.Global, now, setMutation(next.Global))
-		if prev.Global && !next.Global {
-			s.lastOffFlip["global"] = now
-		}
+	}
+	if prev.Global && !next.Global {
+		s.lastOffFlip["global"] = now
 	}
 	for _, k := range statKinds {
 		pv, pok := prev.KindOverrides[k]
 		nv, nok := next.KindOverrides[k]
+		scope := "kind:" + string(k)
+		m, hinted := mutations[scope]
 		switch {
+		case hinted:
+			s.recordChangeLocked(scope, m == mutationSetEnabled, now, m)
 		case nok && (!pok || pv != nv):
 			s.recordChangeLocked("kind:"+string(k), nv, now, setMutation(nv))
 		case pok && !nok:
@@ -194,11 +203,17 @@ func (s *Stats) onSwap(next FlagSettings) (enabledNow bool) {
 	return !prev.Global && next.Global
 }
 
+// FlagMutation names as the proto spells them after the FLAG_MUTATION_ prefix.
+const (
+	mutationSetEnabled  = "SET_ENABLED"
+	mutationSetDisabled = "SET_DISABLED"
+)
+
 func setMutation(v bool) string {
 	if v {
-		return "SET_ENABLED"
+		return mutationSetEnabled
 	}
-	return "SET_DISABLED"
+	return mutationSetDisabled
 }
 
 func (s *Stats) recordChangeLocked(scope string, v bool, at time.Time, mutation string) {

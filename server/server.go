@@ -331,6 +331,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// tick) and join its reloader on shutdown.
 	if gate := deps.SessionService.DeliveryGate(); gate != nil {
 		gate.StartFlagReloader(serverCtx, 5*time.Second)
+		gate.WarnExplicitOffKinds()
 		srv.shutdownHooks = append(srv.shutdownHooks, gate.Stop)
 		srv.startGateStatsWriter(serverCtx, deps, gate, configDir, configErr)
 	}

@@ -368,6 +368,11 @@ type Config struct {
 	// Keys are machine names (e.g. "backlog"); values are booleans.
 	// Absent key == disabled (false is the safe default for all flags).
 	FeatureFlags map[string]bool `json:"feature_flags,omitempty"`
+	// FeatureFlagScopes holds per-scope overrides of a scopable flag, keyed by
+	// flag name then scope ("kind:review"). A scope key is explicit when present;
+	// deleting it returns the scope to the flag's global value. Today only
+	// hidden_session_gate is scopable (see FeatureFlagService).
+	FeatureFlagScopes map[string]map[string]bool `json:"feature_flag_scopes,omitempty"`
 	// LLMBackends selects which backend serves headless (non-interactive) LLM
 	// calls: a global default plus per-feature overrides. Edited live through the
 	// LLM backend settings RPC; no environment variables.
@@ -1873,6 +1878,63 @@ func (c *Config) GetFeatureFlagOverride(name string) (value bool, ok bool) {
 	}
 	value, ok = c.FeatureFlags[name]
 	return value, ok
+}
+
+// GetFeatureFlagScopedOverride reports the explicitly-persisted value of name at
+// scope: (value, true) when that scope key exists, (false, false) otherwise.
+func (c *Config) GetFeatureFlagScopedOverride(name, scope string) (value bool, ok bool) {
+	if c == nil {
+		return false, false
+	}
+	value, ok = c.FeatureFlagScopes[name][scope]
+	return value, ok
+}
+
+// GetFeatureFlagScoped resolves name at scope: the scope's explicit value wins,
+// then the explicit global value, then defaultValue.
+func (c *Config) GetFeatureFlagScoped(name, scope string, defaultValue bool) bool {
+	if v, ok := c.GetFeatureFlagScopedOverride(name, scope); ok {
+		return v
+	}
+	return c.GetFeatureFlagWithDefault(name, defaultValue)
+}
+
+// FeatureFlagScopeOverrides returns a copy of every explicit scope value of name.
+func (c *Config) FeatureFlagScopeOverrides(name string) map[string]bool {
+	if c == nil || len(c.FeatureFlagScopes[name]) == 0 {
+		return nil
+	}
+	out := make(map[string]bool, len(c.FeatureFlagScopes[name]))
+	for k, v := range c.FeatureFlagScopes[name] {
+		out[k] = v
+	}
+	return out
+}
+
+// SetFeatureFlagScope persists an explicit value of name at scope.
+func (c *Config) SetFeatureFlagScope(name, scope string, value bool) error {
+	if c.FeatureFlagScopes == nil {
+		c.FeatureFlagScopes = make(map[string]map[string]bool)
+	}
+	if c.FeatureFlagScopes[name] == nil {
+		c.FeatureFlagScopes[name] = make(map[string]bool)
+	}
+	c.FeatureFlagScopes[name][scope] = value
+	return SaveConfig(c)
+}
+
+// DeleteFeatureFlagScope removes the explicit value of name at scope (inherit)
+// and persists. An emptied flag entry, and then an emptied map, is dropped so
+// the file returns to its previous-version shape.
+func (c *Config) DeleteFeatureFlagScope(name, scope string) error {
+	delete(c.FeatureFlagScopes[name], scope)
+	if len(c.FeatureFlagScopes[name]) == 0 {
+		delete(c.FeatureFlagScopes, name)
+	}
+	if len(c.FeatureFlagScopes) == 0 {
+		c.FeatureFlagScopes = nil
+	}
+	return SaveConfig(c)
 }
 
 // ImportSessionEnabled reports whether the import-external-session feature

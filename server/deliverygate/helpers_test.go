@@ -105,6 +105,12 @@ func (f *staticFlags) set(global bool) {
 	f.mu.Unlock()
 }
 
+func (f *staticFlags) setSettings(s FlagSettings) {
+	f.mu.Lock()
+	f.s = s
+	f.mu.Unlock()
+}
+
 func (f *staticFlags) readCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -130,8 +136,9 @@ func newTestGate(flagOn bool, entries ...Entry) (*Gate, *fakeClock, func() []log
 }
 
 var (
-	hiddenReview = Entry{UUID: "u-h1", Title: "review:abc", TmuxName: "ssq_review_abc", Hidden: true, Kind: KindReview}
-	visibleSess  = Entry{UUID: "u-v1", Title: "my-work", TmuxName: "ssq_my_work"}
+	hiddenReview   = Entry{UUID: "u-h1", Title: "review:abc", TmuxName: "ssq_review_abc", Hidden: true, Kind: KindReview}
+	hiddenDiagnose = Entry{UUID: "u-h2", Title: "diagnose:abc", TmuxName: "ssq_diagnose_abc", Hidden: true, Kind: KindDiagnose}
+	visibleSess    = Entry{UUID: "u-v1", Title: "my-work", TmuxName: "ssq_my_work"}
 )
 
 var _ = session.Status(0)
