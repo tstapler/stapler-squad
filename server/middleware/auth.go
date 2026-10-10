@@ -96,7 +96,7 @@ func isGenericWebhookDelivery(r *http.Request) bool {
 		return false
 	}
 	slug, ok := strings.CutPrefix(r.URL.Path, "/webhooks/")
-	return ok && slug != "" && !strings.Contains(slug, "/") && slug != "github"
+	return ok && slug != "" && slug != "." && slug != ".." && !strings.Contains(slug, "/") && !strings.EqualFold(slug, "github")
 }
 
 func isAPIPath(path string) bool {

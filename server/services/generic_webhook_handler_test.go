@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
@@ -42,6 +43,21 @@ func newGenericWebhookMux(h *GenericWebhookHandler) *http.ServeMux {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	return mux
+}
+
+type rejectingWebhookAuthValidator struct{}
+
+func (rejectingWebhookAuthValidator) ValidateAuthSession(string) bool { return false }
+
+func doAuthenticatedGenericWebhookRequest(t *testing.T, handler http.Handler, slug string, body []byte, sigHeader string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/"+slug, bytes.NewReader(body))
+	if sigHeader != "" {
+		req.Header.Set("X-Webhook-Signature", sigHeader)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
 }
 
 func doGenericWebhookRequest(t *testing.T, mux *http.ServeMux, slug string, body []byte, sigHeader string) *httptest.ResponseRecorder {
@@ -127,7 +143,8 @@ func TestGenericWebhookHandler_should_Return400AndRecordRejected_When_BodyIsMalf
 	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
 	mux := newGenericWebhookMux(h)
 
-	rec := doGenericWebhookRequest(t, mux, "jira-ticket-3", []byte("not json"), "sha256=whatever")
+	body := []byte("not json")
+	rec := doGenericWebhookRequest(t, mux, "jira-ticket-3", body, sign("s3cr3t", body))
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Equal(t, int32(0), infra.sessionSvc.callCount.Load())
@@ -166,10 +183,55 @@ func TestGenericWebhookHandler_should_Return404_When_SlugIsUnknown(t *testing.T)
 	assert.Equal(t, int32(0), infra.sessionSvc.callCount.Load())
 }
 
+// TestGenericWebhookHandler_should_NotPersistUnauthenticatedRequests verifies that traffic
+// rejected before HMAC verification cannot fill the trigger audit table.
+func TestGenericWebhookHandler_should_EnforceHMACBehindGlobalAuth(t *testing.T) {
+	infra := newWebhookTestInfra(t)
+	wf := newGenericWebhookWorkflow(t, infra, "jira-ticket-global-auth", "s3cr3t", "issue_created", "", "Triage {{.issue.key}}")
+	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	protected := middleware.Auth(rejectingWebhookAuthValidator{})(newGenericWebhookMux(h))
+	body := jiraTicketBody(t, "issue_created", nil, "PROJ-1", "fix it")
+
+	assert.Equal(t, http.StatusUnauthorized, doAuthenticatedGenericWebhookRequest(t, protected, wf.WebhookSlug, body, "").Code)
+	assert.Equal(t, http.StatusUnauthorized, doAuthenticatedGenericWebhookRequest(t, protected, wf.WebhookSlug, body, "sha256=deadbeef").Code)
+	assert.Equal(t, http.StatusNotFound, doAuthenticatedGenericWebhookRequest(t, protected, "no-such-slug", body, sign("s3cr3t", body)).Code)
+	assert.Equal(t, http.StatusOK, doAuthenticatedGenericWebhookRequest(t, protected, wf.WebhookSlug, body, sign("s3cr3t", body)).Code)
+
+	infra.cfg.FeatureFlags["webhook_triggers"] = false
+	assert.Equal(t, http.StatusNotFound, doAuthenticatedGenericWebhookRequest(t, protected, wf.WebhookSlug, body, sign("s3cr3t", body)).Code)
+}
+
+// TestGenericWebhookHandler_should_NotPersistUnauthenticatedRequests verifies that traffic
+// rejected before HMAC verification cannot fill the trigger audit table.
+func TestGenericWebhookHandler_should_NotPersistUnauthenticatedRequests(t *testing.T) {
+	infra := newWebhookTestInfra(t)
+	wf := newGenericWebhookWorkflow(t, infra, "jira-ticket-unauthenticated", "s3cr3t", "issue_created", "", "Triage {{.issue.key}}")
+	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	mux := newGenericWebhookMux(h)
+	body := jiraTicketBody(t, "issue_created", nil, "PROJ-1", "fix it")
+
+	for _, request := range []struct {
+		name string
+		slug string
+		sig  string
+	}{
+		{name: "unknown slug", slug: "no-such-slug", sig: "sha256=whatever"},
+		{name: "invalid signature", slug: wf.WebhookSlug, sig: "sha256=deadbeef"},
+		{name: "missing signature", slug: wf.WebhookSlug},
+	} {
+		t.Run(request.name, func(t *testing.T) {
+			rec := doGenericWebhookRequest(t, mux, request.slug, body, request.sig)
+			assert.Contains(t, []int{http.StatusNotFound, http.StatusUnauthorized}, rec.Code)
+		})
+	}
+
+	events, err := infra.fireEvents.ListByWorkflow(context.Background(), wf.ID, 10)
+	require.NoError(t, err)
+	assert.Empty(t, events)
+}
+
 // TestGenericWebhookHandler_should_Return404_When_EnabledIsFalse_EvenIfCronEnabledTrue
-// proves Enabled and CronEnabled are now independent fields (webhook-triggers verify
-// follow-ups AC0-3): a webhook trigger with CronEnabled=true (a vestigial value that no
-// longer means anything for this trigger type) but Enabled=false must not fire.
+// proves Enabled and CronEnabled are independent fields: a disabled webhook must not fire.
 func TestGenericWebhookHandler_should_Return404_When_EnabledIsFalse_EvenIfCronEnabledTrue(t *testing.T) {
 	infra := newWebhookTestInfra(t)
 	wf, err := infra.workflowRepo.Create(context.Background(), session.WorkflowCreateInput{
@@ -198,8 +260,22 @@ func TestGenericWebhookHandler_should_Return404_When_EnabledIsFalse_EvenIfCronEn
 
 	events, err := infra.fireEvents.ListByWorkflow(context.Background(), wf.ID, 10)
 	require.NoError(t, err)
-	require.Len(t, events, 1)
-	assert.Equal(t, "no_match", events[0].Outcome)
+	assert.Empty(t, events)
+}
+
+func TestGenericWebhookHandler_should_RejectOversizedBodyBeforeSignatureVerification(t *testing.T) {
+	infra := newWebhookTestInfra(t)
+	wf := newGenericWebhookWorkflow(t, infra, "jira-ticket-too-large", "s3cr3t", "", "", "Triage {{.issue.key}}")
+	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	mux := newGenericWebhookMux(h)
+	body := bytes.Repeat([]byte("x"), MaxWebhookBodyBytes+1)
+
+	rec := doGenericWebhookRequest(t, mux, wf.WebhookSlug, body, "sha256=deadbeef")
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+
+	events, err := infra.fireEvents.ListByWorkflow(context.Background(), wf.ID, 10)
+	require.NoError(t, err)
+	assert.Empty(t, events)
 }
 
 func TestGenericWebhookHandler_should_Return404_When_FeatureFlagDisabled(t *testing.T) {

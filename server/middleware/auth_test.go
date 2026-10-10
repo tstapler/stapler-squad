@@ -33,6 +33,10 @@ func TestAuth_should_AllowOnlySingleSegmentGenericWebhookPost(t *testing.T) {
 	for _, request := range []struct{ method, path string }{
 		{http.MethodPost, "/webhooks/"},
 		{http.MethodPost, "/webhooks/stapler-squad/extra"},
+		{http.MethodPost, "/webhooks/%2e%2e"},
+		{http.MethodPost, "/webhooks//x"},
+		{http.MethodPost, "/webhooks/x/"},
+		{http.MethodPost, "/webhooks/GitHub"},
 		{http.MethodGet, "/webhooks/stapler-squad"},
 		{http.MethodPost, "/webhooks/github"},
 		{http.MethodPost, "/api/session.v1.SessionService/CreateWorkflow"},

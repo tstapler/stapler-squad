@@ -3,6 +3,9 @@ package services
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -47,9 +50,6 @@ func (h *GenericWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 	wf, err := h.repo.GetByWebhookSlug(ctx, slug)
 	if err != nil {
-		persistTriggerFireEvent(ctx, h.fireEvents, session.TriggerFireEventInput{
-			Outcome: "rejected", ErrorMessage: "unknown slug",
-		})
 		http.NotFound(w, r)
 		return
 	}
@@ -60,15 +60,19 @@ func (h *GenericWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// unauthenticated prober can't use the response to enumerate which slugs exist but
 	// are merely disabled/misconfigured.
 	if wf.TriggerType != "webhook" || !wf.Enabled {
-		persistTriggerFireEvent(ctx, h.fireEvents, session.TriggerFireEventInput{
-			WorkflowID: uuidPtr(wf.ID), Outcome: "no_match",
-		})
 		http.NotFound(w, r)
 		return
 	}
 
-	payload, body, ok := readAndDecodeWebhookBody(w, r, h.fireEvents, "", uuidPtr(wf.ID))
-	if !ok {
+	body := http.MaxBytesReader(w, r.Body, MaxWebhookBodyBytes)
+	bodyBytes, err := io.ReadAll(body)
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, "failed to read request body", http.StatusBadRequest)
 		return
 	}
 
@@ -83,11 +87,17 @@ func (h *GenericWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sigHeader := r.Header.Get("X-Webhook-Signature")
-	if !VerifyWebhookSecret(secret, body, sigHeader) {
-		persistTriggerFireEvent(ctx, h.fireEvents, session.TriggerFireEventInput{
-			WorkflowID: uuidPtr(wf.ID), Outcome: "rejected", ErrorMessage: "invalid signature",
-		})
+	if !VerifyWebhookSecret(secret, bodyBytes, sigHeader) {
 		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		return
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+		persistTriggerFireEvent(ctx, h.fireEvents, session.TriggerFireEventInput{
+			WorkflowID: uuidPtr(wf.ID), Outcome: "rejected", ErrorMessage: "malformed JSON",
+		})
+		http.Error(w, "malformed JSON", http.StatusBadRequest)
 		return
 	}
 
@@ -96,7 +106,7 @@ func (h *GenericWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// The (workflow_id, delivery_id) composite unique index already scopes this per
 	// wf.ID (resolved from {slug} above), so identical payloads delivered to two
 	// different slugs don't collide without needing to fold the slug into the digest.
-	deliveryID := sha256Hex(body)
+	deliveryID := sha256Hex(bodyBytes)
 
 	ok, alreadyClaimed := claimTriggerFireEvent(ctx, h.fireEvents, wf, deliveryID)
 	if alreadyClaimed {
