@@ -703,8 +703,13 @@ test-integration: ensure-tools proto-gen $(GOTESTSUM_BIN) ## Run integration tes
 # Type-based delivery-gate and terminal-write guards (Story 2.6 / Story 5.1d).
 # Runs only the Test* funcs declared in files tagged `//go:build sinkguard`
 # (selected per package with -run), so it does not re-run the untagged suite.
-.PHONY: test-delivery-guards
-test-delivery-guards: ensure-tools proto-gen ent-gen $(GOTESTSUM_BIN) ## Run the sinkguard-tagged type-based guard tests
+.PHONY: test-delivery-guards test-delivery-guards-run
+test-delivery-guards: ensure-tools proto-gen ent-gen ## Run the sinkguard-tagged type-based guard tests
+	@$(MAKE) --no-print-directory test-delivery-guards-run
+
+# The run half has no tool/codegen prerequisites so CI can call it directly
+# after downloading the generated-code artifact (build.yml, test-delivery-guards).
+test-delivery-guards-run: $(GOTESTSUM_BIN)
 	@set -e; for d in $$(grep -rl --include='*_test.go' '^//go:build sinkguard' server session cmd pkg 2>/dev/null | xargs -r -n1 dirname | sort -u); do \
 		names=$$(grep -h -oE '^func (Test[A-Za-z0-9_]+)' $$(grep -l '^//go:build sinkguard' $$d/*_test.go) | sed 's/^func //' | paste -sd'|' -); \
 		[ -n "$$names" ] || continue; \
