@@ -59,6 +59,10 @@ export const header = style({
       padding: "0.75rem 1rem",
     },
   },
+  selectors: {
+    // The peek sheet is ~220px tall: the header must not spend it all (see headerActions below).
+    '[data-sheet="peek"] &': { padding: "4px 8px", gap: "0 8px" },
+  },
 });
 
 export const title = style({
@@ -73,6 +77,9 @@ export const title = style({
     [`screen and (max-width: ${breakpoints.md})`]: {
       fontSize: "1.125rem",
     },
+  },
+  selectors: {
+    '[data-sheet="peek"] &': { fontSize: "1rem" },
   },
 });
 
@@ -98,6 +105,14 @@ export const headerActions = style({
   flexWrap: "wrap",
   gap: "0.5rem",
 });
+
+/*
+ * Peek sheet: the actions join the header's own wrap so the close button can sit on the title row
+ * (visually only; DOM and tab order are unchanged). Four 44px+ controls never fit beside the title at
+ * 320px, and a header that wraps to three rows leaves the 220px sheet no room for the list.
+ */
+globalStyle(`[data-sheet="peek"] ${headerActions}`, { display: "contents" });
+globalStyle(`[data-sheet="peek"] ${headerActions} > *`, { order: 1 });
 
 export const markAllButton = style({
   padding: "0.5rem 0.75rem",
@@ -150,6 +165,8 @@ export const closeButton = style({
     },
   },
 });
+
+globalStyle(`[data-sheet="peek"] ${headerActions} > ${closeButton}`, { order: 0, marginLeft: "auto" });
 
 export const content = style({
   flex: 1,
