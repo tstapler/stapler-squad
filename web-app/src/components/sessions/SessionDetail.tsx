@@ -10,6 +10,7 @@ import { getApiBaseUrl } from "@/lib/config";
 import { useAppSelector } from "@/lib/store";
 import { selectAllSessions } from "@/lib/store/sessionsSlice";
 import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
+import { ReadOnlyBanner } from "./ReadOnlyBanner";
 
 // Dynamically import SessionDetailView (and its heavy transitive deps: CodeMirror,
 // XtermTerminal, syntax-highlight packs, WASM) so they are NOT in the initial bundle.
@@ -90,31 +91,44 @@ export function SessionDetail({
     prefetchVcsStatus(session.id, baseUrl);
   }, [session.id]);
 
+  const detailView = (
+    <SessionDetailView
+      session={session}
+      allSessions={allSessions}
+      actions={actions}
+      onClose={onClose}
+      onFullscreenChange={onFullscreenChange}
+      onTabChange={onTabChange}
+      initialTab={initialTab}
+      embedded={embedded}
+      onNext={onNext}
+      onPrevious={onPrevious}
+      showNavigation={showNavigation}
+      onApprovalResolved={onApprovalResolved}
+      onDismissFromQueue={onDismissFromQueue}
+      queuePosition={queuePosition}
+      queueTotal={queueTotal}
+      nextSessionName={nextSessionName}
+      previousSessionName={previousSessionName}
+      onBack={onBack}
+      canGoBack={canGoBack}
+      backlogItemId={backlogItemId}
+      backlogEntry={backlogEntry}
+    />
+  );
+
+  // Read-only is decided from session.hidden (the server enforces the same rule, Story 5.1).
+  // The wrapper exists only for hidden sessions so a visible session's layout is untouched.
   return (
     <SessionVcsProvider sessionId={session.id} baseUrl={getApiBaseUrl()} isActive={isActive}>
-      <SessionDetailView
-        session={session}
-        allSessions={allSessions}
-        actions={actions}
-        onClose={onClose}
-        onFullscreenChange={onFullscreenChange}
-        onTabChange={onTabChange}
-        initialTab={initialTab}
-        embedded={embedded}
-        onNext={onNext}
-        onPrevious={onPrevious}
-        showNavigation={showNavigation}
-        onApprovalResolved={onApprovalResolved}
-        onDismissFromQueue={onDismissFromQueue}
-        queuePosition={queuePosition}
-        queueTotal={queueTotal}
-        nextSessionName={nextSessionName}
-        previousSessionName={previousSessionName}
-        onBack={onBack}
-        canGoBack={canGoBack}
-        backlogItemId={backlogItemId}
-        backlogEntry={backlogEntry}
-      />
+      {session.hidden ? (
+        <div style={{ display: "flex", flexDirection: "column", flex: 1, height: "100%", minHeight: 0 }}>
+          <ReadOnlyBanner />
+          <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>{detailView}</div>
+        </div>
+      ) : (
+        detailView
+      )}
     </SessionVcsProvider>
   );
 }

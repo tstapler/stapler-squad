@@ -278,7 +278,21 @@ describe("useSessionNotifications", () => {
       const call = mockAddNotification.mock.calls[0][0];
       expect(typeof call.onView).toBe("function");
       call.onView();
-      expect(onViewSession).toHaveBeenCalledWith("test-session");
+      expect(onViewSession).toHaveBeenCalledWith("test-session", undefined);
+    });
+
+    it("onView carries the notification record id so the deep link can show a deleted session's own text (Story 5.3)", () => {
+      const onViewSession = jest.fn();
+      const { result } = renderHook(() =>
+        useSessionNotifications({ enableAudio: false, onViewSession })
+      );
+
+      act(() => {
+        result.current({ ...makeEvent(NT.WARNING), notificationId: "n-42" });
+      });
+
+      mockAddNotification.mock.calls[0][0].onView();
+      expect(onViewSession).toHaveBeenCalledWith("test-session", "n-42");
     });
 
     it("backlog-item notifications (metadata.item_id present) do not wire up onView — sessionId now holds the item's ID, not a real session, so navigating to /?session=<id> would 404", () => {

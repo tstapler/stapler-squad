@@ -11,6 +11,7 @@ const scrollPages = jest.fn();
 const terminal = {
   cols: 80,
   rows: 24,
+  options: { disableStdin: false },
   scrollPages,
   buffer: { active: { viewportY: 50, baseY: 100, type: "normal" } },
 };
@@ -75,8 +76,12 @@ const CTRL_PGUP = "\x1b[5;5~";
 const sendInput = jest.fn();
 let isInputChunking: jest.Mock;
 
-async function renderTerminal() {
-  render(withPool(<TerminalOutput sessionId="s1" baseUrl="/api" isVisible={false} />));
+async function renderTerminal(readOnly = false) {
+  const ui = () => withPool(<TerminalOutput sessionId="s1" baseUrl="/api" isVisible={false} readOnly={readOnly} />);
+  const view = render(ui());
+  await act(async () => {});
+  // The pooled xterm handle attaches after the first commit; a later render applies disableStdin.
+  view.rerender(ui());
   await act(async () => {});
 }
 
@@ -88,6 +93,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   localStorage.clear();
   terminal.buffer.active = { viewportY: 50, baseY: 100, type: "normal" };
+  terminal.options.disableStdin = false;
   isInputChunking = jest.fn(() => false);
   (useTerminalStream as jest.Mock).mockReturnValue({
     isInputChunking,
@@ -183,5 +189,34 @@ describe("toolbar PgUp/PgDn route awareness", () => {
     tap("Page up");
     expect(scrollPages).toHaveBeenCalledWith(-1);
     expect(sendInput).not.toHaveBeenCalled();
+  });
+});
+
+// Story 5.3 (RO-1, RO-2 client half): a hidden session's terminal is read-only.
+describe("TerminalOutput readOnly (hidden session)", () => {
+  it("readonly_should_disable_stdin_and_pass_readOnly_to_the_stream_hook", async () => {
+    await renderTerminal(true);
+    expect(terminal.options.disableStdin).toBe(true);
+    const lastCall = (useTerminalStream as jest.Mock).mock.calls.at(-1);
+    expect(lastCall?.[0].readOnly).toBe(true);
+  });
+
+  it("readonly_should_drop_typed_input_before_the_stream", async () => {
+    await renderTerminal(true);
+    act(() => capturedXtermProps.onData("rm -rf"));
+    expect(sendInput).not.toHaveBeenCalled();
+  });
+
+  it("readonly_should_remove_the_keyboard_toggle", async () => {
+    await renderTerminal(true);
+    expect(screen.queryByRole("button", { name: /mobile keyboard/i })).toBeNull();
+  });
+
+  it("writable_should_keep_stdin_input_and_the_keyboard_toggle", async () => {
+    await renderTerminal(false);
+    expect(terminal.options.disableStdin).toBe(false);
+    act(() => capturedXtermProps.onData("ls"));
+    expect(sendInput).toHaveBeenCalledWith("ls");
+    expect(screen.getByRole("button", { name: /mobile keyboard/i })).toBeInTheDocument();
   });
 });

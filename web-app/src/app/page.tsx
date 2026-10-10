@@ -30,15 +30,28 @@ import { usePageView } from "@/lib/analytics/usePageView";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { findSessionById as findSessionByIdIn } from "./findSessionById";
+import { SessionUnavailableCard } from "@/components/sessions/SessionUnavailableCard";
+import { useNotificationRecord } from "@/lib/hooks/useNotificationRecord";
+import {
+  classifyGetSessionFailure,
+  parseSessionDeepLink,
+  shouldResolveViaGetSession,
+  type SessionDeepLinkParams,
+  type SessionLookupOutcome,
+} from "./sessionDeepLink";
 import { useOmnibarQueryParamLaunch } from "./useOmnibarQueryParamLaunch";
 import { DeleteSessionConfirmModal } from "./DeleteSessionConfirmModal";
 import { useResumeSessionFlow } from "./useResumeSessionFlow";
 import * as styles from "./page.css";
 
+// A hidden session is not in the watch stream, so an open one is polled for status changes.
+const FALLBACK_SESSION_REFRESH_MS = 5_000;
+const MAX_FALLBACK_SESSIONS = 5;
+
 function HomeContent() {
   usePageView();
   const { track } = useAnalytics();
-  const { addNotification } = useNotifications();
+  const { addNotification, notificationHistory } = useNotifications();
   const searchParams = useSearchParams();
   const router = useRouter();
   const { openInCreationMode, openOmnibar } = useOmnibar();
@@ -75,6 +88,17 @@ function HomeContent() {
   // sessionId instead of refiring on every `sessions` stream update.
   const hiddenSessionFallbackRef = useRef<string | null>(null);
 
+  // Sessions resolved through getSession because the live list does not carry them
+  // (hidden sessions). They are handed to the pane tree only, never to the session list.
+  const [fallbackSessions, setFallbackSessions] = useState<Record<string, Session>>({});
+  // Set when the deep link's session could not be opened: gone (not_found) or a
+  // retryable lookup failure (failed). Rendered as a card, never a 404 or blank screen.
+  const [lookup, setLookup] = useState<{
+    sessionId: string;
+    notificationId: string | null;
+    status: Exclude<SessionLookupOutcome, "found">;
+  } | null>(null);
+
   // Focus detail panel when session opens; return focus on close
   useEffect(() => {
     if (selectedSession) {
@@ -107,7 +131,14 @@ function HomeContent() {
     listSessions,
     updateSession,
     getSession,
+    hasLoadedOnce,
+    error: sessionsError,
   } = useSessionServiceContext();
+
+  const paneSessions = useMemo(() => {
+    const extras = Object.values(fallbackSessions).filter((f) => !sessions.some((s) => s.id === f.id));
+    return extras.length > 0 ? [...sessions, ...extras] : sessions;
+  }, [sessions, fallbackSessions]);
 
   const {
     resumeTarget,
@@ -125,7 +156,7 @@ function HomeContent() {
   // createWindow/closeWindow/renameWindow have no UI to call them from yet — WindowTabStrip
   // (Task 2.2.2b) is deferred to Epic 3.1, where it doesn't exist yet.
   const { windows, isRestored: isWindowsRestored, dispatchPane, createWindow, closeWindow, renameWindow } =
-    useWindowManager(sessions);
+    useWindowManager(paneSessions);
   const { currentWindowId, switchToWindow } = useWindowUrlSync(windows, isWindowsRestored);
   const currentWindow = windows.find((w) => w.id === currentWindowId) ?? windows[0];
   const paneDispatch = useCallback(
@@ -220,34 +251,77 @@ function HomeContent() {
   // hiddenSessionFallbackRef so it fires once per sessionId, not on every
   // `sessions` stream update.
   const fetchHiddenSessionFallback = useCallback(
-    (sessionId: string, tabParam: string | null, newPaneParam: string | null) => {
-      if (hiddenSessionFallbackRef.current === sessionId) return;
+    (link: SessionDeepLinkParams, force = false) => {
+      const { sessionId } = link;
+      if (!sessionId) return;
+      if (!force && hiddenSessionFallbackRef.current === sessionId) return;
       hiddenSessionFallbackRef.current = sessionId;
-      getSession(sessionId).then((fetched) => {
+      let failure: SessionLookupOutcome = "not_found";
+      getSession(sessionId, {
+        onFailure: (err) => {
+          failure = classifyGetSessionFailure(err);
+        },
+      }).then((fetched) => {
         if (!fetched) {
-          console.warn(`[URL] Session not found: ${sessionId}`);
+          setLookup({
+            sessionId,
+            notificationId: link.notificationId,
+            status: failure === "failed" ? "failed" : "not_found",
+          });
           return;
         }
-        routeToResolvedSession(fetched, sessionId, tabParam, newPaneParam);
+        setLookup(null);
+        setFallbackSessions((prev) => {
+          const kept = Object.entries(prev).filter(([id]) => id !== fetched.id).slice(-(MAX_FALLBACK_SESSIONS - 1));
+          return { ...Object.fromEntries(kept), [fetched.id]: fetched };
+        });
+        routeToResolvedSession(fetched, sessionId, link.tab, link.newPane);
       });
     },
     [getSession, routeToResolvedSession]
   );
 
-  // Handle direct session selection from URL
+  // Handle direct session selection from URL. A cold deep link arrives with an empty
+  // list: the fallback runs once the list request has settled, not on `sessions.length`.
   useEffect(() => {
-    const sessionId = searchParams.get("session");
-    const tabParam = searchParams.get("tab");
-    const newPaneParam = searchParams.get("newPane");
-    if (!sessionId || sessions.length === 0) return;
-
-    const session = findSessionById(sessionId);
-    if (session) {
-      routeToResolvedSession(session, sessionId, tabParam, newPaneParam);
+    const link = parseSessionDeepLink(searchParams);
+    if (!link.sessionId) {
+      hiddenSessionFallbackRef.current = null;
+      setLookup((prev) => (prev ? null : prev));
       return;
     }
-    fetchHiddenSessionFallback(sessionId, tabParam, newPaneParam);
-  }, [searchParams, sessions, findSessionById, routeToResolvedSession, fetchHiddenSessionFallback]);
+
+    const session = findSessionById(link.sessionId);
+    if (session) {
+      routeToResolvedSession(session, link.sessionId, link.tab, link.newPane);
+      return;
+    }
+    const listSettled = hasLoadedOnce === true || sessions.length > 0 || sessionsError != null;
+    if (!shouldResolveViaGetSession({ sessionId: link.sessionId, foundInList: false, listSettled })) return;
+    fetchHiddenSessionFallback(link);
+  }, [searchParams, sessions, hasLoadedOnce, sessionsError, findSessionById, routeToResolvedSession, fetchHiddenSessionFallback]);
+
+  // Keep a fallback session's status current: the watch stream never carries hidden sessions.
+  const openFallbackIds = useMemo(() => Object.keys(fallbackSessions).join(","), [fallbackSessions]);
+  useEffect(() => {
+    const ids = openFallbackIds ? openFallbackIds.split(",") : [];
+    if (ids.length === 0) return;
+    const timer = setInterval(() => {
+      for (const id of ids) {
+        void getSession(id, { onFailure: () => {} }).then((fresh) => {
+          if (fresh) setFallbackSessions((prev) => (prev[id] ? { ...prev, [id]: fresh } : prev));
+        });
+      }
+    }, FALLBACK_SESSION_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [openFallbackIds, getSession]);
+
+  const lookupNotification = useNotificationRecord(
+    notificationHistory,
+    lookup?.notificationId ?? null,
+    lookup?.sessionId ?? null,
+    lookup?.status === "not_found",
+  );
 
   // Detect ?new=true, ?pr=<url>, ?duplicate=<id>, or ?worktree=<path>&branch=<branch> query params
   useOmnibarQueryParamLaunch(searchParams, router, openOmnibar, track, getSession);
@@ -491,24 +565,42 @@ function HomeContent() {
             }}
             onRename={renameWindow}
           />
-          <div
-            ref={sessionDetailRef}
-            className={styles.cockpitContainer}
-            tabIndex={-1}
-            role="region"
-            aria-label="Session cockpit"
-            data-context="cockpit"
-          >
-            <PaneTilingContainer
-              sessions={sessions}
-              paneState={currentWindow.paneState}
-              dispatch={paneDispatch}
-              externalSessionAssign={externalAssignSession ? {
-                ...externalAssignSession,
-                version: externalAssignCounter,
-              } : null}
+          {lookup ? (
+            <SessionUnavailableCard
+              variant={lookup.status === "failed" ? "failed" : "unavailable"}
+              sessionLabel={lookup.sessionId.slice(0, 8)}
+              notification={lookup.status === "not_found" ? lookupNotification : null}
+              onOpenNotifications={() => router.push("/notifications")}
+              onGoToSessions={() => {
+                setLookup(null);
+                updateUrl(null, null);
+              }}
+              onRetry={() => {
+                const link = parseSessionDeepLink(searchParams);
+                setLookup(null);
+                fetchHiddenSessionFallback(link, true);
+              }}
             />
-          </div>
+          ) : (
+            <div
+              ref={sessionDetailRef}
+              className={styles.cockpitContainer}
+              tabIndex={-1}
+              role="region"
+              aria-label="Session cockpit"
+              data-context="cockpit"
+            >
+              <PaneTilingContainer
+                sessions={paneSessions}
+                paneState={currentWindow.paneState}
+                dispatch={paneDispatch}
+                externalSessionAssign={externalAssignSession ? {
+                  ...externalAssignSession,
+                  version: externalAssignCounter,
+                } : null}
+              />
+            </div>
+          )}
         </SessionViewModeProvider>
       </CockpitActionsProvider>
 

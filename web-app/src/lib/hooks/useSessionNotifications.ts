@@ -71,7 +71,8 @@ interface UseSessionNotificationsOptions {
   /** Enable audio chimes (default: true) */
   enableAudio?: boolean;
   /** Callback when user clicks "View" on a notification */
-  onViewSession?: (sessionId: string) => void;
+  /** `notificationId` is the server record id, carried into the deep link (Story 5.3). */
+  onViewSession?: (sessionId: string, notificationId?: string) => void;
 }
 
 /**
@@ -149,7 +150,7 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
         metadata: event.metadata,
         isPendingDecision: event.isPendingDecision,
         onView: (onViewSessionRef.current && !isBacklogItemNotification)
-          ? () => onViewSessionRef.current?.(event.sessionId)
+          ? () => onViewSessionRef.current?.(event.sessionId, event.notificationId || undefined)
           : undefined,
       });
       return;
@@ -180,7 +181,7 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
       metadata: event.metadata,
       isPendingDecision: event.isPendingDecision,
       onView: (onViewSessionRef.current && !isBacklogItemNotification)
-        ? () => onViewSessionRef.current?.(event.sessionId)
+        ? () => onViewSessionRef.current?.(event.sessionId, event.notificationId || undefined)
         : undefined,
       // Add focus window handler if we have source app info
       onFocusWindow: (sourceApp || sourceBundleId)

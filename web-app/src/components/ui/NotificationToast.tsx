@@ -5,6 +5,8 @@ import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import { useCoarsePointer } from "@/lib/hooks/useCoarsePointer";
 import { useNowTicker } from "@/lib/hooks/useNowTicker";
 import { useSwipeToDismiss } from "@/lib/hooks/useSwipeToDismiss";
+import { useSessionHidden } from "@/lib/hooks/useSessionHidden";
+import { BackgroundChip } from "./BackgroundChip";
 import { needsApproveConfirm, useDecisionFlow, type Verb } from "@/lib/hooks/useDecisionFlow";
 import { isPinned } from "@/lib/notification-policy";
 import { NotificationData } from "@/lib/types/notification";
@@ -150,6 +152,11 @@ export function NotificationToast({
     }
   }, []);
 
+  // A hidden session opens read-only: label the action for that expectation (Story 5.3).
+  const sessionHidden = useSessionHidden(notification.sessionId) === true;
+  const viewLabel = sessionHidden ? "View output" : "View Session";
+  const viewTestId = sessionHidden ? "notification-view-output" : "notification-view-session";
+
   const handleView = () => {
     auditLog.logNotificationSessionViewed(notification.id, notification.sessionId);
     notification.onView?.();
@@ -195,7 +202,7 @@ export function NotificationToast({
     notification.metadata?.tool_input_command ??
     notification.metadata?.tool_input_file ??
     notification.message;
-  const focusWindowAvailable = Boolean(hasSourceApp && notification.onFocusWindow);
+  const focusWindowAvailable = Boolean(hasSourceApp && notification.onFocusWindow) && !sessionHidden;
   // Focus Window is a desktop-terminal action: absent on touch, and tucked into "..." when crowded.
   const focusInOverflow = stacked && !coarse && focusWindowAvailable && isApproval;
   const showFocusInline = focusWindowAvailable && !coarse && !(stacked && isApproval);
@@ -301,6 +308,7 @@ export function NotificationToast({
               </span>
             )}
             <span className={typeLabel}>{notificationTypeLabel(notification.notificationType)}</span>
+            {sessionHidden && <BackgroundChip />}
           </div>
           <div className={subtitleRow}>
             {subtitleText && (
@@ -400,8 +408,8 @@ export function NotificationToast({
           </button>
         )}
         {showViewInline && (
-          <button className={viewButton} onClick={handleView}>
-            View Session
+          <button className={viewButton} onClick={handleView} data-testid={viewTestId}>
+            {viewLabel}
           </button>
         )}
         {showDismissButton && (
@@ -424,8 +432,8 @@ export function NotificationToast({
         {phoneApproval && menuOpen && (
           <div className={overflowMenu}>
             {coarse && (
-              <button type="button" className={inlineAction} onClick={handleView}>
-                View Session
+              <button type="button" className={inlineAction} onClick={handleView} data-testid={viewTestId}>
+                {viewLabel}
               </button>
             )}
             {focusInOverflow && (

@@ -948,4 +948,46 @@ describe('useTerminalFlowControl', () => {
       expect(console.warn).toHaveBeenCalledWith(expect.stringMatching(/not connected/i));
     });
   });
+  // Plan Story 5.3 (T-RO-02 client half): a read-only (hidden-session) view never
+  // sends Input or Resize frames; the server also drops them (Story 5.1).
+  describe('readOnly (hidden-session view)', () => {
+    it('sendInput sends nothing, including a chunked paste', () => {
+      const { options, pushMessageFn } = createTestOptions({ readOnly: true });
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => {
+        result.current.sendInput('rm -rf');
+        result.current.sendInput('x'.repeat(2000));
+        jest.advanceTimersByTime(500);
+      });
+
+      expect(pushMessageFn).not.toHaveBeenCalled();
+      expect(result.current.isInputChunking()).toBe(false);
+    });
+
+    it('resize sends no Resize frame but still requests a fresh pane capture', () => {
+      const { options, pushMessageFn } = createTestOptions({ readOnly: true });
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => {
+        result.current.resize(200, 50);
+        jest.advanceTimersByTime(500);
+      });
+
+      const cases = pushMessageFn.mock.calls.map((c) => c[0].data.case);
+      expect(cases).not.toContain('resize');
+      expect(cases).not.toContain('input');
+    });
+
+    it('stays writable by default', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => {
+        result.current.sendInput('ls');
+      });
+
+      expect(pushMessageFn.mock.calls[0][0].data.case).toBe('input');
+    });
+  });
 });

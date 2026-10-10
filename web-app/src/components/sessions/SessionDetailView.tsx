@@ -546,6 +546,11 @@ export function SessionDetailView({
   // Terminal instance pool: keeps up to 8 session terminals alive (LRU, oldest first)
   // Pool entries are either session IDs or "shell:<shellId>" strings.
   const [pooledSessionIds, setPooledSessionIds] = useState<string[]>([]);
+  // Pool ids whose session was hidden when it was current, so a pooled terminal stays
+  // read-only while another session is in front (Story 5.3).
+  const hiddenPoolIdsRef = useRef(new Set<string>());
+  if (session.hidden) hiddenPoolIdsRef.current.add(session.id);
+  else hiddenPoolIdsRef.current.delete(session.id);
   const [pooledMuxPaths, setPooledMuxPaths] = useState<string[]>([]);
   // Separate pool for shell PTY terminals, keyed by "shell:<shellId>"
   const [pooledShellKeys, setPooledShellKeys] = useState<string[]>([]);
@@ -1047,6 +1052,7 @@ export function SessionDetailView({
                       baseUrl={getApiBaseUrl()}
                       isVisible={poolId === session.id}
                       scheduleResync={getScheduleResync(poolId)}
+                      readOnly={hiddenPoolIdsRef.current.has(poolId)}
                     />
                   </div>
                 ))}
@@ -1148,6 +1154,7 @@ export function SessionDetailView({
                 shellId={shellId}
                 isVisible={activeTabId === shellKey}
                 scheduleResync={getScheduleResync(shellKey)}
+                readOnly={session.hidden}
                 onShellStatusChange={(status, exitCode) => {
                   updateShellStatus(shellId, status, exitCode);
                 }}
