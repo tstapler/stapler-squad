@@ -1295,6 +1295,7 @@ func registerStaticRoutes(srv *Server) {
 
 	// Register server-info endpoint for settings UI
 	srv.registerServerInfoHandler()
+	srv.registerUserThemesHandler()
 	log.Info("Registered server-info handler at /api/server-info")
 
 	// Serve web UI static files

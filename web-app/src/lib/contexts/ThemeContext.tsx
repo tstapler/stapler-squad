@@ -17,6 +17,7 @@ import {
   lightTheme,
   darkTheme,
 } from "@/styles/theme.css";
+import { vars } from "@/styles/theme-contract.css";
 
 const STORAGE_KEY = "stapler-theme";
 
@@ -34,10 +35,23 @@ export const THEME_CLASSES: Record<ThemeName, string> = {
 
 const ALL_THEME_CLASSES = Object.values(THEME_CLASSES);
 
+const CUSTOM_PREFIX = "custom:";
+
+/** A server-supplied theme (`GET /api/themes`): a built-in base plus dotted-path token overrides. */
+export interface UserTheme {
+  id: string;
+  label: string;
+  description?: string;
+  base: ThemeName;
+  tokens: Record<string, string>;
+}
+
 interface ThemeContextValue {
-  theme: ThemeName;
-  setTheme: (name: ThemeName) => void;
+  /** A built-in ThemeName, or `custom:<id>` for a user theme. */
+  theme: string;
+  setTheme: (name: string) => void;
   availableThemes: ThemeName[];
+  customThemes: UserTheme[];
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -51,6 +65,7 @@ export function useTheme(): ThemeContextValue {
       theme: "clean" as ThemeName,
       setTheme: () => {},
       availableThemes: [],
+      customThemes: [],
     };
   }
   return ctx;
@@ -63,7 +78,9 @@ interface ThemeProviderProps {
 }
 
 export function ThemeProvider({ children, initialTheme = "clean" }: ThemeProviderProps) {
-  const [theme, setThemeState] = useState<ThemeName>(initialTheme);
+  const [theme, setThemeState] = useState<string>(initialTheme);
+  const [customThemes, setCustomThemes] = useState<UserTheme[]>([]);
+  const customThemesRef = useRef<UserTheme[]>([]);
   const initialized = useRef(false);
 
   // On first mount, read localStorage and apply the persisted theme
@@ -71,22 +88,35 @@ export function ThemeProvider({ children, initialTheme = "clean" }: ThemeProvide
     if (initialized.current) return;
     initialized.current = true;
 
-    let persisted: ThemeName = initialTheme;
+    let persisted: string = initialTheme;
     try {
-      const stored = localStorage.getItem(STORAGE_KEY) as ThemeName | null;
-      if (stored && stored in THEME_CLASSES) {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored && (stored in THEME_CLASSES || stored.startsWith(CUSTOM_PREFIX))) {
         persisted = stored;
       }
     } catch {
       // localStorage unavailable
     }
 
-    applyThemeClass(persisted);
+    // A persisted custom theme can't apply until /api/themes answers; show the default meanwhile.
+    applyTheme(persisted in THEME_CLASSES ? persisted : initialTheme, []);
     setThemeState(persisted);
+
+    fetch("/api/themes")
+      .then((res) => (res.ok ? res.json() : { themes: [] }))
+      .then((body: { themes?: UserTheme[] }) => {
+        const themes = body.themes ?? [];
+        customThemesRef.current = themes;
+        setCustomThemes(themes);
+        if (persisted.startsWith(CUSTOM_PREFIX)) applyTheme(persisted, themes);
+      })
+      .catch(() => {
+        // server without /api/themes: built-in themes only
+      });
   }, [initialTheme]);
 
-  const setTheme = useCallback((name: ThemeName) => {
-    applyThemeClass(name);
+  const setTheme = useCallback((name: string) => {
+    applyTheme(name, customThemesRef.current);
     setThemeState(name);
     try {
       localStorage.setItem(STORAGE_KEY, name);
@@ -101,11 +131,47 @@ export function ThemeProvider({ children, initialTheme = "clean" }: ThemeProvide
         theme,
         setTheme,
         availableThemes: Object.keys(THEME_CLASSES) as ThemeName[],
+        customThemes,
       }}
     >
       {children}
     </ThemeContext.Provider>
   );
+}
+
+let appliedOverrides: string[] = [];
+
+/** `var(--color-primary__x1)` -> `--color-primary__x1`, walking a dotted path through the contract. */
+function cssVarName(path: string): string | null {
+  let node: unknown = vars;
+  for (const key of path.split(".")) {
+    if (typeof node !== "object" || node === null || !(key in node)) return null;
+    node = (node as Record<string, unknown>)[key];
+  }
+  const match = typeof node === "string" ? /^var\((--[^),\s]+)/.exec(node) : null;
+  return match ? match[1] : null;
+}
+
+function applyTheme(name: string, custom: UserTheme[]) {
+  if (typeof document === "undefined") return;
+  const style = document.documentElement.style;
+  appliedOverrides.forEach((prop) => style.removeProperty(prop));
+  appliedOverrides = [];
+
+  const user = name.startsWith(CUSTOM_PREFIX)
+    ? custom.find((t) => t.id === name.slice(CUSTOM_PREFIX.length))
+    : undefined;
+  if (!user) {
+    applyThemeClass(name in THEME_CLASSES ? (name as ThemeName) : "clean");
+    return;
+  }
+  applyThemeClass(user.base in THEME_CLASSES ? user.base : "clean");
+  for (const [path, value] of Object.entries(user.tokens)) {
+    const prop = cssVarName(path);
+    if (!prop) continue;
+    style.setProperty(prop, value);
+    appliedOverrides.push(prop);
+  }
 }
 
 function applyThemeClass(name: ThemeName) {
