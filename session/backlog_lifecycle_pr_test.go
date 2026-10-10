@@ -50,9 +50,9 @@ func TestBacklogItemLink(t *testing.T) {
 func TestBuildFallbackPRBody(t *testing.T) {
 	t.Parallel()
 
-	const dashboardBaseURL = "http://localhost:8543"
+	const dashboardBaseURL = "https://ssq.example.com"
 	const itemID = "b608ab1e-b86e-4130-8879-7328cd363063"
-	wantLink := "Backlog item: http://localhost:8543/backlog?item=b608ab1e-b86e-4130-8879-7328cd363063"
+	wantLink := "Backlog item: https://ssq.example.com/backlog?item=b608ab1e-b86e-4130-8879-7328cd363063"
 
 	tests := []struct {
 		name           string
@@ -119,10 +119,70 @@ func TestBuildFallbackPRBody_SanitizesDescription(t *testing.T) {
 		Description: "<script>alert(1)</script>" + strings.Repeat("a", 2000),
 	}
 
-	got := buildFallbackPRBody(item, "http://localhost:8543")
+	got := buildFallbackPRBody(item, "https://ssq.example.com")
 
 	require.NotContains(t, got, "<script>")
 	require.Contains(t, got, "[truncated]")
+}
+
+// TestBuildFallbackPRBody_OmitsBacklogFooter_WhenNoBaseURL: with no
+// reviewer-reachable base URL the footer is dropped entirely, never replaced
+// by a dead link.
+func TestBuildFallbackPRBody_OmitsBacklogFooter_WhenNoBaseURL(t *testing.T) {
+	t.Parallel()
+
+	item := &BacklogItemData{ID: "b608ab1e-b86e-4130-8879-7328cd363063", Description: "Fixes the thing."}
+	got := buildFallbackPRBody(item, "")
+
+	require.Equal(t, "## Summary\nFixes the thing.\n", got)
+	require.NotContains(t, got, "Backlog item")
+	require.NotContains(t, got, "/backlog?item=")
+}
+
+func TestAppendBacklogFooter(t *testing.T) {
+	t.Parallel()
+
+	const itemID = "b608ab1e-b86e-4130-8879-7328cd363063"
+	drafted := "## Summary\n\nBody text.\n\n"
+
+	require.Equal(t,
+		"## Summary\n\nBody text.\n\nBacklog item: https://ssq.example.com/backlog?item="+itemID+"\n",
+		appendBacklogFooter(drafted, "https://ssq.example.com", itemID))
+	require.Equal(t, "## Summary\n\nBody text.\n", appendBacklogFooter(drafted, "", itemID))
+}
+
+func TestReviewerReachableBaseURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct{ name, in, want string }{
+		{"public https", "https://ssq.example.com", "https://ssq.example.com"},
+		{"trailing slash trimmed", "https://ssq.example.com/", "https://ssq.example.com"},
+		{"lan hostname with port", "https://onyx.lan:8444", "https://onyx.lan:8444"},
+		{"empty", "", ""},
+		{"localhost", "http://localhost:8543", ""},
+		{"loopback v4", "http://127.0.0.1:8543", ""},
+		{"loopback v6", "http://[::1]:8543", ""},
+		{"unspecified", "http://0.0.0.0:8543", ""},
+		{"no scheme", "ssq.example.com", ""},
+		{"custom scheme", "ssq://host/backlog", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tt.want, ReviewerReachableBaseURL(tt.in))
+		})
+	}
+}
+
+func TestListenerDashboardBaseURL_DropsLoopback(t *testing.T) {
+	t.Parallel()
+
+	l := &BacklogLifecycleListener{}
+	require.Equal(t, "", l.getDashboardBaseURL(), "unset fn must yield no link")
+	l.SetDashboardBaseURLFn(func() string { return "http://127.0.0.1:8543" })
+	require.Equal(t, "", l.getDashboardBaseURL())
+	l.SetDashboardBaseURLFn(func() string { return "https://ssq.example.com" })
+	require.Equal(t, "https://ssq.example.com", l.getDashboardBaseURL())
 }
 
 func mustSerializeAcCriteria(t *testing.T, criteria []domain.AcCriterion) domain.AcCriteriaJSON {

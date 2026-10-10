@@ -2772,7 +2772,7 @@ func TestPushAndCreatePR_should_SendWarningNotification_When_RequestCopilotRevie
 // a headless pool is wired and DraftPRDescription succeeds, pushAndCreatePR's
 // drafted-body path (not just buildFallbackPRBody's fallback path) still
 // appends the "Backlog item: <link>" deep link the reviewer needs — see the
-// `strings.TrimRight(drafted, "\n") + "\n\nBacklog item: " + backlogItemLink(...)`
+// `appendBacklogFooter`
 // composition in pushAndCreatePR. Drives a real headless.Pool against a
 // FakeRunner (session/headless/fake_runner.go) so DraftPRDescription's own
 // non-empty-diff precondition is exercised for real, using a small on-disk
@@ -2817,6 +2817,7 @@ func TestPushAndCreatePR_AppendsBacklogLink_ToAgentDraftedBody(t *testing.T) {
 
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetHeadlessPool(pool)
+	listener.SetDashboardBaseURLFn(func() string { return "https://ssq.example.com" })
 	fakeCreator := &fakePRCreator{
 		createURL:    "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/321",
 		createNumber: 321,
