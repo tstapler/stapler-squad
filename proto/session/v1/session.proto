@@ -705,8 +705,8 @@ message ListSessionsRequest {
   // Defaults to false — archived sessions are excluded unless explicitly requested.
   bool include_archived = 8;
 
-  // When true, return only hidden (system/background) sessions. Not yet
-  // honored by the server; reserved for the hidden-session view.
+  // When true, return only hidden (system/background) sessions, regardless of
+  // include_hidden. Used by the tray's Background activity section.
   bool hidden_only = 9;
 }
 
