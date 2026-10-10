@@ -22,7 +22,9 @@ describe("include_hidden guard", () => {
       const text = fs.readFileSync(file, "utf8");
       // Code only: comments may explain why the flag is absent.
       const code = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-      return /\bincludeHidden\s*:|\binclude_hidden\s*:|\bhiddenOnly\s*:/.test(code);
+      if (/\bincludeHidden\s*:|\binclude_hidden\s*:/.test(code)) return true;
+      // hidden_only is the Background section's own query (Story 5.4) and nobody else's.
+      return /\bhiddenOnly\s*:/.test(code) && !file.endsWith(path.join("hooks", "useBackgroundSessions.ts"));
     });
     expect(offenders).toEqual([]);
   });

@@ -52,6 +52,16 @@ describe("useSessionHidden", () => {
     expect(result.current).toBeUndefined();
   });
 
+  it("should_not_ask_again_for_a_session_the_server_reported_not_found", async () => {
+    getSession.mockRejectedValue({ code: 5 });
+    const store = makeStore();
+    const first = renderHook(() => useSessionHidden("gone"), { wrapper: wrapper(store) });
+    await waitFor(() => expect(getSession).toHaveBeenCalledTimes(1));
+    first.unmount();
+    renderHook(() => useSessionHidden("gone"), { wrapper: wrapper(store) });
+    expect(getSession).toHaveBeenCalledTimes(1);
+  });
+
   it("should_stay_unknown_outside_a_redux_provider", () => {
     const { result } = renderHook(() => useSessionHidden("h1"));
     expect(result.current).toBeUndefined();
