@@ -161,14 +161,14 @@ service SessionService {
 
   // PruneHiddenSessionNotifications removes stored notification rows that
   // belong to hidden sessions. Operator-triggered; dry run unless apply is set.
-  // Stub: returns Unimplemented until the prune story lands.
+  // Keeps rows whose session cannot be determined; guarded as a local write.
   // +api: notification:prune-hidden
   rpc PruneHiddenSessionNotifications(PruneHiddenSessionNotificationsRequest) returns (PruneHiddenSessionNotificationsResponse) {}
 
   // GetDeliveryGateStats reports the hidden-session delivery gate's counters and
   // the persisted hourly soak buckets. Aggregate counters only; no row content.
-  // Stub: returns Unimplemented until the stats story lands.
-  // +api: notification:delivery-gate-stats
+  // Unavailable when the gate is not configured.
+  // +api: notification:gate-stats
   rpc GetDeliveryGateStats(GetDeliveryGateStatsRequest) returns (GetDeliveryGateStatsResponse) {}
 
   // ListApprovalRules returns all auto-approval rules (user, seed, and claude-settings).
@@ -3315,7 +3315,7 @@ message UpdateFeatureFlagRequest {
   // every other mutation.
   bool enabled = 2;
   // "kind:<name>" for a per-kind change, or the literal "global" for a global
-  // set. Validation (enforced by the server once scopes are implemented):
+  // set. Validation (enforced by the server):
   // UNSPECIFIED with a non-empty scope, an unknown enum value, a set with an
   // empty scope and RESET_GLOBAL with a scope are InvalidArgument; CLEAR_SCOPE
   // requires a "kind:" scope.

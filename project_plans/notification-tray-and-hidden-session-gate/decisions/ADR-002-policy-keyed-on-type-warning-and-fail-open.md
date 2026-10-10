@@ -95,3 +95,9 @@ guardrail stop). Lookup can fail for deleted sessions (84 of 319 stored rows).
   keeps these rows regardless.
 - Unit test enumerates every `sessionv1.NotificationType` value and fails if a
   new enum value has no explicit class (compile-time-style exhaustiveness).
+- **Accepted risk (Phase 6 verify):** `delivery_class` and `auto_remediating` are
+  caller-supplied metadata on an unauthenticated local RPC, so any localhost
+  caller can demote its own failure-class event to routine and have a hidden
+  session's ERROR suppressed. Needs-human events are not demotable. The hook
+  handler is itself an HTTP caller, so the server cannot tell it from another
+  client; narrowing this needs an in-process-only producer path (operator call).
