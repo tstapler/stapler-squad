@@ -1077,4 +1077,19 @@ describe("unread count floor (TH-1)", () => {
     });
     expect(result.current.getUnreadCount()).toBe(3);
   });
+
+  it("mark_as_read_by_session_should_send_one_rpc_under_strict_mode_when_history_has_unread_rows", () => {
+    mockMarkAsRead.mockClear();
+    const strict = ({ children }: { children: React.ReactNode }) => (
+      <React.StrictMode>{wrapper({ children })}</React.StrictMode>
+    );
+    const { result } = renderHook(() => useNotifications(), { wrapper: strict });
+    act(() => {
+      result.current.addToHistoryOnly(makeNotification({ sessionId: "s1" }));
+    });
+    act(() => {
+      result.current.markAsReadBySessionId("s1");
+    });
+    expect(mockMarkAsRead).toHaveBeenCalledTimes(1);
+  });
 });

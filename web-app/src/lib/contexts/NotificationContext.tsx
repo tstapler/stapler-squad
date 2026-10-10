@@ -119,6 +119,11 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
   const timers = useToastTimers();
   const [notificationHistory, setNotificationHistory] = useState<NotificationHistoryItem[]>([]);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
+  // Commands read these for side effects (audit, RPC) so React updater functions stay pure.
+  const historyStateRef = useRef<NotificationHistoryItem[]>([]);
+  historyStateRef.current = notificationHistory;
+  const isPanelOpenRef = useRef(false);
+  isPanelOpenRef.current = isPanelOpen;
   const [moved, setMovedState] = useState<MovedBatch | null>(null);
   const movedRef = useRef<MovedBatch | null>(null);
   const { announce } = useAnnounce();
@@ -176,6 +181,12 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
       return notification.id;
     };
 
+    // Pure transform applied to the state and, eagerly, to the ref a second command in the same tick reads.
+    const mutateHistory = (fn: (prev: NotificationHistoryItem[]) => NotificationHistoryItem[]) => {
+      historyStateRef.current = fn(historyStateRef.current);
+      setNotificationHistory(fn);
+    };
+
     const addToHistory = (notification: NotificationData) =>
       setNotificationHistory((prev) =>
         prev.some((n) => n.id === notification.id) ? prev : [{ ...notification, isRead: false }, ...prev],
@@ -197,12 +208,10 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
     const markAsRead = (id: string | string[]) => {
       const ids = Array.isArray(id) ? id : [id];
       const idSet = new Set(ids);
-      setNotificationHistory((prev) => {
-        for (const n of prev) {
-          if (idSet.has(n.id)) auditLogRef.current.logNotificationMarkedRead(n.id, n.sessionId);
-        }
-        return prev.map((n) => (idSet.has(n.id) ? { ...n, isRead: true, isPendingDecision: false } : n));
-      });
+      for (const n of historyStateRef.current) {
+        if (idSet.has(n.id)) auditLogRef.current.logNotificationMarkedRead(n.id, n.sessionId);
+      }
+      mutateHistory((prev) => prev.map((n) => (idSet.has(n.id) ? { ...n, isRead: true, isPendingDecision: false } : n)));
       return historyRef.current.markAsRead(ids);
     };
 
@@ -260,12 +269,13 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
         writeQuietMode(on);
         setQuietModeState(on);
       },
-      togglePanel: () =>
-        setIsPanelOpen((prev) => {
-          if (!prev) auditLogRef.current.logNotificationPanelOpened();
-          else auditLogRef.current.logNotificationPanelClosed();
-          return !prev;
-        }),
+      togglePanel: () => {
+        const opening = !isPanelOpenRef.current;
+        isPanelOpenRef.current = opening;
+        if (opening) auditLogRef.current.logNotificationPanelOpened();
+        else auditLogRef.current.logNotificationPanelClosed();
+        setIsPanelOpen(opening);
+      },
       markAsRead,
       // Removes the toast(s) AND marks them read in one operation; prefer it to
       // calling removeNotification + markAsRead separately.
@@ -283,46 +293,39 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
       },
       markAsReadBySessionId: (sessionId) => {
         const sessionIds = toIdSet(sessionId);
-        setNotificationHistory((prev) => {
-          const idsToMark: string[] = [];
-          const updated = prev.map((n) => {
-            if (!n.isRead && n.sessionId != null && sessionIds.has(n.sessionId)) {
-              idsToMark.push(n.id);
-              return { ...n, isRead: true, isPendingDecision: false };
-            }
-            return n;
-          });
-          if (idsToMark.length > 0) historyRef.current.markAsRead(idsToMark);
-          return updated;
-        });
+        const idsToMark = historyStateRef.current
+          .filter((n) => !n.isRead && n.sessionId != null && sessionIds.has(n.sessionId))
+          .map((n) => n.id);
+        if (idsToMark.length === 0) return;
+        const marked = new Set(idsToMark);
+        mutateHistory((prev) =>
+          prev.map((n) => (marked.has(n.id) ? { ...n, isRead: true, isPendingDecision: false } : n)),
+        );
+        historyRef.current.markAsRead(idsToMark);
       },
       removeToastBySessionId: (sessionId) => {
         const sessionIds = toIdSet(sessionId);
         sessionIds.delete(""); // never match notifications without a sessionId
         if (sessionIds.size > 0) dispatch({ type: "removeBySessionIds", sessionIds });
       },
-      removeFromHistory: (id) =>
-        setNotificationHistory((prev) => {
-          const notification = prev.find((n) => n.id === id);
-          if (notification) auditLogRef.current.logNotificationRemoved(notification.id, notification.sessionId);
-          return prev.filter((n) => n.id !== id);
-        }),
+      removeFromHistory: (id) => {
+        const notification = historyStateRef.current.find((n) => n.id === id);
+        if (notification) auditLogRef.current.logNotificationRemoved(notification.id, notification.sessionId);
+        mutateHistory((prev) => prev.filter((n) => n.id !== id));
+      },
       clearHistory: () => {
-        setNotificationHistory((prev) => {
-          if (prev.length > 0) auditLogRef.current.logNotificationHistoryCleared(prev.length);
-          return [];
-        });
+        const count = historyStateRef.current.length;
+        if (count > 0) auditLogRef.current.logNotificationHistoryCleared(count);
+        mutateHistory(() => []);
         historyRef.current.clearHistory();
       },
       clearHistoryByIds: async (ids, options) => {
         const result = await historyRef.current.clearByIds(ids, options);
         const gone = ids.filter((id) => !result.kept.includes(id));
         if (gone.length > 0) {
-          setNotificationHistory((prev) => {
-            const removed = prev.filter((n) => gone.includes(n.id));
-            if (removed.length > 0) auditLogRef.current.logNotificationHistoryCleared(removed.length);
-            return prev.filter((n) => !gone.includes(n.id));
-          });
+          const removedCount = historyStateRef.current.filter((n) => gone.includes(n.id)).length;
+          if (removedCount > 0) auditLogRef.current.logNotificationHistoryCleared(removedCount);
+          mutateHistory((prev) => prev.filter((n) => !gone.includes(n.id)));
           sendToOtherTabs({ type: "NOTIFICATIONS_BULK_DISMISSED", kind: "dismissed", ids: gone });
         }
         return result;
