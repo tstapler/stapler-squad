@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/events"
 )
 
 const (
@@ -60,6 +61,13 @@ func IsActionableType(t int32) bool {
 	default:
 		return false
 	}
+}
+
+// IsPendingDecision is the single server definition of "the operator must act on
+// this": an unread actionable type not stamped auto_remediating=true. The history
+// record field, the live event field, Clear and the prune all call it (ADR-008).
+func IsPendingDecision(t int32, metadata map[string]string, read bool) bool {
+	return !read && IsActionableType(t) && metadata[events.MetadataKeyAutoRemediating] != "true"
 }
 
 // NotificationRecord is the persisted representation of a notification event.
@@ -424,7 +432,7 @@ func (s *NotificationHistoryStore) Clear(before *time.Time) (int, error) {
 
 	var kept []*NotificationRecord
 	for _, r := range s.records {
-		if !r.IsRead && IsActionableType(r.NotificationType) {
+		if IsPendingDecision(r.NotificationType, r.Metadata, r.IsRead) {
 			kept = append(kept, r) // never delete a still-pending decision
 			continue
 		}

@@ -11,6 +11,9 @@ const (
 	// MetadataKeyItemID carries the backlog item ID a session-scoped
 	// notification's session is linked to, when known.
 	MetadataKeyItemID = "item_id"
+	// MetadataKeyAutoRemediating marks a WARNING whose automation is already
+	// acting; it is informational, not a pending decision.
+	MetadataKeyAutoRemediating = "auto_remediating"
 )
 
 // SessionScopedMetadata builds a fresh metadata map for a session-scoped
