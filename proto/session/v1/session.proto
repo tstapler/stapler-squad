@@ -162,13 +162,13 @@ service SessionService {
   // PruneHiddenSessionNotifications removes stored notification rows that
   // belong to hidden sessions. Operator-triggered; dry run unless apply is set.
   // Keeps rows whose session cannot be determined; guarded as a local write.
-  // +api: PruneHiddenSessionNotifications
+  // +api: notification:prune-hidden
   rpc PruneHiddenSessionNotifications(PruneHiddenSessionNotificationsRequest) returns (PruneHiddenSessionNotificationsResponse) {}
 
   // GetDeliveryGateStats reports the hidden-session delivery gate's counters and
   // the persisted hourly soak buckets. Aggregate counters only; no row content.
   // Unavailable when the gate is not configured.
-  // +api: GetDeliveryGateStats
+  // +api: notification:gate-stats
   rpc GetDeliveryGateStats(GetDeliveryGateStatsRequest) returns (GetDeliveryGateStatsResponse) {}
 
   // ListApprovalRules returns all auto-approval rules (user, seed, and claude-settings).

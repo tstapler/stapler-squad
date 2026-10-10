@@ -291,7 +291,7 @@ func (s *SessionService) ClearNotificationHistory(
 
 // PruneHiddenSessionNotifications removes stored notifications of hidden sessions
 // (dry run unless apply is set; LocalWriteGuard procedure; audited; no MCP tool).
-// +api: PruneHiddenSessionNotifications
+// +api: notification:prune-hidden
 func (s *SessionService) PruneHiddenSessionNotifications(
 	ctx context.Context,
 	req *connect.Request[sessionv1.PruneHiddenSessionNotificationsRequest],
@@ -300,7 +300,7 @@ func (s *SessionService) PruneHiddenSessionNotifications(
 }
 
 // GetDeliveryGateStats reports the hidden-session delivery gate's counters and soak evidence.
-// +api: GetDeliveryGateStats
+// +api: notification:gate-stats
 func (s *SessionService) GetDeliveryGateStats(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetDeliveryGateStatsRequest],

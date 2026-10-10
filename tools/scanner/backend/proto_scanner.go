@@ -412,6 +412,15 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// server/services/session_service.go's ProbeProgram handler, so
 	// markerFound stays false for this entry until one is added separately.
 	"ProbeProgram": "program:probe",
+	// Gate RPCs match their "// +api:" markers; the rest keep the method-name id
+	// ScanProto already produced, so committed registry files stay identical.
+	"GetDeliveryGateStats":            "notification:gate-stats",
+	"PruneHiddenSessionNotifications": "notification:prune-hidden",
+	"GetCompactionStats":              "GetCompactionStats",
+	"GetContextHistory":               "GetContextHistory",
+	"ListSessionsByCeilingTime":       "ListSessionsByCeilingTime",
+	"GetLLMBackendSettings":           "GetLLMBackendSettings",
+	"UpdateLLMBackendSettings":        "UpdateLLMBackendSettings",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

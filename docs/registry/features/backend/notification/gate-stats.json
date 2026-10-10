@@ -1,12 +1,12 @@
 {
-  "id": "PruneHiddenSessionNotifications",
+  "id": "notification:gate-stats",
   "type": "backend",
   "service": "SessionService",
-  "method": "PruneHiddenSessionNotifications",
+  "method": "GetDeliveryGateStats",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
   "handlerFile": "server/services/session_service_delegates.go",
   "tested": false,
   "testIds": [],
-  "lastModified": "2026-10-09T21:29:21.021923534-07:00"
+  "lastModified": "2026-10-10T03:13:42.800267392-07:00"
 }
