@@ -92,4 +92,17 @@ describe("ThemeProvider user themes", () => {
     );
     await waitFor(() => expect(screen.getByTestId("theme").textContent).toBe("clean"));
   });
+
+  it("caches the applied custom theme for the FOUC script", async () => {
+    render(
+      <ThemeProvider>
+        <Probe />
+      </ThemeProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId("count").textContent).toBe("1"));
+    act(() => screen.getByText("netflix").click());
+    const cache = JSON.parse(localStorage.getItem("stapler-theme-custom")!);
+    expect(cache.id).toBe("custom:netflix");
+    expect(cache.props[propName(vars.color.primary)]).toBe("#e50914");
+  });
 });

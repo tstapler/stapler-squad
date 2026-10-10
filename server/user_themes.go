@@ -17,6 +17,8 @@ const (
 	userThemesDirName = "themes"
 	maxUserThemeBytes = 64 << 10
 	maxThemeValueLen  = 200
+	maxUserThemes     = 50
+	maxThemeTokens    = 300
 	defaultThemeBase  = "clean"
 )
 
@@ -27,7 +29,7 @@ var (
 	// Token values land in CSS custom properties. Allowlist the characters, and below the CSS functions,
 	// so nothing can end the declaration or fetch a resource (url(), image-set(), src(), @import...).
 	themeValueChars   = regexp.MustCompile(`^[a-zA-Z0-9#%.,()\s/'"_+*-]+$`)
-	themeFuncCall     = regexp.MustCompile(`([a-zA-Z-]+)\(`)
+	themeFuncCall     = regexp.MustCompile(`([a-zA-Z0-9_-]+)\(`)
 	themeAllowedFuncs = map[string]bool{
 		"rgb": true, "rgba": true, "hsl": true, "hsla": true, "hwb": true, "lab": true, "lch": true,
 		"oklab": true, "oklch": true, "color-mix": true, "var": true, "calc": true, "min": true, "max": true, "clamp": true,
@@ -52,6 +54,10 @@ func loadUserThemes(dir string) []userTheme {
 		return themes
 	}
 	for _, e := range entries {
+		if len(themes) >= maxUserThemes {
+			log.Warn("user-themes: too many theme files, ignoring the rest", "max", maxUserThemes)
+			break
+		}
 		id := strings.TrimSuffix(e.Name(), ".json")
 		if e.IsDir() || id == e.Name() || !themeIDPattern.MatchString(id) {
 			continue
@@ -101,6 +107,10 @@ func sanitizeUserTheme(id string, t userTheme) userTheme {
 	}
 	clean := make(map[string]string, len(t.Tokens))
 	for k, v := range t.Tokens {
+		if len(clean) >= maxThemeTokens {
+			log.Warn("user-themes: too many tokens, ignoring the rest", "theme", id, "max", maxThemeTokens)
+			break
+		}
 		if !themeTokenPattern.MatchString(k) || len(v) > maxThemeValueLen || !safeThemeValue(v) {
 			log.Warn("user-themes: dropping token", "theme", id, "token", k)
 			continue
@@ -119,7 +129,9 @@ func (s *Server) registerUserThemesHandler() {
 			return
 		}
 		themes := []userTheme{}
-		if configDir, err := config.GetConfigDir(); err == nil {
+		if configDir, err := config.GetConfigDir(); err != nil {
+			log.Warn("user-themes: config dir unavailable", "err", err)
+		} else {
 			themes = loadUserThemes(filepath.Join(configDir, userThemesDirName))
 		}
 		w.Header().Set("Content-Type", "application/json")

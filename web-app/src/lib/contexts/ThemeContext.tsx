@@ -36,6 +36,18 @@ export const THEME_CLASSES: Record<ThemeName, string> = {
 const ALL_THEME_CLASSES = Object.values(THEME_CLASSES);
 
 const CUSTOM_PREFIX = "custom:";
+/** Last applied custom theme (`{id, cls, props}`), read by the FOUC script in app/layout.tsx. */
+const CUSTOM_CACHE_KEY = "stapler-theme-custom";
+
+const isBuiltin = (name: string): name is ThemeName => Object.hasOwn(THEME_CLASSES, name);
+
+function readCustomCache(): { id: string; cls: string; props: Record<string, string> } | null {
+  try {
+    return JSON.parse(localStorage.getItem(CUSTOM_CACHE_KEY) ?? "null");
+  } catch {
+    return null;
+  }
+}
 
 /** A server-supplied theme (`GET /api/themes`): a built-in base plus dotted-path token overrides. */
 export interface UserTheme {
@@ -93,22 +105,29 @@ export function ThemeProvider({ children, initialTheme = "clean" }: ThemeProvide
     let persisted: string = initialTheme;
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored && (stored in THEME_CLASSES || stored.startsWith(CUSTOM_PREFIX))) {
+      if (stored && (isBuiltin(stored) || stored.startsWith(CUSTOM_PREFIX))) {
         persisted = stored;
       }
     } catch {
       // localStorage unavailable
     }
 
-    // A persisted custom theme can't apply until /api/themes answers; show the default meanwhile.
-    applyTheme(persisted in THEME_CLASSES ? persisted : initialTheme, []);
+    if (isBuiltin(persisted)) {
+      applyTheme(persisted, []);
+    } else {
+      // A persisted custom theme is already painted by the FOUC script from its cache; adopt those
+      // overrides so a later switch clears them, then confirm against /api/themes.
+      const cached = readCustomCache();
+      if (cached?.id === persisted) appliedOverrides = Object.keys(cached.props);
+    }
     themeRef.current = persisted;
     setThemeState(persisted);
 
+    if (typeof fetch !== "function") return;
     fetch("/api/themes")
       .then((res) => (res.ok ? res.json() : { themes: [] }))
       .then((body: { themes?: UserTheme[] }) => {
-        const themes = body.themes ?? [];
+        const themes = (body.themes ?? []).map((t) => ({ ...t, tokens: t.tokens ?? {} }));
         customThemesRef.current = themes;
         setCustomThemes(themes);
         const current = themeRef.current;
@@ -118,6 +137,7 @@ export function ThemeProvider({ children, initialTheme = "clean" }: ThemeProvide
         } else {
           // Persisted custom theme no longer exists (file removed): fall back rather than show nothing selected.
           themeRef.current = initialTheme;
+          applyTheme(initialTheme, []);
           setThemeState(initialTheme);
         }
       })
@@ -174,15 +194,23 @@ function applyTheme(name: string, custom: UserTheme[]) {
     ? custom.find((t) => t.id === name.slice(CUSTOM_PREFIX.length))
     : undefined;
   if (!user) {
-    applyThemeClass(name in THEME_CLASSES ? (name as ThemeName) : "clean");
+    applyThemeClass(isBuiltin(name) ? name : "clean");
     return;
   }
-  applyThemeClass(user.base in THEME_CLASSES ? user.base : "clean");
+  const base = isBuiltin(user.base) ? user.base : "clean";
+  applyThemeClass(base);
+  const props: Record<string, string> = {};
   for (const [path, value] of Object.entries(user.tokens)) {
     const prop = cssVarName(path);
     if (!prop) continue;
     style.setProperty(prop, value);
-    appliedOverrides.push(prop);
+    props[prop] = value;
+  }
+  appliedOverrides = Object.keys(props);
+  try {
+    localStorage.setItem(CUSTOM_CACHE_KEY, JSON.stringify({ id: name, cls: THEME_CLASSES[base], props }));
+  } catch {
+    // ignore
   }
 }
 
