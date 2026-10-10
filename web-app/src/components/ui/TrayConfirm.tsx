@@ -20,7 +20,15 @@ interface TrayConfirmProps {
  */
 export function TrayConfirm({ text, confirmLabel, error, busy, onConfirm, onCancel }: TrayConfirmProps) {
   const cancelRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => cancelRef.current?.focus({ preventScroll: true }), []);
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    cancelRef.current?.focus({ preventScroll: true });
+    return () => {
+      // Confirm and Cancel unmount the focused button; hand focus back to the control that opened this.
+      const active = document.activeElement;
+      if (opener?.isConnected && (!active || active === document.body)) opener.focus({ preventScroll: true });
+    };
+  }, []);
 
   return (
     <div

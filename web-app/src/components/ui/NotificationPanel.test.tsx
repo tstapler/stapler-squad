@@ -603,6 +603,17 @@ describe("tray (notification_tray_v2)", () => {
       expect(screen.queryByRole("menu")).toBeNull();
       expect(document.activeElement).toBe(trigger);
     });
+
+    it("focus_should_return_to_overflow_trigger_after_menu_item_and_after_confirm_cancel", () => {
+      mockHistory = [info("a", "s1")];
+      renderTray();
+      const trigger = screen.getByTestId("tray-overflow");
+      openMenuItem("tray-menu-clear-informational");
+      expect(screen.getByTestId("tray-confirm")).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId("tray-confirm-cancel"));
+      expect(screen.queryByTestId("tray-confirm")).toBeNull();
+      expect(document.activeElement).toBe(trigger);
+    });
   });
 
   describe("offline and error states (Tasks 4.3e-4.3g)", () => {

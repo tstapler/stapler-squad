@@ -104,7 +104,8 @@ export function TrayOverflowMenu({ groups, triggerLabel = "More notification act
                     data-testid={`tray-menu-${item.key}`}
                     onClick={() => {
                       if (disabled) return;
-                      setOpen(false);
+                      // The focused item unmounts with the menu; a target that opens its own UI re-focuses over this.
+                      close(true);
                       item.onSelect();
                     }}
                   >
