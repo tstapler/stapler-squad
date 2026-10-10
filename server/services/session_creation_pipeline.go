@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"go.opentelemetry.io/otel/codes"
@@ -141,7 +142,7 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error("[session pipeline] panic recovered, writing terminal Failed",
-				"session", p.instanceTitle, "panic", r)
+				"session", p.instanceTitle, "panic", r, "stack", string(debug.Stack()))
 			span.AddEvent("panic_recovered")
 			terminal(pipelineOutcome{session.Failed, "StartupError", SessionCreationOutcomeFailed})
 		}
