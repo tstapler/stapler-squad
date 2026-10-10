@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
 func TestRateLimitStateToProto_AllStates(t *testing.T) {
@@ -549,4 +550,22 @@ func TestInstanceToProto_LegacyPathFields_Unchanged(t *testing.T) {
 	require.Equal(t, repoPath, got.Path, "path carried the disk-checked value, which falls back here")
 	//nolint:staticcheck // ditto.
 	require.Equal(t, worktreePath, got.WorkingDir, "working_dir carried the disk-agnostic value")
+}
+
+func TestInstanceToProto_PopulatesContextHealthFields(t *testing.T) {
+	li := session.NewLiveInstance(&session.Instance{})
+	t.Cleanup(li.Stop)
+	li.SetContextHealth(tokens.ContextHealthVerdict{Level: tokens.HealthRed, Reason: "Repeated the same Bash call 6 times in a row"})
+
+	proto := InstanceToProto(li.Instance, nil)
+	require.NotNil(t, proto)
+	require.Equal(t, sessionv1.ContextHealth_CONTEXT_HEALTH_RED, proto.ContextHealth)
+	require.Equal(t, "Repeated the same Bash call 6 times in a row", proto.ContextHealthReason)
+}
+
+func TestInstanceToProto_LeavesContextHealthUnspecifiedWhenNeverComputed(t *testing.T) {
+	proto := InstanceToProto(&session.Instance{}, nil)
+	require.NotNil(t, proto)
+	require.Equal(t, sessionv1.ContextHealth_CONTEXT_HEALTH_UNSPECIFIED, proto.ContextHealth)
+	require.Equal(t, "", proto.ContextHealthReason)
 }

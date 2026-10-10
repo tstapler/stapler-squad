@@ -376,6 +376,8 @@ type Config struct {
 	Hibernation HibernationConfig `json:"hibernation,omitempty"`
 	// Capacity holds configuration for the provider capacity monitoring and transition feature.
 	Capacity CapacityConfig `json:"capacity,omitempty"`
+	// ContextHealth holds the thresholds for the per-session ContextHealth signal.
+	ContextHealth ContextHealthConfig `json:"context_health,omitempty"`
 	// HandoffSummary holds configuration for the restart-with-handoff-summary feature.
 	HandoffSummary HandoffSummaryConfig `json:"handoff_summary,omitempty"`
 	// Quota holds configuration for the account-wide session-quota gate that
@@ -786,6 +788,7 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 		RetentionDays:             30,
 	}
 	cfg.Capacity = CapacityConfig{}.CapacityConfigOrDefault()
+	cfg.ContextHealth = ContextHealthConfig{}.ContextHealthConfigOrDefault()
 	cfg.HandoffSummary = HandoffSummaryConfig{}.HandoffSummaryConfigOrDefault()
 	cfg.Quota = QuotaConfig{}.QuotaConfigOrDefault()
 	// Initialize SessionDefaults maps so callers never encounter nil maps.
@@ -1633,6 +1636,7 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	cfg.executor = newTimeoutCommandExecutor(5 * time.Second)
 
 	cfg.Capacity = cfg.Capacity.CapacityConfigOrDefault()
+	cfg.ContextHealth = cfg.ContextHealth.ContextHealthConfigOrDefault()
 	cfg.HandoffSummary = cfg.HandoffSummary.HandoffSummaryConfigOrDefault()
 	cfg.Quota = cfg.Quota.QuotaConfigOrDefault()
 

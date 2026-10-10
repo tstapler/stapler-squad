@@ -1858,3 +1858,33 @@ func TestGitBackendCohortsConfig_TolerantDecodeAndStableRoundTrip(t *testing.T) 
 		t.Errorf("omitempty lost: %s", empty)
 	}
 }
+
+func TestContextHealthConfigOrDefault_AppliesDefaultsToZeroAndNegativeFields(t *testing.T) {
+	got := ContextHealthConfig{LoopRepeatThreshold: 0, ConfusionPhraseThreshold: -4, MinToolCallSamples: 0}.ContextHealthConfigOrDefault()
+	assert.Equal(t, ContextHealthConfig{LoopRepeatThreshold: 3, ConfusionPhraseThreshold: 5, MinToolCallSamples: 5}, got)
+}
+
+func TestLoadConfigFromPath_PartialContextHealthBlockKeepsSetFieldAndDefaultsRest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ConfigFileName)
+	require.NoError(t, os.WriteFile(path, []byte(`{"context_health": {"loop_repeat_threshold": 7}}`), 0o600))
+
+	cfg, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.Equal(t, 7, cfg.ContextHealth.LoopRepeatThreshold)
+	assert.Equal(t, 5, cfg.ContextHealth.ConfusionPhraseThreshold)
+	assert.Equal(t, 5, cfg.ContextHealth.MinToolCallSamples)
+}
+
+func TestLoadConfig_MalformedContextHealthBlockFallsBackToDefaults(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+	require.NoError(t, os.Unsetenv("STAPLER_SQUAD_TEST_DIR"))
+	dir := filepath.Join(home, ".stapler-squad")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte(`{"context_health": "nonsense"}`), 0o600))
+
+	var cfg *Config
+	require.NotPanics(t, func() { cfg = LoadConfig() })
+	assert.Equal(t, 3, cfg.ContextHealth.LoopRepeatThreshold)
+}

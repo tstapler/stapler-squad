@@ -84,6 +84,7 @@ func (p *Parser) ParseReader(r io.Reader) (*ParseResult, error) {
 	}
 
 	modelCounts := make(map[string]int)
+	healthRing := &healthTurnRing{}
 	humanTurnIndex := 0
 
 	for scanner.Scan() {
@@ -107,7 +108,7 @@ func (p *Parser) ParseReader(r io.Reader) (*ParseResult, error) {
 
 		switch entryType {
 		case "assistant":
-			p.processAssistantEntry(entry, result, modelCounts)
+			p.processAssistantEntry(entry, result, modelCounts, healthRing)
 		case "user":
 			p.processUserEntry(entry, result, humanTurnIndex)
 			humanTurnIndex++
@@ -120,6 +121,7 @@ func (p *Parser) ParseReader(r io.Reader) (*ParseResult, error) {
 	_ = scanner.Err()
 
 	resolveCompactTokensAfter(result)
+	result.ContextHealth = extractContextHealthSignals(healthRing)
 
 	// Determine primary model (most frequently used).
 	result.PrimaryModel = primaryModel(modelCounts)
@@ -131,7 +133,7 @@ func (p *Parser) ParseReader(r io.Reader) (*ParseResult, error) {
 }
 
 // processAssistantEntry extracts token counts and tool usage from an assistant turn.
-func (p *Parser) processAssistantEntry(entry jsonlEntry, result *ParseResult, modelCounts map[string]int) {
+func (p *Parser) processAssistantEntry(entry jsonlEntry, result *ParseResult, modelCounts map[string]int, healthRing *healthTurnRing) {
 	if len(entry.Message) == 0 {
 		return
 	}
@@ -171,12 +173,21 @@ func (p *Parser) processAssistantEntry(entry jsonlEntry, result *ParseResult, mo
 		result.CacheRead += turn.CacheRead
 	}
 
+	var health healthTurnRecord
 	// Extract tool use names from content.
 	for _, c := range msg.Content {
+		if c.Type == "text" && c.Text != "" {
+			if hit := matchConfusionPatterns(c.Text); hit != "" {
+				health.ConfusionHits = append(health.ConfusionHits, hit)
+			}
+			continue
+		}
 		if c.Type != "tool_use" || c.Name == "" {
 			continue
 		}
 		turn.ToolNames = append(turn.ToolNames, c.Name)
+		health.Fingerprints = append(health.Fingerprints, toolCallFingerprint(c.Name, c.Input))
+		health.ToolNames = append(health.ToolNames, c.Name)
 
 		stat := result.ToolUsage[c.Name]
 		stat.ToolName = c.Name
@@ -198,6 +209,8 @@ func (p *Parser) processAssistantEntry(entry jsonlEntry, result *ParseResult, mo
 	result.MessageCount++
 	if msg.Model != syntheticModelSentinel {
 		result.TurnTimeline = append(result.TurnTimeline, turn)
+		health.At = turn.Timestamp
+		healthRing.push(health)
 	}
 }
 
