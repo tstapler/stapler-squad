@@ -393,6 +393,138 @@ describe("Move all to tray (Story 3.4)", () => {
   });
 });
 
+describe("Timers pause and pinned collapse (Story 3.5)", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    window.localStorage.clear();
+  });
+  afterEach(() => jest.useRealTimers());
+
+  const advance = (ms: number) =>
+    act(() => {
+      jest.advanceTimersByTime(ms);
+    });
+
+  it("toast_timers_should_preserve_remaining_time_on_hover_pause_and_pause_when_tray_open_and_never_expire_pinned_10min", () => {
+    mount();
+    act(() => notifications.addNotification(toast(0, { notificationType: "info" })));
+    const card = screen.getByTestId("toast");
+
+    advance(3_000);
+    fireEvent.pointerEnter(card);
+    advance(7_000); // pointer leaves at t=10s; the 8s close would long since have fired
+    expect(notifications.notifications).toHaveLength(1);
+
+    fireEvent.pointerLeave(card);
+    advance(4_999);
+    expect(notifications.notifications).toHaveLength(1);
+    advance(1 + 300); // remaining 5s, then the 300ms exit animation
+    expect(notifications.notifications).toHaveLength(0);
+  });
+
+  it("holds the timer while focus is within the card", () => {
+    mount();
+    act(() => notifications.addNotification(toast(0, { notificationType: "info" })));
+    const close = within(screen.getByTestId("toast")).getByRole("button", { name: "Close notification" });
+
+    fireEvent.focus(close);
+    advance(60_000);
+    expect(notifications.notifications).toHaveLength(1);
+    fireEvent.blur(close);
+    advance(8_000 + 300);
+    expect(notifications.notifications).toHaveLength(0);
+  });
+
+  it("pauses every timer while the tray is open and resumes them when it closes", () => {
+    mount();
+    act(() => notifications.addNotification(toast(0, { notificationType: "info" })));
+    act(() => notifications.togglePanel());
+    advance(60_000);
+    expect(notifications.notifications).toHaveLength(1);
+
+    act(() => notifications.togglePanel());
+    advance(8_000 + 300);
+    expect(notifications.notifications).toHaveLength(0);
+  });
+
+  it("never expires a pinned decision in the deck", () => {
+    mount();
+    act(() =>
+      notifications.addNotification(
+        toast(0, { notificationType: "approval_needed", isPendingDecision: true, onApprove: jest.fn(), onDeny: jest.fn() }),
+      ),
+    );
+    advance(10 * 60 * 1000);
+    expect(notifications.notifications).toHaveLength(1);
+  });
+
+  describe("pinned card collapse on a phone (TD-14)", () => {
+    const pinnedError = () =>
+      act(() => notifications.addNotification(toast(0, { notificationType: "error", isPendingDecision: true })));
+
+    it("collapses to a one-line chip after the default 8s and stays pinned in the tray", () => {
+      setPhone();
+      mount();
+      pinnedError();
+      advance(7_999);
+      expect(screen.queryByTestId("toast-collapsed-chip")).toBeNull();
+      advance(1);
+      expect(screen.getByTestId("toast-collapsed-chip")).toHaveTextContent("1 needs you - Title 0");
+      expect(notifications.notifications).toHaveLength(1);
+      expect(notifications.notificationHistory[0].isPendingDecision).toBe(true);
+    });
+
+    it("expands on tap and is not re-collapsed", () => {
+      setPhone();
+      mount();
+      pinnedError();
+      advance(8_000);
+      fireEvent.click(screen.getByTestId("toast-collapsed-chip"));
+      expect(screen.queryByTestId("toast-collapsed-chip")).toBeNull();
+      advance(60_000);
+      expect(screen.queryByTestId("toast-collapsed-chip")).toBeNull();
+    });
+
+    it("honours the per-device delay and Never, and does not collapse on desktop", () => {
+      window.localStorage.setItem("ssq.notifications.pinnedCollapse", "15000");
+      setPhone();
+      const first = mount();
+      pinnedError();
+      advance(14_999);
+      expect(screen.queryByTestId("toast-collapsed-chip")).toBeNull();
+      advance(1);
+      expect(screen.getByTestId("toast-collapsed-chip")).toBeInTheDocument();
+      first.unmount();
+
+      window.localStorage.setItem("ssq.notifications.pinnedCollapse", "never");
+      mount();
+      pinnedError();
+      advance(5 * 60 * 1000);
+      expect(screen.queryByTestId("toast-collapsed-chip")).toBeNull();
+
+      window.localStorage.clear();
+      setDesktop();
+      mount();
+      pinnedError();
+      advance(60_000);
+      expect(screen.queryByTestId("toast-collapsed-chip")).toBeNull();
+    });
+
+    it("holds the collapse timer while the card is hovered", () => {
+      setPhone();
+      mount();
+      pinnedError();
+      const card = screen.getByTestId("toast");
+      fireEvent.pointerEnter(card);
+      advance(60_000);
+      expect(screen.queryByTestId("toast-collapsed-chip")).toBeNull();
+      fireEvent.pointerLeave(card);
+      advance(8_000);
+      expect(screen.getByTestId("toast-collapsed-chip")).toBeInTheDocument();
+    });
+  });
+});
+
 describe("ToastStack announcements (Story 3.6)", () => {
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => jest.useRealTimers());

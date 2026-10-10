@@ -8,6 +8,7 @@ import { notificationTypeIcon, notificationTypeLabel, priorityColor } from "@/li
 import {
   toast,
   toastStacked,
+  collapsedChip,
   toastApproval,
   repeatBadge,
   offlineHint,
@@ -46,6 +47,13 @@ export interface NotificationToastProps {
   stacked?: boolean;
   /** When set, Approve and Deny (the server-bound actions) are disabled and this reason is shown. */
   offlineReason?: string;
+  /** Phone only: a pinned card shrunk to a one-line chip; tapping it expands. */
+  collapsed?: boolean;
+  onExpandCollapsed?: () => void;
+  /** Reports that an Approve or Deny is in flight or its confirm step is open, which exempts the card from collapsing. */
+  onBusyChange?: (busy: boolean) => void;
+  /** Pointer and focus handlers the stack uses to pause this toast's timers. */
+  holdHandlers?: React.HTMLAttributes<HTMLDivElement>;
   /** Compact pill; clicking it expands. */
   minimized?: boolean;
   onExpand?: () => void;
@@ -79,6 +87,9 @@ export function NotificationToast({
   onClose,
   stacked = false,
   offlineReason,
+  collapsed = false,
+  onExpandCollapsed,
+  holdHandlers,
   exiting = false,
   minimized = false,
   onExpand,
@@ -118,8 +129,30 @@ export function NotificationToast({
   if (hasSourceApp && notification.sourceApp) subtitleParts.push(`via ${notification.sourceApp}`);
   const subtitleText = subtitleParts.join(' ');
 
+  if (collapsed) {
+    return (
+      <div
+        className={`${toast} ${toastStacked}`}
+        style={{ "--priority-color": priorityColor(notification.priority) } as React.CSSProperties}
+        data-testid="toast"
+        data-collapsed="true"
+        {...holdHandlers}
+      >
+        <button
+          type="button"
+          className={collapsedChip}
+          data-testid="toast-collapsed-chip"
+          onClick={onExpandCollapsed}
+        >
+          1 needs you - {displayTitle}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div
+      {...holdHandlers}
       className={`${toast} ${notification.notificationType === "approval_needed" ? toastApproval : ""} ${exiting ? exitingClass : ""} ${minimized ? minimizedClass : ""} ${stacked ? toastStacked : ""}`}
       style={{ "--priority-color": priorityColor(notification.priority) } as React.CSSProperties}
       data-testid="toast"

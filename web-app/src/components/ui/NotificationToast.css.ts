@@ -503,3 +503,20 @@ export const undoAction = style({
   fontWeight: 600,
   cursor: "pointer",
 });
+
+export const collapsedChip = style({
+  display: "block",
+  width: "100%",
+  minHeight: "44px",
+  padding: "0 14px",
+  border: "none",
+  background: "transparent",
+  color: vars.color.textPrimary,
+  fontSize: "14px",
+  fontWeight: 600,
+  textAlign: "left",
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  cursor: "pointer",
+});

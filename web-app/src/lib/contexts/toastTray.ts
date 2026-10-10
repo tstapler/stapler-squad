@@ -2,6 +2,7 @@ import type { MutableRefObject } from "react";
 import type { NotificationData } from "@/lib/types/notification";
 import type { ToastQueue, ToastQueueAction } from "@/lib/hooks/useToastQueue";
 import type { ToastTimerRegistry } from "@/lib/hooks/useToastTimers";
+import { readUndoWindowMs } from "@/lib/utils/deckSettings";
 
 /**
  * "Move all to tray": a demote-only deck action. It takes toasts off the screen
@@ -11,7 +12,6 @@ import type { ToastTimerRegistry } from "@/lib/hooks/useToastTimers";
  */
 
 export const MOVE_UNDO_TIMER_ID = "move-all-to-tray";
-export const UNDO_WINDOW_MS_DEFAULT = 8_000;
 
 export interface MovedBatch {
   toasts: NotificationData[];
@@ -24,7 +24,6 @@ interface Deps {
   movedRef: MutableRefObject<MovedBatch | null>;
   setMoved: (batch: MovedBatch | null) => void;
   announce: (message: string) => void;
-  undoWindowMs?: number;
 }
 
 export function createToastTrayCommands(deps: Deps) {
@@ -44,9 +43,7 @@ export function createToastTrayCommands(deps: Deps) {
       ids.forEach((id) => timers.cancel(id));
       dispatch({ type: "remove", ids: new Set(ids) });
       setMoved({ toasts: [...toasts] });
-      timers.register(MOVE_UNDO_TIMER_ID, "undo-window", deps.undoWindowMs ?? UNDO_WINDOW_MS_DEFAULT, () =>
-        setMoved(null),
-      );
+      timers.register(MOVE_UNDO_TIMER_ID, "undo-window", readUndoWindowMs(), () => setMoved(null));
       announce(`${toasts.length} moved to tray`);
       return ids;
     },

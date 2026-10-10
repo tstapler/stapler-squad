@@ -1,7 +1,7 @@
 // +feature: notification-toast-stack
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { zIndex } from "@/styles/theme.css";
 import { NotificationToast } from "@/components/ui/NotificationToast";
 import {
@@ -21,6 +21,7 @@ import { useAnnounce } from "@/lib/hooks/useAnnounce";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import type { ToastTimerRegistry } from "@/lib/hooks/useToastTimers";
 import { MOVE_UNDO_TIMER_ID } from "@/lib/contexts/toastTray";
+import { readPinnedCollapseMs } from "@/lib/utils/deckSettings";
 import {
   NOTIFICATION_TRAY_V2_FLAG,
   isPinned,
@@ -43,6 +44,8 @@ interface ToastSlotProps {
   onRemove: (id: string) => void;
   /** Capped deck: cards sit in flow, and a pinned decision never auto-closes or minimizes. */
   stacked: boolean;
+  /** Phone deck: a pinned card with no interaction collapses to a chip so it cannot cover the terminal for long. */
+  collapsible?: boolean;
   offlineReason?: string;
 }
 
@@ -50,7 +53,7 @@ interface ToastSlotProps {
  * One toast and its timers. Every timer goes through the registry so the stack,
  * and not the card, decides when a toast closes, minimizes or exits.
  */
-function ToastSlot({ notification, timers, onRemove, stacked, offlineReason }: ToastSlotProps) {
+function ToastSlot({ notification, timers, onRemove, stacked, collapsible = false, offlineReason }: ToastSlotProps) {
   const { id } = notification;
   // The audit-log object is new every render; a ref keeps timer effects from restarting.
   const auditLog = useAuditLog();
@@ -59,6 +62,11 @@ function ToastSlot({ notification, timers, onRemove, stacked, offlineReason }: T
   const [presented, setPresented] = useState(false);
   const [exiting, setExiting] = useState(false);
   const [minimized, setMinimized] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  // Once the user expands a collapsed card it stays open: no collapse loop.
+  const expandedByUser = useRef(false);
+  // True while an Approve or Deny is in flight or its confirm step is open (set by the card).
+  const [busy, setBusy] = useState(false);
   const closingRef = useRef(false);
   const pinned = isPinned(notification);
 
@@ -100,13 +108,39 @@ function ToastSlot({ notification, timers, onRemove, stacked, offlineReason }: T
     return () => timers.cancel(id, "minimize");
   }, [presented, minimized, stacked, id, notification.notificationType, timers]);
 
+  useEffect(() => {
+    if (!presented || !collapsible || !pinned || collapsed || busy || expandedByUser.current) return;
+    const collapseMs = readPinnedCollapseMs();
+    if (collapseMs === null) return;
+    timers.register(id, "collapse", collapseMs, () => setCollapsed(true));
+    return () => timers.cancel(id, "collapse");
+  }, [presented, collapsible, pinned, collapsed, busy, id, timers]);
+
   useEffect(() => () => timers.cancel(id), [id, timers]);
+
+  // Hover, focus and touch hold this toast's timers; the remaining time is kept.
+  const holdHandlers = useMemo(
+    () => ({
+      onPointerEnter: () => timers.pause(id, "hover"),
+      onPointerLeave: () => timers.resume(id, "hover"),
+      onFocus: () => timers.pause(id, "focus"),
+      onBlur: () => timers.resume(id, "focus"),
+    }),
+    [id, timers],
+  );
 
   return (
     <NotificationToast
       notification={notification}
       stacked={stacked}
       offlineReason={offlineReason}
+      collapsed={collapsed}
+      onExpandCollapsed={() => {
+        expandedByUser.current = true;
+        setCollapsed(false);
+      }}
+      onBusyChange={setBusy}
+      holdHandlers={holdHandlers}
       exiting={exiting}
       minimized={minimized}
       onExpand={() => setMinimized(false)}
@@ -212,6 +246,7 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
           timers={timers}
           onRemove={onRemove}
           stacked
+          collapsible={onPhone}
           offlineReason={isOffline ? "Offline" : undefined}
         />
       ))}
@@ -264,10 +299,17 @@ function LegacyList({ toasts, timers, onRemove }: Omit<DeckProps, "onOpenTray">)
  * off it renders the legacy uncapped list.
  */
 export function ToastStack({ timers }: ToastStackProps) {
-  const { notifications } = useNotificationState();
+  const { notifications, isPanelOpen } = useNotificationState();
   const { removeNotification, togglePanel } = useNotificationCommands();
   const v2 = useFeatureFlag(NOTIFICATION_TRAY_V2_FLAG);
   useAnnounceArrivals(notifications);
+
+  // An open tray holds every toast timer; closing it resumes them with time preserved.
+  useEffect(() => {
+    if (isPanelOpen) timers.hold("tray-open");
+    else timers.release("tray-open");
+    return () => timers.release("tray-open");
+  }, [isPanelOpen, timers]);
 
   return v2 ? (
     <Deck toasts={notifications} timers={timers} onRemove={removeNotification} onOpenTray={togglePanel} />
