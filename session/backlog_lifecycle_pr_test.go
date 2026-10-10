@@ -1,12 +1,16 @@
 package session
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/git"
 )
 
 // TestBacklogItemLink locks in the deep-link shape pushAndCreatePR and
@@ -130,4 +134,55 @@ func mustSerializeAcCriteria(t *testing.T, criteria []domain.AcCriterion) domain
 	serialized, err := domain.SerializeAcCriteria(criteria)
 	require.NoError(t, err)
 	return serialized
+}
+
+// failingCIListener wires a listener over a still-CI-failing PR and returns it
+// with its stamped-capable notifier and fix spawner.
+func failingCIListener(t *testing.T, storage *Storage, prNumber int) (*BacklogLifecycleListener, *autoRemediatingNotifier, *BacklogItemData) {
+	t.Helper()
+	item := newPRPendingTestItem(t, storage, prNumber)
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		status: &git.PRStatus{CIFailing: true, FeedbackText: "## Failing CI checks\n- build FAILED\n"},
+	})
+	listener.SetPRFixSpawner(&fakePRFixSpawner{})
+	n := &autoRemediatingNotifier{}
+	listener.SetNotifier(n)
+	return listener, n, item
+}
+
+// T-AR-01: the first sighting of a PR that needs a fix publishes the WARNING
+// through the auto-remediating (stamped) path, exactly once.
+func TestPRNeedsAttention_ShouldStampAutoRemediating_WhenWarningPublishedAtBackoffGate(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	listener, n, _ := failingCIListener(t, storage, 9301)
+
+	listener.ReconcilePRPending(context.Background(), storage.repo)
+	listener.ReconcilePRPending(context.Background(), storage.repo)
+
+	assert.Equal(t, []string{"PR needs attention"}, n.stamped, "one stamped WARNING on first sighting, none on the next tick")
+	assert.Empty(t, n.titles(), "the automation-is-acting WARNING must not also go out unstamped")
+}
+
+// T-AR-02: when the automation gives up (the fifth attempt parks the row), the
+// escalation is a plain, UNSTAMPED notification, so it counts as a pending
+// decision and the stamped WARNING never masks it.
+func TestPRNeedsAttention_ShouldHaveUnstampedEscalation_WhenAutomationFails(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	listener, n, item := failingCIListener(t, storage, 9302)
+	er := storage.repo
+
+	for attempt := 1; attempt <= 5; attempt++ {
+		listener.ReconcilePRPending(context.Background(), er)
+		backdateNextRemediationAt(t, er, item.ID, domain.StuckReasonPRNeedsFix, time.Now().Add(-time.Second))
+	}
+
+	assert.Equal(t, []string{"PR needs attention"}, n.stamped)
+	require.Equal(t, []string{"Auto-rework paused"}, n.titles(), "the dead-end escalation goes through plain Notify")
+	assert.True(t, n.calls[0].Urgent, "the escalation is urgent")
+	assert.EqualValues(t, 8, n.calls[0].NotificationType)
 }

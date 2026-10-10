@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,6 +35,7 @@ func newStatsRPCGate(t *testing.T, clk *gateTestClock) *deliverygate.Gate {
 	return g
 }
 
+// T-OB-10 (aggregate-counters half; listener half in server/gatestats_listener_test.go).
 func TestGetDeliveryGateStats_ShouldReturnSinceProcessStartTotalsAndBucketsWithAggregateCountersOnly_WhenTelemetryUninitialized(t *testing.T) {
 	t.Parallel()
 	clk := newGateTestClock()
@@ -104,7 +106,8 @@ func TestGetDeliveryGateStats_ShouldBeUnavailable_WhenNoGateIsConfigured(t *test
 	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
 }
 
-// The stats RPC has no MCP tool (aggregate counters are an operator surface).
+// T-OB-10 (no-MCP-tool half): the stats RPC has no MCP tool (aggregate counters
+// are an operator surface).
 func TestGetDeliveryGateStats_ShouldHaveNoMCPTool_WhenMCPToolsAreScanned(t *testing.T) {
 	t.Parallel()
 	err := filepath.WalkDir("../mcp", func(p string, d os.DirEntry, werr error) error {
@@ -117,4 +120,67 @@ func TestGetDeliveryGateStats_ShouldHaveNoMCPTool_WhenMCPToolsAreScanned(t *test
 		return nil
 	})
 	require.NoError(t, err)
+}
+
+// T-OB-23: the stats response carries routine_events_while_on, last_off_flip_at
+// and the writable flag, and the Stage 3 prerequisites in the reference doc are
+// written against exactly those fields (an unwritable stats file never
+// satisfies the soak prerequisite).
+func TestStatsResponse_ShouldCarryRoutineEventsWhileOnLastOffFlipAtAndWritableFlag_AndStage3ChecksRequireWritable(t *testing.T) {
+	t.Parallel()
+	clk := newGateTestClock()
+	var on atomic.Bool
+	on.Store(true)
+	lg, _ := newLogCapture()
+	g := deliverygate.NewGate(
+		deliverygate.WithClock(clk.Now), deliverygate.WithLogger(lg),
+		deliverygate.WithFlagLoader(func() (deliverygate.FlagSettings, error) {
+			return deliverygate.FlagSettings{Global: on.Load()}, nil
+		}),
+	)
+	g.Flags().Reload()
+	g.Index().Replace([]deliverygate.Entry{{UUID: "u-h1", Title: "review:t", Hidden: true, Kind: deliverygate.KindReview}})
+
+	ns := &NotificationService{}
+	ns.SetDeliveryGate(g)
+	writable := false
+	ns.SetGateStatsFileStatus(func() deliverygate.StatsFileStatus {
+		return deliverygate.StatsFileStatus{Loaded: true, Writable: writable}
+	})
+
+	clk.Advance(10 * time.Minute)
+	on.Store(false)
+	g.Flags().Reload()
+	offAt := clk.Now()
+	clk.Advance(10 * time.Minute)
+	on.Store(true)
+	g.Flags().Reload()
+	// Routine events count only in hour buckets after the one holding the last
+	// off flip, so the event lands an hour later.
+	clk.Advance(time.Hour)
+	g.Stats().Tick(clk.Now()) // what the stats writer goroutine does each minute
+	require.False(t, g.PublishFilter()(events.NewNotificationEvent("review:t", "review:t", "n1",
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE), 2, "t", "m", nil)))
+
+	get := func() *sessionv1.GetDeliveryGateStatsResponse {
+		resp, err := ns.GetDeliveryGateStats(context.Background(), connect.NewRequest(&sessionv1.GetDeliveryGateStatsRequest{}))
+		require.NoError(t, err)
+		return resp.Msg
+	}
+	m := get()
+	assert.EqualValues(t, 1, m.Soak.RoutineEventsWhileOn)
+	require.NotNil(t, m.Soak.LastOffFlipAt)
+	assert.True(t, m.Soak.LastOffFlipAt.AsTime().Equal(offAt), "last_off_flip_at = %v, want %v", m.Soak.LastOffFlipAt.AsTime(), offAt)
+	assert.False(t, m.StatsFileStatus.Writable, "an unwritable stats file is reported as such")
+	writable = true
+	assert.True(t, get().StatsFileStatus.Writable)
+
+	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "reference", "notification-delivery-gate.md"))
+	require.NoError(t, err)
+	stage3 := string(doc)[strings.Index(string(doc), "**Stage 3 prerequisites**"):]
+	stage3 = stage3[:strings.Index(stage3, "**Stage 4")]
+	for _, field := range []string{"soak.soak_streak_hours >= 24", "stats_file_status.writable == true",
+		"failure_delivered_while_on >= 1", "soak.explicit_off_scopes"} {
+		assert.Contains(t, stage3, field, "Stage 3 prerequisites must require %s", field)
+	}
 }

@@ -1,6 +1,8 @@
 package deliverygate_test
 
 import (
+	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -9,6 +11,8 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -45,4 +49,71 @@ func TestCrashNotification_ShouldDeliverOneHistoryRowAndOnePush_WhenHiddenGateOn
 		"the crash is delivered as failure class, not suppressed")
 	require.EqualValues(t, 1, m.Total("notification_delivery_suppressed_total"),
 		"the only suppression is the hidden Stopped status-change push")
+}
+
+type recordCapture struct {
+	mu       sync.Mutex
+	records  []notifications.NotificationRecord
+	sentinel chan struct{}
+	once     sync.Once
+}
+
+func (c *recordCapture) Append(r *notifications.NotificationRecord) error {
+	c.mu.Lock()
+	c.records = append(c.records, *r)
+	c.mu.Unlock()
+	if r.SessionID == visibleTitle {
+		c.once.Do(func() { close(c.sentinel) })
+	}
+	return nil
+}
+
+// T-CR-08: a hidden session's crash leaves exactly one unread, session-scoped
+// FAILURE history record keyed by the hidden session's id and title, so the
+// Background activity join (history x hidden sessions) can find it, and the
+// key still resolves to the hidden session in the index.
+func TestHiddenCrash_ShouldLeaveFailureHistoryRecord_WhenBackgroundJoinReads(t *testing.T) {
+	t.Parallel()
+	const hiddenUUID = "u-h"
+	bus := events.NewEventBus(64)
+	t.Cleanup(bus.Close)
+	gate := deliverygate.NewGate(deliverygate.WithFlagLoader(func() (deliverygate.FlagSettings, error) {
+		return deliverygate.FlagSettings{Global: true}, nil
+	}))
+	gate.Flags().Reload()
+	gate.Index().Replace([]deliverygate.Entry{
+		{UUID: hiddenUUID, Title: hiddenTitle, Hidden: true, Kind: deliverygate.KindReview},
+		{UUID: "u-v", Title: visibleTitle},
+	})
+	bus.SetPublishFilter(gate.PublishFilter())
+	capture := &recordCapture{sentinel: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	notifications.StartSubscriberWithInterval(ctx, bus, capture, 5*time.Millisecond)
+
+	bus.Publish(services.NewSessionCrashEvent(hiddenUUID, hiddenTitle, "pane exited 137", time.Unix(1_700_000_000, 0)))
+	bus.Publish(notifEvent(visibleTitle, sessionv1.NotificationType_NOTIFICATION_TYPE_INFO, sentinelID))
+	select {
+	case <-capture.sentinel:
+	case <-time.After(10 * time.Second):
+		t.Fatal("history sink never saw the sentinel")
+	}
+
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	var hidden []notifications.NotificationRecord
+	for _, r := range capture.records {
+		if r.SessionID == hiddenUUID {
+			hidden = append(hidden, r)
+		}
+	}
+	require.Len(t, hidden, 1, "one history record for the hidden crash")
+	r := hidden[0]
+	assert.EqualValues(t, sessionv1.NotificationType_NOTIFICATION_TYPE_FAILURE, r.NotificationType)
+	assert.Equal(t, hiddenTitle, r.SessionName)
+	assert.False(t, r.IsRead)
+	assert.True(t, r.SessionScoped)
+	for _, key := range []string{r.SessionID, r.SessionName} {
+		assert.Equal(t, deliverygate.VisibilityHidden, gate.Resolver().Resolve(key, nil).Visibility, "join key %q", key)
+	}
 }

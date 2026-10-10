@@ -7,9 +7,12 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 )
 
-// Task 2.3f: the publish filter runs on the caller goroutine of ~108 Publish
-// sites, so its cost is measured against an unfiltered Publish. Run in the
-// background per docs/reference/benchmarks.md:
+// Task 2.3f / T-BF-11: the publish filter runs on the caller goroutine of ~108
+// Publish sites, so its cost is measured against an unfiltered Publish, with an
+// index of 0 and of 1000 sessions (it lives here rather than in pkg/events,
+// which cannot import the gate). The 5% budget is judged from the benchmark
+// output in the PR, not asserted. Run in the background per
+// docs/reference/benchmarks.md:
 //
 //	go test -run '^$' -bench 'BenchmarkPublish' -benchmem -count 5 ./server/deliverygate &
 

@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -1213,6 +1214,10 @@ func TestMaybeAutoCreatePR_TriggersViaOnQueueUpdated_When_ItemChangesReasonWhile
 
 // ─── AC4: OnItemAdded suppression for Hidden backlog-linked sessions ──────────
 
+// T-LG-07: this test, ..._ReasonVariants and the counter test below pin that
+// the legacy suppressForHidden predicate still swallows TASK_COMPLETE/IDLE/STALE
+// for hidden sessions (the predicate is flag-independent).
+//
 // TestOnItemAdded_SuppressesNotification_When_SessionHidden verifies that a
 // Hidden session (e.g. a headless triage/review worker) does not get a
 // TASK_COMPLETE EventNotification published — Hidden sessions are excluded
@@ -1702,5 +1707,69 @@ func TestOnItemAdded_Integration_DigestSuppressesPerItemNotification_When_BothWo
 	}
 	if notify != 0 {
 		t.Errorf("NotifyReviewQueueItem calls = %d, want 0 (suppressed by the digest firing on the same call)", notify)
+	}
+}
+
+// T-LG-08: with the delivery gate's flag in either state, a Hidden session's
+// routine reasons are stopped at every layer in front of the bus: the poller
+// skips the session, the determiner turns a routine Add into Skip, and the
+// manager's legacy predicate publishes nothing even when handed the item.
+func TestReviewQueue_ShouldNeverEmitRoutineReasonsForHidden_WhenPollerSkipAndDetermineGateBothFlagStates(t *testing.T) {
+	for _, flagOn := range []bool{false, true} {
+		t.Run(fmt.Sprintf("flag_on=%v", flagOn), func(t *testing.T) {
+			repo := session.NewTestEntRepository(t)
+			storage, err := session.NewStorageWithRepository(repo)
+			require.NoError(t, err)
+			queue := session.NewReviewQueue()
+			statusMgr := session.NewInstanceStatusManager()
+			poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+			bus := events.NewEventBus(32)
+			t.Cleanup(bus.Close)
+			gate := deliverygate.NewGate(deliverygate.WithFlagLoader(func() (deliverygate.FlagSettings, error) {
+				return deliverygate.FlagSettings{Global: flagOn}, nil
+			}))
+			gate.Flags().Reload()
+			bus.SetPublishFilter(gate.PublishFilter())
+			mgr := NewReactiveQueueManager(queue, poller, bus, statusMgr, storage)
+
+			hidden := &session.Instance{Title: "review:lg08", UUID: "lg08-uuid", Status: session.Active, Hidden: true}
+			poller.SetInstances([]*session.Instance{hidden})
+			gate.SeedFromInstances([]*session.Instance{hidden})
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			eventCh, _ := bus.Subscribe(ctx)
+
+			// Layer 1: the poller never evaluates a hidden session.
+			poller.CheckSession(hidden)
+			require.Zero(t, queue.Count(), "poller must skip the hidden session")
+
+			// Layer 2: the determiner downgrades a routine Add for it to Skip.
+			determiner := session.NewDefaultStatusDeterminer(session.DefaultReviewQueuePollerConfig())
+			res := determiner.Determine(hidden, "", session.InstanceStatusInfo{
+				IsControllerActive: true, ClaudeStatus: detection.StatusSuccess,
+			}, detection.NewStatusDetector())
+			require.Equal(t, session.DetectionActionSkip, res.Action)
+
+			// Layer 3: even handed the routine item, the manager publishes nothing.
+			for _, reason := range []session.AttentionReason{session.ReasonTaskComplete, session.ReasonIdle, session.ReasonStale} {
+				mgr.OnItemAdded(&session.ReviewItem{
+					SessionID: "review:lg08", Reason: reason, Priority: session.PriorityLow, DetectedAt: time.Now(),
+				})
+			}
+			// A sentinel published after the items bounds what the bus delivers.
+			bus.Publish(events.NewNotificationEvent("", "", "lg08-sentinel",
+				int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO), 1, "s", "s", nil))
+			for {
+				select {
+				case ev := <-eventCh:
+					if ev.Type == events.EventNotification && ev.NotificationID == "lg08-sentinel" {
+						return
+					}
+					t.Fatalf("hidden routine reason leaked to the bus: %s", ev.Type)
+				case <-ctx.Done():
+					t.Fatal("sentinel never arrived")
+				}
+			}
+		})
 	}
 }

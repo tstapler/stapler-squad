@@ -283,3 +283,22 @@ func TestGate_ShouldRecordFilterDurationHistogram_WhenFilterRuns(t *testing.T) {
 		t.Fatalf("filter observations = %d, want 1", n)
 	}
 }
+
+// T-MX-10: a routine event for a session the index cannot resolve is delivered
+// (fail open), counted as unresolved{class=routine}, and WARNs once.
+func TestGate_ShouldIncrementUnresolvedCounterAndWarn_WhenRoutineEventForUnresolvedSession(t *testing.T) {
+	t.Parallel()
+	g, _, recs, _ := newTestGate(true, visibleSess)
+	f := g.PublishFilter()
+	for i := 0; i < 3; i++ {
+		if !f(notif("no-such-session", tTaskComplete, nil)) {
+			t.Fatal("unresolved routine event must fail open")
+		}
+	}
+	if got := g.Metrics().Value(CounterUnresolved, "routine"); got != 3 {
+		t.Errorf("unresolved{routine} = %d, want 3", got)
+	}
+	if got := countMsg(recs(), "delivery_unresolved_fail_open"); got != 1 {
+		t.Errorf("WARN count = %d, want 1 (rate limited per session/type)", got)
+	}
+}

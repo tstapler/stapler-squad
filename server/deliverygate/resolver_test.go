@@ -42,6 +42,8 @@ func gateWithLister(l InstanceDataLister, timeout chan time.Time) (*Gate, *fakeC
 	return NewGate(opts...), clk
 }
 
+// T-IX-03: an upsert following an unresolved miss is visible immediately
+// (the cache is positive-only).
 func TestResolve_ShouldReturnUnresolvedAndNotCache_WhenHookPublishedBeforeUpsert(t *testing.T) {
 	t.Parallel()
 	g, _, _, _ := newTestGate(false)

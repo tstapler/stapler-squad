@@ -391,3 +391,29 @@ func TestInlineNotificationURL_ShouldKeepTwoParameterForm_WhenStatusChangeOrAppr
 	assert.Equal(t, want, buildApprovalNotification(sess).Data["url"])
 	assert.Equal(t, want, buildCompletedNotification(sess).Data["url"])
 }
+
+// T-PS-06: a hidden session's failure reaches push through the inline path with
+// its own title, never the status-change "Session Completed" copy.
+func TestInlinePush_ShouldTitleFailureNotSessionCompleted_WhenHiddenFailure(t *testing.T) {
+	n, ok := buildInlineNotification(&events.Event{
+		Type:                 events.EventNotification,
+		NotificationPriority: priorityUrgent,
+		NotificationType:     typeUnspecified,
+		NotificationTitle:    "Review failed: my-review",
+		NotificationMessage:  "The review session exited with an error",
+		NotificationID:       "n-fail-1",
+		SessionID:            "hidden-review-uuid",
+		Timestamp:            time.Now(),
+	})
+	require.True(t, ok)
+	assert.Equal(t, "Review failed: my-review", n.Title)
+	assert.NotEqual(t, buildCompletedNotification(&session.Instance{ID: "x", Title: "t"}).Title, n.Title)
+	assert.Equal(t, "notification-n-fail-1", n.Tag)
+}
+
+// T-OB-29 (push half): the synthetic probe is a medium-priority ERROR, which
+// is neither URGENT nor an approval, so it never pushes.
+func TestShouldNotify_ShouldBeFalse_WhenMediumPriorityErrorProbe(t *testing.T) {
+	const typeError = int32(7) // NOTIFICATION_TYPE_ERROR
+	assert.False(t, shouldNotify(events.EventNotification, priorityMedium, typeError, time.Minute))
+}

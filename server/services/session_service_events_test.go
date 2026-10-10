@@ -248,3 +248,57 @@ func TestCrashCoalescing_ShouldCountHiddenAndVisibleInOneLimiter_WhenMixedCrashe
 	}
 	assert.Equal(t, 1, summary, "the fourth crash folds regardless of hidden or visible")
 }
+
+// T-CR-06 (-race): the exit publisher reads the instance's status through the
+// published snapshot while another goroutine mutates it; the only observable
+// outcome is that every exit yields one session.updated, and a crash FAILURE
+// only for exits that observed Crashed.
+func TestSessionExitedPublisher_ShouldReadStatusViaSnapshot_WhenInstanceMutatedConcurrently(t *testing.T) {
+	e := newCrashEnv(t, false)
+	storage := e.svc.storage.(*session.Storage)
+	require.NoError(t, storage.AddInstance(&session.Instance{
+		Title: "racy-exit", Path: "/tmp/test", Status: session.Paused, Program: "claude",
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}))
+	instances, err := e.svc.loadInstancesWithWiring()
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	inst := instances[0]
+
+	const exits = 20
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < exits; i++ {
+			if i%2 == 0 {
+				inst.ForceStatus(session.Crashed)
+			} else {
+				inst.ForceStatus(session.Active)
+			}
+		}
+	}()
+	for i := 0; i < exits; i++ {
+		inst.FireLifecycleEventForTest(session.EventExited, "pty-eof")
+	}
+	<-done
+
+	// Each exit's publisher goroutine publishes exactly one session.updated
+	// before it reads the snapshot, so counting them joins every goroutine.
+	updated, failures := 0, 0
+	timeout := time.After(10 * time.Second)
+	for updated < exits {
+		select {
+		case ev := <-e.ch:
+			switch {
+			case ev.Type == events.EventSessionUpdated:
+				updated++
+			case ev.Type == events.EventNotification && ev.NotificationType == failureType:
+				failures++
+			}
+		case <-timeout:
+			t.Fatalf("saw %d of %d session.updated events", updated, exits)
+		}
+	}
+	failures += len(notificationsOf(e.collect(t), failureType))
+	assert.LessOrEqual(t, failures, exits, "at most one crash FAILURE per exit")
+}

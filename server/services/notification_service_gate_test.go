@@ -205,3 +205,40 @@ func TestSendNotification_ShouldSwallowHiddenAndLowAsOnMain_WhenFlagOff(t *testi
 		map[string]string{events.MetadataKeySSQNotifySchema: events.SSQNotifySchemaVersion})
 	assert.NotNil(t, f.next(), "visible LOW is delivered")
 }
+
+// T-OB-29 (ADV-N30): the operator's synthetic probe traverses the real gate
+// end to end with the legacy hidden checks present. A `-p low` probe never gets
+// that far (the legacy hidden+LOW swallow drops it first, so it would prove
+// nothing about the gate); a `-p medium` ERROR probe reaches the bus with its
+// label, is counted as a probe delivery, and carries no metadata that could
+// steer a channel. That medium priority does not push is T-OB-29's push half,
+// in server/push (TestShouldNotify_ShouldBeFalse_WhenMediumPriorityErrorProbe).
+func TestSyntheticProbe_ShouldTraverseTheRealGateNotBePushedAndKeepItsLabel_WhenSsqNotifySendsAMediumPriorityErrorForAHiddenSession(t *testing.T) {
+	t.Parallel()
+	f := newGatedNotifFixture(t, true)
+	title := deliverygate.ProbeTitlePrefix + " gate check"
+	send := func(prio sessionv1.NotificationPriority) {
+		_, err := f.client.SendNotification(context.Background(), connect.NewRequest(&sessionv1.SendNotificationRequest{
+			SessionId: "review-h", Title: title, Message: "probe",
+			NotificationType: sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR, Priority: prio,
+			Metadata: map[string]string{events.MetadataKeySSQNotifySchema: events.SSQNotifySchemaVersion},
+		}))
+		require.NoError(t, err)
+	}
+
+	send(prioLow)
+	assert.Nil(t, f.next(), "a low-priority probe is dropped by the legacy check before the gate")
+	assert.EqualValues(t, 0, f.gate.Metrics().Total(deliverygate.CounterHiddenDelivered), "a low probe never reaches the gate")
+
+	send(prioMedium)
+	got := f.next()
+	require.NotNil(t, got, "a medium-priority probe must traverse the gate and be delivered")
+	assert.Equal(t, title, got.NotificationTitle, "the probe keeps its label")
+	assert.EqualValues(t, 2, got.NotificationPriority)
+	assert.EqualValues(t, 1, f.gate.Metrics().Value(deliverygate.CounterHiddenDelivered, "bus", "failure", "other"))
+	assert.EqualValues(t, 1, f.gate.StatsSnapshot().Soak.ProbeDeliveredWhileOn)
+	for k := range got.NotificationMetadata {
+		assert.NotContains(t, []string{events.MetadataKeyDeliveryClass, "channel", "push"}, k,
+			"the probe must not carry a metadata hint that steers a channel")
+	}
+}

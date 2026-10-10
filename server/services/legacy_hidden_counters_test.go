@@ -37,7 +37,9 @@ func assertNoLegacyNotification(t *testing.T, ch <-chan *events.Event) {
 	}
 }
 
-// T-LG-01..T-LG-04 and T-LG-09 (session_service_events.go sites): behavior is
+// T-LG-01, T-LG-02, T-LG-03, T-LG-04 (one site each: cold restore, rate limit
+// detected, recovery succeeded, recovery failed) and T-LG-09
+// (session_service_events.go sites): behavior is
 // unchanged (nothing published for a hidden session) and each swallow is counted
 // with the closed site label, the type and the class the policy would assign.
 func TestLegacyCounters_ShouldLabelSiteTypeAndClass_WhenSessionEventSitesFireForHiddenSession(t *testing.T) {
