@@ -46,6 +46,10 @@ const notifTypeApprovalNeededTest = int32(1)
 
 // TestAppendDedup_SameSessionAndType verifies that two appends with the same
 // (sessionID, notificationType) produce one record with OccurrenceCount=2.
+//
+// T-E2-34 (OS-1, characterization): the delivery gate filters at bus publish, upstream of
+// this store (ADR-001), so #738's coalescing by session and type is the same with the
+// gate on; this test is that unchanged behavior.
 func TestAppendDedup_SameSessionAndType(t *testing.T) {
 	store := newTestStore(t)
 
