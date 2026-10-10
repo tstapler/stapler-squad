@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   IDLE_SWIPE,
   REVEAL_PX,
+  startsInEdgeGuard,
   swipeStep,
   type SwipeSample,
   type SwipeState,
@@ -62,9 +63,9 @@ export function useSwipeToDismiss(
     const point = (e: TouchEvent) => e.touches[0] ?? e.changedTouches[0];
 
     const onStart = (e: TouchEvent) => {
-      e.stopPropagation();
       const p = point(e);
-      if (!p) return;
+      if (!p || startsInEdgeGuard(p.clientX, window.innerWidth)) return;
+      e.stopPropagation();
       touching = true;
       apply({ type: "start", x: p.clientX, y: p.clientY, t: e.timeStamp, width: el.getBoundingClientRect().width });
     };

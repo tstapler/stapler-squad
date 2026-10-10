@@ -14,8 +14,14 @@ export const VERTICAL_CANCEL_PX = GESTURE_MOVEMENT_THRESHOLD_PX;
 export const DISMISS_FRACTION = 0.4;
 export const FLING_MIN_PX = 60;
 export const FLING_MIN_VELOCITY = 0.3;
+/** A touch starting this close to a screen edge is the OS back gesture, never a dismiss. */
+export const EDGE_GUARD_PX = 30;
 /** Past this the reveal layer ("Dismiss" or "Move to tray") shows behind the row. */
 export const REVEAL_PX = 24;
+
+export function startsInEdgeGuard(x: number, viewportWidth: number): boolean {
+  return x < EDGE_GUARD_PX || x > viewportWidth - EDGE_GUARD_PX;
+}
 
 export type SwipePhase = "idle" | "tracking" | "dragging" | "done";
 export type SwipeOutcome = "dismiss" | "cancel";

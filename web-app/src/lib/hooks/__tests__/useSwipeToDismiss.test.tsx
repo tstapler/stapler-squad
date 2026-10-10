@@ -55,6 +55,20 @@ describe("useSwipeToDismiss", () => {
     expect(row).toHaveAttribute("data-offset", "0");
   });
 
+  it("swipe_hook_should_ignore_a_touch_that_starts_within_30px_of_either_screen_edge", () => {
+    render(<Row />);
+    const row = screen.getByTestId("row");
+    const edgeX = [10, window.innerWidth - 10];
+    for (const x0 of edgeX) {
+      touch(row, "touchstart", x0, 100, 0);
+      touch(row, "touchmove", x0 + 60, 102, 60);
+      touch(row, "touchmove", x0 + 120, 104, 120);
+      touch(row, "touchend", x0 + 120, 104, 150);
+      expect(row).toHaveAttribute("data-offset", "0");
+    }
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+
   it("swipe_hook_should_not_reach_document_touchmove_spy_when_swipe_starts_on_row", () => {
     render(<Row />);
     const row = screen.getByTestId("row");
