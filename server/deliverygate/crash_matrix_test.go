@@ -28,8 +28,11 @@ func TestCrashNotification_ShouldDeliverOneHistoryRowAndOnePush_WhenHiddenGateOn
 	env.bus.Publish(hidden)
 	env.bus.Publish(visible)
 	env.bus.Publish(&events.Event{
-		Type:          events.EventSessionUpdated,
-		Session:       &session.Instance{ID: "id-h", UUID: "u-h", Title: hiddenTitle, Hidden: true, Status: session.Stopped},
+		Type: events.EventSessionUpdated,
+		// Instance.Hidden is false on purpose: push's legacy Hidden check (kept until PR 2b)
+		// drops a hidden instance before the gate, so this models the index/instance
+		// disagreement that only the gate catches.
+		Session:       &session.Instance{ID: "id-h", UUID: "u-h", Title: hiddenTitle, Status: session.Stopped},
 		UpdatedFields: []string{events.FieldStatus},
 	})
 	env.bus.Publish(notifEvent(visibleTitle, sessionv1.NotificationType_NOTIFICATION_TYPE_INFO, sentinelID))
