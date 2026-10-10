@@ -8,6 +8,10 @@ jest.mock("@/lib/hooks/useAuditLog", () => ({
   useAuditLog: () => ({ logNotificationSessionViewed: jest.fn() }),
 }));
 jest.mock("@/lib/hooks/useSessionHidden", () => ({ useSessionHidden: jest.fn() }));
+let mockReplyFlag = true;
+jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
+  useFeatureFlag: (name: string) => (name === "hidden_session_reply" ? mockReplyFlag : false),
+}));
 
 const make = (overrides: Partial<NotificationData> = {}): NotificationData => ({
   id: "t1",
@@ -61,5 +65,37 @@ describe("hidden-session toast variant (Story 5.3, C6/C15)", () => {
     (useSessionHidden as jest.Mock).mockReturnValue(undefined);
     render(<NotificationToast notification={make()} onClose={jest.fn()} stacked />);
     expect(screen.getByTestId("notification-view-session")).toBeInTheDocument();
+  });
+
+  describe("Reply action (Story 5.6, RP-8)", () => {
+    const replyable = {
+      notificationType: "question" as const,
+      title: "Claude has a question",
+      metadata: { question_id: "q1", question_shape: "single", question_options: '["A","B"]' },
+    };
+
+    beforeEach(() => {
+      mockReplyFlag = true;
+    });
+
+    it("rp8_hidden_question_toast_should_offer_reply_beside_view_output", () => {
+      (useSessionHidden as jest.Mock).mockReturnValue(true);
+      const notification = make(replyable);
+      render(<NotificationToast notification={notification} onClose={jest.fn()} stacked />);
+      expect(screen.getByTestId("notification-view-output")).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId("notification-reply"));
+      expect(notification.onView).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ["a visible session", () => (useSessionHidden as jest.Mock).mockReturnValue(false), replyable],
+      ["a multi-select question", () => (useSessionHidden as jest.Mock).mockReturnValue(true), { ...replyable, metadata: { question_shape: "multi" } }],
+      ["a question with no proof", () => (useSessionHidden as jest.Mock).mockReturnValue(true), { ...replyable, metadata: { reply_unavailable: "no_proof" } }],
+      ["the kill switch off", () => { (useSessionHidden as jest.Mock).mockReturnValue(true); mockReplyFlag = false; }, replyable],
+    ])("rp8_should_not_offer_reply_for_%s", (_name, arrange, over) => {
+      arrange();
+      render(<NotificationToast notification={make(over as Partial<NotificationData>)} onClose={jest.fn()} stacked />);
+      expect(screen.queryByTestId("notification-reply")).toBeNull();
+    });
   });
 });

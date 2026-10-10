@@ -6,6 +6,10 @@ import type { NotificationHistoryItem } from "@/lib/types/notification";
 import { useSessionHidden } from "@/lib/hooks/useSessionHidden";
 
 jest.mock("@/lib/hooks/useSessionHidden", () => ({ useSessionHidden: jest.fn() }));
+let mockReplyFlag = true;
+jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
+  useFeatureFlag: (name: string) => (name === "hidden_session_reply" ? mockReplyFlag : false),
+}));
 jest.mock("next/link", () => ({
   __esModule: true,
   default: ({ href, children, ...props }: { href: string; children: React.ReactNode; [k: string]: unknown }) => (
@@ -88,5 +92,40 @@ describe("hidden-session tray row (Task 5.3f, C6)", () => {
     (useSessionHidden as jest.Mock).mockReturnValue(undefined);
     renderItem(group());
     expect(screen.getByTestId("notification-view-session")).toBeInTheDocument();
+  });
+
+  describe("Reply action (Story 5.6, RP-8)", () => {
+    const question = {
+      notificationType: "question" as const,
+      metadata: { question_id: "q1", question_shape: "single", question_options: '["A","B"]' },
+    };
+
+    beforeEach(() => {
+      mockReplyFlag = true;
+      (useSessionHidden as jest.Mock).mockReturnValue(true);
+    });
+
+    it("rp8_hidden_question_row_should_link_reply_with_the_reply_deep_link_beside_view_output", () => {
+      renderItem(group(question));
+      expect(screen.getByTestId("notification-reply")).toHaveAttribute(
+        "href",
+        "/?session=review%3Ah1&tab=terminal&notification=n-9&reply=1",
+      );
+      expect(screen.getByTestId("notification-view-output")).toBeInTheDocument();
+    });
+
+    it("rp8_should_not_show_reply_for_a_non_replyable_question_or_with_the_kill_switch_off", () => {
+      renderItem(group({ ...question, metadata: { question_shape: "multi" } }));
+      expect(screen.queryByTestId("notification-reply")).toBeNull();
+      mockReplyFlag = false;
+      renderItem(group(question));
+      expect(screen.queryByTestId("notification-reply")).toBeNull();
+    });
+
+    it("rp8_should_not_show_reply_on_a_visible_session", () => {
+      (useSessionHidden as jest.Mock).mockReturnValue(false);
+      renderItem(group(question));
+      expect(screen.queryByTestId("notification-reply")).toBeNull();
+    });
   });
 });

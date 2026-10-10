@@ -100,6 +100,7 @@ const OFFLINE_REASON = "Offline";
  */
 export function NotificationPanel() {
   const v2 = useFeatureFlag(NOTIFICATION_TRAY_V2_FLAG);
+  const replyEnabled = useFeatureFlag("hidden_session_reply");
   const {
     notificationHistory,
     isPanelOpen,
@@ -891,6 +892,7 @@ export function NotificationPanel() {
               lastUpdatedAt={background.lastUpdatedAt}
               onRefresh={background.refresh}
               onOpenRow={openBackgroundRow}
+              replyEnabled={replyEnabled}
             />
           ) : (
             renderBody()

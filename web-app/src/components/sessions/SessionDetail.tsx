@@ -9,9 +9,13 @@ import { prefetchVcsStatus } from "@/lib/hooks/useVcsStatus";
 import { getApiBaseUrl } from "@/lib/config";
 import { useAppDispatch, useAppSelector } from "@/lib/store";
 import { selectAllSessions, selectSessionsError, setError } from "@/lib/store/sessionsSlice";
-import { useNotificationCommands } from "@/lib/contexts/notificationContexts";
+import { useNotificationCommands, useNotificationState } from "@/lib/contexts/notificationContexts";
+import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
+import { pendingQuestionFor } from "@/lib/reply/replyQuestion";
+import { useStickyReplyQuestion } from "@/lib/hooks/useStickyReplyQuestion";
 import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 import { ReadOnlyBanner } from "./ReadOnlyBanner";
+import { ReplyCard } from "./ReplyCard";
 import { isReadOnlyRefusal, READ_ONLY_REFUSAL_TOAST } from "./readOnlyCopy";
 
 // Dynamically import SessionDetailView (and its heavy transitive deps: CodeMirror,
@@ -88,7 +92,16 @@ export function SessionDetail({
   const allSessions = useAppSelector(selectAllSessions);
   const sessionsError = useAppSelector(selectSessionsError);
   const dispatch = useAppDispatch();
-  const { showActionToast } = useNotificationCommands();
+  const { showActionToast, markAsRead } = useNotificationCommands();
+  const { notificationHistory } = useNotificationState();
+  // Kill switch: the server's hidden_session_reply flag (a missing value reads as off).
+  const replyEnabled = useFeatureFlag("hidden_session_reply");
+  const unreadQuestion = session.hidden && replyEnabled
+    ? pendingQuestionFor(notificationHistory, session.id)
+    : undefined;
+  // Marking the notification read after a send must not unmount the card holding its receipt.
+  const stickyQuestion = useStickyReplyQuestion(unreadQuestion, session.id);
+  const pendingQuestion = session.hidden && replyEnabled ? stickyQuestion : undefined;
 
   // A write the server refused on a hidden session reads as one plain line, never the raw RPC error.
   useEffect(() => {
@@ -135,7 +148,16 @@ export function SessionDetail({
     <SessionVcsProvider sessionId={session.id} baseUrl={getApiBaseUrl()} isActive={isActive}>
       {session.hidden ? (
         <div style={{ display: "flex", flexDirection: "column", flex: 1, height: "100%", minHeight: 0 }}>
-          <ReadOnlyBanner />
+          <ReadOnlyBanner replyCardPresent={pendingQuestion !== undefined} />
+          {pendingQuestion && (
+            <ReplyCard
+              key={pendingQuestion.id}
+              sessionId={session.id}
+              notification={pendingQuestion}
+              onSent={() => void markAsRead(pendingQuestion.id)}
+              onViewOutput={() => onTabChange?.("terminal")}
+            />
+          )}
           <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>{detailView}</div>
         </div>
       ) : (

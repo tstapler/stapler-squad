@@ -1,0 +1,19 @@
+{
+  "id": "session-reply-card",
+  "type": "frontend",
+  "name": "Reply card in a hidden session's read-only view: one numbered option button per option of a pending single-select question, audited and rate limited",
+  "component": "ReplyCard",
+  "path": "web-app/src/components/sessions/ReplyCard.tsx",
+  "filePath": "web-app/src/components/sessions/ReplyCard.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "web-app/src/components/sessions/__tests__/ReplyCard.test.tsx",
+    "web-app/src/components/sessions/__tests__/SessionDetail.readonly.test.tsx",
+    "web-app/src/components/ui/__tests__/NotificationItem.hidden.test.tsx",
+    "web-app/src/components/ui/__tests__/NotificationToast.hidden.test.tsx",
+    "web-app/src/lib/reply/__tests__/replyQuestion.test.ts",
+    "tests/e2e/hidden-session-reply.spec.ts"
+  ],
+  "lastModified": "2026-10-10T00:00:00Z"
+}

@@ -35,4 +35,13 @@ describe("notification docs", () => {
   it("the project does not keep notification docs under .claude/docs", () => {
     expect(fs.existsSync(path.join(REPO, ".claude", "docs"))).toBe(false);
   });
+
+  // T-RP-82: the Reply release-note line stays in the how-to, so the headline dead end is
+  // not presented as fixed for questions or sessions it cannot answer.
+  it("the how-to carries the Reply release-note line", () => {
+    const howTo = fs.readFileSync(path.join(REPO, "docs/how-to/manage-notifications.md"), "utf8");
+    expect(howTo).toContain(
+      "Reply answers a single-select question from a background session with one tap; other questions, and sessions whose hook has not yet been refreshed (a service restart or session resume refreshes it, no agent restart needed), show 'Answer in the terminal'. Free text is not supported.",
+    );
+  });
 });

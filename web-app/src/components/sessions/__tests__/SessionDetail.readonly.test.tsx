@@ -20,6 +20,8 @@ jest.mock("@/lib/contexts/SessionVcsContext", () => ({
 jest.mock("@/lib/hooks/useVcsStatus", () => ({ prefetchVcsStatus: jest.fn() }));
 jest.mock("@/lib/config", () => ({ getApiBaseUrl: () => "http://localhost:8543" }));
 let mockSessionsError: string | null = null;
+let mockHistory: unknown[] = [];
+let mockFlags: Record<string, boolean> = {};
 const mockDispatch = jest.fn();
 const mockShowActionToast = jest.fn();
 jest.mock("@/lib/store", () => ({
@@ -32,7 +34,11 @@ jest.mock("@/lib/store/sessionsSlice", () => ({
   setError: (value: string | null) => ({ type: "sessions/setError", payload: value }),
 }));
 jest.mock("@/lib/contexts/notificationContexts", () => ({
-  useNotificationCommands: () => ({ showActionToast: mockShowActionToast }),
+  useNotificationCommands: () => ({ showActionToast: mockShowActionToast, markAsRead: jest.fn() }),
+  useNotificationState: () => ({ notificationHistory: mockHistory }),
+}));
+jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
+  useFeatureFlag: (name: string) => mockFlags[name] ?? false,
 }));
 
 const session = (hidden: boolean) => ({ id: "s1", title: "review:ee1b4be0", hidden }) as unknown as Session;
@@ -61,6 +67,56 @@ describe("SessionDetail read-only banner", () => {
     expect(screen.queryByTestId("readonly-banner")).toBeNull();
     expect(screen.getByTestId("session-detail-view-stub")).toBeInTheDocument();
     expect(announce).not.toHaveBeenCalled();
+  });
+});
+
+describe("SessionDetail Reply card (Story 5.6)", () => {
+  const question = {
+    id: "n1",
+    sessionId: "s1",
+    sessionName: "review:ee1b4be0",
+    message: "Which color?",
+    timestamp: 5,
+    notificationType: "question",
+    isRead: false,
+    metadata: { question_id: "q1", question_shape: "single", question_options: '["Red","Green"]' },
+  };
+
+  beforeEach(() => {
+    mockHistory = [question];
+    mockFlags = { hidden_session_reply: true };
+  });
+  afterEach(() => {
+    mockHistory = [];
+    mockFlags = {};
+  });
+
+  it("rp1_should_show_the_card_directly_below_the_banner_for_a_hidden_session_with_a_pending_question", () => {
+    renderDetail(true);
+    const banner = screen.getByTestId("readonly-banner");
+    const card = screen.getByTestId("reply-card");
+    const view = screen.getByTestId("session-detail-view-stub");
+    expect(banner.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(card.compareDocumentPosition(view) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByTestId("reply-option-2")).toHaveTextContent("2. Green");
+    expect(screen.getByTestId("readonly-banner-secondary")).toHaveTextContent(/Reply to Claude's question below/);
+  });
+
+  it("rp1_should_never_show_the_card_for_a_visible_session", () => {
+    renderDetail(false);
+    expect(screen.queryByTestId("reply-card")).toBeNull();
+  });
+
+  it("rp1_should_show_no_card_when_no_question_is_pending_or_the_kill_switch_is_off", () => {
+    mockHistory = [{ ...question, isRead: true }];
+    renderDetail(true);
+    expect(screen.queryByTestId("reply-card")).toBeNull();
+  });
+
+  it("rp_kill_switch_should_hide_the_card_when_hidden_session_reply_is_off", () => {
+    mockFlags = { hidden_session_reply: false };
+    renderDetail(true);
+    expect(screen.queryByTestId("reply-card")).toBeNull();
   });
 });
 

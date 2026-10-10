@@ -1,5 +1,7 @@
 "use client";
 
+import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
+import { replyAvailability } from "@/lib/reply/replyQuestion";
 import { useEffect, useRef, useState } from "react";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import { useCoarsePointer } from "@/lib/hooks/useCoarsePointer";
@@ -156,6 +158,9 @@ export function NotificationToast({
   const sessionHidden = useSessionHidden(notification.sessionId) === true;
   const viewLabel = sessionHidden ? "View output" : "View Session";
   const viewTestId = sessionHidden ? "notification-view-output" : "notification-view-session";
+  // Reply opens the same read-only view, where the Reply card is (Surface 12b).
+  const replyEnabled = useFeatureFlag("hidden_session_reply");
+  const showReply = sessionHidden && replyEnabled && replyAvailability(notification)?.kind === "replyable";
 
   const handleView = () => {
     auditLog.logNotificationSessionViewed(notification.id, notification.sessionId);
@@ -411,6 +416,11 @@ export function NotificationToast({
         {showViewInline && (
           <button className={viewButton} onClick={handleView} data-testid={viewTestId}>
             {viewLabel}
+          </button>
+        )}
+        {showViewInline && showReply && (
+          <button className={viewButton} onClick={handleView} data-testid="notification-reply">
+            Reply
           </button>
         )}
         {showDismissButton && (

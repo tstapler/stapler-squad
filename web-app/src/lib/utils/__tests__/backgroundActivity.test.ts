@@ -102,10 +102,16 @@ describe("selectBackgroundRows (C7 join)", () => {
     expect(view.completedOkToday).toBe(0);
   });
 
-  it("flags only an unread question record as a pending question", () => {
+  it("flags only a replyable unread question record as a pending question", () => {
     const sessions = [sess()];
-    const q = selectBackgroundRows([rec({ notificationType: "question" })], sessions, [], NOW).rows[0];
+    const replyable = {
+      notificationType: "question" as const,
+      metadata: { question_id: "q1", question_shape: "single", question_options: '["A","B"]' },
+    };
+    const q = selectBackgroundRows([rec(replyable)], sessions, [], NOW).rows[0];
     expect(q.pendingQuestion).toBe(true);
+    const unregistered = selectBackgroundRows([rec({ notificationType: "question" })], sessions, [], NOW).rows[0];
+    expect(unregistered.pendingQuestion).toBe(false);
     const a = selectBackgroundRows([rec({ notificationType: "approval_needed" })], sessions, [], NOW).rows[0];
     expect(a.pendingQuestion).toBe(false);
   });

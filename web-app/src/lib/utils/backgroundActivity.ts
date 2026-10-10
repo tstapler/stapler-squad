@@ -1,3 +1,4 @@
+import { replyAvailability } from "@/lib/reply/replyQuestion";
 import type { NotificationData, NotificationHistoryItem } from "@/lib/types/notification";
 
 /** A hidden session as the Background section needs it. `id` is the title today (types.proto:11). */
@@ -133,7 +134,7 @@ export function selectBackgroundRows(
       recordIds: records.map((r) => r.id),
       primaryRecordId: primary.id,
       sessionAvailable: candidate.available,
-      pendingQuestion: primary.notificationType === "question",
+      pendingQuestion: replyAvailability(primary)?.kind === "replyable",
     });
   }
   rows.sort((a, b) => {

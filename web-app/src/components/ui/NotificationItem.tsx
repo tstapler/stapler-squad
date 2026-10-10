@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useCallback, useMemo, useRef } from "react";
 import { useFocusRestoreOnRemoval } from "@/lib/hooks/useFocusRestoreOnRemoval";
 import { useSessionHidden } from "@/lib/hooks/useSessionHidden";
+import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
+import { replyAvailability } from "@/lib/reply/replyQuestion";
 import { BackgroundChip } from "./BackgroundChip";
 import { GroupedNotification, groupNotifications } from "@/lib/utils/notificationGrouping";
 import { formatRelativeTime } from "@/lib/utils/datetime";
@@ -164,6 +166,7 @@ export function NotificationItem({
   const hasSourceApp = notification.sourceApp || notification.sourceBundleId;
   // A hidden session opens read-only (Story 5.3): chip and "View output" instead of "View Session".
   const sessionHidden = useSessionHidden(notification.sessionId, lookupHidden) === true;
+  const replyEnabled = useFeatureFlag("hidden_session_reply");
 
   // Always show the session name as the primary title so users know which
   // session generated the notification. If the stored title is a generic
@@ -344,18 +347,30 @@ export function NotificationItem({
             </Link>
           )}
           {!notification.metadata?.["item_id"] && notification.sessionId && (
-            <Link
-              href={
-                sessionHidden
-                  ? hiddenSessionHref(notification.sessionId, notification.id)
-                  : getSessionHref(notification.sessionId)
-              }
-              className={viewButton}
-              onClick={() => navigate(group.allIds, notification.onView, notification.sessionId)}
-              data-testid={sessionHidden ? "notification-view-output" : "notification-view-session"}
-            >
-              {sessionHidden ? "View output" : "View Session"}
-            </Link>
+            <>
+              <Link
+                href={
+                  sessionHidden
+                    ? hiddenSessionHref(notification.sessionId, notification.id)
+                    : getSessionHref(notification.sessionId)
+                }
+                className={viewButton}
+                onClick={() => navigate(group.allIds, notification.onView, notification.sessionId)}
+                data-testid={sessionHidden ? "notification-view-output" : "notification-view-session"}
+              >
+                {sessionHidden ? "View output" : "View Session"}
+              </Link>
+              {sessionHidden && replyEnabled && replyAvailability(notification)?.kind === "replyable" && (
+                <Link
+                  href={`${hiddenSessionHref(notification.sessionId, notification.id)}&reply=1`}
+                  className={viewButton}
+                  onClick={() => navigate(group.allIds, notification.onView, notification.sessionId)}
+                  data-testid="notification-reply"
+                >
+                  Reply
+                </Link>
+              )}
+            </>
           )}
         </div>
       </div>
