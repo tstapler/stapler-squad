@@ -96,7 +96,7 @@ func TestServer_should_NegotiateALPNHTTP2_When_StartRemoteServesOverRealTLS(t *t
 
 	port := testutil.FindFreePort(t)
 	remoteAddr := fmt.Sprintf("127.0.0.1:%d", port)
-	require.NoError(t, srv.StartRemote(ctx, remoteAddr, tlsCfg, nil))
+	require.NoError(t, srv.StartRemote(ctx, remoteAddr, tlsCfg, nil, false))
 
 	transport := &http2.Transport{
 		TLSClientConfig: &tls.Config{

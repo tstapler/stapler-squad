@@ -7,6 +7,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/server/middleware"
+	"github.com/tstapler/stapler-squad/server/services"
 )
 
 // newChainTestServer builds a Server with only a mux, so the per-listener
@@ -80,7 +84,7 @@ func TestStartChain_should_KeepHostGuard_When_AuthMiddlewareSet(t *testing.T) {
 func TestRemoteChain_should_NotContainGuard_When_HostIsOnyxAt8444WithAuth(t *testing.T) {
 	srv, reached := newChainTestServer(t, "localhost:8543")
 	admit := func(next http.Handler) http.Handler { return next }
-	assert.Equal(t, http.StatusOK, postProbe(srv.remoteChain(admit), "onyx.staplerhome.internal:8444", ""))
+	assert.Equal(t, http.StatusOK, postProbe(srv.remoteChain(admit, false), "onyx.staplerhome.internal:8444", ""))
 	assert.Equal(t, 1, *reached)
 }
 
@@ -126,7 +130,7 @@ func TestLocalChainAndRemoteChain_should_AlwaysWrapNudgePathWithAuthOrGuard_When
 	})
 	t.Run("remote wraps with auth", func(t *testing.T) {
 		srv, reached := newServer()
-		assert.Equal(t, http.StatusUnauthorized, postNudge(srv.remoteChain(denyAll), http.MethodPost, "onyx.lan:8444", ""))
+		assert.Equal(t, http.StatusUnauthorized, postNudge(srv.remoteChain(denyAll, true), http.MethodPost, "onyx.lan:8444", ""))
 		assert.Zero(t, *reached)
 	})
 }
@@ -141,6 +145,85 @@ func TestRemoteChain_should_LeaveNudgeReachable_When_AuthMiddlewareNil(t *testin
 		reached++
 		w.WriteHeader(http.StatusOK)
 	})
-	assert.Equal(t, http.StatusOK, postNudge(srv.remoteChain(nil), http.MethodPost, "onyx.lan:8444", ""))
+	assert.Equal(t, http.StatusOK, postNudge(srv.remoteChain(nil, false), http.MethodPost, "onyx.lan:8444", ""))
 	assert.Equal(t, 1, reached)
+}
+
+type typedNilValidator struct{}
+
+func (*typedNilValidator) ValidateAuthSession(string) bool { return false }
+
+type okValidator struct{}
+
+func (okValidator) ValidateAuthSession(string) bool { return true }
+
+// recordProbe serves one request through h and returns the RequestRecord the
+// handler behind the chain observed.
+func recordProbe(t *testing.T, build func(*Server) http.Handler, host string, hdr map[string]string) services.RequestRecord {
+	t.Helper()
+	srv, _ := newChainTestServer(t, "localhost:8543")
+	var got services.RequestRecord
+	var found bool
+	srv.mux.HandleFunc("/record-probe", func(_ http.ResponseWriter, r *http.Request) {
+		got, found = services.RequestRecordFrom(r.Context())
+	})
+	r := httptest.NewRequest(http.MethodPost, "/record-probe", strings.NewReader("{}"))
+	r.Host = host
+	for k, v := range hdr {
+		r.Header.Set(k, v)
+	}
+	build(srv).ServeHTTP(httptest.NewRecorder(), r)
+	require.True(t, found, "no request record reached the handler")
+	return got
+}
+
+func TestAuthMode_ShouldBeRequiredOnlyWhenARealValidatorIsWired_AndAnIdentityOrNilWrapperOrTypedNilKeepsTheHostTest(t *testing.T) {
+	identity := func(next http.Handler) http.Handler { return next }
+	var typedNil *typedNilValidator
+	cases := []struct {
+		name string
+		mw   func(http.Handler) http.Handler
+		req  bool
+		want string
+	}{
+		{"nil wrapper", nil, false, services.AuthModeNone},
+		{"identity wrapper", identity, false, services.AuthModeNone},
+		{"Auth(nil)", middleware.Auth(nil), middleware.AuthRequires(nil), services.AuthModeNone},
+		{"Auth(typed nil)", middleware.Auth(typedNil), middleware.AuthRequires(typedNil), services.AuthModeNone},
+		{"Auth(validator)", middleware.Auth(okValidator{}), middleware.AuthRequires(okValidator{}), services.AuthModeRequired},
+	}
+	for _, c := range cases {
+		t.Run(c.name+" local", func(t *testing.T) {
+			if c.name == "Auth(typed nil)" {
+				t.Skip("Auth wraps a typed nil and 401s before any handler; auth_mode is covered by the remote subtest")
+			}
+			rec := recordProbe(t, func(srv *Server) http.Handler {
+				srv.SetupAuth(c.mw, c.req)
+				return srv.localChain()
+			}, "localhost:8543", map[string]string{"Authorization": "Bearer x"})
+			assert.Equal(t, c.want, rec.AuthMode)
+		})
+		t.Run(c.name+" remote", func(t *testing.T) {
+			rec := recordProbe(t, func(srv *Server) http.Handler { return srv.remoteChain(identity, c.req) }, "onyx.lan:8444", nil)
+			assert.Equal(t, c.want, rec.AuthMode)
+		})
+	}
+
+	// An identity wrapper must keep the Host test on the local chain.
+	srv, reached := newChainTestServer(t, "localhost:8543")
+	srv.SetupAuth(identity, false)
+	assert.Equal(t, http.StatusForbidden, postProbe(srv.localChain(), "evil.example:8543", ""))
+	assert.Zero(t, *reached)
+}
+
+func TestRequestRecord_ShouldCarryRawListenerAuthModeHostOriginAndProxiedOnBothChainsWithoutAVerdict_WhenOnlyPr1fAIsMerged(t *testing.T) {
+	local := recordProbe(t, (*Server).localChain, "localhost:8543", nil)
+	assert.Equal(t, services.RequestRecord{Listener: services.ListenerLocal, AuthMode: services.AuthModeNone, Host: "localhost:8543"}, local)
+
+	remote := recordProbe(t, func(srv *Server) http.Handler { return srv.remoteChain(nil, true) }, "onyx.lan:8444", map[string]string{"X-Forwarded-For": "10.0.0.9", "Origin": "https://onyx.lan:8444"})
+	assert.Equal(t, services.RequestRecord{Listener: services.ListenerRemote, AuthMode: services.AuthModeRequired, Host: "onyx.lan:8444", Origin: "https://onyx.lan:8444", Proxied: true}, remote)
+
+	// Raw values only: the record adds no refusal, even for a foreign Host.
+	rebinding := recordProbe(t, func(srv *Server) http.Handler { return srv.remoteChain(nil, false) }, "evil.example", nil)
+	assert.Equal(t, "evil.example", rebinding.Host)
 }

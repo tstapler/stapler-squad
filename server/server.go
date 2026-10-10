@@ -57,6 +57,7 @@ type Server struct {
 	mux                        *http.ServeMux
 	tlsConfig                  *tls.Config                     // non-nil when TLS is enabled
 	authMiddleware             func(http.Handler) http.Handler // nil when auth is disabled
+	requiresAuth               bool                            // explicit: a real validator is wired
 	httpsURL                   string                          // set when remote access is enabled
 	hostnames                  atomic.Pointer[[]string]        // detected LAN hostnames; published add-only via SetHostnames, read lock-free via GetHostnames
 	origins                    []string                        // allowed CORS origins
@@ -1319,8 +1320,11 @@ func (s *Server) SetupTLS(cfg *tls.Config) {
 
 // SetupAuth installs authentication middleware.  Must be called before Start().
 // authMiddleware is a function that wraps an http.Handler; pass nil to disable.
-func (s *Server) SetupAuth(authMiddleware func(http.Handler) http.Handler) {
+// requiresAuth must be true only when the wrapper was built from a non-nil
+// validator (middleware.AuthRequires); it feeds the request record's auth_mode.
+func (s *Server) SetupAuth(authMiddleware func(http.Handler) http.Handler, requiresAuth bool) {
 	s.authMiddleware = authMiddleware
+	s.requiresAuth = requiresAuth
 }
 
 // RegisterConnectHandler registers a ConnectRPC service handler.
@@ -1715,7 +1719,8 @@ func (s *Server) localChain() http.Handler {
 		inner = middleware.ProbeGuardPaths(guardedProcedurePaths, s.probeGuardConfig())(inner)
 	}
 	inner = middleware.HostGuard(s.hostGuardConfig())(inner)
-	return middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner)))
+	stamp := services.WithRequestRecord(services.ListenerLocal, s.requiresAuth)
+	return stamp(middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))))
 }
 
 // localExemptPaths skip the Host guard on :8543.
@@ -1733,12 +1738,13 @@ func (s *Server) hostGuardConfig() middleware.HostGuardConfig {
 // A nil authMW leaves the chain open (existing posture, pinned by
 // TestRemoteChain_should_LeaveNudgeReachable_When_AuthMiddlewareNil); main.go
 // always passes middleware.Auth, so nil only occurs in tests.
-func (s *Server) remoteChain(authMW func(http.Handler) http.Handler) http.Handler {
+func (s *Server) remoteChain(authMW func(http.Handler) http.Handler, requiresAuth bool) http.Handler {
 	inner := http.Handler(s)
 	if authMW != nil {
 		inner = authMW(inner)
 	}
-	return middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner)))
+	stamp := services.WithRequestRecord(services.ListenerRemote, requiresAuth)
+	return stamp(middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))))
 }
 
 // probeGuardConfig reads everything lazily: origins, hostnames and the bound
@@ -1755,9 +1761,9 @@ func (s *Server) probeGuardConfig() middleware.ProbeGuardConfig {
 // route mux as the local server but protected by TLS and auth middleware.
 // It binds eagerly (returns a bind error immediately if the port is in use),
 // then runs the server in a background goroutine until ctx is cancelled.
-func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls.Config, authMW func(http.Handler) http.Handler) error {
+func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls.Config, authMW func(http.Handler) http.Handler, requiresAuth bool) error {
 	handler := otelhttp.NewHandler(
-		s.remoteChain(authMW),
+		s.remoteChain(authMW, requiresAuth),
 		"stapler-squad-remote",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)

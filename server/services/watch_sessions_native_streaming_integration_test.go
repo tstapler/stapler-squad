@@ -270,7 +270,7 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 
 	port := testutil.FindFreePort(t)
 	remoteAddr := fmt.Sprintf("127.0.0.1:%d", port)
-	require.NoError(t, srv.StartRemote(srvCtx, remoteAddr, tlsCfg, nil))
+	require.NoError(t, srv.StartRemote(srvCtx, remoteAddr, tlsCfg, nil, false))
 
 	h2Transport := &http2.Transport{
 		TLSClientConfig: &tls.Config{

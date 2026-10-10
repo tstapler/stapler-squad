@@ -1611,7 +1611,7 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	startHostGossip(ctx, srv.Mux(), configDir, hostnames, lanIPs, remotePort, storage, backlogSvc)
 
 	// Start the remote HTTPS server with auth middleware applied.
-	if err := srv.StartRemote(ctx, remoteAddr, tlsCfg, middleware.Auth(sessions)); err != nil {
+	if err := srv.StartRemote(ctx, remoteAddr, tlsCfg, middleware.Auth(sessions), middleware.AuthRequires(sessions)); err != nil {
 		return nil, fmt.Errorf("start remote server: %w", err)
 	}
 

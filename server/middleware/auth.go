@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"reflect"
 	"strings"
 )
 
@@ -9,6 +10,20 @@ import (
 // session manager.
 type AuthValidator interface {
 	ValidateAuthSession(token string) bool
+}
+
+// AuthRequires reports whether Auth(validator) enforces authentication: false
+// for a nil interface and for a typed nil pointer, which Auth would wrap.
+func AuthRequires(validator AuthValidator) bool {
+	if validator == nil {
+		return false
+	}
+	v := reflect.ValueOf(validator)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.Interface:
+		return !v.IsNil()
+	}
+	return true
 }
 
 // Auth returns middleware that enforces authentication on all non-exempt paths.

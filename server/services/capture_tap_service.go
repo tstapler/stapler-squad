@@ -38,6 +38,62 @@ func WithRequestHost(next http.Handler) http.Handler {
 	})
 }
 
+// Listener names and auth modes stamped on a RequestRecord.
+const (
+	ListenerLocal    = "local"
+	ListenerRemote   = "remote"
+	AuthModeNone     = "none"
+	AuthModeRequired = "required"
+)
+
+// RequestRecord holds the raw facts about an inbound request that later
+// policy (the delivery-gate audit, LocalWriteGuard) reads. It carries no verdict.
+type RequestRecord struct {
+	Listener string
+	AuthMode string
+	Host     string
+	Origin   string
+	Proxied  bool
+}
+
+type requestRecordKey struct{}
+
+// WithRequestRecord stamps a RequestRecord on the request context. AuthMode is
+// "required" only when requiresAuth is true.
+func WithRequestRecord(listener string, requiresAuth bool) func(http.Handler) http.Handler {
+	mode := AuthModeNone
+	if requiresAuth {
+		mode = AuthModeRequired
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rec := RequestRecord{
+				Listener: listener,
+				AuthMode: mode,
+				Host:     r.Host,
+				Origin:   r.Header.Get("Origin"),
+				Proxied:  hasProxyHeader(r.Header),
+			}
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestRecordKey{}, rec)))
+		})
+	}
+}
+
+// RequestRecordFrom returns the stamped record; ok is false when no chain stamped it.
+func RequestRecordFrom(ctx context.Context) (RequestRecord, bool) {
+	rec, ok := ctx.Value(requestRecordKey{}).(RequestRecord)
+	return rec, ok
+}
+
+func hasProxyHeader(h http.Header) bool {
+	for name, values := range h {
+		if len(values) > 0 && isProxyHeader(name) {
+			return true
+		}
+	}
+	return false
+}
+
 // proxyHeaders mark a request that passed through a reverse proxy or tunnel. A
 // local proxy connects from loopback, so the socket alone cannot tell a proxied
 // remote caller from a local one.
