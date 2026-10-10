@@ -294,15 +294,6 @@ var knownFeatureFlags = []struct {
 // site (e.g. currentResyncOptions' UseFastLane) resolve against, so the two can never
 // drift on what "default" means for a given flag. Returns false for an unregistered
 // name, matching GetFeatureFlag's own "absent means false" convention.
-func featureFlagScopes(name string) []string {
-	for _, kf := range knownFeatureFlags {
-		if kf.name == name {
-			return kf.scopes
-		}
-	}
-	return nil
-}
-
 func featureFlagDefault(name string) bool {
 	for _, kf := range knownFeatureFlags {
 		if kf.name == name {

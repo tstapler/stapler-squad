@@ -53,8 +53,9 @@ func TestStats_ShouldRecordTheMutationInFlagHistory_WhenOperatorResetsGlobalOrCl
 	// Reset of an explicit false to a default-off flag: the effective value did not move.
 	e.g.Flags().OnFlagMutation(config.HiddenSessionGateFeatureFlag, "global", "RESET_GLOBAL")
 
-	var got []string
-	for _, c := range e.snap().FlagHistory {
+	history := e.snap().FlagHistory
+	got := make([]string, 0, len(history))
+	for _, c := range history {
 		got = append(got, c.Scope+"="+c.Mutation)
 	}
 	assert.Equal(t, []string{
