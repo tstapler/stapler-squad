@@ -39,7 +39,11 @@ func applyContextHealth(
 			continue
 		}
 		verdict := tokens.EvaluateContextHealth(pr.ContextHealth, cfg)
-		prev := inst.Snapshot().ContextHealth.Level
+		cur := inst.Snapshot().ContextHealth
+		if verdict == cur {
+			continue
+		}
+		prev := cur.Level
 		inst.SetContextHealth(verdict)
 		if verdict.Level == prev {
 			continue

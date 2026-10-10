@@ -1415,7 +1415,7 @@ func (i *Instance) SetArtifacts(blob *artifacts.SessionArtifactsBlob) {
 // SetContextHealth atomically updates the transcript-derived ContextHealth verdict.
 func (i *Instance) SetContextHealth(v tokens.ContextHealthVerdict) {
 	_ = i.sendSyncErr(func(s *instanceState) error {
-		s.inst.ContextHealth = v
+		setContextHealthLocked(s, v)
 		return nil
 	})
 }

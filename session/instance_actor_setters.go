@@ -22,6 +22,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
 // ---- MCPServerURL ----------------------------------------------------------------
@@ -46,6 +47,17 @@ import (
 func setMCPServerURLLocked(s *instanceState, url string) {
 	s.inst.mu.Lock()
 	s.inst.MCPServerURL = url
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
+}
+
+// setContextHealthLocked writes the verdict and republishes the snapshot itself,
+// because the nil-liveInstance path of sendSyncErr runs without the actor loop's
+// post-command rebuild.
+func setContextHealthLocked(s *instanceState, v tokens.ContextHealthVerdict) {
+	s.inst.mu.Lock()
+	s.inst.ContextHealth = v
 	snap := buildSnapshot(s.inst)
 	s.inst.mu.Unlock()
 	s.inst.snapshot.Store(snap)
