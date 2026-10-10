@@ -52,6 +52,7 @@ func (g *GitProvider) WorkDir() string {
 func (g *GitProvider) runGit(args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	cmd := safeexec.CommandContext(ctx, "git", append([]string{"-C", g.repoRoot}, args...)...)
 	output, err := cmd.Output()
 	if err != nil {

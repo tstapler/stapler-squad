@@ -311,12 +311,14 @@ func RepairCorruptedGitRepo(repoPath string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	cmd := safeexec.CommandContext(ctx, "git", "clone", originURL, repoPath)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to re-clone repository at %s: %w\nOutput: %s", repoPath, err, sanitizeCloneOutput(output, originURL))
 	}
 	if strings.Contains(originURL, "@") {
 		publicURL := strings.Replace(originURL, originURL[strings.Index(originURL, "://")+3:strings.Index(originURL, "@")+1], "", 1)
+		//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 		setURLCmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "remote", "set-url", "origin", publicURL)
 		if output, err := setURLCmd.CombinedOutput(); err != nil {
 			log.Warn("failed to strip credentials from remote url", "err", err, "output", string(output))
@@ -372,6 +374,7 @@ func (m *RepoPathManager) EnsureRepoCloned(ctx context.Context, ref *GitHubRef) 
 			log.Info("repository exists, fetching latest", "path", repoPath)
 			fetchCtx, fetchCancel := context.WithTimeout(ctx, 60*time.Second)
 			defer fetchCancel()
+			//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 			cmd := safeexec.CommandContext(fetchCtx, "git", "-C", repoPath, "fetch", "--all", "--prune")
 			cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 			if output, err := cmd.CombinedOutput(); err != nil {
@@ -415,6 +418,7 @@ func (m *RepoPathManager) EnsureRepoCloned(ctx context.Context, ref *GitHubRef) 
 	log.Info("cloning repository", "host", host, "owner", ref.Owner, "repo", ref.Repo, "path", repoPath)
 	cloneCtx, cloneCancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cloneCancel()
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	cmd := safeexec.CommandContext(cloneCtx, "git", "clone", cloneURL, repoPath)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -430,6 +434,7 @@ func (m *RepoPathManager) EnsureRepoCloned(ctx context.Context, ref *GitHubRef) 
 
 	if strings.Contains(cloneURL, "@") {
 		publicURL := fmt.Sprintf("https://%s/%s/%s.git", host, ref.Owner, ref.Repo)
+		//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 		setURLCmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "remote", "set-url", "origin", publicURL)
 		if output, err := setURLCmd.CombinedOutput(); err != nil {
 			log.Warn("failed to strip credentials from remote url", "err", err, "output", string(output))
@@ -570,6 +575,7 @@ func detectWorktreeUncached(path string) (*WorktreeInfo, error) {
 	// Get the remote URL using git command (works for both worktrees and main repos)
 	remoteCtx, remoteCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer remoteCancel()
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	cmd := safeexec.CommandContext(remoteCtx, "git", "-C", path, "config", "--get", "remote.origin.url")
 	output, err := cmd.Output()
 	if err == nil {
@@ -613,6 +619,7 @@ func parseGitHubRemoteURL(remoteURL string) (owner, repo, host string) {
 func GetMainRepoPath(path string) (string, error) {
 	mainCtx, mainCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer mainCancel()
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	cmd := safeexec.CommandContext(mainCtx, "git", "-C", path, "rev-parse", "--git-common-dir")
 	output, err := cmd.Output()
 	if err != nil {
