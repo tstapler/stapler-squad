@@ -62,3 +62,12 @@ confirmation, error, failure and warning.
 - Cross-tab bulk dismissal needs a new idempotent id-set message (ADR-008).
 - jscpd threshold is 0.14 (`web-app/.jscpd.json`); a single row component and
   single predicate set are required to stay under it.
+
+## Reconciliation with `design/ux.md` (triad repair 1, 2026-10-09; status stays Proposed)
+
+`design/ux.md` is authoritative; this ADR's decisions are read with these corrections:
+
+- Decision 3's "cap 3 visible" is the desktop cap. The phone cap is 1 card in portrait and landscape and 0 with the keyboard open (ux.md Surface 1, ADR-009); overflow collapses into the stable `TrayEntryChip` (ux.md D10), not a separate "+N more" element.
+- Decision 3's "Pinned toasts always render" has one phone-only exception: after `PINNED_COLLAPSE_MS` (default 8s, a per-device setting 8s / 15s / 30s / Never) a pinned card collapses to a one-line chip and stays pinned and unread in the tray (ux.md TD-14).
+- A phone `approval_needed` card keeps both Approve and Deny visible and wraps the command text (ux.md D11, TC-12 to TC-14); `NotificationToast` is presentational but its action layout is specified there, and the TC-5 two-action cap does not apply to that decision pair.
+- Decision 5's `useSwipeToDismiss` keeps its 44px button alternatives, and the in-drag reveal labels of ux.md TC-11 apply.

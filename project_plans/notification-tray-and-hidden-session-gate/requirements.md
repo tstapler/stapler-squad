@@ -80,9 +80,38 @@ Baseline is taken **before PR 2a-1 ships** and re-measured **after the soak** wi
 | Hidden-session pushes (INFERRED) | NOT YET MEASURED (Story 1.5) | not yet | 0 routine |
 | Hidden-session failure and needs-human events (the dead-end exposure) | NOT YET MEASURED (Story 1.5) | not yet | unchanged volume, each one opens read-only in <= 1 tap |
 | Largest burst of rows inside any 60 seconds (proxy for simultaneous toasts) | NOT YET MEASURED (Story 1.5) | not yet | deck still capped at 3 (1 on a phone) whatever the burst |
-| Pinned toasts per hour (alert-fatigue check; an auto-remediating WARNING must not count) | NOT YET MEASURED | not yet | recorded, no invented target |
+| Pinned toasts per operator-active hour (alert-fatigue check; an auto-remediating WARNING must not count; an "active hour" is an hour with at least one history row, INFERRED proxy) | NOT YET MEASURED (Story 1.5) | not yet | **median <= 2 and busiest hour <= 6** (planner default, DECISION; the figures are a judgment about how many pending decisions one operator can take per hour, not a measured threshold, UNVERIFIED). Re-derived once the baseline exists: if the baseline median is below 4, the target becomes half the baseline median, so the number can only get stricter |
+| **Interruptions per day** (operator-experience; every history row that toasts plus the INFERRED push estimate, hidden and visible sessions, trailing 7 days) | NOT YET MEASURED (Story 1.5) | not yet | falls by at least the hidden-session routine share the baseline reports (the removable part); the remainder (visible sessions, hidden failure and needs-human) is recorded, not targeted |
+| **Taps to triage a burst** (scripted walkthrough on a manual instance: a seeded burst of 10 notifications, 6 informational, 3 pending approvals, 1 failure; taps counted by the script from the burst arriving to an empty deck with every pending decision acted on or left pinned in the tray) and **time to triage** (the operator, with a stopwatch on a phone, median of 3 runs; INFERRED, manual) | NOT YET MEASURED (Story 1.5, run on the unchanged `origin/main` build: dismiss each toast, then the Notifications page) | not yet | taps <= 2 + 1 per pending decision (derived from TB-8: one tap to an empty deck, one to open the tray, one per decision); time recorded, and once a baseline exists the target is half of it (planner default, DECISION) |
+| **Taps to reach a failing hidden session** (scripted: a hidden-session failure notification, taps from the notification to the read-only output view, from the toast and from the tray) | not reachable on `origin/main` (Baseline; Spike 1.1 confirms and records the four repros) | not yet | <= 1 tap from the toast or push (TC-6), <= 2 from the closed tray (open tray, tap "View output") |
 
-The numbers go in this table when Story 1.5 runs; until then the cells say so rather than guess.
+The numbers go in this table when Story 1.5 runs; until then the cells say so rather than guess. **Measurement owner**: plan Story 1.5 (Tasks 1.5a and 1.5b) takes the baseline for every row above, including the scripted tap counts and the operator-timed runs on the unchanged build; Task 2.9e re-runs the history rows after the soak (R1) and the committed walkthrough spec of Task 3.10b re-runs the scripted taps after R2 and again after R4; the operator-timed runs repeat on the same phone after the device checks DV-1 to DV-9. A figure that cannot be measured by the stated method stays labelled INFERRED or NOT YET MEASURED.
+
+### Riskiest product hypothesis (stated so it can be checked, not assumed)
+
+**H1: capping toasts (3 on desktop, 1 on a phone) and moving the overflow into a tray fixes the operator's burst fatigue beyond what the hidden-session gate already removes.** It is the riskiest assumption because the gate alone may remove most bursts (the screenshots show hidden-session routine pushes and toasts; the burst rate from visible sessions and hidden failures has not been measured), and because a tray is a second place to look that can cost more attention than it saves.
+
+**The check, pre-registered before any toast or tray code is written.** Story 1.5 computes from the 7-day history, as part of the baseline, the **residual bursts**: the number of 60-second windows holding at least 4 toast-eligible rows after every hidden-session routine row is removed (the counterfactual "gate only"), per week, plus the largest burst and the pinned-per-hour median. Task 2.9e re-computes the same figures from the real soak window, where the gate really is on. H1 is judged on those residual figures, not on the raw baseline, because the raw baseline still contains the hidden-session flood the gate removes.
+
+### Post-soak decision rule (what the result changes)
+
+Applied once, from the Task 2.9e figures, before Epic 3 merges; the operator records which row applied in the PR 3 description. O8 stands: **this rule cuts no scope and withholds no story**; it changes parameters and ordering, and it names the one thing that stops.
+
+| Post-soak result | What it changes |
+|---|---|
+| Residual bursts >= 3 per week, or a 60-second burst of >= 4 on at least 2 days | H1 supported. Epics 3 and 4 proceed as planned; SM-3 keeps its "fixes burst fatigue" wording. |
+| Residual bursts 1 to 2 per week | H1 partly supported. Epics 3 and 4 proceed as planned; the cap values (3 and 1) and `PINNED_COLLAPSE_MS` are the tunable parameters, set from DV-1 and the operator's use rather than changed in advance. |
+| Residual bursts 0 (the gate alone removed the bursts) | H1 not supported by data. The toast stack and tray still ship (O8), but SM-3 is reworded from "fixes burst fatigue" to "bounds the worst case" and **no further toast-stack or tray features are added beyond the planned stories** on the strength of burst fatigue (the one thing that stops: additions, not planned work). |
+| Pinned toasts per active hour above the target (median > 2 or busiest hour > 6) in any row above | Before R2 ships, the pinned set is reviewed: which warning and error producers are pinned and whether more should be stamped `auto_remediating` (plan Task 3.2d); the cap and tray are unaffected. |
+| After R2 or R4, taps to triage the seeded burst are at or above the baseline's (the tray costs more than it saves) | The late-sequenced Epic 4 items (Quiet mode, hotkey, `top-sheet`, `landscape-panel`, Pin tray) pause until the triage path meets the taps target; they are resumed, not cut. |
+
+### Roadmap and cost of delay
+
+Ordered by what each day of delay costs, then by what can start now (plan "Sequencing and PR order"). No human-time figure is given or implied.
+- **R1 (gate, first).** Each day without it costs the baseline's hidden-session interruptions per day (NOT YET MEASURED; Story 1.5 turns this into a number). It needs no phone, has the smallest blast radius behind a flag, and the soak figures feed the decision rule above, so it also buys the evidence for R2.
+- **R2 (toast stack).** Costs delay only when a burst happens: the residual bursts per week of H1's check, times the taps per burst. Startable now after the contract PR; the phone placement fixes the covered input line in the screenshots on its own.
+- **R3 (hidden-session reachability).** Rare events with high severity: a hidden failure is currently a notification that cannot be opened (0%). It is third because it is blocked (Spike 1.1, the re-review PASS, and Spike 1.3g for Reply), not because it matters least; the Story 1.5 count of hidden failure and needs-human events checks this order against data before R2 starts.
+- **R4 (tray and late-sequenced items).** The convenience layer; lowest cost of delay, and Reply is last within Epic 5 because its benefit (answering a hidden question from the phone) is the smallest of the group and its risk is the largest.
 
 ## Appetite
 
@@ -164,7 +193,7 @@ The numbers go in this table when Story 1.5 runs; until then the cells say so ra
    ever deleting an unread pending decision. It replaced the earlier restart-time one-shot
    cleanup and is the plan's answer to the Baseline's existing stale rows (existing rows also
    age out under the 7-day retention). In scope; it ships after the gate (plan PR 2c).
-8. **Items beyond the original requirements text, kept in scope by operator decision O8** (appetite extended, full scope): Quiet mode (plan Story 4.5), the tray hotkey (Task 4.2f; the chord is spiked first and the hotkey is not shipped if no safe chord exists, which is a finding), the `top-sheet` and `landscape-panel` tray variants (Task 4.2e) and the push service-worker handoff (Story 5.5). They are sequenced last within their epic and keep their dependencies and gating spikes. None is required by Success Metrics or Scope 1-7, but none is cuttable.
+8. **Items beyond the original requirements text, kept in scope by operator decision O8** (appetite extended, full scope): Quiet mode (plan Story 4.5), the tray hotkey (Task 4.2f; the chord is spiked first and the hotkey is not shipped if no safe chord exists, which is a finding), the `top-sheet` and `landscape-panel` tray variants (Task 4.2e) and the push service-worker handoff (Story 5.5). They are sequenced last within their epic and keep their dependencies and gating spikes. None is required by Success Metrics or Scope 1-7, but none is cuttable. Triad repair 1 adds, in the same spirit and also in scope: the opt-in **Pin tray** (dock) mode that removes the overlay's hidden-columns cost for a user who wants it (Task 4.2e, `design/ux.md` D12), the one-time "What changed" card (TM-13), the phone approval card layout (D11) and the single stable phone tray entry (D10).
 
 ### Out of Scope
 

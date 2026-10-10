@@ -48,3 +48,13 @@ terminal. Any layout change to the terminal container triggers
   across open/close (pattern at `tests/e2e/terminal-stress/tmux-roundtrip.spec.ts`).
 - Axe must pass with the new roles; badge contrast and icon-only handle labels
   are part of the acceptance criteria.
+
+## Reconciliation with `design/ux.md` (triad repair 1, 2026-10-09; status stays Proposed)
+
+`design/ux.md` is the authoritative source for tray behavior; where this ADR's Decision text differs, ux.md wins and the Decision above is read as follows:
+
+- **Keyboard open on a phone.** Decision item 2 says "top-anchored full-height while the soft keyboard is open". The first-wave behavior is the **capped bottom sheet** (height capped to `--viewport-height`, bottom edge at `var(--keyboard-height)`, never under the keyboard; ux.md Surface 6, TK-2). The top-anchored `top-sheet` is a late-sequenced variant (plan Task 4.2e, ux.md Surface 7) that replaces the capped sheet once it lands.
+- **Expanded mobile sheet.** Decision item 2 says it "may be modal". ux.md decides it by pointer type: **non-trapping on touch** (`pointer: coarse`: no focus trap, no `inert`, no `aria-modal`, no focus move on open or close, so the soft keyboard is never summoned or collapsed) and **modal with a defined trap exit only on `pointer: fine`** (a narrow desktop window; ux.md D6, D7, TS-4, TS-9).
+- **Layout participation.** The tray is overlay-only by default, as decided. The one addition is the explicit, per-device, default-off **Pin tray** mode (ux.md D12, TY-12; plan Task 4.2e), which docks the tray as a column and costs one terminal resize vote per toggle. The "Docked push-aside panel: rejected" alternative below stays true for the default and is amended only for that opt-in.
+- **Desktop overlay cost.** The overlay hides up to `min(400px, 40vw)` of the terminal; ux.md TY-11 measures that at 900, 1000 and 1100px and TY-10 and plan Task 4.2h check the handle.
+- **Mobile entry.** The chip in decision item 2 is the single `TrayEntryChip` of ux.md D10 on session pages (no floating bottom-right chip there).
