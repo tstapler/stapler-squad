@@ -1146,9 +1146,11 @@ func (s *BacklogService) spawnSessionAfterGates(
 	if s.pipelineEngine != nil {
 		pipelineModeSnapshotHash, _ = s.pipelineEngine.ContentHashFor(session.PipelineMode(item.PipelineMode))
 	}
+	// Stamp the full branch, not the bare slug: the slug never equals a PR's head ref, so
+	// stamping it broke the merge-verification guard.
 	var workSessionBranchName string
 	if useWorktree {
-		workSessionBranchName = workBranchSlug
+		workSessionBranchName = session.BacklogWorkBranchName(workBranchSlug)
 	}
 	is, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
 		ItemID:                   item.ID,

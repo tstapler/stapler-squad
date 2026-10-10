@@ -146,7 +146,7 @@ func defaultOrphanedPRFinder(ctx context.Context, repoPath, branch string) (*git
 // remote, then looks up prNumber directly (immutable-number-keyed, not
 // branch-name-keyed — see github.GetPRByNumber's doc comment). This is the
 // production default installed by newListenerBase for
-// verifyPRHeadBranchMatchesTracked's live-GitHub re-check.
+// verifyPRBelongsToItem's live-GitHub re-check.
 func defaultPRByNumberFinder(ctx context.Context, repoPath string, prNumber int) (*github.PRInfo, error) {
 	ref, err := github.GetOwnerRepoFromRemote(repoPath, enterpriseHostsForRemoteParsing())
 	if err != nil {
@@ -1450,12 +1450,13 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		// Story 6 guard (adversarial-review.md's Blocker): re-verify, via a
 		// live GitHub lookup, that PR #item.PrNumber's head branch still
 		// matches this item's currently-tracked branch before treating the
-		// merge as this item's own and auto-completing it. No resolvable
-		// tracked branch (neither lastWork.BranchName nor wt) is treated
-		// identically to a definitive mismatch — fail closed.
-		trackedBranch := trackedBranchFor(lastWork, wt)
-		if matches, verifyErr := l.verifyPRHeadBranchMatchesTracked(ctx, item.RepoPath, trackedBranch, item.PrNumber); verifyErr != nil || !matches {
-			log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s: PR #%d head branch no longer verifiably matches the tracked branch — skipping auto-done transition (was this item's PR attached via report_pr_created's override_reason path?)", item.ID, item.PrNumber)
+		// merge as this item's own and auto-completing it. No recorded
+		// ownership evidence is treated identically to a definitive mismatch
+		// — fail closed.
+		own := prOwnershipFor(lastWork, wt)
+		if matches, verifyErr := l.verifyPRBelongsToItem(ctx, item.RepoPath, own, item.PrNumber); verifyErr != nil || !matches {
+			log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s: merged PR #%d can't be verified as this item's — skipping auto-done transition (%s, verifyErr=%v, matched=%t; was it attached via report_pr_created's override_reason path?)", item.ID, item.PrNumber, own, verifyErr, matches)
+			l.markMergedPRUnverified(ctx, er, item, own, verifyErr)
 			return
 		}
 
@@ -1810,46 +1811,115 @@ func logFeedbackBatchCoverage(itemID string, prStatus *git.PRStatus) {
 		itemID, len(authors), strings.Join(authors, ", "), prStatus.LatestFeedbackAt.Format(time.RFC3339))
 }
 
-// verifyPRHeadBranchMatchesTracked re-verifies, via a live GitHub lookup,
-// that prNumber's real head branch still equals the item's currently-tracked
-// branch (trackedBranch) — the guard Story 6 adds in response to
-// adversarial-review.md's Blocker, called immediately before any of
-// closeIfSupersededByMain/ReconcilePRPending/reconcileBouncingItems treats
-// item.PrNumber as ground truth for an automated GitHub-mutating or
-// completing action. Fails closed in both directions: an empty
-// trackedBranch (the caller couldn't resolve the item's own tracked branch)
-// returns false without even calling the finder, and a finder error (e.g. a
-// transient GitHub failure) also returns false — neither is ever read as a
-// verified match.
-func (l *BacklogLifecycleListener) verifyPRHeadBranchMatchesTracked(ctx context.Context, repoPath, trackedBranch string, prNumber int) (bool, error) {
-	if trackedBranch == "" {
-		return false, fmt.Errorf("verifyPRHeadBranchMatchesTracked: no tracked branch to verify PR #%d against", prNumber)
+// markMergedPRUnverified records the refused auto-done transition as a durable
+// stuck row and notifies once, so a merged PR the ownership guard can't tie to
+// its item is visible to the operator instead of a per-tick log line. Cleared
+// by selfHealStuck when the item leaves pr_pending. Best-effort: failures are
+// logged, never returned.
+func (l *BacklogLifecycleListener) markMergedPRUnverified(ctx context.Context, er *EntRepository, item *ent.BacklogItem, own prOwnership, verifyErr error) {
+	itemID := item.ID.String()
+	detail := fmt.Sprintf("PR #%d is merged but can't be verified as this item's (%s, verifyErr=%v) — mark the item done manually if the PR is its work", item.PrNumber, own, verifyErr)
+	applied, err := er.MarkStuck(ctx, itemID, domain.StuckReasonMergedPRUnverified, BacklogStatusPRPending, detail)
+	if err != nil {
+		log.WarningLog().Printf("[BacklogLifecycle] markMergedPRUnverified MarkStuck item=%s: %v", itemID, err)
+		return
+	}
+	if !applied {
+		return
+	}
+	rows, findErr := er.FindOpenStuckStates(ctx)
+	if findErr != nil {
+		log.WarningLog().Printf("[BacklogLifecycle] markMergedPRUnverified FindOpenStuckStates item=%s: %v", itemID, findErr)
+		return
+	}
+	row, ok := findOpenStuckStateFor(rows, itemID, domain.StuckReasonMergedPRUnverified)
+	if !ok || row.NotifiedAt != nil {
+		return
+	}
+	l.notify(itemID,
+		"Backlog item stuck: merged PR unverified",
+		fmt.Sprintf("%s — PR #%d is merged but no recorded branch or commit ties it to this item, so it was not auto-completed. Mark it done manually if the PR is its work.", item.Title, item.PrNumber),
+		8,          // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+		true, true, // urgent, important — never auto-resolves
+	)
+	if _, notifyErr := er.MarkStuckNotified(ctx, itemID, domain.StuckReasonMergedPRUnverified); notifyErr != nil {
+		log.WarningLog().Printf("[BacklogLifecycle] markMergedPRUnverified MarkStuckNotified item=%s: %v", itemID, notifyErr)
+	}
+}
+
+// prOwnership is the durable evidence that a PR belongs to a backlog item:
+// the branch names the item's work session is known by, and that session's
+// tip commit. A PR matches when its head ref is one of branches or its head
+// commit is tipSHA — the SHA path covers rows whose session/worktree rows are
+// gone and whose branch was never stamped.
+type prOwnership struct {
+	branches []string
+	tipSHA   string
+}
+
+// prOwnershipFor collects lastWork's and wt's ownership evidence. Branches
+// are listed with and without BacklogBranchPrefix because older spawns stamped
+// the bare slug while the real branch is prefixed. A tip equal to the
+// session's base commit is dropped: with no commits of its own it is not
+// evidence of anything.
+func prOwnershipFor(lastWork *ItemSessionSummary, wt *GitWorktreeData) prOwnership {
+	var own prOwnership
+	seen := map[string]bool{}
+	add := func(name string) {
+		if name != "" && !seen[name] {
+			seen[name] = true
+			own.branches = append(own.branches, name)
+		}
+	}
+	addWithPrefix := func(name string) {
+		add(name)
+		if name != "" && !strings.HasPrefix(name, BacklogBranchPrefix) {
+			add(BacklogWorkBranchName(name))
+		}
+	}
+	if lastWork != nil {
+		addWithPrefix(lastWork.BranchName)
+		if lastWork.LastCommitSha != "" && lastWork.LastCommitSha != lastWork.BaseCommitSha {
+			own.tipSHA = lastWork.LastCommitSha
+		}
+	}
+	if wt != nil {
+		addWithPrefix(wt.BranchName)
+	}
+	return own
+}
+
+func (o prOwnership) empty() bool { return len(o.branches) == 0 && o.tipSHA == "" }
+
+func (o prOwnership) String() string {
+	return fmt.Sprintf("branches=%q tipSHA=%q", o.branches, o.tipSHA)
+}
+
+// verifyPRBelongsToItem re-verifies, via a live GitHub lookup, that
+// prNumber's head branch or head commit is the item's own — the guard Story 6
+// adds in response to adversarial-review.md's Blocker, called immediately
+// before closeIfSupersededByMain/ReconcilePRPending/reconcileBouncingItems
+// treats item.PrNumber as ground truth for an automated GitHub-mutating or
+// completing action. Fails closed: no evidence (own.empty()) returns an error
+// without calling the finder, and a finder error also returns false — neither
+// is ever read as a verified match.
+func (l *BacklogLifecycleListener) verifyPRBelongsToItem(ctx context.Context, repoPath string, own prOwnership, prNumber int) (bool, error) {
+	if own.empty() {
+		return false, fmt.Errorf("verifyPRBelongsToItem: no branch or tip commit recorded to verify PR #%d against", prNumber)
 	}
 	info, err := l.getPRByNumberFinder()(ctx, repoPath, prNumber)
 	if err != nil {
 		return false, err
 	}
-	return info.HeadRef == trackedBranch, nil
-}
-
-// trackedBranchFor resolves the branch to verify a merged/closed PR against,
-// for verifyPRHeadBranchMatchesTracked's trackedBranch argument. Prefers
-// lastWork.BranchName — stamped once at work-session spawn time directly onto
-// the durable ItemSession row — over wt (the legacy sessions/worktrees-table
-// lookup via GetWorktreeDataBySessionUUID), which reads back empty once the
-// underlying Session row is gone (see EntRepository.Delete, which already
-// anticipates exactly this "Session row is ephemeral, ItemSession survives it"
-// shape for ConversationUUID). wt remains the fallback for ItemSession rows
-// created before branch_name existed. Returns "" (fail closed, per
-// verifyPRHeadBranchMatchesTracked's contract) when neither source has it.
-func trackedBranchFor(lastWork *ItemSessionSummary, wt *GitWorktreeData) string {
-	if lastWork != nil && lastWork.BranchName != "" {
-		return lastWork.BranchName
+	if own.tipSHA != "" && info.HeadSHA == own.tipSHA {
+		return true, nil
 	}
-	if wt != nil {
-		return wt.BranchName
+	for _, b := range own.branches {
+		if info.HeadRef == b {
+			return true, nil
+		}
 	}
-	return ""
+	return false, nil
 }
 
 // unverifiedPRAssociationDisclaimer is prepended (Task 6.3a) to a spawned
@@ -1862,14 +1932,14 @@ const unverifiedPRAssociationDisclaimer = "NOTE: this PR's association with this
 // verifyPRAssociationForFixSpawn independently resolves itemIDStr's
 // currently-tracked branch (its most recent work session's worktree data,
 // mirroring closeIfSupersededByMain's identical session-lookup loop) and
-// re-runs verifyPRHeadBranchMatchesTracked against prNumber. Used at Task
+// re-runs verifyPRBelongsToItem against prNumber. Used at Task
 // 6.3a's two fixCtx-building call sites in ReconcilePRPending and Task 6.5's
 // reconcileBouncingItems done-transition guard — deliberately re-run rather
 // than threaded through closeIfSupersededByMain's return value, since that
 // function returns false for several reasons unrelated to branch
 // verification and its return value alone can't distinguish "guard tripped"
 // from "nothing to verify yet" (see plan.md's Task 6.3a rationale). Fails
-// closed identically to verifyPRHeadBranchMatchesTracked's own contract: no
+// closed identically to verifyPRBelongsToItem's own contract: no
 // work session, a GetWorktreeDataBySessionUUID error, or the guard itself
 // erroring all count as "unverified", never "verified".
 func (l *BacklogLifecycleListener) verifyPRAssociationForFixSpawn(ctx context.Context, itemIDStr, repoPath string, prNumber int) bool {
@@ -1893,8 +1963,7 @@ func (l *BacklogLifecycleListener) verifyPRAssociationForFixSpawn(ctx context.Co
 	if wtErr != nil {
 		return false
 	}
-	trackedBranch := trackedBranchFor(lastWork, &wt)
-	matches, verifyErr := l.verifyPRHeadBranchMatchesTracked(ctx, repoPath, trackedBranch, prNumber)
+	matches, verifyErr := l.verifyPRBelongsToItem(ctx, repoPath, prOwnershipFor(lastWork, &wt), prNumber)
 	return verifyErr == nil && matches
 }
 
@@ -2009,9 +2078,9 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 		log.WarningLog().Printf("[BacklogLifecycle] closeIfSupersededByMain item=%s: PR #%d head branch no longer verifiably matches the tracked branch — skipping auto-close (was this item's PR attached via report_pr_created's override_reason path?)", item.ID, item.PrNumber)
 		return false
 	}
-	trackedBranch := trackedBranchFor(lastWork, &wt)
-	if matches, verifyErr := l.verifyPRHeadBranchMatchesTracked(ctx, item.RepoPath, trackedBranch, item.PrNumber); verifyErr != nil || !matches {
-		log.WarningLog().Printf("[BacklogLifecycle] closeIfSupersededByMain item=%s: PR #%d head branch no longer verifiably matches the tracked branch — skipping auto-close (was this item's PR attached via report_pr_created's override_reason path?)", item.ID, item.PrNumber)
+	own := prOwnershipFor(lastWork, &wt)
+	if matches, verifyErr := l.verifyPRBelongsToItem(ctx, item.RepoPath, own, item.PrNumber); verifyErr != nil || !matches {
+		log.WarningLog().Printf("[BacklogLifecycle] closeIfSupersededByMain item=%s: PR #%d can't be verified as this item's — skipping auto-close (%s, verifyErr=%v, matched=%t; was it attached via report_pr_created's override_reason path?)", item.ID, item.PrNumber, own, verifyErr, matches)
 		return false
 	}
 

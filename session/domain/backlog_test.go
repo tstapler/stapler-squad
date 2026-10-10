@@ -73,17 +73,18 @@ func TestStuckReasonReworkBlockedStale_should_beValid_When_Checked(t *testing.T)
 	}
 }
 
-// TestAllStuckReasons_should_contain23Entries_When_Enumerated is a regression
+// TestAllStuckReasons_should_contain24Entries_When_Enumerated is a regression
 // guard: catches an accidental removal from AllStuckReasons (which would
 // silently exclude a valid reason from every consumer that iterates the full
 // set, e.g. exhaustiveness tests) independent of IsValid's own switch. Bumped
 // from 20 to 21 by session-worktree-reconciliation's StuckReasonWorktreeInconsistent
 // addition (Architecture-A2), to 22 by cross-host-claim-dedup's
-// StuckReasonBlockedByClaim, and to 23 by StuckReasonRepeatedNoopDispatch.
-func TestAllStuckReasons_should_contain23Entries_When_Enumerated(t *testing.T) {
+// StuckReasonBlockedByClaim, to 23 by StuckReasonRepeatedNoopDispatch, and to 24 by
+// StuckReasonMergedPRUnverified.
+func TestAllStuckReasons_should_contain24Entries_When_Enumerated(t *testing.T) {
 	t.Parallel()
-	if len(AllStuckReasons) != 23 {
-		t.Errorf("len(AllStuckReasons) = %d, want 23", len(AllStuckReasons))
+	if len(AllStuckReasons) != 24 {
+		t.Errorf("len(AllStuckReasons) = %d, want 24", len(AllStuckReasons))
 	}
 }
 

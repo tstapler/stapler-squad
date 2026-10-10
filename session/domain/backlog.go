@@ -247,6 +247,13 @@ const (
 	// leaves review/in_progress, a new commit lands, or the duplicate claim
 	// that usually explains it is confirmed/archived.
 	StuckReasonRepeatedNoopDispatch StuckReason = "repeated_noop_dispatch"
+	// StuckReasonMergedPRUnverified: a pr_pending item's PR is merged on GitHub,
+	// but ReconcilePRPending's ownership guard (session.prOwnership) found no
+	// recorded branch or tip commit matching the PR, so it refused the
+	// auto-done transition. Fails closed by design; this row exists so that
+	// refusal is visible and operator-resolvable (mark done) rather than a
+	// per-tick log line on an item that sits in pr_pending forever.
+	StuckReasonMergedPRUnverified StuckReason = "merged_pr_unverified"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -274,6 +281,7 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonBlockedByClaim,
 	StuckReasonWorktreeInconsistent,
 	StuckReasonRepeatedNoopDispatch,
+	StuckReasonMergedPRUnverified,
 }
 
 // IsValid reports whether r is a known stuck reason value.
@@ -285,7 +293,8 @@ func (r StuckReason) IsValid() bool {
 		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale, StuckReasonPRNeedsFix,
 		StuckReasonRespawnBlockedActive, StuckReasonLikelyFlaky, StuckReasonBlockedByDependency,
 		StuckReasonMultipleReasons, StuckReasonBounceCapExhausted, StuckReasonSteerFailed,
-		StuckReasonGateTimeout, StuckReasonBlockedByClaim, StuckReasonWorktreeInconsistent, StuckReasonRepeatedNoopDispatch:
+		StuckReasonGateTimeout, StuckReasonBlockedByClaim, StuckReasonWorktreeInconsistent, StuckReasonRepeatedNoopDispatch,
+		StuckReasonMergedPRUnverified:
 		return true
 	}
 	return false
