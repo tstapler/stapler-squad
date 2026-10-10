@@ -64,6 +64,16 @@ type AutonomousOrchestrationService struct {
 	// Optional — if nil, the item is simply left in_progress (marked
 	// autonomous_stuck) until a human reopens it manually.
 	autonomousStuckRespawner AutonomousStuckRespawner
+
+	// legacyHiddenCounter, when set, is told about each hidden-session
+	// notification the generic notifier swallows (observability only).
+	legacyHiddenCounter func(site string, notificationType int32)
+}
+
+// SetLegacyHiddenCounter wires the legacy-suppression counter (see
+// deliverygate.Gate.CountLegacySuppressedType).
+func (a *AutonomousOrchestrationService) SetLegacyHiddenCounter(fn func(site string, notificationType int32)) {
+	a.legacyHiddenCounter = fn
 }
 
 // SetReviewGateTrigger wires the review gate trigger (typically BacklogLifecycleListener).
@@ -623,6 +633,8 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 			derivePriority(urgent, important),
 			title, body, events.SessionScopedMetadata(nil, linkedItemID),
 		))
+	} else if a.legacyHiddenCounter != nil {
+		a.legacyHiddenCounter("autonomous_generic", notifType)
 	}
 }
 

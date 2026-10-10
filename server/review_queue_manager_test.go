@@ -1265,6 +1265,38 @@ func TestOnItemAdded_SuppressesNotification_When_SessionHidden(t *testing.T) {
 	}
 }
 
+// TestSuppressForHidden_ShouldCountLegacySwallow_WhenHiddenRoutineReason pins that
+// the legacy predicate still swallows and now reports each swallow (site, type)
+// to the delivery-gate soak counter without changing behavior.
+func TestSuppressForHidden_ShouldCountLegacySwallow_WhenHiddenRoutineReason(t *testing.T) {
+	mgr, poller, _ := newReactiveQueueTestSetupWithStorage(t)
+	type swallow struct {
+		site string
+		typ  int32
+	}
+	var got []swallow
+	mgr.SetLegacyHiddenCounter(func(site string, typ int32) { got = append(got, swallow{site, typ}) })
+
+	poller.SetInstances([]*session.Instance{{Title: "review:counted", UUID: "counted-uuid", Hidden: true}})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	eventCh, _ := mgr.eventBus.Subscribe(ctx)
+
+	mgr.OnItemAdded(&session.ReviewItem{
+		SessionID: "review:counted", Reason: session.ReasonTaskComplete,
+		Priority: session.PriorityLow, DetectedAt: time.Now(),
+	})
+
+	select {
+	case ev := <-eventCh:
+		t.Fatalf("legacy check must still swallow, got %s", ev.Type)
+	default:
+	}
+	if len(got) != 1 || got[0].site != "rqm_suppress_for_hidden" {
+		t.Fatalf("legacy counter calls = %+v, want one rqm_suppress_for_hidden", got)
+	}
+}
+
 // TestOnItemAdded_SuppressesNotification_When_SessionHidden_ReasonVariants
 // extends the base case to ReasonIdle and ReasonStale — the suppression must
 // apply to all three "routine churn" reasons, not just TASK_COMPLETE.

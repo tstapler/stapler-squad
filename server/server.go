@@ -773,6 +773,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// wiring above.
 	if deps.ReactiveQueueMgr != nil {
 		deps.ReactiveQueueMgr.SetDashboardBaseURLFn(hookBaseURLFn)
+		if gate := deps.SessionService.DeliveryGate(); gate != nil {
+			deps.ReactiveQueueMgr.SetLegacyHiddenCounter(gate.CountLegacySuppressedType)
+		}
 	}
 
 	// Register Claude Code HTTP hook approval endpoint

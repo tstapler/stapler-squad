@@ -102,6 +102,10 @@ type ReactiveQueueManager struct {
 	// nil-checks before calling.
 	dashboardBaseURLFn func() string
 
+	// legacyHiddenCounter, when set, is told about each hidden-session item
+	// suppressForHidden swallows (observability for the delivery-gate soak).
+	legacyHiddenCounter func(site string, notificationType int32)
+
 	// autoCreatePRInFlight tracks sessions with an in-progress AutoCreatePR
 	// one-shot run, keyed by stable session UUID. Prevents a second concurrent
 	// run for the same session when the review-queue item is removed and
@@ -202,6 +206,12 @@ func (rqm *ReactiveQueueManager) SetSlackNotifier(n SlackNotifierWiring) {
 // exactly like server.go's own hookBaseURLFn wiring.
 func (rqm *ReactiveQueueManager) SetDashboardBaseURLFn(fn func() string) {
 	rqm.dashboardBaseURLFn = fn
+}
+
+// SetLegacyHiddenCounter wires the legacy-suppression counter (see
+// deliverygate.Gate.CountLegacySuppressedType). Optional; nil disables it.
+func (rqm *ReactiveQueueManager) SetLegacyHiddenCounter(fn func(site string, notificationType int32)) {
+	rqm.legacyHiddenCounter = fn
 }
 
 // Start initializes the reactive queue manager and subscribes to events.
@@ -440,6 +450,10 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 	// real problem an operator needs to see regardless of whether the session is
 	// hidden from the default session list/review queue UI.
 	suppressForHidden := hiddenSession && (item.Reason == session.ReasonTaskComplete || item.Reason == session.ReasonIdle || item.Reason == session.ReasonStale)
+	if suppressForHidden && rqm.legacyHiddenCounter != nil {
+		notifType, _ := rqm.mapReviewItemToNotification(item)
+		rqm.legacyHiddenCounter("rqm_suppress_for_hidden", notifType)
+	}
 
 	// Publish an EventNotification to the EventBus so the notification history store
 	// captures this event — but skip APPROVAL_PENDING items. The ApprovalHandler already

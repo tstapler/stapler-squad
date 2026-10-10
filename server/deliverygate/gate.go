@@ -244,6 +244,12 @@ func (g *Gate) CountLegacySuppressed(site string, t sessionv1.NotificationType, 
 	g.metrics.Add(CounterLegacySuppressed, site, t.String(), d.Class.String())
 }
 
+// CountLegacySuppressedType is CountLegacySuppressed for callers that hold the
+// raw int32 notification type (the event shape) and no class hint.
+func (g *Gate) CountLegacySuppressedType(site string, notificationType int32) {
+	g.CountLegacySuppressed(site, sessionv1.NotificationType(notificationType), HintNone)
+}
+
 // CountUnversionedRequest counts a SendNotification without ssq_notify_schema
 // and logs one WARN per hour.
 func (g *Gate) CountUnversionedRequest() {

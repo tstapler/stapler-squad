@@ -1027,6 +1027,7 @@ func newGatedSessionService(storage session.InstanceStore) *SessionService {
 	svc := NewSessionService(storage, eventBus)
 	svc.deliveryGate = gate
 	svc.notificationSvc.SetDeliveryGate(gate)
+	svc.autonomousSvc.SetLegacyHiddenCounter(gate.CountLegacySuppressedType)
 	return svc
 }
 
