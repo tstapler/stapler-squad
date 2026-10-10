@@ -15,6 +15,7 @@
 
 * **backlog:** auto-complete merged PRs whose branch evidence was stamped wrong or never recorded ([#970](https://github.com/tstapler/stapler-squad/issues/970)) ([e96a1eb](https://github.com/tstapler/stapler-squad/commit/e96a1ebafb9acbe9c5d50cc2bb29e5906c54608b))
 * **backlog:** survive deleted work-session rows in PR-merge branch verification ([4fa8c5b](https://github.com/tstapler/stapler-squad/commit/4fa8c5b8b0556b143a5cf2f311bd255a71204739))
+* **git:** allow-list ref names, commit-only peels, scp scrub, faster real-git tests ([#968](https://github.com/tstapler/stapler-squad/issues/968)) ([2eeace1](https://github.com/tstapler/stapler-squad/commit/2eeace1ff19a16c5961c381b5a66186e76aa02c9))
 * **git:** resolve review follow-ups and failures from [#962](https://github.com/tstapler/stapler-squad/issues/962) ([#963](https://github.com/tstapler/stapler-squad/issues/963)) ([558c462](https://github.com/tstapler/stapler-squad/commit/558c46226166606d7494e78e67838e2c307f9788))
 * **unfinished:** wait for scanner maintenance goroutine before test TempDir cleanup ([#965](https://github.com/tstapler/stapler-squad/issues/965)) ([c9f6679](https://github.com/tstapler/stapler-squad/commit/c9f6679c0909a14dcd8fdb422cb115bbd291ede8))
 
