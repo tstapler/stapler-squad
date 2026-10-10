@@ -509,12 +509,18 @@ func destroyWithTimeout(destroy func() error, timeout time.Duration) error {
 // reason as destroyWithTimeout: onSlow lets a test observe the timeout firing without
 // needing a real Instance whose Destroy() can be made to hang on demand.
 func waitForDestroyLoggingSlowCleanup(destroy func() error, timeout time.Duration, onSlow func()) error {
+	start := time.Now()
 	done := make(chan error, 1)
 	go func() {
 		done <- destroy()
 	}()
 	select {
 	case err := <-done:
+		// When destroy() finishes right at the deadline both select cases are ready and
+		// Go picks one at random, so judge "slow" by elapsed time, not by which case won.
+		if onSlow != nil && time.Since(start) >= timeout {
+			onSlow()
+		}
 		return err
 	case <-time.After(timeout):
 		if onSlow != nil {
