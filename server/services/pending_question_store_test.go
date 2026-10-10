@@ -132,7 +132,7 @@ func TestClaim_ShouldConsumeOnConsumeAndRemoveRegisteredEntriesOnSessionDelete(t
 
 func TestParseAskUserQuestion_ShouldClassifyTheRealPayloadShapes(t *testing.T) {
 	opts := func(labels ...string) []interface{} {
-		var out []interface{}
+		out := make([]interface{}, 0, len(labels))
 		for _, l := range labels {
 			out = append(out, map[string]interface{}{"label": l, "description": "d"})
 		}

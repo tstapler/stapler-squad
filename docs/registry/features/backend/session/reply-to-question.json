@@ -6,7 +6,13 @@
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
   "handlerFile": "server/services/hidden_question_reply.go",
-  "tested": false,
-  "testIds": [],
+  "tested": true,
+  "testIds": [
+    "server/services/hidden_question_reply_test.go",
+    "session/pane_reply_test.go",
+    "server/services/pending_question_store_test.go",
+    "server/services/approval_question_test.go",
+    "tests/e2e/hidden-session-reply.spec.ts"
+  ],
   "lastModified": "2026-10-10T11:04:31.256479995-07:00"
 }
