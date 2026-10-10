@@ -100,6 +100,26 @@ jobs:
             server/web/dist/
             web-app/src/gen/
 
+  # Standalone: `buf breaking` reads only proto/ from git history, so it needs no
+  # codegen. Needs fetch-depth: 0 so origin/main is resolvable (same as go-lint).
+  proto-breaking:
+    name: Proto breaking changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up buf
+        uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
+        with:
+          version: '1.41.0'
+          setup_only: 'true'
+
+      - name: buf breaking against origin/main
+        run: make proto-breaking
+
   # Standalone — no codegen dependency, so it isn't blocked on lint-prepare.
   shell-lint:
     name: ShellCheck
