@@ -14,7 +14,7 @@ import (
 
 // hiddenSessionReadonlyGuardsFlagName is the live escape hatch for the unary
 // write guards (plan Story 5.2). Global only, default on, no env var. Off lets
-// WriteToSession, the steer branch, RestartSession/RestartShell, SwitchWorkspace
+// WriteToSession, the steer branch, RestartSession/RestartShell, SpawnShell, SwitchWorkspace
 // and UpdateSession's program/auto_approve accept a hidden target as on main;
 // the stream drops and Reply are governed elsewhere.
 const hiddenSessionReadonlyGuardsFlagName = "hidden_session_readonly_guards"

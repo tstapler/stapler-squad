@@ -14,13 +14,13 @@ var terminalWriteRPCs = map[string]string{
 	"SessionService.UpdateSession":        `classified by field, see updateSessionFieldClass: steer_message types into the pane, program and auto_approve restart it and type a marker`,
 	"SessionService.SwitchWorkspace":      `directory switch types cd into the pane, revision and worktree switches restart the agent (refused for a hidden target)`,
 	"SessionService.RestartSession":       `restarts the agent and types a marker into the new pane (refused for a hidden target)`,
+	"SessionService.SpawnShell":           `runs an arbitrary command in a new sibling tmux session in the workspace; refused for a hidden target with RestartShell (T-RO-17)`,
 	"SessionService.RestartShell":         `relaunches a session shell; refused for a hidden target with the other restart RPCs`,
 	"GitHubUserService.NudgeSessionForPR": `types a prompt into the linked session through SteerInstanceGuarded`,
 }
 
 // notTerminalWriteReasons records why a lifecycle-looking RPC is not a terminal write.
 var notTerminalWriteReasons = map[string]string{
-	"SessionService.SpawnShell":                    `runs a command in a new sibling tmux session in the workspace, not in the agent pane`,
 	"SessionService.ResumeHibernatedSession":       `lifecycle transition; types no marker`,
 	"SessionService.ResumeCrashedSession":          `lifecycle transition; types no marker`,
 	"SessionService.RetrySession":                  `internal retry restart (Restart(false)): no marker typed`,
@@ -116,7 +116,7 @@ var notTerminalWriteRPCs = map[string][]string{
 		"ResolveDefaults", "RestartTmuxServer", "ResumeCrashedSession", "ResumeHibernatedSession", "RetrySession",
 		"RetrySessionCreation", "RevokeEgressConsent", "RunOneShot", "RunWorkflow", "SaveRulesToConfigFile",
 		"SearchClaudeHistory", "SearchFiles", "SendNotification", "SetCaptureTap", "SetStreamHubGlobalOverride",
-		"SetStreamHubSessionOverride", "SpawnShell", "StopShell", "StreamTerminal", "SwitchDatabase",
+		"SetStreamHubSessionOverride", "StopShell", "StreamTerminal", "SwitchDatabase",
 		"TestJulesConnection", "TestSlackWebhook", "UnarchiveSession", "UnpinSession", "UpdateBackgroundModels",
 		"UpdateCallbackConfig", "UpdateClaudeConfig", "UpdateFeatureFlag", "UpdateGlobalDefaults",
 		"UpdateJulesConfig", "UpdateProject", "UpdateSlackConfig", "UpdateTaggingClassifierConfig",

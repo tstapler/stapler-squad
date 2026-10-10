@@ -72,6 +72,7 @@ var pinnedLifecycleCallers = map[string]callerRow{
 var pinnedAccessCallers = map[string]callerRow{
 	"server/services:SessionService.RestartSession":     {kind: kindUI, reason: "Story 5.2 unary handler"},
 	"server/services:SessionService.RestartShell":       {kind: kindUI, reason: "Story 5.2 unary handler"},
+	"server/services:SessionService.SpawnShell":         {kind: kindUI, reason: "Story 5.2 unary handler"},
 	"server/services:SessionService.decideSteerAccess":  {kind: kindUI, reason: "steer access decision: the guards-off bypass of a non-qualifying hidden target"},
 	"server/services:SessionService.decideUpdateAccess": {kind: kindUI, reason: "UpdateSession access-decision block"},
 	"server/services:SessionService.runSteer":           {kind: kindUI, reason: "UpdateSession steer dispatch"},

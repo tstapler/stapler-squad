@@ -64,6 +64,9 @@ func TestRestartSessionAndShell_ShouldReturnFailedPrecondition_WhenHiddenAndInte
 
 	_, err = fix.svc.RestartShell(context.Background(), connect.NewRequest(&sessionv1.RestartShellRequest{SessionId: "restart-hidden", ShellId: "sh-1"}))
 	requireReadOnlyRefusal(t, err, "RestartShell")
+
+	_, err = fix.svc.SpawnShell(context.Background(), connect.NewRequest(&sessionv1.SpawnShellRequest{SessionId: "restart-hidden", Command: "id"}))
+	requireReadOnlyRefusal(t, err, "SpawnShell")
 }
 
 // T-RO-40

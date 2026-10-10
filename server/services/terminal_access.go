@@ -52,7 +52,7 @@ func (f *UnaryGuardsFlag) GuardsEnabled() bool { return f == nil || !f.off.Load(
 func (f *UnaryGuardsFlag) SetEnabled(on bool) { f.off.Store(!on) }
 
 // AccessForUnary is the constructor of the Story 5.2 unary handlers
-// (WriteToSession, UpdateSession, RestartSession, RestartShell, SwitchWorkspace).
+// (WriteToSession, UpdateSession, RestartSession, RestartShell, SpawnShell, SwitchWorkspace).
 // It differs from AccessFor only in the live flag: a hidden target is
 // ReadWrite while the flag is off. The pinned-caller test fails if any other
 // function, a stream site included, calls it.
