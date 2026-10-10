@@ -6,7 +6,11 @@
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
   "handlerFile": "server/services/session_service_delegates.go",
-  "tested": false,
-  "testIds": [],
+  "tested": true,
+  "testIds": [
+    "server/services/gatestats_rpc_test.go",
+    "server/services/session_service_delegates_test.go",
+    "server/gatestats_listener_test.go"
+  ],
   "lastModified": "2026-10-10T03:13:42.800267392-07:00"
 }
