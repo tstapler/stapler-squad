@@ -83,6 +83,7 @@ export class AnnouncerEngine {
     this.arrivalTimer = setTimeout(() => this.flushArrivals(), COALESCE_WINDOW_MS);
   }
 
+  /** Stops every timer. Queued messages are kept so `resume()` can speak them (StrictMode runs cleanup, then setup, on one instance). */
   dispose(): void {
     if (this.arrivalTimer !== null) clearTimeout(this.arrivalTimer);
     this.arrivalTimer = null;
@@ -90,7 +91,18 @@ export class AnnouncerEngine {
       const timer = this.holdTimers[channel];
       if (timer !== null) clearTimeout(timer);
       this.holdTimers[channel] = null;
+      // A cleared hold timer would never fire, leaving the channel stuck "speaking" and silent.
+      this.speaking[channel] = false;
     }
+  }
+
+  /** Restarts scheduling after `dispose()`: pending arrivals flush and queued messages drain. */
+  resume(): void {
+    if (this.arrivals.length > 0 && this.arrivalTimer === null) {
+      this.arrivalTimer = setTimeout(() => this.flushArrivals(), COALESCE_WINDOW_MS);
+    }
+    this.drain("polite");
+    this.drain("assertive");
   }
 
   private flushArrivals(): void {

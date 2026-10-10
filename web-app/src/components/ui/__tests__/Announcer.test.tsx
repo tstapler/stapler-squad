@@ -144,6 +144,31 @@ describe("Announcer", () => {
     expect(spoken.slice(0, 6)).toEqual(["m0", "m4", "m5", "m6", "m7", "m8"]);
   });
 
+  it("keeps speaking after StrictMode's simulated unmount when a child announces in its mount effect", () => {
+    function Greeter() {
+      const a = useAnnounce();
+      api = a;
+      React.useEffect(() => a.announce("Hello"), [a]);
+      return null;
+    }
+    render(
+      <React.StrictMode>
+        <AnnouncerProvider>
+          <Greeter />
+        </AnnouncerProvider>
+      </React.StrictMode>,
+    );
+    expect(polite()).toHaveTextContent("Hello");
+
+    act(() => {
+      jest.advanceTimersByTime(2_000);
+    });
+    expect(polite()).toHaveTextContent("");
+
+    act(() => api.announce("Later"));
+    expect(polite()).toHaveTextContent("Later");
+  });
+
   it("is a harmless no-op outside a provider", () => {
     function Lone() {
       const lone = useAnnounce();

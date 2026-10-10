@@ -25,6 +25,7 @@ export function AnnouncerProvider({ children }: { children?: ReactNode }) {
 
   useEffect(() => {
     const engine = engineRef.current;
+    engine?.resume();
     return () => engine?.dispose();
   }, []);
 
