@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -115,4 +116,35 @@ func TestCallStateIsCallLevel(t *testing.T) {
 	assert.False(t, st.Wrote())
 	backend.CallStateFrom(ctx).MarkWrote() // a nested scope marks the shared call state
 	assert.True(t, st.Wrote())
+}
+
+func TestErrFallbackEligibleBehaviour(t *testing.T) {
+	cause := errors.New("torn read")
+	var err error = backend.ErrFallbackEligible{Wrote: false, Err: cause}
+	assert.Contains(t, err.Error(), "wrote=false")
+	assert.Contains(t, err.Error(), "torn read")
+	assert.Equal(t, cause, errors.Unwrap(err))
+	assert.NotErrorIs(t, errors.New("x"), backend.ErrFallbackEligible{})
+	assert.NotErrorIs(t, cause, backend.ErrFallbackEligible{})
+	var fe backend.ErrFallbackEligible
+	require.ErrorAs(t, fmt.Errorf("w: %w", backend.ErrFallbackEligible{Wrote: true, Err: cause}), &fe)
+	assert.True(t, fe.Wrote)
+}
+
+func TestCallStateAccumulatesAcrossNestedScopes(t *testing.T) {
+	ctx, outer := backend.WithCallState(context.Background())
+	innerCtx, inner := backend.WithCallState(ctx)
+	assert.Same(t, outer, inner, "a nested scope shares the call's state")
+	assert.Equal(t, ctx, innerCtx)
+	assert.False(t, outer.Wrote(), "zero value: nothing written")
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); inner.MarkWrote() }()
+	}
+	wg.Wait()
+	assert.True(t, outer.Wrote())
+	inner.MarkWrote()
+	assert.True(t, outer.Wrote(), "monotonic: never reset")
 }

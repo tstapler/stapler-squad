@@ -30,6 +30,9 @@ func commitRef(ref backend.RefName) error {
 	if err := optArg("ref", string(ref)); err != nil {
 		return err
 	}
+	if strings.Contains(strings.TrimSuffix(string(ref), "^{commit}"), "^{") {
+		return fmt.Errorf("%w: ref %q has a peel suffix other than ^{commit}", backend.ErrInvalidArgument, ref)
+	}
 	if strings.Contains(string(ref), ":") {
 		return fmt.Errorf("%w: ref %q is a tree-ish expression, not a commit", backend.ErrInvalidArgument, ref)
 	}
@@ -37,7 +40,7 @@ func commitRef(ref backend.RefName) error {
 }
 
 func commitish(ref backend.RefName) string {
-	if strings.Contains(string(ref), "^{") {
+	if strings.HasSuffix(string(ref), "^{commit}") {
 		return string(ref)
 	}
 	return string(ref) + "^{commit}"
@@ -54,7 +57,6 @@ func (b *Backend) unbornOr(ctx context.Context, loc backend.RepoLocation, fallba
 		if errors.As(fallback, &cerr) {
 			return fmt.Errorf("%w: %w", backend.ErrUnborn, cerr)
 		}
-		return backend.ErrUnborn
 	}
 	return fallback
 }
@@ -259,10 +261,8 @@ func (b *Backend) SetConfig(ctx context.Context, loc backend.RepoLocation, req b
 	if err := optArg("key", string(req.Key)); err != nil {
 		return err
 	}
-	if err := optArg("value", req.Value); err != nil && req.Value != "" {
-		return err
-	}
-	_, err := b.git(ctx, loc, backend.OpSetConfig, "config", string(req.Key), req.Value)
+	// "--" ends option parsing so values such as -1 (core.compression) pass through verbatim.
+	_, err := b.git(ctx, loc, backend.OpSetConfig, "config", "--", string(req.Key), req.Value)
 	return err
 }
 
