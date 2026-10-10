@@ -4,7 +4,6 @@ import { ReadOnlyBanner } from "../ReadOnlyBanner";
 import {
   READ_ONLY_BANNER_PRIMARY,
   READ_ONLY_SECONDARY,
-  READ_ONLY_SECONDARY_STREAM_ONLY,
   READ_ONLY_SECONDARY_WITH_REPLY,
 } from "../readOnlyCopy";
 import { AnnouncerContext } from "@/lib/hooks/useAnnounce";
@@ -41,11 +40,11 @@ describe("ReadOnlyBanner (RO-1, RO-5, RO-8, RO-12)", () => {
     expect(screen.getByTestId("readonly-banner")).toHaveTextContent("Background session - read-only");
   });
 
-  it("ro12_should_use_the_stream_only_secondary_text_until_pr_5u_and_the_reply_text_with_a_card", () => {
+  it("ro12_should_use_the_you_can_read_output_but_not_type_text_and_the_reply_text_with_a_card", () => {
     const { rerender } = renderWithAnnouncer(<ReadOnlyBanner />);
     expect(screen.getByTestId("readonly-banner-secondary")).toHaveTextContent(READ_ONLY_SECONDARY);
-    expect(READ_ONLY_SECONDARY).toBe(READ_ONLY_SECONDARY_STREAM_ONLY);
-    expect(READ_ONLY_SECONDARY_STREAM_ONLY).toBe("Terminal input is disabled in this view.");
+    expect(READ_ONLY_SECONDARY).toBe("You can read output but not type.");
+    expect(screen.getByTestId("readonly-banner-secondary")).not.toHaveTextContent("Terminal input is disabled");
 
     rerender(<ReadOnlyBanner replyCardPresent />);
     expect(screen.getByTestId("readonly-banner-secondary")).toHaveTextContent(READ_ONLY_SECONDARY_WITH_REPLY);

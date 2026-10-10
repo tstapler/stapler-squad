@@ -69,7 +69,7 @@ test.describe("hidden-session-view", () => {
 
     await page.goto(`${BASE_URL}/?session=${HIDDEN_ID}&tab=terminal`, { waitUntil: "domcontentloaded" });
     await expect(page.getByTestId("readonly-banner")).toBeVisible();
-    await expect(page.getByTestId("readonly-banner-secondary")).toHaveText("Terminal input is disabled in this view.");
+    await expect(page.getByTestId("readonly-banner-secondary")).toHaveText("You can read output but not type.");
     await expect(page.getByRole("button", { name: /mobile keyboard/i })).toHaveCount(0);
     await expect(page.getByTestId("mobile-key")).toHaveCount(0);
   });

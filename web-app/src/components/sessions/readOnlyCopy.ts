@@ -2,12 +2,11 @@
 
 export const READ_ONLY_BANNER_PRIMARY = "Background session - read-only";
 
-// PR 5 ships the stream guards only; WriteToSession, the UpdateSession text fields and the
-// backlog steer are guarded by PR 5u. Until then the copy claims only what the view enforces.
-// PR 5u switches this constant to READ_ONLY_SECONDARY_FULL (and its test).
-export const READ_ONLY_SECONDARY_STREAM_ONLY = "Terminal input is disabled in this view.";
-export const READ_ONLY_SECONDARY_FULL = "You can read output but not type.";
-export const READ_ONLY_SECONDARY = READ_ONLY_SECONDARY_STREAM_ONLY;
+// One constant (ADV-N36): PR 5u added the unary guards (WriteToSession, the UpdateSession
+// text fields, the steer branch, Restart and SwitchWorkspace), so the view may now say
+// that nothing can be typed. Until PR 5u the copy read "Terminal input is disabled in
+// this view." because only the stream was guarded.
+export const READ_ONLY_SECONDARY = "You can read output but not type.";
 
 export const READ_ONLY_SECONDARY_WITH_REPLY =
   "You can read output. Reply to Claude's question below; nothing else can be typed.";
