@@ -1319,6 +1319,35 @@ Epic 5 (hidden view; PR 5 = 5.1+5.3+5.1d streams, PR 5u = 5.2+5.1d unary, PR 5b 
 ### Epic 3: Toast stack (PR 3, `feat(web):`, behind `notification_tray_v2`)
 **Goal**: At most 3 toasts visible with a "+N more" chip and one one-tap bulk control, "Move all to tray", that clears the deck without deleting anything; toasts never cover the terminal input or soft keyboard. Prerequisite: Contract PR 1 (Story 1.4) supplies `is_pending_decision` on `NotificationHistoryRecord` and on the live `NotificationEvent` (additive proto, computed server-side by `IsPendingDecision`). **PR 3 merges behind the default-off `notification_tray_v2` flag; the operator's device checks (Task 3.7d) gate turning the flag on, not the merge.**
 
+#### Implementation status: PR 3 (recorded after the build; the story text below is unchanged)
+
+Stories 3.1 to 3.10 are implemented behind `notification_tray_v2` (default off) in the order 3.1, 3.2, 3.6, 3.3, 3.4, 3.5, 3.7, 3.9, 3.8, 3.10 (3.6 before any live role, 3.9 before 3.8 so the moved message has a sender and a receiver). Commits are listed in the PR 3 hand-off; every one carries "Plan slice: PR 3 (Story 3.x)".
+
+**AWAITING OPERATOR (not run, not faked)**
+- [ ] **Spike 1.2** (Radix non-modal vs xterm focus, and the `useTerminalGestures` document-listener audit). Story 3.8 was built on the documented default: touches that start on a toast row stop at the row (`useSwipeToDismiss.ts`), vertical drift of 10px cancels, a release past 40% of the width or a 60px fling at 0.3 px/ms dismisses. The default needs the DV-6 real-device confirmation.
+- [ ] **Task 3.7d DV-1..DV-9** on a real Android Chrome and iOS Safari (browser tab and installed PWA), recorded in the PR 3 thread before the flag is turned on. Playwright covers only the CSS-variable path (`setKeyboardOpen` overrides `visualViewport.height`), so DV-3 (the soft keyboard), DV-4 (URL bar), DV-5 (cutouts), DV-6 (swipe vs pull-to-refresh) and DV-7 (screen readers) rest on the operator.
+- [ ] **Task 3.7g MC-1** manual contrast of the toast, chip and handle over the xterm canvas (bright and dark xterm themes, coloured ANSI behind, light and dark app theme; text >= 4.5:1, non-text >= 3:1).
+- [x] **The five committed e2e specs ran green** (10 tests, `chromium` project, isolated server on a free port with `STAPLER_SQUAD_TMUX_SOCKET` set, headless shell 1208 because the pinned 1200 was not installed). Re-run once in CI with the real toolchain: `cd tests/e2e && npm install && npm test`. Of the pre-existing specs touched, 28 of 35 passed; `notifications-responsive.spec.ts:117` (onboarding modal plus a collapsed Recent activity section) and the six `backlog-session-steer.spec.ts` tests (the item detail never opens from the list) fail before reaching anything this PR changed.
+- [ ] **Task 3.2d** (stamp auto-remediating WARNING producers with `auto_remediating=true`): not done. `session.Notifier.Notify(itemID, title, message, type, urgent, important)` has no metadata parameter, so stamping `session/backlog_lifecycle_pr.go:1317` needs a Notifier interface change that reaches `server/`. Until then that WARNING is a pending decision and pins.
+- [ ] **Server stamp of `risk_level` on the approval notification** (`server/services/approval_handler.go` `broadcastApprovalNotification` builds the metadata without it; `PendingApproval.RiskLevel` exists). Until it is stamped the phone approval card treats every approval as unrecorded risk and asks "Approve this command?" first (the documented fail-safe).
+
+**Plan assumptions found wrong while building**
+- Task 3.7c names `PaneSplitRenderer.tsx` as the publisher site. The row the wireframe means ("Terminal Diff VCS Files ...") is `SessionDetailView`'s `tabsWrapper`; `PaneSplitRenderer` only owns the multi-pane "[Window 3] [+]" strip. `--mobile-stack-top-offset` is published from `SessionDetailView` (`usePublishStackTopOffset`).
+- Task 3.7f assumes a right-hand xterm scrollbar. The app draws its own left-hand scrollbar track (`XtermTerminal.tsx`), so `--terminal-scrollbar-width` defaults to 0 and nothing publishes it.
+- Story 3.1 says `NotificationToast` timers move into `ToastStack`; the unmodified `NotificationContext.test.tsx` mocks `NotificationToast` to `null` and advances five minutes expecting toasts to stay. Per-toast timers therefore start when the card mounts (`onPresent`), which is also the right behavior for an overflow toast with no card yet.
+- Story 3.10 says a flag toggle applies "without reload (`useFeatureFlags` refetch)". `FeatureFlagsProvider` fetches once on mount and after its own `setFlag`, so a toggle made in the same page (Settings > Features) applies on the next render, while a change made from another tab or an RPC needs a reload.
+- Live events had no stable client id, so the cross-tab id-set message could never match another tab's toast. Toasts now take the server's `notificationId`.
+- The info auto-close in the story examples is 5s; the shipped `DEFAULT_TOAST_MS` is 8s. Tests use the shipped value.
+- Task 3.10b says to commit the Story 1.5 walkthrough "unchanged"; no such script was ever committed (Story 1.5 recorded none). `notification-triage-walkthrough.spec.ts` is new and covers the burst-to-empty-deck leg only; the read-only-output leg waits for Epic 5.
+- Task 3.10f is already reconciled: `CLAUDE.md` and `web-app/.jscpd.json` both say 0.14%. Only `scripts/check-jscpd-threshold-doc.sh` (validation T-JS-01) was added.
+- TD-7 "a toast for the session in view is suppressed" had no client concept of the viewed session; `lib/utils/viewedSessions.ts` plus `SessionDetailView` now provide it.
+
+**Deviations**
+- `isActionable` was renamed `hasLongToastLifetime` (staleness only), per Task 3.2c's "renamed for its remaining meaning".
+- `clearAll()` now keeps pinned toasts for every flag state (ADR-004 decision 9).
+- Review-queue toasts built by `showSessionNotification` carry no `isPendingDecision` (it is a server field), so they are not pinned; they still expire by `hasLongToastLifetime`.
+- The mocked-history e2e specs (`notifications-needs-decision`, `approval-*`, `accessibility`) now send `isPendingDecision`, and two specs that located toasts by `role="alert"` use the toast testid (the Announcer owns the only live roles).
+
 #### Story 3.1: Extract `ToastStack` and the timer registry (refactor-first, no behavior change)
 **As an** engineer, **I want** toast rendering and timers out of `NotificationContext.tsx`, **so that** the new behavior lands in a small unit.
 **Acceptance Criteria**:
