@@ -125,10 +125,11 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
   const markAsRead = useCallback(async (ids: string[]) => {
     if (!clientRef.current) return false;
 
-    // Optimistic update
+    // Optimistic update; reading a row also resolves it as a pending decision, so the
+    // merge into the context history does not resurrect the server's stale flag.
     setNotifications((prev) =>
       prev.map((n) =>
-        ids.includes(n.id) ? { ...n, isRead: true } as unknown as NotificationHistoryRecord : n
+        ids.includes(n.id) ? { ...n, isRead: true, isPendingDecision: false } as unknown as NotificationHistoryRecord : n
       )
     );
     setUnreadCount((prev) => Math.max(0, prev - ids.length));
