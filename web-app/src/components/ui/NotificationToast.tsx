@@ -222,8 +222,7 @@ export function NotificationToast({
     .filter(Boolean)
     .join(" ");
 
-  const verbLabel = (v: Verb) =>
-    v === "approve" ? <><span aria-hidden="true">✓</span> Approve</> : <><span aria-hidden="true">✗</span> Deny</>;
+  const verbLabel = (v: Verb) => (v === "approve" ? "✓ Approve" : "✗ Deny");
   const decisionLabel = (v: Verb) => {
     if (sending && decision.verb === v) return v === "approve" ? "Approving..." : "Denying...";
     return verbLabel(v);

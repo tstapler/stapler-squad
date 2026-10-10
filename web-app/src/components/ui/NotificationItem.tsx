@@ -273,7 +273,7 @@ export function NotificationItem({
                 }
                 return (
                   <span className={resolvedBadge} data-decision={resolved}>
-                    <span aria-hidden="true">{resolved === "allow" ? "✓" : "✗"}</span> {resolved === "allow" ? "Approved" : "Denied"}
+                    {resolved === "allow" ? "✓ Approved" : "✗ Denied"}
                   </span>
                 );
               }
@@ -305,7 +305,7 @@ export function NotificationItem({
                         </button>
                       )}
                       <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", group.allIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Deny this tool use"}>
-                        {isPending ? "…" : <><span aria-hidden="true">✗</span> Deny</>}
+                        {isPending ? "…" : "✗ Deny"}
                       </button>
                     </div>
                   </div>
@@ -320,10 +320,10 @@ export function NotificationItem({
                     </span>
                   )}
                   <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", group.allIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Approve this tool use"}>
-                    {isPending ? "…" : <><span aria-hidden="true">✓</span> Approve</>}
+                    {isPending ? "…" : "✓ Approve"}
                   </button>
                   <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", group.allIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Deny this tool use"}>
-                    {isPending ? "…" : <><span aria-hidden="true">✗</span> Deny</>}
+                    {isPending ? "…" : "✗ Deny"}
                   </button>
                 </>
               );
