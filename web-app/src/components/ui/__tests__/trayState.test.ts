@@ -1,4 +1,4 @@
-import { selectTrayBanner, selectTrayState, type TrayStateInput } from "../trayState";
+import { selectTrayBanner, selectTrayState, type TrayStateInput, type TrayStateKind } from "../trayState";
 
 const base: TrayStateInput = {
   isOffline: false,
@@ -37,5 +37,35 @@ describe("selectTrayState", () => {
     expect(selectTrayBanner({ isOffline: false, hasLoadError: true, rowCount: 3 })).toBe("load-error");
     expect(selectTrayBanner({ isOffline: true, hasLoadError: true, rowCount: 3 })).toBe("offline");
     expect(selectTrayBanner({ isOffline: false, hasLoadError: false, rowCount: 3 })).toBeNull();
+  });
+});
+
+describe("every tray state has an exit (TE-6)", () => {
+  // A state without a control must leave on its own: loading when the fetch settles,
+  // offline when the connection returns, and the two quiet success states are not dead ends.
+  const AUTOMATIC: Record<TrayStateKind, boolean> = {
+    loading: true,
+    offline: true,
+    "load-error": false,
+    "empty-filtered": false,
+    "all-caught-up": true,
+    "needs-attention-empty": true,
+    "load-more": false,
+    list: true,
+  };
+
+  it.each([
+    ["loading", { loading: true, hasLoadedOnce: false }],
+    ["offline", { isOffline: true }],
+    ["load-error", { hasLoadError: true }],
+    ["empty-filtered", { filtered: true }],
+    ["all-caught-up", {}],
+    ["needs-attention-empty", { rowCount: 5 }],
+    ["load-more", { rowCount: 5, hasMore: true, needsAttentionCount: 1 }],
+    ["list", { rowCount: 5, needsAttentionCount: 2 }],
+  ] as const)("%s has a visible control or an automatic exit", (kind, patch) => {
+    const state = selectTrayState({ ...base, ...patch });
+    expect(state.kind).toBe(kind);
+    expect(state.exit !== null || AUTOMATIC[state.kind]).toBe(true);
   });
 });
