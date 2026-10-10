@@ -222,3 +222,24 @@ func kindOffStatusDetail() string {
 	}
 	return strings.Join(parts, "; ")
 }
+
+const (
+	gateShadowStatusDetail = "Shadow mode: hidden sessions still notify; would-suppress counts are logged"
+	gateOffStatusDetail    = "Gate is OFF: hidden sessions deliver everything"
+)
+
+// globalOffStatusDetail is the global half of the off status line (FG-4): the
+// effective global value is off and either never set (shadow mode) or
+// explicitly false. It reads the effective value, so it goes silent once the
+// default flips on.
+func globalOffStatusDetail() string {
+	cfg := config.LoadConfig()
+	name := config.HiddenSessionGateFeatureFlag
+	if cfg.GetFeatureFlagWithDefault(name, featureFlagDefault(name)) {
+		return ""
+	}
+	if _, explicit := cfg.GetFeatureFlagOverride(name); explicit {
+		return gateOffStatusDetail
+	}
+	return gateShadowStatusDetail
+}

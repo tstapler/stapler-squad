@@ -39,7 +39,8 @@ func flagUpdateCtx(ctx context.Context, svc *FeatureFlagService, name string, en
 func TestGateFlag_ShouldBeRegisteredDefaultOffWithStatsWriterDetail_WhenNoWriterRuns(t *testing.T) {
 	svc := newGatedFlagService(t)
 	require.False(t, featureFlagDefault(config.HiddenSessionGateFeatureFlag))
-	assert.Equal(t, statsWriterNotRunning, statusDetailOf(t, svc.featureFlagSvc, config.HiddenSessionGateFeatureFlag))
+	assert.Equal(t, statsWriterNotRunning+"; Shadow mode: hidden sessions still notify; would-suppress counts are logged",
+		statusDetailOf(t, svc.featureFlagSvc, config.HiddenSessionGateFeatureFlag))
 }
 
 func TestGateFlag_ShouldRefuseEnableWhileStatsWriterNotRunningAndNeverRefuseDisabling_AndAllowWithRunningWriter(t *testing.T) {

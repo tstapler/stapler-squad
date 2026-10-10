@@ -226,30 +226,56 @@ func TestUpdateFeatureFlag_ShouldNeverRefuseDisablingClearScopeOrResetGlobal_Whe
 
 // T-FL-21 (per-kind half) / T-FL-09: a persisted false kind override is
 // reported through the composite provider and as explicit_off_scopes.
-func TestStatusDetail_ShouldReportEachFalseKindOverrideAndStayEmpty_WhenNoneIsFalse(t *testing.T) {
+func TestStatusDetail_ShouldReportEachFalseKindOverrideAndStayShadowOnly_WhenNoneIsFalse(t *testing.T) {
+	const shadow = "Shadow mode: hidden sessions still notify; would-suppress counts are logged"
+	const kindOff = "Gate is OFF for kind review: hidden review sessions deliver everything"
 	svc := newGatedFlagService(t)
 	gate := svc.DeliveryGate()
 	gate.Stats().SetWriterRunning(true)
-	assert.Empty(t, statusDetailOf(t, svc.featureFlagSvc, gateFlag))
+	assert.Equal(t, shadow, statusDetailOf(t, svc.featureFlagSvc, gateFlag), "default off is shadow mode")
 	assert.Empty(t, explicitOffScopes())
 
 	_, err := mutateFlag(svc.featureFlagSvc, gateFlag, setOn, "kind:diagnose")
 	require.NoError(t, err)
-	assert.Empty(t, statusDetailOf(t, svc.featureFlagSvc, gateFlag), "an explicit true is not an off line")
+	assert.Equal(t, shadow, statusDetailOf(t, svc.featureFlagSvc, gateFlag), "an explicit true kind is not an off line")
 
 	_, err = mutateFlag(svc.featureFlagSvc, gateFlag, setOff, "kind:review")
 	require.NoError(t, err)
-	assert.Equal(t, "Gate is OFF for kind review: hidden review sessions deliver everything",
-		statusDetailOf(t, svc.featureFlagSvc, gateFlag))
+	assert.Equal(t, shadow+"; "+kindOff, statusDetailOf(t, svc.featureFlagSvc, gateFlag))
 	assert.Equal(t, []string{"kind:review"}, explicitOffScopes())
 
 	gate.Stats().SetWriterRunning(false)
-	assert.Equal(t, statsWriterNotRunning+"; Gate is OFF for kind review: hidden review sessions deliver everything",
+	assert.Equal(t, statsWriterNotRunning+"; "+shadow+"; "+kindOff,
 		statusDetailOf(t, svc.featureFlagSvc, gateFlag), "contributions join in registration order")
 
 	_, err = mutateFlag(svc.featureFlagSvc, gateFlag, clearScope, "kind:review")
 	require.NoError(t, err)
-	assert.Equal(t, statsWriterNotRunning, statusDetailOf(t, svc.featureFlagSvc, gateFlag))
+	assert.Equal(t, statsWriterNotRunning+"; "+shadow, statusDetailOf(t, svc.featureFlagSvc, gateFlag))
+}
+
+// FG-4: the shadow line is for default-off only; an explicit global false says
+// the gate is OFF, an effective on says nothing, and Reset returns to shadow.
+func TestStatusDetail_ShouldShowShadowOrOffLine_WhenFlagStatesDiffer(t *testing.T) {
+	const shadow = "Shadow mode: hidden sessions still notify; would-suppress counts are logged"
+	const off = "Gate is OFF: hidden sessions deliver everything"
+	svc := newGatedFlagService(t)
+	svc.DeliveryGate().Stats().SetWriterRunning(true)
+	detail := func() string { return statusDetailOf(t, svc.featureFlagSvc, gateFlag) }
+
+	assert.Equal(t, shadow, detail(), "never set: default off")
+
+	_, err := mutateFlag(svc.featureFlagSvc, gateFlag, setOff, "global")
+	require.NoError(t, err)
+	assert.Equal(t, off, detail(), "explicit global false")
+	assert.NotContains(t, detail(), "Shadow mode")
+
+	_, err = mutateFlag(svc.featureFlagSvc, gateFlag, setOn, "global")
+	require.NoError(t, err)
+	assert.Empty(t, detail(), "effective on")
+
+	_, err = mutateFlag(svc.featureFlagSvc, gateFlag, resetGlob, "")
+	require.NoError(t, err)
+	assert.Equal(t, shadow, detail(), "reset deletes the explicit key")
 }
 
 // The flag cache sees the kind override at once and the gate follows it.

@@ -337,6 +337,37 @@ describe("FeaturesPage - hidden_session_gate overrides", () => {
   });
 });
 
+// FG-4: the server's status_detail distinguishes default-off (shadow mode) from an explicit global off.
+describe("FeaturesPage - hidden_session_gate status line (FG-4)", () => {
+  const SHADOW = "Shadow mode: hidden sessions still notify; would-suppress counts are logged";
+  const OFF = "Gate is OFF: hidden sessions deliver everything";
+
+  function gateRow() {
+    return screen.getAllByTestId("feature-flag-row")[0];
+  }
+
+  it("fg4_should_show_the_shadow_mode_line_when_the_flag_is_off_by_default", () => {
+    mockFlags([makeFlag({ name: "hidden_session_gate", enabled: false, statusDetail: SHADOW })]);
+    render(<FeaturesPage />);
+    expect(within(gateRow()).getByText(SHADOW)).toBeInTheDocument();
+    expect(within(gateRow()).queryByText(OFF)).not.toBeInTheDocument();
+  });
+
+  it("fg4_should_show_the_gate_is_off_line_instead_when_the_global_value_is_an_explicit_false", () => {
+    mockFlags([makeFlag({ name: "hidden_session_gate", enabled: false, statusDetail: OFF })]);
+    render(<FeaturesPage />);
+    expect(within(gateRow()).getByText(OFF)).toBeInTheDocument();
+    expect(within(gateRow()).queryByText(SHADOW)).not.toBeInTheDocument();
+  });
+
+  it("fg4_should_show_neither_line_when_the_gate_is_on", () => {
+    mockFlags([makeFlag({ name: "hidden_session_gate", enabled: true, statusDetail: "" })]);
+    render(<FeaturesPage />);
+    expect(within(gateRow()).queryByText(SHADOW)).not.toBeInTheDocument();
+    expect(within(gateRow()).queryByText(OFF)).not.toBeInTheDocument();
+  });
+});
+
 // Story 3.10 / 2.11 UX criteria FG-1, FG-5, FG-6.
 describe("FeaturesPage - notification flag rows (FG-1, FG-5, FG-6)", () => {
   it("fg1_should_show_both_flags_as_toggles_with_a_description_and_takes_effect_without_reload", () => {
