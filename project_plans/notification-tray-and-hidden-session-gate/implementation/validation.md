@@ -1006,3 +1006,27 @@ Items found while mapping. G-1 and G-2 are unavoidable partial automation; G-3..
 15. Review-repair iteration 6 (2026-10-09; the re-review has NOT been re-run): one new row, T-RO-48 (capture-pane input and resize for a hidden managed session with control mode off or `IsManaged` false, observed on the injectable `tmuxInputSender` seam; named T-RO-44 in the brief, which was already taken by the positive control), and reworded rows T-RO-01, T-RO-10, T-RO-12, T-RO-17, T-RO-42, T-RP-71, T-RP-73 (real hook command against `httptest`, fail-open, now Integration), T-RP-76, T-RP-79, T-WL-07 (now Integration), T-WL-11, T-OB-29 (`-p medium`, legacy checks present) and the section M heading; they map to plan Tasks 1.8d, 2.8h, 5.0d, 5.0f, 5.1a, 5.1c-a, 5.1c-b, 5.1d-0, 5.1d-a, 5.1d-c and 5.6n and to the Stage 2 checklist.
 16. Review-repair iteration 6b (2026-10-09; the re-review has NOT been re-run): **no row added or removed** (468 `T-` rows before and after, recounted by `grep -c '^| T-'`); T-RO-01, T-RO-10, T-RO-12, T-RO-44, T-RP-73, T-RP-79, T-FL-15 and UX row RO-12 gained assertions for ADV-N32..N36, ARCH-C51, C53..C56 and m20; T-RP-76 renamed the variable. No test mapping changes: T-RO-44's `make test-delivery-guards` now exists from PR 1g.
 17. Triad repair 1 (2026-10-09; the re-review has NOT been re-run): the section N rows (T-FT-01, T-FT-02, T-RP-82), the 10 new UX rows (TC-12, TC-13, TC-14, TH-9, TY-11, TY-12, TM-13, RP-18, XA-16, XA-17) and the reworded rows (T-TS-28, TD-14, TH-2, TH-7, TH-8, RP-2) map to plan Tasks 1.5a, 1.5b, 2.1d, 2.6a, 2.8f, 2.9e, 3.5c, 3.7d, 3.8d, 3.10b, 4.2a, 4.2e, 4.2i, 4.4h, 4.5d, 5.6e and 5.6f (no task added; 224 before and after). They were added because the triad found the phone approval card under-specified for a destructive action (G1), a phone tray entry that relocated (G2), no measured cost for the desktop overlay (G3), an IME-unsafe Enter on an irreversible reply (G4), no forced-colors or text-spacing check (G6) and unguarded flaky-test hazards in the new gate tests (BUG-084, BUG-087, BUG-089, BUG-100).
+
+## Phase 5 spec-gap repair (web and e2e): where each row's test lives
+
+The plan names differ from the shipped test names. Rows not listed here were already covered under their plan name.
+
+| Row | Test (file: name) |
+|-----|-------------------|
+| T-TS-32 | `web-app/src/components/ui/__tests__/ToastStack.test.tsx`: `toast_action_should_show_inline_could_not_verb_retry_and_pin_toast_when_rpc_fails` (card half: `NotificationToast.test.tsx` "shows Could not approve - Retry") |
+| T-TY-10, T-TY-11, T-TY-12, T-TY-23, T-TY-24 | `web-app/src/components/ui/NotificationPanel.test.tsx`, describe "tray spec gaps (Phase 5)" (T-TY-24 lives here, not in NotificationItem.test.tsx) |
+| T-TY-20 | same file, `tray_error_boundary_should_show_open_notifications_page_link_and_keep_handle_usable_when_render_throws`; the boundary itself was missing and is `TrayErrorBoundary.tsx` |
+| T-RC-01, T-RC-04 | `web-app/src/app/page.test.tsx`; `web-app/src/lib/hooks/__tests__/useNotificationRecord.test.ts`; card: `SessionUnavailableCard.test.tsx` |
+| T-RC-02 | `TerminalOutput.toolbarKeys.test.tsx` "TerminalOutput readOnly" (there is no input bar in the terminal; disableStdin and the keyboard toggle are asserted) |
+| T-RC-07 | row `NotificationItem.hidden.test.tsx`, Background `BackgroundActivity.test.tsx`, toast `useSessionNotifications.test.ts` (`onViewSession(sessionId, notificationId)`); the `reply` param half waits for Story 5.6 |
+| T-RC-08 | `TerminalOutput.toolbarKeys.test.tsx`: `read_only_terminal_should_send_0_bytes_and_announce_hint_at_most_once_per_10s_when_keys_typed` |
+| T-RC-09 | `SessionDetail.readonly.test.tsx`: `session_detail_should_toast_this_session_is_read_only_not_stack_trace_when_server_rejects_write` |
+| T-E2-17 | not an e2e: the server-side 0 bytes and 0 resizes are `server/services/terminal_readonly_test.go` and `session_service_stream_terminal_readonly_test.go`; the e2e client cannot seed a hidden session |
+| T-E2-25 | `notification-a11y-matrix.spec.ts`, `background-activity.spec.ts` (ba7), `hidden-session-view.spec.ts` (read-only view and deleted card, both schemes); the Reply card waits for Story 5.6 |
+| T-E2-28 | `web-app/src/lib/__tests__/e2e_notification_conventions.test.ts` |
+| T-E2-30, T-E2-36, T-E2-37 | `notification-tray-bulk.spec.ts`, `hidden-session-view.spec.ts`, `toast-stack-mobile.spec.ts` |
+| T-E2-34 | `server/notifications/store_test.go` `TestAppendDedup_SameSessionAndType` (the gate sits upstream of the store) |
+| T-E2-38 | `web-app/src/lib/__tests__/notification_plan_docs.test.ts` |
+| T-SN-06, T-OB-05, T-AR-03, T-AR-04, T-AN-04, T-OF-01, T-OF-04, T-PC-02, T-UW-02 | `useSessionNotifications.test.ts`; `no_new_telemetry.test.ts`; `ToastStack.test.tsx` (`td5_...`); `NotificationPanel.test.tsx` (`row_should_hide_dismiss_...`); `xa15_...`; `useNotificationConnectivity.test.tsx`; `connectivity_source_guard.test.ts`; `ToastStack.test.tsx` (`pinned_collapse_should_pause_on_focus_...`); `useUndoWindow.test.ts` |
+
+Running the terminal-text e2e specs: the `chromium` project loads SwiftShader WebGL, so xterm paints a canvas and `.xterm-rows` is empty; those specs now skip outside `chromium-dom`. Also give each run its own `STAPLER_SQUAD_TMUX_SOCKET`: a socket file left by a killed test server makes the next server's tmux fail with "server exited unexpectedly" and sessions never start.
