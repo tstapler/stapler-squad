@@ -21,16 +21,18 @@ var leaseWriters = [...]string{
 
 var leaseBusyMirror [len(leaseWriters)]atomic.Uint64
 
-var leaseBusyCounter, leaseHeldGauge = registerLeaseInstruments()
+var leaseBusyCounter = registerLeaseInstruments()
 
-func registerLeaseInstruments() (metric.Int64Counter, metric.Float64ObservableGauge) {
+// registerLeaseInstruments registers the busy counter (returned) and the
+// held-seconds observable gauge (kept alive by its callback registration).
+func registerLeaseInstruments() metric.Int64Counter {
 	meter := telemetry.GetMeter()
 	busy, err := meter.Int64Counter("hidden_session_write_lease_busy_total",
 		metric.WithDescription("Writes that found the per-instance terminal write lease held, by writer"))
 	if err != nil {
 		panic(err)
 	}
-	held, err := meter.Float64ObservableGauge("hidden_session_write_lease_held_seconds",
+	_, err = meter.Float64ObservableGauge("hidden_session_write_lease_held_seconds",
 		metric.WithDescription("Longest current hold of the terminal write lease, by writer"),
 		metric.WithFloat64Callback(func(_ context.Context, o metric.Float64Observer) error {
 			now := time.Now()
@@ -42,7 +44,7 @@ func registerLeaseInstruments() (metric.Int64Counter, metric.Float64ObservableGa
 	if err != nil {
 		panic(err)
 	}
-	return busy, held
+	return busy
 }
 
 func leaseWriterIndex(writer string) int {
