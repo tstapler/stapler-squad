@@ -4,9 +4,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { zIndex } from "@/styles/theme.css";
 import { NotificationToast } from "@/components/ui/NotificationToast";
+import { useAnnounce } from "@/lib/hooks/useAnnounce";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import type { ToastTimerRegistry } from "@/lib/hooks/useToastTimers";
-import { toastAutoCloseMs, toastAutoMinimizeMs } from "@/lib/notification-policy";
+import { isPinned, toastAutoCloseMs, toastAutoMinimizeMs } from "@/lib/notification-policy";
 import type { NotificationData } from "@/lib/types/notification";
 
 const EXIT_ANIMATION_MS = 300;
@@ -86,8 +87,30 @@ function ToastSlot({ notification, timers, onRemove }: ToastSlotProps) {
   );
 }
 
+/** Speaks each newly arrived toast once; the Announcer coalesces bursts and owns the live regions. */
+function useAnnounceArrivals(toasts: NotificationData[]) {
+  const { announce, announceArrival } = useAnnounce();
+  const seen = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const current = new Set(toasts.map((n) => n.id));
+    for (const n of toasts) {
+      if (seen.current.has(n.id)) continue;
+      seen.current.add(n.id);
+      const isReceipt = n.notificationType === "undo" || n.metadata?.actionToastKey !== undefined;
+      if (isReceipt) {
+        announce(n.message, n.notificationType === "error" ? "assertive" : "polite", n.id);
+      } else {
+        announceArrival({ title: n.title || n.sessionName || n.message, pinned: isPinned(n) });
+      }
+    }
+    seen.current.forEach((id) => current.has(id) || seen.current.delete(id));
+  }, [toasts, announce, announceArrival]);
+}
+
 /** Renders the active toasts. The provider owns the queue; this owns presentation and per-toast timers. */
 export function ToastStack({ toasts, timers, onRemove }: ToastStackProps) {
+  useAnnounceArrivals(toasts);
   return (
     <div
       style={{

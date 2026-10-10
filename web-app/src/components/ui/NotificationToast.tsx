@@ -114,8 +114,6 @@ export function NotificationToast({
       className={`${toast} ${notification.notificationType === "approval_needed" ? toastApproval : ""} ${exiting ? exitingClass : ""} ${minimized ? minimizedClass : ""}`}
       style={{ "--priority-color": priorityColor(notification.priority) } as React.CSSProperties}
       data-testid="toast"
-      role="alert"
-      aria-live={notification.notificationType === "approval_needed" ? "assertive" : "polite"}
       onClick={minimized ? onExpand : undefined}
       title={minimized ? "Click to expand" : undefined}
     >

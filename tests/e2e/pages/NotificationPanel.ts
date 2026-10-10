@@ -16,7 +16,7 @@ export async function dismissNotificationInterference(page: Page): Promise<void>
   // (independent of any caller's own retry count) so a stuck/reappearing
   // toast can't hang the test -- warn rather than fail if it's still there,
   // since this is best-effort mitigation, not the assertion under test.
-  const dismissButtons = page.getByRole('alert').getByRole('button', { name: /Dismiss|Close notification/ });
+  const dismissButtons = page.getByTestId('toast').getByRole('button', { name: /Dismiss|Close notification/ });
   for (let i = 0; i < 5; i++) {
     if ((await dismissButtons.count()) === 0) return;
     await dismissButtons.first().click().catch(() => {});

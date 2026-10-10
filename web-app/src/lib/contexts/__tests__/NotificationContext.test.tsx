@@ -873,6 +873,9 @@ describe("NotificationContext", () => {
       act(() => {
         result.current.showActionToast("Saved", "success", "k1");
       });
+      act(() => {
+        jest.advanceTimersByTime(1_500); // let the Announcer's one-second hold finish
+      });
       expect(jest.getTimerCount()).toBe(baseline + 1);
 
       act(() => {

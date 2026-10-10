@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { ToastStack } from "@/components/ui/ToastStack";
+import { AnnouncerProvider } from "@/components/ui/Announcer";
 import { NotificationData, NotificationHistoryItem } from "@/lib/types/notification";
 import { ReviewItem, AttentionReason } from "@/gen/session/v1/types_pb";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
@@ -368,12 +369,14 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   );
 
   return (
-    <NotificationCommandsContext.Provider value={commands}>
-      <NotificationStateContext.Provider value={state}>
-        {children}
-        <ToastStack toasts={notifications} timers={timers} onRemove={commands.removeNotification} />
-      </NotificationStateContext.Provider>
-    </NotificationCommandsContext.Provider>
+    <AnnouncerProvider>
+      <NotificationCommandsContext.Provider value={commands}>
+        <NotificationStateContext.Provider value={state}>
+          {children}
+          <ToastStack toasts={notifications} timers={timers} onRemove={commands.removeNotification} />
+        </NotificationStateContext.Provider>
+      </NotificationCommandsContext.Provider>
+    </AnnouncerProvider>
   );
 }
 
