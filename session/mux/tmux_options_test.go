@@ -148,8 +148,8 @@ func TestWriteReadUserOptions(t *testing.T) {
 	// inside a `go test` binary -- see prependIsolatedSocket.
 	create := safeexec.CommandContext(context.Background(), tmux.Binary(),
 		prependIsolatedSocket([]string{"new-session", "-d", "-s", sessionName, "sleep", "60"})...)
-	if err := create.Run(); err != nil {
-		t.Fatalf("create tmux session: %v", err)
+	if out, err := create.CombinedOutput(); err != nil {
+		t.Fatalf("create tmux session: %v: %s", err, out)
 	}
 	// Deliberately a `defer`, not t.Cleanup: t.Cleanup funcs run only after all
 	// of the test function's own deferred statements have already fired, which
@@ -224,8 +224,8 @@ func TestScanFromUserOptions_RegistersSession(t *testing.T) {
 	// ScanByUserOptions resolve to inside a `go test` binary -- see prependIsolatedSocket.
 	create := safeexec.CommandContext(context.Background(), tmux.Binary(),
 		prependIsolatedSocket([]string{"new-session", "-d", "-s", sessionName, "sleep", "60"})...)
-	if err := create.Run(); err != nil {
-		t.Fatalf("create tmux session: %v", err)
+	if out, err := create.CombinedOutput(); err != nil {
+		t.Fatalf("create tmux session: %v: %s", err, out)
 	}
 	// See the matching comment in TestWriteReadUserOptions: this must be a
 	// `defer` (runs before tmuxTestMu.Unlock() above, LIFO), not t.Cleanup
