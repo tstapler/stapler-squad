@@ -12,6 +12,15 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 )
 
+// hiddenVisibleInList applies include_hidden / hidden_only to one session. hidden_only
+// wins over include_hidden: the Background view must never receive visible sessions.
+func hiddenVisibleInList(hidden bool, req *sessionv1.ListSessionsRequest) bool {
+	if req.HiddenOnly {
+		return hidden
+	}
+	return !hidden || req.IncludeHidden
+}
+
 // ListSessions returns all sessions with optional filtering.
 // This includes both managed sessions and external mux-enabled sessions.
 // +api: session:list
@@ -57,8 +66,9 @@ func (s *SessionService) ListSessions(
 			continue
 		}
 
-		// Exclude hidden (system/background) sessions unless explicitly requested
-		if inst.Hidden && !req.Msg.IncludeHidden {
+		// Exclude hidden (system/background) sessions unless explicitly requested;
+		// hidden_only keeps only them and implies include_hidden.
+		if !hiddenVisibleInList(inst.Hidden, req.Msg) {
 			continue
 		}
 
@@ -98,7 +108,7 @@ func (s *SessionService) ListSessions(
 			}
 
 			// Exclude hidden external sessions unless requested
-			if extInst.Hidden && !req.Msg.IncludeHidden {
+			if !hiddenVisibleInList(extInst.Hidden, req.Msg) {
 				continue
 			}
 

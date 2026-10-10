@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -582,12 +581,10 @@ func Test_InjectHooksConfig_should_ProduceByteIdenticalLocalCommand_When_NoRemot
 		t.Fatalf("expected exactly one PermissionRequest hook group/entry, got groups=%+v", groups)
 	}
 
-	// The only addition to the pre-Phase-5 command is the run-time token-file
-	// Authorization header (require_local_auth); it never embeds the secret.
-	want := fmt.Sprintf(
-		"curl -s --max-time %d -X POST '%s' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s'%s -d @-",
-		hookTimeout, hookApprovalURL(), "local-sess", hookAuthArg(),
-	)
+	// The command is the one producer's output: the run-time proof and token-file
+	// header branches never embed a secret and are guarded so a missing file
+	// still POSTs (see TestBuildLocalHookCommand_*).
+	want := buildLocalHookCommand(hookApprovalURL(), "local-sess")
 	got := groups[0].Hooks[0].Command
 	if got != want {
 		t.Errorf("local session's PermissionRequest hook command changed by Phase 5:\n  want: %s\n  got:  %s", want, got)
@@ -791,7 +788,11 @@ func Test_InjectHooksConfig_should_UpgradeExistingHookWithAuthHeader_When_Header
 	if len(groups) != 1 || len(groups[0].Hooks) != 1 {
 		t.Fatalf("hook duplicated or lost: %+v", groups)
 	}
-	if want := localtoken.CurlHeaderArg(cfgDir); !strings.Contains(groups[0].Hooks[0].Command, want) {
-		t.Errorf("command not upgraded with %q: %s", want, groups[0].Hooks[0].Command)
+	// The header file is read through a guarded `-H @file`, never inlined.
+	cmd := groups[0].Hooks[0].Command
+	for _, want := range []string{"T='" + localtoken.HeaderPath(cfgDir) + "'", `[ -f "$T" ] && [ -r "$T" ] && set -- "$@" -H "@$T"`} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("command not upgraded with %q: %s", want, cmd)
+		}
 	}
 }

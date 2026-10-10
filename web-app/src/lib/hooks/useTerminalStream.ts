@@ -41,6 +41,8 @@ interface UseTerminalStreamOptions {
   /** Callback invoked when a ShellStatusUpdate is received for this shell. */
   onShellStatusChange?: (status: "running" | "stopped" | "error", exitCode?: number) => void;
   getTerminal?: () => Terminal | null; // Getter function for terminal instance (evaluated at connect time)
+  /** Hidden-session view: no Input or Resize frames are sent (Story 5.3). */
+  readOnly?: boolean;
   scrollbackLines?: number; // Number of lines to request from scrollback
   onError?: (error: Error) => void;
   onScrollbackReceived?: (scrollback: string, metadata?: ScrollbackMetadata) => void; // Callback when scrollback is received
@@ -149,6 +151,7 @@ export function useTerminalStream({
   onInputDropped,
   foreground = false,
   outstandingResyncIdsRef,
+  readOnly = false,
 }: UseTerminalStreamOptions): TerminalStreamResult {
   // ---- Connection state ----
   const [isConnected, setIsConnected] = useState(false);
@@ -278,6 +281,7 @@ export function useTerminalStream({
     isConnectedRef,
     onError,
     outstandingResyncIdsRef,
+    readOnly,
   });
 
   const metrics = useTerminalMetrics({ onOutput });

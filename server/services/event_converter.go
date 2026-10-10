@@ -4,6 +4,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/sshremote"
@@ -79,6 +80,8 @@ func convertEventToProto(event *events.Event) *sessionv1.SessionEvent {
 				Metadata:         event.NotificationMetadata,
 				Timestamp:        timestamppb.New(event.Timestamp),
 				NotificationId:   event.NotificationID,
+				// A live event is unread by definition, so read=false.
+				IsPendingDecision: notifications.IsPendingDecision(event.NotificationType, event.NotificationMetadata, false),
 			},
 		}
 

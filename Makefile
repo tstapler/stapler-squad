@@ -87,7 +87,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: help ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build ent-gen web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks build-otel-auto build-otel-auto-embedded otel-auto-isolation-guard otel-auto-isolation-guard-selftest otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
+.PHONY: help ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build proto-breaking ent-gen web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks build-otel-auto build-otel-auto-embedded otel-auto-isolation-guard otel-auto-isolation-guard-selftest otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
 
 # Default target
 help: ## Show this help message
@@ -578,6 +578,9 @@ proto-lint: ensure-tools ## Lint protocol buffer files
 proto-build: ensure-tools ## Build/validate protocol buffer files
 	buf build proto
 
+proto-breaking: ensure-tools ## Fail on breaking proto changes versus origin/main (needs a reachable origin/main)
+	buf breaking proto --against '.git#branch=origin/main,subdir=proto'
+
 proto-clean: ## Clean generated protocol buffer code
 	rm -rf gen/proto/go
 	rm -rf web/src/gen
@@ -696,6 +699,22 @@ test-integration: ensure-tools proto-gen $(GOTESTSUM_BIN) ## Run integration tes
 	# parallel via the second invocation.
 	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags integration -timeout 20m -p 1 ./session ./session/tmux
 	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags integration -timeout 20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/tmux)$$')
+
+# Type-based delivery-gate and terminal-write guards (Story 2.6 / Story 5.1d).
+# Runs only the Test* funcs declared in files tagged `//go:build sinkguard`
+# (selected per package with -run), so it does not re-run the untagged suite.
+.PHONY: test-delivery-guards test-delivery-guards-run
+test-delivery-guards: ensure-tools proto-gen ent-gen ## Run the sinkguard-tagged type-based guard tests
+	@$(MAKE) --no-print-directory test-delivery-guards-run
+
+# The run half has no tool/codegen prerequisites so CI can call it directly
+# after downloading the generated-code artifact (build.yml, test-delivery-guards).
+test-delivery-guards-run: $(GOTESTSUM_BIN)
+	@set -e; for d in $$(grep -rl --include='*_test.go' '^//go:build sinkguard' server session cmd pkg 2>/dev/null | xargs -r -n1 dirname | sort -u); do \
+		names=$$(grep -h -oE '^func (Test[A-Za-z0-9_]+)' $$(grep -l '^//go:build sinkguard' $$d/*_test.go) | sed 's/^func //' | paste -sd'|' -); \
+		[ -n "$$names" ] || continue; \
+		$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -tags sinkguard -timeout 20m -run "^($$names)$$" ./$$d; \
+	done
 
 test-triage-harness: proto-gen ## Run all backlog triage harness phases (no UI/browser needed)
 	go test -v -tags=harness -run TestTriageHarness ./server/services/
@@ -958,7 +977,7 @@ dev-setup: install-tools ## Set up development environment
 	@echo "Development environment setup complete!"
 	@echo "Run 'make help' to see available commands"
 
-ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration test-shell fmt-check registry-generate actor-field-guard ptmx-field-guard otel-auto-isolation-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
+ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration test-delivery-guards test-shell fmt-check registry-generate actor-field-guard ptmx-field-guard otel-auto-isolation-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
 
 # ready: everything `make ci` runs, plus the CI-only checks that have no local
 # equivalent yet — .github/workflows/lint.yml's complexity gate (gocyclo/
@@ -967,7 +986,7 @@ ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration t
 # local equivalent (the external go-test-coverage action, the E2E-coverage PR
 # comment) — those only run in CI. `--new-from-rev=origin/main` requires a
 # reachable origin/main; `git fetch origin main` first if it's stale.
-ready: ci ready-complexity-gate ready-duplication-gate-web ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites)
+ready: ci proto-breaking ready-complexity-gate ready-duplication-gate-web ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites)
 	cd web-app && npx next lint
 	cd web-app && pnpm run lint:css && pnpm run lint:css-vars
 	cd tools/scanner && go test ./...

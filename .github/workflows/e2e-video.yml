@@ -57,7 +57,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set +e
-          CHANGED_FILES=$(gh api "repos/${{ github.repository }}/compare/${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}" --paginate --jq '.files[].filename')
+          CHANGED_FILES=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
           export CHANGED_FILES
           ./tools/ci/detect-feature-changes.sh origin/main
           EXIT_CODE=$?

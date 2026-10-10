@@ -57,6 +57,7 @@ import {
   setConnectionState,
   selectAllSessions,
   selectSessionsLoading,
+  selectSessionsHasLoadedOnce,
   selectSessionsError,
   selectConnectionState,
   removeDetectedStatus,
@@ -88,6 +89,10 @@ export const LIST_SESSIONS_TIMEOUT_MS = 15_000;
 
 const DISCONNECTED: ConnectionState = "disconnected";
 
+export interface GetSessionOptions {
+  onFailure?: (err: unknown) => void;
+}
+
 interface UseSessionServiceOptions {
   baseUrl?: string;
   autoWatch?: boolean;
@@ -117,14 +122,21 @@ interface UseSessionServiceReturn {
   // State
   sessions: Session[];
   loading: boolean;
+  /** True once a session list (possibly empty) has been applied; a cold deep link waits on it. */
+  hasLoadedOnce: boolean;
   error: Error | null;
   connectionState: import("@/lib/store/sessionsSlice").ConnectionState;
   /** System-wide memory usage percentage (0–100). Zero when unavailable. */
   systemMemoryPct: number;
 
   // Methods
-  listSessions: (options?: { category?: string; status?: SessionStatus; includeArchived?: boolean }) => Promise<void>;
-  getSession: (id: string) => Promise<Session | null>;
+  listSessions: (options?: { category?: string; status?: SessionStatus; includeArchived?: boolean; includeHidden?: boolean }) => Promise<void>;
+  /**
+   * `options.onFailure` receives the raw error and replaces the shared error banner, so a
+   * caller that renders its own failure state (the hidden-session deep link) can tell
+   * NotFound from a network failure.
+   */
+  getSession: (id: string, options?: GetSessionOptions) => Promise<Session | null>;
   createSession: (request: Partial<CreateSessionRequest>) => Promise<Session | null>;
   updateSession: (id: string, updates: Partial<UpdateSessionRequest>) => Promise<Session | null>;
   deleteSession: (id: string, force?: boolean) => Promise<boolean>;
@@ -217,6 +229,7 @@ export function useSessionService(
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
   const loading = useAppSelector(selectSessionsLoading);
+  const hasLoadedOnce = useAppSelector(selectSessionsHasLoadedOnce);
   const errorStr = useAppSelector(selectSessionsError);
 
   // Async-session-creation Epic 5.3 (Surface 4): fire a global failure toast
@@ -306,7 +319,7 @@ export function useSessionService(
 
   // List sessions with retry logic
   const listSessions = useCallback(
-    async (listOptions?: { category?: string; status?: SessionStatus; includeArchived?: boolean }) => {
+    async (listOptions?: { category?: string; status?: SessionStatus; includeArchived?: boolean; includeHidden?: boolean }) => {
       if (!clientRef.current) return;
 
       dispatch(setLoading(true));
@@ -320,6 +333,7 @@ export function useSessionService(
                 category: listOptions?.category,
                 status: listOptions?.status,
                 includeArchived: listOptions?.includeArchived,
+                includeHidden: listOptions?.includeHidden,
               },
               { timeoutMs: LIST_SESSIONS_TIMEOUT_MS }
             ),
@@ -350,14 +364,18 @@ export function useSessionService(
   );
 
   // Get single session
-  const getSession = useCallback(async (id: string): Promise<Session | null> => {
+  const getSession = useCallback(async (id: string, options?: GetSessionOptions): Promise<Session | null> => {
     if (!clientRef.current) return null;
 
     try {
       const response = await clientRef.current.getSession({ id });
       return response.session ?? null;
     } catch (err) {
-      dispatch(setError(err instanceof Error ? err.message : "Failed to get session"));
+      if (options?.onFailure) {
+        options.onFailure(err);
+      } else {
+        dispatch(setError(err instanceof Error ? err.message : "Failed to get session"));
+      }
       return null;
     }
   }, [dispatch]);
@@ -1369,6 +1387,7 @@ export function useSessionService(
   return {
     sessions,
     loading,
+    hasLoadedOnce,
     error,
     connectionState,
     systemMemoryPct,

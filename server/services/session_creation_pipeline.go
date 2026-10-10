@@ -311,7 +311,7 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 		if err := s.setupRemoteApprovalHooks(p.instance, instanceRootDir, p.instanceTitle); err != nil {
 			log.Warn("[session pipeline] failed to set up remote approval relay", "session", p.instanceTitle, "err", err)
 		}
-	} else if err := InjectHookConfig(instanceRootDir, p.instanceTitle); err != nil {
+	} else if err := InjectHookConfig(instanceRootDir, p.instanceTitle, p.instance.UUID); err != nil {
 		log.Warn("[session pipeline] failed to inject hook config", "session", p.instanceTitle, "err", err)
 	}
 

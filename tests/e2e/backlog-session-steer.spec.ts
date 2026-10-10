@@ -167,7 +167,7 @@ test.describe("backlog-session-steer", () => {
         await page.getByTestId(`session-steer-input-${realSessionId}`).fill("please run the tests");
         await page.getByTestId(`session-steer-submit-${realSessionId}`).click();
 
-        await expect(page.getByRole("alert").filter({ hasText: "Steering message sent." })).toBeVisible();
+        await expect(page.getByTestId("toast").filter({ hasText: "Steering message sent." })).toBeVisible();
 
         // Absent, not just hidden — a headless-triage row never renders a
         // steer toggle at all (ADR-002).
@@ -215,7 +215,7 @@ test.describe("backlog-session-steer", () => {
       await toggle.click();
       await input.fill("run the linter");
       await input.press("Enter");
-      await expect(page.getByRole("alert").filter({ hasText: "Steering message sent." })).toBeVisible();
+      await expect(page.getByTestId("toast").filter({ hasText: "Steering message sent." })).toBeVisible();
 
       // Escape cancels and returns focus to the toggle.
       await expect(toggle).toBeVisible({ timeout: 5000 });
@@ -274,7 +274,7 @@ test.describe("backlog-session-steer", () => {
       // role="alert"> has no aria-label, so getByRole("alert", { name })
       // can never match its text. Filter on text content instead, same as
       // the ARIA-role + hasText pattern used for the "Steering message
-      // sent." toast alert above.
+      // sent." toast above.
       await expect(
         page
           .getByTestId(`session-steer-composer-${fakeSessionId}`)

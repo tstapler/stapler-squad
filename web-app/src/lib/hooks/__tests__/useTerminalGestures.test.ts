@@ -1283,6 +1283,25 @@ describe('useTerminalGestures', () => {
       expect(term.select).not.toHaveBeenCalled();
     });
 
+    it('touchstart_should_IgnoreGesture_When_TargetIsInsideRealDataGestureIgnoreElement', () => {
+      const { term } = mountScroll();
+      const deck = document.createElement('div');
+      deck.setAttribute('data-gesture-ignore', '');
+      const toast = document.createElement('button');
+      deck.appendChild(toast);
+      document.body.appendChild(deck);
+      try {
+        fakeContainer.fire('touchstart', makeTouchEvent('touchstart', 100, START_Y, 'touches', { target: toast }));
+        expect(mv(START_Y + 100).preventDefault).not.toHaveBeenCalled();
+        frame();
+        end(START_Y + 100);
+        expect(term.scrollLines).not.toHaveBeenCalled();
+        expect(term.focus).not.toHaveBeenCalled();
+      } finally {
+        deck.remove();
+      }
+    });
+
     it('touchstart_should_StartGesture_When_TargetIsNotIgnorable', () => {
       const { term } = mountScroll({ cellH: 20 });
       const plainTarget = { closest: jest.fn(() => null) };

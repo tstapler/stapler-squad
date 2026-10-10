@@ -1580,6 +1580,16 @@ func (i *Instance) SendKeys(keys string) error {
 	return err
 }
 
+// SendKeysN is SendKeys that keeps the byte count, so a caller can tell a write
+// that provably wrote nothing (0, err) from one that may have written. Its only
+// caller is SubmitReplyOnce.
+func (i *Instance) SendKeysN(keys string) (int, error) {
+	if !i.started.Load() || i.Status == Paused {
+		return 0, fmt.Errorf("cannot send keys to instance that has not been started or is paused")
+	}
+	return i.pm().SendKeys(keys)
+}
+
 // SendInputViaControlMode sends raw bytes through the existing control mode connection,
 // avoiding the subprocess spawn overhead and timeout risk of exec.CommandContext.
 func (i *Instance) SendInputViaControlMode(ctx context.Context, data []byte) error {

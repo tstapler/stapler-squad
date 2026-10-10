@@ -391,7 +391,16 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		// SubmitDriverContent sends content and the submit keystroke as two SEPARATE
 		// writes, not concatenated into one (BUG-031): see its doc comment
 		// (pane_submit.go) for why a single write is unsafe for long content.
-		if sendErr := SubmitDriverContent(ctx, d.inst, nextMsg, d.paneSettlePollInterval, d.paneSettleMaxWait); sendErr != nil {
+		//
+		// The turn is this chain's acquirer (Story 5.0): a bounded blocking
+		// acquire, because a Reply or a steer holds the lease for a short time
+		// only, and a timeout takes the existing submit-error path.
+		lease, leaseErr := d.inst.AcquireTerminalWriteLease(ctx, LeaseWriterAutonomous, AutonomousTurnLeaseWait)
+		if leaseErr != nil {
+			log.Warn("AutonomousDriver: failed to submit turn", "session", sessionName, "turn", turnCount+1, "err", leaseErr)
+			break
+		}
+		if sendErr := SubmitDriverContent(ctx, d.inst, lease, nextMsg, d.paneSettlePollInterval, d.paneSettleMaxWait); sendErr != nil {
 			log.Warn("AutonomousDriver: failed to submit turn", "session", sessionName, "turn", turnCount+1, "err", sendErr)
 			break
 		}

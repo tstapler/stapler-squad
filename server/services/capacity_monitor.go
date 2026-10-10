@@ -94,8 +94,15 @@ func NewCapacityMonitor(p CapacityMonitorParams) *CapacityMonitor {
 		// SessionCompactor directly — wrap it. *session.Instance satisfies
 		// paneSubmitter, so this call resolves fine even though the two
 		// function *types* don't match for a direct assignment.
+		//
+		// The closure is the chain's acquirer (Story 5.0): a busy lease is an
+		// error the capacity monitor already logs and retries next cycle.
 		compactor = func(ctx context.Context, inst *session.Instance, content string) error {
-			return session.SubmitContentWithEnter(ctx, inst, content)
+			lease, ok := inst.TryTerminalWriteLease(session.LeaseWriterOther)
+			if !ok {
+				return session.ErrLeaseBusy
+			}
+			return session.SubmitContentWithEnter(ctx, inst, lease, content)
 		}
 	}
 	return &CapacityMonitor{

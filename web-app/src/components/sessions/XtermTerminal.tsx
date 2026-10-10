@@ -28,6 +28,7 @@ import { TerminalLinkMenu } from "./TerminalLinkMenu";
 import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme, type TerminalConfig } from "@/lib/config/terminalConfig";
 import { dimensionsEqual, isFiniteResizeDimensions, type ResizeDimensions } from "@/lib/terminal/types";
 import { getCellDimensions } from "@/lib/terminal/cellDimensions";
+import { cursorCellRect, registerTerminalCursorSource } from "@/lib/terminal/cursorRect";
 import { pointToCell, rafThrottlePoint, type CellGeometry } from "@/lib/terminal/touchDrag";
 import { isMouseTracking } from "@/lib/terminal/mouseTracking";
 import { mobileDebug } from "@/lib/terminal/mobileDebug";
@@ -953,6 +954,10 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       // CRITICAL: Store refs BEFORE triggering callbacks
       // This ensures terminalRef is available when parent component calls getTerminal()
       terminalRef.current = terminal;
+      // Lets the desktop toast deck keep clear of the cursor line.
+      const unregisterCursorSource = registerTerminalCursorSource(() =>
+        cursorCellRect(terminal, terminal.element?.querySelector(".xterm-screen") ?? null),
+      );
       fitAddonRef.current = fitAddon;
       searchAddonRef.current = searchAddon;
       serializeAddonRef.current = serializeAddon;
@@ -1495,6 +1500,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         forgetWebglTerminal(terminal);
         releaseWebglSlot(webglSlot);
         focusContainer?.removeEventListener("focusin", onFocusIn);
+        unregisterCursorSource();
         terminal.dispose();
         terminalRef.current = null;
         fitAddonRef.current = null;

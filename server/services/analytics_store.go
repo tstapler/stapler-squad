@@ -143,8 +143,9 @@ type AnalyticsStore struct {
 	ch      chan AnalyticsEntry
 	dropped int64 // atomic counter for dropped or unflushed entries
 	stopped atomic.Bool
-	// flushDelay is the deadline after the first buffered entry; tests that
-	// assert size-triggered batching raise it so a slow producer can't trip it.
+
+	// flushDelay is the batch deadline; a field so a test can make size the
+	// only flush trigger instead of racing a 2ms wall-clock timer.
 	flushDelay time.Duration
 
 	cancel   context.CancelFunc

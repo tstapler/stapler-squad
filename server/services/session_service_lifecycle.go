@@ -405,6 +405,7 @@ func (s *SessionService) DeleteSession(
 
 	// Publish SessionDeleted event to all watchers. Use UUID so the frontend
 	// entity adapter (keyed by UUID) matches and tombstones the correct entry.
+	s.onSessionDeletedForReply(sessionUUID)
 	s.eventBus.Publish(events.NewSessionDeletedEvent(sessionUUID))
 
 	return connect.NewResponse(&sessionv1.DeleteSessionResponse{
@@ -589,6 +590,7 @@ func (s *SessionService) RetrySessionCreation(
 // Call this before deleting from storage to close the race window where LoadInstances()
 // could re-add the session via external discovery.
 func (s *SessionService) removeFromAllPollers(id string) {
+	s.unindexSessionForDelivery(id)
 	if s.reviewQueueSvc != nil {
 		s.reviewQueueSvc.GetQueue().Remove(id)
 	}
@@ -637,11 +639,21 @@ func (s *SessionService) RestartSession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
 
+	// Restart ends the agent and types a marker into the new pane; a hidden
+	// (background) session is read-only for UI actions. Internal restarts
+	// (retry, program switch) do not come through this handler.
+	if _, err := AccessForUnary(instance, s.guards).Writer(nil); err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("session %q is a background session and is read-only: %w", req.Msg.Id, err))
+	}
+
 	// Restart the instance
 	if err := instance.Restart(req.Msg.PreserveOutput); err != nil {
 		log.Error("[RestartSession] failed to restart session", "session", instance.Title, "err", err)
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to restart session: %w", err))
 	}
+
+	RefreshInstanceHookProof(instance)
 
 	// Persist the updated instance state.
 	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {

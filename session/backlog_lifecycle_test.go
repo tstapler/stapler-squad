@@ -5030,3 +5030,32 @@ func TestTransitionBouncingItemToDone_SkipsCleanup_When_TransitionFails(t *testi
 	require.Error(t, transErr)
 	assert.Empty(t, cleaner.calls(), "cleanup must never fire when the done transition itself failed")
 }
+
+// autoRemediatingNotifier records that the stamped path was taken.
+type autoRemediatingNotifier struct {
+	fakeNotifier
+	stamped []string
+}
+
+func (a *autoRemediatingNotifier) NotifyAutoRemediating(itemID, title, message string, notificationType int32, urgent, important bool) {
+	a.stamped = append(a.stamped, title)
+}
+
+func TestNotifyAutoRemediating_should_UseStampedPathWhenImplementedAndFallBackToNotifyOtherwise(t *testing.T) {
+	t.Parallel()
+	stamped := &autoRemediatingNotifier{}
+	l := &BacklogLifecycleListener{}
+	l.SetNotifier(stamped)
+	l.notifyAutoRemediating("item", "PR needs attention", "m", 8, false, true)
+	if len(stamped.stamped) != 1 || len(stamped.calls) != 0 {
+		t.Fatalf("stamped path: stamped=%v plain=%v", stamped.stamped, stamped.titles())
+	}
+
+	plain := &fakeNotifier{}
+	l2 := &BacklogLifecycleListener{}
+	l2.SetNotifier(plain)
+	l2.notifyAutoRemediating("item", "PR needs attention", "m", 8, false, true)
+	if len(plain.calls) != 1 || plain.calls[0].Method != "Notify" {
+		t.Fatalf("fallback should call Notify once, got %+v", plain.calls)
+	}
+}

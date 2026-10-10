@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -758,6 +759,10 @@ type Instance struct {
 	// snapshot-tracked field.
 	scrollLease scrollLease
 
+	// writeLease is the per-instance terminal write lease (instance_write_lease.go);
+	// transient orchestration state like scrollLease, so not in InstanceSnapshot.
+	writeLease writeLeaseState
+
 	// destroyed is set by Destroy() so a SessionDriver goroutine that outlives
 	// its own teardown (session_driver.go's loop only self-terminates on a
 	// 25-minute wall-clock deadline or a detected terminal status, both of
@@ -815,6 +820,10 @@ type Instance struct {
 	// Artifacts holds structured artifacts extracted from the session's JSONL history.
 	// Populated asynchronously by ArtifactExtractor. Protected by mu.
 	Artifacts *artifacts.SessionArtifactsBlob
+
+	// ContextHealth is the latest transcript-derived verdict, pushed by the
+	// server's TokenStore subscriber. Zero value is HealthUnknown. Protected by mu.
+	ContextHealth tokens.ContextHealthVerdict
 
 	// ExecutionTarget selects where this session's TmuxSession/GitWorktree
 	// subprocess commands run (session/execution_target.go, ssh-remote-workspaces
@@ -1403,6 +1412,14 @@ func (i *Instance) HasGitHubPR() bool {
 func (i *Instance) SetArtifacts(blob *artifacts.SessionArtifactsBlob) {
 	_ = i.sendSyncErr(func(s *instanceState) error {
 		s.inst.Artifacts = blob
+		return nil
+	})
+}
+
+// SetContextHealth atomically updates the transcript-derived ContextHealth verdict.
+func (i *Instance) SetContextHealth(v tokens.ContextHealthVerdict) {
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		setContextHealthLocked(s, v)
 		return nil
 	})
 }

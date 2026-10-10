@@ -487,9 +487,7 @@ func TestAnalyticsStoreFlushesBurstByBatchSize(t *testing.T) {
 	t.Parallel()
 	sink := &recordingAnalyticsBatchSink{called: make(chan struct{}, 1)}
 	store := newAnalyticsStore(nil, sink)
-	// Only the size trigger may flush: at the default 2ms deadline, a slow
-	// producer loop under -race lets the timer split the burst into batches.
-	store.flushDelay = time.Hour
+	store.flushDelay = time.Hour // only the batch size may trigger this flush
 	store.Start(context.Background())
 	defer store.Stop()
 

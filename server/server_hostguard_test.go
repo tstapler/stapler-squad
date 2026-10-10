@@ -133,7 +133,7 @@ func TestLocalChain_should_RequireCredential_When_LocalAuthMiddlewareSet(t *test
 	t.Cleanup(sessions.Close)
 	validator := auth.NewLocalValidator(sessions, "local-token")
 	auth.RegisterLocalLoginRoutes(srv.Mux(), auth.NewLocalLogin(sessions, validator), true)
-	srv.SetupAuth(middleware.Auth(validator))
+	srv.SetupAuth(middleware.Auth(validator), true)
 	chain := srv.localChain()
 
 	call := func(mutate func(*http.Request)) int {

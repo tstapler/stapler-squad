@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/tstapler/stapler-squad/config"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -16,10 +19,13 @@ import (
 // 68964304): submit_diagnosis_result and diagnose_nudge_session. live may be
 // nil (e.g. the stdio fallback path with no *services.SessionService) —
 // diagnose_nudge_session then always refuses with SESSION_NOT_FOUND rather
-// than panicking.
+// than panicking. eventBus is optional — nil means submit_diagnosis_result's
+// outcome notification (see notifyDiagnosisResult) is skipped, matching every
+// other optional-eventBus handler's nil-degrades-to-off convention.
 type diagnoseHandlers struct {
-	storage *session.Storage
-	live    liveInstanceFinder
+	storage  *session.Storage
+	live     liveInstanceFinder
+	eventBus *events.EventBus
 }
 
 // diagnoseOutcomeValues are the valid submit_diagnosis_result outcomes,
@@ -135,8 +141,52 @@ func (dh *diagnoseHandlers) submitDiagnosisResult(ctx context.Context, req mcpgo
 	if noteErr := dh.storage.AppendActivityNote(ctx, itemID, callerUUID, "diagnose", note); noteErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("record diagnosis result: %v", noteErr), ""), nil
 	}
+	dh.notifyDiagnosisResult(itemID, outcome, summary)
 
 	return mcpgo.NewToolResultText(fmt.Sprintf("Diagnosis result recorded for item %s: %s", itemID, outcome)), nil
+}
+
+// diagnosisOutcomeTitles gives each diagnoseOutcomeValues entry an
+// operator-facing title, keyed the same as the note AppendActivityNote
+// records, so the notification and the activity log agree on what happened.
+var diagnosisOutcomeTitles = map[string]string{
+	"BUG_FILED": "Diagnosis: bug filed",
+	"NOTE_ONLY": "Diagnosis: note added",
+	"NUDGED":    "Diagnosis: session nudged",
+	"NO_ACTION": "Diagnosis: no action needed",
+}
+
+// notifyDiagnosisResult publishes an operator-facing notification for a
+// completed Diagnose & Nudge dispatch, carrying the actual outcome/summary
+// and linking to the backlog item (via metadata's item_id) rather than the
+// hidden, one-shot diagnostic session itself — that session is excluded from
+// the default session list, so a notification that only links to it is a
+// dead end. Without this, the only signal a completed diagnose dispatch ever
+// produced was the generic "Session Completed" push built from the session's
+// raw internal title (e.g. "diagnose:e32264b0:..."), which carries no
+// information about what was found. Best-effort: nil eventBus is a no-op.
+func (dh *diagnoseHandlers) notifyDiagnosisResult(itemID, outcome, summary string) {
+	if dh.eventBus == nil {
+		return
+	}
+	title := diagnosisOutcomeTitles[outcome]
+	if title == "" {
+		title = "Diagnosis complete"
+	}
+	// BUG_FILED added new backlog work the operator didn't ask for and may
+	// want to triage soon; the other outcomes are routine background noise.
+	priority := sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW
+	if outcome == "BUG_FILED" {
+		priority = sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
+	}
+	dh.eventBus.Publish(events.NewNotificationEvent(
+		itemID, "", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
+		int32(priority),
+		title,
+		summary,
+		map[string]string{"item_id": itemID},
+	))
 }
 
 func (dh *diagnoseHandlers) nudgeSession(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -263,6 +313,24 @@ func (dh *diagnoseHandlers) resolveNudgeTarget(ctx context.Context, a nudgeSessi
 	return target, nil
 }
 
+// writeNudge takes the target's write lease BEFORE claiming the dispatch's one
+// nudge attempt, so a busy lease (a driver key, a steer) never consumes the
+// attempt and the diagnostic agent may retry (Story 5.0).
+func (dh *diagnoseHandlers) writeNudge(ctx context.Context, callerUUID string, target *session.Instance, message string) *mcpgo.CallToolResult {
+	lease, busy := acquireMCPWriteLease(target, session.LeaseWriterNudge)
+	if busy != nil {
+		return busy
+	}
+	if errRes := dh.claimNudgeAttemptForWrite(ctx, callerUUID); errRes != nil {
+		lease.Release()
+		return errRes
+	}
+	if submitErr := session.SubmitContentWithEnter(ctx, target, lease, message); submitErr != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("nudge write failed: %v", submitErr), "")
+	}
+	return nil
+}
+
 func (dh *diagnoseHandlers) performNudge(ctx context.Context, callerUUID string, a nudgeSessionArgs) (*mcpgo.CallToolResult, error) {
 	// Kill switch (AC3): read fresh at the write instant, not cached from
 	// dispatch time, so flipping the flag off mid-flight still blocks an
@@ -280,12 +348,8 @@ func (dh *diagnoseHandlers) performNudge(ctx context.Context, callerUUID string,
 		return errRes, nil
 	}
 
-	if errRes := dh.claimNudgeAttemptForWrite(ctx, callerUUID); errRes != nil {
+	if errRes := dh.writeNudge(ctx, callerUUID, target, a.message); errRes != nil {
 		return errRes, nil
-	}
-
-	if submitErr := session.SubmitContentWithEnter(ctx, target, a.message); submitErr != nil {
-		return errResult(ErrInternalError, fmt.Sprintf("nudge write failed: %v", submitErr), ""), nil
 	}
 
 	if _, recErr := dh.storage.RecordDiagnoseNudgeAttempt(ctx, a.itemID, domain.StuckReason(a.stuckReason)); recErr != nil {

@@ -340,6 +340,8 @@ web-app/src/gen/session/v1/types_pb.ts.
 
 #### Story 2.1.1: `ContextHealth` enum + `Session` fields 72/73
 
+> **Correction at implementation time:** 72/73 (`exit_reason`/`note`) and 90–96 were already in use on `Session`; the fields shipped as `context_health = 97` and `context_health_reason = 98`. Read 72/73 below as 97/98.
+
 **As** a frontend client, **I want** `context_health` and `context_health_reason` on the `Session` message, **so that** I receive health updates on the `WatchSessions` stream I already consume.
 
 **Acceptance Criteria**:

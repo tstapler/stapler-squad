@@ -808,3 +808,17 @@ type fetcherFunc func(ctx context.Context, key githubpkg.PRKey, token string) (g
 func (f fetcherFunc) FetchPRNudgeDetail(ctx context.Context, key githubpkg.PRKey, token string) (githubpkg.PRNudgeDetail, error) {
 	return f(ctx, key, token)
 }
+
+// A PR can be linked to a hidden review session; the manual nudge refuses it
+// with 0 steers and 0 GitHub fetches (Story 5.1d, the SteerInstanceGuarded family).
+func TestNudgeSessionForPR_should_RefuseAHiddenSessionWithZeroSteersAndZeroFetches_When_TheLinkedSessionIsHidden(t *testing.T) {
+	f := newNudgeFixture(t)
+	f.inst.Hidden = true
+
+	_, err := f.call("fix-ci")
+
+	requireCode(t, err, connect.CodeFailedPrecondition)
+	assert.Contains(t, err.Error(), "read-only")
+	assert.Zero(t, f.nudger.steerCount())
+	assert.Zero(t, f.fetcher.callCount())
+}

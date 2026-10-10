@@ -35,6 +35,7 @@ func TestShouldNotifyTable(t *testing.T) {
 		{"urgent priority generic, fresh → push", events.EventNotification, priorityUrgent, typeUnspecified, 5 * time.Minute, true},                     // UT-2.1b [BUG-2 fix]
 		{"urgent priority generic, aged past TTL → no push", events.EventNotification, priorityUrgent, typeUnspecified, urgentTTL + time.Minute, false}, // urgency decay
 		{"urgent priority generic, exactly at TTL → no push", events.EventNotification, priorityUrgent, typeUnspecified, urgentTTL, false},              // boundary is exclusive
+		{"medium priority WARNING (write-lease wedge tray warning) → no push", events.EventNotification, priorityMedium, int32(8), 0, false},
 		{"low priority APPROVAL → push", events.EventNotification, priorityLow, typeApproval, 0, true},                                                  // UT-2.2 [R5]
 		{"high priority APPROVAL → push", events.EventNotification, priorityHigh, typeApproval, 0, true},                                                // UT-2.3
 		{"urgent priority APPROVAL, aged past TTL → still push", events.EventNotification, priorityUrgent, typeApproval, urgentTTL + time.Minute, true}, // approval override ignores age
@@ -123,6 +124,37 @@ func TestRenotifyApproval(t *testing.T) {
 func TestRenotifyComplete(t *testing.T) {
 	notif := buildCompletedNotification(&session.Instance{ID: "s1", Title: "S1"})
 	assert.False(t, notif.Renotify)
+}
+
+// TestBuildStatusChangeNotification_should_Suppress_When_SessionHidden guards
+// the fix for hidden one-shot dispatches (Diagnose & Nudge, review) firing a
+// generic, uninformative "Session Completed" push built from their raw
+// internal title (e.g. "diagnose:e32264b0:...") whose deep link has nowhere
+// useful to go, since Hidden sessions are excluded from the default session
+// list. Mirrors review_queue_manager.go's suppressForHidden precedent.
+func TestBuildStatusChangeNotification_should_Suppress_When_SessionHidden(t *testing.T) {
+	inst := &session.Instance{ID: "diagnose-1", Title: "diagnose:abc123:1", Status: session.Stopped, Hidden: true}
+	event := &events.Event{
+		Type:          events.EventSessionUpdated,
+		Session:       inst,
+		UpdatedFields: []string{"status"},
+	}
+
+	_, ok := buildStatusChangeNotification(event)
+	assert.False(t, ok, "a Hidden session completing must not produce a push notification")
+}
+
+func TestBuildStatusChangeNotification_should_Deliver_When_SessionNotHidden(t *testing.T) {
+	inst := &session.Instance{ID: "normal-1", Title: "My Session", Status: session.Stopped, Hidden: false}
+	event := &events.Event{
+		Type:          events.EventSessionUpdated,
+		Session:       inst,
+		UpdatedFields: []string{"status"},
+	}
+
+	notif, ok := buildStatusChangeNotification(event)
+	require.True(t, ok)
+	assert.Equal(t, "Session Completed", notif.Title)
 }
 
 // BV-3 — Empty notifier slice does not panic
@@ -366,3 +398,53 @@ func (e *errorNotifier) Send(_ context.Context, _ DeliveryNotification) error {
 	return fmt.Errorf("notifier %q always fails", e.name)
 }
 func (e *errorNotifier) Name() string { return e.name }
+
+// Contract PR 1: an inline (history-record-backed) push deep-links to its
+// notification; the status-change and approval builders keep the two-parameter form.
+func TestInlineNotificationURL_ShouldAppendNotificationId_WhenEventHasNotificationID(t *testing.T) {
+	n, ok := buildInlineNotification(&events.Event{
+		Type:                 events.EventNotification,
+		NotificationPriority: priorityUrgent,
+		NotificationType:     typeApproval,
+		NotificationTitle:    "Approval needed",
+		NotificationMessage:  "Please review",
+		NotificationID:       "n-42",
+		SessionID:            "session-abc",
+		Timestamp:            time.Now(),
+	})
+	require.True(t, ok)
+	assert.Equal(t, "/?session=session-abc&tab=terminal&notification=n-42", n.Data["url"])
+}
+
+func TestInlineNotificationURL_ShouldKeepTwoParameterForm_WhenStatusChangeOrApproval(t *testing.T) {
+	want := "/?session=session-abc-123&tab=terminal"
+	sess := &session.Instance{ID: "session-abc-123", Title: "t"}
+	assert.Equal(t, want, buildApprovalNotification(sess).Data["url"])
+	assert.Equal(t, want, buildCompletedNotification(sess).Data["url"])
+}
+
+// T-PS-06: a hidden session's failure reaches push through the inline path with
+// its own title, never the status-change "Session Completed" copy.
+func TestInlinePush_ShouldTitleFailureNotSessionCompleted_WhenHiddenFailure(t *testing.T) {
+	n, ok := buildInlineNotification(&events.Event{
+		Type:                 events.EventNotification,
+		NotificationPriority: priorityUrgent,
+		NotificationType:     typeUnspecified,
+		NotificationTitle:    "Review failed: my-review",
+		NotificationMessage:  "The review session exited with an error",
+		NotificationID:       "n-fail-1",
+		SessionID:            "hidden-review-uuid",
+		Timestamp:            time.Now(),
+	})
+	require.True(t, ok)
+	assert.Equal(t, "Review failed: my-review", n.Title)
+	assert.NotEqual(t, buildCompletedNotification(&session.Instance{ID: "x", Title: "t"}).Title, n.Title)
+	assert.Equal(t, "notification-n-fail-1", n.Tag)
+}
+
+// T-OB-29 (push half): the synthetic probe is a medium-priority ERROR, which
+// is neither URGENT nor an approval, so it never pushes.
+func TestShouldNotify_ShouldBeFalse_WhenMediumPriorityErrorProbe(t *testing.T) {
+	const typeError = int32(7) // NOTIFICATION_TYPE_ERROR
+	assert.False(t, shouldNotify(events.EventNotification, priorityMedium, typeError, time.Minute))
+}

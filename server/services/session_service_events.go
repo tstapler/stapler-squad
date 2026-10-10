@@ -74,6 +74,7 @@ func (l *coldRestoreOutcomeListener) OnLifecycleEvent(event session.LifecycleEve
 // Hidden instances (e.g. headless review sessions) never surface this.
 func (s *SessionService) onColdRestoreLostHistory(inst *session.Instance) {
 	if inst.Hidden {
+		s.countLegacyHiddenSuppressed("session_events_cold_restore", int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING))
 		return
 	}
 	linkedItemID := s.rateLimitLinkedItemID(inst)
@@ -113,6 +114,9 @@ func (l *sessionExitedPublisher) OnLifecycleEvent(event session.LifecycleEvent, 
 	go func() {
 		_ = l.svc.storage.SaveInstances([]*session.Instance{l.inst})
 		l.svc.eventBus.Publish(events.NewSessionUpdatedEvent(l.inst, []string{"status"}))
+		// Status is already Crashed here: MarkCrashed completes its transition
+		// before firing EventExited, and this goroutine reads it afterwards.
+		l.svc.publishCrash(l.inst.Snapshot())
 	}()
 }
 
@@ -190,6 +194,9 @@ func (s *SessionService) rateLimitLinkedItemID(inst *session.Instance) string {
 // Hidden instances (e.g. headless review sessions) never surface a
 // notification for this.
 func (s *SessionService) onRateLimitDetected(inst *session.Instance, sessionID string, resetTime time.Time) {
+	if inst.Hidden {
+		s.countLegacyHiddenSuppressed("session_events_rate_limit_detected", int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING))
+	}
 	if !inst.Hidden {
 		linkedItemID := s.rateLimitLinkedItemID(inst)
 
@@ -231,6 +238,9 @@ func (s *SessionService) onRateLimitDetected(inst *session.Instance, sessionID s
 // dispatch closure picks the function that matches the outcome instead of
 // passing a flag.
 func (s *SessionService) onRateLimitRecoverySucceeded(inst *session.Instance, sessionID string) {
+	if inst.Hidden {
+		s.countLegacyHiddenSuppressed("session_events_recovery_succeeded", int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO))
+	}
 	if !inst.Hidden {
 		linkedItemID := s.rateLimitLinkedItemID(inst)
 		s.eventBus.Publish(events.NewNotificationEvent(
@@ -249,6 +259,9 @@ func (s *SessionService) onRateLimitRecoverySucceeded(inst *session.Instance, se
 // counterpart -- see its doc comment. errMsg is the auto-resume failure
 // reason, surfaced in the notification body.
 func (s *SessionService) onRateLimitRecoveryFailed(inst *session.Instance, sessionID, errMsg string) {
+	if inst.Hidden {
+		s.countLegacyHiddenSuppressed("session_events_recovery_failed", int32(sessionv1.NotificationType_NOTIFICATION_TYPE_FAILURE))
+	}
 	if !inst.Hidden {
 		linkedItemID := s.rateLimitLinkedItemID(inst)
 		s.eventBus.Publish(events.NewNotificationEvent(

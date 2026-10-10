@@ -14,11 +14,35 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 )
 
+// SessionDeliveryGate decides whether the status-change push (the path the bus
+// publish filter cannot reach: it is built from EventSessionUpdated, not an
+// EventNotification) may be delivered for a session. sessionID is the session's
+// UUID, or its title when it has none. Implemented by the delivery gate.
+type SessionDeliveryGate interface {
+	AllowStatusChange(sessionID string) bool
+}
+
+// DeliveryOption configures StartDeliverySubscriber.
+type DeliveryOption func(*deliveryConfig)
+
+type deliveryConfig struct {
+	gate SessionDeliveryGate
+}
+
+// WithSessionDeliveryGate drops status-change pushes the gate refuses.
+func WithSessionDeliveryGate(g SessionDeliveryGate) DeliveryOption {
+	return func(c *deliveryConfig) { c.gate = g }
+}
+
 // StartDeliverySubscriber subscribes to the EventBus and fans push notifications
 // out to all provided Notifiers. It exits when ctx is cancelled.
 // A single failing Notifier does not prevent delivery to the others.
 // The returned channel is closed when the subscriber goroutine has fully exited.
-func StartDeliverySubscriber(ctx context.Context, bus *events.EventBus, notifiers []Notifier) <-chan struct{} {
+func StartDeliverySubscriber(ctx context.Context, bus *events.EventBus, notifiers []Notifier, opts ...DeliveryOption) <-chan struct{} {
+	var cfg deliveryConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
 	done := make(chan struct{})
 	if bus == nil {
 		log.Warn("DeliverySubscriber EventBus is nil, not starting")
@@ -32,14 +56,14 @@ func StartDeliverySubscriber(ctx context.Context, bus *events.EventBus, notifier
 	ch, _ := bus.Subscribe(ctx)
 	dedup := newDedupTracker(dedupWindow)
 
-	go runDeliveryLoop(ctx, ch, dedup, notifiers, done)
+	go runDeliveryLoop(ctx, ch, dedup, notifiers, cfg.gate, done)
 	return done
 }
 
 // runDeliveryLoop drains ch until it closes or ctx is cancelled, delivering
 // each event via deliverEvent, then closes done. Run as its own goroutine by
 // StartDeliverySubscriber.
-func runDeliveryLoop(ctx context.Context, ch <-chan *events.Event, dedup *dedupTracker, notifiers []Notifier, done chan<- struct{}) {
+func runDeliveryLoop(ctx context.Context, ch <-chan *events.Event, dedup *dedupTracker, notifiers []Notifier, gate SessionDeliveryGate, done chan<- struct{}) {
 	defer close(done)
 	log.Info("DeliverySubscriber started", "notifiers", len(notifiers))
 	defer log.Info("DeliverySubscriber stopped")
@@ -50,7 +74,7 @@ func runDeliveryLoop(ctx context.Context, ch <-chan *events.Event, dedup *dedupT
 			if !ok {
 				return
 			}
-			deliverEvent(ctx, event, dedup, notifiers)
+			deliverEvent(ctx, event, dedup, notifiers, gate)
 		case <-ctx.Done():
 			return
 		}
@@ -60,7 +84,7 @@ func runDeliveryLoop(ctx context.Context, ch <-chan *events.Event, dedup *dedupT
 // deliverEvent converts event into a DeliveryNotification and fans it out to
 // notifiers, dropping the event entirely if it doesn't warrant a notification
 // or if dedup has already seen its tag within its window.
-func deliverEvent(ctx context.Context, event *events.Event, dedup *dedupTracker, notifiers []Notifier) {
+func deliverEvent(ctx context.Context, event *events.Event, dedup *dedupTracker, notifiers []Notifier, gate SessionDeliveryGate) {
 	if event == nil {
 		return
 	}
@@ -68,10 +92,23 @@ func deliverEvent(ctx context.Context, event *events.Event, dedup *dedupTracker,
 	if !ok {
 		return
 	}
+	if gate != nil && event.Type == events.EventSessionUpdated && !gate.AllowStatusChange(gateSessionID(event.Session)) {
+		return
+	}
 	if !dedup.allow(dn.Tag) {
 		return
 	}
 	fanout(ctx, notifiers, dn)
+}
+
+// gateSessionID is the identity the delivery gate resolves: the UUID, or the
+// title for a session that has none. Read via the lock-free snapshot.
+func gateSessionID(sess *session.Instance) string {
+	snap := sess.Snapshot()
+	if snap.UUID != "" {
+		return snap.UUID
+	}
+	return snap.Title
 }
 
 // dedupTracker suppresses re-delivering a notification with the same tag
@@ -100,12 +137,12 @@ func (d *dedupTracker) allow(tag string) bool {
 
 // StartPushSubscriber is the legacy entry-point. New code should use
 // StartDeliverySubscriber with an explicit []Notifier slice.
-func StartPushSubscriber(ctx context.Context, bus *events.EventBus, pushService *services.PushService) {
+func StartPushSubscriber(ctx context.Context, bus *events.EventBus, pushService *services.PushService, opts ...DeliveryOption) {
 	if pushService == nil {
 		log.Warn("PushSubscriber push service is nil, not starting")
 		return
 	}
-	StartDeliverySubscriber(ctx, bus, []Notifier{NewWebPushNotifier(pushService)})
+	StartDeliverySubscriber(ctx, bus, []Notifier{NewWebPushNotifier(pushService)}, opts...)
 }
 
 // shouldNotify returns true when the event/priority/type combination warrants a
@@ -173,6 +210,17 @@ func buildStatusChangeNotification(event *events.Event) (DeliveryNotification, b
 	if session.Status(sess.GetStatus()) != session.Stopped {
 		return DeliveryNotification{}, false
 	}
+	// A Hidden (headless/background) session — a one-shot Diagnose & Nudge or
+	// review dispatch — completing is routine, not something to push: its
+	// title is an internal dispatch ID ("diagnose:<item>:<ts>"), it carries no
+	// information about what the session actually did, and the session itself
+	// is deliberately excluded from the default session list, so the push's
+	// "Open" deep link has nowhere useful to go. Mirrors
+	// review_queue_manager.go's suppressForHidden precedent for the same
+	// class of noise.
+	if sess.Snapshot().Hidden {
+		return DeliveryNotification{}, false
+	}
 
 	title := "Session Completed"
 	body := fmt.Sprintf("Session '%s' has completed", sess.GetTitle())
@@ -208,7 +256,7 @@ func buildInlineNotification(event *events.Event) (DeliveryNotification, bool) {
 			"sessionId":        event.SessionID,
 			"notificationType": notificationTypeName(event.NotificationType),
 			"timestamp":        time.Now().Unix(),
-			"url":              buildSessionURL(event.SessionID),
+			"url":              buildNotificationURL(event.SessionID, event.NotificationID),
 		}
 	}
 
@@ -301,6 +349,16 @@ func baseDataMap(sess *session.Instance, notifType string) map[string]interface{
 // buildSessionURL returns the deep-link URL for a session, using the stable ID.
 func buildSessionURL(sessionID string) string {
 	return "/?session=" + url.QueryEscape(sessionID) + "&tab=terminal"
+}
+
+// buildNotificationURL is buildSessionURL plus a notification=<id> deep-link
+// parameter when the push is backed by a history record.
+func buildNotificationURL(sessionID, notificationID string) string {
+	u := buildSessionURL(sessionID)
+	if notificationID == "" {
+		return u
+	}
+	return u + "&notification=" + url.QueryEscape(notificationID)
 }
 
 // notificationTypeName maps a proto NotificationType int32 to a string.

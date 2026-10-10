@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1555,6 +1556,27 @@ func TestUpdateSession_TitleRename_DoesNotOrphanOldRow(t *testing.T) {
 		"rename must not leave an orphaned row under the old title (found: %v)", matches)
 }
 
+// A title-only UpdateSession must refresh the delivery gate's visibility index, or
+// events keyed by the new title resolve Unresolved (delivered) until the backstop.
+func TestUpdateSession_TitleRename_ShouldIndexNewTitleForDeliveryGate(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+	gate := deliverygate.NewGate()
+	fix.svc.deliveryGate = gate
+
+	addPausedSession(t, fix, "gate-old-title")
+	newTitle := "gate-new-title"
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:    "gate-old-title",
+		Title: &newTitle,
+	}))
+	require.NoError(t, err)
+
+	res := gate.Resolver().Resolve(newTitle, nil)
+	assert.Equal(t, deliverygate.VisibilityVisible, res.Visibility)
+}
+
 // TestUpdateSession_TitleAndProgramCombo_DoesNotDuplicateRow is the regression test for a
 // bug found in code review: when a single UpdateSession request changes both Title and
 // Program, the Program branch's SwitchProgram callback used to persist via SaveInstances
@@ -2063,7 +2085,7 @@ func TestUpdateSession_SteerMessage_AutonomousNilController_NowReturnsError(t *t
 }
 
 // --------------------------------------------------------------------------
-// steerInstance — autonomous branch error/timeout paths (Story 1.1.2)
+// steerInternal — autonomous branch error/timeout paths (Story 1.1.2)
 // --------------------------------------------------------------------------
 
 // fakeControllerInstance is a minimal session.InstanceContext double that lets
@@ -2098,13 +2120,13 @@ func (f *fakeControllerInstance) GetProgram() string                  { return "
 //     SendCommandImmediate's underlying executeCommand loop then observes
 //     ctx.Done() as the only ready select case on its very first iteration —
 //     deterministic, no real PTY-timing race — giving a fast, genuine
-//     "success" outcome (steerInstance's autonomous branch treats a nil
+//     "success" outcome (steerInternal's autonomous branch treats a nil
 //     SendCommandImmediate error as success regardless of the
 //     *ExecutionResult's own internal Error field; see ExecuteImmediate in
 //     session/command_executor.go). An earlier version of this helper
 //     instead closed the slave fd immediately to force an EOF/hangup on the
 //     master read — that raced the kernel's hangup delivery against
-//     steerInstance's 5s bound and flaked under -count=5. Used by
+//     steerInternal's 5s bound and flaked under -count=5. Used by
 //     TestUpdateSession_SteerMessage_AutonomousSession_StillUsesController.
 //   - false: the context is left live and the slave stays open for the whole
 //     test body (closed only in t.Cleanup, after assertions already ran), so
@@ -2163,12 +2185,12 @@ func TestSteerInstance_AutonomousNilController_ReturnsError(t *testing.T) {
 		UpdatedAt:      time.Now(),
 	}
 
-	err := fix.svc.steerInstance(context.Background(), inst, "fix the conflict")
+	err := fix.svc.steerInternal(context.Background(), inst, "fix the conflict")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "controller not started")
 
 	var connectErr *connect.Error
-	assert.False(t, errors.As(err, &connectErr), "steerInstance must never return a connect.Error — UpdateSession alone translates to a connect.Code")
+	assert.False(t, errors.As(err, &connectErr), "steerInternal must never return a connect.Error — UpdateSession alone translates to a connect.Code")
 }
 
 // TestSteerInstance_AutonomousSendCommandImmediateError_ReturnsError verifies
@@ -2193,18 +2215,18 @@ func TestSteerInstance_AutonomousSendCommandImmediateError_ReturnsError(t *testi
 	}
 	inst.SetControllerForTest(ctrl)
 
-	steerErr := fix.svc.steerInstance(context.Background(), inst, "fix the conflict")
+	steerErr := fix.svc.steerInternal(context.Background(), inst, "fix the conflict")
 	require.Error(t, steerErr)
 	assert.Contains(t, steerErr.Error(), "steer autonomous session")
 
 	var connectErr *connect.Error
-	assert.False(t, errors.As(steerErr, &connectErr), "steerInstance must never return a connect.Error")
+	assert.False(t, errors.As(steerErr, &connectErr), "steerInternal must never return a connect.Error")
 }
 
 // TestSteerInstance_AutonomousSendCommandImmediateHangs_TimesOutRatherThanBlockingForever
 // is the regression test for the unbounded-PTY-write bug: a wedged controller
 // (real, started, but nothing ever drains/responds on its pty) must not be
-// able to hang steerInstance forever — it must return within ~5s wrapping
+// able to hang steerInternal forever — it must return within ~5s wrapping
 // context.DeadlineExceeded.
 func TestSteerInstance_AutonomousSendCommandImmediateHangs_TimesOutRatherThanBlockingForever(t *testing.T) {
 	fix := setupForkTestFixture(t)
@@ -2226,7 +2248,7 @@ func TestSteerInstance_AutonomousSendCommandImmediateHangs_TimesOutRatherThanBlo
 	done := make(chan result, 1)
 	start := time.Now()
 	go func() {
-		done <- result{err: fix.svc.steerInstance(context.Background(), inst, "fix the conflict")}
+		done <- result{err: fix.svc.steerInternal(context.Background(), inst, "fix the conflict")}
 	}()
 
 	select {
@@ -2234,9 +2256,9 @@ func TestSteerInstance_AutonomousSendCommandImmediateHangs_TimesOutRatherThanBlo
 		elapsed := time.Since(start)
 		require.Error(t, r.err)
 		assert.True(t, errors.Is(r.err, context.DeadlineExceeded), "expected error to wrap context.DeadlineExceeded, got: %v", r.err)
-		assert.Less(t, elapsed, 10*time.Second, "steerInstance must bound the PTY write to ~5s, not block indefinitely")
+		assert.Less(t, elapsed, 10*time.Second, "steerInternal must bound the PTY write to ~5s, not block indefinitely")
 	case <-time.After(15 * time.Second):
-		t.Fatal("steerInstance did not return within 15s — the PTY write timeout did not fire")
+		t.Fatal("steerInternal did not return within 15s — the PTY write timeout did not fire")
 	}
 }
 

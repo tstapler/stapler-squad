@@ -269,6 +269,7 @@ func TestNotifyReviewQueueItem_NoOps_When_WebhookNotConfigured(t *testing.T) {
 	}, 750*time.Millisecond, 20*time.Millisecond, "no send should have been attempted")
 }
 
+// T-OS-01: Slack payload characterization (see slack_gate_test.go).
 func TestNotifyReviewQueueItem_PostsExpectedBlockKitPayload_ToHTTPTestServer(t *testing.T) {
 	t.Parallel()
 	srv, ch := startCapturingSlackServer(t)
@@ -333,6 +334,7 @@ func TestNotifyApprovalPending_NoOps_When_WebhookNotConfigured(t *testing.T) {
 	}, 750*time.Millisecond, 20*time.Millisecond, "no send should have been attempted")
 }
 
+// T-OS-01: Slack payload characterization (see slack_gate_test.go).
 func TestNotifyApprovalPending_PostsExpectedPayload_ToHTTPTestServer(t *testing.T) {
 	t.Parallel()
 	srv, ch := startCapturingSlackServer(t)
