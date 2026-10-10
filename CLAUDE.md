@@ -361,4 +361,5 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Up Next PR tab, "Ask to fix" button, `STAPLER_SQUAD_PR_POLL_DEGRADED`, nudge/funnel log lines | `docs/how-to/use-up-next-pr-tabs-and-ask-to-fix.md` |
 | Capture the terminal stream (raw output, drops, resizes) to diagnose garbled terminals — records secrets | `docs/how-to/capture-terminal-stream-tap.md` |
 | Playwright Chromium install hangs during extraction | `docs/how-to/fix-playwright-chromium-install-stall.md` |
+| Add a custom UI theme (`~/.stapler-squad/themes/*.json`, `GET /api/themes`) | `docs/how-to/add-user-themes.md` |
 | Dispatch backlog work to Google Jules (prerequisites, badge states, escape hatch) | `docs/how-to/dispatch-work-to-google-jules.md` |
