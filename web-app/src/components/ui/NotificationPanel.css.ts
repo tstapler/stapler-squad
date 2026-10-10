@@ -971,14 +971,15 @@ export const trayVariant = styleVariants({
       left: 0,
       right: 0,
       bottom: "max(var(--keyboard-height, 0px), var(--bottom-nav-height, 0px))",
-      // 25% of the visual viewport, but never so short that the header leaves no list (small phones).
-      height: "max(calc(var(--viewport-height, 100dvh) * 0.25), 220px)",
+      // TS-1: peek stays inside 22-28% of the viewport; a pixel floor broke that below 786px.
+      height: "calc(var(--viewport-height, 100dvh) * 0.27)",
       maxHeight: "var(--viewport-height, 100dvh)",
       transform: "translateY(100%)",
       borderTop: `1px solid ${vars.color.borderColor}`,
       borderTopLeftRadius: "12px",
       borderTopRightRadius: "12px",
-      paddingBottom: "env(safe-area-inset-bottom, 0px)",
+      // The bottom nav's measured height already includes the inset; pad only what it does not cover (TS-7).
+      paddingBottom: "max(0px, calc(env(safe-area-inset-bottom, 0px) - var(--bottom-nav-height, 0px)))",
       selectors: {
         '&[data-state="open"]': { transform: "translateY(0)" },
         '&[data-sheet="expanded"]': { height: "calc(var(--viewport-height, 100dvh) * 0.85)" },

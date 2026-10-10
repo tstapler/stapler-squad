@@ -270,7 +270,7 @@ export function NotificationPanel() {
     [notificationHistory, bulk.hiddenIds],
   );
 
-  const stable = useStableRowOrder(visibleHistory, v2 && isPanelOpen && scrolled);
+  const stable = useStableRowOrder(visibleHistory, v2 && isPanelOpen, scrolled);
 
   const filteredNotifications = useMemo(() => {
     let rows = stable.items.filter((n) => n.notificationType !== "auto_approved");

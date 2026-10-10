@@ -1048,6 +1048,24 @@ describe("tray spec gaps (Phase 5)", () => {
     expect(rowTitles()).toHaveLength(3);
   });
 
+  it("duplicate_should_increment_count_without_reordering_when_tray_is_open_at_top (TR-5)", () => {
+    mockHistory = [
+      info("a", "s-a", { timestamp: 3_000 }),
+      info("b", "s-b", { timestamp: 2_000 }),
+    ];
+    const view = render(tree());
+    mockHistory = [
+      info("b", "s-b", { timestamp: 5_000, occurrenceCount: 2 }),
+      info("a", "s-a", { timestamp: 3_000 }),
+    ];
+    view.rerender(tree());
+
+    const rows = rowTitles();
+    expect(rows[0]).toContain("s-a");
+    expect(rows[1]).toContain("s-b");
+    expect(within(screen.getAllByTestId("tray-row")[1]).getByLabelText("2 occurrences")).toHaveTextContent("x2");
+  });
+
   it("tray_should_keep_search_text_and_scroll_when_variant_switches_across_900px (TK-5)", () => {
     mockHistory = [info("a", "s1", { sessionName: "alpha" }), info("b", "s1", { sessionName: "alpha", notificationType: "error" })];
     const view = render(tree(PHONE));
@@ -1377,7 +1395,9 @@ describe("tray spec gaps (Phase 5)", () => {
       return css.slice(from, css.indexOf("],", from));
     };
     // The jsdom run cannot apply a 34px inset; the real-device leg is the operator's DV-3.
-    expect(block("bottomSheet")).toMatch(/paddingBottom: "env\(safe-area-inset-bottom, 0px\)"/);
+    expect(block("bottomSheet")).toMatch(/paddingBottom: "max\(0px, calc\(env\(safe-area-inset-bottom, 0px\) - var\(--bottom-nav-height, 0px\)\)\)"/);
+    // TS-1: no pixel floor on the peek height (it exceeded 28% of the viewport below 786px).
+    expect(block("bottomSheet")).toMatch(/height: "calc\(var\(--viewport-height, 100dvh\) \* 0\.27\)"/);
     expect(block("landscapePanel")).toMatch(/paddingRight: "env\(safe-area-inset-right, 0px\)"/);
     expect(block("landscapePanel")).toMatch(/width: "min\(360px, 50vw\)"/);
   });

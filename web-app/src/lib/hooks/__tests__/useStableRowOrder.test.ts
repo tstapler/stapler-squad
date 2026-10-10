@@ -47,3 +47,37 @@ describe("useStableRowOrder", () => {
     expect(result.current.items).toBe(history);
   });
 });
+
+describe("useStableRowOrder withholdNew", () => {
+  it("freezes a bumped row's recency but shows new rows at once when not withholding", () => {
+    let history = [item("a", 3), item("b", 2)];
+    const { result, rerender } = renderHook(
+      ({ withhold }) => useStableRowOrder(history, true, withhold),
+      { initialProps: { withhold: false } },
+    );
+    rerender({ withhold: false });
+
+    history = [item("b", 10), item("a", 3), item("new", 11)];
+    rerender({ withhold: false });
+    expect(result.current.heldCount).toBe(0);
+    expect(result.current.items.map((n) => [n.id, n.timestamp])).toEqual([
+      ["b", 2],
+      ["a", 3],
+      ["new", 11],
+    ]);
+  });
+
+  it("keeps a row it already showed when withholding starts later", () => {
+    let history = [item("a", 3)];
+    const { result, rerender } = renderHook(
+      ({ withhold }) => useStableRowOrder(history, true, withhold),
+      { initialProps: { withhold: false } },
+    );
+    rerender({ withhold: false });
+    history = [item("new", 5), item("a", 3)];
+    rerender({ withhold: false });
+    rerender({ withhold: true });
+    expect(result.current.heldCount).toBe(0);
+    expect(result.current.items.map((n) => n.id)).toEqual(["new", "a"]);
+  });
+});
