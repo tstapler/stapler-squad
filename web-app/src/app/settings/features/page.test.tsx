@@ -28,6 +28,11 @@ jest.mock("@/components/settings/TymuxRolloutPanel", () => ({
   TymuxRolloutPanel: () => null,
 }));
 
+// The status line has its own test (GateStatusLine.test.tsx); here only its placement matters.
+jest.mock("./GateStatusLine", () => ({
+  GateStatusLine: () => <div data-testid="gate-status-line" />,
+}));
+
 const mockUseFeatureFlags = useFeatureFlags as jest.MockedFunction<typeof useFeatureFlags>;
 
 function makeFlag(overrides: Partial<FeatureFlagMeta> & Pick<FeatureFlagMeta, "name">): FeatureFlagMeta {
@@ -255,5 +260,19 @@ describe("FeaturesPage — pi-support disable warning", () => {
 
     expect(setFlag).toHaveBeenCalledWith("pi-support", true);
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("FeaturesPage_should_RenderGateStatusLineOnlyUnderHiddenSessionGate", () => {
+    mockFlags([
+      makeFlag({ name: "backlog" }),
+      makeFlag({ name: "hidden_session_gate", enabled: false }),
+    ]);
+
+    render(<FeaturesPage />);
+
+    const lines = screen.getAllByTestId("gate-status-line");
+    expect(lines).toHaveLength(1);
+    const row = lines[0].closest('[data-testid="feature-flag-row"]');
+    expect(row?.textContent).toContain("hidden-session delivery gate");
   });
 });
