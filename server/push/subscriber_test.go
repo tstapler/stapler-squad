@@ -125,6 +125,37 @@ func TestRenotifyComplete(t *testing.T) {
 	assert.False(t, notif.Renotify)
 }
 
+// TestBuildStatusChangeNotification_should_Suppress_When_SessionHidden guards
+// the fix for hidden one-shot dispatches (Diagnose & Nudge, review) firing a
+// generic, uninformative "Session Completed" push built from their raw
+// internal title (e.g. "diagnose:e32264b0:...") whose deep link has nowhere
+// useful to go, since Hidden sessions are excluded from the default session
+// list. Mirrors review_queue_manager.go's suppressForHidden precedent.
+func TestBuildStatusChangeNotification_should_Suppress_When_SessionHidden(t *testing.T) {
+	inst := &session.Instance{ID: "diagnose-1", Title: "diagnose:abc123:1", Status: session.Stopped, Hidden: true}
+	event := &events.Event{
+		Type:          events.EventSessionUpdated,
+		Session:       inst,
+		UpdatedFields: []string{"status"},
+	}
+
+	_, ok := buildStatusChangeNotification(event)
+	assert.False(t, ok, "a Hidden session completing must not produce a push notification")
+}
+
+func TestBuildStatusChangeNotification_should_Deliver_When_SessionNotHidden(t *testing.T) {
+	inst := &session.Instance{ID: "normal-1", Title: "My Session", Status: session.Stopped, Hidden: false}
+	event := &events.Event{
+		Type:          events.EventSessionUpdated,
+		Session:       inst,
+		UpdatedFields: []string{"status"},
+	}
+
+	notif, ok := buildStatusChangeNotification(event)
+	require.True(t, ok)
+	assert.Equal(t, "Session Completed", notif.Title)
+}
+
 // BV-3 — Empty notifier slice does not panic
 func TestStartDeliverySubscriberEmptyNotifiers(t *testing.T) {
 	bus := events.NewEventBus(10)

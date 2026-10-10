@@ -2477,6 +2477,40 @@ func TestReconcileTerminalItemSessions_should_ArchiveAndKillReviewSession_When_I
 	assert.Contains(t, archiver.killedUUIDs, "leaked-live-review-session")
 }
 
+// TestReconcileTerminalItemSessions_should_ArchiveAndKillDiagnoseSession_When_ItemAlreadyDone
+// guards the fix for diagnose sessions never getting cleaned up: a finished
+// Diagnose & Nudge dispatch (Hidden+OneShot, like review) used to be excluded
+// from IsTmuxBackedSessionRole and so was never archived/killed, leaking
+// indefinitely as a Stopped+Hidden session — the same leak class the
+// 2026-07-29 OOM incident this predicate exists to prevent.
+func TestReconcileTerminalItemSessions_should_ArchiveAndKillDiagnoseSession_When_ItemAlreadyDone(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "done item with a still-live diagnose session",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "leaked-live-diagnose-session",
+		SessionRole: SessionRoleDiagnose,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	archiver := &fakeSessionArchiver{}
+	listener.SetSessionArchiver(archiver)
+
+	listener.reconcileTerminalItemSessions(ctx)
+
+	assert.Contains(t, archiver.archivedUUIDs, "leaked-live-diagnose-session")
+	assert.Contains(t, archiver.killedUUIDs, "leaked-live-diagnose-session")
+}
+
 // TestReconcileTerminalItemSessions_should_SkipTmuxKill_When_ItemSessionRoleIsJulesWork
 // guards Story 2.1.1: a Jules session has no local tmux pane (IsTmuxBackedSessionRole
 // excludes SessionRoleJulesWork), so the sweep must not attempt to archive/kill it —

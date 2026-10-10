@@ -265,6 +265,7 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
     onHibernateSession: hibernateSession ? (id: string) => void hibernateSession(id) : undefined,
     onResumeHibernatedSession: resumeHibernatedSession ? (id: string) => void resumeHibernatedSession(id) : undefined,
     onFetchArchivedSessions: (includeArchived: boolean) => /* analytics-exempt */ void listSessions({ includeArchived }),
+    onFetchHiddenSessions: (includeHidden: boolean) => /* analytics-exempt */ void listSessions({ includeHidden }),
     storageKeyPrefix: `pane-${pane.id}.`,
     backlogIndex,
   };

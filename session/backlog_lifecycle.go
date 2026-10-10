@@ -115,10 +115,15 @@ type BacklogLifecycleListener struct {
 	// dashboardBaseURLFnMu guards dashboardBaseURLFn for concurrent Set/get
 	// access. Resolves the base URL used to build a clickable deep link back
 	// to a backlog item from a PR body (see backlogItemLink in
-	// backlog_lifecycle_pr.go); defaults to localhost:8543 and is overridden
-	// at startup via SetDashboardBaseURLFn with the real bound address.
+	// backlog_lifecycle_pr.go). Defaults to "" (text-only footer); the server
+	// wires a non-loopback address via SetDashboardBaseURLFn, and loopback
+	// results are always dropped by getDashboardBaseURL.
 	dashboardBaseURLFnMu sync.RWMutex
 	dashboardBaseURLFn   func() string
+
+	// hostRefFn names this instance (host ID and hostname) in the PR footer;
+	// guarded by dashboardBaseURLFnMu. Nil means the footer carries no host.
+	hostRefFn func() (HostID, string)
 
 	// noopThresholdMu guards noopThresholdFn (see SetNoopDispatchThresholdFn).
 	noopThresholdMu sync.RWMutex
@@ -330,7 +335,8 @@ func (l *BacklogLifecycleListener) SetHeadlessPool(p *headless.Pool) {
 }
 
 // SetDashboardBaseURLFn overrides the base URL used by backlogItemLink to
-// build a deep link back to a backlog item in agent-created PR bodies.
+// build a deep link back to a backlog item in agent-created PR bodies. fn must
+// return a non-loopback URL or ""; loopback URLs are discarded.
 func (l *BacklogLifecycleListener) SetDashboardBaseURLFn(fn func() string) {
 	l.dashboardBaseURLFnMu.Lock()
 	defer l.dashboardBaseURLFnMu.Unlock()
@@ -741,7 +747,30 @@ func (l *BacklogLifecycleListener) getHeadlessCaller() headless.PoolClient {
 func (l *BacklogLifecycleListener) getDashboardBaseURL() string {
 	l.dashboardBaseURLFnMu.RLock()
 	defer l.dashboardBaseURLFnMu.RUnlock()
-	return l.dashboardBaseURLFn()
+	if l.dashboardBaseURLFn == nil {
+		return ""
+	}
+	return NonLoopbackBaseURL(l.dashboardBaseURLFn())
+}
+
+// SetHostRefFn wires the resolver that names this instance (host ID and
+// ssq:// hostname) in PR-body footers. Either value may be empty.
+func (l *BacklogLifecycleListener) SetHostRefFn(fn func() (HostID, string)) {
+	l.dashboardBaseURLFnMu.Lock()
+	defer l.dashboardBaseURLFnMu.Unlock()
+	l.hostRefFn = fn
+}
+
+// getPRFooterOrigin resolves who created a PR, for prFooter.
+func (l *BacklogLifecycleListener) getPRFooterOrigin() PRFooterOrigin {
+	origin := PRFooterOrigin{BaseURL: l.getDashboardBaseURL()}
+	l.dashboardBaseURLFnMu.RLock()
+	fn := l.hostRefFn
+	l.dashboardBaseURLFnMu.RUnlock()
+	if fn != nil {
+		origin.HostID, origin.Hostname = fn()
+	}
+	return origin
 }
 
 // Shutdown cancels in-flight review gate calls. Safe to call concurrently.
@@ -770,7 +799,7 @@ func newListenerBase(storage *Storage, pipelineEngine PipelineEngine, livenessEn
 		branchReconciler:        git.MergeMainIntoWorktree,
 		orphanedPRFinder:        defaultOrphanedPRFinder,
 		prByNumberFinder:        defaultPRByNumberFinder,
-		dashboardBaseURLFn:      func() string { return "http://localhost:8543" },
+		dashboardBaseURLFn:      func() string { return "" },
 	}
 	l.runner = NewReviewGateRunner(storage, l.getAutoReopener, l.getNotifier, l.getSessionCreator, pipelineEngine)
 	return l

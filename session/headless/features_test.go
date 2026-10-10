@@ -83,6 +83,22 @@ func TestDraftPRDescription_ReturnsText_WhenFakeRunnerResponds(t *testing.T) {
 	assert.Equal(t, prText, result)
 }
 
+// TestDraftPRDescription_PreservesMarkdownLineBreaks_WhenSessionResumed covers
+// the resumed-call path, which reads plain-text stdout line by line and once
+// dropped every newline (the PR body began "## SummaryQuery blocks…").
+func TestDraftPRDescription_PreservesMarkdownLineBreaks_WhenSessionResumed(t *testing.T) {
+	t.Parallel()
+	prText := "## Summary\n\nQuery blocks were run together.\n\n## Test plan\n- Unit tests added"
+	runner := NewFakeRunner(firstCallJSON("s1", "warm-up"), prText+"\n")
+	pool := NewPoolWithRunner(PoolConfig{}, runner)
+
+	_, _, err := DraftPRDescription(context.Background(), pool, "T", "D", "diff content", "b")
+	require.NoError(t, err)
+	result, _, err := DraftPRDescription(context.Background(), pool, "T", "D", "diff content", "b")
+	require.NoError(t, err)
+	assert.Equal(t, prText, result)
+}
+
 // TestDraftPRDescription_TruncatesDiff_WhenOver40000Bytes verifies truncation.
 func TestDraftPRDescription_TruncatesDiff_WhenOver40000Bytes(t *testing.T) {
 	t.Parallel()

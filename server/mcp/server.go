@@ -102,7 +102,7 @@ func NewCore(
 		// reuses the same liveFinder guard as registerTerminalTools above —
 		// diagnose_nudge_session needs live-instance lookup for the same
 		// reason write_to_session does.
-		registerDiagnoseTools(s, &diagnoseHandlers{storage: storage, live: liveFinder})
+		registerDiagnoseTools(s, &diagnoseHandlers{storage: storage, live: liveFinder, eventBus: eventBus})
 	}
 	if prCache != nil {
 		registerGitHubTools(s, &githubHandlers{cache: prCache, store: store, svc: svc})
