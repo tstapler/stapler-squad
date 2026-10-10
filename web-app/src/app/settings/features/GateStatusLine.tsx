@@ -1,11 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { createClient } from "@connectrpc/connect";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
-import { getConnectTransport } from "@/lib/api/transport";
-import { SessionService } from "@/gen/session/v1/session_pb";
+import { GATE_STATS_POLL_MS, loadGateStats, useGateStats } from "./useGateStats";
 
 /** The slice of GetDeliveryGateStatsResponse the status line reads. */
 export interface GateStatsLike {
@@ -17,7 +14,7 @@ export interface GateStatsLike {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-export const GATE_STATS_POLL_MS = 30_000;
+export { GATE_STATS_POLL_MS };
 
 /** Buckets are hourly, so "last 24h" means buckets that started within 24h. */
 function last24hCount(stats: GateStatsLike, counter: string, now: Date): number {
@@ -53,34 +50,12 @@ interface GateStatusLineProps {
 
 /**
  * The standing reminder under hidden_session_gate: reads GetDeliveryGateStats
- * while the page is open and stops polling when it unmounts. Failures render
- * nothing (the flag row is still usable).
+ * (one poller shared with the kind overrides) while the page is open and stops
+ * polling when it unmounts. Failures render nothing (the flag row is still usable).
  */
 export function GateStatusLine({ className, fetchStats, pollMs = GATE_STATS_POLL_MS }: GateStatusLineProps) {
-  const [text, setText] = useState<string | null>(null);
-  const defaultFetch = useMemo(() => {
-    const client = createClient(SessionService, getConnectTransport());
-    return () => client.getDeliveryGateStats({});
-  }, []);
-  const load = fetchStats ?? defaultFetch;
-
-  useEffect(() => {
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const stats = await load();
-        if (!cancelled) setText(summarizeGateStats(stats, new Date()));
-      } catch {
-        if (!cancelled) setText(null);
-      }
-    };
-    void tick();
-    const id = setInterval(() => void tick(), pollMs);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [load, pollMs]);
+  const stats = useGateStats(fetchStats ?? loadGateStats, pollMs);
+  const text = stats ? summarizeGateStats(stats, new Date()) : null;
 
   if (!text) return null;
   return (

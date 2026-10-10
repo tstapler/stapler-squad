@@ -1,5 +1,5 @@
 import React from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { GATE_OVERRIDE_KINDS, GateKindOverrides, modeOf } from "./GateKindOverrides";
 
 jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));
@@ -77,6 +77,23 @@ describe("GateKindOverrides", () => {
       expect(screen.getByTestId("gate-override-count-review").textContent).toBe(" (12 events in the last 24h)"),
     );
     expect(screen.getByTestId("gate-override-count-diagnose").textContent).toBe(" (0 events in the last 24h)");
+  });
+
+  it("GateKindOverrides_should_KeepOneTabStopAndMoveSelectionWithArrowKeys_When_RadioGroupFocused", async () => {
+    const onChange = jest.fn();
+    await renderOverrides(
+      <GateKindOverrides scopes={{ "kind:review": true }} onChange={onChange} onReset={jest.fn()} fetchCounts={noCounts} pollMs={1e9} />,
+    );
+    const group = within(screen.getByTestId("gate-override-review"));
+    const radios = group.getAllByRole("radio");
+    expect(radios.map((r) => r.getAttribute("tabindex"))).toEqual(["-1", "0", "-1"]);
+
+    fireEvent.keyDown(radios[1], { key: "ArrowRight" });
+    expect(onChange).toHaveBeenCalledWith("kind:review", "off");
+    expect(document.activeElement).toBe(radios[2]);
+
+    fireEvent.keyDown(radios[1], { key: "ArrowLeft" });
+    expect(onChange).toHaveBeenCalledWith("kind:review", "inherit");
   });
 
   it("GateKindOverrides_should_CallOnReset_When_ResetToDefaultClicked", async () => {

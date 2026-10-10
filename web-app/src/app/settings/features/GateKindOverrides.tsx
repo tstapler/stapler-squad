@@ -1,9 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { createClient } from "@connectrpc/connect";
-import { getConnectTransport } from "@/lib/api/transport";
-import { SessionService } from "@/gen/session/v1/session_pb";
+import { useRef } from "react";
+import { loadGateStats, useGateStats } from "./useGateStats";
 import {
   flagDescription,
   overrides,
@@ -26,6 +24,11 @@ export const GATE_OVERRIDE_KINDS = ["review", "diagnose", "other"] as const;
 export type OverrideMode = "inherit" | "on" | "off";
 
 export const OVERRIDE_POLL_MS = 30_000;
+
+function countsOf(raw: { eventsByKind24h?: Record<string, bigint | number> } | null): Record<string, number> | null {
+  if (!raw?.eventsByKind24h) return null;
+  return Object.fromEntries(Object.entries(raw.eventsByKind24h).map(([k, v]) => [k, Number(v)]));
+}
 
 const MODES: ReadonlyArray<{ mode: OverrideMode; label: string }> = [
   { mode: "inherit", label: "Inherit" },
@@ -70,33 +73,19 @@ export function GateKindOverrides({
   fetchCounts,
   pollMs = OVERRIDE_POLL_MS,
 }: GateKindOverridesProps) {
-  const [counts, setCounts] = useState<Record<string, number> | null>(null);
-  const defaultFetch = useMemo(() => {
-    const client = createClient(SessionService, getConnectTransport());
-    return async () => {
-      const res = await client.getDeliveryGateStats({});
-      return Object.fromEntries(Object.entries(res.eventsByKind24h).map(([k, v]) => [k, Number(v)]));
-    };
-  }, []);
-  const load = fetchCounts ?? defaultFetch;
+  // Without a seam this reads the same shared poller as GateStatusLine (one request per tick).
+  const raw = useGateStats<unknown>((fetchCounts ?? loadGateStats) as () => Promise<unknown>, pollMs);
+  const counts = fetchCounts ? (raw as Record<string, number> | null) : countsOf(raw as Parameters<typeof countsOf>[0]);
+  const radioRefs = useRef<Record<string, Array<HTMLButtonElement | null>>>({});
 
-  useEffect(() => {
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const c = await load();
-        if (!cancelled) setCounts(c);
-      } catch {
-        if (!cancelled) setCounts(null);
-      }
-    };
-    void tick();
-    const id = setInterval(() => void tick(), pollMs);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [load, pollMs]);
+  const onRadioKey = (e: React.KeyboardEvent, kind: string, index: number, current: OverrideMode) => {
+    const step = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+    if (step === 0) return;
+    e.preventDefault();
+    const next = (index + step + MODES.length) % MODES.length;
+    radioRefs.current[kind]?.[next]?.focus();
+    if (MODES[next].mode !== current) onChange(`kind:${kind}`, MODES[next].mode);
+  };
 
   return (
     <details className={overrides} data-testid="gate-kind-overrides">
@@ -116,12 +105,17 @@ export function GateKindOverrides({
               )}
             </span>
             <div className={overrideSegments} role="radiogroup" aria-label={`Gate override for ${kind} sessions`}>
-              {MODES.map(({ mode, label }) => (
+              {MODES.map(({ mode, label }, index) => (
                 <button
                   key={mode}
+                  ref={(el) => {
+                    (radioRefs.current[kind] ??= [])[index] = el;
+                  }}
                   type="button"
                   role="radio"
                   aria-checked={current === mode}
+                  tabIndex={current === mode ? 0 : -1}
+                  onKeyDown={(e) => onRadioKey(e, kind, index, current)}
                   className={`${overrideSegment} ${current === mode ? overrideSegmentActive : ""}`}
                   onClick={() => current !== mode && onChange(`kind:${kind}`, mode)}
                 >
