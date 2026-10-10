@@ -894,8 +894,14 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		RoleResolver: capRoleResolver,
 		Terminator:   capTerminator,
 	})
-	capacityMonitor.RegisterClient("anthropic", NewAnthropicLimitsClient(credChain, ""))
-	capacityMonitor.RegisterClient("google", NewGeminiLimitsClient(credChain, ""))
+	// Under `go test` the real limits clients would POST to api.anthropic.com
+	// with the developer's own credentials on every SetLifecycleContext, and the
+	// h2 connection they leave in the shared transport pool shows up as a leaked
+	// goroutine in whichever goleak-checked test runs next.
+	if !config.IsTestMode() {
+		capacityMonitor.RegisterClient("anthropic", NewAnthropicLimitsClient(credChain, ""))
+		capacityMonitor.RegisterClient("google", NewGeminiLimitsClient(credChain, ""))
+	}
 
 	if anthropicClient, ok := aiClientImpl.(*AnthropicAIClient); ok {
 		anthropicClient.OnResponseHeaders = func(h http.Header) {

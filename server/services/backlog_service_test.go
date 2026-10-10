@@ -58,6 +58,11 @@ func TestMain(m *testing.M) {
 	restoreState := envtest.ClearAmbientStaplerSquadStateEnv()
 	reapLeakedTmuxTestServers()
 	startTmuxTestServerWatchdog()
+	// Before any test's goleak.IgnoreCurrent() baseline: see the function's doc comment.
+	if err := session.WarmTestEntRepositoryTemplate(); err != nil {
+		fmt.Fprintf(os.Stderr, "TestMain: warm test ent repository template: %v\n", err)
+		os.Exit(1)
+	}
 	code := m.Run()
 	restoreState()
 	restore()
