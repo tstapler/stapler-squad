@@ -122,8 +122,51 @@ The flag is registered in `knownFeatureFlags`, so it is settable through
 - The previous value recorded on a flip is the true one: an absent key is the
   registered default, and a controller failure on an absent key rolls back by
   deleting the key instead of writing an explicit `false`.
-- `scope` and `mutation` on `UpdateFeatureFlagRequest` still return
-  `Unimplemented` (Story 2.11, PR 2e).
+
+### Per-kind overrides
+
+Only `hidden_session_gate` is scopable. A scope is a hidden-session kind,
+`kind:review`, `kind:diagnose` or `kind:other` (the closed set
+`deliverygate.ScopableKinds`; `kind:triage` is refused because no producer
+creates a triage-tagged hidden session, Spike 1.3h). The kind is derived from
+the session's tags and re-derived on every tag change, with the total order
+`review` > `diagnose` > `triage` > `other`. A session with no resolvable kind
+(`Unresolved`, not a session) uses the global value.
+
+Precedence, most specific first: kind override (explicit on or off) > explicit
+global value > registry default. Overrides persist under
+`feature_flag_scopes` in `config.json`; a file without the key loads unchanged,
+and deleting every override returns the file to its previous shape.
+
+`UpdateFeatureFlag` mutations (`FlagMutation`):
+
+| Mutation | `scope` | Effect |
+|---|---|---|
+| unspecified (legacy) | empty | global set of `enabled` |
+| `SET_ENABLED` / `SET_DISABLED` | `global` or `kind:<name>` | persists true or false at that scope; `enabled` is ignored |
+| `CLEAR_SCOPE` | `kind:<name>` | deletes that override (inherit) |
+| `RESET_GLOBAL` | empty | deletes the explicit global key; the registry default applies |
+
+Everything else is `InvalidArgument` and persists nothing: a set with an empty
+scope, `RESET_GLOBAL` with a scope, `CLEAR_SCOPE` without a `kind:` scope, an
+unspecified mutation with a scope, an unknown enum value, an unregistered or
+unreachable kind, a scope on a flag that has none. The response lists the
+persisted scopes read back from `config.json`. Only enabling (any scope) is
+refused by the stats-writer precondition; disabling, `CLEAR_SCOPE` and
+`RESET_GLOBAL` never are. A failed controller apply of a key that was absent
+deletes it instead of writing `false`.
+
+An override that is explicitly `false` makes that kind deliver everything,
+including after the default flips on. Startup logs WARN
+`hidden_session_gate_explicit_false` once per such kind, the flag's
+`status_detail` carries "Gate is OFF for kind <kind>: hidden <kind> sessions
+deliver everything" and `soak.explicit_off_scopes` lists `kind:<name>` (and
+`global` when the global key is an explicit false). Stage 3 needs that list to
+be empty.
+
+`flag_history` entries carry the mutation, so a `RESET_GLOBAL` or
+`CLEAR_SCOPE` reads as such and not as a set false; `flag_change` audit lines
+gain a `mutation` field and a per-kind `scope`.
 
 ## Counters
 
@@ -211,7 +254,7 @@ classes x 72 buckets.
 Every `hidden_session_gate` flip appends to
 `<config dir>/audit/hidden-session-replies.jsonl` (directory 0700, file 0600,
 rotated at 5 MiB, 3 files kept; created on the first flip). Lines carry `ts`,
-`kind=flag_change`, `phase`, `change_id`, `flag`, `scope`, `previous`, `new`,
+`kind=flag_change`, `phase`, `change_id`, `flag`, `scope`, `mutation`, `previous`, `new`,
 `outcome`, `seq`, `boot_id`, `boot_ts`, `boot_seq`, and the request's
 `listener`, `peer_addr`, `host`, `origin`, `user_agent`, `auth_mode`.
 
