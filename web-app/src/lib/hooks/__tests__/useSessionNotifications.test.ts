@@ -178,6 +178,17 @@ describe("useSessionNotifications", () => {
       }
     );
 
+    it("session_notifications_should_route_idle_info_to_history_only_when_visible_session_hook_fires", () => {
+      const { result } = renderHook(() => useSessionNotifications({ enableAudio: false }));
+      act(() => {
+        result.current({ ...makeEvent(NT.INFO), metadata: { source_app: "tmux" } } as never);
+      });
+      expect(mockAddToHistoryOnly).toHaveBeenCalledWith(
+        expect.objectContaining({ metadata: expect.objectContaining({ source_app: "tmux" }) }),
+      );
+      expect(mockAddNotification).not.toHaveBeenCalled();
+    });
+
     it("sessionless history-only event passes through empty sessionName, not a placeholder", () => {
       const { result } = renderHook(() =>
         useSessionNotifications({ enableAudio: false })

@@ -743,6 +743,7 @@ describe("deck rules from the UX criteria (TD-5, TD-9, TB-2, T-TS-32)", () => {
       jest.advanceTimersByTime(ms);
     });
 
+  // T-AR-03: the auto-remediating warning (isPendingDecision=false) does not pin and auto-closes.
   it("td5_should_keep_a_pending_toast_for_10_minutes_and_remove_an_auto_remediating_warning_at_its_timeout", () => {
     mount();
     act(() => notifications.addNotification(toast(0, { notificationType: "warning", isPendingDecision: true })));
@@ -837,5 +838,18 @@ describe("deck rules from the UX criteria (TD-5, TD-9, TB-2, T-TS-32)", () => {
     addMany(2);
     act(() => notifications.togglePanel());
     expect(screen.getByTestId("toast-stack").className).toMatch(/deckBehindTray/);
+  });
+
+  it("pinned_collapse_should_pause_on_focus_and_touch_hold_and_not_run_on_desktop (T-PC-02)", () => {
+    setPhone();
+    mount();
+    act(() => notifications.addNotification(toast(0, { notificationType: "error", isPendingDecision: true })));
+    const card = screen.getByTestId("toast");
+    fireEvent.focus(within(card).getAllByRole("button")[0]);
+    advance(60_000);
+    expect(screen.queryByTestId("toast-collapsed-chip")).toBeNull();
+    fireEvent.blur(within(card).getAllByRole("button")[0]);
+    advance(8_000);
+    expect(screen.getByTestId("toast-collapsed-chip")).toBeInTheDocument();
   });
 });

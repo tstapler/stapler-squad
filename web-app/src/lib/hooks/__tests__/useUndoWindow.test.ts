@@ -76,7 +76,15 @@ describe("useUndoWindow", () => {
     expect(commit).toHaveBeenCalled();
   });
 
-  it("falls back to the default when localStorage throws (TM-12)", () => {
+  it("undo_window_should_use_per_device_setting_and_fall_back_when_localStorage_throws", () => {
+    window.localStorage.setItem("ssq.notifications.undoWindow", "15000");
+    const { result } = renderHook(() => useUndoWindow());
+    act(() => result.current.start("Cleared", jest.fn()));
+    expect(result.current.pending?.windowMs).toBe(15000);
+    window.localStorage.removeItem("ssq.notifications.undoWindow");
+  });
+
+  it("falls back to the default when localStorage throws (TM-12, T-UW-02)", () => {
     const spy = jest.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
       throw new Error("blocked");
     });
