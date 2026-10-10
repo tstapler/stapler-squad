@@ -2260,6 +2260,30 @@ func (i *Instance) Pause() error {
 	return i.sendSyncErr(func(s *instanceState) error { return pauseLocked(s) })
 }
 
+// worktreeNeedsCommit reports whether the session's worktree holds uncommitted work
+// that must be committed before the worktree is removed. It fails closed: if the
+// dirty state cannot be determined it returns ErrDirtyStateUnknown so the caller
+// keeps the worktree. It bypasses IsDirty's TTL cache (a clean result is trusted
+// for minutes) because a stale "clean" would skip the commit and lose files.
+func (i *Instance) worktreeNeedsCommit() (bool, error) {
+	if !i.IsWorktree {
+		return false, nil
+	}
+	if !i.gitManager.HasWorktree() {
+		return false, fmt.Errorf("%w: git worktree not initialized", ErrDirtyStateUnknown)
+	}
+	if _, err := os.Stat(i.gitManager.GetWorktreePath()); errors.Is(err, os.ErrNotExist) {
+		return false, nil // nothing on disk to lose
+	} else if err != nil {
+		return false, fmt.Errorf("%w: %w", ErrDirtyStateUnknown, err)
+	}
+	dirty, err := i.gitManager.IsDirtyUncached()
+	if err != nil {
+		return false, fmt.Errorf("%w: %w", ErrDirtyStateUnknown, err)
+	}
+	return dirty, nil
+}
+
 // pauseLocked is the actor-safe body of Pause().
 func pauseLocked(s *instanceState) error {
 	i := s.inst
@@ -2282,16 +2306,21 @@ func pauseLocked(s *instanceState) error {
 		return nil
 	}
 
+	// Fail closed before any side effect: an unknown dirty state must never fall
+	// through to Remove(), which would delete uncommitted work.
+	needsCommit, err := i.worktreeNeedsCommit()
+	if err != nil {
+		log.Error("pause aborted: cannot determine worktree dirty state", "session", i.Title, "err", err)
+		return err
+	}
+
 	stopControllerLocked(s)
 
 	var errs []error
 
 	// Git operations only apply to worktree sessions.
 	if i.IsWorktree {
-		if dirty, err := i.gitManager.IsDirty(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to check if worktree is dirty: %w", err))
-			log.Error("failed to check if worktree is dirty", "session", i.Title, "err", err)
-		} else if dirty {
+		if needsCommit {
 			commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s (paused)", i.Title, time.Now().Format(time.RFC822))
 			if err := i.gitManager.CommitChanges(commitMsg); err != nil {
 				errs = append(errs, fmt.Errorf("failed to commit changes: %w", err))
@@ -2473,13 +2502,18 @@ func stopByUserLocked(s *instanceState) error {
 		return ErrInvalidTransition{From: i.Status, To: Stopped}
 	}
 
+	// Fail closed before any side effect — see pauseLocked.
+	needsCommit, err := i.worktreeNeedsCommit()
+	if err != nil {
+		log.Error("stop aborted: cannot determine worktree dirty state", "session", i.Title, "err", err)
+		return err
+	}
+
 	stopControllerLocked(s)
 
 	var errs []error
 	if i.IsWorktree {
-		if dirty, err := i.gitManager.IsDirty(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to check if worktree is dirty: %w", err))
-		} else if dirty {
+		if needsCommit {
 			commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s (stopped)", i.Title, time.Now().Format(time.RFC822))
 			if err := i.gitManager.CommitChanges(commitMsg); err != nil {
 				return i.combineErrors(append(errs, fmt.Errorf("failed to commit changes: %w", err)))
