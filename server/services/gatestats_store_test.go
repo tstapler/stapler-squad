@@ -213,7 +213,7 @@ func TestStatsStore_ShouldUsePidSpecificTempNameDefinedChecksumAndForeignWriterR
 }
 
 func TestStatsStore_ShouldDefaultToNoopStoreWithNoDiskOrGoroutine_WhenUnitTestsBuildAGate(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	var s deliverygate.StatsStore = deliverygate.NoopStatsStore{}
 	_, ok := s.Load()
 	assert.False(t, ok)

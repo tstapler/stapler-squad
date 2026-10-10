@@ -38,12 +38,14 @@ func TestContractStubs_ShouldReturnUnimplementedOrReject_WhenScopeMutationStatsO
 		})
 	}
 
-	t.Run("stats_rpc", func(t *testing.T) {
+	// The stats RPC is implemented (PR 2a-2); without a gate it reports
+	// Unavailable rather than an empty answer.
+	t.Run("stats_rpc_without_gate", func(t *testing.T) {
 		svc := &SessionService{notificationSvc: &NotificationService{}}
 		_, err := svc.GetDeliveryGateStats(context.Background(),
 			connect.NewRequest(&sessionv1.GetDeliveryGateStatsRequest{}))
 		require.Error(t, err)
-		require.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+		require.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
 	})
 }
 
