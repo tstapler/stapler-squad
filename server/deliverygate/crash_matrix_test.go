@@ -55,7 +55,6 @@ type recordCapture struct {
 	mu       sync.Mutex
 	records  []notifications.NotificationRecord
 	sentinel chan struct{}
-	once     sync.Once
 }
 
 func (c *recordCapture) Append(r *notifications.NotificationRecord) error {
@@ -63,7 +62,10 @@ func (c *recordCapture) Append(r *notifications.NotificationRecord) error {
 	c.records = append(c.records, *r)
 	c.mu.Unlock()
 	if r.SessionID == visibleTitle {
-		c.once.Do(func() { close(c.sentinel) })
+		select {
+		case c.sentinel <- struct{}{}:
+		default:
+		}
 	}
 	return nil
 }
@@ -86,17 +88,25 @@ func TestHiddenCrash_ShouldLeaveFailureHistoryRecord_WhenBackgroundJoinReads(t *
 		{UUID: "u-v", Title: visibleTitle},
 	})
 	bus.SetPublishFilter(gate.PublishFilter())
-	capture := &recordCapture{sentinel: make(chan struct{})}
+	capture := &recordCapture{sentinel: make(chan struct{}, 4)}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	notifications.StartSubscriberWithInterval(ctx, bus, capture, 5*time.Millisecond)
 
 	bus.Publish(services.NewSessionCrashEvent(hiddenUUID, hiddenTitle, "pane exited 137", time.Unix(1_700_000_000, 0)))
-	bus.Publish(notifEvent(visibleTitle, sessionv1.NotificationType_NOTIFICATION_TYPE_INFO, sentinelID))
-	select {
-	case <-capture.sentinel:
-	case <-time.After(10 * time.Second):
-		t.Fatal("history sink never saw the sentinel")
+	// The subscriber flushes a coalescing map in random order, so one sentinel can land before
+	// the crash record of the same flush. A second sentinel published after the first was seen
+	// can only arrive in a later flush, by which time the first flush has fully completed.
+	for _, typ := range []sessionv1.NotificationType{
+		sessionv1.NotificationType_NOTIFICATION_TYPE_INFO,
+		sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR,
+	} {
+		bus.Publish(notifEvent(visibleTitle, typ, sentinelID))
+		select {
+		case <-capture.sentinel:
+		case <-time.After(10 * time.Second):
+			t.Fatal("history sink never saw the sentinel")
+		}
 	}
 
 	capture.mu.Lock()
