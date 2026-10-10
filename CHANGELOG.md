@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.2.0](https://github.com/tstapler/stapler-squad/compare/v2.1.1...v2.2.0) (2026-10-10)
+
+
+### Features
+
+* **git:** Backend interface, RepoLocation and CLI implementation ([#966](https://github.com/tstapler/stapler-squad/issues/966)) ([668c84e](https://github.com/tstapler/stapler-squad/commit/668c84e2645b187af11e01b86962da3df4e1013f))
+* **git:** cohort types and config parsing for the git backend seam ([#964](https://github.com/tstapler/stapler-squad/issues/964)) ([a91e7e4](https://github.com/tstapler/stapler-squad/commit/a91e7e46a0d533d0918996772eb80dfa34c50c74))
+* load user themes from ~/.stapler-squad/themes at runtime ([#967](https://github.com/tstapler/stapler-squad/issues/967)) ([7ae7544](https://github.com/tstapler/stapler-squad/commit/7ae7544eb22b6f5d1a42ffa4c6d036ef4975c27b))
+* **triage:** persist error_detail for unclassified headless failures and escalate batch parking ([#960](https://github.com/tstapler/stapler-squad/issues/960)) ([4c64e92](https://github.com/tstapler/stapler-squad/commit/4c64e929aa529c6bc9676cb61a8c033143fb5a5f))
+
+
+### Bug Fixes
+
+* **backlog:** auto-complete merged PRs whose branch evidence was stamped wrong or never recorded ([#970](https://github.com/tstapler/stapler-squad/issues/970)) ([e96a1eb](https://github.com/tstapler/stapler-squad/commit/e96a1ebafb9acbe9c5d50cc2bb29e5906c54608b))
+* **backlog:** survive deleted work-session rows in PR-merge branch verification ([4fa8c5b](https://github.com/tstapler/stapler-squad/commit/4fa8c5b8b0556b143a5cf2f311bd255a71204739))
+* **git:** resolve review follow-ups and failures from [#962](https://github.com/tstapler/stapler-squad/issues/962) ([#963](https://github.com/tstapler/stapler-squad/issues/963)) ([558c462](https://github.com/tstapler/stapler-squad/commit/558c46226166606d7494e78e67838e2c307f9788))
+* **unfinished:** wait for scanner maintenance goroutine before test TempDir cleanup ([#965](https://github.com/tstapler/stapler-squad/issues/965)) ([c9f6679](https://github.com/tstapler/stapler-squad/commit/c9f6679c0909a14dcd8fdb422cb115bbd291ede8))
+
 ## [2.1.1](https://github.com/tstapler/stapler-squad/compare/v2.1.0...v2.1.1) (2026-10-09)
 
 
