@@ -1,7 +1,7 @@
 // +feature: notification-toast-stack
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { zIndex } from "@/styles/theme.css";
 import { NotificationToast } from "@/components/ui/NotificationToast";
 import {
@@ -21,6 +21,9 @@ import { useAnnounce } from "@/lib/hooks/useAnnounce";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import type { ToastTimerRegistry } from "@/lib/hooks/useToastTimers";
 import { MOVE_UNDO_TIMER_ID } from "@/lib/contexts/toastTray";
+import { getStackTopOffset, subscribeStackTopOffset } from "@/lib/utils/toastDock";
+import { readTerminalCursor } from "@/lib/terminal/cursorRect";
+import { bottomRightFootprint, deckAnchor, type DeckAnchor } from "@/components/ui/toastDeckAnchor";
 import { readPinnedCollapseMs } from "@/lib/utils/deckSettings";
 import {
   NOTIFICATION_TRAY_V2_FLAG,
@@ -179,6 +182,39 @@ interface DeckProps {
 }
 
 const MOVE_ALL_LABEL = "Move all notifications to tray";
+const ANCHOR_POLL_MS = 250;
+const DESKTOP_DECK = { width: 360, inset: { right: 16, bottom: 24 }, fallbackHeight: 120 };
+
+/**
+ * Deck controls must not pull focus off the terminal: a mousedown on a button
+ * would blur xterm's textarea (and, on a phone, collapse the soft keyboard).
+ */
+const keepTerminalFocus = { onMouseDown: (e: React.MouseEvent) => e.preventDefault() };
+
+/**
+ * Desktop overlap guard (TD-15): re-reads the xterm cursor a few times a second
+ * while a deck is showing and moves the deck to the top-right anchor whenever
+ * its bottom-right footprint would cover the cursor cell.
+ */
+function useDesktopDeckAnchor(enabled: boolean, deckRef: React.RefObject<HTMLDivElement | null>): DeckAnchor {
+  const [anchor, setAnchor] = useState<DeckAnchor>("bottom-right");
+  useEffect(() => {
+    if (!enabled) return;
+    const check = () => {
+      const deck = deckRef.current;
+      const footprint = bottomRightFootprint(
+        { width: window.innerWidth, height: window.innerHeight },
+        { width: DESKTOP_DECK.width, height: deck?.offsetHeight || DESKTOP_DECK.fallbackHeight },
+        DESKTOP_DECK.inset,
+      );
+      setAnchor(deckAnchor(readTerminalCursor(), footprint));
+    };
+    check();
+    const interval = setInterval(check, ANCHOR_POLL_MS);
+    return () => clearInterval(interval);
+  }, [enabled, deckRef]);
+  return enabled ? anchor : "bottom-right";
+}
 
 /** "Moved N to tray - Undo", paused while hovered or focused so it cannot vanish under a tap. */
 function UndoBar({ count, timers, onUndo }: { count: number; timers: ToastTimerRegistry; onUndo: () => void }) {
@@ -202,7 +238,13 @@ function UndoBar({ count, timers, onUndo }: { count: number; timers: ToastTimerR
       onBlur={() => resume("focus")}
     >
       <span>Moved {count} to tray</span>
-      <button type="button" className={undoAction} data-testid="toast-undo-move" onClick={onUndo}>
+      <button
+        type="button"
+        className={undoAction}
+        data-testid="toast-undo-move"
+        onClick={onUndo}
+        {...keepTerminalFocus}
+      >
         Undo
       </button>
     </div>
@@ -216,10 +258,24 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
   const { movedToTray } = useNotificationState();
   const { moveAllToTray, undoMoveToTray } = useNotificationCommands();
   const cap = toastCapFor(viewport);
-  const { visible, overflow } = partitionToasts(toasts, cap);
-  const placement = viewport.isInnerScreen ? "desktop" : "mobileBottom";
+  const { visible, overflow, pinnedCount } = partitionToasts(toasts, cap);
   const onPhone = !viewport.isInnerScreen;
-  if (visible.length === 0 && overflow === 0 && !movedToTray) return null;
+  const topOffset = useSyncExternalStore(subscribeStackTopOffset, getStackTopOffset, () => null);
+  const deckRef = useRef<HTMLDivElement>(null);
+  const hasContent = visible.length > 0 || overflow > 0 || movedToTray !== null;
+  const desktopAnchor = useDesktopDeckAnchor(!onPhone && hasContent, deckRef);
+  if (!hasContent) return null;
+
+  // Phone: top dock under the session tab row when one is published, else above the bottom nav.
+  let placement: keyof typeof deckPlacement;
+  if (!onPhone) placement = desktopAnchor === "top-right" ? "desktopTopRight" : "desktop";
+  else placement = topOffset !== null ? "mobileTop" : "mobileBottom";
+  // With the keyboard open the cap is 0: one line, "N notifications - M needs you".
+  const chipText =
+    cap === 0
+      ? `${toasts.length} notification${toasts.length === 1 ? "" : "s"}${pinnedCount > 0 ? ` - ${pinnedCount} needs you` : ""}`
+      : `+${overflow} more`;
+  const chipLabel = cap === 0 ? `${chipText}, open tray` : `${overflow} more notifications, open tray`;
 
   const moveAll = (
     <button
@@ -228,6 +284,7 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
       data-testid="toast-move-all-to-tray"
       aria-label={MOVE_ALL_LABEL}
       onClick={() => moveAllToTray()}
+      {...keepTerminalFocus}
     >
       Move all to tray ({toasts.length})
     </button>
@@ -236,7 +293,7 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
   const undo = movedToTray ? <UndoBar count={movedToTray.count} timers={timers} onUndo={undoMoveToTray} /> : null;
 
   return (
-    <div className={deckPlacement[placement]} data-testid="toast-stack">
+    <div ref={deckRef} className={deckPlacement[placement]} data-testid="toast-stack" data-placement={placement}>
       {/* Desktop: one header slot, holding either the bulk control or its undo. */}
       {!onPhone && (undo ?? (showMoveAll ? <div className={deckHeader}>{moveAll}</div> : null))}
       {visible.map((notification) => (
@@ -259,10 +316,11 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
               type="button"
               className={overflowChip}
               data-testid="toast-overflow-chip"
-              aria-label={`${overflow} more notifications, open tray`}
+              aria-label={chipLabel}
               onClick={onOpenTray}
+              {...keepTerminalFocus}
             >
-              +{overflow} more
+              {chipText}
             </button>
           )}
           {onPhone && showMoveAll && moveAll}

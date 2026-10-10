@@ -4,6 +4,8 @@ import path from "path";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { NotificationProvider, useNotifications } from "@/lib/contexts/NotificationContext";
 import { markSessionViewed } from "@/lib/utils/viewedSessions";
+import { setStackTopOffset } from "@/lib/utils/toastDock";
+import { registerTerminalCursorSource } from "@/lib/terminal/cursorRect";
 import { useSessionNotifications } from "@/lib/hooks/useSessionNotifications";
 import { NotificationType, NotificationPriority } from "@/gen/session/v1/types_pb";
 import type { NotificationData } from "@/lib/types/notification";
@@ -390,6 +392,79 @@ describe("Move all to tray (Story 3.4)", () => {
     const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
     expect(code).not.toMatch(/markAsRead|clearHistory|removeFromHistory|ClearNotificationHistory|MarkNotificationRead|useNotificationHistory|acknowledgeNotification|clearAll/);
     expect(code).not.toMatch(/^import .*session_pb/m);
+  });
+});
+
+describe("Mobile and keyboard positioning (Story 3.7)", () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => {
+    setStackTopOffset(null);
+    jest.useRealTimers();
+  });
+
+  it("docks at the top under the session tab row on a phone session page, and at the bottom on a page with no terminal", () => {
+    setPhone();
+    mount();
+    addMany(3);
+    expect(screen.getByTestId("toast-stack")).toHaveAttribute("data-placement", "mobileBottom");
+
+    act(() => setStackTopOffset(120));
+    expect(screen.getByTestId("toast-stack")).toHaveAttribute("data-placement", "mobileTop");
+    expect(document.documentElement.style.getPropertyValue("--mobile-stack-top-offset")).toBe("120px");
+  });
+
+  it("shows one line chip '3 notifications - 1 needs you' with the keyboard open and no card", () => {
+    setPhone(true);
+    mount();
+    act(() => {
+      notifications.addNotification(toast(0, { notificationType: "error", isPendingDecision: true }));
+      notifications.addNotification(toast(1));
+      notifications.addNotification(toast(2));
+    });
+    expect(screen.queryAllByTestId("toast")).toHaveLength(0);
+    const chip = screen.getByTestId("toast-overflow-chip");
+    expect(chip).toHaveTextContent("3 notifications - 1 needs you");
+  });
+
+  it("keeps terminal focus when a deck control is pressed", () => {
+    setPhone(true);
+    mount();
+    addMany(2);
+    const chip = screen.getByTestId("toast-overflow-chip");
+    const notPrevented = fireEvent.mouseDown(chip);
+    expect(notPrevented).toBe(false); // preventDefault was called, so the textarea is not blurred
+  });
+
+  it("moves the desktop deck to the top-right when it would cover the cursor cell, and back when it moves", () => {
+    mount();
+    let cursor: { left: number; top: number; width: number; height: number } | null = {
+      left: window.innerWidth - 100,
+      top: window.innerHeight - 40,
+      width: 8,
+      height: 16,
+    };
+    const unregister = registerTerminalCursorSource(() => cursor);
+    addMany(2);
+    act(() => {
+      jest.advanceTimersByTime(300);
+    });
+    expect(screen.getByTestId("toast-stack")).toHaveAttribute("data-placement", "desktopTopRight");
+
+    cursor = { left: 20, top: 20, width: 8, height: 16 };
+    act(() => {
+      jest.advanceTimersByTime(300);
+    });
+    expect(screen.getByTestId("toast-stack")).toHaveAttribute("data-placement", "desktop");
+    unregister();
+  });
+
+  it("stays bottom-right on a page with no terminal", () => {
+    mount();
+    addMany(2);
+    act(() => {
+      jest.advanceTimersByTime(600);
+    });
+    expect(screen.getByTestId("toast-stack")).toHaveAttribute("data-placement", "desktop");
   });
 });
 

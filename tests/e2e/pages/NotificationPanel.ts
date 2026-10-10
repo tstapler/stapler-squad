@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import type { APIRequestContext, Locator, Page } from '@playwright/test';
 
 // Closes anything that can steal keyboard focus from the session list: the
 // Notification Panel (if auto-opened) and any visible toast alerts. Both
@@ -23,5 +23,73 @@ export async function dismissNotificationInterference(page: Page): Promise<void>
   }
   if ((await dismissButtons.count()) > 0) {
     console.warn('[a11y] dismissNotificationInterference: a toast is still visible after 5 dismiss attempts');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Toast deck (notification_tray_v2)
+// ---------------------------------------------------------------------------
+
+
+export const TRAY_V2_FLAG = 'notification_tray_v2';
+
+/** Live-sets a feature flag through the same RPC Settings > Features calls. */
+export async function setFeatureFlag(
+  request: APIRequestContext,
+  baseUrl: string,
+  name: string,
+  enabled: boolean,
+): Promise<void> {
+  const response = await request.post(`${baseUrl}/api/session.v1.SessionService/UpdateFeatureFlag`, {
+    headers: { 'Content-Type': 'application/json' },
+    data: { name, enabled },
+  });
+  if (!response.ok()) throw new Error(`UpdateFeatureFlag ${name}=${enabled} failed: ${response.status()}`);
+}
+
+export interface SeededNotification {
+  sessionId: string;
+  type: 'ERROR' | 'WARNING' | 'APPROVAL_NEEDED' | 'CUSTOM';
+  title: string;
+  message?: string;
+  metadata?: Record<string, string>;
+}
+
+/** Publishes one notification through SendNotification (localhost only; external session ids are accepted). */
+export async function sendNotification(
+  request: APIRequestContext,
+  baseUrl: string,
+  n: SeededNotification,
+): Promise<void> {
+  const response = await request.post(`${baseUrl}/api/session.v1.SessionService/SendNotification`, {
+    headers: { 'Content-Type': 'application/json' },
+    data: {
+      sessionId: n.sessionId,
+      notificationType: `NOTIFICATION_TYPE_${n.type}`,
+      priority: 'NOTIFICATION_PRIORITY_HIGH',
+      title: n.title,
+      message: n.message ?? n.title,
+      metadata: n.metadata ?? {},
+    },
+  });
+  if (!response.ok()) throw new Error(`SendNotification ${n.title} failed: ${response.status()}`);
+}
+
+/** The capped toast deck: cards, the "+N more" chip and the single bulk control. */
+export class ToastDeck {
+  readonly deck: Locator;
+  readonly toasts: Locator;
+  readonly chip: Locator;
+  readonly moveAll: Locator;
+  readonly undoBar: Locator;
+  readonly undo: Locator;
+
+  constructor(private readonly page: Page) {
+    this.deck = page.getByTestId('toast-stack');
+    this.toasts = page.getByTestId('toast');
+    this.chip = page.getByTestId('toast-overflow-chip');
+    this.moveAll = page.getByTestId('toast-move-all-to-tray');
+    this.undoBar = page.getByTestId('toast-undo-bar');
+    this.undo = page.getByTestId('toast-undo-move');
   }
 }

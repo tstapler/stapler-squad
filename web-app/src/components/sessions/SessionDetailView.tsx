@@ -36,6 +36,7 @@ import { GuidanceRequestPanel } from "@/components/guidance/GuidanceRequestPanel
 import { useShells } from "@/lib/hooks/useShells";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { markSessionViewed } from "@/lib/utils/viewedSessions";
+import { usePublishStackTopOffset } from "@/lib/hooks/usePublishStackTopOffset";
 import { ShellTabLabel } from "./ShellTab";
 import { NewShellDialog } from "./NewShellDialog";
 import { useWorkflows } from "@/lib/hooks/useWorkflows";
@@ -444,6 +445,10 @@ export function SessionDetailView({
 
   // Tell the notification deck which session is on screen so it can skip redundant non-pinned toasts.
   useEffect(() => markSessionViewed(session.id), [session.id]);
+
+  // The mobile toast deck docks directly under this tab row.
+  const tabRowRef = useRef<HTMLDivElement>(null);
+  usePublishStackTopOffset(tabRowRef);
 
   // Fire a toast notification when a shell exits with a non-zero exit code.
   // Track which shell IDs we've already notified to avoid duplicate toasts.
@@ -875,7 +880,7 @@ export function SessionDetailView({
         </ActionBar>
       </div>}
 
-      <div className={styles.tabsWrapper}>
+      <div className={styles.tabsWrapper} ref={tabRowRef}>
       <div
         className={`${styles.tabs} ${isFullscreen ? styles.fullscreenMobileTabs : ""}`}
         role="tablist"
