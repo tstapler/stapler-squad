@@ -1,6 +1,7 @@
 # BUG-089: `TestServer_Shutdown_JoinsBackgroundTickers` flakes when run alongside the full `server` package suite [SEVERITY: Low]
 
-**Status**: 🐛 Open
+**Status**: Fixed
+**Fixed in**: this branch (2026-10-10) — see Resolution
 **Discovered**: 2026-08-23
 **Impact**: Intermittent CI failure in the `server` package's test suite — no production impact. Not caused by, or related to, PR #605's diff; this test is pre-existing code from `main` (merged into the PR #605 branch via a `main`-sync merge), not something that PR added or touched.
 
@@ -52,3 +53,12 @@ After the fix: run `go test ./server/... -count=20` (full package, not just the 
 ## Related Tasks
 
 Discovered while running PR #605's (`stapler-squad-web-transport` branch, project `web-transport-architecture-review`) local test gate, immediately after merging latest `main` into the branch (this test is `main`'s code, not PR #605's). See also `docs/bugs/open/BUG-087-captureLogs-global-slog-swap-races-under-t-parallel.md` for the same symptom shape found in the same investigation, and `docs/bugs/open/BUG-088-credential-chain-bypasses-test-dir-isolation.md` for a related test-isolation gap.
+
+## Resolution (2026-10-10)
+
+The leaking goroutine named above (`RestoreWithWorkDir.func2.1` -> `exec.Cmd.Wait`, `tmux.go:1758`) no longer exists on main: PR #583 moved PTY-triple reaping into `closePTYTriple`, which waits synchronously. `TestServer_Shutdown_JoinsBackgroundTickers` and `TestHandleActuatorHealth_ReturnsOK_InNormalConditions` (now pinned to fixed inputs) passed in every full-package run on current main: `go test ./server -race -count=3` and two `-count=6` runs under CPU load, plus `-race -count=20` in isolation.
+
+The same full-package runs did surface the same *class* of failure in neighbouring tests, root-caused and fixed alongside:
+
+- `TestServer_should_NegotiateALPNHTTP2_When_StartRemoteServesOverRealTLS` (failed 4 of 6 under load): `NewSessionService` registered the real Anthropic/Gemini limits clients under `go test`, so `SetLifecycleContext` -> `CapacityMonitor.Start` POSTed to `api.anthropic.com` with the developer's credentials. The HTTP/2 connection left in the shared transport pool appeared as a leaked `http2ClientConn.readLoop` in the next goleak-checked test. Fix: do not register the real clients when `config.IsTestMode()`.
+- `TestWireDepsIntoServer_*` ("TempDir RemoveAll: directory not empty"): the notification subscriber's final flush on context cancel wrote `notifications.json` after `Shutdown()` returned. Fix: `StartSubscriber` returns a done channel and `server.go` joins it via `backgroundTasksWG`.
