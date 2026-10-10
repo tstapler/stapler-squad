@@ -287,6 +287,11 @@ var knownFeatureFlags = []struct {
 		description: "Hidden-session delivery gate: a hidden session (review, diagnose) notifies only for failures and needs-human events; routine completions are dropped on every channel. Off keeps today's behavior and only counts what would have been suppressed (see the status line). Can be enabled only while the stats writer runs, so the soak is recorded. Can be overridden per hidden-session kind (review, diagnose, other). Default: off.",
 		scopes:      gateFlagScopes(),
 	},
+	{
+		name:         terminalWriteLeaseFlagName,
+		description:  "Per-session terminal write lease: the driver's prompt and answer keys, steers, nudges, MCP writes and rate-limit recovery take turns writing to a session's terminal instead of interleaving. Turn off only to restore the pre-lease behavior if the lease misbehaves (every write then proceeds unserialized). Applies at once; global only. Default: on.",
+		defaultValue: true,
+	},
 }
 
 // featureFlagDefault looks up name's defaultValue in knownFeatureFlags — the single
