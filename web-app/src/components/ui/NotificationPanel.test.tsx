@@ -75,6 +75,7 @@ describe("NotificationPanel — scoped bulk-read (Task 3.1.5a)", () => {
       makeNotification({
         id: "notif-approval",
         notificationType: "approval_needed",
+        isPendingDecision: true,
         metadata: { approval_id: "appr-1" },
       }),
       makeNotification({ id: "notif-complete", notificationType: "task_complete" }),
@@ -91,6 +92,7 @@ describe("NotificationPanel — scoped bulk-read (Task 3.1.5a)", () => {
       makeNotification({
         id: "notif-approval",
         notificationType: "approval_needed",
+        isPendingDecision: true,
         metadata: { approval_id: "appr-1" },
       }),
     ];
@@ -110,6 +112,7 @@ describe("NotificationPanel — no ✕ control for an unread actionable item (Ta
       makeNotification({
         id: "notif-approval",
         notificationType: "approval_needed",
+        isPendingDecision: true,
         metadata: { approval_id: "appr-1" },
       }),
       makeNotification({ id: "notif-complete", notificationType: "task_complete", isRead: true }),

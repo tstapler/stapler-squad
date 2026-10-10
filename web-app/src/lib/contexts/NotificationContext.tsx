@@ -211,7 +211,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         for (const n of prev) {
           if (idSet.has(n.id)) auditLogRef.current.logNotificationMarkedRead(n.id, n.sessionId);
         }
-        return prev.map((n) => (idSet.has(n.id) ? { ...n, isRead: true } : n));
+        return prev.map((n) => (idSet.has(n.id) ? { ...n, isRead: true, isPendingDecision: false } : n));
       });
       historyRef.current.markAsRead(ids);
     };
@@ -291,7 +291,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           const updated = prev.map((n) => {
             if (!n.isRead && n.sessionId != null && sessionIds.has(n.sessionId)) {
               idsToMark.push(n.id);
-              return { ...n, isRead: true };
+              return { ...n, isRead: true, isPendingDecision: false };
             }
             return n;
           });
@@ -338,7 +338,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         timers.cancel(notificationId);
         dispatch({ type: "remove", ids: new Set([notificationId]) });
         setNotificationHistory((prev) =>
-          prev.map((n) => (n.id === notificationId ? { ...n, isRead: true } : n))
+          prev.map((n) => (n.id === notificationId ? { ...n, isRead: true, isPendingDecision: false } : n))
         );
       }
       // NOTIFICATION_ACKNOWLEDGED is intentionally not handled here.

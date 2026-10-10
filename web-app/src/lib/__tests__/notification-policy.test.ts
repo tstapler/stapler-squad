@@ -5,11 +5,15 @@ import {
   NATIVE_HIGH_TTL_MS,
   NATIVE_MEDIUM_TTL_MS,
   hasLongToastLifetime,
+  isPinned,
+  partitionToasts,
   toastAutoCloseMs,
   toastAutoMinimizeMs,
   nativeAutoCloseMs,
 } from "@/lib/notification-policy";
 import { NotificationPriority } from "@/gen/session/v1/types_pb";
+import fs from "fs";
+import path from "path";
 
 describe("notification-policy", () => {
   describe("constants", () => {
@@ -157,5 +161,71 @@ describe("notification-policy", () => {
     it("returns 3 seconds for undefined (auto-minimize)", () => {
       expect(toastAutoMinimizeMs(undefined)).toBe(3_000);
     });
+  });
+});
+
+describe("pending-decision stack policy", () => {
+  const t = (id: string, pinned = false) => ({ id, isPendingDecision: pinned });
+
+  describe("partitionToasts", () => {
+    it("partitionToasts_should_keep_pinned_first_and_report_overflow_when_cap_3", () => {
+      const toasts = [t("approval", true), t("info1"), t("info2"), t("error", true), t("info3")];
+      const result = partitionToasts(toasts, 3);
+      expect(result.visible.map((n) => n.id)).toEqual(["approval", "error", "info3"]);
+      expect(result.overflow).toBe(2);
+    });
+
+    it("collapses pinned beyond the cap into the overflow, keeping arrival order", () => {
+      const toasts = [t("a", true), t("b", true), t("c", true), t("d", true)];
+      const result = partitionToasts(toasts, 3);
+      expect(result.visible.map((n) => n.id)).toEqual(["a", "b", "c"]);
+      expect(result.overflow).toBe(1);
+      expect(result.pinnedCount).toBe(4);
+    });
+
+    it("shows nothing but counts everything when the cap is 0 (keyboard open)", () => {
+      const result = partitionToasts([t("a", true), t("b")], 0);
+      expect(result.visible).toEqual([]);
+      expect(result.overflow).toBe(2);
+      expect(result.pinnedCount).toBe(1);
+    });
+
+    it("returns everything when the cap exceeds the deck", () => {
+      const result = partitionToasts([t("a"), t("b")], 3);
+      expect(result.visible.map((n) => n.id)).toEqual(["a", "b"]);
+      expect(result.overflow).toBe(0);
+    });
+  });
+
+  describe("isPinned", () => {
+    it("isPinned_should_read_only_isPendingDecision_and_never_list_types_when_grepped", () => {
+      expect(isPinned({ isPendingDecision: true })).toBe(true);
+      expect(isPinned({ isPendingDecision: false })).toBe(false);
+      expect(isPinned({})).toBe(false);
+
+      const source = fs.readFileSync(path.join(process.cwd(), "src/lib/notification-policy.ts"), "utf8");
+      const body = source.slice(source.indexOf("export function isPinned"));
+      const fn = body.slice(0, body.indexOf("\n}\n"));
+      expect(fn).not.toMatch(/approval_needed|question|"error"|task_failed|"warning"/);
+    });
+  });
+
+  it("client_should_have_no_actionable_type_set_when_grepped", () => {
+    const libDir = path.join(process.cwd(), "src/lib");
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name !== "__tests__") walk(full);
+        } else if (/\.(ts|tsx)$/.test(entry.name) && !/\.test\./.test(entry.name)) {
+          if (/ACTIONABLE_TYPES|isActionableNotification|new Set<[^>]*>\(\[\s*"approval_needed"/.test(fs.readFileSync(full, "utf8"))) {
+            offenders.push(path.relative(libDir, full));
+          }
+        }
+      }
+    };
+    walk(libDir);
+    expect(offenders).toEqual([]);
   });
 });

@@ -88,3 +88,39 @@ export function toastAutoMinimizeMs(type: NotificationData["notificationType"]):
   if (type === "warning") return 5_000;
   return 3_000;
 }
+
+/**
+ * A toast is pinned (it never auto-closes and is never cleared in bulk) exactly
+ * when the server marked it a pending decision. Presentational policy only: the
+ * server's `IsPendingDecision` is the one definition, so this reads the field
+ * and never inspects types.
+ */
+export function isPinned(toast: { isPendingDecision?: boolean }): boolean {
+  return toast.isPendingDecision === true;
+}
+
+export interface ToastPartition<T> {
+  visible: T[];
+  /** Toasts that did not fit under the cap; shown as the "+N more" chip. */
+  overflow: number;
+  pinnedCount: number;
+}
+
+/**
+ * Splits a deck (oldest first) into what the cap shows and what collapses to the
+ * chip. Pinned toasts claim the slots first, in arrival order so a new pinned
+ * arrival never shuffles a card under the user's thumb; any remaining slots go
+ * to the newest non-pinned toasts.
+ */
+export function partitionToasts<T extends { isPendingDecision?: boolean }>(
+  toasts: readonly T[],
+  cap: number,
+): ToastPartition<T> {
+  const pinned = toasts.filter(isPinned);
+  const rest = toasts.filter((t) => !isPinned(t));
+  const shownPinned = pinned.slice(0, cap);
+  const slotsLeft = Math.max(0, cap - shownPinned.length);
+  const shownRest = slotsLeft > 0 ? rest.slice(-slotsLeft) : [];
+  const visible = [...shownPinned, ...shownRest];
+  return { visible, overflow: toasts.length - visible.length, pinnedCount: pinned.length };
+}

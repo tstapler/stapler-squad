@@ -14,6 +14,7 @@ export function recordToHistoryItem(record: NotificationHistoryRecord): Notifica
     notificationType: mapNotificationType(record.notificationType),
     metadata: record.metadata ? Object.fromEntries(Object.entries(record.metadata)) : undefined,
     isRead: record.isRead,
+    isPendingDecision: record.isPendingDecision,
     occurrenceCount: record.occurrenceCount,
   };
 }

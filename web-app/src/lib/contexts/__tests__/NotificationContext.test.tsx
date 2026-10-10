@@ -897,4 +897,21 @@ describe("NotificationContext", () => {
       expect(source.split("\n").length).toBeLessThan(532);
     });
   });
+  describe("isPendingDecision (Story 3.2)", () => {
+    it("clears the pending flag on a history row once it is marked read", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+
+      act(() => {
+        result.current.addNotification(makeNotification({ notificationType: "warning", isPendingDecision: true }));
+      });
+      const id = result.current.notificationHistory[0].id;
+      expect(result.current.notificationHistory[0].isPendingDecision).toBe(true);
+
+      act(() => {
+        result.current.markAsRead(id);
+      });
+      expect(result.current.notificationHistory[0].isRead).toBe(true);
+      expect(result.current.notificationHistory[0].isPendingDecision).toBe(false);
+    });
+  });
 });

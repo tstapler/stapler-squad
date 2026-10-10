@@ -10,7 +10,6 @@ import { useApprovalResolution } from "@/lib/hooks/useApprovalResolution";
 import { groupNotifications } from "@/lib/utils/notificationGrouping";
 import {
   notificationTypeFilter,
-  isActionableNotification,
   isReconciledNotification,
   computeScopedMarkReadIds,
   capBadgeCount,
@@ -151,11 +150,11 @@ export function NotificationsPage() {
   // decision" tier and everything else ("recent activity" — never
   // "informational", which is Task 3.2.1a's Review Queue tier name).
   const needsDecision = useMemo(
-    () => filteredNotifications.filter((n) => !n.isRead && isActionableNotification(n.notificationType)),
+    () => filteredNotifications.filter((n) => n.isPendingDecision === true),
     [filteredNotifications]
   );
   const recentActivity = useMemo(
-    () => filteredNotifications.filter((n) => n.isRead || !isActionableNotification(n.notificationType)),
+    () => filteredNotifications.filter((n) => n.isPendingDecision !== true),
     [filteredNotifications]
   );
 
@@ -164,7 +163,7 @@ export function NotificationsPage() {
   // NeedsDecisionSection can tell "nothing needs a decision" apart from "a
   // filter is hiding something that does" (Product Triad Review round-4 fix).
   const totalActionableCount = useMemo(
-    () => notificationHistory.filter((n) => !n.isRead && isActionableNotification(n.notificationType)).length,
+    () => notificationHistory.filter((n) => n.isPendingDecision === true).length,
     [notificationHistory]
   );
 

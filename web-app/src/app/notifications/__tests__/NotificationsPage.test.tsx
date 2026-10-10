@@ -322,6 +322,7 @@ describe("NotificationsPage — NeedsDecisionSection tiering (Task 3.1.2c/3.1.2d
         sessionId: "sess-a1b2c3",
         sessionName: "Approval Session",
         notificationType: "approval_needed",
+        isPendingDecision: true,
         metadata: { approval_id: "appr-1" },
       }),
       makeNotification({ id: "notif-1", sessionId: "sess-x", sessionName: "Complete 1", notificationType: "task_complete", isRead: true }),
@@ -362,6 +363,7 @@ describe("NotificationsPage — NeedsDecisionSection tiering (Task 3.1.2c/3.1.2d
         id: "notif-approval",
         sessionName: "Approval Session",
         notificationType: "approval_needed",
+        isPendingDecision: true,
         metadata: { approval_id: "appr-1" },
       }),
       makeNotification({ id: "notif-1", sessionName: "Complete 1", notificationType: "task_complete", isRead: true }),
@@ -383,6 +385,7 @@ describe("NotificationsPage — NeedsDecisionSection tiering (Task 3.1.2c/3.1.2d
         id: "notif-approval",
         sessionName: "Approval Session",
         notificationType: "approval_needed",
+        isPendingDecision: true,
         metadata: { approval_id: "appr-1" },
       }),
     ];
@@ -404,6 +407,7 @@ describe("NotificationsPage — scoped bulk-read button (Task 3.1.2e/3.1.2f)", (
         id: "notif-approval",
         sessionName: "Approval Session",
         notificationType: "approval_needed",
+        isPendingDecision: true,
         metadata: { approval_id: "appr-1" },
       }),
       makeNotification({ id: "notif-complete", sessionId: "sess-c", sessionName: "Complete", notificationType: "task_complete" }),
@@ -423,6 +427,7 @@ describe("NotificationsPage — scoped bulk-read button (Task 3.1.2e/3.1.2f)", (
         id: "notif-approval",
         sessionName: "Approval Session",
         notificationType: "approval_needed",
+        isPendingDecision: true,
         metadata: { approval_id: "appr-1" },
       }),
     ];
@@ -450,6 +455,7 @@ describe("NotificationsPage — no ✕ control in NeedsDecisionSection (Task 3.1
         id: "notif-approval",
         sessionName: "Approval Session",
         notificationType: "approval_needed",
+        isPendingDecision: true,
         metadata: { approval_id: "appr-1" },
       }),
     ];

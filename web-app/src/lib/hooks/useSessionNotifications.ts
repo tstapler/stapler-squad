@@ -144,6 +144,7 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
         priority: mapPriority(event.priority),
         notificationType: mapNotificationType(event.notificationType),
         metadata: event.metadata,
+        isPendingDecision: event.isPendingDecision,
         onView: (onViewSessionRef.current && !isBacklogItemNotification)
           ? () => onViewSessionRef.current?.(event.sessionId)
           : undefined,
@@ -172,6 +173,7 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
       sourceWorkingDir: sourceWorkingDir,
       sourceProject: sourceProject,
       metadata: event.metadata,
+      isPendingDecision: event.isPendingDecision,
       onView: (onViewSessionRef.current && !isBacklogItemNotification)
         ? () => onViewSessionRef.current?.(event.sessionId)
         : undefined,

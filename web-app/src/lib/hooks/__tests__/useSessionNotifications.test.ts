@@ -516,4 +516,39 @@ describe("useSessionNotifications", () => {
       );
     });
   });
+  // ── Story 3.2: the server-sent pending-decision field rides on the toast ──
+
+  describe("isPendingDecision", () => {
+    it("copies the live event's server-computed value onto the toast", () => {
+      const { result } = renderHook(() => useSessionNotifications({ enableAudio: false }));
+
+      act(() => {
+        result.current({ ...makeEvent(NT.WARNING, "s-warn"), isPendingDecision: true });
+      });
+      act(() => {
+        result.current({ ...makeEvent(NT.WARNING, "s-auto"), isPendingDecision: false });
+      });
+
+      expect(mockAddNotification).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ sessionId: "s-warn", isPendingDecision: true }),
+      );
+      expect(mockAddNotification).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ sessionId: "s-auto", isPendingDecision: false }),
+      );
+    });
+
+    it("copies the value onto history-only records too", () => {
+      const { result } = renderHook(() => useSessionNotifications({ enableAudio: false }));
+
+      act(() => {
+        result.current({ ...makeEvent(NT.INFO), isPendingDecision: false });
+      });
+
+      expect(mockAddToHistoryOnly).toHaveBeenCalledWith(
+        expect.objectContaining({ isPendingDecision: false }),
+      );
+    });
+  });
 });

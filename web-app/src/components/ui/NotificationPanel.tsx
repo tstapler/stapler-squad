@@ -7,7 +7,6 @@ import { useApprovalResolution } from "@/lib/hooks/useApprovalResolution";
 import { groupNotifications } from "@/lib/utils/notificationGrouping";
 import {
   notificationTypeFilter,
-  isActionableNotification,
   computeScopedMarkReadIds,
 } from "@/lib/utils/notificationMapping";
 import { NotificationItem, AutoHandledSection } from "./NotificationItem";
@@ -249,7 +248,7 @@ export function NotificationPanel() {
                     // Task 3.1.5b: exempt an unread actionable item from the ✕
                     // control, same as NeedsDecisionSection — this dropdown has no
                     // tiered sections, so the exemption is applied inline per item.
-                    isActionableNotification(group.notification.notificationType) && !group.notification.isRead
+                    group.notification.isPendingDecision === true
                       ? undefined
                       : removeFromHistory
                   }
