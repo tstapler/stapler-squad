@@ -28,21 +28,27 @@ type Appender interface {
 // converts them to NotificationRecords, coalesces rapid-fire events for the same
 // (sessionID, notificationType) key within a 500ms window, and flushes them to the store.
 // It stops when the context is canceled, flushing any remaining buffered records.
-func StartSubscriber(ctx context.Context, bus *events.EventBus, store *NotificationHistoryStore) {
-	StartSubscriberWithInterval(ctx, bus, store, DefaultCoalesceInterval)
+//
+// The returned channel is closed once the subscriber goroutine has exited, after
+// that final flush; callers that tear down the store's directory should wait on it.
+func StartSubscriber(ctx context.Context, bus *events.EventBus, store *NotificationHistoryStore) <-chan struct{} {
+	return StartSubscriberWithInterval(ctx, bus, store, DefaultCoalesceInterval)
 }
 
 // StartSubscriberWithInterval is like StartSubscriber but allows configuring the
 // coalescing interval. This is primarily useful for tests that need shorter intervals.
-func StartSubscriberWithInterval(ctx context.Context, bus *events.EventBus, store Appender, interval time.Duration) {
+func StartSubscriberWithInterval(ctx context.Context, bus *events.EventBus, store Appender, interval time.Duration) <-chan struct{} {
+	done := make(chan struct{})
 	if bus == nil || store == nil {
 		log.Warn("NotificationSubscriber EventBus or store is nil, not starting subscriber")
-		return
+		close(done)
+		return done
 	}
 
 	ch, _ := bus.Subscribe(ctx)
 
 	go func() {
+		defer close(done)
 		log.Info("NotificationSubscriber started", "coalesce_interval", interval)
 		defer log.Info("NotificationSubscriber stopped")
 
@@ -124,6 +130,7 @@ func StartSubscriberWithInterval(ctx context.Context, bus *events.EventBus, stor
 			}
 		}
 	}()
+	return done
 }
 
 // UrgentTTL is how long a notification's urgent axis stays push-eligible after it first
