@@ -416,3 +416,50 @@ func TestStreamHub_BeginScrollForward_should_BlockUntilAttachSubscriberCatchUpSn
 		t.Fatalf("BeginScrollForward did not acquire the barrier after AttachSubscriber released it")
 	}
 }
+
+// T-RO-03 (Story 5.1e): a read-only subscriber's size is never a vote, at attach or later.
+func TestAttachSubscriber_ShouldIgnoreSizeVote_WhenReadOnly200x50(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	controller := newFakeSessionController()
+	controller.captureContent = "snapshot"
+	hub := streamhub.NewStreamHub("ro-hub", controller,
+		streamhub.WithTeardownGrace(time.Hour),
+		streamhub.WithQuiescenceTimeout(30*time.Millisecond),
+		streamhub.WithQuiescenceQuietPeriod(5*time.Millisecond),
+	)
+	defer hub.ForceTeardown()
+
+	writerID := hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{CanResize: true})
+	hub.RequestResize(context.Background(), writerID, mustSize(t, 80, 24))
+	callsBefore := controller.setWindowSizeCalls.Load()
+
+	readOnlyID := hub.AttachSubscriber(newMemoryTransport(), streamhub.ReadOnlyCapability())
+	hub.RequestResize(context.Background(), readOnlyID, mustSize(t, 200, 50))
+
+	if got := controller.resizeCallCount(200, 50); got != 0 {
+		t.Fatalf("a read-only subscriber's 200x50 vote reached SetWindowSize %d times", got)
+	}
+	if got := controller.setWindowSizeCalls.Load(); got != callsBefore {
+		t.Fatalf("pane size changed after a read-only vote: %d calls before, %d after", callsBefore, got)
+	}
+	if size := hub.NegotiatedSize(); size != mustSize(t, 80, 24) {
+		t.Fatalf("negotiated size moved to %v", size)
+	}
+}
+
+// T-RO-05: a read-only subscriber still receives the pane's output.
+func TestStream_ShouldStreamOutputToClient_WhenHiddenPaneProducesOutput(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	hub := streamhub.NewStreamHub("ro-output", newFakeSessionController(), streamhub.WithTeardownGrace(time.Hour))
+	defer hub.ForceTeardown()
+
+	transport := newMemoryTransport()
+	hub.AttachSubscriber(transport, streamhub.ReadOnlyCapability())
+	hub.OnRawOutput([]byte("agent output"))
+
+	if !waitFor(t, time.Second, func() bool { return transport.receivedCount() >= 1 }) {
+		t.Fatal("a read-only subscriber received no output")
+	}
+}

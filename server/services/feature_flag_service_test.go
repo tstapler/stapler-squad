@@ -56,6 +56,7 @@ func assertScrollbackRequestReachesAppScrollGate(t *testing.T, fallbackContent s
 			}
 		}()
 		_, _ = scrollbackResultForRequest(scrollbackRequestParams{
+			writer:    testWriter(),
 			startLine: "-100",
 			endLine:   "-1",
 			logPrefix: "[test]",
@@ -73,6 +74,7 @@ func assertScrollbackRequestSkipsAppScrollGate(t *testing.T) {
 	t.Helper()
 	fallbackCalled := false
 	result, err := scrollbackResultForRequest(scrollbackRequestParams{
+		writer:    testWriter(),
 		startLine: "-100",
 		endLine:   "-1",
 		logPrefix: "[test]",
