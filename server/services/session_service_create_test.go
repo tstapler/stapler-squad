@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -643,6 +645,91 @@ func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
 		}
 		t.Error("status manager was never wired within 30 s — regression in CreateSession goroutine")
 	}
+}
+
+// TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession proves a custom program's
+// registered env map reaches the spawned session's process, end to end: the real
+// UpsertProgramConfig RPC -> the real CreateSession RPC -> a real tmux server.
+//
+// Root cause of the original bug (fixed in cdfd4e5cf2, 2026-09-21): before that commit
+// initTmuxSession called session.SetExtraEnv([]string{"STAPLER_SESSION_UUID=" + uuid})
+// directly, and no code path merged config.ResolveProgramConfig(...).EnvVars into the
+// tmux `-e` set at all (resolveExtraEnvVars/buildExtraEnv did not exist). The unit tests
+// of that era built &Instance{} literals and called the resolver directly, so they
+// never saw the missing wiring. Only this RPC-to-tmux path does.
+func TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession(t *testing.T) {
+	// Not t.Parallel(): shells out to a real tmux binary on this service's isolated socket.
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not available")
+	}
+	const (
+		envKey = "ANTHROPIC_BASE_URL"
+		envVal = "http://127.0.0.1:47000"
+	)
+	// One isolated config dir shared by the write (UpsertProgramConfig) and the
+	// read (CreateSession -> resolveExtraEnvVars -> config.LoadConfig).
+	envtest.NewIsolatedStateDir(t)
+
+	ctx := context.Background()
+	_, err := NewDefaultsService().UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
+		Program: &sessionv1.ProgramConfigProto{
+			Id: "netflix-model-gateway", Label: "Netflix Model Gateway",
+			Command: "bash", // a shell, so printenv can run in the pane; env injection is command-agnostic
+			Env:     map[string]string{envKey: envVal},
+		},
+	}))
+	require.NoError(t, err)
+
+	repoDir := t.TempDir()
+	initGitRepoWithCommit(t, repoDir)
+
+	svc := newCreateTestService(t, createTestStorage(t))
+	resp, err := svc.CreateSession(ctx, connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:       "program-env-repro",
+		Path:        repoDir,
+		Branch:      "program-env-repro",
+		SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE,
+		Program:     "netflix-model-gateway",
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
+
+	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
+	require.NotNil(t, inst)
+
+	// Poll (not testify Eventually: its condition runs in a goroutine, which breaks t.Skip).
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) && session.Status(inst.GetStatus()) != session.Active && session.Status(inst.GetStatus()) != session.Stopped {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if session.Status(inst.GetStatus()) == session.Stopped {
+		t.Skip("session failed to start (tmux unusable in this environment)")
+	}
+	require.Equal(t, session.Active, session.Status(inst.GetStatus()), "session must reach Active within 30s")
+
+	tmuxName := inst.GetTmuxSessionName()
+	require.NotEmpty(t, tmuxName)
+	socket := svc.testTmuxServerSocket
+
+	// AC2: session-scoped table.
+	out, err := exec.CommandContext(ctx, "tmux", "-L", socket, "show-environment", "-t", tmuxName).CombinedOutput()
+	require.NoError(t, err, string(out))
+	assert.Contains(t, string(out), envKey+"="+envVal, "tmux show-environment must carry the program's env")
+
+	// AC1: the pane's actual process environment, not just tmux's table. The pane's
+	// shell may not be ready yet, so re-send until the value shows up or the deadline hits.
+	var captured []byte
+	paneDeadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(paneDeadline) {
+		_ = exec.CommandContext(ctx, "tmux", "-L", socket, "send-keys", "-t", tmuxName,
+			"echo ENVPROBE_$(printenv "+envKey+")_END", "Enter").Run()
+		time.Sleep(300 * time.Millisecond)
+		captured, _ = exec.CommandContext(ctx, "tmux", "-L", socket, "capture-pane", "-p", "-t", tmuxName).Output()
+		if strings.Contains(string(captured), "ENVPROBE_"+envVal+"_END") {
+			break
+		}
+	}
+	assert.Contains(t, string(captured), "ENVPROBE_"+envVal+"_END", "printenv inside the pane must show the program's env")
 }
 
 // ---------------------------------------------------------------------------
