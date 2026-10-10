@@ -75,7 +75,8 @@ const testStatsDir = "/cfg"
 func newTestStore(t *testing.T, mfs *memFS, clk *gateTestClock, pid int) (*FileStatsStore, func(string) int) {
 	t.Helper()
 	lg, count := newLogCapture()
-	return NewFileStatsStore(testStatsDir, WithStatsFS(mfs), WithStatsClock(clk.Now), WithStatsPID(pid), WithStatsLogger(lg)), count
+	return NewFileStatsStore(testStatsDir, WithStatsFS(mfs), WithStatsClock(clk.Now), WithStatsPID(pid), WithStatsLogger(lg),
+		WithStatsPIDLiveness(func(int, time.Time) bool { return true })), count
 }
 
 func sampleStats(clk *gateTestClock) deliverygate.PersistedStats {
@@ -210,6 +211,37 @@ func TestStatsStore_ShouldUsePidSpecificTempNameDefinedChecksumAndForeignWriterR
 
 	clk.Advance(3 * time.Minute) // writer pid 100 is gone: last write older than 2 minutes
 	require.NoError(t, b.Save(sampleStats(clk)))
+}
+
+func TestStatsStore_ShouldWriteImmediately_WhenForeignWriterPidIsDead(t *testing.T) {
+	t.Parallel()
+	mfs, clk := newMemFS(), newGateTestClock()
+	a, _ := newTestStore(t, mfs, clk, 100)
+	require.NoError(t, a.Save(sampleStats(clk)))
+
+	lg, _ := newLogCapture()
+	alive := true
+	b := NewFileStatsStore(testStatsDir, WithStatsFS(mfs), WithStatsClock(clk.Now), WithStatsPID(200),
+		WithStatsLogger(lg), WithStatsPIDLiveness(func(pid int, _ time.Time) bool { return alive && pid == 100 }))
+	clk.Advance(5 * time.Second) // well inside the 2-minute window
+	require.True(t, b.ForeignWriterActive(), "live writer still blocks")
+	require.ErrorIs(t, b.Save(sampleStats(clk)), errForeignWriter)
+
+	alive = false // writer 100 was killed and restarted as 200
+	assert.False(t, b.ForeignWriterActive())
+	require.NoError(t, b.Save(sampleStats(clk)))
+	p, ok := b.Load()
+	require.True(t, ok)
+	assert.Equal(t, 200, p.WriterPID)
+}
+
+func TestProcessWriterAlive_ShouldReportSelfAliveAndRejectBogusAndReusedPids(t *testing.T) {
+	t.Parallel()
+	self := os.Getpid()
+	assert.True(t, ProcessWriterAlive(self, time.Now()))
+	assert.False(t, ProcessWriterAlive(0, time.Now()))
+	assert.False(t, ProcessWriterAlive(self, time.Now().Add(-24*time.Hour)),
+		"a process that started after the file was written is a reused pid")
 }
 
 func TestStatsStore_ShouldDefaultToNoopStoreWithNoDiskOrGoroutine_WhenUnitTestsBuildAGate(t *testing.T) {

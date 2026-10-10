@@ -31,6 +31,7 @@ type FileStatsStore struct {
 	dir    string
 	pid    int
 	now    func() time.Time
+	alive  PidLiveness
 	logger *slog.Logger
 
 	saveMu   sync.Mutex // serializes Save (writer tick and shutdown flush share the temp file)
@@ -53,6 +54,12 @@ func WithStatsClock(now func() time.Time) StatsStoreOption {
 // WithStatsPID injects the writer pid.
 func WithStatsPID(pid int) StatsStoreOption { return func(s *FileStatsStore) { s.pid = pid } }
 
+// WithStatsPIDLiveness injects the probe that decides whether a foreign writer
+// pid is still running (deterministic fake in tests).
+func WithStatsPIDLiveness(p PidLiveness) StatsStoreOption {
+	return func(s *FileStatsStore) { s.alive = p }
+}
+
 // WithStatsLogger injects the logger (default: the repo logger).
 func WithStatsLogger(l *slog.Logger) StatsStoreOption {
 	return func(s *FileStatsStore) { s.logger = l }
@@ -62,7 +69,7 @@ func WithStatsLogger(l *slog.Logger) StatsStoreOption {
 // by the caller (the test-mode directory when STAPLER_SQUAD_TEST_DIR is set).
 func NewFileStatsStore(dir string, opts ...StatsStoreOption) *FileStatsStore {
 	s := &FileStatsStore{
-		fs: osFS{}, dir: dir, pid: os.Getpid(), now: time.Now, logger: deliverygate.NewRepoLogger(),
+		fs: osFS{}, dir: dir, pid: os.Getpid(), now: time.Now, alive: ProcessWriterAlive, logger: deliverygate.NewRepoLogger(),
 		warnedAt: map[string]time.Time{},
 	}
 	for _, o := range opts {
@@ -177,7 +184,8 @@ func (s *FileStatsStore) quarantine(why string) {
 var errForeignWriter = errors.New("delivery gate stats file is being written by another process")
 
 // ForeignWriterActive reports whether the file was written by a different pid within
-// foreignWriterWindow.
+// foreignWriterWindow and that pid is still the process that wrote it. A dead
+// (or pid-reused) writer never blocks, so a restart resumes writing at once.
 func (s *FileStatsStore) ForeignWriterActive() bool {
 	data, err := s.fs.ReadFile(s.path())
 	if err != nil {
@@ -187,7 +195,10 @@ func (s *FileStatsStore) ForeignWriterActive() bool {
 	if json.Unmarshal(data, &p) != nil {
 		return false
 	}
-	return p.WriterPID != 0 && p.WriterPID != s.pid && s.now().Sub(p.WrittenAt) < foreignWriterWindow
+	if p.WriterPID == 0 || p.WriterPID == s.pid || s.now().Sub(p.WrittenAt) >= foreignWriterWindow {
+		return false
+	}
+	return s.alive(p.WriterPID, p.WrittenAt)
 }
 
 // Save writes atomically: pid-named temp file, fsync, rename, mode 0600. A
