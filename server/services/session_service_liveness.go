@@ -70,6 +70,13 @@ func isSafeSteerStatus(status detection.DetectedStatus, statusContext string) bo
 	return session.IsSafeSteerStatus(status, statusContext)
 }
 
+// IsHiddenSession implements SessionSteerer: true only for a live instance that
+// is hidden. An untracked session is not hidden (the steer fails on its own).
+func (s *SessionService) IsHiddenSession(sessionUUID string) bool {
+	inst := s.FindLiveInstance(sessionUUID)
+	return inst != nil && inst.Snapshot().Hidden
+}
+
 // IsReadyForSteer implements SessionSteerer. It gates an unattended PTY
 // write (e.g. PR-fix steering) on isSafeSteerStatus — see that function's
 // doc comment for the StatusIdle-vs-safe-description invariant. Any case

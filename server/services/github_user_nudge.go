@@ -297,6 +297,10 @@ func (s *GitHubUserService) resolveSession(call *nudgeCall, sessionID string) (i
 	}
 	call.sessionID = inst.GetStableID()
 	call.live = true
+	if snap.Hidden {
+		// A PR can be linked to a hidden review session; the UI never types into one.
+		return nil, nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("this session is a background session and is read-only, so nothing was sent"))
+	}
 	if snap.Status.IsSuspended() {
 		return nil, nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_PAUSED, nil, call.sessionID, nudgePausedDetail), nil
 	}

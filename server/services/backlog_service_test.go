@@ -339,6 +339,14 @@ type mockSessionSteerer struct {
 	// write is recorded). Absent uuids delegate to recordSteer.
 	guardedOutcome map[string]SteerOutcome
 	guardedSigs    []string
+	// hidden marks uuids whose IsHiddenSession must return true.
+	hidden map[string]bool
+}
+
+func (m *mockSessionSteerer) IsHiddenSession(uuid string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.hidden[uuid]
 }
 
 type mockSteerCall struct {
