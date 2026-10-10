@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
 )
@@ -226,4 +227,158 @@ func TestRequestRecord_ShouldCarryRawListenerAuthModeHostOriginAndProxiedOnBothC
 	// Raw values only: the record adds no refusal, even for a foreign Host.
 	rebinding := recordProbe(t, func(srv *Server) http.Handler { return srv.remoteChain(nil, false) }, "evil.example", nil)
 	assert.Equal(t, "evil.example", rebinding.Host)
+}
+
+const pruneProcedurePath = "/api" + sessionv1connect.SessionServicePruneHiddenSessionNotificationsProcedure
+
+// rebindingSet adds a stand-in rebinding-profile member; the real members
+// (Prune, Reply) register in later PRs.
+func rebindingSet() map[string]middleware.GuardProfile {
+	set := map[string]middleware.GuardProfile{pruneProcedurePath: middleware.ProfileRebinding}
+	for p, prof := range guardedProcedures {
+		set[p] = prof
+	}
+	return set
+}
+
+func newRebindingTestServer(t *testing.T, addr string) (*Server, *int) {
+	t.Helper()
+	srv, _ := newChainTestServer(t, addr)
+	reached := new(int)
+	srv.mux.HandleFunc(pruneProcedurePath, func(w http.ResponseWriter, _ *http.Request) {
+		*reached++
+		w.WriteHeader(http.StatusOK)
+	})
+	return srv, reached
+}
+
+func postPath(h http.Handler, path, host, origin string) int {
+	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}"))
+	r.Host = host
+	if origin != "" {
+		r.Header.Set("Origin", origin)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w.Code
+}
+
+// T-RP-39: the rebinding profile on every supported bind, and ProbeProgram
+// behavior unchanged beside it. The local chain's HostGuard (no AllowedHosts)
+// refuses every non-loopback Host before the procedure guard, so a verified LAN
+// hostname never reaches it on :8543; the profile's LAN-hostname allowance is
+// covered at the middleware level (callerguard_test.go).
+func TestLocalWriteGuard_ShouldRejectRebindingHostForeignOriginAndNonPostForReply_AndKeepProbeProgramBehaviorUnchanged(t *testing.T) {
+	for _, addr := range []string{"localhost:8543", "127.0.0.1:8543", "0.0.0.0:8543", ":8543"} {
+		t.Run(addr, func(t *testing.T) {
+			srv, reached := newRebindingTestServer(t, addr)
+			srv.ReplaceVerifiedHostnames([]string{"onyx.lan"})
+			chain := srv.localChainWith(rebindingSet())
+
+			assert.Equal(t, http.StatusForbidden, postPath(chain, pruneProcedurePath, "evil.example:8543", ""))
+			assert.Equal(t, http.StatusForbidden, postPath(chain, pruneProcedurePath, "localhost:8543", "https://evil.example"))
+			assert.Equal(t, http.StatusForbidden, postPath(chain, pruneProcedurePath, "onyx.lan:8543", ""), "HostGuard refuses LAN names on :8543")
+			assert.Zero(t, *reached)
+
+			r := httptest.NewRequest(http.MethodGet, pruneProcedurePath, nil)
+			r.Host = "localhost:8543"
+			w := httptest.NewRecorder()
+			chain.ServeHTTP(w, r)
+			assert.Equal(t, http.StatusMethodNotAllowed, w.Code, "non-POST to a guarded procedure")
+
+			// Loopback passes the rebinding profile on every bind, wildcard included.
+			assert.Equal(t, http.StatusOK, postPath(chain, pruneProcedurePath, "localhost:8543", ""))
+			assert.Equal(t, 1, *reached)
+
+			// ProbeProgram keeps its loopback-bound condition: allowed only on a loopback bind.
+			wantProbe := http.StatusForbidden
+			if middleware.ListenAddrIsLoopback(addr) {
+				wantProbe = http.StatusOK
+			}
+			assert.Equal(t, wantProbe, postProbe(chain, "localhost:8543", ""))
+		})
+	}
+}
+
+// A name that is only in GetHostnames() (detected, unverified) is refused.
+func TestLocalWriteGuard_ShouldRefuseAHostnameOnlyInDetectedSet_WhenVerifiedSetLacksIt(t *testing.T) {
+	srv, reached := newRebindingTestServer(t, "0.0.0.0:8543")
+	srv.SetHostnames([]string{"attacker.example"})
+	assert.Equal(t, http.StatusForbidden, postPath(srv.localChainWith(rebindingSet()), pruneProcedurePath, "attacker.example:8543", ""))
+	assert.Zero(t, *reached)
+}
+
+// T-RP-57: the set holds only the registered procedures and never
+// ClearNotificationHistory.
+func TestLocalWriteGuard_ShouldKeepProbeProgramByteForByteAndListOnlyRegisteredProcedures_AndNeverGuardClearNotificationHistory(t *testing.T) {
+	assert.Equal(t, map[string]middleware.GuardProfile{
+		probeProcedurePath: middleware.ProfileProbe,
+		nudgeProcedurePath: middleware.ProfileProbe,
+	}, guardedProcedures)
+	_, hasClear := guardedProcedures["/api"+sessionv1connect.SessionServiceClearNotificationHistoryProcedure]
+	assert.False(t, hasClear)
+	_, hasPrune := guardedProcedures[pruneProcedurePath]
+	assert.False(t, hasPrune, "Prune registers in Task 2.7c")
+}
+
+// T-RP-67: path variants of a guarded procedure are not served without the guard.
+func TestLocalWriteGuard_ShouldNotServeTrailingSlashDoubleSlashDotSegmentOrPercentEncodedProcedurePathsWithoutTheGuard(t *testing.T) {
+	srv, reached := newRebindingTestServer(t, "localhost:8543")
+	chain := srv.localChainWith(rebindingSet())
+	bare := strings.TrimPrefix(pruneProcedurePath, "/api")
+	variants := map[string]string{
+		"unprefixed":      bare,
+		"trailing slash":  pruneProcedurePath + "/",
+		"double slash":    "/api/" + bare,
+		"dot segment":     "/api/./" + strings.TrimPrefix(bare, "/"),
+		"percent encoded": "/api%2F" + strings.TrimPrefix(bare, "/"),
+		"encoded slash":   strings.Replace(pruneProcedurePath, "/PruneHidden", "%2FPruneHidden", 1),
+	}
+	for name, path := range variants {
+		t.Run(name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("{}"))
+			r.URL.Path = path
+			r.URL.RawPath = ""
+			r.Host = "evil.example:8543"
+			w := httptest.NewRecorder()
+			chain.ServeHTTP(w, r)
+			assert.NotEqual(t, http.StatusOK, w.Code)
+		})
+	}
+	assert.Zero(t, *reached, "no variant reaches the handler from a rebinding Host")
+}
+
+// T-RP-68: with an authMiddleware the procedure guard is not installed and
+// auth is the boundary; the Host guard stays.
+func TestLocalWriteGuard_ShouldNotBeInstalledWhenAuthMiddlewareIsSetAndTheVerdictShouldFollowAuthMode_WhenLocalChainHasAuth(t *testing.T) {
+	srv, reached := newRebindingTestServer(t, "0.0.0.0:8543")
+	srv.SetupAuth(func(next http.Handler) http.Handler { return next }, true)
+	chain := srv.localChainWith(rebindingSet())
+
+	// A GET would be 405 from the procedure guard; it reaches the handler, so no guard is installed.
+	r := httptest.NewRequest(http.MethodGet, pruneProcedurePath, nil)
+	r.Host = "localhost:8543"
+	w := httptest.NewRecorder()
+	chain.ServeHTTP(w, r)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, 1, *reached)
+	assert.Equal(t, http.StatusForbidden, postPath(chain, pruneProcedurePath, "evil.example:8543", ""), "Host guard stays")
+
+	rec := recordProbe(t, func(s *Server) http.Handler {
+		s.SetupAuth(func(next http.Handler) http.Handler { return next }, true)
+		return s.localChain()
+	}, "localhost:8543", nil)
+	assert.Equal(t, services.AuthModeRequired, rec.AuthMode)
+}
+
+func TestReplaceVerifiedHostnames_ShouldNormalizeDropLiteralsAndLocalhostAndReplaceWholesale(t *testing.T) {
+	srv, _ := newChainTestServer(t, "localhost:8543")
+	assert.Nil(t, srv.GetVerifiedHostnames())
+
+	srv.ReplaceVerifiedHostnames([]string{"B.lan.", "a.lan", "A.LAN", "localhost", "10.0.0.5", "::1", ""})
+	assert.Equal(t, []string{"a.lan", "b.lan"}, srv.GetVerifiedHostnames())
+
+	srv.ReplaceVerifiedHostnames([]string{"c.lan"})
+	assert.Equal(t, []string{"c.lan"}, srv.GetVerifiedHostnames(), "not add-only")
+	assert.Empty(t, srv.GetHostnames(), "the detected set is a separate store")
 }

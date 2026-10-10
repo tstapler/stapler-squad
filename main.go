@@ -1367,6 +1367,9 @@ type remoteAccessResult struct {
 	Handler   *serverauth.Handler
 	CertStore *server.NetworkCertStore
 	Networks  map[string][]string
+	// VerifiedHostnames is the boot-time set that passed verifyHostnameOwnership;
+	// Networks holds the raw, unverified candidates and must not feed the verdict.
+	VerifiedHostnames []string
 }
 
 // remoteAuthSetup carries the auth-subsystem collaborators initRemoteAuth
@@ -1650,7 +1653,8 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 
 	log.Info("auth: remote access enabled", "port", remotePort, "rpID", rpID, "host", displayHost, "lan_ip", lanIPStr)
 	log.Info("auth: TLS CA cert", "path", caFile)
-	return &remoteAccessResult{Handler: waHandler, CertStore: certStore, Networks: networks}, nil
+	return &remoteAccessResult{Handler: waHandler, CertStore: certStore, Networks: networks,
+		VerifiedHostnames: append([]string(nil), verifiedHostnames...)}, nil
 }
 
 // startHostnameDetector wires up LAN hostname redetection: builds the
@@ -1672,7 +1676,9 @@ func startHostnameDetector(mux *http.ServeMux, srv *server.Server, remoteAccess 
 	initialNetworks := map[string][]string{}
 	var waHandler *serverauth.Handler
 	var certStore *server.NetworkCertStore
+	var initialVerified []string
 	if remoteAccess != nil {
+		initialVerified = remoteAccess.VerifiedHostnames
 		initialNetworks = remoteAccess.Networks
 		waHandler = remoteAccess.Handler
 		certStore = remoteAccess.CertStore
@@ -1700,6 +1706,7 @@ func startHostnameDetector(mux *http.ServeMux, srv *server.Server, remoteAccess 
 	detector := NewHostnameDetector(HostnameDetectorConfig{
 		Srv:             srv,
 		InitialNetworks: initialNetworks,
+		InitialVerified: initialVerified,
 		Tick:            time.NewTicker(hostnameRedetectInterval()).C,
 		Events:          netChangeEvents,
 		WAHandler:       waHandler,

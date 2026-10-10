@@ -37,6 +37,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -60,6 +61,7 @@ type Server struct {
 	requiresAuth               bool                            // explicit: a real validator is wired
 	httpsURL                   string                          // set when remote access is enabled
 	hostnames                  atomic.Pointer[[]string]        // detected LAN hostnames; published add-only via SetHostnames, read lock-free via GetHostnames
+	verifiedHostnames          atomic.Pointer[[]string]        // forward-verified subset; replaced wholesale via ReplaceVerifiedHostnames, read lock-free via GetVerifiedHostnames
 	origins                    []string                        // allowed CORS origins
 	shutdownHooks              []func()                        // called before HTTP server stops
 	connCtxCancel              context.CancelFunc              // cancels BaseContext → closes active streams on shutdown
@@ -1613,6 +1615,50 @@ func (s *Server) GetHostnames() []string {
 	return *p
 }
 
+// ReplaceVerifiedHostnames atomically replaces the verified hostname set. Unlike
+// SetHostnames it is not add-only: the detector recomputes it from its
+// ownership check every cycle. Empty names, IP literals and localhost are
+// dropped (an IP literal is allowed by the verdict's own rule, not by
+// membership), names are normalized, de-duplicated and sorted.
+func (s *Server) ReplaceVerifiedHostnames(names []string) {
+	seen := make(map[string]struct{}, len(names))
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		h := middleware.NormalizeHost(n)
+		if h == "" || h == "localhost" || net.ParseIP(h) != nil {
+			continue
+		}
+		if _, dup := seen[h]; dup {
+			continue
+		}
+		seen[h] = struct{}{}
+		out = append(out, h)
+	}
+	sort.Strings(out)
+	s.verifiedHostnames.Store(&out)
+}
+
+// GetVerifiedHostnames returns the verified hostname set, or nil before the
+// first ReplaceVerifiedHostnames. The slice is immutable; do not modify it.
+func (s *Server) GetVerifiedHostnames() []string {
+	p := s.verifiedHostnames.Load()
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+// LocalWriteVerdictConfig is the rebinding gate's live input set, read lazily so
+// origins, the bound address and the verified hostnames published after
+// construction are honored.
+func (s *Server) LocalWriteVerdictConfig() middleware.VerdictConfig {
+	return middleware.VerdictConfig{
+		VerifiedHosts:  s.GetVerifiedHostnames,
+		ListenAddr:     s.GetAddr,
+		AllowedOrigins: s.GetOrigins,
+	}
+}
+
 // SetOrigins records the allowed CORS origins.
 func (s *Server) SetOrigins(origins []string) {
 	s.origins = origins
@@ -1702,7 +1748,12 @@ const probeProcedurePath = "/api" + sessionv1connect.SessionServiceProbeProgramP
 // NudgeSessionForPR, guarded like ProbeProgram on the unauthenticated listener.
 const nudgeProcedurePath = "/api" + sessionv1connect.GitHubUserServiceNudgeSessionForPRProcedure
 
-var guardedProcedurePaths = []string{probeProcedurePath, nudgeProcedurePath}
+// guardedProcedures is the LocalWriteGuard set. A new member names its profile;
+// ProbeProgram and the nudge keep the original probe verdict byte for byte.
+var guardedProcedures = map[string]middleware.GuardProfile{
+	probeProcedurePath: middleware.ProfileProbe,
+	nudgeProcedurePath: middleware.ProfileProbe,
+}
 
 // localChain is the :8543 middleware chain (inside otelhttp):
 // Logging -> CORS -> Compress -> HostGuard -> [auth | ProbeGuard] -> mux.
@@ -1712,15 +1763,24 @@ var guardedProcedurePaths = []string{probeProcedurePath, nudgeProcedurePath}
 // boundary for the RPCs that execute a program or write to a session's terminal
 // (ProbeProgram, NudgeSessionForPR); with auth, auth is the boundary.
 func (s *Server) localChain() http.Handler {
+	return s.localChainWith(guardedProcedures)
+}
+
+// localChainWith builds localChain over an explicit guard set so tests can
+// exercise a profile before a real procedure registers in it.
+func (s *Server) localChainWith(procedures map[string]middleware.GuardProfile) http.Handler {
 	inner := http.Handler(s)
 	if s.authMiddleware != nil {
 		inner = s.authMiddleware(inner)
 	} else {
-		inner = middleware.ProbeGuardPaths(guardedProcedurePaths, s.probeGuardConfig())(inner)
+		inner = middleware.LocalWriteGuard(procedures, middleware.LocalWriteGuardConfig{
+			Probe:     s.probeGuardConfig(),
+			Rebinding: s.LocalWriteVerdictConfig(),
+		})(inner)
 	}
 	inner = middleware.HostGuard(s.hostGuardConfig())(inner)
-	stamp := services.WithRequestRecord(services.ListenerLocal, s.requiresAuth)
-	return stamp(middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))))
+	return s.stampRequest(services.ListenerLocal, s.requiresAuth)(
+		middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))))
 }
 
 // localExemptPaths skip the Host guard on :8543.
@@ -1743,8 +1803,16 @@ func (s *Server) remoteChain(authMW func(http.Handler) http.Handler, requiresAut
 	if authMW != nil {
 		inner = authMW(inner)
 	}
-	stamp := services.WithRequestRecord(services.ListenerRemote, requiresAuth)
-	return stamp(middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))))
+	return s.stampRequest(services.ListenerRemote, requiresAuth)(
+		middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))))
+}
+
+// stampRequest stamps the raw request record and the in-handler verdict's live
+// inputs on the context for both chains.
+func (s *Server) stampRequest(listener string, requiresAuth bool) func(http.Handler) http.Handler {
+	record := services.WithRequestRecord(listener, requiresAuth)
+	verdict := services.WithLocalWriteVerdictConfig(s.LocalWriteVerdictConfig())
+	return func(next http.Handler) http.Handler { return record(verdict(next)) }
 }
 
 // probeGuardConfig reads everything lazily: origins, hostnames and the bound

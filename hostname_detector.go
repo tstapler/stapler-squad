@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"slices"
 	"sort"
@@ -11,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server"
 	serverauth "github.com/tstapler/stapler-squad/server/auth"
+	"github.com/tstapler/stapler-squad/server/middleware"
 )
 
 // defaultHostnameRedetectInterval is used when
@@ -84,6 +86,11 @@ type HostnameDetectorConfig struct {
 	// context so it can be bounded by the per-cycle cycleTimeout, not just
 	// invoked context-less (see redetect's cycleCtx thread-through).
 	ValidateFn func(context.Context, string) bool
+
+	// InitialVerified is the boot-time verified hostname set (startRemoteAccess's
+	// verifiedHostnames). It seeds Server.GetVerifiedHostnames at construction,
+	// before any cycle completes, and stays a candidate for re-verification.
+	InitialVerified []string
 }
 
 // HostnameDetector periodically (re)detects this host's LAN IPs and their
@@ -134,6 +141,12 @@ type HostnameDetector struct {
 	certStore  *server.NetworkCertStore
 	validateFn func(context.Context, string) bool
 
+	// initialVerified seeds the verified set and stays a candidate every cycle.
+	initialVerified []string
+	// verified tracks per-name verification state across cycles; only Run's
+	// goroutine touches it. nil until seedVerified or the first recompute.
+	verified map[string]*verifyState
+
 	// certPublisher wraps server.EnsureNetworkTLSCerts by default; tests
 	// inject a fake to simulate issuance failure or to count invocations
 	// without touching disk.
@@ -155,7 +168,7 @@ func NewHostnameDetector(cfg HostnameDetectorConfig) *HostnameDetector {
 		validateFn = verifyHostnameOwnership
 	}
 
-	return &HostnameDetector{
+	d := &HostnameDetector{
 		srv:           cfg.Srv,
 		detectFn:      detectLANIPs,
 		resolveFn:     resolveLANHostnames,
@@ -170,6 +183,9 @@ func NewHostnameDetector(cfg HostnameDetectorConfig) *HostnameDetector {
 		validateFn:    validateFn,
 		certPublisher: server.EnsureNetworkTLSCerts,
 	}
+	d.initialVerified = append([]string(nil), cfg.InitialVerified...)
+	d.seedVerified()
+	return d
 }
 
 // Run performs one detection cycle immediately (TriggerStartup), then loops
@@ -227,6 +243,7 @@ func (d *HostnameDetector) redetect(ctx context.Context, trigger TriggerSource) 
 	}
 
 	verifiedNew, unverifiedThisCycle := d.resolveAndValidate(cycleCtx)
+	d.recomputeVerified(cycleCtx)
 
 	// flattened is the verified set (d.networks' union) -- the basis for both
 	// PrevCount and NewCount, so a hostname that fails validateFn every
@@ -271,6 +288,7 @@ func (d *HostnameDetector) redetect(ctx context.Context, trigger TriggerSource) 
 		"new_count", cycle.NewCount,
 		"unverified_count", cycle.UnverifiedCount,
 		"added", cycle.Added,
+		"verified", d.srv.GetVerifiedHostnames(),
 	)
 
 	return cycle
@@ -410,4 +428,94 @@ func sortedUnique(items []string) []string {
 	}
 	sort.Strings(unique)
 	return unique
+}
+
+// verifyState is one candidate's re-verification history.
+type verifyState struct {
+	in     bool
+	misses int
+}
+
+// verifiedDropAfter is how many consecutive false results (with a live
+// context) remove a name from the verified set.
+const verifiedDropAfter = 2
+
+// seedVerified publishes the boot-time verified set so it is non-empty from
+// construction, before the first cycle completes (and stays static when the
+// loop is disabled).
+func (d *HostnameDetector) seedVerified() {
+	d.verified = make(map[string]*verifyState, len(d.initialVerified))
+	for _, n := range d.initialVerified {
+		if h := verifiedCandidate(n); h != "" {
+			d.verified[h] = &verifyState{in: true}
+		}
+	}
+	d.publishVerifiedSet()
+}
+
+// verifiedCandidate normalizes name and returns "" for names that are never
+// verified by membership: IP literals (the verdict allows a local literal by
+// its own rule) and localhost.
+func verifiedCandidate(name string) string {
+	h := middleware.NormalizeHost(name)
+	if h == "" || h == "localhost" || net.ParseIP(h) != nil {
+		return ""
+	}
+	return h
+}
+
+// recomputeVerified re-runs the ownership check for every candidate (the
+// names in d.networks plus the boot-time set) and publishes the result. A
+// seeded name is validated, not trusted: d.networks holds unverified boot-time
+// PTR guesses. A name the cycle did not get to check, or whose lookup was cut
+// by the cycle deadline, keeps its previous state; a verified name needs
+// verifiedDropAfter consecutive false results to drop.
+func (d *HostnameDetector) recomputeVerified(cycleCtx context.Context) {
+	if d.verified == nil {
+		d.seedVerified()
+	}
+	candidates := make([]string, 0, len(d.initialVerified))
+	candidates = append(candidates, d.initialVerified...)
+	for _, names := range d.networks {
+		candidates = append(candidates, names...)
+	}
+	for _, c := range candidates {
+		name := verifiedCandidate(c)
+		if name == "" {
+			continue
+		}
+		st := d.verified[name]
+		if st == nil {
+			st = &verifyState{}
+			d.verified[name] = st
+		}
+		if cycleCtx.Err() != nil {
+			continue
+		}
+		ok := d.validateFn(cycleCtx, name)
+		if cycleCtx.Err() != nil {
+			continue
+		}
+		if ok {
+			st.in, st.misses = true, 0
+			continue
+		}
+		if st.misses++; st.misses >= verifiedDropAfter {
+			st.in = false
+		}
+	}
+	d.publishVerifiedSet()
+}
+
+func (d *HostnameDetector) publishVerifiedSet() {
+	if d.srv == nil {
+		return
+	}
+	names := make([]string, 0, len(d.verified))
+	for name, st := range d.verified {
+		if st.in {
+			names = append(names, name)
+		}
+	}
+	d.srv.ReplaceVerifiedHostnames(names)
 }
