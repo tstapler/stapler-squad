@@ -2775,3 +2775,13 @@ Planning-artifact edits only (`requirements.md`, `design/ux.md`, this plan, `imp
 - **Doc claims corrected**: `Gate` is no longer documented as "no consumer receives the whole Gate" (services hold `*Gate` for `Index()`, `Resolver()`, `Metrics()` and the legacy counters; the narrow `Allow*` methods are the consumer gates); Task 3.2d, T-WL-07 remedy (Delete or restart, not Pause), the `:8543` LAN-hostname claim (HostGuard refuses it first), ADR-004 title (five flags), ADR-005 status.
 - **Not done**: RESET_GLOBAL to a default-on flag is still unguarded (the default is off today).
 
+
+## Web follow-ups (phase 6 REFACTOR)
+
+Web-side items from the phase 6 verify review, one commit each (`web-app/`, `tests/e2e/` only).
+
+- **UX criteria**: TS-1 (peek is 27% of `--viewport-height`, no 220px floor that exceeded 28% below 786px) and TS-7 (sheet pads only the inset the BottomNav height does not already cover) in `NotificationPanel.css.ts`; TR-5 (recency frozen for the whole time the tray is open, new rows held only once scrolled); swipe edge guard (touches starting within 30px of a screen edge never swipe); TM-13 (the card names the swipe and Quiet mode controls); BottomNav More sheet gains the "Notifications (N)" row that opens the tray.
+- **Fixes**: tray tab stop stays on a mounted row under virtualization; `GateKindOverrides` radios have roving tabindex and arrow keys; focus returns to the overflow trigger after a menu item or a confirm; `AnnouncerEngine.dispose()` no longer leaves a channel stuck under StrictMode (`resume()` on setup); `GateStatusLine` and `GateKindOverrides` share one 30s stats poller (`useGateStats`); decorative emoji icons are `aria-hidden`; audit and RPC side effects moved out of `NotificationContext` state updaters; the push click posts its message only after `focus()` succeeds, so a refused focus opens one window.
+- **Tests**: T-E2-14 is `tests/e2e/hidden-session-quiet.spec.ts` with a real hidden session (`tests/e2e/seed-hidden` writes it before boot; the send carries `ssq_notify_schema` because an unversioned send is treated as untrusted and delivered); T-E2-31 is `web-app/src/lib/__tests__/notification_docs_exist.test.ts`; T-E2-33 is `web-app/src/lib/__tests__/e2e_isolation_guard.test.ts`.
+- **Decision**: the `✓ Approve` / `✗ Deny` button names keep their glyph text because four existing e2e specs locate the buttons by that accessible name; only decorative icons were hidden.
+- **Not done**: Reply (Story 5.6), the PR 2b flip, the tray hotkey, and anything needing a live or device check (DV-1..DV-9).
