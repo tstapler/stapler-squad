@@ -327,6 +327,16 @@ func (ns *NotificationService) PruneHiddenSessionNotifications(
 		errors.New("PruneHiddenSessionNotifications is not implemented yet"))
 }
 
+// GetDeliveryGateStats is a contract-PR stub; the handler lands with the stats
+// story.
+func (ns *NotificationService) GetDeliveryGateStats(
+	_ context.Context,
+	_ *connect.Request[sessionv1.GetDeliveryGateStatsRequest],
+) (*connect.Response[sessionv1.GetDeliveryGateStatsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented,
+		errors.New("GetDeliveryGateStats is not implemented yet"))
+}
+
 // ---------------------------------------------------------------------------
 // Helper functions
 // ---------------------------------------------------------------------------

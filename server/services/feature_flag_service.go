@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -369,6 +370,13 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 	ctx context.Context,
 	req *connect.Request[sessionv1.UpdateFeatureFlagRequest],
 ) (*connect.Response[sessionv1.UpdateFeatureFlagResponse], error) {
+	// Contract-PR stub: a scoped or mutation request must fail loudly, never fall
+	// through to the legacy global write below.
+	if req.Msg.GetScope() != "" || req.Msg.GetMutation() != sessionv1.FlagMutation_FLAG_MUTATION_UNSPECIFIED {
+		return nil, connect.NewError(connect.CodeUnimplemented,
+			errors.New("UpdateFeatureFlag scope and mutation are not implemented yet"))
+	}
+
 	name := req.Msg.GetName()
 	enabled := req.Msg.GetEnabled()
 

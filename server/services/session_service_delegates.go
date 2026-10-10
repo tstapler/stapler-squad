@@ -293,6 +293,14 @@ func (s *SessionService) PruneHiddenSessionNotifications(
 	return s.notificationSvc.PruneHiddenSessionNotifications(ctx, req)
 }
 
+// GetDeliveryGateStats reports the hidden-session delivery gate's counters (stub).
+func (s *SessionService) GetDeliveryGateStats(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetDeliveryGateStatsRequest],
+) (*connect.Response[sessionv1.GetDeliveryGateStatsResponse], error) {
+	return s.notificationSvc.GetDeliveryGateStats(ctx, req)
+}
+
 // ResolveApproval allows the web UI to approve or deny a pending Claude Code tool use request.
 func (s *SessionService) ResolveApproval(
 	ctx context.Context,
