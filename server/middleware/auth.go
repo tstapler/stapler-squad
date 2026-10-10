@@ -52,7 +52,34 @@ var exemptPrefixes = []string{
 	"/favicon", // browser tab icon
 }
 
+// exemptPeerPaths are host-to-host gossip endpoints. Peers are other
+// stapler-squad instances with no passkey session, so they can never pass
+// isAuthenticated; each handler authenticates the payload itself. Matched
+// exactly, not by prefix, so nothing else under /internal/ is opened up. Paths
+// must equal session.AdvertisementEndpointPath,
+// session.ClaimAdvertisementEndpointPath and session.ClaimLookupEndpointPath
+// (asserted in auth_test.go).
+//
+//   - /internal/host-advertisement is how a peer enrols in HostRegistry
+//     (Ed25519 signature, TOFU-pinned key). Without the exemption no peer can
+//     ever enrol, the registry stays empty and claim gossip cannot work between
+//     hosts. Enrolment is open to anyone who can reach the port (the accepted
+//     same-LAN threat model of ADR-002); the handler bounds body size and the
+//     registry bounds entry count.
+//   - /internal/claim-advertisement accepts only signed claims from enrolled
+//     hosts (ClaimIndex.RecordClaim).
+//   - /internal/claim-lookup requires a signed request from an enrolled host
+//     (ClaimIndex.AuthorizeClaimLookup).
+var exemptPeerPaths = map[string]struct{}{
+	"/internal/host-advertisement":  {},
+	"/internal/claim-advertisement": {},
+	"/internal/claim-lookup":        {},
+}
+
 func isExempt(path string) bool {
+	if _, ok := exemptPeerPaths[path]; ok {
+		return true
+	}
 	for _, prefix := range exemptPrefixes {
 		if strings.HasPrefix(path, prefix) {
 			return true

@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/memory"
 	"github.com/tstapler/stapler-squad/session/sshremote"
+	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/telemetry"
 
@@ -423,7 +424,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			services.ProgramCLIFlagProbeGatedMethod,
 		)),
 	)
+	// Build the capture tap registry now so an env-enabled tap logs its ACTIVE warning at startup.
+	_ = streamhub.DefaultTapRegistry()
 	path, handler := sessionv1connect.NewSessionServiceHandler(deps.SessionService, sessionOpts...)
+	handler = services.WithRequestHost(handler)
 	apiPath := "/api" + path
 
 	// Register StreamingWSBridge for server-streaming Watch* RPCs so browsers use
@@ -432,9 +436,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	wsBridge := services.NewStreamingWSBridge(handler)
 	watchSessionsPath := "/api" + sessionv1connect.SessionServiceWatchSessionsProcedure
 	watchReviewQueuePath := "/api" + sessionv1connect.SessionServiceWatchReviewQueueProcedure
+	watchWorkflowsPath := "/api" + sessionv1connect.SessionServiceWatchWorkflowsProcedure
 	srv.mux.Handle(watchSessionsPath, wsBridge.Handler("/api"))
 	srv.mux.Handle(watchReviewQueuePath, wsBridge.Handler("/api"))
-	log.Info("Registered StreamingWSBridge", "watchSessions", watchSessionsPath, "watchReviewQueue", watchReviewQueuePath)
+	srv.mux.Handle(watchWorkflowsPath, wsBridge.Handler("/api"))
+	log.Info("Registered StreamingWSBridge", "watchSessions", watchSessionsPath, "watchReviewQueue", watchReviewQueuePath, "watchWorkflows", watchWorkflowsPath)
 
 	srv.RegisterConnectHandler(apiPath, http.StripPrefix("/api", handler))
 
@@ -494,6 +500,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		ghAPIPath := "/api" + ghPath
 		srv.RegisterConnectHandler(ghAPIPath, http.StripPrefix("/api", ghHandler))
 		log.Info("Registered GitHubUserService handler", "path", ghAPIPath)
+
+		// Bridge WatchUserPRs over WebSocket too — the browser sends every Watch*
+		// call through the WS transport (see createSessionWatchTransport), so an
+		// unbridged one fails to connect.
+		watchUserPRsPath := "/api" + sessionv1connect.GitHubUserServiceWatchUserPRsProcedure
+		srv.mux.Handle(watchUserPRsPath, services.NewStreamingWSBridge(ghHandler).Handler("/api"))
+		log.Info("Registered StreamingWSBridge", "watchUserPRs", watchUserPRsPath)
 	}
 
 	// Register TymuxRolloutService handler (tymux-bundled-integration Epic
@@ -528,6 +541,25 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		guidanceRequestAPIPath := "/api" + guidanceRequestPath
 		srv.RegisterConnectHandler(guidanceRequestAPIPath, http.StripPrefix("/api", guidanceRequestHandler))
 		log.Info("Registered GuidanceRequestService handler", "path", guidanceRequestAPIPath)
+	}
+
+	// Register DiagnosticService handler ("Diagnose & Nudge", backlog item
+	// 68964304): AssembleDiagnosticBundle/DispatchDiagnose. deps.SessionService
+	// satisfies services.DiagnosticSpawner (SpawnDiagnosticSession); a nil
+	// *SessionService (same nil-interface-boxing hazard the GuidanceRequestService
+	// block above documents) is guarded by only assigning it when non-nil.
+	if deps.Storage != nil {
+		var diagnosticSpawner services.DiagnosticSpawner
+		if deps.SessionService != nil {
+			diagnosticSpawner = deps.SessionService
+		}
+		diagnosticSvc := services.NewDiagnosticService(deps.Storage, diagnosticSpawner)
+		diagnosticSvc.SetPoller(deps.ReviewQueuePoller)
+		diagnosticSvc.SetExternalDiscovery(deps.ExternalDiscovery)
+		diagnosticPath, diagnosticHandler := sessionv1connect.NewDiagnosticServiceHandler(diagnosticSvc, ConnectOptions(deps.ErrorRegistry)...)
+		diagnosticAPIPath := "/api" + diagnosticPath
+		srv.RegisterConnectHandler(diagnosticAPIPath, http.StripPrefix("/api", diagnosticHandler))
+		log.Info("Registered DiagnosticService handler", "path", diagnosticAPIPath)
 	}
 
 	// Register RemoteService handler (ssh-remote-workspaces Epic 3.3: TOFU
@@ -653,6 +685,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered HeadlessService handler", "path", hlAPIPath)
 	}
 
+	// LLMBackendService: live-editable headless backend selection (always registered;
+	// the selector's backends report their own availability).
+	{
+		llmPath, llmHandler := sessionv1connect.NewLLMBackendServiceHandler(
+			services.NewLLMBackendService(deps.LLMSelector), ConnectOptions(deps.ErrorRegistry)...)
+		srv.RegisterConnectHandler("/api"+llmPath, http.StripPrefix("/api", llmHandler))
+		log.Info("Registered LLMBackendService handler", "path", "/api"+llmPath)
+	}
+
 	// Register ImportService handler (import-external-session, Phase 1).
 	// Gated behind STAPLER_SQUAD_ENABLE_SESSION_IMPORT: only the three
 	// mutating RPCs (CommitImportExternalSession, ConfirmKillExternalSession,
@@ -734,6 +775,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// PR bodies can link back to the backlog item instead of embedding a bare UUID.
 	if deps.BacklogLifecycleListener != nil {
 		deps.BacklogLifecycleListener.SetDashboardBaseURLFn(hookBaseURLFn)
+		deps.BacklogLifecycleListener.SetNoopDispatchThresholdFn(func() int {
+			return config.LoadConfig().NoopDispatchThresholdOrDefault()
+		})
 	}
 	// Wire the review queue poller for immediate queue checks on new approvals (Story 3, Task 3.1)
 	approvalHandler.SetQueueChecker(deps.ReviewQueuePoller)
@@ -761,8 +805,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		approvalHandler.SetAutoApprovalLogger(notifStore)
 	}
 	// Wire LLM approval for autonomous sessions (E5)
-	if deps.HeadlessPool != nil {
-		approvalHandler.SetHeadlessPool(deps.HeadlessPool)
+	if deps.LLMClient != nil {
+		approvalHandler.SetHeadlessPool(deps.LLMClient)
 	}
 	approvalHandler.SetAutonomousChecker(func(sessionID string) bool {
 		inst := deps.SessionService.FindLiveInstance(sessionID)
@@ -1176,6 +1220,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		go orphanSweeper.Start(serverCtx)
 	}
 
+	// Start leaked-control-mode-client sweeper, the periodic counterpart to
+	// main.go's one-time startup cleanup — see StartLeakedControlModeSweeper's
+	// doc comment. Gated on IsIsolatedInstance like OrphanedTmuxSweeper: a
+	// named instance shares the real default tmux socket without its own, so
+	// this would otherwise kill the production instance's own live clients.
+	if !config.IsIsolatedInstance() {
+		go tmux.StartLeakedControlModeSweeper(serverCtx, "")
+	}
+
 	// Start session retention sweeper (deletes archived sessions past the retention
 	// window once they pass safety checks — see SessionRetentionSweeper doc comment).
 	if cfg.SessionRetention.EnabledOrDefault() {
@@ -1242,6 +1295,7 @@ func registerStaticRoutes(srv *Server) {
 
 	// Register server-info endpoint for settings UI
 	srv.registerServerInfoHandler()
+	srv.registerUserThemesHandler()
 	log.Info("Registered server-info handler at /api/server-info")
 
 	// Serve web UI static files
@@ -1640,22 +1694,45 @@ func (s *Server) registerServerInfoHandler() {
 // outer handler, before the mux strips the "/api" prefix.
 const probeProcedurePath = "/api" + sessionv1connect.SessionServiceProbeProgramProcedure
 
+// nudgeProcedurePath is the full request path of the write-capable
+// NudgeSessionForPR, guarded like ProbeProgram on the unauthenticated listener.
+const nudgeProcedurePath = "/api" + sessionv1connect.GitHubUserServiceNudgeSessionForPRProcedure
+
+var guardedProcedurePaths = []string{probeProcedurePath, nudgeProcedurePath}
+
 // localChain is the :8543 middleware chain (inside otelhttp):
-// Logging -> CORS -> Compress -> [auth | ProbeGuard] -> mux.
+// Logging -> CORS -> Compress -> HostGuard -> [auth | ProbeGuard] -> mux.
+// HostGuard covers every route (and WebSocket upgrade), so a rebinding or
+// reverse-proxy Host never reaches a handler.
 // The listener has no auth unless authMiddleware is set, so ProbeGuard is the
-// boundary for the one RPC that executes a program; with auth, auth is the boundary.
+// boundary for the RPCs that execute a program or write to a session's terminal
+// (ProbeProgram, NudgeSessionForPR); with auth, auth is the boundary.
 func (s *Server) localChain() http.Handler {
 	inner := http.Handler(s)
 	if s.authMiddleware != nil {
 		inner = s.authMiddleware(inner)
 	} else {
-		inner = middleware.ProbeGuard(probeProcedurePath, s.probeGuardConfig())(inner)
+		inner = middleware.ProbeGuardPaths(guardedProcedurePaths, s.probeGuardConfig())(inner)
 	}
+	inner = middleware.HostGuard(s.hostGuardConfig())(inner)
 	return middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner)))
+}
+
+// localExemptPaths skip the Host guard on :8543.
+var localExemptPaths = []string{"/health"}
+
+func (s *Server) hostGuardConfig() middleware.HostGuardConfig {
+	return middleware.HostGuardConfig{
+		AllowedOrigins: s.GetOrigins,
+		ExemptPaths:    localExemptPaths,
+	}
 }
 
 // remoteChain is the :8444 chain. It never carries ProbeGuard: auth is the
 // boundary there and its Host is a LAN/Tailscale name the guard would reject.
+// A nil authMW leaves the chain open (existing posture, pinned by
+// TestRemoteChain_should_LeaveNudgeReachable_When_AuthMiddlewareNil); main.go
+// always passes middleware.Auth, so nil only occurs in tests.
 func (s *Server) remoteChain(authMW func(http.Handler) http.Handler) http.Handler {
 	inner := http.Handler(s)
 	if authMW != nil {

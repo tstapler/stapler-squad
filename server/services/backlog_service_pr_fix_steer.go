@@ -8,13 +8,17 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -53,6 +57,56 @@ func (r reasonSignature) hasHeader(header string) bool {
 		}
 	}
 	return false
+}
+
+// key is the guard's duplicate-window signature. Known headers map onto the
+// canonical reason names the manual nudge uses (reasonSetSignature), so a manual
+// nudge and an auto-steer for the same problem set dedupe each other; unknown
+// header text stays distinct.
+func (r reasonSignature) key(pr githubpkg.LinkKey) string {
+	names := make([]string, 0, len(r.headers))
+	for _, h := range r.headers {
+		names = append(names, canonicalReasonForHeader(h))
+	}
+	return guardSignature(pr, reasonSetSignature(dropSubsumedChangesRequested(names)...))
+}
+
+// dropSubsumedChangesRequested removes CHANGES_REQUESTED when UNRESOLVED_THREADS
+// is also present: the manual nudge has no changes-requested reason and its
+// thread prompt carries the same actionable content, so keeping the name would
+// key the same fix differently on the two paths and send it twice.
+func dropSubsumedChangesRequested(names []string) []string {
+	hasThreads := false
+	for _, n := range names {
+		if n == reasonNameUnresolvedThreads {
+			hasThreads = true
+		}
+	}
+	if !hasThreads {
+		return names
+	}
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if n != reasonNameChangesRequested {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func canonicalReasonForHeader(h string) string {
+	switch {
+	case h == conflictHeader:
+		return reasonNameMergeConflict
+	case h == "## Failing CI checks":
+		return reasonNameFailingChecks
+	case strings.HasPrefix(h, "## Review: changes requested"):
+		return reasonNameChangesRequested
+	case h == "## Reviewer comments", h == "## PR comments":
+		return reasonNameUnresolvedThreads
+	default:
+		return "other:" + h
+	}
 }
 
 const conflictHeader = "## Merge conflict"
@@ -307,9 +361,59 @@ func (s *BacklogService) steerActiveSessionForPRFix(ctx context.Context, itemID,
 	}
 
 	message := buildSteerMessage(program, fixContext)
-	deliverErr := s.sessionSteerer.SteerActiveSession(ctx, activeSessionUUID, message)
+	outcome, deliverErr := s.sessionSteerer.SteerSessionGuarded(ctx, activeSessionUUID, candidate.key(s.prLinkKeyForItem(ctx, itemID)), message)
+	switch outcome {
+	case SteerGuardBusy, SteerDuplicate, SteerCoolingDown:
+		// A manual nudge is in flight, just landed, or a just-failed write is cooling down; not a failure, retry next tick.
+		log.InfoLog().Printf("[AutoReopenForPRFix] steer for item=%s skipped by nudge guard (outcome=%s); retrying next tick", itemID, outcome)
+		return
+	case SteerBusy, SteerNoStatusSource, SteerNotTracked:
+		// Session stopped being safely writable after the IsReadyForSteer check above.
+		s.degradeToRespawnBlocked(ctx, itemID, itemTitle, currentStatus, activeSessionUUID)
+		return
+	case SteerUnspecified:
+		// An unset outcome must never read as delivered.
+		if deliverErr == nil {
+			deliverErr = errors.New("guarded steer returned an unspecified outcome")
+		}
+	}
 	s.steerDedup.Store(itemID, nextLastSteerReason(last, candidate, activeSessionUUID, deliverErr == nil))
 	s.notifyActiveSessionSteered(ctx, itemID, itemTitle, currentStatus, activeSessionUUID, message, program, candidate, deliverErr)
+}
+
+// prLinkKeyForItem is the item's PR in the key form the manual nudge uses, or ""
+// when the item has no parseable PR URL (then the cross-path dedupe is skipped,
+// never wrongly merged).
+func (s *BacklogService) prLinkKeyForItem(ctx context.Context, itemID string) githubpkg.LinkKey {
+	if s.storage == nil {
+		return ""
+	}
+	item, err := s.storage.GetBacklogItem(ctx, itemID)
+	if err != nil || item == nil {
+		return ""
+	}
+	return linkKeyFromPRURL(item.PrURL)
+}
+
+// linkKeyFromPRURL parses "https://<host>/<owner>/<repo>/pull/<n>" host-agnostically.
+func linkKeyFromPRURL(raw string) githubpkg.LinkKey {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) < 4 || parts[2] != "pull" {
+		return ""
+	}
+	n, err := strconv.Atoi(parts[3])
+	if err != nil {
+		return ""
+	}
+	key, err := githubpkg.NewPRKey(u.Hostname(), parts[0], parts[1], n)
+	if err != nil {
+		return ""
+	}
+	return key.Key()
 }
 
 // degradeToRespawnBlocked is steerActiveSessionForPRFix's shared exit for

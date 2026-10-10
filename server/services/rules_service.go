@@ -14,6 +14,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/session"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -48,6 +49,10 @@ type RulesService struct {
 	// lock, so go test -race cannot detect it; only forcing a real pause mid-critical-section
 	// and observing the other path block on rebuildMu proves serialization actually holds.
 	testHook func()
+
+	// exportAntigravity writes user rules to Antigravity settings under the process-global
+	// $HOME. Tests clear it so parallel tests never write into another test's HOME.
+	exportAntigravity func(context.Context, *session.Storage) error
 
 	// claudeSettingsWatcher owns the fsnotify watch + debounce + last-known-good cache for
 	// claude-settings files. Nil until SetClaudeSettingsWatcher is called (or if fsnotify
@@ -120,12 +125,13 @@ func (rs *RulesService) afterRebuildReadHook() {
 // configStore, promptBuilder, and aiClient may be nil; nil means that capability is unavailable.
 func NewRulesService(rulesStore *RulesStore, configStore ConfigFileRulesRepository, analyticsStore *AnalyticsStore, classifier *classifier.RuleBasedClassifier, promptBuilder RulePromptBuilder, aiClient AIClient) *RulesService {
 	return &RulesService{
-		rulesStore:     rulesStore,
-		configStore:    configStore,
-		analyticsStore: analyticsStore,
-		classifier:     classifier,
-		promptBuilder:  promptBuilder,
-		aiClient:       aiClient,
+		exportAntigravity: ExportAntigravityRulesFromDB,
+		rulesStore:        rulesStore,
+		configStore:       configStore,
+		analyticsStore:    analyticsStore,
+		classifier:        classifier,
+		promptBuilder:     promptBuilder,
+		aiClient:          aiClient,
 	}
 }
 
@@ -577,9 +583,14 @@ func (rs *RulesService) rebuildClassifier() {
 		userRules := rs.rulesStore.ToRules()
 		existing := rs.classifier.Rules()
 		rs.afterRebuildReadHook() // test-only: see field doc comment
-		nonUser := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceClaudeSettings)
+		nonUser := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceClaudeSettings, classifier.SourceConfig)
 		rs.classifier.ReplaceRules(append(nonUser, userRules...))
 	}()
+	if rs.rulesStore != nil && rs.rulesStore.storage != nil && rs.exportAntigravity != nil {
+		if err := rs.exportAntigravity(context.Background(), rs.rulesStore.storage); err != nil {
+			log.Warn("[RulesService] failed to export rules to Antigravity", "err", err)
+		}
+	}
 	// Per ADR-004: reconciliation runs asynchronously, after rebuildMu releases, so the
 	// RPC that triggered this rebuild (UpsertApprovalRule/DeleteApprovalRule) returns
 	// before a large pending backlog finishes reconciling. Always the panic-recovering
@@ -597,7 +608,7 @@ func (rs *RulesService) rebuildClaudeSettingsRules(newClaudeRules []classifier.R
 
 		existing := rs.classifier.Rules()
 		rs.afterRebuildReadHook() // test-only: see field doc comment
-		kept := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceUser)
+		kept := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceUser, classifier.SourceConfig)
 		rs.classifier.ReplaceRules(append(kept, newClaudeRules...))
 	}()
 	// See rebuildClassifier's identical comment above — same ADR-004 rationale.

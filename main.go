@@ -219,6 +219,10 @@ var (
 				log.Close()
 			}()
 
+			if err := tmux.LogEnvSocket(); err != nil {
+				return err
+			}
+
 			// Keep the launchd/systemd-captured raw stdout/stderr log bounded
 			// even when the process runs for a long time between installs --
 			// scripts/install-service.sh's own rotation only fires at
@@ -324,11 +328,8 @@ var (
 				address = listenAddrFlag
 			}
 
-			// Warn when binding to non-localhost
-			host, _, _ := net.SplitHostPort(address)
-			if host != "localhost" && host != "127.0.0.1" && host != "::1" {
-				log.Warn("WARNING: Binding to non-localhost address. Ensure firewall rules are configured.", "address", address)
-				fmt.Fprintf(os.Stderr, "\nWARNING: stapler-squad is listening on %s (all interfaces).\nEnsure this is intentional and your network is secured.\n\n", address)
+			if err := requireLoopbackListenAddr(address); err != nil {
+				return err
 			}
 
 			// --rp-id flag overrides config
@@ -365,6 +366,8 @@ var (
 				coreDeps *server.CoreDeps
 				svcDeps  *server.ServiceDeps
 				srv      *server.Server
+				// backlogSvc is captured from the runtime phase for startRemoteAccess.
+				backlogSvc *services.BacklogService
 			)
 
 			app.Phase("core-deps", func(ctx context.Context, a *warren.App) error {
@@ -425,11 +428,7 @@ var (
 				// previous process instance (BUG-042). Reconcile before restoring any
 				// session, which is the earliest point a fresh control-mode client could
 				// be spawned.
-				if killed, err := tmux.KillOrphanedControlModeClients(""); err != nil {
-					log.Warn("Failed to clean up orphaned control-mode clients", "err", err)
-				} else if killed > 0 {
-					log.Info("Cleaned up orphaned control-mode clients left over from a prior process instance", "count", killed)
-				}
+				cleanupOrphanedControlModeClients(config.IsIsolatedInstance(), tmux.KillOrphanedControlModeClients)
 				// Create a keepalive session so the tmux server does not exit when all user sessions close.
 				if err := tmux.CreateKeepaliveSession(""); err != nil {
 					if strictStartup {
@@ -453,6 +452,7 @@ var (
 				}
 
 				srv = server.NewServerWithDeps(address, rt.ToServerDeps())
+				backlogSvc = rt.BacklogService
 				srv.SetHostnames(hostnames)
 
 				// Derive the login-shell PATH for ProbeProgram lookups off the request
@@ -477,11 +477,15 @@ var (
 					log.Info("CORS trusted origins", "origins", srv.GetOrigins())
 				}
 
+				if err := setupLocalAuth(srv, cfg, !remoteAccessFlag && !cfg.PasskeyEnabled); err != nil {
+					return err
+				}
+
 				// Start a second HTTPS server with passkey auth for remote access.
 				var remoteAccess *remoteAccessResult
 				if remoteAccessFlag || cfg.PasskeyEnabled {
 					var raErr error
-					remoteAccess, raErr = startRemoteAccess(ctx, srv, address, cfg, remotePortFlag)
+					remoteAccess, raErr = startRemoteAccess(ctx, srv, address, cfg, remotePortFlag, coreDeps.Storage, backlogSvc)
 					if raErr != nil {
 						return fmt.Errorf("start remote access: %w", raErr)
 					}
@@ -865,7 +869,7 @@ func init() {
 
 	// Remote access and passkey flags
 	rootCmd.Flags().StringVar(&listenAddrFlag, "listen", "",
-		"Address to listen on (e.g. '0.0.0.0:8543'). Overrides config listen_address.")
+		"Loopback address to listen on (e.g. '127.0.0.1:8543'); non-loopback is rejected. Overrides config listen_address.")
 	rootCmd.Flags().BoolVar(&remoteAccessFlag, "remote-access", false,
 		"Enable remote access: starts a second HTTPS server with passkey auth on --remote-port (default 8444). "+
 			"Local server on localhost remains unchanged.")
@@ -1384,7 +1388,7 @@ type remoteAuthSetup struct {
 // gate -- this block is a self-contained "auth subsystem bring-up" unit with
 // no branching into the surrounding TLS/hostname-detection logic, so it can
 // be named and tested independently.
-func initRemoteAuth(ctx context.Context, srv *server.Server, allRPIDs, origins []string, hostnameValidator func(string) bool, caFile, displayHost string, remotePort int) (*remoteAuthSetup, error) {
+func initRemoteAuth(ctx context.Context, srv *server.Server, allRPIDs, origins []string, hostnameValidator func(string) bool, caFile, displayHost string, remotePort int, requireLocalAuth bool) (*remoteAuthSetup, error) {
 	store, err := serverauth.NewCredentialStore()
 	if err != nil {
 		return nil, fmt.Errorf("create credential store: %w", err)
@@ -1395,8 +1399,7 @@ func initRemoteAuth(ctx context.Context, srv *server.Server, allRPIDs, origins [
 	if err != nil {
 		return nil, fmt.Errorf("get config dir: %w", err)
 	}
-	sessionsPath := filepath.Join(configDir, "auth-sessions.json")
-	sessions := serverauth.NewSessionManager(sessionsPath)
+	sessions := sharedAuthSessions(configDir)
 
 	waHandler, err := serverauth.NewHandler(allRPIDs, origins, store, sessions, hostnameValidator)
 	if err != nil {
@@ -1416,7 +1419,7 @@ func initRemoteAuth(ctx context.Context, srv *server.Server, allRPIDs, origins [
 	go setupMgr.WatchFile(ctx, setupTokenPath)
 
 	// Register auth routes on the shared mux (accessible via both servers).
-	serverauth.RegisterRoutes(srv.Mux(), waHandler, sessions, store, setupMgr, inviteMgr, caFile, displayHost, remotePort)
+	serverauth.RegisterRoutes(srv.Mux(), waHandler, sessions, store, setupMgr, inviteMgr, caFile, displayHost, remotePort, serverauth.RequireLocalAuth(requireLocalAuth))
 
 	return &remoteAuthSetup{
 		ConfigDir: configDir,
@@ -1427,9 +1430,79 @@ func initRemoteAuth(ctx context.Context, srv *server.Server, allRPIDs, origins [
 	}, nil
 }
 
+// startHostGossip registers the gossip-style host advertisement endpoint
+// (docs/adr/ADR-002-workspace-host-registry-gossip.md) and the cross-host claim
+// gossip endpoint on mux -- the same shared --remote-port mux, see
+// host_advertisement.go's doc comment -- and starts their background loops.
+// It also wires the resulting ClaimRecorder into storage, so every backlog
+// item created with an ExternalURL records a claim (ADR-002 of
+// project_plans/cross-host-claim-dedup/decisions/), and hands backlogSvc and
+// storage the claim checkers. backlogSvc may be nil. Failures disable gossip
+// with a warning rather than aborting remote access.
+func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, hostnames, lanIPs []string, remotePort int, storage *session.Storage, backlogSvc *services.BacklogService) {
+	hostIdentity, err := session.LoadOrCreateHostIdentity(configDir)
+	if err != nil {
+		log.Warn("failed to load/create host identity, host advertisement disabled", "err", err)
+		return
+	}
+	hostRegistry, err := session.NewHostRegistry(configDir, session.DefaultHostRegistryTTL)
+	if err != nil {
+		log.Warn("failed to open host registry, host advertisement disabled", "err", err)
+		return
+	}
+	selfAddresses := make([]string, 0, len(hostnames)+len(lanIPs))
+	for _, hn := range hostnames {
+		selfAddresses = append(selfAddresses, fmt.Sprintf("%s:%d", hn, remotePort))
+	}
+	for _, ip := range lanIPs {
+		selfAddresses = append(selfAddresses, fmt.Sprintf("%s:%d", ip, remotePort))
+	}
+	advertiser := session.NewHostAdvertiser(hostIdentity, hostRegistry, selfAddresses, session.DefaultHostAdvertisementInterval)
+	serverauth.RegisterHostAdvertisementRoute(mux, hostIdentity, hostRegistry, advertiser, selfAddresses)
+	go advertiser.Run(ctx)
+	pruneTicker := time.NewTicker(session.DefaultHostAdvertisementInterval)
+	go func() {
+		defer pruneTicker.Stop()
+		hostRegistry.RunPruneLoop(ctx, pruneTicker.C)
+	}()
+
+	claimIndex, err := session.NewClaimIndex(configDir, hostRegistry)
+	if err != nil {
+		log.Warn("failed to open claim index, cross-host claim gossip disabled", "err", err)
+		return
+	}
+	claimGossiper, err := session.NewClaimGossiper(hostIdentity, hostRegistry, claimIndex, selfAddresses, session.DefaultHostAdvertisementInterval)
+	if err != nil {
+		log.Warn("failed to build claim gossiper, cross-host claim gossip disabled", "err", err)
+		return
+	}
+	serverauth.RegisterClaimAdvertisementRoute(mux, claimIndex, claimGossiper)
+	go claimGossiper.Run(ctx)
+
+	deepLinkHost := ""
+	if len(selfAddresses) > 0 {
+		deepLinkHost, _, _ = net.SplitHostPort(selfAddresses[0])
+	}
+	recorder, err := session.NewClaimIndexRecorder(hostIdentity, claimIndex, claimGossiper, deepLinkHost, nil)
+	if err != nil {
+		log.Warn("failed to build claim recorder, claims will not be recorded", "err", err)
+		return
+	}
+	storage.SetClaimRecorder(recorder)
+
+	// The checks below are all gated by the cross_host_claim_dedup feature flag
+	// (off by default), so wiring them here changes nothing until it is enabled.
+	storage.SetForeignClaimLookup(services.NewFlagGatedForeignClaimLookup(recorder))
+	storage.SetPRProvenanceSource(services.NewFlagGatedPRProvenance(recorder))
+	if backlogSvc != nil {
+		checker := services.NewLocalClaimChecker(claimIndex, hostIdentity.ID, hostRegistry).SignLookupsWith(hostIdentity)
+		backlogSvc.SetClaimChecker(checker, checker)
+	}
+}
+
 // startRemoteAccess starts a second HTTPS server on all interfaces with passkey
 // authentication, while the local server on localhost stays unchanged.
-func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string, cfg *config.Config, remotePort int) (*remoteAccessResult, error) {
+func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string, cfg *config.Config, remotePort int, storage *session.Storage, backlogSvc *services.BacklogService) (*remoteAccessResult, error) {
 	// Detect every LAN IP (not just the OS-preferred outbound one, which can
 	// be a VPN tunnel) for QR code URLs and TLS cert SANs.
 	lanIPs := detectLANIPs(ctx)
@@ -1529,35 +1602,13 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 
 	srv.SetOrigins(append(srv.GetOrigins(), origins...))
 
-	auth, err := initRemoteAuth(ctx, srv, allRPIDs, origins, hostnameValidator, caFile, displayHost, remotePort)
+	auth, err := initRemoteAuth(ctx, srv, allRPIDs, origins, hostnameValidator, caFile, displayHost, remotePort, cfg.RequireLocalAuth)
 	if err != nil {
 		return nil, err
 	}
 	configDir, store, sessions, waHandler, setupMgr := auth.ConfigDir, auth.Store, auth.Sessions, auth.WAHandler, auth.SetupMgr
 
-	// Register the gossip-style host advertisement endpoint (ADR-002) on the
-	// same shared mux/remote server -- see host_advertisement.go's doc
-	// comment for why this is the right integration point.
-	hostIdentity, err := session.LoadOrCreateHostIdentity(configDir)
-	if err != nil {
-		log.Warn("failed to load/create host identity, host advertisement disabled", "err", err)
-	} else {
-		hostRegistry, regErr := session.NewHostRegistry(configDir, session.DefaultHostRegistryTTL)
-		if regErr != nil {
-			log.Warn("failed to open host registry, host advertisement disabled", "err", regErr)
-		} else {
-			selfAddresses := make([]string, 0, len(hostnames)+len(lanIPs))
-			for _, hn := range hostnames {
-				selfAddresses = append(selfAddresses, fmt.Sprintf("%s:%d", hn, remotePort))
-			}
-			for _, ip := range lanIPs {
-				selfAddresses = append(selfAddresses, fmt.Sprintf("%s:%d", ip, remotePort))
-			}
-			advertiser := session.NewHostAdvertiser(hostIdentity, hostRegistry, selfAddresses, session.DefaultHostAdvertisementInterval)
-			serverauth.RegisterHostAdvertisementRoute(srv.Mux(), hostIdentity, hostRegistry, advertiser, selfAddresses)
-			go advertiser.Run(ctx)
-		}
-	}
+	startHostGossip(ctx, srv.Mux(), configDir, hostnames, lanIPs, remotePort, storage, backlogSvc)
 
 	// Start the remote HTTPS server with auth middleware applied.
 	if err := srv.StartRemote(ctx, remoteAddr, tlsCfg, middleware.Auth(sessions)); err != nil {

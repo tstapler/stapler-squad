@@ -143,6 +143,11 @@ message ItemSession {
   // model family) — see headless.CostSink's priced signal. True for all
   // pre-existing rows (Claude-only cost data was always priced).
   bool cost_priced = 26;
+  // error_detail is the truncated (<=500 runes) Go error text behind
+  // end_reason "other" — the catch-all bucket that otherwise carries no
+  // diagnostic signal once the log rotates. Empty for every other end_reason
+  // and for successful sessions. (Field 19 is failure_capture_path.)
+  string error_detail = 27;
 }
 
 // BacklogStatusEvent records a single status transition for a backlog item.
@@ -281,6 +286,13 @@ message BacklogItem {
   // ever fires for this item — 0.0 is a legitimate configured threshold,
   // distinct from unset. See session.EvaluateBudgetThreshold.
   optional double cost_budget_threshold_usd = 39;
+  // duplicate_pending is true when a report_duplicate claim is recorded for
+  // this item and it is still in review awaiting operator confirmation.
+  // Derived from the claim marker in ItemSession.verification_notes; only
+  // populated on reads that eagerly load item sessions.
+  bool duplicate_pending = 40;
+  // duplicate_ref is the claimed duplicate's URL when duplicate_pending.
+  string duplicate_ref = 41;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -471,11 +483,22 @@ message CreateBacklogItemRequest {
   // cost_budget_threshold_usd — see BacklogItem.cost_budget_threshold_usd.
   // Unset means no threshold is configured at creation time.
   optional double cost_budget_threshold_usd = 16;
+  // external_url is the source tracker's URL for the item (BacklogItem.external_url).
+  // When set, the cross-host claim check runs before creation.
+  optional string external_url = 17;
+  // override_claim creates the item even when another host claimed external_url.
+  // Requires override_reason.
+  bool override_claim = 18;
+  // override_reason is audit-logged; at least 5 non-space characters when override_claim is set.
+  string override_reason = 19;
 }
 
 message CreateBacklogItemResponse {
   BacklogItem item = 1;
   bool triage_triggered = 2;
+  // Set when another host already claimed external_url and override_claim was
+  // not requested. No item is created; `item` is unset.
+  AlreadyClaimedElsewhere already_claimed_elsewhere = 3;
 }
 
 // CreateBacklogItemFromChatRequest carries a single free-text chat turn.
@@ -491,6 +514,8 @@ message CreateBacklogItemFromChatRequest {
 message CreateBacklogItemFromChatResponse {
   BacklogItem item = 1;
   bool triage_triggered = 2;
+  // See CreateBacklogItemResponse.already_claimed_elsewhere.
+  AlreadyClaimedElsewhere already_claimed_elsewhere = 3;
 }
 
 // ParseBacklogItemIntentRequest carries the omnibar's free-text message.
@@ -1325,6 +1350,10 @@ message BacklogItemEvent {
   // published bus event and must not participate in the frontend's
   // afterSeq/gap-detection bookkeeping (see useWatchBacklogItems.ts).
   uint64 seq = 8;
+
+  // Synthetic marker (oneof left unset) sent periodically on an otherwise-
+  // idle connection -- see SessionEvent.heartbeat's identical doc comment.
+  bool heartbeat = 11;
 }
 
 // BacklogItemStatusChangedEvent is emitted when an item's status transitions
@@ -1639,6 +1668,31 @@ service BacklogService {
   // ImportGitHubIssue creates a backlog item pre-populated from a GitHub issue.
   rpc ImportGitHubIssue(ImportGitHubIssueRequest) returns (ImportGitHubIssueResponse) {}
 
+  // OverrideClaimBlock dequeues and spawns a queued/ready item that
+  // DequeueNextQueuedItems skipped for STUCK_REASON_BLOCKED_BY_CLAIM, despite
+  // the other host's claim. reason is required and audit-logged.
+  rpc OverrideClaimBlock(OverrideClaimBlockRequest) returns (OverrideClaimBlockResponse) {}
+
+  // ResolveClaimDispute clears the local "disputed" flag on the claim for an
+  // external URL after a human has looked at it. Never auto-arbitrates.
+  rpc ResolveClaimDispute(ResolveClaimDisputeRequest) returns (ResolveClaimDisputeResponse) {}
+
+  // RecordClaimOverride writes the audit-log line for an operator choosing to
+  // proceed on an item another host has claimed, when no server-side block exists
+  // to lift (the item-detail banner). reason is required (at least 5 non-space
+  // characters). It changes no state.
+  rpc RecordClaimOverride(RecordClaimOverrideRequest) returns (RecordClaimOverrideResponse) {}
+
+  // CheckCrossHostClaim reports whether another host has claimed an external URL,
+  // for the item-detail banner. Never an error for "could not confirm": see
+  // CheckCrossHostClaimResponse.checked.
+  rpc CheckCrossHostClaim(CheckCrossHostClaimRequest) returns (CheckCrossHostClaimResponse) {}
+
+  // ListForeignClaims returns every claim this host's local index holds for a URL
+  // another host claimed. Local-only (no peer queries), so the board can call it
+  // once per render for its ClaimChip.
+  rpc ListForeignClaims(ListForeignClaimsRequest) returns (ListForeignClaimsResponse) {}
+
   // SearchGitHubRepos returns GitHub repos accessible to the authenticated user.
   rpc SearchGitHubRepos(SearchGitHubReposRequest) returns (SearchGitHubReposResponse) {}
 
@@ -1717,6 +1771,11 @@ message ImportGitHubIssueRequest {
   // multiple accounts are connected for the issue URL's host. Empty resolves
   // to any configured token for that host (see github.GetKeychainTokenForHost).
   string account_username = 4;
+  // override creates the item even when another host already claimed the issue
+  // (cross_host_claim_dedup). Requires override_reason.
+  bool override = 5;
+  // override_reason is audit-logged; at least 5 non-space characters when override is set.
+  string override_reason = 6;
 }
 
 message ImportGitHubIssueResponse {
@@ -1725,6 +1784,73 @@ message ImportGitHubIssueResponse {
   // True when issue_url was already imported — `item` is the existing backlog
   // item, not a newly-created one, and no new triage was triggered.
   bool already_existed = 3;
+  // Set when another host already claimed the issue and override was not
+  // requested. No item is created; `item` is unset.
+  AlreadyClaimedElsewhere already_claimed_elsewhere = 4;
+}
+
+// AlreadyClaimedElsewhere is the structured "a different host holds this
+// external URL" outcome of a pre-creation claim check. It is a distinct third
+// outcome, not an error, so clients can offer Copy link / Override.
+message AlreadyClaimedElsewhere {
+  string external_url = 1;
+  string claiming_host_id = 2;
+  // item_deep_link is the claiming host's ssq:// link to its item.
+  string item_deep_link = 3;
+  // disputed is true when this host has seen two different hosts claim the URL.
+  bool disputed = 4;
+}
+
+message OverrideClaimBlockRequest {
+  string item_id = 1;
+  // reason is audit-logged; at least 5 non-space characters.
+  string reason = 2;
+}
+
+message OverrideClaimBlockResponse {
+  BacklogItem item = 1;
+}
+
+message RecordClaimOverrideRequest {
+  string external_url = 1;
+  // reason is audit-logged; at least 5 non-space characters.
+  string reason = 2;
+}
+
+message RecordClaimOverrideResponse {}
+
+message ResolveClaimDisputeRequest {
+  string external_url = 1;
+  // reason is audit-logged (optional).
+  string reason = 2;
+}
+
+message ResolveClaimDisputeResponse {}
+
+message CheckCrossHostClaimRequest {
+  string external_url = 1;
+  // local_only skips the live peer fan-out and reads only this host's claim index.
+  bool local_only = 2;
+}
+
+message CheckCrossHostClaimResponse {
+  // enabled is false while the cross_host_claim_dedup feature flag is off; clients
+  // render nothing.
+  bool enabled = 1;
+  // checked is true when the answer is definitive (claimed or confirmed clear).
+  // enabled && !checked means a known peer was unreachable: unknown, not clear.
+  bool checked = 2;
+  // claim is set when another host holds external_url.
+  AlreadyClaimedElsewhere claim = 3;
+  // claimed_at_unix is the claim's timestamp (seconds), 0 when unknown.
+  int64 claimed_at_unix = 4;
+}
+
+message ListForeignClaimsRequest {}
+
+message ListForeignClaimsResponse {
+  bool enabled = 1;
+  repeated AlreadyClaimedElsewhere claims = 2;
 }
 
 message CancelTriageRequest {
@@ -1896,6 +2022,28 @@ enum StuckReason {
   // delivery itself failed. Distinct from STUCK_REASON_RESPAWN_BLOCKED_ACTIVE,
   // which covers the degrade paths where a steer was never attempted at all.
   STUCK_REASON_STEER_FAILED = 19;
+  // STUCK_REASON_WORKTREE_INCONSISTENT: see domain.StuckReasonWorktreeInconsistent
+  // (session/domain/backlog.go) — the worktree consistency sweep
+  // (session/worktree_consistency_sweep.go) flagged a session's worktree
+  // state as unrepairable (ambiguous/zero live-git-worktree match, an
+  // unresolvable repo_path, or an unresolvable base_commit_sha).
+  //
+  // Note: value 20, not 21 — STUCK_REASON_GATE_TIMEOUT (domain.StuckReasonGateTimeout)
+  // is a pre-existing domain enum value with no proto mapping yet; that gap is
+  // tracked separately and intentionally left unassigned here.
+  STUCK_REASON_WORKTREE_INCONSISTENT = 20;
+
+  // STUCK_REASON_BLOCKED_BY_CLAIM: see domain.StuckReasonBlockedByClaim
+  // (session/domain/backlog.go) — DequeueNextQueuedItems skipped this item
+  // because a different host holds the cross-host claim for its external URL.
+  // Cleared with OverrideClaimBlock.
+  STUCK_REASON_BLOCKED_BY_CLAIM = 21;
+  // STUCK_REASON_REPEATED_NOOP_DISPATCH: see domain.StuckReasonRepeatedNoopDispatch.
+  STUCK_REASON_REPEATED_NOOP_DISPATCH = 22;
+  // STUCK_REASON_MERGED_PR_UNVERIFIED: see domain.StuckReasonMergedPRUnverified
+  // — the item's PR is merged but no recorded branch/tip commit matches it, so
+  // the auto-done transition was refused.
+  STUCK_REASON_MERGED_PR_UNVERIFIED = 23;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState
@@ -1938,6 +2086,10 @@ message StuckBacklogItem {
   // "Approve Plan" affordance on an actual plan existing, instead of trusting
   // `reason` alone (which only refreshes on the next ReconcileStuck tick).
   string plan_artifacts_path = 14;
+  // duplicate_pending / duplicate_ref: the item carries an unconfirmed
+  // report_duplicate claim (see BacklogItem.duplicate_pending).
+  bool duplicate_pending = 15;
+  string duplicate_ref = 16;
 }
 
 message ListStuckBacklogItemsRequest {}

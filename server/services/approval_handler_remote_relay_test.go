@@ -188,7 +188,7 @@ func (d delayingClassifier) BuildContext(cwd string) classifier.ClassificationCo
 }
 
 func (d delayingClassifier) Classify(classifier.PermissionRequestPayload, classifier.ClassificationContext) classifier.ClassificationResult {
-	time.Sleep(d.delay)
+	time.Sleep(d.delay) //nolint:notimesleeptest simulates human-latency classifier; the real socat half-close wall-clock is what is under test
 	return classifier.ClassificationResult{Decision: classifier.AutoAllow, RuleID: "test-delayed-allow", RuleName: "test delayed allow"}
 }
 

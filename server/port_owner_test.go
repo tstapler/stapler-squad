@@ -7,6 +7,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestNewRemoteBindError_should_IncludePortOwner_When_AddressIsInUse(t *testing.T) {
@@ -17,6 +18,9 @@ func TestNewRemoteBindError_should_IncludePortOwner_When_AddressIsInUse(t *testi
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir)
+	prevTimeout := portOwnerLookupTimeout
+	portOwnerLookupTimeout = 30 * time.Second
+	t.Cleanup(func() { portOwnerLookupTimeout = prevTimeout })
 
 	err := newRemoteBindError("0.0.0.0:8444", syscall.EADDRINUSE)
 

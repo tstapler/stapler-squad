@@ -63,6 +63,8 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"ResolveApproval":           "approval:resolve",
 	"ListPendingApprovals":      "approval:list-pending",
 	"CreateDebugSnapshot":       "debug:create-snapshot",
+	"GetCaptureTap":             "debug:get-capture-tap",
+	"SetCaptureTap":             "debug:set-capture-tap",
 	"GetNotificationHistory":    "notification:get-history",
 	"MarkNotificationRead":      "notification:mark-read",
 	"ClearNotificationHistory":  "notification:clear-history",
@@ -199,6 +201,12 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"SearchGitHubRepos": "SearchGitHubRepos",
 	"ListGitHubIssues":  "ListGitHubIssues",
 	"ImportGitHubIssue": "ImportGitHubIssue",
+	// Cross-host claim RPCs (#893): identity ids, matching the committed fallback-id registry files.
+	"CheckCrossHostClaim": "CheckCrossHostClaim",
+	"ListForeignClaims":   "ListForeignClaims",
+	"OverrideClaimBlock":  "OverrideClaimBlock",
+	"RecordClaimOverride": "RecordClaimOverride",
+	"ResolveClaimDispute": "ResolveClaimDispute",
 	// Launcher presets RPCs
 	"GetLauncherPresets": "launcher_presets:get",
 	// Program config RPCs
@@ -208,6 +216,8 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// Session lifecycle RPCs
 	"ArchiveSession":          "session:archive",
 	"UnarchiveSession":        "session:unarchive",
+	"PinSession":              "session:pin",
+	"UnpinSession":            "session:unpin",
 	"HibernateSession":        "session:hibernate",
 	"ResumeHibernatedSession": "session:resume-hibernated",
 	"ResumeCrashedSession":    "session:resume-crashed",
@@ -268,6 +278,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// GitHub user RPCs
 	"ListUserPRs":               "github-user:list-prs",
 	"WatchUserPRs":              "github-user:watch-prs",
+	"NudgeSessionForPR":         "github-user:nudge-session-for-pr",
 	"GetGitHubAuthState":        "github-user:get-auth-state",
 	"AddGitHubAccountWithToken": "github-user:add-account-with-token",
 	"ListGitHubCLIHosts":        "github-user:list-cli-hosts",
@@ -325,6 +336,8 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// Tagging-classifier RPCs (tagging_classifier_service.go).
 	"GetTaggingClassifierConfig":    "tagging-classifier:get-config",
 	"UpdateTaggingClassifierConfig": "tagging-classifier:update-config",
+	"GetBackgroundModels":           "background-models:get",
+	"UpdateBackgroundModels":        "background-models:update",
 	"ReclassifySessionTags":         "tagging-classifier:reclassify-session",
 	"ListTaggingRules":              "tagging-rule:list",
 	"UpsertTaggingRule":             "tagging-rule:upsert",
@@ -387,6 +400,18 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// already uses the method-name-as-id convention (see the SearchGitHubRepos
 	// comment above), so match it verbatim rather than a kebab-case id.
 	"DismissFinding": "DismissFinding",
+	// Diagnose & Nudge RPCs (DiagnosticService in diagnose.proto, backlog item
+	// 68964304) -- must match the "// +api: session:diagnose-*" markers in
+	// server/services/diagnostic_service.go verbatim, same failure mode as
+	// the SearchGitHubRepos comment above.
+	"AssembleDiagnosticBundle": "session:diagnose-assemble-bundle",
+	"DispatchDiagnose":         "session:diagnose-dispatch",
+	// ProbeProgram (SessionService in session.proto) -- pre-existing gap found
+	// by TestMethodToIDCompleteness while adding the entries above (unrelated
+	// to Diagnose & Nudge). No "// +api:" marker exists on
+	// server/services/session_service.go's ProbeProgram handler, so
+	// markerFound stays false for this entry until one is added separately.
+	"ProbeProgram": "program:probe",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

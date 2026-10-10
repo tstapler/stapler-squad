@@ -88,6 +88,8 @@ type fakeHeadlessPool struct {
 	// require.Eventually, which is a scheduler-contention-sensitive flake under
 	// full-suite parallel load (BUG-103).
 	onEnter func()
+	// onExit, if set, runs when CallBlocking returns on any path (pairs with onEnter to count live callers).
+	onExit func()
 }
 
 type fakePoolCall struct {
@@ -124,7 +126,11 @@ func (f *fakeHeadlessPool) CallBlocking(ctx context.Context, key headless.Featur
 	}
 	onCall := f.onCall
 	onEnter := f.onEnter
+	onExit := f.onExit
 	f.mu.Unlock()
+	if onExit != nil {
+		defer onExit()
+	}
 	if onEnter != nil {
 		onEnter()
 	}
@@ -208,10 +214,12 @@ type mockSessionCreator struct {
 
 // mockSessionStopper implements SessionStopper for tests.
 type mockSessionStopper struct {
-	liveUUIDs         map[string]bool
-	killedPaneUUIDs   []string
-	archivedUUIDs     []string
-	archiveErrForUUID map[string]error
+	liveUUIDs       map[string]bool
+	killedPaneUUIDs []string
+	// killByTitleAllowed records the allowedOwnerUUIDs of each KillTmuxSessionByTitle call.
+	killByTitleAllowed [][]string
+	archivedUUIDs      []string
+	archiveErrForUUID  map[string]error
 	// stoppedUUIDs records every UUID passed to StopSessionByUUID.
 	stoppedUUIDs []string
 	// stopperErr, if non-nil, is returned by StopSessionByUUID (default nil —
@@ -277,7 +285,8 @@ func (m *mockSessionStopper) StopSessionByUUID(_ context.Context, uuid string) e
 	return m.stopperErr
 }
 
-func (m *mockSessionStopper) KillTmuxSessionByTitle(_ context.Context, _ string) error {
+func (m *mockSessionStopper) KillTmuxSessionByTitle(_ context.Context, _ string, allowedOwnerUUIDs ...string) error {
+	m.killByTitleAllowed = append(m.killByTitleAllowed, allowedOwnerUUIDs)
 	return nil
 }
 
@@ -307,7 +316,7 @@ func (m *mockSessionStopper) ArchiveSessionByUUID(_ context.Context, uuid string
 
 // mockSessionSteerer implements SessionSteerer for tests, mirroring
 // mockSessionStopper's shape. mu guards steerCalls against concurrent
-// SteerActiveSession calls (needed by the steerInFlight race test,
+// recordSteer calls (needed by the steerInFlight race test,
 // server/services/backlog_service_pr_fix_steer_integration_test.go). programs
 // and steerErr are unguarded — no write to them ever races a concurrent
 // read in the current tests, but that's because those writes happen between
@@ -318,7 +327,7 @@ func (m *mockSessionStopper) ArchiveSessionByUUID(_ context.Context, uuid string
 type mockSessionSteerer struct {
 	mu         sync.Mutex
 	programs   map[string]string // uuid -> program; absent = not live
-	steerErr   map[string]error  // uuid -> error SteerActiveSession returns
+	steerErr   map[string]error  // uuid -> error recordSteer returns
 	steerCalls []mockSteerCall
 	// notReady marks uuids whose IsReadyForSteer must return false. Absent
 	// (or a uuid not in the set) defaults to true — every existing test's
@@ -326,6 +335,10 @@ type mockSessionSteerer struct {
 	// production's TestAutoReopenForPRFix_ActiveWorkSession_* fixture
 	// default (see requirement to keep those tests unchanged).
 	notReady map[string]bool
+	// guardedOutcome overrides SteerSessionGuarded's result for a uuid (no
+	// write is recorded). Absent uuids delegate to recordSteer.
+	guardedOutcome map[string]SteerOutcome
+	guardedSigs    []string
 }
 
 type mockSteerCall struct {
@@ -341,18 +354,41 @@ func (m *mockSessionSteerer) SessionProgram(uuid string) (string, bool) {
 // IsReadyForSteer implements SessionSteerer. Defaults to true (ready) unless
 // uuid is explicitly marked in notReady — see that field's doc comment.
 func (m *mockSessionSteerer) IsReadyForSteer(uuid string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return !m.notReady[uuid]
 }
 
-func (m *mockSessionSteerer) SteerActiveSession(_ context.Context, uuid, message string) error {
+func (m *mockSessionSteerer) recordSteer(_ context.Context, uuid, message string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.steerCalls = append(m.steerCalls, mockSteerCall{uuid: uuid, message: message})
 	return m.steerErr[uuid]
 }
 
+// SteerSessionGuarded implements SessionSteerer. Without a guardedOutcome
+// override it behaves like the unguarded path, so tests written against
+// the unguarded recording path keep their meaning.
+func (m *mockSessionSteerer) SteerActiveSession(ctx context.Context, uuid, message string) error {
+	return m.recordSteer(ctx, uuid, message)
+}
+
+func (m *mockSessionSteerer) SteerSessionGuarded(ctx context.Context, uuid, sig, message string) (SteerOutcome, error) {
+	m.mu.Lock()
+	m.guardedSigs = append(m.guardedSigs, sig)
+	override, ok := m.guardedOutcome[uuid]
+	m.mu.Unlock()
+	if ok {
+		return override, nil
+	}
+	if err := m.recordSteer(ctx, uuid, message); err != nil {
+		return SteerFailed, err
+	}
+	return SteerDelivered, nil
+}
+
 // calls returns a snapshot copy of steerCalls, safe to read concurrently with
-// in-flight SteerActiveSession calls.
+// in-flight recordSteer calls.
 func (m *mockSessionSteerer) calls() []mockSteerCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -400,7 +436,8 @@ type mockCreateCall struct {
 	programOverride string
 }
 
-func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, path, prompt string, tags []string, oneShot bool, _ bool, programOverride string) (*session.Instance, error) {
+func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, path string, opts SessionSpawnOptions) (*session.Instance, error) {
+	title, prompt, tags, oneShot, programOverride := opts.Title, opts.Prompt, opts.Tags, opts.OneShot, opts.ProgramOverride
 	_, contextErr := os.Stat(filepath.Join(path, ".backlog-context.md"))
 	_, slashErr := os.Stat(filepath.Join(path, ".claude", "commands", "backlog", "status.md"))
 	m.mu.Lock()
@@ -445,7 +482,8 @@ func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, pa
 
 // CreateWorktreeSession records the call to the same calls slice as CreateDirectorySession,
 // using worktreePath as the session path (that's where files are written before spawn).
-func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, title, _, worktreePath, prompt string, tags []string, oneShot bool, _ bool, programOverride string) (*session.Instance, error) {
+func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, _, worktreePath string, opts SessionSpawnOptions) (*session.Instance, error) {
+	title, prompt, tags, oneShot, programOverride := opts.Title, opts.Prompt, opts.Tags, opts.OneShot, opts.ProgramOverride
 	_, contextErr := os.Stat(filepath.Join(worktreePath, ".backlog-context.md"))
 	_, slashErr := os.Stat(filepath.Join(worktreePath, ".claude", "commands", "backlog", "status.md"))
 	m.mu.Lock()
@@ -1748,6 +1786,33 @@ func TestSpawnSessionFromItem_AutonomousBypassesPlanningGate(t *testing.T) {
 	require.Len(t, starter.calls, 1, "autonomous driver start hook must fire")
 }
 
+// TestSpawnSessionFromItem_TitleIncludesItemIDSuffix guards against ce71ad1a:
+// two different backlog items with the same repo and short title used to
+// produce the exact same tmux session name (no per-item uniquifying suffix),
+// so a stale pane from one item's earlier session could be silently
+// reattached to when spawning the other item's session. baseTitle now
+// mirrors SpawnReviewSession's "review:"+item.ID[:8] convention.
+func TestSpawnSessionFromItem_TitleIncludesItemIDSuffix(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "same short title")
+
+	_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
+		ItemId: itemID,
+	}))
+	require.NoError(t, err)
+	require.Len(t, creator.calls, 1)
+
+	require.Contains(t, creator.calls[0].title, itemID[:8],
+		"session title must include the item's ID prefix so two items with the same repo+short-title can't collide on the same tmux session name")
+}
+
 // TestSpawnSessionFromItem_Reopen_SetsBacklogCategory verifies that a
 // revision-reopen spawn (item already in_progress, isReopen=true in
 // SpawnSessionFromItem) also gets Category == "Backlog", not just the
@@ -1833,6 +1898,33 @@ func TestSpawnSessionFromItem_Reopen_ReusesBranch(t *testing.T) {
 
 	assert.Equal(t, firstBranch, secondBranch, "reopen must reuse the same branch, not mint a new -rN branch")
 	assert.NotContains(t, secondBranch, "-r2", "branch name must not pick up the session title's revision suffix")
+}
+
+// TestSpawnSessionFromItem_should_StampRealGitBranchOnItemSession is the regression
+// test for PR #960 (item 4daf7ced) sticking in pr_pending after merge: the work
+// ItemSession's branch_name was stamped with the bare slug while the worktree's real
+// branch (the PR's head ref) is "backlog/<slug>", so the merge-verification guard
+// compared two different strings. Asserts the stamp equals the branch git actually
+// checked out.
+func TestSpawnSessionFromItem_should_StampRealGitBranchOnItemSession(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "stamp branch item")
+
+	_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.Len(t, creator.calls, 1)
+
+	sessions, err := storage.ListItemSessions(t.Context(), itemID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, currentBranch(t, creator.calls[0].path), sessions[0].BranchName,
+		"ItemSession.BranchName must be the worktree's real branch, which is what a PR's head ref will be")
 }
 
 // TestSpawnSessionFromItem_Reopen_ReusesWorktreeInPlace is a regression test for a
@@ -3772,11 +3864,11 @@ func TestItemSessionToProto_HandlesInvalidTriageResultJSON(t *testing.T) {
 // errSessionCreator always returns an error from CreateDirectorySession and CreateWorktreeSession.
 type errSessionCreator struct{ err error }
 
-func (e *errSessionCreator) CreateDirectorySession(_ context.Context, _, _, _ string, _ []string, _ bool, _ bool, _ string) (*session.Instance, error) {
+func (e *errSessionCreator) CreateDirectorySession(_ context.Context, _ string, _ SessionSpawnOptions) (*session.Instance, error) {
 	return nil, e.err
 }
 
-func (e *errSessionCreator) CreateWorktreeSession(_ context.Context, _, _, _, _ string, _ []string, _ bool, _ bool, _ string) (*session.Instance, error) {
+func (e *errSessionCreator) CreateWorktreeSession(_ context.Context, _, _ string, _ SessionSpawnOptions) (*session.Instance, error) {
 	return nil, e.err
 }
 
@@ -4444,12 +4536,16 @@ func TestCreateBacklogItem_should_SpawnSDDSession_When_PipelineModeSDDAndAutoSpa
 func TestTriggerTriage_PersistFailurePublishesNotification(t *testing.T) {
 	t.Parallel()
 	storage := createTestStorage(t)
-	// Delay the fake LLM call so the test can race a status change in underneath it,
-	// deterministically forcing the final TransitionBacklogItemStatus precondition to fail.
-	pool := &fakeHeadlessPool{response: validTriageJSON(), delay: 200 * time.Millisecond}
+	// Hold the fake LLM call open on a gate (not a wall-clock delay) so the status change
+	// below is guaranteed to land before the final TransitionBacklogItemStatus runs.
+	gate := make(chan struct{})
+	var releaseGate sync.Once
+	release := func() { releaseGate.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+	pool := &fakeHeadlessPool{response: validTriageJSON(), onCall: func(string) { <-gate }}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
-	eventBus := events.NewEventBus(4)
+	eventBus := events.NewEventBus(64)
 	svc.SetEventBus(eventBus)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
@@ -4472,19 +4568,22 @@ func TestTriggerTriage_PersistFailurePublishesNotification(t *testing.T) {
 	// Move the item off 'idea' while the delayed headless call is still in flight.
 	_, err = storage.TransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusReview, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
+	release()
 
+	// The completion goroutine's latency under full-suite load is unbounded (a fixed 3s
+	// per-event timeout here flaked ~26% under CPU contention), so wait on the event
+	// itself with a generous ceiling that only matters when the code is actually broken.
 	var notif *events.Event
-	for i := 0; i < 5; i++ {
+	deadline := time.After(60 * time.Second)
+wait:
+	for notif == nil {
 		select {
 		case ev := <-ch:
 			if ev.Type == events.EventNotification {
 				notif = ev
 			}
-		case <-time.After(3 * time.Second):
-			i = 5
-		}
-		if notif != nil {
-			break
+		case <-deadline:
+			break wait
 		}
 	}
 	require.NotNil(t, notif, "a persistence failure during triage completion must publish an operator notification")

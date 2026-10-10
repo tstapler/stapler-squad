@@ -173,16 +173,16 @@ func TestIsDirtyUncached_should_ReuseHeadTreeCache_When_HeadUnchangedAcrossCalls
 
 	_, err := g.IsDirtyUncached()
 	require.NoError(t, err)
-	first, ok := g.headTreeCache.v.Load().(headTreeCacheEntry)
+	first, ok := g.headTreeCache.CachedHashes()
 	require.True(t, ok, "IsDirtyUncached must populate g.headTreeCache, not leave it empty")
-	require.NotNil(t, first.hashes, "cached entry must carry a real hashes map")
+	require.NotNil(t, first, "cached entry must carry a real hashes map")
 
 	_, err = g.IsDirtyUncached()
 	require.NoError(t, err)
-	second, ok := g.headTreeCache.v.Load().(headTreeCacheEntry)
+	second, ok := g.headTreeCache.CachedHashes()
 	require.True(t, ok)
 
-	assert.Equal(t, fmt.Sprintf("%p", first.hashes), fmt.Sprintf("%p", second.hashes),
+	assert.Equal(t, fmt.Sprintf("%p", first), fmt.Sprintf("%p", second),
 		"a second IsDirtyUncached call against an unchanged HEAD must reuse the cached hashes map, not recompute it")
 }
 

@@ -140,11 +140,13 @@ func TestEnsureRemoteSession_RetryAfterConnectionDrop_DoesNotDuplicate(t *testin
 	// alone) while intermittently missing a 5s deadline under full-package
 	// -race load.
 	deadline := time.Now().Add(20 * time.Second)
+	sessionTick := time.NewTicker(2 * time.Millisecond)
+	defer sessionTick.Stop()
 	for remoteSessionCount(t, socket, sess.GetSanitizedName()) == 0 {
 		if time.Now().After(deadline) {
 			t.Fatal("timed out waiting for the first EnsureRemoteSession attempt to create the remote session")
 		}
-		time.Sleep(2 * time.Millisecond)
+		<-sessionTick.C
 	}
 	if client, ok := pool.Peek(target.Name); ok {
 		if err := client.Close(); err != nil {
@@ -275,9 +277,11 @@ func TestEnsureRemoteSession_RaceWindow_ConcurrentCreatorWins_RecoversViaHasSess
 // eventual retry always succeeds once the watcher catches up).
 func waitForEnsureRemoteSessionRetry(ctx context.Context, sess *TmuxSession, workDir string) error {
 	var lastErr error
+	retryTick := time.NewTicker(50 * time.Millisecond)
+	defer retryTick.Stop()
 	for attempt := 0; attempt < 10; attempt++ {
 		if attempt > 0 {
-			time.Sleep(50 * time.Millisecond)
+			<-retryTick.C
 		}
 		if err := sess.EnsureRemoteSession(ctx, workDir); err == nil {
 			return nil

@@ -23,6 +23,7 @@ func newBugfixTaggingEngine() *classifier.TaggingEngine {
 }
 
 func TestReclassifyTagsAfterCreate_should_ApplyTagImmediately_When_NewWorktreeSessionMatchesSeedRule(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
@@ -54,6 +55,7 @@ func TestReclassifyTagsAfterCreate_should_ApplyTagImmediately_When_NewWorktreeSe
 }
 
 func TestReclassifyTagsAfterCreate_should_ApplyTagImmediately_When_NewProjectOrExistingWorktreeSessionCreated(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}

@@ -3,14 +3,16 @@ package git
 import (
 	"context"
 	"fmt"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
-	"github.com/tstapler/stapler-squad/log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/git/native"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -25,23 +27,11 @@ func isTraversalPathSegment(s string) bool {
 	return s == "." || s == ".."
 }
 
-// defaultPlainOpenOptions is the single source of truth for how this codebase opens a
-// git repository. In particular, EnableDotGitCommonDir must always be set: without it,
-// go-git silently resolves objects/refs for a linked worktree (`git worktree add`)
-// against the wrong gitdir — not an error, a real-but-wrong result (verified
-// empirically: HEAD resolved to a stale SHA from before the worktree was created).
-// Read-only after init, so sharing this one instance across every OpenRepo call is safe.
-var defaultPlainOpenOptions = &git.PlainOpenOptions{ //nolint:gochecknoglobals shared read-only options, not mutable state
-	DetectDotGit:          true,
-	EnableDotGitCommonDir: true,
-}
-
-// OpenRepo opens the git repository or worktree at path using defaultPlainOpenOptions.
-// Every git repository open in this codebase must go through this function rather than
-// a bare git.PlainOpen/PlainOpenWithOptions call — see tools/lint's norawgitopen
-// analyzer, which enforces this.
+// OpenRepo opens the git repository or worktree at path. It is the session/git entry
+// point for native.OpenRepo, which owns the shared open options; every open in this
+// codebase must go through one of the two (see tools/lint's norawgitopen analyzer).
 func OpenRepo(path string) (*git.Repository, error) {
-	return git.PlainOpenWithOptions(path, defaultPlainOpenOptions) //nolint:norawgitopen this is the wrapper itself
+	return native.OpenRepo(path)
 }
 
 // sanitizeBranchName transforms an arbitrary string into a Git branch name friendly string.
@@ -152,28 +142,9 @@ func joinWithinDir(baseDir, name string) (string, error) {
 	return joined, nil
 }
 
-// CanonicalizeWorktreePath resolves path to its symlink-free (realpath'd) form,
-// matching what `git worktree list --porcelain` reports and what
-// getWorktreeDirectory already produces for freshly-created worktree parents.
-// On macOS /var (and /tmp) is itself a symlink to /private/var, so two code
-// paths that construct the "same" worktree path differently — one via
-// filepath.Join on an unresolved parent, the other by reading git's
-// already-resolved output — end up as different strings for the identical
-// directory (see TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession).
-// EvalSymlinks requires the path to exist, which doesn't hold for the
-// pre-creation/rehydration cases this is also used in; falling back to
-// filepath.Clean on ANY error (not just ENOENT) keeps this a pure, non-failing
-// normalizer, matching the established pattern in session/history_detector.go,
-// session/import_correlate.go, and session/unfinished/gogitstore/open.go.
+// CanonicalizeWorktreePath forwards to native.CanonicalizeWorktreePath.
 func CanonicalizeWorktreePath(path string) string {
-	if path == "" {
-		return path
-	}
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return filepath.Clean(path)
-	}
-	return resolved
+	return native.CanonicalizeWorktreePath(path)
 }
 
 // checkGHCLI checks if GitHub CLI is installed and configured. The auth check

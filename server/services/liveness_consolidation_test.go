@@ -367,6 +367,79 @@ func TestOtherLiveSessionInsideWorktree_ExcludedAndUnrelatedAndDead_NotBlocked(t
 	}
 }
 
+// TestConversationOwnedByOtherLiveSession_should_ReportOwnership_When_LiveSiblingSharesUUIDAndPath
+// is worktree-envvars-hijack validation.md row 29 / Story 1.4.2's SessionService-level
+// unit test: unlike OtherLiveSessionInsideWorktree, path overlap alone must never be
+// enough to report ownership -- the sibling must also already own this exact
+// conversation UUID, so a session detecting its OWN first conversation at a shared
+// path is never mistaken for adopting someone else's.
+func TestConversationOwnedByOtherLiveSession_should_ReportOwnership_When_LiveSiblingSharesUUIDAndPath(t *testing.T) {
+	t.Parallel()
+
+	const conversationUUID = "550e8400-e29b-41d4-a716-446655440000"
+	sharedPath := t.TempDir()
+
+	t.Run("no reviewQueuePoller: nothing can be proven, so nothing may be reported owned", func(t *testing.T) {
+		t.Parallel()
+		svc := &SessionService{}
+		_, owned := svc.ConversationOwnedByOtherLiveSession(conversationOwnershipQuery{selfUUID: "self-uuid", conversationUUID: conversationUUID, path: sharedPath})
+		assert.False(t, owned)
+	})
+
+	t.Run("live sibling shares UUID and path: reports ownership", func(t *testing.T) {
+		t.Parallel()
+		sibling := newLiveProbeInstance(t, "owner-"+t.Name(), sharedPath)
+		sibling.SetHistoryInfo(conversationUUID, filepath.Join(sharedPath, conversationUUID+".jsonl"))
+		poller := newEmptyPoller()
+		poller.SetInstances([]*session.Instance{sibling})
+		svc := &SessionService{reviewQueuePoller: poller}
+
+		ownerUUID, owned := svc.ConversationOwnedByOtherLiveSession(conversationOwnershipQuery{selfUUID: "self-uuid", conversationUUID: conversationUUID, path: sharedPath})
+
+		require.True(t, owned, "a live sibling that already owns this exact conversation UUID at this path must be reported")
+		assert.Equal(t, sibling.UUID, ownerUUID)
+	})
+
+	t.Run("self-exclusion: a session's own record is never reported as another owner", func(t *testing.T) {
+		t.Parallel()
+		self := newLiveProbeInstance(t, "self-"+t.Name(), sharedPath)
+		self.SetHistoryInfo(conversationUUID, filepath.Join(sharedPath, conversationUUID+".jsonl"))
+		poller := newEmptyPoller()
+		poller.SetInstances([]*session.Instance{self})
+		svc := &SessionService{reviewQueuePoller: poller}
+
+		_, owned := svc.ConversationOwnedByOtherLiveSession(conversationOwnershipQuery{selfUUID: self.UUID, conversationUUID: conversationUUID, path: sharedPath})
+
+		assert.False(t, owned, "cold-restore self-recovery must never be blocked by a session's own record")
+	})
+
+	t.Run("path shared but UUID differs: not reported owned (legitimate SessionTypeDirectory path-sharing)", func(t *testing.T) {
+		t.Parallel()
+		sibling := newLiveProbeInstance(t, "different-uuid-"+t.Name(), sharedPath)
+		sibling.SetHistoryInfo("11111111-1111-1111-1111-111111111111", filepath.Join(sharedPath, "other.jsonl"))
+		poller := newEmptyPoller()
+		poller.SetInstances([]*session.Instance{sibling})
+		svc := &SessionService{reviewQueuePoller: poller}
+
+		_, owned := svc.ConversationOwnedByOtherLiveSession(conversationOwnershipQuery{selfUUID: "self-uuid", conversationUUID: conversationUUID, path: sharedPath})
+
+		assert.False(t, owned, "path overlap alone must never be enough -- the sibling must own this exact UUID")
+	})
+
+	t.Run("dead sibling: not reported owned", func(t *testing.T) {
+		t.Parallel()
+		dead := newDeadProbeInstance(t, "dead-"+t.Name(), sharedPath)
+		dead.SetHistoryInfo(conversationUUID, filepath.Join(sharedPath, conversationUUID+".jsonl"))
+		poller := newEmptyPoller()
+		poller.SetInstances([]*session.Instance{dead})
+		svc := &SessionService{reviewQueuePoller: poller}
+
+		_, owned := svc.ConversationOwnedByOtherLiveSession(conversationOwnershipQuery{selfUUID: "self-uuid", conversationUUID: conversationUUID, path: sharedPath})
+
+		assert.False(t, owned, "a no-longer-live sibling must not block adoption")
+	})
+}
+
 // --------------------------------------------------------------------------
 // findConfirmedLiveWorkSession (spawnSessionAfterGates' 8b2 cap)
 // --------------------------------------------------------------------------

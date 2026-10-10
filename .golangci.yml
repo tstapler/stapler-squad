@@ -89,6 +89,70 @@ linters:
           deny:
             - pkg: "io/ioutil"
               desc: "replaced by io and os packages since Go 1.16"
+        # Story 1.1.0c (go-git fork plan, package topology). Strict allow-lists: anything not
+        # listed is rejected. Test files are excluded so fixtures can use testify, gittest,
+        # safeexec etc. The `go list -deps` acceptance checks in the plan are the second
+        # line of defense (they also catch transitive imports, which depguard cannot).
+        # backend is a leaf: no session/*, config or go-git in its API.
+        git_backend_leaf:
+          list-mode: strict
+          files:
+            - "**/session/git/backend/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - go.opentelemetry.io/otel
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/telemetry
+            - github.com/tstapler/stapler-squad/session/git/redact
+            - github.com/tstapler/stapler-squad/session/git/backend
+        # native holds the on-disk worktree/merge code; collaborators are injected (MergeDeps).
+        git_native_isolation:
+          list-mode: strict
+          files:
+            - "**/session/git/native/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/go-git
+            - github.com/sergi/go-diff
+            - go.opentelemetry.io/otel
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/telemetry
+            - github.com/tstapler/stapler-squad/session/git/redact
+            - github.com/tstapler/stapler-squad/session/git/native
+        # The composition root may import everything; nothing it composes may import it back.
+        git_no_gitwiring_import:
+          files:
+            - "**/session/git/**"
+            - "**/session/vcs/**"
+            - "**/session/vc/**"
+            - "**/pkg/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: "github.com/tstapler/stapler-squad/session/gitwiring"
+              desc: "session/gitwiring is the composition root; session/git, session/vcs, session/vc and pkg/ receive collaborators by injection and must not import it"
+        # pkg/ must not reach into session/. depguard matches `pkg` exactly here: a bare
+        # ".../session" did not deny ".../session/tmux", and trailing "/**" and "/*" globs
+        # matched nothing in a failing-fixture check, so the packages that matter are named.
+        # The `go list -deps ./pkg/classifier` check in the plan covers the transitive case.
+        pkg_no_session:
+          files:
+            - "**/pkg/**"
+            - "!**/*_test.go"
+            # Pre-existing: events carries session types in its payloads.
+            - "!**/pkg/events/**"
+          deny:
+            - pkg: "github.com/tstapler/stapler-squad/session"
+              desc: "pkg/ must not import session"
+            - pkg: "github.com/tstapler/stapler-squad/session/git"
+              desc: "pkg/ must not import session/git; take an injected backend or a narrow local port"
+            - pkg: "github.com/tstapler/stapler-squad/session/git/native"
+              desc: "pkg/ must not import session/git/native"
+            - pkg: "github.com/tstapler/stapler-squad/session/tmux"
+              desc: "pkg/ must not import session/tmux"
+            - pkg: "github.com/tstapler/stapler-squad/session/lifecycle"
+              desc: "pkg/ must not import session/lifecycle"
         no_ent_in_services:
           # activated-after: all server/services exclusions removed (refactor/storage-interface-cleanup P6)
           files:
@@ -142,6 +206,10 @@ linters:
             # production API has no way to construct otherwise. The production
             # file (github_webhook_pr_fix.go) does NOT need this exclusion.
             - "!**/server/services/github_webhook_pr_fix_test.go"
+            # session_service.go's *ent.Client usage (SetAnalyticsClient) moved here
+            # verbatim in the session_service_*.go file-size split (2026-10) — same
+            # already-grandfathered exclusion, not newly introduced.
+            - "!**/server/services/session_service_wiring.go"
           deny:
             - pkg: "github.com/tstapler/stapler-squad/session/ent"
               desc: "server/services must not import session/ent directly; use domain DTOs from session package"
@@ -252,6 +320,12 @@ linters:
         linters: [forbidigo]
         text: "LoadInstances"
       - path: "server/services/session_service\\.go"
+        linters: [forbidigo]
+        text: "LoadInstances"
+      # Same intentional LoadInstances uses as session_service.go above, moved
+      # verbatim into these files by the session_service_*.go file-size split
+      # (2026-10) — not newly introduced.
+      - path: "server/services/session_service_(crud|lifecycle)\\.go"
         linters: [forbidigo]
         text: "LoadInstances"
       # MCP tools have their own per-tool LoadInstances calls that are aware of the

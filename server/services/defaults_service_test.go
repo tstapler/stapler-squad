@@ -207,6 +207,56 @@ func TestGetSessionDefaults_ResolvesStaleSessionDefaults(t *testing.T) {
 	assert.True(t, resp.Msg.Defaults.StaleSessionNotifyEnabled)
 }
 
+// TestGetSessionDefaults_ServesRuntimeReworkCapDefault pins the settings form's
+// value to the cap the server enforces (single source of truth).
+func TestGetSessionDefaults_ServesRuntimeReworkCapDefault(t *testing.T) {
+	svc := newIsolatedDefaultsService(t)
+
+	resp, err := svc.GetSessionDefaults(context.Background(), connect.NewRequest(&sessionv1.GetSessionDefaultsRequest{}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Defaults)
+	assert.Equal(t, int32(config.DefaultMaxAutoReworkIterations), resp.Msg.Defaults.MaxAutoReworkIterations)
+	assert.Equal(t, config.DefaultMaxAutoReworkIterations, (*config.Config)(nil).MaxAutoReworkIterationsOrDefault())
+}
+
+// TestGetSessionDefaults_ServesRuntimeAutonomousMaxTurnsDefault pins the settings
+// form's turn-cap value to the cap the server enforces.
+func TestGetSessionDefaults_ServesRuntimeAutonomousMaxTurnsDefault(t *testing.T) {
+	svc := newIsolatedDefaultsService(t)
+
+	resp, err := svc.GetSessionDefaults(context.Background(), connect.NewRequest(&sessionv1.GetSessionDefaultsRequest{}))
+	require.NoError(t, err)
+	assert.Equal(t, int32((*config.Config)(nil).AutonomousMaxTurnsOrDefault()), resp.Msg.Defaults.AutonomousMaxTurns)
+}
+
+func TestUpdateGlobalDefaults_AutonomousMaxTurns(t *testing.T) {
+	update := func(t *testing.T, svc *DefaultsService, turns int32) int32 {
+		t.Helper()
+		_, err := svc.UpdateGlobalDefaults(context.Background(), connect.NewRequest(&sessionv1.UpdateGlobalDefaultsRequest{AutonomousMaxTurns: turns}))
+		require.NoError(t, err)
+		// Re-read via the getter so persistence, not just the response echo, is asserted.
+		got, err := svc.GetSessionDefaults(context.Background(), connect.NewRequest(&sessionv1.GetSessionDefaultsRequest{}))
+		require.NoError(t, err)
+		return got.Msg.Defaults.AutonomousMaxTurns
+	}
+	def := int32((*config.Config)(nil).AutonomousMaxTurnsOrDefault())
+
+	t.Run("ExplicitValuePersists", func(t *testing.T) {
+		assert.Equal(t, int32(50), update(t, newIsolatedDefaultsService(t), 50))
+	})
+	t.Run("ZeroResetsPreviouslySetValue", func(t *testing.T) {
+		svc := newIsolatedDefaultsService(t)
+		require.Equal(t, int32(50), update(t, svc, 50))
+		assert.Equal(t, def, update(t, svc, 0))
+	})
+	t.Run("AboveCeilingClampsTo200", func(t *testing.T) {
+		assert.Equal(t, int32(200), update(t, newIsolatedDefaultsService(t), 500))
+	})
+	t.Run("NegativeFallsBackToDefault", func(t *testing.T) {
+		assert.Equal(t, def, update(t, newIsolatedDefaultsService(t), -5))
+	})
+}
+
 // TestUpdateGlobalDefaults_ZeroStaleSessionThreshold_UsesServerDefault verifies the
 // "0 means use the server default" convention (matching max_auto_rework_iterations
 // and max_concurrent_backlog_work_items): sending 0 leaves the persisted config.json

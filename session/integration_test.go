@@ -78,6 +78,7 @@ func TestMain(m *testing.M) {
 
 	code := m.Run()
 	close(stop)
+	removeGitTemplateRepos()
 	os.Exit(code)
 }
 

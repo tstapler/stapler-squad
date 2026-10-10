@@ -1061,12 +1061,8 @@ func TestRecoverBaseCommitSHA_UsesExplicitBranchRef_NotAmbientHEAD(t *testing.T)
 	ctx := context.Background()
 
 	repoDir := t.TempDir()
-	runGitOrFail(t, repoDir, "init", "-b", "main")
-	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
-	runGitOrFail(t, repoDir, "config", "user.name", "Test")
-	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("base\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "README.md")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+	initConfiguredRepo(t, repoDir, "main")
+	commitFile(t, repoDir, "README.md", "base\n", "initial")
 	mainSHA := strings.TrimSpace(runGitCapture(t, repoDir, "rev-parse", "main"))
 
 	// The session's own dedicated worktree, branched from main, with real committed work.

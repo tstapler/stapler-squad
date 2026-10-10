@@ -191,10 +191,14 @@ type ReviewVerdictSummary struct {
 //   - OverallOutcome: from the review_verdicts table (populated via ReviewVerdict edge)
 //   - ReviewVerdict: eagerly loaded when the query uses WithReviewVerdict()
 type ItemSessionSummary struct {
-	ID                       string
-	BacklogItemID            string
-	SessionUUID              string
-	Role                     string
+	ID            string
+	BacklogItemID string
+	SessionUUID   string
+	Role          string
+	// BranchName is the work session's git branch, stamped once at spawn
+	// time — see ItemSession.branch_name's schema comment. Empty for rows
+	// created before this field existed, or for a non-work role.
+	BranchName               string
 	AcSnapshot               AcCriteriaJSON
 	PipelineModeSnapshot     string
 	PipelineModeSnapshotHash string
@@ -223,6 +227,7 @@ type ItemSessionSummary struct {
 	StartedAt             *time.Time
 	EndedAt               *time.Time
 	EndReason             string // set alongside EndedAt for a headless call; see ItemSession.end_reason schema comment
+	ErrorDetail           string // truncated error text for end_reason "other"; see ItemSession.error_detail schema comment
 	FailureCapturePath    string // absolute path to a durable raw-output capture; see ItemSession.failure_capture_path schema comment
 	LastCommitAt          *time.Time
 	LastFileTouchAt       *time.Time
@@ -755,6 +760,14 @@ type ShellRepository interface {
 	UpdateShellStatus(ctx context.Context, shellID, status string, exitCode *int) error
 	// DeleteShell removes the shell record with the given ID.
 	DeleteShell(ctx context.Context, shellID string) error
+}
+
+// InitialPromptRepository is the minimal persistence interface for recording when
+// Instance.InitialPrompt was actually sent. It is implemented by EntRepository;
+// pass nil to disable persistence (e.g., tests).
+type InitialPromptRepository interface {
+	// UpdateInitialPromptSentAt sets the initial_prompt_sent_at field for a session.
+	UpdateInitialPromptSentAt(ctx context.Context, title string, t time.Time) error
 }
 
 // RepositoryOption is a function that configures a repository

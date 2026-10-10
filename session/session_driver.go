@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -39,6 +40,23 @@ var spinnerTimeRe = regexp.MustCompile(`\(\d+[hms]`)
 // a work session, e.g. "✻ Perambulated for 1h 5m", "✽ Roosted for 9m", or
 // "* Moonwalked for 30s". Matches any leading symbol variant.
 var completionVerbRe = regexp.MustCompile(`[✻✽\*] \w+ed for \d+`)
+
+// driverTiming is the pair of driver timings tests need to shrink.
+type driverTiming struct {
+	pollInterval, readyTimeout time.Duration
+}
+
+// testDriverTiming overrides the production timings; nil means defaults. It is
+// an atomic pointer read once per driver start so leaked goroutines from other
+// tests cannot race a test that swaps it.
+var testDriverTiming atomic.Pointer[driverTiming]
+
+func currentDriverTiming() driverTiming {
+	if t := testDriverTiming.Load(); t != nil {
+		return *t
+	}
+	return driverTiming{pollInterval: driverPollInterval, readyTimeout: driverReadyTimeout}
+}
 
 const (
 	driverPollInterval  = 2 * time.Second
@@ -303,10 +321,11 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		}
 	}()
 
-	readyDeadline := time.Now().Add(driverReadyTimeout)
+	timing := currentDriverTiming()
+	readyDeadline := time.Now().Add(timing.readyTimeout)
 	totalDeadline := time.Now().Add(driverTotalTimeout)
 
-	ticker := time.NewTicker(driverPollInterval)
+	ticker := time.NewTicker(timing.pollInterval)
 	defer ticker.Stop()
 
 	// Once a PR URL is found in terminal output we stop scanning.
@@ -324,15 +343,27 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	var initialPromptSentAt time.Time
 	if sentInitial {
 		initialPromptSentAt = time.Now()
+	} else if persisted := inst.GetInitialPromptSentAt(); !persisted.IsZero() {
+		// Persisted record of an actual send in a previous service run --
+		// authoritative, checked before the output/JSONL heuristics below
+		// (which only exist for sessions that predate this field, or for the
+		// rare case a send happened but the persist call itself failed).
+		sentInitial = true
+		initialPromptSentAt = persisted
 	} else {
 		// Check if the prompt was already delivered in a previous service run.
 		// Use live terminal output first (no disk latency), then fall back to JSONL file.
+		// Persist the result via SetInitialPromptSentAt either way, so this
+		// session (predating the persisted field, or hit by an earlier failed
+		// persist call) doesn't have to re-run these heuristics again next restart.
 		if startOutput, err := inst.PreviewContext(ctx); err == nil && outputShowsConversationStarted(startOutput) {
 			sentInitial = true
 			initialPromptSentAt = time.Now()
+			inst.SetInitialPromptSentAt(initialPromptSentAt)
 		} else if _, err := FindConversationFilePath(ctx, inst.GetStableID()); err == nil {
 			sentInitial = true
 			initialPromptSentAt = time.Now()
+			inst.SetInitialPromptSentAt(initialPromptSentAt)
 		}
 	}
 	var sendAttempts int
@@ -617,6 +648,17 @@ func handleStartupDialogTick(inst *Instance, tailed string, startupLatch *dialog
 // already started underneath us, sending the prompt, and read-back
 // verification. The caller always `continue`s the loop after calling this.
 func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt string, output string, detectedSt detection.DetectedStatus, readyDeadline time.Time, sentInitial *bool, initialPromptSentAt *time.Time, sendAttempts *int) {
+	// markSent records every "we're done trying to send" transition below
+	// through the same path so it's always durably persisted (via
+	// Instance.SetInitialPromptSentAt's injected repo) -- not just reflected
+	// in this tick's local pointers, which reset on the next service restart.
+	markSent := func() {
+		now := time.Now()
+		*sentInitial = true
+		*initialPromptSentAt = now
+		inst.SetInitialPromptSentAt(now)
+	}
+
 	// Wait for StatusIdle specifically: the `^>\s*▌?\s*$` pattern confirms
 	// Claude Code's readline is showing the input prompt and is listening.
 	//
@@ -648,8 +690,7 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 		log.Info("SessionDriver: terminal output shows conversation already active, skipping injection",
 			"session", inst.Title,
 		)
-		*sentInitial = true
-		*initialPromptSentAt = time.Now()
+		markSent()
 		return
 	}
 
@@ -657,8 +698,7 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 		log.Info("SessionDriver: conversation file exists, skipping initial prompt injection",
 			"session", inst.Title,
 		)
-		*sentInitial = true
-		*initialPromptSentAt = time.Now()
+		markSent()
 		return
 	}
 
@@ -694,8 +734,7 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 			log.Error("SessionDriver: giving up on initial prompt after 3 failed attempts",
 				"session", inst.Title,
 			)
-			*sentInitial = true
-			*initialPromptSentAt = time.Now()
+			markSent()
 		}
 		// sentInitial stays false → retry next tick
 		return
@@ -714,8 +753,7 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 	// cannot reliably verify (Claude may not be at a prompt).
 	if !claudeAtPrompt || *sendAttempts >= 3 {
 		// Timeout-triggered send or max retries: accept without verification.
-		*sentInitial = true
-		*initialPromptSentAt = time.Now()
+		markSent()
 		return
 	}
 
@@ -746,8 +784,7 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 		"session", inst.Title,
 		"attempt", *sendAttempts,
 	)
-	*sentInitial = true
-	*initialPromptSentAt = time.Now()
+	markSent()
 }
 
 // handleInactivityTick checks for driver inactivity once the initial prompt

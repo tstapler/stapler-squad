@@ -11,12 +11,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/git/internal/obstest"
+
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // corruptPackedRefs overwrites repoDir's .git/packed-refs with malformed content, forcing
@@ -391,7 +394,7 @@ func TestBranchExistsAfterAddFailure_ReturnsTrue_When_BranchAppearsDuringRetryWi
 	go func() {
 		// Past the loop's first two checks (attempt 0 has no pre-sleep; attempt 1
 		// sleeps once) but well within its total budget.
-		time.Sleep(2 * worktreeAddRetryDelay)
+		time.Sleep(2 * worktreeAddRetryDelay) //nolint:notimesleeptest must create the branch after the production retry loop's own wall-clock backoff (worktreeAddRetryDelay) has begun; no hook exposes loop progress
 		cmd := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", branchName)
 		_ = cmd.Run()
 	}()
@@ -414,24 +417,34 @@ func TestBranchExistsAfterAddFailure_IncrementsRetryCounter_When_ItRetries(t *te
 	repoDir := setupTestRepo(t)
 	branchName := "backlog/retry-counter-fixture"
 
+	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-retry-counter-fixture", branchName)
+	require.NoError(t, err)
+
+	before := obstest.CollectMetric(t, "git_worktree_retry_total")
+	baseline := obstest.SumCounter(t, before)
+
+	// Create the branch only once the loop has recorded its first retry (so the
+	// attempt-0 check has already seen "not found"); this test is not parallel,
+	// so the counter only moves on this loop's own retries.
+	var racer sync.WaitGroup
+	racer.Add(1)
+	defer racer.Wait()
 	go func() {
-		time.Sleep(2 * worktreeAddRetryDelay)
+		defer racer.Done()
+		retried := func() bool {
+			return obstest.SumCounter(t, obstest.CollectMetric(t, "git_worktree_retry_total")) > baseline
+		}
+		_ = wait.WaitForCondition(retried, wait.WaitConfig{Timeout: 10 * time.Second, PollInterval: 10 * time.Millisecond, Description: "first retry recorded"})
 		cmd := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", branchName)
 		_ = cmd.Run()
 	}()
 
-	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-retry-counter-fixture", branchName)
-	require.NoError(t, err)
-
-	before := collectGitMetric(t, "git_worktree_retry_total")
-	baseline := sumGitCounter(t, before)
-
 	assert.True(t, wt.branchExistsAfterAddFailure(plumbing.NewBranchReferenceName(branchName)),
 		"must self-heal once the delayed race winner's branch appears within the retry window")
 
-	after := collectGitMetric(t, "git_worktree_retry_total")
+	after := obstest.CollectMetric(t, "git_worktree_retry_total")
 	require.NotNil(t, after)
-	assert.Greater(t, sumGitCounter(t, after), baseline, "expected at least one Ground-Truth Re-Query retry to be recorded")
+	assert.Greater(t, obstest.SumCounter(t, after), baseline, "expected at least one Ground-Truth Re-Query retry to be recorded")
 }
 
 // TestBranchExistsAfterAddFailure_ReturnsFalse_When_BranchNeverAppears is Story 1.1.1's
@@ -509,7 +522,7 @@ func TestSetupFromExistingBranch_SelfHeals_When_WorktreeRegisteredByDelayedRaceW
 	winnerPath := CanonicalizeWorktreePath(filepath.Join(t.TempDir(), "winner-worktree"))
 
 	go func() {
-		time.Sleep(2 * worktreeAddRetryDelay)
+		time.Sleep(2 * worktreeAddRetryDelay) //nolint:notimesleeptest must register the winner worktree after the production retry loop's own wall-clock backoff (worktreeAddRetryDelay) has begun; no hook exposes loop progress
 		winnerWt := NewGitWorktreeFromStorageWithExecutor(repoDir, winnerPath, "test-delayed-race-winner-layer2-winner", branchName, "")
 		_ = winnerWt.nativeSetupNewWorktree()
 	}()

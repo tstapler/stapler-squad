@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -523,11 +524,9 @@ func TestReadControlModeOutput_GoroutineNeverReachesExitSites_ActiveGenerationsG
 	// Give the (intentionally wedged) goroutine a moment to prove it does
 	// NOT end the generation on its own -- the gauge must stay elevated for
 	// as long as the goroutine never reaches an exit site.
-	time.Sleep(20 * time.Millisecond)
-	after := sumTmuxControlModeMetric(t, collectLifecycleMetric(t, gaugeName), "")
-	if after != baseline+1 {
-		t.Errorf("gauge = baseline+%d, want baseline+1 (still elevated for the abandoned generation)", after-baseline)
-	}
+	require.Never(t, func() bool {
+		return sumTmuxControlModeMetric(t, collectLifecycleMetric(t, gaugeName), "") != baseline+1
+	}, 20*time.Millisecond, 5*time.Millisecond, "gauge must stay at baseline+1 (still elevated for the abandoned generation)")
 
 	// Unblock the wedged goroutine and join it within this test's own body,
 	// rather than leaving it to t.Cleanup's unordered pipe close -- otherwise

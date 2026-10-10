@@ -33,6 +33,10 @@ export const STUCK_REASON_LABELS: Record<StuckReason, string> = {
   [StuckReason.MULTIPLE_REASONS]: "Multiple reasons stuck",
   [StuckReason.BOUNCE_CAP_EXHAUSTED]: "Bounce cap exhausted",
   [StuckReason.STEER_FAILED]: "Steer attempt failed",
+  [StuckReason.BLOCKED_BY_CLAIM]: "Blocked: claimed by another host",
+  [StuckReason.WORKTREE_INCONSISTENT]: "Worktree state inconsistent",
+  [StuckReason.REPEATED_NOOP_DISPATCH]: "Repeated no-op sessions",
+  [StuckReason.MERGED_PR_UNVERIFIED]: "Merged PR not tied to item",
 };
 
 /** Decorative icon glyph for every StuckReason (never the sole signal — text label always accompanies it). */
@@ -57,6 +61,10 @@ export const STUCK_REASON_ICONS: Record<StuckReason, string> = {
   [StuckReason.MULTIPLE_REASONS]: "🔺",
   [StuckReason.BOUNCE_CAP_EXHAUSTED]: "🛑",
   [StuckReason.STEER_FAILED]: "⛔",
+  [StuckReason.BLOCKED_BY_CLAIM]: "🟠",
+  [StuckReason.WORKTREE_INCONSISTENT]: "⛔",
+  [StuckReason.REPEATED_NOOP_DISPATCH]: "🔁",
+  [StuckReason.MERGED_PR_UNVERIFIED]: "⛔",
 };
 
 /** vanilla-extract class per StuckReason (design/ux.md Surface 7 chip legend). */
@@ -81,6 +89,10 @@ export const STUCK_REASON_CLASS: Record<StuckReason, string> = {
   [StuckReason.MULTIPLE_REASONS]: styles.chipEscalated,
   [StuckReason.BOUNCE_CAP_EXHAUSTED]: styles.chipEscalated,
   [StuckReason.STEER_FAILED]: styles.chipSteerFailed,
+  [StuckReason.BLOCKED_BY_CLAIM]: styles.chipBlockedByClaim,
+  [StuckReason.WORKTREE_INCONSISTENT]: styles.chipWorktreeInconsistent,
+  [StuckReason.REPEATED_NOOP_DISPATCH]: styles.chipWorktreeInconsistent,
+  [StuckReason.MERGED_PR_UNVERIFIED]: styles.chipPrPendingNoPR,
 };
 
 /**
@@ -113,23 +125,29 @@ export const STUCK_REASON_PRIORITY: Record<StuckReason, number> = {
   [StuckReason.BOUNCE_CAP_EXHAUSTED]: 0,
   [StuckReason.MULTIPLE_REASONS]: 1,
   [StuckReason.STEER_FAILED]: 2,
-  [StuckReason.PUSH_FAILED]: 3,
-  [StuckReason.SPAWN_FAILED]: 4,
-  [StuckReason.PR_PENDING_NO_PR]: 5,
-  [StuckReason.REWORK_BLOCKED_STALE]: 6,
-  [StuckReason.PR_NEEDS_FIX]: 7,
-  [StuckReason.ABANDONED_REVIEW]: 8,
-  [StuckReason.REWORK_CAP]: 9,
-  [StuckReason.RESPAWN_BLOCKED_ACTIVE]: 10,
-  [StuckReason.ORPHANED_TRIAGE]: 11,
-  [StuckReason.AUTONOMOUS_STUCK]: 12,
-  [StuckReason.BLOCKED_BY_DEPENDENCY]: 13,
-  [StuckReason.PLAN_NOT_APPROVED]: 14,
-  [StuckReason.STALE_WORK]: 15,
-  [StuckReason.BOUNCING]: 16,
-  [StuckReason.PR_READY_UNMERGED]: 17,
-  [StuckReason.LIKELY_FLAKY]: 18,
-  [StuckReason.UNSPECIFIED]: 19,
+  [StuckReason.WORKTREE_INCONSISTENT]: 3,
+  [StuckReason.REPEATED_NOOP_DISPATCH]: 3.5,
+  [StuckReason.PUSH_FAILED]: 4,
+  [StuckReason.SPAWN_FAILED]: 5,
+  [StuckReason.PR_PENDING_NO_PR]: 6,
+  // Same dead-end shape as PR_PENDING_NO_PR: needs a manual mark-done.
+  [StuckReason.MERGED_PR_UNVERIFIED]: 6.5,
+  [StuckReason.REWORK_BLOCKED_STALE]: 7,
+  [StuckReason.PR_NEEDS_FIX]: 8,
+  [StuckReason.ABANDONED_REVIEW]: 9,
+  [StuckReason.REWORK_CAP]: 10,
+  [StuckReason.RESPAWN_BLOCKED_ACTIVE]: 11,
+  [StuckReason.ORPHANED_TRIAGE]: 12,
+  [StuckReason.AUTONOMOUS_STUCK]: 13,
+  [StuckReason.BLOCKED_BY_DEPENDENCY]: 14,
+  // Sorts just after BLOCKED_BY_DEPENDENCY: both are by-design dequeue skips.
+  [StuckReason.BLOCKED_BY_CLAIM]: 14.5,
+  [StuckReason.PLAN_NOT_APPROVED]: 15,
+  [StuckReason.STALE_WORK]: 16,
+  [StuckReason.BOUNCING]: 17,
+  [StuckReason.PR_READY_UNMERGED]: 18,
+  [StuckReason.LIKELY_FLAKY]: 19,
+  [StuckReason.UNSPECIFIED]: 20,
 };
 
 /**

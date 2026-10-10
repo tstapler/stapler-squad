@@ -82,25 +82,26 @@ func (i *Instance) ToInstanceData() InstanceData {
 	})
 
 	data := InstanceData{
-		Title:         snap.Title,
-		UUID:          snap.UUID,
-		Path:          snap.Path,
-		WorkingDir:    snap.WorkingDir,
-		Branch:        snap.Branch,
-		Status:        snap.Status,
-		Height:        snap.Height,
-		Width:         snap.Width,
-		CreatedAt:     snap.CreatedAt,
-		UpdatedAt:     time.Now(),
-		Program:       snap.Program,
-		AutoYes:       snap.AutoYes,
-		AutoApprove:   snap.AutoApprove,
-		Prompt:        snap.Prompt,
-		InitialPrompt: snap.InitialPrompt,
-		Category:      snap.Category,
-		Note:          snap.Note,
-		IsExpanded:    snap.IsExpanded,
-		Tags:          snap.Tags, // Include tags in serialization
+		Title:               snap.Title,
+		UUID:                snap.UUID,
+		Path:                snap.Path,
+		WorkingDir:          snap.WorkingDir,
+		Branch:              snap.Branch,
+		Status:              snap.Status,
+		Height:              snap.Height,
+		Width:               snap.Width,
+		CreatedAt:           snap.CreatedAt,
+		UpdatedAt:           time.Now(),
+		Program:             snap.Program,
+		AutoYes:             snap.AutoYes,
+		AutoApprove:         snap.AutoApprove,
+		Prompt:              snap.Prompt,
+		InitialPrompt:       snap.InitialPrompt,
+		InitialPromptSentAt: snap.InitialPromptSentAt,
+		Category:            snap.Category,
+		Note:                snap.Note,
+		IsExpanded:          snap.IsExpanded,
+		Tags:                snap.Tags, // Include tags in serialization
 		// ADR-002 tag provenance — see Instance.RuleTagProvenance/SuppressedRuleTags.
 		RuleTagProvenance:  snap.RuleTagProvenance,
 		SuppressedRuleTags: snap.SuppressedRuleTags,
@@ -157,6 +158,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		OneShot: snap.OneShot,
 		// Hidden (system/background) flag
 		Hidden: snap.Hidden,
+		Pinned: snap.Pinned,
 		// Project association
 		ProjectID: snap.ProjectID,
 		// Full launch command for diagnostics (not in snapshot — set once during Start)
@@ -274,25 +276,26 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	}
 
 	instance := &Instance{
-		Title:         data.Title,
-		UUID:          data.UUID,
-		Path:          migratedPath, // Use migrated path
-		WorkingDir:    data.WorkingDir,
-		Branch:        data.Branch,
-		Status:        data.Status,
-		Height:        data.Height,
-		Width:         data.Width,
-		CreatedAt:     data.CreatedAt,
-		UpdatedAt:     data.UpdatedAt,
-		Program:       data.Program,
-		AutoYes:       data.AutoYes, // pre-existing bug: was never restored on load, losing auto_yes across every restart
-		AutoApprove:   data.AutoApprove,
-		Prompt:        data.Prompt,
-		InitialPrompt: data.InitialPrompt,
-		Category:      data.Category,
-		Note:          data.Note,
-		IsExpanded:    data.IsExpanded,
-		Tags:          tags, // Use migrated tags (includes category if needed)
+		Title:               data.Title,
+		UUID:                data.UUID,
+		Path:                migratedPath, // Use migrated path
+		WorkingDir:          data.WorkingDir,
+		Branch:              data.Branch,
+		Status:              data.Status,
+		Height:              data.Height,
+		Width:               data.Width,
+		CreatedAt:           data.CreatedAt,
+		UpdatedAt:           data.UpdatedAt,
+		Program:             data.Program,
+		AutoYes:             data.AutoYes, // pre-existing bug: was never restored on load, losing auto_yes across every restart
+		AutoApprove:         data.AutoApprove,
+		Prompt:              data.Prompt,
+		InitialPrompt:       data.InitialPrompt,
+		InitialPromptSentAt: data.InitialPromptSentAt,
+		Category:            data.Category,
+		Note:                data.Note,
+		IsExpanded:          data.IsExpanded,
+		Tags:                tags, // Use migrated tags (includes category if needed)
 		// ADR-002 tag provenance — see Instance.RuleTagProvenance/SuppressedRuleTags.
 		RuleTagProvenance:  data.RuleTagProvenance,
 		SuppressedRuleTags: data.SuppressedRuleTags,
@@ -352,6 +355,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		OneShot: data.OneShot,
 		// Hidden (system/background) flag
 		Hidden: data.Hidden,
+		Pinned: data.Pinned,
 		// Project association
 		ProjectID: data.ProjectID,
 		// Launch command for diagnostics
@@ -490,7 +494,18 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		// which pprof's fork-pressure monitor flagged as a sustained "critical"
 		// spawn/failure rate (subprocess failures/spawns >> the exec-gate's timeout
 		// budget once a couple thousand archived sessions accumulate).
-		if instance.ArchivedAt != nil {
+		//
+		// Also skip for one-shot sessions (backlog:triage/backlog:review tags, see
+		// isOneShot): session_driver.go's handleStoppedStatus already treats their
+		// Stopped status as terminal and deliberately does not retry them
+		// ("BacklogLifecycleListener handles this; driver exits cleanly"). Reviving
+		// one here contradicts that decision and respawns the same one-shot
+		// `claude -p --resume ...` invocation, which exits almost immediately and
+		// gets killed again -- an endless ~60s kill/respawn loop observed in
+		// production for an archived backlog item's stale review session, whose own
+		// ArchivedAt was nil (set only by archiveItemWorkSessions, which this old
+		// session predates) so only this check protects it.
+		if instance.ArchivedAt != nil || isOneShot(instance) {
 			instance.started.Store(true)
 		} else {
 			paneExited := false

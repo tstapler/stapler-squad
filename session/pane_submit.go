@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // DefaultPaneSettlePollInterval and DefaultPaneSettleMaxWait mirror
@@ -46,6 +48,22 @@ type paneSubmitter interface {
 	keySender
 }
 
+// paneOwnerVerifier is optionally implemented by paneSubmitters backed by a
+// real tmux pane; SubmitDriverContent calls it just before the first write.
+type paneOwnerVerifier interface {
+	VerifyPaneOwner(ctx context.Context) error
+}
+
+// VerifyPaneOwner re-checks, right before a write, that the tmux pane under
+// this instance's name is still stamped with this instance's UUID
+// (ce71ad1a). A no-op for non-tmux backends.
+func (i *Instance) VerifyPaneOwner(ctx context.Context) error {
+	if i.GetTmuxSession() == nil {
+		return nil
+	}
+	return VerifyPaneOwnershipBeforeWrite(ctx, i)
+}
+
 // SubmitDriverContent sends driver-generated content to inst, then submits it
 // with a separate Enter keystroke. content and Enter MUST travel as two
 // distinct SendKeys writes (BUG-031): concatenating them into a single write
@@ -77,6 +95,12 @@ type paneSubmitter interface {
 func SubmitDriverContent(ctx context.Context, inst paneSubmitter, content string, pollInterval, maxWait time.Duration) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("submit cancelled before sending content: %w", err)
+	}
+	if v, ok := inst.(paneOwnerVerifier); ok {
+		if err := v.VerifyPaneOwner(ctx); err != nil {
+			log.Error("SubmitDriverContent: refusing to write, pane owner not verified", "err", err)
+			return fmt.Errorf("pane owner not verified, content not sent: %w", err)
+		}
 	}
 	if err := inst.SendKeys(content); err != nil {
 		return fmt.Errorf("send content: %w", err)

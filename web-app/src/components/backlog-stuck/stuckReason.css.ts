@@ -158,6 +158,15 @@ export const chipBlockedByDependency = style([
   },
 ]);
 
+export const chipBlockedByClaim = style([
+  chip,
+  {
+    background: vars.color.warningBg,
+    color: vars.color.warningText,
+    border: `1px solid ${vars.color.warning}`,
+  },
+]);
+
 // Escalation chip (multiple_reasons / bounce_cap_exhausted) — deliberately its
 // own independent style(), not a `chipXxx` variant reused from an existing
 // reason, and using the `critical` token trio (unused by every other chip in
@@ -178,6 +187,18 @@ export const chipEscalated = style([
 // warning-styled chipRespawnBlockedActive "skipped" chips above; see
 // ADR-002 in project_plans/pr-fix-steering/decisions/).
 export const chipSteerFailed = style([
+  chip,
+  {
+    background: vars.color.errorBg,
+    color: vars.color.errorText,
+    border: `1px solid ${vars.color.error}`,
+  },
+]);
+
+// worktree_inconsistent: the reconciliation sweep declined to auto-repair a
+// session's worktree state — mirrors chipPushFailed's error styling since it
+// requires manual intervention, not just a wait.
+export const chipWorktreeInconsistent = style([
   chip,
   {
     background: vars.color.errorBg,

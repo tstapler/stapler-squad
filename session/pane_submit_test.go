@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/tstapler/stapler-squad/session/sendkeysguard"
 )
 
@@ -21,11 +23,15 @@ type fakePaneSubmitter struct {
 	failOnCall  int // -1 (default) means never fail
 	updates     []bool
 	updateCalls int
+	onSend      func(int)
 }
 
 func (f *fakePaneSubmitter) SendKeys(keys string) error {
 	idx := len(f.sendCalls)
 	f.sendCalls = append(f.sendCalls, keys)
+	if f.onSend != nil {
+		f.onSend(len(f.sendCalls))
+	}
 	if f.failOnCall == idx {
 		return errors.New("fake send failure")
 	}
@@ -238,18 +244,24 @@ func TestSubmitDriverContent_ContextAlreadyCancelled_NeverSendsKeys(t *testing.T
 // a ctx that's already dead before the call starts.
 func TestSubmitDriverContent_ContextExpiresDuringSettle_StopsBeforeEnter(t *testing.T) {
 	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	inst := newFakePaneSubmitter()
 	inst.updates = []bool{false} // never updates
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Millisecond)
-	defer cancel()
+	inst.onSend = func(calls int) {
+		if calls == 1 {
+			cancel()
+		}
+	}
 
 	// pollInterval is longer than ctx's deadline, so waitForPaneSettle's
 	// internal select hits <-ctx.Done() before its first <-time.After(poll)
 	// tick — exercising "context expires mid-wait," not "settle finishes
 	// quickly on its own."
 	err := SubmitDriverContent(ctx, inst, "content", 50*time.Millisecond, 200*time.Millisecond)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("SubmitDriverContent error = %v, want wrapping context.DeadlineExceeded", err)
+	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("SubmitDriverContent error = %v, want context cancellation", err)
 	}
 	if len(inst.sendCalls) != 1 {
 		t.Fatalf("SendKeys called %d times, want exactly 1 (content only — ctx expired before Enter) — got %#v", len(inst.sendCalls), inst.sendCalls)
@@ -314,14 +326,20 @@ func TestSubmitContentWithEnter_DelegatesToSubmitDriverContent(t *testing.T) {
 // TestSubmitDriverContent_ContextExpiresDuringSettle_StopsBeforeEnter.
 func TestSubmitDriverContent_ContextExpiresBeforeRetry_StopsBeforeRetryEnter(t *testing.T) {
 	t.Parallel()
-	inst := newFakePaneSubmitter()
-	inst.updates = []bool{false} // settles immediately; confirmation poll never sees a change
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	err := SubmitDriverContent(ctx, inst, "content", time.Millisecond, 2*time.Millisecond)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("SubmitDriverContent error = %v, want wrapping context.DeadlineExceeded", err)
+	inst := newFakePaneSubmitter()
+	inst.updates = []bool{false} // settles immediately; confirmation poll never sees a change
+	inst.onSend = func(calls int) {
+		if calls == 2 {
+			cancel()
+		}
+	}
+
+	err := SubmitDriverContent(ctx, inst, "content", time.Millisecond, 50*time.Millisecond)
+	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("SubmitDriverContent error = %v, want context cancellation", err)
 	}
 	if len(inst.sendCalls) != 2 {
 		t.Fatalf("SendKeys called %d times, want exactly 2 (content, first Enter — no retry) — got %#v", len(inst.sendCalls), inst.sendCalls)
@@ -335,4 +353,28 @@ func TestSubmitDriverContent_ContextExpiresBeforeRetry_StopsBeforeRetryEnter(t *
 func TestSessionPackage_NoDirectSendKeysPlusEnterConcatenation(t *testing.T) {
 	t.Parallel()
 	sendkeysguard.CheckNoSingleWriteEnterConcatenation(t, ".", "pane_submit.go")
+}
+
+type ownerCheckedSubmitter struct {
+	*fakePaneSubmitter
+	ownerErr error
+}
+
+func (o *ownerCheckedSubmitter) VerifyPaneOwner(context.Context) error { return o.ownerErr }
+
+// ce71ad1a: a pane whose owner can't be confirmed must receive no bytes.
+func TestSubmitDriverContent_OwnerMismatch_WritesNothing(t *testing.T) {
+	sub := &ownerCheckedSubmitter{fakePaneSubmitter: newFakePaneSubmitter(), ownerErr: errors.New("pane ownership mismatch")}
+
+	err := SubmitDriverContent(context.Background(), sub, "review prompt", time.Millisecond, time.Millisecond)
+
+	require.ErrorContains(t, err, "pane owner not verified")
+	require.Empty(t, sub.sendCalls, "no content or Enter may be written to a pane with a mismatched owner")
+}
+
+func TestSubmitDriverContent_OwnerVerified_Writes(t *testing.T) {
+	sub := &ownerCheckedSubmitter{fakePaneSubmitter: newFakePaneSubmitter()}
+
+	require.NoError(t, SubmitDriverContent(context.Background(), sub, "review prompt", time.Millisecond, time.Millisecond))
+	require.Equal(t, "review prompt", sub.sendCalls[0])
 }

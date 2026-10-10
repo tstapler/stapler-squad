@@ -7,6 +7,7 @@ import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { getApiBaseUrl } from "@/lib/config";
 import { PROGRAMS } from "@/lib/constants/programs";
+import { RepoPathInput } from "@/components/ui/RepoPathInput";
 import { ALIAS_NAME_RE } from "@/lib/omnibar/detectors/AliasDetector";
 
 const SESSION_TYPE_OPTIONS: Array<{ value: SessionType; label: string }> = [
@@ -450,13 +451,11 @@ export function AliasesManager() {
                 <label className={labelClass} htmlFor="alias-path">
                   Path
                 </label>
-                <input
+                <RepoPathInput
                   id="alias-path"
-                  type="text"
-                  className={input}
                   placeholder="e.g. ~/code/myproject"
                   value={form.path}
-                  onChange={(e) => setForm({ ...form, path: e.target.value })}
+                  onChange={(v) => setForm({ ...form, path: v })}
                 />
               </div>
 

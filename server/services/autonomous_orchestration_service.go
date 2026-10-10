@@ -36,7 +36,7 @@ type AutonomousStuckRespawner interface {
 // registering them on session creation, stopping them on deletion/hibernate, and
 // handling their completion callbacks.
 type AutonomousOrchestrationService struct {
-	pool *headless.Pool
+	pool headless.PoolClient
 	bus  *events.EventBus
 
 	// mu guards drivers (registry membership only — not Instance state).
@@ -89,11 +89,12 @@ func (a *AutonomousOrchestrationService) TriggerReviewForSession(sessionUUID str
 // NewAutonomousOrchestrationService creates a new service.
 // pool may be nil when the claude binary is not found; methods degrade gracefully.
 func NewAutonomousOrchestrationService(pool *headless.Pool, bus *events.EventBus) *AutonomousOrchestrationService {
-	return &AutonomousOrchestrationService{
-		pool:    pool,
+	a := &AutonomousOrchestrationService{
 		bus:     bus,
 		drivers: make(map[string]*session.AutonomousDriver),
 	}
+	a.SetPool(pool) // nil *Pool must stay an untyped-nil interface
+	return a
 }
 
 // SetLifecycleContext binds the server's root context.
@@ -105,7 +106,16 @@ func (a *AutonomousOrchestrationService) SetLifecycleContext(ctx context.Context
 // SetPool updates the headless pool after construction.
 // Called from SessionService.SetHeadlessPool so the two stay in sync.
 func (a *AutonomousOrchestrationService) SetPool(pool *headless.Pool) {
+	if pool == nil {
+		a.pool = nil
+		return
+	}
 	a.pool = pool
+}
+
+// SetClient wires a backend-selecting client in place of the raw claude pool.
+func (a *AutonomousOrchestrationService) SetClient(c headless.PoolClient) {
+	a.pool = c
 }
 
 // SetInstanceFinder wires a function for resolving live instances by title.
@@ -377,7 +387,7 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 							// synchronously, exactly like the review branch does, so the respawn
 							// below sees an accurately-closed session instead of racing its own
 							// stale liveness signal.
-							if endErr := concreteStorage.UpdateItemSessionEnded(ctx, is.ID, time.Now()); endErr != nil {
+							if endErr := concreteStorage.UpdateItemSessionEnded(ctx, is.ID, time.Now()); endErr != nil { //nolint:silenttransition // AutoRespawnAutonomousWork -> tombstoneOrphanWorkSessions/findActiveWorkSession blocks respawn with notifyRespawnBlockedByActiveSession
 								log.Warn("[AutonomousDriver] onAutonomousDriverComplete: UpdateItemSessionEnded(work, stuck) failed", "item", item.ID, "itemSession", is.ID, "err", endErr)
 								// Mirrors the SessionRoleReview branch's notifyStuckBookkeepingFailed
 								// call below: this bookkeeping write is what makes a stuck session visible

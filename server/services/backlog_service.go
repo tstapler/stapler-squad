@@ -10,9 +10,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
@@ -29,16 +32,13 @@ import (
 
 // SessionCreator allows BacklogService to spawn sessions without importing handler internals.
 type SessionCreator interface {
-	// programOverride, when non-empty, replaces config.ResolveDefaults' resolved.Program
-	// as the spawned Instance's InstanceOptions.Program — set before session.NewInstance/
-	// instance.Start(true), never via a post-hoc SwitchProgram/Restart (see Epic 2.4's
-	// design note). Pass "" for callers unaffected by per-stage program overrides.
-	CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool, programOverride string) (*session.Instance, error)
+	// CreateDirectorySession creates a directory-type session at path. See
+	// SessionSpawnOptions.ProgramOverride's doc comment for how program overrides apply.
+	CreateDirectorySession(ctx context.Context, path string, opts SessionSpawnOptions) (*session.Instance, error)
 	// CreateWorktreeSession spawns a session inside an already-created git worktree at
 	// worktreePath. repoPath is the parent repo used for program resolution; worktreePath
-	// must already exist on disk before this is called. See programOverride's doc comment
-	// on CreateDirectorySession above.
-	CreateWorktreeSession(ctx context.Context, title, repoPath, worktreePath, prompt string, tags []string, oneShot bool, hidden bool, programOverride string) (*session.Instance, error)
+	// must already exist on disk before this is called.
+	CreateWorktreeSession(ctx context.Context, repoPath, worktreePath string, opts SessionSpawnOptions) (*session.Instance, error)
 }
 
 // AutonomousDriverStarter allows BacklogService to start an AutonomousDriver on an existing instance.
@@ -55,7 +55,10 @@ type SessionStopper interface {
 	// KillTmuxSessionByTitle kills a tmux session by its title, regardless of
 	// whether the Instance is still tracked in memory. Used to clear stale tmux
 	// sessions before re-triggering so the fresh session gets its --append-system-prompt.
-	KillTmuxSessionByTitle(ctx context.Context, title string) error
+	// allowedOwnerUUIDs are the Instance UUID(s) the caller trusts to be
+	// killed under this title -- see the implementation's doc comment
+	// (ce71ad1a: a name match alone isn't enough to prove ownership).
+	KillTmuxSessionByTitle(ctx context.Context, title string, allowedOwnerUUIDs ...string) error
 	// IsSessionLive returns true if the session UUID is currently tracked in the
 	// live in-memory poller. Used to distinguish genuinely-running sessions from
 	// sessions that exited but whose DB records were not closed (e.g. after a
@@ -102,7 +105,13 @@ type SessionSteerer interface {
 	// *SessionService.IsReadyForSteer's doc comment for why "unknown" must
 	// never default to true here).
 	IsReadyForSteer(sessionUUID string) bool
+	// SteerActiveSession writes message to the session unguarded (verdict steering).
 	SteerActiveSession(ctx context.Context, sessionUUID, message string) error
+	// SteerSessionGuarded delivers message under the per-session nudge guard
+	// shared with the manual PR nudge: sig is the reason signature used for
+	// the duplicate window, and a guard-caused outcome (SteerGuardBusy,
+	// SteerDuplicate) is not a delivery failure.
+	SteerSessionGuarded(ctx context.Context, sessionUUID, sig, message string) (SteerOutcome, error)
 }
 
 // RepoWatchRemover lets BacklogService tell the background unfinished-changes
@@ -126,12 +135,16 @@ type itemSourceBackend interface {
 
 // BacklogService handles Backlog RPCs.
 type BacklogService struct {
-	storage           *session.Storage
-	sourceBackend     itemSourceBackend
-	sessionCreator    SessionCreator
-	sessionStopper    SessionStopper
-	sessionSteerer    SessionSteerer
-	autonomousStarter AutonomousDriverStarter
+	storage        *session.Storage
+	sourceBackend  itemSourceBackend
+	sessionCreator SessionCreator
+	sessionStopper SessionStopper
+	sessionSteerer SessionSteerer
+	// verdictSteer* override the verdict-delivery readiness poll (zero = defaults); tests only.
+	verdictSteerPollInterval, verdictSteerReadyTimeout time.Duration
+	// verdictSteerLatest maps itemID -> latest verdict key (see dispatchVerdictSteer).
+	verdictSteerLatest sync.Map
+	autonomousStarter  AutonomousDriverStarter
 	// repoWatchRemover tells the unfinished-changes scanner to stop watching a
 	// worktree path once it's removed from disk (BUG-034). nil-safe — wired via
 	// SetRepoWatchRemover.
@@ -149,6 +162,9 @@ type BacklogService struct {
 	julesDispatcher JulesDispatcher
 	cfg             *config.Config
 	engine          session.WorkflowEngine
+	// reviewGuard is the listener's process-wide review-spawn reservation, so
+	// headless re-review honors the same one-reviewer-per-item rule. nil-safe.
+	reviewGuard *session.ReviewSpawnGuard
 	// worktreeMu serializes context-file writes to the same worktree path so that
 	// concurrent SpawnSessionFromItem / AttachSessionToItem calls cannot produce
 	// a partially-written .claude/backlog-context.md.
@@ -171,6 +187,14 @@ type BacklogService struct {
 	// the WIP cap by each computing freeSlots from their own stale snapshot
 	// (PR #199 review F2).
 	dequeueMu sync.Mutex
+
+	// claimWiring holds the cross_host_claim_dedup checker and dispute resolver
+	// (backlog_service_claim.go). It is atomic because SetClaimChecker runs at
+	// startup while RPCs and the dequeue sweep already read it. nil means
+	// unimplemented: everything reads as unclaimed. claimDedupFlag overrides the
+	// live feature-flag read (tests only).
+	claimWiring    atomic.Pointer[claimWiring]
+	claimDedupFlag func() bool
 
 	// spawnInFlight is a per-backlog-item "at most one work-session spawn in
 	// flight" set, keyed by item ID, storing struct{} — the same LoadOrStore/
@@ -232,6 +256,9 @@ type BacklogService struct {
 	// Populated incrementally as dependencies.go wires each caller in, since
 	// GeminiCaller (Epic 3.1) is constructed after backlogSvc itself.
 	headlessCallers map[string]headless.PoolClient
+	// backendSelector, when set, routes stage programs and the default headless
+	// client through the live backend selection (nil in tests).
+	backendSelector *headless.Selector
 
 	// modelFamilies resolves a stage executor's "family:<alias>" Model value
 	// (e.g. "family:opus") to a concrete model ID via session.ResolveModel,
@@ -554,7 +581,7 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 		pipelineModeRepo:     pipelineModeRepo,
 		shutdownCtx:          ctx,
 		shutdownCancel:       cancel,
-		triageSem:            make(chan struct{}, 8),
+		triageSem:            make(chan struct{}, cfg.MaxConcurrentTriageOrDefault()),
 		triageCleanupTimeout: defaultTriageCleanupTimeout,
 		resolveGitHubInput:   session.ResolveGitHubInput,
 		capabilityCheck:      headless.DefaultCapabilitySelfCheck,
@@ -578,6 +605,17 @@ func (s *BacklogService) SetHeadlessPool(pool headless.PoolClient) {
 		s.headlessCallers = make(map[string]headless.PoolClient)
 	}
 	s.headlessCallers["claude"] = pool
+}
+
+// SetBackendSelector routes the default headless client (empty stage program)
+// and every known backend name through sel, so per-feature settings and
+// capability/availability fallback apply. headlessCallers["claude"] keeps the
+// raw pool so a stage explicitly configured "claude" is never re-routed.
+func (s *BacklogService) SetBackendSelector(sel *headless.Selector) {
+	s.backendSelector = sel
+	if sel != nil {
+		s.headlessPool = &headless.SelectingClient{Selector: sel}
+	}
 }
 
 // SetGeminiCaller registers caller in headlessCallers under "gemini" so a
@@ -617,8 +655,22 @@ type availabilityChecker interface {
 // entirely). itemID/stage are for the log line and are not otherwise
 // interpreted.
 func (s *BacklogService) resolveHeadlessCaller(program, itemID, stage string) (caller headless.PoolClient, configuredProgram, fallbackReason string) {
+	if program == "claude" {
+		if raw, ok := s.headlessCallers["claude"]; ok {
+			return raw, "", ""
+		}
+	}
 	if program == "" || program == "claude" {
 		return s.headlessPool, "", ""
+	}
+	if s.backendSelector != nil && slices.Contains(headless.KnownBackendNames(), program) {
+		_, res := s.backendSelector.Resolve(headless.FeatureKey(stage), program, headless.Caps{})
+		reason := res.FallbackReason
+		if reason != "" {
+			log.Warn("[PipelineEngine] headless program fell back", "program", program, "item", itemID, "stage", stage, "reason", reason)
+			return &headless.SelectingClient{Selector: s.backendSelector}, program, reason
+		}
+		return &headless.SelectingClient{Selector: s.backendSelector, StageProgram: program}, "", ""
 	}
 	found, ok := s.headlessCallers[program]
 	if !ok {
@@ -827,6 +879,7 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 		CostPriced:               is.CostPriced,
 		EndReason:                is.EndReason,
 		FailureCapturePath:       is.FailureCapturePath,
+		ErrorDetail:              is.ErrorDetail,
 		ClaimantHostId:           is.ClaimantHostID,
 	}
 	if is.StartedAt != nil {
@@ -904,7 +957,7 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 				ClarifyingQuestions: clarifying,
 				Tasks:               tasks,
 				// #nosec G115 -- triage rework iteration counter, bounded by the small
-				// configurable rework cap (config.MaxAutoReworkIterationsOrDefault, default 3).
+				// configurable rework cap (config.MaxAutoReworkIterationsOrDefault, default 5).
 				Iteration: int32(tr.Iteration),
 				Feedback:  tr.Feedback,
 			}
@@ -1057,6 +1110,8 @@ func backlogItemToProto(item *session.BacklogItemData, engine session.WorkflowEn
 		CreatedAt:          timestamppb.New(item.CreatedAt),
 		UpdatedAt:          timestamppb.New(item.UpdatedAt),
 		AllowedTransitions: allowedTransitionStrings(engine, session.BacklogStatus(item.Status), session.BuildStageConfigSnapshotFallback(item)),
+		DuplicateRef:       duplicateRefPending(item),
+		DuplicatePending:   duplicateRefPending(item) != "",
 		PublicId:           item.PublicIDRaw,
 	}
 	if item.ExternalURL != "" {
@@ -1239,7 +1294,27 @@ func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, session
 			continue
 		}
 		wt, err := s.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
-		if err != nil || wt.WorktreePath == "" {
+		if err != nil {
+			continue
+		}
+		if wt.WorktreePath == "" {
+			// Epic 2.1: previously silently skipped here even when a worktree row was
+			// expected. Extra lookup needed since ItemSessionSummary lacks
+			// SessionType/Branch; a lookup failure falls back to silent skip.
+			if sessionData, lookupErr := s.storage.FindInstanceDataByID(is.SessionUUID); lookupErr == nil && session.ExpectsWorktree(*sessionData) {
+				log.Warn("[cleanupItemWorktreesExcept] worktree row missing but expected",
+					"session_id", is.SessionUUID, "item_id", is.BacklogItemID)
+				if s.eventBus != nil {
+					s.eventBus.Publish(events.NewNotificationEvent(
+						is.BacklogItemID, "", uuid.New().String(),
+						int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
+						derivePriority(true, true), // urgent, important — cleanup silently could not find anything to remove
+						"Worktree row missing during item archival",
+						fmt.Sprintf("Session %s expected a git worktree but has no worktree row, so its on-disk directory (if any) could not be cleaned up.", is.SessionUUID),
+						map[string]string{"item_id": is.BacklogItemID},
+					))
+				}
+			}
 			continue
 		}
 		if exceptPath != "" && wt.WorktreePath == exceptPath {
@@ -1375,4 +1450,19 @@ func (s *BacklogService) checkWorkStageBudget(itemID string, thresholdUSD *float
 		return
 	}
 	log.WarningLog().Printf("[BudgetWarning] item=%s stage=work threshold=%.2f spent=%.2f", itemID, *thresholdUSD, totalCostUSD)
+}
+
+// duplicateRefPending returns the claimed duplicate_ref while item sits in
+// review awaiting confirmation, "" otherwise. Needs eagerly loaded ItemSessions.
+func duplicateRefPending(item *session.BacklogItemData) string {
+	if item.Status != string(session.BacklogStatusReview) {
+		return ""
+	}
+	return session.PendingDuplicateRef(item.ItemSessions)
+}
+
+// SetReviewSpawnGuard wires the lifecycle listener's review-spawn guard into the
+// headless re-review paths (TriggerReReview, AutoRespawnReview).
+func (s *BacklogService) SetReviewSpawnGuard(g *session.ReviewSpawnGuard) {
+	s.reviewGuard = g
 }

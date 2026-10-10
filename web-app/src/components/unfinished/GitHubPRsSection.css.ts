@@ -12,121 +12,6 @@ export {
 
 export const badge = style([badgeBase, { marginLeft: vars.space["2"] }]);
 
-export const prCard = style({
-  background: vars.color.cardBackground,
-  border: `1px solid ${vars.color.borderColor}`,
-  borderRadius: vars.radii.md,
-  padding: `${vars.space["3"]} ${vars.space["4"]}`,
-  display: "flex",
-  flexDirection: "column",
-  gap: vars.space["2"],
-  transition: "border-color 0.15s",
-  ":hover": {
-    borderColor: vars.color.borderHover,
-  },
-});
-
-export const prHeader = style({
-  display: "flex",
-  alignItems: "flex-start",
-  gap: vars.space["3"],
-});
-
-export const prTitle = style({
-  fontSize: vars.fontSize.sm,
-  fontWeight: 600,
-  color: vars.color.textPrimary,
-  textDecoration: "none",
-  flexGrow: 1,
-  // minWidth:0 overrides the flex item's default content-based automatic
-  // minimum size; overflowWrap lets long unbreakable tokens (e.g.
-  // "cache_read_input_tokens/cache_creation_input_tokens") wrap instead of
-  // forcing this row (and every ancestor up to UnfinishedTab's .container)
-  // wider than the viewport on mobile.
-  minWidth: 0,
-  overflowWrap: "break-word",
-  lineHeight: 1.4,
-  ":hover": {
-    textDecoration: "underline",
-    color: vars.color.primary,
-  },
-});
-
-export const prMeta = style({
-  display: "flex",
-  alignItems: "center",
-  gap: vars.space["3"],
-  flexWrap: "wrap",
-});
-
-export const prRepo = style({
-  fontFamily: vars.font.mono,
-  fontSize: vars.fontSize.xs,
-  color: vars.color.textMuted,
-});
-
-export const prBranch = style({
-  fontFamily: vars.font.mono,
-  fontSize: vars.fontSize.xs,
-  color: vars.color.textSecondary,
-});
-
-export const chips = style({
-  display: "flex",
-  gap: vars.space["2"],
-  alignItems: "center",
-  flexWrap: "wrap",
-  marginLeft: "auto",
-});
-
-const chipBase = style({
-  display: "inline-flex",
-  alignItems: "center",
-  padding: `${vars.space["1"]} ${vars.space["2"]}`,
-  borderRadius: vars.radii.sm,
-  fontSize: vars.fontSize.xs,
-  fontWeight: 600,
-  lineHeight: 1.5,
-  whiteSpace: "nowrap",
-});
-
-export const chipDraft = style([
-  chipBase,
-  {
-    background: vars.color.surfaceSubtle,
-    color: vars.color.textMuted,
-    border: `1px solid ${vars.color.borderColor}`,
-  },
-]);
-
-export const chipSuccess = style([
-  chipBase,
-  {
-    background: vars.color.successBg,
-    color: vars.color.success,
-    border: `1px solid ${vars.color.success}`,
-  },
-]);
-
-export const chipError = style([
-  chipBase,
-  {
-    background: vars.color.errorBg,
-    color: vars.color.errorText,
-    border: `1px solid ${vars.color.error}`,
-  },
-]);
-
-export const worktreeLink = style({
-  fontFamily: vars.font.mono,
-  fontSize: vars.fontSize.xs,
-  color: vars.color.primary,
-  textDecoration: "none",
-  ":hover": {
-    textDecoration: "underline",
-  },
-});
-
 export const empty = style({
   padding: `${vars.space["4"]} ${vars.space["4"]}`,
   color: vars.color.textMuted,
@@ -412,23 +297,6 @@ export const statCountError = style({
 
 // --- Repo groups ---
 
-export const repoGroupSection = style({
-  display: "flex",
-  flexDirection: "column",
-  gap: vars.space["2"],
-  paddingLeft: vars.space["4"],
-});
-
-export const repoGroupHeader = style({
-  fontSize: vars.fontSize.xs,
-  fontFamily: vars.font.mono,
-  color: vars.color.textMuted,
-  fontWeight: 600,
-  padding: `${vars.space["1"]} 0`,
-  borderBottom: `1px solid ${vars.color.borderSubtle}`,
-  marginTop: vars.space["1"],
-});
-
 // --- Filter / sort toolbar ---
 
 export const filterBar = style({
@@ -444,10 +312,12 @@ export const filterBar = style({
 export const filterChipGroup = style({
   display: "flex",
   alignItems: "center",
+  flexWrap: "wrap",
   gap: vars.space["1"],
 });
 
 const filterChipBase = style({
+  minHeight: "44px",
   padding: `2px ${vars.space["2"]}`,
   borderRadius: vars.radii.full,
   fontSize: vars.fontSize.xs,
@@ -479,6 +349,7 @@ export const filterChipActive = style([
 export const sortGroup = style({
   display: "flex",
   alignItems: "center",
+  flexWrap: "wrap",
   gap: vars.space["1"],
   marginLeft: "auto",
 });
@@ -490,6 +361,7 @@ export const sortLabel = style({
 });
 
 export const sortSelect = style({
+  minHeight: "44px",
   padding: `2px ${vars.space["2"]}`,
   borderRadius: vars.radii.sm,
   fontSize: vars.fontSize.xs,
@@ -507,6 +379,8 @@ export const sortSelect = style({
 });
 
 export const searchInput = style({
+  minHeight: "44px",
+  maxWidth: "100%",
   padding: `2px ${vars.space["3"]}`,
   borderRadius: vars.radii.sm,
   fontSize: vars.fontSize.xs,
@@ -570,46 +444,82 @@ export const authTabActive = style([
 
 // --- Session action buttons ---
 
-export const prActions = style({
+
+export const attentionNote = style({
+  margin: `0 ${vars.space["3"]} ${vars.space["2"]}`,
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+});
+
+// --- PRs panel header, banners, empty states ---
+
+export const panelHeader = style({
   display: "flex",
   alignItems: "center",
-  gap: vars.space["2"],
-  marginTop: vars.space["1"],
+  flexWrap: "wrap",
+  gap: vars.space["3"],
+  padding: `${vars.space["2"]} ${vars.space["4"]}`,
 });
 
-export const openSessionButton = style({
-  padding: `${vars.space["1"]} ${vars.space["3"]}`,
-  background: vars.color.accentBg,
-  color: vars.color.inputFocusBorder,
-  border: `1px solid ${vars.color.inputFocusBorder}`,
-  borderRadius: vars.radii.sm,
-  fontSize: vars.fontSize.xs,
+export const panelHeading = style({
+  margin: 0,
+  fontSize: vars.fontSize.sm,
   fontWeight: 600,
-  cursor: "pointer",
-  textDecoration: "none",
-  display: "inline-flex",
-  alignItems: "center",
-  whiteSpace: "nowrap",
-  ":hover": {
-    background: vars.color.accentHover,
-  },
+  color: vars.color.textPrimary,
+  ":focus-visible": { outline: `2px solid ${vars.color.inputFocusBorder}`, outlineOffset: "2px" },
 });
 
-export const createSessionButton = style({
+export const freshness = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  marginLeft: "auto",
+  minWidth: 0,
+  overflowWrap: "anywhere",
+});
+
+export const panelButton = style({
+  minHeight: "44px",
   padding: `${vars.space["1"]} ${vars.space["3"]}`,
   background: "transparent",
   color: vars.color.textSecondary,
-  border: `1px solid ${vars.color.borderColor}`,
+  border: `1px solid ${vars.color.borderMuted}`,
   borderRadius: vars.radii.sm,
   fontSize: vars.fontSize.xs,
   fontWeight: 600,
   cursor: "pointer",
-  textDecoration: "none",
-  display: "inline-flex",
-  alignItems: "center",
-  whiteSpace: "nowrap",
-  ":hover": {
-    borderColor: vars.color.primary,
-    color: vars.color.primary,
+  selectors: {
+    '&[aria-disabled="true"]': { cursor: "progress", opacity: 0.7 },
   },
+  ":focus-visible": { outline: `2px solid ${vars.color.inputFocusBorder}`, outlineOffset: "2px" },
+});
+
+export const banner = style({
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: vars.space["2"],
+  margin: `${vars.space["1"]} ${vars.space["4"]}`,
+  padding: `${vars.space["2"]} ${vars.space["3"]}`,
+  borderRadius: vars.radii.md,
+  fontSize: vars.fontSize.sm,
+  color: vars.color.warningText,
+  background: vars.color.warningBg,
+  border: `1px solid ${vars.color.warning}`,
+  overflowWrap: "anywhere",
+});
+
+export const bannerError = style({
+  color: vars.color.errorText,
+  background: vars.color.errorBg,
+  border: `1px solid ${vars.color.error}`,
+});
+
+export const emptyState = style({
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: vars.space["3"],
+  padding: `${vars.space["4"]} ${vars.space["4"]}`,
+  color: vars.color.textSecondary,
+  fontSize: vars.fontSize.sm,
 });

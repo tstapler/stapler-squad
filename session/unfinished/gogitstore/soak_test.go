@@ -257,7 +257,11 @@ func BenchmarkGogitstoreSoakUnderSustainedLoad(b *testing.B) {
 			} else {
 				repackCount.Add(1)
 			}
-			time.Sleep(300 * time.Millisecond)
+			select {
+			case <-stop:
+				return
+			case <-time.After(300 * time.Millisecond): // repack cadence
+			}
 		}
 	}()
 
@@ -331,11 +335,13 @@ func BenchmarkGogitstoreSoakUnderSustainedLoad(b *testing.B) {
 	// exit before this fails.
 	grDeadline := time.Now().Add(5 * time.Second)
 	var leakErr error
+	leakTick := time.NewTicker(100 * time.Millisecond)
+	defer leakTick.Stop()
 	for {
 		if leakErr = goleak.Find(goroutineBaseline); leakErr == nil || time.Now().After(grDeadline) {
 			break
 		}
-		time.Sleep(100 * time.Millisecond)
+		<-leakTick.C
 	}
 	if leakErr != nil {
 		b.Errorf("goroutine leak after full eviction: %v", leakErr)

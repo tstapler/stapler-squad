@@ -1,14 +1,39 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/stretchr/testify/require"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 )
+
+// testCustomProgramID is the custom program ID registered by
+// upsertTestCustomProgram, shared by every test that needs a
+// UpsertProgramConfig-registered program (as opposed to a built-in).
+const testCustomProgramID = "claude-250k-proxy"
+
+// upsertTestCustomProgram registers a custom program on svc, for tests
+// asserting that create_session/create_session_for_pr accept a program
+// beyond the built-in set.
+func upsertTestCustomProgram(t *testing.T, svc *services.SessionService) {
+	t.Helper()
+	_, err := svc.UpsertProgramConfig(context.Background(), connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
+		Program: &sessionv1.ProgramConfigProto{
+			Id:      testCustomProgramID,
+			Label:   "Claude 250k proxy",
+			Command: testCustomProgramID,
+		},
+	}))
+	require.NoError(t, err)
+}
 
 // stubStore implements session.InstanceStore for tests.
 type stubStore struct {

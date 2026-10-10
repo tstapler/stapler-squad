@@ -366,6 +366,9 @@ message Session {
   // Absent entries mean the tag was added manually. Mirrors
   // session.Instance's RuleTagProvenance field.
   map<string, string> rule_tag_provenance = 95;
+
+  // Server-owned pin flag: pinned sessions render in the Pinned section.
+  bool pinned = 96;
 }
 
 // PiExtensionHealth mirrors server/services.PiExtensionHealth: whether a pi
@@ -1781,4 +1784,37 @@ message UserPR {
   google.protobuf.Timestamp merged_at           = 15;
   repeated string           session_ids          = 16; // local sessions checked out on this branch
   string                    local_worktree_path  = 17; // local worktree path, if any
+  repeated FailingCheck     failing_checks       = 18; // capped at 10
+  optional int32            unresolved_thread_count = 19; // unset = unknown (distinct from 0)
+  optional bool             has_merge_conflict   = 20; // unset = GitHub mergeable UNKNOWN
+  bool                      details_loaded       = 21;
+  repeated LinkedSession    linked_sessions      = 22;
+  string                    host                 = 23; // never empty; "github.com" for github.com
+  string                    account_login        = 24; // login name, never a token
+  bool                      unresolved_threads_truncated = 25; // true when count was capped at 50
+}
+
+// FailingCheck is a failed CheckRun or legacy StatusContext on a PR head.
+message FailingCheck {
+  string name       = 1;
+  string url        = 2;
+  string conclusion = 3;
+}
+
+enum LinkedSessionStatus {
+  LINKED_SESSION_STATUS_UNSPECIFIED = 0;
+  LINKED_SESSION_STATUS_RUNNING     = 1;
+  LINKED_SESSION_STATUS_PAUSED      = 2;
+  LINKED_SESSION_STATUS_STOPPED     = 3;
+}
+
+// LinkedSession is a local session linked to a PR.
+message LinkedSession {
+  string                    session_id     = 1;
+  LinkedSessionStatus       status         = 2;
+  google.protobuf.Timestamp last_active_at = 3;
+  // steer_ready is true only when the session is live, linked by title, runs
+  // a steerable program and is confirmed idle by the same gate the nudge uses.
+  // False includes "unknown": the UI then leads with "Open session".
+  bool                      steer_ready    = 4;
 }

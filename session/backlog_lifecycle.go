@@ -38,6 +38,13 @@ import (
 // push-gate redesign PR for the classification behind each site.
 type Notifier interface {
 	Notify(itemID, title, message string, notificationType int32, urgent, important bool)
+
+	// NotifySession notifies about a bare session with no linked BacklogItem.
+	// Implementations must not write sessionID into metadata["item_id"] — that
+	// key means "this is about backlog item <value>" to every consumer
+	// (NotificationItem.tsx, NotificationsPage.tsx). Use Notify when a real
+	// BacklogItemID exists.
+	NotifySession(sessionID, title, message string, notificationType int32, urgent, important bool)
 }
 
 // QueueDequeuer claims and spawns as many queued (and, by default, "ready" —
@@ -58,6 +65,10 @@ type QueueDequeuer interface {
 type BacklogLifecycleListener struct {
 	storage *Storage
 
+	// triageParks tracks recent orphaned-triage retry-cap parkings so a burst can
+	// escalate as one batch notification; see recordTriageParkAndMaybeEscalate.
+	triageParks parkBurstTracker
+
 	// sessionCreatorMu guards sessionCreator for concurrent Set/get access, same
 	// pattern as autoReopener/notifier/prFixSpawner below. Needed because
 	// production wiring (server/dependencies.go) constructs this listener before
@@ -69,6 +80,9 @@ type BacklogLifecycleListener struct {
 	// poolMu guards headlessPool for concurrent Set/get access.
 	poolMu       sync.RWMutex
 	headlessPool *headless.Pool
+	// headlessClient, when set, takes precedence over headlessPool for gate and PR-draft
+	// calls so they honor the LLM backend selector. Guarded by poolMu.
+	headlessClient headless.PoolClient
 
 	// autoReopenMu guards autoReopener for concurrent Set/get access.
 	autoReopenMu sync.RWMutex
@@ -106,6 +120,10 @@ type BacklogLifecycleListener struct {
 	dashboardBaseURLFnMu sync.RWMutex
 	dashboardBaseURLFn   func() string
 
+	// noopThresholdMu guards noopThresholdFn (see SetNoopDispatchThresholdFn).
+	noopThresholdMu sync.RWMutex
+	noopThresholdFn func() int
+
 	// oneShotShipRunnerMu guards oneShotShipRunner for concurrent Set/get access.
 	oneShotShipRunnerMu sync.RWMutex
 	// oneShotShipRunner runs the agent-driven ship flow (see agentShipPrompt)
@@ -136,7 +154,7 @@ type BacklogLifecycleListener struct {
 	// prByNumberFinderMu guards prByNumberFinder for concurrent Set/get access.
 	prByNumberFinderMu sync.RWMutex
 	// prByNumberFinder looks up a PR by its immutable number — used by
-	// verifyPRHeadBranchMatchesTracked to re-verify, via a live GitHub lookup,
+	// verifyPRBelongsToItem to re-verify, via a live GitHub lookup,
 	// that item.PrNumber's real head branch still matches the item's
 	// currently-tracked branch before an automated reconciliation call site
 	// treats that PR number as ground truth (Story 6, adversarial-review.md's
@@ -183,6 +201,8 @@ type BacklogLifecycleListener struct {
 
 	// reviewSem limits concurrent review gate goroutines.
 	reviewSem chan struct{}
+	// reviewGuard keeps at most one review spawn per item in flight (see ReviewSpawnGuard).
+	reviewGuard *ReviewSpawnGuard
 
 	// customCheckSem limits concurrent custom-gate-check goroutines
 	// (runCustomGateCheck, session/backlog_lifecycle_gates.go), same pattern
@@ -553,7 +573,7 @@ func (l *BacklogLifecycleListener) getOrphanedPRFinder() func(ctx context.Contex
 }
 
 // SetPRByNumberFinder overrides the function used to look up a PR by its
-// immutable number, used by verifyPRHeadBranchMatchesTracked (Story 6).
+// immutable number, used by verifyPRBelongsToItem (Story 6).
 // Overridable in tests to avoid real GitHub API calls or needing a real git
 // remote on disk; production code never needs to call this, since
 // newListenerBase installs defaultPRByNumberFinder.
@@ -697,11 +717,25 @@ func (l *BacklogLifecycleListener) getSessionLivenessChecker() func(sessionUUID 
 	return l.sessionLivenessChecker
 }
 
-// getHeadlessPool returns the current headless pool under a read lock.
-func (l *BacklogLifecycleListener) getHeadlessPool() *headless.Pool {
+// SetHeadlessClient routes custom-gate and PR-description calls through c
+// (normally a headless.SelectingClient) instead of the raw claude pool.
+func (l *BacklogLifecycleListener) SetHeadlessClient(c headless.PoolClient) {
+	l.poolMu.Lock()
+	defer l.poolMu.Unlock()
+	l.headlessClient = c
+}
+
+// getHeadlessCaller returns the selector client if wired, else the raw pool, else nil.
+func (l *BacklogLifecycleListener) getHeadlessCaller() headless.PoolClient {
 	l.poolMu.RLock()
 	defer l.poolMu.RUnlock()
-	return l.headlessPool
+	if l.headlessClient != nil {
+		return l.headlessClient
+	}
+	if l.headlessPool != nil {
+		return l.headlessPool
+	}
+	return nil
 }
 
 func (l *BacklogLifecycleListener) getDashboardBaseURL() string {
@@ -727,6 +761,7 @@ func newListenerBase(storage *Storage, pipelineEngine PipelineEngine, livenessEn
 		pipelineEngine:          pipelineEngine,
 		livenessEngine:          livenessEngine,
 		reviewSem:               make(chan struct{}, maxConcurrentReviewGates),
+		reviewGuard:             NewReviewSpawnGuard(),
 		customCheckSem:          make(chan struct{}, maxConcurrentCustomGateChecks),
 		shutdownCtx:             ctx,
 		shutdownCancel:          cancel,
@@ -1294,6 +1329,13 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	// (also guarded by its own recover() below regardless of ordering).
 	l.runStuckDetector("bouncing", &okNames, &panickedNames, func() {
 		l.reconcileBouncingItems(ctx, er)
+	})
+
+	// PASS-verdict items whose last N work sessions all ended with no commits
+	// (the 70+ report_duplicate no-op dispatch loop) — flags them so the
+	// dispatcher gate in BacklogService.spawnSessionAfterGates stops respawning.
+	l.runStuckDetector("repeated_noop_dispatch", &okNames, &panickedNames, func() {
+		l.reconcileRepeatedNoopDispatch(ctx, er)
 	})
 
 	// Retry the push+PR flow for items with an open push_failed row (Phase B
@@ -2067,8 +2109,12 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 			resolve = row.ItemStatus != BacklogStatusQueued
 		case domain.StuckReasonPRPendingNoPR:
 			resolve = row.ItemStatus != BacklogStatusPRPending
-		case domain.StuckReasonPRNeedsFix:
+		case domain.StuckReasonPRNeedsFix, domain.StuckReasonMergedPRUnverified:
 			resolve = row.ItemStatus != BacklogStatusPRPending
+		case domain.StuckReasonRepeatedNoopDispatch:
+			// Commit-landed resolution is reconcileRepeatedNoopDispatch's
+			// else-branch (same-status, invisible to this sweep).
+			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
 		default:
 			// autonomous_stuck, push_failed, rework_cap, multiple_reasons, and
 			// any future reason with no non-terminal anchor: stays open until

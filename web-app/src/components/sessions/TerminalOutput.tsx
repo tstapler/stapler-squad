@@ -1,7 +1,7 @@
 "use client";
 // +feature: terminal-pre-sizing terminal-dimension-cache terminal-image-upload
 
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useRef, useCallback, useState, useMemo } from "react";
 import { createPortal } from "react-dom";
 
 // xterm modifier key sequences (CSI parameter convention: modifier 5=Ctrl, 3=Alt).
@@ -47,6 +47,7 @@ import { useVisibilityResync } from "./useVisibilityResync";
 import { useBrowserLogStream } from "@/lib/hooks/useBrowserLogStream";
 import { useHandedness } from "@/lib/hooks/useHandedness";
 import { useSplitContainerSize } from "@/lib/hooks/useSplitContainerSize";
+import type { ScrollGestureProps } from "./XtermTerminal";
 import { usePooledTerminal, usePooledTerminalCallbacks } from "@/lib/terminal/TerminalPool";
 import * as poolStyles from "@/lib/terminal/TerminalPool.css";
 import { InputDropBadge } from "./InputDropBadge";
@@ -57,6 +58,17 @@ import { ScrollForwardOutcome, ScrollBlockedReason } from "@/gen/session/v1/even
 import { ScrollLoadingPill } from "./ScrollLoadingPill";
 import { ScrollSourceIndicator } from "./ScrollSourceIndicator";
 import { DEFAULT_TOAST_MS } from "@/lib/notification-policy";
+import { createViewportSettle, createRafScheduler, DEFAULT_STABLE_FRAMES, DEFAULT_MAX_WAIT_MS } from "@/lib/terminal/viewportSettle";
+import { mobileDebug } from "@/lib/terminal/mobileDebug";
+import { toolbarPageAction, PAGE_UP_BYTES, PAGE_DOWN_BYTES, type ScrollMode, type ScrollOverride } from "@/lib/terminal/scrollRouting";
+import { createNetPagesUpTracker, MIN_ROWS_FOR_OVERLAYS } from "@/lib/terminal/scrollPosition";
+import { scrollSettings } from "@/lib/terminal/scrollOverride";
+import { srOnly } from "@/components/ui/LiveRegion.css";
+import { JumpToLatestMount } from "./JumpToLatestMount";
+import type { JumpTerminal } from "./JumpToLatestButton";
+import { ScrollHint, useScrollHint } from "./ScrollHint";
+import { ScrollingPanel, ScrollModeChip, SCROLL_OPTIONS, shouldRenderPanelAsOverlay, useMisrouteCue } from "./ScrollingPanel";
+import { useEffectiveScrollMode, useScrollSettings } from "@/lib/hooks/useEffectiveScrollMode";
 import { getCachedDimensions, saveDimensions, validateCellDimensions } from "@/lib/terminal/TerminalDimensionCache";
 import { DEFAULT_TERMINAL_CONFIG } from "@/lib/config/terminalConfig";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
@@ -105,6 +117,12 @@ const XTERM_DEFAULT_ROWS = 24;
 
 // Story 2.3 — coalescing window for InputDropBadge drop episodes (design/ux.md §2.2).
 const DROP_EPISODE_COALESCE_WINDOW_MS = 400;
+
+// Matches XtermTerminal's assumed first scroll mode, so only real changes are reported.
+const INITIAL_SCROLL_MODE: ScrollMode = { bufferType: "normal", mouseTrackingMode: "none" };
+
+const SCROLL_PICKER_PANEL_ROWS = 10;
+const SCROLL_FULL_PANEL_ROWS = 20;
 
 /**
  * Story 1.4.3 — the exact toast copy for a BLOCKED outcome, keyed on
@@ -168,7 +186,10 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const refreshCountRef = useRef(0);
   const isMountedRef = useRef(true);
-  const isFittingRef = useRef(false);
+  // One-shot: set when a viewport settle triggers refit(); the single resize that fit produces bypasses the
+  // server bounce hold (Story 2.1.5) and consumes it. Any later resize, e.g. an A->B->A oscillation, is held.
+  const settleBypassPendingRef = useRef(false);
+  const clearedAtRef = useRef<number | null>(null);
   const sizeStabilityTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const hasInitiatedConnectionRef = useRef(false);
   const hasCachedDimensionsRef = useRef(false);
@@ -627,6 +648,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // itself owns detecting a full-pane replacement snapshot and clearing the xterm
   // buffer for it (ANSI_SNAPSHOT_PREFIX in TerminalStreamManager.ts); this only resets
   // the paging refs the manager doesn't know about.
+  // Gesture-cancel / netPagesUp-reset trigger (ux.md S7/S9): bumped on every reconnect
+  // and on every full-snapshot write.
+  const [connectionEpoch, setConnectionEpoch] = useState(0);
+  const bumpConnectionEpoch = useCallback(() => setConnectionEpoch((e) => e + 1), []);
+
   const resetScrollbackPaging = useCallback(() => {
     hasMoreScrollbackRef.current = true;
     hasMoreAppScrollbackRef.current = true;
@@ -656,6 +682,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // differently-wrapped content for the ~100-400ms round trip until the server's
   // post-resize snapshot arrives and TerminalStreamManager clears it again anyway.
   const clearBufferBeforeResize = useCallback(() => {
+    clearedAtRef.current = Date.now();
+    mobileDebug.log("clear-before-resize", {});
     xtermRef.current?.clear();
     resetScrollbackPaging();
   }, [resetScrollbackPaging, xtermRef]);
@@ -675,7 +703,14 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     // Detect + clear on a full-pane replacement snapshot (ANSI_SNAPSHOT_PREFIX) — the
     // single spot this is handled; every write() call site (live output, the RESIZING
     // queue flush) benefits without needing its own check.
-    manager.setOnFullSnapshot(resetScrollbackPaging);
+    manager.setOnFullSnapshot(() => {
+      resetScrollbackPaging();
+      bumpConnectionEpoch();
+      if (clearedAtRef.current !== null) {
+        mobileDebug.log("snapshot-after-clear", { elapsedMs: Date.now() - clearedAtRef.current });
+        clearedAtRef.current = null;
+      }
+    });
 
     // Story 1.4.0 (Task 1.4.0a) — mirror the manager's altScreenActive locally
     // so the wheel listener / useTerminalGestures can read it synchronously.
@@ -721,7 +756,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
     streamManagerRef.current = manager;
     return manager;
-  }, [logTerminalMetrics, sessionId, track, resetScrollbackPaging, xtermRef, warmRef]);
+  }, [logTerminalMetrics, sessionId, track, resetScrollbackPaging, bumpConnectionEpoch, xtermRef, warmRef]);
 
   // Story 1.4.3 (Task 1.4.3a/1.4.3c) — outcome handling for a BLOCKED
   // response, keyed on blocked_reason. UNSPECIFIED (a gate failure the client
@@ -1020,7 +1055,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     };
   }, [reportDroppedInput]);
 
-  const { isConnected, error, sendInput, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived, connectionCount } = useTerminalStream({
+  const { isConnected, error, sendInput, isInputChunking, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived, connectionCount } = useTerminalStream({
     baseUrl,
     sessionId: effectiveSessionId,
     shellId,
@@ -1051,6 +1086,10 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   if (!retrySessionClientRef.current) {
     retrySessionClientRef.current = createClient(SessionService, createConnectTransport({ baseUrl }));
   }
+  const reconnectViaHook = useCallback(() => {
+    bumpConnectionEpoch();
+    handleHookReconnect();
+  }, [bumpConnectionEpoch, handleHookReconnect]);
   const [isRetryingSession, setIsRetryingSession] = useState(false);
   const handleRetryNow = useCallback(async () => {
     setIsRetryingSession(true);
@@ -1061,9 +1100,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       await retrySessionClientRef.current?.retrySession({ id: effectiveSessionId });
     } finally {
       setIsRetryingSession(false);
-      handleHookReconnect();
+      reconnectViaHook();
     }
-  }, [effectiveSessionId, handleHookReconnect]);
+  }, [effectiveSessionId, reconnectViaHook]);
 
   const { notifyResyncOutputReceived, resetStallWatchdog } = useVisibilityResync({
     sessionId: effectiveSessionId,
@@ -1177,8 +1216,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     };
   }, []);
 
-  // Handle terminal data input
-  const handleTerminalData = useCallback((data: string) => {
+  // TUI page-key estimate (declared early: every input path below can invalidate it).
+  const [netPagesUp] = useState(createNetPagesUpTracker);
+
+  // Delivers bytes to the session without touching the page-key estimate. Programmatic page
+  // keys (drag, momentum, toolbar PgUp/PgDn, the jump button) use this directly; user input
+  // goes through handleTerminalData, which also invalidates the estimate.
+  const deliverTerminalData = useCallback((data: string) => {
     sendInput(data);
 
     // Optimistic clear on Enter only — reduces false-positive flicker
@@ -1196,11 +1240,123 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
   }, [sendInput, clearForSession, sessionId, refreshApprovals, pendingCount]);
 
+  // User keystrokes and pastes move the app's own position, so the estimate no longer holds.
+  const handleTerminalData = useCallback((data: string) => {
+    netPagesUp.invalidate("keystroke");
+    deliverTerminalData(data);
+  }, [netPagesUp, deliverTerminalData]);
+
+  // Scroll route shared by the toolbar PgUp/PgDn (and later the chip and jump button).
+  // XtermTerminal reports the live mode upward only when it changes.
+  const { override: scrollOverride, gestureScrollEnabled } = useScrollSettings();
+  const [scrollMode, setScrollMode] = useState<ScrollMode>(INITIAL_SCROLL_MODE);
+  const handleScrollModeChange = useCallback((next: ScrollMode) => {
+    setScrollMode((prev) =>
+      prev.bufferType === next.bufferType && prev.mouseTrackingMode === next.mouseTrackingMode ? prev : next,
+    );
+  }, []);
+  const effectiveScroll = useEffectiveScrollMode(scrollMode, scrollOverride, gestureScrollEnabled);
+
+  // Scrolling chip / picker / full panel (ux.md S6). Rows come from the terminal's own resize report.
+  const [scrollPanel, setScrollPanel] = useState<"picker" | "full" | null>(null);
+  const [terminalRows, setTerminalRows] = useState(0);
+  // The xterm instance is created inside XtermTerminal's effect; the first resize report reveals it.
+  const [jumpTerminal, setJumpTerminal] = useState<JumpTerminal | null>(null);
+  const [gestureActive, setGestureActive] = useState(false);
+  // Host-owned live region: the picker unmounts on select, so its own announcement would be lost.
+  const [scrollAnnouncement, setScrollAnnouncement] = useState("");
+  const scrollChipRef = useRef<HTMLButtonElement>(null);
+  const misrouteCue = useMisrouteCue();
+  const scrollHint = useScrollHint();
+  const notifyScrollStart = scrollHint.notifyScrollStart;
+  const markScrollHintSeen = scrollHint.markSeenOnPanelOpen;
+  const getTouchSurface = useCallback(() => terminalContainerRef.current, []);
+  const reportMisroute = misrouteCue.report;
+  // Drag/momentum page keys keep the estimate current instead of invalidating it.
+  const handlePageKeysSent = useCallback(
+    (direction: "up" | "down", pages: number) => {
+      for (let i = 0; i < pages; i++) {
+        if (direction === "up") netPagesUp.pageUp();
+        else netPagesUp.pageDown();
+      }
+    },
+    [netPagesUp],
+  );
+  const scrollGestureProps = useMemo<ScrollGestureProps>(
+    () => ({
+      scrollOverride,
+      gestureScrollEnabled,
+      connectionEpoch,
+      onScrollGesture: reportMisroute,
+      onScrollStart: notifyScrollStart,
+      onPageKeysSent: handlePageKeysSent,
+      onGestureActiveChange: setGestureActive,
+      onProgrammaticData: deliverTerminalData,
+      isInputBusy: isInputChunking,
+    }),
+    [scrollOverride, gestureScrollEnabled, connectionEpoch, reportMisroute, notifyScrollStart, handlePageKeysSent, deliverTerminalData, isInputChunking],
+  );
+  const handleScrollOverrideChange = useCallback(
+    (value: ScrollOverride) => {
+      scrollSettings.setOverride(value);
+      if (scrollPanel === "picker") {
+        const label = SCROLL_OPTIONS.find((o) => o.value === value)?.announce ?? value;
+        setScrollAnnouncement(`Scroll mode: ${label}`);
+      }
+    },
+    [scrollPanel],
+  );
+  const closeScrollPanel = useCallback(() => setScrollPanel(null), []);
+  const openScrollPicker = useCallback(() => {
+    markScrollHintSeen();
+    setScrollPanel((p) => (p === "picker" ? null : "picker"));
+  }, [markScrollHintSeen]);
+  const toggleScrollFullPanel = useCallback(() => {
+    markScrollHintSeen();
+    setScrollPanel((p) => (p === "full" ? null : "full"));
+  }, [markScrollHintSeen]);
+  const openScrollFullPanel = useCallback(() => setScrollPanel("full"), []);
+  // Approximate panel heights in terminal rows (picker: 3 radios + 2 buttons; full: adds switch and notes).
+  // Only used to decide inline vs overlay, so a rough constant is enough.
+  // terminalRows is re-measured after an inline panel shrinks the terminal, so the choice is latched when the
+  // panel opens (reset on close); re-deciding from the shrunken count flip-flops. The latch only upgrades
+  // inline -> overlay (e.g. the soft keyboard leaves too few rows); it never downgrades while open.
+  const panelOverlayLatchRef = useRef<boolean | null>(null);
+  const panelRowsEstimate = scrollPanel === "full" ? SCROLL_FULL_PANEL_ROWS : SCROLL_PICKER_PANEL_ROWS;
+  if (scrollPanel === null) panelOverlayLatchRef.current = null;
+  else if (panelOverlayLatchRef.current === null) {
+    panelOverlayLatchRef.current = shouldRenderPanelAsOverlay(terminalRows - panelRowsEstimate);
+  } else if (!panelOverlayLatchRef.current && shouldRenderPanelAsOverlay(terminalRows)) {
+    // An inline panel has already taken its rows out of terminalRows, so no estimate is subtracted.
+    panelOverlayLatchRef.current = true;
+  }
+  const panelAsOverlay = panelOverlayLatchRef.current ?? false;
+  const panelMaxHeight =
+    panelAsOverlay && terminalRows > MIN_ROWS_FOR_OVERLAYS && containerSize.height > 0
+      ? Math.round((containerSize.height * (terminalRows - MIN_ROWS_FOR_OVERLAYS)) / terminalRows)
+      : undefined;
+
+  const lastEpochRef = useRef(connectionEpoch);
+  useEffect(() => {
+    if (lastEpochRef.current === connectionEpoch) return;
+    lastEpochRef.current = connectionEpoch;
+    netPagesUp.invalidate("reconnect");
+  }, [connectionEpoch, netPagesUp]);
+
+  // A buffer switch, mouse-mode change or override change reroutes scrolling; skip the initial mount.
+  const modeKey = `${scrollMode.bufferType}|${scrollMode.mouseTrackingMode}|${scrollOverride}`;
+  const lastModeKeyRef = useRef(modeKey);
+  useEffect(() => {
+    if (lastModeKeyRef.current === modeKey) return;
+    lastModeKeyRef.current = modeKey;
+    netPagesUp.invalidate("mode-change");
+  }, [modeKey, netPagesUp]);
+
   // Send a key sequence, applying any active sticky modifier (CTRL or ALT) first.
   // Modifier sequences follow xterm's parameter convention:
   //   modifier 3 = Alt (escape prefix or CSI param ;3)
   //   modifier 5 = Ctrl (CSI param ;5)
-  const sendKey = useCallback((keyData: string) => {
+  const sendKey = useCallback((keyData: string, programmatic = false) => {
     let data = keyData;
 
     if (ctrlActive) {
@@ -1214,12 +1370,44 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       setShiftActive(false);
     }
 
-    handleTerminalData(data);
-  }, [ctrlActive, altActive, shiftActive, handleTerminalData]);
+    (programmatic ? deliverTerminalData : handleTerminalData)(data);
+  }, [ctrlActive, altActive, shiftActive, handleTerminalData, deliverTerminalData]);
+
+  // Route-aware PgUp/PgDn (ux.md S4): the same route as the drag, so the keys are an
+  // equivalent single-pointer alternative. TUI-route bytes are unchanged from before.
+  const sendToolbarPageKey = useCallback((direction: "up" | "down") => {
+    mobileDebug.toolbarKey(direction === "up" ? "PageUp" : "PageDown");
+    const terminal = xtermRef.current?.terminal ?? null;
+    const buffer = terminal?.buffer?.active;
+    const canScroll = !!buffer && (direction === "up" ? buffer.viewportY > 0 : buffer.viewportY < buffer.baseY);
+    const action = toolbarPageAction({
+      route: effectiveScroll.target,
+      direction,
+      modifiers: { ctrl: ctrlActive, alt: altActive, shift: shiftActive },
+      canScroll,
+      override: scrollOverride,
+    });
+    if (action.type === "scroll-pages" && terminal) {
+      terminal.scrollPages(action.pages);
+      return;
+    }
+    // A chunked paste is still streaming: page-key bytes would splice into it, so drop the tap (as the drag does).
+    if (isInputChunking()) return;
+    const bytes = action.type === "send-keys" ? action.bytes : direction === "up" ? PAGE_UP_BYTES : PAGE_DOWN_BYTES;
+    const countsTowardNetPages = action.type === "send-keys" && action.countsTowardNetPages;
+    if (countsTowardNetPages) {
+      if (direction === "up") netPagesUp.pageUp();
+      else netPagesUp.pageDown();
+    }
+    sendKey(bytes, countsTowardNetPages);
+  }, [effectiveScroll.target, scrollOverride, ctrlActive, altActive, shiftActive, sendKey, netPagesUp, isInputChunking]);
 
   // Handle terminal resize with size stability detection
   const handleTerminalResize = useCallback((cols: number, rows: number) => {
     console.log(`[TerminalOutput] Terminal resized to ${cols}x${rows}`);
+    setTerminalRows(rows);
+    setJumpTerminal(xtermRef.current?.terminal ?? null);
+    netPagesUp.invalidate("resize");
 
     const lastResize = lastResizeRef.current;
     const sizeChanged = !lastResize || lastResize.cols !== cols || lastResize.rows !== rows;
@@ -1318,8 +1506,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
     console.log(`[TerminalOutput] Sending resize: ${cols}x${rows} (prev: ${lastResize?.cols || 'none'}x${lastResize?.rows || 'none'})`);
     clearBufferBeforeResize();
-    resize(cols, rows);
-  }, [isConnected, resize, connect, error, sessionId, clearBufferBeforeResize, xtermRef]);
+    if (settleBypassPendingRef.current) {
+      settleBypassPendingRef.current = false;
+      resize(cols, rows, false, { bypassBounceHold: true });
+    } else {
+      resize(cols, rows);
+    }
+  }, [isConnected, resize, connect, error, sessionId, clearBufferBeforeResize, netPagesUp, xtermRef]);
 
   // Monitor connection state changes
   useEffect(() => {
@@ -1488,6 +1681,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     onResize: handleTerminalResize,
     isAltScreenActive,
     onAltScreenScrollUp,
+    scrollGesture: scrollGestureProps,
+    onScrollModeChange: handleScrollModeChange,
   });
 
   // Task 2.3.1 — DOM scroll listener to detect near-top-of-buffer and trigger paged history load.
@@ -1554,12 +1749,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
       const timeout = setTimeout(() => {
         console.log("[TerminalOutput] Attempting reconnection...");
+        bumpConnectionEpoch();
         connect();
       }, backoffDelay);
 
       return () => clearTimeout(timeout);
     }
-  }, [isConnected, error, connectionAttempts, connect, isHardFailed]);
+  }, [isConnected, error, connectionAttempts, connect, isHardFailed, bumpConnectionEpoch]);
 
   // Initialize with cached dimensions on mount.
   // When cell pixel metrics are also cached, pre-calculate cols/rows from the
@@ -1633,41 +1829,37 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, containerSize.width]);
 
-  // When terminal becomes visible (e.g. session switch in pool), trigger fit+focus.
-  // Story 3 (Task 3.5) — usePooledTerminal's own docking effect now also
-  // fits+focuses on dock (via requestAnimationFrame), so this is redundant
-  // for the pooled path; left in place as a harmless second attempt (fit/
-  // focus are idempotent) rather than risking removing a timing behavior
-  // some non-pool caller might still depend on.
+  // When terminal becomes visible (e.g. session switch in pool), refit through the sampler + focus.
+  // Story 3 (Task 3.5) — usePooledTerminal's docking effect also fits+focuses on dock; this is a
+  // harmless second attempt (both idempotent).
   useEffect(() => {
     if (isVisible && xtermRef.current) {
-      setTimeout(() => {
-        xtermRef.current?.fit();
-        xtermRef.current?.terminal?.focus();
-      }, 50);
+      xtermRef.current.refit({ reason: 'visibility' });
+      xtermRef.current.terminal?.focus();
     }
   }, [isVisible, xtermRef]);
 
-  // visualViewport resize listener — re-fits terminal when the on-screen keyboard
-  // appears/disappears on mobile (visualViewport changes don't fire window resize).
-  // isFittingRef guard prevents resize loops on iOS where fit() triggers another resize event.
+  // On-screen keyboard / URL bar: refit once visualViewport height and offsetTop stop changing.
+  // Sole viewport-driven fit path; the sampler in XtermTerminal owns the actual fit
+  // (ADR-002: a direct fit() off visualViewport raced that sampler, so we only call refit()).
   useEffect(() => {
-    const vp = window.visualViewport;
-    if (!vp) return;
-
-    const onVpResize = () => {
-      if (isFittingRef.current) return;
-      isFittingRef.current = true;
-      // Increase debounce on mobile (400ms) to wait for keyboard animation to finish
-      setTimeout(() => {
-        xtermRef.current?.fit();
-        requestAnimationFrame(() => { isFittingRef.current = false; });
-      }, isMobile ? 400 : 300);
-    };
-
-    vp.addEventListener('resize', onVpResize);
-    return () => vp.removeEventListener('resize', onVpResize);
-  }, [isMobile, xtermRef]);
+    return createViewportSettle(window.visualViewport, createRafScheduler(), {
+      stableFrames: DEFAULT_STABLE_FRAMES,
+      maxWaitMs: DEFAULT_MAX_WAIT_MS,
+      onSettled: (snapshot) => {
+        mobileDebug.log("vp-settle", snapshot);
+        netPagesUp.invalidate("resize");
+        const xterm = xtermRef.current;
+        if (!xterm) return; // no refit issued, so no bypass to arm
+        settleBypassPendingRef.current = true;
+        xterm.refit({
+          reason: 'viewport-settle',
+          // The fit ended without a size change (or exhausted retries): drop the unused bypass.
+          onFitted: () => { settleBypassPendingRef.current = false; },
+        });
+      },
+    });
+  }, [netPagesUp]);
 
   // Reset loading state when switching sessions and trigger reconnect
   useEffect(() => {
@@ -1757,8 +1949,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     console.log("[TerminalOutput] Manual reconnect requested");
     setConnectionAttempts(0);
     setShowReconnectButton(false);
+    bumpConnectionEpoch();
     connect();
-  }, [connect]);
+  }, [connect, bumpConnectionEpoch]);
 
   const handleToggleDebug = useCallback(() => {
     const newDebugMode = !debugMode;
@@ -1987,25 +2180,33 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
   };
 
+  // The fit completes asynchronously (sampler, rAF), so the forced resize message is sent from
+  // onFitted with the post-fit dims. The latest connection state is read when it fires, not when
+  // the button was tapped.
+  const manualResizeLatestRef = useRef({ isConnected, resize, clearBufferBeforeResize });
+  useEffect(() => {
+    manualResizeLatestRef.current = { isConnected, resize, clearBufferBeforeResize };
+  });
+
   const handleManualResize = () => {
     console.log("[TerminalOutput] Manual resize triggered");
-    if (xtermRef.current) {
-      xtermRef.current.fit();
-
-      const terminal = xtermRef.current.terminal;
-      if (terminal) {
-        const cols = terminal.cols;
-        const rows = terminal.rows;
-        console.log(`[TerminalOutput] Terminal resized to ${cols}x${rows}`);
-
-        if (isConnected) {
-          console.log(`[TerminalOutput] Forcing resize message to backend: ${cols}x${rows}`);
-          lastResizeRef.current = { cols, rows };
-          clearBufferBeforeResize();
-          resize(cols, rows, true);
+    xtermRef.current?.refit({
+      reason: 'manual-resize',
+      onFitted: ({ cols, rows, stale }) => {
+        const latest = manualResizeLatestRef.current;
+        // Forcing a resize (which also clears the local buffer) with pre-hide dims would redraw at a size the container no longer has.
+        if (stale) {
+          console.log(`[TerminalOutput] Manual resize skipped: container never became visible (stale ${cols}x${rows})`);
+          return;
         }
-      }
-    }
+        console.log(`[TerminalOutput] Terminal resized to ${cols}x${rows}`);
+        if (!isMountedRef.current || !latest.isConnected) return;
+        console.log(`[TerminalOutput] Forcing resize message to backend: ${cols}x${rows}`);
+        lastResizeRef.current = { cols, rows };
+        latest.clearBufferBeforeResize();
+        latest.resize(cols, rows, true);
+      },
+    });
   };
 
   // Epic 4.2, Story 4.2.2 (Task 4.2.2b) — best-effort resize-mismatch signal
@@ -2073,6 +2274,15 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       },
     },
     {
+      key: 'scrolling',
+      icon: '↕️',
+      label: 'Scrolling',
+      ariaLabel: 'Scrolling settings',
+      title: 'How dragging scrolls, and touch gestures',
+      extraClass: '',
+      handler: toggleScrollFullPanel,
+    },
+    {
       key: 'mouse',
       icon: '🖱️',
       label: mouseMode === 'none' ? 'Mouse' : 'Mouse ON',
@@ -2087,6 +2297,49 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   ];
 
   const isConnectingState = terminalState === "CONNECTING" || terminalState === "LOADING";
+
+  // Rendered in both the desktop toolbar and the mobile overflow row; the hidden file <input>s stay in toolbarActions. The overflow row stays open on click so upload status on the Gallery label remains visible.
+  const renderUploadButtons = () => (
+    <>
+      <button
+        className={styles.toolbarButton}
+        onClick={() => {
+          track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "gallery" } });
+          handleGalleryButtonClick();
+        }}
+        disabled={uploadingCount > 0}
+        title="Attach image(s) from gallery — multi-select supported"
+        aria-label={uploadingCount > 0 ? `Uploading ${uploadingCount} file(s)...` : "Attach images from gallery"}
+      >
+        {uploadSuccess ? `✅ ${uploadSuccess}` : uploadError ? `⚠️ ${uploadError}` : uploadingCount > 0 ? `⏳ ${uploadingCount}…` : "🖼️ Gallery"}
+      </button>
+      <button
+        className={styles.toolbarButton}
+        onClick={() => {
+          track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "files" } });
+          handleFilesButtonClick();
+        }}
+        disabled={uploadingCount > 0}
+        title="Attach any file(s) — multi-select, all types accepted"
+        aria-label={uploadingCount > 0 ? `Uploading ${uploadingCount} file(s)...` : "Attach files"}
+      >
+        {uploadingCount > 0 ? `⏳ ${uploadingCount}…` : "📁 Files"}
+      </button>
+      {/* Camera — hidden on fine-pointer devices, visible on touch */}
+      <button
+        className={`${styles.toolbarButton} ${styles.mobileOnlyUpload}`}
+        onClick={() => {
+          track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "camera" } });
+          handleCameraButtonClick();
+        }}
+        disabled={uploadingCount > 0}
+        title="Take a photo — opens camera directly"
+        aria-label={uploadingCount > 0 ? `Uploading ${uploadingCount} file(s)...` : "Take photo with camera"}
+      >
+        {uploadingCount > 0 ? `⏳ ${uploadingCount}…` : "📷"}
+      </button>
+    </>
+  );
 
   return (
     <div className={styles.container}>
@@ -2161,18 +2414,33 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
               🔄 Reconnect
             </button>
           )}
-          {/* Resize — always visible (minimized default); heavily used per analytics */}
+          {/* Redraw (formerly "Resize") — always visible so a blank screen is recoverable with the toolbar collapsed */}
           <button
             className={styles.toolbarButton}
             onClick={() => {
               track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "resize" } });
               handleManualResize();
             }}
-            aria-label="Resize terminal to fit container"
-            title="Resize terminal to fit container"
+            aria-label="Redraw terminal (fixes a blank screen)"
+            title="Redraw terminal (fixes a blank screen)"
           >
-            ↔️ Resize
+            ↔️<span className={styles.toolbarButtonLabel}> Redraw</span>
           </button>
+          {/* Scroll mode chip — outside the toolbarExpanded conditional so it is reachable with the toolbar collapsed */}
+          <ScrollModeChip
+            effectiveTarget={effectiveScroll.target}
+            gestureScrollEnabled={gestureScrollEnabled}
+            onClick={openScrollPicker}
+            visibleRows={terminalRows}
+            highlighted={misrouteCue.highlighted}
+            announcement={misrouteCue.announcement}
+            suppressAnnouncements={scrollPanel !== null}
+            getTouchSurface={getTouchSurface}
+            buttonRef={scrollChipRef}
+          />
+          <div role="status" aria-live="polite" className={srOnly} data-testid="scroll-mode-announcer">
+            {scrollAnnouncement}
+          </div>
           {toolbarExpanded && (
             <div className={styles.toolbarActions} data-testid="toolbar-actions">
               {/* Secondary actions (Copy, Paste, Bottom, Clear, Mouse) — inline on desktop, hidden on mobile */}
@@ -2222,45 +2490,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
                 onChange={handleFilesUpload}
                 aria-hidden="true"
               />
-              {/* Gallery button — always visible */}
-              <button
-                className={styles.toolbarButton}
-                onClick={() => {
-                  track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "gallery" } });
-                  handleGalleryButtonClick();
-                }}
-                disabled={uploadingCount > 0}
-                title="Attach image(s) from gallery — multi-select supported"
-                aria-label={uploadingCount > 0 ? `Uploading ${uploadingCount} file(s)...` : "Attach images from gallery"}
-              >
-                {uploadSuccess ? `✅ ${uploadSuccess}` : uploadError ? `⚠️ ${uploadError}` : uploadingCount > 0 ? `⏳ ${uploadingCount}…` : "🖼️ Gallery"}
-              </button>
-              {/* Files button — any file type, always visible */}
-              <button
-                className={styles.toolbarButton}
-                onClick={() => {
-                  track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "files" } });
-                  handleFilesButtonClick();
-                }}
-                disabled={uploadingCount > 0}
-                title="Attach any file(s) — multi-select, all types accepted"
-                aria-label={uploadingCount > 0 ? `Uploading ${uploadingCount} file(s)...` : "Attach files"}
-              >
-                {uploadingCount > 0 ? `⏳ ${uploadingCount}…` : "📁 Files"}
-              </button>
-              {/* Camera button — hidden on desktop (pointer: fine = mouse), visible on touch */}
-              <button
-                className={`${styles.toolbarButton} ${styles.mobileOnlyUpload}`}
-                onClick={() => {
-                  track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "camera" } });
-                  handleCameraButtonClick();
-                }}
-                disabled={uploadingCount > 0}
-                title="Take a photo — opens camera directly"
-                aria-label={uploadingCount > 0 ? `Uploading ${uploadingCount} file(s)...` : "Take photo with camera"}
-              >
-                {uploadingCount > 0 ? `⏳ ${uploadingCount}…` : "📷"}
-              </button>
+              {/* Inline on desktop; on mobile the same buttons render in the overflow row */}
+              <span className={styles.desktopOnlyUploads}>{renderUploadButtons()}</span>
               {/* Dev tools toggle */}
               <button
                 ref={devToggleRef}
@@ -2374,7 +2605,24 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
               {action.icon} {action.label}
             </button>
           ))}
+          {renderUploadButtons()}
         </div>
+      )}
+      <ScrollHint visible={scrollHint.visible} route={scrollHint.route} onDismiss={scrollHint.dismiss} />
+      {scrollPanel && (
+        <ScrollingPanel
+          variant={scrollPanel}
+          override={scrollOverride}
+          onOverrideChange={handleScrollOverrideChange}
+          effectiveTarget={effectiveScroll.target}
+          gestureScrollEnabled={gestureScrollEnabled}
+          onGestureScrollChange={scrollSettings.setGestureScroll}
+          onClose={closeScrollPanel}
+          onOpenFull={openScrollFullPanel}
+          openerRef={scrollChipRef}
+          renderAsOverlay={panelAsOverlay}
+          maxHeight={panelMaxHeight}
+        />
       )}
       <div className={styles.terminal} ref={terminalContainerRef}>
         {showReconnectBanner && !isHardFailed && (
@@ -2398,7 +2646,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
                 </button>
               </>
             ) : (
-              <>Connection lost — <button onClick={handleHookReconnect}>Retry</button></>
+              <>Connection lost — <button onClick={reconnectViaHook}>Retry</button></>
             )}
           </div>
         )}
@@ -2455,13 +2703,22 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             No more history available
           </div>
         )}
-{/* Story 3 (Task 3.4) — the pooled terminal instance docks here; see
-    usePooledTerminal's call site near the top of this component and
-    dockRef's own doc comment for why this must stay a plain, otherwise-
-    childless node. The loadingOverlay above covers this area while
-    isLoadingInitialContent=true (skipped entirely for an already-warm
-    pool entry -- see isLoadingInitialContent's lazy initializer). */}
-<div ref={dockRef} className={poolStyles.dockAnchor} />
+        {/* Story 3 (Task 3.4) — the pooled terminal instance docks here; keep it a plain,
+            otherwise-childless node (the pool appends/removes its host imperatively). The
+            loadingOverlay above covers this area while isLoadingInitialContent=true. */}
+        <div ref={dockRef} className={poolStyles.dockAnchor} />
+        {jumpTerminal?.buffer?.active && (
+          <JumpToLatestMount
+            terminal={jumpTerminal}
+            route={effectiveScroll.target}
+            netPagesUp={netPagesUp}
+            connectionEpoch={connectionEpoch}
+            sendData={deliverTerminalData}
+            isInputBusy={isInputChunking}
+            gestureActive={gestureActive}
+            getContainer={getTouchSurface}
+          />
+        )}
       </div>
       {/* Story 2.3 — InputDropBadge is `position: fixed` and portal-rendered
           to document.body (modeled on XtermTerminal's `copiedToast`), unlike
@@ -2509,7 +2766,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[H'); }} aria-label="Home" data-testid="mobile-key">Home</button>
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[A'); }} aria-label="Up arrow" data-testid="mobile-key">↑</button>
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[F'); }} aria-label="End" data-testid="mobile-key">End</button>
-            <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[5~'); }} aria-label="Page up" data-testid="mobile-key">PgUp</button>
+            <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendToolbarPageKey("up"); }} aria-label="Page up" data-testid="mobile-key">PgUp</button>
           </div>
           <div className={styles.mobileKeyRow}>
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\t'); }} aria-label="Tab" data-testid="mobile-key">Tab</button>
@@ -2543,7 +2800,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[D'); }} aria-label="Left arrow" data-testid="mobile-key">←</button>
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[B'); }} aria-label="Down arrow" data-testid="mobile-key">↓</button>
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[C'); }} aria-label="Right arrow" data-testid="mobile-key">→</button>
-            <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[6~'); }} aria-label="Page down" data-testid="mobile-key">PgDn</button>
+            <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendToolbarPageKey("down"); }} aria-label="Page down" data-testid="mobile-key">PgDn</button>
           </div>
           <div className={styles.mobileKeyRow}>
             <button className={`${styles.mobileKey} ${styles.mobileKeyCtrlC}`} onPointerDown={(e) => { e.preventDefault(); setCtrlActive(false); setAltActive(false); handleTerminalData('\x03'); }} aria-label="Ctrl+C (interrupt)" title="Interrupt (Ctrl+C)" data-testid="mobile-key">^C</button>

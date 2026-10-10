@@ -1,19 +1,29 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/zalando/go-keyring"
 
+	"connectrpc.com/connect"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/envtest"
+	githubpkg "github.com/tstapler/stapler-squad/github"
+	logpkg "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -356,6 +366,38 @@ func TestReconcileTicker_should_KeepRunningReconcileStuck_When_QuotaGateReconcil
 	}
 }
 
+// TestWorktreeConsistencySweeperWiring_should_StartAndStopWithoutPanicking_When_DependenciesBuiltNarrow
+// is Task 1.3.2b's wiring smoke test for the session.StartWorktreeConsistencySweeper call
+// added alongside the 60s reconcile ticker above (server/dependencies.go): confirms the
+// sweeper goroutine starts and returns cleanly on ctx cancellation. Deliberately builds a
+// narrow session/events/config dependency set rather than calling server.BuildDependencies()
+// or NewServerWithDeps, which wire ~30 real production subsystems and make real outbound
+// network calls even under test isolation (instinct_ci_hermetic_testing_gotchas.md) —
+// mirroring server/services/session_service_test.go's createTestStorage pattern.
+func TestWorktreeConsistencySweeperWiring_should_StartAndStopWithoutPanicking_When_DependenciesBuiltNarrow(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	repo := session.NewTestEntRepository(t)
+	storage, err := session.NewStorageWithRepository(repo)
+	require.NoError(t, err)
+
+	notifier := &services.EventBusNotifier{Bus: events.NewEventBus(100)}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		session.StartWorktreeConsistencySweeper(ctx, storage, notifier, config.LoadConfig)
+		close(done)
+	}()
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("StartWorktreeConsistencySweeper did not return after ctx cancellation")
+	}
+}
+
 // TestSetSyncFeatureEnabledCheck_should_MatchPlainIsEnabled_When_NotThrottled
 // exercises the real composed closure server/dependencies.go passes to
 // backlogSvc.SetSyncFeatureEnabledCheck (Story 2.3.2) indirectly via
@@ -489,4 +531,85 @@ func TestWireDepsIntoServer_should_StartPollerExactlyOnce_When_HeadlessPoolPrese
 	})
 
 	assert.True(t, deps.SessionTagClassificationPoller.Running(), "wireDepsIntoServer must start the poller")
+}
+
+func TestAnnotateUserPRCache_should_PopulateStatusAndLastActiveFromSnapshot_When_RunningAndPausedInstances(t *testing.T) {
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "s-run", Path: t.TempDir(), Program: "true", SessionType: session.SessionTypeDirectory,
+	})
+	require.NoError(t, err)
+	snap := inst.Snapshot()
+	assert.Equal(t, githubpkg.LinkedSessionRunning, linkedStatusFor(snap.Status))
+	assert.False(t, snap.UpdatedAt.IsZero(), "LastActiveAt source (snapshot UpdatedAt) must be populated")
+
+	// A paused session (worktree removed, branch kept) still reports a status.
+	paused := *snap
+	paused.Status = session.Paused
+	assert.Equal(t, githubpkg.LinkedSessionPaused, linkedStatusFor(paused.Status))
+	assert.Equal(t, githubpkg.LinkedSessionStopped, linkedStatusFor(session.Crashed))
+}
+
+func TestAnnotateUserPRCache_should_LogUnmatchedSessionCount_When_SessionsHaveBranchButNoPR(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	var buf bytes.Buffer
+	prev := logpkg.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { logpkg.SetSlogDefaultForTest(prev) })
+
+	cache := githubpkg.NewUserPRCache()
+	cache.SeedPRsForTest([]githubpkg.UserPR{{Owner: "acme", Repo: "api", Number: 1, HeadRef: "has-pr"}})
+
+	poller := session.NewPRStatusPoller(nil)
+	titles := []string{"no-pr-one", "no-pr-two"}
+	instances := make([]*session.Instance, 0, len(titles))
+	for _, title := range titles {
+		inst, err := session.NewInstance(session.InstanceOptions{
+			Title:       title,
+			Path:        t.TempDir(),
+			Program:     "echo",
+			Branch:      "branch-" + title,
+			GitHubOwner: "acme",
+			GitHubRepo:  "api",
+		})
+		require.NoError(t, err)
+		instances = append(instances, inst)
+	}
+	poller.SetInstances(instances)
+
+	cache.Annotate(buildPRAnnotations(poller, nil))
+
+	out := buf.String()
+	assert.Contains(t, out, "sessions with a branch but no matching PR")
+	assert.Contains(t, out, "count=2")
+}
+
+// Dropping any of SetPRNudger/SetPRDetailFetcher/SetPRTokenResolver in
+// BuildDependencies would make every nudge answer Unavailable with no compile
+// error; an unknown PR instead reaches PR_NOT_FOUND only when all are wired.
+func TestBuildDependencies_should_WireNudgeCollaborators_When_DepsBuilt(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+	require.NotNil(t, deps.GitHubUserService)
+
+	resp, err := deps.GitHubUserService.NudgeSessionForPR(context.Background(), connect.NewRequest(&sessionv1.NudgeSessionForPRRequest{
+		Pr:        &sessionv1.PRKey{Owner: "acme", Repo: "api", Number: 1},
+		SessionId: "s",
+	}))
+
+	if err != nil {
+		assert.NotEqual(t, connect.CodeUnavailable, connect.CodeOf(err), "nudge collaborators are not wired: %v", err)
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assert.Equal(t, sessionv1.NudgeOutcome_NUDGE_OUTCOME_PR_NOT_FOUND, resp.Msg.GetOutcome())
+}
+
+func TestUserPRCacheConfigFromEnv_should_SelectDegradedDetails_When_EnvSet(t *testing.T) {
+	t.Setenv(prPollDegradedEnv, "")
+	assert.False(t, userPRCacheConfigFromEnv().DegradedDetails)
+	t.Setenv(prPollDegradedEnv, "true")
+	assert.True(t, userPRCacheConfigFromEnv().DegradedDetails)
+	t.Setenv(prPollDegradedEnv, "1")
+	assert.True(t, userPRCacheConfigFromEnv().DegradedDetails)
 }

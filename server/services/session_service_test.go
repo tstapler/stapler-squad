@@ -765,7 +765,7 @@ func TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil(t *testing.T) {
 	var mu sync.Mutex
 	finished := false
 	svc.trackCleanup(func() {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond) //nolint:notimesleeptest simulated in-flight cleanup Shutdown must block on
 		mu.Lock()
 		finished = true
 		mu.Unlock()
@@ -822,7 +822,7 @@ func TestShutdown_WaitsForDeleteSessionCleanup_LiveInstancePresent(t *testing.T)
 	var mu sync.Mutex
 	finished := false
 	svc.trackCleanup(func() {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond) //nolint:notimesleeptest simulated in-flight cleanup Shutdown must block on
 		mu.Lock()
 		finished = true
 		mu.Unlock()
@@ -855,7 +855,7 @@ func TestShutdown_BlocksUntilTrackedCleanupCompletes(t *testing.T) {
 	var mu sync.Mutex
 	finished := false
 	svc.trackCleanup(func() {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond) //nolint:notimesleeptest simulated in-flight cleanup Shutdown must block on
 		mu.Lock()
 		finished = true
 		mu.Unlock()
@@ -885,7 +885,7 @@ func TestDestroyWithTimeout_ReturnsTimeoutError_When_WorkExceedsTimeout(t *testi
 	workDone := make(chan struct{})
 	start := time.Now()
 	err := destroyWithTimeout(func() error {
-		time.Sleep(workDuration)
+		time.Sleep(workDuration) //nolint:notimesleeptest simulated slow work whose wall-clock timeout handling is under test
 		close(workDone)
 		return nil
 	}, testTimeout)
@@ -921,7 +921,7 @@ func TestWaitForDestroyLoggingSlowCleanup_DoesNotAbandonWorkAfterTimeout(t *test
 	workDone := make(chan struct{})
 	start := time.Now()
 	err := waitForDestroyLoggingSlowCleanup(func() error {
-		time.Sleep(workDuration)
+		time.Sleep(workDuration) //nolint:notimesleeptest simulated slow work whose wall-clock timeout handling is under test
 		close(workDone)
 		return nil
 	}, testTimeout, func() {
@@ -2241,12 +2241,12 @@ func TestSteerInstance_AutonomousSendCommandImmediateHangs_TimesOutRatherThanBlo
 }
 
 // --------------------------------------------------------------------------
-// SessionSteerer (Story 1.2.1) — SessionProgram / SteerActiveSession
+// SessionSteerer (Story 1.2.1) — SessionProgram
 // --------------------------------------------------------------------------
 //
 // validation.md flags these as a coverage gap: plan.md's Tasks 1.2.1a-d name
 // only a compile-time interface assertion (var _ SessionSteerer =
-// (*SessionService)(nil)) for SessionProgram/SteerActiveSession, with no
+// (*SessionService)(nil)) for SessionProgram, with no
 // direct Test... function for their own return-value behavior. Added here
 // per validation.md's explicit recommendation.
 
@@ -2282,18 +2282,6 @@ func TestSessionService_SessionProgram_ReturnsNotOkForUnknownUUID(t *testing.T) 
 	program, ok := fix.svc.SessionProgram("no-such-session")
 	assert.False(t, ok)
 	assert.Empty(t, program)
-}
-
-// TestSessionService_SteerActiveSession_ReturnsErrorForUnknownUUID verifies
-// SteerActiveSession returns a non-nil error (and does not panic) when no
-// live instance is tracked for the given UUID.
-func TestSessionService_SteerActiveSession_ReturnsErrorForUnknownUUID(t *testing.T) {
-	t.Parallel()
-	fix := setupForkTestFixture(t)
-	t.Cleanup(fix.cleanup)
-
-	err := fix.svc.SteerActiveSession(context.Background(), "missing-uuid", "hello")
-	require.Error(t, err)
 }
 
 // --------------------------------------------------------------------------
@@ -2543,7 +2531,7 @@ func TestResumeHibernatedSession_DoesNotTouchOtherSessions(t *testing.T) {
 	// effect. Best-effort clean it up so repeated test runs don't leave orphaned tmux
 	// sessions, mirroring TestResumeCrashedSession_TransitionsCrashedToActive.
 	t.Cleanup(func() {
-		time.Sleep(100 * time.Millisecond)
+		_ = wait.WaitForCondition(hibernated.Started, wait.WaitConfig{Timeout: time.Second, PollInterval: 10 * time.Millisecond, Description: "relaunch goroutine to start tmux"})
 		_ = hibernated.KillSession()
 	})
 
@@ -2662,7 +2650,7 @@ func TestResumeCrashedSession_TransitionsCrashedToActive(t *testing.T) {
 	// test runs don't leave orphaned tmux sessions on the machine; the goroutine
 	// isn't awaited, so this is a short grace delay, not a guarantee.
 	t.Cleanup(func() {
-		time.Sleep(100 * time.Millisecond)
+		_ = wait.WaitForCondition(testInstance.Started, wait.WaitConfig{Timeout: time.Second, PollInterval: 10 * time.Millisecond, Description: "relaunch goroutine to start tmux"})
 		_ = testInstance.KillSession()
 	})
 
@@ -2737,10 +2725,11 @@ func TestWireCallbacks_WiresMCPServerURLProvider(t *testing.T) {
 	svc.SetMCPServerURL(func() string { return "http://localhost:19194/mcp" })
 
 	inst := &session.Instance{
-		Title:   "wire-callbacks-provider-session",
-		UUID:    "11111111-0000-0000-0000-000000000007",
-		Path:    "/tmp/test",
-		Program: "claude",
+		Title:       "wire-callbacks-provider-session",
+		UUID:        "11111111-0000-0000-0000-000000000007",
+		Path:        "/tmp/test",
+		Program:     "claude",
+		SessionType: session.SessionTypeDirectory, // NewInstance() would default this; this raw literal must too, or setupFirstTimeWorktree's stricter default: (worktree-envvars-hijack Story 3.2.1) now errors on the zero value instead of silently treating it as directory
 		// MCPServerURL deliberately left empty -- exercises the provider
 		// path, not the one-shot-field fallback.
 	}
@@ -3292,7 +3281,7 @@ func TestCreateDirectorySession_HonorsSessionNameOverrideMap(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
 		[]byte(`{"default_program": "claude", "feature_flags": {"tymux": true}, "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
 
-	inst, err := svc.CreateDirectorySession(context.Background(), title, t.TempDir(), "", nil, true, false, "")
+	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), SessionSpawnOptions{Title: title, OneShot: true})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
@@ -3316,7 +3305,7 @@ func TestCreateWorktreeSession_HonorsSessionNameOverrideMap(t *testing.T) {
 	worktreePath := t.TempDir()
 	initGitRepoWithCommit(t, worktreePath)
 
-	inst, err := svc.CreateWorktreeSession(context.Background(), title, t.TempDir(), worktreePath, "", nil, true, false, "")
+	inst, err := svc.CreateWorktreeSession(context.Background(), t.TempDir(), worktreePath, SessionSpawnOptions{Title: title, OneShot: true})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
@@ -3341,7 +3330,9 @@ func TestCreateDirectorySession_should_SetProgramFromOverride_When_ProgramOverri
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	inst, err := svc.CreateDirectorySession(context.Background(), "program-override-directory-session", t.TempDir(), "do the thing", nil, true, false, "claude --model claude-sonnet-4-6")
+	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), SessionSpawnOptions{
+		Title: "program-override-directory-session", Prompt: "do the thing", OneShot: true, ProgramOverride: "claude --model claude-sonnet-4-6",
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
@@ -3362,7 +3353,9 @@ func TestCreateDirectorySession_should_UseResolvedProgram_When_ProgramOverrideEm
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"), []byte(`{"default_program": "claude"}`), 0o644))
 
-	inst, err := svc.CreateDirectorySession(context.Background(), "no-override-directory-session", t.TempDir(), "do the thing", nil, true, false, "")
+	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), SessionSpawnOptions{
+		Title: "no-override-directory-session", Prompt: "do the thing", OneShot: true,
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
@@ -3379,7 +3372,9 @@ func TestCreateWorktreeSession_should_SetProgramFromOverride_When_ProgramOverrid
 	worktreePath := t.TempDir()
 	initGitRepoWithCommit(t, worktreePath)
 
-	inst, err := svc.CreateWorktreeSession(context.Background(), "program-override-worktree-session", t.TempDir(), worktreePath, "do the thing", nil, true, false, "claude --model claude-sonnet-4-6")
+	inst, err := svc.CreateWorktreeSession(context.Background(), t.TempDir(), worktreePath, SessionSpawnOptions{
+		Title: "program-override-worktree-session", Prompt: "do the thing", OneShot: true, ProgramOverride: "claude --model claude-sonnet-4-6",
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
@@ -3734,6 +3729,37 @@ func TestSpawnReviewSession_SetsBacklogCategory(t *testing.T) {
 	assert.Equal(t, session.CategoryBacklog, inst.Category)
 }
 
+// TestSpawnDiagnosticSession_RestrictsAllowedTools is gap #1(a)'s
+// defense-in-depth regression guard: a dispatched Diagnose & Nudge session
+// must launch with --allowedTools restricted to diagnosticSessionAllowedTools
+// (client-side layer), unlike SpawnReviewSession's unrestricted default. The
+// real, server-side enforcement is denyIfDiagnoseCaller (server/mcp) — this
+// only proves the client-side restriction is actually wired at dispatch, not
+// that it alone would be sufficient.
+func TestSpawnDiagnosticSession_RestrictsAllowedTools(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts a real tmux session")
+	}
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"default_program": "bash -c 'sleep 30'"}`), 0o644))
+
+	repoPath := t.TempDir()
+	item := &session.BacklogItemData{ID: uuid.New().String(), RepoPath: repoPath}
+
+	inst, err := fix.svc.SpawnDiagnosticSession(context.Background(), item, "diagnose this")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	assert.Equal(t, session.CategoryBacklog, inst.Category)
+	assert.Equal(t, diagnosticSessionAllowedTools, inst.AllowedTools)
+	assert.NotContains(t, inst.AllowedTools, "write_to_session", "diagnostic sessions must not be allowed the general-purpose terminal-control tools")
+}
+
 // drainNotificationEvents reads every event currently queued on ch (with a short
 // deadline) and returns any events.EventNotification events found. Used to assert
 // on presence/absence of a notification without depending on channel buffering
@@ -3840,7 +3866,7 @@ func TestWireRateLimitCallbacks_SuppressesNotification_When_InstanceHidden(t *te
 		defer cancel()
 		ch, _ := eventBus.Subscribe(subCtx)
 
-		svc.onRateLimitRecovery(inst, inst.UUID, true, "")
+		svc.onRateLimitRecoverySucceeded(inst, inst.UUID)
 
 		notifs := drainNotificationEvents(ch)
 		assert.Empty(t, notifs, "a Hidden instance must never receive a rate-limit-recovery notification")
@@ -3914,7 +3940,7 @@ func TestWireRateLimitCallbacks_StillPublishesSessionUpdated_When_InstanceHidden
 		defer cancel()
 		ch, _ := eventBus.Subscribe(subCtx)
 
-		svc.onRateLimitRecovery(inst, inst.UUID, true, "")
+		svc.onRateLimitRecoverySucceeded(inst, inst.UUID)
 
 		all := drainAllEvents(ch)
 		notifs := filterEventsByType(all, events.EventNotification)
@@ -4362,6 +4388,90 @@ func TestCreateSession_should_ReachActiveViaPipeline(t *testing.T) {
 		defer mu.Unlock()
 		assert.GreaterOrEqual(t, len(phases), 2,
 			"creation_progress must be observed transitioning at least once before Active (Story 6.1.1's restart acceptance criterion); observed phases=%v", phases)
+	})
+
+	// ModeIsNewWorktree is worktree-envvars-hijack's Epic 4.1/Story 4.1.1
+	// end-to-end regression test: the exact request shape the original bug
+	// report used (SESSION_TYPE_NEW_WORKTREE + non-empty EnvVars + Program
+	// "claude") against a repo that already hosts a live SessionTypeDirectory
+	// session, asserting both directory-path isolation (a real, distinct
+	// worktree, never the bare repo path) and conversation-content isolation
+	// (the new session's ConversationUUID/HistoryFilePath never adopt the
+	// pre-existing sibling's) in both directions.
+	t.Run("ModeIsNewWorktree", func(t *testing.T) {
+		fix := setupForkTestFixture(t)
+		t.Cleanup(fix.cleanup)
+		wireRegistryForActorSerialization(fix)
+		home := withFakeHome(t) // the pre-existing session's fake JSONL fixture resolves under here
+
+		repoDir := t.TempDir()
+		initGitRepoWithCommit(t, repoDir)
+
+		// Seed the pre-existing sibling's fake conversation JSONL fixture,
+		// following TestHistoryFileDetector_DetectByPath_*'s pattern
+		// (session/history_detector_test.go): ~/.claude/projects/<encoded
+		// repoDir>/<uuid>.jsonl.
+		const preExistingUUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+		projDir := filepath.Join(home, ".claude", "projects", session.ClaudeProjectDirName(repoDir))
+		require.NoError(t, os.MkdirAll(projDir, 0o755))
+		preExistingHistoryPath := filepath.Join(projDir, preExistingUUID+".jsonl")
+		require.NoError(t, os.WriteFile(preExistingHistoryPath, []byte(`{"sessionId":"`+preExistingUUID+`"}`+"\n"), 0o644))
+
+		// A real, live SessionTypeDirectory instance already running at
+		// repoDir -- real tmux backend via fix.svc.testTmuxServerSocket, not
+		// a struct-literal double, so IsBackendProcessAlive()/liveness checks
+		// see it as genuinely live. SetHistoryInfo seeds its conversation
+		// state deterministically rather than depending on a HistoryLinker
+		// poll to discover the JSONL fixture above.
+		preExisting, err := session.NewInstance(session.InstanceOptions{
+			Title:            "epic61-preexisting-directory",
+			Path:             repoDir,
+			Program:          "sh",
+			SessionType:      session.SessionTypeDirectory,
+			TmuxServerSocket: fix.svc.testTmuxServerSocket,
+		})
+		require.NoError(t, err)
+		require.NoError(t, preExisting.Start(true))
+		t.Cleanup(func() { _ = preExisting.Destroy() })
+		preExisting.SetHistoryInfo(preExistingUUID, preExistingHistoryPath)
+		require.NoError(t, fix.storage.AddInstance(preExisting))
+
+		resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+			Title:       "epic61-new-worktree-session",
+			Path:        repoDir,
+			Program:     "claude",
+			SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE,
+			Branch:      "epic61-new-worktree",
+			EnvVars:     map[string]string{"ANTHROPIC_BASE_URL": "http://127.0.0.1:47000"},
+		}))
+		require.NoError(t, err)
+		id := resp.Msg.Session.Id
+		t.Cleanup(func() { destroyCreatedSession(t, fix.svc, id) })
+
+		assertReachesActiveViaPipeline(t, fix.svc, resp.Msg.Session, awaitTimeout, awaitPollInterval)
+
+		inst := fix.svc.FindLiveInstance(id)
+		require.NotNil(t, inst)
+
+		ws := inst.Workspace()
+		assert.NotEqual(t, repoDir, ws.ActiveDir,
+			"the new worktree session must resolve to a real, distinct worktree path, never the bare repo path")
+		assert.Equal(t, "http://127.0.0.1:47000", inst.EnvVars["ANTHROPIC_BASE_URL"],
+			"envVars-based program configuration must still work (issue #852's out-of-scope-but-must-not-worsen concern)")
+
+		// Conversation-content isolation half: if the new session has any
+		// conversation UUID/history path at all, it must never be the
+		// pre-existing sibling's -- proving no cross-session attach occurred.
+		assert.NotEqual(t, preExistingUUID, inst.GetClaudeConversationUUID(),
+			"new session must never adopt the pre-existing sibling's conversation UUID")
+		assert.NotEqual(t, preExistingHistoryPath, inst.Snapshot().HistoryFilePath,
+			"new session must never adopt the pre-existing sibling's history file path")
+
+		// The pre-existing sibling's own state must be untouched -- proving
+		// no cross-attach occurred in the OTHER direction either.
+		assert.Equal(t, session.Active, session.Status(preExisting.GetStatus()))
+		assert.Equal(t, repoDir, preExisting.Workspace().ActiveDir)
+		assert.Equal(t, preExistingUUID, preExisting.GetClaudeConversationUUID())
 	})
 
 	t.Run("ModeIsFork", func(t *testing.T) {

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -87,7 +88,6 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 	defer span.End()
 
 	startedAt := time.Now()
-	instanceRootDir := p.instanceRootDir
 
 	// terminal is the pipeline's one terminal-write call site (Story 2.2.3):
 	// every exit path (success, per-phase failure, timeout, panic recovery)
@@ -195,7 +195,6 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 			PRNumber:       ref.PRNumber,
 			PRURL:          prURL,
 		})
-		instanceRootDir = p.instance.GetEffectiveRootDir()
 		s.eventBus.Publish(events.NewSessionUpdatedEvent(p.instance, []string{"path", "branch", "github_owner", "github_repo"}))
 		log.Info("[session pipeline] resolved deferred GitHub URL", "session", p.instanceTitle, "path", localPath, "branch", branch)
 	}
@@ -258,9 +257,27 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 	if startErr := p.instance.Start(true); startErr != nil {
 		log.Error("[session pipeline] async start failed", "session", p.instanceTitle, "err", startErr)
 		setPhase(fmt.Sprintf("Startup failed: %s", startErr.Error()))
-		terminal(pipelineOutcome{session.Failed, "StartupError", SessionCreationOutcomeFailed})
+		// Classify via errors.Is (sentinel matching, not string parsing) into a fixed,
+		// short failureReason/metricsOutcome distinct from the generic "StartupError"
+		// (worktree-envvars-hijack Task 3.3.3a) -- never interpolate the detailed
+		// title/path/blocking-UUID text from startErr.Error() into these wire-level
+		// values; that text is still logged in full above for debugging.
+		failureReason := "StartupError"
+		switch {
+		case errors.Is(startErr, session.ErrWorktreeResolutionFailed):
+			failureReason = "WorktreeResolutionFailed"
+		case errors.Is(startErr, session.ErrDirectoryCollision):
+			failureReason = "DirectoryCollision"
+		}
+		terminal(pipelineOutcome{session.Failed, failureReason, SessionCreationOutcomeFailed})
 		return
 	}
+
+	// Derived only here, after Start() has completed worktree creation --
+	// any earlier point is stale for a plain SessionTypeNewWorktree session,
+	// leaving InjectHookConfig/StartSessionDriver below pointed at the bare
+	// repo path instead of the freshly-created worktree.
+	instanceRootDir := p.instance.GetEffectiveRootDir()
 
 	// Clear progress message now that we are about to become Active.
 	p.instance.SetCreationProgress("")
@@ -326,7 +343,7 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 		if concreteStorage := s.GetStorage(); concreteStorage != nil {
 			costOpt = session.WithCostSink(session.CostSinkForSessionUUID(concreteStorage, p.instance.UUID))
 		}
-		driver := session.NewAutonomousDriver(p.instance, s.headlessPool, p.instance.Prompt, config.LoadConfig().AutonomousMaxTurnsOrDefault(), costOpt)
+		driver := session.NewAutonomousDriver(p.instance, s.autonomousDriverClient(), p.instance.Prompt, config.LoadConfig().AutonomousMaxTurnsOrDefault(), costOpt)
 		driver.RegisterCompletionCallback(s.autonomousSvc.onAutonomousDriverComplete)
 		if driverErr := driver.Start(s.autonomousSvc.driverCtx()); driverErr != nil {
 			log.Warn("[session pipeline] failed to start autonomous driver", "session", p.instanceTitle, "err", driverErr)

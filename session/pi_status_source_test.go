@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // TestPiStatusSource_ReadyBeforeAnyEvent covers Story 5.2.1's third AC
@@ -72,6 +73,7 @@ func TestPiStatusSource_MultipleOutstandingToolCalls(t *testing.T) {
 // second AC bullet: after agent_end and piIdleGracePeriod elapses with no
 // further events, status becomes StatusIdle.
 func TestPiStatusSource_IdleAfterAgentEndAndGracePeriod(t *testing.T) {
+	// Serial: asserts real-time budgets (5s grace period, fork/exec relaunch backoff) that parallel load can blow.
 	src := NewPiStatusSource("test-session", nil)
 	src.handleEvent(PiAgentStartEvent{Type: "agent_start"})
 	src.handleEvent(PiAgentEndEvent{Type: "agent_end"})
@@ -81,29 +83,34 @@ func TestPiStatusSource_IdleAfterAgentEndAndGracePeriod(t *testing.T) {
 		t.Errorf("CurrentStatus() = %v immediately after agent_end, want NOT StatusIdle yet", got)
 	}
 
-	deadline := time.Now().Add(piIdleGracePeriod + 2*time.Second)
-	for time.Now().Before(deadline) {
-		if src.CurrentStatus() == detection.StatusIdle {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Errorf("CurrentStatus() never became StatusIdle within grace period + margin, got %v", src.CurrentStatus())
+	wait.RequireEventually(t, func() bool { return src.CurrentStatus() == detection.StatusIdle },
+		piIdleGracePeriod+2*time.Second, 10*time.Millisecond,
+		"CurrentStatus() never became StatusIdle within grace period + margin")
 }
 
 // TestPiStatusSource_NewEventCancelsPendingIdleTransition verifies that a
 // new event arriving before the grace period elapses cancels the pending
 // idle transition, per Story 5.2.1's AC.
 func TestPiStatusSource_NewEventCancelsPendingIdleTransition(t *testing.T) {
+	t.Parallel()
 	src := NewPiStatusSource("test-session", nil)
 	src.handleEvent(PiAgentEndEvent{Type: "agent_end"})
 	// A new turn starts before the grace period elapses.
 	src.handleEvent(PiAgentStartEvent{Type: "agent_start"})
 
-	time.Sleep(piIdleGracePeriod + 500*time.Millisecond)
+	src.mu.Lock()
+	pendingTimer := src.idleTimer
+	src.mu.Unlock()
+	if pendingTimer != nil {
+		t.Error("idleTimer still pending after agent_start; the new event should have cancelled it")
+	}
 
-	if got := src.CurrentStatus(); got == detection.StatusIdle {
-		t.Errorf("CurrentStatus() = %v, want the pending idle transition to have been canceled by the new agent_start", got)
+	// piIdleGracePeriod is a package const, so a leaked timer can only be ruled out by
+	// outlasting it and observing that the status never flips to Idle.
+	time.Sleep(piIdleGracePeriod + 500*time.Millisecond) //nolint:notimesleeptest absence check: must outlast the real const piIdleGracePeriod to prove the cancelled idle transition never fires
+
+	if got := src.CurrentStatus(); got != detection.StatusProcessing {
+		t.Errorf("CurrentStatus() = %v, want StatusProcessing: the pending idle transition should have been canceled by the new agent_start", got)
 	}
 }
 
@@ -135,14 +142,8 @@ func TestPiStatusSource_DetectsSubprocessDeath(t *testing.T) {
 
 	// One relaunch attempt's worth of backoff, plus margin, is enough for
 	// the wait goroutine to observe the exit and bump the retry counter.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if src.retryCount.Load() > 0 {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Errorf("retryCount never incremented after killing the subprocess")
+	wait.RequireEventually(t, func() bool { return src.retryCount.Load() > 0 }, 2*time.Second, 5*time.Millisecond,
+		"retryCount never incremented after killing the subprocess")
 }
 
 func TestPiStatusSource_SuccessfulRelaunchResumesAndResetsRetryCounter(t *testing.T) {
@@ -163,17 +164,12 @@ func TestPiStatusSource_SuccessfulRelaunchResumesAndResetsRetryCounter(t *testin
 	}
 	defer src.Stop()
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		// The relaunch's echoed agent_start event both resumes normal
-		// inference (StatusProcessing, via handleEvent's default case) and
-		// resets the retry counter (handleEvent's unconditional reset).
-		if src.CurrentStatus() == detection.StatusProcessing && src.retryCount.Load() == 0 && !src.unavailable.Load() {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Errorf("relaunch did not resume normal inference / reset retry counter in time (attempts=%d, retryCount=%d, unavailable=%v, status=%v)", attempt, src.retryCount.Load(), src.unavailable.Load(), src.CurrentStatus())
+	// The relaunch's echoed agent_start event both resumes normal
+	// inference (StatusProcessing, via handleEvent's default case) and
+	// resets the retry counter (handleEvent's unconditional reset).
+	wait.RequireEventually(t, func() bool {
+		return src.CurrentStatus() == detection.StatusProcessing && src.retryCount.Load() == 0 && !src.unavailable.Load()
+	}, 5*time.Second, 10*time.Millisecond, "relaunch did not resume normal inference / reset retry counter in time")
 }
 
 // --- Task 2.2.1e: propagating the real pi session ID back to the owning Instance ---
@@ -266,6 +262,7 @@ func TestPiStatusSource_SessionEventPropagatesToInstance(t *testing.T) {
 // stopped flag, because Stop()'s wg.Wait() now blocks until that resolution
 // either way.
 func TestPiStatusSource_StopWaitsOutPendingRelaunchAndPreventsIt(t *testing.T) {
+	// Serial: asserts real-time budgets (5s grace period, fork/exec relaunch backoff) that parallel load can blow.
 	var launches atomic.Int32
 	factory := func() *exec.Cmd {
 		launches.Add(1)
@@ -286,13 +283,8 @@ func TestPiStatusSource_StopWaitsOutPendingRelaunchAndPreventsIt(t *testing.T) {
 
 	// Wait for handleProcessExit to observe the exit and schedule the
 	// relaunch timer (retryCount bumps synchronously with scheduling).
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && src.retryCount.Load() == 0 {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if src.retryCount.Load() == 0 {
-		t.Fatal("relaunch was never scheduled after killing the subprocess")
-	}
+	wait.RequireEventually(t, func() bool { return src.retryCount.Load() != 0 }, 2*time.Second, 5*time.Millisecond,
+		"relaunch was never scheduled after killing the subprocess")
 
 	launchesBeforeStop := launches.Load()
 
@@ -302,7 +294,7 @@ func TestPiStatusSource_StopWaitsOutPendingRelaunchAndPreventsIt(t *testing.T) {
 
 	// Give any would-be leaked relaunch (the pre-fix bug) time to fire --
 	// well past the backoff and then some margin.
-	time.Sleep(piRelaunchBackoff*time.Duration(piMaxRelaunchAttempts) + 500*time.Millisecond)
+	time.Sleep(piRelaunchBackoff*time.Duration(piMaxRelaunchAttempts) + 500*time.Millisecond) //nolint:notimesleeptest absence check: must outlast the real relaunch backoff timer to prove a leaked relaunch never fires
 
 	if got := launches.Load(); got != launchesBeforeStop {
 		t.Errorf("launch() was called again after Stop() returned (launches before=%d, after=%d) -- pending relaunch timer was not cancelled/joined by Stop()", launchesBeforeStop, got)
@@ -310,6 +302,7 @@ func TestPiStatusSource_StopWaitsOutPendingRelaunchAndPreventsIt(t *testing.T) {
 }
 
 func TestPiStatusSource_ExhaustedRetriesReportUnavailable(t *testing.T) {
+	// Serial: asserts real-time budgets (5s grace period, fork/exec relaunch backoff) that parallel load can blow.
 	factory := func() *exec.Cmd {
 		// Every launch dies immediately -- retries never succeed.
 		return safeexec.CommandContext(context.Background(), "/bin/sh", "-c", "exit 1")
@@ -321,20 +314,14 @@ func TestPiStatusSource_ExhaustedRetriesReportUnavailable(t *testing.T) {
 	}
 	defer src.Stop()
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if src.unavailable.Load() {
-			if got := src.CurrentStatus(); got != detection.StatusError {
-				t.Errorf("CurrentStatus() = %v once unavailable, want StatusError", got)
-			}
-			if src.StatusContext() == "" {
-				t.Errorf("StatusContext() empty once unavailable, want a non-empty message")
-			}
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+	wait.RequireEventually(t, func() bool { return src.unavailable.Load() }, 5*time.Second, 10*time.Millisecond,
+		"subprocess never reported unavailable after exhausting retries")
+	if got := src.CurrentStatus(); got != detection.StatusError {
+		t.Errorf("CurrentStatus() = %v once unavailable, want StatusError", got)
 	}
-	t.Errorf("subprocess never reported unavailable after exhausting %d retries (retryCount=%d)", piMaxRelaunchAttempts, src.retryCount.Load())
+	if src.StatusContext() == "" {
+		t.Errorf("StatusContext() empty once unavailable, want a non-empty message")
+	}
 }
 
 // TestPiStatusSource_StopConcurrentWithRelaunchStress is a stress/fuzz-style
@@ -358,6 +345,7 @@ func TestPiStatusSource_ExhaustedRetriesReportUnavailable(t *testing.T) {
 // iterations finish -- a leaked "sleep 100" would still be alive and
 // answer signal(0) successfully.
 func TestPiStatusSource_StopConcurrentWithRelaunchStress(t *testing.T) {
+	t.Parallel()
 	const iterations = 200
 
 	var mu sync.Mutex

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -35,6 +36,10 @@ type InstanceData struct {
 	AutoApprove   bool      `json:"auto_approve"`
 	Prompt        string    `json:"prompt"`
 	InitialPrompt string    `json:"initial_prompt,omitempty"`
+	// InitialPromptSentAt records when InitialPrompt was actually typed into the
+	// terminal, persisted so a service restart's fresh driver goroutine doesn't
+	// have to re-derive (and potentially get wrong) whether it was already sent.
+	InitialPromptSentAt time.Time `json:"initial_prompt_sent_at,omitempty"`
 
 	Program          string          `json:"program"`
 	ExistingWorktree string          `json:"existing_worktree,omitempty"`
@@ -146,6 +151,8 @@ type InstanceData struct {
 
 	// Hidden excludes this session from the default session list and review queue.
 	Hidden bool `json:"hidden,omitempty"`
+	// Pinned mirrors Instance.Pinned for JSON snapshot / ent round-trip.
+	Pinned bool `json:"pinned,omitempty"`
 
 	// ProjectID is the optional project this session belongs to.
 	ProjectID string `json:"project_id,omitempty"`
@@ -264,6 +271,15 @@ var _ InstanceStore = (*Storage)(nil)
 // Storage handles saving and loading instances via the repository backend.
 type Storage struct {
 	repo *EntRepository
+
+	// claimRecorder is set once at startup but read from every creation path
+	// (including background sync loops), so it is atomic.
+	claimRecorder atomic.Pointer[ClaimRecorder]
+	// foreignClaims is the local-only claim reader SyncOne consults; nil means
+	// no cross-host claim checking.
+	foreignClaims atomic.Pointer[ForeignClaimLookup]
+	// provenance builds the PR provenance comment; nil means no stamping.
+	provenance atomic.Pointer[PRProvenanceSource]
 }
 
 // NewStorageWithRepository creates a Storage backed by an EntRepository.
@@ -284,6 +300,36 @@ func (s *Storage) GetEntClient() *ent.Client {
 // SetItemChangePublisher wires p into the underlying repository.
 func (s *Storage) SetItemChangePublisher(p ItemChangePublisher) {
 	s.repo.SetItemChangePublisher(p)
+}
+
+// SetClaimRecorder wires r as the recorder CreateBacklogItem calls for every
+// item created with a non-empty ExternalURL. Passing nil disables recording.
+func (s *Storage) SetClaimRecorder(r ClaimRecorder) {
+	if r == nil {
+		s.claimRecorder.Store(nil)
+		return
+	}
+	s.claimRecorder.Store(&r)
+}
+
+// SetForeignClaimLookup wires l as the local-only claim reader ForeignClaim
+// uses. Passing nil disables cross-host claim checking.
+func (s *Storage) SetForeignClaimLookup(l ForeignClaimLookup) {
+	if l == nil {
+		s.foreignClaims.Store(nil)
+		return
+	}
+	s.foreignClaims.Store(&l)
+}
+
+// ForeignClaim reports a claim on externalURL held by another host, consulting
+// only local state. It reports false when no lookup is wired or externalURL is empty.
+func (s *Storage) ForeignClaim(externalURL string) (ClaimRecord, bool) {
+	lookup := s.foreignClaims.Load()
+	if lookup == nil || externalURL == "" {
+		return ClaimRecord{}, false
+	}
+	return (*lookup).ForeignClaim(externalURL)
 }
 
 // SetCallbackDispatcher forwards to the underlying *EntRepository's SetCallbackDispatcher.
@@ -355,6 +401,7 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 		}
 		// Inject shell repository so shell operations can persist to the DB.
 		inst.SetShellRepository(s.repo)
+		inst.SetInitialPromptRepository(s.repo)
 		instances = append(instances, inst)
 	}
 
@@ -594,6 +641,7 @@ func (s *Storage) AddInstance(instance *Instance) error {
 	}
 	// Inject shell repository so shell operations can persist to the DB.
 	instance.SetShellRepository(s.repo)
+	instance.SetInitialPromptRepository(s.repo)
 	return nil
 }
 
@@ -656,6 +704,13 @@ func (s *Storage) UpdateInstanceTimestampsOnly(title string, lastTerminalUpdate,
 // UpdateInstanceLastAddedToQueue updates ONLY the LastAddedToQueue field for a specific instance.
 func (s *Storage) UpdateInstanceLastAddedToQueue(title string, lastAddedToQueue time.Time) error {
 	return s.repo.UpdateLastAddedToQueue(context.Background(), title, lastAddedToQueue)
+}
+
+// UpdateInstanceInitialPromptSentAt persists when InitialPrompt was actually typed
+// into the terminal, so a service restart doesn't have to re-derive (and risk
+// getting wrong) whether it was already sent -- see Instance.InitialPromptSentAt.
+func (s *Storage) UpdateInstanceInitialPromptSentAt(title string, t time.Time) error {
+	return s.repo.UpdateInitialPromptSentAt(context.Background(), title, t)
 }
 
 // UpdateInstanceLastUserResponse persists the LastUserResponse timestamp for a session.
@@ -925,7 +980,31 @@ func (s *Storage) CreateBacklogItem(ctx context.Context, data BacklogItemData) (
 			data.RepoPath = resolved
 		}
 	}
-	return s.repo.CreateBacklogItem(ctx, data)
+	created, err := s.repo.CreateBacklogItem(ctx, data)
+	if err != nil {
+		return nil, err
+	}
+	s.recordClaim(ctx, created)
+	return created, nil
+}
+
+// recordClaim is the single choke point (ADR-002 of
+// project_plans/cross-host-claim-dedup/decisions/) that records a cross-host
+// claim for every newly created item that has an ExternalURL. Best-effort: a
+// failure is logged and never fails item creation.
+func (s *Storage) recordClaim(ctx context.Context, item *BacklogItemData) {
+	recorder := s.claimRecorder.Load()
+	if recorder == nil || item == nil || item.ExternalURL == "" {
+		return
+	}
+	err := (*recorder).RecordClaim(ctx, ClaimRecord{
+		ExternalURL:  item.ExternalURL,
+		ItemDeepLink: BacklogItemDeepLinkPath(item),
+		ClaimedAt:    item.CreatedAt,
+	})
+	if err != nil {
+		log.Warn("claim_index.record_failed", "external_url", item.ExternalURL, "err", err)
+	}
 }
 
 // GetBacklogItem retrieves a backlog item by UUID string.
@@ -1153,6 +1232,17 @@ func (s *Storage) FindOpenStuckStates(ctx context.Context) ([]OpenStuckStateData
 	return s.repo.FindOpenStuckStates(ctx)
 }
 
+// HasOpenStuckReason reports whether itemID has an open (unresolved,
+// un-snoozed) stuck row for reason.
+func (s *Storage) HasOpenStuckReason(ctx context.Context, itemID string, reason domain.StuckReason) (bool, error) {
+	rows, err := s.repo.FindOpenStuckStates(ctx)
+	if err != nil {
+		return false, err
+	}
+	_, ok := findOpenStuckStateFor(rows, itemID, reason)
+	return ok, nil
+}
+
 // SnoozeStuckState sets snoozed_until on an open BacklogStuckState row for
 // (itemID, reason). Returns false, nil when the backend does not support
 // stuck-state writes or no matching open row exists — never an error for a
@@ -1254,6 +1344,31 @@ func (s *Storage) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID s
 	return s.repo.GetItemSessionBySessionUUID(ctx, sessionUUID)
 }
 
+// IsDiagnoseCaller reports whether sessionUUID is currently linked to a
+// backlog item with SessionRoleDiagnose — i.e. whether it's a dispatched
+// Diagnose & Nudge investigation session, as opposed to any other role. Used
+// by server/mcp's denyIfDiagnoseCaller to gate the general-purpose
+// terminal-control MCP tools away from that narrow role: --allowedTools
+// provides no real technical enforcement on its own (see
+// session/backlog_review.go's BuildReviewCallOptions doc comment), so this is
+// the actual, server-side gate. Returns false (not diagnose) on any lookup
+// error, including "no link at all" — the check only ever narrows what a
+// positively-identified diagnose session may do, so an unidentifiable caller
+// falls through to the pre-existing unrestricted behavior for every other role.
+func (s *Storage) IsDiagnoseCaller(ctx context.Context, sessionUUID string) bool {
+	row, err := s.repo.GetItemSessionBySessionUUID(ctx, sessionUUID)
+	if err != nil {
+		return false
+	}
+	return row.Role == SessionRoleDiagnose
+}
+
+// ClaimDiagnoseNudgeAttempt atomically claims sessionUUID's one nudge-write
+// attempt — see EntRepository.ClaimDiagnoseNudgeAttempt's doc comment.
+func (s *Storage) ClaimDiagnoseNudgeAttempt(ctx context.Context, sessionUUID string) (claimed bool, err error) {
+	return s.repo.ClaimDiagnoseNudgeAttempt(ctx, sessionUUID)
+}
+
 // GetWorktreeDataBySessionUUID returns the git worktree data for the Session with
 // the given UUID. Returns empty GitWorktreeData for directory-mode sessions or if
 // the session is not found.
@@ -1323,6 +1438,12 @@ func (s *Storage) UpdateItemSessionEndedWithReason(ctx context.Context, id strin
 // See EntRepository.UpdateItemSessionConversationUUID.
 func (s *Storage) UpdateItemSessionConversationUUID(ctx context.Context, id string, conversationUUID string) error {
 	return s.repo.UpdateItemSessionConversationUUID(ctx, id, conversationUUID)
+}
+
+// UpdateItemSessionEndedWithDetail is UpdateItemSessionEndedWithReason plus the
+// truncated error text for end_reason "other". See EntRepository.UpdateItemSessionEndedWithDetail.
+func (s *Storage) UpdateItemSessionEndedWithDetail(ctx context.Context, id string, endedAt time.Time, reason, detail string) error {
+	return s.repo.UpdateItemSessionEndedWithDetail(ctx, id, endedAt, reason, detail)
 }
 
 // UpdateItemSessionFailureCapture records the absolute path to a durable raw-output

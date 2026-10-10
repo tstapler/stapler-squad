@@ -1,9 +1,11 @@
+// +feature: backlog-diagnose-nudge
 "use client";
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { routes } from "@/lib/routes";
+import { useAnalytics } from "@/lib/analytics";
 import { resolveReworkCapOverride } from "@/lib/backlog/formatReworkCapOverride";
 import { formatAgo, formatSinceUTC, isPrStatusUnknown } from "./stuckReason";
 import * as styles from "./StuckItemDetail.css";
@@ -35,6 +37,18 @@ interface StuckItemDetailProps {
    * instead of a generic error.
    */
   onApprovePlan?: (itemId: string) => Promise<void>;
+  /**
+   * Dispatches a "Diagnose & Nudge" agent for this item (backlog item
+   * 68964304), scoped to this card's own StuckReason so the nudge
+   * cap/cooldown gate (AC4) and the dispatched agent's action space key off
+   * the right BacklogStuckState row. Omitted disables the control entirely.
+   * Resolves with the dispatched diagnostic session's UUID, which this
+   * component links to directly once dispatched — the session runs hidden
+   * from the main list, so that link is the only way to open its transcript
+   * and see what it actually did. Rejects (throws) on failure, mirroring
+   * onApprovePlan above.
+   */
+  onDiagnose?: (itemId: string, reason: StuckReason) => Promise<string>;
 }
 
 /** Read-only "Repo auto-merge: on/off/unknown" line (Story 4.1.4). `allowAutoMerge` is
@@ -71,7 +85,9 @@ export function StuckItemDetail({
   currentReworkCapOverride,
   reworkCapOverrideLoaded = false,
   onApprovePlan,
+  onDiagnose,
 }: StuckItemDetailProps) {
+  const { track } = useAnalytics();
   const unknown = isPrStatusUnknown(item);
   const isPrReady = item.reason === StuckReason.PR_READY_UNMERGED;
   const isReworkCap = item.reason === StuckReason.REWORK_CAP;
@@ -126,16 +142,35 @@ export function StuckItemDetail({
   const [overrideState, setOverrideState] = useState<"idle" | "pending" | "error">("idle");
   const [approveState, setApproveState] = useState<"idle" | "pending" | "error">("idle");
   const [approveError, setApproveError] = useState<string | null>(null);
+  const [diagnoseState, setDiagnoseState] = useState<"idle" | "pending" | "dispatched" | "error">(
+    "idle"
+  );
+  const [diagnoseError, setDiagnoseError] = useState<string | null>(null);
+  // Each computed once and reused for both a button's aria-disabled and its
+  // click guard below, so the two conditions can't drift apart.
+  const isOverridePending = overrideState === "pending";
+  const isSetCapDisabled = isOverridePending || !Number(moreRounds) || Number(moreRounds) <= 0;
+  const isApprovePending = approveState === "pending";
+  const isDiagnosePending = diagnoseState === "pending" || diagnoseState === "dispatched";
+  // The dispatched diagnostic session's UUID (onDiagnose's resolved value),
+  // used to render a direct "View diagnostic session" link below — see
+  // onDiagnose's doc comment for why this link matters (the session is
+  // hidden from the main session list).
+  const [dispatchedSessionUuid, setDispatchedSessionUuid] = useState<string | null>(null);
 
   async function submitOverride(override: number) {
-    if (!onReworkCapOverride) return;
+    // These buttons use aria-disabled instead of disabled (so they stay
+    // focusable while busy), which doesn't block clicks on its own — guard
+    // here against a rapid double click/Enter re-dispatching before the
+    // first request settles.
+    if (!onReworkCapOverride || isOverridePending) return;
     setOverrideState("pending");
     const ok = await onReworkCapOverride(item.itemId, override);
     setOverrideState(ok ? "idle" : "error");
   }
 
   async function submitApprovePlan() {
-    if (!onApprovePlan) return;
+    if (!onApprovePlan || isApprovePending) return;
     setApproveState("pending");
     setApproveError(null);
     try {
@@ -144,6 +179,20 @@ export function StuckItemDetail({
     } catch (err) {
       setApproveState("error");
       setApproveError(err instanceof Error ? err.message : "Failed to approve — try again.");
+    }
+  }
+
+  async function submitDiagnose() {
+    if (!onDiagnose || isDiagnosePending) return;
+    setDiagnoseState("pending");
+    setDiagnoseError(null);
+    try {
+      const uuid = await onDiagnose(item.itemId, item.reason);
+      setDispatchedSessionUuid(uuid);
+      setDiagnoseState("dispatched");
+    } catch (err) {
+      setDiagnoseState("error");
+      setDiagnoseError(err instanceof Error ? err.message : "Failed to dispatch — try again.");
     }
   }
 
@@ -194,13 +243,22 @@ export function StuckItemDetail({
                 className={styles.overrideInput}
                 aria-label="This item's new rework cap"
                 data-testid="stuck-item-rework-cap-rounds-input"
-                disabled={overrideState === "pending"}
+                disabled={isOverridePending}
               />
               <button
                 type="button"
                 className={styles.overrideButton}
-                disabled={overrideState === "pending" || !Number(moreRounds) || Number(moreRounds) <= 0}
-                onClick={() => void submitOverride(Number(moreRounds))}
+                aria-disabled={isSetCapDisabled}
+                onClick={() => {
+                  if (isSetCapDisabled) return;
+                  track({
+                    name: "stuck_item_rework_cap_override",
+                    category: "user_action",
+                    component: "StuckItemDetail",
+                    labels: { unlimited: "false" },
+                  });
+                  void submitOverride(Number(moreRounds));
+                }}
                 data-testid="stuck-item-rework-cap-allow-rounds"
               >
                 Set this item&apos;s cap to {moreRounds || 0} &amp; resume
@@ -208,8 +266,17 @@ export function StuckItemDetail({
               <button
                 type="button"
                 className={styles.overrideUnlimitedButton}
-                disabled={overrideState === "pending"}
-                onClick={() => void submitOverride(0)}
+                aria-disabled={isOverridePending}
+                onClick={() => {
+                  if (isOverridePending) return;
+                  track({
+                    name: "stuck_item_rework_cap_override",
+                    category: "user_action",
+                    component: "StuckItemDetail",
+                    labels: { unlimited: "true" },
+                  });
+                  void submitOverride(0);
+                }}
                 data-testid="stuck-item-rework-cap-unlimited"
               >
                 Remove cap for this item &amp; resume
@@ -251,8 +318,12 @@ export function StuckItemDetail({
               <button
                 type="button"
                 className={styles.overrideButton}
-                disabled={approveState === "pending"}
-                onClick={() => void submitApprovePlan()}
+                aria-disabled={isApprovePending}
+                onClick={() => {
+                  if (isApprovePending) return;
+                  track({ name: "stuck_item_approve_plan", category: "user_action", component: "StuckItemDetail" });
+                  void submitApprovePlan();
+                }}
                 data-testid="stuck-item-approve-plan"
               >
                 {approveState === "pending" ? "Approving…" : "Approve Plan"}
@@ -303,6 +374,52 @@ export function StuckItemDetail({
           >
             🔗 View PR #{item.prNumber} on GitHub
           </a>
+        </div>
+      )}
+
+      {onDiagnose && (
+        <div className={styles.overrideForm} data-testid="stuck-item-diagnose-form">
+          <button
+            type="button"
+            className={styles.overrideButton}
+            aria-disabled={isDiagnosePending}
+            onClick={() => {
+              if (isDiagnosePending) return;
+              track({
+                name: "stuck_item_diagnose",
+                category: "user_action",
+                component: "StuckItemDetail",
+                labels: { reason: String(item.reason) },
+              });
+              void submitDiagnose();
+            }}
+            data-testid="stuck-item-diagnose"
+          >
+            {diagnoseState === "pending"
+              ? "Dispatching…"
+              : diagnoseState === "dispatched"
+                ? "Diagnostic session dispatched"
+                : "Diagnose & Nudge"}
+          </button>
+          {diagnoseState === "error" && (
+            <span className={styles.overrideStatus} role="alert" data-testid="stuck-item-diagnose-error">
+              {diagnoseError}
+            </span>
+          )}
+          {diagnoseState === "dispatched" && dispatchedSessionUuid && (
+            <span className={styles.overrideStatus} data-testid="stuck-item-diagnose-dispatched-detail">
+              <Link
+                className={styles.prLink}
+                href={routes.sessionDetail(dispatchedSessionUuid)}
+                data-testid="stuck-item-diagnose-session-link"
+                aria-label="Open the dispatched diagnostic session's transcript"
+              >
+                View diagnostic session →
+              </Link>{" "}
+              for its live log. Its conclusion (bug filed, note, or nudge) posts to this
+              item&apos;s Activity Log — see &quot;Open item detail&quot; below.
+            </span>
+          )}
         </div>
       )}
 

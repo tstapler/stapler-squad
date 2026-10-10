@@ -2409,12 +2409,17 @@ func (f *fakeOneShotShipRunner) RunOneShotForSession(ctx context.Context, sessio
 	return f.prURL, f.err
 }
 
-// fakeNotifierCall records a single Notify invocation's title, message body,
-// notification type, and urgent/important axes, so tests can assert on
+// fakeNotifierCall records a single Notify/NotifySession invocation's title, message
+// body, notification type, and urgent/important axes, so tests can assert on
 // interpolated message content (e.g. that a verdict/outcome actually reached
 // the message) and on differentiated ERROR/URGENT vs WARNING/HIGH severity,
-// not just which notification fired.
+// not just which notification fired. Method/RecipientID (added for
+// session/worktree_consistency_sweep.go's Architecture-A1 regression guard) record which
+// Notifier method fired and the itemID (Notify) or sessionID (NotifySession) it was
+// called with.
 type fakeNotifierCall struct {
+	Method           string // "Notify" or "NotifySession"
+	RecipientID      string // itemID (Notify) or sessionID (NotifySession)
 	Title            string
 	Message          string
 	NotificationType int32
@@ -2424,11 +2429,15 @@ type fakeNotifierCall struct {
 
 // fakeNotifier is a test double implementing Notifier, recording every call.
 type fakeNotifier struct {
-	calls []fakeNotifierCall // one per Notify call, in order
+	calls []fakeNotifierCall // one per Notify/NotifySession call, in order
 }
 
 func (f *fakeNotifier) Notify(itemID, title, message string, notificationType int32, urgent, important bool) {
-	f.calls = append(f.calls, fakeNotifierCall{Title: title, Message: message, NotificationType: notificationType, Urgent: urgent, Important: important})
+	f.calls = append(f.calls, fakeNotifierCall{Method: "Notify", RecipientID: itemID, Title: title, Message: message, NotificationType: notificationType, Urgent: urgent, Important: important})
+}
+
+func (f *fakeNotifier) NotifySession(sessionID, title, message string, notificationType int32, urgent, important bool) {
+	f.calls = append(f.calls, fakeNotifierCall{Method: "NotifySession", RecipientID: sessionID, Title: title, Message: message, NotificationType: notificationType, Urgent: urgent, Important: important})
 }
 
 // titles returns just the Title of every recorded call, in order — for tests (the
@@ -4243,22 +4252,28 @@ func TestReviewGateSpawn_should_FireForReviewToPrPending_When_AutomatedReviewGat
 	}()
 	waitWithTimeout(t, done)
 
+	// The spawner's call count is bumped before spawnReviewGate inserts the
+	// review ItemSession, so wait on the row itself, not the count.
+	var reviewEntry *ItemSessionSummary
 	wait.RequireEventually(t, func() bool {
-		return spawner.getCallCount() == 1
-	}, 2*time.Second, 20*time.Millisecond, "the built-in review->pr_pending gate must still spawn a review session")
+		sessions, listErr := storage.ListItemSessions(ctx, createdItem.ID)
+		if listErr != nil {
+			return false
+		}
+		reviewEntry = nil
+		for i := range sessions {
+			if sessions[i].Role == SessionRoleReview {
+				reviewEntry = &sessions[i]
+			}
+		}
+		return reviewEntry != nil
+	}, 2*time.Second, 20*time.Millisecond, "the built-in review->pr_pending gate must still spawn a review session and record its ItemSession")
+	require.Equal(t, 1, spawner.getCallCount())
 
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
 	require.NoError(t, err)
 	require.Equal(t, string(BacklogStatusReview), fetchedItem.Status)
 
-	sessions, err := storage.ListItemSessions(ctx, createdItem.ID)
-	require.NoError(t, err)
-	var reviewEntry *ItemSessionSummary
-	for i := range sessions {
-		if sessions[i].Role == SessionRoleReview {
-			reviewEntry = &sessions[i]
-		}
-	}
 	require.NotNil(t, reviewEntry, "a review ItemSession must be created")
 	assert.Equal(t, reviewInstance.UUID, reviewEntry.SessionUUID)
 }

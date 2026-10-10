@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -157,6 +158,54 @@ func TestFireNow_AdmissionAllowed_CreatesSession(t *testing.T) {
 	require.NoError(t, fireErr)
 	assert.True(t, gate.called)
 	assert.True(t, fakeSess.called, "CreateSession should be called once admission is granted")
+}
+
+// TestDeriveWorkflowSessionTitle covers the arg → title mapping a manual
+// @<slug> omnibar fire (or run_workflow) relies on: a bare GitHub PR/branch/repo
+// reference in arg becomes an identifiable owner/repo-based title instead of
+// the generic timestamp default, matching create_session_for_pr's convention.
+func TestDeriveWorkflowSessionTitle(t *testing.T) {
+	wf := &ent.Workflow{Name: "pr-review"}
+
+	prTitle := deriveWorkflowSessionTitle(wf, "https://github.com/tstapler/stapler-squad/pull/123")
+	assert.Equal(t, "tstapler/stapler-squad#123", prTitle)
+
+	branchTitle := deriveWorkflowSessionTitle(wf, "  https://github.com/tstapler/stapler-squad/tree/my-branch  ")
+	assert.Equal(t, "tstapler/stapler-squad:my-branch", branchTitle)
+
+	repoTitle := deriveWorkflowSessionTitle(wf, "https://github.com/tstapler/stapler-squad")
+	assert.Equal(t, "tstapler/stapler-squad", repoTitle)
+
+	notGitHub := deriveWorkflowSessionTitle(wf, "review this please")
+	assert.Contains(t, notGitHub, "pr-review — ", "non-GitHub arg should fall back to the default timestamp title")
+
+	empty := deriveWorkflowSessionTitle(wf, "")
+	assert.Contains(t, empty, "pr-review — ", "empty arg should fall back to the default timestamp title")
+}
+
+// TestFireNow_PRUrlArg_UsesOwnerRepoTitleAndInjectsSessionID verifies the
+// pr-review workflow story end to end: firing with a PR URL as arg both names
+// the created session "owner/repo#N" and substitutes that same value for
+// {{session_id}} in the rendered prompt, so the workflow's own command can
+// instruct the agent how to rename itself later via update_session.
+func TestFireNow_PRUrlArg_UsesOwnerRepoTitleAndInjectsSessionID(t *testing.T) {
+	fakeSess := &fakeSessionService{}
+	sched, wfRepo, _ := newTestScheduler(t, fakeSess)
+
+	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+		Slug:            "pr-review",
+		Name:            "PR Review",
+		Command:         "Review {{input}}. Your session_id is {{session_id}} -- rename yourself once you know the PR title.",
+		TargetDirectory: "/tmp/test",
+	})
+	require.NoError(t, err)
+
+	_, fireErr := sched.FireNow(context.Background(), wf, "https://github.com/tstapler/stapler-squad/pull/456")
+	require.NoError(t, fireErr)
+
+	require.NotNil(t, fakeSess.lastReq)
+	assert.Equal(t, "tstapler/stapler-squad#456", fakeSess.lastReq.Title)
+	assert.Contains(t, fakeSess.lastReq.InitialPrompt, "session_id is tstapler/stapler-squad#456")
 }
 
 // TestScheduler_Start_DoesNotRegisterMismatchedTriggerAsCron verifies Task 1.1.1f: a
@@ -672,4 +721,97 @@ func TestFireNow_OverrideFile_ExpectNewLatestPickedUpWithoutCodeChange(t *testin
 	require.NoError(t, err)
 	require.NotNil(t, fakeSess.lastReq)
 	assert.Equal(t, "claude --model claude-sonnet-9999-override", fakeSess.lastReq.Program)
+}
+
+// uniqueTitleSessionService mimics SessionService.CreateSession's title-uniqueness
+// check: a duplicate title returns CodeAlreadyExists.
+type uniqueTitleSessionService struct {
+	mu      sync.Mutex
+	titles  map[string]bool
+	prompts map[string]string // title -> InitialPrompt of the created session
+	seq     int
+}
+
+func (f *uniqueTitleSessionService) CreateSession(_ context.Context, req *connect.Request[sessionv1.CreateSessionRequest]) (*connect.Response[sessionv1.CreateSessionResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.titles == nil {
+		f.titles = map[string]bool{}
+	}
+	if f.titles[req.Msg.Title] {
+		return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("session with title '%s' already exists", req.Msg.Title))
+	}
+	f.titles[req.Msg.Title] = true
+	if f.prompts != nil {
+		f.prompts[req.Msg.Title] = req.Msg.InitialPrompt
+	}
+	f.seq++
+	return connect.NewResponse(&sessionv1.CreateSessionResponse{
+		Session: &sessionv1.Session{Id: fmt.Sprintf("sess-%d", f.seq)},
+	}), nil
+}
+
+// TestFireNow_ConcurrentSameMinuteRuns_AllCreated is the regression test for
+// run_workflow failing with "session with title ... already exists" when several
+// runs of one workflow start within the same minute.
+func TestFireNow_ConcurrentSameMinuteRuns_AllCreated(t *testing.T) {
+	const n = 8
+	fake := &uniqueTitleSessionService{}
+	sched, wfRepo, _ := newTestScheduler(t, fake)
+	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+		Slug: "concurrent-wf", Name: "PR Code Review", Command: "review {{input}}", TargetDirectory: "/tmp/test",
+	})
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = sched.FireNow(context.Background(), wf, fmt.Sprintf("pr %d", i))
+		}(i)
+	}
+	wg.Wait()
+
+	for i, e := range errs {
+		assert.NoError(t, e, "run %d", i)
+	}
+	assert.Len(t, fake.titles, n, "every run must get a distinct session title")
+}
+
+// TestFireNow_TitleCollision_AutoDeduped covers a collision the default title
+// can't avoid: re-running the same GitHub PR reference yields the same derived title.
+func TestFireNow_TitleCollision_AutoDeduped(t *testing.T) {
+	fake := &uniqueTitleSessionService{}
+	sched, wfRepo, _ := newTestScheduler(t, fake)
+	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+		Slug: "dedupe-wf", Name: "PR Review", Command: "review {{input}} as {{session_id}}", TargetDirectory: "/tmp/test",
+	})
+	require.NoError(t, err)
+
+	const pr = "https://github.com/corp/repo/pull/42"
+	for i := 0; i < 3; i++ {
+		_, err := sched.FireNow(context.Background(), wf, pr)
+		require.NoError(t, err, "run %d", i)
+	}
+	assert.True(t, fake.titles["corp/repo#42"])
+	assert.True(t, fake.titles["corp/repo#42 (2)"])
+	assert.True(t, fake.titles["corp/repo#42 (3)"])
+}
+
+// TestFireNow_TitleDedupe_DoesNotCorruptArgInPrompt guards the retry's prompt
+// rewrite: the derived title ("foo/bar") is a substring of the arg URL, which
+// must reach the agent unchanged while {{session_id}} follows the deduped title.
+func TestFireNow_TitleDedupe_DoesNotCorruptArgInPrompt(t *testing.T) {
+	fake := &uniqueTitleSessionService{titles: map[string]bool{"foo/bar": true}, prompts: map[string]string{}}
+	sched, wfRepo, _ := newTestScheduler(t, fake)
+	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+		Slug: "argcorrupt-wf", Name: "Repo Review", Command: "review {{input}} as {{session_id}}", TargetDirectory: "/tmp/test",
+	})
+	require.NoError(t, err)
+
+	_, err = sched.FireNow(context.Background(), wf, "https://github.com/foo/bar")
+	require.NoError(t, err)
+	assert.Equal(t, "review https://github.com/foo/bar as foo/bar (2)", fake.prompts["foo/bar (2)"])
 }

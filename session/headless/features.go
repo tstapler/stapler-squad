@@ -13,15 +13,20 @@ import (
 
 // Feature key constants for well-known AI features.
 const (
-	FeatureKeyReview             FeatureKey = "review"
-	FeatureKeySummarize          FeatureKey = "summarize"
-	FeatureKeyAC                 FeatureKey = "acceptance-criteria"
-	FeatureKeyPRDescription      FeatureKey = "pr-description"
-	FeatureKeyCommitMessage      FeatureKey = "commit-message"
-	FeatureKeyCustom             FeatureKey = "custom"
-	FeatureKeyAutonomousFix      FeatureKey = "autonomous_fix"
-	FeatureKeyAutonomousApproval FeatureKey = "autonomous_approval"
-	FeatureKeyTriage             FeatureKey = "triage"
+	FeatureKeyReview        FeatureKey = "review"
+	FeatureKeySummarize     FeatureKey = "summarize"
+	FeatureKeyAC            FeatureKey = "acceptance-criteria"
+	FeatureKeyPRDescription FeatureKey = "pr-description"
+	FeatureKeyCommitMessage FeatureKey = "commit-message"
+	FeatureKeyCustom        FeatureKey = "custom"
+	// FeatureKeyUnfinishedWorkSummary and FeatureKeyInstanceResume name the formerly
+	// hard-coded claude call sites so settings can override them per feature.
+	FeatureKeyUnfinishedWorkSummary FeatureKey = "unfinished-work-summary"
+	FeatureKeyInstanceResume        FeatureKey = "instance-resume"
+	FeatureKeyRulesGeneration       FeatureKey = "rules-generation"
+	FeatureKeyAutonomousFix         FeatureKey = "autonomous_fix"
+	FeatureKeyAutonomousApproval    FeatureKey = "autonomous_approval"
+	FeatureKeyTriage                FeatureKey = "triage"
 	// FeatureKeyBacklogIntentParse: excluded from AllowedFeatureKeys, same
 	// rationale as FeatureKeyTriage — called directly from BacklogService,
 	// not exposed via the public MCP headless-call gate.
@@ -226,6 +231,8 @@ const headlessTriageSystemPrompt = `You are a senior software architect performi
 
 This is a single, non-interactive call with no later turn: once you stop producing tool calls, this process exits and whatever text you last wrote becomes the final, and only, result. If any tool or subagent you use reports that it is running in the background, you must still wait for it to actually finish and produce its real output before you continue - poll or re-check within this same call rather than assuming a future message will notify you, because no future message is coming. Never end your response with a status update describing work still in progress (for example "I will wait for its completion" or "running in the background") - that text would become this call's entire final output, with none of the underlying work actually finished.
 
+When you have multiple subagents running in parallel, do not re-check status after every individual one reports back - each subagent's completion already interrupts your wait automatically the moment it happens, so calling a status/list tool or re-arming a watch per notification only adds a wasted turn that re-reads this entire call's accumulated context from scratch. Only check overall status when you actually need it to decide what to do next (for example, before starting a phase that depends on a whole batch of prior results) - wait for the full batch you dispatched together rather than checking in on its members one at a time.
+
 Rules:
 1. Write all planning files to the artifact directory specified in the user prompt.
 2. Do NOT modify any source code.
@@ -241,7 +248,7 @@ func HeadlessTriageSystemPrompt() string { return headlessTriageSystemPrompt }
 
 // SummarizeBacklogItem calls the LLM to summarize a backlog item.
 // Returns the summary text from the JSON response.
-func SummarizeBacklogItem(ctx context.Context, pool *Pool, title, description string) (string, error) {
+func SummarizeBacklogItem(ctx context.Context, pool PoolClient, title, description string) (string, error) {
 	userPrompt := fmt.Sprintf("Title: %s\n\nDescription: %s", title, description)
 	raw, err := pool.CallBlocking(ctx, FeatureKeySummarize, summarizeSystemPrompt, userPrompt, CallOptions{}, DiscardCost)
 	if err != nil {
@@ -261,7 +268,7 @@ func SummarizeBacklogItem(ctx context.Context, pool *Pool, title, description st
 
 // GenerateAcceptanceCriteria calls the LLM to generate acceptance criteria.
 // Returns a slice of criterion strings.
-func GenerateAcceptanceCriteria(ctx context.Context, pool *Pool, title, description string) ([]string, error) {
+func GenerateAcceptanceCriteria(ctx context.Context, pool PoolClient, title, description string) ([]string, error) {
 	userPrompt := fmt.Sprintf("Title: %s\n\nDescription: %s", title, description)
 	raw, err := pool.CallBlocking(ctx, FeatureKeyAC, acSystemPrompt, userPrompt, CallOptions{}, DiscardCost)
 	if err != nil {
@@ -294,7 +301,7 @@ func GenerateAcceptanceCriteria(ctx context.Context, pool *Pool, title, descript
 // Returns the drafted body and the USD cost of the call (0 on error) — callers
 // with a session to attribute it to should persist it, e.g. via
 // session.CostSinkForSessionUUID.
-func DraftPRDescription(ctx context.Context, pool *Pool, itemTitle, itemDescription, diff, branchName string) (string, float64, error) {
+func DraftPRDescription(ctx context.Context, pool PoolClient, itemTitle, itemDescription, diff, branchName string) (string, float64, error) {
 	if strings.TrimSpace(diff) == "" {
 		return "", 0, fmt.Errorf("DraftPRDescription: empty diff, nothing to describe")
 	}
@@ -313,7 +320,7 @@ func DraftPRDescription(ctx context.Context, pool *Pool, itemTitle, itemDescript
 
 // SuggestCommitMessage calls the LLM to generate a Conventional Commit message.
 // Diffs longer than maxDiffSizeCommit bytes are truncated before sending.
-func SuggestCommitMessage(ctx context.Context, pool *Pool, diff string) (string, error) {
+func SuggestCommitMessage(ctx context.Context, pool PoolClient, diff string) (string, error) {
 	if len(diff) > maxDiffSizeCommit {
 		diff = diff[:maxDiffSizeCommit]
 	}

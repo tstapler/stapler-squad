@@ -44,7 +44,14 @@ const OmnibarContext = createContext<OmnibarContextValue | null>(null);
 export function useOmnibar(): OmnibarContextValue {
   const context = useContext(OmnibarContext);
   if (!context) {
-    throw new Error("useOmnibar must be used within an OmnibarProvider");
+    return {
+      isOpen: false,
+      open: () => {},
+      openInCreationMode: () => {},
+      openOmnibar: () => {},
+      close: () => {},
+      toggle: () => {},
+    };
   }
   return context;
 }

@@ -119,6 +119,16 @@ function SettingsPageInner() {
                 Tag Classification (AI tagging model) →
               </Link>
             </section>
+            <section className={styles.section}>
+              <Link href={routes.settingsLlmBackends} className={styles.helpLink} data-testid="settings-llm-backends-link">
+                LLM Backends (claude / consolette / agy / gemini / opencode) →
+              </Link>
+            </section>
+            <section className={styles.section}>
+              <Link href={routes.settingsBackgroundModels} className={styles.helpLink} data-testid="settings-background-models-link">
+                Background Models (cheaper models and effort for unattended work) →
+              </Link>
+            </section>
             {/* Help subsection */}
             <section className={styles.section}>
               <div className={styles.helpSection}>

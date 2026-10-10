@@ -197,6 +197,14 @@ service SessionService {
   // classification. Takes effect on the next classification with no restart.
   rpc UpdateTaggingClassifierConfig(UpdateTaggingClassifierConfigRequest) returns (UpdateTaggingClassifierConfigResponse) {}
 
+  // GetBackgroundModels returns the model/effort pins for unattended LLM work (overrides
+  // plus built-in defaults).
+  rpc GetBackgroundModels(GetBackgroundModelsRequest) returns (GetBackgroundModelsResponse) {}
+
+  // UpdateBackgroundModels replaces the model/effort overrides. Applies on the next call
+  // with no restart.
+  rpc UpdateBackgroundModels(UpdateBackgroundModelsRequest) returns (UpdateBackgroundModelsResponse) {}
+
   // GetApprovalAnalytics returns aggregated analytics for classification decisions.
   rpc GetApprovalAnalytics(GetApprovalAnalyticsRequest) returns (GetApprovalAnalyticsResponse) {}
 
@@ -596,6 +604,13 @@ service SessionService {
   // UnarchiveSession clears archived_at, restoring the session to the default list.
   rpc UnarchiveSession(UnarchiveSessionRequest) returns (UnarchiveSessionResponse) {}
 
+  // PinSession pins a session so it surfaces in the dedicated Pinned section.
+  // Idempotent; rejects an archived session.
+  rpc PinSession(PinSessionRequest) returns (PinSessionResponse) {}
+
+  // UnpinSession clears the pinned flag. Idempotent.
+  rpc UnpinSession(UnpinSessionRequest) returns (UnpinSessionResponse) {}
+
   // ArchiveWorkflowSessions archives all non-active sessions for a given workflow.
   // Active, Creating, and Paused sessions are silently skipped.
   // Returns the count of sessions that were archived.
@@ -635,6 +650,19 @@ service SessionService {
   // obtain explicit user confirmation before calling this.
   // +api: tmux:restart-server
   rpc RestartTmuxServer(RestartTmuxServerRequest) returns (RestartTmuxServerResponse) {}
+
+  // SetCaptureTap turns the terminal-stream capture tap on or off at runtime,
+  // for the named sessions or (empty session_ids) all sessions. Loopback
+  // requests only; the output directory is fixed server-side. Every enable
+  // expires after ttl_seconds. The tap records raw terminal output, which can
+  // include secrets. See docs/how-to/capture-terminal-stream-tap.md.
+  // +api: capture-tap:set
+  rpc SetCaptureTap(SetCaptureTapRequest) returns (SetCaptureTapResponse) {}
+
+  // GetCaptureTap reports the capture tap's current state. Loopback requests
+  // only, because the response names local file paths.
+  // +api: capture-tap:get
+  rpc GetCaptureTap(GetCaptureTapRequest) returns (GetCaptureTapResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -1876,6 +1904,34 @@ message UpdateTaggingClassifierConfigResponse {
   TaggingClassifierConfigProto config = 1;
 }
 
+message BackgroundModelsProto {
+  // Headless feature key -> model alias/ID override.
+  map<string, string> features = 1;
+  // Backlog stage role ("work", "review") -> model alias/ID override.
+  map<string, string> stages = 2;
+  // --effort level for background work sessions; empty = server default ("medium"); "off" = no --effort flag.
+  string effort = 3;
+}
+
+message GetBackgroundModelsRequest {}
+
+message GetBackgroundModelsResponse {
+  BackgroundModelsProto settings = 1;
+  // Built-in defaults, keyed like settings; a blank override resolves to these.
+  map<string, string> feature_defaults = 2;
+  map<string, string> stage_defaults = 3;
+  // Accepted --effort values.
+  repeated string effort_levels = 4;
+}
+
+message UpdateBackgroundModelsRequest {
+  BackgroundModelsProto settings = 1;
+}
+
+message UpdateBackgroundModelsResponse {
+  BackgroundModelsProto settings = 1;
+}
+
 message GetApprovalAnalyticsRequest {
   // Time window in days (default 7, max 90).
   optional int32 window_days = 1;
@@ -2178,7 +2234,7 @@ message SessionDefaultsConfig {
   string new_project_base_dir = 9;
   // Max automated rework iterations before a backlog item's auto-reopen loop
   // leaves it in review for manual action. 0 in a request means "use the
-  // server default (3)"; the response always echoes the resolved value.
+  // server default (5)"; the response always echoes the resolved value.
   int32 max_auto_rework_iterations = 10;
   // Max backlog items that may be in_progress at once. 0 in a request means
   // "use the server default (2)"; the response always echoes the resolved value.
@@ -2191,6 +2247,9 @@ message SessionDefaultsConfig {
   // Global default configurable crash/stall retry policy
   // (session-retry-backoff). Always the resolved value in responses.
   RetryPolicyConfig retry_policy = 14;
+  // Max turns one autonomous-driver session may run. The response always echoes the
+  // resolved value (default 30, bounded [1, 200]).
+  int32 autonomous_max_turns = 15;
 }
 
 // RetryPolicyConfig describes the automated crash/stall retry policy: how
@@ -2259,7 +2318,7 @@ message UpdateGlobalDefaultsRequest {
   string one_off_base_dir = 6;
   // Base directory where new project folders are created. Defaults to ~/Projects.
   string new_project_base_dir = 7;
-  // 0 = use the server default (3). See SessionDefaultsConfig.max_auto_rework_iterations.
+  // 0 = use the server default (5). See SessionDefaultsConfig.max_auto_rework_iterations.
   int32 max_auto_rework_iterations = 8;
   // 0 = use the server default (2). See SessionDefaultsConfig.max_concurrent_backlog_work_items.
   int32 max_concurrent_backlog_work_items = 9;
@@ -2270,6 +2329,8 @@ message UpdateGlobalDefaultsRequest {
   // (session-retry-backoff). Applies to newly-started retry episodes only —
   // a session already mid-backoff keeps the policy it started with.
   RetryPolicyConfig retry_policy = 12;
+  // 0 = use the server default (30). See SessionDefaultsConfig.autonomous_max_turns.
+  int32 autonomous_max_turns = 13;
 }
 
 message UpdateGlobalDefaultsResponse {
@@ -3590,6 +3651,10 @@ message WorkflowEvent {
   // "no sequence information" -- used for the synthetic initial-snapshot
   // events, which don't correspond to a single published bus event.
   uint64 seq = 7;
+
+  // Synthetic marker (oneof left unset) sent periodically on an otherwise-
+  // idle connection -- see SessionEvent.heartbeat's identical doc comment.
+  bool heartbeat = 8;
 }
 
 // WorkflowCreatedEvent is emitted when a new workflow is saved.
@@ -3680,6 +3745,16 @@ message UnarchiveSessionRequest {
 
 message UnarchiveSessionResponse {}
 
+message PinSessionRequest {
+  string session_id = 1;
+}
+message PinSessionResponse {}
+
+message UnpinSessionRequest {
+  string session_id = 1;
+}
+message UnpinSessionResponse {}
+
 message ArchiveWorkflowSessionsRequest {
   string workflow_id = 1;
 }
@@ -3725,3 +3800,83 @@ message GetProviderLimitsResponse {
   ProviderLimitsProto limits = 1;
 }
 
+// SetCaptureTapRequest enables or disables the terminal-stream capture tap.
+message SetCaptureTapRequest {
+  // true starts recording; false stops it and closes the files.
+  bool enabled = 1;
+
+  // Session titles to apply to (the title shown in the UI, not the tmux
+  // name). Empty means all sessions. Each id is at most 200 bytes with no
+  // control characters. Disabling named sessions while the tap is on for all
+  // sessions is rejected. Enabling all sessions replaces the operator env
+  // override's no-expiry with the TTL; disabling all sessions turns an
+  // env-enabled tap off until restart.
+  repeated string session_ids = 2;
+
+  // Seconds an enable lasts. 0 uses the default (30 minutes); values above
+  // 4 hours are clamped; negative is rejected when enabled is true. Ignored
+  // when enabled is false.
+  int32 ttl_seconds = 3;
+}
+
+// CaptureTapSessionStatus describes one session's capture file.
+message CaptureTapSessionStatus {
+  // Session title, the key used in SetCaptureTapRequest.session_ids.
+  string name = 1;
+
+  // Absolute path of the JSONL file. Empty until the file is first opened.
+  string path = 2;
+
+  // true while this session is recording.
+  bool enabled = 3;
+
+  // Size of the file, including earlier appends.
+  int64 bytes_written = 4;
+
+  // The 64 MiB per-file cap stopped the tap for this session. Enabling again
+  // rotates the full file to "<path>.old" (replacing any earlier .old) and
+  // records into a fresh file.
+  bool capped = 5;
+
+  // A file or write error stopped the tap for this session. Enabling again
+  // retries.
+  bool failed = 6;
+
+  // The full file was rotated to "<path>.old" by the latest enable.
+  bool rotated = 7;
+}
+
+// CaptureTapState is the capture tap's current state.
+message CaptureTapState {
+  // true while any session is recording.
+  bool enabled = 1;
+
+  // "all" (every session), "sessions" (only session_ids) or "off".
+  string scope = 2;
+
+  // Session titles enabled by name.
+  repeated string session_ids = 3;
+
+  // Latest deadline among the enabled scopes. Unset when off or when the
+  // operator enabled the tap at startup (no expiry).
+  google.protobuf.Timestamp ttl_expires_at = 4;
+
+  // Directory the files are written to.
+  string dir = 5;
+
+  // Sessions that are recording or were stopped by the cap or an error.
+  repeated CaptureTapSessionStatus sessions = 6;
+}
+
+// SetCaptureTapResponse carries the state after the change.
+message SetCaptureTapResponse {
+  CaptureTapState state = 1;
+}
+
+// GetCaptureTapRequest has no fields.
+message GetCaptureTapRequest {}
+
+// GetCaptureTapResponse carries the current state.
+message GetCaptureTapResponse {
+  CaptureTapState state = 1;
+}

@@ -210,8 +210,13 @@ type Config struct {
 	// serialized since the field is unexported; read via SlackSigningSecretOverride().
 	slackSigningSecretOverride string
 	// ListenAddress is the address the HTTP server listens on.
-	// Default: "localhost:8543". Set to "0.0.0.0:8543" for remote access.
+	// Must be loopback (localhost, 127.0.0.1, ::1); startup rejects anything else.
+	// Default: "localhost:8543". Remote access uses the separate HTTPS listener.
 	ListenAddress string `json:"listen_address"`
+	// GitBackendCohorts maps a git backend cohort name (refs, diffstatus, localwrite,
+	// network, worktree) to a mode (cli, gogit, shadow). Raw on purpose: validation and
+	// defaulting happen in session/gitwiring.ParseCohortMap. Absent key means cli.
+	GitBackendCohorts GitBackendCohortsConfig `json:"git_backend_cohorts,omitempty"`
 	// PasskeyRPID is the WebAuthn Relying Party ID (effective domain, no scheme/port).
 	// Example: "192.168.1.42" or "myhost.local". Must match the hostname clients use.
 	// Required when remote access is enabled.
@@ -219,6 +224,12 @@ type Config struct {
 	// PasskeyEnabled controls whether passkey authentication is enforced.
 	// Automatically set to true when non-localhost listen address is used.
 	PasskeyEnabled bool `json:"passkey_enabled"`
+	// RequireLocalAuth makes the :8543 listener demand credentials (a passkey
+	// session cookie or the local API token) instead of trusting loopback
+	// RemoteAddr. Off by default: a same-box reverse proxy or other local
+	// process otherwise reaches every route. Non-browser clients read the token
+	// from <config dir>/auth/local-api-token.
+	RequireLocalAuth bool `json:"require_local_auth,omitempty"`
 	// DefaultProgram is the default program to run in new instances
 	DefaultProgram string `json:"default_program"`
 	// AutoYes is a flag to automatically accept all prompts.
@@ -227,6 +238,11 @@ type Config struct {
 	DaemonPollInterval int `json:"daemon_poll_interval"`
 	// BranchPrefix is the prefix used for git branches created by the application.
 	BranchPrefix string `json:"branch_prefix"`
+	// HeadlessTriageMaxTurns / HeadlessTriageMaxSubagents cap one sdd-mode headless
+	// triage call's assistant turns / subagent launches (ADR-029). 0 = use the
+	// default; negative = no limit. Read via the *OrDefault accessors.
+	HeadlessTriageMaxTurns     int `json:"headless_triage_max_turns,omitempty"`
+	HeadlessTriageMaxSubagents int `json:"headless_triage_max_subagents,omitempty"`
 	// DetectNewSessions is a flag to enable detection of new sessions from other windows
 	DetectNewSessions bool `json:"detect_new_sessions"`
 	// SessionDetectionInterval is the interval (ms) at which the daemon checks for new sessions
@@ -295,15 +311,35 @@ type Config struct {
 	ClaimantHostID string `json:"claimant_host_id,omitempty"`
 	// MaxAutoReworkIterations caps how many automated work sessions the backlog auto-reopen
 	// loop will spawn for a single item before leaving it for manual review. 0 = use the
-	// default (20). Individual items can also override this via
+	// default (DefaultMaxAutoReworkIterations). Individual items can also override this via
 	// BacklogItemData.ReworkCapOverride (0 = unlimited for that item, >0 = that item's own
 	// cap) — see effectiveReworkCap in server/services/backlog_service_triage.go.
 	MaxAutoReworkIterations int `json:"max_auto_rework_iterations,omitempty"`
 	// AutonomousMaxTurns caps how many turns a single AutonomousDriver run gets before
 	// stopping without a DONE signal (session/autonomous_driver.go). 0 = use the default
-	// (60); values above autonomousMaxTurnsHardCeiling are clamped to it. Unlike
+	// (30); values above autonomousMaxTurnsHardCeiling are clamped to it. Unlike
 	// MaxAutoReworkIterations (caps respawned sessions), this caps turns within one session.
 	AutonomousMaxTurns int `json:"autonomous_max_turns,omitempty"`
+	// DiagnoseNudgeMaxAttempts caps how many times the Diagnose & Nudge feature
+	// (BacklogStuckState.DiagnoseNudgeCount) will nudge the same stuck item before
+	// further automatic nudging stops and the dispatched agent's action space is
+	// narrowed to file-a-bug/post-a-note only. 0 = use the default (3); values
+	// above diagnoseNudgeMaxAttemptsHardCeiling are clamped to it.
+	DiagnoseNudgeMaxAttempts int `json:"diagnose_nudge_max_attempts,omitempty"`
+	// NoopDispatchThreshold is how many consecutive work sessions on one PASS-verdict
+	// item may end with no new commits before it is flagged repeated_noop_dispatch and
+	// further dispatch is blocked. 0 = use the default (3).
+	NoopDispatchThreshold int `json:"noop_dispatch_threshold,omitempty"`
+	// HeadlessTriageMaxCostUSD aborts a headless triage call whose estimated spend
+	// exceeds this many USD, independent of elapsed time. 0 = use the default ($25);
+	// negative disables the ceiling.
+	HeadlessTriageMaxCostUSD float64 `json:"headless_triage_max_cost_usd,omitempty"`
+	// MaxConcurrentTriage caps simultaneous headless triage calls; extra runs queue.
+	// 0 = default (8), clamped to [1, MaxConcurrentTriageCeiling].
+	MaxConcurrentTriage int `json:"max_concurrent_triage,omitempty"`
+	// HeadlessTriageModel is the model for triage when the item's pipeline mode does
+	// not pin one: a concrete ID or "family:<alias>". "" = family:sonnet; "none" = account default.
+	HeadlessTriageModel string `json:"headless_triage_model,omitempty"`
 	// MaxConcurrentBacklogWorkItems caps how many distinct backlog items may be
 	// "in_progress" at the same time. 0 = use the default (2). Values above
 	// maxConcurrentBacklogWorkItemsHardCeiling are clamped to the ceiling.
@@ -332,6 +368,10 @@ type Config struct {
 	// Keys are machine names (e.g. "backlog"); values are booleans.
 	// Absent key == disabled (false is the safe default for all flags).
 	FeatureFlags map[string]bool `json:"feature_flags,omitempty"`
+	// LLMBackends selects which backend serves headless (non-interactive) LLM
+	// calls: a global default plus per-feature overrides. Edited live through the
+	// LLM backend settings RPC; no environment variables.
+	LLMBackends LLMBackendsConfig `json:"llm_backends,omitempty"`
 	// Hibernation holds configuration for the session hibernation feature.
 	Hibernation HibernationConfig `json:"hibernation,omitempty"`
 	// Capacity holds configuration for the provider capacity monitoring and transition feature.
@@ -371,6 +411,8 @@ type Config struct {
 	// TaggingClassifier holds the LLM model hierarchy for session-tag
 	// classification (primary model plus ordered fallbacks).
 	TaggingClassifier TaggingClassifierConfig `json:"tagging_classifier,omitempty"`
+	// BackgroundModels pins model/effort for unattended LLM work (see background_models.go).
+	BackgroundModels BackgroundModelsConfig `json:"background_models,omitempty"`
 
 	// Escape analytics configuration
 
@@ -476,6 +518,25 @@ const TriageGuidanceHaltFeatureFlag = "triage_guidance_halt"
 // matters (mirrors EffectiveTymuxEnabled's live-read contract).
 func EffectiveTriageGuidanceHaltEnabled(cfg *Config) bool {
 	return cfg.GetFeatureFlagWithDefault(TriageGuidanceHaltFeatureFlag, false)
+}
+
+// DiagnoseNudgeFeatureFlag is the config.FeatureFlags key backing
+// EffectiveDiagnoseNudgeEnabled — the kill switch for autonomous
+// diagnose_nudge_session writes (Diagnose & Nudge, backlog item 68964304).
+// Shipped with no way to disable short of a code change/redeploy; this flag
+// closes that gap. Defaults to off, same posture as TymuxFeatureFlag/
+// TriageGuidanceHaltFeatureFlag: no rollback rehearsal has vouched for
+// autonomous nudging as the default yet.
+const DiagnoseNudgeFeatureFlag = "diagnose_nudge_enabled"
+
+// EffectiveDiagnoseNudgeEnabled reports whether a dispatched Diagnose & Nudge
+// agent may actually perform a nudge write. Callers must read this fresh at
+// the exact write instant (diagnose_nudge_session's MCP handler), not cache
+// it at dispatch start — an in-flight diagnostic session that already
+// decided to nudge before the flag flips off must still be blocked at the
+// write call site.
+func EffectiveDiagnoseNudgeEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(DiagnoseNudgeFeatureFlag, false)
 }
 
 // EffectiveTymuxEnabled reports whether the global tymux process-manager
@@ -829,6 +890,42 @@ func (c *Config) TriageArtifactDirOrDefault() (string, error) {
 	return filepath.Join(configDir, "triage-artifacts"), nil
 }
 
+// Defaults sit between a normal sdd triage call and the #882 incident (1,094
+// turns, 262 subagent completions); re-tune from the logged per-call counters.
+const (
+	DefaultHeadlessTriageMaxTurns     = 600
+	DefaultHeadlessTriageMaxSubagents = 120
+)
+
+// HeadlessTriageMaxTurnsOrDefault resolves the sdd triage turn ceiling: the
+// default when unset, 0 (disabled in headless.CallOptions) when configured < 0.
+func (c *Config) HeadlessTriageMaxTurnsOrDefault() int {
+	if c == nil {
+		return 0
+	}
+	return ceilingOrDefault(c.HeadlessTriageMaxTurns, DefaultHeadlessTriageMaxTurns)
+}
+
+// HeadlessTriageMaxSubagentsOrDefault resolves the sdd triage subagent ceiling
+// (launches, not completions) with the same semantics as the turn ceiling.
+func (c *Config) HeadlessTriageMaxSubagentsOrDefault() int {
+	if c == nil {
+		return 0
+	}
+	return ceilingOrDefault(c.HeadlessTriageMaxSubagents, DefaultHeadlessTriageMaxSubagents)
+}
+
+func ceilingOrDefault(configured, def int) int {
+	switch {
+	case configured < 0:
+		return 0
+	case configured == 0:
+		return def
+	default:
+		return configured
+	}
+}
+
 // HeadlessFailureCaptureDirOrDefault returns the resolved directory for durable
 // headless (triage/review claude -p) failure captures — see
 // session.WriteHeadlessFailureCapture. "headless-failures" under GetConfigDir() —
@@ -908,32 +1005,94 @@ func (c *Config) AnalyticsMaxRowsOrDefault() int {
 	return c.AnalyticsMaxRows
 }
 
-// MaxAutoReworkIterationsOrDefault returns the configured rework-cap ceiling, or 20
-// if not set (zero value) or c is nil (BacklogService's cfg is nil in some test setups).
-// Raised from 3 to 20: 3 was tripping routinely on real, ultimately-fixable items
-// (e.g. a multi-round diff/review-harness flake, or a straightforward merge conflict)
-// well before the work was actually stuck, forcing manual "Reopen for Revision" clicks
-// for otherwise-recoverable items. Genuinely stuck items still get caught — just
-// later — and per-item overrides (BacklogItemData.ReworkCapOverride) exist for cases
-// that need to go further still.
+// HeadlessTriageMaxCostUSDDefault is the cost ceiling for one headless triage call
+// when unconfigured: well above a normal multi-subagent triage, well below the
+// $106.69 runaway that motivated it.
+const HeadlessTriageMaxCostUSDDefault = 25.0
+
+// HeadlessTriageMaxCostUSDOrDefault returns the triage cost ceiling in USD, or 0
+// when it is disabled (negative config value). Falls back to the default if unset or c is nil.
+func (c *Config) HeadlessTriageMaxCostUSDOrDefault() float64 {
+	switch {
+	case c == nil || c.HeadlessTriageMaxCostUSD == 0:
+		return HeadlessTriageMaxCostUSDDefault
+	case c.HeadlessTriageMaxCostUSD < 0:
+		return 0
+	}
+	return c.HeadlessTriageMaxCostUSD
+}
+
+const (
+	DefaultMaxConcurrentTriage = 8
+	MaxConcurrentTriageCeiling = 64
+	// DefaultHeadlessTriageModel is a cheaper tier than the account default; triage
+	// output is structured planning, not deep code generation.
+	DefaultHeadlessTriageModel = "family:sonnet"
+	// HeadlessTriageModelAccountDefault opts out of the model pin.
+	HeadlessTriageModelAccountDefault = "none"
+)
+
+// MaxConcurrentTriageOrDefault returns the triage concurrency cap, nil-safe.
+func (c *Config) MaxConcurrentTriageOrDefault() int {
+	switch {
+	case c == nil || c.MaxConcurrentTriage <= 0:
+		return DefaultMaxConcurrentTriage
+	case c.MaxConcurrentTriage > MaxConcurrentTriageCeiling:
+		return MaxConcurrentTriageCeiling
+	}
+	return c.MaxConcurrentTriage
+}
+
+// HeadlessTriageModelOrDefault returns the configured triage model ("" when the
+// operator opted out via "none"), nil-safe.
+func (c *Config) HeadlessTriageModelOrDefault() string {
+	switch {
+	case c == nil || c.HeadlessTriageModel == "":
+		return DefaultHeadlessTriageModel
+	case c.HeadlessTriageModel == HeadlessTriageModelAccountDefault:
+		return ""
+	}
+	return c.HeadlessTriageModel
+}
+
+// NoopDispatchThresholdOrDefault returns the configured no-op dispatch threshold, or 3
+// if unset or c is nil.
+func (c *Config) NoopDispatchThresholdOrDefault() int {
+	if c == nil || c.NoopDispatchThreshold <= 0 {
+		return 3
+	}
+	return c.NoopDispatchThreshold
+}
+
+// DefaultMaxAutoReworkIterations is the rework cap applied when unset. It is
+// served to the settings form via GetSessionDefaults, so the UI shows the value
+// the server enforces. 20 never fired on live data (max 9 work sessions on any
+// item, mostly zero-commit) while costing real spend; per-item ReworkCapOverride
+// covers items that need more.
+const DefaultMaxAutoReworkIterations = 5
+
+// MaxAutoReworkIterationsOrDefault returns the configured rework-cap ceiling, or
+// DefaultMaxAutoReworkIterations if not set (zero value) or c is nil
+// (BacklogService's cfg is nil in some test setups).
 func (c *Config) MaxAutoReworkIterationsOrDefault() int {
 	if c == nil || c.MaxAutoReworkIterations <= 0 {
-		return 20
+		return DefaultMaxAutoReworkIterations
 	}
 	return c.MaxAutoReworkIterations
 }
 
 // autonomousMaxTurnsDefault is used when the config value is unset (0 or negative).
-// Raised from the driver's own historical fallback of 20, which was observed cutting
-// off recoverable multi-round work. autonomousMaxTurnsHardCeiling guards against a
+// 30 is ~1.8x the highest turn count seen in live driver logs (17); 60 was a
+// generous ceiling that let non-converging runs burn billed turns.
+// autonomousMaxTurnsHardCeiling guards against a
 // runaway config value burning billed turns on a non-converging run.
 const (
-	autonomousMaxTurnsDefault     = 60
+	autonomousMaxTurnsDefault     = 30
 	autonomousMaxTurnsHardCeiling = 200
 )
 
 // AutonomousMaxTurnsOrDefault returns the configured autonomous-driver turn cap,
-// clamped to [1, autonomousMaxTurnsHardCeiling]. Falls back to the default (60)
+// clamped to [1, autonomousMaxTurnsHardCeiling]. Falls back to the default (30)
 // if unset (<=0) or c is nil.
 func (c *Config) AutonomousMaxTurnsOrDefault() int {
 	if c == nil || c.AutonomousMaxTurns <= 0 {
@@ -943,6 +1102,28 @@ func (c *Config) AutonomousMaxTurnsOrDefault() int {
 		return autonomousMaxTurnsHardCeiling
 	}
 	return c.AutonomousMaxTurns
+}
+
+// diagnoseNudgeMaxAttemptsDefault is used when the config value is unset (0 or
+// negative). diagnoseNudgeMaxAttemptsHardCeiling guards against a runaway
+// config value letting the Diagnose & Nudge feature nudge a stuck session
+// indefinitely.
+const (
+	diagnoseNudgeMaxAttemptsDefault     = 3
+	diagnoseNudgeMaxAttemptsHardCeiling = 10
+)
+
+// DiagnoseNudgeMaxAttemptsOrDefault returns the configured Diagnose & Nudge
+// attempt cap, clamped to [1, diagnoseNudgeMaxAttemptsHardCeiling]. Falls back
+// to the default (3) if unset (<=0) or c is nil.
+func (c *Config) DiagnoseNudgeMaxAttemptsOrDefault() int {
+	if c == nil || c.DiagnoseNudgeMaxAttempts <= 0 {
+		return diagnoseNudgeMaxAttemptsDefault
+	}
+	if c.DiagnoseNudgeMaxAttempts > diagnoseNudgeMaxAttemptsHardCeiling {
+		return diagnoseNudgeMaxAttemptsHardCeiling
+	}
+	return c.DiagnoseNudgeMaxAttempts
 }
 
 // maxConcurrentBacklogWorkItemsDefault is used when the config value is unset (0
@@ -1342,6 +1523,32 @@ func saveConfigLocked(config *Config, configPath string) error {
 // SaveConfig exports the saveConfig function for use by other packages.
 func SaveConfig(config *Config) error {
 	return saveConfig(config)
+}
+
+// GitBackendCohortsConfig is the raw cohort-name -> mode map from config.json. Decoding is
+// tolerant so one malformed entry cannot fail the whole config load (which would reset
+// every other setting to defaults): non-string values keep their key with the raw JSON text
+// as the value, which session/gitwiring.ParseCohortMap rejects with a WARN naming the key,
+// and a null or non-object value decodes to an empty map.
+type GitBackendCohortsConfig map[string]string
+
+// UnmarshalJSON implements json.Unmarshaler; it never returns an error.
+func (g *GitBackendCohortsConfig) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil || len(raw) == 0 {
+		*g = nil
+		return nil
+	}
+	out := make(GitBackendCohortsConfig, len(raw))
+	for k, v := range raw {
+		var str string
+		if err := json.Unmarshal(v, &str); err != nil {
+			str = string(v)
+		}
+		out[k] = str
+	}
+	*g = out
+	return nil
 }
 
 // LoadConfigFromPath loads and parses a config file from an explicit path.
