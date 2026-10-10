@@ -61,6 +61,7 @@ func (s *SessionService) Shutdown() {
 	if store := s.GetAnalyticsStore(); store != nil {
 		store.Stop()
 	}
+	s.featureFlagSvc.Close()
 	// Stop accepting new tracked cleanup work before draining what's already
 	// tracked — see deleteCleanupClosed's doc comment for why this ordering
 	// (under deleteCleanupMu, before Wait) is what makes Add/Wait race-free.

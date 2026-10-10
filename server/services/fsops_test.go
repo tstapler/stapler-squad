@@ -63,7 +63,10 @@ func (m *memFS) stall() {
 		return
 	}
 	if m.syncEntered != nil {
-		m.syncEntered <- struct{}{}
+		select {
+		case m.syncEntered <- struct{}{}:
+		default: // never block a stalled call on an unread signal
+		}
 	}
 	<-m.syncStall
 }

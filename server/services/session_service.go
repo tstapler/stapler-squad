@@ -1028,7 +1028,37 @@ func newGatedSessionService(storage session.InstanceStore) *SessionService {
 	svc.deliveryGate = gate
 	svc.notificationSvc.SetDeliveryGate(gate)
 	svc.autonomousSvc.SetLegacyHiddenCounter(gate.CountLegacySuppressedType)
+	svc.wireGateFlag(gate)
 	return svc
+}
+
+// statsWriterNotRunning is the status_detail contribution (and the enable
+// refusal reason) while no stats writer runs.
+const statsWriterNotRunning = "stats writer not running"
+
+// wireGateFlag connects the gate flag to the flag service: the cache reloads on
+// every flip, enabling needs a running stats writer (so the soak is recorded),
+// and every flip is audited. Registration of the flag itself is separate.
+func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
+	ff := s.featureFlagSvc
+	ff.SetFlagObserver(gate.Flags())
+	ff.SetEnableGuard(config.HiddenSessionGateFeatureFlag, func() string {
+		if !gate.Stats().WriterRunning() {
+			return statsWriterNotRunning
+		}
+		return ""
+	})
+	ff.AddStatusDetailSource(config.HiddenSessionGateFeatureFlag, func() string {
+		if !gate.Stats().WriterRunning() {
+			return statsWriterNotRunning
+		}
+		return ""
+	})
+	sink := NewAuditSink(config.GetConfigDir,
+		WithAuditDegradedCounter(func(mode string) { gate.Metrics().Add(deliverygate.CounterAuditDegraded, mode) }))
+	ff.SetAudit(sink, map[string]FlagAuditPolicy{
+		config.HiddenSessionGateFeatureFlag: {}, // every gate flip takes the non-blocking path
+	})
 }
 
 // DeliveryGate returns the delivery gate, or nil when the service was built
