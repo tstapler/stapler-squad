@@ -51,86 +51,82 @@ func StartSubscriberWithInterval(ctx context.Context, bus *events.EventBus, stor
 		defer close(done)
 		log.Info("NotificationSubscriber started", "coalesce_interval", interval)
 		defer log.Info("NotificationSubscriber stopped")
-
-		var mu sync.Mutex
-		buffer := make(map[string]*NotificationRecord)
-
-		// flush sends all buffered records to the store and clears the buffer.
-		// Must be called with mu held or when no concurrent access is possible.
-		flush := func() {
-			if len(buffer) == 0 {
-				return
-			}
-			for key, record := range buffer {
-				if err := store.Append(record); err != nil {
-					log.Error("NotificationSubscriber failed to append notification", "err", err)
-				}
-				delete(buffer, key)
-			}
-		}
-
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		defer func() {
-			mu.Lock()
-			flush()
-			mu.Unlock()
-		}()
-
-		for {
-			select {
-			case event, ok := <-ch:
-				if !ok {
-					return
-				}
-				if event == nil || event.Type != events.EventNotification {
-					continue
-				}
-
-				record := eventToRecord(event)
-				if record == nil {
-					continue
-				}
-
-				key := coalesceKey(record.SessionID, record.NotificationType)
-
-				mu.Lock()
-				buffer[key] = record // Latest wins
-				// If buffer exceeds max size, flush immediately to prevent memory growth
-				if len(buffer) >= maxBufferSize {
-					flush()
-				}
-				mu.Unlock()
-
-			case <-ticker.C:
-				mu.Lock()
-				flush()
-				mu.Unlock()
-
-			case <-ctx.Done():
-				// Drain any events already in the channel so the deferred flush captures them.
-				mu.Lock()
-				for {
-					select {
-					case event, ok := <-ch:
-						if !ok {
-							mu.Unlock()
-							return
-						}
-						if event != nil && event.Type == events.EventNotification {
-							if record := eventToRecord(event); record != nil {
-								buffer[coalesceKey(record.SessionID, record.NotificationType)] = record
-							}
-						}
-					default:
-						mu.Unlock()
-						return
-					}
-				}
-			}
-		}
+		runSubscriber(ctx, ch, newCoalescingBuffer(store), interval)
 	}()
 	return done
+}
+
+// coalescingBuffer holds the latest record per (sessionID, notificationType) key
+// until flushed to the store. Used only from the subscriber goroutine.
+type coalescingBuffer struct {
+	store   Appender
+	records map[string]*NotificationRecord
+}
+
+func newCoalescingBuffer(store Appender) *coalescingBuffer {
+	return &coalescingBuffer{store: store, records: make(map[string]*NotificationRecord)}
+}
+
+// add buffers the record for a notification event (latest wins) and reports
+// whether the buffer has reached maxBufferSize and should be flushed.
+func (b *coalescingBuffer) add(event *events.Event) (full bool) {
+	if event == nil || event.Type != events.EventNotification {
+		return false
+	}
+	record := eventToRecord(event)
+	if record == nil {
+		return false
+	}
+	b.records[coalesceKey(record.SessionID, record.NotificationType)] = record
+	return len(b.records) >= maxBufferSize
+}
+
+func (b *coalescingBuffer) flush() {
+	for key, record := range b.records {
+		if err := b.store.Append(record); err != nil {
+			log.Error("NotificationSubscriber failed to append notification", "err", err)
+		}
+		delete(b.records, key)
+	}
+}
+
+// drain buffers every event already queued on ch without blocking.
+func (b *coalescingBuffer) drain(ch <-chan *events.Event) {
+	for {
+		select {
+		case event, ok := <-ch:
+			if !ok {
+				return
+			}
+			b.add(event)
+		default:
+			return
+		}
+	}
+}
+
+// runSubscriber is the subscriber loop; it flushes the buffer on every return path.
+func runSubscriber(ctx context.Context, ch <-chan *events.Event, buf *coalescingBuffer, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	defer buf.flush()
+
+	for {
+		select {
+		case event, ok := <-ch:
+			if !ok {
+				return
+			}
+			if buf.add(event) {
+				buf.flush()
+			}
+		case <-ticker.C:
+			buf.flush()
+		case <-ctx.Done():
+			buf.drain(ch)
+			return
+		}
+	}
 }
 
 // UrgentTTL is how long a notification's urgent axis stays push-eligible after it first
