@@ -114,6 +114,9 @@ func (l *sessionExitedPublisher) OnLifecycleEvent(event session.LifecycleEvent, 
 	go func() {
 		_ = l.svc.storage.SaveInstances([]*session.Instance{l.inst})
 		l.svc.eventBus.Publish(events.NewSessionUpdatedEvent(l.inst, []string{"status"}))
+		// Status is already Crashed here: MarkCrashed completes its transition
+		// before firing EventExited, and this goroutine reads it afterwards.
+		l.svc.publishCrash(l.inst.Snapshot())
 	}()
 }
 

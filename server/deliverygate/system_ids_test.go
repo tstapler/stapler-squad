@@ -26,6 +26,7 @@ var reviewedDynamicIDForms = map[string]string{
 	"instance.UUID":        "session UUID",
 	"snap.UUID":            "session UUID (snapshot)",
 	"sessionUUID":          "session UUID",
+	"uuid":                 "session UUID (crash producer, NewSessionCrashEvent)",
 	"sessionID":            "session UUID, title, tmux name or raw hook id (Spike 1.3d identity forms); bulk-reset:<scope> ids are in the system prefix set",
 	"resolvedID":           "review-queue key resolved through FindInstance, else the raw title key",
 	"resolvedSessionID":    "SendNotification's resolved UUID, else the raw hook id",

@@ -93,6 +93,9 @@ type SessionService struct {
 	// publish filter at construction (nil when built through NewSessionService).
 	deliveryGate *deliverygate.Gate
 
+	// crashes limits crash notifications to a few individual ones per minute.
+	crashes crashLimiter
+
 	// tapRegistry backs SetCaptureTap/GetCaptureTap. nil means the process-wide
 	// streamhub.DefaultTapRegistry, which is what the terminal streams use.
 	tapRegistry *streamhub.TapRegistry
