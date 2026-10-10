@@ -35,6 +35,7 @@ import { HandoffSummarySection } from "./HandoffSummarySection";
 import { GuidanceRequestPanel } from "@/components/guidance/GuidanceRequestPanel";
 import { useShells } from "@/lib/hooks/useShells";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
+import { markSessionViewed } from "@/lib/utils/viewedSessions";
 import { ShellTabLabel } from "./ShellTab";
 import { NewShellDialog } from "./NewShellDialog";
 import { useWorkflows } from "@/lib/hooks/useWorkflows";
@@ -440,6 +441,9 @@ export function SessionDetailView({
   const { shells, spawnShell, stopShell, restartShell, deleteShell, updateShellStatus } = useShells(session.id);
   const [showNewShellDialog, setShowNewShellDialog] = useState(false);
   const { addNotification } = useNotifications();
+
+  // Tell the notification deck which session is on screen so it can skip redundant non-pinned toasts.
+  useEffect(() => markSessionViewed(session.id), [session.id]);
 
   // Fire a toast notification when a shell exits with a non-zero exit code.
   // Track which shell IDs we've already notified to avoid duplicate toasts.

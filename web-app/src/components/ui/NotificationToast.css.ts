@@ -1,4 +1,4 @@
-import { style, keyframes, globalStyle } from "@vanilla-extract/css";
+import { style, styleVariants, keyframes, globalStyle } from "@vanilla-extract/css";
 import { vars, zIndex } from "@/styles/theme.css";
 
 const ring = keyframes({
@@ -335,3 +335,133 @@ export const undoButton = style([baseActionButton, {
     },
   },
 }]);
+
+// ---------------------------------------------------------------------------
+// Capped deck (notification_tray_v2): one fixed flex column, cards in normal flow.
+// ---------------------------------------------------------------------------
+
+const deckBase = style({
+  position: "fixed",
+  zIndex: zIndex.toast,
+  display: "flex",
+  flexDirection: "column",
+  gap: "8px",
+  // Only the cards and controls take pointer events; the gaps never block the page.
+  pointerEvents: "none",
+  boxSizing: "border-box",
+});
+
+/**
+ * Where the deck docks (ADR-009):
+ *  - desktop: bottom-right, 360px wide, clear of the xterm scrollbar;
+ *  - mobileTop: under the session tab row (`--mobile-stack-top-offset`, published
+ *    by the session layout), never above the safe-area inset;
+ *  - mobileBottom: a phone page with no terminal, above the bottom nav.
+ */
+export const deckPlacement = styleVariants({
+  desktop: [
+    deckBase,
+    {
+      bottom: "24px",
+      right: "calc(16px + var(--terminal-scrollbar-width, 0px))",
+      width: "360px",
+      maxHeight: "calc(var(--viewport-height, 100dvh) - 48px)",
+    },
+  ],
+  desktopTopRight: [
+    deckBase,
+    {
+      top: "64px",
+      right: "calc(16px + var(--terminal-scrollbar-width, 0px))",
+      width: "360px",
+      maxHeight: "calc(var(--viewport-height, 100dvh) - 96px)",
+    },
+  ],
+  mobileTop: [
+    deckBase,
+    {
+      top: "calc(max(var(--mobile-stack-top-offset, 0px), env(safe-area-inset-top, 0px)) + 8px)",
+      left: "max(16px, env(safe-area-inset-left, 0px))",
+      right: "max(16px, env(safe-area-inset-right, 0px))",
+      maxHeight: "calc(var(--viewport-height, 100dvh) * 0.4)",
+      overflowY: "auto",
+    },
+  ],
+  mobileBottom: [
+    deckBase,
+    {
+      left: "16px",
+      right: "16px",
+      bottom:
+        "calc(var(--bottom-nav-height, 64px) + var(--mobile-pane-tab-strip-height, 0px) + 12px + max(env(safe-area-inset-bottom, 0px), 0px))",
+      maxHeight: "calc(var(--viewport-height, 100dvh) * 0.4)",
+      overflowY: "auto",
+    },
+  ],
+});
+
+/** A card inside the deck: in flow, filling the deck width. Declared last so it wins over `toast`'s fixed rules. */
+export const toastStacked = style({
+  position: "relative",
+  top: "auto",
+  right: "auto",
+  bottom: "auto",
+  left: "auto",
+  width: "100%",
+  maxHeight: "none",
+  flexShrink: 0,
+  pointerEvents: "auto",
+  "@media": {
+    "screen and (max-width: 899px)": {
+      left: "auto",
+      right: "auto",
+      bottom: "auto",
+      width: "100%",
+    },
+  },
+});
+
+export const chipRow = style({
+  display: "flex",
+  gap: "8px",
+  alignItems: "stretch",
+  flexShrink: 0,
+  pointerEvents: "auto",
+});
+
+const chipBase = {
+  minHeight: "44px",
+  padding: "0 14px",
+  borderRadius: "22px",
+  fontSize: "14px",
+  fontWeight: 600,
+  cursor: "pointer",
+  border: `1px solid ${vars.color.borderColor}`,
+  background: vars.color.modalBackground,
+  color: vars.color.textPrimary,
+  boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+} as const;
+
+export const overflowChip = style({
+  ...chipBase,
+  flex: 1,
+  textAlign: "left",
+  selectors: { "&:hover": { background: vars.color.hoverBackground } },
+});
+
+export const repeatBadge = style({
+  fontSize: "11px",
+  fontWeight: 700,
+  padding: "1px 6px",
+  borderRadius: "10px",
+  background: vars.color.cardBackground,
+  color: vars.color.textSecondary,
+  border: `1px solid ${vars.color.borderColor}`,
+  flexShrink: 0,
+});
+
+export const offlineHint = style({
+  fontSize: "12px",
+  color: vars.color.textMuted,
+  alignSelf: "center",
+});

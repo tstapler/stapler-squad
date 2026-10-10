@@ -7,6 +7,7 @@ import {
   hasLongToastLifetime,
   isPinned,
   partitionToasts,
+  toastCapFor,
   toastAutoCloseMs,
   toastAutoMinimizeMs,
   nativeAutoCloseMs,
@@ -227,5 +228,16 @@ describe("pending-decision stack policy", () => {
     };
     walk(libDir);
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("toastCapFor", () => {
+  it.each([
+    ["desktop", { isInnerScreen: true, isVirtualKeyboardOpen: false }, 3],
+    ["phone", { isInnerScreen: false, isVirtualKeyboardOpen: false }, 1],
+    ["phone with keyboard", { isInnerScreen: false, isVirtualKeyboardOpen: true }, 0],
+    ["desktop with keyboard", { isInnerScreen: true, isVirtualKeyboardOpen: true }, 0],
+  ])("%s", (_name, viewport, expected) => {
+    expect(toastCapFor(viewport)).toBe(expected);
   });
 });

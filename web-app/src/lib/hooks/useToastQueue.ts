@@ -34,7 +34,11 @@ export function toastQueueReducer(queue: ToastQueue, action: ToastQueueAction): 
       // An approval toast is never displaced by a non-approval one — it needs resolving.
       const existing = queue.find((n) => n.sessionId === notification.sessionId);
       if (existing && isApprovalToast(existing) && !isApprovalToast(notification)) return queue;
-      return [...queue.filter((n) => n.sessionId !== notification.sessionId), notification];
+      const repeated =
+        existing && existing.notificationType === notification.notificationType
+          ? { ...notification, repeatCount: (existing.repeatCount ?? 1) + 1 }
+          : notification;
+      return [...queue.filter((n) => n.sessionId !== notification.sessionId), repeated];
     }
     case "append": {
       const { notification, replaceKey } = action;

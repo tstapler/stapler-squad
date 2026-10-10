@@ -124,3 +124,19 @@ export function partitionToasts<T extends { isPendingDecision?: boolean }>(
   const visible = [...shownPinned, ...shownRest];
   return { visible, overflow: toasts.length - visible.length, pinnedCount: pinned.length };
 }
+
+/** Live-settable rollout flag (Settings > Features) for the capped deck and tray. */
+export const NOTIFICATION_TRAY_V2_FLAG = "notification_tray_v2";
+
+export const DESKTOP_TOAST_CAP = 3;
+export const MOBILE_TOAST_CAP = 1;
+
+/**
+ * How many toast cards the deck shows: 3 on desktop, 1 on a phone (portrait or
+ * landscape), 0 with the soft keyboard open so only the chip is left. The rest
+ * collapse into the "+N more" chip (ADR-009).
+ */
+export function toastCapFor(viewport: { isInnerScreen: boolean; isVirtualKeyboardOpen: boolean }): number {
+  if (viewport.isVirtualKeyboardOpen) return 0;
+  return viewport.isInnerScreen ? DESKTOP_TOAST_CAP : MOBILE_TOAST_CAP;
+}

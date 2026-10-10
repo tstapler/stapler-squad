@@ -1,39 +1,51 @@
 // +feature: notification-toast-stack
+import { useEffect } from "react";
 import type { Meta, StoryObj } from "@storybook/react";
 import type { NotificationData } from "@/lib/types/notification";
-import { createToastTimerRegistry } from "@/lib/hooks/useToastTimers";
-import { ToastStack } from "./ToastStack";
+import { NotificationProvider } from "@/lib/contexts/NotificationContext";
+import { useNotificationCommands } from "@/lib/contexts/notificationContexts";
 
-const timers = createToastTimerRegistry();
+type Seed = Omit<NotificationData, "id" | "timestamp">;
 
-const meta: Meta<typeof ToastStack> = {
-  component: ToastStack,
-  title: "UI/ToastStack",
-  args: { timers, onRemove: () => {} },
-};
-export default meta;
-type Story = StoryObj<typeof ToastStack>;
-
-function make(id: string, overrides: Partial<NotificationData> = {}): NotificationData {
-  return {
-    id,
-    sessionId: `sess-${id}`,
-    sessionName: `session-${id}`,
-    message: "Needs your attention.",
-    timestamp: Date.now() - 30_000,
-    notificationType: "error",
-    isPendingDecision: true,
-    ...overrides,
-  };
+/** Seeds the real provider, which renders the ToastStack. */
+function Seeded({ toasts }: { toasts: Seed[] }) {
+  const { addNotification } = useNotificationCommands();
+  useEffect(() => {
+    toasts.forEach(addNotification);
+  }, [toasts, addNotification]);
+  return <p>The toast stack renders in the corner of the page.</p>;
 }
 
-export const Single: Story = { args: { toasts: [make("1")] } };
+const make = (index: number, overrides: Partial<Seed> = {}): Seed => ({
+  sessionId: `sess-${index}`,
+  sessionName: `session-${index}`,
+  message: "Needs your attention.",
+  notificationType: "error",
+  isPendingDecision: true,
+  ...overrides,
+});
+
+const meta: Meta<typeof Seeded> = {
+  component: Seeded,
+  title: "UI/ToastStack",
+  decorators: [
+    (Story) => (
+      <NotificationProvider>
+        <Story />
+      </NotificationProvider>
+    ),
+  ],
+};
+export default meta;
+type Story = StoryObj<typeof Seeded>;
+
+export const Single: Story = { args: { toasts: [make(1)] } };
 export const Mixed: Story = {
   args: {
     toasts: [
-      make("1", { notificationType: "approval_needed", onApprove: () => {}, onDeny: () => {} }),
-      make("2", { notificationType: "info", isPendingDecision: false, message: "Session started." }),
-      make("3"),
+      make(1, { notificationType: "approval_needed", onApprove: () => {}, onDeny: () => {} }),
+      make(2, { notificationType: "info", isPendingDecision: false, message: "Session started." }),
+      make(3),
     ],
   },
 };

@@ -1,9 +1,19 @@
 "use client";
 
-import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { ToastStack } from "@/components/ui/ToastStack";
 import { AnnouncerProvider } from "@/components/ui/Announcer";
 import { NotificationData, NotificationHistoryItem } from "@/lib/types/notification";
+import {
+  NotificationStateContext,
+  NotificationCommandsContext,
+  useNotificationState,
+  useNotificationCommands,
+  useNotifications,
+  type NotificationStateValue,
+  type NotificationCommandsValue,
+  type NotificationContextValue,
+} from "@/lib/contexts/notificationContexts";
 import { ReviewItem, AttentionReason } from "@/gen/session/v1/types_pb";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import { useNotificationHistory } from "@/lib/hooks/useNotificationHistory";
@@ -11,12 +21,16 @@ import { useToastQueue } from "@/lib/hooks/useToastQueue";
 import { useToastTimers } from "@/lib/hooks/useToastTimers";
 import { groupNotifications } from "@/lib/utils/notificationGrouping";
 import { mapPriority } from "@/lib/utils/notificationMapping";
+import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
+import { NOTIFICATION_TRAY_V2_FLAG, isPinned } from "@/lib/notification-policy";
+import { isSessionViewed } from "@/lib/utils/viewedSessions";
 import { mergeBackendHistory, recordToHistoryItem } from "@/lib/utils/notificationHistoryMerge";
 import { createNotificationSyncChannel } from "@/lib/utils/broadcastChannel";
 import { markAcknowledged } from "@/lib/utils/notificationStorage";
 import type { FailureReason } from "@/lib/utils/sessionFailure";
 
-export type { NotificationData, NotificationHistoryItem };
+export type { NotificationData, NotificationHistoryItem, NotificationContextValue };
+export { useNotificationState, useNotificationCommands, useNotifications };
 
 /**
  * Reason-specific toast copy for a session that transitioned to
@@ -53,82 +67,6 @@ export function getFailureReasonToastMessage(failureReason: string): string {
       return "Session creation failed.";
   }
 }
-
-/** Read-only notification state; changes whenever a toast, history row or panel flag does. */
-interface NotificationStateValue {
-  notifications: NotificationData[];
-  notificationHistory: NotificationHistoryItem[];
-  isPanelOpen: boolean;
-  historyLoading: boolean;
-  historyHasMore: boolean;
-  /** Set when the most recent history fetch failed; cleared on the next successful one. Last-known-good `notificationHistory` is left untouched either way (Task 3.1.2h, AC38). */
-  historyError: Error | null;
-  /** Date.now() of the last successful history fetch; null until the first one completes. */
-  historyLastUpdatedAt: number | null;
-  unreadCount: number;
-}
-
-/** Stable commands: identities never change, so command-only consumers never re-render on state. */
-interface NotificationCommandsValue {
-  addNotification: (notification: Omit<NotificationData, "id" | "timestamp">) => void;
-  /** Add to history panel only — no toast, no sound. For informational events like task_complete. */
-  addToHistoryOnly: (notification: Omit<NotificationData, "id" | "timestamp">) => void;
-  removeNotification: (id: string) => void;
-  /**
-   * Remove an active toast whose metadata.approval_id matches the given approvalId.
-   * Used to preemptively clear approval toasts when an approval_response event arrives,
-   * before refreshHistory() completes.
-   */
-  removeToastByApprovalId: (approvalId: string) => void;
-  /**
-   * Acknowledge one or more notifications: removes the active toast(s) and marks
-   * them as read in the history panel. Use this for all user-triggered dismissals
-   * so the two operations are always kept in sync.
-   */
-  acknowledgeNotification: (id: string | string[]) => void;
-  clearAll: () => void;
-  showSessionNotification: (
-    item: ReviewItem,
-    onView?: () => void,
-    onAcknowledge?: () => void
-  ) => void;
-  togglePanel: () => void;
-  markAsRead: (id: string | string[]) => void;
-  markAsReadBySessionId: (sessionId: string | string[]) => void;
-  /**
-   * Remove active toast(s) for the given session ID(s).
-   * Does NOT mark history as read — use acknowledgeNotification for that.
-   * Used by useReviewQueueNotifications when a stale/queue item resolves,
-   * so the toast disappears even if auto-minimize hasn't fired yet.
-   */
-  removeToastBySessionId: (sessionId: string | string[]) => void;
-  removeFromHistory: (id: string) => void;
-  clearHistory: () => void;
-  loadMoreHistory: () => Promise<void>;
-  /** Re-fetch the full notification history from the server (e.g. after a stream reconnect). */
-  refreshHistory: () => Promise<void>;
-  /**
-   * Show an undo-variant toast. Returns the notification ID so the caller can
-   * dismiss it when the undo window expires (e.g. via removeNotification).
-   * Default duration is 5000ms (passed as durationMs for callers that want to
-   * schedule their own dismissal; the toast itself auto-closes via the normal policy).
-   */
-  showUndoToast: (message: string, onUndo: () => void, durationMs?: number) => string;
-  /**
-   * Show a lightweight success/error toast for a routine action (e.g. a backlog
-   * button click). Bypasses the history panel/audit log — for that, no toast is
-   * the right call. `key` dedupes: a second call with the same key replaces the
-   * existing toast instead of stacking a duplicate; toasts with different keys
-   * (e.g. different items) never collide.
-   */
-  showActionToast: (message: string, type: "success" | "error", key: string) => string;
-}
-
-export type NotificationContextValue = NotificationStateValue &
-  NotificationCommandsValue & { getUnreadCount: () => number };
-
-const NotificationStateContext = createContext<NotificationStateValue | null>(null);
-const NotificationCommandsContext = createContext<NotificationCommandsValue | null>(null);
 
 function reviewItemToNotificationType(reason: AttentionReason): NotificationData["notificationType"] {
   switch (reason) {
@@ -170,6 +108,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   auditLogRef.current = auditLog;
   const historyRef = useRef(history);
   historyRef.current = history;
+  const trayV2Ref = useRef(false);
+  trayV2Ref.current = useFeatureFlag(NOTIFICATION_TRAY_V2_FLAG);
 
   // Backend data is authoritative: runs on initial load and whenever refreshHistory()
   // is called (reconnect, approval_response), updating local items with the server version.
@@ -198,7 +138,10 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
     const addNotification: NotificationCommandsValue["addNotification"] = (notification) => {
       const next: NotificationData = { ...notification, id: newNotificationId(), timestamp: Date.now() };
-      dispatch({ type: "add", notification: next });
+      // Under the capped deck a non-pinned toast for the session already on screen
+      // adds nothing; the history row is still recorded.
+      const suppressed = trayV2Ref.current && !isPinned(next) && isSessionViewed(next.sessionId);
+      if (!suppressed) dispatch({ type: "add", notification: next });
       addToHistory(next);
     };
 
@@ -326,7 +269,10 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   // Remove stale toasts every minute (history keeps them): plain toasts after
   // TOAST_STALE_MS, approval/question toasts after ACTIONABLE_TOAST_STALE_MS.
   useEffect(() => {
-    const interval = setInterval(() => dispatch({ type: "prune", now: Date.now() }), SWEEP_INTERVAL_MS);
+    const interval = setInterval(
+      () => dispatch({ type: "prune", now: Date.now(), keep: trayV2Ref.current ? isPinned : undefined }),
+      SWEEP_INTERVAL_MS,
+    );
     return () => clearInterval(interval);
   }, [dispatch]);
 
@@ -373,59 +319,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       <NotificationCommandsContext.Provider value={commands}>
         <NotificationStateContext.Provider value={state}>
           {children}
-          <ToastStack toasts={notifications} timers={timers} onRemove={commands.removeNotification} />
+          <ToastStack timers={timers} />
         </NotificationStateContext.Provider>
       </NotificationCommandsContext.Provider>
     </AnnouncerProvider>
   );
 }
-
-const noop = () => {};
-const OUTSIDE_PROVIDER_STATE: NotificationStateValue = {
-  notifications: [],
-  notificationHistory: [],
-  isPanelOpen: false,
-  historyLoading: false,
-  historyHasMore: false,
-  historyError: null,
-  historyLastUpdatedAt: null,
-  unreadCount: 0,
-};
-
-/**
- * Outside a NotificationProvider these return no-ops, so components render in
- * tests or embedded views without a full provider tree.
- */
-const OUTSIDE_PROVIDER_COMMANDS = {
-  addNotification: noop,
-  addToHistoryOnly: noop,
-  removeNotification: noop,
-  removeToastByApprovalId: noop,
-  acknowledgeNotification: noop,
-  clearAll: noop,
-  showSessionNotification: noop,
-  togglePanel: noop,
-  markAsRead: noop,
-  showActionToast: () => "",
-} as unknown as NotificationCommandsValue;
-
-/** Toast and history state, without the commands. */
-export function useNotificationState(): NotificationStateValue {
-  return useContext(NotificationStateContext) ?? OUTSIDE_PROVIDER_STATE;
-}
-
-/** Stable commands only; consumers using just these never re-render on notification state. */
-export function useNotificationCommands(): NotificationCommandsValue {
-  return useContext(NotificationCommandsContext) ?? OUTSIDE_PROVIDER_COMMANDS;
-}
-
-/** Both halves merged: the original `useNotifications()` surface. */
-export function useNotifications(): NotificationContextValue {
-  const state = useNotificationState();
-  const commands = useNotificationCommands();
-  return useMemo(
-    () => ({ ...state, ...commands, getUnreadCount: () => state.unreadCount }),
-    [state, commands],
-  );
-}
-

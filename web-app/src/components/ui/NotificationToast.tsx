@@ -7,7 +7,10 @@ import { NotificationData } from "@/lib/types/notification";
 import { notificationTypeIcon, notificationTypeLabel, priorityColor } from "@/lib/utils/notificationMapping";
 import {
   toast,
+  toastStacked,
   toastApproval,
+  repeatBadge,
+  offlineHint,
   exiting as exitingClass,
   minimized as minimizedClass,
   header,
@@ -39,6 +42,10 @@ export interface NotificationToastProps {
   onClose: (options?: { acknowledge?: boolean }) => void;
   /** True while the stack runs the exit animation. */
   exiting?: boolean;
+  /** Inside the capped deck: laid out in flow rather than fixed to the corner. */
+  stacked?: boolean;
+  /** When set, Approve and Deny (the server-bound actions) are disabled and this reason is shown. */
+  offlineReason?: string;
   /** Compact pill; clicking it expands. */
   minimized?: boolean;
   onExpand?: () => void;
@@ -70,6 +77,8 @@ function getRelativeTime(timestampMs: number, now: number): string {
 export function NotificationToast({
   notification,
   onClose,
+  stacked = false,
+  offlineReason,
   exiting = false,
   minimized = false,
   onExpand,
@@ -111,7 +120,7 @@ export function NotificationToast({
 
   return (
     <div
-      className={`${toast} ${notification.notificationType === "approval_needed" ? toastApproval : ""} ${exiting ? exitingClass : ""} ${minimized ? minimizedClass : ""}`}
+      className={`${toast} ${notification.notificationType === "approval_needed" ? toastApproval : ""} ${exiting ? exitingClass : ""} ${minimized ? minimizedClass : ""} ${stacked ? toastStacked : ""}`}
       style={{ "--priority-color": priorityColor(notification.priority) } as React.CSSProperties}
       data-testid="toast"
       onClick={minimized ? onExpand : undefined}
@@ -122,6 +131,11 @@ export function NotificationToast({
         <div className={titleWrapper}>
           <div className={titleRow}>
             <strong>{displayTitle}</strong>
+            {(notification.repeatCount ?? 1) > 1 && (
+              <span className={repeatBadge} data-testid="toast-repeat-count">
+                x{notification.repeatCount}
+              </span>
+            )}
             <span className={typeLabel}>{notificationTypeLabel(notification.notificationType)}</span>
           </div>
           <div className={subtitleRow}>
@@ -160,8 +174,13 @@ export function NotificationToast({
         {notification.onApprove && (
           <button
             className={approveButton}
-            onClick={() => { notification.onApprove?.(); onClose({ acknowledge: true }); }}
-            title="Allow this tool use"
+            aria-disabled={offlineReason ? true : undefined}
+            onClick={() => {
+              if (offlineReason) return;
+              notification.onApprove?.();
+              onClose({ acknowledge: true });
+            }}
+            title={offlineReason ?? "Allow this tool use"}
           >
             ✓ Approve
           </button>
@@ -169,11 +188,21 @@ export function NotificationToast({
         {notification.onDeny && (
           <button
             className={denyButton}
-            onClick={() => { notification.onDeny?.(); onClose({ acknowledge: true }); }}
-            title="Deny this tool use"
+            aria-disabled={offlineReason ? true : undefined}
+            onClick={() => {
+              if (offlineReason) return;
+              notification.onDeny?.();
+              onClose({ acknowledge: true });
+            }}
+            title={offlineReason ?? "Deny this tool use"}
           >
             ✗ Deny
           </button>
+        )}
+        {offlineReason && (notification.onApprove || notification.onDeny) && (
+          <span className={offlineHint} data-testid="toast-offline-hint">
+            {offlineReason}
+          </span>
         )}
         {notification.notificationType === "undo" && notification.onUndo && (
           <button
