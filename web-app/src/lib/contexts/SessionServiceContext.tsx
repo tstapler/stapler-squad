@@ -31,7 +31,7 @@ export interface SessionServiceContextValue {
   systemMemoryPct: number;
   /** Reconnect attempt counter from BackoffState. Zero when connected normally. */
   reconnectAttemptCount: number;
-  listSessions: (options?: { category?: string; status?: SessionStatus; includeArchived?: boolean }) => Promise<void>;
+  listSessions: (options?: { category?: string; status?: SessionStatus; includeArchived?: boolean; includeHidden?: boolean }) => Promise<void>;
   getSession: (id: string, options?: { onFailure?: (err: unknown) => void }) => Promise<Session | null>;
   createSession: (request: Partial<CreateSessionRequest>) => Promise<Session | null>;
   updateSession: (id: string, updates: Partial<UpdateSessionRequest>) => Promise<Session | null>;

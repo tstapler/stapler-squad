@@ -130,7 +130,7 @@ interface UseSessionServiceReturn {
   systemMemoryPct: number;
 
   // Methods
-  listSessions: (options?: { category?: string; status?: SessionStatus; includeArchived?: boolean }) => Promise<void>;
+  listSessions: (options?: { category?: string; status?: SessionStatus; includeArchived?: boolean; includeHidden?: boolean }) => Promise<void>;
   /**
    * `options.onFailure` receives the raw error and replaces the shared error banner, so a
    * caller that renders its own failure state (the hidden-session deep link) can tell
@@ -319,7 +319,7 @@ export function useSessionService(
 
   // List sessions with retry logic
   const listSessions = useCallback(
-    async (listOptions?: { category?: string; status?: SessionStatus; includeArchived?: boolean }) => {
+    async (listOptions?: { category?: string; status?: SessionStatus; includeArchived?: boolean; includeHidden?: boolean }) => {
       if (!clientRef.current) return;
 
       dispatch(setLoading(true));
@@ -333,6 +333,7 @@ export function useSessionService(
                 category: listOptions?.category,
                 status: listOptions?.status,
                 includeArchived: listOptions?.includeArchived,
+                includeHidden: listOptions?.includeHidden,
               },
               { timeoutMs: LIST_SESSIONS_TIMEOUT_MS }
             ),

@@ -28,8 +28,11 @@ func stoppedEvent(title string, hidden bool) *events.Event {
 	}
 }
 
-// T-PS-01: hidden Stopped push is dropped with the gate on, visible still
-// pushes, and gate off pushes both (shadow counted).
+// T-PS-01: a session the gate index marks hidden is dropped with the gate on,
+// visible still pushes, and gate off pushes both (shadow counted). The event's
+// Instance.Hidden is false on purpose: the legacy Hidden check in
+// buildStatusChangeNotification drops a hidden instance before the gate, so only
+// an index/instance disagreement (a stale instance snapshot) reaches the gate.
 func TestStatusChangePush_ShouldDeliverZeroHiddenOneVisible_WhenGateOnAndOneWhenOff(t *testing.T) {
 	t.Parallel()
 	run := func(flagOn bool) (hidden, visible int, g *deliverygate.Gate) {
@@ -46,7 +49,7 @@ func TestStatusChangePush_ShouldDeliverZeroHiddenOneVisible_WhenGateOnAndOneWhen
 		n := &mockNotifier{name: "rec"}
 		ctx := context.Background()
 		dedup := newDedupTracker(0)
-		deliverEvent(ctx, stoppedEvent("hidden-sess", true), dedup, []Notifier{n}, g)
+		deliverEvent(ctx, stoppedEvent("hidden-sess", false), dedup, []Notifier{n}, g)
 		hidden = n.CallCount()
 		deliverEvent(ctx, stoppedEvent("visible-sess", false), dedup, []Notifier{n}, g)
 		visible = n.CallCount() - hidden
@@ -63,6 +66,19 @@ func TestStatusChangePush_ShouldDeliverZeroHiddenOneVisible_WhenGateOnAndOneWhen
 	assert.EqualValues(t, 1, g.Metrics().Total(deliverygate.CounterWouldSuppress), "shadow suppression must be counted")
 }
 
+// The legacy Hidden check stays until PR 2b: a hidden instance never pushes a
+// completion whatever the gate says, including with the gate off.
+func TestStatusChangePush_ShouldDropHiddenInstance_WhenGateOffByLegacyCheck(t *testing.T) {
+	t.Parallel()
+	g := deliverygate.NewGate(deliverygate.WithFlagLoader(func() (deliverygate.FlagSettings, error) {
+		return deliverygate.FlagSettings{Global: false}, nil
+	}))
+	g.Flags().Reload()
+	n := &mockNotifier{name: "rec"}
+	deliverEvent(context.Background(), stoppedEvent("hidden-instance", true), newDedupTracker(0), []Notifier{n}, g)
+	assert.Equal(t, 0, n.CallCount())
+}
+
 // T-PS-04: an unresolved session fails open.
 func TestStatusChangePush_ShouldDeliverAndCount_WhenGateReportsUnresolved(t *testing.T) {
 	t.Parallel()
@@ -71,7 +87,7 @@ func TestStatusChangePush_ShouldDeliverAndCount_WhenGateReportsUnresolved(t *tes
 	}))
 	g.Flags().Reload()
 	n := &mockNotifier{name: "rec"}
-	deliverEvent(context.Background(), stoppedEvent("never-indexed", true), newDedupTracker(0), []Notifier{n}, g)
+	deliverEvent(context.Background(), stoppedEvent("never-indexed", false), newDedupTracker(0), []Notifier{n}, g)
 	require.Equal(t, 1, n.CallCount())
 	assert.EqualValues(t, 1, g.Metrics().Value(deliverygate.CounterUnresolved, "routine"))
 }
