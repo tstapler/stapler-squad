@@ -555,7 +555,7 @@ func TestInstanceToProto_LegacyPathFields_Unchanged(t *testing.T) {
 func TestInstanceToProto_PopulatesContextHealthFields(t *testing.T) {
 	li := session.NewLiveInstance(&session.Instance{})
 	t.Cleanup(li.Stop)
-	li.Instance.SetContextHealth(tokens.ContextHealthVerdict{Level: tokens.HealthRed, Reason: "Repeated the same Bash call 6 times in a row"})
+	li.SetContextHealth(tokens.ContextHealthVerdict{Level: tokens.HealthRed, Reason: "Repeated the same Bash call 6 times in a row"})
 
 	proto := InstanceToProto(li.Instance, nil)
 	require.NotNil(t, proto)

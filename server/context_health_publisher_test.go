@@ -15,7 +15,7 @@ func healthTestInstance(t *testing.T, uuid string) *session.Instance {
 	li := session.NewLiveInstance(&session.Instance{Title: "s-" + uuid})
 	t.Cleanup(li.Stop)
 	if uuid != "" {
-		li.Instance.SetClaudeConversationUUID(uuid)
+		li.SetClaudeConversationUUID(uuid)
 	}
 	return li.Instance
 }
