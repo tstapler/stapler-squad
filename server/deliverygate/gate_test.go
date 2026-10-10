@@ -302,3 +302,33 @@ func TestGate_ShouldIncrementUnresolvedCounterAndWarn_WhenRoutineEventForUnresol
 		t.Errorf("WARN count = %d, want 1 (rate limited per session/type)", got)
 	}
 }
+
+func TestAllowQueueItem_ShouldGateHiddenRoutineOnly_AndShadowWhenFlagOff(t *testing.T) {
+	t.Parallel()
+	g, _, _, flags := newTestGate(true, hiddenReview, visibleSess)
+	for _, ch := range []Channel{ChannelSlack, ChannelWebhook} {
+		if g.AllowQueueItem(ch, "review:abc", nil, int32(tTaskComplete)) {
+			t.Errorf("%s: hidden routine must be dropped with the gate on", ch)
+		}
+		if !g.AllowQueueItem(ch, "review:abc", nil, int32(tError)) {
+			t.Errorf("%s: hidden failure must deliver", ch)
+		}
+		if !g.AllowQueueItem(ch, "review:abc", nil, int32(tApproval)) {
+			t.Errorf("%s: hidden needs-human must deliver", ch)
+		}
+		if !g.AllowQueueItem(ch, "my-work", nil, int32(tTaskComplete)) {
+			t.Errorf("%s: visible session must deliver", ch)
+		}
+		if !g.AllowQueueItem(ch, "never-seen", nil, int32(tTaskComplete)) {
+			t.Errorf("%s: unresolved must fail open", ch)
+		}
+	}
+	flags.set(false)
+	g.Flags().Reload()
+	if !g.AllowQueueItem(ChannelSlack, "review:abc", nil, int32(tTaskComplete)) {
+		t.Error("gate off must deliver")
+	}
+	if got := g.Metrics().Value(CounterWouldSuppress, "slack", "NOTIFICATION_TYPE_TASK_COMPLETE", string(ReasonRoutineForHidden), "review"); got != 1 {
+		t.Errorf("shadow slack = %d, want 1", got)
+	}
+}

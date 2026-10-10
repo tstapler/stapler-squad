@@ -15,7 +15,7 @@ import (
 
 // Gate owns the visibility index, flag cache, counters and logger from
 // construction (there is no later Bind). It implements the bus publish filter
-// and the one-method consumer-side gates; no consumer receives the whole Gate.
+// and the narrow consumer-side gates (see AllowQueueItem and the Allow* methods).
 type Gate struct {
 	index    *VisibilityIndex
 	resolver *Resolver
@@ -239,6 +239,38 @@ func (g *Gate) AllowAutoApprovedRow(sessionID, decision string) bool {
 		return true
 	}
 	return g.decideFailOpen(ChannelAutoApproved, sessionID, sessionv1.NotificationType_NOTIFICATION_TYPE_AUTO_APPROVED)
+}
+
+// AllowQueueItem gates the review-queue sends that bypass the bus filter (the
+// Slack notifier and the outbound webhook callback) with the same policy and
+// flag as the bus. It counts only its own channel, not the soak stats, which
+// the bus decision for the same event already recorded.
+func (g *Gate) AllowQueueItem(ch Channel, sessionID string, metadata map[string]string, notificationType int32) (deliver bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			deliver = true
+			g.metrics.Add(CounterFilterPanic)
+			g.limiter.log(slog.LevelError, "delivery_gate_filter_panic",
+				limiterKey{event: "filter_panic", typ: string(ch)}, "panic", r)
+		}
+	}()
+	res := g.resolver.Resolve(sessionID, metadata)
+	if res.Visibility != VisibilityHidden {
+		return true
+	}
+	hint, _ := ParseClassHint(metadata)
+	t := sessionv1.NotificationType(notificationType)
+	d := ShouldDeliver(res.Visibility, Facts{Type: t, Hint: hint})
+	if d.Outcome == OutcomeDeliver {
+		return true
+	}
+	counter := CounterWouldSuppress
+	deliver = true
+	if g.flags.EnabledFor(res.Kind) {
+		counter, deliver = CounterSuppressed, false
+	}
+	g.metrics.Add(counter, string(ch), typeName(t), string(d.Reason), string(res.Kind))
+	return deliver
 }
 
 // decideFailOpen is decide for the consumer-side gates, which run on subscriber

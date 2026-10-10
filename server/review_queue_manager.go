@@ -7,8 +7,8 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
+	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"sync"
@@ -25,6 +25,12 @@ import (
 // satisfies it via RunOneShotForSession.
 type OneShotPRCreator interface {
 	RunOneShotForSession(ctx context.Context, sessionID, prompt string, timeoutSeconds int32) (string, error)
+}
+
+// CallbackDispatchWiring is the subset of *services.CallbackDispatcher the
+// queue manager fires; a nil *CallbackDispatcher is a safe no-op receiver.
+type CallbackDispatchWiring interface {
+	Dispatch(eventType string, payload any)
 }
 
 // SlackNotifierWiring is the narrow subset of *services.SlackNotifier that
@@ -86,7 +92,7 @@ type ReactiveQueueManager struct {
 	// disables the feature entirely (Dispatch is also nil-receiver-safe, but
 	// OnItemAdded nil-checks first to avoid the call entirely) — safe default
 	// for tests and any wiring path that doesn't call the setter.
-	callbackDispatcher *services.CallbackDispatcher
+	callbackDispatcher CallbackDispatchWiring
 
 	// slackNotifier is set via SetSlackNotifier and drives Slack notifications
 	// for new review-queue items (see OnItemAdded). nil disables the feature
@@ -105,6 +111,10 @@ type ReactiveQueueManager struct {
 	// legacyHiddenCounter, when set, is told about each hidden-session item
 	// suppressForHidden swallows (observability for the delivery-gate soak).
 	legacyHiddenCounter func(site string, notificationType int32)
+
+	// queueItemGate decides the Slack and webhook-callback sends, which the bus
+	// publish filter does not reach. Nil allows everything.
+	queueItemGate func(ch deliverygate.Channel, sessionID string, metadata map[string]string, notificationType int32) bool
 
 	// autoCreatePRInFlight tracks sessions with an in-progress AutoCreatePR
 	// one-shot run, keyed by stable session UUID. Prevents a second concurrent
@@ -187,7 +197,7 @@ func (rqm *ReactiveQueueManager) SetOneShotRunner(r OneShotPRCreator) {
 // on_queue_item_created (see OnItemAdded, webhook-triggers Phase 5). Called
 // post-construction from server/dependencies.go, same setter-injection pattern
 // as SetOneShotRunner above.
-func (rqm *ReactiveQueueManager) SetCallbackDispatcher(d *services.CallbackDispatcher) {
+func (rqm *ReactiveQueueManager) SetCallbackDispatcher(d CallbackDispatchWiring) {
 	rqm.callbackDispatcher = d
 }
 
@@ -212,6 +222,16 @@ func (rqm *ReactiveQueueManager) SetDashboardBaseURLFn(fn func() string) {
 // deliverygate.Gate.CountLegacySuppressedType). Optional; nil disables it.
 func (rqm *ReactiveQueueManager) SetLegacyHiddenCounter(fn func(site string, notificationType int32)) {
 	rqm.legacyHiddenCounter = fn
+}
+
+// SetQueueItemGate wires the delivery gate for the Slack and webhook sends
+// (deliverygate.Gate.AllowQueueItem). Optional; nil allows everything.
+func (rqm *ReactiveQueueManager) SetQueueItemGate(fn func(ch deliverygate.Channel, sessionID string, metadata map[string]string, notificationType int32) bool) {
+	rqm.queueItemGate = fn
+}
+
+func (rqm *ReactiveQueueManager) allowQueueItem(ch deliverygate.Channel, sessionID string, metadata map[string]string, notificationType int32) bool {
+	return rqm.queueItemGate == nil || rqm.queueItemGate(ch, sessionID, metadata, notificationType)
 }
 
 // Start initializes the reactive queue manager and subscribes to events.
@@ -455,21 +475,21 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 		rqm.legacyHiddenCounter("rqm_suppress_for_hidden", notifType)
 	}
 
+	notifType, notifPriority := rqm.mapReviewItemToNotification(item)
+	metadata := events.SessionScopedMetadata(item.Metadata, linkedItemID)
+
 	// Publish an EventNotification to the EventBus so the notification history store
 	// captures this event — but skip APPROVAL_PENDING items. The ApprovalHandler already
 	// broadcasts a richer notification (with the actual command preview and approval UUID)
 	// when the HTTP hook fires. Publishing again here would create a duplicate card in the
 	// notification panel because APPROVAL_NEEDED records are never deduplicated server-side.
 	if rqm.eventBus != nil && item.Reason != session.ReasonApprovalPending && !suppressForHidden {
-		notifType, notifPriority := rqm.mapReviewItemToNotification(item)
 		notifID := fmt.Sprintf("review-queue-%s-%d", item.SessionID, item.DetectedAt.UnixMilli())
 		title := fmt.Sprintf("%s: %s", item.Reason.String(), item.SessionName)
 		message := item.Context
 		if message == "" {
 			message = fmt.Sprintf("Session '%s' needs attention", item.SessionName)
 		}
-
-		metadata := events.SessionScopedMetadata(item.Metadata, linkedItemID)
 
 		notifEvent := events.NewNotificationEvent(
 			resolvedID,
@@ -487,7 +507,7 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 		// guard as the eventBus.Publish above — a threshold-crossing digest
 		// suppresses the per-item send on the same call (Unresolved Questions
 		// default, plan.md's Epic 1.2.4).
-		if rqm.slackNotifier != nil {
+		if rqm.slackNotifier != nil && rqm.allowQueueItem(deliverygate.ChannelSlack, resolvedID, metadata, notifType) {
 			cfg := config.LoadConfig()
 			dashboardURL := cfg.Slack.DashboardBaseURL
 			if dashboardURL == "" && rqm.dashboardBaseURLFn != nil {
@@ -511,7 +531,7 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 	// latency here. rqm.callbackDispatcher is nil-checked rather than relying on
 	// a nil *services.CallbackDispatcher receiver, matching this file's existing
 	// nil-safety convention (e.g. oneShotRunner in maybeAutoCreatePR).
-	if rqm.callbackDispatcher != nil {
+	if rqm.callbackDispatcher != nil && rqm.allowQueueItem(deliverygate.ChannelWebhook, resolvedID, metadata, notifType) {
 		rqm.callbackDispatcher.Dispatch("queue_item_created", map[string]any{
 			"event":       "queue_item_created",
 			"session_id":  resolvedID,

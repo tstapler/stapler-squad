@@ -20,6 +20,7 @@ const (
 	ChannelPushStatus   Channel = "push_status"
 	ChannelAutoApproved Channel = "auto_approved"
 	ChannelSlack        Channel = "slack"
+	ChannelWebhook      Channel = "webhook"
 )
 
 // Counter names. Each is mirrored in-process (the OTel meter is a no-op when
