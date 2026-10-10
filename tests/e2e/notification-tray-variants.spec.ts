@@ -6,18 +6,17 @@
  * its keyboard cap (TK-2, TS-9), 500-row virtualization (TR-1) and the offline
  * policy (TE-2). Real soft keyboard and device behavior is the operator's DV-3.
  */
-import path from 'path';
 import { test, expect, type Page } from '@playwright/test';
-import { SessionClient } from './helpers/session-client';
 import {
   NotificationTray,
   TRAY_V2_FLAG,
   installWebSocketSendCounter,
   readTerminalFacts,
-  markTerminalRoot,
   sendNotification,
   setFeatureFlag,
   webSocketSends,
+  waitForIdleFrames,
+  openTerminalSession,
 } from './pages/NotificationPanel';
 import { profiles, setKeyboardOpen } from './helpers/viewport-profiles';
 
@@ -25,22 +24,8 @@ const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
 const ONBOARDED_KEY = 'stapler-squad:onboarded';
 const MARKER = 'TRAY-VARIANT-MARKER';
 
-async function openSession(page: Page, { waitForText = true } = {}) {
-  const client = new SessionClient(BASE_URL);
-  const session = await client.createSession({
-    title: `tray-variants-${Date.now()}`,
-    path: '/tmp',
-    program: `sh ${path.join(__dirname, 'fixtures', 'tray-terminal-fixture.sh')} ${MARKER}`,
-  });
-  await page.addInitScript((key) => localStorage.setItem(key, 'true'), ONBOARDED_KEY);
-  await page.goto(`${BASE_URL}/?session=${session.id}`, { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('textbox', { name: 'Terminal input' })).toBeAttached({ timeout: 20_000 });
-  // At 844x390 the app chrome leaves the terminal a few cells; there is no text to wait for there.
-  if (waitForText) {
-    await expect.poll(async () => (await readTerminalFacts(page)).text, { timeout: 15_000 }).toContain(MARKER);
-  }
-  await markTerminalRoot(page);
-  return { client, session };
+function openSession(page: Page, { waitForText = true } = {}) {
+  return openTerminalSession(page, BASE_URL, { marker: MARKER, titlePrefix: 'tray-variants', waitForText });
 }
 
 async function seed(request: Parameters<typeof sendNotification>[0], prefix: string, count: number) {
@@ -174,7 +159,8 @@ test.describe('notification tray variants', () => {
         const pinnedFacts = await readTerminalFacts(page);
         // The resize vote is debounced by the settling hook, so wait for it, then let anything extra arrive.
         await expect.poll(async () => (await webSocketSends(page)) - sendsBefore).toBeGreaterThanOrEqual(1);
-        await page.waitForTimeout(1_000);
+        // Anything extra from the same settle has arrived once the frame count stops moving.
+        await waitForIdleFrames(page, 500);
         const resizeFrames = (await webSocketSends(page)) - sendsBefore;
         console.log(`  pin on: cols ${overlayFacts.cols} -> ${pinnedFacts.cols}, frames sent ${resizeFrames}`);
         expect(pinnedFacts.hasProbe).toBe(true);
@@ -286,6 +272,83 @@ test.describe('notification tray variants', () => {
       }
     });
 
+    test('sheet_open_expand_and_close_should_keep_cols_rows_and_node_and_send_no_resize_when_phone', async ({ page, request }) => {
+      await installWebSocketSendCounter(page);
+      const { client, session } = await openSession(page);
+      try {
+        const tray = new NotificationTray(page);
+        await seed(request, `tray-ts2-${Date.now()}`, 2);
+        await expect(tray.entry).toHaveAttribute('data-content', 'more-row');
+        const before = await readTerminalFacts(page);
+        await waitForIdleFrames(page);
+        const sendsBefore = await webSocketSends(page);
+
+        await page.getByTestId('toast-overflow-chip').click();
+        await tray.expectOpen();
+        await tray.tray.getByTestId('tray-expand').click();
+        await expect(tray.tray).toHaveAttribute('data-sheet', 'expanded');
+        await tray.tray.getByTestId('tray-expand').click();
+        await expect(tray.tray).toHaveAttribute('data-sheet', 'peek');
+        await tray.tray.getByRole('button', { name: 'Close notification panel' }).click();
+        await tray.expectClosed();
+
+        const after = await readTerminalFacts(page);
+        expect(after.cols).toBe(before.cols);
+        expect(after.rows).toBe(before.rows);
+        expect(after.hasProbe).toBe(true);
+        // Same budget as the desktop invariants spec: no resize vote beyond idle chatter.
+        await waitForIdleFrames(page);
+        expect((await webSocketSends(page)) - sendsBefore).toBeLessThanOrEqual(2);
+      } finally {
+        await client.deleteSession(session.id, true);
+      }
+    });
+
+    test('entry_should_be_one_visible_element_in_every_frame_and_hold_its_top_right_anchor_across_state_changes', async ({ page, request }) => {
+      const { client, session } = await openSession(page, { waitForText: false });
+      try {
+        const tray = new NotificationTray(page);
+        await page.evaluate(() => {
+          const w = window as unknown as { __entryFrames: Array<{ visible: number; right: number; top: number }>; __entryStop: boolean };
+          w.__entryFrames = [];
+          w.__entryStop = false;
+          const sample = () => {
+            const boxes = Array.from(document.querySelectorAll('[data-testid="tray-entry"]'))
+              .map((el) => el.getBoundingClientRect())
+              .filter((r) => r.width > 0 && r.height > 0);
+            const first = boxes[0];
+            w.__entryFrames.push({ visible: boxes.length, right: first ? first.right : -1, top: first ? first.top : -1 });
+            if (!w.__entryStop) requestAnimationFrame(sample);
+          };
+          requestAnimationFrame(sample);
+        });
+
+        // bell (0 toasts) -> more-row -> keyboard-chip -> more-row -> bell with undo -> bell
+        await expect(tray.entry).toHaveAttribute('data-content', 'bell');
+        await seed(request, `tray-th8-${Date.now()}`, 3);
+        await expect(tray.entry).toHaveAttribute('data-content', 'more-row');
+        await setKeyboardOpen(page, 300);
+        await expect(tray.entry).toHaveAttribute('data-content', 'keyboard-chip');
+        await setKeyboardOpen(page, 0);
+        await expect(tray.entry).toHaveAttribute('data-content', 'more-row');
+        await page.getByTestId('toast-move-all-to-tray').click();
+        await expect(tray.entry).toHaveAttribute('data-undo', 'true');
+        await expect(tray.entry).toHaveAttribute('data-undo', 'false', { timeout: 15_000 });
+
+        const frames = await page.evaluate(() => {
+          const w = window as unknown as { __entryFrames: Array<{ visible: number; right: number; top: number }>; __entryStop: boolean };
+          w.__entryStop = true;
+          return w.__entryFrames;
+        });
+        expect(frames.length).toBeGreaterThan(30);
+        expect(frames.filter((f) => f.visible !== 1)).toEqual([]);
+        const rights = frames.map((f) => f.right);
+        expect(Math.max(...rights) - Math.min(...rights)).toBeLessThanOrEqual(1);
+      } finally {
+        await client.deleteSession(session.id, true);
+      }
+    });
+
     test('touchstart_within_30px_of_the_edge_should_not_open_the_tray', async ({ page }) => {
       const { client, session } = await openSession(page);
       try {
@@ -359,8 +422,10 @@ test.describe('notification tray variants', () => {
           const bb = await b.boundingBox();
           if (bb && bb.width > 0) expect(bb.height).toBeGreaterThanOrEqual(43);
         }
-        // The close control is visible without scrolling (TL-2).
+        // The close control is visible without scrolling (TL-2) and the list scrolls inside the panel (TL-4).
         await expect(tray.tray.getByRole('button', { name: 'Close notification panel' })).toBeInViewport();
+        const overflowY = await tray.tray.getByTestId('tray-scroll').evaluate((el) => getComputedStyle(el).overflowY);
+        expect(['auto', 'scroll']).toContain(overflowY);
         const after = await readTerminalFacts(page);
         expect(after.cols).toBe(before.cols);
         expect(after.rows).toBe(before.rows);

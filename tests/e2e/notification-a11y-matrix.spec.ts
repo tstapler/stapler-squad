@@ -91,6 +91,42 @@ test.describe('notification a11y matrix', () => {
         expect(small).toEqual([]);
       });
 
+      if (key === 'V1' || key === 'V2') {
+        test('overflow_menu_confirm_and_undo_controls_should_meet_44px_and_the_menu_should_use_menu_roles', async ({ page, request }) => {
+          await seedAndOpen(page, request, `a11y-menu-${key}-${Date.now()}`);
+          const deck = new ToastDeck(page);
+          const tray = new NotificationTray(page);
+          await expect(deck.toasts.first()).toBeVisible({ timeout: 20_000 });
+          await tray.handle.or(deck.chip).or(tray.entryOpen).first().click();
+          await tray.expectOpen();
+          await tray.dismissWhatChanged();
+          await expect(tray.rows.first()).toBeVisible();
+
+          const tooSmall = async (locator: import('@playwright/test').Locator) =>
+            locator.evaluateAll((els) =>
+              els
+                .map((el) => el.getBoundingClientRect())
+                .filter((r) => r.width > 0 && (r.height < 43 || r.width < 43))
+                .map((r) => `${Math.round(r.width)}x${Math.round(r.height)}`),
+            );
+
+          await tray.overflow.click();
+          const menu = page.getByRole('menu');
+          await expect(menu).toBeVisible();
+          const items = menu.getByRole('menuitem');
+          expect(await items.count()).toBeGreaterThan(1);
+          expect(await tooSmall(items)).toEqual([]);
+          await page.keyboard.press('Escape');
+
+          await tray.clickMenuItem('clear-informational');
+          await expect(tray.confirm).toBeVisible();
+          expect(await tooSmall(tray.confirm.getByRole('button'))).toEqual([]);
+          await tray.confirm.getByTestId('tray-confirm-ok').click();
+          await expect(tray.undoBar).toBeVisible();
+          expect(await tooSmall(tray.undoBar.getByRole('button'))).toEqual([]);
+        });
+      }
+
       for (const scheme of ['light', 'dark'] as const) {
         test(`axe_should_find_no_serious_violations_in_deck_tray_menu_and_confirm_in_${scheme}_scheme`, async ({ page, request }) => {
           await page.emulateMedia({ colorScheme: scheme });

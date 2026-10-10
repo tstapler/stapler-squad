@@ -96,6 +96,50 @@ test.describe('toast stack (phone)', () => {
       }
     });
 
+    test('swipe_should_start_only_on_row_surface_and_never_from_grabber_tab_strip_or_30px_edge_when_touch_sequences_run', async ({ page, request, context }) => {
+      const { client, session, deck } = await openSessionAndSeed(page, request, 2);
+      try {
+        const cdp = await context.newCDPSession(page);
+        const swipeFrom = async (x: number, y: number, dx: number) => {
+          const touch = (type: 'touchStart' | 'touchMove' | 'touchEnd', px: number) =>
+            cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x: px, y }] });
+          await touch('touchStart', x);
+          for (let step = 1; step <= 6; step++) await touch('touchMove', x + (step * dx) / 6);
+          await touch('touchEnd', x + dx);
+        };
+        await expect(deck.toasts.first()).toContainText('Failure 0');
+
+        // 1. From the tab strip: no toast is dismissed and the tray stays closed.
+        const tabBox = (await page.getByRole('tab', { name: /Terminal/ }).first().boundingBox())!;
+        await swipeFrom(tabBox.x + 20, tabBox.y + tabBox.height / 2, 240);
+        await expect(deck.toasts.first()).toContainText('Failure 0');
+
+        // 2. From within 30px of the screen edge: the same.
+        const rowBox = (await page.getByTestId('toast-row').first().boundingBox())!;
+        await swipeFrom(10, rowBox.y + rowBox.height / 2, 240);
+        await expect(deck.toasts.first()).toContainText('Failure 0');
+
+        // 3. Open the sheet; a horizontal drag that starts on the grabber never dismisses a tray row.
+        await page.getByTestId('toast-overflow-chip').or(page.getByTestId('tray-entry-open')).first().click();
+        const grabber = page.getByTestId('tray-grabber');
+        await expect(grabber).toBeVisible();
+        const rows = page.getByTestId('tray-row');
+        const rowsBefore = await rows.count();
+        const grabberBox = (await grabber.boundingBox())!;
+        await swipeFrom(grabberBox.x + grabberBox.width / 2 - 100, grabberBox.y + grabberBox.height / 2, 240);
+        await expect(page.getByTestId('tray-undo-bar')).toHaveCount(0);
+        await expect(rows).toHaveCount(rowsBefore);
+
+        // 4. A swipe that does start on the row surface dismisses (the positive control).
+        await page.getByRole('button', { name: 'Close notification panel' }).click();
+        const target = (await page.getByTestId('toast-row').first().boundingBox())!;
+        await swipeFrom(target.x + 40, target.y + target.height / 2, 240);
+        await expect(deck.toasts.first()).toContainText('Failure 1');
+      } finally {
+        await client.deleteSession(session.id, true);
+      }
+    });
+
     test('toast_stack_should_hold_the_undo_bar_in_the_chip_row_when_move_all_on_a_phone', async ({ page, request }) => {
       const { client, session, deck } = await openSessionAndSeed(page, request, 3);
       try {

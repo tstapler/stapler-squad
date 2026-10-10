@@ -6,7 +6,14 @@
  * "Clear informational" cases to this file.
  */
 import { test, expect, type APIRequestContext } from '@playwright/test';
-import { NotificationTray, ToastDeck, TRAY_V2_FLAG, sendNotification, setFeatureFlag } from './pages/NotificationPanel';
+import {
+  NotificationTray,
+  ToastDeck,
+  TRAY_V2_FLAG,
+  openTerminalSession,
+  sendNotification,
+  setFeatureFlag,
+} from './pages/NotificationPanel';
 import { profiles } from './helpers/viewport-profiles';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
@@ -139,11 +146,14 @@ test.describe('tray bulk actions with seeded decisions (Story 4.4)', () => {
     page.on('request', (r) => {
       if (r.url().includes(CLEAR_RPC)) clears.push(r.url());
     });
+    await page.clock.install();
     const tray = await openTray(page);
     await tray.clickMenuItem('clear-informational');
     await tray.confirm.getByTestId('tray-confirm-ok').click();
     await tray.undo.click();
-    await page.waitForTimeout(6_000); // longer than the 5s window
+    await expect(tray.undoBar).toBeHidden();
+    // Jump past the 5s window: a cancelled clear must not fire when its timer would have.
+    await page.clock.fastForward(10_000);
     expect(clears).toHaveLength(0);
     expect((await historyFor(request, prefix)).filter((n) => (n.sessionId ?? '').includes('-info-'))).toHaveLength(5);
   });
@@ -203,5 +213,43 @@ test.describe('tray bulk actions with seeded decisions (Story 4.4)', () => {
     const body = (await response.json()) as { clearedCount?: number; keptIds?: string[] };
     expect(body.clearedCount).toBe(1);
     expect(body.keptIds).toEqual([err.id]);
+  });
+});
+
+test.describe('Claude notification via tmux (OQ-2 characterization)', () => {
+  test.beforeEach(async ({ request }) => {
+    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, true);
+  });
+  test.afterEach(async ({ request }) => {
+    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, false);
+  });
+
+  test('claude_notification_via_tmux_toast_should_not_appear_but_history_row_should_when_visible_session_idle_hook_with_v2_on', async ({ page, request }) => {
+    const { client, session } = await openTerminalSession(page, BASE_URL, { marker: 'TMUX-HOOK-MARKER', titlePrefix: 'tmux-hook', waitForText: false });
+    try {
+      const deck = new ToastDeck(page);
+      const tray = new NotificationTray(page);
+      // The idle hook inside a stapler-squad pane keeps source_app=tmux and arrives as INFO for the
+      // session in view: history only, never a toast, and the session itself is visible (hidden=0).
+      await sendNotification(request, BASE_URL, {
+        sessionId: session.id,
+        type: 'INFO',
+        title: 'Claude is waiting for your input',
+        metadata: { source_app: 'tmux' },
+      });
+
+      await expect.poll(async () => (await historyFor(request, session.id)).length, { timeout: 10_000 }).toBe(1);
+      await expect(deck.toasts).toHaveCount(0);
+
+      await tray.handle.click();
+      await tray.expectOpen();
+      await tray.dismissWhatChanged();
+      // The shared test server holds other specs' history; only this session's row is asserted.
+      const mine = tray.rows.filter({ hasText: 'Claude is waiting for your input' });
+      await expect(mine).toHaveCount(1);
+      await expect(deck.toasts).toHaveCount(0);
+    } finally {
+      await client.deleteSession(session.id, true);
+    }
   });
 });

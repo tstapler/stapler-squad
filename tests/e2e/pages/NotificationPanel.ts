@@ -1,4 +1,6 @@
-import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
+import path from 'path';
+import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
+import { SessionClient } from '../helpers/session-client';
 
 // Closes anything that can steal keyboard focus from the session list: the
 // Notification Panel (if auto-opened) and any visible toast alerts. Both
@@ -49,7 +51,7 @@ export async function setFeatureFlag(
 
 export interface SeededNotification {
   sessionId: string;
-  type: 'ERROR' | 'WARNING' | 'APPROVAL_NEEDED' | 'CUSTOM';
+  type: 'ERROR' | 'WARNING' | 'APPROVAL_NEEDED' | 'CUSTOM' | 'INFO';
   title: string;
   message?: string;
   metadata?: Record<string, string>;
@@ -200,6 +202,18 @@ export async function markTerminalRoot(page: Page): Promise<void> {
   });
 }
 
+/**
+ * Terminal text and row counts are read from xterm's DOM renderer. The `chromium` project loads
+ * SwiftShader WebGL, which paints a canvas and leaves `.xterm-rows` empty, so a spec that waits
+ * for terminal text runs only in the `chromium-dom` project (the repo convention).
+ */
+export function skipWithoutDomRenderer(): void {
+  test.skip(
+    !test.info().project.name.includes('dom'),
+    'terminal text is read from the DOM renderer; runs in the chromium-dom project',
+  );
+}
+
 export async function readTerminalFacts(page: Page): Promise<TerminalFacts> {
   return page.evaluate(() => {
     const screen = document.querySelector('.xterm-screen') as HTMLElement | null;
@@ -213,4 +227,49 @@ export async function readTerminalFacts(page: Page): Promise<TerminalFacts> {
       text: rowEls.map((r) => r.textContent || '').join('\n'),
     };
   });
+}
+
+const ONBOARDED_KEY = 'stapler-squad:onboarded';
+
+/**
+ * Opens a real session whose terminal is filled to the bottom (prompt on the last row) and waits
+ * for it to render. Call `installWebSocketSendCounter` first when the spec counts frames.
+ */
+export async function openTerminalSession(
+  page: Page,
+  baseUrl: string,
+  { marker, titlePrefix, waitForText = true }: { marker: string; titlePrefix: string; waitForText?: boolean },
+): Promise<{ client: SessionClient; session: { id: string } }> {
+  if (waitForText) skipWithoutDomRenderer();
+  const client = new SessionClient(baseUrl);
+  const session = await client.createSession({
+    title: `${titlePrefix}-${Date.now()}`,
+    path: '/tmp',
+    program: `sh ${path.join(__dirname, '..', 'fixtures', 'tray-terminal-fixture.sh')} ${marker}`,
+  });
+  await page.addInitScript((key) => localStorage.setItem(key, 'true'), ONBOARDED_KEY);
+  await page.goto(`${baseUrl}/?session=${session.id}`, { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('textbox', { name: 'Terminal input' })).toBeAttached({ timeout: 20_000 });
+  if (waitForText) {
+    await expect.poll(async () => (await readTerminalFacts(page)).text, { timeout: 15_000 }).toContain(marker);
+  }
+  await markTerminalRoot(page);
+  return { client, session };
+}
+
+/** Waits until the page's WebSocket send counter has stopped moving (two samples apart are equal). */
+export async function waitForIdleFrames(page: Page, intervalMs = 300): Promise<number> {
+  let last = -1;
+  await expect
+    .poll(
+      async () => {
+        const sends = await webSocketSends(page);
+        const settled = sends === last;
+        last = sends;
+        return settled;
+      },
+      { intervals: [intervalMs], timeout: 10_000 },
+    )
+    .toBe(true);
+  return last;
 }
