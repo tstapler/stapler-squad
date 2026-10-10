@@ -53,7 +53,7 @@ nothing merged a program's `EnvVars` into the tmux `-e` set. `resolveExtraEnvVar
 
 | AC | Status | Evidence |
 |----|--------|----------|
-| 1, 2 | Observed once on HEAD | `go test ./server/services -run TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession -count=1 -v` printed `--- PASS` (2026-10-10). Pane text not yet logged; plan Task 1.1.1b adds it. |
+| 1, 2 | Observed once on HEAD | `go test ./server/services -run TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession -count=1 -v` printed `--- PASS` (2026-10-10). Pane text not yet logged; plan Task 1.1.1b adds it. One run, no SKIP gate, no `tmux -V` recorded: this row stays "Observed once" and is NOT promoted to VERIFIED until plan evidence E1 (and E5) land with the `RealTmuxGate` verdict and tmux version. |
 | 3 | Partly | Pre-fix run on `cdfd4e5cf2^` (`4dbbe7b40`) failed on `tmux show-environment must carry the program's env` (coordinator-run, unconverted test, no verbatim record in repo). Overlay red/green and lint-clean not done: the landed test has 5 blocking lint findings (plan Task 1.1.0a). |
 | 4a | Unit tests exist and pass | `go test ./session -run 'EnvOverride|ExtraEnv|SettingsEnv' -count=1`: ok. End-to-end Claude-program test not written yet (plan Task 1.1.3c). |
 | 4b | Not run | See above. |
@@ -69,7 +69,28 @@ nothing merged a program's `EnvVars` into the tmux `-e` set. `resolveExtraEnvVar
 - The companion directory-collision bug named in the item (no separate ID known).
 - Redesign of the Program Configurations UI/API.
 
-## Risky assumption
+## Backlog criteria mapping
 
-Real tmux in CI behaves like local tmux 3.6a (CI pins 3.4); a skipped real-tmux test must
-never be counted as a pass (plan Task 1.1.0b gate).
+The backlog item's acceptance criteria are numbered 1-5 and map 1:1 to AC1-AC5 above
+(backlog criterion 4 = AC4; `report_progress` `criteria_index` is 0-based, so AC4 =
+`criteria_index=3`). `request_review` fails closed unless every criterion is `pass`
+(`docs/reference/backlog-completion-gate-and-cleanup.md`). AC4 may be reported `pass` only
+when AC4a is executed AND the owner's acceptance of unverified AC4b is recorded in the
+`request_review` message; otherwise it is not marked `pass` and the owner is asked via
+`create_guidance_request`/`report_blocked`. An earlier session marked criterion 4 `pass` on
+AC4a unit tests only; that must be re-qualified in the review message (plan Story 1.1.3).
+
+## Risky assumptions
+
+1. Real tmux in CI behaves like local tmux 3.6a (CI pins 3.4); a skipped real-tmux test must
+   never be counted as a pass (plan Task 1.1.0b gate).
+2. The original report ("env silently ignored") was caused by the pre-`cdfd4e5cf2` code and
+   not by a route this item leaves out of scope. Nothing records on which build or path the
+   symptom was first observed, so the user-visible symptom may still reproduce on HEAD via:
+   edit-after-create then reuse of a live session (`initTmuxSession` reuse guard), in-process
+   restart with frozen `EnvVars` (F2), the tymux gRPC backend (F5, inferred), or remote
+   execution targets (F4). The PR body MUST name these four as residual symptom routes so
+   closing the item is a deliberate owner decision (plan Task 1.4.2a). Cheap check: ask the
+   reporter/owner which build and creation path the original observation used.
+3. The companion directory-collision bug named in the item is not covered here and has no
+   known ID; the PR body MUST name it so it is filed or linked rather than dropped.

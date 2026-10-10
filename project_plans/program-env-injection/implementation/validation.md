@@ -4,6 +4,7 @@
 **Complexity**: 2
 **Inputs**: `implementation/plan.md` (Ready for implementation), `requirements.md` (AC1-AC5).
 **Scope of this document**: test design only. Nothing here was executed; existence of cited tests and helpers was checked by `grep` at HEAD `56857ba09`.
+**Triad iteration 2 update**: mirrors plan.md "Repair log (triad iteration 2)". HEAD pins in this document and the plan (`56857ba09`, `9ef8fbc68`) predate the current HEAD (`572df53f8`, docs-only commits in between); plan Task 1.1.0b re-confirms every cited line before the first edit. T5-T9 are tagged AC4a, not AC4. AC4 reaches the backlog gate as criterion 4 (`criteria_index=3`) only under the plan's Story 1.1.3 "How the item reaches review" rule (AC4a executed plus recorded owner acceptance of AC4b). Worktree model: one worktree per agent plus a coordinator integration worktree with a merge step (G9 below).
 **Iteration 1 update**: mirrors plan.md "Repair log (validate iteration 1)": real-tmux runs go through the `RealTmuxGate` (plan Task 1.1.0b), AC4 is split into AC4a (executed) and AC4b (UNVERIFIED, not executed), and gap G1's test (T17, plan Task 1.3.2c) is accepted into the plan.
 
 ## Happy Path Scenario
@@ -40,11 +41,13 @@ Checked with `grep` against the worktree. "Exists" = found at the cited location
 | T2 | `TestInstance_BuildExtraEnv_IncludesCustomProgramAndInstanceEnvVars` | `session/instance_tmux_test.go:1202` | Unit | Exists | AC1, AC3 (PIT-5 control) |
 | T3 | `TestNewSessionArgs_EmitsExtraEnvPairs` (6 table cases; the `;`-suffixed value is characterization only: argv unescaped, tmux `new-session` rc=1, fix is F3) | `session/tmux/new_session_args_extra_env_test.go` | Unit | To create (1.2.1a) | AC2 support |
 | T4 | `TestNewSessionArgv_BothCreationPaths_CarryExtraEnv` (2 subtests) | `session/tmux/new_session_argv_creation_paths_test.go` | Unit (`MockCmdExec`) | To create (1.2.2a) | AC2 support |
-| T5 | `TestClaudeSettingsEnvOverrideArgs_CarriesResolvedEnvVars` | `session/instance_tmux_test.go:1248` | Unit | Exists | AC4 |
-| T6 | `TestClaudeSettingsEnvOverrideArgs_EmptyWhenNoEnvVars` | `session/instance_tmux_test.go:1232` | Unit (error/empty path) | Exists | AC4 |
-| T7 | `TestBuildClaudeCommand_IncludesSettingsEnvOverride` | `session/instance_tmux_test.go:1278` | Unit | Exists | AC4 |
-| T8 | `TestClaudeSettingsEnvOverrideArgs_HostileValuesRoundTripThroughShell` (9 values) | `session/instance_tmux_test.go` | Unit (real `sh -c`) | To create (1.3.1a) | AC4 |
-| T9 | `TestCreateSession_CustomClaudeProgram_SettingsEnvReachesLaunchedProcess` | `server/services/session_service_create_settings_env_test.go` | Integration (real tmux + FakeClaude) | To create (1.1.3c) | AC4 |
+| T5 | `TestClaudeSettingsEnvOverrideArgs_CarriesResolvedEnvVars` | `session/instance_tmux_test.go:1248` | Unit | Exists | AC4a (not AC4b) |
+| T6 | `TestClaudeSettingsEnvOverrideArgs_EmptyWhenNoEnvVars` | `session/instance_tmux_test.go:1232` | Unit (error/empty path) | Exists | AC4a |
+| T7 | `TestBuildClaudeCommand_IncludesSettingsEnvOverride` | `session/instance_tmux_test.go:1278` | Unit | Exists | AC4a |
+| T8 | `TestClaudeSettingsEnvOverrideArgs_HostileValuesRoundTripThroughShell` (9 values) | `session/instance_tmux_test.go` | Unit (real `sh -c`) | To create (1.3.1a) | AC4a |
+| T9 | `TestCreateSession_CustomClaudeProgram_SettingsEnvReachesLaunchedProcess` | `server/services/session_service_create_settings_env_test.go` | Integration (real tmux + FakeClaude) | To create (1.1.3c) | AC4a |
+
+No test is tied to AC4b; T5-T9 passing does not satisfy AC4 as a whole.
 | T10 | `TestResolveExtraEnvVars_InstanceEnvVarsCopyShadowsLaterProgramEdit` | `session/instance_program_env_semantics_test.go` | Unit (characterization) | To create (1.3.2a) | AC-less (PIT-B) |
 | T11 | `TestResolveExtraEnvVars_InstanceWithoutEnvVarsSeesCurrentProgramEnv` | same | Unit (characterization) | To create (1.3.2a) | AC-less (PIT-B) |
 | T12 | `TestInstanceData_RoundTripDropsEnvVars` | same | Unit (characterization) | To create (1.3.2b) | AC-less (PIT-B) |
@@ -237,7 +240,7 @@ cd web-app && pnpm exec jest --testPathPatterns="useAvailablePrograms" --coverag
 | G14 | **evidence.md ownership (triad GAP-4).** Coordinator is the single writer; agents report text blocks; structure is the E1-E9 table in plan "Evidence file structure" | Process | Plan header and "Evidence file structure" |
 | G15 | **tmux 3.4 not run locally (triad GAP-6).** Named CI/wall-clock blocker; fallback wording "Verified on tmux 3.6a only; the CI-pinned tmux 3.4 was not run for this evidence" | Medium | Plan Effort Estimate |
 | G16 | **AC4b closure (product gap).** Item may be reported with AC4b UNVERIFIED and owner acceptance requested; AC4 as a whole is not ticked without an executed E9 (run by a human with credentials) or recorded owner acceptance. F1-F5 are listed in the PR body for the owner to file | Medium | Plan Story 1.1.3 closure rule, Task 1.4.2a |
-| G9 | **Wave-1 package contention.** T3/T4 (`session/tmux`), T8/T10-T12 (`session`), T1/T9 (`server/services`), T13 (`web-app`) must be authored one agent per package or per worktree; one half-written `_test.go` breaks `go test` for the whole package | Process | Plan's Dependency Visualization already assigns agents A-D by package |
+| G9 | **Wave-1 package contention.** T3/T4 (`session/tmux`), T8/T10-T12 (`session`), T1/T9 (`server/services`), T13 (`web-app`) must be authored one agent per package or per worktree; one half-written `_test.go` breaks `go test` for the whole package | Process | Plan's Dependency Visualization assigns agents A-D by package, each in its own worktree (generated code per worktree), with a Wave 1.5 merge plus integration `bin/linter` run in the coordinator worktree where Waves 2R/3/4 execute (triad iteration 2, G1) |
 | G10 | T4 `RestoreWithWorkDir_MissingSession` costs about 1.5 s of `probeSessionExistsWithRetries` backoff with a mock executor; the capture closure needs a `sync.Mutex` under `-race` | Low | In plan (Task 1.2.2a); recorded here so the reviewer checks both |
 
 ## Coverage Summary

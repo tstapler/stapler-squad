@@ -115,12 +115,30 @@ Every change that would alter production behaviour is held out of this item. Eac
 ```
 Epic 1.1 is the first shippable unit (AC evidence + lint repair); Epics 1.2-1.4.1 may land in a separate PR.
 Parallelism is per PACKAGE, not per file: one half-written _test.go breaks `go test`
-for every agent in the same package/worktree. One agent per package, or one worktree per agent.
+for every agent in the same package/worktree.
+
+WORKTREE MODEL (decided): ONE WORKTREE PER AGENT. Agents A-D each edit in their own git
+worktree (branch off the coordinator's branch), so no agent loads another agent's
+half-written package and `go -C tools/lint build -o bin/linter` writes a per-worktree
+output file. Each agent worktree is a FRESH worktree: it needs Wave 0's generated code
+(`make proto-gen ent-gen`, `server/web/dist` stub, per Task 1.1.0b) before its first
+`go vet`/`bin/linter`; the Wave 0 preflight therefore runs in every agent worktree, not
+once. Inside one agent's worktree, `bin/linter` may be scoped to that agent's own
+package(s) only (A: ./server/services; B: ./session/tmux; C: ./session), never to the
+other agents' packages.
+INTEGRATION WORKTREE: the coordinator's worktree (the item's own branch) is the single
+place where Waves 2R, 3 and 4 run. After Wave 1 the coordinator merges (cherry-pick or
+`git merge`) the four agent branches, in order A, B, C, D (disjoint files, so no
+conflicts expected), then re-runs `bin/linter ./server/services ./session ./session/tmux`
+on the merged tree as the integration gate BEFORE Wave 2R. Only test files are edited, so
+the merge is the last point at which a cross-package lint or compile break can surface.
 
 Wave 0 (serial, before any evidence run)
   1.1.0b  Preflight: generated code (proto-gen, ent-gen, server/web/dist stub, lint
-          prerequisites; per fresh worktree) + RealTmuxGate (resolve TMUX_BIN, record
-          tmux -V, define gate)
+          prerequisites; in the integration worktree AND each agent worktree) +
+          web-app deps (pnpm install, jscpd prerequisites; Agent D worktree and the
+          integration worktree) + citation re-confirmation + RealTmuxGate (resolve
+          TMUX_BIN, record tmux -V, define gate)
 
 Wave 1  -- EDIT-ONLY: agents write test files and run only fast, non-real-tmux checks
            (go vet / bin/linter / mock-executor tests / non-tmux unit tests). Cap
@@ -134,19 +152,26 @@ Wave 1  -- EDIT-ONLY: agents write test files and run only fast, non-real-tmux c
   Agent C (package session):          1.3.1a -> 1.3.2a -> 1.3.2b -> 1.3.2c
   Agent D (web-app):                  1.3.3a
       |
-Wave 2R (serial real-tmux, ONE run at a time, nothing else building; one agent or the coordinator)
+Wave 1.5 (merge, coordinator, integration worktree; serial)
+  merge agent branches A, B, C, D; run `bin/linter ./server/services ./session ./session/tmux`
+  and `go vet` on the merged tree; fix any cross-package break before any real-tmux run
+      |
+Wave 2R (serial real-tmux, ONE run at a time, nothing else building; one agent or the
+         coordinator, in the INTEGRATION worktree)
   1.1.0a, 1.1.1b, 1.1.1c   RealTmuxGate run of the converted test (single run, gate OK)
   1.1.3c                   RealTmuxGate run of the new test
   1.1.1a baseline (E1, AFTER the three runs above), 1.4.1a (shell evidence)
       |
-Wave 2 (read-only / non-tmux, may overlap Wave 2R)
+Wave 2 (read-only / non-tmux; runs AFTER Wave 2R completes, never concurrently with it:
+        1.1.3a is a `go test ./session` compile and must not load the machine while a
+        30 s-timeout real-tmux run is in flight)
   1.1.3a, 1.1.3b     (evidence; 1.1.3a is non-tmux)
       |
-Wave 3 (-overlay does not touch the tree; real-tmux runs are serial, one at a time)
+Wave 3 (integration worktree; -overlay does not touch the tree; real-tmux runs are serial, one at a time)
   1.1.2a -> 1.1.2b -> 1.1.2c        (AC3, AC5)
   1.1.3d                            (needs 1.1.3c)
       |
-Wave 4
+Wave 4 (integration worktree)
   1.1.1d  repeat-run flake evidence (-count=5 -race), nothing else building
   1.4.2a  follow-ups recorded
   1.4.2b  final gates (custom linters, lint, targeted test set)
@@ -274,6 +299,7 @@ Every finding in `research/pitfalls.md` and `research/architecture.md` appears b
 - Verify (Wave 1 check): `go -C tools/lint build -o "$(pwd)/bin/linter" ./cmd/linter && bin/linter ./server/services ./session ./session/tmux` exits 0 (the Makefile's `lint-custom` recipe, `Makefile:814-821`, scoped to the touched packages; `make lint-custom` is the repo-wide form) and `go vet ./server/services`. Verify (RealTmuxGate run, Wave 2R, serial): the `RealTmuxGate` run (Task 1.1.0b) of `TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession` with `-race -short -count=1 -v` and `want=1`. Re-run the linter line after every later task that adds a test file.
 
 ##### Task 1.1.0b: `RealTmuxGate` preflight and output gate (XS, run-only; do this before ANY real-tmux run; every task below that says "`RealTmuxGate`" uses it)
+- Re-confirm citations first (docs-only commits have landed since the plan's `9ef8fbc68` and validation's `56857ba09` pins; HEAD at triad iteration 2 was `572df53f8`). Before any edit: `git rev-parse HEAD`, then re-run the cheap greps that the line numbers in this plan hang on and record any drift in E1's header: `grep -n 'func (i \*Instance) \(resolveExtraEnvVars\|buildExtraEnv\|claudeSettingsEnvOverrideArgs\|wireTmuxSession\|initTmuxSession\)' session/instance_tmux.go`; `grep -n 'time.Sleep\|exec.CommandContext' server/services/session_service_create_test.go` (expect :718/:740 and :729/:738/:741); `grep -n 'func seedCustomProgram' session/instance_tmux_test.go`; `grep -n 'func (s \*TmuxSession) newSessionArgs' session/tmux/tmux_session_start.go`; `git diff --stat 9ef8fbc68 HEAD -- session server/services` (expect empty: docs-only commits). A cited line that moved is corrected in the worker's own edit; a cited symbol that is gone halts the item.
 - Reason: the landed test calls `t.Skip` when `exec.LookPath(tmux.Binary())` fails, and `go test` exits 0 / prints `ok` for a skip, so a bare exit code can record a vacuous run as PASS (pre-mortem Failure #1).
 - Preflight (resolve to an EXISTING binary; never `export TMUX_BIN="$(pwd)/bin/tmux"` unless that file exists, which it does not in a fresh worktree):
   ```bash
@@ -289,6 +315,14 @@ Every finding in `research/pitfalls.md` and `research/architecture.md` appears b
   make ent-gen     # Makefile:564 -> `go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema`. The sql/upsert flag is mandatory; do not hand-run without it
   test -d server/web/dist || make server/web/dist   # Makefile:208; the Go embed needs the directory. Either build it (needs web-app/out, i.e. `make web-build`) or create a stub: `mkdir -p server/web/dist && touch server/web/dist/.gitkeep` (scratch only, gitignored; never commit)
   ```
+  Web-app prerequisites (Task 1.3.3a and Task 1.4.2b's `jscpd` gate; run in the worktree that executes them, i.e. Agent D's and the integration worktree; `node_modules` is not shared between worktrees; pnpm only, `docs/how-to/use-pnpm-in-web-app.md`):
+  ```bash
+  test -d web-app/node_modules/.bin || (cd web-app && pnpm install --frozen-lockfile)
+  test -x web-app/node_modules/.bin/jest  || { echo "PREFLIGHT FAIL: jest missing"; exit 1; }
+  test -x web-app/node_modules/.bin/jscpd || { echo "PREFLIGHT FAIL: jscpd missing (lint:duplicates needs it)"; exit 1; }
+  test -f web-app/.jscpd.json             || { echo "PREFLIGHT FAIL: web-app/.jscpd.json missing"; exit 1; }
+  ```
+  If `pnpm install` cannot run (no network), Task 1.3.3a and the `jscpd` line of Task 1.4.2b are reported NOT RUN, never green.
   For Task 1.4.2b's `make lint` the prerequisites are exactly the Makefile's own (`Makefile:798`: `ensure-tools proto-gen ent-gen server/web/dist lint-custom lint-shell`), plus `golangci-lint` v2 on `PATH` (the recipe `go install`s it if missing, which needs network) and `shellcheck` for `lint-shell`. Record in E1 which of these were already present and which were generated. `make build` satisfies the first three. Never `git add` the generated output (`.gitignore` excludes it; CLAUDE.md).
 - Gate script (scratchpad only, never committed): `$SCRATCH/gate.sh <pass|fail> <TestName> <wantCount> <outfile>`:
   ```bash
@@ -349,7 +383,7 @@ Every finding in `research/pitfalls.md` and `research/architecture.md` appears b
 - Verify (Wave 1 check): `go vet ./server/services && bin/linter ./server/services`. Verify (RealTmuxGate run, Wave 2R, serial, after the vet/linter line): `RealTmuxGate` run (`-race -short -count=1 -v`, `want=1`, `GATE OK`).
 
 ##### Task 1.1.1d: Repeat-run flake evidence (E2) (XS, run-only)
-- Run via `RealTmuxGate` (Task 1.1.0b, `STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30`, resolved existing `TMUX_BIN`; CI uses `-race -short` with `TMUX_BIN="$(pwd)/bin/tmux"`, `.github/workflows/build.yml:275,327`, so build `bin/tmux` first or use system tmux and say so): `go test -race -short ./server/services -run '^TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession$' -count=5 -v`, then `gate.sh pass TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession 5`. Run it serially on a quiet machine (nothing else building). Paste output, per-run durations and the `GATE OK` line into E2.
+- Run via `RealTmuxGate` (Task 1.1.0b, `STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30`, resolved existing `TMUX_BIN`; CI uses `-race -short` with `TMUX_BIN="$(pwd)/bin/tmux"`, `.github/workflows/build.yml:275,327`, so build `bin/tmux` first or use system tmux and say so): `go test -race -short ./server/services -run '^TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession$' -count=5 -v`, then `gate.sh pass TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession 5`. Run it serially on a quiet machine (nothing else building). `-count=5` re-runs the test five times in ONE process, so the service/config/worktree state must not collide across iterations: the test uses the fixed Title/Branch `program-env-repro`, and a cleanup that has not freed the worktree/branch would fail iteration 2+ with a collision that reads as a flake. Before the run, either (a) make Title and Branch unique per iteration (suffix with a per-run counter or `t.Name()` plus `time.Now().UnixNano()`; `destroyCreatedSession` stays in `t.Cleanup`), or (b) confirm that `destroyCreatedSession` removes both the worktree and the branch (read it, and after a `-count=2` run check `git worktree list` and `git branch --list 'program-env-repro*'` print nothing). Record which in E2; a failure in iteration 2+ that is a worktree/branch collision is a test defect, not a flake. Paste output, per-run durations and the `GATE OK` line into E2.
 - Files: `project_plans/program-env-injection/implementation/evidence.md`
 - Verify: `GATE OK: 5 "--- PASS: ..." line(s), 0 SKIP`. Five SKIP lines are a gate failure, not five passes. A single failure is a defect to fix, but re-run it alone on a quiet machine once before classifying (create-timeout/load, pre-mortem Failure #6).
 
@@ -360,7 +394,7 @@ Every finding in `research/pitfalls.md` and `research/architecture.md` appears b
   - *Given* the `PreFixOverlay` (`wireTmuxSession` calls `SetExtraEnv([]string{"STAPLER_SESSION_UUID=" + i.UUID})` only) and `ProgramConfig{ID: "netflix-model-gateway", Env: {"ANTHROPIC_BASE_URL": "http://127.0.0.1:47000"}}`, *When* `go test -overlay <json> ./server/services -run '^TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession$'` runs, *Then* it fails with the assertion message `tmux show-environment must carry the program's env`, and the same command without `-overlay` passes.
 - AC5: root cause documented with the failure mechanism.
   - *Given* `git show cdfd4e5cf2^:session/instance_tmux.go`, *When* its `SetExtraEnv` call is inspected, *Then* it shows `if i.UUID != "" { session.SetExtraEnv([]string{"STAPLER_SESSION_UUID=" + i.UUID}) }` (line 578-580) and no `resolveExtraEnvVars`/`buildExtraEnv` symbol exists in that file.
-  - Root-cause wording (replaces `requirements.md`'s anachronistic "no code path merged `ResolveProgramConfig(...).EnvVars`"; apply to E3 and the test's doc comment): VERIFIED by `git grep ResolveProgramConfig cdfd4e5cf2^ -- '*.go'` (no non-test hits; first introduced by `cdfd4e5cf2`) that at the parent commit custom program IDs were not resolved to a command at all; `cdfd4e5cf2` added program-ID resolution AND the env merge together. The only wire-time `SetExtraEnv` carried `STAPLER_SESSION_UUID`. Consequently the parent-commit run (E4b) fails for TWO reasons (ID unresolved, "Pane is dead (status 127)"; and env absent), and only the overlay run (E4) isolates the env-only failure. `PreFixOverlay` is a reconstruction of that failure on HEAD, not a state that existed in history.
+  - Root-cause wording (already applied to `requirements.md` "Root cause", which no longer carries the earlier anachronistic "no code path merged `ResolveProgramConfig(...).EnvVars`" sentence; apply the same wording to E3 and the test's doc comment): VERIFIED by `git grep ResolveProgramConfig cdfd4e5cf2^ -- '*.go'` (no non-test hits; first introduced by `cdfd4e5cf2`) that at the parent commit custom program IDs were not resolved to a command at all; `cdfd4e5cf2` added program-ID resolution AND the env merge together. The only wire-time `SetExtraEnv` carried `STAPLER_SESSION_UUID`. Consequently the parent-commit run (E4b) fails for TWO reasons (ID unresolved, "Pane is dead (status 127)"; and env absent), and only the overlay run (E4) isolates the env-only failure. `PreFixOverlay` is a reconstruction of that failure on HEAD, not a state that existed in history.
 **Files**: scratchpad overlay files (never committed), `project_plans/program-env-injection/implementation/evidence.md`
 
 ##### Task 1.1.2a: Build the `PreFixOverlay` and prove it matches the historical shape (E3) (XS)
@@ -389,7 +423,11 @@ Every finding in `research/pitfalls.md` and `research/architecture.md` appears b
   - *AC4a scenario*, *Given* `ProgramConfig{ID: "netflix-model-gateway", Command: "<tmp>/claude" (FakeClaude), Env: {"ANTHROPIC_BASE_URL": "http://127.0.0.1:47000", "SSQ_HOSTILE": "it's $(touch <tmp>/pwned) `touch <tmp>/pwned` \"q\" a=b"}}`, *When* `CreateSession` launches it and the fake records its argv, *Then* the argv holds `--settings` followed by JSON equal to `{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:47000","SSQ_HOSTILE":"it's $(touch <tmp>/pwned) `touch <tmp>/pwned` \"q\" a=b"}}`, `<tmp>/pwned` does not exist, and `tmux show-environment` carries both keys.
   - *Given* the same program but `claudeSettingsEnvOverrideArgs` disabled by overlay, *When* the test runs, *Then* it fails at the `--settings` assertion.
 - AC4b remains UNVERIFIED locally even if the doc page is fetched; it is labelled UNVERIFIED outright if the page cannot be fetched.
-- **AC4b closure rule**: the backlog item MAY be reported done (PR opened, `report_pr_created`/`report_progress` for AC1, AC2, AC3, AC4a, AC5) with AC4b explicitly UNVERIFIED, provided the report (a) states "AC4b: UNVERIFIED (upstream-documented, not executed)", (b) asks the owner (Tyler) to accept that gap or to run E9, and (c) the coordinator does NOT tick AC4 as a whole: only AC4a is reported as passed. AC4 as a whole closes only on an executed E9 (`cli` printed) or on explicit owner acceptance recorded in the PR thread; E9 showing `global` is a defect to escalate, not to paper over.
+- **AC4b closure rule**: the PR may be opened (`report_pr_created`) and AC1, AC2, AC3, AC5 reported `pass` with AC4b explicitly UNVERIFIED, provided every report (a) states "AC4b: UNVERIFIED (upstream-documented, not executed)", (b) asks the owner (Tyler) to accept that gap or to run E9, and (c) AC4 as a whole (backlog criterion 4, `criteria_index=3`) is NOT reported `pass` until an executed E9 (`cli` printed) or explicit owner acceptance recorded in the PR thread or guidance reply; AC4a alone is reported in prose, not as the criterion's `pass`. E9 showing `global` is a defect to escalate, not to paper over. See "How the item reaches review" below for the exact `report_progress` / `request_review` / `report_blocked` sequence.
+- **How the item reaches review (backlog completion gate)**: `request_review` fails closed unless EVERY backlog criterion is `pass` via `report_progress`, and a rejection counts toward the `blockedCycleThreshold` (3) escalation (`docs/reference/backlog-completion-gate-and-cleanup.md`, "The AC-completeness gate"). The backlog item's criteria are numbered 1-5 and map 1:1 to AC1-AC5 here (backlog criterion 4 = AC4 as a whole; `report_progress` `criteria_index` is 0-based, so AC4 = `criteria_index=3`; the `backlog:done-3` skill is that call). There is no separate backlog criterion for AC4a, so the plan chooses, in order:
+  1. **AC4 may be reported `pass` (`criteria_index=3`) only when AC4a is executed and gated (E6 + E8 `GATE OK`) AND the owner's acceptance of the unverified AC4b is recorded in the `request_review` message** (or E9 was executed and printed `cli`). The review message must carry the sentence "AC4b: UNVERIFIED (upstream-documented, not executed); owner acceptance requested/recorded" so the reviewer sees what `pass` rests on. A recorded acceptance is a quote of the owner's statement with date and thread, never an inference.
+  2. **If the owner has not accepted by the time AC1-AC3, AC4a and AC5 are done, do NOT mark criterion 4 `pass` and do NOT call `request_review`** (it would be rejected, add a `[request_review:rejected]` note and burn one of three cycles). Instead call `report_progress` with `pass` for `criteria_index` 0, 1, 2, 4 and then `create_guidance_request` (or `report_blocked` with the reason "AC4b needs owner acceptance or an E9 run") asking Tyler to either accept AC4b as unverified or run E9. When the answer arrives, mark criterion 4 `pass` and call `request_review` with the acceptance quoted.
+  3. **Earlier-session note, to be re-qualified**: a prior session marked `criteria_index=3` as `pass` on the basis of AC4a unit tests only (the #852 string-level tests, before T8/T9 existed and before the AC4a/AC4b split). That pass is not evidence for AC4 as written in `requirements.md`. The `request_review` message must say so explicitly ("criterion 4 was earlier marked pass on AC4a unit tests only; it is re-qualified here as AC4a executed end to end plus owner acceptance of AC4b") and, if acceptance is not yet recorded, the coordinator re-marks criterion 4 `fail`/`in_progress` via `report_progress` (statuses `pending`, `in_progress`, `fail` are all treated as not done) so the stale `pass` cannot carry the gate.
 - **Who runs E9**: a human with a real `claude` login and credentials (the owner, or a person the owner designates); no agent or CI job in this item has them. The coordinator hands the human the exact probe above and pastes the result into E9 verbatim with `claude --version`. Not running E9 is a recorded decision, not a blocked task.
 **Files**: `server/services/session_service_create_settings_env_test.go` (new), `project_plans/program-env-injection/implementation/evidence.md`
 
@@ -493,7 +531,7 @@ Every finding in `research/pitfalls.md` and `research/architecture.md` appears b
 - Verify: `go test -race -short ./session -run 'TestResolveExtraEnvVars_' -count=1 -v && bin/linter ./session`
 
 ##### Task 1.3.2b: Add `TestInstanceData_RoundTripDropsEnvVars` (XS, test-first)
-- Same file; mirror `TestToInstanceData_PreservesBackend` (`session/instance_serialization_test.go:15`), plus `envtest.NewIsolatedStateDir(t)` because `FromInstanceData` for a `Paused` instance calls `wireTmuxSession` when the process manager is a `TmuxBackend` (`instance_serialization.go:463-467`), and that calls `config.LoadConfig()`. Read the result through `Snapshot()` per `.claude/rules/instance-lock-free-reads.md`. Name and comment it as characterization of a gap, not a guarantee: because `EnvVars` is not persisted, request-level `env_vars` are silently lost across a server restart.
+- Same file; mirror `TestToInstanceData_PreservesBackend` (`session/instance_serialization_test.go:15`) but **drop its `t.Parallel()`**: `envtest.NewIsolatedStateDir` calls `t.Setenv` (`envtest/envtest.go:71-75`; its doc comment: must be called before `t.Parallel()`, "it panics otherwise"), and `t.Setenv` is forbidden in parallel tests, so the new test must not call `t.Parallel()` at all. Add `envtest.NewIsolatedStateDir(t)` because `FromInstanceData` for a `Paused` instance calls `wireTmuxSession` when the process manager is a `TmuxBackend` (`instance_serialization.go:463-467`), and that calls `config.LoadConfig()`. Read the result through `Snapshot()` per `.claude/rules/instance-lock-free-reads.md`. Name and comment it as characterization of a gap, not a guarantee: because `EnvVars` is not persisted, request-level `env_vars` are silently lost across a server restart.
 - Files: `session/instance_program_env_semantics_test.go`
 - Verify: `go test -race -short ./session -run '^TestInstanceData_RoundTripDropsEnvVars$' -count=1 && bin/linter ./session`
 
@@ -510,6 +548,7 @@ Every finding in `research/pitfalls.md` and `research/architecture.md` appears b
 
 ##### Task 1.3.3a: Add `useAvailablePrograms_should_UseProgramIdNotCommandAsValue_When_IdAndCommandDiffer` (XS, test-first)
 - New `it` in the existing `describe`; leave the existing cases untouched. This locks only the hook's mapping; Omnibar `dispatch.ts` was not re-audited in this run.
+- Preflight (Agent D's worktree is fresh; `node_modules` is per worktree): the web-app block of Task 1.1.0b (`pnpm install --frozen-lockfile` when `web-app/node_modules/.bin` is absent; jest, jscpd and `web-app/.jscpd.json` present). Without it the Verify line fails on a missing `jest`, which is an environment fault, not a test result.
 - Files: `web-app/src/lib/hooks/useAvailablePrograms.test.ts`
 - Verify: `cd web-app && pnpm exec jest --testPathPatterns="useAvailablePrograms" --no-coverage`
 
@@ -541,7 +580,7 @@ Every finding in `research/pitfalls.md` and `research/architecture.md` appears b
 **Files**: `project_plans/program-env-injection/implementation/evidence.md`
 
 ##### Task 1.4.2a: Write the follow-up section (XS)
-- Copy F1-F5 from this plan (title, risk, decision) and add a one-line proposed test per item (F1: real create with a secret value, grep captured logs and persisted `LaunchCommand`; F2: flip Story 1.3.2's tests; F3: `buildExtraEnv` with `STAPLER_SESSION_UUID` in `EnvVars`; F4: argv capture on `createRemoteSession`; F5: tymux-backed session `show-environment`). File them via `create_backlog_item` only if the owner answers yes to the first Unresolved Question. Regardless of that answer, F1-F5 (title, risk, one-line proposed test) are listed verbatim in the PR body under "Follow-ups for the owner to file", so a decision not to file is a decision, not an omission. The worker drafts the section; the coordinator appends it to `evidence.md`.
+- Copy F1-F5 from this plan (title, risk, decision) and add a one-line proposed test per item (F1: real create with a secret value, grep captured logs and persisted `LaunchCommand`; F2: flip Story 1.3.2's tests; F3: `buildExtraEnv` with `STAPLER_SESSION_UUID` in `EnvVars`; F4: argv capture on `createRemoteSession`; F5: tymux-backed session `show-environment`). File them via `create_backlog_item` only if the owner answers yes to the first Unresolved Question. Regardless of that answer, F1-F5 (title, risk, one-line proposed test) are listed verbatim in the PR body under "Follow-ups for the owner to file", so a decision not to file is a decision, not an omission. The PR body also carries two mandatory paragraphs: (i) **"Residual routes for the original symptom"**: closing this item does not prove the user-visible symptom ("registered env silently ignored") cannot recur; it can still occur through routes this item does not cover, namely edit-after-create then reuse of a live session (`initTmuxSession` reuse guard, `instance_tmux.go:807-810`, pinned not changed), in-process restart with frozen `EnvVars` (F2), the tymux gRPC backend (F5, inferred, not traced) and remote execution targets (F4); closing is a deliberate owner decision, not an implication; (ii) **"Companion bug not covered"**: the directory-collision bug named in the backlog item is out of scope here and has no separate ID known; the PR body names it by description ("directory collision named in backlog item 4bbe28f9") and asks the owner to file or link it so it is not dropped (optionally the coordinator files it via `create_backlog_item` if the owner says yes). Also reference the earlier-session criterion-4 re-qualification (Story 1.1.3). The worker drafts the section; the coordinator appends it to `evidence.md`.
 - Files: `project_plans/program-env-injection/implementation/evidence.md`
 - Verify: `grep -c '^### F' project_plans/program-env-injection/implementation/evidence.md` prints 5.
 
@@ -554,6 +593,7 @@ Use the invocations CI uses (`-race -short`; `.github/workflows/build.yml:275,32
 - Custom linters: `make lint-custom` (builds `bin/linter`, runs `bin/linter ./...`, `Makefile:814-817`; the same step CI runs; the single pass covers `entfullscan, hotpolllog, noarchivedrevival, nocommandpattern, nolegacylog, noliveinstanceraw, norawexec, norawghrequest, norawgitopen, notimesleeptest, novartestseam, silenttransition, tmuxsocketscope`). It can only be green because Task 1.1.0a repaired the landed test; before 1.1.0a it reports 5 findings. Record the `custom lint: ok` line in the evidence.
 - `make lint` (depends on `lint-custom`).
 - `dupl` is moot for new Go tests: `.golangci.yml:244-246` excludes `_test.go` from `gocyclo,gocognit,funlen,revive,dupl`, so `make ready-complexity-gate` needs no table-test refactor. The gate that can bite is web `jscpd`: `cd web-app && pnpm run lint:duplicates` for the added Jest `it` (absolute threshold ratchet, see CLAUDE.md).
+- Web gate prerequisites: the web-app preflight of Task 1.1.0b (`pnpm install --frozen-lockfile`, jest and jscpd present) in the integration worktree; `pnpm run lint:duplicates` is NOT RUN, never green, if they are missing.
 - Files: none
 - Verify: every command exits 0 AND every gate prints `GATE OK` with 0 SKIP; output summarized in the PR body, which states "AC4b: UNVERIFIED (upstream-documented, not executed)" unless E9 was run. If Epics 1.2-1.4.1 land in a separate PR, run only the lines for the packages each PR touches. The final claim about real-tmux behaviour is worded per "CI-pinned tmux 3.4 run" in the Effort Estimate (a named blocker with exact fallback wording): until a 3.4 run is recorded the claim is "verified on tmux 3.6a only".
 
@@ -669,3 +709,23 @@ Changes made in response to the engineering and product triad lenses. Docs only;
 - **Citation drift**: `wait.ScaleTimeout` -> `testutil/wait/load.go:84` (opened, `func ScaleTimeout` at :84); `seedCustomProgram` -> `session/instance_tmux_test.go:1192` (opened, `func seedCustomProgram` at :1192).
 - **Product gaps**: AC4b closure rule added to Story 1.1.3 (item may be reported with AC4b explicitly UNVERIFIED and owner acceptance requested; the coordinator must not tick AC4 as a whole; AC4 closes only on an executed E9 or recorded owner acceptance); E9 is run by a human with credentials (Tyler or designee), listed as an optional non-blocking blocker; F1-F5 are listed in the PR body for the owner to file regardless of the first Unresolved Question (Task 1.4.2a). `validation.md` G16.
 - Not changed: target-user/impact statement, requirements.md out-of-scope list and companion-bug pointer (requirements.md is the coordinator's); F1 owner/date (owner decision, Unresolved Question 1).
+
+---
+
+## Repair log (triad iteration 2)
+
+Changes made in response to the round-2 product and engineering triad lenses. Docs only; nothing executed, no source changes.
+
+- **Product G-A (AC4 vs completion gate)**: Story 1.1.3 gains "How the item reaches review". Backlog criteria 1-5 map 1:1 to AC1-AC5 (criterion 4 = AC4 = `report_progress` `criteria_index=3`). AC4 is reported `pass` only when AC4a is executed and gated AND owner acceptance of unverified AC4b is recorded in the `request_review` message (or E9 ran and printed `cli`); otherwise criteria 0, 1, 2, 4 are passed, criterion 4 is not, `request_review` is not called, and `create_guidance_request`/`report_blocked` asks the owner. The earlier session's `criteria_index=3` pass (AC4a unit tests only) is to be re-qualified in the review message and re-marked non-pass if acceptance is absent. The AC4b closure-rule bullet was reworded to match (no per-AC4a tick).
+- **Product G-B**: Task 1.4.2a requires a PR-body paragraph "Residual routes for the original symptom" naming reuse guard after edit, F2 frozen `EnvVars`, F5 tymux and F4 remote. (requirements.md carries the matching risky assumption.)
+- **Product G-C**: Task 1.4.2a requires a PR-body paragraph naming the companion directory-collision bug (no ID known) and asking the owner to file or link it.
+- **Product G-D**: Story 1.1.2 AC5 wording no longer says it "replaces" a requirements.md sentence that was already reconciled away; it says the wording is already applied.
+- **Product G-E**: validation.md T5-T9 retagged AC4a.
+- **Product G-F**: Task 1.1.0b opens with a "re-confirm citations" step (HEAD rev, symbol and line greps, `git diff --stat 9ef8fbc68 HEAD -- session server/services`), recording drift in E1. validation.md header notes the pin drift.
+- **Product G-G**: requirements.md evidence row for AC1/2 states it stays "Observed once" until E1 and E5 land with the gate; not promoted to VERIFIED earlier.
+- **Engineering G1**: Dependency Visualization now fixes the worktree model: one worktree per agent (each needs Wave 0 generated code and, for Agent D, web-app deps), `bin/linter` scoped to the agent's own package inside its worktree, a new Wave 1.5 merge-and-integration-lint step by the coordinator, and the coordinator's integration worktree named as the place Waves 2R, 3 and 4 run.
+- **Engineering G2**: Wave 2 now runs after Wave 2R, never concurrently; overlap claim removed.
+- **Engineering G3**: Task 1.1.1d requires unique Title/Branch per iteration or a verified worktree/branch cleanup before `-count=5`; collisions in iteration 2+ are classed as a test defect, not a flake.
+- **Engineering G4**: Task 1.3.2b says drop `t.Parallel()` (the `TestToInstanceData_PreservesBackend` model has it) because `envtest.NewIsolatedStateDir` uses `t.Setenv`; verified at `envtest/envtest.go:64-76` (doc comment: panics when mixed with `t.Parallel()`).
+- **Engineering G5**: Task 1.1.0b gains a web-app preflight (`pnpm install --frozen-lockfile`, jest/jscpd/`.jscpd.json` present); Task 1.3.3a and Task 1.4.2b reference it and report NOT RUN if unsatisfied.
+- Not changed: effort table (no task added; the new merge step is coordinator bookkeeping inside existing 1.1.0b/1.4.2b budgets, recalibrate after first run).
