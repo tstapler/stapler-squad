@@ -5,6 +5,8 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 enforced="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['threshold'])" "$root/web-app/.jscpd.json")"
+# The backticks are literal text in CLAUDE.md, not a command substitution.
+# shellcheck disable=SC2016
 documented="$(grep -m1 -oE 'absolute `threshold` \(([0-9.]+)%' "$root/CLAUDE.md" | grep -oE '[0-9.]+' | head -1 || true)"
 
 if [[ -z "$documented" ]]; then
