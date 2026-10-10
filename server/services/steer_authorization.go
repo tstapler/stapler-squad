@@ -143,7 +143,7 @@ func (s *SessionService) decideSteerAccess(ctx context.Context, req connect.AnyR
 func (s *SessionService) steerUnderLease(ctx context.Context, auth steerAuthorization, instance *session.Instance, message string) error {
 	lease, ok := instance.TryTerminalWriteLease(session.LeaseWriterSteer)
 	if !ok {
-		return fmt.Errorf("steer session %q: %w", instance.Title, session.ErrLeaseBusy)
+		return fmt.Errorf("steer session %q: %w", instance.Snapshot().Title, session.ErrLeaseBusy)
 	}
 	return s.steerAuthorized(ctx, auth, lease, instance, message)
 }
@@ -154,7 +154,7 @@ func (s *SessionService) steerUnderLease(ctx context.Context, auth steerAuthoriz
 func (s *SessionService) steerInternal(ctx context.Context, instance *session.Instance, message string) error {
 	lease, ok := instance.TryTerminalWriteLease(session.LeaseWriterSteer)
 	if !ok {
-		return fmt.Errorf("steer session %q: %w", instance.Title, session.ErrLeaseBusy)
+		return fmt.Errorf("steer session %q: %w", instance.Snapshot().Title, session.ErrLeaseBusy)
 	}
 	return s.steerAuthorized(ctx, internalSteerAuthorization(instance), lease, instance, message)
 }
@@ -172,13 +172,13 @@ func (s *SessionService) steerInternal(ctx context.Context, instance *session.In
 func (s *SessionService) steerAuthorized(ctx context.Context, auth steerAuthorization, lease *session.HeldLease, instance *session.Instance, message string) error {
 	if err := auth.verify(instance, lease); err != nil {
 		lease.Release()
-		return fmt.Errorf("steer session %q: %w", instance.Title, err)
+		return fmt.Errorf("steer session %q: %w", instance.Snapshot().Title, err)
 	}
-	if instance.AutonomousMode {
+	if instance.Snapshot().Autonomous.AutonomousMode {
 		controller := instance.GetController()
 		if controller == nil {
 			lease.Release()
-			return fmt.Errorf("steer autonomous session %q: controller not started", instance.Title)
+			return fmt.Errorf("steer autonomous session %q: controller not started", instance.Snapshot().Title)
 		}
 
 		// SendCommandImmediate's own ~5min internal timeout doesn't protect
@@ -197,10 +197,10 @@ func (s *SessionService) steerAuthorized(ctx context.Context, auth steerAuthoriz
 		select {
 		case sendErr := <-errCh:
 			if sendErr != nil {
-				return fmt.Errorf("steer autonomous session %q: %w", instance.Title, sendErr)
+				return fmt.Errorf("steer autonomous session %q: %w", instance.Snapshot().Title, sendErr)
 			}
 		case <-timeoutCtx.Done():
-			return fmt.Errorf("timed out steering autonomous session %q: %w", instance.Title, timeoutCtx.Err())
+			return fmt.Errorf("timed out steering autonomous session %q: %w", instance.Snapshot().Title, timeoutCtx.Err())
 		}
 		s.notifySteerSent(instance, message)
 		return nil
@@ -213,7 +213,7 @@ func (s *SessionService) steerAuthorized(ctx context.Context, auth steerAuthoriz
 	// the submit keystroke travel as two separate SendKeys writes (BUG-031),
 	// never concatenated.
 	if err := session.SubmitContentWithEnter(ctx, instance, lease, message); err != nil {
-		return fmt.Errorf("steer session %q: %w", instance.Title, err)
+		return fmt.Errorf("steer session %q: %w", instance.Snapshot().Title, err)
 	}
 	s.notifySteerSent(instance, message)
 	return nil

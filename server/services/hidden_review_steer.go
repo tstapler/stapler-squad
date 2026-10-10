@@ -234,7 +234,7 @@ func (s *SessionService) steerHiddenReviewViaBacklogLink(ctx context.Context, li
 	lease, ok := inst.TryTerminalWriteLease(session.LeaseWriterSteer)
 	if !ok {
 		s.appendSteerResult(line, steerOutcomeAborted)
-		return fmt.Errorf("steer session %q: %w", inst.Title, session.ErrLeaseBusy)
+		return fmt.Errorf("steer session %q: %w", inst.Snapshot().Title, session.ErrLeaseBusy)
 	}
 	if _, stillLinked, err := s.backlogLinks.ResolveLiveReviewLink(ctx, inst); err != nil || !stillLinked {
 		lease.Release()
