@@ -1,15 +1,35 @@
+// +feature: notification-tray
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
+import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
+import { useDeckViewport } from "@/lib/contexts/deckViewportContext";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import { useApprovalResolution } from "@/lib/hooks/useApprovalResolution";
-import { groupNotifications } from "@/lib/utils/notificationGrouping";
+import { useAnnounce } from "@/lib/hooks/useAnnounce";
+import { useNotificationConnectivity } from "@/lib/hooks/useNotificationConnectivity";
+import { useStableRowOrder } from "@/lib/hooks/useStableRowOrder";
+import { useCoarsePointer } from "@/lib/hooks/useCoarsePointer";
+import { useTrayFocus } from "@/lib/hooks/useTrayFocus";
+import { useTrayBulkActions } from "@/lib/hooks/useTrayBulkActions";
+import { useTrayDismissal } from "@/lib/hooks/useTrayDismissal";
+import { NOTIFICATION_TRAY_V2_FLAG } from "@/lib/notification-policy";
+import { routes } from "@/lib/routes";
+import { countNeedsAttention, groupNotifications, flattenGroups, type GroupedNotification } from "@/lib/utils/notificationGrouping";
 import {
   notificationTypeFilter,
   computeScopedMarkReadIds,
 } from "@/lib/utils/notificationMapping";
+import { readWhatChangedSeen, writeWhatChangedSeen } from "@/lib/utils/deckSettings";
 import { NotificationItem, AutoHandledSection } from "./NotificationItem";
+import { TrayConfirm } from "./TrayConfirm";
+import { TrayList, type ListRow } from "./TrayList";
+import { TrayOverflowMenu, type TrayMenuItem } from "./TrayOverflowMenu";
+import { TraySettings, WHAT_CHANGED_TEXT, WhatChangedCard } from "./TraySettings";
+import { selectTrayBanner, selectTrayState } from "./trayState";
+import { selectTrayVariant } from "./trayVariant";
 import {
   overlay,
   panel,
@@ -34,6 +54,16 @@ import {
   list,
   loadMore,
   loadMoreButton,
+  newPill,
+  sheetGrabber,
+  sheetGrabberRow,
+  sheetScrim,
+  trayAttention,
+  trayBanner,
+  trayButton,
+  trayFooter,
+  trayUndoBar,
+  trayVariant,
 } from "./NotificationPanel.css";
 
 type TypeFilter = "all" | "approval_needed" | "error" | "task_complete" | "info";
@@ -46,12 +76,22 @@ const TYPE_FILTER_LABELS: Record<TypeFilter, string> = {
   info: "Info",
 };
 
+const TRAY_ID = "notification-tray";
+const HEADING_ID = "notification-tray-heading";
+const GRABBER_DRAG_PX = 80;
+const OFFLINE_REASON = "Offline";
+
 /**
- * NotificationPanel - A sidebar that displays notification history
- * Similar to Android's notification panel, persists notifications for review.
- * Now backed by server-side persistent storage that survives page refreshes.
+ * NotificationPanel - the notification history surface.
+ *
+ * With `notification_tray_v2` off it is the original modal slide-over. With it on
+ * it is the non-modal tray (ADR-006): no backdrop, no `aria-modal`, `transform`
+ * only motion, grouped and virtualized rows, a pinned "Needs attention" group,
+ * bulk actions guarded server-side with undo, and layout that never touches the
+ * terminal.
  */
 export function NotificationPanel() {
+  const v2 = useFeatureFlag(NOTIFICATION_TRAY_V2_FLAG);
   const {
     notificationHistory,
     isPanelOpen,
@@ -63,35 +103,135 @@ export function NotificationPanel() {
     getUnreadCount,
     historyLoading,
     historyHasMore,
+    historyError,
+    historyLastUpdatedAt,
     loadMoreHistory,
+    refreshHistory,
+    clearHistoryByIds,
+    showActionToast,
   } = useNotifications();
 
   const auditLog = useAuditLog();
+  const { announce } = useAnnounce();
+  const viewport = useDeckViewport();
+  const { isOffline } = useNotificationConnectivity();
+  const coarse = useCoarsePointer();
+  const variant = selectTrayVariant(viewport);
+  const isSheet = v2 && variant === "bottom-sheet";
+
+  const trayRef = useRef<HTMLDivElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [autoHandledOpen, setAutoHandledOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  const [scrolled, setScrolled] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [whatChangedOpen, setWhatChangedOpen] = useState(() => !readWhatChangedSeen());
 
   const { resolvedApprovals, pendingApprovals, blockedApprovals, failedApprovals, resolveApproval } = useApprovalResolution({
     notificationHistory,
     acknowledgeNotification,
   });
 
+  useTrayFocus({ isOpen: v2 && isPanelOpen, trayRef, headingRef, coarse });
+
+  const modalSheet = isSheet && expanded && !coarse && isPanelOpen;
+
+  const close = useCallback(() => {
+    if (isPanelOpen) togglePanel();
+  }, [isPanelOpen, togglePanel]);
+  useTrayDismissal({ enabled: v2, isOpen: isPanelOpen, isSheet, modal: modalSheet, trayRef, close });
+
+  const trapTab = (e: React.KeyboardEvent) => {
+    if (!modalSheet || e.key !== "Tab") return;
+    const focusable = Array.from(
+      trayRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input, select, [tabindex]:not([tabindex="-1"])') ?? [],
+    ).filter((el) => el.offsetParent !== null || el === document.activeElement);
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+
+  // Only the grabber drags the sheet; list content never does (C12).
+  const dragStartY = useRef<number | null>(null);
+  const onGrabberDown = (e: React.PointerEvent) => {
+    dragStartY.current = e.clientY;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  };
+  const onGrabberUp = (e: React.PointerEvent) => {
+    const start = dragStartY.current;
+    dragStartY.current = null;
+    if (start === null) return;
+    const dy = e.clientY - start;
+    if (dy >= GRABBER_DRAG_PX) {
+      if (expanded) setExpanded(false);
+      else close();
+    } else if (dy <= -GRABBER_DRAG_PX) setExpanded(true);
+  };
+
+  // Reuses the one scoping helper the Notifications page calls — never a second
+  // hand-written filter that could drift.
+  const scopedMarkReadIds = useMemo(
+    () => computeScopedMarkReadIds(notificationHistory),
+    [notificationHistory]
+  );
+
+  const bulk = useTrayBulkActions({
+    notificationHistory,
+    isOffline,
+    needsAttention: countNeedsAttention(notificationHistory),
+    scopedMarkReadIds,
+    announce,
+    markAsRead,
+    clearHistoryByIds,
+    showActionToast,
+  });
+  const { undoWindow, clearError } = bulk;
+
+  // Closing resets the sheet so it reopens at peek.
+  useEffect(() => {
+    if (!isPanelOpen) {
+      setExpanded(false);
+      setSettingsOpen(false);
+      bulk.reset();
+    }
+    // `bulk.reset` only sets state to its initial values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPanelOpen]);
+
   // Filter notifications by search query and type; auto_approved records are always excluded
   // from the main list and shown in a separate collapsible section.
+  const visibleHistory = useMemo(
+    () => (bulk.hiddenIds.size === 0 ? notificationHistory : notificationHistory.filter((n) => !bulk.hiddenIds.has(n.id))),
+    [notificationHistory, bulk.hiddenIds],
+  );
+
+  const stable = useStableRowOrder(visibleHistory, v2 && isPanelOpen && scrolled);
+
   const filteredNotifications = useMemo(() => {
-    let list = notificationHistory.filter((n) => n.notificationType !== "auto_approved");
+    let rows = stable.items.filter((n) => n.notificationType !== "auto_approved");
 
     if (typeFilter !== "all") {
       const allowed = new Set(
-        notificationTypeFilter(typeFilter, list.map((n) => n.notificationType))
+        notificationTypeFilter(typeFilter, rows.map((n) => n.notificationType))
       );
-      list = list.filter((n) => allowed.has(n.notificationType));
+      rows = rows.filter((n) => allowed.has(n.notificationType));
     }
 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      list = list.filter(
+      rows = rows.filter(
         (n) =>
           (n.sessionName || "").toLowerCase().includes(q) ||
           (n.message || "").toLowerCase().includes(q) ||
@@ -99,8 +239,8 @@ export function NotificationPanel() {
       );
     }
 
-    return list;
-  }, [notificationHistory, typeFilter, searchQuery]);
+    return rows;
+  }, [stable.items, typeFilter, searchQuery]);
 
   const autoHandledNotifications = useMemo(() => {
     return notificationHistory.filter((n) => n.notificationType === "auto_approved");
@@ -108,21 +248,41 @@ export function NotificationPanel() {
 
   const unreadCount = getUnreadCount();
 
-  // Task 3.1.5a: reuses the identical scoping helper Task 3.1.2e's Notifications-page
-  // button calls — never a second hand-written filter that could drift.
-  const scopedMarkReadIds = useMemo(
-    () => computeScopedMarkReadIds(notificationHistory),
-    [notificationHistory]
+  const { rows: flatRows, needsAttention, setSize } = useMemo(
+    () => flattenGroups(filteredNotifications, collapsed),
+    [filteredNotifications, collapsed],
   );
 
-  const handleMarkActivityRead = () => markAsRead(scopedMarkReadIds);
+  const listRows: ListRow[] = useMemo(
+    () => (historyHasMore ? [...flatRows, { kind: "load-more", key: "__load_more__" }] : flatRows),
+    [flatRows, historyHasMore],
+  );
+  const groupsById = useMemo(() => {
+    const map = new Map<string, GroupedNotification>();
+    for (const g of groupNotifications(filteredNotifications)) map.set(g.notification.id, g);
+    return map;
+  }, [filteredNotifications]);
 
-  const handleClearHistory = () => {
-    // Task 3.1.5d: irreversible, so gate behind a confirm — the actual
-    // exclusion of unread actionable records lives server-side (Task 3.1.5c).
+  const legacyClearHistory = () => {
+    // Irreversible, so gate behind a confirm — the actual exclusion of unread
+    // actionable records lives server-side.
     if (window.confirm("Clear read notifications? This can't be undone. Items still needing a decision won't be cleared.")) {
       clearHistory();
     }
+  };
+
+  const dismissGroup = (group: GroupedNotification) =>
+    bulk.startUndoableClear(
+      group.allIds.length > 1 ? `Dismissed ${group.allIds.length} notifications` : "Dismissed 1 notification",
+      group.allIds,
+    );
+
+  const dismissSession = (sessionKey: string) => {
+    const ids: string[] = [];
+    for (const g of groupNotifications(filteredNotifications)) {
+      if ((g.notification.sessionId || "__no_session__") === sessionKey && !g.notification.isPendingDecision) ids.push(...g.allIds);
+    }
+    bulk.startUndoableClear(`Dismissed ${ids.length} informational`, ids);
   };
 
   const handleNotificationClick = (ids: string | string[], onView?: () => void, sessionId?: string) => {
@@ -137,58 +297,371 @@ export function NotificationPanel() {
     }
   };
 
+  const toggleGroup = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  const sessionKeys = useMemo(
+    () => flatRows.filter((r) => r.kind === "header" && !r.pinned).map((r) => r.key),
+    [flatRows],
+  );
+
+  const filtered = !!searchQuery.trim() || typeFilter !== "all";
+  const trayState = selectTrayState({
+    isOffline,
+    loading: historyLoading,
+    hasLoadError: historyError !== null,
+    hasLoadedOnce: historyLastUpdatedAt !== null,
+    rowCount: filteredNotifications.length,
+    filtered,
+    needsAttentionCount: needsAttention,
+    hasMore: historyHasMore,
+  });
+  const banner = selectTrayBanner({ isOffline, hasLoadError: historyError !== null, rowCount: notificationHistory.length });
+  const updatedAt = historyLastUpdatedAt ? new Date(historyLastUpdatedAt).toLocaleTimeString() : null;
+  const offlineReason = isOffline ? OFFLINE_REASON : undefined;
+
+  // The one-time "What changed" card is announced once, politely, with no focus move (TM-13).
+  const announcedWhatChanged = useRef(false);
+  useEffect(() => {
+    if (v2 && isPanelOpen && whatChangedOpen && !announcedWhatChanged.current) {
+      announcedWhatChanged.current = true;
+      announce(WHAT_CHANGED_TEXT, "polite", "what-changed");
+    }
+  }, [v2, isPanelOpen, whatChangedOpen, announce]);
+
+  const menuGroups: TrayMenuItem[][] = [
+    [
+      {
+        key: "clear-informational",
+        label: `Clear informational (${bulk.informationalIds.length})`,
+        caption: "Undo available",
+        disabledReason: isOffline ? OFFLINE_REASON : bulk.informationalIds.length === 0 ? "Nothing to clear" : undefined,
+        onSelect: () => bulk.openConfirm("informational"),
+      },
+    ],
+    [
+      {
+        key: "clear-history",
+        label: "Clear history...",
+        icon: <span aria-hidden="true">⚠ </span>,
+        caption: "cannot be undone",
+        disabledReason: isOffline ? OFFLINE_REASON : bulk.readIds.length === 0 ? "Nothing to clear" : undefined,
+        onSelect: () => bulk.openConfirm("history"),
+      },
+    ],
+    [
+      { key: "collapse-all", label: "Collapse all groups", onSelect: () => setCollapsed(new Set(sessionKeys)) },
+      { key: "expand-all", label: "Expand all groups", onSelect: () => setCollapsed(new Set()) },
+    ],
+    [
+      { key: "settings", label: "Tray settings", onSelect: () => setSettingsOpen((v) => !v) },
+      { key: "what-changed", label: "What changed", onSelect: () => setWhatChangedOpen(true) },
+    ],
+  ];
+
+  const legacyList = (
+    <div className={list}>
+      {groupNotifications(filteredNotifications).map((group) => (
+        <NotificationItem
+          key={group.notification.id}
+          group={group}
+          resolvedApprovals={resolvedApprovals}
+          pendingApprovals={pendingApprovals}
+          blockedApprovals={blockedApprovals}
+          failedApprovals={failedApprovals}
+          resolveApproval={resolveApproval}
+          removeFromHistory={group.notification.isPendingDecision === true ? undefined : removeFromHistory}
+          handleNotificationClick={handleNotificationClick}
+          onNavigate={togglePanel}
+        />
+      ))}
+      {historyHasMore && (
+        <div className={loadMore}>
+          <button className={loadMoreButton} onClick={loadMoreHistory} disabled={historyLoading}>
+            {historyLoading ? "Loading..." : "Load more"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
+  const emptyStateText = () => {
+    if (trayState.kind === "empty-filtered") return { icon: "🔍", text: "No matching notifications", sub: "Try adjusting your search or filter" };
+    if (trayState.kind === "offline") return { icon: "📡", text: "Offline - showing cached", sub: updatedAt ? `Updated ${updatedAt}` : "Reconnect to load notifications" };
+    if (trayState.kind === "load-error") return { icon: "⚠", text: "Could not load notifications.", sub: "" };
+    return { icon: "🔔", text: v2 ? "All caught up" : "No notifications yet", sub: "You'll see notifications from your sessions here" };
+  };
+
+  const renderBody = () => {
+    if (!v2) {
+      if (historyLoading && notificationHistory.length === 0) {
+        return (
+          <div className={empty}>
+            <div className={emptyIcon}>⏳</div>
+            <p className={emptyText}>Loading notifications...</p>
+          </div>
+        );
+      }
+      if (filteredNotifications.length === 0) {
+        const e = emptyStateText();
+        return (
+          <div className={empty}>
+            <div className={emptyIcon}>{filtered ? "🔍" : "🔔"}</div>
+            <p className={emptyText}>{filtered ? "No matching notifications" : "No notifications yet"}</p>
+            <p className={emptySubtext}>{e.sub}</p>
+          </div>
+        );
+      }
+      return legacyList;
+    }
+
+    if (trayState.kind === "loading") {
+      return (
+        <div className={empty} aria-busy="true" data-testid="tray-skeleton">
+          <div className={emptyIcon}>⏳</div>
+          <p className={emptyText}>Loading notifications...</p>
+        </div>
+      );
+    }
+    if (filteredNotifications.length === 0) {
+      const e = emptyStateText();
+      return (
+        <div className={empty} data-testid={`tray-empty-${trayState.kind}`}>
+          <div className={emptyIcon}>{e.icon}</div>
+          <p className={emptyText}>{e.text}</p>
+          {e.sub && <p className={emptySubtext}>{e.sub}</p>}
+          {trayState.exit === "retry" && (
+            <button type="button" className={trayButton} onClick={() => refreshHistory()}>
+              Retry
+            </button>
+          )}
+          {trayState.exit === "clear-filters" && (
+            <button
+              type="button"
+              className={trayButton}
+              onClick={() => {
+                setSearchQuery("");
+                setTypeFilter("all");
+              }}
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+      );
+    }
+    return (
+      <>
+        {stable.heldCount > 0 && (
+          <button type="button" className={newPill} data-testid="tray-new-pill" onClick={stable.release}>
+            {stable.heldCount} new
+          </button>
+        )}
+        <TrayList
+          rows={listRows}
+          setSize={setSize}
+          itemProps={{
+            resolvedApprovals,
+            pendingApprovals,
+            blockedApprovals,
+            failedApprovals,
+            resolveApproval,
+            handleNotificationClick,
+            onNavigate: close,
+          }}
+          offlineReason={offlineReason}
+          scrollRef={scrollRef}
+          hasMore={historyHasMore}
+          loading={historyLoading}
+          onLoadMore={loadMoreHistory}
+          onToggleGroup={toggleGroup}
+          onDismissGroup={dismissGroup}
+          onDismissSession={dismissSession}
+          groupForId={(id) => groupsById.get(id)}
+        />
+      </>
+    );
+  };
+
+  const panelClass = v2
+    ? `${trayVariant[isSheet ? "bottomSheet" : "sideOverlay"]}`
+    : `${panel} ${isPanelOpen ? panelOpen : ""}`;
+
   return (
     <>
-      {/* Overlay backdrop */}
-      {isPanelOpen && (
-        <div className={overlay} onClick={togglePanel} aria-hidden="true" />
-      )}
+      {/* Legacy overlay backdrop; the v2 tray has none. */}
+      {!v2 && isPanelOpen && <div className={overlay} onClick={togglePanel} aria-hidden="true" />}
+      {modalSheet && <div className={sheetScrim} data-testid="tray-scrim" onClick={close} aria-hidden="true" />}
 
-      {/* Notification Panel */}
       <div
-        className={`${panel} ${isPanelOpen ? panelOpen : ""}`}
-        role="dialog"
-        aria-label="Notification Panel"
-        aria-modal="true"
+        ref={trayRef}
+        id={TRAY_ID}
+        className={panelClass}
+        data-testid="notification-tray"
+        data-variant={v2 ? variant : "legacy"}
+        data-state={isPanelOpen ? "open" : "closed"}
+        data-sheet={isSheet ? (expanded ? "expanded" : "peek") : undefined}
+        role={v2 && !modalSheet ? "complementary" : "dialog"}
+        aria-label={v2 ? undefined : "Notification Panel"}
+        aria-labelledby={v2 ? HEADING_ID : undefined}
+        aria-modal={v2 ? (modalSheet ? true : undefined) : true}
+        onKeyDown={trapTab}
       >
+        {isSheet && (
+          <div className={sheetGrabberRow}>
+            <button
+              type="button"
+              className={sheetGrabber}
+              data-testid="tray-grabber"
+              aria-label="Drag to resize notifications sheet"
+              tabIndex={-1}
+              onPointerDown={onGrabberDown}
+              onPointerUp={onGrabberUp}
+              onPointerCancel={() => (dragStartY.current = null)}
+            />
+            <button
+              type="button"
+              className={trayButton}
+              data-testid="tray-expand"
+              aria-pressed={expanded}
+              onClick={() => setExpanded((v) => !v)}
+            >
+              {expanded ? "Collapse" : "Expand"}
+            </button>
+          </div>
+        )}
+
         {/* Header */}
         <div className={header}>
-          <h2 className={title}>
+          <h2 id={HEADING_ID} ref={headingRef} tabIndex={-1} className={title}>
             Notifications
             {unreadCount > 0 && (
               <span className={unreadBadge}>{unreadCount}</span>
             )}
           </h2>
+          {v2 && needsAttention > 0 && (
+            <span className={trayAttention} data-testid="tray-needs-attention">
+              {needsAttention} need attention
+            </span>
+          )}
           <div className={headerActions}>
             {notificationHistory.length > 0 && (
               <>
                 {scopedMarkReadIds.length > 0 && (
                   <button
-                    className={markAllButton}
-                    onClick={handleMarkActivityRead}
-                    aria-label="Mark activity as read"
+                    className={v2 ? trayButton : markAllButton}
+                    onClick={bulk.markActivityRead}
+                    aria-label={v2 ? "Mark activity read" : "Mark activity as read"}
+                    aria-disabled={v2 && isOffline ? true : undefined}
+                    title={v2 && isOffline ? OFFLINE_REASON : undefined}
                   >
                     Mark activity read
                   </button>
                 )}
-                <button
-                  className={clearButton}
-                  onClick={handleClearHistory}
-                  aria-label="Clear notification history"
-                >
-                  Clear history
-                </button>
+                {!v2 && (
+                  <button
+                    className={clearButton}
+                    onClick={legacyClearHistory}
+                    aria-label="Clear notification history"
+                  >
+                    Clear history
+                  </button>
+                )}
               </>
             )}
+            {v2 && <TrayOverflowMenu groups={menuGroups} />}
             <button
               className={closeButton}
               onClick={togglePanel}
               aria-label="Close notification panel"
+              style={v2 ? { minWidth: 44, minHeight: 44 } : undefined}
             >
               ✕
             </button>
           </div>
         </div>
+
+        {v2 && isOffline && (
+          <div className={trayBanner} data-testid="tray-banner-offline">
+            <span>Offline - showing cached{updatedAt ? `, updated ${updatedAt}` : ""}</span>
+          </div>
+        )}
+        {v2 && banner === "load-error" && (
+          <div className={trayBanner} data-testid="tray-banner-load-error">
+            <span>Could not load notifications.{updatedAt ? ` Showing cached - updated ${updatedAt}` : ""}</span>
+            <button type="button" className={trayButton} onClick={() => refreshHistory()}>
+              Retry
+            </button>
+          </div>
+        )}
+        {v2 && undoWindow.pending && (
+          <div
+            key={undoWindow.pending.id}
+            className={trayUndoBar}
+            data-testid="tray-undo-bar"
+            onPointerEnter={() => undoWindow.pause("hover")}
+            onPointerLeave={() => undoWindow.resume("hover")}
+            onFocus={() => undoWindow.pause("focus")}
+            onBlur={() => undoWindow.resume("focus")}
+          >
+            <span>{undoWindow.pending.label}</span>
+            <button type="button" className={trayButton} data-testid="tray-undo" onClick={bulk.undo}>
+              Undo
+            </button>
+          </div>
+        )}
+        {v2 && bulk.keptLine && (
+          <div className={trayBanner} data-testid="tray-kept-line">
+            <span>{bulk.keptLine}</span>
+          </div>
+        )}
+        {v2 && clearError && (
+          <div className={trayBanner} data-testid="tray-clear-error">
+            <span>Could not clear notifications</span>
+            <button type="button" className={trayButton} onClick={() => bulk.startUndoableClear(clearError.label, clearError.ids)}>
+              Retry
+            </button>
+          </div>
+        )}
+        {v2 && bulk.markReadError && (
+          <div className={trayBanner} data-testid="tray-mark-read-error">
+            <span>Could not mark read</span>
+            <button type="button" className={trayButton} onClick={bulk.markActivityRead}>
+              Retry
+            </button>
+          </div>
+        )}
+        {v2 && bulk.confirm === "informational" && (
+          <TrayConfirm
+            text={`Clear ${bulk.informationalIds.length} informational notifications? ${bulk.decisionCount} awaiting decision kept.`}
+            confirmLabel={`Clear ${bulk.informationalIds.length}`}
+            onConfirm={bulk.confirmClearInformational}
+            onCancel={bulk.cancelConfirm}
+          />
+        )}
+        {v2 && bulk.confirm === "history" && (
+          <TrayConfirm
+            text={`Clear ${bulk.readIds.length} read notifications? This can't be undone. ${bulk.decisionCount} awaiting decision kept.`}
+            confirmLabel={`Clear ${bulk.readIds.length}`}
+            error={bulk.confirmError}
+            onConfirm={bulk.confirmClearHistory}
+            onCancel={bulk.cancelConfirm}
+          />
+        )}
+        {v2 && settingsOpen && <TraySettings />}
+        {v2 && whatChangedOpen && (
+          <WhatChangedCard
+            onDismiss={() => {
+              writeWhatChangedSeen();
+              setWhatChangedOpen(false);
+            }}
+          />
+        )}
 
         {/* Search + Filter Bar */}
         <div className={filterBar}>
@@ -215,62 +688,13 @@ export function NotificationPanel() {
         </div>
 
         {/* Notification List */}
-        <div className={content}>
-          {historyLoading && notificationHistory.length === 0 ? (
-            <div className={empty}>
-              <div className={emptyIcon}>⏳</div>
-              <p className={emptyText}>Loading notifications...</p>
-            </div>
-          ) : filteredNotifications.length === 0 ? (
-            <div className={empty}>
-              <div className={emptyIcon}>{searchQuery || typeFilter !== "all" ? "🔍" : "🔔"}</div>
-              <p className={emptyText}>
-                {searchQuery || typeFilter !== "all" ? "No matching notifications" : "No notifications yet"}
-              </p>
-              <p className={emptySubtext}>
-                {searchQuery || typeFilter !== "all"
-                  ? "Try adjusting your search or filter"
-                  : "You'll see notifications from your sessions here"}
-              </p>
-            </div>
-          ) : (
-            <div className={list}>
-              {groupNotifications(filteredNotifications).map((group) => (
-                <NotificationItem
-                  key={group.notification.id}
-                  group={group}
-                  resolvedApprovals={resolvedApprovals}
-                  pendingApprovals={pendingApprovals}
-                  blockedApprovals={blockedApprovals}
-                  failedApprovals={failedApprovals}
-                  resolveApproval={resolveApproval}
-                  removeFromHistory={
-                    // Task 3.1.5b: exempt an unread actionable item from the ✕
-                    // control, same as NeedsDecisionSection — this dropdown has no
-                    // tiered sections, so the exemption is applied inline per item.
-                    group.notification.isPendingDecision === true
-                      ? undefined
-                      : removeFromHistory
-                  }
-                  handleNotificationClick={handleNotificationClick}
-                  onNavigate={togglePanel}
-                />
-              ))}
-
-              {/* Load more button */}
-              {historyHasMore && (
-                <div className={loadMore}>
-                  <button
-                    className={loadMoreButton}
-                    onClick={loadMoreHistory}
-                    disabled={historyLoading}
-                  >
-                    {historyLoading ? "Loading..." : "Load more"}
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
+        <div
+          ref={scrollRef}
+          className={content}
+          data-testid="tray-scroll"
+          onScroll={(e) => setScrolled((e.currentTarget as HTMLDivElement).scrollTop > 0)}
+        >
+          {renderBody()}
         </div>
 
         {/* Auto-handled section — collapsible, always below main list */}
@@ -279,6 +703,14 @@ export function NotificationPanel() {
           isOpen={autoHandledOpen}
           onToggle={() => setAutoHandledOpen((v) => !v)}
         />
+
+        {v2 && (
+          <div className={trayFooter}>
+            <Link href={routes.notifications} onClick={close}>
+              Review all notifications
+            </Link>
+          </div>
+        )}
       </div>
     </>
   );

@@ -10,7 +10,7 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { render, screen, fireEvent, within, waitFor } from "@testing-library/react";
 import { NotificationsPage } from "../NotificationsPage";
 import type { NotificationHistoryItem } from "@/lib/types/notification";
 import type { Session } from "@/gen/session/v1/types_pb";
@@ -68,6 +68,8 @@ let mockUnreadCountOverride: number | null = null;
 const mockLoadMoreHistory = jest.fn();
 const mockMarkAsRead = jest.fn();
 const mockClearHistory = jest.fn();
+const mockClearHistoryByIds = jest.fn();
+const mockShowActionToast = jest.fn();
 const mockRefreshHistory = jest.fn();
 jest.mock("@/lib/contexts/NotificationContext", () => ({
   useNotifications: () => ({
@@ -76,6 +78,8 @@ jest.mock("@/lib/contexts/NotificationContext", () => ({
     removeFromHistory: jest.fn(),
     acknowledgeNotification: jest.fn(),
     clearHistory: mockClearHistory,
+    clearHistoryByIds: mockClearHistoryByIds,
+    showActionToast: mockShowActionToast,
     getUnreadCount: () => mockUnreadCountOverride ?? mockHistory.filter((n) => !n.isRead).length,
     historyLoading: false,
     historyHasMore: mockHistoryHasMore,
@@ -309,6 +313,8 @@ function resetSharedMocks() {
   mockUnreadCountOverride = null;
   mockMarkAsRead.mockClear();
   mockClearHistory.mockClear();
+  mockClearHistoryByIds.mockReset();
+  mockShowActionToast.mockClear();
   mockRefreshHistory.mockClear();
 }
 
@@ -615,11 +621,40 @@ describe("NotificationsPage — 'Clear history' confirm gate (Task 3.1.5d)", () 
     (window.confirm as jest.Mock).mockRestore();
   });
 
-  it("calls clearHistory once the confirm dialog is accepted", () => {
+  it("sends the non-decision ids once the confirm dialog is accepted", () => {
+    mockClearHistoryByIds.mockResolvedValue({ deleted: 1, kept: [] });
+    mockHistory = [
+      makeNotification({ id: "notif-1", notificationType: "task_complete", isRead: true }),
+      makeNotification({ id: "notif-p", notificationType: "approval_needed", isPendingDecision: true, metadata: { approval_id: "a1" } }),
+    ];
     jest.spyOn(window, "confirm").mockReturnValue(true);
     render(<NotificationsPage />);
     fireEvent.click(screen.getByRole("button", { name: "Clear notification history" }));
-    expect(mockClearHistory).toHaveBeenCalled();
+    expect(mockClearHistoryByIds).toHaveBeenCalledWith(["notif-1"]);
+    (window.confirm as jest.Mock).mockRestore();
+  });
+
+  it("notifications_page_should_show_n_kept_line_when_clear_response_lists_kept_and_show_nothing_when_empty", async () => {
+    mockHistory = [
+      makeNotification({ id: "a", sessionId: "s1", notificationType: "task_complete", isRead: true }),
+      makeNotification({ id: "b", sessionId: "s2", notificationType: "task_complete", isRead: false }),
+    ];
+    jest.spyOn(window, "confirm").mockReturnValue(true);
+
+    mockClearHistoryByIds.mockResolvedValueOnce({ deleted: 0, kept: ["a", "b"] });
+    const { unmount } = render(<NotificationsPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Clear notification history" }));
+    expect(await screen.findByTestId("notifications-kept-line")).toHaveTextContent("2 kept: still needs attention");
+    // The next user action clears the line.
+    fireEvent.click(screen.getByTestId("notifications-mark-all-read"));
+    expect(screen.queryByTestId("notifications-kept-line")).toBeNull();
+    unmount();
+
+    mockClearHistoryByIds.mockResolvedValueOnce({ deleted: 2, kept: [] });
+    render(<NotificationsPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Clear notification history" }));
+    await waitFor(() => expect(mockClearHistoryByIds).toHaveBeenCalledTimes(2));
+    expect(screen.queryByTestId("notifications-kept-line")).toBeNull();
     (window.confirm as jest.Mock).mockRestore();
   });
 

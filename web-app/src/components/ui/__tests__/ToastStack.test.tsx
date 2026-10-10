@@ -660,3 +660,76 @@ describe("ToastStack announcements (Story 3.6)", () => {
     expect(screen.getByTestId("announcer-polite")).toHaveTextContent("Item saved");
   });
 });
+
+describe("single phone tray entry (Task 4.2i, TH-7..TH-9)", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    setPhone();
+    act(() => setStackTopOffset(120));
+  });
+  afterEach(() => {
+    setStackTopOffset(null);
+    jest.useRealTimers();
+  });
+
+  const entries = () => screen.queryAllByTestId("tray-entry");
+
+  it("shows exactly one entry as a bell with 0 toasts, then with 1 toast and 0 overflow (never zero)", () => {
+    mount();
+    expect(entries()).toHaveLength(1);
+    expect(entries()[0]).toHaveAttribute("data-content", "bell");
+
+    addMany(1);
+    expect(entries()).toHaveLength(1);
+    expect(entries()[0]).toHaveAttribute("data-content", "bell");
+    expect(screen.getByTestId("tray-entry-open")).toHaveAccessibleName(/^Notifications, \d+ unread/);
+  });
+
+  it("keeps one mounted node while its content changes bell -> more-row -> keyboard-chip -> bell", () => {
+    const { rerender } = mount();
+    const node = entries()[0];
+    addMany(3);
+    expect(entries()[0]).toBe(node);
+    expect(node).toHaveAttribute("data-content", "more-row");
+    expect(screen.getByTestId("toast-overflow-chip")).toHaveAccessibleName("2 more notifications, open tray");
+
+    setPhone(true);
+    rerender(
+      <Harness>
+        <Driver />
+      </Harness>,
+    );
+    expect(entries()).toHaveLength(1);
+    expect(entries()[0]).toBe(node);
+    expect(node).toHaveAttribute("data-content", "keyboard-chip");
+
+    act(() => notifications.moveAllToTray());
+    act(() => notifications.undoMoveToTray());
+    act(() => notifications.clearAll());
+    expect(entries()[0]).toBe(node);
+  });
+
+  it("opens the same tray from every content", () => {
+    mount();
+    fireEvent.click(screen.getByTestId("tray-entry-open"));
+    expect(notifications.isPanelOpen).toBe(true);
+  });
+
+  it("renders the undo inside the same entry with a trailing bell", () => {
+    mount();
+    const node = entries()[0];
+    addMany(3);
+    fireEvent.click(screen.getByTestId("toast-move-all-to-tray"));
+    expect(entries()).toHaveLength(1);
+    expect(entries()[0]).toBe(node);
+    expect(node).toHaveAttribute("data-undo", "true");
+    expect(within(node).getByTestId("toast-undo-bar")).toBeInTheDocument();
+    expect(within(node).getByTestId("tray-entry-open")).toBeInTheDocument();
+  });
+
+  it("shows no entry on a phone page with no terminal and nothing to say", () => {
+    act(() => setStackTopOffset(null));
+    mount();
+    expect(entries()).toHaveLength(0);
+  });
+});

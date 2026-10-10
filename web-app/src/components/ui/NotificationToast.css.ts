@@ -708,3 +708,31 @@ export const riskLabel = style({
   letterSpacing: "0.5px",
   color: vars.color.textSecondary,
 });
+
+/** The single phone tray entry: one mounted node whose content changes in place (D10). */
+export const trayEntry = style({
+  display: "flex",
+  gap: "8px",
+  alignItems: "stretch",
+  justifyContent: "flex-end",
+  flexShrink: 0,
+  pointerEvents: "auto",
+  minHeight: "44px",
+  selectors: {
+    // Wide contents (the "+N more" row, the keyboard chip, the undo bar) fill the row.
+    '&[data-content="more-row"], &[data-content="keyboard-chip"], &[data-undo="true"]': { flex: 1 },
+  },
+});
+
+export const trayEntryBell = style({
+  ...chipBase,
+  width: "44px",
+  minWidth: "44px",
+  padding: 0,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: "4px",
+  borderRadius: "22px",
+  selectors: { "&:hover": { background: vars.color.hoverBackground } },
+});

@@ -114,6 +114,12 @@ export interface NotificationItemProps {
   getSessionHref?: (sessionId: string) => string;
   /** Called after handleNotificationClick fires for the Backlog/Session links (e.g. to close the panel). */
   onNavigate?: () => void;
+  /**
+   * Set while offline (the one connectivity source): server-mutating controls on
+   * this row (Approve, Deny, Remove) are disabled and the reason is shown. Nothing
+   * is queued; the controls re-enable when it clears.
+   */
+  offlineReason?: string;
 }
 
 const defaultSessionHref = (sessionId: string) => `/?session=${encodeURIComponent(sessionId)}`;
@@ -139,6 +145,7 @@ export function NotificationItem({
   handleNotificationClick,
   getSessionHref = defaultSessionHref,
   onNavigate,
+  offlineReason,
 }: NotificationItemProps) {
   const notification = group.notification;
   const contextString = getContextString(notification);
@@ -186,8 +193,10 @@ export function NotificationItem({
         {removeFromHistory && (
           <button
             className={removeButton}
-            onClick={() => removeFromHistory(notification.id)}
+            onClick={() => !offlineReason && removeFromHistory(notification.id)}
             aria-label="Remove notification"
+            aria-disabled={offlineReason ? true : undefined}
+            title={offlineReason}
           >
             ✕
           </button>
@@ -276,11 +285,11 @@ export function NotificationItem({
                       {/* No CI-checks URL (e.g. a reconciliation-race message) means there is
                           nothing left to "approve anyway" against — only Deny still applies. */}
                       {checksUrl && (
-                        <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", group.allIds, true)} disabled={isPending} title="Approve despite failing CI">
+                        <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", group.allIds, true)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Approve despite failing CI"}>
                           {isPending ? "…" : "Approve anyway"}
                         </button>
                       )}
-                      <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", group.allIds)} disabled={isPending} title="Deny this tool use">
+                      <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", group.allIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Deny this tool use"}>
                         {isPending ? "…" : "✗ Deny"}
                       </button>
                     </div>
@@ -289,15 +298,16 @@ export function NotificationItem({
               }
               return (
                 <>
+                  {offlineReason && <span className={ciBlockedText} data-testid="row-offline-reason">{offlineReason}</span>}
                   {failedMessage && (
                     <span className={ciBlockedText} data-testid="approval-retry-message">
                       {failedMessage}
                     </span>
                   )}
-                  <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", group.allIds)} disabled={isPending} title="Approve this tool use">
+                  <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", group.allIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Approve this tool use"}>
                     {isPending ? "…" : "✓ Approve"}
                   </button>
-                  <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", group.allIds)} disabled={isPending} title="Deny this tool use">
+                  <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", group.allIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Deny this tool use"}>
                     {isPending ? "…" : "✗ Deny"}
                   </button>
                 </>

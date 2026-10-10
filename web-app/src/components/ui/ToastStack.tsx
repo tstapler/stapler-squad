@@ -25,6 +25,8 @@ import { getStackTopOffset, subscribeStackTopOffset } from "@/lib/utils/toastDoc
 import { readTerminalCursor } from "@/lib/terminal/cursorRect";
 import { bottomRightFootprint, deckAnchor, type DeckAnchor } from "@/components/ui/toastDeckAnchor";
 import { readPinnedCollapseMs } from "@/lib/utils/deckSettings";
+import { TrayEntryChip } from "@/components/ui/TrayHandle";
+import { trayAffordanceVariant } from "@/components/ui/trayVariant";
 import {
   NOTIFICATION_TRAY_V2_FLAG,
   isPinned,
@@ -259,16 +261,19 @@ function UndoBar({ count, timers, onUndo }: { count: number; timers: ToastTimerR
 function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
   const viewport = useDeckViewport();
   const { isOffline } = useNotificationConnectivity();
-  const { movedToTray } = useNotificationState();
+  const { movedToTray, unreadCount } = useNotificationState();
   const { moveAllToTray, undoMoveToTray } = useNotificationCommands();
   const cap = toastCapFor(viewport);
   const { visible, overflow, pinnedCount } = partitionToasts(toasts, cap);
   const onPhone = !viewport.isInnerScreen;
   const topOffset = useSyncExternalStore(subscribeStackTopOffset, getStackTopOffset, () => null);
   const deckRef = useRef<HTMLDivElement>(null);
+  const hasTerminal = topOffset !== null;
   const hasContent = visible.length > 0 || overflow > 0 || movedToTray !== null;
   const desktopAnchor = useDesktopDeckAnchor(!onPhone && hasContent, deckRef);
-  if (!hasContent) return null;
+  // A phone session page always shows the one tray entry, so the dock never unmounts there.
+  const showsEntry = onPhone && (hasTerminal || hasContent || unreadCount > 0);
+  if (!hasContent && !showsEntry) return null;
 
   // Phone: top dock under the session tab row when one is published, else above the bottom nav.
   let placement: keyof typeof deckPlacement;
@@ -296,10 +301,25 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
   const showMoveAll = toasts.length >= 2;
   const undo = movedToTray ? <UndoBar count={movedToTray.count} timers={timers} onUndo={undoMoveToTray} /> : null;
 
+  const affordance = trayAffordanceVariant(overflow, toasts.length, viewport.isVirtualKeyboardOpen, hasTerminal);
+  // A page with no terminal floats the entry above the bottom nav (the dock's own placement), but
+  // the entry still says the same thing: overflow, keyboard chip or bell.
+  const entryContent =
+    affordance === "floating-bottom"
+      ? trayAffordanceVariant(overflow, toasts.length, viewport.isVirtualKeyboardOpen, true)
+      : affordance;
+
   return (
     <div ref={deckRef} className={deckPlacement[placement]} data-testid="toast-stack" data-placement={placement}>
       {/* Desktop: one header slot, holding either the bulk control or its undo. */}
       {!onPhone && (undo ?? (showMoveAll ? <div className={deckHeader}>{moveAll}</div> : null))}
+      {/* Phone: the single tray entry sits at the top anchor and never moves; the undo replaces its content in place. */}
+      {onPhone && (
+        <div className={chipRow}>
+          {!undo && showMoveAll && moveAll}
+          <TrayEntryChip content={entryContent} chipText={chipText} chipLabel={chipLabel} undo={undo} onOpen={onOpenTray} />
+        </div>
+      )}
       {visible.map((notification) => (
         <ToastSlot
           key={notification.id}
@@ -311,23 +331,19 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
           offlineReason={isOffline ? "Offline" : undefined}
         />
       ))}
-      {/* Phone: the undo replaces the chip row in place; otherwise chip plus a secondary bulk button. */}
-      {onPhone && undo}
-      {!(onPhone && undo) && (overflow > 0 || (onPhone && showMoveAll)) && (
+      {/* Desktop: the "+N more" chip stays under the cards; the handle and header bell are the other entries. */}
+      {!onPhone && overflow > 0 && (
         <div className={chipRow}>
-          {overflow > 0 && (
-            <button
-              type="button"
-              className={overflowChip}
-              data-testid="toast-overflow-chip"
-              aria-label={chipLabel}
-              onClick={onOpenTray}
-              {...keepTerminalFocus}
-            >
-              {chipText}
-            </button>
-          )}
-          {onPhone && showMoveAll && moveAll}
+          <button
+            type="button"
+            className={overflowChip}
+            data-testid="toast-overflow-chip"
+            aria-label={chipLabel}
+            onClick={onOpenTray}
+            {...keepTerminalFocus}
+          >
+            {chipText}
+          </button>
         </div>
       )}
     </div>

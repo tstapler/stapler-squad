@@ -1,5 +1,5 @@
-import { style, keyframes, globalStyle } from "@vanilla-extract/css";
-import { vars, breakpoints } from "@/styles/theme.css";
+import { style, styleVariants, keyframes, globalStyle } from "@vanilla-extract/css";
+import { vars, breakpoints, zIndex } from "@/styles/theme.css";
 
 const fadeIn = keyframes({
   from: { opacity: 0 },
@@ -13,7 +13,7 @@ export const overlay = style({
   right: 0,
   bottom: 0,
   backgroundColor: vars.color.overlayBackground,
-  zIndex: 9998,
+  zIndex: zIndex.slideOver,
   animation: `${fadeIn} 0.3s ease-out`,
 });
 
@@ -26,7 +26,7 @@ export const panel = style({
   maxWidth: "90vw",
   backgroundColor: vars.color.background,
   boxShadow: "-2px 0 10px rgba(0, 0, 0, 0.2)",
-  zIndex: 9999,
+  zIndex: zIndex.slideOver,
   transform: "translateX(100%)",
   transition: "transform 0.3s ease-out",
   display: "flex",
@@ -902,4 +902,367 @@ export const needsDecisionClearFilterButton = style({
       borderColor: vars.color.primary,
     },
   },
+});
+
+// ---------------------------------------------------------------------------
+// Notification tray (notification_tray_v2): non-modal, transform-only motion.
+// Closed trays are `visibility: hidden`, so they leave the tab order and the
+// accessibility tree without a layout change.
+// ---------------------------------------------------------------------------
+
+const trayBase = style({
+  position: "fixed",
+  zIndex: zIndex.slideOver,
+  display: "flex",
+  flexDirection: "column",
+  overflow: "hidden",
+  boxSizing: "border-box",
+  backgroundColor: vars.color.background,
+  color: vars.color.textPrimary,
+  boxShadow: "0 0 12px rgba(0, 0, 0, 0.25)",
+  visibility: "hidden",
+  transition: "transform 0.25s ease-out, visibility 0s linear 0.25s",
+  "@media": {
+    "(prefers-reduced-motion: reduce)": { transition: "none" },
+  },
+  selectors: {
+    '&[data-state="open"]': { visibility: "visible", transitionDelay: "0s" },
+  },
+});
+
+/** Desktop: a right-edge overlay that covers the terminal without resizing it. */
+export const trayVariant = styleVariants({
+  sideOverlay: [
+    trayBase,
+    {
+      top: 0,
+      right: 0,
+      bottom: 0,
+      width: "min(400px, 40vw)",
+      transform: "translateX(100%)",
+      borderLeft: `1px solid ${vars.color.borderColor}`,
+      selectors: { '&[data-state="open"]': { transform: "translateX(0)" } },
+    },
+  ],
+  bottomSheet: [
+    trayBase,
+    {
+      left: 0,
+      right: 0,
+      bottom: "max(var(--keyboard-height, 0px), var(--bottom-nav-height, 0px))",
+      height: "calc(var(--viewport-height, 100dvh) * 0.25)",
+      maxHeight: "var(--viewport-height, 100dvh)",
+      transform: "translateY(100%)",
+      borderTop: `1px solid ${vars.color.borderColor}`,
+      borderTopLeftRadius: "12px",
+      borderTopRightRadius: "12px",
+      paddingBottom: "env(safe-area-inset-bottom, 0px)",
+      selectors: {
+        '&[data-state="open"]': { transform: "translateY(0)" },
+        '&[data-sheet="expanded"]': { height: "calc(var(--viewport-height, 100dvh) * 0.85)" },
+      },
+    },
+  ],
+});
+
+export const sheetScrim = style({
+  position: "fixed",
+  inset: 0,
+  zIndex: zIndex.slideOver,
+  background: "transparent",
+});
+
+export const sheetGrabberRow = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  flexShrink: 0,
+  gap: "8px",
+  padding: "0 8px",
+});
+
+/** Only this strip drags the sheet; list content never does (C12). */
+export const sheetGrabber = style({
+  flex: 1,
+  minHeight: "44px",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  touchAction: "none",
+  cursor: "grab",
+  background: "transparent",
+  border: "none",
+  selectors: {
+    "&::before": {
+      content: '""',
+      width: "40px",
+      height: "4px",
+      borderRadius: "2px",
+      background: vars.color.textMuted,
+    },
+  },
+});
+
+export const trayButton = style({
+  minWidth: "44px",
+  minHeight: "44px",
+  padding: "0 12px",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: "6px",
+  background: "transparent",
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: "8px",
+  color: vars.color.textPrimary,
+  fontSize: "0.875rem",
+  cursor: "pointer",
+  selectors: {
+    "&:hover:not([aria-disabled='true'])": { backgroundColor: vars.color.hoverBackground },
+    "&[aria-disabled='true']": { opacity: 0.55, cursor: "not-allowed" },
+    "&[aria-pressed='true']": { backgroundColor: vars.color.hoverBackground, borderColor: vars.color.primary },
+    "&:focus-visible": { outline: `2px solid ${vars.color.primary}`, outlineOffset: "2px" },
+  },
+});
+
+export const trayAttention = style({
+  fontSize: "0.8125rem",
+  fontWeight: 600,
+  color: vars.color.error,
+});
+
+export const trayBanner = style({
+  padding: "8px 16px",
+  fontSize: "0.8125rem",
+  background: vars.color.cardBackground,
+  borderBottom: `1px solid ${vars.color.borderColor}`,
+  color: vars.color.textPrimary,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "8px",
+  flexShrink: 0,
+});
+
+export const trayUndoBar = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "12px",
+  padding: "4px 16px",
+  background: vars.color.modalBackground,
+  borderBottom: `1px solid ${vars.color.borderColor}`,
+  flexShrink: 0,
+  position: "sticky",
+  top: 0,
+});
+
+export const trayMenu = style({
+  position: "absolute",
+  top: "calc(100% + 4px)",
+  right: 0,
+  minWidth: "260px",
+  padding: "4px",
+  background: vars.color.modalBackground,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: "8px",
+  boxShadow: "0 8px 24px rgba(0, 0, 0, 0.3)",
+  zIndex: zIndex.raised,
+  display: "flex",
+  flexDirection: "column",
+});
+
+export const trayMenuItem = style({
+  minHeight: "44px",
+  padding: "6px 12px",
+  textAlign: "left",
+  background: "transparent",
+  border: "none",
+  borderRadius: "6px",
+  color: vars.color.textPrimary,
+  fontSize: "0.875rem",
+  cursor: "pointer",
+  display: "flex",
+  flexDirection: "column",
+  justifyContent: "center",
+  selectors: {
+    "&:hover:not([aria-disabled='true'])": { backgroundColor: vars.color.hoverBackground },
+    "&:focus-visible": { outline: `2px solid ${vars.color.primary}`, outlineOffset: "-2px" },
+    "&[aria-disabled='true']": { opacity: 0.55, cursor: "not-allowed" },
+  },
+});
+
+export const trayMenuCaption = style({ fontSize: "0.75rem", color: vars.color.textSecondary });
+
+export const trayMenuDivider = style({
+  height: "1px",
+  margin: "4px 0",
+  background: vars.color.borderColor,
+});
+
+export const trayConfirm = style({
+  margin: "8px 16px",
+  padding: "12px",
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: "8px",
+  background: vars.color.cardBackground,
+  display: "flex",
+  flexDirection: "column",
+  gap: "8px",
+  flexShrink: 0,
+});
+
+export const trayConfirmActions = style({ display: "flex", gap: "8px", justifyContent: "flex-end" });
+
+export const traySettings = style({
+  margin: "8px 16px",
+  padding: "8px 12px",
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: "8px",
+  display: "flex",
+  flexDirection: "column",
+  gap: "8px",
+  flexShrink: 0,
+});
+
+export const traySettingsRow = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "8px",
+  fontSize: "0.875rem",
+});
+
+export const traySelect = style({
+  minHeight: "44px",
+  padding: "0 8px",
+  background: vars.color.background,
+  color: vars.color.textPrimary,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: "6px",
+});
+
+export const virtualViewport = style({
+  position: "relative",
+  width: "100%",
+});
+
+export const virtualRow = style({
+  position: "absolute",
+  top: 0,
+  left: 0,
+  width: "100%",
+});
+
+export const groupHeader = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "8px",
+  padding: "0 12px 0 16px",
+  minHeight: "44px",
+  background: vars.color.cardBackground,
+  borderBottom: `1px solid ${vars.color.borderColor}`,
+  fontSize: "0.8125rem",
+  fontWeight: 600,
+  textTransform: "uppercase",
+  letterSpacing: "0.3px",
+});
+
+export const groupHeaderPinned = style({
+  borderLeft: `4px solid ${vars.color.error}`,
+});
+
+export const groupToggle = style({
+  flex: 1,
+  minHeight: "44px",
+  display: "flex",
+  alignItems: "center",
+  gap: "8px",
+  textAlign: "left",
+  background: "transparent",
+  border: "none",
+  color: "inherit",
+  font: "inherit",
+  textTransform: "inherit",
+  letterSpacing: "inherit",
+  cursor: "pointer",
+  selectors: { "&:focus-visible": { outline: `2px solid ${vars.color.primary}`, outlineOffset: "-2px" } },
+});
+
+export const groupNote = style({
+  padding: "12px 16px",
+  fontSize: "0.8125rem",
+  color: vars.color.textSecondary,
+  borderBottom: `1px solid ${vars.color.borderColor}`,
+});
+
+export const swipeRow = style({
+  position: "relative",
+  touchAction: "pan-y",
+  willChange: "transform",
+});
+
+export const trayFooter = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  padding: "0 16px",
+  minHeight: "44px",
+  borderTop: `1px solid ${vars.color.borderColor}`,
+  flexShrink: 0,
+});
+
+export const newPill = style({
+  position: "sticky",
+  top: 8,
+  alignSelf: "center",
+  zIndex: zIndex.raised,
+  minHeight: "44px",
+  padding: "0 16px",
+  borderRadius: "22px",
+  border: "none",
+  background: vars.color.primary,
+  color: vars.color.primaryText,
+  fontWeight: 600,
+  cursor: "pointer",
+});
+
+export const trayHandle = style({
+  position: "fixed",
+  top: "35%",
+  right: 0,
+  width: "44px",
+  minHeight: "88px",
+  zIndex: zIndex.slideOver,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: "4px",
+  padding: "8px 0",
+  background: vars.color.modalBackground,
+  color: vars.color.textPrimary,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRight: "none",
+  borderRadius: "8px 0 0 8px",
+  boxShadow: "-2px 2px 8px rgba(0, 0, 0, 0.25)",
+  cursor: "pointer",
+  fontSize: "0.75rem",
+  fontWeight: 700,
+  transition: "right 0.25s ease-out",
+  "@media": { "(prefers-reduced-motion: reduce)": { transition: "none" } },
+  selectors: {
+    '&[data-open="true"]': { right: "min(400px, 40vw)" },
+    "&:hover": { backgroundColor: vars.color.hoverBackground },
+    "&:focus-visible": { outline: `2px solid ${vars.color.primary}`, outlineOffset: "2px" },
+  },
+});
+
+export const trayHandleDot = style({
+  width: "10px",
+  height: "10px",
+  borderRadius: "50%",
+  background: vars.color.error,
+  border: `2px solid ${vars.color.modalBackground}`,
 });
