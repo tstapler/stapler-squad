@@ -26,6 +26,9 @@
 //     log.Info/Warn/Error/Debug API
 //   - notimesleeptest: rejects time.Sleep in _test.go files outside
 //     tests/realtime/ (ADR-003); //nolint:notimesleeptest <reason> exempts
+//   - noarchivedrevival: requires Start(false)/RecoverFromStopped()/restartForRetry/
+//     transitionToLocked(..., Active) in the automated-lifecycle files to follow an
+//     IsArchived()/ArchivedAt check (.claude/rules/noarchivedrevival.md)
 //   - novartestseam: detects a package-level var whose only reassignments
 //     live in _test.go files — should be a const injected as a function
 //     parameter instead of a mutated global test seam
@@ -36,6 +39,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/tools/lint/entfullscan"
 	"github.com/tstapler/stapler-squad/tools/lint/hotpolllog"
+	"github.com/tstapler/stapler-squad/tools/lint/noarchivedrevival"
 	"github.com/tstapler/stapler-squad/tools/lint/nocommandpattern"
 	"github.com/tstapler/stapler-squad/tools/lint/nolegacylog"
 	"github.com/tstapler/stapler-squad/tools/lint/noliveinstanceraw"
@@ -52,6 +56,7 @@ func main() {
 	multichecker.Main(
 		entfullscan.Analyzer,
 		hotpolllog.Analyzer,
+		noarchivedrevival.Analyzer,
 		nocommandpattern.Analyzer,
 		nolegacylog.Analyzer,
 		noliveinstanceraw.Analyzer,
