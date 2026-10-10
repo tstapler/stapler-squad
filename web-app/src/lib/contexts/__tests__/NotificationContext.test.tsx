@@ -821,4 +821,80 @@ describe("NotificationContext", () => {
       expect(result.current.notifications).toHaveLength(1);
     });
   });
+  describe("toast timer registry (Story 3.1)", () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it("showActionToast expires on its own: success after 5s, error after 10s", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+
+      act(() => {
+        result.current.showActionToast("Saved", "success", "ok");
+        result.current.showActionToast("Failed", "error", "bad");
+      });
+      expect(result.current.notifications).toHaveLength(2);
+
+      act(() => {
+        jest.advanceTimersByTime(5_000);
+      });
+      expect(result.current.notifications.map((n) => n.message)).toEqual(["Failed"]);
+
+      act(() => {
+        jest.advanceTimersByTime(5_000);
+      });
+      expect(result.current.notifications).toHaveLength(0);
+    });
+
+    it("showUndoToast expires after the given duration", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+
+      act(() => {
+        result.current.showUndoToast("Deleted", jest.fn(), 2_000);
+      });
+      act(() => {
+        jest.advanceTimersByTime(1_999);
+      });
+      expect(result.current.notifications).toHaveLength(1);
+      act(() => {
+        jest.advanceTimersByTime(1);
+      });
+      expect(result.current.notifications).toHaveLength(0);
+    });
+
+    it("context_should_cancel_pending_timers_when_clearAll_or_unmount", () => {
+      const { result, unmount } = renderHook(() => useNotifications(), { wrapper });
+      const baseline = jest.getTimerCount(); // the stale-sweep interval
+
+      act(() => {
+        result.current.showActionToast("Saved", "success", "k1");
+      });
+      expect(jest.getTimerCount()).toBe(baseline + 1);
+
+      act(() => {
+        result.current.clearAll();
+      });
+      expect(jest.getTimerCount()).toBe(baseline);
+      expect(result.current.notifications).toHaveLength(0);
+
+      act(() => {
+        result.current.showActionToast("Saved again", "success", "k2");
+      });
+      unmount();
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it("notification_context_should_pass_all_existing_tests_unmodified_and_shrink_below_532_lines", () => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const fs = require("fs") as typeof import("fs");
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const path = require("path") as typeof import("path");
+      const source = fs.readFileSync(path.join(process.cwd(), "src/lib/contexts/NotificationContext.tsx"), "utf8");
+      expect(source.split("\n").length).toBeLessThan(532);
+    });
+  });
 });

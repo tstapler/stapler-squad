@@ -3,11 +3,11 @@ import type { Meta, StoryObj } from "@storybook/react";
 import type { NotificationData } from "@/lib/types/notification";
 import { NotificationToast } from "./NotificationToast";
 
-// Corner toast. autoClose/autoMinimize default to 0 here so each state stays on screen.
+// Presentational card: timers belong to ToastStack, so each state stays on screen here.
 const meta: Meta<typeof NotificationToast> = {
   component: NotificationToast,
   title: "UI/NotificationToast",
-  args: { onClose: () => {}, autoClose: 0, autoMinimize: 0 },
+  args: { onClose: () => {} },
 };
 export default meta;
 type Story = StoryObj<typeof NotificationToast>;

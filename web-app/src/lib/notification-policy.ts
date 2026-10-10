@@ -25,8 +25,12 @@ export const TOAST_DEDUP_WINDOW_MS = 10_000;
  */
 export const ACTIONABLE_TOAST_STALE_MS = 6 * 60 * 1000;
 
-/** Returns true for notification types that require explicit user action before closing. */
-export function isActionable(type: NotificationData["notificationType"]): boolean {
+/**
+ * Toast staleness only: approval_needed and question toasts outlive the
+ * 5-minute sweep. Whether a notification is a pending *decision* is the
+ * server-sent `isPendingDecision`, never this type check.
+ */
+export function hasLongToastLifetime(type: NotificationData["notificationType"]): boolean {
   return type === "approval_needed" || type === "question";
 }
 
@@ -48,7 +52,7 @@ export const DEFAULT_TOAST_MS = 8_000;
  * visible until resolved, or until the 6-minute fallback fires.
  */
 export function toastAutoCloseMs(type: NotificationData["notificationType"]): number {
-  if (isActionable(type)) return ACTIONABLE_TOAST_STALE_MS;
+  if (hasLongToastLifetime(type)) return ACTIONABLE_TOAST_STALE_MS;
   if (type === "error" || type === "task_failed") return 12_000;
   return DEFAULT_TOAST_MS;
 }
@@ -79,7 +83,7 @@ export function nativeAutoCloseMs(priority: NotificationPriority): number {
  * Actionable types never minimize because they need user interaction.
  */
 export function toastAutoMinimizeMs(type: NotificationData["notificationType"]): number {
-  if (isActionable(type)) return 0;
+  if (hasLongToastLifetime(type)) return 0;
   if (type === "error" || type === "task_failed") return 5_000;
   if (type === "warning") return 5_000;
   return 3_000;

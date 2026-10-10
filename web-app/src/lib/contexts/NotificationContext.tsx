@@ -1,15 +1,16 @@
 "use client";
 
-import React, { createContext, useContext, useState, useCallback, useEffect, useMemo } from "react";
-import { NotificationToast } from "@/components/ui/NotificationToast";
-import { zIndex } from "@/styles/theme.css";
+import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { ToastStack } from "@/components/ui/ToastStack";
 import { NotificationData, NotificationHistoryItem } from "@/lib/types/notification";
 import { ReviewItem, AttentionReason } from "@/gen/session/v1/types_pb";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import { useNotificationHistory } from "@/lib/hooks/useNotificationHistory";
+import { useToastQueue } from "@/lib/hooks/useToastQueue";
+import { useToastTimers } from "@/lib/hooks/useToastTimers";
 import { groupNotifications } from "@/lib/utils/notificationGrouping";
-import { mapNotificationType, mapPriority } from "@/lib/utils/notificationMapping";
-import { TOAST_STALE_MS, ACTIONABLE_TOAST_STALE_MS, isActionable } from "@/lib/notification-policy";
+import { mapPriority } from "@/lib/utils/notificationMapping";
+import { mergeBackendHistory, recordToHistoryItem } from "@/lib/utils/notificationHistoryMerge";
 import { createNotificationSyncChannel } from "@/lib/utils/broadcastChannel";
 import { markAcknowledged } from "@/lib/utils/notificationStorage";
 import type { FailureReason } from "@/lib/utils/sessionFailure";
@@ -52,10 +53,22 @@ export function getFailureReasonToastMessage(failureReason: string): string {
   }
 }
 
-interface NotificationContextValue {
+/** Read-only notification state; changes whenever a toast, history row or panel flag does. */
+interface NotificationStateValue {
   notifications: NotificationData[];
   notificationHistory: NotificationHistoryItem[];
   isPanelOpen: boolean;
+  historyLoading: boolean;
+  historyHasMore: boolean;
+  /** Set when the most recent history fetch failed; cleared on the next successful one. Last-known-good `notificationHistory` is left untouched either way (Task 3.1.2h, AC38). */
+  historyError: Error | null;
+  /** Date.now() of the last successful history fetch; null until the first one completes. */
+  historyLastUpdatedAt: number | null;
+  unreadCount: number;
+}
+
+/** Stable commands: identities never change, so command-only consumers never re-render on state. */
+interface NotificationCommandsValue {
   addNotification: (notification: Omit<NotificationData, "id" | "timestamp">) => void;
   /** Add to history panel only — no toast, no sound. For informational events like task_complete. */
   addToHistoryOnly: (notification: Omit<NotificationData, "id" | "timestamp">) => void;
@@ -90,13 +103,6 @@ interface NotificationContextValue {
   removeToastBySessionId: (sessionId: string | string[]) => void;
   removeFromHistory: (id: string) => void;
   clearHistory: () => void;
-  getUnreadCount: () => number;
-  historyLoading: boolean;
-  historyHasMore: boolean;
-  /** Set when the most recent history fetch failed; cleared on the next successful one. Last-known-good `notificationHistory` is left untouched either way (Task 3.1.2h, AC38). */
-  historyError: Error | null;
-  /** Date.now() of the last successful history fetch; null until the first one completes. */
-  historyLastUpdatedAt: number | null;
   loadMoreHistory: () => Promise<void>;
   /** Re-fetch the full notification history from the server (e.g. after a stream reconnect). */
   refreshHistory: () => Promise<void>;
@@ -117,7 +123,11 @@ interface NotificationContextValue {
   showActionToast: (message: string, type: "success" | "error", key: string) => string;
 }
 
-const NotificationContext = createContext<NotificationContextValue | null>(null);
+export type NotificationContextValue = NotificationStateValue &
+  NotificationCommandsValue & { getUnreadCount: () => number };
+
+const NotificationStateContext = createContext<NotificationStateValue | null>(null);
+const NotificationCommandsContext = createContext<NotificationCommandsValue | null>(null);
 
 function reviewItemToNotificationType(reason: AttentionReason): NotificationData["notificationType"] {
   switch (reason) {
@@ -138,212 +148,186 @@ function reviewItemToNotificationType(reason: AttentionReason): NotificationData
   }
 }
 
+const newNotificationId = () => `notification-${Date.now()}-${Math.random()}`;
+const toIdSet = (id: string | string[]) => new Set(Array.isArray(id) ? id : [id]);
+
+const SWEEP_INTERVAL_MS = 60_000;
+const UNDO_TOAST_DEFAULT_MS = 5_000;
+const ACTION_TOAST_SUCCESS_MS = 5_000;
+const ACTION_TOAST_ERROR_MS = 10_000;
+
 export function NotificationProvider({ children }: { children: React.ReactNode }) {
-  const [notifications, setNotifications] = useState<NotificationData[]>([]);
+  const { queue: notifications, queueRef, dispatch } = useToastQueue();
+  const timers = useToastTimers();
   const [notificationHistory, setNotificationHistory] = useState<NotificationHistoryItem[]>([]);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
 
   const auditLog = useAuditLog();
   const history = useNotificationHistory();
+  // Commands read these through refs so their identities stay stable across renders.
+  const auditLogRef = useRef(auditLog);
+  auditLogRef.current = auditLog;
+  const historyRef = useRef(history);
+  historyRef.current = history;
 
-  // Hydrate and refresh notificationHistory from the backend.
-  // Runs on initial load and whenever refreshHistory() is called (e.g. on reconnect
-  // or after an approval_response event). Backend data is authoritative: existing
-  // local items are UPDATED with the server version so isRead state and metadata
-  // (e.g. approval_decision stamped after resolution) always reflect server truth.
+  // Backend data is authoritative: runs on initial load and whenever refreshHistory()
+  // is called (reconnect, approval_response), updating local items with the server version.
   useEffect(() => {
     if (history.notifications.length === 0) return;
-
-    const backendItems: NotificationHistoryItem[] = history.notifications.map((record) => ({
-      id: record.id,
-      sessionId: record.sessionId,
-      sessionName: record.sessionName,
-      title: record.title,
-      message: record.message,
-      timestamp: record.createdAt ? Number(record.createdAt.seconds) * 1000 : Date.now(),
-      priority: mapPriority(record.priority),
-      notificationType: mapNotificationType(record.notificationType),
-      metadata: record.metadata ? Object.fromEntries(Object.entries(record.metadata)) : undefined,
-      isRead: record.isRead,
-      occurrenceCount: record.occurrenceCount,
-    }));
-
-    setNotificationHistory((prev) => {
-      const backendById = new Map(backendItems.map((n) => [n.id, n]));
-      // Maps dedup key -> backend item, so stream-added items (with client-generated
-      // IDs) also get replaced by the authoritative server version.
-      const backendByDedupKey = new Map(
-        backendItems.map((n) => [`${n.sessionId ?? ""}:${n.notificationType ?? ""}`, n])
-      );
-
-      // Pass 1: walk existing local items and replace with server version where available.
-      const updated: NotificationHistoryItem[] = [];
-      const consumedDedupKeys = new Set<string>();
-      for (const n of prev) {
-        const dk = `${n.sessionId ?? ""}:${n.notificationType ?? ""}`;
-        if (consumedDedupKeys.has(dk)) continue; // skip duplicate local entries
-        const serverVersion = backendById.get(n.id) ?? backendByDedupKey.get(dk);
-        // Preserve local callbacks (onView, onApprove, etc.) on the server version
-        // since they are not persisted and are only meaningful for the current session.
-        updated.push(serverVersion ? { ...serverVersion, onView: n.onView, onApprove: n.onApprove, onDeny: n.onDeny, onFocusWindow: n.onFocusWindow } : n);
-        consumedDedupKeys.add(dk);
-      }
-
-      // Pass 2: add backend items not covered by any local item.
-      // Mutate existingDedupKeys as we go so duplicate-type records (e.g. multiple
-      // auto_approved entries for the same session) don't all slip through.
-      const existingIds = new Set(updated.map((n) => n.id));
-      const existingDedupKeys = new Set(updated.map((n) => `${n.sessionId ?? ""}:${n.notificationType ?? ""}`));
-      const newFromBackend: NotificationHistoryItem[] = [];
-      for (const n of backendItems) {
-        if (existingIds.has(n.id)) continue;
-        const dk = `${n.sessionId ?? ""}:${n.notificationType ?? ""}`;
-        if (existingDedupKeys.has(dk)) continue;
-        newFromBackend.push(n);
-        existingDedupKeys.add(dk);
-      }
-
-      return [...newFromBackend, ...updated];
-    });
+    const backendItems = history.notifications.map(recordToHistoryItem);
+    setNotificationHistory((prev) => mergeBackendHistory(prev, backendItems));
   }, [history.notifications]);
 
-  const addNotification = useCallback(
-    (notification: Omit<NotificationData, "id" | "timestamp">) => {
-      const id = `notification-${Date.now()}-${Math.random()}`;
-      const newNotification: NotificationData = { ...notification, id, timestamp: Date.now() };
+  const commands = useMemo<NotificationCommandsValue>(() => {
+    const removeToast = (id: string) => {
+      timers.cancel(id);
+      dispatch({ type: "remove", ids: new Set([id]) });
+    };
 
-      // Only show the latest toast per session — replace any existing toast for the
-      // same sessionId so they don't stack. Older notifications remain in history.
-      // Exception: never displace an approval toast (one with onApprove/onDeny) with
-      // a notification that lacks those callbacks — approvals require explicit resolution.
-      setNotifications((prev) => {
-        const existing = prev.find((n) => n.sessionId === notification.sessionId);
-        if (
-          existing &&
-          (existing.onApprove || existing.onDeny) &&
-          !notification.onApprove &&
-          !notification.onDeny
-        ) {
-          return prev;
-        }
-        const without = prev.filter((n) => n.sessionId !== notification.sessionId);
-        return [...without, newNotification];
-      });
+    const appendEphemeral = (notification: NotificationData, lifetimeMs: number, replaceKey?: string) => {
+      dispatch({ type: "append", notification, replaceKey });
+      timers.register(notification.id, "expire", lifetimeMs, () => removeToast(notification.id));
+      return notification.id;
+    };
 
-      setNotificationHistory((prev) => {
-        if (prev.some((n) => n.id === id)) return prev;
-        return [{ ...newNotification, isRead: false }, ...prev];
-      });
-    },
-    []
-  );
-
-  const addToHistoryOnly = useCallback(
-    (notification: Omit<NotificationData, "id" | "timestamp">) => {
-      const id = `notification-${Date.now()}-${Math.random()}`;
-      const newNotification: NotificationData = { ...notification, id, timestamp: Date.now() };
-      setNotificationHistory((prev) => {
-        if (prev.some((n) => n.id === id)) return prev;
-        return [{ ...newNotification, isRead: false }, ...prev];
-      });
-    },
-    []
-  );
-
-  const removeNotification = useCallback((id: string) => {
-    setNotifications((prev) => prev.filter((n) => n.id !== id));
-  }, []);
-
-  const removeToastByApprovalId = useCallback((approvalId: string) => {
-    setNotifications((prev) =>
-      prev.filter((n) => n.metadata?.approval_id !== approvalId)
-    );
-  }, []);
-
-  const clearAll = useCallback(() => {
-    setNotifications([]);
-  }, []);
-
-  const showSessionNotification = useCallback(
-    (item: ReviewItem, onView?: () => void, onAcknowledge?: () => void) => {
-      addNotification({
-        sessionId: item.sessionId,
-        sessionName: item.sessionName || "Unnamed Session",
-        message: item.context || "This session is waiting for your input",
-        priority: mapPriority(item.priority),
-        notificationType: reviewItemToNotificationType(item.reason),
-        onView,
-        onAcknowledge,
-      });
-    },
-    [addNotification]
-  );
-
-  const showUndoToast = useCallback(
-    (message: string, onUndo: () => void, durationMs: number = 5000): string => {
-      const id = `notification-${Date.now()}-${Math.random()}`;
-      const newNotification: NotificationData = {
-        id,
-        sessionId: "",
-        sessionName: "",
-        message,
-        timestamp: Date.now(),
-        notificationType: "undo",
-        onUndo,
-      };
-      setNotifications((prev) => [...prev, newNotification]);
-      // Auto-dismiss after durationMs
-      setTimeout(() => {
-        setNotifications((prev) => prev.filter((n) => n.id !== id));
-      }, durationMs);
-      return id;
-    },
-    []
-  );
-
-  const showActionToast = useCallback(
-    (message: string, type: "success" | "error", key: string): string => {
-      const id = `notification-${Date.now()}-${Math.random()}`;
-      const newNotification: NotificationData = {
-        id,
-        sessionId: "",
-        sessionName: "",
-        message,
-        timestamp: Date.now(),
-        notificationType: type === "success" ? "task_complete" : "error",
-        metadata: { actionToastKey: key },
-      };
-      const durationMs = type === "success" ? 5000 : 10000;
-      // Replace any existing toast for this key instead of stacking a duplicate.
-      setNotifications((prev) => [
-        ...prev.filter((n) => n.metadata?.actionToastKey !== key),
-        newNotification,
-      ]);
-      setTimeout(() => {
-        setNotifications((prev) => prev.filter((n) => n.id !== id));
-      }, durationMs);
-      return id;
-    },
-    []
-  );
-
-  // Remove stale toasts every minute.
-  // Non-actionable: removed after TOAST_STALE_MS (5 min).
-  // Actionable (approval_needed, question): removed after ACTIONABLE_TOAST_STALE_MS (6 min).
-  // Both remain in the notification history panel regardless.
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const now = Date.now();
-      setNotifications((prev) =>
-        prev.filter((n) =>
-          isActionable(n.notificationType)
-            ? now - n.timestamp < ACTIONABLE_TOAST_STALE_MS
-            : now - n.timestamp < TOAST_STALE_MS
-        )
+    const addToHistory = (notification: NotificationData) =>
+      setNotificationHistory((prev) =>
+        prev.some((n) => n.id === notification.id) ? prev : [{ ...notification, isRead: false }, ...prev],
       );
-    }, 60_000);
+
+    const addNotification: NotificationCommandsValue["addNotification"] = (notification) => {
+      const next: NotificationData = { ...notification, id: newNotificationId(), timestamp: Date.now() };
+      dispatch({ type: "add", notification: next });
+      addToHistory(next);
+    };
+
+    const addToHistoryOnly: NotificationCommandsValue["addToHistoryOnly"] = (notification) =>
+      addToHistory({ ...notification, id: newNotificationId(), timestamp: Date.now() });
+
+    const markAsRead = (id: string | string[]) => {
+      const ids = Array.isArray(id) ? id : [id];
+      const idSet = new Set(ids);
+      setNotificationHistory((prev) => {
+        for (const n of prev) {
+          if (idSet.has(n.id)) auditLogRef.current.logNotificationMarkedRead(n.id, n.sessionId);
+        }
+        return prev.map((n) => (idSet.has(n.id) ? { ...n, isRead: true } : n));
+      });
+      historyRef.current.markAsRead(ids);
+    };
+
+    return {
+      addNotification,
+      addToHistoryOnly,
+      removeNotification: removeToast,
+      removeToastByApprovalId: (approvalId) => dispatch({ type: "removeByApprovalId", approvalId }),
+      clearAll: () => {
+        timers.cancelAll();
+        dispatch({ type: "clear" });
+      },
+      showSessionNotification: (item, onView, onAcknowledge) =>
+        addNotification({
+          sessionId: item.sessionId,
+          sessionName: item.sessionName || "Unnamed Session",
+          message: item.context || "This session is waiting for your input",
+          priority: mapPriority(item.priority),
+          notificationType: reviewItemToNotificationType(item.reason),
+          onView,
+          onAcknowledge,
+        }),
+      showUndoToast: (message, onUndo, durationMs = UNDO_TOAST_DEFAULT_MS) =>
+        appendEphemeral(
+          {
+            id: newNotificationId(),
+            sessionId: "",
+            sessionName: "",
+            message,
+            timestamp: Date.now(),
+            notificationType: "undo",
+            onUndo,
+          },
+          durationMs,
+        ),
+      showActionToast: (message, type, key) =>
+        appendEphemeral(
+          {
+            id: newNotificationId(),
+            sessionId: "",
+            sessionName: "",
+            message,
+            timestamp: Date.now(),
+            notificationType: type === "success" ? "task_complete" : "error",
+            metadata: { actionToastKey: key },
+          },
+          type === "success" ? ACTION_TOAST_SUCCESS_MS : ACTION_TOAST_ERROR_MS,
+          key,
+        ),
+      togglePanel: () =>
+        setIsPanelOpen((prev) => {
+          if (!prev) auditLogRef.current.logNotificationPanelOpened();
+          else auditLogRef.current.logNotificationPanelClosed();
+          return !prev;
+        }),
+      markAsRead,
+      // Removes the toast(s) AND marks them read in one operation; prefer it to
+      // calling removeNotification + markAsRead separately.
+      acknowledgeNotification: (id) => {
+        const ids = Array.isArray(id) ? id : [id];
+        const idSet = new Set(ids);
+        const syncChannel = createNotificationSyncChannel();
+        for (const n of queueRef.current) {
+          if (!idSet.has(n.id)) continue;
+          syncChannel.broadcast({ type: "NOTIFICATION_DISMISSED", notificationId: n.id });
+          if (n.sessionId) markAcknowledged(n.sessionId);
+          timers.cancel(n.id);
+        }
+        dispatch({ type: "remove", ids: idSet });
+        markAsRead(ids);
+      },
+      markAsReadBySessionId: (sessionId) => {
+        const sessionIds = toIdSet(sessionId);
+        setNotificationHistory((prev) => {
+          const idsToMark: string[] = [];
+          const updated = prev.map((n) => {
+            if (!n.isRead && n.sessionId != null && sessionIds.has(n.sessionId)) {
+              idsToMark.push(n.id);
+              return { ...n, isRead: true };
+            }
+            return n;
+          });
+          if (idsToMark.length > 0) historyRef.current.markAsRead(idsToMark);
+          return updated;
+        });
+      },
+      removeToastBySessionId: (sessionId) => {
+        const sessionIds = toIdSet(sessionId);
+        sessionIds.delete(""); // never match notifications without a sessionId
+        if (sessionIds.size > 0) dispatch({ type: "removeBySessionIds", sessionIds });
+      },
+      removeFromHistory: (id) =>
+        setNotificationHistory((prev) => {
+          const notification = prev.find((n) => n.id === id);
+          if (notification) auditLogRef.current.logNotificationRemoved(notification.id, notification.sessionId);
+          return prev.filter((n) => n.id !== id);
+        }),
+      clearHistory: () => {
+        setNotificationHistory((prev) => {
+          if (prev.length > 0) auditLogRef.current.logNotificationHistoryCleared(prev.length);
+          return [];
+        });
+        historyRef.current.clearHistory();
+      },
+      loadMoreHistory: () => historyRef.current.loadMore(),
+      refreshHistory: () => historyRef.current.refresh(),
+    };
+  }, [dispatch, queueRef, timers]);
+
+  // Remove stale toasts every minute (history keeps them): plain toasts after
+  // TOAST_STALE_MS, approval/question toasts after ACTIONABLE_TOAST_STALE_MS.
+  useEffect(() => {
+    const interval = setInterval(() => dispatch({ type: "prune", now: Date.now() }), SWEEP_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, []);
+  }, [dispatch]);
 
   // Cross-tab sync: when another tab dismisses a notification, reflect it locally.
   useEffect(() => {
@@ -351,7 +335,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     const unsubscribe = syncChannel.subscribe((message) => {
       if (message.type === "NOTIFICATION_DISMISSED") {
         const { notificationId } = message;
-        setNotifications((prev) => prev.filter((n) => n.id !== notificationId));
+        timers.cancel(notificationId);
+        dispatch({ type: "remove", ids: new Set([notificationId]) });
         setNotificationHistory((prev) =>
           prev.map((n) => (n.id === notificationId ? { ...n, isRead: true } : n))
         );
@@ -361,172 +346,83 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       // event from the server stream (useSessionService), not BroadcastChannel.
     });
     return unsubscribe;
-  }, []);
+  }, [dispatch, timers]);
 
-  const togglePanel = useCallback(() => {
-    setIsPanelOpen((prev) => {
-      const newState = !prev;
-      if (newState) auditLog.logNotificationPanelOpened();
-      else auditLog.logNotificationPanelClosed();
-      return newState;
-    });
-  }, [auditLog]);
+  const unreadCount = useMemo(
+    () => groupNotifications(notificationHistory.filter((n) => !n.isRead)).length,
+    [notificationHistory],
+  );
 
-  const markAsRead = useCallback((id: string | string[]) => {
-    const ids = Array.isArray(id) ? id : [id];
-    const idSet = new Set(ids);
-    setNotificationHistory((prev) => {
-      for (const n of prev) {
-        if (idSet.has(n.id)) auditLog.logNotificationMarkedRead(n.id, n.sessionId);
-      }
-      return prev.map((n) => (idSet.has(n.id) ? { ...n, isRead: true } : n));
-    });
-    history.markAsRead(ids);
-  }, [auditLog, history]);
-
-  /**
-   * Acknowledge one or more notifications: removes the active toast(s) AND marks
-   * them as read in the history panel in a single atomic operation.
-   *
-   * Always prefer this over calling removeNotification + markAsRead separately.
-   */
-  const acknowledgeNotification = useCallback((id: string | string[]) => {
-    const ids = Array.isArray(id) ? id : [id];
-    const idSet = new Set(ids);
-    const syncChannel = createNotificationSyncChannel();
-    setNotifications((prev) => {
-      prev.forEach((n) => {
-        if (idSet.has(n.id)) {
-          syncChannel.broadcast({ type: "NOTIFICATION_DISMISSED", notificationId: n.id });
-          if (n.sessionId) markAcknowledged(n.sessionId);
-        }
-      });
-      return prev.filter((n) => !idSet.has(n.id));
-    });
-    markAsRead(ids);
-  }, [markAsRead]);
-
-  const markAsReadBySessionId = useCallback((sessionId: string | string[]) => {
-    const sessionIds = new Set(Array.isArray(sessionId) ? sessionId : [sessionId]);
-    setNotificationHistory((prev) => {
-      const idsToMark: string[] = [];
-      const updated = prev.map((n) => {
-        if (!n.isRead && n.sessionId != null && sessionIds.has(n.sessionId)) {
-          idsToMark.push(n.id);
-          return { ...n, isRead: true };
-        }
-        return n;
-      });
-      if (idsToMark.length > 0) history.markAsRead(idsToMark);
-      return updated;
-    });
-  }, [history]);
-
-  const removeToastBySessionId = useCallback((sessionId: string | string[]) => {
-    const sessionIds = new Set(Array.isArray(sessionId) ? sessionId : [sessionId]);
-    sessionIds.delete(""); // never match notifications without a sessionId
-    if (sessionIds.size === 0) return;
-    setNotifications((prev) => prev.filter((n) => !sessionIds.has(n.sessionId ?? "")));
-  }, []);
-
-  const removeFromHistory = useCallback((id: string) => {
-    setNotificationHistory((prev) => {
-      const notification = prev.find((n) => n.id === id);
-      if (notification) auditLog.logNotificationRemoved(notification.id, notification.sessionId);
-      return prev.filter((n) => n.id !== id);
-    });
-  }, [auditLog]);
-
-  const clearHistory = useCallback(() => {
-    setNotificationHistory((prev) => {
-      if (prev.length > 0) auditLog.logNotificationHistoryCleared(prev.length);
-      return [];
-    });
-    history.clearHistory();
-  }, [auditLog, history]);
-
-  const unreadCount = useMemo(() => {
-    const unreadGroups = groupNotifications(notificationHistory.filter((n) => !n.isRead));
-    return unreadGroups.length;
-  }, [notificationHistory]);
-
-  const getUnreadCount = useCallback(() => unreadCount, [unreadCount]);
+  const state = useMemo<NotificationStateValue>(
+    () => ({
+      notifications,
+      notificationHistory,
+      isPanelOpen,
+      historyLoading: history.loading,
+      historyHasMore: history.hasMore,
+      historyError: history.error,
+      historyLastUpdatedAt: history.lastUpdatedAt,
+      unreadCount,
+    }),
+    [notifications, notificationHistory, isPanelOpen, history.loading, history.hasMore, history.error, history.lastUpdatedAt, unreadCount],
+  );
 
   return (
-    <NotificationContext.Provider
-      value={{
-        notifications,
-        notificationHistory,
-        isPanelOpen,
-        addNotification,
-        addToHistoryOnly,
-        removeNotification,
-        removeToastByApprovalId,
-        acknowledgeNotification,
-        clearAll,
-        showSessionNotification,
-        togglePanel,
-        markAsRead,
-        markAsReadBySessionId,
-        removeToastBySessionId,
-        removeFromHistory,
-        clearHistory,
-        getUnreadCount,
-        historyLoading: history.loading,
-        historyHasMore: history.hasMore,
-        historyError: history.error,
-        historyLastUpdatedAt: history.lastUpdatedAt,
-        loadMoreHistory: history.loadMore,
-        refreshHistory: history.refresh,
-        showUndoToast,
-        showActionToast,
-      }}
-    >
-      {children}
-      <div
-        style={{
-          position: "fixed",
-          bottom: 0,
-          right: 0,
-          zIndex: zIndex.toast,
-          pointerEvents: "none",
-        }}
-      >
-        {notifications.map((notification) => (
-          <div key={notification.id} style={{ pointerEvents: "auto" }}>
-            <NotificationToast
-              notification={notification}
-              onClose={() => removeNotification(notification.id)}
-            />
-          </div>
-        ))}
-      </div>
-    </NotificationContext.Provider>
+    <NotificationCommandsContext.Provider value={commands}>
+      <NotificationStateContext.Provider value={state}>
+        {children}
+        <ToastStack toasts={notifications} timers={timers} onRemove={commands.removeNotification} />
+      </NotificationStateContext.Provider>
+    </NotificationCommandsContext.Provider>
   );
 }
 
-export function useNotifications() {
-  const context = useContext(NotificationContext);
-  if (!context) {
-    // Return a no-op fallback when used outside a NotificationProvider.
-    // This allows components to be rendered in test environments or
-    // as part of an embedded view without a full provider tree.
-    const noop = () => {};
-    return {
-      notifications: [] as NotificationData[],
-      notificationHistory: [] as NotificationHistoryItem[],
-      isPanelOpen: false,
-      addNotification: noop,
-      addToHistoryOnly: noop,
-      removeNotification: noop,
-      removeToastByApprovalId: noop,
-      acknowledgeNotification: noop,
-      clearAll: noop,
-      showSessionNotification: noop,
-      togglePanel: noop,
-      markAsRead: noop,
-      showActionToast: () => "",
-    } as unknown as NonNullable<typeof context>;
-  }
-  return context;
+const noop = () => {};
+const OUTSIDE_PROVIDER_STATE: NotificationStateValue = {
+  notifications: [],
+  notificationHistory: [],
+  isPanelOpen: false,
+  historyLoading: false,
+  historyHasMore: false,
+  historyError: null,
+  historyLastUpdatedAt: null,
+  unreadCount: 0,
+};
+
+/**
+ * Outside a NotificationProvider these return no-ops, so components render in
+ * tests or embedded views without a full provider tree.
+ */
+const OUTSIDE_PROVIDER_COMMANDS = {
+  addNotification: noop,
+  addToHistoryOnly: noop,
+  removeNotification: noop,
+  removeToastByApprovalId: noop,
+  acknowledgeNotification: noop,
+  clearAll: noop,
+  showSessionNotification: noop,
+  togglePanel: noop,
+  markAsRead: noop,
+  showActionToast: () => "",
+} as unknown as NotificationCommandsValue;
+
+/** Toast and history state, without the commands. */
+export function useNotificationState(): NotificationStateValue {
+  return useContext(NotificationStateContext) ?? OUTSIDE_PROVIDER_STATE;
 }
+
+/** Stable commands only; consumers using just these never re-render on notification state. */
+export function useNotificationCommands(): NotificationCommandsValue {
+  return useContext(NotificationCommandsContext) ?? OUTSIDE_PROVIDER_COMMANDS;
+}
+
+/** Both halves merged: the original `useNotifications()` surface. */
+export function useNotifications(): NotificationContextValue {
+  const state = useNotificationState();
+  const commands = useNotificationCommands();
+  return useMemo(
+    () => ({ ...state, ...commands, getUnreadCount: () => state.unreadCount }),
+    [state, commands],
+  );
+}
+

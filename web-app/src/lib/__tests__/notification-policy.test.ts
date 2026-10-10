@@ -4,7 +4,7 @@ import {
   TOAST_DEDUP_WINDOW_MS,
   NATIVE_HIGH_TTL_MS,
   NATIVE_MEDIUM_TTL_MS,
-  isActionable,
+  hasLongToastLifetime,
   toastAutoCloseMs,
   toastAutoMinimizeMs,
   nativeAutoCloseMs,
@@ -30,37 +30,37 @@ describe("notification-policy", () => {
     });
   });
 
-  describe("isActionable", () => {
+  describe("hasLongToastLifetime", () => {
     it("returns true for approval_needed", () => {
-      expect(isActionable("approval_needed")).toBe(true);
+      expect(hasLongToastLifetime("approval_needed")).toBe(true);
     });
 
     it("returns true for question", () => {
-      expect(isActionable("question")).toBe(true);
+      expect(hasLongToastLifetime("question")).toBe(true);
     });
 
     it("returns false for error", () => {
-      expect(isActionable("error")).toBe(false);
+      expect(hasLongToastLifetime("error")).toBe(false);
     });
 
     it("returns false for warning", () => {
-      expect(isActionable("warning")).toBe(false);
+      expect(hasLongToastLifetime("warning")).toBe(false);
     });
 
     it("returns false for task_complete", () => {
-      expect(isActionable("task_complete")).toBe(false);
+      expect(hasLongToastLifetime("task_complete")).toBe(false);
     });
 
     it("returns false for task_failed", () => {
-      expect(isActionable("task_failed")).toBe(false);
+      expect(hasLongToastLifetime("task_failed")).toBe(false);
     });
 
     it("returns false for info", () => {
-      expect(isActionable("info")).toBe(false);
+      expect(hasLongToastLifetime("info")).toBe(false);
     });
 
     it("returns false for undefined", () => {
-      expect(isActionable(undefined)).toBe(false);
+      expect(hasLongToastLifetime(undefined)).toBe(false);
     });
   });
 

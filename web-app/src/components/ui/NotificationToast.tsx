@@ -1,17 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ReviewItem } from "@/gen/session/v1/types_pb";
+import { useEffect, useRef } from "react";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
+import { useNowTicker } from "@/lib/hooks/useNowTicker";
 import { NotificationData } from "@/lib/types/notification";
-import { toastAutoCloseMs, toastAutoMinimizeMs } from "@/lib/notification-policy";
 import { notificationTypeIcon, notificationTypeLabel, priorityColor } from "@/lib/utils/notificationMapping";
 import {
   toast,
   toastApproval,
-  visible,
-  exiting,
-  minimized,
+  exiting as exitingClass,
+  minimized as minimizedClass,
   header,
   icon,
   titleWrapper,
@@ -30,22 +28,30 @@ import {
   denyButton,
   viewButton,
   dismissButton,
-  minimizeHint,
   undoButton,
 } from "./NotificationToast.css";
 
 export type { NotificationData };
 
-interface NotificationToastProps {
+export interface NotificationToastProps {
   notification: NotificationData;
-  onClose: () => void;
-  autoClose?: number; // Auto-close after N milliseconds (0 = no auto-close)
-  /** Auto-minimize to compact pill after N milliseconds (0 = disabled). Tier 2 default: 5000ms. */
-  autoMinimize?: number;
+  /** Ask the stack to close this toast. `acknowledge` also fires the toast's onAcknowledge. */
+  onClose: (options?: { acknowledge?: boolean }) => void;
+  /** True while the stack runs the exit animation. */
+  exiting?: boolean;
+  /** Compact pill; clicking it expands. */
+  minimized?: boolean;
+  onExpand?: () => void;
+  /**
+   * Called when the card mounts; the returned cleanup runs on unmount. The stack
+   * starts a toast's timers only while its card is mounted, so an overflowing
+   * toast with no card yet does not expire unseen.
+   */
+  onPresent?: () => void | (() => void);
 }
 
-function getRelativeTime(timestamp: number): string {
-  const seconds = Math.floor((Date.now() - timestamp) / 1000);
+function getRelativeTime(timestampMs: number, now: number): string {
+  const seconds = Math.floor((now - timestampMs) / 1000);
   if (seconds < 5) return "just now";
   if (seconds < 60) return `${seconds}s ago`;
   const minutes = Math.floor(seconds / 60);
@@ -57,43 +63,24 @@ function getRelativeTime(timestamp: number): string {
 }
 
 /**
- * Toast notification that appears in the corner of the screen.
- * Shows session information and provides action buttons.
- *
- * Timing policy is centralized in lib/notification-policy.ts —
- * do not add dismissal logic here.
+ * One toast card. Presentational: it owns no timers. Auto-close, minimize and
+ * exit timing live in the ToastStack through the timer registry, and the timing
+ * policy in lib/notification-policy.ts.
  */
 export function NotificationToast({
   notification,
   onClose,
-  autoClose,
-  autoMinimize,
+  exiting = false,
+  minimized = false,
+  onExpand,
+  onPresent,
 }: NotificationToastProps) {
-  const effectiveAutoClose =
-    autoClose !== undefined ? autoClose : toastAutoCloseMs(notification.notificationType);
-  const effectiveAutoMinimize =
-    autoMinimize !== undefined ? autoMinimize : toastAutoMinimizeMs(notification.notificationType);
-
-  const [isVisible, setIsVisible] = useState(false);
-  const [isExiting, setIsExiting] = useState(false);
-  const [isMinimized, setIsMinimized] = useState(false);
-  const [relativeTime, setRelativeTime] = useState(() => getRelativeTime(notification.timestamp));
   const auditLog = useAuditLog();
   const undoButtonRef = useRef<HTMLButtonElement>(null);
+  const now = useNowTicker(1_000);
+  const relativeTime = getRelativeTime(notification.timestamp, now);
 
-  // Tick every second to keep relative time live
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setRelativeTime(getRelativeTime(notification.timestamp));
-    }, 1_000);
-    return () => clearInterval(interval);
-  }, [notification.timestamp]);
-
-  // Entrance animation
-  useEffect(() => {
-    const timer = setTimeout(() => setIsVisible(true), 10);
-    return () => clearTimeout(timer);
-  }, []);
+  useEffect(() => onPresent?.(), [onPresent]);
 
   // WCAG 2.4.3: move focus to Undo button when undo toast mounts
   useEffect(() => {
@@ -102,47 +89,11 @@ export function NotificationToast({
     }
   }, []);
 
-  const handleClose = useCallback((shouldAcknowledge: boolean = false) => {
-    setIsExiting(true);
-    auditLog.logNotificationDismissed(notification.id, notification.sessionId);
-    setTimeout(() => {
-      notification.onDismiss?.();
-      if (shouldAcknowledge) {
-        notification.onAcknowledge?.();
-      }
-      onClose();
-    }, 300);
-  }, [auditLog, notification, onClose]);
-
-  // Auto-close timer (does NOT acknowledge - user didn't explicitly dismiss)
-  useEffect(() => {
-    if (effectiveAutoClose > 0) {
-      const timer = setTimeout(() => {
-        handleClose(false);
-      }, effectiveAutoClose);
-      return () => clearTimeout(timer);
-    }
-  }, [effectiveAutoClose, handleClose]);
-
-  // Auto-minimize timer: shrink to compact pill so it doesn't obscure content
-  useEffect(() => {
-    if (effectiveAutoMinimize > 0 && !isMinimized) {
-      const timer = setTimeout(() => {
-        setIsMinimized(true);
-      }, effectiveAutoMinimize);
-      return () => clearTimeout(timer);
-    }
-  }, [effectiveAutoMinimize, isMinimized]);
-
   const handleView = () => {
     auditLog.logNotificationSessionViewed(notification.id, notification.sessionId);
     notification.onView?.();
-    handleClose();
+    onClose();
   };
-
-  const getPriorityColor = () => priorityColor(notification.priority);
-  const getTypeIcon = () => notificationTypeIcon(notification.notificationType);
-  const getTypeLabel = () => notificationTypeLabel(notification.notificationType);
 
   const displayTitle = notification.title || notification.sessionName;
   const hasSourceApp = notification.sourceApp || notification.sourceBundleId;
@@ -160,20 +111,20 @@ export function NotificationToast({
 
   return (
     <div
-      className={`${toast} ${notification.notificationType === "approval_needed" ? toastApproval : ""} ${isVisible ? visible : ""} ${isExiting ? exiting : ""} ${isMinimized ? minimized : ""}`}
-      style={{ "--priority-color": getPriorityColor() } as React.CSSProperties}
+      className={`${toast} ${notification.notificationType === "approval_needed" ? toastApproval : ""} ${exiting ? exitingClass : ""} ${minimized ? minimizedClass : ""}`}
+      style={{ "--priority-color": priorityColor(notification.priority) } as React.CSSProperties}
       data-testid="toast"
       role="alert"
       aria-live={notification.notificationType === "approval_needed" ? "assertive" : "polite"}
-      onClick={isMinimized ? () => setIsMinimized(false) : undefined}
-      title={isMinimized ? "Click to expand" : undefined}
+      onClick={minimized ? onExpand : undefined}
+      title={minimized ? "Click to expand" : undefined}
     >
       <div className={header}>
-        <div className={icon}>{getTypeIcon()}</div>
+        <div className={icon}>{notificationTypeIcon(notification.notificationType)}</div>
         <div className={titleWrapper}>
           <div className={titleRow}>
             <strong>{displayTitle}</strong>
-            <span className={typeLabel}>{getTypeLabel()}</span>
+            <span className={typeLabel}>{notificationTypeLabel(notification.notificationType)}</span>
           </div>
           <div className={subtitleRow}>
             {subtitleText && (
@@ -186,7 +137,7 @@ export function NotificationToast({
         </div>
         <button
           className={closeButton}
-          onClick={() => handleClose(false)}
+          onClick={() => onClose()}
           aria-label="Close notification"
         >
           ×
@@ -211,7 +162,7 @@ export function NotificationToast({
         {notification.onApprove && (
           <button
             className={approveButton}
-            onClick={() => { notification.onApprove?.(); handleClose(true); }}
+            onClick={() => { notification.onApprove?.(); onClose({ acknowledge: true }); }}
             title="Allow this tool use"
           >
             ✓ Approve
@@ -220,7 +171,7 @@ export function NotificationToast({
         {notification.onDeny && (
           <button
             className={denyButton}
-            onClick={() => { notification.onDeny?.(); handleClose(true); }}
+            onClick={() => { notification.onDeny?.(); onClose({ acknowledge: true }); }}
             title="Deny this tool use"
           >
             ✗ Deny
@@ -232,7 +183,7 @@ export function NotificationToast({
             className={undoButton}
             data-testid="undo-toast-button"
             aria-label="Undo the last bulk delete"
-            onClick={() => { notification.onUndo?.(); handleClose(false); }}
+            onClick={() => { notification.onUndo?.(); onClose(); }}
           >
             Undo
           </button>
@@ -240,7 +191,7 @@ export function NotificationToast({
         <button className={viewButton} onClick={handleView}>
           View Session
         </button>
-        <button className={dismissButton} onClick={() => handleClose(true)}>
+        <button className={dismissButton} onClick={() => onClose({ acknowledge: true })}>
           Dismiss
         </button>
       </div>

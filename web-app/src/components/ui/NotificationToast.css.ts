@@ -7,6 +7,11 @@ const ring = keyframes({
   "20%, 40%, 60%, 80%": { transform: "rotate(10deg)" },
 });
 
+const enter = keyframes({
+  from: { transform: "translateX(450px)", opacity: 0 },
+  to: { transform: "translateX(0)", opacity: 1 },
+});
+
 export const toast = style({
   position: "fixed",
   bottom: "24px",
@@ -20,8 +25,10 @@ export const toast = style({
   boxShadow: `0 8px 32px rgba(0, 0, 0, 0.4), 0 0 0 1px ${vars.color.glowSecondary}`,
   zIndex: zIndex.toast,
   overflow: "hidden",
-  transform: "translateX(450px)",
-  opacity: 0,
+  transform: "translateX(0)",
+  opacity: 1,
+  // Entrance is a keyframe (not a post-mount class flip) so the card needs no timer.
+  animation: `${enter} 0.3s cubic-bezier(0.4, 0, 0.2, 1)`,
   transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
   "@media": {
     // On mobile the bottom nav + optional pane tab strip must be cleared.
@@ -32,33 +39,9 @@ export const toast = style({
       width: "auto",
       bottom: "calc(var(--bottom-nav-height, 64px) + var(--mobile-pane-tab-strip-height, 0px) + 12px + max(env(safe-area-inset-bottom, 0px), 0px))",
     },
-  },
-  selectors: {
-    "&:nth-child(2)": {
-      bottom: "calc(24px + 120px)",
-      opacity: 0.9,
-      transform: "scale(0.95) translateX(450px)",
-    },
-    "&:nth-child(3)": {
-      bottom: "calc(24px + 240px)",
-      opacity: 0.8,
-      transform: "scale(0.9) translateX(450px)",
-    },
-    "&:nth-child(n + 4)": {
-      display: "none",
-    },
-  },
-});
-
-export const visible = style({
-  transform: "translateX(0)",
-  opacity: 1,
-  selectors: {
-    [`${toast}&:nth-child(2)`]: {
-      transform: "scale(0.95) translateX(0)",
-    },
-    [`${toast}&:nth-child(3)`]: {
-      transform: "scale(0.9) translateX(0)",
+    "(prefers-reduced-motion: reduce)": {
+      animation: "none",
+      transition: "none",
     },
   },
 });
