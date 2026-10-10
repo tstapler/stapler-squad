@@ -514,6 +514,10 @@ const TymuxFeatureFlag = "tymux"
 // it can be set only by editing config.json (picked up by the 5s FlagCache tick).
 const HiddenSessionGateFeatureFlag = "hidden_session_gate"
 
+// HiddenSessionGateDefault is the registry default, shared by the flag service
+// and the gate's FlagCache so flipping it cannot leave them disagreeing.
+const HiddenSessionGateDefault = false
+
 // TriageGuidanceHaltFeatureFlag is the config.FeatureFlags key backing
 // EffectiveTriageGuidanceHaltEnabled — gates whether automated triage halts
 // and asks via a durable GuidanceRequest instead of guessing on a genuinely

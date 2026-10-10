@@ -283,9 +283,10 @@ var knownFeatureFlags = []struct {
 		description: "Notification tray v2: cap the toast deck at 3 (1 on phones) with a \"+N more\" chip and one \"Move all to tray\" control, instead of the uncapped legacy toast list. Applies on the next toast render, no reload. Default: off.",
 	},
 	{
-		name:        config.HiddenSessionGateFeatureFlag,
-		description: "Hidden-session delivery gate: a hidden session (review, diagnose) notifies only for failures and needs-human events; routine completions are dropped on every channel. Off keeps today's behavior and only counts what would have been suppressed (see the status line). Can be enabled only while the stats writer runs, so the soak is recorded. Can be overridden per hidden-session kind (review, diagnose, other). Default: off.",
-		scopes:      gateFlagScopes(),
+		name:         config.HiddenSessionGateFeatureFlag,
+		defaultValue: config.HiddenSessionGateDefault,
+		description:  "Hidden-session delivery gate: a hidden session (review, diagnose) notifies only for failures and needs-human events; routine completions are dropped on every channel. Off keeps today's behavior and only counts what would have been suppressed (see the status line). Can be enabled only while the stats writer runs, so the soak is recorded. Can be overridden per hidden-session kind (review, diagnose, other). Default: off.",
+		scopes:       gateFlagScopes(),
 	},
 	{
 		name:         terminalWriteLeaseFlagName,

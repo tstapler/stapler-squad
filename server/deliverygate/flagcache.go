@@ -65,7 +65,7 @@ type FlagObserver interface {
 // FlagSettingsFromConfig reads the gate flag and its per-kind overrides from a
 // loaded config. A scope key outside ScopableKinds (a hand edit) is ignored.
 func FlagSettingsFromConfig(cfg *config.Config) FlagSettings {
-	s := FlagSettings{Global: cfg.GetFeatureFlagWithDefault(config.HiddenSessionGateFeatureFlag, false)}
+	s := FlagSettings{Global: cfg.GetFeatureFlagWithDefault(config.HiddenSessionGateFeatureFlag, config.HiddenSessionGateDefault)}
 	for scope, v := range cfg.FeatureFlagScopeOverrides(config.HiddenSessionGateFeatureFlag) {
 		if k, ok := ScopableKindFromScope(scope); ok {
 			if s.KindOverrides == nil {
@@ -86,7 +86,7 @@ type FlagMutationObserver interface {
 }
 
 // ConfigFlagLoader reads hidden_session_gate from config.json. A missing file
-// is the registry default (off); an unreadable or unparsable file is an error
+// is the registry default; an unreadable or unparsable file is an error
 // (so the last good snapshot is kept, never a silent flip).
 func ConfigFlagLoader() (FlagSettings, error) {
 	dir, err := config.GetConfigDir()
@@ -96,7 +96,7 @@ func ConfigFlagLoader() (FlagSettings, error) {
 	cfg, err := config.LoadConfigFromPath(filepath.Join(dir, config.ConfigFileName))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return FlagSettings{}, nil
+			return FlagSettings{Global: config.HiddenSessionGateDefault}, nil
 		}
 		return FlagSettings{}, err
 	}
