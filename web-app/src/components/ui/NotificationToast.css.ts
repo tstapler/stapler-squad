@@ -430,6 +430,8 @@ export const chipRow = style({
   display: "flex",
   gap: "8px",
   alignItems: "stretch",
+  // The phone tray entry is right-aligned and never relocates when its content changes (TH-8).
+  justifyContent: "flex-end",
   flexShrink: 0,
   pointerEvents: "auto",
 });

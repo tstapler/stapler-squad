@@ -92,8 +92,8 @@ jest.mock("@/lib/constants/programs", () => ({
   isKnownProgram: () => true,
   PROGRAMS: [],
 }));
-jest.mock("@/lib/store", () => ({ useAppSelector: jest.fn(() => []) }));
-jest.mock("@/lib/store/sessionsSlice", () => ({ selectAllSessions: jest.fn() }));
+jest.mock("@/lib/store", () => ({ useAppSelector: jest.fn(() => []), useAppDispatch: () => jest.fn() }));
+jest.mock("@/lib/store/sessionsSlice", () => ({ selectAllSessions: jest.fn(), selectSessionsError: jest.fn(), setError: jest.fn() }));
 
 // useShells otherwise fires a real ConnectRPC listShells call on mount, and
 // useAvailablePrograms fires a real fetch("/api/server-info") — both land outside this
