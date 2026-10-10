@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -91,21 +92,49 @@ func TestServer_should_NegotiateALPNHTTP2_When_StartRemoteServesOverRealTLS(t *t
 	// ignored baseline. Registered before the cancel() defer below so it
 	// runs last (LIFO) -- after cancel() has had a chance to unwind them.
 	baseline := goleak.IgnoreCurrent()
-	defer goleak.VerifyNone(t, baseline)
-	defer cancel()
 
 	port := testutil.FindFreePort(t)
 	remoteAddr := fmt.Sprintf("127.0.0.1:%d", port)
 	require.NoError(t, srv.StartRemote(ctx, remoteAddr, tlsCfg, nil, false))
 
+	tlsClientCfg := &tls.Config{
+		RootCAs:    caPool,
+		ServerName: "127.0.0.1",
+		NextProtos: []string{"h2"},
+	}
+	var ownConn closeTrackingConn
 	transport := &http2.Transport{
-		TLSClientConfig: &tls.Config{
-			RootCAs:    caPool,
-			ServerName: "127.0.0.1",
+		TLSClientConfig: tlsClientCfg,
+		DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
+			c, dialErr := (&tls.Dialer{Config: cfg}).DialContext(ctx, network, addr)
+			if dialErr != nil {
+				return nil, dialErr
+			}
+			ownConn.set(c.(*tls.Conn))
+			return &ownConn, nil
 		},
 	}
-	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport}
+
+	// Teardown: shut the server down, release our client conn, then prove OUR
+	// conn is closed (which is what ends our client read loop) before goleak
+	// runs. goleak then ignores every http2 client read loop: this package's
+	// tests also make real outbound HTTPS calls through http.DefaultTransport
+	// (api.github.com, generativelanguage.googleapis.com, ...) from background
+	// goroutines, and a pooled keep-alive h2 conn from one of those that
+	// happens to be dialed inside this test's window is indistinguishable by
+	// stack from ours and lives for the transport's 90s idle timeout.
+	defer func() {
+		cancel()
+		wait.RequireEventually(t, func() bool {
+			transport.CloseIdleConnections()
+			return ownConn.isClosed()
+		}, 5*time.Second, 5*time.Millisecond, "client conn to the remote server was not closed after shutdown")
+		goleak.VerifyNone(t, baseline,
+			goleak.IgnoreAnyFunction("net/http.(*http2clientConnReadLoop).run"),
+			goleak.IgnoreAnyFunction("net/http.(*http2ClientConn).readLoop"),
+		)
+	}()
 
 	url := fmt.Sprintf("https://%s/health", remoteAddr)
 	var resp *http.Response
@@ -120,6 +149,34 @@ func TestServer_should_NegotiateALPNHTTP2_When_StartRemoteServesOverRealTLS(t *t
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, 2, resp.ProtoMajor,
 		"expected real ALPN-negotiated HTTP/2 (pre-existing stdlib behavior), got ProtoMajor=%d", resp.ProtoMajor)
+}
+
+// closeTrackingConn wraps a *tls.Conn to record whether it has been closed,
+// preserving ConnectionState so the http2 transport still sees the negotiated
+// ALPN protocol.
+type closeTrackingConn struct {
+	*tls.Conn
+	mu     sync.Mutex
+	closed bool
+}
+
+func (c *closeTrackingConn) set(conn *tls.Conn) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Conn = conn
+}
+
+func (c *closeTrackingConn) Close() error {
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+	return c.Conn.Close()
+}
+
+func (c *closeTrackingConn) isClosed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
 }
 
 // TestServer_should_RejectHTTP2PriorKnowledge_When_StartServesOverPlainHTTP is
