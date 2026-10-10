@@ -67,4 +67,29 @@ describe("ThemeProvider user themes", () => {
       expect(document.documentElement.style.getPropertyValue(propName(vars.color.primary))).toBe("#e50914"),
     );
   });
+
+  it("keeps a theme chosen while /api/themes is in flight", async () => {
+    localStorage.setItem("stapler-theme", "custom:netflix");
+    let resolveFetch!: (v: unknown) => void;
+    global.fetch = jest.fn().mockReturnValue(new Promise((r) => (resolveFetch = r)));
+    render(
+      <ThemeProvider>
+        <Probe />
+      </ThemeProvider>,
+    );
+    act(() => screen.getByText("clean").click());
+    await act(async () => resolveFetch({ ok: true, json: async () => ({ themes: [netflix] }) }));
+    expect(screen.getByTestId("theme").textContent).toBe("clean");
+    expect(document.documentElement.style.getPropertyValue(propName(vars.color.primary))).toBe("");
+  });
+
+  it("falls back to the default when the persisted custom theme is gone", async () => {
+    localStorage.setItem("stapler-theme", "custom:missing");
+    render(
+      <ThemeProvider>
+        <Probe />
+      </ThemeProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId("theme").textContent).toBe("clean"));
+  });
 });

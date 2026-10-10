@@ -18,6 +18,10 @@ func TestLoadUserThemes_should_SanitizeAndSkipInvalid(t *testing.T) {
 		"color.primary":"#e50914",
 		"color.statusDot.running":"#46d369",
 		"color.background":"red; background:url(http://evil)",
+		"color.textPrimary":"image-set(\"https://evil/p\" 1x)",
+		"color.textMuted":"url(http://evil)",
+		"color.borderColor":"rgba(229,9,20,0.35)",
+		"shadow.sm":"0 1px 2px 0 rgba(0,0,0,0.3)",
 		"bad key":"#fff"}}`)
 	write("nobase.json", `{"base":"bogus","tokens":{}}`)
 	write("broken.json", `{not json`)
@@ -30,7 +34,10 @@ func TestLoadUserThemes_should_SanitizeAndSkipInvalid(t *testing.T) {
 	assert.Equal(t, "netflix", got[0].ID)
 	assert.Equal(t, "Netflix", got[0].Label)
 	assert.Equal(t, "dark", got[0].Base)
-	assert.Equal(t, map[string]string{"color.primary": "#e50914", "color.statusDot.running": "#46d369"}, got[0].Tokens)
+	assert.Equal(t, map[string]string{
+		"color.primary": "#e50914", "color.statusDot.running": "#46d369",
+		"color.borderColor": "rgba(229,9,20,0.35)", "shadow.sm": "0 1px 2px 0 rgba(0,0,0,0.3)",
+	}, got[0].Tokens)
 	assert.Equal(t, "nobase", got[1].ID)
 	assert.Equal(t, defaultThemeBase, got[1].Base)
 }

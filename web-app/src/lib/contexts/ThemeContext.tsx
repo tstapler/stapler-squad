@@ -81,6 +81,8 @@ export function ThemeProvider({ children, initialTheme = "clean" }: ThemeProvide
   const [theme, setThemeState] = useState<string>(initialTheme);
   const [customThemes, setCustomThemes] = useState<UserTheme[]>([]);
   const customThemesRef = useRef<UserTheme[]>([]);
+  // Latest selection, so the async /api/themes response never clobbers a choice made while it was in flight.
+  const themeRef = useRef<string>(initialTheme);
   const initialized = useRef(false);
 
   // On first mount, read localStorage and apply the persisted theme
@@ -100,6 +102,7 @@ export function ThemeProvider({ children, initialTheme = "clean" }: ThemeProvide
 
     // A persisted custom theme can't apply until /api/themes answers; show the default meanwhile.
     applyTheme(persisted in THEME_CLASSES ? persisted : initialTheme, []);
+    themeRef.current = persisted;
     setThemeState(persisted);
 
     fetch("/api/themes")
@@ -108,7 +111,15 @@ export function ThemeProvider({ children, initialTheme = "clean" }: ThemeProvide
         const themes = body.themes ?? [];
         customThemesRef.current = themes;
         setCustomThemes(themes);
-        if (persisted.startsWith(CUSTOM_PREFIX)) applyTheme(persisted, themes);
+        const current = themeRef.current;
+        if (!current.startsWith(CUSTOM_PREFIX)) return;
+        if (themes.some((t) => `${CUSTOM_PREFIX}${t.id}` === current)) {
+          applyTheme(current, themes);
+        } else {
+          // Persisted custom theme no longer exists (file removed): fall back rather than show nothing selected.
+          themeRef.current = initialTheme;
+          setThemeState(initialTheme);
+        }
       })
       .catch(() => {
         // server without /api/themes: built-in themes only
@@ -116,6 +127,7 @@ export function ThemeProvider({ children, initialTheme = "clean" }: ThemeProvide
   }, [initialTheme]);
 
   const setTheme = useCallback((name: string) => {
+    themeRef.current = name;
     applyTheme(name, customThemesRef.current);
     setThemeState(name);
     try {

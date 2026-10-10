@@ -24,9 +24,15 @@ var (
 	themeIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
 	// Dotted path into the web-app's theme contract, e.g. "color.primary" or "color.statusDot.running".
 	themeTokenPattern = regexp.MustCompile(`^[a-zA-Z]+(\.[a-zA-Z]+){1,2}$`)
-	// Token values land in CSS custom properties; reject anything that could pull in resources or end the declaration.
-	themeValueForbidden = regexp.MustCompile(`(?i)[;{}<>\\]|url\(|@import|expression\(`)
-	builtinThemeBases   = map[string]bool{"matrix": true, "cyberpunk77": true, "wh40k": true, "clean": true, "light": true, "dark": true}
+	// Token values land in CSS custom properties. Allowlist the characters, and below the CSS functions,
+	// so nothing can end the declaration or fetch a resource (url(), image-set(), src(), @import...).
+	themeValueChars   = regexp.MustCompile(`^[a-zA-Z0-9#%.,()\s/'"_+*-]+$`)
+	themeFuncCall     = regexp.MustCompile(`([a-zA-Z-]+)\(`)
+	themeAllowedFuncs = map[string]bool{
+		"rgb": true, "rgba": true, "hsl": true, "hsla": true, "hwb": true, "lab": true, "lch": true,
+		"oklab": true, "oklch": true, "color-mix": true, "var": true, "calc": true, "min": true, "max": true, "clamp": true,
+	}
+	builtinThemeBases = map[string]bool{"matrix": true, "cyberpunk77": true, "wh40k": true, "clean": true, "light": true, "dark": true}
 )
 
 // userTheme is a runtime-loadable theme: a built-in base plus CSS-variable token overrides.
@@ -73,6 +79,18 @@ func loadUserThemes(dir string) []userTheme {
 	return themes
 }
 
+func safeThemeValue(v string) bool {
+	if !themeValueChars.MatchString(v) {
+		return false
+	}
+	for _, m := range themeFuncCall.FindAllStringSubmatch(v, -1) {
+		if !themeAllowedFuncs[strings.ToLower(m[1])] {
+			return false
+		}
+	}
+	return true
+}
+
 func sanitizeUserTheme(id string, t userTheme) userTheme {
 	t.ID = id
 	if t.Label == "" {
@@ -83,7 +101,7 @@ func sanitizeUserTheme(id string, t userTheme) userTheme {
 	}
 	clean := make(map[string]string, len(t.Tokens))
 	for k, v := range t.Tokens {
-		if !themeTokenPattern.MatchString(k) || len(v) > maxThemeValueLen || themeValueForbidden.MatchString(v) {
+		if !themeTokenPattern.MatchString(k) || len(v) > maxThemeValueLen || !safeThemeValue(v) {
 			log.Warn("user-themes: dropping token", "theme", id, "token", k)
 			continue
 		}
