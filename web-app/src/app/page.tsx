@@ -3,7 +3,6 @@
 
 import React, { useState, useEffect, useRef, Suspense, useCallback, useMemo } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { usePushClickHandoff } from "@/lib/hooks/usePushNotifications";
 import { Session } from "@/gen/session/v1/types_pb";
 import { SessionListSkeleton } from "@/components/sessions/SessionListSkeleton";
 import { SessionDetailTab } from "@/components/sessions/SessionDetail";
@@ -55,7 +54,6 @@ function HomeContent() {
   const { addNotification, notificationHistory } = useNotifications();
   const searchParams = useSearchParams();
   const router = useRouter();
-  usePushClickHandoff(useCallback((url: string) => router.push(url), [router]));
   const { openInCreationMode, openOmnibar } = useOmnibar();
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
   const [activeTab, setActiveTab] = useState<SessionDetailTab>("info");
@@ -264,6 +262,8 @@ function HomeContent() {
           failure = classifyGetSessionFailure(err);
         },
       }).then((fetched) => {
+        // A newer deep link superseded this lookup while it was in flight.
+        if (hiddenSessionFallbackRef.current !== sessionId) return;
         if (!fetched) {
           setLookup({
             sessionId,
@@ -295,6 +295,7 @@ function HomeContent() {
 
     const session = findSessionById(link.sessionId);
     if (session) {
+      setLookup((prev) => (prev ? null : prev));
       routeToResolvedSession(session, link.sessionId, link.tab, link.newPane);
       return;
     }
