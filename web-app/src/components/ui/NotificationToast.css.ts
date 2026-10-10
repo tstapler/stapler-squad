@@ -520,3 +520,191 @@ export const collapsedChip = style({
   textOverflow: "ellipsis",
   cursor: "pointer",
 });
+
+// ---------------------------------------------------------------------------
+// Swipe row, compact card and phone approval card (Story 3.8)
+// ---------------------------------------------------------------------------
+
+/** Wraps a deck card so a swipe has a reveal layer behind it. `pan-y` leaves vertical scrolling to the browser. */
+export const swipeRow = style({
+  position: "relative",
+  flexShrink: 0,
+  pointerEvents: "auto",
+  touchAction: "pan-y",
+});
+
+export const swipeCard = style({
+  transition: "transform 0.2s ease-out",
+  "@media": {
+    "(prefers-reduced-motion: reduce)": { transition: "none" },
+  },
+});
+
+export const swipeCardDragging = style({ transition: "none" });
+
+export const reveal = style({
+  position: "absolute",
+  inset: 0,
+  display: "flex",
+  alignItems: "center",
+  gap: "8px",
+  padding: "0 20px",
+  borderRadius: "12px",
+  background: vars.color.cardBackground,
+  border: `1px solid ${vars.color.borderColor}`,
+  color: vars.color.textPrimary,
+  fontSize: "14px",
+  fontWeight: 600,
+});
+
+export const revealEnd = style({ justifyContent: "flex-end" });
+
+const hit44 = { minHeight: "44px", minWidth: "44px" } as const;
+
+export const closeButtonStacked = style({
+  ...hit44,
+  background: "none",
+  border: "none",
+  fontSize: "28px",
+  lineHeight: 1,
+  color: vars.color.textMuted,
+  cursor: "pointer",
+  borderRadius: "8px",
+  flexShrink: 0,
+  selectors: { "&:hover": { background: vars.color.hoverBackground, color: vars.color.textPrimary } },
+});
+
+/** Pinned toasts get a tray icon and the visible word "Tray": the control is not a dismissal. */
+export const trayButton = style({
+  ...hit44,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: "4px",
+  padding: "0 8px",
+  background: "none",
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: "8px",
+  color: vars.color.textPrimary,
+  fontSize: "13px",
+  fontWeight: 600,
+  cursor: "pointer",
+  flexShrink: 0,
+  selectors: { "&:hover": { background: vars.color.hoverBackground } },
+});
+
+/** Phone, non-approval: icon, title and one body line left; the primary action and close right. At most 96px. */
+export const compactCard = style({
+  maxHeight: "96px",
+  overflow: "hidden",
+});
+
+globalStyle(`${compactCard} [data-slot="body"]`, { padding: "0 16px 8px", maxHeight: "none", overflow: "hidden" });
+globalStyle(`${compactCard} [data-slot="body"] p`, {
+  display: "-webkit-box",
+  WebkitLineClamp: 1,
+  WebkitBoxOrient: "vertical",
+  overflow: "hidden",
+});
+globalStyle(`${compactCard} [data-slot="workdir"]`, { display: "none" });
+globalStyle(`${compactCard} [data-slot="actions"]`, { padding: "0 16px 8px", borderTop: "none" });
+
+export const commandText = style({
+  margin: 0,
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  fontSize: "13px",
+  lineHeight: 1.4,
+  whiteSpace: "pre-wrap",
+  overflowWrap: "anywhere",
+  color: vars.color.textPrimary,
+  display: "-webkit-box",
+  WebkitLineClamp: 4,
+  WebkitBoxOrient: "vertical",
+  overflow: "hidden",
+});
+
+export const commandTextExpanded = style({
+  display: "block",
+  WebkitLineClamp: "unset",
+  overflow: "visible",
+  maxHeight: "40vh",
+  overflowY: "auto",
+});
+
+export const disclosureButton = style({
+  ...hit44,
+  alignSelf: "flex-start",
+  padding: "0 4px",
+  background: "none",
+  border: "none",
+  color: vars.color.primary,
+  fontSize: "13px",
+  fontWeight: 600,
+  cursor: "pointer",
+  textAlign: "left",
+});
+
+/** Approve and Deny: one decision pair, equal weight, at least 24px between the hit areas. */
+export const decisionPair = style({
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "24px",
+  width: "100%",
+  "@media": {
+    "(max-width: 359px)": { flexDirection: "column" },
+  },
+});
+
+globalStyle(`${decisionPair} > button`, { ...hit44, flex: "1 1 120px" });
+
+export const actionError = style({
+  display: "flex",
+  alignItems: "center",
+  gap: "8px",
+  flexWrap: "wrap",
+  width: "100%",
+  fontSize: "13px",
+  color: vars.color.error,
+});
+
+export const inlineAction = style({
+  ...hit44,
+  padding: "0 12px",
+  borderRadius: "8px",
+  border: `1px solid ${vars.color.borderColor}`,
+  background: vars.color.cardBackground,
+  color: vars.color.textPrimary,
+  fontWeight: 600,
+  cursor: "pointer",
+});
+
+export const overflowMenu = style({
+  position: "absolute",
+  right: "16px",
+  bottom: "56px",
+  zIndex: 1,
+  display: "flex",
+  flexDirection: "column",
+  background: vars.color.modalBackground,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: "8px",
+  boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+});
+
+export const overflowTrigger = style({
+  ...hit44,
+  background: "none",
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: "8px",
+  color: vars.color.textPrimary,
+  cursor: "pointer",
+  flex: "0 0 auto",
+});
+
+export const riskLabel = style({
+  fontSize: "11px",
+  fontWeight: 700,
+  textTransform: "uppercase",
+  letterSpacing: "0.5px",
+  color: vars.color.textSecondary,
+});

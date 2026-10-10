@@ -259,7 +259,7 @@ describe("ToastStack cap and chip (Story 3.3)", () => {
 
     fireEvent.click(approve);
     expect(onApprove).not.toHaveBeenCalled();
-    expect(within(card).getByRole("button", { name: "Close notification" })).not.toHaveAttribute("aria-disabled");
+    expect(within(card).getByRole("button", { name: "Move to tray" })).not.toHaveAttribute("aria-disabled");
   });
 });
 
@@ -500,7 +500,7 @@ describe("Timers pause and pinned collapse (Story 3.5)", () => {
   it("holds the timer while focus is within the card", () => {
     mount();
     act(() => notifications.addNotification(toast(0, { notificationType: "info" })));
-    const close = within(screen.getByTestId("toast")).getByRole("button", { name: "Close notification" });
+    const close = within(screen.getByTestId("toast")).getByRole("button", { name: "Dismiss notification" });
 
     fireEvent.focus(close);
     advance(60_000);

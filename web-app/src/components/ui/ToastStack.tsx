@@ -70,8 +70,10 @@ function ToastSlot({ notification, timers, onRemove, stacked, collapsible = fals
   const expandedByUser = useRef(false);
   // True while an Approve or Deny is in flight or its confirm step is open (set by the card).
   const [busy, setBusy] = useState(false);
+  // An Approve or Deny that failed keeps the toast up until it is resolved.
+  const [actionFailed, setActionFailed] = useState(false);
   const closingRef = useRef(false);
-  const pinned = isPinned(notification);
+  const pinned = isPinned(notification) || actionFailed;
 
   const requestClose = useCallback(
     ({ acknowledge = false }: { acknowledge?: boolean } = {}) => {
@@ -136,6 +138,7 @@ function ToastSlot({ notification, timers, onRemove, stacked, collapsible = fals
     <NotificationToast
       notification={notification}
       stacked={stacked}
+      compact={collapsible}
       offlineReason={offlineReason}
       collapsed={collapsed}
       onExpandCollapsed={() => {
@@ -143,6 +146,7 @@ function ToastSlot({ notification, timers, onRemove, stacked, collapsible = fals
         setCollapsed(false);
       }}
       onBusyChange={setBusy}
+      onActionFailed={() => setActionFailed(true)}
       holdHandlers={holdHandlers}
       exiting={exiting}
       minimized={minimized}

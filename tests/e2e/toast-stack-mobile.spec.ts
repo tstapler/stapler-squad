@@ -69,6 +69,32 @@ test.describe('toast stack (phone)', () => {
       }
     });
 
+    test('swipe_on_toast_should_dismiss_pinned_to_tray_without_deleting_history_when_touch', async ({ page, request, context }) => {
+      const { client, session, deck } = await openSessionAndSeed(page, request, 2);
+      try {
+        const row = page.getByTestId('toast-row').first();
+        const box = await row.boundingBox();
+        const y = box!.y + box!.height / 2;
+        const startX = box!.x + 40;
+        const cdp = await context.newCDPSession(page);
+        const touch = (type: 'touchStart' | 'touchMove' | 'touchEnd', x: number) =>
+          cdp.send('Input.dispatchTouchEvent', {
+            type,
+            touchPoints: type === 'touchEnd' ? [] : [{ x, y }],
+          });
+        await touch('touchStart', startX);
+        for (let step = 1; step <= 6; step++) await touch('touchMove', startX + step * 40);
+        await touch('touchEnd', startX + 240);
+
+        // The pinned toast leaves the deck (moved to the tray, not deleted); the next one takes its slot.
+        await expect(deck.toasts).toHaveCount(1);
+        await expect(deck.toasts.first()).toContainText('Failure 1');
+        await expect(deck.chip).toHaveCount(0);
+      } finally {
+        await client.deleteSession(session.id, true);
+      }
+    });
+
     test('toast_stack_should_hold_the_undo_bar_in_the_chip_row_when_move_all_on_a_phone', async ({ page, request }) => {
       const { client, session, deck } = await openSessionAndSeed(page, request, 3);
       try {

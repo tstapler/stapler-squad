@@ -26,7 +26,8 @@ const HISTORY_ONLY_TYPES = new Set([
 ]);
 
 /**
- * Calls resolveApproval RPC to allow or deny a pending tool use.
+ * Calls resolveApproval RPC to allow or deny a pending tool use. A failure is
+ * logged and rethrown so the toast can show "Could not approve - Retry".
  */
 async function resolveApproval(approvalId: string, decision: "allow" | "deny"): Promise<void> {
   try {
@@ -37,6 +38,7 @@ async function resolveApproval(approvalId: string, decision: "allow" | "deny"): 
     await client.resolveApproval({ approvalId, decision });
   } catch (error) {
     console.error(`[resolveApproval] Failed to resolve approval ${approvalId}:`, error);
+    throw error;
   }
 }
 
