@@ -2433,7 +2433,13 @@ func (p shellPanePTY) ResizePTYContext(ctx context.Context, cols, rows int) erro
 		return ErrReadOnly
 	}
 	done := make(chan error, 1)
-	go func() { done <- p.session.SetWindowSize(cols, rows) }()
+	go func() {
+		if p.writer == nil {
+			done <- ErrReadOnly
+			return
+		}
+		done <- p.session.SetWindowSize(cols, rows)
+	}()
 	select {
 	case err := <-done:
 		return err
@@ -3494,6 +3500,9 @@ func handleCapturePaneResize(p capturePaneStreamParams, targetCols, targetRows i
 // resizeManagedCapturePaneTarget uses the proper PTY resize method (ioctl,
 // signal propagation, tmux window resizing) and verifies it took effect.
 func resizeManagedCapturePaneTarget(p capturePaneStreamParams, targetCols, targetRows int) {
+	if p.writer == nil {
+		return
+	}
 	if err := p.cpt.target.ResizePTY(targetCols, targetRows); err != nil {
 		log.Warn("[streamViaTmuxCapture] failed to resize managed session", "session", p.cpt.sessionID, "err", err)
 		return
