@@ -487,3 +487,22 @@ The adversarial review recommended shipping Reply later as its own project (it i
   "Effort" (Story 5.6); the Reply proto lands in a separate Contract PR 3
   (Story 1.7) after Spike 1.3g, and the whole path has its own kill switch,
   `hidden_session_reply` (ADR-004 decision 11).
+
+## Addendum 2026-10-10: Spike 1.3g measured results (VERIFIED live; full record under plan.md Task 1.3g)
+
+Measured on an isolated manual instance with real Claude Code v2.1.296 and a hidden `backlog:review` session. These supersede the INFERRED statements above wherever they conflict:
+
+- **Payload shape.** `tool_input` is `{"questions":[{question, header, options:[{label, description}], multiSelect}]}`; there is no `prompt` key. Any rule that reads `tool_input["prompt"]` yields no token. The `QuestionToken` and `question_shape` derive from `questions[]` (single = one question and `multiSelect:false`).
+- **Status set cannot discriminate.** The question dialog and a Bash permission dialog raised right after it are both `DETECTED_STATUS_INPUT_REQUIRED` with the same context ("Selection prompt with numbered options"); neither produced `NEEDS_APPROVAL`. The status set is a coarse pre-filter only, and it is blank for about 6 to 9 s after any operator keypress. Hook event plus live fingerprint decide.
+- **Keystrokes.** Single-select: a digit selects immediately, no Enter (`DigitOnly`). "Type something." is the row after the last option: its digit only focuses a text field, then text and Enter submit. multiSelect and multi-question calls need navigation (tabs, a review page); they are not single-keystroke replies and are "Open the terminal to answer".
+- **Fingerprint.** A live `capture-pane` of the dialog region was byte-identical across 8 captures over about 32 s of idle; the selection glyph `❯` changes it and must be normalised; at 80 columns the question wraps with a `│ ` gutter.
+- **Parallel questions.** Two tool calls in one turn fire two hooks before either is answered, the pane shows A then B, and no hook fires when B appears. A "newer hook supersedes older" rule would mark A superseded while A is the dialog on screen; the fingerprint, not hook order, must decide which question the pane shows.
+- **Render timing.** Dialog visible, hook delivered and `INPUT_REQUIRED` reported within one 100 ms tick; no render-delay window is needed beyond hook delivery.
+- **Hook environment.** The hook subprocess inherits `STAPLER_SESSION_UUID` (equal to the session UUID); the `X-CS-Session-ID` header carries the title. A rewritten `.claude/settings.local.json` reached the RUNNING agent, so the "hooks are snapshotted at start" premise is false for this version: the hook-proof design must not rely on it.
+- **Not measured**: forged-hook negative test and boilerplate denylist (h6), supersede frequency with a visible peer (h7), per-sender header table, behaviour with no controller.
+
+Consequence: the Spike 1.3g gate is **run, not passed**. Story 5.6 and Contract PR 3 remain blocked on repairing the status-set, payload-shape, supersede and hook-snapshot assumptions above and on the second Reply review recorded in plan.md ("Second Reply review, 2026-10-10").
+
+### Second Reply review, 2026-10-10: FAIL (3 blockers), design not yet repaired
+
+The independent review against the facts above found 3 blockers: (1) free text via `ContentThenEnter` can write into the next dialog because a digit selects immediately, and digits N+1 ("Type something.") and N+2 ("Chat about this") are not option answers; v1 must be single-question, single-select, exactly one digit in `1..N`, validated against the card's label on the live capture. (2) The dialog-identity rule cannot rely on status (question and permission dialogs are both `INPUT_REQUIRED`) and a token match is forgeable; identity must be a positive structural match of the live capture (question, options 1..N, "Type something." N+1, "Chat about this" N+2) used as both fingerprint and pre-write guard. (3) The payload rule must be written for `questions[]` (token and card text from `questions[0].question`; `single` iff one question and `multiSelect:false`). Full text and the nine non-blocking items: plan.md "Second Reply review, 2026-10-10". Decisions 6-8 (authz, audit, flag, kill switch, lease, claim lifecycle) held. Status: Reply stays blocked until these edits are made and the review is re-run with 0 blockers.
