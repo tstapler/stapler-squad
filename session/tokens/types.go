@@ -20,7 +20,9 @@ type ParseResult struct {
 	TurnTimeline     []TurnStats // per-assistant-message stats for burn rate chart
 	ToolUsage        map[string]ToolTokenStats
 	SkillActivations []SkillActivation
-	CompactEvents    []CompactEvent // compaction boundaries in transcript order
+	// ContextHealth holds derived counts over the trailing assistant turns; no message content.
+	ContextHealth ContextHealthSignals
+	CompactEvents []CompactEvent // compaction boundaries in transcript order
 
 	ParsedAt    time.Time
 	FileModTime time.Time // used for cache invalidation

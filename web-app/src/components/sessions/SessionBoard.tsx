@@ -227,6 +227,7 @@ export function SessionBoard({
     selectedTag: "all",
     hidePaused: false,
     showArchived: false,
+    showHidden: false,
     filterNeedsApproval: false,
     pendingDeleteIds: EMPTY_ID_SET,
     sortField: "lastActivity",

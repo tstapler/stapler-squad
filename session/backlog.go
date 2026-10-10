@@ -69,11 +69,16 @@ const (
 // archived AND have its tmux pane killed once its backlog item goes terminal, or it
 // leaks indefinitely (root cause of the 2026-07-29 OOM: dozens of done/archived
 // items' work and review sessions still running, each with its own MCP subprocess
-// fleet). Work and review sessions are tmux-backed. Triage sessions are not: they run
-// as bounded one-shot headless subprocess calls (see headlessTriageUUIDPrefix) that
-// exit on their own when the call returns, so they were never tracked as a live
-// Instance in the first place and have nothing to kill — their own failure mode
-// (a crashed/hung goroutine leaving a stale DB row) is handled separately by
+// fleet). Work, review, and diagnose sessions are all tmux-backed — diagnose was
+// missed when this predicate was introduced (it's Hidden+OneShot like review, but
+// dispatched via a separate path, DiagnosticService.DispatchDiagnose) and had no
+// cleanup at all as a result: a finished Diagnose & Nudge dispatch just sits as a
+// Stopped+Hidden session forever, the same leak class this predicate exists to
+// prevent. Triage sessions are not tmux-backed: they run as bounded one-shot
+// headless subprocess calls (see headlessTriageUUIDPrefix) that exit on their own
+// when the call returns, so they were never tracked as a live Instance in the first
+// place and have nothing to kill — their own failure mode (a crashed/hung goroutine
+// leaving a stale DB row) is handled separately by
 // reconcileOrphanedTriageItems/reconcileOrphanedTriageRemediation. Jules sessions are
 // not tmux-backed either: they run on Google's infrastructure, so like triage there is
 // no local pane to kill.
@@ -85,7 +90,7 @@ const (
 // they already did once (the archive-and-kill fix originally covered work sessions
 // only; review sessions kept leaking until this predicate unified both call sites).
 func IsTmuxBackedSessionRole(role string) bool {
-	return role == SessionRoleWork || role == SessionRoleReview
+	return role == SessionRoleWork || role == SessionRoleReview || role == SessionRoleDiagnose
 }
 
 // HasActiveJulesSession reports whether sessions contains an open (not yet ended)

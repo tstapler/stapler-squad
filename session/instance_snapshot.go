@@ -31,6 +31,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session/artifacts"
+	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
 // GitHubIntegration groups all GitHub PR / URL integration fields within
@@ -161,6 +162,7 @@ type InstanceSnapshot struct {
 	ExternalMetadata *ExternalInstanceMetadata // copy of pointee — see buildSnapshot
 	Permissions      InstancePermissions       // RequiresConfirmation map deep-copied
 	Artifacts        *artifacts.SessionArtifactsBlob
+	ContextHealth    tokens.ContextHealthVerdict // flat value; no deep copy needed
 }
 
 // buildSnapshot builds a point-in-time InstanceSnapshot from i.
@@ -249,6 +251,7 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		InstanceType:               i.InstanceType,
 		IsManaged:                  i.IsManaged,
 		Artifacts:                  i.Artifacts,
+		ContextHealth:              i.ContextHealth,
 	}
 
 	// Deep copy RateLimitAutoResume *bool

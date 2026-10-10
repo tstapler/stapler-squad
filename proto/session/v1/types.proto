@@ -369,6 +369,17 @@ message Session {
 
   // Server-owned pin flag: pinned sessions render in the Pinned section.
   bool pinned = 96;
+
+  // Derived green/amber/red signal that the agent's reasoning is degrading
+  // (repeated identical tool calls, apology/self-correction phrasing). Computed
+  // from the Claude Code JSONL transcript only, so it is UNSPECIFIED for
+  // Aider/Gemini/OpenCode sessions and until enough tool calls have been seen.
+  // Not persisted; recomputed on every transcript parse.
+  ContextHealth context_health = 97;
+
+  // Human-readable explanation for context_health. Empty when context_health
+  // is UNSPECIFIED or GREEN.
+  string context_health_reason = 98;
 }
 
 // PiExtensionHealth mirrors server/services.PiExtensionHealth: whether a pi
@@ -544,6 +555,16 @@ enum InstanceType {
   INSTANCE_TYPE_MANAGED = 1;
   // Session discovered externally (e.g., via ssq-mux) with limited interaction.
   INSTANCE_TYPE_EXTERNAL = 2;
+}
+
+// ContextHealth is the per-session degradation signal derived from the
+// transcript. UNSPECIFIED means "not enough data / not a Claude Code session",
+// never "healthy".
+enum ContextHealth {
+  CONTEXT_HEALTH_UNSPECIFIED = 0;
+  CONTEXT_HEALTH_GREEN = 1;
+  CONTEXT_HEALTH_AMBER = 2;
+  CONTEXT_HEALTH_RED = 3;
 }
 
 // DetectedStatus represents the fine-grained activity state detected from PTY output analysis.

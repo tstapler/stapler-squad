@@ -5,7 +5,7 @@ import { NavLink } from "@/lib/navigation/NavLink";
 import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 import { badge, compact as compactClass, icon, text } from "./BacklogOriginBadge.css";
 
-const KNOWN_ROLES = new Set(["work", "review", "triage"]);
+const KNOWN_ROLES = new Set(["work", "review", "triage", "diagnose"]);
 
 interface BacklogOriginBadgeProps {
   entry?: BacklogIndexEntry;
