@@ -224,7 +224,7 @@ func isNilRunner(r Runner) bool {
 		return true
 	}
 	v := reflect.ValueOf(r)
-	return v.Kind() == reflect.Ptr && v.IsNil()
+	return v.Kind() == reflect.Pointer && v.IsNil()
 }
 
 // readSpec describes how to judge a read's result "clean" for the destructive-intent rule and

@@ -259,34 +259,10 @@ func deepEqual(a, b reflect.Value) bool {
 		return false
 	}
 	switch a.Kind() {
-	case reflect.Slice:
-		if a.Len() != b.Len() {
-			return false
-		}
-		for i := 0; i < a.Len(); i++ {
-			if !deepEqual(a.Index(i), b.Index(i)) {
-				return false
-			}
-		}
-		return true
-	case reflect.Array:
-		for i := 0; i < a.Len(); i++ {
-			if !deepEqual(a.Index(i), b.Index(i)) {
-				return false
-			}
-		}
-		return true
+	case reflect.Slice, reflect.Array:
+		return sequenceEqual(a, b)
 	case reflect.Map:
-		if a.Len() != b.Len() {
-			return false
-		}
-		for _, k := range a.MapKeys() {
-			bv := b.MapIndex(k)
-			if !bv.IsValid() || !deepEqual(a.MapIndex(k), bv) {
-				return false
-			}
-		}
-		return true
+		return mapEqual(a, b)
 	case reflect.Struct:
 		for i := 0; i < a.NumField(); i++ {
 			if !deepEqual(a.Field(i), b.Field(i)) {
@@ -294,11 +270,45 @@ func deepEqual(a, b reflect.Value) bool {
 			}
 		}
 		return true
-	case reflect.Ptr, reflect.Interface:
+	case reflect.Pointer, reflect.Interface:
 		if a.IsNil() || b.IsNil() {
 			return a.IsNil() == b.IsNil()
 		}
 		return deepEqual(a.Elem(), b.Elem())
+	default:
+		return scalarEqual(a, b)
+	}
+}
+
+func sequenceEqual(a, b reflect.Value) bool {
+	if a.Len() != b.Len() {
+		return false
+	}
+	for i := 0; i < a.Len(); i++ {
+		if !deepEqual(a.Index(i), b.Index(i)) {
+			return false
+		}
+	}
+	return true
+}
+
+func mapEqual(a, b reflect.Value) bool {
+	if a.Len() != b.Len() {
+		return false
+	}
+	for _, k := range a.MapKeys() {
+		bv := b.MapIndex(k)
+		if !bv.IsValid() || !deepEqual(a.MapIndex(k), bv) {
+			return false
+		}
+	}
+	return true
+}
+
+// scalarEqual compares basic kinds; any kind not listed (func, chan, ...) is never equal, so
+// an unexpected result type shows up as a mismatch instead of passing silently.
+func scalarEqual(a, b reflect.Value) bool {
+	switch a.Kind() {
 	case reflect.String:
 		return a.String() == b.String()
 	case reflect.Bool:
@@ -309,7 +319,6 @@ func deepEqual(a, b reflect.Value) bool {
 		return a.Uint() == b.Uint()
 	case reflect.Float32, reflect.Float64:
 		return a.Float() == b.Float()
-	default:
-		return false
 	}
+	return false
 }
