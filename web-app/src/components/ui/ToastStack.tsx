@@ -13,7 +13,7 @@ import {
   undoBar,
   undoAction,
 } from "@/components/ui/NotificationToast.css";
-import { useViewport } from "@/components/providers/ViewportProvider";
+import { useDeckViewport } from "@/lib/contexts/deckViewportContext";
 import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import { useNotificationState, useNotificationCommands } from "@/lib/contexts/notificationContexts";
 import { useNotificationConnectivity } from "@/lib/hooks/useNotificationConnectivity";
@@ -257,7 +257,7 @@ function UndoBar({ count, timers, onUndo }: { count: number; timers: ToastTimerR
 
 /** The capped deck (notification_tray_v2): at most `cap` cards and a "+N more" chip for the rest. */
 function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
-  const viewport = useViewport();
+  const viewport = useDeckViewport();
   const { isOffline } = useNotificationConnectivity();
   const { movedToTray } = useNotificationState();
   const { moveAllToTray, undoMoveToTray } = useNotificationCommands();

@@ -4,6 +4,7 @@ import { useRef } from "react";
 import { Provider } from "react-redux";
 import { store } from "@/lib/store/store";
 import { NotificationProvider } from "@/lib/contexts/NotificationContext";
+import { DeckViewportBridge } from "@/components/providers/DeckViewportBridge";
 import { OmnibarProvider } from "@/lib/contexts/OmnibarContext";
 import { ReviewQueueProvider } from "@/lib/contexts/ReviewQueueContext";
 import { ApprovalsProvider } from "@/lib/contexts/ApprovalsContext";
@@ -41,6 +42,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
         <ThemeProvider>
           <FeatureFlagsProvider>
           <NavigationProvider>
+            <DeckViewportBridge>
             <NotificationProvider>
               <GlobalSessionServiceProvider>
                 <SystemMemoryProvider>
@@ -64,6 +66,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 </SystemMemoryProvider>
               </GlobalSessionServiceProvider>
             </NotificationProvider>
+            </DeckViewportBridge>
           </NavigationProvider>
           </FeatureFlagsProvider>
         </ThemeProvider>

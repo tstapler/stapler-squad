@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { NotificationProvider, useNotifications } from "@/lib/contexts/NotificationContext";
+import { DeckViewportContext } from "@/lib/contexts/deckViewportContext";
 import { markSessionViewed } from "@/lib/utils/viewedSessions";
 import { setStackTopOffset } from "@/lib/utils/toastDock";
 import { registerTerminalCursorSource } from "@/lib/terminal/cursorRect";
@@ -10,8 +11,7 @@ import { useSessionNotifications } from "@/lib/hooks/useSessionNotifications";
 import { NotificationType, NotificationPriority } from "@/gen/session/v1/types_pb";
 import type { NotificationData } from "@/lib/types/notification";
 
-const mockViewport = { isMobile: false, isFoldable: false, isInnerScreen: true, hasFinePointer: true, isVirtualKeyboardOpen: false };
-jest.mock("@/components/providers/ViewportProvider", () => ({ useViewport: () => mockViewport }));
+const mockViewport = { isInnerScreen: true, isVirtualKeyboardOpen: false };
 
 const mockFlags: Record<string, boolean> = {};
 jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
@@ -67,11 +67,20 @@ function Driver() {
   return null;
 }
 
+/** Re-reads the mutable viewport on every render, like the bridge does from ViewportProvider. */
+function Harness({ children }: { children: React.ReactNode }) {
+  return (
+    <DeckViewportContext.Provider value={{ ...mockViewport }}>
+      <NotificationProvider>{children}</NotificationProvider>
+    </DeckViewportContext.Provider>
+  );
+}
+
 function mount() {
   return render(
-    <NotificationProvider>
+    <Harness>
       <Driver />
-    </NotificationProvider>,
+    </Harness>,
   );
 }
 
@@ -87,10 +96,10 @@ function toast(index: number, overrides: Partial<NotificationData> = {}): Omit<N
 }
 
 function setDesktop() {
-  Object.assign(mockViewport, { isMobile: false, isInnerScreen: true, isVirtualKeyboardOpen: false });
+  Object.assign(mockViewport, { isInnerScreen: true, isVirtualKeyboardOpen: false });
 }
 function setPhone(keyboardOpen = false) {
-  Object.assign(mockViewport, { isMobile: true, isInnerScreen: false, isVirtualKeyboardOpen: keyboardOpen });
+  Object.assign(mockViewport, { isInnerScreen: false, isVirtualKeyboardOpen: keyboardOpen });
 }
 
 function addMany(count: number, overrides: Partial<NotificationData> = {}) {
@@ -142,9 +151,9 @@ describe("ToastStack cap and chip (Story 3.3)", () => {
 
     setPhone(false);
     rerender(
-      <NotificationProvider>
+      <Harness>
         <Driver />
-      </NotificationProvider>,
+      </Harness>,
     );
     expect(screen.getAllByTestId("toast")).toHaveLength(1);
   });
@@ -166,10 +175,10 @@ describe("ToastStack cap and chip (Story 3.3)", () => {
       return null;
     }
     render(
-      <NotificationProvider>
+      <Harness>
         <Driver />
         <Feed />
-      </NotificationProvider>,
+      </Harness>,
     );
     expect(screen.queryAllByTestId("toast")).toHaveLength(0);
     expect(notifications.notificationHistory).toHaveLength(1);
@@ -200,9 +209,9 @@ describe("ToastStack cap and chip (Story 3.3)", () => {
 
     mockFlags["notification_tray_v2"] = true;
     rerender(
-      <NotificationProvider>
+      <Harness>
         <Driver />
-      </NotificationProvider>,
+      </Harness>,
     );
     expect(screen.getAllByTestId("toast")).toHaveLength(3);
     expect(screen.getByTestId("toast-overflow-chip")).toHaveTextContent("+2 more");
