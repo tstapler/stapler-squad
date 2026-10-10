@@ -59,7 +59,7 @@ type Server struct {
 	tlsConfig                  *tls.Config                     // non-nil when TLS is enabled
 	authMiddleware             func(http.Handler) http.Handler // nil when auth is disabled
 	requiresAuth               bool                            // explicit: a real validator is wired
-	httpsURL                   string                          // set when remote access is enabled
+	httpsURL                   atomic.Pointer[string]          // set when remote access is enabled
 	hostnames                  atomic.Pointer[[]string]        // detected LAN hostnames; published add-only via SetHostnames, read lock-free via GetHostnames
 	verifiedHostnames          atomic.Pointer[[]string]        // forward-verified subset; replaced wholesale via ReplaceVerifiedHostnames, read lock-free via GetVerifiedHostnames
 	origins                    []string                        // allowed CORS origins
@@ -799,10 +799,20 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// InjectHookConfig's PermissionRequest URL and InjectHooksConfig's stop/pre-tool-use/
 	// post-tool-use/prompt-submit endpoints resolve through this single shared mechanism.
 	services.SetHookBaseURLFn(hookBaseURLFn)
-	// Same lazy base-URL resolver, wired into BacklogLifecycleListener so agent-created
-	// PR bodies can link back to the backlog item instead of embedding a bare UUID.
+	// PR-body footers identify this instance from any of the owner's machines, so they
+	// must never carry the loopback listen address hookBaseURLFn returns.
 	if deps.BacklogLifecycleListener != nil {
-		deps.BacklogLifecycleListener.SetDashboardBaseURLFn(hookBaseURLFn)
+		deps.BacklogLifecycleListener.SetDashboardBaseURLFn(func() string {
+			return resolvePRBodyBaseURL(prBaseURLSources{
+				configured:     config.LoadConfig().Slack.DashboardBaseURL,
+				remoteHTTPSURL: srv.GetHTTPSURL(),
+				listenAddr:     srv.GetAddr(),
+				hostnames:      srv.GetHostnames(),
+			})
+		})
+		if cfgDir, cfgDirErr := config.GetConfigDir(); cfgDirErr == nil {
+			deps.BacklogLifecycleListener.SetHostRefFn(newHostRefResolver(cfgDir, srv.GetHostnames))
+		}
 		deps.BacklogLifecycleListener.SetNoopDispatchThresholdFn(func() int {
 			return config.LoadConfig().NoopDispatchThresholdOrDefault()
 		})
@@ -1603,7 +1613,16 @@ func (s *Server) Mux() *http.ServeMux {
 // SetHTTPSURL records the public HTTPS URL for this server (used by /api/server-info).
 // Call this after remote access is configured in main.go.
 func (s *Server) SetHTTPSURL(url string) {
-	s.httpsURL = url
+	s.httpsURL.Store(&url)
+}
+
+// GetHTTPSURL returns the remote-access HTTPS origin, or "" if remote access
+// is not enabled (yet).
+func (s *Server) GetHTTPSURL() string {
+	if p := s.httpsURL.Load(); p != nil {
+		return *p
+	}
+	return ""
 }
 
 // SetHostnames merges hostnames into the previously published set and
@@ -1754,7 +1773,7 @@ func (s *Server) registerServerInfoHandler() {
 
 		info := serverInfoResponse{
 			CAPEMPath:  caPath,
-			HTTPSURL:   s.httpsURL,
+			HTTPSURL:   s.GetHTTPSURL(),
 			TLSEnabled: tlsEnabled,
 			Hostnames:  s.GetHostnames(),
 			Programs:   s.availablePrograms,

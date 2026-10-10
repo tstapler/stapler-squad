@@ -13,7 +13,7 @@ describe("SourceSection", () => {
       />
     );
 
-    const link = screen.getByRole("link", { name: /Issue #42/ });
+    const link = screen.getByRole("link", { name: "Issue acme/widget#42" });
     expect(link).toHaveAttribute("href", "https://github.com/acme/widget/issues/42");
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
@@ -32,7 +32,15 @@ describe("SourceSection", () => {
       />
     );
 
-    expect(screen.getByRole("link", { name: /Issue #42/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Issue acme/widget#42" })).toBeInTheDocument();
+  });
+
+  it("SourceSection_should_FallBackToBareId_When_ExternalUrlUnparseable", () => {
+    render(
+      <SourceSection externalUrl="https://example.com/tracker/42" externalId="42" labels={[]} defaultExpanded={true} />
+    );
+
+    expect(screen.getByRole("link", { name: "Issue #42" })).toBeInTheDocument();
   });
 
   it("SourceSection_should_BeCollapsed_When_DefaultExpandedFalse", () => {
@@ -47,7 +55,7 @@ describe("SourceSection", () => {
 
     const header = screen.getByTestId("collapsible-header-source");
     expect(header).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByRole("link", { name: /Issue #42/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Issue acme\/widget#42/ })).not.toBeInTheDocument();
   });
 
   it("SourceSection_should_OmitIssueNumber_When_ExternalIdMissing", () => {
