@@ -826,6 +826,41 @@ func (c CapacityConfig) CapacityConfigOrDefault() CapacityConfig {
 	return out
 }
 
+// ContextHealthConfig holds the thresholds for the per-session ContextHealth
+// signal (green/amber/red). Fields <= 0 mean "unset" and take the default.
+type ContextHealthConfig struct {
+	// LoopRepeatThreshold is the number of consecutive identical tool calls
+	// that raises the level. Default 3.
+	LoopRepeatThreshold int `json:"loop_repeat_threshold,omitempty"`
+	// ConfusionPhraseThreshold is the number of apology/self-correction
+	// messages in the trailing window that raises the level. Default 5.
+	ConfusionPhraseThreshold int `json:"confusion_phrase_threshold,omitempty"`
+	// MinToolCallSamples is the minimum number of tool calls in the window
+	// before any level other than unknown is reported. Default 5.
+	MinToolCallSamples int `json:"min_tool_call_samples,omitempty"`
+}
+
+const (
+	defaultLoopRepeatThreshold      = 3
+	defaultConfusionPhraseThreshold = 5
+	defaultMinToolCallSamples       = 5
+)
+
+// ContextHealthConfigOrDefault returns a copy with defaults applied to unset fields.
+func (c ContextHealthConfig) ContextHealthConfigOrDefault() ContextHealthConfig {
+	out := c
+	if out.LoopRepeatThreshold <= 0 {
+		out.LoopRepeatThreshold = defaultLoopRepeatThreshold
+	}
+	if out.ConfusionPhraseThreshold <= 0 {
+		out.ConfusionPhraseThreshold = defaultConfusionPhraseThreshold
+	}
+	if out.MinToolCallSamples <= 0 {
+		out.MinToolCallSamples = defaultMinToolCallSamples
+	}
+	return out
+}
+
 func withRoleDefault[V int | float64](m map[string]V, role string, def V) map[string]V {
 	out := make(map[string]V, len(m)+1)
 	out[role] = def

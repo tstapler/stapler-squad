@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
+	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/session/vnc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -258,6 +259,13 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	if statusInfo.IsControllerActive && statusInfo.ClaudeStatus != detection.StatusUnknown {
 		protoSession.DetectedStatus = detection.DetectedStatusToProto(statusInfo.ClaudeStatus)
 		protoSession.DetectedContext = statusInfo.StatusContext
+	}
+
+	// ContextHealth / ContextHealthReason (fields 97–98): left UNSPECIFIED until a
+	// verdict with enough samples exists (e.g. never for non-Claude sessions).
+	if snap.ContextHealth.Level != tokens.HealthUnknown {
+		protoSession.ContextHealth = tokens.ContextHealthLevelToProto(snap.ContextHealth.Level)
+		protoSession.ContextHealthReason = snap.ContextHealth.Reason
 	}
 
 	// SubagentCount (field 75): count of background agents/shells/monitors from the

@@ -1329,6 +1329,17 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	if homeDirErr == nil {
 		tokenStore = tokens.NewTokenStore(historyDir)
 		historyLinker.RegisterFileCallback(tokenStore.OnHistoryFileChanged)
+		go publishContextHealth(context.Background(), tokenStore,
+			historyLinker.Instances,
+			func() config.ContextHealthConfig {
+				if cfg == nil {
+					return config.ContextHealthConfig{}
+				}
+				return cfg.ContextHealth
+			},
+			func(inst *session.Instance) {
+				eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"context_health"}))
+			})
 		tokenStore.Start(context.Background())
 		// Persist context history off the parse/CapacityMonitor path: the recorder
 		// consumes TokenStore's notifications on its own goroutine.
