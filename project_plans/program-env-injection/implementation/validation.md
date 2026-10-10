@@ -64,7 +64,7 @@ Non-test checks (evidence runs, not `go test` functions):
 | M4 | Parent-commit run (`4dbbe7b40` + unconverted HEAD test): coordinator-reported, NO verbatim record in the repo; label as such, not counted toward AC3 unless re-run and gated | 1.1.2b | E4b |
 | G0 | `RealTmuxGate`: preflight (`command -v tmux`, `test -x`, `tmux -V`, `STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30`) + `-v` + `gate.sh` (require `--- PASS: <name>`, reject `--- SKIP`) on every real-tmux run (T1, T9, M1-M3, F1) | 1.1.0b | E1, E2, E4, E5, E8 |
 | M5 | PIT-5 control: T2 PASSES under `PreFixOverlay` (resolver unit test cannot see the wiring bug) | 1.1.2b | E4 |
-| L1 | Custom analyzers `norawexec` and `notimesleeptest` clean on touched packages | 1.1.0a, every test task | final gate |
+| L1 | Custom analyzers clean on touched packages: `norawexec`, `notimesleeptest`, `tmuxsocketscope` (new tests derive tmux argv via `tmux.ResolveSocket(...).Args`), `novartestseam`, `silenttransition` (the last two n/a, checked) | 1.1.0a, every test task | final gate |
 | F1 | Flake evidence: T1 `-count=5 -race` | 1.1.1d | E2 |
 | D1 | Upstream precedence quote (or literal `UNVERIFIED`) | 1.1.3b | E7 |
 | D2 | AC5 historical diff via `git show cdfd4e5cf2^:...` | 1.1.2a | E3 |
@@ -139,6 +139,11 @@ export TMUX_BIN="${TMUX_BIN:-$(command -v tmux)}"
 test -x "$TMUX_BIN" || { echo "PREFLIGHT FAIL: no tmux"; exit 1; }
 "$TMUX_BIN" -V                                   # 3.6a locally; CI pins 3.4
 export STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30   # as Makefile:601,682
+
+# Generated code (fresh worktree, plan Task 1.1.0b; gitignored, never committed)
+make proto-gen                                   # Makefile:547 (buf generate proto)
+make ent-gen                                     # Makefile:564 (ent generate --feature sql/upsert)
+test -d server/web/dist || mkdir -p server/web/dist   # embed stub; or `make web-build`
 
 # Gate: $SCRATCH/gate.sh <pass|fail> <TestName> <wantCount> <outfile>  (scratch only)
 #   awk: counts '--- PASS: <name> (' (or '--- FAIL:') lines; any '--- SKIP' -> exit 1; count != want -> exit 1
@@ -226,6 +231,12 @@ cd web-app && pnpm exec jest --testPathPatterns="useAvailablePrograms" --coverag
 | G6 | **T9 asserts tmux session env and argv, not the FakeClaude process's own `environ`.** FakeClaude records `"$@"` only. Inheritance from tmux session env to the pane process is relied on from T1's `printenv` (bash program), not re-proved on the Claude path | Low | Optional: have FakeClaude also write `env` to its output file and assert the key; one line, would close it. Not in plan |
 | G7 | **Only `SESSION_TYPE_NEW_WORKTREE` is exercised end to end.** Other creation and restore entry points share `wireTmuxSession` (8 call sites, one `SetExtraEnv` caller) and are not individually tested (PIT-1 deferral) | Low | Accepted by the plan; T4's two subtests cover the two argv-construction paths |
 | G8 | **F1-F5 have no tests.** Secret exposure in logs/`LaunchCommand`, restart policy, reserved keys, remote, tymux are documented follow-ups, not validated | Accepted | By design (Scope Decision B); characterization tests T10-T12 are written to flip when F2 lands |
+| G11 | **Generated code and lint prerequisites in fresh worktrees (triad GAP-1).** `gen/` (proto) and `session/ent/*.go` are gitignored, so a new agent worktree cannot compile `./server/services`/`./session`; `make lint` also needs `server/web/dist`, `golangci-lint` v2 and `shellcheck` (`Makefile:798`) | Process | Plan Task 1.1.0b preflight and Task 1.4.2b prerequisites use the real targets (`make proto-gen ent-gen`, `server/web/dist`); an unsatisfied prerequisite is reported as NOT RUN, not green |
+| G12 | **Custom-linter coverage of new tests (triad GAP-3).** `tmuxsocketscope`, `novartestseam`, `silenttransition` are in the same `bin/linter` pass as `norawexec`/`notimesleeptest`; `tmuxsocketscope` flags tmux calls whose argv is not derived from `ResolveSocket`/`Socket.Args` | Low | Plan Task 1.1.0a rule list names all three; Task 1.1.3c builds tmux argv with `tmux.ResolveSocket(...).Args(...)`; `bin/linter` output is the authority |
+| G13 | **Wave 1 vs real-tmux runs (triad GAP-2).** Editing agents run only vet + `bin/linter`; the `RealTmuxGate` runs for 1.1.0a, 1.1.1b, 1.1.1c, 1.1.3c execute serially in Wave 2R | Process | Plan Dependency Visualization |
+| G14 | **evidence.md ownership (triad GAP-4).** Coordinator is the single writer; agents report text blocks; structure is the E1-E9 table in plan "Evidence file structure" | Process | Plan header and "Evidence file structure" |
+| G15 | **tmux 3.4 not run locally (triad GAP-6).** Named CI/wall-clock blocker; fallback wording "Verified on tmux 3.6a only; the CI-pinned tmux 3.4 was not run for this evidence" | Medium | Plan Effort Estimate |
+| G16 | **AC4b closure (product gap).** Item may be reported with AC4b UNVERIFIED and owner acceptance requested; AC4 as a whole is not ticked without an executed E9 (run by a human with credentials) or recorded owner acceptance. F1-F5 are listed in the PR body for the owner to file | Medium | Plan Story 1.1.3 closure rule, Task 1.4.2a |
 | G9 | **Wave-1 package contention.** T3/T4 (`session/tmux`), T8/T10-T12 (`session`), T1/T9 (`server/services`), T13 (`web-app`) must be authored one agent per package or per worktree; one half-written `_test.go` breaks `go test` for the whole package | Process | Plan's Dependency Visualization already assigns agents A-D by package |
 | G10 | T4 `RestoreWithWorkDir_MissingSession` costs about 1.5 s of `probeSessionExistsWithRetries` backoff with a mock executor; the capture closure needs a `sync.Mutex` under `-race` | Low | In plan (Task 1.2.2a); recorded here so the reviewer checks both |
 

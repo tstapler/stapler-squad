@@ -5,7 +5,7 @@
 **Status**: Ready for implementation
 **ADRs**: None. No new technology or architectural pattern; every task adds tests or recorded evidence. Follow-up F2 (restart semantics) should open an ADR when taken, see Production-Behaviour Decisions.
 **Inputs**: `project_plans/program-env-injection/requirements.md`, `research/{stack,architecture,pitfalls,build-vs-buy}.md`, prior plan `project_plans/program-env-not-applied/implementation/plan.md` (its `decisions/` dir is empty, so there are no prior ADRs to carry).
-**Evidence file produced by the implementer**: `project_plans/program-env-injection/implementation/evidence.md` (sections E1-E8; commands and verbatim output).
+**Evidence file**: `project_plans/program-env-injection/implementation/evidence.md` (sections E1-E9; commands and verbatim output). **Single owner: the coordinator.** Worker agents never edit `evidence.md`; each reports command, `tmux -V`, test-file hash, verbatim output and gate verdict in its hand-back message, and the coordinator appends the section (see "Evidence file structure" below). Several parallel writers on one file is how sections get lost or interleaved.
 
 ---
 
@@ -44,7 +44,7 @@ Three approaches were considered (Step 0.5 CREATIVE pass):
 | `RealTmuxGate` | The preflight plus output gate every real-tmux run must pass (Task 1.1.0b): resolved existing `TMUX_BIN`, `-v`, a `--- PASS: <name>` line, zero `--- SKIP`. | A bare exit 0 / `ok` is never evidence for a real-tmux test |
 | AC4a / AC4b | AC4a: `--settings` flag delivery + hostile-value integrity + no regression of existing #852 unit tests (executable, verified). AC4b: program env outranks a global `~/.claude/settings.json` `env` block (upstream-documented, NOT executed locally). | See Story 1.1.3 |
 | `FakeClaude` | A shell script named `claude` that writes its argv to a file then `sleep`s; `isClaude` matches on token basename (`session/instance_tmux.go:239`). | Lets the real `--settings` path run through real tmux |
-| `EvidenceLog` | `project_plans/program-env-injection/implementation/evidence.md`: verbatim commands and output. | Per-AC proof |
+| `EvidenceLog` | `project_plans/program-env-injection/implementation/evidence.md`: verbatim commands and output. Single writer: the coordinator, from agent hand-back reports. | Per-AC proof |
 | Frozen vs reloaded env | In-process restart keeps the create-time `InstanceEnvVars` copy (frozen); after a server restart `EnvVars` is empty and program env is re-resolved (reloaded). | Characterized by Story 1.3.2, policy deferred (F2) |
 
 ---
@@ -118,20 +118,29 @@ Parallelism is per PACKAGE, not per file: one half-written _test.go breaks `go t
 for every agent in the same package/worktree. One agent per package, or one worktree per agent.
 
 Wave 0 (serial, before any evidence run)
-  1.1.0b  RealTmuxGate preflight (resolve TMUX_BIN, record tmux -V, define gate)
+  1.1.0b  Preflight: generated code (proto-gen, ent-gen, server/web/dist stub, lint
+          prerequisites; per fresh worktree) + RealTmuxGate (resolve TMUX_BIN, record
+          tmux -V, define gate)
 
 Wave 1  -- EDIT-ONLY: agents write test files and run only fast, non-real-tmux checks
-           (go vet / bin/linter / mock-executor tests). Cap concurrent `go build`/
-           `go test -race` processes at 2 (use `-p 1` and GOMAXPROCS-limited agents);
-           real-tmux runs are NOT made in Wave 1 (see Wave 3/4: serial, quiet machine).
+           (go vet / bin/linter / mock-executor tests / non-tmux unit tests). Cap
+           concurrent `go build`/`go test -race` processes at 2 (use `-p 1` and
+           GOMAXPROCS-limited agents). NO real-tmux run is made in Wave 1: a task's
+           RealTmuxGate Verify line is split into "Wave 1 check" (vet + bin/linter,
+           run by the editing agent) and a "RealTmuxGate run" that executes in
+           Wave 2R below, serially, on a quiet machine.
   Agent A (package server/services): 1.1.0a -> 1.1.1b -> 1.1.1c, then 1.1.3c
   Agent B (package session/tmux):     1.2.1a -> 1.2.2a
   Agent C (package session):          1.3.1a -> 1.3.2a -> 1.3.2b -> 1.3.2c
   Agent D (web-app):                  1.3.3a
-  Read-only / run-only (any agent):   1.1.1a baseline (AFTER 1.1.0a-1.1.1c, or labelled pre-conversion), 1.4.1a
       |
-Wave 2
-  1.1.3a, 1.1.3b     (read-only evidence)
+Wave 2R (serial real-tmux, ONE run at a time, nothing else building; one agent or the coordinator)
+  1.1.0a, 1.1.1b, 1.1.1c   RealTmuxGate run of the converted test (single run, gate OK)
+  1.1.3c                   RealTmuxGate run of the new test
+  1.1.1a baseline (E1, AFTER the three runs above), 1.4.1a (shell evidence)
+      |
+Wave 2 (read-only / non-tmux, may overlap Wave 2R)
+  1.1.3a, 1.1.3b     (evidence; 1.1.3a is non-tmux)
       |
 Wave 3 (-overlay does not touch the tree; real-tmux runs are serial, one at a time)
   1.1.2a -> 1.1.2b -> 1.1.2c        (AC3, AC5)
@@ -140,10 +149,11 @@ Wave 3 (-overlay does not touch the tree; real-tmux runs are serial, one at a ti
 Wave 4
   1.1.1d  repeat-run flake evidence (-count=5 -race), nothing else building
   1.4.2a  follow-ups recorded
-  1.4.2b  final gates (custom linter, lint, targeted test set)
+  1.4.2b  final gates (custom linters, lint, targeted test set)
+  Final claim: the CI-pinned tmux 3.4 run (see Effort Estimate, wall-clock blockers)
 ```
 
-Critical path: 1.1.0a -> 1.1.1b -> 1.1.1c -> 1.1.2a -> 1.1.2b -> 1.1.2c -> 1.4.2b.
+Critical path: 1.1.0b -> 1.1.0a -> 1.1.1b -> 1.1.1c -> 1.1.2a -> 1.1.2b -> 1.1.2c -> 1.4.2b.
 
 ---
 
@@ -258,9 +268,10 @@ Every finding in `research/pitfalls.md` and `research/architecture.md` appears b
 - Open `tools/lint/norawexec/analyzer.go` and `tools/lint/notimesleeptest/analyzer.go` (read this run): `norawexec` requires `safeexec.CommandContext` (`github.com/tstapler/stapler-squad/executor/safeexec`, sets `WaitDelay`; already imported by sibling tests in this package, e.g. `connectrpc_websocket_test.go:24`) or a `//nolint:norawexec <reason>`; `notimesleeptest` (ADR-003, `docs/adr/003-no-static-sleeps-in-tests.md`) rejects `time.Sleep` in `_test.go` files, pointing at fake clocks, channels, `require.Eventually` or the repo helper `wait.RequireEventually` (`testutil/wait/eventually.go:20`).
 - Add the `github.com/tstapler/stapler-squad/executor/safeexec` import to this file (it is not imported here yet). Replace the three `exec.CommandContext` calls (lines ~729, 738, 741) with `safeexec.CommandContext` (same signature); keep the `os/exec` import because `exec.LookPath` still needs it.
 - Replace the line-~718 Active poll with `wait.RequireEventually` here (so this task's own `bin/linter` verify passes; Task 1.1.1c then only tunes its timeout via `wait.ScaleTimeout`) and the line-~740 send-keys retry: put the `send-keys` + `capture-pane` into a `wait.RequireEventually` condition (one side effect per tick is fine) with a 15 s base timeout and 300 ms tick, so no `time.Sleep` remains. This supersedes the earlier "keep the send-keys retry loop as is".
-- Rule for every new test in this plan (Tasks 1.1.3c, 1.2.1a, 1.2.2a, 1.3.1a, 1.3.2a/b): subprocesses use `safeexec.CommandContext`; no `time.Sleep`; wait with `wait.RequireEventually`.
+- Rule for every new test in this plan (Tasks 1.1.3c, 1.2.1a, 1.2.2a, 1.3.1a, 1.3.2a/b/c): subprocesses use `safeexec.CommandContext`; no `time.Sleep`; wait with `wait.RequireEventually`; any `safeexec`/`exec` call whose binary is `tmux.Binary()` derives its argv from `tmux.ResolveSocket(<name>).Args(...)` (`session/tmux/tmux.go:644`, `Socket.Args` at `:604`) or another sanctioned helper (`prependSocket`, `prependIsolatedSocket`), never a hand-written `"-L", name` literal and never an unscoped call (`tmuxsocketscope`).
+- Linters the single `bin/linter` pass applies (names from `Makefile:814`), and how each is satisfied by this plan: `norawexec` (`safeexec.CommandContext`), `notimesleeptest` (`wait.RequireEventually`), `tmuxsocketscope` (sanctioned socket helper, above; the analyzer is heuristic, does not trace `tmuxBin := tmux.Binary()` through a variable, and accepts a literal `-L`, so the landed test passes today by those loopholes: do not rely on them in new code), `novartestseam` (n/a: no package-level `var` is added only to be reassigned from tests; test helpers are locals/consts), `silenttransition` (n/a: no `TransitionBacklogItemStatus`/`UpdateItemSessionEnded` call is added), `entfullscan`, `hotpolllog`, `noarchivedrevival`, `nocommandpattern`, `nolegacylog`, `noliveinstanceraw`, `norawghrequest`, `norawgitopen` (n/a: test-only change, no production file in their scope is edited). The `bin/linter` run is the authority; this list is a checklist, not a substitute.
 - Files: `server/services/session_service_create_test.go`
-- Verify: `go -C tools/lint build -o "$(pwd)/bin/linter" ./cmd/linter && bin/linter ./server/services ./session ./session/tmux` exits 0 (the Makefile's `lint-custom` recipe, `Makefile:814-821`, scoped to the touched packages; `make lint-custom` is the repo-wide form), then the `RealTmuxGate` run (Task 1.1.0b) of `TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession` with `-race -short -count=1 -v` and `want=1`. Re-run the linter line after every later task that adds a test file.
+- Verify (Wave 1 check): `go -C tools/lint build -o "$(pwd)/bin/linter" ./cmd/linter && bin/linter ./server/services ./session ./session/tmux` exits 0 (the Makefile's `lint-custom` recipe, `Makefile:814-821`, scoped to the touched packages; `make lint-custom` is the repo-wide form) and `go vet ./server/services`. Verify (RealTmuxGate run, Wave 2R, serial): the `RealTmuxGate` run (Task 1.1.0b) of `TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession` with `-race -short -count=1 -v` and `want=1`. Re-run the linter line after every later task that adds a test file.
 
 ##### Task 1.1.0b: `RealTmuxGate` preflight and output gate (XS, run-only; do this before ANY real-tmux run; every task below that says "`RealTmuxGate`" uses it)
 - Reason: the landed test calls `t.Skip` when `exec.LookPath(tmux.Binary())` fails, and `go test` exits 0 / prints `ok` for a skip, so a bare exit code can record a vacuous run as PASS (pre-mortem Failure #1).
@@ -272,6 +283,13 @@ Every finding in `research/pitfalls.md` and `research/architecture.md` appears b
   export STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30   # as Makefile:601,682 do
   ```
   If a pinned CI-equivalent build is wanted, build `bin/tmux` via the Makefile first, then `test -x bin/tmux` before pointing `TMUX_BIN` at it.
+- Generated-code and lint prerequisites (every FRESH worktree, once, before the first `go test`/`go vet`/`bin/linter`; the code is gitignored, so a new agent worktree has none of it, and `go test ./server/services ./session` fails to compile without it). Use the Makefile's real targets, not hand-run generators:
+  ```bash
+  make proto-gen   # Makefile:547 -> `buf generate proto`; needs ensure-tools and web-app/node_modules (its own prerequisites). Writes gen/proto/go/... (gitignored)
+  make ent-gen     # Makefile:564 -> `go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema`. The sql/upsert flag is mandatory; do not hand-run without it
+  test -d server/web/dist || make server/web/dist   # Makefile:208; the Go embed needs the directory. Either build it (needs web-app/out, i.e. `make web-build`) or create a stub: `mkdir -p server/web/dist && touch server/web/dist/.gitkeep` (scratch only, gitignored; never commit)
+  ```
+  For Task 1.4.2b's `make lint` the prerequisites are exactly the Makefile's own (`Makefile:798`: `ensure-tools proto-gen ent-gen server/web/dist lint-custom lint-shell`), plus `golangci-lint` v2 on `PATH` (the recipe `go install`s it if missing, which needs network) and `shellcheck` for `lint-shell`. Record in E1 which of these were already present and which were generated. `make build` satisfies the first three. Never `git add` the generated output (`.gitignore` excludes it; CLAUDE.md).
 - Gate script (scratchpad only, never committed): `$SCRATCH/gate.sh <pass|fail> <TestName> <wantCount> <outfile>`:
   ```bash
   #!/bin/sh
@@ -295,7 +313,7 @@ Every finding in `research/pitfalls.md` and `research/architecture.md` appears b
   For an expected-red overlay run: `rc` is non-zero, so use `"$SCRATCH/gate.sh" fail <Name> 1 "$SCRATCH/out.txt"` AND `grep -F "<assertion text>" "$SCRATCH/out.txt"`; a build failure (`[build failed]`) or a `--- SKIP` does not count.
 - A `--- SKIP` anywhere (including subtests) rejects the run. A missing `--- PASS: <name>` rejects it. Neither is retried silently: fix the environment, then re-run.
 - Files: scratchpad only
-- Verify: `test -x "$TMUX_BIN" && "$TMUX_BIN" -V` prints a version; `sh "$SCRATCH/gate.sh" pass X 1 /dev/null` prints `GATE FAIL` (self-check that the gate rejects an empty log).
+- Verify: `test -x "$TMUX_BIN" && "$TMUX_BIN" -V` prints a version; `sh "$SCRATCH/gate.sh" pass X 1 /dev/null` prints `GATE FAIL` (self-check that the gate rejects an empty log); `test -f gen/proto/go/session/v1/session.pb.go && ls session/ent/*.go >/dev/null && test -d server/web/dist && go build ./session/... ./server/services/...` exits 0 (generated code present and the packages compile).
 
 #### Story 1.1.1: AC1 / AC2 hold at HEAD and the test cannot be masked or flake on a loaded runner
 **As a** maintainer, **I want** the existing regression test run, recorded, and made hermetic, **so that** AC1 and AC2 rest on evidence rather than on "it passed once".
@@ -311,7 +329,7 @@ Every finding in `research/pitfalls.md` and `research/architecture.md` appears b
 ##### Task 1.1.1a: Record the HEAD baseline (E1) (XS, run-only)
 - Order: run this AFTER Tasks 1.1.0a-1.1.1c so E1 is the converted, committed test (provenance matches E4/E5); if run earlier, label E1 "pre-conversion baseline (unconverted test)".
 - Run the `RealTmuxGate` (Task 1.1.0b) for `go test ./server/services -run '^TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession$' -count=1 -v` (`want=1`) and plain `go test ./session -run 'EnvOverride|ExtraEnv|SettingsEnv' -count=1 -v` (non-tmux).
-- Create `evidence.md`; section E1 holds `git rev-parse HEAD`, `git hash-object server/services/session_service_create_test.go`, `tmux -V` ("3.6a only, CI pins 3.4"), the resolved `TMUX_BIN` path, both commands, verbatim output, the gate's `GATE OK` line, and the `t.Logf` pane/show-environment lines (Task 1.1.1b) containing `ENVPROBE_probe-7f3a91_END` and `ANTHROPIC_BASE_URL=`. Every later E-section also records `git hash-object` of the test file and `tmux -V`.
+- The worker reports the E1 material in its hand-back; the coordinator (sole owner, see "Evidence file structure") creates `evidence.md` and appends it. Section E1 holds `git rev-parse HEAD`, `git hash-object server/services/session_service_create_test.go`, `tmux -V` ("3.6a only, CI pins 3.4"), the resolved `TMUX_BIN` path, both commands, verbatim output, the gate's `GATE OK` line, and the `t.Logf` pane/show-environment lines (Task 1.1.1b) containing `ENVPROBE_probe-7f3a91_END` and `ANTHROPIC_BASE_URL=`. Every later E-section also records `git hash-object` of the test file and `tmux -V`.
 - Per-run provenance table at the top of `evidence.md`: E-section, test file hash, converted (1.1.0a-1.1.1c applied) yes/no, overlay yes/no, tmux version.
 - Files: `project_plans/program-env-injection/implementation/evidence.md`
 - Verify: `GATE OK` printed for T1; the second command exits 0 with `ok`; E1 shows the in-pane line.
@@ -322,13 +340,13 @@ Every finding in `research/pitfalls.md` and `research/architecture.md` appears b
 - Make the evidence pane text, not a PASS line: add `t.Logf("show-environment:\n%s", out)` and `t.Logf("pane capture:\n%s", captured)` immediately before the assertions (so they print under `-v`, and on failure), and make the pane assertion a `require` (it is the last assertion, nothing is lost). The lines containing `ENVPROBE_probe-7f3a91_END` and `ANTHROPIC_BASE_URL=http://127.0.0.1:47000` are pasted into E1 and E5.
 - Reason for the probe key: defensive only. A user `~/.bashrc` exporting `ANTHROPIC_BASE_URL` could in principle mask the pane probe; no rc file sets `SSQ_PROGRAM_ENV_PROBE`. SPECULATIVE: the adversarial reviewer's overlay-red run on this machine showed no rc masking, and no real occurrence is cited.
 - Files: `server/services/session_service_create_test.go`
-- Verify: `RealTmuxGate` (Task 1.1.0b) run of `go test -race -short ./server/services -run '^TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession$' -count=1 -v` (`want=1`), plus `grep -F 'ENVPROBE_probe-7f3a91_END' "$SCRATCH/out.txt"` finds the logged pane line.
+- Verify (Wave 1 check): `go vet ./server/services && bin/linter ./server/services`. Verify (RealTmuxGate run, Wave 2R, serial): `RealTmuxGate` (Task 1.1.0b) run of `go test -race -short ./server/services -run '^TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession$' -count=1 -v` (`want=1`), plus `grep -F 'ENVPROBE_probe-7f3a91_END' "$SCRATCH/out.txt"` finds the logged pane line.
 
 ##### Task 1.1.1c: Replace the hand-rolled Active poll with `wait.RequireEventually` (XS, test edit; same agent as Task 1.1.0a)
 - Replace the `for time.Now().Before(deadline) ... time.Sleep(100ms)` loop (test lines 716-719) with `wait.RequireEventually(t, cond, 30*time.Second, 100*time.Millisecond, "session must reach Active")`; inside `cond`, call `t.Fatalf` when status is `session.Stopped` so a real spawn failure still fails fast (not skips). `testutil/wait` is already imported in this file (`wait.WaitForCondition`, line ~649).
-- Reason: the 30 s bound is a fixed wall-clock wait; `wait.ScaleTimeout` stretches it under machine load (`testutil/wait/load.go:31-43`, BUG-103) and the repo's `fix-flaky-tests-dont-defer` / `deterministic-fast-tests` skills prefer it. The send-keys retry loop is converted in Task 1.1.0a (lint requires it).
+- Reason: the 30 s bound is a fixed wall-clock wait; `wait.ScaleTimeout` stretches it under machine load (`testutil/wait/load.go:84`, `ScaleTimeout`; BUG-103) and the repo's `fix-flaky-tests-dont-defer` / `deterministic-fast-tests` skills prefer it. The send-keys retry loop is converted in Task 1.1.0a (lint requires it).
 - Files: `server/services/session_service_create_test.go`
-- Verify: `RealTmuxGate` run (`-race -short -count=1 -v`, `want=1`, `GATE OK`) `&& go vet ./server/services && bin/linter ./server/services`
+- Verify (Wave 1 check): `go vet ./server/services && bin/linter ./server/services`. Verify (RealTmuxGate run, Wave 2R, serial, after the vet/linter line): `RealTmuxGate` run (`-race -short -count=1 -v`, `want=1`, `GATE OK`).
 
 ##### Task 1.1.1d: Repeat-run flake evidence (E2) (XS, run-only)
 - Run via `RealTmuxGate` (Task 1.1.0b, `STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30`, resolved existing `TMUX_BIN`; CI uses `-race -short` with `TMUX_BIN="$(pwd)/bin/tmux"`, `.github/workflows/build.yml:275,327`, so build `bin/tmux` first or use system tmux and say so): `go test -race -short ./server/services -run '^TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession$' -count=5 -v`, then `gate.sh pass TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession 5`. Run it serially on a quiet machine (nothing else building). Paste output, per-run durations and the `GATE OK` line into E2.
@@ -371,6 +389,8 @@ Every finding in `research/pitfalls.md` and `research/architecture.md` appears b
   - *AC4a scenario*, *Given* `ProgramConfig{ID: "netflix-model-gateway", Command: "<tmp>/claude" (FakeClaude), Env: {"ANTHROPIC_BASE_URL": "http://127.0.0.1:47000", "SSQ_HOSTILE": "it's $(touch <tmp>/pwned) `touch <tmp>/pwned` \"q\" a=b"}}`, *When* `CreateSession` launches it and the fake records its argv, *Then* the argv holds `--settings` followed by JSON equal to `{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:47000","SSQ_HOSTILE":"it's $(touch <tmp>/pwned) `touch <tmp>/pwned` \"q\" a=b"}}`, `<tmp>/pwned` does not exist, and `tmux show-environment` carries both keys.
   - *Given* the same program but `claudeSettingsEnvOverrideArgs` disabled by overlay, *When* the test runs, *Then* it fails at the `--settings` assertion.
 - AC4b remains UNVERIFIED locally even if the doc page is fetched; it is labelled UNVERIFIED outright if the page cannot be fetched.
+- **AC4b closure rule**: the backlog item MAY be reported done (PR opened, `report_pr_created`/`report_progress` for AC1, AC2, AC3, AC4a, AC5) with AC4b explicitly UNVERIFIED, provided the report (a) states "AC4b: UNVERIFIED (upstream-documented, not executed)", (b) asks the owner (Tyler) to accept that gap or to run E9, and (c) the coordinator does NOT tick AC4 as a whole: only AC4a is reported as passed. AC4 as a whole closes only on an executed E9 (`cli` printed) or on explicit owner acceptance recorded in the PR thread; E9 showing `global` is a defect to escalate, not to paper over.
+- **Who runs E9**: a human with a real `claude` login and credentials (the owner, or a person the owner designates); no agent or CI job in this item has them. The coordinator hands the human the exact probe above and pastes the result into E9 verbatim with `claude --version`. Not running E9 is a recorded decision, not a blocked task.
 **Files**: `server/services/session_service_create_settings_env_test.go` (new), `project_plans/program-env-injection/implementation/evidence.md`
 
 ##### Task 1.1.3a: Run the existing #852 tests (E6) (XS, run-only)
@@ -391,7 +411,8 @@ Every finding in `research/pitfalls.md` and `research/architecture.md` appears b
 - Feasibility: confirmed by the adversarial review's scratch spike (experiment 3; see closed Unresolved Question). Expect a harmless `ERROR claude launch: MCP server URL unresolved` log.
 - Test-first order: write the test, confirm it fails under the V-settings overlay (Task 1.1.3d) before treating it as done.
 - Files: `server/services/session_service_create_settings_env_test.go`
-- Verify: `RealTmuxGate` run (`STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30`, `go test -race -short ./server/services -run '^TestCreateSession_CustomClaudeProgram_SettingsEnvReachesLaunchedProcess$' -count=1 -v`, `gate.sh pass ... 1`, `GATE OK`, 0 SKIP) `&& bin/linter ./server/services`. Log the recorded argv with `t.Logf` so the `--settings` JSON appears in the `-v` output pasted into E8.
+- Socket rule (`tmuxsocketscope`): the `show-environment` call (and any other tmux call this test makes) builds its argv with `tmux.ResolveSocket(svc.testTmuxServerSocket).Args("show-environment", "-t", tmuxName)` passed to `safeexec.CommandContext(ctx, tmux.Binary(), args...)`; do not copy the landed test's literal `"-L", socket` form. Name this in the test's header comment so the next reader keeps it.
+- Verify (Wave 1 check): `go vet ./server/services && bin/linter ./server/services` (all custom linters, including `tmuxsocketscope`, `norawexec`, `notimesleeptest`, `novartestseam`, `silenttransition`, reported clean). Verify (RealTmuxGate run, Wave 2R, serial): `RealTmuxGate` run (`STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30`, `go test -race -short ./server/services -run '^TestCreateSession_CustomClaudeProgram_SettingsEnvReachesLaunchedProcess$' -count=1 -v`, `gate.sh pass ... 1`, `GATE OK`, 0 SKIP) `&& bin/linter ./server/services`. Log the recorded argv with `t.Logf` so the `--settings` JSON appears in the `-v` output pasted into E8.
 
 ##### Task 1.1.3d: Overlay red/green for the AC4 test (E8) (XS)
 - Same mechanism as Task 1.1.2a, second overlay: the copy's `claudeSettingsEnvOverrideArgs` body replaced with `return "", ""`. Run Task 1.1.3c's command with `-overlay` through the `RealTmuxGate`: `gate.sh fail TestCreateSession_CustomClaudeProgram_SettingsEnvReachesLaunchedProcess 1` plus a `grep -F` of the `--settings` assertion message (not a build error, not a SKIP); re-run without the overlay: `gate.sh pass ... 1`; `git status --short` empty. Record `tmux -V`, `tmux show-options -gv default-shell` and `$SHELL` in E8.
@@ -466,7 +487,7 @@ Every finding in `research/pitfalls.md` and `research/architecture.md` appears b
 **Files**: `session/instance_program_env_semantics_test.go` (new)
 
 ##### Task 1.3.2a: Add the two resolver characterization tests (S, test-first)
-- `TestResolveExtraEnvVars_InstanceEnvVarsCopyShadowsLaterProgramEdit` and `TestResolveExtraEnvVars_InstanceWithoutEnvVarsSeesCurrentProgramEnv`. Use `seedCustomProgram` (`session/instance_tmux_test.go:1190`) once, then load config, modify `Env`, and `SaveConfig` explicitly: `seedCustomProgram` calls `t.Setenv(STAPLER_SQUAD_TEST_DIR, t.TempDir())` on every call, so calling it twice silently swaps in a fresh empty config instead of editing the first. Header comment: "characterization of current behaviour (PIT-B); changing it is follow-up F2". Not `t.Parallel()` (`t.Setenv`).
+- `TestResolveExtraEnvVars_InstanceEnvVarsCopyShadowsLaterProgramEdit` and `TestResolveExtraEnvVars_InstanceWithoutEnvVarsSeesCurrentProgramEnv`. Use `seedCustomProgram` (`session/instance_tmux_test.go:1192`) once, then load config, modify `Env`, and `SaveConfig` explicitly: `seedCustomProgram` calls `t.Setenv(STAPLER_SQUAD_TEST_DIR, t.TempDir())` on every call, so calling it twice silently swaps in a fresh empty config instead of editing the first. Header comment: "characterization of current behaviour (PIT-B); changing it is follow-up F2". Not `t.Parallel()` (`t.Setenv`).
 - Files: `session/instance_program_env_semantics_test.go`
 - Note: the in-process half restates the CLASH case of `TestInstance_BuildExtraEnv_IncludesCustomProgramAndInstanceEnvVars` (`instance_tmux_test.go:1202`); keep it only because it is the named characterization that flips under F2.
 - Verify: `go test -race -short ./session -run 'TestResolveExtraEnvVars_' -count=1 -v && bin/linter ./session`
@@ -508,7 +529,7 @@ Every finding in `research/pitfalls.md` and `research/architecture.md` appears b
 
 ##### Task 1.4.1a: Paste the recorded experiment (XS, evidence paste; optional 1-minute re-run)
 - Result already known: tmux 3.6a, private socket, `-e K=first -e K=second`, `show-environment -t dup K` printed `K=second`. Paste it with `tmux -V`; re-run only if cheap.
-- Use `tmux.Binary()`'s path (honour `TMUX_BIN`); record `tmux -V`; finish with `tmux -L ssq-dup-env-probe kill-server` (touches only that socket, never the live one).
+- Use `tmux.Binary()`'s path (honour `TMUX_BIN`); record `tmux -V`; finish with `tmux -L ssq-dup-env-probe kill-server` (touches only that socket, never the live one). This is a shell run, outside `tmuxsocketscope`'s Go-AST scope; if it is ever turned into a Go test it must build its argv with `tmux.ResolveSocket("ssq-dup-env-probe").Args(...)` (see the Task 1.1.0a rule).
 - Files: `project_plans/program-env-injection/implementation/evidence.md`
 - Verify: the evidence section shows the printed `K=...` line and the kill-server exit status 0.
 
@@ -520,20 +541,41 @@ Every finding in `research/pitfalls.md` and `research/architecture.md` appears b
 **Files**: `project_plans/program-env-injection/implementation/evidence.md`
 
 ##### Task 1.4.2a: Write the follow-up section (XS)
-- Copy F1-F5 from this plan (title, risk, decision) and add a one-line proposed test per item (F1: real create with a secret value, grep captured logs and persisted `LaunchCommand`; F2: flip Story 1.3.2's tests; F3: `buildExtraEnv` with `STAPLER_SESSION_UUID` in `EnvVars`; F4: argv capture on `createRemoteSession`; F5: tymux-backed session `show-environment`). File them via `create_backlog_item` only if the owner answers yes to the first Unresolved Question.
+- Copy F1-F5 from this plan (title, risk, decision) and add a one-line proposed test per item (F1: real create with a secret value, grep captured logs and persisted `LaunchCommand`; F2: flip Story 1.3.2's tests; F3: `buildExtraEnv` with `STAPLER_SESSION_UUID` in `EnvVars`; F4: argv capture on `createRemoteSession`; F5: tymux-backed session `show-environment`). File them via `create_backlog_item` only if the owner answers yes to the first Unresolved Question. Regardless of that answer, F1-F5 (title, risk, one-line proposed test) are listed verbatim in the PR body under "Follow-ups for the owner to file", so a decision not to file is a decision, not an omission. The worker drafts the section; the coordinator appends it to `evidence.md`.
 - Files: `project_plans/program-env-injection/implementation/evidence.md`
 - Verify: `grep -c '^### F' project_plans/program-env-injection/implementation/evidence.md` prints 5.
 
 ##### Task 1.4.2b: Final gates (S, run-only)
+Prerequisites (Task 1.1.0b's generated-code block, verified present in THIS worktree before starting): `make proto-gen ent-gen`, `server/web/dist` present, and for `make lint` the Makefile's own chain (`Makefile:798`: `ensure-tools proto-gen ent-gen server/web/dist lint-custom lint-shell`) with `golangci-lint` v2 and `shellcheck` on `PATH`; if `golangci-lint` is missing the recipe `go install`s it (network). If any prerequisite cannot be satisfied, record which line was NOT run and why (not "green").
 Use the invocations CI uses (`-race -short`; `.github/workflows/build.yml:275,327`) with the Task 1.1.0b preflight applied (existing `TMUX_BIN`, `STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30`) and EVERY `go test` run with `-v` captured to a file and gated; a bare exit 0 is not accepted.
 - `go test -race -short ./session/tmux -run 'TestNewSessionArgs_|TestNewSessionArgv_' -count=1 -v` (gate: `--- PASS: TestNewSessionArgs_EmitsExtraEnvPairs`, `--- PASS: TestNewSessionArgv_BothCreationPaths_CarryExtraEnv`, no `--- SKIP`)
 - `go test -race -short ./session -run 'TestResolveExtraEnvVars_|TestInstanceData_RoundTripDropsEnvVars|TestClaudeSettingsEnvOverrideArgs|TestBuildClaudeCommand_IncludesSettingsEnvOverride|TestInstance_BuildExtraEnv' -count=1 -v` (gate: each named test has a `--- PASS` line, including the three `TestResolveExtraEnvVars_*`, no `--- SKIP`)
 - `go test -race -short ./server/services -run 'TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession|TestCreateSession_CustomClaudeProgram_SettingsEnvReachesLaunchedProcess|TestCreateSession_should_NotLogEnvVarValues_When_EnvVarsProvided' -count=1 -v` (gate: `gate.sh pass <Name> 1` for EACH of the three names; `--- SKIP` anywhere rejects)
-- Custom linters: `make lint-custom` (builds `bin/linter`, runs `bin/linter ./...`, `Makefile:814-817`; the same step CI runs). It can only be green because Task 1.1.0a repaired the landed test; before 1.1.0a it reports 5 findings.
+- Custom linters: `make lint-custom` (builds `bin/linter`, runs `bin/linter ./...`, `Makefile:814-817`; the same step CI runs; the single pass covers `entfullscan, hotpolllog, noarchivedrevival, nocommandpattern, nolegacylog, noliveinstanceraw, norawexec, norawghrequest, norawgitopen, notimesleeptest, novartestseam, silenttransition, tmuxsocketscope`). It can only be green because Task 1.1.0a repaired the landed test; before 1.1.0a it reports 5 findings. Record the `custom lint: ok` line in the evidence.
 - `make lint` (depends on `lint-custom`).
 - `dupl` is moot for new Go tests: `.golangci.yml:244-246` excludes `_test.go` from `gocyclo,gocognit,funlen,revive,dupl`, so `make ready-complexity-gate` needs no table-test refactor. The gate that can bite is web `jscpd`: `cd web-app && pnpm run lint:duplicates` for the added Jest `it` (absolute threshold ratchet, see CLAUDE.md).
 - Files: none
-- Verify: every command exits 0 AND every gate prints `GATE OK` with 0 SKIP; output summarized in the PR body, which states "AC4b: UNVERIFIED (upstream-documented, not executed)" unless E9 was run. If Epics 1.2-1.4.1 land in a separate PR, run only the lines for the packages each PR touches.
+- Verify: every command exits 0 AND every gate prints `GATE OK` with 0 SKIP; output summarized in the PR body, which states "AC4b: UNVERIFIED (upstream-documented, not executed)" unless E9 was run. If Epics 1.2-1.4.1 land in a separate PR, run only the lines for the packages each PR touches. The final claim about real-tmux behaviour is worded per "CI-pinned tmux 3.4 run" in the Effort Estimate (a named blocker with exact fallback wording): until a 3.4 run is recorded the claim is "verified on tmux 3.6a only".
+
+---
+
+## Evidence file structure
+
+`project_plans/program-env-injection/implementation/evidence.md` is created and edited ONLY by the coordinator. Agents return, for each run, a text block with: command (verbatim), `tmux -V`, `git hash-object` of the test file, verbatim output (or the tail with the assertion and `t.Logf` lines), and the `gate.sh` verdict line. The coordinator appends it as the section named below. One section per row; a row without an executed run stays literally `NOT RUN`.
+
+Top of file, in this order: (1) header with `git rev-parse HEAD`, `TMUX_BIN` path, `tmux -V`, generated-code status (Task 1.1.0b); (2) the table below, filled as sections land; (3) sections `### E1` ... `### E9`, then `### F1` ... `### F5` (Task 1.4.2a).
+
+| Section | Purpose (AC) | Command | `tmux -V` | Test-file hash | Result (verbatim ref) | Gate-script verdict |
+|---|---|---|---|---|---|---|
+| E1 | HEAD baseline, converted test (AC1, AC2) | `go test -race -short ./server/services -run '^TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession$' -count=1 -v` | | | | `GATE OK: 1 "--- PASS"` |
+| E2 | Repeat-run flake evidence (AC1, AC2) | same, `-count=5` | | | | `GATE OK: 5 "--- PASS"` |
+| E3 | `PreFixOverlay` equivalence (AC3, AC5) | `git show cdfd4e5cf2^:...`, `diff -u`, `git grep ResolveProgramConfig cdfd4e5cf2^` | n/a | n/a | | n/a (static) |
+| E4 | Red under overlay (AC3); E4b parent-commit run, coordinator-reported, not counted | `go test -overlay <json> ./server/services -run ... -count=1 -v` | | | | `GATE OK: 1 "--- FAIL"` + assertion `grep -F` |
+| E5 | Green on HEAD, clean tree (AC3) | same as E1, no overlay; `git status --short` empty | | | | `GATE OK: 1 "--- PASS"` |
+| E6 | #852 unit tests, no regression (AC4a) | `go test ./session -run 'TestClaudeSettingsEnvOverrideArgs_...' -count=1 -v` | n/a (non-tmux) | | | 4 `--- PASS`, 0 SKIP |
+| E7 | Upstream precedence quote (AC4b, documentation only) | `mcp__stapler-mcp__read_website` | n/a | n/a | quote + date, or `UNVERIFIED` | n/a |
+| E8 | `--settings` end to end, red/green overlay (AC4a) | Task 1.1.3c command with and without `-overlay` | | | | `GATE OK` fail-mode and pass-mode |
+| E9 | Real `claude -p` precedence probe (AC4b) | Story 1.1.3 probe; run by a human with credentials | n/a (`claude --version`) | n/a | `cli` or `global`; `NOT RUN` by default | n/a |
 
 ---
 
@@ -557,22 +599,26 @@ Bands and weights are INFERRED (`~/.claude/skills/sdd/skills/ESTIMATION.md`); re
 
 | Story | Tasks | Classes | Raw tokens | Output share | CU before x1.5 | CU with x1.5 | Wall-clock blocker |
 |---|---|---|---|---|---|---|---|
+| 1.1.0 | 2 | 1 S, 1 XS | 75k | 5-15% | 112k | 168k | Generated-code build (`make proto-gen ent-gen`, buf/ent toolchain, possible network) |
 | 1.1.1 | 4 | 4 XS | 80k | 5-15% | 112k | 168k | Real-tmux runs (up to 45 s each, five in 1.1.1d) |
 | 1.1.2 | 3 | 2 XS, 1 S | 95k | 5-10% | 118k | 177k | Real-tmux run |
 | 1.1.3 | 4 | 3 XS, 1 S | 115k | 5-15% | 160k | 240k | Upstream doc fetch (network) |
 | 1.2.1 | 1 | XS | 20k | 15% | 32k | 48k | none |
 | 1.2.2 | 1 | S | 55k | 15% | 88k | 132k | none |
 | 1.3.1 | 1 | S | 55k | 15% | 88k | 132k | none |
-| 1.3.2 | 2 | 1 S, 1 XS | 75k | 15% | 120k | 180k | none |
+| 1.3.2 | 3 | 1 S, 2 XS | 95k | 15% | 152k | 228k | none |
 | 1.3.3 | 1 | XS | 20k | 15% | 32k | 48k | none |
 | 1.4.1 | 1 | XS | 20k | 5% | 24k | 36k | none |
 | 1.4.2 | 2 | 1 XS, 1 S | 75k | 5-10% | 94k | 141k | `make lint` and the `dupl` gate runtime |
-| **Total** | **20** | 14 XS, 6 S | **610k** | | **868k** | **~1.3M CU** | |
+| **Total** | **23** | 16 XS, 7 S | **705k** | | **1,012k** | **~1.52M CU** | |
+
+Task count check: 23 task headings (1.1.0a, 1.1.0b; 1.1.1a-d; 1.1.2a-c; 1.1.3a-d; 1.2.1a; 1.2.2a; 1.3.1a; 1.3.2a-c; 1.3.3a; 1.4.1a; 1.4.2a, 1.4.2b). Re-count with `grep -c '^##### Task' project_plans/program-env-injection/implementation/plan.md` (expect 23). The prior table (20 tasks, ~868k CU before / ~1.3M with x1.5) omitted 1.1.0a (S), 1.1.0b (XS) and 1.3.2c (XS), +95k raw, +144k CU before x1.5, +216k with x1.5. The E4b paste is coordinator-reported and costs nothing.
 
 - Size band: Medium (0.5-3M CU), informational only.
-- Critical path: 4 agent waves (see Dependency Visualization); serial chain 1.1.0a -> 1.1.1b -> 1.1.1c -> 1.1.2a-c -> 1.4.2b because the overlay red run needs the converted test. Task 1.1.0a (S, ~55k raw tokens, roughly +88k CU with x1.5) and the E4b paste are not yet in the table totals above. Roughly half of the CU is AC-less hardening (Epics 1.2-1.4.1); Epic 1.1 alone is the first shippable unit.
-- Overrun checkpoint: if cumulative spend on completed stories exceeds 1.25 x the "CU with x1.5" column, pause and report the delta and its cause (informational, not a scope cut).
-- Wall-clock blockers (owners): owner answers to the three Unresolved Questions (Tyler; none blocks code in this item); a tmux binary matching `tmux.Binary()` on the machine running evidence (implementer); network access for Task 1.1.3b (implementer).
+- Critical path: 4 agent waves plus the serial real-tmux Wave 2R (see Dependency Visualization); serial chain 1.1.0b -> 1.1.0a -> 1.1.1b -> 1.1.1c -> 1.1.2a-c -> 1.4.2b because the overlay red run needs the converted test. Roughly half of the CU is AC-less hardening (Epics 1.2-1.4.1); Epic 1.1 alone is the first shippable unit.
+- Overrun checkpoint: pause and report the delta and its cause (informational, not a scope cut) if cumulative spend on completed stories exceeds 1.25 x the "CU with x1.5" column, i.e. above ~1.9M CU in total (1.25 x ~1.52M = ~1.90M) or 1.25 x the row value for any single story (for example 1.1.0 above ~210k, 1.3.2 above ~285k).
+- Wall-clock blockers (owners): owner answers to the three Unresolved Questions (Tyler; none blocks code in this item); a tmux binary matching `tmux.Binary()` on the machine running evidence (implementer); network access for Task 1.1.3b (implementer); generated-code build and `golangci-lint` install in each fresh worktree (implementer); **a CI-pinned tmux 3.4 run for the final claim** (CI / implementer, see below); **E9, the real-`claude` AC4b probe (a human with credentials: Tyler or his designee; optional, non-blocking, see the AC4b closure rule)**.
+- **CI-pinned tmux 3.4 run (named blocker for the final real-tmux claim)**: all local evidence is tmux 3.6a, and CI pins 3.4 (`.github/workflows/build.yml:275,327`, `TMUX_BIN="$(pwd)/bin/tmux"`). Final claim for AC1/AC2/AC4a requires either (i) the CI run of the PR's tests (`TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession`, `TestCreateSession_CustomClaudeProgram_SettingsEnvReachesLaunchedProcess`) green with the gate (`--- PASS`, 0 `--- SKIP`) read from the job log, or (ii) a local run against a built `bin/tmux` whose `-V` prints 3.4, recorded in E2. Exact fallback wording if neither can be run: "Verified on tmux 3.6a only; the CI-pinned tmux 3.4 was not run for this evidence (tmux 3.2 is the documented minimum for `-e`, STK-1, not tested here)." The PR body and `report_progress` must use that sentence, not "verified" without the version.
 - Basis: cost bands INFERRED; planning overhead not included.
 
 ---
@@ -607,3 +653,19 @@ Changes made in response to `pre-mortem.md` (P1 #1, #2; P2 #3-#6; P3 #7) and `va
 - **P3 #7**: `;`-suffixed value added to Task 1.2.1a's table as characterization-only (argv carries it unescaped; tmux 3.6a `new-session` rc=1, VERIFIED in the pre-mortem); F3 extended with the escape-or-reject fix.
 - **Gap G1 accepted**: Task 1.3.2c adds `TestResolveExtraEnvVars_should_ReturnOnlyInstanceEnv_When_ProgramNotRegistered` (Story 1.3.2 AC, Wave 1 Agent C, Traceability). Effort: +1 XS (~20k raw) and +1 XS for Task 1.1.0b, not in the table totals.
 - Not changed (out of scope this pass): pre-mortem P3 #8-#10 remain advisory (NUL-delimited fake argv, evidence.md single-writer, send-keys cadence).
+
+---
+
+## Repair log (triad iteration 1)
+
+Changes made in response to the engineering and product triad lenses. Docs only; nothing executed, no source changes.
+
+- **GAP-1 (generated code)**: Task 1.1.0b now carries a generated-code preflight using the Makefile's real targets (`make proto-gen` `Makefile:547`, `make ent-gen` `Makefile:564` with `--feature sql/upsert`, `server/web/dist` `Makefile:208` or a gitignored stub) and a compile check in its Verify line; Task 1.4.2b lists the `make lint` chain (`Makefile:798`: `ensure-tools proto-gen ent-gen server/web/dist lint-custom lint-shell`, plus `golangci-lint` v2 and `shellcheck`) and says an unsatisfied prerequisite is reported NOT RUN, never green. Wave 0 updated.
+- **GAP-2 (Wave 1 vs real-tmux)**: Wave 1 stays edit-only; Tasks 1.1.0a, 1.1.1b, 1.1.1c, 1.1.3c split their Verify into a "Wave 1 check" (vet + `bin/linter`) and a "RealTmuxGate run" executed in a new serial Wave 2R, one run at a time; 1.1.1a (E1) runs after them. Critical path now starts at 1.1.0b.
+- **GAP-3 (linters)**: Task 1.1.0a names every linter in the `Makefile:814` pass with how each is satisfied or why n/a (`norawexec`, `notimesleeptest`, `tmuxsocketscope`, `novartestseam`, `silenttransition`, rest n/a); the rule now requires tmux calls in new tests to derive argv via `tmux.ResolveSocket(...).Args(...)` (`session/tmux/tmux.go:604,644`; sanctioned names read from `tools/lint/tmuxsocketscope/analyzer.go`), not a literal `-L` and not by relying on the analyzer's variable-tracing and literal-`-L` loopholes. Task 1.1.3c states the socket rule; Task 1.4.1a notes its shell scope; Task 1.4.2b records the `custom lint: ok` line. `validation.md` L1 and G12 mirror it.
+- **GAP-4 (evidence ownership)**: the coordinator is the single writer of `evidence.md`; agents hand back text blocks (header, glossary row, Tasks 1.1.1a and 1.4.2a updated). New "Evidence file structure" section holds the E1-E9 table (command, `tmux -V`, test-file hash, result, gate-script verdict). `validation.md` G14.
+- **GAP-5 (effort)**: table now 23 tasks (new row 1.1.0 for 1.1.0a S and 1.1.0b XS; 1.3.2 gains 1.3.2c XS): 16 XS + 7 S = 705k raw, 1,012k CU, ~1.52M CU with x1.5 (was 20 tasks / 610k / 868k / ~1.3M). Overrun checkpoint recomputed: 1.25 x ~1.52M = ~1.9M CU total, or 1.25 x any story row. Task count verified with `grep -c '^##### Task'` = 23.
+- **GAP-6 (tmux 3.4)**: the CI-pinned tmux 3.4 run is a named wall-clock/CI blocker with two ways to satisfy it and exact fallback wording ("Verified on tmux 3.6a only; the CI-pinned tmux 3.4 was not run for this evidence ..."); Task 1.4.2b and Wave 4 reference it. `validation.md` G15.
+- **Citation drift**: `wait.ScaleTimeout` -> `testutil/wait/load.go:84` (opened, `func ScaleTimeout` at :84); `seedCustomProgram` -> `session/instance_tmux_test.go:1192` (opened, `func seedCustomProgram` at :1192).
+- **Product gaps**: AC4b closure rule added to Story 1.1.3 (item may be reported with AC4b explicitly UNVERIFIED and owner acceptance requested; the coordinator must not tick AC4 as a whole; AC4 closes only on an executed E9 or recorded owner acceptance); E9 is run by a human with credentials (Tyler or designee), listed as an optional non-blocking blocker; F1-F5 are listed in the PR body for the owner to file regardless of the first Unresolved Question (Task 1.4.2a). `validation.md` G16.
+- Not changed: target-user/impact statement, requirements.md out-of-scope list and companion-bug pointer (requirements.md is the coordinator's); F1 owner/date (owner decision, Unresolved Question 1).
