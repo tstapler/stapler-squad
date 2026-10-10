@@ -34,6 +34,9 @@ export async function dismissNotificationInterference(page: Page): Promise<void>
 
 
 export const TRAY_V2_FLAG = 'notification_tray_v2';
+export const HIDDEN_GATE_FLAG = 'hidden_session_gate';
+/** Title of the hidden review session seeded before the test server boots (tests/e2e/seed-hidden). */
+export const SEEDED_HIDDEN_SESSION = 'e2e-hidden-review';
 
 /** Live-sets a feature flag through the same RPC Settings > Features calls. */
 export async function setFeatureFlag(
@@ -51,7 +54,7 @@ export async function setFeatureFlag(
 
 export interface SeededNotification {
   sessionId: string;
-  type: 'ERROR' | 'WARNING' | 'APPROVAL_NEEDED' | 'CUSTOM' | 'INFO';
+  type: 'ERROR' | 'WARNING' | 'APPROVAL_NEEDED' | 'CUSTOM' | 'INFO' | 'TASK_COMPLETE';
   title: string;
   message?: string;
   metadata?: Record<string, string>;

@@ -65,6 +65,7 @@ export class TestServer {
     await this.cleanupTestDir();
     await this.ensureBinary();
     await this.seedDemoData();
+    await this.seedHiddenSession();
 
     this.process = spawn(this.config.buildPath, [
       '--test-mode',
@@ -197,6 +198,20 @@ export class TestServer {
       console.log('✅ Demo sessions seeded');
     } catch (err) {
       console.warn(`Warning: Failed to seed demo data: ${err}`);
+    }
+  }
+
+  /**
+   * Writes one hidden review session ("e2e-hidden-review") into the database so the
+   * delivery gate resolves it as hidden. Hidden sessions cannot be created over the API.
+   */
+  private async seedHiddenSession(): Promise<void> {
+    const projectRoot = path.join(__dirname, '../../..');
+    try {
+      await execPromise(`go run ./tests/e2e/seed-hidden "${this.config.testDir}"`, { cwd: projectRoot });
+      console.log('✅ Hidden review session seeded');
+    } catch (err) {
+      console.warn(`Warning: Failed to seed hidden session: ${err}`);
     }
   }
 
