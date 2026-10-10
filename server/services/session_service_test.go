@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1553,6 +1554,27 @@ func TestUpdateSession_TitleRename_DoesNotOrphanOldRow(t *testing.T) {
 	}
 	assert.Equal(t, []string{newTitle}, matches,
 		"rename must not leave an orphaned row under the old title (found: %v)", matches)
+}
+
+// A title-only UpdateSession must refresh the delivery gate's visibility index, or
+// events keyed by the new title resolve Unresolved (delivered) until the backstop.
+func TestUpdateSession_TitleRename_ShouldIndexNewTitleForDeliveryGate(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+	gate := deliverygate.NewGate()
+	fix.svc.deliveryGate = gate
+
+	addPausedSession(t, fix, "gate-old-title")
+	newTitle := "gate-new-title"
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:    "gate-old-title",
+		Title: &newTitle,
+	}))
+	require.NoError(t, err)
+
+	res := gate.Resolver().Resolve(newTitle, nil)
+	assert.Equal(t, deliverygate.VisibilityVisible, res.Visibility)
 }
 
 // TestUpdateSession_TitleAndProgramCombo_DoesNotDuplicateRow is the regression test for a

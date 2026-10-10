@@ -197,6 +197,7 @@ func (s *SessionService) UpdateSession(
 	} else if renamed {
 		updatedFields = append(updatedFields, "title")
 		metaTitle = req.Msg.Title
+		s.indexSessionForDelivery(instance) // the gate resolves by title and tmux name
 	}
 
 	// Handle category update
