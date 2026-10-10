@@ -1,4 +1,3 @@
-// +feature: notification-toast-stack
 import type { Meta, StoryObj } from "@storybook/react";
 import { AnnouncerProvider } from "./Announcer";
 import { useAnnounce } from "@/lib/hooks/useAnnounce";

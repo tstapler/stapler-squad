@@ -1,4 +1,3 @@
-// +feature: notification-toast-stack
 import { useEffect } from "react";
 import type { Meta, StoryObj } from "@storybook/react";
 import type { NotificationData } from "@/lib/types/notification";

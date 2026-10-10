@@ -1,6 +1,7 @@
 // +feature: settings-features
 "use client";
 
+import { NOTIFICATION_TRAY_V2_FLAG } from "@/lib/notification-policy";
 import { useCallback, useState } from "react";
 import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
 import { usePageView } from "@/lib/analytics";
@@ -41,6 +42,7 @@ const FEATURE_META: Record<string, { label: string }> = {
   "terminal:resync-stagger": { label: "Terminal resync: stagger bursts" },
   "terminal:resync-compression": { label: "Terminal resync: wire compression" },
   "terminal:resync-batching": { label: "Terminal resync: batch requests" },
+  [NOTIFICATION_TRAY_V2_FLAG]: { label: "Notifications: capped toast deck with Move all to tray" },
 };
 
 export default function FeaturesPage() {
