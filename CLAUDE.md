@@ -350,6 +350,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Service restart kills every live tmux session without `--tmux-keep-server` | `docs/explanation/tmux-keep-server-on-restart.md` |
 | Package manager: always pnpm in web-app/, never npm/yarn | `docs/how-to/use-pnpm-in-web-app.md` |
 | macOS restart can leave orphaned processes racing over tmux/session state | `docs/explanation/service-restart-orphan-process.md` |
+| A terminal one-shot session (triage/review) can be revived and respawned forever | `docs/explanation/oneshot-session-respawn-loop.md` |
 | Fix flaky tests when found, don't just re-defer as "known pre-existing" | `fix-flaky-tests-dont-defer` skill |
 | Prefer deterministic, fast tests over real sleeps/timeouts/t.Setenv fixtures | `deterministic-fast-tests` skill |
 | Test I/O/storage isolation strategy: in-memory DB, config-dir-resolved state directories, `envtest` env helpers | `docs/explanation/test-io-storage-isolation.md` |
