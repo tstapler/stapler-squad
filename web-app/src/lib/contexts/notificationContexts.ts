@@ -55,7 +55,8 @@ export interface NotificationCommandsValue {
     onAcknowledge?: () => void
   ) => void;
   togglePanel: () => void;
-  markAsRead: (id: string | string[]) => void;
+  /** Resolves false when the server write failed and the rows were rolled back. */
+  markAsRead: (id: string | string[]) => void | Promise<boolean>;
   markAsReadBySessionId: (sessionId: string | string[]) => void;
   /**
    * Remove active toast(s) for the given session ID(s).
@@ -66,6 +67,12 @@ export interface NotificationCommandsValue {
   removeToastBySessionId: (sessionId: string | string[]) => void;
   removeFromHistory: (id: string) => void;
   clearHistory: () => void;
+  /**
+   * Deletes exactly these history rows server-side (one RPC). Rows the server keeps
+   * because they are pending decisions stay in local history and come back in `kept`.
+   * Rejects when the RPC fails; nothing local changes in that case.
+   */
+  clearHistoryByIds: (ids: string[], options?: { keepalive?: boolean }) => Promise<{ deleted: number; kept: string[] }>;
   loadMoreHistory: () => Promise<void>;
   /** Re-fetch the full notification history from the server (e.g. after a stream reconnect). */
   refreshHistory: () => Promise<void>;

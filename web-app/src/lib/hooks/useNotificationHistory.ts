@@ -13,7 +13,8 @@ import {
   ClearNotificationHistoryRequestSchema,
 } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
-import { getConnectTransport } from "@/lib/api/transport";
+import { getConnectTransport, getKeepaliveConnectTransport } from "@/lib/api/transport";
+import type { ClearByIdsResult } from "@/lib/hooks/useClearResultLine";
 
 const DEFAULT_PAGE_SIZE = 50;
 
@@ -25,8 +26,11 @@ interface UseNotificationHistoryReturn {
   hasMore: boolean;
   /** Timestamp (Date.now()) of the last *successful* fetchHistory completion — null until the first one. Never touched on failure, so it always reflects the last-known-good data (Task 3.1.2h, AC38). */
   lastUpdatedAt: number | null;
-  markAsRead: (ids: string[]) => Promise<void>;
+  /** Resolves true when the server accepted the write, false after a rollback refetch. */
+  markAsRead: (ids: string[]) => Promise<boolean>;
   clearHistory: (beforeTimestamp?: string) => Promise<void>;
+  /** Deletes exactly these ids server-side; pending decisions come back in `kept`. Throws on RPC failure. */
+  clearByIds: (ids: string[], options?: { keepalive?: boolean }) => Promise<ClearByIdsResult>;
   loadMore: () => Promise<void>;
   refresh: () => Promise<void>;
 }
@@ -119,7 +123,7 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
 
   // Mark specific notifications as read
   const markAsRead = useCallback(async (ids: string[]) => {
-    if (!clientRef.current) return;
+    if (!clientRef.current) return false;
 
     // Optimistic update
     setNotifications((prev) =>
@@ -134,10 +138,12 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
         notificationIds: ids,
       });
       await clientRef.current.markNotificationRead(request);
+      return true;
     } catch (err) {
       console.error("Failed to mark notifications as read:", err);
       // Rollback on failure
       await fetchHistory(true);
+      return false;
     }
   }, [fetchHistory]);
 
@@ -164,6 +170,20 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
     }
   }, [notifications, fetchHistory]);
 
+  const clearByIds = useCallback(async (ids: string[], options?: { keepalive?: boolean }) => {
+    const client = options?.keepalive
+      ? createClient(SessionService, getKeepaliveConnectTransport())
+      : clientRef.current;
+    if (!client) throw new Error("notification client not ready");
+    const response = await client.clearNotificationHistory(
+      create(ClearNotificationHistoryRequestSchema, { notificationIds: ids }),
+    );
+    const kept = response.keptIds ?? [];
+    const gone = new Set(ids.filter((id) => !kept.includes(id)));
+    setNotifications((prev) => prev.filter((n) => !gone.has(n.id)));
+    return { deleted: response.clearedCount, kept };
+  }, []);
+
   return {
     notifications,
     unreadCount,
@@ -173,6 +193,7 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
     lastUpdatedAt,
     markAsRead,
     clearHistory,
+    clearByIds,
     loadMore,
     refresh,
   };

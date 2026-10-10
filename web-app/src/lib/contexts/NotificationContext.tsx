@@ -187,7 +187,7 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
         }
         return prev.map((n) => (idSet.has(n.id) ? { ...n, isRead: true, isPendingDecision: false } : n));
       });
-      historyRef.current.markAsRead(ids);
+      return historyRef.current.markAsRead(ids);
     };
 
     return {
@@ -293,6 +293,19 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
           return [];
         });
         historyRef.current.clearHistory();
+      },
+      clearHistoryByIds: async (ids, options) => {
+        const result = await historyRef.current.clearByIds(ids, options);
+        const gone = ids.filter((id) => !result.kept.includes(id));
+        if (gone.length > 0) {
+          setNotificationHistory((prev) => {
+            const removed = prev.filter((n) => gone.includes(n.id));
+            if (removed.length > 0) auditLogRef.current.logNotificationHistoryCleared(removed.length);
+            return prev.filter((n) => !gone.includes(n.id));
+          });
+          createNotificationSyncChannel().broadcast({ type: "NOTIFICATIONS_BULK_DISMISSED", kind: "dismissed", ids: gone });
+        }
+        return result;
       },
       loadMoreHistory: () => historyRef.current.loadMore(),
       refreshHistory: () => historyRef.current.refresh(),
