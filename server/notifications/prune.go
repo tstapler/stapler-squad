@@ -91,9 +91,9 @@ type PruneOptions struct {
 	IncludeUnreadActionable bool
 	// Now stamps the backup name (injected so tests never read the clock).
 	Now time.Time
-	// BeforeApply runs under the store lock once the plan is final and before
-	// the backup and the delete; an error aborts with nothing written. It must
-	// not call the store.
+	// BeforeApply runs once the plan is final and before the backup and the
+	// delete, without the store lock (it does audit I/O); an error aborts with
+	// nothing written. It must not call the store.
 	BeforeApply func(PrunePlan) error
 }
 
@@ -105,10 +105,14 @@ type PruneOptions struct {
 // deletes and persists. It is keyed on current state, so a re-run removes
 // nothing more.
 func (s *NotificationHistoryStore) PruneByPredicate(classify PruneClassifier, opts PruneOptions) (PrunePlan, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// pruneMu serializes prunes only; ordinary store calls never wait on it, so
+	// the audit fsync and the backup copy below run without s.mu.
+	s.pruneMu.Lock()
+	defer s.pruneMu.Unlock()
 
-	plan, drop := s.planPruneLocked(classify, opts)
+	s.mu.Lock()
+	plan, _ := s.planPruneLocked(classify, opts)
+	s.mu.Unlock()
 	if !opts.Apply || len(plan.Remove) == 0 {
 		return plan, nil
 	}
@@ -117,26 +121,54 @@ func (s *NotificationHistoryStore) PruneByPredicate(classify PruneClassifier, op
 			return plan, err
 		}
 	}
-	backup, err := s.writePruneBackupLocked(opts.Now)
+	backup, err := s.writePruneBackup(opts.Now)
 	if err != nil {
 		return plan, err
 	}
 	plan.BackupPath = backup
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Re-plan under the lock and delete only rows that were both audited and
+	// still qualify, so a row read or removed meanwhile is never deleted blind.
+	_, drop := s.planPruneLocked(classify, opts)
+	audited := make(map[string]struct{}, len(plan.Remove))
+	for _, row := range plan.Remove {
+		audited[row.ID] = struct{}{}
+	}
+	for id := range drop {
+		if _, ok := audited[id]; !ok {
+			delete(drop, id)
+		}
+	}
 	previous := s.records
-	remaining := make([]*NotificationRecord, 0, len(previous)-len(drop))
+	remaining := make([]*NotificationRecord, 0, len(previous))
 	for _, r := range previous {
 		if _, gone := drop[r.ID]; !gone {
 			remaining = append(remaining, r)
 		}
+	}
+	if len(drop) == 0 {
+		return plan, nil
 	}
 	s.records = remaining
 	if err := s.saveToDisk(); err != nil {
 		s.records = previous
 		return plan, err
 	}
+	plan.Remove = filterPlanRows(plan.Remove, drop)
 	plan.Applied = true
 	return plan, nil
+}
+
+func filterPlanRows(rows []PrunePlanRow, keep map[string]struct{}) []PrunePlanRow {
+	out := rows[:0:0]
+	for _, row := range rows {
+		if _, ok := keep[row.ID]; ok {
+			out = append(out, row)
+		}
+	}
+	return out
 }
 
 func (s *NotificationHistoryStore) planPruneLocked(classify PruneClassifier, opts PruneOptions) (PrunePlan, map[string]struct{}) {
@@ -166,9 +198,10 @@ func (s *NotificationHistoryStore) planPruneLocked(classify PruneClassifier, opt
 	return plan, drop
 }
 
-// writePruneBackupLocked copies the on-disk store file; the copy is what
-// restores the pre-prune state byte for byte.
-func (s *NotificationHistoryStore) writePruneBackupLocked(now time.Time) (string, error) {
+// writePruneBackup copies the on-disk store file; the copy is what restores the
+// pre-prune state byte for byte. Saves replace the file atomically, so reading
+// it without s.mu yields a whole prior state.
+func (s *NotificationHistoryStore) writePruneBackup(now time.Time) (string, error) {
 	// #nosec G304 -- s.filePath is the internal config-dir store path, never RPC input.
 	data, err := os.ReadFile(s.filePath)
 	if err != nil {

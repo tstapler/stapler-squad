@@ -372,3 +372,45 @@ func TestPrune_ShouldReportGroupFormAndAliasFlagPerPlannedRow(t *testing.T) {
 	assert.True(t, plan.Remove[1].ByAlias)
 	assert.Equal(t, map[string]int{PruneReasonRoutine: 2}, plan.ReasonCounts())
 }
+
+// The audit line is written with no store lock held, so a stalled fsync cannot
+// block every other notification-store caller.
+func TestPrune_ShouldNotHoldTheStoreLockAcrossBeforeApply(t *testing.T) {
+	s, classify := storyStore(t)
+	lockFree := false
+	plan, err := s.PruneByPredicate(classify, PruneOptions{
+		Apply: true, Now: pruneClock,
+		BeforeApply: func(PrunePlan) error {
+			if lockFree = s.mu.TryLock(); lockFree {
+				s.mu.Unlock()
+			}
+			return nil
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, lockFree, "BeforeApply ran under the store lock")
+	assert.True(t, plan.Applied)
+}
+
+// A row that vanishes between the audited plan and the delete is not counted as
+// removed, and the rest are still deleted.
+func TestPrune_ShouldDeleteOnlyRowsStillQualifying_WhenTheStoreChangesDuringBeforeApply(t *testing.T) {
+	s, classify := storyStore(t)
+	plan, err := s.PruneByPredicate(classify, PruneOptions{
+		Apply: true, Now: pruneClock,
+		BeforeApply: func(PrunePlan) error {
+			s.mu.Lock()
+			for i, r := range s.records {
+				if r.ID == "h1-info" {
+					s.records = append(s.records[:i], s.records[i+1:]...)
+					break
+				}
+			}
+			s.mu.Unlock()
+			return nil
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"h1-warn", "h1-done"}, plan.IDs())
+	assert.ElementsMatch(t, []string{"h2-warn", "d1-warn", "v1-warn"}, storeIDs(s))
+}

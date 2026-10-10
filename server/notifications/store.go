@@ -127,6 +127,10 @@ type NotificationHistoryStore struct {
 	mu       sync.RWMutex
 	records  []*NotificationRecord
 
+	// pruneMu serializes PruneByPredicate calls so its audit and backup I/O can
+	// run without mu.
+	pruneMu sync.Mutex
+
 	// existenceChecker, when non-nil, is called at most once per orphanPruneInterval
 	// from enforceRetention to batch-fetch the set of currently-existing session IDs
 	// for orphan pruning. See SetSessionExistenceLookup and PruneOrphaned.
