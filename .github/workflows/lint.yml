@@ -118,7 +118,7 @@ jobs:
           setup_only: 'true'
 
       - name: buf breaking against origin/main
-        run: make proto-breaking
+        run: buf breaking proto --against '.git#branch=origin/main,subdir=proto'
 
   # Standalone — no codegen dependency, so it isn't blocked on lint-prepare.
   shell-lint:
