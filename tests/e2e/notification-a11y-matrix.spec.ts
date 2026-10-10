@@ -227,6 +227,8 @@ test.describe('notification a11y matrix', () => {
       await expect(tray.entry.or(tray.handle).first()).toBeVisible({ timeout: 20_000 });
       await tray.entry.or(tray.handle).first().locator('button').or(tray.handle).first().click();
       await tray.expectOpen();
+      // A 320x640 peek (27% of the height, TS-1) holds only the header and tabs; expand to reach the card.
+      if ((await tray.tray.getAttribute('data-sheet')) === 'peek') await tray.tray.getByTestId('tray-expand').click();
       await tray.dismissWhatChanged();
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       expect(overflow).toBeLessThanOrEqual(1);
