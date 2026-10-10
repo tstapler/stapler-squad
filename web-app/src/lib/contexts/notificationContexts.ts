@@ -22,9 +22,13 @@ export interface NotificationStateValue {
 
 /** Stable commands: identities never change, so command-only consumers never re-render on state. */
 export interface NotificationCommandsValue {
-  addNotification: (notification: Omit<NotificationData, "id" | "timestamp">) => void;
+  /**
+   * `id` is optional: pass the server's notification id so every tab names the same
+   * toast, which is what lets a bulk action in one tab drop exactly the same toasts in another.
+   */
+  addNotification: (notification: Omit<NotificationData, "id" | "timestamp"> & { id?: string }) => void;
   /** Add to history panel only — no toast, no sound. For informational events like task_complete. */
-  addToHistoryOnly: (notification: Omit<NotificationData, "id" | "timestamp">) => void;
+  addToHistoryOnly: (notification: Omit<NotificationData, "id" | "timestamp"> & { id?: string }) => void;
   removeNotification: (id: string) => void;
   /**
    * Remove an active toast whose metadata.approval_id matches the given approvalId.

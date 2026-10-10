@@ -24,6 +24,8 @@ interface Deps {
   movedRef: MutableRefObject<MovedBatch | null>;
   setMoved: (batch: MovedBatch | null) => void;
   announce: (message: string) => void;
+  /** Tells other open tabs which toasts left the deck (a "moved" message; history untouched). */
+  notifyOtherTabs?: (ids: string[]) => void;
 }
 
 export function createToastTrayCommands(deps: Deps) {
@@ -44,6 +46,7 @@ export function createToastTrayCommands(deps: Deps) {
       dispatch({ type: "remove", ids: new Set(ids) });
       setMoved({ toasts: [...toasts] });
       timers.register(MOVE_UNDO_TIMER_ID, "undo-window", readUndoWindowMs(), () => setMoved(null));
+      deps.notifyOtherTabs?.(ids);
       announce(`${toasts.length} moved to tray`);
       return ids;
     },

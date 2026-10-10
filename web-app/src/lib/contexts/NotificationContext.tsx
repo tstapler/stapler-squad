@@ -151,6 +151,8 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
         setMovedState(batch);
       },
       announce: (message) => announceRef.current(message),
+      notifyOtherTabs: (ids) =>
+        createNotificationSyncChannel().broadcast({ type: "NOTIFICATIONS_BULK_DISMISSED", kind: "moved", ids }),
     });
 
     const appendEphemeral = (notification: NotificationData, lifetimeMs: number, replaceKey?: string) => {
@@ -165,7 +167,7 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
       );
 
     const addNotification: NotificationCommandsValue["addNotification"] = (notification) => {
-      const next: NotificationData = { ...notification, id: newNotificationId(), timestamp: Date.now() };
+      const next: NotificationData = { ...notification, id: notification.id ?? newNotificationId(), timestamp: Date.now() };
       // Under the capped deck a non-pinned toast for the session already on screen
       // adds nothing; the history row is still recorded.
       const suppressed = trayV2Ref.current && !isPinned(next) && isSessionViewed(next.sessionId);
@@ -174,7 +176,7 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
     };
 
     const addToHistoryOnly: NotificationCommandsValue["addToHistoryOnly"] = (notification) =>
-      addToHistory({ ...notification, id: newNotificationId(), timestamp: Date.now() });
+      addToHistory({ ...notification, id: notification.id ?? newNotificationId(), timestamp: Date.now() });
 
     const markAsRead = (id: string | string[]) => {
       const ids = Array.isArray(id) ? id : [id];
@@ -327,6 +329,15 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
         setNotificationHistory((prev) =>
           prev.map((n) => (n.id === notificationId ? { ...n, isRead: true, isPendingDecision: false } : n))
         );
+      }
+      if (message.type === "NOTIFICATIONS_BULK_DISMISSED") {
+        const ids = new Set(message.ids);
+        ids.forEach((id) => timers.cancel(id));
+        dispatch({ type: "remove", ids });
+        // "moved" only leaves the deck; "dismissed" also drops the rows the other tab cleared.
+        if (message.kind === "dismissed") {
+          setNotificationHistory((prev) => prev.filter((n) => !ids.has(n.id)));
+        }
       }
       // NOTIFICATION_ACKNOWLEDGED is intentionally not handled here.
       // Cross-tab session acknowledgement is driven by the sessionAcknowledged

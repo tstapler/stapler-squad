@@ -134,6 +134,7 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
     if (HISTORY_ONLY_TYPES.has(event.notificationType)) {
       if (isDuplicate) return;
       addToHistoryOnly({
+        id: event.notificationId || undefined,
         sessionId: event.sessionId,
         // Empty, not "Unknown Session": a placeholder here would win the
         // NotificationPanel fallback chain over the event's real title for
@@ -160,7 +161,9 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
     const approvalId = event.metadata?.["approval_id"];
 
     // Build the notification data with all available fields
-    const notificationData: Omit<NotificationData, "id" | "timestamp"> = {
+    const notificationData: Omit<NotificationData, "id" | "timestamp"> & { id?: string } = {
+      // The server's id names the same toast in every open tab (cross-tab bulk sync).
+      id: event.notificationId || undefined,
       sessionId: event.sessionId,
       // See the comment on the history-only branch above.
       sessionName: event.sessionName || "",

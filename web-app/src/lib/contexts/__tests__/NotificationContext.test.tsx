@@ -917,4 +917,64 @@ describe("NotificationContext", () => {
       expect(result.current.notificationHistory[0].isPendingDecision).toBe(false);
     });
   });
+  describe("cross-tab bulk dismissal (Story 3.9)", () => {
+    const seed = (result: { current: ReturnType<typeof useNotifications> }) => {
+      act(() => {
+        result.current.addNotification({ ...makeNotification({ sessionId: "sa" }), id: "a" });
+        result.current.addNotification({ ...makeNotification({ sessionId: "sb" }), id: "b" });
+        result.current.addNotification({ ...makeNotification({ sessionId: "sc" }), id: "c" });
+      });
+    };
+
+    it("bulk_sync_should_apply_id_set_idempotently_and_ignore_late_arrivals_when_message_replayed", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+      seed(result);
+      const message = { type: "NOTIFICATIONS_BULK_DISMISSED", kind: "dismissed", ids: ["a", "b"] };
+
+      act(() => capturedSubscribeHandler?.(message));
+      expect(result.current.notifications.map((n) => n.id)).toEqual(["c"]);
+
+      // A toast that arrived after the click is unaffected, and a replay changes nothing.
+      act(() => {
+        result.current.addNotification({ ...makeNotification({ sessionId: "sd" }), id: "d" });
+      });
+      act(() => capturedSubscribeHandler?.(message));
+      expect(result.current.notifications.map((n) => n.id)).toEqual(["c", "d"]);
+    });
+
+    it("a moved message drops the toast but leaves its history row unread", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+      seed(result);
+
+      act(() => capturedSubscribeHandler?.({ type: "NOTIFICATIONS_BULK_DISMISSED", kind: "moved", ids: ["a"] }));
+
+      expect(result.current.notifications.map((n) => n.id)).toEqual(["b", "c"]);
+      const row = result.current.notificationHistory.find((n) => n.id === "a");
+      expect(row).toBeDefined();
+      expect(row?.isRead).toBe(false);
+    });
+
+    it("a dismissed message also drops the cleared history rows", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+      seed(result);
+
+      act(() => capturedSubscribeHandler?.({ type: "NOTIFICATIONS_BULK_DISMISSED", kind: "dismissed", ids: ["a"] }));
+      expect(result.current.notificationHistory.map((n) => n.id).sort()).toEqual(["b", "c"]);
+    });
+
+    it("moveAllToTray broadcasts the moved ids once", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+      seed(result);
+
+      act(() => {
+        result.current.moveAllToTray();
+      });
+
+      expect(mockBroadcast).toHaveBeenCalledWith({
+        type: "NOTIFICATIONS_BULK_DISMISSED",
+        kind: "moved",
+        ids: ["a", "b", "c"],
+      });
+    });
+  });
 });
