@@ -82,3 +82,17 @@ func TestSsqNotify_ShouldMapNamesToProtoNumbers_WhenDryRunPrintsType(t *testing.
 		})
 	}
 }
+
+// The script marks its requests with the schema version so SendNotification can
+// tell it from a stale installed copy, and a caller cannot override the marker.
+func TestSsqNotify_ShouldStampSchemaVersion_WhenDryRunPrintsMetadata(t *testing.T) {
+	t.Parallel()
+	body := ssqNotifyDryRun(t, "info", "-d", "ssq_notify_schema=1", "-d", "k=v")
+	md, _ := body["metadata"].(map[string]any)
+	if md["ssq_notify_schema"] != "2" {
+		t.Errorf("ssq_notify_schema = %v, want \"2\"", md["ssq_notify_schema"])
+	}
+	if md["k"] != "v" {
+		t.Errorf("caller metadata lost: %v", md)
+	}
+}

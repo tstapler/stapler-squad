@@ -1026,6 +1026,7 @@ func newGatedSessionService(storage session.InstanceStore) *SessionService {
 	eventBus.SetPublishFilter(gate.PublishFilter())
 	svc := NewSessionService(storage, eventBus)
 	svc.deliveryGate = gate
+	svc.notificationSvc.SetDeliveryGate(gate)
 	return svc
 }
 

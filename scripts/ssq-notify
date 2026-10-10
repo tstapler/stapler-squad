@@ -176,6 +176,11 @@ if [[ ${#METADATA[@]} -gt 0 ]]; then
     done
 fi
 
+# Schema marker: lets the server tell this script (proto type numbers) from a stale
+# installed copy whose numbers collide with the proto enum. Set last so a caller
+# cannot override it.
+metadata_json=$(jq --null-input --argjson base "$metadata_json" '$base + {"ssq_notify_schema": "2"}')
+
 # Convert priority and type to enum values
 priority_enum=$(priority_to_enum "$PRIORITY")
 type_enum=$(type_to_enum "$TYPE")

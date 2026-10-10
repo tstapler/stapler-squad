@@ -9,6 +9,8 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
@@ -33,6 +35,38 @@ type NotificationService struct {
 	eventBus                *events.EventBus
 	reviewQueuePoller       *session.ReviewQueuePoller
 	storage                 session.InstanceStore
+	deliveryGate            *deliverygate.Gate // optional: counters for legacy checks and unversioned requests
+}
+
+// SetDeliveryGate wires the delivery gate used for legacy-check and
+// unversioned-request counters. It never changes delivery decisions here: the
+// bus publish filter makes those.
+func (ns *NotificationService) SetDeliveryGate(g *deliverygate.Gate) {
+	ns.deliveryGate = g
+}
+
+// requestMetadata returns the metadata to publish: a copy of the request's with
+// any client-supplied untrusted-type stamp removed (only the server may set it),
+// and the stamp added when the request did not come from a versioned ssq-notify
+// (an old script's type numbers collide with the proto enum, ADR-003).
+func (ns *NotificationService) requestMetadata(in map[string]string) map[string]string {
+	_, clientStamped := in[pkgevents.MetadataKeyUntrustedType]
+	versioned := in[pkgevents.MetadataKeySSQNotifySchema] != ""
+	if versioned && !clientStamped {
+		return in
+	}
+	out := make(map[string]string, len(in)+1)
+	for k, v := range in {
+		out[k] = v
+	}
+	delete(out, pkgevents.MetadataKeyUntrustedType)
+	if !versioned {
+		out[pkgevents.MetadataKeyUntrustedType] = "true"
+		if ns.deliveryGate != nil {
+			ns.deliveryGate.CountUnversionedRequest()
+		}
+	}
+	return out
 }
 
 // NewNotificationService creates a NotificationService with the given dependencies.
@@ -91,6 +125,10 @@ func (ns *NotificationService) SendNotification(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("title is required"))
 	}
 
+	// Count and stamp unversioned requests for every request, including ones the
+	// legacy checks below drop.
+	metadata := ns.requestMetadata(req.Msg.Metadata)
+
 	// Use the session ID as the display name. LoadInstances() cannot be used here because
 	// it calls FromInstanceData() which calls Start() on every non-paused session --
 	// a catastrophic side-effect that restarts all sessions on each notification.
@@ -141,6 +179,10 @@ func (ns *NotificationService) SendNotification(
 	// (task_failed, sent at high priority) must still surface regardless of
 	// Hidden, since nothing else watches a stuck-in-error hidden session.
 	if hidden && req.Msg.Priority == sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW {
+		if ns.deliveryGate != nil {
+			hint, _ := deliverygate.ParseClassHint(metadata)
+			ns.deliveryGate.CountLegacySuppressed("send_notification_low", sessionv1.NotificationType(req.Msg.NotificationType), hint)
+		}
 		return connect.NewResponse(&sessionv1.SendNotificationResponse{
 			Success: true,
 			Message: "Notification suppressed for hidden session",
@@ -164,7 +206,7 @@ func (ns *NotificationService) SendNotification(
 		int32(req.Msg.Priority),
 		req.Msg.Title,
 		req.Msg.Message,
-		req.Msg.Metadata,
+		metadata,
 	)
 	ns.eventBus.Publish(event)
 
