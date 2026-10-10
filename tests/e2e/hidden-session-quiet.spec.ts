@@ -91,6 +91,8 @@ test.describe('hidden session stays quiet', () => {
     await tray.handle.click();
     await tray.expectOpen();
     await tray.dismissWhatChanged();
+    // The shared history is long and virtualized; the stamp narrows it to this test's rows.
+    await tray.tray.getByRole('searchbox', { name: 'Search notifications' }).fill(String(stamp));
     await expect(tray.tray.getByText(controlTitle).first()).toBeVisible();
     await expect(tray.tray.getByText(hiddenTitle)).toHaveCount(0);
 
