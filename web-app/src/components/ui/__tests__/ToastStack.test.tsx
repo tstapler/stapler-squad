@@ -7,6 +7,7 @@ import { DeckViewportContext } from "@/lib/contexts/deckViewportContext";
 import { markSessionViewed } from "@/lib/utils/viewedSessions";
 import { setStackTopOffset } from "@/lib/utils/toastDock";
 import { registerTerminalCursorSource } from "@/lib/terminal/cursorRect";
+import { GESTURE_IGNORE_SELECTOR } from "@/lib/hooks/useTerminalGestures";
 import { useSessionNotifications } from "@/lib/hooks/useSessionNotifications";
 import { NotificationType, NotificationPriority } from "@/gen/session/v1/types_pb";
 import type { NotificationData } from "@/lib/types/notification";
@@ -132,6 +133,21 @@ describe("ToastStack cap and chip (Story 3.3)", () => {
     expect(notifications.isPanelOpen).toBe(false);
     fireEvent.click(chip);
     expect(notifications.isPanelOpen).toBe(true);
+  });
+
+  it("toast_stack_should_opt_deck_and_legacy_list_out_of_terminal_gestures_when_rendered", () => {
+    const { unmount } = mount();
+    addMany(2);
+    const deck = screen.getByTestId("toast-stack");
+    expect(deck).toHaveAttribute("data-gesture-ignore");
+    expect(screen.getAllByTestId("toast")[0].closest(GESTURE_IGNORE_SELECTOR)).toBe(deck);
+    unmount();
+
+    mockFlags["notification_tray_v2"] = false;
+    mount();
+    addMany(2);
+    const legacyToast = screen.getAllByTestId("toast")[0];
+    expect(legacyToast.closest(GESTURE_IGNORE_SELECTOR)).not.toBeNull();
   });
 
   it("toast_stack_should_cap_1_portrait_1_landscape_0_keyboard_when_viewport_variant_changes", () => {

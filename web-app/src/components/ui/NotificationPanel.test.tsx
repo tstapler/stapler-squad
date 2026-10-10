@@ -8,6 +8,7 @@
  *   - "Clear history" requires confirmation before it runs.
  */
 
+import { GESTURE_IGNORE_SELECTOR } from "@/lib/hooks/useTerminalGestures";
 import React from "react";
 import { render, screen, fireEvent, act, within, waitFor } from "@testing-library/react";
 import { NotificationPanel } from "./NotificationPanel";
@@ -289,6 +290,14 @@ describe("tray (notification_tray_v2)", () => {
   });
 
   describe("non-modal layout (Story 4.1)", () => {
+    it("tray_should_opt_out_of_terminal_gestures_when_open", () => {
+      mockHistory = [info("a")];
+      renderTray();
+      const tray = screen.getByTestId("notification-tray");
+      expect(tray).toHaveAttribute("data-gesture-ignore");
+      expect(screen.getByTestId("tray-pin").closest(GESTURE_IGNORE_SELECTOR)).toBe(tray);
+    });
+
     it("tray_should_have_no_aria_modal_backdrop_or_inert_when_desktop_open", () => {
       mockHistory = [info("a")];
       const { container } = renderTray();

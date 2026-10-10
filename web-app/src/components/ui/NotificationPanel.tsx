@@ -634,6 +634,7 @@ export function NotificationPanel() {
         id={TRAY_ID}
         className={panelClass}
         data-testid="notification-tray"
+        data-gesture-ignore
         data-notification-tray={v2 ? "v2" : undefined}
         data-variant={v2 ? variant : "legacy"}
         data-state={isPanelOpen ? "open" : "closed"}

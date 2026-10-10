@@ -318,6 +318,7 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
       className={`${deckPlacement[placement]} ${isPanelOpen ? (onPhone ? deckBehindTray : deckBesideTray) : ""}`}
       data-testid="toast-stack"
       data-placement={placement}
+      data-gesture-ignore
     >
       {/* Desktop: one header slot, holding either the bulk control or its undo. */}
       {!onPhone && (undo ?? (showMoveAll ? <div className={deckHeader}>{moveAll}</div> : null))}
@@ -362,6 +363,7 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
 function LegacyList({ toasts, timers, onRemove }: Omit<DeckProps, "onOpenTray">) {
   return (
     <div
+      data-gesture-ignore
       style={{
         position: "fixed",
         bottom: 0,
