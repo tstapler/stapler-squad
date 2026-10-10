@@ -301,7 +301,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			// in-flight event handler that calls GetNotificationStore() sees a
 			// non-nil value even if the subscriber goroutine races ahead.
 			deps.SessionService.SetNotificationStore(notifStore)
-			notifications.StartSubscriber(serverCtx, deps.EventBus, notifStore)
+			subscriberDone := notifications.StartSubscriber(serverCtx, deps.EventBus, notifStore)
+			// Joined by Shutdown: the subscriber's final flush on ctx cancel writes
+			// notifications.json, which must not outlive Shutdown() (it raced a
+			// caller's removal of the config dir).
+			srv.backgroundTasksWG.Go(func() { <-subscriberDone })
 			log.Info("NotificationHistoryStore initialized", "path", notifStorePath)
 
 			// Periodically demote URGENT notifications whose urgency has aged out

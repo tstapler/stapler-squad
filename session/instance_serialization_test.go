@@ -204,3 +204,19 @@ func TestFromInstanceData_should_NotAutoRestoreAndNormalizeOnlyActiveCreating_Wh
 		})
 	}
 }
+
+// A creation pipeline can persist progress (Storage.UpdateInstance ->
+// ToInstanceData) just after DeleteSession/CancelSessionCreation stopped the
+// instance's actor; the actor-routed snapshot build never runs then, and
+// ToInstanceData used to dereference the resulting nil snapshot.
+func TestToInstanceData_should_ReturnCurrentFields_When_ActorAlreadyStopped(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "actor-stopped", Path: "/path/to/repo", Status: Creating, Program: "claude"}
+	li := NewLiveInstance(inst)
+	li.Stop()
+
+	data := inst.ToInstanceData()
+	if data.Title != "actor-stopped" || data.Path != "/path/to/repo" {
+		t.Fatalf("ToInstanceData() after actor stop = %+v, want the instance's current fields", data)
+	}
+}

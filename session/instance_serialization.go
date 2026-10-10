@@ -70,16 +70,30 @@ func worktreeMissingLevel(alreadyLogged bool) slog.Level {
 // LaunchCommand is not in the snapshot (set once during Start) and is read directly.
 // gitManager and claudeSession sub-objects have their own synchronisation.
 func (i *Instance) ToInstanceData() InstanceData {
-	var snap *InstanceSnapshot
-	_ = i.sendSyncErr(func(s *instanceState) error {
+	// Handed back over a buffered channel, not a captured variable: sendSyncErr
+	// can return early on actor-context cancellation while the command is still
+	// executing on the actor goroutine.
+	snapCh := make(chan *InstanceSnapshot, 1)
+	err := i.sendSyncErr(func(s *instanceState) error {
 		// i.mu guards buildSnapshot here too: legacy setters (MarkViewed & co.)
 		// mutate fields directly under i.mu.Lock() from outside the actor — see
 		// runActor's doc comment in actor.go.
 		s.inst.mu.Lock()
-		snap = buildSnapshot(s.inst)
+		snapCh <- buildSnapshot(s.inst)
 		s.inst.mu.Unlock()
 		return nil
 	})
+	var snap *InstanceSnapshot
+	if err == nil {
+		snap = <-snapCh
+	} else {
+		// The actor was stopped (session deleted/cancelled) before it ran the
+		// command, so the closure never ran. Callers such as the creation
+		// pipeline's setPhase can still legitimately persist after that.
+		i.mu.Lock()
+		snap = buildSnapshot(i)
+		i.mu.Unlock()
+	}
 
 	data := InstanceData{
 		Title:               snap.Title,
