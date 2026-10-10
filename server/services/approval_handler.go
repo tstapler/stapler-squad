@@ -17,6 +17,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
@@ -722,6 +723,10 @@ func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approv
 		"approval_id": approval.ID,
 		"tool_name":   approval.ToolName,
 		"cwd":         approval.Cwd,
+	}
+
+	if approval.RiskLevel != "" {
+		metadata[pkgevents.MetadataKeyRiskLevel] = approval.RiskLevel
 	}
 
 	// Extract tool-specific display fields

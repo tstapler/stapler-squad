@@ -14,6 +14,9 @@ const (
 	// MetadataKeyAutoRemediating marks a WARNING whose automation is already
 	// acting; it is informational, not a pending decision.
 	MetadataKeyAutoRemediating = "auto_remediating"
+	// MetadataKeyRiskLevel carries an approval's classifier risk level (low,
+	// medium, high, critical) so a phone approval confirms the risky ones.
+	MetadataKeyRiskLevel = "risk_level"
 	// MetadataKeyDeliveryClass is an optional producer stamp (DeliveryClassFailure
 	// or DeliveryClassRoutine) the hidden-session delivery gate honors for hidden
 	// sessions only: it promotes a hard-stop WARNING or demotes per-tool noise.

@@ -9,6 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -689,7 +690,7 @@ func (a *AutonomousOrchestrationService) notifyAutonomousRespawnAttemptFailed(it
 		derivePriority(false, false), // urgent, important — no operator action needed yet, will retry automatically
 		"Automated retry failed",
 		fmt.Sprintf("%s — an automated turn-budget respawn attempt failed (%v). It will retry automatically per the standard backoff schedule.", itemTitle, respawnErr),
-		nil,
+		map[string]string{"item_id": itemID, pkgevents.MetadataKeyAutoRemediating: "true"},
 	))
 }
 
