@@ -213,6 +213,7 @@ func (s *SessionService) UpdateSession(
 	} else if updated {
 		updatedFields = append(updatedFields, "tags")
 		sideEffectChanged = true
+		s.indexSessionForDelivery(instance) // HiddenKind derives from tags
 	}
 
 	// Handle program update. Empty string means "System default" — resolve to the

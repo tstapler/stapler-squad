@@ -1,7 +1,9 @@
 package deliverygate
 
 import (
+	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -20,6 +22,9 @@ type Gate struct {
 	logger   *slog.Logger
 	limiter  *rateLimitedLogger
 	now      Clock
+
+	tickerMu sync.Mutex
+	ticker   *time.Ticker
 }
 
 // Option configures NewGate.
@@ -98,8 +103,25 @@ func (g *Gate) Resolver() *Resolver { return g.resolver }
 // Seeded reports whether the startup seed ran.
 func (g *Gate) Seeded() bool { return g.index.Seeded() }
 
-// Stop stops the flag ticker and joins background work. Idempotent.
+// StartFlagReloader re-reads the flag every interval until ctx ends or Stop is
+// called, so a config.json edit takes effect without a restart.
+func (g *Gate) StartFlagReloader(ctx context.Context, interval time.Duration) {
+	g.tickerMu.Lock()
+	defer g.tickerMu.Unlock()
+	if g.ticker != nil {
+		return
+	}
+	g.ticker = time.NewTicker(interval)
+	g.flags.Start(ctx, g.ticker.C)
+}
+
+// Stop stops the flag reloader and joins background work. Idempotent.
 func (g *Gate) Stop() {
+	g.tickerMu.Lock()
+	if g.ticker != nil {
+		g.ticker.Stop()
+	}
+	g.tickerMu.Unlock()
 	g.flags.Stop()
 	g.resolver.Wait()
 }
@@ -125,8 +147,9 @@ func (g *Gate) UpsertInstance(inst *session.Instance) {
 	g.index.Upsert(EntryFromSnapshot(inst.Snapshot()))
 }
 
-// RemoveInstance tombstones a deleted session (hidden sessions stay hidden for 24h).
-func (g *Gate) RemoveInstance(uuid string) { g.index.Remove(uuid) }
+// RemoveSession tombstones a deleted session given any identity key (hidden
+// sessions stay hidden for 24h).
+func (g *Gate) RemoveSession(key string) { g.index.Remove(key) }
 
 // PublishFilter is installed on the EventBus at construction. It applies to
 // EventNotification only, takes no caller-visible lock, and fails open on a

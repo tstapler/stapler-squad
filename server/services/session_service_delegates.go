@@ -209,6 +209,10 @@ func (s *SessionService) RenameSession(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save renamed instance: %w", err))
 	}
 
+	// Keep the delivery index current (the old title stays an alias for hooks
+	// already running under it).
+	s.indexSessionForDelivery(instance)
+
 	// Publish SessionUpdated event
 	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"title"}))
 
@@ -530,6 +534,7 @@ func (s *SessionService) ForkSession(
 	if err := s.storage.AddInstance(newInst); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("persist forked session: %w", err))
 	}
+	s.indexSessionForDelivery(newInst)
 
 	if s.reviewQueuePoller != nil {
 		updatedInstances := append(s.reviewQueuePoller.GetInstances(), newInst)

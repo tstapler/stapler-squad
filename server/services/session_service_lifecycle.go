@@ -589,6 +589,7 @@ func (s *SessionService) RetrySessionCreation(
 // Call this before deleting from storage to close the race window where LoadInstances()
 // could re-add the session via external discovery.
 func (s *SessionService) removeFromAllPollers(id string) {
+	s.unindexSessionForDelivery(id)
 	if s.reviewQueueSvc != nil {
 		s.reviewQueueSvc.GetQueue().Remove(id)
 	}

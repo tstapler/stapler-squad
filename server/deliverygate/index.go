@@ -193,13 +193,14 @@ func (i *VisibilityIndex) aliasRenamedKeys(s *indexState, prev, next *Entry) {
 	}
 }
 
-// Remove deletes a session; a hidden one leaves tombstones on all its keys.
-func (i *VisibilityIndex) Remove(uuid string) {
+// Remove deletes a session by any of its identity keys (UUID, title, tmux
+// name); a hidden one leaves tombstones on all its keys.
+func (i *VisibilityIndex) Remove(key string) {
 	i.writeMu.Lock()
 	defer i.writeMu.Unlock()
 	cur := i.state.Load()
-	prev, ok := cur.keys[uuid]
-	if !ok || uuid == "" {
+	prev, ok := cur.keys[key]
+	if !ok || key == "" {
 		return
 	}
 	s := cur.clone()

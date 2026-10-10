@@ -21,6 +21,7 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -87,6 +88,10 @@ type SessionService struct {
 	// guardedSteer holds the per-session nudge guard and its test seams; see
 	// session_service_guarded_steer.go. The zero value is production-ready.
 	guardedSteer guardedSteerState
+
+	// deliveryGate is the hidden-session delivery gate installed as the event bus
+	// publish filter at construction (nil when built through NewSessionService).
+	deliveryGate *deliverygate.Gate
 
 	// tapRegistry backs SetCaptureTap/GetCaptureTap. nil means the process-wide
 	// streamhub.DefaultTapRegistry, which is what the terminal streams use.
@@ -1009,8 +1014,25 @@ func NewSessionServiceFromConfig() (*SessionService, error) {
 		return nil, fmt.Errorf("failed to initialize storage with EntRepository: %w", err)
 	}
 
+	return newGatedSessionService(storage), nil
+}
+
+// newGatedSessionService builds the production SessionService: the delivery
+// gate is created with the bus and installed as its publish filter before any
+// producer can publish, so there is no un-gated window and no later bind step.
+func newGatedSessionService(storage session.InstanceStore) *SessionService {
+	gate := deliverygate.NewGate(deliverygate.WithInstanceLister(storage))
 	eventBus := events.NewEventBus(100)
-	return NewSessionService(storage, eventBus), nil
+	eventBus.SetPublishFilter(gate.PublishFilter())
+	svc := NewSessionService(storage, eventBus)
+	svc.deliveryGate = gate
+	return svc
+}
+
+// DeliveryGate returns the delivery gate, or nil when the service was built
+// without one (unit tests that call NewSessionService directly).
+func (s *SessionService) DeliveryGate() *deliverygate.Gate {
+	return s.deliveryGate
 }
 
 // NewSessionServiceWithEntClient creates a SessionService from a pre-existing *ent.Client.
@@ -1023,8 +1045,7 @@ func NewSessionServiceWithEntClient(entClient *ent.Client) (*SessionService, err
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize storage with provided ent client: %w", err)
 	}
-	eventBus := events.NewEventBus(100)
-	return NewSessionService(storage, eventBus), nil
+	return newGatedSessionService(storage), nil
 }
 
 // GetStorage returns the concrete *session.Storage for components that haven't migrated to InstanceStore yet.
