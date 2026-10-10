@@ -12,6 +12,7 @@ import { useAnnounce } from "@/lib/hooks/useAnnounce";
 import { useNotificationConnectivity } from "@/lib/hooks/useNotificationConnectivity";
 import { useStableRowOrder } from "@/lib/hooks/useStableRowOrder";
 import { useCoarsePointer } from "@/lib/hooks/useCoarsePointer";
+import { useBackgroundSessions } from "@/lib/hooks/useBackgroundSessions";
 import { useTrayFocus } from "@/lib/hooks/useTrayFocus";
 import { useTrayBulkActions } from "@/lib/hooks/useTrayBulkActions";
 import { useTrayDismissal } from "@/lib/hooks/useTrayDismissal";
@@ -22,8 +23,12 @@ import {
   notificationTypeFilter,
   computeScopedMarkReadIds,
 } from "@/lib/utils/notificationMapping";
+import { selectBackgroundRows, type BackgroundRow } from "@/lib/utils/backgroundActivity";
+import { knownHiddenSessions } from "@/lib/utils/hiddenSessionRegistry";
 import { readTrayPinned, readWhatChangedSeen, writeTrayPinned, writeWhatChangedSeen } from "@/lib/utils/deckSettings";
 import { NotificationItem, AutoHandledSection } from "./NotificationItem";
+import { BackgroundActivity } from "./BackgroundActivity";
+import { segment, segments } from "./BackgroundActivity.css";
 import { TrayConfirm } from "./TrayConfirm";
 import { TrayHandle } from "./TrayHandle";
 import { TrayList, type ListRow } from "./TrayList";
@@ -76,6 +81,8 @@ const TYPE_FILTER_LABELS: Record<TypeFilter, string> = {
   task_complete: "Task",
   info: "Info",
 };
+
+type TraySegment = "notifications" | "background";
 
 const TRAY_ID = "notification-tray";
 const HEADING_ID = "notification-tray-heading";
@@ -140,6 +147,7 @@ export function NotificationPanel() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [whatChangedOpen, setWhatChangedOpen] = useState(() => !readWhatChangedSeen());
   const [pinned, setPinned] = useState(false);
+  const [traySegment, setTraySegment] = useState<TraySegment>("notifications");
 
   const { resolvedApprovals, pendingApprovals, blockedApprovals, failedApprovals, resolveApproval } = useApprovalResolution({
     notificationHistory,
@@ -280,6 +288,28 @@ export function NotificationPanel() {
 
   const unreadCount = getUnreadCount();
 
+  // Background activity (Story 5.4): polled only while its segment is showing; the segment
+  // badge is the same join over history, so it adds nothing to the bell count.
+  const backgroundVisible = v2 && isPanelOpen && traySegment === "background";
+  const background = useBackgroundSessions(backgroundVisible && !isOffline);
+  const backgroundView = useMemo(
+    () =>
+      selectBackgroundRows(
+        notificationHistory,
+        background.sessions,
+        background.lastUpdatedAt === null ? knownHiddenSessions() : background.departed,
+      ),
+    [notificationHistory, background.sessions, background.departed, background.lastUpdatedAt],
+  );
+  const announcedBackgroundLoad = useRef(false);
+  useEffect(() => {
+    if (backgroundVisible && background.loading && !announcedBackgroundLoad.current) {
+      announcedBackgroundLoad.current = true;
+      announce("Loading background activity", "polite", "background-loading");
+    }
+    if (!background.loading) announcedBackgroundLoad.current = false;
+  }, [backgroundVisible, background.loading, announce]);
+
   const { rows: flatRows, needsAttention, setSize } = useMemo(
     () => flattenGroups(filteredNotifications, collapsed),
     [filteredNotifications, collapsed],
@@ -327,6 +357,12 @@ export function NotificationPanel() {
       auditLog.logNotificationViewed(primaryId, sessionId);
       onView();
     }
+  };
+
+  const openBackgroundRow = (row: BackgroundRow) => {
+    markAsRead(row.recordIds);
+    auditLog.logNotificationSessionViewed(row.primaryRecordId, row.sessionId);
+    close();
   };
 
   const toggleGroup = (key: string) =>
@@ -763,20 +799,70 @@ export function NotificationPanel() {
         )}
         {!v2 && filterBlock}
 
+        {v2 && (
+          <div className={segments} role="tablist" aria-label="Tray sections" data-testid="tray-segments">
+            {(["notifications", "background"] as const).map((id) => {
+              const selected = traySegment === id;
+              const count = id === "background" ? backgroundView.rows.length : 0;
+              return (
+                // analytics-exempt
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  id={`tray-tab-${id}`}
+                  aria-selected={selected}
+                  aria-controls="tray-segment-panel"
+                  tabIndex={selected ? 0 : -1}
+                  className={segment}
+                  data-testid={`tray-tab-${id}`}
+                  onClick={() => setTraySegment(id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+                      e.preventDefault();
+                      const next = id === "notifications" ? "background" : "notifications";
+                      setTraySegment(next);
+                      document.getElementById(`tray-tab-${next}`)?.focus();
+                    }
+                  }}
+                >
+                  {id === "notifications" ? "Notifications" : count > 0 ? `Background (${count})` : "Background"}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {/* Notification List */}
         <div
           ref={scrollRef}
           className={content}
           data-testid="tray-scroll"
+          id={v2 ? "tray-segment-panel" : undefined}
+          role={v2 ? "tabpanel" : undefined}
+          aria-labelledby={v2 ? `tray-tab-${traySegment}` : undefined}
           onScroll={(e) => setScrolled((e.currentTarget as HTMLDivElement).scrollTop > 0)}
         >
           {v2 && (
-            <div ref={headRef} data-testid="tray-scroll-head">
+            <div ref={headRef} data-testid="tray-scroll-head" hidden={traySegment === "background"}>
               {cardsBlock}
               {filterBlock}
             </div>
           )}
-          {renderBody()}
+          {v2 && traySegment === "background" ? (
+            <BackgroundActivity
+              view={backgroundView}
+              hasHiddenSessions={background.sessions.length > 0 || background.departed.length > 0}
+              loading={background.loading}
+              failed={background.failed}
+              offline={isOffline}
+              lastUpdatedAt={background.lastUpdatedAt}
+              onRefresh={background.refresh}
+              onOpenRow={openBackgroundRow}
+            />
+          ) : (
+            renderBody()
+          )}
         </div>
 
         {/* Auto-handled section — collapsible, always below main list */}

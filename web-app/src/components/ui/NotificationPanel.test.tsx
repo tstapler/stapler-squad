@@ -33,6 +33,19 @@ jest.mock("@tanstack/react-virtual", () => ({
   }),
 }));
 
+const mockUseBackgroundSessions = jest.fn();
+jest.mock("@/lib/hooks/useBackgroundSessions", () => ({
+  useBackgroundSessions: (enabled: boolean) =>
+    mockUseBackgroundSessions(enabled) ?? {
+      sessions: [],
+      departed: [],
+      loading: false,
+      failed: false,
+      lastUpdatedAt: null,
+      refresh: () => {},
+    },
+}));
+
 let mockConnectivity = { state: "connected", isOffline: false };
 jest.mock("@/lib/hooks/useNotificationConnectivity", () => ({
   useNotificationConnectivity: () => mockConnectivity,
@@ -798,5 +811,97 @@ describe("tray (notification_tray_v2)", () => {
       fireEvent.click(screen.getByTestId("tray-menu-what-changed"));
       expect(screen.getByTestId("tray-what-changed")).toBeInTheDocument();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Background activity segment (Story 5.4)
+// ---------------------------------------------------------------------------
+
+describe("tray Background segment (Story 5.4)", () => {
+  const refresh = jest.fn();
+  const hiddenState = (over: Record<string, unknown> = {}) => ({
+    sessions: [{ id: "review:h1", title: "review:h1", state: "running", updatedAtMs: Date.now() }],
+    departed: [],
+    loading: false,
+    failed: false,
+    lastUpdatedAt: Date.now(),
+    refresh,
+    ...over,
+  });
+
+  beforeEach(() => {
+    mockFlags.notification_tray_v2 = true;
+    mockIsPanelOpen = true;
+    mockConnectivity = { state: "connected", isOffline: false };
+    mockMarkAsRead.mockClear();
+    mockTogglePanel.mockClear();
+    mockUseBackgroundSessions.mockReset();
+    mockUseBackgroundSessions.mockReturnValue(hiddenState());
+    mockHistory = [
+      makeNotification({ id: "f1", sessionId: "review:h1", sessionName: "review:h1", notificationType: "error", message: "boom" }),
+      makeNotification({ id: "v1", sessionId: "vis", sessionName: "vis", notificationType: "info" }),
+    ];
+  });
+  afterEach(() => {
+    mockFlags.notification_tray_v2 = false;
+  });
+
+  it("segment_should_not_poll_while_collapsed_and_poll_when_the_background_tab_is_selected", () => {
+    renderTray();
+    expect(mockUseBackgroundSessions).toHaveBeenLastCalledWith(false);
+    fireEvent.click(screen.getByTestId("tray-tab-background"));
+    expect(mockUseBackgroundSessions).toHaveBeenLastCalledWith(true);
+    fireEvent.click(screen.getByTestId("tray-tab-notifications"));
+    expect(mockUseBackgroundSessions).toHaveBeenLastCalledWith(false);
+  });
+
+  it("does_not_poll_while_the_tray_is_closed_or_offline", () => {
+    mockIsPanelOpen = false;
+    const { rerender } = renderTray();
+    fireEvent.click(screen.getByTestId("tray-tab-background"));
+    expect(mockUseBackgroundSessions).toHaveBeenLastCalledWith(false);
+    mockIsPanelOpen = true;
+    mockConnectivity = { state: "offline", isOffline: true };
+    rerender(
+      <DeckViewportContext.Provider value={{ isInnerScreen: true, isVirtualKeyboardOpen: false }}>
+        <NotificationPanel />
+      </DeckViewportContext.Provider>,
+    );
+    expect(mockUseBackgroundSessions).toHaveBeenLastCalledWith(false);
+  });
+
+  it("background_badge_should_count_only_failure_and_needs_human_and_not_change_bell_count", () => {
+    renderTray();
+    expect(screen.getByTestId("tray-tab-background")).toHaveTextContent("Background (1)");
+    // bell/header unread badge is the plain unread total of history, unchanged by the join
+    expect(screen.getByRole("heading", { name: /Notifications/ })).toHaveTextContent("2");
+    fireEvent.click(screen.getByTestId("tray-tab-background"));
+    expect(screen.getAllByTestId("background-row")).toHaveLength(1);
+    expect(screen.getByRole("heading", { name: /Notifications/ })).toHaveTextContent("2");
+  });
+
+  it("opening_a_row_should_mark_its_records_read_and_close_the_tray", () => {
+    renderTray();
+    fireEvent.click(screen.getByTestId("tray-tab-background"));
+    fireEvent.click(screen.getByTestId("notification-view-output"));
+    expect(mockMarkAsRead).toHaveBeenCalledWith(["f1"]);
+    expect(mockTogglePanel).toHaveBeenCalledTimes(1);
+  });
+
+  it("a_deleted_hidden_session_row_stays_until_read", () => {
+    mockUseBackgroundSessions.mockReturnValue(
+      hiddenState({ sessions: [], departed: [{ id: "review:h1", title: "review:h1" }] }),
+    );
+    renderTray();
+    fireEvent.click(screen.getByTestId("tray-tab-background"));
+    expect(screen.getByTestId("background-row")).toHaveTextContent("Session no longer available");
+  });
+
+  it("legacy_panel_has_no_segments", () => {
+    mockFlags.notification_tray_v2 = false;
+    render(<NotificationPanel />);
+    expect(screen.queryByTestId("tray-segments")).toBeNull();
+    expect(mockUseBackgroundSessions).toHaveBeenLastCalledWith(false);
   });
 });

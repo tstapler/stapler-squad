@@ -133,7 +133,7 @@ export function selectBackgroundRows(
   let running = 0;
   for (const s of hiddenSessions) {
     if (s.state === "running") running += 1;
-    else if (s.state === "stopped" && s.updatedAtMs >= dayStart && !failedToday.has(byKey.get(s.id)!)) {
+    else if (s.state === "stopped" && s.updatedAtMs >= dayStart && !failedToday.has(byKey.get(s.id) as Candidate)) {
       completedOkToday += 1;
     }
   }
