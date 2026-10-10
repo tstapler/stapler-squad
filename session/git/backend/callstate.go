@@ -8,6 +8,8 @@ import (
 // CallState records, for one Backend call, whether any step already wrote repository state.
 // It is the call-level "Wrote" flag of plan Story 1.1.3: the OR over every lock scope and
 // worktree write the call performed, so the Router never replays a call that half-applied.
+// Only the carrier exists today: no backend marks it yet (the gogit lock layer does, Story
+// 2.3.1). It is monotonic: once marked it stays marked.
 type CallState struct {
 	wrote atomic.Bool
 }
@@ -20,8 +22,12 @@ func (s *CallState) Wrote() bool { return s.wrote.Load() }
 
 type callStateKey struct{}
 
-// WithCallState returns a context carrying a fresh CallState, and that state.
+// WithCallState returns a context carrying a CallState, and that state. If ctx already carries
+// one it is reused, so every nested scope of one call accumulates into the same flag.
 func WithCallState(ctx context.Context) (context.Context, *CallState) {
+	if s := CallStateFrom(ctx); s != nil {
+		return ctx, s
+	}
 	s := &CallState{}
 	return context.WithValue(ctx, callStateKey{}, s), s
 }

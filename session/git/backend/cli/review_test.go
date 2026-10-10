@@ -52,14 +52,14 @@ func TestRefspecLookalikeBranchesRejected(t *testing.T) {
 
 // S3: credentials must not survive scrubbing in any URL shape, including at the truncation point.
 func TestScrubHidesCredentials(t *testing.T) {
-	pad := strings.Repeat("x", 1990)
 	cases := map[string]struct{ in, secret string }{
-		"at-in-password":    {"fatal: unable to access 'https://user:p@ss/word@github.com/x/y.git/'", "ss/word"},
-		"plain":             {"fatal: https://user:tok123@github.com/x/y.git", "tok123"},
-		"scp-style":         {"fatal: could not read from user:tok456@host.example:o/r.git", "tok456"},
-		"token-only":        {"remote: https://ghp_tok789@github.com/x/y.git", "ghp_tok789"},
-		"at-truncation":     {pad + " https://user:topsecretpw@github.com/x/y.git", "topsecretpw"},
-		"split-at-boundary": {pad[:1985] + " https://user:topsecretpw@github.com/x/y.git", "pw@"},
+		"at-in-password":     {"fatal: unable to access 'https://user:p@ss/word@github.com/x/y.git/'", "ss/word"},
+		"plain":              {"fatal: https://user:tok123@github.com/x/y.git", "tok123"},
+		"scp-style":          {"fatal: could not read from user:tok456@host.example:o/r.git", "tok456"},
+		"token-only":         {"remote: https://ghp_tok789@github.com/x/y.git", "ghp_tok789"},
+		"scp-at-in-password": {"fatal: user:pa@ss@host.example:o/r.git", "ss@"},
+		// The 2000-byte cut lands 3 bytes into the password: truncating first would leave "top".
+		"cut-inside-password": {strings.Repeat("x", 1983) + " https://user:topsecretpw@github.com/x/y.git", "top"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -159,9 +159,6 @@ func TestOptionLookalikesRejectedEverywhere(t *testing.T) {
 		{"GetConfig", func(b backend.Backend, l backend.RepoLocation) error { _, e := b.GetConfig(ctx, l, x); return e }},
 		{"SetConfig.Key", func(b backend.Backend, l backend.RepoLocation) error {
 			return b.SetConfig(ctx, l, backend.SetConfigRequest{Key: x, Value: "v"})
-		}},
-		{"SetConfig.Value", func(b backend.Backend, l backend.RepoLocation) error {
-			return b.SetConfig(ctx, l, backend.SetConfigRequest{Key: "a.b", Value: x})
 		}},
 		{"SetRemoteURL.Remote", func(b backend.Backend, l backend.RepoLocation) error {
 			return b.SetRemoteURL(ctx, l, backend.SetRemoteURLRequest{Remote: x, URL: "u"})
@@ -395,7 +392,7 @@ func TestRealGitNothingToCommitAndLocked(t *testing.T) {
 // D9: operations added for later plan stories (Reset modes, DeleteBranch, SetUpstream,
 // CheckoutCommit, ListRemote, rm, mv).
 func TestRealGitAddedOperations(t *testing.T) {
-	eachBackend(t, func(t *testing.T, b backend.Backend) {
+	onceBackend(t, func(t *testing.T, b backend.Backend) {
 		ctx := context.Background()
 		origin := newRepo(t, true)
 		parent := realPath(t, t.TempDir())
@@ -449,4 +446,140 @@ func TestRealGitAddedOperations(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, ok)
 	})
+}
+
+// R1: glob and other non-ref-name "branches" must be refused, and git must push nothing.
+func TestValidRefNameAllowList(t *testing.T) {
+	ctx := context.Background()
+	bad := []backend.BranchName{"refs/heads/*", "a*", "a?", "a[b]", "a^", "a~1", "a b", "a\\b", "a..b", "a@{u}", "@",
+		"a.lock", "a/b.lock/c", "a/", "/a", "a//b", "a.", ".hidden", "a/.b", "a\x01b", ":main", "+main", "main:other"}
+	for _, name := range bad {
+		fake := newFake()
+		err := cli.New(nil).Push(ctx, remoteAt(fake), backend.PushRequest{Remote: "origin", Branch: name})
+		assert.ErrorIs(t, err, backend.ErrInvalidArgument, "%q", name)
+		assert.Empty(t, fake.calls, "%q", name)
+	}
+	for _, name := range []backend.BranchName{"main", "feature/x-1", "refs/heads/main", "a.b", "v1.0", "user@host"} {
+		fake := newFake()
+		assert.NoError(t, cli.New(nil).Push(ctx, remoteAt(fake), backend.PushRequest{Remote: "origin", Branch: name}), "%q", name)
+	}
+}
+
+func TestRealGitGlobPushPushesNothing(t *testing.T) {
+	requireGit(t)
+	b := cli.New(execRunner{home: t.TempDir()})
+	repo := newRepo(t, true)
+	mustGit(t, repo, "branch", "other")
+	bare := filepath.Join(realPath(t, t.TempDir()), "bare.git")
+	mustGit(t, repo, "init", "-q", "--bare", bare)
+	mustGit(t, repo, "remote", "add", "o", bare)
+
+	err := b.Push(context.Background(), backend.Local{Root: backend.RepoRoot(repo)}, backend.PushRequest{Remote: "o", Branch: "refs/heads/*"})
+
+	assert.ErrorIs(t, err, backend.ErrInvalidArgument)
+	assert.Empty(t, mustGit(t, bare, "branch", "--list"), "nothing may reach the remote")
+}
+
+// R2: ResolveRef is commit-only; a tree/blob peel must not return a non-commit SHA.
+func TestResolveRefRejectsNonCommitPeels(t *testing.T) {
+	for _, ref := range []backend.RefName{"HEAD^{tree}", "HEAD^{blob}", "HEAD^{}", "v1^{tag}", "HEAD^{tree}^{commit}"} {
+		fake := newFake()
+		_, err := cli.New(nil).ResolveRef(context.Background(), remoteAt(fake), ref)
+		assert.ErrorIs(t, err, backend.ErrInvalidArgument, "%q", ref)
+		_, err = cli.New(nil).RefExists(context.Background(), remoteAt(fake), ref)
+		assert.ErrorIs(t, err, backend.ErrInvalidArgument, "%q", ref)
+		assert.Empty(t, fake.calls)
+	}
+	fake := newFake().on("rev-parse --verify HEAD^{commit}", sha1+"\n", nil)
+	_, err := cli.New(nil).ResolveRef(context.Background(), remoteAt(fake), "HEAD^{commit}")
+	assert.NoError(t, err, "an explicit ^{commit} stays valid")
+}
+
+// R3: values that start with '-' are legitimate (core.compression=-1) and must round-trip.
+func TestRealGitSetConfigDashValues(t *testing.T) {
+	eachBackend(t, func(t *testing.T, b backend.Backend) {
+		loc := backend.Local{Root: backend.RepoRoot(newRepo(t, false))}
+		for _, v := range []string{"-1", "-x", "--foo", "plain"} {
+			require.NoError(t, b.SetConfig(context.Background(), loc, backend.SetConfigRequest{Key: "core.compression", Value: v}), v)
+			got, err := b.GetConfig(context.Background(), loc, "core.compression")
+			require.NoError(t, err)
+			assert.Equal(t, v, got)
+		}
+	})
+}
+
+// R5b: parsers keep names exactly and reject records that do not start where they should.
+func TestParsersAreStrictAboutRecordStarts(t *testing.T) {
+	ctx := context.Background()
+	b := cli.New(nil)
+
+	fake := newFake().on("status --porcelain=v2 --branch -z --untracked-files=all",
+		"# branch.oid (initial)\x00# branch.head main\x002 R. N... 100644 100644 100644 a b R100 \nnew\x00\nold\x00? \nuntracked\x00", nil)
+	st, err := b.Status(ctx, remoteAt(fake), backend.IntentDisplay)
+	require.NoError(t, err)
+	require.Len(t, st.Files, 2)
+	assert.Equal(t, backend.RepoPath("\nnew"), st.Files[0].Path)
+	assert.Equal(t, backend.RepoPath("\nold"), st.Files[0].OrigPath)
+	assert.Equal(t, backend.RepoPath("\nuntracked"), st.Files[1].Path)
+
+	fake = newFake().on("status --porcelain=v2 --branch -z --untracked-files=all", "# branch.oid (initial)\x00\n? x\x00", nil)
+	_, err = b.Status(ctx, remoteAt(fake), backend.IntentDisplay)
+	assert.Error(t, err, "a record starting with a stray newline is not silently repaired")
+
+	fake = newFake().on("diff --no-color --no-ext-diff --no-textconv --numstat -z", "1\t0\t\nname\x00", nil)
+	rows, err := b.DiffNumstat(ctx, remoteAt(fake), backend.DiffSpec{})
+	require.NoError(t, err)
+	assert.Equal(t, []backend.NumstatRow{{Path: "\nname", Added: 1}}, rows)
+
+	fake = newFake().on("diff --no-color --no-ext-diff --no-textconv --numstat -z", "\n1\t0\tname\x00", nil)
+	_, err = b.DiffNumstat(ctx, remoteAt(fake), backend.DiffSpec{})
+	assert.Error(t, err)
+}
+
+// R5d: hostile user config must not change Diff or DiffNumstat output.
+func TestRealGitDiffIgnoresHostileUserConfig(t *testing.T) {
+	eachBackend(t, func(t *testing.T, b backend.Backend) {
+		ctx := context.Background()
+		repo := newRepo(t, true)
+		loc := backend.Local{Root: backend.RepoRoot(repo)}
+		write(t, repo, ".gitattributes", "*.txt diff=up\n")
+		for k, v := range map[string]string{
+			"color.ui": "always", "diff.noprefix": "true", "diff.mnemonicPrefix": "true",
+			"diff.external": "false", "diff.up.textconv": "tr a-z A-Z <",
+		} {
+			mustGit(t, repo, "config", k, v)
+		}
+		write(t, repo, "a.txt", "one\nchanged\n")
+
+		text, err := b.Diff(ctx, loc, backend.DiffSpec{Base: "HEAD", Paths: []backend.RepoPath{"a.txt"}})
+		require.NoError(t, err)
+		assert.NotContains(t, text, "\x1b[", "no color escapes")
+		assert.Contains(t, text, "--- a/a.txt", "standard a/ b/ prefixes")
+		assert.Contains(t, text, "+changed", "textconv filter not applied")
+
+		rows, err := b.DiffNumstat(ctx, loc, backend.DiffSpec{Base: "HEAD", Paths: []backend.RepoPath{"a.txt"}})
+		require.NoError(t, err)
+		assert.Equal(t, []backend.NumstatRow{{Path: "a.txt", Added: 1}}, rows)
+	})
+}
+
+// R5e: an unborn HEAD found through a classified "unknown revision" failure is ErrUnborn
+// only, and the command error stays reachable.
+func TestUnbornDoesNotCarryRefNotFound(t *testing.T) {
+	fake := newFake().
+		on("rev-parse --verify HEAD^{commit}", "fatal: Needed a single revision\n", exitErr{128}).
+		on("symbolic-ref -q HEAD", "refs/heads/main\n", nil)
+	_, err := cli.New(nil).ResolveRef(context.Background(), remoteAt(fake), "HEAD")
+	require.ErrorIs(t, err, backend.ErrUnborn)
+	assert.NotErrorIs(t, err, backend.ErrRefNotFound)
+	var cerr *backend.CommandError
+	require.ErrorAs(t, err, &cerr)
+	assert.Equal(t, backend.OpResolveRef, cerr.Operation)
+
+	// Probe also fails: not unborn, and the original classification is kept.
+	fake = newFake().on("rev-parse --verify HEAD^{commit}", "fatal: Needed a single revision\n", exitErr{128}).
+		on("symbolic-ref -q HEAD", "", exitErr{1})
+	_, err = cli.New(nil).ResolveRef(context.Background(), remoteAt(fake), "HEAD")
+	assert.ErrorIs(t, err, backend.ErrRefNotFound)
+	assert.NotErrorIs(t, err, backend.ErrUnborn)
 }

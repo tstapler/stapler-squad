@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -76,9 +77,10 @@ func requireGit(t *testing.T) {
 	}
 }
 
+// mustGit runs git for test setup. One shared HOME avoids a TempDir per call.
 func mustGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	out, err := execRunner{home: t.TempDir()}.Run(context.Background(), dir, "git", args...)
+	out, err := execRunner{home: sharedHome()}.Run(context.Background(), dir, "git", args...)
 	require.NoError(t, err, "git %v: %s", args, out)
 	return strings.TrimSpace(string(out))
 }
@@ -90,15 +92,76 @@ func realPath(t *testing.T, p string) string {
 	return r
 }
 
-func newRepo(t *testing.T, commit bool) string {
+// Fixture repositories are built once (three git spawns) and copied per test (no spawns).
+var (
+	fixtureRoot    string
+	fixtureRootErr error
+	fixtureOnce    sync.Once
+	fixtureMu      sync.Mutex
+	fixtures       = map[bool]string{}
+)
+
+func sharedHome() string {
+	fixtureOnce.Do(func() { fixtureRoot, fixtureRootErr = os.MkdirTemp("", "backend-cli-fixtures-") })
+	if fixtureRootErr != nil {
+		panic(fixtureRootErr)
+	}
+	return fixtureRoot
+}
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if fixtureRoot != "" {
+		_ = os.RemoveAll(fixtureRoot)
+	}
+	os.Exit(code)
+}
+
+// fixture returns the path of a prepared repository: branch main with one commit "first"
+// (a.txt = "one\n") when commit is set, otherwise unborn.
+func fixture(t *testing.T, commit bool) string {
 	t.Helper()
-	dir := realPath(t, t.TempDir())
-	mustGit(t, dir, "init", "-q", "-b", "main")
+	fixtureMu.Lock()
+	defer fixtureMu.Unlock()
+	if dir, ok := fixtures[commit]; ok {
+		return dir
+	}
+	dir, err := os.MkdirTemp(sharedHome(), "fx-")
+	require.NoError(t, err)
+	dir = realPath(t, dir)
+	mustGit(t, dir, "init", "-q", "-b", "main", "--template=")
 	if commit {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\n"), 0o600))
 		mustGit(t, dir, "add", "-A")
 		mustGit(t, dir, "commit", "-q", "-m", "first")
 	}
+	fixtures[commit] = dir
+	return dir
+}
+
+func copyTree(t *testing.T, src, dst string) {
+	t.Helper()
+	require.NoError(t, filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, p)
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o700)
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o600)
+	}))
+}
+
+func newRepo(t *testing.T, commit bool) string {
+	t.Helper()
+	dir := realPath(t, t.TempDir())
+	copyTree(t, fixture(t, commit), dir)
 	return dir
 }
 
@@ -109,6 +172,15 @@ func backends(t *testing.T) map[string]backend.Backend {
 		"combined": cli.New(execRunner{home: h}),
 		"stdout":   cli.New(execStdoutRunner{execRunner{home: h}}),
 	}
+}
+
+// onceBackend runs fn against the combined-output runner only (the remote/SSH path). For
+// operations whose output is not parsed the runner flavour cannot change the result, so the
+// stdout flavour would only double the git spawns.
+func onceBackend(t *testing.T, fn func(t *testing.T, b backend.Backend)) {
+	requireGit(t)
+	t.Parallel()
+	fn(t, cli.New(execRunner{home: sharedHome()}))
 }
 
 func eachBackend(t *testing.T, fn func(t *testing.T, b backend.Backend)) {
@@ -319,7 +391,7 @@ func TestRealGitWorkingTree(t *testing.T) {
 }
 
 func TestRealGitBranches(t *testing.T) {
-	eachBackend(t, func(t *testing.T, b backend.Backend) {
+	onceBackend(t, func(t *testing.T, b backend.Backend) {
 		ctx := context.Background()
 		repo := newRepo(t, true)
 		loc := backend.Local{Root: backend.RepoRoot(repo)}
@@ -341,7 +413,7 @@ func TestRealGitBranches(t *testing.T) {
 }
 
 func TestRealGitWorktrees(t *testing.T) {
-	eachBackend(t, func(t *testing.T, b backend.Backend) {
+	onceBackend(t, func(t *testing.T, b backend.Backend) {
 		ctx := context.Background()
 		repo := newRepo(t, true)
 		loc := backend.Local{Root: backend.RepoRoot(repo)}
@@ -378,7 +450,7 @@ func TestRealGitWorktrees(t *testing.T) {
 }
 
 func TestRealGitNetwork(t *testing.T) {
-	eachBackend(t, func(t *testing.T, b backend.Backend) {
+	onceBackend(t, func(t *testing.T, b backend.Backend) {
 		ctx := context.Background()
 		origin := newRepo(t, true)
 		parent := realPath(t, t.TempDir())

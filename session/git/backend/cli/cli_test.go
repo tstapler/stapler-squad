@@ -124,7 +124,7 @@ func argvCases() []struct {
 		}, "config --get remote.origin.url", "u\n"},
 		{"SetConfig", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			return b.SetConfig(c, l, backend.SetConfigRequest{Key: "user.name", Value: "T"})
-		}, "config user.name T", ""},
+		}, "config -- user.name T", ""},
 		{"SetRemoteURL", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			return b.SetRemoteURL(c, l, backend.SetRemoteURLRequest{Remote: "origin", URL: "https://h/x.git"})
 		}, "remote set-url origin https://h/x.git", ""},
