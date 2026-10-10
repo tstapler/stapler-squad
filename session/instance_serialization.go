@@ -494,7 +494,18 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		// which pprof's fork-pressure monitor flagged as a sustained "critical"
 		// spawn/failure rate (subprocess failures/spawns >> the exec-gate's timeout
 		// budget once a couple thousand archived sessions accumulate).
-		if instance.ArchivedAt != nil {
+		//
+		// Also skip for one-shot sessions (backlog:triage/backlog:review tags, see
+		// isOneShot): session_driver.go's handleStoppedStatus already treats their
+		// Stopped status as terminal and deliberately does not retry them
+		// ("BacklogLifecycleListener handles this; driver exits cleanly"). Reviving
+		// one here contradicts that decision and respawns the same one-shot
+		// `claude -p --resume ...` invocation, which exits almost immediately and
+		// gets killed again -- an endless ~60s kill/respawn loop observed in
+		// production for an archived backlog item's stale review session, whose own
+		// ArchivedAt was nil (set only by archiveItemWorkSessions, which this old
+		// session predates) so only this check protects it.
+		if instance.ArchivedAt != nil || isOneShot(instance) {
 			instance.started.Store(true)
 		} else {
 			paneExited := false

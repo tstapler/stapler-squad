@@ -247,6 +247,22 @@ func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
 
 // TestHotRestore_ExistingSession verifies that when the tmux session is already
 // alive, Start(false) attaches to it (hot restore) rather than creating a new one.
+// sleepInstanceOptions builds the InstanceOptions for a long-lived `sleep
+// 300` tmux session on an isolated prefix/socket — the fixture shared by
+// every real-tmux restore test below (hot restore and the one-shot revive
+// regression test), so the live-pane session shape is defined once.
+func sleepInstanceOptions(title, tmpDir, prefix, socket string) InstanceOptions {
+	return InstanceOptions{
+		Title:            title,
+		Path:             tmpDir,
+		Program:          "sleep 300",
+		SessionType:      SessionTypeDirectory,
+		AutoYes:          false,
+		TmuxPrefix:       prefix,
+		TmuxServerSocket: socket,
+	}
+}
+
 func TestHotRestore_ExistingSession(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -260,15 +276,7 @@ func TestHotRestore_ExistingSession(t *testing.T) {
 	prefix := fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano())
 
 	// First instance: create and start normally to put a live tmux session in place.
-	inst1, cleanup1, err := NewInstanceWithCleanup(InstanceOptions{
-		Title:            title,
-		Path:             tmpDir,
-		Program:          "sleep 300",
-		SessionType:      SessionTypeDirectory,
-		AutoYes:          false,
-		TmuxPrefix:       prefix,
-		TmuxServerSocket: socket,
-	})
+	inst1, cleanup1, err := NewInstanceWithCleanup(sleepInstanceOptions(title, tmpDir, prefix, socket))
 	require.NoError(t, err)
 	defer func() {
 		if cleanupErr := cleanup1(); cleanupErr != nil {
@@ -290,15 +298,7 @@ func TestHotRestore_ExistingSession(t *testing.T) {
 
 	// Second instance: same title/socket — simulates an instance reloaded from storage
 	// while the original tmux session is still alive.
-	inst2, cleanup2, err := NewInstanceWithCleanup(InstanceOptions{
-		Title:            title,
-		Path:             tmpDir,
-		Program:          "sleep 300",
-		SessionType:      SessionTypeDirectory,
-		AutoYes:          false,
-		TmuxPrefix:       prefix,
-		TmuxServerSocket: socket,
-	})
+	inst2, cleanup2, err := NewInstanceWithCleanup(sleepInstanceOptions(title, tmpDir, prefix, socket))
 	require.NoError(t, err)
 	defer func() {
 		if cleanupErr := cleanup2(); cleanupErr != nil {
@@ -319,6 +319,98 @@ func TestHotRestore_ExistingSession(t *testing.T) {
 
 	assert.True(t, inst2.Started(), "inst2 must be marked as started after hot restore")
 	assert.Equal(t, Running, inst2.Status, "inst2 status must be Running after hot restore")
+}
+
+// TestFromInstanceData_should_NotReviveStoppedToActive_When_OneShotSessionHasLiveTmuxPane
+// is a regression test for the production respawn loop first seen on backlog
+// item ce71ad1a-a6a5-485f-8245-c5a502754a8b: a `backlog:review` one-shot
+// session, already archived at the item level but with its own ArchivedAt
+// left nil (an orphaned pre-item_sessions-linkage row), was recreated roughly
+// every 60s for hours. The Stopped-branch "secretly still alive" probe in
+// fromInstanceData (session/instance_serialization.go) saw the tmux pane
+// still running (remain-on-exit keeps a dead pane around, see that probe's
+// doc comment) and flipped Stopped -> Active -> Start(false), contradicting
+// session_driver.go's handleStoppedStatus, which already treats a one-shot
+// session's Stopped status as terminal ("driver exits cleanly"). Uses a real
+// tmux session (not a mock) so the test exercises the actual IsAlive()/
+// PaneExitStatus() probe the production bug hit, not a stand-in for it.
+func TestFromInstanceData_should_NotReviveStoppedToActive_When_OneShotSessionHasLiveTmuxPane(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping integration test that starts real tmux sessions")
+	}
+	checkTmuxAvailable(t)
+
+	t.Run("oneshot_review_tag_stays_stopped", func(t *testing.T) {
+		t.Parallel()
+		assertStoppedReloadOutcome(t, []string{"backlog:review"}, Stopped, true)
+	})
+
+	t.Run("non_oneshot_control_revives_to_active", func(t *testing.T) {
+		t.Parallel()
+		assertStoppedReloadOutcome(t, nil, Active, false)
+	})
+}
+
+// assertStoppedReloadOutcome starts a real, long-running tmux session, then
+// reloads it from a Stopped/unarchived InstanceData carrying the given tags
+// — the same shape LoadInstances feeds fromInstanceData's "secretly still
+// alive" probe — and asserts the resulting status/started flags. A live pane
+// (not a mock) so the assertion exercises the actual IsAlive()/
+// PaneExitStatus() probe the production respawn loop hit.
+func assertStoppedReloadOutcome(t *testing.T, tags []string, wantStatus Status, wantStarted bool) {
+	t.Helper()
+	inst, title, tmpDir, prefix, socket := newLiveSleepInstance(t)
+
+	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive before restore")
+
+	data := InstanceData{
+		Title:            title,
+		Path:             tmpDir,
+		Status:           Stopped,
+		Program:          "sleep 300",
+		TmuxPrefix:       prefix,
+		TmuxServerSocket: socket,
+		Tags:             tags,
+	}
+	restored, err := FromInstanceDataDeferred(data)
+	require.NoError(t, err)
+
+	assert.Equal(t, wantStatus, restored.Snapshot().Status)
+	assert.Equal(t, wantStarted, restored.Started())
+}
+
+// newLiveSleepInstance starts a real tmux session running a long-lived
+// program on an isolated socket/prefix and registers its teardown, returning
+// the live Instance plus the identifiers needed to reload it via
+// InstanceData (title, path, tmux prefix, tmux socket).
+func newLiveSleepInstance(t *testing.T) (inst *Instance, title, tmpDir, prefix, socket string) {
+	t.Helper()
+	title = fmt.Sprintf("test-oneshot-revive-%d", time.Now().UnixNano())
+	tmpDir = t.TempDir()
+	socket = coldRestoreSocket(t)
+	prefix = fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano())
+
+	inst, cleanup, err := NewInstanceWithCleanup(sleepInstanceOptions(title, tmpDir, prefix, socket))
+	require.NoError(t, err)
+	t.Cleanup(func() { logTeardownErr(t, "cleanup", cleanup()) })
+
+	startCleanup, err := inst.StartWithCleanup(true)
+	require.NoError(t, err)
+	if startCleanup != nil {
+		t.Cleanup(func() { logTeardownErr(t, "startCleanup", startCleanup()) })
+	}
+	return inst, title, tmpDir, prefix, socket
+}
+
+// logTeardownErr logs a non-nil test-cleanup error without failing the test
+// — teardown failures are informational, matching this file's existing
+// cleanup-callback convention.
+func logTeardownErr(t *testing.T, label string, err error) {
+	t.Helper()
+	if err != nil {
+		t.Logf("%s warning: %v", label, err)
+	}
 }
 
 // TestIsStaleResumeExit verifies the detection function used by the auto-recovery path.
