@@ -143,4 +143,3 @@ func TestT10_Census(t *testing.T) {
 		t.Errorf("census count %d != 23 (incl. status.go:122 and 3 submodule reads)", len(got))
 	}
 }
-

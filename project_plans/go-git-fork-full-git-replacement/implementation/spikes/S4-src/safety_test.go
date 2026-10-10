@@ -2,12 +2,12 @@ package s4lock
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
-	"fmt"
 )
 
 func indexBytes(t *testing.T, d string) []byte {

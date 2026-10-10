@@ -13,11 +13,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/go-git/go-billy/v5/osfs"
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/cache"
 	"github.com/go-git/go-git/v5/storage/filesystem"
-	"github.com/go-git/go-billy/v5/osfs"
 )
 
 func run(dir string, args ...string) error {
@@ -63,10 +63,10 @@ func read(r *git.Repository, h plumbing.Hash) error {
 
 type stats struct {
 	reads, notFound, otherErr, retried, retryFail int64
-	maxAttempts                                    int64
-	mu                                             sync.Mutex
-	lat                                            []time.Duration // latency of reads that needed a retry
-	errKinds                                       map[string]int
+	maxAttempts                                   int64
+	mu                                            sync.Mutex
+	lat                                           []time.Duration // latency of reads that needed a retry
+	errKinds                                      map[string]int
 }
 
 func (s *stats) kind(e error) {

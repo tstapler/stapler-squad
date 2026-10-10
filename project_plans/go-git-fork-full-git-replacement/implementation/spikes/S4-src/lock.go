@@ -294,7 +294,7 @@ func WithIndexLock(repoPath string, opts Options, fn func(*Scope) error) (retErr
 	for _, n := range order {
 		b := s.refs[n]
 		if err := s.fs.Rename(b.lock, string(n)); err != nil {
-				return err
+			return err
 		}
 		s.created = removeStr(s.created, b.lock)
 	}
