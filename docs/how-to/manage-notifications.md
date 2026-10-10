@@ -79,6 +79,15 @@ No tray hotkey ships. `Alt+N` was a candidate, but a chord that xterm never sees
 
 The subtitle is `ssq-hook-handler`'s `source_app=tmux` for any stapler-squad-managed tmux session (`scripts/ssq-hook-handler:231-235`), rendered as `via ${sourceApp}` (`NotificationToast.tsx` and `NotificationItem.tsx`). It is not a hidden-session leak: the named session in the original report has `hidden=0`.
 
+## "A write to this session is stuck"
+
+Every automated or unary write to a session's terminal (the driver's prompt and answer keys, a steer, a nudge, the MCP write tools, a rate-limit recovery) holds one per-session write lease, so two writers never interleave bytes. A write that never returns (a wedged pane) keeps the lease held; there is deliberately no "unstick" control, because a forced release would allow exactly the interleave the lease exists to stop.
+
+- **What you see**: after 30 seconds one tray warning per stuck write, "A write to this session is stuck". It reaches the toast deck, the tray and history; it is never pushed. The server log has `terminal_write_lease_wedged` (at most once a minute) and the gauge `hidden_session_write_lease_held_seconds{writer}` rises.
+- **What stops meanwhile**: the driver's prompt and answer key, steers, nudges and (later) Reply for that session get a retryable "a write to this session is in progress".
+- **Remedy**: Delete the session, or restart stapler-squad. Pause and Delete both complete while the write is stuck (they do not take the lease) and the pane header's actions menu stays available in the read-only hidden view. Closing the PTY does not wake a blocked write (verified against a real PTY pair; only a reader on the slave side does), so a session that is Paused and then Resumed stays blocked until the service restarts.
+- **Escape hatch**: the `terminal_write_lease` flag (Settings > Features, global only, default on). Off makes every lease non-exclusive, which is the behavior before the lease existed. Every flip is a `flag_change` line in the audit file; turning it off is persisted even when the audit sink is down.
+
 ## Roll back
 
 Toggle the flag off. The tray, deck, handle, entry chip, Quiet mode and Pin all return to the legacy behavior. If the deck itself misbehaves on a device, the bottom-dock fallback for phones is a CSS and variant change recorded in ADR-009.

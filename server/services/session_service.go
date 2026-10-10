@@ -1032,6 +1032,7 @@ func newGatedSessionService(storage session.InstanceStore) *SessionService {
 	svc.notificationSvc.SetDeliveryGate(gate)
 	svc.autonomousSvc.SetLegacyHiddenCounter(gate.CountLegacySuppressedType)
 	svc.wireGateFlag(gate)
+	svc.wireLeaseFlag()
 	return svc
 }
 
@@ -1062,6 +1063,7 @@ func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
 		WithAuditDegradedCounter(func(mode string) { gate.Metrics().Add(deliverygate.CounterAuditDegraded, mode) }))
 	ff.SetAudit(sink, map[string]FlagAuditPolicy{
 		config.HiddenSessionGateFeatureFlag: {}, // every gate flip takes the non-blocking path
+		terminalWriteLeaseFlagName:          terminalWriteLeaseAuditPolicy,
 	})
 }
 
