@@ -904,6 +904,27 @@ func TestOpenStandingStream_TearDownForReopen_DoesNotDeadlock_WhenOldStreamWould
 		"reopen must open exactly one new Attach stream, not trigger the old reader's ReconnectLoop")
 }
 
+// settledCount returns read() once it has held the same value for
+// settledPolls consecutive polls. The generation gauge is process-global, so
+// earlier tests' background goroutines can still be ending generations when
+// a test samples its baseline; an unsettled baseline makes "baseline+1" unreachable.
+func settledCount(t *testing.T, read func() int64) int64 {
+	t.Helper()
+	const settledPolls = 20
+	var last int64 = -1
+	stable := 0
+	wait.RequireEventually(t, func() bool {
+		cur := read()
+		if cur == last {
+			stable++
+		} else {
+			last, stable = cur, 0
+		}
+		return stable >= settledPolls
+	}, 5*time.Second, time.Millisecond, "generation count never settled before sampling the baseline")
+	return last
+}
+
 // TestOpenStandingStream_TearDownForReopen_ProceedsAnyway_WhenOldReaderIsWedged
 // is incident #3's regression test: a reader goroutine whose Receive()
 // never returns, even once its stream's ctx is canceled (a transport that
@@ -928,7 +949,7 @@ func TestOpenStandingStream_TearDownForReopen_ProceedsAnyway_WhenOldReaderIsWedg
 	active := func() int64 {
 		return sumForSubsystem(t, collectMetric(t, "session_lifecycle_active_generations"), "tymux_stream", "")
 	}
-	baseline := active()
+	baseline := settledCount(t, active)
 
 	sess := NewTymuxGRPCSession(transport)
 	setTeardownWait(sess, 50*time.Millisecond)
