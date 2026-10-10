@@ -772,9 +772,23 @@ describe("BacklogItemCard — GitHub provenance badge (Epic 4.1, backlog-github-
       />
     );
 
-    const badge = screen.getByRole("link", { name: "Imported from GitHub issue #42" });
+    const badge = screen.getByRole("link", { name: "Imported from GitHub issue acme/widget#42" });
     expect(badge).toHaveAttribute("href", "https://github.com/acme/widget/issues/42");
     expect(badge).toHaveAttribute("target", "_blank");
+    expect(badge).toHaveAttribute("title", "acme/widget#42");
+    expect(badge).toHaveTextContent("widget#42");
+  });
+
+  it("BacklogItemCard_should_FallBackToBareId_When_ExternalUrlUnparseable", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ externalUrl: "https://example.com/tracker/42", externalId: "42" })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    const badge = screen.getByRole("link", { name: "Imported from GitHub issue #42" });
     expect(badge).toHaveTextContent("#42");
   });
 
@@ -810,7 +824,7 @@ describe("BacklogItemCard — GitHub provenance badge (Epic 4.1, backlog-github-
       />
     );
 
-    fireEvent.click(screen.getByRole("link", { name: "Imported from GitHub issue #42" }));
+    fireEvent.click(screen.getByRole("link", { name: "Imported from GitHub issue acme/widget#42" }));
 
     expect(onClick).not.toHaveBeenCalled();
   });
@@ -832,7 +846,7 @@ describe("BacklogItemCard — GitHub provenance badge (Epic 4.1, backlog-github-
       />
     );
 
-    const badge = screen.getByRole("link", { name: "Imported from GitHub issue #42" });
+    const badge = screen.getByRole("link", { name: "Imported from GitHub issue acme/widget#42" });
     fireEvent.keyDown(badge, { key: "Enter" });
 
     expect(onClick).not.toHaveBeenCalled();
