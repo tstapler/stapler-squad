@@ -33,9 +33,14 @@ func typeThroughStreamTerminal(t *testing.T, client sessionv1connect.SessionServ
 		SessionId: sessionID,
 		Data:      &sessionv1.TerminalData_Input{Input: &sessionv1.TerminalInput{Data: []byte("echo " + marker + "\n")}},
 	}))
-	// Give the server loop time to process the frames before the stream closes.
-	time.Sleep(1500 * time.Millisecond) //nolint:notimesleeptest the server gives no ack for a frame; the stream must stay open while it processes them
-	_ = stream.CloseRequest()
+	// The handler returns only after it has consumed every frame up to the
+	// client's half-close, so draining the stream is the "processed" signal.
+	require.NoError(t, stream.CloseRequest())
+	for {
+		if _, err := stream.Receive(); err != nil {
+			break
+		}
+	}
 }
 
 func paneContains(inst *session.Instance, marker string) func() bool {
@@ -79,7 +84,12 @@ func TestStreamTerminal_ShouldDropInputAndResizeForHiddenAndApplyForVisible_When
 
 	hidden := spawn(true)
 	typeThroughStreamTerminal(t, client, hidden.Snapshot().Title, "RO_HIDDEN_$((40+2))")
-	time.Sleep(2 * time.Second) //nolint:notimesleeptest absence of input has no event to wait on; a bounded window is the only observation
+	// Keys reach the pane PTY in order, so once a sentinel typed after the stream closed
+	// is visible, any marker the stream had written would be visible too.
+	require.NoError(t, hidden.SendKeys("echo RO_SENTINEL_$((40+2))\n"))
+	require.NoError(t, wait.WaitForCondition(paneContains(hidden, "RO_SENTINEL_42"), wait.WaitConfig{
+		Timeout: 20 * time.Second, PollInterval: 200 * time.Millisecond, Description: "hidden pane shows the sentinel",
+	}))
 	content, err := hidden.CapturePaneContent()
 	require.NoError(t, err)
 	require.NotContains(t, content, "RO_HIDDEN_", "a hidden session's pane must receive nothing from the stream")
