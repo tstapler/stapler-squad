@@ -193,9 +193,11 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// connection, entgo.io/ent/dialect/sql/schema.(*Atlas) has internal
 	// package-level state that races under `go test -parallel` when many
 	// NewEntRepository calls run schema creation concurrently.
+	stopSlowWatch := watchSlowOp("ent schema create (incl. wait for EntSchemaCreateMu)", entSchemaCreateSlowAfter)
 	EntSchemaCreateMu.Lock()
 	err = client.Schema.Create(context.Background())
 	EntSchemaCreateMu.Unlock()
+	stopSlowWatch()
 	if err != nil {
 		_ = client.Close() // best-effort cleanup; we're already returning the real startup error
 		return nil, fmt.Errorf("failed to create schema: %w", err)

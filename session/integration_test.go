@@ -38,6 +38,18 @@ func TestMain(m *testing.M) {
 	// those tests fail non-deterministically depending on local machine state.
 	keyring.MockInit()
 
+	// Fail the run on any non-loopback dial through http.DefaultTransport.
+	netGuard := envtest.DenyNonLoopbackNetwork()
+
+	// Tests that launch the real `claude` binary (restart/resume, MCP-config)
+	// must not use the developer's credentials or MCP servers.
+	restoreClaudeCLI, err := envtest.IsolateClaudeCLI()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "TestMain: %v\n", err)
+		os.Exit(1)
+	}
+	defer restoreClaudeCLI()
+
 	// See envtest.ClearAmbientStaplerSquadStateEnv's doc comment: an ambient
 	// STAPLER_SQUAD_TEST_DIR/STAPLER_SQUAD_INSTANCE left set in the shell (e.g.
 	// by an earlier e2e run) silently wins over this package's own per-PID test
@@ -79,6 +91,10 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	close(stop)
 	removeGitTemplateRepos()
+	if report := netGuard.Report(); report != "" {
+		fmt.Fprint(os.Stderr, report)
+		code = 1
+	}
 	os.Exit(code)
 }
 
