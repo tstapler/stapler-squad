@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useCallback, useMemo, useRef } from "react";
 import { useFocusRestoreOnRemoval } from "@/lib/hooks/useFocusRestoreOnRemoval";
+import { useSessionHidden } from "@/lib/hooks/useSessionHidden";
+import { BackgroundChip } from "./BackgroundChip";
 import { GroupedNotification, groupNotifications } from "@/lib/utils/notificationGrouping";
 import { formatRelativeTime } from "@/lib/utils/datetime";
 import { NotificationData, NotificationHistoryItem } from "@/lib/types/notification";
@@ -124,6 +126,10 @@ export interface NotificationItemProps {
 
 const defaultSessionHref = (sessionId: string) => `/?session=${encodeURIComponent(sessionId)}`;
 
+// notification=<id> lets the deleted-session card show this record's own text (Task 5.3e).
+const hiddenSessionHref = (sessionId: string, notificationId: string) =>
+  `/?session=${encodeURIComponent(sessionId)}&tab=terminal&notification=${encodeURIComponent(notificationId)}`;
+
 /**
  * Renders a single notification card: type label, count badge, remove button,
  * subtitle/context/message, approval-needed metadata, and the footer action
@@ -150,6 +156,8 @@ export function NotificationItem({
   const notification = group.notification;
   const contextString = getContextString(notification);
   const hasSourceApp = notification.sourceApp || notification.sourceBundleId;
+  // A hidden session opens read-only (Story 5.3): chip and "View output" instead of "View Session".
+  const sessionHidden = useSessionHidden(notification.sessionId) === true;
 
   // Always show the session name as the primary title so users know which
   // session generated the notification. If the stored title is a generic
@@ -181,6 +189,7 @@ export function NotificationItem({
           {!notification.isRead && <span className={unreadDot} role="img" aria-label="Unread" />}
           <span className={typeIcon}>{notificationTypeIcon(notification.notificationType)}</span>
           <strong>{primaryTitle}</strong>
+          {sessionHidden && <BackgroundChip />}
           <span className={typeLabel} style={{ backgroundColor: priorityColor(notification.priority) }}>
             {notificationTypeLabel(notification.notificationType)}
           </span>
@@ -313,7 +322,7 @@ export function NotificationItem({
                 </>
               );
             })()}
-          {hasSourceApp && notification.onFocusWindow && (
+          {hasSourceApp && notification.onFocusWindow && !sessionHidden && (
             <button className={focusButton} onClick={notification.onFocusWindow} title="Focus the source application window">
               🔗 Focus
             </button>
@@ -330,11 +339,16 @@ export function NotificationItem({
           )}
           {!notification.metadata?.["item_id"] && notification.sessionId && (
             <Link
-              href={getSessionHref(notification.sessionId)}
+              href={
+                sessionHidden
+                  ? hiddenSessionHref(notification.sessionId, notification.id)
+                  : getSessionHref(notification.sessionId)
+              }
               className={viewButton}
               onClick={() => navigate(group.allIds, notification.onView, notification.sessionId)}
+              data-testid={sessionHidden ? "notification-view-output" : "notification-view-session"}
             >
-              View Session
+              {sessionHidden ? "View output" : "View Session"}
             </Link>
           )}
         </div>
