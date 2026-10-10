@@ -128,9 +128,14 @@ test.describe("notifications-responsive", () => {
 
     // Scope to the page content, not the (also-mounted, off-screen) NotificationPanel
     // drawer, which shares the same GetNotificationHistory-backed data.
+    // "Recent activity" is collapsed by default, which hides its rows; open it first.
+    await page.locator("#main-content").getByRole("button", { name: /Recent activity/ }).click();
     const lastItem = page.locator("#main-content").getByText("Task 29 finished");
-    await lastItem.scrollIntoViewIfNeeded();
-    await expect(lastItem).toBeInViewport();
+    // The section animates open, so retry the scroll until the final layout settles.
+    await expect(async () => {
+      await lastItem.scrollIntoViewIfNeeded();
+      await expect(lastItem).toBeInViewport({ timeout: 1_000 });
+    }).toPass({ timeout: 10_000 });
 
     const listScrolls = await page.evaluate(() => {
       const el = document.querySelector('[data-testid="notifications-content"]');
