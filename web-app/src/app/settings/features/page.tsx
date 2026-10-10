@@ -4,6 +4,7 @@
 import { NOTIFICATION_TRAY_V2_FLAG } from "@/lib/notification-policy";
 import { useCallback, useState } from "react";
 import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
+import { GLOBAL_SCOPE } from "@/lib/contexts/featureFlagScopes";
 import { usePageView } from "@/lib/analytics";
 import { vars } from "@/styles/theme.css";
 import { StreamHubRolloutPanel } from "@/components/settings/StreamHubRolloutPanel";
@@ -11,6 +12,7 @@ import { TymuxRolloutPanel } from "@/components/settings/TymuxRolloutPanel";
 import { PiDisableWarningDialog } from "@/components/settings/PiDisableWarningDialog";
 import { PI_SUPPORT_FLAG_NAME } from "@/lib/constants/programs";
 import { GateStatusLine } from "./GateStatusLine";
+import { GateKindOverrides, type OverrideMode } from "./GateKindOverrides";
 import {
   container,
   title,
@@ -65,7 +67,14 @@ export default function FeaturesPage() {
     async (name: string, currentEnabled: boolean) => {
       const disablingPiSupport = name === PI_SUPPORT_FLAG_NAME && currentEnabled;
       if (!disablingPiSupport) {
-        setFlag(name, !currentEnabled);
+        // The scopable gate flag always sends the explicit "global" scope, so a
+        // dropped scope can never write the global value by accident.
+        setFlag(
+          name,
+          name === HIDDEN_SESSION_GATE_FLAG
+            ? { mutation: "set", scope: GLOBAL_SCOPE, enabled: !currentEnabled }
+            : !currentEnabled,
+        );
         return;
       }
       try {
@@ -100,6 +109,20 @@ export default function FeaturesPage() {
     setFlag(PI_SUPPORT_FLAG_NAME, false);
   }, [setFlag]);
 
+  const changeKindOverride = useCallback(
+    (scope: string, mode: OverrideMode) => {
+      setFlag(
+        HIDDEN_SESSION_GATE_FLAG,
+        mode === "inherit" ? { mutation: "clear", scope } : { mutation: "set", scope, enabled: mode === "on" },
+      );
+    },
+    [setFlag],
+  );
+
+  const resetGateDefault = useCallback(() => {
+    setFlag(HIDDEN_SESSION_GATE_FLAG, { mutation: "reset" });
+  }, [setFlag]);
+
   const cancelPiDisable = useCallback(() => {
     setPendingPiDisable(false);
   }, []);
@@ -120,7 +143,7 @@ export default function FeaturesPage() {
       ) : !error && flagList.length === 0 ? (
         <p className={emptyMessage}>No feature flags configured.</p>
       ) : (
-        flagList.map(({ name, enabled, description, statusDetail }) => {
+        flagList.map(({ name, enabled, description, statusDetail, scopes }) => {
           const meta = FEATURE_META[name];
           const label = meta?.label ?? name;
           return (
@@ -143,6 +166,9 @@ export default function FeaturesPage() {
                 )}
                 {name === HIDDEN_SESSION_GATE_FLAG && (
                   <GateStatusLine className={flagDescription} />
+                )}
+                {name === HIDDEN_SESSION_GATE_FLAG && (
+                  <GateKindOverrides scopes={scopes} onChange={changeKindOverride} onReset={resetGateDefault} />
                 )}
               </div>
               <button

@@ -33,6 +33,12 @@ jest.mock("./GateStatusLine", () => ({
   GateStatusLine: () => <div data-testid="gate-status-line" />,
 }));
 
+// The override disclosure reads GetDeliveryGateStats for its per-kind counts.
+jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));
+jest.mock("@connectrpc/connect", () => ({
+  createClient: () => ({ getDeliveryGateStats: async () => ({ eventsByKind24h: {} }) }),
+}));
+
 const mockUseFeatureFlags = useFeatureFlags as jest.MockedFunction<typeof useFeatureFlags>;
 
 function makeFlag(overrides: Partial<FeatureFlagMeta> & Pick<FeatureFlagMeta, "name">): FeatureFlagMeta {
@@ -274,5 +280,57 @@ describe("FeaturesPage — pi-support disable warning", () => {
     expect(lines).toHaveLength(1);
     const row = lines[0].closest('[data-testid="feature-flag-row"]');
     expect(row?.textContent).toContain("hidden-session delivery gate");
+  });
+});
+
+// Story 2.11: per-kind overrides and the explicit global scope.
+describe("FeaturesPage - hidden_session_gate overrides", () => {
+  function setup(scopes?: Record<string, boolean>, enabled = false) {
+    const setFlag = jest.fn();
+    mockUseFeatureFlags.mockReturnValue({
+      flags: { hidden_session_gate: enabled },
+      flagList: [makeFlag({ name: "hidden_session_gate", enabled, description: "gate", scopes })],
+      isLoading: false,
+      error: null,
+      setFlag,
+    });
+    render(<FeaturesPage />);
+    return setFlag;
+  }
+
+  it("features_page_should_send_the_global_literal_scope_when_the_gate_toggle_is_used", () => {
+    const setFlag = setup();
+    fireEvent.click(screen.getByRole("button", { name: /enable notifications: hidden-session delivery gate/i }));
+    expect(setFlag).toHaveBeenCalledWith("hidden_session_gate", { mutation: "set", scope: "global", enabled: true });
+  });
+
+  it("features_page_should_send_set_clear_and_reset_when_override_controls_are_used", () => {
+    const setFlag = setup({ "kind:review": true });
+    const review = screen.getByTestId("gate-override-review");
+    fireEvent.click(review.querySelector('[role="radio"][aria-checked="false"]') as HTMLElement); // Inherit
+    expect(setFlag).toHaveBeenLastCalledWith("hidden_session_gate", { mutation: "clear", scope: "kind:review" });
+    fireEvent.click(screen.getAllByRole("radio", { name: "On" })[1]); // diagnose
+    expect(setFlag).toHaveBeenLastCalledWith("hidden_session_gate", {
+      mutation: "set",
+      scope: "kind:diagnose",
+      enabled: true,
+    });
+    fireEvent.click(screen.getByTestId("gate-reset-default"));
+    expect(setFlag).toHaveBeenLastCalledWith("hidden_session_gate", { mutation: "reset" });
+  });
+
+  it("features_page_should_show_server_readback_not_optimistic_state_when_save_fails", () => {
+    const setFlag = setup({ "kind:review": true });
+    fireEvent.click(screen.getAllByRole("radio", { name: "Off" })[0]);
+    expect(setFlag).toHaveBeenCalled();
+    // setFlag is a no-op stub (a failed save): the control still shows the read-back value.
+    const checked = screen.getByTestId("gate-override-review").querySelector('[aria-checked="true"]');
+    expect(checked?.textContent).toBe("On");
+  });
+
+  it("features_page_should_show_no_override_controls_for_other_flags", () => {
+    mockFlags([makeFlag({ name: "backlog" })]);
+    render(<FeaturesPage />);
+    expect(screen.queryByTestId("gate-kind-overrides")).not.toBeInTheDocument();
   });
 });
