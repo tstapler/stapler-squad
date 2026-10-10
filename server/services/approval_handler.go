@@ -88,6 +88,19 @@ type ApprovalHandler struct {
 	slackNotifier       *SlackNotifier              // optional: notifies a configured Slack webhook about new pending approvals; concrete type (no interface) since both live in this package
 	dashboardBaseURLFn  func() string               // optional: lazily-read fallback for the Slack dashboard-link base URL, used only when cfg.Slack.DashboardBaseURL is unset. Mirrors ReactiveQueueManager.dashboardBaseURLFn exactly (server.go wires the same hookBaseURLFn into both).
 	piHealthTracker     *PiExtensionHealthTracker   // optional: records pi approval-extension health pings (pi-support Epic 4.2)
+	autoApprovedGate    AutoApprovedGate            // optional: drops hidden-session auto-allow history rows (nil = append all)
+}
+
+// AutoApprovedGate decides whether an auto-approved history row is recorded for
+// a session. Implemented by the delivery gate; declared here so tests fake it
+// with one func literal. A deny is the audit trail and is never gated by callers.
+type AutoApprovedGate interface {
+	AllowAutoApprovedRow(sessionID, decision string) bool
+}
+
+// SetAutoApprovedGate wires the hidden-session gate for auto-approved rows.
+func (h *ApprovalHandler) SetAutoApprovedGate(g AutoApprovedGate) {
+	h.autoApprovedGate = g
 }
 
 // NewApprovalHandler creates a new ApprovalHandler.
@@ -473,7 +486,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 		switch result.Decision {
 		case classifier.AutoAllow:
 			log.ForSession(sessionID).Info("[ApprovalHandler] auto-allowed", "tool", payload.ToolName, "rule", result.RuleID, "detail", approvalDetail(payload.ToolInput))
-			if h.autoApprovalLog != nil {
+			if h.autoApprovalLog != nil && (h.autoApprovedGate == nil || h.autoApprovedGate.AllowAutoApprovedRow(sessionID, "allow")) {
 				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, approvalDetail(payload.ToolInput), result.RuleID, result.RuleName, result.Source, "allow")
 			}
 			h.writeDecision(w, "allow", "")
@@ -484,6 +497,8 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 				msg = fmt.Sprintf("%s %s", msg, result.Alternative)
 			}
 			log.ForSession(sessionID).Info("[ApprovalHandler] auto-denied", "tool", payload.ToolName, "rule", result.RuleID, "msg", msg, "detail", approvalDetail(payload.ToolInput))
+			// Never gated: a deny row is the only record that a rule blocked a tool
+			// in a background session.
 			if h.autoApprovalLog != nil {
 				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, approvalDetail(payload.ToolInput), result.RuleID, result.RuleName, result.Source, "deny")
 			}

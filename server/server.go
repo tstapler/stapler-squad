@@ -326,12 +326,23 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		}
 	}
 
+	// Keep the delivery gate's flag fresh (edits to config.json apply within one
+	// tick) and join its reloader on shutdown.
+	if gate := deps.SessionService.DeliveryGate(); gate != nil {
+		gate.StartFlagReloader(serverCtx, 5*time.Second)
+		srv.shutdownHooks = append(srv.shutdownHooks, gate.Stop)
+	}
+
 	// Initialize push notification service.
 	if configErr == nil {
 		pushService := services.NewPushService(configDir)
 		pushHandler := services.NewPushHandler(pushService)
 		pushHandler.RegisterRoutes(srv.mux)
-		push.StartPushSubscriber(serverCtx, deps.EventBus, pushService)
+		var pushOpts []push.DeliveryOption
+		if gate := deps.SessionService.DeliveryGate(); gate != nil {
+			pushOpts = append(pushOpts, push.WithSessionDeliveryGate(gate))
+		}
+		push.StartPushSubscriber(serverCtx, deps.EventBus, pushService, pushOpts...)
 		log.Info("Push notification service initialized")
 	}
 
@@ -770,6 +781,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		deps.Storage,
 		deps.EventBus,
 	)
+	// Hidden-session auto-allow history rows go through the delivery gate.
+	if gate := deps.SessionService.DeliveryGate(); gate != nil {
+		approvalHandler.SetAutoApprovedGate(gate)
+	}
 	// Wire the lazy base-URL resolver into the hook injector (hook_injector.go); both
 	// InjectHookConfig's PermissionRequest URL and InjectHooksConfig's stop/pre-tool-use/
 	// post-tool-use/prompt-submit endpoints resolve through this single shared mechanism.
