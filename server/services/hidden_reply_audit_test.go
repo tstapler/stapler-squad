@@ -207,6 +207,7 @@ func TestLooseningFlip_ShouldFailWithInternalAndZeroPersisted_WhenDiskIsFullButH
 	err := e.flip(flagLoosening, false)
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInternal, connect.CodeOf(err))
+	assert.NotContains(t, err.Error(), errDiskFull.Error(), "internal audit error text stays server-side")
 	_, ok := overrideOf(flagLoosening)
 	assert.False(t, ok)
 

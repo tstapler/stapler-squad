@@ -313,6 +313,8 @@ func TestLocalWriteGuard_ShouldKeepProbeProgramByteForByteAndListOnlyRegisteredP
 		probeProcedurePath: middleware.ProfileProbe,
 		nudgeProcedurePath: middleware.ProfileProbe,
 		pruneProcedurePath: middleware.ProfileRebinding,
+
+		updateFlagProcedurePath: middleware.ProfileRebinding,
 	}, guardedProcedures)
 	_, hasClear := guardedProcedures["/api"+sessionv1connect.SessionServiceClearNotificationHistoryProcedure]
 	assert.False(t, hasClear)

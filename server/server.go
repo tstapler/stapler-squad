@@ -1782,12 +1782,18 @@ const nudgeProcedurePath = "/api" + sessionv1connect.GitHubUserServiceNudgeSessi
 // guarded whole (dry run and apply) with the rebinding profile.
 const pruneProcedurePath = "/api" + sessionv1connect.SessionServicePruneHiddenSessionNotificationsProcedure
 
+// updateFlagProcedurePath is the full request path of UpdateFeatureFlag, which
+// flips protections (read-only guards, the delivery gate), guarded like prune.
+const updateFlagProcedurePath = "/api" + sessionv1connect.SessionServiceUpdateFeatureFlagProcedure
+
 // guardedProcedures is the LocalWriteGuard set. A new member names its profile;
 // ProbeProgram and the nudge keep the original probe verdict byte for byte.
 var guardedProcedures = map[string]middleware.GuardProfile{
 	probeProcedurePath: middleware.ProfileProbe,
 	nudgeProcedurePath: middleware.ProfileProbe,
 	pruneProcedurePath: middleware.ProfileRebinding,
+
+	updateFlagProcedurePath: middleware.ProfileRebinding,
 }
 
 // localChain is the :8543 middleware chain (inside otelhttp):

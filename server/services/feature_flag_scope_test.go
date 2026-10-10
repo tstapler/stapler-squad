@@ -218,10 +218,31 @@ func TestUpdateFeatureFlag_ShouldNeverRefuseDisablingClearScopeOrResetGlobal_Whe
 	for _, step := range []struct {
 		m     sessionv1.FlagMutation
 		scope string
-	}{{setOff, "kind:review"}, {clearScope, "kind:review"}, {setOff, "global"}, {resetGlob, ""}} {
+	}{{clearScope, "kind:review"}, {setOff, "kind:review"}, {setOff, "global"}, {resetGlob, ""}} {
 		_, err := mutateFlag(svc, gateFlag, step.m, step.scope)
 		require.NoError(t, err, "%v %q", step.m, step.scope)
 	}
+}
+
+// Clearing an explicit false kind override while the global value is on turns
+// that kind on, so it is held to the enable guard; a clear that changes nothing
+// about the effective value is not.
+func TestUpdateFeatureFlag_ShouldRefuseClearScope_WhenItTurnsAKindOnAndTheGuardReports(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	svc := NewFeatureFlagService()
+	svc.SetEnableGuard(gateFlag, func() string { return statsWriterNotRunning })
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(gateFlag, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlagScope(gateFlag, "kind:review", false))
+
+	_, err := mutateFlag(svc, gateFlag, clearScope, "kind:review")
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	v, ok := config.LoadConfig().GetFeatureFlagScopedOverride(gateFlag, "kind:review")
+	assert.True(t, ok && !v, "a refused clear persists nothing")
+
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(gateFlag, false))
+	_, err = mutateFlag(svc, gateFlag, clearScope, "kind:review")
+	require.NoError(t, err, "global off: the clear does not enable anything")
 }
 
 // T-FL-21 (per-kind half) / T-FL-09: a persisted false kind override is

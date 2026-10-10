@@ -44,3 +44,9 @@ func TestGetDeliveryGateStats_ShouldBeReachableWithoutAuthOnLocalListenerRequire
 	assert.Equal(t, http.StatusUnauthorized, post(remote, "onyx.lan:8444"), "remote listener: auth required")
 	assert.Equal(t, 1, reached, "an unauthenticated remote call must not reach the handler")
 }
+
+func TestUpdateFeatureFlag_ShouldBeInTheLocalWriteGuardSetWithRebindingProfile(t *testing.T) {
+	prof, ok := guardedProcedures[updateFlagProcedurePath]
+	require.True(t, ok, "UpdateFeatureFlag flips protections and must be guarded on the unauthenticated listener")
+	assert.Equal(t, middleware.ProfileRebinding, prof)
+}

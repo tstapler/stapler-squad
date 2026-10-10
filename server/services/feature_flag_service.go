@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -493,9 +494,9 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 		return nil, err
 	}
 
-	// Only the way on is guarded: disabling, clearing a scope and resetting the
-	// global value are never refused by a precondition.
-	if op.enabling() {
+	// Only the way on is guarded: disabling and resetting the global value are
+	// never refused. Clearing a scope is guarded only when it turns the kind on.
+	if op.enabling() || clearTurnsKindOn(op) {
 		if guard, ok := f.enableGuards[name]; ok {
 			if reason := guard(); reason != "" {
 				return nil, connect.NewError(connect.CodeFailedPrecondition,
@@ -510,7 +511,8 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 	// the unlock.
 	audit, err := f.auditBegin(ctx, op, flagRequestFields(ctx, req.Peer().Addr, req.Header()))
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("flag change not audited, nothing persisted: %w", err))
+		log.Error("feature flag change not audited, nothing persisted", "feature", name, "err", err)
+		return nil, connect.NewError(connect.CodeInternal, errors.New("flag change not audited, nothing persisted"))
 	}
 	defer audit.finish()
 

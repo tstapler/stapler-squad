@@ -54,6 +54,17 @@ func (o flagOp) enabling() bool {
 	return o.mutation == sessionv1.FlagMutation_FLAG_MUTATION_SET_ENABLED
 }
 
+// clearTurnsKindOn reports whether a CLEAR_SCOPE removes an explicit false
+// override while the global value is on, so the kind starts following global on.
+func clearTurnsKindOn(o flagOp) bool {
+	if o.mutation != sessionv1.FlagMutation_FLAG_MUTATION_CLEAR_SCOPE {
+		return false
+	}
+	cfg := config.LoadConfig()
+	override, ok := cfg.GetFeatureFlagScopedOverride(o.name, o.scope)
+	return ok && !override && cfg.GetFeatureFlagWithDefault(o.name, featureFlagDefault(o.name))
+}
+
 func (o flagOp) mutationName() string {
 	return strings.TrimPrefix(o.mutation.String(), "FLAG_MUTATION_")
 }

@@ -114,7 +114,8 @@ func TestUpdateFeatureFlag_ShouldAppendFlagChangeLineForEveryHiddenSessionGateFl
 }
 
 // T-FL-20 (clear and reset halves): with the stats writer down only enabling is
-// refused; scope clears, resets and disables always go through.
+// refused; disables, resets and clears that enable nothing go through (a clear
+// that turns a kind on is refused: see ShouldRefuseClearScope).
 func TestGateFlag_ShouldNeverRefuseDisablingClearScopeOrResetGlobal_WhenStatsWriterNotRunningAndRefuseEnablingAKind(t *testing.T) {
 	svc := newGatedFlagService(t)
 	ff := svc.featureFlagSvc
@@ -126,7 +127,7 @@ func TestGateFlag_ShouldNeverRefuseDisablingClearScopeOrResetGlobal_WhenStatsWri
 	for _, m := range []struct {
 		m     sessionv1.FlagMutation
 		scope string
-	}{{setOff, "kind:review"}, {clearScope, "kind:review"}, {setOff, "global"}, {resetGlob, ""}} {
+	}{{clearScope, "kind:review"}, {setOff, "kind:review"}, {setOff, "global"}, {resetGlob, ""}} {
 		_, err := mutateFlag(ff, config.HiddenSessionGateFeatureFlag, m.m, m.scope)
 		require.NoError(t, err, "%v %q", m.m, m.scope)
 	}
