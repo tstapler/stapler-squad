@@ -178,6 +178,11 @@ func (s *SessionService) RestartShell(
 			fmt.Errorf("session %q is not running", req.Msg.SessionId))
 	}
 
+	if _, err := AccessForUnary(inst, s.guards).Writer(nil); err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("session %q is a background session and is read-only: %w", req.Msg.SessionId, err))
+	}
+
 	// shellTmuxSessionName is deterministic per shell ID, so RestartShell reuses the
 	// same tmux session name — evict any existing streamer first so the new session
 	// gets a fresh one rather than a streamer still caching content from before the restart.

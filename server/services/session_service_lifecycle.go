@@ -638,6 +638,14 @@ func (s *SessionService) RestartSession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
 
+	// Restart ends the agent and types a marker into the new pane; a hidden
+	// (background) session is read-only for UI actions. Internal restarts
+	// (retry, program switch) do not come through this handler.
+	if _, err := AccessForUnary(instance, s.guards).Writer(nil); err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("session %q is a background session and is read-only: %w", req.Msg.Id, err))
+	}
+
 	// Restart the instance
 	if err := instance.Restart(req.Msg.PreserveOutput); err != nil {
 		log.Error("[RestartSession] failed to restart session", "session", instance.Title, "err", err)

@@ -22,23 +22,28 @@ import (
 // land here from the first PR in which the gate can flip, Reply and the steer
 // extend it later.
 const (
-	auditFileName     = "hidden-session-replies.jsonl"
-	auditBootSeqName  = "boot_seq"
-	auditDirMode      = 0o700
-	auditFileMode     = 0o600
-	auditRotateBytes  = 5 << 20
-	auditFilesKept    = 3
-	auditQueueSize    = 64
-	auditAppendBound  = 2 * time.Second
-	auditKindFlagChg  = "flag_change"
-	auditPhaseRequest = "requested"
-	auditPhaseResult  = "result"
+	auditFileName    = "hidden-session-replies.jsonl"
+	auditBootSeqName = "boot_seq"
+	auditDirMode     = 0o700
+	auditFileMode    = 0o600
+	auditRotateBytes = 5 << 20
+	auditFilesKept   = 3
+	auditQueueSize   = 64
+	auditAppendBound = 2 * time.Second
+	auditKindFlagChg = "flag_change"
+	// Steer line kinds (plan Story 5.2). Both carry a `requested` line before the
+	// write and a `result` line after it.
+	auditKindBacklogSteer = "backlog_steer"
+	auditKindGuardBypass  = "guard_bypass"
+	auditPhaseRequest     = "requested"
+	auditPhaseResult      = "result"
 )
 
 // Degraded-mode label values of hidden_session_audit_degraded_total.
 const (
 	auditModeQueued      = "flag_change_queued"
 	auditModeFallbackLog = "flag_change_fallback_log"
+	auditModeSteerLog    = "steer_fallback_log"
 )
 
 // Outcomes of a flag flip, recorded on the result line.
@@ -78,6 +83,17 @@ type AuditLine struct {
 	Origin    string `json:"origin,omitempty"`
 	UserAgent string `json:"user_agent,omitempty"`
 	AuthMode  string `json:"auth_mode,omitempty"`
+
+	// Steer lines (kind backlog_steer, guard_bypass). The preview is the first
+	// 80 characters only; the full text is never recorded.
+	SessionUUID    string `json:"session_uuid,omitempty"`
+	SessionTitle   string `json:"session_title,omitempty"`
+	ItemID         string `json:"item_id,omitempty"`
+	MessageLen     int    `json:"message_len,omitempty"`
+	MessageSHA256  string `json:"message_sha256,omitempty"`
+	MessagePreview string `json:"message_preview,omitempty"`
+	PeerLoopback   *bool  `json:"peer_loopback,omitempty"`
+	Proxied        *bool  `json:"proxied,omitempty"`
 }
 
 // AuditSink appends to <config dir>/audit/hidden-session-replies.jsonl. It does
@@ -368,8 +384,19 @@ func (s *AuditSink) drainOne(l AuditLine) {
 // Fallback writes the line's fields to the main log as one WARN record and
 // counts it; the main log is not tamper-evident, which the ADR states.
 func (s *AuditSink) fallback(l AuditLine, cause error) {
-	s.degraded(auditModeFallbackLog)
 	bootID, bootSeq := s.bootID, s.bootSeqString()
+	if l.Kind == auditKindBacklogSteer || l.Kind == auditKindGuardBypass {
+		s.degraded(auditModeSteerLog)
+		s.logger.Warn("steer_audit_degraded",
+			"cause", cause.Error(), "kind", l.Kind, "phase", l.Phase, "change_id", l.ChangeID, "outcome", l.Outcome,
+			"session_uuid", l.SessionUUID, "session_title", l.SessionTitle, "item_id", l.ItemID,
+			"message_len", l.MessageLen, "message_sha256", l.MessageSHA256, "message_preview", l.MessagePreview,
+			"boot_id", bootID, "boot_seq", bootSeq, "listener", l.Listener, "peer_addr", l.PeerAddr,
+			"peer_loopback", boolPtrString(l.PeerLoopback), "proxied", boolPtrString(l.Proxied),
+			"host", l.Host, "origin", l.Origin, "user_agent", l.UserAgent, "auth_mode", l.AuthMode)
+		return
+	}
+	s.degraded(auditModeFallbackLog)
 	s.logger.Warn("flag_change_audit_degraded",
 		"cause", cause.Error(), "phase", l.Phase, "change_id", l.ChangeID, "flag", l.Flag, "scope", l.Scope,
 		"previous", boolPtrString(l.Previous), "new", boolPtrString(l.New), "outcome", l.Outcome, "seq", l.Seq,

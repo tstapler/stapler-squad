@@ -81,14 +81,15 @@ func (s *SessionService) IsReadyForSteer(sessionUUID string) bool {
 	return inst != nil && s.instanceReadyForSteer(inst) == notReadyNone
 }
 
-// SteerActiveSession implements SessionSteerer, delegating to the same
-// steerInstance UpdateSession's SteerMessage handling uses.
+// SteerActiveSession implements SessionSteerer. It is the internal steer: it
+// takes no per-request access decision, its callers are pinned by the guard
+// set (Story 5.1d), and a hidden target still succeeds (characterized).
 func (s *SessionService) SteerActiveSession(ctx context.Context, sessionUUID, message string) error {
 	inst := s.FindLiveInstance(sessionUUID)
 	if inst == nil {
 		return fmt.Errorf("steer session %q: not tracked live", sessionUUID)
 	}
-	return s.steerInstance(ctx, inst, message)
+	return s.steerInternal(ctx, inst, message)
 }
 
 // ArchiveSessionByUUID satisfies the BacklogService.SessionStopper interface and the

@@ -38,6 +38,7 @@ const (
 	CounterAuditDegraded       = "hidden_session_audit_degraded_total"             // mode
 	CounterCrashCoalesced      = "notification_crash_coalesced_total"              // (none)
 	CounterLeaseWedgeNotified  = "hidden_session_write_lease_wedge_notified_total" // (none)
+	CounterBacklogSteer        = "hidden_session_backlog_steer_total"              // outcome
 	histogramFilterDurationSec = "notification_gate_filter_duration_seconds"       // OTel only
 	counterLabelSeparator      = "|"
 )
@@ -59,6 +60,7 @@ var counterLabelKeys = map[string][]string{
 	CounterIndexRefresh:     {"result"},
 	CounterLegacySuppressed: {"site", "type", "class"},
 	CounterAuditDegraded:    {"mode"},
+	CounterBacklogSteer:     {"outcome"},
 }
 
 // maxLabels is the widest counter label set (suppressed: channel, type, reason, kind).
@@ -268,6 +270,7 @@ var counterShortNames = map[string]string{
 	CounterAuditDegraded:      "audit_degraded",
 	CounterCrashCoalesced:     "crash_coalesced",
 	CounterLeaseWedgeNotified: "lease_wedge_notified",
+	CounterBacklogSteer:       "backlog_steer",
 }
 
 // ShortCounterName is the name the stats RPC reports for a counter.

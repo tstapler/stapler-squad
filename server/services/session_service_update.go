@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -156,6 +155,13 @@ func (s *SessionService) UpdateSession(
 	instance := findInstanceByID(instances, req.Msg.Id)
 	if instance == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	// The access decision comes before any mutation below: several of them
+	// publish in memory at once, so a steer rejected late would leave them applied.
+	steer, err := s.decideUpdateAccess(ctx, req, instance)
+	if err != nil {
+		return nil, err
 	}
 
 	// Captured before any rename below mutates instance.Title in-memory. A narrow
@@ -312,17 +318,16 @@ func (s *SessionService) UpdateSession(
 	// non-autonomous, Instance-backed sessions fall back to the same PTY send
 	// primitive the MCP steer_session tool already uses (tools_terminal.go's
 	// SendKeys fallback branch) so browser-originated steering reaches ordinary
-	// backlog work/review sessions too, not just autonomous ones.
+	// backlog work/review sessions too, not just autonomous ones. The access
+	// decision above already chose between the visible path and the audited
+	// O7 backlog-link path.
 	if req.Msg.SteerMessage != nil && *req.Msg.SteerMessage != "" {
 		if len(*req.Msg.SteerMessage) > session.MaxSteerMessageLength {
 			return nil, connect.NewError(connect.CodeInvalidArgument,
 				fmt.Errorf("steer_message exceeds maximum length of %d bytes", session.MaxSteerMessageLength))
 		}
-		if err := s.steerInstance(ctx, instance, *req.Msg.SteerMessage); err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				return nil, connect.NewError(connect.CodeDeadlineExceeded, err)
-			}
-			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+		if err := s.runSteer(ctx, steer, instance, *req.Msg.SteerMessage); err != nil {
+			return nil, steerErrorToConnect(err)
 		}
 	}
 
@@ -360,73 +365,6 @@ func (s *SessionService) UpdateSession(
 	return connect.NewResponse(&sessionv1.UpdateSessionResponse{
 		Session: adapters.InstanceToProto(instance, s.workflowNames()),
 	}), nil
-}
-
-// steerInstance injects message into instance's active session. Autonomous
-// sessions keep the existing ClaudeController command-queue path;
-// non-autonomous, Instance-backed sessions fall back to the same PTY send
-// primitive the MCP steer_session tool already uses. Returns only plain
-// fmt.Errorf-wrapped errors — never connect.NewError/connect.Code* — since
-// SteerActiveSession calls this in-process from BacklogService; UpdateSession
-// is the sole caller that translates the error into a connect.Code.
-func (s *SessionService) steerInstance(ctx context.Context, instance *session.Instance, message string) error {
-	// steerInstance is the chain's one acquirer (Story 5.0): UpdateSession,
-	// SteerActiveSession and the guarded-steer family all come through here,
-	// and the lease is handed down to the write below.
-	lease, ok := instance.TryTerminalWriteLease(session.LeaseWriterSteer)
-	if !ok {
-		return fmt.Errorf("steer session %q: %w", instance.Title, session.ErrLeaseBusy)
-	}
-	return s.steerWithLease(ctx, instance, lease, message)
-}
-
-// steerWithLease is steerInstance's body: it receives the held lease and
-// releases it exactly once on every path (the autonomous branch's writing
-// goroutine, or SubmitContentWithEnter's).
-func (s *SessionService) steerWithLease(ctx context.Context, instance *session.Instance, lease *session.HeldLease, message string) error {
-	if instance.AutonomousMode {
-		controller := instance.GetController()
-		if controller == nil {
-			lease.Release()
-			return fmt.Errorf("steer autonomous session %q: controller not started", instance.Title)
-		}
-
-		// SendCommandImmediate's own ~5min internal timeout doesn't protect
-		// against the raw PTY write itself hanging, which would leak
-		// steerActiveSessionForPRFix's steerInFlight guard forever.
-		errCh := make(chan error, 1)
-		go func() {
-			defer lease.Release()
-			_, sendErr := controller.SendCommandImmediate(message + "\r")
-			errCh <- sendErr
-		}()
-
-		timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-
-		select {
-		case sendErr := <-errCh:
-			if sendErr != nil {
-				return fmt.Errorf("steer autonomous session %q: %w", instance.Title, sendErr)
-			}
-		case <-timeoutCtx.Done():
-			return fmt.Errorf("timed out steering autonomous session %q: %w", instance.Title, timeoutCtx.Err())
-		}
-		s.notifySteerSent(instance, message)
-		return nil
-	}
-
-	// Non-autonomous sessions get the same PTY send primitive the MCP
-	// steer_session tool falls back to (session.SubmitContentWithEnter,
-	// bounded with a generous timeout so a browser click against a
-	// wedged/dead session can't hang this goroutine forever) — content and
-	// the submit keystroke travel as two separate SendKeys writes (BUG-031),
-	// never concatenated.
-	if err := session.SubmitContentWithEnter(ctx, instance, lease, message); err != nil {
-		return fmt.Errorf("steer session %q: %w", instance.Title, err)
-	}
-	s.notifySteerSent(instance, message)
-	return nil
 }
 
 // notifySteerSent logs and publishes the "steering input sent" notification

@@ -36,7 +36,8 @@ type guardConfig struct {
 	// writerTypes: a use of an object whose type is one of these names satisfies R1/R2.
 	writerTypes map[string]bool
 	// capabilityTypes: type name -> the one file that may construct it.
-	capabilityTypes map[string]string
+	capabilityTypes      map[string]string
+	constructorCallTypes map[string]bool
 	// primitiveMethods are UI-stream primitives matched by method name on module types.
 	primitiveMethods map[string]bool
 	// primitiveFuncs are package-level functions that write to a pane.
@@ -56,9 +57,15 @@ func realGuardConfig() guardConfig {
 	return guardConfig{
 		writerTypes: map[string]bool{"TerminalWriter": true, "paneWriter": true},
 		capabilityTypes: map[string]string{
-			"paneWriter": "terminal_access.go",
-			"HeldLease":  "instance_write_lease.go",
+			"paneWriter":         "terminal_access.go",
+			"HeldLease":          "instance_write_lease.go",
+			"steerAuthorization": "steer_authorization.go",
+			"BacklogReviewLink":  "hidden_review_steer.go",
 		},
+		// constructorCallTypes: a call returning one of these is a construction too,
+		// so the token has exactly one creating file (a plain conversion or literal
+		// is caught separately).
+		constructorCallTypes: map[string]bool{"steerAuthorization": true},
 		primitiveMethods: map[string]bool{
 			"WriteToPTY": true, "SendInputViaControlMode": true, "ResizePTY": true, "ResizePTYContext": true,
 			"SetWindowSize": true, "SetWindowSizeContext": true, "RequestResize": true, "ForwardScroll": true,
@@ -153,6 +160,17 @@ func walkUnits(file *ast.File, visit func(u unit, n ast.Node)) {
 				stack = append(stack, unit{name: name, decl: true})
 				if x.Body != nil {
 					walk(x.Body)
+				}
+				stack = stack[:len(stack)-1]
+				return false
+			case *ast.ValueSpec:
+				// A package-level variable initializer is a unit named for the variable.
+				if len(stack) > 0 || len(x.Names) == 0 {
+					return true
+				}
+				stack = append(stack, unit{name: x.Names[0].Name, decl: true})
+				for _, v := range x.Values {
+					walk(v)
 				}
 				stack = stack[:len(stack)-1]
 				return false
@@ -323,6 +341,8 @@ func (c guardConfig) checkCapabilityLiterals(pkgs []*packages.Package, pkgFilter
 						report(p, x.Pos(), "new()", name)
 					} else if ftv, isType := p.TypesInfo.Types[x.Fun]; isType && ftv.IsType() {
 						report(p, x.Pos(), "conversion", name)
+					} else if c.constructorCallTypes[name] {
+						report(p, x.Pos(), "constructor call", name)
 					}
 				case *ast.ValueSpec:
 					if x.Type == nil || len(x.Values) > 0 {
@@ -484,13 +504,24 @@ func TestGuardChecks_ShouldFail_WhenFixtureHasAUiFunctionThatIgnoresOrLacksTheWr
 		if !containsSubstring(lits, how+" of paneWriter in") {
 			t.Errorf("check (a) did not flag a %s outside the defining file; findings: %v", how, lits)
 		}
+		if !containsSubstring(lits, how+" of steerAuthorization in") {
+			t.Errorf("check (a) did not flag a steerAuthorization %s outside steer_authorization.go; findings: %v", how, lits)
+		}
 	}
-	if !containsSubstring(lits, "composite literal of HeldLease in") {
-		t.Errorf("check (a) did not flag a HeldLease literal outside instance_write_lease.go; findings: %v", lits)
+	for _, want := range []string{
+		"composite literal of HeldLease in",
+		"constructor call of steerAuthorization in",
+		"composite literal of BacklogReviewLink in",
+	} {
+		if !containsSubstring(lits, want) {
+			t.Errorf("check (a) did not flag %q outside the defining file; findings: %v", want, lits)
+		}
 	}
 	for _, f := range lits {
-		if strings.HasSuffix(f, "/terminal_access.go") || strings.HasSuffix(f, "/instance_write_lease.go") {
-			t.Errorf("check (a) flagged the defining file: %s", f)
+		for _, defining := range []string{"/terminal_access.go", "/instance_write_lease.go", "/steer_authorization.go", "/hidden_review_steer.go"} {
+			if strings.HasSuffix(f, defining) {
+				t.Errorf("check (a) flagged the defining file: %s", f)
+			}
 		}
 	}
 

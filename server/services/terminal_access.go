@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
@@ -31,6 +32,41 @@ func AccessFor(inst *session.Instance) TerminalAccess {
 		return TerminalReadOnly
 	}
 	return TerminalReadWrite
+}
+
+// GuardsFlag is the live hidden_session_readonly_guards value, injected into
+// the unary handlers (never a bool a caller could pass as true). A nil
+// GuardsFlag means the guards are on: only an explicit "off" ever loosens them.
+type GuardsFlag interface {
+	GuardsEnabled() bool
+}
+
+// UnaryGuardsFlag is the atomic behind GuardsFlag. The zero value (and a nil
+// pointer) is "on", so an unreadable config keeps the guards on.
+type UnaryGuardsFlag struct{ off atomic.Bool }
+
+// GuardsEnabled reports whether hidden targets are refused by the unary handlers.
+func (f *UnaryGuardsFlag) GuardsEnabled() bool { return f == nil || !f.off.Load() }
+
+// SetEnabled flips the flag; false lets the unary handlers accept hidden targets.
+func (f *UnaryGuardsFlag) SetEnabled(on bool) { f.off.Store(!on) }
+
+// AccessForUnary is the constructor of the Story 5.2 unary handlers
+// (WriteToSession, UpdateSession, RestartSession, RestartShell, SwitchWorkspace).
+// It differs from AccessFor only in the live flag: a hidden target is
+// ReadWrite while the flag is off. The pinned-caller test fails if any other
+// function, a stream site included, calls it.
+func AccessForUnary(inst *session.Instance, flag GuardsFlag) TerminalAccess {
+	if inst == nil {
+		return TerminalReadOnly
+	}
+	if !inst.Snapshot().Hidden {
+		return TerminalReadWrite
+	}
+	if flag != nil && !flag.GuardsEnabled() {
+		return TerminalReadWrite
+	}
+	return TerminalReadOnly
 }
 
 // Writer returns the capability that every UI-stream pane write goes through,

@@ -22,12 +22,19 @@ type TerminalService struct {
 	// SetExternalDiscovery, forwarded from SessionService's own setters.
 	poller       *session.ReviewQueuePoller
 	extDiscovery *session.ExternalSessionDiscovery
+	// guards is the live hidden_session_readonly_guards value; nil means on.
+	guards GuardsFlag
 }
 
 // NewTerminalService creates a TerminalService. Wire poller and externalDiscovery
 // after construction via SetPoller and SetExternalDiscovery.
 func NewTerminalService() *TerminalService {
 	return &TerminalService{}
+}
+
+// SetGuardsFlag injects the live read-only guards flag.
+func (ts *TerminalService) SetGuardsFlag(f GuardsFlag) {
+	ts.guards = f
 }
 
 // SetPoller wires the live-instance poller for instance lookup.
@@ -113,6 +120,13 @@ func (ts *TerminalService) WriteToSession(
 	inst := ts.findInstance(req.Msg.SessionId)
 	if inst == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
+	}
+
+	// A hidden (background) session is read-only for UI input; the flag
+	// hidden_session_readonly_guards turns this off at runtime.
+	if _, err := AccessForUnary(inst, ts.guards).Writer(nil); err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("session %q is a background session and is read-only: %w", req.Msg.SessionId, err))
 	}
 
 	// BUG-047: must use session.EnterKeySequence ('\r'), not a bare '\n' —

@@ -33,3 +33,12 @@ func badConstruct() (TerminalWriter, TerminalWriter, TerminalWriter) {
 
 // badLease builds the lease capability outside its defining file (check (a)).
 func badLease() *HeldLease { return &HeldLease{owner: "forged"} }
+
+// badToken builds the steer token outside its defining file in every spelling (check (a)).
+func badToken() (steerAuthorization, steerAuthorization, *steerAuthorization, steerAuthorization, steerAuthorization) {
+	var zero steerAuthorization
+	return steerAuthorization{kind: 3}, zero, new(steerAuthorization), steerAuthorization(rawAuth{}), newSteerAuthorization()
+}
+
+// badLink builds the backlog link outside its defining file (check (a)).
+func badLink() BacklogReviewLink { return BacklogReviewLink{session: "forged"} }

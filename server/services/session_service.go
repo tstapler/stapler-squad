@@ -89,6 +89,13 @@ type SessionService struct {
 	// session_service_guarded_steer.go. The zero value is production-ready.
 	guardedSteer guardedSteerState
 
+	// guards is the live hidden_session_readonly_guards value the unary handlers
+	// read through AccessForUnary; the zero value is "on".
+	guards *UnaryGuardsFlag
+	// backlogLinks decides whether a hidden session is a live backlog review
+	// session (the O7 steer exemption).
+	backlogLinks BacklogLinkResolver
+
 	// deliveryGate is the hidden-session delivery gate installed as the event bus
 	// publish filter at construction (nil when built through NewSessionService).
 	deliveryGate *deliverygate.Gate
@@ -916,6 +923,15 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	}
 	capacityMonitor.sessionSwitcher = svc
 	capacityMonitor.poller = svc
+
+	svc.guards = &UnaryGuardsFlag{}
+	svc.terminalSvc.SetGuardsFlag(svc.guards)
+	workspaceSvc.SetGuardsFlag(svc.guards)
+	var linkLookup itemSessionLookup
+	if concStorage != nil {
+		linkLookup = concStorage
+	}
+	svc.backlogLinks = storageLinkResolver{lookup: linkLookup}
 
 	if config.IsTestMode() {
 		svc.testTmuxServerSocket = fmt.Sprintf("test_server_services_%d_%d", os.Getpid(), atomic.AddUint64(&testTmuxServerSocketCounter, 1))

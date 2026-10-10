@@ -81,4 +81,33 @@ describe("BacklogItemDetail steer characterization (Task 5.2d)", () => {
       expect(showActionToast).toHaveBeenCalledWith("Steering message sent.", "success", `${sessionId}:steer`)
     );
   });
+
+  // T-RO-35: the server refuses a hidden-review steer when its audit line cannot
+  // be written; the composer says so in one explicit sentence.
+  it("backlog_composer_should_show_audit_log_unavailable_message_when_steer_fails_with_audit_error", async () => {
+    const sessionId = "review-live-2";
+    const item = makeReviewItem({
+      linkedSessions: [
+        { entityId: "entity-review-2", sessionId, role: "review", estimatedCostUsd: 0 },
+      ],
+    });
+    getBacklogItem.mockReset().mockResolvedValue(item);
+    updateSession.mockReset().mockRejectedValue(new Error("[internal] audit log unavailable, steer not sent"));
+    showActionToast.mockClear();
+    localStorage.clear();
+
+    render(<BacklogItemDetail itemId={item.id} />);
+
+    fireEvent.click(await screen.findByTestId(`session-steer-toggle-${sessionId}`));
+    fireEvent.change(screen.getByTestId(`session-steer-input-${sessionId}`), { target: { value: "go on" } });
+    fireEvent.click(screen.getByTestId(`session-steer-submit-${sessionId}`));
+
+    await waitFor(() =>
+      expect(showActionToast).toHaveBeenCalledWith(
+        "Audit log unavailable, steer not sent",
+        "error",
+        `${sessionId}:steer`
+      )
+    );
+  });
 });

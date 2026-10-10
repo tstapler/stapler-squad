@@ -30,12 +30,12 @@ func TestSteerInstance_ShouldReturnRetryableBusyWithZeroWrites_WhenTheLeaseIsHel
 	held, ok := inst.TryTerminalWriteLease(session.LeaseWriterDriver)
 	require.True(t, ok)
 
-	err := fix.svc.steerInstance(context.Background(), inst, "fix it")
+	err := fix.svc.steerInternal(context.Background(), inst, "fix it")
 	require.ErrorIs(t, err, session.ErrLeaseBusy)
 	assert.Empty(t, pm.writes())
 
 	held.Release()
-	require.NoError(t, fix.svc.steerInstance(context.Background(), inst, "fix it"))
+	require.NoError(t, fix.svc.steerInternal(context.Background(), inst, "fix it"))
 	assert.Equal(t, []string{"fix it", session.EnterKeySequence}, pm.writes())
 	session.AssertLeaseFree(t, inst)
 }

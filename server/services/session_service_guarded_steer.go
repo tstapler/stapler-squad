@@ -116,7 +116,7 @@ func (s *SessionService) InstanceReadyForSteer(inst *session.Instance) bool {
 // shared by the manual nudge RPC and PR-fix auto-steer. Order: guard ->
 // idle gate -> pane-ownership verification -> write. Pane ownership is
 // verified unconditionally and immediately before the write because
-// steerInstance does not do it itself (tmux-name collision, ce71ad1a).
+// steerInternal does not do it itself (tmux-name collision, ce71ad1a).
 // Not-delivered outcomes other than SteerFailed return a nil error.
 func (s *SessionService) SteerInstanceGuarded(ctx context.Context, inst *session.Instance, sig, msg string) (SteerOutcome, error) {
 	if inst == nil {
@@ -165,7 +165,7 @@ func (s *SessionService) SteerInstanceGuarded(ctx context.Context, inst *session
 
 	write := s.guardedSteer.write
 	if write == nil {
-		write = s.steerInstance
+		write = s.steerInternal
 	}
 	if err := write(ctx, inst, msg); err != nil {
 		if errors.Is(err, session.ErrLeaseBusy) {

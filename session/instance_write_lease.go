@@ -107,6 +107,15 @@ func (l *HeldLease) Writer() string {
 	return l.writer
 }
 
+// OwnerUUID is the identity of the instance the lease is bound to ("" for a nil
+// or zero-value lease), so a consumer can refuse a lease for another session.
+func (l *HeldLease) OwnerUUID() string {
+	if l == nil {
+		return ""
+	}
+	return l.owner
+}
+
 // Release frees the lease. Idempotent and nil-safe: the one-release rule is the
 // design, the sync.Once is the backstop.
 func (l *HeldLease) Release() {

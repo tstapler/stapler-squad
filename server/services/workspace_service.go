@@ -68,6 +68,8 @@ type WorkspaceService struct {
 	storage    *session.Storage
 	eventBus   *events.EventBus
 	liveFinder LiveInstanceFinder
+	// guards is the live hidden_session_readonly_guards value; nil means on.
+	guards GuardsFlag
 	// inFlightSwitches tracks session IDs currently undergoing a workspace switch.
 	// Prevents concurrent SwitchWorkspace RPCs on the same session from corrupting state.
 	inFlightSwitches sync.Map
@@ -90,6 +92,11 @@ func NewWorkspaceService(storage *session.Storage, eventBus *events.EventBus) *W
 // SessionService so that read-only RPCs bypass LoadInstances().
 func (ws *WorkspaceService) SetLiveFinder(f LiveInstanceFinder) {
 	ws.liveFinder = f
+}
+
+// SetGuardsFlag injects the live read-only guards flag.
+func (ws *WorkspaceService) SetGuardsFlag(f GuardsFlag) {
+	ws.guards = f
 }
 
 // findInstanceFast returns the live instance for the given id. It tries the
@@ -349,17 +356,24 @@ func (ws *WorkspaceService) SwitchWorkspace(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("target is required"))
 	}
 
+	instance, err := ws.findInstanceFast(req.Msg.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	// Every switch type types into or restarts the pane, so a hidden target is
+	// refused before the in-flight entry, the checkpoint or any git-side change.
+	if _, err := AccessForUnary(instance, ws.guards).Writer(nil); err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("session %q is a background session and is read-only: %w", req.Msg.Id, err))
+	}
+
 	// Guard against concurrent switches on the same session.
 	if _, loaded := ws.inFlightSwitches.LoadOrStore(req.Msg.Id, true); loaded {
 		return nil, connect.NewError(connect.CodeUnavailable,
 			fmt.Errorf("workspace switch already in progress for session '%s'", req.Msg.Id))
 	}
 	defer ws.inFlightSwitches.Delete(req.Msg.Id)
-
-	instance, err := ws.findInstanceFast(req.Msg.Id)
-	if err != nil {
-		return nil, err
-	}
 
 	// ExistingDir despite the "never compare it" rule on Workspace: this keys the
 	// VCS status cache, and that status is genuinely a property of the directory

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -22,6 +23,8 @@ type steerRecordingPM struct {
 	pending bool
 }
 
+func (r *steerRecordingPM) GetSessionIdentifier() string         { return "" }
+func (r *steerRecordingPM) GetPanePID() (int32, error)           { return 0, errors.New("no pane") }
 func (r *steerRecordingPM) HasSession() bool                     { return true }
 func (r *steerRecordingPM) IsAlive() bool                        { return true }
 func (r *steerRecordingPM) HasMeaningfulContent(string) bool     { return false }
@@ -52,8 +55,10 @@ func (r *steerRecordingPM) writes() []string {
 
 // TestUpdateSessionSteer_ShouldSucceedOnMain_WhenHiddenLinkedReviewSession is the
 // Task 5.2d characterization (T-RO-22): UpdateSession accepts a steer to a
-// hidden review session linked to a backlog item today. The read-only guard
-// must keep this path working for exactly this shape (O7). It also pins the
+// hidden review session linked to a backlog item (on main without any request
+// record; since PR 5u through the typed, audited path, which needs the request
+// record the real server chain stamps). The read-only guard must keep this
+// path working for exactly this shape (O7). It also pins the
 // durable "live review link" predicate the typed steer path will implement:
 // the session's newest item_session row is a review row with no EndedAt, and
 // the instance is live.
@@ -62,6 +67,9 @@ func (r *steerRecordingPM) writes() []string {
 func TestUpdateSessionSteer_ShouldSucceedOnMain_WhenHiddenLinkedReviewSession(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	ctx := context.Background()
+	sink := NewAuditSink(func() (string, error) { return "/cfg", nil }, WithAuditFS(newMemFS()))
+	t.Cleanup(sink.Close)
+	fix.svc.featureFlagSvc.SetAudit(sink, nil)
 
 	const sessionUUID = "hidden-review-steer-uuid"
 	pm := &steerRecordingPM{}
@@ -96,7 +104,11 @@ func TestUpdateSessionSteer_ShouldSucceedOnMain_WhenHiddenLinkedReviewSession(t 
 	assert.True(t, inst.Snapshot().Hidden, "the session is hidden")
 
 	msg := "re-check the acceptance criteria"
-	resp, err := fix.svc.UpdateSession(ctx, connect.NewRequest(&sessionv1.UpdateSessionRequest{
+	// The hidden-steer path evaluates the rebinding verdict from the stamped
+	// request record, as the production chain provides it.
+	cfg := verdictServiceConfig("localhost:8543", nil)
+	reqCtx := stampedContext(t, &cfg, ListenerLocal, false, "localhost:8543", nil)
+	resp, err := fix.svc.UpdateSession(reqCtx, connect.NewRequest(&sessionv1.UpdateSessionRequest{
 		Id:           inst.Title,
 		SteerMessage: &msg,
 	}))
