@@ -697,6 +697,17 @@ test-integration: ensure-tools proto-gen $(GOTESTSUM_BIN) ## Run integration tes
 	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags integration -timeout 20m -p 1 ./session ./session/tmux
 	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags integration -timeout 20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/tmux)$$')
 
+# Type-based delivery-gate and terminal-write guards (Story 2.6 / Story 5.1d).
+# Runs only the Test* funcs declared in files tagged `//go:build sinkguard`
+# (selected per package with -run), so it does not re-run the untagged suite.
+.PHONY: test-delivery-guards
+test-delivery-guards: ensure-tools proto-gen ent-gen $(GOTESTSUM_BIN) ## Run the sinkguard-tagged type-based guard tests
+	@set -e; for d in $$(grep -rl --include='*_test.go' '^//go:build sinkguard' server session cmd pkg 2>/dev/null | xargs -r -n1 dirname | sort -u); do \
+		names=$$(grep -h -oE '^func (Test[A-Za-z0-9_]+)' $$(grep -l '^//go:build sinkguard' $$d/*_test.go) | sed 's/^func //' | paste -sd'|' -); \
+		[ -n "$$names" ] || continue; \
+		$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -tags sinkguard -timeout 20m -run "^($$names)$$" ./$$d; \
+	done
+
 test-triage-harness: proto-gen ## Run all backlog triage harness phases (no UI/browser needed)
 	go test -v -tags=harness -run TestTriageHarness ./server/services/
 
@@ -958,7 +969,7 @@ dev-setup: install-tools ## Set up development environment
 	@echo "Development environment setup complete!"
 	@echo "Run 'make help' to see available commands"
 
-ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration test-shell fmt-check registry-generate actor-field-guard ptmx-field-guard otel-auto-isolation-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
+ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration test-delivery-guards test-shell fmt-check registry-generate actor-field-guard ptmx-field-guard otel-auto-isolation-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
 
 # ready: everything `make ci` runs, plus the CI-only checks that have no local
 # equivalent yet — .github/workflows/lint.yml's complexity gate (gocyclo/
