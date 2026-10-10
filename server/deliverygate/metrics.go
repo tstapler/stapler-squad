@@ -25,19 +25,20 @@ const (
 // Counter names. Each is mirrored in-process (the OTel meter is a no-op when
 // telemetry is not initialized, so the soak cannot depend on it).
 const (
-	CounterSuppressed          = "notification_delivery_suppressed_total"       // channel,type,reason,kind
-	CounterWouldSuppress       = "notification_delivery_would_suppress_total"   // channel,type,reason,kind
-	CounterHiddenDelivered     = "notification_hidden_delivered_total"          // channel,class,kind
-	CounterUnresolved          = "notification_delivery_unresolved_total"       // class
-	CounterIndexMiss           = "notification_gate_index_miss_total"           // (none)
-	CounterIndexRefresh        = "notification_gate_index_refresh_total"        // result
-	CounterResolvedLater       = "notification_unresolved_resolved_later_total" // (none)
-	CounterFilterPanic         = "notification_gate_filter_panic_total"         // (none)
-	CounterLegacySuppressed    = "notification_legacy_hidden_suppressed_total"  // site,type,class
-	CounterRPCUnversioned      = "notification_rpc_unversioned_total"           // (none)
-	CounterAuditDegraded       = "hidden_session_audit_degraded_total"          // mode
-	CounterCrashCoalesced      = "notification_crash_coalesced_total"           // (none)
-	histogramFilterDurationSec = "notification_gate_filter_duration_seconds"    // OTel only
+	CounterSuppressed          = "notification_delivery_suppressed_total"          // channel,type,reason,kind
+	CounterWouldSuppress       = "notification_delivery_would_suppress_total"      // channel,type,reason,kind
+	CounterHiddenDelivered     = "notification_hidden_delivered_total"             // channel,class,kind
+	CounterUnresolved          = "notification_delivery_unresolved_total"          // class
+	CounterIndexMiss           = "notification_gate_index_miss_total"              // (none)
+	CounterIndexRefresh        = "notification_gate_index_refresh_total"           // result
+	CounterResolvedLater       = "notification_unresolved_resolved_later_total"    // (none)
+	CounterFilterPanic         = "notification_gate_filter_panic_total"            // (none)
+	CounterLegacySuppressed    = "notification_legacy_hidden_suppressed_total"     // site,type,class
+	CounterRPCUnversioned      = "notification_rpc_unversioned_total"              // (none)
+	CounterAuditDegraded       = "hidden_session_audit_degraded_total"             // mode
+	CounterCrashCoalesced      = "notification_crash_coalesced_total"              // (none)
+	CounterLeaseWedgeNotified  = "hidden_session_write_lease_wedge_notified_total" // (none)
+	histogramFilterDurationSec = "notification_gate_filter_duration_seconds"       // OTel only
 	counterLabelSeparator      = "|"
 )
 
@@ -103,7 +104,7 @@ func otelInstrument(name string) metric.Int64Counter {
 				otelCounters.Store(n, c)
 			}
 		}
-		for _, n := range []string{CounterIndexMiss, CounterResolvedLater, CounterFilterPanic, CounterRPCUnversioned, CounterCrashCoalesced} {
+		for _, n := range []string{CounterIndexMiss, CounterResolvedLater, CounterFilterPanic, CounterRPCUnversioned, CounterCrashCoalesced, CounterLeaseWedgeNotified} {
 			if c, err := meter.Int64Counter(n); err == nil {
 				otelCounters.Store(n, c)
 			}
@@ -254,18 +255,19 @@ func (m *Metrics) Series() []Series {
 }
 
 var counterShortNames = map[string]string{
-	CounterSuppressed:       "suppressed",
-	CounterWouldSuppress:    "would_suppress",
-	CounterHiddenDelivered:  "hidden_delivered",
-	CounterUnresolved:       "unresolved",
-	CounterIndexMiss:        "index_miss",
-	CounterIndexRefresh:     "index_refresh",
-	CounterResolvedLater:    "unresolved_resolved_later",
-	CounterFilterPanic:      "filter_panic",
-	CounterLegacySuppressed: "legacy_hidden_suppressed",
-	CounterRPCUnversioned:   "rpc_unversioned",
-	CounterAuditDegraded:    "audit_degraded",
-	CounterCrashCoalesced:   "crash_coalesced",
+	CounterSuppressed:         "suppressed",
+	CounterWouldSuppress:      "would_suppress",
+	CounterHiddenDelivered:    "hidden_delivered",
+	CounterUnresolved:         "unresolved",
+	CounterIndexMiss:          "index_miss",
+	CounterIndexRefresh:       "index_refresh",
+	CounterResolvedLater:      "unresolved_resolved_later",
+	CounterFilterPanic:        "filter_panic",
+	CounterLegacySuppressed:   "legacy_hidden_suppressed",
+	CounterRPCUnversioned:     "rpc_unversioned",
+	CounterAuditDegraded:      "audit_degraded",
+	CounterCrashCoalesced:     "crash_coalesced",
+	CounterLeaseWedgeNotified: "lease_wedge_notified",
 }
 
 // ShortCounterName is the name the stats RPC reports for a counter.

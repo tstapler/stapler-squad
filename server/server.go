@@ -335,6 +335,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		srv.shutdownHooks = append(srv.shutdownHooks, gate.Stop)
 		srv.startGateStatsWriter(serverCtx, deps, gate, configDir, configErr)
 	}
+	srv.startLeaseWedgeWatcher(serverCtx, deps)
 
 	// Initialize push notification service.
 	if configErr == nil {
