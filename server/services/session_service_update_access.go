@@ -38,12 +38,16 @@ func otherMutatingFields(msg *sessionv1.UpdateSessionRequest) []string {
 }
 
 // restartsPane reports whether applying program or auto_approve would restart
-// the agent (and type a marker into the new pane), the second route into a
-// hidden session's terminal (ADV-N28). A value equal to the current one is a
-// no-op in the handler and is not refused here.
+// the agent (and type a marker into the new pane), or autonomous_mode=true would
+// start the driver typing into it: further routes into a hidden session's
+// terminal (ADV-N28). A value equal to the current one is a no-op in the handler
+// and is not refused here.
 func restartsPane(msg *sessionv1.UpdateSessionRequest, inst *session.Instance) bool {
 	snap := inst.Snapshot()
 	if msg.Program != nil && (*msg.Program == "" || *msg.Program != snap.Program) {
+		return true
+	}
+	if msg.AutonomousMode != nil && *msg.AutonomousMode && !snap.Autonomous.AutonomousMode {
 		return true
 	}
 	return msg.AutoApprove != nil && *msg.AutoApprove != snap.AutoApprove
@@ -63,7 +67,7 @@ func (s *SessionService) decideUpdateAccess(ctx context.Context, req *connect.Re
 	}
 	if hidden && AccessForUnary(inst, s.guards) == TerminalReadOnly && restartsPane(msg, inst) {
 		return steerDecision{}, connect.NewError(connect.CodeFailedPrecondition,
-			errors.New("this background session is read-only: program and auto_approve changes restart its terminal"))
+			errors.New("this background session is read-only: program, auto_approve and autonomous_mode changes write to its terminal"))
 	}
 	if !steering {
 		return steerDecision{}, nil

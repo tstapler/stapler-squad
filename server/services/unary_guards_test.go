@@ -116,6 +116,7 @@ func TestUpdateSession_ShouldReturnFailedPreconditionWithZeroRestartsZeroMarkers
 		"auto_approve":         {Id: "restart-fields", AutoApprove: &yes},
 		"program":              {Id: "restart-fields", Program: &aider},
 		"auto_approve + title": {Id: "restart-fields", AutoApprove: &yes, Title: &title},
+		"autonomous_mode":      {Id: "restart-fields", AutonomousMode: &yes},
 	}
 	for name, r := range cases {
 		_, err := e.fix.svc.UpdateSession(context.Background(), connect.NewRequest(r))
