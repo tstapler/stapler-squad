@@ -215,3 +215,11 @@ $ go vet ./server/services                                      -> exit 0
 $ gofmt -l server/services                                      -> no output
 $ golangci-lint run ./server/services/...                       -> 0 issues.
 ```
+
+## sdd:6-verify (coordinator, 2026-10-10, tmux 3.6a, HEAD after test edits)
+
+- Layer 1 (Go idioms) and Layer 2 (architecture, refactor candidates): 0 MUST FIX, 0 BLOCKER. Applied: full-value hostile assert, `assert.NoFileExists`, naming comment. Not applied (deliberate): shared helper extraction (two callers only), fail-instead-of-skip when tmux is absent in CI (covered by the RealTmuxGate in this plan; CI pins tmux).
+- Layer 3 (coordinator-run, `-race -short`, `STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30`):
+  - `go test ./server/services ./session ./session/tmux -count=1`: all three `ok` (162s / 97s / 45s); `go build ./...` rc=0; `go vet` clean; `gofmt -l` empty.
+  - Both real-tmux tests `--- PASS` with no SKIP; custom linter `./server/services ./session ./session/tmux` rc=0.
+- AC4b remains UNVERIFIED (E9 not run). E4b not re-run.

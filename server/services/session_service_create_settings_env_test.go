@@ -45,6 +45,8 @@ func TestCreateSession_CustomClaudeProgram_SettingsEnvReachesLaunchedProcess(t *
 	tmp := t.TempDir()
 	argvOut := filepath.Join(tmp, "argv.txt")
 	pwned := filepath.Join(tmp, "pwned")
+	// Must be named "claude": the --settings override is only appended when the
+	// program is recognised as Claude (session/instance_tmux.go buildClaudeCommand).
 	fakeClaude := filepath.Join(tmp, "claude")
 	script := "#!/bin/sh\n" +
 		"printf '%s\\n' \"$@\" > '" + argvOut + ".tmp'\n" +
@@ -114,8 +116,7 @@ func TestCreateSession_CustomClaudeProgram_SettingsEnvReachesLaunchedProcess(t *
 	require.NoError(t, json.Unmarshal([]byte(argv[idx+1]), &settings), "--settings value must be valid JSON")
 	assert.Equal(t, map[string]map[string]string{"env": wantEnv}, settings, "--settings JSON must carry the registered env intact")
 
-	_, statErr := os.Stat(pwned)
-	assert.True(t, os.IsNotExist(statErr), "hostile value must not be executed by a shell")
+	assert.NoFileExists(t, pwned, "hostile value must not be executed by a shell")
 
 	tmuxName := inst.GetTmuxSessionName()
 	require.NotEmpty(t, tmuxName)
@@ -123,5 +124,5 @@ func TestCreateSession_CustomClaudeProgram_SettingsEnvReachesLaunchedProcess(t *
 	out, err := safeexec.CommandContext(ctx, tmuxBin, args...).CombinedOutput()
 	require.NoError(t, err, string(out))
 	assert.Contains(t, string(out), baseURLKey+"="+baseURLVal)
-	assert.Contains(t, string(out), hostileKey+"=")
+	assert.Contains(t, string(out), hostileKey+"="+hostileVal, "tmux -e must carry the hostile value byte-for-byte")
 }
