@@ -659,7 +659,12 @@ func (p *Pool) readFirstCallStream(ctx context.Context, key FeatureKey, stdout i
 // scan error (recordSuccess on a clean io.EOF, recordError/rotate
 // otherwise). Returns true once the call has ended and the caller must stop
 // looping.
-func (p *Pool) handleResumedCallLine(key FeatureKey, idleTimer *time.Timer, lr streamLine, cio callIO) bool {
+//
+// bufio.Scanner strips line terminators, so every line after the first is
+// forwarded with a leading "\n"; concatenating the chunks then reproduces the
+// original stdout (minus any trailing newline) instead of collapsing it to
+// one line. *sawLine tracks whether a line has been forwarded yet.
+func (p *Pool) handleResumedCallLine(key FeatureKey, idleTimer *time.Timer, lr streamLine, cio callIO, sawLine *bool) bool {
 	if lr.err != nil {
 		if errors.Is(lr.err, io.EOF) {
 			p.recordSuccess(key)
@@ -671,7 +676,12 @@ func (p *Pool) handleResumedCallLine(key FeatureKey, idleTimer *time.Timer, lr s
 		return true
 	}
 	resetIdleTimer(idleTimer, idleTimeout)
-	return !cio.send(StreamChunk{Text: lr.text})
+	text := lr.text
+	if *sawLine {
+		text = "\n" + text
+	}
+	*sawLine = true
+	return !cio.send(StreamChunk{Text: text})
 }
 
 // readResumedCallStream scans a resumed call's plain-text stdout line by
@@ -685,6 +695,7 @@ func (p *Pool) readResumedCallStream(ctx context.Context, key FeatureKey, stdout
 	idleTimer := time.NewTimer(idleTimeout)
 	defer idleTimer.Stop()
 
+	sawLine := false
 	for {
 		select {
 		case lr, more := <-lines:
@@ -693,7 +704,7 @@ func (p *Pool) readResumedCallStream(ctx context.Context, key FeatureKey, stdout
 				cio.send(StreamChunk{Done: true})
 				return
 			}
-			if p.handleResumedCallLine(key, idleTimer, lr, cio) {
+			if p.handleResumedCallLine(key, idleTimer, lr, cio, &sawLine) {
 				return
 			}
 		case <-idleTimer.C:
