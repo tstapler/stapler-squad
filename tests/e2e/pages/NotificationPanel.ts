@@ -1,4 +1,4 @@
-import type { APIRequestContext, Locator, Page } from '@playwright/test';
+import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 
 // Closes anything that can steal keyboard focus from the session list: the
 // Notification Panel (if auto-opened) and any visible toast alerts. Both
@@ -92,4 +92,102 @@ export class ToastDeck {
     this.undoBar = page.getByTestId('toast-undo-bar');
     this.undo = page.getByTestId('toast-undo-move');
   }
+}
+
+// ---------------------------------------------------------------------------
+// Notification tray (notification_tray_v2)
+// ---------------------------------------------------------------------------
+
+/** The non-modal tray, its entry points and the terminal facts its invariants are about. */
+export class NotificationTray {
+  readonly tray: Locator;
+  readonly handle: Locator;
+  readonly entry: Locator;
+  readonly entryOpen: Locator;
+  readonly rows: Locator;
+  readonly needsAttentionHeader: Locator;
+  readonly undoBar: Locator;
+  readonly undo: Locator;
+  readonly overflow: Locator;
+  readonly keptLine: Locator;
+  readonly confirm: Locator;
+
+  constructor(private readonly page: Page) {
+    this.tray = page.getByTestId('notification-tray');
+    this.handle = page.getByTestId('tray-handle');
+    this.entry = page.getByTestId('tray-entry');
+    this.entryOpen = page.getByTestId('tray-entry-open');
+    this.rows = this.tray.getByTestId('tray-row');
+    this.needsAttentionHeader = this.tray.getByTestId('tray-needs-attention-header');
+    this.undoBar = this.tray.getByTestId('tray-undo-bar');
+    this.undo = this.tray.getByTestId('tray-undo');
+    this.overflow = this.tray.getByTestId('tray-overflow');
+    this.keptLine = this.tray.getByTestId('tray-kept-line');
+    this.confirm = this.tray.getByTestId('tray-confirm');
+  }
+
+  async expectOpen(): Promise<void> {
+    await expect(this.tray).toHaveAttribute('data-state', 'open');
+  }
+
+  async expectClosed(): Promise<void> {
+    await expect(this.tray).toHaveAttribute('data-state', 'closed');
+  }
+
+  async clickMenuItem(item: 'clear-informational' | 'clear-history' | 'settings'): Promise<void> {
+    await this.overflow.click();
+    await this.tray.getByTestId(`tray-menu-${item}`).click();
+  }
+
+  /** Dismisses the one-time "What changed" card so it does not sit above the list in layout checks. */
+  async dismissWhatChanged(): Promise<void> {
+    const dismiss = this.tray.getByTestId('tray-what-changed-dismiss');
+    if (await dismiss.isVisible().catch(() => false)) await dismiss.click();
+  }
+}
+
+/** Counts frames the page sends over any WebSocket; a terminal resize vote is one frame. */
+export async function installWebSocketSendCounter(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __wsSends: number };
+    w.__wsSends = 0;
+    const original = WebSocket.prototype.send;
+    WebSocket.prototype.send = function (this: WebSocket, data: Parameters<WebSocket['send']>[0]) {
+      w.__wsSends += 1;
+      return original.call(this, data);
+    };
+  });
+}
+
+export function webSocketSends(page: Page): Promise<number> {
+  return page.evaluate(() => (window as unknown as { __wsSends: number }).__wsSends);
+}
+
+export interface TerminalFacts {
+  cols: number | null;
+  rows: number;
+  hasProbe: boolean;
+  text: string;
+}
+
+/** Marks the terminal root so a later read can prove it is the same DOM node. */
+export async function markTerminalRoot(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    document.querySelector('.xterm')?.setAttribute('data-ssq-probe', 'same-node');
+  });
+}
+
+export async function readTerminalFacts(page: Page): Promise<TerminalFacts> {
+  return page.evaluate(() => {
+    const screen = document.querySelector('.xterm-screen') as HTMLElement | null;
+    const ruler = document.querySelector('.xterm-char-measure-element') as HTMLElement | null;
+    const cell = ruler ? ruler.getBoundingClientRect().width : 0;
+    const rowEls = Array.from(document.querySelectorAll('.xterm-rows > div'));
+    return {
+      cols: screen && cell > 0 ? Math.round(screen.getBoundingClientRect().width / cell) : null,
+      rows: rowEls.length,
+      hasProbe: document.querySelector('.xterm')?.getAttribute('data-ssq-probe') === 'same-node',
+      text: rowEls.map((r) => r.textContent || '').join('\n'),
+    };
+  });
 }
