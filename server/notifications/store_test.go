@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/pkg/events"
 )
 
 // newTestStore creates a NotificationHistoryStore backed by a temp file for testing.
@@ -43,6 +46,10 @@ const notifTypeApprovalNeededTest = int32(1)
 
 // TestAppendDedup_SameSessionAndType verifies that two appends with the same
 // (sessionID, notificationType) produce one record with OccurrenceCount=2.
+//
+// T-E2-34 (OS-1, characterization): the delivery gate filters at bus publish, upstream of
+// this store (ADR-001), so #738's coalescing by session and type is the same with the
+// gate on; this test is that unchanged behavior.
 func TestAppendDedup_SameSessionAndType(t *testing.T) {
 	store := newTestStore(t)
 
@@ -1477,5 +1484,118 @@ func TestAppendDedup_ExactIDMatch_UnchangedContentIsNoOp(t *testing.T) {
 	}
 	if !rec.IsRead {
 		t.Error("expected an unchanged retry to leave the record's read state untouched")
+	}
+}
+
+// T-CT-01: IsPendingDecision must equal "unread AND actionable AND NOT auto_remediating"
+// for every NotificationType the proto knows about.
+func TestHistory_ShouldSetIsPendingDecisionEqualIsPendingDecisionPredicate_WhenRangingEveryNotificationType(t *testing.T) {
+	t.Parallel()
+	actionable := map[sessionv1.NotificationType]bool{
+		sessionv1.NotificationType_NOTIFICATION_TYPE_APPROVAL_NEEDED:     true,
+		sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED:      true,
+		sessionv1.NotificationType_NOTIFICATION_TYPE_CONFIRMATION_NEEDED: true,
+		sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR:               true,
+		sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING:             true,
+		sessionv1.NotificationType_NOTIFICATION_TYPE_FAILURE:             true,
+	}
+	stamped := map[string]string{events.MetadataKeyAutoRemediating: "true"}
+	for v, name := range sessionv1.NotificationType_name {
+		for _, read := range []bool{false, true} {
+			for _, md := range []map[string]string{nil, stamped, {events.MetadataKeyAutoRemediating: "false"}} {
+				want := actionable[sessionv1.NotificationType(v)] && !read && md[events.MetadataKeyAutoRemediating] != "true"
+				if got := IsPendingDecision(v, md, read); got != want {
+					t.Errorf("IsPendingDecision(%s, %v, read=%v) = %v, want %v", name, md, read, got, want)
+				}
+			}
+		}
+	}
+}
+
+// T-CT-07: one predicate backs Clear, so a stamped auto-remediating WARNING is
+// deleted while an unstamped unread WARNING is kept.
+func TestClear_ShouldDeleteUnreadAutoRemediatingWarningAndKeepUnstampedWarning_WhenOnePredicateShared(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	const warning = int32(8)
+
+	stampedRec := makeRecord("stamped", "s1", warning)
+	stampedRec.Metadata = map[string]string{events.MetadataKeyAutoRemediating: "true"}
+	plainRec := makeRecord("plain", "s2", warning)
+	for _, r := range []*NotificationRecord{stampedRec, plainRec} {
+		if err := store.Append(r); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+
+	cleared, err := store.Clear(nil)
+	if err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+	if cleared != 1 {
+		t.Fatalf("cleared = %d, want 1", cleared)
+	}
+	if _, ok := store.GetByID("stamped"); ok {
+		t.Error("auto-remediating WARNING should have been cleared")
+	}
+	if _, ok := store.GetByID("plain"); !ok {
+		t.Error("unstamped unread WARNING must be kept")
+	}
+}
+
+// T-PR-11: ClearByIDs deletes only the listed ids that are not pending decisions
+// and returns the listed pending ones as kept; unlisted rows are untouched.
+func TestClearByIDs_ShouldDeleteOnlyReadOrNonActionableAndReturnKept_WhenPendingIdIncluded(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	const warning = int32(8)
+	approval, info := notifTypeApprovalNeededTest, notifTypeTaskCompleteTest
+
+	pendingWarning := makeRecord("pending-warning", "s1", warning)
+	pendingApproval := makeRecord("pending-approval", "s2", approval)
+	informational := makeRecord("info", "s3", info)
+	remediating := makeRecord("remediating", "s4", warning)
+	remediating.Metadata = map[string]string{events.MetadataKeyAutoRemediating: "true"}
+	unlisted := makeRecord("unlisted", "s5", info)
+	for _, r := range []*NotificationRecord{pendingWarning, pendingApproval, informational, remediating, unlisted} {
+		if err := store.Append(r); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+
+	deleted, kept, err := store.ClearByIDs([]string{"pending-warning", "pending-approval", "info", "remediating", "missing"})
+	if err != nil {
+		t.Fatalf("ClearByIDs: %v", err)
+	}
+	if deleted != 2 {
+		t.Errorf("deleted = %d, want 2 (info and the auto-remediating warning)", deleted)
+	}
+	if len(kept) != 2 || kept[0] != "pending-warning" || kept[1] != "pending-approval" {
+		t.Errorf("kept = %v, want [pending-warning pending-approval]", kept)
+	}
+	for _, id := range []string{"pending-warning", "pending-approval", "unlisted"} {
+		if _, ok := store.GetByID(id); !ok {
+			t.Errorf("%s must survive ClearByIDs", id)
+		}
+	}
+	for _, id := range []string{"info", "remediating"} {
+		if _, ok := store.GetByID(id); ok {
+			t.Errorf("%s should have been deleted", id)
+		}
+	}
+}
+
+func TestClearByIDs_ShouldBeNoOp_WhenIdsEmpty(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	if err := store.Append(makeRecord("a", "s1", notifTypeTaskCompleteTest)); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	deleted, kept, err := store.ClearByIDs(nil)
+	if err != nil || deleted != 0 || len(kept) != 0 {
+		t.Fatalf("ClearByIDs(nil) = %d, %v, %v; want 0, nil, nil", deleted, kept, err)
+	}
+	if _, ok := store.GetByID("a"); !ok {
+		t.Error("an empty id list must delete nothing")
 	}
 }

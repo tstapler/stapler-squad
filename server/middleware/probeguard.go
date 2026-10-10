@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-
-	"github.com/tstapler/stapler-squad/log"
 )
 
 // ProbeGuardConfig supplies the guard's inputs as functions evaluated per
@@ -29,25 +27,11 @@ func ProbeGuard(procedurePath string, cfg ProbeGuardConfig) func(http.Handler) h
 // explicitly allowed. The Host check is what stops DNS rebinding, which CORS
 // does not. Every other path passes through untouched.
 func ProbeGuardPaths(procedurePaths []string, cfg ProbeGuardConfig) func(http.Handler) http.Handler {
-	guarded := make(map[string]struct{}, len(procedurePaths))
+	procedures := make(map[string]GuardProfile, len(procedurePaths))
 	for _, p := range procedurePaths {
-		guarded[p] = struct{}{}
+		procedures[p] = ProfileProbe
 	}
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if _, ok := guarded[r.URL.Path]; !ok {
-				next.ServeHTTP(w, r)
-				return
-			}
-			if reason, status := probeGuardVerdict(r, cfg); reason != "" {
-				log.Warn("guarded procedure request rejected", "procedure", r.URL.Path, "reason", reason, "host", clipForLog(r.Host),
-					"origin", clipForLog(r.Header.Get("Origin")), "remote_addr", r.RemoteAddr)
-				http.Error(w, http.StatusText(status), status)
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
+	return LocalWriteGuard(procedures, LocalWriteGuardConfig{Probe: cfg})
 }
 
 func probeGuardVerdict(r *http.Request, cfg ProbeGuardConfig) (reason string, status int) {

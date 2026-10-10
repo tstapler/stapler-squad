@@ -328,6 +328,13 @@ func (s *BacklogService) steerActiveSessionForPRFix(ctx context.Context, itemID,
 		s.degradeToRespawnBlocked(ctx, itemID, itemTitle, currentStatus, activeSessionUUID)
 		return
 	}
+	// A hidden (background) session is read-only for every automated steer too:
+	// the item's active session is its work session, so this is a defense that
+	// pins the reviewed caller list of SteerActiveSession (T-RO-39).
+	if s.sessionSteerer.IsHiddenSession(activeSessionUUID) {
+		s.degradeToRespawnBlocked(ctx, itemID, itemTitle, currentStatus, activeSessionUUID)
+		return
+	}
 	// Security: fixContext is unauthenticated GitHub PR/review content written
 	// verbatim into the PTY. Never deliver it unless the pane is confirmed
 	// idle — a busy/unknown state must degrade, not guess.

@@ -70,6 +70,13 @@ func isSafeSteerStatus(status detection.DetectedStatus, statusContext string) bo
 	return session.IsSafeSteerStatus(status, statusContext)
 }
 
+// IsHiddenSession implements SessionSteerer: true only for a live instance that
+// is hidden. An untracked session is not hidden (the steer fails on its own).
+func (s *SessionService) IsHiddenSession(sessionUUID string) bool {
+	inst := s.FindLiveInstance(sessionUUID)
+	return inst != nil && inst.Snapshot().Hidden
+}
+
 // IsReadyForSteer implements SessionSteerer. It gates an unattended PTY
 // write (e.g. PR-fix steering) on isSafeSteerStatus — see that function's
 // doc comment for the StatusIdle-vs-safe-description invariant. Any case
@@ -81,14 +88,15 @@ func (s *SessionService) IsReadyForSteer(sessionUUID string) bool {
 	return inst != nil && s.instanceReadyForSteer(inst) == notReadyNone
 }
 
-// SteerActiveSession implements SessionSteerer, delegating to the same
-// steerInstance UpdateSession's SteerMessage handling uses.
+// SteerActiveSession implements SessionSteerer. It is the internal steer: it
+// takes no per-request access decision, its callers are pinned by the guard
+// set (Story 5.1d), and a hidden target still succeeds (characterized).
 func (s *SessionService) SteerActiveSession(ctx context.Context, sessionUUID, message string) error {
 	inst := s.FindLiveInstance(sessionUUID)
 	if inst == nil {
 		return fmt.Errorf("steer session %q: not tracked live", sessionUUID)
 	}
-	return s.steerInstance(ctx, inst, message)
+	return s.steerInternal(ctx, inst, message)
 }
 
 // ArchiveSessionByUUID satisfies the BacklogService.SessionStopper interface and the

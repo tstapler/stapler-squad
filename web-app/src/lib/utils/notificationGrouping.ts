@@ -67,3 +67,99 @@ export function groupNotifications(
 
   return result;
 }
+
+// ---------------------------------------------------------------------------
+// Tray model: per-session groups, the pinned "Needs attention" group and the
+// flattened row list the virtualized tray renders.
+// ---------------------------------------------------------------------------
+
+export const NEEDS_ATTENTION_KEY = "__needs_attention__";
+
+/** Groups whose representative row is a pending decision (the server-sent field, never a type list). */
+export function selectPinnedDecisions(groups: GroupedNotification[]): GroupedNotification[] {
+  return groups.filter((g) => g.notification.isPendingDecision === true);
+}
+
+/** Count behind "N need attention" and the handle's dot: one per pinned group. */
+export function countNeedsAttention(notifications: NotificationHistoryItem[]): number {
+  return selectPinnedDecisions(groupNotifications(notifications)).length;
+}
+
+export interface SessionGroup {
+  /** Stable collapse key. */
+  key: string;
+  sessionName: string;
+  groups: GroupedNotification[];
+  /** Notification records in this session group (sum of group counts is NOT used; rows are records). */
+  rowCount: number;
+}
+
+/** Splits non-pinned groups by session, newest session first. */
+export function groupBySession(groups: GroupedNotification[]): SessionGroup[] {
+  const bySession = new Map<string, SessionGroup>();
+  for (const group of groups) {
+    const key = group.notification.sessionId || "__no_session__";
+    let bucket = bySession.get(key);
+    if (!bucket) {
+      bucket = {
+        key,
+        sessionName: group.notification.sessionName || group.notification.sessionId || "No session",
+        groups: [],
+        rowCount: 0,
+      };
+      bySession.set(key, bucket);
+    }
+    bucket.groups.push(group);
+    bucket.rowCount += group.allIds.length;
+  }
+  // `groups` arrive newest first, so insertion order is already newest-session first.
+  return [...bySession.values()];
+}
+
+export type TrayRow =
+  | { kind: "header"; key: string; label: string; count: number; collapsed: boolean; pinned: boolean }
+  | { kind: "note"; key: string; text: string }
+  | {
+      kind: "group";
+      key: string;
+      group: GroupedNotification;
+      pinned: boolean;
+      /** Position among the selectable rows (headers excluded) for aria-posinset. */
+      posInSet: number;
+    };
+
+/**
+ * Flattens the tray into the single ordered list the virtualizer windows over:
+ * the pinned group first (never collapsible), then one header and its rows per
+ * session, skipping the rows of a collapsed session.
+ */
+export function flattenGroups(
+  notifications: NotificationHistoryItem[],
+  collapsed: ReadonlySet<string>,
+): { rows: TrayRow[]; needsAttention: number; setSize: number } {
+  const all = groupNotifications(notifications);
+  const pinned = selectPinnedDecisions(all);
+  const pinnedSet = new Set(pinned);
+  const rest = all.filter((g) => !pinnedSet.has(g));
+  const rows: TrayRow[] = [];
+  let pos = 0;
+
+  if (pinned.length > 0) {
+    rows.push({ kind: "header", key: NEEDS_ATTENTION_KEY, label: "NEEDS ATTENTION", count: pinned.length, collapsed: false, pinned: true });
+    for (const group of pinned) {
+      rows.push({ kind: "group", key: group.notification.id, group, pinned: true, posInSet: ++pos });
+    }
+  } else if (rest.length > 0) {
+    rows.push({ kind: "note", key: "nothing-needs-attention", text: "Nothing needs attention" });
+  }
+
+  for (const session of groupBySession(rest)) {
+    const isCollapsed = collapsed.has(session.key);
+    rows.push({ kind: "header", key: session.key, label: session.sessionName, count: session.rowCount, collapsed: isCollapsed, pinned: false });
+    if (isCollapsed) continue;
+    for (const group of session.groups) {
+      rows.push({ kind: "group", key: group.notification.id, group, pinned: false, posInSet: ++pos });
+    }
+  }
+  return { rows, needsAttention: pinned.length, setSize: pos };
+}

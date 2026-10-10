@@ -37,6 +37,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -57,8 +58,10 @@ type Server struct {
 	mux                        *http.ServeMux
 	tlsConfig                  *tls.Config                     // non-nil when TLS is enabled
 	authMiddleware             func(http.Handler) http.Handler // nil when auth is disabled
+	requiresAuth               bool                            // explicit: a real validator is wired
 	httpsURL                   atomic.Pointer[string]          // set when remote access is enabled
 	hostnames                  atomic.Pointer[[]string]        // detected LAN hostnames; published add-only via SetHostnames, read lock-free via GetHostnames
+	verifiedHostnames          atomic.Pointer[[]string]        // forward-verified subset; replaced wholesale via ReplaceVerifiedHostnames, read lock-free via GetVerifiedHostnames
 	origins                    []string                        // allowed CORS origins
 	shutdownHooks              []func()                        // called before HTTP server stops
 	connCtxCancel              context.CancelFunc              // cancels BaseContext → closes active streams on shutdown
@@ -66,6 +69,7 @@ type Server struct {
 	startedAt                  time.Time                       // set once in newServerBase; used to gate orphan notification pruning until instance data has had time to load
 	approvalHandler            *services.ApprovalHandler       // set in wireDepsIntoServer; exposed only for wiring regression tests (same-package field access, e.g. TestWireDepsIntoServer_SharesSingleSlackNotifierInstance...)
 	slackInteractiveDisabled   bool                            // set in wireDepsIntoServer; see ServeHTTP's doc comment for why this can't be expressed as an s.mux registration
+	finalStatsFlush            func()                          // delivery-gate stats flush; deferred at the top of Shutdown
 	backgroundTasksWG          sync.WaitGroup                  // joined by Shutdown() — fork-pressure logger, zombie watcher, zombie reaper
 	backgroundTasksJoinTimeout time.Duration                   // bounds Shutdown's join of backgroundTasksWG; defaults to defaultBackgroundTasksJoinTimeout, overridable in tests
 	hookIPC                    *hookIPCState                   // resident instance-scoped PreToolUse classifier; started with the HTTP server
@@ -323,12 +327,26 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		}
 	}
 
+	// Keep the delivery gate's flag fresh (edits to config.json apply within one
+	// tick) and join its reloader on shutdown.
+	if gate := deps.SessionService.DeliveryGate(); gate != nil {
+		gate.StartFlagReloader(serverCtx, 5*time.Second)
+		gate.WarnExplicitOffKinds()
+		srv.shutdownHooks = append(srv.shutdownHooks, gate.Stop)
+		srv.startGateStatsWriter(serverCtx, deps, gate, configDir, configErr)
+	}
+	srv.startLeaseWedgeWatcher(serverCtx, deps)
+
 	// Initialize push notification service.
 	if configErr == nil {
 		pushService := services.NewPushService(configDir)
 		pushHandler := services.NewPushHandler(pushService)
 		pushHandler.RegisterRoutes(srv.mux)
-		push.StartPushSubscriber(serverCtx, deps.EventBus, pushService)
+		var pushOpts []push.DeliveryOption
+		if gate := deps.SessionService.DeliveryGate(); gate != nil {
+			pushOpts = append(pushOpts, push.WithSessionDeliveryGate(gate))
+		}
+		push.StartPushSubscriber(serverCtx, deps.EventBus, pushService, pushOpts...)
 		log.Info("Push notification service initialized")
 	}
 
@@ -759,6 +777,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// wiring above.
 	if deps.ReactiveQueueMgr != nil {
 		deps.ReactiveQueueMgr.SetDashboardBaseURLFn(hookBaseURLFn)
+		if gate := deps.SessionService.DeliveryGate(); gate != nil {
+			deps.ReactiveQueueMgr.SetLegacyHiddenCounter(gate.CountLegacySuppressedType)
+			deps.ReactiveQueueMgr.SetQueueItemGate(gate.AllowQueueItem)
+		}
 	}
 
 	// Register Claude Code HTTP hook approval endpoint
@@ -767,6 +789,12 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		deps.Storage,
 		deps.EventBus,
 	)
+	// Hidden-session auto-allow history rows go through the delivery gate.
+	if gate := deps.SessionService.DeliveryGate(); gate != nil {
+		approvalHandler.SetAutoApprovedGate(gate)
+	}
+	// Reply: hook sender proofs (best-effort provenance) and the pending-question registry.
+	wireHookProofsAndQuestions(approvalHandler, deps)
 	// Wire the lazy base-URL resolver into the hook injector (hook_injector.go); both
 	// InjectHookConfig's PermissionRequest URL and InjectHooksConfig's stop/pre-tool-use/
 	// post-tool-use/prompt-submit endpoints resolve through this single shared mechanism.
@@ -1329,8 +1357,11 @@ func (s *Server) SetupTLS(cfg *tls.Config) {
 
 // SetupAuth installs authentication middleware.  Must be called before Start().
 // authMiddleware is a function that wraps an http.Handler; pass nil to disable.
-func (s *Server) SetupAuth(authMiddleware func(http.Handler) http.Handler) {
+// requiresAuth must be true only when the wrapper was built from a non-nil
+// validator (middleware.AuthRequires); it feeds the request record's auth_mode.
+func (s *Server) SetupAuth(authMiddleware func(http.Handler) http.Handler, requiresAuth bool) {
 	s.authMiddleware = authMiddleware
+	s.requiresAuth = requiresAuth
 }
 
 // RegisterConnectHandler registers a ConnectRPC service handler.
@@ -1512,6 +1543,13 @@ const defaultBackgroundTasksJoinTimeout = 10 * time.Second
 
 // Shutdown gracefully shuts down the HTTP server.
 func (s *Server) Shutdown() error {
+	// Deferred so the stats flush runs after httpServer.Shutdown returns, on its
+	// error path too (an early return there must not skip it). Hooks and the
+	// background join run before handlers stop, so a flush placed in either
+	// would miss the last publishes.
+	if s.finalStatsFlush != nil {
+		defer s.finalStatsFlush()
+	}
 	// Cancel the server's BaseContext first so active streaming connections
 	// (ConnectRPC terminal streams) see a done context and close themselves,
 	// preventing context deadline exceeded on the graceful shutdown below.
@@ -1628,6 +1666,50 @@ func (s *Server) GetHostnames() []string {
 	return *p
 }
 
+// ReplaceVerifiedHostnames atomically replaces the verified hostname set. Unlike
+// SetHostnames it is not add-only: the detector recomputes it from its
+// ownership check every cycle. Empty names, IP literals and localhost are
+// dropped (an IP literal is allowed by the verdict's own rule, not by
+// membership), names are normalized, de-duplicated and sorted.
+func (s *Server) ReplaceVerifiedHostnames(names []string) {
+	seen := make(map[string]struct{}, len(names))
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		h := middleware.NormalizeHost(n)
+		if h == "" || h == "localhost" || net.ParseIP(h) != nil {
+			continue
+		}
+		if _, dup := seen[h]; dup {
+			continue
+		}
+		seen[h] = struct{}{}
+		out = append(out, h)
+	}
+	sort.Strings(out)
+	s.verifiedHostnames.Store(&out)
+}
+
+// GetVerifiedHostnames returns the verified hostname set, or nil before the
+// first ReplaceVerifiedHostnames. The slice is immutable; do not modify it.
+func (s *Server) GetVerifiedHostnames() []string {
+	p := s.verifiedHostnames.Load()
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+// LocalWriteVerdictConfig is the rebinding gate's live input set, read lazily so
+// origins, the bound address and the verified hostnames published after
+// construction are honored.
+func (s *Server) LocalWriteVerdictConfig() middleware.VerdictConfig {
+	return middleware.VerdictConfig{
+		VerifiedHosts:  s.GetVerifiedHostnames,
+		ListenAddr:     s.GetAddr,
+		AllowedOrigins: s.GetOrigins,
+	}
+}
+
 // SetOrigins records the allowed CORS origins.
 func (s *Server) SetOrigins(origins []string) {
 	s.origins = origins
@@ -1717,7 +1799,29 @@ const probeProcedurePath = "/api" + sessionv1connect.SessionServiceProbeProgramP
 // NudgeSessionForPR, guarded like ProbeProgram on the unauthenticated listener.
 const nudgeProcedurePath = "/api" + sessionv1connect.GitHubUserServiceNudgeSessionForPRProcedure
 
-var guardedProcedurePaths = []string{probeProcedurePath, nudgeProcedurePath}
+// pruneProcedurePath is the full request path of PruneHiddenSessionNotifications,
+// guarded whole (dry run and apply) with the rebinding profile.
+const pruneProcedurePath = "/api" + sessionv1connect.SessionServicePruneHiddenSessionNotificationsProcedure
+
+// updateFlagProcedurePath is the full request path of UpdateFeatureFlag, which
+// flips protections (read-only guards, the delivery gate), guarded like prune.
+const updateFlagProcedurePath = "/api" + sessionv1connect.SessionServiceUpdateFeatureFlagProcedure
+
+// replyProcedurePath is the full request path of ReplyToPendingQuestion, the
+// audited write into a hidden session's question dialog, guarded with the
+// rebinding profile (the in-handler local-caller gate adds the peer check).
+const replyProcedurePath = "/api" + sessionv1connect.SessionServiceReplyToPendingQuestionProcedure
+
+// guardedProcedures is the LocalWriteGuard set. A new member names its profile;
+// ProbeProgram and the nudge keep the original probe verdict byte for byte.
+var guardedProcedures = map[string]middleware.GuardProfile{
+	probeProcedurePath: middleware.ProfileProbe,
+	nudgeProcedurePath: middleware.ProfileProbe,
+	pruneProcedurePath: middleware.ProfileRebinding,
+
+	updateFlagProcedurePath: middleware.ProfileRebinding,
+	replyProcedurePath:      middleware.ProfileRebinding,
+}
 
 // localChain is the :8543 middleware chain (inside otelhttp):
 // Logging -> CORS -> Compress -> HostGuard -> [auth | ProbeGuard] -> mux.
@@ -1727,14 +1831,24 @@ var guardedProcedurePaths = []string{probeProcedurePath, nudgeProcedurePath}
 // boundary for the RPCs that execute a program or write to a session's terminal
 // (ProbeProgram, NudgeSessionForPR); with auth, auth is the boundary.
 func (s *Server) localChain() http.Handler {
+	return s.localChainWith(guardedProcedures)
+}
+
+// localChainWith builds localChain over an explicit guard set so tests can
+// exercise a profile before a real procedure registers in it.
+func (s *Server) localChainWith(procedures map[string]middleware.GuardProfile) http.Handler {
 	inner := http.Handler(s)
 	if s.authMiddleware != nil {
 		inner = s.authMiddleware(inner)
 	} else {
-		inner = middleware.ProbeGuardPaths(guardedProcedurePaths, s.probeGuardConfig())(inner)
+		inner = middleware.LocalWriteGuard(procedures, middleware.LocalWriteGuardConfig{
+			Probe:     s.probeGuardConfig(),
+			Rebinding: s.LocalWriteVerdictConfig(),
+		})(inner)
 	}
 	inner = middleware.HostGuard(s.hostGuardConfig())(inner)
-	return middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner)))
+	return s.stampRequest(services.ListenerLocal, s.requiresAuth)(
+		middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))))
 }
 
 // localExemptPaths skip the Host guard on :8543.
@@ -1752,12 +1866,21 @@ func (s *Server) hostGuardConfig() middleware.HostGuardConfig {
 // A nil authMW leaves the chain open (existing posture, pinned by
 // TestRemoteChain_should_LeaveNudgeReachable_When_AuthMiddlewareNil); main.go
 // always passes middleware.Auth, so nil only occurs in tests.
-func (s *Server) remoteChain(authMW func(http.Handler) http.Handler) http.Handler {
+func (s *Server) remoteChain(authMW func(http.Handler) http.Handler, requiresAuth bool) http.Handler {
 	inner := http.Handler(s)
 	if authMW != nil {
 		inner = authMW(inner)
 	}
-	return middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner)))
+	return s.stampRequest(services.ListenerRemote, requiresAuth)(
+		middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))))
+}
+
+// stampRequest stamps the raw request record and the in-handler verdict's live
+// inputs on the context for both chains.
+func (s *Server) stampRequest(listener string, requiresAuth bool) func(http.Handler) http.Handler {
+	record := services.WithRequestRecord(listener, requiresAuth)
+	verdict := services.WithLocalWriteVerdictConfig(s.LocalWriteVerdictConfig())
+	return func(next http.Handler) http.Handler { return record(verdict(next)) }
 }
 
 // probeGuardConfig reads everything lazily: origins, hostnames and the bound
@@ -1774,9 +1897,9 @@ func (s *Server) probeGuardConfig() middleware.ProbeGuardConfig {
 // route mux as the local server but protected by TLS and auth middleware.
 // It binds eagerly (returns a bind error immediately if the port is in use),
 // then runs the server in a background goroutine until ctx is cancelled.
-func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls.Config, authMW func(http.Handler) http.Handler) error {
+func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls.Config, authMW func(http.Handler) http.Handler, requiresAuth bool) error {
 	handler := otelhttp.NewHandler(
-		s.remoteChain(authMW),
+		s.remoteChain(authMW, requiresAuth),
 		"stapler-squad-remote",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)

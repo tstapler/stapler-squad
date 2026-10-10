@@ -25,8 +25,12 @@ export const TOAST_DEDUP_WINDOW_MS = 10_000;
  */
 export const ACTIONABLE_TOAST_STALE_MS = 6 * 60 * 1000;
 
-/** Returns true for notification types that require explicit user action before closing. */
-export function isActionable(type: NotificationData["notificationType"]): boolean {
+/**
+ * Toast staleness only: approval_needed and question toasts outlive the
+ * 5-minute sweep. Whether a notification is a pending *decision* is the
+ * server-sent `isPendingDecision`, never this type check.
+ */
+export function hasLongToastLifetime(type: NotificationData["notificationType"]): boolean {
   return type === "approval_needed" || type === "question";
 }
 
@@ -48,7 +52,7 @@ export const DEFAULT_TOAST_MS = 8_000;
  * visible until resolved, or until the 6-minute fallback fires.
  */
 export function toastAutoCloseMs(type: NotificationData["notificationType"]): number {
-  if (isActionable(type)) return ACTIONABLE_TOAST_STALE_MS;
+  if (hasLongToastLifetime(type)) return ACTIONABLE_TOAST_STALE_MS;
   if (type === "error" || type === "task_failed") return 12_000;
   return DEFAULT_TOAST_MS;
 }
@@ -79,8 +83,60 @@ export function nativeAutoCloseMs(priority: NotificationPriority): number {
  * Actionable types never minimize because they need user interaction.
  */
 export function toastAutoMinimizeMs(type: NotificationData["notificationType"]): number {
-  if (isActionable(type)) return 0;
+  if (hasLongToastLifetime(type)) return 0;
   if (type === "error" || type === "task_failed") return 5_000;
   if (type === "warning") return 5_000;
   return 3_000;
+}
+
+/**
+ * A toast is pinned (it never auto-closes and is never cleared in bulk) exactly
+ * when the server marked it a pending decision. Presentational policy only: the
+ * server's `IsPendingDecision` is the one definition, so this reads the field
+ * and never inspects types.
+ */
+export function isPinned(toast: { isPendingDecision?: boolean }): boolean {
+  return toast.isPendingDecision === true;
+}
+
+export interface ToastPartition<T> {
+  visible: T[];
+  /** Toasts that did not fit under the cap; shown as the "+N more" chip. */
+  overflow: number;
+  pinnedCount: number;
+}
+
+/**
+ * Splits a deck (oldest first) into what the cap shows and what collapses to the
+ * chip. Pinned toasts claim the slots first, in arrival order so a new pinned
+ * arrival never shuffles a card under the user's thumb; any remaining slots go
+ * to the newest non-pinned toasts.
+ */
+export function partitionToasts<T extends { isPendingDecision?: boolean }>(
+  toasts: readonly T[],
+  cap: number,
+): ToastPartition<T> {
+  const pinned = toasts.filter(isPinned);
+  const rest = toasts.filter((t) => !isPinned(t));
+  const shownPinned = pinned.slice(0, cap);
+  const slotsLeft = Math.max(0, cap - shownPinned.length);
+  const shownRest = slotsLeft > 0 ? rest.slice(-slotsLeft) : [];
+  const visible = [...shownPinned, ...shownRest];
+  return { visible, overflow: toasts.length - visible.length, pinnedCount: pinned.length };
+}
+
+/** Live-settable rollout flag (Settings > Features) for the capped deck and tray. */
+export const NOTIFICATION_TRAY_V2_FLAG = "notification_tray_v2";
+
+export const DESKTOP_TOAST_CAP = 3;
+export const MOBILE_TOAST_CAP = 1;
+
+/**
+ * How many toast cards the deck shows: 3 on desktop, 1 on a phone (portrait or
+ * landscape), 0 with the soft keyboard open so only the chip is left. The rest
+ * collapse into the "+N more" chip (ADR-009).
+ */
+export function toastCapFor(viewport: { isInnerScreen: boolean; isVirtualKeyboardOpen: boolean }): number {
+  if (viewport.isVirtualKeyboardOpen) return 0;
+  return viewport.isInnerScreen ? DESKTOP_TOAST_CAP : MOBILE_TOAST_CAP;
 }

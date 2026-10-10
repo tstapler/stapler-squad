@@ -521,7 +521,12 @@ func TestSetupFromExistingBranch_SelfHeals_When_WorktreeRegisteredByDelayedRaceW
 	branchName := "backlog/delayed-race-winner-layer2"
 	winnerPath := CanonicalizeWorktreePath(filepath.Join(t.TempDir(), "winner-worktree"))
 
+	// The loser can see the winner's registration while the winner is still writing
+	// its checkout; the TempDir cleanup must wait for that goroutine or it races it.
+	winnerDone := make(chan struct{})
+	t.Cleanup(func() { <-winnerDone })
 	go func() {
+		defer close(winnerDone)
 		time.Sleep(2 * worktreeAddRetryDelay) //nolint:notimesleeptest must register the winner worktree after the production retry loop's own wall-clock backoff (worktreeAddRetryDelay) has begun; no hook exposes loop progress
 		winnerWt := NewGitWorktreeFromStorageWithExecutor(repoDir, winnerPath, "test-delayed-race-winner-layer2-winner", branchName, "")
 		_ = winnerWt.nativeSetupNewWorktree()

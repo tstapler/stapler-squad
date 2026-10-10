@@ -25,7 +25,7 @@ export function BottomNav() {
   const pathname = usePathname();
   const { open: openOmnibar } = useOmnibar();
   const { authenticated, authEnabled } = useAuth();
-  const { getUnreadCount } = useNotifications();
+  const { getUnreadCount, togglePanel } = useNotifications();
   const unreadCount = getUnreadCount();
   const [moreOpen, setMoreOpen] = useState(false);
   const { leftHanded, toggleHandedness } = useHandedness();
@@ -142,6 +142,19 @@ export function BottomNav() {
               </section>
             ))}
           <div className={styles.moreSheetUtilitySection}>
+            {flags.notification_tray_v2 && (
+              <button
+                className={styles.moreSheetItem}
+                data-testid="more-notifications"
+                onClick={() => {
+                  setMoreOpen(false);
+                  togglePanel();
+                }}
+              >
+                <span className={styles.moreSheetItemIcon} aria-hidden="true"><Bell size={20} /></span>
+                <span>Notifications ({unreadCount})</span>
+              </button>
+            )}
             <button
               className={styles.moreSheetItem}
               onClick={toggleHandedness}

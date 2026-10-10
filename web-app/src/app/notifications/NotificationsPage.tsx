@@ -7,10 +7,10 @@ import { selectAllSessions, selectSessionsHasLoadedOnce } from "@/lib/store/sess
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import { useApprovalResolution } from "@/lib/hooks/useApprovalResolution";
+import { useClearResultLine } from "@/lib/hooks/useClearResultLine";
 import { groupNotifications } from "@/lib/utils/notificationGrouping";
 import {
   notificationTypeFilter,
-  isActionableNotification,
   isReconciledNotification,
   computeScopedMarkReadIds,
   capBadgeCount,
@@ -68,7 +68,8 @@ export function NotificationsPage() {
     markAsRead,
     removeFromHistory,
     acknowledgeNotification,
-    clearHistory,
+    clearHistoryByIds,
+    showActionToast,
     getUnreadCount,
     historyLoading,
     historyHasMore,
@@ -79,6 +80,7 @@ export function NotificationsPage() {
   } = useNotifications();
 
   const auditLog = useAuditLog();
+  const { keptLine, applyClearResult, clearKeptLine } = useClearResultLine();
 
   // Epic 3.3 (session-completion-summary), Story 3.3.2: a notification's
   // sessionId may reference a session that's since been deleted from the
@@ -151,11 +153,11 @@ export function NotificationsPage() {
   // decision" tier and everything else ("recent activity" — never
   // "informational", which is Task 3.2.1a's Review Queue tier name).
   const needsDecision = useMemo(
-    () => filteredNotifications.filter((n) => !n.isRead && isActionableNotification(n.notificationType)),
+    () => filteredNotifications.filter((n) => n.isPendingDecision === true),
     [filteredNotifications]
   );
   const recentActivity = useMemo(
-    () => filteredNotifications.filter((n) => n.isRead || !isActionableNotification(n.notificationType)),
+    () => filteredNotifications.filter((n) => n.isPendingDecision !== true),
     [filteredNotifications]
   );
 
@@ -164,7 +166,7 @@ export function NotificationsPage() {
   // NeedsDecisionSection can tell "nothing needs a decision" apart from "a
   // filter is hiding something that does" (Product Triad Review round-4 fix).
   const totalActionableCount = useMemo(
-    () => notificationHistory.filter((n) => !n.isRead && isActionableNotification(n.notificationType)).length,
+    () => notificationHistory.filter((n) => n.isPendingDecision === true).length,
     [notificationHistory]
   );
 
@@ -197,16 +199,23 @@ export function NotificationsPage() {
   );
 
   const handleMarkActivityRead = useCallback(() => {
+    clearKeptLine();
     markAsRead(scopedMarkReadIds);
-  }, [markAsRead, scopedMarkReadIds]);
+  }, [markAsRead, scopedMarkReadIds, clearKeptLine]);
 
   const handleClearHistory = useCallback(() => {
-    // Task 3.1.5d: irreversible, so gate behind a confirm — the actual
-    // exclusion of unread actionable records lives server-side (Task 3.1.5c).
-    if (window.confirm("Clear read notifications? This can't be undone. Items still needing a decision won't be cleared.")) {
-      clearHistory();
+    // Irreversible, so gate behind a confirm. The ids are every read row the server field
+    // says is not a pending decision; the server guards the same predicate again and lists
+    // anything it kept, which the shared helper turns into the "N kept" line (Task 4.4f).
+    if (!window.confirm("Clear read notifications? This can't be undone. Items still needing a decision won't be cleared.")) {
+      return;
     }
-  }, [clearHistory]);
+    clearKeptLine();
+    const ids = notificationHistory.filter((n) => n.isRead && !n.isPendingDecision).map((n) => n.id);
+    clearHistoryByIds(ids)
+      .then(applyClearResult)
+      .catch(() => showActionToast("Could not clear notifications", "error", "notifications-clear"));
+  }, [notificationHistory, clearHistoryByIds, applyClearResult, clearKeptLine, showActionToast]);
 
   const handleNotificationClick = (ids: string | string[], onView?: () => void, sessionId?: string) => {
     markAsRead(ids);
@@ -317,6 +326,10 @@ export function NotificationsPage() {
         </div>
       </div>
 
+      {keptLine && (
+        <p data-testid="notifications-kept-line">{keptLine}</p>
+      )}
+
       <div className={filterBar}>
         <div className={searchRow}>
           <input
@@ -377,7 +390,7 @@ export function NotificationsPage() {
         )}
         {historyLoading && notificationHistory.length === 0 ? (
           <div className={empty}>
-            <div className={emptyIcon}>⏳</div>
+            <div className={emptyIcon} aria-hidden="true">⏳</div>
             <p className={emptyText}>Loading notifications...</p>
           </div>
         ) : totalActionableCount > 0 && needsDecision.length === 0 ? (
@@ -403,7 +416,7 @@ export function NotificationsPage() {
           // Reachable only when totalActionableCount === 0 — the branch above
           // already caught every case where it's nonzero.
           <div className={empty}>
-            <div className={emptyIcon}>{hasActiveFilter ? "🔍" : "🔔"}</div>
+            <div className={emptyIcon} aria-hidden="true">{hasActiveFilter ? "🔍" : "🔔"}</div>
             <p className={emptyText}>
               {hasActiveFilter ? "No matching notifications" : "No notifications yet"}
             </p>

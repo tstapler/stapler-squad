@@ -20,20 +20,20 @@
 #   --metadata, -d      Key=value pairs (can be specified multiple times)
 #   --port              Server port (default: 8543)
 #   --quiet, -q         Suppress output on success
+#   --dry-run           Print the request JSON and exit without contacting the server
 #   --help, -h          Show this help message
 #
 # Notification Types:
-#   info              - General information
-#   approval_needed   - Requires user approval
-#   error             - Error occurred
-#   warning           - Warning message
-#   task_complete     - Task finished successfully
-#   task_failed       - Task finished with errors
-#   progress          - Progress update
-#   question          - Question for user
-#   reminder          - Reminder notification
-#   system            - System notification
-#   custom            - Custom notification
+#   info              - General information (INFO = 10)
+#   approval_needed   - Requires user approval (APPROVAL_NEEDED = 1)
+#   question          - Question for user (INPUT_REQUIRED = 2)
+#   error             - Error occurred (ERROR = 7)
+#   warning           - Warning message (WARNING = 8)
+#   task_complete     - Task finished successfully (TASK_COMPLETE = 4)
+#   task_failed       - Task finished with errors (FAILURE = 9)
+#   progress          - Progress update (PROCESS_STARTED = 5)
+#   reminder, system  - Mapped to INFO (10)
+#   custom            - Custom notification (CUSTOM = 100)
 #
 # Examples:
 #   # Simple notification
@@ -65,6 +65,7 @@ MESSAGE=""
 TYPE="info"
 PRIORITY="medium"
 QUIET=false
+DRY_RUN=false
 declare -a METADATA=()
 
 # Map priority names to protobuf enum values
@@ -78,21 +79,23 @@ priority_to_enum() {
     esac
 }
 
-# Map type names to protobuf enum values
+# Map type names to protobuf NotificationType numbers
+# (proto/session/v1/types.proto; ADR-003). Pinned by
+# server/services/ssq_notify_enum_parity_test.go.
 type_to_enum() {
     case "$1" in
-        info)            echo 1 ;;
-        approval_needed) echo 2 ;;
-        error)           echo 3 ;;
-        warning)         echo 4 ;;
-        task_complete)   echo 5 ;;
-        task_failed)     echo 6 ;;
-        progress)        echo 7 ;;
-        question)        echo 8 ;;
-        reminder)        echo 9 ;;
-        system)          echo 10 ;;
-        custom)          echo 11 ;;
-        *)               echo 1 ;; # default to info
+        info)            echo 10 ;;  # INFO
+        approval_needed) echo 1 ;;   # APPROVAL_NEEDED
+        question)        echo 2 ;;   # INPUT_REQUIRED
+        error)           echo 7 ;;   # ERROR
+        warning)         echo 8 ;;   # WARNING
+        task_complete)   echo 4 ;;   # TASK_COMPLETE
+        task_failed)     echo 9 ;;   # FAILURE
+        progress)        echo 5 ;;   # PROCESS_STARTED
+        reminder)        echo 10 ;;  # INFO
+        system)          echo 10 ;;  # INFO
+        custom)          echo 100 ;; # CUSTOM
+        *)               echo 10 ;;  # default to INFO
     esac
 }
 
@@ -141,6 +144,10 @@ while [[ $# -gt 0 ]]; do
             QUIET=true
             shift
             ;;
+        --dry-run)
+            DRY_RUN=true
+            shift
+            ;;
         --help|-h)
             usage
             ;;
@@ -169,6 +176,11 @@ if [[ ${#METADATA[@]} -gt 0 ]]; then
     done
 fi
 
+# Schema marker: lets the server tell this script (proto type numbers) from a stale
+# installed copy whose numbers collide with the proto enum. Set last so a caller
+# cannot override it.
+metadata_json=$(jq --null-input --argjson base "$metadata_json" '$base + {"ssq_notify_schema": "2"}')
+
 # Convert priority and type to enum values
 priority_enum=$(priority_to_enum "$PRIORITY")
 type_enum=$(type_to_enum "$TYPE")
@@ -183,6 +195,11 @@ request_json=$(jq --null-input \
     --argjson metadata "$metadata_json" \
     '{sessionId: $sessionId, notificationType: $notificationType, priority: $priority, title: $title, message: $message, metadata: $metadata}'
 )
+
+if [[ "$DRY_RUN" == "true" ]]; then
+    echo "$request_json"
+    exit 0
+fi
 
 # Send request to server using ConnectRPC JSON format
 response=$(curl -s -w "\n%{http_code}" \

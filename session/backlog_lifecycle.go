@@ -637,6 +637,28 @@ func (l *BacklogLifecycleListener) notify(itemID, title, message string, notific
 	}
 }
 
+// AutoRemediatingNotifier is an optional Notifier extension for a WARNING whose
+// automation is already acting. The implementation stamps it so it is informational
+// (never a pending decision that pins and inflates the count); the escalation, an
+// unstamped notification, is what asks the operator to act.
+type AutoRemediatingNotifier interface {
+	NotifyAutoRemediating(itemID, title, message string, notificationType int32, urgent, important bool)
+}
+
+// notifyAutoRemediating falls back to a plain Notify when the wired notifier does
+// not implement AutoRemediatingNotifier, so older adapters keep working.
+func (l *BacklogLifecycleListener) notifyAutoRemediating(itemID, title, message string, notificationType int32, urgent, important bool) {
+	n := l.getNotifier()
+	if n == nil {
+		return
+	}
+	if ar, ok := n.(AutoRemediatingNotifier); ok {
+		ar.NotifyAutoRemediating(itemID, title, message, notificationType, urgent, important)
+		return
+	}
+	n.Notify(itemID, title, message, notificationType, urgent, important)
+}
+
 // notifyTransitionFailed publishes an operator-facing notification when a
 // status-transition write fails AFTER its side effects have already happened
 // — e.g. a PR was confirmed merged, or a commit was confirmed shipped to

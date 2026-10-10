@@ -2,12 +2,15 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"time"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
@@ -32,6 +35,41 @@ type NotificationService struct {
 	eventBus                *events.EventBus
 	reviewQueuePoller       *session.ReviewQueuePoller
 	storage                 session.InstanceStore
+	deliveryGate            *deliverygate.Gate // optional: counters for legacy checks and unversioned requests
+	statsFileStatus         func() deliverygate.StatsFileStatus
+	auditSink               *AuditSink       // optional: prune apply refuses without it
+	pruneNow                func() time.Time // injected clock; nil means time.Now
+}
+
+// SetDeliveryGate wires the delivery gate used for legacy-check and
+// unversioned-request counters. It never changes delivery decisions here: the
+// bus publish filter makes those.
+func (ns *NotificationService) SetDeliveryGate(g *deliverygate.Gate) {
+	ns.deliveryGate = g
+}
+
+// requestMetadata returns the metadata to publish: a copy of the request's with
+// any client-supplied untrusted-type stamp removed (only the server may set it),
+// and the stamp added when the request did not come from a versioned ssq-notify
+// (an old script's type numbers collide with the proto enum, ADR-003).
+func (ns *NotificationService) requestMetadata(in map[string]string) map[string]string {
+	_, clientStamped := in[pkgevents.MetadataKeyUntrustedType]
+	versioned := in[pkgevents.MetadataKeySSQNotifySchema] != ""
+	if versioned && !clientStamped {
+		return in
+	}
+	out := make(map[string]string, len(in)+1)
+	for k, v := range in {
+		out[k] = v
+	}
+	delete(out, pkgevents.MetadataKeyUntrustedType)
+	if !versioned {
+		out[pkgevents.MetadataKeyUntrustedType] = "true"
+		if ns.deliveryGate != nil {
+			ns.deliveryGate.CountUnversionedRequest()
+		}
+	}
+	return out
 }
 
 // NewNotificationService creates a NotificationService with the given dependencies.
@@ -90,6 +128,10 @@ func (ns *NotificationService) SendNotification(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("title is required"))
 	}
 
+	// Count and stamp unversioned requests for every request, including ones the
+	// legacy checks below drop.
+	metadata := ns.requestMetadata(req.Msg.Metadata)
+
 	// Use the session ID as the display name. LoadInstances() cannot be used here because
 	// it calls FromInstanceData() which calls Start() on every non-paused session --
 	// a catastrophic side-effect that restarts all sessions on each notification.
@@ -140,6 +182,10 @@ func (ns *NotificationService) SendNotification(
 	// (task_failed, sent at high priority) must still surface regardless of
 	// Hidden, since nothing else watches a stuck-in-error hidden session.
 	if hidden && req.Msg.Priority == sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW {
+		if ns.deliveryGate != nil {
+			hint, _ := deliverygate.ParseClassHint(metadata)
+			ns.deliveryGate.CountLegacySuppressed("send_notification_low", sessionv1.NotificationType(req.Msg.NotificationType), hint)
+		}
 		return connect.NewResponse(&sessionv1.SendNotificationResponse{
 			Success: true,
 			Message: "Notification suppressed for hidden session",
@@ -163,7 +209,7 @@ func (ns *NotificationService) SendNotification(
 		int32(req.Msg.Priority),
 		req.Msg.Title,
 		req.Msg.Message,
-		req.Msg.Metadata,
+		metadata,
 	)
 	ns.eventBus.Publish(event)
 
@@ -289,6 +335,20 @@ func (ns *NotificationService) ClearNotificationHistory(
 		}), nil
 	}
 
+	if len(req.Msg.NotificationIds) > 0 {
+		deleted, kept, err := ns.notificationStore.ClearByIDs(req.Msg.NotificationIds)
+		if err != nil {
+			log.Error("[NotificationHistory] failed to clear notifications by id", "err", err)
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		// #nosec G115 -- count is a local notification-store row count, far below int32 range.
+		return connect.NewResponse(&sessionv1.ClearNotificationHistoryResponse{
+			Success:      true,
+			ClearedCount: int32(deleted),
+			KeptIds:      kept,
+		}), nil
+	}
+
 	var before *time.Time
 	if req.Msg.BeforeTimestamp != nil {
 		t, err := time.Parse(time.RFC3339, *req.Msg.BeforeTimestamp)
@@ -311,6 +371,34 @@ func (ns *NotificationService) ClearNotificationHistory(
 	}), nil
 }
 
+// SetGateStatsFileStatus wires the persisted stats file's status (loaded,
+// quarantined, writable) into GetDeliveryGateStats.
+func (ns *NotificationService) SetGateStatsFileStatus(fn func() deliverygate.StatsFileStatus) {
+	ns.statsFileStatus = fn
+}
+
+// GetDeliveryGateStats reports the hidden-session delivery gate's counters, the
+// persisted hourly buckets and the server-computed soak evidence. It returns
+// aggregate counters only (no session id, title or reply text), which is why it
+// is reachable on :8543 without auth and on :8444 behind it; it has no MCP tool.
+func (ns *NotificationService) GetDeliveryGateStats(
+	_ context.Context,
+	_ *connect.Request[sessionv1.GetDeliveryGateStatsRequest],
+) (*connect.Response[sessionv1.GetDeliveryGateStatsResponse], error) {
+	if ns.deliveryGate == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, errors.New("delivery gate is not configured"))
+	}
+	view := gateStatsView{
+		Snapshot:    ns.deliveryGate.StatsSnapshot(),
+		Series:      ns.deliveryGate.Metrics().Series(),
+		ExplicitOff: explicitOffScopes(),
+	}
+	if ns.statsFileStatus != nil {
+		view.File = ns.statsFileStatus()
+	}
+	return connect.NewResponse(buildGateStatsResponse(view)), nil
+}
+
 // ---------------------------------------------------------------------------
 // Helper functions
 // ---------------------------------------------------------------------------
@@ -328,16 +416,17 @@ func recordToProto(r *notifications.NotificationRecord) *sessionv1.NotificationH
 	}
 
 	record := &sessionv1.NotificationHistoryRecord{
-		Id:               r.ID,
-		SessionId:        r.SessionID,
-		SessionName:      r.SessionName,
-		NotificationType: sessionv1.NotificationType(r.NotificationType),
-		Priority:         sessionv1.NotificationPriority(r.Priority),
-		Title:            r.Title,
-		Message:          r.Message,
-		Metadata:         metadata,
-		CreatedAt:        timestamppb.New(r.CreatedAt),
-		IsRead:           r.IsRead,
+		Id:                r.ID,
+		SessionId:         r.SessionID,
+		SessionName:       r.SessionName,
+		NotificationType:  sessionv1.NotificationType(r.NotificationType),
+		Priority:          sessionv1.NotificationPriority(r.Priority),
+		Title:             r.Title,
+		Message:           r.Message,
+		Metadata:          metadata,
+		CreatedAt:         timestamppb.New(r.CreatedAt),
+		IsRead:            r.IsRead,
+		IsPendingDecision: notifications.IsPendingDecision(r.NotificationType, r.Metadata, r.IsRead),
 		// #nosec G115 -- OccurrenceCount is a per-notification dedup-repeat
 		// counter, far below int32 range.
 		OccurrenceCount: int32(r.OccurrenceCount),

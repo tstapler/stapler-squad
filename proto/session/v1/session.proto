@@ -159,6 +159,25 @@ service SessionService {
   // Optionally filters by timestamp to only clear older notifications.
   rpc ClearNotificationHistory(ClearNotificationHistoryRequest) returns (ClearNotificationHistoryResponse) {}
 
+  // PruneHiddenSessionNotifications removes stored notification rows that
+  // belong to hidden sessions. Operator-triggered; dry run unless apply is set.
+  // Keeps rows whose session cannot be determined; guarded as a local write.
+  // +api: notification:prune-hidden
+  rpc PruneHiddenSessionNotifications(PruneHiddenSessionNotificationsRequest) returns (PruneHiddenSessionNotificationsResponse) {}
+
+  // ReplyToPendingQuestion answers one outstanding single-select AskUserQuestion
+  // in one hidden session by writing one option digit to its terminal. Audited
+  // before the write, rate limited, guarded as a local write, no MCP tool.
+  // Expected business outcomes are in the response enum, never Connect errors.
+  // +api: session:reply-to-question
+  rpc ReplyToPendingQuestion(ReplyToPendingQuestionRequest) returns (ReplyToPendingQuestionResponse) {}
+
+  // GetDeliveryGateStats reports the hidden-session delivery gate's counters and
+  // the persisted hourly soak buckets. Aggregate counters only; no row content.
+  // Unavailable when the gate is not configured.
+  // +api: notification:gate-stats
+  rpc GetDeliveryGateStats(GetDeliveryGateStatsRequest) returns (GetDeliveryGateStatsResponse) {}
+
   // ListApprovalRules returns all auto-approval rules (user, seed, and claude-settings).
   rpc ListApprovalRules(ListApprovalRulesRequest) returns (ListApprovalRulesResponse) {}
 
@@ -692,6 +711,10 @@ message ListSessionsRequest {
   // When true, include archived sessions in results.
   // Defaults to false — archived sessions are excluded unless explicitly requested.
   bool include_archived = 8;
+
+  // When true, return only hidden (system/background) sessions, regardless of
+  // include_hidden. Used by the tray's Background activity section.
+  bool hidden_only = 9;
 }
 
 message ListSessionsResponse {
@@ -1750,6 +1773,11 @@ message NotificationHistoryRecord {
   // Timestamp of the most recent occurrence (may differ from created_at
   // which tracks the first occurrence).
   optional google.protobuf.Timestamp last_occurred_at = 13;
+
+  // True when this record is an unread decision the operator must act on:
+  // an actionable type that is not stamped auto_remediating=true. Computed by
+  // the server's single IsPendingDecision predicate; clients must not re-derive it.
+  bool is_pending_decision = 14;
 }
 
 // GetNotificationHistoryRequest filters and paginates notification history.
@@ -1793,12 +1821,178 @@ message MarkNotificationReadResponse {
 message ClearNotificationHistoryRequest {
   // Optional: Clear notifications older than this timestamp (RFC3339 string).
   optional string before_timestamp = 1;
+
+  // Clear exactly these notification ids (pending decisions among them are
+  // kept and listed in the response's kept_ids). Takes precedence over
+  // before_timestamp.
+  repeated string notification_ids = 2;
+}
+
+// PruneHiddenSessionNotificationsRequest selects what a prune removes.
+message PruneHiddenSessionNotificationsRequest {
+  // When false (the default) nothing is deleted and the response lists what would be.
+  bool apply = 1;
+  // When true, unread actionable rows of hidden sessions are removed too.
+  bool include_unread_actionable = 2;
+}
+
+// PruneHiddenSessionNotificationsResponse reports the planned or applied removal.
+message PruneHiddenSessionNotificationsResponse {
+  // True when rows were deleted (apply was set and the call succeeded).
+  bool applied = 1;
+  // Ids of the rows removed, or that would be removed on a dry run.
+  repeated string notification_ids = 2;
+  // Unread actionable rows of hidden sessions that were kept.
+  int32 kept_unread_actionable = 3;
+  // Rows whose session cannot be classified; always kept.
+  int32 undeterminable = 4;
+  // Path of the timestamped backup written before an apply.
+  string backup_path = 5;
+}
+
+// ReplyOutcome is the result of a Reply attempt. Every expected business outcome
+// is a value here; Connect errors are only InvalidArgument, Internal,
+// PermissionDenied and Unauthenticated.
+enum ReplyOutcome {
+  REPLY_OUTCOME_UNSPECIFIED = 0;
+  // The digit was written and the dialog closed.
+  REPLY_OUTCOME_SENT = 1;
+  // The digit may or may not have been written, or the dialog stayed open; no Retry.
+  REPLY_OUTCOME_SEND_INDETERMINATE = 2;
+  // Failed strictly before the first byte; Retry with the same reply_id is safe.
+  REPLY_OUTCOME_NOT_SENT = 3;
+  // No such pending question for this session (answered, expired or unknown).
+  REPLY_OUTCOME_NO_PENDING = 4;
+  // The question is not the dialog on screen (stale or replaced).
+  REPLY_OUTCOME_STALE_PROMPT = 5;
+  // The session is visible; answer in the terminal.
+  REPLY_OUTCOME_NOT_HIDDEN = 6;
+  // The session's dialog cannot be read right now.
+  REPLY_OUTCOME_NOT_WAITING = 7;
+  // Rate limited; see retry_after_seconds.
+  REPLY_OUTCOME_RATE_LIMITED = 8;
+  // The hidden_session_reply kill switch is off.
+  REPLY_OUTCOME_DISABLED = 9;
+}
+
+// ReplyToPendingQuestionRequest selects one option of one pending question.
+message ReplyToPendingQuestionRequest {
+  // Session id (UUID, title or tmux name; resolved to the UUID server side).
+  string session_id = 1;
+  // question_id from the INPUT_REQUIRED notification metadata.
+  string question_id = 2;
+  // Exactly one ASCII digit, the option number (1..N).
+  string reply_text = 3;
+  // Client-generated idempotency key; a Retry reuses it.
+  string reply_id = 4;
+}
+
+// ReplyToPendingQuestionResponse carries the outcome.
+message ReplyToPendingQuestionResponse {
+  ReplyOutcome outcome = 1;
+  // Seconds to wait before retrying when outcome is RATE_LIMITED.
+  int32 retry_after_seconds = 2;
+}
+
+// GetDeliveryGateStatsRequest has no parameters.
+message GetDeliveryGateStatsRequest {}
+
+// DeliveryGateCounter is one counter at full labels.
+message DeliveryGateCounter {
+  // Counter name, e.g. "suppressed", "would_suppress", "hidden_delivered".
+  string counter = 1;
+  // Session kind: review|triage|diagnose|other|unresolved.
+  string kind = 2;
+  // Delivery class: needs_human|failure|routine.
+  string class = 3;
+  int64 count = 4;
+}
+
+// DeliveryGateBucket is one persisted hour of gate activity.
+message DeliveryGateBucket {
+  google.protobuf.Timestamp hour_start = 1;
+  // Seconds the process was running in this hour.
+  int32 uptime_seconds = 2;
+  // Seconds the global gate value was on in this hour.
+  int32 gate_on_seconds = 3;
+  // Seconds each kind's effective value was on, keyed by kind.
+  map<string, int32> gate_on_seconds_by_kind = 4;
+  int64 hidden_events_seen = 5;
+  int64 hidden_events_while_on = 6;
+  // Hidden events the gate decided to suppress: a resolved hidden session,
+  // routine class, evaluated while that scope was on. An Unresolved session is
+  // delivered fail-open and is not counted.
+  int64 routine_events_while_on = 7;
+  repeated DeliveryGateCounter counters = 8;
+}
+
+// DeliveryGateFlagChange is one change to hidden_session_gate.
+message DeliveryGateFlagChange {
+  // "global" or "kind:<name>".
+  string scope = 1;
+  // The explicit value after the change; false when the value was cleared.
+  bool value = 2;
+  google.protobuf.Timestamp at = 3;
+  // The mutation applied, so a clear or reset is distinguishable from a set false.
+  FlagMutation mutation = 4;
+}
+
+// DeliveryGateSoak is the server-computed evidence the Stage 3 prerequisites read.
+message DeliveryGateSoak {
+  double gate_on_hours = 1;
+  int64 routine_events_while_on = 2;
+  // Empty when there was no off flip in the 72-hour window.
+  google.protobuf.Timestamp last_off_flip_at = 3;
+  // Hidden events delivered while the gate was on that traversed the real gate
+  // with class failure, since last_off_flip_at.
+  int64 failure_delivered_while_on = 4;
+  // The same for class needs-human.
+  int64 needs_human_delivered_while_on = 5;
+  // The subset of the two counts whose title starts with "[synthetic-probe]".
+  int64 probe_delivered_while_on = 6;
+  // Scopes with an explicit persisted false: "global", "kind:review", ...
+  repeated string explicit_off_scopes = 7;
+  // Sum over the buckets since last_off_flip_at of
+  // min(gate_on_seconds, uptime_seconds)/3600, counting only buckets with
+  // routine_events_while_on > 0 and excluding the bucket that contains
+  // last_off_flip_at.
+  double soak_streak_hours = 8;
+  // The same figure per kind, keyed by kind.
+  map<string, double> soak_streak_hours_by_kind = 9;
+}
+
+// DeliveryGateStatsFileStatus describes the persisted bucket file.
+message DeliveryGateStatsFileStatus {
+  bool loaded = 1;
+  bool quarantined = 2;
+  // False when the file cannot be written; the streak figure is then lost on restart.
+  bool writable = 3;
+}
+
+// GetDeliveryGateStatsResponse separates totals that reset on restart from
+// buckets that do not.
+message GetDeliveryGateStatsResponse {
+  google.protobuf.Timestamp process_start = 1;
+  int64 uptime_seconds = 2;
+  // Counters since process start, at full labels. Reset on restart.
+  repeated DeliveryGateCounter since_process_start = 3;
+  // The last 72 hourly buckets, oldest first. Persisted across restarts.
+  repeated DeliveryGateBucket buckets = 4;
+  // The last 20 changes of hidden_session_gate, newest last.
+  repeated DeliveryGateFlagChange flag_history = 5;
+  // Hidden events resolved to each kind in the last 24 hours.
+  map<string, int64> events_by_kind_24h = 6;
+  DeliveryGateSoak soak = 7;
+  DeliveryGateStatsFileStatus stats_file_status = 8;
 }
 
 // ClearNotificationHistoryResponse confirms how many notifications were cleared.
 message ClearNotificationHistoryResponse {
   bool success = 1;
   int32 cleared_count = 2;
+  // Requested ids the server refused to delete because they are still pending
+  // decisions. Always empty for the before_timestamp / clear-everything paths.
+  repeated string kept_ids = 3;
 }
 
 // ============================================================================
@@ -3062,6 +3256,17 @@ message FeatureFlag {
   // Optional human-readable status line (e.g. why a controller-backed flag is
   // currently off). Empty when not applicable.
   string status_detail = 4;
+  // Explicit per-scope overrides, read back from the persisted config. Empty
+  // for a flag that is not scopable or has no override.
+  repeated FeatureFlagScopeOverride scopes = 5;
+}
+
+// FeatureFlagScopeOverride is one persisted per-scope value of a scopable flag.
+message FeatureFlagScopeOverride {
+  // Scope key, e.g. "kind:review".
+  string scope = 1;
+  // The explicit value stored for that scope.
+  bool enabled = 2;
 }
 
 message GetFeatureFlagsRequest {}
@@ -3136,11 +3341,38 @@ message RestartTmuxServerResponse {
   int32 sessions_affected = 1;
 }
 
+// FlagMutation says what an UpdateFeatureFlag call does. The set values carry
+// the enabled state, so a set can never write false because `enabled` was
+// omitted.
+enum FlagMutation {
+  // The legacy shape an old client sends: `scope` must be empty and `enabled`
+  // is read as a global set.
+  FLAG_MUTATION_UNSPECIFIED = 0;
+  // Persist true at `scope`.
+  FLAG_MUTATION_SET_ENABLED = 1;
+  // Persist false at `scope`.
+  FLAG_MUTATION_SET_DISABLED = 2;
+  // Delete the explicit value at a "kind:" `scope` (inherit).
+  FLAG_MUTATION_CLEAR_SCOPE = 3;
+  // Delete the explicit global value so the registry default applies.
+  FLAG_MUTATION_RESET_GLOBAL = 4;
+}
+
 message UpdateFeatureFlagRequest {
   // The feature name to update (e.g. "backlog").
   string name = 1;
-  // The new enabled state.
+  // The new enabled state. Read only when `mutation` is
+  // FLAG_MUTATION_UNSPECIFIED; ignored (neither a conflict nor an error) for
+  // every other mutation.
   bool enabled = 2;
+  // "kind:<name>" for a per-kind change, or the literal "global" for a global
+  // set. Validation (enforced by the server):
+  // UNSPECIFIED with a non-empty scope, an unknown enum value, a set with an
+  // empty scope and RESET_GLOBAL with a scope are InvalidArgument; CLEAR_SCOPE
+  // requires a "kind:" scope.
+  string scope = 3;
+  // What to do. Zero is the legacy "set `enabled` globally" shape.
+  FlagMutation mutation = 4;
 }
 
 message UpdateFeatureFlagResponse {

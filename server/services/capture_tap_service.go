@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -38,17 +37,52 @@ func WithRequestHost(next http.Handler) http.Handler {
 	})
 }
 
-// proxyHeaders mark a request that passed through a reverse proxy or tunnel. A
-// local proxy connects from loopback, so the socket alone cannot tell a proxied
-// remote caller from a local one.
-var proxyHeaders = []string{
-	"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Prefix",
-	"X-Original-Forwarded-For", "X-Real-Ip", "X-Client-Ip", "True-Client-Ip", "Cf-Connecting-Ip",
-	"Cdn-Loop", "Via",
+// Listener names and auth modes stamped on a RequestRecord.
+const (
+	ListenerLocal    = "local"
+	ListenerRemote   = "remote"
+	AuthModeNone     = "none"
+	AuthModeRequired = "required"
+)
+
+// RequestRecord holds the raw facts about an inbound request that later
+// policy (the delivery-gate audit, LocalWriteGuard) reads. It carries no verdict.
+type RequestRecord struct {
+	Listener string
+	AuthMode string
+	Host     string
+	Origin   string
+	Proxied  bool
 }
 
-// proxyHeaderPrefixes match whole header families, such as Tailscale Serve's.
-var proxyHeaderPrefixes = []string{"Tailscale-"}
+type requestRecordKey struct{}
+
+// WithRequestRecord stamps a RequestRecord on the request context. AuthMode is
+// "required" only when requiresAuth is true.
+func WithRequestRecord(listener string, requiresAuth bool) func(http.Handler) http.Handler {
+	mode := AuthModeNone
+	if requiresAuth {
+		mode = AuthModeRequired
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rec := RequestRecord{
+				Listener: listener,
+				AuthMode: mode,
+				Host:     r.Host,
+				Origin:   r.Header.Get("Origin"),
+				Proxied:  middleware.HasProxyHeader(r.Header),
+			}
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestRecordKey{}, rec)))
+		})
+	}
+}
+
+// RequestRecordFrom returns the stamped record; ok is false when no chain stamped it.
+func RequestRecordFrom(ctx context.Context) (RequestRecord, bool) {
+	rec, ok := ctx.Value(requestRecordKey{}).(RequestRecord)
+	return rec, ok
+}
 
 // SetCaptureTap turns the terminal-stream capture tap on or off at runtime.
 // Loopback requests only; the output directory is never caller-supplied.
@@ -131,20 +165,14 @@ func requireLoopbackCaller(peerAddr, host string, h http.Header) error {
 		return connect.NewError(connect.CodePermissionDenied,
 			errors.New("the capture tap can only be controlled from loopback (127.0.0.1 or ::1) without proxy headers: "+reason))
 	}
-	ap, err := netip.ParseAddrPort(peerAddr)
-	if err != nil || !ap.Addr().Unmap().IsLoopback() {
+	if !middleware.PeerIsLoopback(peerAddr) {
 		return deny("peer address is not loopback")
 	}
 	if !hostIsLoopback(host) {
 		return deny("Host is not a loopback name")
 	}
-	for name, values := range h {
-		if len(values) == 0 {
-			continue
-		}
-		if isProxyHeader(name) {
-			return deny("request carries " + name)
-		}
+	if name := middleware.ProxyHeaderName(h); name != "" {
+		return deny("request carries " + name)
 	}
 	for _, origin := range h.Values("Origin") {
 		if u, perr := url.Parse(origin); perr != nil || u.Host == "" || !strings.EqualFold(u.Host, host) {
@@ -162,21 +190,6 @@ func hostIsLoopback(host string) bool {
 	}
 	u, err := url.Parse("//" + host)
 	return err == nil && u.User == nil && u.Hostname() != "" && middleware.IsLoopbackHostname(u.Hostname())
-}
-
-func isProxyHeader(name string) bool {
-	name = http.CanonicalHeaderKey(name)
-	for _, p := range proxyHeaders {
-		if name == http.CanonicalHeaderKey(p) {
-			return true
-		}
-	}
-	for _, prefix := range proxyHeaderPrefixes {
-		if strings.HasPrefix(name, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 func captureTapScope(st streamhub.TapStatus) string {
