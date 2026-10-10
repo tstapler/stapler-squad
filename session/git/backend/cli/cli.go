@@ -163,7 +163,7 @@ func stripNoise(out []byte) []byte {
 // containing '@' or '/' is hidden entirely. scpCredential covers scp-style user:token@host:path.
 var (
 	credentialInURL = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^\s'"]*@`)
-	scpCredential   = regexp.MustCompile(`\b[A-Za-z0-9._~-]+:[^\s@'"/]+@`)
+	scpCredential   = regexp.MustCompile(`\b[A-Za-z0-9._~-]+:[^\s'"/]+@`)
 	lockPath        = regexp.MustCompile(`Unable to create '([^']+\.lock)'`)
 )
 
@@ -250,16 +250,39 @@ func optArg(name, v string) error {
 	return nil
 }
 
-// refspecArg is optArg plus the characters that turn a "branch name" into a refspec when given
-// to push, pull or fetch: ':' (":main" deletes the remote branch) and a leading '+' (force).
+// refspecArg validates a branch name that git will read as (part of) a refspec, as push, pull
+// and fetch do. It is an allow-list, not a deny-list: the name must satisfy git's
+// check-ref-format rules, so globs (refs/heads/*), ':' (delete) and similar cannot get through,
+// and a leading '+' (force) is refused as well.
 func refspecArg(name, v string) error {
 	if err := optArg(name, v); err != nil {
 		return err
 	}
-	if strings.HasPrefix(v, "+") || strings.Contains(v, ":") {
-		return fmt.Errorf("%w: %s %q looks like a refspec", backend.ErrInvalidArgument, name, v)
+	if strings.HasPrefix(v, "+") || !validRefName(v) {
+		return fmt.Errorf("%w: %s %q is not a plain ref name", backend.ErrInvalidArgument, name, v)
 	}
 	return nil
+}
+
+// validRefName implements `git check-ref-format` (without --allow-onelevel restrictions
+// relaxed: a single component such as "main" is accepted, as for branch names).
+func validRefName(v string) bool {
+	if v == "" || v == "@" || strings.HasPrefix(v, "/") || strings.HasSuffix(v, "/") ||
+		strings.HasSuffix(v, ".") || strings.Contains(v, "..") || strings.Contains(v, "@{") ||
+		strings.Contains(v, "//") {
+		return false
+	}
+	for _, r := range v {
+		if r < 0x20 || r == 0x7f || strings.ContainsRune(" ~^:?*[\\", r) {
+			return false
+		}
+	}
+	for _, comp := range strings.Split(v, "/") {
+		if strings.HasPrefix(comp, ".") || strings.HasSuffix(comp, ".lock") {
+			return false
+		}
+	}
+	return true
 }
 
 func paths(ps []backend.RepoPath) []string {
