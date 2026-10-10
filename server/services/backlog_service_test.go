@@ -1900,6 +1900,33 @@ func TestSpawnSessionFromItem_Reopen_ReusesBranch(t *testing.T) {
 	assert.NotContains(t, secondBranch, "-r2", "branch name must not pick up the session title's revision suffix")
 }
 
+// TestSpawnSessionFromItem_should_StampRealGitBranchOnItemSession is the regression
+// test for PR #960 (item 4daf7ced) sticking in pr_pending after merge: the work
+// ItemSession's branch_name was stamped with the bare slug while the worktree's real
+// branch (the PR's head ref) is "backlog/<slug>", so the merge-verification guard
+// compared two different strings. Asserts the stamp equals the branch git actually
+// checked out.
+func TestSpawnSessionFromItem_should_StampRealGitBranchOnItemSession(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "stamp branch item")
+
+	_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.Len(t, creator.calls, 1)
+
+	sessions, err := storage.ListItemSessions(t.Context(), itemID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, currentBranch(t, creator.calls[0].path), sessions[0].BranchName,
+		"ItemSession.BranchName must be the worktree's real branch, which is what a PR's head ref will be")
+}
+
 // TestSpawnSessionFromItem_Reopen_ReusesWorktreeInPlace is a regression test for a
 // real bug: reopen used to force-remove and recreate the worktree at the reused
 // path (git.GitWorktree.setupFromExistingBranch always ran `worktree remove -f`

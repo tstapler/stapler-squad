@@ -2040,6 +2040,10 @@ enum StuckReason {
   STUCK_REASON_BLOCKED_BY_CLAIM = 21;
   // STUCK_REASON_REPEATED_NOOP_DISPATCH: see domain.StuckReasonRepeatedNoopDispatch.
   STUCK_REASON_REPEATED_NOOP_DISPATCH = 22;
+  // STUCK_REASON_MERGED_PR_UNVERIFIED: see domain.StuckReasonMergedPRUnverified
+  // — the item's PR is merged but no recorded branch/tip commit matches it, so
+  // the auto-done transition was refused.
+  STUCK_REASON_MERGED_PR_UNVERIFIED = 23;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState

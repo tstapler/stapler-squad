@@ -36,6 +36,7 @@ export const STUCK_REASON_LABELS: Record<StuckReason, string> = {
   [StuckReason.BLOCKED_BY_CLAIM]: "Blocked: claimed by another host",
   [StuckReason.WORKTREE_INCONSISTENT]: "Worktree state inconsistent",
   [StuckReason.REPEATED_NOOP_DISPATCH]: "Repeated no-op sessions",
+  [StuckReason.MERGED_PR_UNVERIFIED]: "Merged PR not tied to item",
 };
 
 /** Decorative icon glyph for every StuckReason (never the sole signal — text label always accompanies it). */
@@ -63,6 +64,7 @@ export const STUCK_REASON_ICONS: Record<StuckReason, string> = {
   [StuckReason.BLOCKED_BY_CLAIM]: "🟠",
   [StuckReason.WORKTREE_INCONSISTENT]: "⛔",
   [StuckReason.REPEATED_NOOP_DISPATCH]: "🔁",
+  [StuckReason.MERGED_PR_UNVERIFIED]: "⛔",
 };
 
 /** vanilla-extract class per StuckReason (design/ux.md Surface 7 chip legend). */
@@ -90,6 +92,7 @@ export const STUCK_REASON_CLASS: Record<StuckReason, string> = {
   [StuckReason.BLOCKED_BY_CLAIM]: styles.chipBlockedByClaim,
   [StuckReason.WORKTREE_INCONSISTENT]: styles.chipWorktreeInconsistent,
   [StuckReason.REPEATED_NOOP_DISPATCH]: styles.chipWorktreeInconsistent,
+  [StuckReason.MERGED_PR_UNVERIFIED]: styles.chipPrPendingNoPR,
 };
 
 /**
@@ -127,6 +130,8 @@ export const STUCK_REASON_PRIORITY: Record<StuckReason, number> = {
   [StuckReason.PUSH_FAILED]: 4,
   [StuckReason.SPAWN_FAILED]: 5,
   [StuckReason.PR_PENDING_NO_PR]: 6,
+  // Same dead-end shape as PR_PENDING_NO_PR: needs a manual mark-done.
+  [StuckReason.MERGED_PR_UNVERIFIED]: 6.5,
   [StuckReason.REWORK_BLOCKED_STALE]: 7,
   [StuckReason.PR_NEEDS_FIX]: 8,
   [StuckReason.ABANDONED_REVIEW]: 9,

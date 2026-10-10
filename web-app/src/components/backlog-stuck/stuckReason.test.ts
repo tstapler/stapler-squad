@@ -29,6 +29,7 @@ const ALL_REASONS: StuckReason[] = [
   StuckReason.BLOCKED_BY_DEPENDENCY,
   StuckReason.STEER_FAILED,
   StuckReason.BLOCKED_BY_CLAIM,
+  StuckReason.MERGED_PR_UNVERIFIED,
 ];
 
 describe("stuckReason", () => {

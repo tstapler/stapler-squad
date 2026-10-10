@@ -299,6 +299,11 @@ func EnsureDirectorySessionPath(path string) error {
 // bug this once caused when the two sides used independently-duplicated logic.
 const BacklogBranchPrefix = "backlog/"
 
+// BacklogWorkBranchName is the full git branch a backlog work session for the
+// given slug lives on. Every writer or predictor of that branch name must go
+// through this, not concatenate BacklogBranchPrefix itself.
+func BacklogWorkBranchName(slug string) string { return BacklogBranchPrefix + slug }
+
 // CreateBacklogWorktree creates a git worktree for a backlog work session.
 // It creates a branch named BacklogBranchPrefix+branchSuffix and returns the
 // on-disk worktree path. The caller is responsible for writing files to the
@@ -358,7 +363,7 @@ func CreateBacklogWorktree(repoPath, branchSuffix, baseBranch string) (string, e
 		if err := RepairCorruptedGitRepo(resolvedRepo); err != nil {
 			return err
 		}
-		branchName := BacklogBranchPrefix + branchSuffix
+		branchName := BacklogWorkBranchName(branchSuffix)
 		var wt *git.GitWorktree
 		var err error
 		var defaultBranch, baseSHA string

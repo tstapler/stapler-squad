@@ -198,7 +198,7 @@ func TestReconcilePRPending_should_StillCloseSupersededPR_When_SessionsRealTipIs
 	overridePRPendingChecker(t, listener, checker)
 	spawner := &fakePRFixSpawner{}
 	listener.SetPRFixSpawner(spawner)
-	// Story 6's closeIfSupersededByMain guard (verifyPRHeadBranchMatchesTracked)
+	// Story 6's closeIfSupersededByMain guard (verifyPRBelongsToItem)
 	// re-verifies the PR's head branch before closing it — stub a matching
 	// finder so this pre-existing "genuinely superseded" case still confirms
 	// as verified rather than failing closed.

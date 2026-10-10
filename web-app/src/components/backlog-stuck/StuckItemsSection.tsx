@@ -55,6 +55,7 @@ const GROUP_ORDER: StuckReason[] = [
   StuckReason.BLOCKED_BY_CLAIM,
   StuckReason.WORKTREE_INCONSISTENT,
   StuckReason.REPEATED_NOOP_DISPATCH,
+  StuckReason.MERGED_PR_UNVERIFIED,
 ];
 
 function firstDetectedMs(item: StuckBacklogItem): number {

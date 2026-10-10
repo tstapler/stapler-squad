@@ -154,7 +154,7 @@ type BacklogLifecycleListener struct {
 	// prByNumberFinderMu guards prByNumberFinder for concurrent Set/get access.
 	prByNumberFinderMu sync.RWMutex
 	// prByNumberFinder looks up a PR by its immutable number — used by
-	// verifyPRHeadBranchMatchesTracked to re-verify, via a live GitHub lookup,
+	// verifyPRBelongsToItem to re-verify, via a live GitHub lookup,
 	// that item.PrNumber's real head branch still matches the item's
 	// currently-tracked branch before an automated reconciliation call site
 	// treats that PR number as ground truth (Story 6, adversarial-review.md's
@@ -573,7 +573,7 @@ func (l *BacklogLifecycleListener) getOrphanedPRFinder() func(ctx context.Contex
 }
 
 // SetPRByNumberFinder overrides the function used to look up a PR by its
-// immutable number, used by verifyPRHeadBranchMatchesTracked (Story 6).
+// immutable number, used by verifyPRBelongsToItem (Story 6).
 // Overridable in tests to avoid real GitHub API calls or needing a real git
 // remote on disk; production code never needs to call this, since
 // newListenerBase installs defaultPRByNumberFinder.
@@ -2109,7 +2109,7 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 			resolve = row.ItemStatus != BacklogStatusQueued
 		case domain.StuckReasonPRPendingNoPR:
 			resolve = row.ItemStatus != BacklogStatusPRPending
-		case domain.StuckReasonPRNeedsFix:
+		case domain.StuckReasonPRNeedsFix, domain.StuckReasonMergedPRUnverified:
 			resolve = row.ItemStatus != BacklogStatusPRPending
 		case domain.StuckReasonRepeatedNoopDispatch:
 			// Commit-landed resolution is reconcileRepeatedNoopDispatch's

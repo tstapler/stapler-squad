@@ -97,7 +97,7 @@ func retitleTriageWorktreeToFinalBranch(itemID, repoPath, title string, wt *git.
 	if title == "" {
 		return
 	}
-	finalBranch := session.BacklogBranchPrefix + backlogWorkBranchSlug(repoPath, title)
+	finalBranch := session.BacklogWorkBranchName(backlogWorkBranchSlug(repoPath, title))
 
 	if renameErr := wt.RenameBranch(finalBranch); renameErr != nil {
 		log.Warn("[TriggerTriage] failed to rename triage worktree branch", "item", itemID, "branch", finalBranch, "error", renameErr)
