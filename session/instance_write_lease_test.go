@@ -483,3 +483,29 @@ func waitLeaseFree(t *testing.T, inst *Instance) {
 		return ok
 	}, 5*time.Second, time.Millisecond, "the writing goroutine never released the lease")
 }
+
+// include is caller code: it must run outside leaseRegistry.mu, or a filter
+// that touches another lease (here, taking one) deadlocks the scan.
+func TestScanWedgedLeases_ShouldRunIncludeOutsideTheRegistryLock(t *testing.T) {
+	inst := leaseInstance(t, "include-unlocked")
+	other := leaseInstance(t, "include-unlocked-other")
+	lease, ok := inst.TryTerminalWriteLease(LeaseWriterReply)
+	require.True(t, ok)
+	t.Cleanup(lease.Release)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ScanWedgedLeases(lease.acquiredAt.Add(LeaseWedgeWarnAfter), LeaseWedgeWarnAfter, func(i *Instance) bool {
+			if l, got := other.TryTerminalWriteLease(LeaseWriterNudge); got {
+				l.Release()
+			}
+			return i == inst
+		})
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("ScanWedgedLeases deadlocked: include ran under leaseRegistry.mu")
+	}
+}

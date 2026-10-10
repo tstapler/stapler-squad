@@ -222,9 +222,11 @@ export function NotificationToast({
     .filter(Boolean)
     .join(" ");
 
+  const verbLabel = (v: Verb) =>
+    v === "approve" ? <><span aria-hidden="true">✓</span> Approve</> : <><span aria-hidden="true">✗</span> Deny</>;
   const decisionLabel = (v: Verb) => {
     if (sending && decision.verb === v) return v === "approve" ? "Approving..." : "Denying...";
-    return v === "approve" ? "✓ Approve" : "✗ Deny";
+    return verbLabel(v);
   };
 
   const legacyDecide = (v: Verb) => {
@@ -246,7 +248,7 @@ export function NotificationToast({
       }}
       title={offlineReason ?? "Allow this tool use"}
     >
-      {stacked ? decisionLabel("approve") : "✓ Approve"}
+      {stacked ? decisionLabel("approve") : verbLabel("approve")}
     </button>
   );
   const denyButtonEl = notification.onDeny && (
@@ -261,7 +263,7 @@ export function NotificationToast({
       }}
       title={offlineReason ?? "Deny this tool use"}
     >
-      {stacked ? decisionLabel("deny") : "✗ Deny"}
+      {stacked ? decisionLabel("deny") : verbLabel("deny")}
     </button>
   );
 
@@ -298,7 +300,7 @@ export function NotificationToast({
       {...(stacked ? {} : holdHandlers)}
     >
       <div className={header}>
-        <div className={icon}>{notificationTypeIcon(notification.notificationType)}</div>
+        <div className={icon} aria-hidden="true">{notificationTypeIcon(notification.notificationType)}</div>
         <div className={titleWrapper}>
           <div className={titleRow}>
             <strong>{displayTitle}</strong>

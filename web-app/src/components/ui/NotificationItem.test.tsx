@@ -77,7 +77,7 @@ describe("NotificationItem — resolved-approval badge", () => {
       resolvedApprovals: { "appr-1": "allow" },
     });
 
-    expect(screen.getByText("✓ Approved")).toBeInTheDocument();
+    expect(screen.getByText("Approved")).toBeInTheDocument();
     expect(screen.queryByText(/Auto-resolved by rule/)).not.toBeInTheDocument();
   });
 
@@ -88,7 +88,7 @@ describe("NotificationItem — resolved-approval badge", () => {
       resolvedApprovals: { "appr-1": "deny" },
     });
 
-    expect(screen.getByText("✗ Denied")).toBeInTheDocument();
+    expect(screen.getByText("Denied")).toBeInTheDocument();
   });
 
   it('shows "Auto-resolved by rule: <name>" instead of "✓ Approved" when the notification is reconciled', () => {
@@ -150,7 +150,7 @@ describe("NotificationItem — CI-block override actions (Epic 2.3.2)", () => {
 
     expect(screen.getByText("Approve anyway")).toBeInTheDocument();
     expect(screen.getByTestId("ci-block-view-run-link")).toBeInTheDocument();
-    expect(screen.getByText("✗ Deny")).toBeInTheDocument();
+    expect(screen.getByText("Deny")).toBeInTheDocument();
   });
 
   it('omits "Approve anyway" (nothing left to approve against) when the blocked message has no CI-checks URL, e.g. a reconciliation race', () => {
@@ -165,7 +165,7 @@ describe("NotificationItem — CI-block override actions (Epic 2.3.2)", () => {
     expect(screen.queryByText("Approve anyway")).not.toBeInTheDocument();
     expect(screen.queryByTestId("ci-block-view-run-link")).not.toBeInTheDocument();
     // Deny still applies — there's still a pending decision on the human's side of the race.
-    expect(screen.getByText("✗ Deny")).toBeInTheDocument();
+    expect(screen.getByText("Deny")).toBeInTheDocument();
   });
 });
 
@@ -178,8 +178,8 @@ describe("NotificationItem — transient resolveApproval failure (validation.md 
     });
 
     expect(screen.getByText("Couldn't record your decision — try again.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "✓ Approve" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "✗ Deny" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
     expect(screen.queryByText("Expired")).not.toBeInTheDocument();
   });
 });

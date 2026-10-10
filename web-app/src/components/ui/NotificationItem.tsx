@@ -193,7 +193,7 @@ export function NotificationItem({
       <div className={itemHeader}>
         <div className={itemTitle}>
           {!notification.isRead && <span className={unreadDot} role="img" aria-label="Unread" />}
-          <span className={typeIcon}>{notificationTypeIcon(notification.notificationType)}</span>
+          <span className={typeIcon} aria-hidden="true">{notificationTypeIcon(notification.notificationType)}</span>
           <strong>{primaryTitle}</strong>
           {sessionHidden && <BackgroundChip />}
           <span className={typeLabel} style={{ backgroundColor: priorityColor(notification.priority) }}>
@@ -267,13 +267,13 @@ export function NotificationItem({
                       data-decision={`${resolved}-reconciled`}
                       title="Re-evaluated with current context (e.g. CI status, session idle time) at resolution time, which may have changed since this was first escalated."
                     >
-                      {resolved === "allow" ? "✓" : "✗"} Auto-resolved by rule: {ruleName}
+                      <span aria-hidden="true">{resolved === "allow" ? "✓" : "✗"}</span> Auto-resolved by rule: {ruleName}
                     </span>
                   );
                 }
                 return (
                   <span className={resolvedBadge} data-decision={resolved}>
-                    {resolved === "allow" ? "✓ Approved" : "✗ Denied"}
+                    <span aria-hidden="true">{resolved === "allow" ? "✓" : "✗"}</span> {resolved === "allow" ? "Approved" : "Denied"}
                   </span>
                 );
               }
@@ -284,7 +284,7 @@ export function NotificationItem({
                 const { text: blockedText, checksUrl } = splitCIBlockMessage(blockedMessage);
                 return (
                   <div className={ciBlockedRow} data-testid="ci-block-message">
-                    <span className={ciBlockedText}>⚠️ {blockedText}</span>
+                    <span className={ciBlockedText}><span aria-hidden="true">⚠️ </span>{blockedText}</span>
                     {checksUrl && (
                       <a
                         href={checksUrl}
@@ -305,7 +305,7 @@ export function NotificationItem({
                         </button>
                       )}
                       <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", group.allIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Deny this tool use"}>
-                        {isPending ? "…" : "✗ Deny"}
+                        {isPending ? "…" : <><span aria-hidden="true">✗</span> Deny</>}
                       </button>
                     </div>
                   </div>
@@ -320,10 +320,10 @@ export function NotificationItem({
                     </span>
                   )}
                   <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", group.allIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Approve this tool use"}>
-                    {isPending ? "…" : "✓ Approve"}
+                    {isPending ? "…" : <><span aria-hidden="true">✓</span> Approve</>}
                   </button>
                   <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", group.allIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Deny this tool use"}>
-                    {isPending ? "…" : "✗ Deny"}
+                    {isPending ? "…" : <><span aria-hidden="true">✗</span> Deny</>}
                   </button>
                 </>
               );
@@ -398,7 +398,10 @@ export function AutoHandledSection({ notifications, isOpen, onToggle }: AutoHand
             const toolName = n.metadata?.["tool_name"] ?? n.title;
             return (
               <div key={n.id} className={autoHandledItem}>
-                <span className={autoHandledDecision}>{decision === "deny" ? "✗" : "✓"}</span>
+                <span className={autoHandledDecision}>
+                  <span aria-hidden="true">{decision === "deny" ? "✗" : "✓"}</span>
+                  <span className={visuallyHidden}>{decision === "deny" ? "Denied" : "Approved"}</span>
+                </span>
                 <div className={autoHandledContent}>
                   <div className={autoHandledTitle}>{toolName}</div>
                   {(n.message || ruleName) && (

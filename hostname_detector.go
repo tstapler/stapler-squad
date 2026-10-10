@@ -479,11 +479,18 @@ func (d *HostnameDetector) recomputeVerified(cycleCtx context.Context) {
 	for _, names := range d.networks {
 		candidates = append(candidates, names...)
 	}
+	// One verdict per name per cycle: a name listed under several IPs or also
+	// in the boot-time set would otherwise burn all its misses in one cycle.
+	seen := make(map[string]struct{}, len(candidates))
 	for _, c := range candidates {
 		name := verifiedCandidate(c)
 		if name == "" {
 			continue
 		}
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
 		st := d.verified[name]
 		if st == nil {
 			st = &verifyState{}

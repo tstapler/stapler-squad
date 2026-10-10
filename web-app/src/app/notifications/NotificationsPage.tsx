@@ -390,7 +390,7 @@ export function NotificationsPage() {
         )}
         {historyLoading && notificationHistory.length === 0 ? (
           <div className={empty}>
-            <div className={emptyIcon}>⏳</div>
+            <div className={emptyIcon} aria-hidden="true">⏳</div>
             <p className={emptyText}>Loading notifications...</p>
           </div>
         ) : totalActionableCount > 0 && needsDecision.length === 0 ? (
@@ -416,7 +416,7 @@ export function NotificationsPage() {
           // Reachable only when totalActionableCount === 0 — the branch above
           // already caught every case where it's nonzero.
           <div className={empty}>
-            <div className={emptyIcon}>{hasActiveFilter ? "🔍" : "🔔"}</div>
+            <div className={emptyIcon} aria-hidden="true">{hasActiveFilter ? "🔍" : "🔔"}</div>
             <p className={emptyText}>
               {hasActiveFilter ? "No matching notifications" : "No notifications yet"}
             </p>

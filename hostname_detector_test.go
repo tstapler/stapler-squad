@@ -772,3 +772,24 @@ func TestVerifiedHostnames_ShouldBeSeededAtBootFromVerifiedHostnamesOnlyAndStayS
 		t.Fatalf("verified set = %v, want only the boot-verified names (raw candidates excluded)", got)
 	}
 }
+
+func TestRecomputeVerified_ShouldCountOneMissPerNamePerCycle_WhenANameIsListedUnderSeveralSources(t *testing.T) {
+	srv := &server.Server{}
+	calls := 0
+	validate := func(context.Context, string) bool { calls++; return false }
+	d := verifiedTestDetector(srv, HostnameDetectorConfig{InitialVerified: []string{"a.lan"}},
+		detectIPs(), func(context.Context, string) []string { return nil }, validate)
+	d.networks = map[string][]string{"10.0.0.1": {"a.lan"}, "10.0.0.2": {"A.lan."}}
+
+	d.recomputeVerified(context.Background())
+	if calls != 1 {
+		t.Fatalf("validateFn calls = %d, want 1 per distinct name", calls)
+	}
+	if got := srv.GetVerifiedHostnames(); !slices.Contains(got, "a.lan") {
+		t.Fatalf("one false cycle must not drop a boot-verified name, got %v", got)
+	}
+	d.recomputeVerified(context.Background())
+	if got := srv.GetVerifiedHostnames(); slices.Contains(got, "a.lan") {
+		t.Fatalf("two consecutive false cycles must drop it, got %v", got)
+	}
+}

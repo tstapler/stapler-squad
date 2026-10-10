@@ -484,7 +484,7 @@ export function NotificationPanel() {
       if (historyLoading && notificationHistory.length === 0) {
         return (
           <div className={empty}>
-            <div className={emptyIcon}>⏳</div>
+            <div className={emptyIcon} aria-hidden="true">⏳</div>
             <p className={emptyText}>Loading notifications...</p>
           </div>
         );
@@ -493,7 +493,7 @@ export function NotificationPanel() {
         const e = emptyStateText();
         return (
           <div className={empty}>
-            <div className={emptyIcon}>{filtered ? "🔍" : "🔔"}</div>
+            <div className={emptyIcon} aria-hidden="true">{filtered ? "🔍" : "🔔"}</div>
             <p className={emptyText}>{filtered ? "No matching notifications" : "No notifications yet"}</p>
             <p className={emptySubtext}>{e.sub}</p>
           </div>
@@ -505,7 +505,7 @@ export function NotificationPanel() {
     if (trayState.kind === "loading") {
       return (
         <div className={empty} aria-busy="true" data-testid="tray-skeleton">
-          <div className={emptyIcon}>⏳</div>
+          <div className={emptyIcon} aria-hidden="true">⏳</div>
           <p className={emptyText}>Loading notifications...</p>
         </div>
       );
@@ -514,7 +514,7 @@ export function NotificationPanel() {
       const e = emptyStateText();
       return (
         <div className={empty} data-testid={`tray-empty-${trayState.kind}`}>
-          <div className={emptyIcon}>{e.icon}</div>
+          <div className={emptyIcon} aria-hidden="true">{e.icon}</div>
           <p className={emptyText}>{e.text}</p>
           {e.sub && <p className={emptySubtext}>{e.sub}</p>}
           {trayState.exit === "retry" && (

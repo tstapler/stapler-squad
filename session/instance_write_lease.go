@@ -296,14 +296,31 @@ type WedgedLease struct {
 // instances it accepts (nil scans every held lease; a test passes its own
 // instance so a parallel test's lease is never swept up).
 func ScanWedgedLeases(now time.Time, warnAfter time.Duration, include func(*Instance) bool) []WedgedLease {
-	var warns, firsts []WedgedLease
+	// include is caller code (it may read instance state), so it runs outside
+	// leaseRegistry.mu: candidates are copied out, filtered, then marked.
+	var candidates []*HeldLease
 	leaseRegistry.mu.Lock()
 	for _, l := range leaseRegistry.held {
-		held := now.Sub(l.acquiredAt)
-		if held < warnAfter || (include != nil && !include(l.inst)) {
-			continue
+		if now.Sub(l.acquiredAt) >= warnAfter {
+			candidates = append(candidates, l)
 		}
-		w := WedgedLease{Instance: l.inst, Writer: l.writer, Held: held, AcquisitionID: l.id}
+	}
+	leaseRegistry.mu.Unlock()
+
+	if include != nil {
+		kept := candidates[:0]
+		for _, l := range candidates {
+			if include(l.inst) {
+				kept = append(kept, l)
+			}
+		}
+		candidates = kept
+	}
+
+	var warns, firsts []WedgedLease
+	leaseRegistry.mu.Lock()
+	for _, l := range candidates {
+		w := WedgedLease{Instance: l.inst, Writer: l.writer, Held: now.Sub(l.acquiredAt), AcquisitionID: l.id}
 		if !l.wedgeSeen {
 			l.wedgeSeen = true
 			firsts = append(firsts, w)
