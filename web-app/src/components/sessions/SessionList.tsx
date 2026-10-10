@@ -94,6 +94,14 @@ export interface SessionListProps {
    * instead, since the server-side default already excludes them going forward.
    */
   onFetchArchivedSessions?: (includeArchived: boolean) => void;
+  /**
+   * Called when the "Show hidden" toggle changes to true, so the parent can
+   * re-fetch sessions with includeHidden via the session service. Same shape
+   * as onFetchArchivedSessions — see its doc comment. Hidden sessions are
+   * background/system dispatches (Diagnose & Nudge, review) excluded from the
+   * default list; see session.Instance's Hidden field doc comment.
+   */
+  onFetchHiddenSessions?: (includeHidden: boolean) => void;
   /** When true, renders the loading skeleton instead of the session list. */
   isLoading?: boolean;
   /** Prefix for localStorage keys, used when multiple instances are rendered (e.g. split view). */
@@ -254,6 +262,7 @@ const BASE_STORAGE_KEYS = {
   SELECTED_TAG: 'stapler-squad-selected-tag',
   HIDE_PAUSED: 'stapler-squad-hide-paused',
   SHOW_ARCHIVED: 'stapler-squad-show-archived',
+  SHOW_HIDDEN: 'stapler-squad-show-hidden',
   FILTER_NEEDS_APPROVAL: 'stapler-squad-filter-needs-approval',
   GROUPING_STRATEGY: 'stapler-squad-grouping-strategy',
   COLLAPSED_GROUPS: 'stapler-squad-collapsed-groups',
@@ -269,6 +278,7 @@ interface SessionListPersistedState {
   selectedTag: string | "all";
   hidePaused: boolean;
   showArchived: boolean;
+  showHidden: boolean;
   filterNeedsApproval: boolean;
   groupingStrategy: GroupingStrategy;
   collapsedGroups: Set<string>;
@@ -307,6 +317,15 @@ function buildPersistedFieldsConfig(prefix = ''): PersistedFieldsConfig<SessionL
     // default excludes archived sessions) and stops client-side filtering them out below.
     showArchived: {
       key: k(BASE_STORAGE_KEYS.SHOW_ARCHIVED),
+      defaultValue: false,
+      isValid: (v) => typeof v === "boolean",
+    },
+    // showHidden: same shape as showArchived — when true, re-fetches with
+    // includeHidden=true (server-side default excludes Hidden sessions, e.g.
+    // Diagnose & Nudge/review one-shot dispatches) and stops client-side
+    // filtering them out below.
+    showHidden: {
+      key: k(BASE_STORAGE_KEYS.SHOW_HIDDEN),
       defaultValue: false,
       isValid: (v) => typeof v === "boolean",
     },
@@ -375,6 +394,7 @@ export function SessionList({
   onHibernateSession,
   onResumeHibernatedSession,
   onFetchArchivedSessions,
+  onFetchHiddenSessions,
   isLoading = false,
   storageKeyPrefix,
   extraHeaderActions,
@@ -418,6 +438,7 @@ export function SessionList({
     selectedTag,
     hidePaused,
     showArchived,
+    showHidden,
     filterNeedsApproval,
     groupingStrategy,
     collapsedGroups,
@@ -432,6 +453,7 @@ export function SessionList({
     selectedTag: setSelectedTag,
     hidePaused: setHidePaused,
     showArchived: setShowArchived,
+    showHidden: setShowHidden,
     filterNeedsApproval: setFilterNeedsApproval,
     groupingStrategy: setGroupingStrategy,
     collapsedGroups: setCollapsedGroups,
@@ -541,6 +563,15 @@ export function SessionList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showArchived]);
 
+  // Re-fetch with includeHidden whenever the toggle changes — same shape as the
+  // includeArchived effect above.
+  useEffect(() => {
+    if (showHidden) {
+      onFetchHiddenSessions?.(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showHidden]);
+
   // Extract unique categories from sessions
   const categories = useMemo(() => {
     const categorySet = new Set<string>();
@@ -581,6 +612,7 @@ export function SessionList({
     selectedTag,
     hidePaused,
     showArchived,
+    showHidden,
     filterNeedsApproval,
     pendingDeleteIds,
     sortField,
@@ -1056,6 +1088,20 @@ export function SessionList({
                 data-testid="show-archived-toggle"
               />
               <span>Show Archived</span>
+            </label>
+
+            {/* Show hidden toggle — background/system sessions (Diagnose & Nudge,
+                review one-shot dispatches) are excluded server-side by default;
+                enabling this re-fetches with includeHidden. */}
+            <label className={checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={showHidden}
+                onChange={(e) => setShowHidden(e.target.checked)}
+                aria-label="Show hidden sessions"
+                data-testid="show-hidden-toggle"
+              />
+              <span>Show Hidden</span>
             </label>
 
             {/* Needs-approval quick filter */}
