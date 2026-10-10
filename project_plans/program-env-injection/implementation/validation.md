@@ -4,6 +4,7 @@
 **Complexity**: 2
 **Inputs**: `implementation/plan.md` (Ready for implementation), `requirements.md` (AC1-AC5).
 **Scope of this document**: test design only. Nothing here was executed; existence of cited tests and helpers was checked by `grep` at HEAD `56857ba09`.
+**Status update (2026-10-10, supersedes any 'AC4b UNVERIFIED / NOT executed' wording below):** AC4b was EXECUTED against a real `claude` 2.1.296 with local listeners (evidence.md E9): a global `settings.json` `env` beats an ambient env var (the #852 shape), and `--settings` `env` beats the `settings.json` `env` block. Limits: the CLI flag was run directly (the tmux-launch delivery half is AC4a / E8), and no org-managed settings were present. Backlog criterion 4 therefore rests on AC4a (E6, E8) plus AC4b (E9).
 **Triad iteration 2 update**: mirrors plan.md "Repair log (triad iteration 2)". HEAD pins in this document and the plan (`56857ba09`, `9ef8fbc68`) predate the current HEAD (`572df53f8`, docs-only commits in between); plan Task 1.1.0b re-confirms every cited line before the first edit. T5-T9 are tagged AC4a, not AC4. AC4 reaches the backlog gate as criterion 4 (`criteria_index=3`) only under the plan's Story 1.1.3 "How the item reaches review" rule (AC4a executed plus recorded owner acceptance of AC4b). Worktree model: one worktree per agent plus a coordinator integration worktree with a merge step (G9 below).
 **Iteration 1 update**: mirrors plan.md "Repair log (validate iteration 1)": real-tmux runs go through the `RealTmuxGate` (plan Task 1.1.0b), AC4 is split into AC4a (executed) and AC4b (UNVERIFIED, not executed), and gap G1's test (T17, plan Task 1.3.2c) is accepted into the plan.
 
@@ -47,7 +48,7 @@ Checked with `grep` against the worktree. "Exists" = found at the cited location
 | T8 | `TestClaudeSettingsEnvOverrideArgs_HostileValuesRoundTripThroughShell` (9 values) | `session/instance_tmux_test.go` | Unit (real `sh -c`) | To create (1.3.1a) | AC4a |
 | T9 | `TestCreateSession_CustomClaudeProgram_SettingsEnvReachesLaunchedProcess` | `server/services/session_service_create_settings_env_test.go` | Integration (real tmux + FakeClaude) | To create (1.1.3c) | AC4a |
 
-No test is tied to AC4b; T5-T9 passing does not satisfy AC4 as a whole.
+AC4b is covered by the executed listener probe E9 (not a Go test): `claude` 2.1.296 shows `--settings` env beats a `settings.json` env block. T5-T9 cover AC4a only.
 | T10 | `TestResolveExtraEnvVars_InstanceEnvVarsCopyShadowsLaterProgramEdit` | `session/instance_program_env_semantics_test.go` | Unit (characterization) | To create (1.3.2a) | AC-less (PIT-B) |
 | T11 | `TestResolveExtraEnvVars_InstanceWithoutEnvVarsSeesCurrentProgramEnv` | same | Unit (characterization) | To create (1.3.2a) | AC-less (PIT-B) |
 | T12 | `TestInstanceData_RoundTripDropsEnvVars` | same | Unit (characterization) | To create (1.3.2b) | AC-less (PIT-B) |
@@ -96,7 +97,7 @@ Non-test checks (evidence runs, not `go test` functions):
 | AC4a | same | T8 `..._HostileValuesRoundTripThroughShell` | Unit | Error path: `'`, `$(...)`, backticks, `"`, `=`, space, newline, backslash, `${HOME}` survive `sh -c` byte for byte, `pwned` never created |
 | AC4a | `server/services/session_service_create_settings_env_test.go` | T9 `TestCreateSession_CustomClaudeProgram_SettingsEnvReachesLaunchedProcess` | Integration | FakeClaude records argv through real tmux; `--settings` followed by exact env JSON; `show-environment` carries both keys |
 | AC4a | same | T9 under overlay (M3) | Mutation | Test is red when the override is disabled |
-| **AC4b**: program env outranks a global `~/.claude/settings.json` `env` block | n/a | D1 quoted upstream doc only | Documentation | **UNVERIFIED locally; NOT executed.** No test exists. Unrun probe: real `claude -p`, scratch `CLAUDE_CONFIG_DIR` with `settings.json` `env.SSQ_PRECEDENCE_PROBE=global`, `--settings '{"env":{"SSQ_PRECEDENCE_PROBE":"cli"}}'`, print the var via Bash tool (`cli` proves, `global` disproves); needs credentials, evidence slot E9, not run in this item. See Gap G2 |
+| **AC4b**: program env outranks a global `~/.claude/settings.json` `env` block | n/a | D1 doc quote + **E9 executed** | Probe (real `claude`) | **VERIFIED 2026-10-10 (evidence.md E9, scenarios A-D).** Limits: CLI flag run directly; no org-managed settings. No Go test exists for it. |
 | AC5: root cause documented with failure mechanism | `requirements.md`, doc comment above T1 | D2 `git show cdfd4e5cf2^:session/instance_tmux.go` | Documentation | Historical block inspected (line 578-579 verified in this run); no executable test exists or is claimed. Wording per plan Story 1.1.2: `config.ResolveProgramConfig` did not exist non-test at `cdfd4e5cf2^` (resolution + env merge arrived together), so the parent-commit run (M4) fails for two reasons and `PreFixOverlay` is an env-only reconstruction |
 
 ## UX Acceptance Tests
@@ -175,9 +176,9 @@ go test ./session -run 'TestClaudeSettingsEnvOverrideArgs_CarriesResolvedEnvVars
 go test -race -short ./session -run '^TestClaudeSettingsEnvOverrideArgs_HostileValuesRoundTripThroughShell$' -count=1 -v
 go test -race -short ./server/services -run '^TestCreateSession_CustomClaudeProgram_SettingsEnvReachesLaunchedProcess$' -count=1 -v   # gate: pass T9 1
 go test -overlay "$SCRATCH/overlay-settings.json" ./server/services -run '^TestCreateSession_CustomClaudeProgram_SettingsEnvReachesLaunchedProcess$' -count=1 -v   # gate: fail T9 1 + grep '--settings' assertion
-
-# AC4b: NOT run in this item (needs real claude login). Probe, for the record:
-#   CLAUDE_CONFIG_DIR=<scratch with settings.json {"env":{"SSQ_PRECEDENCE_PROBE":"global"}}> \
+# AC4b: EXECUTED (evidence.md E9). Probe: three local HTTP listeners; scratch CLAUDE_CONFIG_DIR settings.json env.ANTHROPIC_BASE_URL=<GLOBAL>;
+#   env -i ... claude -p hi [--settings '{"env":{"ANTHROPIC_BASE_URL":"<PROGRAM>"}}']   # the listener that receives the request is the URL used
+#   result: settings.json beats ambient env; --settings beats settings.json
 #   claude -p --settings '{"env":{"SSQ_PRECEDENCE_PROBE":"cli"}}' 'print $SSQ_PRECEDENCE_PROBE via your Bash tool'   # "cli" proves, "global" disproves
 
 # AC5 (D2)
@@ -227,7 +228,7 @@ cd web-app && pnpm exec jest --testPathPatterns="useAvailablePrograms" --coverag
 | # | Gap | Severity | Disposition |
 |---|---|---|---|
 | G1 | **AC1 error path had no unit test.** `resolveExtraEnvVars` was covered only by T2; an unregistered `Program` ID was asserted nowhere | Low | **RESOLVED (iteration 1)**: accepted; T17 added to the plan as Task 1.3.2c (Story 1.3.2 AC, Traceability, Wave 1 Agent C) |
-| G2 | **AC4b (precedence over a global `~/.claude/settings.json` `env` block) is UNVERIFIED locally; AC4 is split into AC4a (executed) and AC4b (not executed).** Requirement 4 as written says program env "still wins"; the plan now tracks that as AC4b and restates AC4a as "no regression to the override mechanism". Locally provable (AC4a): `--settings` flag with the exact env JSON reaches the process argv through real tmux and a real shell (T5-T9, M3). Not provable: that Claude Code ranks `--settings` above user settings. That is upstream behaviour; D1 is a doc quote, not an execution, and stays UNVERIFIED even if the page is fetched. FakeClaude does not read `settings.json` | **Medium** | Stated, not closed. If the owner wants the literal AC4, a manual acceptance step with a real `claude` login and a `settings.json` containing a conflicting `ANTHROPIC_BASE_URL` is the only proof; it is not in the plan and needs credentials. Treat AC4a as verified and AC4b as "documented upstream, UNVERIFIED, not run here"; AC4 as a whole is not ticked as passing, and E9 stays empty unless the probe is executed |
+| G2 | **AC4b (precedence over a global `~/.claude/settings.json` `env` block): CLOSED by E9 (executed, real `claude` 2.1.296).** Residual limits: ran the CLI flag directly rather than through a tmux launch (delivery is AC4a / E8); no org-managed settings present. |
 | G3 | **AC5 is documentation, not a test.** D2 proves the historical block; nothing can fail if the doc comment above T1 or `requirements.md` rots | Low | Accepted. The doc comment and requirements text are reviewed by hand in PR |
 | G4 | **AC3 red proof uses a hand-built mutant.** `PreFixOverlay` is a reconstruction of the pre-fix `wireTmuxSession`, so it is only as faithful as D2's equivalence check (paste both into E3). M4 is the literal pre-fix-commit run but was executed by the coordinator and needs proto/ent regeneration, so it is paste-only | Low | Overlay primary, M4 corroborating, as the plan states. Contingency: if T1 passes under the overlay, halt (assertion vacuous) |
 | G5 | **Real-tmux tests are environment dependent.** T1 and T9 skip when no tmux resolves, so a runner without tmux reports green without coverage; a tmux client/server version mismatch fails them as an environment fault. Local 3.6a differs from the CI pin 3.4, and T1/T9 results were not observed on 3.4 in this plan (PIT-3b/D3 one version only) | Medium | **Mitigated by the `RealTmuxGate` (plan Task 1.1.0b)**: existing `TMUX_BIN`, `-v`, `--- PASS: <name>` required, any `--- SKIP` rejected, `STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30`. Residual: 3.6a vs CI 3.4 (record `tmux -V` per run, label "3.6a only"); CI log must show T1 and T9 as `PASS`, not `SKIP` |
@@ -239,13 +240,13 @@ cd web-app && pnpm exec jest --testPathPatterns="useAvailablePrograms" --coverag
 | G13 | **Wave 1 vs real-tmux runs (triad GAP-2).** Editing agents run only vet + `bin/linter`; the `RealTmuxGate` runs for 1.1.0a, 1.1.1b, 1.1.1c, 1.1.3c execute serially in Wave 2R | Process | Plan Dependency Visualization |
 | G14 | **evidence.md ownership (triad GAP-4).** Coordinator is the single writer; agents report text blocks; structure is the E1-E9 table in plan "Evidence file structure" | Process | Plan header and "Evidence file structure" |
 | G15 | **tmux 3.4 not run locally (triad GAP-6).** Named CI/wall-clock blocker; fallback wording "Verified on tmux 3.6a only; the CI-pinned tmux 3.4 was not run for this evidence" | Medium | Plan Effort Estimate |
-| G16 | **AC4b closure (product gap).** Item may be reported with AC4b UNVERIFIED and owner acceptance requested; AC4 as a whole is not ticked without an executed E9 (run by a human with credentials) or recorded owner acceptance. F1-F5 are listed in the PR body for the owner to file | Medium | Plan Story 1.1.3 closure rule, Task 1.4.2a |
+| G16 | **AC4b closure: resolved by executing E9.** AC4 as a whole is supported by AC4a (E6, E8) plus AC4b (E9). F1-F5 are still listed in the PR body for the owner to file. |
 | G9 | **Wave-1 package contention.** T3/T4 (`session/tmux`), T8/T10-T12 (`session`), T1/T9 (`server/services`), T13 (`web-app`) must be authored one agent per package or per worktree; one half-written `_test.go` breaks `go test` for the whole package | Process | Plan's Dependency Visualization assigns agents A-D by package, each in its own worktree (generated code per worktree), with a Wave 1.5 merge plus integration `bin/linter` run in the coordinator worktree where Waves 2R/3/4 execute (triad iteration 2, G1) |
 | G10 | T4 `RestoreWithWorkDir_MissingSession` costs about 1.5 s of `probeSessionExistsWithRetries` backoff with a mock executor; the capture closure needs a `sync.Mutex` under `-race` | Low | In plan (Task 1.2.2a); recorded here so the reviewer checks both |
 
 ## Coverage Summary
 
-- Requirements mapped: **5 of 5** to at least one concrete check with an exact command. Fully executable: AC1, AC2, AC3, AC4a. NOT executed: AC4b (precedence over global `settings.json`; upstream-documented, UNVERIFIED, G2). Documentation-verified only: AC5 (G3).
+- Requirements mapped: **5 of 5** to at least one concrete check with an exact command. Executed: AC1, AC2, AC3, AC4a. AC4b executed (E9, real `claude`; G2 closed). Documentation-verified only: AC5 (G3).
 - Test functions: **17** (14 unit, 3 integration), of which 8 exist today (6 unit, 2 integration) and 9 are to be created (8 unit including 1 Jest, 1 integration). Subtest cases inside the new ones: T3 6, T4 2, T8 9, T17 2.
 - Non-test evidence checks: 3 mutation/overlay runs (M1, M3, M4) plus 1 control (M5), 1 static gate (L1), 1 flake run (F1), 3 documentation/probe checks (D1-D3). UX acceptance tests: 0 (N/A). Migration test: N/A.
 - T17 (G1) accepted into the plan as Task 1.3.2c; no proposed additions remain outside the plan.
