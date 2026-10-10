@@ -19,6 +19,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -671,7 +672,9 @@ func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
 // never saw the missing wiring. Only this RPC-to-tmux path does.
 func TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession(t *testing.T) {
 	// Not t.Parallel(): shells out to a real tmux binary on this service's isolated socket.
-	if _, err := exec.LookPath("tmux"); err != nil {
+	// tmux.Binary() honors TMUX_BIN, so client and server versions match (CI pins tmux).
+	tmuxBin := tmux.Binary()
+	if _, err := exec.LookPath(tmuxBin); err != nil {
 		t.Skip("tmux not available")
 	}
 	const (
@@ -714,9 +717,8 @@ func TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession(t *testing.T) {
 	for time.Now().Before(deadline) && session.Status(inst.GetStatus()) != session.Active && session.Status(inst.GetStatus()) != session.Stopped {
 		time.Sleep(100 * time.Millisecond)
 	}
-	if session.Status(inst.GetStatus()) == session.Stopped {
-		t.Skip("session failed to start (tmux unusable in this environment)")
-	}
+	// tmux is present (LookPath above), so Stopped is a real spawn failure, not a skip:
+	// skipping here would turn the very regression under test green.
 	require.Equal(t, session.Active, session.Status(inst.GetStatus()), "session must reach Active within 30s")
 
 	tmuxName := inst.GetTmuxSessionName()
@@ -724,7 +726,7 @@ func TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession(t *testing.T) {
 	socket := svc.testTmuxServerSocket
 
 	// AC2: session-scoped table.
-	out, err := exec.CommandContext(ctx, "tmux", "-L", socket, "show-environment", "-t", tmuxName).CombinedOutput()
+	out, err := exec.CommandContext(ctx, tmuxBin, "-L", socket, "show-environment", "-t", tmuxName).CombinedOutput()
 	require.NoError(t, err, string(out))
 	assert.Contains(t, string(out), envKey+"="+envVal, "tmux show-environment must carry the program's env")
 
@@ -733,10 +735,10 @@ func TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession(t *testing.T) {
 	var captured []byte
 	paneDeadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(paneDeadline) {
-		_ = exec.CommandContext(ctx, "tmux", "-L", socket, "send-keys", "-t", tmuxName,
+		_ = exec.CommandContext(ctx, tmuxBin, "-L", socket, "send-keys", "-t", tmuxName,
 			"echo ENVPROBE_$(printenv "+envKey+")_END", "Enter").Run()
 		time.Sleep(300 * time.Millisecond)
-		captured, _ = exec.CommandContext(ctx, "tmux", "-L", socket, "capture-pane", "-p", "-t", tmuxName).Output()
+		captured, _ = exec.CommandContext(ctx, tmuxBin, "-L", socket, "capture-pane", "-p", "-J", "-t", tmuxName).Output()
 		if strings.Contains(string(captured), "ENVPROBE_"+envVal+"_END") {
 			break
 		}
