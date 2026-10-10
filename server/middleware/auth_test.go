@@ -25,6 +25,23 @@ func serveThroughAuth(method, path string) (code int, reached bool) {
 	return w.Code, reached
 }
 
+func TestAuth_should_AllowOnlySingleSegmentGenericWebhookPost(t *testing.T) {
+	code, reached := serveThroughAuth(http.MethodPost, "/webhooks/stapler-squad")
+	assert.True(t, reached)
+	assert.Equal(t, http.StatusOK, code)
+
+	for _, request := range []struct{ method, path string }{
+		{http.MethodPost, "/webhooks/"},
+		{http.MethodPost, "/webhooks/stapler-squad/extra"},
+		{http.MethodGet, "/webhooks/stapler-squad"},
+		{http.MethodPost, "/webhooks/github"},
+		{http.MethodPost, "/api/session.v1.SessionService/CreateWorkflow"},
+	} {
+		code, reached = serveThroughAuth(request.method, request.path)
+		assert.False(t, reached, "%s %s must remain protected", request.method, request.path)
+		assert.NotEqual(t, http.StatusOK, code)
+	}
+}
 func TestAuth_should_ExemptClaimGossipEndpoints_When_PeerHasNoPasskeySession(t *testing.T) {
 	code, reached := serveThroughAuth(http.MethodPost, session.ClaimAdvertisementEndpointPath)
 	assert.True(t, reached)

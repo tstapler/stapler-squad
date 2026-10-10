@@ -20,7 +20,7 @@ func Auth(validator AuthValidator) func(http.Handler) http.Handler {
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Always allow auth endpoints and static assets needed before login.
-			if isExempt(r.URL.Path) {
+			if isExempt(r) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -76,16 +76,27 @@ var exemptPeerPaths = map[string]struct{}{
 	"/internal/claim-lookup":        {},
 }
 
-func isExempt(path string) bool {
-	if _, ok := exemptPeerPaths[path]; ok {
+func isExempt(r *http.Request) bool {
+	if isGenericWebhookDelivery(r) {
+		return true
+	}
+	if _, ok := exemptPeerPaths[r.URL.Path]; ok {
 		return true
 	}
 	for _, prefix := range exemptPrefixes {
-		if strings.HasPrefix(path, prefix) {
+		if strings.HasPrefix(r.URL.Path, prefix) {
 			return true
 		}
 	}
 	return false
+}
+
+func isGenericWebhookDelivery(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	slug, ok := strings.CutPrefix(r.URL.Path, "/webhooks/")
+	return ok && slug != "" && !strings.Contains(slug, "/") && slug != "github"
 }
 
 func isAPIPath(path string) bool {
