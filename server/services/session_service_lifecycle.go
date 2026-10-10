@@ -405,6 +405,7 @@ func (s *SessionService) DeleteSession(
 
 	// Publish SessionDeleted event to all watchers. Use UUID so the frontend
 	// entity adapter (keyed by UUID) matches and tombstones the correct entry.
+	s.onSessionDeletedForReply(sessionUUID)
 	s.eventBus.Publish(events.NewSessionDeletedEvent(sessionUUID))
 
 	return connect.NewResponse(&sessionv1.DeleteSessionResponse{
@@ -651,6 +652,8 @@ func (s *SessionService) RestartSession(
 		log.Error("[RestartSession] failed to restart session", "session", instance.Title, "err", err)
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to restart session: %w", err))
 	}
+
+	RefreshInstanceHookProof(instance)
 
 	// Persist the updated instance state.
 	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {

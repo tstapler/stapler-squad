@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/buildinfo"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/analytics"
+	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/handlers"
 	"github.com/tstapler/stapler-squad/server/interceptors"
@@ -793,6 +794,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if gate := deps.SessionService.DeliveryGate(); gate != nil {
 		approvalHandler.SetAutoApprovedGate(gate)
 	}
+	// Reply: hook sender proofs (best-effort provenance) and the pending-question registry.
+	wireHookProofsAndQuestions(approvalHandler, deps)
 	// Wire the lazy base-URL resolver into the hook injector (hook_injector.go); both
 	// InjectHookConfig's PermissionRequest URL and InjectHooksConfig's stop/pre-tool-use/
 	// post-tool-use/prompt-submit endpoints resolve through this single shared mechanism.
@@ -1786,6 +1789,11 @@ const pruneProcedurePath = "/api" + sessionv1connect.SessionServicePruneHiddenSe
 // flips protections (read-only guards, the delivery gate), guarded like prune.
 const updateFlagProcedurePath = "/api" + sessionv1connect.SessionServiceUpdateFeatureFlagProcedure
 
+// replyProcedurePath is the full request path of ReplyToPendingQuestion, the
+// audited write into a hidden session's question dialog, guarded with the
+// rebinding profile (the in-handler local-caller gate adds the peer check).
+const replyProcedurePath = "/api" + sessionv1connect.SessionServiceReplyToPendingQuestionProcedure
+
 // guardedProcedures is the LocalWriteGuard set. A new member names its profile;
 // ProbeProgram and the nudge keep the original probe verdict byte for byte.
 var guardedProcedures = map[string]middleware.GuardProfile{
@@ -1794,6 +1802,7 @@ var guardedProcedures = map[string]middleware.GuardProfile{
 	pruneProcedurePath: middleware.ProfileRebinding,
 
 	updateFlagProcedurePath: middleware.ProfileRebinding,
+	replyProcedurePath:      middleware.ProfileRebinding,
 }
 
 // localChain is the :8543 middleware chain (inside otelhttp):
@@ -2077,5 +2086,30 @@ func ConnectOptions(registry interceptors.ErrorRecorder) []connect.HandlerOption
 			interceptors.NewErrorRecorderInterceptor(registry),
 			otelInterceptor,
 		),
+	}
+}
+
+// wireHookProofsAndQuestions installs the process-wide hook proofs, feeds the
+// approval handler's question registry and, once per boot, refreshes every live
+// local session's proof file and stale hook entry in the background.
+func wireHookProofsAndQuestions(h *services.ApprovalHandler, deps *ServerDependencies) {
+	if dir, err := config.GetConfigDir(); err != nil {
+		log.Warn("hook proofs disabled: config dir unavailable", "err", err)
+	} else if proofs, perr := services.NewHookProofs(dir); perr != nil {
+		log.Warn("hook proofs disabled: secret unavailable", "err", perr)
+	} else {
+		services.SetDefaultHookProofs(proofs)
+		h.SetHookProofs(proofs)
+	}
+	var count func(cause string)
+	if gate := deps.SessionService.DeliveryGate(); gate != nil {
+		count = func(cause string) { gate.Metrics().Add(deliverygate.CounterReplyUnreplyable, cause) }
+	}
+	h.SetQuestionRegistry(deps.SessionService.PendingQuestions(), count)
+	if deps.ReviewQueuePoller != nil && services.DefaultHookProofs() != nil {
+		go func() {
+			n := services.RefreshHookProofs(deps.ReviewQueuePoller.GetInstances())
+			log.Info("[HookProof] refreshed live sessions", "sessions", n)
+		}()
 	}
 }

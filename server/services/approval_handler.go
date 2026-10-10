@@ -90,6 +90,7 @@ type ApprovalHandler struct {
 	dashboardBaseURLFn  func() string               // optional: lazily-read fallback for the Slack dashboard-link base URL, used only when cfg.Slack.DashboardBaseURL is unset. Mirrors ReactiveQueueManager.dashboardBaseURLFn exactly (server.go wires the same hookBaseURLFn into both).
 	piHealthTracker     *PiExtensionHealthTracker   // optional: records pi approval-extension health pings (pi-support Epic 4.2)
 	autoApprovedGate    AutoApprovedGate            // optional: drops hidden-session auto-allow history rows (nil = append all)
+	questions           questionWiring              // optional: Reply's pending-question registry and hook-proof verification
 }
 
 // AutoApprovedGate decides whether an auto-approved history row is recorded for
@@ -437,7 +438,11 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 	// no Approve/Deny buttons.
 	if strings.EqualFold(payload.ToolName, "AskUserQuestion") {
 		log.ForSession(sessionID).Info("[ApprovalHandler] AskUserQuestion — notifying and deferring to native dialog")
-		h.broadcastQuestionNotification(sessionID, payload)
+		qa := h.attributeQuestion(r, sessionID)
+		if qa.uuid != "" {
+			sessionID = qa.uuid // a verified proof's UUID is the attribution; the title header is ignored
+		}
+		h.broadcastQuestionNotification(sessionID, payload, qa)
 		h.writeDeferDecision(w)
 		return
 	}
@@ -774,23 +779,34 @@ func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approv
 const maxNotificationMessageLen = 120
 
 // broadcastQuestionNotification fires an INPUT_REQUIRED notification when Claude uses
-// AskUserQuestion. It omits approval_id from metadata so no Approve/Deny buttons are shown —
-// only a ❓ toast directing the user to respond in the terminal.
-func (h *ApprovalHandler) broadcastQuestionNotification(sessionID string, payload classifier.PermissionRequestPayload) {
+// AskUserQuestion. It omits approval_id from metadata so no Approve/Deny buttons are shown.
+// The title and body come from questions[0] (Spike 1.3g: the real payload has no "prompt"
+// key). A single-select question whose sender proof verified is registered for Reply and
+// stamps question_id, question_shape and question_options; every other question stamps
+// question_shape and reply_unavailable so the card says "Answer in the terminal".
+func (h *ApprovalHandler) broadcastQuestionNotification(sessionID string, payload classifier.PermissionRequestPayload, qa questionAttribution) {
+	asked := ParseAskUserQuestion(payload.ToolInput)
 	message := "Check the terminal to respond."
-	if prompt, ok := payload.ToolInput["prompt"].(string); ok && prompt != "" {
-		message = truncateString(prompt, maxNotificationMessageLen)
+	switch {
+	case asked.Question != "":
+		message = truncateString(asked.Question, maxNotificationMessageLen)
+	default:
+		if prompt, ok := payload.ToolInput["prompt"].(string); ok && prompt != "" {
+			message = truncateString(prompt, maxNotificationMessageLen)
+		}
 	}
+	meta := h.registerQuestion(sessionID, qa, asked)
+	logQuestionRegistered(sessionID, string(asked.Shape), meta[metaReplyUnavailable])
 
 	event := events.NewNotificationEvent(
 		sessionID,
 		h.resolveSessionName(sessionID),
-		uuid.New().String(),
+		newQuestionNotificationID(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED),
 		derivePriority(true, true), // urgent, important — Claude is blocked waiting on the user right now
 		"Claude has a question",
 		message,
-		nil,
+		meta,
 	)
 	h.eventBus.Publish(event)
 }
@@ -1005,7 +1021,10 @@ func hookApprovalURL() string {
 // local path as "file doesn't exist" and this then writes a settings file
 // nobody remote will ever read), which was the ssh-remote-workspaces Phase
 // 5 bug this pair of functions exists to fix. See ADR-003's addendum.
-func InjectHookConfig(rootDir, sessionTitle string) error {
+func InjectHookConfig(rootDir, sessionTitle, sessionUUID string) error {
+	// The proof file is (re)written first, so an entry that gains the proof
+	// branch below finds its file at the next dialog.
+	ensureHookProofFile(sessionUUID)
 	claudeDir := filepath.Join(rootDir, ".claude")
 	settingsPath := filepath.Join(claudeDir, "settings.local.json")
 	// Serializes the read-merge-write sequence below against InjectHooksConfig and
@@ -1017,10 +1036,7 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 	url := hookApprovalURL()
 	// Desired hook entry for this session.
 	// settings.local.json only supports "command" type hooks; use curl to POST to the approval URL.
-	curlCmd := fmt.Sprintf(
-		"curl -s --max-time %d -X POST '%s' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s' -d @-",
-		hookTimeout, url, sessionTitle,
-	)
+	curlCmd := buildLocalHookCommand(url, sessionTitle)
 	entry := hookEntry{Type: "command", Command: curlCmd, Timeout: hookTimeout}
 
 	// Read existing settings (if any).
@@ -1039,8 +1055,12 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 		return err
 	}
 	if alreadyPresent {
-		log.Debug("[InjectHookConfig] hook already present", "path", settingsPath)
-		return nil
+		replaced, changed := replaceStaleHookInSettings(data, url, curlCmd)
+		if !changed {
+			log.Debug("[InjectHookConfig] hook already present", "path", settingsPath)
+			return nil
+		}
+		out = replaced
 	}
 
 	// Re-parse out back into a raw map so this shares writeSettingsAtomic's
@@ -1059,6 +1079,36 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 	}
 	log.Info("[InjectHookConfig] wrote hook config", "path", settingsPath, "session", sessionTitle)
 	return nil
+}
+
+// replaceStaleHookInSettings rewrites, in place, a PermissionRequest command hook
+// for url whose command differs from desired (an entry from before the proof
+// branch existed). changed is false when nothing needed rewriting.
+func replaceStaleHookInSettings(existingData []byte, url, desired string) (out []byte, changed bool) {
+	raw := parseSettingsWithRepair(existingData, "replaceStaleHookInSettings")
+	groups := permissionRequestGroupsFromSettings(raw)
+	if _, changed = replaceStaleHookCommand(groups, url, desired); !changed {
+		return nil, false
+	}
+	hooksMap := map[string]json.RawMessage{}
+	if hooksRaw, ok := raw["hooks"]; ok {
+		_ = json.Unmarshal(hooksRaw, &hooksMap)
+	}
+	prJSON, err := json.Marshal(groups)
+	if err != nil {
+		return nil, false
+	}
+	hooksMap["PermissionRequest"] = json.RawMessage(prJSON)
+	hooksJSON, err := json.Marshal(hooksMap)
+	if err != nil {
+		return nil, false
+	}
+	raw["hooks"] = json.RawMessage(hooksJSON)
+	out, err = json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 // mergeHookEntryIntoSettings computes the merged settings.local.json bytes

@@ -67,7 +67,7 @@ func TestApprovalHandler_should_UseBaseURLFnValueAtCallTime_When_ThreeUsageSites
 	_ = NewApprovalHandler(NewApprovalStore(""), nil, events.NewEventBus(1))
 
 	tmpDir := t.TempDir()
-	if err := InjectHookConfig(tmpDir, "session-a"); err != nil {
+	if err := InjectHookConfig(tmpDir, "session-a", ""); err != nil {
 		t.Fatalf("InjectHookConfig (first write): %v", err)
 	}
 	firstAddr := fmt.Sprintf("http://localhost:%d", 20000+calls) // whatever nextAddr() returned during that call
@@ -82,7 +82,7 @@ func TestApprovalHandler_should_UseBaseURLFnValueAtCallTime_When_ThreeUsageSites
 	// URL moves forward, mirroring a server that rebinds to a different port between
 	// hook-injection events -- the exact scenario the lazy baseURLFn mechanism exists to
 	// support (never a string baked in at construction time).
-	if err := InjectHookConfig(tmpDir, "session-a"); err != nil {
+	if err := InjectHookConfig(tmpDir, "session-a", ""); err != nil {
 		t.Fatalf("InjectHookConfig (second write): %v", err)
 	}
 
@@ -759,7 +759,7 @@ func TestInjectHookConfig_ConcurrentWritesToSameRootDir_NeverProduceCorruptJSON(
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			errCh <- InjectHookConfig(rootDir, fmt.Sprintf("session-%d", i))
+			errCh <- InjectHookConfig(rootDir, fmt.Sprintf("session-%d", i), "")
 		}(i)
 	}
 	wg.Wait()

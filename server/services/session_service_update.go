@@ -119,6 +119,7 @@ func (s *SessionService) applyStatusTransition(msg *sessionv1.UpdateSessionReque
 		if err := instance.Resume(); err != nil {
 			return false, classifyPauseResumeErr(err, "resume")
 		}
+		RefreshInstanceHookProof(instance)
 		// Clear pause reason only after a successful resume.
 		instance.SetPauseReason("")
 		return true, nil

@@ -295,6 +295,11 @@ var knownFeatureFlags = []struct {
 		defaultValue: true,
 	},
 	{
+		name:         hiddenSessionReplyFlagName,
+		description:  "Hidden-session Reply: answer a background session's single-select question from the toast, tray or read-only view by writing one option digit to its terminal. The kill switch for the Reply path only; it does not affect the write guards. Every reply is audited before it is written. Applies at once; global only. Default: on.",
+		defaultValue: true,
+	},
+	{
 		name:         hiddenSessionReadonlyGuardsFlagName,
 		description:  "Hidden-session write guards: the UI's write RPCs (terminal input, steer, restart, workspace switch, program and auto-approve changes) refuse a hidden (background) session, except the backlog Steer of a live review session, which stays audited. Turn off only to restore the previous behavior if a guard blocks a legitimate action; every write allowed while off is recorded in the audit log. Applies at once; global only. Default: on.",
 		defaultValue: true,

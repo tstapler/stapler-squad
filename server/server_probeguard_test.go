@@ -243,10 +243,12 @@ func newRebindingTestServer(t *testing.T, addr string) (*Server, *int) {
 	t.Helper()
 	srv, _ := newChainTestServer(t, addr)
 	reached := new(int)
-	srv.mux.HandleFunc(pruneProcedurePath, func(w http.ResponseWriter, _ *http.Request) {
-		*reached++
-		w.WriteHeader(http.StatusOK)
-	})
+	for _, path := range []string{pruneProcedurePath, replyProcedurePath} {
+		srv.mux.HandleFunc(path, func(w http.ResponseWriter, _ *http.Request) {
+			*reached++
+			w.WriteHeader(http.StatusOK)
+		})
+	}
 	return srv, reached
 }
 
@@ -276,9 +278,12 @@ func TestLocalWriteGuard_ShouldRejectRebindingHostForeignOriginAndNonPostForRepl
 			assert.Equal(t, http.StatusForbidden, postPath(chain, pruneProcedurePath, "evil.example:8543", ""))
 			assert.Equal(t, http.StatusForbidden, postPath(chain, pruneProcedurePath, "localhost:8543", "https://evil.example"))
 			assert.Equal(t, http.StatusForbidden, postPath(chain, pruneProcedurePath, "onyx.lan:8543", ""), "HostGuard refuses LAN names on :8543")
+			// Reply is in the same guard set with the same rebinding profile.
+			assert.Equal(t, http.StatusForbidden, postPath(chain, replyProcedurePath, "evil.example:8543", ""))
+			assert.Equal(t, http.StatusForbidden, postPath(chain, replyProcedurePath, "localhost:8543", "https://evil.example"))
 			assert.Zero(t, *reached)
 
-			r := httptest.NewRequest(http.MethodGet, pruneProcedurePath, nil)
+			r := httptest.NewRequest(http.MethodGet, replyProcedurePath, nil)
 			r.Host = "localhost:8543"
 			w := httptest.NewRecorder()
 			chain.ServeHTTP(w, r)
@@ -286,7 +291,8 @@ func TestLocalWriteGuard_ShouldRejectRebindingHostForeignOriginAndNonPostForRepl
 
 			// Loopback passes the rebinding profile on every bind, wildcard included.
 			assert.Equal(t, http.StatusOK, postPath(chain, pruneProcedurePath, "localhost:8543", ""))
-			assert.Equal(t, 1, *reached)
+			assert.Equal(t, http.StatusOK, postPath(chain, replyProcedurePath, "localhost:8543", ""))
+			assert.Equal(t, 2, *reached)
 
 			// ProbeProgram keeps its loopback-bound condition: allowed only on a loopback bind.
 			wantProbe := http.StatusForbidden
@@ -315,6 +321,7 @@ func TestLocalWriteGuard_ShouldKeepProbeProgramByteForByteAndListOnlyRegisteredP
 		pruneProcedurePath: middleware.ProfileRebinding,
 
 		updateFlagProcedurePath: middleware.ProfileRebinding,
+		replyProcedurePath:      middleware.ProfileRebinding,
 	}, guardedProcedures)
 	_, hasClear := guardedProcedures["/api"+sessionv1connect.SessionServiceClearNotificationHistoryProcedure]
 	assert.False(t, hasClear)

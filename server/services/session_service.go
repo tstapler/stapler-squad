@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -94,6 +95,18 @@ type SessionService struct {
 	guards *UnaryGuardsFlag
 	// guardBypass counts and rate-limits the guards-off bypass writes.
 	guardBypass guardBypassState
+	// reply is the Reply machinery (pending questions, idempotency, limiters,
+	// flag), built on first use; replyNow injects the clock in tests.
+	replyOnce sync.Once
+	reply     *replyState
+	replyNow  func() time.Time
+	// replyPeerAddr and replyControllerActive are test seams; nil means
+	// req.Peer().Addr and "the instance has a started status controller".
+	replyPeerAddr         func(connect.AnyRequest) string
+	replyControllerActive func(*session.Instance) bool
+	// replyAfter injects the timer behind the send timeout and the closed-check
+	// polls (nil is time.After).
+	replyAfter func(time.Duration) <-chan time.Time
 	// backlogLinks decides whether a hidden session is a live backlog review
 	// session (the O7 steer exemption).
 	backlogLinks BacklogLinkResolver
@@ -1052,6 +1065,7 @@ func newGatedSessionService(storage session.InstanceStore) *SessionService {
 	svc.wireGateFlag(gate)
 	svc.wireLeaseFlag()
 	svc.wireGuardsFlag()
+	svc.wireReplyFlag()
 	return svc
 }
 
@@ -1086,6 +1100,7 @@ func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
 		config.HiddenSessionGateFeatureFlag: {}, // every gate flip takes the non-blocking path
 		terminalWriteLeaseFlagName:          terminalWriteLeaseAuditPolicy,
 		hiddenSessionReadonlyGuardsFlagName: guardsFlagAuditPolicy,
+		hiddenSessionReplyFlagName:          replyFlagAuditPolicy,
 	})
 }
 

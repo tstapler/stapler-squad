@@ -33,6 +33,8 @@ var pinnedCallers = map[string]callerRow{
 	"server/services:SessionService.SteerInstanceGuarded":            {kind: kindChain, reason: "guarded steer behind the nudge guard; writes through steerInternal"},
 	"server/services:SessionService.SteerSessionGuarded":             {kind: kindChain, reason: "UUID-only wrapper of SteerInstanceGuarded for the PR-fix auto-steer"},
 	"server/services:SessionService.StreamTerminal.func4":            {kind: kindUI, reason: "StreamTerminal input of a visible session; dropped for a hidden one (Story 5.1)"},
+	"server/services:QuestionReplyWriter.SubmitReply":                {kind: kindChain, reason: "the Reply capability's one method: only obtainable with a PendingQuestionClaim, reaches only SubmitReplyOnce (one digit, no Enter)"},
+	"server/services:SessionService.replyToPendingQuestion":          {kind: kindAcquirer, reason: "the Reply chain's acquirer: audit line first, then Try lease, before-first-byte checks, SubmitReply"},
 	"server/services:SessionService.runBypassSteer":                  {kind: kindChain, reason: "guards-off steer of a non-qualifying hidden target: guard_bypass line first, then steerUnderLease"},
 	"server/services:SessionService.runSteer":                        {kind: kindChain, reason: "dispatches UpdateSession's steer to the visible acquirer, the typed O7 writer or the audited bypass"},
 	"server/services:SessionService.steerAuthorized":                 {kind: kindReceiver, reason: "the verified body of the steer chain; never acquires, releases the lease it was given"},

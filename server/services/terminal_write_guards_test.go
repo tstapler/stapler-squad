@@ -57,10 +57,11 @@ func realGuardConfig() guardConfig {
 	return guardConfig{
 		writerTypes: map[string]bool{"TerminalWriter": true, "paneWriter": true},
 		capabilityTypes: map[string]string{
-			"paneWriter":         "terminal_access.go",
-			"HeldLease":          "instance_write_lease.go",
-			"steerAuthorization": "steer_authorization.go",
-			"BacklogReviewLink":  "hidden_review_steer.go",
+			"paneWriter":           "terminal_access.go",
+			"HeldLease":            "instance_write_lease.go",
+			"steerAuthorization":   "steer_authorization.go",
+			"BacklogReviewLink":    "hidden_review_steer.go",
+			"PendingQuestionClaim": "pending_question_store.go",
 		},
 		// constructorCallTypes: a call returning one of these is a construction too,
 		// so the token has exactly one creating file (a plain conversion or literal

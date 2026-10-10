@@ -9,15 +9,17 @@ import (
 	"testing"
 )
 
-// T-RO-11 (O7 half): the UI-exception steer path is reachable only through
-// functions that take the BacklogReviewLink capability, which is constructible
-// only in hidden_review_steer.go (check (a)). The Reply half of the row
-// (PendingQuestionClaim) is Story 5.6 and has no code to reflect on yet.
+// T-RO-11: each UI-exception path is reachable only through functions that take
+// its capability: the O7 steer takes the BacklogReviewLink (constructible only in
+// hidden_review_steer.go) and Reply takes the PendingQuestionClaim (constructible
+// only in pending_question_store.go), check (a).
 func TestUiExceptionEntryPoints_ShouldEachRequireTheirCapabilityParam_WhenReflected(t *testing.T) {
-	entryPoints := []struct{ file, recv, name string }{
-		{"hidden_review_steer.go", "TerminalAccess", "BacklogSteerWriter"},
-		{"hidden_review_steer.go", "SessionService", "steerHiddenReviewViaBacklogLink"},
-		{"steer_authorization.go", "SessionService", "steerBacklogLinked"},
+	entryPoints := []struct{ file, recv, name, param string }{
+		{"hidden_review_steer.go", "TerminalAccess", "BacklogSteerWriter", "BacklogReviewLink"},
+		{"hidden_review_steer.go", "SessionService", "steerHiddenReviewViaBacklogLink", "BacklogReviewLink"},
+		{"steer_authorization.go", "SessionService", "steerBacklogLinked", "BacklogReviewLink"},
+		{"hidden_question_reply.go", "TerminalAccess", "QuestionReplyWriter", "PendingQuestionClaim"},
+		{"hidden_question_reply.go", "SessionService", "replyToPendingQuestion", "PendingQuestionClaim"},
 	}
 	for _, ep := range entryPoints {
 		f, err := parser.ParseFile(token.NewFileSet(), ep.file, nil, 0)
@@ -36,12 +38,12 @@ func TestUiExceptionEntryPoints_ShouldEachRequireTheirCapabilityParam_WhenReflec
 		}
 		found := false
 		for _, p := range fn.Type.Params.List {
-			if id, ok := p.Type.(*ast.Ident); ok && id.Name == "BacklogReviewLink" {
+			if id, ok := p.Type.(*ast.Ident); ok && id.Name == ep.param {
 				found = true
 			}
 		}
 		if !found {
-			t.Errorf("%s.%s must take a BacklogReviewLink parameter", ep.recv, ep.name)
+			t.Errorf("%s.%s must take a %s parameter", ep.recv, ep.name, ep.param)
 		}
 	}
 }

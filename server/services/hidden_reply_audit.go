@@ -31,6 +31,9 @@ const (
 	auditQueueSize   = 64
 	auditAppendBound = 2 * time.Second
 	auditKindFlagChg = "flag_change"
+	// auditKindReply is a Reply to a hidden session's question (ADR-010): a
+	// `requested` line (fsynced) before the one digit is written, a `result` after.
+	auditKindReply = "reply"
 	// Steer line kinds (plan Story 5.2). Both carry a `requested` line before the
 	// write and a `result` line after it.
 	auditKindBacklogSteer = "backlog_steer"
@@ -97,6 +100,15 @@ type AuditLine struct {
 	MessagePreview string `json:"message_preview,omitempty"`
 	PeerLoopback   *bool  `json:"peer_loopback,omitempty"`
 	Proxied        *bool  `json:"proxied,omitempty"`
+
+	// Reply lines (kind reply). The label is the first 80 runes of the chosen
+	// option; there is no hash (a digit is brute-forceable) and no free text.
+	QuestionID    string `json:"question_id,omitempty"`
+	ReplyID       string `json:"reply_id,omitempty"`
+	OptionIndex   int    `json:"option_index,omitempty"`
+	OptionLabel   string `json:"option_label,omitempty"`
+	QuestionToken string `json:"question_token,omitempty"`
+	Stage         string `json:"stage,omitempty"`
 
 	// Prune lines (kind prune): counts only, never row content, a title or a
 	// session id.

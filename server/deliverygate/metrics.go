@@ -26,21 +26,23 @@ const (
 // Counter names. Each is mirrored in-process (the OTel meter is a no-op when
 // telemetry is not initialized, so the soak cannot depend on it).
 const (
-	CounterSuppressed          = "notification_delivery_suppressed_total"          // channel,type,reason,kind
-	CounterWouldSuppress       = "notification_delivery_would_suppress_total"      // channel,type,reason,kind
-	CounterHiddenDelivered     = "notification_hidden_delivered_total"             // channel,class,kind
-	CounterUnresolved          = "notification_delivery_unresolved_total"          // class
-	CounterIndexMiss           = "notification_gate_index_miss_total"              // (none)
-	CounterIndexRefresh        = "notification_gate_index_refresh_total"           // result
-	CounterResolvedLater       = "notification_unresolved_resolved_later_total"    // (none)
-	CounterFilterPanic         = "notification_gate_filter_panic_total"            // (none)
-	CounterLegacySuppressed    = "notification_legacy_hidden_suppressed_total"     // site,type,class
-	CounterRPCUnversioned      = "notification_rpc_unversioned_total"              // (none)
-	CounterAuditDegraded       = "hidden_session_audit_degraded_total"             // mode
-	CounterCrashCoalesced      = "notification_crash_coalesced_total"              // (none)
-	CounterLeaseWedgeNotified  = "hidden_session_write_lease_wedge_notified_total" // (none)
-	CounterBacklogSteer        = "hidden_session_backlog_steer_total"              // outcome
-	histogramFilterDurationSec = "notification_gate_filter_duration_seconds"       // OTel only
+	CounterSuppressed          = "notification_delivery_suppressed_total"            // channel,type,reason,kind
+	CounterWouldSuppress       = "notification_delivery_would_suppress_total"        // channel,type,reason,kind
+	CounterHiddenDelivered     = "notification_hidden_delivered_total"               // channel,class,kind
+	CounterUnresolved          = "notification_delivery_unresolved_total"            // class
+	CounterIndexMiss           = "notification_gate_index_miss_total"                // (none)
+	CounterIndexRefresh        = "notification_gate_index_refresh_total"             // result
+	CounterResolvedLater       = "notification_unresolved_resolved_later_total"      // (none)
+	CounterFilterPanic         = "notification_gate_filter_panic_total"              // (none)
+	CounterLegacySuppressed    = "notification_legacy_hidden_suppressed_total"       // site,type,class
+	CounterRPCUnversioned      = "notification_rpc_unversioned_total"                // (none)
+	CounterAuditDegraded       = "hidden_session_audit_degraded_total"               // mode
+	CounterCrashCoalesced      = "notification_crash_coalesced_total"                // (none)
+	CounterLeaseWedgeNotified  = "hidden_session_write_lease_wedge_notified_total"   // (none)
+	CounterBacklogSteer        = "hidden_session_backlog_steer_total"                // outcome
+	CounterReply               = "hidden_session_reply_total"                        // outcome
+	CounterReplyUnreplyable    = "hidden_session_reply_registered_unreplyable_total" // cause
+	histogramFilterDurationSec = "notification_gate_filter_duration_seconds"         // OTel only
 	counterLabelSeparator      = "|"
 )
 
@@ -62,6 +64,8 @@ var counterLabelKeys = map[string][]string{
 	CounterLegacySuppressed: {"site", "type", "class"},
 	CounterAuditDegraded:    {"mode"},
 	CounterBacklogSteer:     {"outcome"},
+	CounterReply:            {"outcome"},
+	CounterReplyUnreplyable: {"cause"},
 }
 
 // maxLabels is the widest counter label set (suppressed: channel, type, reason, kind).
@@ -272,6 +276,8 @@ var counterShortNames = map[string]string{
 	CounterCrashCoalesced:     "crash_coalesced",
 	CounterLeaseWedgeNotified: "lease_wedge_notified",
 	CounterBacklogSteer:       "backlog_steer",
+	CounterReply:              "reply",
+	CounterReplyUnreplyable:   "reply_unreplyable",
 }
 
 // ShortCounterName is the name the stats RPC reports for a counter.
