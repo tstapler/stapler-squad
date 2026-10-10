@@ -25,7 +25,10 @@ export function useNotificationRecord(
   sessionId: string | null,
   enabled: boolean,
 ): NotificationRecordSummary | null | undefined {
-  const [fetched, setFetched] = useState<NotificationRecordSummary | null | undefined>(undefined);
+  const [fetchedFor, setFetchedFor] = useState<{
+    forId: string;
+    value: NotificationRecordSummary | null;
+  } | null>(null);
 
   const inSlice = notificationId
     ? (notificationHistory ?? []).find((n) => n.id === notificationId)
@@ -43,18 +46,19 @@ export function useNotificationRecord(
       .then((res) => {
         if (controller.signal.aborted) return;
         const hit = res.notifications.find((n) => n.id === notificationId);
-        setFetched(
-          hit
+        setFetchedFor({
+          forId: notificationId,
+          value: hit
             ? {
                 title: hit.title,
                 message: hit.message,
                 timestampMs: hit.createdAt ? Number(hit.createdAt.seconds) * 1000 : 0,
               }
             : null,
-        );
+        });
       })
       .catch(() => {
-        if (!controller.signal.aborted) setFetched(null);
+        if (!controller.signal.aborted) setFetchedFor({ forId: notificationId, value: null });
       });
     return () => controller.abort();
   }, [enabled, notificationId, sessionId, inSlice]);
@@ -67,5 +71,6 @@ export function useNotificationRecord(
       timestampMs: inSlice.timestamp,
     };
   }
-  return fetched;
+  // A result fetched for another id must not leak onto this card while its own fetch is in flight.
+  return fetchedFor?.forId === notificationId ? fetchedFor.value : undefined;
 }

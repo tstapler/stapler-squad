@@ -60,6 +60,8 @@ export function useSessionHidden(sessionId: string | undefined, lookup = true): 
   );
 
   useEffect(() => {
+    // Reused rows and toasts must not keep the previous session's answer.
+    setHidden(sessionId ? hiddenBySessionId.get(sessionId) : undefined);
     if (!sessionId || !redux) return;
     const cached = hiddenBySessionId.get(sessionId);
     if (cached !== undefined) {
