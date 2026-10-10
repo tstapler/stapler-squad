@@ -15,15 +15,6 @@ func (s *SessionService) indexSessionForDelivery(inst *session.Instance) {
 	}
 }
 
-// countLegacyHiddenSuppressed records that a legacy hidden-session check just
-// swallowed a notification (the soak compares these with the gate's decisions
-// before the legacy checks are removed). Observability only.
-func (s *SessionService) countLegacyHiddenSuppressed(site string, notificationType int32) {
-	if s.deliveryGate != nil {
-		s.deliveryGate.CountLegacySuppressedType(site, notificationType)
-	}
-}
-
 // unindexSessionForDelivery tombstones a deleted session by any identity key.
 func (s *SessionService) unindexSessionForDelivery(key string) {
 	if s.deliveryGate != nil {

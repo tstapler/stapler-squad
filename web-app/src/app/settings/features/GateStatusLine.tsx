@@ -30,13 +30,14 @@ function last24hCount(stats: GateStatsLike, counter: string, now: Date): number 
 }
 
 export function summarizeGateStats(stats: GateStatsLike, now: Date): string {
+  const suppressed = last24hCount(stats, "suppressed", now);
   const wouldSuppress = last24hCount(stats, "would_suppress", now);
   const unresolved = last24hCount(stats, "unresolved", now);
   const unversioned = stats.sinceProcessStart
     .filter((c) => c.counter === "rpc_unversioned")
     .reduce((n, c) => n + Number(c.count), 0);
   return (
-    `Shadow: ${wouldSuppress} hidden events would have been suppressed in the last 24h; ` +
+    `Last 24h: ${suppressed} hidden events suppressed; ${wouldSuppress} would have been suppressed (gate off); ` +
     `${unresolved} unresolved fail-open; ${unversioned} unversioned ssq-notify`
   );
 }

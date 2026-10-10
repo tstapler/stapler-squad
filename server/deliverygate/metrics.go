@@ -34,7 +34,6 @@ const (
 	CounterIndexRefresh        = "notification_gate_index_refresh_total"             // result
 	CounterResolvedLater       = "notification_unresolved_resolved_later_total"      // (none)
 	CounterFilterPanic         = "notification_gate_filter_panic_total"              // (none)
-	CounterLegacySuppressed    = "notification_legacy_hidden_suppressed_total"       // site,type,class
 	CounterRPCUnversioned      = "notification_rpc_unversioned_total"                // (none)
 	CounterAuditDegraded       = "hidden_session_audit_degraded_total"               // mode
 	CounterCrashCoalesced      = "notification_crash_coalesced_total"                // (none)
@@ -61,7 +60,6 @@ var counterLabelKeys = map[string][]string{
 	CounterHiddenDelivered:  {"channel", "class", "kind"},
 	CounterUnresolved:       {"class"},
 	CounterIndexRefresh:     {"result"},
-	CounterLegacySuppressed: {"site", "type", "class"},
 	CounterAuditDegraded:    {"mode"},
 	CounterBacklogSteer:     {"outcome"},
 	CounterReply:            {"outcome"},
@@ -270,7 +268,6 @@ var counterShortNames = map[string]string{
 	CounterIndexRefresh:       "index_refresh",
 	CounterResolvedLater:      "unresolved_resolved_later",
 	CounterFilterPanic:        "filter_panic",
-	CounterLegacySuppressed:   "legacy_hidden_suppressed",
 	CounterRPCUnversioned:     "rpc_unversioned",
 	CounterAuditDegraded:      "audit_degraded",
 	CounterCrashCoalesced:     "crash_coalesced",

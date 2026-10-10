@@ -3856,15 +3856,14 @@ func newRateLimitHiddenTestFixture(t *testing.T, title string) (*SessionService,
 		UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
+	installOnGate(eventBus, deliverygate.Entry{UUID: inst.UUID, Title: title, Hidden: true, Kind: deliverygate.KindOther})
 	return svc, eventBus, inst
 }
 
 // TestWireRateLimitCallbacks_SuppressesNotification_When_InstanceHidden verifies
-// the Epic 5 Story 5.1 Hidden gate: a Hidden instance (e.g. a headless review
-// session spawned via SpawnReviewSession) must never receive a rate-limit
-// detected/recovery notification, since rate-limit events have no
-// AttentionReason to preserve as a narrowing safety net — suppression here is
-// unconditional on Hidden, matching Epic 3's generic done/stuck notifier.
+// the Epic 5 Story 5.1 Hidden behavior: a Hidden instance (e.g. a headless
+// review session spawned via SpawnReviewSession) never receives a rate-limit
+// detected/recovery notification. The delivery gate on the bus drops them.
 func TestWireRateLimitCallbacks_SuppressesNotification_When_InstanceHidden(t *testing.T) {
 	t.Parallel()
 
@@ -3934,6 +3933,7 @@ func TestWireRateLimitCallbacks_StillPublishesSessionUpdated_When_InstanceHidden
 		svc := NewSessionService(storage, eventBus)
 		t.Cleanup(func() { svc.Shutdown() })
 		inst := newHiddenInstance(t, storage, "rl-hidden-detected-sync")
+		installOnGate(eventBus, deliverygate.Entry{UUID: inst.UUID, Title: inst.Title, Hidden: true, Kind: deliverygate.KindOther})
 		subCtx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		ch, _ := eventBus.Subscribe(subCtx)
@@ -3958,6 +3958,7 @@ func TestWireRateLimitCallbacks_StillPublishesSessionUpdated_When_InstanceHidden
 		svc := NewSessionService(storage, eventBus)
 		t.Cleanup(func() { svc.Shutdown() })
 		inst := newHiddenInstance(t, storage, "rl-hidden-recovery-sync")
+		installOnGate(eventBus, deliverygate.Entry{UUID: inst.UUID, Title: inst.Title, Hidden: true, Kind: deliverygate.KindOther})
 		subCtx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		ch, _ := eventBus.Subscribe(subCtx)
@@ -4028,12 +4029,12 @@ func TestWireRateLimitCallbacks_StampsItemIDMetadata_When_BacklogLinkedAndNotHid
 	assert.Equal(t, "true", notifs[0].NotificationMetadata[events.MetadataKeySessionScoped])
 }
 
-// TestOnColdRestoreLostHistory_PublishesNotification_UnlessHidden verifies the
-// session-revive-uuid-loss AC3 notification: a non-Hidden instance whose cold
-// restore was forced fresh despite prior conversation history gets a durable
-// WARNING/MEDIUM notification, while a Hidden instance (e.g. a headless
-// review session) never does — mirroring onRateLimitRecovery's Hidden gate.
-func TestOnColdRestoreLostHistory_PublishesNotification_UnlessHidden(t *testing.T) {
+// TestOnColdRestoreLostHistory_PublishesNotification verifies the
+// session-revive-uuid-loss AC3 notification: an instance whose cold restore was
+// forced fresh despite prior conversation history gets a durable
+// WARNING/MEDIUM notification. A hidden instance's copy is dropped by the
+// delivery gate (see TestHiddenSessionEvents_ShouldDeliverOnlyRecoveryFailure_WhenGateOn).
+func TestOnColdRestoreLostHistory_PublishesNotification(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(8)
 	svc := NewSessionService(storage, eventBus)
@@ -4067,18 +4068,6 @@ func TestOnColdRestoreLostHistory_PublishesNotification_UnlessHidden(t *testing.
 		assert.Equal(t, int32(8), notifs[0].NotificationType, "must be NotificationType_WARNING")
 		assert.Equal(t, int32(3), notifs[0].NotificationPriority, "must be NotificationPriority_HIGH (important-but-not-urgent)")
 		assert.Contains(t, notifs[0].NotificationTitle, inst.Title)
-	})
-
-	t.Run("hidden suppresses notification", func(t *testing.T) {
-		inst := newInstance("cold-restore-hidden", true)
-		subCtx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		ch, _ := eventBus.Subscribe(subCtx)
-
-		svc.onColdRestoreLostHistory(inst)
-
-		notifs := drainNotificationEvents(ch)
-		assert.Empty(t, notifs, "a Hidden instance must never receive a cold-restore-lost-history notification")
 	})
 }
 

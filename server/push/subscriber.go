@@ -210,18 +210,8 @@ func buildStatusChangeNotification(event *events.Event) (DeliveryNotification, b
 	if session.Status(sess.GetStatus()) != session.Stopped {
 		return DeliveryNotification{}, false
 	}
-	// A Hidden (headless/background) session — a one-shot Diagnose & Nudge or
-	// review dispatch — completing is routine, not something to push: its
-	// title is an internal dispatch ID ("diagnose:<item>:<ts>"), it carries no
-	// information about what the session actually did, and the session itself
-	// is deliberately excluded from the default session list, so the push's
-	// "Open" deep link has nowhere useful to go. Mirrors
-	// review_queue_manager.go's suppressForHidden precedent for the same
-	// class of noise.
-	if sess.Snapshot().Hidden {
-		return DeliveryNotification{}, false
-	}
-
+	// A hidden session's completion is dropped by the SessionDeliveryGate in
+	// deliverEvent, not here.
 	title := "Session Completed"
 	body := fmt.Sprintf("Session '%s' has completed", sess.GetTitle())
 	tag := "session-completed-" + stableID(sess)

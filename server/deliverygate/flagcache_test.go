@@ -44,13 +44,13 @@ func TestFlagCache_ShouldReflectOverrideImmediately_WhenUpdateFeatureFlagCalled(
 	lg, _ := newRecLogger()
 	f := &staticFlags{}
 	c := NewFlagCache(f.load, lg)
-	f.set(true)
+	f.set(false) // the registry default is on, so the observable change is a flip to off
 	c.OnFlagChanged("some_other_flag")
-	if c.Enabled() {
+	if !c.Enabled() {
 		t.Fatal("unrelated flag change must not reload")
 	}
 	c.OnFlagChanged("hidden_session_gate")
-	if !c.Enabled() {
+	if c.Enabled() {
 		t.Fatal("OnFlagChanged did not reload immediately")
 	}
 }
@@ -61,15 +61,15 @@ func TestEnabledFor_ShouldApplyKindOverrideThenGlobalThenDefault(t *testing.T) {
 	c := NewFlagCache(func() (FlagSettings, error) {
 		return FlagSettings{Global: false, KindOverrides: map[HiddenKind]bool{KindReview: true}}, nil
 	}, lg)
-	if c.EnabledFor(KindReview) || c.EnabledFor(KindOther) {
-		t.Fatal("before reload everything is the default (off)")
+	if !c.EnabledFor(KindReview) || !c.EnabledFor(KindOther) {
+		t.Fatal("before reload everything is the default (on)")
 	}
 	c.Reload()
 	if !c.EnabledFor(KindReview) {
 		t.Error("review override on must win over global off")
 	}
 	if c.EnabledFor(KindOther) {
-		t.Error("kind without override follows global (off)")
+		t.Error("kind without override follows the loaded global (off)")
 	}
 }
 

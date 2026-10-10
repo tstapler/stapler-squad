@@ -13,9 +13,8 @@ import (
 // ReactiveQueueManager.OnItemAdded with the bus publish filter installed, a
 // hidden session's routine reasons reach Slack zero times and its failure
 // reasons once, exactly as before the gate existed. Slack is invoked from the
-// review-queue path (not the bus), so this path is covered by the poller skip
-// and suppressForHidden rather than the publish filter; the test pins that the
-// presence of the gate does not change it.
+// review-queue path (not the bus), so it is gated by Gate.AllowQueueItem via
+// the manager's queue-item gate rather than the publish filter.
 func TestSlackNotifier_ShouldReceiveZeroRoutine_WhenHiddenReviewItemAdded(t *testing.T) {
 	cases := []struct {
 		reason    session.AttentionReason
@@ -39,6 +38,7 @@ func TestSlackNotifier_ShouldReceiveZeroRoutine_WhenHiddenReviewItemAdded(t *tes
 			gate.Flags().Reload()
 			gate.Index().Replace([]deliverygate.Entry{{UUID: "slack-hidden-uuid", Title: "review:slack", Hidden: true, Kind: deliverygate.KindReview}})
 			bus.SetPublishFilter(gate.PublishFilter())
+			mgr.SetQueueItemGate(gate.AllowQueueItem)
 
 			fake := &fakeSlackNotifierWiring{}
 			mgr.SetSlackNotifier(fake)
@@ -74,10 +74,10 @@ func (r *recordingDispatcher) count() int {
 }
 
 // The Slack and webhook-callback sends are gated by the delivery gate itself,
-// not by the legacy suppressForHidden predicate: the instance here is NOT
-// Hidden (so the legacy check is inert, as after PR 2b) while the gate's index
-// says hidden.
-func TestQueueItemSends_ShouldFollowGate_WhenLegacyPredicateInert(t *testing.T) {
+// not by a Hidden check in the manager: the instance is Hidden and the gate's
+// index says hidden, and only the gate decides (on: routine reasons dropped;
+// off: everything delivered).
+func TestQueueItemSends_ShouldFollowGate_ForHiddenSession(t *testing.T) {
 	cases := []struct {
 		reason session.AttentionReason
 		want   int
@@ -104,7 +104,7 @@ func TestQueueItemSends_ShouldFollowGate_WhenLegacyPredicateInert(t *testing.T) 
 				hook := &recordingDispatcher{}
 				mgr.SetSlackNotifier(fake)
 				mgr.SetCallbackDispatcher(hook)
-				poller.SetInstances([]*session.Instance{{Title: "review:gate", UUID: "gate-hidden-uuid"}})
+				poller.SetInstances([]*session.Instance{{Title: "review:gate", UUID: "gate-hidden-uuid", Hidden: true}})
 
 				mgr.OnItemAdded(&session.ReviewItem{
 					SessionID: "review:gate", SessionName: "review:gate",

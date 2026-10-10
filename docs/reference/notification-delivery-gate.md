@@ -5,39 +5,48 @@ notification about a hidden session (review, diagnose, triage, headless) is
 delivered. Policy and rollout rationale live in
 `project_plans/notification-tray-and-hidden-session-gate/` (ADR-001 to ADR-004).
 
-## Operator checklist (owner: the operator)
+## Rollout status and operator checklist
 
-The gate ships dark. Turning it on is the point of the project, so the
-stages below are an operator checklist, not background reading. The standing
-reminder is the status line under the flag in Settings > Features: "Shadow: N
-hidden events would have been suppressed in the last 24h; M unresolved
-fail-open; K unversioned ssq-notify". `would_suppress` growing while nothing is
-suppressed means the project is not done.
+The gate is **on by default** (`config.HiddenSessionGateDefault`, PR 2b) and the
+legacy per-site hidden checks are gone: this file's Policy section is the whole
+mechanism. The flag stays live-settable as the rollback (see Flag below).
 
-**Stage 1b reminders.** Created only after **both** PR 2a-2 and PR 2e have
-merged (the review-only flip needs the per-kind override): three dated backlog
-items, due 7, 10 and 14 days after the later merge. The merging agent or the
-operator creates them with `create_backlog_item` and records the ids and dates
-here. Until then this table is the placeholder.
+**The Stage 2 soak was skipped by operator decision.** The plan required
+`soak_streak_hours >= 24`, a reviewed new-delivery volume table and a measured
+before/after table before default-on. None of that was collected: the
+before/after delivery table (Task 2.9e) is **NOT MEASURED**, and no
+`GetDeliveryGateStats` evidence from a gate-on window backs the flip. After
+deploying, read `GetDeliveryGateStats` yourself (`soak.failure_delivered_while_on`,
+`needs_human_delivered_while_on`, `unresolved`) and the status line under the flag
+in Settings > Features: "Last 24h: N hidden events suppressed; M would have been
+suppressed (gate off); K unresolved fail-open; J unversioned ssq-notify".
+`unresolved` growing means a hidden session is missing from the index and is
+failing open (delivering); `would_suppress` growing means the gate is off for
+some scope.
 
-| Reminder | Due | Backlog item id |
-|---|---|---|
-| Flip `hidden_session_gate` on for kind `review` | later merge + 7 days | _not created yet_ |
-| Flip `hidden_session_gate` globally once the `review` phase shows nothing unexpected in `would_suppress` / `hidden_delivered` | later merge + 10 days | _not created yet_ |
-| Open PR 2b (default-on and legacy deletion) once `soak_streak_hours >= 24` with `stats_file_status.writable` | later merge + 14 days | _not created yet_ |
+**Rollback.** Settings > Features > turn `hidden_session_gate` off (globally or
+per kind; applies within the 5s flag reload and never needs the stats writer), or
+revert PR 2b. With the flag off hidden sessions deliver everything, including the
+routine events the removed legacy checks used to swallow; shadow counters
+(`would_suppress`) keep counting.
 
-**Stage 2 soak.** Flip the gate on live, then 24-48h of traffic. The evidence
-is the `GetDeliveryGateStats` output, never an OTel dashboard. Paste it into
-the PR 2b description. End the soak with "flip back on or Reset to default,
-never leave an explicit off".
+**Persisted explicit `false`.** A `config.json` that stored
+`hidden_session_gate: false` (or a per-kind `false` override) before the default
+flipped keeps the gate off for that scope. Startup logs WARN
+`hidden_session_gate_explicit_false` and `status_detail` says "Gate is OFF"
+(`soak.explicit_off_scopes` lists the scopes). Use `RESET_GLOBAL` or
+`CLEAR_SCOPE` to follow the default.
+
+**Redeploy `ssq-notify`.** An installed `ssq-notify` that predates the
+`ssq_notify_schema` stamp has type numbers that collide with the proto enum; the
+gate fails open for it (delivered, counted `unversioned`). Run `make install` to
+refresh `~/.local/bin/ssq-notify`.
 
 Synthetic probe (the failure and needs-human paths are rare; the probe proves
 the `ssq-notify` bus path only): against a **live hidden session** from
 Background activity, run
 `ssq-notify -s '<session title>' --type error -p medium -t '[synthetic-probe] gate failure-path check' -m 'ignore this notification'`
-and the same with `--type question` for needs-human. Use `-p medium`: a
-`-p low` probe is dropped by the legacy check before it reaches the gate. The
-row must appear in the tray within seconds (a silent drop is noticed, not read
+and the same with `--type question` for needs-human. The row must appear in the tray within seconds (a silent drop is noticed, not read
 as a stalled counter) and is dismissed by the operator. It counts toward
 `failure_delivered_while_on` and `needs_human_delivered_while_on` and is also
 counted in `probe_delivered_while_on`. No metadata hint is honored for it.
@@ -52,18 +61,8 @@ counted in `probe_delivered_while_on`. No metadata hint is honored for it.
 
 A producer counts as live-verified only when an organic event for it was seen.
 
-**Stage 3 prerequisites** (each pasted into the PR 2b description):
-`soak.explicit_off_scopes` is empty; `soak.soak_streak_hours >= 24` with
-`stats_file_status.writable == true`, `failure_delivered_while_on >= 1` and
-`needs_human_delivered_while_on >= 1` (state whether the probe alone satisfied
-them: `failure_delivered_while_on == probe_delivered_while_on`); the reviewed
-new-delivery volume from `legacy_hidden_suppressed{class=failure|needs_human}`;
-the before/after delivery table. If the binary was ever rolled back, re-verify
-the per-kind overrides (an older binary's `SaveConfig` drops them).
-
-**Stage 4: prune existing hidden-session rows (operator-run, after PR 2b has
-soaked).** `PruneHiddenSessionNotifications` removes stored routine rows of
-hidden sessions. It is never run by a restart hook and has no marker key; it is
+**Prune existing hidden-session rows (operator-run, after PR 2b is deployed).**
+`PruneHiddenSessionNotifications` removes stored routine rows of hidden sessions. It is never run by a restart hook and has no marker key; it is
 keyed on current state, so re-running removes nothing more. It has no MCP tool.
 
 1. Confirm the index is seeded: the RPC returns `FailedPrecondition` until the
@@ -124,7 +123,8 @@ index) fails open and is counted.
 | `bus` | every `EventNotification` (history, push, toasts) | `EventBus.SetPublishFilter`, dropped before `Seq` so replay cannot resurrect it |
 | `push_status` | Stopped `session.updated` push | `push.SessionDeliveryGate.AllowStatusChange` |
 | `auto_approved` | auto-allow history rows (deny rows are always kept) | `services.AutoApprovedGate.AllowAutoApprovedRow` |
-| `slack` | review-queue Slack message | unchanged: the poller skip and `suppressForHidden` (removed in PR 2b) |
+| `slack` | review-queue Slack message | `ReactiveQueueManager.allowQueueItem` calls `Gate.AllowQueueItem` (same policy and flag as the bus) |
+| `webhook` | outbound `queue_item_created` callback | same `AllowQueueItem` gate |
 
 The gate is installed on the bus when `SessionService` is constructed
 (`newGatedSessionService`) and seeded synchronously in `BuildRuntimeDeps` right
@@ -132,8 +132,10 @@ after `storage.LoadInstances()`, before any instance is wired or started.
 
 ## Flag
 
-`hidden_session_gate` (`config.HiddenSessionGateFeatureFlag`), default **off**:
-off means today's behavior plus shadow counters (`would_suppress`). Read from
+`hidden_session_gate` (`config.HiddenSessionGateFeatureFlag`), default **on**
+(`config.HiddenSessionGateDefault`, shared by the registry and the `FlagCache`):
+off is the rollback, where hidden sessions deliver everything and the gate only
+counts what it would have dropped (`would_suppress`). Read from
 `config.json` by a `FlagCache` (no I/O on the publish path; reloaded every 5s,
 at startup and immediately by the `FlagObserver` call that
 `FeatureFlagService.UpdateFeatureFlag` makes after every persisted change).
@@ -191,8 +193,8 @@ including after the default flips on. Startup logs WARN
 `hidden_session_gate_explicit_false` once per such kind, the flag's
 `status_detail` carries "Gate is OFF for kind <kind>: hidden <kind> sessions
 deliver everything" and `soak.explicit_off_scopes` lists `kind:<name>` (and
-`global` when the global key is an explicit false). Stage 3 needs that list to
-be empty.
+`global` when the global key is an explicit false). An empty list means the
+default applies everywhere.
 
 `flag_history` entries carry the mutation, so a `RESET_GLOBAL` or
 `CLEAR_SCOPE` reads as such and not as a set false; `flag_change` audit lines
@@ -213,7 +215,6 @@ initialized). No counter carries a session id.
 | `notification_gate_index_refresh_total` | result: started, skipped_min_interval, timeout, error, ok |
 | `notification_unresolved_resolved_later_total` | none (must stay 0: an index defect signal) |
 | `notification_gate_filter_panic_total` | none |
-| `notification_legacy_hidden_suppressed_total` | site, type, class |
 | `notification_rpc_unversioned_total` | none |
 | `hidden_session_audit_degraded_total` | mode: `flag_change_queued`, `flag_change_fallback_log` |
 | `notification_crash_coalesced_total` | none |
@@ -327,8 +328,9 @@ Hidden-reachable failure producers, and what covers each:
 | Crash | `FAILURE` | `session_service_events_test.go` (T-CR-01, -04, -07, -09, -10, -11), `crash_matrix_test.go` (T-CR-02, -03, -08) |
 | `PermanentlyFailed` | `ERROR` | `TestPermanentlyFailed_ShouldDeliverOneErrorAndResolveHidden_WhenItemIDEqualsUUID` (T-CR-05) |
 | Main-session Stop with an error stop reason (`ssq-notify --type task_failed`) | failure class, unstamped | `TestHookHandler_ShouldStampRoutineOnPostToolAndSubagentOnly_WhenCurlPayloadRecorded` asserts the main stop is not demoted; the policy matrix covers the type. Post-tool and subagent errors are stamped `delivery_class=routine` and are dropped for hidden sessions |
-| Autonomous driver "Autonomous fix stuck" | `FAILURE` | not reachable for a hidden session until PR 2b: the legacy `if !inst.Hidden` check drops it first and counts `legacy_hidden_suppressed{site=autonomous_generic}` |
-| Rate-limit and capacity hard stops | `WARNING` + `delivery_class=failure` | not reachable for hidden sessions until PR 2b (legacy checks); the stamp is covered by `ssq_hook_handler_stamp_test.go` |
+| Autonomous driver "Autonomous fix stuck" | `FAILURE` | `TestAutonomous_ShouldDeliverStuckFailureAndDropCompleteInfo_WhenHiddenAndGateOn` |
+| Rate-limit recovery failure (`onRateLimitRecoveryFailed`) | `FAILURE` | `TestHiddenSessionEvents_ShouldDeliverOnlyRecoveryFailure_WhenGateOn` |
+| Capacity guardrail hard stop (`stopForGuardrail`) | `WARNING` + `delivery_class=failure` | `TestCapacityGuardrailStop_ShouldDeliverForHiddenSession_WhenGateOn` |
 | `ReviewQueuePoller` ErrorState / TestsFailing | n/a | unreachable for hidden sessions (`shouldSkipSession`); not relied on |
 
 ## Latency

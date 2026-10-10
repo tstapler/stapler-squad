@@ -35,7 +35,7 @@ type NotificationService struct {
 	eventBus                *events.EventBus
 	reviewQueuePoller       *session.ReviewQueuePoller
 	storage                 session.InstanceStore
-	deliveryGate            *deliverygate.Gate // optional: counters for legacy checks and unversioned requests
+	deliveryGate            *deliverygate.Gate // optional: unversioned-request counter and stats RPC
 	statsFileStatus         func() deliverygate.StatsFileStatus
 	auditSink               *AuditSink       // optional: prune apply refuses without it
 	pruneNow                func() time.Time // injected clock; nil means time.Now
@@ -128,8 +128,7 @@ func (ns *NotificationService) SendNotification(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("title is required"))
 	}
 
-	// Count and stamp unversioned requests for every request, including ones the
-	// legacy checks below drop.
+	// Count and stamp unversioned requests for every request.
 	metadata := ns.requestMetadata(req.Msg.Metadata)
 
 	// Use the session ID as the display name. LoadInstances() cannot be used here because
@@ -140,12 +139,10 @@ func (ns *NotificationService) SendNotification(
 	sessionName := req.Msg.SessionId // Default to session ID
 	resolvedSessionID := req.Msg.SessionId
 	resolved := false
-	hidden := false
 	if ns.reviewQueuePoller != nil {
 		if inst := ns.reviewQueuePoller.FindInstance(req.Msg.SessionId); inst != nil {
 			sessionName = inst.Title
 			resolvedSessionID = inst.GetStableID()
-			hidden = inst.Snapshot().Hidden
 			resolved = true
 		}
 	}
@@ -164,32 +161,10 @@ func (ns *NotificationService) SendNotification(
 				if matchesIDData(d, req.Msg.SessionId) {
 					sessionName = d.Title
 					resolvedSessionID = stableIDForData(d)
-					hidden = d.Hidden
 					break
 				}
 			}
 		}
-	}
-
-	// Hidden (headless/background, e.g. review) sessions run a real Claude Code
-	// CLI process and get the same native Stop/Notification hooks as any visible
-	// session (session/mux/hooks.go's GenerateHooksFile has no concept of
-	// Hidden) — so ssq-hook-handler's routine "Task Complete"/"Subagent
-	// Complete" hook fires for them exactly like a normal session, landing in
-	// notification history/push for a session the UI hides and "View Session"
-	// can't open. Suppress only LOW-priority (routine) notifications for Hidden
-	// sessions, mirroring ReactiveQueueManager's suppressForHidden: a failure
-	// (task_failed, sent at high priority) must still surface regardless of
-	// Hidden, since nothing else watches a stuck-in-error hidden session.
-	if hidden && req.Msg.Priority == sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW {
-		if ns.deliveryGate != nil {
-			hint, _ := deliverygate.ParseClassHint(metadata)
-			ns.deliveryGate.CountLegacySuppressed("send_notification_low", sessionv1.NotificationType(req.Msg.NotificationType), hint)
-		}
-		return connect.NewResponse(&sessionv1.SendNotificationResponse{
-			Success: true,
-			Message: "Notification suppressed for hidden session",
-		}), nil
 	}
 
 	// Apply rate limiting (applies to both managed and external sessions)

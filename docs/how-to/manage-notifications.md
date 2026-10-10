@@ -99,6 +99,12 @@ Every automated or unary write to a session's terminal (the driver's prompt and 
 - **Remedy**: Delete the session, or restart stapler-squad. Pause and Delete both complete while the write is stuck (they do not take the lease) and the pane header's actions menu stays available in the read-only hidden view. Closing the PTY does not wake a blocked write (verified against a real PTY pair; only a reader on the slave side does), so a session that is Paused and then Resumed stays blocked until the service restarts.
 - **Escape hatch**: the `terminal_write_lease` flag (Settings > Features, global only, default on). Off makes every lease non-exclusive, which is the behavior before the lease existed. Every flip is a `flag_change` line in the audit file; turning it off is persisted even when the audit sink is down.
 
+## Hidden sessions stop notifying for routine events (and how to roll it back)
+
+The hidden-session delivery gate is **on by default**. A hidden session (review, diagnose, triage, headless) notifies only for failures and needs-human events (errors, crashes, approvals, questions); routine completions, idle and rate-limit advisories are dropped on every channel (history, toasts, push, Slack, webhook callbacks). The per-site hidden checks that used to do this have been removed, so the gate is the only mechanism: see `docs/reference/notification-delivery-gate.md`.
+
+To roll back, open **Settings > Features** and turn **Notifications: hidden-session delivery gate** off (globally, or per kind under the kind overrides). It applies within seconds. Off means hidden sessions deliver everything, including the routine events the removed checks used to swallow; the status line under the flag still counts what would have been suppressed. If **Stats writer not running** is shown, enabling is refused until the stats writer is up; disabling is never refused.
+
 ## A hidden session refuses a UI action ("read-only")
 
 A hidden (background) session is read-only in the UI. The server refuses, with "this session is a background session and is read-only": raw terminal input (`WriteToSession`), restart (`RestartSession`, `RestartShell`), workspace switches of every type, an `UpdateSession` that changes `program` or `auto_approve`, a steer that is not the backlog Steer, and the manual PR nudge. Read RPCs, pause, resume and delete are unchanged, and MCP tools and `SteerActiveSession` (the internal steers) behave as before.

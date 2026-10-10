@@ -86,24 +86,21 @@ func TestStartupWindow_ShouldCountZeroIndexMissesBeforeLoadInstances_WhenNoSessi
 }
 
 // T-MX-08: every producer that can emit a FAILURE for a hidden session is
-// enumerated here with the test that proves its delivery, or an explicit
-// "unreachable before PR 2b" note plus the test that proves the legacy check
-// still swallows (and counts) it. A named test that no longer exists, or an
-// unreachable note without evidence, fails the guard.
-func TestHiddenFailureProducers_ShouldEachHaveTestOrUnreachableNote_WhenTableEnumerated(t *testing.T) {
+// enumerated here with the test that proves its delivery through the gate. A
+// named test that no longer exists fails the guard.
+func TestHiddenFailureProducers_ShouldEachHaveTest_WhenTableEnumerated(t *testing.T) {
 	producers := []struct {
-		name        string
-		test        string // proves delivery (reachable) or the legacy swallow (unreachable)
-		unreachable string // non-empty: why the producer cannot reach the gate yet
+		name string
+		test string // proves delivery
 	}{
 		{name: "hook Stop task_failed (main agent)",
 			test: "TestHookEvents_ShouldYieldZeroRowsForHiddenPostToolErrorAndOneFailureForMainStop_WhenGateOn"},
 		{name: "autonomous driver 'Autonomous fix stuck'",
-			test:        "TestAutonomous_ShouldCountSkippedHiddenGenericNotify_WhenFlagOff",
-			unreachable: "legacy !inst.Hidden check in onAutonomousDriverComplete swallows it until PR 2b"},
-		{name: "capacity and rate-limit hard stops",
-			test:        "TestLegacyCounters_ShouldLabelSiteTypeAndClass_WhenSessionEventSitesFireForHiddenSession",
-			unreachable: "legacy hidden checks in onRateLimitRecoveryFailed and siblings swallow them until PR 2b"},
+			test: "TestAutonomous_ShouldDeliverStuckFailureAndDropCompleteInfo_WhenHiddenAndGateOn"},
+		{name: "rate-limit recovery failure",
+			test: "TestHiddenSessionEvents_ShouldDeliverOnlyRecoveryFailure_WhenGateOn"},
+		{name: "capacity guardrail hard stop",
+			test: "TestCapacityGuardrailStop_ShouldDeliverForHiddenSession_WhenGateOn"},
 		{name: "PermanentlyFailed ERROR",
 			test: "TestPermanentlyFailed_ShouldDeliverOneErrorAndResolveHidden_WhenItemIDEqualsUUID"},
 		{name: "session crash FAILURE",

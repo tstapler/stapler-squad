@@ -73,9 +73,9 @@ func TestFlagCache_ShouldIgnoreMutationHintsOfOtherFlags_WhenObserverIsToldAbout
 	lg, _ := newRecLogger()
 	f := &staticFlags{}
 	c := NewFlagCache(f.load, lg)
-	f.set(true)
-	c.OnFlagMutation("some_other_flag", "global", "SET_ENABLED")
-	assert.False(t, c.Enabled(), "another flag's mutation must not reload this one")
+	f.set(false)
+	c.OnFlagMutation("some_other_flag", "global", "SET_DISABLED")
+	assert.True(t, c.Enabled(), "another flag's mutation must not reload this one")
 	assert.Equal(t, 0, f.readCount())
 }
 
