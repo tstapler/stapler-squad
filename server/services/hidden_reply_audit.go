@@ -116,8 +116,8 @@ type AuditSink struct {
 	after    func(time.Duration) <-chan time.Time
 	degraded func(mode string)
 
-	openOnce  sync.Once
-	openErr   error
+	openMu    sync.Mutex
+	opened    bool
 	dir       string
 	bootID    string    // fixed at construction: identity of this process start
 	bootTS    time.Time // label only; readers order by (boot_seq, seq)
@@ -180,27 +180,29 @@ func NewAuditSink(dirFn func() (string, error), opts ...AuditSinkOption) *AuditS
 // open creates the directory and takes the next boot_seq. A fault here is the
 // same fault as an unwritable sink.
 func (s *AuditSink) open() error {
-	s.openOnce.Do(func() {
-		base, err := s.dirFn()
-		if err != nil {
-			s.openErr = err
-			return
-		}
-		s.dir = filepath.Join(base, "audit")
-		if err := s.fs.MkdirAll(s.dir, auditDirMode); err != nil {
-			s.openErr = err
-			return
-		}
-		seq, err := s.nextBootSeq()
-		if err != nil {
-			s.openErr = fmt.Errorf("boot_seq: %w", err)
-			return
-		}
-		s.metaMu.Lock()
-		s.bootSeq = strconv.FormatInt(seq, 10)
-		s.metaMu.Unlock()
-	})
-	return s.openErr
+	s.openMu.Lock()
+	defer s.openMu.Unlock()
+	if s.opened {
+		return nil
+	}
+	base, err := s.dirFn()
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(base, "audit")
+	if err := s.fs.MkdirAll(dir, auditDirMode); err != nil {
+		return err
+	}
+	s.dir = dir
+	seq, err := s.nextBootSeq()
+	if err != nil {
+		return fmt.Errorf("boot_seq: %w", err)
+	}
+	s.metaMu.Lock()
+	s.bootSeq = strconv.FormatInt(seq, 10)
+	s.metaMu.Unlock()
+	s.opened = true
+	return nil
 }
 
 // nextBootSeq increments the persisted counter atomically (temp file, fsync, rename).
@@ -208,7 +210,13 @@ func (s *AuditSink) nextBootSeq() (int64, error) {
 	path := filepath.Join(s.dir, auditBootSeqName)
 	var cur int64
 	if b, err := s.fs.ReadFile(path); err == nil {
-		cur, _ = strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+		parsed, perr := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+		if perr != nil || parsed < 0 {
+			// A corrupt counter must not rewind (readers order by boot_seq); jump past any plausible count.
+			s.logger.Warn("audit boot_seq unreadable, resuming from wall clock", "error", perr)
+			parsed = s.now().Unix()
+		}
+		cur = parsed
 	}
 	next := cur + 1
 	tmp := path + ".tmp"
