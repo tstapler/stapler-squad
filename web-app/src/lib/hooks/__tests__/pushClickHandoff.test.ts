@@ -63,6 +63,15 @@ describe("push-sw handoff", () => {
     const { p, openWindow } = run([c]);
     await expect(p).resolves.toEqual({ handedOff: false, url: URL_ });
     expect(openWindow).toHaveBeenCalledWith(URL_);
+    // The existing window must not also navigate, or one click opens the target twice.
+    expect(c.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("opens a window and does not report a handoff when postMessage throws after focus", async () => {
+    const c = client({ postMessage: jest.fn(() => { throw new Error("detached"); }) });
+    const { p, openWindow } = run([c]);
+    await expect(p).resolves.toEqual({ handedOff: false, url: URL_ });
+    expect(openWindow).toHaveBeenCalledWith(URL_);
   });
 
   it("collapses missing, cross-origin and malformed URLs to /", () => {

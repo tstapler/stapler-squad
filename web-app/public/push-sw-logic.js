@@ -43,16 +43,17 @@
     );
   }
 
-  // Hands the click to an open window (focus + postMessage, no reload); opens one only
-  // when none exists or focusing is refused.
+  // Hands the click to an open window (focus, then postMessage, no reload); opens one only
+  // when none exists or focusing is refused. The message is sent only after focus succeeds:
+  // posting first and then opening a window on a refused focus navigated two windows.
   async function handleNotificationClick(opts) {
     var url = normalizeTargetUrl(opts.url, opts.origin);
     var clientList = await opts.matchAll();
     var client = pickClient(clientList, opts.origin);
     if (client) {
       try {
-        client.postMessage({ type: MESSAGE_TYPE, url: url });
         if (typeof client.focus === 'function') await client.focus();
+        client.postMessage({ type: MESSAGE_TYPE, url: url });
         return { handedOff: true, url: url };
       } catch (e) {
         // fall through to openWindow
