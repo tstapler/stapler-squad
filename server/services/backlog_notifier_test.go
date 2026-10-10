@@ -76,3 +76,22 @@ func TestEventBusNotifier_NotifySession_should_NoOp_When_BusNil(t *testing.T) {
 		notifier.NotifySession("sess-1", "title", "message", 10, false, false)
 	})
 }
+
+// The auto-remediating WARNING carries the stamp that makes it informational.
+func TestEventBusNotifier_NotifyAutoRemediating_should_StampAutoRemediatingAndKeepItemId_When_Called(t *testing.T) {
+	t.Parallel()
+	bus := events.NewEventBus(1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := bus.Subscribe(ctx)
+
+	(&EventBusNotifier{Bus: bus}).NotifyAutoRemediating("item-1", "PR needs attention", "retrying", 8, false, true)
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, "true", ev.NotificationMetadata["auto_remediating"])
+		assert.Equal(t, "item-1", ev.NotificationMetadata["item_id"])
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a notification event after NotifyAutoRemediating")
+	}
+}

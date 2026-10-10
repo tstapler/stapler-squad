@@ -1312,7 +1312,7 @@ func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Con
 		if findErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate FindOpenStuckStates item=%s: %v", itemID, findErr)
 		} else if row, ok := findOpenStuckStateFor(rows, itemID, domain.StuckReasonPRNeedsFix); ok && row.NotifiedAt == nil {
-			l.notify(itemID,
+			l.notifyAutoRemediating(itemID,
 				"PR needs attention",
 				fmt.Sprintf("%s — the PR has failing CI, blocking reviews, or a merge conflict. An automated fix attempt will run on the standard backoff schedule.", itemTitle),
 				8,           // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
