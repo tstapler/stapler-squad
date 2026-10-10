@@ -159,6 +159,12 @@ service SessionService {
   // Optionally filters by timestamp to only clear older notifications.
   rpc ClearNotificationHistory(ClearNotificationHistoryRequest) returns (ClearNotificationHistoryResponse) {}
 
+  // PruneHiddenSessionNotifications removes stored notification rows that
+  // belong to hidden sessions. Operator-triggered; dry run unless apply is set.
+  // Stub: returns Unimplemented until the prune story lands.
+  // +api: notification:prune-hidden
+  rpc PruneHiddenSessionNotifications(PruneHiddenSessionNotificationsRequest) returns (PruneHiddenSessionNotificationsResponse) {}
+
   // ListApprovalRules returns all auto-approval rules (user, seed, and claude-settings).
   rpc ListApprovalRules(ListApprovalRulesRequest) returns (ListApprovalRulesResponse) {}
 
@@ -692,6 +698,10 @@ message ListSessionsRequest {
   // When true, include archived sessions in results.
   // Defaults to false — archived sessions are excluded unless explicitly requested.
   bool include_archived = 8;
+
+  // When true, return only hidden (system/background) sessions. Not yet
+  // honored by the server; reserved for the hidden-session view.
+  bool hidden_only = 9;
 }
 
 message ListSessionsResponse {
@@ -1750,6 +1760,11 @@ message NotificationHistoryRecord {
   // Timestamp of the most recent occurrence (may differ from created_at
   // which tracks the first occurrence).
   optional google.protobuf.Timestamp last_occurred_at = 13;
+
+  // True when this record is an unread decision the operator must act on:
+  // an actionable type that is not stamped auto_remediating=true. Computed by
+  // the server's single IsPendingDecision predicate; clients must not re-derive it.
+  bool is_pending_decision = 14;
 }
 
 // GetNotificationHistoryRequest filters and paginates notification history.
@@ -1793,6 +1808,32 @@ message MarkNotificationReadResponse {
 message ClearNotificationHistoryRequest {
   // Optional: Clear notifications older than this timestamp (RFC3339 string).
   optional string before_timestamp = 1;
+
+  // Clear exactly these notification ids (pending decisions among them are
+  // kept). Not yet honored: the server returns Unimplemented while this is set.
+  repeated string notification_ids = 2;
+}
+
+// PruneHiddenSessionNotificationsRequest selects what a prune removes.
+message PruneHiddenSessionNotificationsRequest {
+  // When false (the default) nothing is deleted and the response lists what would be.
+  bool apply = 1;
+  // When true, unread actionable rows of hidden sessions are removed too.
+  bool include_unread_actionable = 2;
+}
+
+// PruneHiddenSessionNotificationsResponse reports the planned or applied removal.
+message PruneHiddenSessionNotificationsResponse {
+  // True when rows were deleted (apply was set and the call succeeded).
+  bool applied = 1;
+  // Ids of the rows removed, or that would be removed on a dry run.
+  repeated string notification_ids = 2;
+  // Unread actionable rows of hidden sessions that were kept.
+  int32 kept_unread_actionable = 3;
+  // Rows whose session cannot be classified; always kept.
+  int32 undeterminable = 4;
+  // Path of the timestamped backup written before an apply.
+  string backup_path = 5;
 }
 
 // ClearNotificationHistoryResponse confirms how many notifications were cleared.

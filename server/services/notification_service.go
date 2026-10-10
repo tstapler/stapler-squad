@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -282,6 +283,11 @@ func (ns *NotificationService) ClearNotificationHistory(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ClearNotificationHistoryRequest],
 ) (*connect.Response[sessionv1.ClearNotificationHistoryResponse], error) {
+	if len(req.Msg.NotificationIds) > 0 {
+		return nil, connect.NewError(connect.CodeUnimplemented,
+			errors.New("clearing by notification_ids is not implemented yet"))
+	}
+
 	if ns.notificationStore == nil {
 		return connect.NewResponse(&sessionv1.ClearNotificationHistoryResponse{
 			Success:      true,
@@ -311,6 +317,16 @@ func (ns *NotificationService) ClearNotificationHistory(
 	}), nil
 }
 
+// PruneHiddenSessionNotifications is a contract-PR stub; the handler lands with
+// the prune story.
+func (ns *NotificationService) PruneHiddenSessionNotifications(
+	_ context.Context,
+	_ *connect.Request[sessionv1.PruneHiddenSessionNotificationsRequest],
+) (*connect.Response[sessionv1.PruneHiddenSessionNotificationsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented,
+		errors.New("PruneHiddenSessionNotifications is not implemented yet"))
+}
+
 // ---------------------------------------------------------------------------
 // Helper functions
 // ---------------------------------------------------------------------------
@@ -328,16 +344,17 @@ func recordToProto(r *notifications.NotificationRecord) *sessionv1.NotificationH
 	}
 
 	record := &sessionv1.NotificationHistoryRecord{
-		Id:               r.ID,
-		SessionId:        r.SessionID,
-		SessionName:      r.SessionName,
-		NotificationType: sessionv1.NotificationType(r.NotificationType),
-		Priority:         sessionv1.NotificationPriority(r.Priority),
-		Title:            r.Title,
-		Message:          r.Message,
-		Metadata:         metadata,
-		CreatedAt:        timestamppb.New(r.CreatedAt),
-		IsRead:           r.IsRead,
+		Id:                r.ID,
+		SessionId:         r.SessionID,
+		SessionName:       r.SessionName,
+		NotificationType:  sessionv1.NotificationType(r.NotificationType),
+		Priority:          sessionv1.NotificationPriority(r.Priority),
+		Title:             r.Title,
+		Message:           r.Message,
+		Metadata:          metadata,
+		CreatedAt:         timestamppb.New(r.CreatedAt),
+		IsRead:            r.IsRead,
+		IsPendingDecision: notifications.IsPendingDecision(r.NotificationType, r.Metadata, r.IsRead),
 		// #nosec G115 -- OccurrenceCount is a per-notification dedup-repeat
 		// counter, far below int32 range.
 		OccurrenceCount: int32(r.OccurrenceCount),

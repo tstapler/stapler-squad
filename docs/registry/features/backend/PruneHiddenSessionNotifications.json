@@ -1,0 +1,11 @@
+{
+  "id": "PruneHiddenSessionNotifications",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "PruneHiddenSessionNotifications",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-10-09T18:46:15.822671394-07:00"
+}

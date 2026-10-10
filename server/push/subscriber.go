@@ -208,7 +208,7 @@ func buildInlineNotification(event *events.Event) (DeliveryNotification, bool) {
 			"sessionId":        event.SessionID,
 			"notificationType": notificationTypeName(event.NotificationType),
 			"timestamp":        time.Now().Unix(),
-			"url":              buildSessionURL(event.SessionID),
+			"url":              buildNotificationURL(event.SessionID, event.NotificationID),
 		}
 	}
 
@@ -301,6 +301,16 @@ func baseDataMap(sess *session.Instance, notifType string) map[string]interface{
 // buildSessionURL returns the deep-link URL for a session, using the stable ID.
 func buildSessionURL(sessionID string) string {
 	return "/?session=" + url.QueryEscape(sessionID) + "&tab=terminal"
+}
+
+// buildNotificationURL is buildSessionURL plus a notification=<id> deep-link
+// parameter when the push is backed by a history record.
+func buildNotificationURL(sessionID, notificationID string) string {
+	u := buildSessionURL(sessionID)
+	if notificationID == "" {
+		return u
+	}
+	return u + "&notification=" + url.QueryEscape(notificationID)
 }
 
 // notificationTypeName maps a proto NotificationType int32 to a string.

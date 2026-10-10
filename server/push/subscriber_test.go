@@ -366,3 +366,27 @@ func (e *errorNotifier) Send(_ context.Context, _ DeliveryNotification) error {
 	return fmt.Errorf("notifier %q always fails", e.name)
 }
 func (e *errorNotifier) Name() string { return e.name }
+
+// Contract PR 1: an inline (history-record-backed) push deep-links to its
+// notification; the status-change and approval builders keep the two-parameter form.
+func TestInlineNotificationURL_ShouldAppendNotificationId_WhenEventHasNotificationID(t *testing.T) {
+	n, ok := buildInlineNotification(&events.Event{
+		Type:                 events.EventNotification,
+		NotificationPriority: priorityUrgent,
+		NotificationType:     typeApproval,
+		NotificationTitle:    "Approval needed",
+		NotificationMessage:  "Please review",
+		NotificationID:       "n-42",
+		SessionID:            "session-abc",
+		Timestamp:            time.Now(),
+	})
+	require.True(t, ok)
+	assert.Equal(t, "/?session=session-abc&tab=terminal&notification=n-42", n.Data["url"])
+}
+
+func TestInlineNotificationURL_ShouldKeepTwoParameterForm_WhenStatusChangeOrApproval(t *testing.T) {
+	want := "/?session=session-abc-123&tab=terminal"
+	sess := &session.Instance{ID: "session-abc-123", Title: "t"}
+	assert.Equal(t, want, buildApprovalNotification(sess).Data["url"])
+	assert.Equal(t, want, buildCompletedNotification(sess).Data["url"])
+}

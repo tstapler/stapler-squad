@@ -285,6 +285,14 @@ func (s *SessionService) ClearNotificationHistory(
 	return s.notificationSvc.ClearNotificationHistory(ctx, req)
 }
 
+// PruneHiddenSessionNotifications removes stored notifications of hidden sessions (stub).
+func (s *SessionService) PruneHiddenSessionNotifications(
+	ctx context.Context,
+	req *connect.Request[sessionv1.PruneHiddenSessionNotificationsRequest],
+) (*connect.Response[sessionv1.PruneHiddenSessionNotificationsResponse], error) {
+	return s.notificationSvc.PruneHiddenSessionNotifications(ctx, req)
+}
+
 // ResolveApproval allows the web UI to approve or deny a pending Claude Code tool use request.
 func (s *SessionService) ResolveApproval(
 	ctx context.Context,

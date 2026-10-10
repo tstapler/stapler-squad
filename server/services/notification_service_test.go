@@ -12,6 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -396,4 +397,42 @@ func TestValidateLocalhostOrigin(t *testing.T) {
 			}
 		})
 	}
+}
+
+// T-CT-03: the contract-PR stub is wired through SessionService and refuses
+// until Story 2.7 implements it.
+func TestStubs_ShouldReturnUnimplemented_WhenPruneOrReplyCalledBeforeImplementation(t *testing.T) {
+	t.Parallel()
+	svc := &SessionService{notificationSvc: &NotificationService{}}
+	_, err := svc.PruneHiddenSessionNotifications(context.Background(),
+		connect.NewRequest(&sessionv1.PruneHiddenSessionNotificationsRequest{}))
+	require.Error(t, err)
+	require.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+}
+
+// The history record reports the same pending-decision answer as the predicate.
+func TestRecordToProto_ShouldSetIsPendingDecision_WhenUnreadWarningInfoAndAutoRemediatingWarning(t *testing.T) {
+	t.Parallel()
+	mk := func(typ sessionv1.NotificationType, md map[string]string) *notifications.NotificationRecord {
+		return &notifications.NotificationRecord{ID: "n", NotificationType: int32(typ), Metadata: md, CreatedAt: time.Unix(1700000000, 0)}
+	}
+	warning := sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+	require.True(t, recordToProto(mk(warning, nil)).IsPendingDecision)
+	require.False(t, recordToProto(mk(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO, nil)).IsPendingDecision)
+	require.False(t, recordToProto(mk(warning, map[string]string{"auto_remediating": "true"})).IsPendingDecision)
+
+	read := mk(warning, nil)
+	read.IsRead = true
+	require.False(t, recordToProto(read).IsPendingDecision)
+}
+
+// A client that sends notification_ids before Story 4.4 implements ClearByIDs
+// must not fall through to "clear everything".
+func TestClearNotificationHistory_ShouldReturnUnimplemented_WhenNotificationIdsSetBeforeClearByIDs(t *testing.T) {
+	t.Parallel()
+	ns := &NotificationService{}
+	_, err := ns.ClearNotificationHistory(context.Background(),
+		connect.NewRequest(&sessionv1.ClearNotificationHistoryRequest{NotificationIds: []string{"a"}}))
+	require.Error(t, err)
+	require.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
 }
