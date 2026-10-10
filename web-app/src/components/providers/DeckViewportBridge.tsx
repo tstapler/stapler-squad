@@ -6,7 +6,10 @@ import { useViewport } from "./ViewportProvider";
 
 /** Publishes the viewport facts the notification deck needs; mount inside ViewportProvider. */
 export function DeckViewportBridge({ children }: { children: ReactNode }) {
-  const { isInnerScreen, isVirtualKeyboardOpen } = useViewport();
-  const value = useMemo(() => ({ isInnerScreen, isVirtualKeyboardOpen }), [isInnerScreen, isVirtualKeyboardOpen]);
+  const { isInnerScreen, isVirtualKeyboardOpen, isLandscape } = useViewport();
+  const value = useMemo(
+    () => ({ isInnerScreen, isVirtualKeyboardOpen, isLandscape }),
+    [isInnerScreen, isVirtualKeyboardOpen, isLandscape],
+  );
   return <DeckViewportContext.Provider value={value}>{children}</DeckViewportContext.Provider>;
 }

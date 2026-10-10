@@ -60,3 +60,25 @@ export function readWhatChangedSeen(): boolean {
 export function writeWhatChangedSeen(): void {
   writeRaw(WHAT_CHANGED_STORAGE_KEY, "true");
 }
+
+export const QUIET_MODE_STORAGE_KEY = "ssq.notifications.quietMode";
+
+/** Quiet mode: non-pinned toasts go straight to the tray on this device. Off when storage is unavailable. */
+export function readQuietMode(): boolean {
+  return readRaw(QUIET_MODE_STORAGE_KEY) === "true";
+}
+
+export function writeQuietMode(on: boolean): void {
+  writeRaw(QUIET_MODE_STORAGE_KEY, on ? "true" : "false");
+}
+
+export const TRAY_PINNED_STORAGE_KEY = "ssq.notifications.trayPinned";
+
+/** Pin tray: dock the open tray as a layout column. Off when storage is unavailable. */
+export function readTrayPinned(): boolean {
+  return readRaw(TRAY_PINNED_STORAGE_KEY) === "true";
+}
+
+export function writeTrayPinned(on: boolean): void {
+  writeRaw(TRAY_PINNED_STORAGE_KEY, on ? "true" : "false");
+}

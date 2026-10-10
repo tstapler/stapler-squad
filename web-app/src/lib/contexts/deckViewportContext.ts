@@ -11,6 +11,8 @@ import { createContext, useContext } from "react";
 export interface DeckViewport {
   isInnerScreen: boolean;
   isVirtualKeyboardOpen: boolean;
+  /** A phone on its side (narrower than 900px and wider than tall); the tray becomes a side panel. */
+  isLandscape?: boolean;
 }
 
 export const DeckViewportContext = createContext<DeckViewport>({

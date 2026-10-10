@@ -29,6 +29,8 @@ interface TrayListProps {
   /** Visible reason server-mutating controls are disabled; also turns swipe off. */
   offlineReason?: string;
   scrollRef: RefObject<HTMLDivElement | null>;
+  /** Height of the non-virtual block (search, filters, cards) above the list in the same scroller. */
+  scrollMargin?: number;
   hasMore: boolean;
   loading: boolean;
   onLoadMore: () => void;
@@ -74,6 +76,7 @@ export function TrayList({
   itemProps,
   offlineReason,
   scrollRef,
+  scrollMargin = 0,
   hasMore,
   loading,
   onLoadMore,
@@ -92,6 +95,7 @@ export function TrayList({
     estimateSize: (i) => (rows[i]?.kind === "group" ? GROUP_HEIGHT : HEADER_HEIGHT),
     getItemKey: (i) => rows[i]?.key ?? i,
     overscan: 8,
+    scrollMargin,
     initialRect: { width: 400, height: 640 },
   });
   const virtualItems = virtualizer.getVirtualItems();
@@ -245,7 +249,7 @@ export function TrayList({
               ref={virtualizer.measureElement}
               data-index={v.index}
               className={virtualRow}
-              style={{ transform: `translateY(${v.start}px)` }}
+              style={{ transform: `translateY(${v.start - scrollMargin}px)` }}
             >
               <div
                 role="listitem"

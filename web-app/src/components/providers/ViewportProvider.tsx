@@ -6,6 +6,7 @@ interface ViewportContextValue {
   isMobile: boolean;    // < 600px
   isFoldable: boolean;  // 600px–899px
   isInnerScreen: boolean; // >= 900px
+  isLandscape: boolean; // narrower than 900px and wider than tall (a phone on its side)
   hasFinePointer: boolean; // real mouse/trackpad attached (matchMedia: hover:hover and pointer:fine)
   isVirtualKeyboardOpen: boolean; // on-screen/virtual keyboard currently showing (visualViewport shrink)
 }
@@ -14,6 +15,7 @@ const ViewportContext = createContext<ViewportContextValue>({
   isMobile: true,
   isFoldable: false,
   isInnerScreen: false,
+  isLandscape: false,
   hasFinePointer: false,
   isVirtualKeyboardOpen: false,
 });
@@ -27,6 +29,7 @@ export function ViewportProvider({ children }: { children?: ReactNode }) {
     isMobile: true,
     isFoldable: false,
     isInnerScreen: false,
+    isLandscape: false,
     hasFinePointer: false,
     isVirtualKeyboardOpen: false,
   });
@@ -92,6 +95,7 @@ export function ViewportProvider({ children }: { children?: ReactNode }) {
         isMobile: w < 600,
         isFoldable: w >= 600 && w < 900,
         isInnerScreen: w >= 900,
+        isLandscape: w < 900 && w > window.innerHeight,
       }));
     };
     update();

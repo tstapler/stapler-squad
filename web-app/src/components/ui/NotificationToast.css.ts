@@ -137,7 +137,8 @@ export const typeLabel = style({
   letterSpacing: "0.5px",
   padding: "2px 6px",
   borderRadius: "4px",
-  background: `var(--priority-color, ${vars.color.primary})`,
+  // The darkening layer keeps white text at >= 4.5:1 on every priority colour (Axe color-contrast).
+  background: `linear-gradient(rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0.4)), var(--priority-color, ${vars.color.primary})`,
   color: vars.color.primaryText,
   whiteSpace: "nowrap",
   flexShrink: 0,
@@ -256,7 +257,8 @@ const baseActionButton = style({
 });
 
 export const viewButton = style([baseActionButton, {
-  background: `var(--priority-color, ${vars.color.primary})`,
+  // The darkening layer keeps white text at >= 4.5:1 on every priority colour (Axe color-contrast).
+  background: `linear-gradient(rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0.4)), var(--priority-color, ${vars.color.primary})`,
   color: vars.color.primaryText,
   selectors: {
     "&:hover": {
@@ -363,7 +365,8 @@ export const deckPlacement = styleVariants({
     deckBase,
     {
       bottom: "24px",
-      right: "calc(16px + var(--terminal-scrollbar-width, 0px))",
+      // Clear of the 44px tray handle on the right edge.
+      right: "calc(60px + var(--terminal-scrollbar-width, 0px))",
       width: "360px",
       maxHeight: "calc(var(--viewport-height, 100dvh) - 48px)",
     },
@@ -372,7 +375,8 @@ export const deckPlacement = styleVariants({
     deckBase,
     {
       top: "64px",
-      right: "calc(16px + var(--terminal-scrollbar-width, 0px))",
+      // Clear of the 44px tray handle on the right edge.
+      right: "calc(60px + var(--terminal-scrollbar-width, 0px))",
       width: "360px",
       maxHeight: "calc(var(--viewport-height, 100dvh) - 96px)",
     },
@@ -735,4 +739,14 @@ export const trayEntryBell = style({
   gap: "4px",
   borderRadius: "22px",
   selectors: { "&:hover": { background: vars.color.hoverBackground } },
+});
+
+/**
+ * While the tray is open the deck steps aside (it stays mounted, so the phone
+ * entry node is never removed): the tray shows the same notifications and a deck
+ * above it would cover the sheet's header and close button.
+ */
+export const deckBehindTray = style({
+  visibility: "hidden",
+  pointerEvents: "none",
 });

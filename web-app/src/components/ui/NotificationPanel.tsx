@@ -1,7 +1,7 @@
 // +feature: notification-tray
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
@@ -22,9 +22,10 @@ import {
   notificationTypeFilter,
   computeScopedMarkReadIds,
 } from "@/lib/utils/notificationMapping";
-import { readWhatChangedSeen, writeWhatChangedSeen } from "@/lib/utils/deckSettings";
+import { readTrayPinned, readWhatChangedSeen, writeTrayPinned, writeWhatChangedSeen } from "@/lib/utils/deckSettings";
 import { NotificationItem, AutoHandledSection } from "./NotificationItem";
 import { TrayConfirm } from "./TrayConfirm";
+import { TrayHandle } from "./TrayHandle";
 import { TrayList, type ListRow } from "./TrayList";
 import { TrayOverflowMenu, type TrayMenuItem } from "./TrayOverflowMenu";
 import { TraySettings, WHAT_CHANGED_TEXT, WhatChangedCard } from "./TraySettings";
@@ -109,6 +110,8 @@ export function NotificationPanel() {
     refreshHistory,
     clearHistoryByIds,
     showActionToast,
+    quietMode,
+    setQuietMode,
   } = useNotifications();
 
   const auditLog = useAuditLog();
@@ -117,11 +120,16 @@ export function NotificationPanel() {
   const { isOffline } = useNotificationConnectivity();
   const coarse = useCoarsePointer();
   const variant = selectTrayVariant(viewport);
-  const isSheet = v2 && variant === "bottom-sheet";
+  const isBottomSheet = v2 && variant === "bottom-sheet";
+  // Both phone sheets own a history entry for hardware Back; only the bottom sheet drags and expands.
+  const isSheet = v2 && (variant === "bottom-sheet" || variant === "top-sheet");
+  const isSideOverlay = v2 && variant === "side-overlay";
 
   const trayRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const headRef = useRef<HTMLDivElement>(null);
+  const [headHeight, setHeadHeight] = useState(0);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
@@ -131,6 +139,7 @@ export function NotificationPanel() {
   const [scrolled, setScrolled] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [whatChangedOpen, setWhatChangedOpen] = useState(() => !readWhatChangedSeen());
+  const [pinned, setPinned] = useState(false);
 
   const { resolvedApprovals, pendingApprovals, blockedApprovals, failedApprovals, resolveApproval } = useApprovalResolution({
     notificationHistory,
@@ -139,7 +148,18 @@ export function NotificationPanel() {
 
   useTrayFocus({ isOpen: v2 && isPanelOpen, trayRef, headingRef, coarse });
 
-  const modalSheet = isSheet && expanded && !coarse && isPanelOpen;
+  // Pin tray is read after mount so server and client render the same first frame.
+  useEffect(() => setPinned(readTrayPinned()), []);
+  const docked = isSideOverlay && pinned && isPanelOpen;
+  useEffect(() => {
+    if (!docked) return;
+    document.documentElement.dataset.trayPinned = "true";
+    return () => {
+      delete document.documentElement.dataset.trayPinned;
+    };
+  }, [docked]);
+
+  const modalSheet = isBottomSheet && expanded && !coarse && isPanelOpen;
 
   const close = useCallback(() => {
     if (isPanelOpen) togglePanel();
@@ -198,6 +218,18 @@ export function NotificationPanel() {
     showActionToast,
   });
   const { undoWindow, clearError } = bulk;
+
+  // The search bar, filters and cards scroll with the list (a peek sheet has little height to spare),
+  // so the virtualizer needs their height as its scroll margin.
+  useLayoutEffect(() => {
+    const head = headRef.current;
+    if (!head) return;
+    setHeadHeight(head.offsetHeight);
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => setHeadHeight(head.offsetHeight));
+    observer.observe(head);
+    return () => observer.disconnect();
+  }, [v2]);
 
   // Closing resets the sheet so it reopens at peek.
   useEffect(() => {
@@ -476,6 +508,7 @@ export function NotificationPanel() {
           }}
           offlineReason={offlineReason}
           scrollRef={scrollRef}
+          scrollMargin={headHeight}
           hasMore={historyHasMore}
           loading={historyLoading}
           onLoadMore={loadMoreHistory}
@@ -488,31 +521,79 @@ export function NotificationPanel() {
     );
   };
 
-  const panelClass = v2
-    ? `${trayVariant[isSheet ? "bottomSheet" : "sideOverlay"]}`
-    : `${panel} ${isPanelOpen ? panelOpen : ""}`;
+  const cardsBlock = (
+    <>
+{settingsOpen && <TraySettings />}
+{whatChangedOpen && (
+          <WhatChangedCard
+            onDismiss={() => {
+              writeWhatChangedSeen();
+              setWhatChangedOpen(false);
+            }}
+          />
+        )}
+
+    </>
+  );
+  const filterBlock = (
+    <>
+        <div className={filterBar}>
+          <input
+            className={searchInput}
+            type="search"
+            placeholder="Search notifications…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            aria-label="Search notifications"
+          />
+          <div className={filterPills} role="group" aria-label="Filter by type">
+            {(Object.keys(TYPE_FILTER_LABELS) as TypeFilter[]).map((filter) => (
+              <button
+                key={filter}
+                className={`${filterPill} ${typeFilter === filter ? filterPillActive : ""}`}
+                onClick={() => setTypeFilter(filter)}
+                aria-pressed={typeFilter === filter}
+              >
+                {TYPE_FILTER_LABELS[filter]}
+              </button>
+            ))}
+          </div>
+        </div>
+
+    </>
+  );
+
+  const variantClass = {
+    "side-overlay": trayVariant.sideOverlay,
+    "bottom-sheet": trayVariant.bottomSheet,
+    "top-sheet": trayVariant.topSheet,
+    "landscape-panel": trayVariant.landscapePanel,
+  }[variant];
+  const panelClass = v2 ? variantClass : `${panel} ${isPanelOpen ? panelOpen : ""}`;
 
   return (
     <>
       {/* Legacy overlay backdrop; the v2 tray has none. */}
       {!v2 && isPanelOpen && <div className={overlay} onClick={togglePanel} aria-hidden="true" />}
       {modalSheet && <div className={sheetScrim} data-testid="tray-scrim" onClick={close} aria-hidden="true" />}
+      <TrayHandle />
 
       <div
         ref={trayRef}
         id={TRAY_ID}
         className={panelClass}
         data-testid="notification-tray"
+        data-notification-tray={v2 ? "v2" : undefined}
         data-variant={v2 ? variant : "legacy"}
         data-state={isPanelOpen ? "open" : "closed"}
-        data-sheet={isSheet ? (expanded ? "expanded" : "peek") : undefined}
+        data-sheet={isBottomSheet ? (expanded ? "expanded" : "peek") : undefined}
         role={v2 && !modalSheet ? "complementary" : "dialog"}
         aria-label={v2 ? undefined : "Notification Panel"}
         aria-labelledby={v2 ? HEADING_ID : undefined}
         aria-modal={v2 ? (modalSheet ? true : undefined) : true}
         onKeyDown={trapTab}
       >
-        {isSheet && (
+        {isBottomSheet && (
           <div className={sheetGrabberRow}>
             <button
               type="button"
@@ -573,6 +654,33 @@ export function NotificationPanel() {
                   </button>
                 )}
               </>
+            )}
+            {isSideOverlay && (
+              <button
+                type="button"
+                className={trayButton}
+                aria-pressed={pinned}
+                aria-label={pinned ? "Unpin notifications tray" : "Pin notifications tray"}
+                data-testid="tray-pin"
+                onClick={() => {
+                  writeTrayPinned(!pinned);
+                  setPinned(!pinned);
+                }}
+              >
+                Pin
+              </button>
+            )}
+            {v2 && (
+              <button
+                type="button"
+                className={trayButton}
+                aria-pressed={quietMode}
+                data-testid="tray-quiet"
+                title="Quiet mode: send every non-urgent toast straight to the tray on this device"
+                onClick={() => setQuietMode(!quietMode)}
+              >
+                Quiet mode
+              </button>
             )}
             {v2 && <TrayOverflowMenu groups={menuGroups} />}
             <button
@@ -653,39 +761,7 @@ export function NotificationPanel() {
             onCancel={bulk.cancelConfirm}
           />
         )}
-        {v2 && settingsOpen && <TraySettings />}
-        {v2 && whatChangedOpen && (
-          <WhatChangedCard
-            onDismiss={() => {
-              writeWhatChangedSeen();
-              setWhatChangedOpen(false);
-            }}
-          />
-        )}
-
-        {/* Search + Filter Bar */}
-        <div className={filterBar}>
-          <input
-            className={searchInput}
-            type="search"
-            placeholder="Search notifications…"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            aria-label="Search notifications"
-          />
-          <div className={filterPills} role="group" aria-label="Filter by type">
-            {(Object.keys(TYPE_FILTER_LABELS) as TypeFilter[]).map((filter) => (
-              <button
-                key={filter}
-                className={`${filterPill} ${typeFilter === filter ? filterPillActive : ""}`}
-                onClick={() => setTypeFilter(filter)}
-                aria-pressed={typeFilter === filter}
-              >
-                {TYPE_FILTER_LABELS[filter]}
-              </button>
-            ))}
-          </div>
-        </div>
+        {!v2 && filterBlock}
 
         {/* Notification List */}
         <div
@@ -694,6 +770,12 @@ export function NotificationPanel() {
           data-testid="tray-scroll"
           onScroll={(e) => setScrolled((e.currentTarget as HTMLDivElement).scrollTop > 0)}
         >
+          {v2 && (
+            <div ref={headRef} data-testid="tray-scroll-head">
+              {cardsBlock}
+              {filterBlock}
+            </div>
+          )}
           {renderBody()}
         </div>
 

@@ -3,17 +3,26 @@
  * is shown. Kept free of React and the DOM so they are table-testable.
  */
 
-export type TrayVariant = "side-overlay" | "bottom-sheet";
+export type TrayVariant = "side-overlay" | "bottom-sheet" | "top-sheet" | "landscape-panel";
 
 export interface TrayViewport {
   /** Viewport is >= 900px wide. */
   isInnerScreen: boolean;
   isVirtualKeyboardOpen: boolean;
+  /** Narrower than 900px and wider than tall. */
+  isLandscape?: boolean;
 }
 
-/** Desktop gets a right-edge overlay; everything narrower gets the capped bottom sheet. */
+/**
+ * Desktop gets a right-edge overlay; a phone on its side a right panel; a phone with
+ * the soft keyboard open a top-anchored sheet (so the keyboard never covers it);
+ * everything else the bottom sheet.
+ */
 export function selectTrayVariant(viewport: TrayViewport): TrayVariant {
-  return viewport.isInnerScreen ? "side-overlay" : "bottom-sheet";
+  if (viewport.isInnerScreen) return "side-overlay";
+  if (viewport.isLandscape) return "landscape-panel";
+  if (viewport.isVirtualKeyboardOpen) return "top-sheet";
+  return "bottom-sheet";
 }
 
 /** What the single phone entry shows; `floating-bottom` is the no-terminal page only. */

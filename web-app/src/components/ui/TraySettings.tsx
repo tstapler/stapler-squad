@@ -12,7 +12,7 @@ import {
 import { trayButton, trayConfirm, traySelect, traySettings, traySettingsRow } from "./NotificationPanel.css";
 
 export const WHAT_CHANGED_TEXT =
-  "What changed: routine events from hidden sessions no longer notify, toasts are capped and the rest wait here, and Move all to tray never deletes anything.";
+  "What changed: routine events from hidden sessions no longer notify, toasts are capped and the rest wait here, and Move all to tray never deletes anything. Quiet mode in this header sends every non-urgent toast straight here.";
 
 const seconds = (ms: number) => `${ms / 1000}s`;
 

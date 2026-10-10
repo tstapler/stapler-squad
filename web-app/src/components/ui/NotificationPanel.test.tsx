@@ -83,6 +83,8 @@ const mockClearByIds = jest.fn();
 const mockShowActionToast = jest.fn();
 const mockLoadMore = jest.fn();
 const mockRefresh = jest.fn();
+const mockSetQuiet = jest.fn();
+let mockQuiet = false;
 jest.mock("@/lib/contexts/NotificationContext", () => ({
   useNotifications: () => ({
     notificationHistory: mockHistory,
@@ -101,6 +103,8 @@ jest.mock("@/lib/contexts/NotificationContext", () => ({
     historyLastUpdatedAt: mockLastUpdatedAt,
     loadMoreHistory: mockLoadMore,
     refreshHistory: mockRefresh,
+    quietMode: mockQuiet,
+    setQuietMode: mockSetQuiet,
   }),
 }));
 
@@ -257,7 +261,8 @@ function resetTrayState() {
   mockHasMore = false;
   mockConnectivity = { state: "connected", isOffline: false };
   mockFlags.notification_tray_v2 = true;
-  [mockMarkAsRead, mockClearByIds, mockShowActionToast, mockTogglePanel, mockLoadMore, mockRefresh].forEach((m) => m.mockReset());
+  mockQuiet = false;
+  [mockMarkAsRead, mockClearByIds, mockShowActionToast, mockTogglePanel, mockLoadMore, mockRefresh, mockSetQuiet].forEach((m) => m.mockReset());
   window.localStorage.clear();
 }
 
@@ -695,6 +700,68 @@ describe("tray (notification_tray_v2)", () => {
       fireEvent.pointerUp(grabber, { clientY: 180, pointerId: 1 });
       expect(tray).toHaveAttribute("data-sheet", "peek");
       (window as unknown as { PointerEvent: unknown }).PointerEvent = originalPointerEvent;
+    });
+  });
+
+  describe("Quiet mode toggle (Task 4.5b)", () => {
+    it("quiet_toggle_should_expose_aria_pressed_and_flip_the_setting_when_clicked", () => {
+      renderTray();
+      const toggle = screen.getByTestId("tray-quiet");
+      expect(toggle).toHaveAttribute("aria-pressed", "false");
+      fireEvent.click(toggle);
+      expect(mockSetQuiet).toHaveBeenCalledWith(true);
+    });
+
+    it("quiet_toggle_should_reflect_an_enabled_setting", () => {
+      mockQuiet = true;
+      renderTray();
+      expect(screen.getByTestId("tray-quiet")).toHaveAttribute("aria-pressed", "true");
+      fireEvent.click(screen.getByTestId("tray-quiet"));
+      expect(mockSetQuiet).toHaveBeenCalledWith(false);
+    });
+  });
+
+  describe("variants and Pin tray (Task 4.2e)", () => {
+    it("tray_should_pick_top_sheet_with_keyboard_open_and_landscape_panel_on_its_side", () => {
+      const { unmount } = renderTray({ isInnerScreen: false, isVirtualKeyboardOpen: true });
+      expect(screen.getByTestId("notification-tray")).toHaveAttribute("data-variant", "top-sheet");
+      // The top sheet has no grabber or expand control.
+      expect(screen.queryByTestId("tray-grabber")).toBeNull();
+      unmount();
+
+      renderTray({ isInnerScreen: false, isVirtualKeyboardOpen: false, isLandscape: true } as never);
+      expect(screen.getByTestId("notification-tray")).toHaveAttribute("data-variant", "landscape-panel");
+      expect(screen.queryByTestId("tray-expand")).toBeNull();
+    });
+
+    it("pin_should_be_an_aria_pressed_toggle_only_on_the_desktop_overlay_and_dock_the_open_tray", () => {
+      const { unmount } = renderTray({ isInnerScreen: false, isVirtualKeyboardOpen: false });
+      expect(screen.queryByTestId("tray-pin")).toBeNull();
+      unmount();
+
+      renderTray();
+      const pin = screen.getByTestId("tray-pin");
+      expect(pin).toHaveAttribute("aria-pressed", "false");
+      expect(pin).toHaveAccessibleName("Pin notifications tray");
+      expect(document.documentElement.dataset.trayPinned).toBeUndefined();
+
+      fireEvent.click(pin);
+      expect(screen.getByTestId("tray-pin")).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByTestId("tray-pin")).toHaveAccessibleName("Unpin notifications tray");
+      expect(document.documentElement.dataset.trayPinned).toBe("true");
+      expect(window.localStorage.getItem("ssq.notifications.trayPinned")).toBe("true");
+
+      fireEvent.click(screen.getByTestId("tray-pin"));
+      expect(document.documentElement.dataset.trayPinned).toBeUndefined();
+    });
+
+    it("pin_should_render_off_and_not_crash_when_localstorage_throws", () => {
+      const get = jest.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+        throw new Error("blocked");
+      });
+      renderTray();
+      expect(screen.getByTestId("tray-pin")).toHaveAttribute("aria-pressed", "false");
+      get.mockRestore();
     });
   });
 

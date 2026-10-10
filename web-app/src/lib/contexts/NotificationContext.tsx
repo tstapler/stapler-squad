@@ -29,6 +29,7 @@ import { isSessionViewed } from "@/lib/utils/viewedSessions";
 import { mergeBackendHistory, recordToHistoryItem } from "@/lib/utils/notificationHistoryMerge";
 import { createNotificationSyncChannel } from "@/lib/utils/broadcastChannel";
 import { markAcknowledged } from "@/lib/utils/notificationStorage";
+import { readQuietMode, writeQuietMode } from "@/lib/utils/deckSettings";
 import type { FailureReason } from "@/lib/utils/sessionFailure";
 
 export type { NotificationData, NotificationHistoryItem, NotificationContextValue };
@@ -126,6 +127,13 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
   historyRef.current = history;
   const trayV2Ref = useRef(false);
   trayV2Ref.current = useFeatureFlag(NOTIFICATION_TRAY_V2_FLAG);
+  const [quietMode, setQuietModeState] = useState(false);
+  const quietRef = useRef(false);
+  // Read after mount so server and client render the same first frame.
+  useEffect(() => {
+    quietRef.current = readQuietMode();
+    setQuietModeState(quietRef.current);
+  }, []);
 
   // Backend data is authoritative: runs on initial load and whenever refreshHistory()
   // is called (reconnect, approval_response), updating local items with the server version.
@@ -168,9 +176,10 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
 
     const addNotification: NotificationCommandsValue["addNotification"] = (notification) => {
       const next: NotificationData = { ...notification, id: notification.id ?? newNotificationId(), timestamp: Date.now() };
-      // Under the capped deck a non-pinned toast for the session already on screen
-      // adds nothing; the history row is still recorded.
-      const suppressed = trayV2Ref.current && !isPinned(next) && isSessionViewed(next.sessionId);
+      // Under the capped deck a non-pinned toast for the session already on screen adds
+      // nothing, and Quiet mode demotes every non-pinned toast; a pending decision always
+      // toasts. The history row is recorded either way.
+      const suppressed = trayV2Ref.current && !isPinned(next) && (quietRef.current || isSessionViewed(next.sessionId));
       if (!suppressed) dispatch({ type: "add", notification: next });
       addToHistory(next);
     };
@@ -239,6 +248,11 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
           type === "success" ? ACTION_TOAST_SUCCESS_MS : ACTION_TOAST_ERROR_MS,
           key,
         ),
+      setQuietMode: (on) => {
+        quietRef.current = on;
+        writeQuietMode(on);
+        setQuietModeState(on);
+      },
       togglePanel: () =>
         setIsPanelOpen((prev) => {
           if (!prev) auditLogRef.current.logNotificationPanelOpened();
@@ -359,9 +373,12 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
     return unsubscribe;
   }, [dispatch, timers]);
 
+  // Only one page of history is loaded, so the server's unread total is the floor: a badge
+  // for 120 unread must not read 49 just because that is what has been paged in.
+  const serverUnread = history.unreadCount ?? 0;
   const unreadCount = useMemo(
-    () => groupNotifications(notificationHistory.filter((n) => !n.isRead)).length,
-    [notificationHistory],
+    () => Math.max(groupNotifications(notificationHistory.filter((n) => !n.isRead)).length, serverUnread),
+    [notificationHistory, serverUnread],
   );
 
   const state = useMemo<NotificationStateValue>(
@@ -375,8 +392,9 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
       historyLastUpdatedAt: history.lastUpdatedAt,
       unreadCount,
       movedToTray: moved ? { count: moved.toasts.length } : null,
+      quietMode,
     }),
-    [notifications, notificationHistory, isPanelOpen, moved, history.loading, history.hasMore, history.error, history.lastUpdatedAt, unreadCount],
+    [notifications, notificationHistory, isPanelOpen, moved, quietMode, history.loading, history.hasMore, history.error, history.lastUpdatedAt, unreadCount],
   );
 
   return (

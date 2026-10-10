@@ -12,6 +12,7 @@ import {
   deckAction,
   undoBar,
   undoAction,
+  deckBehindTray,
 } from "@/components/ui/NotificationToast.css";
 import { useDeckViewport } from "@/lib/contexts/deckViewportContext";
 import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
@@ -189,7 +190,8 @@ interface DeckProps {
 
 const MOVE_ALL_LABEL = "Move all notifications to tray";
 const ANCHOR_POLL_MS = 250;
-const DESKTOP_DECK = { width: 360, inset: { right: 16, bottom: 24 }, fallbackHeight: 120 };
+// The right inset leaves room for the 44px tray handle on the edge.
+const DESKTOP_DECK = { width: 360, inset: { right: 60, bottom: 24 }, fallbackHeight: 120 };
 
 /**
  * Deck controls must not pull focus off the terminal: a mousedown on a button
@@ -261,7 +263,7 @@ function UndoBar({ count, timers, onUndo }: { count: number; timers: ToastTimerR
 function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
   const viewport = useDeckViewport();
   const { isOffline } = useNotificationConnectivity();
-  const { movedToTray, unreadCount } = useNotificationState();
+  const { movedToTray, unreadCount, isPanelOpen } = useNotificationState();
   const { moveAllToTray, undoMoveToTray } = useNotificationCommands();
   const cap = toastCapFor(viewport);
   const { visible, overflow, pinnedCount } = partitionToasts(toasts, cap);
@@ -310,7 +312,12 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
       : affordance;
 
   return (
-    <div ref={deckRef} className={deckPlacement[placement]} data-testid="toast-stack" data-placement={placement}>
+    <div
+      ref={deckRef}
+      className={`${deckPlacement[placement]} ${isPanelOpen ? deckBehindTray : ""}`}
+      data-testid="toast-stack"
+      data-placement={placement}
+    >
       {/* Desktop: one header slot, holding either the bulk control or its undo. */}
       {!onPhone && (undo ?? (showMoveAll ? <div className={deckHeader}>{moveAll}</div> : null))}
       {/* Phone: the single tray entry sits at the top anchor and never moves; the undo replaces its content in place. */}

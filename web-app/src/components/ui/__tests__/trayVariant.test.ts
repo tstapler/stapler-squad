@@ -4,7 +4,11 @@ describe("selectTrayVariant", () => {
   it.each([
     [{ isInnerScreen: true, isVirtualKeyboardOpen: false }, "side-overlay"],
     [{ isInnerScreen: false, isVirtualKeyboardOpen: false }, "bottom-sheet"],
-    [{ isInnerScreen: false, isVirtualKeyboardOpen: true }, "bottom-sheet"],
+    [{ isInnerScreen: false, isVirtualKeyboardOpen: true }, "top-sheet"],
+    [{ isInnerScreen: false, isVirtualKeyboardOpen: false, isLandscape: true }, "landscape-panel"],
+    // Landscape wins over the keyboard: the panel is a side column, never under the keyboard.
+    [{ isInnerScreen: false, isVirtualKeyboardOpen: true, isLandscape: true }, "landscape-panel"],
+    [{ isInnerScreen: true, isVirtualKeyboardOpen: true, isLandscape: true }, "side-overlay"],
   ] as const)("%j -> %s", (viewport, expected) => {
     expect(selectTrayVariant(viewport)).toBe(expected);
   });

@@ -84,6 +84,8 @@ export const unreadBadge = style({
   height: "1.5rem",
   padding: "0 0.5rem",
   backgroundColor: vars.color.error,
+  // Darkened so white text stays >= 4.5:1 on the error colour (Axe color-contrast).
+  backgroundImage: "linear-gradient(rgba(0, 0, 0, 0.25), rgba(0, 0, 0, 0.25))",
   color: "white",
   borderRadius: "12px",
   fontSize: "0.75rem",
@@ -257,6 +259,8 @@ export const typeLabel = style({
   padding: "2px 4px",
   borderRadius: "3px",
   color: "white",
+  // Darkens the inline priority colour so white text stays >= 4.5:1 (Axe color-contrast).
+  backgroundImage: "linear-gradient(rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0.4))",
   whiteSpace: "nowrap",
   flexShrink: 0,
 });
@@ -950,7 +954,8 @@ export const trayVariant = styleVariants({
       left: 0,
       right: 0,
       bottom: "max(var(--keyboard-height, 0px), var(--bottom-nav-height, 0px))",
-      height: "calc(var(--viewport-height, 100dvh) * 0.25)",
+      // 25% of the visual viewport, but never so short that the header leaves no list (small phones).
+      height: "max(calc(var(--viewport-height, 100dvh) * 0.25), 220px)",
       maxHeight: "var(--viewport-height, 100dvh)",
       transform: "translateY(100%)",
       borderTop: `1px solid ${vars.color.borderColor}`,
@@ -963,6 +968,48 @@ export const trayVariant = styleVariants({
       },
     },
   ],
+  /** Soft keyboard open on a phone: anchored under the tab row so the keyboard never covers it. */
+  topSheet: [
+    trayBase,
+    {
+      left: 0,
+      right: 0,
+      top: "max(var(--mobile-stack-top-offset, 0px), env(safe-area-inset-top, 0px))",
+      height: "calc(var(--viewport-height, 100dvh) * 0.5)",
+      maxHeight:
+        "calc(var(--viewport-height, 100dvh) - max(var(--mobile-stack-top-offset, 0px), env(safe-area-inset-top, 0px)))",
+      transform: "translateY(-100%)",
+      borderBottom: `1px solid ${vars.color.borderColor}`,
+      borderBottomLeftRadius: "12px",
+      borderBottomRightRadius: "12px",
+      selectors: { '&[data-state="open"]': { transform: "translateY(0)" } },
+    },
+  ],
+  /** Phone on its side: a right-hand column that honors the notch insets. */
+  landscapePanel: [
+    trayBase,
+    {
+      top: 0,
+      right: 0,
+      bottom: 0,
+      width: "min(360px, 50vw)",
+      paddingRight: "env(safe-area-inset-right, 0px)",
+      paddingTop: "env(safe-area-inset-top, 0px)",
+      paddingBottom: "env(safe-area-inset-bottom, 0px)",
+      transform: "translateX(100%)",
+      borderLeft: `1px solid ${vars.color.borderColor}`,
+      selectors: { '&[data-state="open"]': { transform: "translateX(0)" } },
+    },
+  ],
+});
+
+/**
+ * Pin tray (opt-in, >= 900px): the open tray becomes a layout column, so the
+ * terminal narrows instead of being covered. The one mode that resizes the
+ * terminal, and only once per toggle through the existing fit() path.
+ */
+globalStyle('html[data-tray-pinned="true"] #main-content', {
+  marginRight: "min(400px, 40vw)",
 });
 
 export const sheetScrim = style({
@@ -1211,6 +1258,10 @@ export const trayFooter = style({
   minHeight: "44px",
   borderTop: `1px solid ${vars.color.borderColor}`,
   flexShrink: 0,
+  selectors: {
+    // The peek sheet spends its height on the list; the footer link appears when expanded.
+    '[data-sheet="peek"] &': { display: "none" },
+  },
 });
 
 export const newPill = style({
@@ -1265,4 +1316,21 @@ export const trayHandleDot = style({
   borderRadius: "50%",
   background: vars.color.error,
   border: `2px solid ${vars.color.modalBackground}`,
+});
+
+/**
+ * Every control in the v2 tray meets the 44px target size (TS-6, TL-4, XA-2), including
+ * the row actions and filter pills shared with the Notifications page, without
+ * resizing them there.
+ */
+globalStyle('[data-notification-tray="v2"] :is(button, select, input[type="search"])', {
+  minHeight: "44px",
+  minWidth: "44px",
+});
+
+globalStyle('[data-notification-tray="v2"] a[href]', {
+  display: "inline-flex",
+  alignItems: "center",
+  minHeight: "44px",
+  minWidth: "44px",
 });

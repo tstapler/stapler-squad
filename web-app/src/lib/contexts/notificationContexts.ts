@@ -18,6 +18,8 @@ export interface NotificationStateValue {
   unreadCount: number;
   /** Set for the undo window after "Move all to tray"; toasts are off the deck, history untouched. */
   movedToTray: { count: number } | null;
+  /** Per-device Quiet mode: every non-pinned toast is demoted to the tray. Pending decisions still toast. */
+  quietMode: boolean;
 }
 
 /** Stable commands: identities never change, so command-only consumers never re-render on state. */
@@ -55,6 +57,7 @@ export interface NotificationCommandsValue {
     onAcknowledge?: () => void
   ) => void;
   togglePanel: () => void;
+  setQuietMode: (on: boolean) => void;
   /** Resolves false when the server write failed and the rows were rolled back. */
   markAsRead: (id: string | string[]) => void | Promise<boolean>;
   markAsReadBySessionId: (sessionId: string | string[]) => void;
@@ -110,6 +113,7 @@ const OUTSIDE_PROVIDER_STATE: NotificationStateValue = {
   historyLastUpdatedAt: null,
   unreadCount: 0,
   movedToTray: null,
+  quietMode: false,
 };
 
 /**
