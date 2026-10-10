@@ -94,14 +94,14 @@ interface TerminalOutputProps {
 // from xterm.js before the CSS container has finished laying out. The first
 // resize event often fires at e.g. 10x6 before layout is complete; caching or
 // connecting at those dimensions produces a garbled terminal on the next view.
-const MIN_COLS = 30;
-const MIN_ROWS = 10;
+export const MIN_COLS = 30;
+export const MIN_ROWS = 10;
 
 // xterm.js initializes with these default dimensions before FitAddon.fit() runs.
 // Cache entries equal to these values are treated as potentially corrupt (see Bug 1)
 // and are not used for fast-connect. The actual container size arrives via onResize.
-const XTERM_DEFAULT_COLS = 80;
-const XTERM_DEFAULT_ROWS = 24;
+export const XTERM_DEFAULT_COLS = 80;
+export const XTERM_DEFAULT_ROWS = 24;
 
 // Story 2.3 — coalescing window for InputDropBadge drop episodes (design/ux.md §2.2).
 const DROP_EPISODE_COALESCE_WINDOW_MS = 400;
