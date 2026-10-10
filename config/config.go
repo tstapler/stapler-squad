@@ -502,6 +502,13 @@ const StreamHubFeatureFlag = "stream_hub"
 // still required, same as the STAPLER_SQUAD_USE_TYMUX env var it replaces.
 const TymuxFeatureFlag = "tymux"
 
+// HiddenSessionGateFeatureFlag is the config.FeatureFlags key backing the
+// hidden-session delivery gate (server/deliverygate). Off by default: the gate
+// only counts what it would suppress until the legacy checks are removed.
+// Registration in the feature-flag service lands with the stats RPC; until then
+// it can be set only by editing config.json (picked up by the 5s FlagCache tick).
+const HiddenSessionGateFeatureFlag = "hidden_session_gate"
+
 // TriageGuidanceHaltFeatureFlag is the config.FeatureFlags key backing
 // EffectiveTriageGuidanceHaltEnabled — gates whether automated triage halts
 // and asks via a durable GuidanceRequest instead of guessing on a genuinely
