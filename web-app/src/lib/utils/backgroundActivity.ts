@@ -41,8 +41,20 @@ export interface BackgroundActivityView {
 
 type UIType = NotificationData["notificationType"];
 
-const FAILURE_TYPES: ReadonlySet<UIType> = new Set<UIType>(["error", "task_failed"]);
-const NEEDS_HUMAN_TYPES: ReadonlySet<UIType> = new Set<UIType>(["approval_needed", "question"]);
+// The C7 join's own classification (the types the gate lets through for hidden sessions).
+// Deliberately not a "pinned" set: pinning reads only the server's isPendingDecision.
+function kindOf(type: UIType): BackgroundRowKind | null {
+  switch (type) {
+    case "error":
+    case "task_failed":
+      return "failure";
+    case "approval_needed":
+    case "question":
+      return "needs_human";
+    default:
+      return null;
+  }
+}
 
 function statusLabelFor(type: UIType): BackgroundStatusLabel {
   if (type === "question") return "NEEDS INPUT";
@@ -92,9 +104,9 @@ export function selectBackgroundRows(
   const unreadBySession = new Map<Candidate, NotificationHistoryItem[]>();
   const failedToday = new Set<Candidate>();
   for (const record of history) {
-    const type = record.notificationType;
-    const isFailure = FAILURE_TYPES.has(type);
-    if (!isFailure && !NEEDS_HUMAN_TYPES.has(type)) continue;
+    const kind = kindOf(record.notificationType);
+    if (!kind) continue;
+    const isFailure = kind === "failure";
     const candidate = byKey.get(record.sessionId) ?? byKey.get(record.sessionName);
     if (!candidate) continue;
     if (isFailure && record.timestamp >= dayStart) failedToday.add(candidate);
@@ -106,7 +118,7 @@ export function selectBackgroundRows(
 
   const rows: BackgroundRow[] = [];
   for (const [candidate, records] of unreadBySession) {
-    const failures = records.filter((r) => FAILURE_TYPES.has(r.notificationType));
+    const failures = records.filter((r) => kindOf(r.notificationType) === "failure");
     const pool = failures.length > 0 ? failures : records;
     const primary = pool.reduce((a, b) => (b.timestamp > a.timestamp ? b : a));
     rows.push({
