@@ -1,3 +1,4 @@
+// +feature: notification-background-activity
 "use client";
 
 import Link from "next/link";

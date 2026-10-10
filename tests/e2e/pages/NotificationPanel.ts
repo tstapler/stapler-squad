@@ -146,6 +146,29 @@ export class NotificationTray {
   }
 }
 
+/** The tray's Background segment (Story 5.4). */
+export class BackgroundSegment {
+  readonly tab: Locator;
+  readonly notificationsTab: Locator;
+  readonly rows: Locator;
+  readonly summary: Locator;
+  readonly refresh: Locator;
+  readonly error: Locator;
+  readonly stale: Locator;
+  readonly emptyHealthy: Locator;
+
+  constructor(page: Page) {
+    this.tab = page.getByTestId('tray-tab-background');
+    this.notificationsTab = page.getByTestId('tray-tab-notifications');
+    this.rows = page.getByTestId('background-row');
+    this.summary = page.getByTestId('background-summary');
+    this.refresh = page.getByTestId('background-refresh');
+    this.error = page.getByTestId('background-error');
+    this.stale = page.getByTestId('background-stale');
+    this.emptyHealthy = page.getByTestId('background-empty-healthy');
+  }
+}
+
 /** Counts frames the page sends over any WebSocket; a terminal resize vote is one frame. */
 export async function installWebSocketSendCounter(page: Page): Promise<void> {
   await page.addInitScript(() => {

@@ -71,6 +71,17 @@ While the connection is stale or down, every server-changing control is disabled
 - **Tray settings** (overflow menu): the undo window (5, 8, 15 or 30 seconds) and the pinned-card collapse delay (8, 15, 30 seconds or never).
 - **What changed** is a one-time card on the first open after the upgrade; reopen it from the overflow menu.
 
+### Background activity
+
+The **Background** tab beside **Notifications** shows what hidden sessions (review, triage, diagnose, headless) are doing without un-hiding them.
+
+- A hidden session gets one row while its notification history holds an unread failure, error, approval or input record. Each row carries a "Background" chip, a status word (FAILED, NEEDS INPUT, NEEDS APPROVAL) and **View output**, which opens the read-only view and marks those records read, so the row leaves.
+- Routine completions are never rows: they are one line, "N completed OK today", with "N running" beneath it.
+- The tab badge counts rows only and never adds to the bell count; the same records are already counted there.
+- A row stays, labelled "Session no longer available", when its session was deleted while the failure was unread. This only works for sessions this tab has seen hidden: history records carry no hidden flag, so after a reload a deleted hidden session's failure stays an ordinary notification.
+- The list comes from `ListSessions{hidden_only: true}`: once when the tab is shown, then every 30 seconds, and never while the tab is collapsed, the tray is closed or the connection is down. **Refresh** polls now.
+- The join reads the history page the tray has loaded (50 rows), so a failure older than that does not appear until **Load more** brings it in.
+
 ### Hotkey
 
 No tray hotkey ships. `Alt+N` was a candidate, but a chord that xterm never sees needs real macOS and terminal checks first (Option+N is a dead key on macOS and `Alt+N` reaches the shell as `ESC n` elsewhere). Until that spike is run, use the handle, the header bell or the phone entry chip.
