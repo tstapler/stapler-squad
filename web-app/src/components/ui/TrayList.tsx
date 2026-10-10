@@ -118,7 +118,12 @@ export function TrayList({
   });
 
   const focusableKeys = rows.map((r) => r.key).filter((k) => k !== "nothing-needs-attention");
-  const tabbableKey = activeKey && focusableKeys.includes(activeKey) ? activeKey : focusableKeys[0];
+  // Under virtualization the active row can be outside the rendered window; the tab stop must stay on a mounted row.
+  const renderedKeys = new Set(virtualItems.map((v) => rows[v.index]?.key));
+  const tabbableKey =
+    activeKey && focusableKeys.includes(activeKey) && renderedKeys.has(activeKey)
+      ? activeKey
+      : (focusableKeys.find((k) => renderedKeys.has(k)) ?? focusableKeys[0]);
 
   const moveTo = (key: string | undefined) => {
     if (!key) return;
