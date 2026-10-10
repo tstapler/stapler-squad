@@ -527,7 +527,7 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, name string, e
 	if !hadKey {
 		previous = featureFlagDefault(name)
 	}
-	if audit != nil {
+	if audit.active() {
 		f.flagSeq++
 		audit.seq, audit.previous = f.flagSeq, previous
 	}
@@ -556,14 +556,14 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, name string, e
 		"feature", name, "enabled", enabled, "err", ctrlErr)
 	if rollbackErr := rollbackFlag(cfg, name, previous, hadKey); rollbackErr != nil {
 		log.Error("failed to roll back feature flag after controller error", "feature", name, "err", rollbackErr)
-		if audit != nil {
+		if audit.active() {
 			audit.outcome = flagOutcomeControllerFailed
 		}
 		return connect.NewError(connect.CodeInternal,
 			fmt.Errorf("failed to %s feature %q: %w (rollback also failed, disk state may be inconsistent: %v)",
 				verb, name, ctrlErr, rollbackErr))
 	}
-	if audit != nil {
+	if audit.active() {
 		audit.outcome = flagOutcomeRolledBack
 	}
 	f.notifyObserver(name)
@@ -578,7 +578,7 @@ func rollbackFlag(cfg *config.Config, name string, previous, hadKey bool) error 
 }
 
 func (f *FeatureFlagService) finishApplied(name string, audit *flagAudit) {
-	if audit != nil {
+	if audit.active() {
 		audit.outcome = flagOutcomeApplied
 	}
 	f.notifyObserver(name)

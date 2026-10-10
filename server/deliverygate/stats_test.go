@@ -269,3 +269,21 @@ func TestStats_ShouldMergeByHourStartSummingCountersAndClampingSecondsTo3600_Whe
 		t.Fatalf("suppressed after merge = %d, want 2", suppressed)
 	}
 }
+
+func TestGate_ShouldWarnEnabledWithoutStats_WhenHandEditedOnWhileNoWriterRuns(t *testing.T) {
+	t.Parallel()
+	g, _, recs, flags := newTestGate(false, hiddenReview)
+	flags.set(true)
+	g.Flags().Reload() // a ticker read picks up a hand edit
+	if got := countMsg(recs(), "delivery_gate_enabled_without_stats"); got != 1 {
+		t.Fatalf("WARN count = %d, want 1", got)
+	}
+
+	g2, _, recs2, flags2 := newTestGate(false, hiddenReview)
+	g2.Stats().SetWriterRunning(true)
+	flags2.set(true)
+	g2.Flags().Reload()
+	if got := countMsg(recs2(), "delivery_gate_enabled_without_stats"); got != 0 {
+		t.Fatalf("WARN with a running writer = %d, want 0", got)
+	}
+}

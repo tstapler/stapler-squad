@@ -35,6 +35,9 @@ func flagRequestFields(ctx context.Context, peer string, header http.Header) Aud
 	return l
 }
 
+// active reports whether this flip is audited (a sink and a policy exist).
+func (a *flagAudit) active() bool { return a != nil && a.sink != nil }
+
 func boolRef(b bool) *bool { return &b }
 
 // begin writes the durable `requested` line of a loosening flip before the
@@ -44,7 +47,7 @@ func boolRef(b bool) *bool { return &b }
 func (f *FeatureFlagService) auditBegin(ctx context.Context, name string, enabled bool, fields AuditLine) (*flagAudit, error) {
 	policy, audited := f.auditPolicies[name]
 	if f.audit == nil || !audited {
-		return nil, nil
+		return &flagAudit{}, nil // inactive: no sink or no policy for this flag
 	}
 	a := &flagAudit{sink: f.audit, enabled: enabled, outcome: flagOutcomePersistFailed}
 	a.base = fields
@@ -67,7 +70,7 @@ func (f *FeatureFlagService) auditBegin(ctx context.Context, name string, enable
 // finish enqueues the `result` line. It is deferred before the update mutex is
 // taken, so it runs after the unlock and never lengthens the critical section.
 func (a *flagAudit) finish() {
-	if a == nil {
+	if !a.active() {
 		return
 	}
 	l := a.base

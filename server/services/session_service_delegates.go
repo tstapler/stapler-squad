@@ -297,8 +297,8 @@ func (s *SessionService) PruneHiddenSessionNotifications(
 	return s.notificationSvc.PruneHiddenSessionNotifications(ctx, req)
 }
 
-// +api: notification:gate-stats
 // GetDeliveryGateStats reports the hidden-session delivery gate's counters and soak evidence.
+// +api: notification:gate-stats
 func (s *SessionService) GetDeliveryGateStats(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetDeliveryGateStatsRequest],
