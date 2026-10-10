@@ -1538,3 +1538,60 @@ func TestClear_ShouldDeleteUnreadAutoRemediatingWarningAndKeepUnstampedWarning_W
 		t.Error("unstamped unread WARNING must be kept")
 	}
 }
+
+// T-PR-11: ClearByIDs deletes only the listed ids that are not pending decisions
+// and returns the listed pending ones as kept; unlisted rows are untouched.
+func TestClearByIDs_ShouldDeleteOnlyReadOrNonActionableAndReturnKept_WhenPendingIdIncluded(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	const warning = int32(8)
+	approval, info := notifTypeApprovalNeededTest, notifTypeTaskCompleteTest
+
+	pendingWarning := makeRecord("pending-warning", "s1", warning)
+	pendingApproval := makeRecord("pending-approval", "s2", approval)
+	informational := makeRecord("info", "s3", info)
+	remediating := makeRecord("remediating", "s4", warning)
+	remediating.Metadata = map[string]string{events.MetadataKeyAutoRemediating: "true"}
+	unlisted := makeRecord("unlisted", "s5", info)
+	for _, r := range []*NotificationRecord{pendingWarning, pendingApproval, informational, remediating, unlisted} {
+		if err := store.Append(r); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+
+	deleted, kept, err := store.ClearByIDs([]string{"pending-warning", "pending-approval", "info", "remediating", "missing"})
+	if err != nil {
+		t.Fatalf("ClearByIDs: %v", err)
+	}
+	if deleted != 2 {
+		t.Errorf("deleted = %d, want 2 (info and the auto-remediating warning)", deleted)
+	}
+	if len(kept) != 2 || kept[0] != "pending-warning" || kept[1] != "pending-approval" {
+		t.Errorf("kept = %v, want [pending-warning pending-approval]", kept)
+	}
+	for _, id := range []string{"pending-warning", "pending-approval", "unlisted"} {
+		if _, ok := store.GetByID(id); !ok {
+			t.Errorf("%s must survive ClearByIDs", id)
+		}
+	}
+	for _, id := range []string{"info", "remediating"} {
+		if _, ok := store.GetByID(id); ok {
+			t.Errorf("%s should have been deleted", id)
+		}
+	}
+}
+
+func TestClearByIDs_ShouldBeNoOp_WhenIdsEmpty(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	if err := store.Append(makeRecord("a", "s1", notifTypeTaskCompleteTest)); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	deleted, kept, err := store.ClearByIDs(nil)
+	if err != nil || deleted != 0 || len(kept) != 0 {
+		t.Fatalf("ClearByIDs(nil) = %d, %v, %v; want 0, nil, nil", deleted, kept, err)
+	}
+	if _, ok := store.GetByID("a"); !ok {
+		t.Error("an empty id list must delete nothing")
+	}
+}

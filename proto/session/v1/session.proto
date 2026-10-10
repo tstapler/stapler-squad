@@ -1816,7 +1816,8 @@ message ClearNotificationHistoryRequest {
   optional string before_timestamp = 1;
 
   // Clear exactly these notification ids (pending decisions among them are
-  // kept). Not yet honored: the server returns Unimplemented while this is set.
+  // kept and listed in the response's kept_ids). Takes precedence over
+  // before_timestamp.
   repeated string notification_ids = 2;
 }
 
@@ -1938,6 +1939,9 @@ message GetDeliveryGateStatsResponse {
 message ClearNotificationHistoryResponse {
   bool success = 1;
   int32 cleared_count = 2;
+  // Requested ids the server refused to delete because they are still pending
+  // decisions. Always empty for the before_timestamp / clear-everything paths.
+  repeated string kept_ids = 3;
 }
 
 // ============================================================================

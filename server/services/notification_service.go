@@ -325,15 +325,24 @@ func (ns *NotificationService) ClearNotificationHistory(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ClearNotificationHistoryRequest],
 ) (*connect.Response[sessionv1.ClearNotificationHistoryResponse], error) {
-	if len(req.Msg.NotificationIds) > 0 {
-		return nil, connect.NewError(connect.CodeUnimplemented,
-			errors.New("clearing by notification_ids is not implemented yet"))
-	}
-
 	if ns.notificationStore == nil {
 		return connect.NewResponse(&sessionv1.ClearNotificationHistoryResponse{
 			Success:      true,
 			ClearedCount: 0,
+		}), nil
+	}
+
+	if len(req.Msg.NotificationIds) > 0 {
+		deleted, kept, err := ns.notificationStore.ClearByIDs(req.Msg.NotificationIds)
+		if err != nil {
+			log.Error("[NotificationHistory] failed to clear notifications by id", "err", err)
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		// #nosec G115 -- count is a local notification-store row count, far below int32 range.
+		return connect.NewResponse(&sessionv1.ClearNotificationHistoryResponse{
+			Success:      true,
+			ClearedCount: int32(deleted),
+			KeptIds:      kept,
 		}), nil
 	}
 

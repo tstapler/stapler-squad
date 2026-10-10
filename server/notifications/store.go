@@ -455,6 +455,50 @@ func (s *NotificationHistoryStore) Clear(before *time.Time) (int, error) {
 	return cleared, nil
 }
 
+// ClearByIDs deletes the listed records except those that are still pending
+// decisions (ADR-008), which are returned in kept in request order. Unknown ids
+// are ignored; records not listed are never touched.
+func (s *NotificationHistoryStore) ClearByIDs(ids []string) (deleted int, kept []string, err error) {
+	if len(ids) == 0 {
+		return 0, nil, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	byID := make(map[string]*NotificationRecord, len(s.records))
+	for _, r := range s.records {
+		byID[r.ID] = r
+	}
+	remove := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		r, ok := byID[id]
+		if !ok {
+			continue
+		}
+		if IsPendingDecision(r.NotificationType, r.Metadata, r.IsRead) {
+			kept = append(kept, id)
+			continue
+		}
+		remove[id] = struct{}{}
+	}
+	if len(remove) == 0 {
+		return 0, kept, nil
+	}
+
+	remaining := s.records[:0:0]
+	for _, r := range s.records {
+		if _, drop := remove[r.ID]; !drop {
+			remaining = append(remaining, r)
+		}
+	}
+	s.records = remaining
+	deleted = len(remove)
+	if err := s.saveToDisk(); err != nil {
+		return deleted, kept, err
+	}
+	return deleted, kept, nil
+}
+
 // SetSessionExistenceLookup registers the batch-fetch function used by the orphan-pruning
 // sweep in enforceRetention to determine which session IDs currently exist. Pass nil to
 // disable orphan pruning.

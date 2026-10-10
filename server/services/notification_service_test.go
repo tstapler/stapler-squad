@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -426,13 +427,29 @@ func TestRecordToProto_ShouldSetIsPendingDecision_WhenUnreadWarningInfoAndAutoRe
 	require.False(t, recordToProto(read).IsPendingDecision)
 }
 
-// A client that sends notification_ids before Story 4.4 implements ClearByIDs
-// must not fall through to "clear everything".
-func TestClearNotificationHistory_ShouldReturnUnimplemented_WhenNotificationIdsSetBeforeClearByIDs(t *testing.T) {
+// T-PR-13: a request listing a pending decision deletes the rest and reports
+// the pending id in kept_ids; the pending row survives.
+func TestClearNotificationHistory_ShouldReturnKeptIds_WhenRequestListsPendingDecision(t *testing.T) {
 	t.Parallel()
-	ns := &NotificationService{}
-	_, err := ns.ClearNotificationHistory(context.Background(),
-		connect.NewRequest(&sessionv1.ClearNotificationHistoryRequest{NotificationIds: []string{"a"}}))
-	require.Error(t, err)
-	require.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+	store, err := notifications.NewNotificationHistoryStore(filepath.Join(t.TempDir(), "notifications.json"))
+	require.NoError(t, err)
+	for _, r := range []*notifications.NotificationRecord{
+		{ID: "pending", SessionID: "s1", NotificationType: int32(sessionv1.NotificationType_NOTIFICATION_TYPE_APPROVAL_NEEDED), CreatedAt: time.Now()},
+		{ID: "info-1", SessionID: "s2", NotificationType: int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO), CreatedAt: time.Now()},
+		{ID: "info-2", SessionID: "s3", NotificationType: int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO), CreatedAt: time.Now()},
+	} {
+		require.NoError(t, store.Append(r))
+	}
+	ns := &NotificationService{notificationStore: store}
+
+	resp, err := ns.ClearNotificationHistory(context.Background(),
+		connect.NewRequest(&sessionv1.ClearNotificationHistoryRequest{NotificationIds: []string{"pending", "info-1"}}))
+	require.NoError(t, err)
+	require.True(t, resp.Msg.Success)
+	require.EqualValues(t, 1, resp.Msg.ClearedCount)
+	require.Equal(t, []string{"pending"}, resp.Msg.KeptIds)
+	_, ok := store.GetByID("pending")
+	require.True(t, ok)
+	_, ok = store.GetByID("info-2")
+	require.True(t, ok, "an unlisted row must survive")
 }
