@@ -91,6 +91,8 @@ describe("ThemeProvider user themes", () => {
       </ThemeProvider>,
     );
     await waitFor(() => expect(screen.getByTestId("theme").textContent).toBe("clean"));
+    expect(localStorage.getItem("stapler-theme")).toBe("clean");
+    expect(localStorage.getItem("stapler-theme-custom")).toBeNull();
   });
 
   it("caches the applied custom theme for the FOUC script", async () => {

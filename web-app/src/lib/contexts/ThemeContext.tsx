@@ -139,6 +139,12 @@ export function ThemeProvider({ children, initialTheme = "clean" }: ThemeProvide
           themeRef.current = initialTheme;
           applyTheme(initialTheme, []);
           setThemeState(initialTheme);
+          try {
+            localStorage.setItem(STORAGE_KEY, initialTheme);
+            localStorage.removeItem(CUSTOM_CACHE_KEY);
+          } catch {
+            // ignore
+          }
         }
       })
       .catch(() => {
