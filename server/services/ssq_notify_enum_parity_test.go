@@ -2,7 +2,9 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -28,9 +30,10 @@ func ssqNotifyDryRun(t *testing.T, typeName string, extra ...string) map[string]
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Skip("jq not installed; ssq-notify requires it")
 	}
-	args := []string{ssqNotifyScript(t), "--dry-run", "-s", "sess", "-t", "title", "--type", typeName}
+	args := make([]string, 0, 8+len(extra))
+	args = append(args, ssqNotifyScript(t), "--dry-run", "-s", "sess", "-t", "title", "--type", typeName)
 	args = append(args, extra...)
-	cmd := exec.Command("bash", args...)
+	cmd := safeexec.CommandContext(context.Background(), "bash", args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {

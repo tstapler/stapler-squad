@@ -2,6 +2,8 @@ package services
 
 import (
 	"bytes"
+	"context"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,7 +30,7 @@ func runHookHandler(t *testing.T, hookType, input string) []string {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command("bash", handler, hookType)
+	cmd := safeexec.CommandContext(context.Background(), "bash", handler, hookType)
 	cmd.Stdin = strings.NewReader(input)
 	cmd.Env = append(os.Environ(), "CS_NOTIFY="+fake, "CS_SESSION_ID=hook-test-session", "CS_HOOKS_DISABLED=false", "TMUX=")
 	cmd.Dir = dir
