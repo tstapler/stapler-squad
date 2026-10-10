@@ -131,6 +131,7 @@ func TestGuardBypass_ShouldRefuseWithZeroWrites_WhenTheAuditSinkIsDown_AndStillS
 	review := e.addSession("down-review", true, session.SessionRoleReview)
 	diag := e.addSession("down-diagnose", true, session.SessionRoleDiagnose)
 	e.setGuards(false)
+	e.sink.Close() // drains the flag-change result line before the fault is injected
 	e.mfs.failWrite = errDiskFull
 
 	err := e.steer(e.localCtx(), diag.inst.Title, "bypass")
