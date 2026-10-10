@@ -61,6 +61,36 @@ new-delivery volume from `legacy_hidden_suppressed{class=failure|needs_human}`;
 the before/after delivery table. If the binary was ever rolled back, re-verify
 the per-kind overrides (an older binary's `SaveConfig` drops them).
 
+**Stage 4: prune existing hidden-session rows (operator-run, after PR 2b has
+soaked).** `PruneHiddenSessionNotifications` removes stored routine rows of
+hidden sessions. It is never run by a restart hook and has no marker key; it is
+keyed on current state, so re-running removes nothing more. It has no MCP tool.
+
+1. Confirm the index is seeded: the RPC returns `FailedPrecondition` until the
+   server has finished startup.
+2. Dry run (the default; no `apply`). The dry run is part of the guarded
+   procedure: a Host outside the allowed set gets the same 403 as an apply.
+   `curl -sS -X POST -H 'Content-Type: application/json' -d '{}' \
+   http://localhost:8543/api/session.v1.SessionService/PruneHiddenSessionNotifications`
+3. Review `notificationIds`, `keptUnreadActionable` and `undeterminable`, and the
+   INFO log lines `prune dry run` and `prune group` in
+   `~/.stapler-squad/logs/staplersquad.log`: rows are grouped by resolved
+   session title and kind, with the id form each matched by (`uuid`, `title`,
+   `tmux`, `alias`, `tombstone`) and `matched_by_alias` where only a rename
+   alias or tombstone matched.
+4. Apply: `-d '{"apply": true}'`. Add `"includeUnreadActionable": true` only
+   to also remove unread pending decisions of hidden sessions (the default
+   keeps them).
+5. The apply writes `kind=prune` `requested` and `result` lines to the audit
+   file before and after it deletes (a failed append means nothing is
+   deleted), and returns `backupPath`.
+6. Roll back by copying the `notifications.json.pre-prune-<UTC>.bak` file named
+   in `backupPath` over `notifications.json` while the service is stopped.
+
+Rows whose session is unresolved, not a session (system ids), or matches both a
+hidden and a visible session are always kept and counted as `undeterminable`,
+which includes rows of sessions deleted before the gate shipped.
+
 ## Policy
 
 A hidden session notifies only for failures and needs-human events. The policy
@@ -272,6 +302,12 @@ rotated at 5 MiB, 3 files kept; created on the first flip). Lines carry `ts`,
   `hidden_session_audit_degraded_total`.
 - A `requested` line with no `result` is indeterminate: read the persisted
   config (`GetFeatureFlags`) for the actual state, never the log.
+- A prune apply writes `kind=prune` lines (a durable `requested` line before
+  any row is deleted, a `result` line with `outcome` `applied` or `failed`
+  after) carrying `matched_count`, `include_unread_actionable`, `counts`
+  (`routine`, `unread_actionable`, `kept_unread_actionable`, `undeterminable`,
+  `visible`), the request facts above and `peer_loopback`/`proxied`, and no row
+  content, title or session id. A dry run writes no audit line.
 
 ## Crash notification
 

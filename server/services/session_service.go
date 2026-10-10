@@ -1080,6 +1080,7 @@ func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
 	ff.AddStatusDetailSource(config.HiddenSessionGateFeatureFlag, kindOffStatusDetail)
 	sink := NewAuditSink(config.GetConfigDir,
 		WithAuditDegradedCounter(func(mode string) { gate.Metrics().Add(deliverygate.CounterAuditDegraded, mode) }))
+	s.notificationSvc.SetAuditSink(sink)
 	ff.SetAudit(sink, map[string]FlagAuditPolicy{
 		config.HiddenSessionGateFeatureFlag: {}, // every gate flip takes the non-blocking path
 		terminalWriteLeaseFlagName:          terminalWriteLeaseAuditPolicy,

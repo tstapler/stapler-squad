@@ -35,8 +35,11 @@ const (
 	// write and a `result` line after it.
 	auditKindBacklogSteer = "backlog_steer"
 	auditKindGuardBypass  = "guard_bypass"
-	auditPhaseRequest     = "requested"
-	auditPhaseResult      = "result"
+	// auditKindPrune is an operator-triggered history prune apply (plan Story
+	// 2.7): a `requested` line before any row is deleted, a `result` line after.
+	auditKindPrune    = "prune"
+	auditPhaseRequest = "requested"
+	auditPhaseResult  = "result"
 )
 
 // Degraded-mode label values of hidden_session_audit_degraded_total.
@@ -94,6 +97,12 @@ type AuditLine struct {
 	MessagePreview string `json:"message_preview,omitempty"`
 	PeerLoopback   *bool  `json:"peer_loopback,omitempty"`
 	Proxied        *bool  `json:"proxied,omitempty"`
+
+	// Prune lines (kind prune): counts only, never row content, a title or a
+	// session id.
+	MatchedCount            *int           `json:"matched_count,omitempty"`
+	IncludeUnreadActionable *bool          `json:"include_unread_actionable,omitempty"`
+	Counts                  map[string]int `json:"counts,omitempty"`
 }
 
 // AuditSink appends to <config dir>/audit/hidden-session-replies.jsonl. It does

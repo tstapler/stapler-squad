@@ -37,6 +37,8 @@ type NotificationService struct {
 	storage                 session.InstanceStore
 	deliveryGate            *deliverygate.Gate // optional: counters for legacy checks and unversioned requests
 	statsFileStatus         func() deliverygate.StatsFileStatus
+	auditSink               *AuditSink       // optional: prune apply refuses without it
+	pruneNow                func() time.Time // injected clock; nil means time.Now
 }
 
 // SetDeliveryGate wires the delivery gate used for legacy-check and
@@ -367,16 +369,6 @@ func (ns *NotificationService) ClearNotificationHistory(
 		Success:      true,
 		ClearedCount: int32(count),
 	}), nil
-}
-
-// PruneHiddenSessionNotifications is a contract-PR stub; the handler lands with
-// the prune story.
-func (ns *NotificationService) PruneHiddenSessionNotifications(
-	_ context.Context,
-	_ *connect.Request[sessionv1.PruneHiddenSessionNotificationsRequest],
-) (*connect.Response[sessionv1.PruneHiddenSessionNotificationsResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented,
-		errors.New("PruneHiddenSessionNotifications is not implemented yet"))
 }
 
 // SetGateStatsFileStatus wires the persisted stats file's status (loaded,

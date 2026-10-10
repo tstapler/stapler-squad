@@ -229,12 +229,10 @@ func TestRequestRecord_ShouldCarryRawListenerAuthModeHostOriginAndProxiedOnBothC
 	assert.Equal(t, "evil.example", rebinding.Host)
 }
 
-const pruneProcedurePath = "/api" + sessionv1connect.SessionServicePruneHiddenSessionNotificationsProcedure
-
-// rebindingSet adds a stand-in rebinding-profile member; the real members
-// (Prune, Reply) register in later PRs.
+// rebindingSet is the production set plus a stand-in for Reply, which
+// registers in a later PR; Prune is already a member of guardedProcedures.
 func rebindingSet() map[string]middleware.GuardProfile {
-	set := map[string]middleware.GuardProfile{pruneProcedurePath: middleware.ProfileRebinding}
+	set := map[string]middleware.GuardProfile{}
 	for p, prof := range guardedProcedures {
 		set[p] = prof
 	}
@@ -314,11 +312,10 @@ func TestLocalWriteGuard_ShouldKeepProbeProgramByteForByteAndListOnlyRegisteredP
 	assert.Equal(t, map[string]middleware.GuardProfile{
 		probeProcedurePath: middleware.ProfileProbe,
 		nudgeProcedurePath: middleware.ProfileProbe,
+		pruneProcedurePath: middleware.ProfileRebinding,
 	}, guardedProcedures)
 	_, hasClear := guardedProcedures["/api"+sessionv1connect.SessionServiceClearNotificationHistoryProcedure]
 	assert.False(t, hasClear)
-	_, hasPrune := guardedProcedures[pruneProcedurePath]
-	assert.False(t, hasPrune, "Prune registers in Task 2.7c")
 }
 
 // T-RP-67: path variants of a guarded procedure are not served without the guard.
@@ -381,4 +378,19 @@ func TestReplaceVerifiedHostnames_ShouldNormalizeDropLiteralsAndLocalhostAndRepl
 	srv.ReplaceVerifiedHostnames([]string{"c.lan"})
 	assert.Equal(t, []string{"c.lan"}, srv.GetVerifiedHostnames(), "not add-only")
 	assert.Empty(t, srv.GetHostnames(), "the detected set is a separate store")
+}
+
+// T-PR-16 (guard half): the production set guards Prune whole-procedure, so a
+// rebinding Host or foreign Origin is refused before the handler, dry run or
+// apply alike; a loopback caller on a wildcard bind passes (no LoopbackBound).
+func TestLocalChain_ShouldRefuseRebindingHostAndForeignOriginOnPrune_WithTheProductionGuardSet(t *testing.T) {
+	for _, addr := range []string{"localhost:8543", "0.0.0.0:8543"} {
+		srv, reached := newRebindingTestServer(t, addr)
+		chain := srv.localChain()
+		assert.Equal(t, http.StatusForbidden, postPath(chain, pruneProcedurePath, "evil.example:8543", ""), addr)
+		assert.Equal(t, http.StatusForbidden, postPath(chain, pruneProcedurePath, "localhost:8543", "https://evil.example"), addr)
+		assert.Zero(t, *reached, addr)
+		assert.Equal(t, http.StatusOK, postPath(chain, pruneProcedurePath, "localhost:8543", ""), addr)
+		assert.Equal(t, 1, *reached, addr)
+	}
 }

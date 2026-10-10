@@ -132,23 +132,54 @@ func (i *VisibilityIndex) Seeded() bool { return i.seeded.Load() }
 // Len is the number of identity keys (diagnostics, benchmarks).
 func (i *VisibilityIndex) Len() int { return len(i.state.Load().keys) }
 
+// MatchForm names the identity form a lookup key matched.
+type MatchForm string
+
+// The forms a stored session_id can take: producers pass a UUID, a title or the
+// tmux session name; a renamed or deleted hidden session still resolves through
+// its alias or tombstone.
+const (
+	FormUUID      MatchForm = "uuid"
+	FormTitle     MatchForm = "title"
+	FormTmux      MatchForm = "tmux"
+	FormAlias     MatchForm = "alias"
+	FormTombstone MatchForm = "tombstone"
+)
+
 // Lookup resolves one identity string: live entry, then rename alias, then tombstone.
 func (i *VisibilityIndex) Lookup(key string) (Entry, bool) {
+	e, _, ok := i.LookupForm(key)
+	return e, ok
+}
+
+// LookupForm is Lookup that also reports which identity form matched.
+func (i *VisibilityIndex) LookupForm(key string) (Entry, MatchForm, bool) {
 	if key == "" {
-		return Entry{}, false
+		return Entry{}, "", false
 	}
 	s := i.state.Load()
 	if e, ok := s.keys[key]; ok {
-		return *e, true
+		return *e, liveForm(e, key), true
 	}
 	now := i.now()
 	if a, ok := s.aliases[key]; ok && now.Before(a.expires) {
-		return *a.entry, true
+		return *a.entry, FormAlias, true
 	}
 	if t, ok := s.tombs[key]; ok && now.Before(t.expires) {
-		return Entry{Hidden: true, Kind: t.kind}, true
+		return Entry{Hidden: true, Kind: t.kind}, FormTombstone, true
 	}
-	return Entry{}, false
+	return Entry{}, "", false
+}
+
+func liveForm(e *Entry, key string) MatchForm {
+	switch key {
+	case e.UUID:
+		return FormUUID
+	case e.Title:
+		return FormTitle
+	default:
+		return FormTmux
+	}
 }
 
 // Upsert adds or replaces a session. A visible entry evicts any tombstone or

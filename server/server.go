@@ -1777,11 +1777,16 @@ const probeProcedurePath = "/api" + sessionv1connect.SessionServiceProbeProgramP
 // NudgeSessionForPR, guarded like ProbeProgram on the unauthenticated listener.
 const nudgeProcedurePath = "/api" + sessionv1connect.GitHubUserServiceNudgeSessionForPRProcedure
 
+// pruneProcedurePath is the full request path of PruneHiddenSessionNotifications,
+// guarded whole (dry run and apply) with the rebinding profile.
+const pruneProcedurePath = "/api" + sessionv1connect.SessionServicePruneHiddenSessionNotificationsProcedure
+
 // guardedProcedures is the LocalWriteGuard set. A new member names its profile;
 // ProbeProgram and the nudge keep the original probe verdict byte for byte.
 var guardedProcedures = map[string]middleware.GuardProfile{
 	probeProcedurePath: middleware.ProfileProbe,
 	nudgeProcedurePath: middleware.ProfileProbe,
+	pruneProcedurePath: middleware.ProfileRebinding,
 }
 
 // localChain is the :8543 middleware chain (inside otelhttp):

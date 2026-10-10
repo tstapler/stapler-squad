@@ -400,17 +400,6 @@ func TestValidateLocalhostOrigin(t *testing.T) {
 	}
 }
 
-// T-CT-03: the contract-PR stub is wired through SessionService and refuses
-// until Story 2.7 implements it.
-func TestStubs_ShouldReturnUnimplemented_WhenPruneOrReplyCalledBeforeImplementation(t *testing.T) {
-	t.Parallel()
-	svc := &SessionService{notificationSvc: &NotificationService{}}
-	_, err := svc.PruneHiddenSessionNotifications(context.Background(),
-		connect.NewRequest(&sessionv1.PruneHiddenSessionNotificationsRequest{}))
-	require.Error(t, err)
-	require.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
-}
-
 // The history record reports the same pending-decision answer as the predicate.
 func TestRecordToProto_ShouldSetIsPendingDecision_WhenUnreadWarningInfoAndAutoRemediatingWarning(t *testing.T) {
 	t.Parallel()

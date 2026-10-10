@@ -289,7 +289,9 @@ func (s *SessionService) ClearNotificationHistory(
 	return s.notificationSvc.ClearNotificationHistory(ctx, req)
 }
 
-// PruneHiddenSessionNotifications removes stored notifications of hidden sessions (stub).
+// PruneHiddenSessionNotifications removes stored notifications of hidden sessions
+// (dry run unless apply is set; LocalWriteGuard procedure; audited; no MCP tool).
+// +api: PruneHiddenSessionNotifications
 func (s *SessionService) PruneHiddenSessionNotifications(
 	ctx context.Context,
 	req *connect.Request[sessionv1.PruneHiddenSessionNotificationsRequest],
