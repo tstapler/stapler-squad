@@ -802,6 +802,8 @@ describe("tray (notification_tray_v2)", () => {
       renderTray();
       const card = screen.getByTestId("tray-what-changed");
       expect(card).not.toHaveAttribute("role");
+      expect(card).toHaveTextContent("Swipe a toast or a row to dismiss it");
+      expect(card).toHaveTextContent("Quiet mode");
       const before = document.activeElement;
       fireEvent.click(screen.getByTestId("tray-what-changed-dismiss"));
       expect(screen.queryByTestId("tray-what-changed")).toBeNull();
