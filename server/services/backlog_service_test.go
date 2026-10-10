@@ -53,6 +53,13 @@ import (
 // own per-PID test isolation and fails session creation with an unrelated
 // "Session.program" validator error.
 func TestMain(m *testing.M) {
+	netGuard := envtest.DenyNonLoopbackNetwork()
+	restoreClaudeCLI, err := envtest.IsolateClaudeCLI()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "TestMain: %v\n", err)
+		os.Exit(1)
+	}
+	lookupIPAddr = hermeticLookupIPAddr
 	headless.DefaultCapabilitySelfCheck = headless.NewPassedCapabilitySelfCheckForTesting()
 	restore := envtest.ClearAmbientGitHubTokenEnv()
 	restoreState := envtest.ClearAmbientStaplerSquadStateEnv()
@@ -66,6 +73,11 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	restoreState()
 	restore()
+	restoreClaudeCLI()
+	if report := netGuard.Report(); report != "" {
+		fmt.Fprint(os.Stderr, report)
+		code = 1
+	}
 	os.Exit(code)
 }
 
