@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
@@ -14,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/sshremote"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // GetApprovalStore returns the approval store for wiring up the HTTP hook handler.
@@ -70,6 +72,27 @@ func (s *SessionService) Shutdown() {
 	// Await DeleteSession's background cleanup goroutines so they don't
 	// outlive this process (or, in tests, outlive the test that spawned them).
 	s.deleteCleanupWG.Wait()
+	// Must run after the Wait above: any trackCleanup-tracked goroutine still
+	// touching tmux needs to finish before the server backing it is killed.
+	s.killTestTmuxServer()
+}
+
+// killTestTmuxServer stops the real tmux server a test spawned under
+// testTmuxServerSocket (set in NewSessionService only under
+// config.IsTestMode()); a no-op in production, where the socket is always "".
+// Nothing else ever killed it, so it survived every test and the whole test
+// binary, piling up as leaked `tmux -L test_server_services_...` processes
+// that held bin/tmux open and broke the next `make build-tmux` (ETXTBSY).
+// Centralized here rather than per-fixture because every test construction
+// path eventually calls Shutdown. Best-effort: a socket with no real server
+// behind it (the test never created a session) is a silently ignored no-op.
+func (s *SessionService) killTestTmuxServer() {
+	if s.testTmuxServerSocket == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = safeexec.CommandContext(ctx, tmux.Binary(), "-L", s.testTmuxServerSocket, "kill-server").Run()
 }
 
 // waitForPendingCleanup blocks until every DeleteSession call made so far has
