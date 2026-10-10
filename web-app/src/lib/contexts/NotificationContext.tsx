@@ -19,6 +19,8 @@ import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import { useNotificationHistory } from "@/lib/hooks/useNotificationHistory";
 import { useToastQueue } from "@/lib/hooks/useToastQueue";
 import { useToastTimers } from "@/lib/hooks/useToastTimers";
+import { useAnnounce } from "@/lib/hooks/useAnnounce";
+import { createToastTrayCommands, MOVE_UNDO_TIMER_ID, type MovedBatch } from "@/lib/contexts/toastTray";
 import { groupNotifications } from "@/lib/utils/notificationGrouping";
 import { mapPriority } from "@/lib/utils/notificationMapping";
 import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
@@ -96,10 +98,24 @@ const ACTION_TOAST_SUCCESS_MS = 5_000;
 const ACTION_TOAST_ERROR_MS = 10_000;
 
 export function NotificationProvider({ children }: { children: React.ReactNode }) {
+  // The Announcer wraps the provider's own logic so commands can announce receipts.
+  return (
+    <AnnouncerProvider>
+      <NotificationProviderInner>{children}</NotificationProviderInner>
+    </AnnouncerProvider>
+  );
+}
+
+function NotificationProviderInner({ children }: { children: React.ReactNode }) {
   const { queue: notifications, queueRef, dispatch } = useToastQueue();
   const timers = useToastTimers();
   const [notificationHistory, setNotificationHistory] = useState<NotificationHistoryItem[]>([]);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
+  const [moved, setMovedState] = useState<MovedBatch | null>(null);
+  const movedRef = useRef<MovedBatch | null>(null);
+  const { announce } = useAnnounce();
+  const announceRef = useRef(announce);
+  announceRef.current = announce;
 
   const auditLog = useAuditLog();
   const history = useNotificationHistory();
@@ -124,6 +140,18 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       timers.cancel(id);
       dispatch({ type: "remove", ids: new Set([id]) });
     };
+
+    const tray = createToastTrayCommands({
+      queueRef,
+      dispatch,
+      timers,
+      movedRef,
+      setMoved: (batch) => {
+        movedRef.current = batch;
+        setMovedState(batch);
+      },
+      announce: (message) => announceRef.current(message),
+    });
 
     const appendEphemeral = (notification: NotificationData, lifetimeMs: number, replaceKey?: string) => {
       dispatch({ type: "append", notification, replaceKey });
@@ -164,10 +192,13 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       addNotification,
       addToHistoryOnly,
       removeNotification: removeToast,
+      dismissToast: removeToast,
+      moveAllToTray: tray.moveAllToTray,
+      undoMoveToTray: tray.undoMoveToTray,
       removeToastByApprovalId: (approvalId) => dispatch({ type: "removeByApprovalId", approvalId }),
       clearAll: () => {
-        timers.cancelAll();
-        dispatch({ type: "clear" });
+        queueRef.current.filter((n) => !isPinned(n)).forEach((n) => timers.cancel(n.id));
+        dispatch({ type: "clearUnpinned" });
       },
       showSessionNotification: (item, onView, onAcknowledge) =>
         addNotification({
@@ -266,6 +297,15 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     };
   }, [dispatch, queueRef, timers]);
 
+  // Opening the tray ends the undo window: the moved toasts are now simply tray rows.
+  useEffect(() => {
+    if (isPanelOpen && movedRef.current) {
+      timers.cancel(MOVE_UNDO_TIMER_ID);
+      movedRef.current = null;
+      setMovedState(null);
+    }
+  }, [isPanelOpen, timers]);
+
   // Remove stale toasts every minute (history keeps them): plain toasts after
   // TOAST_STALE_MS, approval/question toasts after ACTIONABLE_TOAST_STALE_MS.
   useEffect(() => {
@@ -310,18 +350,17 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       historyError: history.error,
       historyLastUpdatedAt: history.lastUpdatedAt,
       unreadCount,
+      movedToTray: moved ? { count: moved.toasts.length } : null,
     }),
-    [notifications, notificationHistory, isPanelOpen, history.loading, history.hasMore, history.error, history.lastUpdatedAt, unreadCount],
+    [notifications, notificationHistory, isPanelOpen, moved, history.loading, history.hasMore, history.error, history.lastUpdatedAt, unreadCount],
   );
 
   return (
-    <AnnouncerProvider>
-      <NotificationCommandsContext.Provider value={commands}>
-        <NotificationStateContext.Provider value={state}>
-          {children}
-          <ToastStack timers={timers} />
-        </NotificationStateContext.Provider>
-      </NotificationCommandsContext.Provider>
-    </AnnouncerProvider>
+    <NotificationCommandsContext.Provider value={commands}>
+      <NotificationStateContext.Provider value={state}>
+        {children}
+        <ToastStack timers={timers} />
+      </NotificationStateContext.Provider>
+    </NotificationCommandsContext.Provider>
   );
 }

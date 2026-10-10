@@ -4,7 +4,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { zIndex } from "@/styles/theme.css";
 import { NotificationToast } from "@/components/ui/NotificationToast";
-import { deckPlacement, chipRow, overflowChip } from "@/components/ui/NotificationToast.css";
+import {
+  deckPlacement,
+  chipRow,
+  overflowChip,
+  deckHeader,
+  deckAction,
+  undoBar,
+  undoAction,
+} from "@/components/ui/NotificationToast.css";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import { useNotificationState, useNotificationCommands } from "@/lib/contexts/notificationContexts";
@@ -12,6 +20,7 @@ import { useNotificationConnectivity } from "@/lib/hooks/useNotificationConnecti
 import { useAnnounce } from "@/lib/hooks/useAnnounce";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import type { ToastTimerRegistry } from "@/lib/hooks/useToastTimers";
+import { MOVE_UNDO_TIMER_ID } from "@/lib/contexts/toastTray";
 import {
   NOTIFICATION_TRAY_V2_FLAG,
   isPinned,
@@ -135,17 +144,67 @@ interface DeckProps {
   onOpenTray: () => void;
 }
 
+const MOVE_ALL_LABEL = "Move all notifications to tray";
+
+/** "Moved N to tray - Undo", paused while hovered or focused so it cannot vanish under a tap. */
+function UndoBar({ count, timers, onUndo }: { count: number; timers: ToastTimerRegistry; onUndo: () => void }) {
+  const pause = (reason: string) => timers.pause(MOVE_UNDO_TIMER_ID, reason);
+  const resume = (reason: string) => timers.resume(MOVE_UNDO_TIMER_ID, reason);
+  // Release any hold when the bar goes away, so the next window cannot start paused.
+  useEffect(
+    () => () => {
+      timers.resume(MOVE_UNDO_TIMER_ID, "hover");
+      timers.resume(MOVE_UNDO_TIMER_ID, "focus");
+    },
+    [timers],
+  );
+  return (
+    <div
+      className={undoBar}
+      data-testid="toast-undo-bar"
+      onPointerEnter={() => pause("hover")}
+      onPointerLeave={() => resume("hover")}
+      onFocus={() => pause("focus")}
+      onBlur={() => resume("focus")}
+    >
+      <span>Moved {count} to tray</span>
+      <button type="button" className={undoAction} data-testid="toast-undo-move" onClick={onUndo}>
+        Undo
+      </button>
+    </div>
+  );
+}
+
 /** The capped deck (notification_tray_v2): at most `cap` cards and a "+N more" chip for the rest. */
 function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
   const viewport = useViewport();
   const { isOffline } = useNotificationConnectivity();
+  const { movedToTray } = useNotificationState();
+  const { moveAllToTray, undoMoveToTray } = useNotificationCommands();
   const cap = toastCapFor(viewport);
   const { visible, overflow } = partitionToasts(toasts, cap);
   const placement = viewport.isInnerScreen ? "desktop" : "mobileBottom";
-  if (visible.length === 0 && overflow === 0) return null;
+  const onPhone = !viewport.isInnerScreen;
+  if (visible.length === 0 && overflow === 0 && !movedToTray) return null;
+
+  const moveAll = (
+    <button
+      type="button"
+      className={deckAction}
+      data-testid="toast-move-all-to-tray"
+      aria-label={MOVE_ALL_LABEL}
+      onClick={() => moveAllToTray()}
+    >
+      Move all to tray ({toasts.length})
+    </button>
+  );
+  const showMoveAll = toasts.length >= 2;
+  const undo = movedToTray ? <UndoBar count={movedToTray.count} timers={timers} onUndo={undoMoveToTray} /> : null;
 
   return (
     <div className={deckPlacement[placement]} data-testid="toast-stack">
+      {/* Desktop: one header slot, holding either the bulk control or its undo. */}
+      {!onPhone && (undo ?? (showMoveAll ? <div className={deckHeader}>{moveAll}</div> : null))}
       {visible.map((notification) => (
         <ToastSlot
           key={notification.id}
@@ -156,17 +215,22 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
           offlineReason={isOffline ? "Offline" : undefined}
         />
       ))}
-      {overflow > 0 && (
+      {/* Phone: the undo replaces the chip row in place; otherwise chip plus a secondary bulk button. */}
+      {onPhone && undo}
+      {!(onPhone && undo) && (overflow > 0 || (onPhone && showMoveAll)) && (
         <div className={chipRow}>
-          <button
-            type="button"
-            className={overflowChip}
-            data-testid="toast-overflow-chip"
-            aria-label={`${overflow} more notifications, open tray`}
-            onClick={onOpenTray}
-          >
-            +{overflow} more
-          </button>
+          {overflow > 0 && (
+            <button
+              type="button"
+              className={overflowChip}
+              data-testid="toast-overflow-chip"
+              aria-label={`${overflow} more notifications, open tray`}
+              onClick={onOpenTray}
+            >
+              +{overflow} more
+            </button>
+          )}
+          {onPhone && showMoveAll && moveAll}
         </div>
       )}
     </div>

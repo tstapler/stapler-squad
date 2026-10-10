@@ -61,6 +61,27 @@ describe("toastQueueReducer", () => {
     expect(toastQueueReducer(queue, { type: "remove", ids: new Set(["zzz"]) })).toBe(queue);
   });
 
+  it("clearUnpinned keeps pinned decisions and drops everything else", () => {
+    const queue: ToastQueue = [
+      toast({ id: "pinned", isPendingDecision: true, sessionId: "s1" }),
+      toast({ id: "info", sessionId: "s2" }),
+    ];
+    expect(toastQueueReducer(queue, { type: "clearUnpinned" }).map((n) => n.id)).toEqual(["pinned"]);
+    const allPinned: ToastQueue = [toast({ id: "p", isPendingDecision: true })];
+    expect(toastQueueReducer(allPinned, { type: "clearUnpinned" })).toBe(allPinned);
+  });
+
+  it("restore puts moved toasts back ahead of newer ones, skipping a session with a newer toast", () => {
+    const moved = [
+      toast({ id: "a", sessionId: "s1" }),
+      toast({ id: "b", sessionId: "s2" }),
+      toast({ id: "c", sessionId: "s3" }),
+    ];
+    const queue: ToastQueue = [toast({ id: "newer", sessionId: "s2" }), toast({ id: "late", sessionId: "s9" })];
+    const next = toastQueueReducer(queue, { type: "restore", toasts: moved });
+    expect(next.map((n) => n.id)).toEqual(["a", "c", "newer", "late"]);
+  });
+
   it("prune applies the short window to plain toasts and the long one to approvals", () => {
     const queue: ToastQueue = [
       toast({ id: "info", notificationType: "info" }),

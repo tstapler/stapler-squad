@@ -465,3 +465,41 @@ export const offlineHint = style({
   color: vars.color.textMuted,
   alignSelf: "center",
 });
+
+export const deckHeader = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "flex-end",
+  gap: "8px",
+  pointerEvents: "auto",
+  flexShrink: 0,
+});
+
+export const deckAction = style({
+  ...chipBase,
+  borderRadius: "8px",
+  selectors: { "&:hover": { background: vars.color.hoverBackground } },
+});
+
+/** "Moved N to tray - Undo": takes the header slot on desktop and the chip row's place on a phone. */
+export const undoBar = style({
+  ...chipBase,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "12px",
+  pointerEvents: "auto",
+  flexShrink: 0,
+});
+
+export const undoAction = style({
+  minHeight: "44px",
+  minWidth: "44px",
+  padding: "0 12px",
+  borderRadius: "8px",
+  border: "none",
+  background: vars.color.primary,
+  color: vars.color.primaryText,
+  fontWeight: 600,
+  cursor: "pointer",
+});

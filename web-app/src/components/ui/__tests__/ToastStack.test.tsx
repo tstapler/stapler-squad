@@ -261,6 +261,138 @@ describe("ToastStack cap and chip (Story 3.3)", () => {
   });
 });
 
+describe("Move all to tray (Story 3.4)", () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  const approval = (index: number): Partial<NotificationData> => ({
+    notificationType: "approval_needed",
+    isPendingDecision: true,
+    onApprove: jest.fn(),
+    onDeny: jest.fn(),
+    metadata: { approval_id: `a${index}` },
+  });
+
+  it("deck_header_should_always_read_move_all_to_tray_n_and_hide_for_0_or_1_toast", () => {
+    mount();
+    expect(screen.queryByTestId("toast-move-all-to-tray")).toBeNull();
+
+    act(() => notifications.addNotification(toast(0, { isPendingDecision: true, notificationType: "error" })));
+    expect(screen.queryByTestId("toast-move-all-to-tray")).toBeNull();
+
+    act(() => notifications.addNotification(toast(1)));
+    expect(screen.getByTestId("toast-move-all-to-tray")).toHaveTextContent("Move all to tray (2)");
+
+    act(() => notifications.addNotification(toast(2, { isPendingDecision: true, notificationType: "error" })));
+    expect(screen.getByTestId("toast-move-all-to-tray")).toHaveTextContent("Move all to tray (3)");
+  });
+
+  it("moveAllToTray_should_make_0_rpc_calls_keep_all_rows_unread_and_undo_in_order_when_10_pinned", () => {
+    mount();
+    for (let i = 0; i < 10; i++) {
+      act(() => notifications.addNotification(toast(i, approval(i))));
+    }
+    const orderBefore = notifications.notifications.map((n) => n.sessionId);
+    expect(notifications.notificationHistory.every((n) => !n.isRead && n.isPendingDecision)).toBe(true);
+
+    fireEvent.click(screen.getByTestId("toast-move-all-to-tray"));
+
+    expect(notifications.notifications).toHaveLength(0);
+    expect(screen.queryAllByTestId("toast")).toHaveLength(0);
+    expect(notifications.notificationHistory).toHaveLength(10);
+    expect(notifications.notificationHistory.every((n) => !n.isRead && n.isPendingDecision)).toBe(true);
+    expect(screen.getByTestId("toast-undo-bar")).toHaveTextContent("Moved 10 to tray");
+    expect(screen.getByTestId("announcer-polite")).toHaveTextContent("10 moved to tray");
+
+    fireEvent.click(screen.getByTestId("toast-undo-move"));
+    expect(notifications.notifications.map((n) => n.sessionId)).toEqual(orderBefore);
+    expect(screen.queryByTestId("toast-undo-bar")).toBeNull();
+  });
+
+  it("undo_should_restore_moved_toasts_within_undo_window_pause_on_hover_and_vanish_after_when_move_all", () => {
+    mount();
+    act(() => notifications.addNotification(toast(0, approval(0))));
+    act(() => notifications.addNotification(toast(1, { notificationType: "info" })));
+    fireEvent.click(screen.getByTestId("toast-move-all-to-tray"));
+    const bar = screen.getByTestId("toast-undo-bar");
+
+    // Hovering holds the window open past its 8s.
+    fireEvent.pointerEnter(bar);
+    act(() => {
+      jest.advanceTimersByTime(20_000);
+    });
+    expect(screen.getByTestId("toast-undo-bar")).toBeInTheDocument();
+
+    fireEvent.pointerLeave(bar);
+    act(() => {
+      jest.advanceTimersByTime(7_999);
+    });
+    expect(screen.getByTestId("toast-undo-bar")).toBeInTheDocument();
+    act(() => {
+      jest.advanceTimersByTime(1);
+    });
+    expect(screen.queryByTestId("toast-undo-bar")).toBeNull();
+    // Final: the toasts stay in the tray only.
+    expect(notifications.notifications).toHaveLength(0);
+    expect(notifications.notificationHistory).toHaveLength(2);
+  });
+
+  it("opening the tray ends the undo window", () => {
+    mount();
+    act(() => notifications.addNotification(toast(0)));
+    act(() => notifications.addNotification(toast(1)));
+    fireEvent.click(screen.getByTestId("toast-move-all-to-tray"));
+    expect(screen.getByTestId("toast-undo-bar")).toBeInTheDocument();
+
+    act(() => notifications.togglePanel());
+    expect(screen.queryByTestId("toast-undo-bar")).toBeNull();
+  });
+
+  it("on a phone the undo replaces the chip row in place, also with the keyboard open", () => {
+    setPhone(true);
+    mount();
+    addMany(3);
+    expect(screen.getByTestId("toast-overflow-chip")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("toast-move-all-to-tray"));
+
+    expect(screen.queryByTestId("toast-overflow-chip")).toBeNull();
+    expect(screen.getByTestId("toast-undo-bar")).toHaveTextContent("Moved 3 to tray");
+  });
+
+  it("clearAll_should_keep_pinned_and_dismissToast_should_remove_one_informational_toast_and_leave_history_when_called", () => {
+    mount();
+    act(() => notifications.addNotification(toast(0, approval(0))));
+    act(() => notifications.addNotification(toast(1, { notificationType: "info" })));
+    act(() => notifications.addNotification(toast(2, { notificationType: "info" })));
+
+    const infoToast = notifications.notifications.find((n) => n.sessionId === "s1")!;
+    act(() => notifications.dismissToast(infoToast.id));
+    expect(notifications.notifications.map((n) => n.sessionId)).toEqual(["s0", "s2"]);
+    expect(notifications.notificationHistory).toHaveLength(3);
+
+    act(() => notifications.clearAll());
+    expect(notifications.notifications.map((n) => n.sessionId)).toEqual(["s0"]);
+    expect(notifications.notificationHistory).toHaveLength(3);
+  });
+
+  it("clearAll_should_not_remove_pinned_question_toast_when_flag_off", () => {
+    mockFlags["notification_tray_v2"] = false;
+    mount();
+    act(() =>
+      notifications.addNotification(toast(0, { notificationType: "question", isPendingDecision: true })),
+    );
+    act(() => notifications.clearAll());
+    expect(notifications.notifications).toHaveLength(1);
+  });
+
+  it("moveAllToTray_should_never_import_bulk_clear_or_history_mutators_when_grepped", () => {
+    const source = fs.readFileSync(path.join(process.cwd(), "src/lib/contexts/toastTray.ts"), "utf8");
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    expect(code).not.toMatch(/markAsRead|clearHistory|removeFromHistory|ClearNotificationHistory|MarkNotificationRead|useNotificationHistory|acknowledgeNotification|clearAll/);
+    expect(code).not.toMatch(/^import .*session_pb/m);
+  });
+});
+
 describe("ToastStack announcements (Story 3.6)", () => {
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => jest.useRealTimers());

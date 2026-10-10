@@ -6,6 +6,7 @@ import {
   TOAST_STALE_MS,
   ACTIONABLE_TOAST_STALE_MS,
   hasLongToastLifetime,
+  isPinned,
 } from "@/lib/notification-policy";
 
 /** The active (on-screen or overflowing) toasts, oldest first. */
@@ -18,7 +19,10 @@ export type ToastQueueAction =
   | { type: "remove"; ids: ReadonlySet<string> }
   | { type: "removeByApprovalId"; approvalId: string }
   | { type: "removeBySessionIds"; sessionIds: ReadonlySet<string> }
-  | { type: "clear" }
+  /** Bulk clear: drops every toast except a pinned decision, which only an explicit act removes. */
+  | { type: "clearUnpinned" }
+  /** Puts back toasts moved to the tray (undo), oldest first, skipping a session that has a newer toast. */
+  | { type: "restore"; toasts: readonly NotificationData[] }
   /** Drop toasts past their staleness window; `keep` exempts a toast (a pinned decision). */
   | { type: "prune"; now: number; keep?: (n: NotificationData) => boolean };
 
@@ -54,8 +58,18 @@ export function toastQueueReducer(queue: ToastQueue, action: ToastQueueAction): 
       return queue.filter((n) => n.metadata?.approval_id !== action.approvalId);
     case "removeBySessionIds":
       return queue.filter((n) => !action.sessionIds.has(n.sessionId ?? ""));
-    case "clear":
-      return queue.length === 0 ? queue : [];
+    case "clearUnpinned": {
+      const next = queue.filter(isPinned);
+      return next.length === queue.length ? queue : next;
+    }
+    case "restore": {
+      const present = new Set(queue.map((n) => n.id));
+      const sessions = new Set(queue.map((n) => n.sessionId).filter(Boolean));
+      const back = action.toasts.filter(
+        (n) => !present.has(n.id) && !(n.sessionId && sessions.has(n.sessionId)),
+      );
+      return back.length === 0 ? queue : [...back, ...queue];
+    }
     case "prune": {
       const next = queue.filter((n) => {
         if (action.keep?.(n)) return true;

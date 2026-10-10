@@ -16,6 +16,8 @@ export interface NotificationStateValue {
   /** Date.now() of the last successful history fetch; null until the first one completes. */
   historyLastUpdatedAt: number | null;
   unreadCount: number;
+  /** Set for the undo window after "Move all to tray"; toasts are off the deck, history untouched. */
+  movedToTray: { count: number } | null;
 }
 
 /** Stable commands: identities never change, so command-only consumers never re-render on state. */
@@ -36,7 +38,13 @@ export interface NotificationCommandsValue {
    * so the two operations are always kept in sync.
    */
   acknowledgeNotification: (id: string | string[]) => void;
+  /** Bulk clear that leaves pinned decisions in place. Never touches history. */
   clearAll: () => void;
+  /** Takes one toast off the deck; its history row stays (a pinned toast is demoted, not deleted). */
+  dismissToast: (id: string) => void;
+  /** Demotes every toast to the tray without marking read or deleting anything. Returns the ids moved. */
+  moveAllToTray: () => string[];
+  undoMoveToTray: () => void;
   showSessionNotification: (
     item: ReviewItem,
     onView?: () => void,
@@ -90,6 +98,7 @@ const OUTSIDE_PROVIDER_STATE: NotificationStateValue = {
   historyError: null,
   historyLastUpdatedAt: null,
   unreadCount: 0,
+  movedToTray: null,
 };
 
 /**
@@ -103,6 +112,9 @@ const OUTSIDE_PROVIDER_COMMANDS = {
   removeToastByApprovalId: noop,
   acknowledgeNotification: noop,
   clearAll: noop,
+  dismissToast: noop,
+  moveAllToTray: () => [],
+  undoMoveToTray: noop,
   showSessionNotification: noop,
   togglePanel: noop,
   markAsRead: noop,
