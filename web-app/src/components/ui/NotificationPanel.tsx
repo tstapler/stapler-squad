@@ -687,7 +687,7 @@ export function NotificationPanel() {
                 {scopedMarkReadIds.length > 0 && (
                   <button
                     className={v2 ? trayButton : markAllButton}
-                    onClick={bulk.markActivityRead}
+                    onClick={v2 && isOffline ? undefined : bulk.markActivityRead}
                     aria-label={v2 ? "Mark activity read" : "Mark activity as read"}
                     aria-disabled={v2 && isOffline ? true : undefined}
                     title={v2 && isOffline ? OFFLINE_REASON : undefined}

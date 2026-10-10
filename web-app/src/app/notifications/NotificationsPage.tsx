@@ -204,14 +204,14 @@ export function NotificationsPage() {
   }, [markAsRead, scopedMarkReadIds, clearKeptLine]);
 
   const handleClearHistory = useCallback(() => {
-    // Irreversible, so gate behind a confirm. The ids are every row the server field says
-    // is not a pending decision; the server guards the same predicate again and lists
+    // Irreversible, so gate behind a confirm. The ids are every read row the server field
+    // says is not a pending decision; the server guards the same predicate again and lists
     // anything it kept, which the shared helper turns into the "N kept" line (Task 4.4f).
     if (!window.confirm("Clear read notifications? This can't be undone. Items still needing a decision won't be cleared.")) {
       return;
     }
     clearKeptLine();
-    const ids = notificationHistory.filter((n) => !n.isPendingDecision).map((n) => n.id);
+    const ids = notificationHistory.filter((n) => n.isRead && !n.isPendingDecision).map((n) => n.id);
     clearHistoryByIds(ids)
       .then(applyClearResult)
       .catch(() => showActionToast("Could not clear notifications", "error", "notifications-clear"));

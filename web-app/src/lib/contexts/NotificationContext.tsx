@@ -32,6 +32,13 @@ import { markAcknowledged } from "@/lib/utils/notificationStorage";
 import { readQuietMode, writeQuietMode } from "@/lib/utils/deckSettings";
 import type { FailureReason } from "@/lib/utils/sessionFailure";
 
+// One sender per tab; a channel per broadcast was opened and never closed.
+let broadcastSender: ReturnType<typeof createNotificationSyncChannel> | null = null;
+function sendToOtherTabs(message: Parameters<ReturnType<typeof createNotificationSyncChannel>["broadcast"]>[0]) {
+  if (!broadcastSender) broadcastSender = createNotificationSyncChannel();
+  broadcastSender.broadcast(message);
+}
+
 export type { NotificationData, NotificationHistoryItem, NotificationContextValue };
 export { useNotificationState, useNotificationCommands, useNotifications };
 
@@ -160,7 +167,7 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
       },
       announce: (message) => announceRef.current(message),
       notifyOtherTabs: (ids) =>
-        createNotificationSyncChannel().broadcast({ type: "NOTIFICATIONS_BULK_DISMISSED", kind: "moved", ids }),
+        sendToOtherTabs({ type: "NOTIFICATIONS_BULK_DISMISSED", kind: "moved", ids }),
     });
 
     const appendEphemeral = (notification: NotificationData, lifetimeMs: number, replaceKey?: string) => {
@@ -265,10 +272,9 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
       acknowledgeNotification: (id) => {
         const ids = Array.isArray(id) ? id : [id];
         const idSet = new Set(ids);
-        const syncChannel = createNotificationSyncChannel();
         for (const n of queueRef.current) {
           if (!idSet.has(n.id)) continue;
-          syncChannel.broadcast({ type: "NOTIFICATION_DISMISSED", notificationId: n.id });
+          sendToOtherTabs({ type: "NOTIFICATION_DISMISSED", notificationId: n.id });
           if (n.sessionId) markAcknowledged(n.sessionId);
           timers.cancel(n.id);
         }
@@ -317,7 +323,7 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
             if (removed.length > 0) auditLogRef.current.logNotificationHistoryCleared(removed.length);
             return prev.filter((n) => !gone.includes(n.id));
           });
-          createNotificationSyncChannel().broadcast({ type: "NOTIFICATIONS_BULK_DISMISSED", kind: "dismissed", ids: gone });
+          sendToOtherTabs({ type: "NOTIFICATIONS_BULK_DISMISSED", kind: "dismissed", ids: gone });
         }
         return result;
       },
@@ -370,7 +376,10 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
       // Cross-tab session acknowledgement is driven by the sessionAcknowledged
       // event from the server stream (useSessionService), not BroadcastChannel.
     });
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+      broadcastSender = null; // the provider is gone; the next one opens its own sender
+    };
   }, [dispatch, timers]);
 
   // Only one page of history is loaded, so the server's unread total is the floor: a badge

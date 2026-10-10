@@ -248,6 +248,7 @@ export const actions = style({
 
 const baseActionButton = style({
   flex: 1,
+  minHeight: "44px", // phone touch target (ux.md)
   padding: "10px 16px",
   border: "none",
   borderRadius: "6px",
