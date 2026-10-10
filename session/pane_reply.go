@@ -373,12 +373,3 @@ func awaitDialogClosed(ctx context.Context, pane replyPane, o ReplyOptions) repl
 		elapsed += o.PollEvery
 	}
 }
-
-// SendKeysN is SendKeys that keeps the byte count, so a caller can tell a write
-// that provably wrote nothing (0, err) from one that may have written.
-func (i *Instance) SendKeysN(keys string) (int, error) {
-	if !i.started.Load() || i.Status == Paused {
-		return 0, fmt.Errorf("cannot send keys to instance that has not been started or is paused")
-	}
-	return i.pm().SendKeys(keys)
-}

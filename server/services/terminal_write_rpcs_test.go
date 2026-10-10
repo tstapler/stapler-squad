@@ -10,13 +10,14 @@ package services
 
 // terminalWriteRPCs are the RPCs that can type into or restart a pane.
 var terminalWriteRPCs = map[string]string{
-	"SessionService.WriteToSession":       `types raw input into the agent pane (Story 5.2: refused for a hidden target)`,
-	"SessionService.UpdateSession":        `classified by field, see updateSessionFieldClass: steer_message types into the pane, program and auto_approve restart it and type a marker`,
-	"SessionService.SwitchWorkspace":      `directory switch types cd into the pane, revision and worktree switches restart the agent (refused for a hidden target)`,
-	"SessionService.RestartSession":       `restarts the agent and types a marker into the new pane (refused for a hidden target)`,
-	"SessionService.SpawnShell":           `runs an arbitrary command in a new sibling tmux session in the workspace; refused for a hidden target with RestartShell (T-RO-17)`,
-	"SessionService.RestartShell":         `relaunches a session shell; refused for a hidden target with the other restart RPCs`,
-	"GitHubUserService.NudgeSessionForPR": `types a prompt into the linked session through SteerInstanceGuarded`,
+	"SessionService.WriteToSession":         `types raw input into the agent pane (Story 5.2: refused for a hidden target)`,
+	"SessionService.UpdateSession":          `classified by field, see updateSessionFieldClass: steer_message types into the pane, program and auto_approve restart it and type a marker`,
+	"SessionService.SwitchWorkspace":        `directory switch types cd into the pane, revision and worktree switches restart the agent (refused for a hidden target)`,
+	"SessionService.RestartSession":         `restarts the agent and types a marker into the new pane (refused for a hidden target)`,
+	"SessionService.SpawnShell":             `runs an arbitrary command in a new sibling tmux session in the workspace; refused for a hidden target with RestartShell (T-RO-17)`,
+	"SessionService.RestartShell":           `relaunches a session shell; refused for a hidden target with the other restart RPCs`,
+	"SessionService.ReplyToPendingQuestion": `types one option digit into a hidden session's question dialog; the claim-gated, audited UI exception of ADR-010 (Story 5.6)`,
+	"GitHubUserService.NudgeSessionForPR":   `types a prompt into the linked session through SteerInstanceGuarded`,
 }
 
 // notTerminalWriteReasons records why a lifecycle-looking RPC is not a terminal write.

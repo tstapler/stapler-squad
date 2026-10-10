@@ -165,6 +165,13 @@ service SessionService {
   // +api: notification:prune-hidden
   rpc PruneHiddenSessionNotifications(PruneHiddenSessionNotificationsRequest) returns (PruneHiddenSessionNotificationsResponse) {}
 
+  // ReplyToPendingQuestion answers one outstanding single-select AskUserQuestion
+  // in one hidden session by writing one option digit to its terminal. Audited
+  // before the write, rate limited, guarded as a local write, no MCP tool.
+  // Expected business outcomes are in the response enum, never Connect errors.
+  // +api: session:reply-to-question
+  rpc ReplyToPendingQuestion(ReplyToPendingQuestionRequest) returns (ReplyToPendingQuestionResponse) {}
+
   // GetDeliveryGateStats reports the hidden-session delivery gate's counters and
   // the persisted hourly soak buckets. Aggregate counters only; no row content.
   // Unavailable when the gate is not configured.
@@ -1841,6 +1848,50 @@ message PruneHiddenSessionNotificationsResponse {
   int32 undeterminable = 4;
   // Path of the timestamped backup written before an apply.
   string backup_path = 5;
+}
+
+// ReplyOutcome is the result of a Reply attempt. Every expected business outcome
+// is a value here; Connect errors are only InvalidArgument, Internal,
+// PermissionDenied and Unauthenticated.
+enum ReplyOutcome {
+  REPLY_OUTCOME_UNSPECIFIED = 0;
+  // The digit was written and the dialog closed.
+  REPLY_OUTCOME_SENT = 1;
+  // The digit may or may not have been written, or the dialog stayed open; no Retry.
+  REPLY_OUTCOME_SEND_INDETERMINATE = 2;
+  // Failed strictly before the first byte; Retry with the same reply_id is safe.
+  REPLY_OUTCOME_NOT_SENT = 3;
+  // No such pending question for this session (answered, expired or unknown).
+  REPLY_OUTCOME_NO_PENDING = 4;
+  // The question is not the dialog on screen (stale or replaced).
+  REPLY_OUTCOME_STALE_PROMPT = 5;
+  // The session is visible; answer in the terminal.
+  REPLY_OUTCOME_NOT_HIDDEN = 6;
+  // The session's dialog cannot be read right now.
+  REPLY_OUTCOME_NOT_WAITING = 7;
+  // Rate limited; see retry_after_seconds.
+  REPLY_OUTCOME_RATE_LIMITED = 8;
+  // The hidden_session_reply kill switch is off.
+  REPLY_OUTCOME_DISABLED = 9;
+}
+
+// ReplyToPendingQuestionRequest selects one option of one pending question.
+message ReplyToPendingQuestionRequest {
+  // Session id (UUID, title or tmux name; resolved to the UUID server side).
+  string session_id = 1;
+  // question_id from the INPUT_REQUIRED notification metadata.
+  string question_id = 2;
+  // Exactly one ASCII digit, the option number (1..N).
+  string reply_text = 3;
+  // Client-generated idempotency key; a Retry reuses it.
+  string reply_id = 4;
+}
+
+// ReplyToPendingQuestionResponse carries the outcome.
+message ReplyToPendingQuestionResponse {
+  ReplyOutcome outcome = 1;
+  // Seconds to wait before retrying when outcome is RATE_LIMITED.
+  int32 retry_after_seconds = 2;
 }
 
 // GetDeliveryGateStatsRequest has no parameters.

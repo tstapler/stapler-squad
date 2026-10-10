@@ -1,0 +1,12 @@
+{
+  "id": "session:reply-to-question",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ReplyToPendingQuestion",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/hidden_question_reply.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-10-10T11:04:31.256479995-07:00"
+}

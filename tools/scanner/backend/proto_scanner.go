@@ -416,6 +416,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// ScanProto already produced, so committed registry files stay identical.
 	"GetDeliveryGateStats":            "notification:gate-stats",
 	"PruneHiddenSessionNotifications": "notification:prune-hidden",
+	"ReplyToPendingQuestion":          "session:reply-to-question",
 	"GetCompactionStats":              "GetCompactionStats",
 	"GetContextHistory":               "GetContextHistory",
 	"ListSessionsByCeilingTime":       "ListSessionsByCeilingTime",

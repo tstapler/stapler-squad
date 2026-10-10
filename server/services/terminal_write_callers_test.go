@@ -196,7 +196,7 @@ func realCallerConfig() callerConfig {
 	}
 	return callerConfig{
 		surface: set(
-			"Instance.SendKeys", "Instance.WriteToPTY", "Instance.TapEnter", "Instance.SendPrompt", "Instance.changeDirectory",
+			"Instance.SendKeys", "Instance.SendKeysN", "SubmitReplyOnce", "Instance.WriteToPTY", "Instance.TapEnter", "Instance.SendPrompt", "Instance.changeDirectory",
 			"SubmitDriverContent", "SubmitContentWithEnter", "SendKeysWithTimeout",
 			"ClaudeController.SendCommandImmediate", "ClaudeController.SendCommand",
 			"SessionService.steerUnderLease", "SessionService.steerInternal", "SessionService.steerAuthorized",
@@ -211,7 +211,7 @@ func realCallerConfig() callerConfig {
 		},
 		exemptFiles: set("tmux_process_manager.go", "native_process_manager.go", "native_process_manager_windows.go",
 			"tmux_backend.go", "backend_tymux.go", "instance_tmux.go"),
-		exemptUnits: set("Instance.SendKeys", "Instance.SendPrompt", "Instance.TapEnter", "Instance.WriteToPTY",
+		exemptUnits: set("Instance.SendKeys", "Instance.SendKeysN", "Instance.SendPrompt", "Instance.TapEnter", "Instance.WriteToPTY",
 			"SendKeysWithTimeout", "SubmitContentWithEnter", "SubmitDriverContent"),
 	}
 }

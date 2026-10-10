@@ -51,6 +51,7 @@ var pinnedCallers = map[string]callerRow{
 	"session:leasedSessionAccessor.WriteToPTY":                       {kind: kindAcquirer, reason: "the wrapper that implements ratelimit.SessionAccessor: takes the lease, writes, releases"},
 	"session:sendAnswerKeyUnderLease":                                {kind: kindAcquirer, reason: "session driver answer key: takes the lease once"},
 	"session:sendInitialPromptTick":                                  {kind: kindAcquirer, reason: "session driver initial prompt: takes the lease once, before the attempt counter"},
+	"session:replyRun.execute":                                       {kind: kindReceiver, reason: "SubmitReplyOnce's writing goroutine: one digit under the lease replyToPendingQuestion took, no Enter, no retry"},
 	"session:submitInitialPrompt.func1":                              {kind: kindReceiver, reason: "initial-prompt submit under the lease sendInitialPromptTick took (a variable only so a test can force a lease error)"},
 	"session:switchWorkspaceLocked":                                  {kind: kindLifecycle, reason: "directory switch under the workspace lock; reached only from SwitchWorkspace, guarded by Story 5.2"},
 }
