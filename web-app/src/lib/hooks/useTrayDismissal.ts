@@ -20,7 +20,14 @@ interface Options {
  * Back on a bottom sheet (TS-8; the entry keeps the URL and Next's own state), and
  * the modal sheet's inert background.
  */
-export function useTrayDismissal({ enabled, isOpen, isSheet, modal, trayRef, close }: Options): void {
+export function useTrayDismissal({
+  enabled,
+  isOpen,
+  isSheet,
+  modal,
+  trayRef,
+  close,
+}: Options): { releaseHistoryEntry: () => void } {
   useEffect(() => {
     if (!enabled || !isOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -37,6 +44,11 @@ export function useTrayDismissal({ enabled, isOpen, isSheet, modal, trayRef, clo
   const closeRef = useRef(close);
   closeRef.current = close;
   const ownsHistoryEntry = useRef(false);
+  // A navigation that closes the sheet must not also history.back(): that pops the page it
+  // just opened. The tray's own entry is left behind instead.
+  const releaseHistoryEntry = useRef(() => {
+    ownsHistoryEntry.current = false;
+  }).current;
   useEffect(() => {
     if (!enabled || !isSheet || !isOpen) return;
     window.history.pushState({ ...(window.history.state ?? {}), ssqTray: true }, "");
@@ -61,4 +73,6 @@ export function useTrayDismissal({ enabled, isOpen, isSheet, modal, trayRef, clo
     main?.setAttribute("inert", "");
     return () => main?.removeAttribute("inert");
   }, [modal]);
+
+  return { releaseHistoryEntry };
 }

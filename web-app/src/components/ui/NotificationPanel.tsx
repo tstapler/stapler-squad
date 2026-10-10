@@ -172,7 +172,18 @@ export function NotificationPanel() {
   const close = useCallback(() => {
     if (isPanelOpen) togglePanel();
   }, [isPanelOpen, togglePanel]);
-  useTrayDismissal({ enabled: v2, isOpen: isPanelOpen, isSheet, modal: modalSheet, trayRef, close });
+  const { releaseHistoryEntry } = useTrayDismissal({
+    enabled: v2,
+    isOpen: isPanelOpen,
+    isSheet,
+    modal: modalSheet,
+    trayRef,
+    close,
+  });
+  const closeForNavigation = useCallback(() => {
+    releaseHistoryEntry();
+    close();
+  }, [releaseHistoryEntry, close]);
 
   const trapTab = (e: React.KeyboardEvent) => {
     if (!modalSheet || e.key !== "Tab") return;
@@ -362,7 +373,7 @@ export function NotificationPanel() {
   const openBackgroundRow = (row: BackgroundRow) => {
     markAsRead(row.recordIds);
     auditLog.logNotificationSessionViewed(row.primaryRecordId, row.sessionId);
-    close();
+    closeForNavigation();
   };
 
   const toggleGroup = (key: string) =>
@@ -540,7 +551,7 @@ export function NotificationPanel() {
             failedApprovals,
             resolveApproval,
             handleNotificationClick,
-            onNavigate: close,
+            onNavigate: closeForNavigation,
           }}
           offlineReason={offlineReason}
           scrollRef={scrollRef}
