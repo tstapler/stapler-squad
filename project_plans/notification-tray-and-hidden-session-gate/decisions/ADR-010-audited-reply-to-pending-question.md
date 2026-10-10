@@ -90,7 +90,7 @@ What exists, and why it is not reused as is:
       description}], multiSelect}]}` (Spike 1.3g, VERIFIED, Claude Code v2.1.296;
       there is no `prompt` key). `question_shape = single` **iff**
       `len(questions) == 1 && !questions[0].multiSelect && 1 <= len(options) <= 7
-      && every label is non-empty`; any other payload is `multi` (more than one
+      && every label is non-empty and at most 80 runes and `multiSelect` is present`; any other payload is `multi` (more than one
       question, or `multiSelect`) or `unknown` and is **not replyable, hard**: the
       card says "Answer in the terminal" and nothing is registered. The entry keeps
       `questions[0].question`, `header`, the ordered option labels and a derived
@@ -111,9 +111,18 @@ What exists, and why it is not reused as is:
       Normalization per line: strip trailing whitespace, strip a leading `│ `
       gutter (2 cells, measured at 80 columns), replace the selection glyph `❯` in
       the first two cells with spaces, collapse whitespace runs. Region: the lines
-      after the **last** header row (`☐ <header>`) through the first footer line
-      (`Enter to select`); a capture with no header row or no footer does not
-      match. It matches **iff**: (1) the lines before the first numbered row, joined
+      after the **last** header row (`☐ <header>`, its text equal to
+      `questions[0].header`) through the **last** footer line (a line that starts
+      with `Enter to select`); a capture with no header row or no footer does not
+      match. **Bottom anchor (re-review blocker 1):** after that last footer line
+      the capture may hold only blank lines and unnumbered lines; **any numbered
+      row (`<n>. `, with or without the `❯` glyph) or a line containing `Do you
+      want` after it is no match**. Agent-controlled text inside a permission
+      dialog (a command, a diff) can reproduce the header, question, rows and
+      footer, but the dialog's own option rows (`❯ 1. Yes ...`) are drawn after
+      that text and are numbered, so the forged block is never the last one (the
+      layout order command-then-options is INFERRED from the one captured Bash
+      dialog; a deterministic fake-pane test fails without the anchor). It matches **iff**: (1) the lines before the first numbered row, joined
       by one space, equal the normalized `questions[0].question`; (2) the numbered
       rows (`<n>. <text>`) carry exactly the indices `1..N+2`, once each, in order
       (a command box that repeats `1.`/`2.` lines therefore adds a duplicate index
@@ -138,7 +147,7 @@ What exists, and why it is not reused as is:
       registration with the same question text and labels as a live entry of the
       session replaces it (one card, not two). Consequence, stated: a stale entry
       whose question is asked again identically will answer that new dialog; the
-      question and labels are the same, so the digit means the same thing.
+      question text and labels are the same, so the digit means the same option; descriptions and header are not compared, so a re-asked question with identical text and different descriptions is answered by the stale card (accepted residual: a wrong answer, never a permission approval, because the bottom anchor still requires this question's dialog on screen). Unmeasured and fail-closed: a long label that wraps at 80 columns leaves an unnumbered continuation line, the row text is a prefix of the label, and the question is not replyable; an absent `multiSelect` is treated as `unknown`; an empty `header` leaves the `☐` row unmatched; the gutter was measured at 80 columns only; the footer is matched by prefix (INFERRED; fixture-tested).
    f. *Bounds.* 256 entries, at most 8 per session, TTL 30 minutes (INFERRED);
       removed on reply, TTL, replacement and session deletion. The per-session
       limiter map is bounded (LRU 1024, evicted on session delete). A reply to an
@@ -252,8 +261,8 @@ What exists, and why it is not reused as is:
    Check (3) is authoritative and mandatory. The audit append does an
    `fsync`, so the window between decision and write is not zero; that is why the
    checks run after it. **Residual, stated:** the interval between the final
-   capture and the byte reaching the pane (microseconds to milliseconds, plus one
-   write already in the syscall) cannot be closed from userland, and it is the
+   capture and the byte reaching the pane (one `tmux capture-pane` subprocess plus
+   the write: tens of milliseconds, plus one write already in the syscall) cannot be closed from userland, and it is the
    **whole** residual risk: a digit that lands in a permission dialog that drew in
    that interval approves option 1 or 2. The kill switch stops further replies; it
    cannot undo a keystroke.
