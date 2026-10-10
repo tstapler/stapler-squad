@@ -50,8 +50,10 @@ function lookupViaRpc(sessionId: string): Promise<boolean | undefined> {
  * list never carries hidden sessions, so an id absent from it is asked of the server once.
  * `undefined` while unknown, for a deleted session, and outside a Redux Provider. Toasts
  * render above the session-service context, so this reads the store directly.
+ * With `lookup` false the server is never asked (a closed tray keeps its rows mounted);
+ * cached and live-list answers still apply.
  */
-export function useSessionHidden(sessionId: string | undefined): boolean | undefined {
+export function useSessionHidden(sessionId: string | undefined, lookup = true): boolean | undefined {
   const redux = useContext(ReactReduxContext);
   const [hidden, setHidden] = useState<boolean | undefined>(() =>
     sessionId ? hiddenBySessionId.get(sessionId) : undefined,
@@ -71,7 +73,7 @@ export function useSessionHidden(sessionId: string | undefined): boolean | undef
       setHidden(live.hidden);
       return;
     }
-    if (missingSessionIds.has(sessionId)) return;
+    if (!lookup || missingSessionIds.has(sessionId)) return;
     let cancelled = false;
     void lookupViaRpc(sessionId).then((answer) => {
       if (!cancelled) setHidden(answer);
@@ -79,7 +81,7 @@ export function useSessionHidden(sessionId: string | undefined): boolean | undef
     return () => {
       cancelled = true;
     };
-  }, [sessionId, redux]);
+  }, [sessionId, redux, lookup]);
 
   return hidden;
 }

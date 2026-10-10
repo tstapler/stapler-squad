@@ -76,6 +76,14 @@ describe("hidden-session tray row (Task 5.3f, C6)", () => {
     expect(screen.queryByTestId("notification-view-output")).toBeNull();
   });
 
+  it("lookup_should_follow_the_lookupHidden_prop", () => {
+    (useSessionHidden as jest.Mock).mockReturnValue(undefined);
+    renderItem(group(), { lookupHidden: false });
+    expect(useSessionHidden).toHaveBeenLastCalledWith("review:h1", false);
+    renderItem(group());
+    expect(useSessionHidden).toHaveBeenLastCalledWith("review:h1", true);
+  });
+
   it("unknown_hidden_state_should_render_the_visible_variant", () => {
     (useSessionHidden as jest.Mock).mockReturnValue(undefined);
     renderItem(group());

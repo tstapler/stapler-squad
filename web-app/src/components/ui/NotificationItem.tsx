@@ -122,6 +122,11 @@ export interface NotificationItemProps {
    * is queued; the controls re-enable when it clears.
    */
   offlineReason?: string;
+  /**
+   * False while the row is mounted but not shown (a closed tray keeps its rows): the hidden
+   * check then never asks the server, so a page load does not fan out GetSession calls.
+   */
+  lookupHidden?: boolean;
 }
 
 const defaultSessionHref = (sessionId: string) => `/?session=${encodeURIComponent(sessionId)}`;
@@ -152,12 +157,13 @@ export function NotificationItem({
   getSessionHref = defaultSessionHref,
   onNavigate,
   offlineReason,
+  lookupHidden = true,
 }: NotificationItemProps) {
   const notification = group.notification;
   const contextString = getContextString(notification);
   const hasSourceApp = notification.sourceApp || notification.sourceBundleId;
   // A hidden session opens read-only (Story 5.3): chip and "View output" instead of "View Session".
-  const sessionHidden = useSessionHidden(notification.sessionId) === true;
+  const sessionHidden = useSessionHidden(notification.sessionId, lookupHidden) === true;
 
   // Always show the session name as the primary title so users know which
   // session generated the notification. If the stored title is a generic

@@ -62,6 +62,20 @@ describe("useSessionHidden", () => {
     expect(getSession).toHaveBeenCalledTimes(1);
   });
 
+  it("should_not_ask_the_server_while_lookup_is_off_but_still_answer_from_cache", async () => {
+    getSession.mockResolvedValue({ session: { id: "h9", hidden: true, title: "h9" } });
+    const store = makeStore();
+    const off = renderHook(() => useSessionHidden("h9", false), { wrapper: wrapper(store) });
+    expect(off.result.current).toBeUndefined();
+    expect(getSession).not.toHaveBeenCalled();
+
+    const on = renderHook(() => useSessionHidden("h9"), { wrapper: wrapper(store) });
+    await waitFor(() => expect(on.result.current).toBe(true));
+    const cached = renderHook(() => useSessionHidden("h9", false), { wrapper: wrapper(store) });
+    expect(cached.result.current).toBe(true);
+    expect(getSession).toHaveBeenCalledTimes(1);
+  });
+
   it("should_stay_unknown_outside_a_redux_provider", () => {
     const { result } = renderHook(() => useSessionHidden("h1"));
     expect(result.current).toBeUndefined();

@@ -457,6 +457,7 @@ export function NotificationPanel() {
           removeFromHistory={group.notification.isPendingDecision === true ? undefined : removeFromHistory}
           handleNotificationClick={handleNotificationClick}
           onNavigate={togglePanel}
+          lookupHidden={isPanelOpen}
         />
       ))}
       {historyHasMore && (
@@ -552,6 +553,7 @@ export function NotificationPanel() {
             resolveApproval,
             handleNotificationClick,
             onNavigate: closeForNavigation,
+            lookupHidden: isPanelOpen,
           }}
           offlineReason={offlineReason}
           scrollRef={scrollRef}
