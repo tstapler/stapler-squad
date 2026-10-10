@@ -2,7 +2,6 @@ package deliverygate
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -58,16 +57,34 @@ var counterLabelKeys = map[string][]string{
 	CounterLegacySuppressed: {"site", "type", "class"},
 }
 
+// maxLabels is the widest counter label set (suppressed: channel, type, reason, kind).
+const maxLabels = 4
+
+// ckey is a comparable counter key: building it allocates nothing.
+type ckey struct {
+	name   string
+	labels [maxLabels]string
+}
+
+// counter is one (name, labels) series: the in-process value plus the OTel
+// measurement option built once, so the hot path allocates nothing.
+type counter struct {
+	n    atomic.Uint64
+	inst metric.Int64Counter
+	opt  metric.AddOption
+}
+
 // Metrics holds the in-process counter mirror (and feeds the OTel instruments).
 // The zero value is not usable; use NewMetrics.
 type Metrics struct {
-	counts   sync.Map // string key -> *atomic.Uint64
+	mu       sync.RWMutex // guards counts' structure only; held for a map access, never across a call out
+	counts   map[ckey]*counter
 	filterNS atomic.Uint64
 	filterN  atomic.Uint64
 }
 
 // NewMetrics returns an empty mirror.
-func NewMetrics() *Metrics { return &Metrics{} }
+func NewMetrics() *Metrics { return &Metrics{counts: map[ckey]*counter{}} }
 
 var (
 	otelOnce       sync.Once
@@ -98,19 +115,23 @@ func otelInstrument(name string) metric.Int64Counter {
 	return nil
 }
 
-// Add increments counter name for the given label values (in counterLabelKeys order).
-func (m *Metrics) Add(name string, labels ...string) {
-	if m == nil {
-		return
-	}
-	key := metricKey(name, labels...)
-	v, ok := m.counts.Load(key)
-	if !ok {
-		v, _ = m.counts.LoadOrStore(key, new(atomic.Uint64))
-	}
-	v.(*atomic.Uint64).Add(1)
+func makeKey(name string, labels []string) ckey {
+	k := ckey{name: name}
+	copy(k.labels[:], labels)
+	return k
+}
 
-	if c := otelInstrument(name); c != nil {
+// series returns the counter for (name, labels), creating it on first use.
+func (m *Metrics) series(name string, labels []string) *counter {
+	k := makeKey(name, labels)
+	m.mu.RLock()
+	c := m.counts[k]
+	m.mu.RUnlock()
+	if c != nil {
+		return c
+	}
+	c = &counter{inst: otelInstrument(name)}
+	if c.inst != nil {
 		keys := counterLabelKeys[name]
 		attrs := make([]attribute.KeyValue, 0, len(labels))
 		for i, l := range labels {
@@ -118,7 +139,27 @@ func (m *Metrics) Add(name string, labels ...string) {
 				attrs = append(attrs, attribute.String(keys[i], l))
 			}
 		}
-		c.Add(context.Background(), 1, metric.WithAttributes(attrs...))
+		c.opt = metric.WithAttributes(attrs...)
+	}
+	m.mu.Lock()
+	if existing := m.counts[k]; existing != nil {
+		c = existing
+	} else {
+		m.counts[k] = c
+	}
+	m.mu.Unlock()
+	return c
+}
+
+// Add increments counter name for the given label values (in counterLabelKeys order).
+func (m *Metrics) Add(name string, labels ...string) {
+	if m == nil {
+		return
+	}
+	c := m.series(name, labels)
+	c.n.Add(1)
+	if c.inst != nil {
+		c.inst.Add(context.Background(), 1, c.opt)
 	}
 }
 
@@ -145,38 +186,42 @@ func (m *Metrics) Value(name string, labels ...string) uint64 {
 	if m == nil {
 		return 0
 	}
-	if v, ok := m.counts.Load(metricKey(name, labels...)); ok {
-		return v.(*atomic.Uint64).Load()
+	m.mu.RLock()
+	c := m.counts[makeKey(name, labels)]
+	m.mu.RUnlock()
+	if c == nil {
+		return 0
 	}
-	return 0
+	return c.n.Load()
 }
 
 // Total sums every label combination of a counter.
 func (m *Metrics) Total(name string) uint64 {
 	var sum uint64
-	prefix := name + counterLabelSeparator
-	m.counts.Range(func(k, v any) bool {
-		if ks := k.(string); ks == name || strings.HasPrefix(ks, prefix) {
-			sum += v.(*atomic.Uint64).Load()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for k, c := range m.counts {
+		if k.name == name {
+			sum += c.n.Load()
 		}
-		return true
-	})
+	}
 	return sum
 }
 
 // Snapshot copies every counter (key is "name|label|label").
 func (m *Metrics) Snapshot() map[string]uint64 {
 	out := map[string]uint64{}
-	m.counts.Range(func(k, v any) bool {
-		out[k.(string)] = v.(*atomic.Uint64).Load()
-		return true
-	})
-	return out
-}
-
-func metricKey(name string, labels ...string) string {
-	if len(labels) == 0 {
-		return name
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for k, c := range m.counts {
+		key := k.name
+		for _, l := range k.labels {
+			if l == "" {
+				break
+			}
+			key += counterLabelSeparator + l
+		}
+		out[key] = c.n.Load()
 	}
-	return name + counterLabelSeparator + strings.Join(labels, counterLabelSeparator)
+	return out
 }

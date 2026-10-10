@@ -75,37 +75,50 @@ func newRateLimitedLogger(l *slog.Logger, now Clock) *rateLimitedLogger {
 	return &rateLimitedLogger{logger: l, now: now, order: list.New(), items: map[limiterKey]*list.Element{}}
 }
 
+// permit reports whether a line for k may be emitted now (and the count of
+// lines suppressed since the last one). It allocates nothing, so callers can
+// build log attributes only after it returns true.
+func (r *rateLimitedLogger) permit(k limiterKey) (since uint64, ok bool) {
+	return r.permitEvery(logWindow, k)
+}
+
+func (r *rateLimitedLogger) permitEvery(window time.Duration, k limiterKey) (uint64, bool) {
+	n := r.now()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if el, ok := r.items[k]; ok {
+		e := el.Value.(*limiterEntry)
+		r.order.MoveToFront(el)
+		if n.Sub(e.lastLogged) < window {
+			e.suppressed++
+			return 0, false
+		}
+		since := e.suppressed
+		e.suppressed = 0
+		e.lastLogged = n
+		return since, true
+	}
+	r.items[k] = r.order.PushFront(&limiterEntry{key: k, lastLogged: n})
+	if r.order.Len() > logLimiterKeys {
+		oldest := r.order.Back()
+		r.order.Remove(oldest)
+		delete(r.items, oldest.Value.(*limiterEntry).key)
+	}
+	return 0, true
+}
+
 // log emits msg at level unless the same key already logged inside logWindow.
+// Prefer permit on hot paths: log's variadic attrs are built before the check.
 func (r *rateLimitedLogger) log(level slog.Level, msg string, k limiterKey, attrs ...any) {
 	r.logEvery(logWindow, level, msg, k, attrs...)
 }
 
 // logEvery is log with an explicit window (e.g. one WARN per hour).
 func (r *rateLimitedLogger) logEvery(window time.Duration, level slog.Level, msg string, k limiterKey, attrs ...any) {
-	n := r.now()
-	var since uint64
-	r.mu.Lock()
-	if el, ok := r.items[k]; ok {
-		e := el.Value.(*limiterEntry)
-		r.order.MoveToFront(el)
-		if n.Sub(e.lastLogged) < window {
-			e.suppressed++
-			r.mu.Unlock()
-			return
-		}
-		since = e.suppressed
-		e.suppressed = 0
-		e.lastLogged = n
-	} else {
-		r.items[k] = r.order.PushFront(&limiterEntry{key: k, lastLogged: n})
-		if r.order.Len() > logLimiterKeys {
-			oldest := r.order.Back()
-			r.order.Remove(oldest)
-			delete(r.items, oldest.Value.(*limiterEntry).key)
-		}
+	since, ok := r.permitEvery(window, k)
+	if !ok {
+		return
 	}
-	r.mu.Unlock()
-
 	attrs = append(attrs, "suppressed_since_last", since)
 	r.logger.Log(context.Background(), level, msg, attrs...)
 }

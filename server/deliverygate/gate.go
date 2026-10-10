@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -23,9 +24,14 @@ type Gate struct {
 	limiter  *rateLimitedLogger
 	now      Clock
 
+	filterSeq atomic.Uint64 // counts notification decisions for duration sampling
+
 	tickerMu sync.Mutex
 	ticker   *time.Ticker
 }
+
+// filterSampleEvery is the duration-histogram sampling period (one in N).
+const filterSampleEvery = 32
 
 // Option configures NewGate.
 type Option func(*gateConfig)
@@ -159,7 +165,14 @@ func (g *Gate) PublishFilter() func(*events.Event) bool {
 		if ev == nil || ev.Type != events.EventNotification {
 			return true
 		}
-		start := time.Now()
+		// Time one in filterSampleEvery decisions: a clock read costs more than the
+		// rest of the visible-session path (Task 2.3f), so timing every event would
+		// dominate the filter's own latency.
+		var start time.Time
+		sampled := g.filterSeq.Add(1)%filterSampleEvery == 1
+		if sampled {
+			start = time.Now()
+		}
 		defer func() {
 			if r := recover(); r != nil {
 				deliver = true
@@ -167,7 +180,9 @@ func (g *Gate) PublishFilter() func(*events.Event) bool {
 				g.limiter.log(slog.LevelError, "delivery_gate_filter_panic",
 					limiterKey{event: "filter_panic"}, "panic", r)
 			}
-			g.metrics.ObserveFilterDuration(time.Since(start))
+			if sampled {
+				g.metrics.ObserveFilterDuration(time.Since(start))
+			}
 		}()
 		return g.decide(ChannelBus, ev.SessionID, ev.NotificationMetadata, sessionv1.NotificationType(ev.NotificationType))
 	}
@@ -175,7 +190,7 @@ func (g *Gate) PublishFilter() func(*events.Event) bool {
 
 // AllowStatusChange gates the Stopped push (push.SessionDeliveryGate).
 func (g *Gate) AllowStatusChange(sessionID string) bool {
-	return g.decide(ChannelPushStatus, sessionID, nil, sessionv1.NotificationType_NOTIFICATION_TYPE_STATUS_CHANGE)
+	return g.decideFailOpen(ChannelPushStatus, sessionID, sessionv1.NotificationType_NOTIFICATION_TYPE_STATUS_CHANGE)
 }
 
 // AllowAutoApprovedRow gates the auto-approved history row. A deny is always
@@ -184,7 +199,37 @@ func (g *Gate) AllowAutoApprovedRow(sessionID, decision string) bool {
 	if decision == "deny" {
 		return true
 	}
-	return g.decide(ChannelAutoApproved, sessionID, nil, sessionv1.NotificationType_NOTIFICATION_TYPE_AUTO_APPROVED)
+	return g.decideFailOpen(ChannelAutoApproved, sessionID, sessionv1.NotificationType_NOTIFICATION_TYPE_AUTO_APPROVED)
+}
+
+// decideFailOpen is decide for the consumer-side gates, which run on subscriber
+// and handler goroutines where an unrecovered panic would take the process down.
+func (g *Gate) decideFailOpen(ch Channel, sessionID string, t sessionv1.NotificationType) (deliver bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			deliver = true
+			g.metrics.Add(CounterFilterPanic)
+			g.limiter.log(slog.LevelError, "delivery_gate_filter_panic",
+				limiterKey{event: "filter_panic", typ: string(ch)}, "panic", r)
+		}
+	}()
+	return g.decide(ch, sessionID, nil, t)
+}
+
+// typeNames caches NotificationType.String() so the hot path allocates nothing.
+var typeNames = func() map[sessionv1.NotificationType]string {
+	m := map[sessionv1.NotificationType]string{}
+	for v, n := range sessionv1.NotificationType_name {
+		m[sessionv1.NotificationType(v)] = n
+	}
+	return m
+}()
+
+func typeName(t sessionv1.NotificationType) string {
+	if n, ok := typeNames[t]; ok {
+		return n
+	}
+	return t.String()
 }
 
 // decide resolves visibility, applies the policy and the flag, and records
@@ -193,46 +238,55 @@ func (g *Gate) decide(ch Channel, sessionID string, metadata map[string]string, 
 	res := g.resolver.Resolve(sessionID, metadata)
 	hint, hintOK := ParseClassHint(metadata)
 	if !hintOK {
-		g.limiter.log(slog.LevelWarn, "delivery_class_unknown", limiterKey{event: "unknown_hint", typ: t.String()},
-			"channel", string(ch), "delivery_class", metadata[events.MetadataKeyDeliveryClass])
+		if _, ok := g.limiter.permit(limiterKey{event: "unknown_hint", typ: typeName(t)}); ok {
+			g.logger.Warn("delivery_class_unknown", "channel", string(ch),
+				"delivery_class", metadata[events.MetadataKeyDeliveryClass])
+		}
 	}
-	d := ShouldDeliver(res.Visibility, Facts{Type: t, Hint: hint})
-	key := limiterKey{session: sessionID, typ: t.String(), reason: string(d.Reason)}
-
 	switch res.Visibility {
 	case VisibilityUnresolved:
-		g.metrics.Add(CounterUnresolved, d.Class.String())
-		key.event = "unresolved"
-		g.limiter.log(slog.LevelWarn, "delivery_unresolved_fail_open", key,
-			"channel", string(ch), "session_id", sessionID, "notification_type", t.String(), "class", d.Class.String())
+		class := ClassOf(t).String()
+		g.metrics.Add(CounterUnresolved, class)
+		if since, ok := g.limiter.permit(limiterKey{event: "unresolved", session: sessionID, typ: typeName(t), reason: string(ReasonUnresolvedFailOpen)}); ok {
+			g.logger.Warn("delivery_unresolved_fail_open", "channel", string(ch), "session_id", sessionID,
+				"notification_type", typeName(t), "class", class, "suppressed_since_last", since)
+		}
 		return true
 	case VisibilityHidden:
-		return g.decideHidden(ch, res, d, t, key, sessionID)
+		return g.decideHidden(ch, res, ShouldDeliver(res.Visibility, Facts{Type: t, Hint: hint}), t, sessionID)
 	default:
 		return true
 	}
 }
 
-func (g *Gate) decideHidden(ch Channel, res Resolution, d Decision, t sessionv1.NotificationType, key limiterKey, sessionID string) bool {
+func (g *Gate) decideHidden(ch Channel, res Resolution, d Decision, t sessionv1.NotificationType, sessionID string) bool {
 	kind := string(res.Kind)
+	name := typeName(t)
+	key := limiterKey{session: sessionID, typ: name, reason: string(d.Reason)}
 	if d.Outcome == OutcomeDeliver {
 		g.metrics.Add(CounterHiddenDelivered, string(ch), d.Class.String(), kind)
 		key.event = "hidden_delivery_allowed"
-		g.limiter.log(slog.LevelInfo, "hidden_delivery_allowed", key,
-			"channel", string(ch), "session_id", sessionID, "class", d.Class.String(), "reason", string(d.Reason))
+		if since, ok := g.limiter.permit(key); ok {
+			g.logger.Info("hidden_delivery_allowed", "channel", string(ch), "session_id", sessionID,
+				"class", d.Class.String(), "reason", string(d.Reason), "suppressed_since_last", since)
+		}
 		return true
 	}
 	if g.flags.EnabledFor(res.Kind) {
-		g.metrics.Add(CounterSuppressed, string(ch), t.String(), string(d.Reason), kind)
+		g.metrics.Add(CounterSuppressed, string(ch), name, string(d.Reason), kind)
 		key.event = "delivery_suppressed"
-		g.limiter.log(slog.LevelInfo, "delivery_suppressed", key,
-			"channel", string(ch), "session_id", sessionID, "notification_type", t.String(), "reason", string(d.Reason))
+		if since, ok := g.limiter.permit(key); ok {
+			g.logger.Info("delivery_suppressed", "channel", string(ch), "session_id", sessionID,
+				"notification_type", name, "reason", string(d.Reason), "suppressed_since_last", since)
+		}
 		return false
 	}
-	g.metrics.Add(CounterWouldSuppress, string(ch), t.String(), string(d.Reason), kind)
+	g.metrics.Add(CounterWouldSuppress, string(ch), name, string(d.Reason), kind)
 	key.event = "delivery_would_suppress"
-	g.limiter.log(slog.LevelInfo, "delivery_would_suppress", key,
-		"channel", string(ch), "session_id", sessionID, "notification_type", t.String(), "reason", string(d.Reason))
+	if since, ok := g.limiter.permit(key); ok {
+		g.logger.Info("delivery_would_suppress", "channel", string(ch), "session_id", sessionID,
+			"notification_type", name, "reason", string(d.Reason), "suppressed_since_last", since)
+	}
 	return true
 }
 
@@ -241,7 +295,7 @@ func (g *Gate) decideHidden(ch Channel, res Resolution, d Decision, t sessionv1.
 // that event (Task 2.4c). It never changes behavior.
 func (g *Gate) CountLegacySuppressed(site string, t sessionv1.NotificationType, hint ClassHint) {
 	d := ShouldDeliver(VisibilityHidden, Facts{Type: t, Hint: hint})
-	g.metrics.Add(CounterLegacySuppressed, site, t.String(), d.Class.String())
+	g.metrics.Add(CounterLegacySuppressed, site, typeName(t), d.Class.String())
 }
 
 // CountLegacySuppressedType is CountLegacySuppressed for callers that hold the
