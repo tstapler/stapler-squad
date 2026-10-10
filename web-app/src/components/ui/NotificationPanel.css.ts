@@ -1310,6 +1310,34 @@ export const trayHandle = style({
   },
 });
 
+/** Text indicator that Quiet mode is on (TQ-4); never color alone. */
+export const trayQuietBadge = style({
+  fontSize: "0.625rem",
+  fontWeight: 700,
+  lineHeight: 1,
+  letterSpacing: "0.02em",
+  textTransform: "uppercase",
+});
+
+/** Fixed fallback shown when the tray throws while rendering (T-TY-20); sits beside the handle. */
+export const trayErrorLink = style({
+  position: "fixed",
+  right: "16px",
+  bottom: "16px",
+  zIndex: zIndex.slideOver,
+  display: "inline-flex",
+  alignItems: "center",
+  minHeight: "44px",
+  padding: "0 12px",
+  background: vars.color.modalBackground,
+  color: vars.color.textPrimary,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: "8px",
+  fontSize: "0.8125rem",
+  textDecoration: "underline",
+  selectors: { "&:focus-visible": { outline: `2px solid ${vars.color.primary}`, outlineOffset: "2px" } },
+});
+
 export const trayHandleDot = style({
   width: "10px",
   height: "10px",

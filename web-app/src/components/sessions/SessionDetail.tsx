@@ -7,10 +7,12 @@ import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { SessionVcsProvider } from "@/lib/contexts/SessionVcsContext";
 import { prefetchVcsStatus } from "@/lib/hooks/useVcsStatus";
 import { getApiBaseUrl } from "@/lib/config";
-import { useAppSelector } from "@/lib/store";
-import { selectAllSessions } from "@/lib/store/sessionsSlice";
+import { useAppDispatch, useAppSelector } from "@/lib/store";
+import { selectAllSessions, selectSessionsError, setError } from "@/lib/store/sessionsSlice";
+import { useNotificationCommands } from "@/lib/contexts/notificationContexts";
 import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 import { ReadOnlyBanner } from "./ReadOnlyBanner";
+import { isReadOnlyRefusal, READ_ONLY_REFUSAL_TOAST } from "./readOnlyCopy";
 
 // Dynamically import SessionDetailView (and its heavy transitive deps: CodeMirror,
 // XtermTerminal, syntax-highlight packs, WASM) so they are NOT in the initial bundle.
@@ -84,6 +86,16 @@ export function SessionDetail({
 }: SessionDetailProps) {
   const actions = useSessionActions(session.id);
   const allSessions = useAppSelector(selectAllSessions);
+  const sessionsError = useAppSelector(selectSessionsError);
+  const dispatch = useAppDispatch();
+  const { showActionToast } = useNotificationCommands();
+
+  // A write the server refused on a hidden session reads as one plain line, never the raw RPC error.
+  useEffect(() => {
+    if (!session.hidden || !isReadOnlyRefusal(sessionsError)) return;
+    showActionToast(READ_ONLY_REFUSAL_TOAST, "error", "readonly-refusal");
+    dispatch(setError(null));
+  }, [session.hidden, sessionsError, showActionToast, dispatch]);
 
   // Prefetch VCS data as soon as a session is selected so tabs load instantly.
   useEffect(() => {

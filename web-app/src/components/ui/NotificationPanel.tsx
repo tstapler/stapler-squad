@@ -25,7 +25,7 @@ import {
 } from "@/lib/utils/notificationMapping";
 import { selectBackgroundRows, type BackgroundRow } from "@/lib/utils/backgroundActivity";
 import { knownHiddenSessions } from "@/lib/utils/hiddenSessionRegistry";
-import { readTrayPinned, readWhatChangedSeen, writeTrayPinned, writeWhatChangedSeen } from "@/lib/utils/deckSettings";
+import { readQuietMode, readTrayPinned, readWhatChangedSeen, writeTrayPinned, writeWhatChangedSeen } from "@/lib/utils/deckSettings";
 import { NotificationItem, AutoHandledSection } from "./NotificationItem";
 import { BackgroundActivity } from "./BackgroundActivity";
 import { segment, segments } from "./BackgroundActivity.css";
@@ -147,6 +147,8 @@ export function NotificationPanel() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [whatChangedOpen, setWhatChangedOpen] = useState(() => !readWhatChangedSeen());
   const [pinned, setPinned] = useState(false);
+  // True when a Quiet toggle did not persist (storage blocked): it still applies until reload.
+  const [quietUnsaved, setQuietUnsaved] = useState(false);
   const [traySegment, setTraySegment] = useState<TraySegment>("notifications");
 
   const { resolvedApprovals, pendingApprovals, blockedApprovals, failedApprovals, resolveApproval } = useApprovalResolution({
@@ -725,10 +727,14 @@ export function NotificationPanel() {
                 className={trayButton}
                 aria-pressed={quietMode}
                 data-testid="tray-quiet"
-                title="Quiet mode: send every non-urgent toast straight to the tray on this device"
-                onClick={() => setQuietMode(!quietMode)}
+                title="Quiet mode: send every non-urgent toast straight to the tray on this device. Push notifications are unchanged."
+                onClick={() => {
+                  const next = !quietMode;
+                  setQuietMode(next);
+                  setQuietUnsaved(next && !readQuietMode());
+                }}
               >
-                Quiet mode
+                Quiet mode{quietMode ? " on" : ""}
               </button>
             )}
             {v2 && <TrayOverflowMenu groups={menuGroups} />}
@@ -743,6 +749,18 @@ export function NotificationPanel() {
           </div>
         </div>
 
+        {v2 && (quietMode || quietUnsaved) && (
+          <div className={trayBanner} data-testid="tray-quiet-banner">
+            <span>
+              <strong data-testid="tray-quiet-state">Quiet mode on</strong>
+              <span data-testid="tray-quiet-hint">
+                {" "}
+                - hides toasts on this device. Push notifications are unchanged.
+              </span>
+            </span>
+            {quietUnsaved && <span data-testid="tray-quiet-unsaved">Preference could not be saved</span>}
+          </div>
+        )}
         {v2 && isOffline && (
           <div className={trayBanner} data-testid="tray-banner-offline">
             <span>Offline - showing cached{updatedAt ? `, updated ${updatedAt}` : ""}</span>

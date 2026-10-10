@@ -8,7 +8,7 @@ import { useNotificationCommands, useNotificationState } from "@/lib/contexts/no
 import { NOTIFICATION_TRAY_V2_FLAG } from "@/lib/notification-policy";
 import { countNeedsAttention } from "@/lib/utils/notificationGrouping";
 import { capBadgeCount } from "@/lib/utils/notificationMapping";
-import { trayHandle, trayHandleDot } from "./NotificationPanel.css";
+import { trayHandle, trayHandleDot, trayQuietBadge } from "./NotificationPanel.css";
 import { overflowChip, trayEntry, trayEntryBell } from "./NotificationToast.css";
 import type { TrayAffordance } from "./trayVariant";
 
@@ -17,9 +17,9 @@ export const keepTerminalFocus = { onMouseDown: (e: React.MouseEvent) => e.preve
 
 const TRAY_ID = "notification-tray";
 
-export function trayEntryLabel(unread: number, needsAttention: number): string {
+export function trayEntryLabel(unread: number, needsAttention: number, quiet = false): string {
   const decisions = needsAttention > 0 ? `, ${needsAttention} need attention` : "";
-  return `Notifications, ${unread} unread${decisions}`;
+  return `Notifications, ${unread} unread${decisions}${quiet ? ", quiet mode on" : ""}`;
 }
 
 function BellIcon() {
@@ -47,7 +47,7 @@ export function useTrayCounts() {
 export function TrayHandle() {
   const v2 = useFeatureFlag(NOTIFICATION_TRAY_V2_FLAG);
   const { isInnerScreen } = useDeckViewport();
-  const { isPanelOpen } = useNotificationState();
+  const { isPanelOpen, quietMode } = useNotificationState();
   const { togglePanel } = useNotificationCommands();
   const { unreadCount, needsAttention } = useTrayCounts();
   if (!v2 || !isInnerScreen) return null;
@@ -60,11 +60,16 @@ export function TrayHandle() {
       data-open={isPanelOpen}
       aria-expanded={isPanelOpen}
       aria-controls={TRAY_ID}
-      aria-label={trayEntryLabel(unreadCount, needsAttention)}
+      aria-label={trayEntryLabel(unreadCount, needsAttention, quietMode)}
       onClick={() => togglePanel()}
       {...keepTerminalFocus}
     >
       <BellIcon />
+      {quietMode && (
+        <span className={trayQuietBadge} data-testid="tray-handle-quiet" aria-hidden="true">
+          Quiet
+        </span>
+      )}
       {unreadCount > 0 && <span data-testid="tray-handle-count">{capBadgeCount(unreadCount)}</span>}
       {needsAttention > 0 && <span className={trayHandleDot} data-testid="tray-handle-dot" aria-hidden="true" />}
     </button>
@@ -87,7 +92,7 @@ interface TrayEntryChipProps {
  * Rendered by the deck's dock, never by a page.
  */
 export function TrayEntryChip({ content, chipText, chipLabel, undo, onOpen }: TrayEntryChipProps) {
-  const { isPanelOpen } = useNotificationState();
+  const { isPanelOpen, quietMode } = useNotificationState();
   const { unreadCount, needsAttention } = useTrayCounts();
   const bellProps = {
     type: "button" as const,
@@ -95,13 +100,18 @@ export function TrayEntryChip({ content, chipText, chipLabel, undo, onOpen }: Tr
     "data-testid": "tray-entry-open",
     "aria-expanded": isPanelOpen,
     "aria-controls": TRAY_ID,
-    "aria-label": trayEntryLabel(unreadCount, needsAttention),
+    "aria-label": trayEntryLabel(unreadCount, needsAttention, quietMode),
     onClick: onOpen,
     ...keepTerminalFocus,
   };
   const bell = (
     <button {...bellProps}>
       <BellIcon />
+      {quietMode && (
+        <span className={trayQuietBadge} data-testid="tray-entry-quiet" aria-hidden="true">
+          Quiet
+        </span>
+      )}
       {unreadCount > 0 && <span>{capBadgeCount(unreadCount)}</span>}
     </button>
   );

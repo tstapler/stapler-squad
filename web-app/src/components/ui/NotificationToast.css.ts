@@ -95,6 +95,7 @@ export const icon = style({
   lineHeight: 1,
   flexShrink: 0,
   animation: `${ring} 0.5s ease-in-out`,
+  "@media": { "(prefers-reduced-motion: reduce)": { animation: "none" } },
   selectors: {
     [`${minimized} &`]: {
       fontSize: "16px",
@@ -742,11 +743,19 @@ export const trayEntryBell = style({
 });
 
 /**
- * While the tray is open the deck steps aside (it stays mounted, so the phone
- * entry node is never removed): the tray shows the same notifications and a deck
- * above it would cover the sheet's header and close button.
+ * Phone: while the tray is open the deck steps aside (it stays mounted, so the entry
+ * node is never removed): the tray shows the same notifications and a deck above it
+ * would cover the sheet's header and close button.
  */
 export const deckBehindTray = style({
   visibility: "hidden",
   pointerEvents: "none",
+});
+
+/**
+ * Desktop: the side tray is an overlay, so the deck shifts left to stay 16px clear of its
+ * left edge instead of hiding (TD-12). The tray is min(400px, 40vw) wide.
+ */
+export const deckBesideTray = style({
+  right: "calc(min(400px, 40vw) + 16px)",
 });

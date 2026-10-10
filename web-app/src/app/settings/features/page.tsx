@@ -33,6 +33,9 @@ import {
 // Mirrors config.HiddenSessionGateFeatureFlag on the server.
 const HIDDEN_SESSION_GATE_FLAG = "hidden_session_gate";
 
+// The notification flags are read live by the page (FG-1): no reload after a flip.
+const LIVE_FLAG_NOTE = "Takes effect without reload";
+
 const FEATURE_META: Record<string, { label: string }> = {
   backlog: { label: "Backlog" },
   "programs:cli-flag-probe": { label: "Program flag discovery (check binary and read --help)" },
@@ -161,6 +164,11 @@ export default function FeaturesPage() {
                 {description && (
                   <div className={flagDescription}>{description}</div>
                 )}
+                {(name === NOTIFICATION_TRAY_V2_FLAG || name === HIDDEN_SESSION_GATE_FLAG) && (
+                  <div className={flagDescription} data-testid="flag-live-note">
+                    {LIVE_FLAG_NOTE}
+                  </div>
+                )}
                 {statusDetail && (
                   <div className={flagDescription}>{statusDetail}</div>
                 )}
@@ -168,7 +176,12 @@ export default function FeaturesPage() {
                   <GateStatusLine className={flagDescription} />
                 )}
                 {name === HIDDEN_SESSION_GATE_FLAG && (
-                  <GateKindOverrides scopes={scopes} onChange={changeKindOverride} onReset={resetGateDefault} />
+                  <GateKindOverrides
+                    scopes={scopes}
+                    globalEnabled={enabled}
+                    onChange={changeKindOverride}
+                    onReset={resetGateDefault}
+                  />
                 )}
               </div>
               <button

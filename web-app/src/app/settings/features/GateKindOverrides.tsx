@@ -33,6 +33,13 @@ const MODES: ReadonlyArray<{ mode: OverrideMode; label: string }> = [
   { mode: "off", label: "Off" },
 ];
 
+/** Effective value and where it comes from: "On - override" or "Off - from global". */
+export function effectiveText(scopes: Record<string, boolean> | undefined, kind: string, globalEnabled: boolean): string {
+  const override = scopes?.[`kind:${kind}`];
+  if (override !== undefined) return `${override ? "On" : "Off"} - override`;
+  return `${globalEnabled ? "On" : "Off"} - from global`;
+}
+
 export function modeOf(scopes: Record<string, boolean> | undefined, kind: string): OverrideMode {
   const v = scopes?.[`kind:${kind}`];
   return v === undefined ? "inherit" : v ? "on" : "off";
@@ -41,6 +48,8 @@ export function modeOf(scopes: Record<string, boolean> | undefined, kind: string
 interface GateKindOverridesProps {
   /** Explicit per-scope values as the server read them back. */
   scopes?: Record<string, boolean>;
+  /** The global value, so a kind without an override can say what it inherits (FG-6). */
+  globalEnabled?: boolean;
   onChange: (scope: string, mode: OverrideMode) => void;
   onReset: () => void;
   /** Test seam; defaults to GetDeliveryGateStats.events_by_kind_24h. */
@@ -55,6 +64,7 @@ interface GateKindOverridesProps {
  */
 export function GateKindOverrides({
   scopes,
+  globalEnabled,
   onChange,
   onReset,
   fetchCounts,
@@ -101,6 +111,9 @@ export function GateKindOverrides({
               <span data-testid={`gate-override-count-${kind}`}>
                 {count === null ? "" : ` (${count} events in the last 24h)`}
               </span>
+              {globalEnabled !== undefined && (
+                <span data-testid={`gate-override-effective-${kind}`}> {effectiveText(scopes, kind, globalEnabled)}</span>
+              )}
             </span>
             <div className={overrideSegments} role="radiogroup" aria-label={`Gate override for ${kind} sessions`}>
               {MODES.map(({ mode, label }) => (

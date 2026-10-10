@@ -13,6 +13,7 @@ import {
   undoBar,
   undoAction,
   deckBehindTray,
+  deckBesideTray,
 } from "@/components/ui/NotificationToast.css";
 import { useDeckViewport } from "@/lib/contexts/deckViewportContext";
 import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
@@ -314,7 +315,7 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
   return (
     <div
       ref={deckRef}
-      className={`${deckPlacement[placement]} ${isPanelOpen ? deckBehindTray : ""}`}
+      className={`${deckPlacement[placement]} ${isPanelOpen ? (onPhone ? deckBehindTray : deckBesideTray) : ""}`}
       data-testid="toast-stack"
       data-placement={placement}
     >

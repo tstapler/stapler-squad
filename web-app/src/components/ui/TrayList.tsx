@@ -67,7 +67,7 @@ function SwipeRow({ onDismiss, disabled, children }: { onDismiss: () => void; di
 /**
  * The virtualized list (Story 4.3): a flattened header/group model windowed by
  * `@tanstack/react-virtual`, so only the visible rows are in the DOM. Roving
- * tabindex over header and group rows; arrows move, Enter opens, `x` dismisses
+ * tabindex over header and group rows; arrows or `j`/`k` move, Enter opens, `x` dismisses
  * (only while focus is inside the list, WCAG 2.1.4).
  */
 export function TrayList({
@@ -134,10 +134,12 @@ export function TrayList({
     const rowEl = target.closest<HTMLElement>("[data-tray-row]");
     const currentKey = rowEl?.dataset.trayRow ?? tabbableKey;
     const at = focusableKeys.indexOf(currentKey ?? "");
-    if (e.key === "ArrowDown") {
+    // j and k are single-key shortcuts: they act only here, with focus inside the list (WCAG 2.1.4).
+    const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
+    if (e.key === "ArrowDown" || (plain && e.key === "j")) {
       e.preventDefault();
       moveTo(focusableKeys[Math.min(at + 1, focusableKeys.length - 1)]);
-    } else if (e.key === "ArrowUp") {
+    } else if (e.key === "ArrowUp" || (plain && e.key === "k")) {
       e.preventDefault();
       moveTo(focusableKeys[Math.max(at - 1, 0)]);
     } else if (e.key === "Home") {

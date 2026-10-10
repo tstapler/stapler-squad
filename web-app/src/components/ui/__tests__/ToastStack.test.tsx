@@ -733,3 +733,109 @@ describe("single phone tray entry (Task 4.2i, TH-7..TH-9)", () => {
     expect(entries()).toHaveLength(0);
   });
 });
+
+describe("deck rules from the UX criteria (TD-5, TD-9, TB-2, T-TS-32)", () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  const advance = (ms: number) =>
+    act(() => {
+      jest.advanceTimersByTime(ms);
+    });
+
+  it("td5_should_keep_a_pending_toast_for_10_minutes_and_remove_an_auto_remediating_warning_at_its_timeout", () => {
+    mount();
+    act(() => notifications.addNotification(toast(0, { notificationType: "warning", isPendingDecision: true })));
+    // The producer stamped auto_remediating, so the server sent isPendingDecision=false.
+    act(() => notifications.addNotification(toast(1, { notificationType: "warning", isPendingDecision: false })));
+    expect(screen.getAllByTestId("toast")).toHaveLength(2);
+
+    advance(8_000 + 300);
+    expect(notifications.notifications.map((n) => n.sessionId)).toEqual(["s0"]);
+
+    advance(10 * 60 * 1000);
+    expect(notifications.notifications.map((n) => n.sessionId)).toEqual(["s0"]);
+    expect(screen.getAllByTestId("toast")).toHaveLength(1);
+  });
+
+  it("td9_should_leave_document_active_element_alone_when_a_toast_arrives", () => {
+    mount();
+    const field = document.createElement("textarea");
+    document.body.appendChild(field);
+    field.focus();
+    expect(document.activeElement).toBe(field);
+
+    act(() => notifications.addNotification(toast(0, { notificationType: "error", isPendingDecision: true })));
+    act(() => notifications.addNotification(toast(1)));
+    advance(500);
+    expect(screen.getAllByTestId("toast").length).toBeGreaterThan(0);
+    expect(document.activeElement).toBe(field);
+    field.remove();
+  });
+
+  it("tb2_should_label_the_bulk_control_move_all_to_tray_n_for_every_deck_content_and_never_offer_dismiss_all", () => {
+    const { unmount } = mount();
+    act(() => {
+      notifications.addNotification(toast(0));
+      notifications.addNotification(toast(1));
+    });
+    expect(screen.getByTestId("toast-move-all-to-tray")).toHaveTextContent("Move all to tray (2)");
+    expect(screen.queryByText(/dismiss all/i)).toBeNull();
+    unmount();
+
+    mount();
+    addMany(2);
+    expect(screen.getByTestId("toast-move-all-to-tray")).toHaveTextContent("Move all to tray (2)");
+    expect(screen.queryByText(/dismiss all/i)).toBeNull();
+  });
+
+  it("toast_action_should_show_inline_could_not_verb_retry_and_pin_toast_when_rpc_fails", async () => {
+    mount();
+    const onApprove = jest.fn().mockRejectedValue(new Error("boom"));
+    act(() => {
+      notifications.addNotification(
+        toast(1, {
+          notificationType: "error",
+          isPendingDecision: false,
+          onApprove,
+          onDeny: jest.fn(),
+          metadata: { risk_level: "low" },
+        }),
+      );
+      notifications.addNotification(toast(2, { notificationType: "error", isPendingDecision: false }));
+    });
+    const failing = screen.getByText("Title 1").closest('[data-testid="toast"]') as HTMLElement;
+
+    await act(async () => {
+      fireEvent.click(within(failing).getByRole("button", { name: /Approve/ }));
+    });
+    expect(onApprove).toHaveBeenCalledTimes(1);
+    expect(within(failing).getByTestId("toast-action-error")).toHaveTextContent("Could not approve - Retry");
+
+    // The untouched twin times out; the toast whose action failed stays until it is resolved.
+    advance(60_000);
+    expect(notifications.notifications.map((n) => n.sessionId)).toEqual(["s1"]);
+    expect(screen.getByTestId("toast-action-error")).toBeInTheDocument();
+  });
+
+  it("td12_should_shift_the_desktop_deck_clear_of_the_open_tray_and_step_a_phone_deck_aside", () => {
+    mount();
+    addMany(2);
+    expect(screen.getByTestId("toast-stack").className).not.toMatch(/deckBesideTray|deckBehindTray/);
+
+    act(() => notifications.togglePanel());
+    // Desktop: still visible, with its right edge moved left of the min(400px, 40vw) tray plus 16px.
+    expect(screen.getByTestId("toast-stack").className).toMatch(/deckBesideTray/);
+    expect(screen.getByTestId("toast-stack").className).not.toMatch(/deckBehindTray/);
+    const css = fs.readFileSync(path.join(process.cwd(), "src/components/ui/NotificationToast.css.ts"), "utf8");
+    expect(css).toMatch(/deckBesideTray = style\(\{\s*right: "calc\(min\(400px, 40vw\) \+ 16px\)"/);
+  });
+
+  it("td12_phone_deck_should_stay_mounted_but_hidden_while_the_tray_is_open", () => {
+    setPhone();
+    mount();
+    addMany(2);
+    act(() => notifications.togglePanel());
+    expect(screen.getByTestId("toast-stack").className).toMatch(/deckBehindTray/);
+  });
+});

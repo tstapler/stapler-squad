@@ -14,3 +14,10 @@ export const READ_ONLY_SECONDARY_WITH_REPLY =
 export function readOnlySecondaryText(replyCardPresent: boolean): string {
   return replyCardPresent ? READ_ONLY_SECONDARY_WITH_REPLY : READ_ONLY_SECONDARY;
 }
+
+export const READ_ONLY_REFUSAL_TOAST = "This session is read-only";
+
+/** True for the server's guard refusal ("this session is a background session and is read-only"). */
+export function isReadOnlyRefusal(message: string | null | undefined): boolean {
+  return !!message && /background session.*read-only/i.test(message);
+}

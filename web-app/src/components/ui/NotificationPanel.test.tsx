@@ -11,7 +11,9 @@
 import React from "react";
 import { render, screen, fireEvent, act, within, waitFor } from "@testing-library/react";
 import { NotificationPanel } from "./NotificationPanel";
+import { TrayErrorBoundary } from "./TrayErrorBoundary";
 import { DeckViewportContext } from "@/lib/contexts/deckViewportContext";
+import { writeQuietMode } from "@/lib/utils/deckSettings";
 import type { NotificationHistoryItem } from "@/lib/types/notification";
 
 const mockFlags: Record<string, boolean> = {};
@@ -903,5 +905,501 @@ describe("tray Background segment (Story 5.4)", () => {
     render(<NotificationPanel />);
     expect(screen.queryByTestId("tray-segments")).toBeNull();
     expect(mockUseBackgroundSessions).toHaveBeenLastCalledWith(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spec-gap repair (Phase 5): validation.md T-TY-10..T-TY-24 and the tray UX criteria
+// ---------------------------------------------------------------------------
+
+describe("tray spec gaps (Phase 5)", () => {
+  const DESKTOP = { isInnerScreen: true, isVirtualKeyboardOpen: false };
+  const PHONE = { isInnerScreen: false, isVirtualKeyboardOpen: false };
+
+  function tree(viewport: { isInnerScreen: boolean; isVirtualKeyboardOpen: boolean } = DESKTOP) {
+    return (
+      <DeckViewportContext.Provider value={viewport}>
+        <NotificationPanel />
+      </DeckViewportContext.Provider>
+    );
+  }
+
+  function setPointer(coarse: boolean) {
+    window.matchMedia = ((q: string) => ({
+      matches: coarse && q.includes("coarse"),
+      media: q,
+      addEventListener() {},
+      removeEventListener() {},
+    })) as unknown as typeof window.matchMedia;
+  }
+
+  /** A fling to the left: 90px in 150ms passes the swipe machine's dismiss rule. */
+  function swipe(target: Element, dx: number, dy = 0) {
+    const fire = (type: string, x: number, y: number, t: number) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      const point = { clientX: x, clientY: y };
+      Object.defineProperty(event, "touches", { value: type === "touchend" ? [] : [point] });
+      Object.defineProperty(event, "changedTouches", { value: [point] });
+      Object.defineProperty(event, "timeStamp", { value: t });
+      act(() => {
+        target.dispatchEvent(event);
+      });
+    };
+    fire("touchstart", 100, 100, 0);
+    fire("touchmove", 100 - dx / 2, 100 + dy / 2, 60);
+    fire("touchmove", 100 - dx, 100 + dy, 150);
+    fire("touchend", 100 - dx, 100 + dy, 200);
+  }
+
+  const rowTitles = () => screen.getAllByTestId("tray-row").map((row) => row.textContent ?? "");
+
+  beforeEach(() => {
+    resetTrayState();
+    setPointer(false);
+    jest.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      width: 360, height: 80, top: 0, left: 0, right: 360, bottom: 80, x: 0, y: 0, toJSON: () => ({}),
+    } as DOMRect);
+  });
+  afterEach(() => {
+    jest.restoreAllMocks();
+    jest.useRealTimers();
+    mockFlags.notification_tray_v2 = false;
+  });
+
+  it("group_collapse_should_be_per_viewer_and_not_shared_across_tabs_when_toggled", () => {
+    const created = jest.fn();
+    const original = (window as unknown as { BroadcastChannel?: unknown }).BroadcastChannel;
+    (window as unknown as { BroadcastChannel: unknown }).BroadcastChannel = class {
+      constructor(name: string) {
+        created(name);
+      }
+      postMessage() {}
+      close() {}
+      addEventListener() {}
+      removeEventListener() {}
+    };
+    mockHistory = [info("a", "s1", { sessionName: "alpha" }), info("b", "s1", { sessionName: "alpha", notificationType: "error" })];
+    const storedBefore = window.localStorage.length + window.sessionStorage.length;
+
+    const first = render(tree());
+    const toggle = within(first.container).getByRole("button", { name: /alpha \(2\)/ });
+    fireEvent.click(toggle);
+    expect(within(first.container).getByRole("button", { name: /alpha \(2\)/ })).toHaveAttribute("aria-expanded", "false");
+
+    // A second viewer (another tab or device) renders its own tray: still expanded, nothing was written or broadcast.
+    const second = render(tree());
+    expect(within(second.container).getByRole("button", { name: /alpha \(2\)/ })).toHaveAttribute("aria-expanded", "true");
+    expect(window.localStorage.length + window.sessionStorage.length).toBe(storedBefore);
+    expect(created).not.toHaveBeenCalled();
+    (window as unknown as { BroadcastChannel?: unknown }).BroadcastChannel = original;
+  });
+
+  it("group_dismiss_should_offer_dismiss_n_informational_and_keep_decision_when_group_has_decision", async () => {
+    jest.useFakeTimers();
+    mockHistory = [
+      pending("p1", "s-x"),
+      info("a", "s-x", { notificationType: "task_complete" }),
+      info("b", "s-x", { notificationType: "error" }),
+    ];
+    mockClearByIds.mockResolvedValue({ deleted: 2, kept: [] });
+    render(tree());
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss 2 informational" }));
+    expect(screen.getByTestId("tray-undo-bar")).toHaveTextContent("Dismissed 2 informational");
+    // The decision row never left the pinned group while the others were hidden for the window.
+    expect(screen.getAllByTestId("needs-attention-row")).toHaveLength(1);
+
+    await act(async () => {
+      jest.advanceTimersByTime(8_000);
+    });
+    expect(mockClearByIds).toHaveBeenCalledTimes(1);
+    expect([...mockClearByIds.mock.calls[0][0]].sort()).toEqual(["a", "b"]);
+    expect(screen.getAllByTestId("needs-attention-row")).toHaveLength(1);
+  });
+
+  it("duplicate_should_increment_group_count_in_place_and_show_n_new_pill_when_order_would_change", () => {
+    mockHistory = [
+      info("a", "s-a", { timestamp: 3_000 }),
+      info("b", "s-b", { timestamp: 2_000 }),
+    ];
+    const view = render(tree());
+    fireEvent.scroll(screen.getByTestId("tray-scroll"), { target: { scrollTop: 40 } });
+    expect(rowTitles()[0]).toContain("s-a");
+
+    // The server folds a duplicate into its record (same id, newer time, count 2), which would
+    // move b to the top; a brand new session row arrives too.
+    mockHistory = [
+      info("b", "s-b", { timestamp: 5_000, occurrenceCount: 2 }),
+      info("c", "s-c", { timestamp: 4_000 }),
+      info("a", "s-a", { timestamp: 3_000 }),
+    ];
+    view.rerender(tree());
+
+    const rows = rowTitles();
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toContain("s-a");
+    expect(rows[1]).toContain("s-b");
+    expect(within(screen.getAllByTestId("tray-row")[1]).getByLabelText("2 occurrences")).toHaveTextContent("x2");
+    expect(screen.getByTestId("tray-new-pill")).toHaveTextContent("1 new");
+
+    fireEvent.click(screen.getByTestId("tray-new-pill"));
+    expect(screen.queryByTestId("tray-new-pill")).toBeNull();
+    expect(rowTitles()[0]).toContain("s-b");
+    expect(rowTitles()).toHaveLength(3);
+  });
+
+  it("tray_should_keep_search_text_and_scroll_when_variant_switches_across_900px (TK-5)", () => {
+    mockHistory = [info("a", "s1", { sessionName: "alpha" }), info("b", "s1", { sessionName: "alpha", notificationType: "error" })];
+    const view = render(tree(PHONE));
+    expect(screen.getByTestId("notification-tray")).toHaveAttribute("data-variant", "bottom-sheet");
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search notifications" }), { target: { value: "alp" } });
+    fireEvent.click(screen.getByRole("button", { name: /alpha \(2\)/ }));
+    const scroller = screen.getByTestId("tray-scroll");
+    scroller.scrollTop = 120;
+
+    const expectKept = () => {
+      expect(screen.getByRole("searchbox", { name: "Search notifications" })).toHaveValue("alp");
+      expect(screen.getByRole("button", { name: /alpha \(2\)/ })).toHaveAttribute("aria-expanded", "false");
+      expect(screen.getByTestId("tray-scroll").scrollTop).toBe(120);
+    };
+
+    view.rerender(tree({ isInnerScreen: false, isVirtualKeyboardOpen: true }));
+    expect(screen.getByTestId("notification-tray")).toHaveAttribute("data-variant", "top-sheet");
+    expectKept();
+
+    view.rerender(tree(DESKTOP));
+    expect(screen.getByTestId("notification-tray")).toHaveAttribute("data-variant", "side-overlay");
+    expectKept();
+  });
+
+  it("row_should_hide_dismiss_and_swipe_for_unread_decision_and_show_both_for_informational", () => {
+    mockHistory = [
+      pending("p1", "s-p"),
+      info("i1", "s-i"),
+      // An auto-remediating WARNING arrives with isPendingDecision=false (TR-11); an unstamped one is pinned.
+      makeNotification({ id: "w-auto", sessionId: "s-wa", sessionName: "s-wa", notificationType: "warning", isPendingDecision: false }),
+      makeNotification({ id: "w-real", sessionId: "s-wr", sessionName: "s-wr", notificationType: "warning", isPendingDecision: true }),
+    ];
+    render(tree());
+
+    expect(screen.getByTestId("tray-needs-attention")).toHaveTextContent("2 need attention");
+    const pinned = screen.getAllByTestId("needs-attention-row");
+    expect(pinned.map((row) => row.textContent)).toEqual(expect.arrayContaining([expect.stringContaining("s-p"), expect.stringContaining("s-wr")]));
+    for (const row of pinned) {
+      expect(within(row).queryByLabelText("Remove notification")).toBeNull();
+      expect(row.closest('[data-testid="tray-swipe-row"]')).toBeNull();
+    }
+
+    const swipeRows = screen.getAllByTestId("tray-swipe-row");
+    expect(swipeRows).toHaveLength(2);
+    for (const row of swipeRows) {
+      expect(within(row).getByLabelText("Remove notification")).toBeInTheDocument();
+    }
+    expect(swipeRows.map((row) => row.textContent).join(" ")).toContain("s-wa");
+    // The auto-remediating warning sits in its session group and is not counted as needing attention.
+    expect(screen.getAllByTestId("tray-group-header").map((h) => h.textContent).join(" ")).toContain("s-wa");
+  });
+
+  it("tr3_swipe_of_90px_should_dismiss_with_undo_and_60px_vertical_drift_should_scroll_instead", () => {
+    mockHistory = [info("a", "s-a"), info("b", "s-b")];
+    render(tree());
+    const [first, second] = screen.getAllByTestId("tray-swipe-row");
+
+    swipe(second, 20, 60);
+    expect(screen.queryByTestId("tray-undo-bar")).toBeNull();
+    expect(screen.getAllByTestId("tray-row")).toHaveLength(2);
+
+    swipe(first, 90);
+    expect(screen.getByTestId("tray-undo-bar")).toHaveTextContent("Dismissed 1 notification");
+    expect(screen.getAllByTestId("tray-row")).toHaveLength(1);
+  });
+
+  it("tr6_rows_should_carry_visible_text_for_type_and_a_text_background_chip", () => {
+    mockHistory = [
+      info("e1", "s-e", { notificationType: "error", sessionName: "failing" }),
+      info("t1", "s-t", { notificationType: "task_complete", sessionName: "finished" }),
+    ];
+    render(tree());
+    const rows = screen.getAllByTestId("tray-row");
+    // The type is a word on the row, not only a colour; unread is an image with a label, not a colour.
+    expect(within(rows[0]).getByText(/^Error$/i)).toBeInTheDocument();
+    expect(within(rows[1]).getByText(/complete/i)).toBeInTheDocument();
+    expect(within(rows[0]).getByRole("img", { name: "Unread" })).toBeInTheDocument();
+  });
+
+  it("tr8_keyboard_alone_should_open_a_row_collapse_a_group_and_dismiss_a_row", async () => {
+    jest.useFakeTimers();
+    mockHistory = [info("a", "s1", { sessionName: "alpha" }), info("b", "s2", { sessionName: "beta" })];
+    mockClearByIds.mockResolvedValue({ deleted: 1, kept: [] });
+    render(tree());
+    const headerRow = document.querySelector('[data-tray-row="s1"]') as HTMLElement;
+    headerRow.focus();
+
+    fireEvent.keyDown(headerRow, { key: "Enter" });
+    expect(screen.getByRole("button", { name: /alpha \(1\)/ })).toHaveAttribute("aria-expanded", "false");
+    fireEvent.keyDown(headerRow, { key: " " });
+    expect(screen.getByRole("button", { name: /alpha \(1\)/ })).toHaveAttribute("aria-expanded", "true");
+
+    const groupRow = screen.getAllByTestId("tray-row")[0];
+    groupRow.focus();
+    fireEvent.keyDown(groupRow, { key: "Enter" });
+    expect(mockMarkAsRead).toHaveBeenCalledWith(["a"]);
+
+    fireEvent.keyDown(groupRow, { key: "x" });
+    expect(screen.getByTestId("tray-undo-bar")).toHaveTextContent("Dismissed 1 notification");
+  });
+
+  it("tr9_should_never_call_focus_on_a_row_when_a_new_notification_arrives", () => {
+    mockHistory = [info("a", "s-a", { timestamp: 1_000 })];
+    const view = render(tree());
+    const focus = jest.spyOn(HTMLElement.prototype, "focus");
+
+    mockHistory = [info("n", "s-n", { timestamp: 2_000 }), ...mockHistory];
+    view.rerender(tree());
+
+    expect(screen.getAllByTestId("tray-row")).toHaveLength(2);
+    const focusedRows = focus.mock.contexts.filter((el) => (el as HTMLElement).hasAttribute?.("data-tray-row"));
+    expect(focusedRows).toHaveLength(0);
+  });
+
+  it("ty8_j_and_k_should_move_between_rows_only_while_focus_is_inside_the_list", () => {
+    mockHistory = [info("a", "s1", { sessionName: "alpha" }), info("b", "s2", { sessionName: "beta" })];
+    render(tree());
+    const keyOf = () => (document.activeElement as HTMLElement).getAttribute("data-tray-row");
+
+    const first = document.querySelector('[data-tray-row="s1"]') as HTMLElement;
+    first.focus();
+    fireEvent.keyDown(first, { key: "j" });
+    expect(keyOf()).not.toBe("s1");
+    const moved = keyOf();
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: "k" });
+    expect(keyOf()).toBe("s1");
+    expect(moved).toBeTruthy();
+
+    // Outside the list a j does nothing and is not swallowed.
+    const search = screen.getByRole("searchbox", { name: "Search notifications" });
+    search.focus();
+    const notPrevented = fireEvent.keyDown(search, { key: "j" });
+    expect(notPrevented).toBe(true);
+    expect(document.activeElement).toBe(search);
+  });
+
+  it("ty6_ty7_header_controls_should_be_named_and_tab_order_should_follow_the_surface_without_a_trap", () => {
+    mockHistory = [info("a", "s1")];
+    render(tree());
+    const tray = screen.getByTestId("notification-tray");
+
+    for (const button of within(tray).getAllByRole("button")) {
+      expect(button).toHaveAccessibleName();
+    }
+
+    const heading = within(tray).getByRole("heading", { name: /Notifications/ });
+    const firstControl = within(tray).getByTestId("tray-quiet");
+    const segment = within(tray).getByTestId("tray-tab-notifications");
+    const search = within(tray).getByRole("searchbox", { name: "Search notifications" });
+    const row = within(tray).getAllByRole("listitem").find((el) => el.getAttribute("tabindex") === "0") as HTMLElement;
+    const review = within(tray).getByRole("link", { name: "Review all notifications" });
+    const order = [heading, firstControl, segment, search, row, review];
+    for (let i = 0; i < order.length - 1; i++) {
+      expect(order[i].compareDocumentPosition(order[i + 1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+
+    // The desktop overlay never traps Tab at either end.
+    expect(fireEvent.keyDown(review, { key: "Tab" })).toBe(true);
+    expect(fireEvent.keyDown(firstControl, { key: "Tab", shiftKey: true })).toBe(true);
+  });
+
+  it("ts5_peek_sheet_should_keep_the_background_interactive_with_no_trap_or_aria_modal", () => {
+    const main = document.createElement("main");
+    main.id = "main-content";
+    document.body.appendChild(main);
+    render(tree(PHONE));
+    const tray = screen.getByTestId("notification-tray");
+
+    expect(tray).toHaveAttribute("data-sheet", "peek");
+    expect(tray).not.toHaveAttribute("aria-modal");
+    expect(main).not.toHaveAttribute("inert");
+    const review = screen.getByRole("link", { name: "Review all notifications" });
+    expect(fireEvent.keyDown(review, { key: "Tab" })).toBe(true);
+    main.remove();
+  });
+
+  it("tk3_should_not_focus_the_search_input_when_opened_on_touch", () => {
+    setPointer(true);
+    mockIsPanelOpen = false;
+    const view = render(tree(PHONE));
+    mockIsPanelOpen = true;
+    view.rerender(tree(PHONE));
+
+    expect(document.activeElement).not.toBe(screen.getByRole("searchbox", { name: "Search notifications" }));
+    expect(screen.getByTestId("notification-tray")).toHaveAttribute("data-state", "open");
+  });
+
+  it("te4_should_disable_dismiss_swipe_and_bulk_actions_offline_and_reenable_them_on_reconnect", () => {
+    mockHistory = [info("a", "s1", { sessionName: "alpha" })];
+    mockConnectivity = { state: "disconnected", isOffline: true };
+    const view = render(tree());
+
+    expect(screen.getByLabelText("Remove notification")).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("button", { name: "Mark activity read" })).toHaveAttribute("aria-disabled", "true");
+    swipe(screen.getByTestId("tray-swipe-row"), 90);
+    expect(screen.queryByTestId("tray-undo-bar")).toBeNull();
+    fireEvent.click(screen.getByTestId("tray-overflow"));
+    fireEvent.click(screen.getByTestId("tray-menu-clear-informational"));
+    expect(screen.queryByTestId("tray-confirm")).toBeNull();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+
+    mockConnectivity = { state: "connected", isOffline: false };
+    view.rerender(tree());
+    expect(screen.queryByTestId("tray-banner-offline")).toBeNull();
+    expect(screen.getByLabelText("Remove notification")).not.toHaveAttribute("aria-disabled");
+    expect(screen.getByRole("button", { name: "Mark activity read" })).not.toHaveAttribute("aria-disabled");
+    swipe(screen.getByTestId("tray-swipe-row"), 90);
+    expect(screen.getByTestId("tray-undo-bar")).toBeInTheDocument();
+  });
+
+  it("te5_te3_loading_should_be_one_busy_region_without_live_roles_and_filtered_empty_should_offer_a_44px_exit", () => {
+    mockHistoryLoading = true;
+    mockLastUpdatedAt = null;
+    const loading = render(tree());
+    const skeleton = screen.getByTestId("tray-skeleton");
+    expect(skeleton).toHaveAttribute("aria-busy", "true");
+    expect(skeleton.querySelectorAll("[role='status'], [role='alert'], [aria-live]")).toHaveLength(0);
+    loading.unmount();
+
+    mockHistoryLoading = false;
+    mockLastUpdatedAt = 1;
+    mockHistory = [info("a")];
+    render(tree());
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search notifications" }), { target: { value: "zzz" } });
+    const clear = screen.getByRole("button", { name: "Clear filters" });
+    // The 44px target rule is one global selector over every control inside the v2 tray.
+    expect(clear.closest('[data-notification-tray="v2"]')).not.toBeNull();
+    const css = require("fs").readFileSync(require("path").join(__dirname, "NotificationPanel.css.ts"), "utf8") as string;
+    expect(css).toMatch(/\[data-notification-tray="v2"\] :is\(button, select, input\[type="search"\]\)[\s\S]{0,80}minHeight: "44px"/);
+  });
+
+  it("tm4_should_restore_rows_and_show_could_not_clear_notifications_with_retry_when_the_rpc_fails", async () => {
+    jest.useFakeTimers();
+    mockHistory = [info("a", "s1"), info("b", "s2")];
+    mockClearByIds.mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce({ deleted: 2, kept: [] });
+    render(tree());
+    fireEvent.click(screen.getByTestId("tray-overflow"));
+    fireEvent.click(screen.getByTestId("tray-menu-clear-informational"));
+    fireEvent.click(screen.getByTestId("tray-confirm-ok"));
+    await act(async () => {
+      jest.advanceTimersByTime(8_000);
+    });
+
+    const banner = screen.getByTestId("tray-clear-error");
+    expect(banner).toHaveTextContent("Could not clear notifications");
+    expect(screen.getAllByTestId("tray-row")).toHaveLength(2);
+    fireEvent.click(within(banner).getByRole("button", { name: "Retry" }));
+    await act(async () => {
+      jest.advanceTimersByTime(8_000);
+    });
+    expect(mockClearByIds).toHaveBeenCalledTimes(2);
+  });
+
+  it("tm8_should_clear_50_informational_rows_in_three_taps", async () => {
+    jest.useFakeTimers();
+    const rows = Array.from({ length: 50 }, (_, i) => info(`i-${i}`, `s-${i}`));
+    mockHistory = rows;
+    mockClearByIds.mockResolvedValue({ deleted: 50, kept: [] });
+    render(tree());
+
+    fireEvent.click(screen.getByTestId("tray-overflow")); // tap 1
+    fireEvent.click(screen.getByTestId("tray-menu-clear-informational")); // tap 2
+    fireEvent.click(screen.getByTestId("tray-confirm-ok")); // tap 3
+    await act(async () => {
+      jest.advanceTimersByTime(8_000);
+    });
+    expect(mockClearByIds).toHaveBeenCalledTimes(1);
+    expect(mockClearByIds.mock.calls[0][0]).toHaveLength(50);
+  });
+
+  it("xa15_tray_and_background_segment_should_own_no_live_region_of_their_own", () => {
+    mockUseBackgroundSessions.mockReturnValue({
+      sessions: [{ id: "review:h1", title: "review:h1", state: "running", updatedAtMs: Date.now() }],
+      departed: [],
+      loading: false,
+      failed: false,
+      lastUpdatedAt: Date.now(),
+      refresh: jest.fn(),
+    });
+    mockHistory = [
+      pending("p1"),
+      makeNotification({ id: "f1", sessionId: "review:h1", sessionName: "review:h1", notificationType: "error" }),
+    ];
+    render(tree());
+    const tray = screen.getByTestId("notification-tray");
+    const live = () => tray.querySelectorAll("[role='status'], [role='alert'], [aria-live]");
+    expect(live()).toHaveLength(0);
+
+    fireEvent.click(screen.getByTestId("tray-tab-background"));
+    expect(screen.getAllByTestId("background-row").length).toBeGreaterThan(0);
+    expect(live()).toHaveLength(0);
+  });
+
+  it("quiet_mode_should_state_itself_in_the_header_say_push_is_unchanged_and_note_a_failed_save", () => {
+    mockQuiet = true;
+    mockSetQuiet.mockImplementation((on: boolean) => writeQuietMode(on));
+    const view = render(tree());
+    const toggle = screen.getByTestId("tray-quiet");
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(toggle).toHaveTextContent("Quiet mode on");
+    expect(screen.getByTestId("tray-quiet-state")).toHaveTextContent("Quiet mode on");
+    expect(screen.getByTestId("tray-quiet-hint")).toHaveTextContent("Push notifications are unchanged");
+    expect(screen.queryByTestId("tray-quiet-unsaved")).toBeNull();
+    view.unmount();
+
+    // Storage that throws: the toggle still applies for this page, and the panel says it will not persist.
+    mockQuiet = false;
+    const set = jest.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    mockSetQuiet.mockImplementation((on: boolean) => {
+      mockQuiet = on;
+      writeQuietMode(on);
+    });
+    const second = render(tree());
+    fireEvent.click(screen.getByTestId("tray-quiet"));
+    second.rerender(tree());
+    expect(screen.getByTestId("tray-quiet-unsaved")).toHaveTextContent("Preference could not be saved");
+    set.mockRestore();
+  });
+
+  it("ts7_tl1_sheet_and_landscape_panel_should_pad_by_the_device_safe_area_insets", () => {
+    const css = require("fs").readFileSync(require("path").join(__dirname, "NotificationPanel.css.ts"), "utf8") as string;
+    const block = (name: string) => {
+      const from = css.indexOf(`${name}: [`);
+      return css.slice(from, css.indexOf("],", from));
+    };
+    // The jsdom run cannot apply a 34px inset; the real-device leg is the operator's DV-3.
+    expect(block("bottomSheet")).toMatch(/paddingBottom: "env\(safe-area-inset-bottom, 0px\)"/);
+    expect(block("landscapePanel")).toMatch(/paddingRight: "env\(safe-area-inset-right, 0px\)"/);
+    expect(block("landscapePanel")).toMatch(/width: "min\(360px, 50vw\)"/);
+  });
+
+  it("tray_error_boundary_should_show_open_notifications_page_link_and_keep_handle_usable_when_render_throws", () => {
+    mockFlags.notification_tray_v2 = true;
+    jest.spyOn(console, "error").mockImplementation(() => {});
+    function Broken(): React.ReactElement {
+      throw new Error("tray render failed");
+    }
+    render(
+      <DeckViewportContext.Provider value={DESKTOP}>
+        <TrayErrorBoundary>
+          <Broken />
+        </TrayErrorBoundary>
+      </DeckViewportContext.Provider>,
+    );
+
+    const link = screen.getByRole("link", { name: "Notifications unavailable - Open Notifications page" });
+    expect(link).toHaveAttribute("href", "/notifications");
+    const handle = screen.getByTestId("tray-handle");
+    expect(handle).toBeEnabled();
+    expect(handle).toHaveAttribute("aria-controls", "notification-tray");
   });
 });

@@ -52,6 +52,19 @@ describe("NotificationToast source", () => {
     expect(source).not.toMatch(/setTimeout|setInterval|requestAnimationFrame/);
   });
 
+  it("td11_should_switch_every_enter_and_exit_animation_off_when_prefers_reduced_motion", () => {
+    const css = fs.readFileSync(path.join(process.cwd(), "src/components/ui/NotificationToast.css.ts"), "utf8");
+    const blocks = css.split(/^export const /m).slice(1);
+    const animated = blocks.filter((block) => /animation: `/.test(block));
+    expect(animated.length).toBeGreaterThan(0);
+    for (const block of animated) {
+      expect(block).toMatch(/prefers-reduced-motion: reduce[\s\S]*animation: "none"/);
+    }
+    // The card's own enter/exit transition is switched off in the same block.
+    const card = blocks.find((block) => block.startsWith("toast = style("))!;
+    expect(card).toMatch(/prefers-reduced-motion: reduce[\s\S]*transition: "none"/);
+  });
+
   it("swipe_hook_should_skip_fling_animation_when_prefers_reduced_motion", () => {
     const css = fs.readFileSync(path.join(process.cwd(), "src/components/ui/NotificationToast.css.ts"), "utf8");
     const swipeCard = css.slice(css.indexOf("export const swipeCard "));
@@ -258,5 +271,24 @@ describe("in-drag reveal (TC-11)", () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.queryByTestId("toast-swipe-reveal")).toBeNull();
     jest.restoreAllMocks();
+  });
+});
+
+describe("no gesture-only action (TC-9, XA-5)", () => {
+  beforeEach(() => setCoarse(true));
+
+  it.each([
+    ["an informational toast", {}, "Dismiss notification"],
+    ["a pinned toast", { notificationType: "error", isPendingDecision: true } as Partial<NotificationData>, "Move to tray"],
+  ])("%s exposes its swipe action as a focusable button that also answers the Delete key", (_label, overrides, name) => {
+    const { onClose } = renderCard(overrides);
+    const button = screen.getByRole("button", { name });
+    expect(button).toBeEnabled();
+    expect(button).not.toHaveAttribute("tabindex", "-1");
+    button.focus();
+    expect(document.activeElement).toBe(button);
+
+    fireEvent.keyDown(screen.getByTestId("toast"), { key: "Delete" });
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
