@@ -109,7 +109,7 @@ test.describe("hidden-session-view", () => {
     });
 
     await page.goto(`${BASE_URL}/?session=${HIDDEN_ID}&tab=terminal`, { waitUntil: "domcontentloaded" });
-    await expect(page.getByText("Could not load session.")).toBeVisible();
+    await expect(page.getByTestId("session-unavailable-card")).toContainText("Could not load session.");
     await page.getByTestId("session-unavailable-retry").click();
     await expect(page.getByTestId("readonly-banner")).toBeVisible();
   });
