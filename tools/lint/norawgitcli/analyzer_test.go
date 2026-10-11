@@ -10,11 +10,17 @@ import (
 
 func TestAnalyzer(t *testing.T) {
 	testdata := analysistest.TestData()
-	// a: violations, suppressions, and _test.go exemption; the example.com packages
-	// are the sanctioned paths and must produce no diagnostics.
+	// a: violations, suppressions, stale directives, and the _test.go exemption;
+	// session/git carries the runGitCommand wrapper; clix is a near-miss that must
+	// be flagged; the other packages are sanctioned and must produce no diagnostics.
 	analysistest.Run(t, testdata, norawgitcli.Analyzer,
 		"a",
-		"example.com/session/git/backend/cli",
-		"example.com/session/gitwiring",
+		"github.com/tstapler/stapler-squad/session/git",
+		"github.com/tstapler/stapler-squad/session/git/backend/clix",
+		"github.com/tstapler/stapler-squad/session/git/backend/cli",
+		"github.com/tstapler/stapler-squad/session/git/backend/cli/sub",
+		"github.com/tstapler/stapler-squad/session/gitwiring",
+		"github.com/tstapler/stapler-squad/testutil/gitfixture",
+		"github.com/tstapler/stapler-squad/session/git/internal/gittest",
 	)
 }

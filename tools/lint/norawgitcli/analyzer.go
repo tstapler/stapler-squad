@@ -15,6 +15,10 @@
 //   - a Run(ctx, dir, "git", ...) call on a command runner (tmux.CommandRunner)
 //   - any call to a function or method named runGitCommand
 //
+// Limits (documented, not detected): function-value aliases (f := exec.Command),
+// non-constant command names, wrapper helpers that take the name as a parameter,
+// exec.Cmd struct literals, and indirection through sh -c / env.
+//
 // Sanctioned packages: session/git/backend/cli and session/gitwiring, plus the
 // test-fixture helper packages that build throwaway repos (testutil/gitfixture,
 // session/git/internal/gittest).
@@ -23,14 +27,14 @@ package norawgitcli
 import (
 	"go/ast"
 	"go/constant"
+	"go/token"
 	"go/types"
+	"path"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/ast/inspector"
-
-	"github.com/tstapler/stapler-squad/tools/lint/internal/nolintcomment"
 )
 
 // Analyzer is the exported analysis.Analyzer for the norawgitcli check.
@@ -43,41 +47,76 @@ var Analyzer = &analysis.Analyzer{
 
 // sanctionedPackageSuffixes are the packages allowed to invoke git directly:
 // the CLI backend, the Runner implementation wired into it, and test-fixture builders.
-var sanctionedPackageSuffixes = []string{
-	"/session/git/backend/cli",
-	"/session/gitwiring",
-	"/testutil/gitfixture",
-	"/session/git/internal/gittest",
+var sanctionedPackages = []string{
+	modulePath + "/session/git/backend/cli",
+	modulePath + "/session/gitwiring",
+	modulePath + "/testutil/gitfixture",
+	modulePath + "/session/git/internal/gittest",
 }
+
+const modulePath = "github.com/tstapler/stapler-squad"
+
+const directive = "nolint:norawgitcli"
 
 // execPackageSuffixes are the packages whose Command* constructors spawn a process.
 var execPackageSuffixes = []string{"os/exec", "/executor/safeexec"}
 
 func run(pass *analysis.Pass) (interface{}, error) {
 	pkgPath := pass.Pkg.Path()
-	for _, suffix := range sanctionedPackageSuffixes {
-		if strings.HasSuffix(pkgPath, suffix) || strings.Contains(pkgPath, suffix+"/") {
+	for _, p := range sanctionedPackages {
+		if pkgPath == p || strings.HasPrefix(pkgPath, p+"/") {
 			return nil, nil
+		}
+	}
+
+	// Directive comments by file and line; used entries are removed so the
+	// leftovers are stale (they suppress nothing) and get reported.
+	directives := map[string]map[int]token.Pos{}
+	for _, f := range pass.Files {
+		for _, cg := range f.Comments {
+			for _, c := range cg.List {
+				if strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(c.Text, "//")), directive) {
+					pos := pass.Fset.Position(c.Pos())
+					if directives[pos.Filename] == nil {
+						directives[pos.Filename] = map[int]token.Pos{}
+					}
+					directives[pos.Filename][pos.Line] = c.Pos()
+				}
+			}
 		}
 	}
 
 	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
 	insp.Preorder([]ast.Node{(*ast.CallExpr)(nil)}, func(n ast.Node) {
 		call := n.(*ast.CallExpr)
-		if strings.HasSuffix(pass.Fset.File(call.Pos()).Name(), "_test.go") {
+		pos := pass.Fset.Position(call.Pos())
+		if strings.HasSuffix(pos.Filename, "_test.go") {
 			return
 		}
 		kind, ok := rawGitCall(call, pass)
 		if !ok {
 			return
 		}
-		if nolintcomment.Contains(pass, call.Pos(), "norawgitcli") {
-			return
+		// A directive on the call's line or the line above suppresses it.
+		for _, line := range []int{pos.Line, pos.Line - 1} {
+			if _, found := directives[pos.Filename][line]; found {
+				delete(directives[pos.Filename], line)
+				return
+			}
 		}
 		pass.Reportf(call.Pos(),
 			"%s invokes the git CLI directly — route it through session/git/backend (CLI calls belong only in session/git/backend/cli and session/gitwiring); if this is existing code mid-migration add //nolint:norawgitcli // migrating, <ticket>",
 			kind)
 	})
+
+	for file, lines := range directives {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		for _, pos := range lines {
+			pass.Reportf(pos, "stale //%s: no git CLI call on this line or the next; delete it (and lower baselineCount in baseline_test.go)", directive)
+		}
+	}
 	return nil, nil
 }
 
@@ -87,7 +126,7 @@ func rawGitCall(call *ast.CallExpr, pass *analysis.Pass) (string, bool) {
 	if fn == nil {
 		return "", false
 	}
-	if fn.Name() == "runGitCommand" {
+	if fn.Name() == "runGitCommand" && fn.Pkg() != nil && isPackage(fn.Pkg(), "/session/git") {
 		return "runGitCommand", true
 	}
 	sig, ok := fn.Type().(*types.Signature)
@@ -101,8 +140,8 @@ func rawGitCall(call *ast.CallExpr, pass *analysis.Pass) (string, bool) {
 		if idx >= 0 && isGitArg(call, idx, pass) {
 			return fn.Pkg().Name() + "." + fn.Name(), true
 		}
-	case fn.Name() == "Run" && sig.Recv() != nil:
-		// Runner shape: Run(ctx, dir, name string, args ...string).
+	case fn.Name() == "Run" && sig.Recv() != nil && fn.Pkg() != nil && isPackage(fn.Pkg(), "/session/tmux"):
+		// tmux.CommandRunner shape: Run(ctx, dir, name string, args ...string).
 		if sig.Params().Len() == 4 && sig.Variadic() && isStringParam(sig, 1) && isStringParam(sig, 2) &&
 			isGitArg(call, 2, pass) {
 			return "runner.Run", true
@@ -137,6 +176,10 @@ func isExecConstructor(fn *types.Func) bool {
 	return false
 }
 
+func isPackage(p *types.Package, suffix string) bool {
+	return strings.HasSuffix(p.Path(), suffix)
+}
+
 func firstStringParam(sig *types.Signature) int {
 	for i := 0; i < sig.Params().Len(); i++ {
 		if isStringParam(sig, i) {
@@ -160,6 +203,6 @@ func isGitArg(call *ast.CallExpr, idx int, pass *analysis.Pass) bool {
 	if !ok || tv.Value == nil || tv.Value.Kind() != constant.String {
 		return false
 	}
-	v := constant.StringVal(tv.Value)
-	return v == "git" || strings.HasSuffix(v, "/git")
+	base := strings.ToLower(path.Base(strings.TrimSpace(constant.StringVal(tv.Value))))
+	return base == "git" || base == "git.exe"
 }

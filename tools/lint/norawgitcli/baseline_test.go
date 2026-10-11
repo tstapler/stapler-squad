@@ -1,8 +1,9 @@
 package norawgitcli_test
 
 import (
+	"go/parser"
+	"go/token"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,10 +16,10 @@ import (
 // Lowering the count without lowering this constant fails too, so the constant
 // always tracks reality.
 //
-// Counted by the analyzer's own definition (see analyzer.go), not the Story
-// 0.1.1 audit's textual regexes, which also match comments, testdata, a
-// `kill` runner call and fixture helpers (36 constructor + 26 runner = 62 on
-// 2026-10-10; the analyzer's 57 excludes those).
+// Counted by the analyzer's own definition (see analyzer.go; it also reports
+// stale directives), not the Story 0.1.1 audit's textual regexes, which also
+// match comments, testdata, a `kill` runner call and fixture helpers (36
+// constructor + 26 runner = 62 on 2026-10-10; the analyzer's 57 excludes those).
 const baselineCount = 57
 
 const nolintDirective = "//nolint:norawgitcli"
@@ -45,11 +46,19 @@ func TestBaselineCount(t *testing.T) {
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
-		b, err := os.ReadFile(path)
+		// Parse comments instead of grepping so prose or string mentions of the
+		// directive are not counted; the analyzer itself reports stale directives.
+		f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ParseComments|parser.SkipObjectResolution)
 		if err != nil {
 			return err
 		}
-		count += strings.Count(string(b), nolintDirective)
+		for _, cg := range f.Comments {
+			for _, c := range cg.List {
+				if strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(c.Text, "//")), strings.TrimPrefix(nolintDirective, "//")) {
+					count++
+				}
+			}
+		}
 		return nil
 	})
 	if err != nil {

@@ -4,13 +4,11 @@ package sanctioned
 import (
 	"context"
 	"os/exec"
+
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-type runner interface {
-	Run(ctx context.Context, dir, name string, args ...string) ([]byte, error)
-}
-
-func ok(ctx context.Context, r runner) {
+func ok(ctx context.Context, r tmux.CommandRunner) {
 	_ = exec.Command("git", "status")
 	_, _ = r.Run(ctx, "/repo", "git", "status")
 }
