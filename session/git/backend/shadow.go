@@ -117,8 +117,10 @@ func (o outcome[T]) summary() string {
 // the returned value nor panic its way out.
 func shadowCall[T any](r *Router, ctx context.Context, op OperationName, d decision, spec readSpec[T], call func(context.Context, Backend) (T, error)) (T, error) {
 	r.metrics.countShadowCall(op)
+	// The CLI answers the caller in shadow mode, so its spawns are the configured default.
+	cliCtx := WithCallInfo(ctx, CallInfo{Op: op, Reason: ReasonConfig})
 	read := func() (outcome[T], outcome[T]) {
-		c, cerr := call(ctx, r.cli)
+		c, cerr := call(cliCtx, r.cli)
 		return outcome[T]{c, cerr}, safeGoGitRead(ctx, r.gogit, call)
 	}
 

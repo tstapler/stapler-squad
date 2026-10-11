@@ -700,6 +700,13 @@ test-integration: ensure-tools proto-gen $(GOTESTSUM_BIN) ## Run integration tes
 	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags integration -timeout 20m -p 1 ./session ./session/tmux
 	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags integration -timeout 20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/tmux)$$')
 
+# Differential oracle tests (go-git fork plan Story 1.3.3): files tagged `//go:build gitoracle`
+# run a candidate git backend against the real git CLI over temp repositories. Needs git only,
+# no generated code, so CI calls it directly.
+.PHONY: test-oracle
+test-oracle: $(GOTESTSUM_BIN) ## Run the gitoracle-tagged differential tests against real git
+	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags gitoracle -timeout 10m ./testutil/gitoracle/...
+
 # Type-based delivery-gate and terminal-write guards (Story 2.6 / Story 5.1d).
 # Runs only the Test* funcs declared in files tagged `//go:build sinkguard`
 # (selected per package with -run), so it does not re-run the untagged suite.
@@ -977,7 +984,7 @@ dev-setup: install-tools ## Set up development environment
 	@echo "Development environment setup complete!"
 	@echo "Run 'make help' to see available commands"
 
-ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration test-delivery-guards test-shell fmt-check registry-generate actor-field-guard ptmx-field-guard otel-auto-isolation-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
+ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration test-delivery-guards test-oracle test-shell fmt-check registry-generate actor-field-guard ptmx-field-guard otel-auto-isolation-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
 
 # ready: everything `make ci` runs, plus the CI-only checks that have no local
 # equivalent yet — .github/workflows/lint.yml's complexity gate (gocyclo/
