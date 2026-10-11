@@ -288,6 +288,11 @@ export const tab = style({
     "&:hover": {
       color: vars.color.textPrimary,
     },
+    // Inset so the scrolling tab row can't clip the ring.
+    "&:focus-visible": {
+      outline: `2px solid ${vars.color.primary}`,
+      outlineOffset: "-2px",
+    },
   },
   "@media": {
     [mobileMediaQuery]: {

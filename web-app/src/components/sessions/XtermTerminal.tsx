@@ -219,6 +219,15 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   isAltScreenActive,
   onAltScreenScrollUp,
 }, ref) => {
+  // Re-render on Settings > Appearance changes so the font/cursor effects below pick them up.
+  const [, setConfigVersion] = useState(0);
+  useEffect(() => {
+    if (!useConfig) return;
+    const onChange = () => setConfigVersion((v) => v + 1);
+    window.addEventListener("terminal-config-changed", onChange);
+    return () => window.removeEventListener("terminal-config-changed", onChange);
+  }, [useConfig]);
+
   // Load configuration
   const config = useConfig ? loadTerminalConfig() : null;
 

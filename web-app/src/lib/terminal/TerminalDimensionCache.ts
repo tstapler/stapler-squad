@@ -1,5 +1,22 @@
-// Re-export minimum dimension constants from TerminalOutput.tsx to avoid duplication
-import { MIN_COLS, MIN_ROWS, XTERM_DEFAULT_COLS, XTERM_DEFAULT_ROWS } from '../components/sessions/TerminalOutput';
+
+/**
+ * Constants for minimum and default terminal dimensions.
+ *
+ * Dimensions smaller than MIN_COLS/MIN_ROWS are transient (e.g., from xterm.js before
+ * the CSS container has finished laying out). Caching or connecting at those dimensions
+ * produces a garbled terminal on the next view. The first resize event often fires at
+ * e.g., 10x6 before layout is complete.
+ *
+ * We also reject xterm.js default dimensions (80x24) to prevent cache corruption — the
+ * logic in saveDimensions will not overwrite a larger existing cache with smaller
+ * dimensions from the xterm.js default mount behavior.
+ */
+export const MIN_COLS = 30;
+export const MIN_ROWS = 10;
+
+/** xterm.js's default terminal dimensions — rejected to prevent cache corruption. */
+export const XTERM_DEFAULT_COLS = 80;
+export const XTERM_DEFAULT_ROWS = 24;
 
 /**
  * Cached terminal dimensions structure with optional cell/pixel dimensions for pre-sizing
@@ -50,20 +67,71 @@ export function getCachedDimensions(sessionId: string): CachedDimensions | null 
     }
   } catch (err) {
     console.warn('[TerminalDimensionCache] Failed to load cached dimensions:', err);
+    return null;
   }
   return null;
 }
 
 /**
- * Validate that dimensions are valid for caching.
- * Rejects xterm.js defaults (80x24) and dimensions below minimum.
+ * Get the current window dimensions with validation against minimum values.
  *
- * @param cols - Number of terminal columns
- * @param rows - Number of terminal rows
- * @returns true if dimensions are valid for caching, false otherwise
+ * @returns Object with cols, rows, cellWidth, cellHeight, or null if dimensions invalid
  */
+export function getCurrentWindowDimensions(): CachedDimensions | null {
+  if (typeof window === 'undefined') return null;
+
+  // Get window inner dimensions
+  const cols = Math.max(MIN_COLS, Math.min(window.innerWidth / 8, XTERM_DEFAULT_COLS));
+  const rows = Math.max(MIN_ROWS, Math.min(window.innerHeight / 18, XTERM_DEFAULT_ROWS));
+
+  console.log(`[TerminalDimensionCache] Calculated window dimensions: ${cols}x${rows}`);
+
+  return { cols, rows };
+}
+
+/**
+ * Validate cached terminal dimensions against current font configuration.
+ *
+ * @param cached - Cached dimensions from localStorage (must include cols, rows, optionally cellWidth/cellHeight, fontSize/fontFamily)
+ * @param fontSize - Current font size in px (from DEFAULT_TERMINAL_CONFIG)
+ * @param fontFamily - Current font family (from DEFAULT_TERMINAL_CONFIG)
+ * @returns Validated dimensions, or null if cache is stale/corrupt
+ */
+export function validateCellDimensions(
+  cached: CachedDimensions,
+  fontSize: number,
+  fontFamily: string,
+): CachedDimensions | null {
+  // Create a copy to avoid mutating the cached value
+  const validated: CachedDimensions = { cols: cached.cols, rows: cached.rows };
+
+  // Font configuration changed — invalidate cell dimensions
+  if (cached.fontSize != null && cached.fontFamily != null &&
+      (cached.fontSize !== fontSize || cached.fontFamily !== fontFamily)) {
+    console.log(
+      `[TerminalDimensionCache] Invalidating stale cache due to font config change: ` +
+      `${cached.fontSize}px/${cached.fontFamily} → ${fontSize}px/${fontFamily}`
+    );
+    return null;
+  }
+
+  // Preserve cell dimensions when font unchanged, but reset font-related fields
+  if (cached.cellWidth != null && cached.cellHeight != null) {
+    validated.cellWidth = cached.cellWidth;
+    validated.cellHeight = cached.cellHeight;
+    validated.fontSize = fontSize;
+    validated.fontFamily = fontFamily;
+  }
+
+  console.log(
+    `[TerminalDimensionCache] Validated cached dimensions: ${validated.cols}x${validated.rows}`
+  );
+  return validated;
+}
+
+
+/** Rejects xterm.js defaults (80x24) and sub-minimum dimensions so they never corrupt the cache. */
 function isValidToCache(cols: number, rows: number): boolean {
-  // Don't cache xterm.js default dimensions to prevent cache corruption
   if (cols === XTERM_DEFAULT_COLS && rows === XTERM_DEFAULT_ROWS) {
     console.log(
       `[TerminalDimensionCache] Rejecting xterm.js default dimensions (${cols}x${rows}) for caching`
@@ -71,7 +139,6 @@ function isValidToCache(cols: number, rows: number): boolean {
     return false;
   }
 
-  // Don't cache dimensions below minimum threshold
   if (cols < MIN_COLS || rows < MIN_ROWS) {
     console.log(
       `[TerminalDimensionCache] Rejecting sub-minimum dimensions (${cols}x${rows}) for caching`
@@ -148,7 +215,7 @@ export function saveDimensions(
  * @param options - Optional configuration for cell dimensions
  * @returns true if we should overwrite the cache, false otherwise
  */
-function shouldOverwriteCache(
+export function shouldOverwriteCache(
   key: string,
   cols: number,
   rows: number,
@@ -172,6 +239,7 @@ function shouldOverwriteCache(
     }
   } catch (parseErr) {
     console.warn('[TerminalDimensionCache] Failed to parse existing dimensions:', parseErr);
+    return false;
   }
 
   return true;

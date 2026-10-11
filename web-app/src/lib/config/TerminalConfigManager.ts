@@ -6,62 +6,55 @@
  * This module provides a class-based parameter system for terminal configuration,
  * supporting validation, merging, and runtime updates. It replaces scattered
  * configuration logic with a structured approach to terminal parameter management.
- *
- * Key features:
- * - Default configuration management
- * - Parameter validation and normalization
- * - Configuration merging and inheritance
- * - Runtime configuration updates
- * - Environment-specific configurations
  */
-
-import { z } from "zod";
 
 /**
- * Schema for terminal configuration validation.
- * Centralizes all terminal rendering parameters with type-safe validation.
+ * Configuration data interface with all terminal rendering parameters.
  */
-const TerminalConfigSchema = z.object({
-  // Core terminal dimensions
-  cols: z.number().int().min(1).max(1000).default(80),
-  rows: z.number().int().min(1).max(1000).default(24),
-
-  // Font settings
-  fontSize: z.number().min(8).max(72).default(14),
-  fontFamily: z.string().default("monospace"),
-
-  // Color scheme
-  theme: z.enum(["dark", "light", "auto"]).default("dark"),
-
-  // Scrollback buffer
-  scrollback: z.number().int().min(100).max(100000).default(10000),
-
-  // Copy-paste settings
-  copyOnSelect: z.boolean().default(true),
-  copyAsHtml: z.boolean().default(false),
-  copyWithTimestamps: z.boolean().default(false),
-
-  // Shell settings
-  shell: z.string().default("bash"),
-
-  // Terminal behavior
-  cursorBlink: z.boolean().default(true),
-  cursorStyle: z.enum(["block", "underline", "bar"]).default("block"),
-
-  // Rendering options
-  letterSpacing: z.number().min(0).max(10).default(0),
-  lineHeight: z.number().min(1).max(3).default(1.2),
-
-  // Advanced settings
-  enableVisualBell: z.boolean().default(false),
-  scrollOnOutput: z.boolean().default(true),
-  scrollSensitivity: z.enum(["lazy", "smooth", "instant"]).default("smooth"),
-});
+export interface TerminalConfigData {
+  cols: number;
+  rows: number;
+  fontSize: number;
+  fontFamily: string;
+  theme: "dark" | "light" | "auto";
+  scrollback: number;
+  copyOnSelect: boolean;
+  copyAsHtml: boolean;
+  copyWithTimestamps: boolean;
+  shell: string;
+  cursorBlink: boolean;
+  cursorStyle: "block" | "underline" | "bar";
+  letterSpacing: number;
+  lineHeight: number;
+  enableVisualBell: boolean;
+  scrollOnOutput: boolean;
+  scrollSensitivity: "lazy" | "smooth" | "instant";
+  // Index signature for dynamic property access
+  [key: string]: unknown;
+}
 
 /**
- * Type inferred from the schema - represents a fully validated terminal configuration.
+ * Default configuration values.
  */
-export type TerminalConfigData = z.infer<typeof TerminalConfigSchema>;
+export const DEFAULT_TERMINAL_CONFIG_DATA: TerminalConfigData = {
+  cols: 80,
+  rows: 24,
+  fontSize: 14,
+  fontFamily: "monospace",
+  theme: "dark",
+  scrollback: 10000,
+  copyOnSelect: true,
+  copyAsHtml: false,
+  copyWithTimestamps: false,
+  shell: "bash",
+  cursorBlink: true,
+  cursorStyle: "block",
+  letterSpacing: 0,
+  lineHeight: 1.2,
+  enableVisualBell: false,
+  scrollOnOutput: true,
+  scrollSensitivity: "smooth",
+};
 
 /**
  * Merge strategy for configuration updates.
@@ -71,16 +64,158 @@ export type TerminalConfigData = z.infer<typeof TerminalConfigSchema>;
 export type MergeStrategy = "shallow" | "deep";
 
 /**
+ * Partial configuration for updates.
+ */
+export type PartialConfig = Partial<TerminalConfigData>;
+
+/**
+ * Result of validating a partial configuration.
+ */
+export interface ValidationResults {
+  valid: boolean;
+  data: TerminalConfigData;
+  errors: string[];
+}
+
+/** Validator return type */
+type ValidatorResult = { value: unknown; error?: string };
+
+/** Validator functions for each field type. */
+const validators: Record<keyof TerminalConfigData, (v: unknown, def: unknown) => ValidatorResult> = {
+  cols: (v, def) => validateInt(v, 1, 1000, def as number),
+  rows: (v, def) => validateInt(v, 1, 1000, def as number),
+  fontSize: (v, def) => validateInt(v, 8, 72, def as number),
+  fontFamily: (v, def) => validateStringField(v, def as string),
+  scrollback: (v, def) => validateInt(v, 100, 100000, def as number),
+  copyOnSelect: (v, def) => validateBool(v, def as boolean),
+  copyAsHtml: (v, def) => validateBool(v, def as boolean),
+  copyWithTimestamps: (v, def) => validateBool(v, def as boolean),
+  shell: (v, def) => validateStringField(v, def as string),
+  cursorBlink: (v, def) => validateBool(v, def as boolean),
+  cursorStyle: (v, def) => validateEnumField(v, def as string, ["block", "underline", "bar"]),
+  letterSpacing: (v, def) => validateFloat(v, 0, 10, def as number),
+  lineHeight: (v, def) => validateFloat(v, 1, 3, def as number),
+  enableVisualBell: (v, def) => validateBool(v, def as boolean),
+  scrollOnOutput: (v, def) => validateBool(v, def as boolean),
+  scrollSensitivity: (v, def) => validateEnumField(v, def as string, ["lazy", "smooth", "instant"]),
+  theme: (v, def) => validateEnumField(v, def as string, ["dark", "light", "auto"]),
+};
+
+function validateInt(value: unknown, min: number, max: number, def: number): ValidatorResult {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return { value: def };
+  }
+  return { value: Math.max(min, Math.min(max, Math.round(value))) };
+}
+
+function validateFloat(value: unknown, min: number, max: number, def: number): ValidatorResult {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return { value: def };
+  }
+  return { value: Math.max(min, Math.min(max, value)) };
+}
+
+function validateStringField(value: unknown, def: string): ValidatorResult {
+  if (typeof value === "string" && value.length > 0) {
+    return { value: value };
+  }
+  return { value: def };
+}
+
+function validateBool(value: unknown, def: boolean): ValidatorResult {
+  if (typeof value === "boolean") {
+    return { value: value };
+  }
+  if (typeof value === "string") {
+    if (value === "true") return { value: true };
+    if (value === "false") return { value: false };
+  }
+  return { value: def };
+}
+
+function validateEnumField(
+  value: unknown,
+  def: string,
+  allowed: readonly string[],
+): ValidatorResult {
+  if (typeof value === "string" && allowed.includes(value)) {
+    return { value: value };
+  }
+  if (typeof value !== "string") {
+    return { value: def };
+  }
+  return {
+    value: def,
+    error: `Invalid value "${value}", expected one of: ${allowed.join(", ")}`,
+  };
+}
+
+/**
+ * Validate a raw object against the terminal config schema,
+ * merging with defaults. Returns validated data and any errors.
+ */
+export function validateTerminalConfig(
+  partial: unknown,
+  defaults: TerminalConfigData = DEFAULT_TERMINAL_CONFIG_DATA,
+): ValidationResults {
+  const errors: string[] = [];
+  const result: Partial<TerminalConfigData> = { ...defaults };
+
+  if (!partial || typeof partial !== "object" || Array.isArray(partial)) {
+    if (partial !== undefined && partial !== null) {
+      errors.push("Configuration must be an object");
+    }
+    return { valid: errors.length === 0, data: { ...defaults }, errors };
+  }
+
+  const obj = partial as Record<string, unknown>;
+
+  for (const key of Object.keys(validators)) {
+    if (key in obj) {
+      const { value, error } = validators[key](obj[key], defaults[key]);
+      (result as Record<string, unknown>)[key] = value;
+      if (error) errors.push(error);
+    }
+  }
+
+  return { valid: errors.length === 0, data: result as TerminalConfigData, errors };
+}
+
+/**
+ * Merge two configuration objects deeply.
+ * For each key in override, if both values are objects and neither is an array,
+ * recursively merge them. Otherwise, override the value.
+ */
+function deepMerge(base: TerminalConfigData, override: PartialConfig): TerminalConfigData {
+  const result: TerminalConfigData = { ...base };
+
+  for (const key of Object.keys(override) as (keyof PartialConfig)[]) {
+    const baseVal = base[key];
+    const overrideVal = override[key];
+
+    if (
+      baseVal !== null &&
+      typeof baseVal === "object" &&
+      !Array.isArray(baseVal) &&
+      overrideVal !== null &&
+      typeof overrideVal === "object" &&
+      !Array.isArray(overrideVal)
+    ) {
+      (result as Record<string, unknown>)[key] = deepMerge(
+        baseVal as TerminalConfigData,
+        overrideVal as PartialConfig,
+      );
+    } else if (overrideVal !== undefined) {
+      (result as Record<string, unknown>)[key] = overrideVal;
+    }
+  }
+
+  return result;
+}
+
+/**
  * TerminalConfigManager — manages terminal configuration with validation,
  * merging, and runtime update capabilities.
- *
- * This class provides a single source of truth for terminal rendering parameters,
- * replacing scattered configuration logic across components. It supports:
- * - Loading defaults from the schema
- * - Merging partial configurations
- * - Runtime updates with validation
- * - Environment-specific overrides
- * - Persistence via localStorage
  */
 export class TerminalConfigManager {
   private config: TerminalConfigData;
@@ -88,81 +223,53 @@ export class TerminalConfigManager {
   private readonly defaults: TerminalConfigData;
 
   /**
-   * Create a new TerminalConfigManager.
-   *
-   * @param sessionId - Session identifier used for namespaced localStorage persistence
+   * @param sessionId - Session identifier for namespaced localStorage persistence
    * @param initialConfig - Optional partial configuration to merge with defaults
    * @param storageKey - Optional custom localStorage key
    */
-  constructor(
-    sessionId: string,
-    initialConfig?: Partial<TerminalConfigData>,
-    storageKey?: string,
-  ) {
+  constructor(sessionId: string, initialConfig?: PartialConfig, storageKey?: string) {
     this.storageKey = storageKey ?? `terminal-config-${sessionId}`;
-    this.defaults = TerminalConfigSchema.parse({});
+    this.defaults = { ...DEFAULT_TERMINAL_CONFIG_DATA };
 
-    // Load persisted config if available, merge with initial, fall back to defaults
     const persisted = this.loadFromStorage();
-    this.config = TerminalConfigSchema.parse({
-      ...this.defaults,
-      ...persisted,
-      ...initialConfig,
-    });
+    const validated = validateTerminalConfig(
+      { ...this.defaults, ...persisted, ...initialConfig },
+      this.defaults,
+    );
+    this.config = validated.data;
   }
 
-  /**
-   * Get the full current configuration.
-   * Returns a copy to prevent external mutation.
-   */
   getConfig(): TerminalConfigData {
     return { ...this.config };
   }
 
-  /**
-   * Get a specific configuration value by key.
-   */
   get<K extends keyof TerminalConfigData>(key: K): TerminalConfigData[K] {
     return this.config[key];
   }
 
-  /**
-   * Update configuration with a partial override, validated against the schema.
-   *
-   * @param partial - Partial configuration to merge
-   * @param strategy - Merge strategy ('shallow' or 'deep')
-   * @returns The new merged configuration
-   * @throws If validation fails
-   */
-  update(
-    partial: Partial<TerminalConfigData>,
-    strategy: MergeStrategy = "shallow",
-  ): TerminalConfigData {
+  update(partial: PartialConfig, strategy: MergeStrategy = "shallow"): TerminalConfigData {
     const merged =
       strategy === "deep"
-        ? this.deepMerge(this.config, partial)
+        ? deepMerge(this.config, partial)
         : { ...this.config, ...partial };
 
-    this.config = TerminalConfigSchema.parse(merged);
+    const validated = validateTerminalConfig(merged, this.defaults);
+    this.config = validated.data;
     this.saveToStorage(this.config);
     return this.getConfig();
   }
 
-  /**
-   * Reset configuration to defaults.
-   *
-   * @param keep - Optional list of keys to preserve from current config
-   */
   reset(keep?: (keyof TerminalConfigData)[]): TerminalConfigData {
     if (keep && keep.length > 0) {
       const preserved = keep.reduce(
         (acc, key) => ({ ...acc, [key]: this.config[key] }),
-        {} as Partial<TerminalConfigData>,
+        {} as PartialConfig,
       );
-      this.config = TerminalConfigSchema.parse({
-        ...this.defaults,
-        ...preserved,
-      });
+      const validated = validateTerminalConfig(
+        { ...this.defaults, ...preserved },
+        this.defaults,
+      );
+      this.config = validated.data;
     } else {
       this.config = { ...this.defaults };
     }
@@ -170,109 +277,42 @@ export class TerminalConfigManager {
     return this.getConfig();
   }
 
-  /**
-   * Validate a partial configuration without applying it.
-   *
-   * @returns `{ valid: true, data }` if valid, `{ valid: false, errors }` otherwise
-   */
-  validate(partial: unknown):
-    | { valid: true; data: TerminalConfigData }
-    | { valid: false; errors: string[] } {
-    const result = TerminalConfigSchema.safeParse(
-      partial instanceof Object && partial !== null
-        ? { ...this.defaults, ...partial }
-        : this.defaults,
-    );
-
-    if (!result.success) {
-      return {
-        valid: false,
-        errors: result.error.errors.map((e) => e.message),
-      };
+  validate(partial: unknown): { valid: true; data: TerminalConfigData } | { valid: false; errors: string[] } {
+    const result = validateTerminalConfig(partial, this.defaults);
+    if (result.valid) {
+      return { valid: true, data: result.data };
     }
-    return { valid: true, data: result.data };
+    return { valid: false, errors: result.errors };
   }
 
-  /**
-   * Load persisted configuration from localStorage.
-   * Only available in browser environments.
-   */
-  private loadFromStorage(): Partial<TerminalConfigData> | undefined {
+  private loadFromStorage(): PartialConfig | undefined {
     if (typeof window === "undefined") return undefined;
     try {
       const raw = localStorage.getItem(this.storageKey);
       if (!raw) return undefined;
-      const parsed = JSON.parse(raw);
-      // Validate persisted data against schema, return only valid subset
-      const validated = TerminalConfigSchema.partial().safeParse(parsed);
-      return validated.success ? validated.data : undefined;
+      const parsed = JSON.parse(raw) as PartialConfig;
+      const validated = validateTerminalConfig(parsed, this.defaults);
+      return validated.valid ? parsed : undefined;
     } catch {
       return undefined;
     }
   }
 
-  /**
-   * Persist configuration to localStorage.
-   * Only available in browser environments.
-   */
   private saveToStorage(config: TerminalConfigData): void {
     if (typeof window === "undefined") return;
     try {
       localStorage.setItem(this.storageKey, JSON.stringify(config));
     } catch {
-      // Ignore storage errors (quota exceeded, etc.)
+      // Quota exceeded or storage unavailable — ignore silently
     }
   }
 
-  /**
-   * Deep merge two configuration objects.
-   * Arrays are replaced, nested objects are merged recursively.
-   */
-  private deepMerge(
-    base: TerminalConfigData,
-    override: Partial<TerminalConfigData>,
-  ): TerminalConfigData {
-    const result: TerminalConfigData = { ...base };
-
-    for (const key of Object.keys(override) as (keyof TerminalConfigData)[]):
-      const baseVal = base[key];
-      const overrideVal = override[key];
-
-      if (
-        baseVal !== null &&
-        typeof baseVal === "object" &&
-        !Array.isArray(baseVal) &&
-        overrideVal !== null &&
-        typeof overrideVal === "object" &&
-        !Array.isArray(overrideVal)
-      ) {
-        (result as Record<string, unknown>)[key] = this.deepMerge(
-          baseVal as TerminalConfigData,
-          overrideVal as Partial<TerminalConfigData>,
-        );
-      } else if (overrideVal !== undefined) {
-        (result as Record<string, unknown>)[key] = overrideVal;
-      }
-
-    return result;
-  }
-
-  /**
-   * Export the current configuration as a plain object.
-   * Useful for serialization or passing to xterm.js constructors.
-   */
   toJSON(): TerminalConfigData {
     return this.getConfig();
   }
 
-  /**
-   * Create a TerminalConfigManager from environment variables and stored config.
-   * Convenience factory for SSR/hydration scenarios.
-   */
-  static createForEnvironment(
-    sessionId: string,
-    envConfig?: Partial<TerminalConfigData>,
-  ): TerminalConfigManager {
+  static createForEnvironment(sessionId: string, envConfig?: PartialConfig): TerminalConfigManager {
     return new TerminalConfigManager(sessionId, envConfig);
   }
 }
+
