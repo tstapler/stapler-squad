@@ -40,7 +40,7 @@ import (
 // Analyzer is the exported analysis.Analyzer for the norawgitcli check.
 var Analyzer = &analysis.Analyzer{
 	Name:     "norawgitcli",
-	Doc:      "forbids git CLI call sites (exec/safeexec constructors, runner.Run(..., \"git\", ...), runGitCommand) outside session/git/backend/cli and session/gitwiring; route git through session/git/backend instead",
+	Doc:      "forbids git CLI call sites (exec/safeexec constructors, runner.Run(..., \"git\", ...), runGitCommand) outside session/git/backend/cli, session/gitwiring and the test-fixture helpers testutil/gitfixture and session/git/internal/gittest; route git through session/git/backend instead",
 	Run:      run,
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 }
@@ -63,9 +63,10 @@ var execPackageSuffixes = []string{"os/exec", "/executor/safeexec"}
 
 func run(pass *analysis.Pass) (interface{}, error) {
 	pkgPath := pass.Pkg.Path()
+	sanctioned := false
 	for _, p := range sanctionedPackages {
 		if pkgPath == p || strings.HasPrefix(pkgPath, p+"/") {
-			return nil, nil
+			sanctioned = true
 		}
 	}
 
@@ -94,7 +95,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			return
 		}
 		kind, ok := rawGitCall(call, pass)
-		if !ok {
+		if !ok || sanctioned {
 			return
 		}
 		// A directive on the call's line or the line above suppresses it.
@@ -140,8 +141,10 @@ func rawGitCall(call *ast.CallExpr, pass *analysis.Pass) (string, bool) {
 		if idx >= 0 && isGitArg(call, idx, pass) {
 			return fn.Pkg().Name() + "." + fn.Name(), true
 		}
-	case fn.Name() == "Run" && sig.Recv() != nil && fn.Pkg() != nil && isPackage(fn.Pkg(), "/session/tmux"):
-		// tmux.CommandRunner shape: Run(ctx, dir, name string, args ...string).
+	case (fn.Name() == "Run" || fn.Name() == "RunStdout") && sig.Recv() != nil && fn.Pkg() != nil &&
+		(isPackage(fn.Pkg(), "/session/tmux") || isPackage(fn.Pkg(), "/session/git/backend")):
+		// tmux.CommandRunner / backend.Runner / backend.StdoutRunner shape:
+		// Run(ctx, dir, name string, args ...string).
 		if sig.Params().Len() == 4 && sig.Variadic() && isStringParam(sig, 1) && isStringParam(sig, 2) &&
 			isGitArg(call, 2, pass) {
 			return "runner.Run", true

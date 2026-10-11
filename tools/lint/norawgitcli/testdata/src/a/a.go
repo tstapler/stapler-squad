@@ -6,6 +6,7 @@ import (
 	"os/exec"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -57,4 +58,9 @@ func suppressed(ctx context.Context, r tmux.CommandRunner) {
 func stale() {
 	//nolint:norawgitcli // migrating, gone // want `stale //nolint:norawgitcli`
 	_ = exec.Command("ls")
+}
+
+func port(ctx context.Context, r backend.Runner, s backend.StdoutRunner) {
+	_, _ = r.Run(ctx, "/repo", "git", "status")       // want `runner\.Run invokes the git CLI directly`
+	_, _ = s.RunStdout(ctx, "/repo", "git", "status") // want `runner\.Run invokes the git CLI directly`
 }

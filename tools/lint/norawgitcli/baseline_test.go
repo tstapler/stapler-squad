@@ -4,6 +4,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -40,6 +41,12 @@ func TestBaselineCount(t *testing.T) {
 		if d.IsDir() {
 			if skipDirs[d.Name()] || path == ownPkg {
 				return filepath.SkipDir
+			}
+			// Nested modules are not loaded by `linter ./...`, so the analyzer never checks them.
+			if path != root {
+				if _, statErr := os.Stat(filepath.Join(path, "go.mod")); statErr == nil {
+					return filepath.SkipDir
+				}
 			}
 			return nil
 		}
