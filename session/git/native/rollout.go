@@ -2,12 +2,14 @@ package native
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/tstapler/stapler-squad/session/git/redact"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -119,8 +121,10 @@ func WithOperationSpan(ctx context.Context, op string, fn func() (implementation
 		attribute.String("outcome", outcome),
 	)
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		// Git error text can carry credentialed URLs; redact before it reaches OTel (Story 1.3.1).
+		safe := redact.Git(err.Error())
+		span.RecordError(errors.New(safe))
+		span.SetStatus(codes.Error, safe)
 	}
 
 	operationDurationMS.Record(spanCtx, float64(time.Since(start).Milliseconds()),
