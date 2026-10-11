@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,6 +14,55 @@ import (
 )
 
 var testEntRepoCounter int64
+
+var (
+	templateKeeper *sql.Conn // never closed: pins the template in memory for the process lifetime
+	templateDBOnce sync.Once
+	templateDBURI  string
+	templateDBErr  error
+)
+
+// migratedTemplateDBURI returns the DSN of a shared-cache in-memory database that
+// already has the full schema and every startup migration applied, built once per
+// test process and kept open (never closed) so the in-memory database survives for
+// every later copy. Schema creation (ent/Atlas) is ~70% of NewEntRepository's CPU
+// and runs under a process-wide mutex, so repeating it for every test is the
+// dominant cost of storage-backed tests; copying this template skips it.
+func migratedTemplateDBURI() (string, error) {
+	templateDBOnce.Do(func() {
+		dsn := fmt.Sprintf("file:testentrepotemplate%d?mode=memory&cache=shared", atomic.AddInt64(&testEntRepoCounter, 1))
+		if _, err := NewEntRepository(WithDatabasePath(dsn)); err != nil {
+			templateDBErr = err
+			return
+		}
+		// An in-memory database lives only while a connection to it stays open, and
+		// NewEntRepository's pool recycles its connection after an hour
+		// (SetConnMaxLifetime). Pin a second connection with no lifetime limit so the
+		// template survives a long-running test process.
+		keeper, err := sql.Open("sqlite", dsn)
+		if err != nil {
+			templateDBErr = err
+			return
+		}
+		keeper.SetConnMaxLifetime(0)
+		if templateKeeper, err = keeper.Conn(context.Background()); err != nil {
+			templateDBErr = err
+			return
+		}
+		_ = templateKeeper // held, not read: the open connection is what keeps the database alive
+		templateDBURI = dsn
+	})
+	return templateDBURI, templateDBErr
+}
+
+// WarmTestEntRepositoryTemplate builds the process-wide template database that
+// NewTestEntRepository copies from. Its connection-pool goroutines live for
+// the whole process, so a goleak.IgnoreCurrent() baseline taken before the
+// first NewTestEntRepository call flags them as leaks. Call it from TestMain.
+func WarmTestEntRepositoryTemplate() error {
+	_, err := migratedTemplateDBURI()
+	return err
+}
 
 // NewTestEntRepository returns an EntRepository backed by a uniquely-named
 // shared-cache in-memory SQLite database, closed automatically via
@@ -30,7 +80,11 @@ func NewTestEntRepository(t testing.TB) *EntRepository {
 	t.Helper()
 	id := atomic.AddInt64(&testEntRepoCounter, 1)
 	dsn := fmt.Sprintf("file:testentrepo%d?mode=memory&cache=shared", id)
-	repo, err := NewEntRepository(WithDatabasePath(dsn))
+	seedURI, seedErr := migratedTemplateDBURI()
+	if seedErr != nil {
+		t.Fatalf("NewTestEntRepository: build template database: %v", seedErr)
+	}
+	repo, err := NewEntRepository(WithDatabasePath(dsn), withSeedURI(seedURI))
 	if err != nil {
 		t.Fatalf("NewTestEntRepository: %v", err)
 	}

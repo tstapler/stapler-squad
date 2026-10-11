@@ -131,19 +131,30 @@ func (i *Instance) setupFirstTimeWorktree() error {
 			// the same as a lookup failure -- it's a real string but not a
 			// meaningful branch name to persist or display.
 			if i.Branch == "" {
-				i.Branch = "unknown"
+				// Resolve into a local var BEFORE taking i.mu -- runner.Run is a
+				// blocking remote git subprocess bounded only by the 10s ctx timeout
+				// above; holding the actor lock across it would stall every other
+				// i.mu.Lock()/RLock() caller (including the legacy-writer setters
+				// documented in instance_actor_setters.go) for up to that long.
+				branch := "unknown"
 				if out, brErr := runner.Run(ctx, i.ExistingWorktree, "git", "rev-parse", "--abbrev-ref", "HEAD"); brErr == nil {
 					if br := strings.TrimSpace(string(out)); br != "" && br != "HEAD" {
-						i.Branch = br
+						branch = br
 					}
 				} else {
 					log.Warn("failed to resolve remote worktree branch name", "session", i.Title, "path", i.ExistingWorktree, "err", brErr)
 				}
+				i.mu.Lock()
+				i.Branch = branch
+				i.mu.Unlock()
 			}
 			cancel()
 			gitWorktree := git.NewGitWorktreeFromStorage(i.Path, i.ExistingWorktree, i.Title, i.Branch, baseCommitSHA, git.WithCommandRunner(runner))
+			i.mu.Lock()
 			i.gitManager.SetWorktree(gitWorktree)
-			log.Info("attached to remote git worktree", "session", i.Title, "path", i.ExistingWorktree, "branch", i.Branch)
+			attachedBranch := i.Branch
+			i.mu.Unlock()
+			log.Info("attached to remote git worktree", "session", i.Title, "path", i.ExistingWorktree, "branch", attachedBranch)
 			break
 		}
 		log.Info("connecting to existing worktree", "session", i.Title, "path", i.ExistingWorktree)
@@ -151,9 +162,12 @@ func (i *Instance) setupFirstTimeWorktree() error {
 		if err != nil {
 			return fmt.Errorf("failed to connect to existing worktree: %w", err)
 		}
+		i.mu.Lock()
 		i.gitManager.SetWorktree(gitWorktree)
-		i.Branch = gitWorktree.GetBranchName()
-		log.Info("connected to existing worktree", "session", i.Title, "branch", i.Branch)
+		connectedBranch := gitWorktree.GetBranchName()
+		i.Branch = connectedBranch
+		i.mu.Unlock()
+		log.Info("connected to existing worktree", "session", i.Title, "branch", connectedBranch)
 	case SessionTypeNewProject:
 		log.Info("new project session, initializing git repo", "session", i.Title, "path", i.Path)
 		// A remote instance's project directory was already git-initialized on the
@@ -183,15 +197,19 @@ func (i *Instance) setupFirstTimeWorktree() error {
 			if err != nil {
 				return fmt.Errorf("new_project worktree creation failed: %w", err)
 			}
+			i.mu.Lock()
 			i.gitManager.SetWorktree(gitWorktree)
 			i.Branch = branchName
-			log.Info("new project initialized with worktree", "path", i.Path, "branch", i.Branch)
-			return nil
+			i.mu.Unlock()
+			log.Info("new project initialized with worktree", "path", i.Path, "branch", branchName)
+		} else {
+			i.mu.Lock()
+			i.gitManager.SetWorktree(nil)
+			i.Branch = ""
+			i.mu.Unlock()
+			log.Info("new project initialized", "path", i.Path)
 		}
-		i.gitManager.SetWorktree(nil)
-		i.Branch = ""
-		log.Info("new project initialized", "path", i.Path)
-	default: // SessionTypeDirectory and unknown types → no worktree
+	case SessionTypeDirectory:
 		log.Info("directory session, no git worktree", "session", i.Title, "path", i.Path)
 		// EnsureDirectorySessionPath does local-filesystem os.Stat/git-init -- correct for
 		// a local Directory session, but i.Path names a REMOTE host path for a remote one,
@@ -205,9 +223,21 @@ func (i *Instance) setupFirstTimeWorktree() error {
 				return fmt.Errorf("failed to create directory for session: %w", err)
 			}
 		}
+		i.mu.Lock()
 		i.gitManager.SetWorktree(nil)
 		i.Branch = ""
+		i.mu.Unlock()
+	default:
+		return fmt.Errorf("setupFirstTimeWorktree: unrecognized session type %q for session %q", i.SessionType, i.Title)
 	}
+
+	// Shared republish for every case that doesn't already inline one (SessionTypeNewWorktree
+	// above republishes early so GetCreationWarning() sees CreationWarning immediately; this
+	// second store for that case is a harmless, idempotent extra atomic write).
+	i.mu.Lock()
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.snapshot.Store(snap)
 	return nil
 }
 
@@ -269,6 +299,11 @@ func EnsureDirectorySessionPath(path string) error {
 // bug this once caused when the two sides used independently-duplicated logic.
 const BacklogBranchPrefix = "backlog/"
 
+// BacklogWorkBranchName is the full git branch a backlog work session for the
+// given slug lives on. Every writer or predictor of that branch name must go
+// through this, not concatenate BacklogBranchPrefix itself.
+func BacklogWorkBranchName(slug string) string { return BacklogBranchPrefix + slug }
+
 // CreateBacklogWorktree creates a git worktree for a backlog work session.
 // It creates a branch named BacklogBranchPrefix+branchSuffix and returns the
 // on-disk worktree path. The caller is responsible for writing files to the
@@ -328,7 +363,7 @@ func CreateBacklogWorktree(repoPath, branchSuffix, baseBranch string) (string, e
 		if err := RepairCorruptedGitRepo(resolvedRepo); err != nil {
 			return err
 		}
-		branchName := BacklogBranchPrefix + branchSuffix
+		branchName := BacklogWorkBranchName(branchSuffix)
 		var wt *git.GitWorktree
 		var err error
 		var defaultBranch, baseSHA string

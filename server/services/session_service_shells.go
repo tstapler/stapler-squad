@@ -93,6 +93,11 @@ func (s *SessionService) SpawnShell(
 			fmt.Errorf("session %q is not running", req.Msg.SessionId))
 	}
 
+	if _, err := AccessForUnary(inst, s.guards).Writer(nil); err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("session %q is a background session and is read-only: %w", req.Msg.SessionId, err))
+	}
+
 	shell, spawnErr := inst.SpawnShell(ctx, session.SpawnShellRequest{
 		Name:       req.Msg.Name,
 		Command:    req.Msg.Command,
@@ -176,6 +181,11 @@ func (s *SessionService) RestartShell(
 	if inst == nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("session %q is not running", req.Msg.SessionId))
+	}
+
+	if _, err := AccessForUnary(inst, s.guards).Writer(nil); err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("session %q is a background session and is read-only: %w", req.Msg.SessionId, err))
 	}
 
 	// shellTmuxSessionName is deterministic per shell ID, so RestartShell reuses the

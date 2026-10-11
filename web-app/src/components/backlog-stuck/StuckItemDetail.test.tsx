@@ -2,6 +2,9 @@ import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
+
+jest.mock("@/lib/analytics", () => ({ useAnalytics: () => ({ track: jest.fn() }) }));
+
 import { StuckItemDetail } from "./StuckItemDetail";
 
 function makeItem(overrides: Partial<StuckBacklogItem> = {}): StuckBacklogItem {
@@ -18,6 +21,19 @@ function makeItem(overrides: Partial<StuckBacklogItem> = {}): StuckBacklogItem {
     planArtifactsPath: "",
     ...overrides,
   } as StuckBacklogItem;
+}
+
+// Shared by the rework-cap pre-fill/sync tests below, which only ever vary
+// currentReworkCapOverride (used for both the initial render() and a
+// follow-up rerender() in the transition/clobber tests).
+function reworkCapDetail(currentReworkCapOverride: number | undefined) {
+  return (
+    <StuckItemDetail
+      item={makeItem({ reason: StuckReason.REWORK_CAP })}
+      onReworkCapOverride={jest.fn()}
+      currentReworkCapOverride={currentReworkCapOverride}
+    />
+  );
 }
 
 describe("StuckItemDetail", () => {
@@ -177,35 +193,17 @@ describe("StuckItemDetail", () => {
     });
 
     it("pre-fills the rounds input with the current override when one is set", () => {
-      render(
-        <StuckItemDetail
-          item={makeItem({ reason: StuckReason.REWORK_CAP })}
-          onReworkCapOverride={jest.fn()}
-          currentReworkCapOverride={5}
-        />
-      );
+      render(reworkCapDetail(5));
       expect(screen.getByTestId("stuck-item-rework-cap-rounds-input")).toHaveValue(5);
     });
 
     it("falls back to the default '3' pre-fill when currentReworkCapOverride is 0 (unlimited)", () => {
-      render(
-        <StuckItemDetail
-          item={makeItem({ reason: StuckReason.REWORK_CAP })}
-          onReworkCapOverride={jest.fn()}
-          currentReworkCapOverride={0}
-        />
-      );
+      render(reworkCapDetail(0));
       expect(screen.getByTestId("stuck-item-rework-cap-rounds-input")).toHaveValue(3);
     });
 
     it("falls back to the default '3' pre-fill when currentReworkCapOverride is undefined", () => {
-      render(
-        <StuckItemDetail
-          item={makeItem({ reason: StuckReason.REWORK_CAP })}
-          onReworkCapOverride={jest.fn()}
-          currentReworkCapOverride={undefined}
-        />
-      );
+      render(reworkCapDetail(undefined));
       expect(screen.getByTestId("stuck-item-rework-cap-rounds-input")).toHaveValue(3);
     });
   });
@@ -266,46 +264,22 @@ describe("StuckItemDetail", () => {
   // in StuckItemDetail.tsx.
   describe("StuckItemDetail_should_syncInputToResolvedOverride_When_ParentFetchResolvesAfterMount", () => {
     it("re-syncs the input when currentReworkCapOverride transitions from undefined to a resolved positive value", () => {
-      const { rerender } = render(
-        <StuckItemDetail
-          item={makeItem({ reason: StuckReason.REWORK_CAP })}
-          onReworkCapOverride={jest.fn()}
-          currentReworkCapOverride={undefined}
-        />
-      );
+      const { rerender } = render(reworkCapDetail(undefined));
       expect(screen.getByTestId("stuck-item-rework-cap-rounds-input")).toHaveValue(3);
 
-      rerender(
-        <StuckItemDetail
-          item={makeItem({ reason: StuckReason.REWORK_CAP })}
-          onReworkCapOverride={jest.fn()}
-          currentReworkCapOverride={5}
-        />
-      );
+      rerender(reworkCapDetail(5));
 
       expect(screen.getByTestId("stuck-item-rework-cap-rounds-input")).toHaveValue(5);
     });
 
     it("does not clobber a value the user already typed before the fetch resolves", () => {
-      const { rerender } = render(
-        <StuckItemDetail
-          item={makeItem({ reason: StuckReason.REWORK_CAP })}
-          onReworkCapOverride={jest.fn()}
-          currentReworkCapOverride={undefined}
-        />
-      );
+      const { rerender } = render(reworkCapDetail(undefined));
       const input = screen.getByTestId("stuck-item-rework-cap-rounds-input");
       fireEvent.change(input, { target: { value: "10" } });
       expect(input).toHaveValue(10);
 
       // The parent's fetch resolves after the user has already edited the field.
-      rerender(
-        <StuckItemDetail
-          item={makeItem({ reason: StuckReason.REWORK_CAP })}
-          onReworkCapOverride={jest.fn()}
-          currentReworkCapOverride={5}
-        />
-      );
+      rerender(reworkCapDetail(5));
 
       expect(screen.getByTestId("stuck-item-rework-cap-rounds-input")).toHaveValue(10);
     });
@@ -452,6 +426,78 @@ describe("StuckItemDetail", () => {
         />
       );
       expect(screen.getByTestId("stuck-item-no-action-copy")).toBeInTheDocument();
+    });
+  });
+
+  describe("StuckItemDetail_should_offerDiagnoseControl_When_HandlerProvided", () => {
+    it("does not render the Diagnose button when no handler is provided", () => {
+      render(<StuckItemDetail item={makeItem()} />);
+      expect(screen.queryByTestId("stuck-item-diagnose-form")).not.toBeInTheDocument();
+    });
+
+    it("calls onDiagnose with the item id and reason when 'Diagnose & Nudge' is clicked", async () => {
+      const onDiagnose = jest.fn().mockResolvedValue("diag-session-uuid-1");
+      render(
+        <StuckItemDetail
+          item={makeItem({ itemId: "item-diag-1", reason: StuckReason.BOUNCING })}
+          onDiagnose={onDiagnose}
+        />
+      );
+      fireEvent.click(screen.getByTestId("stuck-item-diagnose"));
+
+      await waitFor(() =>
+        expect(onDiagnose).toHaveBeenCalledWith("item-diag-1", StuckReason.BOUNCING)
+      );
+      expect(screen.getByTestId("stuck-item-diagnose").textContent).toBe(
+        "Diagnostic session dispatched"
+      );
+    });
+
+    it("links to the dispatched diagnostic session once onDiagnose resolves", async () => {
+      const onDiagnose = jest.fn().mockResolvedValue("diag-session-uuid-1");
+      render(<StuckItemDetail item={makeItem()} onDiagnose={onDiagnose} />);
+      fireEvent.click(screen.getByTestId("stuck-item-diagnose"));
+
+      await waitFor(() =>
+        expect(screen.getByTestId("stuck-item-diagnose-session-link")).toBeInTheDocument()
+      );
+      expect(screen.getByTestId("stuck-item-diagnose-session-link")).toHaveAttribute(
+        "href",
+        "/?session=diag-session-uuid-1"
+      );
+    });
+
+    it("shows an error message when the dispatch call rejects", async () => {
+      const onDiagnose = jest.fn().mockRejectedValue(new Error("dispatch failed"));
+      render(<StuckItemDetail item={makeItem()} onDiagnose={onDiagnose} />);
+      fireEvent.click(screen.getByTestId("stuck-item-diagnose"));
+
+      await waitFor(() =>
+        expect(screen.getByTestId("stuck-item-diagnose-error").textContent).toBe("dispatch failed")
+      );
+    });
+
+    it("calls onDiagnose only once when clicked repeatedly before the first call settles", async () => {
+      // The button uses aria-disabled (not disabled) so it stays focusable
+      // while busy, which doesn't block clicks on its own — this is what
+      // the onClick/submitDiagnose re-dispatch guards exist to prevent.
+      let resolveDiagnose!: (uuid: string) => void;
+      const onDiagnose = jest.fn(
+        () => new Promise<string>((resolve) => { resolveDiagnose = resolve; })
+      );
+      render(<StuckItemDetail item={makeItem()} onDiagnose={onDiagnose} />);
+      const button = screen.getByTestId("stuck-item-diagnose");
+
+      fireEvent.click(button);
+      fireEvent.click(button);
+      fireEvent.click(button);
+      expect(onDiagnose).toHaveBeenCalledTimes(1);
+      expect(button).toHaveAttribute("aria-disabled", "true");
+
+      resolveDiagnose("diag-session-uuid");
+      await waitFor(() => expect(button).toHaveTextContent("Diagnostic session dispatched"));
+      fireEvent.click(button);
+      expect(onDiagnose).toHaveBeenCalledTimes(1);
     });
   });
 });

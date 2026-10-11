@@ -43,6 +43,8 @@ export interface TerminalSizingRefs {
   pendingConnectAfterDisconnectRef: RefObject<boolean>;
   isMountedRef: RefObject<boolean>;
   metricsRef: RefObject<TerminalLoadMetrics>;
+  /** One-shot: set by a viewport settle's refit so the resulting resize skips the server bounce hold. */
+  settleBypassPendingRef?: RefObject<boolean>;
 }
 
 type Connect = (cols?: number, rows?: number) => void;
@@ -53,9 +55,11 @@ interface ResizeHandlerParams {
   isConnected: boolean;
   error: unknown;
   connect: Connect;
-  resize: (cols: number, rows: number, force?: boolean) => void;
+  resize: (cols: number, rows: number, force?: boolean, opts?: { bypassBounceHold?: boolean }) => void;
   clearBufferBeforeResize: () => void;
   setIsWaitingForStableSize: (waiting: boolean) => void;
+  /** Called on every xterm resize, before any dedupe, so overlays can track the live row count. */
+  onTerminalResized?: (cols: number, rows: number) => void;
   refs: TerminalSizingRefs;
 }
 
@@ -69,6 +73,7 @@ export function useTerminalResizeHandler({
   resize,
   clearBufferBeforeResize,
   setIsWaitingForStableSize,
+  onTerminalResized,
   refs,
 }: ResizeHandlerParams) {
   const {
@@ -78,10 +83,12 @@ export function useTerminalResizeHandler({
     sizeStabilityTimeoutRef,
     isMountedRef,
     metricsRef,
+    settleBypassPendingRef,
   } = refs;
 
   return useCallback((cols: number, rows: number) => {
     console.log(`[TerminalOutput] Terminal resized to ${cols}x${rows}`);
+    onTerminalResized?.(cols, rows);
 
     const lastResize = lastResizeRef.current;
     const sizeChanged = !lastResize || lastResize.cols !== cols || lastResize.rows !== rows;
@@ -174,8 +181,13 @@ export function useTerminalResizeHandler({
 
     console.log(`[TerminalOutput] Sending resize: ${cols}x${rows} (prev: ${lastResize?.cols || 'none'}x${lastResize?.rows || 'none'})`);
     clearBufferBeforeResize();
-    resize(cols, rows);
-  }, [isConnected, resize, connect, error, sessionId, clearBufferBeforeResize, xtermRef]);
+    if (settleBypassPendingRef?.current) {
+      settleBypassPendingRef.current = false;
+      resize(cols, rows, false, { bypassBounceHold: true });
+    } else {
+      resize(cols, rows);
+    }
+  }, [isConnected, resize, connect, error, sessionId, clearBufferBeforeResize, onTerminalResized, xtermRef]);
 }
 
 interface ConnectionBootstrapParams {

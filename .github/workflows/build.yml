@@ -74,7 +74,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          CHANGED=$(gh api "repos/${{ github.repository }}/compare/${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}" --paginate --jq '.files[].filename')
+          CHANGED=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
           echo "Changed files:"
           echo "$CHANGED"
           if echo "$CHANGED" | grep -qE '\.go$|^go\.(mod|sum)$|^Makefile$|^install\.sh$|^proto/|^web-app/src/|^web-app/package\.json$|^web-app/pnpm-lock\.yaml$|^\.github/workflows/build\.yml$|^\.github/actions/prepare/|^\.gitmodules$|^third_party/tmux/'; then
@@ -227,6 +227,9 @@ jobs:
           # ESLint step needs it (see that file's comment on this exact
           # gotcha with a shallow default checkout).
           fetch-depth: 0
+          # Blobless: full commit/tree history (merge-base and origin/main resolve)
+          # without the ~16GB of historical blobs; blobs for diffed files fetch lazily.
+          filter: blob:none
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -313,13 +316,15 @@ jobs:
           # 8m0s" (confirmed twice in a row, PR #735 CI runs 34164579438 attempts
           # 1-2 -- each kill caught an unrelated, normally-fast subtest still
           # "running", not a hang/deadlock, ruling out a real code regression).
-          # 12m keeps meaningful margin below the 22m full-suite fallback while
-          # covering this wide-but-not-__ALL__ blast-radius case.
+          # 15m (was 12m): PR #927 (session/tmux) hit "test timed out after 12m0s"
+          # on a normal -race run while only fast tests were still in flight --
+          # the same runner-speed tipping point, not a hang. Still below the 22m
+          # full-suite fallback and within this job's 30m timeout-minutes.
           # PKGS is deliberately unquoted below: it's a space-separated list
           # of package paths that must word-split into separate `go test`
           # arguments, not one quoted string.
           # shellcheck disable=SC2086
-          TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions -- -race -short -timeout=12m \
+          TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions -- -race -short -timeout=15m \
             -coverprofile=coverage.affected.out -covermode=atomic $PKGS
 
       # Advisory only -- a global-threshold-style gate doesn't make sense
@@ -373,7 +378,12 @@ jobs:
             echo "Registry out of date — run: make registry-generate"
             exit 1
           }
-          NEW_FILES=$(git diff --name-only origin/main -- 'docs/registry/features/backend/**' 2>/dev/null || true)
+          # --diff-filter=A: only files *added* relative to origin/main are a new RPC.
+          # Without it, a refactor that only moves a handler to a different file (and so
+          # only bumps handlerFile/lastModified on an existing, already-untested feature
+          # file) is indistinguishable from a brand-new untested RPC, and blocks on
+          # pre-existing debt this PR didn't create.
+          NEW_FILES=$(git diff --name-only --diff-filter=A origin/main -- 'docs/registry/features/backend/**' 2>/dev/null || true)
           for f in $NEW_FILES; do
             if [ -f "$f" ] && jq -e '.tested == false' "$f" > /dev/null 2>&1; then
               echo "ERROR: New RPC $f has no test (tested: false). Add a test and set tested: true."
@@ -579,6 +589,40 @@ jobs:
           name: coverage-tmux
           path: coverage.tmux.out
           retention-days: 1
+
+  # test-delivery-guards: the `//go:build sinkguard` type-based guard tests
+  # (delivery gate sinks, terminal-write callers) are excluded from every other
+  # job's default build tags, so without this job a regression in them would
+  # only surface in a local `make ci`. Runs on PRs and main; the guards are
+  # static/type checks with no tmux, so it stays fast.
+  test-delivery-guards:
+    name: Test (delivery-gate and terminal-write guards)
+    runs-on: ubuntu-latest
+    needs: prepare
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Install gotestsum
+        run: |
+          go install gotest.tools/gotestsum@v1.13.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Download generated files
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.prepare.outputs.artifact-name }}
+
+      - name: Run sinkguard-tagged guard tests
+        run: make test-delivery-guards-run
 
   # test-rest's budget was raised 22m->30m (job timeout 25->35) on 2026-09-05
   # (PR #697): the retry-on-any-failure fallback below re-runs the entire

@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { type Session, SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
-import { groupSessions, type GroupingStrategy, type GroupedSessions } from "@/lib/grouping/strategies";
+import { groupSessions, groupWithPinned, type GroupingStrategy, type GroupedSessions } from "@/lib/grouping/strategies";
 import { compareSessionsByCost } from "@/components/sessions/sessionCostSort";
 
 export type SortField = "lastActivity" | "name" | "createdAt" | "updatedAt" | "tokenCost";
@@ -14,6 +14,7 @@ export interface UseFilteredGroupedSessionsParams {
   selectedTag: string | "all";
   hidePaused: boolean;
   showArchived: boolean;
+  showHidden: boolean;
   filterNeedsApproval: boolean;
   /** Optimistically-removed session IDs, excluded from the filtered result. */
   pendingDeleteIds: Set<string>;
@@ -52,6 +53,7 @@ export function useFilteredGroupedSessions({
   selectedTag,
   hidePaused,
   showArchived,
+  showHidden,
   filterNeedsApproval,
   pendingDeleteIds,
   sortField,
@@ -114,9 +116,16 @@ export function useFilteredGroupedSessions({
         return false;
       }
 
+      // Hidden filter — same shape as the archived filter above: excluded by
+      // default even if a prior includeHidden fetch left hidden sessions (e.g.
+      // Diagnose & Nudge, review dispatches) in the Redux store.
+      if (!showHidden && session.hidden) {
+        return false;
+      }
+
       return true;
     });
-  }, [sessions, searchQuery, selectedStatus, selectedCategory, selectedTag, hidePaused, filterNeedsApproval, showArchived, pendingDeleteIds]);
+  }, [sessions, searchQuery, selectedStatus, selectedCategory, selectedTag, hidePaused, filterNeedsApproval, showArchived, showHidden, pendingDeleteIds]);
 
   const sortedSessions = useMemo(() => {
     const sorted = [...filteredSessions];
@@ -161,9 +170,11 @@ export function useFilteredGroupedSessions({
   // tick a caller may drive — a session can cross the stale threshold with no change
   // to sortedSessions/groupingStrategy, and this is the only way to pick that up.
   const groupedSessionsResult = useMemo(() => {
-    return groupSessions(sortedSessions, groupingStrategy, {
-      thresholdMinutes: staleThresholdMinutes,
-    });
+    return groupWithPinned(sortedSessions, (rest) =>
+      groupSessions(rest, groupingStrategy, {
+        thresholdMinutes: staleThresholdMinutes,
+      })
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortedSessions, groupingStrategy, staleThresholdMinutes, staleRecomputeTick]);
 

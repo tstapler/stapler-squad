@@ -20,6 +20,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/git/native"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -915,22 +916,8 @@ func RemoteURL(repoPath, remote string) (string, error) {
 	return urls[0], nil
 }
 
-// MergeMainResult describes the outcome of MergeMainIntoWorktree.
-type MergeMainResult struct {
-	// UpToDate is true when the worktree's branch already contained everything
-	// from mainBranch — nothing was merged in.
-	UpToDate bool
-	// Merged is true when the merge (including a fast-forward) brought in new
-	// commits from mainBranch.
-	Merged bool
-	// Conflicted is true when merging mainBranch produced conflicts. The merge is
-	// always aborted before returning, so the worktree is left clean either way —
-	// callers never have to clean up a half-merged tree.
-	Conflicted bool
-	// ConflictedFiles lists the paths that conflicted. Populated only when
-	// Conflicted is true.
-	ConflictedFiles []string
-}
+// MergeMainResult describes the outcome of MergeMainIntoWorktree; see native.MergeMainResult.
+type MergeMainResult = native.MergeMainResult
 
 // MergeMainIntoWorktree fetches mainBranch from origin and merges it into whatever
 // branch is currently checked out in worktreePath. It never leaves the worktree in a
@@ -938,7 +925,7 @@ type MergeMainResult struct {
 // conflicting paths, so the caller can hand that context to whoever resolves it rather
 // than leaving a half-merged working tree behind for the next thing that touches it.
 //
-// Dispatches to nativeMergeMainIntoWorktreeLocked (Epic 3.4) — every real call site
+// Dispatches to native.MergeMainIntoWorktree (Epic 3.4) — every real call site
 // (drift.go's EnsureBranchSyncedWithMain, backlog_service_triage.go's
 // syncPRBranchWithMain, session/backlog_lifecycle.go's branchReconciler, which is
 // assigned this exact function value) needs no change of its own.
@@ -947,7 +934,7 @@ func MergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainResult, e
 	ctx := withOperationAttrs(context.Background(), attribute.String("worktree_path", worktreePath))
 	err := withOperationSpan(ctx, "git.merge.main", func() (string, string, error) {
 		var mergeErr error
-		result, mergeErr = nativeMergeMainIntoWorktreeLocked(worktreePath, mainBranch)
+		result, mergeErr = native.MergeMainIntoWorktree(nativeMergeDeps, worktreePath, mainBranch)
 		return implementationNative, mergeOutcomeLabel(result, mergeErr), mergeErr
 	})
 	return result, err

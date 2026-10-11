@@ -12,8 +12,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
@@ -47,6 +49,10 @@ func TestClassifyHeadlessCallError_should_BucketErrorsForLogGrepping(t *testing.
 		{"idle timeout (stream stalled)", headless.ErrIdleTimeout, 5 * time.Minute, "idle"},
 		{"wrapped idle timeout", fmt.Errorf("headless call ended: %w", headless.ErrIdleTimeout), 5 * time.Minute, "idle"},
 		{"idle timeout even with elapsed near budget must not fall into the timeout heuristic", headless.ErrIdleTimeout, triageCallBudget - time.Second, "idle"},
+		{"fan-out ceiling", &headless.FanoutCeilingError{Turns: 700, Subagents: 121, MaxTurns: 600, MaxSubagents: 120}, 40 * time.Minute, "fanout_ceiling"},
+		{"wrapped fan-out ceiling near budget must not fall into the timeout heuristic", fmt.Errorf("headless call ended: %w", &headless.FanoutCeilingError{}), triageCallBudget - time.Second, "fanout_ceiling"},
+		{"cost ceiling exceeded", fmt.Errorf("headless call ended: %w", &headless.CostCeilingError{SpendUSD: 30}), 5 * time.Minute, "cost_ceiling"},
+		{"cost ceiling even with elapsed near budget must not fall into the timeout heuristic", headless.ErrCostCeilingExceeded, triageCallBudget - time.Second, "cost_ceiling"},
 		{"ctx deadline exceeded", context.DeadlineExceeded, 5 * time.Minute, "timeout"},
 		{"wrapped ctx deadline exceeded", fmt.Errorf("headless call ended: %w", context.DeadlineExceeded), 5 * time.Minute, "timeout"},
 		{"elapsed within budget tail even without deadline error", errors.New("some other error"), 3*time.Hour - 4*time.Second, "timeout"},
@@ -649,7 +655,7 @@ func TestDequeueNextQueuedItems_SpawnsOldestQueuedItemFirst(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resp.Msg.Queued)
 
-	time.Sleep(5 * time.Millisecond)
+	waitClockPast(t, time.Now(), 5*time.Millisecond)
 
 	newerID := createReadyItemForSpawn(t, svc, repoPath, "newer queued")
 	resp, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: newerID}))
@@ -995,7 +1001,7 @@ func TestDequeueNextQueuedItems_should_SpawnHigherPriorityReadyItemFirst_When_On
 	// pure FIFO/creation-order dequeue would pick the P5 one; priority order must
 	// pick the P1 one instead.
 	p5ID := createReadyItemWithPriority(t, svc, repoPath, "low priority", 5)
-	time.Sleep(5 * time.Millisecond)
+	waitClockPast(t, time.Now(), 5*time.Millisecond)
 	p1ID := createReadyItemWithPriority(t, svc, repoPath, "high priority", 1)
 
 	sessions, err := storage.ListItemSessions(t.Context(), inProgressIDs[0])
@@ -3797,9 +3803,9 @@ func TestSpawnSessionFromItem_should_SetInstanceProgramViaInstanceOptions_When_W
 	require.Equal(t, 1, creator.callCount(),
 		"the override must reach instance creation via this single spawn call, never a follow-up SwitchProgram/Restart call")
 	call := creator.calls[0]
-	assert.Equal(t, "claude --model claude-sonnet-4-6", call.programOverride,
+	assert.Equal(t, "claude --model claude-sonnet-4-6 --effort medium", call.programOverride,
 		"family:sonnet must resolve to the concrete model ID via ResolveExecutorProgram, threaded as the programOverride argument")
-	assert.Equal(t, "claude --model claude-sonnet-4-6", call.inst.Program,
+	assert.Equal(t, "claude --model claude-sonnet-4-6 --effort medium", call.inst.Program,
 		"the spawned Instance must actually run on the resolved program, proving InstanceOptions.Program (not a post-hoc call) carried it")
 	assert.Contains(t, call.prompt, "kickoff: work-stage override item",
 		"the item's kickoff prompt must still be delivered in the same call that carries the program override — not dropped or raced")
@@ -4397,11 +4403,10 @@ func TestTriggerTriage_should_SetCallOptionsModel_When_PipelineModeConfiguresTri
 	assert.Empty(t, sessions[0].ExecutorFallbackReason)
 }
 
-// TestTriggerTriage_should_LeaveCallOptionsModelEmpty_When_PipelineModeIsDefault
-// (Story 2.3.2) is the byte-identical-to-today counterpart: an item on
-// PipelineModeDefault (no stage executor override configured anywhere) must
-// resolve to an empty CallOptions.Model, unchanged from pre-Epic-2.3 behavior.
-func TestTriggerTriage_should_LeaveCallOptionsModelEmpty_When_PipelineModeIsDefault(t *testing.T) {
+// TestTriggerTriage_should_UseConfiguredTriageModel_When_PipelineModeIsDefault: an item on
+// PipelineModeDefault (no stage executor override) runs triage on the configured triage
+// model (default family:sonnet), not the account default — and an explicit "none" opts out.
+func TestTriggerTriage_should_UseConfiguredTriageModel_When_PipelineModeIsDefault(t *testing.T) {
 	t.Parallel()
 	storage := createTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
@@ -4426,7 +4431,7 @@ func TestTriggerTriage_should_LeaveCallOptionsModelEmpty_When_PipelineModeIsDefa
 		return pool.callCount() == 1
 	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call")
 
-	assert.Empty(t, pool.firstCall().model, "CallOptions.Model must stay empty when no stage executor override is configured")
+	assert.Equal(t, "claude-sonnet-4-6", pool.firstCall().model, "unpinned triage must use the configured default model, not the account default")
 }
 
 // TestTriggerTriage_should_UseUnmodifiedRetriagePrompt_When_RetriagingRegardlessOfPipelineMode
@@ -6345,4 +6350,187 @@ func TestStopLiveWorkSessions_should_LogAndContinue_When_SessionStopperReturnsEr
 	updated, err := storage.GetItemSession(t.Context(), workSession.ID)
 	require.NoError(t, err)
 	assert.NotNil(t, updated.EndedAt, "session must still be marked ended despite the stop error, matching best-effort semantics")
+}
+
+// A repeated_noop_dispatch row must stop any further work-session spawn; once
+// the row resolves, dispatch proceeds again.
+func TestSpawnSessionFromItem_should_Refuse_When_RepeatedNoopDispatchRowOpen(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+	createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "noop gate item", RepoPath: repoPath, SkipTriage: true, SkipPlanning: true,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{{Index: 0, Text: "test", Status: "pending"}},
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+	_, err = svc.TransitionBacklogItemStatus(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{ItemId: itemID, TargetStatus: "ready"}))
+	require.NoError(t, err)
+
+	applied, err := storage.MarkStuck(ctx, itemID, domain.StuckReasonRepeatedNoopDispatch, session.BacklogStatusReady, "3 no-op sessions")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "repeated_noop_dispatch")
+
+	_, err = storage.ResolveStuck(ctx, itemID, domain.StuckReasonRepeatedNoopDispatch)
+	require.NoError(t, err)
+	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+}
+
+// TestReReview_BlockedByInFlightListenerReservation verifies the headless
+// re-review paths honor the lifecycle listener's per-item review reservation.
+func TestReReview_BlockedByInFlightListenerReservation(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, &config.Config{}, nil, nil, nil)
+	guard := session.NewReviewSpawnGuard()
+	svc.SetReviewSpawnGuard(guard)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title: "in-flight review", RepoPath: repoPath, Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	release, ok := guard.TryReserve(item.ID, nil)
+	require.True(t, ok)
+	defer release()
+
+	_, reviewErr := svc.TriggerReReview(context.Background(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: item.ID}))
+	require.Error(t, reviewErr)
+	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(reviewErr))
+
+	require.NoError(t, svc.AutoRespawnReview(context.Background(), item.ID), "auto respawn skips quietly")
+	sessions, err := storage.ListItemSessions(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Empty(t, sessions, "no review row created while another spawn is in flight")
+}
+
+func TestTriggerTriage_should_PersistErrorDetail_When_HeadlessCallFailsWithUnclassifiedError(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: "partial", err: errors.New("dial tcp: connection refused")}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "triage-error-detail item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: item.ID}))
+	require.NoError(t, trigErr)
+
+	is := waitForTriageFailureCaptured(t, storage, item.ID)
+	t.Cleanup(func() { _ = os.Remove(is.FailureCapturePath) })
+
+	assert.Equal(t, "other", is.EndReason)
+	assert.Contains(t, is.ErrorDetail, "dial tcp: connection refused")
+}
+
+func TestTruncateErrorDetail_should_RedactAndNormalize_When_ErrorHasSecretsOrWhitespace(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"sk- key", "dial failed sk-abcdef123456 end", "dial failed [REDACTED] end"},
+		{"bearer", "auth Bearer abcdefgh12 failed", "auth [REDACTED] failed"},
+		{"token=", "x token=abc123 y", "x [REDACTED] y"},
+		{"case-insensitive PASSWORD=", "x PASSWORD=hunter2", "x [REDACTED]"},
+		{"api_key=", "x api_key=hunter2", "x [REDACTED]"},
+		{"URL userinfo keeps scheme and host", "GET https://user:pa55@example.com/repo.git failed", "GET https://[REDACTED]@example.com/repo.git failed"},
+		{"ghp_ token", "push ghp_" + strings.Repeat("a1", 12) + " denied", "push [REDACTED] denied"},
+		{"github_pat_ token", "x github_pat_" + strings.Repeat("A1", 15), "x [REDACTED]"},
+		{"slack token", "x xoxb-1234567890-abcdef", "x [REDACTED]"},
+		{"AWS access key", "x AKIAIOSFODNN7EXAMPLE y", "x [REDACTED] y"},
+		{"JWT", "x eyJhbGciOiJI.eyJzdWIiOiIx.sig_-abc y", "x [REDACTED] y"},
+		{"Authorization Basic", "Authorization: Basic dXNlcjpwYXNz", "[REDACTED]"},
+		{"colon form", "token: s3cr3tvalue now", "[REDACTED] now"},
+		{"JSON form", `body {"token":"s3cr3t","ok":1}`, `body {"[REDACTED]","ok":1}`},
+		{"--flag with space", "run --api-key s3cr3t --verbose", "run [REDACTED] --verbose"},
+		{"no false positive in ordinary words", "task-management-x", "task-management-x"},
+		{"no false positive on bare word token", "token expired for user", "token expired for user"},
+		{"whitespace collapsed", "a\n  b\tc", "a b c"},
+		{"short passthrough", "short", "short"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, truncateErrorDetail(errors.New(tt.in), maxErrorDetailRunes))
+		})
+	}
+
+	t.Run("secret straddling the cut is redacted before truncation", func(t *testing.T) {
+		t.Parallel()
+		in := strings.Repeat("a", maxErrorDetailRunes-5) + " sk-abcdef123456789"
+		got := truncateErrorDetail(errors.New(in), maxErrorDetailRunes)
+		assert.NotContains(t, got, "sk-")
+		assert.Equal(t, maxErrorDetailRunes, utf8.RuneCountInString(got))
+	})
+}
+
+func TestTruncateErrorDetail_should_CutOnRuneBoundary_When_ErrorExceedsLimit(t *testing.T) {
+	t.Parallel()
+	got := truncateErrorDetail(errors.New(strings.Repeat("é", 600)), maxErrorDetailRunes)
+	assert.Equal(t, maxErrorDetailRunes, utf8.RuneCountInString(got))
+	assert.True(t, utf8.ValidString(got))
+}
+
+func TestTruncateErrorDetail_should_ReturnEmpty_When_ErrorIsNil(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "", truncateErrorDetail(nil, maxErrorDetailRunes))
+}
+
+func TestEndItemSessionForCallError_should_RecordDetailOnlyForOtherBucket(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		callErr    error
+		wantReason string
+		wantDetail string
+	}{
+		{"unclassified error records detail", errors.New("dial tcp: connection refused"), session.TriageEndReasonOther, "dial tcp: connection refused"},
+		{"classified pool saturation leaves detail empty", headless.ErrPoolSaturated, "pool_saturated", ""},
+		{"classified idle timeout leaves detail empty", headless.ErrIdleTimeout, "idle", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			storage := createTestStorage(t)
+			svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+			item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+				Title: "end-session item", Status: string(session.BacklogStatusIdea), Priority: 3, RepoPath: t.TempDir(),
+			})
+			require.NoError(t, err)
+			is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+				ItemID: item.ID, SessionUUID: "headless-triage-" + uuid.New().String(), SessionRole: session.SessionRoleTriage,
+			})
+			require.NoError(t, err)
+
+			errType := classifyHeadlessCallError(tt.callErr, time.Minute, triageCallBudget)
+			svc.endItemSessionForCallError(t.Context(), is.ID, errType, tt.callErr)
+
+			sessions, err := storage.ListItemSessions(t.Context(), item.ID)
+			require.NoError(t, err)
+			require.Len(t, sessions, 1)
+			assert.Equal(t, tt.wantReason, sessions[0].EndReason)
+			assert.Equal(t, tt.wantDetail, sessions[0].ErrorDetail)
+		})
+	}
 }

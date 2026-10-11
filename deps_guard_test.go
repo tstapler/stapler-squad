@@ -28,7 +28,7 @@ func TestNoForbiddenDependencies(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, "go", "list", "-deps", "./...").Output()
+	out, err := exec.CommandContext(ctx, "go", "list", "-deps", "./...").Output() //nolint:norawexec one-shot Output() runs to completion under ctx; no long-running child to reap
 	if err != nil {
 		t.Fatalf("go list -deps ./... failed: %v", err)
 	}

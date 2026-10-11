@@ -182,10 +182,17 @@ func (s *BacklogService) watchBacklogItems(
 	}
 
 	// Stream events until client disconnects or context is canceled.
+	heartbeat := time.NewTicker(events.HeartbeatInterval)
+	defer heartbeat.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-heartbeat.C:
+			if err := sender.Send(&sessionv1.BacklogItemEvent{Timestamp: timestamppb.Now(), Heartbeat: true}); err != nil {
+				return fmt.Errorf("failed to send backlog heartbeat: %w", err)
+			}
 		case evt, ok := <-eventCh:
 			if !ok {
 				return nil

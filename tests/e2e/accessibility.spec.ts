@@ -18,6 +18,7 @@ import AxeBuilder from '@axe-core/playwright';
 import {
   StuckItemsPage,
   seedStuckItem,
+  deleteSeededStuckItems,
   enableBacklogFeatureFlag,
   disableBacklogFeatureFlag,
 } from './pages/StuckItemsPage';
@@ -34,6 +35,11 @@ import { dismissNotificationInterference } from './pages/NotificationPanel';
 import { WindowTabStripPage } from './pages/WindowTabStripPage';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+
+// Seeded stuck items persist on the shared test server; remove them so other specs don't see them.
+test.afterEach(async ({ request }) => {
+  await deleteSeededStuckItems(request);
+});
 
 test.describe('Accessibility (WCAG 2.1 AA)', () => {
   // Axe scans are CPU-heavy; give each test 2 minutes to avoid browser-crash flakes.
@@ -833,6 +839,7 @@ test.describe('Accessibility — notification-revamp (WCAG 2.1 AA)', () => {
               metadata: { approval_id: 'appr-a11y', tool_name: 'Bash' },
               createdAt: new Date().toISOString(),
               isRead: false,
+              isPendingDecision: true,
             },
             {
               id: 'n-a11y-read',
@@ -1328,25 +1335,10 @@ test.describe('Accessibility — multi-window (WCAG 2.1 AA)', () => {
     await strip.createWindow();
     await strip.createWindow(); // 3 windows: "×" close buttons render for every tab
 
-    const tabListHandle = await strip.tabList.elementHandle();
-    expect(tabListHandle).not.toBeNull();
-    // interestingOnly defaults to true, which (per a known Playwright/CDP
-    // quirk) can make snapshot() return null when the tablist root itself
-    // isn't judged "interesting" — interestingOnly: false avoids that; the
-    // collect() walk below still filters to only tab/button/textbox roles.
-    const snapshot = await page.accessibility.snapshot({ root: tabListHandle!, interestingOnly: false });
-    expect(snapshot).not.toBeNull();
-
-    const names: string[] = [];
-    function collect(node: NonNullable<typeof snapshot>) {
-      if (['tab', 'button', 'textbox'].includes(node.role) && node.name) {
-        names.push(node.name);
-      }
-      for (const child of node.children ?? []) {
-        collect(child);
-      }
-    }
-    collect(snapshot!);
+    // page.accessibility was removed in Playwright 1.5x; ariaSnapshot() yields
+    // YAML lines like `- tab "Window 1"` / `- button "Close Window 1"`.
+    const yaml = await strip.tabList.ariaSnapshot();
+    const names = [...yaml.matchAll(/^\s*- (?:tab|button|textbox) "((?:[^"\\]|\\.)*)"/gm)].map((m) => m[1]);
 
     expect(names.length).toBeGreaterThan(0);
     const uniqueNames = new Set(names);

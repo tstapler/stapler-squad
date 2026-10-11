@@ -1009,6 +1009,14 @@ func TestBuildSessionSummary_WhenCalledDirectly_ExpectProtoEqualToHandBuiltExpec
 		// "/home/user/proj" has no /worktrees/ segment, so groupUnattributed
 		// classifies it "external" rather than leaving it "".
 		SessionRole: session.SessionRoleExternal,
+		// Per-category cost split (same EstimatedCostUsd formula, broken out):
+		// InputCostUsd: 1.0*3.0 = 3; OutputCostUsd: 0.5*15.0 = 7.5;
+		// CacheCreationCostUsd: 0 (no cache-creation tokens);
+		// CacheReadCostUsd: 0.25*0.3 = 0.075.
+		InputCostUsd:         3,
+		OutputCostUsd:        7.5,
+		CacheCreationCostUsd: 0,
+		CacheReadCostUsd:     0.075,
 	}
 
 	require.Empty(t, got.UnpricedModels)
@@ -1024,15 +1032,27 @@ func TestBuildSessionSummary_WhenCalledDirectly_ExpectProtoEqualToHandBuiltExpec
 	require.Len(t, got.TopTools, 1)
 	assert.InDelta(t, 10.575, got.TopTools[0].CostUsd, 1e-9)
 	assert.InDelta(t, 0.675, got.CacheRoiUsd, 1e-9)
+	assert.InDelta(t, 3.0, got.InputCostUsd, 1e-9)
+	assert.InDelta(t, 7.5, got.OutputCostUsd, 1e-9)
+	assert.InDelta(t, 0.0, got.CacheCreationCostUsd, 1e-9)
+	assert.InDelta(t, 0.075, got.CacheReadCostUsd, 1e-9)
 
 	gotForEqual := proto.Clone(got).(*sessionv1.SessionTokenSummary)
 	gotForEqual.EstimatedCostUsd = 0
 	gotForEqual.TopTools[0].CostUsd = 0
 	gotForEqual.CacheRoiUsd = 0
+	gotForEqual.InputCostUsd = 0
+	gotForEqual.OutputCostUsd = 0
+	gotForEqual.CacheCreationCostUsd = 0
+	gotForEqual.CacheReadCostUsd = 0
 	wantForEqual := proto.Clone(want).(*sessionv1.SessionTokenSummary)
 	wantForEqual.EstimatedCostUsd = 0
 	wantForEqual.TopTools[0].CostUsd = 0
 	wantForEqual.CacheRoiUsd = 0
+	wantForEqual.InputCostUsd = 0
+	wantForEqual.OutputCostUsd = 0
+	wantForEqual.CacheCreationCostUsd = 0
+	wantForEqual.CacheReadCostUsd = 0
 	assert.True(t, proto.Equal(wantForEqual, gotForEqual), "buildSessionSummary output diverged from hand-built expected summary:\n got:  %+v\n want: %+v", got, want)
 }
 

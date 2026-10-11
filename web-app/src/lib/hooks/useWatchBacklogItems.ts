@@ -57,12 +57,11 @@ import {
 } from "@/lib/store/backlogItemsSlice";
 import { mapBacklogItem } from "@/lib/hooks/useBacklogService";
 import type { BacklogItem as MappedBacklogItem } from "@/lib/hooks/useBacklogService";
+import { useWatchStream } from "@/lib/hooks/useWatchStream";
+import type { WatchConnectionState } from "@/lib/hooks/useWatchStream";
 
 const MAX_RETRIES = 5;
 const FALLBACK_POLL_INTERVAL_MS = 30_000;
-const BACKSTOP_INTERVAL_MS = 30_000;
-const STALE_THRESHOLD_MS = 15_000;
-const VISIBILITY_DEBOUNCE_MS = 200;
 // AC #19 (project_plans/backlog-event-driven-updates/design/ux.md,
 // ConnectionIndicator's "Rapid connect/disconnect flapping" edge case): only
 // the reconnecting -> live transition is debounced by a "few hundred ms"
@@ -142,35 +141,28 @@ export function useWatchBacklogItems(
 
   const clientRef = useRef<ReturnType<typeof createClient<typeof BacklogService>> | null>(null);
 
-  // Stream health/reconnect bookkeeping — hoisted to hook-level refs (rather
-  // than effect-local) so the fallback-poll, backstop, and visibility/online
-  // effects can all read/drive the same connection state, mirroring
-  // useSessionService.ts's ref layout.
-  const isConnectedRef = useRef(false);
-  const lastEventTimeRef = useRef<number | null>(null);
+  // Gap-detection bookkeeping (Story 4.2.2): distinct from useWatchStream's
+  // own internal afterSeq tracking -- this one drives triggerResync's
+  // forward/backward-jump full-refetch logic, a backlog-specific business
+  // rule useWatchStream has no reason to know about.
   const lastSeqRef = useRef<bigint>(0n);
   const resyncInFlightRef = useRef(false);
-  // Set right before a backstop- or visibility/online-triggered reconnect;
-  // cleared (and a full refetch fired) on that reconnect's first received
-  // event. This ties the "reconnect success path issues a refetch"
-  // requirement (Story 4.2.3) specifically to self-healing reconnects, not
-  // ordinary in-loop backoff retries — and fires even if zero
-  // BacklogItemEvents were ever received before the staleness was detected.
+  // Set when useWatchStream reports "stale" (a watchdog- or visibility-
+  // triggered reconnect); cleared (and a full refetch fired) on that
+  // reconnect's "live" transition. Ties the "reconnect success path issues a
+  // refetch" requirement (Story 4.2.3) specifically to self-healing
+  // reconnects, not ordinary in-loop backoff retries.
   const staleReconnectPendingRef = useRef(false);
-  const backstopTriggeredRef = useRef(false);
-  const streamRetriesRef = useRef(0);
-  const streamDeadRef = useRef(false);
-  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Mirrors whether useWatchStream is currently reporting "live", so
+  // scheduleLiveTransition's debounced commit (AC #19) can bail out if the
+  // connection has already dropped again by the time its timer fires.
+  const isLiveRef = useRef(false);
   // AC #19: pending reconnecting -> live debounce (see
   // LIVE_TRANSITION_DEBOUNCE_MS above). Re-armed on every successful
   // (re)connect/resync; the scheduled flip to "live" only actually commits if
   // the stream is still connected once the timer fires, so a flap that drops
   // again mid-hold never shows "Live" at all.
   const liveTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Set by the main watch effect on every run; called by the fallback-poll,
-  // backstop, and visibility/online effects to force a reconnect without
-  // needing `connect` in their own dependency arrays.
-  const reconnectRef = useRef<(() => void) | null>(null);
 
   // Initialize ConnectRPC client via the shared watch-transport singleton
   // (server.go now registers BacklogService.WatchBacklogItems with
@@ -222,7 +214,7 @@ export function useWatchBacklogItems(
     if (liveTransitionTimerRef.current) clearTimeout(liveTransitionTimerRef.current);
     liveTransitionTimerRef.current = setTimeout(() => {
       liveTransitionTimerRef.current = null;
-      if (isConnectedRef.current) setConnectionState("live");
+      if (isLiveRef.current) setConnectionState("live");
     }, LIVE_TRANSITION_DEBOUNCE_MS);
   }, []);
 
@@ -236,15 +228,13 @@ export function useWatchBacklogItems(
       await refresh();
     } finally {
       resyncInFlightRef.current = false;
-      if (isConnectedRef.current) scheduleLiveTransition();
+      if (isLiveRef.current) scheduleLiveTransition();
     }
   }, [refresh, scheduleLiveTransition]);
 
   // Apply after_seq bookkeeping (Story 4.2.2) then dispatch to the store.
   const handleEvent = useCallback(
     (event: BacklogItemEvent) => {
-      lastEventTimeRef.current = Date.now();
-
       // seq === 0 marks a synthetic per-item snapshot event sent on a fresh
       // (non-replay) connection — it carries no real bus sequence number, so
       // it must not participate in gap detection (see BacklogItemEvent.seq's
@@ -334,163 +324,95 @@ export function useWatchBacklogItems(
     [dispatch, triggerResync]
   );
 
-  // Main stream connection lifecycle: connect, consume via `for await`,
-  // reconnect with exponential backoff on error (capped at 30s, 5 retries,
-  // matching useReviewQueue.ts's constants exactly), then fall back to
-  // polling once retries are exhausted.
-  useEffect(() => {
-    streamRetriesRef.current = 0;
-    streamDeadRef.current = false;
+  // Connection mechanics (backoff reconnect, idle-staleness watchdog) live in
+  // the shared useWatchStream.ts; this only supplies the request shape,
+  // afterSeq bookkeeping (shared with the gap-detection logic in handleEvent
+  // above via lastSeqRef), and the AC #19 / Story 4.2.3 presentation layer
+  // on top of its connection-state callback.
+  const subscribeBacklogItems = useCallback(
+    (afterSeq: bigint, signal: AbortSignal) =>
+      clientRef.current!.watchBacklogItems(
+        { statusFilter: statusFilter ?? [], categoryFilter: categoryFilter ?? [], afterSeq },
+        { signal }
+      ),
+    [statusFilter, categoryFilter]
+  );
 
-    const abortController = new AbortController();
-    const signal = abortController.signal;
-
-    const connect = async () => {
-      if (signal.aborted || !clientRef.current) return;
-
-      // Treat stream (re)connect attempts as activity so the 30s backstop
-      // below can engage even if the connection never yields a single event
-      // (mirrors useSessionService.ts:822 exactly).
-      lastEventTimeRef.current = Date.now();
-
-      try {
-        const stream = clientRef.current.watchBacklogItems(
-          {
-            statusFilter: statusFilter ?? [],
-            categoryFilter: categoryFilter ?? [],
-            afterSeq: lastSeqRef.current,
-          },
-          { signal }
-        );
-
-        let firstEvent = true;
-        for await (const event of stream) {
-          if (firstEvent) {
-            firstEvent = false;
-            isConnectedRef.current = true;
-            backstopTriggeredRef.current = false;
-            streamRetriesRef.current = 0;
-            streamDeadRef.current = false;
-            scheduleLiveTransition();
-            // Story 4.2.3: a backstop- or visibility-triggered reconnect's
-            // success path issues a full refetch, even if zero
-            // BacklogItemEvents were ever received during the whole idle
-            // period beforehand.
-            if (staleReconnectPendingRef.current) {
-              staleReconnectPendingRef.current = false;
-              void refresh();
-            }
+  const onConnectionStateChange = useCallback(
+    (next: WatchConnectionState) => {
+      isLiveRef.current = next === "live";
+      switch (next) {
+        case "live":
+          scheduleLiveTransition();
+          // Story 4.2.3: a watchdog- or visibility-triggered reconnect's
+          // success path issues a full refetch, even if zero
+          // BacklogItemEvents were ever received during the whole idle
+          // period beforehand.
+          if (staleReconnectPendingRef.current) {
+            staleReconnectPendingRef.current = false;
+            void refresh();
           }
-          handleEvent(event);
-        }
-
-        // Clean server-side close — reset retry counter; the fallback-poll/
-        // backstop/visibility effects will drive the next reconnect attempt.
-        isConnectedRef.current = false;
-        streamRetriesRef.current = 0;
-      } catch (err) {
-        isConnectedRef.current = false;
-        if (err instanceof Error && err.name === "AbortError") return;
-        if (signal.aborted) return;
-
-        console.error("[useWatchBacklogItems] watchBacklogItems stream error:", err);
-
-        if (streamRetriesRef.current < MAX_RETRIES) {
-          const delay = Math.min(1000 * Math.pow(2, streamRetriesRef.current), 30_000);
-          streamRetriesRef.current++;
+          break;
+        case "stale":
+          staleReconnectPendingRef.current = true;
+          setConnectionState("stale");
+          break;
+        case "reconnecting":
           setConnectionState("reconnecting");
-          setTimeout(() => {
-            if (signal.aborted) return;
-            void connect();
-          }, delay);
-        } else {
-          streamDeadRef.current = true;
+          break;
+        case "exhausted":
           setConnectionState("polling");
-        }
+          break;
+        case "connecting":
+          break;
       }
-    };
+    },
+    [refresh, scheduleLiveTransition]
+  );
 
-    reconnectRef.current = () => void connect();
-    void connect();
+  const { reconnect } = useWatchStream<BacklogItemEvent>({
+    subscribe: subscribeBacklogItems,
+    onEvent: handleEvent,
+    isHeartbeat: (event) => event.heartbeat,
+    getSeq: (event) => event.seq,
+    onConnectionStateChange,
+    maxRetries: MAX_RETRIES,
+    // Preserves this hook's original two-tier Story 4.2.3 staleness design:
+    // the periodic background watchdog tolerates 30s (matching the original
+    // BACKSTOP_INTERVAL_MS, and wide enough not to fire mid-backoff during
+    // the MAX_RETRIES exhaustion sequence above), while a tab-refocus/online
+    // event reacts faster at 15s (STALE_THRESHOLD_MS) since a user actively
+    // looking at the tab justifies a snappier check than a background poll.
+    staleThresholdMs: 30_000,
+    visibilityStaleThresholdMs: 15_000,
+    // Restart the connection (fresh afterSeq=0) when the filters actually
+    // change value, not just array identity -- subscribeBacklogItems reads
+    // statusFilter/categoryFilter live via optionsRef otherwise, which would
+    // silently keep the stale filter set on an existing connection.
+    restartKey: `${statusFilterKey}|${categoryFilterKey}`,
+  });
 
+  useEffect(() => {
     return () => {
-      reconnectRef.current = null;
-      abortController.abort();
-      isConnectedRef.current = false;
       if (liveTransitionTimerRef.current) {
         clearTimeout(liveTransitionTimerRef.current);
         liveTransitionTimerRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilterKey, categoryFilterKey, handleEvent, refresh, scheduleLiveTransition]);
+  }, []);
 
-  // REST fallback polling (Task 4.2.1d): once retries are exhausted, poll
-  // periodically; a successful poll that finds the stream dead attempts
-  // exactly one reconnect before continuing to poll.
+  // REST fallback polling (Task 4.2.1d): once useWatchStream reports
+  // "exhausted" (MAX_RETRIES backoff attempts failed), poll periodically; a
+  // successful poll attempts exactly one reconnect before continuing to poll.
   useEffect(() => {
     const interval = setInterval(() => {
       void (async () => {
         await refresh();
-        if (streamDeadRef.current) {
-          streamDeadRef.current = false;
-          streamRetriesRef.current = 0;
-          reconnectRef.current?.();
-        }
+        if (connectionState === "polling") reconnect();
       })();
     }, FALLBACK_POLL_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [refresh]);
-
-  // Story 4.2.3 — idle-staleness backstop #1: a 30s periodic timer that
-  // forces a reconnect + full refetch even with zero live events, mirroring
-  // useSessionService.ts:944-962 verbatim.
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (
-        !isConnectedRef.current &&
-        lastEventTimeRef.current !== null &&
-        Date.now() - lastEventTimeRef.current > BACKSTOP_INTERVAL_MS
-      ) {
-        setConnectionState("stale");
-        if (!backstopTriggeredRef.current) {
-          backstopTriggeredRef.current = true;
-          staleReconnectPendingRef.current = true;
-          reconnectRef.current?.();
-        }
-      }
-    }, BACKSTOP_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, []);
-
-  // Story 4.2.3 — idle-staleness backstop #2: a 15s staleness threshold on
-  // visibility/online events, mirroring useSessionService.ts:971-986.
-  useEffect(() => {
-    const handleVisibilityOrOnline = (ev: Event) => {
-      if (document.visibilityState !== "visible" && ev.type !== "online") return;
-      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-      debounceTimerRef.current = setTimeout(() => {
-        debounceTimerRef.current = null;
-        const isStale =
-          lastEventTimeRef.current !== null && lastEventTimeRef.current < Date.now() - STALE_THRESHOLD_MS;
-        if (!isConnectedRef.current || isStale) {
-          if (isStale) setConnectionState("stale");
-          staleReconnectPendingRef.current = true;
-          streamRetriesRef.current = 0;
-          streamDeadRef.current = false;
-          reconnectRef.current?.();
-        }
-      }, VISIBILITY_DEBOUNCE_MS);
-    };
-
-    document.addEventListener("visibilitychange", handleVisibilityOrOnline);
-    window.addEventListener("online", handleVisibilityOrOnline);
-    return () => {
-      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-      document.removeEventListener("visibilitychange", handleVisibilityOrOnline);
-      window.removeEventListener("online", handleVisibilityOrOnline);
-    };
-  }, []);
+  }, [refresh, reconnect, connectionState]);
 
   // Map proto -> domain shape at the hook boundary (see file header, note 3)
   // so every consumer gets the same fields useBacklogService.listBacklogItems

@@ -205,7 +205,7 @@ const (
 	StuckReasonBounceCapExhausted StuckReason = "bounce_cap_exhausted"
 	// StuckReasonSteerFailed: AutoReopenForPRFix attempted to steer an
 	// already-active session with a PR-fix problem description
-	// (SessionSteerer.SteerActiveSession) and the delivery itself failed —
+	// (SessionSteerer.SteerSessionGuarded) and the delivery itself failed —
 	// distinct from StuckReasonRespawnBlockedActive, which covers the
 	// degrade paths where a steer was never attempted at all (nil-safe
 	// SessionSteerer, session not live, or dedup/debounce suppression). See
@@ -228,10 +228,32 @@ const (
 	// (session/backlog_lifecycle_gates.go), mirroring
 	// reconcileOrphanedTriageItems' LivenessEngine-consulting sweep pattern.
 	StuckReasonGateTimeout StuckReason = "gate_timeout"
+	// StuckReasonBlockedByClaim: DequeueNextQueuedItems skipped this item because
+	// a different host holds the cross-host claim for its ExternalURL
+	// (project_plans/cross-host-claim-dedup). Claims never expire, so a stale
+	// claim would otherwise starve the item silently; this makes the skip
+	// visible with an operator override (OverrideClaimBlock).
+	StuckReasonBlockedByClaim StuckReason = "blocked_by_claim"
 	// StuckReasonWorktreeInconsistent: the worktree consistency sweep flagged an
 	// inconsistency it declined to auto-repair. Dual-written alongside its
 	// notification when the session has a live linked BacklogItem.
 	StuckReasonWorktreeInconsistent StuckReason = "worktree_inconsistent"
+	// StuckReasonRepeatedNoopDispatch: an item with a PASS verdict, sitting in
+	// review/in_progress, has had N consecutive work sessions end with no new
+	// commits (session/stuck_decisions.go's isRepeatedNoopDispatch). Set by
+	// reconcileRepeatedNoopDispatch; while open, the dispatcher
+	// (BacklogService.spawnSessionAfterGates) refuses to spawn another work
+	// session so the loop cannot continue unattended. Resolved when the item
+	// leaves review/in_progress, a new commit lands, or the duplicate claim
+	// that usually explains it is confirmed/archived.
+	StuckReasonRepeatedNoopDispatch StuckReason = "repeated_noop_dispatch"
+	// StuckReasonMergedPRUnverified: a pr_pending item's PR is merged on GitHub,
+	// but ReconcilePRPending's ownership guard (session.prOwnership) found no
+	// recorded branch or tip commit matching the PR, so it refused the
+	// auto-done transition. Fails closed by design; this row exists so that
+	// refusal is visible and operator-resolvable (mark done) rather than a
+	// per-tick log line on an item that sits in pr_pending forever.
+	StuckReasonMergedPRUnverified StuckReason = "merged_pr_unverified"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -256,7 +278,10 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonBounceCapExhausted,
 	StuckReasonSteerFailed,
 	StuckReasonGateTimeout,
+	StuckReasonBlockedByClaim,
 	StuckReasonWorktreeInconsistent,
+	StuckReasonRepeatedNoopDispatch,
+	StuckReasonMergedPRUnverified,
 }
 
 // IsValid reports whether r is a known stuck reason value.
@@ -268,7 +293,8 @@ func (r StuckReason) IsValid() bool {
 		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale, StuckReasonPRNeedsFix,
 		StuckReasonRespawnBlockedActive, StuckReasonLikelyFlaky, StuckReasonBlockedByDependency,
 		StuckReasonMultipleReasons, StuckReasonBounceCapExhausted, StuckReasonSteerFailed,
-		StuckReasonGateTimeout, StuckReasonWorktreeInconsistent:
+		StuckReasonGateTimeout, StuckReasonBlockedByClaim, StuckReasonWorktreeInconsistent, StuckReasonRepeatedNoopDispatch,
+		StuckReasonMergedPRUnverified:
 		return true
 	}
 	return false

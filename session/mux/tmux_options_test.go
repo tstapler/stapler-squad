@@ -2,6 +2,8 @@ package mux
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -135,7 +137,7 @@ func TestWriteReadUserOptions(t *testing.T) {
 		t.Skip("tmux not available")
 	}
 
-	sessionName := "cs-test-useropts"
+	sessionName := fmt.Sprintf("cs-test-useropts_%d_%d", os.Getpid(), time.Now().UnixNano())
 
 	// Serialize against every other tmux-touching test in this package — see
 	// tmuxTestMu's doc comment for why.
@@ -146,8 +148,8 @@ func TestWriteReadUserOptions(t *testing.T) {
 	// inside a `go test` binary -- see prependIsolatedSocket.
 	create := safeexec.CommandContext(context.Background(), tmux.Binary(),
 		prependIsolatedSocket([]string{"new-session", "-d", "-s", sessionName, "sleep", "60"})...)
-	if err := create.Run(); err != nil {
-		t.Fatalf("create tmux session: %v", err)
+	if out, err := create.CombinedOutput(); err != nil {
+		t.Fatalf("create tmux session: %v: %s", err, out)
 	}
 	// Deliberately a `defer`, not t.Cleanup: t.Cleanup funcs run only after all
 	// of the test function's own deferred statements have already fired, which
@@ -164,7 +166,7 @@ func TestWriteReadUserOptions(t *testing.T) {
 			prependIsolatedSocket([]string{"kill-session", "-t", sessionName})...).Run()
 	}()
 
-	socketPath := "/tmp/ssq-mux-test-99999.sock"
+	socketPath := fmt.Sprintf("/tmp/ssq-mux-test-%d-%d.sock", os.Getpid(), time.Now().UnixNano())
 	cwd := "/tmp/test-cwd"
 	command := "claude"
 	pid := 99999
@@ -211,7 +213,7 @@ func TestScanFromUserOptions_RegistersSession(t *testing.T) {
 		t.Skip("tmux not available")
 	}
 
-	sessionName := "cs-test-scanfromopts"
+	sessionName := fmt.Sprintf("cs-test-scanfromopts_%d_%d", os.Getpid(), time.Now().UnixNano())
 
 	// Serialize against every other tmux-touching test in this package — see
 	// tmuxTestMu's doc comment for why.
@@ -222,8 +224,8 @@ func TestScanFromUserOptions_RegistersSession(t *testing.T) {
 	// ScanByUserOptions resolve to inside a `go test` binary -- see prependIsolatedSocket.
 	create := safeexec.CommandContext(context.Background(), tmux.Binary(),
 		prependIsolatedSocket([]string{"new-session", "-d", "-s", sessionName, "sleep", "60"})...)
-	if err := create.Run(); err != nil {
-		t.Fatalf("create tmux session: %v", err)
+	if out, err := create.CombinedOutput(); err != nil {
+		t.Fatalf("create tmux session: %v: %s", err, out)
 	}
 	// See the matching comment in TestWriteReadUserOptions: this must be a
 	// `defer` (runs before tmuxTestMu.Unlock() above, LIFO), not t.Cleanup
@@ -236,7 +238,7 @@ func TestScanFromUserOptions_RegistersSession(t *testing.T) {
 			prependIsolatedSocket([]string{"kill-session", "-t", sessionName})...).Run()
 	}()
 
-	socketPath := "/tmp/ssq-mux-test-88888.sock"
+	socketPath := fmt.Sprintf("/tmp/ssq-mux-test-%d-%d.sock", os.Getpid(), time.Now().UnixNano())
 	if err := WriteSessionUserOptions(sessionName, socketPath, "/tmp", "claude", 88888, time.Now().Unix()); err != nil {
 		t.Fatalf("WriteSessionUserOptions: %v", err)
 	}

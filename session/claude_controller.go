@@ -239,7 +239,7 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 		pa := NewPTYAccess(cc.sessionName, ptyReader, buffer)
 
 		// Create rate limit detection handler
-		rateLimitManager := ratelimit.NewManager(cc.sessionName, cc.instance)
+		rateLimitManager := ratelimit.NewManager(cc.sessionName, leasedSessionAccessor{cc.instance})
 		rlh := ratelimit.NewPTYConsumer(pa, rateLimitManager)
 
 		// Create response stream

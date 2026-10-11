@@ -57,6 +57,8 @@ async function mockPendingApproval(page: Page, approvalId: string, sessionId: st
             metadata: { approval_id: approvalId, tool_name: "Bash" },
             createdAt: new Date().toISOString(),
             isRead: false,
+            // The server-computed field the client reads for "needs a decision".
+            isPendingDecision: true,
           },
         ],
         totalCount: 1,

@@ -3,8 +3,11 @@ package session
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session/sendkeysguard"
 )
@@ -21,11 +24,30 @@ type fakePaneSubmitter struct {
 	failOnCall  int // -1 (default) means never fail
 	updates     []bool
 	updateCalls int
+	onSend      func(int)
+}
+
+// fakeLeaseOwner is the lease identity every pane fake in this file reports.
+const fakeLeaseOwner = "fake-pane-owner"
+
+func (f *fakePaneSubmitter) LeaseOwnerUUID() string { return fakeLeaseOwner }
+
+// newFakeLease returns a held lease bound to fakeLeaseOwner, taken from a
+// throwaway instance so each call owns an independent lease.
+func newFakeLease(t *testing.T) *HeldLease {
+	t.Helper()
+	inst := &Instance{UUID: fakeLeaseOwner}
+	l, ok := inst.TryTerminalWriteLease(LeaseWriterOther)
+	require.True(t, ok)
+	return l
 }
 
 func (f *fakePaneSubmitter) SendKeys(keys string) error {
 	idx := len(f.sendCalls)
 	f.sendCalls = append(f.sendCalls, keys)
+	if f.onSend != nil {
+		f.onSend(len(f.sendCalls))
+	}
 	if f.failOnCall == idx {
 		return errors.New("fake send failure")
 	}
@@ -62,7 +84,7 @@ func TestSubmitDriverContent_SendsContentAndEnterAsSeparateWrites(t *testing.T) 
 	inst.updates = []bool{false, false, true} // settle immediately, then confirm the submit
 
 	const content = "some long driver-generated prompt text"
-	if err := SubmitDriverContent(context.Background(), inst, content, time.Millisecond, 20*time.Millisecond); err != nil {
+	if err := SubmitDriverContent(context.Background(), inst, newFakeLease(t), content, time.Millisecond, 20*time.Millisecond); err != nil {
 		t.Fatalf("SubmitDriverContent returned unexpected error: %v", err)
 	}
 
@@ -84,7 +106,7 @@ func TestSubmitDriverContent_ContentSendFailure_NeverSendsEnter(t *testing.T) {
 	inst := newFakePaneSubmitter()
 	inst.failOnCall = 0
 
-	err := SubmitDriverContent(context.Background(), inst, "content", time.Millisecond, 20*time.Millisecond)
+	err := SubmitDriverContent(context.Background(), inst, newFakeLease(t), "content", time.Millisecond, 20*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected an error from the failed content send")
 	}
@@ -100,7 +122,7 @@ func TestSubmitDriverContent_SubmitKeystrokeFailure_ReportsError(t *testing.T) {
 	inst := newFakePaneSubmitter()
 	inst.failOnCall = 1
 
-	err := SubmitDriverContent(context.Background(), inst, "content", time.Millisecond, 20*time.Millisecond)
+	err := SubmitDriverContent(context.Background(), inst, newFakeLease(t), "content", time.Millisecond, 20*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected an error from the failed submit keystroke")
 	}
@@ -119,7 +141,7 @@ func TestSubmitDriverContent_SwallowedSubmit_RetriesOnceThenReturnsErrSubmitNotC
 	inst := newFakePaneSubmitter()
 	inst.updates = []bool{false} // settles immediately (no changes), never confirms (repeats false forever)
 
-	err := SubmitDriverContent(context.Background(), inst, "content", time.Millisecond, 5*time.Millisecond)
+	err := SubmitDriverContent(context.Background(), inst, newFakeLease(t), "content", time.Millisecond, 5*time.Millisecond)
 	if !errors.Is(err, ErrSubmitNotConfirmed) {
 		t.Fatalf("SubmitDriverContent error = %v, want ErrSubmitNotConfirmed", err)
 	}
@@ -150,7 +172,7 @@ func TestSubmitDriverContent_ConfirmedOnRetry_Succeeds(t *testing.T) {
 	t.Parallel()
 	inst := &retryConfirmFake{fakePaneSubmitter: newFakePaneSubmitter()}
 
-	err := SubmitDriverContent(context.Background(), inst, "content", time.Millisecond, 5*time.Millisecond)
+	err := SubmitDriverContent(context.Background(), inst, newFakeLease(t), "content", time.Millisecond, 5*time.Millisecond)
 	if err != nil {
 		t.Fatalf("SubmitDriverContent returned unexpected error: %v", err)
 	}
@@ -223,7 +245,7 @@ func TestSubmitDriverContent_ContextAlreadyCancelled_NeverSendsKeys(t *testing.T
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := SubmitDriverContent(ctx, inst, "content", time.Millisecond, 20*time.Millisecond)
+	err := SubmitDriverContent(ctx, inst, newFakeLease(t), "content", time.Millisecond, 20*time.Millisecond)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("SubmitDriverContent error = %v, want wrapping context.Canceled", err)
 	}
@@ -238,18 +260,24 @@ func TestSubmitDriverContent_ContextAlreadyCancelled_NeverSendsKeys(t *testing.T
 // a ctx that's already dead before the call starts.
 func TestSubmitDriverContent_ContextExpiresDuringSettle_StopsBeforeEnter(t *testing.T) {
 	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	inst := newFakePaneSubmitter()
 	inst.updates = []bool{false} // never updates
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Millisecond)
-	defer cancel()
+	inst.onSend = func(calls int) {
+		if calls == 1 {
+			cancel()
+		}
+	}
 
 	// pollInterval is longer than ctx's deadline, so waitForPaneSettle's
 	// internal select hits <-ctx.Done() before its first <-time.After(poll)
 	// tick — exercising "context expires mid-wait," not "settle finishes
 	// quickly on its own."
-	err := SubmitDriverContent(ctx, inst, "content", 50*time.Millisecond, 200*time.Millisecond)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("SubmitDriverContent error = %v, want wrapping context.DeadlineExceeded", err)
+	err := SubmitDriverContent(ctx, inst, newFakeLease(t), "content", 50*time.Millisecond, 200*time.Millisecond)
+	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("SubmitDriverContent error = %v, want context cancellation", err)
 	}
 	if len(inst.sendCalls) != 1 {
 		t.Fatalf("SendKeys called %d times, want exactly 1 (content only — ctx expired before Enter) — got %#v", len(inst.sendCalls), inst.sendCalls)
@@ -261,6 +289,8 @@ func TestSubmitDriverContent_ContextExpiresDuringSettle_StopsBeforeEnter(t *test
 type blockingKeySender struct {
 	unblock chan struct{}
 }
+
+func (b *blockingKeySender) LeaseOwnerUUID() string { return fakeLeaseOwner }
 
 func (b *blockingKeySender) SendKeys(_ string) error {
 	<-b.unblock
@@ -274,7 +304,7 @@ func TestSendKeysWithTimeout_WedgedWrite_ReturnsDeadlineExceeded(t *testing.T) {
 	inst := &blockingKeySender{unblock: make(chan struct{})}
 	defer close(inst.unblock) // let the leaked goroutine's SendKeys return
 
-	err := SendKeysWithTimeout(context.Background(), inst, "input", 20*time.Millisecond)
+	err := SendKeysWithTimeout(context.Background(), inst, newFakeLease(t), "input", 20*time.Millisecond)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("SendKeysWithTimeout error = %v, want context.DeadlineExceeded", err)
 	}
@@ -287,7 +317,7 @@ func TestSendKeysWithTimeout_NormalWrite_ReturnsUnderlyingError(t *testing.T) {
 	inst := newFakePaneSubmitter()
 	inst.failOnCall = 0
 
-	err := SendKeysWithTimeout(context.Background(), inst, "input", time.Second)
+	err := SendKeysWithTimeout(context.Background(), inst, newFakeLease(t), "input", time.Second)
 	if err == nil || err.Error() != "fake send failure" {
 		t.Fatalf("SendKeysWithTimeout error = %v, want the underlying SendKeys failure", err)
 	}
@@ -299,7 +329,7 @@ func TestSubmitContentWithEnter_DelegatesToSubmitDriverContent(t *testing.T) {
 	t.Parallel()
 	inst := newFakePaneSubmitter()
 
-	if err := SubmitContentWithEnter(context.Background(), inst, "hello"); err != nil {
+	if err := SubmitContentWithEnter(context.Background(), inst, newFakeLease(t), "hello"); err != nil {
 		t.Fatalf("SubmitContentWithEnter error = %v, want nil", err)
 	}
 	if len(inst.sendCalls) != 2 || inst.sendCalls[0] != "hello" || inst.sendCalls[1] != EnterKeySequence {
@@ -314,14 +344,20 @@ func TestSubmitContentWithEnter_DelegatesToSubmitDriverContent(t *testing.T) {
 // TestSubmitDriverContent_ContextExpiresDuringSettle_StopsBeforeEnter.
 func TestSubmitDriverContent_ContextExpiresBeforeRetry_StopsBeforeRetryEnter(t *testing.T) {
 	t.Parallel()
-	inst := newFakePaneSubmitter()
-	inst.updates = []bool{false} // settles immediately; confirmation poll never sees a change
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	err := SubmitDriverContent(ctx, inst, "content", time.Millisecond, 2*time.Millisecond)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("SubmitDriverContent error = %v, want wrapping context.DeadlineExceeded", err)
+	inst := newFakePaneSubmitter()
+	inst.updates = []bool{false} // settles immediately; confirmation poll never sees a change
+	inst.onSend = func(calls int) {
+		if calls == 2 {
+			cancel()
+		}
+	}
+
+	err := SubmitDriverContent(ctx, inst, newFakeLease(t), "content", time.Millisecond, 50*time.Millisecond)
+	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("SubmitDriverContent error = %v, want context cancellation", err)
 	}
 	if len(inst.sendCalls) != 2 {
 		t.Fatalf("SendKeys called %d times, want exactly 2 (content, first Enter — no retry) — got %#v", len(inst.sendCalls), inst.sendCalls)
@@ -335,4 +371,80 @@ func TestSubmitDriverContent_ContextExpiresBeforeRetry_StopsBeforeRetryEnter(t *
 func TestSessionPackage_NoDirectSendKeysPlusEnterConcatenation(t *testing.T) {
 	t.Parallel()
 	sendkeysguard.CheckNoSingleWriteEnterConcatenation(t, ".", "pane_submit.go")
+}
+
+type ownerCheckedSubmitter struct {
+	*fakePaneSubmitter
+	ownerErr error
+}
+
+func (o *ownerCheckedSubmitter) VerifyPaneOwner(context.Context) error { return o.ownerErr }
+
+// ce71ad1a: a pane whose owner can't be confirmed must receive no bytes.
+func TestSubmitDriverContent_OwnerMismatch_WritesNothing(t *testing.T) {
+	sub := &ownerCheckedSubmitter{fakePaneSubmitter: newFakePaneSubmitter(), ownerErr: errors.New("pane ownership mismatch")}
+
+	err := SubmitDriverContent(context.Background(), sub, newFakeLease(t), "review prompt", time.Millisecond, time.Millisecond)
+
+	require.ErrorContains(t, err, "pane owner not verified")
+	require.Empty(t, sub.sendCalls, "no content or Enter may be written to a pane with a mismatched owner")
+}
+
+func TestSubmitDriverContent_OwnerVerified_Writes(t *testing.T) {
+	sub := &ownerCheckedSubmitter{fakePaneSubmitter: newFakePaneSubmitter()}
+
+	require.NoError(t, SubmitDriverContent(context.Background(), sub, newFakeLease(t), "review prompt", time.Millisecond, time.Millisecond))
+	require.Equal(t, "review prompt", sub.sendCalls[0])
+}
+
+// T-WL-03: the lease stays held until the abandoned writer goroutine's write
+// returns, even though the caller already got DeadlineExceeded.
+func TestSubmitContentWithEnterAndSendKeysWithTimeout_ShouldKeepTheLeaseUntilTheAbandonedWriterGoroutineExits_WhenTheCallerTimesOut(t *testing.T) {
+	t.Parallel()
+
+	t.Run("SendKeysWithTimeout", func(t *testing.T) {
+		t.Parallel()
+		inst := leaseInstance(t, fakeLeaseOwner)
+		lease, ok := inst.TryTerminalWriteLease(LeaseWriterMCP)
+		require.True(t, ok)
+		pane := &blockingKeySender{unblock: make(chan struct{})}
+
+		err := SendKeysWithTimeout(context.Background(), pane, lease, "x", 20*time.Millisecond)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+
+		_, ok = inst.TryTerminalWriteLease(LeaseWriterSteer)
+		require.False(t, ok, "the abandoned write still holds the lease")
+
+		close(pane.unblock)
+		waitLeaseFree(t, inst)
+	})
+
+	t.Run("SubmitContentWithEnter", func(t *testing.T) {
+		t.Parallel()
+		inst := leaseInstance(t, fakeLeaseOwner)
+		lease, ok := inst.TryTerminalWriteLease(LeaseWriterMCP)
+		require.True(t, ok)
+
+		unblock := make(chan struct{})
+		entered := make(chan struct{})
+		pane := newFakePaneSubmitter()
+		var once sync.Once
+		pane.onSend = func(int) {
+			once.Do(func() { close(entered) })
+			<-unblock
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- SubmitContentWithEnter(ctx, pane, lease, "x") }()
+
+		<-entered
+		cancel()
+		require.ErrorIs(t, <-done, context.DeadlineExceeded)
+
+		_, ok = inst.TryTerminalWriteLease(LeaseWriterSteer)
+		require.False(t, ok, "the abandoned write still holds the lease")
+
+		close(unblock)
+		waitLeaseFree(t, inst)
+	})
 }

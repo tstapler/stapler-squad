@@ -302,3 +302,53 @@ describe("RepoPathInput — worktree grouping", () => {
     expect(order.indexOf(root)).toBeLessThan(order.indexOf(`${worktree}/`));
   });
 });
+
+describe("RepoPathInput — Tab, Escape default, onEnter, aria-label", () => {
+  beforeEach(() => mockUseSessionRepoPaths.mockReturnValue(["/home/user/project-a"]));
+
+  it("closes the dropdown on Tab so it does not stay open over the next control", () => {
+    render(<RepoPathInput value="" onChange={jest.fn()} />);
+    const input = screen.getByRole("combobox");
+    fireEvent.focus(input);
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    fireEvent.keyDown(input, { key: "Tab" });
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(input).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("cancels the Escape default when it dismisses the dropdown (a native <dialog> must not close)", () => {
+    render(<RepoPathInput value="" onChange={jest.fn()} />);
+    const input = screen.getByRole("combobox");
+    fireEvent.focus(input);
+    const notPrevented = fireEvent.keyDown(input, { key: "Escape" });
+    expect(notPrevented).toBe(false);
+  });
+
+  it("leaves Escape alone when the dropdown is closed", () => {
+    render(<RepoPathInput value="" onChange={jest.fn()} />);
+    const input = screen.getByRole("combobox");
+    expect(fireEvent.keyDown(input, { key: "Escape" })).toBe(true);
+  });
+
+  it("fires onEnter and closes the list on Enter when no entry is highlighted", () => {
+    const onEnter = jest.fn();
+    render(<RepoPathInput value="/x" onChange={jest.fn()} onEnter={onEnter} />);
+    const input = screen.getByRole("combobox");
+    fireEvent.focus(input);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onEnter).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
+  it("does not fire onEnter while an IME composition is confirming", () => {
+    const onEnter = jest.fn();
+    render(<RepoPathInput value="/x" onChange={jest.fn()} onEnter={onEnter} />);
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter", isComposing: true });
+    expect(onEnter).not.toHaveBeenCalled();
+  });
+
+  it("applies aria-label as the accessible name", () => {
+    render(<RepoPathInput value="" onChange={jest.fn()} aria-label="Target directory" />);
+    expect(screen.getByRole("combobox", { name: "Target directory" })).toBeInTheDocument();
+  });
+});

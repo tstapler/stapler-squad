@@ -1,0 +1,23 @@
+{
+  "id": "notification-toast-stack",
+  "type": "frontend",
+  "name": "Capped toast deck with Move all to tray, swipe dismissal and one Announcer",
+  "component": "ToastStack",
+  "path": "web-app/src/components/ui/ToastStack.tsx",
+  "filePath": "web-app/src/components/ui/ToastStack.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "web-app/src/components/ui/__tests__/ToastStack.test.tsx",
+    "web-app/src/components/ui/__tests__/Announcer.test.tsx",
+    "web-app/src/components/ui/__tests__/NotificationToast.test.tsx",
+    "web-app/src/lib/hooks/__tests__/useToastTimers.test.ts",
+    "web-app/src/lib/hooks/__tests__/swipeToDismissMachine.test.ts",
+    "tests/e2e/toast-stack.spec.ts",
+    "tests/e2e/toast-stack-mobile.spec.ts",
+    "tests/e2e/notification-tray-bulk.spec.ts",
+    "tests/e2e/notification-flag-rollback.spec.ts",
+    "tests/e2e/notification-triage-walkthrough.spec.ts"
+  ],
+  "lastModified": "2026-10-09T00:00:00Z"
+}

@@ -205,3 +205,44 @@ OpenTelemetry metric instead — see `docs/how-to/enable-opentelemetry.md`. The
 `onBatchFlush` case above is the template: `recordBatchFlushFramesCoalesced`
 already exports this as a metric, so the log line was pure duplication once
 downgraded off the default-visible path.
+
+## Diagnosing parked triage items (`end_reason = 'other'`)
+
+`classifyHeadlessCallError` buckets every headless triage/review failure it
+can't recognize as `other`. For those, the Go error text is persisted (first
+500 runes of `err.Error()`) in `item_sessions.error_detail`, so you no longer
+need the log to have survived rotation. It holds only the Go error chain —
+raw subprocess output is in the `failure_capture_path` file instead. The same
+text appears in the stuck-state context (`triage session … ended (other:
+<error_detail>) …`), the item's Sessions panel failure notice, and
+`ItemSession.error_detail` (proto field 27).
+
+Find `other` failures and group by shared cause (a common prefix across many
+items in one batch points at infrastructure, not the items). `<config-dir>` is
+where your instance keeps state — see `docs/reference/state-isolation.md`:
+
+```bash
+sqlite3 <config-dir>/sessions.db \
+  "SELECT error_detail, COUNT(*) FROM item_sessions
+   WHERE end_reason='other' AND error_detail != ''
+   GROUP BY substr(error_detail,1,60) ORDER BY COUNT(*) DESC;"
+```
+
+Find items parked at the retry cap (the same rows the per-item "Auto-triage
+paused" notification refers to):
+
+```bash
+sqlite3 <config-dir>/sessions.db \
+  "SELECT item_id, remediation_attempts, context FROM backlog_stuck_states
+   WHERE reason='orphaned_triage' AND resolved_at IS NULL AND remediation_attempts >= 5;"
+```
+
+When 3 or more items park within 10 minutes, a "Multiple auto-triage retries
+exhausted" notification fires in addition to the per-item ones — treat it as a
+signal to look for a shared cause before resetting anything.
+
+Once the cause is fixed, reset the batch with the `BulkResetStuckRemediation`
+RPC (`reason = STUCK_REASON_ORPHANED_TRIAGE`, `only_parked` defaults to true),
+or reset one item with `ResetStuckRemediation`. Rows with an `error_detail`
+from before this field existed are empty; only failures after it shipped are
+recoverable this way.

@@ -35,6 +35,7 @@ import { SendBackError } from "./detail/SendBackError";
 import { CollapsibleGroup } from "@/components/ui/Collapsible";
 import { InlineNotice } from "@/components/common/InlineNotice";
 import { ConnectionIndicator } from "./ConnectionIndicator";
+import { ItemClaimBanner } from "./ItemClaimBanner";
 import { BacklogItemForm } from "./BacklogItemForm";
 import { AcCriteriaList } from "./AcCriteriaList";
 import { InlineError } from "./InlineError";
@@ -96,6 +97,17 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   reopen: "Reopened for review.",
   send_back_idea: "Sent back to triage.",
 };
+
+/**
+ * The server refuses a steer to a hidden review session when it cannot write
+ * the audit line first (Internal, "audit log unavailable"). Show that as one
+ * explicit sentence instead of the raw RPC error.
+ */
+export const STEER_AUDIT_UNAVAILABLE_MESSAGE = "Audit log unavailable, steer not sent";
+
+export function steerFailureMessage(raw: string): string {
+  return /audit log unavailable/i.test(raw) ? STEER_AUDIT_UNAVAILABLE_MESSAGE : raw;
+}
 
 export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const { track } = useAnalytics();
@@ -235,7 +247,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // than LifecycleSummary standing up its own transport/client and 60s poll
   // on every remount (this component remounts via `key={selectedItemId}` on
   // every backlog item click — see stapler-squad PR #208 review).
-  const { items: stuckItems, triggerRemediationNow } = useStuckBacklogItems();
+  const { items: stuckItems, triggerRemediationNow, overrideClaimBlock } = useStuckBacklogItems();
   // BUG-105: an item can have several simultaneous open StuckBacklogItem rows
   // (e.g. BOUNCING + BOUNCE_CAP_EXHAUSTED + MULTIPLE_REASONS all open at
   // once) — `summarizeStuckItemGroup` resolves the SAME shared-priority
@@ -630,7 +642,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         }
         showActionToast("Steering message sent.", "success", toastKey);
       } catch (err) {
-        const msg = getErrorMessage(err, "Failed to steer session.");
+        const msg = steerFailureMessage(getErrorMessage(err, "Failed to steer session."));
         showActionToast(msg, "error", toastKey);
         throw err instanceof Error ? err : new Error(msg);
       } finally {
@@ -1499,6 +1511,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 {copiedField === "link" && "Link copied to clipboard"}
               </span>
             </div>
+            {item.externalUrl && <ItemClaimBanner externalUrl={item.externalUrl} />}
           </div>
           <div className={styles.headerActions}>
             <ConnectionIndicator connectionState={connectionState} />
@@ -1535,6 +1548,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           stuckItem={stuckItem}
           otherStuckReasons={stuckSummary?.otherReasons}
           onTriggerRemediationNow={triggerRemediationNow}
+          onOverrideClaimBlock={overrideClaimBlock}
         />
         {/* Epic 5.3 (D2): per-item soft-budget warning — renders null until
             costBudgetThresholdUsd is configured and crossed. Pinned here

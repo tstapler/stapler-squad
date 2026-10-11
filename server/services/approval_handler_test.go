@@ -67,7 +67,7 @@ func TestApprovalHandler_should_UseBaseURLFnValueAtCallTime_When_ThreeUsageSites
 	_ = NewApprovalHandler(NewApprovalStore(""), nil, events.NewEventBus(1))
 
 	tmpDir := t.TempDir()
-	if err := InjectHookConfig(tmpDir, "session-a"); err != nil {
+	if err := InjectHookConfig(tmpDir, "session-a", ""); err != nil {
 		t.Fatalf("InjectHookConfig (first write): %v", err)
 	}
 	firstAddr := fmt.Sprintf("http://localhost:%d", 20000+calls) // whatever nextAddr() returned during that call
@@ -82,7 +82,7 @@ func TestApprovalHandler_should_UseBaseURLFnValueAtCallTime_When_ThreeUsageSites
 	// URL moves forward, mirroring a server that rebinds to a different port between
 	// hook-injection events -- the exact scenario the lazy baseURLFn mechanism exists to
 	// support (never a string baked in at construction time).
-	if err := InjectHookConfig(tmpDir, "session-a"); err != nil {
+	if err := InjectHookConfig(tmpDir, "session-a", ""); err != nil {
 		t.Fatalf("InjectHookConfig (second write): %v", err)
 	}
 
@@ -703,7 +703,7 @@ func TestBroadcastApprovalNotification_InvokesNotifyApprovalPending_When_SlackNo
 
 	// Give any accidental second dispatch a moment to land, then assert the
 	// count settled at exactly one call.
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond) //nolint:notimesleeptest negative assertion on a fire-and-forget dispatch with no completion signal
 	require.EqualValues(t, 1, requestCount.Load(), "NotifyApprovalPending should be invoked exactly once")
 }
 
@@ -759,7 +759,7 @@ func TestInjectHookConfig_ConcurrentWritesToSameRootDir_NeverProduceCorruptJSON(
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			errCh <- InjectHookConfig(rootDir, fmt.Sprintf("session-%d", i))
+			errCh <- InjectHookConfig(rootDir, fmt.Sprintf("session-%d", i), "")
 		}(i)
 	}
 	wg.Wait()
@@ -774,4 +774,25 @@ func TestInjectHookConfig_ConcurrentWritesToSameRootDir_NeverProduceCorruptJSON(
 
 	var parsed map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(data, &parsed), "settings.local.json must be valid JSON after concurrent writes, not torn/corrupt: %s", data)
+}
+
+func TestBroadcastApprovalNotification_ShouldStampRiskLevel_WhenApprovalIsClassified(t *testing.T) {
+	bus := events.NewEventBus(4)
+	defer bus.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := bus.Subscribe(ctx)
+	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+
+	h.broadcastApprovalNotification("sess-r", &PendingApproval{
+		ID: "appr-r", SessionID: "sess-r", ToolName: "Bash", RiskLevel: "critical",
+		ToolInput: map[string]interface{}{},
+	})
+
+	select {
+	case ev := <-ch:
+		require.Equal(t, "critical", ev.NotificationMetadata["risk_level"])
+	case <-time.After(2 * time.Second):
+		t.Fatal("no notification published")
+	}
 }

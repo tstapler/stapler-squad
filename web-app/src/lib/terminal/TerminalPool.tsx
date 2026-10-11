@@ -69,9 +69,11 @@ import React, {
 } from "react";
 import { createPortal } from "react-dom";
 import type {
+  ScrollGestureProps,
   XtermTerminalHandle,
   XtermTerminalProps,
 } from "@/components/sessions/XtermTerminal";
+import type { ScrollMode } from "@/lib/terminal/scrollRouting";
 import * as styles from "./TerminalPool.css";
 
 const XtermTerminal = lazy(() =>
@@ -84,6 +86,11 @@ export const DEFAULT_TERMINAL_POOL_MAX_SIZE = 8;
 // meaningful -- always 5000 regardless of what any individual consumer might
 // otherwise request (Task 3.3). Never overridden per-entry.
 const POOLED_SCROLLBACK = 5000;
+
+// Fit-on-show retry cap (Bug 2, see usePooledTerminal's docking effect) --
+// bounds the poll to ~5s at 60fps before giving up and logging a warning,
+// rather than polling forever if a pane genuinely never lays out.
+const FIT_ON_SHOW_MAX_ATTEMPTS = 300;
 
 /** Per-entry state the pool owns for the lifetime of a pooled session's Terminal. */
 interface PoolEntry {
@@ -120,6 +127,14 @@ interface PoolEntry {
   stableOnResize: (cols: number, rows: number) => void;
   stableIsAltScreenActive: () => boolean;
   stableOnAltScreenScrollUp: (lines: number) => void;
+  // Scroll/gesture wiring (scrolling feature). The consumer's latest ScrollGestureProps and
+  // onScrollModeChange live in refs; `scrollGesture` is the object handed to <XtermTerminal>:
+  // its callbacks are stable delegates, and its primitives (override, enabled, epoch) are
+  // re-snapshotted by usePooledTerminalCallbacks, which bumps the pool to re-render the portal.
+  scrollGestureSourceRef: React.RefObject<ScrollGestureProps | null>;
+  onScrollModeChangeRef: React.RefObject<((mode: ScrollMode) => void) | null>;
+  scrollGesture: ScrollGestureProps;
+  stableOnScrollModeChange: (mode: ScrollMode) => void;
 }
 
 interface TerminalPoolContextValue {
@@ -161,6 +176,17 @@ function createEntry(sessionId: string): PoolEntry {
   const onResizeRef: React.RefObject<((cols: number, rows: number) => void) | null> = { current: null };
   const isAltScreenActiveRef: React.RefObject<(() => boolean) | null> = { current: null };
   const onAltScreenScrollUpRef: React.RefObject<((lines: number) => void) | null> = { current: null };
+  const scrollGestureSourceRef: React.RefObject<ScrollGestureProps | null> = { current: null };
+  const onScrollModeChangeRef: React.RefObject<((mode: ScrollMode) => void) | null> = { current: null };
+  const src = () => scrollGestureSourceRef.current;
+  const scrollGesture: ScrollGestureProps = {
+    onScrollStart: (route) => src()?.onScrollStart?.(route),
+    onScrollGesture: (info) => src()?.onScrollGesture?.(info),
+    onPageKeysSent: (direction, pages) => src()?.onPageKeysSent?.(direction, pages),
+    onGestureActiveChange: (active) => src()?.onGestureActiveChange?.(active),
+    isInputBusy: () => src()?.isInputBusy?.() ?? false,
+    onProgrammaticData: (data) => (src()?.onProgrammaticData ?? onDataRef.current)?.(data),
+  };
 
   return {
     sessionId,
@@ -181,6 +207,10 @@ function createEntry(sessionId: string): PoolEntry {
     stableOnResize: (cols, rows) => onResizeRef.current?.(cols, rows),
     stableIsAltScreenActive: () => isAltScreenActiveRef.current?.() ?? false,
     stableOnAltScreenScrollUp: (lines) => onAltScreenScrollUpRef.current?.(lines),
+    scrollGestureSourceRef,
+    onScrollModeChangeRef,
+    scrollGesture,
+    stableOnScrollModeChange: (mode) => onScrollModeChangeRef.current?.(mode),
   };
 }
 
@@ -329,6 +359,8 @@ export function TerminalPoolProvider({ children, maxSize = DEFAULT_TERMINAL_POOL
             theme="dark"
             useConfig
             scrollback={POOLED_SCROLLBACK}
+            scrollGesture={entry.scrollGesture}
+            onScrollModeChange={entry.stableOnScrollModeChange}
             isAltScreenActive={entry.stableIsAltScreenActive}
             onAltScreenScrollUp={entry.stableOnAltScreenScrollUp}
           />
@@ -369,6 +401,53 @@ export interface UsePooledTerminalResult {
   xtermRef: React.RefObject<XtermTerminalHandle | null>;
   /** See PoolEntry.warmRef's doc comment. Consumers read `.current` once, synchronously, to decide their own initial loading-state -- never subscribe to it. */
   warmRef: React.RefObject<boolean>;
+}
+
+/**
+ * Retries `fit()`+`focus()` on `entry` until `anchor` reports a real,
+ * non-zero size AND `entry.handleRef` is populated (see usePooledTerminal's
+ * docking effect for why neither is guaranteed on the frame docking
+ * happens). Returns a cleanup function that cancels any pending retry.
+ */
+function fitOnShow(entry: PoolEntry, anchor: HTMLElement, sessionId: string): () => void {
+  let settled = false;
+  let rafId: number | null = null;
+  let attempts = 0;
+
+  const tryFit = () => {
+    rafId = null;
+    if (settled) return;
+    const handle = entry.handleRef.current;
+    const { width, height } = anchor.getBoundingClientRect();
+    if (handle && width > 0 && height > 0) {
+      settled = true;
+      handle.fit();
+      handle.focus();
+      observer.disconnect();
+      return;
+    }
+    attempts += 1;
+    if (attempts >= FIT_ON_SHOW_MAX_ATTEMPTS) {
+      console.warn(`[TerminalPool] Gave up waiting to fit ${sessionId} after ${attempts} frames (handle ready: ${!!handle}, size: ${width}x${height})`);
+      return;
+    }
+    rafId = requestAnimationFrame(tryFit);
+  };
+
+  // Anchor size changing (including its first real layout, which fires once
+  // even if it never changes again) is exactly the signal that a
+  // previously-failed fit attempt might now succeed.
+  const observer = new ResizeObserver(() => {
+    if (rafId === null) rafId = requestAnimationFrame(tryFit);
+  });
+  observer.observe(anchor);
+  rafId = requestAnimationFrame(tryFit);
+
+  return () => {
+    settled = true;
+    if (rafId !== null) cancelAnimationFrame(rafId);
+    observer.disconnect();
+  };
 }
 
 /**
@@ -417,6 +496,19 @@ export function usePooledTerminal(
   }, [pool, sessionId]);
 
   // Dock/undock + fit-on-show + focus (Task 3.5).
+  //
+  // Bug 2 (docs/tasks/terminal-jank.md "FitAddon on visibility:hidden
+  // Terminals") — this used to fit() inside a single requestAnimationFrame,
+  // assuming both (a) the anchor's CSS layout had already settled to its
+  // final size and (b) the lazily-loaded <XtermTerminal> (see the `lazy(...)`
+  // import above) had already mounted and populated `entry.handleRef`.
+  // Neither is guaranteed on every dock: a window-switch's freshly-mounted
+  // pane can still be mid-layout a frame later, and a cold pool entry's
+  // XtermTerminal chunk may not have resolved yet. When the guess was wrong,
+  // fit() ran against a stale/zero size (or was a no-op on a null ref) and
+  // nothing re-fit it afterward, leaving a blank terminal until the user
+  // clicked the manual "Resize" button. fitOnShow() polls (bounded) instead
+  // of guessing one frame ahead.
   useEffect(() => {
     if (!isVisible) {
       pool.undock(sessionId);
@@ -425,12 +517,9 @@ export function usePooledTerminal(
     const anchor = dockRef.current;
     if (!anchor) return;
     pool.dock(sessionId, anchor);
-    const raf = requestAnimationFrame(() => {
-      entry.handleRef.current?.fit();
-      entry.handleRef.current?.focus();
-    });
+    const cancelFit = fitOnShow(entry, anchor, sessionId);
     return () => {
-      cancelAnimationFrame(raf);
+      cancelFit();
       // Also fires on unmount (not just isVisible->false) -- without this an
       // unmounted consumer leaves its entry stuck `docked: true`, permanently
       // exempt from evictLRU.
@@ -447,6 +536,9 @@ export interface PooledTerminalCallbacks {
   onResize: (cols: number, rows: number) => void;
   isAltScreenActive: () => boolean;
   onAltScreenScrollUp: (lines: number) => void;
+  /** Scroll/gesture settings + callbacks (see ScrollGestureProps). Primitive changes re-render the pooled terminal. */
+  scrollGesture?: ScrollGestureProps;
+  onScrollModeChange?: (mode: ScrollMode) => void;
 }
 
 /**
@@ -460,7 +552,7 @@ export interface PooledTerminalCallbacks {
 export function usePooledTerminalCallbacks(
   sessionId: string,
   isVisible: boolean,
-  { onData, onResize, isAltScreenActive, onAltScreenScrollUp }: PooledTerminalCallbacks
+  { onData, onResize, isAltScreenActive, onAltScreenScrollUp, scrollGesture, onScrollModeChange }: PooledTerminalCallbacks
 ): void {
   const pool = useTerminalPoolContext();
   // Entry must already exist -- usePooledTerminal (called earlier in the
@@ -488,4 +580,34 @@ export function usePooledTerminalCallbacks(
       if (entry.onAltScreenScrollUpRef.current === onAltScreenScrollUp) entry.onAltScreenScrollUpRef.current = null;
     };
   }, [entry, isVisible, onData, onResize, isAltScreenActive, onAltScreenScrollUp]);
+
+  useEffect(() => {
+    entry.onScrollModeChangeRef.current = onScrollModeChange ?? null;
+    return () => {
+      if (entry.onScrollModeChangeRef.current === onScrollModeChange) entry.onScrollModeChangeRef.current = null;
+    };
+  }, [entry, onScrollModeChange]);
+
+  // Callbacks flow through the source ref; only the primitives need a re-render of <XtermTerminal>.
+  const scrollOverride = scrollGesture?.scrollOverride;
+  const gestureScrollEnabled = scrollGesture?.gestureScrollEnabled;
+  const tuiScrollPolicy = scrollGesture?.tuiScrollPolicy;
+  const connectionEpoch = scrollGesture?.connectionEpoch;
+  useEffect(() => {
+    entry.scrollGestureSourceRef.current = scrollGesture ?? null;
+    return () => {
+      if (entry.scrollGestureSourceRef.current === scrollGesture) entry.scrollGestureSourceRef.current = null;
+    };
+  }, [entry, scrollGesture]);
+  useEffect(() => {
+    const cur = entry.scrollGesture;
+    if (
+      cur.scrollOverride === scrollOverride &&
+      cur.gestureScrollEnabled === gestureScrollEnabled &&
+      cur.tuiScrollPolicy === tuiScrollPolicy &&
+      cur.connectionEpoch === connectionEpoch
+    ) return;
+    entry.scrollGesture = { ...cur, scrollOverride, gestureScrollEnabled, tuiScrollPolicy, connectionEpoch };
+    pool.registerEntry();
+  }, [entry, pool, scrollOverride, gestureScrollEnabled, tuiScrollPolicy, connectionEpoch]);
 }

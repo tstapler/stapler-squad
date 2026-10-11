@@ -13,12 +13,15 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
@@ -399,6 +402,12 @@ func (s *BacklogService) notifyManualOverride(itemID, itemTitle, message string)
 const (
 	headlessTriageUUIDPrefix   = "headless-triage-"
 	headlessReReviewUUIDPrefix = "headless-re-review-"
+
+	// HeadlessTriageUUIDPrefix / HeadlessReReviewUUIDPrefix are the exported
+	// forms for callers outside this package that must not treat a synthetic
+	// headless ItemSession UUID as a tmux session.
+	HeadlessTriageUUIDPrefix   = headlessTriageUUIDPrefix
+	HeadlessReReviewUUIDPrefix = headlessReReviewUUIDPrefix
 )
 
 // triageCallBudget bounds a single headless triage LLM call — now a backstop
@@ -740,6 +749,14 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 	s.dequeueMu.Lock()
 	defer s.dequeueMu.Unlock()
 
+	// Read once per sweep, not per candidate: it is a config read.
+	claimDedup := s.crossHostClaimDedupEnabled()
+	var claims foreignClaimSet
+	if claimDedup {
+		claims = s.foreignClaimsSnapshot()
+	}
+	s.reconcileClaimBlockedStuck(ctx, claimDedup, claims)
+
 	liveCount, err := s.countLiveBacklogWorkSessions(ctx)
 	if err != nil {
 		return fmt.Errorf("count live work sessions: %w", err)
@@ -782,58 +799,73 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 		if spawned >= freeSlots {
 			break
 		}
-		fromStatus := session.BacklogStatus(item.Status)
-		claimed, claimErr := s.transitionWithGuard(ctx, &item,
-			session.BacklogStatusInProgress,
-			&session.BacklogItemPrecondition{ExpectedStatus: string(fromStatus), Note: "dequeued: WIP slot freed"},
-			session.TriggeredBySystem,
-			unresolvedBlockers[item.ID])
-		if claimErr != nil {
-			switch {
-			case errors.Is(claimErr, session.ErrPreconditionFailed):
-				// Expected under concurrent claims (another process's dequeue
-				// sweep, or a manual un-queue) — not worth logging.
-			case errors.Is(claimErr, session.ErrUnresolvedBlockers):
-				// Expected steady state: item is legitimately blocked and will be
-				// retried on a later sweep once its blocker reaches done — not a
-				// bug, so not worth a warning-level log every sweep. Still surface
-				// it durably (AC3) so the item detail view can render a BlockerChip
-				// instead of leaving the operator to guess why it's stalled.
-				s.notifyBlockedByDependency(ctx, item.ID, fromStatus)
-			case errors.Is(claimErr, session.ErrPlanRequired), errors.Is(claimErr, session.ErrPlanArtifactsRequired):
-				// Defense-in-depth (PR #199 review F2/F3): should be unreachable
-				// now that SpawnSessionFromItem's planning gate runs before the
-				// WIP-cap queue gate, but refuse the claim rather than silently
-				// spawning an unapproved item if this is ever hit (e.g. a future
-				// call site regression, or a pre-existing queued/ready row from
-				// before that ordering fix).
-				log.Warn("[DequeueNextQueuedItems] claim blocked by planning gate — leaving as-is", "item", item.ID, "status", fromStatus, "error", claimErr)
-			default:
-				log.Warn("[DequeueNextQueuedItems] claim failed", "item", item.ID, "status", fromStatus, "error", claimErr)
-			}
+		if claimDedup && s.skipForForeignClaim(ctx, &item, claims) {
 			continue
 		}
-
-		resp, spawnErr := s.spawnSessionAfterGates(ctx, claimed, true, item.QueuedAutonomous)
-		if spawnErr != nil {
-			log.Warn("[DequeueNextQueuedItems] spawn failed for dequeued item; rolling back", "item", item.ID, "error", spawnErr, "to", fromStatus)
-			if _, rbErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, fromStatus,
-				&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress), Note: "dequeue spawn failed"},
-				session.TriggeredBySystem); rbErr != nil {
-				log.Error("[DequeueNextQueuedItems] rollback failed", "to", fromStatus, "item", item.ID, "error", rbErr)
-				// The same silent-stranding shape notifySpawnAndRollbackFailed was
-				// built for (BUG-030) — that fix only wired this helper into
-				// AutoReopenAfterFailedReview's own spawn+rollback path, missing this
-				// sibling one. The item is left claimed (in_progress) with no live
-				// session and no visible error anywhere.
-				s.notifySpawnAndRollbackFailed(ctx, item.ID, item.Title, spawnErr, rbErr)
+		if s.claimAndSpawnCandidate(ctx, item, unresolvedBlockers[item.ID]) {
+			spawned++
+			if claimDedup {
+				s.resolveClaimBlockedLogged(ctx, item.ID)
 			}
-			continue
 		}
-		spawned++
-		log.Info("[DequeueNextQueuedItems] dequeued and spawned", "item", item.ID, "was", fromStatus, "priority", item.Priority, "session", resp.Msg.SessionUuid)
 	}
 	return nil
+}
+
+// claimAndSpawnCandidate claims item (CAS to in_progress via transitionWithGuard)
+// and spawns its work session, rolling back to the pre-claim status if the spawn
+// fails. It reports whether a session was spawned. Callers hold dequeueMu.
+func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item session.BacklogItemData, hasUnresolvedBlockers bool) bool {
+	fromStatus := session.BacklogStatus(item.Status)
+	claimed, claimErr := s.transitionWithGuard(ctx, &item,
+		session.BacklogStatusInProgress,
+		&session.BacklogItemPrecondition{ExpectedStatus: string(fromStatus), Note: "dequeued: WIP slot freed"},
+		session.TriggeredBySystem,
+		hasUnresolvedBlockers)
+	if claimErr != nil {
+		switch {
+		case errors.Is(claimErr, session.ErrPreconditionFailed):
+			// Expected under concurrent claims (another process's dequeue
+			// sweep, or a manual un-queue) — not worth logging.
+		case errors.Is(claimErr, session.ErrUnresolvedBlockers):
+			// Expected steady state: item is legitimately blocked and will be
+			// retried on a later sweep once its blocker reaches done — not a
+			// bug, so not worth a warning-level log every sweep. Still surface
+			// it durably (AC3) so the item detail view can render a BlockerChip
+			// instead of leaving the operator to guess why it's stalled.
+			s.notifyBlockedByDependency(ctx, item.ID, fromStatus)
+		case errors.Is(claimErr, session.ErrPlanRequired), errors.Is(claimErr, session.ErrPlanArtifactsRequired):
+			// Defense-in-depth (PR #199 review F2/F3): should be unreachable
+			// now that SpawnSessionFromItem's planning gate runs before the
+			// WIP-cap queue gate, but refuse the claim rather than silently
+			// spawning an unapproved item if this is ever hit (e.g. a future
+			// call site regression, or a pre-existing queued/ready row from
+			// before that ordering fix).
+			log.Warn("[DequeueNextQueuedItems] claim blocked by planning gate — leaving as-is", "item", item.ID, "status", fromStatus, "error", claimErr)
+		default:
+			log.Warn("[DequeueNextQueuedItems] claim failed", "item", item.ID, "status", fromStatus, "error", claimErr)
+		}
+		return false
+	}
+
+	resp, spawnErr := s.spawnSessionAfterGates(ctx, claimed, true, item.QueuedAutonomous)
+	if spawnErr != nil {
+		log.Warn("[DequeueNextQueuedItems] spawn failed for dequeued item; rolling back", "item", item.ID, "error", spawnErr, "to", fromStatus)
+		if _, rbErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, fromStatus,
+			&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress), Note: "dequeue spawn failed"},
+			session.TriggeredBySystem); rbErr != nil {
+			log.Error("[DequeueNextQueuedItems] rollback failed", "to", fromStatus, "item", item.ID, "error", rbErr)
+			// The same silent-stranding shape notifySpawnAndRollbackFailed was
+			// built for (BUG-030) — that fix only wired this helper into
+			// AutoReopenAfterFailedReview's own spawn+rollback path, missing this
+			// sibling one. The item is left claimed (in_progress) with no live
+			// session and no visible error anywhere.
+			s.notifySpawnAndRollbackFailed(ctx, item.ID, item.Title, spawnErr, rbErr)
+		}
+		return false
+	}
+	log.Info("[DequeueNextQueuedItems] dequeued and spawned", "item", item.ID, "was", fromStatus, "priority", item.Priority, "session", resp.Msg.SessionUuid)
+	return true
 }
 
 // effectiveQueueTime is the timestamp DequeueNextQueuedItems' priority-tiebreaker sort
@@ -904,6 +936,17 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// docs/tasks/backlog-feature-improvement.md).
 	s.tombstoneOrphanWorkSessions(ctx, item.ID, priorSessions)
 
+	// 8a'. No-op loop gate: refuse to dispatch another work session while a
+	// repeated_noop_dispatch row is open (see domain.StuckReasonRepeatedNoopDispatch).
+	// Autonomous respawns pass through here too, so this stops every auto path.
+	if blocked, gateErr := s.storage.HasOpenStuckReason(ctx, item.ID, domain.StuckReasonRepeatedNoopDispatch); gateErr != nil {
+		log.Warn("[spawnSessionAfterGates] no-op gate lookup failed, proceeding", "item", item.ID, "error", gateErr)
+	} else if blocked {
+		log.Warn("[spawnSessionAfterGates] refusing dispatch: repeated no-op sessions on this item", "item", item.ID)
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("item has repeated_noop_dispatch open: consecutive work sessions produced no commits; resolve the duplicate/shipped state (archive or reset the item) before dispatching again"))
+	}
+
 	// 8a2. Close the tmux pane of every already-ended work-session round before
 	// spawning the next one. Each rework round gets its own "-rN" title (see
 	// buildRevisionTitle) so the session list stays readable across rounds, but
@@ -953,8 +996,12 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// 9. Generate session title.
 	// On reopen, append a revision number (r2, r3…) based on how many work sessions
 	// already exist so the session list shows distinct, human-readable names.
+	// item.ID[:8] suffix matches SpawnReviewSession's "review:"+item.ID[:8]
+	// convention -- without it, two different items with the same repo and
+	// short title collide on the exact same tmux session name (ce71ad1a: the
+	// "stapler-squad-backlog-devbug" incident had no such suffix).
 	shortTitle := triageShortTitle(priorSessions, item.Title)
-	baseTitle := slugify(filepath.Base(item.RepoPath)) + "-" + shortTitle
+	baseTitle := slugify(filepath.Base(item.RepoPath)) + "-" + shortTitle + "-" + item.ID[:8]
 	title := buildRevisionTitle(baseTitle, isReopen, priorSessions)
 
 	// 10. Create a dedicated git worktree for this work session. The branch slug
@@ -978,8 +1025,9 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// "branch already exists" failure (session/git/worktree_ops.go's setupNewWorktree
 	// self-heals that specific error, but serializing here closes the race at the
 	// source instead of just recovering from it after the fact).
+	workBranchSlug := backlogWorkBranchSlug(item.RepoPath, shortTitle)
 	s.worktreeMu.Lock()
-	worktreePath, useWorktree, resolveErr := resolveSessionPath(item.RepoPath, backlogWorkBranchSlug(item.RepoPath, shortTitle), item.BaseBranch)
+	worktreePath, useWorktree, resolveErr := resolveSessionPath(item.RepoPath, workBranchSlug, item.BaseBranch)
 	if resolveErr != nil {
 		s.worktreeMu.Unlock()
 		return nil, resolveErr
@@ -1003,10 +1051,12 @@ func (s *BacklogService) spawnSessionAfterGates(
 		workExecProgram, workExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleWork)
 	}
 	workExecutorHash := session.ComputeExecutorHash(workExecProgram, workExecModel)
+	// Pin after hashing: the hash must stay the raw mode-side pair (see above).
+	workExecModel = pinnedWorkStageModel(item.RepoPath, workExecProgram, workExecModel)
 	var programOverride, workResolvedModel string
 	if workExecProgram != "" || workExecModel != "" {
 		var resolveErr error
-		programOverride, resolveErr = session.ResolveExecutorProgram(workExecProgram, workExecModel, s.modelFamilies)
+		programOverride, resolveErr = session.ResolveExecutorProgramWithEffort(workExecProgram, workExecModel, config.LoadConfig().BackgroundEffort(), s.modelFamilies)
 		if resolveErr != nil {
 			log.Warn("[SpawnSessionFromItem] failed to resolve work-stage executor program, falling back to default", "item", item.ID, "program", workExecProgram, "model", workExecModel, "err", resolveErr)
 			programOverride = ""
@@ -1031,13 +1081,17 @@ func (s *BacklogService) spawnSessionAfterGates(
 	if autonomous {
 		spawnTags = append(spawnTags, session.TagAutonomous)
 	}
+	spawnOpts := SessionSpawnOptions{
+		Title:           title,
+		Prompt:          prompt,
+		Tags:            spawnTags,
+		ProgramOverride: programOverride,
+	}
 	var inst *session.Instance
 	if useWorktree {
-		inst, err = s.sessionCreator.CreateWorktreeSession(ctx, title, item.RepoPath, worktreePath, prompt,
-			spawnTags, false, false, programOverride)
+		inst, err = s.sessionCreator.CreateWorktreeSession(ctx, item.RepoPath, worktreePath, spawnOpts)
 	} else {
-		inst, err = s.sessionCreator.CreateDirectorySession(ctx, title, worktreePath, prompt,
-			spawnTags, false, false, programOverride)
+		inst, err = s.sessionCreator.CreateDirectorySession(ctx, worktreePath, spawnOpts)
 	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn session: %w", err))
@@ -1092,10 +1146,17 @@ func (s *BacklogService) spawnSessionAfterGates(
 	if s.pipelineEngine != nil {
 		pipelineModeSnapshotHash, _ = s.pipelineEngine.ContentHashFor(session.PipelineMode(item.PipelineMode))
 	}
+	// Stamp the full branch, not the bare slug: the slug never equals a PR's head ref, so
+	// stamping it broke the merge-verification guard.
+	var workSessionBranchName string
+	if useWorktree {
+		workSessionBranchName = session.BacklogWorkBranchName(workBranchSlug)
+	}
 	is, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
 		ItemID:                   item.ID,
 		SessionUUID:              inst.UUID,
 		SessionRole:              session.SessionRoleWork,
+		BranchName:               workSessionBranchName,
 		AcSnapshot:               acSnapshot,
 		PipelineModeSnapshot:     item.PipelineMode,
 		PipelineModeSnapshotHash: pipelineModeSnapshotHash,
@@ -2352,6 +2413,8 @@ func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, 
 	return nil
 }
 
+var errReviewInFlight = errors.New("a review for this item is already in flight")
+
 // AutoRespawnReview implements session.ReviewRespawner. It re-triggers the review gate
 // for a backlog item abandoned in review with no active session — closing the gap where
 // StuckReasonAbandonedReview was previously only detected and notified, never acted on,
@@ -2430,6 +2493,9 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 	}
 
 	if _, reviewErr := s.TriggerReReview(ctx, connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID})); reviewErr != nil {
+		if connect.CodeOf(reviewErr) == connect.CodeAlreadyExists {
+			return nil // another review spawn won the reservation; already logged
+		}
 		return fmt.Errorf("trigger re-review: %w", reviewErr)
 	}
 	log.Info("[AutoRespawnReview] re-review triggered", "item", itemID)
@@ -2460,6 +2526,16 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 // transition) before triage can run again — this mirrors the manual recovery already
 // performed for be676dab exactly, just automated.
 func (s *BacklogService) AutoRespawnTriage(ctx context.Context, itemID string) error {
+	return s.respawnTriage(ctx, itemID, true)
+}
+
+// ResumeTriage re-triggers triage after an operator answered a guidance request. Unlike
+// AutoRespawnTriage it never applies the cost-skip gate: the answer is new input.
+func (s *BacklogService) ResumeTriage(ctx context.Context, itemID string) error {
+	return s.respawnTriage(ctx, itemID, false)
+}
+
+func (s *BacklogService) respawnTriage(ctx context.Context, itemID string, applyGate bool) error {
 	if s.storage == nil {
 		return fmt.Errorf("storage not available")
 	}
@@ -2467,6 +2543,20 @@ func (s *BacklogService) AutoRespawnTriage(ctx context.Context, itemID string) e
 	item, err := s.storage.GetBacklogItem(ctx, itemID)
 	if err != nil {
 		return fmt.Errorf("load item: %w", err)
+	}
+
+	if applyGate {
+		sessions, listErr := s.storage.ListItemSessions(ctx, itemID)
+		if listErr != nil {
+			log.Warn("[AutoRespawnTriage] list sessions failed; skipping unchanged-content gate", "item", itemID, "error", listErr)
+		}
+		if listErr == nil && (item.Status == string(session.BacklogStatusIdea) || item.Status == string(session.BacklogStatusQueued)) {
+			// Checked before the queued->idea reset below so a skipped item is not demoted.
+			if reason := unchangedRetriageSkipReason(item, sessions); reason != "" {
+				s.recordTriageSkip(ctx, itemID, reason+"; human action needed (approve the plan or edit the item)")
+				return nil
+			}
+		}
 	}
 
 	switch session.BacklogStatus(item.Status) {
@@ -2571,6 +2661,12 @@ func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string
 //     headless.idleTimeout (session/headless/pool.go) — checked before
 //     "timeout" so a genuinely stalled call isn't indistinguishable from a
 //     legitimately long-but-active one.
+//   - "fanout_ceiling": an sdd-mode call crossed its configured turn/subagent ceiling
+//     (headless.ErrFanoutCeilingExceeded, ADR-029). Checked before "timeout" so an abort
+//     near the budget tail keeps its distinct reason.
+//   - "cost_ceiling": estimated spend crossed headless.CallOptions.MaxCostUSD/MaxTokens
+//     (headless.ErrCostCeilingExceeded) — a busy-but-wasteful call, caught regardless
+//     of elapsed time. Checked before "timeout" so it is never mislabeled as one.
 //   - "timeout": ctx deadline exceeded, or elapsed is within 5s of budget (covers a
 //     hang whose error got wrapped/lost before reaching context.DeadlineExceeded). With
 //     idle detection now the primary defense against a truly stuck call, this bucket
@@ -2600,12 +2696,20 @@ func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string
 // budget is the caller's own call timeout (e.g. triageCallBudget for TriggerTriage,
 // callTimeout for TriggerReReview) — the same classifier is shared across both headless
 // call sites, so it takes budget as a parameter rather than hardcoding one.
+//
+// Callers MUST log the underlying error ("error", callErr) in the same structured log
+// call as errType — the bucket alone is undiagnosable — and persist the ItemSession end
+// via endItemSessionForCallError so "other" also records error_detail.
 func classifyHeadlessCallError(err error, elapsed, budget time.Duration) string {
 	switch {
 	case errors.Is(err, headless.ErrPoolSaturated):
 		return "pool_saturated"
 	case errors.Is(err, headless.ErrIdleTimeout):
 		return "idle"
+	case errors.Is(err, headless.ErrFanoutCeilingExceeded):
+		return session.TriageEndReasonFanoutCeiling
+	case errors.Is(err, headless.ErrCostCeilingExceeded):
+		return session.TriageEndReasonCostCeiling
 	case errors.Is(err, context.DeadlineExceeded), budget-elapsed < 5*time.Second:
 		return "timeout"
 	case errors.Is(err, context.Canceled):
@@ -2615,7 +2719,61 @@ func classifyHeadlessCallError(err error, elapsed, budget time.Duration) string 
 	case errors.Is(err, headless.ErrSubprocessStart):
 		return "subprocess_start_error"
 	default:
-		return "other"
+		return session.TriageEndReasonOther
+	}
+}
+
+// maxErrorDetailRunes bounds ItemSession.error_detail.
+const maxErrorDetailRunes = 500
+
+// errorDetailSecretPattern matches common credential shapes that could ride along in a
+// wrapped exec/network error: vendor token prefixes, JWTs, bearer/basic auth, and
+// key/value or --flag secrets with =, :, quoted-JSON or (for --flags) space separators.
+var errorDetailSecretPattern = regexp.MustCompile(`(?i)(` +
+	`\bsk-[a-z0-9_-]{8,}` +
+	`|\b(?:gh[pousr]|github_pat)_[a-z0-9_]{20,}` +
+	`|\bxox[abpr]-[a-z0-9-]{8,}` +
+	`|\b(?:akia|asia)[a-z0-9]{16}\b` +
+	`|\beyj[a-z0-9_-]+\.[a-z0-9_-]+\.[a-z0-9_-]*` +
+	`|\b(?:bearer|basic)\s+[a-z0-9._~+/=-]{8,}` +
+	`|(?:api[_-]?key|token|secret|passw(?:or)?d|authorization)\b["']?\s*[:=]\s*["']?(?:(?:bearer|basic)\s+)?[^\s"',;&]+` +
+	`|--(?:api[_-]?key|token|secret|passw(?:or)?d)\s+[^\s"',;&]+` +
+	`)`)
+
+// errorDetailURLUserinfoPattern captures a URL's scheme so only its user:pass@ part is masked.
+var errorDetailURLUserinfoPattern = regexp.MustCompile(`(?i)(\b[a-z][a-z0-9+.-]*://)[^\s/@]+@`)
+
+// redactErrorDetail masks credential-shaped substrings. Best-effort: error_detail outlives
+// log rotation and is shown in the UI, so it must not become a durable secret store.
+func redactErrorDetail(s string) string {
+	s = errorDetailURLUserinfoPattern.ReplaceAllString(s, "${1}[REDACTED]@")
+	return errorDetailSecretPattern.ReplaceAllString(s, "[REDACTED]")
+}
+
+// truncateErrorDetail returns err.Error() cut to at most maxRunes runes (never splitting a
+// multi-byte rune), or "" for a nil error.
+func truncateErrorDetail(err error, maxRunes int) string {
+	if err == nil {
+		return ""
+	}
+	s := redactErrorDetail(strings.Join(strings.Fields(err.Error()), " ")) // one line: it is embedded in a one-line stuck context
+	if utf8.RuneCountInString(s) <= maxRunes {
+		return s
+	}
+	return string([]rune(s)[:maxRunes])
+}
+
+// endItemSessionForCallError closes an ItemSession after a failed headless call,
+// recording error_detail only for the unclassified "other" bucket. Best-effort.
+func (s *BacklogService) endItemSessionForCallError(ctx context.Context, itemSessionID, errType string, callErr error) {
+	var err error
+	if errType == session.TriageEndReasonOther {
+		err = s.storage.UpdateItemSessionEndedWithDetail(ctx, itemSessionID, time.Now(), errType, truncateErrorDetail(callErr, maxErrorDetailRunes))
+	} else {
+		err = s.storage.UpdateItemSessionEndedWithReason(ctx, itemSessionID, time.Now(), errType)
+	}
+	if err != nil {
+		log.Warn("failed to record headless call failure on item session", "itemSession", itemSessionID, "errType", errType, "error", err)
 	}
 }
 
@@ -2668,6 +2826,21 @@ func (s *BacklogService) MaybeTriggerTriage(ctx context.Context, itemID string, 
 	if skipTriage || repoPath == "" || s.headlessPool == nil {
 		return false
 	}
+	if s.storage != nil {
+		if item, getErr := s.storage.GetBacklogItem(ctx, itemID); getErr == nil {
+			if reason := newItemTriageSkipReason(item); reason != "" {
+				s.recordTriageSkip(ctx, itemID, reason)
+				// Triage is what normally advances idea->ready; without it a skipped item
+				// would sit in idea forever, so advance it here (the note above is the visible record).
+				precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
+				if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, //nolint:silenttransition surfaced via the triage-gate activity note recorded just above
+					session.BacklogStatusReady, precondition, session.TriggeredBySystem); transErr != nil {
+					log.Warn("[MaybeTriggerTriage] failed to advance skipped item to ready", "item", itemID, "error", transErr)
+				}
+				return false
+			}
+		}
+	}
 	// 30s gates only the synchronous path (item lookup + ItemSession creation).
 	// The headless LLM call itself runs in a goroutine under shutdownCtx (30-min cap).
 	triageCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -2709,6 +2882,17 @@ func (s *BacklogService) TriggerReReview(
 	if item.RepoPath == "" {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("set repo_path before triggering re-review"))
+	}
+
+	// 3b. One in-flight review per item, shared with the lifecycle listener's
+	// spawn paths. Held for the whole (synchronous) re-review.
+	if s.reviewGuard != nil {
+		release, ok := s.reviewGuard.TryReserve(item.ID, nil)
+		if !ok {
+			log.Info("[TriggerReReview] skipping: review already in flight", "item", item.ID)
+			return nil, connect.NewError(connect.CodeAlreadyExists, errReviewInFlight)
+		}
+		defer release()
 	}
 
 	// 4. Find the most recent review and work ItemSessions for this item.
@@ -2912,6 +3096,7 @@ Do not modify the code. Only write the review verdict.
 			reviewExecProgram, reviewExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleReview)
 		}
 		reviewExecutorHash := session.ComputeExecutorHash(reviewExecProgram, reviewExecModel)
+		reviewExecModel = pinnedStageModel(session.StageRoleReview, reviewExecProgram, reviewExecModel)
 		reviewCaller, reviewConfiguredProgram, reviewFallbackReason := s.resolveHeadlessCaller(reviewExecProgram, item.ID, "review")
 		reviewResolvedModel, reviewModelErr := session.ResolveModel(s.modelFamilies, reviewExecModel)
 		if reviewModelErr != nil {
@@ -3009,7 +3194,7 @@ Do not modify the code. Only write the review verdict.
 			}); failCreateErr != nil {
 				log.Warn("[TriggerReReview] failed to record audit ItemSession for failed call", "item", item.ID, "error", failCreateErr)
 			} else {
-				_ = s.storage.UpdateItemSessionEndedWithReason(failCleanupCtx, failIS.ID, time.Now(), errType)
+				s.endItemSessionForCallError(failCleanupCtx, failIS.ID, errType, callErr)
 				if capturePath != "" {
 					_ = s.storage.UpdateItemSessionFailureCapture(failCleanupCtx, failIS.ID, capturePath)
 				}
@@ -3122,8 +3307,13 @@ Do not modify the code. Only write the review verdict.
 	// Kill any stale tmux session with this title so the new session gets a fresh
 	// pane and the autonomous driver can deliver its prompt without attaching to an
 	// old, idle session that was left behind from a previous (possibly crashed) attempt.
+	// Only allowed to kill a pane owned by one of this item's own prior sessions
+	// (ce71ad1a) -- a stale pane under this exact title belonging to an unrelated
+	// item is refused, not silently killed.
 	if s.sessionStopper != nil {
-		_ = s.sessionStopper.KillTmuxSessionByTitle(ctx, title)
+		if err := s.sessionStopper.KillTmuxSessionByTitle(ctx, title, nonEmptySessionUUIDs(sessions)...); errors.Is(err, ErrTmuxKillRefused) {
+			log.Warn("re-review: stale tmux session not owned by this item, leaving it", "title", title, "err", err)
+		}
 	}
 
 	// Archive the prior review round's Instance before spawning its replacement —
@@ -3135,8 +3325,14 @@ Do not modify the code. Only write the review verdict.
 		s.archiveItemWorkSessions(ctx, []session.ItemSessionSummary{*mostRecentReviewSession})
 	}
 
-	inst, spawnErr := s.sessionCreator.CreateDirectorySession(ctx, title, item.RepoPath, reReviewPrompt,
-		[]string{"backlog:review"}, !useAutonomous /*oneShot*/, true /*hidden*/, "" /*programOverride: review-stage threading is out of Epic 2.4's scope*/)
+	inst, spawnErr := s.sessionCreator.CreateDirectorySession(ctx, item.RepoPath, SessionSpawnOptions{
+		Title:  title,
+		Prompt: reReviewPrompt,
+		Tags:   []string{"backlog:review"},
+		// review-stage program threading is out of Epic 2.4's scope, so ProgramOverride stays "".
+		OneShot: !useAutonomous,
+		Hidden:  true,
+	})
 	if spawnErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn re-review session: %w", spawnErr))
 	}

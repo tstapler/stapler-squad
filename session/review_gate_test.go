@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -451,15 +453,9 @@ func forceEmptyBranchNameViaRawSQL(t *testing.T, storage *Storage, sessionName s
 func newNonEmptyDiffGitRepo(t *testing.T) string {
 	t.Helper()
 	repoDir := t.TempDir()
-	runGitOrFail(t, repoDir, "init", "-b", "main")
-	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
-	runGitOrFail(t, repoDir, "config", "user.name", "Test")
-	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("base\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "README.md")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial")
-	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "change.txt"), []byte("change\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "change.txt")
-	runGitOrFail(t, repoDir, "commit", "-m", "add change")
+	initConfiguredRepo(t, repoDir, "main")
+	commitFile(t, repoDir, "README.md", "base\n", "initial")
+	commitFile(t, repoDir, "change.txt", "change\n", "add change")
 	return repoDir
 }
 
@@ -479,7 +475,7 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 	// RecoverBaseCommitSHA fails here and hits review_gate.go's WarningLog.Printf
 	// directly; redirect it so this write serializes against every other test's
 	// concurrent swapWarningLog redirection instead of landing in one of their buffers.
-	_ = swapWarningLog(t)
+	quietWarningLog(t)
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -496,12 +492,7 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 	// TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBlocks's
 	// "repair resolves but the recovered diff is empty" sub-branch below.
 	repoDir := t.TempDir()
-	runGitOrFail(t, repoDir, "init", "-b", "feature")
-	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
-	runGitOrFail(t, repoDir, "config", "user.name", "Test")
-	require.NoError(t, os.WriteFile(repoDir+"/file.txt", []byte("hello\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "file.txt")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial commit")
+	initialCommitRepo(t, repoDir, "feature")
 
 	itemData := BacklogItemData{
 		Title:              "Diff compute failure test",
@@ -588,12 +579,7 @@ func TestReviewGateRunner_NoWorktreeRecorded_DiffComputationFailure_BlocksReview
 	ctx := context.Background()
 
 	repoDir := t.TempDir()
-	runGitOrFail(t, repoDir, "init", "-b", "main")
-	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
-	runGitOrFail(t, repoDir, "config", "user.name", "Test")
-	require.NoError(t, os.WriteFile(repoDir+"/file.txt", []byte("hello\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "file.txt")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial commit")
+	initialCommitRepo(t, repoDir, "main")
 
 	itemData := BacklogItemData{
 		Title:              "No worktree recorded, diff compute failure test",
@@ -670,19 +656,14 @@ func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *t
 	// Empty committed diff hits review_gate.go's WarningLog.Printf directly; redirect
 	// it so this write serializes against every other test's concurrent
 	// swapWarningLog redirection instead of landing in one of their buffers.
-	_ = swapWarningLog(t)
+	quietWarningLog(t)
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
 	repoDir := t.TempDir()
-	runGitOrFail(t, repoDir, "init", "-b", "main")
-	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
-	runGitOrFail(t, repoDir, "config", "user.name", "Test")
-	require.NoError(t, os.WriteFile(repoDir+"/file.txt", []byte("hello\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "file.txt")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial commit")
-	headSHA := strings.TrimSpace(runGitOutputOrFail(t, repoDir, "rev-parse", "HEAD"))
+	initialCommitRepo(t, repoDir, "main")
+	headSHA := headCommitSHA(t, repoDir)
 
 	itemData := BacklogItemData{
 		Title:              "Empty committed diff test",
@@ -748,13 +729,8 @@ func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *t
 func newEmptyDiffFixture(t *testing.T, ctx context.Context, storage *Storage, title string) (*BacklogItemData, ItemSessionSummary) {
 	t.Helper()
 	repoDir := t.TempDir()
-	runGitOrFail(t, repoDir, "init", "-b", "main")
-	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
-	runGitOrFail(t, repoDir, "config", "user.name", "Test")
-	require.NoError(t, os.WriteFile(repoDir+"/file.txt", []byte("hello\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "file.txt")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial commit")
-	headSHA := strings.TrimSpace(runGitOutputOrFail(t, repoDir, "rev-parse", "HEAD"))
+	initialCommitRepo(t, repoDir, "main")
+	headSHA := headCommitSHA(t, repoDir)
 
 	itemData := BacklogItemData{
 		Title:              title,
@@ -934,12 +910,8 @@ func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(
 	ctx := context.Background()
 
 	repoDir := t.TempDir()
-	runGitOrFail(t, repoDir, "init", "-b", "main")
-	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
-	runGitOrFail(t, repoDir, "config", "user.name", "Test")
-	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("base\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "README.md")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+	initConfiguredRepo(t, repoDir, "main")
+	commitFile(t, repoDir, "README.md", "base\n", "initial")
 
 	// Real feature branch with real committed work, checked out in its own dedicated
 	// worktree directory — the same shape as ae1e2070's stelekit worktree, which had a
@@ -1021,18 +993,14 @@ func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBloc
 	// The recovered-but-empty diff path hits review_gate.go's WarningLog.Printf
 	// directly; redirect it so this write serializes against every other test's
 	// concurrent swapWarningLog redirection instead of landing in one of their buffers.
-	_ = swapWarningLog(t)
+	quietWarningLog(t)
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
 	repoDir := t.TempDir()
-	runGitOrFail(t, repoDir, "init", "-b", "main")
-	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
-	runGitOrFail(t, repoDir, "config", "user.name", "Test")
-	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("base\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "README.md")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+	initConfiguredRepo(t, repoDir, "main")
+	commitFile(t, repoDir, "README.md", "base\n", "initial")
 	// Deliberately no divergent branch: "main" is the only branch and repoPath's own
 	// checked-out HEAD already sits on it, so merge-base(HEAD, "main") collapses to
 	// HEAD itself and the "recovered" diff against it is empty.
@@ -1117,12 +1085,7 @@ func TestReviewGateRunner_NoBranchName_BlockedByIdentityGuard_SkipsRepairEntirel
 	ctx := context.Background()
 
 	repoDir := t.TempDir()
-	runGitOrFail(t, repoDir, "init", "-b", "main")
-	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
-	runGitOrFail(t, repoDir, "config", "user.name", "Test")
-	require.NoError(t, os.WriteFile(repoDir+"/file.txt", []byte("hello\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "file.txt")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial commit")
+	initialCommitRepo(t, repoDir, "main")
 
 	itemData := BacklogItemData{
 		Title:              "No branch name, diff compute failure test",
@@ -1176,7 +1139,7 @@ func TestReviewGateRunner_NoBranchName_BlockedByIdentityGuard_SkipsRepairEntirel
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
 	redirectInfoLog(t)
-	warnBuf := swapWarningLog(t)
+	warnBuf := captureWarningLog(t)
 
 	var onPassCalled atomic.Bool
 	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
@@ -1185,7 +1148,7 @@ func TestReviewGateRunner_NoBranchName_BlockedByIdentityGuard_SkipsRepairEntirel
 
 	assert.Equal(t, 0, spawner.getCallCount(), "session creator must not be consulted when the worktree identity could not be verified")
 	assert.False(t, onPassCalled.Load(), "onPass must not fire for a blocked review")
-	assert.NotContains(t, warnBuf.String(), "RecoverBaseCommitSHA", "repair must never be attempted when the identity guard has already blocked the review")
+	assert.NotContains(t, warnBuf.String(), "RecoverBaseCommitSHA item="+item.ID, "repair must never be attempted when the identity guard has already blocked the review")
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
 	require.NoError(t, err)
@@ -1213,12 +1176,8 @@ func TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict
 	ctx := context.Background()
 
 	repoDir := t.TempDir()
-	runGitOrFail(t, repoDir, "init", "-b", "main")
-	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
-	runGitOrFail(t, repoDir, "config", "user.name", "Test")
-	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("base\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "README.md")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+	initConfiguredRepo(t, repoDir, "main")
+	commitFile(t, repoDir, "README.md", "base\n", "initial")
 
 	// The path this session's worktree row will claim — but it's checked out on
 	// "other-item-branch" (a later, unrelated item's work), not this session's own
@@ -1304,12 +1263,8 @@ func TestReviewGateRunner_WorktreeBranchMismatch_RepeatedFailure_StillDedupsViaI
 	ctx := context.Background()
 
 	repoDir := t.TempDir()
-	runGitOrFail(t, repoDir, "init", "-b", "main")
-	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
-	runGitOrFail(t, repoDir, "config", "user.name", "Test")
-	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("base\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "README.md")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+	initConfiguredRepo(t, repoDir, "main")
+	commitFile(t, repoDir, "README.md", "base\n", "initial")
 
 	recycledPath := t.TempDir()
 	runGitOrFail(t, repoDir, "worktree", "add", "-b", "other-item-branch", recycledPath, "main")
@@ -1378,12 +1333,8 @@ func TestReviewGateRunner_WorktreeDirectoryGone_FallsBackToRepoPath_DoesNotHardB
 	ctx := context.Background()
 
 	repoDir := t.TempDir()
-	runGitOrFail(t, repoDir, "init", "-b", "main")
-	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
-	runGitOrFail(t, repoDir, "config", "user.name", "Test")
-	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("base\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "README.md")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+	initConfiguredRepo(t, repoDir, "main")
+	commitFile(t, repoDir, "README.md", "base\n", "initial")
 	baseSHA := strings.TrimSpace(runGitCapture(t, repoDir, "rev-parse", "main"))
 
 	// A real worktree, with real committed work, that is then fully torn down —
@@ -1465,12 +1416,8 @@ func TestReviewGateRunner_WorktreeGoneAndBaseSHACorrupted_RecoversViaRepoPath(t 
 	ctx := context.Background()
 
 	repoDir := t.TempDir()
-	runGitOrFail(t, repoDir, "init", "-b", "main")
-	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
-	runGitOrFail(t, repoDir, "config", "user.name", "Test")
-	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("base\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "README.md")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+	initConfiguredRepo(t, repoDir, "main")
+	commitFile(t, repoDir, "README.md", "base\n", "initial")
 
 	// A real worktree, with real committed work, then fully torn down — same as the
 	// test above, except the recorded base_commit_sha below is corrupted/unreachable
@@ -1542,12 +1489,8 @@ func TestWorktreeIdentityMismatch(t *testing.T) {
 	t.Parallel()
 
 	repoDir := t.TempDir()
-	runGitOrFail(t, repoDir, "init", "-b", "main")
-	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
-	runGitOrFail(t, repoDir, "config", "user.name", "Test")
-	require.NoError(t, os.WriteFile(repoDir+"/f.txt", []byte("x"), 0o644))
-	runGitOrFail(t, repoDir, "add", "f.txt")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+	initConfiguredRepo(t, repoDir, "main")
+	commitFile(t, repoDir, "f.txt", "x", "initial")
 	detachedSHA := strings.TrimSpace(runGitCapture(t, repoDir, "rev-parse", "HEAD"))
 	runGitOrFail(t, repoDir, "checkout", detachedSHA)
 
@@ -1588,11 +1531,20 @@ func cloneWithOrigin(t *testing.T, originDir string) string {
 // landing on main while a work session's branch sits open.
 func commitOnRepo(t *testing.T, dir string, n int, prefix string) {
 	t.Helper()
+	// In-process go-git: 2n git subprocesses per call contended on the fork lock
+	// and made the BranchDrift tests the slowest in the package.
+	repo, err := git.OpenRepo(dir)
+	require.NoError(t, err)
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	sig := &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()}
 	for i := 0; i < n; i++ {
 		fname := fmt.Sprintf("%s-%d.txt", prefix, i)
 		require.NoError(t, os.WriteFile(filepath.Join(dir, fname), []byte("content\n"), 0o644))
-		runGitOrFail(t, dir, "add", fname)
-		runGitOrFail(t, dir, "commit", "-m", fmt.Sprintf("%s commit %d", prefix, i))
+		_, err := wt.Add(fname)
+		require.NoError(t, err)
+		_, err = wt.Commit(fmt.Sprintf("%s commit %d", prefix, i), &gogit.CommitOptions{Author: sig, Committer: sig})
+		require.NoError(t, err)
 	}
 }
 
@@ -1610,32 +1562,24 @@ func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoS
 	// The unresolvable branch-drift conflict hits review_gate.go's WarningLog.Printf
 	// directly; redirect it so this write serializes against every other test's
 	// concurrent swapWarningLog redirection instead of landing in one of their buffers.
-	_ = swapWarningLog(t)
+	quietWarningLog(t)
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
 	origin := t.TempDir()
-	runGitOrFail(t, origin, "init", "-b", "main")
-	runGitOrFail(t, origin, "config", "user.email", "test@example.com")
-	runGitOrFail(t, origin, "config", "user.name", "Test")
-	require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("# base\n"), 0o644))
-	runGitOrFail(t, origin, "add", "README.md")
-	runGitOrFail(t, origin, "commit", "-m", "initial commit")
+	initConfiguredRepo(t, origin, "main")
+	commitFile(t, origin, "README.md", "# base\n", "initial commit")
 
 	work := cloneWithOrigin(t, origin)
 	runGitOrFail(t, work, "checkout", "-b", "feature")
 	baseSHA := strings.TrimSpace(runGitCapture(t, work, "rev-parse", "HEAD"))
 
 	// The feature branch makes its own real edit to README.md.
-	require.NoError(t, os.WriteFile(filepath.Join(work, "README.md"), []byte("# Feature Edit\n"), 0o644))
-	runGitOrFail(t, work, "add", "README.md")
-	runGitOrFail(t, work, "commit", "-m", "feature: edit README")
+	commitFile(t, work, "README.md", "# Feature Edit\n", "feature: edit README")
 
 	// Main diverges on the same line AND drifts well past the default threshold (50).
-	require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("# Main Edit\n"), 0o644))
-	runGitOrFail(t, origin, "add", "README.md")
-	runGitOrFail(t, origin, "commit", "-m", "main: edit README")
+	commitFile(t, origin, "README.md", "# Main Edit\n", "main: edit README")
 	commitOnRepo(t, origin, 55, "upstream")
 
 	itemData := BacklogItemData{
@@ -1715,21 +1659,15 @@ func TestReviewGateRunner_BranchDrift_SyncsAutomaticallyAndProceeds_When_NoConfl
 	ctx := context.Background()
 
 	origin := t.TempDir()
-	runGitOrFail(t, origin, "init", "-b", "main")
-	runGitOrFail(t, origin, "config", "user.email", "test@example.com")
-	runGitOrFail(t, origin, "config", "user.name", "Test")
-	require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("# base\n"), 0o644))
-	runGitOrFail(t, origin, "add", "README.md")
-	runGitOrFail(t, origin, "commit", "-m", "initial commit")
+	initConfiguredRepo(t, origin, "main")
+	commitFile(t, origin, "README.md", "# base\n", "initial commit")
 
 	work := cloneWithOrigin(t, origin)
 	runGitOrFail(t, work, "checkout", "-b", "feature")
 	baseSHA := strings.TrimSpace(runGitCapture(t, work, "rev-parse", "HEAD"))
 
 	// The feature branch's own unrelated change.
-	require.NoError(t, os.WriteFile(filepath.Join(work, "feature.txt"), []byte("feature work\n"), 0o644))
-	runGitOrFail(t, work, "add", "feature.txt")
-	runGitOrFail(t, work, "commit", "-m", "feature work")
+	commitFile(t, work, "feature.txt", "feature work\n", "feature work")
 
 	// Main drifts well past the threshold, but on unrelated files.
 	commitOnRepo(t, origin, 55, "upstream")
@@ -1875,7 +1813,7 @@ func TestReviewGateRunner_should_SkipDiffWorktreeBranchDriftChecks_When_GateCont
 // implicit in the synthetic ItemSession+ReviewVerdict pair.
 func TestReviewGateRunner_should_RecordGateSatisfaction_When_ConfiguredGateFailsClosed(t *testing.T) {
 	t.Parallel()
-	_ = swapWarningLog(t)
+	quietWarningLog(t)
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -1931,7 +1869,7 @@ func TestReviewGateRunner_should_RecordGateSatisfaction_When_ConfiguredGateFails
 // persisted TransitionGate row to key one on.
 func TestReviewGateRunner_should_NotRecordGateSatisfaction_When_BuiltInGateContext(t *testing.T) {
 	t.Parallel()
-	_ = swapWarningLog(t)
+	quietWarningLog(t)
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -1947,4 +1885,34 @@ func TestReviewGateRunner_should_NotRecordGateSatisfaction_When_BuiltInGateConte
 
 	_, getErr := repo.GetByItemAndGate(ctx, uuid.MustParse(item.ID), uuid.New())
 	require.Error(t, getErr, "no row exists for any gate id since GateID==\"\" must never call Create/Update")
+}
+
+func TestDiffFromMergeBaseWhenResumed(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	runGitOrFail(t, dir, "init", "-q", "-b", "main")
+	runGitOrFail(t, dir, "config", "user.email", "t@example.com")
+	runGitOrFail(t, dir, "config", "user.name", "t")
+	runGitOrFail(t, dir, "commit", "-q", "--allow-empty", "-m", "base")
+	runGitOrFail(t, dir, "checkout", "-q", "-b", "work")
+	r := &ReviewGateRunner{}
+	item := &BacklogItemData{RepoPath: dir}
+
+	// Zero commits ahead of main: still empty, so the no-changes gate holds.
+	tip := headCommitSHA(t, dir)
+	diff, _ := r.diffFromMergeBaseWhenResumed(context.Background(), item, dir, "work", tip, "", false)
+	require.Empty(t, strings.TrimSpace(diff))
+
+	// Pre-existing commits ahead of main with recorded base == tip (resumed branch).
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "f.txt"), []byte("hello\n"), 0o644))
+	runGitOrFail(t, dir, "add", "f.txt")
+	runGitOrFail(t, dir, "commit", "-q", "-m", "feature")
+	tip = runGitOutputOrFail(t, dir, "rev-parse", "HEAD")
+	diff, _ = r.diffFromMergeBaseWhenResumed(context.Background(), item, dir, "work", tip, "", false)
+	require.Contains(t, diff, "+hello")
+}
+
+func TestBackfillLockFilePath_SkipsInMemoryDSN(t *testing.T) {
+	require.Empty(t, (&EntRepository{dbPath: ":memory:"}).backfillLockFilePath("x.lock"))
+	require.Equal(t, filepath.Join("/data", "x.lock"), (&EntRepository{dbPath: "/data/sessions.db"}).backfillLockFilePath("x.lock"))
 }

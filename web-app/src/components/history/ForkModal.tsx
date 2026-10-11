@@ -3,6 +3,7 @@
 import { ClaudeHistoryEntry } from "@/gen/session/v1/session_pb";
 import { SessionType } from "@/gen/session/v1/types_pb";
 import { useEffect, useRef, useState } from "react";
+import { RepoPathInput } from "@/components/ui/RepoPathInput";
 import * as styles from "./ForkModal.css";
 
 export interface ForkParams {
@@ -89,14 +90,7 @@ export function ForkModal({ entry, submitting, error, onClose, onSubmit }: ForkM
 
         <div className={styles.field}>
           <label className={styles.label} htmlFor="fork-path">Directory</label>
-          <input
-            id="fork-path"
-            type="text"
-            className={styles.input}
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
-            required
-          />
+          <RepoPathInput id="fork-path" value={path} onChange={setPath} required />
         </div>
 
         <div className={styles.field}>

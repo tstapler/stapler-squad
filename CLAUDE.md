@@ -91,10 +91,10 @@ both fail the build, not just report:
   Level 0 consolidation gate), not a suppression.
 - **web-app — `jscpd`** (`web-app/.jscpd.json`; `make ready-duplication-gate-web`
   or `pnpm run lint:duplicates` in `web-app/`): jscpd has no git-diff scoping
-  like `--new-from-rev`, so this gates on an absolute `threshold` (0.12%,
-  raised from 0.1% on 2026-09-12 after PR #785's new Omnibar test file added
-  one more irreducible `jest.mock(...)` block and tripped the old ratchet —
-  see below) instead of new-code-only — a ratchet against a cleaned-up
+  like `--new-from-rev`, so this gates on an absolute `threshold` (0.14%,
+  raised from 0.1% to 0.12% on 2026-09-12 after PR #785's new Omnibar test
+  file added one more irreducible `jest.mock(...)` block and tripped the old
+  ratchet, then to 0.14% as later heavily-mocked test files landed — see below) instead of new-code-only — a ratchet against a cleaned-up
   baseline, not zero-tolerance. `minLines`/`minTokens` are tuned to 20/200:
   verified empirically (2026-08-24 repo-wide sweep + fix) that at that size
   every finding was real, actionable duplication — component forks,
@@ -117,9 +117,9 @@ When writing, reviewing, or refactoring Go code, invoke the relevant skill(s):
 
 | Task | Skill |
 |---|---|
-| General idioms, error handling, interfaces, naming, project structure | `/go-development` |
-| Concurrency primitive selection (mutex vs atomic vs channel vs lock-free) | `/go-concurrency` |
-| pprof profiling — CPU, memory, goroutine, mutex profiles | `/go-profiling` |
+| General idioms, error handling, interfaces, naming, project structure | `/golang-development` |
+| Concurrency primitive selection (mutex vs atomic vs channel vs lock-free) | `/golang-concurrency` |
+| pprof profiling — CPU, memory, goroutine, mutex profiles | `/golang-profiling` |
 | Fix a specific pprof hotspot (atomic shadow, RWMutex, TTL cache, etc.) | `/go:optimize` |
 
 Invoke proactively — do not wait to be asked. If a task involves any `.go` file, load the appropriate skill before starting.
@@ -265,15 +265,18 @@ Backlog items and other automation depend on the systemd-managed instance at `:8
 ```bash
 mkdir -p ~/.stapler-squad/manual-builds/manual-1
 go build -o ~/.stapler-squad/manual-builds/manual-1/stapler-squad .
-PORT=62871 STAPLER_SQUAD_INSTANCE=claude-manual-test ~/.stapler-squad/manual-builds/manual-1/stapler-squad --tmux-keep-server &
+ss -ltnp | grep -E '62871|62872'   # must print nothing — stale manual instances can still hold these ports
+PORT=62871 STAPLER_SQUAD_INSTANCE=claude-manual-test STAPLER_SQUAD_TMUX_SOCKET=ssq-manual-1 ~/.stapler-squad/manual-builds/manual-1/stapler-squad --tmux-keep-server &
 # ...test in a browser at http://localhost:62871...
 # for --remote-access, also pass: --remote-port 62872   (its default, 8444, collides with the live instance)
 kill %1   # stop it when done
+tmux -L ssq-manual-1 kill-server   # drop its private tmux server (touches only that socket, never the live one)
 ```
 
 - Build to `~/.stapler-squad/manual-builds/manual-<N>/stapler-squad` — never `./stapler-squad` (the live launchd/systemd unit's `ExecStart` binary; overwriting it in place is confusing even though a running process keeps its old inode open) and never a bare `/tmp/ssq-manual-test` path (no per-instance separation, so a second concurrent manual build silently overwrites the first instance's running binary, and `/tmp` can be cleared by the OS between reboots, unlike `~/.stapler-squad/`). Number the directory to match the port-block instance (`manual-1` ↔ `62871`/`62872`, `manual-2` ↔ `62873`/`62874`) so the binary path and the port it's bound to stay obviously paired.
 - Use ports from the **manual dev port block** below — `PORT` must differ from `:8543` (and `--remote-port` from `:8444`) or the bind will fail.
-- `STAPLER_SQUAD_INSTANCE=<name>` gives it its own state dir under `~/.stapler-squad/instances/<name>/` (see `docs/reference/state-isolation.md`) — it will not see or affect the live deployed instance's sessions, backlog items, or config. This is separate from the build directory above: `instances/<name>/` holds runtime state (sessions, config, worktrees), `manual-builds/manual-<N>/` holds the binary.
+- `STAPLER_SQUAD_INSTANCE=<name>` gives it its own state dir under `~/.stapler-squad/instances/<name>/` (see `docs/reference/state-isolation.md`) — config, DB, logs, sessions and backlog are separate from the live instance. This is separate from the build directory above: `instances/<name>/` holds runtime state (sessions, config, worktrees), `manual-builds/manual-<N>/` holds the binary.
+- **`STAPLER_SQUAD_TMUX_SOCKET=<unique-name>` is what isolates tmux** (name: 1–64 chars of `[A-Za-z0-9._-]`, not starting with `-`; an invalid value makes startup fail). `STAPLER_SQUAD_INSTANCE` and `--test-mode`/`--test-dir` do **not** — without the socket var the instance shares the live service's default tmux server, sees its sessions, and its leaked-control-mode sweeper (`session/tmux/leaked_control_mode_sweeper.go`) can kill the live service's control clients. Use a different name per concurrent instance (e.g. `ssq-manual-2` for `manual-2`). Startup logs `Using private tmux socket` when it is active.
 - `--tmux-keep-server` still applies here: without it, stopping this manual instance kills its tmux server too (fine for a throwaway instance, but keep the flag if you want to leave sessions running between restarts of it).
 
 #### Manual dev port block
@@ -330,6 +333,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Tag-based session organization | `docs/reference/tag-organization.md` |
 | Backlog completion gate (AC-completeness check) + synchronous terminal-transition cleanup | `docs/reference/backlog-completion-gate-and-cleanup.md` |
 | Benchmark reference | `docs/reference/benchmarks.md` |
+| Hidden-session delivery gate (policy, counters, latency, guards) | `docs/reference/notification-delivery-gate.md` |
 | Nil safety & static analysis tools | `docs/how-to/run-nil-safety-analysis.md` |
 | Go concurrency patterns | `docs/explanation/concurrency-patterns.md` |
 | Bundling tmux (single-binary) | `docs/how-to/bundle-tmux.md` |
@@ -347,6 +351,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Service restart kills every live tmux session without `--tmux-keep-server` | `docs/explanation/tmux-keep-server-on-restart.md` |
 | Package manager: always pnpm in web-app/, never npm/yarn | `docs/how-to/use-pnpm-in-web-app.md` |
 | macOS restart can leave orphaned processes racing over tmux/session state | `docs/explanation/service-restart-orphan-process.md` |
+| A terminal one-shot session (triage/review) can be revived and respawned forever | `docs/explanation/oneshot-session-respawn-loop.md` |
 | Fix flaky tests when found, don't just re-defer as "known pre-existing" | `fix-flaky-tests-dont-defer` skill |
 | Prefer deterministic, fast tests over real sleeps/timeouts/t.Setenv fixtures | `deterministic-fast-tests` skill |
 | Test I/O/storage isolation strategy: in-memory DB, config-dir-resolved state directories, `envtest` env helpers | `docs/explanation/test-io-storage-isolation.md` |
@@ -355,5 +360,8 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | GitHub webhook (`/webhooks/github`, incl. PR-fix events) public reachability | `docs/how-to/expose-github-webhook-endpoint.md` |
 | Log debugging: file locations, global/per-package log levels, reducing log volume, pattern-clustering tool | `docs/how-to/debug-with-logs.md` |
 | `gh pr merge` needs `--repo owner/repo` | `docs/how-to/merge-prs-with-gh-cli.md` |
+| Up Next PR tab, "Ask to fix" button, `STAPLER_SQUAD_PR_POLL_DEGRADED`, nudge/funnel log lines | `docs/how-to/use-up-next-pr-tabs-and-ask-to-fix.md` |
+| Capture the terminal stream (raw output, drops, resizes) to diagnose garbled terminals — records secrets | `docs/how-to/capture-terminal-stream-tap.md` |
 | Playwright Chromium install hangs during extraction | `docs/how-to/fix-playwright-chromium-install-stall.md` |
+| Add a custom UI theme (`~/.stapler-squad/themes/*.json`, `GET /api/themes`) | `docs/how-to/add-user-themes.md` |
 | Dispatch backlog work to Google Jules (prerequisites, badge states, escape hatch) | `docs/how-to/dispatch-work-to-google-jules.md` |

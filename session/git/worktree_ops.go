@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/git/native"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -79,7 +80,7 @@ func branchRefExists(repo *git.Repository, branchRef plumbing.ReferenceName) (bo
 func (g *GitWorktree) branchExistsAfterAddFailure(branchRef plumbing.ReferenceName) bool {
 	for attempt := 0; attempt < worktreeAddRetryAttempts; attempt++ {
 		if attempt > 0 {
-			worktreeRetryTotal.Add(context.Background(), 1)
+			native.RecordWorktreeRetry(context.Background())
 			time.Sleep(worktreeAddRetryDelay)
 		}
 		repo, err := OpenRepo(g.repoPath)

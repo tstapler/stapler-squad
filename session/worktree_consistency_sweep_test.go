@@ -532,7 +532,7 @@ func TestResolveFinding_should_CreateWorktreeRowAndNotify_When_UniqueMatchOnNonI
 	wt, err := storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
 	require.NoError(t, err)
 	assert.Equal(t, git.CanonicalizeWorktreePath(worktreePath), git.CanonicalizeWorktreePath(wt.WorktreePath))
-	assert.Equal(t, repoPath, wt.RepoPath)
+	assert.Equal(t, git.CanonicalizeWorktreePath(repoPath), git.CanonicalizeWorktreePath(wt.RepoPath))
 	assert.Equal(t, realBranch, wt.BranchName)
 }
 
@@ -1227,7 +1227,7 @@ func TestSweep_ShouldRepairRegressionPR625_When_WorktreeRowMissingButOnDiskWorkt
 	wt, err := storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
 	require.NoError(t, err)
 	assert.Equal(t, git.CanonicalizeWorktreePath(worktreePath), git.CanonicalizeWorktreePath(wt.WorktreePath))
-	assert.Equal(t, repoPath, wt.RepoPath)
+	assert.Equal(t, git.CanonicalizeWorktreePath(repoPath), git.CanonicalizeWorktreePath(wt.RepoPath))
 	assert.Equal(t, branch, wt.BranchName)
 }
 

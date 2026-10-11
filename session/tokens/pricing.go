@@ -235,18 +235,54 @@ func hasUsage(input, output, cacheCreation, cacheRead int64) bool {
 	return input != 0 || output != 0 || cacheCreation != 0 || cacheRead != 0
 }
 
-// EstimateCost computes USD cost for a ParseResult using the PricingTable.
-// Returns 0.0 for the cost of any model family not found in the table, and
-// reports those skipped families in unpriced (sorted) so the caller can
-// distinguish "genuinely zero usage" from "usage present but unpriced" —
-// see ADR-001-unpriced-signal-return-shape.md. A family with zero usage
-// across every counter (e.g. Claude Code's internal "<synthetic>" turns,
-// which the parser already filters out of TurnTimeline in production — see
-// parser.go's syntheticModelSentinel) is never flagged unpriced, since there
-// is nothing to price and nothing to warn about.
+// CategoryCosts is a session's estimated cost split by token category. Input +
+// Output + CacheCreation + CacheRead equals the EstimateCost total for a
+// fully-priced session; an unpriced model family contributes 0 to every field.
+type CategoryCosts struct {
+	Input         float64
+	Output        float64
+	CacheCreation float64
+	CacheRead     float64
+}
+
+// Total sums the four category costs, equivalent to EstimateCost's return value.
+func (c CategoryCosts) Total() float64 {
+	return c.Input + c.Output + c.CacheCreation + c.CacheRead
+}
+
+// priceUsage multiplies token counts by pricing's per-Mtok rates, returning the
+// per-category cost split. Shared by every EstimateCost* variant to keep a future
+// pricing-formula change (rate tiers, rounding) a single edit instead of four.
+func priceUsage(pricing ModelPricing, input, output, cacheCreation, cacheRead int64) CategoryCosts {
+	return CategoryCosts{
+		Input:         float64(input) / 1_000_000.0 * pricing.InputPricePerMTok,
+		Output:        float64(output) / 1_000_000.0 * pricing.OutputPricePerMTok,
+		CacheCreation: float64(cacheCreation) / 1_000_000.0 * pricing.CacheWritePerMTok,
+		CacheRead:     float64(cacheRead) / 1_000_000.0 * pricing.CacheReadPerMTok,
+	}
+}
+
+// EstimateCost computes USD cost for a ParseResult using the PricingTable —
+// the sum of EstimateCostByCategory's four category costs. See that function's
+// doc comment for the unpriced/zero-usage semantics both share.
 func (pt *PricingTable) EstimateCost(r *ParseResult) (cost float64, unpriced []string) {
+	costs, unpriced := pt.EstimateCostByCategory(r)
+	return costs.Total(), unpriced
+}
+
+// EstimateCostByCategory computes USD cost for a ParseResult using the
+// PricingTable, split by token category (see CategoryCosts) instead of summed
+// into one total. Returns 0.0 for the cost of any model family not found in
+// the table, and reports those skipped families in unpriced (sorted) so the
+// caller can distinguish "genuinely zero usage" from "usage present but
+// unpriced" — see ADR-001-unpriced-signal-return-shape.md. A family with zero
+// usage across every counter (e.g. Claude Code's internal "<synthetic>"
+// turns, which the parser already filters out of TurnTimeline in
+// production — see parser.go's syntheticModelSentinel) is never flagged
+// unpriced, since there is nothing to price and nothing to warn about.
+func (pt *PricingTable) EstimateCostByCategory(r *ParseResult) (costs CategoryCosts, unpriced []string) {
 	if r == nil || pt == nil {
-		return 0.0, nil
+		return CategoryCosts{}, nil
 	}
 
 	// Build per-model token counts from turn timeline.
@@ -274,7 +310,6 @@ func (pt *PricingTable) EstimateCost(r *ParseResult) (cost float64, unpriced []s
 
 	unpricedSet := make(map[string]bool)
 
-	var total float64
 	for family, inputTok := range modelInputs {
 		pricing, ok := pt.Prices[family]
 		if !ok {
@@ -283,10 +318,11 @@ func (pt *PricingTable) EstimateCost(r *ParseResult) (cost float64, unpriced []s
 			}
 			continue
 		}
-		total += float64(inputTok) / 1_000_000.0 * pricing.InputPricePerMTok
-		total += float64(modelOutputs[family]) / 1_000_000.0 * pricing.OutputPricePerMTok
-		total += float64(modelCacheCreation[family]) / 1_000_000.0 * pricing.CacheWritePerMTok
-		total += float64(modelCacheRead[family]) / 1_000_000.0 * pricing.CacheReadPerMTok
+		familyCosts := priceUsage(pricing, inputTok, modelOutputs[family], modelCacheCreation[family], modelCacheRead[family])
+		costs.Input += familyCosts.Input
+		costs.Output += familyCosts.Output
+		costs.CacheCreation += familyCosts.CacheCreation
+		costs.CacheRead += familyCosts.CacheRead
 	}
 
 	unpriced = make([]string, 0, len(unpricedSet))
@@ -295,7 +331,7 @@ func (pt *PricingTable) EstimateCost(r *ParseResult) (cost float64, unpriced []s
 	}
 	sort.Strings(unpriced)
 
-	return total, unpriced
+	return costs, unpriced
 }
 
 // IsStale returns true when any entry in the table has an EffectiveDate older
@@ -339,10 +375,7 @@ func (pt *PricingTable) ModelFamilyCost(r *ParseResult) (costs map[string]float6
 			}
 			continue
 		}
-		cost := float64(turn.Input)/1_000_000.0*pricing.InputPricePerMTok +
-			float64(turn.Output)/1_000_000.0*pricing.OutputPricePerMTok +
-			float64(turn.CacheCreation)/1_000_000.0*pricing.CacheWritePerMTok +
-			float64(turn.CacheRead)/1_000_000.0*pricing.CacheReadPerMTok
+		cost := priceUsage(pricing, turn.Input, turn.Output, turn.CacheCreation, turn.CacheRead).Total()
 		result[family] += cost
 	}
 
@@ -351,10 +384,7 @@ func (pt *PricingTable) ModelFamilyCost(r *ParseResult) (costs map[string]float6
 		family := NormalizeModelFamily(r.PrimaryModel)
 		pricing, ok := pt.Prices[family]
 		if ok {
-			cost := float64(r.TotalInput)/1_000_000.0*pricing.InputPricePerMTok +
-				float64(r.TotalOutput)/1_000_000.0*pricing.OutputPricePerMTok +
-				float64(r.CacheCreation)/1_000_000.0*pricing.CacheWritePerMTok +
-				float64(r.CacheRead)/1_000_000.0*pricing.CacheReadPerMTok
+			cost := priceUsage(pricing, r.TotalInput, r.TotalOutput, r.CacheCreation, r.CacheRead).Total()
 			result[family] = cost
 		} else if hasUsage(r.TotalInput, r.TotalOutput, r.CacheCreation, r.CacheRead) {
 			unpriced[family] = true
@@ -378,10 +408,7 @@ func (pt *PricingTable) EstimateTurnCost(turn TurnStats) (cost float64, priced b
 	if !ok {
 		return 0, false
 	}
-	cost = float64(turn.Input)/1_000_000.0*pricing.InputPricePerMTok +
-		float64(turn.Output)/1_000_000.0*pricing.OutputPricePerMTok +
-		float64(turn.CacheCreation)/1_000_000.0*pricing.CacheWritePerMTok +
-		float64(turn.CacheRead)/1_000_000.0*pricing.CacheReadPerMTok
+	cost = priceUsage(pricing, turn.Input, turn.Output, turn.CacheCreation, turn.CacheRead).Total()
 	return cost, true
 }
 

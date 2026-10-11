@@ -5,7 +5,7 @@ import { TerminalData, TerminalDataSchema, TerminalInput, TerminalInputSchema, T
 import { create } from "@bufbuild/protobuf";
 import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import { generateSecureId } from "@/lib/pane/paneUtils";
-import { useResizeSettling } from "@/lib/hooks/useResizeSettling";
+import { useResizeSettling, type ResizeOptions } from "@/lib/hooks/useResizeSettling";
 import type { Terminal } from '@xterm/xterm';
 
 // Epic 3.1 (AC2) — client-generated correlation ID echoed back on the
@@ -13,6 +13,8 @@ import type { Terminal } from '@xterm/xterm';
 // behavior: CurrentPaneRequest.resync_id is left empty and
 // requestFullResync()'s return value is always undefined.
 export const RESYNC_CORRELATION_ID_FLAG = 'terminal:resync-correlation-id';
+
+export type { ResizeOptions };
 
 export interface UseTerminalFlowControlOptions {
   sessionId: string;
@@ -34,11 +36,19 @@ export interface UseTerminalFlowControlOptions {
    * reset.
    */
   outstandingResyncIdsRef?: React.MutableRefObject<Map<string, number>>;
+  /**
+   * Hidden-session view: sends no Input and no Resize frame (Story 5.3). The
+   * server enforces the same rule (Story 5.1); this keeps the client honest.
+   * Pane-capture requests still go out, they only read.
+   */
+  readOnly?: boolean;
 }
 
 export interface UseTerminalFlowControlResult {
   sendInput: (input: string) => void;
-  resize: (cols: number, rows: number, force?: boolean) => void;
+  /** True while a >512 B paste is mid-chunking; backed by a ref, safe to read inside rAF. */
+  isInputChunking: () => boolean;
+  resize: (cols: number, rows: number, force?: boolean, opts?: ResizeOptions) => void;
   requestScrollback: (fromSequence: number, limit: number) => void;
   sendFlowControl: (paused: boolean, watermark?: number) => void;
   /**
@@ -67,8 +77,11 @@ export function useTerminalFlowControl({
   isConnectedRef,
   onError,
   outstandingResyncIdsRef,
+  readOnly = false,
 }: UseTerminalFlowControlOptions): UseTerminalFlowControlResult {
   const correlationIdEnabled = useFeatureFlag(RESYNC_CORRELATION_ID_FLAG);
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
 
   // Resync state machine refs. Hold the pending resync's generated tracking
   // ID (null when no resync is pending) rather than a plain boolean — Epic
@@ -83,6 +96,11 @@ export function useTerminalFlowControl({
   const isResyncingRef = useRef<string | null>(null);
   const waitingForPaneResponseRef = useRef<string | null>(null);
   const lastResyncTimeRef = useRef<number>(0);
+  // Ref, not state: the gesture rAF callback must read the live value.
+  // One token per in-flight chunked paste, so an overlapping or aborted paste never clears another's flag.
+  const activePastesRef = useRef(new Set<symbol>());
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
   const paneRequestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dimensionSyncRef = useRef<{ cols?: number; rows?: number }>({});
   // Epic 3.1, Task 3.1.1.4a — last dimensions a resync response was actually
@@ -217,6 +235,7 @@ export function useTerminalFlowControl({
   const CHUNK_DELAY_MS = 10;   // ms between chunks — yields event loop without stalling input
 
   const sendInput = useCallback((input: string) => {
+    if (readOnlyRef.current) return;
     if (!ensureConnected("send input")) return;
 
     const encoder = new TextEncoder();
@@ -244,10 +263,20 @@ export function useTerminalFlowControl({
     // pending chunks are aborted (sessionIdAtStart !== current sessionId).
     const sessionIdAtStart = sessionId;
     let offset = 0;
+    const pasteToken = Symbol("paste");
+    const activePastes = activePastesRef.current;
+    const finishPaste = () => { activePastes.delete(pasteToken); };
     const sendChunk = () => {
-      if (!pushMessageRef.current || !isConnectedRef.current) return;
-      if (sessionId !== sessionIdAtStart) return; // session changed; abort
-      if (offset >= inputBytes.length) return;
+      // sessionIdRef, not the closed-over sessionId, which is always sessionIdAtStart.
+      if (
+        !pushMessageRef.current ||
+        !isConnectedRef.current ||
+        sessionIdRef.current !== sessionIdAtStart || // session changed; abort
+        offset >= inputBytes.length
+      ) {
+        finishPaste();
+        return;
+      }
       const chunk = inputBytes.slice(offset, offset + PASTE_CHUNK_SIZE);
       offset += PASTE_CHUNK_SIZE;
       try {
@@ -261,15 +290,27 @@ export function useTerminalFlowControl({
           })
         );
       } catch (err) {
+        finishPaste();
         handleError(err);
         return;
       }
       if (offset < inputBytes.length) {
+        activePastes.add(pasteToken);
         setTimeout(sendChunk, CHUNK_DELAY_MS);
+      } else {
+        finishPaste();
       }
     };
     sendChunk();
   }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError, ensureConnected]);
+
+  // True from the first chunk of a >512 B paste until the last chunk is sent (or it aborts).
+  const isInputChunking = useCallback(() => activePastesRef.current.size > 0, []);
+
+  // A session switch aborts the pending chunks; clear eagerly rather than waiting for the next timer.
+  useEffect(() => {
+    activePastesRef.current.clear();
+  }, [sessionId]);
 
   // The actual send, invoked by useResizeSettling only once it has judged a
   // (cols, rows) value settled (BUG-101) — debounce, throttle, and
@@ -280,17 +321,19 @@ export function useTerminalFlowControl({
   // value as the last one actually sent.
   const sendSettledResize = useCallback((cols: number, rows: number): boolean => {
     if (!pushMessageRef.current || !isConnectedRef.current) return false;
-    try {
-      console.log(`[useTerminalFlowControl] Sending resize to server: ${cols}x${rows}`);
-      pushMessage(
-        create(TerminalDataSchema, {
-          sessionId,
-          data: { case: "resize", value: create(TerminalResizeSchema, { cols, rows }) },
-        })
-      );
-    } catch (err) {
-      handleError(err);
-      return false;
+    if (!readOnlyRef.current) {
+      try {
+        console.log(`[useTerminalFlowControl] Sending resize to server: ${cols}x${rows}`);
+        pushMessage(
+          create(TerminalDataSchema, {
+            sessionId,
+            data: { case: "resize", value: create(TerminalResizeSchema, { cols, rows }) },
+          })
+        );
+      } catch (err) {
+        handleError(err);
+        return false;
+      }
     }
 
     // After resizing, request fresh terminal content
@@ -333,9 +376,9 @@ export function useTerminalFlowControl({
 
   const { resize: settledResize } = useResizeSettling({ onSettled: sendSettledResize });
 
-  const resize = useCallback((cols: number, rows: number, force: boolean = false) => {
+  const resize = useCallback((cols: number, rows: number, force: boolean = false, opts?: ResizeOptions) => {
     if (!ensureConnected("resize terminal")) return;
-    settledResize(cols, rows, force);
+    settledResize(cols, rows, force, opts);
   }, [ensureConnected, settledResize]);
 
   const requestScrollback = useCallback((fromSequence: number, limit: number) => {
@@ -406,6 +449,7 @@ export function useTerminalFlowControl({
 
   return {
     sendInput,
+    isInputChunking,
     resize,
     requestScrollback,
     sendFlowControl,

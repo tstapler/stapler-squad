@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"reflect"
 	"strings"
 )
 
@@ -9,6 +10,20 @@ import (
 // session manager.
 type AuthValidator interface {
 	ValidateAuthSession(token string) bool
+}
+
+// AuthRequires reports whether Auth(validator) enforces authentication: false
+// for a nil interface and for a typed nil pointer, which Auth would wrap.
+func AuthRequires(validator AuthValidator) bool {
+	if validator == nil {
+		return false
+	}
+	v := reflect.ValueOf(validator)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.Interface:
+		return !v.IsNil()
+	}
+	return true
 }
 
 // Auth returns middleware that enforces authentication on all non-exempt paths.
@@ -20,7 +35,7 @@ func Auth(validator AuthValidator) func(http.Handler) http.Handler {
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Always allow auth endpoints and static assets needed before login.
-			if isExempt(r.URL.Path) {
+			if isExempt(r) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -52,13 +67,51 @@ var exemptPrefixes = []string{
 	"/favicon", // browser tab icon
 }
 
-func isExempt(path string) bool {
+// exemptPeerPaths are host-to-host gossip endpoints. Peers are other
+// stapler-squad instances with no passkey session, so they can never pass
+// isAuthenticated; each handler authenticates the payload itself. Matched
+// exactly, not by prefix, so nothing else under /internal/ is opened up. Paths
+// must equal session.AdvertisementEndpointPath,
+// session.ClaimAdvertisementEndpointPath and session.ClaimLookupEndpointPath
+// (asserted in auth_test.go).
+//
+//   - /internal/host-advertisement is how a peer enrols in HostRegistry
+//     (Ed25519 signature, TOFU-pinned key). Without the exemption no peer can
+//     ever enrol, the registry stays empty and claim gossip cannot work between
+//     hosts. Enrolment is open to anyone who can reach the port (the accepted
+//     same-LAN threat model of ADR-002); the handler bounds body size and the
+//     registry bounds entry count.
+//   - /internal/claim-advertisement accepts only signed claims from enrolled
+//     hosts (ClaimIndex.RecordClaim).
+//   - /internal/claim-lookup requires a signed request from an enrolled host
+//     (ClaimIndex.AuthorizeClaimLookup).
+var exemptPeerPaths = map[string]struct{}{
+	"/internal/host-advertisement":  {},
+	"/internal/claim-advertisement": {},
+	"/internal/claim-lookup":        {},
+}
+
+func isExempt(r *http.Request) bool {
+	if isGenericWebhookDelivery(r) {
+		return true
+	}
+	if _, ok := exemptPeerPaths[r.URL.Path]; ok {
+		return true
+	}
 	for _, prefix := range exemptPrefixes {
-		if strings.HasPrefix(path, prefix) {
+		if strings.HasPrefix(r.URL.Path, prefix) {
 			return true
 		}
 	}
 	return false
+}
+
+func isGenericWebhookDelivery(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	slug, ok := strings.CutPrefix(r.URL.Path, "/webhooks/")
+	return ok && slug != "" && !strings.Contains(slug, "/") && slug != "github"
 }
 
 func isAPIPath(path string) bool {

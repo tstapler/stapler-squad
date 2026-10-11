@@ -75,14 +75,16 @@ function makeSession(overrides: Partial<Session> = {}): Session {
 describe("SessionCard — Program row excluded from dedup", () => {
   it("SessionCard_should_RenderProgramRowUnchanged_When_TitleMatchesProgram", () => {
     const session = makeSession({ title: "claude", program: "claude" });
-    render(<SessionCard session={session} />);
+    // Program row is gated behind visibleColumns as of Story 2.2.3 and hidden by
+    // default -- pass "agent" explicitly since this test is about dedup, not gating.
+    render(<SessionCard session={session} visibleColumns={["agent"]} />);
     expect(screen.getByText("Program:")).toBeInTheDocument();
     expect(screen.getAllByText("claude").length).toBeGreaterThan(0);
   });
 
   it("SessionCard_should_RenderProgramRowUnchanged_When_TitleDoesNotMatchProgram", () => {
     const session = makeSession({ title: "fix-auth", program: "claude" });
-    render(<SessionCard session={session} />);
+    render(<SessionCard session={session} visibleColumns={["agent"]} />);
     expect(screen.getByText("Program:")).toBeInTheDocument();
     expect(screen.getByText("claude")).toBeInTheDocument();
   });
@@ -101,11 +103,13 @@ describe("SessionCard — no visual regression when no field duplicates the titl
       program: "claude",
       goal: makeGoalSummary({ goalText: "Ship SSO login" }),
     });
-    render(<SessionCard session={session} />);
+    render(<SessionCard session={session} visibleColumns={["agent"]} />);
     expect(screen.getByText("Branch:")).toBeInTheDocument();
     expect(screen.getByText("feature/sso")).toBeInTheDocument();
     expect(screen.getByText("Path:")).toBeInTheDocument();
-    expect(screen.getByText("/home/user/worktrees/implement-oauth-work")).toBeInTheDocument();
+    // truncateWorkspacePath (Story 2.2.1) always collapses a /home or /Users prefix to
+    // "~" regardless of budget -- the visible text is no longer the raw existingDir.
+    expect(screen.getByText("~/worktrees/implement-oauth-work")).toBeInTheDocument();
     expect(screen.getByText("Program:")).toBeInTheDocument();
     expect(screen.getByText("Goal")).toBeInTheDocument();
     expect(screen.getByText("Ship SSO login")).toBeInTheDocument();
@@ -118,7 +122,7 @@ describe("SessionCard — no visual regression when no field duplicates the titl
     });
     render(<SessionCard session={session} />);
     expect(screen.getByText("Path:")).toBeInTheDocument();
-    expect(screen.getByText("/home/user/worktrees/fix-auth-2")).toBeInTheDocument();
+    expect(screen.getByText("~/worktrees/fix-auth-2")).toBeInTheDocument();
   });
 });
 
@@ -193,7 +197,7 @@ describe("SessionCard — all-fields-redundant edge case", () => {
       goal: makeGoalSummary({ goalText: "fix-auth" }),
       program: "claude",
     });
-    render(<SessionCard session={session} />);
+    render(<SessionCard session={session} visibleColumns={["agent"]} />);
     expect(screen.queryByText("Branch:")).toBeNull();
     expect(screen.queryByText("Path:")).toBeNull();
     expect(screen.queryByText("Working Dir:")).toBeNull();
@@ -228,7 +232,7 @@ describe("SessionCard — UX acceptance for dedup", () => {
       }), // State C: all-fields-redundant
     ];
     for (const session of states) {
-      const { unmount } = render(<SessionCard session={session} />);
+      const { unmount } = render(<SessionCard session={session} visibleColumns={["agent"]} />);
       // Program is always present with a non-empty value in every state.
       expect(screen.getByText("Program:")).toBeInTheDocument();
       expect(screen.getByText(session.program)).toBeInTheDocument();

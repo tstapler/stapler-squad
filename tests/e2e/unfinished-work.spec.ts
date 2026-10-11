@@ -15,7 +15,8 @@ import * as os from 'os';
 import * as path from 'path';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
-const UNFINISHED_URL = `${BASE_URL}/unfinished`;
+// Worktree content lives on the Worktrees tab; the default tab is PRs.
+const UNFINISHED_URL = `${BASE_URL}/unfinished?tab=worktrees`;
 
 // ── Test data setup ──────────────────────────────────────────────────────────
 // We create a real bare git repo + worktree with uncommitted changes AND a
@@ -130,6 +131,13 @@ test.afterAll(() => {
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 test.describe('unfinished-work', () => {
+  // Mark the first-visit onboarding dialog dismissed so its overlay can't intercept clicks.
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('stapler-squad:onboarded', 'true');
+    });
+  });
+
   test('unfinished-work > page loads with title and filter controls', async ({ page }) => {
     await page.goto(UNFINISHED_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
 
@@ -251,8 +259,11 @@ test.describe('unfinished-work', () => {
       await expect(openBtn).toBeVisible({ timeout: 5000 });
 
       await openBtn.click();
-      // Should navigate to home with ?worktree= param to pre-fill wizard
-      await expect(page).toHaveURL(/[?&]worktree=/, { timeout: 5000 });
+      // The ?worktree= param is cleared right after it is read, so assert the outcome:
+      // the omnibar opens with path@branch prefilled.
+      const sourceInput = page.locator('[aria-label="Session source input"]');
+      await expect(sourceInput).toBeVisible({ timeout: 10000 });
+      await expect(sourceInput).toHaveValue(new RegExp(`${repoName}.*@main$`));
     } finally {
       await addPinnedRepoViaApi(testSeedDir);
       fs.rmSync(noSessionRepoDir, { recursive: true, force: true });

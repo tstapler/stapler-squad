@@ -9,7 +9,7 @@ import { createAuthInterceptor } from "@/lib/config";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { BackoffState, connectTimeoutMs, isNonRetriableConnectError, isWorktreeMissingError } from "@/lib/utils/backoff";
 import { MessageQueue } from "@/lib/terminal/MessageQueue";
-import { useTerminalFlowControl } from "./useTerminalFlowControl";
+import { useTerminalFlowControl, type ResizeOptions } from "./useTerminalFlowControl";
 import { useTerminalMetrics } from "./useTerminalMetrics";
 import type { Terminal } from '@xterm/xterm';
 import { ShellStatus } from "@/gen/session/v1/types_pb";
@@ -41,6 +41,8 @@ interface UseTerminalStreamOptions {
   /** Callback invoked when a ShellStatusUpdate is received for this shell. */
   onShellStatusChange?: (status: "running" | "stopped" | "error", exitCode?: number) => void;
   getTerminal?: () => Terminal | null; // Getter function for terminal instance (evaluated at connect time)
+  /** Hidden-session view: no Input or Resize frames are sent (Story 5.3). */
+  readOnly?: boolean;
   scrollbackLines?: number; // Number of lines to request from scrollback
   onError?: (error: Error) => void;
   onScrollbackReceived?: (scrollback: string, metadata?: ScrollbackMetadata) => void; // Callback when scrollback is received
@@ -104,7 +106,9 @@ interface TerminalStreamResult {
   isConnected: boolean;
   error: Error | null;
   sendInput: (input: string) => void;
-  resize: (cols: number, rows: number, force?: boolean) => void;
+  /** True while a chunked paste is in flight (see useTerminalFlowControl). */
+  isInputChunking: () => boolean;
+  resize: (cols: number, rows: number, force?: boolean, opts?: ResizeOptions) => void;
   connect: (cols?: number, rows?: number) => Promise<void>; // Optional dimensions to override initial values
   disconnect: () => Promise<void>;
   scrollbackLoaded: boolean; // Indicates if scrollback has been loaded
@@ -147,6 +151,7 @@ export function useTerminalStream({
   onInputDropped,
   foreground = false,
   outstandingResyncIdsRef,
+  readOnly = false,
 }: UseTerminalStreamOptions): TerminalStreamResult {
   // ---- Connection state ----
   const [isConnected, setIsConnected] = useState(false);
@@ -276,6 +281,7 @@ export function useTerminalStream({
     isConnectedRef,
     onError,
     outstandingResyncIdsRef,
+    readOnly,
   });
 
   const metrics = useTerminalMetrics({ onOutput });
@@ -770,6 +776,7 @@ export function useTerminalStream({
     isConnected,
     error,
     sendInput: flowControl.sendInput,
+    isInputChunking: flowControl.isInputChunking,
     resize: flowControl.resize,
     connect,
     disconnect,

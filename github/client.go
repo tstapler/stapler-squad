@@ -580,6 +580,7 @@ func GetPRByNumber(ctx context.Context, ref RepoRef, prNumber int) (*PRInfo, err
 		Merged  bool   `json:"merged"`
 		Head    struct {
 			Ref string `json:"ref"`
+			SHA string `json:"sha"`
 		} `json:"head"`
 		Base struct {
 			Ref  string `json:"ref"`
@@ -612,6 +613,7 @@ func GetPRByNumber(ctx context.Context, ref RepoRef, prNumber int) (*PRInfo, err
 	return &PRInfo{
 		Number:  prResp.Number,
 		HeadRef: prResp.Head.Ref,
+		HeadSHA: prResp.Head.SHA,
 		BaseRef: prResp.Base.Ref,
 		State:   state,
 		Author:  prResp.User.Login,

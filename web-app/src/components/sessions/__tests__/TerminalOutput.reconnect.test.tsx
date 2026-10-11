@@ -14,6 +14,7 @@ import { render, screen, fireEvent, act } from "@testing-library/react";
 const mockXtermHandle = {
   terminal: null as null,
   fit: jest.fn(),
+  refit: jest.fn(),
   write: jest.fn(),
   writeln: jest.fn(),
   clear: jest.fn(),

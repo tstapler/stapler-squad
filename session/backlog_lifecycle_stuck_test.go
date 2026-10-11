@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1160,15 +1161,17 @@ func TestRemediateStaleWorkWithBackoffGate_should_parkAfterMaxAttempts_When_Rewo
 
 	assert.Contains(t, notifier.titles(), "Auto-rework paused", "the 5th attempt must fire the parked notification regardless of ReworkCapOverride=0")
 
-	// 6th call, well past backoff: must not consume another attempt — the
-	// unlimited rework cap does not un-park a MaxRemediationAttempts-exhausted row.
-	backdateNextRemediationAt(t, er, item.ID, domain.StuckReasonStaleWork, time.Now().Add(-time.Second))
-	listener.remediateStaleWorkWithBackoffGate(ctx, item.ID, item.Title)
+	// Past backoff the parked row gets only the bounded cold retries; the
+	// unlimited rework cap must not extend that budget.
+	for i := 0; i < int(MaxRemediationColdRetries)+2; i++ {
+		backdateNextRemediationAt(t, er, item.ID, domain.StuckReasonStaleWork, time.Now().Add(-time.Second))
+		listener.remediateStaleWorkWithBackoffGate(ctx, item.ID, item.Title)
+	}
 
 	rows, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, int32(5), rows[0].RemediationAttempts, "parked attempt count must not grow past the cap even with an unlimited rework override")
+	assert.Equal(t, MaxRemediationAttempts+MaxRemediationColdRetries, rows[0].RemediationAttempts, "attempt count must stop at the cold-retry ceiling even with an unlimited rework override")
 }
 
 // --- rework_blocked_stale: reconcileReworkBlockedStaleResolution orchestration
@@ -1859,6 +1862,40 @@ func TestReconcileOrphanedTriageRemediation_should_retryEndedWithoutTransitionRo
 	}
 }
 
+// TestReconcileOrphanedTriageRemediation_should_notRetry_When_LatestTriageHitFanoutCeiling
+// pins ADR-029: a deterministic fan-out overrun must not be auto-retried by the
+// shared backoff (30m..72h, then cold heartbeat), each attempt re-spending up to the ceiling.
+func TestReconcileOrphanedTriageRemediation_should_notRetry_When_LatestTriageHitFanoutCeiling(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "ceiling", AcceptanceCriteria: `[]`, Priority: 1, Status: string(BacklogStatusIdea)})
+	require.NoError(t, err)
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "headless-triage-" + uuid.New().String(), SessionRole: SessionRoleTriage})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEndedWithReason(ctx, is.ID, time.Now(), TriageEndReasonFanoutCeiling))
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	respawner := newFakeTriageRespawner()
+	listener.SetTriageRespawner(respawner)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "the abort still surfaces to the operator as a stuck row")
+	listener.reconcileOrphanedTriageRemediation(ctx, er)
+
+	select {
+	case <-respawner.calls:
+		t.Fatal("a fan-out-ceiling abort must not be auto-retried")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
 // fakeTriageRespawner is a test double implementing TriageRespawner, recording
 // every AutoRespawnTriage call on a buffered channel (not a plain counter)
 // because retryOrphanedTriageWithBackoffGate dispatches asynchronously —
@@ -2438,6 +2475,40 @@ func TestReconcileTerminalItemSessions_should_ArchiveAndKillReviewSession_When_I
 
 	assert.Contains(t, archiver.archivedUUIDs, "leaked-live-review-session")
 	assert.Contains(t, archiver.killedUUIDs, "leaked-live-review-session")
+}
+
+// TestReconcileTerminalItemSessions_should_ArchiveAndKillDiagnoseSession_When_ItemAlreadyDone
+// guards the fix for diagnose sessions never getting cleaned up: a finished
+// Diagnose & Nudge dispatch (Hidden+OneShot, like review) used to be excluded
+// from IsTmuxBackedSessionRole and so was never archived/killed, leaking
+// indefinitely as a Stopped+Hidden session — the same leak class the
+// 2026-07-29 OOM incident this predicate exists to prevent.
+func TestReconcileTerminalItemSessions_should_ArchiveAndKillDiagnoseSession_When_ItemAlreadyDone(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "done item with a still-live diagnose session",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "leaked-live-diagnose-session",
+		SessionRole: SessionRoleDiagnose,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	archiver := &fakeSessionArchiver{}
+	listener.SetSessionArchiver(archiver)
+
+	listener.reconcileTerminalItemSessions(ctx)
+
+	assert.Contains(t, archiver.archivedUUIDs, "leaked-live-diagnose-session")
+	assert.Contains(t, archiver.killedUUIDs, "leaked-live-diagnose-session")
 }
 
 // TestReconcileTerminalItemSessions_should_SkipTmuxKill_When_ItemSessionRoleIsJulesWork
@@ -5584,4 +5655,216 @@ func TestReconcileBouncingItems_should_NotMarkStuckForSddModeItemButStillMarkDef
 	_, defaultFlagged := findOpenStuckStateFor(open, defaultItem.ID, domain.StuckReasonBouncing)
 	assert.False(t, sddFlagged, "sdd-mode item with 4 cycles must not be flagged under the per-item CycleThreshold=5 override")
 	assert.True(t, defaultFlagged, "default-mode sibling with the identical 4-cycles-in-30h shape must still be flagged via the unconfigured pair's DefaultLivenessEngine fallback (bounceThreshold=3) — proving per-item, not package-level, resolution")
+}
+
+func TestReconcileOrphanedTriageItems_should_includeErrorDetailInContext_When_EndReasonOther(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Other-ended triage test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-triage-" + uuid.New().String(),
+		SessionRole: SessionRoleTriage,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEndedWithDetail(ctx, is.ID, time.Now(), "other", "dial tcp: connection refused"))
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	listener.reconcileOrphanedTriageItems(ctx, storage.repo)
+
+	open, err := storage.repo.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Contains(t, open[0].Context, "ended (other: dial tcp: connection refused)")
+}
+
+func TestRecordTriageParkAndMaybeEscalate_should_notifyOnce_When_ThresholdParksWithinWindow(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	base := time.Now()
+	listener.recordTriageParkAndMaybeEscalate("a", base)
+	listener.recordTriageParkAndMaybeEscalate("b", base.Add(time.Minute))
+	assert.Empty(t, notifier.calls, "below threshold must not escalate")
+
+	listener.recordTriageParkAndMaybeEscalate("c", base.Add(2*time.Minute))
+	require.Len(t, notifier.calls, 1)
+	assert.Equal(t, "Multiple auto-triage retries exhausted", notifier.calls[0].Title)
+	assert.Contains(t, notifier.calls[0].Message, "3 items")
+}
+
+func TestRecordTriageParkAndMaybeEscalate_should_notifyOnlyOnce_When_BurstContinuesPastThreshold(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	base := time.Now()
+	for i := 0; i < 10; i++ {
+		listener.recordTriageParkAndMaybeEscalate(fmt.Sprintf("item-%d", i), base.Add(time.Duration(i)*time.Second))
+	}
+	assert.Len(t, notifier.calls, 1)
+}
+
+func TestRecordTriageParkAndMaybeEscalate_should_countDistinctItems_When_SameItemParksRepeatedly(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	base := time.Now()
+	for i := 0; i < 5; i++ {
+		listener.recordTriageParkAndMaybeEscalate("same-item", base.Add(time.Duration(i)*time.Second))
+	}
+	assert.Empty(t, notifier.calls)
+}
+
+func TestRecordTriageParkAndMaybeEscalate_should_notNotify_When_ParksSpreadBeyondWindow(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	base := time.Now()
+	for i := 0; i < 5; i++ {
+		listener.recordTriageParkAndMaybeEscalate(fmt.Sprintf("item-%d", i), base.Add(time.Duration(i)*(batchParkWindow+time.Minute)))
+	}
+	assert.Empty(t, notifier.calls)
+}
+
+func TestParkBurstTracker_should_refireForSecondBurst_When_WindowElapsed(t *testing.T) {
+	t.Parallel()
+	var tr parkBurstTracker
+	base := time.Now()
+	for i, id := range []string{"a", "b", "c"} {
+		_, fire := tr.record(id, base.Add(time.Duration(i)*time.Second), batchParkWindow, batchParkThreshold)
+		assert.Equal(t, i == 2, fire, "first burst fires only at the threshold")
+	}
+
+	second := base.Add(2*time.Second + batchParkWindow + time.Second) // past the last first-burst park + window
+	for i, id := range []string{"d", "e", "f"} {
+		count, fire := tr.record(id, second.Add(time.Duration(i)*time.Second), batchParkWindow, batchParkThreshold)
+		assert.Equal(t, i == 2, fire, "second burst fires once at the threshold")
+		assert.Equal(t, i+1, count, "first-burst items must have aged out of the window")
+	}
+}
+
+func TestParkBurstTracker_should_pinWindowBoundary_When_RecordingAtExactOffsets(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		offset    time.Duration // second park, relative to the first park that already fired
+		wantFire  bool
+		wantCount int
+	}{
+		{"just inside window: suppressed, both parks counted", batchParkWindow - time.Second, false, 2},
+		{"exactly +window: re-fires and the first park has aged out", batchParkWindow, true, 1},
+		{"after window", batchParkWindow + time.Second, true, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var tr parkBurstTracker
+			base := time.Now()
+			_, fire := tr.record("a", base, batchParkWindow, 1)
+			require.True(t, fire)
+			count, fire := tr.record("b", base.Add(tt.offset), batchParkWindow, 1)
+			assert.Equal(t, tt.wantFire, fire)
+			assert.Equal(t, tt.wantCount, count)
+		})
+	}
+}
+
+func TestRetryOrphanedTriageWithBackoffGate_should_escalateOnceForBatch_And_NotForSinglePark(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	parkable := func(title string) string {
+		item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: title, AcceptanceCriteria: `[]`, Priority: 1, Status: string(BacklogStatusIdea)})
+		require.NoError(t, err)
+		_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatusIdea, "orphaned triage")
+		require.NoError(t, err)
+		// One attempt short of the cap, due now: the next gate call parks it.
+		applied, err := er.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonOrphanedTriage, MaxRemediationAttempts-1, timePtr(time.Now().Add(-time.Minute)))
+		require.NoError(t, err)
+		require.True(t, applied)
+		return item.ID
+	}
+	newListener := func() (*BacklogLifecycleListener, *fakeNotifier) {
+		l := NewBacklogLifecycleListener(storage)
+		n := &fakeNotifier{}
+		l.SetNotifier(n)
+		l.SetTriageRespawner(newFakeTriageRespawner())
+		return l, n
+	}
+	countTitle := func(n *fakeNotifier, title string) int {
+		c := 0
+		for _, call := range n.calls {
+			if call.Title == title {
+				c++
+			}
+		}
+		return c
+	}
+
+	t.Run("single parked item gets only the per-item notification", func(t *testing.T) {
+		l, n := newListener()
+		l.retryOrphanedTriageWithBackoffGate(ctx, parkable("single"), "single")
+		assert.Equal(t, 1, countTitle(n, "Auto-triage paused"))
+		assert.Equal(t, 0, countTitle(n, "Multiple auto-triage retries exhausted"))
+	})
+
+	t.Run("three distinct parked items fire the aggregate exactly once", func(t *testing.T) {
+		l, n := newListener()
+		for _, name := range []string{"one", "two", "three"} {
+			l.retryOrphanedTriageWithBackoffGate(ctx, parkable(name), name)
+		}
+		assert.Equal(t, 3, countTitle(n, "Auto-triage paused"))
+		assert.Equal(t, 1, countTitle(n, "Multiple auto-triage retries exhausted"))
+	})
+}
+
+func TestTriageEndReasonWithDetail(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name, reason, detail, want string
+	}{
+		{"other with empty detail has no colon", TriageEndReasonOther, "", "other"},
+		{"other with detail appends it", TriageEndReasonOther, "dial failed", "other: dial failed"},
+		{"non-other ignores detail", "idle", "dial failed", "idle"},
+		{"empty reason falls back to unknown", "", "dial failed", triageEndReasonOrUnknown("")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := triageEndReasonWithDetail(tt.reason, tt.detail)
+			assert.Equal(t, tt.want, got)
+			if tt.reason != TriageEndReasonOther {
+				assert.NotContains(t, got, tt.detail)
+			}
+		})
+	}
 }

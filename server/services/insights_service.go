@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/contexthistory"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -64,6 +65,9 @@ type InsightsService struct {
 	// GetInsightsSummary to filter dismissed findings out of the response.
 	// nil means dismissal is unavailable (see doc comment on the interface).
 	dismissedFindings DismissedFindingsRepository
+
+	// contextHistory serves the context-history RPCs. nil means unavailable.
+	contextHistory *contexthistory.Store
 
 	// logMu guards loggedUnpricedFamilies.
 	logMu sync.Mutex
@@ -237,6 +241,124 @@ func (s *InsightsService) SetDismissedFindingsStore(store DismissedFindingsRepos
 	s.dismissedFindings = store
 }
 
+// SetContextHistoryStore wires the persisted context-history store (nil disables
+// the context-history RPCs).
+func (s *InsightsService) SetContextHistoryStore(store *contexthistory.Store) {
+	s.contextHistory = store
+}
+
+func (s *InsightsService) requireContextHistory() error {
+	if s.contextHistory == nil {
+		return connect.NewError(connect.CodeUnimplemented, fmt.Errorf("context history is not available"))
+	}
+	return nil
+}
+
+func toCeilingSummary(sum contexthistory.SessionSummary) *sessionv1.ContextCeilingSummary {
+	return &sessionv1.ContextCeilingSummary{
+		ConversationId:       sum.SessionUUID,
+		Turns:                int32(sum.Turns),
+		PeakTokens:           sum.PeakTokens,
+		FractionAtOrAbove_75: sum.FractionWarn,
+		FractionAtOrAbove_90: sum.FractionCritical,
+	}
+}
+
+// GetContextHistory returns a session's persisted context series, ceiling summary and compactions.
+// +api: GetContextHistory
+func (s *InsightsService) GetContextHistory(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetContextHistoryRequest],
+) (*connect.Response[sessionv1.GetContextHistoryResponse], error) {
+	if err := s.requireContextHistory(); err != nil {
+		return nil, err
+	}
+	id := req.Msg.ConversationId
+	if id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("conversation_id is required"))
+	}
+	series, err := s.contextHistory.Series(ctx, id)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	compactions, err := s.contextHistory.Compactions(ctx, id)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	resp := &sessionv1.GetContextHistoryResponse{
+		Samples: make([]*sessionv1.ContextSample, 0, len(series)),
+		Summary: toCeilingSummary(contexthistory.Summarize(id, series)),
+	}
+	for _, sm := range series {
+		resp.Samples = append(resp.Samples, &sessionv1.ContextSample{
+			TurnIndex:     int32(sm.TurnIndex),
+			SampledAt:     timestamppb.New(sm.SampledAt),
+			Model:         sm.Model,
+			ContextTokens: sm.ContextTokens,
+			ContextMax:    sm.ContextMax,
+		})
+	}
+	for _, c := range compactions {
+		resp.Compactions = append(resp.Compactions, &sessionv1.CompactionEvent{
+			ConversationId: c.SessionUUID,
+			TurnIndex:      int32(c.TurnIndex),
+			OccurredAt:     timestamppb.New(c.OccurredAt),
+			Trigger:        c.Trigger,
+			TokensBefore:   c.TokensBefore,
+			TokensAfter:    c.TokensAfter,
+			TokensFreed:    c.TokensFreed,
+		})
+	}
+	return connect.NewResponse(resp), nil
+}
+
+// ListSessionsByCeilingTime ranks sessions by time spent near the context ceiling.
+// +api: ListSessionsByCeilingTime
+func (s *InsightsService) ListSessionsByCeilingTime(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListSessionsByCeilingTimeRequest],
+) (*connect.Response[sessionv1.ListSessionsByCeilingTimeResponse], error) {
+	if err := s.requireContextHistory(); err != nil {
+		return nil, err
+	}
+	ranked, err := s.contextHistory.RankByCeilingTime(ctx, int(req.Msg.Limit))
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	resp := &sessionv1.ListSessionsByCeilingTimeResponse{}
+	for _, sum := range ranked {
+		resp.Sessions = append(resp.Sessions, toCeilingSummary(sum))
+	}
+	return connect.NewResponse(resp), nil
+}
+
+// GetCompactionStats aggregates compaction telemetry across sessions.
+// +api: GetCompactionStats
+func (s *InsightsService) GetCompactionStats(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetCompactionStatsRequest],
+) (*connect.Response[sessionv1.GetCompactionStatsResponse], error) {
+	if err := s.requireContextHistory(); err != nil {
+		return nil, err
+	}
+	var since time.Time
+	if req.Msg.Since != nil {
+		since = req.Msg.Since.AsTime()
+	}
+	st, err := s.contextHistory.CompactionStats(ctx, since)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(&sessionv1.GetCompactionStatsResponse{
+		Count:                  int32(st.Count),
+		ManualCount:            int32(st.ManualCount),
+		AutoCount:              int32(st.AutoCount),
+		TotalTokensFreed:       st.TotalFreed,
+		AverageTokensFreed:     st.AverageFreed,
+		SessionsWithCompaction: int32(st.SessionsWithAny),
+	}), nil
+}
+
 // warnNewUnpricedFamilies logs a warning for each family in families that has
 // not previously been logged, then marks it logged. Deduped across calls so a
 // given unpriced family produces exactly one log line for the life of the
@@ -293,7 +415,8 @@ func buildSessionSummary(
 	// would filter SessionsTable by a role value no session ever reports.
 	attributed = groupUnattributed(attributed, r.ProjectPath)
 
-	costUSD, unpriced := pt.EstimateCost(r)
+	categoryCosts, unpriced := pt.EstimateCostByCategory(r)
+	costUSD := categoryCosts.Total()
 	cacheHitRate := tokens.ComputeCacheHitRate(r.TotalInput, r.CacheRead)
 	activityType := tokens.ClassifyActivity(r)
 	topTools := sessionTopTools(r, pt)
@@ -304,16 +427,20 @@ func buildSessionSummary(
 	}
 
 	summary := &sessionv1.SessionTokenSummary{
-		SessionId:           sessionID,
-		ConversationId:      r.SessionUUID,
-		ProjectPath:         r.ProjectPath,
-		PrimaryModel:        r.PrimaryModel,
-		TotalInputTokens:    r.TotalInput,
-		TotalOutputTokens:   r.TotalOutput,
-		CacheCreationTokens: r.CacheCreation,
-		CacheReadTokens:     r.CacheRead,
-		EstimatedCostUsd:    costUSD,
-		CacheHitRate:        cacheHitRate,
+		SessionId:            sessionID,
+		ConversationId:       r.SessionUUID,
+		ProjectPath:          r.ProjectPath,
+		PrimaryModel:         r.PrimaryModel,
+		TotalInputTokens:     r.TotalInput,
+		TotalOutputTokens:    r.TotalOutput,
+		CacheCreationTokens:  r.CacheCreation,
+		CacheReadTokens:      r.CacheRead,
+		EstimatedCostUsd:     costUSD,
+		InputCostUsd:         categoryCosts.Input,
+		OutputCostUsd:        categoryCosts.Output,
+		CacheCreationCostUsd: categoryCosts.CacheCreation,
+		CacheReadCostUsd:     categoryCosts.CacheRead,
+		CacheHitRate:         cacheHitRate,
 		// #nosec G115 -- r.MessageCount is a per-session Claude message count, far below int32 range.
 		MessageCount:     int32(r.MessageCount),
 		IsOrphan:         isOrphan,

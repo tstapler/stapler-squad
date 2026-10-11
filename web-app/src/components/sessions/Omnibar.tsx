@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import Fuse from "fuse.js";
 import {
@@ -76,6 +75,7 @@ import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 import { AliasPalette } from "@/components/ui/AliasPalette";
 import { useAliasSuggestions } from "@/lib/hooks/useAliasSuggestions";
 import { useAliases } from "@/lib/hooks/useAliases";
+import { PathConfirmDialog } from "./PathConfirmDialog";
 import {
   addRecentShellCommand,
   getRecentShellCommands,
@@ -684,6 +684,7 @@ export function Omnibar({
   const totalResultCount = getResultListItemCount(
     displayedSessionResults.length,
     displayedRepoEntries.length,
+    true,
   );
 
   // Accept a completion entry: fill the input and continue for further completion.
@@ -1027,9 +1028,13 @@ export function Omnibar({
         const repoIndex = index - displayedSessionResults.length;
         if (repoIndex < displayedRepoEntries.length) {
           handleRepoSelect(displayedRepoEntries[repoIndex].path);
-        } else {
+        } else if (repoIndex === displayedRepoEntries.length) {
           dispatchMode({ kind: "open_creation_direct" });
           setResultHighlightIndex(-1);
+        } else {
+          setInput("backlog: ");
+          setResultHighlightIndex(-1);
+          inputRef.current?.focus();
         }
       }
     },
@@ -2026,6 +2031,11 @@ export function Omnibar({
               dispatchMode({ kind: "open_creation_direct" });
               setResultHighlightIndex(-1);
             }}
+            onCreateBacklog={() => {
+              setInput("backlog: ");
+              setResultHighlightIndex(-1);
+              inputRef.current?.focus();
+            }}
           />
         )}
 
@@ -2109,123 +2119,35 @@ export function Omnibar({
         )}
 
         {/* R2: Confirmation dialog for Directory mode with non-existent path */}
-        {showPathConfirmation && pendingSessionData && createPortal(
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="path-confirm-title"
-            style={{
-              position: "fixed",
-              inset: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              background: "rgba(0,0,0,0.5)",
-              zIndex: 10,
-              borderRadius: "inherit",
+        {showPathConfirmation && pendingSessionData && (
+          <PathConfirmDialog
+            path={pendingSessionData.path}
+            onCancel={() => {
+              setShowPathConfirmation(false);
+              setPendingSessionData(null);
             }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div
-              style={{
-                background: "var(--card-background)",
-                border: "1px solid var(--border-color)",
-                borderRadius: "8px",
-                padding: "24px",
-                maxWidth: "420px",
-                width: "100%",
-                margin: "16px",
-              }}
-            >
-              <div
-                id="path-confirm-title"
-                style={{
-                  fontWeight: 600,
-                  fontSize: "1rem",
-                  marginBottom: "8px",
-                }}
-              >
-                Create directory?
-              </div>
-              <div
-                style={{
-                  fontSize: "0.875rem",
-                  color: "var(--text-secondary)",
-                  marginBottom: "16px",
-                }}
-              >
-                The path{" "}
-                <code style={{ fontFamily: "monospace", padding: "0 4px" }}>
-                  {pendingSessionData.path}
-                </code>{" "}
-                does not exist. Create it and initialize a git repository?
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  gap: "8px",
-                  justifyContent: "flex-end",
-                }}
-              >
-                <button
-                  type="button"
-                  style={{
-                    padding: "6px 14px",
-                    fontSize: "0.875rem",
-                    borderRadius: "6px",
-                    border: "1px solid var(--border-color)",
-                    background: "transparent",
-                    color: "var(--text-primary)",
-                    cursor: "pointer",
-                  }}
-                  onClick={() => {
-                    setShowPathConfirmation(false);
-                    setPendingSessionData(null);
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  style={{
-                    padding: "6px 14px",
-                    fontSize: "0.875rem",
-                    borderRadius: "6px",
-                    border: "none",
-                    background: "var(--primary)",
-                    color: "var(--primary-text)",
-                    cursor: "pointer",
-                  }}
-                  onClick={async () => {
-                    setShowPathConfirmation(false);
-                    const retryData = {
-                      ...pendingSessionData,
-                      createIfMissing: true,
-                    };
-                    setPendingSessionData(null);
-                    setIsSubmitting(true);
-                    setError(null);
-                    try {
-                      await onCreateSession(retryData);
-                      onClose();
-                    } catch (err) {
-                      const message =
-                        err instanceof Error
-                          ? err.message
-                          : "Failed to create session";
-                      setError(message);
-                    } finally {
-                      setIsSubmitting(false);
-                      isSubmittingRef.current = false;
-                    }
-                  }}
-                >
-                  Create &amp; Open
-                </button>
-              </div>
-            </div>
-          </div>,
-          document.body
+            onConfirm={async () => {
+              setShowPathConfirmation(false);
+              const retryData = {
+                ...pendingSessionData,
+                createIfMissing: true,
+              };
+              setPendingSessionData(null);
+              setIsSubmitting(true);
+              setError(null);
+              try {
+                await onCreateSession(retryData);
+                onClose();
+              } catch (err) {
+                const message =
+                  err instanceof Error ? err.message : "Failed to create session";
+                setError(message);
+              } finally {
+                setIsSubmitting(false);
+                isSubmittingRef.current = false;
+              }
+            }}
+          />
         )}
 
         {/* Keyboard Shortcuts */}

@@ -19,23 +19,26 @@ func isClaudeAntigravityFamily(program string) bool {
 	return resolveHistoryAdapter(program) != nil
 }
 
-// isClaudeAntigravityCrossSwitch reports whether oldProgram and newProgram sit on opposite
-// sides of the Claude/Antigravity family (e.g. claude -> antigravity or vice versa) — the
-// case where conversation history should be ported rather than discarded.
+// isClaudeAntigravityCrossSwitch reports whether oldProgram and newProgram cross between two
+// distinct HistoryAdapter-backed programs (e.g. claude <-> agy <-> opencode) where conversation
+// history should be ported rather than discarded.
 func isClaudeAntigravityCrossSwitch(oldProgram, newProgram string) bool {
-	return (strings.Contains(oldProgram, "claude") && (strings.Contains(newProgram, "agy") || strings.Contains(newProgram, "antigravity"))) ||
-		((strings.Contains(oldProgram, "agy") || strings.Contains(oldProgram, "antigravity")) && strings.Contains(newProgram, "claude"))
+	srcAdapter := resolveHistoryAdapter(oldProgram)
+	dstAdapter := resolveHistoryAdapter(newProgram)
+	return srcAdapter != nil && dstAdapter != nil && srcAdapter.Name() != dstAdapter.Name()
 }
 
 // portHistoryFailureIsExpected reports whether portErr is the low-severity ErrNoHistoryAdapter
-// sentinel (isClaudeAntigravityCrossSwitch and each adapter's CanHandle having drifted out of
-// sync) rather than a genuine import/export failure, so SwitchProgram can pick Warn vs Error.
-// Currently unreachable via SwitchProgram itself — isClaudeAntigravityFamily now derives from
-// resolveHistoryAdapter, so the two stay in sync by construction — but kept as defense-in-depth
-// against isClaudeAntigravityCrossSwitch (which can't reduce the same way, since it also
-// encodes directionality) drifting independently in the future.
+// sentinel or an unlinked conversation UUID error (no conversation history generated yet)
+// so SwitchProgram can pick Warn vs Error.
 func portHistoryFailureIsExpected(portErr error) bool {
-	return errors.Is(portErr, ErrNoHistoryAdapter)
+	if errors.Is(portErr, ErrNoHistoryAdapter) {
+		return true
+	}
+	if portErr != nil && strings.Contains(portErr.Error(), "no conversation UUID found") {
+		return true
+	}
+	return false
 }
 
 // SwitchProgram atomically switches this instance's Program to rawProgram (resolving an

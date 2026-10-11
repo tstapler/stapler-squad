@@ -323,24 +323,39 @@ func TestSanitizeInitialContentRealWorldCapture(t *testing.T) {
 
 // --- waitForQuiescence ---
 
+// runWithHangGuard runs fn and returns how long it took, failing if it has not
+// returned after 5s. Tests pair it with an hour-long window on the path that must
+// NOT end the wait, so the 5s bound only detects a hang and never asserts latency
+// that scheduler load could stretch.
+func runWithHangGuard(t *testing.T, fn func()) time.Duration {
+	t.Helper()
+	start := time.Now()
+	done := make(chan struct{})
+	go func() {
+		fn()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("waitForQuiescence did not return")
+	}
+	return time.Since(start)
+}
+
 // TestWaitForQuiescenceReturnsAfterQuietPeriod verifies that waitForQuiescence
 // returns once no updates arrive for the quietFor duration.
 func TestWaitForQuiescenceReturnsAfterQuietPeriod(t *testing.T) {
 	t.Parallel()
 	updates := make(chan struct{}, 1)
-	start := time.Now()
 
 	// Send one update, then stop; quiescence should be detected after quietFor.
 	updates <- struct{}{}
 
-	waitForQuiescence(updates, 200*time.Millisecond, 30*time.Millisecond)
-
-	elapsed := time.Since(start)
+	// The hour-long timeout means only the quiet window can end the wait.
+	elapsed := runWithHangGuard(t, func() { waitForQuiescence(updates, time.Hour, 30*time.Millisecond) })
 	if elapsed < 30*time.Millisecond {
 		t.Errorf("waitForQuiescence returned too quickly (%v); expected >= 30ms quiet window", elapsed)
-	}
-	if elapsed > 150*time.Millisecond {
-		t.Errorf("waitForQuiescence took too long (%v); expected ~30ms quiet period after last update", elapsed)
 	}
 }
 
@@ -353,6 +368,7 @@ func TestWaitForQuiescenceReturnsOnTimeout(t *testing.T) {
 	// Continuously send updates from a goroutine to prevent quiescence.
 	// stopSender is closed by the outer function; the goroutine exits when it sees the signal.
 	stopSender := make(chan struct{})
+	t.Cleanup(func() { close(stopSender) }) // also runs when runWithHangGuard fails the test
 	go func() {
 		for {
 			select {
@@ -369,23 +385,12 @@ func TestWaitForQuiescenceReturnsOnTimeout(t *testing.T) {
 		}
 	}()
 
-	start := time.Now()
+	// The hour-long quiet window means only the deadline can end the wait.
 	timeout := 60 * time.Millisecond
-	waitForQuiescence(updates, timeout, 500*time.Millisecond)
-	elapsed := time.Since(start)
-	close(stopSender) // signal the sender goroutine to stop
+	elapsed := runWithHangGuard(t, func() { waitForQuiescence(updates, timeout, time.Hour) })
 
 	if elapsed < timeout {
 		t.Errorf("waitForQuiescence returned before timeout (%v < %v)", elapsed, timeout)
-	}
-	// Tolerance is generous (150ms, vs. a 60ms timeout) because this only needs to
-	// prove waitForQuiescence returned at the deadline rather than blocking for the
-	// full 500ms quietFor window — not that scheduling is sub-50ms precise. A tight
-	// 50ms margin flaked under CPU contention from concurrent test/build load on a
-	// shared machine (goroutine wasn't scheduled promptly after the deadline fired),
-	// even though 5 isolated re-runs of this test alone all passed comfortably.
-	if elapsed > timeout+150*time.Millisecond {
-		t.Errorf("waitForQuiescence took too long after timeout (%v)", elapsed)
 	}
 }
 
@@ -396,13 +401,8 @@ func TestWaitForQuiescenceReturnsOnChannelClose(t *testing.T) {
 	updates := make(chan struct{})
 	close(updates)
 
-	start := time.Now()
-	waitForQuiescence(updates, time.Second, time.Second)
-	elapsed := time.Since(start)
-
-	if elapsed > 20*time.Millisecond {
-		t.Errorf("waitForQuiescence did not return promptly on closed channel (took %v)", elapsed)
-	}
+	// An hour-long window means only the closed channel can end the wait.
+	runWithHangGuard(t, func() { waitForQuiescence(updates, time.Hour, time.Hour) })
 }
 
 // TestWaitForQuiescenceResetsTimerOnUpdates verifies that each incoming update
@@ -593,7 +593,7 @@ func clearStreamHubOverrideForTest(t *testing.T) {
 // the cleanup on its own.
 func getOrCreateHubForTest(t *testing.T, registry *hubRegistry, sessionName string, controller streamhub.SessionController) (*streamhub.StreamHub, error) {
 	t.Helper()
-	hub, err := registry.GetOrCreate(sessionName, controller)
+	hub, err := registry.GetOrCreate(sessionName, streamhub.TapName(sessionName), controller)
 	if hub != nil {
 		t.Cleanup(func() { _ = hub.ForceTeardown() })
 	}
@@ -721,7 +721,7 @@ func TestHubRegistryAndStreamOwnershipLock_should_NeverProduceTwoOwners_When_Rac
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if h, err := registry.GetOrCreate(sessionName, &fakeSessionController{}); err != nil {
+				if h, err := registry.GetOrCreate(sessionName, streamhub.TapName(sessionName), &fakeSessionController{}); err != nil {
 					hubErrs.Add(1)
 				} else {
 					hubWins.Add(1)
@@ -2028,6 +2028,7 @@ func TestRunInputReadLoopExitsPromptlyOnConnectionClose(t *testing.T) {
 	var resizeSettling atomic.Bool
 	go func() {
 		runInputReadLoop(inputReadLoopParams{
+			writer:               testWriter(),
 			stream:               serverStream,
 			doneChan:             doneChan,
 			errChan:              errChan,
@@ -2215,7 +2216,7 @@ func TestStreamViaTmuxCapturePane_should_EchoResyncIdOnTerminalOutput_When_Reque
 	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{ResyncId: "abc-123"}
 
-	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{EchoResyncID: true})
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{Writer: testWriter(), EchoResyncID: true})
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -2237,7 +2238,7 @@ func TestHandleCurrentPaneRequest_should_LeaveResyncIdEmpty_When_RequestOmitsIt(
 	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{}
 
-	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{EchoResyncID: true})
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{Writer: testWriter(), EchoResyncID: true})
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -2257,7 +2258,7 @@ func TestHandleCurrentPaneRequest_should_NotEchoResyncId_When_CorrelationIdFlagI
 	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{ResyncId: "abc-123"}
 
-	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{})
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{Writer: testWriter()})
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -2280,7 +2281,7 @@ func TestHandleCurrentPaneRequest_should_LogDebugWhenResyncIdNotEchoed_When_Corr
 	req := &sessionv1.CurrentPaneRequest{ResyncId: "abc-123"}
 
 	restore := captureInfoLog()
-	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{})
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{Writer: testWriter()})
 	logOutput := restore()
 
 	require.NoError(t, err)
@@ -2310,7 +2311,7 @@ func TestHandleCurrentPaneRequest_should_SkipResizeAndSigwinchLoop_When_StaleDim
 		StaleDimensions: true,
 	}
 
-	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{SkipStaleDimensionSlowPath: true})
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{Writer: testWriter(), SkipStaleDimensionSlowPath: true})
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -2346,17 +2347,17 @@ func TestHandleCurrentPaneRequest_should_RunFullSlowPath_When_StaleDimensionsFal
 		{
 			name:            "stale dimensions false, flag on",
 			staleDimensions: false,
-			opts:            ResyncOptions{SkipStaleDimensionSlowPath: true},
+			opts:            ResyncOptions{Writer: testWriter(), SkipStaleDimensionSlowPath: true},
 		},
 		{
 			name:            "stale dimensions true, flag off",
 			staleDimensions: true,
-			opts:            ResyncOptions{SkipStaleDimensionSlowPath: false},
+			opts:            ResyncOptions{Writer: testWriter(), SkipStaleDimensionSlowPath: false},
 		},
 		{
 			name:            "stale dimensions false, flag off",
 			staleDimensions: false,
-			opts:            ResyncOptions{SkipStaleDimensionSlowPath: false},
+			opts:            ResyncOptions{Writer: testWriter(), SkipStaleDimensionSlowPath: false},
 		},
 	}
 
@@ -2404,7 +2405,7 @@ func TestStreamViaTmuxCapturePane_should_CaptureAtExistingPaneDimensions_When_St
 		StaleDimensions: true,
 	}
 
-	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{SkipStaleDimensionSlowPath: true})
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{Writer: testWriter(), SkipStaleDimensionSlowPath: true})
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -2451,6 +2452,7 @@ func TestRunInputReadLoop_should_InvokeOnCurrentPaneRequestOnce_When_CurrentPane
 	var resizeSettling atomic.Bool
 	go func() {
 		runInputReadLoop(inputReadLoopParams{
+			writer:               testWriter(),
 			stream:               serverStream,
 			doneChan:             doneChan,
 			errChan:              errChan,
@@ -2687,13 +2689,8 @@ func TestWaitForQuiescenceReturnsAfterQuietForWhenNoProducer(t *testing.T) {
 	t.Parallel()
 	ch := make(chan struct{}, 16) // no producer, mirroring the initial-nudge call site
 
-	start := time.Now()
-	waitForQuiescence(ch, 500*time.Millisecond, 50*time.Millisecond)
-	elapsed := time.Since(start)
-
-	if elapsed >= 400*time.Millisecond {
-		t.Errorf("waited %v — expected to return after quietFor (~50ms), not the 500ms timeout", elapsed)
-	}
+	// The hour-long timeout means only the quiet window can end the wait.
+	elapsed := runWithHangGuard(t, func() { waitForQuiescence(ch, time.Hour, 50*time.Millisecond) })
 	if elapsed < 40*time.Millisecond {
 		t.Errorf("returned after %v — expected to wait at least quietFor (~50ms)", elapsed)
 	}
@@ -2746,7 +2743,7 @@ type slowCursorPositioner struct {
 }
 
 func (s slowCursorPositioner) GetPaneCursorPosition() (int, int, error) {
-	time.Sleep(s.delay)
+	time.Sleep(s.delay) //nolint:notimesleeptest simulates a degraded lookup that must outlast withCursorSyncTimeout
 	if s.calledCh != nil {
 		close(s.calledCh)
 	}
@@ -2790,7 +2787,8 @@ func TestWithCursorSync_should_ReturnWithinTimeout_When_PositionLookupIsSlow(t *
 func TestWaitForEvent_should_ReturnTrue_When_MatchingEventArrivesDuringWait(t *testing.T) {
 	bus := events.NewEventBus(1)
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		// Publish only once waitForEvent has subscribed, so the event arrives mid-wait.
+		wait.RequireEventually(t, func() bool { return bus.SubscriberCount() >= 1 }, 2*time.Second, time.Millisecond, "waitForEvent never subscribed")
 		bus.Publish(&events.Event{Type: events.EventSessionUpdated})
 	}()
 
@@ -2840,7 +2838,7 @@ func TestWaitForInstanceStartedEvent_should_Ignore_UnrelatedUpdateOnSameInstance
 	inst := &session.Instance{UUID: "same-uuid"}
 	bus := events.NewEventBus(1)
 	go func() {
-		time.Sleep(20 * time.Millisecond)
+		wait.RequireEventually(t, func() bool { return bus.SubscriberCount() >= 1 }, 2*time.Second, time.Millisecond, "waitForInstanceStartedEvent never subscribed")
 		bus.Publish(events.NewSessionUpdatedEvent(inst, []string{"title"}))
 	}()
 
@@ -2926,7 +2924,7 @@ func TestHandleBatchedCurrentPaneRequest_should_DispatchNIndividuallyTaggedRespo
 	}
 
 	onCurrentPaneRequest := func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest(ctx, "test-session", target, req, ResyncOptions{EchoResyncID: true})
+		return handleCurrentPaneRequest(ctx, "test-session", target, req, ResyncOptions{Writer: testWriter(), EchoResyncID: true})
 	}
 
 	outputs := handleBatchedCurrentPaneRequest("test-session", batch, onCurrentPaneRequest)
@@ -2968,7 +2966,7 @@ func TestHandleBatchedCurrentPaneRequest_should_PreserveCorrelationPerRequest_Wh
 			return nil, fmt.Errorf("simulated capture failure")
 		}
 		target := &fakePanePTY{captureContent: req.GetResyncId() + "-content", cols: 80, rows: 24}
-		return handleCurrentPaneRequest(ctx, "test-session", target, req, ResyncOptions{EchoResyncID: true})
+		return handleCurrentPaneRequest(ctx, "test-session", target, req, ResyncOptions{Writer: testWriter(), EchoResyncID: true})
 	}
 
 	outputs := handleBatchedCurrentPaneRequest("test-session", batch, onCurrentPaneRequest)
@@ -3057,7 +3055,7 @@ func TestFullResyncRoundTrip_should_MatchPreProjectBaseline_When_AllSevenFlagsOf
 	}
 
 	onCurrentPaneRequest := func(ctx context.Context, r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptions())
+		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptionsFor(testWriter()))
 	}
 	var resizeSettling atomic.Bool
 	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest, &resizeSettling)
@@ -3130,7 +3128,7 @@ func TestFullResyncRoundTrip_should_ExhibitAllSevenBehaviors_When_AllSevenFlagsO
 	}
 
 	onCurrentPaneRequest := func(ctx context.Context, r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptions())
+		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptionsFor(testWriter()))
 	}
 	var resizeSettling atomic.Bool
 	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest, &resizeSettling)
@@ -3177,7 +3175,7 @@ func TestFullResyncRoundTrip_should_ExhibitAllSevenBehaviors_When_AllSevenFlagsO
 	// covers it in this same all-flags-on context, not only in isolation.
 	batchTarget := &fakePanePTY{captureContent: "batch-content", cols: 80, rows: 24}
 	batchOnCurrentPaneRequest := func(ctx context.Context, r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest(ctx, "test-session", batchTarget, r, currentResyncOptions())
+		return handleCurrentPaneRequest(ctx, "test-session", batchTarget, r, currentResyncOptionsFor(testWriter()))
 	}
 	batch := &sessionv1.BatchedCurrentPaneRequest{
 		Requests: []*sessionv1.CurrentPaneRequest{{ResyncId: "batch-1"}, {ResyncId: "batch-2"}},
@@ -3217,7 +3215,7 @@ func TestHandleCurrentPaneRequest_should_RoundTripCompressedTerminalOutput_When_
 	defer cleanup()
 
 	onCurrentPaneRequest := func(ctx context.Context, r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptions())
+		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptionsFor(testWriter()))
 	}
 	var resizeSettling atomic.Bool
 	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest, &resizeSettling)
@@ -3266,7 +3264,7 @@ func TestHandleCurrentPaneRequest_should_LogSkippedSlowPathWithSessionIdAndElaps
 	}
 
 	restore := captureInfoLog()
-	_, err := handleCurrentPaneRequest(context.Background(), "skip-log-session", target, req, ResyncOptions{SkipStaleDimensionSlowPath: true})
+	_, err := handleCurrentPaneRequest(context.Background(), "skip-log-session", target, req, ResyncOptions{Writer: testWriter(), SkipStaleDimensionSlowPath: true})
 	logOutput := restore()
 
 	require.NoError(t, err)
@@ -3297,7 +3295,7 @@ func TestHandleCurrentPaneRequest_should_OnlyRouteFastLane_When_OnlyExecGateFast
 		TargetRows: int32Ptr(40),
 	}
 
-	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptions())
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptionsFor(testWriter()))
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -3346,7 +3344,7 @@ func TestHandleCurrentPaneRequest_should_ShareOneDeadlineAcrossAllFastLaneCalls_
 		TargetRows: int32Ptr(40),
 	}
 
-	_, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptions())
+	_, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptionsFor(testWriter()))
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -3385,7 +3383,7 @@ func TestHandleCurrentPaneRequest_should_OnlyEchoResyncId_When_OnlyCorrelationId
 		TargetRows: int32Ptr(40),
 	}
 
-	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptions())
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptionsFor(testWriter()))
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -3422,7 +3420,7 @@ func TestHandleCurrentPaneRequest_should_OnlySkipSlowPath_When_OnlySkipStaleDime
 		StaleDimensions: true,
 	}
 
-	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptions())
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptionsFor(testWriter()))
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -3599,6 +3597,7 @@ func TestScrollbackResultForRequest_should_SkipAppScrollGate_When_FlagIsOff(t *t
 
 	fallbackCalled := false
 	result, err := scrollbackResultForRequest(scrollbackRequestParams{
+		writer:    testWriter(),
 		instance:  nil,
 		startLine: "-100",
 		endLine:   "-1",
@@ -3634,6 +3633,7 @@ func TestScrollbackResultForRequest_should_AttemptAppScrollGate_When_FlagIsOn(t 
 			}
 		}()
 		_, _ = scrollbackResultForRequest(scrollbackRequestParams{
+			writer:    testWriter(),
 			instance:  nil,
 			startLine: "-100",
 			endLine:   "-1",

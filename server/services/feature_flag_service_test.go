@@ -2,8 +2,11 @@ package services
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -53,6 +56,7 @@ func assertScrollbackRequestReachesAppScrollGate(t *testing.T, fallbackContent s
 			}
 		}()
 		_, _ = scrollbackResultForRequest(scrollbackRequestParams{
+			writer:    testWriter(),
 			startLine: "-100",
 			endLine:   "-1",
 			logPrefix: "[test]",
@@ -70,6 +74,7 @@ func assertScrollbackRequestSkipsAppScrollGate(t *testing.T) {
 	t.Helper()
 	fallbackCalled := false
 	result, err := scrollbackResultForRequest(scrollbackRequestParams{
+		writer:    testWriter(),
 		startLine: "-100",
 		endLine:   "-1",
 		logPrefix: "[test]",
@@ -117,4 +122,115 @@ func TestProgramCLIFlagProbe_should_GateProbeProgramPerRequest_When_FlagToggled(
 
 func TestFeatureFlagService_should_ListProbeFlagDefaultOn_When_NeverPersisted(t *testing.T) {
 	require.True(t, featureFlagDefault(programCLIFlagProbeFlagName))
+}
+
+func TestFeatureFlagService_should_ListNotificationTrayV2DefaultOff_When_NeverPersisted(t *testing.T) {
+	registered := false
+	for _, kf := range knownFeatureFlags {
+		if kf.name == notificationTrayV2FlagName {
+			registered = true
+		}
+	}
+	require.True(t, registered, "notification_tray_v2 must be in knownFeatureFlags")
+	require.False(t, featureFlagDefault(notificationTrayV2FlagName))
+}
+
+// recordingObserver is a deliverygate.FlagObserver that records the names it is told about.
+type recordingObserver struct {
+	mu    sync.Mutex
+	names []string
+}
+
+func (r *recordingObserver) OnFlagChanged(name string) {
+	r.mu.Lock()
+	r.names = append(r.names, name)
+	r.mu.Unlock()
+}
+
+func (r *recordingObserver) seen() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.names...)
+}
+
+func flagUpdate(svc *FeatureFlagService, name string, enabled bool) error {
+	_, err := svc.UpdateFeatureFlag(context.Background(),
+		connect.NewRequest(&sessionv1.UpdateFeatureFlagRequest{Name: name, Enabled: enabled}))
+	return err
+}
+
+func statusDetailOf(t *testing.T, svc *FeatureFlagService, name string) string {
+	t.Helper()
+	resp, err := svc.GetFeatureFlags(context.Background(), connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
+	require.NoError(t, err)
+	for _, f := range resp.Msg.Flags {
+		if f.Name == name {
+			return f.StatusDetail
+		}
+	}
+	t.Fatalf("flag %q not listed", name)
+	return ""
+}
+
+func TestUpdateFeatureFlag_ShouldNotifyTheFlagObserverAfterEveryPersistedChange_WhenFlagIsFlippedOrRolledBack(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	svc := NewFeatureFlagService()
+	obs := &recordingObserver{}
+	svc.SetFlagObserver(obs)
+
+	require.NoError(t, flagUpdate(svc, "backlog", true))
+	require.Equal(t, []string{"backlog"}, obs.seen())
+
+	svc.SetFeatureController("backlog", &fakeFeatureController{failDisable: errors.New("boom")})
+	require.Error(t, flagUpdate(svc, "backlog", false))
+	require.Equal(t, []string{"backlog", "backlog"}, obs.seen(), "the rollback also reaches the observer")
+}
+
+func TestUpdateFeatureFlag_ShouldRefuseOnlyEnablingWithFailedPrecondition_WhenEnableGuardReportsAReason(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	svc := NewFeatureFlagService()
+	reason := "stats writer not running"
+	svc.SetEnableGuard("backlog", func() string { return reason })
+
+	err := flagUpdate(svc, "backlog", true)
+	require.Error(t, err)
+	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	require.Contains(t, err.Error(), reason)
+	_, ok := config.LoadConfig().GetFeatureFlagOverride("backlog")
+	require.False(t, ok, "a refused enable persists nothing")
+
+	require.NoError(t, flagUpdate(svc, "backlog", false), "disabling is never refused by the guard")
+
+	reason = ""
+	require.NoError(t, flagUpdate(svc, "backlog", true), "allowed once the precondition holds")
+}
+
+func TestStatusDetail_ShouldJoinEverySourceInRegistrationOrderAndKeepTheSetterSlot_WhenCompositeProviderUsed(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	sources := map[string]func() string{
+		"stats writer not running":    func() string { return "stats writer not running" },
+		"Gate is OFF":                 func() string { return "Gate is OFF" },
+		"Gate is OFF for kind review": func() string { return "Gate is OFF for kind review" },
+	}
+	names := []string{"stats writer not running", "Gate is OFF", "Gate is OFF for kind review"}
+	perms := [][]int{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}}
+	for _, p := range perms {
+		svc := NewFeatureFlagService()
+		want := make([]string, 0, 3)
+		for _, i := range p {
+			svc.AddStatusDetailSource("backlog", sources[names[i]])
+			want = append(want, names[i])
+		}
+		require.Equal(t, strings.Join(want, "; "), statusDetailOf(t, svc, "backlog"), "order %v", p)
+	}
+
+	svc := NewFeatureFlagService()
+	require.Equal(t, "", statusDetailOf(t, svc, "backlog"), "an empty detail means no source contributed")
+	svc.AddStatusDetailSource("backlog", func() string { return "" })
+	require.Equal(t, "", statusDetailOf(t, svc, "backlog"))
+
+	svc.SetStatusDetailProvider("backlog", func() string { return "paused by quota" })
+	svc.AddStatusDetailSource("backlog", func() string { return "extra" })
+	svc.SetStatusDetailProvider("backlog", func() string { return "resumed" })
+	require.Equal(t, "resumed; extra", statusDetailOf(t, svc, "backlog"), "the setter replaces only its own slot")
 }

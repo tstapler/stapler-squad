@@ -93,7 +93,11 @@ require.NoError(t, err)
 1. **Phase 1**: Create testutil package with wait utilities
 2. **Phase 2**: Update failing integration tests to use new utilities
 3. **Phase 3**: Gradually refactor remaining tests
-4. **Phase 4**: Add linting rule to prevent new static sleeps
+4. **Phase 4**: Add linting rule to prevent new static sleeps — done: the type-aware `notimesleeptest` analyzer (`tools/lint/notimesleeptest`) runs in `make lint-custom`, `make lint`, `make ci`, and the GitHub Actions lint workflow. The earlier grep-based `lint-no-sleep-tests` target is retired.
+
+### Enforcement and exemptions
+- `time.Sleep` (direct, aliased, dot-imported, or taken as a func value) in any `_test.go` fails lint.
+- Exempt: packages under `tests/realtime/`, where wall-clock behaviour is itself the subject (see its `doc.go`), and sites annotated `//nolint:notimesleeptest <reason>` (the reason is mandatory).
 
 ## Monitoring
 - Track test execution time improvements

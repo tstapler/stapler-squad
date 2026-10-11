@@ -210,7 +210,7 @@ func TestForwardSyncSubscriber_NoOpWhenForwardSyncDisabled(t *testing.T) {
 
 	// Negative assertion: give the subscriber goroutine a window to (wrongly)
 	// act, then confirm it never did.
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond) //nolint:notimesleeptest negative assertion on a subscriber goroutine with no completion signal
 	require.Equal(t, 0, fake.closeCallCount(), "no GitHub call should be made when ForwardSyncEnabled is false")
 }
 

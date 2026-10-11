@@ -6,12 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
 
 	"go.uber.org/goleak"
+
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // stuckDialogProcessManager implements ProcessManager. CapturePaneContent always
@@ -30,6 +33,7 @@ import (
 type stuckDialogProcessManager struct {
 	sendKeysCount atomic.Int32
 	callCount     atomic.Int32
+	contentCalls  atomic.Int32 // every content() call: one per driver poll tick
 	dialogText    string
 
 	// growPerCall, when true, prepends growing unrelated content to each
@@ -40,6 +44,11 @@ type stuckDialogProcessManager struct {
 
 	// failCount, when > 0, makes the first failCount SendKeys calls return an error.
 	failCount int
+
+	// pollEntered, when non-nil, is closed on the first pane capture so a test
+	// can wait until a driver poll is genuinely in flight.
+	pollEntered     chan struct{}
+	pollEnteredOnce sync.Once
 }
 
 const trustDialogText = `Quick safety check: Is this a project you created or one you trust?
@@ -83,6 +92,10 @@ func (m *stuckDialogProcessManager) SendInputViaControlMode(ctx context.Context,
 const growBaseReps = 500
 
 func (m *stuckDialogProcessManager) content() string {
+	m.contentCalls.Add(1)
+	if m.pollEntered != nil {
+		m.pollEnteredOnce.Do(func() { close(m.pollEntered) })
+	}
 	if !m.growPerCall {
 		return m.dialogText
 	}
@@ -628,6 +641,104 @@ func TestRunSessionDriver_fallsBackToStaticPromptWhenWhitespace(t *testing.T) {
 	}
 }
 
+// fakeInitialPromptRepo records UpdateInitialPromptSentAt calls for assertions,
+// without needing a real EntRepository/DB.
+type fakeInitialPromptRepo struct {
+	title string
+	sent  time.Time
+	calls int
+}
+
+func (f *fakeInitialPromptRepo) UpdateInitialPromptSentAt(_ context.Context, title string, t time.Time) error {
+	f.title = title
+	f.sent = t
+	f.calls++
+	return nil
+}
+
+// Bug: after a service restart, a fresh driver goroutine's local `sentInitial`
+// always starts false, so without a persisted record it would re-type
+// InitialPrompt into an already-completed session. SetInitialPromptSentAt is
+// the fix's persistence primitive: it must update both the in-memory
+// Instance/Snapshot (so this process's own driver can see it immediately) and
+// the injected repo (so the NEXT process's driver can see it after a restart).
+func TestSetInitialPromptSentAt_persistsAndIsReadableViaSnapshot(t *testing.T) {
+	t.Parallel()
+	inst, err := NewInstance(InstanceOptions{
+		Title:         "test-initial-prompt-sent-at",
+		Path:          t.TempDir(),
+		Program:       "echo",
+		InitialPrompt: "review this PR",
+	})
+	if err != nil {
+		t.Fatalf("NewInstance: %v", err)
+	}
+
+	if got := inst.GetInitialPromptSentAt(); !got.IsZero() {
+		t.Fatalf("GetInitialPromptSentAt() before any send = %v, want zero", got)
+	}
+
+	repo := &fakeInitialPromptRepo{}
+	inst.SetInitialPromptRepository(repo)
+
+	sentAt := time.Now()
+	inst.SetInitialPromptSentAt(sentAt)
+
+	if got := inst.GetInitialPromptSentAt(); !got.Equal(sentAt) {
+		t.Errorf("GetInitialPromptSentAt() = %v, want %v", got, sentAt)
+	}
+	if repo.calls != 1 {
+		t.Errorf("repo.calls = %d, want 1", repo.calls)
+	}
+	if repo.title != inst.Title {
+		t.Errorf("repo persisted title = %q, want %q", repo.title, inst.Title)
+	}
+	if !repo.sent.Equal(sentAt) {
+		t.Errorf("repo persisted time = %v, want %v", repo.sent, sentAt)
+	}
+}
+
+// Bug regression: runSessionDriverWithPrompt's startup selection logic must
+// treat a persisted InitialPromptSentAt as authoritative and skip re-sending
+// -- this is the exact restart scenario from the bug report (a completed
+// workflow session getting its prompt retyped after `make install-service`).
+func TestRunSessionDriver_persistedInitialPromptSentAt_skipsResend(t *testing.T) {
+	t.Parallel()
+	inst, err := NewInstance(InstanceOptions{
+		Title:         "test-persisted-sent-at",
+		Path:          t.TempDir(),
+		Program:       "echo",
+		InitialPrompt: "review this PR",
+	})
+	if err != nil {
+		t.Fatalf("NewInstance: %v", err)
+	}
+
+	sentAt := time.Now().Add(-45 * time.Minute) // e.g. sent 45m ago, before a restart
+	inst.SetInitialPromptSentAt(sentAt)
+
+	// Mirrors runSessionDriverWithPrompt's own startup selection logic
+	// (session_driver.go) -- a fresh driver goroutine's local sentInitial
+	// always starts false for a non-empty InitialPrompt, so it must fall
+	// through to GetInitialPromptSentAt() rather than re-deriving via the
+	// output/JSONL heuristics.
+	sentInitial := inst.InitialPrompt == ""
+	var initialPromptSentAt time.Time
+	if !sentInitial {
+		if persisted := inst.GetInitialPromptSentAt(); !persisted.IsZero() {
+			sentInitial = true
+			initialPromptSentAt = persisted
+		}
+	}
+
+	if !sentInitial {
+		t.Fatal("sentInitial = false, want true (persisted InitialPromptSentAt should short-circuit the heuristics)")
+	}
+	if !initialPromptSentAt.Equal(sentAt) {
+		t.Errorf("initialPromptSentAt = %v, want the persisted %v", initialPromptSentAt, sentAt)
+	}
+}
+
 // ─── U-GO-08: TestSanitizeInitialPromptForTmux_utf8BoundaryNotSplit ───────────
 
 func TestSanitizeInitialPromptForTmux_utf8BoundaryNotSplit(t *testing.T) {
@@ -902,6 +1013,17 @@ func TestScanTerminalForPRURL(t *testing.T) {
 // waits 6 poll ticks (double Phase 0's original 3-tick reproduction window),
 // and asserts SendKeys("1\n") never exceeds maxDialogAnswerAttempts — the
 // shared body of the stuck-buffer and growing-buffer regression tests below.
+// shrinkDriverTiming makes driver goroutines started after this call tick fast
+// so tests observe real poll/ready-timeout behaviour in milliseconds. Callers
+// are non-parallel (they use t.Setenv), so no other test is mid-start.
+func shrinkDriverTiming(t *testing.T) driverTiming {
+	t.Helper()
+	fast := &driverTiming{pollInterval: 50 * time.Millisecond, readyTimeout: 500 * time.Millisecond}
+	testDriverTiming.Store(fast)
+	t.Cleanup(func() { testDriverTiming.Store(nil) })
+	return *fast
+}
+
 func runBoundedDialogAnswerScenario(t *testing.T, title string, fakePM *stuckDialogProcessManager, logMsg string) {
 	t.Helper()
 	inst := &Instance{
@@ -912,8 +1034,16 @@ func runBoundedDialogAnswerScenario(t *testing.T, title string, fakePM *stuckDia
 	}
 	inst.started.Store(true)
 
+	timing := shrinkDriverTiming(t)
 	StartSessionDriver(inst, "/tmp")
-	time.Sleep(driverPollInterval*6 + 500*time.Millisecond)
+	// Wait for the 6 poll ticks themselves rather than a fixed sleep, so a starved
+	// scheduler cannot let the bound pass vacuously with fewer ticks than intended.
+	// contentCalls also counts non-tick previews, so also require 6 poll intervals of wall time.
+	started := time.Now()
+	wait.RequireEventually(t, func() bool {
+		return fakePM.contentCalls.Load() >= 6 && time.Since(started) >= timing.pollInterval*6
+	},
+		timing.pollInterval*6+10*time.Second, 5*time.Millisecond, "driver never reached 6 poll ticks")
 
 	count := fakePM.sendKeysCount.Load()
 	t.Logf(logMsg, count)
@@ -1280,6 +1410,7 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 
 	// startSessionDriverForTest exists because StartSessionDriver always
 	// resolves RetryPolicy fresh from config — see its doc comment for why.
+	timing := shrinkDriverTiming(t)
 	startSessionDriverForTest(inst, "/tmp", driverInitialPrompt, policy)
 	defer StopSessionDriver(inst)
 
@@ -1288,7 +1419,7 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	// `continue`. It only fires via the timedOut fallback once
 	// driverReadyTimeout elapses; the 3x margin absorbs scheduler contention
 	// under -race (confirmed flaky at tighter budgets).
-	deadline := time.After(3*driverReadyTimeout + driverPollInterval*3 + time.Second)
+	deadline := time.After(3*timing.readyTimeout + timing.pollInterval*3 + time.Second)
 	waitForSendKeysCountAbove(t, fakePM, maxDialogAnswerAttempts, deadline,
 		"SendKeys count never exceeded the dialog-answer cap — the dialogGaveUp fall-through never reached the initial-prompt-send step (stuck in the continue trap)")
 }
@@ -1344,7 +1475,7 @@ func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineL
 	baseline := goleak.IgnoreCurrent()
 	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)
 
-	fakePM := &stuckDialogProcessManager{}
+	fakePM := &stuckDialogProcessManager{pollEntered: make(chan struct{})}
 
 	inst := &Instance{
 		Title:          "concurrent-stop-test",
@@ -1357,7 +1488,12 @@ func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineL
 
 	StartSessionDriver(inst, t.TempDir())
 	waitForDriverRunning(t, inst)
-	time.Sleep(10 * time.Millisecond)
+
+	select {
+	case <-fakePM.pollEntered:
+	case <-time.After(driverPollInterval + 5*time.Second):
+		t.Fatal("driver never entered a poll")
+	}
 
 	stopSessionDriverConcurrently(t, inst)
 
@@ -1367,8 +1503,9 @@ func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineL
 
 	// A StartSessionDriver call arriving after Destroy() must be refused —
 	// driverDestroyed (set by StopSessionDriver) must permanently block it.
+	// A refused start returns synchronously without spawning; if it did spawn,
+	// the deferred goleak.VerifyNone below catches the leaked goroutine.
 	StartSessionDriver(inst, t.TempDir())
-	time.Sleep(20 * time.Millisecond)
 	if inst.driverRunning.Load() {
 		t.Fatal("StartSessionDriver spawned a new driver goroutine after the instance was destroyed")
 	}

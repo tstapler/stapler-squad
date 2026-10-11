@@ -38,6 +38,15 @@ message SessionEvent {
   // after_seq in WatchSessionsRequest on reconnect to replay missed events.
   // Events are retained for up to one hour.
   uint64 seq = 10;
+
+  // Synthetic marker (no corresponding bus event, oneof left unset) sent
+  // periodically -- every few seconds of otherwise-idle connection -- so a
+  // client can distinguish "stream connected and quiet" from "stream
+  // silently stalled" (e.g. a proxy idle-timeout that never surfaces an
+  // error or close to the client's fetch reader). seq is left at 0 on these;
+  // do not fold them into afterSeq/gap-detection bookkeeping. See
+  // web-app/src/lib/hooks/useWatchStream.ts.
+  bool heartbeat = 12;
 }
 
 // SessionCreatedEvent is emitted when a new session is created
@@ -454,6 +463,14 @@ message ReviewQueueEvent {
     ReviewQueueItemUpdatedEvent item_updated = 4;
     ReviewQueueStatisticsEvent statistics = 5;
   }
+
+  // Synthetic marker (oneof left unset) sent periodically on an otherwise-
+  // idle connection -- see SessionEvent.heartbeat's identical doc comment.
+  // NOTE: ReviewQueueEvent has no seq/after_seq replay (the review queue
+  // manager isn't built on pkg/events.EventBus's ring buffer like the other
+  // three Watch* streams) -- a stall detected via this heartbeat can only
+  // trigger a reconnect + fresh snapshot, not gap-recovery replay.
+  bool heartbeat = 6;
 }
 
 // ReviewQueueItemAddedEvent is emitted when item is added to queue
@@ -548,4 +565,8 @@ message NotificationEvent {
 
   // Unique notification ID (for tracking)
   string notification_id = 9;
+
+  // True when this event is an unread decision the operator must act on
+  // (same server predicate as NotificationHistoryRecord.is_pending_decision).
+  bool is_pending_decision = 10;
 }

@@ -163,6 +163,7 @@ export function HistoryFilterBar({
           aria-label="Filter by branch"
         />
         <select
+          aria-label="Filter by model"
           value={selectedModel}
           onChange={(e) => setSelectedModel(e.target.value)}
           className={styles.select}
@@ -174,6 +175,7 @@ export function HistoryFilterBar({
         </select>
 
         <select
+          aria-label="Filter by date"
           value={dateFilter}
           onChange={(e) => setDateFilter(e.target.value as DateFilter)}
           className={styles.select}
@@ -185,6 +187,7 @@ export function HistoryFilterBar({
         </select>
 
         <select
+          aria-label="Sort by"
           value={sortField}
           onChange={(e) => setSortField(e.target.value as SortField)}
           className={styles.select}
@@ -205,6 +208,7 @@ export function HistoryFilterBar({
         </button>
 
         <select
+          aria-label="Group by"
           value={groupingStrategy}
           onChange={(e) => setGroupingStrategy(e.target.value as HistoryGroupingStrategy)}
           className={styles.select}

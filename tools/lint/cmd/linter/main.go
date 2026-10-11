@@ -24,6 +24,14 @@
 //   - nolegacylog: forbids log.<Level>Log().Printf(...) (the legacy,
 //     non-JSON logging API) in files already migrated to the structured
 //     log.Info/Warn/Error/Debug API
+//   - notimesleeptest: rejects time.Sleep in _test.go files outside
+//     tests/realtime/ (ADR-003); //nolint:notimesleeptest <reason> exempts
+//   - noarchivedrevival: requires Start(false)/RecoverFromStopped()/restartForRetry/
+//     transitionToLocked(..., Active) in the automated-lifecycle files to follow an
+//     IsArchived()/ArchivedAt check (.claude/rules/noarchivedrevival.md)
+//   - novartestseam: detects a package-level var whose only reassignments
+//     live in _test.go files — should be a const injected as a function
+//     parameter instead of a mutated global test seam
 package main
 
 import (
@@ -31,12 +39,15 @@ import (
 
 	"github.com/tstapler/stapler-squad/tools/lint/entfullscan"
 	"github.com/tstapler/stapler-squad/tools/lint/hotpolllog"
+	"github.com/tstapler/stapler-squad/tools/lint/noarchivedrevival"
 	"github.com/tstapler/stapler-squad/tools/lint/nocommandpattern"
 	"github.com/tstapler/stapler-squad/tools/lint/nolegacylog"
 	"github.com/tstapler/stapler-squad/tools/lint/noliveinstanceraw"
 	"github.com/tstapler/stapler-squad/tools/lint/norawexec"
 	"github.com/tstapler/stapler-squad/tools/lint/norawghrequest"
 	"github.com/tstapler/stapler-squad/tools/lint/norawgitopen"
+	"github.com/tstapler/stapler-squad/tools/lint/notimesleeptest"
+	"github.com/tstapler/stapler-squad/tools/lint/novartestseam"
 	"github.com/tstapler/stapler-squad/tools/lint/silenttransition"
 	"github.com/tstapler/stapler-squad/tools/lint/tmuxsocketscope"
 )
@@ -45,12 +56,15 @@ func main() {
 	multichecker.Main(
 		entfullscan.Analyzer,
 		hotpolllog.Analyzer,
+		noarchivedrevival.Analyzer,
 		nocommandpattern.Analyzer,
 		nolegacylog.Analyzer,
 		noliveinstanceraw.Analyzer,
 		norawexec.Analyzer,
 		norawghrequest.Analyzer,
 		norawgitopen.Analyzer,
+		notimesleeptest.Analyzer,
+		novartestseam.Analyzer,
 		silenttransition.Analyzer,
 		tmuxsocketscope.Analyzer,
 	)

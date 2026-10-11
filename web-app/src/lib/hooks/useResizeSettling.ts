@@ -2,6 +2,7 @@
 
 import { useRef, useCallback, useEffect } from "react";
 import { dimensionsEqual, type ResizeDimensions } from "@/lib/terminal/types";
+import { mobileDebug } from "@/lib/terminal/mobileDebug";
 
 const THROTTLE_MS = 200;
 // Last BOUNCE_HISTORY_SIZE sizes sent (oldest first; the current lastSentDimsRef is
@@ -27,6 +28,11 @@ function nextBounceHoldMs(streak: number): number {
   return Math.min(BOUNCE_HOLD_BASE_MS * 2 ** streak, BOUNCE_HOLD_MAX_MS);
 }
 
+/** bypassBounceHold skips only the bounce hold; dedup and the 200 ms throttle still apply. */
+export interface ResizeOptions {
+  bypassBounceHold?: boolean;
+}
+
 export interface UseResizeSettlingOptions {
   /**
    * Invoked with a size this boundary has judged settled -- sent immediately,
@@ -48,7 +54,7 @@ export interface UseResizeSettlingResult {
    * possibly-bouncing size. `force:true` bypasses dedup, throttle, and bounce
    * detection (e.g. a user-initiated explicit resize).
    */
-  resize: (cols: number, rows: number, force?: boolean) => void;
+  resize: (cols: number, rows: number, force?: boolean, opts?: ResizeOptions) => void;
 }
 
 /**
@@ -119,8 +125,9 @@ export function useResizeSettling({
   );
 
   const resize = useCallback(
-    (cols: number, rows: number, force: boolean = false) => {
+    (cols: number, rows: number, force: boolean = false, opts?: ResizeOptions) => {
       const next = { cols, rows };
+      const bypassed = opts?.bypassBounceHold === true;
 
       // Cancel any previously deferred resize -- we have newer dimensions now.
       // This MUST run before the value-dedup early-return below: otherwise a
@@ -139,6 +146,7 @@ export function useResizeSettling({
       // lastResizeTimeRef is deliberately left untouched here.
       if (!force && isDuplicateOfLastSent(lastSentDimsRef.current, next)) {
         console.log(`[useResizeSettling] Resize skipped, value unchanged (${cols}x${rows})`);
+        mobileDebug.log('resize', { cols, rows, outcome: 'deduped', bypassed });
         return;
       }
 
@@ -147,12 +155,13 @@ export function useResizeSettling({
       // viewport can wander through 3+ values on a slower cadence than
       // THROTTLE_MS catches. Held out past an escalating hold instead of
       // sent immediately, coalescing the oscillation into one settled resize.
-      if (!force && matchesBounceHistory(sentHistoryRef.current, next)) {
+      if (!force && !bypassed && matchesBounceHistory(sentHistoryRef.current, next)) {
         const holdMs = nextBounceHoldMs(bounceStreakRef.current);
         bounceStreakRef.current += 1;
         console.log(
           `[useResizeSettling] Resize bounce detected (${cols}x${rows} matches recent history), holding ${holdMs}ms (streak ${bounceStreakRef.current})`
         );
+        mobileDebug.log('resize', { cols, rows, outcome: 'bounce', bounce: true, holdMs, streak: bounceStreakRef.current, bypassed });
         scheduleDeferredSend(next, holdMs);
         return;
       }
@@ -163,10 +172,12 @@ export function useResizeSettling({
         // settled size always reaches the server after rapid resize sequences.
         const remaining = THROTTLE_MS - timeSinceLastResize;
         console.log(`[useResizeSettling] Resize deferred ${remaining}ms (${cols}x${rows})`);
+        mobileDebug.log('resize', { cols, rows, outcome: 'deferred', bounce: false, holdMs: remaining, bypassed });
         scheduleDeferredSend(next, remaining + 1);
         return;
       }
 
+      mobileDebug.log('resize', { cols, rows, outcome: 'sent', bounce: false, bypassed });
       doSend(cols, rows);
     },
     [doSend, scheduleDeferredSend]

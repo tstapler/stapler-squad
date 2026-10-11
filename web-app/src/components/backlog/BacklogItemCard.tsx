@@ -7,12 +7,15 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 // mark and is used here instead (plan.md's snippet assumed `Github` exists;
 // it doesn't in the installed version).
 import { CircleDot } from "lucide-react";
-import type { BacklogItem, BacklogItemStatus } from "@/lib/hooks/useBacklogService";
+import type { BacklogItem, BacklogItemStatus, ClaimedElsewhere } from "@/lib/hooks/useBacklogService";
 import type { StuckBacklogItem, StuckReason } from "@/gen/session/v1/backlog_pb";
 import { getStatusLabel } from "@/lib/backlog/status";
 import { getPrimaryCardAction } from "@/lib/backlog/itemActions";
 import { BlockerChip } from "./BlockerChip";
+import { DuplicatePendingBadge } from "./DuplicatePendingBadge";
+import { ClaimChip } from "./ClaimChip";
 import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
+import { parseExternalRef } from "./externalRef";
 import * as styles from "./BacklogItemCard.css";
 
 interface BacklogItemCardProps {
@@ -46,6 +49,34 @@ interface BacklogItemCardProps {
    * BUG-105). Threaded straight through to BlockerChip's "+N more" indicator.
    */
   otherStuckReasons?: StuckReason[];
+  /**
+   * Claim another host holds on this item's externalUrl, from the board's single
+   * ListForeignClaims call. Undefined renders no chip.
+   */
+  claim?: ClaimedElsewhere;
+}
+
+// The bare externalId is only an issue number, so repo-qualify it from the URL
+// (stapler-mcp#22 vs stapler-squad#22); unparseable URLs keep the bare "#N".
+function ProvenanceBadge({ externalUrl, externalId }: { externalUrl: string; externalId: string }) {
+  const ref = parseExternalRef(externalUrl);
+  const fullRef = ref ? `${ref.repo}#${ref.number}` : `#${externalId}`;
+  const shortRef = ref ? `${ref.repo.split("/")[1]}#${ref.number}` : fullRef;
+  return (
+    <a
+      href={externalUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={styles.provenanceBadge}
+      aria-label={`Imported from GitHub issue ${fullRef}`}
+      title={fullRef}
+      data-action-button="true"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <CircleDot aria-hidden="true" size={12} />
+      {shortRef}
+    </a>
+  );
 }
 
 function AcSummary({ item }: { item: BacklogItem }) {
@@ -101,6 +132,7 @@ export const BacklogItemCard = memo(function BacklogItemCard({
   forceJustChanged = false,
   stuckItem,
   otherStuckReasons,
+  claim,
 }: BacklogItemCardProps) {
   const actionSpec = getPrimaryCardAction(item);
   const isTriageRunning = item.triageStatus === "running";
@@ -183,6 +215,7 @@ export const BacklogItemCard = memo(function BacklogItemCard({
         <span className={styles.statusLabel} data-testid="backlog-item-card-status">
           {getStatusLabel(item.status)}
         </span>
+        {item.duplicatePending && <DuplicatePendingBadge duplicateRef={item.duplicateRef ?? ""} />}
       </div>
 
       {isTriageRunning && (
@@ -200,19 +233,9 @@ export const BacklogItemCard = memo(function BacklogItemCard({
           <VerdictBadge item={item} />
         </span>
         {item.externalUrl && item.externalId && (
-          <a
-            href={item.externalUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={styles.provenanceBadge}
-            aria-label={`Imported from GitHub issue #${item.externalId}`}
-            data-action-button="true"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <CircleDot aria-hidden="true" size={12} />
-            #{item.externalId}
-          </a>
+          <ProvenanceBadge externalUrl={item.externalUrl} externalId={item.externalId} />
         )}
+        {claim && <ClaimChip claim={claim} />}
         <button
           className={`${styles.actionButton} ${actionSpec.isDone ? styles.actionButtonDone : ""}`}
           disabled={actionSpec.disabled || actionSpec.isDone || isTriageRunning || pendingAction !== null}

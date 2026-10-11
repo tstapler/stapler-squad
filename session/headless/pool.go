@@ -28,6 +28,24 @@ type PoolConfig struct {
 
 	// DefaultModel overrides the claude model used when no model is specified per-call.
 	DefaultModel string
+
+	// FeatureModel, if set, is consulted on every call (so config edits apply live) for
+	// the model pinned to a feature key. Precedence: per-call opts.Model > FeatureModel
+	// > DefaultModel. The pool only launches claude, so a pin cannot reach another program.
+	FeatureModel func(FeatureKey) string
+}
+
+// modelFor resolves the --model for a call: explicit > per-feature pin > DefaultModel.
+func (p *Pool) modelFor(key FeatureKey, explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if p.cfg.FeatureModel != nil {
+		if m := p.cfg.FeatureModel(key); m != "" {
+			return m
+		}
+	}
+	return p.cfg.DefaultModel
 }
 
 // Pool manages a map of named LLM feature sessions, providing session reuse
@@ -44,6 +62,11 @@ type Pool struct {
 
 	// concurrencySem limits max simultaneous subprocess calls.
 	concurrencySem chan struct{}
+
+	// fanout is the per-call turn/subagent ceiling applied to first-call
+	// streams. Set only on the one-shot pool CallWithOptions builds for a
+	// WorkDir call, so it is immutable once the pool is serving.
+	fanout FanoutLimits
 }
 
 // defaultPoolMu protects the package-level default pool variable.

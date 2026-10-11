@@ -57,7 +57,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set +e
-          CHANGED_FILES=$(gh api "repos/${{ github.repository }}/compare/${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}" --paginate --jq '.files[].filename')
+          CHANGED_FILES=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
           export CHANGED_FILES
           ./tools/ci/detect-feature-changes.sh origin/main
           EXIT_CODE=$?
@@ -178,6 +178,17 @@ jobs:
         env:
           RECORD_FEATURES: 'true'
           TEST_SERVER_URL: http://localhost:8543
+          # Without this, global-setup.ts's ensureBinary() ignores the binary
+          # this job already downloaded and falls through to `make
+          # stapler-squad`, which needs the asdf-managed go/buf/pnpm toolchain
+          # this job never installs (only actions/setup-go + pnpm/action-setup)
+          # — it fails on .asdf-install.stamp, so global-setup throws, 0 specs
+          # run, and "Upload videos" warns "No files were found" with no
+          # video-count check on it (continue-on-error: true), silently
+          # producing zero test-results and the "No video artifacts" PR
+          # comment. Pointing TEST_SERVER_BINARY at the already-built,
+          # already-chmod'd binary makes ensureBinary() skip the rebuild.
+          TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
         run: |
           DEMO_DIR=$(mktemp -d)
           go run ./tests/demo/seed "$DEMO_DIR" 6

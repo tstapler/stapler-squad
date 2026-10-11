@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/memory"
 	"github.com/tstapler/stapler-squad/session/sshremote"
+	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/telemetry"
 
@@ -36,6 +37,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -56,8 +58,10 @@ type Server struct {
 	mux                        *http.ServeMux
 	tlsConfig                  *tls.Config                     // non-nil when TLS is enabled
 	authMiddleware             func(http.Handler) http.Handler // nil when auth is disabled
-	httpsURL                   string                          // set when remote access is enabled
+	requiresAuth               bool                            // explicit: a real validator is wired
+	httpsURL                   atomic.Pointer[string]          // set when remote access is enabled
 	hostnames                  atomic.Pointer[[]string]        // detected LAN hostnames; published add-only via SetHostnames, read lock-free via GetHostnames
+	verifiedHostnames          atomic.Pointer[[]string]        // forward-verified subset; replaced wholesale via ReplaceVerifiedHostnames, read lock-free via GetVerifiedHostnames
 	origins                    []string                        // allowed CORS origins
 	shutdownHooks              []func()                        // called before HTTP server stops
 	connCtxCancel              context.CancelFunc              // cancels BaseContext → closes active streams on shutdown
@@ -65,6 +69,7 @@ type Server struct {
 	startedAt                  time.Time                       // set once in newServerBase; used to gate orphan notification pruning until instance data has had time to load
 	approvalHandler            *services.ApprovalHandler       // set in wireDepsIntoServer; exposed only for wiring regression tests (same-package field access, e.g. TestWireDepsIntoServer_SharesSingleSlackNotifierInstance...)
 	slackInteractiveDisabled   bool                            // set in wireDepsIntoServer; see ServeHTTP's doc comment for why this can't be expressed as an s.mux registration
+	finalStatsFlush            func()                          // delivery-gate stats flush; deferred at the top of Shutdown
 	backgroundTasksWG          sync.WaitGroup                  // joined by Shutdown() — fork-pressure logger, zombie watcher, zombie reaper
 	backgroundTasksJoinTimeout time.Duration                   // bounds Shutdown's join of backgroundTasksWG; defaults to defaultBackgroundTasksJoinTimeout, overridable in tests
 	hookIPC                    *hookIPCState                   // resident instance-scoped PreToolUse classifier; started with the HTTP server
@@ -296,7 +301,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			// in-flight event handler that calls GetNotificationStore() sees a
 			// non-nil value even if the subscriber goroutine races ahead.
 			deps.SessionService.SetNotificationStore(notifStore)
-			notifications.StartSubscriber(serverCtx, deps.EventBus, notifStore)
+			subscriberDone := notifications.StartSubscriber(serverCtx, deps.EventBus, notifStore)
+			// Joined by Shutdown: the subscriber's final flush on ctx cancel writes
+			// notifications.json, which must not outlive Shutdown() (it raced a
+			// caller's removal of the config dir).
+			srv.backgroundTasksWG.Go(func() { <-subscriberDone })
 			log.Info("NotificationHistoryStore initialized", "path", notifStorePath)
 
 			// Periodically demote URGENT notifications whose urgency has aged out
@@ -322,12 +331,26 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		}
 	}
 
+	// Keep the delivery gate's flag fresh (edits to config.json apply within one
+	// tick) and join its reloader on shutdown.
+	if gate := deps.SessionService.DeliveryGate(); gate != nil {
+		gate.StartFlagReloader(serverCtx, 5*time.Second)
+		gate.WarnExplicitOffKinds()
+		srv.shutdownHooks = append(srv.shutdownHooks, gate.Stop)
+		srv.startGateStatsWriter(serverCtx, deps, gate, configDir, configErr)
+	}
+	srv.startLeaseWedgeWatcher(serverCtx, deps)
+
 	// Initialize push notification service.
 	if configErr == nil {
 		pushService := services.NewPushService(configDir)
 		pushHandler := services.NewPushHandler(pushService)
 		pushHandler.RegisterRoutes(srv.mux)
-		push.StartPushSubscriber(serverCtx, deps.EventBus, pushService)
+		var pushOpts []push.DeliveryOption
+		if gate := deps.SessionService.DeliveryGate(); gate != nil {
+			pushOpts = append(pushOpts, push.WithSessionDeliveryGate(gate))
+		}
+		push.StartPushSubscriber(serverCtx, deps.EventBus, pushService, pushOpts...)
 		log.Info("Push notification service initialized")
 	}
 
@@ -423,7 +446,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			services.ProgramCLIFlagProbeGatedMethod,
 		)),
 	)
+	// Build the capture tap registry now so an env-enabled tap logs its ACTIVE warning at startup.
+	_ = streamhub.DefaultTapRegistry()
 	path, handler := sessionv1connect.NewSessionServiceHandler(deps.SessionService, sessionOpts...)
+	handler = services.WithRequestHost(handler)
 	apiPath := "/api" + path
 
 	// Register StreamingWSBridge for server-streaming Watch* RPCs so browsers use
@@ -432,9 +458,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	wsBridge := services.NewStreamingWSBridge(handler)
 	watchSessionsPath := "/api" + sessionv1connect.SessionServiceWatchSessionsProcedure
 	watchReviewQueuePath := "/api" + sessionv1connect.SessionServiceWatchReviewQueueProcedure
+	watchWorkflowsPath := "/api" + sessionv1connect.SessionServiceWatchWorkflowsProcedure
 	srv.mux.Handle(watchSessionsPath, wsBridge.Handler("/api"))
 	srv.mux.Handle(watchReviewQueuePath, wsBridge.Handler("/api"))
-	log.Info("Registered StreamingWSBridge", "watchSessions", watchSessionsPath, "watchReviewQueue", watchReviewQueuePath)
+	srv.mux.Handle(watchWorkflowsPath, wsBridge.Handler("/api"))
+	log.Info("Registered StreamingWSBridge", "watchSessions", watchSessionsPath, "watchReviewQueue", watchReviewQueuePath, "watchWorkflows", watchWorkflowsPath)
 
 	srv.RegisterConnectHandler(apiPath, http.StripPrefix("/api", handler))
 
@@ -494,6 +522,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		ghAPIPath := "/api" + ghPath
 		srv.RegisterConnectHandler(ghAPIPath, http.StripPrefix("/api", ghHandler))
 		log.Info("Registered GitHubUserService handler", "path", ghAPIPath)
+
+		// Bridge WatchUserPRs over WebSocket too — the browser sends every Watch*
+		// call through the WS transport (see createSessionWatchTransport), so an
+		// unbridged one fails to connect.
+		watchUserPRsPath := "/api" + sessionv1connect.GitHubUserServiceWatchUserPRsProcedure
+		srv.mux.Handle(watchUserPRsPath, services.NewStreamingWSBridge(ghHandler).Handler("/api"))
+		log.Info("Registered StreamingWSBridge", "watchUserPRs", watchUserPRsPath)
 	}
 
 	// Register TymuxRolloutService handler (tymux-bundled-integration Epic
@@ -528,6 +563,25 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		guidanceRequestAPIPath := "/api" + guidanceRequestPath
 		srv.RegisterConnectHandler(guidanceRequestAPIPath, http.StripPrefix("/api", guidanceRequestHandler))
 		log.Info("Registered GuidanceRequestService handler", "path", guidanceRequestAPIPath)
+	}
+
+	// Register DiagnosticService handler ("Diagnose & Nudge", backlog item
+	// 68964304): AssembleDiagnosticBundle/DispatchDiagnose. deps.SessionService
+	// satisfies services.DiagnosticSpawner (SpawnDiagnosticSession); a nil
+	// *SessionService (same nil-interface-boxing hazard the GuidanceRequestService
+	// block above documents) is guarded by only assigning it when non-nil.
+	if deps.Storage != nil {
+		var diagnosticSpawner services.DiagnosticSpawner
+		if deps.SessionService != nil {
+			diagnosticSpawner = deps.SessionService
+		}
+		diagnosticSvc := services.NewDiagnosticService(deps.Storage, diagnosticSpawner)
+		diagnosticSvc.SetPoller(deps.ReviewQueuePoller)
+		diagnosticSvc.SetExternalDiscovery(deps.ExternalDiscovery)
+		diagnosticPath, diagnosticHandler := sessionv1connect.NewDiagnosticServiceHandler(diagnosticSvc, ConnectOptions(deps.ErrorRegistry)...)
+		diagnosticAPIPath := "/api" + diagnosticPath
+		srv.RegisterConnectHandler(diagnosticAPIPath, http.StripPrefix("/api", diagnosticHandler))
+		log.Info("Registered DiagnosticService handler", "path", diagnosticAPIPath)
 	}
 
 	// Register RemoteService handler (ssh-remote-workspaces Epic 3.3: TOFU
@@ -653,6 +707,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered HeadlessService handler", "path", hlAPIPath)
 	}
 
+	// LLMBackendService: live-editable headless backend selection (always registered;
+	// the selector's backends report their own availability).
+	{
+		llmPath, llmHandler := sessionv1connect.NewLLMBackendServiceHandler(
+			services.NewLLMBackendService(deps.LLMSelector), ConnectOptions(deps.ErrorRegistry)...)
+		srv.RegisterConnectHandler("/api"+llmPath, http.StripPrefix("/api", llmHandler))
+		log.Info("Registered LLMBackendService handler", "path", "/api"+llmPath)
+	}
+
 	// Register ImportService handler (import-external-session, Phase 1).
 	// Gated behind STAPLER_SQUAD_ENABLE_SESSION_IMPORT: only the three
 	// mutating RPCs (CommitImportExternalSession, ConfirmKillExternalSession,
@@ -718,6 +781,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// wiring above.
 	if deps.ReactiveQueueMgr != nil {
 		deps.ReactiveQueueMgr.SetDashboardBaseURLFn(hookBaseURLFn)
+		if gate := deps.SessionService.DeliveryGate(); gate != nil {
+			deps.ReactiveQueueMgr.SetQueueItemGate(gate.AllowQueueItem)
+		}
 	}
 
 	// Register Claude Code HTTP hook approval endpoint
@@ -726,14 +792,33 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		deps.Storage,
 		deps.EventBus,
 	)
+	// Hidden-session auto-allow history rows go through the delivery gate.
+	if gate := deps.SessionService.DeliveryGate(); gate != nil {
+		approvalHandler.SetAutoApprovedGate(gate)
+	}
+	// Reply: hook sender proofs (best-effort provenance) and the pending-question registry.
+	wireHookProofsAndQuestions(approvalHandler, deps)
 	// Wire the lazy base-URL resolver into the hook injector (hook_injector.go); both
 	// InjectHookConfig's PermissionRequest URL and InjectHooksConfig's stop/pre-tool-use/
 	// post-tool-use/prompt-submit endpoints resolve through this single shared mechanism.
 	services.SetHookBaseURLFn(hookBaseURLFn)
-	// Same lazy base-URL resolver, wired into BacklogLifecycleListener so agent-created
-	// PR bodies can link back to the backlog item instead of embedding a bare UUID.
+	// PR-body footers identify this instance from any of the owner's machines, so they
+	// must never carry the loopback listen address hookBaseURLFn returns.
 	if deps.BacklogLifecycleListener != nil {
-		deps.BacklogLifecycleListener.SetDashboardBaseURLFn(hookBaseURLFn)
+		deps.BacklogLifecycleListener.SetDashboardBaseURLFn(func() string {
+			return resolvePRBodyBaseURL(prBaseURLSources{
+				configured:     config.LoadConfig().Slack.DashboardBaseURL,
+				remoteHTTPSURL: srv.GetHTTPSURL(),
+				listenAddr:     srv.GetAddr(),
+				hostnames:      srv.GetHostnames(),
+			})
+		})
+		if cfgDir, cfgDirErr := config.GetConfigDir(); cfgDirErr == nil {
+			deps.BacklogLifecycleListener.SetHostRefFn(newHostRefResolver(cfgDir, srv.GetHostnames))
+		}
+		deps.BacklogLifecycleListener.SetNoopDispatchThresholdFn(func() int {
+			return config.LoadConfig().NoopDispatchThresholdOrDefault()
+		})
 	}
 	// Wire the review queue poller for immediate queue checks on new approvals (Story 3, Task 3.1)
 	approvalHandler.SetQueueChecker(deps.ReviewQueuePoller)
@@ -761,8 +846,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		approvalHandler.SetAutoApprovalLogger(notifStore)
 	}
 	// Wire LLM approval for autonomous sessions (E5)
-	if deps.HeadlessPool != nil {
-		approvalHandler.SetHeadlessPool(deps.HeadlessPool)
+	if deps.LLMClient != nil {
+		approvalHandler.SetHeadlessPool(deps.LLMClient)
 	}
 	approvalHandler.SetAutonomousChecker(func(sessionID string) bool {
 		inst := deps.SessionService.FindLiveInstance(sessionID)
@@ -1176,6 +1261,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		go orphanSweeper.Start(serverCtx)
 	}
 
+	// Start leaked-control-mode-client sweeper, the periodic counterpart to
+	// main.go's one-time startup cleanup — see StartLeakedControlModeSweeper's
+	// doc comment. Gated on IsIsolatedInstance like OrphanedTmuxSweeper: a
+	// named instance shares the real default tmux socket without its own, so
+	// this would otherwise kill the production instance's own live clients.
+	if !config.IsIsolatedInstance() {
+		go tmux.StartLeakedControlModeSweeper(serverCtx, "")
+	}
+
 	// Start session retention sweeper (deletes archived sessions past the retention
 	// window once they pass safety checks — see SessionRetentionSweeper doc comment).
 	if cfg.SessionRetention.EnabledOrDefault() {
@@ -1242,6 +1336,7 @@ func registerStaticRoutes(srv *Server) {
 
 	// Register server-info endpoint for settings UI
 	srv.registerServerInfoHandler()
+	srv.registerUserThemesHandler()
 	log.Info("Registered server-info handler at /api/server-info")
 
 	// Serve web UI static files
@@ -1265,8 +1360,11 @@ func (s *Server) SetupTLS(cfg *tls.Config) {
 
 // SetupAuth installs authentication middleware.  Must be called before Start().
 // authMiddleware is a function that wraps an http.Handler; pass nil to disable.
-func (s *Server) SetupAuth(authMiddleware func(http.Handler) http.Handler) {
+// requiresAuth must be true only when the wrapper was built from a non-nil
+// validator (middleware.AuthRequires); it feeds the request record's auth_mode.
+func (s *Server) SetupAuth(authMiddleware func(http.Handler) http.Handler, requiresAuth bool) {
 	s.authMiddleware = authMiddleware
+	s.requiresAuth = requiresAuth
 }
 
 // RegisterConnectHandler registers a ConnectRPC service handler.
@@ -1448,6 +1546,13 @@ const defaultBackgroundTasksJoinTimeout = 10 * time.Second
 
 // Shutdown gracefully shuts down the HTTP server.
 func (s *Server) Shutdown() error {
+	// Deferred so the stats flush runs after httpServer.Shutdown returns, on its
+	// error path too (an early return there must not skip it). Hooks and the
+	// background join run before handlers stop, so a flush placed in either
+	// would miss the last publishes.
+	if s.finalStatsFlush != nil {
+		defer s.finalStatsFlush()
+	}
 	// Cancel the server's BaseContext first so active streaming connections
 	// (ConnectRPC terminal streams) see a done context and close themselves,
 	// preventing context deadline exceeded on the graceful shutdown below.
@@ -1511,7 +1616,16 @@ func (s *Server) Mux() *http.ServeMux {
 // SetHTTPSURL records the public HTTPS URL for this server (used by /api/server-info).
 // Call this after remote access is configured in main.go.
 func (s *Server) SetHTTPSURL(url string) {
-	s.httpsURL = url
+	s.httpsURL.Store(&url)
+}
+
+// GetHTTPSURL returns the remote-access HTTPS origin, or "" if remote access
+// is not enabled (yet).
+func (s *Server) GetHTTPSURL() string {
+	if p := s.httpsURL.Load(); p != nil {
+		return *p
+	}
+	return ""
 }
 
 // SetHostnames merges hostnames into the previously published set and
@@ -1553,6 +1667,50 @@ func (s *Server) GetHostnames() []string {
 		return nil
 	}
 	return *p
+}
+
+// ReplaceVerifiedHostnames atomically replaces the verified hostname set. Unlike
+// SetHostnames it is not add-only: the detector recomputes it from its
+// ownership check every cycle. Empty names, IP literals and localhost are
+// dropped (an IP literal is allowed by the verdict's own rule, not by
+// membership), names are normalized, de-duplicated and sorted.
+func (s *Server) ReplaceVerifiedHostnames(names []string) {
+	seen := make(map[string]struct{}, len(names))
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		h := middleware.NormalizeHost(n)
+		if h == "" || h == "localhost" || net.ParseIP(h) != nil {
+			continue
+		}
+		if _, dup := seen[h]; dup {
+			continue
+		}
+		seen[h] = struct{}{}
+		out = append(out, h)
+	}
+	sort.Strings(out)
+	s.verifiedHostnames.Store(&out)
+}
+
+// GetVerifiedHostnames returns the verified hostname set, or nil before the
+// first ReplaceVerifiedHostnames. The slice is immutable; do not modify it.
+func (s *Server) GetVerifiedHostnames() []string {
+	p := s.verifiedHostnames.Load()
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+// LocalWriteVerdictConfig is the rebinding gate's live input set, read lazily so
+// origins, the bound address and the verified hostnames published after
+// construction are honored.
+func (s *Server) LocalWriteVerdictConfig() middleware.VerdictConfig {
+	return middleware.VerdictConfig{
+		VerifiedHosts:  s.GetVerifiedHostnames,
+		ListenAddr:     s.GetAddr,
+		AllowedOrigins: s.GetOrigins,
+	}
 }
 
 // SetOrigins records the allowed CORS origins.
@@ -1618,7 +1776,7 @@ func (s *Server) registerServerInfoHandler() {
 
 		info := serverInfoResponse{
 			CAPEMPath:  caPath,
-			HTTPSURL:   s.httpsURL,
+			HTTPSURL:   s.GetHTTPSURL(),
 			TLSEnabled: tlsEnabled,
 			Hostnames:  s.GetHostnames(),
 			Programs:   s.availablePrograms,
@@ -1640,28 +1798,92 @@ func (s *Server) registerServerInfoHandler() {
 // outer handler, before the mux strips the "/api" prefix.
 const probeProcedurePath = "/api" + sessionv1connect.SessionServiceProbeProgramProcedure
 
+// nudgeProcedurePath is the full request path of the write-capable
+// NudgeSessionForPR, guarded like ProbeProgram on the unauthenticated listener.
+const nudgeProcedurePath = "/api" + sessionv1connect.GitHubUserServiceNudgeSessionForPRProcedure
+
+// pruneProcedurePath is the full request path of PruneHiddenSessionNotifications,
+// guarded whole (dry run and apply) with the rebinding profile.
+const pruneProcedurePath = "/api" + sessionv1connect.SessionServicePruneHiddenSessionNotificationsProcedure
+
+// updateFlagProcedurePath is the full request path of UpdateFeatureFlag, which
+// flips protections (read-only guards, the delivery gate), guarded like prune.
+const updateFlagProcedurePath = "/api" + sessionv1connect.SessionServiceUpdateFeatureFlagProcedure
+
+// replyProcedurePath is the full request path of ReplyToPendingQuestion, the
+// audited write into a hidden session's question dialog, guarded with the
+// rebinding profile (the in-handler local-caller gate adds the peer check).
+const replyProcedurePath = "/api" + sessionv1connect.SessionServiceReplyToPendingQuestionProcedure
+
+// guardedProcedures is the LocalWriteGuard set. A new member names its profile;
+// ProbeProgram and the nudge keep the original probe verdict byte for byte.
+var guardedProcedures = map[string]middleware.GuardProfile{
+	probeProcedurePath: middleware.ProfileProbe,
+	nudgeProcedurePath: middleware.ProfileProbe,
+	pruneProcedurePath: middleware.ProfileRebinding,
+
+	updateFlagProcedurePath: middleware.ProfileRebinding,
+	replyProcedurePath:      middleware.ProfileRebinding,
+}
+
 // localChain is the :8543 middleware chain (inside otelhttp):
-// Logging -> CORS -> Compress -> [auth | ProbeGuard] -> mux.
+// Logging -> CORS -> Compress -> HostGuard -> [auth | ProbeGuard] -> mux.
+// HostGuard covers every route (and WebSocket upgrade), so a rebinding or
+// reverse-proxy Host never reaches a handler.
 // The listener has no auth unless authMiddleware is set, so ProbeGuard is the
-// boundary for the one RPC that executes a program; with auth, auth is the boundary.
+// boundary for the RPCs that execute a program or write to a session's terminal
+// (ProbeProgram, NudgeSessionForPR); with auth, auth is the boundary.
 func (s *Server) localChain() http.Handler {
+	return s.localChainWith(guardedProcedures)
+}
+
+// localChainWith builds localChain over an explicit guard set so tests can
+// exercise a profile before a real procedure registers in it.
+func (s *Server) localChainWith(procedures map[string]middleware.GuardProfile) http.Handler {
 	inner := http.Handler(s)
 	if s.authMiddleware != nil {
 		inner = s.authMiddleware(inner)
 	} else {
-		inner = middleware.ProbeGuard(probeProcedurePath, s.probeGuardConfig())(inner)
+		inner = middleware.LocalWriteGuard(procedures, middleware.LocalWriteGuardConfig{
+			Probe:     s.probeGuardConfig(),
+			Rebinding: s.LocalWriteVerdictConfig(),
+		})(inner)
 	}
-	return middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner)))
+	inner = middleware.HostGuard(s.hostGuardConfig())(inner)
+	return s.stampRequest(services.ListenerLocal, s.requiresAuth)(
+		middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))))
+}
+
+// localExemptPaths skip the Host guard on :8543.
+var localExemptPaths = []string{"/health"}
+
+func (s *Server) hostGuardConfig() middleware.HostGuardConfig {
+	return middleware.HostGuardConfig{
+		AllowedOrigins: s.GetOrigins,
+		ExemptPaths:    localExemptPaths,
+	}
 }
 
 // remoteChain is the :8444 chain. It never carries ProbeGuard: auth is the
 // boundary there and its Host is a LAN/Tailscale name the guard would reject.
-func (s *Server) remoteChain(authMW func(http.Handler) http.Handler) http.Handler {
+// A nil authMW leaves the chain open (existing posture, pinned by
+// TestRemoteChain_should_LeaveNudgeReachable_When_AuthMiddlewareNil); main.go
+// always passes middleware.Auth, so nil only occurs in tests.
+func (s *Server) remoteChain(authMW func(http.Handler) http.Handler, requiresAuth bool) http.Handler {
 	inner := http.Handler(s)
 	if authMW != nil {
 		inner = authMW(inner)
 	}
-	return middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner)))
+	return s.stampRequest(services.ListenerRemote, requiresAuth)(
+		middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))))
+}
+
+// stampRequest stamps the raw request record and the in-handler verdict's live
+// inputs on the context for both chains.
+func (s *Server) stampRequest(listener string, requiresAuth bool) func(http.Handler) http.Handler {
+	record := services.WithRequestRecord(listener, requiresAuth)
+	verdict := services.WithLocalWriteVerdictConfig(s.LocalWriteVerdictConfig())
+	return func(next http.Handler) http.Handler { return record(verdict(next)) }
 }
 
 // probeGuardConfig reads everything lazily: origins, hostnames and the bound
@@ -1678,9 +1900,9 @@ func (s *Server) probeGuardConfig() middleware.ProbeGuardConfig {
 // route mux as the local server but protected by TLS and auth middleware.
 // It binds eagerly (returns a bind error immediately if the port is in use),
 // then runs the server in a background goroutine until ctx is cancelled.
-func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls.Config, authMW func(http.Handler) http.Handler) error {
+func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls.Config, authMW func(http.Handler) http.Handler, requiresAuth bool) error {
 	handler := otelhttp.NewHandler(
-		s.remoteChain(authMW),
+		s.remoteChain(authMW, requiresAuth),
 		"stapler-squad-remote",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)

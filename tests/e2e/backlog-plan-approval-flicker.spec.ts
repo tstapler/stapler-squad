@@ -29,6 +29,7 @@ import { test, expect, APIRequestContext } from "@playwright/test";
 import {
   StuckItemsPage,
   seedStuckItem,
+  deleteSeededStuckItems,
   enableBacklogFeatureFlag,
   disableBacklogFeatureFlag,
 } from "./pages/StuckItemsPage";
@@ -46,6 +47,11 @@ async function waitForBacklogRPCsEnabled(request: APIRequestContext) {
   }
   throw new Error("BacklogService RPCs did not become enabled in time");
 }
+
+// Seeded stuck items persist on the shared test server; remove them so other specs don't see them.
+test.afterEach(async ({ request }) => {
+  await deleteSeededStuckItems(request);
+});
 
 test.describe("plan-approval flicker fix", () => {
   test.beforeAll(async ({ request }) => {

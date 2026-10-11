@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,9 +15,13 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // ---------------------------------------------------------------------------
@@ -28,7 +33,9 @@ func TestResolveSessionType_ExplicitDirectory(t *testing.T) {
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
 	}
-	assert.Equal(t, session.SessionTypeDirectory, resolveSessionType(msg, ""))
+	got, err := resolveSessionType(msg, "")
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionTypeDirectory, got)
 }
 
 func TestResolveSessionType_ExplicitNewWorktree(t *testing.T) {
@@ -36,7 +43,9 @@ func TestResolveSessionType_ExplicitNewWorktree(t *testing.T) {
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE,
 	}
-	assert.Equal(t, session.SessionTypeNewWorktree, resolveSessionType(msg, "my-branch"))
+	got, err := resolveSessionType(msg, "my-branch")
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionTypeNewWorktree, got)
 }
 
 func TestResolveSessionType_ExplicitExistingWorktree(t *testing.T) {
@@ -45,7 +54,9 @@ func TestResolveSessionType_ExplicitExistingWorktree(t *testing.T) {
 		SessionType:      sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE,
 		ExistingWorktree: "/some/worktree",
 	}
-	assert.Equal(t, session.SessionTypeExistingWorktree, resolveSessionType(msg, ""))
+	got, err := resolveSessionType(msg, "")
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionTypeExistingWorktree, got)
 }
 
 func TestResolveSessionType_UnspecifiedDefaultsToDirectory(t *testing.T) {
@@ -53,7 +64,9 @@ func TestResolveSessionType_UnspecifiedDefaultsToDirectory(t *testing.T) {
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED,
 	}
-	assert.Equal(t, session.SessionTypeDirectory, resolveSessionType(msg, ""))
+	got, err := resolveSessionType(msg, "")
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionTypeDirectory, got)
 }
 
 func TestResolveSessionType_UnspecifiedBranchInfersNewWorktree(t *testing.T) {
@@ -62,7 +75,9 @@ func TestResolveSessionType_UnspecifiedBranchInfersNewWorktree(t *testing.T) {
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED,
 	}
-	assert.Equal(t, session.SessionTypeNewWorktree, resolveSessionType(msg, "feat/my-feature"))
+	got, err := resolveSessionType(msg, "feat/my-feature")
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionTypeNewWorktree, got)
 }
 
 func TestResolveSessionType_UnspecifiedExistingWorktreeInfersExistingWorktree(t *testing.T) {
@@ -72,7 +87,9 @@ func TestResolveSessionType_UnspecifiedExistingWorktreeInfersExistingWorktree(t 
 		SessionType:      sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED,
 		ExistingWorktree: "/path/to/worktree",
 	}
-	assert.Equal(t, session.SessionTypeExistingWorktree, resolveSessionType(msg, "feat/branch"))
+	got, err := resolveSessionType(msg, "feat/branch")
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionTypeExistingWorktree, got)
 }
 
 func TestResolveSessionType_OneOff_ReturnsSessionTypeOneOff(t *testing.T) {
@@ -81,16 +98,21 @@ func TestResolveSessionType_OneOff_ReturnsSessionTypeOneOff(t *testing.T) {
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_ONE_OFF,
 	}
-	assert.Equal(t, session.SessionTypeOneOff, resolveSessionType(msg, "some-branch"))
+	got, err := resolveSessionType(msg, "some-branch")
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionTypeOneOff, got)
 }
 
-func TestResolveSessionType_UnknownExplicitTypeDefaultsToDirectory(t *testing.T) {
+func TestResolveSessionType_should_ReturnError_When_SessionTypeUnrecognized(t *testing.T) {
 	t.Parallel()
-	// A proto enum value we don't recognise yet should degrade gracefully.
+	// An unrecognized proto enum value must fail loudly instead of silently
+	// downgrading to SessionTypeDirectory (worktree-envvars-hijack Epic 3.1).
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType(999),
 	}
-	assert.Equal(t, session.SessionTypeDirectory, resolveSessionType(msg, ""))
+	got, err := resolveSessionType(msg, "")
+	require.Error(t, err)
+	assert.Equal(t, session.SessionType(""), got)
 }
 
 // ---------------------------------------------------------------------------
@@ -625,15 +647,9 @@ func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
 	// GetStatusManager uses atomic.Pointer.Load(), so polling is race-free.
 	// We avoid testify's Eventually here because its condition runs in a goroutine,
 	// which prevents t.Skip from working correctly.
-	var managerWired bool
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		if inst.GetStatusManager() != nil {
-			managerWired = true
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	managerWired := wait.WaitForCondition(func() bool {
+		return inst.GetStatusManager() != nil
+	}, wait.WaitConfig{Timeout: 30 * time.Second, PollInterval: 100 * time.Millisecond, Description: "status manager wired"}) == nil
 
 	if !managerWired {
 		// When tmux is absent the goroutine sets Status=Stopped and returns early,
@@ -643,6 +659,107 @@ func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
 		}
 		t.Error("status manager was never wired within 30 s — regression in CreateSession goroutine")
 	}
+}
+
+// TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession proves a custom program's
+// registered env map reaches the spawned session's process, end to end: the real
+// UpsertProgramConfig RPC -> the real CreateSession RPC -> a real tmux server.
+//
+// Root cause of the original bug (fixed in cdfd4e5cf2, 2026-09-21): before that commit
+// initTmuxSession called session.SetExtraEnv([]string{"STAPLER_SESSION_UUID=" + uuid})
+// directly, and custom program IDs were not resolved to a command at all;
+// cdfd4e5cf2 added program-ID resolution and the resolveExtraEnvVars/buildExtraEnv env
+// merge together. The only wire-time env was STAPLER_SESSION_UUID, so the registered
+// env map never reached `tmux new-session -e`. The unit tests of that era built
+// &Instance{} literals and called the resolver directly, so they never saw the missing
+// wiring. Only this RPC-to-tmux path does.
+//
+// Scope and limits: `-e` applies only at `new-session`. A live pane, or a same-name
+// tmux session that is reused (tmux_session_start.go start(), instance_tmux.go
+// initTmuxSession reuse guard), keeps its old env until killed and recreated. The
+// Claude `--settings` path is covered by
+// TestCreateSession_CustomClaudeProgram_SettingsEnvReachesLaunchedProcess, not by this
+// bash-based test. SSQ_PROGRAM_ENV_PROBE is a unique key so a user's rc file exporting
+// ANTHROPIC_BASE_URL cannot mask the in-pane probe.
+func TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession(t *testing.T) {
+	// Not t.Parallel(): shells out to a real tmux binary on this service's isolated socket.
+	// tmux.Binary() honors TMUX_BIN, so client and server versions match (CI pins tmux).
+	tmuxBin := tmux.Binary()
+	if _, err := exec.LookPath(tmuxBin); err != nil {
+		t.Skip("tmux not available")
+	}
+	const (
+		envKey   = "ANTHROPIC_BASE_URL"
+		envVal   = "http://127.0.0.1:47000"
+		probeKey = "SSQ_PROGRAM_ENV_PROBE"
+		probeVal = "probe-7f3a91"
+	)
+	// One isolated config dir shared by the write (UpsertProgramConfig) and the
+	// read (CreateSession -> resolveExtraEnvVars -> config.LoadConfig).
+	envtest.NewIsolatedStateDir(t)
+
+	ctx := context.Background()
+	_, err := NewDefaultsService().UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
+		Program: &sessionv1.ProgramConfigProto{
+			Id: "netflix-model-gateway", Label: "Netflix Model Gateway",
+			Command: "bash", // a shell, so printenv can run in the pane; env injection is command-agnostic
+			Env:     map[string]string{envKey: envVal, probeKey: probeVal},
+		},
+	}))
+	require.NoError(t, err)
+
+	repoDir := t.TempDir()
+	initGitRepoWithCommit(t, repoDir)
+
+	svc := newCreateTestService(t, createTestStorage(t))
+	resp, err := svc.CreateSession(ctx, connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:       "program-env-repro",
+		Path:        repoDir,
+		Branch:      "program-env-repro",
+		SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE,
+		Program:     "netflix-model-gateway",
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
+
+	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
+	require.NotNil(t, inst)
+
+	// tmux is present (LookPath above), so Stopped is a real spawn failure, not a skip:
+	// skipping here would turn the very regression under test green.
+	wait.RequireEventually(t, func() bool {
+		switch session.Status(inst.GetStatus()) {
+		case session.Active:
+			return true
+		case session.Stopped:
+			t.Fatalf("session reached Stopped instead of Active: spawn failed")
+		}
+		return false
+	}, 30*time.Second, 100*time.Millisecond, "session must reach Active")
+
+	tmuxName := inst.GetTmuxSessionName()
+	require.NotEmpty(t, tmuxName)
+	tmuxArgs := func(args ...string) []string {
+		return tmux.ResolveSocket(svc.testTmuxServerSocket).Args(args...)
+	}
+
+	// AC2: session-scoped table.
+	out, err := safeexec.CommandContext(ctx, tmuxBin, tmuxArgs("show-environment", "-t", tmuxName)...).CombinedOutput()
+	require.NoError(t, err, string(out))
+	t.Logf("show-environment:\n%s", out)
+	assert.Contains(t, string(out), envKey+"="+envVal, "tmux show-environment must carry the program's env")
+	assert.Contains(t, string(out), probeKey+"="+probeVal, "tmux show-environment must carry the probe key")
+
+	// AC1: the pane's actual process environment, not just tmux's table. The pane's
+	// shell may not be ready yet, so re-send each tick until the value shows up.
+	var captured []byte
+	defer func() { t.Logf("pane capture:\n%s", captured) }()
+	wait.RequireEventually(t, func() bool {
+		_ = safeexec.CommandContext(ctx, tmuxBin, tmuxArgs("send-keys", "-t", tmuxName,
+			"echo ENVPROBE_$(printenv "+probeKey+")_END", "Enter")...).Run()
+		captured, _ = safeexec.CommandContext(ctx, tmuxBin, tmuxArgs("capture-pane", "-p", "-J", "-t", tmuxName)...).Output()
+		return strings.Contains(string(captured), "ENVPROBE_"+probeVal+"_END")
+	}, 15*time.Second, 300*time.Millisecond, "printenv inside the pane must show the program's env")
 }
 
 // ---------------------------------------------------------------------------
@@ -708,4 +825,93 @@ func assertNotConnectCode(t *testing.T, err error, notWant connect.Code, msg str
 		return
 	}
 	assert.NotEqual(t, notWant, ce.Code(), msg)
+}
+
+// ---------------------------------------------------------------------------
+// worktree-envvars-hijack: wireCallbacks' nil-poller collision-guard fallback,
+// and CreateSession's Story 1.3.1 diagnostic request-shape log
+// ---------------------------------------------------------------------------
+
+// TestWireCallbacks_should_LogWarning_When_ReviewQueuePollerNil is
+// worktree-envvars-hijack validation.md row 26 (Story 3.3.2's Tech Debt
+// Disposition): a degenerate/misconfigured SessionService with no
+// reviewQueuePoller wired must still let a session spawn (production's
+// wireCallbacks is always called with a real poller — see SetReviewQueuePoller's
+// doc comment — so this is defense-in-depth, not an expected state), but must
+// log a Warn so the misconfiguration is visible instead of silently permissive.
+func TestWireCallbacks_should_LogWarning_When_ReviewQueuePollerNil(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+	svc.reviewQueuePoller = nil // simulate the degenerate construction this test targets
+
+	repoDir := t.TempDir()
+	initGitRepoWithCommit(t, repoDir)
+
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title:            "wirecallbacks-nil-poller-" + t.Name(),
+		Path:             repoDir,
+		Program:          "sh",
+		SessionType:      session.SessionTypeExistingWorktree,
+		ExistingWorktree: repoDir,
+		TmuxServerSocket: svc.testTmuxServerSocket,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	svc.wireCallbacks(inst)
+
+	logs := captureLogs(t)
+	require.NoError(t, inst.Start(true), "nil reviewQueuePoller must fall back to permissive, not block the spawn")
+	assert.Equal(t, session.Active, inst.Status)
+	assert.Contains(t, logs.String(), "reviewQueuePoller is nil", "the fallback must log a warning, not silently allow")
+}
+
+// TestCreateSession_should_LogRequestShapeAtDebugLevel_When_SessionCreated is
+// worktree-envvars-hijack validation.md row 35 (Story 1.3.1): the diagnostic
+// request-shape log must actually fire with the wire-level fields a future
+// isolation-bug report needs, without a fresh repro.
+func TestCreateSession_should_LogRequestShapeAtDebugLevel_When_SessionCreated(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	logs := captureLogs(t)
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:       "debug-log-shape-test",
+		Path:        t.TempDir(), // requiresExplicitPath would fail before the log line otherwise
+		SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE,
+		Branch:      "test/x",
+		EnvVars:     map[string]string{"ANTHROPIC_BASE_URL": "http://127.0.0.1:47000"},
+		ResumeId:    "not-a-valid-uuid", // fails validation right after the log line -- cheap, no tmux/git needed
+	}))
+	require.Error(t, err, "resume_id validation must still fail after the diagnostic log fires")
+	assert.Nil(t, resp)
+
+	line := logs.String()
+	assert.Contains(t, line, "[CreateSession] request shape")
+	assert.Contains(t, line, "SESSION_TYPE_NEW_WORKTREE")
+	assert.Contains(t, line, "test/x")
+	assert.Contains(t, line, "ANTHROPIC_BASE_URL")
+}
+
+// TestCreateSession_should_NotLogEnvVarValues_When_EnvVarsProvided is
+// worktree-envvars-hijack validation.md row 36: the diagnostic log's
+// env_var_keys must contain only key names, never values -- env vars can
+// carry secrets like API base URLs/tokens.
+func TestCreateSession_should_NotLogEnvVarValues_When_EnvVarsProvided(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	const secretValue = "http://127.0.0.1:47000"
+	logs := captureLogs(t)
+	_, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:       "debug-log-no-value-leak-test",
+		Path:        t.TempDir(),
+		SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE,
+		EnvVars:     map[string]string{"ANTHROPIC_BASE_URL": secretValue},
+		ResumeId:    "not-a-valid-uuid",
+	}))
+	require.Error(t, err)
+
+	assert.NotContains(t, logs.String(), secretValue, "env var VALUES must never be logged, only key names")
+	assert.Contains(t, logs.String(), "ANTHROPIC_BASE_URL", "env var KEY names must still be logged")
 }

@@ -10,6 +10,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -63,10 +64,17 @@ func (s *WorkflowService) watchWorkflows(
 		return err
 	}
 
+	heartbeat := time.NewTicker(events.HeartbeatInterval)
+	defer heartbeat.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-heartbeat.C:
+			if err := sender.Send(&sessionv1.WorkflowEvent{Timestamp: timestamppb.Now(), Heartbeat: true}); err != nil {
+				return fmt.Errorf("failed to send workflow heartbeat: %w", err)
+			}
 		case evt, ok := <-eventCh:
 			if !ok {
 				return nil

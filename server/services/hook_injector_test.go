@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,7 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/pkg/localtoken"
 )
 
 // TestInjectHooksConfigAllTypes (U-3.7): InjectHooksConfig injects all five hook types
@@ -579,10 +581,10 @@ func Test_InjectHooksConfig_should_ProduceByteIdenticalLocalCommand_When_NoRemot
 		t.Fatalf("expected exactly one PermissionRequest hook group/entry, got groups=%+v", groups)
 	}
 
-	want := fmt.Sprintf(
-		"curl -s --max-time %d -X POST '%s' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s' -d @-",
-		hookTimeout, hookApprovalURL(), "local-sess",
-	)
+	// The command is the one producer's output: the run-time proof and token-file
+	// header branches never embed a secret and are guarded so a missing file
+	// still POSTs (see TestBuildLocalHookCommand_*).
+	want := buildLocalHookCommand(hookApprovalURL(), "local-sess")
 	got := groups[0].Hooks[0].Command
 	if got != want {
 		t.Errorf("local session's PermissionRequest hook command changed by Phase 5:\n  want: %s\n  got:  %s", want, got)
@@ -757,5 +759,40 @@ func TestRemoteApprovalHookCommand_QuotesSocketPathAgainstShellInjection(t *test
 
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatalf("shell injection succeeded: marker file %s was created by the malicious SocketPath", marker)
+	}
+}
+
+// Hooks injected before require_local_auth existed are upgraded in place with the
+// header file argument instead of being duplicated or left unauthenticated.
+func Test_InjectHooksConfig_should_UpgradeExistingHookWithAuthHeader_When_HeaderFileAppears(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	tmpDir := t.TempDir()
+	if err := InjectHooksConfig(tmpDir, "sess", nil); err != nil {
+		t.Fatalf("first inject: %v", err)
+	}
+	cfgDir, err := config.GetConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := localtoken.LoadOrCreate(localtoken.Path(cfgDir)); err != nil {
+		t.Fatal(err)
+	}
+	if err := InjectHooksConfig(tmpDir, "sess", nil); err != nil {
+		t.Fatalf("second inject: %v", err)
+	}
+	top := readSettings(t, tmpDir)
+	var hooksMap map[string]json.RawMessage
+	_ = json.Unmarshal(top["hooks"], &hooksMap)
+	var groups []hookMatcherGroup
+	_ = json.Unmarshal(hooksMap["PermissionRequest"], &groups)
+	if len(groups) != 1 || len(groups[0].Hooks) != 1 {
+		t.Fatalf("hook duplicated or lost: %+v", groups)
+	}
+	// The header file is read through a guarded `-H @file`, never inlined.
+	cmd := groups[0].Hooks[0].Command
+	for _, want := range []string{"T='" + localtoken.HeaderPath(cfgDir) + "'", `[ -f "$T" ] && [ -r "$T" ] && set -- "$@" -H "@$T"`} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("command not upgraded with %q: %s", want, cmd)
+		}
 	}
 }
