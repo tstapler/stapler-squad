@@ -48,7 +48,12 @@ func TestProducers_ShouldUseKnownIDForm_WhenScanningEveryNewNotificationEventCal
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case "gen", "node_modules", "web-app", ".git", "third_party", "testdata":
+			case "gen", "node_modules", "web-app", ".git", "third_party", "testdata", ".claude":
+				// .claude/worktrees holds full nested git worktrees of this same
+				// module (one per in-progress agent task) — real directories on
+				// disk, but not part of this module's package graph. Walking into
+				// them re-scans their own, possibly-stale copy of this file against
+				// reviewedDynamicIDForms, which only covers the current source.
 				return fs.SkipDir
 			}
 			return nil
