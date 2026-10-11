@@ -187,6 +187,20 @@ export async function createAltScreenScrollSession(
  * terminal-resync-banner.spec.ts.
  */
 export async function openAndWaitConnected(page: Page, detail: SessionDetailPage): Promise<void> {
+  // The client sends a post-connection "fresh pane content" request ~250ms after
+  // connect (TerminalOutput.tsx's delayed resize sync). The server handles one
+  // client message at a time, so a scroll gesture sent *before* that request
+  // gets its ScrollbackRequest answered first and the resync's full-snapshot
+  // reply lands right after the outcome, which resets paging and unmounts
+  // scroll-source-indicator within ~40ms (the banner "never appears" to a
+  // poll). Waiting until the request has been sent puts it ahead of any
+  // gesture on the same WebSocket. Registered before the tab click so the log
+  // line cannot be missed; there is no DOM signal for this.
+  const resyncRequested = page.waitForEvent('console', {
+    predicate: (msg) => msg.text().includes('Requesting fresh pane content after resize'),
+    timeout: 20000,
+  });
+  resyncRequested.catch(() => undefined); // surfaced by the await below, not as an unhandled rejection
   await detail.getTerminalTab().click();
   await expect(detail.getTerminalToolbarToggle()).toBeVisible({ timeout: 10000 });
   await expect(page.getByText('Connected')).toBeVisible({ timeout: 15000 });
@@ -202,6 +216,7 @@ export async function openAndWaitConnected(page: Page, detail: SessionDetailPage
   await expect(page.getByText(/Loading terminal content|Initializing terminal|Starting session/)).not.toBeVisible({
     timeout: 15000,
   });
+  await resyncRequested;
 }
 
 /**
