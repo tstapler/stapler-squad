@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -179,11 +180,60 @@ func TestRunBothReportsAreReadable(t *testing.T) {
 	}
 }
 
-func TestNormalizerHidesTempPaths(t *testing.T) {
+// A mutating op runs on two separate repositories, so a path in its result differs textually
+// between the sides; a clean comparison proves the normalizer replaced it.
+func TestNormalizerHidesTempPathsInMutatingResults(t *testing.T) {
 	RequireGit(t)
-	// RepoRoot differs textually between the two repositories (different temp dirs); a clean
-	// comparison therefore proves the paths were normalised, not that they were equal.
-	AssertParity(t, newCandidate(t), []Op{ReadOps()[5]}, []Fixture{fixtureLinkedWorktrees})
+	op := Op{Name: "RepoRootAfterWrite", Mutating: true, Places: []string{"main"},
+		Run: func(ctx context.Context, b backend.Backend, l backend.Local) (any, error) {
+			if err := b.CreateBranch(ctx, l, backend.CreateBranchRequest{Name: "n", Base: "HEAD"}); err != nil {
+				return nil, err
+			}
+			return b.RepoRoot(ctx, l)
+		}}
+	AssertParity(t, newCandidate(t), []Op{op}, []Fixture{fixtureLinear})
+}
+
+func TestRenderTreatsNilAndEmptySlicesAlike(t *testing.T) {
+	n := newNormalizer(Places{"main": "/x"})
+	type res struct{ Files []string }
+	if a, b := n.render(res{}), n.render(res{Files: []string{}}); a != b {
+		t.Fatalf("nil %q != empty %q", a, b)
+	}
+	if n.render([]string(nil)) != n.render([]string{}) {
+		t.Fatal("top-level nil slice differs from empty")
+	}
+}
+
+// corruptingBackend writes through the real CLI and then plants an object git rejects, so the
+// fsck comparison inside RunBoth is the only thing that can notice the corruption.
+type corruptingBackend struct {
+	backend.Backend
+	g Git
+}
+
+func (c corruptingBackend) CreateBranch(ctx context.Context, loc backend.RepoLocation, req backend.CreateBranchRequest) error {
+	if err := c.Backend.CreateBranch(ctx, loc, req); err != nil {
+		return err
+	}
+	dir := string(loc.(backend.Local).Root)
+	bad := filepath.Join(c.g.Home, "bad-tree")
+	c.g.Write(c.g.Home, "bad-tree", "100644 \x00"+strings.Repeat("\x01", 20))
+	sha := c.g.Run(dir, "hash-object", "-w", "--literally", "-t", "tree", bad)
+	c.g.Run(dir, "update-ref", "refs/tags/bad", sha)
+	return nil
+}
+
+func TestRunBothReportsFsckFailureOfTheCandidateRepository(t *testing.T) {
+	RequireGit(t)
+	cand := corruptingBackend{newCandidate(t), Git{T: t, Home: t.TempDir()}}
+	var kinds []DiffKind
+	for _, d := range RunBoth(t, cand, CreateBranchOp(), []Fixture{fixtureLinear}) {
+		kinds = append(kinds, d.Kind)
+	}
+	if !slices.Contains(kinds, DiffFsck) {
+		t.Fatalf("kinds = %v, want a DiffFsck", kinds)
+	}
 }
 
 func TestErrorClass(t *testing.T) {

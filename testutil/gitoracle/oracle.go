@@ -338,12 +338,19 @@ func newNormalizer(places Places) normalizer {
 
 func (n normalizer) replace(s string) string { return strings.NewReplacer(n.pairs...).Replace(s) }
 
+// render turns a result into comparable text. A nil slice and an empty slice both render as
+// [], so a candidate is not flagged for returning [] where git's parser returned nil. The
+// result types carry no pointers, so every JSON null here is a nil slice or map.
 func (n normalizer) render(v any) string {
 	data, err := json.MarshalIndent(v, "", " ")
 	if err != nil {
 		data = []byte(fmt.Sprintf("%+v", v))
 	}
-	return n.replace(string(data))
+	text := string(data)
+	if text == "null" {
+		text = "[]"
+	}
+	return n.replace(strings.ReplaceAll(text, ": null", ": []"))
 }
 
 func sortedKeys(p Places) []string {

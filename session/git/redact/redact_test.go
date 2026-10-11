@@ -21,6 +21,8 @@ func TestGit(t *testing.T) {
 		{"bare bearer", "sent Bearer abcdef123456 upstream", "sent Bearer *** upstream"},
 		{"inline helper secret", "out: username=bot; password=hunter2; done", "out: username=bot; password=***; done"},
 		{"token query parameter", "GET https://h/api?access_token=abc123&x=1", "GET https://h/api?access_token=***&x=1"},
+		{"helper line with spaces around equals", "password = hunter two\nnext=1", "password =***\nnext=1"},
+		{"inline bearer key", "sent bearer=abc123def", "sent bearer=***"},
 		{"plain text", "nothing secret here", "nothing secret here"},
 	}
 	for _, c := range cases {

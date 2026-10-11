@@ -27,7 +27,6 @@ import (
 type Backend struct {
 	local  backend.Runner
 	spawns *backend.SpawnCounter
-	remote bool
 }
 
 // Option configures New.
