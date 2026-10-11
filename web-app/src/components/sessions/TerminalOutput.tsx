@@ -4,44 +4,8 @@
 import { useEffect, useRef, useCallback, useState, useMemo } from "react";
 import { createPortal } from "react-dom";
 
-// xterm modifier key sequences (CSI parameter convention: modifier 5=Ctrl, 3=Alt).
-// Defined at module level to avoid per-render allocation inside sendKey.
-const CTRL_KEY_MAP: Record<string, string> = {
-  '\x1b[A': '\x1b[1;5A',  // Ctrl+Up
-  '\x1b[B': '\x1b[1;5B',  // Ctrl+Down
-  '\x1b[C': '\x1b[1;5C',  // Ctrl+Right (word forward)
-  '\x1b[D': '\x1b[1;5D',  // Ctrl+Left (word back)
-  '\x1b[H': '\x1b[1;5H',  // Ctrl+Home
-  '\x1b[F': '\x1b[1;5F',  // Ctrl+End
-  '\x1b[5~': '\x1b[5;5~', // Ctrl+PgUp
-  '\x1b[6~': '\x1b[6;5~', // Ctrl+PgDn
-  '/': '\x1f',             // Ctrl+/ (unit separator)
-  '-': '\x1f',             // Ctrl+- (maps to Ctrl+_)
-};
+import { CTRL_KEY_MAP, ALT_KEY_MAP, SHIFT_KEY_MAP } from "@/lib/terminal/modifierKeys";
 
-const ALT_KEY_MAP: Record<string, string> = {
-  '\x1b[A': '\x1b[1;3A',  // Alt+Up
-  '\x1b[B': '\x1b[1;3B',  // Alt+Down
-  '\x1b[C': '\x1b[1;3C',  // Alt+Right (word forward)
-  '\x1b[D': '\x1b[1;3D',  // Alt+Left (word back)
-  '\x1b[H': '\x1b[1;3H',  // Alt+Home
-  '\x1b[F': '\x1b[1;3F',  // Alt+End
-  '\x1b[5~': '\x1b[5;3~', // Alt+PgUp
-  '\x1b[6~': '\x1b[6;3~', // Alt+PgDn
-};
-
-// CSI modifier parameter 2 = Shift.
-const SHIFT_KEY_MAP: Record<string, string> = {
-  '\t':      '\x1b[Z',      // Shift+Tab (backtab / dedent)
-  '\x1b[A':  '\x1b[1;2A',  // Shift+Up
-  '\x1b[B':  '\x1b[1;2B',  // Shift+Down
-  '\x1b[C':  '\x1b[1;2C',  // Shift+Right
-  '\x1b[D':  '\x1b[1;2D',  // Shift+Left
-  '\x1b[H':  '\x1b[1;2H',  // Shift+Home
-  '\x1b[F':  '\x1b[1;2F',  // Shift+End
-  '\x1b[5~': '\x1b[5;2~',  // Shift+PgUp
-  '\x1b[6~': '\x1b[6;2~',  // Shift+PgDn
-};
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
 import { useAnnounce } from "@/lib/hooks/useAnnounce";
 import { useVisibilityResync } from "./useVisibilityResync";
@@ -55,10 +19,15 @@ import { InputDropBadge } from "./InputDropBadge";
 import { ConnectionCountIndicator } from "./ConnectionCountIndicator";
 import { useDropEpisodeCoalescer } from "./useDropEpisodeCoalescer";
 import { TerminalStreamManager, type AppScrollbackFrame } from "@/lib/terminal/TerminalStreamManager";
+import { ForwardEchoGuard } from "@/lib/terminal/ForwardEchoGuard";
+import { useScrollLoadingPill } from "./useScrollLoadingPill";
+import { useTerminalResizeHandler, useSessionConnectionBootstrap } from "./useTerminalSizing";
+import { useBlockedToast } from "./useBlockedToast";
+import { TerminalOutputFilter } from "./TerminalOutputFilter";
+import { readBufferLines } from "@/lib/terminal/bufferFilter";
 import { ScrollForwardOutcome, ScrollBlockedReason } from "@/gen/session/v1/events_pb";
 import { ScrollLoadingPill } from "./ScrollLoadingPill";
 import { ScrollSourceIndicator } from "./ScrollSourceIndicator";
-import { DEFAULT_TOAST_MS } from "@/lib/notification-policy";
 import { createViewportSettle, createRafScheduler, DEFAULT_STABLE_FRAMES, DEFAULT_MAX_WAIT_MS } from "@/lib/terminal/viewportSettle";
 import { mobileDebug } from "@/lib/terminal/mobileDebug";
 import { toolbarPageAction, PAGE_UP_BYTES, PAGE_DOWN_BYTES, type ScrollMode, type ScrollOverride } from "@/lib/terminal/scrollRouting";
@@ -70,8 +39,6 @@ import type { JumpTerminal } from "./JumpToLatestButton";
 import { ScrollHint, useScrollHint } from "./ScrollHint";
 import { ScrollingPanel, ScrollModeChip, SCROLL_OPTIONS, shouldRenderPanelAsOverlay, useMisrouteCue } from "./ScrollingPanel";
 import { useEffectiveScrollMode, useScrollSettings } from "@/lib/hooks/useEffectiveScrollMode";
-import { getCachedDimensions, saveDimensions, validateCellDimensions } from "@/lib/terminal/TerminalDimensionCache";
-import { DEFAULT_TERMINAL_CONFIG } from "@/lib/config/terminalConfig";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import { useViewport } from "@/components/providers/ViewportProvider";
@@ -113,14 +80,6 @@ interface TerminalOutputProps {
 // from xterm.js before the CSS container has finished laying out. The first
 // resize event often fires at e.g. 10x6 before layout is complete; caching or
 // connecting at those dimensions produces a garbled terminal on the next view.
-const MIN_COLS = 30;
-const MIN_ROWS = 10;
-
-// xterm.js initializes with these default dimensions before FitAddon.fit() runs.
-// Cache entries equal to these values are treated as potentially corrupt (see Bug 1)
-// and are not used for fast-connect. The actual container size arrives via onResize.
-const XTERM_DEFAULT_COLS = 80;
-const XTERM_DEFAULT_ROWS = 24;
 
 // Read-only view: a keypress announces "Read-only session" at most once per this window (design/ux.md Surface 12).
 const READ_ONLY_HINT_INTERVAL_MS = 10_000;
@@ -437,6 +396,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // Recording state
   const [isRecording, setIsRecording] = useState(false);
 
+  // Opt-in, display-only output filter: reads lines out of xterm's buffer and
+  // renders its own list, so it never touches the stream or the buffer itself.
+  const [filterOpen, setFilterOpen] = useState(false);
+  const getFilterLines = useCallback(() => readBufferLines(xtermRef.current?.terminal), [xtermRef]);
+
   // The terminal chrome (tabs, header) always uses the dark VS Code-style
   // palette defined in terminalTokens (styles/theme.css.ts), independent of
   // the app's selectable UI theme. xterm.js must match that fixed palette —
@@ -476,44 +440,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // app-forwarded alt-screen triggers (design/ux.md Surface 1) — every
   // requestScrollback call site funnels through requestScrollbackWithPill
   // below so the pill can't drift out of sync with which trigger fired.
-  const [pillState, setPillState] = useState<{ visible: boolean; stalled: boolean; program?: string }>({
-    visible: false,
-    stalled: false,
-  });
-  const pillShowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pillStallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const clearScrollLoadingTimers = useCallback(() => {
-    if (pillShowTimerRef.current) {
-      clearTimeout(pillShowTimerRef.current);
-      pillShowTimerRef.current = null;
-    }
-    if (pillStallTimerRef.current) {
-      clearTimeout(pillStallTimerRef.current);
-      pillStallTimerRef.current = null;
-    }
-  }, []);
-
-  // Unconditionally clears the pill + its timers — called from every response
-  // handler (tmux-native ScrollbackResponse and every AppScrollbackResponse
-  // outcome) so the pill never persists past outcome delivery (Task 1.4.5b).
-  const clearScrollLoadingState = useCallback(() => {
-    clearScrollLoadingTimers();
-    setPillState({ visible: false, stalled: false });
-  }, [clearScrollLoadingTimers]);
-
-  // Starts the 150ms show-delay / 8s stalled timers, then lets the caller send
-  // the actual request. `program`, if known (Story 1.4.2's lastKnownAppProgramRef),
-  // drives the pill's app-forwarded copy; omitted entirely for the tmux-native path.
-  const startScrollLoadingTimers = useCallback((program?: string) => {
-    clearScrollLoadingTimers();
-    pillShowTimerRef.current = setTimeout(() => {
-      setPillState({ visible: true, stalled: false, program });
-    }, 150);
-    pillStallTimerRef.current = setTimeout(() => {
-      setPillState({ visible: true, stalled: true, program });
-    }, 8000);
-  }, [clearScrollLoadingTimers]);
+  const { pillState, clearScrollLoadingState, startScrollLoadingTimers } = useScrollLoadingPill();
 
   // Task 1.4.5b — Cancel resets local fetch-in-flight state and clears the
   // pill without cancelling the in-flight server request (design/ux.md: a
@@ -537,116 +464,12 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     appScrollbackActiveRef.current = appScrollbackState.active;
   }, [appScrollbackState.active]);
 
-  // ForwardScroll's PageUp send (session/instance_scroll_forward.go) causes
-  // a real redraw that echoes back through the same output stream as a
-  // normal frame, indistinguishable by itself from a genuine live-resume
-  // (Ctrl+L) -- without filtering it, handleOutput's "any normal frame
-  // clears the banner" rule below killed the ScrollSourceIndicator banner
-  // right after DELIVERED/AT_TOP. Content comparison, not a time window or
-  // frame count, is what's invariant: the echo's arrival timing relative to
-  // the outcome frame isn't guaranteed (some redraws never echo at all), but
-  // the echo always redraws the same pane content captureViaRedrawQuiescence
-  // just captured.
-  const lastForwardedContentSignatureRef = useRef<string | null>(null);
-  const contentSignature = useCallback((raw: string): string => {
-    // Strip ANSI CSI/OSC sequences (full ECMA-48 grammar, not just
-    // digits/semicolons -- narrower patterns miss e.g. DECSTR's `\x1b[!p`)
-    // and whitespace entirely (not collapsed) so two redraws of the same
-    // pane compare equal despite differing line-wrap columns. Not truncated
-    // to a fixed prefix either: with no alt-screen scrollback, the server's
-    // capture can start at a different offset into the same content than
-    // the live PTY echo's full bytes.
-    return raw
-      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-      .replace(/\x1b\][^\x07]*(\x07|\x1b\\)/g, "")
-      .replace(/\s+/g, "");
-  }, []);
-  // Accumulates output-frame signatures since the last
-  // recordForwardedContentSignature call, plus how much of the recorded
-  // signature has matched so far -- a redraw echo can legally arrive split
-  // across more than one output frame, where no single frame alone is a
-  // substring match but their concatenation is. Progress must strictly
-  // increase each frame to keep accumulating; a frame that doesn't extend
-  // the match is judged on its own content and the buffer resets, so a
-  // stale partial match can't "stick" and misclassify a later genuine live
-  // resume.
-  const recentEchoBufferRef = useRef<string>("");
-  const matchedEchoPrefixLenRef = useRef<number>(0);
-  const MAX_ECHO_BUFFER = 20000; // generous headroom over any real single-pane capture
-  const recordForwardedContentSignature = useCallback((content: string) => {
-    lastForwardedContentSignatureRef.current = content ? contentSignature(content) : null;
-    recentEchoBufferRef.current = "";
-    matchedEchoPrefixLenRef.current = 0;
-  }, [contentSignature]);
-  // Longest N such that signature.slice(0, N) is a contiguous substring of
-  // haystack. Monotonic in N (a shorter prefix of a contained string is
-  // trivially also contained, at the same offset), so a binary search finds
-  // it in O(log N) haystack.includes() calls instead of an O(N^2) manual
-  // character scan.
-  const longestSignaturePrefixContained = useCallback((signature: string, haystack: string): number => {
-    let lo = 0;
-    let hi = signature.length;
-    while (lo < hi) {
-      const mid = Math.ceil((lo + hi) / 2);
-      if (haystack.includes(signature.slice(0, mid))) {
-        lo = mid;
-      } else {
-        hi = mid - 1;
-      }
-    }
-    return lo;
-  }, []);
-  // Whether output (a normal, non-app-scrollback frame) is recognizable as
-  // the redraw echo of our own last DELIVERED/AT_TOP forward, vs. genuinely
-  // different (and therefore a real live resume). See
-  // recentEchoBufferRef's doc comment for why this accumulates across
-  // frames with a strictly-increasing-progress requirement rather than
-  // comparing each frame to the signature in isolation.
-  const isSelfEchoOfLastForward = useCallback((output: string): boolean => {
-    const signature = lastForwardedContentSignatureRef.current;
-    if (!signature) return false;
-    const outSig = contentSignature(output);
-    if (outSig.length === 0) return true; // no content to judge either way; assume still mid-echo
-
-    const buffered = (recentEchoBufferRef.current + outSig).slice(-MAX_ECHO_BUFFER);
-    const matchedLen = longestSignaturePrefixContained(signature, buffered);
-
-    if (matchedLen >= signature.length) {
-      // The whole recorded signature has now been seen -- fully resolved,
-      // so the next frame is judged fresh rather than against this one.
-      recentEchoBufferRef.current = "";
-      matchedEchoPrefixLenRef.current = 0;
-      return true;
-    }
-    if (matchedLen > matchedEchoPrefixLenRef.current) {
-      // This frame advanced how much of the recorded signature we've seen --
-      // genuine progress toward completing the same multi-frame echo.
-      recentEchoBufferRef.current = buffered;
-      matchedEchoPrefixLenRef.current = matchedLen;
-      return true;
-    }
-    // No progress: judge this frame on its own content rather than the
-    // (now-stale) accumulated buffer.
-    const isEchoAlone = outSig.includes(signature) || signature.includes(outSig);
-    recentEchoBufferRef.current = isEchoAlone ? outSig : "";
-    matchedEchoPrefixLenRef.current = isEchoAlone ? longestSignaturePrefixContained(signature, outSig) : 0;
-    return isEchoAlone;
-  }, [contentSignature, longestSignaturePrefixContained]);
+  // Distinguishes the redraw echo of our own scroll-forward from a genuine live
+  // resume -- see ForwardEchoGuard's doc comment for why content, not timing.
+  const [echoGuard] = useState(() => new ForwardEchoGuard());
 
   // ---- Story 1.4.3 — Blocked outcome toast state ----
-  const [blockedToast, setBlockedToast] = useState<{ reason: ScrollBlockedReason; program: string; seq: number } | null>(null);
-  const blockedToastSeqRef = useRef(0);
-  const blockedToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [connectionPulse, setConnectionPulse] = useState(false);
-  const connectionPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const dismissBlockedToast = useCallback(() => {
-    if (blockedToastTimerRef.current) {
-      clearTimeout(blockedToastTimerRef.current);
-      blockedToastTimerRef.current = null;
-    }
-    setBlockedToast(null);
-  }, []);
+  const { blockedToast, connectionPulse, showBlockedOutcome, dismissBlockedToast } = useBlockedToast();
 
   // ---- Story 1.4.4 — "No more history available" (AT_TOP) affordance state ----
   const [atTopVisible, setAtTopVisible] = useState(false);
@@ -678,8 +501,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     setAppScrollbackState({ active: false, program: "" });
     setAtTopVisible(false);
     dismissBlockedToast();
-    lastForwardedContentSignatureRef.current = null;
-  }, [clearScrollLoadingState, dismissBlockedToast]);
+    echoGuard.clear();
+  }, [clearScrollLoadingState, dismissBlockedToast, echoGuard]);
 
   // Ref-mirror for handleAppScrollbackFrame (Story 1.4.1-1.4.4, defined further
   // below) — same temporal-dead-zone reason as notifyResyncOutputReceivedRef:
@@ -769,33 +592,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     return manager;
   }, [logTerminalMetrics, sessionId, track, resetScrollbackPaging, bumpConnectionEpoch, xtermRef, warmRef]);
 
-  // Story 1.4.3 (Task 1.4.3a/1.4.3c) — outcome handling for a BLOCKED
-  // response, keyed on blocked_reason. UNSPECIFIED (a gate failure the client
-  // should never actually attempt a request for, per Epic 1.1's eligibility
-  // check) falls back to the MULTIPLE_VIEWERS copy as the least-wrong default
-  // rather than showing no message — a deliberate P2 tradeoff (pre-mortem.md
-  // Failure #2), accepted since UNSPECIFIED should be unreachable in
-  // practice. Factored out of handleAppScrollbackFrame below purely to keep
-  // that function's body short; no behavior boundary implied by the split.
-  const handleBlockedOutcome = useCallback((frame: AppScrollbackFrame) => {
-    blockedToastSeqRef.current += 1;
-    setBlockedToast({ reason: frame.blockedReason, program: frame.program, seq: blockedToastSeqRef.current });
-    if (blockedToastTimerRef.current) clearTimeout(blockedToastTimerRef.current);
-    blockedToastTimerRef.current = setTimeout(() => setBlockedToast(null), DEFAULT_TOAST_MS);
-
-    // Pulse ConnectionCountIndicator only for the reason that actually has
-    // connected-viewer state to point to (and its UNSPECIFIED fallback,
-    // which renders the same copy).
-    if (
-      frame.blockedReason === ScrollBlockedReason.MULTIPLE_VIEWERS ||
-      frame.blockedReason === ScrollBlockedReason.SCROLL_BLOCKED_REASON_UNSPECIFIED
-    ) {
-      if (connectionPulseTimerRef.current) clearTimeout(connectionPulseTimerRef.current);
-      setConnectionPulse(true);
-      connectionPulseTimerRef.current = setTimeout(() => setConnectionPulse(false), 600);
-    }
-  }, []);
-
   const handleAppScrollbackFrame = useCallback((frame: AppScrollbackFrame) => {
     // Task 1.4.5b — the pill never persists past outcome delivery.
     clearScrollLoadingState();
@@ -814,7 +610,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         appScrollbackActiveRef.current = true;
         setAppScrollbackState({ active: true, program: frame.program });
         dismissBlockedToast();
-        recordForwardedContentSignature(frame.content);
+        echoGuard.record(frame.content);
         break;
       }
       case ScrollForwardOutcome.AT_TOP: {
@@ -825,7 +621,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         // 2's "banner does not flicker off between pages" edge case).
         hasMoreAppScrollbackRef.current = false;
         setAtTopVisible(true);
-        recordForwardedContentSignature(frame.content);
+        echoGuard.record(frame.content);
         break;
       }
       case ScrollForwardOutcome.NO_CAPABILITY:
@@ -836,10 +632,10 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         break;
       case ScrollForwardOutcome.BLOCKED:
       default:
-        handleBlockedOutcome(frame);
+        showBlockedOutcome(frame);
         break;
     }
-  }, [clearScrollLoadingState, getOrCreateStreamManager, dismissBlockedToast, handleBlockedOutcome, recordForwardedContentSignature]);
+  }, [clearScrollLoadingState, getOrCreateStreamManager, dismissBlockedToast, showBlockedOutcome, echoGuard]);
 
   useEffect(() => {
     handleAppScrollbackFrameRef.current = handleAppScrollbackFrame;
@@ -872,15 +668,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       manager?.setAltScreenInactive();
     }
   }, [getOrCreateStreamManager]);
-
-  // Cleanup blocked-toast/connection-pulse/scroll-loading-pill timers on unmount.
-  useEffect(() => {
-    return () => {
-      if (blockedToastTimerRef.current) clearTimeout(blockedToastTimerRef.current);
-      if (connectionPulseTimerRef.current) clearTimeout(connectionPulseTimerRef.current);
-      clearScrollLoadingTimers();
-    };
-  }, [clearScrollLoadingTimers]);
 
   // Ref to track whether the initial scrollback has been written (Task 2.3.2)
   const isInitialScrollbackDoneRef = useRef(false);
@@ -993,8 +780,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     // server has resumed live streaming, i.e. the scroll lease was released —
     // the banner is cleared on such a frame, unless it's recognizable as the
     // redraw echo of our own last DELIVERED/AT_TOP forward -- see
-    // isSelfEchoOfLastForward's doc comment.
-    if (appScrollbackActiveRef.current && !isSelfEchoOfLastForward(output)) {
+    // ForwardEchoGuard's doc comment.
+    if (appScrollbackActiveRef.current && !echoGuard.isSelfEcho(output)) {
       appScrollbackActiveRef.current = false;
       setAppScrollbackState({ active: false, program: "" });
     }
@@ -1011,7 +798,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     if (manager) {
       manager.write(output);
     }
-  }, [getOrCreateStreamManager, isSelfEchoOfLastForward, xtermRef]);
+  }, [getOrCreateStreamManager, echoGuard, xtermRef]);
 
   // Unified WebSocket streaming (effectiveSessionId computed near the top of
   // this component -- see usePooledTerminal's call site comment for why).
@@ -1424,116 +1211,33 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   }, [effectiveScroll.target, scrollOverride, ctrlActive, altActive, shiftActive, sendKey, netPagesUp, isInputChunking]);
 
   // Handle terminal resize with size stability detection
-  const handleTerminalResize = useCallback((cols: number, rows: number) => {
-    console.log(`[TerminalOutput] Terminal resized to ${cols}x${rows}`);
+  const sizingRefs = {
+    lastResizeRef,
+    hasInitiatedConnectionRef,
+    hasCachedDimensionsRef,
+    sizeStabilityTimeoutRef,
+    pendingConnectAfterDisconnectRef,
+    isMountedRef,
+    metricsRef,
+    settleBypassPendingRef,
+  };
+  const onTerminalResized = useCallback((_cols: number, rows: number) => {
     setTerminalRows(rows);
     setJumpTerminal(xtermRef.current?.terminal ?? null);
     netPagesUp.invalidate("resize");
-
-    const lastResize = lastResizeRef.current;
-    const sizeChanged = !lastResize || lastResize.cols !== cols || lastResize.rows !== rows;
-
-    if (sizeChanged) {
-      lastResizeRef.current = { cols, rows };
-      console.log(`[TerminalOutput] Saved resize dimensions: ${cols}x${rows}`);
-
-      // Only persist dimensions that are plausibly real — transient tiny values
-      // (e.g. 10x6) fired before the CSS container finishes layout would otherwise
-      // corrupt the cache and cause the next session view to connect at the wrong size.
-      if (cols >= MIN_COLS && rows >= MIN_ROWS) {
-        // Also capture cell pixel dimensions so TerminalOutput can pre-calculate
-        // cols/rows from the container size on the next mount, enabling an immediate
-        // connection before xterm fires its first onResize event.
-        // Uses xterm.js private API for cell pixel metrics; gracefully falls back
-        // to dims-only cache entry if the API changes in a future xterm version.
-        // isFinite() guards against NaN/Infinity that a corrupted private API
-        // could theoretically return (e.g. during a render-service error state).
-        const cell = (xtermRef.current?.terminal as any)?._core?._renderService?.dimensions?.css?.cell;
-        const currentFontSize = xtermRef.current?.terminal?.options?.fontSize ?? 14;
-        const currentFontFamily = xtermRef.current?.terminal?.options?.fontFamily ?? 'Menlo, Monaco, "Courier New", monospace';
-        if (cell?.width && cell?.height && isFinite(cell.width) && isFinite(cell.height)) {
-          saveDimensions(sessionId, cols, rows, cell.width, cell.height, currentFontSize, currentFontFamily);
-        } else {
-          saveDimensions(sessionId, cols, rows, undefined, undefined, currentFontSize, currentFontFamily);
-        }
-      } else {
-        console.log(`[TerminalOutput] Skipping cache write for tiny dimensions ${cols}x${rows} (below ${MIN_COLS}x${MIN_ROWS})`);
-      }
-
-      if (metricsRef.current.firstResizeTime === null) {
-        metricsRef.current.firstResizeTime = performance.now();
-      }
-      metricsRef.current.resizeCount++;
-
-      // Skip size stability wait if we have cached dimensions, but only when
-      // the cached size (lastResize) is itself reasonable — a stale tiny cache
-      // entry would otherwise bypass the stability wait and connect at the wrong size.
-      if (hasCachedDimensionsRef.current && !hasInitiatedConnectionRef.current && !isConnected && !error && isMountedRef.current) {
-        const initDims = { cols, rows };
-        if (initDims.cols >= MIN_COLS && initDims.rows >= MIN_ROWS) {
-          console.log(`[TerminalOutput] Using cached dimensions, skipping stability wait (${initDims.cols}x${initDims.rows})`);
-          metricsRef.current.sizeStableTime = performance.now();
-          metricsRef.current.connectionInitTime = performance.now();
-          hasInitiatedConnectionRef.current = true;
-          setIsWaitingForStableSize(false);
-          connect(initDims.cols, initDims.rows);
-          return;
-        } else {
-          // Cached value is too small — treat as no cache and wait for stable size.
-          console.log(`[TerminalOutput] Cached dimensions ${initDims.cols}x${initDims.rows} too small, falling through to stability wait`);
-          hasCachedDimensionsRef.current = false; // prevents future onResize events from fast-connecting on stale cache
-        }
-      }
-
-      // Event-driven size stability detection for initial connection
-      if (!hasInitiatedConnectionRef.current && !isConnected && !error && isMountedRef.current) {
-        if (sizeStabilityTimeoutRef.current) {
-          clearTimeout(sizeStabilityTimeoutRef.current);
-        }
-
-        console.log(`[TerminalOutput] Size changed, waiting for layout to stabilize...`);
-        setIsWaitingForStableSize(true);
-
-        sizeStabilityTimeoutRef.current = setTimeout(() => {
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              if (!hasInitiatedConnectionRef.current && !isConnected && isMountedRef.current) {
-                const stableSize = lastResizeRef.current;
-                if (stableSize) {
-                  metricsRef.current.sizeStableTime = performance.now();
-                  metricsRef.current.connectionInitTime = performance.now();
-                  console.log(`[TerminalOutput] Layout stable at ${stableSize.cols}x${stableSize.rows}, initiating connection`);
-                  hasInitiatedConnectionRef.current = true;
-                  setIsWaitingForStableSize(false);
-                  connect(stableSize.cols, stableSize.rows);
-                }
-              }
-            });
-          });
-          sizeStabilityTimeoutRef.current = null;
-        }, 50);
-      }
-    }
-
-    if (!isConnected) {
-      console.log(`[TerminalOutput] Resize blocked - not connected (${cols}x${rows})`);
-      return;
-    }
-
-    if (!sizeChanged) {
-      console.log(`[TerminalOutput] Resize blocked - unchanged (${cols}x${rows})`);
-      return;
-    }
-
-    console.log(`[TerminalOutput] Sending resize: ${cols}x${rows} (prev: ${lastResize?.cols || 'none'}x${lastResize?.rows || 'none'})`);
-    clearBufferBeforeResize();
-    if (settleBypassPendingRef.current) {
-      settleBypassPendingRef.current = false;
-      resize(cols, rows, false, { bypassBounceHold: true });
-    } else {
-      resize(cols, rows);
-    }
-  }, [isConnected, resize, connect, error, sessionId, clearBufferBeforeResize, netPagesUp, xtermRef]);
+  }, [netPagesUp, xtermRef]);
+  const handleTerminalResize = useTerminalResizeHandler({
+    sessionId,
+    xtermRef,
+    isConnected,
+    error,
+    connect,
+    resize,
+    clearBufferBeforeResize,
+    setIsWaitingForStableSize,
+    onTerminalResized,
+    refs: sizingRefs,
+  });
 
   // Monitor connection state changes
   useEffect(() => {
@@ -1786,77 +1490,25 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
   }, [isConnected, error, connectionAttempts, connect, isHardFailed, bumpConnectionEpoch]);
 
-  // Initialize with cached dimensions on mount.
-  // When cell pixel metrics are also cached, pre-calculate cols/rows from the
-  // container's current pixel size so the session-switch effect can connect
-  // immediately — before xterm.js fires its first onResize event.
-  //
-  // ORDERING INVARIANT: This effect MUST remain defined before the session-switch
-  // effect below (both share the [sessionId] dependency). React runs same-dependency
-  // effects in definition order, so this effect runs first and populates
-  // lastResizeRef before the session-switch effect reads it to trigger connect().
-  // Moving this effect below the session-switch effect will silently break pre-sizing.
-  useEffect(() => {
-    const rawCached = getCachedDimensions(sessionId);
-    // Validate cell dims against current font config (R1.6): stale dims from a different
-    // font configuration produce an incorrect initial fit() and wrong initial resize.
-    // Use DEFAULT_TERMINAL_CONFIG values so this stays in sync with XtermTerminal's actual
-    // font settings rather than being hardcoded independently (Bug 4 fix).
-    const currentFontSize = DEFAULT_TERMINAL_CONFIG.fontSize;
-    const currentFontFamily = DEFAULT_TERMINAL_CONFIG.fontFamily;
-    const cached = rawCached
-      ? validateCellDimensions(rawCached, currentFontSize, currentFontFamily)
-      : null;
-    if (cached && cached.cols >= MIN_COLS && cached.rows >= MIN_ROWS) {
-      hasCachedDimensionsRef.current = true;
-      console.log(`[TerminalOutput] Initialized with cached dimensions: ${cached.cols}x${cached.rows}`);
-
-      if (cached.cellWidth && cached.cellHeight && terminalContainerRef.current) {
-        // Guard: only use getBoundingClientRect after the ResizeObserver has confirmed
-        // the container has a real constrained width (not the full pre-layout browser width).
-        // containerSize.width > 0 means layout is complete and the pane has its actual dimensions.
-        if (containerSize.width > 0) {
-          const rect = terminalContainerRef.current.getBoundingClientRect();
-          if (rect.width > 0 && rect.height > 0) {
-            const preCols = Math.floor(rect.width / cached.cellWidth);
-            const preRows = Math.floor(rect.height / cached.cellHeight);
-            if (preCols >= MIN_COLS && preRows >= MIN_ROWS) {
-              console.log(
-                `[TerminalOutput] Pre-sizing: ${rect.width}×${rect.height}px / ` +
-                `${cached.cellWidth.toFixed(2)}×${cached.cellHeight.toFixed(2)}px/cell → ${preCols}×${preRows}`
-              );
-              lastResizeRef.current = { cols: preCols, rows: preRows };
-              // If this effect fired because containerSize became non-zero (i.e. ResizeObserver
-              // fired after the initial render), the session-switch effect won't re-run because
-              // sessionId didn't change. We must initiate the connection here in that case.
-              // On a sessionId-triggered render, session-switch runs after this and connects,
-              // so we only act when no connection has been initiated yet.
-              const isXtermDefault = preCols === XTERM_DEFAULT_COLS && preRows === XTERM_DEFAULT_ROWS;
-              if (!hasInitiatedConnectionRef.current && !isConnected && isMountedRef.current && !isXtermDefault) {
-                hasInitiatedConnectionRef.current = true;
-                setIsWaitingForStableSize(false);
-                // Grow the xterm buffer to preCols/preRows BEFORE connecting — otherwise the
-                // terminal is still at its 80x24 constructor default and the capture-pane
-                // snapshot's cursor-positioning sequences for rows beyond 24 are silently
-                // dropped, leaving them unpainted until a later resize forces a full repaint.
-                xtermRef.current?.resize(preCols, preRows);
-                connect(preCols, preRows);
-              }
-            } else {
-              console.log(`[TerminalOutput] Pre-sizing skipped: calculated ${preCols}x${preRows} below minimum`);
-            }
-          } else {
-            console.log(`[TerminalOutput] Pre-sizing skipped: container has zero size`);
-          }
-        } else {
-          console.log(`[TerminalOutput] Pre-sizing deferred: container layout not yet resolved (containerSize.width=0)`);
-        }
-      }
-    } else if (cached) {
-      console.log(`[TerminalOutput] Ignoring stale cached dimensions ${cached.cols}x${cached.rows} (below ${MIN_COLS}x${MIN_ROWS})`);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, containerSize.width]);
+  // Starts the connection for a session: pre-size from cache, then session-switch
+  // connect, then post-disconnect connect. The effects inside run in that fixed
+  // order -- see the ORDERING INVARIANT in useSessionConnectionBootstrap.
+  useSessionConnectionBootstrap({
+    sessionId,
+    containerWidth: containerSize.width,
+    terminalContainerRef,
+    xtermRef,
+    isConnected,
+    connect,
+    setIsWaitingForStableSize,
+    setIsLoadingInitialContent,
+    setConnectionAttempts,
+    setShowReconnectButton,
+    reconnectTimeoutRef,
+    previousConnectionStateRef,
+    streamManagerRef,
+    refs: sizingRefs,
+  });
 
   // When terminal becomes visible (e.g. session switch in pool), refit through the sampler + focus.
   // Story 3 (Task 3.5) — usePooledTerminal's docking effect also fits+focuses on dock; this is a
@@ -1889,90 +1541,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       },
     });
   }, [netPagesUp]);
-
-  // Reset loading state when switching sessions and trigger reconnect
-  useEffect(() => {
-    setIsLoadingInitialContent(true);
-    hasInitiatedConnectionRef.current = false;
-    metricsRef.current.mountTime = performance.now();
-    metricsRef.current.firstOutputTime = null;
-
-    // Reset connection tracking so the new session doesn't inherit stale state
-    previousConnectionStateRef.current = false;
-    setConnectionAttempts(0);
-    setShowReconnectButton(false);
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = null;
-    }
-
-    // Reset stream manager for new session
-    if (streamManagerRef.current) {
-      streamManagerRef.current.cleanup();
-      streamManagerRef.current = null;
-    }
-
-    // Connect immediately if already disconnected (e.g. first load, or was already disconnected)
-    // Otherwise set the pending flag so we connect once the in-progress disconnect resolves
-    if (!isConnected) {
-      const dims = lastResizeRef.current;
-      // Guard: don't fast-connect with xterm default dims (80×24). Those are the
-      // terminal's initial values before fitAddon.fit() measures the container —
-      // if Bug 1 corrupted the cache to 80×24, using them here would cause a thin
-      // PTY. The resize handler will fire with the actual dims and connect normally.
-      const isXtermDefault = dims?.cols === XTERM_DEFAULT_COLS && dims?.rows === XTERM_DEFAULT_ROWS;
-      if (dims && isMountedRef.current && !isXtermDefault) {
-        hasInitiatedConnectionRef.current = true;
-        setIsWaitingForStableSize(false);
-        connect(dims.cols, dims.rows);
-      }
-      // If no dims yet (or dims are xterm defaults), resize handler will fire and trigger connect normally
-    } else {
-      // Was connected to previous session — disconnect() is in-flight (async).
-      // Mark pending so the isConnected→false transition triggers connect below.
-      pendingConnectAfterDisconnectRef.current = true;
-    }
-
-    // Safety net: if the container is hidden at mount (display:none, 0×0), the
-    // ResizeObserver zero-size guard prevents fitAddon.fit(), so no resize event
-    // fires and the stability timer never starts. After 5s, attempt to connect
-    // with whatever valid cached dims are available, or skip silently.
-    const safetyTimeout = setTimeout(() => {
-      if (!hasInitiatedConnectionRef.current && isMountedRef.current) {
-        const dims = lastResizeRef.current;
-        if (dims && dims.cols >= MIN_COLS && dims.rows >= MIN_ROWS) {
-          console.log(`[TerminalOutput] Safety timeout: connecting with cached dims ${dims.cols}x${dims.rows} (container may have been hidden at mount)`);
-          hasInitiatedConnectionRef.current = true;
-          setIsWaitingForStableSize(false);
-          connect(dims.cols, dims.rows);
-        } else {
-          console.log(`[TerminalOutput] Safety timeout: no valid dims available, container still not visible`);
-        }
-      }
-    }, 5000);
-
-    return () => {
-      clearTimeout(safetyTimeout);
-      setIsLoadingInitialContent(false);
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
-
-  // When a session switch happened while connected, the previous disconnect() is async (up to 1s).
-  // This effect fires once isConnected transitions to false, completing the switch.
-  useEffect(() => {
-    if (!isConnected && pendingConnectAfterDisconnectRef.current && !hasInitiatedConnectionRef.current && isMountedRef.current) {
-      pendingConnectAfterDisconnectRef.current = false;
-      const dims = lastResizeRef.current;
-      if (dims) {
-        console.log(`[TerminalOutput] Post-disconnect connect for new session: ${dims.cols}x${dims.rows}`);
-        hasInitiatedConnectionRef.current = true;
-        setIsWaitingForStableSize(false);
-        connect(dims.cols, dims.rows);
-      }
-      // If no dims, the resize handler will fire and connect normally
-    }
-  }, [isConnected, connect]);
 
   const handleManualReconnect = useCallback(() => {
     console.log("[TerminalOutput] Manual reconnect requested");
@@ -2524,6 +2092,20 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
               />
               {/* Inline on desktop; on mobile the same buttons render in the overflow row */}
               <span className={styles.desktopOnlyUploads}>{renderUploadButtons()}</span>
+              {/* Output filter toggle — opt-in, display-only */}
+              <button
+                className={styles.toolbarButton}
+                onClick={() => {
+                  track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "output-filter", state: filterOpen ? "closed" : "open" } });
+                  setFilterOpen((open) => !open);
+                }}
+                aria-label={filterOpen ? "Close output filter" : "Filter terminal output"}
+                aria-pressed={filterOpen}
+                data-testid="toolbar-filter-toggle"
+                title="Filter terminal output (display only)"
+              >
+                🔎
+              </button>
               {/* Dev tools toggle */}
               <button
                 ref={devToggleRef}
@@ -2657,6 +2239,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         />
       )}
       <div className={styles.terminal} ref={terminalContainerRef}>
+        {filterOpen && <TerminalOutputFilter getLines={getFilterLines} onClose={() => setFilterOpen(false)} />}
         {showReconnectBanner && !isHardFailed && (
           <div
             className={styles.reconnectingBanner}

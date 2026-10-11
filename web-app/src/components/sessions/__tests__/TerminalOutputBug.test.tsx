@@ -67,7 +67,12 @@ jest.mock('@/lib/hooks/useTerminalStream', () => ({
   useTerminalStream: jest.fn(),
 }));
 
+// saveDimensions(sessionId, cols, rows, options): the options object when no cell metrics are available.
+const FONT_ONLY_OPTIONS = { fontSize: expect.any(Number), fontFamily: expect.any(String) };
+
 jest.mock('@/lib/terminal/TerminalDimensionCache', () => ({
+  // Keep the real MIN_COLS/MIN_ROWS/XTERM_DEFAULT_* constants TerminalOutput imports from here.
+  ...jest.requireActual('@/lib/terminal/TerminalDimensionCache'),
   getCachedDimensions: jest.fn(),
   saveDimensions: jest.fn(),
   validateCellDimensions: jest.fn((cached: unknown) => cached),
@@ -381,7 +386,7 @@ describe('MIN_COLS/MIN_ROWS: tiny dims do not corrupt the cache or trigger fast-
 
     await act(async () => { capturedOnResize?.(30, 10); });
 
-    expect(saveDimensions).toHaveBeenCalledWith(expect.any(String), 30, 10, undefined, undefined, expect.anything(), expect.anything());
+    expect(saveDimensions).toHaveBeenCalledWith(expect.any(String), 30, 10, FONT_ONLY_OPTIONS);
     expect(stream.connect).toHaveBeenCalledWith(30, 10);
   });
 
@@ -740,6 +745,11 @@ describe('Scrollback paging: isFetchingScrollbackRef reset on prependScrollbackB
 // pre-size without waiting for xterm to fire onResize.
 // ---------------------------------------------------------------------------
 describe('Cell dim extraction: saves pixel metrics from xterm private API', () => {
+  // Runs even when an assertion throws, so a failure here can't leak a fake terminal into later tests.
+  afterEach(() => {
+    (mockXtermHandle as any).terminal = null;
+  });
+
   it('saves cell pixel dimensions to cache when terminal provides them', async () => {
     (getCachedDimensions as jest.Mock).mockReturnValue(null);
     const stream = makeStreamMock();
@@ -761,11 +771,8 @@ describe('Cell dim extraction: saves pixel metrics from xterm private API', () =
     await act(async () => { capturedOnResize?.(200, 50); });
 
     expect(saveDimensions).toHaveBeenCalledWith(
-      expect.any(String), 200, 50, 8.4, 17.0, expect.anything(), expect.anything(),
+      expect.any(String), 200, 50, { ...FONT_ONLY_OPTIONS, cellWidth: 8.4, cellHeight: 17.0 },
     );
-
-    // Restore
-    (mockXtermHandle as any).terminal = null;
   });
 
   it('saves only cols/rows when terminal cell API is unavailable', async () => {
@@ -777,11 +784,8 @@ describe('Cell dim extraction: saves pixel metrics from xterm private API', () =
     renderTerminalOutput();
     await act(async () => { capturedOnResize?.(200, 50); });
 
-    // Called without cellWidth/cellHeight (undefined), but with fontSize/fontFamily
-    expect(saveDimensions).toHaveBeenCalledWith(expect.any(String), 200, 50, undefined, undefined, expect.anything(), expect.anything());
-    expect(saveDimensions).not.toHaveBeenCalledWith(
-      expect.any(String), 200, 50, expect.any(Number), expect.any(Number),
-    );
+    // No cellWidth/cellHeight keys at all — only fontSize/fontFamily.
+    expect(saveDimensions).toHaveBeenCalledWith(expect.any(String), 200, 50, FONT_ONLY_OPTIONS);
   });
 
   it('saves only cols/rows when cell dims are non-finite', async () => {
@@ -803,12 +807,7 @@ describe('Cell dim extraction: saves pixel metrics from xterm private API', () =
     renderTerminalOutput();
     await act(async () => { capturedOnResize?.(200, 50); });
 
-    // Called without cellWidth/cellHeight (undefined), but with fontSize/fontFamily
-    expect(saveDimensions).toHaveBeenCalledWith(expect.any(String), 200, 50, undefined, undefined, expect.anything(), expect.anything());
-    expect(saveDimensions).not.toHaveBeenCalledWith(
-      expect.any(String), 200, 50, expect.any(Number), expect.any(Number),
-    );
-
-    (mockXtermHandle as any).terminal = null;
+    // No cellWidth/cellHeight keys at all — only fontSize/fontFamily.
+    expect(saveDimensions).toHaveBeenCalledWith(expect.any(String), 200, 50, FONT_ONLY_OPTIONS);
   });
 });

@@ -357,7 +357,7 @@ export function TerminalPoolProvider({ children, maxSize = DEFAULT_TERMINAL_POOL
             onData={entry.stableOnData}
             onResize={entry.stableOnResize}
             theme="dark"
-            fontSize={14}
+            useConfig
             scrollback={POOLED_SCROLLBACK}
             scrollGesture={entry.scrollGesture}
             onScrollModeChange={entry.stableOnScrollModeChange}
