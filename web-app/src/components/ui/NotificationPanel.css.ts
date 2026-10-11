@@ -320,7 +320,7 @@ export const focusButton = style({
   selectors: {
     "&:hover": {
       backgroundColor: vars.color.primary,
-      color: "white",
+      color: vars.color.onPrimaryFill,
     },
   },
 });
@@ -387,7 +387,7 @@ export const timestamp = style({
 export const viewButton = style({
   padding: "0.375rem 0.75rem",
   backgroundColor: vars.color.primary,
-  color: "white",
+  color: vars.color.onPrimaryFill,
   border: "none",
   borderRadius: "6px",
   cursor: "pointer",
@@ -513,7 +513,7 @@ export const approveButton = style({
   selectors: {
     "&:hover:not(:disabled)": {
       backgroundColor: vars.color.success,
-      color: "white",
+      color: vars.color.onSuccessFill,
     },
     "&:disabled": {
       opacity: 0.45,
@@ -541,7 +541,7 @@ export const denyButton = style({
   selectors: {
     "&:hover:not(:disabled)": {
       backgroundColor: vars.color.error,
-      color: "white",
+      color: vars.color.onErrorFill,
     },
     "&:disabled": {
       opacity: 0.45,
@@ -701,7 +701,7 @@ export const filterPill = style({
 export const filterPillActive = style({
   backgroundColor: vars.color.primary,
   borderColor: vars.color.primary,
-  color: "white",
+  color: vars.color.onPrimaryFill,
 });
 
 // Exclude-style (negative) filter pill — e.g. "hide backlog items" — visually
@@ -710,7 +710,7 @@ export const filterPillActive = style({
 export const filterPillExcludeActive = style({
   backgroundColor: vars.color.error,
   borderColor: vars.color.error,
-  color: "white",
+  color: vars.color.onErrorFill,
 });
 
 // Auto-handled (auto_approved) collapsible section
@@ -1093,7 +1093,7 @@ export const trayButton = style({
 export const trayAttention = style({
   fontSize: "0.8125rem",
   fontWeight: 600,
-  color: vars.color.error,
+  color: vars.color.errorText,
 });
 
 export const trayBanner = style({
