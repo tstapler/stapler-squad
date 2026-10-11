@@ -369,6 +369,7 @@ func (s *SessionService) createRemoteNewWorktree(
 	}
 
 	// Best-effort: "git branch <name> [sha]" failing because the branch already exists is expected.
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	if out, branchErr := runner.Run(ctx, resolvedPath, "git", branchArgs...); branchErr != nil &&
 		!strings.Contains(string(out), "already exists") {
 		return "", nil, git.RemoteWorktree{}, "", "", connect.NewError(connect.CodeInternal,

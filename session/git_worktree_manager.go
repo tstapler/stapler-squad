@@ -572,6 +572,7 @@ func (gm *GitWorktreeManager) GetCurrentCommitSHA() (string, error) {
 
 	revCtx, revCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer revCancel()
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	cmd := safeexec.CommandContext(revCtx, "git", "-C", dir, "rev-parse", "HEAD")
 	output, err := cmd.Output()
 	if err != nil {

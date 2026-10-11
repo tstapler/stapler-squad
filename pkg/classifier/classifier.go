@@ -710,6 +710,7 @@ func (c *RuleBasedClassifier) BuildContext(cwd string) ClassificationContext {
 	}
 	gitCtx, gitCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer gitCancel()
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	toplevelCmd := safeexec.CommandContext(gitCtx, "git", "-C", cwd, "rev-parse", "--show-toplevel")
 	if out, err := toplevelCmd.Output(); err == nil {
 		ctx.RepoRoot = strings.TrimSpace(string(out))
@@ -718,6 +719,7 @@ func (c *RuleBasedClassifier) BuildContext(cwd string) ClassificationContext {
 	if ctx.IsGitRepo {
 		gitDirCtx, gitDirCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer gitDirCancel()
+		//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 		gitDirCmd := safeexec.CommandContext(gitDirCtx, "git", "-C", cwd, "rev-parse", "--git-dir")
 		if out, err := gitDirCmd.Output(); err == nil {
 			ctx.IsWorktree = strings.Contains(string(out), "worktrees")

@@ -15,6 +15,8 @@
 //     calls whose error is only logged, never surfaced or propagated
 //   - entfullscan: detects ent query .All(ctx) calls with no .Where(...) filter
 //     anywhere in the enclosing function — a full-table scan
+//   - norawgitcli: forbids git CLI call sites (exec/safeexec "git", runner.Run
+//     "git", runGitCommand) outside session/git/backend/cli and session/gitwiring
 //   - norawgitopen: detects direct go-git PlainOpen/PlainOpenWithOptions calls
 //     outside session/git.OpenRepo, the approved wrapper
 //   - norawghrequest: detects direct http.NewRequest/NewRequestWithContext
@@ -45,6 +47,7 @@ import (
 	"github.com/tstapler/stapler-squad/tools/lint/noliveinstanceraw"
 	"github.com/tstapler/stapler-squad/tools/lint/norawexec"
 	"github.com/tstapler/stapler-squad/tools/lint/norawghrequest"
+	"github.com/tstapler/stapler-squad/tools/lint/norawgitcli"
 	"github.com/tstapler/stapler-squad/tools/lint/norawgitopen"
 	"github.com/tstapler/stapler-squad/tools/lint/notimesleeptest"
 	"github.com/tstapler/stapler-squad/tools/lint/novartestseam"
@@ -62,6 +65,7 @@ func main() {
 		noliveinstanceraw.Analyzer,
 		norawexec.Analyzer,
 		norawghrequest.Analyzer,
+		norawgitcli.Analyzer,
 		norawgitopen.Analyzer,
 		notimesleeptest.Analyzer,
 		novartestseam.Analyzer,

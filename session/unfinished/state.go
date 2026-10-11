@@ -337,6 +337,7 @@ func (s *StateStore) SaveScanCache(entries []scanCacheEntry) error {
 // ComputeDiffHash runs `git -C path diff HEAD` and SHA256-hashes the output.
 func ComputeDiffHash(worktreePath string) (string, error) {
 	exec3s := executor.MakeTimeoutExecutor(5 * time.Second)
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	cmd := safeexec.CommandContext(context.Background(), "git", "-C", worktreePath, "diff", "HEAD")
 	out, err := exec3s.CombinedOutput(cmd)
 	if err != nil {

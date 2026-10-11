@@ -41,6 +41,7 @@ func (g *GitClient) RepoPath() string {
 func (g *GitClient) run(args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	cmd := safeexec.CommandContext(ctx, "git", args...)
 	cmd.Dir = g.repoPath
 

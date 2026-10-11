@@ -632,6 +632,7 @@ func (ws *WorkspaceService) ListBranches(
 	if req.Msg.GetIncludeRemote() {
 		refSpec = "refs/"
 	}
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	cmd := safeexec.CommandContext(cmdCtx, "git", "-C", absPath, "for-each-ref", refSpec, "--format=%(refname:short)")
 
 	var out bytes.Buffer
