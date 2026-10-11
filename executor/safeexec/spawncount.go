@@ -117,7 +117,8 @@ var gitSubcommands = map[string]bool{
 	"rev-parse": true, "revert": true, "rm": true, "show": true, "show-ref": true,
 	"sparse-checkout": true, "stash": true, "status": true, "submodule": true, "switch": true,
 	"symbolic-ref": true, "tag": true, "unpack-file": true, "update-index": true, "update-ref": true,
-	"version": true, "worktree": true, "write-tree": true,
+	"version": true, "check-attr": true, "commit-tree": true, "name-rev": true, "notes": true,
+	"mktree": true, "shortlog": true, "var": true, "for-each-repo": true, "worktree": true, "write-tree": true,
 }
 
 // GitSubcommand returns the git subcommand named by args, skipping global options (-C <path>,

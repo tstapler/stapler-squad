@@ -272,7 +272,7 @@ func compareOne(t testing.TB, g Git, oracle, cand backend.Backend, op Op, fixtur
 	if o, c := snapshot(t, g, oracleNorm, oraclePlaces[place]), snapshot(t, g, candNorm, candPlaces[place]); o != c {
 		diffs = append(diffs, mk(DiffState, o, c))
 	}
-	if out, err := fsck(g, candPlaces["main"]); err != nil {
+	if out, err := fsck(g, candPlaces[place]); err != nil {
 		diffs = append(diffs, mk(DiffFsck, "exit 0", out))
 	}
 	return diffs

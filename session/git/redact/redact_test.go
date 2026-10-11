@@ -17,6 +17,8 @@ func TestGit(t *testing.T) {
 		{"bare token", "token ghp_abcdef123456 leaked", "token *** leaked"},
 		{"fine grained", "github_pat_11ABCDEF0_xyz", "***"},
 		{"helper output", "protocol=https\nhost=github.com\nusername=bot\npassword=hunter2\n", "protocol=https\nhost=github.com\nusername=bot\npassword=***\n"},
+		{"inline password", "fetch failed password=hunter2 for bot", "fetch failed password=*** for bot"},
+		{"bare bearer", "sent Bearer abcdef123456 upstream", "sent Bearer *** upstream"},
 		{"plain text", "nothing secret here", "nothing secret here"},
 	}
 	for _, c := range cases {
