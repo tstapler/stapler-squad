@@ -125,11 +125,10 @@ type FlagCache struct {
 	done     chan struct{}
 }
 
-// NewFlagCache starts at the registry default (off) without touching the
-// loader; BuildRuntimeDeps calls Reload once and the ticker keeps it fresh.
+// NewFlagCache starts at the registry default without touching the loader; BuildRuntimeDeps calls Reload once and the ticker keeps it fresh.
 func NewFlagCache(loader FlagLoader, logger *slog.Logger) *FlagCache {
 	c := &FlagCache{loader: loader, logger: logger}
-	c.snapshot.Store(&FlagSettings{})
+	c.snapshot.Store(&FlagSettings{Global: config.HiddenSessionGateDefault})
 	return c
 }
 

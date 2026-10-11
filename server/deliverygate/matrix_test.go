@@ -153,10 +153,8 @@ func (e *matrixEnv) publishEveryType(t *testing.T) {
 	}
 	e.bus.Publish(&events.Event{
 		Type: events.EventSessionUpdated,
-		// Instance.Hidden is false on purpose: push's legacy Hidden check (kept until PR 2b)
-		// drops a hidden instance before the gate, so this models the index/instance
-		// disagreement that only the gate catches.
-		Session:       &session.Instance{ID: "id-h", UUID: "u-h", Title: hiddenTitle, Status: session.Stopped},
+		// The instance is Hidden: the gate (not a check in the push builder) drops it.
+		Session:       &session.Instance{ID: "id-h", UUID: "u-h", Title: hiddenTitle, Status: session.Stopped, Hidden: true},
 		UpdatedFields: []string{events.FieldStatus},
 	})
 	e.bus.Publish(notifEvent(visibleTitle, sessionv1.NotificationType_NOTIFICATION_TYPE_INFO, sentinelID))

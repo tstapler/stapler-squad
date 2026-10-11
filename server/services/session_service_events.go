@@ -71,12 +71,8 @@ func (l *coldRestoreOutcomeListener) OnLifecycleEvent(event session.LifecycleEve
 
 // onColdRestoreLostHistory publishes a durable WARNING notification for inst
 // when a cold restore could not recover its previous conversation history.
-// Hidden instances (e.g. headless review sessions) never surface this.
+// Hidden instances are filtered by the delivery gate (routine WARNING).
 func (s *SessionService) onColdRestoreLostHistory(inst *session.Instance) {
-	if inst.Hidden {
-		s.countLegacyHiddenSuppressed("session_events_cold_restore", int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING))
-		return
-	}
 	linkedItemID := s.rateLimitLinkedItemID(inst)
 	notifID := fmt.Sprintf("cold-restore-lost-history-%s", inst.UUID)
 	s.eventBus.Publish(events.NewNotificationEvent(
@@ -191,32 +187,26 @@ func (s *SessionService) rateLimitLinkedItemID(inst *session.Instance) string {
 }
 
 // onRateLimitDetected publishes the rate-limit-detected notification for inst.
-// Hidden instances (e.g. headless review sessions) never surface a
-// notification for this.
+// Hidden instances are filtered by the delivery gate (routine WARNING).
 func (s *SessionService) onRateLimitDetected(inst *session.Instance, sessionID string, resetTime time.Time) {
-	if inst.Hidden {
-		s.countLegacyHiddenSuppressed("session_events_rate_limit_detected", int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING))
-	}
-	if !inst.Hidden {
-		linkedItemID := s.rateLimitLinkedItemID(inst)
+	linkedItemID := s.rateLimitLinkedItemID(inst)
 
-		var resetMsg string
-		if !resetTime.IsZero() {
-			resetMsg = fmt.Sprintf(" — resumes at %s", resetTime.Format("3:04 PM"))
-		}
-		title := fmt.Sprintf("Session \"%s\" rate limited%s", inst.Title, resetMsg)
-		notifID := fmt.Sprintf("rl-detect-%s", sessionID)
-		s.eventBus.Publish(events.NewNotificationEvent(
-			sessionID, inst.Title, notifID,
-			int32(8),                   // NotificationType_WARNING
-			derivePriority(true, true), // urgent, important — the session just stopped making progress right now
-			title,
-			fmt.Sprintf("Session hit the usage limit%s.", resetMsg),
-			events.SessionScopedMetadata(nil, linkedItemID),
-		))
+	var resetMsg string
+	if !resetTime.IsZero() {
+		resetMsg = fmt.Sprintf(" — resumes at %s", resetTime.Format("3:04 PM"))
 	}
-	// Session state sync (rate_limit_state/rate_limit_reset_time) must fire
-	// regardless of Hidden — only the Notifications-page entry above is gated.
+	title := fmt.Sprintf("Session \"%s\" rate limited%s", inst.Title, resetMsg)
+	notifID := fmt.Sprintf("rl-detect-%s", sessionID)
+	s.eventBus.Publish(events.NewNotificationEvent(
+		sessionID, inst.Title, notifID,
+		int32(8),                   // NotificationType_WARNING
+		derivePriority(true, true), // urgent, important — the session just stopped making progress right now
+		title,
+		fmt.Sprintf("Session hit the usage limit%s.", resetMsg),
+		events.SessionScopedMetadata(nil, linkedItemID),
+	))
+	// Session state sync (rate_limit_state/rate_limit_reset_time) is not a
+	// notification and is never gated.
 	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"rate_limit_state", "rate_limit_reset_time"}))
 
 	// Feed the account-wide quota gate's hard/reactive override signal. Not
@@ -228,9 +218,8 @@ func (s *SessionService) onRateLimitDetected(inst *session.Instance, sessionID s
 }
 
 // onRateLimitRecoverySucceeded publishes the rate-limit-recovery notification
-// for inst's successful auto-resume. Hidden instances (e.g. headless review
-// sessions) never surface a notification for this, but the session-state
-// sync below still fires regardless of Hidden.
+// for inst's successful auto-resume. Hidden instances are filtered by the
+// delivery gate (routine INFO); the session-state sync below is never gated.
 //
 // Split from onRateLimitRecoveryFailed below (Fowler's Remove Flag Argument
 // -- the two used to be one onRateLimitRecovery(..., success bool, ...)
@@ -238,20 +227,15 @@ func (s *SessionService) onRateLimitDetected(inst *session.Instance, sessionID s
 // dispatch closure picks the function that matches the outcome instead of
 // passing a flag.
 func (s *SessionService) onRateLimitRecoverySucceeded(inst *session.Instance, sessionID string) {
-	if inst.Hidden {
-		s.countLegacyHiddenSuppressed("session_events_recovery_succeeded", int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO))
-	}
-	if !inst.Hidden {
-		linkedItemID := s.rateLimitLinkedItemID(inst)
-		s.eventBus.Publish(events.NewNotificationEvent(
-			sessionID, inst.Title, fmt.Sprintf("rl-recover-%s", sessionID),
-			int32(10), // NotificationType_INFO
-			derivePriority(false, false),
-			fmt.Sprintf("Session \"%s\" resumed after rate limit", inst.Title),
-			"Session auto-resumed after rate limit expiry.",
-			events.SessionScopedMetadata(nil, linkedItemID),
-		))
-	}
+	linkedItemID := s.rateLimitLinkedItemID(inst)
+	s.eventBus.Publish(events.NewNotificationEvent(
+		sessionID, inst.Title, fmt.Sprintf("rl-recover-%s", sessionID),
+		int32(10), // NotificationType_INFO
+		derivePriority(false, false),
+		fmt.Sprintf("Session \"%s\" resumed after rate limit", inst.Title),
+		"Session auto-resumed after rate limit expiry.",
+		events.SessionScopedMetadata(nil, linkedItemID),
+	))
 	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"rate_limit_state"}))
 }
 
@@ -259,20 +243,15 @@ func (s *SessionService) onRateLimitRecoverySucceeded(inst *session.Instance, se
 // counterpart -- see its doc comment. errMsg is the auto-resume failure
 // reason, surfaced in the notification body.
 func (s *SessionService) onRateLimitRecoveryFailed(inst *session.Instance, sessionID, errMsg string) {
-	if inst.Hidden {
-		s.countLegacyHiddenSuppressed("session_events_recovery_failed", int32(sessionv1.NotificationType_NOTIFICATION_TYPE_FAILURE))
-	}
-	if !inst.Hidden {
-		linkedItemID := s.rateLimitLinkedItemID(inst)
-		s.eventBus.Publish(events.NewNotificationEvent(
-			sessionID, inst.Title, fmt.Sprintf("rl-recover-%s", sessionID),
-			int32(9), // NotificationType_FAILURE
-			derivePriority(true, true),
-			fmt.Sprintf("Session \"%s\" failed to resume after rate limit", inst.Title),
-			fmt.Sprintf("Auto-resume failed: %s", errMsg),
-			events.SessionScopedMetadata(nil, linkedItemID),
-		))
-	}
+	linkedItemID := s.rateLimitLinkedItemID(inst)
+	s.eventBus.Publish(events.NewNotificationEvent(
+		sessionID, inst.Title, fmt.Sprintf("rl-recover-%s", sessionID),
+		int32(9), // NotificationType_FAILURE
+		derivePriority(true, true),
+		fmt.Sprintf("Session \"%s\" failed to resume after rate limit", inst.Title),
+		fmt.Sprintf("Auto-resume failed: %s", errMsg),
+		events.SessionScopedMetadata(nil, linkedItemID),
+	))
 	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"rate_limit_state"}))
 }
 

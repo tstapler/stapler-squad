@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
@@ -170,6 +172,17 @@ func TestSendNotification_PollerMissFallsBackToStorage(t *testing.T) {
 	}
 }
 
+// installOnGate puts a delivery gate (flag on) in front of bus and seeds the
+// hidden entries: hidden-session suppression is the gate's job.
+func installOnGate(bus *events.EventBus, entries ...deliverygate.Entry) {
+	gate := deliverygate.NewGate(deliverygate.WithFlagLoader(func() (deliverygate.FlagSettings, error) {
+		return deliverygate.FlagSettings{Global: true}, nil
+	}))
+	gate.Flags().Reload()
+	gate.Index().Replace(entries)
+	bus.SetPublishFilter(gate.PublishFilter())
+}
+
 // TestSendNotification_SuppressesLowPriorityForHiddenSession verifies that a
 // LOW-priority notification (the shape ssq-hook-handler's native Claude Code
 // Stop hook sends for routine "Task Complete") is suppressed for a Hidden
@@ -189,6 +202,7 @@ func TestSendNotification_SuppressesLowPriorityForHiddenSession(t *testing.T) {
 	const sessionTitle = "hidden-review-session"
 	inst := &session.Instance{Title: sessionTitle, UUID: "hidden-uuid", Hidden: true}
 	poller.SetInstances([]*session.Instance{inst})
+	installOnGate(bus, deliverygate.Entry{UUID: "hidden-uuid", Title: sessionTitle, Hidden: true, Kind: deliverygate.KindReview})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -200,6 +214,7 @@ func TestSendNotification_SuppressesLowPriorityForHiddenSession(t *testing.T) {
 		Title:            "Task Complete",
 		NotificationType: sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE,
 		Priority:         sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW,
+		Metadata:         map[string]string{pkgevents.MetadataKeySSQNotifySchema: pkgevents.SSQNotifySchemaVersion},
 	}))
 	require.NoError(t, err)
 
@@ -251,6 +266,7 @@ func TestSendNotification_SuppressesLowPriorityForHiddenSession_ViaStorageFallba
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}))
+	installOnGate(bus, deliverygate.Entry{UUID: "hidden-uuid-storage-fallback", Title: sessionTitle, Hidden: true, Kind: deliverygate.KindReview})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -262,6 +278,7 @@ func TestSendNotification_SuppressesLowPriorityForHiddenSession_ViaStorageFallba
 		Title:            "Task Complete",
 		NotificationType: sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE,
 		Priority:         sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW,
+		Metadata:         map[string]string{pkgevents.MetadataKeySSQNotifySchema: pkgevents.SSQNotifySchemaVersion},
 	}))
 	require.NoError(t, err)
 
@@ -339,6 +356,7 @@ func TestSendNotification_UnknownSessionUsesRawID(t *testing.T) {
 		Title:            "some notification",
 		NotificationType: sessionv1.NotificationType_NOTIFICATION_TYPE_INFO,
 		Priority:         sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW,
+		Metadata:         map[string]string{pkgevents.MetadataKeySSQNotifySchema: pkgevents.SSQNotifySchemaVersion},
 	}))
 	require.NoError(t, err)
 

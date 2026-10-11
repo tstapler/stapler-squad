@@ -191,28 +191,37 @@ func TestSendNotification_ShouldBeByteIdenticalToMain_WhenFlagOffAndIndexUnseede
 	}
 }
 
-// T-LG-05: the legacy hidden+LOW swallow still happens and is counted.
-func TestSendNotification_ShouldSwallowHiddenAndLowAsOnMain_WhenFlagOff(t *testing.T) {
+// T-LG-05: the legacy hidden+LOW priority check is gone; the gate decides on
+// type. With the gate on a hidden routine type is dropped at any priority, a
+// hidden failure type is delivered even at LOW, and a visible LOW is untouched.
+// With the gate off (the rollback) a hidden LOW routine event is delivered.
+func TestSendNotification_ShouldDecideHiddenLowByTypeThroughGate_WhenGateOn(t *testing.T) {
 	t.Parallel()
-	f := newGatedNotifFixture(t, false)
-	f.send(t, "review-h", sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE, prioLow,
-		map[string]string{events.MetadataKeySSQNotifySchema: events.SSQNotifySchemaVersion})
-	assert.Nil(t, f.next(), "legacy check must still swallow hidden LOW")
-	assert.EqualValues(t, 1, f.gate.Metrics().Value(deliverygate.CounterLegacySuppressed,
-		"send_notification_low", "NOTIFICATION_TYPE_TASK_COMPLETE", "routine"))
+	versioned := map[string]string{events.MetadataKeySSQNotifySchema: events.SSQNotifySchemaVersion}
 
-	f.send(t, "work-v", sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE, prioLow,
-		map[string]string{events.MetadataKeySSQNotifySchema: events.SSQNotifySchemaVersion})
+	f := newGatedNotifFixture(t, true)
+	f.send(t, "review-h", sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE, prioLow, versioned)
+	assert.Nil(t, f.next(), "gate on: hidden routine event dropped")
+	assert.EqualValues(t, 1, f.gate.Metrics().Total(deliverygate.CounterSuppressed))
+
+	f.send(t, "review-h", sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR, prioLow, versioned)
+	assert.NotNil(t, f.next(), "gate on: a hidden failure is delivered even at LOW priority")
+
+	f.send(t, "work-v", sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE, prioLow, versioned)
 	assert.NotNil(t, f.next(), "visible LOW is delivered")
+
+	off := newGatedNotifFixture(t, false)
+	off.send(t, "review-h", sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE, prioLow, versioned)
+	assert.NotNil(t, off.next(), "gate off: rollback delivers the hidden LOW routine event")
+	assert.EqualValues(t, 0, off.gate.Metrics().Total(deliverygate.CounterSuppressed))
+	assert.EqualValues(t, 1, off.gate.Metrics().Total(deliverygate.CounterWouldSuppress))
 }
 
 // T-OB-29 (ADV-N30): the operator's synthetic probe traverses the real gate
-// end to end with the legacy hidden checks present. A `-p low` probe never gets
-// that far (the legacy hidden+LOW swallow drops it first, so it would prove
-// nothing about the gate); a `-p medium` ERROR probe reaches the bus with its
-// label, is counted as a probe delivery, and carries no metadata that could
-// steer a channel. That medium priority does not push is T-OB-29's push half,
-// in server/push (TestShouldNotify_ShouldBeFalse_WhenMediumPriorityErrorProbe).
+// end to end. A ERROR probe reaches the bus with its label at any priority
+// (failure class), is counted as a probe delivery, and carries no metadata that
+// could steer a channel. That medium priority does not push is T-OB-29's push
+// half, in server/push (TestShouldNotify_ShouldBeFalse_WhenMediumPriorityErrorProbe).
 func TestSyntheticProbe_ShouldTraverseTheRealGateNotBePushedAndKeepItsLabel_WhenSsqNotifySendsAMediumPriorityErrorForAHiddenSession(t *testing.T) {
 	t.Parallel()
 	f := newGatedNotifFixture(t, true)
@@ -225,10 +234,6 @@ func TestSyntheticProbe_ShouldTraverseTheRealGateNotBePushedAndKeepItsLabel_When
 		}))
 		require.NoError(t, err)
 	}
-
-	send(prioLow)
-	assert.Nil(t, f.next(), "a low-priority probe is dropped by the legacy check before the gate")
-	assert.EqualValues(t, 0, f.gate.Metrics().Total(deliverygate.CounterHiddenDelivered), "a low probe never reaches the gate")
 
 	send(prioMedium)
 	got := f.next()

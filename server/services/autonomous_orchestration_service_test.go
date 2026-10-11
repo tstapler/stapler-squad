@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	ssqlog "github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
@@ -984,6 +985,8 @@ func TestOnAutonomousDriverComplete_SuppressesGenericNotification_When_InstanceH
 	}
 	require.NoError(t, storage.AddInstance(inst))
 	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+
+	installOnGate(eventBus, deliverygate.Entry{UUID: inst.UUID, Title: title, Hidden: true, Kind: deliverygate.KindOther})
 
 	subCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()

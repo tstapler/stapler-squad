@@ -65,16 +65,6 @@ type AutonomousOrchestrationService struct {
 	// Optional — if nil, the item is simply left in_progress (marked
 	// autonomous_stuck) until a human reopens it manually.
 	autonomousStuckRespawner AutonomousStuckRespawner
-
-	// legacyHiddenCounter, when set, is told about each hidden-session
-	// notification the generic notifier swallows (observability only).
-	legacyHiddenCounter func(site string, notificationType int32)
-}
-
-// SetLegacyHiddenCounter wires the legacy-suppression counter (see
-// deliverygate.Gate.CountLegacySuppressedType).
-func (a *AutonomousOrchestrationService) SetLegacyHiddenCounter(fn func(site string, notificationType int32)) {
-	a.legacyHiddenCounter = fn
 }
 
 // SetReviewGateTrigger wires the review gate trigger (typically BacklogLifecycleListener).
@@ -622,21 +612,16 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 		notifType = int32(9)           // NotificationType_FAILURE
 		urgent, important = true, true // a silent status/reality mismatch is a genuine correctness bug
 	}
-	// Hidden sessions (e.g. review-gate driver runs) already have their own
-	// role-specific notification handling above (or intentionally none, per
-	// SessionRoleReview's comment) — this generic notifier would otherwise
-	// duplicate that signal for a session the operator never surfaces in the
-	// UI. See AC1's intent in the Epic 3 plan.
-	if !inst.Hidden {
-		a.bus.Publish(events.NewNotificationEvent(
-			sessionUUID, instanceName, fmt.Sprintf("autonomous-complete-%s", sessionUUID),
-			notifType,
-			derivePriority(urgent, important),
-			title, body, events.SessionScopedMetadata(nil, linkedItemID),
-		))
-	} else if a.legacyHiddenCounter != nil {
-		a.legacyHiddenCounter("autonomous_generic", notifType)
-	}
+	// Hidden sessions: the delivery gate drops the routine "Autonomous fix
+	// complete" (INFO) and delivers the FAILURE-class "stuck" notification.
+	// SessionRoleReview returns before this point, so a hidden review run
+	// never reaches this generic notifier.
+	a.bus.Publish(events.NewNotificationEvent(
+		sessionUUID, instanceName, fmt.Sprintf("autonomous-complete-%s", sessionUUID),
+		notifType,
+		derivePriority(urgent, important),
+		title, body, events.SessionScopedMetadata(nil, linkedItemID),
+	))
 }
 
 // stuckSessionRole distinguishes which onAutonomousDriverComplete branch a

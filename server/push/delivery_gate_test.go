@@ -28,11 +28,10 @@ func stoppedEvent(title string, hidden bool) *events.Event {
 	}
 }
 
-// T-PS-01: a session the gate index marks hidden is dropped with the gate on,
-// visible still pushes, and gate off pushes both (shadow counted). The event's
-// Instance.Hidden is false on purpose: the legacy Hidden check in
-// buildStatusChangeNotification drops a hidden instance before the gate, so only
-// an index/instance disagreement (a stale instance snapshot) reaches the gate.
+// T-PS-01: a hidden session is dropped with the gate on (the default), visible
+// still pushes, and gate off (the rollback) pushes both with the shadow counter
+// recording the would-be drop. The event's Instance is Hidden and indexed as
+// hidden: the gate is the only thing between it and the push.
 func TestStatusChangePush_ShouldDeliverZeroHiddenOneVisible_WhenGateOnAndOneWhenOff(t *testing.T) {
 	t.Parallel()
 	run := func(flagOn bool) (hidden, visible int, g *deliverygate.Gate) {
@@ -49,7 +48,7 @@ func TestStatusChangePush_ShouldDeliverZeroHiddenOneVisible_WhenGateOnAndOneWhen
 		n := &mockNotifier{name: "rec"}
 		ctx := context.Background()
 		dedup := newDedupTracker(0)
-		deliverEvent(ctx, stoppedEvent("hidden-sess", false), dedup, []Notifier{n}, g)
+		deliverEvent(ctx, stoppedEvent("hidden-sess", true), dedup, []Notifier{n}, g)
 		hidden = n.CallCount()
 		deliverEvent(ctx, stoppedEvent("visible-sess", false), dedup, []Notifier{n}, g)
 		visible = n.CallCount() - hidden
@@ -66,17 +65,20 @@ func TestStatusChangePush_ShouldDeliverZeroHiddenOneVisible_WhenGateOnAndOneWhen
 	assert.EqualValues(t, 1, g.Metrics().Total(deliverygate.CounterWouldSuppress), "shadow suppression must be counted")
 }
 
-// The legacy Hidden check stays until PR 2b: a hidden instance never pushes a
-// completion whatever the gate says, including with the gate off.
-func TestStatusChangePush_ShouldDropHiddenInstance_WhenGateOffByLegacyCheck(t *testing.T) {
+// A hidden instance the index does not know (the index/instance disagreement a
+// stale seed would cause) fails open: it pushes, and the gate counts it as
+// unresolved so the miss is visible. This is the residual risk of removing the
+// push builder's own Instance.Hidden check.
+func TestStatusChangePush_ShouldFailOpenAndCount_WhenHiddenInstanceMissingFromIndex(t *testing.T) {
 	t.Parallel()
 	g := deliverygate.NewGate(deliverygate.WithFlagLoader(func() (deliverygate.FlagSettings, error) {
-		return deliverygate.FlagSettings{Global: false}, nil
+		return deliverygate.FlagSettings{Global: true}, nil
 	}))
 	g.Flags().Reload()
 	n := &mockNotifier{name: "rec"}
-	deliverEvent(context.Background(), stoppedEvent("hidden-instance", true), newDedupTracker(0), []Notifier{n}, g)
-	assert.Equal(t, 0, n.CallCount())
+	deliverEvent(context.Background(), stoppedEvent("hidden-unindexed", true), newDedupTracker(0), []Notifier{n}, g)
+	assert.Equal(t, 1, n.CallCount())
+	assert.EqualValues(t, 1, g.Metrics().Value(deliverygate.CounterUnresolved, "routine"))
 }
 
 // T-PS-04: an unresolved session fails open.

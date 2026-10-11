@@ -61,20 +61,12 @@ var reviewedConsumers = map[finding]string{
 var reviewedAppendCallers = map[finding]string{}
 
 // reviewedRawHiddenReads are the raw session.Instance.Hidden selector reads in
-// non-test server code. It must shrink to empty when the legacy checks are
-// removed (Story 2.9); a new entry needs a reason that is not "notification".
+// non-test server code. The legacy per-site notification checks were removed
+// in Story 2.9; a new entry needs a reason that is not "notification".
 var reviewedRawHiddenReads = map[finding]string{
 	"hidden: " + modulePath + "/server/services.ListSessions":        "session-list include_hidden filtering, not notification delivery",
 	"hidden: " + modulePath + "/server/services.WatchSessions":       "session-stream include_hidden filtering, not notification delivery",
 	"hidden: " + modulePath + "/server/services.isAutomationSession": "automation-session classification",
-	// Legacy per-site checks, left in place until PR 2b (Story 2.9) deletes them
-	// in the commit that makes the gate default-on.
-	"hidden: " + modulePath + "/server/services.onColdRestoreLostHistory":     "legacy check, removed by Story 2.9",
-	"hidden: " + modulePath + "/server/services.onRateLimitDetected":          "legacy check, removed by Story 2.9",
-	"hidden: " + modulePath + "/server/services.onRateLimitRecoverySucceeded": "legacy check, removed by Story 2.9",
-	"hidden: " + modulePath + "/server/services.onRateLimitRecoveryFailed":    "legacy check, removed by Story 2.9",
-	"hidden: " + modulePath + "/server/services.onAutonomousDriverComplete":   "legacy check, removed by Story 2.9",
-	"hidden: " + modulePath + "/server.OnItemAdded":                           "legacy suppressForHidden input, removed by Story 2.9",
 }
 
 // scanResult holds the findings of one scan, by category.
@@ -308,7 +300,7 @@ func TestSinkGuard_ShouldRequireAllowlistReason_WhenNotifierImplEventNotificatio
 }
 
 // T-MX-07: raw session.Instance.Hidden reads in server non-test code are
-// allowlisted; the legacy checks are the only notification-related readers.
+// allowlisted; none of the remaining readers is notification-related.
 func TestRawHiddenReads_ShouldOnlyAppearInAllowlist_WhenScanningServerNonTestFiles(t *testing.T) {
 	pkgs := loadPackages(t, "./server/...")
 	var product []*packages.Package

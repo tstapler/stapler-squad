@@ -123,10 +123,8 @@ func TestGetDeliveryGateStats_ShouldHaveNoMCPTool_WhenMCPToolsAreScanned(t *test
 }
 
 // T-OB-23: the stats response carries routine_events_while_on, last_off_flip_at
-// and the writable flag, and the Stage 3 prerequisites in the reference doc are
-// written against exactly those fields (an unwritable stats file never
-// satisfies the soak prerequisite).
-func TestStatsResponse_ShouldCarryRoutineEventsWhileOnLastOffFlipAtAndWritableFlag_AndStage3ChecksRequireWritable(t *testing.T) {
+// and the writable flag.
+func TestStatsResponse_ShouldCarryRoutineEventsWhileOnLastOffFlipAtAndWritableFlag(t *testing.T) {
 	t.Parallel()
 	clk := newGateTestClock()
 	var on atomic.Bool
@@ -174,13 +172,4 @@ func TestStatsResponse_ShouldCarryRoutineEventsWhileOnLastOffFlipAtAndWritableFl
 	assert.False(t, m.StatsFileStatus.Writable, "an unwritable stats file is reported as such")
 	writable = true
 	assert.True(t, get().StatsFileStatus.Writable)
-
-	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "reference", "notification-delivery-gate.md"))
-	require.NoError(t, err)
-	stage3 := string(doc)[strings.Index(string(doc), "**Stage 3 prerequisites**"):]
-	stage3 = stage3[:strings.Index(stage3, "**Stage 4")]
-	for _, field := range []string{"soak.soak_streak_hours >= 24", "stats_file_status.writable == true",
-		"failure_delivered_while_on >= 1", "soak.explicit_off_scopes"} {
-		assert.Contains(t, stage3, field, "Stage 3 prerequisites must require %s", field)
-	}
 }

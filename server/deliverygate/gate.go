@@ -369,20 +369,6 @@ func (g *Gate) decideHidden(ch Channel, res Resolution, d Decision, t sessionv1.
 	return true
 }
 
-// CountLegacySuppressed increments the legacy-check counter at one of the
-// legacy hidden-session check sites, labelling the class the policy would give
-// that event (Task 2.4c). It never changes behavior.
-func (g *Gate) CountLegacySuppressed(site string, t sessionv1.NotificationType, hint ClassHint) {
-	d := ShouldDeliver(VisibilityHidden, Facts{Type: t, Hint: hint})
-	g.metrics.Add(CounterLegacySuppressed, site, typeName(t), d.Class.String())
-}
-
-// CountLegacySuppressedType is CountLegacySuppressed for callers that hold the
-// raw int32 notification type (the event shape) and no class hint.
-func (g *Gate) CountLegacySuppressedType(site string, notificationType int32) {
-	g.CountLegacySuppressed(site, sessionv1.NotificationType(notificationType), HintNone)
-}
-
 // CountUnversionedRequest counts a SendNotification without ssq_notify_schema
 // and logs one WARN per hour.
 func (g *Gate) CountUnversionedRequest() {

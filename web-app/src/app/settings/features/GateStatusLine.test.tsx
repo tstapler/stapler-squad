@@ -20,6 +20,7 @@ function stats(): GateStatsLike {
       {
         hourStart: hoursAgo(5),
         counters: [
+          { counter: "suppressed", count: 5n },
           { counter: "would_suppress", count: 7n },
           { counter: "unresolved", count: 2n },
         ],
@@ -32,13 +33,13 @@ function stats(): GateStatsLike {
 describe("summarizeGateStats", () => {
   it("summarizeGateStats_should_CountOnlyBucketsWithinTwentyFourHoursAndUnversionedSinceStart", () => {
     expect(summarizeGateStats(stats(), NOW)).toBe(
-      "Shadow: 10 hidden events would have been suppressed in the last 24h; 2 unresolved fail-open; 4 unversioned ssq-notify",
+      "Last 24h: 5 hidden events suppressed; 10 would have been suppressed (gate off); 2 unresolved fail-open; 4 unversioned ssq-notify",
     );
   });
 
   it("summarizeGateStats_should_ReadZeros_When_NothingRecorded", () => {
     expect(summarizeGateStats({ sinceProcessStart: [], buckets: [] }, NOW)).toBe(
-      "Shadow: 0 hidden events would have been suppressed in the last 24h; 0 unresolved fail-open; 0 unversioned ssq-notify",
+      "Last 24h: 0 hidden events suppressed; 0 would have been suppressed (gate off); 0 unresolved fail-open; 0 unversioned ssq-notify",
     );
   });
 });
@@ -51,7 +52,7 @@ describe("GateStatusLine", () => {
     const fetchStats = jest.fn().mockResolvedValue(stats());
     const { unmount } = render(<GateStatusLine fetchStats={fetchStats} pollMs={1000} />);
     await act(async () => {});
-    expect(screen.getByTestId("gate-status-line").textContent).toMatch(/^Shadow: /);
+    expect(screen.getByTestId("gate-status-line").textContent).toMatch(/^Last 24h: /);
     expect(fetchStats).toHaveBeenCalledTimes(1);
 
     await act(async () => {

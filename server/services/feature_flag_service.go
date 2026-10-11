@@ -286,7 +286,7 @@ var knownFeatureFlags = []struct {
 	{
 		name:         config.HiddenSessionGateFeatureFlag,
 		defaultValue: config.HiddenSessionGateDefault,
-		description:  "Hidden-session delivery gate: a hidden session (review, diagnose) notifies only for failures and needs-human events; routine completions are dropped on every channel. Off keeps today's behavior and only counts what would have been suppressed (see the status line). Can be enabled only while the stats writer runs, so the soak is recorded. Can be overridden per hidden-session kind (review, diagnose, other). Default: off.",
+		description:  "Hidden-session delivery gate: a hidden session (review, diagnose) notifies only for failures and needs-human events; routine completions are dropped on every channel. Turning it off (globally or per kind) is the rollback: hidden sessions then deliver everything and the gate only counts what it would have suppressed (see the status line). Can be enabled only while the stats writer runs, so the evidence is recorded. Can be overridden per hidden-session kind (review, diagnose, other). Default: on.",
 		scopes:       gateFlagScopes(),
 	},
 	{

@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/log"
+	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tokens"
@@ -395,7 +396,9 @@ func (m *CapacityMonitor) stopForGuardrail(ctx context.Context, inst *session.In
 			8, // NOTIFICATION_TYPE_WARNING
 			3, // NOTIFICATION_PRIORITY_HIGH
 			title, msg,
-			map[string]string{"type": kind},
+			// The guardrail terminates the session right after this: a hard stop,
+			// so the gate must deliver it for a hidden session too.
+			map[string]string{"type": kind, pkgevents.MetadataKeyDeliveryClass: pkgevents.DeliveryClassFailure},
 		))
 	}
 	if m.terminator == nil {

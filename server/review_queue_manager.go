@@ -108,10 +108,6 @@ type ReactiveQueueManager struct {
 	// nil-checks before calling.
 	dashboardBaseURLFn func() string
 
-	// legacyHiddenCounter, when set, is told about each hidden-session item
-	// suppressForHidden swallows (observability for the delivery-gate soak).
-	legacyHiddenCounter func(site string, notificationType int32)
-
 	// queueItemGate decides the Slack and webhook-callback sends, which the bus
 	// publish filter does not reach. Nil allows everything.
 	queueItemGate func(ch deliverygate.Channel, sessionID string, metadata map[string]string, notificationType int32) bool
@@ -216,12 +212,6 @@ func (rqm *ReactiveQueueManager) SetSlackNotifier(n SlackNotifierWiring) {
 // exactly like server.go's own hookBaseURLFn wiring.
 func (rqm *ReactiveQueueManager) SetDashboardBaseURLFn(fn func() string) {
 	rqm.dashboardBaseURLFn = fn
-}
-
-// SetLegacyHiddenCounter wires the legacy-suppression counter (see
-// deliverygate.Gate.CountLegacySuppressedType). Optional; nil disables it.
-func (rqm *ReactiveQueueManager) SetLegacyHiddenCounter(fn func(site string, notificationType int32)) {
-	rqm.legacyHiddenCounter = fn
 }
 
 // SetQueueItemGate wires the delivery gate for the Slack and webhook sends
@@ -427,20 +417,15 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 	rqm.publishToClients(event)
 
 	// item.SessionID is the session title (the queue key). Resolve it to the
-	// stable UUID so the web client can match the notification to a session, and
-	// capture the resolved *session.Instance itself so its Hidden flag can gate
-	// notification publishing below (a Hidden session — e.g. a headless
-	// triage/review worker — should not surface routine TASK_COMPLETE/IDLE/STALE
-	// notifications the way a normal user-facing session does).
+	// stable UUID so the web client can match the notification to a session.
+	// Hidden-session suppression is the delivery gate's job (the bus publish
+	// filter and allowQueueItem below), not decided here.
 	resolvedID := item.SessionID
-	var inst *session.Instance
 	if rqm.poller != nil {
-		inst = rqm.poller.FindInstance(item.SessionID)
-		if inst != nil {
+		if inst := rqm.poller.FindInstance(item.SessionID); inst != nil {
 			resolvedID = inst.GetStableID()
 		}
 	}
-	hiddenSession := inst != nil && inst.Hidden
 
 	// linkedItemID is the backlog item ID this session is linked to (if any),
 	// resolved below via a bounded storage lookup. Kept as a local variable —
@@ -463,18 +448,6 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 		}
 	}
 
-	// suppressForHidden narrows notification suppression to the routine reasons a
-	// Hidden (headless/background) session churns through in the ordinary
-	// course of automated work — TASK_COMPLETE/IDLE/STALE. ReasonErrorState and
-	// ReasonTestsFailing must still publish even when Hidden: those indicate a
-	// real problem an operator needs to see regardless of whether the session is
-	// hidden from the default session list/review queue UI.
-	suppressForHidden := hiddenSession && (item.Reason == session.ReasonTaskComplete || item.Reason == session.ReasonIdle || item.Reason == session.ReasonStale)
-	if suppressForHidden && rqm.legacyHiddenCounter != nil {
-		notifType, _ := rqm.mapReviewItemToNotification(item)
-		rqm.legacyHiddenCounter("rqm_suppress_for_hidden", notifType)
-	}
-
 	notifType, notifPriority := rqm.mapReviewItemToNotification(item)
 	metadata := events.SessionScopedMetadata(item.Metadata, linkedItemID)
 
@@ -483,7 +456,7 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 	// broadcasts a richer notification (with the actual command preview and approval UUID)
 	// when the HTTP hook fires. Publishing again here would create a duplicate card in the
 	// notification panel because APPROVAL_NEEDED records are never deduplicated server-side.
-	if rqm.eventBus != nil && item.Reason != session.ReasonApprovalPending && !suppressForHidden {
+	if rqm.eventBus != nil && item.Reason != session.ReasonApprovalPending {
 		notifID := fmt.Sprintf("review-queue-%s-%d", item.SessionID, item.DetectedAt.UnixMilli())
 		title := fmt.Sprintf("%s: %s", item.Reason.String(), item.SessionName)
 		message := item.Context

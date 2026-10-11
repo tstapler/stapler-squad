@@ -36,10 +36,11 @@ func flagUpdateCtx(ctx context.Context, svc *FeatureFlagService, name string, en
 	return err
 }
 
-func TestGateFlag_ShouldBeRegisteredDefaultOffWithStatsWriterDetail_WhenNoWriterRuns(t *testing.T) {
+func TestGateFlag_ShouldBeRegisteredDefaultOnWithStatsWriterDetail_WhenNoWriterRuns(t *testing.T) {
 	svc := newGatedFlagService(t)
-	require.False(t, featureFlagDefault(config.HiddenSessionGateFeatureFlag))
-	assert.Equal(t, statsWriterNotRunning+"; Shadow mode: hidden sessions still notify; would-suppress counts are logged",
+	require.True(t, featureFlagDefault(config.HiddenSessionGateFeatureFlag))
+	assert.True(t, svc.DeliveryGate().Flags().Enabled(), "the cache and the registry agree on the default")
+	assert.Equal(t, statsWriterNotRunning,
 		statusDetailOf(t, svc.featureFlagSvc, config.HiddenSessionGateFeatureFlag))
 }
 
@@ -48,14 +49,15 @@ func TestGateFlag_ShouldRefuseEnableWhileStatsWriterNotRunningAndNeverRefuseDisa
 	ctx := context.Background()
 	gate := svc.DeliveryGate()
 
+	require.NoError(t, gateFlagUpdate(svc, ctx, false), "disabling is never refused by the precondition")
+	assert.False(t, gate.Flags().Enabled())
+
 	err := gateFlagUpdate(svc, ctx, true)
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
-	_, persisted := config.LoadConfig().GetFeatureFlagOverride(config.HiddenSessionGateFeatureFlag)
-	assert.False(t, persisted, "a refused enable persists nothing")
+	val, _ := config.LoadConfig().GetFeatureFlagOverride(config.HiddenSessionGateFeatureFlag)
+	assert.False(t, val, "a refused enable leaves the explicit false in place")
 	assert.False(t, gate.Flags().Enabled())
-
-	require.NoError(t, gateFlagUpdate(svc, ctx, false), "disabling is never refused by the precondition")
 
 	gate.Stats().SetWriterRunning(true)
 	require.NoError(t, gateFlagUpdate(svc, ctx, true))
@@ -109,7 +111,7 @@ func TestUpdateFeatureFlag_ShouldAppendFlagChangeLineForEveryHiddenSessionGateFl
 		require.NotNil(t, al.Previous)
 		prevs = append(prevs, *al.Previous)
 	}
-	assert.Equal(t, []bool{false, true, false}, prevs, "true previous values: default off, then on, then off")
+	assert.Equal(t, []bool{true, true, false}, prevs, "true previous values: default on, then on, then off")
 	assert.True(t, bytes.HasSuffix(raw, []byte("\n")))
 }
 
@@ -131,5 +133,5 @@ func TestGateFlag_ShouldNeverRefuseDisablingClearScopeOrResetGlobal_WhenStatsWri
 		_, err := mutateFlag(ff, config.HiddenSessionGateFeatureFlag, m.m, m.scope)
 		require.NoError(t, err, "%v %q", m.m, m.scope)
 	}
-	assert.False(t, svc.DeliveryGate().Flags().Enabled())
+	assert.True(t, svc.DeliveryGate().Flags().Enabled(), "reset returns to the default, which is on")
 }
