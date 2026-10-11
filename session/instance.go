@@ -2290,7 +2290,9 @@ func (i *Instance) worktreeNeedsCommit() (bool, error) {
 }
 
 // commitBeforeRemove re-checks after the agent's tmux session is gone (it could
-// write between the first check and teardown) and commits anything found.
+// write between the first check and teardown) and commits anything found. A
+// failure here leaves tmux already killed but the worktree intact; a retry of
+// pause/stop is safe and goes through the same checks.
 func (i *Instance) commitBeforeRemove(commitMsg string) error {
 	needs, err := i.worktreeNeedsCommit()
 	if err != nil {
@@ -2363,7 +2365,9 @@ func pauseLocked(s *instanceState) error {
 	if i.IsWorktree {
 		if _, err := os.Stat(i.gitManager.GetWorktreePath()); err == nil {
 			if err := i.commitBeforeRemove(fmt.Sprintf("[claudesquad] update from '%s' on %s (paused)", i.Title, time.Now().Format(time.RFC822))); err != nil {
-				return i.combineErrors(append(errs, err))
+				// Return err bare: combineErrors would flatten it and lose errors.Is.
+				log.Warn("aborting before worktree removal; worktree kept", "session", i.Title, "prior_errs", errs, "err", err)
+				return err
 			}
 			if err := i.gitManager.Remove(); err != nil {
 				errs = append(errs, fmt.Errorf("failed to remove git worktree: %w", err))
@@ -2553,7 +2557,9 @@ func stopByUserLocked(s *instanceState) error {
 	if i.IsWorktree {
 		if _, err := os.Stat(i.gitManager.GetWorktreePath()); err == nil {
 			if err := i.commitBeforeRemove(fmt.Sprintf("[claudesquad] update from '%s' on %s (stopped)", i.Title, time.Now().Format(time.RFC822))); err != nil {
-				return i.combineErrors(append(errs, err))
+				// Return err bare: combineErrors would flatten it and lose errors.Is.
+				log.Warn("aborting before worktree removal; worktree kept", "session", i.Title, "prior_errs", errs, "err", err)
+				return err
 			}
 			if err := i.gitManager.Remove(); err != nil {
 				return i.combineErrors(append(errs, fmt.Errorf("failed to remove git worktree: %w", err)))

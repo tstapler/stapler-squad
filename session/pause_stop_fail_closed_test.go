@@ -134,3 +134,13 @@ func TestWorktreeNeedsCommit_should_ReachCommit_When_DirtyCacheIsStaleClean(t *t
 	_, err = commit.File("late.txt")
 	require.NoError(t, err, "late.txt must be committed despite the stale clean cache")
 }
+
+func TestCommitBeforeRemove_should_FailClosed_When_DirtyCheckErrors(t *testing.T) {
+	t.Parallel()
+	inst, precious := brokenWorktreeInstance(t)
+
+	err := inst.commitBeforeRemove("msg")
+
+	require.ErrorIs(t, err, ErrDirtyStateUnknown)
+	assert.FileExists(t, precious)
+}
