@@ -365,6 +365,16 @@ func (gm *GitWorktreeManager) IsDirty() (bool, error) {
 	return wt.IsDirty()
 }
 
+// IsDirtyUncached is IsDirty without the TTL cache. Use it where a stale "clean"
+// would be destructive (pause/stop remove the worktree).
+func (gm *GitWorktreeManager) IsDirtyUncached() (bool, error) {
+	wt := gm.GetWorktree()
+	if wt == nil {
+		return false, fmt.Errorf("git worktree not initialized")
+	}
+	return wt.IsDirtyUncached()
+}
+
 // InvalidateDirtyCache clears the IsDirty TTL cache so the next call re-runs git status.
 // Call after transitions that may change worktree dirty state (Resume, Stop).
 // No-op if no worktree is set.
@@ -522,6 +532,7 @@ type GitManager interface {
 	Remove() error
 	Prune() error
 	IsDirty() (bool, error)
+	IsDirtyUncached() (bool, error)
 	InvalidateDirtyCache()
 	CommitChanges(commitMsg string) error
 	PushChanges(commitMsg string, open bool) error
