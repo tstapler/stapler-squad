@@ -27,6 +27,7 @@ import (
 type Backend struct {
 	local  backend.Runner
 	spawns *backend.SpawnCounter
+	remote bool
 }
 
 // Option configures New.
@@ -57,6 +58,7 @@ type target struct {
 	runner backend.Runner
 	dir    string
 	spawns *backend.SpawnCounter
+	remote bool
 }
 
 func (b *Backend) resolve(loc backend.RepoLocation) (target, error) {
@@ -76,7 +78,7 @@ func (b *Backend) resolve(loc backend.RepoLocation) (target, error) {
 		if l.Path == "" {
 			return target{}, fmt.Errorf("%w: empty remote path", backend.ErrInvalidArgument)
 		}
-		return target{runner: l.Runner, dir: string(l.Path), spawns: b.spawns}, nil
+		return target{runner: l.Runner, dir: string(l.Path), spawns: b.spawns, remote: true}, nil
 	default:
 		return target{}, fmt.Errorf("%w: unsupported location %T", backend.ErrInvalidArgument, loc)
 	}
@@ -114,7 +116,7 @@ func (t target) exec(ctx context.Context, op backend.OperationName, strip bool, 
 		err error
 	)
 	// The one sanctioned git spawn site: every Run of git is counted here, once.
-	t.spawns.Count(ctx, op)
+	t.spawns.Count(ctx, op, t.remote)
 	if sr, ok := t.runner.(backend.StdoutRunner); ok {
 		out, err = sr.RunStdout(ctx, t.dir, "git", args...)
 	} else {

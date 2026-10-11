@@ -92,8 +92,11 @@ func TestSpawnLabels(t *testing.T) {
 		{"unknown operation is not a label", backend.WithCallInfo(context.Background(), backend.CallInfo{Op: "rm -rf /", Reason: backend.ReasonConfig}), backend.OpLog, backend.OpLog, backend.SpawnReasonUnattributed},
 		{"unknown served op", context.Background(), "weird", "unknown", backend.SpawnReasonUnattributed},
 	}
+	if op, reason := backend.SpawnLabels(context.Background(), backend.OpLog, true); op != backend.OpLog || reason != backend.ReasonRemoteHost {
+		t.Errorf("remote without call info: got (%s,%s), want remote_host", op, reason)
+	}
 	for _, c := range cases {
-		op, reason := backend.SpawnLabels(c.ctx, c.served)
+		op, reason := backend.SpawnLabels(c.ctx, c.served, false)
 		if op != c.wantOp || reason != c.wantReason {
 			t.Errorf("%s: got (%s,%s), want (%s,%s)", c.name, op, reason, c.wantOp, c.wantReason)
 		}
@@ -215,6 +218,14 @@ func TestSpawnCounterAllowList(t *testing.T) {
 			r, rig := spawnRouter(t, allCohorts(backend.BackendCLI), nil, nil)
 			return r, rig, backend.Remote{Host: "h", Path: "/p", Runner: &quietRunner{}}
 		}},
+		"direct cli remote, no router": {want: backend.ReasonRemoteHost, build: func(t *testing.T) (backend.Backend, *metricsRig, backend.RepoLocation) {
+			rig, mp := newMetricsRig(t)
+			return cli.New(nil, cli.WithMeter(mp.Meter("test"))), rig, backend.Remote{Host: "h", Path: "/p", Runner: &quietRunner{}}
+		}},
+		"direct cli, remote, no router": {want: backend.ReasonRemoteHost, build: func(t *testing.T) (backend.Backend, *metricsRig, backend.RepoLocation) {
+			rig, mp := newMetricsRig(t)
+			return cli.New(nil, cli.WithMeter(mp.Meter("test"))), rig, backend.Remote{Host: "h", Path: "/p", Runner: &quietRunner{}}
+		}},
 		"direct cli, no router": {want: backend.SpawnReasonUnattributed, build: func(t *testing.T) (backend.Backend, *metricsRig, backend.RepoLocation) {
 			rig, mp := newMetricsRig(t)
 			return cli.New(&quietRunner{}, cli.WithMeter(mp.Meter("test"))), rig, backend.Local{Root: "/repo"}
@@ -243,6 +254,9 @@ func TestSpawnCounterAllowList(t *testing.T) {
 			}
 			if spawned < 10 {
 				t.Fatalf("only %d methods spawned; the sweep is not exercising the backend", spawned)
+			}
+			if name != "direct cli, no router" && sumFor(rig.points(backend.MetricCLISpawnTotal), "reason", string(backend.SpawnReasonUnattributed)) != 0 {
+				t.Errorf("a routed or remote call produced unattributed spawns: %v", rig.points(backend.MetricCLISpawnTotal))
 			}
 			for _, p := range rig.points(backend.MetricCLISpawnTotal) {
 				if len(p.labels) != 2 {

@@ -52,7 +52,8 @@ func TestGitSubcommand(t *testing.T) {
 		{[]string{"-c", "core.quotepath=off", "diff", "--numstat"}, "diff"},
 		{[]string{"--git-dir", "/r/.git", "--work-tree", "/r", "log"}, "log"},
 		{[]string{"--git-dir=/r/.git", "--no-pager", "-C", "x", "-c", "a=b", "worktree", "list"}, "worktree"},
-		{[]string{"-C", "status", "fetch"}, "fetch"}, // "status" is the -C value, not the subcommand
+		{[]string{"--exec-path", "status"}, "status"}, // bare --exec-path takes no value
+		{[]string{"-C", "status", "fetch"}, "fetch"},  // "status" is the -C value, not the subcommand
 		{[]string{"-c", "diff", "show"}, "show"},
 		{[]string{"--no-optional-locks", "-p", "rev-parse", "HEAD"}, "rev-parse"},
 		{[]string{"https://u:tok@host/x.git"}, "other"},

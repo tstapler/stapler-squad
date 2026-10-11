@@ -52,25 +52,32 @@ func NewSpawnCounter(meter metric.Meter) *SpawnCounter {
 }
 
 // SpawnLabels resolves the (operation, reason) labels for one spawn. The Router's CallInfo
-// wins; without one the spawn is attributed to servedOp under SpawnReasonUnattributed. A
-// CallInfo naming an operation or reason outside the closed enums is treated as absent, so a
-// label can never carry free text.
-func SpawnLabels(ctx context.Context, servedOp OperationName) (OperationName, FallbackReason) {
+// wins. Without one, a remote run is still reason remote_host (it never starts a local git, so
+// the gate must not see it as an unattributed local spawn) and a local run is attributed to
+// servedOp under SpawnReasonUnattributed. A CallInfo naming an operation or reason outside the
+// closed enums is treated as absent, so a label can never carry free text.
+func SpawnLabels(ctx context.Context, servedOp OperationName, remote bool) (OperationName, FallbackReason) {
 	if info, ok := CallInfoFrom(ctx); ok && HasCohort(info.Op) && info.Reason.Known() {
 		return info.Op, info.Reason
 	}
-	if !HasCohort(servedOp) {
-		return "unknown", SpawnReasonUnattributed
+	reason := SpawnReasonUnattributed
+	if remote {
+		reason = ReasonRemoteHost
 	}
-	return servedOp, SpawnReasonUnattributed
+	if !HasCohort(servedOp) {
+		return "unknown", reason
+	}
+	return servedOp, reason
 }
 
-// Count records one git process start for a call to servedOp.
-func (s *SpawnCounter) Count(ctx context.Context, servedOp OperationName) {
+// Count records one git process start for a call to servedOp. It is called just before the
+// Runner runs, so a Run that fails to start still counts: the counter means "git was asked to
+// start", and the gate compares it with the backstop, which counts at the same point.
+func (s *SpawnCounter) Count(ctx context.Context, servedOp OperationName, remote bool) {
 	if s == nil || s.counter == nil {
 		return
 	}
-	op, reason := SpawnLabels(ctx, servedOp)
+	op, reason := SpawnLabels(ctx, servedOp, remote)
 	s.counter.Add(ctx, 1, metric.WithAttributes(
 		attribute.String("operation", string(op)),
 		attribute.String("reason", string(reason))))
@@ -83,7 +90,7 @@ const backendPkgPrefix = "github.com/tstapler/stapler-squad/session/git/backend"
 
 func dumpSpawn(path string, op OperationName, reason FallbackReason) {
 	line := fmt.Sprintf("backend %s operation=%s reason=%s\n", callerOutsideBackend(), op, reason)
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G304 -- test-only diagnostic path chosen by the developer's environment
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G304 -- SSQ_GIT_SPAWN_DUMP is a developer-set, test-only variable; anyone who controls the service environment already controls the process
 	if err != nil {
 		return
 	}

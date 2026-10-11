@@ -15,7 +15,7 @@ var (
 	// credential-helper protocol lines (git credential fill/get output): password=..., etc.
 	helperSecret = regexp.MustCompile(`(?im)^(\s*(?:password|oauth_refresh_token|authtoken|bearer)\s*=)[^\r\n]*`)
 	// the same keys mid-line (key=value pairs in a log line) and bare "Bearer <token>".
-	inlineSecret = regexp.MustCompile(`(?i)(\b(?:password|oauth_refresh_token|authtoken)=)[^\s'"&]+`)
+	inlineSecret = regexp.MustCompile(`(?i)(\b(?:password|passwd|oauth_refresh_token|authtoken|secret|access_token|token)=)[^\s'"&;]+`)
 	bearerToken  = regexp.MustCompile(`(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]{8,}`)
 	// bare GitHub tokens (classic, fine-grained) outside a URL.
 	githubToken = regexp.MustCompile(`\b(?:gh[pousr]_[A-Za-z0-9_]{6,}|github_pat_[A-Za-z0-9_]{6,})\b`)

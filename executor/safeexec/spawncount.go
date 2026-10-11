@@ -41,7 +41,10 @@ func newBackstopCounter(meter metric.Meter) metric.Int64Counter {
 
 func isGit(name string) bool { return name == "git" || filepath.Base(name) == "git" }
 
-// recordGitSpawn counts one git process and, when SpawnDumpEnv is set, logs its caller.
+// recordGitSpawn counts one git process and, when SpawnDumpEnv is set, logs its caller. It
+// runs when the command is built, not when it starts: every caller in this repo runs what it
+// builds, and counting here covers CommandContextPG, which wraps CommandContext. A command built
+// and never run over-counts, which can only trip the gate, never hide a bypass.
 func recordGitSpawn(ctx context.Context, name string, args []string) {
 	if !isGit(name) {
 		return
@@ -54,7 +57,7 @@ func recordGitSpawn(ctx context.Context, name string, args []string) {
 }
 
 func dumpExec(path, sub string) {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G304 -- test-only diagnostic path chosen by the developer's environment
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G304 -- SSQ_GIT_SPAWN_DUMP is a developer-set, test-only variable; anyone who controls the service environment already controls the process
 	if err != nil {
 		return
 	}
@@ -99,25 +102,25 @@ func isSpawnPlumbing(fn string) bool {
 // as --opt=value.
 var gitOptionsWithArg = map[string]bool{
 	"-C": true, "-c": true, "--git-dir": true, "--work-tree": true, "--namespace": true,
-	"--exec-path": true, "--super-prefix": true, "--config-env": true, "--attr-source": true,
+	"--config-env": true, "--attr-source": true, // --exec-path and --super-prefix only take the =value form
 }
 
 // gitSubcommands is the closed label set for the backstop counter. Anything else is "other",
 // so an arbitrary argument can never become a label value.
 var gitSubcommands = map[string]bool{
 	"add": true, "apply": true, "archive": true, "bisect": true, "blame": true, "branch": true,
-	"cat-file": true, "check-ignore": true, "checkout": true, "cherry-pick": true, "clean": true,
+	"cat-file": true, "check-ignore": true, "check-ref-format": true, "commit-tree": true, "credential": true, "checkout": true, "cherry-pick": true, "clean": true,
 	"clone": true, "commit": true, "config": true, "count-objects": true, "describe": true,
 	"diff": true, "diff-files": true, "diff-index": true, "diff-tree": true, "fetch": true,
 	"for-each-ref": true, "format-patch": true, "fsck": true, "gc": true, "grep": true,
 	"hash-object": true, "init": true, "log": true, "ls-files": true, "ls-remote": true,
-	"ls-tree": true, "merge": true, "merge-base": true, "merge-file": true, "merge-tree": true,
+	"lfs": true, "ls-tree": true, "maintenance": true, "name-rev": true, "notes": true, "pack-refs": true, "prune": true, "merge": true, "merge-base": true, "merge-file": true, "merge-tree": true,
 	"mv": true, "pull": true, "push": true, "read-tree": true, "rebase": true, "reflog": true,
 	"remote": true, "repack": true, "reset": true, "restore": true, "rev-list": true,
 	"rev-parse": true, "revert": true, "rm": true, "show": true, "show-ref": true,
 	"sparse-checkout": true, "stash": true, "status": true, "submodule": true, "switch": true,
 	"symbolic-ref": true, "tag": true, "unpack-file": true, "update-index": true, "update-ref": true,
-	"version": true, "check-attr": true, "commit-tree": true, "name-rev": true, "notes": true,
+	"version": true, "check-attr": true,
 	"mktree": true, "shortlog": true, "var": true, "for-each-repo": true, "worktree": true, "write-tree": true,
 }
 
