@@ -43,6 +43,7 @@ const SHIFT_KEY_MAP: Record<string, string> = {
   '\x1b[6~': '\x1b[6;2~',  // Shift+PgDn
 };
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
+import { useAnnounce } from "@/lib/hooks/useAnnounce";
 import { useVisibilityResync } from "./useVisibilityResync";
 import { useBrowserLogStream } from "@/lib/hooks/useBrowserLogStream";
 import { useHandedness } from "@/lib/hooks/useHandedness";
@@ -100,6 +101,12 @@ interface TerminalOutputProps {
    * preserves exact pre-Epic-6.1 behavior — see useVisibilityResync.ts.
    */
   scheduleResync?: (fire: () => void, opts: { preempt: boolean }) => void;
+  /**
+   * Hidden-session view (Story 5.3): xterm `disableStdin`, no Input or Resize
+   * frames, no keyboard toolbar, paste or upload. The server enforces the same
+   * rule (Story 5.1); this is the client half, never the guarantee.
+   */
+  readOnly?: boolean;
 }
 
 // Minimum dimensions considered "real" — anything smaller is a transient value
@@ -114,6 +121,9 @@ const MIN_ROWS = 10;
 // and are not used for fast-connect. The actual container size arrives via onResize.
 const XTERM_DEFAULT_COLS = 80;
 const XTERM_DEFAULT_ROWS = 24;
+
+// Read-only view: a keypress announces "Read-only session" at most once per this window (design/ux.md Surface 12).
+const READ_ONLY_HINT_INTERVAL_MS = 10_000;
 
 // Story 2.3 — coalescing window for InputDropBadge drop episodes (design/ux.md §2.2).
 const DROP_EPISODE_COALESCE_WINDOW_MS = 400;
@@ -146,8 +156,9 @@ function blockedToastCopy(reason: ScrollBlockedReason, program: string): string 
   }
 }
 
-export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSessionName, isVisible, shellId, onShellStatusChange, scheduleResync }: TerminalOutputProps) {
+export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSessionName, isVisible, shellId, onShellStatusChange, scheduleResync, readOnly = false }: TerminalOutputProps) {
   const { track } = useAnalytics();
+  const { announce } = useAnnounce();
   const { clearForSession, refresh: refreshApprovals, pendingCount } = useApprovalsContext();
   const { leftHanded, toggleHandedness } = useHandedness();
   const terminalContainerRef = useRef<HTMLDivElement>(null);
@@ -1074,6 +1085,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     onInputDropped: reportDroppedInput,
     foreground: isVisible,
     outstandingResyncIdsRef,
+    readOnly,
   });
 
   // Lightweight, single-purpose RPC client for the worktree-missing hard-fail
@@ -1241,10 +1253,19 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   }, [sendInput, clearForSession, sessionId, refreshApprovals, pendingCount]);
 
   // User keystrokes and pastes move the app's own position, so the estimate no longer holds.
+  const lastReadOnlyHintRef = useRef(0);
   const handleTerminalData = useCallback((data: string) => {
+    if (readOnly) {
+      const now = Date.now();
+      if (now - lastReadOnlyHintRef.current >= READ_ONLY_HINT_INTERVAL_MS) {
+        lastReadOnlyHintRef.current = now;
+        announce("Read-only session", "polite", "terminal-read-only-hint");
+      }
+      return;
+    }
     netPagesUp.invalidate("keystroke");
     deliverTerminalData(data);
-  }, [netPagesUp, deliverTerminalData]);
+  }, [netPagesUp, deliverTerminalData, readOnly, announce]);
 
   // Scroll route shared by the toolbar PgUp/PgDn (and later the chip and jump button).
   // XtermTerminal reports the live mode upward only when it changes.
@@ -1683,6 +1704,14 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     onAltScreenScrollUp,
     scrollGesture: scrollGestureProps,
     onScrollModeChange: handleScrollModeChange,
+  });
+
+  // Read-only view: xterm itself stops emitting keystrokes. handleTerminalData and the flow-control
+  // hook drop anything that still gets through, and the server drops it again (Story 5.1).
+  // The pooled xterm mounts lazily, so this re-checks on every render (a cheap property compare).
+  useEffect(() => {
+    const options = xtermRef.current?.terminal?.options;
+    if (options && options.disableStdin !== readOnly) options.disableStdin = readOnly;
   });
 
   // Task 2.3.1 — DOM scroll listener to detect near-top-of-buffer and trigger paged history load.
@@ -2224,7 +2253,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     (appliedTerminal.cols !== lastResizeRef.current.cols || appliedTerminal.rows !== lastResizeRef.current.rows)
   );
 
-  const secondaryActions = [
+  const allSecondaryActions = [
     {
       key: 'copy',
       icon: '📋',
@@ -2295,11 +2324,12 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       },
     },
   ];
+  const secondaryActions = readOnly ? allSecondaryActions.filter((a) => a.key !== 'paste') : allSecondaryActions;
 
   const isConnectingState = terminalState === "CONNECTING" || terminalState === "LOADING";
 
   // Rendered in both the desktop toolbar and the mobile overflow row; the hidden file <input>s stay in toolbarActions. The overflow row stays open on click so upload status on the Gallery label remains visible.
-  const renderUploadButtons = () => (
+  const renderUploadButtons = () => readOnly ? null : (
     <>
       <button
         className={styles.toolbarButton}
@@ -2393,16 +2423,18 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           >
             {toolbarExpanded ? '✕' : '⋯'}
           </button>
-          {/* Keyboard toggle — always visible so users can find it without expanding toolbar */}
-          <button
-            className={`${styles.toolbarButton} ${styles.mobileKeyboardToggle}`}
-            onClick={toggleMobileKeyboard}
-            aria-label={isKeyboardVisible ? "Hide mobile keyboard" : "Show mobile keyboard"}
-            aria-expanded={isKeyboardVisible}
-            title={isKeyboardVisible ? "Hide mobile keyboard" : "Show mobile keyboard"}
-          >
-            ⌨️
-          </button>
+          {/* Keyboard toggle — always visible so users can find it without expanding toolbar; absent in a read-only view */}
+          {!readOnly && (
+            <button
+              className={`${styles.toolbarButton} ${styles.mobileKeyboardToggle}`}
+              onClick={toggleMobileKeyboard}
+              aria-label={isKeyboardVisible ? "Hide mobile keyboard" : "Show mobile keyboard"}
+              aria-expanded={isKeyboardVisible}
+              title={isKeyboardVisible ? "Hide mobile keyboard" : "Show mobile keyboard"}
+            >
+              ⌨️
+            </button>
+          )}
           {/* Reconnect always visible when needed, regardless of toolbar state */}
           {showReconnectButton && (
             <button
@@ -2757,7 +2789,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           Row 2: TAB CTRL ALT ← ↓ → PGDN
           Row 3: ^C  ^D  ^Z  ^L  ^R  ^W  ^U  (direct Ctrl sequences, no sticky needed)
           CTRL and ALT are sticky: tap to arm, next key fires the modified sequence. */}
-      {isKeyboardVisible && (
+      {isKeyboardVisible && !readOnly && (
         <div className={styles.mobileKeyboard}>
           <div className={styles.mobileKeyRow}>
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b'); }} aria-label="Escape" data-testid="mobile-key">Esc</button>

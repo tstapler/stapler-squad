@@ -759,6 +759,10 @@ type Instance struct {
 	// snapshot-tracked field.
 	scrollLease scrollLease
 
+	// writeLease is the per-instance terminal write lease (instance_write_lease.go);
+	// transient orchestration state like scrollLease, so not in InstanceSnapshot.
+	writeLease writeLeaseState
+
 	// destroyed is set by Destroy() so a SessionDriver goroutine that outlives
 	// its own teardown (session_driver.go's loop only self-terminates on a
 	// 25-minute wall-clock deadline or a detected terminal status, both of

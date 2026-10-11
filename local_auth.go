@@ -50,7 +50,7 @@ func setupLocalAuth(srv *server.Server, cfg *config.Config, withStatusRoute bool
 	sessions := sharedAuthSessions(configDir)
 	validator := serverauth.NewLocalValidator(sessions, token)
 	serverauth.RegisterLocalLoginRoutes(srv.Mux(), serverauth.NewLocalLogin(sessions, validator), withStatusRoute)
-	srv.SetupAuth(middleware.Auth(validator))
+	srv.SetupAuth(middleware.Auth(validator), middleware.AuthRequires(validator))
 	log.Info("local listener auth enabled", "token_file", localtoken.Path(configDir))
 	return nil
 }

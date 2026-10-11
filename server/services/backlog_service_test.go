@@ -53,14 +53,31 @@ import (
 // own per-PID test isolation and fails session creation with an unrelated
 // "Session.program" validator error.
 func TestMain(m *testing.M) {
+	netGuard := envtest.DenyNonLoopbackNetwork()
+	restoreClaudeCLI, err := envtest.IsolateClaudeCLI()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "TestMain: %v\n", err)
+		os.Exit(1)
+	}
+	lookupIPAddr = hermeticLookupIPAddr
 	headless.DefaultCapabilitySelfCheck = headless.NewPassedCapabilitySelfCheckForTesting()
 	restore := envtest.ClearAmbientGitHubTokenEnv()
 	restoreState := envtest.ClearAmbientStaplerSquadStateEnv()
 	reapLeakedTmuxTestServers()
 	startTmuxTestServerWatchdog()
+	// Before any test's goleak.IgnoreCurrent() baseline: see the function's doc comment.
+	if err := session.WarmTestEntRepositoryTemplate(); err != nil {
+		fmt.Fprintf(os.Stderr, "TestMain: warm test ent repository template: %v\n", err)
+		os.Exit(1)
+	}
 	code := m.Run()
 	restoreState()
 	restore()
+	restoreClaudeCLI()
+	if report := netGuard.Report(); report != "" {
+		fmt.Fprint(os.Stderr, report)
+		code = 1
+	}
 	os.Exit(code)
 }
 
@@ -339,6 +356,14 @@ type mockSessionSteerer struct {
 	// write is recorded). Absent uuids delegate to recordSteer.
 	guardedOutcome map[string]SteerOutcome
 	guardedSigs    []string
+	// hidden marks uuids whose IsHiddenSession must return true.
+	hidden map[string]bool
+}
+
+func (m *mockSessionSteerer) IsHiddenSession(uuid string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.hidden[uuid]
 }
 
 type mockSteerCall struct {

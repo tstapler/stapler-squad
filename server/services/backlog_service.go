@@ -99,6 +99,11 @@ type SessionStopper interface {
 // not wired, mirroring SessionStopper.
 type SessionSteerer interface {
 	SessionProgram(sessionUUID string) (program string, ok bool)
+	// IsHiddenSession reports whether sessionUUID is a live hidden
+	// (background) session. The automated steers refuse such a target: they
+	// write to the item's work session, never to a hidden review, diagnose or
+	// triage session (Story 5.1d, T-RO-39).
+	IsHiddenSession(sessionUUID string) bool
 	// IsReadyForSteer reports whether sessionUUID's pane is confirmed idle
 	// and safe for an unattended PTY write. False — including when
 	// readiness can't be determined — means the caller must not steer (see

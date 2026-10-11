@@ -36,6 +36,12 @@ export interface UseTerminalFlowControlOptions {
    * reset.
    */
   outstandingResyncIdsRef?: React.MutableRefObject<Map<string, number>>;
+  /**
+   * Hidden-session view: sends no Input and no Resize frame (Story 5.3). The
+   * server enforces the same rule (Story 5.1); this keeps the client honest.
+   * Pane-capture requests still go out, they only read.
+   */
+  readOnly?: boolean;
 }
 
 export interface UseTerminalFlowControlResult {
@@ -71,8 +77,11 @@ export function useTerminalFlowControl({
   isConnectedRef,
   onError,
   outstandingResyncIdsRef,
+  readOnly = false,
 }: UseTerminalFlowControlOptions): UseTerminalFlowControlResult {
   const correlationIdEnabled = useFeatureFlag(RESYNC_CORRELATION_ID_FLAG);
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
 
   // Resync state machine refs. Hold the pending resync's generated tracking
   // ID (null when no resync is pending) rather than a plain boolean — Epic
@@ -226,6 +235,7 @@ export function useTerminalFlowControl({
   const CHUNK_DELAY_MS = 10;   // ms between chunks — yields event loop without stalling input
 
   const sendInput = useCallback((input: string) => {
+    if (readOnlyRef.current) return;
     if (!ensureConnected("send input")) return;
 
     const encoder = new TextEncoder();
@@ -311,17 +321,19 @@ export function useTerminalFlowControl({
   // value as the last one actually sent.
   const sendSettledResize = useCallback((cols: number, rows: number): boolean => {
     if (!pushMessageRef.current || !isConnectedRef.current) return false;
-    try {
-      console.log(`[useTerminalFlowControl] Sending resize to server: ${cols}x${rows}`);
-      pushMessage(
-        create(TerminalDataSchema, {
-          sessionId,
-          data: { case: "resize", value: create(TerminalResizeSchema, { cols, rows }) },
-        })
-      );
-    } catch (err) {
-      handleError(err);
-      return false;
+    if (!readOnlyRef.current) {
+      try {
+        console.log(`[useTerminalFlowControl] Sending resize to server: ${cols}x${rows}`);
+        pushMessage(
+          create(TerminalDataSchema, {
+            sessionId,
+            data: { case: "resize", value: create(TerminalResizeSchema, { cols, rows }) },
+          })
+        );
+      } catch (err) {
+        handleError(err);
+        return false;
+      }
     }
 
     // After resizing, request fresh terminal content

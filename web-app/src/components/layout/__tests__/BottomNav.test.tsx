@@ -53,8 +53,9 @@ jest.mock("@/lib/hooks/useHandedness", () => ({
 }));
 
 // Mock FeatureFlagsContext
+const mockFlags: Record<string, boolean> = {};
 jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
-  useFeatureFlags: () => ({ flags: {} }),
+  useFeatureFlags: () => ({ flags: mockFlags }),
 }));
 
 // Mock the CSS module
@@ -146,6 +147,21 @@ describe("BottomNav", () => {
 
     const sessionsLink = screen.getByText("Sessions").closest("a");
     expect(sessionsLink).not.toHaveAttribute("aria-current", "page");
+  });
+
+  it("more_sheet_should_list_notifications_row_that_opens_the_tray_when_tray_flag_on", () => {
+    mockFlags.notification_tray_v2 = true;
+    render(<BottomNav />);
+    const row = screen.getByTestId("more-notifications");
+    expect(row).toHaveTextContent("Notifications (0)");
+    fireEvent.click(row);
+    expect(mockTogglePanel).toHaveBeenCalledTimes(1);
+    delete mockFlags.notification_tray_v2;
+  });
+
+  it("more_sheet_should_omit_notifications_row_when_tray_flag_off", () => {
+    render(<BottomNav />);
+    expect(screen.queryByTestId("more-notifications")).toBeNull();
   });
 
   it("renders the More button", () => {

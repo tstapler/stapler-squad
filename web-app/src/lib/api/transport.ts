@@ -5,6 +5,7 @@ import { createSessionWatchTransport } from "@/lib/transport/watch-ws-transport"
 
 let _transport: Transport | null = null;
 let _watchTransport: Transport | null = null;
+let _keepaliveTransport: Transport | null = null;
 
 /**
  * Every unary RPC through this transport sends a Connect-Timeout-Ms header
@@ -40,6 +41,24 @@ export function getConnectTransport(): Transport {
 }
 
 /**
+ * A unary transport whose requests use `fetch(..., { keepalive: true })`, so a
+ * request started as the page hides or unloads still reaches the server. Bodies
+ * must stay under the browser's 64KB keepalive limit; only use it for small
+ * "complete this action now" RPCs (the tray's deferred clear).
+ */
+export function getKeepaliveConnectTransport(): Transport {
+  if (!_keepaliveTransport) {
+    _keepaliveTransport = createConnectTransport({
+      baseUrl: getApiBaseUrl(),
+      defaultTimeoutMs: DEFAULT_RPC_TIMEOUT_MS,
+      interceptors: [createAuthInterceptor()],
+      fetch: (input, init) => fetch(input, { ...init, keepalive: true }),
+    });
+  }
+  return _keepaliveTransport;
+}
+
+/**
  * Returns the shared transport singleton for server-streaming Watch* RPCs.
  *
  * Selects WebSocket-bridge vs. native ConnectRPC streaming per
@@ -61,4 +80,5 @@ export function getWatchTransport(): Transport {
 export function _resetTransportForTesting(): void {
   _transport = null;
   _watchTransport = null;
+  _keepaliveTransport = null;
 }

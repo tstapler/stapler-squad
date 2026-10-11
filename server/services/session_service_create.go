@@ -927,6 +927,9 @@ func (s *SessionService) CreateSession(
 		}
 	}
 
+	// Index before the async start below so the first hook resolves.
+	s.indexSessionForDelivery(instance)
+
 	// Add the session to the poller so WatchSessions picks it up immediately.
 	if s.reviewQueuePoller != nil {
 		s.reviewQueuePoller.AddInstance(instance)

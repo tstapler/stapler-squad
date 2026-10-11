@@ -98,6 +98,17 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   send_back_idea: "Sent back to triage.",
 };
 
+/**
+ * The server refuses a steer to a hidden review session when it cannot write
+ * the audit line first (Internal, "audit log unavailable"). Show that as one
+ * explicit sentence instead of the raw RPC error.
+ */
+export const STEER_AUDIT_UNAVAILABLE_MESSAGE = "Audit log unavailable, steer not sent";
+
+export function steerFailureMessage(raw: string): string {
+  return /audit log unavailable/i.test(raw) ? STEER_AUDIT_UNAVAILABLE_MESSAGE : raw;
+}
+
 export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const { track } = useAnalytics();
   const {
@@ -631,7 +642,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         }
         showActionToast("Steering message sent.", "success", toastKey);
       } catch (err) {
-        const msg = getErrorMessage(err, "Failed to steer session.");
+        const msg = steerFailureMessage(getErrorMessage(err, "Failed to steer session."));
         showActionToast(msg, "error", toastKey);
         throw err instanceof Error ? err : new Error(msg);
       } finally {

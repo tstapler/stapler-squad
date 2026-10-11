@@ -2,13 +2,16 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -147,6 +150,11 @@ const worktreeChangeDetectionFlagName = "vcs:worktree-change-detection"
 // project_plans/app-scrollback-forwarding/implementation/plan.md, Epic 1.5.
 const terminalAppScrollForwardingClaudeFlagName = config.FeatureAppScrollForwardingClaude
 
+// notificationTrayV2FlagName gates the capped toast deck and the notification tray in
+// the web app (read there as a live flag via GetFeatureFlags). The server only registers
+// it; the client mirrors this literal in lib/notification-policy.ts. Default: off.
+const notificationTrayV2FlagName = "notification_tray_v2"
+
 // workspacePeersBlockFor is the single feature-flag gate for the workspace-peers nudge,
 // called by both SessionService.workspacePeersBlockFor (session_service.go) and
 // BacklogService.workspacePeersBlockFor (backlog_service_triage.go) so the two callers can't
@@ -170,6 +178,8 @@ var knownFeatureFlags = []struct {
 	name         string
 	description  string
 	defaultValue bool
+	// scopes lists the per-scope overrides the flag accepts (nil: global only).
+	scopes []string
 }{
 	{
 		name:         programCLIFlagProbeFlagName,
@@ -269,6 +279,31 @@ var knownFeatureFlags = []struct {
 		name:        config.DiagnoseNudgeFeatureFlag,
 		description: "Diagnose & Nudge: allow a dispatched diagnostic agent to autonomously send a redirect message (diagnose_nudge_session) to a linked stuck session. Read fresh at the write instant, so flipping this off blocks an already-dispatched agent too. Default: off — until enabled, a dispatch can still investigate and file a bug or post a note, but never nudge.",
 	},
+	{
+		name:        notificationTrayV2FlagName,
+		description: "Notification tray v2: cap the toast deck at 3 (1 on phones) with a \"+N more\" chip and one \"Move all to tray\" control, instead of the uncapped legacy toast list. Applies on the next toast render, no reload. Default: off.",
+	},
+	{
+		name:         config.HiddenSessionGateFeatureFlag,
+		defaultValue: config.HiddenSessionGateDefault,
+		description:  "Hidden-session delivery gate: a hidden session (review, diagnose) notifies only for failures and needs-human events; routine completions are dropped on every channel. Turning it off (globally or per kind) is the rollback: hidden sessions then deliver everything and the gate only counts what it would have suppressed (see the status line). Can be enabled only while the stats writer runs, so the evidence is recorded. Can be overridden per hidden-session kind (review, diagnose, other). Default: on.",
+		scopes:       gateFlagScopes(),
+	},
+	{
+		name:         terminalWriteLeaseFlagName,
+		description:  "Per-session terminal write lease: the driver's prompt and answer keys, steers, nudges, MCP writes and rate-limit recovery take turns writing to a session's terminal instead of interleaving. Turn off only to restore the pre-lease behavior if the lease misbehaves (every write then proceeds unserialized). Applies at once; global only. Default: on.",
+		defaultValue: true,
+	},
+	{
+		name:         hiddenSessionReplyFlagName,
+		description:  "Hidden-session Reply: answer a background session's single-select question from the toast, tray or read-only view by writing one option digit to its terminal. The kill switch for the Reply path only; it does not affect the write guards. Every reply is audited before it is written. Applies at once; global only. Default: on.",
+		defaultValue: true,
+	},
+	{
+		name:         hiddenSessionReadonlyGuardsFlagName,
+		description:  "Hidden-session write guards: the UI's write RPCs (terminal input, steer, restart, workspace switch, program and auto-approve changes) refuse a hidden (background) session, except the backlog Steer of a live review session, which stays audited. Turn off only to restore the previous behavior if a guard blocks a legitimate action; every write allowed while off is recorded in the audit log. Applies at once; global only. Default: on.",
+		defaultValue: true,
+	},
 }
 
 // featureFlagDefault looks up name's defaultValue in knownFeatureFlags — the single
@@ -294,10 +329,23 @@ type FeatureFlagService struct {
 	// config-file persistence (no in-process component to toggle).
 	featureControllers map[string]FeatureController
 
-	// statusDetailProviders maps feature flag names to a function returning an
-	// optional human-readable status line (e.g. why the flag is currently off).
-	// Wired via SetStatusDetailProvider. Absent name -> "".
-	statusDetailProviders map[string]func() string
+	// statusDetailSlots maps feature flag names to the ordered contributions to
+	// their status line (e.g. why the flag is currently off). SetStatusDetailProvider
+	// owns one named slot per flag; AddStatusDetailSource appends independent
+	// ones. GetFeatureFlags joins the non-empty results with "; ".
+	statusDetailSlots map[string][]statusDetailSlot
+
+	// enableGuards maps flag names to a precondition checked only when the flag
+	// is being enabled; a non-empty return refuses the flip with FailedPrecondition.
+	enableGuards map[string]func() string
+
+	// observer is told after every persisted change so a cache can reload at once.
+	observer deliverygate.FlagObserver
+
+	// audit and auditPolicies record flag_change lines for flags with a policy.
+	audit         *AuditSink
+	auditPolicies map[string]FlagAuditPolicy
+	flagSeq       int64 // persisted order of flips; incremented only under updateMu
 
 	// updateMu serializes UpdateFeatureFlag's read-toggle-rollback sequence so two
 	// concurrent toggles of the same flag can't race: without this, a slow caller's
@@ -327,10 +375,64 @@ func (f *FeatureFlagService) SetFeatureController(name string, c FeatureControll
 // named feature flag. GetFeatureFlags calls fn on every request and populates
 // FeatureFlag.StatusDetail with its result (empty string when fn returns "").
 func (f *FeatureFlagService) SetStatusDetailProvider(name string, fn func() string) {
-	if f.statusDetailProviders == nil {
-		f.statusDetailProviders = make(map[string]func() string)
+	f.setStatusDetailSlot(name, providerSlotKey, fn)
+}
+
+// providerSlotKey names the slot SetStatusDetailProvider owns; a second call
+// replaces it in place so the setter keeps its replace-by-name meaning.
+const providerSlotKey = "provider"
+
+type statusDetailSlot struct {
+	key string
+	fn  func() string
+}
+
+func (f *FeatureFlagService) setStatusDetailSlot(name, key string, fn func() string) {
+	if f.statusDetailSlots == nil {
+		f.statusDetailSlots = make(map[string][]statusDetailSlot)
 	}
-	f.statusDetailProviders[name] = fn
+	slots := f.statusDetailSlots[name]
+	for i := range slots {
+		if key != "" && slots[i].key == key {
+			slots[i].fn = fn
+			return
+		}
+	}
+	f.statusDetailSlots[name] = append(slots, statusDetailSlot{key: key, fn: fn})
+}
+
+// AddStatusDetailSource appends an independent contribution to name's status
+// line. Several sources (stats writer, explicit global false, per-kind false)
+// each speak for the same flag without replacing one another.
+func (f *FeatureFlagService) AddStatusDetailSource(name string, fn func() string) {
+	f.setStatusDetailSlot(name, "", fn)
+}
+
+func (f *FeatureFlagService) statusDetailFor(name string) string {
+	var parts []string
+	for _, s := range f.statusDetailSlots[name] {
+		if d := s.fn(); d != "" {
+			parts = append(parts, d)
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+// SetEnableGuard installs a precondition for enabling name. It is checked only
+// on the way on: disabling and clearing are never refused by it.
+func (f *FeatureFlagService) SetEnableGuard(name string, guard func() string) {
+	if f.enableGuards == nil {
+		f.enableGuards = make(map[string]func() string)
+	}
+	f.enableGuards[name] = guard
+}
+
+// SetFlagObserver wires the cache notified after every persisted change.
+func (f *FeatureFlagService) SetFlagObserver(o deliverygate.FlagObserver) { f.observer = o }
+
+// SetAudit wires the audit sink and the per-flag audit policy.
+func (f *FeatureFlagService) SetAudit(sink *AuditSink, policies map[string]FlagAuditPolicy) {
+	f.audit, f.auditPolicies = sink, policies
 }
 
 // +api: feature-flags:list
@@ -348,15 +450,12 @@ func (f *FeatureFlagService) GetFeatureFlags(
 		if ctrl, ok := f.featureControllers[kf.name]; ok {
 			enabled = ctrl.IsEnabled()
 		}
-		var statusDetail string
-		if provider, ok := f.statusDetailProviders[kf.name]; ok {
-			statusDetail = provider()
-		}
 		flags = append(flags, &sessionv1.FeatureFlag{
 			Name:         kf.name,
 			Enabled:      enabled,
 			Description:  kf.description,
-			StatusDetail: statusDetail,
+			StatusDetail: f.statusDetailFor(kf.name),
+			Scopes:       flagScopeReadback(cfg, kf.name, kf.scopes),
 		})
 	}
 
@@ -364,21 +463,24 @@ func (f *FeatureFlagService) GetFeatureFlags(
 }
 
 // +api: feature-flags:update
-// UpdateFeatureFlag enables or disables a named feature flag and persists the change.
+// UpdateFeatureFlag applies one validated mutation to a named feature flag and
+// persists it: a global set (the legacy shape), a per-scope set, a scope clear
+// or a reset of the explicit global value to the registry default.
 func (f *FeatureFlagService) UpdateFeatureFlag(
 	ctx context.Context,
 	req *connect.Request[sessionv1.UpdateFeatureFlagRequest],
 ) (*connect.Response[sessionv1.UpdateFeatureFlagResponse], error) {
 	name := req.Msg.GetName()
-	enabled := req.Msg.GetEnabled()
 
 	// Validate that the flag name is known.
 	known := false
 	var description string
+	var scopes []string
 	for _, kf := range knownFeatureFlags {
 		if kf.name == name {
 			known = true
 			description = kf.description
+			scopes = kf.scopes
 			break
 		}
 	}
@@ -392,6 +494,32 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 				return names
 			}()))
 	}
+	op, err := parseFlagOp(req.Msg, scopes)
+	if err != nil {
+		return nil, err
+	}
+
+	// Only the way on is guarded: disabling and resetting the global value are
+	// never refused. Clearing a scope is guarded only when it turns the kind on.
+	if op.enabling() || clearTurnsKindOn(op) {
+		if guard, ok := f.enableGuards[name]; ok {
+			if reason := guard(); reason != "" {
+				return nil, connect.NewError(connect.CodeFailedPrecondition,
+					fmt.Errorf("cannot enable %q: %s", name, reason))
+			}
+		}
+	}
+
+	// The loosening flip's durable `requested` line is appended before the
+	// update mutex so a stalled fsync cannot queue a kill switch behind it. The
+	// deferred `result` line is registered before the lock, so it runs after
+	// the unlock.
+	audit, err := f.auditBegin(ctx, op, flagRequestFields(ctx, req.Peer().Addr, req.Header()))
+	if err != nil {
+		log.Error("feature flag change not audited, nothing persisted", "feature", name, "err", err)
+		return nil, connect.NewError(connect.CodeInternal, errors.New("flag change not audited, nothing persisted"))
+	}
+	defer audit.finish()
 
 	// Serialize the whole persist-toggle-rollback sequence: without this, two concurrent
 	// UpdateFeatureFlag calls for the same name could interleave such that a slower
@@ -400,56 +528,116 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 	f.updateMu.Lock()
 	defer f.updateMu.Unlock()
 
-	// Persist to config. SetFeatureFlag handles its own map initialisation and
-	// calls SaveConfig atomically, avoiding a separate LoadConfig→modify→SaveConfig
-	// sequence that would race under concurrent UpdateFeatureFlag calls.
+	if op.scope != "" {
+		err = f.persistScoped(ctx, op, audit)
+	} else {
+		err = f.persistAndApply(ctx, op, audit)
+	}
+	if err != nil {
+		return nil, err
+	}
+
 	cfg := config.LoadConfig()
-	previousEnabled := cfg.GetFeatureFlag(name)
-	if err := cfg.SetFeatureFlag(name, enabled); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to persist feature flag: %w", err))
+	enabled := cfg.GetFeatureFlagWithDefault(name, featureFlagDefault(name))
+	if op.scope == "" && op.isSet() {
+		enabled = op.enabled // the controller-backed state, as before this change
 	}
-
-	// Toggle the in-process controller if one is wired. If the controller fails to apply the
-	// new state, roll back the just-persisted disk flag so disk config and in-memory state can
-	// never diverge — a failed toggle must not leave the two disagreeing about whether the
-	// feature is on, since GetFeatureFlags/RPC-gating interceptors read from different sources.
-	if ctrl, ok := f.featureControllers[name]; ok {
-		var ctrlErr error
-		verb := "disable"
-		if enabled {
-			verb = "enable"
-			ctrlErr = ctrl.Enable(ctx)
-		} else {
-			ctrlErr = ctrl.Disable()
-		}
-		if ctrlErr != nil {
-			log.Error("feature controller toggle failed, rolling back persisted flag",
-				"feature", name, "enabled", enabled, "err", ctrlErr)
-			if rollbackErr := cfg.SetFeatureFlag(name, previousEnabled); rollbackErr != nil {
-				log.Error("failed to roll back feature flag after controller error",
-					"feature", name, "err", rollbackErr)
-				return nil, connect.NewError(connect.CodeInternal,
-					fmt.Errorf("failed to %s feature %q: %w (rollback also failed, disk state may be inconsistent: %v)",
-						verb, name, ctrlErr, rollbackErr))
-			}
-			return nil, connect.NewError(connect.CodeInternal,
-				fmt.Errorf("failed to %s feature %q: %w", verb, name, ctrlErr))
-		}
-	}
-
-	log.Info("feature flag updated", "feature", name, "enabled", enabled)
-
-	var statusDetail string
-	if provider, ok := f.statusDetailProviders[name]; ok {
-		statusDetail = provider()
-	}
-
+	log.Info("feature flag updated", "feature", name, "enabled", enabled, "scope", op.auditScope(), "mutation", op.mutationName())
 	return connect.NewResponse(&sessionv1.UpdateFeatureFlagResponse{
 		Flag: &sessionv1.FeatureFlag{
 			Name:         name,
 			Enabled:      enabled,
 			Description:  description,
-			StatusDetail: statusDetail,
+			StatusDetail: f.statusDetailFor(name),
+			Scopes:       flagScopeReadback(cfg, name, scopes),
 		},
 	}), nil
+}
+
+// persistAndApply persists the global value (a set, or the deletion of the
+// explicit key for RESET_GLOBAL), toggles the controller and rolls back on its
+// failure. The caller holds updateMu. It records the true previous value (an
+// absent key is the registered default, not an explicit false) and, when the key
+// was absent, rolls back by deleting it so a default-on flag never ends a failed
+// flip as an explicit false.
+func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, audit *flagAudit) error {
+	name, enabled := op.name, op.enabled
+	cfg := config.LoadConfig()
+	previous, hadKey := cfg.GetFeatureFlagOverride(name)
+	if !hadKey {
+		previous = featureFlagDefault(name)
+	}
+	if audit.active() {
+		f.flagSeq++
+		audit.seq, audit.previous = f.flagSeq, previous
+	}
+	var err error
+	if op.isSet() {
+		err = cfg.SetFeatureFlag(name, enabled)
+	} else {
+		err = cfg.DeleteFeatureFlag(name)
+	}
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to persist feature flag: %w", err))
+	}
+	ctrl, ok := f.featureControllers[name]
+	if !ok {
+		f.finishApplied(op, audit)
+		return nil
+	}
+	// A failed toggle must not leave disk config and in-memory state disagreeing
+	// about whether the feature is on: GetFeatureFlags and RPC-gating
+	// interceptors read from different sources.
+	verb, ctrlErr := "disable", error(nil)
+	if enabled {
+		verb, ctrlErr = "enable", ctrl.Enable(ctx)
+	} else {
+		ctrlErr = ctrl.Disable()
+	}
+	if ctrlErr == nil {
+		f.finishApplied(op, audit)
+		return nil
+	}
+	log.Error("feature controller toggle failed, rolling back persisted flag",
+		"feature", name, "enabled", enabled, "err", ctrlErr)
+	if rollbackErr := rollbackFlag(cfg, name, previous, hadKey); rollbackErr != nil {
+		log.Error("failed to roll back feature flag after controller error", "feature", name, "err", rollbackErr)
+		if audit.active() {
+			audit.outcome = flagOutcomeControllerFailed
+		}
+		return connect.NewError(connect.CodeInternal,
+			fmt.Errorf("failed to %s feature %q: %w (rollback also failed, disk state may be inconsistent: %v)",
+				verb, name, ctrlErr, rollbackErr))
+	}
+	if audit.active() {
+		audit.outcome = flagOutcomeRolledBack
+	}
+	f.notifyObserver(name)
+	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to %s feature %q: %w", verb, name, ctrlErr))
+}
+
+func rollbackFlag(cfg *config.Config, name string, previous, hadKey bool) error {
+	if hadKey {
+		return cfg.SetFeatureFlag(name, previous)
+	}
+	return cfg.DeleteFeatureFlag(name)
+}
+
+// finishApplied records the applied outcome and tells the observer which scope
+// and mutation changed, so history can tell a clear or reset from a set false.
+func (f *FeatureFlagService) finishApplied(op flagOp, audit *flagAudit) {
+	if audit.active() {
+		audit.outcome = flagOutcomeApplied
+	}
+	if mo, ok := f.observer.(deliverygate.FlagMutationObserver); ok {
+		mo.OnFlagMutation(op.name, op.auditScope(), op.mutationName())
+		return
+	}
+	f.notifyObserver(op.name)
+}
+
+func (f *FeatureFlagService) notifyObserver(name string) {
+	if f.observer != nil {
+		f.observer.OnFlagChanged(name)
+	}
 }

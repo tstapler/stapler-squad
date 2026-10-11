@@ -54,6 +54,11 @@ func gitTemplateRepo(t *testing.T, branch string) string {
 	runGitOrFail(t, dir, "init", "-b", branch)
 	runGitOrFail(t, dir, "config", "user.email", "test@example.com")
 	runGitOrFail(t, dir, "config", "user.name", "Test")
+	// Every `git commit` otherwise spawns a detached `git maintenance run --auto`
+	// that briefly creates .git/objects/maintenance.lock, which a concurrent
+	// os.CopyFS of this template can list and then fail to open (ENOENT).
+	runGitOrFail(t, dir, "config", "maintenance.auto", "false")
+	runGitOrFail(t, dir, "config", "gc.auto", "0")
 	if isEmpty {
 		gitTemplateRepos.dirs["empty:"+branch] = dir
 		return dir

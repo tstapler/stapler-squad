@@ -16,6 +16,10 @@ import { useWindowUrlSync } from "@/lib/window/useWindowUrlSync";
 import { useWindowShortcuts } from "@/lib/window/useWindowShortcuts";
 
 const mockUpdateSession = jest.fn();
+const mockGetSession = jest.fn();
+let mockHasLoadedOnce: boolean | undefined;
+let mockSearchParams = new URLSearchParams();
+let mockNotificationHistory: unknown[] = [];
 const mockAddNotification = jest.fn();
 const mockPaneTilingContainer = jest.fn();
 const mockDispatchPane = jest.fn();
@@ -37,7 +41,8 @@ jest.mock("@/lib/contexts/SessionServiceContext", () => ({
     forkSession: jest.fn(),
     listSessions: jest.fn(),
     updateSession: mockUpdateSession,
-    getSession: jest.fn(),
+    getSession: mockGetSession,
+    hasLoadedOnce: mockHasLoadedOnce,
   }),
 }));
 
@@ -46,13 +51,13 @@ jest.mock("@/lib/hooks/useFocusTrap", () => ({ useFocusTrap: jest.fn() }));
 jest.mock("@/lib/analytics/usePageView", () => ({ usePageView: jest.fn() }));
 jest.mock("@/lib/contexts/AnalyticsContext", () => ({ useAnalytics: () => ({ track: jest.fn() }) }));
 jest.mock("@/lib/contexts/NotificationContext", () => ({
-  useNotifications: () => ({ addNotification: mockAddNotification }),
+  useNotifications: () => ({ addNotification: mockAddNotification, notificationHistory: mockNotificationHistory }),
 }));
 jest.mock("@/lib/contexts/OmnibarContext", () => ({
   useOmnibar: () => ({ openInCreationMode: jest.fn(), openOmnibar: jest.fn() }),
 }));
 jest.mock("next/navigation", () => ({
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => mockSearchParams,
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
 }));
 jest.mock("@/components/sessions/ResumeSessionModal", () => ({
@@ -255,5 +260,59 @@ describe("HomeContent multi-window wiring", () => {
     expect(mockDispatchPane).toHaveBeenCalledWith("win-B", { type: "ZOOM_PANE", paneId: "pane-1" });
     expect(mockSwitchToWindow).not.toHaveBeenCalled();
     expect(mockSwitchToWindowTab2).not.toHaveBeenCalled();
+  });
+});
+
+describe("cold deep link to a hidden session (T-RC-01, T-RC-04)", () => {
+  beforeEach(() => {
+    mockGetSession.mockReset();
+    mockHasLoadedOnce = false;
+    mockSearchParams = new URLSearchParams("session=hidden-uuid&tab=terminal");
+    mockNotificationHistory = [];
+    defaultWindowManagerMock();
+    defaultWindowUrlSyncMock();
+  });
+  afterEach(() => {
+    mockSearchParams = new URLSearchParams();
+    mockHasLoadedOnce = undefined;
+  });
+
+  it("page_should_call_getSession_after_list_settles_empty_when_cold_deep_link_hidden_uuid", async () => {
+    mockGetSession.mockResolvedValue({ id: "hidden-uuid", title: "review:ee1b4be0", hidden: true });
+    const { rerender } = render(<Home />);
+    expect(mockGetSession).not.toHaveBeenCalled();
+
+    mockHasLoadedOnce = true;
+    rerender(<Home />);
+    await waitFor(() => expect(mockGetSession).toHaveBeenCalledTimes(1));
+    expect(mockGetSession).toHaveBeenCalledWith("hidden-uuid", expect.objectContaining({ onFailure: expect.any(Function) }));
+
+    // The settled list does not trigger a second lookup for the same id.
+    rerender(<Home />);
+    expect(mockGetSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("deleted_card_should_show_notification_title_message_when_nid_found_and_fallback_when_absent", async () => {
+    mockHasLoadedOnce = true;
+    mockGetSession.mockImplementation(async (_id: string, options?: { onFailure?: (e: unknown) => void }) => {
+      options?.onFailure?.({ code: 5 });
+      return null;
+    });
+    mockSearchParams = new URLSearchParams("session=hidden-uuid&tab=terminal&notification=n-1");
+    mockNotificationHistory = [
+      { id: "n-1", sessionId: "hidden-uuid", sessionName: "review", title: "Review failed", message: "tests red", timestamp: Date.now(), isRead: false },
+    ];
+    const first = render(<Home />);
+    const card = await screen.findByTestId("session-unavailable-card");
+    expect(card).toHaveTextContent("Session no longer available");
+    expect(screen.getByTestId("session-unavailable-notification")).toHaveTextContent("Review failed");
+    expect(screen.getByTestId("session-unavailable-notification")).toHaveTextContent("tests red");
+    first.unmount();
+
+    mockGetSession.mockClear();
+    mockSearchParams = new URLSearchParams("session=other-uuid&tab=terminal");
+    render(<Home />);
+    expect(await screen.findByTestId("session-unavailable-card")).toHaveTextContent("was removed before you opened it");
+    expect(screen.queryByTestId("session-unavailable-notification")).toBeNull();
   });
 });

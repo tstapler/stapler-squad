@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -21,6 +22,7 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -87,6 +89,34 @@ type SessionService struct {
 	// guardedSteer holds the per-session nudge guard and its test seams; see
 	// session_service_guarded_steer.go. The zero value is production-ready.
 	guardedSteer guardedSteerState
+
+	// guards is the live hidden_session_readonly_guards value the unary handlers
+	// read through AccessForUnary; the zero value is "on".
+	guards *UnaryGuardsFlag
+	// guardBypass counts and rate-limits the guards-off bypass writes.
+	guardBypass guardBypassState
+	// reply is the Reply machinery (pending questions, idempotency, limiters,
+	// flag), built on first use; replyNow injects the clock in tests.
+	replyOnce sync.Once
+	reply     *replyState
+	replyNow  func() time.Time
+	// replyPeerAddr and replyControllerActive are test seams; nil means
+	// req.Peer().Addr and "the instance has a started status controller".
+	replyPeerAddr         func(connect.AnyRequest) string
+	replyControllerActive func(*session.Instance) bool
+	// replyAfter injects the timer behind the send timeout and the closed-check
+	// polls (nil is time.After).
+	replyAfter func(time.Duration) <-chan time.Time
+	// backlogLinks decides whether a hidden session is a live backlog review
+	// session (the O7 steer exemption).
+	backlogLinks BacklogLinkResolver
+
+	// deliveryGate is the hidden-session delivery gate installed as the event bus
+	// publish filter at construction (nil when built through NewSessionService).
+	deliveryGate *deliverygate.Gate
+
+	// crashes limits crash notifications to a few individual ones per minute.
+	crashes crashLimiter
 
 	// tapRegistry backs SetCaptureTap/GetCaptureTap. nil means the process-wide
 	// streamhub.DefaultTapRegistry, which is what the terminal streams use.
@@ -479,12 +509,18 @@ func destroyWithTimeout(destroy func() error, timeout time.Duration) error {
 // reason as destroyWithTimeout: onSlow lets a test observe the timeout firing without
 // needing a real Instance whose Destroy() can be made to hang on demand.
 func waitForDestroyLoggingSlowCleanup(destroy func() error, timeout time.Duration, onSlow func()) error {
+	start := time.Now()
 	done := make(chan error, 1)
 	go func() {
 		done <- destroy()
 	}()
 	select {
 	case err := <-done:
+		// When destroy() finishes right at the deadline both select cases are ready and
+		// Go picks one at random, so judge "slow" by elapsed time, not by which case won.
+		if onSlow != nil && time.Since(start) >= timeout {
+			onSlow()
+		}
 		return err
 	case <-time.After(timeout):
 		if onSlow != nil {
@@ -858,8 +894,14 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		RoleResolver: capRoleResolver,
 		Terminator:   capTerminator,
 	})
-	capacityMonitor.RegisterClient("anthropic", NewAnthropicLimitsClient(credChain, ""))
-	capacityMonitor.RegisterClient("google", NewGeminiLimitsClient(credChain, ""))
+	// Under `go test` the real limits clients would POST to api.anthropic.com
+	// with the developer's own credentials on every SetLifecycleContext, and the
+	// h2 connection they leave in the shared transport pool shows up as a leaked
+	// goroutine in whichever goleak-checked test runs next.
+	if !config.IsTestMode() {
+		capacityMonitor.RegisterClient("anthropic", NewAnthropicLimitsClient(credChain, ""))
+		capacityMonitor.RegisterClient("google", NewGeminiLimitsClient(credChain, ""))
+	}
 
 	if anthropicClient, ok := aiClientImpl.(*AnthropicAIClient); ok {
 		anthropicClient.OnResponseHeaders = func(h http.Header) {
@@ -908,6 +950,15 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	}
 	capacityMonitor.sessionSwitcher = svc
 	capacityMonitor.poller = svc
+
+	svc.guards = &UnaryGuardsFlag{}
+	svc.terminalSvc.SetGuardsFlag(svc.guards)
+	workspaceSvc.SetGuardsFlag(svc.guards)
+	var linkLookup itemSessionLookup
+	if concStorage != nil {
+		linkLookup = concStorage
+	}
+	svc.backlogLinks = storageLinkResolver{lookup: linkLookup}
 
 	if config.IsTestMode() {
 		svc.testTmuxServerSocket = fmt.Sprintf("test_server_services_%d_%d", os.Getpid(), atomic.AddUint64(&testTmuxServerSocketCounter, 1))
@@ -1009,8 +1060,70 @@ func NewSessionServiceFromConfig() (*SessionService, error) {
 		return nil, fmt.Errorf("failed to initialize storage with EntRepository: %w", err)
 	}
 
+	return newGatedSessionService(storage), nil
+}
+
+// newGatedSessionService builds the production SessionService: the delivery
+// gate is created with the bus and installed as its publish filter before any
+// producer can publish, so there is no un-gated window and no later bind step.
+func newGatedSessionService(storage session.InstanceStore) *SessionService {
+	gate := deliverygate.NewGate(deliverygate.WithInstanceLister(storage))
 	eventBus := events.NewEventBus(100)
-	return NewSessionService(storage, eventBus), nil
+	eventBus.SetPublishFilter(gate.PublishFilter())
+	svc := NewSessionService(storage, eventBus)
+	svc.deliveryGate = gate
+	svc.notificationSvc.SetDeliveryGate(gate)
+	svc.wireGateFlag(gate)
+	svc.wireLeaseFlag()
+	svc.wireGuardsFlag()
+	svc.wireReplyFlag()
+	return svc
+}
+
+// statsWriterNotRunning is the status_detail contribution (and the enable
+// refusal reason) while no stats writer runs.
+const statsWriterNotRunning = "stats writer not running"
+
+// wireGateFlag connects the gate flag to the flag service: the cache reloads on
+// every flip, enabling needs a running stats writer (so the soak is recorded),
+// and every flip is audited. Registration of the flag itself is separate.
+func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
+	ff := s.featureFlagSvc
+	ff.SetFlagObserver(gate.Flags())
+	ff.SetEnableGuard(config.HiddenSessionGateFeatureFlag, func() string {
+		if !gate.Stats().WriterRunning() {
+			return statsWriterNotRunning
+		}
+		return ""
+	})
+	ff.AddStatusDetailSource(config.HiddenSessionGateFeatureFlag, func() string {
+		if !gate.Stats().WriterRunning() {
+			return statsWriterNotRunning
+		}
+		return ""
+	})
+	ff.AddStatusDetailSource(config.HiddenSessionGateFeatureFlag, globalOffStatusDetail)
+	ff.AddStatusDetailSource(config.HiddenSessionGateFeatureFlag, kindOffStatusDetail)
+	sink := NewAuditSink(config.GetConfigDir,
+		WithAuditDegradedCounter(func(mode string) { gate.Metrics().Add(deliverygate.CounterAuditDegraded, mode) }))
+	s.notificationSvc.SetAuditSink(sink)
+	ff.SetAudit(sink, map[string]FlagAuditPolicy{
+		config.HiddenSessionGateFeatureFlag: {}, // every gate flip takes the non-blocking path
+		terminalWriteLeaseFlagName:          terminalWriteLeaseAuditPolicy,
+		hiddenSessionReadonlyGuardsFlagName: guardsFlagAuditPolicy,
+		hiddenSessionReplyFlagName:          replyFlagAuditPolicy,
+	})
+}
+
+// DeliveryGate returns the delivery gate, or nil when the service was built
+// without one (unit tests that call NewSessionService directly).
+func (s *SessionService) DeliveryGate() *deliverygate.Gate {
+	return s.deliveryGate
+}
+
+// SetGateStatsFileStatus wires the stats file status behind GetDeliveryGateStats.
+func (s *SessionService) SetGateStatsFileStatus(fn func() deliverygate.StatsFileStatus) {
+	s.notificationSvc.SetGateStatsFileStatus(fn)
 }
 
 // NewSessionServiceWithEntClient creates a SessionService from a pre-existing *ent.Client.
@@ -1023,8 +1136,7 @@ func NewSessionServiceWithEntClient(entClient *ent.Client) (*SessionService, err
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize storage with provided ent client: %w", err)
 	}
-	eventBus := events.NewEventBus(100)
-	return NewSessionService(storage, eventBus), nil
+	return newGatedSessionService(storage), nil
 }
 
 // GetStorage returns the concrete *session.Storage for components that haven't migrated to InstanceStore yet.

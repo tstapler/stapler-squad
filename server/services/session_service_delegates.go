@@ -209,6 +209,10 @@ func (s *SessionService) RenameSession(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save renamed instance: %w", err))
 	}
 
+	// Keep the delivery index current (the old title stays an alias for hooks
+	// already running under it).
+	s.indexSessionForDelivery(instance)
+
 	// Publish SessionUpdated event
 	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"title"}))
 
@@ -283,6 +287,25 @@ func (s *SessionService) ClearNotificationHistory(
 	req *connect.Request[sessionv1.ClearNotificationHistoryRequest],
 ) (*connect.Response[sessionv1.ClearNotificationHistoryResponse], error) {
 	return s.notificationSvc.ClearNotificationHistory(ctx, req)
+}
+
+// PruneHiddenSessionNotifications removes stored notifications of hidden sessions
+// (dry run unless apply is set; LocalWriteGuard procedure; audited; no MCP tool).
+// +api: notification:prune-hidden
+func (s *SessionService) PruneHiddenSessionNotifications(
+	ctx context.Context,
+	req *connect.Request[sessionv1.PruneHiddenSessionNotificationsRequest],
+) (*connect.Response[sessionv1.PruneHiddenSessionNotificationsResponse], error) {
+	return s.notificationSvc.PruneHiddenSessionNotifications(ctx, req)
+}
+
+// GetDeliveryGateStats reports the hidden-session delivery gate's counters and soak evidence.
+// +api: notification:gate-stats
+func (s *SessionService) GetDeliveryGateStats(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetDeliveryGateStatsRequest],
+) (*connect.Response[sessionv1.GetDeliveryGateStatsResponse], error) {
+	return s.notificationSvc.GetDeliveryGateStats(ctx, req)
 }
 
 // ResolveApproval allows the web UI to approve or deny a pending Claude Code tool use request.
@@ -514,6 +537,7 @@ func (s *SessionService) ForkSession(
 	if err := s.storage.AddInstance(newInst); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("persist forked session: %w", err))
 	}
+	s.indexSessionForDelivery(newInst)
 
 	if s.reviewQueuePoller != nil {
 		updatedInstances := append(s.reviewQueuePoller.GetInstances(), newInst)

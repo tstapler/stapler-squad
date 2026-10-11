@@ -652,6 +652,15 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		return nil, fmt.Errorf("load instances: %w", err)
 	}
 
+	// Seed the delivery gate's visibility index synchronously, before any
+	// instance is wired or started, so restore-time producers (cold-restore,
+	// rate-limit callbacks) resolve hidden sessions. Flags are read once here;
+	// the server's ticker keeps them fresh afterwards.
+	if gate := sessionService.DeliveryGate(); gate != nil {
+		gate.SeedFromInstances(instances)
+		gate.Flags().Reload()
+	}
+
 	// WorkflowEngine governs backlog state transitions; constructed once and shared
 	// by the service layer.
 	workflowEngine := session.NewDefaultWorkflowEngine()
@@ -1133,6 +1142,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// Step 11: ExternalDiscovery with session-added/removed callbacks
 	externalDiscovery := session.NewExternalSessionDiscovery()
 	externalDiscovery.OnSessionAdded(func(instance *session.Instance) {
+		if gate := sessionService.DeliveryGate(); gate != nil {
+			gate.UpsertInstance(instance)
+		}
 		if err := storage.AddInstance(instance); err != nil {
 			log.Error("failed to persist external session", "session", instance.Title, "err", err)
 		} else {
@@ -1155,6 +1167,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		log.Info("added external session to review queue poller, PR status poller, and history linker", "session", instance.Title)
 	})
 	externalDiscovery.OnSessionRemoved(func(instance *session.Instance) {
+		if gate := sessionService.DeliveryGate(); gate != nil {
+			gate.RemoveSession(instance.Title)
+		}
 		reviewQueuePoller.RemoveInstance(instance.Title)
 		svc.PRStatusPoller.RemoveInstance(instance.Title)
 		historyLinker.RemoveInstance(instance.Title)

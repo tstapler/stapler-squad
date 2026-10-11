@@ -3,6 +3,7 @@ import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { AuthProvider } from "@/lib/contexts/AuthContext";
 import { Providers } from "./Providers";
 import { NotificationPanel } from "@/components/ui/NotificationPanel";
+import { TrayErrorBoundary } from "@/components/ui/TrayErrorBoundary";
 import { TmuxVersionMismatchBanner } from "@/components/system/TmuxVersionMismatchBanner";
 import { ForkPressureStatusBanner } from "@/components/system/ForkPressureStatusBanner";
 import { ViewportProvider } from "@/components/providers/ViewportProvider";
@@ -69,7 +70,9 @@ export default function RootLayout({
                     <ForkPressureStatusBanner />
                     {children}
                   </main>
-                  <NotificationPanel />
+                  <TrayErrorBoundary>
+                    <NotificationPanel />
+                  </TrayErrorBoundary>
                 </CockpitShell>
               </Providers>
             </AuthProvider>

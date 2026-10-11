@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -893,6 +894,21 @@ func newReactiveQueueTestSetupWithStorage(t *testing.T) (*ReactiveQueueManager, 
 	return mgr, poller, storage
 }
 
+// gateBusOn is the production wiring in miniature: a delivery gate (flag on or
+// off) installed as mgr's bus publish filter and its Slack/webhook gate, seeded
+// with insts. Hidden-session suppression is the gate's job, not the manager's.
+func gateBusOn(t *testing.T, mgr *ReactiveQueueManager, flagOn bool, insts ...*session.Instance) *deliverygate.Gate {
+	t.Helper()
+	gate := deliverygate.NewGate(deliverygate.WithFlagLoader(func() (deliverygate.FlagSettings, error) {
+		return deliverygate.FlagSettings{Global: flagOn}, nil
+	}))
+	gate.Flags().Reload()
+	mgr.eventBus.SetPublishFilter(gate.PublishFilter())
+	mgr.SetQueueItemGate(gate.AllowQueueItem)
+	gate.SeedFromInstances(insts)
+	return gate
+}
+
 // TestMaybeAutoCreatePR_RunsOneShot_When_AutoCreatePREnabled verifies the opt-in
 // "auto-create PR on Complete" policy (docs/tasks/backlog-feature-improvement.md,
 // 2026-07-17 entry): when the backlog item behind a session has AutoCreatePR set
@@ -1213,6 +1229,10 @@ func TestMaybeAutoCreatePR_TriggersViaOnQueueUpdated_When_ItemChangesReasonWhile
 
 // ─── AC4: OnItemAdded suppression for Hidden backlog-linked sessions ──────────
 
+// T-LG-07: this test and ..._ReasonVariants pin
+// that, with the delivery gate on (the default), a hidden session's routine
+// TASK_COMPLETE/IDLE/STALE items are dropped by the gate, not by the manager.
+//
 // TestOnItemAdded_SuppressesNotification_When_SessionHidden verifies that a
 // Hidden session (e.g. a headless triage/review worker) does not get a
 // TASK_COMPLETE EventNotification published — Hidden sessions are excluded
@@ -1245,6 +1265,7 @@ func TestOnItemAdded_SuppressesNotification_When_SessionHidden(t *testing.T) {
 		Hidden: true,
 	}
 	poller.SetInstances([]*session.Instance{inst})
+	gateBusOn(t, mgr, true, inst)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -1305,6 +1326,7 @@ func TestOnItemAdded_SuppressesNotification_When_SessionHidden_ReasonVariants(t 
 				Hidden: true,
 			}
 			poller.SetInstances([]*session.Instance{inst})
+			gateBusOn(t, mgr, true, inst)
 
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
@@ -1443,6 +1465,7 @@ func TestOnItemAdded_PublishesNotification_When_SessionHidden_AndReasonIsErrorSt
 				Hidden: true,
 			}
 			poller.SetInstances([]*session.Instance{inst})
+			gateBusOn(t, mgr, true, inst)
 
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
@@ -1670,5 +1693,77 @@ func TestOnItemAdded_Integration_DigestSuppressesPerItemNotification_When_BothWo
 	}
 	if notify != 0 {
 		t.Errorf("NotifyReviewQueueItem calls = %d, want 0 (suppressed by the digest firing on the same call)", notify)
+	}
+}
+
+// T-LG-08: with the delivery gate's flag in either state the poller skips a
+// Hidden session and the determiner turns a routine Add into Skip. Handed a
+// routine item anyway, the manager publishes through the gate: nothing with the
+// gate on (default), all three with it off (the rollback).
+func TestReviewQueue_ShouldNeverEmitRoutineReasonsForHidden_WhenPollerSkipAndDetermineGateBothFlagStates(t *testing.T) {
+	for _, flagOn := range []bool{false, true} {
+		t.Run(fmt.Sprintf("flag_on=%v", flagOn), func(t *testing.T) {
+			repo := session.NewTestEntRepository(t)
+			storage, err := session.NewStorageWithRepository(repo)
+			require.NoError(t, err)
+			queue := session.NewReviewQueue()
+			statusMgr := session.NewInstanceStatusManager()
+			poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+			bus := events.NewEventBus(32)
+			t.Cleanup(bus.Close)
+			gate := deliverygate.NewGate(deliverygate.WithFlagLoader(func() (deliverygate.FlagSettings, error) {
+				return deliverygate.FlagSettings{Global: flagOn}, nil
+			}))
+			gate.Flags().Reload()
+			bus.SetPublishFilter(gate.PublishFilter())
+			mgr := NewReactiveQueueManager(queue, poller, bus, statusMgr, storage)
+
+			hidden := &session.Instance{Title: "review:lg08", UUID: "lg08-uuid", Status: session.Active, Hidden: true}
+			poller.SetInstances([]*session.Instance{hidden})
+			gate.SeedFromInstances([]*session.Instance{hidden})
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			eventCh, _ := bus.Subscribe(ctx)
+
+			// Layer 1: the poller never evaluates a hidden session.
+			poller.CheckSession(hidden)
+			require.Zero(t, queue.Count(), "poller must skip the hidden session")
+
+			// Layer 2: the determiner downgrades a routine Add for it to Skip.
+			determiner := session.NewDefaultStatusDeterminer(session.DefaultReviewQueuePollerConfig())
+			res := determiner.Determine(hidden, "", session.InstanceStatusInfo{
+				IsControllerActive: true, ClaudeStatus: detection.StatusSuccess,
+			}, detection.NewStatusDetector())
+			require.Equal(t, session.DetectionActionSkip, res.Action)
+
+			// Layer 3: handed the routine item anyway, only the gate decides.
+			for _, reason := range []session.AttentionReason{session.ReasonTaskComplete, session.ReasonIdle, session.ReasonStale} {
+				mgr.OnItemAdded(&session.ReviewItem{
+					SessionID: "review:lg08", Reason: reason, Priority: session.PriorityLow, DetectedAt: time.Now(),
+				})
+			}
+			// A sentinel published after the items bounds what the bus delivers.
+			bus.Publish(events.NewNotificationEvent("", "", "lg08-sentinel",
+				int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO), 1, "s", "s", nil))
+			leaked := 0
+			for {
+				select {
+				case ev := <-eventCh:
+					if ev.Type == events.EventNotification && ev.NotificationID == "lg08-sentinel" {
+						if flagOn {
+							require.Zero(t, leaked, "gate on: hidden routine reasons must not reach the bus")
+						} else {
+							require.Equal(t, 3, leaked, "gate off: the rollback delivers every routine reason")
+						}
+						return
+					}
+					if ev.Type == events.EventNotification {
+						leaked++
+					}
+				case <-ctx.Done():
+					t.Fatal("sentinel never arrived")
+				}
+			}
+		})
 	}
 }

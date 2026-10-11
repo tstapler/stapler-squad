@@ -9,6 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -611,19 +612,16 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 		notifType = int32(9)           // NotificationType_FAILURE
 		urgent, important = true, true // a silent status/reality mismatch is a genuine correctness bug
 	}
-	// Hidden sessions (e.g. review-gate driver runs) already have their own
-	// role-specific notification handling above (or intentionally none, per
-	// SessionRoleReview's comment) — this generic notifier would otherwise
-	// duplicate that signal for a session the operator never surfaces in the
-	// UI. See AC1's intent in the Epic 3 plan.
-	if !inst.Hidden {
-		a.bus.Publish(events.NewNotificationEvent(
-			sessionUUID, instanceName, fmt.Sprintf("autonomous-complete-%s", sessionUUID),
-			notifType,
-			derivePriority(urgent, important),
-			title, body, events.SessionScopedMetadata(nil, linkedItemID),
-		))
-	}
+	// Hidden sessions: the delivery gate drops the routine "Autonomous fix
+	// complete" (INFO) and delivers the FAILURE-class "stuck" notification.
+	// SessionRoleReview returns before this point, so a hidden review run
+	// never reaches this generic notifier.
+	a.bus.Publish(events.NewNotificationEvent(
+		sessionUUID, instanceName, fmt.Sprintf("autonomous-complete-%s", sessionUUID),
+		notifType,
+		derivePriority(urgent, important),
+		title, body, events.SessionScopedMetadata(nil, linkedItemID),
+	))
 }
 
 // stuckSessionRole distinguishes which onAutonomousDriverComplete branch a
@@ -677,7 +675,7 @@ func (a *AutonomousOrchestrationService) notifyAutonomousRespawnAttemptFailed(it
 		derivePriority(false, false), // urgent, important — no operator action needed yet, will retry automatically
 		"Automated retry failed",
 		fmt.Sprintf("%s — an automated turn-budget respawn attempt failed (%v). It will retry automatically per the standard backoff schedule.", itemTitle, respawnErr),
-		nil,
+		map[string]string{"item_id": itemID, pkgevents.MetadataKeyAutoRemediating: "true"},
 	))
 }
 

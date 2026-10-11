@@ -36,6 +36,12 @@ export const vars = createThemeContract({
     primaryActive: null,
     primaryDark: null,
     primaryText: null,
+    // Text on a SOLID primary / success / error fill (Approve, Deny, active filter pill, ...).
+    // Separate from primaryText because bright fills (#10b981, #ef4444, dark #2d9cdb) need dark text
+    // while deep fills (wh40k) need white; each pair is >= 4.5:1 (notification-contrast-over-xterm spec).
+    onPrimaryFill: null,
+    onSuccessFill: null,
+    onErrorFill: null,
 
     // Status
     success: null,
@@ -209,6 +215,10 @@ export const zIndex = {
   // these two (the "no more history" line stays under the loading pill).
   terminalOverlay: 15,
   terminalOverlayPill: 20,
+  // Absolute chrome pinned inside the terminal pane (scroll track, "Copy all", jump-to-latest,
+  // scrolling panel). Must stay below `slideOver`/`toast` so the notification tray and toast
+  // deck are never painted over by terminal chrome (MC-1, notification-contrast-over-xterm.spec.ts).
+  terminalPaneChrome: 25,
   header: 100,
   dropdown: 500,
   slideOver: 700,

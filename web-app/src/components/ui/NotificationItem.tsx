@@ -3,6 +3,10 @@
 import Link from "next/link";
 import { useCallback, useMemo, useRef } from "react";
 import { useFocusRestoreOnRemoval } from "@/lib/hooks/useFocusRestoreOnRemoval";
+import { useSessionHidden } from "@/lib/hooks/useSessionHidden";
+import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
+import { replyAvailability } from "@/lib/reply/replyQuestion";
+import { BackgroundChip } from "./BackgroundChip";
 import { GroupedNotification, groupNotifications } from "@/lib/utils/notificationGrouping";
 import { formatRelativeTime } from "@/lib/utils/datetime";
 import { NotificationData, NotificationHistoryItem } from "@/lib/types/notification";
@@ -114,9 +118,24 @@ export interface NotificationItemProps {
   getSessionHref?: (sessionId: string) => string;
   /** Called after handleNotificationClick fires for the Backlog/Session links (e.g. to close the panel). */
   onNavigate?: () => void;
+  /**
+   * Set while offline (the one connectivity source): server-mutating controls on
+   * this row (Approve, Deny, Remove) are disabled and the reason is shown. Nothing
+   * is queued; the controls re-enable when it clears.
+   */
+  offlineReason?: string;
+  /**
+   * False while the row is mounted but not shown (a closed tray keeps its rows): the hidden
+   * check then never asks the server, so a page load does not fan out GetSession calls.
+   */
+  lookupHidden?: boolean;
 }
 
 const defaultSessionHref = (sessionId: string) => `/?session=${encodeURIComponent(sessionId)}`;
+
+// notification=<id> lets the deleted-session card show this record's own text (Task 5.3e).
+const hiddenSessionHref = (sessionId: string, notificationId: string) =>
+  `/?session=${encodeURIComponent(sessionId)}&tab=terminal&notification=${encodeURIComponent(notificationId)}`;
 
 /**
  * Renders a single notification card: type label, count badge, remove button,
@@ -139,10 +158,15 @@ export function NotificationItem({
   handleNotificationClick,
   getSessionHref = defaultSessionHref,
   onNavigate,
+  offlineReason,
+  lookupHidden = true,
 }: NotificationItemProps) {
   const notification = group.notification;
   const contextString = getContextString(notification);
   const hasSourceApp = notification.sourceApp || notification.sourceBundleId;
+  // A hidden session opens read-only (Story 5.3): chip and "View output" instead of "View Session".
+  const sessionHidden = useSessionHidden(notification.sessionId, lookupHidden) === true;
+  const replyEnabled = useFeatureFlag("hidden_session_reply");
 
   // Always show the session name as the primary title so users know which
   // session generated the notification. If the stored title is a generic
@@ -172,8 +196,9 @@ export function NotificationItem({
       <div className={itemHeader}>
         <div className={itemTitle}>
           {!notification.isRead && <span className={unreadDot} role="img" aria-label="Unread" />}
-          <span className={typeIcon}>{notificationTypeIcon(notification.notificationType)}</span>
+          <span className={typeIcon} aria-hidden="true">{notificationTypeIcon(notification.notificationType)}</span>
           <strong>{primaryTitle}</strong>
+          {sessionHidden && <BackgroundChip />}
           <span className={typeLabel} style={{ backgroundColor: priorityColor(notification.priority) }}>
             {notificationTypeLabel(notification.notificationType)}
           </span>
@@ -186,8 +211,10 @@ export function NotificationItem({
         {removeFromHistory && (
           <button
             className={removeButton}
-            onClick={() => removeFromHistory(notification.id)}
+            onClick={() => !offlineReason && removeFromHistory(notification.id)}
             aria-label="Remove notification"
+            aria-disabled={offlineReason ? true : undefined}
+            title={offlineReason}
           >
             ✕
           </button>
@@ -243,7 +270,7 @@ export function NotificationItem({
                       data-decision={`${resolved}-reconciled`}
                       title="Re-evaluated with current context (e.g. CI status, session idle time) at resolution time, which may have changed since this was first escalated."
                     >
-                      {resolved === "allow" ? "✓" : "✗"} Auto-resolved by rule: {ruleName}
+                      <span aria-hidden="true">{resolved === "allow" ? "✓" : "✗"}</span> Auto-resolved by rule: {ruleName}
                     </span>
                   );
                 }
@@ -260,7 +287,7 @@ export function NotificationItem({
                 const { text: blockedText, checksUrl } = splitCIBlockMessage(blockedMessage);
                 return (
                   <div className={ciBlockedRow} data-testid="ci-block-message">
-                    <span className={ciBlockedText}>⚠️ {blockedText}</span>
+                    <span className={ciBlockedText}><span aria-hidden="true">⚠️ </span>{blockedText}</span>
                     {checksUrl && (
                       <a
                         href={checksUrl}
@@ -276,11 +303,11 @@ export function NotificationItem({
                       {/* No CI-checks URL (e.g. a reconciliation-race message) means there is
                           nothing left to "approve anyway" against — only Deny still applies. */}
                       {checksUrl && (
-                        <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", group.allIds, true)} disabled={isPending} title="Approve despite failing CI">
+                        <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", group.allIds, true)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Approve despite failing CI"}>
                           {isPending ? "…" : "Approve anyway"}
                         </button>
                       )}
-                      <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", group.allIds)} disabled={isPending} title="Deny this tool use">
+                      <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", group.allIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Deny this tool use"}>
                         {isPending ? "…" : "✗ Deny"}
                       </button>
                     </div>
@@ -289,21 +316,22 @@ export function NotificationItem({
               }
               return (
                 <>
+                  {offlineReason && <span className={ciBlockedText} data-testid="row-offline-reason">{offlineReason}</span>}
                   {failedMessage && (
                     <span className={ciBlockedText} data-testid="approval-retry-message">
                       {failedMessage}
                     </span>
                   )}
-                  <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", group.allIds)} disabled={isPending} title="Approve this tool use">
+                  <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", group.allIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Approve this tool use"}>
                     {isPending ? "…" : "✓ Approve"}
                   </button>
-                  <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", group.allIds)} disabled={isPending} title="Deny this tool use">
+                  <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", group.allIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Deny this tool use"}>
                     {isPending ? "…" : "✗ Deny"}
                   </button>
                 </>
               );
             })()}
-          {hasSourceApp && notification.onFocusWindow && (
+          {hasSourceApp && notification.onFocusWindow && !sessionHidden && (
             <button className={focusButton} onClick={notification.onFocusWindow} title="Focus the source application window">
               🔗 Focus
             </button>
@@ -319,13 +347,30 @@ export function NotificationItem({
             </Link>
           )}
           {!notification.metadata?.["item_id"] && notification.sessionId && (
-            <Link
-              href={getSessionHref(notification.sessionId)}
-              className={viewButton}
-              onClick={() => navigate(group.allIds, notification.onView, notification.sessionId)}
-            >
-              View Session
-            </Link>
+            <>
+              <Link
+                href={
+                  sessionHidden
+                    ? hiddenSessionHref(notification.sessionId, notification.id)
+                    : getSessionHref(notification.sessionId)
+                }
+                className={viewButton}
+                onClick={() => navigate(group.allIds, notification.onView, notification.sessionId)}
+                data-testid={sessionHidden ? "notification-view-output" : "notification-view-session"}
+              >
+                {sessionHidden ? "View output" : "View Session"}
+              </Link>
+              {sessionHidden && replyEnabled && replyAvailability(notification)?.kind === "replyable" && (
+                <Link
+                  href={`${hiddenSessionHref(notification.sessionId, notification.id)}&reply=1`}
+                  className={viewButton}
+                  onClick={() => navigate(group.allIds, notification.onView, notification.sessionId)}
+                  data-testid="notification-reply"
+                >
+                  Reply
+                </Link>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -368,7 +413,10 @@ export function AutoHandledSection({ notifications, isOpen, onToggle }: AutoHand
             const toolName = n.metadata?.["tool_name"] ?? n.title;
             return (
               <div key={n.id} className={autoHandledItem}>
-                <span className={autoHandledDecision}>{decision === "deny" ? "✗" : "✓"}</span>
+                <span className={autoHandledDecision}>
+                  <span aria-hidden="true">{decision === "deny" ? "✗" : "✓"}</span>
+                  <span className={visuallyHidden}>{decision === "deny" ? "Denied" : "Approved"}</span>
+                </span>
                 <div className={autoHandledContent}>
                   <div className={autoHandledTitle}>{toolName}</div>
                   {(n.message || ruleName) && (

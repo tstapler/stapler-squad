@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/events"
 )
 
 const (
@@ -60,6 +61,13 @@ func IsActionableType(t int32) bool {
 	default:
 		return false
 	}
+}
+
+// IsPendingDecision is the single server definition of "the operator must act on
+// this": an unread actionable type not stamped auto_remediating=true. The history
+// record field, the live event field, Clear and the prune all call it (ADR-008).
+func IsPendingDecision(t int32, metadata map[string]string, read bool) bool {
+	return !read && IsActionableType(t) && metadata[events.MetadataKeyAutoRemediating] != "true"
 }
 
 // NotificationRecord is the persisted representation of a notification event.
@@ -118,6 +126,10 @@ type NotificationHistoryStore struct {
 	filePath string
 	mu       sync.RWMutex
 	records  []*NotificationRecord
+
+	// pruneMu serializes PruneByPredicate calls so its audit and backup I/O can
+	// run without mu.
+	pruneMu sync.Mutex
 
 	// existenceChecker, when non-nil, is called at most once per orphanPruneInterval
 	// from enforceRetention to batch-fetch the set of currently-existing session IDs
@@ -424,7 +436,7 @@ func (s *NotificationHistoryStore) Clear(before *time.Time) (int, error) {
 
 	var kept []*NotificationRecord
 	for _, r := range s.records {
-		if !r.IsRead && IsActionableType(r.NotificationType) {
+		if IsPendingDecision(r.NotificationType, r.Metadata, r.IsRead) {
 			kept = append(kept, r) // never delete a still-pending decision
 			continue
 		}
@@ -445,6 +457,50 @@ func (s *NotificationHistoryStore) Clear(before *time.Time) (int, error) {
 	}
 
 	return cleared, nil
+}
+
+// ClearByIDs deletes the listed records except those that are still pending
+// decisions (ADR-008), which are returned in kept in request order. Unknown ids
+// are ignored; records not listed are never touched.
+func (s *NotificationHistoryStore) ClearByIDs(ids []string) (deleted int, kept []string, err error) {
+	if len(ids) == 0 {
+		return 0, nil, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	byID := make(map[string]*NotificationRecord, len(s.records))
+	for _, r := range s.records {
+		byID[r.ID] = r
+	}
+	remove := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		r, ok := byID[id]
+		if !ok {
+			continue
+		}
+		if IsPendingDecision(r.NotificationType, r.Metadata, r.IsRead) {
+			kept = append(kept, id)
+			continue
+		}
+		remove[id] = struct{}{}
+	}
+	if len(remove) == 0 {
+		return 0, kept, nil
+	}
+
+	remaining := s.records[:0:0]
+	for _, r := range s.records {
+		if _, drop := remove[r.ID]; !drop {
+			remaining = append(remaining, r)
+		}
+	}
+	s.records = remaining
+	deleted = len(remove)
+	if err := s.saveToDisk(); err != nil {
+		return deleted, kept, err
+	}
+	return deleted, kept, nil
 }
 
 // SetSessionExistenceLookup registers the batch-fetch function used by the orphan-pruning

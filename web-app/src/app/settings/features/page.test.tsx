@@ -5,7 +5,9 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import fs from "fs";
+import path from "path";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import FeaturesPage from "./page";
 import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
 import type { FeatureFlagMeta } from "@/lib/contexts/FeatureFlagsContext";
@@ -26,6 +28,17 @@ jest.mock("@/components/settings/StreamHubRolloutPanel", () => ({
 }));
 jest.mock("@/components/settings/TymuxRolloutPanel", () => ({
   TymuxRolloutPanel: () => null,
+}));
+
+// The status line has its own test (GateStatusLine.test.tsx); here only its placement matters.
+jest.mock("./GateStatusLine", () => ({
+  GateStatusLine: () => <div data-testid="gate-status-line" />,
+}));
+
+// The override disclosure reads GetDeliveryGateStats for its per-kind counts.
+jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));
+jest.mock("@connectrpc/connect", () => ({
+  createClient: () => ({ getDeliveryGateStats: async () => ({ eventsByKind24h: {} }) }),
 }));
 
 const mockUseFeatureFlags = useFeatureFlags as jest.MockedFunction<typeof useFeatureFlags>;
@@ -255,5 +268,162 @@ describe("FeaturesPage — pi-support disable warning", () => {
 
     expect(setFlag).toHaveBeenCalledWith("pi-support", true);
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("FeaturesPage_should_RenderGateStatusLineOnlyUnderHiddenSessionGate", () => {
+    mockFlags([
+      makeFlag({ name: "backlog" }),
+      makeFlag({ name: "hidden_session_gate", enabled: false }),
+    ]);
+
+    render(<FeaturesPage />);
+
+    const lines = screen.getAllByTestId("gate-status-line");
+    expect(lines).toHaveLength(1);
+    const row = lines[0].closest('[data-testid="feature-flag-row"]');
+    expect(row?.textContent).toContain("hidden-session delivery gate");
+  });
+});
+
+// Story 2.11: per-kind overrides and the explicit global scope.
+describe("FeaturesPage - hidden_session_gate overrides", () => {
+  function setup(scopes?: Record<string, boolean>, enabled = false) {
+    const setFlag = jest.fn();
+    mockUseFeatureFlags.mockReturnValue({
+      flags: { hidden_session_gate: enabled },
+      flagList: [makeFlag({ name: "hidden_session_gate", enabled, description: "gate", scopes })],
+      isLoading: false,
+      error: null,
+      setFlag,
+    });
+    render(<FeaturesPage />);
+    return setFlag;
+  }
+
+  it("features_page_should_send_the_global_literal_scope_when_the_gate_toggle_is_used", () => {
+    const setFlag = setup();
+    fireEvent.click(screen.getByRole("button", { name: /enable notifications: hidden-session delivery gate/i }));
+    expect(setFlag).toHaveBeenCalledWith("hidden_session_gate", { mutation: "set", scope: "global", enabled: true });
+  });
+
+  it("features_page_should_send_set_clear_and_reset_when_override_controls_are_used", () => {
+    const setFlag = setup({ "kind:review": true });
+    const review = screen.getByTestId("gate-override-review");
+    fireEvent.click(review.querySelector('[role="radio"][aria-checked="false"]') as HTMLElement); // Inherit
+    expect(setFlag).toHaveBeenLastCalledWith("hidden_session_gate", { mutation: "clear", scope: "kind:review" });
+    fireEvent.click(screen.getAllByRole("radio", { name: "On" })[1]); // diagnose
+    expect(setFlag).toHaveBeenLastCalledWith("hidden_session_gate", {
+      mutation: "set",
+      scope: "kind:diagnose",
+      enabled: true,
+    });
+    fireEvent.click(screen.getByTestId("gate-reset-default"));
+    expect(setFlag).toHaveBeenLastCalledWith("hidden_session_gate", { mutation: "reset" });
+  });
+
+  it("features_page_should_show_server_readback_not_optimistic_state_when_save_fails", () => {
+    const setFlag = setup({ "kind:review": true });
+    fireEvent.click(screen.getAllByRole("radio", { name: "Off" })[0]);
+    expect(setFlag).toHaveBeenCalled();
+    // setFlag is a no-op stub (a failed save): the control still shows the read-back value.
+    const checked = screen.getByTestId("gate-override-review").querySelector('[aria-checked="true"]');
+    expect(checked?.textContent).toBe("On");
+  });
+
+  it("features_page_should_show_no_override_controls_for_other_flags", () => {
+    mockFlags([makeFlag({ name: "backlog" })]);
+    render(<FeaturesPage />);
+    expect(screen.queryByTestId("gate-kind-overrides")).not.toBeInTheDocument();
+  });
+});
+
+// FG-4: the server's status_detail distinguishes default-off (shadow mode) from an explicit global off.
+describe("FeaturesPage - hidden_session_gate status line (FG-4)", () => {
+  const SHADOW = "Shadow mode: hidden sessions still notify; would-suppress counts are logged";
+  const OFF = "Gate is OFF: hidden sessions deliver everything";
+
+  function gateRow() {
+    return screen.getAllByTestId("feature-flag-row")[0];
+  }
+
+  it("fg4_should_show_the_shadow_mode_line_when_the_flag_is_off_by_default", () => {
+    mockFlags([makeFlag({ name: "hidden_session_gate", enabled: false, statusDetail: SHADOW })]);
+    render(<FeaturesPage />);
+    expect(within(gateRow()).getByText(SHADOW)).toBeInTheDocument();
+    expect(within(gateRow()).queryByText(OFF)).not.toBeInTheDocument();
+  });
+
+  it("fg4_should_show_the_gate_is_off_line_instead_when_the_global_value_is_an_explicit_false", () => {
+    mockFlags([makeFlag({ name: "hidden_session_gate", enabled: false, statusDetail: OFF })]);
+    render(<FeaturesPage />);
+    expect(within(gateRow()).getByText(OFF)).toBeInTheDocument();
+    expect(within(gateRow()).queryByText(SHADOW)).not.toBeInTheDocument();
+  });
+
+  it("fg4_should_show_neither_line_when_the_gate_is_on", () => {
+    mockFlags([makeFlag({ name: "hidden_session_gate", enabled: true, statusDetail: "" })]);
+    render(<FeaturesPage />);
+    expect(within(gateRow()).queryByText(SHADOW)).not.toBeInTheDocument();
+    expect(within(gateRow()).queryByText(OFF)).not.toBeInTheDocument();
+  });
+});
+
+// Story 3.10 / 2.11 UX criteria FG-1, FG-5, FG-6.
+describe("FeaturesPage - notification flag rows (FG-1, FG-5, FG-6)", () => {
+  it("fg1_should_show_both_flags_as_toggles_with_a_description_and_takes_effect_without_reload", () => {
+    mockFlags([
+      makeFlag({ name: "notification_tray_v2", enabled: true, description: "Capped toast deck and tray" }),
+      makeFlag({ name: "hidden_session_gate", enabled: false, description: "Quiet hidden sessions" }),
+      makeFlag({ name: "backlog", enabled: true, description: "Backlog" }),
+    ]);
+    render(<FeaturesPage />);
+
+    for (const label of [/disable notifications: capped toast deck with move all to tray/i, /enable notifications: hidden-session delivery gate/i]) {
+      expect(screen.getByRole("button", { name: label })).toHaveAttribute("aria-pressed");
+    }
+    const rows = screen.getAllByTestId("feature-flag-row");
+    const noteCount = rows.filter((row) => row.querySelector('[data-testid="flag-live-note"]')).length;
+    expect(noteCount).toBe(2);
+    expect(screen.getAllByTestId("flag-live-note")[0]).toHaveTextContent("Takes effect without reload");
+    expect(screen.getByText("Capped toast deck and tray")).toBeInTheDocument();
+    expect(screen.getByText("Quiet hidden sessions")).toBeInTheDocument();
+  });
+
+  it("fg5_should_offer_the_session_kind_disclosure_only_under_the_gate_with_44px_labelled_controls", () => {
+    mockFlags([
+      makeFlag({ name: "notification_tray_v2", enabled: true }),
+      makeFlag({ name: "hidden_session_gate", enabled: true }),
+    ]);
+    render(<FeaturesPage />);
+
+    const disclosures = screen.getAllByTestId("gate-kind-overrides");
+    expect(disclosures).toHaveLength(1);
+    expect(disclosures[0].closest('[data-testid="feature-flag-row"]')?.textContent).toContain("hidden-session delivery gate");
+    expect(disclosures[0]).toHaveTextContent("Overrides by session kind");
+    for (const group of screen.getAllByRole("radiogroup")) expect(group).toHaveAccessibleName(/Gate override for \w+ sessions/);
+
+    const css = fs.readFileSync(path.join(__dirname, "page.css.ts"), "utf8");
+    for (const name of ["overrideSegment", "resetButton"]) {
+      const block = css.slice(css.indexOf(`export const ${name} = style(`));
+      expect(block.slice(0, block.indexOf("});"))).toMatch(/minHeight: "2\.75rem"/);
+    }
+  });
+
+  it("fg6_should_state_the_effective_value_and_its_source_and_inherit_should_clear_the_override", () => {
+    const setFlag = jest.fn();
+    mockUseFeatureFlags.mockReturnValue({
+      flags: { hidden_session_gate: true },
+      flagList: [makeFlag({ name: "hidden_session_gate", enabled: true, scopes: { "kind:review": false } })],
+      isLoading: false,
+      error: null,
+      setFlag,
+    });
+    render(<FeaturesPage />);
+
+    expect(screen.getByTestId("gate-override-effective-review")).toHaveTextContent("Off - override");
+    expect(screen.getByTestId("gate-override-effective-diagnose")).toHaveTextContent("On - from global");
+
+    fireEvent.click(within(screen.getByTestId("gate-override-review")).getByRole("radio", { name: "Inherit" }));
+    expect(setFlag).toHaveBeenLastCalledWith("hidden_session_gate", { mutation: "clear", scope: "kind:review" });
   });
 });

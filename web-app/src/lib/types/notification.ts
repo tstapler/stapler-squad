@@ -22,6 +22,13 @@ export interface NotificationData {
   sourceWorkingDir?: string;
   /** Project name for additional context */
   sourceProject?: string;
+  /**
+   * Server-computed: an unread decision the operator must act on (`IsPendingDecision`
+   * in Go). The only input to "pinned"; never derive it from `notificationType`.
+   */
+  isPendingDecision?: boolean;
+  /** Times an identical (session, type) toast replaced its predecessor; shown as "x2". */
+  repeatCount?: number;
   /** Additional metadata key-value pairs */
   metadata?: Record<string, string>;
   onView?: () => void;

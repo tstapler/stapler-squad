@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"go.opentelemetry.io/otel/codes"
@@ -141,7 +142,7 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error("[session pipeline] panic recovered, writing terminal Failed",
-				"session", p.instanceTitle, "panic", r)
+				"session", p.instanceTitle, "panic", r, "stack", string(debug.Stack()))
 			span.AddEvent("panic_recovered")
 			terminal(pipelineOutcome{session.Failed, "StartupError", SessionCreationOutcomeFailed})
 		}
@@ -310,7 +311,7 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 		if err := s.setupRemoteApprovalHooks(p.instance, instanceRootDir, p.instanceTitle); err != nil {
 			log.Warn("[session pipeline] failed to set up remote approval relay", "session", p.instanceTitle, "err", err)
 		}
-	} else if err := InjectHookConfig(instanceRootDir, p.instanceTitle); err != nil {
+	} else if err := InjectHookConfig(instanceRootDir, p.instanceTitle, p.instance.UUID); err != nil {
 		log.Warn("[session pipeline] failed to inject hook config", "session", p.instanceTitle, "err", err)
 	}
 

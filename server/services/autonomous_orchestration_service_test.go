@@ -18,7 +18,9 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	ssqlog "github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -984,6 +986,8 @@ func TestOnAutonomousDriverComplete_SuppressesGenericNotification_When_InstanceH
 	require.NoError(t, storage.AddInstance(inst))
 	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
 
+	installOnGate(eventBus, deliverygate.Entry{UUID: inst.UUID, Title: title, Hidden: true, Kind: deliverygate.KindOther})
+
 	subCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ch, _ := eventBus.Subscribe(subCtx)
@@ -1244,6 +1248,8 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesOpera
 	assert.Equal(t, int32(1), notif.NotificationPriority, "non-terminal, no operator action needed yet — must not demand acknowledgment like the justParked notification does")
 	assert.Contains(t, notif.NotificationMessage, "headless pool exhausted")
 	assert.Contains(t, notif.NotificationMessage, "will retry automatically")
+	assert.False(t, notifications.IsPendingDecision(notif.NotificationType, notif.NotificationMetadata, false),
+		"an auto-retrying WARNING is informational, not a pending decision")
 }
 
 // TestAutonomousOrchestrationService_OnAutonomousDriverComplete_WorkStuck_RespawnsInsteadOfSelfBlocking

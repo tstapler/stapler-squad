@@ -55,6 +55,15 @@ func migratedTemplateDBURI() (string, error) {
 	return templateDBURI, templateDBErr
 }
 
+// WarmTestEntRepositoryTemplate builds the process-wide template database that
+// NewTestEntRepository copies from. Its connection-pool goroutines live for
+// the whole process, so a goleak.IgnoreCurrent() baseline taken before the
+// first NewTestEntRepository call flags them as leaks. Call it from TestMain.
+func WarmTestEntRepositoryTemplate() error {
+	_, err := migratedTemplateDBURI()
+	return err
+}
+
 // NewTestEntRepository returns an EntRepository backed by a uniquely-named
 // shared-cache in-memory SQLite database, closed automatically via
 // t.Cleanup. It replaces the repeated

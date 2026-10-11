@@ -74,7 +74,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          CHANGED=$(gh api "repos/${{ github.repository }}/compare/${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}" --paginate --jq '.files[].filename')
+          CHANGED=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
           echo "Changed files:"
           echo "$CHANGED"
           if echo "$CHANGED" | grep -qE '\.go$|^go\.(mod|sum)$|^Makefile$|^install\.sh$|^proto/|^web-app/src/|^web-app/package\.json$|^web-app/pnpm-lock\.yaml$|^\.github/workflows/build\.yml$|^\.github/actions/prepare/|^\.gitmodules$|^third_party/tmux/'; then
@@ -589,6 +589,40 @@ jobs:
           name: coverage-tmux
           path: coverage.tmux.out
           retention-days: 1
+
+  # test-delivery-guards: the `//go:build sinkguard` type-based guard tests
+  # (delivery gate sinks, terminal-write callers) are excluded from every other
+  # job's default build tags, so without this job a regression in them would
+  # only surface in a local `make ci`. Runs on PRs and main; the guards are
+  # static/type checks with no tmux, so it stays fast.
+  test-delivery-guards:
+    name: Test (delivery-gate and terminal-write guards)
+    runs-on: ubuntu-latest
+    needs: prepare
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Install gotestsum
+        run: |
+          go install gotest.tools/gotestsum@v1.13.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Download generated files
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.prepare.outputs.artifact-name }}
+
+      - name: Run sinkguard-tagged guard tests
+        run: make test-delivery-guards-run
 
   # test-rest's budget was raised 22m->30m (job timeout 25->35) on 2026-09-05
   # (PR #697): the retry-on-any-failure fallback below re-runs the entire

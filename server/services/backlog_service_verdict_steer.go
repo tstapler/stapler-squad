@@ -109,6 +109,12 @@ func (s *BacklogService) steerWorkSessionWithVerdict(ctx context.Context, p *eve
 		return
 	}
 
+	// The work session is never hidden; a hidden target is refused, not written to.
+	if s.sessionSteerer.IsHiddenSession(workUUID) {
+		s.notifyVerdictSteerFailed(itemID, itemTitle, workUUID, "target is a background session and is read-only")
+		return
+	}
+
 	if !s.waitForSteerReady(ctx, workUUID) {
 		s.notifyVerdictSteerFailed(itemID, itemTitle, workUUID, "session never went idle")
 		return

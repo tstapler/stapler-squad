@@ -17,6 +17,11 @@ var (
 	ErrRefNotFound = errors.New("git backend: ref not found")
 	// ErrObjectNotFound means a SHA is well-formed but its object is missing from the object database.
 	ErrObjectNotFound = errors.New("git backend: object not found")
+	// ErrTornRead means an in-process read saw a repository mid-update (e.g. a pack repacked
+	// under it); the Router retries the read on the CLI.
+	ErrTornRead = errors.New("git backend: torn read")
+	// ErrObjectMissing means a well-formed SHA has no object in the object database (spike S7).
+	ErrObjectMissing = errors.New("git backend: object missing")
 	// ErrNoMergeBase means the two revisions share no common ancestor.
 	ErrNoMergeBase = errors.New("git backend: no merge base")
 	// ErrNotARepo means the location is not inside a git repository.

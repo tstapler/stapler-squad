@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/log"
+	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tokens"
@@ -94,8 +95,15 @@ func NewCapacityMonitor(p CapacityMonitorParams) *CapacityMonitor {
 		// SessionCompactor directly — wrap it. *session.Instance satisfies
 		// paneSubmitter, so this call resolves fine even though the two
 		// function *types* don't match for a direct assignment.
+		//
+		// The closure is the chain's acquirer (Story 5.0): a busy lease is an
+		// error the capacity monitor already logs and retries next cycle.
 		compactor = func(ctx context.Context, inst *session.Instance, content string) error {
-			return session.SubmitContentWithEnter(ctx, inst, content)
+			lease, ok := inst.TryTerminalWriteLease(session.LeaseWriterOther)
+			if !ok {
+				return session.ErrLeaseBusy
+			}
+			return session.SubmitContentWithEnter(ctx, inst, lease, content)
 		}
 	}
 	return &CapacityMonitor{
@@ -388,7 +396,9 @@ func (m *CapacityMonitor) stopForGuardrail(ctx context.Context, inst *session.In
 			8, // NOTIFICATION_TYPE_WARNING
 			3, // NOTIFICATION_PRIORITY_HIGH
 			title, msg,
-			map[string]string{"type": kind},
+			// The guardrail terminates the session right after this: a hard stop,
+			// so the gate must deliver it for a hidden session too.
+			map[string]string{"type": kind, pkgevents.MetadataKeyDeliveryClass: pkgevents.DeliveryClassFailure},
 		))
 	}
 	if m.terminator == nil {

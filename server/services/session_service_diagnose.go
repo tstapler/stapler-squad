@@ -149,6 +149,9 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, path string
 	if err != nil {
 		return nil, fmt.Errorf("CreateDirectorySession: %w", err)
 	}
+	// Index before Start: Start launches the agent, whose first hook must resolve
+	// as hidden (AddInstance below is too late; see Spike 1.3e).
+	s.indexSessionForDelivery(instance)
 	// Wire callbacks (including the tagging engine/fire recorder, session-classifier-pipeline
 	// Task 2.3.3d) before Start() so a first-time-setup session's ReclassifyTagsAfterCreate
 	// call has a real engine to evaluate, matching the primary CreateSession pipeline's
@@ -217,6 +220,7 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, repoPath, wo
 	if err != nil {
 		return nil, fmt.Errorf("CreateWorktreeSession: %w", err)
 	}
+	s.indexSessionForDelivery(instance) // before Start, as in CreateDirectorySession
 	// See CreateDirectorySession's matching comment: wire callbacks (tagging engine/fire
 	// recorder included) before Start() so ReclassifyTagsAfterCreate has a real engine.
 	s.wireCallbacks(instance)

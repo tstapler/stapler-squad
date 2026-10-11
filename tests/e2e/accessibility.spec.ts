@@ -839,6 +839,7 @@ test.describe('Accessibility — notification-revamp (WCAG 2.1 AA)', () => {
               metadata: { approval_id: 'appr-a11y', tool_name: 'Bash' },
               createdAt: new Date().toISOString(),
               isRead: false,
+              isPendingDecision: true,
             },
             {
               id: 'n-a11y-read',
