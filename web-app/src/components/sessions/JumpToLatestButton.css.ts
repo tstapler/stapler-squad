@@ -10,7 +10,7 @@ const fadeIn = keyframes({
 export const button = style({
   position: "absolute",
   right: vars.space[2],
-  zIndex: zIndex.floatingTerminalUI,
+  zIndex: zIndex.terminalPaneChrome,
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",

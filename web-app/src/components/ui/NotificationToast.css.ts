@@ -138,9 +138,9 @@ export const typeLabel = style({
   letterSpacing: "0.5px",
   padding: "2px 6px",
   borderRadius: "4px",
-  // The darkening layer keeps white text at >= 4.5:1 on every priority colour (Axe color-contrast).
-  background: `linear-gradient(rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0.4)), var(--priority-color, ${vars.color.primary})`,
-  color: vars.color.primaryText,
+  // Fixed white on a darkened fill: primaryText is black in some themes, which the darkening would sink below 4.5:1.
+  background: `linear-gradient(rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0.5)), var(--priority-color, ${vars.color.primary})`,
+  color: "#ffffff",
   whiteSpace: "nowrap",
   flexShrink: 0,
   selectors: {
@@ -259,9 +259,9 @@ const baseActionButton = style({
 });
 
 export const viewButton = style([baseActionButton, {
-  // The darkening layer keeps white text at >= 4.5:1 on every priority colour (Axe color-contrast).
-  background: `linear-gradient(rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0.4)), var(--priority-color, ${vars.color.primary})`,
-  color: vars.color.primaryText,
+  // Fixed white on a darkened fill: primaryText is black in some themes, which the darkening would sink below 4.5:1.
+  background: `linear-gradient(rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0.5)), var(--priority-color, ${vars.color.primary})`,
+  color: "#ffffff",
   selectors: {
     "&:hover": {
       filter: "brightness(1.1)",
@@ -291,17 +291,16 @@ export const focusButton = style([baseActionButton, {
   selectors: {
     "&:hover": {
       background: vars.color.primary,
-      color: vars.color.primaryText,
+      color: vars.color.onPrimaryFill,
     },
   },
 }]);
 
 export const approveButton = style([baseActionButton, {
   background: vars.color.success,
-  color: vars.color.primaryText,
+  color: vars.color.onSuccessFill,
   selectors: {
     "&:hover": {
-      background: vars.color.successBg,
       transform: "translateY(-1px)",
       boxShadow: "0 4px 8px rgba(0, 0, 0, 0.2)",
     },
@@ -310,10 +309,9 @@ export const approveButton = style([baseActionButton, {
 
 export const denyButton = style([baseActionButton, {
   background: vars.color.error,
-  color: vars.color.primaryText,
+  color: vars.color.onErrorFill,
   selectors: {
     "&:hover": {
-      background: vars.color.errorDark,
       transform: "translateY(-1px)",
       boxShadow: "0 4px 8px rgba(0, 0, 0, 0.2)",
     },
@@ -326,7 +324,7 @@ export const minimizeHint = style({
 
 export const undoButton = style([baseActionButton, {
   background: vars.color.primary,
-  color: vars.color.primaryText,
+  color: vars.color.onPrimaryFill,
   selectors: {
     "&:hover": {
       filter: "brightness(1.1)",
@@ -507,7 +505,7 @@ export const undoAction = style({
   borderRadius: "8px",
   border: "none",
   background: vars.color.primary,
-  color: vars.color.primaryText,
+  color: vars.color.onPrimaryFill,
   fontWeight: 600,
   cursor: "pointer",
 });
@@ -645,7 +643,9 @@ export const disclosureButton = style({
   padding: "0 4px",
   background: "none",
   border: "none",
-  color: vars.color.primary,
+  // textPrimary + underline: `primary` is below 4.5:1 on the card in the clean and cyberpunk77 themes.
+  color: vars.color.textPrimary,
+  textDecoration: "underline",
   fontSize: "13px",
   fontWeight: 600,
   cursor: "pointer",

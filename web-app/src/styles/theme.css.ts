@@ -93,6 +93,9 @@ export const lightTheme = createTheme(vars, {
     primaryActive: "#003d99",
     primaryDark: "#003d99",
     primaryText: "#ffffff",
+    onPrimaryFill: "#ffffff",
+    onSuccessFill: "#0a0a0a",
+    onErrorFill: "#0a0a0a",
 
     success: "#10b981",
     successBg: "#d1fae5",
@@ -200,6 +203,9 @@ export const darkTheme = createTheme(vars, {
     primaryActive: "#52b9f0",
     primaryDark: "#1a7fc1",
     primaryText: "#ffffff",
+    onPrimaryFill: "#0a0a0a",
+    onSuccessFill: "#0a0a0a",
+    onErrorFill: "#0a0a0a",
 
     success: "#10b981",
     successBg: "#064e3b",
@@ -308,6 +314,9 @@ export const matrixTheme = createTheme(vars, {
     primaryActive: "#00cc33",
     primaryDark: "#004d18",
     primaryText: "#000000",
+    onPrimaryFill: "#000000",
+    onSuccessFill: "#000000",
+    onErrorFill: "#000000",
 
     success: "#00ff41",
     successBg: "#001a00",
@@ -423,6 +432,9 @@ export const cyberpunk77Theme = createTheme(vars, {
     primaryActive: "#aa1e50",
     primaryDark: "#7a1540",
     primaryText: "#ffffff",
+    onPrimaryFill: "#ffffff",
+    onSuccessFill: "#000000",
+    onErrorFill: "#000000",
 
     success: "#00ff9f",
     successBg: "#001a11",
@@ -538,6 +550,9 @@ export const wh40kTheme = createTheme(vars, {
     primaryActive: "#a08818",
     primaryDark: "#705810",
     primaryText: "#0c0a08",
+    onPrimaryFill: "#0c0a08",
+    onSuccessFill: "#ffffff",
+    onErrorFill: "#ffffff",
 
     success: "#4a7c3f",
     successBg: "#0a1208",
@@ -547,7 +562,7 @@ export const wh40kTheme = createTheme(vars, {
     warningText: "#e4c840",
     error: "#8b1a1a",
     errorBg: "#1a0808",
-    errorText: "#cc5656", /* was #c45050 = 4.26:1 on errorBg; #cc5656 = 4.65:1 (chipContrast.test.ts) */
+    errorText: "#d46060", /* was #cc5656 = 4.34:1 on cardBackground (tray header); #d46060 = 4.87:1, 5.21:1 on errorBg */
     errorDark: "#6b1010",
     critical: "#6b3d8b",
     criticalBg: "#1a0808",
@@ -654,6 +669,9 @@ export const cleanTheme = createTheme(vars, {
     primaryActive: "#4f46e5",
     primaryDark: "#3730a3",
     primaryText: "#ffffff",
+    onPrimaryFill: "#ffffff",
+    onSuccessFill: "#000000",
+    onErrorFill: "#000000",
 
     // was #10b981 — 3.83:1 on successBg fails WCAG AA; #34d399 = 5.06:1 ✅
     success: "#34d399",

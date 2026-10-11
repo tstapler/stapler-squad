@@ -22,7 +22,7 @@ export const panel = style({
       position: "absolute",
       left: 0,
       right: 0,
-      zIndex: zIndex.floatingTerminalUI,
+      zIndex: zIndex.terminalPaneChrome,
       overflowY: "auto",
     },
   },
