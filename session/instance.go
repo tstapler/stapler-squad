@@ -2281,7 +2281,27 @@ func (i *Instance) worktreeNeedsCommit() (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("%w: %w", ErrDirtyStateUnknown, err)
 	}
+	if dirty {
+		// CommitChanges gates on the cached IsDirty; a stale "clean" there would
+		// skip the commit and Remove() would then delete the files.
+		i.gitManager.InvalidateDirtyCache()
+	}
 	return dirty, nil
+}
+
+// commitBeforeRemove re-checks after the agent's tmux session is gone (it could
+// write between the first check and teardown) and commits anything found.
+func (i *Instance) commitBeforeRemove(commitMsg string) error {
+	needs, err := i.worktreeNeedsCommit()
+	if err != nil {
+		return err
+	}
+	if needs {
+		if err := i.gitManager.CommitChanges(commitMsg); err != nil {
+			return fmt.Errorf("failed to commit changes: %w", err)
+		}
+	}
+	return nil
 }
 
 // pauseLocked is the actor-safe body of Pause().
@@ -2342,6 +2362,9 @@ func pauseLocked(s *instanceState) error {
 	// Check if worktree exists before trying to remove it.
 	if i.IsWorktree {
 		if _, err := os.Stat(i.gitManager.GetWorktreePath()); err == nil {
+			if err := i.commitBeforeRemove(fmt.Sprintf("[claudesquad] update from '%s' on %s (paused)", i.Title, time.Now().Format(time.RFC822))); err != nil {
+				return i.combineErrors(append(errs, err))
+			}
 			if err := i.gitManager.Remove(); err != nil {
 				errs = append(errs, fmt.Errorf("failed to remove git worktree: %w", err))
 				log.Error("failed to remove git worktree", "err", err)
@@ -2529,6 +2552,9 @@ func stopByUserLocked(s *instanceState) error {
 
 	if i.IsWorktree {
 		if _, err := os.Stat(i.gitManager.GetWorktreePath()); err == nil {
+			if err := i.commitBeforeRemove(fmt.Sprintf("[claudesquad] update from '%s' on %s (stopped)", i.Title, time.Now().Format(time.RFC822))); err != nil {
+				return i.combineErrors(append(errs, err))
+			}
 			if err := i.gitManager.Remove(); err != nil {
 				return i.combineErrors(append(errs, fmt.Errorf("failed to remove git worktree: %w", err)))
 			}

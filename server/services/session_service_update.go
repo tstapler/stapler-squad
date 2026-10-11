@@ -22,7 +22,8 @@ func classifyPauseResumeErr(err error, opDesc string) *connect.Error {
 	var transErr session.ErrInvalidTransition
 	if errors.As(err, &transErr) ||
 		errors.Is(err, session.ErrPauseNotPermitted) ||
-		errors.Is(err, session.ErrResumeNotPermitted) {
+		errors.Is(err, session.ErrResumeNotPermitted) ||
+		errors.Is(err, session.ErrDirtyStateUnknown) {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("failed to %s session: %w", opDesc, err))
 	}
 	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to %s session: %w", opDesc, err))
@@ -33,7 +34,8 @@ func classifyPauseResumeErr(err error, opDesc string) *connect.Error {
 // classifyPauseResumeErr.
 func classifyStopErr(err error, opDesc string) *connect.Error {
 	var transErr session.ErrInvalidTransition
-	if errors.As(err, &transErr) || errors.Is(err, session.ErrPauseNotPermitted) {
+	if errors.As(err, &transErr) || errors.Is(err, session.ErrPauseNotPermitted) ||
+		errors.Is(err, session.ErrDirtyStateUnknown) {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("failed to %s session: %w", opDesc, err))
 	}
 	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to %s session: %w", opDesc, err))

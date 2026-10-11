@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -78,7 +77,7 @@ func TestWorktreeNeedsCommit_should_PreserveUntrackedFile_When_WorktreeRemoved(t
 	require.NoError(t, inst.gitManager.CommitChanges("save"))
 	require.NoError(t, inst.gitManager.Remove())
 
-	repo, err := gogit.PlainOpen(repoPath)
+	repo, err := git.OpenRepo(repoPath)
 	require.NoError(t, err)
 	ref, err := repo.Reference(plumbing.NewBranchReferenceName(branch), true)
 	require.NoError(t, err)
@@ -102,4 +101,36 @@ func TestWorktreeNeedsCommit_should_BeFalse_When_WorktreeDirMissing(t *testing.T
 
 	require.NoError(t, err)
 	assert.False(t, needs)
+}
+
+// A stale cached "clean" must not make CommitChanges skip the commit that the
+// uncached check just called for.
+func TestWorktreeNeedsCommit_should_ReachCommit_When_DirtyCacheIsStaleClean(t *testing.T) {
+	t.Parallel()
+	repoPath := t.TempDir()
+	initTestRepoForReviewQueue(t, repoPath)
+	wt, branch, err := git.NewGitWorktree(repoPath, "stale-clean")
+	require.NoError(t, err)
+	require.NoError(t, wt.Setup())
+	t.Cleanup(func() { _ = wt.Cleanup() })
+	inst := &Instance{IsWorktree: true, gitManager: GitWorktreeManager{worktree: wt}}
+
+	dirty, err := inst.gitManager.IsDirty() // primes the clean cache
+	require.NoError(t, err)
+	require.False(t, dirty)
+	require.NoError(t, os.WriteFile(filepath.Join(wt.GetWorktreePath(), "late.txt"), []byte("late"), 0o644))
+
+	needs, err := inst.worktreeNeedsCommit()
+	require.NoError(t, err)
+	require.True(t, needs)
+	require.NoError(t, inst.gitManager.CommitChanges("save"))
+
+	repo, err := git.OpenRepo(repoPath)
+	require.NoError(t, err)
+	ref, err := repo.Reference(plumbing.NewBranchReferenceName(branch), true)
+	require.NoError(t, err)
+	commit, err := repo.CommitObject(ref.Hash())
+	require.NoError(t, err)
+	_, err = commit.File("late.txt")
+	require.NoError(t, err, "late.txt must be committed despite the stale clean cache")
 }
