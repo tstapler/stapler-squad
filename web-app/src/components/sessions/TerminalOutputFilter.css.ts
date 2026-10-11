@@ -1,12 +1,12 @@
 import { style } from "@vanilla-extract/css";
-import { vars } from "@/styles/theme.css";
+import { vars, zIndex } from "@/styles/theme.css";
 
 export const panel = style({
   position: "absolute",
   top: 0,
   left: 0,
   right: 0,
-  zIndex: 20,
+  zIndex: zIndex.terminalPaneChrome,
   display: "flex",
   flexDirection: "column",
   maxHeight: "50%",
