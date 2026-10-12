@@ -96,7 +96,9 @@ func TestProbeErrorAndPanicFailClosedWithSubReason(t *testing.T) {
 func TestProbeIsNotConsultedForRefsReads(t *testing.T) {
 	p := &fakeProbe{err: errors.New("must not be called")}
 	g := newRig(t, allCohorts(backend.BackendGoGit), withProbe(p))
-	g.gg.resolveRef = func(context.Context, backend.RepoLocation, backend.RefName) (backend.CommitSHA, error) { return "sha", nil }
+	g.gg.resolveRef = func(context.Context, backend.RepoLocation, backend.RefName) (backend.CommitSHA, error) {
+		return "sha", nil
+	}
 	got, err := g.r.ResolveRef(ctxBG, localRepo, "HEAD")
 	require.NoError(t, err)
 	assert.Equal(t, backend.CommitSHA("sha"), got)
