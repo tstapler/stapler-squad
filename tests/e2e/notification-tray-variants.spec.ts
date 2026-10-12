@@ -376,7 +376,9 @@ test.describe('notification tray variants', () => {
 
         await page.getByTestId('toast-overflow-chip').click();
         await tray.expectOpen();
-        await expect(tray.tray).toHaveAttribute('data-variant', 'top-sheet');
+        // The keyboard does not change the variant: the sheet rides its top edge.
+        await expect(tray.tray).toHaveAttribute('data-variant', 'bottom-sheet');
+        await expect(tray.tray).toHaveAttribute('data-keyboard', 'open');
         // Pointer open on a touch device never takes focus from the terminal (TK-1).
         expect(await page.evaluate(() => document.activeElement?.getAttribute('aria-label'))).toBe('Terminal input');
 
@@ -389,8 +391,9 @@ test.describe('notification tray variants', () => {
             return b!.y + b!.height;
           })
           .toBeLessThanOrEqual(keyboardTop + 1);
-        // Anchored at the top: the keyboard can never cover it (TK-2).
-        expect((await tray.tray.boundingBox())!.y).toBeLessThan(vp.height / 2);
+        // Flush on the keyboard, not floating above it: no terminal shows through the gap (TK-2).
+        const box = (await tray.tray.boundingBox())!;
+        expect(Math.abs(box.y + box.height - keyboardTop)).toBeLessThanOrEqual(2);
         expect(await page.evaluate(() => document.activeElement?.getAttribute('aria-label'))).toBe('Terminal input');
       } finally {
         await client.deleteSession(session.id, true);
