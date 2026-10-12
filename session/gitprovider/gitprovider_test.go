@@ -15,7 +15,7 @@ import (
 func TestBackend_UnregisteredRejectsLocalLocations(t *testing.T) {
 	defer gitprovider.Register(nil)()
 
-	_, err := gitprovider.Backend().RepoRoot(context.Background(), backend.Local{Root: t.TempDir()})
+	_, err := gitprovider.Backend().RepoRoot(context.Background(), backend.Local{Root: backend.RepoRoot(t.TempDir())})
 
 	require.ErrorIs(t, err, backend.ErrNoLocalRunner)
 }
