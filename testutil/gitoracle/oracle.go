@@ -348,7 +348,9 @@ func (n normalizer) render(v any) string {
 		return n.replace(fmt.Sprintf("%+v", v))
 	}
 	var decoded any
-	if err := json.Unmarshal(data, &decoded); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber() // float64 would collapse distinct integers above 2^53
+	if err := dec.Decode(&decoded); err != nil {
 		return n.replace(string(data))
 	}
 	pretty, err := json.MarshalIndent(nullsToEmptySlices(decoded), "", " ")

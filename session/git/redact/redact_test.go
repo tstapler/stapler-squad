@@ -37,6 +37,9 @@ func TestGit(t *testing.T) {
 		{"helper authtoken line", "authtoken=abc\nhost=h", "authtoken=***\nhost=h"},
 		{"proxy authorization mixed case", "Proxy-Authorization: Basic Zm9v", "Proxy-Authorization: ***"},
 		{"gitlab pat", "using glpat-abcDEF123_xyz456 now", "using *** now"},
+		{"spaces around equals", "remote: token = abc123 done", "remote: token = *** done"},
+		{"double quoted value with spaces", `token="abc def" x`, `token=*** x`},
+		{"single quoted value", "secret='a b' x", "secret=*** x"},
 		{"plain text", "nothing secret here", "nothing secret here"},
 	}
 	for _, c := range cases {

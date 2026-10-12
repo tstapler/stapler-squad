@@ -205,6 +205,14 @@ func TestRenderTreatsNilAndEmptySlicesAlike(t *testing.T) {
 	}
 }
 
+func TestRenderKeepsLargeIntegersDistinct(t *testing.T) {
+	n := newNormalizer(Places{"main": "/x"})
+	type res struct{ Size int64 }
+	if n.render(res{1<<60 + 1}) == n.render(res{1 << 60}) {
+		t.Fatal("distinct large integers rendered identically")
+	}
+}
+
 // A place nested inside another must win over its parent path, or "/a/b/c" renders "<main>/c".
 func TestNormalizerPrefersTheLongestPath(t *testing.T) {
 	n := newNormalizer(Places{"main": "/a/b", "linked": "/a/b/c"})
