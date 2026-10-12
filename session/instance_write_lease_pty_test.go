@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -98,6 +99,14 @@ func TestWedgedWrite_ShouldKeepTheLeaseAndPauseAndDeleteShouldCompleteWhileItIsW
 				t.Logf("%s: the PTY close woke the blocked write", tc.name)
 			} else {
 				t.Logf("%s: the PTY close has not woken the blocked write (a standalone 2s probe of the same pair never saw it wake; only a slave reader does)", tc.name)
+			}
+
+			// macOS: once the master is closed, a blocked write on it never returns, even with a
+			// slave reader (stdlib-only repro: write stays blocked 3s after reopening the slave),
+			// so there is no release to wait for. Linux does release it, which the wait below checks.
+			if runtime.GOOS == "darwin" && !tc.closeSlave {
+				t.Logf("%s: blocked master write is unreleasable after master close on macOS; skipping the release wait", tc.name)
+				return
 			}
 
 			// A slave reader is what ends a blocked master write: attach one
