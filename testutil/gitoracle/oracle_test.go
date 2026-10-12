@@ -205,6 +205,32 @@ func TestRenderTreatsNilAndEmptySlicesAlike(t *testing.T) {
 	}
 }
 
+func TestRenderKeepsLargeIntegersDistinct(t *testing.T) {
+	n := newNormalizer(Places{"main": "/x"})
+	type res struct{ Size int64 }
+	if n.render(res{1<<60 + 1}) == n.render(res{1 << 60}) {
+		t.Fatal("distinct large integers rendered identically")
+	}
+}
+
+// A place nested inside another must win over its parent path, or "/a/b/c" renders "<main>/c".
+func TestNormalizerPrefersTheLongestPath(t *testing.T) {
+	n := newNormalizer(Places{"main": "/a/b", "linked": "/a/b/c"})
+	if got := n.replace("/a/b/c/f and /a/b/g"); got != "<linked>/f and <main>/g" {
+		t.Fatalf("replace = %q", got)
+	}
+}
+
+// A string value that happens to contain ": null" must not be treated as a JSON null.
+func TestRenderKeepsLiteralNullTextInStrings(t *testing.T) {
+	n := newNormalizer(Places{"main": "/x"})
+	type res struct{ Subject string }
+	a, b := n.render(res{Subject: "fix: null"}), n.render(res{Subject: "fix: []"})
+	if a == b {
+		t.Fatalf("different strings rendered identically: %q", a)
+	}
+}
+
 // corruptingBackend writes through the real CLI and then plants an object git rejects, so the
 // fsck comparison inside RunBoth is the only thing that can notice the corruption.
 type corruptingBackend struct {
