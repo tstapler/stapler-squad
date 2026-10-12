@@ -7,6 +7,8 @@ import (
 	"path"
 	"strings"
 
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/git/backend/cli"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -30,13 +32,45 @@ var ErrRemoteBasePathMissing = errors.New("remote worktree base path does not ex
 // meant to be reused across many worktrees on the same remote CommandRunner.
 type RemoteWorktreeOps struct {
 	runner tmux.CommandRunner
+	// host is the remote host's name, identity for logs and metrics only.
+	host string
+	// git runs the git operations (worktree add/remove). Remote locations built by
+	// backend.Locate carry runner, so the same runner value reaches the backend.
+	git backend.Backend
+}
+
+// RemoteWorktreeOption configures a RemoteWorktreeOps.
+type RemoteWorktreeOption func(*RemoteWorktreeOps)
+
+// WithGitBackend injects the backend that runs git. The default is the CLI backend over the
+// ops' own runner, which is what tests with a spy runner want; production passes the router.
+func WithGitBackend(b backend.Backend) RemoteWorktreeOption {
+	return func(r *RemoteWorktreeOps) { r.git = b }
+}
+
+// WithRemoteHost names the host for the backend's logs and metrics.
+func WithRemoteHost(host string) RemoteWorktreeOption {
+	return func(r *RemoteWorktreeOps) { r.host = host }
 }
 
 // NewRemoteWorktreeOps constructs a RemoteWorktreeOps that runs every command
 // through runner (a *tmux.SSHRunner in production, tmux.LocalRunner{} or a
-// test spy in tests).
-func NewRemoteWorktreeOps(runner tmux.CommandRunner) *RemoteWorktreeOps {
-	return &RemoteWorktreeOps{runner: runner}
+// test spy in tests). Git operations go through the backend (WithGitBackend);
+// non-git commands (test -d, the sh -c init script) use runner directly.
+func NewRemoteWorktreeOps(runner tmux.CommandRunner, opts ...RemoteWorktreeOption) *RemoteWorktreeOps {
+	r := &RemoteWorktreeOps{runner: runner}
+	for _, opt := range opts {
+		opt(r)
+	}
+	if r.git == nil {
+		r.git = cli.New(runner)
+	}
+	return r
+}
+
+// location is where repoPath lives, built from the runner this ops value was given.
+func (r *RemoteWorktreeOps) location(repoPath string) backend.RepoLocation {
+	return backend.Locate(r.runner, r.host, repoPath)
 }
 
 // RemoteWorktree identifies one git worktree on a remote host: the existing
@@ -83,9 +117,8 @@ func (r *RemoteWorktreeOps) CreateWorktree(ctx context.Context, w RemoteWorktree
 		return fmt.Errorf("%w: %s: %s (%v)", ErrRemoteBasePathMissing, basePath, bytesToTrimmedString(out), err)
 	}
 
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	if out, err := r.runner.Run(ctx, w.RepoPath, "git", "worktree", "add", w.WorktreePath, w.Branch); err != nil {
-		return fmt.Errorf("remote git worktree add failed: %s (%w)", bytesToTrimmedString(out), err)
+	if err := r.git.AddWorktreeForExistingBranch(ctx, r.location(w.RepoPath), backend.WorktreePath(w.WorktreePath), backend.BranchName(w.Branch)); err != nil {
+		return fmt.Errorf("remote git worktree add failed: %w", err)
 	}
 	return nil
 }
@@ -101,9 +134,8 @@ func (r *RemoteWorktreeOps) CreateWorktree(ctx context.Context, w RemoteWorktree
 // mask the real error), not behavior internal to this method itself, which always
 // reports its own failures rather than swallowing them.
 func (r *RemoteWorktreeOps) RemoveWorktree(ctx context.Context, w RemoteWorktree) error {
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	if out, err := r.runner.Run(ctx, w.RepoPath, "git", "worktree", "remove", w.WorktreePath, "--force"); err != nil {
-		return fmt.Errorf("remote git worktree remove failed: %s (%w)", bytesToTrimmedString(out), err)
+	if err := r.git.RemoveWorktree(ctx, r.location(w.RepoPath), backend.RemoveWorktreeRequest{Path: backend.WorktreePath(w.WorktreePath), Force: true}); err != nil {
+		return fmt.Errorf("remote git worktree remove failed: %w", err)
 	}
 	return nil
 }

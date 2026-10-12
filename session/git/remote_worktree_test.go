@@ -249,7 +249,8 @@ func TestRemoteWorktreeOps_CreateWorktree_ArgumentConstruction(t *testing.T) {
 		t.Fatalf("Run() called %d times, want exactly 2 (base_path check, then git worktree add)", len(runner.calls))
 	}
 	gitCall := runner.calls[1]
-	wantArgs := []string{"worktree", "add", "/srv/workspaces/feature-x", "feature-x"}
+	// The backend inserts "--" before the path so a leading-dash path cannot be read as an option.
+	wantArgs := []string{"worktree", "add", "--", "/srv/workspaces/feature-x", "feature-x"}
 	if gitCall.dir != "/srv/repos/foo.git" || gitCall.name != "git" || !equalStrings(gitCall.args, wantArgs) {
 		t.Errorf("git worktree add call = dir:%q name:%q args:%v, want dir:/srv/repos/foo.git name:git args:%v",
 			gitCall.dir, gitCall.name, gitCall.args, wantArgs)
@@ -344,7 +345,7 @@ func TestRemoteWorktreeOps_RemoveWorktree_ArgumentConstruction(t *testing.T) {
 		t.Fatalf("Run() called %d times, want exactly 1", len(runner.calls))
 	}
 	got := runner.calls[0]
-	wantArgs := []string{"worktree", "remove", "/srv/workspaces/feature-x", "--force"}
+	wantArgs := []string{"worktree", "remove", "--force", "--", "/srv/workspaces/feature-x"}
 	if got.dir != "/srv/repos/foo.git" || got.name != "git" || !equalStrings(got.args, wantArgs) {
 		t.Errorf("git worktree remove call = dir:%q name:%q args:%v, want dir:/srv/repos/foo.git name:git args:%v",
 			got.dir, got.name, got.args, wantArgs)
