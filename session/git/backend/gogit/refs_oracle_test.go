@@ -245,7 +245,7 @@ func fallbackExpected(d gitoracle.Diff) bool {
 		return malformedFallback(d)
 	}
 	if d.Fixture == "symref-depth" {
-		return true // beyond git's depth limit git's answer differs per command; any answer given must still match
+		return symrefDepthFallback(d)
 	}
 	if d.Fixture == "config-continuation" {
 		return true // the repository config cannot be read in-process, so nothing is served
@@ -317,5 +317,19 @@ func oneLine(d gitoracle.Diff) string {
 // without reading the damaged file are required to be served.
 func malformedFallback(d gitoracle.Diff) bool {
 	return strings.HasPrefix(d.Place, "packed-") || strings.HasPrefix(d.Place, "config-") || d.Place == "extension-in-v0" ||
-		strings.HasPrefix(d.Place, "head-") || (d.Place == "loose-broken" && (strings.Contains(d.Op, "(L") || strings.HasPrefix(d.Op, "ListRefs")))
+		strings.HasPrefix(d.Place, "head-") || d.Place == "replace-cycle" || d.Place == "dirfile-conflict" || d.Place == "branch-named-head" || (d.Place == "loose-broken" && (strings.Contains(d.Op, "(L") || strings.HasPrefix(d.Op, "ListRefs")))
+}
+
+// symrefDepthFallback: git reads at most 5 refs along a chain and HEAD counts as the first, so
+// HEAD -> a4 (a4 a3 a2 a1 main) and longer chains, and a5 and longer refs, are beyond the limit;
+// everything shorter must be served.
+func symrefDepthFallback(d gitoracle.Diff) bool {
+	if strings.HasPrefix(d.Op, "ListRefs") {
+		return true // listing resolves every alias, including those past the limit
+	}
+	if strings.Contains(d.Op, "a5") || strings.Contains(d.Op, "a6") || strings.Contains(d.Op, "a7") {
+		return true
+	}
+	n, ok := strings.CutPrefix(d.Place, "head-a")
+	return ok && n >= "4" && (d.Op == "CurrentBranch" || d.Op == "HeadRef" || strings.HasSuffix(d.Op, "(HEAD)"))
 }

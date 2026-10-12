@@ -1,7 +1,6 @@
 package gogit
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -106,7 +105,11 @@ func probeDir(cur string) (lay layout, found bool, err error) {
 	dotGit := filepath.Join(cur, ".git")
 	switch fi, statErr := os.Stat(dotGit); {
 	case statErr == nil && fi.IsDir():
-		if common, ok := commonOf(dotGit); ok {
+		common, ok, err := commonOf(dotGit)
+		if err != nil {
+			return layout{}, false, err
+		}
+		if ok {
 			return layoutFor(cur, dotGit, common, false)
 		}
 	case statErr == nil && fi.Mode().IsRegular():
@@ -114,7 +117,10 @@ func probeDir(cur string) (lay layout, found bool, err error) {
 		if gitfileErr != nil {
 			return layout{}, false, fallbackEligible(gitfileErr)
 		}
-		common, ok := commonOf(gitDir)
+		common, ok, err := commonOf(gitDir)
+		if err != nil {
+			return layout{}, false, err
+		}
 		if !ok {
 			return layout{}, false, fallbackEligible(fmt.Errorf("%s names %s, which is not a git directory", dotGit, gitDir))
 		}
@@ -122,7 +128,11 @@ func probeDir(cur string) (lay layout, found bool, err error) {
 	case statErr != nil && !errors.Is(statErr, fs.ErrNotExist):
 		return layout{}, false, fallbackEligible(statErr)
 	}
-	if common, ok := commonOf(cur); ok {
+	common, ok, err := commonOf(cur)
+	if err != nil {
+		return layout{}, false, err
+	}
+	if ok {
 		return layoutFor("", cur, common, true)
 	}
 	return layout{}, false, nil
@@ -151,13 +161,20 @@ func layoutFor(workTree, gitDir, common string, bare bool) (layout, bool, error)
 }
 
 // commonOf reports whether p is a git directory (git's is_git_directory) and returns its common
-// directory: objects/ and refs/ live there, HEAD lives in p.
-func commonOf(p string) (string, bool) {
-	head, err := readSmallFile(filepath.Join(p, "HEAD"))
-	if err != nil || !validateHeadref(head) {
-		return "", false // git skips a directory whose HEAD it would reject and keeps looking upward
+// directory: objects/ and refs/ live there, HEAD lives in p. A HEAD that is missing or that git
+// would reject means "not a git directory" (git keeps looking upward); a HEAD this reader cannot
+// judge exactly (a symlink, oversized, unreadable) is a fallback error, never "not a repository".
+func commonOf(p string) (common string, ok bool, err error) {
+	head, err := readHeadFile(filepath.Join(p, "HEAD"))
+	switch {
+	case errors.Is(err, fs.ErrNotExist) || isNotDir(err):
+		return "", false, nil
+	case err != nil:
+		return "", false, fallbackEligible(err)
+	case !validateHeadref(head):
+		return "", false, nil
 	}
-	common := p
+	common = p
 	if data, err := os.ReadFile(filepath.Join(p, "commondir")); err == nil {
 		c := strings.TrimRight(string(data), "\r\n")
 		if !filepath.IsAbs(c) {
@@ -167,10 +184,26 @@ func commonOf(p string) (string, bool) {
 	}
 	for _, sub := range []string{"objects", "refs"} {
 		if fi, err := os.Stat(filepath.Join(common, sub)); err != nil || !fi.IsDir() {
-			return "", false
+			return "", false, nil
 		}
 	}
-	return common, true
+	return common, true, nil
+}
+
+// readHeadFile reads a HEAD file. git resolves a symlinked HEAD itself (a legacy symref form),
+// which this reader does not model, so a symlink is an error rather than being read through.
+func readHeadFile(path string) ([]byte, error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if fi.Mode()&fs.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%s is a symlink", path)
+	}
+	if fi.IsDir() {
+		return nil, fmt.Errorf("%s is a directory: %w", path, fs.ErrNotExist)
+	}
+	return readSmallFile(path)
 }
 
 // readGitfile parses a ".git" file: "gitdir: <path>", relative to the file's directory.
@@ -305,9 +338,9 @@ func isTruthy(v string) bool {
 	return true
 }
 
-// historyRewritten reports whether git would read a different commit graph than go-git: a
-// shallow clone's cut-off parents, grafts, or replace refs. Walks that follow parents must fall
-// back when it is true.
+// historyRewritten reports whether git would read a different parent graph than go-git: a
+// shallow clone's cut-off parents or grafts. Walks that follow parents must fall back when it is
+// true (replace refs are checked separately, for every resolution).
 func historyRewritten(lay layout) (bool, error) {
 	for _, p := range []string{
 		filepath.Join(lay.commonDir, "shallow"),
@@ -319,19 +352,5 @@ func historyRewritten(lay layout) (bool, error) {
 			return false, err
 		}
 	}
-	entries, err := os.ReadDir(filepath.Join(lay.commonDir, "refs", "replace"))
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return false, err
-	}
-	if len(entries) > 0 {
-		return true, nil
-	}
-	packed, err := os.ReadFile(filepath.Join(lay.commonDir, "packed-refs"))
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return false, nil
-		}
-		return false, err
-	}
-	return bytes.Contains(packed, []byte(" refs/replace/")), nil
+	return false, nil
 }

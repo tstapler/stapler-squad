@@ -120,6 +120,9 @@ func (v *repoView) revision(ctx context.Context, rev string) (commit *object.Com
 		}
 		hash = h
 	}
+	if err := v.requireNoReplaceRefs(); err != nil {
+		return nil, false, err
+	}
 	if len(ops) > 0 {
 		if err := v.requireIntactHistory(); err != nil {
 			return nil, false, err
@@ -171,7 +174,18 @@ func (v *repoView) requireIntactHistory() error {
 		return fallbackEligible(err)
 	}
 	if rewritten {
-		return fallbackEligible(errors.New("shallow, grafted or replaced history: parents differ from the CLI's"))
+		return fallbackEligible(errors.New("shallow or grafted history: parents differ from the CLI's"))
+	}
+	return nil
+}
+
+func (v *repoView) requireNoReplaceRefs() error {
+	replaced, err := v.hasReplaceRefs()
+	if err != nil {
+		return err
+	}
+	if replaced {
+		return fallbackEligible(errors.New("refs/replace is in use: git would substitute objects"))
 	}
 	return nil
 }

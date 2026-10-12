@@ -385,6 +385,68 @@ func TestRefFilesGitWouldRejectAreNotTrusted(t *testing.T) {
 	}
 }
 
+func TestOddHeadAndRefLayoutsFallBack(t *testing.T) {
+	ctx := context.Background()
+	t.Run("symlinked HEAD", func(t *testing.T) {
+		dir, _, _ := initRepo(t, 1)
+		head := filepath.Join(dir, ".git", "HEAD")
+		require.NoError(t, os.Remove(head))
+		require.NoError(t, os.Symlink("refs/heads/main", head))
+		_, err := newBackend(t).CurrentBranch(ctx, local(dir))
+		assert.True(t, isFallback(err), "git follows the link to a symref; reading through it would say detached: %v", err)
+	})
+	t.Run("oversized HEAD is not 'not a repository'", func(t *testing.T) {
+		dir, _, _ := initRepo(t, 1)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte("ref: refs/heads/main\n"+strings.Repeat(" ", 5000)), 0o600))
+		_, err := newBackend(t).GitDir(ctx, local(dir))
+		assert.True(t, isFallback(err), "%v", err)
+	})
+	t.Run("replace refs", func(t *testing.T) {
+		dir, _, head := initRepo(t, 1)
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "refs", "replace"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "refs", "replace", head.String()), []byte(head.String()+"\n"), 0o600))
+		_, err := newBackend(t).ResolveRef(ctx, local(dir), "HEAD")
+		assert.True(t, isFallback(err), "%v", err)
+	})
+	t.Run("file where a directory should be", func(t *testing.T) {
+		dir, repo, head := initRepo(t, 1)
+		require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference("refs/heads/a/b", head)))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "packed-refs"), []byte("# pack-refs with: peeled fully-peeled sorted\n"+head.String()+" refs/heads/a/b\n"), 0o600))
+		require.NoError(t, os.RemoveAll(filepath.Join(dir, ".git", "refs", "heads", "a")))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "refs", "heads", "a"), []byte(head.String()+"\n"), 0o600))
+		_, err := newBackend(t).ResolveRef(ctx, local(dir), "a/b")
+		assert.True(t, isFallback(err), "%v", err)
+	})
+	t.Run("a ref named HEAD makes HEAD ambiguous to rev-parse --abbrev-ref", func(t *testing.T) {
+		dir, _, head := initRepo(t, 1)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "refs", "heads", "HEAD"), []byte(head.String()+"\n"), 0o600))
+		_, err := newBackend(t).CurrentBranch(ctx, local(dir))
+		assert.True(t, isFallback(err), "%v", err)
+	})
+	t.Run("huge packed-refs is left to git's binary search", func(t *testing.T) {
+		dir, _, head := initRepo(t, 1)
+		var sb strings.Builder
+		sb.WriteString("# pack-refs with: peeled fully-peeled sorted\n")
+		for i := 0; sb.Len() <= maxPackedRefsSize; i++ {
+			fmt.Fprintf(&sb, "%s refs/tags/t%08d\n", head.String(), i)
+		}
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "packed-refs"), []byte(sb.String()), 0o600))
+		require.NoError(t, os.Remove(filepath.Join(dir, ".git", "refs", "heads", "main")))
+		_, err := newBackend(t).ResolveRef(ctx, local(dir), "HEAD")
+		assert.True(t, isFallback(err), "%v", err)
+	})
+}
+
+func TestListRefsLimitStopsEarlyAndKeepsOrder(t *testing.T) {
+	dir, repo, head := initRepo(t, 1)
+	for i := range 50 {
+		require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(plumbing.ReferenceName(fmt.Sprintf("refs/heads/b%02d", i)), head)))
+	}
+	got, err := newBackend(t).ListRefs(context.Background(), local(dir), backend.ListRefsRequest{Limit: 3})
+	require.NoError(t, err)
+	assert.Equal(t, []backend.RefName{"refs/heads/b00", "refs/heads/b01", "refs/heads/b02"}, got)
+}
+
 func TestSymrefChainDepthMatchesGit(t *testing.T) {
 	dir, _, head := initRepo(t, 1)
 	b := newBackend(t)

@@ -411,6 +411,30 @@ var fixtureMalformed = gitoracle.Fixture{Name: "malformed", Build: func(g gitora
 	d = newRepo("head-tab")
 	write(filepath.Join(d, ".git", "HEAD"), "ref:\trefs/heads/main\n")
 
+	d = newRepo("head-symlink")
+	if err := os.Remove(filepath.Join(d, ".git", "HEAD")); err != nil {
+		g.T.Fatal(err)
+	}
+	if err := os.Symlink("refs/heads/main", filepath.Join(d, ".git", "HEAD")); err != nil {
+		g.T.Fatal(err)
+	}
+	d = newRepo("head-oversize")
+	write(filepath.Join(d, ".git", "HEAD"), "ref: refs/heads/main\n"+strings.Repeat(" ", 5000))
+	d = newRepo("replace-cycle")
+	if err := os.MkdirAll(filepath.Join(d, ".git", "refs", "replace"), 0o700); err != nil {
+		g.T.Fatal(err)
+	}
+	write(filepath.Join(d, ".git", "refs", "replace", sha(d)), sha(d)+"\n")
+	d = newRepo("dirfile-conflict")
+	g.Run(d, "branch", "a/b")
+	g.Run(d, "pack-refs", "--all", "--prune")
+	if err := os.MkdirAll(filepath.Join(d, ".git", "refs", "heads"), 0o700); err != nil {
+		g.T.Fatal(err)
+	}
+	write(filepath.Join(d, ".git", "refs", "heads", "a"), sha(d)+"\n")
+	d = newRepo("branch-named-head")
+	write(filepath.Join(d, ".git", "refs", "heads", "head"), sha(d)+"\n")
+
 	outer := newRepo("nested-outer")
 	for name, content := range map[string]string{"empty": "", "garbage": "garbage\n"} {
 		sub := filepath.Join(outer, "sub-"+name)

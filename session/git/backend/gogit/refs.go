@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/tstapler/stapler-squad/session/git/backend"
@@ -26,6 +25,9 @@ func (b *Backend) CurrentBranch(ctx context.Context, loc backend.RepoLocation) (
 	if err != nil {
 		return "", err
 	}
+	if err := v.requireUnambiguousHEAD(); err != nil {
+		return "", err
+	}
 	switch {
 	case h.detached:
 		return "", backend.ErrDetachedHead
@@ -37,6 +39,22 @@ func (b *Backend) CurrentBranch(ctx context.Context, loc backend.RepoLocation) (
 		return "", err
 	}
 	return backend.BranchName(name), nil
+}
+
+// requireUnambiguousHEAD: `rev-parse --abbrev-ref HEAD` fails ("refname 'HEAD' is ambiguous") when
+// a ref named HEAD also exists under refs/ (on a case-insensitive filesystem a branch called
+// "head" counts), which the CLI reports as an error, so the CLI must answer.
+func (v *repoView) requireUnambiguousHEAD() error {
+	for _, full := range []string{"refs/HEAD", "refs/tags/HEAD", "refs/heads/HEAD", "refs/remotes/HEAD", "refs/remotes/HEAD/HEAD"} {
+		exists, err := v.refExists(full)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return fallbackEligible(fmt.Errorf("%s exists, so HEAD is ambiguous to git", full))
+		}
+	}
+	return nil
 }
 
 // HeadRef is `git symbolic-ref -q HEAD`: the ref HEAD ends at once aliases are followed, valid on
@@ -157,12 +175,9 @@ func (b *Backend) ListRefs(ctx context.Context, loc backend.RepoLocation, req ba
 	if err != nil {
 		return nil, err
 	}
-	names, err := v.listRefNames(ctx, string(req.Pattern))
+	names, err := v.listRefNames(ctx, string(req.Pattern), req.Limit)
 	if err != nil {
 		return nil, err
-	}
-	if req.Limit > 0 && len(names) > req.Limit {
-		names = names[:req.Limit]
 	}
 	out := make([]backend.RefName, len(names))
 	for i, n := range names {
@@ -183,12 +198,11 @@ func matchesPattern(pattern, name string) bool {
 	return len(name) == len(pattern) || name[len(pattern)] == '/' || pattern[len(pattern)-1] == '/'
 }
 
-func (v *repoView) listRefNames(ctx context.Context, pattern string) ([]string, error) {
+func (v *repoView) listRefNames(ctx context.Context, pattern string, limit int) ([]string, error) {
 	var lastErr error
 	for attempt := 0; ; attempt++ {
-		names, err := v.scanRefs(pattern)
+		names, err := v.scanRefs(pattern, limit)
 		if err == nil {
-			sort.Strings(names)
 			return names, nil
 		}
 		lastErr = err
@@ -209,19 +223,25 @@ func (v *repoView) listRefNames(ctx context.Context, pattern string) ([]string, 
 // scanRefs lists matching refs once. A ref whose object is absent is skipped by git (with a
 // warning on stderr), but here it may equally be a pack replaced mid-scan, so it surfaces as
 // ErrObjectMissing and the caller retries on a fresh handle, then defers to the CLI.
-func (v *repoView) scanRefs(pattern string) ([]string, error) {
-	all, err := v.walkRefNames()
+func (v *repoView) scanRefs(pattern string, limit int) ([]string, error) {
+	all, loose, err := v.walkRefNames()
+	if err != nil {
+		return nil, err
+	}
+	packed, err := v.packedRefs()
 	if err != nil {
 		return nil, err
 	}
 	var names []string
-	for _, name := range all {
+	for _, name := range all { // sorted, so the first limit valid refs are the ones git prints
 		if !matchesPattern(pattern, name) {
 			continue
 		}
-		hash, found, err := v.resolveName(name)
-		if err != nil {
-			return nil, err
+		hash, found := packed[name], true
+		if loose[name] {
+			if hash, found, err = v.resolveName(name); err != nil {
+				return nil, err
+			}
 		}
 		if !found {
 			continue // dangling symbolic ref: git skips it
@@ -230,6 +250,9 @@ func (v *repoView) scanRefs(pattern string) ([]string, error) {
 			return nil, fallbackEligible(fmt.Errorf("%w: %s -> %s", backend.ErrObjectMissing, name, hash))
 		}
 		names = append(names, name)
+		if limit > 0 && len(names) == limit {
+			break
+		}
 	}
 	return names, nil
 }
@@ -249,6 +272,9 @@ func (b *Backend) MergeBase(ctx context.Context, loc backend.RepoLocation, req b
 		return "", err
 	}
 	if err := v.requireIntactHistory(); err != nil {
+		return "", err
+	}
+	if err := v.requireNoReplaceRefs(); err != nil {
 		return "", err
 	}
 	left, found, err := v.revision(ctx, string(req.Left))

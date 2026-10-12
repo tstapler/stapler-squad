@@ -130,7 +130,7 @@ type headState struct {
 }
 
 func (v *repoView) head() (headState, error) {
-	data, err := readSmallFile(filepath.Join(v.lay.gitDir, "HEAD"))
+	data, err := readHeadFile(filepath.Join(v.lay.gitDir, "HEAD"))
 	if err != nil {
 		return headState{}, fallbackEligible(fmt.Errorf("read HEAD: %w", err))
 	}

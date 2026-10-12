@@ -23,9 +23,10 @@ func TestFIFOIncludeDoesNotBlock(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(cfg, append(existing, []byte("[include]\n\tpath = "+fifo+"\n")...), 0o600))
 
+	b := newBackend(t)
 	done := make(chan error, 1)
 	go func() {
-		_, err := newBackend(t).RepoRoot(context.Background(), local(dir))
+		_, err := b.RepoRoot(context.Background(), local(dir))
 		done <- err
 	}()
 	select {

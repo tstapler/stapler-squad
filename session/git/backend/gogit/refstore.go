@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/go-git/go-git/v5/plumbing"
 
@@ -24,8 +26,9 @@ import (
 // maxRefFileSize bounds a loose ref or HEAD file; real ones are under 100 bytes.
 const maxRefFileSize = 4096
 
-// maxPackedRefsSize bounds packed-refs (a repository with a million refs is about 80 MiB).
-const maxPackedRefsSize = 256 << 20
+// maxPackedRefsSize bounds packed-refs (about 100k refs). It is parsed whole on every call to check
+// it is well formed, which the CLI avoids with a binary search, so larger files are left to it.
+const maxPackedRefsSize = 8 << 20
 
 var hex40 = regexp.MustCompile(`^[0-9a-fA-F]{40}`)
 
@@ -110,7 +113,19 @@ func (v *repoView) readRef(name string) (ref rawRef, found bool, err error) {
 		if !errors.Is(readErr, fs.ErrNotExist) {
 			return rawRef{}, false, fallbackEligible(readErr)
 		}
-	case statErr != nil && !errors.Is(statErr, fs.ErrNotExist) && !isNotDir(statErr):
+	case statErr != nil && isNotDir(statErr):
+		// A file where a directory should be: git reads that as "no such ref" (ordinary for
+		// refs/remotes/origin/HEAD/HEAD), but it does not consult packed-refs, so a packed entry
+		// under a loose file is a conflict only git may judge.
+		packed, err := v.packedRefs()
+		if err != nil {
+			return rawRef{}, false, err
+		}
+		if _, conflict := packed[name]; conflict {
+			return rawRef{}, false, fallbackEligible(fmt.Errorf("packed ref %s is shadowed by a file in its path", name))
+		}
+		return rawRef{}, false, nil
+	case statErr != nil && !errors.Is(statErr, fs.ErrNotExist):
 		return rawRef{}, false, fallbackEligible(statErr)
 	}
 	// a directory, or no loose file: packed-refs decides
@@ -127,10 +142,7 @@ func (v *repoView) readRef(name string) (ref rawRef, found bool, err error) {
 	return rawRef{}, false, nil
 }
 
-func isNotDir(err error) bool {
-	var pe *fs.PathError
-	return errors.As(err, &pe) && strings.Contains(pe.Err.Error(), "not a directory")
-}
+func isNotDir(err error) bool { return errors.Is(err, syscall.ENOTDIR) }
 
 func readSmallFile(path string) ([]byte, error) {
 	f, err := os.Open(path)
@@ -217,8 +229,9 @@ func parsePackedRefs(data []byte) (map[string]plumbing.Hash, bool) {
 
 // walkRefNames lists every ref name under refs/ that git's for-each-ref would consider: loose
 // files (this worktree's per-worktree refs included) overriding packed entries.
-func (v *repoView) walkRefNames() ([]string, error) {
+func (v *repoView) walkRefNames() (sortedNames []string, loose map[string]bool, err error) {
 	names := map[string]struct{}{}
+	loose = map[string]bool{}
 	walk := func(root, prefix string, skipPerWorktree bool) error {
 		return filepath.WalkDir(filepath.Join(root, filepath.FromSlash(prefix)), func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -243,24 +256,25 @@ func (v *repoView) walkRefNames() ([]string, error) {
 			}
 			if validRefName(name, false) {
 				names[name] = struct{}{}
+				loose[name] = true
 			}
 			return nil
 		})
 	}
 	shared := v.lay.gitDir != v.lay.commonDir
 	if err := walk(v.lay.commonDir, "refs", shared); err != nil {
-		return nil, fallbackEligible(fmt.Errorf("list loose refs: %w", err))
+		return nil, nil, fallbackEligible(fmt.Errorf("list loose refs: %w", err))
 	}
 	if shared {
 		for _, p := range perWorktreeRefPrefixes {
 			if err := walk(v.lay.gitDir, strings.TrimSuffix(p, "/"), false); err != nil {
-				return nil, fallbackEligible(fmt.Errorf("list per-worktree refs: %w", err))
+				return nil, nil, fallbackEligible(fmt.Errorf("list per-worktree refs: %w", err))
 			}
 		}
 	}
 	packed, err := v.packedRefs()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for name := range packed {
 		names[name] = struct{}{}
@@ -269,7 +283,30 @@ func (v *repoView) walkRefNames() ([]string, error) {
 	for n := range names {
 		out = append(out, n)
 	}
-	return out, nil
+	sort.Strings(out)
+	return out, loose, nil
+}
+
+// hasReplaceRefs reports whether any refs/replace entry exists, loose or packed: git would swap
+// objects, which this reader does not.
+func (v *repoView) hasReplaceRefs() (bool, error) {
+	entries, err := os.ReadDir(filepath.Join(v.lay.commonDir, "refs", "replace"))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) && !isNotDir(err) {
+		return false, fallbackEligible(err)
+	}
+	if len(entries) > 0 {
+		return true, nil
+	}
+	packed, err := v.packedRefs()
+	if err != nil {
+		return false, err
+	}
+	for name := range packed {
+		if strings.HasPrefix(name, "refs/replace/") {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func isPerWorktreePrefix(name string) bool {
