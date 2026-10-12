@@ -691,23 +691,21 @@ describe("single phone tray entry (Task 4.2i, TH-7..TH-9)", () => {
 
   const entries = () => screen.queryAllByTestId("tray-entry");
 
-  it("shows exactly one entry as a bell with 0 toasts, then with 1 toast and 0 overflow (never zero)", () => {
+  it("shows no entry (and no bell) with 0 toasts or with 1 toast and 0 overflow", () => {
     mount();
-    expect(entries()).toHaveLength(1);
-    expect(entries()[0]).toHaveAttribute("data-content", "bell");
+    expect(entries()).toHaveLength(0);
+    expect(screen.queryByTestId("tray-entry-open")).toBeNull();
 
     addMany(1);
-    expect(entries()).toHaveLength(1);
-    expect(entries()[0]).toHaveAttribute("data-content", "bell");
-    expect(screen.getByTestId("tray-entry-open")).toHaveAccessibleName(/^Notifications, \d+ unread/);
+    expect(entries()).toHaveLength(0);
+    expect(screen.queryByTestId("tray-entry-open")).toBeNull();
   });
 
-  it("keeps one mounted node while its content changes bell -> more-row -> keyboard-chip -> bell", () => {
+  it("shows the overflow row, then the keyboard chip when the keyboard opens", () => {
     const { rerender } = mount();
-    const node = entries()[0];
     addMany(3);
-    expect(entries()[0]).toBe(node);
-    expect(node).toHaveAttribute("data-content", "more-row");
+    expect(entries()).toHaveLength(1);
+    expect(entries()[0]).toHaveAttribute("data-content", "more-row");
     expect(screen.getByTestId("toast-overflow-chip")).toHaveAccessibleName("2 more notifications, open tray");
 
     setPhone(true);
@@ -717,31 +715,25 @@ describe("single phone tray entry (Task 4.2i, TH-7..TH-9)", () => {
       </Harness>,
     );
     expect(entries()).toHaveLength(1);
-    expect(entries()[0]).toBe(node);
-    expect(node).toHaveAttribute("data-content", "keyboard-chip");
-
-    act(() => notifications.moveAllToTray());
-    act(() => notifications.undoMoveToTray());
-    act(() => notifications.clearAll());
-    expect(entries()[0]).toBe(node);
+    expect(entries()[0]).toHaveAttribute("data-content", "keyboard-chip");
   });
 
-  it("opens the same tray from every content", () => {
+  it("opens the tray from the overflow row", () => {
     mount();
-    fireEvent.click(screen.getByTestId("tray-entry-open"));
+    addMany(3);
+    fireEvent.click(screen.getByTestId("toast-overflow-chip"));
     expect(notifications.isPanelOpen).toBe(true);
   });
 
-  it("renders the undo inside the same entry with a trailing bell", () => {
+  it("renders the undo bar in the entry, without a bell", () => {
     mount();
-    const node = entries()[0];
     addMany(3);
     fireEvent.click(screen.getByTestId("toast-move-all-to-tray"));
+    const node = entries()[0];
     expect(entries()).toHaveLength(1);
-    expect(entries()[0]).toBe(node);
     expect(node).toHaveAttribute("data-undo", "true");
     expect(within(node).getByTestId("toast-undo-bar")).toBeInTheDocument();
-    expect(within(node).getByTestId("tray-entry-open")).toBeInTheDocument();
+    expect(screen.queryByTestId("tray-entry-open")).toBeNull();
   });
 
   it("shows no entry on a phone page with no terminal and nothing to say", () => {

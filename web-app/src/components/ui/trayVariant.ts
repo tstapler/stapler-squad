@@ -25,13 +25,13 @@ export function selectTrayVariant(viewport: TrayViewport): TrayVariant {
   return "bottom-sheet";
 }
 
-/** What the single phone entry shows; `floating-bottom` is the no-terminal page only. */
-export type TrayAffordance = "bell" | "more-row" | "keyboard-chip" | "floating-bottom";
-
 /**
- * Content of the one tray entry on a phone page. It changes what the entry says,
- * never where it is or whether it exists, so no frame shows two entries or none.
+ * What the phone entry shows; `floating-bottom` is the no-terminal page only. `none` means
+ * there is nothing to say: the bottom nav's Alerts tab is the always-present way into the tray.
  */
+export type TrayAffordance = "none" | "more-row" | "keyboard-chip" | "floating-bottom";
+
+/** Content of the phone tray entry: overflow, the keyboard chip, or nothing. Never a bell. */
 export function trayAffordanceVariant(
   overflowCount: number,
   toastCount: number,
@@ -41,7 +41,7 @@ export function trayAffordanceVariant(
   if (!hasTerminal) return "floating-bottom";
   if (keyboardOpen && toastCount > 0) return "keyboard-chip";
   if (overflowCount > 0) return "more-row";
-  return "bell";
+  return "none";
 }
 
 /** Peek and expanded sheet heights as a fraction of `--viewport-height` (TS-1: 22-28% and 84-86%). */

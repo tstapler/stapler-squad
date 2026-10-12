@@ -29,7 +29,7 @@ export function BottomNav() {
   const { authenticated, authEnabled } = useAuth();
   const { getUnreadCount, togglePanel } = useNotifications();
   const unreadCount = getUnreadCount();
-  const { isPanelOpen } = useNotificationState();
+  const { isPanelOpen, quietMode } = useNotificationState();
   const [moreOpen, setMoreOpen] = useState(false);
   const { leftHanded, toggleHandedness } = useHandedness();
   const { flags } = useFeatureFlags();
@@ -198,7 +198,7 @@ export function BottomNav() {
             data-testid="nav-alerts"
             aria-expanded={isPanelOpen}
             aria-controls="notification-tray"
-            aria-label={unreadCount > 0 ? `Notifications (${unreadCount} unread)` : "Notifications"}
+            aria-label={`${unreadCount > 0 ? `Notifications (${unreadCount} unread)` : "Notifications"}${quietMode ? ", quiet mode on" : ""}`}
             onClick={() => togglePanel()}
             onMouseDown={(e) => e.preventDefault()}
           >
@@ -208,7 +208,7 @@ export function BottomNav() {
                 <span className={styles.notificationBadge}>{capBadgeCount(unreadCount)}</span>
               )}
             </span>
-            <span className={styles.navItemLabel}>Alerts</span>
+            <span className={styles.navItemLabel}>{quietMode ? "Quiet" : "Alerts"}</span>
           </button>
         ) : (
           <AppLink

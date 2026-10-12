@@ -18,11 +18,11 @@ describe("selectTrayVariant", () => {
 describe("trayAffordanceVariant (overflow, toasts, keyboard, hasTerminal)", () => {
   it.each([
     // [overflow, toasts, keyboard, hasTerminal, expected]
-    [0, 0, false, true, "bell"],
-    [0, 1, false, true, "bell"], // exactly 1 toast, 0 overflow: the bell is the only entry
+    [0, 0, false, true, "none"],
+    [0, 1, false, true, "none"], // exactly 1 toast, 0 overflow: nothing to say
     [2, 3, false, true, "more-row"],
     [1, 1, false, true, "more-row"],
-    [0, 0, true, true, "bell"], // keyboard open with nothing to say keeps the bell
+    [0, 0, true, true, "none"], // keyboard open with nothing to say
     [3, 3, true, true, "keyboard-chip"],
     [0, 1, true, true, "keyboard-chip"],
     [0, 0, false, false, "floating-bottom"],
@@ -38,6 +38,6 @@ describe("trayAffordanceVariant (overflow, toasts, keyboard, hasTerminal)", () =
         for (const keyboard of [false, true]) contents.add(trayAffordanceVariant(overflow, toasts, keyboard, true));
       }
     }
-    expect([...contents].sort()).toEqual(["bell", "keyboard-chip", "more-row"]);
+    expect([...contents].sort()).toEqual(["keyboard-chip", "more-row", "none"]);
   });
 });
