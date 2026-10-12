@@ -83,6 +83,8 @@ jest.mock("@/lib/contexts/notificationContexts", () => ({
   useNotificationState: () => ({}),
 }));
 
+let fetchSpy: jest.SpyInstance | undefined;
+
 const mockUseBacklogService = useBacklogService as jest.MockedFunction<typeof useBacklogService>;
 
 function mockBacklogService(overrides: Partial<ReturnType<typeof useBacklogService>>) {
@@ -108,6 +110,8 @@ afterEach(() => {
     jest.runOnlyPendingTimers();
   });
   jest.useRealTimers();
+  fetchSpy?.mockRestore();
+  fetchSpy = undefined;
   jest.clearAllMocks();
   resetDefaultRegistry();
 });
@@ -204,6 +208,19 @@ describe("Omnibar compose mode", () => {
     expect(screen.getByRole("combobox", { name: /session source input/i })).toHaveValue("draft");
   });
 
+  it("ignores a backdrop click so the draft is not discarded", () => {
+    mockBacklogService({});
+    const onClose = jest.fn();
+    renderOmnibar({ onClose });
+
+    fireEvent.click(screen.getByTestId("mock-create-backlog"));
+    fireEvent.change(screen.getByTestId("backlog-compose-textarea"), { target: { value: "draft" } });
+    fireEvent.click(screen.getByTestId("omnibar"));
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId("backlog-compose-textarea")).toHaveValue("draft");
+  });
+
   it("closes immediately on Create, then notifies with a deep link when creation finishes", async () => {
     let resolveCreate: (v: unknown) => void = () => {};
     const createBacklogItemFromChat = jest.fn(
@@ -249,8 +266,9 @@ describe("Omnibar compose mode", () => {
 
   it("rejects an image over 10 MB client-side without uploading", () => {
     mockBacklogService({});
-    const fetchSpy = jest.fn();
-    global.fetch = fetchSpy as unknown as typeof fetch;
+    // jsdom has no fetch; spyOn needs an existing property.
+    if (!global.fetch) global.fetch = jest.fn() as unknown as typeof fetch;
+    fetchSpy = jest.spyOn(global, "fetch").mockImplementation(jest.fn());
     renderOmnibar();
 
     fireEvent.click(screen.getByTestId("mock-create-backlog"));

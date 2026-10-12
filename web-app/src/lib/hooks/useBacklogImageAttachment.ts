@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ClipboardEvent, ChangeEvent, RefObject } from "react";
 import { getApiBaseUrl } from "@/lib/config";
 
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB — matches server-side cap
+const TOO_LARGE_MESSAGE = "Image is too large (max 10 MB).";
 
 interface Options {
   textareaRef: RefObject<HTMLTextAreaElement | null>;
@@ -18,7 +19,14 @@ interface Options {
  */
 export function useBacklogImageAttachment({ textareaRef, setValue }: Options) {
   const [error, setError] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
+  const [pending, setPending] = useState(0);
+  const isMounted = useRef(true);
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
 
   const upload = useCallback(
     async (file: File) => {
@@ -27,11 +35,11 @@ export function useBacklogImageAttachment({ textareaRef, setValue }: Options) {
         return;
       }
       if (file.size > MAX_ATTACHMENT_BYTES) {
-        setError("Image is too large (max 10 MB).");
+        setError(TOO_LARGE_MESSAGE);
         return;
       }
       setError(null);
-      setUploading(true);
+      setPending((n) => n + 1);
       try {
         const formData = new FormData();
         formData.append("file", file);
@@ -40,9 +48,10 @@ export function useBacklogImageAttachment({ textareaRef, setValue }: Options) {
           body: formData,
         });
         if (!resp.ok) {
+          if (!isMounted.current) return;
           setError(
             resp.status === 413
-              ? "Image is too large (max 10 MB)."
+              ? TOO_LARGE_MESSAGE
               : resp.status === 415
                 ? "Unsupported image type — use PNG, JPEG, GIF, or WebP."
                 : "Upload failed."
@@ -50,6 +59,7 @@ export function useBacklogImageAttachment({ textareaRef, setValue }: Options) {
           return;
         }
         const data = (await resp.json()) as { path: string; filename: string };
+        if (!isMounted.current) return;
         const markdown = `![${data.filename}](${encodeURI(`/api/local/serve${data.path}`)})`;
         const el = textareaRef.current;
         const start = Math.min(el?.selectionStart ?? Infinity, el?.value.length ?? Infinity);
@@ -59,11 +69,11 @@ export function useBacklogImageAttachment({ textareaRef, setValue }: Options) {
           const pos = Math.min(start, el?.value.length ?? start) + markdown.length;
           el?.setSelectionRange(pos, pos);
         });
+        el?.focus();
       } catch {
-        setError("Network error — upload failed.");
+        if (isMounted.current) setError("Network error — upload failed.");
       } finally {
-        setUploading(false);
-        textareaRef.current?.focus();
+        if (isMounted.current) setPending((n) => n - 1);
       }
     },
     [textareaRef, setValue]
@@ -89,5 +99,5 @@ export function useBacklogImageAttachment({ textareaRef, setValue }: Options) {
     [upload]
   );
 
-  return { error, uploading, onFileInputChange, onPaste };
+  return { error, uploading: pending > 0, onFileInputChange, onPaste };
 }

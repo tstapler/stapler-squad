@@ -1751,7 +1751,7 @@ export function Omnibar({
     return (
       <div
         className={overlay}
-        onClick={onClose}
+        // Backdrop clicks are ignored: the draft lives in the widget and only Cancel/Escape preserve it.
         role="dialog"
         aria-modal="true"
         aria-labelledby="backlog-compose-title"
