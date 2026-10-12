@@ -58,6 +58,7 @@ func (d *DiffStats) IsEmpty() bool {
 // can add the same worktree-specific race coverage getHeadCommitSHA already has.
 func (g *GitWorktree) resolveBaseCommitSHA() string {
 	for _, branch := range CandidateDefaultBranches {
+		//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 		output, err := g.runGitCommand(g.worktreePath, "merge-base", "HEAD", branch)
 		if err == nil {
 			if sha := strings.TrimSpace(output); sha != "" {

@@ -211,10 +211,12 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 	// locked (initializing) by an interrupted `worktree add` — the exact state
 	// worktreeAlreadyRegisteredForBranch just rejected above — otherwise refuses
 	// `remove` regardless of -f, leaving the broken checkout stuck forever.
-	_ = g.unlockWorktree()                                                         // Ignore error if not locked
+	_ = g.unlockWorktree() // Ignore error if not locked
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	_, _ = g.runGitCommand(g.repoPath, "worktree", "remove", "-f", g.worktreePath) // Ignore error if worktree doesn't exist
 
 	// Create a new worktree from the existing branch
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	if _, err := g.runGitCommand(g.repoPath, "worktree", "add", g.worktreePath, g.branchName); err != nil {
 		// Ground-Truth Re-Query (ADR-001): rather than gating on specific error text
 		// (git's "already checked out"/"already used by worktree" wording, which varies
@@ -259,6 +261,7 @@ func (g *GitWorktree) initBaseCommitSHA() {
 		// ambient checked-out branch can be anything a concurrent process left it on
 		// (mirrors the fix in resolveBaseCommitSHA, session/git/diff.go, which already
 		// does this correctly).
+		//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 		output, err := g.runGitCommand(g.worktreePath, "merge-base", "HEAD", branch)
 		if err == nil {
 			if sha := strings.TrimSpace(output); sha != "" {
@@ -289,6 +292,7 @@ func (g *GitWorktree) worktreeAlreadyRegisteredForBranch() bool {
 	if _, statErr := os.Stat(g.worktreePath); statErr != nil {
 		return false
 	}
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	output, err := g.runGitCommand(g.repoPath, "worktree", "list", "--porcelain")
 	if err != nil {
 		return false

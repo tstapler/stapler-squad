@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, type RefObject } from "react";
-import { setStackTopOffset } from "@/lib/utils/toastDock";
+import { setDeckTopOffset, setStackTopOffset } from "@/lib/utils/toastDock";
 
 /**
  * Publishes `getBoundingClientRect().bottom` of the session tab row.
@@ -12,6 +12,24 @@ import { setStackTopOffset } from "@/lib/utils/toastDock";
  * coalescing bursts into one frame.
  */
 export function usePublishStackTopOffset(ref: RefObject<HTMLElement | null>, enabled = true): void {
+  usePublishBottomEdge(ref, enabled, setStackTopOffset, false);
+}
+
+/**
+ * Publishes the bottom edge of the terminal toolbar for the phone deck. A hidden
+ * toolbar (display: none, an inactive pane) measures 0 tall and publishes nothing,
+ * so the deck falls back to the tab-row anchor instead of jumping to the screen top.
+ */
+export function usePublishDeckTopOffset(ref: RefObject<HTMLElement | null>, enabled = true): void {
+  usePublishBottomEdge(ref, enabled, setDeckTopOffset, true);
+}
+
+function usePublishBottomEdge(
+  ref: RefObject<HTMLElement | null>,
+  enabled: boolean,
+  publish: (px: number | null) => void,
+  nullWhenHidden: boolean,
+): void {
   useEffect(() => {
     const el = ref.current;
     if (!enabled || !el) return;
@@ -19,7 +37,8 @@ export function usePublishStackTopOffset(ref: RefObject<HTMLElement | null>, ena
     let frame = 0;
     const measure = () => {
       frame = 0;
-      setStackTopOffset(Math.round(el.getBoundingClientRect().bottom));
+      const rect = el.getBoundingClientRect();
+      publish(nullWhenHidden && rect.height === 0 ? null : Math.round(rect.bottom));
     };
     const schedule = () => {
       if (frame === 0) frame = requestAnimationFrame(measure);
@@ -38,7 +57,7 @@ export function usePublishStackTopOffset(ref: RefObject<HTMLElement | null>, ena
       resizeObserver?.disconnect();
       mutationObserver.disconnect();
       window.removeEventListener("resize", schedule);
-      setStackTopOffset(null);
+      publish(null);
     };
-  }, [ref, enabled]);
+  }, [ref, enabled, publish, nullWhenHidden]);
 }

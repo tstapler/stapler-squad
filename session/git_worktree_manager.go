@@ -365,6 +365,16 @@ func (gm *GitWorktreeManager) IsDirty() (bool, error) {
 	return wt.IsDirty()
 }
 
+// IsDirtyUncached is IsDirty without the TTL cache. Use it where a stale "clean"
+// would be destructive (pause/stop remove the worktree).
+func (gm *GitWorktreeManager) IsDirtyUncached() (bool, error) {
+	wt := gm.GetWorktree()
+	if wt == nil {
+		return false, fmt.Errorf("git worktree not initialized")
+	}
+	return wt.IsDirtyUncached()
+}
+
 // InvalidateDirtyCache clears the IsDirty TTL cache so the next call re-runs git status.
 // Call after transitions that may change worktree dirty state (Resume, Stop).
 // No-op if no worktree is set.
@@ -522,6 +532,7 @@ type GitManager interface {
 	Remove() error
 	Prune() error
 	IsDirty() (bool, error)
+	IsDirtyUncached() (bool, error)
 	InvalidateDirtyCache()
 	CommitChanges(commitMsg string) error
 	PushChanges(commitMsg string, open bool) error
@@ -561,6 +572,7 @@ func (gm *GitWorktreeManager) GetCurrentCommitSHA() (string, error) {
 
 	revCtx, revCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer revCancel()
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	cmd := safeexec.CommandContext(revCtx, "git", "-C", dir, "rev-parse", "HEAD")
 	output, err := cmd.Output()
 	if err != nil {

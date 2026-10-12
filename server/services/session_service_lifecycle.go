@@ -264,6 +264,7 @@ func worktreeLooksAlive(path string) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	cmd := safeexec.CommandContext(ctx, "git", "-C", path, "status", "--porcelain")
 	return cmd.Run() == nil
 }
@@ -892,6 +893,7 @@ func extractPRURL(output string) string {
 func checkBranchDivergence(workDir string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	cmd := safeexec.CommandContext(ctx, "git", "rev-list", "--count", "origin/HEAD..HEAD")
 	cmd.Dir = workDir
 	out, err := cmd.Output()

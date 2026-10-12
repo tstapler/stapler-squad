@@ -83,6 +83,7 @@ func (r *RemoteWorktreeOps) CreateWorktree(ctx context.Context, w RemoteWorktree
 		return fmt.Errorf("%w: %s: %s (%v)", ErrRemoteBasePathMissing, basePath, bytesToTrimmedString(out), err)
 	}
 
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	if out, err := r.runner.Run(ctx, w.RepoPath, "git", "worktree", "add", w.WorktreePath, w.Branch); err != nil {
 		return fmt.Errorf("remote git worktree add failed: %s (%w)", bytesToTrimmedString(out), err)
 	}
@@ -100,6 +101,7 @@ func (r *RemoteWorktreeOps) CreateWorktree(ctx context.Context, w RemoteWorktree
 // mask the real error), not behavior internal to this method itself, which always
 // reports its own failures rather than swallowing them.
 func (r *RemoteWorktreeOps) RemoveWorktree(ctx context.Context, w RemoteWorktree) error {
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	if out, err := r.runner.Run(ctx, w.RepoPath, "git", "worktree", "remove", w.WorktreePath, "--force"); err != nil {
 		return fmt.Errorf("remote git worktree remove failed: %s (%w)", bytesToTrimmedString(out), err)
 	}

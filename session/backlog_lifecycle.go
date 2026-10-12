@@ -1819,6 +1819,7 @@ func (l *BacklogLifecycleListener) resolveLatestWorkCommit(ctx context.Context, 
 	if wt.BranchName == "" {
 		return ""
 	}
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "--verify", wt.BranchName)
 	cmd.Dir = repoPath
 	out, revErr := cmd.Output()

@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -69,6 +70,31 @@ func TestWithOperationSpan_should_RecordErrorOutcome_When_UnderlyingCallFails(t 
 		}
 	}
 	assert.True(t, sawExceptionEvent, "expected RecordError to add an exception event")
+}
+
+// Story 1.3.1: the exception message and status description must carry no credential.
+func TestWithOperationSpan_RedactsCredentialsInRecordedError(t *testing.T) {
+	recorder := obstest.InstallProviders(t)
+
+	leaky := errors.New("fatal: unable to access 'https://x-access-token:ghp_abc123@github.com/o/r.git/'")
+	err := WithOperationSpan(context.Background(), "git.worktree.add", func() (string, string, error) {
+		return "legacy", OutcomeError, leaky
+	})
+	require.ErrorIs(t, err, leaky, "the caller still gets the original error")
+
+	span := recorder.Ended()[0]
+	assert.NotContains(t, span.Status().Description, "ghp_")
+	var messages []string
+	for _, event := range span.Events() {
+		for _, kv := range event.Attributes {
+			messages = append(messages, kv.Value.String())
+		}
+	}
+	require.NotEmpty(t, messages)
+	for _, m := range messages {
+		assert.NotContains(t, m, "ghp_")
+	}
+	assert.Contains(t, strings.Join(messages, "\n"), "https://***@github.com/o/r.git/")
 }
 
 // TestWithOperationSpan_AppliesCallerAttrsFromContext covers WithOperationAttrs: the

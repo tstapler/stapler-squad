@@ -338,6 +338,7 @@ func gitLogSummary(ctx context.Context, dir, baseSHA, headRef string) string {
 	logCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	rangeArg := fmt.Sprintf("%s..%s", baseSHA, headRef)
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	out, err := safeexec.CommandContext(logCtx, "git", "-C", dir, "log", "--oneline", "-n", fmt.Sprintf("%d", gitLogOneLineCommits), rangeArg).Output()
 	if err != nil {
 		return ""

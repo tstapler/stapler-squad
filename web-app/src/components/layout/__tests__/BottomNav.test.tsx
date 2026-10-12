@@ -159,6 +159,24 @@ describe("BottomNav", () => {
     delete mockFlags.notification_tray_v2;
   });
 
+  it("alerts_tab_should_open_the_tray_instead_of_navigating_when_tray_flag_on", () => {
+    mockFlags.notification_tray_v2 = true;
+    mockTogglePanel.mockClear();
+    render(<BottomNav />);
+    const alerts = screen.getByTestId("nav-alerts");
+    expect(alerts.tagName).toBe("BUTTON");
+    expect(alerts).toHaveAttribute("aria-controls", "notification-tray");
+    fireEvent.click(alerts);
+    expect(mockTogglePanel).toHaveBeenCalledTimes(1);
+    delete mockFlags.notification_tray_v2;
+  });
+
+  it("alerts_tab_should_link_to_the_notifications_page_when_tray_flag_off", () => {
+    render(<BottomNav />);
+    expect(screen.queryByTestId("nav-alerts")).toBeNull();
+    expect(screen.getByRole("link", { name: "Notifications" })).toHaveAttribute("href", "/notifications");
+  });
+
   it("more_sheet_should_omit_notifications_row_when_tray_flag_off", () => {
     render(<BottomNav />);
     expect(screen.queryByTestId("more-notifications")).toBeNull();

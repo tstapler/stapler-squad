@@ -256,6 +256,7 @@ func findGitRepoRoot(path string) (string, error) {
 func findMainRepoPathForWorktree(worktreePath string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "--path-format=absolute", "--git-common-dir")
 	cmd.Dir = worktreePath
 	out, err := cmd.Output()
@@ -418,6 +419,7 @@ func repoHasAnyRef(path string) (bool, error) {
 func repoHasAnyRefViaCLI(path string) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	cmd := safeexec.CommandContext(ctx, "git", "for-each-ref", "--count=1")
 	cmd.Dir = path
 	out, err := cmd.Output()
@@ -433,6 +435,7 @@ func repoHasAnyRefViaCLI(path string) (bool, error) {
 func getHeadCommitSHAViaCLI(path string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "HEAD")
 	cmd.Dir = path
 	out, err := cmd.Output()

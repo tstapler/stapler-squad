@@ -112,6 +112,7 @@ func (i *Instance) setupFirstTimeWorktree() error {
 			// entirely over a cosmetic diff-stats field.
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			baseCommitSHA := "unknown"
+			//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 			if out, shaErr := runner.Run(ctx, i.ExistingWorktree, "git", "rev-parse", "HEAD"); shaErr == nil {
 				if sha := strings.TrimSpace(string(out)); sha != "" {
 					baseCommitSHA = sha
@@ -137,6 +138,7 @@ func (i *Instance) setupFirstTimeWorktree() error {
 				// i.mu.Lock()/RLock() caller (including the legacy-writer setters
 				// documented in instance_actor_setters.go) for up to that long.
 				branch := "unknown"
+				//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 				if out, brErr := runner.Run(ctx, i.ExistingWorktree, "git", "rev-parse", "--abbrev-ref", "HEAD"); brErr == nil {
 					if br := strings.TrimSpace(string(out)); br != "" && br != "HEAD" {
 						branch = br

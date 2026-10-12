@@ -214,6 +214,7 @@ func (p *PathCompletionService) ListWorktrees(
 	listCtx, cancel := context.WithTimeout(ctx, listWorktreesTimeout)
 	defer cancel()
 
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	cmd := safeexec.CommandContext(listCtx, "git", "worktree", "list", "--porcelain")
 	cmd.Dir = expanded
 	output, err := cmd.Output()

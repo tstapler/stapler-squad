@@ -252,6 +252,9 @@ var (
 	ErrCannotRestart      = errors.New("session cannot be restarted in current state")
 	ErrPauseNotPermitted  = errors.New("session does not permit pause")
 	ErrResumeNotPermitted = errors.New("session does not permit resume")
+	// ErrDirtyStateUnknown means the worktree's uncommitted-changes check failed, so
+	// pause/stop kept the worktree rather than risk deleting uncommitted work.
+	ErrDirtyStateUnknown = errors.New("cannot determine whether the worktree has uncommitted changes; keeping it to avoid data loss")
 )
 
 // ErrInvalidTransition is returned when a status transition is not allowed

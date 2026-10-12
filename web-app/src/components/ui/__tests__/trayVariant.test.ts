@@ -4,7 +4,8 @@ describe("selectTrayVariant", () => {
   it.each([
     [{ isInnerScreen: true, isVirtualKeyboardOpen: false }, "side-overlay"],
     [{ isInnerScreen: false, isVirtualKeyboardOpen: false }, "bottom-sheet"],
-    [{ isInnerScreen: false, isVirtualKeyboardOpen: true }, "top-sheet"],
+    // The keyboard never changes the variant: the sheet rides it in place (data-keyboard) instead of jumping edges.
+    [{ isInnerScreen: false, isVirtualKeyboardOpen: true }, "bottom-sheet"],
     [{ isInnerScreen: false, isVirtualKeyboardOpen: false, isLandscape: true }, "landscape-panel"],
     // Landscape wins over the keyboard: the panel is a side column, never under the keyboard.
     [{ isInnerScreen: false, isVirtualKeyboardOpen: true, isLandscape: true }, "landscape-panel"],
