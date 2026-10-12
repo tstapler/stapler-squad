@@ -27,6 +27,9 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitwiring"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/search"
@@ -355,6 +358,11 @@ type SessionService struct {
 	// than a per-call-site change across the package's ~90 NewSessionService
 	// test call sites.
 	testTmuxServerSocket string
+
+	// gitBackend is the git backend remote session creation routes through. Built lazily
+	// from config by gitBackendOrDefault; tests replace it with setGitBackend before use.
+	gitBackendOnce sync.Once
+	gitBackend     backend.Backend
 
 	// githubResolver performs the actual GitHub-URL-to-local-clone resolution
 	// (network clone/fetch). Defaults to session.ResolveGitHubInputCtxWithHosts;
@@ -1221,4 +1229,30 @@ func maybeAutoMigrateToEnt(repo *session.EntRepository) error {
 
 	log.Info("auto-migration to Ent complete")
 	return nil
+}
+
+// gitBackendOrDefault returns the git backend, building it once from config.GitBackendCohorts
+// (every cohort defaults to the CLI). The config is read at first use, so edits need a restart. Its local runner serves Local locations only; Remote
+// locations carry the SSH runner they were built from.
+func (s *SessionService) gitBackendOrDefault() backend.Backend {
+	s.gitBackendOnce.Do(func() {
+		s.gitBackend = gitwiring.NewRouter(gitwiring.ParseCohortMap(config.LoadConfig().GitBackendCohorts), tmux.LocalRunner{})
+	})
+	return s.gitBackend
+}
+
+// setGitBackend injects the backend. It only takes effect before the first
+// gitBackendOrDefault call (the Once is spent after that), which keeps it race-free.
+// b must be non-nil.
+func (s *SessionService) setGitBackend(b backend.Backend) {
+	if b == nil {
+		panic("services: setGitBackend called with a nil backend")
+	}
+	s.gitBackendOnce.Do(func() { s.gitBackend = b })
+}
+
+// remoteWorktreeOps builds the worktree ops for a remote runner, routing git through the
+// service's backend. The runner passed here is the value that reaches Backend as Remote.Runner.
+func (s *SessionService) remoteWorktreeOps(runner tmux.CommandRunner, host string) *git.RemoteWorktreeOps {
+	return git.NewRemoteWorktreeOps(runner, git.WithGitBackend(s.gitBackendOrDefault()), git.WithRemoteHost(host))
 }

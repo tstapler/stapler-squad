@@ -233,7 +233,12 @@ func sentinelFor(lower, original string) error {
 	return nil
 }
 
-type exitCoder interface{ ExitCode() int }
+type (
+	exitCoder interface{ ExitCode() int }
+	// exitStatuser is golang.org/x/crypto/ssh.ExitError's accessor: an SSH runner's non-zero
+	// exit has ExitStatus, not ExitCode.
+	exitStatuser interface{ ExitStatus() int }
+)
 
 // exitCode returns the process exit status carried by err, or -1 when it carries none
 // (a dial failure, a cancelled context).
@@ -241,6 +246,10 @@ func exitCode(err error) int {
 	var ec exitCoder
 	if errors.As(err, &ec) {
 		return ec.ExitCode()
+	}
+	var es exitStatuser
+	if errors.As(err, &es) {
+		return es.ExitStatus()
 	}
 	return -1
 }

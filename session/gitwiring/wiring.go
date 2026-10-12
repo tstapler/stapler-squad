@@ -18,6 +18,8 @@ import (
 var (
 	_ backend.Runner = tmux.LocalRunner{}
 	_ backend.Runner = (*tmux.SSHRunner)(nil)
+	// Locate takes any tmux.CommandRunner as-is (plan Story 1.1.5).
+	_ backend.Locatable = tmux.CommandRunner(nil)
 )
 
 // NewRouter composes the production backend: the CLI backend over local (which serves Local
