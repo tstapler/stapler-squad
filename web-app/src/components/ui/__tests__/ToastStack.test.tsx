@@ -22,6 +22,7 @@ jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
 let mockConnectivity = { state: "connected", isOffline: false };
 jest.mock("@/lib/hooks/useNotificationConnectivity", () => ({
   useNotificationConnectivity: () => mockConnectivity,
+  useStreamConnectionState: () => mockConnectivity.state,
 }));
 
 jest.mock("@/lib/utils/notifications", () => ({

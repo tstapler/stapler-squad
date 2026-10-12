@@ -24,3 +24,15 @@ export function subscribeStackTopOffset(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
+
+/**
+ * Bottom edge (px) of the terminal's own toolbar, or null when none is visible.
+ * The phone deck docks here, over the terminal output, so it never covers the
+ * toolbar controls. Only the CSS variable is needed: the deck's presence is
+ * still decided by `getStackTopOffset`.
+ */
+export function setDeckTopOffset(px: number | null): void {
+  if (typeof document === "undefined") return;
+  if (px === null) document.documentElement.style.removeProperty("--mobile-deck-top-offset");
+  else document.documentElement.style.setProperty("--mobile-deck-top-offset", `${px}px`);
+}
