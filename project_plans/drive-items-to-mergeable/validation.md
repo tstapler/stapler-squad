@@ -70,3 +70,22 @@ the four highest-risk cases; all are resolved. No blockers identified.
 Estimated scope: small-to-medium. The correctness fix (Phase 1) touches 3 files with
 localized changes; the observability fix (Phase 2) is a one-line change; the frontend
 fix (Phase 3) is ~20 lines + a test.
+
+---
+
+## Implementation notes (2026-10-11)
+
+Deviations from plan.md, found while implementing:
+
+- **No `PRInfo.CIPending` / `prReadyToMergeSolo` change.** `PRInfo.CheckConclusion` already
+  has a `"pending"` value that `prReadyToMergeSolo`'s default arm rejects, so the reconciler
+  sets `CheckConclusion = "pending"` when `PRStatus.CIPending`. Smaller blast radius than Option A.
+- **Phase 3 premise was wrong.** `BacklogItem` has no `stuckReasons`; the detail view already
+  resolves the item's `StuckBacklogItem` group, so `PullRequestSection` takes an optional
+  `stuckReasons` prop fed from it. No new API surface.
+- Legacy `StatusContext` checks (`state` PENDING/EXPECTED) also count as pending.
+- `ACTION_REQUIRED`/`STARTUP_FAILURE`/`STALE` remain out of scope (pre-mortem 4).
+
+Verification: `go test ./session ./session/git/... ./github/...`, `make lint`, `make vet`,
+`make fmt-check`, `make registry-generate` (no diff), `actor-field-guard`, targeted Jest. `make ci`
+itself cannot complete in this worktree (`third_party/tmux` submodule init fails).
