@@ -21,10 +21,11 @@ func (f *facts) hooks() ([]backend.Capability, error) {
 	}
 	dir := filepath.Join(f.l.commonDir, "hooks")
 	if e, ok := cfg.Lookup("core.hooksPath"); ok && e.HasValue && e.Value != "" {
-		dir = f.expandPath(e.Value)
-		if !filepath.IsAbs(dir) {
-			dir = filepath.Join(f.l.root, dir) // hooks run from the worktree top
+		resolved, detail := f.hooksPathDir(e.Value)
+		if detail != "" {
+			return one(backend.CapHooks, detail), nil
 		}
+		dir = resolved
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -47,4 +48,22 @@ func (f *facts) hooks() ([]backend.Capability, error) {
 		}
 	}
 	return nil, nil
+}
+
+// hooksPathDir resolves core.hooksPath. A path git expands in ways this package does not
+// (~user/, %(prefix)/) and a directory inside the worktree both report hooks outright: the
+// latter is the husky/.githooks pattern, where the operation itself (checkout, merge, reset)
+// can bring the hook files into existence after this check ran.
+func (f *facts) hooksPathDir(value string) (dir, detail string) {
+	if (strings.HasPrefix(value, "~") && !strings.HasPrefix(value, "~/")) || strings.HasPrefix(value, "%(") {
+		return "", "core.hooksPath:unexpanded"
+	}
+	dir = f.expandPath(value)
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(f.l.root, dir) // hooks run from the worktree top
+	}
+	if rel, err := filepath.Rel(f.l.root, dir); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", "core.hooksPath:inside-worktree"
+	}
+	return dir, ""
 }

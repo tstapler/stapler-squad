@@ -86,6 +86,9 @@ func RelevantCapabilities(op OperationName) []CapabilityKind {
 	if worktreeContentOps[op] {
 		kinds = append(kinds, CapLFS, CapUnsupportedIndex, CapSparse, CapSubmodule)
 	}
+	if op == OpFetch {
+		kinds = append(kinds, CapSubmodule) // fetch recurses into submodules on demand
+	}
 	if graphOps[op] {
 		kinds = append(kinds, CapShallow)
 	}

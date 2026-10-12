@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
@@ -47,7 +48,18 @@ func remoteURLs(cfg *gitconfig.Result) []string {
 	return urls
 }
 
+var (
+	remoteHelperURL = regexp.MustCompile(`^[A-Za-z0-9+.-]+::`)
+	windowsDrive    = regexp.MustCompile(`^[A-Za-z]:[\\/]`)
+)
+
+// protocolOf classifies a remote URL the way go-git would use it, with two forms go-git's
+// parser misreads: remote helpers ("ext::...", "codecommit::...") that no in-process transport
+// can run, and Windows drive paths. Both are reported as "file" so they route to the CLI.
 func protocolOf(url string) string {
+	if remoteHelperURL.MatchString(url) || windowsDrive.MatchString(url) {
+		return "file"
+	}
 	ep, err := transport.NewEndpoint(url)
 	if err != nil {
 		return "file" // cannot tell: treat as local, which routes to the CLI
@@ -63,7 +75,7 @@ func (f *facts) transport(kind backend.CapabilityKind) ([]backend.Capability, er
 	if err != nil {
 		return nil, err
 	}
-	var ssh bool
+	var ssh, git bool
 	for _, u := range remoteURLs(cfg) {
 		switch protocolOf(u) {
 		case "file":
@@ -72,9 +84,19 @@ func (f *facts) transport(kind backend.CapabilityKind) ([]backend.Capability, er
 			}
 		case "ssh":
 			ssh = true
+		case "git":
+			git = true
 		}
 	}
-	if kind != backend.CapSSHProxy || !ssh {
+	if kind != backend.CapSSHProxy {
+		return nil, nil
+	}
+	if git {
+		if e, ok := cfg.Lookup("core.gitProxy"); (ok && e.HasValue && e.Value != "") || envGet(f.env, "GIT_PROXY_COMMAND") != "" {
+			return one(backend.CapSSHProxy, "core.gitProxy"), nil
+		}
+	}
+	if !ssh {
 		return nil, nil
 	}
 	if e, ok := cfg.Lookup("core.sshCommand"); ok && e.HasValue && e.Value != "" {
@@ -99,7 +121,7 @@ func (f *facts) sshConfigDirectives() ([]backend.Capability, error) {
 		}
 	}
 	for _, p := range paths {
-		d, err := scanSSHConfig(p, filepath.Dir(p), 0)
+		d, err := scanSSHConfig(p, filepath.Dir(p), envGet(f.env, "HOME"), 0)
 		if err != nil {
 			return nil, err
 		}
@@ -115,7 +137,7 @@ const maxSSHIncludeDepth = 4
 // scanSSHConfig returns the first proxy directive in an ssh_config file or anything it includes
 // (relative includes resolve against baseDir). It does not match Host patterns: any such
 // directive anywhere routes, which errs toward the CLI.
-func scanSSHConfig(path, baseDir string, depth int) (string, error) {
+func scanSSHConfig(path, baseDir, home string, depth int) (string, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, fs.ErrNotExist) || isNotDir(err) {
 		return "", nil
@@ -126,7 +148,7 @@ func scanSSHConfig(path, baseDir string, depth int) (string, error) {
 	defer func() { _ = file.Close() }()
 	sc := bufio.NewScanner(file)
 	for sc.Scan() {
-		fields := strings.Fields(strings.ReplaceAll(strings.TrimSpace(sc.Text()), "=", " "))
+		fields := sshFields(sc.Text())
 		if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
 			continue
 		}
@@ -136,12 +158,15 @@ func scanSSHConfig(path, baseDir string, depth int) (string, error) {
 		}
 		if key == "include" && depth < maxSSHIncludeDepth {
 			for _, pat := range fields[1:] {
+				if rest, ok := strings.CutPrefix(pat, "~/"); ok {
+					pat = filepath.Join(home, rest)
+				}
 				if !filepath.IsAbs(pat) {
 					pat = filepath.Join(baseDir, pat)
 				}
 				matches, _ := filepath.Glob(pat)
 				for _, m := range matches {
-					if d, err := scanSSHConfig(m, baseDir, depth+1); d != "" || err != nil {
+					if d, err := scanSSHConfig(m, baseDir, home, depth+1); d != "" || err != nil {
 						return d, err
 					}
 				}
@@ -149,4 +174,32 @@ func scanSSHConfig(path, baseDir string, depth int) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+// sshFields splits an ssh_config line into words: whitespace or '=' separate keyword and
+// arguments, and double quotes group (and are removed), so `"ProxyCommand" nc` is ProxyCommand.
+func sshFields(line string) []string {
+	var fields []string
+	var cur strings.Builder
+	inQuote, started := false, false
+	flush := func() {
+		if started {
+			fields = append(fields, cur.String())
+			cur.Reset()
+			started = false
+		}
+	}
+	for _, r := range strings.TrimSpace(line) {
+		switch {
+		case r == '"':
+			inQuote, started = !inQuote, true
+		case !inQuote && (r == ' ' || r == '\t' || r == '='):
+			flush()
+		default:
+			cur.WriteRune(r)
+			started = true
+		}
+	}
+	flush()
+	return fields
 }

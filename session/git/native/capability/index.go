@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 
 	"github.com/go-git/go-git/v5/plumbing/filemode"
@@ -25,12 +24,11 @@ const (
 // indexFacts are the expensive, index-derived facts: found by decoding every entry, so they are
 // cached under the index's trailing checksum (which changes whenever git rewrites the index).
 type indexFacts struct {
-	checksum      string
-	size          int64
-	attributeDirs []string // directories (relative to the root) holding a tracked .gitattributes
-	skipWorktree  bool     // some entry is sparse-excluded
-	gitlinks      bool     // some entry is a submodule
-	unsupported   bool     // a mandatory extension go-git cannot read (split index)
+	checksum     string
+	size         int64
+	skipWorktree bool // some entry is sparse-excluded
+	gitlinks     bool // some entry is a submodule
+	unsupported  bool // a mandatory extension go-git cannot read (split index)
 }
 
 // readIndex returns the facts of <GitDir>/index, from cache when its checksum is unchanged. A
@@ -58,7 +56,8 @@ func (d *Detector) readIndex(l layout) (*indexFacts, error) {
 	if err != nil {
 		return nil, detectErr(backend.DetectUnsupportedIndex, err)
 	}
-	facts.checksum, facts.size = sum, fi.Size()
+	// Key the entry by the checksum of the bytes actually decoded, not the one read earlier: git
+	// may have rewritten the index in between, and a stale key would serve old facts.
 	d.mu.Lock()
 	if len(d.index) >= indexCacheSize {
 		d.index = map[string]indexFacts{}
@@ -96,25 +95,18 @@ func decodeIndex(p string) (*indexFacts, error) {
 	idx := &index.Index{}
 	err = index.NewDecoder(bufio.NewReader(bytes.NewReader(data))).Decode(idx)
 	if errors.Is(err, index.ErrUnknownExtension) {
-		return &indexFacts{unsupported: true}, nil
+		return &indexFacts{unsupported: true, size: int64(len(data)), checksum: string(data[max(0, len(data)-checksumLen):])}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	f := &indexFacts{}
-	seen := map[string]bool{}
+	f := &indexFacts{size: int64(len(data)), checksum: string(data[max(0, len(data)-checksumLen):])}
 	for _, e := range idx.Entries {
 		if e.SkipWorktree {
 			f.skipWorktree = true
 		}
 		if e.Mode == filemode.Submodule {
 			f.gitlinks = true
-		}
-		if path.Base(e.Name) == ".gitattributes" {
-			if dir := path.Dir(e.Name); !seen[dir] {
-				seen[dir] = true
-				f.attributeDirs = append(f.attributeDirs, dir)
-			}
 		}
 	}
 	return f, nil

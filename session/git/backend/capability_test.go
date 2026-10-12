@@ -159,6 +159,8 @@ func TestRelevantCapabilitiesTable(t *testing.T) {
 	assert.True(t, has(backend.OpAdd, backend.CapLFS))
 	assert.True(t, has(backend.OpMergeBase, backend.CapShallow))
 	assert.True(t, has(backend.OpFetch, backend.CapLocalTransport))
+	assert.True(t, has(backend.OpFetch, backend.CapSubmodule), "fetch recurses into submodules")
+	assert.False(t, has(backend.OpPush, backend.CapSubmodule))
 	assert.True(t, has(backend.OpPush, backend.CapSSHProxy))
 	assert.Empty(t, backend.RelevantCapabilities(backend.OpClone), "clone has no repository to inspect")
 }

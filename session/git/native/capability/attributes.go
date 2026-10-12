@@ -19,48 +19,68 @@ const maxAttributesSize = 8 << 20
 func isNotDir(err error) bool { return errors.Is(err, syscall.ENOTDIR) }
 
 // filters reports a clean/smudge filter driver that applies: some attribute source assigns
-// filter=<name> and the effective config defines filter.<name>.clean, .smudge or .process. A
-// global `git lfs install` defines filter.lfs.* for every repository, so config alone must not
-// route; the attribute has to reference it.
+// filter=<name> (directly or through a macro) and the effective config defines
+// filter.<name>.clean, .smudge, .process or .required. A global `git lfs install` defines
+// filter.lfs.* for every repository, so config alone must not route; the attribute has to
+// reference it. With no driver defined at all there is nothing to look for, so the worktree is
+// not scanned.
 func (f *facts) filters() ([]backend.Capability, error) {
 	cfg, err := f.config()
 	if err != nil {
 		return nil, err
 	}
-	defined := func(name string) bool {
-		for _, k := range []string{"clean", "smudge", "process"} {
-			if _, ok := cfg.Lookup("filter." + name + "." + k); ok {
-				return true
-			}
-		}
-		return false
+	defined := definedFilters(cfg)
+	if len(defined) == 0 {
+		return nil, nil
 	}
-	idx, err := f.indexFacts()
+	paths, err := f.attributeSources(cfg)
 	if err != nil {
 		return nil, err
 	}
-	for _, p := range f.attributeSources(cfg, idx) {
-		names, err := filterNames(p)
+	sources := make([][]byte, 0, len(paths))
+	for _, p := range paths {
+		data, err := readAttributes(p)
 		if err != nil {
 			return nil, err
 		}
-		for _, n := range names {
-			if defined(n) {
-				return one(backend.CapLFS, "filter="+n), nil
-			}
+		sources = append(sources, data)
+	}
+	for _, n := range assignedFilterNames(sources) {
+		if defined[n] {
+			return one(backend.CapLFS, "filter="+n), nil
 		}
 	}
 	return nil, nil
 }
 
-// attributeSources lists every file git consults for attributes: the root .gitattributes, every
-// tracked one, info/attributes, core.attributesFile (default under XDG) and the system files.
-func (f *facts) attributeSources(cfg *gitconfig.Result, idx *indexFacts) []string {
-	srcs := []string{filepath.Join(f.l.root, ".gitattributes")}
-	for _, dir := range idx.attributeDirs {
-		if dir != "." {
-			srcs = append(srcs, filepath.Join(f.l.root, filepath.FromSlash(dir), ".gitattributes"))
+// definedFilters are the driver names the config configures. "required" counts: git dies when a
+// required filter is assigned but has no working driver, which the CLI must report.
+func definedFilters(cfg *gitconfig.Result) map[string]bool {
+	names := map[string]bool{}
+	for _, e := range cfg.InSection("filter") {
+		if !e.HasSubsection {
+			continue
 		}
+		switch e.Key {
+		case "clean", "smudge", "process", "required":
+			names[e.Subsection] = true
+		}
+	}
+	return names
+}
+
+// maxWalkEntries bounds the attribute-file walk; a worktree this large is left to git.
+const maxWalkEntries = 500_000
+
+// attributeSources lists every file git consults for attributes: every .gitattributes in the
+// worktree (tracked or not: git reads them wherever they are, and `git lfs track` in a new
+// directory creates an untracked one), info/attributes, core.attributesFile (default under XDG)
+// and the system files. Nested git repositories are skipped; their files are not this
+// repository's attributes.
+func (f *facts) attributeSources(cfg *gitconfig.Result) ([]string, error) {
+	srcs, err := f.worktreeAttributeFiles()
+	if err != nil {
+		return nil, err
 	}
 	srcs = append(srcs, filepath.Join(f.l.commonDir, "info", "attributes"))
 	if e, ok := cfg.Lookup("core.attributesFile"); ok && e.HasValue && e.Value != "" {
@@ -74,8 +94,53 @@ func (f *facts) attributeSources(cfg *gitconfig.Result, idx *indexFacts) []strin
 	} else if home := envGet(f.env, "HOME"); home != "" {
 		srcs = append(srcs, filepath.Join(home, ".config", "git", "attributes"))
 	}
-	return append(srcs, f.d.systemAttributes()...)
+	return append(srcs, f.d.systemAttributes()...), nil
 }
+
+func (f *facts) worktreeAttributeFiles() ([]string, error) {
+	var found []string
+	entries := 0
+	err := filepath.WalkDir(f.l.root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if path == f.l.root {
+				return err
+			}
+			return nil // a directory that vanished or cannot be listed has no attribute file git could read either
+		}
+		if entries++; entries > maxWalkEntries {
+			return errWalkTooLarge
+		}
+		if ctxErr := f.ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if d.IsDir() {
+			if d.Name() == ".git" {
+				return fs.SkipDir
+			}
+			if path != f.l.root {
+				if _, err := os.Lstat(filepath.Join(path, ".git")); err == nil {
+					return fs.SkipDir // nested repository
+				}
+			}
+			return nil
+		}
+		if d.Name() == ".gitattributes" {
+			found = append(found, path)
+		}
+		return nil
+	})
+	switch {
+	case errors.Is(err, errWalkTooLarge):
+		return nil, detectErr(backend.DetectAttributesUnread, err)
+	case f.ctx.Err() != nil:
+		return nil, detectErr(backend.DetectCanceled, f.ctx.Err())
+	case err != nil:
+		return nil, detectErr(backend.DetectAttributesUnread, err)
+	}
+	return found, nil
+}
+
+var errWalkTooLarge = errors.New("worktree too large to scan for attribute files")
 
 func (d *Detector) systemAttributes() []string {
 	if d.cfg.SystemAttributes != nil {
@@ -88,10 +153,9 @@ func (d *Detector) systemAttributes() []string {
 	return out
 }
 
-// filterNames returns every filter driver name an attributes file assigns, following `[attr]`
-// macros defined in the same file. A missing file has none; one that exists but cannot be read
-// fails closed.
-func filterNames(path string) ([]string, error) {
+// readAttributes returns an attributes file's content. A missing file is empty; one that exists
+// but cannot be read fails closed.
+func readAttributes(path string) ([]byte, error) {
 	fi, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) || isNotDir(err) {
@@ -106,34 +170,57 @@ func filterNames(path string) ([]string, error) {
 	if err != nil {
 		return nil, detectErr(backend.DetectAttributesUnread, err)
 	}
-	return parseFilterNames(data), nil
+	return data, nil
 }
 
-// parseFilterNames scans attribute lines ("<pattern> attr attr=value ...", "[attr]macro attrs...").
-func parseFilterNames(data []byte) []string {
-	macros := map[string][]string{} // macro name -> filter names it assigns
-	type line struct{ attrs []string }
-	var lines []line
-	sc := bufio.NewScanner(bytes.NewReader(data))
-	sc.Buffer(make([]byte, 0, 64<<10), maxAttributesSize)
-	for sc.Scan() {
-		text := strings.TrimSpace(sc.Text())
-		if text == "" || strings.HasPrefix(text, "#") {
-			continue
+// assignedFilterNames returns every filter driver name any source assigns. `[attr]` macros are
+// collected from all sources first (git only honours them in the top-level, info, global and
+// system files; taking them from every file errs toward routing) and expanded recursively.
+func assignedFilterNames(sources [][]byte) []string {
+	macros := map[string][]string{} // macro name -> its attribute list
+	var lines [][]string
+	for _, data := range sources {
+		sc := bufio.NewScanner(bytes.NewReader(data))
+		sc.Buffer(make([]byte, 0, 64<<10), maxAttributesSize)
+		for sc.Scan() {
+			text := strings.TrimSpace(sc.Text())
+			if text == "" || strings.HasPrefix(text, "#") {
+				continue
+			}
+			fields := splitAttrFields(text)
+			if len(fields) < 2 {
+				continue
+			}
+			if name, ok := strings.CutPrefix(fields[0], "[attr]"); ok {
+				macros[name] = fields[1:]
+				continue
+			}
+			lines = append(lines, fields[1:])
 		}
-		fields := splitAttrFields(text)
-		if len(fields) < 2 {
-			continue
-		}
-		if name, ok := strings.CutPrefix(fields[0], "[attr]"); ok {
-			macros[name] = assignedFilters(fields[1:], nil)
-			continue
-		}
-		lines = append(lines, line{attrs: fields[1:]})
 	}
-	names := make([]string, 0, len(lines))
-	for _, l := range lines {
-		names = append(names, assignedFilters(l.attrs, macros)...)
+	var names []string
+	for _, attrs := range lines {
+		names = append(names, expandFilters(attrs, macros, map[string]bool{}, 0)...)
+	}
+	return names
+}
+
+const maxMacroDepth = 10
+
+func expandFilters(attrs []string, macros map[string][]string, seen map[string]bool, depth int) []string {
+	var names []string
+	for _, a := range attrs {
+		if v, ok := strings.CutPrefix(a, "filter="); ok && v != "" {
+			names = append(names, v)
+			continue
+		}
+		body, isMacro := macros[a]
+		if !isMacro || seen[a] || depth >= maxMacroDepth {
+			continue
+		}
+		seen[a] = true
+		names = append(names, expandFilters(body, macros, seen, depth+1)...)
+		delete(seen, a)
 	}
 	return names
 }
@@ -146,16 +233,4 @@ func splitAttrFields(s string) []string {
 		}
 	}
 	return strings.Fields(s)
-}
-
-func assignedFilters(attrs []string, macros map[string][]string) []string {
-	var names []string
-	for _, a := range attrs {
-		if v, ok := strings.CutPrefix(a, "filter="); ok && v != "" {
-			names = append(names, v)
-			continue
-		}
-		names = append(names, macros[a]...)
-	}
-	return names
 }

@@ -568,3 +568,127 @@ func TestEveryGitconfigSubMapsToAKnownDetectSub(t *testing.T) {
 		assert.True(t, known[string(s)], "gitconfig sub %q has no backend.DetectSub", s)
 	}
 }
+
+func lfsHome(f *fx) {
+	f.write(filepath.Join(f.home, ".gitconfig"), "[filter \"foo\"]\n\tclean = cat\n")
+}
+
+func TestFilterInUntrackedNestedGitattributes(t *testing.T) {
+	f := newFx(t)
+	lfsHome(f)
+	f.write(filepath.Join(f.root, "newdir", ".gitattributes"), "* filter=foo\n") // `git lfs track` in a new directory; nothing is in the index
+	f.wantKinds(backend.OpAdd, backend.CapLFS)
+	f.wantKinds(backend.OpStatus, backend.CapLFS)
+}
+
+func TestFilterSkipsNestedRepositoriesAndDotGit(t *testing.T) {
+	f := newFx(t)
+	lfsHome(f)
+	f.write(filepath.Join(f.root, "vendor", "lib", ".git"), "gitdir: elsewhere\n")
+	f.write(filepath.Join(f.root, "vendor", "lib", ".gitattributes"), "* filter=foo\n")
+	f.wantKinds(backend.OpStatus)
+}
+
+func TestFilterNestedMacrosAndMacrosFromOtherSources(t *testing.T) {
+	f := newFx(t)
+	lfsHome(f)
+	f.write(filepath.Join(f.root, ".gitattributes"), "[attr]inner filter=foo\n[attr]outer inner\n*.dat outer\n")
+	f.wantKinds(backend.OpStatus, backend.CapLFS)
+
+	g := newFx(t)
+	lfsHome(g)
+	g.write(filepath.Join(g.home, ".config", "git", "attributes"), "[attr]viafoo filter=foo\n")
+	g.write(filepath.Join(g.root, "sub", ".gitattributes"), "*.dat viafoo\n")
+	g.wantKinds(backend.OpStatus, backend.CapLFS)
+}
+
+func TestFilterMacroCyclesTerminate(t *testing.T) {
+	f := newFx(t)
+	lfsHome(f)
+	f.write(filepath.Join(f.root, ".gitattributes"), "[attr]a b\n[attr]b a\n*.dat a\n")
+	f.wantKinds(backend.OpStatus)
+}
+
+func TestRequiredFilterWithoutDriverStillCounts(t *testing.T) {
+	f := newFx(t)
+	f.write(filepath.Join(f.home, ".gitconfig"), "[filter \"rq\"]\n\trequired = true\n")
+	f.write(filepath.Join(f.root, ".gitattributes"), "*.dat filter=rq\n")
+	f.wantKinds(backend.OpStatus, backend.CapLFS) // git dies on a required filter with no driver; let it say so
+}
+
+func TestNoConfiguredFilterMeansNoWorktreeScan(t *testing.T) {
+	f := newFx(t)
+	// an unreadable attributes file would fail closed if it were opened
+	p := filepath.Join(f.root, ".gitattributes")
+	f.write(p, "*.dat filter=x\n")
+	require.NoError(t, os.Chmod(p, 0))
+	t.Cleanup(func() { _ = os.Chmod(p, 0o600) })
+	f.wantKinds(backend.OpStatus)
+}
+
+func TestHooksPathInsideTheWorktreeAlwaysRoutes(t *testing.T) {
+	for name, value := range map[string]string{"relative": ".githooks", "relative dot": "./hooks/ci", "absolute inside": "ROOT/.githooks"} {
+		t.Run(name, func(t *testing.T) {
+			f := newFx(t)
+			v := value
+			if v == "ROOT/.githooks" {
+				v = filepath.Join(f.root, ".githooks")
+			}
+			f.appendConfig("[core]\n\thooksPath = " + v + "\n") // the directory does not exist yet: a checkout may create it
+			caps := f.wantKinds(backend.OpSwitchBranch, backend.CapHooks)
+			assert.Equal(t, "core.hooksPath:inside-worktree", caps[0].Detail)
+		})
+	}
+	g := newFx(t)
+	g.appendConfig("[core]\n\thooksPath = ~someone/hooks\n")
+	g.wantKinds(backend.OpCommit, backend.CapHooks)
+	h := newFx(t)
+	h.appendConfig("[core]\n\thooksPath = %(prefix)/hooks\n")
+	h.wantKinds(backend.OpCommit, backend.CapHooks)
+}
+
+func TestSSHConfigIncludeTildeAndQuotedKeyword(t *testing.T) {
+	sshRemote := "[remote \"o\"]\n\turl = git@h:r.git\n"
+	f := newFx(t)
+	f.appendConfig(sshRemote)
+	f.write(filepath.Join(f.home, ".ssh", "config"), "Include ~/.ssh/conf.d/*\n")
+	f.write(filepath.Join(f.home, ".ssh", "conf.d", "a"), "Host h\n  ProxyCommand nc %h %p\n")
+	f.wantKinds(backend.OpFetch, backend.CapSSHProxy)
+
+	g := newFx(t)
+	g.appendConfig(sshRemote)
+	g.write(filepath.Join(g.home, ".ssh", "config"), "Host h\n  \"ProxyCommand\" nc %h %p\n")
+	g.wantKinds(backend.OpFetch, backend.CapSSHProxy)
+
+	h := newFx(t)
+	h.appendConfig(sshRemote)
+	h.write(filepath.Join(h.home, ".ssh", "config"), "Host h\n  ProxyJump=bastion\n")
+	h.wantKinds(backend.OpFetch, backend.CapSSHProxy)
+}
+
+func TestRemoteHelperAndDriveLetterURLsRouteAsLocal(t *testing.T) {
+	for _, u := range []string{"ext::sh -c 'cat'", "codecommit::us-east-1://repo", "hg::https://x/y", "persistent-https::https://x", `C:/repo`, `C:\\repo`} {
+		f := newFx(t)
+		f.appendConfig("[remote \"o\"]\n\turl = " + u + "\n")
+		f.wantKinds(backend.OpFetch, backend.CapLocalTransport)
+	}
+}
+
+func TestGitProtocolProxy(t *testing.T) {
+	remote := "[remote \"o\"]\n\turl = git://h/r.git\n"
+	f := newFx(t)
+	f.appendConfig(remote)
+	f.wantKinds(backend.OpFetch)
+	f.appendConfig("[core]\n\tgitProxy = nc %h\n")
+	f.wantKinds(backend.OpFetch, backend.CapSSHProxy)
+	g := newFx(t)
+	g.appendConfig(remote)
+	g.extraEnv = []string{"GIT_PROXY_COMMAND=/bin/proxy"}
+	g.wantKinds(backend.OpFetch, backend.CapSSHProxy)
+}
+
+func TestFetchSeesSubmodules(t *testing.T) {
+	f := newFx(t)
+	f.writeIndex(entry("sub", filemode.Submodule))
+	f.wantKinds(backend.OpFetch, backend.CapSubmodule)
+}
