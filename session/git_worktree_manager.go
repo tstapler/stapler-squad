@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 )
 
 // GitWorktreeManager owns the git worktree and diff-stats state that were
@@ -572,12 +572,10 @@ func (gm *GitWorktreeManager) GetCurrentCommitSHA() (string, error) {
 
 	revCtx, revCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer revCancel()
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	cmd := safeexec.CommandContext(revCtx, "git", "-C", dir, "rev-parse", "HEAD")
-	output, err := cmd.Output()
+	sha, err := gitprovider.Backend().ResolveRef(revCtx, backend.Local{Root: backend.RepoRoot(dir)}, "HEAD")
 	if err != nil {
 		// Not a fatal error — repo may have no commits yet.
 		return "", nil
 	}
-	return strings.TrimSpace(string(output)), nil
+	return string(sha), nil
 }

@@ -1231,12 +1231,13 @@ func maybeAutoMigrateToEnt(repo *session.EntRepository) error {
 	return nil
 }
 
-// gitBackendOrDefault returns the git backend, building it once from config.GitBackendCohorts
-// (every cohort defaults to the CLI). The config is read at first use, so edits need a restart. Its local runner serves Local locations only; Remote
-// locations carry the SSH runner they were built from.
+// gitBackendOrDefault returns the git backend, defaulting to the process-wide router built from
+// config.GitBackendCohorts (every cohort defaults to the CLI; the config is read at first use,
+// so edits need a restart). Its local runner serves Local locations only; Remote locations
+// carry the SSH runner they were built from.
 func (s *SessionService) gitBackendOrDefault() backend.Backend {
 	s.gitBackendOnce.Do(func() {
-		s.gitBackend = gitwiring.NewRouter(gitwiring.ParseCohortMap(config.LoadConfig().GitBackendCohorts), gitwiring.NewLocalRunner())
+		s.gitBackend = gitwiring.Shared()
 	})
 	return s.gitBackend
 }

@@ -16,6 +16,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -294,6 +296,15 @@ func (s *UnfinishedWorkService) UndismissWorktree(
 	return connect.NewResponse(&sessionv1.UndismissWorktreeResponse{}), nil
 }
 
+// worktreeHeadSHA is worktreePath's current HEAD commit, or "" when it cannot be resolved.
+func worktreeHeadSHA(ctx context.Context, worktreePath string) string {
+	sha, err := gitprovider.Backend().ResolveRef(ctx, backend.Local{Root: backend.RepoRoot(worktreePath)}, "HEAD")
+	if err != nil {
+		return ""
+	}
+	return string(sha)
+}
+
 // SnoozeWorktree hides a worktree until the next HEAD SHA change.
 func (s *UnfinishedWorkService) SnoozeWorktree(
 	ctx context.Context,
@@ -306,12 +317,7 @@ func (s *UnfinishedWorkService) SnoozeWorktree(
 		// Run git rev-parse HEAD in the worktree to get current SHA.
 		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
-		//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-		cmd := safeexec.CommandContext(ctx, "git", "-C", r.WorktreePath, "rev-parse", "HEAD")
-		out, err := cmd.Output()
-		if err == nil {
-			headSHA = strings.TrimSpace(string(out))
-		}
+		headSHA = worktreeHeadSHA(ctx, r.WorktreePath)
 	}
 
 	if err := s.stateStore.Snooze(req.Msg.RepoPath, req.Msg.Branch, headSHA); err != nil {
