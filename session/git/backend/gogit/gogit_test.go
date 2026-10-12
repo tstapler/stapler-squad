@@ -669,3 +669,48 @@ func TestListRefsOrderLimitAndPackedRefs(t *testing.T) {
 	_, err = b.ListRefs(context.Background(), local(dir), backend.ListRefsRequest{Pattern: "-x"})
 	assert.ErrorIs(t, err, backend.ErrInvalidArgument)
 }
+
+func TestDeclaredSystemConfigIsReadWhileGuessedOneFallsBack(t *testing.T) {
+	dir, _, _ := initRepo(t, 1)
+	home := t.TempDir()
+	sys := filepath.Join(home, "system.cfg")
+	vendor := filepath.Join(home, "vendor.cfg")
+	require.NoError(t, os.WriteFile(sys, []byte("[s]\n\tk = default\n"), 0o600))
+	require.NoError(t, os.WriteFile(vendor, []byte("[v]\n\tk = vendor\n"), 0o600))
+	env := func(extra ...string) func() []string {
+		return func() []string { return append([]string{"HOME=" + home}, extra...) }
+	}
+	get := func(b *Backend, key string) (string, error) {
+		return b.GetConfig(context.Background(), local(dir), backend.ConfigKey(key))
+	}
+
+	declared := New(WithEnviron(env()), WithSystemConfig(sys), WithVendorSystemConfig(vendor))
+	for key, want := range map[string]string{"s.k": "default", "v.k": "vendor"} {
+		got, err := get(declared, key)
+		require.NoError(t, err, key)
+		assert.Equal(t, want, got, key)
+	}
+
+	// GIT_CONFIG_SYSTEM replaces the default file but not the vendor one.
+	custom := filepath.Join(home, "custom.cfg")
+	require.NoError(t, os.WriteFile(custom, []byte("[c]\n\tk = custom\n"), 0o600))
+	replaced := New(WithEnviron(env("GIT_CONFIG_SYSTEM="+custom)), WithSystemConfig(sys), WithVendorSystemConfig(vendor))
+	_, err := get(replaced, "s.k")
+	assert.ErrorIs(t, err, backend.ErrConfigUnset)
+	got, err := get(replaced, "v.k")
+	require.NoError(t, err)
+	assert.Equal(t, "vendor", got)
+
+	// GIT_CONFIG_NOSYSTEM drops both.
+	none := New(WithEnviron(env("GIT_CONFIG_NOSYSTEM=1")), WithSystemConfig(sys), WithVendorSystemConfig(vendor))
+	for _, key := range []string{"s.k", "v.k"} {
+		_, err = get(none, key)
+		assert.ErrorIs(t, err, backend.ErrConfigUnset, key)
+	}
+
+	// A guessed candidate that mentions the key is only scanned, so the answer is left to git.
+	guessed := New(WithEnviron(env()))
+	guessed.systemCfgs = []string{sys}
+	_, err = get(guessed, "s.k")
+	assert.True(t, isFallback(err), "%v", err)
+}
