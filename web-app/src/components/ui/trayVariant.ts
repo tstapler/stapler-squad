@@ -3,7 +3,7 @@
  * is shown. Kept free of React and the DOM so they are table-testable.
  */
 
-export type TrayVariant = "side-overlay" | "bottom-sheet" | "top-sheet" | "landscape-panel";
+export type TrayVariant = "side-overlay" | "bottom-sheet" | "landscape-panel";
 
 export interface TrayViewport {
   /** Viewport is >= 900px wide. */
@@ -14,14 +14,14 @@ export interface TrayViewport {
 }
 
 /**
- * Desktop gets a right-edge overlay; a phone on its side a right panel; a phone with
- * the soft keyboard open a top-anchored sheet (so the keyboard never covers it);
- * everything else the bottom sheet.
+ * Desktop gets a right-edge overlay; a phone on its side a right panel; every other
+ * phone the bottom sheet. The soft keyboard does not change the variant: the sheet
+ * stays put and rides the keyboard's top edge (CSS, `data-keyboard`), so opening the
+ * keyboard never teleports it to another edge.
  */
 export function selectTrayVariant(viewport: TrayViewport): TrayVariant {
   if (viewport.isInnerScreen) return "side-overlay";
   if (viewport.isLandscape) return "landscape-panel";
-  if (viewport.isVirtualKeyboardOpen) return "top-sheet";
   return "bottom-sheet";
 }
 

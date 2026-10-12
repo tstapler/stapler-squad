@@ -129,8 +129,8 @@ export function NotificationPanel() {
   const coarse = useCoarsePointer();
   const variant = selectTrayVariant(viewport);
   const isBottomSheet = v2 && variant === "bottom-sheet";
-  // Both phone sheets own a history entry for hardware Back; only the bottom sheet drags and expands.
-  const isSheet = v2 && (variant === "bottom-sheet" || variant === "top-sheet");
+  // The phone sheet owns a history entry for hardware Back, and drags and expands.
+  const isSheet = v2 && variant === "bottom-sheet";
   const isSideOverlay = v2 && variant === "side-overlay";
 
   const trayRef = useRef<HTMLDivElement>(null);
@@ -618,7 +618,6 @@ export function NotificationPanel() {
   const variantClass = {
     "side-overlay": trayVariant.sideOverlay,
     "bottom-sheet": trayVariant.bottomSheet,
-    "top-sheet": trayVariant.topSheet,
     "landscape-panel": trayVariant.landscapePanel,
   }[variant];
   const panelClass = v2 ? variantClass : `${panel} ${isPanelOpen ? panelOpen : ""}`;
@@ -640,6 +639,7 @@ export function NotificationPanel() {
         data-variant={v2 ? variant : "legacy"}
         data-state={isPanelOpen ? "open" : "closed"}
         data-sheet={isBottomSheet ? (expanded ? "expanded" : "peek") : undefined}
+        data-keyboard={isBottomSheet && viewport.isVirtualKeyboardOpen ? "open" : undefined}
         role={v2 && !modalSheet ? "complementary" : "dialog"}
         aria-label={v2 ? undefined : "Notification Panel"}
         aria-labelledby={v2 ? HEADING_ID : undefined}

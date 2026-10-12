@@ -757,12 +757,17 @@ describe("tray (notification_tray_v2)", () => {
   });
 
   describe("variants and Pin tray (Task 4.2e)", () => {
-    it("tray_should_pick_top_sheet_with_keyboard_open_and_landscape_panel_on_its_side", () => {
+    it("tray_should_stay_a_bottom_sheet_with_keyboard_open_and_become_a_landscape_panel_on_its_side", () => {
       const { unmount } = renderTray({ isInnerScreen: false, isVirtualKeyboardOpen: true });
-      expect(screen.getByTestId("notification-tray")).toHaveAttribute("data-variant", "top-sheet");
-      // The top sheet has no grabber or expand control.
-      expect(screen.queryByTestId("tray-grabber")).toBeNull();
+      const tray = screen.getByTestId("notification-tray");
+      expect(tray).toHaveAttribute("data-variant", "bottom-sheet");
+      expect(tray).toHaveAttribute("data-keyboard", "open");
+      expect(screen.getByTestId("tray-grabber")).toBeInTheDocument();
       unmount();
+
+      const { unmount: unmountClosed } = renderTray({ isInnerScreen: false, isVirtualKeyboardOpen: false });
+      expect(screen.getByTestId("notification-tray")).not.toHaveAttribute("data-keyboard");
+      unmountClosed();
 
       renderTray({ isInnerScreen: false, isVirtualKeyboardOpen: false, isLandscape: true } as never);
       expect(screen.getByTestId("notification-tray")).toHaveAttribute("data-variant", "landscape-panel");
@@ -1105,7 +1110,7 @@ describe("tray spec gaps (Phase 5)", () => {
     };
 
     view.rerender(tree({ isInnerScreen: false, isVirtualKeyboardOpen: true }));
-    expect(screen.getByTestId("notification-tray")).toHaveAttribute("data-variant", "top-sheet");
+    expect(screen.getByTestId("notification-tray")).toHaveAttribute("data-variant", "bottom-sheet");
     expectKept();
 
     view.rerender(tree(DESKTOP));
