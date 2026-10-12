@@ -1,13 +1,17 @@
 package gitwiring
 
 import (
+	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/session/git/backend"
 )
 
 func TestParseOriginList(t *testing.T) {
@@ -117,4 +121,35 @@ func TestScrubbedGitEnvDropsEveryConfigSelector(t *testing.T) {
 	}
 	assert.Contains(t, got, "GIT_CONFIG_GLOBAL")
 	assert.NotEqual(t, "/g", got["GIT_CONFIG_GLOBAL"])
+}
+
+func TestDiscoveryEnvForcesTheCLocale(t *testing.T) {
+	env := discoveryEnv([]string{"LC_ALL=de_DE.UTF-8"}, t.TempDir(), []string{"GIT_CONFIG_SYSTEM=/x"})
+	last := map[string]string{}
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		last[k] = v // os/exec keeps the last duplicate
+	}
+	assert.Equal(t, "C", last["LC_ALL"])
+	assert.Equal(t, "/x", last["GIT_CONFIG_SYSTEM"])
+}
+
+func TestNewGoGitReadsTheDiscoveredFiles(t *testing.T) {
+	dir := t.TempDir()
+	def, vendor := filepath.Join(dir, "default.cfg"), filepath.Join(dir, "vendor.cfg")
+	require.NoError(t, os.WriteFile(def, []byte("[zz]\n\tdefault = d\n"), 0o600))
+	require.NoError(t, os.WriteFile(vendor, []byte("[zz]\n\tvendor = v\n"), 0o600))
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, k := range []string{"GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM"} {
+		t.Setenv(k, "") // registers the restore of the original value
+		require.NoError(t, os.Unsetenv(k))
+	}
+	b := newGoGit(SystemConfigFiles{Default: []string{def}, Vendor: []string{vendor}}, nil)
+	for key, want := range map[string]string{"zz.default": "d", "zz.vendor": "v"} {
+		got, err := b.GetConfig(context.Background(), backend.Local{Root: backend.RepoRoot(home)}, backend.ConfigKey(key))
+		require.NoError(t, err, key)
+		assert.Equal(t, want, got, key)
+	}
+	assert.NotNil(t, newGoGit(SystemConfigFiles{}, errors.New("no git")), "a failed discovery still yields a usable backend")
 }

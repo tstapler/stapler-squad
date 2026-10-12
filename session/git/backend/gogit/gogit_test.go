@@ -714,3 +714,20 @@ func TestDeclaredSystemConfigIsReadWhileGuessedOneFallsBack(t *testing.T) {
 	_, err = get(guessed, "s.k")
 	assert.True(t, isFallback(err), "%v", err)
 }
+
+func TestSystemFileWinsAKeySetInBothVendorAndSystemFiles(t *testing.T) {
+	dir, _, _ := initRepo(t, 1)
+	home := t.TempDir()
+	sys, vendor := filepath.Join(home, "system.cfg"), filepath.Join(home, "vendor.cfg")
+	require.NoError(t, os.WriteFile(sys, []byte("[init]\n\tdefaultBranch = trunk\n"), 0o600))
+	require.NoError(t, os.WriteFile(vendor, []byte("[init]\n\tdefaultBranch = main\n"), 0o600))
+	for name, environ := range map[string][]string{
+		"default system file": {"HOME=" + home},
+		"GIT_CONFIG_SYSTEM":   {"HOME=" + home, "GIT_CONFIG_SYSTEM=" + sys},
+	} {
+		b := New(WithEnviron(func() []string { return environ }), WithSystemConfig(sys), WithVendorSystemConfig(vendor))
+		got, err := b.GetConfig(context.Background(), local(dir), "init.defaultBranch")
+		require.NoError(t, err, name)
+		assert.Equal(t, "trunk", got, name)
+	}
+}

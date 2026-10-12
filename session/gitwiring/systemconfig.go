@@ -40,7 +40,12 @@ type SystemConfigFiles struct {
 //     missing system file, so a file created after startup is still honoured.
 //
 // GIT_CONFIG_SYSTEM and GIT_CONFIG_NOSYSTEM themselves are not applied here: the backend applies
-// them at read time. A vendor file that does not exist yet is not discovered; restart picks it up.
+// them at read time.
+//
+// Known gap: git names a file only through its entries (or its "unable to read" error when it is
+// missing), so a system or vendor file that is empty at startup, or a vendor file that does not
+// exist yet, is not discovered; a restart picks it up. The result is also fixed at startup: a
+// different git binary on PATH later is not noticed.
 func DiscoverSystemConfig(ctx context.Context) (SystemConfigFiles, error) {
 	dir, err := os.MkdirTemp("", "ssq-gitcfg-")
 	if err != nil {
@@ -94,7 +99,7 @@ func discoverSystemConfig(run gitRun) (SystemConfigFiles, error) {
 	return files, nil
 }
 
-var missingSystemConfig = regexp.MustCompile(`unable to read config file '([^']+)'`)
+var missingSystemConfig = regexp.MustCompile(`unable to read config file '(.+)': `)
 
 // parseOriginList reads `git config --show-origin --list -z` output: for each entry the origin
 // ("file:<path>", "command line:", ...) then "key\nvalue" (or just "key"), each NUL-terminated.
@@ -151,6 +156,12 @@ func scrubbedGitEnv(base []string, sandbox string) []string {
 	)
 }
 
+// discoveryEnv is the full environment of a discovery git process: scrubbed, plus the override
+// under test, plus the locale the "unable to read" error parsing depends on.
+func discoveryEnv(base []string, sandbox string, extraEnv []string) []string {
+	return append(append(scrubbedGitEnv(base, sandbox), extraEnv...), backend.RequiredGitEnv()...)
+}
+
 // runScrubbedGit is the one place discovery starts git. The spawn is counted under
 // (GetConfig, config) so the zero-spawn gate (sum(backstop) <= sum(backend)) stays balanced.
 func runScrubbedGit(ctx context.Context, counter *backend.SpawnCounter, sandbox string, extraEnv []string, args ...string) (stdout, stderr []byte, err error) {
@@ -158,7 +169,7 @@ func runScrubbedGit(ctx context.Context, counter *backend.SpawnCounter, sandbox 
 	counter.Count(ctx, backend.OpGetConfig, false)
 	cmd := safeexec.CommandContext(ctx, "git", args...)
 	cmd.Dir = sandbox
-	cmd.Env = append(append(scrubbedGitEnv(os.Environ(), sandbox), extraEnv...), backend.RequiredGitEnv()...)
+	cmd.Env = discoveryEnv(os.Environ(), sandbox, extraEnv)
 	var so, se bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &so, &se
 	err = cmd.Run()
@@ -170,8 +181,12 @@ func runScrubbedGit(ctx context.Context, counter *backend.SpawnCounter, sandbox 
 // conservative default, which sends any read that a candidate system file could answer to the CLI.
 func NewGoGit(ctx context.Context) *gogit.Backend {
 	files, err := DiscoverSystemConfig(ctx)
-	if err != nil {
-		log.Warn("git system config discovery failed; in-process config reads stay conservative", "err", err)
+	return newGoGit(files, err)
+}
+
+func newGoGit(files SystemConfigFiles, discoveryErr error) *gogit.Backend {
+	if discoveryErr != nil {
+		log.Warn("git system config discovery failed; in-process config reads stay conservative", "err", discoveryErr)
 		return gogit.New()
 	}
 	return gogit.New(gogit.WithSystemConfig(files.Default...), gogit.WithVendorSystemConfig(files.Vendor...))

@@ -53,7 +53,7 @@ var vendorConfigCandidates = []string{ //nolint:gochecknoglobals read-only list
 
 // systemConfig is the system-scope config source list; known says whether it is authoritative.
 type systemConfig struct {
-	paths  []string // replaced by GIT_CONFIG_SYSTEM
+	paths  []string // replaced by GIT_CONFIG_SYSTEM; read after vendor, so it wins a shared key
 	vendor []string // not replaced by it; dropped only by GIT_CONFIG_NOSYSTEM
 	known  bool
 }
@@ -354,12 +354,14 @@ func readScopes(ctx context.Context, environ []string, system systemConfig, loca
 	case !ok:
 		l.res.unsure = true
 	case noSystem:
+	// git reads vendor-added files first, so the system file wins a key set in both
+	// (Apple git: `git config --show-origin --list` lists share/git-core/gitconfig first).
 	case set:
+		l.loadAll(system.vendor, system.known)
 		l.load(sysPath, 1)
-		l.loadAll(system.vendor, system.known)
 	default:
-		l.loadAll(system.paths, system.known)
 		l.loadAll(system.vendor, system.known)
+		l.loadAll(system.paths, system.known)
 	}
 
 	switch globalPath, set := envValue(environ, "GIT_CONFIG_GLOBAL"); {
