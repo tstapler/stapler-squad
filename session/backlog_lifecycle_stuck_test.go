@@ -248,6 +248,30 @@ func TestBackfillStuckStates_should_beIdempotent_When_RunTwice(t *testing.T) {
 
 // --- Story 2.1.1: pr_ready_unmerged ---
 
+// TestReconcilePRPending_should_logWarning_When_PRStatusLookupFails pins the
+// detection-failure signal: a failed IsPRMerged/GetPRStatus must be operator-visible.
+func TestReconcilePRPending_should_logWarning_When_PRStatusLookupFails(t *testing.T) {
+	t.Parallel()
+	for name, checker := range map[string]*fakePRPendingChecker{
+		"IsPRMerged":  {mergedErr: errors.New("gh: auth expired")},
+		"GetPRStatus": {statusErr: errors.New("gh: rate limited")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			storage, cleanup := createTestStorage(t)
+			defer cleanup()
+			newPRPendingTestItem(t, storage, 150)
+
+			listener := NewBacklogLifecycleListener(storage)
+			overridePRPendingChecker(t, listener, checker)
+			buf := tslog.RedirectLogger(t, tslog.WarningLog(), "WARNING: ")
+
+			listener.ReconcilePRPending(context.Background(), storage.repo)
+
+			assert.Contains(t, buf.String(), "ReconcilePRPending "+name)
+		})
+	}
+}
+
 // TestReconcilePRPending_should_notMarkStuck_When_CIStillPending guards the
 // "CI running looks like no CI configured" gap: a mergeable PR whose checks are
 // still in flight must not be flagged pr_ready_unmerged.
