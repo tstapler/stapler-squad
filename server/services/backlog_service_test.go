@@ -3017,6 +3017,16 @@ func TestTriggerTriage_SlowLLMCallDoesNotExpireCleanupContext(t *testing.T) {
 	}
 }
 
+// The ordering test above only sees contexts made through newTriageCleanupContext, so a raw
+// timeout context built from triageCleanupTimeout in the triage goroutine would bypass it.
+func TestTriggerTriage_PersistenceContextsComeOnlyFromTheFactory(t *testing.T) {
+	t.Parallel()
+	src, err := os.ReadFile("backlog_service_trigger_triage.go")
+	require.NoError(t, err)
+	assert.NotContains(t, string(src), "s.triageCleanupTimeout",
+		"create post-LLM persistence contexts with s.newTriageCleanupContext() so the ordering test can see them")
+}
+
 // ─── TriggerReReview ──────────────────────────────────────────────────────
 
 // UT-040a: TriggerReReview on item not in review status → CodeFailedPrecondition
