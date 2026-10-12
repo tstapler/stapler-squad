@@ -1462,7 +1462,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 	// 1. Check if the PR has been merged → done.
 	merged, mergedErr := g.IsPRMerged(ghCtx, item.PrNumber)
 	if mergedErr != nil {
-		log.DebugLog().Printf("[BacklogLifecycle] ReconcilePRPending IsPRMerged item=%s pr=%d: %v", item.ID, item.PrNumber, mergedErr)
+		log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending IsPRMerged item=%s pr=%d: %v", item.ID, item.PrNumber, mergedErr)
 		return
 	}
 	if merged {
@@ -1570,7 +1570,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 	// 2. PR still open — check CI status and reviews.
 	prStatus, statusErr := g.GetPRStatus(ghCtx, item.PrNumber)
 	if statusErr != nil {
-		log.DebugLog().Printf("[BacklogLifecycle] ReconcilePRPending GetPRStatus item=%s pr=%d: %v", item.ID, item.PrNumber, statusErr)
+		log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending GetPRStatus item=%s pr=%d: %v", item.ID, item.PrNumber, statusErr)
 		return
 	}
 
@@ -1690,6 +1690,9 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		}
 		if prStatus.CIFailing {
 			info.CheckConclusion = "failure"
+		} else if prStatus.CIPending {
+			// "" means "no CI configured" to prReadyToMergeSolo; running CI is not ready.
+			info.CheckConclusion = "pending"
 		}
 
 		if prReadyToMergeSolo(info) {

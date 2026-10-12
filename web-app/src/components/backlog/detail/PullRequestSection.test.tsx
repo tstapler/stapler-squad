@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
-import { PullRequestSection } from "./PullRequestSection";
+import { PullRequestSection, prStatusLabel } from "./PullRequestSection";
+import { StuckReason } from "@/gen/session/v1/backlog_pb";
 import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
 
 function makeSession(overrides: Partial<LinkedSession> = {}): LinkedSession {
@@ -78,5 +79,32 @@ describe("PullRequestSection", () => {
     expect(screen.getByRole("link", { name: /View GitHub Pull Request #700/ })).toBeInTheDocument();
     const marker = screen.getByLabelText("Opened by Jules");
     expect(marker).toHaveTextContent("Jules");
+  });
+});
+
+describe("prStatusLabel", () => {
+  it("reports needs-fix when PR_NEEDS_FIX is open, even alongside other reasons", () => {
+    expect(prStatusLabel([StuckReason.MULTIPLE_REASONS, StuckReason.PR_NEEDS_FIX])).toMatch(/needs fixes/);
+  });
+
+  it("reports ready to merge for PR_READY_UNMERGED", () => {
+    expect(prStatusLabel([StuckReason.PR_READY_UNMERGED])).toBe("ready to merge");
+  });
+
+  it("falls back to waiting for merge with no relevant reason", () => {
+    expect(prStatusLabel()).toBe("waiting for merge");
+    expect(prStatusLabel([StuckReason.BOUNCING])).toBe("waiting for merge");
+  });
+
+  it("renders the derived label in the section", () => {
+    render(
+      <PullRequestSection
+        item={makeItem()}
+        actionLoading={null}
+        onMarkDone={jest.fn()}
+        stuckReasons={[StuckReason.PR_NEEDS_FIX]}
+      />
+    );
+    expect(screen.getByText(/PR #700 — needs fixes/)).toBeInTheDocument();
   });
 });
