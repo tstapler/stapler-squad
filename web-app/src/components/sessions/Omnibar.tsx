@@ -71,6 +71,8 @@ import {
   error as errorClass,
 } from "./Omnibar.css";
 import { BacklogItemIntentReview } from "@/components/backlog/BacklogItemIntentReview";
+import { BacklogComposeWidget } from "@/components/backlog/BacklogComposeWidget";
+import { useBacklogBackgroundCreate } from "@/lib/hooks/useBacklogBackgroundCreate";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 import { AliasPalette } from "@/components/ui/AliasPalette";
 import { useAliasSuggestions } from "@/lib/hooks/useAliasSuggestions";
@@ -325,6 +327,10 @@ export function Omnibar({
   // review UI until the user confirms or cancels; see the early return
   // near this component's bottom.
   const [backlogReviewText, setBacklogReviewText] = useState<string | null>(null);
+  // Dedicated multi-line compose mode opened by the "Create backlog item" button;
+  // seeded from the current input so typed text is never discarded.
+  const [backlogComposeText, setBacklogComposeText] = useState<string | null>(null);
+  const createBacklogInBackground = useBacklogBackgroundCreate();
   // Synchronous double-submit guard: `isSubmitting` state only becomes visible to
   // handleSubmit's closure after React commits the re-render, which leaves a window
   // for a second rapid click (e.g. a fast double-click) to read the same stale
@@ -1032,9 +1038,8 @@ export function Omnibar({
           dispatchMode({ kind: "open_creation_direct" });
           setResultHighlightIndex(-1);
         } else {
-          setInput("backlog: ");
+          setBacklogComposeText(input.trim());
           setResultHighlightIndex(-1);
-          inputRef.current?.focus();
         }
       }
     },
@@ -1045,6 +1050,7 @@ export function Omnibar({
       handleRepoSelect,
       dispatchMode,
       setResultHighlightIndex,
+      input,
     ],
   );
 
@@ -1425,6 +1431,7 @@ export function Omnibar({
     // the review UI takes over.
     if (detection?.type === InputType.ChatBacklogItem) {
       isSubmittingRef.current = false;
+      setBacklogComposeText(null);
       setBacklogReviewText(detection.parsedValue);
       return;
     }
@@ -1716,6 +1723,33 @@ export function Omnibar({
               router.push(`/backlog?item=${item.id}`);
             }}
             onCancel={() => setBacklogReviewText(null)}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // Compose mode: dedicated textarea; Create closes the omnibar immediately and
+  // finishes in the background (see useBacklogBackgroundCreate).
+  if (backlogComposeText !== null) {
+    return (
+      <div
+        className={overlay}
+        onClick={onClose}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="omnibar-title"
+        data-testid="omnibar"
+      >
+        <div className={modal} data-testid="omnibar-modal" onClick={(e) => e.stopPropagation()}>
+          <BacklogComposeWidget
+            initialText={backlogComposeText}
+            onSubmit={(text) => {
+              setBacklogComposeText(null);
+              onClose();
+              void createBacklogInBackground(text);
+            }}
+            onCancel={() => setBacklogComposeText(null)}
           />
         </div>
       </div>
@@ -2032,9 +2066,8 @@ export function Omnibar({
               setResultHighlightIndex(-1);
             }}
             onCreateBacklog={() => {
-              setInput("backlog: ");
+              setBacklogComposeText(input.trim());
               setResultHighlightIndex(-1);
-              inputRef.current?.focus();
             }}
           />
         )}

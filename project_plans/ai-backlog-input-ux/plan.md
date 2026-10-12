@@ -226,3 +226,11 @@ The `input` state in `Omnibar.tsx` is not cleared when entering compose mode (on
 
 **Challenge 5: "Two states (`backlogComposeText` and `backlogReviewText`) can both be set simultaneously if code paths overlap."**  
 They cannot simultaneously be non-null because: compose is set by `onCreateBacklog`; review is set by submitting a `backlog:` prefix input. The two entry points are mutually exclusive. Add a guard anyway: entering review mode clears compose (`setBacklogComposeText(null)`) and vice versa.
+
+## Implementation Notes (deviations from the plan above)
+
+- Upload logic was extracted from `BacklogItemForm` into `lib/hooks/useBacklogImageAttachment.ts` and shared with the compose widget; the sketch's inline copy used the wrong serve URL (`/api/local/serve${path}` is correct) and would have tripped jscpd.
+- Background creation lives in `lib/hooks/useBacklogBackgroundCreate.ts`, called from `Omnibar` (which stays mounted) rather than from the widget, so the work isn't tied to the widget's unmount. The widget takes `onSubmit(text)`.
+- Notification types: `task_complete` (success, `onView` deep-links to `/backlog?item=<id>`) and `error` — both valid members of `NotificationData["notificationType"]`.
+- The keyboard-selected "Create Backlog Item" row (`dispatchHighlightedResultAction`) opens compose mode too.
+- AC-7: `jest-axe` is not a dependency; verified structurally (visible `<label>`, native `<button>`s, ≥44px targets) and left to the CI Axe job for the scan.
