@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 )
 
 type branchCacheEntry struct {
@@ -160,14 +162,14 @@ func (g *GitProvider) GetBranch() (string, error) {
 		// branchCache, and a mismatched hash length between them would make
 		// the cached detached-HEAD label's length change depending on which
 		// call happened to populate the cache last.
-		if output, err := g.runGit("rev-parse", "HEAD"); err == nil {
+		if output, headErr := g.headSHA(); headErr == nil {
 			return "(detached: " + truncateHash(output) + ")", nil
 		}
 		return "", err
 	}
 	if output == "" {
 		// Detached HEAD
-		if output, err := g.runGit("rev-parse", "HEAD"); err == nil {
+		if output, err := g.headSHA(); err == nil {
 			output = "(detached: " + truncateHash(output) + ")"
 			g.branchCache.Store(&branchCacheEntry{output, time.Now().Add(branchCacheTTL).UnixNano()})
 			return output, nil
@@ -175,6 +177,14 @@ func (g *GitProvider) GetBranch() (string, error) {
 	}
 	g.branchCache.Store(&branchCacheEntry{output, time.Now().Add(branchCacheTTL).UnixNano()})
 	return output, nil
+}
+
+// headSHA resolves HEAD to a full commit OID through the git backend.
+func (g *GitProvider) headSHA() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	sha, err := gitprovider.Backend().ResolveRef(ctx, backend.Local{Root: backend.RepoRoot(g.repoRoot)}, "HEAD")
+	return string(sha), err
 }
 
 // gitStatusPorcelainArgs is shared between GetChangedFiles and GetStatus so
