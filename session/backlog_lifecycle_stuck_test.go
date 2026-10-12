@@ -248,6 +248,30 @@ func TestBackfillStuckStates_should_beIdempotent_When_RunTwice(t *testing.T) {
 
 // --- Story 2.1.1: pr_ready_unmerged ---
 
+// TestReconcilePRPending_should_notMarkStuck_When_CIStillPending guards the
+// "CI running looks like no CI configured" gap: a mergeable PR whose checks are
+// still in flight must not be flagged pr_ready_unmerged.
+func TestReconcilePRPending_should_notMarkStuck_When_CIStillPending(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	newPRPendingTestItem(t, storage, 149)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		status: &git.PRStatus{Mergeable: "MERGEABLE", CIPending: true},
+	})
+
+	er := storage.repo
+	listener.ReconcilePRPending(ctx, er)
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "pending CI must not flag pr_ready_unmerged")
+}
+
 // TestReconcilePRPending_should_markStuck_When_PRGreenMergeableUnapproved
 // verifies the flagship single-user case (pre-mortem F1): a PR that is green,
 // mergeable, no changes requested, not draft, and has ZERO approvals (Tyler
