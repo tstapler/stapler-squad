@@ -65,7 +65,7 @@ func dumpExec(path, sub string) {
 	_, _ = fmt.Fprintf(f, "exec %s subcommand=%s\n", callerOutsideSpawnPath(), sub)
 }
 
-// callerOutsideSpawnPath is the first frame outside safeexec, the tmux runner and the git
+// callerOutsideSpawnPath is the first frame outside safeexec, the local runners and the git
 // backend: whoever started the chain, not the sanctioned helper every spawn funnels through.
 func callerOutsideSpawnPath() string {
 	pcs := make([]uintptr, 32)
@@ -89,6 +89,7 @@ func isSpawnPlumbing(fn string) bool {
 	for _, p := range []string{
 		"github.com/tstapler/stapler-squad/executor/safeexec.",
 		"github.com/tstapler/stapler-squad/session/tmux.LocalRunner",
+		"github.com/tstapler/stapler-squad/session/gitwiring.gitRunner",
 		"github.com/tstapler/stapler-squad/session/git/backend",
 	} {
 		if strings.HasPrefix(fn, p) {

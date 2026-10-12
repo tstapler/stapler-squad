@@ -12,6 +12,8 @@ type call struct {
 	Dir  string
 	Name string
 	Args []string
+	// Env is the KEY=VALUE words a remote invocation carried in an `env ... git` prefix.
+	Env []string
 }
 
 func (c call) argv() string { return c.Name + " " + strings.Join(c.Args, " ") }
@@ -39,7 +41,18 @@ func (f *fakeRunner) on(args string, out string, err error) *fakeRunner {
 func (f *fakeRunner) Run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, call{Dir: dir, Name: name, Args: append([]string(nil), args...)})
+	c := call{Dir: dir, Name: name, Args: append([]string(nil), args...)}
+	if name == "env" { // remote: unwrap `env K=V... git args...` so tests see the git argv
+		i := 0
+		for i < len(args) && strings.Contains(args[i], "=") {
+			i++
+		}
+		if i < len(args) {
+			c = call{Dir: dir, Name: args[i], Args: append([]string(nil), args[i+1:]...), Env: append([]string(nil), args[:i]...)}
+		}
+	}
+	f.calls = append(f.calls, c)
+	args = c.Args
 	r := f.replies[strings.Join(args, " ")]
 	return r.out, r.err
 }

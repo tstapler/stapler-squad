@@ -748,6 +748,7 @@ Verified facts (2026-10-08, `git grep` and reading each site; the Revision 3 tex
 - The three `NewSSHRunner` construction sites still build their own runners and two of them are untouched.
   - *Given* `go build ./...`, *When* Story 1.1.5 lands, *Then* `git diff --stat` shows no change to `server/services/remote_service.go`, `grep -rn 'NewSSHRunner(' --include='*.go' . | grep -v _test` still lists exactly the three sites (`remote_service.go:115,579`, `session_service_create.go:483`), and no package outside `server/`, `cmd/` and `session/` manager wiring imports `session/gitwiring`.
 **Files**: `session/git/backend/locate.go`, `session/git/backend/locate_test.go`, `session/instance_worktree.go`, `session/execution_target.go`, `session/git/worktree.go`, `session/git/remote_worktree.go`, `server/services/session_service_create.go` (`:354,483,525,573` only)
+**Known blind spot (audit)**: `InitializeProjectDirectory` in `session/git/remote_worktree.go` runs `git init` and the initial commit inside one `sh -c <script>` passed to `CommandRunner.Run`, so `norawgitcli` and the spawn counters cannot see those git invocations (the git name is inside a shell string, not an argv). They also do not get `RequiredGitEnv` from the cli backend's `env` prefix. Not migrated by this story; migrate it when the backend gains a remote `Init`/`InitialCommit` operation.
 
 ##### Task 1.1.5a: `Locate` and its table test (~3 min)
 - Files: `session/git/backend/locate.go`, `session/git/backend/locate_test.go`
