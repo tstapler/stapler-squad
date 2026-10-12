@@ -732,19 +732,6 @@ export const trayEntry = style({
   },
 });
 
-export const trayEntryBell = style({
-  ...chipBase,
-  width: "44px",
-  minWidth: "44px",
-  padding: 0,
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  gap: "4px",
-  borderRadius: "22px",
-  selectors: { "&:hover": { background: vars.color.hoverBackground } },
-});
-
 /**
  * Phone: while the tray is open the deck steps aside (it stays mounted, so the entry
  * node is never removed): the tray shows the same notifications and a deck above it
