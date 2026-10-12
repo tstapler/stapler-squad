@@ -187,6 +187,15 @@ func newRecordingRunner() *recordingRunner {
 }
 
 func (f *recordingRunner) Run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
+	if name == "env" { // the cli backend prefixes `env K=V... git` on remote runs; record the git argv
+		i := 0
+		for i < len(args) && args[i] != "git" {
+			i++
+		}
+		if i < len(args) {
+			name, args = args[i], args[i+1:]
+		}
+	}
 	f.calls = append(f.calls, recordedCall{dir: dir, name: name, args: append([]string(nil), args...)})
 	res := f.results[name]
 	return res.out, res.err

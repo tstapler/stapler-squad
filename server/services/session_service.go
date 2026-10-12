@@ -1236,7 +1236,7 @@ func maybeAutoMigrateToEnt(repo *session.EntRepository) error {
 // locations carry the SSH runner they were built from.
 func (s *SessionService) gitBackendOrDefault() backend.Backend {
 	s.gitBackendOnce.Do(func() {
-		s.gitBackend = gitwiring.NewRouter(gitwiring.ParseCohortMap(config.LoadConfig().GitBackendCohorts), tmux.LocalRunner{})
+		s.gitBackend = gitwiring.NewRouter(gitwiring.ParseCohortMap(config.LoadConfig().GitBackendCohorts), gitwiring.NewLocalRunner())
 	})
 	return s.gitBackend
 }

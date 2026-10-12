@@ -29,8 +29,34 @@ func TestCurrentBranchRemoteArgv(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, backend.BranchName("feature/x"), got)
 	require.Len(t, fake.calls, 1)
-	assert.Equal(t, call{Dir: "/p", Name: "git", Args: []string{"rev-parse", "--abbrev-ref", "HEAD"}}, fake.calls[0])
+	assert.Equal(t, call{Dir: "/p", Name: "git", Args: []string{"rev-parse", "--abbrev-ref", "HEAD"}, Env: backend.RequiredGitEnv()}, fake.calls[0])
 	assert.Empty(t, local.calls, "a Remote location must never touch the local runner")
+}
+
+// A remote runner cannot carry env, so the cli backend puts RequiredGitEnv on the command line;
+// a Local location leaves env to the local runner and sends bare git.
+func TestRemoteGitCarriesRequiredEnvLocalDoesNot(t *testing.T) {
+	ctx := context.Background()
+	remote, local := &rawRecorder{}, &rawRecorder{}
+	b := cli.New(local)
+
+	_, _ = b.CurrentBranch(ctx, remoteAt(remote))
+	_, _ = b.CurrentBranch(ctx, backend.Local{Root: "/r"})
+
+	assert.Equal(t, "env", remote.name)
+	assert.Equal(t, append(backend.RequiredGitEnv(), "git", "rev-parse", "--abbrev-ref", "HEAD"), remote.args)
+	assert.Equal(t, "git", local.name)
+	assert.Equal(t, []string{"rev-parse", "--abbrev-ref", "HEAD"}, local.args)
+}
+
+type rawRecorder struct {
+	name string
+	args []string
+}
+
+func (r *rawRecorder) Run(_ context.Context, _, name string, args ...string) ([]byte, error) {
+	r.name, r.args = name, args
+	return []byte("main\n"), nil
 }
 
 func TestLocationErrors(t *testing.T) {
@@ -284,7 +310,7 @@ func TestClone(t *testing.T) {
 	fake := newFake()
 	err := cli.New(nil).Clone(context.Background(), remoteAt(fake), backend.CloneRequest{URL: "https://h/x.git"})
 	require.NoError(t, err)
-	assert.Equal(t, call{Dir: "", Name: "git", Args: []string{"clone", "--", "https://h/x.git", "/p"}}, fake.last())
+	assert.Equal(t, call{Dir: "", Name: "git", Args: []string{"clone", "--", "https://h/x.git", "/p"}, Env: backend.RequiredGitEnv()}, fake.last())
 }
 
 func TestDiscardChangesSequence(t *testing.T) {

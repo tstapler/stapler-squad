@@ -18,12 +18,12 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/git/backend/cli"
-	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/gitwiring"
 )
 
 // defaultGitBackend serves instances built without an injected backend (tests, legacy
 // construction sites): the CLI over the local runner. Remote locations carry their own runner.
-var defaultGitBackend = sync.OnceValue(func() backend.Backend { return cli.New(tmux.LocalRunner{}) })
+var defaultGitBackend = sync.OnceValue(func() backend.Backend { return cli.New(gitwiring.NewLocalRunner()) })
 
 // gitBackend returns the injected backend, defaulting to defaultGitBackend. GitBackend is set
 // once at construction and never reassigned, so reading it unlocked is safe.

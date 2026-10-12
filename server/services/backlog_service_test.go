@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -89,7 +90,7 @@ type fakeHeadlessPool struct {
 	response  string
 	responses []string // if set, returned in order (one per call) instead of response
 	err       error
-	delay     time.Duration // simulates a slow LLM call; see TestTriggerTriage_SlowLLMCallDoesNotExpireCleanupContext
+	delay     time.Duration // simulates a slow LLM call
 	cost      float64       // returned as CallBlocking's cost; see TestTriggerReReview_HappyPath_ThreadsCallCostIntoItemSession
 	// conversationID, if set, is passed to opts.OnConversationID before
 	// CallBlocking returns, mirroring the real headless.Pool's contract (see
@@ -2962,23 +2963,28 @@ func TestAttachSessionToItem_RejectsWhenSessionPathIsItemSharedRepoCheckout(t *t
 // headless triage complete" while silently failing every single DB write that
 // was supposed to make the result visible, leaving the item stuck at "idea"
 // forever. This test simulates that exact shape (LLM call slower than the
-// cleanup budget) at test-friendly timescales.
+// cleanup budget) by asserting creation order instead of sleeping.
 func TestTriggerTriage_SlowLLMCallDoesNotExpireCleanupContext(t *testing.T) {
 	t.Parallel()
 	storage := createTestStorage(t)
-	// delay outlasts the cleanup timeout below — this is what the old code got
-	// wrong: a cleanupCtx created before this delay would already be expired by
-	// the time it's used afterward.
-	pool := &fakeHeadlessPool{response: validTriageJSON(), delay: 3 * time.Second}
+
+	// Ordering, not elapsed time, is the invariant: the old bug created the cleanup context
+	// BEFORE the LLM call, so a long call exhausted its budget. Record whether the LLM call
+	// had already returned each time a cleanup context is created; no sleeping past a timeout
+	// (which flaked under load) is needed.
+	var llmReturned atomic.Bool
+	var mu sync.Mutex
+	var createdAfterCall []bool
+
+	pool := &fakeHeadlessPool{response: validTriageJSON(), onCall: func(string) { llmReturned.Store(true) }}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
-	// Reduced but kept generous enough (2s) that the real SQLite writes below
-	// can't flake under CI load or a busy test machine — the bug being tested
-	// is about ORDERING (timeout starts before vs. after the slow call), not
-	// about needing a tiny timeout, so there's no reason to cut this closer to
-	// the wire. Set on this instance only — no shared global state, no risk to
-	// any other concurrently running test.
-	svc.SetTriageCleanupTimeout(2 * time.Second)
+	svc.SetTriageCleanupContextFactory(func() (context.Context, context.CancelFunc) {
+		mu.Lock()
+		createdAfterCall = append(createdAfterCall, llmReturned.Load())
+		mu.Unlock()
+		return context.WithTimeout(context.Background(), time.Minute)
+	})
 
 	repoPath := t.TempDir()
 	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -3000,12 +3006,25 @@ func TestTriggerTriage_SlowLLMCallDoesNotExpireCleanupContext(t *testing.T) {
 		}
 		readyItem = getResp.Msg.Item
 		return true
-	}, 6*time.Second, 10*time.Millisecond,
-		"item must reach 'ready' even though the LLM call outlasted triageCleanupTimeout — "+
-			"with the pre-fix ordering this would time out here because every persistence "+
-			"write after the slow call would fail with context deadline exceeded")
+	}, 30*time.Second, 10*time.Millisecond, "item must reach 'ready'")
 
 	require.NotEmpty(t, readyItem.PlanArtifactsPath, "plan_artifacts_path must be persisted, not silently dropped")
+	mu.Lock()
+	defer mu.Unlock()
+	require.NotEmpty(t, createdAfterCall, "post-call persistence must create at least one cleanup context")
+	for i, after := range createdAfterCall {
+		assert.True(t, after, "cleanup context #%d was created before the LLM call returned, so a slow call would expire its budget", i)
+	}
+}
+
+// The ordering test above only sees contexts made through newTriageCleanupContext, so a raw
+// timeout context built from triageCleanupTimeout in the triage goroutine would bypass it.
+func TestTriggerTriage_PersistenceContextsComeOnlyFromTheFactory(t *testing.T) {
+	t.Parallel()
+	src, err := os.ReadFile("backlog_service_trigger_triage.go")
+	require.NoError(t, err)
+	assert.NotContains(t, string(src), "s.triageCleanupTimeout",
+		"create post-LLM persistence contexts with s.newTriageCleanupContext() so the ordering test can see them")
 }
 
 // ─── TriggerReReview ──────────────────────────────────────────────────────
