@@ -157,6 +157,7 @@ func (g *GitWorktree) runGitCommand(path string, args ...string) (string, error)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	output, err := g.commandRunner().Run(ctx, path, "git", args...)
 	if err != nil {
 		return "", fmt.Errorf("git command failed: %s (%w)", output, err)
@@ -191,6 +192,7 @@ func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
 		// If sync fails, try creating the branch on remote first
 		gitPushCtx, gitPushCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer gitPushCancel()
+		//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 		if pushOutput, pushErr := g.commandRunner().Run(gitPushCtx, g.worktreePath, "git", "push", "-u", "origin", g.branchName); pushErr != nil {
 			log.Error("failed to push branch", "err", pushErr)
 			return fmt.Errorf("failed to push branch: %s (%w)", pushOutput, pushErr)
@@ -241,6 +243,7 @@ func (g *GitWorktree) CommitChanges(commitMessage string) error {
 // before the LLM call reveals the item's slug, then renames it afterward to the
 // same "backlog/<item>" branch a later SpawnSessionFromItem will look for.
 func (g *GitWorktree) RenameBranch(newBranchName string) error {
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	if _, err := g.runGitCommand(g.worktreePath, "branch", "-m", newBranchName); err != nil {
 		return fmt.Errorf("failed to rename branch to %q: %w", newBranchName, err)
 	}
@@ -536,6 +539,7 @@ func (g *GitWorktree) OpenBranchURL() error {
 func (g *GitWorktree) PushBranch() error {
 	pushCtx, pushCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer pushCancel()
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	if out, err := g.commandRunner().Run(pushCtx, g.worktreePath, "git", "push", "-u", "origin", g.branchName); err != nil {
 		return fmt.Errorf("failed to push branch: %s (%w)", out, err)
 	}

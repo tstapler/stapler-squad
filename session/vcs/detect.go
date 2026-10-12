@@ -127,6 +127,7 @@ func gitAvailable(repoPath string) bool {
 	// Check if the path is inside a git repository
 	detectCtx, detectCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer detectCancel()
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	cmd := safeexec.CommandContext(detectCtx, "git", "-C", repoPath, "rev-parse", "--git-dir")
 	if err := cmd.Run(); err == nil {
 		return true

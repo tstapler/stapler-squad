@@ -248,7 +248,7 @@ func dispatch[T any](r *Router, ctx context.Context, loc RepoLocation, op Operat
 		if d.count {
 			r.metrics.countFallback(op, d.cohort, d.reason)
 		}
-		return cliCall(r, ctx, op, call)
+		return cliCall(r, ctx, op, d.reason, call)
 	}
 }
 
@@ -259,8 +259,10 @@ func dispatchErr(r *Router, ctx context.Context, loc RepoLocation, op OperationN
 	return err
 }
 
-func cliCall[T any](r *Router, ctx context.Context, op OperationName, call func(context.Context, Backend) (T, error)) (T, error) {
-	res, err := call(ctx, r.cli)
+// cliCall runs the CLI backend with the (operation, reason) attribution every git spawn is
+// counted under (git_backend_cli_spawn_total).
+func cliCall[T any](r *Router, ctx context.Context, op OperationName, reason FallbackReason, call func(context.Context, Backend) (T, error)) (T, error) {
+	res, err := call(WithCallInfo(ctx, CallInfo{Op: op, Reason: reason}), r.cli)
 	r.noteError(ctx, op, ImplCLI, err)
 	return res, err
 }
@@ -277,13 +279,13 @@ func goGitCall[T any](r *Router, ctx context.Context, op OperationName, d decisi
 	if err == nil {
 		if spec.destructive && spec.clean != nil && spec.clean(res) {
 			r.metrics.countFallback(op, d.cohort, ReasonDestructiveConfirm)
-			return cliCall(r, ctx, op, call)
+			return cliCall(r, ctx, op, ReasonDestructiveConfirm, call)
 		}
 		return res, nil
 	}
 	if reason, ok := fallbackReasonFor(ctx, op, err, state); ok {
 		r.metrics.countFallback(op, d.cohort, reason)
-		return cliCall(r, ctx, op, call)
+		return cliCall(r, ctx, op, reason, call)
 	}
 	err = withCallLevelWrote(err, state)
 	r.noteError(ctx, op, ImplGoGit, err)

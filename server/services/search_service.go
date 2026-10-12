@@ -138,6 +138,7 @@ func (ss *SearchService) cachedBranch(ctx context.Context, projectPath string) s
 
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	out, err := safeexec.CommandContext(ctx, "git", "-C", projectPath, "rev-parse", "--abbrev-ref", "HEAD").Output()
 	branch := ""
 	if err == nil {

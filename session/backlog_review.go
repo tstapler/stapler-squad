@@ -661,6 +661,7 @@ func GetGitHeadSHA(repoPath string) (string, error) {
 // uncommitted changes (staged or unstaged). Returns false with no error when
 // the worktree is clean or when it cannot be reached.
 func IsWorktreeDirty(ctx context.Context, worktreePath string) (bool, error) {
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	cmd := safeexec.CommandContext(ctx, "git", "status", "--porcelain")
 	cmd.Dir = worktreePath
 	out, err := cmd.Output()
@@ -744,6 +745,7 @@ func GetGitDiffRef(ctx context.Context, dir string, baseSHA string, headRef stri
 		rangeArg = baseSHA + ".." + headRef
 	}
 
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	cmd := safeexec.CommandContext(ctx, "git", "diff", rangeArg)
 	cmd.Dir = dir
 	out, runErr := cmd.Output()
@@ -785,6 +787,7 @@ func RecoverBaseCommitSHA(ctx context.Context, dir, branchName string) (string, 
 	}
 	var errs []error
 	for _, candidate := range git.CandidateDefaultBranches {
+		//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 		cmd := safeexec.CommandContext(ctx, "git", "merge-base", branchName, candidate)
 		cmd.Dir = dir
 		out, err := cmd.Output()

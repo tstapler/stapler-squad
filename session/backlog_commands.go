@@ -430,6 +430,7 @@ func writeFile(path, content string) error {
 func addWorktreeExcludes(worktreePath string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "--path-format=absolute", "--git-common-dir")
 	cmd.Dir = worktreePath
 	out, err := cmd.Output()

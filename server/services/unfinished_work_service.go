@@ -306,6 +306,7 @@ func (s *UnfinishedWorkService) SnoozeWorktree(
 		// Run git rev-parse HEAD in the worktree to get current SHA.
 		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
+		//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 		cmd := safeexec.CommandContext(ctx, "git", "-C", r.WorktreePath, "rev-parse", "HEAD")
 		out, err := cmd.Output()
 		if err == nil {
@@ -373,6 +374,7 @@ func (s *UnfinishedWorkService) GetWorktreeAISummary(
 	subCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	gitCmd := safeexec.CommandContext(subCtx, "git", "-C", r.WorktreePath, "diff", "HEAD")
 	gitOut, gitErr := gitCmd.Output()
 	if gitErr != nil {
@@ -460,6 +462,7 @@ func (s *UnfinishedWorkService) QuickCommitPush(
 		// git commit -m <message>
 		commitCtx, commitCancel := context.WithTimeout(ctx, 30*time.Second)
 		defer commitCancel()
+		//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 		commitCmd := safeexec.CommandContext(commitCtx, "git", "-C", worktreePath, "commit", "-m", req.Msg.CommitMessage)
 		commitCmd.WaitDelay = 2 * time.Second
 		if out, err := commitCmd.CombinedOutput(); err != nil {
@@ -473,6 +476,7 @@ func (s *UnfinishedWorkService) QuickCommitPush(
 	// git push -u origin <branch> (60s timeout)
 	pushCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	pushCmd := safeexec.CommandContext(pushCtx, "git", "-C", worktreePath, "push", "-u", "origin", req.Msg.Branch)
 	if out, err := pushCmd.CombinedOutput(); err != nil {
 		errMsg := fmt.Sprintf("git push failed: %v\n%s", err, out)
@@ -520,6 +524,7 @@ func (s *UnfinishedWorkService) GetWorktreeDiff(
 
 	if defaultBranch != "" {
 		// Committed changes ahead of the remote default branch.
+		//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 		committedCmd := safeexec.CommandContext(ctx, "git", "-C", r.WorktreePath,
 			"diff", defaultBranch+"...HEAD")
 		committedOut, err := committedCmd.Output()
@@ -529,6 +534,7 @@ func (s *UnfinishedWorkService) GetWorktreeDiff(
 	}
 
 	// Uncommitted (staged + unstaged) changes on top of HEAD.
+	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
 	uncommittedCmd := safeexec.CommandContext(ctx, "git", "-C", r.WorktreePath,
 		"diff", "HEAD")
 	uncommittedOut, err := uncommittedCmd.Output()

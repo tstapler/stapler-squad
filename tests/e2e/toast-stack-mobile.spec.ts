@@ -120,7 +120,7 @@ test.describe('toast stack (phone)', () => {
         await expect(deck.toasts.first()).toContainText('Failure 0');
 
         // 3. Open the sheet; a horizontal drag that starts on the grabber never dismisses a tray row.
-        await page.getByTestId('toast-overflow-chip').or(page.getByTestId('tray-entry-open')).first().click();
+        await page.getByTestId('toast-overflow-chip').or(page.getByTestId('nav-alerts')).first().click();
         const grabber = page.getByTestId('tray-grabber');
         await expect(grabber).toBeVisible();
         const rows = page.getByTestId('tray-row');

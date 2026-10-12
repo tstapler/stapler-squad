@@ -16,17 +16,39 @@ import (
 	"regexp"
 	"strings"
 
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/git/redact"
+	"github.com/tstapler/stapler-squad/telemetry"
 )
 
 // Backend is the CLI implementation of backend.Backend.
 type Backend struct {
-	local backend.Runner
+	local  backend.Runner
+	spawns *backend.SpawnCounter
+}
+
+// Option configures New.
+type Option func(*Backend)
+
+// WithMeter registers git_backend_cli_spawn_total on meter instead of telemetry.GetMeter().
+func WithMeter(meter metric.Meter) Option {
+	return func(b *Backend) { b.spawns = backend.NewSpawnCounter(meter) }
 }
 
 // New returns a CLI backend. local serves backend.Local locations; it may be nil if the
 // backend only ever sees Remote locations (Local locations then fail with ErrNoLocalRunner).
-func New(local backend.Runner) *Backend { return &Backend{local: local} }
+func New(local backend.Runner, opts ...Option) *Backend {
+	b := &Backend{local: local}
+	for _, opt := range opts {
+		opt(b)
+	}
+	if b.spawns == nil {
+		b.spawns = backend.NewSpawnCounter(telemetry.GetMeter())
+	}
+	return b
+}
 
 const maxErrorOutput = 2000
 
@@ -34,6 +56,8 @@ const maxErrorOutput = 2000
 type target struct {
 	runner backend.Runner
 	dir    string
+	spawns *backend.SpawnCounter
+	remote bool
 }
 
 func (b *Backend) resolve(loc backend.RepoLocation) (target, error) {
@@ -45,7 +69,7 @@ func (b *Backend) resolve(loc backend.RepoLocation) (target, error) {
 		if b.local == nil {
 			return target{}, backend.ErrNoLocalRunner
 		}
-		return target{runner: b.local, dir: string(l.Root)}, nil
+		return target{runner: b.local, dir: string(l.Root), spawns: b.spawns}, nil
 	case backend.Remote:
 		if l.Runner == nil {
 			return target{}, backend.ErrNoRemoteRunner
@@ -53,7 +77,7 @@ func (b *Backend) resolve(loc backend.RepoLocation) (target, error) {
 		if l.Path == "" {
 			return target{}, fmt.Errorf("%w: empty remote path", backend.ErrInvalidArgument)
 		}
-		return target{runner: l.Runner, dir: string(l.Path)}, nil
+		return target{runner: l.Runner, dir: string(l.Path), spawns: b.spawns, remote: true}, nil
 	default:
 		return target{}, fmt.Errorf("%w: unsupported location %T", backend.ErrInvalidArgument, loc)
 	}
@@ -90,6 +114,8 @@ func (t target) exec(ctx context.Context, op backend.OperationName, strip bool, 
 		out []byte
 		err error
 	)
+	// The one sanctioned git spawn site: every Run of git is counted here, once.
+	t.spawns.Count(ctx, op, t.remote)
 	if sr, ok := t.runner.(backend.StdoutRunner); ok {
 		out, err = sr.RunStdout(ctx, t.dir, "git", args...)
 	} else {
@@ -159,20 +185,7 @@ func stripNoise(out []byte) []byte {
 	return []byte(strings.Join(kept, "\n"))
 }
 
-// credentialInURL matches scheme://userinfo@ through the LAST '@' of the token, so a password
-// containing '@' or '/' is hidden entirely. scpCredential covers scp-style user:token@host:path.
-var (
-	credentialInURL = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^\s'"]*@`)
-	scpCredential   = regexp.MustCompile(`\b[A-Za-z0-9._~-]+:[^\s'"/]+@`)
-	lockPath        = regexp.MustCompile(`Unable to create '([^']+\.lock)'`)
-)
-
-// scrub hides URL userinfo (tokens, passwords) before output reaches an error message.
-// Stand-in for session/git/redact.Git until that package exists (plan Story 1.3.1).
-func scrub(s string) string {
-	s = credentialInURL.ReplaceAllString(s, "${1}***@")
-	return scpCredential.ReplaceAllString(s, "***@")
-}
+var lockPath = regexp.MustCompile(`Unable to create '([^']+\.lock)'`)
 
 // classify turns a runner error into *CommandError, additionally wrapping a sentinel the
 // output identifies. The raw runner error stays reachable through errors.As/Unwrap.
@@ -184,7 +197,7 @@ func classify(op backend.OperationName, out []byte, err error) error {
 	}
 	text = strings.TrimSpace(text)
 	lower := strings.ToLower(text)
-	shown := scrub(text) // scrub first: truncating before could cut a credential in half
+	shown := redact.Git(text) // redact first: truncating before could cut a credential in half
 	if len(shown) > maxErrorOutput {
 		shown = strings.ToValidUTF8(shown[:maxErrorOutput], "") + "..."
 	}

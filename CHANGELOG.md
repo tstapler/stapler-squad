@@ -1,5 +1,34 @@
 # Changelog
 
+## [2.3.0](https://github.com/tstapler/stapler-squad/compare/v2.2.0...v2.3.0) (2026-10-11)
+
+
+### Features
+
+* **context-health:** ContextHealth signal + proto surface ([#983](https://github.com/tstapler/stapler-squad/issues/983)) ([79cd52c](https://github.com/tstapler/stapler-squad/commit/79cd52cd8391bc1aa2374e9079ab13d102b0c245))
+* **git:** routed backend with fallback, remote routing and shadow mode (Story 1.1.3) ([#986](https://github.com/tstapler/stapler-squad/issues/986)) ([164ae8d](https://github.com/tstapler/stapler-squad/commit/164ae8d8165c0511f826cfa383bfd04bec37abeb))
+* **git:** spawn counters by operation/reason and oracle harness (Epic 1.3) ([#993](https://github.com/tstapler/stapler-squad/issues/993)) ([3b20f9c](https://github.com/tstapler/stapler-squad/commit/3b20f9c29e80231cb05d56eb439a6d1bbbd643c0))
+* **lint:** noarchivedrevival analyzer for automated session revival sites ([#975](https://github.com/tstapler/stapler-squad/issues/975)) ([975ac50](https://github.com/tstapler/stapler-squad/commit/975ac50ba43fd725a161f6c366c894f35a964bc2))
+* **lint:** norawgitcli analyzer forbidding raw git CLI call sites ([#992](https://github.com/tstapler/stapler-squad/issues/992)) ([d8c6b3d](https://github.com/tstapler/stapler-squad/commit/d8c6b3d11da58716ccfd54f8a218a04a5b3b146a))
+* **notifications:** delivery gate, notification tray and read-only hidden-session view ([#974](https://github.com/tstapler/stapler-squad/issues/974)) ([a9b19d8](https://github.com/tstapler/stapler-squad/commit/a9b19d863a44a42f6966b3e1616693d210ac7ef2))
+* **notifications:** enable the delivery gate by default and remove legacy hidden checks ([#987](https://github.com/tstapler/stapler-squad/issues/987)) ([0b3ad53](https://github.com/tstapler/stapler-squad/commit/0b3ad53879b82891071cd5a83373c54d4415df17))
+
+
+### Bug Fixes
+
+* **auth:** permit HMAC generic webhook delivery ([#978](https://github.com/tstapler/stapler-squad/issues/978)) ([9d2154d](https://github.com/tstapler/stapler-squad/commit/9d2154d77f1db1c1562abcc401be43f790236177))
+* **backlog-ui:** repo-qualify the external issue badge ([#979](https://github.com/tstapler/stapler-squad/issues/979)) ([447d146](https://github.com/tstapler/stapler-squad/commit/447d14624aab380c59952eb09862d72b843a4ec7))
+* **backlog:** backfill ExternalID/ExternalURL on legacy imported items ([#980](https://github.com/tstapler/stapler-squad/issues/980)) ([1e9f235](https://github.com/tstapler/stapler-squad/commit/1e9f235e1bd42ff121df7482b993c5b750d1a258))
+* **backlog:** preserve PR body newlines; footer names the creating instance and item ([#981](https://github.com/tstapler/stapler-squad/issues/981)) ([51385b0](https://github.com/tstapler/stapler-squad/commit/51385b078a4827082a6d38846a3a83e7b5f891fe))
+* **session:** close diagnose-session tmux leak and surface its outcome ([b8da2fd](https://github.com/tstapler/stapler-squad/commit/b8da2fddc789490cd5ec0d1bc36d051f4718d28c))
+* **session:** don't revive a Stopped one-shot session with a live tmux pane ([6a0423e](https://github.com/tstapler/stapler-squad/commit/6a0423e03eb31d9d67bdfdfa42ca5ef0264ad5fe))
+* **session:** fail closed when pause/stop cannot determine worktree dirty state ([#985](https://github.com/tstapler/stapler-squad/issues/985)) ([474b089](https://github.com/tstapler/stapler-squad/commit/474b089b1328034def9ff1e0346fe5d65fe00c74))
+* **test:** exclude .claude/worktrees from the delivery-gate ID-form scan ([f580dc9](https://github.com/tstapler/stapler-squad/commit/f580dc90b4b5000fbe1ff3ed0a5ad7f9d37ec4e4))
+* **test:** kill the real tmux server a SessionService test spawns on Shutdown ([a12daab](https://github.com/tstapler/stapler-squad/commit/a12daab560f35da35702748f3222d12c52afeba9))
+* **test:** make server/session/github test binaries hermetic (no real network, keychain or claude credentials) ([#989](https://github.com/tstapler/stapler-squad/issues/989)) ([bb249ed](https://github.com/tstapler/stapler-squad/commit/bb249ed5f7ab0536dc38733d939d7f5a4570ddea))
+* **test:** root-cause the server/services flaky test family (BUG-089 et al.) ([#984](https://github.com/tstapler/stapler-squad/issues/984)) ([0a2b96f](https://github.com/tstapler/stapler-squad/commit/0a2b96f5349785fa10a5adb7ddd8822ab25e31f7))
+* **web:** meet WCAG AA for toast deck and tray over the terminal (MC-1) ([#990](https://github.com/tstapler/stapler-squad/issues/990)) ([09ea728](https://github.com/tstapler/stapler-squad/commit/09ea728f66cc5527bef248554db4280f40193485))
+
 ## [2.2.0](https://github.com/tstapler/stapler-squad/compare/v2.1.1...v2.2.0) (2026-10-10)
 
 
