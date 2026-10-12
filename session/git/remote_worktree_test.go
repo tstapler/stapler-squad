@@ -189,7 +189,7 @@ func newRecordingRunner() *recordingRunner {
 func (f *recordingRunner) Run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
 	if name == "env" { // the cli backend prefixes `env K=V... git` on remote runs; record the git argv
 		i := 0
-		for i < len(args) && strings.Contains(args[i], "=") {
+		for i < len(args) && args[i] != "git" {
 			i++
 		}
 		if i < len(args) {

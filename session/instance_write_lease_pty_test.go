@@ -43,9 +43,9 @@ func (p *ptyWritePM) Close() (err error) {
 // and Pause and Delete complete while it is wedged (they are not acquirers).
 //
 // Settled finding (plan assumption was INFERRED, now VERIFIED the other way):
-// closing the master or the slave does NOT wake a blocked master write on this
-// kernel; only a slave reader does. So the lease is released only when the
-// blocked goroutine's write returns (here: after the test drains the slave).
+// closing the master does NOT wake a blocked master write; a slave reader does on
+// Linux, and closing the slave also does on macOS. So the lease is released only when
+// the blocked goroutine's write returns (here: after the test drains the slave).
 func TestWedgedWrite_ShouldKeepTheLeaseAndPauseAndDeleteShouldCompleteWhileItIsWedged_WhenARealPtyPairStopsBeingRead(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -106,6 +106,7 @@ func TestWedgedWrite_ShouldKeepTheLeaseAndPauseAndDeleteShouldCompleteWhileItIsW
 			// so there is no release to wait for. Linux does release it, which the wait below checks.
 			if runtime.GOOS == "darwin" && !tc.closeSlave {
 				t.Logf("%s: blocked master write is unreleasable after master close on macOS; skipping the release wait", tc.name)
+				t.Cleanup(func() { _ = slave.Close() })
 				return
 			}
 
