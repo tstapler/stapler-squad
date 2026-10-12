@@ -131,7 +131,7 @@ func parseFilterNames(data []byte) []string {
 		}
 		lines = append(lines, line{attrs: fields[1:]})
 	}
-	var names []string
+	names := make([]string, 0, len(lines))
 	for _, l := range lines {
 		names = append(names, assignedFilters(l.attrs, macros)...)
 	}

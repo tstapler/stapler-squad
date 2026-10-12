@@ -37,8 +37,9 @@ func TestResolveOrdersScopesAndKeepsIncludePosition(t *testing.T) {
 	env = append(env, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=a.k", "GIT_CONFIG_VALUE_0=cmd")
 	res, err := Resolve(context.Background(), Env{Environ: env}, Repo{})
 	require.NoError(t, err)
-	var values []string
-	for _, s := range res.All("a.k") {
+	all := res.All("a.k")
+	values := make([]string, 0, len(all))
+	for _, s := range all {
 		values = append(values, string(s.Scope)+":"+s.Value)
 	}
 	assert.Equal(t, []string{"global:xdg", "global:home1", "global:included", "global:home2", "command:cmd"}, values)

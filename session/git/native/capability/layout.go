@@ -25,7 +25,9 @@ type layout struct {
 	commonDir string // shared config, hooks, refs
 }
 
-func detectErr(sub backend.DetectSub, err error) error { return &backend.DetectError{Sub: sub, Err: err} }
+func detectErr(sub backend.DetectSub, err error) error {
+	return &backend.DetectError{Sub: sub, Err: err}
+}
 
 // resolveLayout finds GitDir and CommonDir for a worktree root. `.git` is a directory in the
 // main checkout and a file ("gitdir: <path>") in a linked worktree or submodule, whose

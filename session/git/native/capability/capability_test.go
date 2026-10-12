@@ -19,14 +19,13 @@ import (
 
 // fx is a hand-built repository: .git directory, a fixture HOME, and a Detector reading both.
 type fx struct {
-	t         *testing.T
-	home      string
-	root      string
-	gitDir    string
-	extraEnv  []string
-	detCfg    Config
-	detOnce   *Detector
-	linkedDir string
+	t        *testing.T
+	home     string
+	root     string
+	gitDir   string
+	extraEnv []string
+	detCfg   Config
+	detOnce  *Detector
 }
 
 func newFx(t *testing.T) *fx {
@@ -86,7 +85,7 @@ func (f *fx) caps(op backend.OperationName) ([]backend.Capability, error) {
 }
 
 func kinds(caps []backend.Capability) []backend.CapabilityKind {
-	var out []backend.CapabilityKind
+	out := make([]backend.CapabilityKind, 0, len(caps))
 	for _, c := range caps {
 		out = append(out, c.Kind)
 	}
