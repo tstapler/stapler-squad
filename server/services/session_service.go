@@ -1232,20 +1232,19 @@ func maybeAutoMigrateToEnt(repo *session.EntRepository) error {
 }
 
 // gitBackendOrDefault returns the git backend, building it once from config.GitBackendCohorts
-// (every cohort defaults to the CLI). Its local runner serves Local locations only; Remote
+// (every cohort defaults to the CLI; edits need a restart, the config is read at first use). Its local runner serves Local locations only; Remote
 // locations carry the SSH runner they were built from.
 func (s *SessionService) gitBackendOrDefault() backend.Backend {
 	s.gitBackendOnce.Do(func() {
-		if s.gitBackend == nil {
-			s.gitBackend = gitwiring.NewRouter(gitwiring.ParseCohortMap(config.LoadConfig().GitBackendCohorts), tmux.LocalRunner{})
-		}
+		s.gitBackend = gitwiring.NewRouter(gitwiring.ParseCohortMap(config.LoadConfig().GitBackendCohorts), tmux.LocalRunner{})
 	})
 	return s.gitBackend
 }
 
-// setGitBackend injects the backend; it must run before the first gitBackendOrDefault call.
+// setGitBackend injects the backend. It only takes effect before the first
+// gitBackendOrDefault call (the Once is spent after that), which keeps it race-free.
 func (s *SessionService) setGitBackend(b backend.Backend) {
-	s.gitBackend = b
+	s.gitBackendOnce.Do(func() { s.gitBackend = b })
 }
 
 // remoteWorktreeOps builds the worktree ops for a remote runner, routing git through the

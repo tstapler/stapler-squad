@@ -15,6 +15,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	gossh "golang.org/x/crypto/ssh"
 
+	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -534,4 +535,19 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// A RemoteWorktreeOps built over a runner that claims to be local must still run through that
+// runner (a Remote location), never let the router run git on this machine.
+func TestRemoteWorktreeOps_Location_IsAlwaysRemote(t *testing.T) {
+	t.Parallel()
+	for name, runner := range map[string]tmux.CommandRunner{"local runner": tmux.LocalRunner{}, "nil runner": nil} {
+		loc, ok := NewRemoteWorktreeOps(runner).location("/r").(backend.Remote)
+		if !ok {
+			t.Fatalf("%s: location is not Remote", name)
+		}
+		if (loc.Runner == nil) != (runner == nil) {
+			t.Fatalf("%s: Runner = %v", name, loc.Runner)
+		}
+	}
 }

@@ -68,9 +68,16 @@ func NewRemoteWorktreeOps(runner tmux.CommandRunner, opts ...RemoteWorktreeOptio
 	return r
 }
 
-// location is where repoPath lives, built from the runner this ops value was given.
+// location is where repoPath lives. It is always Remote, whatever runner.IsRemote() says: this
+// type's contract is "remote ops", so a mis-wired local runner must run through that runner
+// (as before) rather than let a Local location make the router run git on this machine. A nil
+// runner is backend.ErrNoRemoteRunner, never a local run.
 func (r *RemoteWorktreeOps) location(repoPath string) backend.RepoLocation {
-	return backend.Locate(r.runner, r.host, repoPath)
+	remote := backend.Remote{Host: backend.RemoteHost(r.host), Path: backend.RemotePath(repoPath)}
+	if r.runner != nil {
+		remote.Runner = r.runner
+	}
+	return remote
 }
 
 // RemoteWorktree identifies one git worktree on a remote host: the existing
