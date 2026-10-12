@@ -73,9 +73,15 @@ func NewRemoteWorktreeOps(runner tmux.CommandRunner, opts ...RemoteWorktreeOptio
 // (as before) rather than let a Local location make the router run git on this machine. A nil
 // runner is backend.ErrNoRemoteRunner, never a local run.
 func (r *RemoteWorktreeOps) location(repoPath string) backend.RepoLocation {
-	remote := backend.Remote{Host: backend.RemoteHost(r.host), Path: backend.RemotePath(repoPath)}
-	if r.runner != nil {
-		remote.Runner = r.runner
+	return remoteLocation(r.runner, r.host, repoPath)
+}
+
+// remoteLocation is the Remote location of path on runner's host; see RemoteWorktreeOps.location
+// for why it is never Local.
+func remoteLocation(runner tmux.CommandRunner, host, path string) backend.RepoLocation {
+	remote := backend.Remote{Host: backend.RemoteHost(host), Path: backend.RemotePath(path)}
+	if runner != nil {
+		remote.Runner = runner
 	}
 	return remote
 }

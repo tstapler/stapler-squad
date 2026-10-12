@@ -9,6 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/git/native"
 	"github.com/tstapler/stapler-squad/session/tmux"
 
@@ -93,6 +94,8 @@ type GitWorktree struct {
 	// since nothing else in the package ever read it. See ADR-002's
 	// addendum.
 	runner tmux.CommandRunner
+	// refBackend overrides the process-wide backend for ref reads; nil means gitprovider.Backend().
+	refBackend backend.Backend
 
 	// dirtyChecker computes IsDirtyWithHint's uncached "is the worktree dirty"
 	// result. Defaults to worktreeIsDirty (go-git's Worktree.Status(), no
