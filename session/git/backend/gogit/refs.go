@@ -7,8 +7,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/go-git/go-git/v5/plumbing"
-
 	"github.com/tstapler/stapler-squad/session/git/backend"
 )
 
@@ -140,7 +138,7 @@ func (b *Backend) layoutOf(ctx context.Context, loc backend.RepoLocation) (layou
 	if err != nil {
 		return layout{}, err
 	}
-	return b.locate(dir, b.environ())
+	return b.locate(ctx, dir, b.environ())
 }
 
 // ListRefs is `git for-each-ref --format=%(refname) [--count=N] [pattern]`: full ref names under
@@ -212,36 +210,26 @@ func (v *repoView) listRefNames(ctx context.Context, pattern string) ([]string, 
 // warning on stderr), but here it may equally be a pack replaced mid-scan, so it surfaces as
 // ErrObjectMissing and the caller retries on a fresh handle, then defers to the CLI.
 func (v *repoView) scanRefs(pattern string) ([]string, error) {
-	iter, err := v.repo.Storer.IterReferences()
+	all, err := v.walkRefNames()
 	if err != nil {
-		return nil, fallbackEligible(fmt.Errorf("list refs: %w", err))
+		return nil, err
 	}
-	defer iter.Close()
 	var names []string
-	err = iter.ForEach(func(ref *plumbing.Reference) error {
-		name := ref.Name().String()
-		if !strings.HasPrefix(name, "refs/") || !validRefName(name, false) || !matchesPattern(pattern, name) {
-			return nil
+	for _, name := range all {
+		if !matchesPattern(pattern, name) {
+			continue
 		}
 		hash, found, err := v.resolveName(name)
 		if err != nil {
-			return err
-		}
-		if !found {
-			return nil // dangling symbolic ref: git skips it
-		}
-		if v.repo.Storer.HasEncodedObject(hash) == nil {
-			names = append(names, name)
-			return nil
-		}
-		return fallbackEligible(fmt.Errorf("%w: %s -> %s", backend.ErrObjectMissing, name, hash))
-	})
-	if err != nil {
-		var eligible backend.ErrFallbackEligible
-		if errors.As(err, &eligible) {
 			return nil, err
 		}
-		return nil, fallbackEligible(fmt.Errorf("list refs: %w", err))
+		if !found {
+			continue // dangling symbolic ref: git skips it
+		}
+		if v.repo.Storer.HasEncodedObject(hash) != nil {
+			return nil, fallbackEligible(fmt.Errorf("%w: %s -> %s", backend.ErrObjectMissing, name, hash))
+		}
+		names = append(names, name)
 	}
 	return names, nil
 }

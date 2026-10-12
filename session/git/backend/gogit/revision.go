@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -51,6 +53,11 @@ func parseRev(rev string) (base string, ops []revOp, ok bool) {
 // dwim expands a short ref name the way git's repo_dwim_ref does: the first of the rev-parse
 // rules that resolves wins (a branch and a tag of the same name resolve to the tag).
 func (v *repoView) dwim(base string) (plumbing.Hash, bool, error) {
+	if !strings.HasPrefix(base, "refs/") && v.namesAFileInGitDir(base) {
+		// git reads rule 0 ("%s") as a file under the git dir (.git/shallow, or .git/head on a
+		// case-insensitive filesystem), which is not a ref this resolver models.
+		return plumbing.ZeroHash, false, fallbackEligible(fmt.Errorf("%q names a file in the git directory", base))
+	}
 	for _, rule := range revParseRules {
 		var full string
 		if rule == "%s" {
@@ -140,6 +147,9 @@ func (v *repoView) step(ctx context.Context, c *object.Commit, op revOp) (next *
 		return v.parent(ctx, c, op.n)
 	}
 	for range op.n {
+		if err = ctx.Err(); err != nil {
+			return nil, false, err
+		}
 		if c, ok, err = v.parent(ctx, c, 1); err != nil || !ok {
 			return nil, false, err
 		}
@@ -164,4 +174,13 @@ func (v *repoView) requireIntactHistory() error {
 		return fallbackEligible(errors.New("shallow, grafted or replaced history: parents differ from the CLI's"))
 	}
 	return nil
+}
+
+func (v *repoView) namesAFileInGitDir(name string) bool {
+	for _, dir := range []string{v.lay.gitDir, v.lay.commonDir} {
+		if _, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(name))); err == nil {
+			return true
+		}
+	}
+	return false
 }

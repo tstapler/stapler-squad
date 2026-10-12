@@ -52,6 +52,14 @@ func WithEnviron(environ func() []string) Option {
 	return func(b *Backend) { b.environ = environ }
 }
 
+// WithSystemConfig sets where git's system-wide config may live. git's own path is compiled in
+// and unknowable without running it, so the default is a list of well-known candidates; a caller
+// that knows the real path (for example from `git config --system --list --show-origin`) should
+// pass it here.
+func WithSystemConfig(paths ...string) Option {
+	return func(b *Backend) { b.systemCfgs = append([]string(nil), paths...) }
+}
+
 // Defaults of the cohort retry policy for a torn read (plan Story 2.1.2a): 3 re-reads, 20 ms apart.
 const (
 	defaultRetries    = 3

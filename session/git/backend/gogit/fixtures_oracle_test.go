@@ -20,7 +20,7 @@ func refFixtures() []gitoracle.Fixture {
 		fixtureRefsRich, fixturePackedRefs, fixtureAmbiguousHead, fixtureSymlinkedRepo,
 		fixtureSubdirs, fixtureShallow, fixtureSubmodule, fixtureBare, fixtureNotARepo,
 		fixtureDanglingHead, fixtureUnrelatedHistories, fixtureCrissCross, fixtureDAG,
-		fixtureAnnotatedTags, fixtureLocalConfigIncludes, fixtureRemoteHeadDangling, fixtureHeadNames, fixtureConfigContinuation,
+		fixtureAnnotatedTags, fixtureLocalConfigIncludes, fixtureRemoteHeadDangling, fixtureHeadNames, fixtureConfigContinuation, fixtureSymrefDepth, fixtureMalformed,
 	)
 }
 
@@ -129,6 +129,7 @@ var fixtureShallow = gitoracle.Fixture{Name: "shallow", Build: func(g gitoracle.
 	g.Run(origin, "branch", "side", "HEAD~2")
 	clone := filepath.Join(root, "clone")
 	g.Run(root, "clone", "-q", "--depth", "2", "--no-single-branch", "file://"+origin, clone)
+	g.Run(clone, "branch", "shallow", "HEAD") // also the name of .git/shallow, which git reads first
 	return gitoracle.Places{"main": clone}
 }}
 
@@ -351,4 +352,123 @@ var fixtureConfigContinuation = gitoracle.Fixture{Name: "config-continuation", B
 	commitFile(g, root, "a.txt", "1\n")
 	appendConfig(g, root, "[val]\n\tcont = a\\\n b\n")
 	return gitoracle.Places{"main": root}
+}}
+
+// fixtureSymrefDepth: alias chains around git's depth limit of 5 reads, from refs and from HEAD.
+var fixtureSymrefDepth = gitoracle.Fixture{Name: "symref-depth", Build: func(g gitoracle.Git, root string) gitoracle.Places {
+	main := filepath.Join(root, "main")
+	if err := os.Mkdir(main, 0o700); err != nil {
+		g.T.Fatal(err)
+	}
+	initMain(g, main)
+	commitFile(g, main, "a.txt", "1\n")
+	g.Run(main, "symbolic-ref", "refs/heads/a1", "refs/heads/main")
+	for i := 2; i <= 7; i++ {
+		g.Run(main, "symbolic-ref", fmt.Sprintf("refs/heads/a%d", i), fmt.Sprintf("refs/heads/a%d", i-1))
+	}
+	places := gitoracle.Places{"main": main}
+	for _, n := range []int{3, 4, 5, 6} {
+		path := filepath.Join(root, fmt.Sprintf("wt-a%d", n))
+		g.Run(main, "worktree", "add", "-q", "--detach", path)
+		g.Run(path, "symbolic-ref", "HEAD", fmt.Sprintf("refs/heads/a%d", n))
+		places[fmt.Sprintf("head-a%d", n)] = path
+	}
+	return places
+}}
+
+// fixtureMalformed: repositories git rejects or reads differently from lenient parsers. Each
+// place is its own repository; the in-process backend must answer like git or fall back.
+var fixtureMalformed = gitoracle.Fixture{Name: "malformed", Build: func(g gitoracle.Git, root string) gitoracle.Places {
+	places := gitoracle.Places{}
+	newRepo := func(name string) string {
+		dir := filepath.Join(root, name)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			g.T.Fatal(err)
+		}
+		initMain(g, dir)
+		commitFile(g, dir, "a.txt", "1\n")
+		commitFile(g, dir, "b.txt", "2\n")
+		g.Run(dir, "tag", "v1", "HEAD~1")
+		g.Run(dir, "branch", "side", "HEAD~1")
+		places[name] = dir
+		return dir
+	}
+	write := func(path, content string) {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			g.T.Fatal(err)
+		}
+	}
+	sha := func(dir string) string { return g.Run(dir, "rev-parse", "HEAD") }
+
+	newRepo("main")
+	for name, content := range map[string]string{"head-empty": "", "head-garbage": "garbage\n", "head-short-sha": "abc1234\n", "head-bare-name": "ref: heads/main\n"} {
+		write(filepath.Join(newRepo(name), ".git", "HEAD"), content)
+	}
+	d := newRepo("head-upper-sha")
+	write(filepath.Join(d, ".git", "HEAD"), strings.ToUpper(sha(d))+"\n")
+	d = newRepo("head-no-space")
+	write(filepath.Join(d, ".git", "HEAD"), "ref:refs/heads/main\n")
+	d = newRepo("head-tab")
+	write(filepath.Join(d, ".git", "HEAD"), "ref:\trefs/heads/main\n")
+
+	outer := newRepo("nested-outer")
+	for name, content := range map[string]string{"empty": "", "garbage": "garbage\n"} {
+		sub := filepath.Join(outer, "sub-"+name)
+		for _, dir := range []string{"objects", "refs"} {
+			if err := os.MkdirAll(filepath.Join(sub, ".git", dir), 0o700); err != nil {
+				g.T.Fatal(err)
+			}
+		}
+		write(filepath.Join(sub, ".git", "HEAD"), content)
+		places["nested-"+name] = sub
+	}
+
+	d = newRepo("loose-broken")
+	h := sha(d)
+	write(filepath.Join(d, ".git", "refs", "heads", "L6"), " "+h+"\n")
+	write(filepath.Join(d, ".git", "refs", "heads", "L14"), h+"a\n")
+	write(filepath.Join(d, ".git", "refs", "heads", "L26"), "\n"+h+"\n")
+	write(filepath.Join(d, ".git", "refs", "heads", "Lempty"), "")
+	write(filepath.Join(d, ".git", "refs", "heads", "Lcrlf"), h+"\r\n")
+	write(filepath.Join(d, ".git", "refs", "heads", "Lextra"), h+" trailing words\n")
+
+	packed := func(name, mutate string) {
+		d := newRepo(name)
+		g.Run(d, "pack-refs", "--all", "--prune")
+		path := filepath.Join(d, ".git", "packed-refs")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			g.T.Fatal(err)
+		}
+		text := string(data)
+		switch mutate {
+		case "stray":
+			text = strings.Replace(text, "\n", "\n# stray\n", 2)
+		case "no-newline":
+			text = strings.TrimSuffix(text, "\n")
+		case "crlf":
+			text = strings.ReplaceAll(text, "\n", "\r\n")
+		case "unsorted":
+			lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+			lines = append(lines[:1], append([]string{lines[len(lines)-1]}, lines[1:len(lines)-1]...)...)
+			text = strings.Join(lines, "\n") + "\n"
+		case "duplicate":
+			lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+			text = strings.Join(append(lines, lines[1]), "\n") + "\n"
+		case "bad-name":
+			text += sha(d) + " refs/heads/bad..name\n"
+		}
+		write(path, text)
+	}
+	for _, m := range []string{"stray", "no-newline", "crlf", "unsorted", "duplicate", "bad-name"} {
+		packed("packed-"+m, m)
+	}
+
+	d = newRepo("config-padded-header")
+	appendConfig(g, d, "[ padded ]\n\tk = v\n")
+	d = newRepo("config-padded-subsection")
+	appendConfig(g, d, "[a \"b\" ]\n\tk = v\n")
+	d = newRepo("extension-in-v0")
+	appendConfig(g, d, "[extensions]\n\tobjectformat = sha1\n")
+	return places
 }}

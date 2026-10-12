@@ -58,7 +58,7 @@ var coreRevisions = []string{"HEAD", "@", "HEAD~1", "HEAD^", "HEAD^{commit}", "m
 // fixtureRevisions picks the revisions worth running on a fixture; every CLI call is a process
 // spawn, so the full list is spent only where its names exist.
 var fixtureRevisions = map[string][]string{
-	"refs-rich":        richRevisions,
+	"refs-rich":        append(append([]string{}, richRevisions...), "head", "Head", "shallow"),
 	"packed-refs":      {"HEAD", "main", "old", "fresh", "gone", "rel", "rel^{commit}", "refs/tags/rel", "light", "tags/light", "heads/old", "nonexistent", "HEAD~1", "full sha of HEAD"},
 	"ambiguous-head":   {"HEAD", "same", "heads/same", "tags/same", "refs/heads/same", "main", "remotes/main", "refs/remotes/main", "origin", "same^{commit}", "full sha of HEAD"},
 	"annotated-tags":   {"t1", "t2", "t2^{commit}", "t2~1", "tree-tag", "refs/tags/t2", "tags/t2", "HEAD", "main", "t2^{}", "full sha of HEAD"},
@@ -66,6 +66,8 @@ var fixtureRevisions = map[string][]string{
 	"dangling-symref":  {"HEAD", "alias", "origin", "origin/HEAD", "refs/remotes/origin/HEAD", "refs/heads/alias", "heads/alias"},
 	"shallow":          {"HEAD", "HEAD~1", "HEAD^", "HEAD^0", "side", "origin/side", "origin/main", "HEAD^{commit}", "main"},
 	"linked-worktrees": {"HEAD", "HEAD~0", "main", "wt-branch", "refs/heads/wt-branch", "full sha of HEAD", "short sha of HEAD", "nonexistent"},
+	"symref-depth":     {"a1", "a3", "a4", "a5", "a6", "a7", "HEAD", "heads/a5", "refs/heads/a5"},
+	"malformed":        {"HEAD", "main", "v1", "L6", "L14", "L26", "Lempty", "Lcrlf", "Lextra", "full sha of HEAD"},
 	"head-names":       {"HEAD", "bt", "heads/bt", "plain", "full sha of HEAD"},
 	"detached-head":    {"HEAD", "HEAD~1", "HEAD^", "main", "@", "full sha of HEAD", "upper sha of HEAD", "short sha of HEAD"},
 	"symlinked":        {"HEAD", "main", "wt", "full sha of HEAD"},
@@ -178,7 +180,7 @@ func opsFor(fixture string) []gitoracle.Op {
 	}
 	ops := append(simpleOps(), resolveOps(revs)...)
 	_, rich := fixtureRevisions[fixture]
-	ops = append(ops, listRefOps(rich && fixture != "unborn" && fixture != "symlinked" && fixture != "subdirs")...)
+	ops = append(ops, listRefOps(rich && fixture != "unborn" && fixture != "symlinked" && fixture != "subdirs" && fixture != "malformed")...)
 	switch fixture {
 	case "refs-rich", "annotated-tags", "linear", "diverged", "criss-cross", "unrelated-histories", "shallow", "random-dag", "dangling-head", "linked-worktrees", "bare", "submodule":
 		ops = append(ops, mergeBaseOps(fixture)...)
@@ -225,7 +227,7 @@ var unmodelledRevisions = map[string]bool{
 	"ORIG_HEAD": true, "FETCH_HEAD": true, "UPPER": true, "HEAD@{1}": true, "main@{u}": true, "@{-1}": true, ":/first": true,
 	"HEAD..main": true, "main...feature": true, "a b": true, "refs/heads/../../x": true, "../x": true, "/abs": true, "x/": true,
 	"abcd": true, "deadbeef": true, "~1": true, "^": true, "refs/heads/": true, "refs/": true, ".hidden": true, "main.lock": true,
-	"HEAD~999999999999": true, "short sha of HEAD": true, "tree-tag": true,
+	"HEAD~999999999999": true, "short sha of HEAD": true, "tree-tag": true, "shallow": true, "head": true, "Head": true, "refs": true,
 }
 
 // absentFullSHAs are well-formed SHAs with no object: possibly a torn read, so the CLI decides.
@@ -239,6 +241,12 @@ func hasSteps(rev string) bool {
 // fallback outside this list is a regression (it silently stopped serving something), and a
 // difference that is not a fallback is a wrong answer.
 func fallbackExpected(d gitoracle.Diff) bool {
+	if d.Fixture == "malformed" {
+		return malformedFallback(d)
+	}
+	if d.Fixture == "symref-depth" {
+		return true // beyond git's depth limit git's answer differs per command; any answer given must still match
+	}
 	if d.Fixture == "config-continuation" {
 		return true // the repository config cannot be read in-process, so nothing is served
 	}
@@ -302,4 +310,12 @@ func mergeBaseFallback(d gitoracle.Diff, left, right string) bool {
 func oneLine(d gitoracle.Diff) string {
 	flat := func(s string) string { return strings.ReplaceAll(s, "\n", " | ") }
 	return fmt.Sprintf("%s/%s %s [%s] oracle=%s candidate=%s", d.Fixture, d.Place, d.Op, d.Kind, flat(d.Oracle), flat(d.Candidate))
+}
+
+// malformedFallback: places whose files git rejects or reads differently. A fallback is always
+// allowed here (and any answer must still equal git's); only the layout answers git gives
+// without reading the damaged file are required to be served.
+func malformedFallback(d gitoracle.Diff) bool {
+	return strings.HasPrefix(d.Place, "packed-") || strings.HasPrefix(d.Place, "config-") || d.Place == "extension-in-v0" ||
+		strings.HasPrefix(d.Place, "head-") || (d.Place == "loose-broken" && (strings.Contains(d.Op, "(L") || strings.HasPrefix(d.Op, "ListRefs")))
 }

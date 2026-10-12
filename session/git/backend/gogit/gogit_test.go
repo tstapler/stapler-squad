@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -280,11 +281,20 @@ func TestConfigReaderEdgeCases(t *testing.T) {
 	assert.ErrorIs(t, err, backend.ErrInvalidArgument)
 }
 
+// TestConcurrentCallsWhileRefsChange reads while a go-git writer (which rewrites ref files in
+// place, unlike git's atomic rename) keeps committing. Every answer must be correct at some
+// instant or fall back; a wrong SHA, branch or ref list fails.
 func TestConcurrentCallsWhileRefsChange(t *testing.T) {
 	dir, repo, _ := initRepo(t, 3)
 	b := newBackend(t)
 	wt, err := repo.Worktree()
 	require.NoError(t, err)
+
+	var known sync.Map // every commit the writer made: the only SHAs HEAD may ever resolve to
+	remember := func(h plumbing.Hash) { known.Store(h.String(), true) }
+	iter, err := repo.Log(&git.LogOptions{})
+	require.NoError(t, err)
+	require.NoError(t, iter.ForEach(func(c *object.Commit) error { remember(c.Hash); return nil }))
 
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
@@ -297,36 +307,156 @@ func TestConcurrentCallsWhileRefsChange(t *testing.T) {
 				return
 			default:
 			}
-			_, _ = wt.Commit(fmt.Sprintf("w%d", i), &git.CommitOptions{AllowEmptyCommits: true, Author: &object.Signature{Name: "T", Email: "t@example.com", When: time.Unix(1_800_000_000+int64(i), 0)}})
-			_ = repo.Storer.SetReference(plumbing.NewHashReference(plumbing.ReferenceName(fmt.Sprintf("refs/heads/b%d", i%5)), plumbing.ZeroHash))
+			h, err := wt.Commit(fmt.Sprintf("w%d", i), &git.CommitOptions{AllowEmptyCommits: true, Author: &object.Signature{Name: "T", Email: "t@example.com", When: time.Unix(1_800_000_000+int64(i), 0)}})
+			if err != nil {
+				continue
+			}
+			remember(h)
+			_ = repo.Storer.SetReference(plumbing.NewHashReference(plumbing.ReferenceName(fmt.Sprintf("refs/heads/b%d", i%5)), h))
 		}
 	}()
+	check := func(err error, ok func()) {
+		if err != nil {
+			assert.True(t, isFallback(err), "only a fallback may fail while refs change: %v", err)
+			return
+		}
+		ok()
+	}
 	var readers sync.WaitGroup
 	for range 4 {
 		readers.Add(1)
 		go func() {
 			defer readers.Done()
+			ctx := context.Background()
 			for range 20 {
-				ctx := context.Background()
-				for _, err := range []error{
-					func() error { _, err := b.ResolveRef(ctx, local(dir), "HEAD"); return err }(),
-					func() error { _, err := b.CurrentBranch(ctx, local(dir)); return err }(),
-					func() error { _, err := b.ListRefs(ctx, local(dir), backend.ListRefsRequest{}); return err }(),
-					func() error {
-						_, err := b.MergeBase(ctx, local(dir), backend.MergeBaseRequest{Left: "HEAD", Right: "HEAD~1"})
-						return err
-					}(),
-				} {
-					if err != nil {
-						assert.True(t, isFallback(err), "only a fallback may fail while refs change: %v", err)
+				sha, err := b.ResolveRef(ctx, local(dir), "HEAD")
+				check(err, func() {
+					_, isKnown := known.Load(string(sha))
+					// the writer records a commit just after creating it, so allow one unrecorded SHA
+					if !isKnown {
+						_, objErr := repo.CommitObject(plumbing.NewHash(string(sha)))
+						assert.NoError(t, objErr, "HEAD resolved to %s, which is not a commit", sha)
 					}
-				}
+				})
+				br, err := b.CurrentBranch(ctx, local(dir))
+				check(err, func() { assert.Equal(t, backend.BranchName("main"), br) })
+				refs, err := b.ListRefs(ctx, local(dir), backend.ListRefsRequest{Pattern: "refs/heads"})
+				check(err, func() { assert.Contains(t, refs, backend.RefName("refs/heads/main")) })
+				_, err = b.MergeBase(ctx, local(dir), backend.MergeBaseRequest{Left: "HEAD", Right: "HEAD~1"})
+				check(err, func() {})
 			}
 		}()
 	}
 	readers.Wait()
 	close(stop)
 	wg.Wait()
+}
+
+func TestRefFilesGitWouldRejectAreNotTrusted(t *testing.T) {
+	dir, _, head := initRepo(t, 2)
+	b := newBackend(t)
+	ctx := context.Background()
+	refDir := filepath.Join(dir, ".git", "refs", "heads")
+	for name, content := range map[string]string{
+		"leading-space": " " + head.String() + "\n", "leading-newline": "\n" + head.String() + "\n", "extra-hex": head.String() + "a\n",
+		"empty": "", "zero": plumbing.ZeroHash.String() + "\n", "garbage": "garbage\n",
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(refDir, name), []byte(content), 0o600))
+		sha, err := b.ResolveRef(ctx, local(dir), backend.RefName(name))
+		assert.Empty(t, sha, name)
+		assert.True(t, isFallback(err), "%s: %v", name, err)
+	}
+
+	require.NoError(t, os.WriteFile(filepath.Join(refDir, "upper"), []byte(strings.ToUpper(head.String())+"\n"), 0o600))
+	upper, err := b.ResolveRef(ctx, local(dir), "upper")
+	require.NoError(t, err, "git reads uppercase hex")
+	assert.Equal(t, head.String(), string(upper))
+
+	headFile := filepath.Join(dir, ".git", "HEAD")
+	require.NoError(t, os.WriteFile(headFile, []byte("ref:refs/heads/main\n"), 0o600))
+	br, err := b.CurrentBranch(ctx, local(dir))
+	require.NoError(t, err, "git accepts a ref: with no space")
+	assert.Equal(t, backend.BranchName("main"), br)
+	for _, content := range []string{head.String() + "garbage\n", " " + head.String() + "\n", "garbage\n", ""} {
+		require.NoError(t, os.WriteFile(headFile, []byte(content), 0o600))
+		_, err = b.CurrentBranch(ctx, local(dir))
+		assert.Error(t, err, "HEAD=%q", content)
+		assert.NotErrorIs(t, err, backend.ErrDetachedHead, "HEAD=%q must not be reported detached", content)
+	}
+}
+
+func TestSymrefChainDepthMatchesGit(t *testing.T) {
+	dir, _, head := initRepo(t, 1)
+	b := newBackend(t)
+	prev := "refs/heads/main"
+	for i := 1; i <= 6; i++ {
+		name := fmt.Sprintf("refs/heads/a%d", i)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", name), []byte("ref: "+prev+"\n"), 0o600))
+		prev = name
+		sha, err := b.ResolveRef(context.Background(), local(dir), backend.RefName(fmt.Sprintf("a%d", i)))
+		if i <= 3 { // git reads at most 5 refs along a chain, the last one direct
+			require.NoError(t, err, i)
+			assert.Equal(t, head.String(), string(sha))
+		} else if i >= 5 {
+			assert.True(t, isFallback(err), "a%d is beyond git's depth limit and git reports it per command: %v", i, err)
+		}
+	}
+}
+
+func TestHostileConfigDoesNotHangOrExplode(t *testing.T) {
+	dir, _, _ := initRepo(t, 1)
+	home := t.TempDir()
+	// a file that includes itself eight times: git's depth limit still allows 8^10 reads
+	var self string
+	for range 8 {
+		self += "[include]\n\tpath = self.cfg\n"
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(home, "self.cfg"), []byte(self), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".gitconfig"), []byte("[include]\n\tpath = self.cfg\n"), 0o600))
+	b := New(WithEnviron(func() []string { return []string{"HOME=" + home} }), WithSystemConfig())
+	start := time.Now()
+	_, err := b.GetConfig(context.Background(), local(dir), "core.bare")
+	assert.True(t, isFallback(err), "%v", err)
+	assert.Less(t, time.Since(start), 5*time.Second)
+
+	big := filepath.Join(home, "big.cfg")
+	require.NoError(t, os.WriteFile(big, []byte("[a]\n\tk = "+strings.Repeat("x", maxConfigFileSize)+"\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".gitconfig"), []byte("[include]\n\tpath = big.cfg\n"), 0o600))
+	_, err = b.GetConfig(context.Background(), local(dir), "a.k")
+	assert.True(t, isFallback(err), "an oversized config is left to git: %v", err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = b.GetConfig(ctx, local(dir), "a.k")
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestMalformedConfigHeadersAndExtensionsFallBack(t *testing.T) {
+	for name, text := range map[string]string{
+		"padded header":     "[ padded ]\n\tk = v\n",
+		"padded subsection": "[a \"b\" ]\n\tk = v\n",
+		"v0 extension":      "[extensions]\n\tobjectformat = sha1\n",
+	} {
+		dir, _, _ := initRepo(t, 1)
+		cfg := filepath.Join(dir, ".git", "config")
+		existing, err := os.ReadFile(cfg)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(cfg, append(existing, []byte(text)...), 0o600))
+		_, err = newBackend(t).GitDir(context.Background(), local(dir))
+		assert.True(t, isFallback(err), "%s: %v", name, err)
+	}
+}
+
+func TestBrokenHeadMakesNotARepository(t *testing.T) {
+	outer, _, _ := initRepo(t, 1)
+	sub := filepath.Join(outer, "sub")
+	for _, d := range []string{"objects", "refs"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(sub, ".git", d), 0o700))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(sub, ".git", "HEAD"), nil, 0o600))
+	root, err := newBackend(t).RepoRoot(context.Background(), local(sub))
+	require.NoError(t, err)
+	assert.Equal(t, backend.RepoRoot(outer), root, "git skips a .git whose HEAD it rejects and finds the enclosing repository")
 }
 
 func TestShortenUnambiguous(t *testing.T) {

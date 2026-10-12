@@ -2,6 +2,7 @@ package gogit
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -51,11 +52,14 @@ func localDir(loc backend.RepoLocation) (string, error) {
 // locate finds the repository containing dir the way `git rev-parse` does (walk up from the real
 // path, stopping at a device boundary). It returns backend.ErrNotARepo only where git would
 // report "not a git repository"; anything it cannot decide exactly is fallback-eligible.
-func (b *Backend) locate(dir string, environ []string) (layout, error) {
+func (b *Backend) locate(ctx context.Context, dir string, environ []string) (layout, error) {
 	for _, v := range repoRedirectVars {
 		if _, set := envValue(environ, v); set {
 			return layout{}, fallbackEligible(fmt.Errorf("%s is set; git would honour it and go-git does not", v))
 		}
+	}
+	if _, ok := envBool(environ, "GIT_CONFIG_NOSYSTEM"); !ok {
+		return layout{}, fallbackEligible(errors.New("GIT_CONFIG_NOSYSTEM is not a boolean; git fails every command"))
 	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
@@ -79,7 +83,7 @@ func (b *Backend) locate(dir string, environ []string) (layout, error) {
 			return layout{}, err
 		}
 		if found {
-			return b.vetLayout(lay, environ)
+			return b.vetLayout(ctx, lay, environ)
 		}
 		parent := filepath.Dir(cur)
 		if parent == cur {
@@ -149,8 +153,9 @@ func layoutFor(workTree, gitDir, common string, bare bool) (layout, bool, error)
 // commonOf reports whether p is a git directory (git's is_git_directory) and returns its common
 // directory: objects/ and refs/ live there, HEAD lives in p.
 func commonOf(p string) (string, bool) {
-	if fi, err := os.Lstat(filepath.Join(p, "HEAD")); err != nil || fi.IsDir() {
-		return "", false
+	head, err := readSmallFile(filepath.Join(p, "HEAD"))
+	if err != nil || !validateHeadref(head) {
+		return "", false // git skips a directory whose HEAD it would reject and keeps looking upward
 	}
 	common := p
 	if data, err := os.ReadFile(filepath.Join(p, "commondir")); err == nil {
@@ -189,7 +194,7 @@ func readGitfile(path string) (string, error) {
 // vetLayout rejects repositories whose semantics go-git would get wrong: other owners (git
 // refuses them as "dubious ownership" unless safe.directory says otherwise), work trees set by
 // config, reftable or SHA-256 storage, partial clones and other extensions.
-func (b *Backend) vetLayout(lay layout, environ []string) (layout, error) {
+func (b *Backend) vetLayout(ctx context.Context, lay layout, environ []string) (layout, error) {
 	uid := b.uid()
 	for _, p := range []string{lay.workTree, lay.gitDir, lay.commonDir} {
 		if p == "" {
@@ -203,7 +208,7 @@ func (b *Backend) vetLayout(lay layout, environ []string) (layout, error) {
 			return layout{}, fallbackEligible(fmt.Errorf("%s is not owned by the current user (safe.directory applies)", p))
 		}
 	}
-	if err := vetRepoConfig(lay, environ); err != nil {
+	if err := vetRepoConfig(ctx, lay, environ); err != nil {
 		return layout{}, err
 	}
 	return lay, nil
@@ -220,12 +225,18 @@ func repoSettingMatcher(section, _, name string) bool {
 	return false
 }
 
-func vetRepoConfig(lay layout, environ []string) error {
+func vetRepoConfig(ctx context.Context, lay layout, environ []string) error {
 	home, _ := envValue(environ, "HOME")
-	l := &configLoader{match: repoSettingMatcher, home: home}
+	l := newConfigLoader(ctx, repoSettingMatcher, home)
 	l.load(filepath.Join(lay.commonDir, "config"), 1)
 	if l.res.unsure {
 		return fallbackEligible(errors.New("repository config cannot be evaluated in-process"))
+	}
+	version := "0"
+	for _, e := range l.res.entries {
+		if strings.EqualFold(e.section, "core") && strings.EqualFold(e.name, "repositoryformatversion") {
+			version = e.value
+		}
 	}
 	for _, e := range l.res.entries {
 		name := strings.ToLower(e.name)
@@ -235,6 +246,9 @@ func vetRepoConfig(lay layout, environ []string) error {
 				return err
 			}
 		case "extensions":
+			if version != "1" {
+				return fallbackEligible(fmt.Errorf("extensions.%s in a repositoryformatversion %s repository: git rejects it", name, version))
+			}
 			if err := vetExtension(name, e.value); err != nil {
 				return err
 			}

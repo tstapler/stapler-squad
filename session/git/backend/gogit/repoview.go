@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -28,9 +27,10 @@ var errNotCommit = errors.New("object is not a commit")
 // repoView is one call's handle on a repository: a fresh *git.Repository opened through
 // native.OpenRepo, discarded when the call returns. It is not safe for concurrent use.
 type repoView struct {
-	b    *Backend
-	lay  layout
-	repo *git.Repository
+	b      *Backend
+	lay    layout
+	repo   *git.Repository
+	packed map[string]plumbing.Hash // parsed packed-refs, read lazily once per handle
 }
 
 // view locates the repository for loc and opens it.
@@ -42,7 +42,7 @@ func (b *Backend) view(ctx context.Context, loc backend.RepoLocation) (*repoView
 	if err != nil {
 		return nil, err
 	}
-	lay, err := b.locate(dir, b.environ())
+	lay, err := b.locate(ctx, dir, b.environ())
 	if err != nil {
 		return nil, err
 	}
@@ -72,6 +72,7 @@ func (v *repoView) reopen() error {
 		return fallbackEligible(fmt.Errorf("go-git opened git dir %q, expected %q", root, v.lay.gitDir))
 	}
 	v.repo = repo
+	v.packed = nil
 	return nil
 }
 
@@ -85,47 +86,28 @@ func (v *repoView) resolveName(name string) (hash plumbing.Hash, found bool, err
 
 // followRef is resolveName that also returns the last ref name it visited: the fully
 // dereferenced name, which is what `symbolic-ref` and `rev-parse --abbrev-ref` report even when
-// HEAD points through an alias, and which exists or not (an unborn branch).
+// HEAD points through an alias, and which exists or not (an unborn branch). git reads at most
+// maxSymrefDepth refs along a chain and the last must be direct.
 func (v *repoView) followRef(name string) (hash plumbing.Hash, found bool, final string, err error) {
-	for depth := 0; depth <= maxSymrefDepth; depth++ {
-		ref, err := v.repo.Storer.Reference(plumbing.ReferenceName(name))
-		switch {
-		case errors.Is(err, plumbing.ErrReferenceNotFound):
-			if v.looseRefFileExists(name) {
-				// go-git silently treats an unreadable loose ref as absent; a file that is there
-				// but unreadable is a writer mid-update, so no "does not exist" answer is safe.
-				return plumbing.ZeroHash, false, name, fallbackEligible(fmt.Errorf("%w: loose ref %s exists but could not be read", backend.ErrTornRead, name))
-			}
-			return plumbing.ZeroHash, false, name, nil
-		case err != nil:
-			return plumbing.ZeroHash, false, name, fallbackEligible(fmt.Errorf("read ref %s: %w", name, err))
+	return v.followRefN(name, maxSymrefDepth)
+}
+
+func (v *repoView) followRefN(name string, reads int) (hash plumbing.Hash, found bool, final string, err error) {
+	for range reads {
+		ref, ok, err := v.readRef(name)
+		if err != nil || !ok {
+			return plumbing.ZeroHash, false, name, err
 		}
-		if ref.Type() == plumbing.HashReference {
-			return ref.Hash(), true, name, nil
+		if !ref.symbolic() {
+			return ref.hash, true, name, nil
 		}
-		name = ref.Target().String()
+		name = ref.target
 		if !strings.HasPrefix(name, "refs/") || !validRefName(name, false) {
 			return plumbing.ZeroHash, false, name, fallbackEligible(fmt.Errorf("symbolic ref points at %q", name))
 		}
 	}
-	return plumbing.ZeroHash, false, name, fallbackEligible(fmt.Errorf("symbolic ref chain from %s is too deep", name))
-}
-
-// perWorktreeRefPrefixes live in the per-worktree git dir; every other ref is shared.
-var perWorktreeRefPrefixes = []string{"refs/bisect/", "refs/worktree/", "refs/rewritten/"} //nolint:gochecknoglobals read-only
-
-func (v *repoView) looseRefFileExists(name string) bool {
-	dir := v.lay.commonDir
-	if !strings.HasPrefix(name, "refs/") {
-		dir = v.lay.gitDir
-	}
-	for _, p := range perWorktreeRefPrefixes {
-		if strings.HasPrefix(name, p) {
-			dir = v.lay.gitDir
-		}
-	}
-	fi, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(name)))
-	return err == nil && !fi.IsDir()
+	// git reports a chain this long differently per command (dangling, "No such ref", ...)
+	return plumbing.ZeroHash, false, name, fallbackEligible(fmt.Errorf("symbolic ref chain from %s is longer than %d reads", name, reads))
 }
 
 // refExists is git's ref_exists for a full name: the ref resolves (the object is not checked).
@@ -148,18 +130,21 @@ type headState struct {
 }
 
 func (v *repoView) head() (headState, error) {
-	ref, err := v.repo.Storer.Reference(plumbing.HEAD)
+	data, err := readSmallFile(filepath.Join(v.lay.gitDir, "HEAD"))
 	if err != nil {
 		return headState{}, fallbackEligible(fmt.Errorf("read HEAD: %w", err))
 	}
-	if ref.Type() == plumbing.HashReference {
-		return headState{detached: true, hash: ref.Hash()}, nil
+	ref, ok := parseRefContent(data)
+	if !ok {
+		return headState{}, fallbackEligible(errors.New("HEAD is not in a form git writes"))
 	}
-	target := ref.Target().String()
-	if !strings.HasPrefix(target, "refs/") || !validRefName(target, false) {
-		return headState{}, fallbackEligible(fmt.Errorf("HEAD points at %q", target))
+	if !ref.symbolic() {
+		return headState{detached: true, hash: ref.hash}, nil
 	}
-	hash, found, final, err := v.followRef(target)
+	if !strings.HasPrefix(ref.target, "refs/") || !validRefName(ref.target, false) {
+		return headState{}, fallbackEligible(fmt.Errorf("HEAD points at %q", ref.target))
+	}
+	hash, found, final, err := v.followRefN(ref.target, maxSymrefDepth-1) // reading HEAD was the first read
 	if err != nil {
 		return headState{}, err
 	}

@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -16,6 +17,13 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/git/backend"
 )
+
+// maxConfigFileSize bounds one config file; real ones are a few KiB.
+const maxConfigFileSize = 1 << 20
+
+// maxConfigFiles bounds the files one read may open, so a config that includes itself many times
+// over (git's own depth limit still allows an exponential fan-out) cannot spin a caller.
+const maxConfigFiles = 64
 
 // maxIncludeDepth mirrors git's limit (MAX_INCLUDE_DEPTH); deeper chains are git errors.
 const maxIncludeDepth = 10
@@ -29,6 +37,8 @@ var systemConfigCandidates = []string{ //nolint:gochecknoglobals read-only list
 	"/usr/etc/gitconfig",
 	"/usr/local/etc/gitconfig",
 	"/opt/homebrew/etc/gitconfig",
+	"/opt/local/etc/gitconfig",
+	"/run/current-system/sw/etc/gitconfig",
 	"/home/linuxbrew/.linuxbrew/etc/gitconfig",
 	"/Library/Developer/CommandLineTools/usr/etc/gitconfig",
 	"/Applications/Xcode.app/Contents/Developer/usr/etc/gitconfig",
@@ -84,17 +94,30 @@ func isAlnumDash(r rune) bool { return isAlpha(r) || (r >= '0' && r <= '9') || r
 // treats as empty). A syntax error comes back as err: git would fail where this reader might
 // not, so the caller must not guess.
 func parseConfigFile(path string) (entries []cfgEntry, exists bool, err error) {
-	f, err := os.Open(path)
+	fi, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, false, nil
 		}
 		return nil, false, err
 	}
-	defer func() { _ = f.Close() }()
-	data, err := io.ReadAll(f)
+	if !fi.Mode().IsRegular() && path != os.DevNull {
+		return nil, true, fmt.Errorf("%s is not a regular file", path) // a FIFO would block forever
+	}
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, true, err
+	}
+	defer func() { _ = f.Close() }()
+	data, err := io.ReadAll(io.LimitReader(f, maxConfigFileSize+1))
+	if err != nil {
+		return nil, true, err
+	}
+	if len(data) > maxConfigFileSize {
+		return nil, true, fmt.Errorf("%s is larger than %d bytes", path, maxConfigFileSize)
+	}
+	if !headersAreStrict(data) {
+		return nil, true, errors.New("config file has a section header git would reject")
 	}
 	if hasLineContinuation(data) {
 		// gcfg and git disagree on how a backslash-newline joins lines, so the CLI must read it.
@@ -111,6 +134,20 @@ func parseConfigFile(path string) (entries []cfgEntry, exists bool, err error) {
 		return nil, true, err
 	}
 	return entries, true, nil
+}
+
+var strictHeader = regexp.MustCompile(`^[ \t]*\[[A-Za-z0-9-]+( "(?:[^"\\\n]|\\.)*")?\]`)
+
+// headersAreStrict reports whether every line that opens a section does so in the form git
+// accepts, "[name]" or "[name \"sub\"]" with no padding inside the brackets; gcfg also accepts
+// "[ name ]", where git fails every command.
+func headersAreStrict(data []byte) bool {
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		if trimmed := bytes.TrimLeft(line, " \t"); len(trimmed) > 0 && trimmed[0] == '[' && !strictHeader.Match(line) {
+			return false
+		}
+	}
+	return true
 }
 
 // hasLineContinuation reports whether any line ends in an odd run of backslashes, which git reads
@@ -148,14 +185,29 @@ func (r configReadResult) last() (cfgEntry, bool) {
 // it is skipped, otherwise the read is marked unsure (go-git cannot evaluate gitdir:, onbranch:
 // or hasconfig: conditions, and guessing would return a wrong value).
 type configLoader struct {
-	match matcher
-	home  string // "" when unknown, which makes "~/" includes unsure
-	res   configReadResult
+	ctx    context.Context
+	match  matcher
+	home   string // "" when unknown, which makes "~/" includes unsure
+	res    configReadResult
+	budget int // files this read may still open
+}
+
+func newConfigLoader(ctx context.Context, match matcher, home string) *configLoader {
+	return &configLoader{ctx: ctx, match: match, home: home, budget: maxConfigFiles}
+}
+
+// admit spends one file of the budget; false means the read is abandoned as unsure.
+func (l *configLoader) admit(depth int) bool {
+	l.budget--
+	if depth > maxIncludeDepth || l.budget < 0 || l.ctx.Err() != nil {
+		l.res.unsure = true
+		return false
+	}
+	return true
 }
 
 func (l *configLoader) load(path string, depth int) {
-	if depth > maxIncludeDepth {
-		l.res.unsure = true
+	if !l.admit(depth) {
 		return
 	}
 	entries, _, err := parseConfigFile(path)
@@ -185,8 +237,7 @@ func (l *configLoader) load(path string, depth int) {
 
 // scan marks the read unsure if path, or anything it includes, mentions a matching key.
 func (l *configLoader) scan(path string, depth int) {
-	if depth > maxIncludeDepth {
-		l.res.unsure = true
+	if !l.admit(depth) {
 		return
 	}
 	entries, _, err := parseConfigFile(path)
@@ -266,9 +317,9 @@ func envBool(environ []string, key string) (value, ok bool) {
 
 // readScopes evaluates system, global and (when localConfig is non-empty) repository config for
 // the keys match selects, in git's precedence order.
-func readScopes(environ, systemConfigs []string, localConfig string, match matcher) configReadResult {
+func readScopes(ctx context.Context, environ, systemConfigs []string, localConfig string, match matcher) configReadResult {
 	home, _ := envValue(environ, "HOME")
-	l := &configLoader{match: match, home: home}
+	l := newConfigLoader(ctx, match, home)
 
 	noSystem, ok := envBool(environ, "GIT_CONFIG_NOSYSTEM")
 	switch sysPath, set := envValue(environ, "GIT_CONFIG_SYSTEM"); {
@@ -324,7 +375,7 @@ func (b *Backend) GetConfig(ctx context.Context, loc backend.RepoLocation, key b
 	}
 	environ := b.environ()
 	localConfig := ""
-	lay, err := b.locate(dir, environ)
+	lay, err := b.locate(ctx, dir, environ)
 	switch {
 	case err == nil:
 		localConfig = filepath.Join(lay.commonDir, "config")
@@ -333,7 +384,7 @@ func (b *Backend) GetConfig(ctx context.Context, loc backend.RepoLocation, key b
 	default:
 		return "", err
 	}
-	res := readScopes(environ, b.systemCfgs, localConfig, keyMatcher(k))
+	res := readScopes(ctx, environ, b.systemCfgs, localConfig, keyMatcher(k))
 	if res.unsure {
 		return "", fallbackEligible(errors.New("config source cannot be evaluated in-process (include condition or unreadable file)"))
 	}
