@@ -8,6 +8,7 @@ import { CTRL_KEY_MAP, ALT_KEY_MAP, SHIFT_KEY_MAP } from "@/lib/terminal/modifie
 
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
 import { useAnnounce } from "@/lib/hooks/useAnnounce";
+import { usePublishDeckTopOffset } from "@/lib/hooks/usePublishStackTopOffset";
 import { useVisibilityResync } from "./useVisibilityResync";
 import { useBrowserLogStream } from "@/lib/hooks/useBrowserLogStream";
 import { useHandedness } from "@/lib/hooks/useHandedness";
@@ -121,6 +122,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const { clearForSession, refresh: refreshApprovals, pendingCount } = useApprovalsContext();
   const { leftHanded, toggleHandedness } = useHandedness();
   const terminalContainerRef = useRef<HTMLDivElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  usePublishDeckTopOffset(toolbarRef);
   // Story 3 (Task 3.4) — anchor <div> the pooled terminal docks into. A
   // plain, otherwise-childless node (see TerminalPool.tsx's module doc
   // comment for why it must never receive JSX children of its own): the
@@ -1941,7 +1944,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
   return (
     <div className={styles.container}>
-      <div className={styles.toolbar}>
+      <div className={styles.toolbar} ref={toolbarRef}>
         <div className={styles.status}>
           {isExternal && (
             <span className={styles.externalLabel} title="External session via ssq-mux">
