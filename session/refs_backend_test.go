@@ -185,3 +185,27 @@ func TestRecoverBaseCommitSHA_ErrorsWhenNoCandidateResolves(t *testing.T) {
 	require.ErrorIs(t, err, backend.ErrNoMergeBase)
 	assert.Contains(t, err.Error(), "no merge-base found for feature")
 }
+
+// The backend's CommonDir is a realpath; a symlinked caller path must still get its own
+// spelling back (the old relative `--git-common-dir` output preserved it).
+func TestGetMainRepoPath_KeepsSymlinkedSpelling(t *testing.T) {
+	real := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(real, "sub"), 0o755))
+	link := filepath.Join(t.TempDir(), "link")
+	require.NoError(t, os.Symlink(real, link))
+	realResolved, err := filepath.EvalSymlinks(real)
+	require.NoError(t, err)
+	fake := gitfake.New("backend")
+	gitfake.Use(t, fake)
+	fake.OnCommonDir = func(backend.RepoLocation) (backend.CommonDir, error) {
+		return backend.CommonDir(filepath.Join(realResolved, ".git")), nil
+	}
+
+	got, err := GetMainRepoPath(link)
+	require.NoError(t, err)
+	assert.Equal(t, link, got)
+
+	got, err = GetMainRepoPath(filepath.Join(link, "sub"))
+	require.NoError(t, err)
+	assert.Equal(t, link, got, "a subdirectory maps back to the symlinked root")
+}

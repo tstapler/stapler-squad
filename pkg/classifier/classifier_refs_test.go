@@ -51,6 +51,7 @@ func TestBuildContext_ReadsGitStateThroughRefReader(t *testing.T) {
 		{"plain checkout", fakeRefs{toplevel: "/code/app\n", gitDir: "/code/app/.git"}, true, false, true},
 		{"linked worktree", fakeRefs{toplevel: "/wt/feat", gitDir: "/code/app/.git/worktrees/feat"}, true, true, true},
 		{"plain checkout under a directory named worktrees", fakeRefs{toplevel: "/home/u/worktrees/app", gitDir: "/home/u/worktrees/app/.git"}, true, false, true},
+		{"plain checkout whose root is named worktrees", fakeRefs{toplevel: "/home/u/worktrees", gitDir: "/home/u/worktrees/.git"}, true, false, true},
 		{"git-dir lookup failure keeps IsWorktree false", fakeRefs{toplevel: "/r", gitDirErr: errors.New("boom")}, true, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -83,7 +84,8 @@ func TestBuildContext_RefsGoGitReachesGoGitForLocal(t *testing.T) {
 	assert.True(t, ctx.IsWorktree)
 	assert.Equal(t, "/code/app", ctx.RepoRoot)
 	rig.RequireOnlyGoGit(t, backend.OpRepoRoot)
-	assert.Len(t, rig.GoGit.CallsTo(backend.OpGitDir), 1)
+	require.Len(t, rig.GoGit.CallsTo(backend.OpGitDir), 1)
+	assert.Equal(t, backend.Local{Root: "/code/app/sub"}, rig.GoGit.CallsTo(backend.OpGitDir)[0].Loc, "git-dir is asked of the cwd, like the old `git -C cwd`")
 	assert.Equal(t, backend.Local{Root: "/code/app/sub"}, rig.GoGit.CallsTo(backend.OpRepoRoot)[0].Loc)
 }
 

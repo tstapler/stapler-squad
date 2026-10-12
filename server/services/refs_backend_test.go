@@ -13,6 +13,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitwiring"
 	"github.com/tstapler/stapler-squad/testutil/gitfake"
 )
 
@@ -185,4 +186,10 @@ func TestShortRefName_MatchesGitForTheKindsABranchPickerLists(t *testing.T) {
 	} {
 		assert.Equal(t, want, shortRefName(full), full)
 	}
+}
+
+// The session service must share the process-wide router, not build a second one whose
+// counters and shadow state would drift from the one gitprovider hands session/git.
+func TestSessionService_GitBackendDefaultsToTheSharedRouter(t *testing.T) {
+	assert.Same(t, gitwiring.Shared(), (&SessionService{}).gitBackendOrDefault())
 }

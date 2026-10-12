@@ -617,6 +617,41 @@ func parseGitHubRemoteURL(remoteURL string) (owner, repo, host string) {
 // GetMainRepoPath uses git rev-parse --git-common-dir to get the main repo path.
 // This is more reliable than parsing the .git file.
 func GetMainRepoPath(path string) (string, error) {
+	root, err := mainRepoRootFromCommonDir(path)
+	if err != nil {
+		return "", err
+	}
+	return keepCallerSpelling(path, root), nil
+}
+
+// keepCallerSpelling maps root (a realpath, since Backend.CommonDir is absolute) back onto the
+// spelling of path when path is root itself or a directory inside it. The old relative
+// `--git-common-dir` output preserved a symlinked spelling (macOS /tmp, a symlinked ~/code), and
+// persisted RepoPaths and lock keys depend on it. A linked worktree's root is outside path and
+// is returned as is.
+func keepCallerSpelling(path, root string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return root
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return root
+	}
+	rel, err := filepath.Rel(root, real)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return root
+	}
+	spelled := abs
+	if rel != "." {
+		for range strings.Split(rel, string(filepath.Separator)) {
+			spelled = filepath.Dir(spelled)
+		}
+	}
+	return spelled
+}
+
+func mainRepoRootFromCommonDir(path string) (string, error) {
 	mainCtx, mainCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer mainCancel()
 	commonDir, err := gitprovider.Backend().CommonDir(mainCtx, backend.Local{Root: backend.RepoRoot(path)})

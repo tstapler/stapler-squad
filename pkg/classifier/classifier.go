@@ -453,9 +453,11 @@ func NewRuleBasedClassifierWithRefs(refs RefReader) *RuleBasedClassifier {
 
 // isLinkedWorktreeGitDir reports whether gitDir is a linked worktree's admin directory
 // (<common dir>/worktrees/<name>). Checking the parent directory's name, not a substring, keeps
-// a plain checkout that merely lives under a directory called "worktrees" from matching.
+// a plain checkout that merely lives under a directory called "worktrees" from matching, and a
+// <dir>/worktrees/.git plain checkout is excluded by its ".git" base name.
 func isLinkedWorktreeGitDir(gitDir string) bool {
-	return filepath.Base(filepath.Dir(filepath.Clean(strings.TrimSpace(gitDir)))) == "worktrees"
+	clean := filepath.Clean(strings.TrimSpace(gitDir))
+	return filepath.Base(clean) != ".git" && filepath.Base(filepath.Dir(clean)) == "worktrees"
 }
 
 // ReplaceRules atomically replaces all rules with the provided list.

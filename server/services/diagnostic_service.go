@@ -360,5 +360,5 @@ func gitLogSummary(ctx context.Context, dir, baseSHA, headRef string) string {
 	for i, e := range entries {
 		lines[i] = onelineSHA(e.SHA) + " " + e.Subject
 	}
-	return strings.Join(lines, "\n")
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
