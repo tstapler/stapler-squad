@@ -94,7 +94,7 @@ func TestDiscoveredSystemConfigHonoursOverrides(t *testing.T) {
 
 	sandbox := t.TempDir()
 	custom := filepath.Join(sandbox, "custom.cfg")
-	require.NoError(t, os.WriteFile(custom, []byte("[zz]\n\tkey = from-custom\n"), 0o600))
+	require.NoError(t, os.WriteFile(custom, []byte("[zz]\n\tkey = from-custom\n[init]\n\tdefaultBranch = from-custom\n"), 0o600))
 	loc := backend.Local{Root: backend.RepoRoot(sandbox)}
 
 	for name, extra := range map[string][]string{
