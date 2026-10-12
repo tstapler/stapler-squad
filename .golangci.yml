@@ -145,6 +145,48 @@ linters:
               desc: "gogit is in-process; it must never start git or any other process"
             - pkg: "github.com/tstapler/stapler-squad/executor/safeexec"
               desc: "gogit is in-process; it must never start git or any other process"
+        # gitconfig is the pure config resolver (Story 1.3.4): standard library only, and never a
+        # process (os/exec is in $gostd, so it is denied explicitly below). Its own parser exists
+        # because go-git's decoder loses include positions and reads a bare key as "".
+        git_gitconfig_isolation:
+          list-mode: strict
+          files:
+            - "**/session/git/native/gitconfig/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+        git_gitconfig_no_process:
+          files:
+            - "**/session/git/native/gitconfig/*.go"
+            - "**/session/git/native/capability/*.go"
+            - "!**/*_test.go"
+          deny:
+            - pkg: "os/exec"
+              desc: "config resolution and capability detection are in-process; they must never start git or any other process"
+            - pkg: "github.com/tstapler/stapler-squad/executor/safeexec"
+              desc: "config resolution and capability detection are in-process; they must never start git or any other process"
+        # capability reads config only through gitconfig. It may use go-git for the index and
+        # transport URL parsing, but never go-git's config decoders (denied next).
+        git_capability_isolation:
+          list-mode: strict
+          files:
+            - "**/session/git/native/capability/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/go-git
+            - github.com/tstapler/stapler-squad/session/git/backend
+            - github.com/tstapler/stapler-squad/session/git/native/gitconfig
+        git_capability_no_go_git_config:
+          files:
+            - "**/session/git/native/capability/*.go"
+            - "**/session/git/native/gitconfig/*.go"
+            - "!**/*_test.go"
+          deny:
+            - pkg: "github.com/go-git/go-git/v5/config"
+              desc: "routing must not read config through go-git (misses ~/.config/git/config, follows no include); use session/git/native/gitconfig"
+            - pkg: "github.com/go-git/go-git/v5/plumbing/format/config"
+              desc: "routing must not use go-git's config decoder (loses include positions, reads a bare key as empty); use session/git/native/gitconfig"
         # The composition root may import everything; nothing it composes may import it back.
         git_no_gitwiring_import:
           files:
