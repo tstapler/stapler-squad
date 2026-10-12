@@ -1,5 +1,6 @@
 import { style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
+import * as formStyles from "./BacklogItemForm.css";
 
 export const root = style({
   display: "flex",
@@ -36,3 +37,11 @@ export const actions = style({
 export const spacer = style({
   flex: 1,
 });
+
+// formStyles.attachButton's `primary` text fails WCAG AA (3.28:1) on the dark
+// theme (found by the e2e axe scan); body text color is AA on every surface.
+export const attachButton = style([
+  formStyles.attachButton,
+  touchTarget,
+  { color: vars.color.textPrimary },
+]);

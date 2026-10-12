@@ -68,7 +68,7 @@ export function BacklogComposeWidget({ initialText, onSubmit, onCancel }: Backlo
       <div className={styles.actions}>
         <button
           type="button"
-          className={`${formStyles.attachButton} ${styles.touchTarget}`}
+          className={styles.attachButton}
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
           data-testid="backlog-compose-attach"
