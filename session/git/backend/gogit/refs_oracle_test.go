@@ -239,6 +239,9 @@ func hasSteps(rev string) bool {
 // fallback outside this list is a regression (it silently stopped serving something), and a
 // difference that is not a fallback is a wrong answer.
 func fallbackExpected(d gitoracle.Diff) bool {
+	if d.Fixture == "config-continuation" {
+		return true // the repository config cannot be read in-process, so nothing is served
+	}
 	if noWorkTree(d) {
 		return d.Op != "GitDir" && d.Op != "CommonDir"
 	}

@@ -20,7 +20,7 @@ func refFixtures() []gitoracle.Fixture {
 		fixtureRefsRich, fixturePackedRefs, fixtureAmbiguousHead, fixtureSymlinkedRepo,
 		fixtureSubdirs, fixtureShallow, fixtureSubmodule, fixtureBare, fixtureNotARepo,
 		fixtureDanglingHead, fixtureUnrelatedHistories, fixtureCrissCross, fixtureDAG,
-		fixtureAnnotatedTags, fixtureLocalConfigIncludes, fixtureRemoteHeadDangling, fixtureHeadNames,
+		fixtureAnnotatedTags, fixtureLocalConfigIncludes, fixtureRemoteHeadDangling, fixtureHeadNames, fixtureConfigContinuation,
 	)
 }
 
@@ -281,7 +281,7 @@ var fixtureLocalConfigIncludes = gitoracle.Fixture{Name: "config-rich", Build: f
 		"[includeIf \"gitdir:/no/such/place/\"]\n\tpath = " + cond + "\n" +
 		"[remote \"Origin\"]\n\turl = git@example.com:o/r.git\n\turl = git@example.com:o/last.git\n" +
 		"[remote \"origin\"]\n\turl = lower\n" +
-		"[val]\n\tquoted = \"a # b\" ; comment\n\ttab = x\\ty\n\tnl = l1\\nl2\n\tempty =\n\tbare\n\tspaced =   padded   \n\tcont = a\\\n b\n\tmulti = one\n\tmulti = two\n" +
+		"[val]\n\tquoted = \"a # b\" ; comment\n\ttab = x\\ty\n\tnl = l1\\nl2\n\tempty =\n\tbare\n\tspaced =   padded   \n\tmulti = one\n\tmulti = two\n" +
 		"[branch \"feat/x\"]\n\tmerge = refs/heads/feat/x\n"
 	appendConfig(g, root, cfg)
 	return gitoracle.Places{"main": root}
@@ -342,4 +342,13 @@ var fixtureHeadNames = gitoracle.Fixture{Name: "head-names", Build: func(g gitor
 		places[name] = path
 	}
 	return places
+}}
+
+// fixtureConfigContinuation: a repository config using backslash line continuation, which the
+// in-process reader leaves to git (gcfg and git disagree), so every call falls back.
+var fixtureConfigContinuation = gitoracle.Fixture{Name: "config-continuation", Build: func(g gitoracle.Git, root string) gitoracle.Places {
+	initMain(g, root)
+	commitFile(g, root, "a.txt", "1\n")
+	appendConfig(g, root, "[val]\n\tcont = a\\\n b\n")
+	return gitoracle.Places{"main": root}
 }}
