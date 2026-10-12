@@ -189,7 +189,13 @@ func NewRig(t testing.TB) *Rig {
 // Install makes the rig's router the process-wide git backend until the test ends.
 func (r *Rig) Install(t testing.TB) {
 	t.Helper()
-	t.Cleanup(gitprovider.Register(func() backend.Backend { return r.Router }))
+	Use(t, r.Router)
+}
+
+// Use makes b the process-wide git backend until the test ends. Not for parallel tests.
+func Use(t testing.TB, b backend.Backend) {
+	t.Helper()
+	t.Cleanup(gitprovider.Register(func() backend.Backend { return b }))
 }
 
 // RequireOnlyGoGit fails unless every recorded call went to the gogit double with a Local

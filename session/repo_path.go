@@ -16,6 +16,8 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 )
 
 const detectWorktreeCacheTTL = 5 * time.Minute
@@ -575,11 +577,9 @@ func detectWorktreeUncached(path string) (*WorktreeInfo, error) {
 	// Get the remote URL using git command (works for both worktrees and main repos)
 	remoteCtx, remoteCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer remoteCancel()
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	cmd := safeexec.CommandContext(remoteCtx, "git", "-C", path, "config", "--get", "remote.origin.url")
-	output, err := cmd.Output()
+	remoteURL, err := gitprovider.Backend().GetConfig(remoteCtx, backend.Local{Root: backend.RepoRoot(path)}, "remote.origin.url")
 	if err == nil {
-		info.RemoteURL = strings.TrimSpace(string(output))
+		info.RemoteURL = strings.TrimSpace(remoteURL)
 		// Try to parse GitHub owner/repo/host from the URL
 		info.GitHubOwner, info.GitHubRepo, info.GitHubHost = parseGitHubRemoteURL(info.RemoteURL)
 	}
@@ -619,14 +619,12 @@ func parseGitHubRemoteURL(remoteURL string) (owner, repo, host string) {
 func GetMainRepoPath(path string) (string, error) {
 	mainCtx, mainCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer mainCancel()
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	cmd := safeexec.CommandContext(mainCtx, "git", "-C", path, "rev-parse", "--git-common-dir")
-	output, err := cmd.Output()
+	commonDir, err := gitprovider.Backend().CommonDir(mainCtx, backend.Local{Root: backend.RepoRoot(path)})
 	if err != nil {
 		return "", fmt.Errorf("failed to get git common dir: %w", err)
 	}
 
-	gitCommonDir := strings.TrimSpace(string(output))
+	gitCommonDir := string(commonDir)
 
 	// If it's an absolute path, use it directly
 	if filepath.IsAbs(gitCommonDir) {
