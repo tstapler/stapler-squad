@@ -17,6 +17,10 @@ import { getConnectTransport, getKeepaliveConnectTransport } from "@/lib/api/tra
 import type { ClearByIdsResult } from "@/lib/hooks/useClearResultLine";
 
 const DEFAULT_PAGE_SIZE = 50;
+/** Minimum gap between automatic refreshes, so a burst of focus/online events fetches once. */
+const AUTO_REFRESH_MIN_GAP_MS = 5_000;
+/** Poll cadence while the live stream is down (new notifications otherwise stop arriving). */
+const FALLBACK_POLL_MS = 30_000;
 
 interface UseNotificationHistoryReturn {
   notifications: NotificationHistoryRecord[];
@@ -41,7 +45,8 @@ interface UseNotificationHistoryReturn {
  * Fetches notification history from the GetNotificationHistory RPC on mount
  * and exposes methods to mark as read, clear, and paginate.
  */
-export function useNotificationHistory(): UseNotificationHistoryReturn {
+export function useNotificationHistory(options: { streamLive?: boolean } = {}): UseNotificationHistoryReturn {
+  const { streamLive = true } = options;
   const [notifications, setNotifications] = useState<NotificationHistoryRecord[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -115,6 +120,30 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
   const refresh = useCallback(async () => {
     await fetchHistory(true);
   }, [fetchHistory]);
+
+  // The stream delivers new notifications, so history is not polled while it is live. Any
+  // other time (tab refocus, network back, stream down) the list is re-fetched by RPC so a
+  // cached list cannot sit stale and the tray can tell "unreachable" from "stream paused".
+  const lastAutoRefreshRef = useRef(0);
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+  useEffect(() => {
+    const autoRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      const now = Date.now();
+      if (now - lastAutoRefreshRef.current < AUTO_REFRESH_MIN_GAP_MS) return;
+      lastAutoRefreshRef.current = now;
+      void refreshRef.current();
+    };
+    document.addEventListener("visibilitychange", autoRefresh);
+    window.addEventListener("online", autoRefresh);
+    const poll = streamLive ? null : setInterval(autoRefresh, FALLBACK_POLL_MS);
+    return () => {
+      document.removeEventListener("visibilitychange", autoRefresh);
+      window.removeEventListener("online", autoRefresh);
+      if (poll) clearInterval(poll);
+    };
+  }, [streamLive]);
 
   // Load more: append next page
   const loadMore = useCallback(async () => {

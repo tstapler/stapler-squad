@@ -151,7 +151,7 @@ export function BackgroundActivity({
   if (!hasData && offline) {
     return (
       <div className={stateBox} data-testid="background-offline">
-        <p>Offline. Background activity will load when you reconnect.</p>
+        <p>Background activity will load when you reconnect.</p>
       </div>
     );
   }
