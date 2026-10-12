@@ -1232,7 +1232,7 @@ func maybeAutoMigrateToEnt(repo *session.EntRepository) error {
 }
 
 // gitBackendOrDefault returns the git backend, building it once from config.GitBackendCohorts
-// (every cohort defaults to the CLI; edits need a restart, the config is read at first use). Its local runner serves Local locations only; Remote
+// (every cohort defaults to the CLI). The config is read at first use, so edits need a restart. Its local runner serves Local locations only; Remote
 // locations carry the SSH runner they were built from.
 func (s *SessionService) gitBackendOrDefault() backend.Backend {
 	s.gitBackendOnce.Do(func() {
@@ -1243,7 +1243,11 @@ func (s *SessionService) gitBackendOrDefault() backend.Backend {
 
 // setGitBackend injects the backend. It only takes effect before the first
 // gitBackendOrDefault call (the Once is spent after that), which keeps it race-free.
+// b must be non-nil.
 func (s *SessionService) setGitBackend(b backend.Backend) {
+	if b == nil {
+		panic("services: setGitBackend called with a nil backend")
+	}
 	s.gitBackendOnce.Do(func() { s.gitBackend = b })
 }
 
