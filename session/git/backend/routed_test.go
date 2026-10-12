@@ -247,6 +247,20 @@ func rebuild(t *testing.T, g *rig, mutate func(*backend.RouterConfig)) *backend.
 	return r
 }
 
+func TestUnimplementedMutationFallsBackWithItsOwnReason(t *testing.T) {
+	g := newRig(t, cohortsOf(map[backend.Cohort]backend.BackendMode{backend.CohortLocalWrite: backend.BackendGoGit}), optedIn(false))
+	g.gg.commit = func(context.Context, backend.RepoLocation, backend.CommitRequest) error {
+		return backend.ErrFallbackEligible{Err: fmt.Errorf("%w: Commit", backend.ErrNotImplemented)}
+	}
+	if err := g.r.Commit(ctxBG, localRepo, backend.CommitRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if g.fallbacks(backend.OpCommit, backend.CohortLocalWrite, backend.ReasonNotImplemented) != 1 ||
+		g.fallbacks(backend.OpCommit, backend.CohortLocalWrite, backend.ReasonError) != 0 {
+		t.Fatal("ErrNotImplemented must count as not_implemented, never as error")
+	}
+}
+
 func TestFallbackFailureModes(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -259,6 +273,8 @@ func TestFallbackFailureModes(t *testing.T) {
 		{"wrapped object not found", fmt.Errorf("x: %w", backend.ErrObjectNotFound), true, backend.ReasonObjectNotFound},
 		{"unclassified failure", errors.New("boom"), true, backend.ReasonError},
 		{"eligible failure", backend.ErrFallbackEligible{Err: errors.New("x")}, true, backend.ReasonError},
+		{"not implemented", backend.ErrFallbackEligible{Err: backend.ErrNotImplemented}, true, backend.ReasonNotImplemented},
+		{"bare not implemented", fmt.Errorf("x: %w", backend.ErrNotImplemented), true, backend.ReasonNotImplemented},
 		{"domain answer is returned", backend.ErrRefNotFound, false, ""},
 		{"unborn is returned", backend.ErrUnborn, false, ""},
 	}
@@ -555,7 +571,7 @@ func TestFirstReasonFollowsPlanPrecedenceForEveryAdjacentPair(t *testing.T) {
 		"capability_hooks", "capability_gpgsign", "capability_lfs", "capability_unsupported_index",
 		"capability_sparse", "capability_shallow", "capability_submodule", "capability_ssh_proxy",
 		"live_session", "unsafe_worktree_write", "unsupported_pull_mode", "lock_unavailable",
-		"torn_read", "object_missing", "object_not_found", "destructive_confirm", "error",
+		"torn_read", "object_missing", "object_not_found", "destructive_confirm", "not_implemented", "error",
 	}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("precedence = %v\nwant %v", order, want)

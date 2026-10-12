@@ -36,7 +36,13 @@ type Backend struct {
 	retryDelay time.Duration
 	sleep      func(context.Context, time.Duration)
 	uid        func() int
-	systemCfgs []string
+	// systemCfgs and vendorCfgs are the system-scope files: the one GIT_CONFIG_SYSTEM replaces,
+	// and vendor additions (Apple git's share/git-core/gitconfig) it does not replace.
+	systemCfgs, vendorCfgs []string
+	// systemKnown is true when those lists are authoritative (WithSystemConfig): each file is
+	// read. Otherwise they are guessed candidates that are only scanned for the key, which makes
+	// a read fall back to the CLI when it matters.
+	systemKnown bool
 }
 
 var _ backend.Backend = (*Backend)(nil)
@@ -52,12 +58,25 @@ func WithEnviron(environ func() []string) Option {
 	return func(b *Backend) { b.environ = environ }
 }
 
-// WithSystemConfig sets where git's system-wide config may live. git's own path is compiled in
-// and unknowable without running it, so the default is a list of well-known candidates; a caller
-// that knows the real path (for example from `git config --system --list --show-origin`) should
-// pass it here.
+// WithSystemConfig declares the exact system-wide config files git reads, in read order. git's
+// own path is compiled into the binary and cannot be learned without running it, so this
+// package never guesses it for you: the composition root learns it once by asking git
+// (session/gitwiring.DiscoverSystemConfig) and passes it here. Each file is read (missing ones
+// are skipped, like git does). GIT_CONFIG_SYSTEM replaces these files and GIT_CONFIG_NOSYSTEM
+// drops them and the vendor files; calling it with no paths declares there is no system config.
+//
+// Without this option the backend falls back to guessed well-known locations that are only
+// scanned: a read whose key appears in one of them goes to the CLI instead of being answered.
 func WithSystemConfig(paths ...string) Option {
-	return func(b *Backend) { b.systemCfgs = append([]string(nil), paths...) }
+	return func(b *Backend) { b.systemCfgs, b.systemKnown = append([]string(nil), paths...), true }
+}
+
+// WithVendorSystemConfig declares config files a git build reads in addition to its system file
+// and that GIT_CONFIG_SYSTEM does not replace (Apple git reads
+// /Library/Developer/CommandLineTools/usr/share/git-core/gitconfig this way; only
+// GIT_CONFIG_NOSYSTEM drops it). Declaring them also marks the system config as known.
+func WithVendorSystemConfig(paths ...string) Option {
+	return func(b *Backend) { b.vendorCfgs, b.systemKnown = append([]string(nil), paths...), true }
 }
 
 // Defaults of the cohort retry policy for a torn read (plan Story 2.1.2a): 3 re-reads, 20 ms apart.
@@ -70,7 +89,7 @@ const (
 func New(opts ...Option) *Backend {
 	b := &Backend{
 		environ: os.Environ, retries: defaultRetries, retryDelay: defaultRetryDelay, sleep: sleepCtx,
-		uid: effectiveUID, systemCfgs: systemConfigCandidates,
+		uid: effectiveUID, systemCfgs: systemConfigCandidates, vendorCfgs: vendorConfigCandidates,
 	}
 	for _, opt := range opts {
 		opt(b)

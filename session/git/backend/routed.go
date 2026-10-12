@@ -317,6 +317,8 @@ func fallbackReasonFor(ctx context.Context, op OperationName, err error, state *
 		return ReasonObjectMissing, true
 	case errors.Is(err, ErrObjectNotFound):
 		return ReasonObjectNotFound, true
+	case errors.Is(err, ErrNotImplemented):
+		return ReasonNotImplemented, true
 	case isEligible:
 		return ReasonError, true
 	case isDomainError(err):

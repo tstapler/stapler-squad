@@ -28,10 +28,10 @@ const maxConfigFiles = 64
 // maxIncludeDepth mirrors git's limit (MAX_INCLUDE_DEPTH); deeper chains are git errors.
 const maxIncludeDepth = 10
 
-// systemConfigCandidates are the places a system-wide gitconfig lives for the git builds this
-// project meets. The real path is compiled into the git binary and cannot be learned without
-// spawning it, so every existing candidate is treated as "might be the one": it is ignored only
-// when it never mentions the key being read.
+// systemConfigCandidates is the fallback used only when the composition root did not declare the
+// real system config (WithSystemConfig). The real path is compiled into the git binary, so every
+// existing candidate is treated as "might be the one": it is ignored only when it never mentions
+// the key being read.
 var systemConfigCandidates = []string{ //nolint:gochecknoglobals read-only list
 	"/etc/gitconfig",
 	"/usr/etc/gitconfig",
@@ -42,6 +42,34 @@ var systemConfigCandidates = []string{ //nolint:gochecknoglobals read-only list
 	"/home/linuxbrew/.linuxbrew/etc/gitconfig",
 	"/Library/Developer/CommandLineTools/usr/etc/gitconfig",
 	"/Applications/Xcode.app/Contents/Developer/usr/etc/gitconfig",
+}
+
+// vendorConfigCandidates are the fallback guesses for vendor-added system files, which
+// GIT_CONFIG_SYSTEM does not replace.
+var vendorConfigCandidates = []string{ //nolint:gochecknoglobals read-only list
+	"/Library/Developer/CommandLineTools/usr/share/git-core/gitconfig",
+	"/Applications/Xcode.app/Contents/Developer/usr/share/git-core/gitconfig",
+}
+
+// systemConfig is the system-scope config source list; known says whether it is authoritative.
+type systemConfig struct {
+	paths  []string // replaced by GIT_CONFIG_SYSTEM; read after vendor, so it wins a shared key
+	vendor []string // not replaced by it; dropped only by GIT_CONFIG_NOSYSTEM
+	known  bool
+}
+
+// loadAll reads every existing file of list (authoritative) or scans it for the key (guessed).
+func (l *configLoader) loadAll(list []string, known bool) {
+	for _, c := range list {
+		if _, err := os.Stat(c); err != nil {
+			continue
+		}
+		if known {
+			l.load(c, 1)
+		} else {
+			l.scan(c, 1)
+		}
+	}
 }
 
 type cfgEntry struct{ section, sub, name, value string }
@@ -317,7 +345,7 @@ func envBool(environ []string, key string) (value, ok bool) {
 
 // readScopes evaluates system, global and (when localConfig is non-empty) repository config for
 // the keys match selects, in git's precedence order.
-func readScopes(ctx context.Context, environ, systemConfigs []string, localConfig string, match matcher) configReadResult {
+func readScopes(ctx context.Context, environ []string, system systemConfig, localConfig string, match matcher) configReadResult {
 	home, _ := envValue(environ, "HOME")
 	l := newConfigLoader(ctx, match, home)
 
@@ -326,14 +354,14 @@ func readScopes(ctx context.Context, environ, systemConfigs []string, localConfi
 	case !ok:
 		l.res.unsure = true
 	case noSystem:
+	// git reads vendor-added files first, so the system file wins a key set in both
+	// (Apple git: `git config --show-origin --list` lists share/git-core/gitconfig first).
 	case set:
+		l.loadAll(system.vendor, system.known)
 		l.load(sysPath, 1)
 	default:
-		for _, c := range systemConfigs {
-			if _, err := os.Stat(c); err == nil {
-				l.scan(c, 1)
-			}
-		}
+		l.loadAll(system.vendor, system.known)
+		l.loadAll(system.paths, system.known)
 	}
 
 	switch globalPath, set := envValue(environ, "GIT_CONFIG_GLOBAL"); {
@@ -384,7 +412,7 @@ func (b *Backend) GetConfig(ctx context.Context, loc backend.RepoLocation, key b
 	default:
 		return "", err
 	}
-	res := readScopes(ctx, environ, b.systemCfgs, localConfig, keyMatcher(k))
+	res := readScopes(ctx, environ, systemConfig{paths: b.systemCfgs, vendor: b.vendorCfgs, known: b.systemKnown}, localConfig, keyMatcher(k))
 	if res.unsure {
 		return "", fallbackEligible(errors.New("config source cannot be evaluated in-process (include condition or unreadable file)"))
 	}
