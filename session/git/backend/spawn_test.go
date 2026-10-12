@@ -95,6 +95,9 @@ func TestSpawnLabels(t *testing.T) {
 	if op, reason := backend.SpawnLabels(context.Background(), backend.OpLog, true); op != backend.OpLog || reason != backend.ReasonRemoteHost {
 		t.Errorf("remote without call info: got (%s,%s), want remote_host", op, reason)
 	}
+	if op, reason := backend.SpawnLabels(ctx, backend.OpLog, true); op != backend.OpFetch || reason != backend.ReasonRemoteHost {
+		t.Errorf("remote with call info: got (%s,%s), want (Fetch,remote_host): a remote run never starts a local git", op, reason)
+	}
 	for _, c := range cases {
 		op, reason := backend.SpawnLabels(c.ctx, c.served, false)
 		if op != c.wantOp || reason != c.wantReason {
@@ -300,4 +303,11 @@ func TestSpawnReasonsAreClosedAndIncludeUnattributed(t *testing.T) {
 	if backend.SpawnReasonUnattributed.Known() {
 		t.Fatal("unattributed must stay outside the router's FallbackReason enum")
 	}
+}
+
+func TestSpawnCounterNilAndZeroValueCountNothing(t *testing.T) {
+	ctx := context.Background()
+	var nilCounter *backend.SpawnCounter
+	nilCounter.Count(ctx, backend.OpLog, false)
+	(&backend.SpawnCounter{}).Count(ctx, backend.OpLog, false)
 }

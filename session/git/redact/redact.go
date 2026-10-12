@@ -15,10 +15,12 @@ var (
 	// credential-helper protocol lines (git credential fill/get output): password=..., etc.
 	helperSecret = regexp.MustCompile(`(?im)^(\s*(?:password|oauth_refresh_token|authtoken|bearer)\s*=)[^\r\n]*`)
 	// the same keys mid-line (key=value pairs in a log line) and bare "Bearer <token>".
-	inlineSecret = regexp.MustCompile(`(?i)(\b(?:password|passwd|oauth_refresh_token|authtoken|bearer|secret|access_token|token)=)[^\s'"&;]+`)
+	inlineSecret = regexp.MustCompile(`(?i)(\b[\w.-]*?(?:password|passwd|passphrase|secret|token|api[_-]?key|bearer)=)[^\s'"&;]+`)
 	bearerToken  = regexp.MustCompile(`(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]{8,}`)
 	// bare GitHub tokens (classic, fine-grained) outside a URL.
 	githubToken = regexp.MustCompile(`\b(?:gh[pousr]_[A-Za-z0-9_]{6,}|github_pat_[A-Za-z0-9_]{6,})\b`)
+	// bare GitLab personal access tokens.
+	gitlabToken = regexp.MustCompile(`\bglpat-[A-Za-z0-9_-]{10,}`)
 )
 
 // Git returns s with URL userinfo, Authorization header values, credential-helper secret lines and GitHub
@@ -30,5 +32,6 @@ func Git(s string) string {
 	s = helperSecret.ReplaceAllString(s, "${1}***")
 	s = inlineSecret.ReplaceAllString(s, "${1}***")
 	s = bearerToken.ReplaceAllString(s, "${1}***")
+	s = gitlabToken.ReplaceAllString(s, "***")
 	return githubToken.ReplaceAllString(s, "***")
 }

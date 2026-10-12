@@ -338,19 +338,40 @@ func newNormalizer(places Places) normalizer {
 
 func (n normalizer) replace(s string) string { return strings.NewReplacer(n.pairs...).Replace(s) }
 
-// render turns a result into comparable text. A nil slice and an empty slice both render as
-// [], so a candidate is not flagged for returning [] where git's parser returned nil. The
-// result types carry no pointers, so every JSON null here is a nil slice or map.
+// render turns a result into comparable text. A nil slice or map renders as "[]", the same as an empty
+// slice, so a candidate is not flagged for returning [] where git's parser returned
+// nil. Nulls are replaced on the decoded value, never in the text, so a string that contains
+// "null" is untouched. The result types carry no pointers, so every JSON null is a nil slice or map.
 func (n normalizer) render(v any) string {
-	data, err := json.MarshalIndent(v, "", " ")
+	data, err := json.Marshal(v)
 	if err != nil {
-		data = []byte(fmt.Sprintf("%+v", v))
+		return n.replace(fmt.Sprintf("%+v", v))
 	}
-	text := string(data)
-	if text == "null" {
-		text = "[]"
+	var decoded any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return n.replace(string(data))
 	}
-	return n.replace(strings.ReplaceAll(text, ": null", ": []"))
+	pretty, err := json.MarshalIndent(nullsToEmptySlices(decoded), "", " ")
+	if err != nil {
+		return n.replace(string(data))
+	}
+	return n.replace(string(pretty))
+}
+
+func nullsToEmptySlices(v any) any {
+	switch x := v.(type) {
+	case nil:
+		return []any{}
+	case []any:
+		for i := range x {
+			x[i] = nullsToEmptySlices(x[i])
+		}
+	case map[string]any:
+		for k := range x {
+			x[k] = nullsToEmptySlices(x[k])
+		}
+	}
+	return v
 }
 
 func sortedKeys(p Places) []string {
