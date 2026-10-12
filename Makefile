@@ -705,7 +705,7 @@ test-integration: ensure-tools proto-gen $(GOTESTSUM_BIN) ## Run integration tes
 # no generated code, so CI calls it directly.
 .PHONY: test-oracle
 test-oracle: $(GOTESTSUM_BIN) ## Run the gitoracle-tagged differential tests against real git
-	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags gitoracle -timeout 10m ./testutil/gitoracle/...
+	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags gitoracle -timeout 10m ./testutil/gitoracle/... ./session/git/backend/gogit/...
 
 # Type-based delivery-gate and terminal-write guards (Story 2.6 / Story 5.1d).
 # Runs only the Test* funcs declared in files tagged `//go:build sinkguard`

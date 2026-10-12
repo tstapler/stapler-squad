@@ -121,6 +121,30 @@ linters:
             - github.com/tstapler/stapler-squad/telemetry
             - github.com/tstapler/stapler-squad/session/git/redact
             - github.com/tstapler/stapler-squad/session/git/native
+        # gogit is the in-process backend: it implements backend.Backend with go-git, opens
+        # repositories only through native.OpenRepo, and starts no process. gcfg is go-git's own
+        # config parser.
+        git_gogit_isolation:
+          list-mode: strict
+          files:
+            - "**/session/git/backend/gogit/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/go-git
+            - github.com/tstapler/stapler-squad/session/git/backend
+            - github.com/tstapler/stapler-squad/session/git/native
+        # "Never starts a process": the strict allow-list above admits all of the standard library,
+        # so os/exec is denied explicitly.
+        git_gogit_no_process:
+          files:
+            - "**/session/git/backend/gogit/*.go"
+            - "!**/*_test.go"
+          deny:
+            - pkg: "os/exec"
+              desc: "gogit is in-process; it must never start git or any other process"
+            - pkg: "github.com/tstapler/stapler-squad/executor/safeexec"
+              desc: "gogit is in-process; it must never start git or any other process"
         # The composition root may import everything; nothing it composes may import it back.
         git_no_gitwiring_import:
           files:
