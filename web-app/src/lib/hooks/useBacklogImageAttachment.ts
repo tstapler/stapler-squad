@@ -8,20 +8,15 @@ export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB — matches serve
 
 interface Options {
   textareaRef: RefObject<HTMLTextAreaElement | null>;
-  /** Current text; its length is the insertion point when the textarea has no selection yet. */
-  value: string;
   setValue: (updater: (prev: string) => string) => void;
 }
 
 /**
  * Uploads an image to /v1/upload-backlog-attachment and inserts a markdown
- * image reference at the textarea cursor.
- *
- * ponytail: the cursor position is captured once at upload start, so two
- * uploads fired back-to-back can land at a stale offset relative to each
- * other — acceptable for the rare double-paste case.
+ * image reference at the textarea cursor as it is when the upload finishes
+ * (not when it started), so typing during the upload is never overwritten.
  */
-export function useBacklogImageAttachment({ textareaRef, value, setValue }: Options) {
+export function useBacklogImageAttachment({ textareaRef, setValue }: Options) {
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
 
@@ -35,9 +30,6 @@ export function useBacklogImageAttachment({ textareaRef, value, setValue }: Opti
         setError("Image is too large (max 10 MB).");
         return;
       }
-      const el = textareaRef.current;
-      const start = el?.selectionStart ?? value.length;
-      const end = el?.selectionEnd ?? value.length;
       setError(null);
       setUploading(true);
       try {
@@ -59,20 +51,22 @@ export function useBacklogImageAttachment({ textareaRef, value, setValue }: Opti
         }
         const data = (await resp.json()) as { path: string; filename: string };
         const markdown = `![${data.filename}](${encodeURI(`/api/local/serve${data.path}`)})`;
-        setValue((prev) => prev.slice(0, start) + markdown + prev.slice(end));
+        const el = textareaRef.current;
+        const start = Math.min(el?.selectionStart ?? Infinity, el?.value.length ?? Infinity);
+        const end = Math.min(el?.selectionEnd ?? Infinity, el?.value.length ?? Infinity);
+        setValue((prev) => prev.slice(0, Math.min(start, prev.length)) + markdown + prev.slice(Math.min(end, prev.length)));
         requestAnimationFrame(() => {
-          el?.focus();
-          const pos = start + markdown.length;
+          const pos = Math.min(start, el?.value.length ?? start) + markdown.length;
           el?.setSelectionRange(pos, pos);
         });
       } catch {
         setError("Network error — upload failed.");
       } finally {
         setUploading(false);
+        textareaRef.current?.focus();
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only value.length matters, and only as a fallback offset
-    [textareaRef, value.length, setValue]
+    [textareaRef, setValue]
   );
 
   const onFileInputChange = useCallback(

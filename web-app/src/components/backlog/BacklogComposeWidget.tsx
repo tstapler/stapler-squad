@@ -11,7 +11,8 @@ interface BacklogComposeWidgetProps {
   initialText: string;
   /** Called with the trimmed text; the caller owns closing and background creation. */
   onSubmit: (text: string) => void;
-  onCancel: () => void;
+  /** Receives the current draft so the caller can restore it to the omnibar input. */
+  onCancel: (draft: string) => void;
 }
 
 export function BacklogComposeWidget({ initialText, onSubmit, onCancel }: BacklogComposeWidgetProps) {
@@ -20,7 +21,6 @@ export function BacklogComposeWidget({ initialText, onSubmit, onCancel }: Backlo
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { error, uploading, onFileInputChange, onPaste } = useBacklogImageAttachment({
     textareaRef,
-    value: text,
     setValue: setText,
   });
 
@@ -36,14 +36,14 @@ export function BacklogComposeWidget({ initialText, onSubmit, onCancel }: Backlo
       onKeyDown={(e) => {
         if (e.key === "Escape") {
           e.stopPropagation();
-          onCancel();
+          onCancel(text);
         } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
           e.preventDefault();
           submit();
         }
       }}
     >
-      <h2 id="omnibar-title" className={styles.title}>
+      <h2 id="backlog-compose-title" className={styles.title}>
         Create backlog item
       </h2>
       <label htmlFor="backlog-compose-textarea" className={formStyles.label}>
@@ -73,7 +73,7 @@ export function BacklogComposeWidget({ initialText, onSubmit, onCancel }: Backlo
           disabled={uploading}
           data-testid="backlog-compose-attach"
         >
-          {uploading ? "Uploading…" : "📎 Attach image"}
+          {uploading ? "Uploading…" : <><span aria-hidden="true">📎</span> Attach image</>}
         </button>
         <input
           ref={fileInputRef}
@@ -81,15 +81,13 @@ export function BacklogComposeWidget({ initialText, onSubmit, onCancel }: Backlo
           accept="image/*"
           className={formStyles.hiddenFileInput}
           onChange={onFileInputChange}
-          aria-label="Attach image file"
-          tabIndex={-1}
           data-testid="backlog-compose-attach-input"
         />
         <span className={styles.spacer} />
         <button
           type="button"
           className={`${formStyles.cancelButton} ${styles.touchTarget}`}
-          onClick={onCancel}
+          onClick={() => onCancel(text)}
           data-testid="backlog-compose-cancel"
         >
           Cancel

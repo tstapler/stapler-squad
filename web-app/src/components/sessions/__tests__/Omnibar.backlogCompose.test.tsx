@@ -6,7 +6,8 @@
  */
 
 import React from "react";
-import { screen, fireEvent, act, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
+import { Omnibar } from "@/components/sessions/Omnibar";
 import {
   mockUsePathCompletions,
   mockUsePathHistory,
@@ -144,6 +145,63 @@ describe("Omnibar compose mode", () => {
 
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByRole("combobox", { name: /session source input/i })).toHaveValue("keep me");
+  });
+
+  it("restores edits made in the widget to the omnibar input on cancel", async () => {
+    mockBacklogService({});
+    const { input } = renderOmnibar();
+    await typeAndDetect(input, "seed");
+
+    fireEvent.click(screen.getByTestId("mock-create-backlog"));
+    fireEvent.change(screen.getByTestId("backlog-compose-textarea"), {
+      target: { value: "seed plus a longer draft" },
+    });
+    fireEvent.click(screen.getByTestId("backlog-compose-cancel"));
+
+    expect(screen.getByRole("combobox", { name: /session source input/i })).toHaveValue(
+      "seed plus a longer draft"
+    );
+  });
+
+  it("strips a leading backlog: prefix when seeding the compose textarea", async () => {
+    mockBacklogService({});
+    const { input } = renderOmnibar();
+    await typeAndDetect(input, "backlog: fix login");
+
+    fireEvent.click(screen.getByTestId("mock-create-backlog"));
+
+    expect(screen.getByTestId("backlog-compose-textarea")).toHaveValue("fix login");
+  });
+
+  it("does not reopen compose mode after the omnibar is closed and reopened", () => {
+    mockBacklogService({});
+    const props = {
+      onClose: jest.fn(),
+      onCreateSession: jest.fn(),
+      onNavigateToSession: jest.fn(),
+    };
+    const { rerender } = render(<Omnibar isOpen={true} {...props} />);
+    fireEvent.click(screen.getByTestId("mock-create-backlog"));
+    expect(screen.getByTestId("backlog-compose-widget")).toBeInTheDocument();
+
+    rerender(<Omnibar isOpen={false} {...props} />);
+    rerender(<Omnibar isOpen={true} {...props} />);
+
+    expect(screen.queryByTestId("backlog-compose-widget")).not.toBeInTheDocument();
+  });
+
+  it("Escape returns to the input with the draft and does not close the omnibar", () => {
+    mockBacklogService({});
+    const onClose = jest.fn();
+    renderOmnibar({ onClose });
+
+    fireEvent.click(screen.getByTestId("mock-create-backlog"));
+    const textarea = screen.getByTestId("backlog-compose-textarea");
+    fireEvent.change(textarea, { target: { value: "draft" } });
+    fireEvent.keyDown(textarea, { key: "Escape" });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("combobox", { name: /session source input/i })).toHaveValue("draft");
   });
 
   it("closes immediately on Create, then notifies with a deep link when creation finishes", async () => {

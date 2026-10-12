@@ -136,7 +136,6 @@ export function BacklogItemForm({
     onPaste: handleDescriptionPaste,
   } = useBacklogImageAttachment({
     textareaRef: descriptionRef,
-    value: description,
     setValue: setDescription,
   });
   const fileInputRef = useRef<HTMLInputElement>(null);

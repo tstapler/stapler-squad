@@ -933,6 +933,7 @@ export function Omnibar({
       });
       setError(null);
       setBacklogReviewText(null);
+      setBacklogComposeText(null);
       // Defense-in-depth: handleSubmit's own finally blocks already reset this on
       // success/failure, but this instance never unmounts across open/close cycles, so
       // also clear it here in case onClose() didn't synchronously flip isOpen after a
@@ -1026,6 +1027,13 @@ export function Omnibar({
     [dispatchMode, setDropdownDismissed, setResultHighlightIndex],
   );
 
+  // Seeds compose mode from the typed input, minus a leading "backlog:" trigger,
+  // so the prefix never ends up in the created item.
+  const openBacklogCompose = useCallback(() => {
+    setBacklogComposeText(input.trim().replace(/^backlog:\s*/i, ""));
+    setResultHighlightIndex(-1);
+  }, [input, setResultHighlightIndex]);
+
   const dispatchHighlightedResultAction = useCallback(
     (index: number) => {
       if (index < displayedSessionResults.length) {
@@ -1038,8 +1046,7 @@ export function Omnibar({
           dispatchMode({ kind: "open_creation_direct" });
           setResultHighlightIndex(-1);
         } else {
-          setBacklogComposeText(input.trim());
-          setResultHighlightIndex(-1);
+          openBacklogCompose();
         }
       }
     },
@@ -1050,7 +1057,7 @@ export function Omnibar({
       handleRepoSelect,
       dispatchMode,
       setResultHighlightIndex,
-      input,
+      openBacklogCompose,
     ],
   );
 
@@ -1273,18 +1280,27 @@ export function Omnibar({
     ],
   );
 
+  // Leaving compose mode (cancel/Escape) remounts the input; put focus back on it.
+  const wasComposingRef = useRef(false);
+  useEffect(() => {
+    const composing = backlogComposeText !== null;
+    if (wasComposingRef.current && !composing && isOpen) inputRef.current?.focus();
+    wasComposingRef.current = composing;
+  }, [backlogComposeText, isOpen]);
+
   // Global keyboard handler
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       // Cmd+K or Ctrl+K to open (handled by parent)
-      if (isOpen && e.key === "Escape") {
+      // Compose mode handles its own Escape (returns to the input, keeping the draft).
+      if (isOpen && e.key === "Escape" && backlogComposeText === null) {
         onClose();
       }
     };
 
     document.addEventListener("keydown", handleGlobalKeyDown);
     return () => document.removeEventListener("keydown", handleGlobalKeyDown);
-  }, [isOpen, onClose]);
+  }, [isOpen, onClose, backlogComposeText]);
 
   // Get type info for display
   const typeInfo = useMemo(() => {
@@ -1738,7 +1754,7 @@ export function Omnibar({
         onClick={onClose}
         role="dialog"
         aria-modal="true"
-        aria-labelledby="omnibar-title"
+        aria-labelledby="backlog-compose-title"
         data-testid="omnibar"
       >
         <div className={modal} data-testid="omnibar-modal" onClick={(e) => e.stopPropagation()}>
@@ -1749,7 +1765,10 @@ export function Omnibar({
               onClose();
               void createBacklogInBackground(text);
             }}
-            onCancel={() => setBacklogComposeText(null)}
+            onCancel={(draft) => {
+              setInput(draft);
+              setBacklogComposeText(null);
+            }}
           />
         </div>
       </div>
@@ -2065,10 +2084,7 @@ export function Omnibar({
               dispatchMode({ kind: "open_creation_direct" });
               setResultHighlightIndex(-1);
             }}
-            onCreateBacklog={() => {
-              setBacklogComposeText(input.trim());
-              setResultHighlightIndex(-1);
-            }}
+            onCreateBacklog={openBacklogCompose}
           />
         )}
 

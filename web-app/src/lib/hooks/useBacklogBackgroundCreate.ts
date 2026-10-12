@@ -29,11 +29,18 @@ export function useBacklogBackgroundCreate() {
           onView: () => router.push(`/backlog?item=${item.id}`),
         });
       } else {
+        // The omnibar is already closed, so put the draft where the user can paste it back.
+        const copied = await navigator.clipboard?.writeText(text).then(
+          () => true,
+          () => false
+        );
         addNotification({
           sessionId: "",
           sessionName: "Backlog",
           title: "Backlog item not created",
-          message: "Creating the backlog item failed. Your text was not saved — try again.",
+          message: copied
+            ? "Creating the backlog item failed. Your text was copied to the clipboard."
+            : "Creating the backlog item failed. Your text was not saved — try again.",
           notificationType: "error",
         });
       }
