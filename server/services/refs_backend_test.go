@@ -109,7 +109,9 @@ func TestGitLogSummary_RoutesLogThroughBackendAndFormatsOneline(t *testing.T) {
 func TestGitLogSummary_EmptyOnErrorOrMissingInput(t *testing.T) {
 	fake := gitfake.New("backend")
 	gitfake.Use(t, fake)
-	fake.OnLog = func(backend.RepoLocation, backend.LogRequest) ([]backend.LogEntry, error) { return nil, errors.New("bad range") }
+	fake.OnLog = func(backend.RepoLocation, backend.LogRequest) ([]backend.LogEntry, error) {
+		return nil, errors.New("bad range")
+	}
 
 	assert.Empty(t, gitLogSummary(context.Background(), "/wt", "base", "head"))
 	assert.Empty(t, gitLogSummary(context.Background(), "", "base", "head"))
