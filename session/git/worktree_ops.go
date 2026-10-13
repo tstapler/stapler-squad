@@ -312,6 +312,9 @@ func (g *GitWorktree) worktreeAlreadyRegisteredForBranch() bool {
 
 // findWorktreeForBranch returns the first listed worktree that has targetBranch checked out.
 func findWorktreeForBranch(infos []backend.WorktreeInfo, targetBranch string) (backend.WorktreeInfo, bool) {
+	if targetBranch == "" {
+		return backend.WorktreeInfo{}, false // detached and bare entries have an empty Branch
+	}
 	for _, info := range infos {
 		if strings.TrimPrefix(string(info.Branch), "refs/heads/") == targetBranch {
 			return info, true

@@ -749,6 +749,11 @@ func GetGitDiffRef(ctx context.Context, dir string, baseSHA string, headRef stri
 	}
 	raw, runErr := gitprovider.Backend().Diff(ctx, backend.Local{Root: backend.RepoRoot(dir)}, spec)
 	if runErr != nil {
+		// Surface only the process status, never git's stderr: this error reaches the UI.
+		var cmdErr *backend.CommandError
+		if errors.As(runErr, &cmdErr) && cmdErr.Err != nil {
+			runErr = cmdErr.Err
+		}
 		return "", false, fmt.Errorf("git diff %s in %s: %w", rangeArg, dir, runErr)
 	}
 

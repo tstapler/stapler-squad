@@ -846,7 +846,7 @@ var _ tmux.CommandRunner = (*gitSpyCommandRunner)(nil)
 // NewGitWorktreeFromStorageWithExecutor with WithCommandRunner(spy), calls
 // PushBranch() (a call site with no cmdExec dependency at all -- see
 // worktree_git.go), and asserts the spy -- not tmux.LocalRunner -- actually
-// received the "git push -u origin <branch>" call, scoped to the worktree
+// received the "git push --set-upstream origin <branch>" call, scoped to the worktree
 // path. Proves injection is wired all the way through to a real call site,
 // not just stored on the struct.
 func TestWithCommandRunner_InjectedRunnerIsActuallyUsed(t *testing.T) {

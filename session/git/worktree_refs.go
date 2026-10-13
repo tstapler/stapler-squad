@@ -19,7 +19,9 @@ func (g *GitWorktree) gitBackend() backend.Backend {
 		return g.refBackend
 	}
 	if r := g.runner; r != nil && !r.IsRemote() {
-		if _, isDefault := r.(tmux.LocalRunner); !isDefault {
+		switch r.(type) {
+		case tmux.LocalRunner, *tmux.LocalRunner:
+		default:
 			return cli.New(r)
 		}
 	}

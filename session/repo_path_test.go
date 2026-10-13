@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/stretchr/testify/assert"
 	"github.com/tstapler/stapler-squad/github"
 	ssqlog "github.com/tstapler/stapler-squad/log"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
@@ -764,4 +766,14 @@ func TestCreateBacklogWorktree_should_Error_When_RepoPathIsEmpty(t *testing.T) {
 	if !strings.Contains(err.Error(), "repoPath must not be empty") {
 		t.Errorf("CreateBacklogWorktree(\"\", ...) error = %q, want it to mention repoPath must not be empty", err.Error())
 	}
+}
+
+func TestRedactedCloneError_HidesCredentialButKeepsCause(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("fatal: repository 'https://x-access-token:s3cret@github.com/o/r.git' not found")
+
+	err := redactedCloneError(cause, "https://x-access-token:s3cret@github.com/o/r.git")
+
+	assert.NotContains(t, err.Error(), "s3cret")
+	assert.ErrorIs(t, err, cause)
 }
