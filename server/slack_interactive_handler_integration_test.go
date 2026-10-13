@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/server/services"
 )
 
@@ -38,10 +37,27 @@ func computeTestSlackInteractiveSignature(secret, timestamp, body string) string
 // gate (server.go, Story 2.1.3) reads the value this test intends.
 func setSlackInteractiveTestConfig(t *testing.T, approvalEnabled bool) {
 	t.Helper()
-	envtest.NewIsolatedStateDir(t)
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", tempDirTolerantOfStragglers(t))
 	cfg := config.LoadConfig()
 	cfg.Slack.ApprovalEnabled = approvalEnabled
 	require.NoError(t, config.SaveConfig(cfg))
+}
+
+// newSlackInteractiveTestServer builds the real server and registers its
+// Shutdown as cleanup so the goroutines it joins (e.g. the delivery-gate stats
+// writer) stop before the state dir is removed. Shutdown does not join every
+// background goroutine (see tempDirTolerantOfStragglers), hence the tolerant
+// temp dir in setSlackInteractiveTestConfig too. Cleanups run LIFO, so this
+// runs before that dir's removal.
+func newSlackInteractiveTestServer(t *testing.T, deps *ServerDependencies) *Server {
+	t.Helper()
+	srv := NewServerWithDeps("localhost:0", deps)
+	t.Cleanup(func() {
+		if err := srv.Shutdown(); err != nil {
+			t.Logf("srv.Shutdown: %v", err)
+		}
+	})
+	return srv
 }
 
 const slackInteractiveIntegrationSecret = "integration-test-signing-secret"
@@ -66,7 +82,7 @@ func TestSlackInteractiveRoute_ResolvesApproval_When_ApprovalEnabledAndSignature
 		ToolName:  "Bash",
 	}))
 
-	srv := NewServerWithDeps("localhost:0", deps)
+	srv := newSlackInteractiveTestServer(t, deps)
 
 	payloadJSON := `{"actions":[{"action_id":"approve","value":"appr-int-1:allow"}]}`
 	body := "payload=" + url.QueryEscape(payloadJSON)
@@ -115,7 +131,7 @@ func TestSlackInteractiveRoute_Returns404_When_ApprovalDisabled(t *testing.T) {
 		ToolName:  "Bash",
 	}))
 
-	srv := NewServerWithDeps("localhost:0", deps)
+	srv := newSlackInteractiveTestServer(t, deps)
 
 	payloadJSON := `{"actions":[{"action_id":"approve","value":"appr-int-2:allow"}]}`
 	body := "payload=" + url.QueryEscape(payloadJSON)
