@@ -612,9 +612,92 @@ func (s *BacklogService) AddBacklogItemDependency(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reload backlog item after adding dependency: %w", err))
 	}
 
-	return connect.NewResponse(&sessionv1.AddBacklogItemDependencyResponse{
-		Item: backlogItemToProto(updated, s.engine, s.buildCostLookup()),
+	pb := backlogItemToProto(updated, s.engine, s.buildCostLookup())
+	s.attachDependencies(ctx, pb)
+	return connect.NewResponse(&sessionv1.AddBacklogItemDependencyResponse{Item: pb}), nil
+}
+
+// RemoveBacklogItemDependency deletes the blocker->blocked edge. Idempotent:
+// removing an edge that does not exist succeeds and returns the blocked item.
+// +api: backlog:remove-item-dependency
+func (s *BacklogService) RemoveBacklogItemDependency(
+	ctx context.Context,
+	req *connect.Request[sessionv1.RemoveBacklogItemDependencyRequest],
+) (*connect.Response[sessionv1.RemoveBacklogItemDependencyResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+	if req.Msg.BlockerItemId == "" || req.Msg.BlockedItemId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("blocker_item_id and blocked_item_id are required"))
+	}
+	edge := session.BacklogItemDependencyEdge{
+		BlockerID: req.Msg.BlockerItemId,
+		BlockedID: req.Msg.BlockedItemId,
+	}
+	if err := s.storage.RemoveBacklogItemDependency(ctx, edge); err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item not found: %w", err))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to remove backlog item dependency: %w", err))
+	}
+	updated, err := s.storage.GetBacklogItem(ctx, req.Msg.BlockedItemId)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reload backlog item after removing dependency: %w", err))
+	}
+	pb := backlogItemToProto(updated, s.engine, s.buildCostLookup())
+	s.attachDependencies(ctx, pb)
+	return connect.NewResponse(&sessionv1.RemoveBacklogItemDependencyResponse{Item: pb}), nil
+}
+
+// ListBacklogItemDependencies returns both directions of an item's dependency edges.
+// +api: backlog:list-item-dependencies
+func (s *BacklogService) ListBacklogItemDependencies(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListBacklogItemDependenciesRequest],
+) (*connect.Response[sessionv1.ListBacklogItemDependenciesResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+	if req.Msg.ItemId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("item_id is required"))
+	}
+	blockedBy, blocking, err := s.storage.ListBacklogItemDependencies(ctx, req.Msg.ItemId)
+	if err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item not found: %w", err))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list backlog item dependencies: %w", err))
+	}
+	return connect.NewResponse(&sessionv1.ListBacklogItemDependenciesResponse{
+		BlockedBy: dependencyRefsToProto(blockedBy),
+		Blocking:  dependencyRefsToProto(blocking),
 	}), nil
+}
+
+// attachDependencies fills pb.BlockedBy/Blocking. Best-effort: a failed lookup
+// is logged and leaves the fields empty rather than failing the whole read.
+// Deliberately not called from ListBacklogItems (N+1).
+func (s *BacklogService) attachDependencies(ctx context.Context, pb *sessionv1.BacklogItem) {
+	blockedBy, blocking, err := s.storage.ListBacklogItemDependencies(ctx, pb.Id)
+	if err != nil {
+		log.ErrorLog().Printf("[attachDependencies] failed to load dependencies for %s: %v", pb.Id, err)
+		return
+	}
+	pb.BlockedBy = dependencyRefsToProto(blockedBy)
+	pb.Blocking = dependencyRefsToProto(blocking)
+}
+
+func dependencyRefsToProto(refs []session.BacklogItemDependencyRef) []*sessionv1.DependencyInfo {
+	out := make([]*sessionv1.DependencyInfo, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, &sessionv1.DependencyInfo{
+			ItemId:   r.ItemID,
+			PublicId: r.PublicID,
+			Title:    r.Title,
+			Status:   r.Status,
+		})
+	}
+	return out
 }
 
 // --- TransitionBacklogItemStatus ---

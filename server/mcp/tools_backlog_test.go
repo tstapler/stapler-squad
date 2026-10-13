@@ -7696,3 +7696,36 @@ func TestRequestReview_RejectsRecoveryWhileReviewerLive(t *testing.T) {
 	require.False(t, m["success"].(bool))
 	require.Contains(t, m["error"].(map[string]interface{})["message"], "active review session")
 }
+
+// TestGetBacklogItem_should_ListDependencies_When_EdgesExist verifies the MCP
+// get_backlog_item output names both the blocker (on the dependent) and the
+// dependent (on the blocker) with title and status.
+func TestGetBacklogItem_should_ListDependencies_When_EdgesExist(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	a, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "Blocker A"})
+	require.NoError(t, err)
+	b, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "Dependent B"})
+	require.NoError(t, err)
+	require.NoError(t, storage.AddBacklogItemDependency(ctx, session.BacklogItemDependencyEdge{BlockerID: a.ID, BlockedID: b.ID}))
+	handler := &backlogHandlers{storage: storage}
+
+	textFor := func(id string) string {
+		res, err := handler.getBacklogItem(ctx, makeToolReq(map[string]interface{}{"item_id": id}))
+		require.NoError(t, err)
+		tc, ok := res.Content[0].(mcpgo.TextContent)
+		require.True(t, ok)
+		return tc.Text
+	}
+
+	textB := textFor(b.ID)
+	require.Contains(t, textB, "## Dependencies")
+	require.Contains(t, textB, "blocked_by:")
+	require.Contains(t, textB, a.ID)
+	require.Contains(t, textB, "Blocker A")
+
+	textA := textFor(a.ID)
+	require.Contains(t, textA, "blocking:")
+	require.Contains(t, textA, b.ID)
+	require.Contains(t, textA, "Dependent B")
+}

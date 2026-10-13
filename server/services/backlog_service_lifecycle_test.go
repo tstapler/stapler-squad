@@ -1664,3 +1664,106 @@ func TestAddBacklogItemDependency_should_ReturnUnavailable_When_StorageNotWired(
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
 }
+
+// ─── Dependency visibility + Remove/List RPCs ──────────────────────────────────
+
+func newDependencyPair(t *testing.T, svc *BacklogService) (blocker, blocked *sessionv1.BacklogItem) {
+	t.Helper()
+	a, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{Title: "A blocker"}))
+	require.NoError(t, err)
+	b, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{Title: "B dependent"}))
+	require.NoError(t, err)
+	_, err = svc.AddBacklogItemDependency(t.Context(), connect.NewRequest(&sessionv1.AddBacklogItemDependencyRequest{
+		BlockerItemId: a.Msg.Item.Id,
+		BlockedItemId: b.Msg.Item.Id,
+	}))
+	require.NoError(t, err)
+	return a.Msg.Item, b.Msg.Item
+}
+
+func TestGetBacklogItem_should_ListBlockedByAndBlocking_When_DependencyExists(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+	a, b := newDependencyPair(t, svc)
+
+	gotB, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: b.Id}))
+	require.NoError(t, err)
+	require.Len(t, gotB.Msg.Item.BlockedBy, 1)
+	assert.Equal(t, a.Id, gotB.Msg.Item.BlockedBy[0].ItemId)
+	assert.Equal(t, "A blocker", gotB.Msg.Item.BlockedBy[0].Title)
+	assert.NotEmpty(t, gotB.Msg.Item.BlockedBy[0].Status)
+
+	gotA, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: a.Id}))
+	require.NoError(t, err)
+	require.Len(t, gotA.Msg.Item.Blocking, 1)
+	assert.Equal(t, b.Id, gotA.Msg.Item.Blocking[0].ItemId)
+}
+
+func TestGetBacklogItem_should_LeaveDependenciesEmpty_When_NoEdges(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+	item, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{Title: "solo"}))
+	require.NoError(t, err)
+
+	got, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: item.Msg.Item.Id}))
+	require.NoError(t, err)
+	assert.Empty(t, got.Msg.Item.BlockedBy)
+	assert.Empty(t, got.Msg.Item.Blocking)
+}
+
+func TestGetBacklogItem_should_ClearBlockedBy_When_BlockerHardDeleted(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+	a, b := newDependencyPair(t, svc)
+
+	_, err := svc.DeleteBacklogItem(t.Context(), connect.NewRequest(&sessionv1.DeleteBacklogItemRequest{ItemId: a.Id}))
+	require.NoError(t, err)
+
+	got, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: b.Id}))
+	require.NoError(t, err)
+	assert.Empty(t, got.Msg.Item.BlockedBy)
+}
+
+func TestRemoveBacklogItemDependency_should_RemoveEdgeAndBeIdempotent(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+	a, b := newDependencyPair(t, svc)
+	req := &sessionv1.RemoveBacklogItemDependencyRequest{BlockerItemId: a.Id, BlockedItemId: b.Id}
+
+	resp, err := svc.RemoveBacklogItemDependency(t.Context(), connect.NewRequest(req))
+	require.NoError(t, err)
+	assert.Equal(t, b.Id, resp.Msg.Item.Id)
+	assert.Empty(t, resp.Msg.Item.BlockedBy)
+
+	// Second removal of the now-missing edge must still succeed.
+	_, err = svc.RemoveBacklogItemDependency(t.Context(), connect.NewRequest(req))
+	require.NoError(t, err)
+}
+
+func TestRemoveBacklogItemDependency_should_ReturnNotFound_When_ItemMissing(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+	a, _ := newDependencyPair(t, svc)
+
+	_, err := svc.RemoveBacklogItemDependency(t.Context(), connect.NewRequest(&sessionv1.RemoveBacklogItemDependencyRequest{
+		BlockerItemId: a.Id,
+		BlockedItemId: "00000000-0000-0000-0000-000000000000",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
+}
+
+func TestListBacklogItemDependencies_should_ReturnBothDirections(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+	a, b := newDependencyPair(t, svc)
+
+	resp, err := svc.ListBacklogItemDependencies(t.Context(), connect.NewRequest(&sessionv1.ListBacklogItemDependenciesRequest{ItemId: b.Id}))
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.BlockedBy, 1)
+	assert.Equal(t, a.Id, resp.Msg.BlockedBy[0].ItemId)
+	assert.Empty(t, resp.Msg.Blocking)
+
+	_, err = svc.ListBacklogItemDependencies(t.Context(), connect.NewRequest(&sessionv1.ListBacklogItemDependenciesRequest{}))
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}

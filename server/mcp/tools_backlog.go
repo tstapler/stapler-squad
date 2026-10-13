@@ -428,6 +428,8 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		session.WriteDescriptionSection(&sb, item.Description, 2000)
 	}
 
+	h.writeDependenciesSection(ctx, &sb, itemID)
+
 	// Latest review verdict, if one has been submitted. This is the primary way a
 	// still-running work session discovers review feedback without being killed and
 	// respawned — see request_review's guidance below.
@@ -3161,4 +3163,27 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 		),
 		h.waitForBacklogEvent,
 	)
+}
+
+// writeDependenciesSection renders blocked_by/blocking edges (id, title,
+// status) so an agent can see why an item is blocked. Titles come from other
+// items, so they are sanitized like any other agent-visible user text.
+func (h *backlogHandlers) writeDependenciesSection(ctx context.Context, sb *strings.Builder, itemID string) {
+	blockedBy, blocking, err := h.storage.ListBacklogItemDependencies(ctx, itemID)
+	if err != nil || (len(blockedBy) == 0 && len(blocking) == 0) {
+		return
+	}
+	sb.WriteString("## Dependencies\n")
+	writeRefs := func(label string, refs []session.BacklogItemDependencyRef) {
+		if len(refs) == 0 {
+			return
+		}
+		fmt.Fprintf(sb, "%s:\n", label)
+		for _, r := range refs {
+			fmt.Fprintf(sb, "- %s \"%s\" (status: %s)\n", r.ItemID, session.SanitizeForAgentContext(r.Title, 200), r.Status)
+		}
+	}
+	writeRefs("blocked_by", blockedBy)
+	writeRefs("blocking", blocking)
+	sb.WriteString("\n")
 }
