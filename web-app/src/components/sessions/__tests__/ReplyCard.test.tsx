@@ -239,6 +239,17 @@ describe("ReplyCard", () => {
     expect(screen.queryByTestId("reply-option-1")).toBeNull();
   });
 
+  it("shows_answer_in_the_terminal_for_parallel_questions_and_buttons_for_a_single_one", () => {
+    const { unmount } = render(
+      <ReplyCard sessionId="s1" notification={{ ...replyable, occurrenceCount: 2 }} />,
+    );
+    expect(screen.getByTestId("reply-unavailable")).toHaveTextContent("Answer in the terminal");
+    expect(screen.queryByTestId("reply-option-1")).toBeNull();
+    unmount();
+    render(<ReplyCard sessionId="s1" notification={{ ...replyable, occurrenceCount: 1 }} />);
+    expect(screen.getByTestId("reply-option-1")).toBeInTheDocument();
+  });
+
   it("renders_nothing_for_a_notification_that_is_not_a_question", () => {
     const { container } = render(
       <ReplyCard sessionId="s1" notification={{ ...replyable, notificationType: "error" }} />,
