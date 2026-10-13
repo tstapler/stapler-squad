@@ -292,7 +292,7 @@ func TestBacklogLifecycleListener_OnSessionExited_WorkSession_TriggersDequeue(t 
 
 	select {
 	case <-dequeuer.called:
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for DequeueNextQueuedItems to be called via onSessionExited")
 	}
 }
@@ -316,7 +316,7 @@ func TestBacklogLifecycleListener_ReconcileStuck_TriggersDequeue(t *testing.T) {
 
 	select {
 	case <-dequeuer.called:
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for DequeueNextQueuedItems to be called via ReconcileStuck")
 	}
 }
@@ -1181,7 +1181,7 @@ func TestMarkAbandonedReview_AutoRespawnsReview_OncePastGrace(t *testing.T) {
 	select {
 	case id := <-respawner.calls:
 		assert.Equal(t, item.ID, id)
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timed out waiting for AutoRespawnReview to be dispatched")
 	}
 
@@ -3829,7 +3829,7 @@ func TestHandleReviewSessionExited_Fail_InvokesAutoReopener(t *testing.T) {
 	select {
 	case gotItemID := <-reopener.called:
 		assert.Equal(t, item.ID, gotItemID)
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
 	}
 	assert.False(t, fakeCreator.pushCalled, "a FAIL verdict must never push/create a PR")
@@ -3857,7 +3857,7 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesAndInvokesAutoReopener(t *t
 
 	select {
 	case <-reopener.called:
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
 	}
 	assert.Contains(t, notifier.titles(), "Review session ended without a verdict")
@@ -3912,7 +3912,7 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesOnlyOnce_AcrossRepeatedSwee
 
 	select {
 	case <-reopener.called:
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview on tick 1 (ungated — no bouncing row yet)")
 	}
 	assert.Equal(t, []string{"Review session ended without a verdict"}, notifier.titles(),
@@ -3984,7 +3984,7 @@ func TestAutoReopenWithBackoffGate_should_MarkBounceCapExhausted_When_JustParked
 
 	select {
 	case <-reopener.called:
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
 	}
 
@@ -4035,7 +4035,7 @@ func TestAutoReopenWithBackoffGate_should_NotMarkBounceCapExhausted_When_NotYetP
 
 	select {
 	case <-reopener.called:
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
 	}
 
@@ -4087,7 +4087,7 @@ func TestAutoReopenWithBackoffGate_should_PassActualItemStatus_When_MarkingBounc
 
 	select {
 	case <-reopener.called:
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
 	}
 
@@ -4128,7 +4128,7 @@ func TestBacklogLifecycleListener_OnSessionExited_ReviewSession_RoutesToHandleRe
 	select {
 	case gotItemID := <-reopener.called:
 		assert.Equal(t, reviewIS.BacklogItemID, gotItemID)
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called via onSessionExited routing")
 	}
 }
@@ -4199,7 +4199,7 @@ func TestBacklogLifecycleListener_HeadlessPoolAlone_NoLongerTriggersReviewGateSp
 	wait.RequireEventually(t, func() bool {
 		fetched, ferr := storage.GetBacklogItem(ctx, createdItem.ID)
 		return ferr == nil && fetched.Status == string(BacklogStatusReview)
-	}, 30*time.Second, 20*time.Millisecond)
+	}, 10*time.Second, 20*time.Millisecond)
 
 	sessions, err := storage.ListItemSessions(ctx, createdItem.ID)
 	require.NoError(t, err)
@@ -4272,7 +4272,7 @@ func TestReviewGateSpawn_should_FireForReviewToPrPending_When_AutomatedReviewGat
 			}
 		}
 		return reviewEntry != nil
-	}, 30*time.Second, 20*time.Millisecond, "the built-in review->pr_pending gate must still spawn a review session and record its ItemSession")
+	}, 10*time.Second, 20*time.Millisecond, "the built-in review->pr_pending gate must still spawn a review session and record its ItemSession")
 	require.Equal(t, 1, spawner.getCallCount())
 
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)

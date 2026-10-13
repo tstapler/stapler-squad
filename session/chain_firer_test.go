@@ -117,6 +117,9 @@ func TestTransitionBacklogItemStatus_should_returnBeforeChainFireCreateSessionBe
 
 	started := make(chan struct{})
 	unblock := make(chan struct{})
+	var unblockOnce sync.Once
+	releaseFirer := func() { unblockOnce.Do(func() { close(unblock) }) }
+	t.Cleanup(releaseFirer) // frees the blocked firer goroutine if an assertion fails first
 	firer := &blockingTriggerFirer{started: started, unblock: unblock}
 
 	cf := NewChainFirer(fx.repo, fx.workflows, fx.fireEvents, firer, enabledCfg())
@@ -156,12 +159,12 @@ func TestTransitionBacklogItemStatus_should_returnBeforeChainFireCreateSessionBe
 		t.Fatal("chain-fire was never dispatched from TransitionBacklogItemStatus")
 	}
 
-	close(unblock)
+	releaseFirer()
 
 	wait.RequireEventually(t, func() bool {
 		latest, getErr := fx.repo.GetBacklogItem(ctx, item.ID)
 		return getErr == nil && latest.ChainFired
-	}, 30*time.Second, 20*time.Millisecond, "ChainFired must eventually be persisted once the async fire completes")
+	}, 10*time.Second, 20*time.Millisecond, "ChainFired must eventually be persisted once the async fire completes")
 }
 
 // TestChainFirer_Fire_should_rejectAndMarkChainFired_When_DepthAtOrAboveMax
