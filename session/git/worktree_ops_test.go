@@ -26,7 +26,7 @@ import (
 // retry-window test costs no fork (a forked git can stall past the loop's budget on a loaded host).
 func createBranchNative(t *testing.T, repoDir, branchName string) {
 	t.Helper()
-	repo, err := git.PlainOpen(repoDir)
+	repo, err := OpenRepo(repoDir)
 	if err != nil {
 		t.Errorf("open %s: %v", repoDir, err)
 		return
