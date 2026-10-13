@@ -29,12 +29,18 @@ func BoundedStopTail(raw string) string {
 		s = strings.Join(lines[len(lines)-stopTailMaxLines:], "\n")
 	}
 
-	if len(s) > stopTailMaxBytes {
-		cut := len(s) - stopTailMaxBytes
-		for cut < len(s) && !utf8.RuneStart(s[cut]) {
-			cut++
-		}
-		s = s[cut:]
+	return TailBytes(s, stopTailMaxBytes)
+}
+
+// TailBytes keeps the last n bytes of s, advancing the cut forward to a rune
+// boundary so valid UTF-8 input stays valid.
+func TailBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
 	}
-	return s
+	cut := len(s) - n
+	for cut < len(s) && !utf8.RuneStart(s[cut]) {
+		cut++
+	}
+	return s[cut:]
 }

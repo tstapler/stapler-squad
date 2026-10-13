@@ -23,7 +23,6 @@ func TestStopReason_Class_CoversEveryValue(t *testing.T) {
 	}
 
 	for _, r := range append([]StopReason{""}, AllStopReasons...) {
-		r := r
 		t.Run(fmt.Sprintf("%q", string(r)), func(t *testing.T) {
 			t.Parallel()
 			expected, ok := want[r]
@@ -125,6 +124,26 @@ func TestClassifyObserved_Table(t *testing.T) {
 			ObservedExited,
 		},
 		{
+			"failed capture with zero-value liveness is unknown, not exited",
+			StopSnapshot{Bucket: BucketActive, CaptureErr: "capture-pane failed"},
+			ObservedUnknown,
+		},
+		{
+			"failed capture with tmux alive but no controller is unknown",
+			StopSnapshot{Bucket: BucketActive, TmuxAlive: true, CaptureErr: "capture-pane failed"},
+			ObservedUnknown,
+		},
+		{
+			"failed capture but liveness proven falls through to bucket",
+			StopSnapshot{Bucket: BucketActive, TmuxAlive: true, ControllerActive: true, CaptureErr: "capture-pane failed"},
+			ObservedWorking,
+		},
+		{
+			"pane death outranks failed capture (exit 2 is crashed)",
+			StopSnapshot{PaneDead: true, ExitCode: 2, CaptureErr: "capture-pane failed"},
+			ObservedCrashed,
+		},
+		{
 			"pane death outranks missing controller (exit 2 is crashed)",
 			StopSnapshot{Bucket: BucketIdle, TmuxAlive: true, ControllerActive: false, PaneDead: true, ExitCode: 2},
 			ObservedCrashed,
@@ -137,7 +156,6 @@ func TestClassifyObserved_Table(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			if got := ClassifyObserved(tc.snap); got != tc.want {
@@ -210,7 +228,6 @@ func TestDecideStallAction_RuleTable(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			if got := DecideStallAction(tc.in); got != tc.want {
@@ -332,7 +349,9 @@ func TestEnumSlices_NoDuplicatesAndNonEmpty(t *testing.T) {
 			seen[v] = true
 		}
 	}
-	var states, buckets, actions []string
+	states := make([]string, 0, len(AllObservedStates))
+	buckets := make([]string, 0, len(AllStatusBuckets))
+	actions := make([]string, 0, len(AllStallActions))
 	for _, s := range AllObservedStates {
 		states = append(states, s.String())
 	}

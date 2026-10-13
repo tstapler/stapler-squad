@@ -45,7 +45,6 @@ func TestSanitizeStopTail_CanaryFamilies(t *testing.T) {
 	}
 
 	for family, tail := range tails {
-		family, tail := family, tail
 		t.Run(family, func(t *testing.T) {
 			t.Parallel()
 			got := sanitizeStopTail(tail)
@@ -86,7 +85,6 @@ func TestSanitizeStopTail_OneLineAndCap(t *testing.T) {
 		"odd multibyte":  "x" + strings.Repeat("€", stopTailSinkMaxBytes),
 	}
 	for name, in := range cases {
-		name, in := name, in
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			got := sanitizeStopTail(in)
@@ -135,15 +133,6 @@ func TestSanitizeStopTail_FailClosedResiduals(t *testing.T) {
 	clientLine := "export client_secret_key=" + "abcd1234efgh"
 	keyBody := "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj"
 
-	t.Run("env style names are not caught by redactErrorDetail alone", func(t *testing.T) {
-		t.Parallel()
-		for _, line := range []string{awsLine, clientLine} {
-			if redactErrorDetail(line) != line {
-				t.Errorf("redactErrorDetail now covers %q; the fail-closed rule may be redundant", line)
-			}
-		}
-	})
-
 	t.Run("env style names are withheld", func(t *testing.T) {
 		t.Parallel()
 		for _, line := range []string{awsLine, clientLine} {
@@ -157,6 +146,32 @@ func TestSanitizeStopTail_FailClosedResiduals(t *testing.T) {
 		t.Parallel()
 		got := sanitizeStopTail("line one\n" + keyBody + "\nline three")
 		if got != stopTailWithheldMarker {
+			t.Errorf("got %q, want withheld", got)
+		}
+	})
+
+	t.Run("rule and digest lines are not key material", func(t *testing.T) {
+		t.Parallel()
+		sha := strings.Repeat("0123456789abcdef", 4)[:40]
+		for name, line := range map[string]string{
+			"equals rule":  strings.Repeat("=", 60),
+			"plus rule":    strings.Repeat("+", 45),
+			"letter run":   strings.Repeat("a", 50),
+			"git sha":      sha,
+			"sha256 hex":   strings.Repeat("0123456789abcdef", 4),
+			"padded equal": "== " + strings.Repeat("=", 50),
+		} {
+			want := strings.TrimSpace(line)
+			if got := sanitizeStopTail("ok\n" + line + "\nok"); got == stopTailWithheldMarker {
+				t.Errorf("%s: %q was withheld", name, want)
+			}
+		}
+	})
+
+	t.Run("mixed-case base64 key body with digits is withheld", func(t *testing.T) {
+		t.Parallel()
+		body := strings.Repeat("aB3dE5gH", 6)
+		if got := sanitizeStopTail(body); got != stopTailWithheldMarker {
 			t.Errorf("got %q, want withheld", got)
 		}
 	})
@@ -183,7 +198,6 @@ func TestSanitizeStopTail_FailClosedRulesNoFalsePositiveOnCommonTails(t *testing
 		"monkey assignment":  "monkey=banana",
 	}
 	for name, tail := range passes {
-		name, tail := name, tail
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if got := sanitizeStopTail(tail); got == stopTailWithheldMarker || got == "" {

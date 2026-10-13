@@ -146,8 +146,11 @@ type StopSnapshot struct {
 }
 
 // ClassifyObserved maps a snapshot to what the pane was doing. Precedence:
-// pane death, then tmux liveness, then missing controller, then the bucket.
-// Liveness beats the bucket: a dead pane's last scrape can still read "active".
+// pane death, then a failed capture with liveness unproven, then tmux
+// liveness, then missing controller, then the bucket. Liveness beats the
+// bucket: a dead pane's last scrape can still read "active". A failed capture
+// leaves TmuxAlive/ControllerActive at their zero values, so those read as
+// "not alive" only by default; that is unknown, not exited.
 func ClassifyObserved(s StopSnapshot) ObservedState {
 	switch {
 	case s.PaneDead:
@@ -155,6 +158,8 @@ func ClassifyObserved(s StopSnapshot) ObservedState {
 			return ObservedExited
 		}
 		return ObservedCrashed
+	case s.CaptureErr != "" && (!s.TmuxAlive || !s.ControllerActive):
+		return ObservedUnknown
 	case !s.TmuxAlive, !s.ControllerActive:
 		return ObservedExited
 	}
@@ -198,6 +203,8 @@ func (a StallAction) String() string { return string(a) }
 // NudgeEnabled is already the AND of both nudge flags (computed by the caller).
 // ItemInWorkStatus is true while the backlog item is still in the status the
 // work role works in; after request_review the pane idles by design.
+// NudgeAllowed and ResuperviseAllowed are the caller's budget/headroom checks
+// (attempt caps, cooldowns) for the nudge and resupervise rows respectively.
 type StallDecisionInput struct {
 	Reason             StopReason
 	State              ObservedState

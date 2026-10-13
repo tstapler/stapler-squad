@@ -11,8 +11,8 @@ func TestBoundedStopTail_RuneSafeAtByteCap(t *testing.T) {
 	t.Parallel()
 
 	// One long line so the byte cap (not the line cap) is what bites.
-	// 10,000 bytes total, ending in "é" (2 bytes) with the cut landing inside a rune.
-	body := strings.Repeat("é", 4999) + "tail-é" // 4999*2 + 4 + 2 = 10,004 bytes; cut offset is odd-aligned
+	// 10,005 bytes total (4999*2 + len("tail-") + 2), cut lands inside a rune.
+	body := strings.Repeat("é", 4999) + "tail-é"
 	got := BoundedStopTail(body)
 
 	if !utf8.ValidString(got) {
@@ -114,7 +114,6 @@ func TestBoundedStopTail_EdgeInputs(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := BoundedStopTail(tc.in)
@@ -123,5 +122,21 @@ func TestBoundedStopTail_EdgeInputs(t *testing.T) {
 			}
 			tc.want(t, got)
 		})
+	}
+}
+
+func TestTailBytes(t *testing.T) {
+	t.Parallel()
+
+	if got := TailBytes("abc", 5); got != "abc" {
+		t.Errorf("under cap: got %q", got)
+	}
+	if got := TailBytes("abcdef", 3); got != "def" {
+		t.Errorf("ascii: got %q", got)
+	}
+	// "€" is 3 bytes; a 4-byte tail of "a€€" would start mid-rune and must advance.
+	got := TailBytes("a€€", 4)
+	if !utf8.ValidString(got) || got != "€" {
+		t.Errorf("multibyte: got %q", got)
 	}
 }

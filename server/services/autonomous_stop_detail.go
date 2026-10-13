@@ -3,7 +3,6 @@ package services
 import (
 	"strings"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -40,7 +39,7 @@ func sanitizeStopTail(raw string) string {
 	}
 
 	s = redactErrorDetail(s)
-	return capTailBytes(foldToOneLine(s), stopTailSinkMaxBytes)
+	return session.TailBytes(foldToOneLine(s), stopTailSinkMaxBytes)
 }
 
 func tailHasSecretLine(s string) bool {
@@ -82,22 +81,29 @@ func isEnvNameByte(b byte) bool {
 }
 
 // looksLikeKeyBody reports whether the whole (trimmed) line is base64-alphabet
-// text of at least keyBodyMinLen runes with no "//", i.e. headerless key material
-// rather than a path or URL (those contain '.', ':' or "//").
+// text of at least keyBodyMinLen bytes with no "//", i.e. headerless key material
+// rather than a path or URL (those contain '.', ':' or "//"). Rule lines
+// ("=====", "+++++"), single-letter runs and all-lowercase-hex digests (git
+// SHAs) are not key material: a key body must mix a letter and a digit.
 func looksLikeKeyBody(line string) bool {
 	line = strings.TrimSpace(line)
 	if len(line) < keyBodyMinLen || strings.Contains(line, "//") {
 		return false
 	}
+	hasLetter, hasDigit, allLowerHex, allSame := false, false, true, true
 	for i := 0; i < len(line); i++ {
 		c := line[i]
-		isBase64 := c == '+' || c == '/' || c == '=' ||
-			(c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-		if !isBase64 {
+		isDigit := c >= '0' && c <= '9'
+		isLetter := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+		if !isDigit && !isLetter && c != '+' && c != '/' && c != '=' {
 			return false
 		}
+		hasDigit = hasDigit || isDigit
+		hasLetter = hasLetter || isLetter
+		allLowerHex = allLowerHex && (isDigit || (c >= 'a' && c <= 'f'))
+		allSame = allSame && c == line[0]
 	}
-	return true
+	return hasLetter && hasDigit && !allSame && !allLowerHex
 }
 
 // foldToOneLine collapses whitespace runs and joins non-empty lines with
@@ -110,16 +116,4 @@ func foldToOneLine(s string) string {
 		}
 	}
 	return strings.Join(parts, stopTailLineSeparator)
-}
-
-// capTailBytes keeps the last max bytes of s, cutting forward to a rune boundary.
-func capTailBytes(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	cut := len(s) - max
-	for cut < len(s) && !utf8.RuneStart(s[cut]) {
-		cut++
-	}
-	return s[cut:]
 }
