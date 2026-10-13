@@ -91,6 +91,9 @@ func (v *repoView) refDir(name string) string {
 // maxRefDirDepth bounds the loose-ref walk; git refs rarely nest past a handful of directories.
 const maxRefDirDepth = 40
 
+// maxRefDirs bounds the directories one listing visits, so symlinks that fan out stay cheap.
+const maxRefDirs = 10000
+
 // perWorktreeRefPrefixes live in the per-worktree git dir; every other ref is shared.
 var perWorktreeRefPrefixes = []string{"refs/bisect/", "refs/worktree/", "refs/rewritten/"} //nolint:gochecknoglobals read-only
 
@@ -239,10 +242,12 @@ func (v *repoView) walkRefNames() (sortedNames []string, loose map[string]bool, 
 	// (refs/ or refs/heads/ moved to shared storage); a symlinked ref FILE is git's legacy
 	// symref form, which this reader does not model.
 	var walk func(dir, name string, skipPerWorktree bool, depth int) error
+	visited := 0
 	walk = func(dir, name string, skipPerWorktree bool, depth int) error {
-		if depth > maxRefDirDepth {
-			return fmt.Errorf("refs nest deeper than %d directories (a symlink loop?)", maxRefDirDepth)
+		if depth > maxRefDirDepth || visited >= maxRefDirs {
+			return errors.New("refs tree is too large to list in-process (symlinked directories that fan out or loop?)")
 		}
+		visited++
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {

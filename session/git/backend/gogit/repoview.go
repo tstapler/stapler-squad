@@ -26,7 +26,8 @@ const maxTagDepth = 10
 
 var errNotCommit = errors.New("object is not a commit")
 
-// repoView is one call's handle on a repository: a fresh *git.Repository (see openStorerOnly), discarded when the call returns. It is not safe for concurrent use.
+// repoView is one call's handle on a repository: a fresh *git.Repository (see
+// openStorerOnly), discarded when the call returns. It is not safe for concurrent use.
 type repoView struct {
 	b      *Backend
 	lay    layout

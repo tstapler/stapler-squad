@@ -293,7 +293,7 @@ func TestParitySymlinkedLayouts(t *testing.T) {
 func symlinkFallbackExcused(d gitoracle.Diff) bool {
 	switch d.Place {
 	case "head-symlink":
-		return true // git resolves a symlinked HEAD as a legacy symref; every read starts at HEAD
+		return true // git resolves a symlinked HEAD as a legacy symref; locating the repository reads HEAD, so every op falls back
 	case "ref-file-symlink":
 		return strings.HasPrefix(d.Op, "ListRefs") || strings.Contains(d.Op, "feature")
 	case "alternates-clone", "alternates-clone-via-symlink":
