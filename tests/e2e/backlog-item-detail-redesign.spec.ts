@@ -51,10 +51,11 @@ test.describe("backlog item detail redesign", () => {
   });
 
   test.beforeEach(async ({ page }) => {
-    // The first-run onboarding modal intercepts clicks and aria-hides the page.
+    // The first-run onboarding and backlog tour modals intercept clicks and aria-hide the page.
     await page.addInitScript(() => {
       try {
         window.localStorage.setItem("stapler-squad:onboarded", "true");
+        window.localStorage.setItem("stapler-squad:backlog-onboarded", "true");
       } catch {
         /* ignore */
       }
@@ -193,12 +194,14 @@ test.describe("backlog item detail redesign", () => {
       await expect(firstAction).toBeVisible();
       await expect(firstAction).toBeInViewport();
 
-      const acHeading = page.getByRole("heading", { name: /Acceptance Criteria/ });
+      // Seeded stuck items carry no AC list, so anchor on the Version Control
+      // section, which is reference content that must sit below the actions.
+      const referenceHeader = detailPage.sectionHeader("version-control");
       const actionBox = await firstAction.boundingBox();
-      const acBox = await acHeading.boundingBox();
+      const refBox = await referenceHeader.boundingBox();
       expect(actionBox).not.toBeNull();
-      expect(acBox).not.toBeNull();
-      expect(actionBox!.y).toBeLessThan(acBox!.y);
+      expect(refBox).not.toBeNull();
+      expect(actionBox!.y).toBeLessThan(refBox!.y);
     });
 
     test("auto-expands Version Control for an archived item with a PR, and a manual collapse survives a real reload", async ({
