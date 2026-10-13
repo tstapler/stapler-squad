@@ -17,6 +17,10 @@ const (
 	MetricErrorTotal          = "git_backend_error_total"           // {operation,implementation}
 	MetricShadowMismatchTotal = "git_backend_shadow_mismatch_total" // {operation,class}
 	MetricShadowCallsTotal    = "git_backend_shadow_calls_total"    // {operation}
+	// MetricCapabilityDetectTotal counts capability preflights, one per call that consulted the
+	// probe: {outcome} is "ok", a capability kind, or "detect_error" (with sub_reason set), so
+	// detect_error over the sum is the ratio the soak ceiling watches (plan Story 1.3.4 h).
+	MetricCapabilityDetectTotal = "git_capability_detect_total"
 )
 
 // Implementation labels the backend that ran, matching withOperationSpan's label.
@@ -32,6 +36,7 @@ type routerMetrics struct {
 	errors         metric.Int64Counter
 	shadowMismatch metric.Int64Counter
 	shadowCalls    metric.Int64Counter
+	capability     metric.Int64Counter
 }
 
 func newRouterMetrics(meter metric.Meter) routerMetrics {
@@ -48,6 +53,7 @@ func newRouterMetrics(meter metric.Meter) routerMetrics {
 		errors:         counter(MetricErrorTotal, "Operational backend errors returned to the caller"),
 		shadowMismatch: counter(MetricShadowMismatchTotal, "Shadow-mode CLI/go-git disagreements by class"),
 		shadowCalls:    counter(MetricShadowCallsTotal, "Shadow-mode calls (the mismatch window denominator)"),
+		capability:     counter(MetricCapabilityDetectTotal, "Capability preflights by outcome; detect_error carries a closed sub_reason"),
 	}
 }
 
@@ -72,4 +78,10 @@ func (m routerMetrics) countMismatch(op OperationName, class MismatchClass) {
 	m.shadowMismatch.Add(context.Background(), 1, metric.WithAttributes(
 		attribute.String("operation", string(op)),
 		attribute.String("class", string(class))))
+}
+
+func (m routerMetrics) countCapability(outcome string, sub DetectSub) {
+	m.capability.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String("outcome", outcome),
+		attribute.String("sub_reason", string(sub))))
 }
