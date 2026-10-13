@@ -50,6 +50,22 @@ func TestShadowReturnsCLIResultAndCountsRealMismatch(t *testing.T) {
 	}
 }
 
+func TestShadowRecordsOneDurationSamplePerSidePerCall(t *testing.T) {
+	g := newRig(t, shadowDiff)
+	g.cli.diff = diffReturning("same")
+	g.gg.diff = diffReturning("same")
+	for i := 0; i < 3; i++ {
+		if _, err := g.r.Diff(ctxBG, localRepo, backend.DiffSpec{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, impl := range []backend.Implementation{backend.ImplCLI, backend.ImplGoGit} {
+		if n := g.m.histogramCount(backend.MetricShadowDurationMS, "implementation", string(impl)); n != 3 {
+			t.Fatalf("%s duration samples = %d, want 3 (one per shadowed call)", impl, n)
+		}
+	}
+}
+
 func TestShadowMismatchRecordIsRedactedAndPathFree(t *testing.T) {
 	g := newRig(t, shadowDiff)
 	secret := "https://x-access-token:ghp_abc123SECRET@github.com/o/r.git"

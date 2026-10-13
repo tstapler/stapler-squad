@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/gitwiring"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -82,5 +84,25 @@ func TestHandleActuatorMetrics_ReturnsExpectedShape(t *testing.T) {
 		if _, ok := body[key]; !ok {
 			t.Errorf("missing top-level key %q in /actuator/metrics response", key)
 		}
+	}
+}
+
+func TestWriteGitBackendSoak_JSONAndText(t *testing.T) {
+	report := gitwiring.SoakReport{Cohorts: map[string]string{"refs": "shadow"}}
+
+	rec := httptest.NewRecorder()
+	writeGitBackendSoak(rec, httptest.NewRequest(http.MethodGet, "/actuator/git-backend", nil), report)
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("JSON body: %v", err)
+	}
+	if rec.Header().Get("Content-Type") != "application/json" || got["cohorts"] == nil {
+		t.Errorf("json response = %q %v", rec.Header().Get("Content-Type"), got)
+	}
+
+	rec = httptest.NewRecorder()
+	writeGitBackendSoak(rec, httptest.NewRequest(http.MethodGet, "/actuator/git-backend?format=text", nil), report)
+	if !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/plain") || !strings.Contains(rec.Body.String(), "git backend soak") {
+		t.Errorf("text response = %q %q", rec.Header().Get("Content-Type"), rec.Body.String())
 	}
 }

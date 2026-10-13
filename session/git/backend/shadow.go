@@ -119,13 +119,23 @@ func shadowCall[T any](r *Router, ctx context.Context, op OperationName, d decis
 	r.metrics.countShadowCall(op)
 	// The CLI answers the caller in shadow mode, so its spawns are the configured default.
 	cliCtx := WithCallInfo(ctx, CallInfo{Op: op, Reason: ReasonConfig})
+	var cliTook, goTook time.Duration
 	read := func() (outcome[T], outcome[T]) {
+		start := time.Now()
 		c, cerr := call(cliCtx, r.cli)
-		return outcome[T]{c, cerr}, safeGoGitRead(ctx, r.gogit, call)
+		cliTook = time.Since(start)
+		start = time.Now()
+		g := safeGoGitRead(ctx, r.gogit, call)
+		goTook = time.Since(start)
+		return outcome[T]{c, cerr}, g
 	}
 
 	pin0 := r.pin(ctx, d.local)
 	cliFirst, goFirst := read()
+	if ctx.Err() == nil {
+		r.metrics.recordShadowDuration(op, ImplCLI, cliTook)
+		r.metrics.recordShadowDuration(op, ImplGoGit, goTook)
+	}
 	if ctx.Err() != nil || outcomesEqual(cliFirst, goFirst) {
 		r.noteError(ctx, op, ImplCLI, cliFirst.err)
 		return cliFirst.res, cliFirst.err

@@ -95,6 +95,10 @@ help: ## Show this help message
 	@echo "================================="
 	@grep -E '^[a-zA-Z0-9._-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
+.PHONY: git-soak-status
+git-soak-status: ## Print the git backend shadow-soak counters and flip verdict (running service; exit 1 = not ready)
+	@scripts/git-soak-status.sh
+
 .PHONY: ports
 ports: ## Show reserved manual dev port block (see CLAUDE.md's "Manual dev port block")
 	@base=$$(python3 -c "import zlib; print(61000 + zlib.crc32(b'stapler-squad') % 4525)" 2>/dev/null || echo 62871); \

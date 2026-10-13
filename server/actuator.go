@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"runtime"
 
+	"github.com/tstapler/stapler-squad/session/gitwiring"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
@@ -26,6 +27,23 @@ const highGoroutineCountThreshold = 100
 func (s *Server) registerActuatorRoutes() {
 	s.mux.HandleFunc("/actuator/health", handleActuatorHealth)
 	s.mux.HandleFunc("/actuator/metrics", handleActuatorMetrics)
+	s.mux.HandleFunc("/actuator/git-backend", handleActuatorGitBackend)
+}
+
+// handleActuatorGitBackend serves the git backend shadow-soak counters and the mechanical flip
+// verdict (docs/how-to/flip-git-backend-cohort.md). JSON by default; ?format=text for a terminal.
+func handleActuatorGitBackend(w http.ResponseWriter, r *http.Request) {
+	writeGitBackendSoak(w, r, gitwiring.SoakStatus(r.Context()))
+}
+
+func writeGitBackendSoak(w http.ResponseWriter, r *http.Request, report gitwiring.SoakReport) {
+	if r.URL.Query().Get("format") == "text" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(report.Text()))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(report)
 }
 
 type actuatorComponent struct {

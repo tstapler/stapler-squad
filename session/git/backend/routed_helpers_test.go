@@ -168,6 +168,30 @@ func (m *metricsRig) count(name string, kv ...string) int64 {
 	return total
 }
 
+// histogramCount sums the sample counts of the named float histogram for one label pair.
+func (m *metricsRig) histogramCount(name, key, value string) uint64 {
+	m.t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := m.reader.Collect(context.Background(), &rm); err != nil {
+		m.t.Fatalf("collect: %v", err)
+	}
+	var total uint64
+	for _, sm := range rm.ScopeMetrics {
+		for _, met := range sm.Metrics {
+			h, ok := met.Data.(metricdata.Histogram[float64])
+			if !ok || met.Name != name {
+				continue
+			}
+			for _, dp := range h.DataPoints {
+				if v, ok := dp.Attributes.Value(attrKey(key)); ok && v.AsString() == value {
+					total += dp.Count
+				}
+			}
+		}
+	}
+	return total
+}
+
 // totalCount sums every data point of the named metric.
 func (m *metricsRig) totalCount(name string) int64 { return m.count(name) }
 
