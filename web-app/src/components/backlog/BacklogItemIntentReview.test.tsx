@@ -11,8 +11,9 @@ import { BacklogItemIntentReview } from "./BacklogItemIntentReview";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 
+let mockKnownRepoPaths: string[] = [];
 jest.mock("@/lib/hooks/useSessionRepoPaths", () => ({
-  useSessionRepoPaths: () => [],
+  useSessionRepoPaths: () => mockKnownRepoPaths,
 }));
 
 jest.mock("@/lib/hooks/usePathCompletions", () => ({
@@ -43,6 +44,7 @@ beforeEach(() => {
   mockUseBacklogService.mockReset();
   mockUseFeatureFlag.mockReset();
   mockUseFeatureFlag.mockReturnValue(false);
+  mockKnownRepoPaths = [];
 });
 
 describe("BacklogItemIntentReview — successful parse", () => {
@@ -121,5 +123,72 @@ describe("BacklogItemIntentReview — parse failure fallback", () => {
     ).toHaveTextContent("Couldn’t parse this into a structured item");
     expect(screen.getByDisplayValue("fix the login bug")).toBeInTheDocument();
     expect(screen.getByTestId("backlog-description-input")).toHaveValue(rawText);
+  });
+});
+
+describe("BacklogItemIntentReview — repo suggestion", () => {
+  const draftWith = (suggestedRepoPath: string) => ({
+    title: "Fix foo",
+    description: "Fix foo in my-repo.",
+    acceptanceCriteria: [],
+    confidence: 0.9,
+    suggestedRepoPath,
+  });
+
+  it("sends known repo paths and pre-populates repoPath with the matched suggestion, labeled as suggested", async () => {
+    mockKnownRepoPaths = ["/code/other", "/code/my-repo"];
+    const parseBacklogItemIntent = jest.fn().mockResolvedValue(draftWith("/code/my-repo"));
+    mockService({ parseBacklogItemIntent });
+
+    render(<BacklogItemIntentReview initialText="fix foo in my-repo" onDone={jest.fn()} onCancel={jest.fn()} />);
+
+    expect(await screen.findByDisplayValue("Fix foo")).toBeInTheDocument();
+    expect(parseBacklogItemIntent).toHaveBeenCalledWith("fix foo in my-repo", ["/code/other", "/code/my-repo"]);
+    expect(screen.getByTestId("backlog-repo-path-input")).toHaveValue("/code/my-repo");
+    expect(screen.getByTestId("repo-suggestion-chip")).toHaveTextContent("Suggested");
+  });
+
+  it("clears repoPath and hides the chip when the suggestion is dismissed", async () => {
+    mockKnownRepoPaths = ["/code/my-repo"];
+    mockService({ parseBacklogItemIntent: jest.fn().mockResolvedValue(draftWith("/code/my-repo")) });
+
+    render(<BacklogItemIntentReview initialText="fix foo in my-repo" onDone={jest.fn()} onCancel={jest.fn()} />);
+
+    await screen.findByTestId("repo-suggestion-chip");
+    fireEvent.click(screen.getByTestId("repo-suggestion-dismiss"));
+
+    expect(screen.getByTestId("backlog-repo-path-input")).toHaveValue("");
+    expect(screen.queryByTestId("repo-suggestion-chip")).not.toBeInTheDocument();
+  });
+
+  it("leaves repoPath blank and shows no chip when no repo matched", async () => {
+    mockKnownRepoPaths = ["/code/my-repo"];
+    mockService({ parseBacklogItemIntent: jest.fn().mockResolvedValue(draftWith("")) });
+
+    render(<BacklogItemIntentReview initialText="fix foo" onDone={jest.fn()} onCancel={jest.fn()} />);
+
+    await screen.findByDisplayValue("Fix foo");
+    expect(screen.getByTestId("backlog-repo-path-input")).toHaveValue("");
+    expect(screen.queryByTestId("repo-suggestion-chip")).not.toBeInTheDocument();
+  });
+
+  it("ignores a suggestion that is not in the known list", async () => {
+    mockKnownRepoPaths = ["/code/my-repo"];
+    mockService({ parseBacklogItemIntent: jest.fn().mockResolvedValue(draftWith("/code/hallucinated")) });
+
+    render(<BacklogItemIntentReview initialText="fix foo" onDone={jest.fn()} onCancel={jest.fn()} />);
+
+    await screen.findByDisplayValue("Fix foo");
+    expect(screen.getByTestId("backlog-repo-path-input")).toHaveValue("");
+    expect(screen.queryByTestId("repo-suggestion-chip")).not.toBeInTheDocument();
+  });
+
+  it("leaves repoPath blank when the known list is empty", async () => {
+    mockService({ parseBacklogItemIntent: jest.fn().mockResolvedValue(draftWith("/code/my-repo")) });
+
+    render(<BacklogItemIntentReview initialText="fix foo" onDone={jest.fn()} onCancel={jest.fn()} />);
+
+    await screen.findByDisplayValue("Fix foo");
+    expect(screen.getByTestId("backlog-repo-path-input")).toHaveValue("");
   });
 });

@@ -102,3 +102,52 @@ func TestParseBacklogItemIntent_should_RejectEmptyMessage_When_MessageIsWhitespa
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 }
+
+func backlogIntentJSONWithRepo(repo string) string {
+	return `{"title":"Fix foo","description":"Fix foo in the repo.","acceptance_criteria":["foo fixed"],"confidence":0.9,"suggested_repo_path":"` + repo + `"}`
+}
+
+func TestParseBacklogItemIntent_should_PopulateSuggestedRepoPath_When_LLMSelectsKnownRepo(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+	pool := &fakeHeadlessPool{response: backlogIntentJSONWithRepo("/code/my-repo")}
+	svc.SetHeadlessPool(pool)
+
+	resp, err := svc.ParseBacklogItemIntent(t.Context(), connect.NewRequest(&sessionv1.ParseBacklogItemIntentRequest{
+		Message:        "fix foo in my-repo",
+		KnownRepoPaths: []string{"/code/other", "/code/my-repo"},
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Draft)
+	assert.Equal(t, "/code/my-repo", resp.Msg.Draft.SuggestedRepoPath)
+	assert.Contains(t, pool.firstCall().userPrompt, "Known repos:")
+}
+
+func TestParseBacklogItemIntent_should_LeaveSuggestedRepoPathEmpty_When_NoKnownRepos(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+	pool := &fakeHeadlessPool{response: backlogIntentJSONWithRepo("/code/hallucinated")}
+	svc.SetHeadlessPool(pool)
+
+	resp, err := svc.ParseBacklogItemIntent(t.Context(), connect.NewRequest(&sessionv1.ParseBacklogItemIntentRequest{
+		Message: "fix foo in my-repo",
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Draft)
+	assert.Equal(t, "", resp.Msg.Draft.SuggestedRepoPath)
+	assert.NotContains(t, pool.firstCall().userPrompt, "Known repos:")
+}
+
+func TestParseBacklogItemIntent_should_DropSuggestedRepoPath_When_NotInKnownList(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+	pool := &fakeHeadlessPool{response: backlogIntentJSONWithRepo("/code/hallucinated")}
+	svc.SetHeadlessPool(pool)
+
+	resp, err := svc.ParseBacklogItemIntent(t.Context(), connect.NewRequest(&sessionv1.ParseBacklogItemIntentRequest{
+		Message:        "fix foo",
+		KnownRepoPaths: []string{"/code/my-repo"},
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "", resp.Msg.Draft.SuggestedRepoPath)
+}

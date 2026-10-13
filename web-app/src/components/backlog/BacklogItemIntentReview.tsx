@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import { BacklogItemForm } from "./BacklogItemForm";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
+import { useSessionRepoPaths } from "@/lib/hooks/useSessionRepoPaths";
 import type { BacklogItem, BacklogItemInput, ParsedBacklogItemDraft } from "@/lib/hooks/useBacklogService";
 
 interface BacklogItemIntentReviewProps {
@@ -27,7 +28,8 @@ function fallbackTitle(message: string): string {
  * typed message is never silently lost. */
 function draftToInitialValues(
   draft: ParsedBacklogItemDraft | null,
-  rawText: string
+  rawText: string,
+  suggestedRepoPath: string
 ): Partial<BacklogItem> {
   if (!draft) {
     return { title: fallbackTitle(rawText), description: rawText };
@@ -35,6 +37,7 @@ function draftToInitialValues(
   return {
     title: draft.title,
     description: draft.description,
+    ...(suggestedRepoPath ? { repoPath: suggestedRepoPath } : {}),
     acCriteria: draft.acceptanceCriteria.map((text, index) => ({
       index,
       text,
@@ -48,8 +51,20 @@ function draftToInitialValues(
  * state — mirrors the abandoned llm-omnibar design's useParseIntent.ts shape,
  * scoped down to this feature's needs.
  */
+/** Returns the draft's suggested repo only if it is an exact member of the
+ * list we sent — the LLM must never introduce a path of its own. */
+function validatedSuggestion(
+  draft: ParsedBacklogItemDraft | null,
+  knownRepoPaths: string[]
+): string {
+  const suggested = draft?.suggestedRepoPath ?? "";
+  return suggested && knownRepoPaths.includes(suggested) ? suggested : "";
+}
+
 function useParseBacklogItemIntent(initialText: string) {
   const { parseBacklogItemIntent } = useBacklogService();
+  const knownRepoPaths = useSessionRepoPaths();
+  const [suggestedRepoPath, setSuggestedRepoPath] = useState("");
   const [phase, setPhase] = useState<"parsing" | "review">("parsing");
   const [initialValues, setInitialValues] = useState<Partial<BacklogItem>>({});
   const [parseFailed, setParseFailed] = useState(false);
@@ -62,10 +77,12 @@ function useParseBacklogItemIntent(initialText: string) {
   useEffect(() => {
     let active = true;
     setPhase("parsing");
-    parseBacklogItemIntent(initialText).then((draft) => {
+    parseBacklogItemIntent(initialText, knownRepoPaths).then((draft) => {
       if (!active) return;
+      const suggestion = validatedSuggestion(draft, knownRepoPaths);
       setParseFailed(!draft);
-      setInitialValues(draftToInitialValues(draft, initialText));
+      setSuggestedRepoPath(suggestion);
+      setInitialValues(draftToInitialValues(draft, initialText, suggestion));
       setPhase("review");
     });
     return () => {
@@ -74,7 +91,7 @@ function useParseBacklogItemIntent(initialText: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per mount; initialText is fixed for this hook's lifetime
   }, []);
 
-  return { phase, initialValues, parseFailed };
+  return { phase, initialValues, parseFailed, suggestedRepoPath };
 }
 
 function ParsingIndicator() {
@@ -116,7 +133,7 @@ export function BacklogItemIntentReview({
   onCancel,
 }: BacklogItemIntentReviewProps) {
   const { createBacklogItem } = useBacklogService();
-  const { phase, initialValues, parseFailed } = useParseBacklogItemIntent(initialText);
+  const { phase, initialValues, parseFailed, suggestedRepoPath } = useParseBacklogItemIntent(initialText);
 
   const handleSubmit = async (data: BacklogItemInput) => {
     const result = await createBacklogItem(data);
@@ -132,6 +149,7 @@ export function BacklogItemIntentReview({
       {parseFailed && <ParseFailedBanner />}
       <BacklogItemForm
         initialValues={initialValues}
+        autoSuggestedRepoPath={suggestedRepoPath || undefined}
         onSubmit={handleSubmit}
         onCancel={onCancel}
       />
