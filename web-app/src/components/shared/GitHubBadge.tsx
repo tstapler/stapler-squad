@@ -104,6 +104,7 @@ export function GitHubBadge({
 
     const handleClick = (e: React.MouseEvent) => {
       e.stopPropagation();
+      e.preventDefault(); // the anchor's own href+target would otherwise open a second tab
       if (resolvedPrUrl) {
         window.open(resolvedPrUrl, "_blank", "noopener,noreferrer");
       }

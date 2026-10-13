@@ -26,6 +26,13 @@ import { BacklogItemShipStatusSchema, StuckReason, type StuckBacklogItem } from 
 // focused on BacklogItemDetail's own render behavior.
 jest.mock("./SessionMonitor", () => ({ SessionMonitor: () => null }));
 jest.mock("./GateVerdictBox", () => ({ GateVerdictBox: () => null }));
+// Off by default; the action-reachability tests flip it so the real gate
+// section's position relative to ActionsSection can be asserted.
+let mockShowGateSection = false;
+jest.mock("./GateBlockingSection", () => ({
+  GateBlockingSection: () =>
+    mockShowGateSection ? <div data-testid="gate-blocking-section" /> : null,
+}));
 // Stubbed to a minimal interactive shim (rather than plain `() => null`) so
 // Task 1.1.2c's wiring test can exercise the real onAnswerQuestion prop
 // BacklogItemDetail passes down, without standing up the full real
@@ -1458,15 +1465,40 @@ describe("BacklogItemDetail — PR visibility and action reachability", () => {
     expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("BacklogItemDetail_should_RenderActionsSectionBeforeGateBlockingSection_When_FullDetailRenders", async () => {
-    await renderItem({ status: "idea" });
-    const actions = screen.getByTestId("backlog-action-trigger-triage");
-    const acHeading = screen.getByText(/^Acceptance Criteria/);
-    expect(actions.compareDocumentPosition(acHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    const gate = screen.queryByTestId("gate-blocking-section");
-    if (gate) {
-      expect(actions.compareDocumentPosition(gate) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    }
+  it("BacklogItemDetail_should_AutoExpandVersionControlSection_When_StatusIsArchivedAndPrUrlIsSet", async () => {
+    await renderItem({ status: "archived", ...PR });
+    expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "true");
+  });
+
+  describe("ordering", () => {
+    afterEach(() => {
+      mockShowGateSection = false;
+    });
+
+    const follows = (a: HTMLElement, b: HTMLElement) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+    it("BacklogItemDetail_should_RenderActionsSectionBeforeGateBlockingSection_When_FullDetailRenders", async () => {
+      mockShowGateSection = true;
+      await renderItem({ status: "idea" });
+      const actions = screen.getByTestId("backlog-action-trigger-triage");
+      expect(follows(actions, screen.getByTestId("gate-blocking-section"))).toBe(true);
+      expect(follows(actions, screen.getByText(/^Acceptance Criteria/))).toBe(true);
+    });
+
+    it("BacklogItemDetail_should_RenderPlanVerdictBoxImmediatelyBeforeActionsSection_When_PlanIsPendingReview", async () => {
+      mockShowGateSection = true;
+      await renderItem({
+        status: "ready",
+        planApproved: false,
+        planArtifactsPath: "/tmp/plans/item-1.md",
+      });
+      const reject = screen.getByTestId("backlog-action-reject-plan");
+      const approve = screen.getByTestId("backlog-action-approve-plan");
+      expect(follows(reject, approve)).toBe(true);
+      expect(follows(approve, screen.getByTestId("gate-blocking-section"))).toBe(true);
+      expect(follows(approve, screen.getByText(/^Acceptance Criteria/))).toBe(true);
+    });
   });
 });
 

@@ -96,6 +96,17 @@ describe("VersionControlSection", () => {
     expect(screen.getByText(/#7/)).toBeInTheDocument();
   });
 
+  it("renders nothing for pr_pending when no widget data exists, even with item.prUrl set", () => {
+    const { container } = render(
+      <VersionControlSection
+        {...baseProps}
+        item={makeItem({ status: "pr_pending", prUrl: "https://github.com/x/y/pull/7", prNumber: 7 })}
+        widgetData={null}
+      />
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it("renders nothing when widgetData is null", () => {
     const { container } = render(
       <VersionControlSection
