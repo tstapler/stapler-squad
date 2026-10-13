@@ -70,6 +70,66 @@ func (s *Storage) DiagnoseNudgeAllowed(ctx context.Context, itemID string, reaso
 	return allowed, disallowReason, nil
 }
 
+// DiagnoseNudgeAllowedWithReserve is DiagnoseNudgeAllowed with the last
+// `reserve` slots of the cap held back (for the diagnose agent), so a planner's
+// read agrees with what ClaimDiagnoseNudgeSlot will grant. reserve 0 is
+// identical to DiagnoseNudgeAllowed. Advisory only: the claim is authoritative,
+// and no open row reads as allowed (nothing to gate against yet).
+func (s *Storage) DiagnoseNudgeAllowedWithReserve(ctx context.Context, itemID string, reason domain.StuckReason, reserve int) (allowed bool, disallowReason string, err error) {
+	row, ok, err := s.findOpenStuckStateForReason(ctx, itemID, reason)
+	if err != nil {
+		return false, "", fmt.Errorf("diagnose nudge allowed %s/%s: %w", itemID, reason, err)
+	}
+	if !ok {
+		return true, "", nil
+	}
+	maxAttempts := int32(config.LoadConfig().DiagnoseNudgeMaxAttemptsOrDefault())
+	limit := maxAttempts - int32(max(reserve, 0))
+	allowed, disallowReason = EvaluateDiagnoseNudgeAllowance(row.DiagnoseNudgeCount, row.DiagnoseNextEligibleAt, limit, time.Now())
+	return allowed, disallowReason, nil
+}
+
+// ClaimResult is the outcome of ClaimDiagnoseNudgeSlot.
+type ClaimResult struct {
+	// Claimed is true when this call took a slot.
+	Claimed bool
+	// JustCapped is true when the slot taken was the last claimable one.
+	JustCapped bool
+}
+
+// ClaimDiagnoseNudgeSlot atomically takes one nudge slot for (itemID, reason),
+// leaving `reserve` of the configured cap for the diagnose agent. Cap and
+// cooldown are checked in the same UPDATE as the increment, so concurrent
+// claimers cannot both pass a stale read. A claim also starts the 1h cooldown,
+// so two stalls in the same hour take at most one slot. There is deliberately no refund: a
+// nudge whose delivery is uncertain keeps its slot. No open row, cap reached
+// and cooldown active all return Claimed=false with a nil error.
+func (s *Storage) ClaimDiagnoseNudgeSlot(ctx context.Context, itemID string, reason domain.StuckReason, reserve int) (ClaimResult, error) {
+	maxAttempts := int32(config.LoadConfig().DiagnoseNudgeMaxAttemptsOrDefault())
+	return s.claimDiagnoseNudgeSlot(ctx, itemID, reason, maxAttempts, reserve, diagnoseNudgeCooldown)
+}
+
+// claimDiagnoseNudgeSlot takes the cap and cooldown explicitly so tests do not
+// depend on the loaded config or on the claim's own cooldown.
+func (s *Storage) claimDiagnoseNudgeSlot(ctx context.Context, itemID string, reason domain.StuckReason, maxAttempts int32, reserve int, cooldown time.Duration) (ClaimResult, error) {
+	limit := maxAttempts - int32(max(reserve, 0))
+	if limit <= 0 {
+		return ClaimResult{}, nil
+	}
+	claimed, err := s.repo.ClaimDiagnoseNudgeSlotIfEligible(ctx, itemID, reason, limit, time.Now(), cooldown)
+	if err != nil {
+		return ClaimResult{}, fmt.Errorf("claim diagnose nudge slot %s/%s: %w", itemID, reason, err)
+	}
+	if !claimed {
+		return ClaimResult{}, nil
+	}
+	// Informational read-back, as in RecordDiagnoseNudgeAttempt: the cap itself
+	// was enforced by the UPDATE.
+	row, ok, findErr := s.findOpenStuckStateForReason(ctx, itemID, reason)
+	justCapped := findErr == nil && ok && row.DiagnoseNudgeCount >= limit
+	return ClaimResult{Claimed: true, JustCapped: justCapped}, nil
+}
+
 // RecordDiagnoseNudgeAttempt records that a nudge was just successfully sent
 // for (itemID, reason): atomically increments diagnose_nudge_count (bounded
 // by the configured cap) and pushes diagnose_next_eligible_at
