@@ -161,6 +161,19 @@ describe("BacklogItemIntentReview — repo suggestion", () => {
     expect(screen.queryByTestId("repo-suggestion-chip")).not.toBeInTheDocument();
   });
 
+  it("does not re-show the chip after dismissal even if the same path is typed back", async () => {
+    mockKnownRepoPaths = ["/code/my-repo"];
+    mockService({ parseBacklogItemIntent: jest.fn().mockResolvedValue(draftWith("/code/my-repo")) });
+
+    render(<BacklogItemIntentReview initialText="fix foo in my-repo" onDone={jest.fn()} onCancel={jest.fn()} />);
+
+    await screen.findByTestId("repo-suggestion-chip");
+    fireEvent.click(screen.getByTestId("repo-suggestion-dismiss"));
+    fireEvent.change(screen.getByTestId("backlog-repo-path-input"), { target: { value: "/code/my-repo" } });
+
+    expect(screen.queryByTestId("repo-suggestion-chip")).not.toBeInTheDocument();
+  });
+
   it("leaves repoPath blank and shows no chip when no repo matched", async () => {
     mockKnownRepoPaths = ["/code/my-repo"];
     mockService({ parseBacklogItemIntent: jest.fn().mockResolvedValue(draftWith("")) });

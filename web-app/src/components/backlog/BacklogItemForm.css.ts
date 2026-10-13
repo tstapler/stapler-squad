@@ -367,7 +367,7 @@ export const repoSuggestionChip = style({
   color: vars.color.inputText,
   background: vars.color.accentBg,
   border: `1px solid ${vars.color.inputBorder}`,
-  borderRadius: "999px",
+  borderRadius: vars.radii.full,
 });
 
 export const repoSuggestionDismiss = style({

@@ -413,6 +413,9 @@ export interface BacklogItemInput {
   prNumber?: number;
 }
 
+/** Mirrors the server's maxKnownRepoPaths (server/services/backlog_service_intent.go); the server is authoritative. */
+const MAX_KNOWN_REPO_PATHS = 20;
+
 /** LLM-structured read of a free-text message — see ParseBacklogItemIntent. */
 export interface ParsedBacklogItemDraft {
   title: string;
@@ -983,14 +986,13 @@ export function useBacklogService(): UseBacklogServiceReturn {
 
   const parseBacklogItemIntent = useCallback(
     // repo_path is intentionally omitted: the omnibar has no "current repo"
-    // context available before parsing. knownRepoPaths lets the LLM suggest
-    // one of them; the server also caps the list at 20.
+    // context available before parsing.
     async (message: string, knownRepoPaths: string[] = []): Promise<ParsedBacklogItemDraft | null> => {
       if (!clientRef.current) return null;
       try {
         const resp = await clientRef.current.parseBacklogItemIntent({
           message,
-          knownRepoPaths: knownRepoPaths.slice(0, 20),
+          knownRepoPaths: knownRepoPaths.slice(0, MAX_KNOWN_REPO_PATHS),
         });
         if (resp.error || !resp.draft) return null;
         return {
@@ -998,7 +1000,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           description: resp.draft.description,
           acceptanceCriteria: resp.draft.acceptanceCriteria,
           confidence: resp.draft.confidence,
-          suggestedRepoPath: resp.draft.suggestedRepoPath,
+          suggestedRepoPath: resp.draft.suggestedRepoPath ?? "",
         };
       } catch (err) {
         console.error("[useBacklogService] parseBacklogItemIntent:", err);

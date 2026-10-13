@@ -94,6 +94,7 @@ export function BacklogItemForm({
   const [title, setTitle] = useState(initialValues?.title ?? "");
   const [description, setDescription] = useState(initialValues?.description ?? "");
   const [repoPath, setRepoPath] = useState(initialValues?.repoPath ?? "");
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false);
   const [priority, setPriority] = useState<number>(initialValues?.priority ?? 3);
   const [skipPlanning, setSkipPlanning] = useState(initialValues?.skipPlanning ?? false);
   const [skipReviewGate, setSkipReviewGate] = useState(initialValues?.skipReviewGate ?? false);
@@ -576,7 +577,7 @@ export function BacklogItemForm({
             detectGitHubUrl
             data-testid="backlog-repo-path-input"
           />
-          {autoSuggestedRepoPath && repoPath === autoSuggestedRepoPath && (
+          {autoSuggestedRepoPath && !suggestionDismissed && repoPath === autoSuggestedRepoPath && (
             <span className={styles.repoSuggestionChip} data-testid="repo-suggestion-chip">
               Suggested from your sessions
               <button
@@ -585,9 +586,13 @@ export function BacklogItemForm({
                 data-testid="repo-suggestion-dismiss"
                 aria-label="Dismiss suggested repository"
                 disabled={busy}
-                onClick={() => setRepoPath("")}
+                onClick={() => {
+                  setSuggestionDismissed(true);
+                  setRepoPath("");
+                  document.getElementById("backlog-repo-path")?.focus();
+                }}
               >
-                ✕
+                <span aria-hidden="true">✕</span>
               </button>
             </span>
           )}

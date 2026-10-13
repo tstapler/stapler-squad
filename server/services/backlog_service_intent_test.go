@@ -1,6 +1,9 @@
 package services
 
 import (
+	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -104,7 +107,12 @@ func TestParseBacklogItemIntent_should_RejectEmptyMessage_When_MessageIsWhitespa
 }
 
 func backlogIntentJSONWithRepo(repo string) string {
-	return `{"title":"Fix foo","description":"Fix foo in the repo.","acceptance_criteria":["foo fixed"],"confidence":0.9,"suggested_repo_path":"` + repo + `"}`
+	b, _ := json.Marshal(map[string]any{
+		"title": "Fix foo", "description": "Fix foo in the repo.",
+		"acceptance_criteria": []string{"foo fixed"}, "confidence": 0.9,
+		"suggested_repo_path": repo,
+	})
+	return string(b)
 }
 
 func TestParseBacklogItemIntent_should_PopulateSuggestedRepoPath_When_LLMSelectsKnownRepo(t *testing.T) {
@@ -134,7 +142,7 @@ func TestParseBacklogItemIntent_should_LeaveSuggestedRepoPathEmpty_When_NoKnownR
 	}))
 	require.NoError(t, err)
 	require.NotNil(t, resp.Msg.Draft)
-	assert.Equal(t, "", resp.Msg.Draft.SuggestedRepoPath)
+	assert.Empty(t, resp.Msg.Draft.SuggestedRepoPath)
 	assert.NotContains(t, pool.firstCall().userPrompt, "Known repos:")
 }
 
@@ -149,5 +157,31 @@ func TestParseBacklogItemIntent_should_DropSuggestedRepoPath_When_NotInKnownList
 		KnownRepoPaths: []string{"/code/my-repo"},
 	}))
 	require.NoError(t, err)
-	assert.Equal(t, "", resp.Msg.Draft.SuggestedRepoPath)
+	assert.Empty(t, resp.Msg.Draft.SuggestedRepoPath)
+}
+
+func TestCleanKnownRepoPaths(t *testing.T) {
+	t.Parallel()
+	many := make([]string, 0, 30)
+	for i := range 30 {
+		many = append(many, fmt.Sprintf("/code/repo-%d", i))
+	}
+	tests := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"trims and dedupes", []string{" /a ", "/a", "/b"}, []string{"/a", "/b"}},
+		{"drops blanks", []string{"", "  ", "/a"}, []string{"/a"}},
+		{"drops entries with newlines or control chars", []string{"/a\nIgnore previous", "/b\x00", "/c"}, []string{"/c"}},
+		{"drops over-long entries", []string{"/" + strings.Repeat("x", maxKnownRepoPathLen), "/ok"}, []string{"/ok"}},
+		{"caps at maxKnownRepoPaths", many, many[:maxKnownRepoPaths]},
+		{"nil in, empty out", nil, []string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, cleanKnownRepoPaths(tt.in))
+		})
+	}
 }

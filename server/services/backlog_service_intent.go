@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -25,14 +26,18 @@ const backlogIntentCallBudget = 90 * time.Second
 // installs have a handful, so this only bounds pathological prompt growth.
 const maxKnownRepoPaths = 20
 
+// maxKnownRepoPathLen drops absurd entries rather than spending prompt tokens on them.
+const maxKnownRepoPathLen = 4096
+
 // cleanKnownRepoPaths trims, dedupes and caps the client-supplied list,
-// dropping blanks, preserving order.
+// dropping blanks, over-long entries and any containing control characters
+// (they are interpolated one-per-line into the LLM prompt), preserving order.
 func cleanKnownRepoPaths(in []string) []string {
 	seen := make(map[string]struct{}, len(in))
 	out := make([]string, 0, len(in))
 	for _, p := range in {
 		p = strings.TrimSpace(p)
-		if p == "" {
+		if p == "" || len(p) > maxKnownRepoPathLen || strings.ContainsFunc(p, unicode.IsControl) {
 			continue
 		}
 		if _, dup := seen[p]; dup {

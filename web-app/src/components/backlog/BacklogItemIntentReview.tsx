@@ -46,11 +46,6 @@ function draftToInitialValues(
   };
 }
 
-/**
- * Wraps ParseBacklogItemIntent with the omnibar review UI's loading/result
- * state — mirrors the abandoned llm-omnibar design's useParseIntent.ts shape,
- * scoped down to this feature's needs.
- */
 /** Returns the draft's suggested repo only if it is an exact member of the
  * list we sent — the LLM must never introduce a path of its own. */
 function validatedSuggestion(
@@ -61,6 +56,11 @@ function validatedSuggestion(
   return suggested && knownRepoPaths.includes(suggested) ? suggested : "";
 }
 
+/**
+ * Wraps ParseBacklogItemIntent with the omnibar review UI's loading/result
+ * state — mirrors the abandoned llm-omnibar design's useParseIntent.ts shape,
+ * scoped down to this feature's needs.
+ */
 function useParseBacklogItemIntent(initialText: string) {
   const { parseBacklogItemIntent } = useBacklogService();
   const knownRepoPaths = useSessionRepoPaths();
@@ -88,7 +88,7 @@ function useParseBacklogItemIntent(initialText: string) {
     return () => {
       active = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per mount; initialText is fixed for this hook's lifetime
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per mount; initialText is fixed, and the known-repo list is a mount-time snapshot (an unhydrated session store just means no suggestion)
   }, []);
 
   return { phase, initialValues, parseFailed, suggestedRepoPath };

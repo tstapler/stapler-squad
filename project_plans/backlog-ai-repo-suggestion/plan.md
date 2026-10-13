@@ -125,3 +125,14 @@ Changing the system prompt breaks prefix caching. This is a one-time cost that r
 
 **Risk: Chip layout breaks on mobile.**
 - The chip is dismissible inline text next to the label. It must respect the existing `RepoPathInput` layout. Use a `<span>` with `data-testid` rather than a floating element to avoid layout shift.
+
+---
+
+## Implementation deviations (recorded at verify)
+
+- **FR-4 (suggestion as prompt context for a second call) not built:** the single LLM call already selects the repo; a second call adds cost for no gain.
+- **Token-cost NFR (basenames for long lists) not built:** full paths, capped at 20, are ~225 tokens — acceptable.
+- **Server-side membership guard added** (not in the original plan): the service drops a `suggested_repo_path` that is not in the cleaned list; the client guard remains as defence in depth.
+- **`cleanKnownRepoPaths`** trims, dedupes, caps and drops control-character/over-long entries so client-supplied paths cannot inject prompt lines.
+- **Dismiss state is tracked** (`suggestionDismissed`) so re-typing the path does not bring the chip back.
+- The Omnibar integration test from Task 8 was not extended; `BacklogItemIntentReview.test.tsx` covers the flow with the same hooks.
