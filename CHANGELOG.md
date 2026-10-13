@@ -1,5 +1,36 @@
 # Changelog
 
+## [2.4.0](https://github.com/tstapler/stapler-squad/compare/v2.3.0...v2.4.0) (2026-10-13)
+
+
+### Features
+
+* **backlog:** PR badge in header, actions first, auto-expand Version Control ([#1011](https://github.com/tstapler/stapler-squad/issues/1011)) ([c37806e](https://github.com/tstapler/stapler-squad/commit/c37806e566d4b2a5f459e15454ec4e24fd51fe4b))
+* **backlog:** suggest a known repo when creating a backlog item from the omnibar ([#1018](https://github.com/tstapler/stapler-squad/issues/1018)) ([433b309](https://github.com/tstapler/stapler-squad/commit/433b30954f76f8c2deaa90baacc6b0391ba0b392))
+* **git:** capability preflight with own gitconfig resolver (Story 1.3.4) ([#1008](https://github.com/tstapler/stapler-squad/issues/1008)) ([2ff0393](https://github.com/tstapler/stapler-squad/commit/2ff0393a411f2c08d62edc7631aa62d45bdf031c))
+* **git:** gogit backend serving ref reads in-process (Story 2.1.1) ([#1004](https://github.com/tstapler/stapler-squad/issues/1004)) ([d321b38](https://github.com/tstapler/stapler-squad/commit/d321b389898d6de68e0c81035502379a1cb071d9))
+* **git:** Locate and production wiring of remote git through Backend (Story 1.1.5) ([#1003](https://github.com/tstapler/stapler-squad/issues/1003)) ([2a5da51](https://github.com/tstapler/stapler-squad/commit/2a5da51e493000337afa3cccacf2be83ff3acc1f))
+* **git:** wire refs shadow mode into production router (Story 2.1.3) ([#1013](https://github.com/tstapler/stapler-squad/issues/1013)) ([0264041](https://github.com/tstapler/stapler-squad/commit/0264041185e66713e87100eb41bd4dbf49c08dde))
+* **services:** diagnose autonomous stalls, record stop reasons, nudge idle sessions instead of respawning ([#1020](https://github.com/tstapler/stapler-squad/issues/1020)) ([a895185](https://github.com/tstapler/stapler-squad/commit/a895185caf20a019861293592955326af81179bc))
+* **web:** dedicated compose widget for AI backlog items (draft preservation, attachments, background create) ([#1000](https://github.com/tstapler/stapler-squad/issues/1000)) ([4a85c12](https://github.com/tstapler/stapler-squad/commit/4a85c12c5982c9aab20e09e35f690330e9535b4d))
+* **web:** leader-key command bar (which-key + fuzzy palette) ([#1012](https://github.com/tstapler/stapler-squad/issues/1012)) ([a1f2d44](https://github.com/tstapler/stapler-squad/commit/a1f2d44b910959b342c0a0410d2425a15a03ba24))
+* **web:** remove the phone bell chip; Alerts is the standing entry to the tray ([#999](https://github.com/tstapler/stapler-squad/issues/999)) ([5689b77](https://github.com/tstapler/stapler-squad/commit/5689b771d1e99d71d1abe4d3d33d16d3525b3068))
+
+
+### Bug Fixes
+
+* **backlog:** don't flag pr_ready_unmerged while CI is running; surface PR-status lookup failures ([#1001](https://github.com/tstapler/stapler-squad/issues/1001)) ([38bf1dd](https://github.com/tstapler/stapler-squad/commit/38bf1dd69e79d3fbd6a954d8a5f6dd1355beaa40))
+* **git:** apply RequiredGitEnv to cli git spawns; fix macOS pid guard and triage test ([#1005](https://github.com/tstapler/stapler-squad/issues/1005)) ([d458406](https://github.com/tstapler/stapler-squad/commit/d458406c81774d90ab57c7c804dc6ba0b0e8c63f))
+* **git:** close review gaps in spawn counters, redaction and oracle ([#1002](https://github.com/tstapler/stapler-squad/issues/1002)) ([9cbfcd9](https://github.com/tstapler/stapler-squad/commit/9cbfcd91f8290e951eaaf92127bfe8c4a93a548a))
+* **git:** match git's not-a-repository error for dangling worktree gitdir in gogit ([#1014](https://github.com/tstapler/stapler-squad/issues/1014)) ([2c8852a](https://github.com/tstapler/stapler-squad/commit/2c8852a11d2efa40b204dcdde505a3de729bcecd))
+* **git:** not_implemented fallback reason and real system-gitconfig discovery ([#1006](https://github.com/tstapler/stapler-squad/issues/1006)) ([60de902](https://github.com/tstapler/stapler-squad/commit/60de9022675deee74a47666033843bf61033a4a7))
+* **git:** serve symlinked git directories in the gogit backend ([#1016](https://github.com/tstapler/stapler-squad/issues/1016)) ([f9124d8](https://github.com/tstapler/stapler-squad/commit/f9124d8212d29e6efaa9c8e01a9a2425f836ffdd))
+* **notifications:** stop calling a non-live stream 'offline' in the tray ([#995](https://github.com/tstapler/stapler-squad/issues/995)) ([a1a1add](https://github.com/tstapler/stapler-squad/commit/a1a1addf7c66abc143471096f9788223a2ee33f6))
+* **server:** join every background goroutine wireDepsIntoServer starts on Shutdown ([#1017](https://github.com/tstapler/stapler-squad/issues/1017)) ([5fd2a25](https://github.com/tstapler/stapler-squad/commit/5fd2a25df2718b3241ba0bd66e3993e4bb8a3df7))
+* **web:** anchor the phone toast deck to the terminal output, not the toolbar ([#996](https://github.com/tstapler/stapler-squad/issues/996)) ([3dd4343](https://github.com/tstapler/stapler-squad/commit/3dd43432c9f59f743b4c6f2db5653899ec6db022))
+* **web:** keep the phone tray a bottom sheet when the keyboard opens; Alerts opens the tray ([#998](https://github.com/tstapler/stapler-squad/issues/998)) ([ce77640](https://github.com/tstapler/stapler-squad/commit/ce7764047a6496c1ff175ec52483b213136dd15c))
+* **web:** Reply card refuses parallel questions and is not offline before first load ([#1019](https://github.com/tstapler/stapler-squad/issues/1019)) ([023a06b](https://github.com/tstapler/stapler-squad/commit/023a06b1db8e8f550db1d048539bf34c896d3803))
+
 ## [2.3.0](https://github.com/tstapler/stapler-squad/compare/v2.2.0...v2.3.0) (2026-10-11)
 
 
