@@ -88,6 +88,9 @@ func (v *repoView) refDir(name string) string {
 	return v.lay.commonDir
 }
 
+// maxRefDirDepth bounds the loose-ref walk; git refs rarely nest past a handful of directories.
+const maxRefDirDepth = 40
+
 // perWorktreeRefPrefixes live in the per-worktree git dir; every other ref is shared.
 var perWorktreeRefPrefixes = []string{"refs/bisect/", "refs/worktree/", "refs/rewritten/"} //nolint:gochecknoglobals read-only
 
@@ -232,42 +235,54 @@ func parsePackedRefs(data []byte) (map[string]plumbing.Hash, bool) {
 func (v *repoView) walkRefNames() (sortedNames []string, loose map[string]bool, err error) {
 	names := map[string]struct{}{}
 	loose = map[string]bool{}
-	walk := func(root, prefix string, skipPerWorktree bool) error {
-		return filepath.WalkDir(filepath.Join(root, filepath.FromSlash(prefix)), func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				if errors.Is(err, fs.ErrNotExist) {
-					return nil
-				}
-				return err
-			}
-			rel, relErr := filepath.Rel(root, path)
-			if relErr != nil {
-				return relErr
-			}
-			name := filepath.ToSlash(rel)
-			if d.IsDir() {
-				if skipPerWorktree && isPerWorktreePrefix(name+"/") {
-					return filepath.SkipDir
-				}
+	// walk lists the loose refs under root/prefix. Like git it follows a symlinked directory
+	// (refs/ or refs/heads/ moved to shared storage); a symlinked ref FILE is git's legacy
+	// symref form, which this reader does not model.
+	var walk func(dir, name string, skipPerWorktree bool, depth int) error
+	walk = func(dir, name string, skipPerWorktree bool, depth int) error {
+		if depth > maxRefDirDepth {
+			return fmt.Errorf("refs nest deeper than %d directories (a symlink loop?)", maxRefDirDepth)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
 				return nil
 			}
-			if d.Type()&fs.ModeSymlink != 0 {
-				return fmt.Errorf("ref %s is a symlink", name)
+			return err
+		}
+		for _, e := range entries {
+			child, path := name+"/"+e.Name(), filepath.Join(dir, e.Name())
+			isDir := e.IsDir()
+			if e.Type()&fs.ModeSymlink != 0 {
+				target, statErr := os.Stat(path)
+				if statErr != nil || !target.IsDir() {
+					return fmt.Errorf("ref %s is a symlink", child)
+				}
+				isDir = true
 			}
-			if validRefName(name, false) {
-				names[name] = struct{}{}
-				loose[name] = true
+			switch {
+			case isDir && skipPerWorktree && isPerWorktreePrefix(child+"/"):
+			case isDir:
+				if err := walk(path, child, skipPerWorktree, depth+1); err != nil {
+					return err
+				}
+			case validRefName(child, false):
+				names[child] = struct{}{}
+				loose[child] = true
 			}
-			return nil
-		})
+		}
+		return nil
+	}
+	walkRoot := func(root, prefix string, skipPerWorktree bool) error {
+		return walk(filepath.Join(root, filepath.FromSlash(prefix)), prefix, skipPerWorktree, 0)
 	}
 	shared := v.lay.gitDir != v.lay.commonDir
-	if err := walk(v.lay.commonDir, "refs", shared); err != nil {
+	if err := walkRoot(v.lay.commonDir, "refs", shared); err != nil {
 		return nil, nil, fallbackEligible(fmt.Errorf("list loose refs: %w", err))
 	}
 	if shared {
 		for _, p := range perWorktreeRefPrefixes {
-			if err := walk(v.lay.gitDir, strings.TrimSuffix(p, "/"), false); err != nil {
+			if err := walkRoot(v.lay.gitDir, strings.TrimSuffix(p, "/"), false); err != nil {
 				return nil, nil, fallbackEligible(fmt.Errorf("list per-worktree refs: %w", err))
 			}
 		}
