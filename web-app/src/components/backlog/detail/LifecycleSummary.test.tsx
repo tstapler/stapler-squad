@@ -243,4 +243,31 @@ describe("LifecycleSummary", () => {
     expect(screen.getByTestId("lifecycle-pipeline-badge")).toHaveTextContent("Pipeline: Fast Track");
     expect(screen.queryByTestId("lifecycle-configured-pipeline-badge")).not.toBeInTheDocument();
   });
+
+  describe("PR badge", () => {
+    const prUrl = "https://github.com/x/y/pull/42";
+
+    it.each(["done", "archived", "review"] as const)(
+      "LifecycleSummary_should_RenderPrBadgeLinkingToPr_When_PrUrlSetAndStatusIs_%s",
+      (status) => {
+        render(<LifecycleSummary item={makeItem({ status, prUrl, prNumber: 42 })} />);
+        expect(screen.getByTestId("lifecycle-pr-badge").querySelector("a")).toHaveAttribute("href", prUrl);
+      }
+    );
+
+    it("LifecycleSummary_should_FallBackToPlainLink_When_PrNumberUnknown", () => {
+      render(<LifecycleSummary item={makeItem({ status: "done", prUrl })} />);
+      expect(screen.getByTestId("lifecycle-pr-badge").querySelector("a")).toHaveAttribute("href", prUrl);
+    });
+
+    it("LifecycleSummary_should_NotRenderPrBadge_When_StatusIsPrPending", () => {
+      render(<LifecycleSummary item={makeItem({ status: "pr_pending", prUrl, prNumber: 42 })} />);
+      expect(screen.queryByTestId("lifecycle-pr-badge")).not.toBeInTheDocument();
+    });
+
+    it("LifecycleSummary_should_NotRenderPrBadge_When_PrUrlIsUndefined", () => {
+      render(<LifecycleSummary item={makeItem({ status: "done", prUrl: undefined })} />);
+      expect(screen.queryByTestId("lifecycle-pr-badge")).not.toBeInTheDocument();
+    });
+  });
 });
