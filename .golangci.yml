@@ -187,6 +187,10 @@ linters:
               desc: "routing must not read config through go-git (misses ~/.config/git/config, follows no include); use session/git/native/gitconfig"
             - pkg: "github.com/go-git/go-git/v5/plumbing/format/config"
               desc: "routing must not use go-git's config decoder (loses include positions, reads a bare key as empty); use session/git/native/gitconfig"
+            - pkg: "github.com/tstapler/stapler-squad/session/git/backend/cli"
+              desc: "the config resolver and capability detectors depend on the backend port only, never on an implementation (the allow-list entry for backend matches subpackages by prefix)"
+            - pkg: "github.com/tstapler/stapler-squad/session/git/backend/gogit"
+              desc: "the config resolver and capability detectors depend on the backend port only, never on an implementation (the allow-list entry for backend matches subpackages by prefix)"
         # The composition root may import everything; nothing it composes may import it back.
         git_no_gitwiring_import:
           files:

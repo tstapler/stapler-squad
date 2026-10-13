@@ -2,9 +2,9 @@ package capability
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -132,21 +132,24 @@ func (f *facts) sshConfigDirectives() ([]backend.Capability, error) {
 	return nil, nil
 }
 
-const maxSSHIncludeDepth = 4
+const (
+	maxSSHIncludeDepth = 4
+	maxSSHConfigSize   = 4 << 20
+)
 
 // scanSSHConfig returns the first proxy directive in an ssh_config file or anything it includes
 // (relative includes resolve against baseDir). It does not match Host patterns: any such
 // directive anywhere routes, which errs toward the CLI.
 func scanSSHConfig(path, baseDir, home string, depth int) (string, error) {
-	file, err := os.Open(path)
+	data, err := gitconfig.ReadRegularFile(path, maxSSHConfigSize)
 	if errors.Is(err, fs.ErrNotExist) || isNotDir(err) {
 		return "", nil
 	}
 	if err != nil {
 		return "", detectErr(backend.DetectSSHConfigUnreadab, err)
 	}
-	defer func() { _ = file.Close() }()
-	sc := bufio.NewScanner(file)
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	sc.Buffer(make([]byte, 0, 64<<10), maxSSHConfigSize) // a long comment line must not end the scan early
 	for sc.Scan() {
 		fields := sshFields(sc.Text())
 		if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
@@ -172,6 +175,9 @@ func scanSSHConfig(path, baseDir, home string, depth int) (string, error) {
 				}
 			}
 		}
+	}
+	if err := sc.Err(); err != nil {
+		return "", detectErr(backend.DetectSSHConfigUnreadab, err)
 	}
 	return "", nil
 }

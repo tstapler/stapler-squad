@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/sha1" //nolint:gosec // the index trailer is SHA-1 by format
 	"encoding/binary"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -691,4 +694,123 @@ func TestFetchSeesSubmodules(t *testing.T) {
 	f := newFx(t)
 	f.writeIndex(entry("sub", filemode.Submodule))
 	f.wantKinds(backend.OpFetch, backend.CapSubmodule)
+}
+
+func TestSSHConfigLongLineDoesNotEndTheScan(t *testing.T) {
+	f := newFx(t)
+	f.appendConfig("[remote \"o\"]\n\turl = git@h:r.git\n")
+	f.write(filepath.Join(f.home, ".ssh", "config"), "# "+strings.Repeat("x", 70000)+"\nHost h\n  ProxyJump bastion\n")
+	f.wantKinds(backend.OpFetch, backend.CapSSHProxy)
+}
+
+func TestUnreadableHooksDirectoryFailsClosed(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission rows need a non-root user")
+	}
+	f := newFx(t)
+	dir := filepath.Join(f.gitDir, "hooks")
+	require.NoError(t, os.Chmod(dir, 0))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	_, err := f.caps(backend.OpCommit)
+	var de *backend.DetectError
+	require.ErrorAs(t, err, &de)
+	assert.Equal(t, backend.DetectHooksUnreadable, de.Sub)
+}
+
+func TestIndexCacheIsKeyedByContentNotSize(t *testing.T) {
+	f := newFx(t)
+	f.writeIndex(entry("sub", filemode.Regular))
+	f.wantKinds(backend.OpStatus)
+	before, err := os.Stat(filepath.Join(f.gitDir, "index"))
+	require.NoError(t, err)
+	f.writeIndex(entry("sub", filemode.Submodule)) // same name, same encoded size, different content
+	after, err := os.Stat(filepath.Join(f.gitDir, "index"))
+	require.NoError(t, err)
+	require.Equal(t, before.Size(), after.Size(), "premise: same size")
+	f.wantKinds(backend.OpStatus, backend.CapSubmodule)
+}
+
+func TestDetectorIsSafeForConcurrentUse(t *testing.T) {
+	f := newFx(t)
+	f.writeIndex(entry("a.txt", filemode.Regular))
+	d := f.detector()
+	var wg sync.WaitGroup
+	for i := range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if i%4 == 0 {
+				f.writeIndexRacy(entry("a.txt", filemode.Regular), entry(fmt.Sprintf("n%d", i), filemode.Regular))
+			}
+			_, _ = d.Capabilities(context.Background(), backend.Local{Root: backend.RepoRoot(f.root)}, backend.OpStatus)
+		}()
+	}
+	wg.Wait()
+}
+
+// writeIndexRacy is writeIndex without test assertions, for use off the test goroutine.
+func (f *fx) writeIndexRacy(entries ...*index.Entry) {
+	file, err := os.Create(filepath.Join(f.gitDir, "index"))
+	if err != nil {
+		return
+	}
+	_ = index.NewEncoder(file).Encode(&index.Index{Version: 2, Entries: entries})
+	_ = file.Close()
+}
+
+func TestUnparseableRemoteURLRoutesToTheCLI(t *testing.T) {
+	f := newFx(t)
+	f.appendConfig("[remote \"o\"]\n\turl = ssh://[bad\n")
+	f.wantKinds(backend.OpFetch, backend.CapLocalTransport)
+}
+
+func TestFilterDriverKindsAndOtherAttributeSources(t *testing.T) {
+	for _, key := range []string{"clean", "smudge", "process", "required"} {
+		f := newFx(t)
+		f.write(filepath.Join(f.home, ".gitconfig"), "[filter \"foo\"]\n\t"+key+" = x\n")
+		f.write(filepath.Join(f.root, ".gitattributes"), "*.dat filter=foo\n")
+		f.wantKinds(backend.OpStatus, backend.CapLFS)
+	}
+	// a driver key that is not one of the four configures nothing
+	g := newFx(t)
+	g.write(filepath.Join(g.home, ".gitconfig"), "[filter \"foo\"]\n\tsomethingElse = x\n")
+	g.write(filepath.Join(g.root, ".gitattributes"), "*.dat filter=foo\n")
+	g.wantKinds(backend.OpStatus)
+
+	// system attributes and an explicit XDG_CONFIG_HOME
+	h := newFx(t)
+	lfsHome(h)
+	sys := filepath.Join(h.home, "sysattrs")
+	h.write(sys, "*.dat filter=foo\n")
+	h.detCfg.SystemAttributes = []string{sys}
+	h.wantKinds(backend.OpStatus, backend.CapLFS)
+
+	x := newFx(t)
+	lfsHome(x)
+	xdg := filepath.Join(x.home, "xdgdir")
+	x.write(filepath.Join(xdg, "git", "attributes"), "*.dat filter=foo\n")
+	x.extraEnv = []string{"XDG_CONFIG_HOME=" + xdg}
+	x.wantKinds(backend.OpStatus, backend.CapLFS)
+}
+
+func TestUnreadableAttributesFileFailsClosedWhenAFilterIsConfigured(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission rows need a non-root user")
+	}
+	f := newFx(t)
+	lfsHome(f)
+	p := filepath.Join(f.root, ".gitattributes")
+	f.write(p, "*.dat filter=foo\n")
+	require.NoError(t, os.Chmod(p, 0))
+	t.Cleanup(func() { _ = os.Chmod(p, 0o600) })
+	_, err := f.caps(backend.OpStatus)
+	var de *backend.DetectError
+	require.ErrorAs(t, err, &de)
+	assert.Equal(t, backend.DetectAttributesUnread, de.Sub)
+}
+
+func TestEmptyShallowFileIsNotShallow(t *testing.T) {
+	f := newFx(t)
+	f.write(filepath.Join(f.gitDir, "shallow"), "")
+	f.wantKinds(backend.OpMergeBase)
 }

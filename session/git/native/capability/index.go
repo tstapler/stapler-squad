@@ -13,10 +13,11 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/format/index"
 
 	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/git/native/gitconfig"
 )
 
 const (
-	maxIndexSize   = 512 << 20 // refuse to decode absurdly large indexes
+	maxIndexSize   = 256 << 20 // refuse to decode absurdly large indexes (a million-file index is ~100 MB)
 	indexCacheSize = 64
 	checksumLen    = 20 // the index ends with a SHA-1 of everything before it
 )
@@ -88,7 +89,7 @@ func trailer(path string, size int64) (string, error) {
 }
 
 func decodeIndex(p string) (*indexFacts, error) {
-	data, err := os.ReadFile(p)
+	data, err := gitconfig.ReadRegularFile(p, maxIndexSize)
 	if err != nil {
 		return nil, err
 	}

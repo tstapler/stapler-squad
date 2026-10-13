@@ -156,18 +156,11 @@ func (d *Detector) systemAttributes() []string {
 // readAttributes returns an attributes file's content. A missing file is empty; one that exists
 // but cannot be read fails closed.
 func readAttributes(path string) ([]byte, error) {
-	fi, err := os.Stat(path)
+	data, err := gitconfig.ReadRegularFile(path, maxAttributesSize)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) || isNotDir(err) {
 			return nil, nil
 		}
-		return nil, detectErr(backend.DetectAttributesUnread, err)
-	}
-	if !fi.Mode().IsRegular() || fi.Size() > maxAttributesSize {
-		return nil, detectErr(backend.DetectAttributesUnread, errors.New("not a plain, reasonably sized file"))
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
 		return nil, detectErr(backend.DetectAttributesUnread, err)
 	}
 	return data, nil
@@ -198,7 +191,7 @@ func assignedFilterNames(sources [][]byte) []string {
 			lines = append(lines, fields[1:])
 		}
 	}
-	var names []string
+	names := make([]string, 0, len(lines))
 	for _, attrs := range lines {
 		names = append(names, expandFilters(attrs, macros, map[string]bool{}, 0)...)
 	}

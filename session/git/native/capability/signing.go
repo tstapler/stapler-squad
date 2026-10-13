@@ -1,8 +1,6 @@
 package capability
 
 import (
-	"strings"
-
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/git/native/gitconfig"
 )
@@ -22,7 +20,8 @@ func (f *facts) signing() ([]backend.Capability, error) {
 		}
 	}
 	if e, ok := cfg.Lookup("push.gpgsign"); ok {
-		if v, valid := gitconfig.ParseBool(e.Value, e.HasValue); v || !valid || strings.EqualFold(e.Value, "if-asked") {
+		// "if-asked" is not a boolean, so it is invalid here and routes like a true value.
+		if v, valid := gitconfig.ParseBool(e.Value, e.HasValue); v || !valid {
 			return one(backend.CapGPGSign, "push.gpgsign"), nil
 		}
 	}

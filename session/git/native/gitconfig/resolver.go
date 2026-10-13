@@ -30,7 +30,9 @@ const CommandOrigin = "command line:"
 const (
 	maxIncludeDepth = 10      // git's MAX_INCLUDE_DEPTH
 	maxFileSize     = 4 << 20 // real config files are a few KiB
-	maxFileReads    = 256     // git's depth limit still allows an exponential include fan-out
+	maxHeadSize     = 4096
+	maxFileReads    = 256  // distinct files one resolution may read
+	maxExpansions   = 2048 // include expansions (a cached file included again counts): git's depth limit still allows an exponential fan-out
 )
 
 // Source is an Entry with where git read it from.
@@ -95,7 +97,6 @@ func (r *resolver) finish(w *walk, cands []string) *Result {
 }
 
 type fileState struct {
-	data    []byte
 	exists  bool
 	entries []Entry
 	err     error
@@ -108,6 +109,7 @@ type resolver struct {
 	files   map[string]*fileState
 	closure []File
 	reads   int
+	expands int
 	head    string
 	headSet bool
 }
@@ -166,29 +168,24 @@ func (r *resolver) load(path string) *fileState {
 		st.err = &Error{Sub: SubIncludeDepth, Path: path, Msg: "too many include reads"}
 		return st
 	}
-	fi, err := os.Stat(path)
+	data, err := ReadRegularFile(path, maxFileSize)
 	switch {
 	case err != nil && (errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)):
 		r.closure = append(r.closure, File{Path: path})
 		return st
-	case err != nil:
-		st.exists, st.err = true, unreadable(path, err)
-		return st
-	case !fi.Mode().IsRegular():
-		st.exists, st.err = true, &Error{Sub: SubUnreadable, Path: path, Msg: "not a regular file"}
-		return st
-	case fi.Size() > maxFileSize:
+	case errors.Is(err, ErrTooLarge):
 		st.exists, st.err = true, &Error{Sub: SubTooLarge, Path: path}
 		return st
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
+	case errors.Is(err, ErrNotRegular):
+		st.exists, st.err = true, &Error{Sub: SubUnreadable, Path: path, Msg: "not a regular file"}
+		return st
+	case err != nil:
 		st.exists, st.err = true, unreadable(path, err)
 		return st
 	}
 	sum := sha256.Sum256(data)
 	r.closure = append(r.closure, File{Path: path, SHA256: hex.EncodeToString(sum[:])})
-	st.exists, st.data = true, data
+	st.exists = true
 	st.entries, err = Parse(data)
 	if err != nil {
 		var ce *Error
@@ -430,6 +427,9 @@ func (w *walk) followInclude(origin string, e Entry, scope Scope, depth int, via
 	if err != nil {
 		return err
 	}
+	if w.r.expands++; w.r.expands > maxExpansions {
+		return &Error{Sub: SubIncludeDepth, Path: path, Msg: "too many include expansions"}
+	}
 	st := w.r.load(path)
 	if st.err != nil {
 		return st.err
@@ -585,7 +585,7 @@ func (w *walk) onbranchCondition(pattern string) (bool, error) {
 func (r *resolver) currentBranch() string {
 	if !r.headSet {
 		r.headSet = true
-		if data, err := os.ReadFile(filepath.Join(r.repo.GitDir, "HEAD")); err == nil {
+		if data, err := ReadRegularFile(filepath.Join(r.repo.GitDir, "HEAD"), maxHeadSize); err == nil {
 			r.head = string(data)
 		}
 	}

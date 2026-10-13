@@ -16,7 +16,10 @@ import (
 	"strings"
 
 	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/git/native/gitconfig"
 )
+
+const maxSmallFile = 64 << 10 // .git files, commondir
 
 // layout is the resolved git directory pair of a worktree.
 type layout struct {
@@ -43,7 +46,7 @@ func resolveLayout(root string) (layout, error) {
 		l.gitDir, l.commonDir = dotGit, dotGit
 		return l, nil
 	}
-	data, err := os.ReadFile(dotGit)
+	data, err := gitconfig.ReadRegularFile(dotGit, maxSmallFile)
 	if err != nil {
 		return l, detectErr(backend.DetectCommonDir, err)
 	}
@@ -58,7 +61,7 @@ func resolveLayout(root string) (layout, error) {
 	}
 	l.gitDir = filepath.Clean(target)
 	l.commonDir = l.gitDir
-	cd, err := os.ReadFile(filepath.Join(l.gitDir, "commondir"))
+	cd, err := gitconfig.ReadRegularFile(filepath.Join(l.gitDir, "commondir"), maxSmallFile)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 	case err != nil:
