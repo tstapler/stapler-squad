@@ -218,9 +218,10 @@ func TestOnAutonomousDriverComplete_Characterization_EventPayloadEqualsPostWrite
 			}
 			require.NotNil(t, updated, "expected the autonomous_mode/autonomous_outcome update event")
 			require.Same(t, f.inst, updated.Session)
-			assert.False(t, updated.Session.AutonomousMode)
-			assert.Equal(t, tc.wantOutcome, updated.Session.AutonomousOutcome)
-			assert.Equal(t, f.inst.AutonomousOutcome, updated.Session.AutonomousOutcome)
+			got := updated.Session.Snapshot().Autonomous
+			assert.False(t, got.AutonomousMode)
+			assert.Equal(t, tc.wantOutcome, got.AutonomousOutcome)
+			assert.Equal(t, f.inst.Snapshot().Autonomous, got)
 		})
 	}
 }

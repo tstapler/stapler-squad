@@ -275,19 +275,9 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 	}
 	sessionUUID := inst.UUID
 
-	// Clear autonomous_mode flag and set outcome on the instance so the badge updates.
-	// NOTE: These direct field writes are unguarded pending instance-actor-concurrency's
-	// Epic 5 (Story 5.3: "Convert buildTurnCallback/onAutonomousDriverComplete to commands").
-	// Do not add actor routing here without coordinating with that project.
-	inst.AutonomousMode = false
-	inst.AutonomousTurn = 0
-	inst.AutonomousMaxTurns = 0
-	if outcome.Done {
-		inst.AutonomousOutcome = "done"
-	} else {
-		inst.AutonomousOutcome = "stuck"
-	}
-	a.bus.Publish(events.NewSessionUpdatedEvent(inst, []string{"autonomous_mode", "autonomous_outcome"}))
+	// No in-place recovery exists yet, so the stop is always applied as a plain stop.
+	// A failed write is logged inside applyInstanceStop; bookkeeping carries on.
+	_ = a.applyInstanceStop(inst, domain.StallActionNone, outcome)
 
 	// Look up the backlog item linked to this session.
 	// statusTransitionErr is surfaced in the notification below so the operator never sees
@@ -657,6 +647,28 @@ func (a *AutonomousOrchestrationService) handleWorkStall(ctx context.Context, co
 		}
 	}
 	return stallResult{Action: domain.StallActionRespawn}
+}
+
+// applyInstanceStop records the stop on inst through the actor and publishes the
+// badge update, as one unit: the event carries the post-write instance, and no
+// event is published when the write did not apply. Nudge and Resupervise keep
+// AutonomousMode on (the approval gate reads it); every other action ends autonomy.
+// The returned error is non-nil only when the instance actor is gone.
+func (a *AutonomousOrchestrationService) applyInstanceStop(inst *session.Instance, action domain.StallAction, outcome session.AutonomousDriverOutcome) error {
+	reason := outcome.NormalizedStopReason()
+	var err error
+	switch action {
+	case domain.StallActionNudge, domain.StallActionResupervise:
+		err = inst.SetAutonomousStopObserved(reason)
+	default:
+		err = inst.SetAutonomousStopped(reason)
+	}
+	if err != nil {
+		log.Warn("[AutonomousDriver] applyInstanceStop: instance write did not apply", "session", inst.Title, "stop_reason", reason, "err", err)
+		return err
+	}
+	a.bus.Publish(events.NewSessionUpdatedEvent(inst, []string{"autonomous_mode", "autonomous_outcome"}))
+	return nil
 }
 
 // stuckSessionRole distinguishes which onAutonomousDriverComplete branch a

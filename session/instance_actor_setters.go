@@ -22,6 +22,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
@@ -139,6 +140,9 @@ func setAutonomousModeLocked(s *instanceState, mode bool, outcome string) {
 	s.inst.mu.Lock()
 	s.inst.AutonomousMode = mode
 	s.inst.AutonomousOutcome = outcome
+	if mode {
+		s.inst.AutonomousStopReason = "" // a new run starts with no stop reason
+	}
 	snap := buildSnapshot(s.inst)
 	s.inst.mu.Unlock()
 	s.inst.snapshot.Store(snap)
@@ -176,6 +180,67 @@ func setAutonomousCompleteLocked(s *instanceState, done bool) {
 func (i *Instance) SetAutonomousComplete(done bool) {
 	_ = i.sendSyncErr(func(s *instanceState) error {
 		setAutonomousCompleteLocked(s, done)
+		return nil
+	})
+}
+
+// autonomousOutcomeForStop maps a StopReason to the wire outcome, which stays in
+// {"", "done", "stuck"}: only an operator-requested stop shows no badge.
+func autonomousOutcomeForStop(reason domain.StopReason) string {
+	switch reason {
+	case domain.StopReasonDone:
+		return "done"
+	case domain.StopReasonCancelledExternal:
+		return ""
+	default:
+		return "stuck"
+	}
+}
+
+func setAutonomousStoppedLocked(s *instanceState, reason domain.StopReason, outcome string) {
+	s.inst.mu.Lock()
+	s.inst.AutonomousMode = false
+	s.inst.AutonomousTurn = 0
+	s.inst.AutonomousMaxTurns = 0
+	s.inst.AutonomousOutcome = outcome
+	s.inst.AutonomousStopReason = reason
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
+}
+
+// SetAutonomousStopped ends autonomy: clears mode and turn counters and records
+// the wire outcome and the stop reason atomically. The error is non-nil only
+// when the instance actor is gone, in which case nothing was written.
+func (i *Instance) SetAutonomousStopped(reason domain.StopReason) error {
+	return i.sendSyncErr(func(s *instanceState) error {
+		setAutonomousStoppedLocked(s, reason, autonomousOutcomeForStop(reason))
+		return nil
+	})
+}
+
+// SetAutonomousStoppedQuiet is SetAutonomousStopped with the outcome forced to
+// "", for stops no row or notification explains (boot-time clears), so the UI
+// shows no "stuck" badge.
+func (i *Instance) SetAutonomousStoppedQuiet(reason domain.StopReason) error {
+	return i.sendSyncErr(func(s *instanceState) error {
+		setAutonomousStoppedLocked(s, reason, "")
+		return nil
+	})
+}
+
+// SetAutonomousStopObserved records the stop reason and zeroes the turn
+// counters but keeps AutonomousMode and the outcome, for a stop that is being
+// recovered in place (approval gating keeps seeing autonomy as on).
+func (i *Instance) SetAutonomousStopObserved(reason domain.StopReason) error {
+	return i.sendSyncErr(func(s *instanceState) error {
+		s.inst.mu.Lock()
+		s.inst.AutonomousTurn = 0
+		s.inst.AutonomousMaxTurns = 0
+		s.inst.AutonomousStopReason = reason
+		snap := buildSnapshot(s.inst)
+		s.inst.mu.Unlock()
+		s.inst.snapshot.Store(snap)
 		return nil
 	})
 }
