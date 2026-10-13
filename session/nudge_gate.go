@@ -61,6 +61,17 @@ func CheckNudgeEligible(inst *Instance) error {
 // remains the guard against a status/identity change between this check
 // returning and the write itself — settleWindow only widens what "checked" means.
 func CheckNudgeEligibleWithSettleWindow(inst *Instance, settleWindow, pollInterval time.Duration) error {
+	return CheckNudgeEligibleWithSettleWindowCtx(context.Background(), inst, settleWindow, pollInterval)
+}
+
+// CheckNudgeEligibleWithSettleWindowCtx is CheckNudgeEligibleWithSettleWindow
+// with a cancellable wait: a cancelled ctx returns promptly (wrapping
+// ctx.Err()) instead of sleeping out the rest of the settle window, so a
+// caller that was told to stop is never left blocked here.
+func CheckNudgeEligibleWithSettleWindowCtx(ctx context.Context, inst *Instance, settleWindow, pollInterval time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("nudge eligibility check cancelled: %w", err)
+	}
 	if inst == nil {
 		return fmt.Errorf("nudge target session not found")
 	}
@@ -78,7 +89,13 @@ func CheckNudgeEligibleWithSettleWindow(inst *Instance, settleWindow, pollInterv
 		if time.Since(start) >= settleWindow {
 			return nil
 		}
-		time.Sleep(pollInterval)
+		timer := time.NewTimer(pollInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("nudge eligibility check cancelled: %w", ctx.Err())
+		case <-timer.C:
+		}
 	}
 }
 
@@ -130,7 +147,7 @@ func VerifyPaneOwnershipBeforeWrite(ctx context.Context, inst *Instance) error {
 // before the caller actually writes to the pane. Returns the first error
 // encountered.
 func VerifyNudgeSafeToWrite(ctx context.Context, inst *Instance) error {
-	if err := CheckNudgeEligible(inst); err != nil {
+	if err := CheckNudgeEligibleWithSettleWindowCtx(ctx, inst, nudgeIdleSettleWindow, nudgeIdleSettlePollInterval); err != nil {
 		return err
 	}
 	return VerifyPaneOwnershipBeforeWrite(ctx, inst)

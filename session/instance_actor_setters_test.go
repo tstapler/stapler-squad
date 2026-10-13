@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func TestSetAutoApprove_should_NotRestart_When_StatusPaused(t *testing.T) {
@@ -471,4 +473,161 @@ func TestInstance_SetPinned_should_BumpUpdatedAt_OnlyWhenValueChanges(t *testing
 
 	require.NoError(t, inst.SetPinned(true))
 	assert.Equal(t, afterPin, inst.Snapshot().UpdatedAt, "no-op pin must not bump UpdatedAt")
+}
+
+// autonomousInstance is a live-actor instance with autonomy on mid-run.
+func autonomousInstance(t *testing.T) *Instance {
+	t.Helper()
+	inst := minimalInstance(t)
+	li := NewLiveInstance(inst)
+	t.Cleanup(li.Stop)
+	inst.SetAutonomousMode(true, "")
+	inst.SetAutonomousTurn(4, 20)
+	return inst
+}
+
+func wantOutcome(reason domain.StopReason) string {
+	switch reason {
+	case domain.StopReasonDone:
+		return "done"
+	case domain.StopReasonCancelledExternal:
+		return ""
+	default:
+		return "stuck"
+	}
+}
+
+func TestSetAutonomousStopped_OutcomeByReason(t *testing.T) {
+	t.Parallel()
+	reasons := append([]domain.StopReason{""}, domain.AllStopReasons...)
+	for _, reason := range reasons {
+		t.Run(string(reason), func(t *testing.T) {
+			t.Parallel()
+			inst := autonomousInstance(t)
+
+			require.NoError(t, inst.SetAutonomousStopped(reason))
+
+			got := inst.Snapshot().Autonomous
+			assert.False(t, got.AutonomousMode)
+			assert.Zero(t, got.AutonomousTurn)
+			assert.Zero(t, got.AutonomousMaxTurns)
+			assert.Equal(t, wantOutcome(reason), got.AutonomousOutcome)
+			assert.Contains(t, []string{"", "done", "stuck"}, got.AutonomousOutcome)
+			assert.Equal(t, reason, got.AutonomousStopReason)
+		})
+	}
+}
+
+func TestSetAutonomousStoppedQuiet_OutcomeAlwaysEmpty(t *testing.T) {
+	t.Parallel()
+	reasons := append([]domain.StopReason{""}, domain.AllStopReasons...)
+	for _, reason := range reasons {
+		t.Run(string(reason), func(t *testing.T) {
+			t.Parallel()
+			inst := autonomousInstance(t)
+
+			require.NoError(t, inst.SetAutonomousStoppedQuiet(reason))
+
+			got := inst.Snapshot().Autonomous
+			assert.False(t, got.AutonomousMode)
+			assert.Equal(t, "", got.AutonomousOutcome)
+			assert.Equal(t, reason, got.AutonomousStopReason)
+		})
+	}
+}
+
+func TestSetAutonomousStopObserved_KeepsModeAndOutcome(t *testing.T) {
+	t.Parallel()
+	inst := autonomousInstance(t)
+	inst.SetAutonomousMode(true, "stuck")
+	inst.SetAutonomousTurn(4, 20)
+
+	require.NoError(t, inst.SetAutonomousStopObserved(domain.StopReasonStartupTimeout))
+
+	got := inst.Snapshot().Autonomous
+	assert.True(t, got.AutonomousMode, "an observed-only stop keeps autonomy on")
+	assert.Equal(t, "stuck", got.AutonomousOutcome, "outcome is untouched")
+	assert.Zero(t, got.AutonomousTurn)
+	assert.Zero(t, got.AutonomousMaxTurns)
+	assert.Equal(t, domain.StopReasonStartupTimeout, got.AutonomousStopReason)
+
+	inst.SetAutonomousMode(true, "")
+	assert.Equal(t, domain.StopReason(""), inst.Snapshot().Autonomous.AutonomousStopReason, "a new run clears the reason")
+}
+
+func TestInstanceSnapshot_CarriesAutonomousStopReason(t *testing.T) {
+	t.Parallel()
+	inst := autonomousInstance(t)
+	assert.Equal(t, domain.StopReason(""), inst.Snapshot().Autonomous.AutonomousStopReason)
+
+	require.NoError(t, inst.SetAutonomousStopObserved(domain.StopReasonSubmitFailed))
+	assert.Equal(t, domain.StopReasonSubmitFailed, inst.Snapshot().Autonomous.AutonomousStopReason)
+
+	require.NoError(t, inst.SetAutonomousStopped(domain.StopReasonMaxTurns))
+	assert.Equal(t, domain.StopReasonMaxTurns, inst.Snapshot().Autonomous.AutonomousStopReason)
+
+	require.NoError(t, inst.SetAutonomousStoppedQuiet(domain.StopReasonCancelledShutdown))
+	assert.Equal(t, domain.StopReasonCancelledShutdown, inst.Snapshot().Autonomous.AutonomousStopReason)
+}
+
+func TestAutonomousSetters_NoRaceWithSnapshotReaders(t *testing.T) {
+	t.Parallel()
+	inst := autonomousInstance(t)
+	const workers, iterations = 8, 50
+
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for n := 0; n < iterations; n++ {
+				_ = inst.SetAutonomousStopped(domain.StopReasonMaxTurns)
+				_ = inst.SetAutonomousStopObserved(domain.StopReasonStartupTimeout)
+				_ = inst.SetAutonomousStoppedQuiet(domain.StopReasonCancelledShutdown)
+				inst.SetAutonomousMode(true, "")
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for n := 0; n < iterations; n++ {
+				_ = inst.Snapshot().Autonomous
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestAutonomousSetters_ReturnErrorWhenActorDone(t *testing.T) {
+	t.Parallel()
+	setters := map[string]func(*Instance) error{
+		"Stopped":      func(i *Instance) error { return i.SetAutonomousStopped(domain.StopReasonOrchestratorError) },
+		"StopObserved": func(i *Instance) error { return i.SetAutonomousStopObserved(domain.StopReasonOrchestratorError) },
+		"StoppedQuiet": func(i *Instance) error { return i.SetAutonomousStoppedQuiet(domain.StopReasonOrchestratorError) },
+	}
+	for name, set := range setters {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			inst := minimalInstance(t)
+			inst.AutonomousMode = true
+			inst.snapshot.Store(buildSnapshot(inst))
+			li := NewLiveInstance(inst)
+			li.cancel()
+			t.Cleanup(li.Stop)
+			before := inst.Snapshot().Autonomous
+
+			err := set(inst)
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, context.Canceled)
+			assert.Equal(t, before, inst.Snapshot().Autonomous, "a failed write must not change the snapshot")
+		})
+	}
+
+	t.Run("nil actor writes directly", func(t *testing.T) {
+		t.Parallel()
+		inst := minimalInstance(t)
+		for _, set := range setters {
+			assert.NoError(t, set(inst))
+		}
+	})
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -334,6 +335,9 @@ type Instance struct {
 	AutonomousMaxTurns int32 `json:"autonomous_max_turns,omitempty"`
 	// AutonomousOutcome is the result of the last autonomous run: "", "done", or "stuck".
 	AutonomousOutcome string `json:"autonomous_outcome,omitempty"`
+	// AutonomousStopReason is why the last autonomous run ended. In-memory only
+	// (not persisted, not on the wire); written through the actor setters.
+	AutonomousStopReason domain.StopReason `json:"-"`
 
 	// GitHub integration fields for PR/URL-based session creation
 	// GitHubPRNumber is the PR number if this session was created from a PR URL

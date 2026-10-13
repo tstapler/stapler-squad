@@ -277,7 +277,12 @@ var knownFeatureFlags = []struct {
 	},
 	{
 		name:        config.DiagnoseNudgeFeatureFlag,
-		description: "Diagnose & Nudge: allow a dispatched diagnostic agent to autonomously send a redirect message (diagnose_nudge_session) to a linked stuck session. Read fresh at the write instant, so flipping this off blocks an already-dispatched agent too. Default: off — until enabled, a dispatch can still investigate and file a bug or post a note, but never nudge.",
+		description: "Diagnose & Nudge: allow a dispatched diagnostic agent to autonomously send a redirect message (diagnose_nudge_session) to a linked stuck session, and the autonomous stall path to type its in-process nudge (also needs autonomous_stall_nudge_enabled). Read fresh at the write instant, so flipping this off blocks an already-dispatched agent too. Default: off — until enabled, a dispatch can still investigate and file a bug or post a note, but never nudge.",
+	},
+	{
+		name:         config.AutonomousStallNudgeFeatureFlag,
+		defaultValue: config.AutonomousStallNudgeDefault,
+		description:  "Autonomous stall nudge: when an autonomous work session stops while its pane sits idle at a prompt, type one fixed reminder into the pane and resume supervision instead of respawning it. Also requires Diagnose & Nudge to be on (that flag is the kill switch for every autonomous pane write). Read fresh at each stop. Default: off — every stall respawns as before.",
 	},
 	{
 		name:        notificationTrayV2FlagName,

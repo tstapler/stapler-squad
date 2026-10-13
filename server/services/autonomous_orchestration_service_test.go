@@ -294,7 +294,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_MarksAutonomo
 	require.Len(t, open, 1)
 	assert.Equal(t, domain.StuckReasonAutonomousStuck, open[0].Reason)
 	assert.Equal(t, item.ID, open[0].ItemID)
-	assert.Contains(t, open[0].Context, "20 turns")
+	assert.Contains(t, open[0].Context, "turns=20")
 	assert.NotNil(t, open[0].NotifiedAt, "dedup must be pre-set since the notification already fired")
 }
 
