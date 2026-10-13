@@ -28,12 +28,14 @@ import (
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
-// waitWithTimeout waits for the done channel to be closed or fails the test after 2 seconds.
+// waitWithTimeout waits for the done channel to be closed. The bound is a
+// hang detector, not a latency assertion: a 2s wall clock flaked when the
+// package's parallel tests starved sqlite-backed goroutines of CPU.
 func waitWithTimeout(t *testing.T, done <-chan struct{}) {
 	t.Helper()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for goroutine to complete")
 	}
 }
@@ -4197,7 +4199,7 @@ func TestBacklogLifecycleListener_HeadlessPoolAlone_NoLongerTriggersReviewGateSp
 	wait.RequireEventually(t, func() bool {
 		fetched, ferr := storage.GetBacklogItem(ctx, createdItem.ID)
 		return ferr == nil && fetched.Status == string(BacklogStatusReview)
-	}, 2*time.Second, 20*time.Millisecond)
+	}, 30*time.Second, 20*time.Millisecond)
 
 	sessions, err := storage.ListItemSessions(ctx, createdItem.ID)
 	require.NoError(t, err)
@@ -4270,7 +4272,7 @@ func TestReviewGateSpawn_should_FireForReviewToPrPending_When_AutomatedReviewGat
 			}
 		}
 		return reviewEntry != nil
-	}, 2*time.Second, 20*time.Millisecond, "the built-in review->pr_pending gate must still spawn a review session and record its ItemSession")
+	}, 30*time.Second, 20*time.Millisecond, "the built-in review->pr_pending gate must still spawn a review session and record its ItemSession")
 	require.Equal(t, 1, spawner.getCallCount())
 
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)

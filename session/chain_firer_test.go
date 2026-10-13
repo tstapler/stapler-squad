@@ -132,25 +132,27 @@ func TestTransitionBacklogItemStatus_should_returnBeforeChainFireCreateSessionBe
 	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{NextWorkflowID: &wfID}, nil)
 	require.NoError(t, err)
 
-	transitionStart := time.Now()
-	_, err = fx.repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone,
-		&BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusReview)}, TriggeredBySystem)
-	transitionElapsed := time.Since(transitionStart)
-	require.NoError(t, err)
-
-	// The transition must return quickly — well under the time the blocking
-	// FireTriggerChained call would take (it cannot return until `unblock` is
-	// closed, which has NOT happened yet at this point in the test). A
-	// synchronous, buggy implementation would make this assertion fail by
-	// taking however long the test's own timeout below allows.
-	assert.Less(t, transitionElapsed, 500*time.Millisecond,
-		"TransitionBacklogItemStatus must not block on the chain-fire's CreateSession-equivalent call (AC9)")
+	// The firer is still blocked on `unblock` here, so the transition can only
+	// return if it does not await the chain-fire. Completion is the proof; a
+	// wall-clock latency bound flaked under load, so only hang-detect.
+	transitionDone := make(chan error, 1)
+	go func() {
+		_, transitionErr := fx.repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone,
+			&BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusReview)}, TriggeredBySystem)
+		transitionDone <- transitionErr
+	}()
+	select {
+	case transitionErr := <-transitionDone:
+		require.NoError(t, transitionErr)
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
+		t.Fatal("TransitionBacklogItemStatus blocked on the chain-fire's CreateSession-equivalent call (AC9)")
+	}
 
 	// Confirm the chain-fire really was dispatched (not silently dropped) —
 	// it should be in-flight right now, blocked on `unblock`.
 	select {
 	case <-started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("chain-fire was never dispatched from TransitionBacklogItemStatus")
 	}
 
@@ -159,7 +161,7 @@ func TestTransitionBacklogItemStatus_should_returnBeforeChainFireCreateSessionBe
 	wait.RequireEventually(t, func() bool {
 		latest, getErr := fx.repo.GetBacklogItem(ctx, item.ID)
 		return getErr == nil && latest.ChainFired
-	}, 2*time.Second, 20*time.Millisecond, "ChainFired must eventually be persisted once the async fire completes")
+	}, 30*time.Second, 20*time.Millisecond, "ChainFired must eventually be persisted once the async fire completes")
 }
 
 // TestChainFirer_Fire_should_rejectAndMarkChainFired_When_DepthAtOrAboveMax
