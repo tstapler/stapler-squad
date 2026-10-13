@@ -36,7 +36,7 @@ This repo's own audit history (`docs/tasks/backlog-feature-improvement.md`) has 
 named "known pre-existing flake, confirmed unrelated" as an acceptable reason to route around
 a failure rather than fix it. `session/tmux`'s `TestEnsureServerRunning_NoOp` and
 `TestKillOrphanedControlModeClients` were cited this way across multiple unrelated PRs without
-being fixed. Every re-excusal is a missed root-cause opportunity, and it erodes the value of CI
+being fixed (both are now root-caused and fixed — see BUG-051). Every re-excusal is a missed root-cause opportunity, and it erodes the value of CI
 red as a signal — a reviewer who sees "known flake, unrelated" stops checking whether that's
 still true.
 
