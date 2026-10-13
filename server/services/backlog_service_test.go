@@ -1953,6 +1953,39 @@ func TestSpawnSessionFromItem_should_StampRealGitBranchOnItemSession(t *testing.
 		"ItemSession.BranchName must be the worktree's real branch, which is what a PR's head ref will be")
 }
 
+// TestSpawnSessionFromItem_should_RecordBaseCommitSha_In_ProtoResponse verifies the
+// spawn-time base commit is a full SHA, matches the worktree HEAD, and is exposed on
+// the ItemSession proto returned by GetBacklogItem.
+func TestSpawnSessionFromItem_should_RecordBaseCommitSha_In_ProtoResponse(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "base sha item")
+
+	_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.Len(t, creator.calls, 1)
+
+	head, err := session.GetGitHeadSHA(creator.calls[0].path)
+	require.NoError(t, err)
+
+	resp, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	var work *sessionv1.ItemSession
+	for _, is := range resp.Msg.GetItem().GetItemSessions() {
+		if is.GetSessionRole() == "work" {
+			work = is
+		}
+	}
+	require.NotNil(t, work, "work session must be in the response")
+	assert.Regexp(t, `^[0-9a-f]{40}$`, work.GetBaseCommitSha())
+	assert.Equal(t, head, work.GetBaseCommitSha())
+}
+
 // TestSpawnSessionFromItem_Reopen_ReusesWorktreeInPlace is a regression test for a
 // real bug: reopen used to force-remove and recreate the worktree at the reused
 // path (git.GitWorktree.setupFromExistingBranch always ran `worktree remove -f`

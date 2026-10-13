@@ -86,6 +86,8 @@ export interface LinkedSession {
   worktreeBranch?: string;
   /** Absolute path to the session's git worktree, if one exists. */
   worktreePath?: string;
+  /** Worktree HEAD at spawn — the commit this work session branched from. */
+  baseCommitSha?: string;
   /**
    * Pipeline mode slug this session actually ran under, frozen at session
    * start — "" means the built-in default mode (or a pre-Epic-1.6 session
@@ -466,6 +468,7 @@ function mapItemSession(s: ItemSessionProto): LinkedSession {
     estimatedCostUsd: s.estimatedCostUsd ?? 0,
     worktreeBranch: s.worktreeBranch || undefined,
     worktreePath: s.worktreePath || undefined,
+    baseCommitSha: s.baseCommitSha || undefined,
     pipelineModeSnapshot: s.pipelineModeSnapshot ?? "",
     pipelineModeSnapshotHash: s.pipelineModeSnapshotHash ?? "",
     endReason: s.endReason || undefined,

@@ -148,6 +148,11 @@ message ItemSession {
   // diagnostic signal once the log rotates. Empty for every other end_reason
   // and for successful sessions. (Field 19 is failure_capture_path.)
   string error_detail = 27;
+  // base_commit_sha is the worktree's HEAD at spawn — what this session
+  // branched from, so an operator can verify work started from an up-to-date
+  // base. Falls back to the cached origin ref when origin was unreachable at
+  // spawn. Empty for pre-existing rows and non-work sessions.
+  string base_commit_sha = 28;
 }
 
 // BacklogStatusEvent records a single status transition for a backlog item.

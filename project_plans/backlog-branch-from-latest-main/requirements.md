@@ -5,6 +5,13 @@
 Backlog item `ea3c02bd-44be-4253-bfbe-f1f6b87b9b71`: "Start backlog work from the
 latest remote main, not a stale local branch"
 
+## Branch base
+
+Verified 2026-10-13 after `git fetch origin`: this branch
+(`backlog/stapler-squad-backlog-branch-from-latest-main`) is based on the current
+`origin/main` tip, `436ff342bccaf5efd653ac59fc77296fd8e2efa1` (0 commits behind). No
+upstream is configured for the branch, so `origin/main` is the base.
+
 ## Original description
 
 New backlog items can begin planning and implementation from an out-of-date base, which
