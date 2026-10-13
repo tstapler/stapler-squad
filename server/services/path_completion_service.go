@@ -9,8 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 
 	"connectrpc.com/connect"
 )
@@ -214,10 +215,7 @@ func (p *PathCompletionService) ListWorktrees(
 	listCtx, cancel := context.WithTimeout(ctx, listWorktreesTimeout)
 	defer cancel()
 
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	cmd := safeexec.CommandContext(listCtx, "git", "worktree", "list", "--porcelain")
-	cmd.Dir = expanded
-	output, err := cmd.Output()
+	infos, err := gitprovider.Backend().ListWorktrees(listCtx, backend.Local{Root: backend.RepoRoot(expanded)})
 	if err != nil {
 		if listCtx.Err() != nil {
 			return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("listing worktrees timed out"))
@@ -226,32 +224,19 @@ func (p *PathCompletionService) ListWorktrees(
 		return connect.NewResponse(&sessionv1.ListWorktreesResponse{}), nil
 	}
 
-	worktrees := parseWorktreeList(string(output))
-	return connect.NewResponse(&sessionv1.ListWorktreesResponse{Worktrees: worktrees}), nil
+	return connect.NewResponse(&sessionv1.ListWorktreesResponse{Worktrees: worktreeEntries(infos)}), nil
 }
 
-// parseWorktreeList parses the output of 'git worktree list --porcelain'.
-func parseWorktreeList(porcelainOutput string) []*sessionv1.WorktreeEntry {
+// worktreeEntries converts backend worktree infos to proto entries; the first listed
+// worktree is the main one.
+func worktreeEntries(infos []backend.WorktreeInfo) []*sessionv1.WorktreeEntry {
 	var result []*sessionv1.WorktreeEntry
-	var current *sessionv1.WorktreeEntry
-	isFirst := true
-
-	for _, line := range strings.Split(strings.TrimSpace(porcelainOutput), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			current = nil
-			continue
-		}
-		if strings.HasPrefix(line, "worktree ") {
-			current = &sessionv1.WorktreeEntry{
-				Path:   strings.TrimPrefix(line, "worktree "),
-				IsMain: isFirst,
-			}
-			isFirst = false
-			result = append(result, current)
-		} else if current != nil && strings.HasPrefix(line, "branch ") {
-			current.Branch = strings.TrimPrefix(line, "branch refs/heads/")
-		}
+	for i, info := range infos {
+		result = append(result, &sessionv1.WorktreeEntry{
+			Path:   string(info.Path),
+			IsMain: i == 0,
+			Branch: strings.TrimPrefix(string(info.Branch), "refs/heads/"),
+		})
 	}
 	return result
 }

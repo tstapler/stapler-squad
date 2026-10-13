@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -18,7 +17,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/git/native"
@@ -36,12 +34,8 @@ func FetchBranch(repoPath, branchName string) error {
 	// name, a documented git argument-injection vector (same class as
 	// CVE-2017-1000117) when branchName originates from caller input, as it
 	// does via BacklogItem.BaseBranch (session.ResolveExplicitBranchSHA).
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	cmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "fetch", "origin", "--", branchName)
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Errorf("failed to fetch branch: %s", string(exitErr.Stderr))
-		}
+	loc := backend.Local{Root: backend.RepoRoot(repoPath)}
+	if err := gitprovider.Backend().Fetch(ctx, loc, backend.FetchRequest{Remote: "origin", Branch: backend.BranchName(branchName)}); err != nil {
 		return fmt.Errorf("failed to fetch branch: %w", err)
 	}
 	return nil
@@ -189,19 +183,18 @@ func FormatAmbientDivergenceWarning(repoPath, defaultBranch, ambientBranch strin
 // order and baseSHA == "" (err == nil) unborn-repo convention, but through
 // runner.Run over SSH instead of go-git against the local filesystem.
 func ResolveRemoteWorktreeBaseCommit(ctx context.Context, runner tmux.CommandRunner, repoPath string) (defaultBranch, baseSHA string, err error) {
-	return resolveRemoteWorktreeBaseCommit(ctx, gitprovider.Backend(), runner, repoPath)
+	return resolveRemoteWorktreeBaseCommit(ctx, gitprovider.Backend(), gitprovider.Backend(), runner, repoPath)
 }
 
 // resolveRemoteWorktreeBaseCommit is ResolveRemoteWorktreeBaseCommit with the ref reads going
-// through refs; fetch still runs on runner.
-func resolveRemoteWorktreeBaseCommit(ctx context.Context, refs backend.Backend, runner tmux.CommandRunner, repoPath string) (defaultBranch, baseSHA string, err error) {
+// through refs and the fetch through network, both against runner's host.
+func resolveRemoteWorktreeBaseCommit(ctx context.Context, refs, network backend.Backend, runner tmux.CommandRunner, repoPath string) (defaultBranch, baseSHA string, err error) {
 	var errs []error
 	loc := remoteLocation(runner, "", repoPath)
 	for _, candidate := range CandidateDefaultBranches {
-		//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-		out, fetchErr := runner.Run(ctx, repoPath, "git", "fetch", "origin", "--", candidate)
+		fetchErr := network.Fetch(ctx, loc, backend.FetchRequest{Remote: "origin", Branch: backend.BranchName(candidate)})
 		if fetchErr != nil {
-			errs = append(errs, fmt.Errorf("fetch %s: %s: %w", candidate, strings.TrimSpace(string(out)), fetchErr))
+			errs = append(errs, fmt.Errorf("fetch %s: %w", candidate, fetchErr))
 			continue
 		}
 		sha, revErr := refs.ResolveRef(ctx, loc, backend.RefName("origin/"+candidate))

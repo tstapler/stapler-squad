@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/git/backend/cli"
 	"github.com/tstapler/stapler-squad/testutil/gitfake"
 )
 
@@ -132,7 +133,7 @@ func TestResolveRemoteWorktreeBaseCommit_ReadsRefsOnRemoteNeverGoGit(t *testing.
 		return "", backend.ErrRefNotFound
 	}
 
-	branch, sha, err := resolveRemoteWorktreeBaseCommit(context.Background(), rig.Router, runner, "/remote/repo")
+	branch, sha, err := resolveRemoteWorktreeBaseCommit(context.Background(), rig.Router, cli.New(nil), runner, "/remote/repo")
 
 	require.NoError(t, err)
 	assert.Equal(t, "main", branch)
@@ -166,7 +167,7 @@ func TestResolveRemoteWorktreeBaseCommit_UnbornVersusFailure(t *testing.T) {
 				}
 				return "", backend.ErrRefNotFound
 			}
-			branch, sha, err := resolveRemoteWorktreeBaseCommit(context.Background(), b, &fetchOKRunner{}, "/r")
+			branch, sha, err := resolveRemoteWorktreeBaseCommit(context.Background(), b, cli.New(nil), &fetchOKRunner{}, "/r")
 			if tc.wantErr {
 				require.Error(t, err)
 				return

@@ -12,7 +12,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
@@ -313,17 +312,13 @@ func RepairCorruptedGitRepo(repoPath string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	cmd := safeexec.CommandContext(ctx, "git", "clone", originURL, repoPath)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to re-clone repository at %s: %w\nOutput: %s", repoPath, err, sanitizeCloneOutput(output, originURL))
+	if err := gitprovider.Backend().Clone(ctx, backend.Local{Root: backend.RepoRoot(repoPath)}, backend.CloneRequest{URL: backend.RemoteURL(originURL)}); err != nil {
+		return fmt.Errorf("failed to re-clone repository at %s: %s", repoPath, sanitizeCloneOutput([]byte(err.Error()), originURL))
 	}
 	if strings.Contains(originURL, "@") {
 		publicURL := strings.Replace(originURL, originURL[strings.Index(originURL, "://")+3:strings.Index(originURL, "@")+1], "", 1)
-		//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-		setURLCmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "remote", "set-url", "origin", publicURL)
-		if output, err := setURLCmd.CombinedOutput(); err != nil {
-			log.Warn("failed to strip credentials from remote url", "err", err, "output", string(output))
+		if err := gitprovider.Backend().SetRemoteURL(ctx, backend.Local{Root: backend.RepoRoot(repoPath)}, backend.SetRemoteURLRequest{Remote: "origin", URL: backend.RemoteURL(publicURL)}); err != nil {
+			log.Warn("failed to strip credentials from remote url", "err", err)
 		}
 	}
 	log.Info("successfully re-cloned previously corrupted repository", "path", repoPath)
@@ -376,10 +371,7 @@ func (m *RepoPathManager) EnsureRepoCloned(ctx context.Context, ref *GitHubRef) 
 			log.Info("repository exists, fetching latest", "path", repoPath)
 			fetchCtx, fetchCancel := context.WithTimeout(ctx, 60*time.Second)
 			defer fetchCancel()
-			//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-			cmd := safeexec.CommandContext(fetchCtx, "git", "-C", repoPath, "fetch", "--all", "--prune")
-			cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-			if output, err := cmd.CombinedOutput(); err != nil {
+			if err := gitprovider.Backend().Fetch(fetchCtx, backend.Local{Root: backend.RepoRoot(repoPath)}, backend.FetchRequest{All: true, Prune: true}); err != nil {
 				// Only propagate when the caller's own ctx (not the local 60s
 				// fetchCtx timeout) is what killed the fetch — that means the
 				// caller's deadline was actually hit and callers like
@@ -390,7 +382,7 @@ func (m *RepoPathManager) EnsureRepoCloned(ctx context.Context, ref *GitHubRef) 
 				if ctx.Err() != nil {
 					return "", fmt.Errorf("failed to fetch repository: %w", ctx.Err())
 				}
-				log.Warn("failed to fetch repository", "err", err, "output", string(output))
+				log.Warn("failed to fetch repository", "err", err)
 				// Don't fail - the existing repo is still usable
 			}
 			return repoPath, nil
@@ -420,10 +412,7 @@ func (m *RepoPathManager) EnsureRepoCloned(ctx context.Context, ref *GitHubRef) 
 	log.Info("cloning repository", "host", host, "owner", ref.Owner, "repo", ref.Repo, "path", repoPath)
 	cloneCtx, cloneCancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cloneCancel()
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	cmd := safeexec.CommandContext(cloneCtx, "git", "clone", cloneURL, repoPath)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	if output, err := cmd.CombinedOutput(); err != nil {
+	if err := gitprovider.Backend().Clone(cloneCtx, backend.Local{Root: backend.RepoRoot(repoPath)}, backend.CloneRequest{URL: backend.RemoteURL(cloneURL)}); err != nil {
 		// A killed/timed-out clone leaves a partially-initialized .git
 		// directory behind (see isCorruptedClone) — remove it so the next
 		// call re-clones from scratch instead of finding and reusing a
@@ -431,15 +420,13 @@ func (m *RepoPathManager) EnsureRepoCloned(ctx context.Context, ref *GitHubRef) 
 		if rmErr := os.RemoveAll(repoPath); rmErr != nil {
 			log.Warn("failed to remove partial clone directory after failed clone", "path", repoPath, "err", rmErr)
 		}
-		return "", fmt.Errorf("failed to clone repository: %w\nOutput: %s", err, sanitizeCloneOutput(output, cloneURL))
+		return "", fmt.Errorf("failed to clone repository: %s", sanitizeCloneOutput([]byte(err.Error()), cloneURL))
 	}
 
 	if strings.Contains(cloneURL, "@") {
 		publicURL := fmt.Sprintf("https://%s/%s/%s.git", host, ref.Owner, ref.Repo)
-		//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-		setURLCmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "remote", "set-url", "origin", publicURL)
-		if output, err := setURLCmd.CombinedOutput(); err != nil {
-			log.Warn("failed to strip credentials from remote url", "err", err, "output", string(output))
+		if err := gitprovider.Backend().SetRemoteURL(ctx, backend.Local{Root: backend.RepoRoot(repoPath)}, backend.SetRemoteURLRequest{Remote: "origin", URL: backend.RemoteURL(publicURL)}); err != nil {
+			log.Warn("failed to strip credentials from remote url", "err", err)
 		}
 	}
 

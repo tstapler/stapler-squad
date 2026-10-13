@@ -8,8 +8,8 @@ import (
 	"github.com/tstapler/stapler-squad/session/gitprovider"
 )
 
-// refReader is the backend ref reads go through: the injected one, else the process-wide one.
-func (g *GitWorktree) refReader() backend.Backend {
+// gitBackend is the backend git operations go through: the injected one, else the process-wide one.
+func (g *GitWorktree) gitBackend() backend.Backend {
 	if g.refBackend != nil {
 		return g.refBackend
 	}
@@ -28,7 +28,7 @@ func (g *GitWorktree) locate(path string) backend.RepoLocation {
 func (g *GitWorktree) headMergeBase(branch string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	sha, err := g.refReader().MergeBase(ctx, g.locate(g.worktreePath), backend.MergeBaseRequest{Left: "HEAD", Right: backend.RefName(branch)})
+	sha, err := g.gitBackend().MergeBase(ctx, g.locate(g.worktreePath), backend.MergeBaseRequest{Left: "HEAD", Right: backend.RefName(branch)})
 	if err != nil {
 		return ""
 	}
