@@ -31,12 +31,10 @@ func newProduction(cohorts backend.CohortMap, local backend.Runner, dir string) 
 		cancel()
 		opts = append(opts, WithInProcess(newGoGit(files, err), newCapabilityProbe(files, err)))
 	}
-	if anyShadow(cohorts) {
-		if dir != "" {
-			opts = append(opts, WithMismatchRecorder(&backend.FileMismatchRecorder{Dir: filepath.Join(dir, "shadow-mismatches")}))
-		}
-		startSoak(cohorts, dir)
+	if anyShadow(cohorts) && dir != "" {
+		opts = append(opts, WithMismatchRecorder(&backend.FileMismatchRecorder{Dir: filepath.Join(dir, "shadow-mismatches")}))
 	}
+	startSoak(cohorts, dir) // also discards a stale ledger when nothing is shadowed
 	return NewRouter(cohorts, local, opts...)
 }
 

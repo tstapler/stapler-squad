@@ -331,3 +331,26 @@ func TestShadowRefsReadsAgreeWithRealGit(t *testing.T) {
 	})
 	assert.Zero(t, real, "go-git disagreed with git on a plain repository")
 }
+
+func TestNewProductionDiscardsStaleLedgerWhenNothingIsShadowed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, soakLedgerFile)
+	require.NoError(t, os.WriteFile(path, []byte(`{"since":"2026-01-01T00:00:00Z"}`), 0o600))
+	newProduction(backend.CohortMap{}, &fakeLocal{}, dir)
+	assert.NoFileExists(t, path)
+}
+
+func TestLedgerForADifferentShadowedSetIsNotReused(t *testing.T) {
+	dir := t.TempDir()
+	old := time.Now().Add(-30 * 24 * time.Hour).UTC()
+	st := &soakState{path: filepath.Join(dir, soakLedgerFile), base: ledger{Since: old, Shadowed: []string{"diffstatus"}}}
+	st.flush(context.Background())
+
+	startSoak(shadowRefs(), dir)
+	t.Cleanup(stopSoak)
+	soakMu.Lock()
+	got := soakActive.base
+	soakMu.Unlock()
+	assert.Equal(t, []string{"refs"}, got.Shadowed)
+	assert.WithinDuration(t, time.Now(), got.Since, time.Minute, "a new cohort mix starts a new window")
+}

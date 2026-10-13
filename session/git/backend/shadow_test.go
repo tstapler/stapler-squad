@@ -372,3 +372,18 @@ func TestShadowPinThatBecomesUnreadableIsNotTreatedAsMovement(t *testing.T) {
 		t.Fatal("an unreadable pin must not downgrade a persistent disagreement to racy")
 	}
 }
+
+func TestFileMismatchRecorderStopsWritingAtItsCap(t *testing.T) {
+	dir := t.TempDir()
+	rec := &backend.FileMismatchRecorder{Dir: dir}
+	for i := 0; i < 250; i++ {
+		rec.Record(backend.MismatchRecord{Operation: backend.OpDiff, Class: backend.MismatchReal})
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 200 {
+		t.Fatalf("wrote %d records, want the cap of 200", len(entries))
+	}
+}

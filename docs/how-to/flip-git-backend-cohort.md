@@ -7,7 +7,9 @@ first step and the evidence that allows the second. Design: ADR-004 and ADR-006 
 
 In `shadow` the git CLI still answers every call. The in-process backend (go-git) runs the same
 read in the same call, the two answers are compared, and the difference is counted. Shadow never
-changes the returned value or error, never spawns git, and only runs for read-only operations.
+changes the returned value or error, and only runs for read-only operations. The in-process side
+spawns no process; the one `git config` discovery at startup and the CLI re-reads described under
+Limits are the only extra spawns.
 
 ## Start the soak (`refs`)
 
@@ -73,7 +75,8 @@ repository is a hash of its root) to `<config dir>/shadow-mismatches/` and log
   operation in the cohort. An operation the app never calls stays at 0 and holds the window open.
 - `class="real"` and `class="false_clean"` are 0 for every operation. `racy` is reported and does
   not block. On a real mismatch, fix it using the repro record, then restart the clock.
-- go-git p50 is not slower than the CLI p50 for every operation (the G3 rule in `gates.md`).
+- go-git p50 (estimated from histogram buckets, so a near tie inside one bucket is decided by
+  interpolation) is not slower than the CLI p50 for every operation (the G3 rule in `gates.md`).
   The verdict is per cohort: one slow operation (G3 measured `Log` as slower) keeps the whole
   cohort NOT READY. Per-operation overrides are not supported yet, so splitting the cohort is a
   decision for the maintainer.
@@ -86,14 +89,20 @@ When these hold, set `"refs": "gogit"` and restart. The verdict never changes co
 
 Set the cohort back to `cli` (or remove the key) in `config.json` and restart the service. For an
 emergency without editing the file, start the service with `STAPLER_SQUAD_GIT_BACKEND=cli`.
-Leaving shadow deletes the soak ledger on the next start.
+Leaving shadow deletes the soak ledger on the next start, and a ledger recorded for a different set of shadowed cohorts is discarded rather than reused.
 
 ## Limits
 
+- At most 200 repro records are written per process run; counters keep counting past that and a
+  WARN says when the cap is hit.
+- With a non-`cli` cohort, the first git call in the process runs a one-off `git config` discovery
+  (10 s bound) before it returns.
 - Counters and the ledger are per instance. The ledger is flushed every minute, so a crash loses
   up to a minute of counts.
 - `git_backend_cli_spawn_total` counts spawns made through the router. Callers still on their own
   CLI backend (for example the session worktree path) are not counted there.
 - The shadow read runs in the caller's goroutine, after the CLI call, so a shadowed refs call
   costs the CLI latency plus the in-process latency (sub-millisecond for `ResolveRef`, per G3).
-  Both sides are timed in `git_backend_shadow_duration_ms`.
+  Both sides are timed in `git_backend_shadow_duration_ms`. On a disagreement the call re-reads
+  both sides (up to twice more) to classify it, which spawns the CLI again; those spawns show up
+  in `git_backend_cli_spawn_total`.

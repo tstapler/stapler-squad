@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -31,8 +32,10 @@ const (
 // ledger persists the cumulative soak counters, so a service restart (make install-service) does
 // not reset the 7-day window. It is written only while some cohort is in shadow.
 type ledger struct {
-	Since  time.Time  `json:"since"`
-	Sample soakSample `json:"sample"`
+	Since time.Time `json:"since"`
+	// Shadowed names the cohorts that were in shadow; a ledger from a different set is not reused.
+	Shadowed []string   `json:"shadowed"`
+	Sample   soakSample `json:"sample"`
 }
 
 type soakState struct {
@@ -44,13 +47,17 @@ type soakState struct {
 }
 
 var (
-	soakMu     sync.Mutex
-	soakActive *soakState
+	soakMu      sync.Mutex
+	soakActive  *soakState
+	soakCohorts backend.CohortMap // the configured modes, set on every production build
 )
 
 // startSoak loads (or, when no cohort is shadowed, discards) the persisted ledger and starts the
 // periodic flush. It is a no-op when no cohort is in shadow, so the default path adds nothing.
 func startSoak(cohorts backend.CohortMap, dir string) {
+	soakMu.Lock()
+	soakCohorts = cohorts
+	soakMu.Unlock()
 	if !anyShadow(cohorts) {
 		if dir != "" {
 			// Leaving shadow ends the window: the next one starts a fresh clock.
@@ -62,7 +69,11 @@ func startSoak(cohorts backend.CohortMap, dir string) {
 	if dir != "" {
 		st.path = filepath.Join(dir, soakLedgerFile)
 		st.base = loadLedger(st.path)
+		if !slices.Equal(st.base.Shadowed, shadowedNames(cohorts)) {
+			st.base = ledger{}
+		}
 	}
+	st.base.Shadowed = shadowedNames(cohorts)
 	if st.base.Since.IsZero() {
 		st.base.Since = time.Now().UTC()
 	}
@@ -97,6 +108,16 @@ func stopSoak() {
 	}
 }
 
+func shadowedNames(c backend.CohortMap) []string {
+	var names []string
+	for _, co := range backend.AllCohorts() {
+		if c.Mode(co) == backend.BackendShadow {
+			names = append(names, co.String())
+		}
+	}
+	return names
+}
+
 func anyShadow(c backend.CohortMap) bool {
 	for _, co := range backend.AllCohorts() {
 		if c.Mode(co) == backend.BackendShadow {
@@ -123,7 +144,7 @@ func loadLedger(path string) ledger {
 }
 
 func (s *soakState) merged(ctx context.Context) ledger {
-	return ledger{Since: s.base.Since, Sample: mergeSamples(s.base.Sample, readLive(ctx))}
+	return ledger{Since: s.base.Since, Shadowed: s.base.Shadowed, Sample: mergeSamples(s.base.Sample, readLive(ctx))}
 }
 
 // flush folds the live counters into the base and writes the ledger atomically.
@@ -201,10 +222,10 @@ type SoakReport struct {
 func SoakStatus(ctx context.Context) SoakReport {
 	Shared() // ensure the router (and with it the ledger) is built
 	soakMu.Lock()
-	st := soakActive
+	st, cohorts := soakActive, soakCohorts
 	soakMu.Unlock()
 	if st == nil {
-		return buildReport(time.Now(), backend.CohortMap{}, ledger{}, false)
+		return buildReport(time.Now(), cohorts, ledger{}, false)
 	}
 	st.mu.Lock()
 	l := st.merged(ctx)
@@ -326,6 +347,16 @@ func evaluate(rep SoakReport, cohort backend.Cohort) SoakVerdict {
 		blockers = append(blockers, fmt.Sprintf("capability detect_error ratio %.2f%% is at or above %.0f%%", 100*rep.Capability.DetectErrorRatio, 100*SoakDetectErrorBudget))
 	}
 	return SoakVerdict{Ready: len(blockers) == 0, Blockers: blockers}
+}
+
+// Ready is true when at least one cohort is shadowed and every shadowed cohort meets the criteria.
+func (r SoakReport) Ready() bool {
+	for _, v := range r.Verdict {
+		if !v.Ready {
+			return false
+		}
+	}
+	return len(r.Verdict) > 0
 }
 
 // Text renders the report for a terminal.

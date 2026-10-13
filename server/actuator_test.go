@@ -96,6 +96,9 @@ func TestWriteGitBackendSoak_JSONAndText(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("JSON body: %v", err)
 	}
+	if rec.Header().Get("X-Git-Soak-Ready") != "false" {
+		t.Errorf("a report with no shadowed cohort must not be ready, header = %q", rec.Header().Get("X-Git-Soak-Ready"))
+	}
 	if rec.Header().Get("Content-Type") != "application/json" || got["cohorts"] == nil {
 		t.Errorf("json response = %q %v", rec.Header().Get("Content-Type"), got)
 	}

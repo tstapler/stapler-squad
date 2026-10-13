@@ -72,9 +72,20 @@ type FileMismatchRecorder struct {
 	seq atomic.Uint64
 }
 
+// maxRecordsPerProcess caps files written per process so a deterministic mismatch on a hot read
+// cannot fill the disk; the counters keep counting past it.
+const maxRecordsPerProcess = 200
+
 // Record implements MismatchRecorder. Failures are logged, never returned: recording must not
 // affect the call that triggered it.
 func (f *FileMismatchRecorder) Record(rec MismatchRecord) {
+	n := f.seq.Add(1)
+	if n > maxRecordsPerProcess {
+		if n == maxRecordsPerProcess+1 {
+			log.Warn("shadow mismatch record cap reached, further repro records are dropped until restart", "cap", maxRecordsPerProcess)
+		}
+		return
+	}
 	if err := os.MkdirAll(f.Dir, 0o700); err != nil {
 		log.Warn("cannot create shadow mismatch dir", "err", redact.Git(err.Error()))
 		return
@@ -84,7 +95,7 @@ func (f *FileMismatchRecorder) Record(rec MismatchRecord) {
 		log.Warn("cannot encode shadow mismatch record", "err", err)
 		return
 	}
-	name := fmt.Sprintf("%s-%06d-%s.json", time.Now().UTC().Format("20060102T150405Z"), f.seq.Add(1), rec.Operation)
+	name := fmt.Sprintf("%s-%06d-%s.json", time.Now().UTC().Format("20060102T150405Z"), n, rec.Operation)
 	if err := os.WriteFile(filepath.Join(f.Dir, name), data, 0o600); err != nil {
 		log.Warn("cannot write shadow mismatch record", "err", redact.Git(err.Error()))
 	}

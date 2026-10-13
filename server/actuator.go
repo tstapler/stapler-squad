@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"runtime"
+	"strconv"
 
 	"github.com/tstapler/stapler-squad/session/gitwiring"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -37,6 +38,7 @@ func handleActuatorGitBackend(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeGitBackendSoak(w http.ResponseWriter, r *http.Request, report gitwiring.SoakReport) {
+	w.Header().Set("X-Git-Soak-Ready", strconv.FormatBool(report.Ready()))
 	if r.URL.Query().Get("format") == "text" {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte(report.Text()))
