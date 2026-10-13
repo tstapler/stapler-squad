@@ -294,6 +294,9 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 	// "complete" while the backlog item silently failed to advance (e.g. a concurrent status
 	// change broke the optimistic-concurrency precondition).
 	var statusTransitionErr error
+	// stall is the work-role stall handler's result; its Notify override is applied
+	// at the notification site below.
+	var stall stallResult
 	// linkedItemID carries the backlog item ID (when this session is backlog-linked) out
 	// of the nested lookup block below, so the generic done/stuck notification at the end
 	// of this function can stamp it via events.SessionScopedMetadata.
@@ -359,87 +362,7 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 						expectedStatus = string(session.BacklogStatusIdea)
 					case session.SessionRoleWork:
 						if !outcome.Done {
-							// Turn-cap stop with no DONE signal: don't force the item into
-							// review — that reviews known-incomplete work every time, and
-							// (before this fix) a doomed review that itself exits with no
-							// verdict fed straight back into another turn-cap-doomed work
-							// session, with no working circuit breaker to stop it (a live
-							// item bounced 78 times in 24h this way — see
-							// docs/tasks/backlog-feature-improvement.md, 2026-07-19 update).
-							// Leave toStatus unset so the item stays in_progress; the
-							// autonomous_stuck row written above already makes this visible
-							// in the Unfinished tab, and the generic "Autonomous fix stuck"
-							// notification below still fires. Give the item a fresh turn
-							// budget directly instead, gated by the same rework cap the
-							// review-side auto-reopen loop uses.
-							log.Info("[AutonomousDriver] work session hit turn cap without DONE; leaving in_progress instead of forcing review", "item", item.ID, "reason", outcome.Reason)
-							// BUG-048's review-role fix (below, in the SessionRoleReview branch)
-							// established that a driver stopping (turn cap, or here a startup
-							// timeout with 0 turns) does NOT kill the underlying tmux/CLI
-							// session -- AutonomousDriver.run just stops injecting turns, so the
-							// ItemSession row stays EndedAt == nil and the pane keeps producing
-							// output. That fact was never applied to this branch: without ending
-							// `is` first, AutoRespawnAutonomousWork dispatched below immediately
-							// finds this very session via findActiveWorkSession (EndedAt == nil)
-							// and/or tombstoneOrphanWorkSessions' IsSessionLive (pane still
-							// alive) and self-blocks with RESPAWN_BLOCKED_ACTIVE, citing the
-							// pane's leftover output recency as "still active" even though the
-							// driver that was using it already reported Stuck. End it now,
-							// synchronously, exactly like the review branch does, so the respawn
-							// below sees an accurately-closed session instead of racing its own
-							// stale liveness signal.
-							if endErr := concreteStorage.UpdateItemSessionEnded(ctx, is.ID, time.Now()); endErr != nil { //nolint:silenttransition // AutoRespawnAutonomousWork -> tombstoneOrphanWorkSessions/findActiveWorkSession blocks respawn with notifyRespawnBlockedByActiveSession
-								log.Warn("[AutonomousDriver] onAutonomousDriverComplete: UpdateItemSessionEnded(work, stuck) failed", "item", item.ID, "itemSession", is.ID, "err", endErr)
-								// Mirrors the SessionRoleReview branch's notifyStuckBookkeepingFailed
-								// call below: this bookkeeping write is what makes a stuck session visible
-								// to auto-respawn's own liveness checks (see the comment above this call).
-								a.notifyStuckBookkeepingFailed(item.ID, item.Title, is.ID, stuckSessionRoleWork, endErr)
-							}
-							if a.autonomousStuckRespawner != nil {
-								respawner := a.autonomousStuckRespawner
-								itemID := item.ID
-								itemTitle := item.Title
-								// Backoff-gated (session/backlog_remediation.go, Phase A of
-								// docs/tasks/backlog-stuck-item-auto-remediation.md): the
-								// MarkStuck(autonomous_stuck) call just above always
-								// refreshes/opens this item's stuck row on every
-								// turn-cap-without-DONE occurrence, so without this gate the
-								// respawn below would fire on every single occurrence too —
-								// exactly the "burns through the rework cap in minutes"
-								// shape the design doc's backoff schedule exists to stop
-								// (count-capped only by the rework cap otherwise, which can
-								// be raised well past what a genuinely-looping item should
-								// get). Checked synchronously (not inside the goroutine) so
-								// the attempt/restart-grace accounting write happens exactly
-								// once per eligible occurrence, before the async dispatch.
-								due, justParked, gateErr := concreteStorage.RemediationDue(ctx, itemID, domain.StuckReasonAutonomousStuck)
-								if gateErr != nil {
-									log.Warn("[AutonomousDriver] RemediationDue(autonomous_stuck) failed", "item", itemID, "err", gateErr)
-									due = true // fail open — see session.autoReopenWithBackoffGate's identical rationale
-								}
-								if justParked {
-									a.bus.Publish(events.NewNotificationEvent(
-										itemID,
-										"Auto-rework paused",
-										fmt.Sprintf("stuck-autonomous-parked-%s", itemID),
-										int32(8),                   // NotificationType_WARNING
-										derivePriority(true, true), // urgent, important — automated retry gave up; a genuine dead end
-										"Automated retry paused",
-										fmt.Sprintf("%s — automated turn-budget respawns have been retried %d times over an extended period without finishing. It now needs manual attention; use Reset to try again automatically.", itemTitle, session.MaxRemediationAttempts),
-										nil,
-									))
-								}
-								if due {
-									go func() {
-										if respawnErr := respawner.AutoRespawnAutonomousWork(a.lifecycleCtx, itemID); respawnErr != nil {
-											log.Warn("[AutonomousDriver] AutoRespawnAutonomousWork failed", "item", itemID, "err", respawnErr)
-											a.notifyAutonomousRespawnAttemptFailed(itemID, itemTitle, respawnErr)
-										}
-									}()
-								} else {
-									log.Info("[AutonomousDriver] autonomous_stuck remediation backoff not yet due, skipping respawn", "item", itemID)
-								}
-							}
+							stall = a.handleWorkStall(ctx, concreteStorage, item, is, outcome)
 						} else {
 							// The orchestrator LLM (session/autonomous_driver.go's
 							// autonomousSystemPrompt) judges "done" purely from a raw
@@ -612,6 +535,15 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 		notifType = int32(9)           // NotificationType_FAILURE
 		urgent, important = true, true // a silent status/reality mismatch is a genuine correctness bug
 	}
+	if stall.Notify.Suppress {
+		return
+	}
+	if stall.Notify.Title != "" {
+		title = stall.Notify.Title
+	}
+	if stall.Notify.Body != "" {
+		body = stall.Notify.Body
+	}
 	// Hidden sessions: the delivery gate drops the routine "Autonomous fix
 	// complete" (INFO) and delivers the FAILURE-class "stuck" notification.
 	// SessionRoleReview returns before this point, so a hidden review run
@@ -622,6 +554,109 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 		derivePriority(urgent, important),
 		title, body, events.SessionScopedMetadata(nil, linkedItemID),
 	))
+}
+
+// stallResult is what handleWorkStall tells its caller: the recovery taken and any
+// change to the generic "Autonomous fix stuck" notification (zero value = publish it
+// unchanged).
+type stallResult struct {
+	Action domain.StallAction
+	Notify notifyOverride
+}
+
+// notifyOverride suppresses or rewords the generic stuck notification.
+type notifyOverride struct {
+	Suppress bool
+	Title    string
+	Body     string
+}
+
+// handleWorkStall handles a work-role driver stop that did not finish: it ends the
+// stalled ItemSession and, subject to the remediation backoff, dispatches a respawn.
+// Callers pass the outer Background ctx; every storage write here uses it.
+func (a *AutonomousOrchestrationService) handleWorkStall(ctx context.Context, concreteStorage *session.Storage, item *session.BacklogItemData, is session.ItemSessionSummary, outcome session.AutonomousDriverOutcome) stallResult {
+	// Turn-cap stop with no DONE signal: don't force the item into
+	// review — that reviews known-incomplete work every time, and
+	// (before this fix) a doomed review that itself exits with no
+	// verdict fed straight back into another turn-cap-doomed work
+	// session, with no working circuit breaker to stop it (a live
+	// item bounced 78 times in 24h this way — see
+	// docs/tasks/backlog-feature-improvement.md, 2026-07-19 update).
+	// Leave toStatus unset so the item stays in_progress; the
+	// autonomous_stuck row written above already makes this visible
+	// in the Unfinished tab, and the generic "Autonomous fix stuck"
+	// notification below still fires. Give the item a fresh turn
+	// budget directly instead, gated by the same rework cap the
+	// review-side auto-reopen loop uses.
+	log.Info("[AutonomousDriver] work session hit turn cap without DONE; leaving in_progress instead of forcing review", "item", item.ID, "reason", outcome.Reason)
+	// BUG-048's review-role fix (below, in the SessionRoleReview branch)
+	// established that a driver stopping (turn cap, or here a startup
+	// timeout with 0 turns) does NOT kill the underlying tmux/CLI
+	// session -- AutonomousDriver.run just stops injecting turns, so the
+	// ItemSession row stays EndedAt == nil and the pane keeps producing
+	// output. That fact was never applied to this branch: without ending
+	// `is` first, AutoRespawnAutonomousWork dispatched below immediately
+	// finds this very session via findActiveWorkSession (EndedAt == nil)
+	// and/or tombstoneOrphanWorkSessions' IsSessionLive (pane still
+	// alive) and self-blocks with RESPAWN_BLOCKED_ACTIVE, citing the
+	// pane's leftover output recency as "still active" even though the
+	// driver that was using it already reported Stuck. End it now,
+	// synchronously, exactly like the review branch does, so the respawn
+	// below sees an accurately-closed session instead of racing its own
+	// stale liveness signal.
+	if endErr := concreteStorage.UpdateItemSessionEnded(ctx, is.ID, time.Now()); endErr != nil { //nolint:silenttransition // AutoRespawnAutonomousWork -> tombstoneOrphanWorkSessions/findActiveWorkSession blocks respawn with notifyRespawnBlockedByActiveSession
+		log.Warn("[AutonomousDriver] onAutonomousDriverComplete: UpdateItemSessionEnded(work, stuck) failed", "item", item.ID, "itemSession", is.ID, "err", endErr)
+		// Mirrors the SessionRoleReview branch's notifyStuckBookkeepingFailed
+		// call below: this bookkeeping write is what makes a stuck session visible
+		// to auto-respawn's own liveness checks (see the comment above this call).
+		a.notifyStuckBookkeepingFailed(item.ID, item.Title, is.ID, stuckSessionRoleWork, endErr)
+	}
+	if a.autonomousStuckRespawner != nil {
+		respawner := a.autonomousStuckRespawner
+		itemID := item.ID
+		itemTitle := item.Title
+		// Backoff-gated (session/backlog_remediation.go, Phase A of
+		// docs/tasks/backlog-stuck-item-auto-remediation.md): the
+		// MarkStuck(autonomous_stuck) call just above always
+		// refreshes/opens this item's stuck row on every
+		// turn-cap-without-DONE occurrence, so without this gate the
+		// respawn below would fire on every single occurrence too —
+		// exactly the "burns through the rework cap in minutes"
+		// shape the design doc's backoff schedule exists to stop
+		// (count-capped only by the rework cap otherwise, which can
+		// be raised well past what a genuinely-looping item should
+		// get). Checked synchronously (not inside the goroutine) so
+		// the attempt/restart-grace accounting write happens exactly
+		// once per eligible occurrence, before the async dispatch.
+		due, justParked, gateErr := concreteStorage.RemediationDue(ctx, itemID, domain.StuckReasonAutonomousStuck)
+		if gateErr != nil {
+			log.Warn("[AutonomousDriver] RemediationDue(autonomous_stuck) failed", "item", itemID, "err", gateErr)
+			due = true // fail open — see session.autoReopenWithBackoffGate's identical rationale
+		}
+		if justParked {
+			a.bus.Publish(events.NewNotificationEvent(
+				itemID,
+				"Auto-rework paused",
+				fmt.Sprintf("stuck-autonomous-parked-%s", itemID),
+				int32(8),                   // NotificationType_WARNING
+				derivePriority(true, true), // urgent, important — automated retry gave up; a genuine dead end
+				"Automated retry paused",
+				fmt.Sprintf("%s — automated turn-budget respawns have been retried %d times over an extended period without finishing. It now needs manual attention; use Reset to try again automatically.", itemTitle, session.MaxRemediationAttempts),
+				nil,
+			))
+		}
+		if due {
+			go func() {
+				if respawnErr := respawner.AutoRespawnAutonomousWork(a.lifecycleCtx, itemID); respawnErr != nil {
+					log.Warn("[AutonomousDriver] AutoRespawnAutonomousWork failed", "item", itemID, "err", respawnErr)
+					a.notifyAutonomousRespawnAttemptFailed(itemID, itemTitle, respawnErr)
+				}
+			}()
+		} else {
+			log.Info("[AutonomousDriver] autonomous_stuck remediation backoff not yet due, skipping respawn", "item", itemID)
+		}
+	}
+	return stallResult{Action: domain.StallActionRespawn}
 }
 
 // stuckSessionRole distinguishes which onAutonomousDriverComplete branch a
