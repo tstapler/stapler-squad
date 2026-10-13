@@ -287,6 +287,7 @@ proposal for the owner to edit; each cell is one constant.
 
 | Final action | Title (type) | Action sentence | You act? |
 |---|---|---|---|
+| nudging (plan-time row annotation, before the nudge outcome is known) | none (row only; the notification fires after the outcome) | A prompt is being sent to continue it automatically. You do not need to do anything. | No |
 | nudged | Autonomous session nudged (INFO) | It was prompted to continue automatically (nudge `n` of `cap`). You do not need to do anything. | No |
 | respawned (no nudge tried) | Autonomous fix stuck (FAILURE, unchanged) | A fresh session is being started automatically. You only need to act if a "needs manual attention" notification follows. | Only if a follow-up says so |
 | respawned after a failed nudge | Autonomous fix stuck (FAILURE, unchanged) | A prompt could not be sent (`<failure phrase>`), so a fresh session is being started instead. You only need to act if a "needs manual attention" notification follows. | Only if a follow-up says so |
