@@ -49,6 +49,7 @@ var pinnedCallers = map[string]callerRow{
 	"session:AutonomousDriver.run":                                   {kind: kindAcquirer, reason: "automated writer: takes the lease once per turn"},
 	"session:Instance.Restart":                                       {kind: kindLifecycle, reason: "restart marker typed into the pane Restart just started; reached only from guarded or internal entries (T-RO-46)"},
 	"session:Instance.changeDirectory":                               {kind: kindLifecycle, reason: "cd typed for a directory switch; reached only from SwitchWorkspace, guarded by Story 5.2"},
+	"session:NudgeStalledAutonomousSession":                          {kind: kindAcquirer, reason: "autonomous stall nudge: gates, one Try lease, atomic slot claim, fixed text; reached only from the service stall path behind diagnose_nudge_enabled"},
 	"session:attemptBacklogNudge":                                    {kind: kindAcquirer, reason: "session driver idle nudge: takes the lease once"},
 	"session:leasedSessionAccessor.WriteToPTY":                       {kind: kindAcquirer, reason: "the wrapper that implements ratelimit.SessionAccessor: takes the lease, writes, releases"},
 	"session:sendAnswerKeyUnderLease":                                {kind: kindAcquirer, reason: "session driver answer key: takes the lease once"},

@@ -308,6 +308,11 @@ func (dh *diagnoseHandlers) resolveNudgeTarget(ctx context.Context, a nudgeSessi
 		return nil, errResult(ErrSessionNotFound, fmt.Sprintf("session %q not found or not live", a.targetSessionID), "")
 	}
 	if verifyErr := session.VerifyNudgeSafeToWrite(ctx, target); verifyErr != nil {
+		// The settle wait honours ctx: a cancelled request is not a refusal
+		// to nudge, so it must not tell the agent to decline.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, errResult(ErrInternalError, fmt.Sprintf("nudge request cancelled before the write: %v", ctxErr), "")
+		}
 		return nil, errResult(ErrPermissionDenied, verifyErr.Error(), declineToDiagnoseRemediation)
 	}
 	return target, nil

@@ -229,3 +229,27 @@ func TestNudgeSession_should_Refuse_When_TargetSessionNotLive(t *testing.T) {
 	errObj := m["error"].(map[string]interface{})
 	assert.Equal(t, ErrSessionNotFound, errObj["code"])
 }
+
+// NDG-12: the gate now honours ctx, so a cancelled request ctx reaches
+// resolveNudgeTarget as a context error. It must surface as a defined
+// internal error with no write, not as a "not idle" or permission refusal.
+func TestWriteNudge_CancelledRequestCtx_ClassifiedCleanly(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	pm := &recordingPM{}
+	target := session.NewStartedInstanceForTest(t, "nudge-cancel-target", pm)
+	live := &fakeLiveInstanceFinder{instances: map[string]*session.Instance{"target-1": target}}
+	dh := &diagnoseHandlers{storage: storage, live: live}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	got, res := dh.resolveNudgeTarget(ctx, nudgeSessionArgs{targetSessionID: "target-1"})
+
+	require.NotNil(t, res)
+	assert.Nil(t, got)
+	errObj := parseResult(t, res)["error"].(map[string]interface{})
+	assert.Equal(t, ErrInternalError, errObj["code"])
+	assert.Contains(t, errObj["message"], "context canceled")
+	assert.NotContains(t, errObj["message"], "not idle")
+	assert.Empty(t, pm.writes())
+}
