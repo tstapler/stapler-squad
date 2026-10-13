@@ -52,13 +52,6 @@ function useBrowserOnline(): boolean {
   );
 }
 
-/**
- * Offline means "notification data cannot be reached", and is claimed only on evidence:
- *  - the browser reports no network, or
- *  - the live stream has been down past a grace period AND the history fetch is failing too.
- * A non-live stream alone (connecting, reconnecting, stale after a tab refocus) is not offline:
- * history refreshes by RPC on its own (useNotificationHistory), so the list is still current.
- */
 function useStreamHasConnectedOnce(): boolean {
   const redux = useContext(ReactReduxContext);
   const store = redux?.store;
@@ -73,6 +66,13 @@ function useStreamHasConnectedOnce(): boolean {
   return useSyncExternalStore(subscribe, getSnapshot, () => true);
 }
 
+/**
+ * Offline means "notification data cannot be reached", and is claimed only on evidence:
+ *  - the browser reports no network, or
+ *  - the live stream has been down past a grace period AND the history fetch is failing too.
+ * A non-live stream alone (connecting, reconnecting, stale after a tab refocus) is not offline:
+ * history refreshes by RPC on its own (useNotificationHistory), so the list is still current.
+ */
 export function useNotificationConnectivity(): NotificationConnectivity {
   const state = useStreamConnectionState();
   const browserOnline = useBrowserOnline();
