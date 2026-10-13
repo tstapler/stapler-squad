@@ -145,12 +145,9 @@ type StopSnapshot struct {
 	CaptureErr       string
 }
 
-// ClassifyObserved maps a snapshot to what the pane was doing. Precedence:
-// pane death, then a failed capture with liveness unproven, then tmux
-// liveness, then missing controller, then the bucket. Liveness beats the
-// bucket: a dead pane's last scrape can still read "active". A failed capture
-// leaves TmuxAlive/ControllerActive at their zero values, so those read as
-// "not alive" only by default; that is unknown, not exited.
+// ClassifyObserved maps a snapshot to what the pane was doing: pane death, then an
+// unproven-liveness capture failure, then tmux liveness, controller, and bucket.
+// A failed capture reads as unknown, not exited.
 func ClassifyObserved(s StopSnapshot) ObservedState {
 	switch {
 	case s.PaneDead:

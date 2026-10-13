@@ -389,3 +389,38 @@ func TestStopDetail_ResuperviseKey(t *testing.T) {
 	t.Parallel()
 	assert.Contains(t, detailFor(domain.StopSnapshot{}, 0, domain.StopReasonMaxTurns), " resupervise=0/3 ")
 }
+
+func TestSanitizeStopTail_VendorTokensWithheld(t *testing.T) {
+	t.Parallel()
+
+	// Built at runtime so no scanner sees a literal token in the source.
+	cases := []struct{ name, tail string }{
+		{"gitlab", "push with glpat-" + strings.Repeat("aB3dE5gH", 3)},
+		{"google", "key AIza" + strings.Repeat("aB3dE5gH", 4) + "xyz"},
+		{"pypi", "twine upload pypi-" + strings.Repeat("aB3dE5gH", 3)},
+		{"huggingface", "token hf_" + strings.Repeat("aB3dE5gH", 4)},
+		{"digitalocean", "doctl dop_v1_" + strings.Repeat("0123abcd", 4)},
+		{"stripe", "using rk_live_" + strings.Repeat("aB3dE5gH", 3)},
+		{"anthropic", "ANTHROPIC sk-ant-" + strings.Repeat("aB3dE5gH", 3)},
+		{"curl user", "curl -u deploy:" + "hunter2hunter2 https://example.com"},
+		{"curl long flag", "curl --user deploy:" + "hunter2hunter2 https://example.com"},
+		{"zero-width split", "glpat-" + strings.Repeat("aB3dE5gH", 1) + "​" + strings.Repeat("aB3dE5gH", 2)},
+		{"control split", "hf_" + strings.Repeat("aB3dE5gH", 2) + "\x07" + strings.Repeat("aB3dE5gH", 2)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := sanitizeStopTail(tc.tail); got != stopTailWithheldMarker {
+				t.Errorf("got %q, want withheld", got)
+			}
+		})
+	}
+
+	t.Run("bidi and control runes are dropped from kept text", func(t *testing.T) {
+		t.Parallel()
+		got := sanitizeStopTail("build ‮failed\x07 here")
+		if got != "build failed here" {
+			t.Errorf("got %q", got)
+		}
+	})
+}

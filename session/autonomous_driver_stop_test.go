@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
@@ -161,6 +162,23 @@ func TestAutonomousDriver_StopReasonPerExit(t *testing.T) {
 			t.Errorf("class = %s", o.Class())
 		}
 		h.noSecondCallback(t)
+	})
+
+	t.Run("rate limit wait exhausted", func(t *testing.T) {
+		pool := &scriptedPool{steps: []poolStep{{resp: "DONE: x"}}}
+		h := newStopHarness(t, pool, 3, idleSrc)
+		m := ratelimit.NewManager("rl", nil)
+		m.GetDetector().SetState(ratelimit.StateWaiting)
+		h.cc.rateLimitHandler.Store(ratelimit.NewPTYConsumer(nil, m))
+		h.driver.rateLimitWaitMax = 20 * time.Millisecond
+		h.startWithIdle(t)
+		o := h.outcome(t)
+		if o.StopReason != domain.StopReasonRateLimitExhausted || o.Turns != 1 || !o.Stuck || o.Done {
+			t.Errorf("got %+v", o)
+		}
+		if pool.calls.Load() != 0 {
+			t.Errorf("LLM called %d times while rate limited", pool.calls.Load())
+		}
 	})
 
 	t.Run("max turns", func(t *testing.T) {

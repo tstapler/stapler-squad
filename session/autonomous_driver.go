@@ -368,8 +368,8 @@ func (d *AutonomousDriver) Wait(ctx context.Context) bool {
 func (d *AutonomousDriver) run(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Error("AutonomousDriver: recovered from panic", "session", d.inst.Title, "panic", r)
-			d.finish(d.inst.Title, domain.StopReasonPanic, AutonomousDriverOutcome{Reason: fmt.Sprintf("panic: %v", r)})
+			log.Error("AutonomousDriver: recovered from panic", "session", d.inst.Snapshot().Title, "panic", r)
+			d.finish(d.inst.Snapshot().Title, domain.StopReasonPanic, AutonomousDriverOutcome{Reason: fmt.Sprintf("panic: %v", r)})
 		}
 	}()
 

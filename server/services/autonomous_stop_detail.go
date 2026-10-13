@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -34,16 +35,33 @@ var secretNameSegments = map[string]struct{}{
 // stopTailSinkMaxBytes, keeping the end. Accepted residual: a short secret in
 // free prose with no marker, or one split across the capture's line cut.
 func sanitizeStopTail(raw string) string {
-	s := strings.ToValidUTF8(raw, "")
+	// Invisible runes are dropped first so they cannot split a token past the rules.
+	s := dropInvisibleRunes(strings.ToValidUTF8(raw, ""))
 	if strings.TrimSpace(s) == "" {
 		return ""
 	}
-	if session.RunPreGateSecurityCheck(s) != nil || tailHasSecretLine(s) {
+	if session.RunPreGateSecurityCheck(s) != nil || tailHasSecretLine(s) || vendorTokenRe.MatchString(s) {
 		return stopTailWithheldMarker
 	}
 
 	s = redactErrorDetail(s)
 	return session.TailBytes(foldToOneLine(s), stopTailSinkMaxBytes)
+}
+
+// vendorTokenRe withholds the tail on vendor token prefixes and `curl -u user:pass`.
+var vendorTokenRe = regexp.MustCompile(`\b(?:glpat-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|pypi-[A-Za-z0-9_-]{20,}|hf_[A-Za-z0-9]{30,}|dop_v1_[a-f0-9]{20,}|rk_live_[A-Za-z0-9]{16,}|sk-ant-[A-Za-z0-9_-]{20,})|\bcurl\b[^\n]*\s(?:-u|--user)[\s=]+\S*:\S+`)
+
+// dropInvisibleRunes removes control (except \n, \r, \t) and bidi/format runes.
+func dropInvisibleRunes(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n' || r == '\r' || r == '\t':
+			return r
+		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r):
+			return -1
+		}
+		return r
+	}, s)
 }
 
 func tailHasSecretLine(s string) bool {

@@ -71,26 +71,32 @@ func (a *AutonomousOrchestrationService) nudgeFlagsOn() (diagnose, stall bool) {
 // toggle-off) cancels, so an in-flight nudge never outlives a requested stop.
 func (a *AutonomousOrchestrationService) beginRecovery(title string) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(a.driverCtx())
+	self := &stallRecovery{cancel: cancel}
 	a.mu.Lock()
 	if a.recoveries == nil {
-		a.recoveries = make(map[string]context.CancelFunc)
+		a.recoveries = make(map[string]*stallRecovery)
 	}
-	a.recoveries[title] = cancel
+	a.recoveries[title] = self
 	a.mu.Unlock()
 	return ctx, func() {
 		a.mu.Lock()
-		delete(a.recoveries, title)
+		if a.recoveries[title] == self { // a newer recovery may own the slot
+			delete(a.recoveries, title)
+		}
 		a.mu.Unlock()
 		cancel()
 	}
 }
 
+// stallRecovery's pointer identity is the token a release checks before deleting.
+type stallRecovery struct{ cancel context.CancelFunc }
+
 func (a *AutonomousOrchestrationService) cancelRecovery(title string) {
 	a.mu.Lock()
-	cancel := a.recoveries[title]
+	r := a.recoveries[title]
 	a.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	if r != nil {
+		r.cancel()
 	}
 }
 
@@ -111,7 +117,7 @@ func (a *AutonomousOrchestrationService) reattachDriver(inst *session.Instance, 
 		return a.restartDriver(inst, timeout)
 	}
 	a.mu.Lock()
-	_, present := a.drivers[inst.Title]
+	_, present := a.drivers[inst.Snapshot().Title]
 	a.mu.Unlock()
 	if present {
 		return nil
@@ -182,10 +188,15 @@ func (a *AutonomousOrchestrationService) nudgeStalledWorkSession(ctx, rctx conte
 	rec.Recovery.NudgeCap = nudgeCap
 	// The claim uses the outer ctx on purpose: the writer checks rctx right before it.
 	claim := func() (bool, error) {
+		// A flag flipped off since planning must not still type into the pane.
+		if diagnoseOn, stallOn := a.nudgeFlagsOn(); !diagnoseOn || !stallOn {
+			return false, nil
+		}
 		r, err := storage.ClaimDiagnoseNudgeSlot(ctx, item.ID, domain.StuckReasonAutonomousStuck, stallNudgeReserve)
 		return r.Claimed, err
 	}
 
+	title := inst.Snapshot().Title
 	var err error
 	if !canRestart(rctx, inst) {
 		err = rctx.Err()
@@ -197,7 +208,7 @@ func (a *AutonomousOrchestrationService) nudgeStalledWorkSession(ctx, rctx conte
 	}
 	outcome, leave := classifyNudgeError(err)
 	if err != nil {
-		log.Warn("[AutonomousDriver] stall nudge not delivered", "session", inst.Title, "item", item.ID, "nudge_outcome", string(outcome), "err", err)
+		log.Warn("[AutonomousDriver] stall nudge not delivered", "session", title, "item", item.ID, "nudge_outcome", string(outcome), "err", err)
 	}
 	switch {
 	case outcome == nudgeOutcomeSuccess:
@@ -212,10 +223,18 @@ func (a *AutonomousOrchestrationService) nudgeStalledWorkSession(ctx, rctx conte
 			return false, true
 		}
 		if rErr := a.reattachDriver(inst, stallNudgeRestartTimeout); rErr != nil {
-			log.Warn("[AutonomousDriver] driver re-attach after nudge failed", "session", inst.Title, "err", rErr)
+			log.Warn("[AutonomousDriver] driver re-attach after nudge failed", "session", title, "err", rErr)
 			rec.Recovery.NudgeOutcome = nudgeOutcomeRestartFailed
 			return true, false
 		}
+		if !canRestart(rctx, inst) {
+			// A stop landed between the check and registration; drop the new driver.
+			a.deregisterDriver(title)
+			rec.Recovery.NudgeOutcome = nudgeOutcomeSuccess
+			rec.Recovery.Action = stopActionNudged
+			return false, true
+		}
+		_ = inst.ClearAutonomousStopReason() // the run is live again
 		rec.Recovery.NudgeOutcome = nudgeOutcomeSuccess
 		rec.Recovery.Action = stopActionNudged
 		return false, false

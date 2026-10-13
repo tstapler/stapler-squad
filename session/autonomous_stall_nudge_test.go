@@ -303,3 +303,24 @@ func TestAutonomousStallNudgeText_ExactBytes(t *testing.T) {
 	assert.Equal(t, []string{want, EnterKeySequence}, pm.recorded())
 	AssertLeaseFree(t, inst)
 }
+
+// Status can change between the first check and the lease; the claim must not run.
+func TestNudgeStalledAutonomousSession_StatusChangesWhileTakingLease_ClaimUntouched(t *testing.T) {
+	t.Parallel()
+	pm := &fakeSendKeysProcessManager{}
+	inst := newNudgeWriterInstance(t, nudgeTestIdlePane, pm)
+	cc := &claimCounter{granted: true}
+	seams := testNudgeSeams(inst)
+	seams.tryLease = func(w string) (*HeldLease, bool) {
+		lease, ok := inst.TryTerminalWriteLease(w)
+		inst.ForceStatus(Paused)
+		return lease, ok
+	}
+
+	err := nudgeStalledWith(context.Background(), inst, cc.claim, seams)
+
+	require.ErrorIs(t, err, ErrNudgeSessionNotActive)
+	assert.Zero(t, cc.calls.Load())
+	assert.Empty(t, pm.recorded())
+	AssertLeaseFree(t, inst)
+}

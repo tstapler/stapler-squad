@@ -3,8 +3,8 @@
 This explains every way an autonomous-mode backlog session can stop before finishing, which
 of those are real stalls, and what the recovery path does with each. It is the diagnosis
 deliverable for backlog item `4a709ebc` (AC1). It describes the code as it was before the stop-reason
-work in `project_plans/autonomous-stall-diagnosis/`; sections marked **After this change** are
-filled in as that work lands.
+work in `project_plans/autonomous-stall-diagnosis/`; the **After this change** section
+records what changed.
 
 ## Short version
 
@@ -150,6 +150,8 @@ Ranked by confidence in the mechanism, **not** by frequency (unknown):
 
 ## Known gaps (not changed by this item)
 
+Resolved by this change: S1, S2, X1-X5 (see "After this change"). The gaps below remain.
+
 - The stale-work detector (O5) and health-checker restarts (O1-O3) still kill and respawn with no
   pane snapshot and no nudge. AC3 is scoped to driver-stop paths; these are a recorded follow-up
   (see the plan's "Follow-up backlog item").
@@ -165,5 +167,33 @@ Ranked by confidence in the mechanism, **not** by frequency (unknown):
 
 ## After this change
 
-Filled in as the typed stop-reason work lands: the `StopReason` taxonomy mapped to the sites above,
-and the nudge-versus-respawn decision table.
+Every exit now carries a typed `domain.StopReason` (`done`, `max_turns`, `startup_timeout`,
+`orchestrator_error`, `submit_failed`, `lease_timeout`, `rate_limit_exhausted`,
+`cancelled_external`, `cancelled_shutdown`, `panic`) plus a pane snapshot taken before anything is
+ended. A panic now fires exactly one completion.
+
+**Resolved.**
+
+- **S1**: the stop is written through `Instance.SetAutonomousStopped` / `SetAutonomousStopObserved`
+  (actor setter, snapshot republished) by `applyInstanceStop`.
+- **S2**: the stuck row's context is built by `formatStopDetail` from the reason, observed state and
+  recovery taken, not a fixed string.
+- **X1-X5**: cancelled-class reasons (`cancelled_external`, `cancelled_shutdown`) are never handled
+  as stalls: no stuck row, no ItemSession end, no respawn, no nudge. A user stop also cancels an
+  in-flight nudge (`stopAndDeregisterDriver` -> `cancelRecovery`).
+
+**Nudge versus respawn** (work role only, `session/domain/autonomous_stop.go` `DecideStallAction`,
+first match wins):
+
+| State and conditions | Action |
+|---|---|
+| not a stall class, archived, or retry pending | none |
+| `max_turns` or `panic` | respawn |
+| idle at a prompt, item `in_progress`, both nudge flags on, slot available | nudge, then re-attach the driver |
+| anything else | respawn |
+
+A nudge types one fixed reminder into the idle pane under the terminal write lease and consumes one
+slot of the item's cap (one slot stays reserved for the diagnose agent). Delivery failures that are
+certain fall back to respawn; an uncertain delivery, a cancel, or a session that is no longer
+restartable leaves the pane alone. Flags are re-read at the claim, so turning one off stops
+in-flight plans. A superseded driver's late completion callback is ignored (matched by run id).

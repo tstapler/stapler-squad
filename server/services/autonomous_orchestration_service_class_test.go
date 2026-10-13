@@ -25,8 +25,9 @@ func (f *charFixture) setReadoption(on bool) {
 }
 
 // assertNoRowOrRecovery asserts the item has no open stuck row, its ItemSession is
-// still open, the respawner was never called and no notification was published.
-func (f *charFixture) assertNoRowOrRecovery(t *testing.T, respawner *signalingRespawner) {
+// still open (the synchronous proof that no respawn started) and no notification
+// was published.
+func (f *charFixture) assertNoRowOrRecovery(t *testing.T, _ *signalingRespawner) {
 	t.Helper()
 	open, err := f.storage.FindOpenStuckStates(context.Background())
 	require.NoError(t, err)
@@ -34,13 +35,12 @@ func (f *charFixture) assertNoRowOrRecovery(t *testing.T, respawner *signalingRe
 	is, err := f.storage.GetItemSessionBySessionUUID(context.Background(), f.inst.UUID)
 	require.NoError(t, err)
 	assert.Nil(t, is.EndedAt, "UpdateItemSessionEnded must not run")
-	assert.Empty(t, respawner.called)
 	assert.Empty(t, notificationTitles(f.drain()))
 }
 
-// SVC-4. Only the observable silence is asserted; the nudger and driver starter
-// seams do not exist yet, so "0 nudges / 0 driver starts" is covered by the
-// absence of any effect (respawner, row, ItemSession end).
+// SVC-4. Observable silence (row, ItemSession end, notifications) is asserted here;
+// zero nudges and zero driver starts are covered by
+// TestStallRecovery_CancelledStopsNeverNudgeOrRestart.
 func TestOnAutonomousDriverComplete_CancelledClassGuards(t *testing.T) {
 	roles := []struct {
 		name       string
@@ -118,7 +118,6 @@ func TestOnAutonomousDriverComplete_CancelledExternal_PreexistingOpenRowStaysOpe
 	row := f.openStuckRow(t)
 	assert.Equal(t, domain.StuckReasonAutonomousStuck, row.Reason)
 	assert.Equal(t, int32(2), row.RemediationAttempts)
-	assert.Empty(t, respawner.called)
 	is, err := f.storage.GetItemSessionBySessionUUID(context.Background(), f.inst.UUID)
 	require.NoError(t, err)
 	assert.Nil(t, is.EndedAt)

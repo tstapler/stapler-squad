@@ -208,3 +208,28 @@ func TestCountMarkStuckWrites(t *testing.T, storage *Storage) func() int64 {
 	})
 	return n.Load
 }
+
+// TestFailMarkStuckWrites makes every later stuck-state write fail, to reach the
+// MarkStuck error branch real storage never produces from a service test.
+func TestFailMarkStuckWrites(t *testing.T, storage *Storage) {
+	t.Helper()
+	client := storage.GetEntClient()
+	if client == nil {
+		t.Fatalf("TestFailMarkStuckWrites: storage has no ent client")
+	}
+	client.BacklogStuckState.Use(func(next ent.Mutator) ent.Mutator {
+		return ent.MutateFunc(func(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+			if _, set := m.Field("context"); set {
+				return nil, errors.New("injected stuck-state write failure")
+			}
+			return next.Mutate(ctx, m)
+		})
+	})
+}
+
+// TestSetAutonomousDriverRunID gives an unstarted driver a run id, so a service
+// test can tell two registered drivers apart without a headless pool.
+func TestSetAutonomousDriverRunID(t *testing.T, d *AutonomousDriver, id uint64) {
+	t.Helper()
+	d.runID.Store(id)
+}

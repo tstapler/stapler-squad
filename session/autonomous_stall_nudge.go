@@ -80,6 +80,11 @@ func nudgeStalledWith(ctx context.Context, inst *Instance, claim func() (bool, e
 		lease.Release()
 		return fmt.Errorf("nudge cancelled before claiming a slot: %w", err)
 	}
+	// Status can change while waiting for the lease; the claim spends budget.
+	if snap := inst.Snapshot(); snap.Status != Active || snap.ArchivedAt != nil {
+		lease.Release()
+		return fmt.Errorf("%w: %s (status %s)", ErrNudgeSessionNotActive, snap.UUID, snap.Status)
+	}
 	granted, err := claim()
 	if err != nil {
 		lease.Release()

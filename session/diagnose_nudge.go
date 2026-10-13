@@ -98,12 +98,9 @@ type ClaimResult struct {
 }
 
 // ClaimDiagnoseNudgeSlot atomically takes one nudge slot for (itemID, reason),
-// leaving `reserve` of the configured cap for the diagnose agent. Cap and
-// cooldown are checked in the same UPDATE as the increment, so concurrent
-// claimers cannot both pass a stale read. A claim also starts the 1h cooldown,
-// so two stalls in the same hour take at most one slot. There is deliberately no refund: a
-// nudge whose delivery is uncertain keeps its slot. No open row, cap reached
-// and cooldown active all return Claimed=false with a nil error.
+// leaving `reserve` of the cap for the diagnose agent. Cap and cooldown are checked
+// in the same UPDATE; there is no refund, so an uncertain delivery keeps its slot.
+// No open row, cap reached and cooldown active all return Claimed=false, nil error.
 func (s *Storage) ClaimDiagnoseNudgeSlot(ctx context.Context, itemID string, reason domain.StuckReason, reserve int) (ClaimResult, error) {
 	maxAttempts := int32(config.LoadConfig().DiagnoseNudgeMaxAttemptsOrDefault())
 	return s.claimDiagnoseNudgeSlot(ctx, itemID, reason, maxAttempts, reserve, diagnoseNudgeCooldown)

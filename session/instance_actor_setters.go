@@ -245,6 +245,19 @@ func (i *Instance) SetAutonomousStopObserved(reason domain.StopReason) error {
 	})
 }
 
+// ClearAutonomousStopReason drops the observed stop reason once a recovered
+// stop's driver is re-attached, keeping mode and outcome.
+func (i *Instance) ClearAutonomousStopReason() error {
+	return i.sendSyncErr(func(s *instanceState) error {
+		s.inst.mu.Lock()
+		s.inst.AutonomousStopReason = ""
+		snap := buildSnapshot(s.inst)
+		s.inst.mu.Unlock()
+		s.inst.snapshot.Store(snap)
+		return nil
+	})
+}
+
 // ---- GitHubPRURL + GitHubPRNumber -----------------------------------------------
 
 func setGitHubPRURLLocked(s *instanceState, prURL string, prNumber int) {

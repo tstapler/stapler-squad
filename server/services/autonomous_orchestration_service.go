@@ -76,7 +76,7 @@ type AutonomousOrchestrationService struct {
 	stallNudgeEnabled    func() bool
 	restartDriver        func(*session.Instance, time.Duration) error
 	// recoveries holds the cancel of each in-flight stall recovery, by session title (guarded by mu).
-	recoveries map[string]context.CancelFunc
+	recoveries map[string]*stallRecovery
 }
 
 // SetReadoptionEnabled wires the live read of the autonomous_driver_readoption flag.
@@ -178,8 +178,26 @@ func (a *AutonomousOrchestrationService) stopAndDeregisterDriver(sessionTitle st
 // deregisterDriver is stopAndDeregisterDriver without cancelling an in-flight stall
 // recovery: the completion callback owns that recovery.
 func (a *AutonomousOrchestrationService) deregisterDriver(sessionTitle string) {
+	a.deregisterDriverRun(sessionTitle, nil)
+}
+
+func (a *AutonomousOrchestrationService) driverReplaced(sessionTitle string, runID uint64) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	d, ok := a.drivers[sessionTitle]
+	return ok && d.RunID() != runID
+}
+
+// deregisterDriverRun removes the driver for sessionTitle only when it is the run
+// that completed; it reports false when a newer driver has replaced that run, which
+// must be left running.
+func (a *AutonomousOrchestrationService) deregisterDriverRun(sessionTitle string, runID *uint64) (owned bool) {
 	a.mu.Lock()
 	d, ok := a.drivers[sessionTitle]
+	if ok && runID != nil && d.RunID() != *runID {
+		a.mu.Unlock()
+		return false
+	}
 	if ok {
 		delete(a.drivers, sessionTitle)
 	}
@@ -187,6 +205,7 @@ func (a *AutonomousOrchestrationService) deregisterDriver(sessionTitle string) {
 	if ok && d != nil {
 		d.Stop()
 	}
+	return true
 }
 
 // StopDriverForSession stops the AutonomousDriver registered under sessionTitle.
@@ -311,9 +330,17 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 	// The goroutine has already exited at this point; Stop() is a no-op but cleans the map.
 	// Register the recovery before deregistering, so a stop that lands during the
 	// bookkeeping below cancels it instead of being lost.
+	// A stopped, replaced driver's callback must not touch the new driver or the instance,
+	// nor clobber the new run's recovery registration.
+	if a.driverReplaced(instanceName, outcome.RunID) {
+		return
+	}
 	recoveryCtx, releaseRecovery := a.beginRecovery(instanceName)
 	defer releaseRecovery()
-	a.deregisterDriver(instanceName)
+	if !a.deregisterDriverRun(instanceName, &outcome.RunID) {
+		rec.Recovery.Action = stopActionNone
+		return
+	}
 
 	// Use Background() intentionally: we want this bookkeeping to complete even if the
 	// server is shutting down concurrently (the driver just finished; its result must persist).
@@ -668,7 +695,7 @@ func (a *AutonomousOrchestrationService) handleWorkStall(ctx, recoveryCtx contex
 	}
 	if plan == domain.StallActionNone {
 		rec.Recovery = stopRecovery{Action: stopActionNone, NoneBecause: noneWhy}
-		log.Info("[AutonomousDriver] stall not recovered", "item", item.ID, "session", inst.Title, "because", string(noneWhy))
+		log.Info("[AutonomousDriver] stall not recovered", "item", item.ID, "session", inst.Snapshot().Title, "because", string(noneWhy))
 		return stallResult{Action: domain.StallActionNone}
 	}
 	if plan == domain.StallActionRespawn && wouldNudge {
@@ -717,7 +744,7 @@ func (a *AutonomousOrchestrationService) handleWorkStall(ctx, recoveryCtx contex
 				if detached {
 					a.stopObservedAsPlain(inst, outcome, true) // delivered, but a stop landed before re-attach
 				}
-				a.publishNudged(inst.UUID, inst.Title, item.ID, *rec)
+				a.publishNudged(inst.UUID, inst.Snapshot().Title, item.ID, *rec)
 				return stallResult{Action: domain.StallActionNudge, Notify: notifyOverride{Suppress: true}}
 			}
 			// Pane left alone (stop requested, session no longer live, or delivery
@@ -746,7 +773,7 @@ func (a *AutonomousOrchestrationService) handleWorkStall(ctx, recoveryCtx contex
 // re-attached driver (no driver is left running for the session).
 func (a *AutonomousOrchestrationService) stopObservedAsPlain(inst *session.Instance, outcome session.AutonomousDriverOutcome, stopRequested bool) {
 	a.mu.Lock()
-	_, running := a.drivers[inst.Title]
+	_, running := a.drivers[inst.Snapshot().Title]
 	a.mu.Unlock()
 	if running {
 		return
@@ -762,45 +789,18 @@ func (a *AutonomousOrchestrationService) stopObservedAsPlain(inst *session.Insta
 // It reports whether a respawn was actually dispatched.
 func (a *AutonomousOrchestrationService) respawnStalledWork(ctx context.Context, concreteStorage *session.Storage, item *session.BacklogItemData, is session.ItemSessionSummary, outcome session.AutonomousDriverOutcome) (dispatched bool) {
 	log.Info("[AutonomousDriver] work session hit turn cap without DONE; leaving in_progress instead of forcing review", "item", item.ID, "reason", outcome.Reason)
-	// BUG-048's review-role fix (below, in the SessionRoleReview branch)
-	// established that a driver stopping (turn cap, or here a startup
-	// timeout with 0 turns) does NOT kill the underlying tmux/CLI
-	// session -- AutonomousDriver.run just stops injecting turns, so the
-	// ItemSession row stays EndedAt == nil and the pane keeps producing
-	// output. That fact was never applied to this branch: without ending
-	// `is` first, AutoRespawnAutonomousWork dispatched below immediately
-	// finds this very session via findActiveWorkSession (EndedAt == nil)
-	// and/or tombstoneOrphanWorkSessions' IsSessionLive (pane still
-	// alive) and self-blocks with RESPAWN_BLOCKED_ACTIVE, citing the
-	// pane's leftover output recency as "still active" even though the
-	// driver that was using it already reported Stuck. End it now,
-	// synchronously, exactly like the review branch does, so the respawn
-	// below sees an accurately-closed session instead of racing its own
-	// stale liveness signal.
+	// A stopped driver leaves the pane live; end the ItemSession now so the respawn's
+	// liveness check does not self-block on it (BUG-048).
 	if endErr := concreteStorage.UpdateItemSessionEnded(ctx, is.ID, time.Now()); endErr != nil { //nolint:silenttransition // AutoRespawnAutonomousWork -> tombstoneOrphanWorkSessions/findActiveWorkSession blocks respawn with notifyRespawnBlockedByActiveSession
 		log.Warn("[AutonomousDriver] onAutonomousDriverComplete: UpdateItemSessionEnded(work, stuck) failed", "item", item.ID, "itemSession", is.ID, "err", endErr)
-		// Mirrors the SessionRoleReview branch's notifyStuckBookkeepingFailed
-		// call below: this bookkeeping write is what makes a stuck session visible
-		// to auto-respawn's own liveness checks (see the comment above this call).
 		a.notifyStuckBookkeepingFailed(item.ID, item.Title, is.ID, stuckSessionRoleWork, endErr)
 	}
 	if a.autonomousStuckRespawner != nil {
 		respawner := a.autonomousStuckRespawner
 		itemID := item.ID
 		itemTitle := item.Title
-		// Backoff-gated (session/backlog_remediation.go, Phase A of
-		// docs/tasks/backlog-stuck-item-auto-remediation.md): the
-		// MarkStuck(autonomous_stuck) call just above always
-		// refreshes/opens this item's stuck row on every
-		// turn-cap-without-DONE occurrence, so without this gate the
-		// respawn below would fire on every single occurrence too —
-		// exactly the "burns through the rework cap in minutes"
-		// shape the design doc's backoff schedule exists to stop
-		// (count-capped only by the rework cap otherwise, which can
-		// be raised well past what a genuinely-looping item should
-		// get). Checked synchronously (not inside the goroutine) so
-		// the attempt/restart-grace accounting write happens exactly
-		// once per eligible occurrence, before the async dispatch.
+		// Backoff-gated, checked synchronously so the attempt accounting happens once per
+		// occurrence (session/backlog_remediation.go).
 		due, justParked, gateErr := concreteStorage.RemediationDue(ctx, itemID, domain.StuckReasonAutonomousStuck)
 		if gateErr != nil {
 			log.Warn("[AutonomousDriver] RemediationDue(autonomous_stuck) failed", "item", itemID, "err", gateErr)
@@ -852,7 +852,7 @@ func (a *AutonomousOrchestrationService) applyInstanceStop(inst *session.Instanc
 		err = inst.SetAutonomousStopped(reason)
 	}
 	if err != nil {
-		log.Warn("[AutonomousDriver] applyInstanceStop: instance write did not apply", "session", inst.Title, "stop_reason", reason, "err", err)
+		log.Warn("[AutonomousDriver] applyInstanceStop: instance write did not apply", "session", inst.Snapshot().Title, "stop_reason", reason, "err", err)
 		return err
 	}
 	a.bus.Publish(events.NewSessionUpdatedEvent(inst, []string{"autonomous_mode", "autonomous_outcome"}))
