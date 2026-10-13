@@ -79,7 +79,7 @@ clicks and zero scrolls.
 #### Task P2.1.1d: Tests (~4 min)
 - Add 3 cases to `LifecycleSummary.test.tsx`:
   1. prUrl set, any status → badge renders with correct href
-  2. prUrl set, status `pr_pending` → badge still renders (not suppressed because PullRequestSection exists)
+  2. prUrl set, status `pr_pending` → no badge (PullRequestSection already shows the link)
   3. prUrl undefined → no badge, no broken link
 - Files: `LifecycleSummary.test.tsx`
 

@@ -31,6 +31,33 @@ export interface VersionControlSectionProps {
  * that case, so the link is still visible via this section alone for every
  * other status.
  */
+/**
+ * The ship-status snapshot can be missing (or carry no GitHub block) even
+ * though the item itself records its PR; fall back to the item's own
+ * prUrl/prNumber so the PR is never absent from this section.
+ */
+function withItemPr(data: VcsWidgetData, item: BacklogItem): VcsWidgetData {
+  if (data.github || !item.prUrl || !item.prNumber) return data;
+  const match = item.prUrl.match(/^https?:\/\/[^/]+\/([^/]+)\/([^/]+)\/pull\/\d+/);
+  return {
+    ...data,
+    github: {
+      owner: match?.[1] ?? "",
+      repo: match?.[2] ?? "",
+      prUrl: item.prUrl,
+      prNumber: item.prNumber,
+      prState: item.status === "done" || item.status === "archived" ? "merged" : "open",
+      isDraft: false,
+      checkConclusion: "",
+      approvedCount: 0,
+      changesReqCount: 0,
+      mergeable: "unknown",
+      checks: [],
+      reviewFeedback: [],
+    },
+  };
+}
+
 export function VersionControlSection({
   item,
   widgetData,
@@ -40,22 +67,30 @@ export function VersionControlSection({
   onViewDiff,
   onBrowseFiles,
 }: VersionControlSectionProps) {
-  if (!widgetData) return null;
+  if (!widgetData && !item.prUrl) return null;
 
   const showPrLink = item.status !== "pr_pending";
 
   return (
     <CollapsibleSection sectionKey="version-control" title="Version Control" defaultExpanded={defaultExpanded}>
       <div className={styles.section}>
-        <VcsWidget
-          data={widgetData}
-          mode="full"
-          onViewDiff={onViewDiff}
-          activeSessionCount={activeSessionCount}
-          worktreePath={worktreePath}
-          onBrowseFiles={onBrowseFiles}
-          showPrLink={showPrLink}
-        />
+        {widgetData ? (
+          <VcsWidget
+            data={withItemPr(widgetData, item)}
+            mode="full"
+            onViewDiff={onViewDiff}
+            activeSessionCount={activeSessionCount}
+            worktreePath={worktreePath}
+            onBrowseFiles={onBrowseFiles}
+            showPrLink={showPrLink}
+          />
+        ) : (
+          showPrLink && (
+            <a href={item.prUrl} target="_blank" rel="noopener noreferrer" data-testid="vcs-section-pr-link">
+              {item.prNumber ? `Pull request #${item.prNumber}` : "Pull request"}
+            </a>
+          )
+        )}
       </div>
     </CollapsibleSection>
   );

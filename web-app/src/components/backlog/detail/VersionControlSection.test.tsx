@@ -66,6 +66,36 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
 }
 
 describe("VersionControlSection", () => {
+  const baseProps = {
+    activeSessionCount: 0,
+    worktreePath: undefined,
+    defaultExpanded: true,
+    onViewDiff: jest.fn(),
+    onBrowseFiles: jest.fn(),
+  };
+
+  it("shows the item's own PR link when no widget data exists but item.prUrl is set", () => {
+    render(
+      <VersionControlSection
+        {...baseProps}
+        item={makeItem({ status: "done", prUrl: "https://github.com/x/y/pull/7", prNumber: 7 })}
+        widgetData={null}
+      />
+    );
+    expect(screen.getByTestId("vcs-section-pr-link")).toHaveAttribute("href", "https://github.com/x/y/pull/7");
+  });
+
+  it("falls back to item.prUrl when widget data carries no GitHub block", () => {
+    render(
+      <VersionControlSection
+        {...baseProps}
+        item={makeItem({ status: "done", prUrl: "https://github.com/x/y/pull/7", prNumber: 7 })}
+        widgetData={makeWidgetData({ github: null })}
+      />
+    );
+    expect(screen.getByText(/#7/)).toBeInTheDocument();
+  });
+
   it("renders nothing when widgetData is null", () => {
     const { container } = render(
       <VersionControlSection

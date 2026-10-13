@@ -1418,6 +1418,58 @@ describe("BacklogItemDetail — Story 3.1.5: auto-expand-on-status-change, first
   });
 });
 
+describe("BacklogItemDetail — PR visibility and action reachability", () => {
+  async function renderItem(overrides: Partial<BacklogItem>) {
+    useVcsStatusMock.mockReturnValue({
+      data: create(VCSStatusSchema, { branch: "feat/x", isClean: true }),
+      loading: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+    getBacklogItem.mockReset().mockResolvedValue({ ...makeItem([]), ...overrides });
+    listPipelineModes.mockReset().mockResolvedValue([]);
+    const utils = render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    return utils;
+  }
+  const PR = { prUrl: "https://github.com/x/y/pull/42", prNumber: 42 };
+
+  it("BacklogItemDetail_should_AutoExpandVersionControlSection_When_StatusIsDoneAndPrUrlIsSet", async () => {
+    await renderItem({ status: "done", ...PR });
+    expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("BacklogItemDetail_should_NotAutoExpandVersionControlSection_When_StatusIsDoneAndPrUrlIsUndefined", async () => {
+    await renderItem({ status: "done", prUrl: undefined });
+    expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("BacklogItemDetail_should_KeepVersionControlCollapsed_When_UserCollapsedItBeforeReopeningWithPrUrl", async () => {
+    const first = await renderItem({ status: "done", ...PR });
+    fireEvent.click(screen.getByTestId("collapsible-header-version-control"));
+    expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "false");
+    first.unmount();
+
+    await renderItem({ status: "done", ...PR });
+    expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("BacklogItemDetail_should_RenderActionsSectionBeforeGateBlockingSection_When_FullDetailRenders", async () => {
+    await renderItem({ status: "idea" });
+    const actions = screen.getByTestId("backlog-action-trigger-triage");
+    const acHeading = screen.getByText(/^Acceptance Criteria/);
+    expect(actions.compareDocumentPosition(acHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const gate = screen.queryByTestId("gate-blocking-section");
+    if (gate) {
+      expect(actions.compareDocumentPosition(gate) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+  });
+});
+
 describe("BacklogItemDetail — regression: Collapsible's defaultExpanded-in-group dev warning", () => {
   it("BacklogItemDetail_should_NotWarn_When_AllGroupedSectionsRenderWithTheirOwnDefaultExpanded", async () => {
     // 1d8b6cd1 added a dev-mode console.warn in Collapsible.tsx for any
