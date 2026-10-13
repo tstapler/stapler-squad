@@ -113,18 +113,7 @@ func probeDir(cur string) (lay layout, found bool, err error) {
 			return layoutFor(cur, dotGit, common, false)
 		}
 	case statErr == nil && fi.Mode().IsRegular():
-		gitDir, gitfileErr := readGitfile(dotGit)
-		if gitfileErr != nil {
-			return layout{}, false, fallbackEligible(gitfileErr)
-		}
-		common, ok, err := commonOf(gitDir)
-		if err != nil {
-			return layout{}, false, err
-		}
-		if !ok {
-			return layout{}, false, fallbackEligible(fmt.Errorf("%s names %s, which is not a git directory", dotGit, gitDir))
-		}
-		return layoutFor(cur, gitDir, common, false)
+		return probeGitfile(cur, dotGit)
 	case statErr != nil && !errors.Is(statErr, fs.ErrNotExist):
 		return layout{}, false, fallbackEligible(statErr)
 	}
@@ -136,6 +125,41 @@ func probeDir(cur string) (lay layout, found bool, err error) {
 		return layoutFor("", cur, common, true)
 	}
 	return layout{}, false, nil
+}
+
+// errDanglingGitfile marks the ErrNotARepo git reports when a ".git" file names a directory that
+// is not a git directory. Unlike the walk running out of parents, git stops here and every
+// command fails, `git config` included, so callers must not treat it as "outside any repository".
+var errDanglingGitfile = errors.New("a .git file names a directory that is not a git directory")
+
+// probeGitfile follows the ".git" file in cur. git never searches parent directories once it
+// has found one: a target that is not a git directory is "not a git repository" for the whole
+// call, so that verdict is final (and only that verdict: a file git cannot parse is a different
+// fatal error that this reader leaves to the CLI).
+func probeGitfile(cur, dotGit string) (layout, bool, error) {
+	target, err := readGitfile(dotGit)
+	if err != nil {
+		return layout{}, false, fallbackEligible(err)
+	}
+	notARepo := func() (layout, bool, error) {
+		return layout{}, false, fmt.Errorf("%w: %s: %w", backend.ErrNotARepo, target, errDanglingGitfile)
+	}
+	// Resolve through the OS, not lexically: "link/../x" is not "x" when link is a symlink.
+	gitDir, err := filepath.EvalSymlinks(target)
+	switch {
+	case errors.Is(err, fs.ErrNotExist) || isNotDir(err):
+		return notARepo()
+	case err != nil:
+		return layout{}, false, fallbackEligible(err)
+	}
+	common, ok, err := commonOf(gitDir)
+	if err != nil {
+		return layout{}, false, err
+	}
+	if !ok {
+		return notARepo()
+	}
+	return layoutFor(cur, gitDir, common, false)
 }
 
 func layoutFor(workTree, gitDir, common string, bare bool) (layout, bool, error) {
@@ -175,8 +199,18 @@ func commonOf(p string) (common string, ok bool, err error) {
 		return "", false, nil
 	}
 	common = p
-	if data, err := os.ReadFile(filepath.Join(p, "commondir")); err == nil {
+	data, err := os.ReadFile(filepath.Join(p, "commondir"))
+	switch {
+	case errors.Is(err, fs.ErrNotExist) || isNotDir(err):
+	case err != nil || len(strings.TrimSpace(string(data))) == 0:
+		// git dies ("failed to read commondir") rather than ignoring a commondir it cannot use.
+		return "", false, fallbackEligible(fmt.Errorf("%s/commondir is unreadable or empty", p))
+	default:
 		c := strings.TrimRight(string(data), "\r\n")
+		if strings.TrimLeft(c, " \t") != c {
+			// git rejects such a path as "Invalid path" (a plain fatal), not as a non-repository
+			return "", false, fallbackEligible(fmt.Errorf("%s/commondir starts with whitespace", p))
+		}
 		if !filepath.IsAbs(c) {
 			c = filepath.Join(p, c)
 		}
@@ -206,23 +240,33 @@ func readHeadFile(path string) ([]byte, error) {
 	return readSmallFile(path)
 }
 
-// readGitfile parses a ".git" file: "gitdir: <path>", relative to the file's directory.
+// readGitfile parses a ".git" file the way git's read_gitfile_gently does: "gitdir: <path>",
+// trailing CR/LF dropped (spaces, tabs and an embedded newline stay part of the path), a relative path
+// taken from the file's directory. The path is returned unresolved. A file git would reject as
+// malformed is an error.
 func readGitfile(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
 	const prefix = "gitdir: "
-	text := strings.TrimRight(string(data), "\r\n")
-	if !strings.HasPrefix(text, prefix) || strings.ContainsRune(text, '\n') || len(text) == len(prefix) {
+	if len(data) > maxGitfileSize || !strings.HasPrefix(string(data), prefix) {
 		return "", fmt.Errorf("%s is not a valid gitfile", path)
 	}
-	target := text[len(prefix):]
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(filepath.Dir(path), target)
+	trimmed := strings.TrimRight(string(data), "\r\n")
+	if len(trimmed) <= len(prefix) {
+		return "", fmt.Errorf("%s names no path", path)
 	}
-	return filepath.Clean(target), nil
+	target := trimmed[len(prefix):]
+	if !filepath.IsAbs(target) {
+		target = filepath.Dir(path) + string(filepath.Separator) + target
+	}
+	return target, nil
 }
+
+// maxGitfileSize is git's limit (PATH_MAX * 4) for a ".git" file, at the smallest PATH_MAX in
+// use; bigger files are left to git.
+const maxGitfileSize = 4096
 
 // vetLayout rejects repositories whose semantics go-git would get wrong: other owners (git
 // refuses them as "dubious ownership" unless safe.directory says otherwise), work trees set by

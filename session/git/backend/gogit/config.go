@@ -407,8 +407,9 @@ func (b *Backend) GetConfig(ctx context.Context, loc backend.RepoLocation, key b
 	switch {
 	case err == nil:
 		localConfig = filepath.Join(lay.commonDir, "config")
-	case errors.Is(err, backend.ErrNotARepo):
-		// `git config` works outside a repository: global and system scope only.
+	case errors.Is(err, backend.ErrNotARepo) && !errors.Is(err, errDanglingGitfile):
+		// `git config` works outside a repository: global and system scope only. A dangling
+		// .git file is not "outside": git fails the command.
 	default:
 		return "", err
 	}
