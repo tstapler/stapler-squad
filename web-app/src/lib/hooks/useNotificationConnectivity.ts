@@ -2,7 +2,7 @@
 
 import { useCallback, useContext, useEffect, useState, useSyncExternalStore } from "react";
 import { ReactReduxContext } from "react-redux";
-import { selectConnectionState, type ConnectionState } from "@/lib/store/sessionsSlice";
+import { selectConnectionState, selectSessionsHasLoadedOnce, type ConnectionState } from "@/lib/store/sessionsSlice";
 import type { RootState } from "@/lib/store";
 import { useNotificationState } from "@/lib/contexts/notificationContexts";
 
@@ -59,12 +59,29 @@ function useBrowserOnline(): boolean {
  * A non-live stream alone (connecting, reconnecting, stale after a tab refocus) is not offline:
  * history refreshes by RPC on its own (useNotificationHistory), so the list is still current.
  */
+function useStreamHasConnectedOnce(): boolean {
+  const redux = useContext(ReactReduxContext);
+  const store = redux?.store;
+  const subscribe = useCallback(
+    (onChange: () => void) => (store ? store.subscribe(onChange) : neverNotifies()),
+    [store],
+  );
+  const getSnapshot = useCallback(
+    () => (store ? selectSessionsHasLoadedOnce(store.getState() as RootState) : true),
+    [store],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot, () => true);
+}
+
 export function useNotificationConnectivity(): NotificationConnectivity {
   const state = useStreamConnectionState();
   const browserOnline = useBrowserOnline();
   const { historyError } = useNotificationState();
 
-  const streamLive = state === CONNECTED;
+  const hasConnectedOnce = useStreamHasConnectedOnce();
+
+  // Before the first connect the stream is "connecting", not "dropped": a cold deep link must not read as an outage.
+  const streamLive = state === CONNECTED || !hasConnectedOnce;
   const [streamDownLong, setStreamDownLong] = useState(false);
   useEffect(() => {
     if (streamLive) {

@@ -7,8 +7,8 @@ import {
 } from "@/lib/hooks/useNotificationConnectivity";
 import { NotificationStateContext } from "@/lib/contexts/notificationContexts";
 
-function fakeStore(initial: string) {
-  let state = { sessions: { connectionState: initial } };
+function fakeStore(initial: string, hasLoadedOnce = true) {
+  let state = { sessions: { connectionState: initial, hasLoadedOnce } };
   const listeners = new Set<() => void>();
   return {
     getState: () => state,
@@ -17,14 +17,14 @@ function fakeStore(initial: string) {
       return () => listeners.delete(l);
     },
     set(next: string) {
-      state = { sessions: { connectionState: next } };
+      state = { sessions: { connectionState: next, hasLoadedOnce: state.sessions.hasLoadedOnce } };
       listeners.forEach((l) => l());
     },
   };
 }
 
-function setup(initial: string, historyError: Error | null = null) {
-  const store = fakeStore(initial);
+function setup(initial: string, historyError: Error | null = null, hasLoadedOnce = true) {
+  const store = fakeStore(initial, hasLoadedOnce);
   const wrapper = ({ children }: { children: React.ReactNode }) => (
     <ReactReduxContext.Provider value={{ store } as never}>
       <NotificationStateContext.Provider value={{ historyError } as never}>{children}</NotificationStateContext.Provider>
@@ -73,6 +73,12 @@ describe("useNotificationConnectivity", () => {
     const { result } = setup("disconnected", new Error("boom"));
     act(() => jest.advanceTimersByTime(STREAM_DOWN_GRACE_MS));
     expect(result.current.isOffline).toBe(true);
+  });
+
+  it("is not offline on a cold load where the stream has never connected, even past grace with a history error", () => {
+    const { result } = setup("disconnected", new Error("boom"), false);
+    act(() => jest.advanceTimersByTime(STREAM_DOWN_GRACE_MS * 3));
+    expect(result.current.isOffline).toBe(false);
   });
 
   it("recovers as soon as the stream is live again", () => {

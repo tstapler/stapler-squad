@@ -2,7 +2,7 @@
 "use client";
 
 import { useId, useState } from "react";
-import type { NotificationData } from "@/lib/types/notification";
+import type { NotificationData, NotificationHistoryItem } from "@/lib/types/notification";
 import {
   REPLY_COPY,
   useReplyToQuestion,
@@ -15,7 +15,8 @@ import * as styles from "./ReplyCard.css";
 export interface ReplyCardProps {
   sessionId: string;
   /** The question notification (metadata carries question_id, question_shape, question_options). */
-  notification: Pick<NotificationData, "id" | "notificationType" | "metadata" | "message">;
+  notification: Pick<NotificationData, "id" | "notificationType" | "metadata" | "message"> &
+    Pick<NotificationHistoryItem, "occurrenceCount">;
   /** Marks the notification read once a reply is SENT. */
   onSent?: () => void;
   /** Opens the terminal output; offered where the card says "check the terminal". */

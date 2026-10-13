@@ -26,6 +26,27 @@ describe("replyAvailability", () => {
     expect(a).toEqual({ kind: "replyable", questionId: "q1", options: ["Red", "Green"], prompt: "Which color should the spike use?" });
   });
 
+  it.each([[2], [5]])("is_unavailable_parallel_question_when_occurrenceCount_is_%i", (occurrenceCount) => {
+    const a = replyAvailability(
+      question(
+        { question_id: "q1", question_shape: "single", question_options: '["Red","Green"]' },
+        { occurrenceCount },
+      ),
+    );
+    expect(a).toEqual({ kind: "unavailable", cause: "parallel_question" });
+    expect(unavailableCopy("parallel_question")).toBe("Answer in the terminal");
+  });
+
+  it.each([[1], [undefined]])("stays_replyable_when_occurrenceCount_is_%s", (occurrenceCount) => {
+    const a = replyAvailability(
+      question(
+        { question_id: "q1", question_shape: "single", question_options: '["Red","Green"]' },
+        { occurrenceCount },
+      ),
+    );
+    expect(a?.kind).toBe("replyable");
+  });
+
   it("is_null_for_a_notification_that_is_not_a_question", () => {
     expect(replyAvailability({ notificationType: "error", metadata: {}, message: "x" })).toBeNull();
   });
