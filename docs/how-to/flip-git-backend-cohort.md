@@ -64,7 +64,8 @@ repository is a hash of its root) to `<config dir>/shadow-mismatches/` and log
    capability dependency never consult the probe.
 2. List every nonzero `detect_error sub_reason` line and note it.
 3. If the ratio is 1% or more, pause the window: fix the sub-reason in the resolver, restart the
-   clock (see revert below), then continue. At 100% every call routes to the CLI and the soak
+   clock (revert to `cli` and restart, then set `shadow` and restart again; a plain restart keeps
+   the ledger), then continue. At 100% every call routes to the CLI and the soak
    measures nothing.
 4. Check `fallback` lines: a large `capability_detect_error` or `config` count on a refs
    operation means shadow is not actually running for it.
@@ -74,7 +75,8 @@ repository is a hash of its root) to `<config dir>/shadow-mismatches/` and log
 - The window is at least 7 days (`window since`), and at least 500 shadow calls on every
   operation in the cohort. An operation the app never calls stays at 0 and holds the window open.
 - `class="real"` and `class="false_clean"` are 0 for every operation. `racy` is reported and does
-  not block. On a real mismatch, fix it using the repro record, then restart the clock.
+  not block. On a real mismatch, fix it using the repro record, then restart the clock: set the cohort to `cli` and restart (this
+  deletes the ledger), then set `shadow` and restart again. A plain restart keeps the counts.
 - go-git p50 (estimated from histogram buckets, so a near tie inside one bucket is decided by
   interpolation) is not slower than the CLI p50 for every operation (the G3 rule in `gates.md`).
   The verdict is per cohort: one slow operation (G3 measured `Log` as slower) keeps the whole

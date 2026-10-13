@@ -332,7 +332,7 @@ func evaluate(rep SoakReport, cohort backend.Cohort) SoakVerdict {
 			blockers = append(blockers, fmt.Sprintf("%s: %d shadow calls, need %d", o.Operation, o.ShadowCalls, SoakMinCallsPerOp))
 		}
 		if n := o.Mismatch[string(backend.MismatchReal)] + o.Mismatch[string(backend.MismatchFalseClean)]; n > 0 {
-			blockers = append(blockers, fmt.Sprintf("%s: %d real mismatch(es); fix from shadow-mismatches/ and restart the window", o.Operation, n))
+			blockers = append(blockers, fmt.Sprintf("%s: %d real mismatch(es); fix from shadow-mismatches/, then set the cohort to cli, restart, set shadow, restart", o.Operation, n))
 		}
 		switch {
 		case o.CLIP50Ms == nil || o.GoGitP50Ms == nil:

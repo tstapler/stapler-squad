@@ -76,27 +76,25 @@ func TestShadowRefsEndToEndReturnsCLIAnswerAndCountsWithoutMismatch(t *testing.T
 	goroutines := runtime.NumGoroutine()
 	var gotSHA backend.CommitSHA
 	var gotBranch backend.BranchName
-	shadowCalls := counterDelta(t, backend.MetricShadowCallsTotal, nil, func() {
-		for i := 0; i < calls; i++ {
-			gotSHA, err = b.ResolveRef(ctx, loc, "HEAD")
-			require.NoError(t, err)
-			gotBranch, err = b.CurrentBranch(ctx, loc)
-			require.NoError(t, err)
-		}
+	var shadowCalls int64
+	realMismatches := counterDelta(t, backend.MetricShadowMismatchTotal, map[string]string{"class": "real"}, func() {
+		shadowCalls = counterDelta(t, backend.MetricShadowCallsTotal, nil, func() {
+			for i := 0; i < calls; i++ {
+				gotSHA, err = b.ResolveRef(ctx, loc, "HEAD")
+				require.NoError(t, err)
+				gotBranch, err = b.CurrentBranch(ctx, loc)
+				require.NoError(t, err)
+			}
+		})
 	})
+	assert.Zero(t, realMismatches, "agreeing repo must not produce a real mismatch")
 	assert.Equal(t, wantSHA, gotSHA)
 	assert.Equal(t, wantBranch, gotBranch)
 	assert.EqualValues(t, 2*calls, shadowCalls)
 	assert.LessOrEqual(t, runtime.NumGoroutine(), goroutines+2, "shadow reads must not leave goroutines behind")
 
-	live := readLive(ctx)
-	for _, p := range live.Counters {
-		if p.Name == backend.MetricShadowMismatchTotal {
-			assert.NotEqual(t, "real", p.Labels["class"], "agreeing repo must not produce a real mismatch: %+v", p)
-		}
-	}
 	var sampled bool
-	for _, h := range live.Histograms {
+	for _, h := range readLive(ctx).Histograms {
 		sampled = sampled || (h.Name == backend.MetricShadowDurationMS && h.Count > 0)
 	}
 	assert.True(t, sampled, "shadow durations must be recorded for the p50 criterion")
@@ -181,8 +179,13 @@ func TestLedgerSurvivesRestartAndIsDiscardedOnLeavingShadow(t *testing.T) {
 
 	loaded := loadLedger(path)
 	assert.True(t, since.Equal(loaded.Since))
-	require.NotEmpty(t, loaded.Sample.Counters)
-	assert.GreaterOrEqual(t, loaded.Sample.Counters[0].Value, int64(7), "the persisted base is kept; live counts of this test process are added on top")
+	var resolveRefCalls int64
+	for _, p := range loaded.Sample.Counters {
+		if p.Name == backend.MetricShadowCallsTotal && p.Labels["operation"] == "ResolveRef" {
+			resolveRefCalls = p.Value
+		}
+	}
+	assert.GreaterOrEqual(t, resolveRefCalls, int64(7), "the persisted base is kept; live counts of this test process are added on top")
 
 	startSoak(backend.CohortMap{}, dir) // leaving shadow ends the window
 	assert.NoFileExists(t, path)
