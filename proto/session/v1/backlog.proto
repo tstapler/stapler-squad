@@ -524,6 +524,9 @@ message ParseBacklogItemIntentRequest {
   // repo_path optionally narrows title/AC phrasing to a known repo. Unset is
   // fine — the LLM parses from the message text alone.
   string repo_path = 2;
+  // known_repo_paths are repo paths the caller already knows about (e.g. from
+  // existing sessions). When set, the LLM may pick one as suggested_repo_path.
+  repeated string known_repo_paths = 3;
 }
 
 // ParsedBacklogItemDraft is the LLM's structured read of a free-text message,
@@ -535,6 +538,9 @@ message ParsedBacklogItemDraft {
   // confidence is 0..1; a low value is a hint for the review UI to flag the
   // draft for closer scrutiny, not a threshold that blocks creation.
   float confidence = 4;
+  // suggested_repo_path is an exact entry from the request's known_repo_paths,
+  // or empty when none matched the message.
+  string suggested_repo_path = 5;
 }
 
 message ParseBacklogItemIntentResponse {
