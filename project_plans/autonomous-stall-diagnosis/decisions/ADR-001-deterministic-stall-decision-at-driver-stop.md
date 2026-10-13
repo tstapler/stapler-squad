@@ -87,6 +87,11 @@ Recovery effects:
   never Respawn, and never Resupervise, whose first turn would append to the pending input; a
   cancelled recovery ctx takes precedence over this row);
   the settle wait honours the recovery ctx; `AutonomousMode` stays true through the nudge window.
+  The open `autonomous_stuck` row is written at plan time with `action=nudging` and refreshed once
+  with the final action (`nudged`, `respawned`, or `none` for delivery-uncertain); it is annotated,
+  not resolved, because it holds the nudge counter (ADR-002). Operator text for every outcome comes
+  from one typed copy table; nudge-failure classes are mapped to plain phrases there and the class
+  code stays in the log.
 - **Shutdown**: with flag `autonomous_driver_readoption` ON, `cancelled_shutdown` does not clear
   `AutonomousMode`, writes no `autonomous_stuck` row and publishes no FAILURE notification;
   persisted `AutonomousMode` is the re-adoption *candidate* signal, never proof. Nothing re-adopts

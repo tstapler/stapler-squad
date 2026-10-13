@@ -7,7 +7,7 @@
 
 ## Happy Path Scenario
 
-Given a backlog `SessionRoleWork` `ItemSession` for an `in_progress` item whose autonomous driver is running, an open nudge budget and both `diagnose_nudge_enabled` and `autonomous_stall_nudge_enabled` on, when the driver exits with `orchestrator_error` while the pane sits at a safe idle prompt, then exactly one `[AutonomousDriver] stopped` line and one `autonomous_stuck` row context carry `stop_reason=orchestrator_error state=idle_prompt` plus a redacted tail, one fixed-text nudge is written under the terminal lease with `diagnose_nudge_count == 1`, a driver is registered again with `AutonomousMode == true` throughout, and the session is neither ended nor respawned (test `STL-1`).
+Given a backlog `SessionRoleWork` `ItemSession` for an `in_progress` item whose autonomous driver is running, an open nudge budget and both `diagnose_nudge_enabled` and `autonomous_stall_nudge_enabled` on, when the driver exits with `orchestrator_error` while the pane sits at a safe idle prompt, then exactly one `[AutonomousDriver] stopped` line and one `autonomous_stuck` row context carry a plain-language lead sentence ("The autonomous run hit an internal error and stopped. The session was waiting at its prompt. It was prompted to continue automatically (nudge 1 of 2). You do not need to do anything.") followed by `stop_reason=orchestrator_error state=idle_prompt action=nudged` and a redacted tail, one fixed-text nudge is written under the terminal lease with `diagnose_nudge_count == 1`, a driver is registered again with `AutonomousMode == true` throughout, and the session is neither ended nor respawned (test `STL-1`).
 
 ## Conventions (deterministic-fast-tests applied)
 
@@ -48,6 +48,7 @@ Given a backlog `SessionRoleWork` `ItemSession` for an `in_progress` item whose 
 | S6 | `ClaimDiagnoseNudgeSlot` result readable without a prior read (`ClaimResult`) | already planned; listed so the concurrency test asserts on the returned struct, not on a re-read | 3.2.1a (as planned) |
 | S7 | `AutonomousDriver.Finished() bool` (non-blocking read of `done`) | `startDriverIfAbsent`'s liveness check; `Wait(ctx)` with an already-cancelled ctx and a closed `done` picks at random in its `select`, so it cannot be used (pre-mortem #5 suggested it; corrected) | 2.1.1a |
 | S8 | `requireReturns` watchdog and `lockProbeSeams` (Fakes table) | a self-deadlock must fail the test, not hang `go test` until `-timeout=20m` | 3.1.3d |
+| S9 | `recordsFor(buf, sessionTitle)` log filter and a unique `"stall-" + t.Name()` session title | `captureLogs` serializes capturers (`slogDefaultMu`) but parallel emitters can still write into the swapped default (BUG-087), so "exactly one stopped line" and canary-absence must be asserted on the filtered set | 3.1.4c |
 
 ## Requirement -> Test Mapping
 
@@ -76,6 +77,8 @@ Requirement keys: AC1-AC4 and R1-R6 from `requirements.md`; **C1** no new proto/
 | TAIL-4 | P4, R4 | `server/services/autonomous_stop_detail_test.go` | `TestSanitizeStopTail_CanaryFamilies` | Unit | One canary per family: `sk-` key, `ghp_`+36 alnum, `AKIA` id, `xox*-` token, JWT, `Authorization: Bearer` 20+ chars, `postgres://u:pw@host/db`, `password=hunter2`, PEM private-key block. Each: `!strings.Contains(out, canary)`; PEM case: output equals `[tail withheld: secret pattern detected]` |
 | TAIL-5 | P4 | same | `TestSanitizeStopTail_OneLineAndCap` | Unit | Newlines become ` ⏎ `; output <= 1024 bytes and rune-safe; exactly-at-cap and cap+1 inputs |
 | TAIL-6 | P4 | same | `TestSanitizeStopTail_NonSecretTextPreserved` | Unit | A plain Claude idle-prompt tail passes through unchanged apart from whitespace collapse (guards over-redaction that would make the row useless) |
+| TAIL-7 | P4, G5 | `server/services/autonomous_stop_detail_test.go` | `TestSanitizeStopTail_FailClosedResiduals` | Unit | Engineering G5. (a) `AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY` and `export client_secret_key=abcd1234efgh`: first assert `redactErrorDetail` alone leaves them unredacted (documents why the rule exists), then `sanitizeStopTail` returns the withheld marker; (b) a headerless base64 key-body line (`MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj`) mid-tail: withheld; (c) accepted residual pinned as a named subtest: `the password is hunter2` passes through |
+| TAIL-8 | P4 | same | `TestSanitizeStopTail_FailClosedRulesNoFalsePositiveOnCommonTails` | Unit | A 60-character URL line, a 50-character file path, an idle-prompt tail, and `git status` output are not withheld; an `API_KEY=` config-dump line is (the intended cost of failing closed) |
 
 ### C. Driver exits and snapshot (Tasks 2.1.1a-c; `session/autonomous_driver_test.go`, `session/autonomous_stop_snapshot_test.go`)
 
@@ -101,12 +104,13 @@ Requirement keys: AC1-AC4 and R1-R6 from `requirements.md`; **C1** no new proto/
 | INS-3 | AC2, P1 | `TestSetAutonomousStopObserved_KeepsModeAndOutcome` | Unit | Mode true stays true, outcome untouched, `AutonomousTurn==0`, reason recorded; then `SetAutonomousMode(true, ...)` clears the reason |
 | INS-4 | AC2 | `TestInstanceSnapshot_CarriesAutonomousStopReason` | Unit | `Snapshot().Autonomous.AutonomousStopReason` reflects each setter; reading it never takes `i.mu` (reads via `Snapshot()` per `instance-lock-free-reads.md`) |
 | INS-5 | C2 | `TestAutonomousSetters_NoRaceWithSnapshotReaders` | Concurrency | 8 writers cycling setters, 8 readers on `Snapshot()`, `-race` clean |
+| INS-6 | AC2, G7 | `TestAutonomousSetters_ReturnErrorWhenActorDone` | Unit | Engineering G7. `NewLiveInstance(inst)` then `li.cancel()`: `SetAutonomousStopped`, `SetAutonomousStopObserved` and `SetAutonomousStoppedQuiet` each return a non-nil error wrapping `context.Canceled` and the snapshot is unchanged; with a nil `liveInstance` (direct path) they return nil |
 
 ### E. Service: wire outcome, characterization, class guards (Tasks 3.1.1a, 3.1.2b, 3.1.3b/d)
 
 | ID | Req | Test File | Test Name | Type | Scenario -> assertion |
 |----|-----|-----------|-----------|------|-----------------------|
-| SVC-1 | C1, AC2 | `autonomous_apply_stop_test.go` | `TestApplyInstanceStop_WireOutcomeSetClosed` | Unit | Every `StopReason` x action {Respawn, None, Nudge, Resupervise}: published `autonomous_outcome` in `{"", "done", "stuck"}`; `NewSessionUpdatedEvent` fields `autonomous_mode`, `autonomous_outcome` present |
+| SVC-1 | C1, AC2 | `autonomous_apply_stop_test.go` | `TestApplyInstanceStop_WireOutcomeSetClosed` | Unit | Every `StopReason` x action {Respawn, None, Nudge, Resupervise}: published `autonomous_outcome` in `{"", "done", "stuck"}`; `NewSessionUpdatedEvent` fields `autonomous_mode`, `autonomous_outcome` present; plus a "write failed" row (actor ctx cancelled): one Warn, no event published, callback continues (engineering G7) |
 | SVC-2 | R4, C2 | `autonomous_orchestration_service_characterization_test.go` | `TestOnAutonomousDriverComplete_Characterization_*` (4 funcs: `RemediationNotDue`, `JustParked`, `UpdateItemSessionEndedFails_NotifiesBookkeepingFailed`, `NilRespawner`) | Integration | Written and green **before** the extraction; unchanged after. Pins the Respawn body's ordering `UpdateItemSessionEnded` -> `RemediationDue` -> goroutine and the rework/backoff gates |
 | SVC-3 | C2 | existing 21 `TestAutonomousOrchestrationService_*` / `TestOnAutonomousDriverComplete_*` | (existing, count by `grep -cE '^func Test(AutonomousOrchestrationService_\|OnAutonomousDriverComplete_)'`) | Integration | `go test ./server/services -run 'Autonomous\|OnAutonomousDriverComplete'` passes unchanged before and after Story 3.1.1; 21 at base |
 | SVC-4 | C3, AC2 | `autonomous_orchestration_service_class_test.go` | `TestOnAutonomousDriverComplete_CancelledClassGuards` | Integration | 20 rows: roles {work, triage, review, unrecognized, unlinked} x reasons {`cancelled_external`, `cancelled_shutdown`} x readoption flag {ON, OFF}. Each asserts: 0 `autonomous_stuck` rows written, `ItemSession.EndedAt == nil`, respawner 0, nudger 0, driver starter 0, no notification, no `UpdateItemSessionEnded`; triage item still `idea` (no `idea -> ready`); review item still `review`; instance outcome `""` for external |
@@ -117,7 +121,7 @@ Requirement keys: AC1-AC4 and R1-R6 from `requirements.md`; **C1** no new proto/
 | SVC-9 | C3 | same | `TestOnAutonomousDriverComplete_UnlinkedCancelled_NoFinalNotification` | Integration | The final notification switch is three-way: `Cancelled` publishes neither "complete" nor "stuck"; update event and one Info log still fire |
 | SVC-10 | AC2 | same | `TestOnAutonomousDriverComplete_StallOutcomeUnlinked_TodayHandling` | Integration | Unlinked stall: mode cleared, outcome `stuck`, generic notification (today's), not nudged, not re-supervised |
 | SVC-11 | AC2, C2 | `autonomous_orchestration_service_characterization_test.go` | `TestOnAutonomousDriverComplete_Characterization_EventPayloadEqualsPostWriteSnapshot` | Integration | Pre-mortem #7. Written green **before** the extraction: the `SessionUpdatedEvent` (`autonomous_mode`, `autonomous_outcome`) carries values equal to the instance snapshot after the write, for done and stall outcomes; stays green after 3.1.2b moves the publish into `applyInstanceStop` |
-| SVC-12 | C2 | same | `TestOnAutonomousDriverComplete_Characterization_MarkStuckOncePerRolePerStall` | Integration | Pre-mortem #7. Work, triage, review and unrecognized roles each: `MarkStuck` called exactly once for a stall, zero for done and cancelled; green before and after `MarkStuck` moves into `handleWorkStall` for the work role |
+| SVC-12 | C2 | same | `TestOnAutonomousDriverComplete_Characterization_MarkStuckOncePerRolePerStall` | Integration | Pre-mortem #7. Work, triage, review and unrecognized roles each: `MarkStuck` called exactly once for a stall, zero for done and cancelled; green before and after `MarkStuck` moves into `handleWorkStall` for the work role. After Task 3.2.3b a work **Nudge** plan calls it exactly twice (plan-time `action=nudging`, then the final-action refresh); every other plan and role stays at once (UX G1) |
 
 ### F. Registry and completion identity (Task 3.1.3a; `autonomous_driver_registry_test.go`)
 
@@ -167,15 +171,16 @@ Requirement keys: AC1-AC4 and R1-R6 from `requirements.md`; **C1** no new proto/
 
 | ID | Req | Test Name | Type | Scenario -> assertion |
 |----|-----|-----------|------|-----------------------|
-| OBS-1 | AC2, R2, R4, P4 | `TestOnAutonomousDriverComplete_StopDetailRedacted` | Integration | `{orchestrator_error, Turns 2, Snapshot{Bucket safe_idle, LastActivityAt 12:03:10, PaneTail "...password=hunter2..."}}`: `MarkStuck` context starts `stop_reason=orchestrator_error state=idle_prompt turns=2 last_activity=`, contains `[REDACTED]`, not `hunter2` |
-| OBS-2 | AC2 | `TestOnAutonomousDriverComplete_LogsExactlyOneStoppedLine` | Integration | `captureLogs`: exactly one `[AutonomousDriver] stopped` record per stop with keys `session`, `item`, `role`, `run_id`, `stop_reason`, `state`, `turns`, `max_turns`, `last_activity_age`, `action`, `tail_bytes`, `resupervise`, `nudge_outcome`, `resupervise_cap_hit` (and `prior_stop_reason` for Resupervise); for a work stall the single line is emitted at `handleWorkStall` exit with the **final** action (a Nudge that fell back to Respawn logs `respawn`); `nudge_outcome=disabled` when the plan would have been Nudge with both flags on (pre-mortem #10); no tail text in any attribute; level Info for done/cancelled, Warn otherwise |
+| OBS-1 | AC2, R2, R4, P4 | `TestOnAutonomousDriverComplete_StopDetailRedacted` | Integration | `{orchestrator_error, Turns 2, Snapshot{Bucket safe_idle, LastActivityAt 12:03:10, PaneTail "...password=hunter2..."}}`: `MarkStuck` context starts with the plain summary (`The autonomous run hit an internal error and stopped. The session was waiting at its prompt.`), then ` | stop_reason=orchestrator_error state=idle_prompt action=… turns=2 last_activity=`; contains `[REDACTED]`, not `hunter2` |
+| OBS-2 | AC2 | `TestOnAutonomousDriverComplete_LogsExactlyOneStoppedLine` | Integration | `captureLogs` with a unique `session=` title and the `recordsFor(buf, title)` filter (engineering G4; BUG-087): exactly one `[AutonomousDriver] stopped` record per stop with keys `session`, `item`, `role`, `run_id`, `stop_reason`, `state`, `turns`, `max_turns`, `last_activity_age`, `action`, `tail_bytes`, `resupervise`, `nudge_outcome`, `resupervise_cap_hit` (and `prior_stop_reason` for Resupervise); for a work stall the single line is emitted at `handleWorkStall` exit with the **final** action (a Nudge that fell back to Respawn logs `respawn`); `nudge_outcome=disabled` when the plan would have been Nudge with both flags on (pre-mortem #10); no tail text in any attribute; level Info for done/cancelled, Warn otherwise |
 | OBS-3 | AC2 | `TestStopDetail_StateDistinguishesIdleErrorExited` | Unit | Three snapshots (`safe_idle`, `error`, pane dead exit 0) produce `state=idle_prompt`, `state=error`, `state=exited`; a fourth (exit 1) produces `state=crashed`. Literal AC2 "distinguishes idle/awaiting-input, error, completed-or-exited" |
-| OBS-4 | AC2 | `TestStopReasonPhrase_EveryReasonHasRow` | Unit | Completeness over the full value list (DOM-2 slice); no phrase contains a tail |
+| OBS-4 | AC2 | `TestStopReasonPhrase_EveryReasonHasRow` | Unit | Completeness over the full value list (DOM-2 slice) for `reasonSentence`, all `ObservedState` values for `stateSentence`, and every nudge-failure class for `nudgeFailurePhrase`; no sentence contains a tail |
 | OBS-5 | AC2 | `TestNotification_StartupTimeoutNeverSaysStoppedAfterZeroTurns` | Integration | `startup_timeout`, `Turns 0`: body lacks `stopped after 0 turns`; non-turn reasons read `during turn N` |
-| OBS-6 | P4 | `TestCanary_AbsentFromRowNotificationAndLogs` | Integration | Canary (`ghp_` + 36 alnum) in the tail: absent from the stuck row context, the notification body and the whole captured log buffer; present nowhere durable |
+| OBS-6 | P4 | `TestCanary_AbsentFromRowNotificationAndLogs` | Integration | Canary (`ghp_` + 36 alnum) in the tail: absent from the stuck row context, the notification body and the filtered captured records (and, being absent, from the unfiltered buffer too); present nowhere durable |
 | OBS-7 | AC2, R2 | `TestStuckRowContext_ReturnedByListStuckBacklogItems` | Integration | Real `Storage`, `MarkStuck` with a `StopDetail`, call the `ListStuckBacklogItems` handler: `StuckBacklogItem.context` (proto field 9) equals the detail. This is the operator read path ADR-002 names; the plan has no test for it (added here) |
 | OBS-8 | AC2 | `TestStopDetail_SingleLineWithMarker` | Unit | Newlines in the tail render as ` ⏎ `; the whole detail has no `\n` (`StuckItemDetail.tsx:203` collapses whitespace) |
 | OBS-9 | AC2, R2 | `TestStopDetail_ResuperviseAndCapKeys` | Unit | Every detail carries `resupervise=n/3`; the cap-reached row carries `resupervise_cap_reached runs=3 last_stop_reason=startup_timeout` |
+| OBS-10 | AC2, G4, G5 | `TestStopCopy_GoldenStringsAndNoCodes` | Unit | UX G4/G5. Every row of the plan's Operator-facing copy tables (reason x state x action, plus the nudge-failure phrases and titles) equals its constant byte for byte; for every `StopReason`, `ObservedState` and `nudge_outcome` class, no composed summary contains the code string (`orchestrator_error`, `idle_prompt`, `lease_busy`, `slot_unavailable`, ...); `none: delivery uncertain` is the only non-unlinked row whose "You act?" is Yes |
 
 ### I. Atomic claim (Task 3.2.1a; `session/diagnose_nudge_test.go`)
 
@@ -217,12 +222,12 @@ File header states: service tests with a fake nudger cannot prove promptness or 
 | STL-2 | AC3, AC4 | `TestFallbackAfterNudge_FailureTable` | Unit | One subtest per row of the plan's failure table, top to bottom: success; recovery ctx cancelled (stop/delete/toggle-off/shutdown); instance not `Active`/archived/paused; `ErrNudgeTargetNotIdle`; `ErrLeaseBusy`; ownership mismatch or dead pane; `ErrNudgeSlotUnavailable`; `ErrNudgeSubmitUncertain`; successful nudge but restart error (successor registered / `ErrNoDriverPool` / `Start` failure); `duplicate` completion. Each asserts action, `AutonomousMode` after, notification, `diagnose_nudge_count` never decremented |
 | STL-3 | AC3 | `TestFallbackAfterNudge_CtxCancelBeatsSubmitUncertain` | Unit | `ErrNudgeSubmitUncertain` returned while the recovery ctx is cancelled: ctx-cancel row wins (no Resupervise, no Respawn, no restart) |
 | STL-4 | AC3 | `TestFallbackAfterNudge_SubmitUncertainLeavesPane` | Unit | Live ctx + `ErrNudgeSubmitUncertain`: `SetAutonomousStopped(<stall reason>)`, stuck row stays, notification "nudge delivery uncertain", driver restarter 0, respawner 0, `KillTmuxPaneOnly` 0, slot stays consumed |
-| STL-5 | AC3, C2 | `TestHandleWorkStall_RespawnAfterNudgeFailure_RunsOriginalBody` | Integration | Each Respawn-mapped row: `UpdateItemSessionEnded` called, `RemediationDue` consulted, respawn dispatched, mode cleared via `SetAutonomousStopped`, body names `nudge not sent: <class>` |
+| STL-5 | AC3, C2 | `TestHandleWorkStall_RespawnAfterNudgeFailure_RunsOriginalBody` | Integration | Each Respawn-mapped row: `UpdateItemSessionEnded` called, `RemediationDue` consulted, respawn dispatched, mode cleared via `SetAutonomousStopped`, body carries the operator phrase for the class (`... a prompt could not be sent (the session was busy again) ...`) and not the class code |
 | STL-6 | AC3, P1 | `TestHandleWorkStall_RoleScope_NoNudgeNoRestart` | Integration | review, triage, unrecognized, unlinked at `idle_prompt` with flag ON and headroom: nudger 0, restarter 0, today's handling per arm |
 | STL-7 | AC3, C2 | `TestHandleWorkStall_Fallbacks` | Integration | 9 rows: `diagnose_nudge_enabled` OFF (stall flag ON) -> today's respawn; **`diagnose_nudge_enabled` ON and `autonomous_stall_nudge_enabled` OFF (the live config's state) -> today's respawn, nudger 0, log `nudge_outcome=disabled`** (pre-mortem P1 #2); stall flag ON and diagnose OFF -> respawn (kill switch wins); `count==2` (cap 3, reserve 1) -> respawn; `needs_approval` -> nudger 0; `MarkStuck (false, nil)` -> nudger 0 (downgrade to `None`, Warn names item status); `IsRetryPending` -> neither nudge nor respawn; row reopened by `MarkStuck` at cap -> post-`MarkStuck` re-read downgrades to Respawn before the settle wait, nudger 0; item `review` -> see STL-18 |
 | STL-8 | C2, AC3 | `TestHandleWorkStall_Archived_NoNudgeNoRespawnNoRow` | Integration | `inst.IsArchived()`: action `none`, no stuck row (M4), respawner 0, nudger 0, driver starter 0 (`noarchivedrevival` behaviour) |
 | STL-9 | AC3, C2 | `TestHandleWorkStall_Concurrency_EightCompletionsCapHolds` | Concurrency | 8 completions for one item (distinct titles) through a barrier, cap 3: nudger write count <= 2, `diagnose_nudge_count <= 2`; `-race` clean |
-| STL-10 | AC2 | `TestHandleWorkStall_NotificationContract` | Integration | Nudge success: INFO "nudged" once, no FAILURE; Resupervise: `Suppress`; Respawn after failure: generic notification body carries `nudge not sent: <class>` |
+| STL-10 | AC2 | `TestHandleWorkStall_NotificationContract` | Integration | Nudge success: INFO "nudged" once, no FAILURE; Resupervise: `Suppress`; Respawn after failure: the generic notification body carries the operator phrase for the failure class and no class code (UX G4); golden title/body for nudged, respawned, respawned-after-failed-nudge, `restart_failed` and uncertain |
 | STL-11 | AC3 | `TestPlanStall_InputAssembly` | Unit | Both flag readers (S1) read at call instant (flip between two calls); `NudgeEnabled` is their AND; `NudgeAllowed` error -> false (fail closed); `Archived`/`RetryPending` from the snapshot; `ItemInWorkStatus` from the item status; `ResuperviseAllowed` from the budget; `State == ClassifyObserved(outcome.Snapshot)` |
 | STL-12 | AC2, C2 | `TestApplyInstanceStop_PerformedOncePerPlanDecision` | Unit | Rewritten by pre-mortem #7 (was "once per return path via a deferred write"). Table over every return path of `handleWorkStall`: exactly one write and one event at plan time; `Nudge`/`Resupervise` use `SetAutonomousStopObserved`, `Respawn`/`None` use `SetAutonomousStopped`; a Nudge that falls back to Respawn adds exactly one second write and event; the event payload equals the post-write snapshot; a fallback write is skipped when a driver is registered, so a successor's turn counters are never zeroed |
 | STL-13 | C2 | `TestHandleWorkStall_MaxTurns_NeverNudgesOrResupervises` | Integration | `max_turns` with `idle_prompt` and with `working`, flag ON, headroom: Respawn, nudger 0, restarter 0, rework cap and `RemediationDue` still consulted |
@@ -232,6 +237,8 @@ File header states: service tests with a fake nudger cannot prove promptness or 
 | STL-17 | AC3, C2 | `TestHandleWorkStall_MarkStuckError_FailsOpenToRespawn` | Integration | Pre-mortem #4. Storage fake returns `(false, err)` from `MarkStuck` for a work stall that planned Nudge: Warn logged, original Respawn body runs (ItemSession ended, respawn dispatched), never `None`, nudger 0; and `(false, nil)` -> `None` with no respawn (contrast row) |
 | STL-18 | AC3, C2 | `TestHandleWorkStall_ItemNotInProgress_NoNudgeNoResupervise` | Integration | Pre-mortem #3. Item `review`, state `idle_prompt` and again `working`, flags on, headroom: nudger 0, restarter 0, no instance write of `Observed`, today's Respawn body (its `AutoRespawnAutonomousWork` re-check no-ops), log `action=respawn` |
 | STL-19 | C1, R6 | `TestFeatureFlag_AutonomousStallNudge_RegisteredDefaultOffLiveSettable` | Unit | Pre-mortem P1 #2. Registered in `feature_flag_service.go`; default asserted as the **literal** `false` (flipping the shipped default requires editing this test); live set changes the next `planStall`; `diagnose_nudge_enabled`'s description names the in-process nudge |
+| STL-20 | AC2, UX G1 | `TestHandleWorkStall_RowActionAnnotated` | Integration | Real `Storage`: Nudge success -> row `action=nudging` at plan time then `action=nudged nudge=1/2`, row still open, `diagnose_nudge_count` 1 (annotated, not resolved); Nudge -> fallback Respawn -> `action=respawned` plus the failure phrase; delivery uncertain -> `action=none`; Respawn/None plans -> one write with the final action; a storage fake failing the refresh: Warn, recovery outcome unchanged |
+| STL-21 | AC2, UX G4 | `TestHandleWorkStall_NoClassCodeInOperatorText` | Integration | Each nudger error class driven through `fallbackAfterNudge`: the published notification title/body and the row context summary contain none of `not_idle`, `lease_busy`, `ownership`, `slot_unavailable`, `uncertain`, `restart_failed`, `ctx_cancelled`; the log record's `nudge_outcome` equals the class |
 
 ### L. Re-supervise (Tasks 3.2.4a/b; `autonomous_stall_recovery_resupervise_test.go`)
 
@@ -262,6 +269,13 @@ File header states: service tests with a fake nudger cannot prove promptness or 
 | DEF-5 | P3 | `backlog_service_stall_deferral_test.go` | `TestWiredStaleWorkRemediator_SatisfiesStaleWorkDeferrer` | Unit | The value passed to `SetStaleWorkRemediator` at the wiring site satisfies `session.StaleWorkDeferrer` (type assertion `ok == true`); a wrapper would make the guard silently inert (architecture review "Specific checks"); the wiring site logs Error when it does not (pre-mortem #12) |
 | DEF-6 | P3, C2 | existing stale-detector tests | (existing, unchanged) | Integration | Pass unchanged when no guard is stamped and when the remediator does not implement `StaleWorkDeferrer` |
 
+### O. Web-app Why value (Task 3.1.4d; CSS only, no TSX change)
+
+| ID | Req | Test File | Test Name | Type | Scenario -> assertion |
+|----|-----|-----------|-----------|------|-----------------------|
+| UI-1 | AC2, UX G6 | `web-app/src/components/backlog-stuck/StuckItemDetail.test.tsx` | `renders a plain-language lead sentence followed by a long unbroken token` | Unit | Context `<sentence> \| stop_reason=… tail=<300 non-space chars>`: both visible in `data-testid="stuck-item-why"`; the data path is pinned (jsdom does not lay out, so the wrap itself is UI-2) |
+| UI-2 | AC2, UX G6 | `tests/e2e/backlog-stuck-items.spec.ts` | `Why value with a long unbroken token does not overflow at 360px` | E2E | `seedStuckItem({context: <300 unbroken chars>})`, viewport 360 x 740, open the card: `document.documentElement.scrollWidth <= window.innerWidth`; `data-testid` locators, no `waitForTimeout`, file already annotated `// @feature backlog:list-stuck` |
+
 ### N. Documentation (AC1, R1) and gates
 
 | ID | Req | Check | Type | Pass condition |
@@ -273,7 +287,7 @@ File header states: service tests with a fake nudger cannot prove promptness or 
 | DOC-5 | AC1 | Evidence labels and census | Doc | Each cause labelled VERIFIED or INFERRED; the doc states local logs held only `test-*` session evidence; census command and output pasted; production frequency stated as unknown, no ranking by count |
 | DOC-6 | AC1, R2 | Taxonomy matches code | Doc | After Task 4.1.1a: every `StopReason` constant name appears in the doc mapped to its driver site by symbol name; the decision table rows equal ADR-001 rows 1-8 and `DOM-4` case names; known-gaps section lists the 6 gaps named in Task 1.2.1b |
 | DOC-7 | AC1 | Doc drift guard (recommended, optional) | Unit | `session/domain` test reads `docs/explanation/autonomous-stall-causes.md` and asserts every `StopReason` string appears in it. Cheap, deterministic; not in the plan (see "Plan deltas") |
-| GATE-1 | C1 | No wire/schema change | Guard | `make registry-diff` empty; `git diff --stat origin/main -- proto session/ent/schema web-app` empty; `make proto-breaking` clean |
+| GATE-1 | C1 | No wire/schema change | Guard | `make registry-diff` empty; `git diff --stat origin/main -- proto session/ent/schema` empty; `git diff --stat origin/main -- web-app` lists only `StuckItemDetail.css.ts` and `StuckItemDetail.test.tsx` (Task 3.1.4d); `make proto-breaking` clean |
 | GATE-2 | C2 | Custom lints incl. `noarchivedrevival`, `silenttransition`, `notimesleeptest` | Guard | `make lint-custom` exits 0 |
 | GATE-3 | C2, INS-5 | Actor-field writes | Guard | `make actor-field-guard` exits 0 (no raw `AutonomousStopReason` write) |
 | GATE-4 | R6 | Complexity/duplication gate | Guard | `make ready-complexity-gate` exits 0 (`run()` and `onAutonomousDriverComplete` not flagged; if `run()` is, extract per Task 2.1.1b) |
@@ -352,11 +366,11 @@ Then, for each row, `git show <sha>:<path> | sed -n '<line>p'` must contain the 
 
 ## UX Acceptance Tests
 
-No `design/ux.md` exists and the plan changes no UI (`web-app/` untouched; ADR-002). No Playwright test is added. The only user-visible surfaces are existing: the Unfinished tab's stuck-row context (`StuckItemDetail.tsx:102`) and `SessionCard.tsx:877,888`.
+No `design/ux.md` exists. The plan adds no component, RPC or marker; its one web-app change is a CSS-only overflow rule on `StuckItemDetail`'s `.value` (Task 3.1.4d, UI-1/UI-2). The user-visible surfaces are existing: the Unfinished tab's stuck-row context (`StuckItemDetail.tsx:102`, now led by a plain-language sentence) and `SessionCard.tsx:877,888`.
 
 | UX Criterion | Test | Tool | Steps |
 |--------------|------|------|-------|
-| Operator can read why a session stopped (AC2) | `OBS-7` (RPC returns the detail) plus **MAN-1** | Go test + manual | MAN-1: on a manual instance (`PORT=62871`, per `CLAUDE.md` manual-testing recipe), stop a work session's pane output to an idle prompt, let the driver exit, open the Unfinished tab, read `stop_reason=... state=idle_prompt` in the item's detail |
+| Operator can read why a session stopped (AC2) | `OBS-7` (RPC returns the detail) plus **MAN-1** | Go test + manual | MAN-1: on a manual instance (`PORT=62871`, per `CLAUDE.md` manual-testing recipe), stop a work session's pane output to an idle prompt, let the driver exit, open the Unfinished tab, read the plain-language lead sentence (what stopped, what the session was doing, what was done, whether you must act) and, after ` | `, `stop_reason=... state=idle_prompt action=...` in the item's detail |
 | No false "stuck" badge after cancel or boot clear | `INS-1`, `INS-2`, `SVC-4`, `RDP-6` assert outcome `""` | Go test | `SessionCard.tsx:888` only fires on `"stuck"`, so outcome `""` is the proof; no Jest change needed |
 | Nudged session continues and is not killed (AC3) | `STL-1` plus **MAN-2** | Go test + manual | MAN-2: flags `diagnose_nudge_enabled` and `autonomous_stall_nudge_enabled` on in the manual instance (the latter ships off), drive a session to an idle prompt, confirm one nudge line appears in the pane, the tmux session survives, and the log shows `action=nudge` |
 | Boot re-adoption candidates are legible | `RDP-1`, `RDP-17` plus **MAN-3** | Go test + manual | MAN-3: first boot after deploy, read every `readopt candidate` line once (wall-clock blocker 3) |
@@ -367,7 +381,7 @@ No `design/ux.md` exists and the plan changes no UI (`web-app/` untouched; ADR-0
 - **Integration**: in-memory ent `Storage`, fake nudger/starter/probe/respawner/clock; real `ClaudeController` only through `pumpIdleSignals`.
 - **Concurrency**: barrier plus `go test -race` (`make test-race`).
 - **Guards**: `make lint-custom`, `make actor-field-guard`, `make test-delivery-guards`, `make ready-complexity-gate`, `make registry-diff`.
-- **E2E / UX**: none automated (no UI change); three manual checks above.
+- **E2E / UX**: one Playwright case (UI-2, 360 px overflow) in the existing `backlog-stuck-items.spec.ts`; three manual checks above.
 - **Migration**: N/A (plan "Migration Plan: None"); no `migration_should_be_reversible` test.
 
 ## Coverage Targets and How to Measure
@@ -376,7 +390,7 @@ No `design/ux.md` exists and the plan changes no UI (`web-app/` untouched; ADR-0
 |-------|------------------|--------|
 | Go (new/changed files) | `go test ./session/domain/... ./session/... ./server/services/... -coverprofile=cover.out && go tool cover -func=cover.out` | >= 80% line on `session/domain/autonomous_stop.go`, `session/autonomous_stop_snapshot.go`, `session/autonomous_stall_nudge.go`, `server/services/autonomous_driver_registry.go`, `autonomous_readoption.go`, `autonomous_stall_recovery.go`, `autonomous_stall_nudge_effect.go`, `autonomous_stall_resupervise.go`, `autonomous_stop_detail.go`, `stall_recovery_guard.go`; 100% of `StopReason` x `ObservedState` decision branches via DOM-5 |
 | Race | `make test-race` | clean |
-| Web-app | not run | no change (stated in the PR) |
+| Web-app | `cd web-app && pnpm exec jest --testPathPatterns StuckItemDetail --no-coverage`; `pnpm run lint:duplicates` | UI-1 passes; jscpd under its threshold (the new test adds no `jest.mock` block) |
 
 - Every public/exported new function has a happy-path and an error-path test (DOM-*, TAIL-*, NDG-*, CLM-*).
 - Every external integration (tmux write, DB claim, GitHub-free) has a unit with a fake and at least one integration against real `Storage` (CLM-*, STL-1, DEF-2).
@@ -387,7 +401,7 @@ No `design/ux.md` exists and the plan changes no UI (`web-app/` untouched; ADR-0
 | Requirement | Automated tests | Manual / doc | Notes |
 |-------------|-----------------|--------------|-------|
 | **AC1** root cause identified, each stop path cited | DOC-7 (optional drift guard) | DOC-1..DOC-6, citation script, checklist | **Documentation deliverable; root-cause correctness is a human judgement and production frequency is unverifiable (no production logs).** Citation resolution is scripted, content quality is manual |
-| **AC2** reason recorded and observable, distinguishes idle/error/exited | DOM-1, DOM-3, DRV-1, DRV-2, DRV-3, INS-1..INS-4, SVC-1, OBS-1..OBS-9 | MAN-1 | Log (OBS-2), instance field (INS-4), stuck-row context via RPC (OBS-7) |
+| **AC2** reason recorded and observable, distinguishes idle/error/exited | DOM-1, DOM-3, DRV-1, DRV-2, DRV-3, INS-1..INS-4, INS-6, SVC-1, OBS-1..OBS-10, STL-20, STL-21, UI-1, UI-2 | MAN-1 | Log (OBS-2), instance field (INS-4), stuck-row context via RPC (OBS-7) |
 | **AC3** state inspected and captured before restart; nudge over respawn when waiting | DOM-4, DOM-5, DRV-4..DRV-6, DRV-10, TAIL-1..TAIL-3, CLM-1..CLM-7, NDG-1..NDG-12, STL-1..STL-19, RSP-1..RSP-8, STP-1..STP-5, DEF-1..DEF-5 | MAN-2; owner sign-off on "AC3 scope" | **Scope is driver-stop paths only** (plan Deferred "AC3 scope"). Stale-detector and health-checker restarts have no snapshot or nudge by design; DEF-4 and DEF-6 pin that they are unchanged. Owner sign-off is not testable |
 | **AC4** tests cover classification and nudge-vs-respawn per state | DOM-3, DOM-4, DOM-5, STL-2, STL-7, STL-13, RSP-6 | none | Meta-requirement: satisfied by the existence and exhaustiveness of these tests; GATE-5 runs them |
 | **R1** diagnosis document with cited paths | none | DOC-1..DOC-6 | Same as AC1 |
@@ -396,13 +410,13 @@ No `design/ux.md` exists and the plan changes no UI (`web-app/` untouched; ADR-0
 | **R4** last activity and output tail captured and recorded before respawn | DRV-4, DRV-5, DRV-6, TAIL-1..TAIL-6, OBS-1, OBS-6, SVC-2 | none | Ordering before `UpdateItemSessionEnded` pinned by SVC-2 and STL-5 |
 | **R5** pure decision; waiting session nudged; bounded by nudge cap | DOM-4, DOM-5, DOM-6, CLM-1..CLM-4, CLM-6, NDG-1..NDG-4, NDG-9, STL-1, STL-7, STL-9 | none | |
 | **R6** table-driven tests for classification and decision for every state | DOM-3, DOM-5, STL-2 | none | Same as AC4 |
-| **C1** no new proto/ent/web-app surface | SVC-1, INS-1 (outcome set closed) | GATE-1 (command, not a Go test) | Guard-only for the "no diff" half |
+| **C1** no new proto/ent/web-app surface | SVC-1, INS-1 (outcome set closed) | GATE-1 (command, not a Go test) | Guard-only for the "no diff" half. The CSS-only change in Task 3.1.4d adds no component, RPC, field or marker; GATE-1 names the two allowed web-app files |
 | **C2** archival, rework cap, remediation backoff, nudge cap not weakened | DOM-5, DOM-6, STL-5, STL-7, STL-8, STL-13, STL-15..STL-18, CLM-1..CLM-3, CLM-5, CLM-7, SVC-2, SVC-3, SVC-11, SVC-12, NDG-4, NDG-11, DEF-6 | GATE-2 (`noarchivedrevival`), GATE-3 | |
 | **C3** external stop is not a stall and triggers no respawn | DRV-1 (`cancelled_external`), DRV-9, SVC-4..SVC-9, REG-4, STP-1..STP-5, STL-3 | none | |
 | **P1** re-supervise a working session, bounded | DOM-4, RSP-1..RSP-8, STL-6, STL-13, STL-14, STL-18 | none | |
 | **P2** boot re-adoption under gates | SVC-7, SVC-8, RDP-1..RDP-18 | MAN-3 | |
 | **P3** stale-remediator deferral | DEF-1..DEF-6 | none | |
-| **P4** secret-safe tail | TAIL-1..TAIL-6, OBS-1, OBS-6 | none | Canary per family, 9 families |
+| **P4** secret-safe tail | TAIL-1..TAIL-8, OBS-1, OBS-6 | none | Canary per family, 9 families, plus the env-style and headerless-key-body residuals fail closed (TAIL-7) with the free-prose residual pinned as accepted |
 | **P5** one pinned, guarded, cancellable write surface | NDG-1..NDG-12, REG-1..REG-16, STP-1..STP-3 | NDG-13 (guard, run manually and in CI) | |
 
 **Coverage**: 13/13 requirements from `requirements.md` (AC1-AC4, R1-R6, C1-C3) map to at least one concrete check; 5/5 plan-derived requirements (P1-P5) likewise. 16 of the 18 have at least one non-optional automated Go test; AC1 and R1 are verified by the document protocol only (scripted citation check plus reviewer checklist); see call-outs.
@@ -426,6 +440,7 @@ None adds a task; each is a line inside an existing task. **Status (2026-10-13):
 5. **Task 3.2.3d**: STL-8 (archived), STL-12 (rewritten: once per plan decision), STL-14 (resupervise writes no row). Written into the plan.
 6. **Task 4.1.1a**: optionally add DOC-7.
 7. **Pre-mortem additions (new rows)**: DRV-10, SVC-11, SVC-12, REG-12..REG-16, STL-15..STL-19; changed rows DOM-4, DOM-5 (2^6 booleans), DOM-6, REG-10, RDP-16, OBS-2, STL-1, STL-7, STL-11, STL-12, RSP-6, DEF-1, DEF-5; new seams S7, S8; new fakes `lockProbeSeams`, `requireReturns`.
+8. **Triad repair (iteration 5)**: new rows TAIL-7, TAIL-8, INS-6, OBS-10, STL-20, STL-21, UI-1, UI-2; changed rows SVC-1, SVC-12, OBS-1, OBS-2, OBS-4, OBS-6, STL-5, STL-10, GATE-1; new seam S9; BUG-079 baseline run is a Task 2.1.1c step, not a row; Task ids 3.1.3e, 3.1.3f, 3.1.4d added to the plan (38 tasks).
 
 ## Summary counts
 
@@ -433,21 +448,22 @@ Counts are derived from the ID and Type columns above (command below), not hand-
 
 | Kind | Rows | IDs |
 |------|------|-----|
-| Unit | 75 | includes DOC-7 (optional drift guard) |
-| Integration | 58 | real in-memory `Storage` and/or several real components |
+| Unit | 80 | includes DOC-7 (optional drift guard) and UI-1 (Jest) |
+| Integration | 60 | real in-memory `Storage` and/or several real components |
 | Concurrency (`-race`, barrier) | 7 | DRV-9, INS-5, REG-7, REG-10, REG-15, CLM-1, STL-9 |
 | Guard (command gate) | 8 | GATE-1..GATE-7, NDG-13 |
 | Doc (AC1 protocol) | 6 | DOC-1..DOC-6 |
-| **Total check rows** | **154** | 140 Go test rows (75 + 58 + 7, of which 3 are existing suites run unchanged: SVC-3, CLM-5, DEF-6) + 8 guards + 6 doc checks |
+| E2E (Playwright) | 1 | UI-2 |
+| **Total check rows** | **162** | 146 Go test rows (79 + 60 + 7, of which 3 are existing suites run unchanged: SVC-3, CLM-5, DEF-6) + 1 Jest (UI-1) + 1 Playwright (UI-2) + 8 guards + 6 doc checks |
 
-- Rows per area: DOM 6, TAIL 6, DRV 10, INS 5, SVC 12, REG 16, RDP 18, OBS 9, CLM 7, NDG 13, STL 19, RSP 8, STP 5, DEF 6, DOC 7, GATE 7 (sum 154).
-- Table cases inside rows that the plan named explicitly: readoption gates 28 (RDP-1), cancelled-class guards 20 (SVC-4), failure-mapping rows 10 (STL-2), fallback rows 9 (STL-7), secret canary families 9 (TAIL-4), exhaustive decision combinations 5,632 at base (11 x 8 x 64) (DOM-5, derived from the enum slices at runtime).
-- UX acceptance tests: 0 automated (no UI change); 3 manual checks (MAN-1, MAN-2, MAN-3).
+- Rows per area: DOM 6, TAIL 8, DRV 10, INS 6, SVC 12, REG 16, RDP 18, OBS 10, CLM 7, NDG 13, STL 21, RSP 8, STP 5, DEF 6, DOC 7, GATE 7, UI 2 (sum 162).
+- Table cases inside rows that the plan named explicitly: readoption gates 28 (RDP-1), cancelled-class guards 20 (SVC-4), failure-mapping rows 10 (STL-2), fallback rows 9 (STL-7), secret canary families 9 (TAIL-4) plus 3 fail-closed residual cases (TAIL-7), exhaustive decision combinations 5,632 at base (11 x 8 x 64) (DOM-5, derived from the enum slices at runtime).
+- UX acceptance tests: 2 automated (UI-1 Jest, UI-2 Playwright, CSS overflow only); 3 manual checks (MAN-1, MAN-2, MAN-3).
 - Migration test: N/A.
 - Requirement coverage: 13/13 source requirements, 5/5 plan-derived; 2 are verified by document protocol only (AC1, R1); 1 has a command-only half (C1).
 
 ```bash
 f=project_plans/autonomous-stall-diagnosis/implementation/validation.md
-grep -E '^\| (DOM|TAIL|DRV|INS|SVC|REG|RDP|OBS|CLM|NDG|STL|RSP|STP|DEF|DOC|GATE)-[0-9]+ ' "$f" | wc -l          # 154
-grep -E '^\| (DOM|TAIL|DRV|INS|SVC|REG|RDP|OBS|CLM|NDG|STL|RSP|STP|DEF|DOC|GATE)-[0-9]+ ' "$f" | grep -c '| Unit |'   # 75
+grep -E '^\| (DOM|TAIL|DRV|INS|SVC|REG|RDP|OBS|CLM|NDG|STL|RSP|STP|DEF|DOC|GATE|UI)-[0-9]+ ' "$f" | wc -l          # 162
+grep -E '^\| (DOM|TAIL|DRV|INS|SVC|REG|RDP|OBS|CLM|NDG|STL|RSP|STP|DEF|DOC|GATE|UI)-[0-9]+ ' "$f" | grep -c '| Unit |'   # 80
 ```

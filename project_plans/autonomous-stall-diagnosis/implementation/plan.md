@@ -2,9 +2,9 @@
 
 **Feature**: Diagnose why autonomous-mode backlog sessions stop early, record a typed stop reason for every stop, inspect the pane before any restart, re-supervise a still-working session, and prefer a bounded nudge over a respawn when the session is only waiting.
 **Date**: 2026-10-13
-**Status**: Ready for implementation (repair iteration 3: adversarial round-3 concerns C1-C3, C5-C7 folded in; boot re-adoption gate results are classified reject / skip / unknown; the one owner decision, the re-adoption default, is a single constant, see Deferred / accepted concerns; repair iteration 4: pre-mortem P1 #1-#2 and P2 #3-#11 folded into existing tasks' ACs, no task added, see "Pre-mortem disposition")
+**Status**: Ready for implementation (repair iteration 3: adversarial round-3 concerns C1-C3, C5-C7 folded in; boot re-adoption gate results are classified reject / skip / unknown; the one owner decision, the re-adoption default, is a single constant, see Deferred / accepted concerns; repair iteration 4: pre-mortem P1 #1-#2 and P2 #3-#11 folded into existing tasks' ACs, no task added, see "Pre-mortem disposition"; repair iteration 5: triad gaps UX G1-G6, engineering G1-G8, product items folded in, three tasks added (3.1.3e, 3.1.3f, 3.1.4d), see "Triad repair disposition")
 **ADRs**: [ADR-001](../decisions/ADR-001-deterministic-stall-decision-at-driver-stop.md), [ADR-002](../decisions/ADR-002-stop-reason-exposure-without-wire-change.md)
-**Complexity**: 2 (backlog item `4a709ebc-51de-4e6a-8f1d-150cde3925bc`; no schema, proto or web-app change)
+**Complexity**: 2 (backlog item `4a709ebc-51de-4e6a-8f1d-150cde3925bc`; no schema or proto change; one CSS-only web-app change, Task 3.1.4d)
 **Base commit**: `6a395b58f`. Every `file:line` below was re-checked against this commit; implementers must re-check at their own HEAD (lines drift).
 
 ---
@@ -79,14 +79,16 @@ must say so and label each cause VERIFIED (code path exists) vs INFERRED (freque
 | `stopSource` | Narrow driver-side interface for the observations `finish` needs (status, last activity, liveness, pane exit, tail) | Test seam, mirrors `panePreviewer`; nil means "use the instance" |
 | `BoundedStopTail` | `string -> string`: ANSI-stripped, last <=40 lines, <=4KB, rune-safe | `session/autonomous_stop_snapshot.go` |
 | `sanitizeStopTail` | Service-side sink sanitizer: withhold on `RunPreGateSecurityCheck`, else `redactErrorDetail`, <=1KB, one line | Reuses existing patterns; no new regex |
-| `StopDetail` | The `autonomous_stuck` row's `context` string: `stop_reason=… state=… turns=… last_activity=… tail=…` | Only sink for the tail |
+| `StopDetail` | The `autonomous_stuck` row's `context` string: `<plain summary> \| stop_reason=… state=… action=… nudge=n/cap turns=… resupervise=n/3 last_activity=… [nudge_outcome=…] tail=…`. The plain summary is one to three sentences from the `stopCopy` table (Operator-facing copy, below); the `key=value` part is for greppability and tests | Only sink for the tail |
+| `stopCopy` | Typed copy table owned by `server/services/autonomous_stop_detail.go`: `reasonSentence(StopReason)`, `stateSentence(ObservedState)`, `actionSentence(action, nudgeFailureClass, n, cap)` and `nudgeFailurePhrase(class)`. One function, `plainSummary(...)`, composes them and feeds both the notification body and the stuck-row lead sentence, so the two cannot drift | Codes (`orchestrator_error`, `lease_busy`, `idle_prompt`) never appear in a sentence; they stay in the `key=value` part and the log line. Completeness and golden-string tests in Task 3.1.4c |
+| `action` (row/log value) | What the callback finally did: `nudged`, `respawned`, `resupervised`, `none`, plus the transient `nudging` that exists only between plan time and the end of the nudge effect (seconds). `left` (nudge delivery uncertain, pane left alone) is written as `none` with `nudge_outcome=uncertain` | `resupervised` never reaches a row (no row is written for it); it is in the log line |
 | `AutonomousStopReason` | `domain.StopReason` (typed) on `AutonomousModeState` / `InstanceSnapshot` | In-memory, actor setter; not on the wire |
-| `SetAutonomousStopped` | Instance actor setter: clears mode/turns, sets outcome (`""|done|stuck`) and `AutonomousStopReason` atomically | Supersedes test-only `SetAutonomousComplete`; used whenever the session ends autonomy: Respawn, None, done, `cancelled_external` (outcome `""`) and the flag-OFF `cancelled_shutdown` callback branch (outcome `"stuck"`, byte-for-byte what the callback writes today) |
+| `SetAutonomousStopped` | Instance actor setter (returns `error`: the `sendSyncErr` result, non-nil only when the instance actor's ctx is done, i.e. the instance is going away; the older `_ = i.sendSyncErr` setters are untouched): clears mode/turns, sets outcome (`""|done|stuck`) and `AutonomousStopReason` atomically | Supersedes test-only `SetAutonomousComplete`; used whenever the session ends autonomy: Respawn, None, done, `cancelled_external` (outcome `""`) and the flag-OFF `cancelled_shutdown` callback branch (outcome `"stuck"`, byte-for-byte what the callback writes today) |
 | `SetAutonomousStoppedQuiet` | Variant of `SetAutonomousStopped` for the boot pass: clears mode/turns, records `AutonomousStopReason`, outcome is always `""` | Boot-cleared candidates must not show the `SessionCard.tsx:888` "stuck" badge (outcome is not persisted, no row or notification explains it; adversarial C2) |
 | `SetAutonomousStopObserved` | Instance actor setter: records `AutonomousStopReason` and zeroes turn counters, leaves `AutonomousMode` and outcome untouched | Used while a Nudge or Resupervise is in flight, so the approval gate (`server.go:889-891`) keeps working, and for `cancelled_shutdown` when `autonomous_driver_readoption` is ON; a recovery must end in a registered driver or `SetAutonomousStopped`, and the boot pass clears the mode of every candidate it definitively rejects (never mode true with no driver, except candidates logged `unknown` or `skip`; see `readoptGate`) |
 | `RunID` | Per-driver unique id (process-wide atomic counter) carried on the outcome and the registry entry | Lets the callback tell "my own run" from a successor registered under the same title |
 | `a.mu` rule | `a.mu` guards **map membership only** (`drivers`, `starting`, `recoveries`). While it is held: no call to `driverCtx()` (an atomic load, never under the lock), `NewAutonomousDriver`, `Start`, `Stop`, `withCostSink`/`storageGetter`, `SessionService`, `instanceFinder`, the event bus, or any `Instance` method that takes `i.mu` | Pre-mortem P1 #1. Enforced by a lock-probing test (REG-12) and watchdog tests (REG-13..REG-15) |
-| `lifecycleCtx` (changed) | `atomic.Pointer[context.Context]`; `SetLifecycleContext` stores, `driverCtx()` loads (falls back to `Background()` when unset); every reader, including the respawn goroutine at `:434`, goes through `driverCtx()` | Never read or written under `a.mu`, so locking the registry never nests with it |
+| `lifecycleCtx` (changed) | `atomic.Pointer[context.Context]`; `SetLifecycleContext` stores, `driverCtx()` loads (falls back to `Background()` when unset); every reader, including the respawn goroutine at `:434`, goes through `driverCtx()`. Task 3.1.3e **moves** `lifecycleCtx`, `SetLifecycleContext` and `driverCtx()` out of `autonomous_orchestration_service.go` into `autonomous_driver_registry.go`, so the boot-pass trigger (Task 3.1.3f) edits the registry file and never the service file | Never read or written under `a.mu`, so locking the registry never nests with it |
 | `completion` | Value returned by `claimCompletion(title, runID) (completion, claimResult)`: `{ctx, release}`; `ctx` is the recovery ctx derived from `a.driverCtx()`, cancelled by `stopAndDeregisterDriver`. `claimResult` is `claimed`, `superseded` (a different non-zero RunID is registered) or `duplicate` (same RunID already has a recovery entry) | Runs under one `a.mu` hold that does map mutation only: supersession check, driver deregistration and `recoveries[title]` registration (the ctx is derived from the atomic-loaded `driverCtx()` *before* the lock is taken), so there is no window in which a stop finds neither (architecture C1). A completion from a *newer* run cancels the older run's recovery and takes the entry. `release` is `defer`red by the callback and is a no-op if the entry was already replaced. **`completion.ctx` bounds only the nudge settle/tmux/submit calls and the restart check**; every storage write in `handleWorkStall` (`MarkStuck`, `UpdateItemSessionEnded`, `RemediationDue`, the claim) uses the outer `context.Background()` ctx, as today (pre-mortem #6) |
 | `recovery` | The registry entry `a.recoveries[title] = {cancel, runID}` created by `claimCompletion` for every completion (before the item lookup, `planStall` or `MarkStuck`) and removed by `release` or by `restartAfterRecovery` | Cancelled by `stopAndDeregisterDriver`; replaces the plain `nudgeInFlight` set |
 | `startDriverIfAbsent` | `(inst, timeout) (*AutonomousDriver, error)` on the service, **reserve-then-start**: (1) under `a.mu` check `drivers[title]` and `starting[title]`; a registered driver whose `Finished()` is true is treated as absent (replaced, with a Warn), any other registered driver or a `starting` reservation returns `ErrDriverPresent`; otherwise insert a `starting` sentinel and unlock; (2) **outside the lock** build the driver (`NewAutonomousDriver`, `withCostSink`, callbacks) and `Start` it; (3) re-lock, and if the sentinel is still the entry (no stop arrived) swap it for the driver, else `Stop()` the new driver outside the lock and return `ErrDriverPresent`; on a build or `Start` error delete the sentinel and return `ErrNoDriverPool` / the `Start` error. `StartAutonomousDriverWithTimeout`/`ForInstance` become void wrappers over the same inner `startDriver` (public signatures and the interface assertion unchanged); every recovery and the boot pass call the error-returning form | Closes the check-then-register gap (architecture C8, adversarial C4) and the silent-failure gap (architecture C7, adversarial C3) without calling anything that locks while `a.mu` is held (pre-mortem P1 #1: `NewAutonomousDriver` -> `inst.GetController()`, `withCostSink` -> `storageGetter()` -> `SessionService.GetStorage()`). A `Stop` during step 2 deletes the sentinel, so the finished build is torn down instead of registered. The liveness check keeps a dead registered driver from returning `ErrDriverPresent` forever (pre-mortem #5) |
@@ -164,21 +166,38 @@ stuck row's `context` is an existing free-text column.
   evidence of how many stalls the nudge would have caught) and, when the re-supervise cap is what
   sent the stop to Respawn, `resupervise_cap_hit=true`. The tail is never logged. Existing driver
   warnings stay; they gain `stop_reason` where cheap.
-- **Durable record**: `autonomous_stuck` row `context` = `StopDetail` (typed reason, state, turns,
-  `resupervise=n/cap`, last activity, sanitized tail <=1KB, newlines shown as ` ⏎ ` because `StuckItemDetail.tsx:203`
-  renders the string in a `<span>` that collapses whitespace).
-- **Notification**: body from a typed `StopReason -> phrase` table; no more "stopped after N turns"
-  for non-turn reasons (turn counts read "during turn N"); no tail; nudge success publishes an INFO
-  "nudged" instead of the FAILURE "stuck" notification; Resupervise, `cancelled_external` and
-  `cancelled_shutdown` publish nothing (log line only). A `Cancelled` outcome never publishes the
-  "complete" notification either.
+- **Durable record**: `autonomous_stuck` row `context` = `StopDetail`: a plain-language summary
+  sentence first (what stopped, what the session was doing, what the system did and whether the
+  operator must act; copy table below), then `stop_reason`, `state`, `action`
+  (`nudged|respawned|none|nudging`), `nudge=n/cap`, turns, `resupervise=n/cap`, last activity,
+  sanitized tail <=1KB, newlines shown as ` ⏎ ` because `StuckItemDetail.tsx:203` renders the string
+  in a `<span>` that collapses whitespace. The row is written at plan time and, **for a Nudge
+  plan only**, refreshed once more when the final action is known (best-effort: a refresh error is
+  a Warn, never a gate): `MarkStuck` on an open row refreshes `context` and `last_checked_at`
+  (fact table, `ent_repository_backlog.go:2128-2196`), so `action=nudging` becomes `nudged`,
+  `respawned` (nudge failed) or `none` (delivery uncertain). **After a successful nudge the row is
+  annotated, not resolved**: it holds the lifetime nudge counter (`diagnose_nudge_count`), it is
+  what `ClaimDiagnoseNudgeSlot` and the diagnose agent key on, and it is closed by the paths that
+  close any open `autonomous_stuck` row today (the DONE branch's `resolveAutonomousStuck`; other
+  closers not verified). The operator sees `Nudged automatically ... You do not need to do
+  anything` as the lead sentence instead of a bare stuck row (UX G1).
+- **Notification**: title and body from the `stopCopy` table (Operator-facing copy, below), one
+  plain sentence per reason, state and action; no codes, no "stopped after N turns" (a turn count,
+  when shown, reads "during turn N"); no tail; nudge success publishes an INFO "nudged" instead of
+  the FAILURE "stuck" notification; Resupervise, `cancelled_external` and `cancelled_shutdown`
+  publish nothing (log line only; accepted, ADR-002). A `Cancelled` outcome never publishes the
+  "complete" notification either. A failed nudge that falls back to Respawn names the failure in an
+  operator phrase ("the session was busy again"); the class code (`nudge_outcome=lease_busy`) is
+  log-only.
 - **Operator read path (AC2)**: the stuck-row `context` is returned by the existing
   `ListStuckBacklogItems` RPC (`StuckBacklogItem.context`) and shown in `StuckItemDetail.tsx:102`.
   Stops with no stuck row (Resupervise, external cancel, shutdown, non-backlog, review/triage
   roles that keep today's handling) are visible in the log line only; the in-memory
   `AutonomousStopReason` is a test seam, not an operator surface. A Resupervise that later hits the
   cap writes its stuck row with `resupervise_cap_reached runs=N last_stop_reason=<reason>` so the
-  chain is traceable without a log search.
+  chain is traceable without a log search. A Resupervise in flight is operator-invisible by design
+  (bounded to about 16 minutes by the cap; its end is always visible, either a later stop or the
+  cap-reached row): accepted, with reasons, in ADR-002 (UX G3).
 - **Metrics**: none new (the log line is greppable; the stuck row is the durable record). A counter
   endpoint next to `/actuator/git-backend` was considered and deferred: it is a new surface outside
   this plan's no-new-surface constraint (C1) and the log line carries every dimension.
@@ -197,7 +216,107 @@ stuck row's `context` is an existing free-text column.
   nudge counter; (b) if `nudge_outcome=disabled` is non-zero and `success` stays zero after the
   flag is on, the gate (not the feature) is suspect; (c) if the working + exhausted -> Respawn
   burst appears, add the pool-outage guard recorded in Deferred.
+- **Success target and delete thresholds (product; the chosen numbers are INFERRED, not derived
+  from data, because there is no pre-change baseline: local logs hold only `test-*` evidence).**
+  Hypothesis and target are stated in `requirements.md` ("Falsifiable hypothesis"); this is the
+  measurement. Two ratios, from the same `stopped` log lines (join on the `item` key):
+  - **Nudge resolution rate** = work stalls with `state=idle_prompt`, `action=nudged`,
+    `nudge_outcome=success`, **and no `action=respawned` line for the same `item` within 24 h**,
+    divided by all work stalls with `state=idle_prompt` where the nudge was eligible
+    (`nudge_outcome` in `success|not_idle|lease_busy|slot_unavailable|uncertain|restart_failed`;
+    `disabled` and `n/a` excluded). Target >= 50%.
+  - **Re-supervise completion rate** = re-supervised stops that are not followed by a
+    `resupervise_cap_hit=true` line for the same `item`, divided by all `action=resupervised`
+    stops. Target >= 50%.
+  - **Delete thresholds.** Nudge: with at least 10 eligible stalls in the window, a resolution
+    rate below 30% means the assumption is false: turn `autonomous_stall_nudge_enabled` off and
+    delete the Nudge branch (Tasks 3.2.2, 3.2.3c; the typed reasons, snapshot and re-supervise
+    stay). Fewer than 10 eligible stalls in two consecutive 14-day windows means the problem the
+    nudge addresses is rare: delete the branch the same way (it is dead weight at that
+    frequency). Re-supervise: a completion rate below 30% over at least 10 stops means row 5 should
+    return `respawn` (one row of `DecideStallAction`, one test table).
+- **Review dates (so the soak cannot silently never start).** The PR description states three
+  dates computed at merge: **flip decision** = merge date + 7 days (read the `readopt candidate`
+  dry-run lines and the `nudge_outcome=disabled` count, then flip or explicitly defer each of the
+  two flags); **soak review** = the flip date + 14 days; **sunset** = merge date + 30 days: if
+  `autonomous_stall_nudge_enabled` is still off with no recorded decision, the nudge is treated as
+  unvalidated and a delete-or-enable decision item is opened. The owner (or the shipping agent, as
+  a one-shot `/schedule` routine or a Todoist reminder) holds these; the plan cannot enforce them,
+  so the ship step (Task 4.1.1b) lists them as a checklist item.
 - **Alerts**: no new alerts.
+
+## Operator-facing copy (owner review)
+
+Every sentence an operator can read comes from the `stopCopy` table (Task 3.1.4b), composed as
+`<reason sentence> <state sentence> <action sentence>`. The same string leads the stuck row's
+`context` (Unfinished tab "Why:") and is the notification body (prefixed `Session '<name>':`). The
+wire values (`stop_reason=…`, `idle_prompt`, `lease_busy`) appear only in the `key=value` part of the
+row and in the log line. Task 3.1.4c asserts each string byte for byte (golden) and asserts that no
+sentence contains any `StopReason`, `ObservedState` or `nudge_outcome` code. Wording below is the
+proposal for the owner to edit; each cell is one constant.
+
+**Reason sentence (per `StopReason`)**
+
+| `StopReason` | Sentence | Notification |
+|---|---|---|
+| `max_turns` | The autonomous run used up its turn allowance before finishing. | yes |
+| `startup_timeout` | The autonomous run gave up waiting for the session to become ready. | yes |
+| `orchestrator_error` | The autonomous run hit an internal error and stopped. | yes |
+| `submit_failed` | The autonomous run could not type its next instruction into the session. | yes |
+| `lease_timeout` | The autonomous run could not get access to the session because something else was using it. | yes |
+| `rate_limit_exhausted` | The autonomous run gave up waiting for the AI service's rate limit to clear. | yes |
+| `panic` | The autonomous run crashed unexpectedly. | yes |
+| `""` (unspecified) | The autonomous run stopped without recording a reason. | yes |
+| `done` | (unchanged "Autonomous fix complete") | existing |
+| `cancelled_external`, `cancelled_shutdown` | none | none |
+
+**State sentence (per `ObservedState`)**
+
+| `ObservedState` | Sentence |
+|---|---|
+| `idle_prompt` | The session was waiting at its prompt. |
+| `needs_approval` | The session was waiting for an approval. |
+| `idle` | The session was sitting at a shell prompt. |
+| `working` | The session was still working. |
+| `error` | The session was showing an error. |
+| `exited` | The session had exited. |
+| `crashed` | The session had crashed. |
+| `unknown` | The session's state could not be read. |
+
+**Action sentence and title (per final action); "You act?" is the plain answer to "do I have to do something"**
+
+| Final action | Title (type) | Action sentence | You act? |
+|---|---|---|---|
+| nudged | Autonomous session nudged (INFO) | It was prompted to continue automatically (nudge `n` of `cap`). You do not need to do anything. | No |
+| respawned (no nudge tried) | Autonomous fix stuck (FAILURE, unchanged) | A fresh session is being started automatically. You only need to act if a "needs manual attention" notification follows. | Only if a follow-up says so |
+| respawned after a failed nudge | Autonomous fix stuck (FAILURE, unchanged) | A prompt could not be sent (`<failure phrase>`), so a fresh session is being started instead. You only need to act if a "needs manual attention" notification follows. | Only if a follow-up says so |
+| respawned after a nudge that was sent but could not be re-attached (`restart_failed`) | Autonomous fix stuck (FAILURE, unchanged) | A prompt was sent, but the autonomous run could not be re-attached, so a fresh session is being started instead. You only need to act if a "needs manual attention" notification follows. | Only if a follow-up says so |
+| none: delivery uncertain (`uncertain`) | Autonomous fix stuck (FAILURE, unchanged) | A prompt may or may not have reached the session, so nothing was restarted. Open the session and check it. | **Yes** |
+| none: archived | Autonomous fix stuck (FAILURE, unchanged) | Nothing was restarted because the session is archived. You do not need to do anything. | No |
+| none: retry pending | Autonomous fix stuck (FAILURE, unchanged) | Nothing was restarted because an automatic retry is already scheduled. You do not need to do anything. | No |
+| respawned, re-attach cap reached | Autonomous fix stuck (FAILURE, unchanged) | The autonomous run was re-attached `n` times while the session kept working, so a fresh session is being started. You only need to act if a "needs manual attention" notification follows. | Only if a follow-up says so |
+| unlinked / non-work role (today's handling) | Autonomous fix stuck (FAILURE, unchanged) | Open the session to review what was accomplished and give the next instruction. | **Yes** |
+| resupervised | none (log line only) | n/a | No |
+
+**Failure phrases (per `nudge_outcome`, plain text; code stays in the log)**
+
+| Class | Phrase |
+|---|---|
+| `not_idle` | the session was busy again |
+| `lease_busy` | another process was using the session |
+| `ownership` | the session's terminal was not the one this run expected |
+| `slot_unavailable` | no automatic prompt was available for this item (limit reached or one was sent recently) |
+| `ctx_cancelled`, `uncertain`, `disabled`, `n/a` | never in a sentence (cancelled: no notification; uncertain: own row above; disabled: today's respawn wording) |
+
+Example Why line for a work stall that was nudged: *The autonomous run hit an internal error and
+stopped. The session was waiting at its prompt. It was prompted to continue automatically (nudge 1
+of 2). You do not need to do anything. | stop_reason=orchestrator_error state=idle_prompt
+action=nudged nudge=1/2 turns=2 resupervise=0/3 last_activity=… tail=…*
+
+**Owner decisions in this table** (one constant each): (1) whether a plain "restarting
+automatically" respawn should stay FAILURE-class (today's behaviour, kept) or become INFO; (2) the
+word "autonomous run" (matches `SessionCard.tsx`'s "Autonomous run stopped"); (3) whether
+`needs_approval` + respawn should say "waiting for an approval" (it is a restart, not an approval).
 
 ## Risk Control
 
@@ -242,6 +361,20 @@ stuck row's `context` is an existing free-text column.
   has `AutonomousMode == true` without a registered driver, **except** candidates logged `skip`
   (a driver is registered, so the invariant holds trivially) or `unknown` (mode left for a
   follow-up pass or a human; logged at Warn).
+- **What an operator sees on a graceful restart, flag OFF (UX G2; accepted, not a regression).**
+  Today a shutdown writes an `autonomous_stuck` row, publishes the FAILURE notification and
+  respawns on the cancelled ctx (fact table, `autonomous_orchestration_service.go:282-290,328-336,
+  398-442,601-604`). After this change, for `cancelled_shutdown` **regardless of the flag**: no
+  stuck row, no notification, no respawn, no `UpdateItemSessionEnded` (Task 3.1.3b; SVC-4, SVC-8).
+  What remains with the flag OFF is only the in-memory `autonomous_outcome = "stuck"` badge on the
+  `SessionCard`, set by `SetAutonomousStopped`. It is a net improvement over today (today it comes
+  with a row and a FAILURE notification), and it is not durable: `serverCtx` is cancelled by
+  `Shutdown()` (`server/server.go:194`, `:1087`), so the process is exiting, and
+  `AutonomousOutcome` is not persisted (`session/storage.go` has no such field), so the badge is
+  gone at the next boot. A connected UI may show it for the length of the teardown. The alternative
+  (set outcome `""` for the flag-OFF shutdown) would stop being "today's in-memory outcome" and
+  breaks nothing, but it would also make the flag change an outcome the owner did not ask to
+  change; kept as decided, with the cost stated here.
 - **Ungated behaviour changes**: typed reasons/logging, `cancelled_external` taking no
   respawn/stuck row/notification, `cancelled_shutdown` taking no respawn/stuck row/notification
   (regardless of the readoption flag), and `working -> Resupervise` for work-role backlog-linked
@@ -263,6 +396,19 @@ stuck row's `context` is an existing free-text column.
   `nudge_outcome=disabled` count, flip `autonomous_driver_readoption` and/or
   `autonomous_stall_nudge_enabled` live per the owner's reading; (3) review at the soak date
   (Observability Plan, exit criteria).
+
+- **Risky assumptions (named so they can be falsified, thresholds in the Observability Plan).**
+  (i) A fixed "call request_review" nudge unsticks an idle-at-prompt work session often enough to
+  matter; with a 2-slot lifetime budget the upside is bounded. *Falsified by*: nudge resolution
+  rate below 30% over >= 10 eligible stalls, or fewer than 10 eligible stalls in two 14-day
+  windows. *Action*: flag off, delete the Nudge branch. (ii) The pane classifier (`working` vs
+  `idle_prompt`) is reliable from a bounded tail. *Falsified by*: `state=working` stalls whose next
+  stop is `idle_prompt` within one warm-up, or a nudge landing in a working pane (`not_idle`
+  share above 30% of eligible stalls). *Action*: tighten `CheckNudgeEligible`'s settle window or
+  drop row 5. (iii) Re-attaching a driver to a working pane beats today's immediate respawn.
+  *Falsified by*: re-supervise completion rate below 30% over >= 10 stops. *Action*: row 5 returns
+  `respawn`. The typed reasons, snapshot, redaction and the log line have value independent of all
+  three assumptions and are never part of a delete.
 
 ## Unresolved Questions
 
@@ -344,13 +490,13 @@ re-supervising, and the diagnosis document lists those restart paths under "know
 | Architecture nit: `StopDetail` is an unparsed string | **Accepted** | Nothing parses it; the tests assert prefix keys. |
 | Architecture nit: `SessionDriver.attemptBacklogNudge` is a second automated nudger | **Folded in** as one sentence in Task 1.2.1b | |
 | Adv minor: shutdown stop capture adds up to 2s per stop | **Folded in**: capture is skipped for `cancelled_shutdown` and `cancelled_external` (Task 2.1.1a) | |
-| Repair-2 B5 (boot re-adoption under-gated) | **Fixed in scope** (Task 3.1.3c, 3.1.3d) | Twelve-gate conjunction, per-gate result log, dry-run when the flag is off, ghost-mode clear on definitive rejection, per-boot cap, table test over every gate row and a persisted round-trip test. |
+| Repair-2 B5 (boot re-adoption under-gated) | **Fixed in scope** (Task 3.1.3c, 3.1.3f, 3.1.3d) | Twelve-gate conjunction, per-gate result log, dry-run when the flag is off, ghost-mode clear on definitive rejection, per-boot cap, table test over every gate row and a persisted round-trip test. |
 | Repair-2 Adv C2 (flag off leaves mode true with no driver) | **Fixed** | Defined in Risk Control: flag off restores today's in-memory mode/outcome in the shutdown branch and clears stale mode at boot. |
 | Round-3 Adv C1 (clear-on-any-rejection conflated reject / skip / unknown; contradicted the run-twice AC) | **Fixed** (Story 3.1.3 classification table, Task 3.1.3c/d) | Three result classes; only a definitive reject clears mode; `no_driver` / `ErrDriverPresent` is a skip, a probe timeout or non-`ErrNotFound` storage error is unknown (left untouched, re-evaluated). AC4 gains the skip-without-clear and transient-probe-error rows. |
 | Round-3 Adv C2 (boot-cleared candidates showed a false "stuck" badge) | **Fixed** (Task 3.1.2a, 3.1.3c) | Boot pass uses `SetAutonomousStoppedQuiet` (outcome `""`); `"stuck"` stays only on the flag-OFF shutdown callback branch. |
-| Round-3 Adv C3 (pass trigger preceded the controller settle; no fallback) | **Fixed** (Task 3.1.3c) | Signal (b) fires after Step 7.6's 500 ms settle and scan (`server/dependencies.go:1084-1088`, same goroutine as Steps 7 and 7.5), via `defer` so every exit signals, plus a bounded fallback timer. |
+| Round-3 Adv C3 (pass trigger preceded the controller settle; no fallback) | **Fixed** (Task 3.1.3f) | Signal (b) fires after Step 7.6's 500 ms settle and scan (`server/dependencies.go:1084-1088`, same goroutine as Steps 7 and 7.5), via `defer` so every exit signals, plus a bounded fallback timer. |
 | Round-3 Adv C5 (submit-uncertain -> Resupervise writes into a pane with unsubmitted text) | **Fixed** (failure table, Story 3.2.3) | Always leave-the-pane; ctx-cancel row takes precedence. |
-| Round-3 Adv C6 (per-boot cap cleared the excess in unspecified order) | **Fixed** (Unresolved Questions, Task 3.1.3c) | Stable order, excess deferred to bounded follow-up passes. |
+| Round-3 Adv C6 (per-boot cap cleared the excess in unspecified order) | **Fixed** (Unresolved Questions, Task 3.1.3c, scheduling in 3.1.3f) | Stable order, excess deferred to bounded follow-up passes. |
 | Round-3 Adv C7 (Risk Control overstated flag-OFF equivalence) | **Fixed** (Risk Control) | States exactly what OFF restores and what stays an ungated correction. |
 | Round-3 Adv C4 (default ON removes gate-validation evidence) | **Resolved: default OFF** (owner decision) | See "Decided" paragraph above; single constant `autonomousDriverReadoptionDefault = false`. |
 | Repair-2 B6 (`cancelled_*` falls into Done-reading arms) | **Fixed** (Task 3.1.3b) | Per-arm guard at the top of every arm, tests for every role including unlinked. |
@@ -359,20 +505,55 @@ re-supervising, and the diagnosis document lists those restart paths under "know
 | Repair-2 Arch C2 (cancelled ctx does not return promptly) | **Fixed** (Task 3.2.2a) | `CheckNudgeEligibleWithSettleWindowCtx` selects on `ctx.Done()` and the poll timer; `CheckNudgeEligible` (MCP path) delegates with `context.Background()`, unchanged. Fake-nudger service tests cannot prove promptness or no-write; the session-level test in 3.2.2a does. Residual: a stop in the microseconds between the last ctx check and the first `SendKeys` writes one fixed-text nudge to an idle pane. |
 | Resupervise multiplies the turn budget (Adv C6) | **Accepted, made traceable** | Up to (1 + 3) x `AutonomousMaxTurnsOrDefault` per ItemSession before Respawn; `max_turns` itself never re-supervises (row 4). Every stop carries `resupervise=n/cap` and the cap-reached row carries `last_stop_reason`. |
 | `resuperviseBudget` not refreshed by progress (arch nit) | **Accepted** | A long legitimately busy session is respawned after about 16 minutes of continuous `working` stops (60 s + 3 x 5 min); today it is respawned on the first. Entries are deleted on `done` and on ItemSession end (adversarial M2). |
+| UX G2: flag-OFF `cancelled_shutdown` keeps the in-memory `stuck` badge | **Accepted, with evidence** | Row, notification and respawn are already suppressed regardless of the flag; the badge is in-memory, in an exiting process, and `AutonomousOutcome` is not persisted. Full statement in Risk Control, "What an operator sees on a graceful restart". |
+| UX G3: Resupervise and `cancelled_*` are log-only | **Accepted** (ADR-002 table) | A Resupervise is bounded (about 16 minutes) and its end is always visible (next stop or the cap-reached row); a cancel is the operator's own action, so a notification about it is noise. No extra cue is added; the cost is that a mid-chain Resupervise needs the log line to see. |
+| Engineering G5: redaction residuals | **Mitigated fail-closed, residual stated** (Task 1.1.2b/c) | `redactErrorDetail`'s key/value alternative requires `\b` after `token\|secret\|password\|authorization` and `api[_-]?key`, so `AWS_SECRET_ACCESS_KEY=...` and `client_secret_key=...` are not matched (checked by running the pattern in Python `re`, which shares the `\b` and alternation semantics: 0 matches on both; Task 1.1.2c re-proves it with Go's `regexp`), and a 40-line tail can begin inside a key body (no `BEGIN` header). Added as string scans, not regexes: withhold the whole tail on an env-style `NAME=` whose name has a `SECRET`/`TOKEN`/`PASSWORD`/`KEY`/`CREDENTIAL` segment, or on a line of >= 40 base64-alphabet characters with no spaces. **Accepted residual:** a short secret in free prose with no marker (`the password is hunter2`), or a credential split across the 40-line cut. The tail stays opt-out-able by the owner as one function. |
+| Engineering G3: BUG-079 (`TestAutonomousDriver_Stop_CancelsLoop_DuringNudgeSuppression` full-suite race) | **Declared known flake with evidence; baseline run added to Task 2.1.1c** | `docs/bugs/open/BUG-079-autonomousdriver-idle-timer-race-under-full-suite.md` is `Open`, unreproduced, cause UNVERIFIED. Its suspect (a package-level idle-settle timer variable shared across tests) is not in the code at this HEAD: the driver's timers are per-driver struct fields (`autonomous_driver.go:101,145`) and the only package-level timer var, `nudgeCooldown` (`session/nudge_dedup.go:13`), is read but never written by any test (`grep -rn nudgeCooldown session/`). A second, unrelated BUG-079 file exists for Jest (`...jest-full-suite-only-failures...`); cite the driver one. Task 2.1.1c: baseline `-race -count` run before adding tests, join every new driver in `t.Cleanup`, and if the race reproduces, fix it as its own commit (standing fix-collateral-debt policy) with the race trace pasted into the bug doc. |
+| Engineering G4: BUG-087 (`captureLogs` global slog swap) | **Mitigated in the new assertions** (Task 3.1.4c) | At HEAD `captureLogs` holds `slogDefaultMu` (`autonomous_orchestration_service_test.go:445-455`), which serializes capturers but not emitters: a parallel test that logs without capturing can still write into the swapped default, which is the exact repro in BUG-087 (an unrelated go-git WARN). New assertions therefore filter records by a unique `session=<title>` and never count unfiltered lines. Not a fix of BUG-087 itself. |
+| Engineering G7: instance setters discard `sendSyncErr` | **Fixed for the new setters only** (Task 3.1.2a/b) | The new setters return the error and `applyInstanceStop` logs it and skips the event; the existing `_ = i.sendSyncErr` setters are out of scope (what was asked) and listed here so the pattern is visible. |
+
+### Follow-up backlog item (spec, ready to file; not filed by this plan)
+
+AC3 is met for driver-stop paths only (above). The stale-work detector and health-checker
+restarts are the remaining restart surfaces. This block is the item body; the shipping agent files
+it at ship time and pastes the item ID into the PR description (Task 4.1.1b checklist). Until an ID
+is recorded here, this block is the only record, so it is part of the plan on purpose.
+
+```
+Title:   Inspect and nudge before restarting from the stale-work detector and health checker
+Source:  autonomous-stall-diagnosis (AC3 scope decision), Deferred Adv C1
+Problem: RemediateStaleWorkSession (server/services/backlog_service_triage.go) and
+         handleDeadPane/respawnDeadPane (session/health.go) end the ItemSession, kill the pane and
+         respawn with no StopSnapshot and no nudge, so an idle-at-prompt session is killed after 2h
+         without anyone looking at what it was doing.
+Scope:   Reuse domain.ClassifyObserved / DecideStallAction and the StallNudger from both paths;
+         capture a StopSnapshot (BoundedStopTail + sanitizeStopTail) before UpdateItemSessionEnded /
+         KillTmuxPaneOnly; record stop_reason (new values stale_work, dead_pane) in the stuck row
+         context with the same plain-language lead sentence.
+Out:     Changing the 2h stale threshold; pause/stop driving the driver (Deferred Adv C1 repair-2).
+AC:      (1) A stale item whose pane is at an idle prompt, nudge allowance left: one nudge, no
+         respawn, row annotated; (2) a dead pane is never nudged; (3) a snapshot is captured and
+         logged before every restart on both paths; (4) table tests per ObservedState x path;
+         (5) stallRecoveryGuard still defers the detector while a driver-stop recovery is live.
+Deps:    autonomous-stall-diagnosis merged (domain types, StallNudger, claim, guard, copy table).
+Size:    M-L (two entry points, one shared effect); gated by the nudge resolution rate from the soak.
+```
 
 ## Pre-mortem disposition
 
 Source: `implementation/pre-mortem.md` (2 P1, 9 P2, 5 P3), each claim re-checked against the code
-at HEAD before patching (corrections are recorded in the pre-mortem). No task was added; every
-fix is folded into an existing task's ACs and each new test has an ID in `validation.md`.
+at HEAD before patching (corrections are recorded in the pre-mortem). Iteration 4 added no task;
+every fix was folded into an existing task's ACs and each new test has an ID in `validation.md`.
+Task ids in this table keep the iteration-4 names; the later 3.1.3 split is in "Triad repair
+disposition" below.
 
 | # | Sev | Disposition | Where |
 |---|-----|-------------|-------|
-| 1 | P1 | **Fixed.** `lifecycleCtx` is an atomic pointer never read under `a.mu`; reserve-then-start with a `starting` sentinel, driver built and started outside the lock; `canRestart`/`canRestartLocked`; the `a.mu` rule (no seam, storage, bus or `Instance` call under the lock); watchdog tests that fail instead of hang | Glossary, Pattern Decisions, 3.1.3a, 3.1.3c, 3.1.3d (REG-10, REG-12..REG-15) |
+| 1 | P1 | **Fixed.** `lifecycleCtx` is an atomic pointer never read under `a.mu`; reserve-then-start with a `starting` sentinel, driver built and started outside the lock; `canRestart`/`canRestartLocked`; the `a.mu` rule (no seam, storage, bus or `Instance` call under the lock); watchdog tests that fail instead of hang | Glossary, Pattern Decisions, 3.1.3a, 3.1.3e (atomic ctx), 3.1.3c, 3.1.3f, 3.1.3d (REG-10, REG-12..REG-15) |
 | 2 | P1 | **Fixed.** Dedicated flag `autonomous_stall_nudge_enabled`, default off, AND-ed with `diagnose_nudge_enabled` (kept as the autonomous-write kill switch) | Glossary, Risk Control, Unresolved Questions, Wall-clock blockers, 3.2.3a/b/d (STL-7, STL-11, STL-19) |
 | 3 | P2 | **Fixed.** `ItemInWorkStatus` input; non-`in_progress` item never Nudges or Resupervises | ADR-001 rows 5-7, 1.1.1, 3.2.3b (DOM-4/5, STL-18) |
 | 4 | P2 | **Fixed.** `MarkStuck` `(false, err)` fails open to Respawn; `(false, nil)` maps to `None` | 3.2.3b (STL-17) |
-| 5 | P2 | **Fixed in part.** Third start site inventoried and routed; panic-recover wrapper around the callback; `Finished()` liveness check. Steady-state ghost-mode sweeper **deferred** (below) | 3.1.3a, 3.1.3d, 2.1.1a (STL-15, REG-16) |
+| 5 | P2 | **Fixed in part.** Third start site inventoried and routed; panic-recover wrapper around the callback; `Finished()` liveness check. Steady-state ghost-mode sweeper **deferred** (below) | 3.1.3a (liveness), 3.1.3e (wrapper, third start site), 3.1.3d, 2.1.1a (STL-15, REG-16) |
 | 6 | P2 | **Fixed.** Recovery ctx reaches only the nudger and the restart check; storage writes stay on `Background()` | Glossary `completion`, 3.2.3b (STL-16) |
 | 7 | P2 | **Fixed.** One `applyInstanceStop` (write + event) at plan time, not a function-exit defer; characterization rows for event payload and `MarkStuck` count | 3.1.1a, 3.1.2b, 3.2.3b (SVC-11, SVC-12, STL-12) |
 | 8 | P2 | **Decided + partly folded.** Default OFF (owner decision). Adoption stamps `stallRecoveryGuard`. Reduced adopted turn budget and a `stale` gate **deferred** (below) | 3.1.3c (RDP-16) |
@@ -396,6 +577,30 @@ Deferred from the pre-mortem, each with its reason:
 | #14 superseded `done` dropped wholesale | **Deferred**, Warn strengthened | A displaced run completing `done` requires the new driver to start while the old one is still reading DONE; the displacing path cancels the old run, which then reports `cancelled_*`. `claimCompletion` logs a Warn naming `done` and the dropped item (REG-1), so it is findable. |
 | #15 double nudge: successor driver has no `lastSentNudge` | **Deferred** | Needs a new driver option and run-local state plumbing in `autonomous_driver.go` for a 3-message edge; the diagnosis document states the "both active?" answer (Task 1.2.1b). |
 
+## Triad repair disposition
+
+Source: the three `pm:triad-review` analyses (UX, engineering, product) of the plan at
+`db5083502`. Each claim was re-verified against the code before patching; corrections to the
+reviews are marked. Three tasks were added (35 -> 38); no scope was removed.
+
+| Gap | Disposition | Where |
+|-----|-------------|-------|
+| UX G1 chosen action not recorded; row state after a nudge unspecified | **Fixed.** `action=` and `nudge=n/cap` in the row; Nudge plans refresh the row once; row **annotated, not resolved** (it holds the nudge counter) | Observability Plan, 3.1.4a, 3.2.3b/c, STL-20 |
+| UX G2 flag-OFF shutdown shows stuck | **Review corrected + accepted.** Row, notification and respawn are already suppressed for shutdown regardless of the flag (3.1.3b); what remains is an in-memory badge in an exiting process, not persisted | Risk Control, Deferred |
+| UX G3 Resupervise/cancel log-only | **Accepted** with reasons | ADR-002, Deferred |
+| UX G4 internal codes in notification | **Fixed.** Class to phrase map in `stopCopy`; code stays in the log | Operator-facing copy, 3.1.4b, 3.2.3c, STL-21 |
+| UX G5 no copy table | **Fixed.** Full table for owner review plus golden tests | Operator-facing copy, 3.1.4c, OBS-10 |
+| UX G6 "Why" readability/overflow | **Fixed.** Plain lead sentence (server) + `overflow-wrap: anywhere` on `.value` (CSS only); verified `.value` has only `color` | 3.1.4d |
+| Eng G1 split 3.1.3a / 3.1.3c | **Fixed.** 3.1.3a + 3.1.3e, 3.1.3c + 3.1.3f; waves recomputed (15) | Dependency Visualization |
+| Eng G2 W5 file collision | **Fixed.** `SetLifecycleContext` moves to the registry file in 3.1.3e; 3.1.3c/f never edit the service file | 3.1.3e, 3.1.3f |
+| Eng G3 BUG-079 | **Handled.** Baseline run, driver join hygiene, own-commit fix if reproduced, else declared known flake. Review corrected: the bug's suspected package-level timer is not in the code at HEAD | 2.1.1c, Deferred |
+| Eng G4 BUG-087 | **Handled.** Session-key filtered assertions; runtime growth called out. Review corrected: `captureLogs` now serializes capturers via `slogDefaultMu` but not emitters | 3.1.4c, 4.1.1b |
+| Eng G5 redaction residuals | **Fixed fail-closed + residual stated** (string scans, no new regex) | 1.1.2b/c, Deferred |
+| Eng G6 stale 3.2.4a wording | **Fixed** | 3.2.4a |
+| Eng G7 setter errors discarded | **Fixed for the new setters** + test INS-6 | 3.1.2a/b |
+| Eng G8 Story 3.2.3 Files line | **Fixed** (per-task file list) | Story 3.2.3 |
+| Product: risky assumption, threshold, soak target, dates, follow-up spec, hypothesis in requirements | **Fixed** | Risk Control, Observability Plan, Deferred, requirements.md |
+
 ## Dependency Visualization
 
 Edges are "must land before". Every task in a wave has all of its predecessors in earlier waves;
@@ -409,8 +614,9 @@ no two tasks in one wave edit the same file (checked against each task's Files l
 1.2.1a ─> 1.2.1b ─────────────────────────────────────────────> 4.1.1a ─> 4.1.1b
 3.1.1a ─┐
 1.1.1a ─> 3.1.2a ─┤
-2.1.1a ───────────┴─> 3.1.2b ─> 3.1.3a ─> 3.1.3b ─┬─> 3.1.3c ─> 3.1.3d
-                                                  └─> 3.1.4a ─> 3.1.4b ─> 3.1.4c
+2.1.1a ───────────┴─> 3.1.2b ─> 3.1.3a ─> 3.1.3e ─> 3.1.3b ─┬─> 3.1.3c ─> 3.1.3f ─> 3.1.3d
+                                                            └─> 3.1.4a ─> 3.1.4b ─> 3.1.4c
+3.1.4d (CSS-only UI hardening; no predecessor, no successor)
 3.2.1a ─┐
 3.2.2a ─> 3.2.2b ─┤
 3.2.5a ─> 3.2.5b ─┤                      3.1.4b + 3.1.3a ─> 3.2.3a ─> 3.2.3b ─> 3.2.3c ─> 3.2.3d
@@ -419,17 +625,26 @@ no two tasks in one wave edit the same file (checked against each task's Files l
 3.2.3c ─> 3.2.4a ─> 3.2.4b
 3.2.5b + 3.2.3c + 3.2.4a ─> 3.2.5c
 Shared-file serial spine (all edit autonomous_orchestration_service.go):
-  3.1.1a -> 3.1.2b -> 3.1.3a -> 3.1.3b -> 3.1.4a -> 3.1.4b -> 3.2.3a -> 3.2.3b
-New source files per lane (no cross-lane edits): readoption = autonomous_readoption.go;
+  3.1.1a -> 3.1.2b -> 3.1.3a -> 3.1.3e -> 3.1.3b -> 3.1.4a -> 3.1.4b -> 3.2.3a -> 3.2.3b
+  (3.2.3c and 3.2.4a also edit it but are later; 3.1.3c and 3.1.3f do NOT edit it: SetLifecycleContext
+  moves to the registry file in 3.1.3e, which is what removed the former W5 collision.)
+New source files per lane (no cross-lane edits): readoption = autonomous_readoption.go (gates, 3.1.3c)
+  and autonomous_readoption_trigger.go (trigger, 3.1.3f);
   nudge effect = autonomous_stall_nudge_effect.go; re-supervise = autonomous_stall_resupervise.go;
   guard = stall_recovery_guard.go. Test files are likewise one per task (see each task).
 ```
 
-Waves (agent waves, 14): W0 `1.1.1a` `1.1.2a` `1.2.1a` `3.1.1a` `3.2.1a` `3.2.2a` `3.2.5a` ->
+Waves (agent waves, 15): W0 `1.1.1a` `1.1.2a` `1.2.1a` `3.1.1a` `3.1.4d` `3.2.1a` `3.2.2a` `3.2.5a` ->
 W1 `1.1.1b` `1.1.2b` `1.2.1b` `2.1.1a` `3.1.2a` `3.2.2b` `3.2.5b` -> W2 `1.1.1c` `1.1.2c`
-`2.1.1b` `3.1.2b` -> W3 `2.1.1c` `3.1.3a` -> W4 `3.1.3b` -> W5 `3.1.3c` `3.1.4a` -> W6 `3.1.3d`
-`3.1.4b` -> W7 `3.1.4c` `3.2.3a` -> W8 `3.2.3b` -> W9 `3.2.3c` -> W10 `3.2.3d` `3.2.4a` -> W11
-`3.2.4b` `3.2.5c` -> W12 `4.1.1a` -> W13 `4.1.1b`.
+`2.1.1b` `3.1.2b` -> W3 `2.1.1c` `3.1.3a` -> W4 `3.1.3e` -> W5 `3.1.3b` -> W6 `3.1.3c` `3.1.4a` ->
+W7 `3.1.3f` `3.1.4b` -> W8 `3.1.3d` `3.1.4c` `3.2.3a` -> W9 `3.2.3b` -> W10 `3.2.3c` -> W11
+`3.2.3d` `3.2.4a` -> W12 `3.2.4b` `3.2.5c` -> W13 `4.1.1a` -> W14 `4.1.1b`.
+Same-wave file check, re-derived for the changed waves: W6 `3.1.3c` (autonomous_readoption.go and
+its test) vs `3.1.4a` (autonomous_stop_detail.go, service.go); W7 `3.1.3f` (readoption_trigger.go,
+registry.go, session_service_wiring.go, dependencies.go, server.go) vs `3.1.4b` (stop_detail.go, service.go); W8 `3.1.3d`
+(three `*_test.go` files), `3.1.4c` (stop_detail_test.go, service_stop_test.go), `3.2.3a`
+(stall_recovery.go, service.go, config.go, pins_test.go): no shared file. `3.1.4d` in W0 touches
+only web-app and e2e files.
 
 ---
 
@@ -474,6 +689,9 @@ W1 `1.1.1b` `1.1.2b` `1.2.1b` `2.1.1a` `3.1.2a` `3.2.2b` `3.2.5b` -> W2 `1.1.1c`
   - *Given* a 10,000-byte tail ending in `"…é"` where `é` straddles the 4096-byte cut, *When* bounded, *Then* the result is valid UTF-8, <=4096 bytes, and keeps the last lines.
 - `sanitizeStopTail` redacts or withholds credentials and caps at 1KB, one line.
   - *Given* a tail containing `ghp_` + 36 alphanumerics, `Authorization: Bearer abc…` (20+ chars), `postgres://u:pw@host/db`, and a `-----BEGIN RSA PRIVATE KEY-----` block, *When* sanitized, *Then* the output contains none of those canaries (private-key block => whole tail replaced by `[tail withheld: secret pattern detected]`).
+  - *Given* a tail containing `AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY` or `export client_secret_key=abcd1234efgh` (names the existing key/value pattern does not match), *Then* the whole tail is withheld (fail closed on an env-style `NAME=` whose upper-case name has a `SECRET`, `TOKEN`, `PASSWORD`, `PASSWD`, `KEY` or `CREDENTIAL(S)` segment).
+  - *Given* a tail whose first lines are base64 key-body lines with no `BEGIN` header (a 64-character `MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj` line), *Then* the whole tail is withheld (fail closed on any line of >= 40 base64-alphabet characters with no spaces).
+  - *Given* a plain idle-prompt tail, a normal `git status`/test-output tail and a 40+ character path or URL line, *Then* the first two pass through and the long URL/path line is not mistaken for key material (it contains `/` segments and `.`/`:`; the rule requires the whole line to be base64-alphabet only). Accepted residual: a short secret in free prose with no marker, or a credential split across the 40-line cut (Deferred, engineering G5).
 **Files**: `session/autonomous_stop_snapshot.go`, `server/services/autonomous_stop_detail.go`, `server/services/autonomous_stop_detail_test.go`
 
 ##### Task 1.1.2a: `BoundedStopTail` (S) — AC3
@@ -481,11 +699,12 @@ W1 `1.1.1b` `1.1.2b` `1.2.1b` `2.1.1a` `3.1.2a` `3.2.2b` `3.2.5b` -> W2 `1.1.1c`
 - Files: `session/autonomous_stop_snapshot.go` (new; also holds `stopSource` in 2.1.1a), `session/autonomous_stop_snapshot_test.go`
 
 ##### Task 1.1.2b: `sanitizeStopTail` (S) — AC3
-- Order: `session.RunPreGateSecurityCheck(raw)` non-nil -> withhold entire tail; else `redactErrorDetail`; collapse whitespace runs/newlines to ` ⏎ `; cap 1024 bytes rune-safe. No new regexes.
+- Order: `session.RunPreGateSecurityCheck(raw)` non-nil -> withhold entire tail; then two **string-scan** fail-closed rules (no new regex, which keeps the plan's "no new regex set" decision): `hasSecretEnvAssignment(line)` (a token before `=` made only of `A-Z0-9_`, split on `_`, any segment in `{SECRET, TOKEN, PASSWORD, PASSWD, KEY, CREDENTIAL, CREDENTIALS}`) and `looksLikeKeyBody(line)` (length >= 40, every rune in `A-Za-z0-9+/=`, no space, and not a path: no `//`); either one -> withhold entire tail. Else `redactErrorDetail`; collapse whitespace runs/newlines to ` ⏎ `; cap 1024 bytes rune-safe. The rules withhold more tails than strictly needed (an `API_KEY=` line of a harmless config dump); that is the intended cost of failing closed on a durable sink, and the row's `state`/`action` still say what happened.
 - Files: `server/services/autonomous_stop_detail.go`
 
 ##### Task 1.1.2c: Canary-secret tests (S) — AC3, AC4
 - One canary per family: `sk-`, `ghp_`, `AKIA`, `xox*-`, JWT, bearer, URL userinfo, `password=`, PEM. Also: empty input, invalid UTF-8 input, ANSI-only input, exactly-at-cap input.
+- Residual canaries (engineering G5): `AWS_SECRET_ACCESS_KEY=`, `client_secret_key=` (first asserted to pass `redactErrorDetail` unredacted, so the test documents *why* the new rule exists, then asserted withheld by `sanitizeStopTail`), a headerless base64 key-body tail (the mid-key case), and the false-positive guards: a 60-character URL line, a 50-character file path and an idle-prompt tail are **not** withheld. Add the accepted-residual case as a named subtest with a comment (`the password is hunter2` passes through) so the limit is pinned, not hidden.
 - Files: `server/services/autonomous_stop_detail_test.go`
 
 ### Epic 1.2: Diagnosis document
@@ -550,6 +769,7 @@ W1 `1.1.1b` `1.1.2b` `1.2.1b` `2.1.1a` `3.1.2a` `3.2.2b` `3.2.5b` -> W2 `1.1.1c`
 - Assert exactly one callback per run, snapshot captured before the callback, `Turns` values, and that `Stop()` after completion is a no-op.
 - Update `TestAutonomousDriver_PanicRecovery` to also assert the single completion. The hung-`Tail` case sets `captureTimeout` tiny (S2, no 2 s wait). `Finished()` is false before `Start`, false while running, true after every exit incl. panic (DRV-10).
 - No `time.Sleep`, `t.Parallel()`, no `t.Setenv`; reuse `pumpIdleSignals`.
+- **BUG-079 handling** (engineering G3; `docs/bugs/open/BUG-079-autonomousdriver-idle-timer-race-under-full-suite.md`, an intermittent `-race` failure of `TestAutonomousDriver_Stop_CancelsLoop_DuringNudgeSuppression` that appears only in the full `session` run, in the same file this task grows by about a dozen driver tests). In order: (1) **baseline before editing**: `go test ./session/ -race -count=10 -run TestAutonomousDriver` and one full `go test ./session/... -race -count=1`, pasted into the commit message; (2) every new test starts the driver with `ctx` and joins it in `t.Cleanup` (`driver.Stop(); driver.Wait(...)`), and stops its `pumpIdleSignals` goroutine through the same ctx, because the leading remaining suspect is a leaked `run()` or pump goroutine from a neighbour (the bug doc's package-level-timer suspect does not match this HEAD: timers are per-driver fields, and `nudgeCooldown` is never written by tests); (3) if the race reproduces in (1) or later, the race trace names the variable: fix it as its **own commit** (standing fix-collateral-debt policy), and paste the trace into the bug doc; (4) if it does not reproduce, the PR description says "BUG-079 known flake, not caused by this diff, baseline run attached" and a red full-suite gate with exactly that test name is re-run once, not treated as a regression. Do not mark the bug fixed without a captured trace.
 - Files: `session/autonomous_driver_test.go`, `session/autonomous_stop_snapshot_test.go`
 
 ---
@@ -581,16 +801,20 @@ W1 `1.1.1b` `1.1.2b` `1.2.1b` `2.1.1a` `3.1.2a` `3.2.2b` `3.2.5b` -> W2 `1.1.1c`
   - *Given* `SetAutonomousStopped(StopReasonCancelledExternal)`, *When* `inst.Snapshot().Autonomous` is read, *Then* `AutonomousMode == false`, `AutonomousOutcome == ""`, `AutonomousStopReason == domain.StopReasonCancelledExternal`; *Given* `StopReasonOrchestratorError`, *Then* outcome `"stuck"`; *Given* `StopReasonDone`, *Then* `"done"`.
 - Observed-only stops keep intent.
   - *Given* `AutonomousMode == true`, *When* `SetAutonomousStopObserved(StopReasonStartupTimeout)` runs, *Then* `AutonomousMode` is still `true`, outcome unchanged, `AutonomousTurn == 0`, reason recorded; *When* `SetAutonomousMode(true, ...)` runs next, *Then* the reason is cleared.
+- A write that did not apply is observable (engineering G7). The three new setters return `sendSyncErr`'s error, which is non-nil only when the instance actor's ctx is done (`session/actor.go:34-56`).
+  - *Given* an instance with a live actor (`NewLiveInstance`, `session/live_instance.go:36-51`) whose ctx has been cancelled (`li.cancel()`), *When* `SetAutonomousStopped(StopReasonOrchestratorError)` runs, *Then* it returns a non-nil error wrapping `context.Canceled`, the snapshot is unchanged, and `applyInstanceStop` logs one Warn naming the session and reason, publishes no `SessionUpdatedEvent` (the payload would be the stale pre-write snapshot) and still lets the callback continue (the instance is going away; bookkeeping and the respawn decision are unaffected).
 **Files**: `session/instance.go`, `session/instance_snapshot.go`, `session/instance_actor_setters.go`, `session/instance_actor_setters_test.go`, `server/services/autonomous_orchestration_service.go`, `server/services/autonomous_apply_stop_test.go`
 
 ##### Task 3.1.2a: Field, snapshot, setters (S) — AC2
 - `Instance.AutonomousStopReason domain.StopReason` (typed, not string; `session` already imports `domain`); add to `AutonomousModeState` and `buildSnapshot` (the header comment in `instance_snapshot.go` is the single field list). `SetAutonomousStopped(reason domain.StopReason)` sets mode false, turns 0, outcome by a typed exhaustive switch, reason. `SetAutonomousStopObserved(reason)` sets reason and zeroes turn counters only. `SetAutonomousStoppedQuiet(reason)` (boot pass, adversarial C2) is `SetAutonomousStopped` with outcome forced to `""` for every reason; the table test asserts it for all `StopReason` values. `SetAutonomousMode(true, …)` clears the reason (new run).
 - Keep `SetAutonomousComplete(done)` as a thin wrapper if tests still use it; otherwise remove with its test.
+- Error contract (engineering G7): `SetAutonomousStopped`, `SetAutonomousStopObserved` and `SetAutonomousStoppedQuiet` return `error` (the `sendSyncErr` result) instead of the `_ =` discard the older setters use. This matters because the plan's invariant "mode is never left true with no driver" depends on these writes applying; the `nil`-`liveInstance` direct path (what the invariant tests use) cannot fail, so without a test the failure branch is unobserved. New test INS-6 (validation) uses a cancelled live instance. The older setters are not changed.
 - Files: `session/instance.go`, `session/instance_snapshot.go`, `session/instance_actor_setters.go`, `session/instance_actor_setters_test.go`
 
 ##### Task 3.1.2b: Replace raw writes (S) — AC2
 - Replace L282-289 with one `applyInstanceStop(inst, action, outcome)` helper that calls `SetAutonomousStopObserved` for `Nudge`, `Resupervise` and (flag-dependent, Task 3.1.3b) `cancelled_shutdown`, and `SetAutonomousStopped(reason)` otherwise (`cancelled_external` -> outcome `""`); `reason` is `normalizeStopReason(outcome)` (empty + `Done` -> `done`; empty + `!Done` -> unspecified stall, outcome `stuck`, so legacy test outcomes behave as today). The `NewSessionUpdatedEvent` publish (fields `autonomous_mode`, `autonomous_outcome`) happens **inside** `applyInstanceStop`, immediately after the write, so the write and its event are one unit and the event payload is the post-write snapshot (pre-mortem #7; SVC-11). The helper is called once at plan time, never from a function-exit defer. Until Task 3.2.3b computes an action, the helper is called with `Respawn`/`None` equivalents so behaviour is unchanged.
 - Table test over all `StopReason` values asserting the wire outcome set.
+- Setter error (engineering G7): `applyInstanceStop` checks the setter's error; on non-nil it logs one Warn (`session`, `stop_reason`, `err`), skips the `SessionUpdatedEvent` publish and returns the error to its caller only as a value the Nudge/Resupervise paths read as "instance gone: do not restart" (they already refuse via `canRestart`'s status check; this is the same refusal from the write side). Test: SVC-1 gains a "write failed" row; INS-6 covers the setter.
 - Files: `server/services/autonomous_orchestration_service.go`, `server/services/autonomous_apply_stop_test.go`
 
 #### Story 3.1.3: Cancelled stops never look like stalls; shutdown is re-adopted under a strict gate
@@ -649,15 +873,19 @@ W1 `1.1.1b` `1.1.2b` `1.2.1b` `2.1.1a` `3.1.2a` `3.2.2b` `3.2.5b` -> W2 `1.1.1c`
   - *Given* a `Stop` arriving while `startDriverIfAbsent` is between sentinel and commit (blocked in a fake `NewAutonomousDriver`), *Then* it returns without deadlock, the new driver is torn down and not registered (REG-14).
   - *Given* a real `SessionService.DeleteSession` running concurrently with a completion callback and a `startDriverIfAbsent` under `-race`, *Then* all three return (REG-15).
 - Liveness (pre-mortem #5). *Given* a registered driver whose `Finished()` is true, *When* `startDriverIfAbsent` runs, *Then* it replaces the entry and starts a new driver rather than returning `ErrDriverPresent` (REG-16). *Given* a panic inside the completion callback, *Then* `AutonomousMode` is cleared, one FAILURE notification is published and the Respawn body is not replayed (STL-15).
-**Files**: `server/services/autonomous_orchestration_service.go`, `server/services/autonomous_driver_registry.go`, `server/services/session_creation_pipeline.go`, `server/services/autonomous_readoption.go`, `server/services/session_service_wiring.go`, `server/server.go`, `server/services/feature_flag_service.go`, `config/config.go`, tests as listed per task
+**Files**: `server/services/autonomous_orchestration_service.go` (3.1.3a, 3.1.3e, 3.1.3b), `server/services/autonomous_driver_registry.go` (3.1.3a, 3.1.3e, 3.1.3f), `server/services/session_creation_pipeline.go` (3.1.3e), `server/services/autonomous_readoption.go` (3.1.3c), `server/services/autonomous_readoption_trigger.go` (3.1.3f), `server/dependencies.go`, `server/server.go` and `server/services/session_service_wiring.go` (3.1.3f), `server/services/feature_flag_service.go` and `config/config.go` (3.1.3b), plus the three test files of 3.1.3d. `SessionService.SetLifecycleContext` (`session_service_wiring.go:269-275`) already delegates to the autonomous service by name and is not changed; 3.1.3f adds only the signal-(b) delegate beside it
 
 ##### Task 3.1.3a: Registry hardening, completion identity (M) — AC2
 - New `server/services/autonomous_driver_registry.go` holds `recovery`, `claimCompletion`, `startDriver`/`startDriverIfAbsent`, `canRestart`/`canRestartLocked`, and the changed `registerDriver` (map mutation under `a.mu` and nothing else, per the Glossary `a.mu` rule; types per the Glossary). `a.recoveries map[string]*recovery`, `a.starting` reservations (separate map or typed entry, whichever keeps existing tests that read `a.drivers` compiling).
-- `lifecycleCtx` becomes an `atomic.Pointer[context.Context]`: `SetLifecycleContext` stores, `driverCtx()` loads (fallback `Background()`), and the respawn goroutine's raw `a.lifecycleCtx` read at `:434` is changed to `a.driverCtx()`. Nothing reads or writes it under `a.mu`, so a locked registry never nests with it (pre-mortem P1 #1; this replaces Task 3.1.3c's earlier "write under `a.mu`").
 - Replace the callback's first line (`stopAndDeregisterDriver(instanceName)`, `autonomous_orchestration_service.go:260`) with `c, res := a.claimCompletion(instanceName, outcome.RunID)` and `defer c.release()`. Under one `a.mu` hold: registered driver with non-zero `RunID` different from `outcome.RunID` -> `superseded` (log Info, return without touching registry/instance/item); registered and matching -> delete without `Stop()` (goroutine already exited); unregistered -> proceed; then register the recovery entry (ctx derived from `a.driverCtx()` loaded **before** the lock is taken, never `Background()`), cancelling and replacing an entry of an older runID, or returning `duplicate` for the same runID (callback returns; the winner is acting). `RunID == 0` matches anything (legacy test literals). Registration therefore happens before the item lookup, `planStall` and `MarkStuck`, so a stop in the DB round-trip window finds the entry (architecture C1).
 - `stopAndDeregisterDriver(title)` additionally cancels and deletes `recoveries[title]`; every external stopper (`session_service_lifecycle.go:47,306`, `session_service_update.go:296`, `server/mcp/tools_backlog.go:1998` via `StopDriverForSession`) reaches an in-flight nudge.
 - `startDriver(inst, timeout, opts) (*AutonomousDriver, error)` is the former body of `StartAutonomousDriverWithTimeout`/`ForInstance` returning `ErrNoDriverPool`/`Start` errors; the two public methods become void wrappers that log the error (signatures and the compile-time interface assertion unchanged). `startDriverIfAbsent` is the reserve-then-start sequence in the Glossary: sentinel under the lock, `NewAutonomousDriver` / `withCostSink` / `Start` outside it, commit under the lock; `Stop()` on a displaced or torn-down driver always runs outside `a.mu`. A registered driver with `Finished() == true` is replaced (Warn), so a dead entry cannot return `ErrDriverPresent` forever.
 - `canRestart(rec, inst) error` and `canRestartLocked(rec, inst) error` per the Glossary row (include `GetLifecycleStatus() == session.Active`, no `starting` sentinel); callers: `canRestart` before the nudger and in the nudge/resupervise effects, `canRestartLocked` only inside `restartAfterRecovery`. No `a.*` method that locks is called with `a.mu` held.
+- Files: `server/services/autonomous_driver_registry.go`, `server/services/autonomous_orchestration_service.go`
+
+##### Task 3.1.3e: Lifecycle ctx atomic, callback panic wrapper, third start site (S) — AC2
+- Split from 3.1.3a for sequencing (engineering G1): 3.1.3a is the registry and its identity/ownership rules; this task is the three changes that touch other call sites. Full scope kept.
+- `lifecycleCtx` becomes an `atomic.Pointer[context.Context]`: `SetLifecycleContext` stores, `driverCtx()` loads (fallback `Background()`), and the respawn goroutine's raw `a.lifecycleCtx` read at `:434` is changed to `a.driverCtx()`. **`lifecycleCtx`, `SetLifecycleContext` and `driverCtx()` move from `autonomous_orchestration_service.go:103-134` into `autonomous_driver_registry.go`** (engineering G2): the boot-pass trigger (Task 3.1.3f) then edits only the registry and trigger files, so it no longer shares `autonomous_orchestration_service.go` with Task 3.1.4a in one wave. The method keeps its name and signature, so `session_service_wiring.go` and `server/server.go:1087` do not change. Nothing reads or writes it under `a.mu`, so a locked registry never nests with it (pre-mortem P1 #1; this replaces Task 3.1.3c's earlier "write under `a.mu`").
 - Completion-callback panic wrapper (pre-mortem #5): after `claimCompletion` succeeds the callback runs under `defer recoverCompletionPanic(...)`: on a panic it logs Error with the stack, calls `SetAutonomousStopped(<stop reason>)` (mode cleared, so no ghost), publishes one FAILURE notification ("autonomous recovery panicked"), and does **not** replay the Respawn body (non-idempotent steps such as `UpdateItemSessionEnded` may already have run); `release` and the short guard stamp still happen via defers. The stale detector is the backstop (STL-15).
 - Third start site (pre-mortem #5): `session_creation_pipeline.go:347-355` is routed through `startDriver`/`startDriverIfAbsent` instead of building and registering the driver inline. Before routing, read `s.autonomousDriverClient()` and `a.pool`/`SetClient`: if they are the same client use it directly, otherwise pass the pipeline's client as a `startDriver` option. Routing adds the turn callback the inline site never had (`AutonomousTurn` updates for UI-created autonomous sessions, same as the toggle/spawn starters) and removes the non-atomic start-then-register gap; note it in the PR as a behaviour difference.
 - Files: `server/services/autonomous_driver_registry.go`, `server/services/autonomous_orchestration_service.go`, `server/services/session_creation_pipeline.go`
@@ -677,14 +905,19 @@ W1 `1.1.1b` `1.1.2b` `1.2.1b` `2.1.1a` `3.1.2a` `3.2.2b` `3.2.5b` -> W2 `1.1.1c`
 ##### Task 3.1.3c: Boot re-adoption pass and gates (M) — AC2
 - `server/services/autonomous_readoption.go`: `readoptGates` (ordered `[]struct{name string; check func(ctx, inst, deps) gateResult}`, where `gateResult{Class pass|reject|skip|unknown; Gate string; Err error}`), `func (a *AutonomousOrchestrationService) ReadoptAutonomousDrivers(ctx, instances []*session.Instance) readoptReport`. Dependencies are narrow seams for tests: `driverStarter`, `itemSessionLookup` (wraps `GetItemSessionBySessionUUID` + `GetBacklogItem`; maps `ErrNotFound` to reject and any other error to unknown), `paneProbe` (wraps `PaneExitInfo`, `VerifyPaneOwnershipBeforeWrite`, and a liveness read through `GetLifecycleStatus()` rather than the raw-`Status` `Instance.TmuxAlive()`; a probe timeout or error is unknown, an ownership mismatch or dead pane is reject).
 - Clearing policy: only a `reject` (or a start failure: `ErrNoDriverPool`/`Start` error) clears mode, via `SetAutonomousStoppedQuiet(cancelled_shutdown)` (outcome `""`) + `NewSessionUpdatedEvent`. `skip` and `unknown` never write. `ErrDriverPresent` from `startDriverIfAbsent` maps to `skip`.
-- Order and cap: candidates are sorted `CreatedAt` ascending, ties by instance UUID; the first 8 passing candidates are started, the rest are `deferred` (mode untouched). Follow-up passes re-evaluate only `deferred` and `unknown` candidates, 60 s apart, at most 3 (injected clock, `time.AfterFunc` equivalent behind a `clock` seam); after the last one, still-over-cap candidates are cleared quietly with one Warn carrying the count, and still-`unknown` candidates are left untouched with one Warn.
-- Trigger: `maybeReadopt()` runs the first pass exactly once (`sync.Once`) when **both** (a) `SetLifecycleContext` has been called and (b) the instance list is loaded, wired **and settled**, whichever happens second. Verified ordering at base `6a395b58f`: instances are wired at `server/dependencies.go:881`; one goroutine (from `:932`) runs Step 7 controllers (`:1047`), Step 7.5 `StartSessionDriver` loop (`:1063-1080`), then Step 7.6 which sleeps 500 ms "to allow controllers to initialize their terminal readers" and runs `scanner.Scan` + `syncOrphanedApprovalsToQueue` (`:1082-1088`). Signal (b) is sent **after `:1088`** (after the settle sleep and scan, not after the Step 7.5 loop), so a re-adopted driver's first `waitForIdle` (settle 0) never reads a not-yet-initialised idle detector; signal it with a `defer` at the top of that goroutine so every exit path signals. Signal (a) comes from `SetLifecycleContext` (`server/server.go:1087`).
-- Bounded fallback: when (a) arrives, `maybeReadopt` also arms a one-shot timer (const 90 s, injected clock). If (b) has not arrived when it fires, the first pass runs anyway, with `controller_present` failures classified `unknown` (the controllers may not have started) so a late dependency goroutine cannot cause a mass clear; the follow-up passes then re-evaluate. A pass never runs twice (`sync.Once`). The pass refuses to start any driver while `a.lifecycleCtx == nil` (otherwise `driverCtx()` would fall back to `Background()` and the driver would not stop on shutdown).
+- Order and cap: candidates are sorted `CreatedAt` ascending, ties by instance UUID; the first 8 passing candidates are started, the rest are `deferred` (mode untouched). `ReadoptAutonomousDrivers(ctx, instances, pass)` takes the pass number: pass 1 evaluates every candidate; follow-up passes (scheduled by Task 3.1.3f) re-evaluate only `deferred` and `unknown` candidates, and on the last follow-up (pass 4) still-over-cap candidates are cleared quietly with one Warn carrying the count and still-`unknown` candidates are left untouched with one Warn. The scheduling (60 s apart, at most 3, injected clock) is Task 3.1.3f; this task is pure and synchronous, so its tests call it directly.
 - Per-instance logging: one structured line per candidate (`readopt candidate session=<title> result=adopted|would_adopt|reject|skip|unknown|deferred|start_failed gate=<name>`); Info for adopted/would_adopt/reject/skip/deferred, Warn for unknown and start_failed. Each line also carries `last_activity_age` (from the persisted `LastProgressAt`) so the dry-run shows which candidates the stale detector would kill next tick (the deferred `stale` gate, below, is decided from this).
 - Adoption resets the turn budget (`AutonomousMaxTurnsOrDefault`) per restart; log it. Does not touch `AutonomousStopReason` or the resupervise budget. Adoption **stamps `stallRecoveryGuard`** for the candidate's item (30 min, item known from the `item_session_open` lookup) so the stale detector cannot kill a just-adopted session on its next tick (pre-mortem #8; RDP-16).
-- Per-boot cap const 8. `SetLifecycleContext` stores the ctx through the atomic pointer (Task 3.1.3a; never under `a.mu`) and then calls `maybeReadopt()`.
+- Files: `server/services/autonomous_readoption.go`
+
+##### Task 3.1.3f: Boot-pass trigger, fallback timer, follow-up passes, Step 7.6 seam (M) — AC2
+- Split from 3.1.3c for sequencing (engineering G1): the gates and pass logic are testable without the dependency graph; the trigger needs the lifecycle ctx and the `server/dependencies.go` goroutine. Full scope kept.
 - Step 7 / 7.5 / 7.6 goroutine seam (validation S5): the goroutine body in `server/dependencies.go` is extracted to a named function taking a `signalSettled func()` and returning on every path (`defer signalSettled()` as its first statement), so "every exit signals" is testable without running the dependency graph (RDP-14).
-- Files: `server/services/autonomous_readoption.go`, `server/services/session_service_wiring.go`, `server/server.go`, `server/dependencies.go`
+- Trigger: `maybeReadopt()` runs the first pass exactly once (`sync.Once`) when **both** (a) `SetLifecycleContext` has been called and (b) the instance list is loaded, wired **and settled**, whichever happens second. Verified ordering at base `6a395b58f`: instances are wired at `server/dependencies.go:881`; one goroutine (from `:932`) runs Step 7 controllers (`:1047`), Step 7.5 `StartSessionDriver` loop (`:1063-1080`), then Step 7.6 which sleeps 500 ms "to allow controllers to initialize their terminal readers" and runs `scanner.Scan` + `syncOrphanedApprovalsToQueue` (`:1082-1088`). Signal (b) is sent **after `:1088`** (after the settle sleep and scan, not after the Step 7.5 loop), so a re-adopted driver's first `waitForIdle` (settle 0) never reads a not-yet-initialised idle detector; signal it with a `defer` at the top of that goroutine so every exit path signals. Signal (a) comes from `SetLifecycleContext` (`server/server.go:1087`).
+- Bounded fallback: when (a) arrives, `maybeReadopt` also arms a one-shot timer (const 90 s, injected clock). If (b) has not arrived when it fires, the first pass runs anyway, with `controller_present` failures classified `unknown` (the controllers may not have started) so a late dependency goroutine cannot cause a mass clear; the follow-up passes then re-evaluate. A pass never runs twice (`sync.Once`). The pass refuses to start any driver while `a.lifecycleCtx == nil` (otherwise `driverCtx()` would fall back to `Background()` and the driver would not stop on shutdown).
+- Follow-up scheduler: after the first pass, if any candidate is `deferred` or `unknown`, schedule up to 3 follow-up passes 60 s apart through the `clock` seam (`time.AfterFunc` equivalent); each calls `ReadoptAutonomousDrivers` with the pass number and stops early when nothing is left to re-evaluate. No pass runs before `SetLifecycleContext` (it refuses to start any driver while the atomic ctx pointer is unset).
+- `SetLifecycleContext` lives in `autonomous_driver_registry.go` after Task 3.1.3e; this task adds the single line that calls `a.maybeReadopt()` after the ctx is stored (never under `a.mu`). `SessionService.SetLifecycleContext` (`session_service_wiring.go:269-275`) already delegates by method name and is not changed; this task adds a sibling delegate `SessionService.NotifyInstancesSettled(instances)` there for signal (b), called from the extracted Step 7.6 function's `defer`.
+- Files: `server/services/autonomous_readoption_trigger.go` (new), `server/services/autonomous_driver_registry.go` (one call), `server/services/session_service_wiring.go` (one delegate), `server/dependencies.go`, `server/server.go`
 
 ##### Task 3.1.3d: Tests (M) — AC2, AC4
 - Files, one per concern so waves never share a test file: `server/services/autonomous_orchestration_service_class_test.go` (class-guard table: roles {triage, work, review, unrecognized, unlinked} x reasons {cancelled_external, cancelled_shutdown} x flag {ON, OFF}; pre-existing-open-row case; serialization round trip), `server/services/autonomous_driver_registry_test.go` (supersession, duplicate, stop-after-claim cancels, `startDriverIfAbsent` error table, `registerDriver` displacement, atomic `SetLifecycleContext` vs `driverCtx()` under `-race`, and the lock-safety / liveness cases REG-12..REG-16 behind a 5 s fail-not-hang watchdog helper), `server/services/autonomous_readoption_test.go` (gate table with the reject / skip / unknown class column, skip-without-clear on twice-run and on `ErrDriverPresent`, transient-probe-error leaves mode untouched and is re-evaluated, quiet clear has outcome `""`, cap with stable order and deferral to follow-up passes, flag OFF dry-run, start failure, invariant with its `unknown` exception, persisted `Hibernated` round trip, trigger-once-after-both, fallback timer runs once when (b) never arrives and never double-runs when (b) arrives first, every exit of the Step 7/7.5/7.6 goroutine signals (b)).
@@ -694,21 +927,31 @@ W1 `1.1.1b` `1.1.2b` `1.2.1b` `2.1.1a` `3.1.2a` `3.2.2b` `3.2.5b` -> W2 `1.1.1c`
 #### Story 3.1.4: Every stop is observable
 **As an** operator, **I want** the stop reason, the pane's state, the turn count and a scrubbed tail in the stuck row and one log line, **so that** I can tell idle from errored from exited without opening the session.
 **Acceptance Criteria** (AC2, AC3):
-- *Given* `{StopReason: orchestrator_error, Turns: 2, Snapshot{Bucket: safe_idle, LastActivityAt: 12:03:10, PaneTail: "…password=hunter2…"}}`, *When* the callback runs for a linked work item, *Then* `MarkStuck` receives a context starting `stop_reason=orchestrator_error state=idle_prompt turns=2 last_activity=…`, containing `[REDACTED]` and not `hunter2`; exactly one `[AutonomousDriver] stopped` log line is emitted and contains no tail text.
+- *Given* `{StopReason: orchestrator_error, Turns: 2, Snapshot{Bucket: safe_idle, LastActivityAt: 12:03:10, PaneTail: "…password=hunter2…"}}`, *When* the callback runs for a linked work item, *Then* `MarkStuck` receives a context that **starts with the plain summary** (`The autonomous run hit an internal error and stopped. The session was waiting at its prompt. …`) followed by ` | stop_reason=orchestrator_error state=idle_prompt action=… turns=2 …`, containing `[REDACTED]` and not `hunter2`; exactly one `[AutonomousDriver] stopped` log line (filtered by this test's unique `session=` key) is emitted and contains no tail text.
 - *Given* `startup_timeout` with `Turns: 0`, *Then* the notification body does not contain "stopped after 0 turns".
-**Files**: `server/services/autonomous_orchestration_service.go`, `server/services/autonomous_stop_detail.go`, `server/services/autonomous_stop_detail_test.go`, `server/services/autonomous_orchestration_service_stop_test.go`
+- *Given* each `StopReason` x `ObservedState` x action in the Operator-facing copy table, *Then* the summary equals the table's strings byte for byte (golden) and contains none of the wire codes (`StopReason` values, `ObservedState` values, `nudge_outcome` classes), so a developer-speak edit fails a test (UX G4, G5).
+- *Given* a Nudge plan, *Then* the row's context shows `action=nudging` at plan time and, after the effect, `action=nudged nudge=1/2` (success) or `action=respawned` plus the plain failure phrase (fallback) or `action=none` plus the uncertain sentence; for every non-Nudge plan the row is written once with its final action (UX G1).
+- *Given* a long unbroken token (a 300-character URL) in the context at a 360 px viewport, *Then* the "Why" value wraps and the page has no horizontal scroll (Task 3.1.4d; UX G6).
+**Files**: `server/services/autonomous_orchestration_service.go`, `server/services/autonomous_stop_detail.go`, `server/services/autonomous_stop_detail_test.go`, `server/services/autonomous_orchestration_service_stop_test.go`, `web-app/src/components/backlog-stuck/StuckItemDetail.css.ts`, `web-app/src/components/backlog-stuck/StuckItemDetail.test.tsx`, `tests/e2e/backlog-stuck-items.spec.ts`
 
 ##### Task 3.1.4a: Log line and detail formatter (S) — AC2
-- `formatStopDetail(outcome, state)` and `logStop(...)`; log exactly once per stop, after the **final** action is known (`action=none`/`respawn` equivalents until Story 3.2.3b lands, when the work arm's call moves to the exit of `handleWorkStall` so a Nudge that fell back to Respawn logs `respawn`; keys include `run_id`, `resupervise=<used>/<cap>`, `0/3` until Task 3.2.3a supplies the budget, `nudge_outcome` (`n/a` until 3.2.3b) and `resupervise_cap_hit`). Replace the hard-coded detail at L329-331; `MarkStuck`'s `(applied, err)` result is now captured and passed on (used by 3.2.3b: an error fails open to Respawn, a clean `applied == false` maps to `None`).
+- `formatStopDetail(outcome, state, action, nudge)` returns `<plainSummary(...)> | stop_reason=… state=… action=… nudge=n/cap turns=… resupervise=n/cap last_activity=… [nudge_outcome=…] tail=…` (the summary comes from Task 3.1.4b's `stopCopy`; the `key=value` part keeps the keys the tests and the `jq` query use) and `logStop(...)`; log exactly once per stop, after the **final** action is known (`action=none`/`respawn` equivalents until Story 3.2.3b lands, when the work arm's call moves to the exit of `handleWorkStall` so a Nudge that fell back to Respawn logs `respawn`; keys include `run_id`, `resupervise=<used>/<cap>`, `0/3` until Task 3.2.3a supplies the budget, `nudge_outcome` (`n/a` until 3.2.3b) and `resupervise_cap_hit`). Replace the hard-coded detail at L329-331; `MarkStuck`'s `(applied, err)` result is now captured and passed on (used by 3.2.3b: an error fails open to Respawn, a clean `applied == false` maps to `None`).
 - Files: `server/services/autonomous_stop_detail.go`, `server/services/autonomous_orchestration_service.go`
 
 ##### Task 3.1.4b: Typed notification body (S) — AC2
-- `StopReason -> phrase` table (every enum value has a row, tested for completeness); replaces L602 text; tail never included. Turn counts read "during turn N" (the in-progress convention), never "stopped after N turns" for a turn that did not complete.
+- The `stopCopy` table from "Operator-facing copy (owner review)" above, as typed constants: `reasonSentence`, `stateSentence`, `actionSentence`, `nudgeFailurePhrase`, composed by `plainSummary`. Every enum value has a row (completeness test over the DOM-2 slice); replaces the L602 text; tail never included; titles per the copy table (`Autonomous session nudged` INFO, `Autonomous fix stuck` FAILURE unchanged for every other case). No turn count in the sentences (a count, when a caller adds one, reads "during turn N"; never "stopped after N turns" for a turn that did not complete). Nudge-failure classes map to operator phrases here and **only** here, so the class code never reaches a notification (UX G4); Task 3.2.3c passes the class, not a string.
 - Files: `server/services/autonomous_stop_detail.go`, `server/services/autonomous_orchestration_service.go`
 
 ##### Task 3.1.4c: Tests (S) — AC2, AC4
-- Detail contains the key=value prefix; canary absent from stuck row, notification and captured logs (`captureLogs` helper); real turn count shown; one log line per stop (with `nudge_outcome` and `resupervise_cap_hit` keys, OBS-2); completeness test for the phrase table; **OBS-7**: with a real `Storage`, `MarkStuck` with a `StopDetail` then the `ListStuckBacklogItems` handler returns `StuckBacklogItem.context` equal to the detail (the AC2 operator read path ADR-002 names was previously untested).
+- Detail contains the plain summary then the key=value part; canary absent from stuck row, notification and captured logs (`captureLogs` helper); real turn count shown; one log line per stop (with `nudge_outcome` and `resupervise_cap_hit` keys, OBS-2); completeness **and golden-string** tests for the copy table (OBS-4, OBS-10); **OBS-7**: with a real `Storage`, `MarkStuck` with a `StopDetail` then the `ListStuckBacklogItems` handler returns `StuckBacklogItem.context` equal to the detail (the AC2 operator read path ADR-002 names was previously untested).
+- **Log-capture isolation (engineering G4, BUG-087).** `captureLogs` holds `slogDefaultMu` (`autonomous_orchestration_service_test.go:445-455`) so capturers do not overlap, but emitters in other parallel tests are not serialized and can write into the swapped default. Every assertion on captured logs here therefore (a) gives the test a unique session title (`"stall-" + t.Name()`), (b) filters records through a helper `recordsFor(buf, title)` that keeps only lines whose `session=` equals that title, and (c) asserts "exactly one `[AutonomousDriver] stopped`" and canary absence **on the filtered set**. The tests are not `t.Parallel()`. If a non-global logger seam lands first (BUG-087's option 2) the helper is replaced, not the assertions.
 - Files: `server/services/autonomous_stop_detail_test.go`, `server/services/autonomous_orchestration_service_stop_test.go`
+
+##### Task 3.1.4d: Operator "Why" value wraps long tokens (XS) — AC2 (UX G6)
+- `web-app/src/components/backlog-stuck/StuckItemDetail.css.ts`: `value` (`:31-33`) has only `color`; the row is `display: flex; flex-wrap: wrap` with a `minWidth: 90px` label, and the value is a bare `<span>`. A pane tail or URL with no spaces is up to 1 KB, so add `overflowWrap: "anywhere"` and `minWidth: 0` to `value`. The ` ⏎ ` separators and spaces already allow normal wrapping; this only covers unbroken tokens. CSS only: no TSX change, so the `// +feature: backlog-diagnose-nudge` marker and the feature registry are untouched (`make registry-diff` stays empty).
+- Tests: (1) `StuckItemDetail.test.tsx`: a case with a plain-sentence lead followed by a 300-character unbroken token renders both in `data-testid="stuck-item-why"` (jsdom cannot measure layout; this pins the data path, not the wrap). (2) `tests/e2e/backlog-stuck-items.spec.ts` (already `// @feature backlog:list-stuck`, uses `seedStuckItem({context})`): one test seeds a 300-character unbroken `context`, sets the viewport to 360 x 740, opens the card, and asserts `document.documentElement.scrollWidth <= window.innerWidth` through `page.evaluate`. Conventions kept: `data-testid` locators, no `waitForTimeout`, page helper reused.
+- The UI still renders the context string verbatim; the lead sentence is the server's (Task 3.1.4a/b), so the "Why" line reads in plain language without a component change (UX G6).
+- Files: `web-app/src/components/backlog-stuck/StuckItemDetail.css.ts`, `web-app/src/components/backlog-stuck/StuckItemDetail.test.tsx`, `tests/e2e/backlog-stuck-items.spec.ts`
 
 ### Epic 3.2: Nudge, re-supervise, or respawn
 **Goal**: A work session that is only waiting at an idle prompt gets a bounded nudge and a re-attached driver; one that is still working keeps a driver and `AutonomousMode`; neither races a user's stop or the stale-work remediator; a respawn happens only when neither applies, and no path leaves `AutonomousMode == true` with no driver.
@@ -787,12 +1030,14 @@ W1 `1.1.1b` `1.1.2b` `1.2.1b` `2.1.1a` `3.1.2a` `3.2.2b` `3.2.5b` -> W2 `1.1.1c`
 - Concurrency.
   - *Given* 8 concurrent completions for the same item with cap 3 (distinct titles share the item), *Then* the nudger's write count is <= 2 and `diagnose_nudge_count <= 2`.
 - Notification contract.
-  - *Given* a Nudge or Resupervise result, *Then* `handleWorkStall` returns `stallResult{Notify: {Suppress: true}}` (or an INFO override for a successful nudge) and the outer function publishes no FAILURE notification; *Given* Respawn after a nudge failure, *Then* the generic notification body names the failure class (`nudge not sent: <class>`) via `notifyOverride`.
+  - *Given* a Nudge or Resupervise result, *Then* `handleWorkStall` returns `stallResult{Notify: {Suppress: true}}` (or an INFO override for a successful nudge) and the outer function publishes no FAILURE notification; *Given* Respawn after a nudge failure, *Then* the generic notification body carries the operator phrase for the failure class from the copy table (`... A prompt could not be sent (the session was busy again), so a fresh session is being started instead. ...`) via `notifyOverride`, and contains no class code (`lease_busy`, `slot_unavailable`, ...); the code is only in the log line's `nudge_outcome` (UX G4).
+- Row annotation (UX G1).
+  - *Given* a Nudge plan that succeeds, *Then* the open row is written at plan time with `action=nudging` and refreshed once with `action=nudged nudge=n/cap`, and is **not** resolved (it holds `diagnose_nudge_count`); *Given* a Nudge that falls back to Respawn, *Then* the refresh carries `action=respawned` and the plain failure phrase; *Given* delivery uncertain, *Then* `action=none` and the "check it" sentence; *Given* the refresh write errors, *Then* a Warn is logged and the recovery outcome is unchanged (annotation is best-effort, never a gate).
 - Recovery ctx vs bookkeeping (pre-mortem #6).
   - *Given* a Nudge whose recovery ctx is cancelled (stop arrives) and whose fallback is Respawn, *Then* `UpdateItemSessionEnded`, `MarkStuck` and `RemediationDue` still run and the fake storage records `ctx.Err() == nil` on each of them (STL-16).
 - Instance write and event (pre-mortem #7).
   - *Given* each action, *Then* the instance write and its `SessionUpdatedEvent` happen once at plan time and the event payload equals the post-write snapshot; a Nudge that falls back to Respawn adds exactly one second write (`SetAutonomousStopped`) and one second event; a late fallback write never zeroes a successor driver's turn counters because it is skipped when a driver is registered (STL-12).
-**Files**: `server/services/autonomous_stall_recovery.go`, `server/services/autonomous_stall_nudge_effect.go`, `server/services/autonomous_orchestration_service.go`, `server/services/autonomous_stall_recovery_nudge_test.go`, `server/services/feature_flag_service.go`
+**Files** (per task, engineering G8; no two tasks of one wave share a file): 3.2.3a `autonomous_stall_recovery.go`, `autonomous_orchestration_service.go`, `config/config.go`, `terminal_write_pins_test.go` (the `kindChain` row; 3.2.2b edited the same test file in an earlier wave); 3.2.3b `autonomous_orchestration_service.go`, `autonomous_stall_recovery.go`, `autonomous_stall_resupervise.go` (stub, filled in 3.2.4a), plus a call to `stall_recovery_guard.go` (created in 3.2.5a); 3.2.3c `autonomous_stall_nudge_effect.go`; 3.2.3d `autonomous_stall_recovery_nudge_test.go`, `autonomous_stop_detail_test.go` (golden strings consumed here), `feature_flag_service.go`. All under `server/services/` except `config/config.go`
 
 ##### Task 3.2.3a: Seams, budget type, adapter (S) — AC3
 - `StallNudger` interface + `SetStallNudger`; `defaultStallNudger` struct (plain method `NudgeStalledSession`, no closures) calls `session.NudgeStalledAutonomousSession`, plus its `kindChain` pin row `server/services/defaultStallNudger.NudgeStalledSession` in the same commit (Task 3.2.2b). The restart seam is a `driverStarter` interface over `startDriverIfAbsent` (error-returning), not a void func, so tests observe re-supervision and failures.
@@ -804,6 +1049,7 @@ W1 `1.1.1b` `1.1.2b` `1.2.1b` `2.1.1a` `3.1.2a` `3.2.2b` `3.2.5b` -> W2 `1.1.1c`
 ##### Task 3.2.3b: `handleWorkStall` owns plan and dispatch (M) — AC3
 - `handleWorkStall(c completion, storage, item, is, outcome) stallResult` is called only from the Work arm of a backlog-linked session for `Class() == Stall`; it owns `planStall`, the work-role `MarkStuck`, and the entire `switch plan` (Respawn, None, Nudge, Resupervise). The outer function passes `completion`, `is`, `item`, `outcome` and consumes the `stallResult`. Glossary, 3.1.1a and this task agree on this.
 - `planStall(inst, item, is, outcome) domain.StallAction` runs **before** `MarkStuck` (a Resupervise must not write a stuck row). Input: `State = domain.ClassifyObserved(outcome.Snapshot)`; `NudgeEnabled = a.diagnoseNudgeEnabled() && a.stallNudgeEnabled()` read at this instant (Task 3.2.3a seams); `NudgeAllowed` = `DiagnoseNudgeAllowedWithReserve(...,1)` (error => false, fail closed; the atomic claim is authoritative); `ResuperviseAllowed = budget.Allowed(is.ID)`; `ItemInWorkStatus = session.BacklogStatus(item.Status) == in_progress` (the same predicate as the boot gate `item_status_matches_role`, one shared function); `Archived = inst.IsArchived()`; `RetryPending = inst.IsRetryPending()`. `planStall` also records whether the plan would have been `Nudge` with both flags on (a second pure `DecideStallAction` call), which feeds `nudge_outcome=disabled`.
+- Row `action=` (UX G1): the plan-time `MarkStuck` context uses `action=nudging` for a Nudge plan and the final value (`respawned`, `none`) for every other plan. After the nudge effect (Task 3.2.3c) finishes, a Nudge plan refreshes the same open row once more through `MarkStuck` with the final `action=` (`nudged`, `respawned`, `none`); the refresh is best-effort (Warn on error) and uses the outer `Background()` ctx. SVC-12's "exactly once per stall" therefore holds for every plan except a Nudge, which is exactly twice.
 - `MarkStuck` runs here for every plan except `Resupervise` and `None`-because-archived/retry-pending (adversarial M4). Its result is captured as `(applied, err)`: **`err != nil` fails open to the original Respawn body** (log Warn, as today's "additive, never a gate" comment at `:328-336`; never `None`, which would leave an open ItemSession, no driver and no row until the 2 h stale detector); `applied == false` with `err == nil` (the item status moved on between the read and the write) downgrades a `Nudge` plan to `None` with a Warn naming the item status, because `MarkStuck`'s precondition is evaluated against the status read a moment earlier. For a `Nudge` plan the nudge allowance is re-read after `MarkStuck` and a now-false value downgrades to `Respawn` before the settle wait (adversarial M3). Review, triage, unrecognized-role and unlinked sessions keep today's top-level `MarkStuck` (guarded by `Class() == Stall`, Task 3.1.3b) and never reach `handleWorkStall`.
 - The instance write (`applyInstanceStop`, which also publishes the `SessionUpdatedEvent`, Task 3.1.2b) is called **once, at the moment the plan is known and before any effect**, not from a function-exit defer (a late defer would run after the nudge/restart effects, publish a stale event, and could zero a successor driver's turn counters): `Nudge`/`Resupervise` -> `SetAutonomousStopObserved`; `Respawn`/`None` -> `SetAutonomousStopped`. A later fallback from Nudge to Respawn performs one explicit second `SetAutonomousStopped` (and event), skipped when a driver is already registered under the title. Between the callback's start and the plan the mode simply stays as the driver left it, and `canRestart` covers the window.
 - Ctx rule (pre-mortem #6): `handleWorkStall` receives the outer `ctx` (`Background()`) and the `completion`; `completion.ctx` is passed **only** to the nudger, the settle wait and `canRestart`/`restartAfterRecovery`; `MarkStuck`, `MarkStuckNotified`, `ClaimDiagnoseNudgeSlot`, `UpdateItemSessionEnded`, `RemediationDue` and the item re-read use the outer ctx.
@@ -814,13 +1060,15 @@ W1 `1.1.1b` `1.1.2b` `1.2.1b` `2.1.1a` `3.1.2a` `3.2.2b` `3.2.5b` -> W2 `1.1.1c`
 
 ##### Task 3.2.3c: Nudge effect, failure mapping, notification (M) — AC3
 - `autonomous_stall_nudge_effect.go`: on a `Nudge` plan, in order: `canRestart(rec, inst)` once more immediately before invoking the nudger (architecture C1: not only before restart; the guard was already stamped at plan time, Task 3.2.3b); run the nudger under the completion ctx with `claim = func() (bool, error) { r, err := storage.ClaimDiagnoseNudgeSlot(ctx, item.ID, reason, 1); return r.Claimed, err }` (Storage call only, no refund); map the error through `fallbackAfterNudge` (table above). The nudge path must not call `UpdateItemSessionEnded` or `RemediationDue`.
-- On success: `canRestart`, `restartAfterRecovery(rec, inst, 5*time.Minute)`; on error fall through the table; on success refresh the guard stamp, publish INFO "nudged" (detail `n/cap`, not the tail), `SetAutonomousMode(true, "")` is not called (mode never went false).
+- On success: `canRestart`, `restartAfterRecovery(rec, inst, 5*time.Minute)`; on error fall through the table; on success refresh the guard stamp, publish INFO "Autonomous session nudged" with the copy table's body (`n/cap`, not the tail), and refresh the stuck row to `action=nudged nudge=n/cap` (annotate, do not resolve: the row holds the nudge counter); `SetAutonomousMode(true, "")` is not called (mode never went false).
+- Fallbacks pass the nudge-failure **class** (not a string) to `stopCopy`; the notification phrase, the row's `action=respawned` text and the `nudge_outcome=<class>` log key are derived from that one value, and only the log key shows the code (UX G4).
 - Files: `server/services/autonomous_stall_nudge_effect.go`
 
 ##### Task 3.2.3d: Tests and flag description (M) — AC3, AC4
 - Table-driven service tests for every AC above using a real in-memory `Storage` (`createTestStorage`), a fake `StallNudger`, a fake respawner (channel-signalled, as in the existing respawn tests), a fake `driverStarter`; the 8-goroutine concurrency test uses a start barrier, not sleeps. The role-scope test (review/triage/unrecognized/unlinked at `idle_prompt`) lives here.
 - Update the `diagnose_nudge_enabled` description in `feature_flag_service.go` to cover the in-process autonomous nudge (the kill switch for every autonomous pane write); register `autonomous_stall_nudge_enabled` next to it reading the default constant exactly as the `autonomous_driver_readoption` entry reads `autonomousDriverReadoptionDefault`, with a description that states default off and that it is AND-ed with `diagnose_nudge_enabled`; run the feature-flag tests (STL-19: registered, default is `false` asserted as a literal so flipping the shipped default means editing a test, and setting it live changes the next `planStall`).
 - The added cases from the pre-mortem and validation: STL-8 (archived), STL-12 (write+event once per plan, fallback adds one), STL-14 (resupervise writes no row), STL-15 (callback panic), STL-16 (recovery ctx cancelled, bookkeeping persists), STL-17 (`MarkStuck` error fails open), STL-18 (item not `in_progress`), STL-7 extended with the flag-combination rows, STL-11 with the combined-flag and `ItemInWorkStatus` assembly.
+- Copy and row cases (triad UX G1, G4, G5): STL-20 (row annotation per final action; refresh error is a Warn, outcome unchanged), STL-21 (no nudge-class code in any notification body or row summary; failure phrases exact), STL-10 extended with the golden title/body for nudged, respawned, respawned-after-failed-nudge, uncertain.
 - Files: `server/services/autonomous_stall_recovery_nudge_test.go`, `server/services/feature_flag_service.go`
 
 #### Story 3.2.4: Re-supervise a still-working session (bounded)
@@ -837,7 +1085,7 @@ W1 `1.1.1b` `1.1.2b` `1.2.1b` `2.1.1a` `3.1.2a` `3.2.2b` `3.2.5b` -> W2 `1.1.1c`
 **Files**: `server/services/autonomous_stall_resupervise.go`, `server/services/autonomous_stall_recovery_resupervise_test.go`
 
 ##### Task 3.2.4a: Effect (M) — AC3
-- `a.resupervise(c, storage, inst, item, is, outcome) stallResult` in `autonomous_stall_resupervise.go` (the guard was stamped at plan time in Task 3.2.3b); `canRestart`; `SetAutonomousStopObserved(reason)` (already applied by the deferred write); `restartAfterRecovery(rec, inst, 5*time.Minute)`; on success increment `budget` and refresh the stamp, return `{Resupervise, Notify: Suppress}`; on error return `{Respawn}` with the `last_stop_reason` and run count carried into the stuck row context (`resupervise_cap_reached runs=N last_stop_reason=<reason>` when the cap is what sent it to Respawn). Log `resupervise=n/cap` on every run so the chain is reconstructible (adversarial C6).
+- `a.resupervise(c, storage, inst, item, is, outcome) stallResult` in `autonomous_stall_resupervise.go` (the guard was stamped at plan time in Task 3.2.3b); `canRestart`; `SetAutonomousStopObserved(reason)` (already applied once at plan time by `applyInstanceStop`, Task 3.2.3b; there is no function-exit defer, pre-mortem #7); `restartAfterRecovery(rec, inst, 5*time.Minute)`; on success increment `budget` and refresh the stamp, return `{Resupervise, Notify: Suppress}`; on error return `{Respawn}` with the `last_stop_reason` and run count carried into the stuck row context (`resupervise_cap_reached runs=N last_stop_reason=<reason>` when the cap is what sent it to Respawn). Log `resupervise=n/cap` on every run so the chain is reconstructible (adversarial C6).
 - Files: `server/services/autonomous_stall_resupervise.go`
 
 ##### Task 3.2.4b: Tests (S) — AC3, AC4
@@ -889,7 +1137,10 @@ W1 `1.1.1b` `1.1.2b` `1.2.1b` `2.1.1a` `3.1.2a` `3.2.2b` `3.2.5b` -> W2 `1.1.1c`
 
 ##### Task 4.1.1b: Run the gates (S) — AC4
 - `make build` (generated proto/ent code first), then `go build ./...`; `go test ./session/domain/... ./session/... ./server/services/... -race` (targeted by package; `-timeout=20m` for `server/services`); `make lint`; `make ready-complexity-gate`; `make test-delivery-guards`; `make actor-field-guard`; `make registry-diff` (expect no change: no RPC, proto or component change); `make lint-custom` (includes `noarchivedrevival`, `silenttransition`); feature-flag registry tests for `autonomous_driver_readoption`.
-- web-app: no change (grep result stated above), so no `pnpm`/jest run is required; say so in the PR.
+- web-app (Task 3.1.4d is the only web-app change, CSS only): `cd web-app && pnpm exec jest --testPathPatterns StuckItemDetail --no-coverage` (pnpm, never npm: `docs/how-to/use-pnpm-in-web-app.md`), `pnpm run lint:duplicates` (jscpd margin; the new test adds no `jest.mock` block), and the one e2e spec `cd tests/e2e && npx playwright test backlog-stuck-items.spec.ts`. `make registry-diff` stays empty (no RPC, component or marker change).
+- **Suite runtime (engineering G4).** The plan adds roughly 90 service-package tests (REG 16, RDP 18, OBS 10, STL 21, RSP 8, STP 5, DEF 6, SVC 12 in `validation.md`) plus ~15 driver/domain rows; `server/services -race` already needs `-timeout=20m` locally and CI runs it under `-timeout=1200s` (`.github/workflows/mcp-integration.yml`; BUG-067 is stale). Record the before/after wall time of `go test ./server/services -race` in the PR; the two watchdog helpers (`requireReturns`, 5 s) never wait on a passing run, and tests use fakes and an injected clock, so growth should be CPU-bound only. If the package exceeds the CI soft wrapper, split by build tag in a follow-up, not by deleting rows.
+- Known flakes on a red gate: `TestAutonomousDriver_Stop_CancelsLoop_DuringNudgeSuppression` (BUG-079, driver file) and any `captureLogs`-based assertion in a test **not** added by this plan (BUG-087); rerun once and name the bug in the PR. A failure in a test this plan added is never attributed to them.
+- Ship checklist (product): (1) the follow-up backlog item for the stale-work and health-checker restart paths is filed from the spec block in Deferred and its ID is pasted into the PR description; (2) the three review dates (flip decision = merge + 7 d, soak review = flip + 14 d, sunset = merge + 30 d) are written into the PR description and a reminder is set; (3) `requirements.md` "Falsifiable hypothesis" is unchanged or its edit explained.
 - Files: none
 
 ---
@@ -899,11 +1150,11 @@ W1 `1.1.1b` `1.1.2b` `1.2.1b` `2.1.1a` `3.1.2a` `3.2.2b` `3.2.5b` -> W2 `1.1.1c`
 | AC | Requirement | Tasks |
 |----|-------------|-------|
 | AC1 | Root cause identified and documented, each stop path cited | 1.2.1a, 1.2.1b, 4.1.1a |
-| AC2 | Each stop's reason recorded and observable (stuck-row context via `ListStuckBacklogItems`, log line, in-memory field); distinguishes idle/awaiting-input, error, completed/exited | 1.1.1a, 1.1.1b, 2.1.1a, 2.1.1b, 3.1.2a, 3.1.2b, 3.1.3a, 3.1.3b, 3.1.3c, 3.1.3d, 3.1.4a, 3.1.4b |
+| AC2 | Each stop's reason recorded and observable (stuck-row context via `ListStuckBacklogItems`, log line, in-memory field); distinguishes idle/awaiting-input, error, completed/exited; the operator-facing text is plain language and states whether the operator must act | 1.1.1a, 1.1.1b, 2.1.1a, 2.1.1b, 3.1.2a, 3.1.2b, 3.1.3a, 3.1.3b, 3.1.3c, 3.1.3d, 3.1.3e, 3.1.3f, 3.1.4a, 3.1.4b, 3.1.4d |
 | AC3 | State inspected and captured before restart; nudge chosen over respawn when only waiting; working session re-supervised; stop/stale races closed. **Scope: driver-stop paths**, which is what the AC text names; the stale-detector and health-restart paths are a recorded follow-up item (Deferred, "AC3 scope") | 1.1.1b, 1.1.2a, 1.1.2b, 2.1.1a, 3.1.1a, 3.2.1a, 3.2.2a, 3.2.2b, 3.2.3a, 3.2.3b, 3.2.3c, 3.2.4a, 3.2.5a, 3.2.5b |
-| AC4 | Tests cover classification and nudge-vs-respawn-vs-resupervise per state | 1.1.1c, 1.1.2c, 2.1.1c, 3.1.3d, 3.1.4c, 3.2.1a, 3.2.2a, 3.2.3d, 3.2.4b, 3.2.5c, 4.1.1b |
+| AC4 | Tests cover classification and nudge-vs-respawn-vs-resupervise per state | 1.1.1c, 1.1.2c, 2.1.1c, 3.1.3d, 3.1.4c, 3.1.4d, 3.2.1a, 3.2.2a, 3.2.3d, 3.2.4b, 3.2.5c, 4.1.1b |
 
-Requirement mapping: R1 -> AC1 tasks; R2 -> 1.1.1a, 2.1.1b, 3.1.2, 3.1.4; R3 -> 1.1.1b, 2.1.1a; R4 -> 1.1.2, 3.1.4a; R5 -> 1.1.1b, 3.2.x; R6 -> 1.1.1c, 3.2.3d, 3.2.4b, 3.2.5c. Constraint "external stop is not a stall" -> 3.1.3a, 3.1.3b, 3.1.3d, 3.2.5c. Review findings: round-1 B1 -> 3.2.4a/b; B2 -> 3.1.3a/b/c/d; B3 -> 3.1.3a, 3.2.5c; B4 -> 3.2.5a/b/c; round-2 B5 -> 3.1.3c/d; B6 -> 3.1.3b/d; architecture C1 -> 3.1.3a, 3.2.3c, 3.2.5c; C2 -> 3.2.2a; C3 -> 3.2.2a, 3.2.3c; C4 -> 3.2.3b, 3.2.3d, 3.2.4b; C6 -> 3.2.5b; C7/C8 -> 3.1.3a, 3.2.4a; C9 -> Dependency Visualization.
+Requirement mapping: R1 -> AC1 tasks; R2 -> 1.1.1a, 2.1.1b, 3.1.2, 3.1.4; R3 -> 1.1.1b, 2.1.1a; R4 -> 1.1.2, 3.1.4a; R5 -> 1.1.1b, 3.2.x; R6 -> 1.1.1c, 3.2.3d, 3.2.4b, 3.2.5c. Constraint "external stop is not a stall" -> 3.1.3a, 3.1.3b, 3.1.3d, 3.2.5c. Review findings: round-1 B1 -> 3.2.4a/b; B2 -> 3.1.3a/b/c/d/e/f; B3 -> 3.1.3a, 3.2.5c; B4 -> 3.2.5a/b/c; round-2 B5 -> 3.1.3c/d; B6 -> 3.1.3b/d; architecture C1 -> 3.1.3a, 3.2.3c, 3.2.5c; C2 -> 3.2.2a; C3 -> 3.2.2a, 3.2.3c; C4 -> 3.2.3b, 3.2.3d, 3.2.4b; C6 -> 3.2.5b; C7/C8 -> 3.1.3a, 3.2.4a; C9 -> Dependency Visualization. Triad repair (iteration 5): UX G1 -> 3.1.4a, 3.2.3b, 3.2.3c; UX G2 -> Risk Control + Deferred (no task, SVC-4/SVC-8 already assert it); UX G3 -> ADR-002 + Deferred; UX G4 -> 3.1.4b, 3.2.3c, 3.2.3d; UX G5 -> Operator-facing copy, 3.1.4b, 3.1.4c; UX G6 -> 3.1.4a/b, 3.1.4d; engineering G1/G2 -> 3.1.3a/e/c/f; G3 -> 2.1.1c; G4 -> 3.1.4c, 4.1.1b; G5 -> 1.1.2b/c; G6 -> 3.2.4a; G7 -> 3.1.2a/b; G8 -> Story 3.2.3 Files; product -> requirements.md, Observability Plan (success target, delete thresholds, review dates), Risk Control (risky assumptions), Deferred (follow-up spec), 4.1.1b (ship checklist).
 
 ---
 
@@ -914,22 +1165,22 @@ Cost classes per `~/.claude/skills/sdd/skills/ESTIMATION.md`; bands and weights 
 | Story | Tasks | Classes | Raw tokens | Output share | CU (k) | Wall-clock blocker |
 |-------|-------|---------|-----------|--------------|--------|--------------------|
 | 1.1.1 domain types/decide | 3 | XS, S, S | 120k | 15% | 192 | |
-| 1.1.2 tail + redaction | 3 | S, S, S | 140k | 12% | 207 | |
+| 1.1.2 tail + redaction (+ fail-closed rules and residual canaries) | 3 | S, S, S | 150k | 12% | 222 | |
 | 1.2.1 diagnosis doc | 2 | S, M | 175k | 5% / 15% | 255 | |
-| 2.1.1 driver finish() | 3 | M, M, M | 355k | 12% | 525 | |
+| 2.1.1 driver finish() (+ BUG-079 baseline and hygiene) | 3 | M, M, M | 365k | 12% | 540 | |
 | 3.1.1 extraction + characterization | 1 | S | 70k | 8% | 92 | |
-| 3.1.2 setters | 2 | S, S | 115k | 12% | 170 | |
-| 3.1.3 registry / class guards / re-adoption / tests | 4 | M, M, M, M | 430k | 12% | 636 | |
-| 3.1.4 observability | 3 | S, S, S | 150k | 12% | 222 | |
+| 3.1.2 setters (+ error return, INS-6) | 2 | S, S | 125k | 12% | 185 | |
+| 3.1.3 registry / lifecycle ctx / class guards / re-adoption gates / trigger / tests (3.1.3a and 3.1.3c split into 3.1.3a+e and 3.1.3c+f) | 6 | M, S, M, M, M, M | 480k | 12% | 710 | |
+| 3.1.4 observability (+ copy table, golden tests, log-capture filter, CSS/e2e) | 4 | S, S, S, XS | 220k | 12% | 326 | |
 | 3.2.1 claim slot (no refund) | 1 | S | 50k | 12% | 74 | |
 | 3.2.2 pinned, cancellable writer | 2 | M, XS | 145k | 12% | 215 | `make test-delivery-guards` CI queue |
-| 3.2.3 nudge branch | 4 | S, M, M, M | 465k (incl. flag + registry) | 12% | 688 | |
+| 3.2.3 nudge branch (+ row annotation, copy consumers) | 4 | S, M, M, M | 480k (incl. flag + registry) | 12% | 710 | |
 | 3.2.4 re-supervise | 2 | M, S | 135k | 12% | 200 | |
 | 3.2.5 guard + stale gate + stop tests | 3 | S, S, M | 215k | 12% | 318 | |
-| 4.1.1 reconcile + gates | 2 | S, S | 115k | 8% | 152 | CI queue |
+| 4.1.1 reconcile + gates (+ web-app/e2e gates, ship checklist) | 2 | S, S | 120k | 8% | 158 | CI queue |
 
-- Task count: 3+3+2+3+1+2+4+3+1+2+4+2+3+2 = **35** (unchanged by repair iteration 4). Raw tokens sum 2,680k; base sum about 3.95M CU (3,946k). With the x1.75 verification multiplier (per-story spec + quality review, `6-verify` layers, CI reruns): about **6.9M CU**, band **Large** (mid-band; repair iteration 4 folded the pre-mortem into existing tasks' ACs, no task added: +100k raw / +145k base CU, about +0.25M after the multiplier, against 6.65M after iteration 3: registry reserve-then-start and lock tests in 3.1.3, the nudge flag, item-status guard, ctx and event rules and extra tests in 3.2.3, seams S1-S5 spread over 2.1.1, 3.1.3, 3.2.2). One line: the tests are the bulk of the size, not the production code.
-- **Critical path (agent waves)**: 14 waves, listed under Dependency Visualization; the serial spine is the shared service file `autonomous_orchestration_service.go` (3.1.1a -> 3.1.2b -> 3.1.3a -> 3.1.3b -> 3.1.4a -> 3.1.4b -> 3.2.3a -> 3.2.3b).
+- Task count: 3+3+2+3+1+2+6+4+1+2+4+2+3+2 = **38** (35 before repair iteration 5: +3.1.3e and +3.1.3f from splitting 3.1.3a and 3.1.3c for sequencing, +3.1.4d for the CSS/e2e change; no scope removed). Raw tokens sum 2,850k; base sum about 4.20M CU (4,197k). With the x1.75 verification multiplier (per-story spec + quality review, `6-verify` layers, CI reruns): about **7.3M CU** (7,345k), band **Large** (mid-band; iteration 5 added +170k raw / +251k base CU, about +0.44M after the multiplier, against 6.9M after iteration 4: the splits, copy table and its golden tests, residual canaries, setter-error test, BUG-079 baseline, the CSS/e2e task; earlier, iteration 4 folded the pre-mortem into existing tasks' ACs, no task added: +100k raw / +145k base CU, about +0.25M after the multiplier, against 6.65M after iteration 3: registry reserve-then-start and lock tests in 3.1.3, the nudge flag, item-status guard, ctx and event rules and extra tests in 3.2.3, seams S1-S5 spread over 2.1.1, 3.1.3, 3.2.2). One line: the tests are the bulk of the size, not the production code.
+- **Critical path (agent waves)**: 15 waves, listed under Dependency Visualization; the serial spine is the shared service file `autonomous_orchestration_service.go` (3.1.1a -> 3.1.2b -> 3.1.3a -> 3.1.3e -> 3.1.3b -> 3.1.4a -> 3.1.4b -> 3.2.3a -> 3.2.3b). The split added one wave (W4 holds 3.1.3e alone) and removed the former W5 same-file collision.
 - **Riskiest first**: 3.1.1 (extraction) and 2.1.1 (driver exits) lead their lanes; 3.2.2b's pin test is run as soon as the writer exists, not at the end.
 - **Overrun checkpoint**: if cumulative actual CU on completed stories exceeds 1.25x their table value (x1.75), pause and report the delta and its cause.
-- **Wall-clock blockers (owners)**: (1) flipping `autonomous_stall_nudge_enabled` live (it ships OFF; `diagnose_nudge_enabled` is already true in the live config, so this flag is the real switch) after reading the `nudge_outcome=disabled` count in the `stopped` log line, then the 14-day soak review against the Observability Plan's exit criteria: tstapler. (2) Owner veto/confirmation of the defaults under Unresolved Questions (working -> Resupervise, `max_turns` -> Respawn, boot re-adoption linked-only scope; the re-adoption default is decided: OFF): tstapler. (3) First post-deploy boot: read the `readopt candidate` log lines once (the default is OFF, so this is a dry-run: read it before flipping the flag on); also note the re-adopted driver's first turn can inject into a quiet-but-mid-tool-call pane (review M4): tstapler. (4) CI queue for `test-delivery-guards` and the complexity gate: none.
+- **Wall-clock blockers (owners)**: (1) flipping `autonomous_stall_nudge_enabled` live (it ships OFF; `diagnose_nudge_enabled` is already true in the live config, so this flag is the real switch) after reading the `nudge_outcome=disabled` count in the `stopped` log line, then the 14-day soak review against the Observability Plan's success target and delete thresholds; the flip decision is due merge + 7 d and the sunset merge + 30 d (Observability Plan, "Review dates"): tstapler. (2) Owner veto/confirmation of the defaults under Unresolved Questions (working -> Resupervise, `max_turns` -> Respawn, boot re-adoption linked-only scope; the re-adoption default is decided: OFF): tstapler. (3) First post-deploy boot: read the `readopt candidate` log lines once (the default is OFF, so this is a dry-run: read it before flipping the flag on); also note the re-adopted driver's first turn can inject into a quiet-but-mid-tool-call pane (review M4): tstapler. (4) CI queue for `test-delivery-guards` and the complexity gate: none.

@@ -42,6 +42,31 @@ spawns a fresh one without first looking at what the session was doing.
   of respawned, bounded by the existing nudge cap so it cannot loop.
 - R6 (AC4): Table-driven unit tests cover classification and the decision for every state.
 
+## Falsifiable hypothesis and success target
+
+Added by the triad repair; the plan's Observability Plan holds the measurement, Risk Control the
+risky assumptions and delete thresholds.
+
+- **Hypothesis (falsifiable).** A meaningful share of autonomous work-session stalls happen with
+  the pane idle at its prompt, and a bounded fixed-text nudge resolves them without a respawn. The
+  evidence today is mechanism-level only (the code path exists; local logs hold 21 startup timeouts,
+  all from `test-*` sessions), so production frequency is UNKNOWN and this is a hypothesis, not a
+  measured problem.
+- **Success target (INFERRED numbers; no pre-change baseline exists).** Over a 14-day soak after
+  the in-process nudge is enabled: (1) **nudge resolution rate** >= 50%, i.e. of work stalls at
+  `idle_prompt` where a nudge was eligible, at least half end with the nudge delivered and no
+  respawn for the same item within 24 h; (2) **re-supervise completion rate** >= 50%, i.e. at least
+  half of re-attached working sessions do not reach the re-attach cap; (3) every stall carries a
+  typed reason (AC2), so the share with `stop_reason=""` is 0.
+- **Risky assumption.** That a fixed "call request_review" nudge unsticks idle-at-prompt sessions
+  often enough to be worth a write surface. **Delete threshold:** a resolution rate below 30% over
+  >= 10 eligible stalls, or fewer than 10 eligible stalls in two consecutive 14-day windows, means
+  the Nudge branch is removed; the typed reasons, snapshot and redaction stay.
+- **Dates.** Flip decision merge + 7 days; soak review flip + 14 days; sunset merge + 30 days (an
+  unflipped nudge flag at sunset opens a delete-or-enable decision).
+- **Out of scope here, tracked.** Stale-work detector and health-checker restarts (AC3 scope
+  decision): follow-up item spec in `implementation/plan.md` "Follow-up backlog item".
+
 ## Non-goals / constraints
 
 - No new proto fields unless needed for exposure; prefer extending existing strings

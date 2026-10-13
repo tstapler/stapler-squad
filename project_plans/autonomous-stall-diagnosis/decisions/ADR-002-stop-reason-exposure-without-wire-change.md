@@ -31,7 +31,9 @@ excluding `gen/`, 2026-10-13).
 
 ## Decision
 
-Option C; no proto, ent or web-app change in this project.
+Option C; no proto or ent change, no new component, RPC or field. The only web-app change is one
+CSS-only rule (`overflow-wrap: anywhere` on `StuckItemDetail`'s `.value`, plan Task 3.1.4d) so a long
+unbroken tail token cannot overflow the card at 360 px.
 
 - `cancelled_external` maps to outcome `""` (not `"stuck"`): an externally requested stop is not
   a stall, and it removes the false "Stuck" badge on paused/deleted/review-handoff sessions.
@@ -43,6 +45,17 @@ Option C; no proto, ent or web-app change in this project.
   shows `stuck` for a stop that is being recovered in place.
 - `AutonomousStopReason` is typed `domain.StopReason` end to end (driver outcome, setter,
   snapshot).
+- The row `context` leads with a plain-language sentence composed from one typed copy table (what
+  stopped, what the session was doing, what the system did, whether the operator must act), then
+  ` | ` and the `key=value` detail (`stop_reason`, `state`, `action`, `nudge=n/cap`, ...). The UI
+  renders the string verbatim, so the lead sentence is what makes the existing "Why:" line readable
+  without a component change. Codes appear only after the separator and in the log line.
+- The row also records the **chosen action** (`nudged|respawned|resupervised|none`, with the
+  transient `nudging` between plan time and the end of a nudge). A successful nudge **annotates**
+  the open row (`action=nudged nudge=n/cap`) and does not resolve it: the row holds the lifetime
+  nudge counter the diagnose agent and the claim key on, and the existing DONE path closes it. This
+  is a design choice with a cost: the item can still appear in the Unfinished tab after a
+  successful nudge, with a lead sentence saying no action is needed.
 - The pane tail is a *sink-bound* value: it goes to exactly one sink (the stuck row context),
   sanitized there; never to the log line or the push notification body. The tail is untrusted
   text (it can originate in a page the agent read): `StuckItemDetail.tsx` renders it as a React
@@ -59,6 +72,18 @@ Option C; no proto, ent or web-app change in this project.
 
 No new RPC or proto field. AC2 is verified through the stuck-row context (RPC) and the log line;
 the in-memory field is a test seam, not an operator surface.
+
+### Accepted: no operator cue for Resupervise or for cancels (UX G3)
+
+| Stop | Why no cue is added | What bounds the invisibility |
+|------|---------------------|------------------------------|
+| Resupervise (a working pane re-attached) | A notification or row per re-attach is noise for a session that is working; adding a stuck row would also put a recovering session in the Unfinished tab, the opposite of the goal | At most 3 re-attaches, about 16 minutes in total; the chain ends in a later stop (typed row) or the cap-reached row that carries `last_stop_reason`; every stop logs `resupervise=n/3` |
+| `cancelled_external` (operator stop, delete, toggle-off, review hand-off) | The operator caused it; the instance shows outcome `""` instead of a false "Stuck" badge | n/a |
+| `cancelled_shutdown` | A graceful restart is not a stall; flag ON keeps the mode for re-adoption, flag OFF leaves only an in-memory badge in the exiting process (plan Risk Control) | Process lifetime |
+
+If the soak shows operators asking "is it still being supervised?", the smallest cue is
+`resupervise=n/3` in the session card's existing autonomous tooltip, which needs one proto field
+(option B above); not planned.
 
 ## Consequences
 
