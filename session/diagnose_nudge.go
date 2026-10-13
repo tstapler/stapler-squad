@@ -177,3 +177,13 @@ func (s *Storage) RecordDiagnoseNudgeAttempt(ctx context.Context, itemID string,
 	}
 	return row.DiagnoseNudgeCount >= maxAttempts, nil
 }
+
+// DiagnoseNudgeCount reports how many nudge slots the open (itemID, reason) row
+// has used; 0 when there is no open row. Read-only, for operator-facing n/cap.
+func (s *Storage) DiagnoseNudgeCount(ctx context.Context, itemID string, reason domain.StuckReason) (int, error) {
+	row, ok, err := s.findOpenStuckStateForReason(ctx, itemID, reason)
+	if err != nil || !ok {
+		return 0, err
+	}
+	return int(row.DiagnoseNudgeCount), nil
+}

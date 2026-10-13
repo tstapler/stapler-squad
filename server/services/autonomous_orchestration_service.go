@@ -69,6 +69,14 @@ type AutonomousOrchestrationService struct {
 	// readoptionEnabled reads the autonomous_driver_readoption flag at the instant
 	// of a shutdown stop. Nil means OFF, the shipped default.
 	readoptionEnabled func() bool
+
+	// Stall nudge seams; nil values fall back to the config-backed / real ones.
+	stallNudger          StallNudger
+	diagnoseNudgeEnabled func() bool
+	stallNudgeEnabled    func() bool
+	restartDriver        func(*session.Instance, time.Duration) error
+	// recoveries holds the cancel of each in-flight stall recovery, by session title (guarded by mu).
+	recoveries map[string]context.CancelFunc
 }
 
 // SetReadoptionEnabled wires the live read of the autonomous_driver_readoption flag.
@@ -174,6 +182,7 @@ func (a *AutonomousOrchestrationService) stopAndDeregisterDriver(sessionTitle st
 // Used by MCP handlers as a belt-and-suspenders stop after task completion.
 // Satisfies mcp.ReviewCompletionSignaler.
 func (a *AutonomousOrchestrationService) StopDriverForSession(sessionTitle string) {
+	a.cancelRecovery(sessionTitle)
 	a.stopAndDeregisterDriver(sessionTitle)
 }
 
@@ -246,14 +255,24 @@ func (a *AutonomousOrchestrationService) StartAutonomousDriverWithTimeout(inst *
 		log.Warn("[AutonomousOrchestrationService] StartAutonomousDriverWithTimeout: pool is nil", "session", inst.Title)
 		return
 	}
+	if err := a.startDriver(inst, startupTimeout); err != nil {
+		log.Warn("[AutonomousOrchestrationService] failed to start autonomous driver", "session", inst.Title, "err", err)
+	}
+}
+
+// startDriver builds, starts and registers a driver with the given warm-up.
+func (a *AutonomousOrchestrationService) startDriver(inst *session.Instance, startupTimeout time.Duration) error {
+	if a.pool == nil {
+		return errors.New("headless pool unavailable")
+	}
 	driver := session.NewAutonomousDriver(inst, a.pool, inst.Prompt, config.LoadConfig().AutonomousMaxTurnsOrDefault(), session.WithStartupTimeout(startupTimeout), a.withCostSink(inst))
 	driver.RegisterCompletionCallback(a.onAutonomousDriverComplete)
 	driver.RegisterTurnCallback(a.buildTurnCallback(inst))
 	if err := driver.Start(a.driverCtx()); err != nil {
-		log.Warn("[AutonomousOrchestrationService] failed to start autonomous driver", "session", inst.Title, "err", err)
-		return
+		return err
 	}
 	a.registerDriver(inst.Title, driver)
+	return nil
 }
 
 // Compile-time assertion: AutonomousOrchestrationService satisfies the public surface of
@@ -301,9 +320,18 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 	rec.MaxTurns = int(inst.Snapshot().Autonomous.AutonomousMaxTurns)
 	cancelled := outcome.Class() == domain.OutcomeClassCancelled
 
-	// No in-place recovery exists yet, so the stop is always applied as a plain stop.
-	// A failed write is logged inside applyInstanceStop; bookkeeping carries on.
-	_ = a.applyInstanceStop(inst, domain.StallActionNone, outcome)
+	// The instance write happens once: at plan time for a work stall (so a nudge keeps
+	// AutonomousMode on), otherwise as a plain stop on exit. A failed write is logged
+	// inside applyInstanceStop; bookkeeping carries on.
+	stopApplied := false
+	applyStop := func(action domain.StallAction) {
+		if stopApplied {
+			return
+		}
+		stopApplied = true
+		_ = a.applyInstanceStop(inst, action, outcome)
+	}
+	defer applyStop(domain.StallActionNone)
 
 	// Look up the backlog item linked to this session.
 	// statusTransitionErr is surfaced in the notification below so the operator never sees
@@ -345,10 +373,8 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 					// a MarkStuck/MarkStuckNotified failure is logged but must not block the
 					// role-specific status handling below.
 					rec.ItemID, rec.Role = item.ID, is.Role
-					if outcome.Class() == domain.OutcomeClassStall {
-						if is.Role == session.SessionRoleWork && a.autonomousStuckRespawner != nil {
-							rec.Recovery = stopRecovery{Action: stopActionRespawned}
-						}
+					// The work role marks inside handleWorkStall, once its plan is known.
+					if outcome.Class() == domain.OutcomeClassStall && is.Role != session.SessionRoleWork {
 						if _, markErr := concreteStorage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck,
 							session.BacklogStatus(item.Status), formatStopDetail(rec)); markErr != nil {
 							log.Warn("[AutonomousDriver] onAutonomousDriverComplete: MarkStuck(autonomous_stuck) failed", "item", item.ID, "err", markErr)
@@ -389,7 +415,7 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 							return
 						}
 						if !outcome.Done {
-							stall = a.handleWorkStall(ctx, concreteStorage, item, is, outcome)
+							stall = a.handleWorkStall(ctx, concreteStorage, inst, item, is, &rec, outcome, applyStop)
 						} else {
 							// The orchestrator LLM (session/autonomous_driver.go's
 							// autonomousSystemPrompt) judges "done" purely from a raw
@@ -558,11 +584,13 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 			body += " — " + outcome.PRUrl
 		}
 	default:
-		title = "Autonomous fix stuck"
 		title = stopTitle(rec.Recovery)
 		body = fmt.Sprintf("Session '%s': %s", instanceName, plainSummary(rec.reason(), rec.State, rec.Recovery))
 		notifType = int32(9) // NotificationType_FAILURE
 		important = true     // matters, but not yet a confirmed dead end (backoff/respawn still handles it)
+		if rec.Recovery.Action == stopActionNudged {
+			notifType, important = int32(10), false // NotificationType_INFO: recovered, no action needed
+		}
 	}
 	if statusTransitionErr != nil {
 		// The driver finished (or got stuck), but the backlog item's status update failed.
@@ -609,23 +637,96 @@ type notifyOverride struct {
 	Body     string
 }
 
-// handleWorkStall handles a work-role driver stop that did not finish: it ends the
-// stalled ItemSession and, subject to the remediation backoff, dispatches a respawn.
-// Callers pass the outer Background ctx; every storage write here uses it.
-func (a *AutonomousOrchestrationService) handleWorkStall(ctx context.Context, concreteStorage *session.Storage, item *session.BacklogItemData, is session.ItemSessionSummary, outcome session.AutonomousDriverOutcome) stallResult {
-	// Turn-cap stop with no DONE signal: don't force the item into
-	// review — that reviews known-incomplete work every time, and
-	// (before this fix) a doomed review that itself exits with no
-	// verdict fed straight back into another turn-cap-doomed work
-	// session, with no working circuit breaker to stop it (a live
-	// item bounced 78 times in 24h this way — see
-	// docs/tasks/backlog-feature-improvement.md, 2026-07-19 update).
-	// Leave toStatus unset so the item stays in_progress; the
-	// autonomous_stuck row written above already makes this visible
-	// in the Unfinished tab, and the generic "Autonomous fix stuck"
-	// notification below still fires. Give the item a fresh turn
-	// budget directly instead, gated by the same rework cap the
-	// review-side auto-reopen loop uses.
+// handleWorkStall handles a work-role driver stop that did not finish. It plans the
+// recovery (ADR-001), writes the stuck row, applies the instance stop once, then
+// nudges the idle session or ends the ItemSession and dispatches a respawn.
+// ctx is the outer Background ctx; every storage write here uses it.
+func (a *AutonomousOrchestrationService) handleWorkStall(ctx context.Context, concreteStorage *session.Storage, inst *session.Instance, item *session.BacklogItemData, is session.ItemSessionSummary, rec *stopRecord, outcome session.AutonomousDriverOutcome, applyStop func(domain.StallAction)) stallResult {
+	plan, wouldNudge := a.planStall(ctx, concreteStorage, inst, item, *rec)
+	if plan == domain.StallActionResupervise {
+		plan = domain.StallActionRespawn // re-supervision is not wired; never chosen today
+	}
+	if plan == domain.StallActionNone {
+		cause := noneCauseArchived
+		if !inst.IsArchived() {
+			cause = noneCauseRetryPending
+		}
+		rec.Recovery = stopRecovery{Action: stopActionNone, NoneBecause: cause}
+		log.Info("[AutonomousDriver] stall not recovered", "item", item.ID, "session", inst.Title, "because", string(cause))
+		return stallResult{Action: domain.StallActionNone}
+	}
+	if plan == domain.StallActionRespawn && wouldNudge {
+		rec.Recovery.NudgeOutcome = nudgeOutcomeDisabled
+	}
+
+	// Plan-time row: annotate what is about to happen.
+	switch {
+	case plan == domain.StallActionNudge:
+		rec.Recovery.Action = stopActionNudging
+	case a.autonomousStuckRespawner != nil:
+		rec.Recovery.Action = stopActionRespawned
+	default:
+		rec.Recovery.Action = stopActionNone
+	}
+	applied, markErr := concreteStorage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, session.BacklogStatus(item.Status), formatStopDetail(*rec))
+	switch {
+	case markErr != nil:
+		// Additive, never a gate: fail open to today's respawn body.
+		log.Warn("[AutonomousDriver] MarkStuck(autonomous_stuck) failed", "item", item.ID, "err", markErr)
+		plan = domain.StallActionRespawn
+	case !applied && plan == domain.StallActionNudge:
+		log.Warn("[AutonomousDriver] stall nudge skipped: item status moved on", "item", item.ID)
+		plan = domain.StallActionNone
+		rec.Recovery.Action = stopActionNone
+	default:
+		if _, notifyErr := concreteStorage.MarkStuckNotified(ctx, item.ID, domain.StuckReasonAutonomousStuck); notifyErr != nil {
+			log.Warn("[AutonomousDriver] MarkStuckNotified(autonomous_stuck) failed", "item", item.ID, "err", notifyErr)
+		}
+	}
+	if plan == domain.StallActionNone {
+		applyStop(domain.StallActionNone)
+		return stallResult{Action: domain.StallActionNone}
+	}
+
+	// A nudge keeps AutonomousMode on; the write precedes any effect.
+	applyStop(plan)
+	if plan == domain.StallActionNudge {
+		if !a.nudgeStalledWorkSession(ctx, concreteStorage, inst, item, rec) {
+			a.refreshStuckRow(ctx, concreteStorage, item, *rec)
+			if rec.Recovery.Action == stopActionNudged {
+				a.publishNudged(inst.UUID, inst.Title, item.ID, *rec)
+				return stallResult{Action: domain.StallActionNudge, Notify: notifyOverride{Suppress: true}}
+			}
+			a.stopObservedAsPlain(inst, outcome)
+			return stallResult{Action: domain.StallActionNone}
+		}
+		// Fall back to today's respawn; mode must read off again.
+		a.stopObservedAsPlain(inst, outcome)
+		rec.Recovery.Action = stopActionRespawned
+		if a.autonomousStuckRespawner == nil {
+			rec.Recovery.Action = stopActionNone
+		}
+		a.refreshStuckRow(ctx, concreteStorage, item, *rec)
+	}
+	a.respawnStalledWork(ctx, concreteStorage, item, is, outcome)
+	return stallResult{Action: domain.StallActionRespawn}
+}
+
+// stopObservedAsPlain turns autonomy off after a nudge that did not end in a
+// re-attached driver (no driver is left running for the session).
+func (a *AutonomousOrchestrationService) stopObservedAsPlain(inst *session.Instance, outcome session.AutonomousDriverOutcome) {
+	a.mu.Lock()
+	_, running := a.drivers[inst.Title]
+	a.mu.Unlock()
+	if running {
+		return
+	}
+	_ = a.applyInstanceStop(inst, domain.StallActionRespawn, outcome)
+}
+
+// respawnStalledWork ends the stalled ItemSession and, subject to the
+// remediation backoff, dispatches a respawn (the pre-nudge behaviour, unchanged).
+func (a *AutonomousOrchestrationService) respawnStalledWork(ctx context.Context, concreteStorage *session.Storage, item *session.BacklogItemData, is session.ItemSessionSummary, outcome session.AutonomousDriverOutcome) {
 	log.Info("[AutonomousDriver] work session hit turn cap without DONE; leaving in_progress instead of forcing review", "item", item.ID, "reason", outcome.Reason)
 	// BUG-048's review-role fix (below, in the SessionRoleReview branch)
 	// established that a driver stopping (turn cap, or here a startup
@@ -694,7 +795,6 @@ func (a *AutonomousOrchestrationService) handleWorkStall(ctx context.Context, co
 			log.Info("[AutonomousDriver] autonomous_stuck remediation backoff not yet due, skipping respawn", "item", itemID)
 		}
 	}
-	return stallResult{Action: domain.StallActionRespawn}
 }
 
 // applyInstanceStop records the stop on inst through the actor and publishes the

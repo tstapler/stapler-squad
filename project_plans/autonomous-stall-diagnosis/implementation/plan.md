@@ -1185,3 +1185,13 @@ Cost classes per `~/.claude/skills/sdd/skills/ESTIMATION.md`; bands and weights 
 - **Riskiest first**: 3.1.1 (extraction) and 2.1.1 (driver exits) lead their lanes; 3.2.2b's pin test is run as soon as the writer exists, not at the end.
 - **Overrun checkpoint**: if cumulative actual CU on completed stories exceeds 1.25x their table value (x1.75), pause and report the delta and its cause.
 - **Wall-clock blockers (owners)**: (1) flipping `autonomous_stall_nudge_enabled` live (it ships OFF; `diagnose_nudge_enabled` is already true in the live config, so this flag is the real switch) after reading the `nudge_outcome=disabled` count in the `stopped` log line, then the 14-day soak review against the Observability Plan's success target and delete thresholds; the flip decision is due merge + 7 d and the sunset merge + 30 d (Observability Plan, "Review dates"): tstapler. (2) Owner veto/confirmation of the defaults under Unresolved Questions (working -> Resupervise, `max_turns` -> Respawn, boot re-adoption linked-only scope; the re-adoption default is decided: OFF): tstapler. (3) First post-deploy boot: read the `readopt candidate` log lines once (the default is OFF, so this is a dry-run: read it before flipping the flag on); also note the re-adopted driver's first turn can inject into a quiet-but-mid-tool-call pane (review M4): tstapler. (4) CI queue for `test-delivery-guards` and the complexity gate: none.
+
+## Implementation status (2026-10-13)
+
+Shipped on this branch: Stories 3.1.1–3.1.2, 3.1.3b (class guards), 3.1.4a–c, 3.2.1, 3.2.2, and the nudge half of 3.2.3
+(`autonomous_stall_recovery.go`, tests in `autonomous_stall_recovery_nudge_test.go`).
+
+Not implemented, deliberately outside the item's four acceptance criteria:
+- Story 3.1.3a/c/e/f (registry hardening, boot re-adoption) and 3.1.4d (CSS wrap).
+- Story 3.2.4 (re-supervise): `ResuperviseAllowed` is never true, so a still-working pane takes the Respawn row (decision-table row 6), as before.
+- Story 3.2.5 (`stallRecoveryGuard` stale-detector deferral): a user stop cancels an in-flight nudge via `StopDriverForSession`, but the stale-work detector is not told a recovery is live.

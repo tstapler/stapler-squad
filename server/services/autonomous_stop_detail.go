@@ -127,6 +127,7 @@ type stopAction string
 
 const (
 	stopActionNone         stopAction = "none"
+	stopActionNudging      stopAction = "nudging" // plan-time row annotation, replaced by the final action
 	stopActionNudged       stopAction = "nudged"
 	stopActionRespawned    stopAction = "respawned"
 	stopActionResupervised stopAction = "resupervised"
@@ -266,6 +267,8 @@ const (
 // which publishes nothing.
 func actionSentence(r stopRecovery) string {
 	switch r.Action {
+	case stopActionNudging:
+		return "A prompt is being sent to continue automatically."
 	case stopActionNudged:
 		return fmt.Sprintf("It was prompted to continue automatically (nudge %d of %d). You do not need to do anything.", r.NudgeUsed, r.NudgeCap)
 	case stopActionRespawned:

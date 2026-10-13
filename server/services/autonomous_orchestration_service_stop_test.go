@@ -84,10 +84,12 @@ func TestOnAutonomousDriverComplete_LogsExactlyOneStoppedLine(t *testing.T) {
 		name    string
 		outcome session.AutonomousDriverOutcome
 		level   string
+		nudge   string
 	}{
-		{"stall", stallWith(domain.StopReasonOrchestratorError, 2, "TAILMARKER-xyz"), "level=WARN"},
-		{"done", session.AutonomousDriverOutcome{StopReason: domain.StopReasonDone, Turns: 3, RunID: 7}, "level=INFO"},
-		{"cancelled", session.AutonomousDriverOutcome{StopReason: domain.StopReasonCancelledExternal, RunID: 7}, "level=INFO"},
+		// An idle-prompt stall with the nudge flags off records that the nudge was disabled.
+		{"stall", stallWith(domain.StopReasonOrchestratorError, 2, "TAILMARKER-xyz"), "level=WARN", "nudge_outcome=disabled"},
+		{"done", session.AutonomousDriverOutcome{StopReason: domain.StopReasonDone, Turns: 3, RunID: 7}, "level=INFO", "nudge_outcome=n/a"},
+		{"cancelled", session.AutonomousDriverOutcome{StopReason: domain.StopReasonCancelledExternal, RunID: 7}, "level=INFO", "nudge_outcome=n/a"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -103,9 +105,10 @@ func TestOnAutonomousDriverComplete_LogsExactlyOneStoppedLine(t *testing.T) {
 			line := lines[0]
 			assert.Contains(t, line, tc.level)
 			for _, key := range []string{"item=", "role=work", "run_id=7", "stop_reason=", "state=", "turns=", "max_turns=",
-				"last_activity_age=", "action=", "tail_bytes=", "resupervise=0/3", "nudge_outcome=n/a", "resupervise_cap_hit=false"} {
+				"last_activity_age=", "action=", "tail_bytes=", "resupervise=0/3", "resupervise_cap_hit=false"} {
 				assert.Contains(t, line, key)
 			}
+			assert.Contains(t, line, tc.nudge)
 			assert.NotContains(t, buf.String(), "TAILMARKER-xyz", "the tail is never logged")
 		})
 	}

@@ -31,6 +31,11 @@ type charFixture struct {
 // newUnlinkedCharFixture is an autonomous session with no linked backlog item.
 func newUnlinkedCharFixture(t *testing.T, title string) *charFixture {
 	t.Helper()
+	return newUnlinkedCharFixtureWithStatus(t, title, session.Paused)
+}
+
+func newUnlinkedCharFixtureWithStatus(t *testing.T, title string, status session.Status) *charFixture {
+	t.Helper()
 	storage := createTestStorage(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -41,7 +46,7 @@ func newUnlinkedCharFixture(t *testing.T, title string) *charFixture {
 
 	inst := &session.Instance{
 		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
-		Status: session.Paused, Program: "claude", AutonomousMode: true,
+		Status: status, Program: "claude", AutonomousMode: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
