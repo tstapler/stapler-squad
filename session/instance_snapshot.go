@@ -31,6 +31,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session/artifacts"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
@@ -70,6 +71,8 @@ type AutonomousModeState struct {
 	AutonomousTurn     int32
 	AutonomousMaxTurns int32
 	AutonomousOutcome  string
+	// AutonomousStopReason is why the last autonomous run ended ("" if none).
+	AutonomousStopReason domain.StopReason
 }
 
 // InstanceSnapshot is a point-in-time, read-safe copy of all mutable Instance
@@ -200,10 +203,11 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		TmuxServerSocket:          i.TmuxServerSocket,
 		Tags:                      append([]string(nil), i.Tags...),
 		Autonomous: AutonomousModeState{
-			AutonomousMode:     i.AutonomousMode,
-			AutonomousTurn:     i.AutonomousTurn,
-			AutonomousMaxTurns: i.AutonomousMaxTurns,
-			AutonomousOutcome:  i.AutonomousOutcome,
+			AutonomousMode:       i.AutonomousMode,
+			AutonomousTurn:       i.AutonomousTurn,
+			AutonomousMaxTurns:   i.AutonomousMaxTurns,
+			AutonomousOutcome:    i.AutonomousOutcome,
+			AutonomousStopReason: i.AutonomousStopReason,
 		},
 		GitHub: GitHubIntegration{
 			GitHubPRNumber:         i.GitHubPRNumber,

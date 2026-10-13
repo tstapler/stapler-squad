@@ -140,7 +140,7 @@ export const typeLabel = style({
   borderRadius: "4px",
   // Fixed white on a darkened fill: primaryText is black in some themes, which the darkening would sink below 4.5:1.
   background: `linear-gradient(rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0.5)), var(--priority-color, ${vars.color.primary})`,
-  color: "#ffffff",
+  color: "white",
   whiteSpace: "nowrap",
   flexShrink: 0,
   selectors: {
@@ -261,7 +261,7 @@ const baseActionButton = style({
 export const viewButton = style([baseActionButton, {
   // Fixed white on a darkened fill: primaryText is black in some themes, which the darkening would sink below 4.5:1.
   background: `linear-gradient(rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0.5)), var(--priority-color, ${vars.color.primary})`,
-  color: "#ffffff",
+  color: "white",
   selectors: {
     "&:hover": {
       filter: "brightness(1.1)",

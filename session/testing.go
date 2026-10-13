@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
+	"github.com/tstapler/stapler-squad/session/ent"
 	entsession "github.com/tstapler/stapler-squad/session/ent/session"
 )
 
@@ -164,4 +166,70 @@ func TestBackdateItemSessionCreatedAt(t *testing.T, storage *Storage, itemSessio
 		return fmt.Errorf("TestBackdateItemSessionCreatedAt: expected to update 1 row, updated %d", n)
 	}
 	return nil
+}
+
+// TestFailItemSessionUpdates makes every later ItemSession update fail, so a
+// service test can reach the "UpdateItemSessionEnded failed" branch that real
+// storage never produces. Callers outside this package cannot import
+// session/ent (depguard no_ent_in_services).
+func TestFailItemSessionUpdates(t *testing.T, storage *Storage) {
+	t.Helper()
+	client := storage.GetEntClient()
+	if client == nil {
+		t.Fatalf("TestFailItemSessionUpdates: storage has no ent client")
+	}
+	client.ItemSession.Use(func(next ent.Mutator) ent.Mutator {
+		return ent.MutateFunc(func(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+			if m.Op().Is(ent.OpUpdate | ent.OpUpdateOne) {
+				return nil, errors.New("injected item session update failure")
+			}
+			return next.Mutate(ctx, m)
+		})
+	})
+}
+
+// TestCountMarkStuckWrites returns a reader of how many MarkStuck writes
+// (stuck-state mutations that set the context column) have happened since the
+// call. MarkStuckNotified, resolve and remediation writes never set context.
+func TestCountMarkStuckWrites(t *testing.T, storage *Storage) func() int64 {
+	t.Helper()
+	client := storage.GetEntClient()
+	if client == nil {
+		t.Fatalf("TestCountMarkStuckWrites: storage has no ent client")
+	}
+	var n atomic.Int64
+	client.BacklogStuckState.Use(func(next ent.Mutator) ent.Mutator {
+		return ent.MutateFunc(func(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+			if _, set := m.Field("context"); set {
+				n.Add(1)
+			}
+			return next.Mutate(ctx, m)
+		})
+	})
+	return n.Load
+}
+
+// TestFailMarkStuckWrites makes every later stuck-state write fail, to reach the
+// MarkStuck error branch real storage never produces from a service test.
+func TestFailMarkStuckWrites(t *testing.T, storage *Storage) {
+	t.Helper()
+	client := storage.GetEntClient()
+	if client == nil {
+		t.Fatalf("TestFailMarkStuckWrites: storage has no ent client")
+	}
+	client.BacklogStuckState.Use(func(next ent.Mutator) ent.Mutator {
+		return ent.MutateFunc(func(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+			if _, set := m.Field("context"); set {
+				return nil, errors.New("injected stuck-state write failure")
+			}
+			return next.Mutate(ctx, m)
+		})
+	})
+}
+
+// TestSetAutonomousDriverRunID gives an unstarted driver a run id, so a service
+// test can tell two registered drivers apart without a headless pool.
+func TestSetAutonomousDriverRunID(t *testing.T, d *AutonomousDriver, id uint64) {
+	t.Helper()
+	d.runID.Store(id)
 }

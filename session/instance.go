@@ -22,6 +22,8 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tokens"
@@ -333,6 +335,9 @@ type Instance struct {
 	AutonomousMaxTurns int32 `json:"autonomous_max_turns,omitempty"`
 	// AutonomousOutcome is the result of the last autonomous run: "", "done", or "stuck".
 	AutonomousOutcome string `json:"autonomous_outcome,omitempty"`
+	// AutonomousStopReason is why the last autonomous run ended. In-memory only
+	// (not persisted, not on the wire); written through the actor setters.
+	AutonomousStopReason domain.StopReason `json:"-"`
 
 	// GitHub integration fields for PR/URL-based session creation
 	// GitHubPRNumber is the PR number if this session was created from a PR URL
@@ -834,6 +839,11 @@ type Instance struct {
 	// this field directly, outside of construction/serialization code.
 	ExecutionTarget ExecutionTarget `json:"-"`
 
+	// GitBackend runs this session's git operations that have migrated to the backend seam.
+	// Set once at construction from InstanceOptions.GitBackend; nil means the default CLI
+	// backend (see gitBackend()). Read via gitBackend().
+	GitBackend backend.Backend `json:"-"`
+
 	// remoteApprovalRelay is the per-session *sshremote.RemoteApprovalRelay
 	// (ssh-remote-workspaces Phase 5, session/sshremote) server/services.
 	// SessionService wires up for a remote session's PermissionRequest hook
@@ -1099,6 +1109,10 @@ type InstanceOptions struct {
 	// Set by server/services/session_service.go's CreateSession mode-specific block when
 	// req.Msg.Remote names a configured remote.
 	ExecutionTarget ExecutionTarget
+
+	// GitBackend is the backend git operations route through (production: the gitwiring
+	// router). nil means the default CLI backend.
+	GitBackend backend.Backend
 }
 
 // ResolveSessionPath expands a leading "~" to the current user's home directory
@@ -1209,6 +1223,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		CLIFlags:             opts.CLIFlags,
 		ExtraArgs:            opts.ExtraArgs,
 		ExecutionTarget:      opts.ExecutionTarget,
+		GitBackend:           opts.GitBackend,
 		// Restart-from-session lineage (Story 2.3.1)
 		RestartedFromSessionID: opts.RestartedFromSessionID,
 	}

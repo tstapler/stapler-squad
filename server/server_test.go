@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,11 +25,10 @@ import (
 )
 
 // syncBuffer wraps bytes.Buffer with a mutex so it's safe to read via
-// String() from the test goroutine while background goroutines the server
-// under test spawned (SessionRetentionSweeper, MemoryPressureNotifier, etc.)
-// are still writing to it via the default slog logger — a plain
-// bytes.Buffer is not safe for that, and Server.Shutdown() does not
-// guarantee every such goroutine has exited by the time it returns.
+// String() from the test goroutine while background goroutines (the server's
+// own until Shutdown() joins them, and BuildRuntimeDeps' process-lifetime
+// ones always) write to it via the default slog logger — a plain
+// bytes.Buffer is not safe for that.
 type syncBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -46,35 +44,6 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
-}
-
-// tempDirTolerantOfStragglers behaves like t.TempDir() but replaces its
-// cleanup with a few retries on ENOTEMPTY. wireDepsIntoServer starts several
-// background goroutines (SessionRetentionSweeper, StaleSessionNotifier,
-// MemoryPressureNotifier, the hibernation sweeper) as bare `go X.Start(ctx)`
-// calls never registered with Server.backgroundTasksWG, so Shutdown() cannot
-// guarantee they've stopped touching files under this directory before it
-// returns — a pre-existing gap (backgroundTasksWG's own doc comment lists
-// only "fork-pressure logger, zombie watcher, zombie reaper" as joined), not
-// something introduced by the Jules tests using this helper. Properly fixing
-// it means auditing and rewiring four unrelated services' shutdown
-// registration, out of scope here — this local retry keeps that pre-existing
-// gap from flaking these two Jules-specific tests.
-func tempDirTolerantOfStragglers(t *testing.T) string {
-	t.Helper()
-	dir, err := os.MkdirTemp("", strings.ReplaceAll(t.Name(), "/", "_"))
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		var lastErr error
-		_ = wait.WaitForCondition(func() bool {
-			lastErr = os.RemoveAll(dir)
-			return lastErr == nil
-		}, wait.WaitConfig{Timeout: 100 * time.Millisecond, PollInterval: 20 * time.Millisecond, Description: "temp dir removal"})
-		if lastErr != nil {
-			t.Logf("tempDirTolerantOfStragglers: cleanup of %s did not converge: %v", dir, lastErr)
-		}
-	})
-	return dir
 }
 
 // captureDefaultLog swaps slog's default handler for one that writes to a
@@ -639,7 +608,7 @@ func Test_runGoleakTolerant_should_RepanicUnrelatedPanics(t *testing.T) {
 // never log a "jules poll tick" line (which only the poller's own tick()
 // loop, never started, could produce).
 func TestServer_should_LeaveJulesSessionPollerNil_When_JulesConfigDisabled(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", tempDirTolerantOfStragglers(t))
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	buf := captureDefaultLog(t)
 
 	deps, err := BuildDependencies()
@@ -663,7 +632,7 @@ func TestServer_should_LeaveJulesSessionPollerNil_When_JulesConfigDisabled(t *te
 // startup, "JulesSessionPoller started" must be logged beside the existing
 // "WorktreePRPoller started" line (server.go's wireDepsIntoServer).
 func TestServer_should_LogJulesSessionPollerStarted_When_JulesEnabledAndKeyResolvable(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", tempDirTolerantOfStragglers(t))
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	keyring.MockInit()
 	require.NoError(t, jules.NewKeyringTokenSource().SetJulesAPIKey(context.Background(), "AIzaSyD-TEST"))
 

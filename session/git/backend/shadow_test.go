@@ -50,6 +50,22 @@ func TestShadowReturnsCLIResultAndCountsRealMismatch(t *testing.T) {
 	}
 }
 
+func TestShadowRecordsOneDurationSamplePerSidePerCall(t *testing.T) {
+	g := newRig(t, shadowDiff)
+	g.cli.diff = diffReturning("same")
+	g.gg.diff = diffReturning("same")
+	for i := 0; i < 3; i++ {
+		if _, err := g.r.Diff(ctxBG, localRepo, backend.DiffSpec{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, impl := range []backend.Implementation{backend.ImplCLI, backend.ImplGoGit} {
+		if n := g.m.histogramCount(backend.MetricShadowDurationMS, "implementation", string(impl)); n != 3 {
+			t.Fatalf("%s duration samples = %d, want 3 (one per shadowed call)", impl, n)
+		}
+	}
+}
+
 func TestShadowMismatchRecordIsRedactedAndPathFree(t *testing.T) {
 	g := newRig(t, shadowDiff)
 	secret := "https://x-access-token:ghp_abc123SECRET@github.com/o/r.git"
@@ -354,5 +370,20 @@ func TestShadowPinThatBecomesUnreadableIsNotTreatedAsMovement(t *testing.T) {
 	_, _ = g.r.Diff(ctxBG, localRepo, backend.DiffSpec{})
 	if g.mismatches(backend.OpDiff, backend.MismatchReal) != 1 {
 		t.Fatal("an unreadable pin must not downgrade a persistent disagreement to racy")
+	}
+}
+
+func TestFileMismatchRecorderStopsWritingAtItsCap(t *testing.T) {
+	dir := t.TempDir()
+	rec := &backend.FileMismatchRecorder{Dir: dir}
+	for i := 0; i < 250; i++ {
+		rec.Record(backend.MismatchRecord{Operation: backend.OpDiff, Class: backend.MismatchReal})
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 200 {
+		t.Fatalf("wrote %d records, want the cap of 200", len(entries))
 	}
 }

@@ -239,6 +239,12 @@ func (p *PRStatusPoller) Start(ctx context.Context) {
 	log.Info("PR status poller started", "interval", p.config.PollInterval, "concurrency", p.config.ConcurrentFetches)
 }
 
+// Wait blocks until the poll loop launched by Start has exited. Unlike Stop it
+// does not cancel anything; call it after cancelling Start's ctx.
+func (p *PRStatusPoller) Wait() {
+	p.wg.Wait()
+}
+
 // Stop gracefully shuts down the poller and waits for in-flight requests.
 func (p *PRStatusPoller) Stop() {
 	p.mu.Lock()

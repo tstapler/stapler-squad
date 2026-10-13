@@ -37,6 +37,10 @@ func (r Remote) Dir() string { return string(r.Path) }
 // pins git's messages to English, which error classification (ErrUnborn, ErrNotARepo, ...) reads;
 // GIT_TERMINAL_PROMPT=0 makes a missing credential fail instead of blocking on a prompt. The
 // caller appends it to its base environment. A fresh slice is returned each call.
+//
+// Who applies it: the local runner in session/gitwiring sets it on every git process; the cli
+// backend prefixes `env <these> git` onto Remote invocations, because an SSH session cannot carry
+// environment. A custom Runner that is handed a bare `git` therefore must supply it itself.
 func RequiredGitEnv() []string {
 	return []string{"LC_ALL=C", "GIT_TERMINAL_PROMPT=0"}
 }
@@ -45,7 +49,8 @@ func RequiredGitEnv() []string {
 // It is byte-for-byte the Run method of session/tmux.CommandRunner, so any tmux.CommandRunner
 // satisfies it without an adapter (asserted in session/gitwiring, never here).
 //
-// Contract: the process runs with RequiredGitEnv; on a non-zero exit the returned error is (or
+// Contract: a `git` process runs with RequiredGitEnv (for Remote locations the cli backend asks for
+// it on the command line, see RequiredGitEnv); on a non-zero exit the returned error is (or
 // wraps) the process exit status, exposing ExitCode() int, so exit-status checks work; the
 // output carries git's stderr text, which classification reads.
 type Runner interface {

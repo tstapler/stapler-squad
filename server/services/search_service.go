@@ -5,16 +5,16 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/session/vc"
 	"github.com/tstapler/stapler-squad/telemetry"
@@ -138,14 +138,11 @@ func (ss *SearchService) cachedBranch(ctx context.Context, projectPath string) s
 
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	out, err := safeexec.CommandContext(ctx, "git", "-C", projectPath, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	// An error (including a detached or unborn HEAD) leaves branch empty: nothing useful to display.
+	name, err := gitprovider.Backend().CurrentBranch(ctx, backend.Local{Root: backend.RepoRoot(projectPath)})
 	branch := ""
 	if err == nil {
-		branch = strings.TrimSpace(string(out))
-		if branch == "HEAD" {
-			branch = "" // detached HEAD — not useful to display
-		}
+		branch = string(name)
 	}
 
 	ss.branchCache.Store(projectPath, &historyBranchEntry{branch: branch, expiresAt: now.Add(ss.branchCacheTTL)})

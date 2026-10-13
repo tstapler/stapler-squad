@@ -413,12 +413,17 @@ export interface BacklogItemInput {
   prNumber?: number;
 }
 
+/** Mirrors the server's maxKnownRepoPaths (server/services/backlog_service_intent.go); the server is authoritative. */
+const MAX_KNOWN_REPO_PATHS = 20;
+
 /** LLM-structured read of a free-text message — see ParseBacklogItemIntent. */
 export interface ParsedBacklogItemDraft {
   title: string;
   description: string;
   acceptanceCriteria: string[];
   confidence: number;
+  /** Exact entry from the known-repo list sent with the request, or "" when none matched. */
+  suggestedRepoPath: string;
 }
 
 export interface ListBacklogItemsFilter {
@@ -794,7 +799,7 @@ interface UseBacklogServiceReturn {
    * set response.error) so the caller can fall back to raw-text creation via
    * createBacklogItemFromChat — never throws.
    */
-  parseBacklogItemIntent: (message: string) => Promise<ParsedBacklogItemDraft | null>;
+  parseBacklogItemIntent: (message: string, knownRepoPaths?: string[]) => Promise<ParsedBacklogItemDraft | null>;
   importGitHubIssue: (issueUrl: string, options?: ImportGitHubIssueOptions) => Promise<ImportGitHubIssueResult | null>;
   /** Null on any RPC failure: the claim banner degrades to nothing. */
   checkCrossHostClaim: (externalUrl: string, options?: { localOnly?: boolean }) => Promise<CrossHostClaimStatus | null>;
@@ -981,18 +986,21 @@ export function useBacklogService(): UseBacklogServiceReturn {
 
   const parseBacklogItemIntent = useCallback(
     // repo_path is intentionally omitted: the omnibar has no "current repo"
-    // context available before parsing, and the request field is optional
-    // (see its proto doc) — the LLM parses from message text alone.
-    async (message: string): Promise<ParsedBacklogItemDraft | null> => {
+    // context available before parsing.
+    async (message: string, knownRepoPaths: string[] = []): Promise<ParsedBacklogItemDraft | null> => {
       if (!clientRef.current) return null;
       try {
-        const resp = await clientRef.current.parseBacklogItemIntent({ message });
+        const resp = await clientRef.current.parseBacklogItemIntent({
+          message,
+          knownRepoPaths: knownRepoPaths.slice(0, MAX_KNOWN_REPO_PATHS),
+        });
         if (resp.error || !resp.draft) return null;
         return {
           title: resp.draft.title,
           description: resp.draft.description,
           acceptanceCriteria: resp.draft.acceptanceCriteria,
           confidence: resp.draft.confidence,
+          suggestedRepoPath: resp.draft.suggestedRepoPath ?? "",
         };
       } catch (err) {
         console.error("[useBacklogService] parseBacklogItemIntent:", err);

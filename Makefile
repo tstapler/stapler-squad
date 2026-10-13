@@ -95,6 +95,10 @@ help: ## Show this help message
 	@echo "================================="
 	@grep -E '^[a-zA-Z0-9._-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
+.PHONY: git-soak-status
+git-soak-status: ## Print the git backend shadow-soak counters and flip verdict (running service; exit 1 = not ready)
+	@scripts/git-soak-status.sh
+
 .PHONY: ports
 ports: ## Show reserved manual dev port block (see CLAUDE.md's "Manual dev port block")
 	@base=$$(python3 -c "import zlib; print(61000 + zlib.crc32(b'stapler-squad') % 4525)" 2>/dev/null || echo 62871); \
@@ -705,7 +709,7 @@ test-integration: ensure-tools proto-gen $(GOTESTSUM_BIN) ## Run integration tes
 # no generated code, so CI calls it directly.
 .PHONY: test-oracle
 test-oracle: $(GOTESTSUM_BIN) ## Run the gitoracle-tagged differential tests against real git
-	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags gitoracle -timeout 10m ./testutil/gitoracle/...
+	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags gitoracle -timeout 10m ./testutil/gitoracle/... ./session/git/backend/gogit/... ./session/gitwiring/... ./session/git/native/gitconfig/... ./session/git/native/capability/...
 
 # Type-based delivery-gate and terminal-write guards (Story 2.6 / Story 5.1d).
 # Runs only the Test* funcs declared in files tagged `//go:build sinkguard`

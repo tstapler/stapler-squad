@@ -12,11 +12,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
@@ -1819,15 +1820,19 @@ func (l *BacklogLifecycleListener) resolveLatestWorkCommit(ctx context.Context, 
 	if wt.BranchName == "" {
 		return ""
 	}
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "--verify", wt.BranchName)
-	cmd.Dir = repoPath
-	out, revErr := cmd.Output()
+	sha, revErr := ResolveBranchTip(ctx, repoPath, wt.BranchName)
 	if revErr != nil {
 		log.Warn("[BacklogLifecycle] resolveLatestWorkCommit: rev-parse failed", "branch", wt.BranchName, "repo_path", repoPath, "error", revErr)
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return sha
+}
+
+// ResolveBranchTip resolves branch to its commit SHA in repoPath. Worktrees share one ref
+// store, so repoPath may be any checkout of the repo. An absent branch is an error.
+func ResolveBranchTip(ctx context.Context, repoPath, branch string) (string, error) {
+	sha, err := gitprovider.Backend().ResolveRef(ctx, backend.Local{Root: backend.RepoRoot(repoPath)}, backend.RefName(branch))
+	return string(sha), err
 }
 
 // transitionBouncingItemToDone moves an item reconcileBouncingItems has

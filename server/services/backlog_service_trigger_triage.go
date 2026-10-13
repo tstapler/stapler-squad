@@ -509,7 +509,7 @@ func (s *BacklogService) TriggerTriage(
 		// already expired by the time these persistence calls run below — every
 		// successful triage would silently fail to ever mark the item ready. This
 		// was a live, 100%-reproducible bug: see the backlog cross-platform audit.
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), s.triageCleanupTimeout)
+		cleanupCtx, cleanupCancel := s.newTriageCleanupContext()
 		defer cleanupCancel()
 
 		// Persisted unconditionally, before the success/failure branches below: the
@@ -622,7 +622,7 @@ func (s *BacklogService) TriggerTriage(
 		// -race -count=5 when those git ops alone ate its budget. See
 		// TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession's
 		// "Second root cause" comment for the full history.
-		persistCtx, persistCancel := context.WithTimeout(context.Background(), s.triageCleanupTimeout)
+		persistCtx, persistCancel := s.newTriageCleanupContext()
 		defer persistCancel()
 
 		payloadJSON, marshalErr := json.Marshal(result)

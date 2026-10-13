@@ -149,6 +149,34 @@ Key to evidence labels: VERIFIED means the spike ran a command or test and recor
 
 Both are **OPEN**. Neither can be satisfied by this document. See `recalibration.md` section 5 for the decisions Tyler must make and the defaults the plan will use if he is silent. G7a is confirm-only: the evidence supports an empty pinned fork F0 (see `fork-necessity.md`), with one unresolved tension (status and diff in-process, below) that Tyler should see before confirming.
 
+## Epic 1.2: real fork and `replace` wiring (2026-10-12)
+
+**Story 1.2.0 confirmation (O-4).** Tyler: "I approve creating the public fork" (2026-10-12). Confirmed owner/name: `tstapler/go-git`. Fork created with `gh repo fork go-git/go-git --clone=false --fork-name go-git`; `gh repo view tstapler/go-git --json visibility,isFork` reported `PUBLIC`, `isFork: true`, parent `go-git/go-git`.
+
+**Story 1.2.1 fork hygiene.**
+- Branch `ssq/v5`; tag `v5.19.2-ssq.0` = `3eeb238da61eb9c7a324f3ee04f990ce89175642` (identical to upstream `v5.19.2`, zero patches); tag `v5.19.3-ssq.1` = `98880159089d78e93878a62434c5f8cff9fd737f` (upstream `v5.19.3` plus two fork-only files: `.github/workflows/ssq-ci.yml`, `README-SSQ.md`; `git diff --stat v5.19.3 HEAD` shows only those two). Local `upstream` remote = `go-git/go-git`. This work pushed only `ssq/v5` and the two tags (the other branches and tags on the fork were copied by GitHub's fork creation).
+- CI on the fork after the push: `ssq-ci` (`go test ./...`) conclusion `success`; the inherited upstream `Git Compatibility` workflow also `success`.
+- The fork's `go.mod` keeps the upstream `module github.com/go-git/go-git/v5` line.
+
+**Story 1.2.2 wiring.** Root `go.mod` gains `replace github.com/go-git/go-git/v5 => github.com/tstapler/go-git/v5 v5.19.3-ssq.1`. `go mod tidy`, `go mod verify` ("all modules verified"), `go build ./...` and `go test ./session/git/...` pass; after review, the `require` line was bumped to `v5.19.3` to match the fork base; `go list -m github.com/go-git/go-git/v5` prints `v5.19.3 => github.com/tstapler/go-git/v5 v5.19.3-ssq.1` (one resolved copy; `go mod graph` still lists the pre-replace version nodes v5.17.1 and v5.19.2, both mapped to the replacement). Tidy also raised go-billy v5.9.0 to v5.9.2, sha1cd v0.6.0 to v0.7.0 and x/crypto v0.55.0 to v0.56.0 (and dropped an unused indirect cpuid) because those are `v5.19.3`'s requirements. `go.sum` records the fork hashes, checked against sum.golang.org (no `GOPRIVATE`/`GONOSUMDB`). `tools/lint/go.mod` has no go-git reference, so no replace there.
+- Task 1.2.2b: no workflow or `.goreleaser.yaml` mentions `GOPRIVATE`, a token or go-git; none was added. Whether the CI jobs fetch the public module is confirmed by this PR's own CI run (see PR).
+- G1 cleanup debt closed: the fake `v5.19.2-ssq.0`/`v5.19.3-ssq.0` zips in `GOMODCACHE` were not removable by the agent (removal blocked by a safety check); the real tags downloaded and verified without a mismatch, so the stale entries were either overwritten or are not consulted. Backlog item 1 remains for tidiness.
+- Note: one `FAIL` line appeared in the log of a first `go test ./session/git/...` attempt that overlapped a second run; the failing test/package was not captured and the cause is unknown. Two clean uncached reruns (the second a full `go test -count=1 ./session/git/...` after the `require` bump, all 8 packages `ok`) passed; the flake is not reproduced.
+
+**Story 1.2.3 rollback proof.** Deleted the `replace` line, `go get github.com/go-git/go-git/v5@v5.19.3`, `go mod tidy`, `go mod verify`, `go list -m` printed `github.com/go-git/go-git/v5 v5.19.3` (no `=>`), `go build ./...` and `go test -count=1 ./session/git/...` all passed. `make ci` was not run locally for this proof; the PR's CI covers the replaced state, and the full-suite rollback run is left to the AC for each future fork tag. Procedure: `docs/how-to/roll-back-go-git-fork.md`.
+
+## Epic 2.1: `refs` shadow soak start procedure (Story 2.1.3, 2026-10-12)
+
+**Wiring.** `session/gitwiring` now attaches the in-process backend (`NewGoGit`) and the capability probe (`NewCapabilityProbe`'s resolver, run once) to the production router only when some cohort is not `cli`; an unconfigured install builds neither and runs no discovery spawn (`TestUnconfiguredRouterSpawnsExactlyAsBeforeAndBuildsNoShadowMachinery`). Shadow returns the CLI answer; the in-process side runs in the same call and spawns nothing (`TestShadowSpawnsOnlyTheCLIOncePerCall`).
+
+**Start.** Set `{"git_backend_cohorts": {"refs": "shadow"}}` in `config.json` and restart. `STAPLER_SQUAD_GIT_BACKEND` can only force `cli`. Runbook: `docs/how-to/flip-git-backend-cohort.md`.
+
+**Read.** `make git-soak-status` (or `GET /actuator/git-backend[?format=text]`). Counters persist in `<config dir>/git-backend-soak.json` across restarts; the 7-day window starts at the first start with a shadowed cohort.
+
+**Day-one checklist (first 24 h).** `detect_error` ratio below 1%, list nonzero sub-reasons, pause and fix the resolver at or above the ceiling. Then the mechanical criteria: 7 days, 500 or more calls per operation, zero `real`/`false_clean`, go-git p50 not above CLI p50, G8 outcome B above. Nothing flips automatically; `gogit` is set by hand.
+
+**Soak started:** UNRECORDED. Fill in the date and instance when the maintainer sets `refs=shadow`.
+
 ## Backlog list (planning freeze: findings that do not edit plan.md)
 
 1. Remove the fake `ssq` go-git zips from `GOMODCACHE` (G1 cleanup debt).

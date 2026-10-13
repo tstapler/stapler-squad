@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -18,9 +17,10 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/git/native"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -34,12 +34,11 @@ func FetchBranch(repoPath, branchName string) error {
 	// name, a documented git argument-injection vector (same class as
 	// CVE-2017-1000117) when branchName originates from caller input, as it
 	// does via BacklogItem.BaseBranch (session.ResolveExplicitBranchSHA).
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	cmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "fetch", "origin", "--", branchName)
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Errorf("failed to fetch branch: %s", string(exitErr.Stderr))
-		}
+	if branchName == "" {
+		return fmt.Errorf("failed to fetch branch: branch name is empty")
+	}
+	loc := backend.Local{Root: backend.RepoRoot(repoPath)}
+	if err := gitprovider.Backend().Fetch(ctx, loc, backend.FetchRequest{Remote: "origin", Branch: backend.BranchName(branchName)}); err != nil {
 		return fmt.Errorf("failed to fetch branch: %w", err)
 	}
 	return nil
@@ -187,42 +186,40 @@ func FormatAmbientDivergenceWarning(repoPath, defaultBranch, ambientBranch strin
 // order and baseSHA == "" (err == nil) unborn-repo convention, but through
 // runner.Run over SSH instead of go-git against the local filesystem.
 func ResolveRemoteWorktreeBaseCommit(ctx context.Context, runner tmux.CommandRunner, repoPath string) (defaultBranch, baseSHA string, err error) {
+	return resolveRemoteWorktreeBaseCommit(ctx, gitprovider.Backend(), gitprovider.Backend(), runner, repoPath)
+}
+
+// resolveRemoteWorktreeBaseCommit is ResolveRemoteWorktreeBaseCommit with the ref reads going
+// through refs and the fetch through network, both against runner's host.
+func resolveRemoteWorktreeBaseCommit(ctx context.Context, refs, network backend.Backend, runner tmux.CommandRunner, repoPath string) (defaultBranch, baseSHA string, err error) {
 	var errs []error
+	loc := remoteLocation(runner, "", repoPath)
 	for _, candidate := range CandidateDefaultBranches {
-		//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-		out, fetchErr := runner.Run(ctx, repoPath, "git", "fetch", "origin", "--", candidate)
+		fetchErr := network.Fetch(ctx, loc, backend.FetchRequest{Remote: "origin", Branch: backend.BranchName(candidate)})
 		if fetchErr != nil {
-			errs = append(errs, fmt.Errorf("fetch %s: %s: %w", candidate, strings.TrimSpace(string(out)), fetchErr))
+			errs = append(errs, fmt.Errorf("fetch %s: %w", candidate, fetchErr))
 			continue
 		}
-		//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-		out, revErr := runner.Run(ctx, repoPath, "git", "rev-parse", "origin/"+candidate)
+		sha, revErr := refs.ResolveRef(ctx, loc, backend.RefName("origin/"+candidate))
 		if revErr != nil {
-			errs = append(errs, fmt.Errorf("rev-parse origin/%s: %s: %w", candidate, strings.TrimSpace(string(out)), revErr))
+			errs = append(errs, fmt.Errorf("rev-parse origin/%s: %w", candidate, revErr))
 			continue
 		}
-		if sha := strings.TrimSpace(string(out)); sha != "" {
-			return candidate, sha, nil
+		if sha != "" {
+			return candidate, string(sha), nil
 		}
 	}
 	for _, candidate := range CandidateDefaultBranches {
-		//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-		if out, revErr := runner.Run(ctx, repoPath, "git", "rev-parse", "refs/heads/"+candidate); revErr == nil {
-			if sha := strings.TrimSpace(string(out)); sha != "" {
-				return candidate, sha, nil
-			}
+		if sha, revErr := refs.ResolveRef(ctx, loc, backend.RefName("refs/heads/"+candidate)); revErr == nil && sha != "" {
+			return candidate, string(sha), nil
 		}
 	}
 	// "rev-parse HEAD failed" alone is ambiguous between an unborn repo and a
-	// dropped connection; symbolic-ref resolving while rev-parse still fails
-	// disambiguates the true unborn case, which is safe to fall back to
+	// dropped connection; the backend maps only the true unborn case (symbolic-ref
+	// resolves while rev-parse fails) to ErrUnborn, which is safe to fall back to
 	// ambient HEAD for (no other branch to misattribute to).
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	if _, symErr := runner.Run(ctx, repoPath, "git", "symbolic-ref", "-q", "HEAD"); symErr == nil {
-		//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-		if _, headErr := runner.Run(ctx, repoPath, "git", "rev-parse", "HEAD"); headErr != nil {
-			return "", "", nil
-		}
+	if _, headErr := refs.ResolveRef(ctx, loc, "HEAD"); errors.Is(headErr, backend.ErrUnborn) {
+		return "", "", nil
 	}
 	return "", "", fmt.Errorf("resolve default branch on remote repo %s (%v)", repoPath, errors.Join(errs...))
 }
@@ -231,17 +228,19 @@ func ResolveRemoteWorktreeBaseCommit(ctx context.Context, runner tmux.CommandRun
 // counterpart, resolving repoPath's checked-out HEAD via runner.Run instead
 // of a local go-git open.
 func RemoteAmbientHEADDivergesFromBase(ctx context.Context, runner tmux.CommandRunner, repoPath, baseSHA string) (diverged bool, ambientBranch string) {
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	out, err := runner.Run(ctx, repoPath, "git", "rev-parse", "HEAD")
-	headSHA := strings.TrimSpace(string(out))
-	if err != nil || headSHA == "" || headSHA == baseSHA {
+	return remoteAmbientHEADDivergesFromBase(ctx, gitprovider.Backend(), runner, repoPath, baseSHA)
+}
+
+// remoteAmbientHEADDivergesFromBase is RemoteAmbientHEADDivergesFromBase over an explicit backend.
+func remoteAmbientHEADDivergesFromBase(ctx context.Context, refs backend.Backend, runner tmux.CommandRunner, repoPath, baseSHA string) (diverged bool, ambientBranch string) {
+	loc := remoteLocation(runner, "", repoPath)
+	head, err := refs.ResolveRef(ctx, loc, "HEAD")
+	if err != nil || head == "" || string(head) == baseSHA {
 		return false, ""
 	}
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	if brOut, brErr := runner.Run(ctx, repoPath, "git", "rev-parse", "--abbrev-ref", "HEAD"); brErr == nil {
-		if br := strings.TrimSpace(string(brOut)); br != "" && br != "HEAD" {
-			ambientBranch = br
-		}
+	// A detached HEAD (backend.ErrDetachedHead) or any other failure leaves ambientBranch empty.
+	if br, brErr := refs.CurrentBranch(ctx, loc); brErr == nil {
+		ambientBranch = string(br)
 	}
 	return true, ambientBranch
 }

@@ -245,6 +245,14 @@ func (p *JulesSessionPoller) run(ctx context.Context) {
 	}
 }
 
+// Wait blocks until the polling goroutine has exited, after Start's ctx is
+// cancelled. It returns immediately if Start was never called.
+func (p *JulesSessionPoller) Wait() {
+	if p.done != nil {
+		<-p.done
+	}
+}
+
 // Stop cancels the polling loop and waits for the goroutine to exit. Safe to
 // call even if Start was never called.
 func (p *JulesSessionPoller) Stop() {

@@ -26,6 +26,56 @@ describe("replyAvailability", () => {
     expect(a).toEqual({ kind: "replyable", questionId: "q1", options: ["Red", "Green"], prompt: "Which color should the spike use?" });
   });
 
+  it.each([[2], [5]])("is_unavailable_parallel_question_when_occurrenceCount_is_%i", (occurrenceCount) => {
+    const a = replyAvailability(
+      question(
+        { question_id: "q1", question_shape: "single", question_options: '["Red","Green"]' },
+        { occurrenceCount },
+      ),
+    );
+    expect(a).toEqual({ kind: "unavailable", cause: "parallel_question" });
+    expect(unavailableCopy("parallel_question")).toBe("Answer in the terminal");
+  });
+
+  it("is_unavailable_when_the_server_reports_more_than_one_pending_question", () => {
+    const a = replyAvailability(
+      question({ question_id: "q1", question_shape: "single", question_options: '["a"]', question_pending_count: "2" }),
+    );
+    expect(a).toEqual({ kind: "unavailable", cause: "parallel_question" });
+  });
+
+  it.each([["0"], [""], ["abc"], ["-1"], ["1.5"]])(
+    "falls_back_to_occurrenceCount_when_question_pending_count_is_%p",
+    (pending) => {
+      const md = { question_id: "q1", question_shape: "single", question_options: '["a"]', question_pending_count: pending };
+      expect(replyAvailability(question(md, { occurrenceCount: 1 }))?.kind).toBe("replyable");
+      expect(replyAvailability(question(md, { occurrenceCount: 3 }))).toEqual({
+        kind: "unavailable",
+        cause: "parallel_question",
+      });
+    },
+  );
+
+  it("stays_replyable_when_one_question_is_pending_however_many_were_answered_before", () => {
+    const a = replyAvailability(
+      question(
+        { question_id: "q1", question_shape: "single", question_options: '["a"]', question_pending_count: "1" },
+        { occurrenceCount: 7 },
+      ),
+    );
+    expect(a?.kind).toBe("replyable");
+  });
+
+  it.each([[1], [undefined]])("stays_replyable_when_occurrenceCount_is_%s", (occurrenceCount) => {
+    const a = replyAvailability(
+      question(
+        { question_id: "q1", question_shape: "single", question_options: '["Red","Green"]' },
+        { occurrenceCount },
+      ),
+    );
+    expect(a?.kind).toBe("replyable");
+  });
+
   it("is_null_for_a_notification_that_is_not_a_question", () => {
     expect(replyAvailability({ notificationType: "error", metadata: {}, message: "x" })).toBeNull();
   });

@@ -136,13 +136,16 @@ func (d *dedupTracker) allow(tag string) bool {
 }
 
 // StartPushSubscriber is the legacy entry-point. New code should use
-// StartDeliverySubscriber with an explicit []Notifier slice.
-func StartPushSubscriber(ctx context.Context, bus *events.EventBus, pushService *services.PushService, opts ...DeliveryOption) {
+// StartDeliverySubscriber with an explicit []Notifier slice. The returned
+// channel is closed once the subscriber goroutine has exited.
+func StartPushSubscriber(ctx context.Context, bus *events.EventBus, pushService *services.PushService, opts ...DeliveryOption) <-chan struct{} {
 	if pushService == nil {
 		log.Warn("PushSubscriber push service is nil, not starting")
-		return
+		done := make(chan struct{})
+		close(done)
+		return done
 	}
-	StartDeliverySubscriber(ctx, bus, []Notifier{NewWebPushNotifier(pushService)}, opts...)
+	return StartDeliverySubscriber(ctx, bus, []Notifier{NewWebPushNotifier(pushService)}, opts...)
 }
 
 // shouldNotify returns true when the event/priority/type combination warrants a
