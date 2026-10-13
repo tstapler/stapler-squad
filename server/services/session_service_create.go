@@ -21,6 +21,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/namegen"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -360,21 +362,20 @@ func (s *SessionService) createRemoteNewWorktree(
 		return "", nil, git.RemoteWorktree{}, "", "", connect.NewError(connect.CodeInternal,
 			fmt.Errorf("failed to resolve default branch on remote %q: %w", resolvedRemote.Name, resolveErr))
 	}
-	branchArgs := []string{"branch", branch}
+	branchReq := backend.CreateBranchRequest{Name: backend.BranchName(branch)}
 	if baseSHA != "" {
-		branchArgs = append(branchArgs, baseSHA)
+		branchReq.Base = backend.RefName(baseSHA)
 		if diverged, ambientBranch := git.RemoteAmbientHEADDivergesFromBase(ctx, runner, resolvedPath, baseSHA); diverged {
 			warning = git.FormatAmbientDivergenceWarning(resolvedPath, defaultBranch, ambientBranch)
 		}
 	}
 
 	// Best-effort: "git branch <name> [sha]" failing because the branch already exists is expected.
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	if out, branchErr := runner.Run(ctx, resolvedPath, "git", branchArgs...); branchErr != nil &&
-		!strings.Contains(string(out), "already exists") {
+	remoteLoc := backend.Remote{Host: backend.RemoteHost(resolvedRemote.Name), Path: backend.RemotePath(resolvedPath), Runner: runner}
+	if branchErr := gitprovider.Backend().CreateBranch(ctx, remoteLoc, branchReq); branchErr != nil &&
+		!strings.Contains(branchErr.Error(), "already exists") {
 		return "", nil, git.RemoteWorktree{}, "", "", connect.NewError(connect.CodeInternal,
-			fmt.Errorf("failed to create branch %q on remote %q: %s (%w)",
-				branch, resolvedRemote.Name, strings.TrimSpace(string(out)), branchErr))
+			fmt.Errorf("failed to create branch %q on remote %q: %w", branch, resolvedRemote.Name, branchErr))
 	}
 	if createErr := worktreeOps.CreateWorktree(ctx, remoteWT); createErr != nil {
 		return "", nil, git.RemoteWorktree{}, "", "", connect.NewError(connect.CodeInternal,

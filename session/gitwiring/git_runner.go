@@ -18,7 +18,10 @@ type gitRunner struct {
 	environ func() []string
 }
 
-var _ backend.Runner = gitRunner{}
+var (
+	_ backend.Runner       = gitRunner{}
+	_ backend.StdoutRunner = gitRunner{}
+)
 
 // Run implements backend.Runner.
 func (g gitRunner) Run(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
@@ -26,6 +29,16 @@ func (g gitRunner) Run(ctx context.Context, dir, name string, args ...string) ([
 	cmd.Dir = dir
 	cmd.Env = g.envFor(name)
 	return cmd.CombinedOutput()
+}
+
+// RunStdout implements backend.StdoutRunner: stdout only, so a stderr warning git writes between
+// two stdout chunks (e.g. a CRLF notice mid-diff) cannot be spliced into parsed or displayed
+// output. On failure the error is an *exec.ExitError whose Stderr holds git's stderr.
+func (g gitRunner) RunStdout(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+	cmd := safeexec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	cmd.Env = g.envFor(name)
+	return cmd.Output()
 }
 
 // envFor returns nil (inherit) for non-git programs. For git the required entries are appended

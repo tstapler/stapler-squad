@@ -8,8 +8,10 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // newShutdownOnCleanupServer builds a Server from deps and registers its
@@ -74,10 +76,11 @@ func newStapleStacks(before map[string]string) []string {
 //  1. Registration (deterministic, see TestWireDepsIntoServer_HasNoBareGoStatements):
 //     wireDepsIntoServer must not contain a bare `go` statement.
 //  2. Liveness (best effort, this test): no new goroutine may still be running
-//     right after Shutdown returns. This catches an unjoined goroutine inside a
-//     component's own Start, but only if it is still alive when the check runs;
-//     there is deliberately no retry (unlike goleak.VerifyNone), which would
-//     wait out the very straggler being asserted absent.
+//     after Shutdown returns. This catches an unjoined goroutine inside a
+//     component's own Start, but only if it is still alive when the check runs.
+//     The check polls briefly because a joined helper (e.g. StatsWriter.FlushFinal's
+//     save goroutine) closes its done channel a few instructions before it exits;
+//     a goroutine that is truly leaked outlives the window and still fails.
 func TestShutdown_JoinsAllWireDepsGoroutines(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	deps, err := BuildDependencies()
@@ -87,7 +90,11 @@ func TestShutdown_JoinsAllWireDepsGoroutines(t *testing.T) {
 	srv := NewServerWithDeps("localhost:0", deps)
 	require.NoError(t, srv.Shutdown())
 
-	stragglers := newStapleStacks(before)
+	var stragglers []string
+	_ = wait.WaitForCondition(func() bool {
+		stragglers = newStapleStacks(before)
+		return len(stragglers) == 0
+	}, wait.WaitConfig{Timeout: 2 * time.Second, PollInterval: 10 * time.Millisecond, Description: "wireDepsIntoServer goroutines to exit"})
 	require.Empty(t, stragglers, "goroutines started by wireDepsIntoServer outlived Shutdown():\n%s", strings.Join(stragglers, "\n\n"))
 }
 

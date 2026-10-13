@@ -546,3 +546,16 @@ func TestParseOutputs(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
+
+// Combined-output runners get stderr banners stripped, but an indented diff context line that
+// merely looks like one is data and must survive.
+func TestDiffKeepsIndentedWarningContextLine(t *testing.T) {
+	diff := "diff --git a/f b/f\n@@ -1,2 +1,2 @@\n warning: keep me\n-old\n+new\n"
+	fake := newFake().on("diff --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ HEAD",
+		"warning: LF will be replaced by CRLF\n"+diff, nil)
+
+	got, err := cli.New(fake).Diff(context.Background(), backend.Local{Root: "/r"}, backend.DiffSpec{Base: "HEAD"})
+
+	require.NoError(t, err)
+	assert.Equal(t, diff, got)
+}

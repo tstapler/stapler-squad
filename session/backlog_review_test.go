@@ -1168,3 +1168,28 @@ func TestReadPlanFile_AllowsPathUnderRepoPath(t *testing.T) {
 	got := readPlanFile(artifactsDir, repoPath)
 	assert.Equal(t, "legit plan content", got)
 }
+
+// A root commit has no parent, so the empty-baseSHA fallback (headRef~1..headRef) must fail
+// rather than silently diff something else; a two-commit history returns just the last commit.
+func TestGetGitDiffRef_EmptyBaseSHA_DiffsLastCommit(t *testing.T) {
+	t.Parallel()
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-b", "main")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("one\n"), 0o644))
+	runGit(t, repo, "add", "a.txt")
+	runGit(t, repo, "commit", "-m", "first")
+
+	_, _, err := GetGitDiffRef(context.Background(), repo, "", "HEAD")
+	require.Error(t, err, "root commit has no HEAD~1")
+
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("two\n"), 0o644))
+	runGit(t, repo, "commit", "-am", "second")
+
+	diff, truncated, err := GetGitDiffRef(context.Background(), repo, "", "HEAD")
+	require.NoError(t, err)
+	assert.False(t, truncated)
+	assert.Contains(t, diff, "+two")
+	assert.Contains(t, diff, "-one")
+}

@@ -13,7 +13,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/backend"
@@ -663,14 +662,11 @@ func GetGitHeadSHA(repoPath string) (string, error) {
 // uncommitted changes (staged or unstaged). Returns false with no error when
 // the worktree is clean or when it cannot be reached.
 func IsWorktreeDirty(ctx context.Context, worktreePath string) (bool, error) {
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	cmd := safeexec.CommandContext(ctx, "git", "status", "--porcelain")
-	cmd.Dir = worktreePath
-	out, err := cmd.Output()
+	dirty, err := gitprovider.Backend().IsDirty(ctx, backend.Local{Root: backend.RepoRoot(worktreePath)}, backend.IntentDestructive)
 	if err != nil {
 		return false, fmt.Errorf("git status in %s: %w", worktreePath, err)
 	}
-	return len(strings.TrimSpace(string(out))) > 0, nil
+	return dirty, nil
 }
 
 // GetWorktreeDirtyPaths returns the specific paths with uncommitted changes
@@ -747,15 +743,20 @@ func GetGitDiffRef(ctx context.Context, dir string, baseSHA string, headRef stri
 		rangeArg = baseSHA + ".." + headRef
 	}
 
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	cmd := safeexec.CommandContext(ctx, "git", "diff", rangeArg)
-	cmd.Dir = dir
-	out, runErr := cmd.Output()
+	spec := backend.DiffSpec{Base: backend.RefName(baseSHA), Head: backend.RefName(headRef), Intent: backend.IntentDisplay}
+	if baseSHA == "" {
+		spec.Base = backend.RefName(headRef + "~1")
+	}
+	raw, runErr := gitprovider.Backend().Diff(ctx, backend.Local{Root: backend.RepoRoot(dir)}, spec)
 	if runErr != nil {
+		// Surface only the process status, never git's stderr: this error reaches the UI.
+		var cmdErr *backend.CommandError
+		if errors.As(runErr, &cmdErr) && cmdErr.Err != nil {
+			runErr = cmdErr.Err
+		}
 		return "", false, fmt.Errorf("git diff %s in %s: %w", rangeArg, dir, runErr)
 	}
 
-	raw := string(out)
 	if len(raw) > headless.MaxDiffSizeReview {
 		return raw[:headless.MaxDiffSizeReview], true, nil
 	}
