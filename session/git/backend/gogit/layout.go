@@ -105,12 +105,18 @@ func probeDir(cur string) (lay layout, found bool, err error) {
 	dotGit := filepath.Join(cur, ".git")
 	switch fi, statErr := os.Stat(dotGit); {
 	case statErr == nil && fi.IsDir():
-		common, ok, err := commonOf(dotGit)
+		// Resolve a symlinked .git first: a relative commondir (a .git linked to a worktree's
+		// admin directory) is applied to the real directory, not to the link's own path.
+		gitDir, err := filepath.EvalSymlinks(dotGit)
+		if err != nil {
+			return layout{}, false, fallbackEligible(err)
+		}
+		common, ok, err := commonOf(gitDir)
 		if err != nil {
 			return layout{}, false, err
 		}
 		if ok {
-			return layoutFor(cur, dotGit, common, false)
+			return layoutFor(cur, gitDir, common, false)
 		}
 	case statErr == nil && fi.Mode().IsRegular():
 		return probeGitfile(cur, dotGit)

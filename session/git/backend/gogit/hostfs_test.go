@@ -84,3 +84,18 @@ func TestRefDirectorySymlinkLoopFallsBack(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, isFallback(err), "%v", err)
 }
+
+// Objects that live only in an alternate store (a `git clone --shared`) are found through the
+// absolute alternates path.
+func TestAlternateObjectStoreIsRead(t *testing.T) {
+	srcDir, _, head := initRepo(t, 2)
+	dir, _, _ := initRepo(t, 0)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "objects", "info"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "objects", "info", "alternates"), []byte(filepath.Join(srcDir, ".git", "objects")+"\n"), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "refs", "heads"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "refs", "heads", "main"), []byte(head.String()+"\n"), 0o600))
+
+	got, err := newBackend(t).MergeBase(context.Background(), local(dir), backend.MergeBaseRequest{Left: "HEAD", Right: "HEAD~1"})
+	require.NoError(t, err)
+	assert.NotEmpty(t, got)
+}

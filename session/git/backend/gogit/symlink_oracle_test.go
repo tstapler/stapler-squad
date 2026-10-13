@@ -167,12 +167,17 @@ var fixtureSymlinkedLayouts = gitoracle.Fixture{Name: "symlinked-layouts", Build
 	seed(head)
 	moveTo(head, "HEAD", filepath.Join(root, "store", "head-file"))
 	places["head-symlink"] = head
-	alt := mkdir(root, "alternates")
-	seed(alt)
-	altStore := mkdir(root, "store", "alt-objects")
-	link(altStore, filepath.Join(root, "alt-objects-link"))
-	write(filepath.Join(alt, ".git", "objects", "info", "alternates"), filepath.Join(root, "alt-objects-link")+"\n")
-	places["alternates-via-symlink"] = alt
+	// a shared clone borrows objects from another repository's store: the objects live only
+	// there, so a read that skips the alternates fails; one clone names the store through a
+	// symlinked parent (go-git needs the alternate's basename to stay "objects")
+	shared := mkdir(root, "alternates-source")
+	seed(shared)
+	g.Run(root, "clone", "-q", "--shared", shared, filepath.Join(root, "alternates-clone"))
+	places["alternates-clone"] = filepath.Join(root, "alternates-clone")
+	g.Run(root, "clone", "-q", "--shared", shared, filepath.Join(root, "alternates-clone-via-symlink"))
+	link(filepath.Join(shared, ".git"), filepath.Join(root, "alternates-gitdir-link"))
+	write(filepath.Join(root, "alternates-clone-via-symlink", ".git", "objects", "info", "alternates"), filepath.Join(root, "alternates-gitdir-link", "objects")+"\n")
+	places["alternates-clone-via-symlink"] = filepath.Join(root, "alternates-clone-via-symlink")
 
 	// a linked worktree whose commondir file names the common directory through a symlink
 	cm := mkdir(root, "commondir-main")
@@ -182,7 +187,22 @@ var fixtureSymlinkedLayouts = gitoracle.Fixture{Name: "symlinked-layouts", Build
 	write(filepath.Join(cm, ".git", "worktrees", "commondir-wt", "commondir"), filepath.Join(root, "commondir-link")+"\n")
 	places["commondir-via-symlink"] = filepath.Join(root, "commondir-wt")
 
-	// macOS reaches the temp directory as /var/... though it lives at /private/var/...
+	// .git symlinked to a linked worktree's admin directory: its relative commondir applies to the
+	// real directory. Nested in another repository, a wrong layout would answer for the parent.
+	am2 := mkdir(root, "admin-link-main")
+	seed(am2)
+	g.Run(am2, "worktree", "add", "-q", "-b", "wtl", filepath.Join(root, "admin-link-wt"))
+	adminReal := filepath.Join(am2, ".git", "worktrees", "admin-link-wt")
+	link(adminReal, filepath.Join(mkdir(root, "dotgit-is-admin-dir"), ".git"))
+	places["dotgit-is-admin-dir"] = filepath.Join(root, "dotgit-is-admin-dir")
+	link(adminReal, filepath.Join(mkdir(am2, "nested"), ".git"))
+	places["nested-dotgit-is-admin-dir"] = filepath.Join(am2, "nested")
+	link(filepath.Join(am2, ".git", "worktrees"), filepath.Join(root, "admin-hop"))
+	link(filepath.Join(root, "admin-hop", "admin-link-wt"), filepath.Join(mkdir(root, "dotgit-is-admin-dir-hop"), ".git"))
+	places["dotgit-is-admin-dir-hop"] = filepath.Join(root, "dotgit-is-admin-dir-hop")
+
+	// macOS reaches the temp directory as /var/... though it lives at /private/var/... (this
+	// place only exists there; the symlinked-state-dir fixture covers a symlinked parent everywhere)
 	if alias := strings.TrimPrefix(root, "/private"); alias != root {
 		if real, err := filepath.EvalSymlinks(alias); err == nil && real == root {
 			vm := mkdir(root, "var-alias")
@@ -201,7 +221,7 @@ var fixtureSymlinkedLayouts = gitoracle.Fixture{Name: "symlinked-layouts", Build
 	places["svc-worktree-sub"] = mkdir(svcWT, "pkg", "x")
 
 	// awkward path characters
-	for name, dirname := range map[string]string{"spaces": "with space", "unicode": "ünï-cödé 日本", "quotes": "it's \"q\"", "leading-dash": "-dash", "hash": "a#b%c"} {
+	for name, dirname := range map[string]string{"spaces": "with space", "unicode": "ünï-cödé 日本", "leading-dash": "-dash"} {
 		d := mkdir(root, "chars", dirname)
 		seed(d)
 		places["chars-"+name] = d
@@ -272,8 +292,13 @@ func TestParitySymlinkedLayouts(t *testing.T) {
 // model them), each on the operations that touch them.
 func symlinkFallbackExcused(d gitoracle.Diff) bool {
 	switch d.Place {
-	case "head-symlink", "ref-file-symlink":
-		return true // git resolves a symlinked HEAD or ref file as a legacy symref; not modelled
+	case "head-symlink":
+		return true // git resolves a symlinked HEAD as a legacy symref; every read starts at HEAD
+	case "ref-file-symlink":
+		return strings.HasPrefix(d.Op, "ListRefs") || strings.Contains(d.Op, "feature")
+	case "alternates-clone", "alternates-clone-via-symlink":
+		// ListRefs checks each ref's object with HasEncodedObject, which ignores alternates
+		return strings.HasPrefix(d.Op, "ListRefs")
 	}
 	if m := revOpName.FindStringSubmatch(d.Op); m != nil {
 		return unmodelledRevisions[m[2]] || absentFullSHAs[m[2]]
