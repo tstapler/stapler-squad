@@ -37,6 +37,23 @@ describe("replyAvailability", () => {
     expect(unavailableCopy("parallel_question")).toBe("Answer in the terminal");
   });
 
+  it("is_unavailable_when_the_server_reports_more_than_one_pending_question", () => {
+    const a = replyAvailability(
+      question({ question_id: "q1", question_shape: "single", question_options: '["a"]', question_pending_count: "2" }),
+    );
+    expect(a).toEqual({ kind: "unavailable", cause: "parallel_question" });
+  });
+
+  it("stays_replyable_when_one_question_is_pending_however_many_were_answered_before", () => {
+    const a = replyAvailability(
+      question(
+        { question_id: "q1", question_shape: "single", question_options: '["a"]', question_pending_count: "1" },
+        { occurrenceCount: 7 },
+      ),
+    );
+    expect(a?.kind).toBe("replyable");
+  });
+
   it.each([[1], [undefined]])("stays_replyable_when_occurrenceCount_is_%s", (occurrenceCount) => {
     const a = replyAvailability(
       question(

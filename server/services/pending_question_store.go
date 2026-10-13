@@ -184,6 +184,21 @@ func (s *PendingQuestionStore) Peek(k QuestionKey) (PendingQuestion, bool) {
 	return e.q, true
 }
 
+// PendingCount is the number of registered, unexpired, unclaimed questions of
+// the session: how many AskUserQuestion dialogs it may be waiting on at once.
+func (s *PendingQuestionStore) PendingCount(sessionUUID string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.expireLocked(s.now())
+	n := 0
+	for _, id := range s.bySession[sessionUUID] {
+		if e := s.entries[id]; e != nil && e.state == pendingRegistered {
+			n++
+		}
+	}
+	return n
+}
+
 // Claim is one critical section: lookup by UUID, state and expiry check, then
 // registered -> claimed. A question that belongs to another session is
 // ClaimNoPending, never a different outcome.

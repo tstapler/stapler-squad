@@ -164,6 +164,13 @@ is established.
 
 ---
 
+## Correction after review
+
+Tasks 1-3 as written used `occurrenceCount > 1` as the parallel signal; that count is a lifetime
+total (see validation.md E3). Implemented instead: `PendingQuestionStore.PendingCount` stamped as
+`question_pending_count` notification metadata; `replyAvailability` prefers it and falls back to
+`occurrenceCount` only when absent.
+
 ## Non-scope: deeper parallel-question fix (REQ-Q4)
 
 A future task could expose a `ListPendingQuestions(sessionId)` RPC that returns all live

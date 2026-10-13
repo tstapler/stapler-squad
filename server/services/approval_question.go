@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 
@@ -20,6 +21,11 @@ const (
 	metaQuestionShape    = "question_shape"
 	metaQuestionOptions  = "question_options"
 	metaReplyUnavailable = "reply_unavailable"
+	// metaQuestionPending is how many questions of the session were registered and
+	// unanswered when this one was: above 1 the card cannot know which one is on
+	// screen. Unlike the notification's occurrence count it does not accumulate
+	// over answered questions.
+	metaQuestionPending = "question_pending_count"
 )
 
 // questionWiring is the optional Reply dependencies of an ApprovalHandler.
@@ -125,6 +131,7 @@ func (h *ApprovalHandler) registerQuestion(sessionID string, qa questionAttribut
 		Token:       QuestionToken(asked.Question),
 	})
 	meta[metaQuestionID] = id
+	meta[metaQuestionPending] = strconv.Itoa(h.questions.store.PendingCount(sessionID))
 	meta[metaQuestionOptions] = string(labels)
 	return meta
 }

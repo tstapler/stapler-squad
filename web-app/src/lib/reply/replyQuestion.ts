@@ -33,6 +33,19 @@ function parseOptions(raw: string | undefined): string[] | null {
 }
 
 /**
+ * Notifications dedupe per (session, type), so metadata carries only the newest question_id and
+ * a question other than the one on screen may be the one offered. The server stamps how many
+ * questions were live when this one registered; that is authoritative. occurrenceCount counts
+ * every question the record ever merged, answered or not, so it only stands in for servers
+ * that do not stamp the pending count.
+ */
+function hasParallelQuestions(pendingCount: string | undefined, occurrenceCount: number | undefined): boolean {
+  const pending = Number(pendingCount);
+  if (pendingCount !== undefined && Number.isInteger(pending) && pending >= 1) return pending > 1;
+  return (occurrenceCount ?? 1) > 1;
+}
+
+/**
  * null when the notification is not a question at all; otherwise whether Reply can
  * answer it. A question the server did not register (no question_id) is unavailable.
  */
@@ -41,12 +54,12 @@ export function replyAvailability(
     Pick<NotificationHistoryItem, "occurrenceCount">,
 ): ReplyAvailability | null {
   if (n.notificationType !== "question") return null;
-  // Notifications dedupe per (session, type), so metadata carries only the newest question_id.
-  // More than one occurrence means a question may be on screen whose id we never saw.
-  if ((n.occurrenceCount ?? 1) > 1) return { kind: "unavailable", cause: "parallel_question" };
   const md = n.metadata ?? {};
   const options = parseOptions(md["question_options"]);
   if (md["question_id"] && md["question_shape"] === "single" && options) {
+    if (hasParallelQuestions(md["question_pending_count"], n.occurrenceCount)) {
+      return { kind: "unavailable", cause: "parallel_question" };
+    }
     return { kind: "replyable", questionId: md["question_id"], options, prompt: n.message };
   }
   const cause = md["reply_unavailable"];

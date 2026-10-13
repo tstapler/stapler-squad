@@ -82,6 +82,28 @@ func TestBroadcastQuestionNotification_ShouldReadQuestionsArrayAndStampQuestionI
 	assert.Empty(t, q.causes)
 }
 
+func TestBroadcastQuestionNotification_ShouldStampPendingCountOfLiveQuestions_NotTheLifetimeOccurrences(t *testing.T) {
+	const secondBody = `{"tool_name":"AskUserQuestion","cwd":"/work","tool_input":{"questions":[{"question":"Which size?","header":"Size","options":[{"label":"S","description":"s"},{"label":"L","description":"l"}],"multiSelect":false}]}}`
+	q := newQuestionHarness(t)
+	headers := map[string]string{hookProofHeader: q.proofs.HeaderValue("sess-uuid")}
+
+	first := q.post(askQuestionBody, headers)
+	assert.Equal(t, "1", first.NotificationMetadata[metaQuestionPending])
+
+	// A parallel question registers while the first is still unanswered.
+	second := q.post(secondBody, headers)
+	assert.Equal(t, "2", second.NotificationMetadata[metaQuestionPending])
+
+	// Both answered through Reply (consumed): the next question is alone again.
+	for _, ev := range []*events.Event{first, second} {
+		claim, res := q.store.Claim(QuestionKey{SessionUUID: "sess-uuid", QuestionID: ev.NotificationMetadata[metaQuestionID]})
+		require.Equal(t, ClaimOK, res)
+		q.store.Consume(claim)
+	}
+	third := q.post(askQuestionBody, headers)
+	assert.Equal(t, "1", third.NotificationMetadata[metaQuestionPending])
+}
+
 // T-RP-62, T-RP-77: no proof, a bad proof or a proof for an unknown session
 // raises the toast, registers nothing replyable and labels the cause.
 func TestHookProof_ShouldRegisterNothingReplyable_WhenProofIsMissingInvalidOrForUnknownSession(t *testing.T) {

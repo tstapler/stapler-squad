@@ -41,11 +41,16 @@ a count of 0 means the field was not populated (old record), not that there were
 Buttons not disabled (`isOffline=false`). RPC fires. If server is reachable, it succeeds.
 If server is down, RPC fails → `retryable` phase → Retry shown. Fail-closed.
 
-### E3: occurrenceCount > 1 but questions are sequential (A answered, B now live)
-The card shows "Answer in the terminal" even though B is answerable. Acceptable trade-off for
-the minimal fix. The deep fix (REQ-Q4) resolves this. Note that in practice, sequential
-questions (not parallel) only increment occurrenceCount when the record is still unread — if
-the user answered A (mark read), then B arrives as a new unread record with occurrenceCount=1.
+### E3: occurrenceCount is a lifetime total (CORRECTED after review)
+The first draft claimed an answered-then-read question restarts the count at 1. It does not:
+`server/notifications/store.go` `findDuplicate`/`mergeOccurrence` keep one record per
+(session, type), increment `OccurrenceCount` forever and only flip `IsRead` back to false. So
+`occurrenceCount > 1` alone would disable Reply for every question after the first in a session.
+The signal is now `question_pending_count`, stamped by `registerQuestion` from the live
+`PendingQuestionStore` (registered, unexpired, unclaimed entries of the session). The
+`occurrenceCount > 1` rule remains only as a fallback when that key is absent. Residual:
+a question answered in the terminal stays registered until its 30 min TTL, so a later question
+in that window reads as parallel (fail-closed).
 
 ### E4: WatchSessions stream never connects (server dead at startup)
 `hasLoadedOnce` stays `false`. `isOffline` stays `false`. User tap → RPC error → Retry shown.
