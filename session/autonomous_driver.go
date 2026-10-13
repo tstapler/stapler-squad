@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
@@ -22,13 +24,44 @@ type HeadlessPoolClient interface {
 }
 
 // AutonomousDriverOutcome describes how an autonomous driver run concluded.
+//
+// Done/Stuck/Reason are the legacy fields; StopReason is authoritative when set
+// and the driver derives Done/Stuck from it. A zero StopReason is read through
+// NormalizedStopReason so hand-built outcomes keep their meaning.
 type AutonomousDriverOutcome struct {
 	Done   bool
 	Reason string
 	PRUrl  string
 	Turns  int
-	Stuck  bool // true if exited via maxTurns without DONE signal
+	Stuck  bool // true if the run ended without DONE and was not a requested stop
+
+	StopReason domain.StopReason
+	// Snapshot is the pane state captured before the driver tore anything down.
+	// CaptureErr is "skipped" for cancelled stops.
+	Snapshot domain.StopSnapshot
+	// RunID identifies the driver run that produced this outcome.
+	RunID uint64
 }
+
+// NormalizedStopReason returns StopReason, or derives one from the legacy Done
+// flag: Done -> done, otherwise the empty "unspecified" stall reason.
+func (o AutonomousDriverOutcome) NormalizedStopReason() domain.StopReason {
+	if o.StopReason != "" {
+		return o.StopReason
+	}
+	if o.Done {
+		return domain.StopReasonDone
+	}
+	return ""
+}
+
+// Class is the three-way outcome class of NormalizedStopReason.
+func (o AutonomousDriverOutcome) Class() domain.OutcomeClass {
+	return o.NormalizedStopReason().Class()
+}
+
+// driverRunIDs hands out RunID values; process-wide so ids are never reused.
+var driverRunIDs atomic.Uint64
 
 // CompletionCallback is called when the driver exits with a final outcome.
 type CompletionCallback func(instanceName string, outcome AutonomousDriverOutcome)
@@ -107,6 +140,21 @@ type AutonomousDriver struct {
 	// costSink receives the USD cost of each per-turn LLM call. Defaults to
 	// headless.DiscardCost (set in NewAutonomousDriver) — override via WithCostSink.
 	costSink headless.CostSink
+
+	// stopRequested is set first thing in Stop(), so run() can tell a requested
+	// cancel from a parent-context (shutdown) cancel.
+	stopRequested atomic.Bool
+	// completed makes finish() fire the completion callback at most once.
+	completed atomic.Bool
+	runID     atomic.Uint64
+	// source overrides the Instance-backed stop-snapshot reads (tests). nil
+	// falls back to instanceStopSource.
+	source stopSource
+	// Zero values fall back to the production defaults, so struct-literal
+	// drivers in tests need no setup.
+	captureTimeout   time.Duration
+	turnLeaseWait    time.Duration
+	rateLimitWaitMax time.Duration
 }
 
 // previewPane returns the current pane content, preferring d.previewer when
@@ -192,6 +240,7 @@ func (d *AutonomousDriver) Start(ctx context.Context) error {
 
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
+	d.runID.Store(driverRunIDs.Add(1))
 	d.mu.Lock()
 	d.cancel = cancel
 	d.done = done
@@ -220,6 +269,7 @@ func (d *AutonomousDriver) Start(ctx context.Context) error {
 // so Stop returns control to the caller nearly immediately — no blocking LLM call delay.
 // Stop does not wait for the goroutine to exit — use Wait for that.
 func (d *AutonomousDriver) Stop() {
+	d.stopRequested.Store(true)
 	d.mu.Lock()
 	cancel := d.cancel
 	d.mu.Unlock()
@@ -227,6 +277,66 @@ func (d *AutonomousDriver) Stop() {
 		cancel()
 	}
 	d.driverRunning.Store(false)
+}
+
+// RunID identifies the current (or last) run; 0 before the first Start.
+func (d *AutonomousDriver) RunID() uint64 { return d.runID.Load() }
+
+// Finished reports, without blocking, whether a started run has fully exited.
+// A driver that was never started is not finished.
+func (d *AutonomousDriver) Finished() bool {
+	d.mu.Lock()
+	done := d.done
+	d.mu.Unlock()
+	if done == nil {
+		return false
+	}
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
+// cancelReason classifies a context cancellation: Stop() records the request
+// first, so anything else is the parent context going away (service shutdown).
+func (d *AutonomousDriver) cancelReason() domain.StopReason {
+	if d.stopRequested.Load() {
+		return domain.StopReasonCancelledExternal
+	}
+	return domain.StopReasonCancelledShutdown
+}
+
+// stopReasonFor picks the cancel reason when ctx is done, else the site's own.
+func (d *AutonomousDriver) stopReasonFor(ctx context.Context, siteReason domain.StopReason) domain.StopReason {
+	if ctx.Err() != nil {
+		return d.cancelReason()
+	}
+	return siteReason
+}
+
+// finish is the single exit: it captures the pane snapshot (skipped for
+// requested stops, which no recovery decision consumes and which must not wait
+// on tmux), derives the legacy flags and fires the completion callback once.
+func (d *AutonomousDriver) finish(sessionName string, reason domain.StopReason, base AutonomousDriverOutcome) {
+	if !d.completed.CompareAndSwap(false, true) {
+		return
+	}
+	base.StopReason = reason
+	base.Done = reason.IsDone()
+	base.Stuck = reason.IsStall()
+	base.RunID = d.runID.Load()
+	if reason.Class() == domain.OutcomeClassCancelled {
+		base.Snapshot = domain.StopSnapshot{CaptureErr: "skipped"}
+	} else {
+		src := d.source
+		if src == nil {
+			src = instanceStopSource{inst: d.inst, controller: d.controller}
+		}
+		base.Snapshot = captureStopSnapshot(src, d.captureTimeout)
+	}
+	d.fireCompletion(sessionName, base)
 }
 
 // Wait blocks until the run() goroutine started by Start has fully exited
@@ -259,6 +369,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error("AutonomousDriver: recovered from panic", "session", d.inst.Title, "panic", r)
+			d.finish(d.inst.Title, domain.StopReasonPanic, AutonomousDriverOutcome{Reason: fmt.Sprintf("panic: %v", r)})
 		}
 	}()
 
@@ -296,12 +407,14 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 	if !waitForIdle(startupCtx, statusCh, d.controller, 0, d.idleSettlePollInterval) {
 		startupCancel()
 		log.Warn("AutonomousDriver: timed out waiting for initial idle state", "session", sessionName)
-		d.fireCompletion(sessionName, AutonomousDriverOutcome{Stuck: true, Reason: "startup timeout"})
+		d.finish(sessionName, d.stopReasonFor(ctx, domain.StopReasonStartupTimeout), AutonomousDriverOutcome{Reason: "startup timeout"})
 		return
 	}
 	startupCancel()
 
-	outcome := AutonomousDriverOutcome{}
+	// exit is set at each abnormal break; an unset exit after the loop means the
+	// loop ran out of turns.
+	var exit AutonomousDriverOutcome
 	malformedResponseCount := 0
 	// lastSentNudge tracks the most recent nudge actually delivered (both SendKeys
 	// writes succeeded). It's a run()-local, not a struct field: every caller
@@ -311,11 +424,13 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 
 	for turnCount := 0; turnCount < d.maxTurns; turnCount++ {
 		if ctx.Err() != nil {
+			exit = AutonomousDriverOutcome{StopReason: d.cancelReason(), Turns: turnCount + 1}
 			break
 		}
 
 		// Respect rate limit: wait until cleared.
 		if err := d.waitForRateLimitClear(ctx); err != nil {
+			exit = AutonomousDriverOutcome{StopReason: d.stopReasonFor(ctx, domain.StopReasonRateLimitExhausted), Reason: err.Error(), Turns: turnCount + 1}
 			break
 		}
 
@@ -330,6 +445,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		resp, err := d.headlessPool.CallBlocking(ctx, featureKey, autonomousSystemPrompt, userPrompt, headless.CallOptions{}, costSink)
 		if err != nil {
 			log.Warn("AutonomousDriver: LLM call failed", "session", sessionName, "turn", turnCount+1, "err", err)
+			exit = AutonomousDriverOutcome{StopReason: d.stopReasonFor(ctx, domain.StopReasonOrchestratorError), Reason: err.Error(), Turns: turnCount + 1}
 			break
 		}
 
@@ -342,14 +458,13 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 
 		if directive == directiveDone {
 			sessionOutput, _ := d.previewPane()
-			outcome = AutonomousDriverOutcome{
-				Done:   true,
+			outcome := AutonomousDriverOutcome{
 				Reason: payload,
 				PRUrl:  ExtractPRURL(sessionOutput),
 				Turns:  turnCount + 1,
 			}
 			log.Info("AutonomousDriver: DONE signal received", "session", sessionName, "turn", turnCount+1, "reason", payload)
-			d.fireCompletion(sessionName, outcome)
+			d.finish(sessionName, domain.StopReasonDone, outcome)
 			return
 		}
 
@@ -363,6 +478,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		if suppressed {
 			log.Info("AutonomousDriver: suppressed nudge", "session", sessionName, "turn", turnCount+1, "directive", directive)
 			if ctx.Err() != nil {
+				exit = AutonomousDriverOutcome{StopReason: d.cancelReason(), Turns: turnCount + 1}
 				break
 			}
 			// Proceed on the same idle-settle cadence a real send uses, instead of
@@ -395,13 +511,23 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		// The turn is this chain's acquirer (Story 5.0): a bounded blocking
 		// acquire, because a Reply or a steer holds the lease for a short time
 		// only, and a timeout takes the existing submit-error path.
-		lease, leaseErr := d.inst.AcquireTerminalWriteLease(ctx, LeaseWriterAutonomous, AutonomousTurnLeaseWait)
+		leaseWait := d.turnLeaseWait
+		if leaseWait <= 0 {
+			leaseWait = AutonomousTurnLeaseWait
+		}
+		lease, leaseErr := d.inst.AcquireTerminalWriteLease(ctx, LeaseWriterAutonomous, leaseWait)
 		if leaseErr != nil {
 			log.Warn("AutonomousDriver: failed to submit turn", "session", sessionName, "turn", turnCount+1, "err", leaseErr)
+			siteReason := domain.StopReasonSubmitFailed
+			if errors.Is(leaseErr, ErrLeaseBusy) {
+				siteReason = domain.StopReasonLeaseTimeout
+			}
+			exit = AutonomousDriverOutcome{StopReason: d.stopReasonFor(ctx, siteReason), Reason: leaseErr.Error(), Turns: turnCount + 1}
 			break
 		}
 		if sendErr := SubmitDriverContent(ctx, d.inst, lease, nextMsg, d.paneSettlePollInterval, d.paneSettleMaxWait); sendErr != nil {
 			log.Warn("AutonomousDriver: failed to submit turn", "session", sessionName, "turn", turnCount+1, "err", sendErr)
+			exit = AutonomousDriverOutcome{StopReason: d.stopReasonFor(ctx, domain.StopReasonSubmitFailed), Reason: sendErr.Error(), Turns: turnCount + 1}
 			break
 		}
 		// Re-capture the pane AFTER delivery completes, rather than reusing the
@@ -430,14 +556,14 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		}
 	}
 
-	if !outcome.Done {
+	if exit.StopReason == "" {
 		reason := "max turns reached"
 		if malformedResponseCount > 0 {
 			reason = fmt.Sprintf("max turns reached (%d malformed orchestrator responses)", malformedResponseCount)
 		}
-		outcome = AutonomousDriverOutcome{Stuck: true, Reason: reason, Turns: d.maxTurns}
+		exit = AutonomousDriverOutcome{StopReason: domain.StopReasonMaxTurns, Reason: reason, Turns: d.maxTurns}
 	}
-	d.fireCompletion(sessionName, outcome)
+	d.finish(sessionName, exit.StopReason, exit)
 }
 
 // paneSettleChecker is the narrow interface waitForPaneSettle needs — satisfied
@@ -482,13 +608,17 @@ const maxRateLimitWait = 4 * time.Hour
 // waitForRateLimitClear blocks until the controller's rate limit state is StateNone.
 // Returns an error if ctx is cancelled or the total wait exceeds maxRateLimitWait.
 func (d *AutonomousDriver) waitForRateLimitClear(ctx context.Context) error {
-	deadline := time.Now().Add(maxRateLimitWait)
+	maxWait := d.rateLimitWaitMax
+	if maxWait <= 0 {
+		maxWait = maxRateLimitWait
+	}
+	deadline := time.Now().Add(maxWait)
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("rate limit wait exceeded %v", maxRateLimitWait)
+			return fmt.Errorf("rate limit wait exceeded %v", maxWait)
 		}
 		state := d.controller.GetRateLimitState()
 		if state == ratelimit.StateNone {
