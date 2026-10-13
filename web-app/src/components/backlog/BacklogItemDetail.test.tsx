@@ -1486,7 +1486,7 @@ describe("BacklogItemDetail — PR visibility and action reachability", () => {
       expect(follows(actions, screen.getByText(/^Acceptance Criteria/))).toBe(true);
     });
 
-    it("BacklogItemDetail_should_RenderPlanVerdictBoxImmediatelyBeforeActionsSection_When_PlanIsPendingReview", async () => {
+    it("BacklogItemDetail_should_RenderPlanDecisionControlsBeforeGateSection_When_PlanIsPendingReview", async () => {
       mockShowGateSection = true;
       await renderItem({
         status: "ready",

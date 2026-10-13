@@ -8,7 +8,6 @@ import { render, screen, within } from "@testing-library/react";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
-import { getStatusLabel } from "@/lib/backlog/status";
 import { BacklogItemCard } from "../BacklogItemCard";
 import { LifecycleSummary } from "./LifecycleSummary";
 import { PullRequestSection } from "./PullRequestSection";
@@ -61,14 +60,24 @@ function makeStuckItem(reason: StuckReason): StuckBacklogItem {
 }
 
 describe("board/list card vs detail lifecycle model (AC3)", () => {
-  it.each(["idea", "ready", "in_progress", "review", "done"])(
-    "card status label for %s matches the label the detail model uses",
-    (status) => {
-      const item = makeItem({ status });
-      render(<BacklogItemCard item={item} onAction={jest.fn()} onClick={jest.fn()} />);
-      expect(screen.getByTestId("backlog-item-card-status")).toHaveTextContent(getStatusLabel(status));
-    }
-  );
+  it.each([
+    ["idea", "Idea"],
+    ["ready", "Ready"],
+    ["in_progress", "In Progress"],
+    ["review", "Review"],
+    ["done", "Done"],
+  ])("card and detail stage tracker both read %s as %s", (status, label) => {
+    const item = makeItem({ status });
+    const card = render(<BacklogItemCard item={item} onAction={jest.fn()} onClick={jest.fn()} />);
+    expect(within(card.container).getByTestId("backlog-item-card-status")).toHaveTextContent(label);
+    card.unmount();
+
+    const detail = render(<LifecycleSummary item={item} />);
+    expect(within(detail.container).getByTestId("stage-tracker")).toHaveAttribute(
+      "aria-label",
+      `Lifecycle stage: ${label}`
+    );
+  });
 
   it.each([StuckReason.STALE_WORK, StuckReason.PR_READY_UNMERGED])(
     "card and detail show the same blocker label for reason %s",
@@ -99,31 +108,45 @@ describe("board/list card vs detail lifecycle model (AC3)", () => {
   });
 });
 
-describe("PR link has one authoritative location per status (AC4)", () => {
+describe("PR link surfaces per status (AC4)", () => {
   const prFields = { prUrl: "https://github.com/o/r/pull/7", prNumber: 7 };
+  const prLinks = (c: HTMLElement) => c.querySelectorAll('a[href="https://github.com/o/r/pull/7"]');
 
-  function renderPrSurfaces(item: BacklogItem) {
-    return render(
+  // BacklogItemDetail mounts PullRequestSection only while pr_pending; that
+  // gating is asserted in BacklogItemDetail.test.tsx, so it is mirrored here.
+  it("pr_pending: header badge and VCS link are suppressed, PullRequestSection links once", () => {
+    const item = makeItem({ status: "pr_pending", ...prFields });
+    const { container } = render(
       <>
         <LifecycleSummary item={item} />
-        {item.status === "pr_pending" && (
-          <PullRequestSection item={item} actionLoading={null} onMarkDone={jest.fn()} />
-        )}
-        <VersionControlSection item={item} widgetData={null}
-          activeSessionCount={0}
-          worktreePath=""
-          onViewDiff={jest.fn()}
-          onBrowseFiles={jest.fn()}
-          defaultExpanded
-        />
+        <PullRequestSection item={item} actionLoading={null} onMarkDone={jest.fn()} />
+        <VersionControlSection {...vcsProps} item={item} />
       </>
     );
-  }
-
-  it("pr_pending: only PullRequestSection links the PR", () => {
-    const { container } = renderPrSurfaces(makeItem({ status: "pr_pending", ...prFields }));
-    expect(container.querySelectorAll('a[href="https://github.com/o/r/pull/7"]')).toHaveLength(1);
+    expect(prLinks(container)).toHaveLength(1);
     expect(screen.queryByTestId("lifecycle-pr-badge")).not.toBeInTheDocument();
     expect(screen.queryByTestId("vcs-section-pr-link")).not.toBeInTheDocument();
   });
+
+  it("done: header badge (glance) plus one Version Control link, no PullRequestSection", () => {
+    const item = makeItem({ status: "done", ...prFields });
+    const { container } = render(
+      <>
+        <LifecycleSummary item={item} />
+        <VersionControlSection {...vcsProps} item={item} />
+      </>
+    );
+    expect(screen.getByTestId("lifecycle-pr-badge")).toBeInTheDocument();
+    expect(screen.getByTestId("vcs-section-pr-link")).toBeInTheDocument();
+    expect(prLinks(container)).toHaveLength(2);
+  });
 });
+
+const vcsProps = {
+  widgetData: null,
+  activeSessionCount: 0,
+  worktreePath: "",
+  onViewDiff: jest.fn(),
+  onBrowseFiles: jest.fn(),
+  defaultExpanded: true,
+};
