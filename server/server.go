@@ -1194,7 +1194,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// BacklogService's plugin registry/key provider so behavior matches
 	// TriggerSync; both are nil-safe when the backlog feature isn't wired.
 	if deps.BacklogService != nil {
-		services.StartBacklogGitHubForwardSyncSubscriber(serverCtx, deps.EventBus, deps.BacklogService.Registry(), deps.BacklogService.SyncLoopForForwardSync(), deps.Storage)
+		forwardSyncDone := services.StartBacklogGitHubForwardSyncSubscriber(serverCtx, deps.EventBus, deps.BacklogService.Registry(), deps.BacklogService.SyncLoopForForwardSync(), deps.Storage)
+		srv.backgroundTasksWG.Go(func() { <-forwardSyncDone })
 	}
 
 	// Register analytics HTTP handler (POST /api/analytics, GET /api/analytics/summary).
