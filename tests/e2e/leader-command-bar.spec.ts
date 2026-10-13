@@ -4,6 +4,7 @@
  * reaches the PTY". Default leader is Alt+; (matched on event.code).
  */
 import { test, expect, type Page } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 import {
   NotificationTray,
   TRAY_V2_FLAG,
@@ -127,5 +128,16 @@ test.describe('leader-key command bar', () => {
     await textarea.focus();
     await page.keyboard.press('x');
     await expect.poll(() => webSocketSends(page)).toBeGreaterThan(sendsBefore);
+  });
+
+  test('openBar_should_haveNoAxeWcagAaViolations', async ({ page }) => {
+    await gotoHome(page);
+    await page.keyboard.press(LEADER);
+    await expect(bar(page)).toBeVisible();
+    const results = await new AxeBuilder({ page })
+      .include('[data-testid="command-bar"]')
+      .withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'])
+      .analyze();
+    expect(results.violations.map((v) => `${v.id}: ${v.help}`)).toEqual([]);
   });
 });
