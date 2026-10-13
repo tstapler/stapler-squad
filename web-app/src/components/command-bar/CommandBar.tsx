@@ -4,9 +4,9 @@
 import { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { registry } from "@/lib/shortcuts/shortcutRegistry";
-import { chordMatches, formatLeader, getLeaderConfig, LEADER_CONFIG_EVENT } from "@/lib/shortcuts/leaderConfig";
+import { chordMatches, formatLeader, getLeaderConfig, getLeaderIdleMs, LEADER_CONFIG_EVENT } from "@/lib/shortcuts/leaderConfig";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
-import { commandBarController } from "./commandBarController";
+import { commandBarController } from "@/lib/shortcuts/commandBarController";
 import {
   barReducer,
   childrenAt,
@@ -138,6 +138,12 @@ export function CommandBar() {
       const cfg = getLeaderConfig();
       const s = stateRef.current;
 
+      // A held chord auto-repeats: swallow the repeats instead of toggling the bar open/closed.
+      if (e.repeat && cfg.enabled && chordMatches(e, cfg.chord)) {
+        consume(e);
+        return;
+      }
+
       if (!s.open) {
         if (!cfg.enabled || !chordMatches(e, cfg.chord)) return;
         // IME composition or an open modal: the leader is a no-op and the key passes through.
@@ -148,6 +154,8 @@ export function CommandBar() {
       }
 
       if (e.isComposing || e.keyCode === 229) return; // let the IME reach the input
+      // Tab stays native so useFocusTrap can cycle the bar's own controls; it can only move focus within the dialog.
+      if (e.key === "Tab") return;
       consume(e);
       if (e.repeat && e.key === "Escape") return;
       if (cfg.enabled && chordMatches(e, cfg.chord)) {
@@ -176,6 +184,13 @@ export function CommandBar() {
 
   useFocusTrap(dialogRef, state.open && mounted, triggerRef);
 
+  // Idle auto-close (no action), restarted by any interaction.
+  useEffect(() => {
+    if (!state.open) return;
+    const t = setTimeout(closeBar, getLeaderIdleMs());
+    return () => clearTimeout(t);
+  }, [state.open, state.path, state.query, state.activeIndex, state.helpOpen, closeBar]);
+
   // The combobox input owns focus (aria-activedescendant points from it); the
   // trap would otherwise land on the Back button when opened at a sub-level.
   useEffect(() => {
@@ -197,7 +212,7 @@ export function CommandBar() {
 
   const total = rows.length;
   const virtual = total > VIRTUALIZE_THRESHOLD;
-  const win = virtualWindow(total, scrollTop, LIST_MAX_HEIGHT_PX, ROW_HEIGHT_PX);
+  const win = virtualWindow(total, scrollTop, LIST_MAX_HEIGHT_PX, ROW_HEIGHT_PX, state.activeIndex);
   const visible = rows.slice(win.start, win.end);
   const optionId = (i: number) => `${listboxId}-opt-${i}`;
   const breadcrumb = state.path.length > 0 ? `${pathLabel(tree, state.path)} › ${state.path.join(" ")}` : "";
@@ -230,8 +245,8 @@ export function CommandBar() {
             ref={inputRef}
             className={styles.searchInput}
             role="combobox"
-            aria-expanded="true"
-            aria-controls={listboxId}
+            aria-expanded={total > 0}
+            aria-controls={total > 0 ? listboxId : undefined}
             aria-activedescendant={total > 0 ? optionId(state.activeIndex) : undefined}
             aria-autocomplete="list"
             aria-label="Search commands"
@@ -248,7 +263,7 @@ export function CommandBar() {
         </div>
         {breadcrumb && <div className={styles.breadcrumb} data-testid="command-bar-path">{breadcrumb}</div>}
         {total === 0 ? (
-          <div className={styles.empty} role="status">No matching commands</div>
+          <div className={styles.empty}>No matching commands</div>
         ) : (
           <ul
             ref={listRef}
@@ -256,6 +271,7 @@ export function CommandBar() {
             role="listbox"
             aria-label={fuzzy ? "Matching commands" : "Next keys"}
             className={styles.list}
+            onMouseDown={(e) => e.preventDefault()}
             onScroll={virtual ? (e) => setScrollTop(e.currentTarget.scrollTop) : undefined}
             data-testid="command-bar-list"
           >

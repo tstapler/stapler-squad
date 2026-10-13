@@ -42,7 +42,7 @@ describe("virtualWindow", () => {
   });
 
   it("should_renderOnlyWindowWhenOverThreshold", () => {
-    const w = virtualWindow(1000, 4400, 352, 44);
+    const w = virtualWindow(1000, 4400, 352, 44, 105);
     expect(w.end - w.start).toBeLessThan(40);
     expect(w.padTop + (w.end - w.start) * 44 + w.padBottom).toBe(1000 * 44);
   });

@@ -11,7 +11,7 @@ import {
   resetLeaderConfig,
   setLeaderConfig,
 } from "@/lib/shortcuts/leaderConfig";
-import { commandBarController } from "@/components/command-bar/commandBarController";
+import { commandBarController } from "@/lib/shortcuts/commandBarController";
 import { Kbd } from "@/components/ui/Kbd";
 import * as styles from "./settings.css";
 
@@ -71,8 +71,10 @@ function LeaderKeySetting() {
       setError(null);
       setRecording(false);
     };
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => document.removeEventListener("keydown", onKeyDown, true);
+    // window capture runs before the command bar's document capture listener, so
+    // recording the current leader chord does not just open the bar.
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [recording]);
 
   const openBar = useCallback(() => commandBarController.open([]), []);

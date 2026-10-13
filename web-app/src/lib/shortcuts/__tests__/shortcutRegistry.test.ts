@@ -66,4 +66,16 @@ describe("ShortcutRegistry sequences", () => {
     reg.releaseLazy();
     expect(reg.getPalette()).toEqual([]);
   });
+
+  it.each([["leafFirst"], ["branchFirst"]])("getTree_should_preferBranchOverPrefixLeaf_%s", (order) => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const leaf = () => reg.register("leaf", { ...base, label: "Leaf", sequence: ["n", "r"] });
+    const branch = () => reg.register("branch", { ...base, label: "Reply 1", sequence: ["n", "r", "1"] });
+    if (order === "leafFirst") { leaf(); branch(); } else { branch(); leaf(); }
+    const r = reg.getTree()[0].children[0];
+    expect(r.key).toBe("r");
+    expect(r.children.map((c) => c.key)).toEqual(["1"]);
+    expect(r.shortcut).toBeUndefined();
+    warn.mockRestore();
+  });
 });

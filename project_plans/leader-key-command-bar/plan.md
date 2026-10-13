@@ -142,3 +142,13 @@ T1, T2, T3 are serial (each builds on the prior). T4, T5, T7 can be parallelised
 - `web-app/src/lib/omnibar/` — no omnibar changes needed.
 - `session/` or `server/` Go code — pure frontend feature.
 - Any existing `.test.ts`/`.spec.ts` — only add, never modify existing test expectations.
+
+## Implementation notes (as built)
+
+- `useLeaderMode`, `CommandBarGroup`, `CommandBarItem`, `useCommandBarFilter` collapsed into a pure reducer + `interpretKey` in `components/command-bar/commandBarState.ts` and one `CommandBar.tsx`.
+- `commandBarController` lives in `lib/shortcuts/` so `lib/` never imports from `components/`.
+- Alt+W opens the bar at `w` when a bar is mounted and no modal is open; otherwise the legacy armed leader runs (keeps `useWindowShortcuts` standalone and its tests valid).
+- Reply options 1..N use the Reply card's own buttons (click `reply-option-N`), so the audited send path is unchanged. Known coupling: a test id as control flow.
+- Idle auto-close defaults to 3 s (`ssq.leaderIdleMs`, never lower).
+- Not done: macOS Safari/Chrome and headed Linux Chrome chord probe (`docs/reference/leader-key-chord-probe.md`); no `"command-bar"` ShortcutContext (not needed).
+- Accepted deviations: j/k are text in fuzzy mode (arrows navigate); modified chords (Ctrl+V etc.) are swallowed while the bar is open; the pane picker's window-level key capture is not suppressed by an open bar.

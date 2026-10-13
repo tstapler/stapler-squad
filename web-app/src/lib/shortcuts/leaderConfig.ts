@@ -61,11 +61,33 @@ function parse(raw: string | null): LeaderConfig {
   return DEFAULT_CONFIG;
 }
 
+let lastRaw: string | null | undefined;
+let lastConfig: LeaderConfig = DEFAULT_CONFIG;
+
+/** Called on every keydown, so the JSON parse is memoised on the raw stored string. */
 export function getLeaderConfig(): LeaderConfig {
   try {
-    return parse(typeof localStorage === "undefined" ? null : localStorage.getItem(LEADER_STORAGE_KEY));
+    const raw = typeof localStorage === "undefined" ? null : localStorage.getItem(LEADER_STORAGE_KEY);
+    if (raw !== lastRaw) {
+      lastRaw = raw;
+      lastConfig = parse(raw);
+    }
+    return lastConfig;
   } catch {
     return DEFAULT_CONFIG;
+  }
+}
+
+export const LEADER_IDLE_KEY = "ssq.leaderIdleMs";
+export const DEFAULT_LEADER_IDLE_MS = 3000;
+
+/** Idle time after which an open bar closes with no action. Never below the 3 s default. */
+export function getLeaderIdleMs(): number {
+  try {
+    const n = Number(localStorage.getItem(LEADER_IDLE_KEY));
+    return Number.isFinite(n) && n >= DEFAULT_LEADER_IDLE_MS ? n : DEFAULT_LEADER_IDLE_MS;
+  } catch {
+    return DEFAULT_LEADER_IDLE_MS;
   }
 }
 

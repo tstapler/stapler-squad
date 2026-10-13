@@ -136,11 +136,13 @@ export function virtualWindow(
   scrollTop: number,
   viewportHeight: number,
   rowHeight: number,
+  activeIndex = 0,
   overscan = 6,
 ): VirtualWindow {
   if (total <= VIRTUALIZE_THRESHOLD) return { start: 0, end: total, padTop: 0, padBottom: 0 };
-  const first = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
-  const last = Math.min(total, Math.ceil((scrollTop + viewportHeight) / rowHeight) + overscan);
+  // The active row is always rendered so aria-activedescendant never dangles while scroll state catches up.
+  const first = Math.max(0, Math.min(Math.floor(scrollTop / rowHeight) - overscan, activeIndex));
+  const last = Math.min(total, Math.max(Math.ceil((scrollTop + viewportHeight) / rowHeight) + overscan, activeIndex + 1));
   return { start: first, end: last, padTop: first * rowHeight, padBottom: (total - last) * rowHeight };
 }
 

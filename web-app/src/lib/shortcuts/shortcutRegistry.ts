@@ -140,13 +140,23 @@ export class ShortcutRegistry {
    */
   getTree(): ShortcutTree {
     const root: ShortcutTreeNode = { key: "", label: "", children: [] };
-    for (const [id, shortcut] of this.shortcuts) {
-      const seq = shortcut.sequence;
-      if (!seq || shortcut.hidden) continue;
+    // Longest sequences first so a branch always beats a leaf that is its prefix,
+    // independent of React effect registration order.
+    const entries = [...this.shortcuts.entries()]
+      .filter(([, sc]) => sc.sequence && !sc.hidden)
+      .sort(([, a], [, b]) => b.sequence!.length - a.sequence!.length);
+    for (const [id, shortcut] of entries) {
+      const seq = shortcut.sequence!;
       let node = root;
-      seq.forEach((key, i) => {
-        let child = node.children.find((c) => c.key === key);
+      let skipped = false;
+      for (let i = 0; i < seq.length; i++) {
+        const key = seq[i];
         const isLast = i === seq.length - 1;
+        let child = node.children.find((c) => c.key === key);
+        if (child?.shortcut) {
+          skipped = true; // would extend (or duplicate) a leaf
+          break;
+        }
         if (!child) {
           child = { key, label: i === 0 ? shortcut.group ?? key : key, children: [] };
           node.children.push(child);
@@ -154,19 +164,16 @@ export class ShortcutRegistry {
           child.label = shortcut.group;
         }
         if (isLast) {
-          if (child.children.length > 0 || child.shortcut) {
-            console.warn(`[ShortcutRegistry] Sequence ${JSON.stringify(seq)} of "${id}" collides with another binding — skipped.`);
-            return;
+          if (child.children.length > 0) {
+            skipped = true; // a longer sequence already owns this key as a branch
+            break;
           }
           child.shortcut = shortcut;
           child.label = shortcut.label;
-        } else if (child.shortcut) {
-          console.warn(`[ShortcutRegistry] Sequence ${JSON.stringify(seq)} of "${id}" extends a leaf — skipped.`);
-          node = { key: "", label: "", children: [] };
-          return;
         }
         node = child;
-      });
+      }
+      if (skipped) console.warn(`[ShortcutRegistry] Sequence ${JSON.stringify(seq)} of "${id}" collides with another binding — skipped.`);
     }
     return root.children;
   }

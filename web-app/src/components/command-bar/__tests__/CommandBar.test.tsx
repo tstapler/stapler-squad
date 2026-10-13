@@ -133,4 +133,48 @@ describe("CommandBar", () => {
     expect(screen.getAllByTestId("command-bar-item")[0]).toHaveAttribute("aria-setsize", "300");
     many.forEach((c) => c());
   });
+
+  it("idle_should_closeBarAfterThreeSecondsWithNoAction", () => {
+    jest.useFakeTimers();
+    render(<CommandBar />);
+    press(leader);
+    expect(screen.getByTestId("command-bar")).toBeInTheDocument();
+    act(() => {
+      jest.advanceTimersByTime(3000);
+    });
+    expect(screen.queryByTestId("command-bar")).toBeNull();
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("heldLeader_should_notToggleBarClosedOnAutoRepeat", () => {
+    render(<CommandBar />);
+    press(leader);
+    press({ ...leader, repeat: true });
+    expect(screen.getByTestId("command-bar")).toBeInTheDocument();
+  });
+
+  it("leaderPressedAgain_should_closeBar", () => {
+    render(<CommandBar />);
+    press(leader);
+    press(leader);
+    expect(screen.queryByTestId("command-bar")).toBeNull();
+  });
+
+  it("closedTrayDialog_should_notBlockLeader", () => {
+    const tray = document.createElement("div");
+    tray.setAttribute("role", "dialog");
+    tray.setAttribute("data-state", "closed");
+    document.body.appendChild(tray);
+    render(<CommandBar />);
+    press(leader);
+    expect(screen.getByTestId("command-bar")).toBeInTheDocument();
+    tray.remove();
+  });
+
+  it("tab_should_passThroughSoFocusTrapCanCycle", () => {
+    render(<CommandBar />);
+    press(leader);
+    const ev = press({ key: "Tab" });
+    expect(ev.defaultPrevented).toBe(false);
+  });
 });

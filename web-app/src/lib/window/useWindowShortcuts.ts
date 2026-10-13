@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef } from "react";
 import type { RefObject } from "react";
 import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import { registry, isInputElement } from "@/lib/shortcuts/shortcutRegistry";
-import { commandBarController } from "@/components/command-bar/commandBarController";
+import { commandBarController } from "@/lib/shortcuts/commandBarController";
 import type { NamedWindow, WindowId } from "./windowTypes";
 
 /**
