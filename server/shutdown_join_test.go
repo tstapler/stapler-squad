@@ -1,6 +1,9 @@
 package server
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"regexp"
 	"runtime"
 	"strings"
@@ -46,13 +49,35 @@ func goroutineStacks() map[string]string {
 	return out
 }
 
-// TestShutdown_JoinsAllWireDepsGoroutines pins that every goroutine
-// wireDepsIntoServer starts has exited by the time Shutdown returns, so none
-// can write into the state dir afterwards (the cause of the "TempDir RemoveAll
-// cleanup: directory not empty" flake). It deliberately does not retry the way
-// goleak.VerifyNone does: a retry would wait out the very straggler we are
-// asserting cannot exist. Goroutines present before NewServerWithDeps
-// (BuildDependencies' own, which have their own lifetime) are excluded.
+// newStapleStacks returns the stacks of stapler-squad goroutines that did not
+// exist in before, excluding the calling test's own goroutine.
+func newStapleStacks(before map[string]string) []string {
+	var out []string
+	for id, stack := range goroutineStacks() {
+		if _, existed := before[id]; existed {
+			continue
+		}
+		if !strings.Contains(stack, "stapler-squad/") || strings.Contains(stack, "TestShutdown_JoinsAllWireDepsGoroutines") {
+			continue
+		}
+		out = append(out, stack)
+	}
+	return out
+}
+
+// TestShutdown_JoinsAllWireDepsGoroutines guards the "directory not empty"
+// TempDir flake: no goroutine wireDepsIntoServer starts may outlive Shutdown(),
+// or it can write into the state dir afterwards. Goroutines present before
+// NewServerWithDeps (BuildDependencies' own, which have their own lifetime) are
+// excluded. Two checks, because each alone has a blind spot:
+//
+//  1. Registration (deterministic, see TestWireDepsIntoServer_HasNoBareGoStatements):
+//     wireDepsIntoServer must not contain a bare `go` statement.
+//  2. Liveness (best effort, this test): no new goroutine may still be running
+//     right after Shutdown returns. This catches an unjoined goroutine inside a
+//     component's own Start, but only if it is still alive when the check runs;
+//     there is deliberately no retry (unlike goleak.VerifyNone), which would
+//     wait out the very straggler being asserted absent.
 func TestShutdown_JoinsAllWireDepsGoroutines(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	deps, err := BuildDependencies()
@@ -62,15 +87,35 @@ func TestShutdown_JoinsAllWireDepsGoroutines(t *testing.T) {
 	srv := NewServerWithDeps("localhost:0", deps)
 	require.NoError(t, srv.Shutdown())
 
-	var stragglers []string
-	for id, stack := range goroutineStacks() {
-		if _, existed := before[id]; existed {
-			continue
-		}
-		if !strings.Contains(stack, "stapler-squad/") || strings.Contains(stack, "TestShutdown_JoinsAllWireDepsGoroutines") {
-			continue
-		}
-		stragglers = append(stragglers, stack)
-	}
+	stragglers := newStapleStacks(before)
 	require.Empty(t, stragglers, "goroutines started by wireDepsIntoServer outlived Shutdown():\n%s", strings.Join(stragglers, "\n\n"))
+}
+
+// TestWireDepsIntoServer_HasNoBareGoStatements fails if wireDepsIntoServer
+// launches a goroutine with a bare `go`. Every one must go through
+// Server.goBackground or joinAfterCancel (or a Start* helper taking
+// &srv.backgroundTasksWG) so Shutdown joins it. Checked on the AST because a
+// goroutine that exits instantly on cancel is invisible to a runtime check.
+func TestWireDepsIntoServer_HasNoBareGoStatements(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "server.go", nil, 0)
+	require.NoError(t, err)
+
+	var found bool
+	var bare []string
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "wireDepsIntoServer" {
+			continue
+		}
+		found = true
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			if g, ok := n.(*ast.GoStmt); ok {
+				bare = append(bare, fset.Position(g.Pos()).String())
+			}
+			return true
+		})
+	}
+	require.True(t, found, "wireDepsIntoServer not found in server.go; update this test if it was renamed")
+	require.Empty(t, bare, "bare `go` in wireDepsIntoServer; use srv.goBackground or srv.joinAfterCancel so Shutdown joins it")
 }

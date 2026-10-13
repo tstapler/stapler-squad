@@ -380,7 +380,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		if gate := deps.SessionService.DeliveryGate(); gate != nil {
 			pushOpts = append(pushOpts, push.WithSessionDeliveryGate(gate))
 		}
-		push.StartPushSubscriber(serverCtx, deps.EventBus, pushService, pushOpts...)
+		pushDone := push.StartPushSubscriber(serverCtx, deps.EventBus, pushService, pushOpts...)
+		srv.backgroundTasksWG.Go(func() { <-pushDone })
 		log.Info("Push notification service initialized")
 	}
 
@@ -1184,7 +1185,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	}
 
 	// Start EventBus analytics subscriber (maps session lifecycle events to analytics records).
-	analytics.StartAnalyticsSubscriber(serverCtx, deps.EventBus, analyticsProvider)
+	analyticsDone := analytics.StartAnalyticsSubscriber(serverCtx, deps.EventBus, analyticsProvider)
+	srv.backgroundTasksWG.Go(func() { <-analyticsDone })
 	log.Info("Analytics EventBus subscriber started")
 
 	// Start EventBus GitHub forward-sync subscriber (closes the linked GitHub
@@ -1567,9 +1569,11 @@ func (s *Server) Start(ctx context.Context) error {
 const shutdownHooksTimeout = 30 * time.Second
 
 // defaultBackgroundTasksJoinTimeout bounds how long Shutdown waits for the
-// fork-pressure logger, zombie watcher, and zombie reaper goroutines
-// (session/tmux) to exit after being signaled via connCtxCancel, before
-// proceeding regardless (backlog item 81e82fee-9528-4dc9-a513-1040b4dee2ec).
+// background goroutines on backgroundTasksWG (wireDepsIntoServer's sweepers,
+// pollers, watchers and subscribers, plus the fork-pressure logger, zombie
+// watcher, and zombie reaper in session/tmux) to exit after being signaled via
+// connCtxCancel, before proceeding regardless (backlog item
+// 81e82fee-9528-4dc9-a513-1040b4dee2ec).
 // zombie_detector.go's ScanZombies shells out to `ps` under its own 10s
 // timeout, so this value is not generous headroom above that — a stuck `ps`
 // call can consume the whole budget. Kept at 10s to match stopJoinTimeout's
@@ -1616,11 +1620,11 @@ func (s *Server) Shutdown() error {
 		log.Warn("[shutdown] shutdown hooks did not complete within deadline, proceeding anyway", "timeout", shutdownHooksTimeout)
 	}
 
-	// Join the fork-pressure logger, zombie watcher, and zombie reaper
-	// goroutines (signaled above via connCtxCancel) so Shutdown doesn't return
+	// Join every goroutine registered on backgroundTasksWG (signaled above via
+	// connCtxCancel) so Shutdown doesn't return
 	// while they're still mid-tick (backlog item 81e82fee-9528-4dc9-a513-1040b4dee2ec).
 	if !syncutil.WaitWithTimeout(&s.backgroundTasksWG, s.backgroundTasksJoinTimeout) {
-		log.Warn("[shutdown] background tasks (fork-pressure logger/zombie watcher/zombie reaper) did not exit within timeout", "timeout", s.backgroundTasksJoinTimeout)
+		log.Warn("[shutdown] background tasks (sweepers, pollers, watchers, subscribers, tmux tickers) did not all exit within timeout", "timeout", s.backgroundTasksJoinTimeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
