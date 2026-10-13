@@ -14,13 +14,11 @@ import type { RadioGroupOption } from "@/components/ui/RadioGroup";
 import { radioBtn, radioBtnActive } from "@/components/ui/RadioGroup.css";
 import { isGitHubRef } from "@/lib/github/urlParser";
 import { useGitHubEnterpriseHosts } from "@/lib/hooks/useGitHubEnterpriseHosts";
-import { getApiBaseUrl } from "@/lib/config";
+import { useBacklogImageAttachment } from "@/lib/hooks/useBacklogImageAttachment";
 import { routes } from "@/lib/routes";
 import { BACKLOG_CATEGORIES, CATEGORY_DEFAULTS } from "@/lib/backlog/categoryDefaults";
 import * as styles from "./BacklogItemForm.css";
 import * as markdownStyles from "./markdownBody.css";
-
-const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB — matches server-side cap
 
 // The 9 content-template fields on PipelineMode — used to detect whether the
 // selected mode's rendered content depends on {{repo_path}} (G-1).
@@ -133,9 +131,16 @@ export function BacklogItemForm({
   const [errors, setErrors] = useState<FormErrors>({});
   const [submitting, setSubmitting] = useState(false);
   const [descriptionTab, setDescriptionTab] = useState<"write" | "preview">("write");
-  const [attachmentError, setAttachmentError] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
   const descriptionRef = useRef<HTMLTextAreaElement>(null);
+  const {
+    error: attachmentError,
+    uploading,
+    onFileInputChange: handleFileInputChange,
+    onPaste: handleDescriptionPaste,
+  } = useBacklogImageAttachment({
+    textareaRef: descriptionRef,
+    setValue: setDescription,
+  });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { listPipelineModes } = useBacklogService();
@@ -433,82 +438,6 @@ export function BacklogItemForm({
       prev.map((c, i) => (i === index ? { ...c, status } : c))
     );
   }, []);
-
-  // Uploads a single image and inserts a markdown image reference at the cursor.
-  // ponytail: cursor position is captured once at upload start, so two uploads
-  // fired back-to-back can land at a stale offset relative to each other —
-  // acceptable for the rare double-paste case; revisit with an insertion-token
-  // queue if that turns out to matter in practice.
-  const uploadAttachment = useCallback(
-    async (file: File) => {
-      if (!file.type.startsWith("image/")) {
-        setAttachmentError("Only image files can be attached.");
-        return;
-      }
-      if (file.size > MAX_ATTACHMENT_BYTES) {
-        setAttachmentError("Image is too large (max 10 MB).");
-        return;
-      }
-      const el = descriptionRef.current;
-      const start = el?.selectionStart ?? description.length;
-      const end = el?.selectionEnd ?? description.length;
-      setAttachmentError(null);
-      setUploading(true);
-      try {
-        const formData = new FormData();
-        formData.append("file", file);
-        const resp = await fetch(`${getApiBaseUrl()}/v1/upload-backlog-attachment`, {
-          method: "POST",
-          body: formData,
-        });
-        if (!resp.ok) {
-          const msg =
-            resp.status === 413
-              ? "Image is too large (max 10 MB)."
-              : resp.status === 415
-                ? "Unsupported image type — use PNG, JPEG, GIF, or WebP."
-                : "Upload failed.";
-          setAttachmentError(msg);
-          return;
-        }
-        const data = (await resp.json()) as { path: string; filename: string };
-        const url = encodeURI(`/api/local/serve${data.path}`);
-        const markdown = `![${data.filename}](${url})`;
-        setDescription((prev) => prev.slice(0, start) + markdown + prev.slice(end));
-        requestAnimationFrame(() => {
-          el?.focus();
-          const pos = start + markdown.length;
-          el?.setSelectionRange(pos, pos);
-        });
-      } catch {
-        setAttachmentError("Network error — upload failed.");
-      } finally {
-        setUploading(false);
-      }
-    },
-    [description.length]
-  );
-
-  const handleFileInputChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      e.target.value = "";
-      if (file) void uploadAttachment(file);
-    },
-    [uploadAttachment]
-  );
-
-  const handleDescriptionPaste = useCallback(
-    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-      const item = Array.from(e.clipboardData.items).find((i) => i.type.startsWith("image/"));
-      if (!item) return;
-      const file = item.getAsFile();
-      if (!file) return;
-      e.preventDefault();
-      void uploadAttachment(file);
-    },
-    [uploadAttachment]
-  );
 
   const busy = submitting || isLoading;
   const { hosts: enterpriseHosts } = useGitHubEnterpriseHosts();

@@ -213,6 +213,9 @@ type Scanner struct {
 	// removed. Set by Start; nil before Start.
 	maintenanceDone chan struct{}
 
+	// wg tracks every goroutine Start launches; see Wait.
+	wg sync.WaitGroup
+
 	mu deadlock.RWMutex
 }
 
@@ -275,11 +278,11 @@ func (s *Scanner) Start(ctx context.Context) {
 
 	const numWorkers = 4
 	for i := 0; i < numWorkers; i++ {
-		go s.worker(ctx)
+		s.wg.Go(func() { s.worker(ctx) })
 	}
-	go s.coordinator(ctx)
-	go s.subscribeToSessionEvents(ctx)
-	go s.pruneMissingRepos(ctx)
+	s.wg.Go(func() { s.coordinator(ctx) })
+	s.wg.Go(func() { s.subscribeToSessionEvents(ctx) })
+	s.wg.Go(func() { s.pruneMissingRepos(ctx) })
 
 	if w, err := fsnotify.NewWatcher(); err != nil {
 		log.Warn("fsnotify unavailable, scanner falling back to tick-only polling", "err", err)
@@ -287,7 +290,7 @@ func (s *Scanner) Start(ctx context.Context) {
 		s.mu.Lock()
 		s.fsWatcher = w
 		s.mu.Unlock()
-		go s.fsnotifyLoop(ctx)
+		s.wg.Go(func() { s.fsnotifyLoop(ctx) })
 	}
 
 	// Runs unconditionally (not gated on reader type) so cache persistence
@@ -295,7 +298,7 @@ func (s *Scanner) Start(ctx context.Context) {
 	// when the reader is the real GoGitVCSReader.
 	done := make(chan struct{})
 	s.maintenanceDone = done
-	go func() {
+	s.wg.Go(func() {
 		defer close(done)
 		s.mu.RLock()
 		maintenanceInterval := s.maintenanceTickInterval
@@ -335,7 +338,14 @@ func (s *Scanner) Start(ctx context.Context) {
 				s.persistCacheToDisk()
 			}
 		}
-	}()
+	})
+}
+
+// Wait blocks until every goroutine Start launched has exited, including the
+// maintenance goroutine's final cache flush. Call it after cancelling Start's
+// ctx; without a cancelled ctx it blocks forever.
+func (s *Scanner) Wait() {
+	s.wg.Wait()
 }
 
 // hydrateCacheFromDisk primes the in-memory worktreeCache from the state

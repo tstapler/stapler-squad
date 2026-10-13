@@ -56,12 +56,7 @@ func TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueu
 		t.Fatalf("BuildDependencies: %v", err)
 	}
 
-	srv := NewServerWithDeps("localhost:0", deps)
-	t.Cleanup(func() {
-		if err := srv.Shutdown(); err != nil {
-			t.Logf("srv.Shutdown: %v", err)
-		}
-	})
+	srv := newShutdownOnCleanupServer(t, "localhost:0", deps)
 
 	if deps.SlackNotifier == nil {
 		t.Fatal("expected ServerDependencies.SlackNotifier to be wired")
@@ -501,12 +496,7 @@ func TestWireDepsIntoServer_should_NotConstructPoller_When_HeadlessPoolNil(t *te
 	require.NoError(t, err)
 	deps.SessionTagClassificationPoller = nil
 
-	srv := NewServerWithDeps("localhost:0", deps)
-	t.Cleanup(func() {
-		if err := srv.Shutdown(); err != nil {
-			t.Logf("srv.Shutdown: %v", err)
-		}
-	})
+	newShutdownOnCleanupServer(t, "localhost:0", deps)
 
 	assert.Nil(t, deps.SessionTagClassificationPoller, "a nil poller must stay unconstructed, never started")
 	assert.NotNil(t, deps.SessionService, "the rest of the server must start normally")
@@ -523,12 +513,7 @@ func TestWireDepsIntoServer_should_StartPollerExactlyOnce_When_HeadlessPoolPrese
 	deps.SessionTagClassificationPoller = session.NewSessionTagClassificationPoller(noopTagPoolClient{}, classifier.NewTaggingEngine())
 	require.False(t, deps.SessionTagClassificationPoller.Running(), "poller must not be running before the server wires it up")
 
-	srv := NewServerWithDeps("localhost:0", deps)
-	t.Cleanup(func() {
-		if err := srv.Shutdown(); err != nil {
-			t.Logf("srv.Shutdown: %v", err)
-		}
-	})
+	newShutdownOnCleanupServer(t, "localhost:0", deps)
 
 	assert.True(t, deps.SessionTagClassificationPoller.Running(), "wireDepsIntoServer must start the poller")
 }

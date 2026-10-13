@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/linkdata/deadlock"
@@ -45,6 +46,8 @@ type HistoryLinker struct {
 	instances      []*Instance
 	backoffs       map[string]*sessionBackoff
 	extraCallbacks []func(string) // additional per-file callbacks (e.g. TokenStore)
+
+	runWG sync.WaitGroup // tracks the run goroutine launched by Start; see Wait
 }
 
 // NewHistoryLinkerFromRealInspector creates a HistoryLinker backed by the real
@@ -180,7 +183,16 @@ func (hl *HistoryLinker) Start(ctx context.Context) {
 		}
 	}
 
-	go hl.run(ctx)
+	hl.runWG.Go(func() { hl.run(ctx) })
+}
+
+// Wait blocks until the goroutines Start launched (the poll loop and the file
+// watcher) have exited. Call it after cancelling Start's ctx.
+func (hl *HistoryLinker) Wait() {
+	hl.runWG.Wait()
+	if hl.watcher != nil {
+		<-hl.watcher.Stopped()
+	}
 }
 
 // run is the polling loop goroutine.

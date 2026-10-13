@@ -289,6 +289,12 @@ func (rqp *ReviewQueuePoller) Start(ctx context.Context) {
 	log.Info("ReviewQueuePoller started", "poll_interval", rqp.config.PollInterval)
 }
 
+// Wait blocks until the poll loop launched by Start has exited. Unlike Stop it
+// does not cancel anything; call it after cancelling Start's ctx.
+func (rqp *ReviewQueuePoller) Wait() {
+	rqp.wg.Wait()
+}
+
 // Stop stops the poller.
 func (rqp *ReviewQueuePoller) Stop() {
 	rqp.mu.Lock()

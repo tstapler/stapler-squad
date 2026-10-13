@@ -980,27 +980,17 @@ export const trayVariant = styleVariants({
       borderTopRightRadius: "12px",
       // The bottom nav's measured height already includes the inset; pad only what it does not cover (TS-7).
       paddingBottom: "max(0px, calc(env(safe-area-inset-bottom, 0px) - var(--bottom-nav-height, 0px)))",
+      // Height and bottom follow the keyboard, so ease them; transform stays the open/close motion.
+      transition:
+        "transform 0.25s ease-out, height 0.2s ease-out, bottom 0.2s ease-out, visibility 0s linear 0.25s",
+      "@media": { "(prefers-reduced-motion: reduce)": { transition: "none" } },
       selectors: {
         '&[data-state="open"]': { transform: "translateY(0)" },
         '&[data-sheet="expanded"]': { height: "calc(var(--viewport-height, 100dvh) * 0.85)" },
+        // Keyboard up: the sheet rides its top edge (bottom already tracks --keyboard-height) and
+        // takes the room above it, so the search results stay visible instead of a 27% sliver.
+        '&[data-keyboard="open"]': { height: "calc(var(--viewport-height, 100dvh) * 0.85)" },
       },
-    },
-  ],
-  /** Soft keyboard open on a phone: anchored under the tab row so the keyboard never covers it. */
-  topSheet: [
-    trayBase,
-    {
-      left: 0,
-      right: 0,
-      top: "max(var(--mobile-stack-top-offset, 0px), env(safe-area-inset-top, 0px))",
-      height: "calc(var(--viewport-height, 100dvh) * 0.5)",
-      maxHeight:
-        "calc(var(--viewport-height, 100dvh) - max(var(--mobile-stack-top-offset, 0px), env(safe-area-inset-top, 0px)))",
-      transform: "translateY(-100%)",
-      borderBottom: `1px solid ${vars.color.borderColor}`,
-      borderBottomLeftRadius: "12px",
-      borderBottomRightRadius: "12px",
-      selectors: { '&[data-state="open"]': { transform: "translateY(0)" } },
     },
   ],
   /** Phone on its side: a right-hand column that honors the notch insets. */

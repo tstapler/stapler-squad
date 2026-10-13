@@ -116,10 +116,14 @@ func (t target) exec(ctx context.Context, op backend.OperationName, strip bool, 
 	)
 	// The one sanctioned git spawn site: every Run of git is counted here, once.
 	t.spawns.Count(ctx, op, t.remote)
+	name, argv := "git", args
+	if t.remote {
+		name, argv = remoteGitArgv(args)
+	}
 	if sr, ok := t.runner.(backend.StdoutRunner); ok {
-		out, err = sr.RunStdout(ctx, t.dir, "git", args...)
+		out, err = sr.RunStdout(ctx, t.dir, name, argv...)
 	} else {
-		out, err = t.runner.Run(ctx, t.dir, "git", args...)
+		out, err = t.runner.Run(ctx, t.dir, name, argv...)
 		if strip {
 			out = stripNoise(out)
 		}
@@ -128,6 +132,15 @@ func (t target) exec(ctx context.Context, op backend.OperationName, strip bool, 
 		return result{out: out}, classify(op, out, err)
 	}
 	return result{out: out, combined: !isStdoutRunner(t.runner)}, nil
+}
+
+// remoteGitArgv prefixes git with `env RequiredGitEnv...`. An SSH runner cannot carry environment
+// (session.Setenv needs sshd AcceptEnv, off by default; see tmux.SSHRunner.Start), so the contract
+// is met on the command line. Local runs get the env from the local runner instead, where it is
+// scoped to git alone.
+func remoteGitArgv(args []string) (string, []string) {
+	argv := append(backend.RequiredGitEnv(), "git")
+	return "env", append(argv, args...)
 }
 
 func isStdoutRunner(r backend.Runner) bool {
@@ -233,7 +246,12 @@ func sentinelFor(lower, original string) error {
 	return nil
 }
 
-type exitCoder interface{ ExitCode() int }
+type (
+	exitCoder interface{ ExitCode() int }
+	// exitStatuser is golang.org/x/crypto/ssh.ExitError's accessor: an SSH runner's non-zero
+	// exit has ExitStatus, not ExitCode.
+	exitStatuser interface{ ExitStatus() int }
+)
 
 // exitCode returns the process exit status carried by err, or -1 when it carries none
 // (a dial failure, a cancelled context).
@@ -241,6 +259,10 @@ func exitCode(err error) int {
 	var ec exitCoder
 	if errors.As(err, &ec) {
 		return ec.ExitCode()
+	}
+	var es exitStatuser
+	if errors.As(err, &es) {
+		return es.ExitStatus()
 	}
 	return -1
 }

@@ -186,6 +186,29 @@ tooltip-string change, not new plumbing. Not blocking for this ship.
 │                              2m ago    [✓ Approve]  [✗ Deny]       │
 │                                        (still clickable, not        │
 │                                         disabled — see flow below)  │
+│                                                                      │
+│                                        ⚠ Approve anyway             │
+│                                        ← own line, below the        │
+│                                          primary row; small ghost/  │
+│                                          warning-outline text       │
+│                                          button, NOT a 3rd button   │
+│                                          of equal weight (Story     │
+│                                          2.2.4 / Task 2.2.4c)       │
+│                                                                      │
+│ (reviewer clicks "Approve anyway" → confirm dialog, see below)      │
+│  ┌ Approve Despite Failing CI? ───────────────────────────────┐    │
+│  │ CI is currently failing on this branch.                    │    │
+│  │ ⚠ This bypasses the CI-red block for this approval only.   │    │
+│  │   The override is recorded for other reviewers to see.     │    │
+│  │                          [Approve Anyway]      [Cancel]     │    │
+│  └──────────────────────────────────────────────────────────┘    │
+│                                                                      │
+│ (override succeeds → resolved state)                                │
+│                              2m ago    ⚠ Approved (CI override)     │
+│                                        ← distinct from the plain    │
+│                                          "✓ Approved" badge, same   │
+│                                          resolvedBadge chrome, new  │
+│                                          icon+text only (see below) │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -239,13 +262,134 @@ ApprovalService.ResolveApproval (server)
                the global flag (see Exit-Path Analysis below)
              • Click "View CI run" — opens the failing run in a new tab
                to investigate
+             • Click "⚠ Approve anyway" — the scoped, per-approval
+               override added by Story 2.2.4 (see dedicated subsection
+               below for the full wireframe/interaction/badge spec)
 ```
+
+### "Approve anyway" Override — Wireframe and Interaction Spec (Story 2.2.4 / Task 2.2.4c)
+
+This subsection was added in this revision to close the gap left when ux.md's
+original pass predated plan.md's adversarial-review addition of Story 2.2.4.
+It covers the override button itself, its confirm step, and the post-override
+badge — the three things Task 2.2.4c's literal scope (proto field, RPC call,
+clear the block-error state) does not fully specify on its own.
+
+**Button visual weight — why it must not read as a 3rd equal-weight button.**
+This is an override of a safety gate, not a normal decision alternative like
+Approve vs. Deny, so its visual weight must communicate "you are choosing to
+bypass a warning," not "here is a third equally-valid option":
+
+- Renders only when a stored block error exists for that `approvalId` — same
+  condition Task 2.2.4c already specifies, so no new state is introduced to
+  decide *when* it shows.
+- Positioned on its **own line below** the Approve/Deny row, not inline
+  beside them — this positional demotion is the primary weight signal.
+- Styled as a small ghost/text button using `vars.color.warning` (not
+  `vars.color.success` used by `approveButton` or `vars.color.error` used by
+  `denyButton`), mirroring the existing outline-button recipe at
+  `web-app/src/components/ui/NotificationPanel.css.ts:450-504`
+  (`approveButton`/`denyButton`: 1px colored border, transparent background,
+  colored text, fills to solid color + white text on hover) but at a smaller
+  font-size (e.g. `0.72rem` vs. their `0.78rem`) and without the `font-weight:
+  600` — a visibly quieter, third-tier action.
+- Label: **"⚠ Approve anyway"** — reuses the same ⚠️ glyph already rendered
+  in the inline block-explanation text immediately above it (Task 2.2.2b),
+  visually tying the override to the specific warning it overrides (Gestalt
+  proximity/similarity), consistent with this doc's existing "icon+text, not
+  color alone" rule (AC14 below).
+- Click target: a real `<button>` element, and — despite the smaller visual
+  footprint — it must keep the same `44px` mobile min-height media query
+  already applied to `approveButton`/`denyButton`
+  (`NotificationPanel.css.ts:470-475`). Visual weight and touch-target size
+  are independent concerns; shrinking one must not shrink the other.
+
+**Confirm-on-click.** Given this bypasses a safety gate whose own design
+goal (requirements.md Goal 2) is that it must remain overridable but not
+trivially so, the override button opens one confirm step rather than firing
+the RPC immediately. Rather than inventing a new confirm idiom, this reuses
+the repo's existing consequential-action-confirm pattern verbatim: the
+`confirmDialog`/`dialogContent`/`dialogActions`/`submitButton`/
+`cancelButton`/`warningText` classes already defined in
+`web-app/src/components/sessions/SessionCard.css.ts` and used for the
+"Run Autonomously" confirmation in
+`web-app/src/components/sessions/SessionActionsOverflow.tsx:401-430`
+(`role="dialog"`, `aria-modal="true"`, portal-rendered to `document.body` per
+`.claude/rules/css-architecture.md`'s createPortal-for-overlays rule). Dialog
+content, matching that precedent's brevity (2 sentences + 2 buttons, no extra
+fields):
+
+- Title: "Approve Despite Failing CI?"
+- One line of context: "CI is currently failing on this branch."
+- One `warningText`-styled caveat line: "This bypasses the CI-red block for
+  this approval only. The override is recorded for other reviewers to see."
+- "Approve Anyway" (`submitButton`) — fires the exact call Task 2.2.4c
+  already specifies, `resolveApproval(approvalId, "allow", group.allIds,
+  true)`. The dialog is a pure client-side gate in front of that call; it
+  adds no new RPC surface.
+- "Cancel" (`cancelButton`) — closes the dialog, no RPC call, blocked state
+  is unchanged (Deny / Approve / Approve-anyway all still available) — a
+  true no-op, preserving "user control and freedom."
+
+(`NotificationPanel.tsx` does not currently import `SessionCard.css.ts`;
+whether the implementer cross-imports these classes or defines an equivalent
+local recipe in `NotificationPanel.css.ts` is an implementation detail — the
+interaction *structure* should match this precedent, not invent a new one.)
+
+**Post-override visual indicator — "approved despite failing CI."** Verified
+against Task 2.2.4c's literal text: on success it "clear[s] the stored
+block-error state for that `approvalId` ... same success path Approve
+already takes at `:166`" — i.e. `resolvedApprovals[approvalId]` is set to
+plain `"allow"`, which renders the exact same `<span className={resolvedBadge}
+data-decision="allow">✓ Approved</span>` as any ordinary approval
+(`NotificationPanel.tsx:452-453`). **As specified, there is no way for a
+later viewer to tell an override apart from a normal approval — this is
+the gap this review exists to close**, and it is precisely what
+`research/ux.md`'s Social JTBD ("a visible, checkable record") depends on.
+
+Checked whether any surface beyond `NotificationPanel.tsx` could show this
+more cheaply: `SessionCard.tsx`/`SessionRow.tsx` render no approval-decision
+state at all today (grepped `approval_decision`/`ApprovalDecision`/
+`resolvedBadge` across both — zero hits), so there is no existing
+session-card surface to extend at low cost; building one from scratch would
+be new UI beyond this gap's proportional scope. The one existing, low-cost
+path is `NotificationPanel.tsx`'s own history view, which already has a
+real, persisted (not just in-memory) signal to key off: `resolvedApprovals`
+is seeded on load from `notification.metadata["approval_decision"]`
+(`NotificationPanel.tsx:140-160`), a value the server stamps via
+`as.notificationStore.SetMetadata(req.Msg.ApprovalId, "approval_decision",
+req.Msg.Decision)` at `server/services/approval_service.go:81` — currently
+always the literal decision string (`"allow"`/`"deny"`), with no override
+distinction. Task 2.2.4b already computes the exact `blocked` boolean needed
+("when `blocked && req.Msg.OverrideCiBlock`... log a distinct line") but
+threads it no further than that log line.
+
+**Minimal-cost recommendation (reuse existing plumbing, not new UI):** when
+`blocked && req.Msg.OverrideCiBlock` is true — the same condition Task
+2.2.4b already uses for its distinct log line — stamp `approval_decision` as
+`"allow_override"` instead of plain `"allow"` at that one `SetMetadata` call
+site (`approval_service.go:81`), a one-line change beyond Task 2.2.4b's
+current scope. On the frontend, extend `resolvedApprovals`'s type from
+`"allow" | "deny" | "expired"` to add `"allow_override"`
+(`NotificationPanel.tsx:136`), add an `else if (decision === "allow_override")`
+branch to the existing seeding effect (`:146-158`), and render a 4th
+`resolvedBadge` branch: `data-decision="allow_override"`, text **"⚠ Approved
+(CI override)"**. No new CSS is needed — `resolvedBadge` itself carries no
+`data-decision`-keyed color today (verified: it's layout-only chrome; the
+existing "✓ Approved"/"✗ Denied"/"Expired" badges are already
+icon+text-differentiated, not color-differentiated), so the override badge
+follows the exact same icon+text idiom already in place, consistent with
+AC14 below. This is the cheapest option that closes the gap without
+inventing a new UI element — it reuses a field, a seeding effect, and a
+badge component that all already exist end-to-end.
+
+---
 
 ### Error / edge-case handling
 
 | Case | What the user sees | Exit offered |
 |---|---|---|
-| Block fires (flag on, PR CI failing) | Inline warning text above Approve/Deny, Approve button re-enabled (not disabled) after the failed attempt | Deny; retry Approve; investigate via "View CI run" link |
+| Block fires (flag on, PR CI failing) | Inline warning text above Approve/Deny, Approve button re-enabled (not disabled) after the failed attempt; "⚠ Approve anyway" override available below the primary row (Story 2.2.4, see subsection above) | Deny; retry Approve; "Approve anyway" (with confirm step); investigate via "View CI run" link |
 | Session has no PR | Block never fires (short-circuits on `githubPrNumber == 0` — AC7) | Normal Approve flow, unaffected |
 | Flag is off (default) | Block never fires | Normal Approve flow, unaffected |
 | Approval already resolved elsewhere (existing "expired" case) | Existing generic "Expired" badge — **must remain a separate code path** from the new blocked-CI case per Task 2.2.2b, since both currently land in the same `catch` block today | "Expired" is terminal — no action possible, matches existing behavior (out of scope for this feature to change) |
@@ -265,12 +409,30 @@ recommendation.
 
 ### Exit-Path / Human-Override Analysis (explicitly requested verification)
 
-**Finding: there is no scoped, per-approval human override.** Reading
-Story 2.2.2's acceptance criteria and Task 2.2.2a/b line by line: the block
-returns a hard `connect.CodeFailedPrecondition` error and nothing in the
-plan adds an "approve anyway" parameter, a second confirmation button, or
-any bypass affordance scoped to a single approval. The only ways out of a
-blocked state are:
+**Update to this revision: the override affordance is now designed, not
+just referenced.** This section originally found a real gap — plan.md's
+Story 2.2.2/2.2.3, as they stood when this doc was first written, shipped a
+hard block with no scoped per-approval override. That finding held at the
+time and drove a documented product/eng escalation (see the original
+recommendation, preserved below). Since then, plan.md's adversarial review
+added **Story 2.2.4** ("Override the AC5 block with an audited 'Approve
+anyway'") to close exactly this gap. This revision closes the loop on the
+UX side: the "Approve anyway" Override — Wireframe and Interaction Spec"
+subsection above gives that mechanism a concrete button design, confirm
+step, and post-override badge — the three things Story 2.2.4's own scope
+(a proto field, a guard-clause change, and a bare RPC call) does not fully
+specify by itself. **AC8 below now reads PASSES, not FAILS**, on that
+basis — with one residual, explicitly named gap (the post-override badge
+needs a small addition beyond Task 2.2.4b/2.2.4c's current written scope;
+see the "Minimal-cost recommendation" above).
+
+The original finding, for context on what changed: reading Story 2.2.2's
+acceptance criteria and Task 2.2.2a/b line by line (as they stood before
+Story 2.2.4 was added), the block returned a hard
+`connect.CodeFailedPrecondition` error and nothing in the plan added an
+"approve anyway" parameter, a second confirmation button, or any bypass
+affordance scoped to a single approval. The only ways out of a blocked
+state were:
 
 1. **Deny** — always available, but this is not an override; it discards
    the approval rather than letting the reviewer approve despite red CI.
@@ -290,31 +452,40 @@ blocked state are:
    it silently removes the guard for every other reviewer/session in the
    interim.
 
-This directly contradicts the feature's own stated framing.
+This directly contradicted the feature's own stated framing.
 `research/ux.md` §5 (Social JTBD) says the block "gives the reviewer a
 system-level reason ('the tool wouldn't let me') rather than requiring them
 to personally remember to check" — i.e., the rule is meant to be a
 **speed bump with a documented override**, not an unconditional wall. As
-currently planned, a reviewer who has legitimately decided a red check is
-safe to override has no in-context way to record that decision; they must
-either lie via Deny (not applicable — Deny doesn't approve), wait, or ask
-an admin to globally disable the safety net for everyone. **This is a
-genuine UX gap, not a nitpick** — it risks the block becoming exactly the
-"hard, unbypassable gate" the requirements doc explicitly says it must not
-be (requirements.md Goal 2: "not a hard-coded always-on gate").
+planned at the time, a reviewer who had legitimately decided a red check was
+safe to override had no in-context way to record that decision; they would
+have had to either lie via Deny (not applicable — Deny doesn't approve),
+wait, or ask an admin to globally disable the safety net for everyone. This
+was a genuine UX gap, not a nitpick — it risked the block becoming exactly
+the "hard, unbypassable gate" the requirements doc explicitly says it must
+not be (requirements.md Goal 2: "not a hard-coded always-on gate").
 
-Recommended fix (design-level, not mandating an implementation): add a
-single additional affordance to the blocked state — e.g. a secondary
-"Approve anyway" button that resends `ResolveApproval` with an explicit
-`overrideCiBlock: true` field, server-side logs the override (mirrors the
-existing `log.Info("[ApprovalService] resolved approval"...)` pattern,
-Observability Plan), and the resulting "✓ Approved" state could optionally
-carry a small badge distinguishing "approved despite failing CI" for
-audit-trail purposes. This is scoped, reviewable, and preserves the
-"visible, checkable record" social value `research/ux.md` describes,
-without requiring a global settings change per override. This is flagged
-here for product/eng sign-off before ship — it is out of scope for this
-UX-design pass to unilaterally add to the implementation plan.
+**Resolution (current state, this revision):** Story 2.2.4 adds exactly the
+single additional affordance this section originally recommended — a
+secondary "Approve anyway" button that resends `ResolveApproval` with an
+explicit `overrideCiBlock: true` field (Task 2.2.4a), server-side logs the
+override distinctly (Task 2.2.4b, mirrors the existing
+`log.Info("[ApprovalService] resolved approval"...)` pattern). The "Approve
+anyway" Override — Wireframe and Interaction Spec" subsection above now
+gives that affordance its visual weight (secondary/warning styling, own
+line below the primary Approve/Deny row), its confirm step (reusing the
+`SessionCard.css.ts` confirm-dialog pattern), and closes the one piece the
+original recommendation left open — the resulting resolved state carrying
+"a small badge distinguishing 'approved despite failing CI' for audit-trail
+purposes" is now a concrete, minimal-cost design (see "Post-override visual
+indicator" above), not just an "optionally." This is scoped, reviewable,
+and preserves the "visible, checkable record" social value `research/ux.md`
+describes, without requiring a global settings change per override. The one
+remaining action item is the small addition to `approval_service.go:81`
+and `NotificationPanel.tsx:136-158` needed to carry the override distinction
+into the persisted `approval_decision` metadata — flagged for product/eng
+to confirm is in scope for Task 2.2.4b/c, since it is not covered by either
+task's current written text.
 
 ---
 
@@ -433,21 +604,22 @@ and 2 doesn't apply here in the same way.
 
 ### No dead ends (explicit override/exit-path verification — the task's primary ask)
 
-8. **FAILS, as currently planned.** The blocked-Approve state (Surface 2)
-   has exit paths for *abandoning* the approval (Deny) or *waiting*
-   (CI turns green, retry), and a *global, unscoped* admin workaround
-   (disable the feature flag for all sessions), but **no scoped, per-approval
-   human override** ("I've reviewed this, approve it anyway despite red
-   CI"). This risks becoming the "hard, unbypassable gate" requirements.md
-   Goal 2 explicitly says the feature must not be. See the "Exit-Path /
-   Human-Override Analysis" section above for the finding and a recommended
-   scoped fix (`overrideCiBlock` flag + audit log entry). **This should be
-   resolved — either by adding the override, or by an explicit, written
-   product decision that the global flag toggle is the intended and
-   accepted override mechanism — before this ships as an on-by-default or
-   widely-recommended setting.** Since the flag defaults off, this doesn't
-   block shipping the feature *disabled*; it blocks recommending it be
-   turned *on* without this gap being closed or explicitly accepted.
+8. **PASSES, with the design in this revision — previously FAILED.** The
+   blocked-Approve state (Surface 2) has exit paths for *abandoning* the
+   approval (Deny), *waiting* (CI turns green, retry), a *global, unscoped*
+   admin workaround (disable the feature flag for all sessions), and now a
+   **scoped, per-approval human override**: Story 2.2.4's "Approve anyway"
+   button, designed above (own line below Approve/Deny, warning styling,
+   confirm-on-click, `overrideCiBlock: true`, distinct server-side log
+   line). This no longer risks becoming the "hard, unbypassable gate"
+   requirements.md Goal 2 says the feature must not be. Two conditions
+   remain before recommending the flag on-by-default: (a) product/eng
+   confirms the button-weight/confirm-dialog/post-override-badge design
+   above is in scope for Task 2.2.4c's implementation (its current written
+   text covers only the RPC call and clearing the block-error state, not
+   these three pieces); (b) the one-line `approval_decision` metadata
+   addition (see "Post-override visual indicator" above) is accepted as
+   in-scope for Task 2.2.4b, since without it AC16 below cannot pass.
 9. The diff-viewer badge (Surface 1) has no dead end — it is read-only and
    non-blocking by construction (AC1–AC4, AC7); there is nothing to be
    "stuck" in.
@@ -490,16 +662,52 @@ and 2 doesn't apply here in the same way.
 14. **Color is never the sole signal:** every state pairs a distinct glyph
     (✅/❌/⏳/⬤) with a text label, per `StatusBadge.tsx`'s established
     pattern — verified this holds for all 4 non-null badge states plus the
-    inline warning icon (⚠️) on the blocked-Approve message.
+    inline warning icon (⚠️) on the blocked-Approve message, and now the
+    ⚠ glyph on the "Approve anyway" button and its post-override badge
+    (AC15/AC16 below).
+
+### "Approve anyway" override (added this revision)
+
+15. **Override button — visibility, click target, weight:** the "⚠ Approve
+    anyway" button (a) renders only when a stored block error exists for
+    that `approvalId` (never alongside a normal, non-blocked Approve/Deny
+    pair); (b) is a native `<button>`, own line below the Approve/Deny row,
+    styled with `vars.color.warning` (not the `success`/`error` colors used
+    by Approve/Deny) at a visibly smaller font-size/weight than those two,
+    so it reads as secondary/warning rather than a third equal-weight
+    choice; (c) keeps the same `44px` mobile min-height touch target as
+    Approve/Deny despite its smaller visual footprint; (d) clicking it opens
+    a confirm dialog ("Approve Despite Failing CI?" + one warning line +
+    "Approve Anyway"/"Cancel") before the RPC fires — reusing
+    `SessionCard.css.ts`'s existing `confirmDialog` pattern, not a new
+    idiom; (e) "Cancel" is a true no-op — no RPC call, blocked state
+    unchanged. All five are verifiable against the rendered component
+    without needing to read source.
+16. **Post-override indicator:** once an override succeeds, the resolved
+    badge for that approval reads **"⚠ Approved (CI override)"**
+    (`data-decision="allow_override"`), distinguishable by icon+text from
+    the plain "✓ Approved" badge shown for a non-override approval — and
+    this distinction **survives a page reload** (backed by the persisted
+    `approval_decision` metadata value `"allow_override"`, not just
+    in-memory component state). This AC requires the one-line addition to
+    `approval_service.go:81` named above; it does not pass under Task
+    2.2.4b/c's currently-written scope alone.
 
 ---
 
 ## Summary of design gaps to route back to product/eng
 
-1. **Blocked-Approve override gap (Surface 2, AC 8 above)** — no scoped
-   per-approval override exists; only Deny, wait, or a global flag toggle.
-   Needs an explicit product decision before the flag is recommended
-   on-by-default.
+1. **Blocked-Approve override gap (Surface 2, AC 8 above) — CLOSED this
+   revision, one follow-up remains.** Story 2.2.4 now adds the scoped
+   per-approval override this item originally flagged as missing; the
+   "Approve anyway" Override — Wireframe and Interaction Spec" subsection
+   gives it a concrete button design, confirm step, and post-override
+   badge. Remaining action item: confirm with product/eng that (a) the
+   button-weight/confirm-dialog design and (b) the one-line
+   `approval_service.go:81` + `NotificationPanel.tsx:136-158` addition
+   needed for the post-override badge (AC16) are accepted as in-scope for
+   Tasks 2.2.4b/2.2.4c — neither is covered by those tasks' current
+   written text.
 2. Badge ambiguity between "not yet polled," "poll errored," and
    "genuinely no CI" (Surface 1) — explicitly accepted scope cut in the
    plan; documented here so it isn't mistaken for an oversight later.

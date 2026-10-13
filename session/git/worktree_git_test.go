@@ -338,6 +338,30 @@ func TestParsePRStatusPayload_CIFailing(t *testing.T) {
 		}
 	})
 
+	t.Run("in-flight checks set CIPending, completed success does not", func(t *testing.T) {
+		cases := map[string]struct {
+			rollup  string
+			pending bool
+		}{
+			"in progress":      {`[{"name":"build","status":"IN_PROGRESS"}]`, true},
+			"queued":           {`[{"name":"build","status":"QUEUED"}]`, true},
+			"legacy pending":   {`[{"context":"ci/x","state":"PENDING"}]`, true},
+			"mixed":            {`[{"name":"a","status":"COMPLETED","conclusion":"SUCCESS"},{"name":"b","status":"IN_PROGRESS"}]`, true},
+			"completed":        {`[{"name":"a","status":"COMPLETED","conclusion":"SUCCESS"}]`, false},
+			"no CI configured": {`[]`, false},
+		}
+		for name, tc := range cases {
+			raw := []byte(`{"statusCheckRollup":` + tc.rollup + `,"reviews":[],"comments":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
+			status, err := parsePRStatusPayload(raw)
+			if err != nil {
+				t.Fatalf("%s: parsePRStatusPayload() error = %v", name, err)
+			}
+			if status.CIPending != tc.pending || status.CIFailing {
+				t.Errorf("%s: CIPending=%v CIFailing=%v; want CIPending=%v CIFailing=false", name, status.CIPending, status.CIFailing, tc.pending)
+			}
+		}
+	})
+
 	t.Run("non-terminal IN_PROGRESS leaves CIFailing false", func(t *testing.T) {
 		raw := []byte(`{"statusCheckRollup":[{"name":"build","status":"IN_PROGRESS"}],"reviews":[],"comments":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
 

@@ -52,12 +52,15 @@ func NewSpawnCounter(meter metric.Meter) *SpawnCounter {
 }
 
 // SpawnLabels resolves the (operation, reason) labels for one spawn. The Router's CallInfo
-// wins. Without one, a remote run is still reason remote_host (it never starts a local git, so
+// names the operation and reason, except that a remote run is always remote_host. Without one, a remote run is still reason remote_host (it never starts a local git, so
 // the gate must not see it as an unattributed local spawn) and a local run is attributed to
 // servedOp under SpawnReasonUnattributed. A CallInfo naming an operation or reason outside the
 // closed enums is treated as absent, so a label can never carry free text.
 func SpawnLabels(ctx context.Context, servedOp OperationName, remote bool) (OperationName, FallbackReason) {
 	if info, ok := CallInfoFrom(ctx); ok && HasCohort(info.Op) && info.Reason.Known() {
+		if remote {
+			return info.Op, ReasonRemoteHost // never a local spawn, whatever the Router attributed
+		}
 		return info.Op, info.Reason
 	}
 	reason := SpawnReasonUnattributed

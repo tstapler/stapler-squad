@@ -16,6 +16,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
@@ -893,15 +895,9 @@ func extractPRURL(output string) string {
 func checkBranchDivergence(workDir string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	cmd := safeexec.CommandContext(ctx, "git", "rev-list", "--count", "origin/HEAD..HEAD")
-	cmd.Dir = workDir
-	out, err := cmd.Output()
-	if err != nil {
-		return false
-	}
-	count := strings.TrimSpace(string(out))
-	return count != "" && count != "0"
+	ahead, err := gitprovider.Backend().CountCommits(ctx, backend.Local{Root: backend.RepoRoot(workDir)},
+		backend.RangeSpec{Exclude: "origin/HEAD", Include: "HEAD"})
+	return err == nil && ahead > 0
 }
 
 // +api: session:unarchive

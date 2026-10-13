@@ -733,6 +733,10 @@ func parseFeedbackTimestamp(raw, fieldLabel string) time.Time {
 type PRStatus struct {
 	// CIFailing is true when at least one CI check has a terminal failure.
 	CIFailing bool
+	// CIPending is true when at least one check has not reached a terminal
+	// conclusion yet (queued/in progress, or a legacy status still PENDING).
+	// Without it, "CI still running" is indistinguishable from "no CI configured".
+	CIPending bool
 	// HasBlockingReviews is true when a reviewer has requested changes.
 	HasBlockingReviews bool
 	// HasConflicts is true when GitHub reports mergeStateStatus == "DIRTY" or
@@ -924,6 +928,16 @@ func ParsePRStatusPayload(raw []byte) (*PRStatus, error) {
 	return parsePRStatusPayload(raw)
 }
 
+// isCheckInFlight reports whether a check with no terminal conclusion is still
+// running (CheckRun status) or awaiting a result (legacy StatusContext state).
+func isCheckInFlight(status, state string) bool {
+	switch status {
+	case "QUEUED", "IN_PROGRESS", "PENDING", "WAITING", "REQUESTED":
+		return true
+	}
+	return state == "PENDING" || state == "EXPECTED"
+}
+
 // parsePRStatusPayload parses gh pr view's combined JSON output, evaluates
 // all PR-status signals into structured fields, and renders FeedbackText
 // from them. It has no I/O dependency and is directly unit-testable.
@@ -1003,6 +1017,10 @@ func parsePRStatusPayload(raw []byte) (*PRStatus, error) {
 				entry += " (" + url + ")"
 			}
 			status.failedChecks = append(status.failedChecks, entry)
+			continue
+		}
+		if conclusion == "" && isCheckInFlight(strings.ToUpper(check.Status), state) {
+			status.CIPending = true
 		}
 	}
 

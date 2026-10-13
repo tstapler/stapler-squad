@@ -6,15 +6,39 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/git/backend/cli"
+	"github.com/tstapler/stapler-squad/session/gitwiring"
 )
+
+// defaultGitBackend serves instances built without an injected backend (tests, legacy
+// construction sites): the CLI over the local runner. Remote locations carry their own runner.
+var defaultGitBackend = sync.OnceValue(func() backend.Backend { return cli.New(gitwiring.NewLocalRunner()) })
+
+// gitBackend returns the injected backend, defaulting to defaultGitBackend. GitBackend is set
+// once at construction and never reassigned, so reading it unlocked is safe.
+func (i *Instance) gitBackend() backend.Backend {
+	if i.GitBackend != nil {
+		return i.GitBackend
+	}
+	return defaultGitBackend()
+}
+
+// location is where path lives for this instance: Remote carrying the execution target's own
+// runner when the target is remote, Local otherwise.
+func (i *Instance) location(path string) backend.RepoLocation {
+	return locationFor(i.executionTarget(), path)
+}
 
 // RepoName returns the name of the git repository.
 // Returns an error if the instance has not been started or has no worktree.
@@ -112,10 +136,10 @@ func (i *Instance) setupFirstTimeWorktree() error {
 			// entirely over a cosmetic diff-stats field.
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			baseCommitSHA := "unknown"
-			//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-			if out, shaErr := runner.Run(ctx, i.ExistingWorktree, "git", "rev-parse", "HEAD"); shaErr == nil {
-				if sha := strings.TrimSpace(string(out)); sha != "" {
-					baseCommitSHA = sha
+			remoteLoc := i.location(i.ExistingWorktree)
+			if sha, shaErr := i.gitBackend().ResolveRef(ctx, remoteLoc, "HEAD"); shaErr == nil {
+				if sha != "" {
+					baseCommitSHA = string(sha)
 				}
 			} else {
 				log.Warn("failed to resolve remote worktree base commit SHA", "session", i.Title, "path", i.ExistingWorktree, "err", shaErr)
@@ -138,12 +162,12 @@ func (i *Instance) setupFirstTimeWorktree() error {
 				// i.mu.Lock()/RLock() caller (including the legacy-writer setters
 				// documented in instance_actor_setters.go) for up to that long.
 				branch := "unknown"
-				//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-				if out, brErr := runner.Run(ctx, i.ExistingWorktree, "git", "rev-parse", "--abbrev-ref", "HEAD"); brErr == nil {
-					if br := strings.TrimSpace(string(out)); br != "" && br != "HEAD" {
-						branch = br
+				// A detached HEAD keeps "unknown", as the old "HEAD" answer did, without a warning.
+				if br, brErr := i.gitBackend().CurrentBranch(ctx, remoteLoc); brErr == nil {
+					if br != "" {
+						branch = string(br)
 					}
-				} else {
+				} else if !errors.Is(brErr, backend.ErrDetachedHead) {
 					log.Warn("failed to resolve remote worktree branch name", "session", i.Title, "path", i.ExistingWorktree, "err", brErr)
 				}
 				i.mu.Lock()

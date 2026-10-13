@@ -15,6 +15,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	gossh "golang.org/x/crypto/ssh"
 
+	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -186,6 +187,15 @@ func newRecordingRunner() *recordingRunner {
 }
 
 func (f *recordingRunner) Run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
+	if name == "env" { // the cli backend prefixes `env K=V... git` on remote runs; record the git argv
+		i := 0
+		for i < len(args) && args[i] != "git" {
+			i++
+		}
+		if i < len(args) {
+			name, args = args[i], args[i+1:]
+		}
+	}
 	f.calls = append(f.calls, recordedCall{dir: dir, name: name, args: append([]string(nil), args...)})
 	res := f.results[name]
 	return res.out, res.err
@@ -249,7 +259,8 @@ func TestRemoteWorktreeOps_CreateWorktree_ArgumentConstruction(t *testing.T) {
 		t.Fatalf("Run() called %d times, want exactly 2 (base_path check, then git worktree add)", len(runner.calls))
 	}
 	gitCall := runner.calls[1]
-	wantArgs := []string{"worktree", "add", "/srv/workspaces/feature-x", "feature-x"}
+	// The backend inserts "--" before the path so a leading-dash path cannot be read as an option.
+	wantArgs := []string{"worktree", "add", "--", "/srv/workspaces/feature-x", "feature-x"}
 	if gitCall.dir != "/srv/repos/foo.git" || gitCall.name != "git" || !equalStrings(gitCall.args, wantArgs) {
 		t.Errorf("git worktree add call = dir:%q name:%q args:%v, want dir:/srv/repos/foo.git name:git args:%v",
 			gitCall.dir, gitCall.name, gitCall.args, wantArgs)
@@ -344,7 +355,7 @@ func TestRemoteWorktreeOps_RemoveWorktree_ArgumentConstruction(t *testing.T) {
 		t.Fatalf("Run() called %d times, want exactly 1", len(runner.calls))
 	}
 	got := runner.calls[0]
-	wantArgs := []string{"worktree", "remove", "/srv/workspaces/feature-x", "--force"}
+	wantArgs := []string{"worktree", "remove", "--force", "--", "/srv/workspaces/feature-x"}
 	if got.dir != "/srv/repos/foo.git" || got.name != "git" || !equalStrings(got.args, wantArgs) {
 		t.Errorf("git worktree remove call = dir:%q name:%q args:%v, want dir:/srv/repos/foo.git name:git args:%v",
 			got.dir, got.name, got.args, wantArgs)
@@ -533,4 +544,19 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// A RemoteWorktreeOps built over a runner that claims to be local must still run through that
+// runner (a Remote location), never let the router run git on this machine.
+func TestRemoteWorktreeOps_Location_IsAlwaysRemote(t *testing.T) {
+	t.Parallel()
+	for name, runner := range map[string]tmux.CommandRunner{"local runner": tmux.LocalRunner{}, "nil runner": nil} {
+		loc, ok := NewRemoteWorktreeOps(runner).location("/r").(backend.Remote)
+		if !ok {
+			t.Fatalf("%s: location is not Remote", name)
+		}
+		if (loc.Runner == nil) != (runner == nil) {
+			t.Fatalf("%s: Runner = %v", name, loc.Runner)
+		}
+	}
 }

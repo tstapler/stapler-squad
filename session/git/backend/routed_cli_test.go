@@ -3,6 +3,7 @@ package backend_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync/atomic"
 	"testing"
 
@@ -65,7 +66,8 @@ func TestRemoteRunnerReceivesGitArgvAtRemotePath(t *testing.T) {
 	if got, err := r.CurrentBranch(ctxBG, backend.Remote{Host: "h", Path: "/p", Runner: remote}); err != nil || got != "main" {
 		t.Fatalf("CurrentBranch = %q, %v", got, err)
 	}
-	if remote.dir != "/p" || remote.name != "git" || len(remote.args) != 3 || remote.args[1] != "--abbrev-ref" {
+	want := append(backend.RequiredGitEnv(), "git", "rev-parse", "--abbrev-ref", "HEAD")
+	if remote.dir != "/p" || remote.name != "env" || !slices.Equal(remote.args, want) {
 		t.Fatalf("remote saw dir=%q %s %v", remote.dir, remote.name, remote.args)
 	}
 	if local.calls.Load() != 0 {

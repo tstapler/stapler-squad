@@ -356,7 +356,7 @@ const deckBase = style({
 /**
  * Where the deck docks (ADR-009):
  *  - desktop: bottom-right, 360px wide, clear of the xterm scrollbar;
- *  - mobileTop: under the session tab row (`--mobile-stack-top-offset`, published
+ *  - mobileTop: under the terminal toolbar (`--mobile-deck-top-offset`), else the session tab row (`--mobile-stack-top-offset`, published
  *    by the session layout), never above the safe-area inset;
  *  - mobileBottom: a phone page with no terminal, above the bottom nav.
  */
@@ -384,7 +384,7 @@ export const deckPlacement = styleVariants({
   mobileTop: [
     deckBase,
     {
-      top: "calc(max(var(--mobile-stack-top-offset, 0px), env(safe-area-inset-top, 0px)) + 8px)",
+      top: "calc(max(var(--mobile-deck-top-offset, var(--mobile-stack-top-offset, 0px)), env(safe-area-inset-top, 0px)) + 8px)",
       left: "max(16px, env(safe-area-inset-left, 0px))",
       right: "max(16px, env(safe-area-inset-right, 0px))",
       maxHeight: "calc(var(--viewport-height, 100dvh) * 0.4)",
@@ -730,19 +730,6 @@ export const trayEntry = style({
     // Wide contents (the "+N more" row, the keyboard chip, the undo bar) fill the row.
     '&[data-content="more-row"], &[data-content="keyboard-chip"], &[data-undo="true"]': { flex: 1 },
   },
-});
-
-export const trayEntryBell = style({
-  ...chipBase,
-  width: "44px",
-  minWidth: "44px",
-  padding: 0,
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  gap: "4px",
-  borderRadius: "22px",
-  selectors: { "&:hover": { background: vars.color.hoverBackground } },
 });
 
 /**

@@ -35,6 +35,9 @@ var (
 	ErrNoLocalRunner = errors.New("git backend: backend has no local runner")
 	// ErrNothingToCommit means Commit found an empty index (or, with Amend, nothing to amend).
 	ErrNothingToCommit = errors.New("git backend: nothing to commit")
+	// ErrNotImplemented means this backend does not serve the operation at all. A non-CLI backend
+	// returns it inside ErrFallbackEligible{Wrote: false} so the Router serves the call on the CLI.
+	ErrNotImplemented = errors.New("git backend: operation not implemented by this backend")
 	// ErrInvalidArgument means a typed argument could not be passed to git safely (empty, or
 	// starting with "-" where git would parse it as an option).
 	ErrInvalidArgument = errors.New("git backend: invalid argument")
