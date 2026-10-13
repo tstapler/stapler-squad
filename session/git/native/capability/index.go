@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 
 	"github.com/go-git/go-git/v5/plumbing/filemode"
@@ -29,7 +30,9 @@ type indexFacts struct {
 	size         int64
 	skipWorktree bool // some entry is sparse-excluded
 	gitlinks     bool // some entry is a submodule
-	unsupported  bool // a mandatory extension go-git cannot read (split index)
+	gitlinkPaths map[string]bool
+	dirs         []string // every directory holding tracked files, ancestors included, "/"-separated and relative
+	unsupported  bool     // a mandatory extension go-git cannot read (split index)
 }
 
 // readIndex returns the facts of <GitDir>/index, from cache when its checksum is unchanged. A
@@ -64,6 +67,7 @@ func (d *Detector) readIndex(l layout) (*indexFacts, error) {
 		d.index = map[string]indexFacts{}
 	}
 	d.index[p] = *facts
+	d.decodes++
 	d.mu.Unlock()
 	return facts, nil
 }
@@ -101,13 +105,19 @@ func decodeIndex(p string) (*indexFacts, error) {
 	if err != nil {
 		return nil, err
 	}
-	f := &indexFacts{size: int64(len(data)), checksum: string(data[max(0, len(data)-checksumLen):])}
+	f := &indexFacts{size: int64(len(data)), checksum: string(data[max(0, len(data)-checksumLen):]), gitlinkPaths: map[string]bool{}}
+	seenDir := map[string]bool{}
 	for _, e := range idx.Entries {
+		for dir := path.Dir(e.Name); dir != "." && dir != "/" && !seenDir[dir]; dir = path.Dir(dir) {
+			seenDir[dir] = true
+			f.dirs = append(f.dirs, dir)
+		}
 		if e.SkipWorktree {
 			f.skipWorktree = true
 		}
 		if e.Mode == filemode.Submodule {
 			f.gitlinks = true
+			f.gitlinkPaths[e.Name] = true
 		}
 	}
 	return f, nil
@@ -131,6 +141,16 @@ func (f *facts) submodules() ([]backend.Capability, error) {
 	}
 	if idx.gitlinks {
 		return one(backend.CapSubmodule, ""), nil
+	}
+	if f.op == backend.OpAdd {
+		// git add stores an untracked nested repository as a gitlink; go-git would add its files
+		_, nested, err := f.walkWorktree(idx)
+		if err != nil {
+			return nil, err
+		}
+		if len(nested) > 0 {
+			return one(backend.CapSubmodule, "untracked nested repository"), nil
+		}
 	}
 	return nil, nil
 }

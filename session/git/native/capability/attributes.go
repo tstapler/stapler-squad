@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -32,6 +33,15 @@ func (f *facts) filters() ([]backend.Capability, error) {
 	defined := definedFilters(cfg)
 	if len(defined) == 0 {
 		return nil, nil
+	}
+	if treeChangingOps[f.op] {
+		// the attributes that apply after the operation come from the tree it brings in
+		names := make([]string, 0, len(defined))
+		for n := range defined {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		return one(backend.CapLFS, "filter="+names[0]+":attributes may arrive with the operation"), nil
 	}
 	paths, err := f.attributeSources(cfg)
 	if err != nil {
@@ -69,18 +79,36 @@ func definedFilters(cfg *gitconfig.Result) map[string]bool {
 	return names
 }
 
-// maxWalkEntries bounds the attribute-file walk; a worktree this large is left to git.
+// maxWalkEntries bounds the worktree walk Add needs; a worktree this large is left to git.
 const maxWalkEntries = 500_000
 
-// attributeSources lists every file git consults for attributes: every .gitattributes in the
-// worktree (tracked or not: git reads them wherever they are, and `git lfs track` in a new
-// directory creates an untracked one), info/attributes, core.attributesFile (default under XDG)
-// and the system files. Nested git repositories are skipped; their files are not this
-// repository's attributes.
+// treeChangingOps bring files, and so .gitattributes files, into the worktree from another
+// tree; the attributes in force afterwards are not the ones on disk now.
+var treeChangingOps = map[backend.OperationName]bool{
+	backend.OpSwitchBranch: true, backend.OpCheckoutCommit: true, backend.OpStashPop: true, backend.OpReset: true,
+	backend.OpRestore: true, backend.OpPull: true, backend.OpAddWorktree: true, backend.OpAddWorktreeForExistingBranch: true,
+}
+
+// attributeSources lists every file git consults for attributes: .gitattributes in the root and
+// in every directory holding tracked files (which covers a new untracked file in a tracked
+// directory, e.g. after `git lfs track`), info/attributes, core.attributesFile (default under
+// XDG) and the system files. Add also walks the worktree, because it takes in untracked
+// directories whose attribute files appear in no index.
 func (f *facts) attributeSources(cfg *gitconfig.Result) ([]string, error) {
-	srcs, err := f.worktreeAttributeFiles()
+	srcs := []string{filepath.Join(f.l.root, ".gitattributes")}
+	idx, err := f.indexFacts()
 	if err != nil {
 		return nil, err
+	}
+	for _, dir := range idx.dirs {
+		srcs = append(srcs, filepath.Join(f.l.root, filepath.FromSlash(dir), ".gitattributes"))
+	}
+	if f.op == backend.OpAdd {
+		walked, _, err := f.walkWorktree(idx)
+		if err != nil {
+			return nil, err
+		}
+		srcs = append(srcs, walked...)
 	}
 	srcs = append(srcs, filepath.Join(f.l.commonDir, "info", "attributes"))
 	if e, ok := cfg.Lookup("core.attributesFile"); ok && e.HasValue && e.Value != "" {
@@ -97,10 +125,12 @@ func (f *facts) attributeSources(cfg *gitconfig.Result) ([]string, error) {
 	return append(srcs, f.d.systemAttributes()...), nil
 }
 
-func (f *facts) worktreeAttributeFiles() ([]string, error) {
-	var found []string
+// walkWorktree lists every .gitattributes and every nested repository not recorded as a
+// gitlink. Nested repositories are not entered (git adds them as gitlinks). Symlinked
+// directories are not followed, as in git.
+func (f *facts) walkWorktree(idx *indexFacts) (attrs, nested []string, err error) {
 	entries := 0
-	err := filepath.WalkDir(f.l.root, func(path string, d fs.DirEntry, err error) error {
+	werr := filepath.WalkDir(f.l.root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if path == f.l.root {
 				return err
@@ -119,25 +149,28 @@ func (f *facts) worktreeAttributeFiles() ([]string, error) {
 			}
 			if path != f.l.root {
 				if _, err := os.Lstat(filepath.Join(path, ".git")); err == nil {
-					return fs.SkipDir // nested repository
+					if rel, rerr := filepath.Rel(f.l.root, path); rerr == nil && !idx.gitlinkPaths[filepath.ToSlash(rel)] {
+						nested = append(nested, path)
+					}
+					return fs.SkipDir
 				}
 			}
 			return nil
 		}
 		if d.Name() == ".gitattributes" {
-			found = append(found, path)
+			attrs = append(attrs, path)
 		}
 		return nil
 	})
 	switch {
-	case errors.Is(err, errWalkTooLarge):
-		return nil, detectErr(backend.DetectAttributesUnread, err)
+	case errors.Is(werr, errWalkTooLarge):
+		return nil, nil, detectErr(backend.DetectAttributesUnread, werr)
 	case f.ctx.Err() != nil:
-		return nil, detectErr(backend.DetectCanceled, f.ctx.Err())
-	case err != nil:
-		return nil, detectErr(backend.DetectAttributesUnread, err)
+		return nil, nil, detectErr(backend.DetectCanceled, f.ctx.Err())
+	case werr != nil:
+		return nil, nil, detectErr(backend.DetectAttributesUnread, werr)
 	}
-	return found, nil
+	return attrs, nested, nil
 }
 
 var errWalkTooLarge = errors.New("worktree too large to scan for attribute files")
@@ -156,6 +189,9 @@ func (d *Detector) systemAttributes() []string {
 // readAttributes returns an attributes file's content. A missing file is empty; one that exists
 // but cannot be read fails closed.
 func readAttributes(path string) ([]byte, error) {
+	if path == os.DevNull {
+		return nil, nil // core.attributesFile=/dev/null is the usual way to disable the file
+	}
 	data, err := gitconfig.ReadRegularFile(path, maxAttributesSize)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) || isNotDir(err) {

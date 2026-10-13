@@ -29,9 +29,10 @@ type Config struct {
 
 // Detector implements backend.CapabilityProbe.
 type Detector struct {
-	cfg   Config
-	mu    sync.Mutex
-	index map[string]indexFacts // keyed by index path; valid while the trailing checksum matches
+	cfg     Config
+	mu      sync.Mutex
+	index   map[string]indexFacts // keyed by index path; valid while the trailing checksum matches
+	decodes int                   // index decodes performed, for tests
 }
 
 var _ backend.CapabilityProbe = (*Detector)(nil)
@@ -51,6 +52,7 @@ func (d *Detector) environ() []string {
 type facts struct {
 	d      *Detector
 	ctx    context.Context
+	op     backend.OperationName
 	l      layout
 	env    []string
 	cfg    *gitconfig.Result
@@ -105,7 +107,7 @@ func (d *Detector) Capabilities(ctx context.Context, loc backend.Local, op backe
 	if err != nil {
 		return nil, err
 	}
-	f := &facts{d: d, ctx: ctx, l: l, env: d.environ()}
+	f := &facts{d: d, ctx: ctx, op: op, l: l, env: d.environ()}
 	var caps []backend.Capability
 	for _, k := range kinds {
 		found, err := f.detect(k)

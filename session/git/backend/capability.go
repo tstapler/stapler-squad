@@ -61,6 +61,12 @@ var graphOps = map[OperationName]bool{
 	OpMergeBase: true, OpCountCommits: true, OpLog: true, OpFetch: true, OpPull: true, OpPush: true,
 }
 
+// programReadOps are reads during which git runs a configured program (core.fsmonitor for
+// status, diff.external and textconv for diff).
+var programReadOps = map[OperationName]bool{
+	OpIsDirty: true, OpStatus: true, OpListUntracked: true, OpDiff: true, OpDiffNumstat: true,
+}
+
 // networkOps talk to a remote. Clone has no repository to inspect yet; its transport checks
 // belong to the network cohort (plan Story 3.2.1), which sees the URL.
 var networkOps = map[OperationName]bool{OpListRemote: true, OpFetch: true, OpPull: true, OpPush: true}
@@ -77,8 +83,8 @@ func RelevantCapabilities(op OperationName) []CapabilityKind {
 		return nil // no repository exists yet to inspect
 	}
 	var kinds []CapabilityKind
-	if op.Mutating() {
-		kinds = append(kinds, CapHooks)
+	if op.Mutating() || programReadOps[op] {
+		kinds = append(kinds, CapHooks) // hooks for writes; config-driven programs (fsmonitor, diff.external) for the reads below
 	}
 	if signingOps[op] {
 		kinds = append(kinds, CapGPGSign)

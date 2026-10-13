@@ -229,3 +229,42 @@ func execGit(dir string, env []string, args ...string) *exec.Cmd {
 	cmd.Dir, cmd.Env = dir, env
 	return cmd
 }
+
+func TestUntrackedNestedRepositoryIsAGitlinkForAdd(t *testing.T) {
+	r := newRealRepo(t)
+	r.g.Run(r.root, "init", "-q", "-b", "main", "--template=", "nested")
+	r.g.Write(r.root, "nested/y.txt", "y\n")
+	r.g.Commit(filepath.Join(r.root, "nested"), "n")
+	assert.True(t, hasKind(r.probe(r.root, backend.OpAdd), backend.CapSubmodule))
+	r.g.Run(r.root, "add", "-A")
+	assert.Contains(t, r.g.Run(r.root, "ls-files", "-s", "nested"), "160000", "premise: real git stores a gitlink")
+}
+
+func TestSmudgeFilterArrivingWithACheckoutRoutes(t *testing.T) {
+	r := newRealRepo(t)
+	marker := filepath.Join(r.home, "smudge-ran")
+	r.g.Run(r.root, "config", "filter.x.smudge", "touch "+marker+"; cat")
+	r.g.Run(r.root, "checkout", "-q", "-b", "other")
+	r.g.Write(r.root, ".gitattributes", "*.dat filter=x\n")
+	r.g.Write(r.root, "f.dat", "d\n")
+	r.g.Commit(r.root, "attrs")
+	r.g.Run(r.root, "checkout", "-q", "main")
+	_ = os.Remove(marker)
+	caps := r.probe(r.root, backend.OpSwitchBranch) // main has no .gitattributes on disk
+	r.g.Run(r.root, "checkout", "-q", "other")
+	_, err := os.Stat(marker)
+	require.NoError(t, err, "premise: the smudge filter ran on checkout")
+	assert.True(t, hasKind(caps, backend.CapLFS))
+}
+
+func TestConfiguredProgramsRunByGitAreReported(t *testing.T) {
+	r := newRealRepo(t)
+	marker := filepath.Join(r.home, "fsmonitor-ran")
+	script := filepath.Join(r.home, "fsm.sh")
+	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\ntouch '"+marker+"'\nprintf '\\0'\n"), 0o755))
+	r.g.Run(r.root, "config", "core.fsmonitor", script)
+	r.g.Run(r.root, "status", "--porcelain")
+	_, err := os.Stat(marker)
+	require.NoError(t, err, "premise: git ran the fsmonitor hook for status")
+	assert.True(t, hasKind(r.probe(r.root, backend.OpStatus), backend.CapHooks))
+}

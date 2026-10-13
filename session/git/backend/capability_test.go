@@ -107,8 +107,8 @@ func TestProbeIsNotConsultedForRefsReads(t *testing.T) {
 }
 
 func TestProbeOverReportingIsFilteredByOperation(t *testing.T) {
-	// Status is a read: hooks and signing say nothing about it.
-	p := &fakeProbe{caps: []backend.Capability{{Kind: backend.CapHooks}, {Kind: backend.CapGPGSign}}}
+	// Status is a read: signing, shallow and transport say nothing about it.
+	p := &fakeProbe{caps: []backend.Capability{{Kind: backend.CapGPGSign}, {Kind: backend.CapShallow}, {Kind: backend.CapLocalTransport}}}
 	g := newRig(t, cohortsOf(map[backend.Cohort]backend.BackendMode{backend.CohortDiffStatus: backend.BackendGoGit}), withProbe(p))
 	g.gg.status = func(context.Context, backend.RepoLocation, backend.Intent) (backend.StatusResult, error) {
 		g.log.add("gogit.Status.ran")
@@ -146,7 +146,8 @@ func TestRelevantCapabilitiesTable(t *testing.T) {
 		if op == backend.OpClone {
 			continue // no repository exists yet; asserted below
 		}
-		assert.Equal(t, op.Mutating(), has(op, backend.CapHooks), "%s: hooks gate exactly the mutating operations", op)
+		programRead := op == backend.OpIsDirty || op == backend.OpStatus || op == backend.OpListUntracked || op == backend.OpDiff || op == backend.OpDiffNumstat
+		assert.Equal(t, op.Mutating() || programRead, has(op, backend.CapHooks), "%s: hooks gate the mutating operations and the program-running reads", op)
 	}
 	for _, op := range []backend.OperationName{backend.OpCurrentBranch, backend.OpHeadRef, backend.OpResolveRef, backend.OpRefExists,
 		backend.OpRepoRoot, backend.OpGitDir, backend.OpCommonDir, backend.OpListRefs, backend.OpGetConfig, backend.OpListBranches, backend.OpListWorktrees} {

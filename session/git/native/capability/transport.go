@@ -76,6 +76,13 @@ func (f *facts) transport(kind backend.CapabilityKind) ([]backend.Capability, er
 		return nil, err
 	}
 	var ssh, git bool
+	if kind == backend.CapLocalTransport {
+		for _, e := range cfg.InSection("remote") {
+			if e.HasSubsection && e.Key == "vcs" {
+				return one(backend.CapLocalTransport, "remote.vcs helper"), nil
+			}
+		}
+	}
 	for _, u := range remoteURLs(cfg) {
 		switch protocolOf(u) {
 		case "file":
@@ -163,6 +170,9 @@ func scanSSHConfig(path, baseDir, home string, depth int) (string, error) {
 			for _, pat := range fields[1:] {
 				if rest, ok := strings.CutPrefix(pat, "~/"); ok {
 					pat = filepath.Join(home, rest)
+				}
+				if strings.ContainsAny(pat, "$%") {
+					return "Include:" + pat, nil // ${VAR} and %-tokens are not expanded here; leave it to ssh
 				}
 				if !filepath.IsAbs(pat) {
 					pat = filepath.Join(baseDir, pat)

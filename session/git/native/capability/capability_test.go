@@ -580,8 +580,22 @@ func TestFilterInUntrackedNestedGitattributes(t *testing.T) {
 	f := newFx(t)
 	lfsHome(f)
 	f.write(filepath.Join(f.root, "newdir", ".gitattributes"), "* filter=foo\n") // `git lfs track` in a new directory; nothing is in the index
-	f.wantKinds(backend.OpAdd, backend.CapLFS)
-	f.wantKinds(backend.OpStatus, backend.CapLFS)
+	f.wantKinds(backend.OpAdd, backend.CapLFS)                                   // Add takes in untracked directories, so it walks the worktree
+	f.wantKinds(backend.OpStatus)                                                // a directory with no tracked file has nothing to convert
+
+	// in a directory that does hold tracked files, an untracked .gitattributes applies to status
+	g := newFx(t)
+	lfsHome(g)
+	g.writeIndex(entry("tracked/a.dat", filemode.Regular))
+	g.write(filepath.Join(g.root, "tracked", ".gitattributes"), "* filter=foo\n")
+	g.wantKinds(backend.OpStatus, backend.CapLFS)
+}
+
+func TestAddWalkFindsUntrackedNestedRepositories(t *testing.T) {
+	f := newFx(t)
+	f.write(filepath.Join(f.root, "nested", ".git", "HEAD"), "ref: refs/heads/main\n")
+	f.wantKinds(backend.OpAdd, backend.CapSubmodule) // git add stores it as a gitlink; go-git would add its files
+	f.wantKinds(backend.OpStatus)
 }
 
 func TestFilterSkipsNestedRepositoriesAndDotGit(t *testing.T) {
@@ -602,6 +616,7 @@ func TestFilterNestedMacrosAndMacrosFromOtherSources(t *testing.T) {
 	lfsHome(g)
 	g.write(filepath.Join(g.home, ".config", "git", "attributes"), "[attr]viafoo filter=foo\n")
 	g.write(filepath.Join(g.root, "sub", ".gitattributes"), "*.dat viafoo\n")
+	g.writeIndex(entry("sub/x.dat", filemode.Regular))
 	g.wantKinds(backend.OpStatus, backend.CapLFS)
 }
 
@@ -813,4 +828,99 @@ func TestEmptyShallowFileIsNotShallow(t *testing.T) {
 	f := newFx(t)
 	f.write(filepath.Join(f.gitDir, "shallow"), "")
 	f.wantKinds(backend.OpMergeBase)
+}
+
+func TestAttributesThatArriveWithTheOperationRoute(t *testing.T) {
+	f := newFx(t)
+	lfsHome(f) // a driver is configured, but no attribute on disk assigns it
+	for _, op := range []backend.OperationName{backend.OpSwitchBranch, backend.OpCheckoutCommit, backend.OpStashPop, backend.OpReset, backend.OpRestore, backend.OpPull, backend.OpAddWorktree} {
+		caps, err := f.caps(op)
+		require.NoError(t, err, op)
+		assert.Contains(t, kinds(caps), backend.CapLFS, op)
+	}
+	f.wantKinds(backend.OpStatus) // reads of the tree on disk are decided by the attributes on disk
+}
+
+func TestSymlinkedWorktreeRootIsWalkedAndHooksPathCompared(t *testing.T) {
+	f := newFx(t)
+	lfsHome(f)
+	f.write(filepath.Join(f.root, "newdir", ".gitattributes"), "* filter=foo\n")
+	link := filepath.Join(filepath.Dir(f.root), "link")
+	require.NoError(t, os.Symlink(f.root, link))
+	f.root = link
+	f.wantKinds(backend.OpAdd, backend.CapLFS)
+
+	g := newFx(t)
+	glink := filepath.Join(filepath.Dir(g.root), "glink")
+	require.NoError(t, os.Symlink(g.root, glink))
+	g.appendConfig("[core]\n\thooksPath = " + filepath.Join(g.root, ".githooks") + "\n") // real path, root given as the link
+	g.root = glink
+	g.wantKinds(backend.OpSwitchBranch, backend.CapHooks)
+	h := newFx(t)
+	hlink := filepath.Join(filepath.Dir(h.root), "hlink")
+	require.NoError(t, os.Symlink(h.root, hlink))
+	h.appendConfig("[core]\n\thooksPath = " + filepath.Join(hlink, ".githooks") + "\n") // link path, root given as the real path
+	h.wantKinds(backend.OpSwitchBranch, backend.CapHooks)
+}
+
+func TestConfigDrivenProgramsRoute(t *testing.T) {
+	cases := map[string]struct {
+		config string
+		op     backend.OperationName
+		want   bool
+	}{
+		"fsmonitor command on status":  {"[core]\n\tfsmonitor = /usr/bin/watchman-hook\n", backend.OpStatus, true},
+		"fsmonitor true on add":        {"[core]\n\tfsmonitor = true\n", backend.OpAdd, true},
+		"fsmonitor false":              {"[core]\n\tfsmonitor = false\n", backend.OpStatus, false},
+		"diff.external on diff":        {"[diff]\n\texternal = difft\n", backend.OpDiff, true},
+		"diff.external not for status": {"[diff]\n\texternal = difft\n", backend.OpStatus, false},
+		"textconv on numstat":          {"[diff \"pdf\"]\n\ttextconv = pdftotext\n", backend.OpDiffNumstat, true},
+		"nothing configured":           {"", backend.OpStatus, false},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newFx(t)
+			f.appendConfig(c.config)
+			if c.want {
+				caps := f.wantKinds(c.op, backend.CapHooks)
+				assert.NotEmpty(t, caps[0].Detail)
+			} else {
+				f.wantKinds(c.op)
+			}
+		})
+	}
+}
+
+func TestAttributesFileDevNullDisablesTheFile(t *testing.T) {
+	f := newFx(t)
+	f.write(filepath.Join(f.home, ".gitconfig"), "[core]\n\tattributesFile = /dev/null\n[filter \"foo\"]\n\tclean = x\n")
+	f.wantKinds(backend.OpStatus)
+}
+
+func TestRemoteVCSHelperRoutes(t *testing.T) {
+	f := newFx(t)
+	f.appendConfig("[remote \"o\"]\n\turl = https://h/r\n\tvcs = hg\n")
+	f.wantKinds(backend.OpFetch, backend.CapLocalTransport)
+}
+
+func TestSSHIncludeWithVariablesLeavesItToSSH(t *testing.T) {
+	f := newFx(t)
+	f.appendConfig("[remote \"o\"]\n\turl = git@h:r.git\n")
+	f.write(filepath.Join(f.home, ".ssh", "config"), "Include ${HOME}/.ssh/conf.d/*\n")
+	f.wantKinds(backend.OpFetch, backend.CapSSHProxy)
+}
+
+func TestIndexIsDecodedOncePerChecksum(t *testing.T) {
+	f := newFx(t)
+	f.writeIndex(entry("a.txt", filemode.Regular))
+	d := f.detector()
+	for range 3 {
+		_, err := d.Capabilities(context.Background(), backend.Local{Root: backend.RepoRoot(f.root)}, backend.OpStatus)
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 1, d.decodes, "unchanged index bytes must hit the cache")
+	f.writeIndex(entry("a.txt", filemode.Regular), entry("b.txt", filemode.Regular))
+	_, err := d.Capabilities(context.Background(), backend.Local{Root: backend.RepoRoot(f.root)}, backend.OpStatus)
+	require.NoError(t, err)
+	assert.Equal(t, 2, d.decodes)
 }

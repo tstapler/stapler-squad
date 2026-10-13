@@ -23,7 +23,8 @@ const maxSmallFile = 64 << 10 // .git files, commondir
 
 // layout is the resolved git directory pair of a worktree.
 type layout struct {
-	root      string // the worktree root as supplied
+	root      string // the worktree root with symlinks resolved (a walk does not enter a symlinked root)
+	logical   string // the root as supplied
 	gitDir    string // per-worktree git dir
 	commonDir string // shared config, hooks, refs
 }
@@ -36,8 +37,11 @@ func detectErr(sub backend.DetectSub, err error) error {
 // main checkout and a file ("gitdir: <path>") in a linked worktree or submodule, whose
 // `commondir` file (when present) names the shared directory.
 func resolveLayout(root string) (layout, error) {
-	l := layout{root: root}
-	dotGit := filepath.Join(root, ".git")
+	l := layout{root: root, logical: root}
+	if real, err := filepath.EvalSymlinks(root); err == nil {
+		l.root = real
+	}
+	dotGit := filepath.Join(l.root, ".git")
 	fi, err := os.Stat(dotGit)
 	if err != nil {
 		return l, detectErr(backend.DetectCommonDir, err)
@@ -57,7 +61,7 @@ func resolveLayout(root string) (layout, error) {
 	}
 	target = strings.TrimSpace(target)
 	if !filepath.IsAbs(target) {
-		target = filepath.Join(root, target)
+		target = filepath.Join(l.root, target)
 	}
 	l.gitDir = filepath.Clean(target)
 	l.commonDir = l.gitDir
