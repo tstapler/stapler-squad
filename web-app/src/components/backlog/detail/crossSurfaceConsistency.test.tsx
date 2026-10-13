@@ -109,7 +109,13 @@ describe("PR link has one authoritative location per status (AC4)", () => {
         {item.status === "pr_pending" && (
           <PullRequestSection item={item} actionLoading={null} onMarkDone={jest.fn()} />
         )}
-        <VersionControlSection item={item} widgetData={null} activeSessionCount={0} defaultExpanded />
+        <VersionControlSection item={item} widgetData={null}
+          activeSessionCount={0}
+          worktreePath=""
+          onViewDiff={jest.fn()}
+          onBrowseFiles={jest.fn()}
+          defaultExpanded
+        />
       </>
     );
   }
