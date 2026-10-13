@@ -97,7 +97,7 @@ must say so and label each cause VERIFIED (code path exists) vs INFERRED (freque
 | `re-supervision` | Starting a fresh driver on the nudged or still-working session so completion tracking continues | Via `restartAfterRecovery` (5 min warm-up); work-role backlog-linked sessions only. Each run gets a fresh `AutonomousMaxTurnsOrDefault`, so a session can use up to (1 + cap) x the turn budget; the chain is traceable through `resupervise=n/cap` in every `StopDetail` and log line |
 | `ReadoptAutonomousDrivers` | Boot pass: evaluates the `readoptGate` list for every instance whose persisted `AutonomousMode` is true, in a stable order (`CreatedAt` ascending, ties by instance UUID), starts one driver per passing instance via `startDriverIfAbsent` (5 min warm-up) up to the per-boot cap, clears the ghost mode (via `SetAutonomousStoppedQuiet`) only on a **definitive reject**, and defers the cap excess and every `unknown` candidate to bounded follow-up passes | See Story 3.1.3 and Task 3.1.3c. Runs once after both the lifecycle ctx is set and the instances are loaded, wired and settled (Step 7.6) |
 | `readoptGate` | Ordered list of named predicates. Each evaluation returns one of three classes: `pass`, or a failure classified **reject** (definitive: clear mode), **skip** (leave mode untouched, log) or **unknown** (transient probe error: leave mode untouched, log at Warn, re-evaluate in a follow-up pass). Adoption requires ALL gates `pass`; the first non-pass gate and its class are logged (dry-run evidence) | Names: `status_active`, `not_archived`, `not_paused`, `mode_persisted`, `controller_present`, `no_driver`, `not_retry_pending`, `item_session_open`, `item_status_matches_role`, `pane_alive`, `pane_owned`, `no_step75_driver`. Classification table in Story 3.1.3 |
-| `autonomous_driver_readoption` | Live-settable feature flag; default is the single constant `autonomousDriverReadoptionDefault` in `config/config.go` (owner decision, see Deferred; the plan's current value is ON). OFF = dry-run: gates are still evaluated and logged, nothing is started | Flag OFF restores today's in-memory shutdown mode/outcome only, not the stuck row, respawn or notification (see Risk Control) |
+| `autonomous_driver_readoption` | Live-settable feature flag; default is the single constant `autonomousDriverReadoptionDefault` in `config/config.go` (owner decision: **OFF**, see Deferred). OFF = dry-run: gates are still evaluated and logged, nothing is started | Flag OFF restores today's in-memory shutdown mode/outcome only, not the stuck row, respawn or notification (see Risk Control) |
 
 ---
 
@@ -176,10 +176,11 @@ stuck row's `context` is an existing free-text column.
     in-process autonomous nudge. With it off the decision table can still return `None` (rows
     1-3), `Respawn` (rows 4, 6, 8) and `Resupervise` (row 5); `Nudge` (row 7) is unreachable.
   - `autonomous_driver_readoption` (new, live-read; default is the single constant
-    `autonomousDriverReadoptionDefault` in `config/config.go`, an owner decision, the plan's
-    current value is ON) gates the boot pass and the in-memory shutdown mode/outcome. ON is
-    justified only by the complete gate list in Task 3.1.3c; every boot logs every candidate with
-    its gate result either way.
+    `autonomousDriverReadoptionDefault` in `config/config.go`, **owner-decided: OFF** for the
+    first release) gates the boot pass and the in-memory shutdown mode/outcome. OFF makes the
+    first boot a dry-run whose per-candidate gate log is the gate-validation evidence; the owner
+    flips the flag live after reading it. Every boot logs every candidate with its gate result
+    either way.
 - **Flag-off semantics for `autonomous_driver_readoption` (adversarial C2, round-3 C7)**: OFF
   restores today's *in-memory* graceful-shutdown mode/outcome (mode cleared, outcome `stuck`),
   and nothing else. Today's shutdown also writes an `autonomous_stuck` row, dispatches a respawn
@@ -206,9 +207,9 @@ stuck row's `context` is an existing free-text column.
   idle-prompt stall); readoption off = flag `autonomous_driver_readoption` off (today's in-memory
   shutdown mode/outcome only, see above); everything else = revert commit. No data to unwind.
 - **Staged rollout**: full rollout on merge; nudge enablement is the owner's flag flip after the
-  soak (wall-clock blocker below). Re-adoption starts at `autonomousDriverReadoptionDefault`
-  (owner decision): if ON, the first-boot candidate log is after-the-fact evidence; if OFF, the
-  first boot is a dry-run and the owner flips the flag after reading one `would_adopt` log.
+  soak (wall-clock blocker below). Re-adoption ships **default OFF** (owner decision): the first
+  boot is a dry-run, and the owner flips `autonomous_driver_readoption` live after reading one
+  `would_adopt` / rejecting-gate log.
 
 ## Unresolved Questions
 
@@ -250,30 +251,31 @@ one-constant change if the owner disagrees.
 Concerns from the adversarial and architecture reviews that are not fully fixed in this plan, each
 with the reason. Nothing here removes an acceptance criterion.
 
-**NEEDS OWNER DECISION (one item, adversarial C4):** boot re-adoption (Story 3.1.3) is in scope
-per the owner's ruling and is gated by the full list in Task 3.1.3c. It is the largest remaining
-risk surface. The decision needed is the first-release default of `autonomous_driver_readoption`.
-The plan's current default is **ON** (justified by the complete gate list plus the always-on
-candidate log). The reviewer's suggestion is **OFF** for the first release: the first boot is then
-a dry-run whose `would_adopt` / rejecting-gate log is the gate-validation evidence, read *before*
-anything is adopted, and the owner flips the flag live afterwards. With ON the log is only
-after-the-fact evidence. OFF is safe: it clears stale mode at boot, which is today's outcome.
-This plan does not decide. The default lives in one constant,
-`autonomousDriverReadoptionDefault` in `config/config.go` (read by the flag registry entry and
-`EffectiveAutonomousDriverReadoption`), so the implementer sets whichever value the owner picks;
-no other task, test or doc depends on the value (tests set the flag explicitly).
+**Decided: `autonomous_driver_readoption` ships default OFF (owner decision, adversarial C4).**
+Boot re-adoption (Story 3.1.3) stays in scope and is gated by the full list in Task 3.1.3c. It is
+the largest remaining risk surface, so the first boot is a dry-run: the `would_adopt` /
+rejecting-gate log is gate-validation evidence read *before* anything is adopted, and the owner
+flips the flag live afterwards. OFF is safe: it clears stale mode at boot, which is today's
+outcome. The default lives in one constant, `autonomousDriverReadoptionDefault` in
+`config/config.go` (value `false`; read by the flag registry entry and
+`EffectiveAutonomousDriverReadoption`); no other task, test or doc depends on the value (tests
+set the flag explicitly).
 
-**AC3 scope (owner-visible limitation).** AC3 ("state inspected and captured before restart;
-nudge chosen over respawn when only waiting") is met **only for driver-stop paths**, i.e. a stop
-reported through `onAutonomousDriverComplete`. The stale-work detector
-(`RemediateStaleWorkSession`) and health-checker restarts still kill and respawn with no pane
-snapshot and no nudge; this plan only adds the deferral guard (Story 3.2.5). That gap is a known,
-accepted limitation, recorded in the diagnosis document's "known gaps", and AC3 must not be
-reported as fully met until the owner signs it (row Adv C1 below).
+**AC3 scope (decided against the AC text).** The backlog item's AC3 reads: "Before a session is
+restarted, its prior state (last activity and output) is inspected and captured, and the restart
+path can choose a nudge over a full respawn when the session is only waiting." It does **not**
+name the stale-work detector or the health checker, and the item description scopes the work to
+"the current recovery path" that "restarts sessions without first inspecting what the session was
+doing", which is the driver-stop recovery in `onAutonomousDriverComplete`. AC3 is therefore met
+for **driver-stop paths**. The stale-work detector (`RemediateStaleWorkSession`) and health-checker
+restarts still kill and respawn with no pane snapshot and no nudge. This is recorded as a
+**follow-up backlog item** (row Adv C1 below), not as a silent omission: this plan adds only the
+deferral guard (Story 3.2.5) so the stale detector cannot kill a session this plan is nudging or
+re-supervising, and the diagnosis document lists those restart paths under "known gaps".
 
 | Concern | Disposition | Reason |
 |---------|-------------|--------|
-| Adv C1 (round 1): AC3 only covers the driver-completion path; `RemediateStaleWorkSession` and health-checker restarts still kill/respawn with no snapshot or nudge | **Deferred, scope decision (owner sign-off requested)** | Those paths have no driver snapshot and are a second restart surface; routing them through `DecideStallAction` needs pane capture in `BacklogService`. The plan only adds the deferral guard (3.2.5). AC3 is claimed for "driver stop" paths and the diagnosis doc lists the others as known gaps. |
+| Adv C1 (round 1): AC3 only covers the driver-completion path; `RemediateStaleWorkSession` and health-checker restarts still kill/respawn with no snapshot or nudge | **Deferred as a follow-up item (AC text does not name these paths)** | AC3's text names neither the stale detector nor the health checker (re-read from the backlog item), and the description scopes the work to the driver-stop recovery path. Those paths have no driver snapshot and are a second restart surface; routing them through `DecideStallAction` needs pane capture in `BacklogService`. Follow-up spec: reuse `ClassifyObserved`/`DecideStallAction` and the nudger from `RemediateStaleWorkSession` and `handleDeadPane`/`respawnDeadPane` (`session/health.go`), capturing a `StopSnapshot` before `UpdateItemSessionEnded`/`KillTmuxPaneOnly`. The plan only adds the deferral guard (3.2.5); the diagnosis doc lists the others as known gaps. |
 | Adv C5 (round 1) / architecture: nudge on `orchestrator_error` with a failing LLM pool is wasted | **Accepted** | Bounded by nudge cap 2 + re-supervise cap 3; recorded in ADR-001 Consequences. Gating on pool health needs a health signal that does not exist. |
 | Adv C8 (round 1): nudge runs synchronously inside the driver goroutine's callback | **Accepted, with tests** | The run is cancellable through the `recovery` entry (created in `claimCompletion`, so no registration gap) and the settle wait is ctx-aware (Task 3.2.2a). |
 | Adv C10a: 21 existing tests may not cover `RemediationDue`/`justParked` branches | **Folded in**: Task 3.1.1a adds characterization tests first | |
@@ -290,7 +292,7 @@ reported as fully met until the owner signs it (row Adv C1 below).
 | Round-3 Adv C5 (submit-uncertain -> Resupervise writes into a pane with unsubmitted text) | **Fixed** (failure table, Story 3.2.3) | Always leave-the-pane; ctx-cancel row takes precedence. |
 | Round-3 Adv C6 (per-boot cap cleared the excess in unspecified order) | **Fixed** (Unresolved Questions, Task 3.1.3c) | Stable order, excess deferred to bounded follow-up passes. |
 | Round-3 Adv C7 (Risk Control overstated flag-OFF equivalence) | **Fixed** (Risk Control) | States exactly what OFF restores and what stays an ungated correction. |
-| Round-3 Adv C4 (default ON removes gate-validation evidence) | **Open: owner decision** | See the NEEDS OWNER DECISION paragraph above; single constant. |
+| Round-3 Adv C4 (default ON removes gate-validation evidence) | **Resolved: default OFF** (owner decision) | See "Decided" paragraph above; single constant `autonomousDriverReadoptionDefault = false`. |
 | Repair-2 B6 (`cancelled_*` falls into Done-reading arms) | **Fixed** (Task 3.1.3b) | Per-arm guard at the top of every arm, tests for every role including unlinked. |
 | Repair-2 Adv C1 (pause and user stop never stop the driver, `session_service_update.go:99-110`) | **Accepted limitation, claim removed** | Story 3.1.3 does not claim pause is covered. A paused/stopped session's pane dies, the driver exits `exited`/`crashed` and takes today's Respawn row; the respawner's own guards decide. `canRestart` and the nudge writer refuse any instance whose status is not `Active`, so a pause during a recovery cannot be undone by it. The boot pass refuses `Paused`/`Stopped` too (gate `status_active`). Stopping the driver on pause is a one-line `stopAndDeregisterDriver` call in `applyStatusTransition` that belongs in its own item. |
 | Repair-2 Adv C5 (`ReleaseDiagnoseNudgeSlot` refund erases a concurrent MCP nudge's cooldown) | **Refund dropped, justified** | The claim runs after the gate and the lease, immediately before the write, so only a failing `SubmitDriverContent` can burn a slot, and that failure may have delivered text (`ErrSubmitNotConfirmed`), so a refund would also under-count a real write. Cost: at most one slot of a 2-slot lifetime budget lost on a rare submit failure; the item then leaves the pane per the failure table. No second UPDATE, no owner-aware predicate. |
@@ -562,7 +564,7 @@ W1 `1.1.1b` `1.1.2b` `1.2.1b` `2.1.1a` `3.1.2a` `3.2.2b` `3.2.5b` -> W2 `1.1.1c`
   - Review arm: run only the existing `status != review` resolve case; the `default` (UpdateItemSessionEnded) is skipped for `Cancelled`; then `return`.
   - Unrecognized-role arm: `return` before the generic notification.
   - Unlinked / lookup-failed / item-load-failed path (no arm runs): the final notification is a `switch outcome.Class()` (`Done` -> complete, `Stall` -> stuck, `Cancelled` -> none); update event and one Info log still fire.
-- Register `autonomous_driver_readoption` (live-read via `config`, same pattern as `diagnose_nudge_enabled`, `feature_flag_service.go:278-281`); no env var. Its default is the single constant `autonomousDriverReadoptionDefault` in `config/config.go` (owner decision, see Deferred; plan's current value ON); no other code or test hard-codes the default.
+- Register `autonomous_driver_readoption` (live-read via `config`, same pattern as `diagnose_nudge_enabled`, `feature_flag_service.go:278-281`); no env var. Its default is the single constant `autonomousDriverReadoptionDefault` in `config/config.go` (owner decision: **OFF**, value `false`; see Deferred); no other code or test hard-codes the default.
 - Files: `server/services/autonomous_orchestration_service.go`, `server/services/feature_flag_service.go`, `config/config.go`
 
 ##### Task 3.1.3c: Boot re-adoption pass and gates (M) — AC2
@@ -777,7 +779,7 @@ W1 `1.1.1b` `1.1.2b` `1.2.1b` `2.1.1a` `3.1.2a` `3.2.2b` `3.2.5b` -> W2 `1.1.1c`
 |----|-------------|-------|
 | AC1 | Root cause identified and documented, each stop path cited | 1.2.1a, 1.2.1b, 4.1.1a |
 | AC2 | Each stop's reason recorded and observable (stuck-row context via `ListStuckBacklogItems`, log line, in-memory field); distinguishes idle/awaiting-input, error, completed/exited | 1.1.1a, 1.1.1b, 2.1.1a, 2.1.1b, 3.1.2a, 3.1.2b, 3.1.3a, 3.1.3b, 3.1.3c, 3.1.3d, 3.1.4a, 3.1.4b |
-| AC3 | State inspected and captured before restart; nudge chosen over respawn when only waiting; working session re-supervised; stop/stale races closed. **Scope: driver-stop paths only**; the stale-detector and health-restart gap is a known, owner-visible limitation (Deferred, "AC3 scope") | 1.1.1b, 1.1.2a, 1.1.2b, 2.1.1a, 3.1.1a, 3.2.1a, 3.2.2a, 3.2.2b, 3.2.3a, 3.2.3b, 3.2.3c, 3.2.4a, 3.2.5a, 3.2.5b |
+| AC3 | State inspected and captured before restart; nudge chosen over respawn when only waiting; working session re-supervised; stop/stale races closed. **Scope: driver-stop paths**, which is what the AC text names; the stale-detector and health-restart paths are a recorded follow-up item (Deferred, "AC3 scope") | 1.1.1b, 1.1.2a, 1.1.2b, 2.1.1a, 3.1.1a, 3.2.1a, 3.2.2a, 3.2.2b, 3.2.3a, 3.2.3b, 3.2.3c, 3.2.4a, 3.2.5a, 3.2.5b |
 | AC4 | Tests cover classification and nudge-vs-respawn-vs-resupervise per state | 1.1.1c, 1.1.2c, 2.1.1c, 3.1.3d, 3.1.4c, 3.2.1a, 3.2.2a, 3.2.3d, 3.2.4b, 3.2.5c, 4.1.1b |
 
 Requirement mapping: R1 -> AC1 tasks; R2 -> 1.1.1a, 2.1.1b, 3.1.2, 3.1.4; R3 -> 1.1.1b, 2.1.1a; R4 -> 1.1.2, 3.1.4a; R5 -> 1.1.1b, 3.2.x; R6 -> 1.1.1c, 3.2.3d, 3.2.4b, 3.2.5c. Constraint "external stop is not a stall" -> 3.1.3a, 3.1.3b, 3.1.3d, 3.2.5c. Review findings: round-1 B1 -> 3.2.4a/b; B2 -> 3.1.3a/b/c/d; B3 -> 3.1.3a, 3.2.5c; B4 -> 3.2.5a/b/c; round-2 B5 -> 3.1.3c/d; B6 -> 3.1.3b/d; architecture C1 -> 3.1.3a, 3.2.3c, 3.2.5c; C2 -> 3.2.2a; C3 -> 3.2.2a, 3.2.3c; C4 -> 3.2.3b, 3.2.3d, 3.2.4b; C6 -> 3.2.5b; C7/C8 -> 3.1.3a, 3.2.4a; C9 -> Dependency Visualization.
@@ -809,4 +811,4 @@ Cost classes per `~/.claude/skills/sdd/skills/ESTIMATION.md`; bands and weights 
 - **Critical path (agent waves)**: 14 waves, listed under Dependency Visualization; the serial spine is the shared service file `autonomous_orchestration_service.go` (3.1.1a -> 3.1.2b -> 3.1.3a -> 3.1.3b -> 3.1.4a -> 3.1.4b -> 3.2.3a -> 3.2.3b).
 - **Riskiest first**: 3.1.1 (extraction) and 2.1.1 (driver exits) lead their lanes; 3.2.2b's pin test is run as soon as the writer exists, not at the end.
 - **Overrun checkpoint**: if cumulative actual CU on completed stories exceeds 1.25x their table value (x1.75), pause and report the delta and its cause.
-- **Wall-clock blockers (owners)**: (1) enabling `diagnose_nudge_enabled` and a soak window to watch the `stopped` log line before trusting nudges: tstapler. (2) Owner veto/confirmation of the defaults under Unresolved Questions (working -> Resupervise, `max_turns` -> Respawn, boot re-adoption default value (constant `autonomousDriverReadoptionDefault`, NEEDS OWNER DECISION) and linked-only scope, AC3 scope per Deferred C1): tstapler. (3) First post-deploy boot: read the `readopt candidate` log lines once (before flipping the flag on if the default is OFF; before trusting the pass if ON, it can be flipped off live); also note the re-adopted driver's first turn can inject into a quiet-but-mid-tool-call pane (review M4): tstapler. (4) CI queue for `test-delivery-guards` and the complexity gate: none.
+- **Wall-clock blockers (owners)**: (1) enabling `diagnose_nudge_enabled` and a soak window to watch the `stopped` log line before trusting nudges: tstapler. (2) Owner veto/confirmation of the defaults under Unresolved Questions (working -> Resupervise, `max_turns` -> Respawn, boot re-adoption linked-only scope; the re-adoption default is decided: OFF): tstapler. (3) First post-deploy boot: read the `readopt candidate` log lines once (the default is OFF, so this is a dry-run: read it before flipping the flag on); also note the re-adopted driver's first turn can inject into a quiet-but-mid-tool-call pane (review M4): tstapler. (4) CI queue for `test-delivery-guards` and the complexity gate: none.
