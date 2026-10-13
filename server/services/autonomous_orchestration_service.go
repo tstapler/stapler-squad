@@ -161,12 +161,23 @@ func (a *AutonomousOrchestrationService) driverCtx() context.Context {
 // registerDriver records a running AutonomousDriver in the registry so it can be stopped later.
 func (a *AutonomousOrchestrationService) registerDriver(sessionTitle string, d *session.AutonomousDriver) {
 	a.mu.Lock()
+	old := a.drivers[sessionTitle]
 	a.drivers[sessionTitle] = d
 	a.mu.Unlock()
+	if old != nil && old != d {
+		old.Stop() // never leave two drivers typing into one pane
+	}
 }
 
 // stopAndDeregisterDriver stops the driver for sessionTitle (if any) and removes it from the registry.
 func (a *AutonomousOrchestrationService) stopAndDeregisterDriver(sessionTitle string) {
+	a.cancelRecovery(sessionTitle)
+	a.deregisterDriver(sessionTitle)
+}
+
+// deregisterDriver is stopAndDeregisterDriver without cancelling an in-flight stall
+// recovery: the completion callback owns that recovery.
+func (a *AutonomousOrchestrationService) deregisterDriver(sessionTitle string) {
 	a.mu.Lock()
 	d, ok := a.drivers[sessionTitle]
 	if ok {
@@ -182,7 +193,6 @@ func (a *AutonomousOrchestrationService) stopAndDeregisterDriver(sessionTitle st
 // Used by MCP handlers as a belt-and-suspenders stop after task completion.
 // Satisfies mcp.ReviewCompletionSignaler.
 func (a *AutonomousOrchestrationService) StopDriverForSession(sessionTitle string) {
-	a.cancelRecovery(sessionTitle)
 	a.stopAndDeregisterDriver(sessionTitle)
 }
 
@@ -299,7 +309,11 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 
 	// Deregister the completed driver so it does not leak in the registry.
 	// The goroutine has already exited at this point; Stop() is a no-op but cleans the map.
-	a.stopAndDeregisterDriver(instanceName)
+	// Register the recovery before deregistering, so a stop that lands during the
+	// bookkeeping below cancels it instead of being lost.
+	recoveryCtx, releaseRecovery := a.beginRecovery(instanceName)
+	defer releaseRecovery()
+	a.deregisterDriver(instanceName)
 
 	// Use Background() intentionally: we want this bookkeeping to complete even if the
 	// server is shutting down concurrently (the driver just finished; its result must persist).
@@ -415,7 +429,7 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 							return
 						}
 						if !outcome.Done {
-							stall = a.handleWorkStall(ctx, concreteStorage, inst, item, is, &rec, outcome, applyStop)
+							stall = a.handleWorkStall(ctx, recoveryCtx, concreteStorage, inst, item, is, &rec, outcome, applyStop)
 						} else {
 							// The orchestrator LLM (session/autonomous_driver.go's
 							// autonomousSystemPrompt) judges "done" purely from a raw
@@ -641,18 +655,20 @@ type notifyOverride struct {
 // recovery (ADR-001), writes the stuck row, applies the instance stop once, then
 // nudges the idle session or ends the ItemSession and dispatches a respawn.
 // ctx is the outer Background ctx; every storage write here uses it.
-func (a *AutonomousOrchestrationService) handleWorkStall(ctx context.Context, concreteStorage *session.Storage, inst *session.Instance, item *session.BacklogItemData, is session.ItemSessionSummary, rec *stopRecord, outcome session.AutonomousDriverOutcome, applyStop func(domain.StallAction)) stallResult {
-	plan, wouldNudge := a.planStall(ctx, concreteStorage, inst, item, *rec)
+func (a *AutonomousOrchestrationService) handleWorkStall(ctx, recoveryCtx context.Context, concreteStorage *session.Storage, inst *session.Instance, item *session.BacklogItemData, is session.ItemSessionSummary, rec *stopRecord, outcome session.AutonomousDriverOutcome, applyStop func(domain.StallAction)) stallResult {
+	if recoveryCtx.Err() != nil {
+		// A stop was requested while this stop was being recorded: the stopper owns the outcome.
+		rec.Recovery = stopRecovery{Action: stopActionNone, NudgeOutcome: nudgeOutcomeCtxCancelled}
+		a.stopObservedAsPlain(inst, outcome, true)
+		return stallResult{Action: domain.StallActionNone, Notify: notifyOverride{Suppress: true}}
+	}
+	plan, wouldNudge, noneWhy := a.planStall(ctx, concreteStorage, inst, item, *rec)
 	if plan == domain.StallActionResupervise {
 		plan = domain.StallActionRespawn // re-supervision is not wired; never chosen today
 	}
 	if plan == domain.StallActionNone {
-		cause := noneCauseArchived
-		if !inst.IsArchived() {
-			cause = noneCauseRetryPending
-		}
-		rec.Recovery = stopRecovery{Action: stopActionNone, NoneBecause: cause}
-		log.Info("[AutonomousDriver] stall not recovered", "item", item.ID, "session", inst.Title, "because", string(cause))
+		rec.Recovery = stopRecovery{Action: stopActionNone, NoneBecause: noneWhy}
+		log.Info("[AutonomousDriver] stall not recovered", "item", item.ID, "session", inst.Title, "because", string(noneWhy))
 		return stallResult{Action: domain.StallActionNone}
 	}
 	if plan == domain.StallActionRespawn && wouldNudge {
@@ -674,6 +690,10 @@ func (a *AutonomousOrchestrationService) handleWorkStall(ctx context.Context, co
 		// Additive, never a gate: fail open to today's respawn body.
 		log.Warn("[AutonomousDriver] MarkStuck(autonomous_stuck) failed", "item", item.ID, "err", markErr)
 		plan = domain.StallActionRespawn
+		rec.Recovery.Action = stopActionNone
+		if a.autonomousStuckRespawner != nil {
+			rec.Recovery.Action = stopActionRespawned
+		}
 	case !applied && plan == domain.StallActionNudge:
 		log.Warn("[AutonomousDriver] stall nudge skipped: item status moved on", "item", item.ID)
 		plan = domain.StallActionNone
@@ -691,42 +711,56 @@ func (a *AutonomousOrchestrationService) handleWorkStall(ctx context.Context, co
 	// A nudge keeps AutonomousMode on; the write precedes any effect.
 	applyStop(plan)
 	if plan == domain.StallActionNudge {
-		if !a.nudgeStalledWorkSession(ctx, concreteStorage, inst, item, rec) {
+		if respawn, detached := a.nudgeStalledWorkSession(ctx, recoveryCtx, concreteStorage, inst, item, rec); !respawn {
 			a.refreshStuckRow(ctx, concreteStorage, item, *rec)
 			if rec.Recovery.Action == stopActionNudged {
+				if detached {
+					a.stopObservedAsPlain(inst, outcome, true) // delivered, but a stop landed before re-attach
+				}
 				a.publishNudged(inst.UUID, inst.Title, item.ID, *rec)
 				return stallResult{Action: domain.StallActionNudge, Notify: notifyOverride{Suppress: true}}
 			}
-			a.stopObservedAsPlain(inst, outcome)
-			return stallResult{Action: domain.StallActionNone}
+			// Pane left alone (stop requested, session no longer live, or delivery
+			// uncertain). A requested stop is the stopper's outcome: no alarm.
+			stopped := rec.Recovery.NudgeOutcome == nudgeOutcomeCtxCancelled || rec.Recovery.NudgeOutcome == nudgeOutcomeNotRestartable
+			a.stopObservedAsPlain(inst, outcome, stopped)
+			return stallResult{Action: domain.StallActionNone, Notify: notifyOverride{Suppress: stopped}}
 		}
 		// Fall back to today's respawn; mode must read off again.
-		a.stopObservedAsPlain(inst, outcome)
+		a.stopObservedAsPlain(inst, outcome, false)
 		rec.Recovery.Action = stopActionRespawned
 		if a.autonomousStuckRespawner == nil {
 			rec.Recovery.Action = stopActionNone
 		}
 		a.refreshStuckRow(ctx, concreteStorage, item, *rec)
 	}
-	a.respawnStalledWork(ctx, concreteStorage, item, is, outcome)
+	if !a.respawnStalledWork(ctx, concreteStorage, item, is, outcome) && rec.Recovery.Action == stopActionRespawned {
+		// Backoff deferred it (or it is parked): never record a respawn that did not start.
+		rec.Recovery.Action = stopActionNone
+		a.refreshStuckRow(ctx, concreteStorage, item, *rec)
+	}
 	return stallResult{Action: domain.StallActionRespawn}
 }
 
 // stopObservedAsPlain turns autonomy off after a nudge that did not end in a
 // re-attached driver (no driver is left running for the session).
-func (a *AutonomousOrchestrationService) stopObservedAsPlain(inst *session.Instance, outcome session.AutonomousDriverOutcome) {
+func (a *AutonomousOrchestrationService) stopObservedAsPlain(inst *session.Instance, outcome session.AutonomousDriverOutcome, stopRequested bool) {
 	a.mu.Lock()
 	_, running := a.drivers[inst.Title]
 	a.mu.Unlock()
 	if running {
 		return
 	}
+	if stopRequested {
+		outcome.StopReason = domain.StopReasonCancelledExternal // keep the stopper's own badge state
+	}
 	_ = a.applyInstanceStop(inst, domain.StallActionRespawn, outcome)
 }
 
 // respawnStalledWork ends the stalled ItemSession and, subject to the
 // remediation backoff, dispatches a respawn (the pre-nudge behaviour, unchanged).
-func (a *AutonomousOrchestrationService) respawnStalledWork(ctx context.Context, concreteStorage *session.Storage, item *session.BacklogItemData, is session.ItemSessionSummary, outcome session.AutonomousDriverOutcome) {
+// It reports whether a respawn was actually dispatched.
+func (a *AutonomousOrchestrationService) respawnStalledWork(ctx context.Context, concreteStorage *session.Storage, item *session.BacklogItemData, is session.ItemSessionSummary, outcome session.AutonomousDriverOutcome) (dispatched bool) {
 	log.Info("[AutonomousDriver] work session hit turn cap without DONE; leaving in_progress instead of forcing review", "item", item.ID, "reason", outcome.Reason)
 	// BUG-048's review-role fix (below, in the SessionRoleReview branch)
 	// established that a driver stopping (turn cap, or here a startup
@@ -785,6 +819,7 @@ func (a *AutonomousOrchestrationService) respawnStalledWork(ctx context.Context,
 			))
 		}
 		if due {
+			dispatched = true
 			go func() {
 				if respawnErr := respawner.AutoRespawnAutonomousWork(a.lifecycleCtx, itemID); respawnErr != nil {
 					log.Warn("[AutonomousDriver] AutoRespawnAutonomousWork failed", "item", itemID, "err", respawnErr)
@@ -795,6 +830,7 @@ func (a *AutonomousOrchestrationService) respawnStalledWork(ctx context.Context,
 			log.Info("[AutonomousDriver] autonomous_stuck remediation backoff not yet due, skipping respawn", "item", itemID)
 		}
 	}
+	return dispatched
 }
 
 // applyInstanceStop records the stop on inst through the actor and publishes the

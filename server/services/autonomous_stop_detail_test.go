@@ -263,7 +263,7 @@ var stopCopyGolden = struct {
 		nudgeOutcomeOwnership:       "the session's terminal was not the one this run expected",
 		nudgeOutcomeSlotUnavailable: "no automatic prompt was available for this item (limit reached or one was sent recently)",
 		nudgeOutcomeNA:              "", nudgeOutcomeSuccess: "", nudgeOutcomeDisabled: "",
-		nudgeOutcomeUncertain: "", nudgeOutcomeCtxCancelled: "", nudgeOutcomeRestartFailed: "",
+		nudgeOutcomeUncertain: "", nudgeOutcomeCtxCancelled: "", nudgeOutcomeRestartFailed: "", nudgeOutcomeNotRestartable: "",
 	},
 	nudged:   "It was prompted to continue automatically (nudge 1 of 2). You do not need to do anything.",
 	respawn:  "A fresh session is being started automatically. You only need to act if a \"needs manual attention\" notification follows.",

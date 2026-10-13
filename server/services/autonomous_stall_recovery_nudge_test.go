@@ -344,3 +344,18 @@ func TestClassifyNudgeError(t *testing.T) {
 }
 
 var _ = events.EventNotification
+
+// A session that is no longer restartable (autonomy turned off before the nudge)
+// must never fall through to a respawn, and a requested stop raises no alarm.
+func TestStallRecovery_NotRestartableLeavesPaneAndStaysQuiet(t *testing.T) {
+	f := newStallNudgeFixture(t, "not-restartable", session.BacklogStatusInProgress, true, true)
+	f.inst.SetAutonomousMode(false, "")
+
+	f.complete(stallIn(domain.ObservedIdlePrompt, domain.StopReasonOrchestratorError))
+
+	assert.Zero(t, f.nudger.callCount())
+	f.requireNoRespawn(t)
+	assert.Zero(t, f.restarts)
+	assert.Contains(t, f.rowContext(t), "nudge_outcome=not_restartable")
+	assert.Empty(t, notificationTitles(f.drain()), "a requested stop is not a stuck alarm")
+}

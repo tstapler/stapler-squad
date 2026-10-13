@@ -1195,3 +1195,4 @@ Not implemented, deliberately outside the item's four acceptance criteria:
 - Story 3.1.3a/c/e/f (registry hardening, boot re-adoption) and 3.1.4d (CSS wrap).
 - Story 3.2.4 (re-supervise): `ResuperviseAllowed` is never true, so a still-working pane takes the Respawn row (decision-table row 6), as before.
 - Story 3.2.5 (`stallRecoveryGuard` stale-detector deferral): a user stop cancels an in-flight nudge via `StopDriverForSession`, but the stale-work detector is not told a recovery is live.
+- Known gaps recorded by the sdd:6-verify review: while a nudge is in flight `AutonomousMode` is true with no registered driver, and a hard process crash in that window leaves it set (boot re-adoption, 3.1.3, is what would clear it); the nudge is not re-checked against `request_review` landing between plan and write (one wasted slot at worst); `onAutonomousDriverComplete`/`handleWorkStall` still pass a long parameter list and could become a small recovery struct.

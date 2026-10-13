@@ -148,13 +148,16 @@ const (
 	nudgeOutcomeUncertain       nudgeOutcome = "uncertain"
 	nudgeOutcomeCtxCancelled    nudgeOutcome = "ctx_cancelled"
 	nudgeOutcomeRestartFailed   nudgeOutcome = "restart_failed"
+	// nudgeOutcomeNotRestartable: the session was archived, paused, retrying or had
+	// autonomy turned off, so nothing was written and nothing is restarted.
+	nudgeOutcomeNotRestartable nudgeOutcome = "not_restartable"
 )
 
 // allNudgeOutcomes drives the copy completeness test.
 var allNudgeOutcomes = []nudgeOutcome{
 	nudgeOutcomeNA, nudgeOutcomeSuccess, nudgeOutcomeDisabled, nudgeOutcomeNotIdle,
 	nudgeOutcomeLeaseBusy, nudgeOutcomeOwnership, nudgeOutcomeSlotUnavailable,
-	nudgeOutcomeUncertain, nudgeOutcomeCtxCancelled, nudgeOutcomeRestartFailed,
+	nudgeOutcomeUncertain, nudgeOutcomeCtxCancelled, nudgeOutcomeRestartFailed, nudgeOutcomeNotRestartable,
 }
 
 // noneCause says why a stop ended with no recovery, for the action sentence.

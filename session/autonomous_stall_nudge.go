@@ -23,6 +23,11 @@ var (
 	// claim: the text may have landed unsubmitted, so the slot stays consumed
 	// and callers must leave the pane alone.
 	ErrNudgeSubmitUncertain = errors.New("nudge delivery uncertain")
+	// ErrNudgeClaimFailed wraps a storage error while claiming the slot; nothing was written.
+	ErrNudgeClaimFailed = errors.New("claim nudge slot")
+	// ErrNudgeSessionNotActive means the target is paused, stopped or archived;
+	// callers must not treat it as a reason to restart anything.
+	ErrNudgeSessionNotActive = errors.New("nudge target session is not an active, unarchived session")
 )
 
 // nudgeSeams are the test-only substitutions for the writer's real
@@ -55,7 +60,7 @@ func NudgeStalledAutonomousSession(ctx context.Context, inst *Instance, claim fu
 func nudgeStalledWith(ctx context.Context, inst *Instance, claim func() (bool, error), s nudgeSeams) error {
 	snap := inst.Snapshot()
 	if snap.Status != Active || snap.ArchivedAt != nil {
-		return fmt.Errorf("nudge target session %s is not an active, unarchived session (status %s)", snap.UUID, snap.Status)
+		return fmt.Errorf("%w: %s (status %s)", ErrNudgeSessionNotActive, snap.UUID, snap.Status)
 	}
 	if err := CheckNudgeEligibleWithSettleWindowCtx(ctx, inst, s.settleWindow, s.poll); err != nil {
 		return err
@@ -78,7 +83,7 @@ func nudgeStalledWith(ctx context.Context, inst *Instance, claim func() (bool, e
 	granted, err := claim()
 	if err != nil {
 		lease.Release()
-		return fmt.Errorf("claim nudge slot: %w", err)
+		return fmt.Errorf("%w: %w", ErrNudgeClaimFailed, err)
 	}
 	if !granted {
 		lease.Release()

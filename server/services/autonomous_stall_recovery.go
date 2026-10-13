@@ -67,7 +67,7 @@ func (a *AutonomousOrchestrationService) nudgeFlagsOn() (diagnose, stall bool) {
 	return diagnose, stall
 }
 
-// beginRecovery returns a ctx that StopDriverForSession (a user stop, delete or
+// beginRecovery returns a ctx that stopAndDeregisterDriver (user stop, delete, pause or
 // toggle-off) cancels, so an in-flight nudge never outlives a requested stop.
 func (a *AutonomousOrchestrationService) beginRecovery(title string) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(a.driverCtx())
@@ -119,9 +119,11 @@ func (a *AutonomousOrchestrationService) reattachDriver(inst *session.Instance, 
 	return a.startDriver(inst, timeout)
 }
 
+var errNotRestartable = errors.New("session is no longer restartable")
+
 // planStall evaluates the ADR-001 decision table. wouldNudge is the plan with
 // both flags forced on, so a disabled nudge is recorded as such.
-func (a *AutonomousOrchestrationService) planStall(ctx context.Context, storage *session.Storage, inst *session.Instance, item *session.BacklogItemData, rec stopRecord) (plan domain.StallAction, wouldNudge bool) {
+func (a *AutonomousOrchestrationService) planStall(ctx context.Context, storage *session.Storage, inst *session.Instance, item *session.BacklogItemData, rec stopRecord) (plan domain.StallAction, wouldNudge bool, none noneCause) {
 	diagnoseOn, stallOn := a.nudgeFlagsOn()
 	in := domain.StallDecisionInput{
 		Reason:           rec.reason(),
@@ -137,19 +139,30 @@ func (a *AutonomousOrchestrationService) planStall(ctx context.Context, storage 
 	plan = domain.DecideStallAction(in)
 	in.NudgeEnabled = true
 	wouldNudge = domain.DecideStallAction(in) == domain.StallActionNudge
-	return plan, wouldNudge
+	switch {
+	case in.Archived:
+		none = noneCauseArchived
+	case in.RetryPending:
+		none = noneCauseRetryPending
+	}
+	return plan, wouldNudge, none
 }
 
 // classifyNudgeError maps the writer's error to the outcome class and whether
-// the pane may be left alone (no fallback respawn).
+// the pane may be left alone (no fallback respawn). Uncertain delivery is
+// checked before ctx errors: its wrapped cause may itself be a ctx error.
 func classifyNudgeError(err error) (outcome nudgeOutcome, leavePane bool) {
 	switch {
 	case err == nil:
 		return nudgeOutcomeSuccess, false
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		return nudgeOutcomeCtxCancelled, true
 	case errors.Is(err, session.ErrNudgeSubmitUncertain):
 		return nudgeOutcomeUncertain, true
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return nudgeOutcomeCtxCancelled, true
+	case errors.Is(err, errNotRestartable), errors.Is(err, session.ErrNudgeSessionNotActive):
+		return nudgeOutcomeNotRestartable, true
+	case errors.Is(err, session.ErrNudgeClaimFailed):
+		return nudgeOutcomeSlotUnavailable, false
 	case errors.Is(err, session.ErrNudgeTargetNotIdle):
 		return nudgeOutcomeNotIdle, false
 	case errors.Is(err, session.ErrLeaseBusy):
@@ -164,12 +177,10 @@ func classifyNudgeError(err error) (outcome nudgeOutcome, leavePane bool) {
 // nudgeStalledWorkSession runs the nudge plan end to end and returns the action
 // the stop finally took; rec.Recovery carries the outcome for the row and copy.
 // A false return from the fallback means the caller must run the respawn body.
-func (a *AutonomousOrchestrationService) nudgeStalledWorkSession(ctx context.Context, storage *session.Storage, inst *session.Instance, item *session.BacklogItemData, rec *stopRecord) (respawn bool) {
-	rctx, release := a.beginRecovery(inst.Title)
-	defer release()
-
+func (a *AutonomousOrchestrationService) nudgeStalledWorkSession(ctx, rctx context.Context, storage *session.Storage, inst *session.Instance, item *session.BacklogItemData, rec *stopRecord) (respawn, detached bool) {
 	nudgeCap := config.LoadConfig().DiagnoseNudgeMaxAttemptsOrDefault() - stallNudgeReserve
 	rec.Recovery.NudgeCap = nudgeCap
+	// The claim uses the outer ctx on purpose: the writer checks rctx right before it.
 	claim := func() (bool, error) {
 		r, err := storage.ClaimDiagnoseNudgeSlot(ctx, item.ID, domain.StuckReasonAutonomousStuck, stallNudgeReserve)
 		return r.Claimed, err
@@ -179,7 +190,7 @@ func (a *AutonomousOrchestrationService) nudgeStalledWorkSession(ctx context.Con
 	if !canRestart(rctx, inst) {
 		err = rctx.Err()
 		if err == nil {
-			err = fmt.Errorf("session no longer restartable")
+			err = errNotRestartable
 		}
 	} else {
 		err = a.nudger().NudgeStalledSession(rctx, inst, claim)
@@ -194,25 +205,27 @@ func (a *AutonomousOrchestrationService) nudgeStalledWorkSession(ctx context.Con
 			rec.Recovery.NudgeUsed = n
 		}
 		if !canRestart(rctx, inst) {
-			rec.Recovery.NudgeOutcome = nudgeOutcomeCtxCancelled
-			rec.Recovery.Action = stopActionNone
-			return false
+			// The pane was nudged; a stop landed before re-attach (the nudged agent's
+			// own request_review does this). Report the delivery, attach nothing.
+			rec.Recovery.NudgeOutcome = nudgeOutcomeSuccess
+			rec.Recovery.Action = stopActionNudged
+			return false, true
 		}
 		if rErr := a.reattachDriver(inst, stallNudgeRestartTimeout); rErr != nil {
 			log.Warn("[AutonomousDriver] driver re-attach after nudge failed", "session", inst.Title, "err", rErr)
 			rec.Recovery.NudgeOutcome = nudgeOutcomeRestartFailed
-			return true
+			return true, false
 		}
 		rec.Recovery.NudgeOutcome = nudgeOutcomeSuccess
 		rec.Recovery.Action = stopActionNudged
-		return false
+		return false, false
 	case leave:
 		rec.Recovery.NudgeOutcome = outcome
 		rec.Recovery.Action = stopActionNone
-		return false
+		return false, false
 	default:
 		rec.Recovery.NudgeOutcome = outcome
-		return true
+		return true, false
 	}
 }
 
