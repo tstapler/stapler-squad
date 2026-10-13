@@ -268,6 +268,16 @@ var _ interface {
 // onAutonomousDriverComplete handles the outcome of an AutonomousDriver run.
 // Updates the linked backlog item status and fires a push notification.
 func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName string, outcome session.AutonomousDriverOutcome) {
+	// One "stopped" line per stop, on every return path, with the final recovery.
+	rec := stopRecord{
+		Session:  instanceName,
+		Outcome:  outcome,
+		State:    domain.ClassifyObserved(outcome.Snapshot),
+		Tail:     sanitizeStopTail(outcome.Snapshot.PaneTail),
+		Recovery: stopRecovery{Action: stopActionNone},
+	}
+	defer func() { logStop(rec) }()
+
 	// Deregister the completed driver so it does not leak in the registry.
 	// The goroutine has already exited at this point; Stop() is a no-op but cleans the map.
 	a.stopAndDeregisterDriver(instanceName)
@@ -287,6 +297,8 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 		return
 	}
 	sessionUUID := inst.UUID
+	// Read before the stop write zeroes it: the budget this run actually had.
+	rec.MaxTurns = int(inst.Snapshot().Autonomous.AutonomousMaxTurns)
 	cancelled := outcome.Class() == domain.OutcomeClassCancelled
 
 	// No in-place recovery exists yet, so the stop is always applied as a plain stop.
@@ -332,10 +344,13 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 					// session/backlog_lifecycle.go participates in. Additive, never a gate:
 					// a MarkStuck/MarkStuckNotified failure is logged but must not block the
 					// role-specific status handling below.
+					rec.ItemID, rec.Role = item.ID, is.Role
 					if outcome.Class() == domain.OutcomeClassStall {
+						if is.Role == session.SessionRoleWork && a.autonomousStuckRespawner != nil {
+							rec.Recovery = stopRecovery{Action: stopActionRespawned}
+						}
 						if _, markErr := concreteStorage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck,
-							session.BacklogStatus(item.Status),
-							fmt.Sprintf("autonomous driver stopped after %d turns without a DONE signal (%s)", outcome.Turns, outcome.Reason)); markErr != nil {
+							session.BacklogStatus(item.Status), formatStopDetail(rec)); markErr != nil {
 							log.Warn("[AutonomousDriver] onAutonomousDriverComplete: MarkStuck(autonomous_stuck) failed", "item", item.ID, "err", markErr)
 						} else if _, notifyErr := concreteStorage.MarkStuckNotified(ctx, item.ID, domain.StuckReasonAutonomousStuck); notifyErr != nil {
 							log.Warn("[AutonomousDriver] onAutonomousDriverComplete: MarkStuckNotified(autonomous_stuck) failed", "item", item.ID, "err", notifyErr)
@@ -544,7 +559,8 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 		}
 	default:
 		title = "Autonomous fix stuck"
-		body = fmt.Sprintf("Session '%s' stopped after %d turns without completing. Open the session to review what was accomplished and give the next instruction.", instanceName, outcome.Turns)
+		title = stopTitle(rec.Recovery)
+		body = fmt.Sprintf("Session '%s': %s", instanceName, plainSummary(rec.reason(), rec.State, rec.Recovery))
 		notifType = int32(9) // NotificationType_FAILURE
 		important = true     // matters, but not yet a confirmed dead end (backoff/respawn still handles it)
 	}

@@ -4,6 +4,10 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // Canaries are assembled at runtime so no literal credential-shaped string
@@ -212,4 +216,176 @@ func TestSanitizeStopTail_FailClosedRulesNoFalsePositiveOnCommonTails(t *testing
 			t.Errorf("got %q, want withheld", got)
 		}
 	})
+}
+
+// stopCopyGolden pins the operator-facing copy byte for byte; editing a sentence
+// is deliberate and must change this table in the same commit (UX G4, G5).
+var stopCopyGolden = struct {
+	reasons  map[domain.StopReason]string
+	states   map[domain.ObservedState]string
+	phrases  map[nudgeOutcome]string
+	nudged   string
+	respawn  string
+	failed   string
+	restart  string
+	uncertn  string
+	archived string
+	retry    string
+	capHit   string
+	manual   string
+}{
+	reasons: map[domain.StopReason]string{
+		domain.StopReasonMaxTurns:           "The autonomous run used up its turn allowance before finishing.",
+		domain.StopReasonStartupTimeout:     "The autonomous run gave up waiting for the session to become ready.",
+		domain.StopReasonOrchestratorError:  "The autonomous run hit an internal error and stopped.",
+		domain.StopReasonSubmitFailed:       "The autonomous run could not type its next instruction into the session.",
+		domain.StopReasonLeaseTimeout:       "The autonomous run could not get access to the session because something else was using it.",
+		domain.StopReasonRateLimitExhausted: "The autonomous run gave up waiting for the AI service's rate limit to clear.",
+		domain.StopReasonPanic:              "The autonomous run crashed unexpectedly.",
+		"":                                  "The autonomous run stopped without recording a reason.",
+		domain.StopReasonDone:               "",
+		domain.StopReasonCancelledExternal:  "",
+		domain.StopReasonCancelledShutdown:  "",
+	},
+	states: map[domain.ObservedState]string{
+		domain.ObservedIdlePrompt:    "The session was waiting at its prompt.",
+		domain.ObservedNeedsApproval: "The session was waiting for an approval.",
+		domain.ObservedIdle:          "The session was sitting at a shell prompt.",
+		domain.ObservedWorking:       "The session was still working.",
+		domain.ObservedError:         "The session was showing an error.",
+		domain.ObservedExited:        "The session had exited.",
+		domain.ObservedCrashed:       "The session had crashed.",
+		domain.ObservedUnknown:       "The session's state could not be read.",
+	},
+	phrases: map[nudgeOutcome]string{
+		nudgeOutcomeNotIdle:         "the session was busy again",
+		nudgeOutcomeLeaseBusy:       "another process was using the session",
+		nudgeOutcomeOwnership:       "the session's terminal was not the one this run expected",
+		nudgeOutcomeSlotUnavailable: "no automatic prompt was available for this item (limit reached or one was sent recently)",
+		nudgeOutcomeNA:              "", nudgeOutcomeSuccess: "", nudgeOutcomeDisabled: "",
+		nudgeOutcomeUncertain: "", nudgeOutcomeCtxCancelled: "", nudgeOutcomeRestartFailed: "",
+	},
+	nudged:   "It was prompted to continue automatically (nudge 1 of 2). You do not need to do anything.",
+	respawn:  "A fresh session is being started automatically. You only need to act if a \"needs manual attention\" notification follows.",
+	failed:   "A prompt could not be sent (the session was busy again), so a fresh session is being started instead. You only need to act if a \"needs manual attention\" notification follows.",
+	restart:  "A prompt was sent, but the autonomous run could not be re-attached, so a fresh session is being started instead. You only need to act if a \"needs manual attention\" notification follows.",
+	uncertn:  "A prompt may or may not have reached the session, so nothing was restarted. Open the session and check it.",
+	archived: "Nothing was restarted because the session is archived. You do not need to do anything.",
+	retry:    "Nothing was restarted because an automatic retry is already scheduled. You do not need to do anything.",
+	capHit:   "The autonomous run was re-attached 3 times while the session kept working, so a fresh session is being started. You only need to act if a \"needs manual attention\" notification follows.",
+	manual:   "Open the session to review what was accomplished and give the next instruction.",
+}
+
+// OBS-4: every enum value has a copy row.
+func TestStopReasonPhrase_EveryReasonHasRow(t *testing.T) {
+	t.Parallel()
+	for _, r := range append([]domain.StopReason{""}, domain.AllStopReasons...) {
+		got := reasonSentence(r)
+		if r.IsStall() {
+			assert.NotEmpty(t, got, "stalling reason %q needs a sentence", r)
+		} else {
+			assert.Empty(t, got, "%q never reaches an operator notification", r)
+		}
+	}
+	for _, s := range domain.AllObservedStates {
+		assert.NotEmpty(t, stateSentence(s), s)
+	}
+	for _, o := range allNudgeOutcomes {
+		_, ok := stopCopyGolden.phrases[o]
+		assert.True(t, ok, "nudge outcome %q is missing from the golden table", o)
+	}
+}
+
+// OBS-10: golden strings, and no wire code leaks into a sentence.
+func TestStopCopy_GoldenStringsAndNoCodes(t *testing.T) {
+	t.Parallel()
+	for r, want := range stopCopyGolden.reasons {
+		assert.Equal(t, want, reasonSentence(r), "reason %q", r)
+	}
+	for s, want := range stopCopyGolden.states {
+		assert.Equal(t, want, stateSentence(s), "state %q", s)
+	}
+	for o, want := range stopCopyGolden.phrases {
+		assert.Equal(t, want, nudgeFailurePhrase(o), "nudge outcome %q", o)
+	}
+	actions := map[string]stopRecovery{
+		stopCopyGolden.nudged:   {Action: stopActionNudged, NudgeUsed: 1, NudgeCap: 2},
+		stopCopyGolden.respawn:  {Action: stopActionRespawned},
+		stopCopyGolden.failed:   {Action: stopActionRespawned, NudgeOutcome: nudgeOutcomeNotIdle},
+		stopCopyGolden.restart:  {Action: stopActionRespawned, NudgeOutcome: nudgeOutcomeRestartFailed},
+		stopCopyGolden.uncertn:  {Action: stopActionNone, NudgeOutcome: nudgeOutcomeUncertain},
+		stopCopyGolden.archived: {Action: stopActionNone, NoneBecause: noneCauseArchived},
+		stopCopyGolden.retry:    {Action: stopActionNone, NoneBecause: noneCauseRetryPending},
+		stopCopyGolden.capHit:   {Action: stopActionRespawned, ResuperviseCapHit: true, ResuperviseN: 3},
+		stopCopyGolden.manual:   {Action: stopActionNone},
+	}
+	for want, rec := range actions {
+		assert.Equal(t, want, actionSentence(rec))
+	}
+	assert.Empty(t, actionSentence(stopRecovery{Action: stopActionResupervised}))
+
+	codes := make([]string, 0, len(domain.AllStopReasons)+len(domain.AllObservedStates)+len(allNudgeOutcomes))
+	for _, r := range domain.AllStopReasons {
+		codes = append(codes, string(r))
+	}
+	for _, s := range domain.AllObservedStates {
+		codes = append(codes, string(s))
+	}
+	for _, o := range allNudgeOutcomes {
+		codes = append(codes, string(o))
+	}
+	for _, reason := range append([]domain.StopReason{""}, domain.AllStopReasons...) {
+		for _, state := range domain.AllObservedStates {
+			for _, rec := range actions {
+				text := plainSummary(reason, state, rec)
+				for _, code := range codes {
+					// Single-word codes ("idle", "working") are ordinary English; only
+					// the underscore codes are unambiguous.
+					if strings.Contains(code, "_") {
+						assert.NotContains(t, text, code)
+					}
+				}
+			}
+		}
+	}
+	assert.Equal(t, "Autonomous session nudged", stopTitle(stopRecovery{Action: stopActionNudged}))
+	assert.Equal(t, "Autonomous fix stuck", stopTitle(stopRecovery{Action: stopActionRespawned}))
+}
+
+func detailFor(snap domain.StopSnapshot, turns int, reason domain.StopReason) string {
+	return formatStopDetail(stopRecord{
+		Outcome:  session.AutonomousDriverOutcome{StopReason: reason, Turns: turns, Snapshot: snap},
+		State:    domain.ClassifyObserved(snap),
+		Recovery: stopRecovery{Action: stopActionRespawned},
+		Tail:     sanitizeStopTail(snap.PaneTail),
+	})
+}
+
+// OBS-3: idle, error, exited and crashed are told apart in the detail.
+func TestStopDetail_StateDistinguishesIdleErrorExited(t *testing.T) {
+	t.Parallel()
+	cases := map[string]domain.StopSnapshot{
+		"state=idle_prompt": {TmuxAlive: true, ControllerActive: true, Bucket: domain.BucketSafeIdle},
+		"state=error":       {TmuxAlive: true, ControllerActive: true, Bucket: domain.BucketError},
+		"state=exited":      {PaneDead: true, ExitCode: 0},
+		"state=crashed":     {PaneDead: true, ExitCode: 1},
+	}
+	for want, snap := range cases {
+		assert.Contains(t, detailFor(snap, 1, domain.StopReasonOrchestratorError), want)
+	}
+}
+
+// OBS-8: one line, newlines shown with the marker.
+func TestStopDetail_SingleLineWithMarker(t *testing.T) {
+	t.Parallel()
+	snap := domain.StopSnapshot{TmuxAlive: true, ControllerActive: true, Bucket: domain.BucketSafeIdle, PaneTail: "first line\nsecond line\n\nthird"}
+	got := detailFor(snap, 2, domain.StopReasonOrchestratorError)
+	assert.NotContains(t, got, "\n")
+	assert.Contains(t, got, "tail=first line ⏎ second line ⏎ third")
+}
+
+// OBS-9 (key part): every detail carries resupervise=n/3.
+func TestStopDetail_ResuperviseKey(t *testing.T) {
+	t.Parallel()
+	assert.Contains(t, detailFor(domain.StopSnapshot{}, 0, domain.StopReasonMaxTurns), " resupervise=0/3 ")
 }
