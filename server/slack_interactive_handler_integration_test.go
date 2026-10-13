@@ -44,6 +44,22 @@ func setSlackInteractiveTestConfig(t *testing.T, approvalEnabled bool) {
 	require.NoError(t, config.SaveConfig(cfg))
 }
 
+// newSlackInteractiveTestServer builds the real server and registers its
+// Shutdown as cleanup. Without it, BuildDependencies' background goroutines
+// (e.g. the delivery-gate stats writer) keep writing into the isolated state
+// dir while t.TempDir's RemoveAll runs, failing the test with "directory not
+// empty". Cleanups run LIFO, so this one runs before the TempDir removal.
+func newSlackInteractiveTestServer(t *testing.T, deps *ServerDependencies) *Server {
+	t.Helper()
+	srv := NewServerWithDeps("localhost:0", deps)
+	t.Cleanup(func() {
+		if err := srv.Shutdown(); err != nil {
+			t.Logf("srv.Shutdown: %v", err)
+		}
+	})
+	return srv
+}
+
 const slackInteractiveIntegrationSecret = "integration-test-signing-secret"
 
 // TestSlackInteractiveRoute_ResolvesApproval_When_ApprovalEnabledAndSignatureValid
@@ -66,7 +82,7 @@ func TestSlackInteractiveRoute_ResolvesApproval_When_ApprovalEnabledAndSignature
 		ToolName:  "Bash",
 	}))
 
-	srv := NewServerWithDeps("localhost:0", deps)
+	srv := newSlackInteractiveTestServer(t, deps)
 
 	payloadJSON := `{"actions":[{"action_id":"approve","value":"appr-int-1:allow"}]}`
 	body := "payload=" + url.QueryEscape(payloadJSON)
@@ -115,7 +131,7 @@ func TestSlackInteractiveRoute_Returns404_When_ApprovalDisabled(t *testing.T) {
 		ToolName:  "Bash",
 	}))
 
-	srv := NewServerWithDeps("localhost:0", deps)
+	srv := newSlackInteractiveTestServer(t, deps)
 
 	payloadJSON := `{"actions":[{"action_id":"approve","value":"appr-int-2:allow"}]}`
 	body := "payload=" + url.QueryEscape(payloadJSON)
