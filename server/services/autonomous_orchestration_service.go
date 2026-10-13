@@ -65,6 +65,19 @@ type AutonomousOrchestrationService struct {
 	// Optional — if nil, the item is simply left in_progress (marked
 	// autonomous_stuck) until a human reopens it manually.
 	autonomousStuckRespawner AutonomousStuckRespawner
+
+	// readoptionEnabled reads the autonomous_driver_readoption flag at the instant
+	// of a shutdown stop. Nil means OFF, the shipped default.
+	readoptionEnabled func() bool
+}
+
+// SetReadoptionEnabled wires the live read of the autonomous_driver_readoption flag.
+func (a *AutonomousOrchestrationService) SetReadoptionEnabled(fn func() bool) {
+	a.readoptionEnabled = fn
+}
+
+func (a *AutonomousOrchestrationService) readoptionOn() bool {
+	return a.readoptionEnabled != nil && a.readoptionEnabled()
 }
 
 // SetReviewGateTrigger wires the review gate trigger (typically BacklogLifecycleListener).
@@ -274,6 +287,7 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 		return
 	}
 	sessionUUID := inst.UUID
+	cancelled := outcome.Class() == domain.OutcomeClassCancelled
 
 	// No in-place recovery exists yet, so the stop is always applied as a plain stop.
 	// A failed write is logged inside applyInstanceStop; bookkeeping carries on.
@@ -318,7 +332,7 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 					// session/backlog_lifecycle.go participates in. Additive, never a gate:
 					// a MarkStuck/MarkStuckNotified failure is logged but must not block the
 					// role-specific status handling below.
-					if !outcome.Done {
+					if outcome.Class() == domain.OutcomeClassStall {
 						if _, markErr := concreteStorage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck,
 							session.BacklogStatus(item.Status),
 							fmt.Sprintf("autonomous driver stopped after %d turns without a DONE signal (%s)", outcome.Turns, outcome.Reason)); markErr != nil {
@@ -332,6 +346,10 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 					var expectedStatus string
 					switch is.Role {
 					case session.SessionRoleTriage:
+						if cancelled {
+							log.Info("[AutonomousDriver] triage run cancelled, leaving item untouched", "item", item.ID, "stop_reason", outcome.NormalizedStopReason())
+							return
+						}
 						if !outcome.Done {
 							// Triage was interrupted/stuck — notify operator but do not advance the item.
 							// The item stays at 'idea' so the operator can re-trigger triage.
@@ -351,6 +369,10 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 						toStatus = session.BacklogStatusReady
 						expectedStatus = string(session.BacklogStatusIdea)
 					case session.SessionRoleWork:
+						if cancelled {
+							log.Info("[AutonomousDriver] work run cancelled, not a stall", "item", item.ID, "stop_reason", outcome.NormalizedStopReason())
+							return
+						}
 						if !outcome.Done {
 							stall = a.handleWorkStall(ctx, concreteStorage, item, is, outcome)
 						} else {
@@ -421,6 +443,9 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 							// forever (the original bug: nothing else was ever going to revisit
 							// this row once opened).
 							a.resolveAutonomousStuck(ctx, concreteStorage, item.ID)
+						case cancelled:
+							// A requested stop of a review still in review is not "stuck": leave the
+							// ItemSession and any open row untouched.
 						default:
 							// BUG-048: still genuinely stuck in review. A review-role autonomous
 							// driver that hits its turn cap without a DONE signal does NOT kill
@@ -468,6 +493,9 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 						// at Warn (diagnosable) and fall through to the generic done/stuck
 						// notification below instead of returning early.
 						log.Warn("[AutonomousDriver] onAutonomousDriverComplete: unrecognized session role, skipping status transition", "role", is.Role, "item", item.ID)
+						if cancelled {
+							return
+						}
 					}
 					if toStatus != "" {
 						precondition := &session.BacklogItemPrecondition{ExpectedStatus: expectedStatus}
@@ -504,13 +532,17 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 	notifType := int32(10) // NotificationType_INFO
 	// urgent/important default to the "complete" case: informational, no action needed.
 	urgent, important := false, false
-	if outcome.Done {
+	switch outcome.Class() {
+	case domain.OutcomeClassCancelled:
+		// A requested stop (external or shutdown) is neither complete nor stuck.
+		return
+	case domain.OutcomeClassDone:
 		title = "Autonomous fix complete"
 		body = fmt.Sprintf("%s: %s", instanceName, outcome.Reason)
 		if outcome.PRUrl != "" {
 			body += " — " + outcome.PRUrl
 		}
-	} else {
+	default:
 		title = "Autonomous fix stuck"
 		body = fmt.Sprintf("Session '%s' stopped after %d turns without completing. Open the session to review what was accomplished and give the next instruction.", instanceName, outcome.Turns)
 		notifType = int32(9) // NotificationType_FAILURE
@@ -652,13 +684,17 @@ func (a *AutonomousOrchestrationService) handleWorkStall(ctx context.Context, co
 // applyInstanceStop records the stop on inst through the actor and publishes the
 // badge update, as one unit: the event carries the post-write instance, and no
 // event is published when the write did not apply. Nudge and Resupervise keep
-// AutonomousMode on (the approval gate reads it); every other action ends autonomy.
+// AutonomousMode on (the approval gate reads it), as does a shutdown stop while
+// re-adoption is enabled; every other action ends autonomy.
 // The returned error is non-nil only when the instance actor is gone.
 func (a *AutonomousOrchestrationService) applyInstanceStop(inst *session.Instance, action domain.StallAction, outcome session.AutonomousDriverOutcome) error {
 	reason := outcome.NormalizedStopReason()
 	var err error
-	switch action {
-	case domain.StallActionNudge, domain.StallActionResupervise:
+	switch {
+	case action == domain.StallActionNudge || action == domain.StallActionResupervise:
+		err = inst.SetAutonomousStopObserved(reason)
+	case reason == domain.StopReasonCancelledShutdown && a.readoptionOn():
+		// Persisted mode is the re-adoption signal; keep it on.
 		err = inst.SetAutonomousStopObserved(reason)
 	default:
 		err = inst.SetAutonomousStopped(reason)

@@ -28,7 +28,8 @@ type charFixture struct {
 	ch      <-chan *events.Event
 }
 
-func newCharFixture(t *testing.T, title string, role string, itemStatus session.BacklogStatus) *charFixture {
+// newUnlinkedCharFixture is an autonomous session with no linked backlog item.
+func newUnlinkedCharFixture(t *testing.T, title string) *charFixture {
 	t.Helper()
 	storage := createTestStorage(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -46,13 +47,20 @@ func newCharFixture(t *testing.T, title string, role string, itemStatus session.
 	require.NoError(t, storage.AddInstance(inst))
 	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: title + " item", Status: string(itemStatus)})
-	require.NoError(t, err)
-	is, err := storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: inst.UUID, SessionRole: role})
-	require.NoError(t, err)
-
 	ch, _ := bus.Subscribe(ctx)
-	return &charFixture{svc: svc, storage: storage, inst: inst, title: title, itemID: item.ID, itemSes: is.ID, ch: ch}
+	return &charFixture{svc: svc, storage: storage, inst: inst, title: title, ch: ch}
+}
+
+func newCharFixture(t *testing.T, title string, role string, itemStatus session.BacklogStatus) *charFixture {
+	t.Helper()
+	f := newUnlinkedCharFixture(t, title)
+	ctx := context.Background()
+	item, err := f.storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: title + " item", Status: string(itemStatus)})
+	require.NoError(t, err)
+	is, err := f.storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: f.inst.UUID, SessionRole: role})
+	require.NoError(t, err)
+	f.itemID, f.itemSes = item.ID, is.ID
+	return f
 }
 
 func (f *charFixture) complete(outcome session.AutonomousDriverOutcome) {
