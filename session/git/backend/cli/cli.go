@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"go.opentelemetry.io/otel/metric"
@@ -213,14 +214,24 @@ func classify(op backend.OperationName, out []byte, err error) error {
 	text = strings.TrimSpace(text)
 	lower := strings.ToLower(text)
 	shown := redact.Git(text) // redact first: truncating before could cut a credential in half
-	if len(shown) > maxErrorOutput {
-		shown = strings.ToValidUTF8(shown[:maxErrorOutput], "") + "..."
-	}
+	shown = truncateKeepingEnds(shown, maxErrorOutput)
 	cerr := &backend.CommandError{Operation: op, Output: shown, Err: err}
 	if s := sentinelFor(lower, text); s != nil {
 		return fmt.Errorf("%w: %w", s, cerr)
 	}
 	return cerr
+}
+
+// truncateKeepingEnds shortens s to about max bytes, keeping its head and its tail: a failing
+// hook or pre-push run prints the cause last, so a head-only cut would lose it.
+func truncateKeepingEnds(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	half := max / 2
+	head := strings.ToValidUTF8(s[:half], "")
+	tail := strings.ToValidUTF8(s[len(s)-half:], "")
+	return head + "\n...[" + strconv.Itoa(len(s)-2*half) + " bytes omitted]...\n" + tail
 }
 
 func sentinelFor(lower, original string) error {

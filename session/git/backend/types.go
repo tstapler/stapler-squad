@@ -1,5 +1,7 @@
 package backend
 
+import "time"
+
 // Distinct string newtypes so a branch cannot be passed where a SHA is expected and a
 // repository path cannot be confused with a git directory.
 type (
@@ -112,15 +114,21 @@ type MergeBaseRequest struct {
 }
 
 // LogRequest selects commits. Limit 0 means no limit. Range's zero value means "from HEAD".
+// Detail additionally fills LogEntry's ShortSHA, Author and AuthorTime.
 type LogRequest struct {
-	Range RangeSpec
-	Limit int
+	Range  RangeSpec
+	Limit  int
+	Detail bool
 }
 
-// LogEntry is one commit from Log.
+// LogEntry is one commit from Log. ShortSHA, Author and AuthorTime are set only when the
+// request asked for Detail.
 type LogEntry struct {
-	SHA     CommitSHA
-	Subject string
+	SHA        CommitSHA
+	Subject    string
+	ShortSHA   string
+	Author     string
+	AuthorTime time.Time
 }
 
 // ListRefsRequest limits a for-each-ref listing; results are full ref names (refs/heads/x), never
@@ -279,7 +287,8 @@ type SetRemoteURLRequest struct {
 }
 
 // AddWorktreeRequest creates a linked worktree at Path on a new Branch cut from Base (HEAD
-// when Base is empty).
+// when Base is empty). An empty Branch lets git pick its default (a branch named after the
+// path's last element).
 type AddWorktreeRequest struct {
 	Path   WorktreePath
 	Branch BranchName

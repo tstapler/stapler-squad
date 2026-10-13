@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tstapler/stapler-squad/session/git/backend"
 )
@@ -226,7 +227,11 @@ func (b *Backend) Log(ctx context.Context, loc backend.RepoLocation, req backend
 	if err := checkRange(req.Range); err != nil {
 		return nil, err
 	}
-	args := []string{"log", "--format=%H%x1f%s"}
+	format := "--format=%H%x1f%s"
+	if req.Detail {
+		format += "%x1f%h%x1f%an%x1f%at"
+	}
+	args := []string{"log", format}
 	if req.Limit > 0 {
 		args = append(args, "-n", strconv.Itoa(req.Limit))
 	}
@@ -237,8 +242,21 @@ func (b *Backend) Log(ctx context.Context, loc backend.RepoLocation, req backend
 	}
 	var entries []backend.LogEntry
 	for _, ln := range nonEmptyLines(res.text()) {
-		sha, subject, _ := strings.Cut(ln, logSep)
-		entries = append(entries, backend.LogEntry{SHA: backend.CommitSHA(sha), Subject: subject})
+		f := strings.Split(ln, logSep)
+		entry := backend.LogEntry{SHA: backend.CommitSHA(f[0])}
+		if len(f) > 1 {
+			entry.Subject = f[1]
+		}
+		if req.Detail {
+			if len(f) != 5 {
+				return nil, fmt.Errorf("git log: malformed detail record %q", ln)
+			}
+			entry.ShortSHA, entry.Author = f[2], f[3]
+			if ts, perr := strconv.ParseInt(f[4], 10, 64); perr == nil {
+				entry.AuthorTime = time.Unix(ts, 0)
+			}
+		}
+		entries = append(entries, entry)
 	}
 	return entries, nil
 }

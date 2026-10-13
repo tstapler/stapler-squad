@@ -1,16 +1,12 @@
 package vcs
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
@@ -40,61 +36,47 @@ func (g *GitClient) RepoPath() string {
 	return g.repoPath
 }
 
-// run executes a git command and returns the output
-func (g *GitClient) run(args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	cmd := safeexec.CommandContext(ctx, "git", args...)
-	cmd.Dir = g.repoPath
+const gitCallTimeout = 30 * time.Second
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	log.Debug("running git command", "args", strings.Join(args, " "))
-
-	if err := cmd.Run(); err != nil {
-		errMsg := strings.TrimSpace(stderr.String())
-		if errMsg == "" {
-			errMsg = err.Error()
-		}
-		return "", fmt.Errorf("git %s failed: %s", strings.Join(args, " "), errMsg)
-	}
-
-	return strings.TrimSpace(stdout.String()), nil
+func (g *GitClient) loc() backend.RepoLocation {
+	return backend.Local{Root: backend.RepoRoot(g.repoPath)}
 }
 
-// GetStatus returns the working copy status
+// gitCtx bounds one backend call.
+func gitCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), gitCallTimeout)
+}
+
+// GetStatus returns the working copy status. Untracked files are listed
+// individually (`--untracked-files=all`), so an untracked directory counts
+// once per file rather than once per directory.
 func (g *GitClient) GetStatus() (*WorkingCopyStatus, error) {
-	output, err := g.run("status", "--porcelain")
+	ctx, cancel := gitCtx()
+	defer cancel()
+	res, err := gitprovider.Backend().Status(ctx, g.loc(), backend.IntentDisplay)
 	if err != nil {
 		return nil, err
 	}
 
 	status := &WorkingCopyStatus{}
-
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
-		if len(line) < 2 {
+	for _, f := range res.Files {
+		if f.Ignored {
 			continue
 		}
-
-		// Git porcelain format: XY filename
-		indexStatus := line[0]
-		workTreeStatus := line[1]
-
-		switch {
-		case indexStatus == 'A' || workTreeStatus == 'A':
-			status.AddedFiles++
-		case indexStatus == 'D' || workTreeStatus == 'D':
-			status.DeletedFiles++
-		case indexStatus == 'M' || workTreeStatus == 'M':
-			status.ModifiedFiles++
-		case indexStatus == 'U' || workTreeStatus == 'U':
-			status.ConflictedFiles++
-		case indexStatus == '?' && workTreeStatus == '?':
+		if f.Untracked {
 			status.AddedFiles++ // Untracked files count as added
+			continue
+		}
+		index, workTree := byte(f.Index), byte(f.Worktree)
+		switch {
+		case index == 'A' || workTree == 'A':
+			status.AddedFiles++
+		case index == 'D' || workTree == 'D':
+			status.DeletedFiles++
+		case index == 'M' || workTree == 'M':
+			status.ModifiedFiles++
+		case index == 'U' || workTree == 'U':
+			status.ConflictedFiles++
 		}
 	}
 
@@ -104,75 +86,59 @@ func (g *GitClient) GetStatus() (*WorkingCopyStatus, error) {
 	return status, nil
 }
 
-// HasUncommittedChanges checks if there are uncommitted changes
+// HasUncommittedChanges checks for staged, unstaged or untracked changes.
 func (g *GitClient) HasUncommittedChanges() (bool, error) {
-	// Check for staged changes
-	staged, err := g.run("diff", "--cached", "--quiet")
-	if err != nil {
-		// Non-zero exit means there are staged changes
-		if strings.Contains(err.Error(), "failed") {
-			return true, nil
-		}
-	}
-
-	// Check for unstaged changes
-	unstaged, err := g.run("diff", "--quiet")
-	if err != nil {
-		// Non-zero exit means there are unstaged changes
-		if strings.Contains(err.Error(), "failed") {
-			return true, nil
-		}
-	}
-
-	// Check for untracked files
-	untracked, err := g.run("ls-files", "--others", "--exclude-standard")
-	if err != nil {
-		return false, err
-	}
-
-	hasChanges := staged != "" || unstaged != "" || untracked != ""
-	return hasChanges, nil
+	ctx, cancel := gitCtx()
+	defer cancel()
+	return gitprovider.Backend().IsDirty(ctx, g.loc(), backend.IntentDestructive)
 }
 
 // GetCurrentRevision returns the current revision
 func (g *GitClient) GetCurrentRevision() (*Revision, error) {
-	// Get commit info
-	format := "%H|%h|%s|%an|%at"
-	output, err := g.run("log", "-1", "--format="+format)
+	revs, err := g.recentRevisions(1)
 	if err != nil {
 		return nil, err
 	}
-
-	parts := strings.SplitN(output, "|", 5)
-	if len(parts) < 5 {
-		return nil, fmt.Errorf("unexpected git log output: %s", output)
+	if len(revs) == 0 {
+		return nil, errors.New("git log returned no commits")
 	}
-
-	rev := &Revision{
-		ID:          parts[0],
-		ShortID:     parts[1],
-		Description: parts[2],
-		Author:      parts[3],
-		IsCurrent:   true,
-	}
-
-	// Parse Unix timestamp
-	if ts, err := strconv.ParseInt(parts[4], 10, 64); err == nil {
-		rev.Timestamp = time.Unix(ts, 0)
-	}
+	rev := revs[0]
 
 	// Get branches pointing to this commit
 	branches, _ := g.getBranchesForCommit(rev.ID)
 	rev.Bookmarks = branches
 
-	return rev, nil
+	return &rev, nil
+}
+
+// recentRevisions returns up to limit commits from HEAD, newest first, the
+// first marked current.
+func (g *GitClient) recentRevisions(limit int) ([]Revision, error) {
+	ctx, cancel := gitCtx()
+	defer cancel()
+	entries, err := gitprovider.Backend().Log(ctx, g.loc(), backend.LogRequest{Limit: limit, Detail: true})
+	if err != nil {
+		return nil, err
+	}
+	revisions := make([]Revision, 0, len(entries))
+	for i, e := range entries {
+		revisions = append(revisions, Revision{
+			ID:          string(e.SHA),
+			ShortID:     e.ShortSHA,
+			Description: e.Subject,
+			Author:      e.Author,
+			Timestamp:   e.AuthorTime,
+			IsCurrent:   i == 0,
+		})
+	}
+	return revisions, nil
 }
 
 // GetCurrentBookmark returns the current branch name
 func (g *GitClient) GetCurrentBookmark() (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := gitCtx()
 	defer cancel()
-	branch, err := gitprovider.Backend().CurrentBranch(ctx, backend.Local{Root: backend.RepoRoot(g.repoPath)})
+	branch, err := gitprovider.Backend().CurrentBranch(ctx, g.loc())
 	if errors.Is(err, backend.ErrDetachedHead) {
 		return "", nil
 	}
@@ -182,20 +148,18 @@ func (g *GitClient) GetCurrentBookmark() (string, error) {
 	return string(branch), nil
 }
 
-// getBranchesForCommit gets branches pointing to a commit
+// getBranchesForCommit gets local branches containing a commit
 func (g *GitClient) getBranchesForCommit(commitID string) ([]string, error) {
-	output, err := g.run("branch", "--contains", commitID, "--format=%(refname:short)")
+	ctx, cancel := gitCtx()
+	defer cancel()
+	infos, err := gitprovider.Backend().ListBranches(ctx, g.loc(), backend.ListBranchesRequest{Contains: backend.CommitSHA(commitID)})
 	if err != nil {
 		return nil, err
 	}
-
-	var branches []string
-	for _, line := range strings.Split(output, "\n") {
-		if branch := strings.TrimSpace(line); branch != "" {
-			branches = append(branches, branch)
-		}
+	branches := make([]string, 0, len(infos))
+	for _, b := range infos {
+		branches = append(branches, string(b.Name))
 	}
-
 	return branches, nil
 }
 
@@ -211,16 +175,14 @@ func (g *GitClient) SwitchTo(target string, opts SwitchOptions) error {
 		switch opts.ChangeStrategy {
 		case KeepAsWIP:
 			// Stash changes
-			_, err := g.run("stash", "push", "-m", "stapler-squad: WIP before workspace switch")
-			if err != nil {
+			if err := g.stashPush("stapler-squad: WIP before workspace switch"); err != nil {
 				return fmt.Errorf("failed to stash changes: %w", err)
 			}
 			log.Info("stashed uncommitted changes")
 
 		case BringAlong:
 			// Stash changes to restore after switch
-			_, err := g.run("stash", "push", "-m", "stapler-squad: bringing changes along")
-			if err != nil {
+			if err := g.stashPush("stapler-squad: bringing changes along"); err != nil {
 				return fmt.Errorf("failed to stash changes: %w", err)
 			}
 			g.stashRef = "stash@{0}" // Remember we stashed
@@ -242,15 +204,13 @@ func (g *GitClient) SwitchTo(target string, opts SwitchOptions) error {
 		if base == "" {
 			base = "HEAD"
 		}
-		_, err := g.run("checkout", "-b", target, base)
-		if err != nil {
+		if err := g.switchBranch(backend.SwitchRequest{Branch: backend.BranchName(target), Create: true, Base: backend.RefName(base)}); err != nil {
 			return fmt.Errorf("failed to create branch %s: %w", target, err)
 		}
 		log.Info("created and switched to branch", "branch", target)
 	} else if targetExists {
 		// Switch to existing branch
-		_, err := g.run("checkout", target)
-		if err != nil {
+		if err := g.checkout(target); err != nil {
 			return fmt.Errorf("failed to switch to %s: %w", target, err)
 		}
 		log.Info("switched to branch", "branch", target)
@@ -260,8 +220,7 @@ func (g *GitClient) SwitchTo(target string, opts SwitchOptions) error {
 
 	// 3. Restore stashed changes if BringAlong
 	if g.stashRef != "" {
-		_, err := g.run("stash", "pop")
-		if err != nil {
+		if err := g.stashPop(); err != nil {
 			log.Warn("failed to pop stash", "err", err)
 			// Don't fail the switch - changes are safe in stash
 		} else {
@@ -275,9 +234,9 @@ func (g *GitClient) SwitchTo(target string, opts SwitchOptions) error {
 
 // branchExists checks if a branch exists
 func (g *GitClient) branchExists(name string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := gitCtx()
 	defer cancel()
-	exists, err := gitprovider.Backend().RefExists(ctx, backend.Local{Root: backend.RepoRoot(g.repoPath)}, backend.RefName(name))
+	exists, err := gitprovider.Backend().RefExists(ctx, g.loc(), backend.RefName(name))
 	return err == nil && exists
 }
 
@@ -287,7 +246,9 @@ func (g *GitClient) CreateBookmark(name string, base string) error {
 		base = "HEAD"
 	}
 
-	_, err := g.run("branch", name, base)
+	ctx, cancel := gitCtx()
+	defer cancel()
+	err := gitprovider.Backend().CreateBranch(ctx, g.loc(), backend.CreateBranchRequest{Name: backend.BranchName(name), Base: backend.RefName(base)})
 	if err != nil {
 		return fmt.Errorf("failed to create branch %s: %w", name, err)
 	}
@@ -307,57 +268,69 @@ func (g *GitClient) DescribeWIP(message string) error {
 
 // AbandonChanges discards all uncommitted changes
 func (g *GitClient) AbandonChanges() error {
-	// Reset staged changes - ignore errors as it might be an initial commit with no HEAD
-	_, _ = g.run("reset", "HEAD")
-
-	// Discard working tree changes
-	if _, err := g.run("checkout", "."); err != nil {
+	ctx, cancel := gitCtx()
+	defer cancel()
+	if err := gitprovider.Backend().DiscardChanges(ctx, g.loc()); err != nil {
 		return fmt.Errorf("failed to discard changes: %w", err)
-	}
-
-	// Remove untracked files
-	if _, err := g.run("clean", "-fd"); err != nil {
-		log.Warn("failed to clean untracked files", "err", err)
 	}
 
 	log.Info("abandoned all uncommitted changes")
 	return nil
 }
 
+func (g *GitClient) stashPush(message string) error {
+	ctx, cancel := gitCtx()
+	defer cancel()
+	return gitprovider.Backend().StashPush(ctx, g.loc(), backend.StashRequest{Message: message})
+}
+
+func (g *GitClient) stashPop() error {
+	ctx, cancel := gitCtx()
+	defer cancel()
+	return gitprovider.Backend().StashPop(ctx, g.loc())
+}
+
+func (g *GitClient) switchBranch(req backend.SwitchRequest) error {
+	ctx, cancel := gitCtx()
+	defer cancel()
+	return gitprovider.Backend().SwitchBranch(ctx, g.loc(), req)
+}
+
+// checkout moves to an existing branch, or detaches onto any other commit-ish
+// (tag, SHA) the way `git checkout <target>` does; SwitchBranch alone refuses
+// non-branches.
+func (g *GitClient) checkout(target string) error {
+	switchErr := g.switchBranch(backend.SwitchRequest{Branch: backend.BranchName(target)})
+	if switchErr == nil {
+		return nil
+	}
+	ctx, cancel := gitCtx()
+	defer cancel()
+	if err := gitprovider.Backend().CheckoutCommit(ctx, g.loc(), backend.CommitSHA(target)); err != nil {
+		return switchErr
+	}
+	return nil
+}
+
 // ListBookmarks returns all branches
 func (g *GitClient) ListBookmarks() ([]Bookmark, error) {
-	output, err := g.run("branch", "-a", "--format=%(refname:short)|%(objectname:short)|%(upstream:short)")
+	ctx, cancel := gitCtx()
+	defer cancel()
+	infos, err := gitprovider.Backend().ListBranches(ctx, g.loc(), backend.ListBranchesRequest{IncludeRemote: true})
 	if err != nil {
 		return nil, err
 	}
 
 	var bookmarks []Bookmark
-	scanner := bufio.NewScanner(strings.NewReader(output))
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
-
-		parts := strings.Split(line, "|")
-		name := parts[0]
-		revID := ""
-		upstream := ""
-
-		if len(parts) > 1 {
-			revID = parts[1]
-		}
-		if len(parts) > 2 {
-			upstream = parts[2]
-		}
-
+	for _, b := range infos {
+		name := string(b.Name)
 		isRemote := strings.HasPrefix(name, "remotes/") || strings.HasPrefix(name, "origin/")
 
 		bookmarks = append(bookmarks, Bookmark{
 			Name:       name,
-			RevisionID: revID,
+			RevisionID: b.ShortSHA,
 			IsRemote:   isRemote,
-			Upstream:   upstream,
+			Upstream:   string(b.Upstream),
 		})
 	}
 
@@ -366,53 +339,17 @@ func (g *GitClient) ListBookmarks() ([]Bookmark, error) {
 
 // ListRecentRevisions returns recent commits
 func (g *GitClient) ListRecentRevisions(limit int) ([]Revision, error) {
-	format := "%H|%h|%s|%an|%at"
-	output, err := g.run("log", fmt.Sprintf("-%d", limit), "--format="+format)
-	if err != nil {
-		return nil, err
+	if limit <= 0 {
+		return nil, nil // `git log -0` prints nothing; Backend.Log treats 0 as unlimited
 	}
-
-	var revisions []Revision
-	scanner := bufio.NewScanner(strings.NewReader(output))
-	isFirst := true
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
-
-		parts := strings.SplitN(line, "|", 5)
-		if len(parts) < 5 {
-			continue
-		}
-
-		rev := Revision{
-			ID:          parts[0],
-			ShortID:     parts[1],
-			Description: parts[2],
-			Author:      parts[3],
-			IsCurrent:   isFirst,
-		}
-		isFirst = false
-
-		if ts, err := strconv.ParseInt(parts[4], 10, 64); err == nil {
-			rev.Timestamp = time.Unix(ts, 0)
-		}
-
-		revisions = append(revisions, rev)
-	}
-
-	return revisions, nil
+	return g.recentRevisions(limit)
 }
 
 // CreateWorktree creates a new Git worktree
 func (g *GitClient) CreateWorktree(path string, branch string) error {
-	args := []string{"worktree", "add", path}
-	if branch != "" {
-		args = append(args, "-b", branch)
-	}
-
-	_, err := g.run(args...)
+	ctx, cancel := gitCtx()
+	defer cancel()
+	err := gitprovider.Backend().AddWorktree(ctx, g.loc(), backend.AddWorktreeRequest{Path: backend.WorktreePath(path), Branch: backend.BranchName(branch)})
 	if err != nil {
 		return fmt.Errorf("failed to create worktree at %s: %w", path, err)
 	}
@@ -423,39 +360,22 @@ func (g *GitClient) CreateWorktree(path string, branch string) error {
 
 // ListWorktrees returns all Git worktrees
 func (g *GitClient) ListWorktrees() ([]Worktree, error) {
-	output, err := g.run("worktree", "list", "--porcelain")
+	ctx, cancel := gitCtx()
+	defer cancel()
+	infos, err := gitprovider.Backend().ListWorktrees(ctx, g.loc())
 	if err != nil {
 		return nil, err
 	}
 
 	var worktrees []Worktree
-	var current *Worktree
-
-	scanner := bufio.NewScanner(strings.NewReader(output))
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		if strings.HasPrefix(line, "worktree ") {
-			if current != nil {
-				worktrees = append(worktrees, *current)
-			}
-			current = &Worktree{
-				Path: strings.TrimPrefix(line, "worktree "),
-			}
-		} else if current != nil {
-			if strings.HasPrefix(line, "HEAD ") {
-				current.RevisionID = strings.TrimPrefix(line, "HEAD ")
-			} else if strings.HasPrefix(line, "branch ") {
-				branch := strings.TrimPrefix(line, "branch ")
-				branch = strings.TrimPrefix(branch, "refs/heads/")
-				current.Bookmark = branch
-				current.Name = branch // Use branch as name
-			}
+	for _, info := range infos {
+		wt := Worktree{Path: string(info.Path), RevisionID: string(info.HeadSHA)}
+		if info.Branch != "" {
+			branch := strings.TrimPrefix(string(info.Branch), "refs/heads/")
+			wt.Bookmark = branch
+			wt.Name = branch // Use branch as name
 		}
-	}
-
-	if current != nil {
-		worktrees = append(worktrees, *current)
+		worktrees = append(worktrees, wt)
 	}
 
 	// Mark current worktree

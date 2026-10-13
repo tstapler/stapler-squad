@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/git/backend"
 )
 
 func TestNewGitProvider(t *testing.T) {
@@ -1008,228 +1010,71 @@ func TestGitProviderGetLogCommand(t *testing.T) {
 	}
 }
 
-func TestNumstatPath(t *testing.T) {
+func TestFileChangesFromStatus(t *testing.T) {
 	tests := []struct {
 		name string
-		raw  string
-		want string
+		in   []backend.FileStatus
+		want []FileChange
 	}{
 		{
-			name: "plain path",
-			raw:  "main.go",
-			want: "main.go",
+			name: "unstaged modification",
+			in:   []backend.FileStatus{{Path: "main.go", Index: '.', Worktree: 'M'}},
+			want: []FileChange{{Path: "main.go", Status: FileModified}},
 		},
 		{
-			name: "plain path with leading/trailing whitespace",
-			raw:  "  main.go  ",
-			want: "main.go",
+			name: "staged addition",
+			in:   []backend.FileStatus{{Path: "new.txt", Index: 'A', Worktree: '.'}},
+			want: []FileChange{{Path: "new.txt", Status: FileAdded, IsStaged: true}},
 		},
 		{
-			name: "simple rename form",
-			raw:  "old.txt => new.txt",
-			want: "new.txt",
+			name: "staged and unstaged change to one path yields two entries",
+			in:   []backend.FileStatus{{Path: "both.txt", Index: 'M', Worktree: 'D'}},
+			want: []FileChange{
+				{Path: "both.txt", Status: FileModified, IsStaged: true},
+				{Path: "both.txt", Status: FileDeleted},
+			},
 		},
 		{
-			name: "braced rename with common prefix and suffix",
-			raw:  "common/{old => new}/tail",
-			want: "common/new/tail",
+			name: "rename threads path and original path, with spaces",
+			in:   []backend.FileStatus{{Path: "renamed with space.txt", OrigPath: "old file.txt", Index: 'R', Worktree: '.'}},
+			want: []FileChange{{Path: "renamed with space.txt", OldPath: "old file.txt", Status: FileRenamed, IsStaged: true}},
 		},
 		{
-			name: "braced rename with empty suffix",
-			raw:  "src/{old.go => new.go}",
-			want: "src/new.go",
+			name: "untracked",
+			in:   []backend.FileStatus{{Path: "untracked.txt", Untracked: true}},
+			want: []FileChange{{Path: "untracked.txt", Status: FileUntracked}},
 		},
 		{
-			name: "braced rename with only a prefix, no suffix segment",
-			raw:  "{old => new}/tail",
-			want: "new/tail",
+			name: "ignored is skipped",
+			in:   []backend.FileStatus{{Path: "ignored.txt", Ignored: true}},
 		},
 		{
-			name: "empty string",
-			raw:  "",
-			want: "",
+			name: "unmerged record is a conflict without an original path",
+			in:   []backend.FileStatus{{Path: "c.txt", OrigPath: "x", Index: 'U', Worktree: 'U', Unmerged: true}},
+			want: []FileChange{{Path: "c.txt", Status: FileConflict}},
 		},
 		{
-			name: "path containing a space, no rename",
-			raw:  "my file.txt",
-			want: "my file.txt",
+			name: "both-added and both-deleted codes are conflicts",
+			in: []backend.FileStatus{
+				{Path: "aa.txt", Index: 'A', Worktree: 'A'},
+				{Path: "dd.txt", Index: 'D', Worktree: 'D'},
+			},
+			want: []FileChange{
+				{Path: "aa.txt", Status: FileConflict},
+				{Path: "dd.txt", Status: FileConflict},
+			},
 		},
-		{
-			name: "rename of a path containing spaces",
-			raw:  "old file.txt => new file.txt",
-			want: "new file.txt",
-		},
+		{name: "empty status yields no files"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := numstatPath(tt.raw)
-			if got != tt.want {
-				t.Errorf("numstatPath(%q) = %q, want %q", tt.raw, got, tt.want)
+			got := fileChangesFromStatus(backend.StatusResult{Files: tt.in})
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("fileChangesFromStatus() = %+v, want %+v", got, tt.want)
 			}
 		})
 	}
-}
-
-func TestParsePorcelainV2Z(t *testing.T) {
-	// join builds a NUL-delimited -z record stream from individual tokens,
-	// matching what `git status --porcelain=v2 -z` emits: one NUL after every
-	// token, no separator required before the first or after the last.
-	join := func(tokens ...string) string {
-		return strings.Join(tokens, "\x00") + "\x00"
-	}
-
-	t.Run("ordinary modified entry, unstaged", func(t *testing.T) {
-		output := join("1 .M N... 100644 100644 100644 " +
-			"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 main.go")
-
-		got := parsePorcelainV2Z(output)
-
-		if len(got) != 1 {
-			t.Fatalf("got %d files, want 1: %+v", len(got), got)
-		}
-		if got[0].Path != "main.go" {
-			t.Errorf("Path = %q, want %q", got[0].Path, "main.go")
-		}
-		if got[0].Status != FileModified {
-			t.Errorf("Status = %v, want %v", got[0].Status, FileModified)
-		}
-		if got[0].IsStaged {
-			t.Error("IsStaged = true, want false")
-		}
-	})
-
-	t.Run("ordinary added entry, staged", func(t *testing.T) {
-		output := join("1 A. N... 000000 100644 100644 " +
-			"0000000000000000000000000000000000000000 e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 new.txt")
-
-		got := parsePorcelainV2Z(output)
-
-		if len(got) != 1 {
-			t.Fatalf("got %d files, want 1: %+v", len(got), got)
-		}
-		if got[0].Path != "new.txt" {
-			t.Errorf("Path = %q, want %q", got[0].Path, "new.txt")
-		}
-		if got[0].Status != FileAdded {
-			t.Errorf("Status = %v, want %v", got[0].Status, FileAdded)
-		}
-		if !got[0].IsStaged {
-			t.Error("IsStaged = false, want true")
-		}
-	})
-
-	t.Run("ordinary deleted entry", func(t *testing.T) {
-		output := join("1 .D N... 100644 100644 000000 " +
-			"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 0000000000000000000000000000000000000000 gone.txt")
-
-		got := parsePorcelainV2Z(output)
-
-		if len(got) != 1 {
-			t.Fatalf("got %d files, want 1: %+v", len(got), got)
-		}
-		if got[0].Path != "gone.txt" {
-			t.Errorf("Path = %q, want %q", got[0].Path, "gone.txt")
-		}
-		if got[0].Status != FileDeleted {
-			t.Errorf("Status = %v, want %v", got[0].Status, FileDeleted)
-		}
-	})
-
-	t.Run("rename entry threads path and origPath", func(t *testing.T) {
-		output := join(
-			"2 R. N... 100644 100644 100644 "+
-				"ce013625030ba8dba906f756967f9e9ca394464a ce013625030ba8dba906f756967f9e9ca394464a R100 renamed.txt",
-			"old.txt",
-		)
-
-		got := parsePorcelainV2Z(output)
-
-		if len(got) != 1 {
-			t.Fatalf("got %d files, want 1: %+v", len(got), got)
-		}
-		if got[0].Path != "renamed.txt" {
-			t.Errorf("Path = %q, want %q", got[0].Path, "renamed.txt")
-		}
-		if got[0].OldPath != "old.txt" {
-			t.Errorf("OldPath = %q, want %q", got[0].OldPath, "old.txt")
-		}
-		if got[0].Status != FileRenamed {
-			t.Errorf("Status = %v, want %v", got[0].Status, FileRenamed)
-		}
-		if !got[0].IsStaged {
-			t.Error("IsStaged = false, want true")
-		}
-	})
-
-	t.Run("untracked entry", func(t *testing.T) {
-		output := join("? untracked.txt")
-
-		got := parsePorcelainV2Z(output)
-
-		if len(got) != 1 {
-			t.Fatalf("got %d files, want 1: %+v", len(got), got)
-		}
-		if got[0].Path != "untracked.txt" {
-			t.Errorf("Path = %q, want %q", got[0].Path, "untracked.txt")
-		}
-		if got[0].Status != FileUntracked {
-			t.Errorf("Status = %v, want %v", got[0].Status, FileUntracked)
-		}
-	})
-
-	t.Run("ignored entry is skipped", func(t *testing.T) {
-		output := join("! ignored.txt")
-
-		got := parsePorcelainV2Z(output)
-
-		if len(got) != 0 {
-			t.Fatalf("got %d files, want 0: %+v", len(got), got)
-		}
-	})
-
-	// Regression test for the space-truncation bug this PR fixes: an ordinary
-	// entry AND a rename entry whose path contains a literal space must not
-	// be truncated by naive space-splitting.
-	t.Run("ordinary entry and rename entry with spaces in path are not truncated", func(t *testing.T) {
-		output := join(
-			"1 .M N... 100644 100644 100644 "+
-				"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 my file.txt",
-			"2 R. N... 100644 100644 100644 "+
-				"ce013625030ba8dba906f756967f9e9ca394464a ce013625030ba8dba906f756967f9e9ca394464a R100 renamed with space.txt",
-			"old file.txt",
-		)
-
-		got := parsePorcelainV2Z(output)
-
-		if len(got) != 2 {
-			t.Fatalf("got %d files, want 2: %+v", len(got), got)
-		}
-
-		if got[0].Path != "my file.txt" {
-			t.Errorf("files[0].Path = %q, want %q", got[0].Path, "my file.txt")
-		}
-		if got[0].Status != FileModified {
-			t.Errorf("files[0].Status = %v, want %v", got[0].Status, FileModified)
-		}
-
-		if got[1].Path != "renamed with space.txt" {
-			t.Errorf("files[1].Path = %q, want %q", got[1].Path, "renamed with space.txt")
-		}
-		if got[1].OldPath != "old file.txt" {
-			t.Errorf("files[1].OldPath = %q, want %q", got[1].OldPath, "old file.txt")
-		}
-		if got[1].Status != FileRenamed {
-			t.Errorf("files[1].Status = %v, want %v", got[1].Status, FileRenamed)
-		}
-	})
-
-	t.Run("empty output yields no files", func(t *testing.T) {
-		got := parsePorcelainV2Z("")
-		if len(got) != 0 {
-			t.Fatalf("got %d files, want 0: %+v", len(got), got)
-		}
-	})
 }
 
 func TestGitProviderGetChangedFiles_PathWithSpace(t *testing.T) {
@@ -1281,44 +1126,6 @@ func TestGitProviderGetChangedFiles_PathWithSpace(t *testing.T) {
 
 	if files[0].Status != FileModified {
 		t.Errorf("files[0].Status = %v, want %v", files[0].Status, FileModified)
-	}
-}
-
-func TestParseBranchHeader(t *testing.T) {
-	tests := []struct {
-		name   string
-		tokens []string
-		want   branchHeaderInfo
-	}{
-		{
-			name:   "branch with upstream and ahead/behind",
-			tokens: []string{"# branch.oid abc123def456", "# branch.head main", "# branch.upstream origin/main", "# branch.ab +2 -3"},
-			want:   branchHeaderInfo{headOID: "abc123def456", headBranch: "main", upstream: "origin/main", aheadBy: 2, behindBy: 3, hasAheadBehind: true},
-		},
-		{
-			name:   "detached HEAD, no upstream",
-			tokens: []string{"# branch.oid abc123def456", "# branch.head (detached)"},
-			want:   branchHeaderInfo{headOID: "abc123def456", headBranch: "(detached)"},
-		},
-		{
-			name:   "initial commit, no HEAD yet",
-			tokens: []string{"# branch.oid (initial)", "# branch.head main"},
-			want:   branchHeaderInfo{headOID: "(initial)", headBranch: "main"},
-		},
-		{
-			name:   "file records mixed in are ignored",
-			tokens: []string{"# branch.oid abc123", "# branch.head main", "1 M. N... 100644 100644 100644 hash1 hash2 file.txt"},
-			want:   branchHeaderInfo{headOID: "abc123", headBranch: "main"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := parseBranchHeader(tt.tokens)
-			if got != tt.want {
-				t.Errorf("parseBranchHeader() = %+v, want %+v", got, tt.want)
-			}
-		})
 	}
 }
 

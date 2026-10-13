@@ -15,9 +15,6 @@ type otherRunner interface {
 	Run(ctx context.Context, dir, name string, args ...string) ([]byte, error)
 }
 
-// runGitCommand outside session/git is unrelated: never flagged.
-func runGitCommand(path string) {}
-
 const gitBin = "git"
 
 func bad(ctx context.Context, r tmux.CommandRunner) {
@@ -40,7 +37,6 @@ func multiLine(ctx context.Context) {
 
 func good(ctx context.Context, r tmux.CommandRunner, o otherRunner) {
 	_, _ = o.Run(ctx, "/repo", "git", "status")
-	runGitCommand("git")
 	_ = exec.Command("/foo/not-git/tool")
 	_ = exec.Command("ls", "-l")
 	_ = safeexec.CommandContext(ctx, "tmux", "ls")
