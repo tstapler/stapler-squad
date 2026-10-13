@@ -207,6 +207,10 @@ func commonOf(p string) (common string, ok bool, err error) {
 		return "", false, fallbackEligible(fmt.Errorf("%s/commondir is unreadable or empty", p))
 	default:
 		c := strings.TrimRight(string(data), "\r\n")
+		if strings.TrimLeft(c, " \t") != c {
+			// git rejects such a path as "Invalid path" (a plain fatal), not as a non-repository
+			return "", false, fallbackEligible(fmt.Errorf("%s/commondir starts with whitespace", p))
+		}
 		if !filepath.IsAbs(c) {
 			c = filepath.Join(p, c)
 		}

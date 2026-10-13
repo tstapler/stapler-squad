@@ -88,6 +88,11 @@ func TestMalformedOrUnreadableGitfileIsLeftToTheCLI(t *testing.T) {
 		"no space":  {content: "gitdir:{root}/nowhere\n"},
 		"no path":   {content: "gitdir: \n"},
 		"oversized": {content: "gitdir: " + string(make([]byte, 5000))},
+		"commondir with leading whitespace": {content: "gitdir: {root}/admin\n", setup: func(root string) {
+			require.NoError(t, os.MkdirAll(filepath.Join(root, "admin"), 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(root, "admin", "HEAD"), []byte("ref: refs/heads/main\n"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(root, "admin", "commondir"), []byte("  ../..\n"), 0o600))
+		}},
 		"empty commondir": {content: "gitdir: {root}/admin\n", setup: func(root string) {
 			require.NoError(t, os.MkdirAll(filepath.Join(root, "admin"), 0o700))
 			require.NoError(t, os.WriteFile(filepath.Join(root, "admin", "HEAD"), []byte("ref: refs/heads/main\n"), 0o600))

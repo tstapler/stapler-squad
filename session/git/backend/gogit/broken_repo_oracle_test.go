@@ -68,6 +68,8 @@ var fixtureBrokenRepos = gitoracle.Fixture{Name: "broken-repos", Build: func(g g
 		{"wt-admin-no-head", func(admin string) { must(os.Remove(filepath.Join(admin, "HEAD"))) }},
 		{"wt-admin-no-commondir", func(admin string) { must(os.Remove(filepath.Join(admin, "commondir"))) }},
 		{"wt-admin-commondir-dangling", func(admin string) { write(filepath.Join(admin, "commondir"), "../../nowhere\n") }},
+		{"wt-admin-commondir-leading-space", func(admin string) { write(filepath.Join(admin, "commondir"), "  ../..\n") }},
+		{"wt-admin-commondir-trailing-space", func(admin string) { write(filepath.Join(admin, "commondir"), "../..  \n") }},
 		{"wt-admin-commondir-empty", func(admin string) { write(filepath.Join(admin, "commondir"), "") }},
 		{"wt-admin-head-garbage", func(admin string) { write(filepath.Join(admin, "HEAD"), "garbage\n") }},
 		{"wt-admin-head-empty", func(admin string) { write(filepath.Join(admin, "HEAD"), "") }},
@@ -172,7 +174,7 @@ func TestParityBrokenRepos(t *testing.T) {
 // the CLI, and the shadow comparator sees two undifferentiated failures as the same answer.
 var cliOnlyBrokenPlaces = map[string]bool{
 	"gitfile-empty": true, "gitfile-garbage": true, "gitfile-no-path": true, "gitfile-no-space": true,
-	"wt-admin-commondir-empty": true,
+	"wt-admin-commondir-empty": true, "wt-admin-commondir-leading-space": true,
 }
 
 // brokenRepoFallback excuses a fallback only where the CLI's answer is such an untyped failure:
