@@ -498,8 +498,10 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     if (item.status !== "review" && item.gateVerdict && !hasStoredPreference("last-review-result")) {
       setLastReviewResultExpanded(true);
     }
+    // A set prUrl expands it for every status (done/archived included) so the
+    // PR is visible; a stored manual choice still wins.
     if (
-      ["in_progress", "review", "pr_pending"].includes(item.status) &&
+      (["in_progress", "review", "pr_pending"].includes(item.status) || !!item.prUrl) &&
       !hasStoredPreference("version-control")
     ) {
       setVersionControlExpanded(true);
@@ -1562,6 +1564,45 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       </div>
 
       <div className={styles.scrollArea}>
+        {/* Decision-making content FIRST: PlanVerdictBox sits right above
+            ActionsSection so approve_plan and reject_plan stay co-located, and
+            both are reachable with zero scroll, before gate/reference content. */}
+        {(item.status === "ready" ||
+          item.status === "queued" ||
+          derivePlanReviewStatus(item) !== "no_plan") && (
+          <PlanVerdictBox
+            status={derivePlanReviewStatus(item)}
+            rejectionReason={item.planRejectionReason}
+            readOnly={terminalState !== null}
+            actionPending={actionLoading === "reject_plan"}
+            onReject={handleRejectPlan}
+            onRegenerateWithFeedback={handleRegeneratePlanWithFeedback}
+          />
+        )}
+
+        {/* Actions */}
+        <ActionsSection
+          item={item}
+          actionLoading={actionLoading}
+          latestWorkSession={latestWorkSession}
+          showManualReview={showManualReview}
+          manualReviewOutcome={manualReviewOutcome}
+          manualReviewSummary={manualReviewSummary}
+          onAction={handleAction}
+          onManualReviewOutcomeChange={setManualReviewOutcome}
+          onManualReviewSummaryChange={setManualReviewSummary}
+          onManualReviewSubmit={() => { void handleManualReviewSubmit(); }}
+          onManualReviewCancel={() => { setShowManualReview(false); setManualReviewSummary(""); }}
+          terminalState={terminalState}
+          julesDispatchGate={julesDispatchGate}
+          onDispatchToJulesClick={(event) => {
+            julesDispatchTriggerRef.current = event.currentTarget;
+            setShowJulesDispatch(true);
+          }}
+          activeWorkSessionCount={activeWorkSessionCount}
+          onSendBackWithFeedback={handleSendBackWithFeedback}
+        />
+
         {/* ADR-005: "what's blocking this transition" gate checklist —
             immediately below LifecycleSummary (which occupies the
             top-billed liveness-panel slot) and above the rest of the
@@ -1723,51 +1764,6 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           </h3>
           <AcCriteriaList criteria={item.acCriteria} />
         </div>
-
-        {/* Plan Review (Story 4.3.1): rendered immediately before Actions,
-            NOT after PlanArtifactsSection's plan-artifacts display as
-            plan.md originally described — Story 3.1.3's later refactor
-            (see the CollapsibleGroup comment below) already pulled
-            ActionsSection out ahead of the collapsible group so it stays
-            reachable without expanding anything; PlanVerdictBox follows the
-            same always-visible convention and sits right above it, so
-            Approve (in ActionsSection) and Request Changes (here) are both
-            reachable without navigating away (AC3). */}
-        {(item.status === "ready" ||
-          item.status === "queued" ||
-          derivePlanReviewStatus(item) !== "no_plan") && (
-          <PlanVerdictBox
-            status={derivePlanReviewStatus(item)}
-            rejectionReason={item.planRejectionReason}
-            readOnly={terminalState !== null}
-            actionPending={actionLoading === "reject_plan"}
-            onReject={handleRejectPlan}
-            onRegenerateWithFeedback={handleRegeneratePlanWithFeedback}
-          />
-        )}
-
-        {/* Actions */}
-        <ActionsSection
-          item={item}
-          actionLoading={actionLoading}
-          latestWorkSession={latestWorkSession}
-          showManualReview={showManualReview}
-          manualReviewOutcome={manualReviewOutcome}
-          manualReviewSummary={manualReviewSummary}
-          onAction={handleAction}
-          onManualReviewOutcomeChange={setManualReviewOutcome}
-          onManualReviewSummaryChange={setManualReviewSummary}
-          onManualReviewSubmit={() => { void handleManualReviewSubmit(); }}
-          onManualReviewCancel={() => { setShowManualReview(false); setManualReviewSummary(""); }}
-          terminalState={terminalState}
-          julesDispatchGate={julesDispatchGate}
-          onDispatchToJulesClick={(event) => {
-            julesDispatchTriggerRef.current = event.currentTarget;
-            setShowJulesDispatch(true);
-          }}
-          activeWorkSessionCount={activeWorkSessionCount}
-          onSendBackWithFeedback={handleSendBackWithFeedback}
-        />
 
         {/* Secondary sections — sibling CollapsibleSections sharing one
             CollapsibleGroup so their headers get Home/End/Arrow roving-

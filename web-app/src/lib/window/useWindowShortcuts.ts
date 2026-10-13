@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef } from "react";
 import type { RefObject } from "react";
 import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import { registry, isInputElement } from "@/lib/shortcuts/shortcutRegistry";
+import { commandBarController } from "@/lib/shortcuts/commandBarController";
 import type { NamedWindow, WindowId } from "./windowTypes";
 
 /**
@@ -84,6 +85,7 @@ function registerFollowup(refs: LeaderRefs, id: string, key: string, action: () 
       key,
       label: `Window leader: ${key}`,
       context: "global",
+      hidden: true,
       action: () => {
         action();
         disarmLeader(refs);
@@ -185,16 +187,42 @@ export function useWindowShortcuts(
 ): void {
   const refs = useLeaderRefs(windows, currentWindowId, switchToWindow, onRenameRequest);
 
+  // Alt+W is an alias for the command bar's `w` branch. The legacy leader
+  // below only arms when no bar is mounted (or a modal is open), which keeps
+  // this hook usable standalone (and its unit tests meaningful).
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const handleArmLeader = useCallback(() => armLeader(refs), []);
+  const handleArmLeader = useCallback(() => {
+    if (!commandBarController.open(["w"])) armLeader(refs);
+  }, []);
 
   useEffect(() => {
     return () => disarmLeader(refs);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // The same actions as sequence bindings, so the command bar lists them under `w`.
+  useEffect(() => {
+    const defs: Array<[string, string, string[], () => void]> = [
+      ...DIGIT_KEYS.map((key, i): [string, string, string[], () => void] => [
+        `window.seq.${key}`,
+        `Switch to window ${key}`,
+        ["w", key],
+        () => switchToOneIndexed(refs, i + 1),
+      ]),
+      ["window.seq.next", "Next window", ["w", "n"], () => cycle(refs, 1)],
+      ["window.seq.prev", "Previous window", ["w", "p"], () => cycle(refs, -1)],
+      ["window.seq.rename", "Rename window", ["w", ","], () => refs.onRenameRequest.current(refs.currentWindowId.current)],
+    ];
+    const cleanups = defs.map(([id, label, sequence, action]) =>
+      registry.register(id, { label, context: "global", sequence, group: "Windows", action })
+    );
+    return () => cleanups.forEach((c) => c());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useShortcut("window.leader", {
     key: "w",
+    code: "KeyW",
     modifiers: { alt: true },
     label: "Window leader key",
     context: "global",
