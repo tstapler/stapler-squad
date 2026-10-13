@@ -1,9 +1,10 @@
 import React, { useRef } from "react";
 import { act, render } from "@testing-library/react";
-import { usePublishStackTopOffset } from "@/lib/hooks/usePublishStackTopOffset";
+import { usePublishDeckTopOffset, usePublishStackTopOffset } from "@/lib/hooks/usePublishStackTopOffset";
 import { getStackTopOffset } from "@/lib/utils/toastDock";
 
 let bottom = 120;
+let height = 40;
 
 function Row() {
   const ref = useRef<HTMLDivElement>(null);
@@ -17,8 +18,9 @@ describe("usePublishStackTopOffset", () => {
   beforeEach(() => {
     jest.useFakeTimers();
     bottom = 120;
+    height = 40;
     jest.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
-      () => ({ bottom, top: bottom - 40, left: 0, right: 390, width: 390, height: 40, x: 0, y: bottom - 40, toJSON: () => ({}) }) as DOMRect,
+      () => ({ bottom, top: bottom - 40, left: 0, right: 390, width: 390, height, x: 0, y: bottom - 40, toJSON: () => ({}) }) as DOMRect,
     );
   });
   afterEach(() => {
@@ -50,5 +52,29 @@ describe("usePublishStackTopOffset", () => {
     unmount();
     expect(cssVar()).toBe("0px");
     expect(getStackTopOffset()).toBeNull();
+  });
+
+  describe("usePublishDeckTopOffset", () => {
+    const deckVar = () => document.documentElement.style.getPropertyValue("--mobile-deck-top-offset");
+    function Toolbar() {
+      const ref = useRef<HTMLDivElement>(null);
+      usePublishDeckTopOffset(ref);
+      return <div ref={ref} />;
+    }
+
+    it("publishes the toolbar's bottom edge and clears it on unmount", () => {
+      bottom = 330;
+      const { unmount } = render(<Toolbar />);
+      expect(deckVar()).toBe("330px");
+      unmount();
+      expect(deckVar()).toBe("");
+    });
+
+    it("publishes nothing while the toolbar is hidden so the deck keeps the tab-row anchor", () => {
+      height = 0;
+      bottom = 0;
+      render(<Toolbar />);
+      expect(deckVar()).toBe("");
+    });
   });
 });

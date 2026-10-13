@@ -16,6 +16,8 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/vc"
 )
@@ -786,17 +788,15 @@ func RecoverBaseCommitSHA(ctx context.Context, dir, branchName string) (string, 
 		return "", fmt.Errorf("cannot recover a base commit without both a directory and a branch to compare against")
 	}
 	var errs []error
+	refs, loc := gitprovider.Backend(), backend.Local{Root: backend.RepoRoot(dir)}
 	for _, candidate := range git.CandidateDefaultBranches {
-		//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-		cmd := safeexec.CommandContext(ctx, "git", "merge-base", branchName, candidate)
-		cmd.Dir = dir
-		out, err := cmd.Output()
+		sha, err := refs.MergeBase(ctx, loc, backend.MergeBaseRequest{Left: backend.RefName(branchName), Right: backend.RefName(candidate)})
 		if err != nil {
 			errs = append(errs, fmt.Errorf("git merge-base %s %s in %s: %w", branchName, candidate, dir, err))
 			continue
 		}
-		if sha := strings.TrimSpace(string(out)); sha != "" {
-			return sha, nil
+		if sha != "" {
+			return string(sha), nil
 		}
 	}
 	return "", fmt.Errorf("no merge-base found for %s against any default branch (%s) in %s: %w", branchName, strings.Join(git.CandidateDefaultBranches, "/"), dir, errors.Join(errs...))

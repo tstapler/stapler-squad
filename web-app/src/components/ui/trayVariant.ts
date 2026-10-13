@@ -3,7 +3,7 @@
  * is shown. Kept free of React and the DOM so they are table-testable.
  */
 
-export type TrayVariant = "side-overlay" | "bottom-sheet" | "top-sheet" | "landscape-panel";
+export type TrayVariant = "side-overlay" | "bottom-sheet" | "landscape-panel";
 
 export interface TrayViewport {
   /** Viewport is >= 900px wide. */
@@ -14,24 +14,24 @@ export interface TrayViewport {
 }
 
 /**
- * Desktop gets a right-edge overlay; a phone on its side a right panel; a phone with
- * the soft keyboard open a top-anchored sheet (so the keyboard never covers it);
- * everything else the bottom sheet.
+ * Desktop gets a right-edge overlay; a phone on its side a right panel; every other
+ * phone the bottom sheet. The soft keyboard does not change the variant: the sheet
+ * stays put and rides the keyboard's top edge (CSS, `data-keyboard`), so opening the
+ * keyboard never teleports it to another edge.
  */
 export function selectTrayVariant(viewport: TrayViewport): TrayVariant {
   if (viewport.isInnerScreen) return "side-overlay";
   if (viewport.isLandscape) return "landscape-panel";
-  if (viewport.isVirtualKeyboardOpen) return "top-sheet";
   return "bottom-sheet";
 }
 
-/** What the single phone entry shows; `floating-bottom` is the no-terminal page only. */
-export type TrayAffordance = "bell" | "more-row" | "keyboard-chip" | "floating-bottom";
-
 /**
- * Content of the one tray entry on a phone page. It changes what the entry says,
- * never where it is or whether it exists, so no frame shows two entries or none.
+ * What the phone entry shows; `floating-bottom` is the no-terminal page only. `none` means
+ * there is nothing to say: the bottom nav's Alerts tab is the always-present way into the tray.
  */
+export type TrayAffordance = "none" | "more-row" | "keyboard-chip" | "floating-bottom";
+
+/** Content of the phone tray entry: overflow, the keyboard chip, or nothing. Never a bell. */
 export function trayAffordanceVariant(
   overflowCount: number,
   toastCount: number,
@@ -41,7 +41,7 @@ export function trayAffordanceVariant(
   if (!hasTerminal) return "floating-bottom";
   if (keyboardOpen && toastCount > 0) return "keyboard-chip";
   if (overflowCount > 0) return "more-row";
-  return "bell";
+  return "none";
 }
 
 /** Peek and expanded sheet heights as a fraction of `--viewport-height` (TS-1: 22-28% and 84-86%). */

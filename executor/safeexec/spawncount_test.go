@@ -61,6 +61,11 @@ func TestGitSubcommand(t *testing.T) {
 		{[]string{"--version"}, "none"},
 		{nil, "none"},
 		{[]string{"-C"}, "none"}, // dangling option value
+		{[]string{"--namespace", "status", "fetch"}, "fetch"},
+		{[]string{"--config-env", "status", "fetch"}, "fetch"},
+		{[]string{"--attr-source", "status", "fetch"}, "fetch"},
+		{[]string{"-c", "alias.st=status", "st"}, "other"}, // aliases are not in the closed list
+		{[]string{"--exec-path=/x", "-C", "d", "-c", "k=v", "status"}, "status"},
 	}
 	for _, c := range cases {
 		if got := GitSubcommand(c.args); got != c.want {

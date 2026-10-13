@@ -26,7 +26,10 @@ const (
 	ReasonObjectMissing            FallbackReason = "object_missing"
 	ReasonObjectNotFound           FallbackReason = "object_not_found"
 	ReasonDestructiveConfirm       FallbackReason = "destructive_confirm"
-	ReasonError                    FallbackReason = "error"
+	// ReasonNotImplemented marks an operation the in-process backend deliberately does not
+	// serve (ErrNotImplemented). It is expected routing, so it must not inflate reason=error.
+	ReasonNotImplemented FallbackReason = "not_implemented"
+	ReasonError          FallbackReason = "error"
 )
 
 // reasonPrecedence is the plan's evaluation order when several pre-call reasons apply (first
@@ -38,7 +41,8 @@ var reasonPrecedence = []FallbackReason{
 	ReasonCapabilityLFS, ReasonCapabilityUnsupportedIdx, ReasonCapabilitySparse,
 	ReasonCapabilityShallow, ReasonCapabilitySubmodule, ReasonCapabilitySSHProxy,
 	ReasonLiveSession, ReasonUnsafeWorktreeWrite, ReasonUnsupportedPullMode, ReasonLockUnavailable,
-	ReasonTornRead, ReasonObjectMissing, ReasonObjectNotFound, ReasonDestructiveConfirm, ReasonError,
+	ReasonTornRead, ReasonObjectMissing, ReasonObjectNotFound, ReasonDestructiveConfirm,
+	ReasonNotImplemented, ReasonError,
 }
 
 // ReasonPrecedence returns every FallbackReason in evaluation order.

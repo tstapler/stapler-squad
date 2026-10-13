@@ -1807,6 +1807,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               actionLoading={actionLoading}
               onMarkDone={() => handleAction("mark_done")}
               readOnly={terminalState !== null}
+              stuckReasons={stuckItemGroup.map((i) => i.reason)}
             />
           )}
 

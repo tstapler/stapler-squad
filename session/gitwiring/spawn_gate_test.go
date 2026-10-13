@@ -124,6 +124,20 @@ func TestSpawnGateInvariant(t *testing.T) {
 		}
 	})
 
+	t.Run("system config discovery is counted by the backend and balances the gate", func(t *testing.T) {
+		before := readTotals(t)
+		if _, err := gitwiring.DiscoverSystemConfig(ctx); err != nil {
+			t.Skipf("no usable git on this machine: %v", err)
+		}
+		d := readTotals(t).since(before)
+		if d.backstop == 0 || d.backendLocal != d.backstop || d.backendRemote != 0 {
+			t.Fatalf("delta = %+v, want every discovery spawn counted by the backend", d)
+		}
+		if !d.gateHolds() {
+			t.Fatal("discovery must not unbalance the zero-spawn gate")
+		}
+	})
+
 	t.Run("remote spawns do not mask a local bypass", func(t *testing.T) {
 		r := newLocalRouter()
 		before := readTotals(t)

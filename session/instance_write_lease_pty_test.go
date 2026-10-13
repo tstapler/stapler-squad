@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -42,9 +43,9 @@ func (p *ptyWritePM) Close() (err error) {
 // and Pause and Delete complete while it is wedged (they are not acquirers).
 //
 // Settled finding (plan assumption was INFERRED, now VERIFIED the other way):
-// closing the master or the slave does NOT wake a blocked master write on this
-// kernel; only a slave reader does. So the lease is released only when the
-// blocked goroutine's write returns (here: after the test drains the slave).
+// closing the master does NOT wake a blocked master write; a slave reader does on
+// Linux, and closing the slave also does on macOS. So the lease is released only when
+// the blocked goroutine's write returns (here: after the test drains the slave).
 func TestWedgedWrite_ShouldKeepTheLeaseAndPauseAndDeleteShouldCompleteWhileItIsWedged_WhenARealPtyPairStopsBeingRead(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -98,6 +99,15 @@ func TestWedgedWrite_ShouldKeepTheLeaseAndPauseAndDeleteShouldCompleteWhileItIsW
 				t.Logf("%s: the PTY close woke the blocked write", tc.name)
 			} else {
 				t.Logf("%s: the PTY close has not woken the blocked write (a standalone 2s probe of the same pair never saw it wake; only a slave reader does)", tc.name)
+			}
+
+			// macOS: once the master is closed, a blocked write on it never returns, even with a
+			// slave reader (stdlib-only repro: write stays blocked 3s after reopening the slave),
+			// so there is no release to wait for. Linux does release it, which the wait below checks.
+			if runtime.GOOS == "darwin" && !tc.closeSlave {
+				t.Logf("%s: blocked master write is unreleasable after master close on macOS; skipping the release wait", tc.name)
+				t.Cleanup(func() { _ = slave.Close() })
+				return
 			}
 
 			// A slave reader is what ends a blocked master write: attach one

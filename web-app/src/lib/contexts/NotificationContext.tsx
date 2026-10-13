@@ -17,6 +17,7 @@ import {
 import { ReviewItem, AttentionReason } from "@/gen/session/v1/types_pb";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import { useNotificationHistory } from "@/lib/hooks/useNotificationHistory";
+import { useStreamConnectionState } from "@/lib/hooks/useNotificationConnectivity";
 import { useToastQueue } from "@/lib/hooks/useToastQueue";
 import { useToastTimers } from "@/lib/hooks/useToastTimers";
 import { useAnnounce } from "@/lib/hooks/useAnnounce";
@@ -131,7 +132,8 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
   announceRef.current = announce;
 
   const auditLog = useAuditLog();
-  const history = useNotificationHistory();
+  const streamLive = useStreamConnectionState() === "connected";
+  const history = useNotificationHistory({ streamLive });
   // Commands read these through refs so their identities stay stable across renders.
   const auditLogRef = useRef(auditLog);
   auditLogRef.current = auditLog;

@@ -264,7 +264,7 @@ function UndoBar({ count, timers, onUndo }: { count: number; timers: ToastTimerR
 function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
   const viewport = useDeckViewport();
   const { isOffline } = useNotificationConnectivity();
-  const { movedToTray, unreadCount, isPanelOpen } = useNotificationState();
+  const { movedToTray, isPanelOpen } = useNotificationState();
   const { moveAllToTray, undoMoveToTray } = useNotificationCommands();
   const cap = toastCapFor(viewport);
   const { visible, overflow, pinnedCount } = partitionToasts(toasts, cap);
@@ -274,9 +274,7 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
   const hasTerminal = topOffset !== null;
   const hasContent = visible.length > 0 || overflow > 0 || movedToTray !== null;
   const desktopAnchor = useDesktopDeckAnchor(!onPhone && hasContent, deckRef);
-  // A phone session page always shows the one tray entry, so the dock never unmounts there.
-  const showsEntry = onPhone && (hasTerminal || hasContent || unreadCount > 0);
-  if (!hasContent && !showsEntry) return null;
+  if (!hasContent) return null;
 
   // Phone: top dock under the session tab row when one is published, else above the bottom nav.
   let placement: keyof typeof deckPlacement;
@@ -306,7 +304,7 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
 
   const affordance = trayAffordanceVariant(overflow, toasts.length, viewport.isVirtualKeyboardOpen, hasTerminal);
   // A page with no terminal floats the entry above the bottom nav (the dock's own placement), but
-  // the entry still says the same thing: overflow, keyboard chip or bell.
+  // the entry still says the same thing: overflow, keyboard chip or nothing.
   const entryContent =
     affordance === "floating-bottom"
       ? trayAffordanceVariant(overflow, toasts.length, viewport.isVirtualKeyboardOpen, true)
@@ -322,13 +320,13 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
     >
       {/* Desktop: one header slot, holding either the bulk control or its undo. */}
       {!onPhone && (undo ?? (showMoveAll ? <div className={deckHeader}>{moveAll}</div> : null))}
-      {/* Phone: the single tray entry sits at the top anchor and never moves; the undo replaces its content in place. */}
-      {onPhone && (
+      {/* Phone: the entry (overflow row, keyboard chip or undo) sits at the dock anchor; the undo replaces it in place. */}
+      {onPhone && (!undo && !showMoveAll && entryContent === "none" ? null : (
         <div className={chipRow}>
           {!undo && showMoveAll && moveAll}
           <TrayEntryChip content={entryContent} chipText={chipText} chipLabel={chipLabel} undo={undo} onOpen={onOpenTray} />
         </div>
-      )}
+      ))}
       {visible.map((notification) => (
         <ToastSlot
           key={notification.id}

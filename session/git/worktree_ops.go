@@ -261,14 +261,10 @@ func (g *GitWorktree) initBaseCommitSHA() {
 		// ambient checked-out branch can be anything a concurrent process left it on
 		// (mirrors the fix in resolveBaseCommitSHA, session/git/diff.go, which already
 		// does this correctly).
-		//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-		output, err := g.runGitCommand(g.worktreePath, "merge-base", "HEAD", branch)
-		if err == nil {
-			if sha := strings.TrimSpace(output); sha != "" {
-				g.baseCommitSHA = sha
-				log.Info("set base commit SHA for branch to merge-base", "branch", g.branchName, "with_branch", branch, "sha", sha[:min(8, len(sha))])
-				return
-			}
+		if sha := g.headMergeBase(branch); sha != "" {
+			g.baseCommitSHA = sha
+			log.Info("set base commit SHA for branch to merge-base", "branch", g.branchName, "with_branch", branch, "sha", sha[:min(8, len(sha))])
+			return
 		}
 	}
 	log.Warn("could not find merge-base for branch with any default branch (main/master/develop/trunk)", "branch", g.branchName)

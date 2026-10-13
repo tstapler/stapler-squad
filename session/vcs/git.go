@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 )
 
 // GitClient implements the VCS interface for Git
@@ -167,18 +170,16 @@ func (g *GitClient) GetCurrentRevision() (*Revision, error) {
 
 // GetCurrentBookmark returns the current branch name
 func (g *GitClient) GetCurrentBookmark() (string, error) {
-	output, err := g.run("rev-parse", "--abbrev-ref", "HEAD")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	branch, err := gitprovider.Backend().CurrentBranch(ctx, backend.Local{Root: backend.RepoRoot(g.repoPath)})
+	if errors.Is(err, backend.ErrDetachedHead) {
+		return "", nil
+	}
 	if err != nil {
 		return "", err
 	}
-
-	branch := strings.TrimSpace(output)
-	if branch == "HEAD" {
-		// Detached HEAD state
-		return "", nil
-	}
-
-	return branch, nil
+	return string(branch), nil
 }
 
 // getBranchesForCommit gets branches pointing to a commit
@@ -274,8 +275,10 @@ func (g *GitClient) SwitchTo(target string, opts SwitchOptions) error {
 
 // branchExists checks if a branch exists
 func (g *GitClient) branchExists(name string) bool {
-	_, err := g.run("rev-parse", "--verify", name)
-	return err == nil
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	exists, err := gitprovider.Backend().RefExists(ctx, backend.Local{Root: backend.RepoRoot(g.repoPath)}, backend.RefName(name))
+	return err == nil && exists
 }
 
 // CreateBookmark creates a new branch at the specified base

@@ -4,13 +4,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/linkdata/deadlock"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 )
 
 // RiskLevel indicates the severity of a tool use request.
@@ -420,17 +421,43 @@ const (
 	SourceGenerated RuleSource = "generated"
 )
 
+// RefReader is the narrow git port BuildContext needs. It takes plain path strings so pkg/ stays
+// free of session/ types; session/gitprovider.RefReader satisfies it over the git backend.
+type RefReader interface {
+	// ShowToplevel is `git rev-parse --show-toplevel`; dir may be any directory, and an error
+	// means "not a repository".
+	ShowToplevel(ctx context.Context, dir string) (string, error)
+	// GitDir is `git rev-parse --git-dir`: the per-worktree directory for a linked worktree.
+	GitDir(ctx context.Context, dir string) (string, error)
+}
+
 // RuleBasedClassifier evaluates a priority-ordered list of Rules.
 type RuleBasedClassifier struct {
 	mu    deadlock.RWMutex
 	rules []Rule // sorted by Priority descending
+	refs  RefReader
 }
 
-// NewRuleBasedClassifier creates a classifier pre-loaded with seed rules.
+// NewRuleBasedClassifier creates a classifier pre-loaded with seed rules, reading git state
+// through the process-wide git backend.
 func NewRuleBasedClassifier() *RuleBasedClassifier {
+	return NewRuleBasedClassifierWithRefs(gitprovider.RefReader{})
+}
+
+// NewRuleBasedClassifierWithRefs is NewRuleBasedClassifier with an explicit git reader.
+func NewRuleBasedClassifierWithRefs(refs RefReader) *RuleBasedClassifier {
 	rules := SeedRules()
 	sort.Slice(rules, func(i, j int) bool { return rules[i].Priority > rules[j].Priority })
-	return &RuleBasedClassifier{rules: rules}
+	return &RuleBasedClassifier{rules: rules, refs: refs}
+}
+
+// isLinkedWorktreeGitDir reports whether gitDir is a linked worktree's admin directory
+// (<common dir>/worktrees/<name>). Checking the parent directory's name, not a substring, keeps
+// a plain checkout that merely lives under a directory called "worktrees" from matching, and a
+// <dir>/worktrees/.git plain checkout is excluded by its ".git" base name.
+func isLinkedWorktreeGitDir(gitDir string) bool {
+	clean := filepath.Clean(strings.TrimSpace(gitDir))
+	return filepath.Base(clean) != ".git" && filepath.Base(filepath.Dir(clean)) == "worktrees"
 }
 
 // ReplaceRules atomically replaces all rules with the provided list.
@@ -708,21 +735,21 @@ func (c *RuleBasedClassifier) BuildContext(cwd string) ClassificationContext {
 	if cwd == "" {
 		return ctx
 	}
+	refs := c.refs
+	if refs == nil {
+		refs = gitprovider.RefReader{}
+	}
 	gitCtx, gitCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer gitCancel()
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	toplevelCmd := safeexec.CommandContext(gitCtx, "git", "-C", cwd, "rev-parse", "--show-toplevel")
-	if out, err := toplevelCmd.Output(); err == nil {
-		ctx.RepoRoot = strings.TrimSpace(string(out))
+	if root, err := refs.ShowToplevel(gitCtx, cwd); err == nil {
+		ctx.RepoRoot = strings.TrimSpace(root)
 		ctx.IsGitRepo = true
 	}
 	if ctx.IsGitRepo {
 		gitDirCtx, gitDirCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer gitDirCancel()
-		//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-		gitDirCmd := safeexec.CommandContext(gitDirCtx, "git", "-C", cwd, "rev-parse", "--git-dir")
-		if out, err := gitDirCmd.Output(); err == nil {
-			ctx.IsWorktree = strings.Contains(string(out), "worktrees")
+		if gitDir, err := refs.GitDir(gitDirCtx, cwd); err == nil {
+			ctx.IsWorktree = isLinkedWorktreeGitDir(gitDir)
 		}
 	}
 	return ctx

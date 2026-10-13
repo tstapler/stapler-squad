@@ -14,7 +14,6 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
@@ -655,15 +654,12 @@ func (s *BacklogService) resolveLatestWorkCommit(ctx context.Context, sessionUUI
 	if wt.BranchName == "" {
 		return ""
 	}
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "--verify", wt.BranchName)
-	cmd.Dir = repoPath
-	out, revErr := cmd.Output()
+	sha, revErr := session.ResolveBranchTip(ctx, repoPath, wt.BranchName)
 	if revErr != nil {
 		log.WarningLog().Printf("resolveLatestWorkCommit: rev-parse %s in %s: %v", wt.BranchName, repoPath, revErr)
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return sha
 }
 
 // isCodeShippedToMain reports whether itemID's most recent work session's

@@ -320,6 +320,11 @@ type BacklogService struct {
 	// silently failed to ever mark the item ready.
 	triageCleanupTimeout time.Duration
 
+	// triageCleanupContextFn, when set, replaces the default timeout-bound context for
+	// TriggerTriage's post-call persistence writes. Tests use it to assert WHEN those
+	// contexts are created (after the LLM call returns) without sleeping past a real timeout.
+	triageCleanupContextFn func() (context.Context, context.CancelFunc)
+
 	// pluginRegistry and syncKeyFunc back TriggerSync / GetSyncHistory. Both are
 	// optional: if pluginRegistry is nil, TriggerSync degrades to CodeUnimplemented
 	// the same way sessionCreator-dependent RPCs degrade when unwired.
@@ -737,6 +742,22 @@ func (s *BacklogService) SetCapabilityCheck(c *headless.CodebaseReadCapabilitySe
 // on the default.
 func (s *BacklogService) SetTriageCleanupTimeout(d time.Duration) {
 	s.triageCleanupTimeout = d
+}
+
+// SetTriageCleanupContextFactory overrides how TriggerTriage creates the contexts for its
+// post-LLM-call DB writes. Exposed for tests; production callers should rely on the default.
+func (s *BacklogService) SetTriageCleanupContextFactory(f func() (context.Context, context.CancelFunc)) {
+	s.triageCleanupContextFn = f
+}
+
+// newTriageCleanupContext returns a fresh context bounding one batch of post-call persistence
+// writes. Callers must invoke it after the LLM call returns, never before: see the
+// triageCleanupTimeout field comment.
+func (s *BacklogService) newTriageCleanupContext() (context.Context, context.CancelFunc) {
+	if s.triageCleanupContextFn != nil {
+		return s.triageCleanupContextFn()
+	}
+	return context.WithTimeout(context.Background(), s.triageCleanupTimeout)
 }
 
 // SetPluginRegistry wires the item-source plugin registry, enabling TriggerSync.

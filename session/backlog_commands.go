@@ -9,9 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 )
 
 // backlogCommandsDir is the relative path from worktree root for slash command files.
@@ -430,15 +431,12 @@ func writeFile(path, content string) error {
 func addWorktreeExcludes(worktreePath string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "--path-format=absolute", "--git-common-dir")
-	cmd.Dir = worktreePath
-	out, err := cmd.Output()
+	commonDir, err := gitprovider.Backend().CommonDir(ctx, backend.Local{Root: backend.RepoRoot(worktreePath)})
 	if err != nil {
 		log.WarningLog().Printf("[addWorktreeExcludes] git rev-parse --git-common-dir in %s: %v", worktreePath, err)
 		return
 	}
-	gitCommonDir := strings.TrimSpace(string(out))
+	gitCommonDir := string(commonDir)
 
 	excludeFile := filepath.Join(gitCommonDir, "info", "exclude")
 	if mkErr := os.MkdirAll(filepath.Dir(excludeFile), 0o750); mkErr != nil {

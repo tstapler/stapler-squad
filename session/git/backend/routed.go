@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"strings"
 
 	"go.opentelemetry.io/otel/metric"
 
@@ -37,9 +38,14 @@ type RouterConfig struct {
 	LocalWriteRepos []RepoRoot
 	// LiveSessions guards localwrite. Nil means "assume a live session".
 	LiveSessions LiveSessionProbe
-	// Preflight is required for any call to reach GoGit; nil routes to the CLI with reason
-	// capability_detect_error.
+	// Preflight is required for any call to reach GoGit unless Capabilities is set; with
+	// neither, calls route to the CLI with reason capability_detect_error. When both are set,
+	// Preflight wins.
 	Preflight Preflight
+	// Capabilities is the typed capability probe (ADR-006). The Router asks it only for
+	// operations with RelevantCapabilities, maps what it finds to reasons, counts the outcome in
+	// git_capability_detect_total, and treats any error or panic as capability_detect_error.
+	Capabilities CapabilityProbe
 	// VerifiedWorktreeWriters lists operations that write worktree files and have a passing
 	// fault-injection parity test. Any other such operation routes to the CLI
 	// (unsafe_worktree_write).
@@ -61,6 +67,7 @@ type Router struct {
 	localWriteRepos map[string]struct{}
 	liveSessions    LiveSessionProbe
 	preflight       Preflight
+	probe           CapabilityProbe
 	worktreeWriters map[OperationName]bool
 	pinner          StatePinner
 	recorder        MismatchRecorder
@@ -85,6 +92,7 @@ func NewRouter(cfg RouterConfig) (*Router, error) {
 		localWriteRepos: make(map[string]struct{}, len(cfg.LocalWriteRepos)),
 		liveSessions:    cfg.LiveSessions,
 		preflight:       cfg.Preflight,
+		probe:           cfg.Capabilities,
 		worktreeWriters: cfg.VerifiedWorktreeWriters,
 		pinner:          cfg.Pinner,
 		recorder:        cfg.Recorder,
@@ -207,9 +215,17 @@ func (r *Router) routeLocal(ctx context.Context, l Local, op OperationName, coho
 }
 
 func (r *Router) preflightReasons(ctx context.Context, l Local, op OperationName) (reasons []FallbackReason) {
-	if r.preflight == nil {
-		return []FallbackReason{ReasonCapabilityDetectError}
+	switch {
+	case r.preflight != nil:
+		return r.runPreflight(ctx, l, op)
+	case r.probe != nil:
+		return r.probeReasons(ctx, l, op)
 	}
+	r.metrics.countCapability("detect_error", DetectNoProbe)
+	return []FallbackReason{ReasonCapabilityDetectError}
+}
+
+func (r *Router) runPreflight(ctx context.Context, l Local, op OperationName) (reasons []FallbackReason) {
 	defer func() {
 		if p := recover(); p != nil {
 			log.Error("git capability preflight panicked, routing to cli", "operation", string(op), "panic", redact.Git(fmt.Sprint(p)))
@@ -217,6 +233,35 @@ func (r *Router) preflightReasons(ctx context.Context, l Local, op OperationName
 		}
 	}()
 	return r.preflight(ctx, l, op)
+}
+
+// probeReasons consults the typed probe. An operation with no relevant capability never calls
+// it (the refs-cohort reads must not depend on config resolution).
+func (r *Router) probeReasons(ctx context.Context, l Local, op OperationName) (reasons []FallbackReason) {
+	if len(RelevantCapabilities(op)) == 0 {
+		return nil
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			log.Error("git capability probe panicked, routing to cli", "operation", string(op), "panic", redact.Git(fmt.Sprint(p)))
+			r.metrics.countCapability("detect_error", DetectPanic)
+			reasons = []FallbackReason{ReasonCapabilityDetectError}
+		}
+	}()
+	caps, err := r.probe.Capabilities(ctx, l, op)
+	if err != nil {
+		sub := detectSubOf(err)
+		log.Debug("git capability detection failed, routing to cli", "operation", string(op), "sub_reason", string(sub), "err", redact.Git(err.Error()))
+		r.metrics.countCapability("detect_error", sub)
+		return []FallbackReason{ReasonCapabilityDetectError}
+	}
+	reasons = reasonsForCapabilities(op, caps)
+	outcome := "ok"
+	if first := FirstReason(reasons...); first != "" {
+		outcome = strings.TrimPrefix(string(first), "capability_")
+	}
+	r.metrics.countCapability(outcome, "")
+	return reasons
 }
 
 func isNilRunner(r Runner) bool {
@@ -317,6 +362,8 @@ func fallbackReasonFor(ctx context.Context, op OperationName, err error, state *
 		return ReasonObjectMissing, true
 	case errors.Is(err, ErrObjectNotFound):
 		return ReasonObjectNotFound, true
+	case errors.Is(err, ErrNotImplemented):
+		return ReasonNotImplemented, true
 	case isEligible:
 		return ReasonError, true
 	case isDomainError(err):
