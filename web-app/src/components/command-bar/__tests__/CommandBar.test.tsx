@@ -177,4 +177,22 @@ describe("CommandBar", () => {
     const ev = press({ key: "Tab" });
     expect(ev.defaultPrevented).toBe(false);
   });
+
+  it("enterOnCloseButton_should_activateItNotRunTheActiveRow", () => {
+    render(<CommandBar />);
+    press(leader);
+    const close = screen.getByTestId("command-bar").querySelector("button") as HTMLElement;
+    const ev = press({ key: "Enter" }, close);
+    expect(ev.defaultPrevented).toBe(false);
+    expect(bubble).not.toHaveBeenCalled();
+  });
+
+  it("modifierCombosInQueryInput_should_keepNativeDefaultButNotPropagate", () => {
+    render(<CommandBar />);
+    press(leader);
+    const input = screen.getByRole("combobox");
+    const ev = press({ key: "v", ctrlKey: true }, input);
+    expect(ev.defaultPrevented).toBe(false);
+    expect(bubble).not.toHaveBeenCalled();
+  });
 });

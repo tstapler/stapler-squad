@@ -156,14 +156,35 @@ export function CommandBar() {
       if (e.isComposing || e.keyCode === 229) return; // let the IME reach the input
       // Tab stays native so useFocusTrap can cycle the bar's own controls; it can only move focus within the dialog.
       if (e.key === "Tab") return;
-      consume(e);
-      if (e.repeat && e.key === "Escape") return;
+
+      // Enter/Space on the bar's own Back/Close buttons must activate them, not run the active row.
+      // Stopping propagation (without preventDefault) keeps the key from the PTY and registry.
+      const target = e.target as HTMLElement | null;
+      if ((e.key === "Enter" || e.key === " ") && target?.closest?.("button")) {
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return;
+      }
+
+      if (e.repeat && e.key === "Escape") {
+        consume(e);
+        return;
+      }
       if (cfg.enabled && chordMatches(e, cfg.chord)) {
+        consume(e);
         dispatch({ type: "close" });
         return;
       }
 
       const outcome = interpretKey(e, s, rowsRef.current, registry.getTree());
+      if (outcome.type === "none" && target === inputRef.current) {
+        // Native editing keys in the query input (Ctrl+V/A, arrows, Delete, AltGr): keep the default
+        // action but never let the key propagate to the PTY or registry.
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return;
+      }
+      consume(e);
       if (outcome.type === "action") dispatch(outcome.action);
       else if (outcome.type === "execute") execute(outcome.row);
       else if (outcome.type === "seedQuery") {
