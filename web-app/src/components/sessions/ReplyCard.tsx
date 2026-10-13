@@ -14,7 +14,7 @@ import * as styles from "./ReplyCard.css";
 
 export interface ReplyCardProps {
   sessionId: string;
-  /** The question notification (metadata carries question_id, question_shape, question_options). */
+  /** The question notification (metadata carries question_id, question_shape, question_options, question_pending_count). */
   notification: Pick<NotificationData, "id" | "notificationType" | "metadata" | "message"> &
     Pick<NotificationHistoryItem, "occurrenceCount">;
   /** Marks the notification read once a reply is SENT. */

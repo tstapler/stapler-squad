@@ -52,7 +52,7 @@ function useBrowserOnline(): boolean {
   );
 }
 
-function useStreamHasConnectedOnce(): boolean {
+function useSessionsLoadedOnce(): boolean {
   const redux = useContext(ReactReduxContext);
   const store = redux?.store;
   const subscribe = useCallback(
@@ -78,10 +78,12 @@ export function useNotificationConnectivity(): NotificationConnectivity {
   const browserOnline = useBrowserOnline();
   const { historyError } = useNotificationState();
 
-  const hasConnectedOnce = useStreamHasConnectedOnce();
+  const sessionsLoadedOnce = useSessionsLoadedOnce();
 
-  // Before the first connect the stream is "connecting", not "dropped": a cold deep link must not read as an outage.
-  const streamLive = state === CONNECTED || !hasConnectedOnce;
+  // Until the first session snapshot lands the stream is "connecting", not "dropped": a cold deep link must
+  // not read as an outage. Known limit: a first load that fails outright keeps this false, so only the
+  // browser-offline signal can claim offline in that case.
+  const streamLive = state === CONNECTED || !sessionsLoadedOnce;
   const [streamDownLong, setStreamDownLong] = useState(false);
   useEffect(() => {
     if (streamLive) {

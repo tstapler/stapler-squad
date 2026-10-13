@@ -16,6 +16,10 @@ function fakeStore(initial: string, hasLoadedOnce = true) {
       listeners.add(l);
       return () => listeners.delete(l);
     },
+    markLoaded() {
+      state = { sessions: { connectionState: state.sessions.connectionState, hasLoadedOnce: true } };
+      listeners.forEach((l) => l());
+    },
     set(next: string) {
       state = { sessions: { connectionState: next, hasLoadedOnce: state.sessions.hasLoadedOnce } };
       listeners.forEach((l) => l());
@@ -79,6 +83,17 @@ describe("useNotificationConnectivity", () => {
     const { result } = setup("disconnected", new Error("boom"), false);
     act(() => jest.advanceTimersByTime(STREAM_DOWN_GRACE_MS * 3));
     expect(result.current.isOffline).toBe(false);
+  });
+
+  it("starts the grace period when the first snapshot lands while the stream is still down", () => {
+    const { result, store } = setup("disconnected", new Error("boom"), false);
+    act(() => jest.advanceTimersByTime(STREAM_DOWN_GRACE_MS * 3));
+    expect(result.current.isOffline).toBe(false);
+    act(() => store.markLoaded());
+    act(() => jest.advanceTimersByTime(STREAM_DOWN_GRACE_MS - 1));
+    expect(result.current.isOffline).toBe(false);
+    act(() => jest.advanceTimersByTime(1));
+    expect(result.current.isOffline).toBe(true);
   });
 
   it("recovers as soon as the stream is live again", () => {

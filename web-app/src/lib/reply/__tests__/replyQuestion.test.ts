@@ -44,6 +44,18 @@ describe("replyAvailability", () => {
     expect(a).toEqual({ kind: "unavailable", cause: "parallel_question" });
   });
 
+  it.each([["0"], [""], ["abc"], ["-1"], ["1.5"]])(
+    "falls_back_to_occurrenceCount_when_question_pending_count_is_%p",
+    (pending) => {
+      const md = { question_id: "q1", question_shape: "single", question_options: '["a"]', question_pending_count: pending };
+      expect(replyAvailability(question(md, { occurrenceCount: 1 }))?.kind).toBe("replyable");
+      expect(replyAvailability(question(md, { occurrenceCount: 3 }))).toEqual({
+        kind: "unavailable",
+        cause: "parallel_question",
+      });
+    },
+  );
+
   it("stays_replyable_when_one_question_is_pending_however_many_were_answered_before", () => {
     const a = replyAvailability(
       question(

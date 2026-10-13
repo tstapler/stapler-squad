@@ -2,7 +2,7 @@
 
 ## Summary
 
-Two frontend-only fixes. No proto or backend changes required for the minimal scope.
+Two fixes: the cold-load gate is frontend-only; parallel-question detection needs a small server stamp (`question_pending_count`, see "Correction after review" — the original frontend-only plan used `occurrenceCount`, which is a lifetime count and was wrong). No proto change.
 
 ---
 
@@ -170,6 +170,16 @@ Tasks 1-3 as written used `occurrenceCount > 1` as the parallel signal; that cou
 total (see validation.md E3). Implemented instead: `PendingQuestionStore.PendingCount` stamped as
 `question_pending_count` notification metadata; `replyAvailability` prefers it and falls back to
 `occurrenceCount` only when absent.
+
+### Tech Debt Disposition
+
+| Debt | Disposition |
+|---|---|
+| Question answered in the terminal is never consumed | Mitigated: `PendingCount` counts only entries inside `pendingParallelWindow` (30s, INFERRED), so a stale entry stops disabling Reply after the window, not the 30 min TTL. Residual: a question asked <30s after a terminal-answered one reads as parallel (fail-closed). |
+| Unregistered (multi-select / unproofed) parallel questions | Mitigated for proofed sessions via `NoteUnreplyable`. Unproofed questions have no session id and are not counted (fail-open, STALE_PROMPT on tap; nothing wrong is written). |
+| Claimed-but-not-consumed question is not counted | Accepted: a reply in flight; revisit if `Release` races show up. |
+| `occurrenceCount` fallback when the stamp is absent | Accepted: only persisted pre-upgrade records; fail-closed. |
+| Cold load where the first session load fails outright | Accepted: `hasLoadedOnce` stays false, so only browser-offline claims offline. Documented in `useNotificationConnectivity.ts`. |
 
 ## Non-scope: deeper parallel-question fix (REQ-Q4)
 

@@ -1,6 +1,7 @@
 // Pure helpers for the Reply card (ADR-010, design/ux.md Surface 12b). The server stamps
-// question_id, question_shape and question_options on a replyable question's notification;
-// everything else is "Answer in the terminal".
+// question_id, question_shape, question_options and question_pending_count (server const
+// metaQuestionPending, server/services/approval_question.go) on a replyable question's
+// notification; everything else is "Answer in the terminal".
 
 import type { NotificationData, NotificationHistoryItem } from "@/lib/types/notification";
 
@@ -41,7 +42,7 @@ function parseOptions(raw: string | undefined): string[] | null {
  */
 function hasParallelQuestions(pendingCount: string | undefined, occurrenceCount: number | undefined): boolean {
   const pending = Number(pendingCount);
-  if (pendingCount !== undefined && Number.isInteger(pending) && pending >= 1) return pending > 1;
+  if (Number.isInteger(pending) && pending >= 1) return pending > 1;
   return (occurrenceCount ?? 1) > 1;
 }
 
