@@ -266,7 +266,7 @@ func worktreeLooksAlive(path string) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := gitprovider.Backend().IsDirty(ctx, backend.Local{Root: backend.RepoRoot(path)}, backend.IntentDisplay)
+	_, err := gitprovider.Backend().IsDirty(ctx, backend.Local{Root: backend.RepoRoot(path)}, backend.IntentDestructive)
 	return err == nil
 }
 

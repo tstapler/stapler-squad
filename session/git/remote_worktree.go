@@ -196,6 +196,7 @@ func (r *RemoteWorktreeOps) InitializeProjectDirectory(ctx context.Context, proj
 	// (`[ -e .git ]` above already prevents the normal re-run case) — mirrors
 	// createInitialCommit's repoHasAnyRef guard in util.go.
 	script := fmt.Sprintf(`set -e
+export LC_ALL=C GIT_TERMINAL_PROMPT=0
 mkdir -p %[1]s
 cd %[1]s
 if [ -e .git ]; then

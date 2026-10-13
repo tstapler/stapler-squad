@@ -143,6 +143,9 @@ func (g *GitWorktree) runGHCommand(ctx context.Context, callSite string, args ..
 
 // pushSetUpstream is `git push -u origin <branch>` from the worktree.
 func (g *GitWorktree) pushSetUpstream(ctx context.Context) error {
+	if g.branchName == "" {
+		return fmt.Errorf("worktree has no branch name to push")
+	}
 	return g.gitBackend().Push(ctx, g.locate(g.worktreePath), backend.PushRequest{
 		Remote: "origin", Branch: backend.BranchName(g.branchName), SetUpstream: true,
 	})
