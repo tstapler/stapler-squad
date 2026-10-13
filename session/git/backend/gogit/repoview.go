@@ -7,13 +7,15 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/cache"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/storage/filesystem"
+	"github.com/go-git/go-git/v5/storage/filesystem/dotgit"
 
 	"github.com/tstapler/stapler-squad/session/git/backend"
-	"github.com/tstapler/stapler-squad/session/git/native"
 )
 
 // maxSymrefDepth is git's symref chain limit (SYMREF_MAXDEPTH).
@@ -24,8 +26,8 @@ const maxTagDepth = 10
 
 var errNotCommit = errors.New("object is not a commit")
 
-// repoView is one call's handle on a repository: a fresh *git.Repository opened through
-// native.OpenRepo, discarded when the call returns. It is not safe for concurrent use.
+// repoView is one call's handle on a repository: a fresh *git.Repository (see
+// openStorerOnly), discarded when the call returns. It is not safe for concurrent use.
 type repoView struct {
 	b      *Backend
 	lay    layout
@@ -53,27 +55,34 @@ func (b *Backend) view(ctx context.Context, loc backend.RepoLocation) (*repoView
 	return v, nil
 }
 
-// reopen replaces the handle with a fresh one. It also proves go-git resolved the same git
-// directory the layout scan did; if they disagree the CLI decides.
+// reopen replaces the handle with a fresh one over exactly the directories the layout scan
+// resolved, so go-git and the layout can never disagree about where the repository is, and a
+// symlinked git directory, objects/ or config is followed as git follows it (see hostFS).
 func (v *repoView) reopen() error {
 	if v.lay.workTree == "" {
 		return fallbackEligible(errors.New("location has no work tree (bare repository or inside a git directory)"))
 	}
-	repo, err := native.OpenRepo(v.lay.workTree)
+	repo, err := openStorerOnly(v.lay)
 	if err != nil {
 		return fallbackEligible(fmt.Errorf("open repository: %w", err))
-	}
-	st, ok := repo.Storer.(*filesystem.Storage)
-	if !ok {
-		return fallbackEligible(errors.New("unexpected go-git storage type"))
-	}
-	root, err := filepath.EvalSymlinks(st.Filesystem().Root())
-	if err != nil || root != v.lay.gitDir {
-		return fallbackEligible(fmt.Errorf("go-git opened git dir %q, expected %q", root, v.lay.gitDir))
 	}
 	v.repo = repo
 	v.packed = nil
 	return nil
+}
+
+// openStorerOnly opens lay's repository for object reads. There is no work tree: nothing here
+// reads or writes one. A linked worktree's shared directories come from its common directory,
+// as with native.OpenRepo's EnableDotGitCommonDir.
+func openStorerOnly(lay layout) (*git.Repository, error) {
+	var repoFS billy.Filesystem = hostFS{root: lay.gitDir}
+	if lay.commonDir != lay.gitDir {
+		repoFS = dotgit.NewRepositoryFilesystem(repoFS, hostFS{root: lay.commonDir})
+	}
+	st := filesystem.NewStorageWithOptions(repoFS, cache.NewObjectLRUDefault(), filesystem.Options{
+		AlternatesFS: hostFS{root: string(filepath.Separator)}, // alternates are absolute host paths
+	})
+	return git.Open(st, nil)
 }
 
 // resolveName follows the ref name (symbolic refs included, up to git's depth limit) to the hash

@@ -11,9 +11,10 @@
 // equal): CountCommits, Log, ListBranches and everything outside the refs cohort.
 //
 // Rules this package follows:
-//   - repositories are opened only through native.OpenRepo (EnableDotGitCommonDir set), with a
-//     fresh handle per call and no cached *git.Repository (go-git caches pack indexes per
-//     handle and is not safe to share, plan handle-lifetime rule);
+//   - object storage is opened over the directories the layout scan resolved (repoview.go,
+//     hostfs.go), not by go-git's own path discovery, so symlinked git directories work; the
+//     handle is fresh per call and never cached (go-git caches pack indexes per handle and is
+//     not safe to share, plan handle-lifetime rule);
 //   - it never starts a process and never writes;
 //   - a SHA is returned only after its object was read back, so a dangling ref never escapes
 //     (spike S7);
