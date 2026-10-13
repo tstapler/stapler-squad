@@ -44,7 +44,11 @@ Option C; no proto, ent or web-app change in this project.
 - `AutonomousStopReason` is typed `domain.StopReason` end to end (driver outcome, setter,
   snapshot).
 - The pane tail is a *sink-bound* value: it goes to exactly one sink (the stuck row context),
-  sanitized there; never to the log line or the push notification body.
+  sanitized there; never to the log line or the push notification body. The tail is untrusted
+  text (it can originate in a page the agent read): `StuckItemDetail.tsx` renders it as a React
+  text node, and `DiagnosticBundleInput` (`session/diagnose_bundle.go:93-105`) has no stuck-row
+  context field, so the diagnose bundle does not ingest it (verified 2026-10-13). If a future
+  change adds the row context to the bundle, wrap it in the bundle's untrusted-data fence.
 
 ## Observability surface for AC2 (explicit)
 

@@ -59,10 +59,10 @@ seam (`StallNudger`). Four actions: `None`, `Nudge`, `Resupervise`, `Respawn`.
 | 1 | outcome class is not `Stall` (`done`, `cancelled_external`, `cancelled_shutdown`) | None (no stuck row, no notification; for shutdown see "Shutdown" below) |
 | 2 | session archived | None |
 | 3 | an automated retry is pending/in flight for the session | None |
-| 4 | reason is `max_turns` | Respawn (today's behaviour: the rework cap and `RemediationDue` backoff keep gating turn-budget exhaustion; a nudge or re-supervise would hand out a fresh budget around them) |
-| 5 | observed state is `working` AND re-supervise headroom left | Resupervise |
-| 6 | observed state is `working` AND re-supervise headroom exhausted | Respawn (terminal fallthrough = today's behaviour; the item is never left driverless) |
-| 7 | state is `idle_prompt` AND nudge kill switch on AND allowance ok | Nudge |
+| 4 | reason is `max_turns` or `panic` | Respawn (`panic`: a deterministic panic must not be nudged or re-supervised; `max_turns` is today's behaviour: the rework cap and `RemediationDue` backoff keep gating turn-budget exhaustion; a nudge or re-supervise would hand out a fresh budget around them) |
+| 5 | observed state is `working` AND the item is still `in_progress` AND re-supervise headroom left | Resupervise |
+| 6 | observed state is `working` AND (re-supervise headroom exhausted OR the item is no longer `in_progress`) | Respawn (terminal fallthrough = today's behaviour; the item is never left driverless; for a non-`in_progress` item `AutoRespawnAutonomousWork` re-checks the status itself) |
+| 7 | state is `idle_prompt` AND the item is still `in_progress` (after `request_review` the pane idles by design) AND nudge enabled (`diagnose_nudge_enabled` AND `autonomous_stall_nudge_enabled`) AND allowance ok | Nudge |
 | 8 | otherwise (needs_approval, error, exited, crashed, idle, unknown) | Respawn |
 
 The decision is consulted only for a backlog-linked `SessionRoleWork` stall (`handleWorkStall`).
@@ -73,8 +73,9 @@ driver (accepted limitation, plan Deferred Adv C1).
 
 Recovery effects:
 
-- **Resupervise**: start a fresh driver (`startDriverIfAbsent`, an error-returning check-and-register
-  under one lock, 5 min warm-up) on the same live session; a start error falls back to Respawn so
+- **Resupervise**: start a fresh driver (`startDriverIfAbsent`, an error-returning reserve-then-start:
+  a `starting` sentinel is inserted under the registry lock, the driver is built and started
+  outside it, and the sentinel is swapped for the driver; 5 min warm-up) on the same live session; a start error falls back to Respawn so
   mode is never left true with no driver. `AutonomousMode` stays true throughout (the approval gate at
   `server/server.go:889-891` keys on it), no `MarkStuck`, no `UpdateItemSessionEnded`, no nudge
   slot consumed, no FAILURE notification (Warn log line only). Bounded by an in-memory per-
@@ -120,6 +121,14 @@ autonomous_stuck)` counter and 1h cooldown. The in-process nudge may use only `c
 (`reserve = 1`), so after the deterministic nudges the escalation agent still has one nudge in its
 action space. With the default cap 3 that is 2 deterministic nudges. A configured cap of 1 means
 no deterministic nudges.
+
+**Enablement (pre-mortem P1 #2).** `diagnose_nudge_enabled` is already `true` in the owner's
+workspace config, and it also gates the diagnose agent's nudge. The in-process nudge therefore has
+its own live-settable flag, `autonomous_stall_nudge_enabled` (default off, a single constant, no
+env var), and runs only when **both** flags are on: `diagnose_nudge_enabled` stays the kill switch
+for every autonomous pane write, so turning it off still restores today's respawn. The new flag
+gates only row 7; it does not change what the diagnose agent may do, and the in-process nudge
+cannot spend the item's shared slots before the owner has chosen to enable it.
 
 ## Consequences
 
