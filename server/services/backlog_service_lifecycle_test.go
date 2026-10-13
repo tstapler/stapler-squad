@@ -1767,3 +1767,42 @@ func TestListBacklogItemDependencies_should_ReturnBothDirections(t *testing.T) {
 	_, err = svc.ListBacklogItemDependencies(t.Context(), connect.NewRequest(&sessionv1.ListBacklogItemDependenciesRequest{}))
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 }
+
+func listedItem(t *testing.T, svc *BacklogService, id string) *sessionv1.BacklogItem {
+	t.Helper()
+	resp, err := svc.ListBacklogItems(t.Context(), connect.NewRequest(&sessionv1.ListBacklogItemsRequest{}))
+	require.NoError(t, err)
+	for _, it := range resp.Msg.Items {
+		if it.Id == id {
+			return it
+		}
+	}
+	t.Fatalf("item %s not in ListBacklogItems response", id)
+	return nil
+}
+
+func TestListBacklogItems_should_ShowUnresolvedBlockerTitle_And_ClearItWhenResolved(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+	a, b := newDependencyPair(t, svc)
+
+	got := listedItem(t, svc, b.Id)
+	require.Len(t, got.BlockedBy, 1)
+	assert.Equal(t, "A blocker", got.BlockedBy[0].Title)
+	assert.Empty(t, got.Blocking, "list responses never carry the blocking direction")
+
+	_, err := svc.ArchiveBacklogItem(t.Context(), connect.NewRequest(&sessionv1.ArchiveBacklogItemRequest{ItemId: a.Id}))
+	require.NoError(t, err)
+	assert.Empty(t, listedItem(t, svc, b.Id).BlockedBy, "archived blocker is resolved, so the label clears")
+}
+
+func TestListBacklogItems_should_ClearBlockedBy_When_BlockerDeleted(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+	a, b := newDependencyPair(t, svc)
+	require.Len(t, listedItem(t, svc, b.Id).BlockedBy, 1)
+
+	_, err := svc.DeleteBacklogItem(t.Context(), connect.NewRequest(&sessionv1.DeleteBacklogItemRequest{ItemId: a.Id}))
+	require.NoError(t, err)
+	assert.Empty(t, listedItem(t, svc, b.Id).BlockedBy)
+}

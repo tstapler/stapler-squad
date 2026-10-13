@@ -164,6 +164,7 @@ func (s *BacklogService) ListBacklogItems(
 		protoItems[i] = backlogItemSummaryToProto(&summaries[i], s.engine, costFor)
 		s.annotateDuplicatePending(ctx, protoItems[i])
 	}
+	s.attachUnresolvedBlockers(ctx, protoItems)
 
 	return connect.NewResponse(&sessionv1.ListBacklogItemsResponse{
 		Items: protoItems,

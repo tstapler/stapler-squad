@@ -687,6 +687,27 @@ func (s *BacklogService) attachDependencies(ctx context.Context, pb *sessionv1.B
 	pb.Blocking = dependencyRefsToProto(blocking)
 }
 
+// attachUnresolvedBlockers fills BlockedBy on list results with each item's
+// still-unresolved blockers via one batched query. Best-effort like
+// attachDependencies.
+func (s *BacklogService) attachUnresolvedBlockers(ctx context.Context, items []*sessionv1.BacklogItem) {
+	if len(items) == 0 {
+		return
+	}
+	ids := make([]string, len(items))
+	for i, it := range items {
+		ids[i] = it.Id
+	}
+	blockers, err := s.storage.UnresolvedBlockersForItems(ctx, ids)
+	if err != nil {
+		log.ErrorLog().Printf("[attachUnresolvedBlockers] batched blocker lookup failed: %v", err)
+		return
+	}
+	for _, it := range items {
+		it.BlockedBy = dependencyRefsToProto(blockers[it.Id])
+	}
+}
+
 func dependencyRefsToProto(refs []session.BacklogItemDependencyRef) []*sessionv1.DependencyInfo {
 	out := make([]*sessionv1.DependencyInfo, 0, len(refs))
 	for _, r := range refs {

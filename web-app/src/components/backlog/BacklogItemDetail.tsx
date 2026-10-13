@@ -46,6 +46,7 @@ import { ReviewChangesModal } from "./ReviewChangesModal";
 import { BacklogFileBrowserModal } from "./BacklogFileBrowserModal";
 import { JulesDispatchDialog } from "./JulesDispatchDialog";
 import { LifecycleSummary } from "./detail/LifecycleSummary";
+import { DependenciesSection } from "./detail/DependenciesSection";
 import { PlanningSection } from "./detail/PlanningSection";
 import { ReviewingSection } from "./detail/ReviewingSection";
 import { LastReviewResultSection } from "./detail/LastReviewResultSection";
@@ -1566,6 +1567,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             top-billed liveness-panel slot) and above the rest of the
             scroll-area content. */}
         <GateBlockingSection item={item} />
+
+        <DependenciesSection item={item} />
 
         {/* Durable guidance requests scoped to this item (AC3) — same shared
             component also embedded in TriageReviewPanel and SessionDetailView.

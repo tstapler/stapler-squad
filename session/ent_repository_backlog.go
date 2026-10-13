@@ -721,6 +721,47 @@ func (r *EntRepository) ListBacklogItemDependencies(ctx context.Context, itemID 
 	return blockedBy, blocking, nil
 }
 
+// UnresolvedBlockersForItems returns, per blocked item ID, the blockers that
+// have not yet reached done/archived (same resolved definition as
+// UnresolvedBlockerItemIDs), eager-loading each blocker's title/status in a
+// single query so list views avoid an N+1. Items with no unresolved blocker
+// are absent from the map.
+func (r *EntRepository) UnresolvedBlockersForItems(ctx context.Context, itemIDs []string) (map[string][]BacklogItemDependencyRef, error) {
+	result := make(map[string][]BacklogItemDependencyRef)
+	if len(itemIDs) == 0 {
+		return result, nil
+	}
+	byUUID := make(map[uuid.UUID]string, len(itemIDs))
+	parsed := make([]uuid.UUID, 0, len(itemIDs))
+	for _, id := range itemIDs {
+		u, err := r.resolveBacklogItemLookup(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+		}
+		byUUID[u] = id
+		parsed = append(parsed, u)
+	}
+	rows, err := r.client.BacklogItemDependency.Query().
+		Where(
+			backlogitemdependency.BlockedIDIn(parsed...),
+			backlogitemdependency.HasBlockerWith(backlogitem.StatusNotIn(TerminalStatusStrings()...)),
+		).
+		WithBlocker().
+		Order(ent.Asc(backlogitemdependency.FieldCreatedAt)).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load unresolved blockers: %w", err)
+	}
+	for _, row := range rows {
+		if row.Edges.Blocker == nil {
+			continue
+		}
+		key := byUUID[row.BlockedID]
+		result[key] = append(result[key], dependencyRefFromItem(row.Edges.Blocker))
+	}
+	return result, nil
+}
+
 func dependencyRefFromItem(item *ent.BacklogItem) BacklogItemDependencyRef {
 	return BacklogItemDependencyRef{
 		ItemID:   item.ID.String(),

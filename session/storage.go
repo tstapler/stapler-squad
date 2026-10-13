@@ -1043,6 +1043,11 @@ func (s *Storage) ListBacklogItemDependencies(ctx context.Context, itemID string
 	return s.repo.ListBacklogItemDependencies(ctx, itemID)
 }
 
+// UnresolvedBlockersForItems returns unresolved blocker refs per blocked item (batched).
+func (s *Storage) UnresolvedBlockersForItems(ctx context.Context, itemIDs []string) (map[string][]BacklogItemDependencyRef, error) {
+	return s.repo.UnresolvedBlockersForItems(ctx, itemIDs)
+}
+
 // UnresolvedBlockerItemIDs returns the subset of itemIDs blocked by an unresolved dependency.
 func (s *Storage) UnresolvedBlockerItemIDs(ctx context.Context, itemIDs []string) (map[string]bool, error) {
 	return s.repo.UnresolvedBlockerItemIDs(ctx, itemIDs)

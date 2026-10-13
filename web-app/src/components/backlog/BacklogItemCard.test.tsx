@@ -963,3 +963,27 @@ describe("ClaimChip on cards (cross-host claim dedup)", () => {
     expect(screen.getAllByTestId("claim-chip")).toHaveLength(1);
   });
 });
+
+describe("BacklogItemCard — blocked-by label", () => {
+  const dep = (title: string, status: string) => ({ itemId: title, publicId: "", title, status });
+
+  it("shows 'blocked by <title>' while a blocker is unresolved", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ blockedBy: [dep("Fix auth", "in_progress")] })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+    expect(screen.getByTestId("backlog-card-blocked-by")).toHaveTextContent("blocked by Fix auth");
+  });
+
+  it("shows nothing once every blocker is resolved or when there are none", () => {
+    const { rerender } = render(
+      <BacklogItemCard item={makeItem({ blockedBy: [dep("Fix auth", "done")] })} onAction={jest.fn()} onClick={jest.fn()} />
+    );
+    expect(screen.queryByTestId("backlog-card-blocked-by")).not.toBeInTheDocument();
+    rerender(<BacklogItemCard item={makeItem()} onAction={jest.fn()} onClick={jest.fn()} />);
+    expect(screen.queryByTestId("backlog-card-blocked-by")).not.toBeInTheDocument();
+  });
+});
