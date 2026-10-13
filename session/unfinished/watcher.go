@@ -28,6 +28,8 @@ type WatchDirWatcher struct {
 	// map[watchDir]map[repoPath]struct{}, guarded by mu.
 	mu         sync.Mutex
 	discovered map[string]map[string]struct{}
+
+	wg sync.WaitGroup // tracks the periodicReWalk goroutine; see Wait
 }
 
 // NewWatchDirWatcher creates a WatchDirWatcher.
@@ -51,7 +53,13 @@ func (w *WatchDirWatcher) Start(ctx context.Context) {
 		w.scanner.AddRepo(repo)
 	}
 
-	go w.periodicReWalk(ctx)
+	w.wg.Go(func() { w.periodicReWalk(ctx) })
+}
+
+// Wait blocks until the periodic re-walk goroutine launched by Start has
+// exited. Call it after cancelling Start's ctx.
+func (w *WatchDirWatcher) Wait() {
+	w.wg.Wait()
 }
 
 // AddWatchDir adds a new watch directory at runtime and walks it immediately.

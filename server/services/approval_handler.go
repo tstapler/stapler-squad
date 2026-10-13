@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -961,8 +962,8 @@ func (h *ApprovalHandler) writeDecision(w http.ResponseWriter, behavior, message
 
 // StartExpirationCleanup starts a background goroutine that periodically removes expired approvals.
 // The goroutine stops when ctx is canceled.
-func StartExpirationCleanup(ctx context.Context, store *ApprovalStore) {
-	go func() {
+func StartExpirationCleanup(ctx context.Context, store *ApprovalStore, wg *sync.WaitGroup) {
+	wg.Go(func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -975,7 +976,7 @@ func StartExpirationCleanup(ctx context.Context, store *ApprovalStore) {
 				return
 			}
 		}
-	}()
+	})
 }
 
 // hookEntry is the individual hook definition within a matcher group.

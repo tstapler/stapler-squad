@@ -289,6 +289,14 @@ func (rqm *ReactiveQueueManager) resolveQueueKey(id string) string {
 	return id // fallback: already a Title, or instance no longer loaded
 }
 
+// Wait blocks until the goroutines Start launched (the event loop and the
+// poller) have exited. Unlike Stop it does not close streaming clients, so it
+// is safe to call after the Start ctx is cancelled while handlers drain.
+func (rqm *ReactiveQueueManager) Wait() {
+	rqm.wg.Wait()
+	rqm.poller.Wait()
+}
+
 // Stop stops the reactive queue manager.
 func (rqm *ReactiveQueueManager) Stop() {
 	if rqm.cancel != nil {

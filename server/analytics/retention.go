@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -20,12 +21,13 @@ import (
 //   - escapeRetentionDays:  escape_event rows older than this many days are deleted.
 //     Use 0 to disable escape event age-based eviction.
 //
-// The goroutine exits when ctx is cancelled.
-func StartRetentionEnforcer(ctx context.Context, client *ent.Client, maxRows int, maxAgeDays int, escapeRetentionDays int, escapeMaxRowsPerSession int) {
+// The goroutine exits when ctx is cancelled and is tracked on wg so the caller
+// can join it.
+func StartRetentionEnforcer(ctx context.Context, client *ent.Client, maxRows int, maxAgeDays int, escapeRetentionDays int, escapeMaxRowsPerSession int, wg *sync.WaitGroup) {
 	if client == nil {
 		return
 	}
-	go func() {
+	wg.Go(func() {
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
 
@@ -40,7 +42,7 @@ func StartRetentionEnforcer(ctx context.Context, client *ent.Client, maxRows int
 				runRetention(ctx, client, maxRows, maxAgeDays, escapeRetentionDays, escapeMaxRowsPerSession)
 			}
 		}
-	}()
+	})
 }
 
 // runRetention performs one enforcement cycle: age-based eviction first, then
