@@ -6,6 +6,8 @@ import { DrawerNav } from "./DrawerNav";
 import { BottomNav } from "./BottomNav";
 import { KeyboardShortcutOverlay } from "@/components/ui/KeyboardShortcutOverlay";
 import { useShortcut } from "@/lib/shortcuts/useShortcut";
+import { useNotificationShortcuts } from "@/lib/shortcuts/useNotificationShortcuts";
+import { CommandBar } from "@/components/command-bar/CommandBar";
 import { useNavigation } from "@/lib/contexts/NavigationContext";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import { cockpitRoot, drawerColumn, mainContent } from "@/styles/layout.css";
@@ -32,6 +34,8 @@ export function CockpitShell({ children }: CockpitShellProps) {
 
   const openShortcuts = useCallback(() => setShortcutsOpen(true), []);
   const closeShortcuts = useCallback(() => setShortcutsOpen(false), []);
+
+  useNotificationShortcuts();
 
   // Global: [ → toggle nav drawer
   useShortcut("nav:toggle-drawer", {
@@ -76,6 +80,7 @@ export function CockpitShell({ children }: CockpitShellProps) {
         </div>
       </div>
       <BottomNav />
+      <CommandBar />
       <KeyboardShortcutOverlay isOpen={shortcutsOpen} onClose={closeShortcuts} />
       {showFloatingShortcutsButton && (
         <button
