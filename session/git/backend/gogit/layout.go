@@ -237,7 +237,7 @@ func readHeadFile(path string) ([]byte, error) {
 }
 
 // readGitfile parses a ".git" file the way git's read_gitfile_gently does: "gitdir: <path>",
-// trailing whitespace dropped (an embedded newline stays part of the path), a relative path
+// trailing CR/LF dropped (spaces, tabs and an embedded newline stay part of the path), a relative path
 // taken from the file's directory. The path is returned unresolved. A file git would reject as
 // malformed is an error.
 func readGitfile(path string) (string, error) {
@@ -249,7 +249,7 @@ func readGitfile(path string) (string, error) {
 	if len(data) > maxGitfileSize || !strings.HasPrefix(string(data), prefix) {
 		return "", fmt.Errorf("%s is not a valid gitfile", path)
 	}
-	trimmed := strings.TrimRight(string(data), " \t\r\n")
+	trimmed := strings.TrimRight(string(data), "\r\n")
 	if len(trimmed) <= len(prefix) {
 		return "", fmt.Errorf("%s names no path", path)
 	}

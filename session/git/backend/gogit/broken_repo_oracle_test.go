@@ -108,6 +108,12 @@ var fixtureBrokenRepos = gitoracle.Fixture{Name: "broken-repos", Build: func(g g
 	gitfile("gitfile-no-path", "gitdir: \n")
 	gitfile("gitfile-no-space", "gitdir:"+filepath.Join(main, ".git")+"\n")
 	gitfile("gitfile-two-lines", "gitdir: "+filepath.Join(root, "nowhere")+"\nsecond\n")
+	gitfile("gitfile-trailing-spaces", "gitdir: "+main+"/.git   \n")
+	gitfile("gitfile-trailing-tab", "gitdir: "+main+"/.git\t\n")
+	// a relative target that climbs through a symlink resolves through the OS, not lexically
+	must(os.Symlink(filepath.Join(root, "wt-admin-deleted"), filepath.Join(root, "link")))
+	gitfile("gitfile-relative-through-symlink", "gitdir: ../link/../main/.git\n")
+	gitfile("gitfile-loop", "gitdir: "+filepath.Join(root, "gitfile-loop", ".git")+"\n")
 	gitfile("gitfile-crlf", "gitdir: "+filepath.Join(root, "nowhere")+"\r\n")
 	// a parent repository exists above this one
 	write(filepath.Join(main, "sub-broken", ".git"), "gitdir: "+filepath.Join(root, "nowhere")+"\n")
