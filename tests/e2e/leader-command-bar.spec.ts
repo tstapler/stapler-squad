@@ -43,7 +43,8 @@ test.describe('leader-key command bar', () => {
     await page.keyboard.press(LEADER);
     await expect(bar(page)).toBeVisible();
     const count = await page.getByTestId('command-bar-item').count();
-    test.skip(count < 2, 'needs at least two top-level groups registered');
+    // Windows (w) and Notifications (n) are always registered; fewer means a registration regression.
+    expect(count).toBeGreaterThan(1);
 
     const first = await barInput(page).getAttribute('aria-activedescendant');
     await page.keyboard.press('j');
