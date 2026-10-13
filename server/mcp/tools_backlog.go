@@ -2169,6 +2169,10 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid acceptance_criteria: %v", err), ""), nil
 	}
 
+	dependsOn, bad := h.parseDependsOn(ctx, args)
+	if bad != nil {
+		return bad, nil
+	}
 	created, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
 		Title:              title,
 		Description:        description,
@@ -2185,6 +2189,15 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 	}
 
 	log.InfoLog().Printf("[mcp:create_backlog_item] session=%s item=%s title=%q", callerUUID, created.ID, created.Title)
+	var depNote string
+	for _, blocker := range dependsOn {
+		edge := session.BacklogItemDependencyEdge{BlockerID: blocker, BlockedID: created.ID}
+		if err := h.storage.AddBacklogItemDependency(ctx, edge); err != nil {
+			depNote += fmt.Sprintf(" Failed to add dependency on %s: %v.", blocker, err)
+			continue
+		}
+		depNote += fmt.Sprintf(" Blocked by %s.", blocker)
+	}
 
 	triageTriggered := false
 	if h.backlogSvc != nil {
@@ -2196,7 +2209,7 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 		triageNote = " Auto-triage started."
 	}
 	return mcpgo.NewToolResultText(fmt.Sprintf(
-		"Created backlog item %s: %q (status: idea, priority: P%d).%s", created.ID, created.Title, created.Priority, triageNote,
+		"Created backlog item %s: %q (status: idea, priority: P%d).%s%s", created.ID, created.Title, created.Priority, depNote, triageNote,
 	)), nil
 }
 
@@ -2768,6 +2781,8 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 
 // registerBacklogTools registers all backlog-related MCP tools on the server.
 func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
+	registerBacklogDependencyTools(s, h)
+
 	s.AddTool(
 		mcpgo.NewTool("get_backlog_item",
 			mcpgo.WithDescription("Fetch full details for a backlog item: title, description, acceptance criteria, priority, and status. Call this first in any backlog-linked session to orient yourself. Returns role-specific workflow guidance when your session is linked to the item (triage/work/review role instructions)."),
@@ -3011,6 +3026,10 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			),
 			mcpgo.WithString("notes",
 				mcpgo.Description("Freeform operator notes, e.g. where this request came from."),
+			),
+			mcpgo.WithArray("depends_on",
+				mcpgo.Description("Optional UUIDs of existing items that must reach done or archived before this item can start. A missing UUID fails the call before anything is created."),
+				mcpgo.Items(map[string]any{"type": "string"}),
 			),
 			mcpgo.WithBoolean("skip_triage",
 				mcpgo.Description("Skip auto-triage on creation (default false: an item with a repo_path is triaged automatically, same as the web UI's \"New Idea\" form). Set true to leave the item in idea status untouched, e.g. when filing several related items you intend to triage together later."),
