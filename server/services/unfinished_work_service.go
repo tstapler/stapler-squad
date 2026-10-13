@@ -440,6 +440,10 @@ func (s *UnfinishedWorkService) QuickCommitPush(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("worktree not found: %s|%s", req.Msg.RepoPath, req.Msg.Branch))
 	}
 
+	if strings.TrimSpace(req.Msg.Branch) == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("branch is required"))
+	}
+
 	worktreePath := r.WorktreePath
 
 	// Stage everything, then untrack any backlog-scaffolding path that's already

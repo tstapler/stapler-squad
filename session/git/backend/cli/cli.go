@@ -184,6 +184,8 @@ func hasNoisePrefix(s string) bool {
 }
 
 // stripNoise drops warning:/hint: lines git (or an ssh banner) wrote to stderr into combined output.
+// Only column-0 lines count: git's own banners start there, while an indented line is real data
+// (e.g. a diff context line " warning: x").
 func stripNoise(out []byte) []byte {
 	if len(out) == 0 {
 		return out
@@ -191,7 +193,7 @@ func stripNoise(out []byte) []byte {
 	lines := strings.Split(string(out), "\n")
 	kept := lines[:0]
 	for _, ln := range lines {
-		if !hasNoisePrefix(strings.TrimSpace(ln)) {
+		if !hasNoisePrefix(ln) {
 			kept = append(kept, ln)
 		}
 	}

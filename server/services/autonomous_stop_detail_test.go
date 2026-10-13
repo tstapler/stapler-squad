@@ -404,7 +404,7 @@ func TestSanitizeStopTail_VendorTokensWithheld(t *testing.T) {
 		{"anthropic", "ANTHROPIC sk-ant-" + strings.Repeat("aB3dE5gH", 3)},
 		{"curl user", "curl -u deploy:" + "hunter2hunter2 https://example.com"},
 		{"curl long flag", "curl --user deploy:" + "hunter2hunter2 https://example.com"},
-		{"zero-width split", "glpat-" + strings.Repeat("aB3dE5gH", 1) + "​" + strings.Repeat("aB3dE5gH", 2)},
+		{"zero-width split", "glpat-" + strings.Repeat("aB3dE5gH", 1) + "\u200b" + strings.Repeat("aB3dE5gH", 2)},
 		{"control split", "hf_" + strings.Repeat("aB3dE5gH", 2) + "\x07" + strings.Repeat("aB3dE5gH", 2)},
 	}
 	for _, tc := range cases {
@@ -418,7 +418,7 @@ func TestSanitizeStopTail_VendorTokensWithheld(t *testing.T) {
 
 	t.Run("bidi and control runes are dropped from kept text", func(t *testing.T) {
 		t.Parallel()
-		got := sanitizeStopTail("build ‮failed\x07 here")
+		got := sanitizeStopTail("build \u202efailed\x07 here")
 		if got != "build failed here" {
 			t.Errorf("got %q", got)
 		}

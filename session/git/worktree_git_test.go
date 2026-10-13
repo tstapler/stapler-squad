@@ -15,7 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/metric"
 
-	"github.com/tstapler/stapler-squad/session/git/backend/cli"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -859,9 +858,6 @@ func TestWithCommandRunner_InjectedRunnerIsActuallyUsed(t *testing.T) {
 	if g == nil {
 		t.Fatal("NewGitWorktreeFromStorageWithExecutor returned nil")
 	}
-	// PushBranch goes through the git backend; a cli backend over the spy proves the
-	// worktree's own location and push shape reach the runner.
-	g.refBackend = cli.New(spy)
 
 	if err := g.PushBranch(); err != nil {
 		t.Fatalf("PushBranch returned error: %v", err)

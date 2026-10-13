@@ -236,6 +236,20 @@ func (m *RepoPathManager) GetCloneURL(ref *GitHubRef) string {
 	return fmt.Sprintf("https://%s/%s/%s.git", host, ref.Owner, ref.Repo)
 }
 
+// redactedCloneErr keeps an error reachable through errors.Is/As while its message has cloneURL's
+// credentials removed.
+type redactedCloneErr struct {
+	msg string
+	err error
+}
+
+func (e redactedCloneErr) Error() string { return e.msg }
+func (e redactedCloneErr) Unwrap() error { return e.err }
+
+func redactedCloneError(err error, cloneURL string) error {
+	return redactedCloneErr{msg: sanitizeCloneOutput([]byte(err.Error()), cloneURL), err: err}
+}
+
 // sanitizeCloneOutput strips an embedded credential from git's own error output
 // before it's wrapped into an error (which callers may log or surface to the
 // UI). git commonly echoes the clone URL verbatim in messages like
@@ -313,7 +327,7 @@ func RepairCorruptedGitRepo(repoPath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	if err := gitprovider.Backend().Clone(ctx, backend.Local{Root: backend.RepoRoot(repoPath)}, backend.CloneRequest{URL: backend.RemoteURL(originURL)}); err != nil {
-		return fmt.Errorf("failed to re-clone repository at %s: %s", repoPath, sanitizeCloneOutput([]byte(err.Error()), originURL))
+		return fmt.Errorf("failed to re-clone repository at %s: %w", repoPath, redactedCloneError(err, originURL))
 	}
 	if strings.Contains(originURL, "@") {
 		publicURL := strings.Replace(originURL, originURL[strings.Index(originURL, "://")+3:strings.Index(originURL, "@")+1], "", 1)
@@ -420,7 +434,7 @@ func (m *RepoPathManager) EnsureRepoCloned(ctx context.Context, ref *GitHubRef) 
 		if rmErr := os.RemoveAll(repoPath); rmErr != nil {
 			log.Warn("failed to remove partial clone directory after failed clone", "path", repoPath, "err", rmErr)
 		}
-		return "", fmt.Errorf("failed to clone repository: %s", sanitizeCloneOutput([]byte(err.Error()), cloneURL))
+		return "", fmt.Errorf("failed to clone repository: %w", redactedCloneError(err, cloneURL))
 	}
 
 	if strings.Contains(cloneURL, "@") {

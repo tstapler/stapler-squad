@@ -111,8 +111,7 @@ type RemoteWorktree struct {
 
 // CreateWorktree runs `git worktree add <WorktreePath> <Branch>` on the remote
 // host via the injected CommandRunner, mirroring GitWorktree.setupFromExistingBranch's
-// argument construction (worktree_ops.go's `g.runGitCommand(g.repoPath, "worktree",
-// "add", g.worktreePath, g.branchName)`) and returning the same result shape (an
+// argument construction (worktree_ops.go's AddWorktreeForExistingBranch call) and returning the same result shape (an
 // error only — the worktree's path is already known to the caller via
 // w.WorktreePath, exactly as GitWorktree.Setup() returns only an error since the
 // path is already stored on the receiver).

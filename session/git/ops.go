@@ -34,6 +34,9 @@ func FetchBranch(repoPath, branchName string) error {
 	// name, a documented git argument-injection vector (same class as
 	// CVE-2017-1000117) when branchName originates from caller input, as it
 	// does via BacklogItem.BaseBranch (session.ResolveExplicitBranchSHA).
+	if branchName == "" {
+		return fmt.Errorf("failed to fetch branch: branch name is empty")
+	}
 	loc := backend.Local{Root: backend.RepoRoot(repoPath)}
 	if err := gitprovider.Backend().Fetch(ctx, loc, backend.FetchRequest{Remote: "origin", Branch: backend.BranchName(branchName)}); err != nil {
 		return fmt.Errorf("failed to fetch branch: %w", err)

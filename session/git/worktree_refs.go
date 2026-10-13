@@ -5,13 +5,23 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/git/backend/cli"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-// gitBackend is the backend git operations go through: the injected one, else the process-wide one.
+// gitBackend is the backend git operations go through: the injected one, else a cli backend
+// over a runner injected with WithCommandRunner (a test double or fake; production only injects
+// LocalRunner or an SSH runner, which the process-wide backend already serves), else the
+// process-wide one.
 func (g *GitWorktree) gitBackend() backend.Backend {
 	if g.refBackend != nil {
 		return g.refBackend
+	}
+	if r := g.runner; r != nil && !r.IsRemote() {
+		if _, isDefault := r.(tmux.LocalRunner); !isDefault {
+			return cli.New(r)
+		}
 	}
 	return gitprovider.Backend()
 }

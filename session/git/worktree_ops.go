@@ -28,7 +28,7 @@ import (
 // Deliberately NOT copied from headSHARetryAttempts/headSHARetryDelay (util.go:285-288,
 // 3 attempts / 20ms total) — that pair bounds an in-process go-git torn-read against a
 // local file write (microsecond-scale). This retry instead waits out a concurrent `git
-// worktree add` *subprocess*, which can run up to runGitCommand's 30s timeout under CI
+// worktree add` *subprocess*, which can run up to the 30s git timeout under CI
 // load. No local repro captured real contended-completion timing, so this is sized as a
 // materially larger bound than the unrelated precedent — a few seconds with backoff, not
 // tens of milliseconds — rather than reusing 20ms unexamined.
@@ -285,7 +285,7 @@ func (g *GitWorktree) initBaseCommitSHA() {
 //   - NOT locked with git's "initializing" marker. `worktree add` briefly holds this
 //     lock while it populates the checkout and clears it on success; a worktree still
 //     locked here means an earlier `worktree add` was interrupted mid-checkout (e.g.
-//     killed by runGitCommand's 30s timeout under load) and left a half-populated
+//     killed by the 30s git timeout under load) and left a half-populated
 //     directory — reusing that in place would silently hand a broken checkout to the
 //     new session instead of self-healing via a fresh remove+add, exactly the failure
 //     this reuse-in-place logic exists to prevent for the *good* case.

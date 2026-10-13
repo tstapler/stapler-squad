@@ -230,7 +230,7 @@ func (p *PathCompletionService) ListWorktrees(
 // worktreeEntries converts backend worktree infos to proto entries; the first listed
 // worktree is the main one.
 func worktreeEntries(infos []backend.WorktreeInfo) []*sessionv1.WorktreeEntry {
-	var result []*sessionv1.WorktreeEntry
+	result := make([]*sessionv1.WorktreeEntry, 0, len(infos))
 	for i, info := range infos {
 		result = append(result, &sessionv1.WorktreeEntry{
 			Path:   string(info.Path),
