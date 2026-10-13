@@ -14,7 +14,6 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/git/backend/gogit"
-	"github.com/tstapler/stapler-squad/telemetry"
 )
 
 // SystemConfigFiles are the system-scope config files git reads.
@@ -52,7 +51,7 @@ func DiscoverSystemConfig(ctx context.Context) (SystemConfigFiles, error) {
 		return SystemConfigFiles{}, fmt.Errorf("system git config discovery: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
-	counter := backend.NewSpawnCounter(telemetry.GetMeter())
+	counter := backend.NewSpawnCounter(soakMeter())
 	run := func(extraEnv []string, args ...string) ([]byte, []byte, error) {
 		return runScrubbedGit(ctx, counter, dir, extraEnv, args...)
 	}

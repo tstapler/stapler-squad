@@ -165,6 +165,18 @@ Both are **OPEN**. Neither can be satisfied by this document. See `recalibration
 
 **Story 1.2.3 rollback proof.** Deleted the `replace` line, `go get github.com/go-git/go-git/v5@v5.19.3`, `go mod tidy`, `go mod verify`, `go list -m` printed `github.com/go-git/go-git/v5 v5.19.3` (no `=>`), `go build ./...` and `go test -count=1 ./session/git/...` all passed. `make ci` was not run locally for this proof; the PR's CI covers the replaced state, and the full-suite rollback run is left to the AC for each future fork tag. Procedure: `docs/how-to/roll-back-go-git-fork.md`.
 
+## Epic 2.1: `refs` shadow soak start procedure (Story 2.1.3, 2026-10-12)
+
+**Wiring.** `session/gitwiring` now attaches the in-process backend (`NewGoGit`) and the capability probe (`NewCapabilityProbe`'s resolver, run once) to the production router only when some cohort is not `cli`; an unconfigured install builds neither and runs no discovery spawn (`TestUnconfiguredRouterSpawnsExactlyAsBeforeAndBuildsNoShadowMachinery`). Shadow returns the CLI answer; the in-process side runs in the same call and spawns nothing (`TestShadowSpawnsOnlyTheCLIOncePerCall`).
+
+**Start.** Set `{"git_backend_cohorts": {"refs": "shadow"}}` in `config.json` and restart. `STAPLER_SQUAD_GIT_BACKEND` can only force `cli`. Runbook: `docs/how-to/flip-git-backend-cohort.md`.
+
+**Read.** `make git-soak-status` (or `GET /actuator/git-backend[?format=text]`). Counters persist in `<config dir>/git-backend-soak.json` across restarts; the 7-day window starts at the first start with a shadowed cohort.
+
+**Day-one checklist (first 24 h).** `detect_error` ratio below 1%, list nonzero sub-reasons, pause and fix the resolver at or above the ceiling. Then the mechanical criteria: 7 days, 500 or more calls per operation, zero `real`/`false_clean`, go-git p50 not above CLI p50, G8 outcome B above. Nothing flips automatically; `gogit` is set by hand.
+
+**Soak started:** UNRECORDED. Fill in the date and instance when the maintainer sets `refs=shadow`.
+
 ## Backlog list (planning freeze: findings that do not edit plan.md)
 
 1. Remove the fake `ssq` go-git zips from `GOMODCACHE` (G1 cleanup debt).

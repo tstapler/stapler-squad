@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -21,7 +22,15 @@ const (
 	// probe: {outcome} is "ok", a capability kind, or "detect_error" (with sub_reason set), so
 	// detect_error over the sum is the ratio the soak ceiling watches (plan Story 1.3.4 h).
 	MetricCapabilityDetectTotal = "git_capability_detect_total"
+	// MetricShadowDurationMS records how long each side of a shadow comparison took, so the soak
+	// can check go-git p50 against the CLI's: {operation,implementation}. One sample per side per
+	// shadowed call (the first read only, not the classification re-reads).
+	MetricShadowDurationMS = "git_backend_shadow_duration_ms"
 )
+
+// ShadowDurationBucketsMS are the explicit histogram bounds for MetricShadowDurationMS. Fixed so
+// that a persisted soak ledger can be merged across restarts.
+var ShadowDurationBucketsMS = []float64{0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 50, 100, 250, 500, 1000, 5000}
 
 // Implementation labels the backend that ran, matching withOperationSpan's label.
 type Implementation string
@@ -37,6 +46,7 @@ type routerMetrics struct {
 	shadowMismatch metric.Int64Counter
 	shadowCalls    metric.Int64Counter
 	capability     metric.Int64Counter
+	shadowDuration metric.Float64Histogram
 }
 
 func newRouterMetrics(meter metric.Meter) routerMetrics {
@@ -48,7 +58,16 @@ func newRouterMetrics(meter metric.Meter) routerMetrics {
 		}
 		return c
 	}
+	duration, err := meter.Float64Histogram(MetricShadowDurationMS,
+		metric.WithDescription("Shadow-mode wall time per implementation, in milliseconds"),
+		metric.WithUnit("ms"),
+		metric.WithExplicitBucketBoundaries(ShadowDurationBucketsMS...))
+	if err != nil {
+		log.Warn("git backend metric unavailable, counting disabled", "metric", MetricShadowDurationMS, "err", err)
+		duration = noop.Float64Histogram{}
+	}
 	return routerMetrics{
+		shadowDuration: duration,
 		fallback:       counter(MetricFallbackTotal, "Calls routed to the CLI instead of the cohort backend, by reason"),
 		errors:         counter(MetricErrorTotal, "Operational backend errors returned to the caller"),
 		shadowMismatch: counter(MetricShadowMismatchTotal, "Shadow-mode CLI/go-git disagreements by class"),
@@ -84,4 +103,10 @@ func (m routerMetrics) countCapability(outcome string, sub DetectSub) {
 	m.capability.Add(context.Background(), 1, metric.WithAttributes(
 		attribute.String("outcome", outcome),
 		attribute.String("sub_reason", string(sub))))
+}
+
+func (m routerMetrics) recordShadowDuration(op OperationName, impl Implementation, d time.Duration) {
+	m.shadowDuration.Record(context.Background(), float64(d)/float64(time.Millisecond), metric.WithAttributes(
+		attribute.String("operation", string(op)),
+		attribute.String("implementation", string(impl))))
 }
