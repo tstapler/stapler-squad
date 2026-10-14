@@ -670,6 +670,33 @@ func TestCreateBacklogWorktree_AnchorsAtMainRepo_When_RepoPathIsAWorktree(t *tes
 	}
 }
 
+// TestCreateBacklogWorktree_BranchesFromFetchedOriginTip_NotAmbientHead guards
+// freshness end to end: origin's main advances after the clone and the clone's
+// checked-out HEAD sits on a diverged branch, yet the new worktree must start
+// at origin's current main tip.
+func TestCreateBacklogWorktree_BranchesFromFetchedOriginTip_NotAmbientHead(t *testing.T) {
+	t.Parallel()
+	origin := t.TempDir()
+	runGitOrFail(t, origin, "init", "-b", "main")
+	runGitOrFail(t, origin, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "init")
+
+	clone := cloneWithOrigin(t, origin)
+	runGitOrFail(t, clone, "checkout", "-b", "stale-feature")
+	runGitOrFail(t, clone, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "diverged local work")
+
+	runGitOrFail(t, origin, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "newer origin commit")
+	originTip := strings.TrimSpace(runGitOutputOrFail(t, origin, "rev-parse", "main"))
+
+	worktreePath, err := CreateBacklogWorktree(clone, "fresh-base-item", "")
+	if err != nil {
+		t.Fatalf("CreateBacklogWorktree failed: %v", err)
+	}
+	head := strings.TrimSpace(runGitOutputOrFail(t, worktreePath, "rev-parse", "HEAD"))
+	if head != originTip {
+		t.Errorf("worktree HEAD = %s, want freshly fetched origin/main tip %s", head, originTip)
+	}
+}
+
 // TestCreateBacklogWorktree_UsesExplicitBaseBranch_When_Set is the opt-in
 // override's end-to-end test: with baseBranch set, the new worktree must
 // fork from that branch's tip, not the repo's default branch.

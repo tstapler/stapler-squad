@@ -907,6 +907,7 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 		FailureCapturePath:       is.FailureCapturePath,
 		ErrorDetail:              is.ErrorDetail,
 		ClaimantHostId:           is.ClaimantHostID,
+		BaseCommitSha:            is.BaseCommitSha,
 	}
 	if is.StartedAt != nil {
 		p.StartedAt = timestamppb.New(*is.StartedAt)
