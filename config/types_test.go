@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"math"
 	"testing"
 	"time"
@@ -246,12 +247,28 @@ func TestCapacityConfig_SpendRate(t *testing.T) {
 				t.Errorf("SpendRateWindow() = %v, want %v", got, tc.wantWindow)
 			}
 			def := tc.in.CapacityConfigOrDefault()
-			if def.SpendRateWindow() != tc.wantWindow {
-				t.Errorf("after defaults window = %v, want %v", def.SpendRateWindow(), tc.wantWindow)
+			if def.SpendRateWindowMinutes != int(tc.wantWindow/time.Minute) {
+				t.Errorf("after defaults SpendRateWindowMinutes = %d, want %d", def.SpendRateWindowMinutes, int(tc.wantWindow/time.Minute))
 			}
-			if r2, e2 := def.SpendRateThreshold(); r2 != tc.wantRate || e2 != tc.wantEnabled {
-				t.Errorf("after defaults threshold = (%v, %v), want (%v, %v)", r2, e2, tc.wantRate, tc.wantEnabled)
+			if tc.wantEnabled && def.SpendRateAlertUSDPerHour != tc.wantRate {
+				t.Errorf("after defaults SpendRateAlertUSDPerHour = %v, want %v", def.SpendRateAlertUSDPerHour, tc.wantRate)
+			}
+			if !tc.wantEnabled && def.SpendRateAlertUSDPerHour >= 0 {
+				t.Errorf("after defaults disabled threshold became %v, want it to stay negative", def.SpendRateAlertUSDPerHour)
 			}
 		})
+	}
+}
+
+func TestCapacityConfig_SpendRateJSONKeys(t *testing.T) {
+	t.Parallel()
+	var cfg struct {
+		Capacity CapacityConfig `json:"capacity"`
+	}
+	if err := json.Unmarshal([]byte(`{"capacity":{"spend_rate_alert_usd_per_hour":-1,"spend_rate_window_minutes":30}}`), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Capacity.SpendRateAlertUSDPerHour != -1 || cfg.Capacity.SpendRateWindowMinutes != 30 {
+		t.Errorf("got %+v", cfg.Capacity)
 	}
 }

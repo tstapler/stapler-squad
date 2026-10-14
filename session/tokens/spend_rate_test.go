@@ -11,7 +11,7 @@ func TestRollingSpendRate(t *testing.T) {
 	t.Parallel()
 	pt := DefaultPricingTable()
 	now := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
-	// Sonnet 4.5 cache reads priced via the real table; derive the per-turn cost rather than hardcoding a price.
+	// Derive the per-turn cost from the real table rather than hardcoding a price.
 	turn := func(ago time.Duration, model string) TurnStats {
 		return TurnStats{Timestamp: now.Add(-ago), Model: model, Input: 1_000_000}
 	}
@@ -34,6 +34,7 @@ func TestRollingSpendRate(t *testing.T) {
 		{"only unpriced model", &ParseResult{TurnTimeline: []TurnStats{turn(time.Minute, "mystery-model")}}, pt, time.Hour, 0, false},
 		{"all turns outside window", &ParseResult{TurnTimeline: []TurnStats{turn(2*time.Hour, "claude-sonnet-4-5")}}, pt, time.Hour, 0, false},
 		{"turn exactly at window start is excluded", &ParseResult{TurnTimeline: []TurnStats{turn(time.Hour, "claude-sonnet-4-5")}}, pt, time.Hour, 0, false},
+		{"turn exactly at now is included", &ParseResult{TurnTimeline: []TurnStats{turn(0, "claude-sonnet-4-5")}}, pt, time.Hour, unit, true},
 		{"future turn ignored", &ParseResult{TurnTimeline: []TurnStats{turn(-time.Minute, "claude-sonnet-4-5")}}, pt, time.Hour, 0, false},
 		{"zero timestamp ignored", &ParseResult{TurnTimeline: []TurnStats{{Model: "claude-sonnet-4-5", Input: 1_000_000}}}, pt, time.Hour, 0, false},
 		{

@@ -271,7 +271,8 @@ func TestCapacityMonitor_IdleWaitEscalation_NonBacklogSessionNotStopped(t *testi
 	assert.Empty(t, terminator.calls())
 }
 
-// countSpendRateAlerts polls the monitor n times and counts spend_rate notifications.
+// countSpendRateAlerts polls the monitor n times and counts spend_rate
+// notifications, failing if the removed session_token_ceiling one reappears.
 func countSpendRateAlerts(t *testing.T, monitor *CapacityMonitor, bus *events.EventBus, polls int) int {
 	t.Helper()
 	ch, subID := bus.Subscribe(context.Background())
@@ -281,6 +282,7 @@ func countSpendRateAlerts(t *testing.T, monitor *CapacityMonitor, bus *events.Ev
 	}
 	n := 0
 	for _, ty := range drainTypes(ch) {
+		assert.NotEqual(t, "session_token_ceiling", ty)
 		if ty == "spend_rate" {
 			n++
 		}
@@ -292,7 +294,7 @@ var spendRateBase = time.Date(2026, 9, 22, 17, 0, 0, 0, time.UTC)
 
 func TestCapacityMonitor_SpendRateAlert_FastBurnNotifiesOncePerWindow(t *testing.T) {
 	t.Parallel()
-	// $0.30 per 1M cache-read tokens: ~60 one-minute turns in the window cost ~$17.7/h > $15/h default.
+	// $0.30 per 1M cache-read tokens: 59 one-minute turns in the window cost ~$17.7/h > $15/h default.
 	tl := cacheReadTimeline(100, 1_000_000, []string{"Edit"}, spendRateBase, time.Minute)
 	monitor, bus, _, _ := newGuardrailMonitor(t, session.SessionRoleWork, config.CapacityConfig{}, parseResultFrom(tl))
 	assert.Equal(t, 1, countSpendRateAlerts(t, monitor, bus, 3))
@@ -327,7 +329,7 @@ func TestCapacityMonitor_SpendRateAlert_RefiresAfterCooldown(t *testing.T) {
 
 func TestCapacityMonitor_SpendRateAlert_LongLowRateSessionDoesNotAlert(t *testing.T) {
 	t.Parallel()
-	// 5M total tokens (over the old 2M token ceiling) but only ~$1.50 of spend.
+	// 5M total tokens (over the old 2M token ceiling) but ~$0.18/h in the window.
 	tl := cacheReadTimeline(500, 10_000, []string{"Edit"}, spendRateBase, time.Minute)
 	monitor, bus, _, _ := newGuardrailMonitor(t, session.SessionRoleWork, config.CapacityConfig{}, parseResultFrom(tl))
 	assert.Zero(t, countSpendRateAlerts(t, monitor, bus, 2))
@@ -348,4 +350,36 @@ func TestCapacityMonitor_SpendRateAlert_UnpricedModelDoesNotAlertOrPanic(t *test
 	}
 	monitor, bus, _, _ := newGuardrailMonitor(t, session.SessionRoleWork, config.CapacityConfig{}, parseResultFrom(tl))
 	assert.Zero(t, countSpendRateAlerts(t, monitor, bus, 2))
+}
+
+func TestCapacityMonitor_SpendRateAlert_CustomWindowAndCooldownBoundary(t *testing.T) {
+	t.Parallel()
+	// 5-minute window, $1/h line: ~5 turns x $0.30 = $1.50 per window -> $18/h.
+	tl := cacheReadTimeline(20, 1_000_000, []string{"Edit"}, spendRateBase, time.Minute)
+	cfg := config.CapacityConfig{SpendRateAlertUSDPerHour: 1, SpendRateWindowMinutes: 5}
+	monitor, bus, _, _ := newGuardrailMonitor(t, session.SessionRoleWork, cfg, parseResultFrom(tl))
+	ch, subID := bus.Subscribe(context.Background())
+	defer bus.Unsubscribe(subID)
+
+	first := spendRateBase.Add(20 * time.Minute)
+	at := first
+	monitor.now = func() time.Time { return at }
+	monitor.poll(context.Background())
+	// One nanosecond before the cooldown ends: quiet. Turns older than 5 min are
+	// out of window by then, so keep a fresh turn present.
+	monitor.tokenStore.(*fakeTokenStore).results[0].TurnTimeline = append(tl,
+		tokens.TurnStats{Timestamp: first.Add(4 * time.Minute), Model: "claude-sonnet-4-5", Input: 1, CacheRead: 20_000_000})
+	at = first.Add(5*time.Minute - time.Nanosecond)
+	monitor.poll(context.Background())
+	// Exactly at the cooldown boundary: alerts again.
+	at = first.Add(5 * time.Minute)
+	monitor.poll(context.Background())
+
+	n := 0
+	for _, ty := range drainTypes(ch) {
+		if ty == "spend_rate" {
+			n++
+		}
+	}
+	assert.Equal(t, 2, n)
 }
