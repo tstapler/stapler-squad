@@ -96,7 +96,11 @@ func (s *SessionService) applyStatusTransition(msg *sessionv1.UpdateSessionReque
 		if err := s.RefuseIfWorktreeSharedWithOtherLiveSession(instance); err != nil {
 			return false, err
 		}
-		if err := instance.StopByUser(); err != nil {
+		stop := instance.StopByUser
+		if msg.GetForceStop() {
+			stop = instance.ForceStopByUser
+		}
+		if err := stop(); err != nil {
 			return false, classifyStopErr(err, "stop")
 		}
 		return true, nil

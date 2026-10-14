@@ -144,3 +144,64 @@ func TestCommitBeforeRemove_should_FailClosed_When_DirtyCheckErrors(t *testing.T
 	require.ErrorIs(t, err, ErrDirtyStateUnknown)
 	assert.FileExists(t, precious)
 }
+
+func TestForceStopByUser_should_StopAndKeepWorktree_When_DirtyCheckErrors(t *testing.T) {
+	t.Parallel()
+	inst, precious := brokenWorktreeInstance(t)
+	pm := &fakeStopByUserProcessManager{hasSession: true}
+	inst.processManager = pm
+
+	err := inst.ForceStopByUser()
+
+	require.NoError(t, err)
+	assert.Equal(t, Stopped, inst.Status)
+	assert.FileExists(t, precious, "force stop must never delete the worktree contents")
+	assert.True(t, pm.closeCalled, "force stop must still kill the tmux session")
+}
+
+func TestForceStopByUser_should_StillRefuse_When_TransitionIllegal(t *testing.T) {
+	t.Parallel()
+	inst, precious := brokenWorktreeInstance(t)
+	inst.Status = Restoring
+	pm := &fakeStopByUserProcessManager{hasSession: true}
+	inst.processManager = pm
+
+	err := inst.ForceStopByUser()
+
+	var transErr ErrInvalidTransition
+	require.ErrorAs(t, err, &transErr)
+	assert.False(t, pm.closeCalled)
+	assert.FileExists(t, precious)
+}
+
+// A known-dirty tree must still be committed by a forced stop: force only
+// bypasses the unknown-state case.
+func TestForceStopByUser_should_CommitDirtyTree_When_DirtyStateIsKnown(t *testing.T) {
+	t.Parallel()
+	repoPath := t.TempDir()
+	initTestRepoForReviewQueue(t, repoPath)
+	wt, branch, err := git.NewGitWorktree(repoPath, "force-known-dirty")
+	require.NoError(t, err)
+	require.NoError(t, wt.Setup())
+	t.Cleanup(func() { _ = wt.Cleanup() })
+	inst := &Instance{
+		Title: "force-known-dirty", Status: Running, IsWorktree: true,
+		Permissions: GetManagedPermissions(),
+		gitManager:  GitWorktreeManager{worktree: wt},
+	}
+	inst.started.Store(true)
+	inst.processManager = &fakeStopByUserProcessManager{hasSession: true}
+	require.NoError(t, os.WriteFile(filepath.Join(wt.GetWorktreePath(), "work.txt"), []byte("w"), 0o644))
+
+	require.NoError(t, inst.ForceStopByUser())
+
+	assert.Equal(t, Stopped, inst.Status)
+	repo, err := git.OpenRepo(repoPath)
+	require.NoError(t, err)
+	ref, err := repo.Reference(plumbing.NewBranchReferenceName(branch), true)
+	require.NoError(t, err)
+	commit, err := repo.CommitObject(ref.Hash())
+	require.NoError(t, err)
+	_, err = commit.File("work.txt")
+	require.NoError(t, err, "known-dirty work must be committed, not skipped")
+}

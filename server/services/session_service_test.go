@@ -1887,6 +1887,36 @@ func TestUpdateSession_should_StopSession_When_TargetIsStoppedFromActive(t *test
 	assert.Equal(t, sessionv1.SessionStatus_SESSION_STATUS_STOPPED, resp.Msg.Session.Status)
 }
 
+// TestUpdateSession_should_StopSession_When_ForceStopSetOnHealthySession verifies
+// force_stop is plumbed through the handler and is harmless on a session whose
+// dirty check works.
+func TestUpdateSession_should_StopSession_When_ForceStopSetOnHealthySession(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:       "force-stop-session",
+		Path:        "/tmp/test",
+		Status:      session.Active,
+		Program:     "claude",
+		Permissions: session.GetManagedPermissions(),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	stopped := sessionv1.SessionStatus_SESSION_STATUS_STOPPED
+	force := true
+	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:        "force-stop-session",
+		Status:    &stopped,
+		ForceStop: &force,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, sessionv1.SessionStatus_SESSION_STATUS_STOPPED, resp.Msg.Session.Status)
+}
+
 // TestUpdateSession_should_RejectStop_When_TransitionIsIllegal verifies that an
 // illegal target (Restoring -> Stopped, which has no entry in transitionDefs) is
 // classified as FailedPrecondition, not CodeInternal.
