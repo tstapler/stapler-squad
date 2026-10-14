@@ -75,7 +75,7 @@ func truncateHash(oid string) string {
 	return oid
 }
 
-// GetStatus reports the working tree's full status in 3 git spawns: one
+// GetStatus reports the working tree's full status in 4 git spawns: one
 // `git status --branch`, one `git log` for the commit description, and the two
 // `git diff --numstat` calls GetChangedFiles already needs. Branch/HEAD/
 // upstream/ahead-behind come from the "# branch.*" header --branch adds to
@@ -148,19 +148,14 @@ func (g *GitProvider) GetBranch() (string, error) {
 	}
 	ctx, cancel := gitCtx()
 	defer cancel()
-	name, err := gitprovider.Backend().CurrentBranch(ctx, g.loc())
-	if errors.Is(err, backend.ErrUnborn) {
-		// No commits yet: `rev-parse --abbrev-ref HEAD` fails, but HEAD still names the branch.
-		ref, refErr := gitprovider.Backend().HeadRef(ctx, g.loc())
-		if refErr != nil {
-			return "", err
-		}
-		name, err = backend.BranchName(strings.TrimPrefix(string(ref), "refs/heads/")), nil
-	}
+	// HeadRef (symbolic-ref) rather than CurrentBranch (rev-parse --abbrev-ref): the latter
+	// reports "heads/main" when a tag shares the branch's name and fails on an unborn repo.
+	ref, err := gitprovider.Backend().HeadRef(ctx, g.loc())
 	if err != nil && !errors.Is(err, backend.ErrDetachedHead) {
 		return "", err
 	}
-	branch := string(name)
+	name := strings.TrimPrefix(string(ref), "refs/heads/")
+	branch := name
 	if errors.Is(err, backend.ErrDetachedHead) {
 		// Full OID + truncateHash (not `rev-parse --short`) so this matches
 		// applyBranchHeader's fixed-length format exactly -- both write into

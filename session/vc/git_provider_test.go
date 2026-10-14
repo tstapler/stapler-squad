@@ -1032,6 +1032,77 @@ func TestGitProviderGetBranch_UnbornRepoReportsBranchName(t *testing.T) {
 	}
 }
 
+func TestGitProviderGetBranch_TagSharingBranchNameReportsBranch(t *testing.T) {
+	tmpDir := t.TempDir()
+	initGitRepoWithCommit(t, tmpDir)
+	branchOut, err := safeexecOutput(tmpDir, "branch", "--show-current")
+	if err != nil {
+		t.Fatalf("branch --show-current: %v", err)
+	}
+	if _, err := safeexecOutput(tmpDir, "tag", branchOut); err != nil {
+		t.Fatalf("git tag: %v", err)
+	}
+	provider, err := NewGitProvider(tmpDir)
+	if err != nil {
+		t.Fatalf("NewGitProvider() error = %v", err)
+	}
+
+	branch, err := provider.GetBranch()
+
+	if err != nil {
+		t.Fatalf("GetBranch() error = %v", err)
+	}
+	if branch != branchOut {
+		t.Errorf("GetBranch() = %q, want %q", branch, branchOut)
+	}
+}
+
+func safeexecOutput(dir string, args ...string) (string, error) {
+	cmd := safeexec.CommandContext(context.Background(), "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err
+}
+
+func TestGitProviderGetChangedFiles_RenameWithEditsMergesNumstat(t *testing.T) {
+	tmpDir := t.TempDir()
+	initGitRepoWithCommit(t, tmpDir)
+	body := "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n"
+	if err := os.WriteFile(filepath.Join(tmpDir, "old name.txt"), []byte(body), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "."}, {"commit", "-m", "add spaced"}, {"mv", "old name.txt", "new name.txt"}} {
+		if _, err := safeexecOutput(tmpDir, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "new name.txt"), []byte(body+"extra\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := safeexecOutput(tmpDir, "add", "."); err != nil {
+		t.Fatal(err)
+	}
+	provider, err := NewGitProvider(tmpDir)
+	if err != nil {
+		t.Fatalf("NewGitProvider() error = %v", err)
+	}
+
+	files, err := provider.GetChangedFiles()
+
+	if err != nil {
+		t.Fatalf("GetChangedFiles() error = %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("got %d files, want 1: %+v", len(files), files)
+	}
+	if files[0].Path != "new name.txt" || files[0].OldPath != "old name.txt" {
+		t.Errorf("paths = %q <- %q", files[0].Path, files[0].OldPath)
+	}
+	if files[0].Additions != 1 || files[0].Deletions != 0 {
+		t.Errorf("numstat = +%d -%d, want +1 -0", files[0].Additions, files[0].Deletions)
+	}
+}
+
 func TestFileChangesFromStatus(t *testing.T) {
 	tests := []struct {
 		name string
