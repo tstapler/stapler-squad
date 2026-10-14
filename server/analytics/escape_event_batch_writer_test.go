@@ -70,7 +70,7 @@ func TestFlushBatch_EnforcesPerSessionCap_DeletingOldestFirst(t *testing.T) {
 	w.flushBatch(ctx, batch(0, 4))
 	w.flushBatch(ctx, batch(4, 4)) // 8 rows total -> trim to the cap
 
-	got, err := client.EscapeEvent.Query().Order(escapeevent.ByWallTime()).All(ctx)
+	got, err := client.EscapeEvent.Query().Where(escapeevent.SessionID("s1")).Order(escapeevent.ByWallTime()).All(ctx)
 	require.NoError(t, err)
 	require.Len(t, got, cap)
 	seqs := make([]string, 0, len(got))
