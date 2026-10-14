@@ -239,3 +239,24 @@ func TestMCPCreateBacklogItem_should_CreateNothing_When_DependsOnBlockerMissing(
 	require.NoError(t, err)
 	assert.Empty(t, list, "a bad depends_on must fail before the item is created")
 }
+
+func TestMCPCreateBacklogItem_should_RejectBadDependsOnShape(t *testing.T) {
+	h, storage := newDepHandlers(t)
+	h.backlogSvc = nil
+	ctx := context.Background()
+
+	tooMany := make([]any, maxDependsOn+1)
+	for i := range tooMany {
+		tooMany[i] = missingItemUUID
+	}
+	for name, dependsOn := range map[string]any{"not an array": "abc", "too many": tooMany} {
+		res, err := h.createBacklogItem(ctx, makeToolReq(map[string]any{
+			"title": "dependent", "depends_on": dependsOn, "skip_triage": true,
+		}))
+		require.NoError(t, err, name)
+		assert.Contains(t, toolText(t, res), ErrInvalidArgument, name)
+	}
+	list, err := storage.ListBacklogItems(ctx, session.BacklogItemFilter{})
+	require.NoError(t, err)
+	assert.Empty(t, list)
+}

@@ -158,24 +158,34 @@ func (h *backlogHandlers) transitionBacklogItemStatus(ctx context.Context, req m
 	if expected == "" {
 		return errResult(ErrInvalidArgument, "expected_status is required", "Pass the status you last observed via get_backlog_item; the transition is rejected if the item has moved since."), nil
 	}
-	resp, err := h.backlogSvc.TransitionBacklogItemStatus(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+	resp, err := h.backlogSvc.TransitionBacklogItemStatusAs(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:         itemID,
 		TargetStatus:   target,
 		ExpectedStatus: expected,
-	}))
+	}), session.TriggeredByAgent)
 	if err != nil {
 		return connectErrResult("transition_backlog_item_status", err), nil
 	}
 	return mcpgo.NewToolResultText(fmt.Sprintf("Transitioned %s: %s -> %s.", itemID, expected, resp.Msg.GetItem().GetStatus())), nil
 }
 
+// maxDependsOn bounds create_backlog_item's per-call dependency fan-out.
+const maxDependsOn = 50
+
 // parseDependsOn validates create_backlog_item's optional depends_on list and
 // confirms each blocker exists, so a bad ID fails the call before any item is
 // created rather than leaving a half-linked item behind.
 func (h *backlogHandlers) parseDependsOn(ctx context.Context, args map[string]any) ([]string, *mcpgo.CallToolResult) {
-	raw, ok := args["depends_on"].([]any)
-	if !ok {
+	rawVal, present := args["depends_on"]
+	if !present || rawVal == nil {
 		return nil, nil
+	}
+	raw, ok := rawVal.([]any)
+	if !ok {
+		return nil, errResult(ErrInvalidArgument, "depends_on must be an array of backlog item UUIDs", "")
+	}
+	if len(raw) > maxDependsOn {
+		return nil, errResult(ErrInvalidArgument, fmt.Sprintf("depends_on has %d entries; the maximum is %d", len(raw), maxDependsOn), "")
 	}
 	seen := make(map[string]bool, len(raw))
 	var ids []string

@@ -691,6 +691,13 @@ func (s *BacklogService) attachDependencies(ctx context.Context, pb *sessionv1.B
 // still-unresolved blockers via one batched query. Best-effort like
 // attachDependencies.
 func (s *BacklogService) attachUnresolvedBlockers(ctx context.Context, items []*sessionv1.BacklogItem) {
+	attachUnresolvedBlockersTo(ctx, s.storage, items)
+}
+
+// attachUnresolvedBlockersTo is the storage-parameterised form shared with the
+// Watch stream, whose snapshot/event payloads would otherwise carry an empty
+// BlockedBy and make the UI drop its "blocked by" label on every live update.
+func attachUnresolvedBlockersTo(ctx context.Context, storage *session.Storage, items []*sessionv1.BacklogItem) {
 	if len(items) == 0 {
 		return
 	}
@@ -698,7 +705,7 @@ func (s *BacklogService) attachUnresolvedBlockers(ctx context.Context, items []*
 	for i, it := range items {
 		ids[i] = it.Id
 	}
-	blockers, err := s.storage.UnresolvedBlockersForItems(ctx, ids)
+	blockers, err := storage.UnresolvedBlockersForItems(ctx, ids)
 	if err != nil {
 		log.ErrorLog().Printf("[attachUnresolvedBlockers] batched blocker lookup failed: %v", err)
 		return
@@ -826,6 +833,16 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	ctx context.Context,
 	req *connect.Request[sessionv1.TransitionBacklogItemStatusRequest],
 ) (*connect.Response[sessionv1.TransitionBacklogItemStatusResponse], error) {
+	return s.TransitionBacklogItemStatusAs(ctx, req, session.TriggeredByUser)
+}
+
+// TransitionBacklogItemStatusAs is TransitionBacklogItemStatus with an explicit
+// audit actor, so MCP-initiated moves are recorded as agent-triggered.
+func (s *BacklogService) TransitionBacklogItemStatusAs(
+	ctx context.Context,
+	req *connect.Request[sessionv1.TransitionBacklogItemStatusRequest],
+	triggeredBy string,
+) (*connect.Response[sessionv1.TransitionBacklogItemStatusResponse], error) {
 	if s.storage == nil {
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
 	}
@@ -915,7 +932,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		}
 	}
 
-	updated, err := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId, to, precondition, session.TriggeredByUser)
+	updated, err := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId, to, precondition, triggeredBy)
 	if err != nil {
 		if errors.Is(err, session.ErrPreconditionFailed) {
 			return nil, connect.NewError(connect.CodeAborted, err)

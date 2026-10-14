@@ -2210,14 +2210,21 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 	}
 
 	log.InfoLog().Printf("[mcp:create_backlog_item] session=%s item=%s title=%q", callerUUID, created.ID, created.Title)
-	var depNote string
+	var depNote, depFailures string
 	for _, blocker := range dependsOn {
 		edge := session.BacklogItemDependencyEdge{BlockerID: blocker, BlockedID: created.ID}
 		if err := h.storage.AddBacklogItemDependency(ctx, edge); err != nil {
-			depNote += fmt.Sprintf(" Failed to add dependency on %s: %v.", blocker, err)
+			depFailures += fmt.Sprintf(" Failed to add dependency on %s: %v.", blocker, err)
 			continue
 		}
 		depNote += fmt.Sprintf(" Blocked by %s.", blocker)
+	}
+	if depFailures != "" {
+		// Item exists but is not fully gated: surface as an error naming it so the
+		// caller can fix the edges or delete it instead of assuming it is blocked.
+		return errResult(ErrInternalError,
+			fmt.Sprintf("Created backlog item %s but dependency setup failed.%s%s", created.ID, depNote, depFailures),
+			"Use add_backlog_item_dependency to retry the failed edges."), nil
 	}
 
 	triageTriggered := false

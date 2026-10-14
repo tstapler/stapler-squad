@@ -741,16 +741,23 @@ func (r *EntRepository) UnresolvedBlockersForItems(ctx context.Context, itemIDs 
 		byUUID[u] = id
 		parsed = append(parsed, u)
 	}
-	rows, err := r.client.BacklogItemDependency.Query().
-		Where(
-			backlogitemdependency.BlockedIDIn(parsed...),
-			backlogitemdependency.HasBlockerWith(backlogitem.StatusNotIn(TerminalStatusStrings()...)),
-		).
-		WithBlocker().
-		Order(ent.Asc(backlogitemdependency.FieldCreatedAt)).
-		All(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load unresolved blockers: %w", err)
+	// Chunk the IN list to stay under SQLite's bound-variable limit.
+	const chunkSize = 500
+	var rows []*ent.BacklogItemDependency
+	for start := 0; start < len(parsed); start += chunkSize {
+		end := min(start+chunkSize, len(parsed))
+		chunk, err := r.client.BacklogItemDependency.Query().
+			Where(
+				backlogitemdependency.BlockedIDIn(parsed[start:end]...),
+				backlogitemdependency.HasBlockerWith(backlogitem.StatusNotIn(TerminalStatusStrings()...)),
+			).
+			WithBlocker().
+			Order(ent.Asc(backlogitemdependency.FieldCreatedAt)).
+			All(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load unresolved blockers: %w", err)
+		}
+		rows = append(rows, chunk...)
 	}
 	for _, row := range rows {
 		if row.Edges.Blocker == nil {
