@@ -962,7 +962,9 @@ message UpdateSessionRequest {
   // cannot determine whether it has uncommitted changes). Only meaningful when
   // status is STOPPED. Skips the fail-closed dirty-state check solely when that
   // check errored; the worktree and branch are kept on disk. A worktree known
-  // to be dirty is still committed first.
+  // to be dirty is still committed first. Rejected with InvalidArgument unless
+  // status is STOPPED. The kept worktree is not protected from a later explicit
+  // session delete, which removes it without a dirty check.
   optional bool force_stop = 14;
 }
 

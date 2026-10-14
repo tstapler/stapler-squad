@@ -28,7 +28,7 @@ func classifyPauseResumeErr(err error, opDesc string) *connect.Error {
 	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to %s session: %w", opDesc, err))
 }
 
-// classifyStopErr maps a StopByUser() error to the appropriate connect error code,
+// classifyStopErr maps a StopByUser()/ForceStopByUser() error to the appropriate connect error code,
 // using the same permission/state-machine-rejection-vs-operational-failure split as
 // classifyPauseResumeErr.
 func classifyStopErr(err error, opDesc string) *connect.Error {
@@ -86,6 +86,9 @@ func applyTagsUpdate(msg *sessionv1.UpdateSessionRequest, instance *session.Inst
 // msg.Status is unset/UNSPECIFIED or already matches instance's current
 // status -- a no-op the caller treats as "nothing to record".
 func (s *SessionService) applyStatusTransition(msg *sessionv1.UpdateSessionRequest, instance *session.Instance) (bool, error) {
+	if msg.GetForceStop() && msg.GetStatus() != sessionv1.SessionStatus_SESSION_STATUS_STOPPED {
+		return false, connect.NewError(connect.CodeInvalidArgument, errors.New("force_stop requires status STOPPED"))
+	}
 	if msg.Status == nil || *msg.Status == sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
 		return false, nil
 	}

@@ -1887,34 +1887,65 @@ func TestUpdateSession_should_StopSession_When_TargetIsStoppedFromActive(t *test
 	assert.Equal(t, sessionv1.SessionStatus_SESSION_STATUS_STOPPED, resp.Msg.Session.Status)
 }
 
-// TestUpdateSession_should_StopSession_When_ForceStopSetOnHealthySession verifies
-// force_stop is plumbed through the handler and is harmless on a session whose
-// dirty check works.
-func TestUpdateSession_should_StopSession_When_ForceStopSetOnHealthySession(t *testing.T) {
+// TestUpdateSession_should_ForceStopBrokenWorktree_Only_When_ForceStopSet proves the
+// handler selects ForceStopByUser: without the flag a broken worktree is refused
+// (FailedPrecondition); with it the session stops. Files survive both calls.
+func TestUpdateSession_should_ForceStopBrokenWorktree_Only_When_ForceStopSet(t *testing.T) {
 	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
+	wtDir := t.TempDir()
+	precious := filepath.Join(wtDir, "precious.txt")
+	require.NoError(t, os.WriteFile(precious, []byte("uncommitted"), 0o644))
 	inst := &session.Instance{
 		Title:       "force-stop-session",
 		Path:        "/tmp/test",
 		Status:      session.Active,
 		Program:     "claude",
+		IsWorktree:  true,
 		Permissions: session.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
+	inst.SetGitWorktree(git.NewGitWorktreeFromStorage(t.TempDir(), wtDir, "force-stop-session", "branch", ""))
 	addInstanceToPoller(fix.poller, inst)
 
 	stopped := sessionv1.SessionStatus_SESSION_STATUS_STOPPED
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id: "force-stop-session", Status: &stopped,
+	}))
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
+	assert.FileExists(t, precious)
+
 	force := true
 	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
-		Id:        "force-stop-session",
-		Status:    &stopped,
-		ForceStop: &force,
+		Id: "force-stop-session", Status: &stopped, ForceStop: &force,
 	}))
 	require.NoError(t, err)
 	assert.Equal(t, sessionv1.SessionStatus_SESSION_STATUS_STOPPED, resp.Msg.Session.Status)
+	assert.FileExists(t, precious)
+}
+
+func TestUpdateSession_should_RejectForceStop_When_StatusIsNotStopped(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+	inst := &session.Instance{
+		Title: "force-stop-bad-status", Path: "/tmp/test", Status: session.Active, Program: "claude",
+		Permissions: session.GetManagedPermissions(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	force := true
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id: "force-stop-bad-status", ForceStop: &force,
+	}))
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
 }
 
 // TestUpdateSession_should_RejectStop_When_TransitionIsIllegal verifies that an
