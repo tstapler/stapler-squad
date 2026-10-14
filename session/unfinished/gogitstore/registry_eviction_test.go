@@ -8,6 +8,7 @@ package gogitstore
 // mechanism under test.
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -793,5 +794,48 @@ func TestEncodedObject_CachedHit_DoesNotProbeLooseObjectPath(t *testing.T) {
 	}
 	if probes := counting.looseObjectProbes() - before; probes != 0 {
 		t.Errorf("cached reads of %d objects made %d loose-object filesystem probes, want 0", len(hashes), probes)
+	}
+}
+
+// TestEncodedObject_CachedHit_KeepsNotFoundSemantics: the cache-first shortcut
+// must not change results — a cached object requested as the wrong type is
+// not-found, and one that has dropped out of the pack index (pruned/repacked
+// away) is not-found too rather than served from the cache.
+func TestEncodedObject_CachedHit_KeepsNotFoundSemantics(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not available")
+	}
+	mainRepo := filepath.Join(t.TempDir(), "main")
+	buildPackedFixture(t, mainRepo, 80)
+	_, commonFs, _, commonDirAbs, err := resolveGitFilesystems(mainRepo)
+	if err != nil {
+		t.Fatalf("resolveGitFilesystems: %v", err)
+	}
+	store := newSharedObjectStore(commonDirAbs, commonFs, cache.NewObjectLRU(cache.DefaultMaxSize), 0, false)
+	hashes := firstPackedHashes(t, store, 1)
+	if len(hashes) == 0 {
+		t.Fatal("fixture produced no packed objects")
+	}
+	h := hashes[0]
+	ws := &WorktreeStorer{shared: store}
+	defer func() { _ = ws.Close() }()
+	obj, err := ws.EncodedObject(plumbing.AnyObject, h) // warm the cache
+	if err != nil {
+		t.Fatalf("EncodedObject: %v", err)
+	}
+
+	wrong := plumbing.BlobObject
+	if obj.Type() == plumbing.BlobObject {
+		wrong = plumbing.CommitObject
+	}
+	if _, err := ws.EncodedObject(wrong, h); !errors.Is(err, plumbing.ErrObjectNotFound) {
+		t.Errorf("cached object requested as %s: err = %v, want ErrObjectNotFound", wrong, err)
+	}
+
+	store.mu.Lock()
+	store.indexSnapshot = nil // the pack no longer lists h (pruned or repacked away)
+	store.mu.Unlock()
+	if _, err := ws.EncodedObject(plumbing.AnyObject, h); !errors.Is(err, plumbing.ErrObjectNotFound) {
+		t.Errorf("object absent from the pack index: err = %v, want ErrObjectNotFound (cache must not resurrect it)", err)
 	}
 }

@@ -440,14 +440,19 @@ func (s *SharedObjectStore) EncodedObject(t plumbing.ObjectType, h plumbing.Hash
 // optional per-worktree packHandleCache (nil means "no caching, open a fresh
 // pack handle per call" — see getFromPackfile's doc comment).
 func (s *SharedObjectStore) encodedObject(t plumbing.ObjectType, h plumbing.Hash, handles *packHandleCache) (plumbing.EncodedObject, error) {
-	// Decoded-object cache first: getFromUnpacked opens (Lstat+Open+Close) the
-	// loose-object path before consulting it, a measured 5.2% of live CPU in
-	// os.Lstat. Objects are immutable by hash, so a hit is always valid.
-	if cached, found := s.objectCache.Get(h); found {
-		if t != plumbing.AnyObject && cached.Type() != t {
-			return nil, plumbing.ErrObjectNotFound
+	// Decoded-object cache first, for objects still in the in-memory pack index:
+	// getFromUnpacked opens (Lstat+Open+Close) the loose-object path before
+	// consulting the cache, a measured 5.2% of live CPU in os.Lstat. The pack-index
+	// check keeps the old not-found semantics for an object since pruned or
+	// repacked away (the cache alone would keep serving it); loose-only objects
+	// take the old path.
+	if cached, found := s.objectCache.Get(h); found && s.ensureIndex() == nil {
+		if _, _, inPack := s.findObjectInPackfile(h); inPack {
+			if t != plumbing.AnyObject && cached.Type() != t {
+				return nil, plumbing.ErrObjectNotFound
+			}
+			return cached, nil
 		}
-		return cached, nil
 	}
 	obj, err := s.getFromUnpacked(h)
 	if errors.Is(err, plumbing.ErrObjectNotFound) {
