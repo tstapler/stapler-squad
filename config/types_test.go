@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"math"
+	"testing"
+	"time"
+)
 
 func TestQuotaConfigOrDefault_should_FillAllDefaults_When_ZeroValueStruct(t *testing.T) {
 	cfg := QuotaConfig{}
@@ -209,5 +213,45 @@ func TestCreationStaleConfig_ThresholdMinutesOrDefault_should_ReturnConfiguredVa
 
 	if out != 20 {
 		t.Errorf("ThresholdMinutesOrDefault() = %v, want 20 (explicit value must survive defaulting)", out)
+	}
+}
+
+func TestCapacityConfig_SpendRate(t *testing.T) {
+	t.Parallel()
+	nan, inf := math.NaN(), math.Inf(1)
+	tests := []struct {
+		name        string
+		in          CapacityConfig
+		wantRate    float64
+		wantEnabled bool
+		wantWindow  time.Duration
+	}{
+		{"zero value takes defaults", CapacityConfig{}, 15, true, time.Hour},
+		{"explicit values kept", CapacityConfig{SpendRateAlertUSDPerHour: 40, SpendRateWindowMinutes: 30}, 40, true, 30 * time.Minute},
+		{"negative disables", CapacityConfig{SpendRateAlertUSDPerHour: -1}, 0, false, time.Hour},
+		{"NaN falls back to default", CapacityConfig{SpendRateAlertUSDPerHour: nan}, 15, true, time.Hour},
+		{"Inf falls back to default", CapacityConfig{SpendRateAlertUSDPerHour: inf}, 15, true, time.Hour},
+		{"window clamped low", CapacityConfig{SpendRateWindowMinutes: 1}, 15, true, 5 * time.Minute},
+		{"negative window clamped low", CapacityConfig{SpendRateWindowMinutes: -30}, 15, true, 5 * time.Minute},
+		{"window clamped high", CapacityConfig{SpendRateWindowMinutes: 100000}, 15, true, 24 * time.Hour},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rate, enabled := tc.in.SpendRateThreshold()
+			if rate != tc.wantRate || enabled != tc.wantEnabled {
+				t.Errorf("SpendRateThreshold() = (%v, %v), want (%v, %v)", rate, enabled, tc.wantRate, tc.wantEnabled)
+			}
+			if got := tc.in.SpendRateWindow(); got != tc.wantWindow {
+				t.Errorf("SpendRateWindow() = %v, want %v", got, tc.wantWindow)
+			}
+			def := tc.in.CapacityConfigOrDefault()
+			if def.SpendRateWindow() != tc.wantWindow {
+				t.Errorf("after defaults window = %v, want %v", def.SpendRateWindow(), tc.wantWindow)
+			}
+			if r2, e2 := def.SpendRateThreshold(); r2 != tc.wantRate || e2 != tc.wantEnabled {
+				t.Errorf("after defaults threshold = (%v, %v), want (%v, %v)", r2, e2, tc.wantRate, tc.wantEnabled)
+			}
+		})
 	}
 }
