@@ -71,6 +71,18 @@ func TestScrubHidesCredentials(t *testing.T) {
 	}
 }
 
+// Long failure output keeps its head and its tail: hooks print the cause last.
+func TestErrorOutputTruncationKeepsHeadAndTail(t *testing.T) {
+	long := "HEAD-MARKER " + strings.Repeat("x", 5000) + " TAIL-MARKER"
+	fake := newFake().on("push", long, exitErr{1})
+	err := cli.New(nil).Push(context.Background(), remoteAt(fake), backend.PushRequest{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "HEAD-MARKER")
+	assert.Contains(t, err.Error(), "TAIL-MARKER")
+	assert.Contains(t, err.Error(), "bytes omitted")
+	assert.Less(t, len(err.Error()), 2300)
+}
+
 // S4: a combined-output runner cannot be trusted with unmarked NUL-delimited data.
 func TestCombinedRunnerNulOutputNeverSilentlyWrong(t *testing.T) {
 	ctx := context.Background()

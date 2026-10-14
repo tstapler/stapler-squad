@@ -87,6 +87,8 @@ export interface LinkedSession {
   worktreeBranch?: string;
   /** Absolute path to the session's git worktree, if one exists. */
   worktreePath?: string;
+  /** Worktree HEAD at spawn — the commit this work session branched from. */
+  baseCommitSha?: string;
   /**
    * Pipeline mode slug this session actually ran under, frozen at session
    * start — "" means the built-in default mode (or a pre-Epic-1.6 session
@@ -426,12 +428,17 @@ export interface BacklogItemInput {
   prNumber?: number;
 }
 
+/** Mirrors the server's maxKnownRepoPaths (server/services/backlog_service_intent.go); the server is authoritative. */
+const MAX_KNOWN_REPO_PATHS = 20;
+
 /** LLM-structured read of a free-text message — see ParseBacklogItemIntent. */
 export interface ParsedBacklogItemDraft {
   title: string;
   description: string;
   acceptanceCriteria: string[];
   confidence: number;
+  /** Exact entry from the known-repo list sent with the request, or "" when none matched. */
+  suggestedRepoPath: string;
 }
 
 export interface ListBacklogItemsFilter {
@@ -478,6 +485,7 @@ function mapItemSession(s: ItemSessionProto): LinkedSession {
     estimatedCostUsd: s.estimatedCostUsd ?? 0,
     worktreeBranch: s.worktreeBranch || undefined,
     worktreePath: s.worktreePath || undefined,
+    baseCommitSha: s.baseCommitSha || undefined,
     pipelineModeSnapshot: s.pipelineModeSnapshot ?? "",
     pipelineModeSnapshotHash: s.pipelineModeSnapshotHash ?? "",
     endReason: s.endReason || undefined,
@@ -813,7 +821,7 @@ interface UseBacklogServiceReturn {
    * set response.error) so the caller can fall back to raw-text creation via
    * createBacklogItemFromChat — never throws.
    */
-  parseBacklogItemIntent: (message: string) => Promise<ParsedBacklogItemDraft | null>;
+  parseBacklogItemIntent: (message: string, knownRepoPaths?: string[]) => Promise<ParsedBacklogItemDraft | null>;
   importGitHubIssue: (issueUrl: string, options?: ImportGitHubIssueOptions) => Promise<ImportGitHubIssueResult | null>;
   /** Null on any RPC failure: the claim banner degrades to nothing. */
   checkCrossHostClaim: (externalUrl: string, options?: { localOnly?: boolean }) => Promise<CrossHostClaimStatus | null>;
@@ -1000,18 +1008,21 @@ export function useBacklogService(): UseBacklogServiceReturn {
 
   const parseBacklogItemIntent = useCallback(
     // repo_path is intentionally omitted: the omnibar has no "current repo"
-    // context available before parsing, and the request field is optional
-    // (see its proto doc) — the LLM parses from message text alone.
-    async (message: string): Promise<ParsedBacklogItemDraft | null> => {
+    // context available before parsing.
+    async (message: string, knownRepoPaths: string[] = []): Promise<ParsedBacklogItemDraft | null> => {
       if (!clientRef.current) return null;
       try {
-        const resp = await clientRef.current.parseBacklogItemIntent({ message });
+        const resp = await clientRef.current.parseBacklogItemIntent({
+          message,
+          knownRepoPaths: knownRepoPaths.slice(0, MAX_KNOWN_REPO_PATHS),
+        });
         if (resp.error || !resp.draft) return null;
         return {
           title: resp.draft.title,
           description: resp.draft.description,
           acceptanceCriteria: resp.draft.acceptanceCriteria,
           confidence: resp.draft.confidence,
+          suggestedRepoPath: resp.draft.suggestedRepoPath ?? "",
         };
       } catch (err) {
         console.error("[useBacklogService] parseBacklogItemIntent:", err);

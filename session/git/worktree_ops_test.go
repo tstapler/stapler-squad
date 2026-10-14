@@ -22,6 +22,25 @@ import (
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
+// createBranchNative creates branchName at HEAD through go-git, so a delayed "race winner" in a
+// retry-window test costs no fork (a forked git can stall past the loop's budget on a loaded host).
+func createBranchNative(t *testing.T, repoDir, branchName string) {
+	t.Helper()
+	repo, err := OpenRepo(repoDir)
+	if err != nil {
+		t.Errorf("open %s: %v", repoDir, err)
+		return
+	}
+	head, err := repo.Head()
+	if err != nil {
+		t.Errorf("head of %s: %v", repoDir, err)
+		return
+	}
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branchName), head.Hash())); err != nil {
+		t.Errorf("create branch %s: %v", branchName, err)
+	}
+}
+
 // corruptPackedRefs overwrites repoDir's .git/packed-refs with malformed content, forcing
 // repo.Reference() to return a non-ErrReferenceNotFound error for any branch that has no
 // loose ref (falls through to the packed-refs parser and fails there). A malformed *loose*
@@ -395,8 +414,7 @@ func TestBranchExistsAfterAddFailure_ReturnsTrue_When_BranchAppearsDuringRetryWi
 		// Past the loop's first two checks (attempt 0 has no pre-sleep; attempt 1
 		// sleeps once) but well within its total budget.
 		time.Sleep(2 * worktreeAddRetryDelay) //nolint:notimesleeptest must create the branch after the production retry loop's own wall-clock backoff (worktreeAddRetryDelay) has begun; no hook exposes loop progress
-		cmd := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", branchName)
-		_ = cmd.Run()
+		createBranchNative(t, repoDir, branchName)
 	}()
 
 	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-delayed-race-winner-layer1", branchName)
@@ -435,8 +453,7 @@ func TestBranchExistsAfterAddFailure_IncrementsRetryCounter_When_ItRetries(t *te
 			return obstest.SumCounter(t, obstest.CollectMetric(t, "git_worktree_retry_total")) > baseline
 		}
 		_ = wait.WaitForCondition(retried, wait.WaitConfig{Timeout: 10 * time.Second, PollInterval: 10 * time.Millisecond, Description: "first retry recorded"})
-		cmd := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", branchName)
-		_ = cmd.Run()
+		createBranchNative(t, repoDir, branchName)
 	}()
 
 	assert.True(t, wt.branchExistsAfterAddFailure(plumbing.NewBranchReferenceName(branchName)),
@@ -467,7 +484,8 @@ func TestBranchExistsAfterAddFailure_ReturnsFalse_When_BranchNeverAppears(t *tes
 // to the "worktree unlock"/"worktree remove -f" cleanup calls that also route through the
 // same spy.
 func isWorktreeAddNoBranchCall(call gitSpyRunCall) bool {
-	return len(call.args) == 4 && call.args[0] == "worktree" && call.args[1] == "add"
+	// The backend inserts "--" before the path: worktree add -- <path> <branch>.
+	return len(call.args) == 5 && call.args[0] == "worktree" && call.args[1] == "add" && call.args[2] == "--"
 }
 
 // newWorktreeAddFailureSpy returns a gitSpyCommandRunner that fails

@@ -16,7 +16,7 @@
 //   - entfullscan: detects ent query .All(ctx) calls with no .Where(...) filter
 //     anywhere in the enclosing function — a full-table scan
 //   - norawgitcli: forbids git CLI call sites (exec/safeexec "git", runner.Run
-//     "git", runGitCommand) outside session/git/backend/cli and session/gitwiring
+//     "git") outside session/git/backend/cli and session/gitwiring
 //   - norawgitopen: detects direct go-git PlainOpen/PlainOpenWithOptions calls
 //     outside session/git.OpenRepo, the approved wrapper
 //   - norawghrequest: detects direct http.NewRequest/NewRequestWithContext

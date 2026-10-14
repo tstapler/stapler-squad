@@ -556,6 +556,21 @@ func EffectiveDiagnoseNudgeEnabled(cfg *Config) bool {
 	return cfg.GetFeatureFlagWithDefault(DiagnoseNudgeFeatureFlag, false)
 }
 
+// AutonomousStallNudgeFeatureFlag gates the in-process nudge the autonomous
+// stall path may type into an idle work session instead of respawning it.
+// It is AND-ed with DiagnoseNudgeFeatureFlag, which stays the kill switch for
+// every autonomous pane write.
+const AutonomousStallNudgeFeatureFlag = "autonomous_stall_nudge_enabled"
+
+// AutonomousStallNudgeDefault is the shipped default: off until soaked.
+const AutonomousStallNudgeDefault = false
+
+// EffectiveAutonomousStallNudgeEnabled reports whether the stall path may nudge.
+// Read it at the decision instant, never cached.
+func EffectiveAutonomousStallNudgeEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(AutonomousStallNudgeFeatureFlag, AutonomousStallNudgeDefault)
+}
+
 // EffectiveTymuxEnabled reports whether the global tymux process-manager
 // backend default is active. Resolved fresh on every call (session.getSelectedBackend)
 // via SetTymuxGlobalOverride — live-settable, no process restart required.

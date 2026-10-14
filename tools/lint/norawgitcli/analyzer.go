@@ -13,7 +13,6 @@
 //   - os/exec or executor/safeexec Command/CommandContext/CommandContextPG
 //     whose command-name argument is the constant "git"
 //   - a Run(ctx, dir, "git", ...) call on a command runner (tmux.CommandRunner)
-//   - any call to a function or method named runGitCommand
 //
 // Limits (documented, not detected): function-value aliases (f := exec.Command),
 // non-constant command names, wrapper helpers that take the name as a parameter,
@@ -40,7 +39,7 @@ import (
 // Analyzer is the exported analysis.Analyzer for the norawgitcli check.
 var Analyzer = &analysis.Analyzer{
 	Name:     "norawgitcli",
-	Doc:      "forbids git CLI call sites (exec/safeexec constructors, runner.Run(..., \"git\", ...), runGitCommand) outside session/git/backend/cli, session/gitwiring and the test-fixture helpers testutil/gitfixture and session/git/internal/gittest; route git through session/git/backend instead",
+	Doc:      "forbids git CLI call sites (exec/safeexec constructors, runner.Run(..., \"git\", ...)) outside session/git/backend/cli, session/gitwiring and the test-fixture helpers testutil/gitfixture and session/git/internal/gittest; route git through session/git/backend instead",
 	Run:      run,
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 }
@@ -126,9 +125,6 @@ func rawGitCall(call *ast.CallExpr, pass *analysis.Pass) (string, bool) {
 	fn := calledFunc(call, pass)
 	if fn == nil {
 		return "", false
-	}
-	if fn.Name() == "runGitCommand" && fn.Pkg() != nil && isPackage(fn.Pkg(), "/session/git") {
-		return "runGitCommand", true
 	}
 	sig, ok := fn.Type().(*types.Signature)
 	if !ok {

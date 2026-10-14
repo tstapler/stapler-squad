@@ -462,8 +462,7 @@ func TestWorktreeSetup_RecreatesLockedInterruptedWorktree(t *testing.T) {
 	// Simulate an interrupted `worktree add`: lock the worktree as git itself would
 	// mid-checkout, then delete a real tracked file to simulate a half-populated
 	// directory left behind by the kill.
-	_, err = wt1.runGitCommand(repoDir, "worktree", "lock", "--reason", "initializing", path)
-	require.NoError(t, err)
+	runRealGit(t, repoDir, "worktree", "lock", "--reason", "initializing", path)
 	trackedFile := filepath.Join(path, "README.md")
 	require.NoError(t, os.Remove(trackedFile))
 

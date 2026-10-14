@@ -2499,6 +2499,43 @@ func (r *EntRepository) RecordDiagnoseNudgeAttemptIfBelowCap(ctx context.Context
 	return n > 0, nil
 }
 
+// ClaimDiagnoseNudgeSlotIfEligible is RecordDiagnoseNudgeAttemptIfBelowCap
+// plus the cooldown check, in the same UPDATE: count < claimLimit AND
+// (next_eligible IS NULL OR next_eligible <= now). Folding the cooldown into
+// the predicate means no concurrent claimer can pass a stale cooldown read.
+// A successful claim starts a new cooldown; cooldown <= 0 clears it instead.
+// claimed=false with a nil error covers no open row, cap reached and cooldown
+// active alike (fail closed).
+func (r *EntRepository) ClaimDiagnoseNudgeSlotIfEligible(ctx context.Context, itemID string, reason domain.StuckReason, claimLimit int32, now time.Time, cooldown time.Duration) (claimed bool, err error) {
+	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
+	if err != nil {
+		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+	}
+
+	update := r.client.BacklogStuckState.Update().
+		Where(
+			backlogstuckstate.ItemID(parsedID),
+			backlogstuckstate.Reason(string(reason)),
+			backlogstuckstate.ResolvedAtIsNil(),
+			backlogstuckstate.DiagnoseNudgeCountLT(claimLimit),
+			backlogstuckstate.Or(
+				backlogstuckstate.DiagnoseNextEligibleAtIsNil(),
+				backlogstuckstate.DiagnoseNextEligibleAtLTE(now),
+			),
+		).
+		AddDiagnoseNudgeCount(1)
+	if cooldown > 0 {
+		update = update.SetDiagnoseNextEligibleAt(now.Add(cooldown))
+	} else {
+		update = update.ClearDiagnoseNextEligibleAt()
+	}
+	n, err := update.Save(ctx)
+	if err != nil {
+		return false, fmt.Errorf("claim diagnose nudge slot %s/%s: %w", itemID, reason, err)
+	}
+	return n > 0, nil
+}
+
 // RecordRemediationRestartGrace records that itemID/reason's open row just
 // consumed its one-per-boot restart-grace pass (see evaluateRemediation):
 // sets grace_boot_time to bootTime WITHOUT touching remediation_attempts or

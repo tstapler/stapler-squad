@@ -266,9 +266,8 @@ func worktreeLooksAlive(path string) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	//nolint:norawgitcli // migrating, go-git-fork plan Epic 1.2 (route via session/git/backend)
-	cmd := safeexec.CommandContext(ctx, "git", "-C", path, "status", "--porcelain")
-	return cmd.Run() == nil
+	_, err := gitprovider.Backend().IsDirty(ctx, backend.Local{Root: backend.RepoRoot(path)}, backend.IntentDestructive)
+	return err == nil
 }
 
 func (s *SessionService) DeleteSession(

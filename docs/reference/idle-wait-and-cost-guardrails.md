@@ -20,9 +20,13 @@ An idle-wait turn uses only `Monitor`, `ListAgents`, `TaskStop`, `SendMessage`, 
 
 First trip: `/compact` plus an info notification. If the run trips again strictly after the compact: one high-priority notification and, for a backlog-linked session, the session is stopped with end reason `idle_wait_loop_escalation`. Sessions with no backlog role are notified only. The escalation fires once per loop; a real (non-idle) turn clears the state.
 
-## Token ceiling
+## Spend rate
 
-A critical `SESSION_TOKEN_CEILING` finding (`session/tokens/findings.go`) on a live session now also produces one notification per session, instead of surfacing only on the Insights page.
+A live session whose priced spend over the trailing `spend_rate_window_minutes`, scaled to USD/hour, exceeds `spend_rate_alert_usd_per_hour` produces one notification, then stays quiet for one window before it can alert again. A session younger than the window is divided by the full window, so a short burst is not extrapolated. Turns with an unpriced model are skipped, and a window with no priced turns never alerts.
+
+This replaced a per-session total-token notification, which fired on any long-running session regardless of how slowly it spent. The `SESSION_TOKEN_CEILING` finding still appears on the Insights page.
+
+The default of $15/hour sits between p90 ($13.52) and p95 ($17.58) of per-session peak 60-minute rates over 228 sessions in a 14-day window (2026-09-29 to 2026-10-13, from `~/.claude/projects` transcripts priced with `tokens.DefaultPricingTable`). Re-measure and adjust if your usage or model mix changes. A negative value disables the alert.
 
 ## Config keys (`capacity` in `config.json`)
 
@@ -33,3 +37,5 @@ A critical `SESSION_TOKEN_CEILING` finding (`session/tokens/findings.go`) on a l
 | `idle_wait_turn_ceiling` | 15 | Consecutive idle turns before compact |
 | `role_idle_wait_turn_ceiling` | `{"triage": 10}` | Per-role ceiling |
 | `idle_wait_max_minutes` | 30 | Wall-clock span of an idle run that trips the guardrail |
+| `spend_rate_alert_usd_per_hour` | 15 | Spend-rate alert line; negative disables |
+| `spend_rate_window_minutes` | 60 | Rolling window and per-session alert cooldown (clamped 5-1440) |

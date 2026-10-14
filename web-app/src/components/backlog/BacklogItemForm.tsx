@@ -67,6 +67,8 @@ interface BacklogItemFormProps {
   onSubmit: (data: BacklogItemInput) => Promise<void>;
   onCancel: () => void;
   isLoading?: boolean;
+  /** Repo path inferred by the intent parser; shows a dismissible "suggested" chip while repoPath still equals it. */
+  autoSuggestedRepoPath?: string;
 }
 
 interface FormErrors {
@@ -87,10 +89,12 @@ export function BacklogItemForm({
   onSubmit,
   onCancel,
   isLoading = false,
+  autoSuggestedRepoPath,
 }: BacklogItemFormProps) {
   const [title, setTitle] = useState(initialValues?.title ?? "");
   const [description, setDescription] = useState(initialValues?.description ?? "");
   const [repoPath, setRepoPath] = useState(initialValues?.repoPath ?? "");
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false);
   const [priority, setPriority] = useState<number>(initialValues?.priority ?? 3);
   const [skipPlanning, setSkipPlanning] = useState(initialValues?.skipPlanning ?? false);
   const [skipReviewGate, setSkipReviewGate] = useState(initialValues?.skipReviewGate ?? false);
@@ -573,6 +577,25 @@ export function BacklogItemForm({
             detectGitHubUrl
             data-testid="backlog-repo-path-input"
           />
+          {autoSuggestedRepoPath && !suggestionDismissed && repoPath === autoSuggestedRepoPath && (
+            <span className={styles.repoSuggestionChip} data-testid="repo-suggestion-chip">
+              Suggested from your sessions
+              <button
+                type="button"
+                className={styles.repoSuggestionDismiss}
+                data-testid="repo-suggestion-dismiss"
+                aria-label="Dismiss suggested repository"
+                disabled={busy}
+                onClick={() => {
+                  setSuggestionDismissed(true);
+                  setRepoPath("");
+                  document.getElementById("backlog-repo-path")?.focus();
+                }}
+              >
+                <span aria-hidden="true">✕</span>
+              </button>
+            </span>
+          )}
           {errors.repoPath && (
             <span id="backlog-repo-path-error" className={styles.errorMessage} role="alert">
               {errors.repoPath}

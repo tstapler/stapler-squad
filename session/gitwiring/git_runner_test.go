@@ -3,6 +3,7 @@ package gitwiring
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -95,4 +96,17 @@ func TestWithGitEnvUpgradesOnlyBareLocalRunner(t *testing.T) {
 	assert.IsType(t, gitRunner{}, withGitEnv(tmux.LocalRunner{}))
 	custom := &fakeLocal{}
 	assert.Same(t, custom, withGitEnv(custom))
+}
+
+func TestGitRunnerRunStdoutExcludesStderrAndKeepsItOnFailure(t *testing.T) {
+	r := gitRunner{}
+
+	out, err := r.RunStdout(context.Background(), "", "sh", "-c", "echo out; echo noise >&2")
+	require.NoError(t, err)
+	assert.Equal(t, "out\n", string(out), "stderr must not be spliced into stdout")
+
+	_, err = r.RunStdout(context.Background(), "", "sh", "-c", "echo fatal: nope >&2; exit 3")
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr)
+	assert.Equal(t, "fatal: nope\n", string(exitErr.Stderr))
 }

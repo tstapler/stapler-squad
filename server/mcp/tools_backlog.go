@@ -454,6 +454,27 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("\n")
 	}
 
+	// Base commit each work session branched from, so an operator can confirm
+	// work started from an up-to-date base. Best-effort like the sections around it.
+	if sessions, sessErr := h.storage.ListItemSessions(ctx, itemID); sessErr != nil {
+		log.WarningLog().Printf("get_backlog_item: failed to list item sessions for %s: %v", itemID, sessErr)
+	} else {
+		wroteHeader := false
+		for _, is := range sessions {
+			if is.Role != "work" || is.BaseCommitSha == "" {
+				continue
+			}
+			if !wroteHeader {
+				sb.WriteString("## Work Sessions\n")
+				wroteHeader = true
+			}
+			fmt.Fprintf(&sb, "- session %s: base commit %s\n", is.SessionUUID, is.BaseCommitSha)
+		}
+		if wroteHeader {
+			sb.WriteString("\n")
+		}
+	}
+
 	// Activity log: free-form notes posted via post_backlog_update (ADR-001).
 	// Best-effort — a lookup failure logs and skips the section rather than
 	// failing the whole get_backlog_item call, matching latestReviewVerdict's

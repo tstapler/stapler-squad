@@ -21,7 +21,7 @@ import (
 // stale directives), not the Story 0.1.1 audit's textual regexes, which also
 // match comments, testdata, a `kill` runner call and fixture helpers (36
 // constructor + 26 runner = 62 on 2026-10-10; the analyzer's 57 excludes those).
-const baselineCount = 27
+const baselineCount = 0
 
 const nolintDirective = "//nolint:norawgitcli"
 

@@ -94,7 +94,7 @@ type GitWorktree struct {
 	// since nothing else in the package ever read it. See ADR-002's
 	// addendum.
 	runner tmux.CommandRunner
-	// refBackend overrides the process-wide backend for ref reads; nil means gitprovider.Backend().
+	// refBackend overrides the process-wide backend for git operations; nil means gitprovider.Backend().
 	refBackend backend.Backend
 
 	// dirtyChecker computes IsDirtyWithHint's uncached "is the worktree dirty"

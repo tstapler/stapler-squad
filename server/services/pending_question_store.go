@@ -19,6 +19,9 @@ const (
 	pendingQuestionMaxTotal      = 256
 	pendingQuestionMaxPerSession = 8
 	pendingQuestionTTL           = 30 * time.Minute // INFERRED
+	// pendingParallelWindow bounds how far apart two questions may be and still
+	// count as asked in the same turn. INFERRED: parallel tool-call hooks fire together.
+	pendingParallelWindow        = 30 * time.Second
 	pendingQuestionMaxLabelRunes = 80
 	pendingQuestionMaxOptions    = 7
 	pendingQuestionTokenRunes    = 40
@@ -111,7 +114,10 @@ type PendingQuestionStore struct {
 	now       func() time.Time
 	entries   map[string]*pendingEntry // by question id
 	bySession map[string][]string      // session uuid -> question ids, oldest first
-	nextClaim uint64
+	// unreplyable holds when each session recently asked a question that was never
+	// registered (multi-select, unproofed). Only the parallel window matters.
+	unreplyable map[string][]time.Time
+	nextClaim   uint64
 }
 
 // NewPendingQuestionStore builds an empty store. now is injected by tests.
@@ -119,7 +125,10 @@ func NewPendingQuestionStore(now func() time.Time) *PendingQuestionStore {
 	if now == nil {
 		now = time.Now
 	}
-	return &PendingQuestionStore{now: now, entries: map[string]*pendingEntry{}, bySession: map[string][]string{}}
+	return &PendingQuestionStore{
+		now: now, entries: map[string]*pendingEntry{}, bySession: map[string][]string{},
+		unreplyable: map[string][]time.Time{},
+	}
 }
 
 // NewQuestionID returns 128 random bits as hex.
@@ -133,8 +142,9 @@ func NewQuestionID() string {
 
 // Register stores q (stamping CreatedAt). A live entry of the same session with
 // the same question text and labels is replaced; the oldest entry goes when a
-// bound is hit.
-func (s *PendingQuestionStore) Register(q PendingQuestion) {
+// bound is hit. It returns the session's PendingCount including q, taken in the
+// same critical section so a concurrent Register cannot split the two.
+func (s *PendingQuestionStore) Register(q PendingQuestion) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
@@ -158,6 +168,44 @@ func (s *PendingQuestionStore) Register(q PendingQuestion) {
 	}
 	s.entries[q.QuestionID] = &pendingEntry{q: q, state: pendingRegistered, expiry: now.Add(pendingQuestionTTL)}
 	s.bySession[q.SessionUUID] = append(s.bySession[q.SessionUUID], q.QuestionID)
+	return s.pendingCountLocked(q.SessionUUID, now)
+}
+
+// NoteUnreplyable records that the session asked a question that is not
+// registered, so a registered one arriving within the parallel window is not
+// mistaken for the only question on screen.
+func (s *PendingQuestionStore) NoteUnreplyable(sessionUUID string) {
+	if sessionUUID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	s.unreplyable[sessionUUID] = append(s.recentUnreplyableLocked(sessionUUID, now), now)
+}
+
+func (s *PendingQuestionStore) recentUnreplyableLocked(sessionUUID string, now time.Time) []time.Time {
+	kept := s.unreplyable[sessionUUID][:0]
+	for _, at := range s.unreplyable[sessionUUID] {
+		if now.Sub(at) <= pendingParallelWindow {
+			kept = append(kept, at)
+		}
+	}
+	if len(kept) == 0 {
+		delete(s.unreplyable, sessionUUID)
+	}
+	return kept
+}
+
+func (s *PendingQuestionStore) pendingCountLocked(sessionUUID string, now time.Time) int {
+	n := len(s.recentUnreplyableLocked(sessionUUID, now))
+	for _, id := range s.bySession[sessionUUID] {
+		e := s.entries[id]
+		if e != nil && e.state == pendingRegistered && now.Sub(e.q.CreatedAt) <= pendingParallelWindow {
+			n++
+		}
+	}
+	return n
 }
 
 func sameDialog(a, b session.QuestionDialog) bool {
@@ -182,6 +230,19 @@ func (s *PendingQuestionStore) Peek(k QuestionKey) (PendingQuestion, bool) {
 		return PendingQuestion{}, false
 	}
 	return e.q, true
+}
+
+// PendingCount is how many AskUserQuestion dialogs the session may be waiting on
+// at once: its registered, unclaimed questions plus unregistered ones, counted
+// only inside pendingParallelWindow. Parallel questions arrive together; an older
+// unanswered entry was answered in the terminal, which the store cannot observe,
+// and must not keep disabling Reply until its TTL.
+func (s *PendingQuestionStore) PendingCount(sessionUUID string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	s.expireLocked(now)
+	return s.pendingCountLocked(sessionUUID, now)
 }
 
 // Claim is one critical section: lookup by UUID, state and expiry check, then

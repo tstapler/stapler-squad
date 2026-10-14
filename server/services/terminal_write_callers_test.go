@@ -197,7 +197,7 @@ func realCallerConfig() callerConfig {
 	return callerConfig{
 		surface: set(
 			"Instance.SendKeys", "Instance.SendKeysN", "SubmitReplyOnce", "Instance.WriteToPTY", "Instance.TapEnter", "Instance.SendPrompt", "Instance.changeDirectory",
-			"SubmitDriverContent", "SubmitContentWithEnter", "SendKeysWithTimeout",
+			"SubmitDriverContent", "SubmitContentWithEnter", "SendKeysWithTimeout", "NudgeStalledAutonomousSession",
 			"ClaudeController.SendCommandImmediate", "ClaudeController.SendCommand",
 			"SessionService.steerUnderLease", "SessionService.steerInternal", "SessionService.steerAuthorized",
 			"SessionService.steerHiddenReviewViaBacklogLink", "SessionService.SteerActiveSession",

@@ -5,13 +5,25 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/git/backend/cli"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-// refReader is the backend ref reads go through: the injected one, else the process-wide one.
-func (g *GitWorktree) refReader() backend.Backend {
+// gitBackend is the backend git operations go through: the injected one, else a cli backend
+// over a runner injected with WithCommandRunner (a test double or fake; production only injects
+// LocalRunner or an SSH runner, which the process-wide backend already serves), else the
+// process-wide one.
+func (g *GitWorktree) gitBackend() backend.Backend {
 	if g.refBackend != nil {
 		return g.refBackend
+	}
+	if r := g.runner; r != nil && !r.IsRemote() {
+		switch r.(type) {
+		case tmux.LocalRunner, *tmux.LocalRunner:
+		default:
+			return cli.New(r)
+		}
 	}
 	return gitprovider.Backend()
 }
@@ -28,7 +40,7 @@ func (g *GitWorktree) locate(path string) backend.RepoLocation {
 func (g *GitWorktree) headMergeBase(branch string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	sha, err := g.refReader().MergeBase(ctx, g.locate(g.worktreePath), backend.MergeBaseRequest{Left: "HEAD", Right: backend.RefName(branch)})
+	sha, err := g.gitBackend().MergeBase(ctx, g.locate(g.worktreePath), backend.MergeBaseRequest{Left: "HEAD", Right: backend.RefName(branch)})
 	if err != nil {
 		return ""
 	}
