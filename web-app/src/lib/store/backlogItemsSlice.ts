@@ -97,6 +97,11 @@ const backlogItemsSlice = createSlice({
           if ((existing.allowedTransitions?.length ?? 0) > 0 && (incoming.allowedTransitions?.length ?? 0) === 0) {
             patch.allowedTransitions = existing.allowedTransitions;
           }
+          // blocking is only populated by GetBacklogItem/Add/Remove; Watch
+          // payloads never carry it, so a live event must not erase it.
+          if ((existing.blocking?.length ?? 0) > 0 && (incoming.blocking?.length ?? 0) === 0) {
+            patch.blocking = existing.blocking;
+          }
           if (existing.status === incoming.status && existing.planArtifactsPath && !incoming.planArtifactsPath) {
             patch.planArtifactsPath = existing.planArtifactsPath;
           }
