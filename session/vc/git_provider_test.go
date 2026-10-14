@@ -1010,6 +1010,28 @@ func TestGitProviderGetLogCommand(t *testing.T) {
 	}
 }
 
+func TestGitProviderGetBranch_UnbornRepoReportsBranchName(t *testing.T) {
+	tmpDir := t.TempDir()
+	cmd := safeexec.CommandContext(context.Background(), "git", "init", "-b", "trunk")
+	cmd.Dir = tmpDir
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	provider, err := NewGitProvider(tmpDir)
+	if err != nil {
+		t.Fatalf("NewGitProvider() error = %v", err)
+	}
+
+	branch, err := provider.GetBranch()
+
+	if err != nil {
+		t.Fatalf("GetBranch() error = %v", err)
+	}
+	if branch != "trunk" {
+		t.Errorf("GetBranch() = %q, want %q", branch, "trunk")
+	}
+}
+
 func TestFileChangesFromStatus(t *testing.T) {
 	tests := []struct {
 		name string

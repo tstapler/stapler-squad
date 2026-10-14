@@ -106,13 +106,15 @@ func (g *GitProvider) GetStatus() (*VCSStatus, error) {
 		g.applyBranchHeader(status, res)
 	}
 
-	if entries, logErr := gitprovider.Backend().Log(ctx, g.loc(), backend.LogRequest{Limit: 1}); logErr == nil && len(entries) > 0 {
+	logCtx, logCancel := gitCtx()
+	defer logCancel()
+	if entries, logErr := gitprovider.Backend().Log(logCtx, g.loc(), backend.LogRequest{Limit: 1}); logErr == nil && len(entries) > 0 {
 		status.Description = entries[0].Subject
 	}
 
 	// Changed files come from the status result already fetched above --
 	// avoids a second `git status` spawn.
-	files := g.changedFilesFromStatus(ctx, res)
+	files := g.changedFilesFromStatus(res)
 
 	// Categorize files
 	for _, f := range files {
@@ -147,6 +149,14 @@ func (g *GitProvider) GetBranch() (string, error) {
 	ctx, cancel := gitCtx()
 	defer cancel()
 	name, err := gitprovider.Backend().CurrentBranch(ctx, g.loc())
+	if errors.Is(err, backend.ErrUnborn) {
+		// No commits yet: `rev-parse --abbrev-ref HEAD` fails, but HEAD still names the branch.
+		ref, refErr := gitprovider.Backend().HeadRef(ctx, g.loc())
+		if refErr != nil {
+			return "", err
+		}
+		name, err = backend.BranchName(strings.TrimPrefix(string(ref), "refs/heads/")), nil
+	}
 	if err != nil && !errors.Is(err, backend.ErrDetachedHead) {
 		return "", err
 	}
@@ -185,7 +195,7 @@ func (g *GitProvider) GetChangedFiles() ([]FileChange, error) {
 	if err != nil {
 		return nil, err
 	}
-	return g.changedFilesFromStatus(ctx, res), nil
+	return g.changedFilesFromStatus(res), nil
 }
 
 // changedFilesFromStatus converts an already-fetched StatusResult into
@@ -197,7 +207,7 @@ func (g *GitProvider) GetChangedFiles() ([]FileChange, error) {
 // the status output always carries header lines, so only the parsed file
 // list says whether the repo is clean -- otherwise both `git diff --numstat`
 // calls would run unconditionally on every clean-repo poll.
-func (g *GitProvider) changedFilesFromStatus(ctx context.Context, res backend.StatusResult) []FileChange {
+func (g *GitProvider) changedFilesFromStatus(res backend.StatusResult) []FileChange {
 	files := fileChangesFromStatus(res)
 	if len(files) == 0 {
 		return nil
@@ -206,10 +216,10 @@ func (g *GitProvider) changedFilesFromStatus(ctx context.Context, res backend.St
 	// Best-effort per-file insertion/deletion counts. A numstat failure (e.g. no
 	// commits yet) should not prevent the file list itself from being returned.
 	var unstagedStats, stagedStats map[string]numstatEntry
-	if stats, statErr := g.getNumstat(ctx, false); statErr == nil {
+	if stats, statErr := g.getNumstat(false); statErr == nil {
 		unstagedStats = stats
 	}
-	if stats, statErr := g.getNumstat(ctx, true); statErr == nil {
+	if stats, statErr := g.getNumstat(true); statErr == nil {
 		stagedStats = stats
 	}
 
@@ -307,7 +317,9 @@ type numstatEntry struct {
 // getNumstat returns per-file insertion/deletion counts keyed by the file's
 // current (post-change) path. Pass staged=true for staged changes, false for
 // unstaged. Binary files report no counts, which are treated as 0.
-func (g *GitProvider) getNumstat(ctx context.Context, staged bool) (map[string]numstatEntry, error) {
+func (g *GitProvider) getNumstat(staged bool) (map[string]numstatEntry, error) {
+	ctx, cancel := gitCtx()
+	defer cancel()
 	rows, err := gitprovider.Backend().DiffNumstat(ctx, g.loc(), backend.DiffSpec{Staged: staged, Intent: backend.IntentDisplay})
 	if err != nil {
 		return nil, err

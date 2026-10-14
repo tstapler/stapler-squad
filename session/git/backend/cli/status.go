@@ -10,8 +10,10 @@ import (
 )
 
 // IsDirty ignores intent: the CLI is the authoritative answer for both Display and Destructive.
+// Untracked files are pinned on so a user's status.showUntrackedFiles=no cannot hide them from
+// a check that guards stash and discard decisions.
 func (b *Backend) IsDirty(ctx context.Context, loc backend.RepoLocation, _ backend.Intent) (bool, error) {
-	res, err := b.git(ctx, loc, backend.OpIsDirty, "status", "--porcelain")
+	res, err := b.git(ctx, loc, backend.OpIsDirty, "status", "--porcelain", "--untracked-files=normal")
 	if err != nil {
 		return false, err
 	}

@@ -153,3 +153,28 @@ func TestGitClient_RealGit_Worktrees(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, evalDir, evalMain)
 }
+
+// A local branch that cannot be switched to must error, not silently detach HEAD.
+func TestGitClient_RealGit_SwitchToBranchInOtherWorktreeFails(t *testing.T) {
+	_, run, c := newRealRepo(t)
+	run("worktree", "add", "-b", "feat", filepath.Join(t.TempDir(), "other"))
+
+	err := c.SwitchTo("feat", SwitchOptions{})
+
+	require.Error(t, err)
+	got, bmErr := c.GetCurrentBookmark()
+	require.NoError(t, bmErr)
+	assert.Equal(t, "main", got, "HEAD must not move")
+}
+
+// Untracked files count as changes even when the user config hides them from `git status`.
+func TestGitClient_RealGit_UncommittedChangesSeeUntrackedDespiteConfig(t *testing.T) {
+	dir, run, c := newRealRepo(t)
+	run("config", "status.showUntrackedFiles", "no")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "untracked"), []byte("u"), 0o644))
+
+	dirty, err := c.HasUncommittedChanges()
+
+	require.NoError(t, err)
+	assert.True(t, dirty)
+}

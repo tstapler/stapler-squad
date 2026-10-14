@@ -298,7 +298,8 @@ func (g *GitClient) switchBranch(req backend.SwitchRequest) error {
 
 // checkout moves to an existing branch, or detaches onto any other commit-ish
 // (tag, SHA) the way `git checkout <target>` does; SwitchBranch alone refuses
-// non-branches.
+// non-branches. A local branch that cannot be switched to (e.g. checked out in
+// another worktree) must fail rather than silently detach.
 func (g *GitClient) checkout(target string) error {
 	switchErr := g.switchBranch(backend.SwitchRequest{Branch: backend.BranchName(target)})
 	if switchErr == nil {
@@ -306,6 +307,10 @@ func (g *GitClient) checkout(target string) error {
 	}
 	ctx, cancel := gitCtx()
 	defer cancel()
+	isLocalBranch, err := gitprovider.Backend().RefExists(ctx, g.loc(), backend.RefName("refs/heads/"+target))
+	if err != nil || isLocalBranch {
+		return switchErr
+	}
 	if err := gitprovider.Backend().CheckoutCommit(ctx, g.loc(), backend.CommitSHA(target)); err != nil {
 		return switchErr
 	}

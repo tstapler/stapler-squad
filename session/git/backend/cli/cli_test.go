@@ -158,7 +158,7 @@ func argvCases() []struct {
 		{"IsDirty", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			_, e := b.IsDirty(c, l, backend.IntentDisplay)
 			return e
-		}, "status --porcelain", ""},
+		}, "status --porcelain --untracked-files=normal", ""},
 		{"Status", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			_, e := b.Status(c, l, backend.IntentDestructive)
 			return e
