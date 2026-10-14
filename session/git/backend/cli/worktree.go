@@ -66,10 +66,14 @@ func (b *Backend) AddWorktree(ctx context.Context, loc backend.RepoLocation, req
 	if err := optArg("path", string(req.Path)); err != nil {
 		return err
 	}
-	if err := optArg("branch", string(req.Branch)); err != nil {
-		return err
+	args := []string{"worktree", "add"}
+	if req.Branch != "" {
+		if err := optArg("branch", string(req.Branch)); err != nil {
+			return err
+		}
+		args = append(args, "-b", string(req.Branch))
 	}
-	args := []string{"worktree", "add", "-b", string(req.Branch), "--", string(req.Path)}
+	args = append(args, "--", string(req.Path))
 	if req.Base != "" {
 		if err := optArg("base", string(req.Base)); err != nil {
 			return err

@@ -28,7 +28,7 @@ func classifyPauseResumeErr(err error, opDesc string) *connect.Error {
 	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to %s session: %w", opDesc, err))
 }
 
-// classifyStopErr maps a StopByUser() error to the appropriate connect error code,
+// classifyStopErr maps a StopByUser()/ForceStopByUser() error to the appropriate connect error code,
 // using the same permission/state-machine-rejection-vs-operational-failure split as
 // classifyPauseResumeErr.
 func classifyStopErr(err error, opDesc string) *connect.Error {
@@ -96,7 +96,11 @@ func (s *SessionService) applyStatusTransition(msg *sessionv1.UpdateSessionReque
 		if err := s.RefuseIfWorktreeSharedWithOtherLiveSession(instance); err != nil {
 			return false, err
 		}
-		if err := instance.StopByUser(); err != nil {
+		stop := instance.StopByUser
+		if msg.GetForceStop() {
+			stop = instance.ForceStopByUser
+		}
+		if err := stop(); err != nil {
 			return false, classifyStopErr(err, "stop")
 		}
 		return true, nil
@@ -138,6 +142,10 @@ func (s *SessionService) UpdateSession(
 ) (*connect.Response[sessionv1.UpdateSessionResponse], error) {
 	if req.Msg.Id == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+	// Validate before any handler mutates the instance, so a rejected request leaves no partial state.
+	if req.Msg.GetForceStop() && req.Msg.GetStatus() != sessionv1.SessionStatus_SESSION_STATUS_STOPPED {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("force_stop requires status STOPPED"))
 	}
 
 	// Use the live poller list to avoid LoadInstances side-effects (Start() on Active

@@ -155,5 +155,6 @@ var updateSessionFieldClass = map[string]string{
 	"autonomous_mode":    "not a write: starts or stops the driver, which acquires the lease itself",
 	"steer_message":      "WRITE: typed into the pane (visible, or the audited O7 path)",
 	"note":               "not a write: metadata",
+	"force_stop":         "not a write: modifies how a stop is gated; types no marker",
 	"auto_approve":       "WRITE: SetAutoApprove restarts an Active pane and types a marker",
 }

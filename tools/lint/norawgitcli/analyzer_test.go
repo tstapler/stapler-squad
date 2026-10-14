@@ -11,8 +11,7 @@ import (
 func TestAnalyzer(t *testing.T) {
 	testdata := analysistest.TestData()
 	// a: violations, suppressions, stale directives, and the _test.go exemption;
-	// session/git carries the runGitCommand wrapper; clix is a near-miss that must
-	// be flagged; the other packages are sanctioned and must produce no diagnostics.
+	// session/git and clix are non-sanctioned look-alikes that must be flagged; the other packages are sanctioned and must produce no diagnostics.
 	analysistest.Run(t, testdata, norawgitcli.Analyzer,
 		"a",
 		"github.com/tstapler/stapler-squad/session/git",
