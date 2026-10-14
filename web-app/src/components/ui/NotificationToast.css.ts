@@ -366,7 +366,7 @@ export const deckPlacement = styleVariants({
     {
       bottom: "24px",
       // Clear of the 44px tray handle on the right edge.
-      right: "calc(60px + var(--terminal-scrollbar-width, 0px))",
+      right: "calc(var(--tray-handle-inset, 60px) + var(--terminal-scrollbar-width, 0px))",
       width: "360px",
       maxHeight: "calc(var(--viewport-height, 100dvh) - 48px)",
     },
@@ -376,7 +376,7 @@ export const deckPlacement = styleVariants({
     {
       top: "64px",
       // Clear of the 44px tray handle on the right edge.
-      right: "calc(60px + var(--terminal-scrollbar-width, 0px))",
+      right: "calc(var(--tray-handle-inset, 60px) + var(--terminal-scrollbar-width, 0px))",
       width: "360px",
       maxHeight: "calc(var(--viewport-height, 100dvh) - 96px)",
     },

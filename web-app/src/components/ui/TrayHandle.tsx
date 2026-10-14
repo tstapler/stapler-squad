@@ -1,7 +1,8 @@
 // +feature: notification-tray
 "use client";
 
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useRef, type ReactNode } from "react";
+import { useDraggableBell } from "@/lib/hooks/useDraggableBell";
 import { useDeckViewport } from "@/lib/contexts/deckViewportContext";
 import { useNotificationCommands, useNotificationState } from "@/lib/contexts/notificationContexts";
 import { countNeedsAttention } from "@/lib/utils/notificationGrouping";
@@ -39,17 +40,22 @@ export function useTrayCounts() {
 /**
  * The desktop edge handle: a fixed 44px-wide band at 35% from the top (O6),
  * capped "99+" visually with the exact count in its accessible name. It overlays
- * the terminal; nothing reflows. Not rendered on a phone (the entry chip is).
+ * the terminal; nothing reflows. Draggable (see useDraggableBell). On a phone it renders only when the opt-in floating bell is on.
  */
 export function TrayHandle() {
   const { isInnerScreen } = useDeckViewport();
   const { isPanelOpen, quietMode } = useNotificationState();
   const { togglePanel } = useNotificationCommands();
   const { unreadCount, needsAttention } = useTrayCounts();
-  if (!isInnerScreen) return null;
+  const { isVirtualKeyboardOpen } = useDeckViewport();
+  const ref = useRef<HTMLButtonElement>(null);
+  const bell = useDraggableBell(ref, !isInnerScreen);
+  // The phone's standing entry is the bottom nav; the floating bell is opt-in and yields to the keyboard.
+  if (!isInnerScreen && (!bell.floatingBellEnabled || isVirtualKeyboardOpen)) return null;
 
   return (
     <button
+      ref={ref}
       type="button"
       className={trayHandle}
       data-testid="tray-handle"
@@ -57,7 +63,19 @@ export function TrayHandle() {
       aria-expanded={isPanelOpen}
       aria-controls={TRAY_ID}
       aria-label={trayEntryLabel(unreadCount, needsAttention, quietMode)}
-      onClick={() => togglePanel()}
+      data-gesture-ignore
+      data-dragging={bell.dragging}
+      style={{
+        touchAction: "none",
+        userSelect: "none",
+        WebkitTouchCallout: "none",
+        ...bell.style,
+      }}
+      onClick={() => {
+        if (bell.consumeClickSuppression()) return;
+        togglePanel();
+      }}
+      {...bell.handlers}
       {...keepTerminalFocus}
     >
       <BellIcon />

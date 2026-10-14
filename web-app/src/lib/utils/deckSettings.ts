@@ -3,6 +3,8 @@
  * about this device's screen and thumb, not the account), and every read falls
  * back to the default when storage is missing, blocked or holds junk.
  */
+import { parseBellPos, type BellPos } from "./bellPosition";
+
 export const PINNED_COLLAPSE_MS = 8_000;
 export const PINNED_COLLAPSE_CHOICES_MS = [8_000, 15_000, 30_000] as const;
 export const PINNED_COLLAPSE_NEVER = "never";
@@ -81,4 +83,41 @@ export function readTrayPinned(): boolean {
 
 export function writeTrayPinned(on: boolean): void {
   writeRaw(TRAY_PINNED_STORAGE_KEY, on ? "true" : "false");
+}
+
+export const BELL_POS_STORAGE_KEY = "ssq.notifications.bellPos";
+export const FLOATING_BELL_STORAGE_KEY = "ssq.notifications.floatingBell";
+/** Fired on this window after a bell setting changes so a mounted handle re-reads it. */
+export const BELL_SETTINGS_EVENT = "ssq:bell-settings-changed";
+
+function notifyBellSettings(): void {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(BELL_SETTINGS_EVENT));
+}
+
+export function readBellPos(): BellPos | null {
+  return parseBellPos(readRaw(BELL_POS_STORAGE_KEY));
+}
+
+export function writeBellPos(pos: BellPos): void {
+  writeRaw(BELL_POS_STORAGE_KEY, JSON.stringify(pos));
+  notifyBellSettings();
+}
+
+export function resetBellPos(): void {
+  try {
+    if (typeof window !== "undefined") window.localStorage.removeItem(BELL_POS_STORAGE_KEY);
+  } catch {
+    // Storage blocked: nothing persisted, so there is nothing to reset.
+  }
+  notifyBellSettings();
+}
+
+/** Opt-in floating bell on a phone (the bottom nav's Alerts tab is the default entry). Off by default. */
+export function readFloatingBell(): boolean {
+  return readRaw(FLOATING_BELL_STORAGE_KEY) === "true";
+}
+
+export function writeFloatingBell(on: boolean): void {
+  writeRaw(FLOATING_BELL_STORAGE_KEY, on ? "true" : "false");
+  notifyBellSettings();
 }
