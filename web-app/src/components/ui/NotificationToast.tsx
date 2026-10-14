@@ -25,6 +25,8 @@ import {
   swipeCard,
   swipeCardDragging,
   compactCard,
+  compactApprovalCard,
+  compactPreview,
   compactTrailing,
   decisionPair,
   actionError,
@@ -198,7 +200,7 @@ export function NotificationToast({
           data-testid="toast-collapsed-chip"
           onClick={onExpandCollapsed}
         >
-          1 needs you - {displayTitle}
+          {notification.sessionName || displayTitle} needs you
         </button>
       </div>
     );
@@ -224,6 +226,7 @@ export function NotificationToast({
     stacked ? swipeCard : "",
     stacked && swipe.dragging ? swipeCardDragging : "",
     stacked && compact && !isApproval ? compactCard : "",
+    stacked && compact && isApproval ? compactApprovalCard : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -319,14 +322,20 @@ export function NotificationToast({
             <span className={typeLabel}>{notificationTypeLabel(notification.notificationType)}</span>
             {sessionHidden && <BackgroundChip />}
           </div>
-          <div className={subtitleRow}>
-            {subtitleText && (
-              <span className={sourceApp}>{subtitleText}</span>
-            )}
-            <span className={timestamp} title={new Date(notification.timestamp).toLocaleTimeString()}>
-              {relativeTime}
-            </span>
-          </div>
+          {compactRow ? (
+            <p className={compactPreview} data-testid="toast-preview">
+              {notification.message}
+            </p>
+          ) : (
+            <div className={subtitleRow}>
+              {subtitleText && (
+                <span className={sourceApp}>{subtitleText}</span>
+              )}
+              <span className={timestamp} title={new Date(notification.timestamp).toLocaleTimeString()}>
+                {relativeTime}
+              </span>
+            </div>
+          )}
         </div>
         {compactRow ? (
           <div className={compactTrailing}>
@@ -345,6 +354,7 @@ export function NotificationToast({
         )}
       </div>
 
+      {!compactRow && (
       <div className={body} data-slot="body">
         {phoneApproval ? (
           <ToastCommand
@@ -362,6 +372,7 @@ export function NotificationToast({
           </p>
         )}
       </div>
+      )}
 
       <div className={actions} data-slot="actions">
         {phoneApproval ? (

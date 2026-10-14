@@ -342,8 +342,8 @@ describe("Move all to tray (Story 3.4)", () => {
     expect(screen.queryByTestId("toast-undo-bar")).toBeNull();
   });
 
-  it("on a phone the undo replaces the chip row in place, also with the keyboard open", () => {
-    setPhone(true);
+  it("on a phone the undo replaces the chip row in place", () => {
+    setPhone();
     mount();
     addMany(3);
     expect(screen.getByTestId("toast-overflow-chip")).toBeInTheDocument();
@@ -404,7 +404,7 @@ describe("Mobile and keyboard positioning (Story 3.7)", () => {
     expect(document.documentElement.style.getPropertyValue("--mobile-stack-top-offset")).toBe("120px");
   });
 
-  it("shows one line chip '3 notifications - 1 needs you' with the keyboard open and no card", () => {
+  it("shows one strip 'Open tray - 1 needs you' with the keyboard open, no card and no Move all", () => {
     setPhone(true);
     mount();
     act(() => {
@@ -414,7 +414,8 @@ describe("Mobile and keyboard positioning (Story 3.7)", () => {
     });
     expect(screen.queryAllByTestId("toast")).toHaveLength(0);
     const chip = screen.getByTestId("toast-overflow-chip");
-    expect(chip).toHaveTextContent("3 notifications - 1 needs you");
+    expect(chip).toHaveTextContent("Open tray - 1 needs you");
+    expect(screen.queryByTestId("toast-move-all-to-tray")).toBeNull();
   });
 
   it("keeps terminal focus when a deck control is pressed", () => {
@@ -535,7 +536,7 @@ describe("Timers pause and pinned collapse (Story 3.5)", () => {
       advance(7_999);
       expect(screen.queryByTestId("toast-collapsed-chip")).toBeNull();
       advance(1);
-      expect(screen.getByTestId("toast-collapsed-chip")).toHaveTextContent("1 needs you - Title 0");
+      expect(screen.getByTestId("toast-collapsed-chip")).toHaveTextContent("Session 0 needs you");
       expect(notifications.notifications).toHaveLength(1);
       expect(notifications.notificationHistory[0].isPendingDecision).toBe(true);
     });
@@ -850,5 +851,26 @@ describe("deck rules from the UX criteria (TD-5, TD-9, TB-2, T-TS-32)", () => {
     const view = within(card).getByTestId("notification-view-session");
     expect(within(card).getByTestId("toast-move-to-tray").parentElement).toBe(view.parentElement);
     expect(card.querySelector('[data-slot="actions"]')?.contains(view)).toBe(false);
+  });
+
+  it("phone_card_should_be_one_row_with_the_preview_in_the_title_column_and_no_body_slot", () => {
+    setPhone();
+    mount();
+    act(() => notifications.addNotification(toast(0, { notificationType: "error", isPendingDecision: true })));
+    const card = screen.getByTestId("toast");
+    expect(card.querySelector('[data-slot="body"]')).toBeNull();
+    const preview = within(card).getByTestId("toast-preview");
+    expect(preview).toHaveTextContent("Message 0");
+    expect(within(card).getByText("Title 0").parentElement?.parentElement).toBe(preview.parentElement);
+  });
+
+  it("keeps the undo bar in the chip row's place so the deck does not grow", () => {
+    setPhone();
+    mount();
+    addMany(2);
+    const rowsBefore = screen.getByTestId("toast-stack").children.length;
+    fireEvent.click(screen.getByTestId("toast-move-all-to-tray"));
+    expect(screen.getByTestId("toast-undo-bar")).toBeInTheDocument();
+    expect(screen.getByTestId("toast-stack").children.length).toBeLessThanOrEqual(rowsBefore);
   });
 });

@@ -272,12 +272,13 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
   let placement: keyof typeof deckPlacement;
   if (!onPhone) placement = desktopAnchor === "top-right" ? "desktopTopRight" : "desktop";
   else placement = topOffset !== null ? "mobileTop" : "mobileBottom";
-  // With the keyboard open the cap is 0: one line, "N notifications - M needs you".
+  // With the keyboard open the cap is 0: one 40px strip with a verb, "Open tray - M need you".
+  const needYou = `${pinnedCount} ${pinnedCount === 1 ? "needs" : "need"} you`;
   const chipText =
     cap === 0
-      ? `${toasts.length} notification${toasts.length === 1 ? "" : "s"}${pinnedCount > 0 ? ` - ${pinnedCount} needs you` : ""}`
+      ? `Open tray - ${pinnedCount > 0 ? needYou : `${toasts.length} notification${toasts.length === 1 ? "" : "s"}`}`
       : `+${overflow} more`;
-  const chipLabel = cap === 0 ? `${chipText}, open tray` : `${overflow} more notifications, open tray`;
+  const chipLabel = cap === 0 ? chipText : `${overflow} more notifications, open tray`;
 
   const moveAll = (
     <button
@@ -291,7 +292,8 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
       Move all to tray ({toasts.length})
     </button>
   );
-  const showMoveAll = toasts.length >= 2;
+  // Not with the keyboard open: the strip is the only deck control then.
+  const showMoveAll = toasts.length >= 2 && cap > 0;
   const undo = movedToTray ? <UndoBar count={movedToTray.count} timers={timers} onUndo={undoMoveToTray} /> : null;
 
   const affordance = trayAffordanceVariant(overflow, toasts.length, viewport.isVirtualKeyboardOpen, hasTerminal);

@@ -609,18 +609,44 @@ export const compactTrailing = style({
   flexShrink: 0,
 });
 
-globalStyle(`${compactCard} > ${header}`, { padding: "8px 8px 4px 12px", gap: "8px" });
+// One row: border 2+2, header padding 4+4, content 44 (the Tray/View hit targets) = 56px.
+globalStyle(`${compactCard} > ${header}`, { padding: "4px 8px 4px 12px", gap: "8px", borderBottom: "none" });
+globalStyle(`${compactCard} ${typeLabel}`, { display: "none" });
 globalStyle(`${compactTrailing} > button`, { flex: "0 0 auto", padding: "0 12px", fontSize: "13px" });
-globalStyle(`${compactCard} [data-slot="body"]`, { padding: "0 12px 8px", maxHeight: "none", overflow: "hidden" });
-globalStyle(`${compactCard} [data-slot="body"] p`, {
-  display: "-webkit-box",
-  WebkitLineClamp: 1,
-  WebkitBoxOrient: "vertical",
-  overflow: "hidden",
-});
-globalStyle(`${compactCard} [data-slot="workdir"]`, { display: "none" });
 globalStyle(`${compactCard} [data-slot="actions"]`, { padding: "0 12px 8px", borderTop: "none" });
 globalStyle(`${compactCard} [data-slot="actions"]:empty`, { display: "none" });
+
+/** The one-line preview that sits under the title inside the compact row's title column. */
+export const compactPreview = style({
+  margin: 0,
+  fontSize: "12px",
+  lineHeight: "16px",
+  color: vars.color.textSecondary,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+});
+
+/**
+ * Phone approval card: the command gets a fixed three-line region (no nested scroller) and
+ * Approve/Deny stay in view. Border 4 + header 56 + body 8+99 + actions 8+44+8 = 227px.
+ */
+export const compactApprovalCard = style({});
+globalStyle(`${compactApprovalCard} > ${header}`, { padding: "4px 8px 4px 12px", gap: "8px", borderBottom: "none" });
+globalStyle(`${compactApprovalCard} ${typeLabel}`, { display: "none" });
+globalStyle(`${compactApprovalCard} [data-slot="body"]`, { padding: "4px 12px", maxHeight: "none", overflow: "visible" });
+globalStyle(`${compactApprovalCard} [data-slot="workdir"]`, { display: "none" });
+globalStyle(`${compactApprovalCard} [data-slot="actions"]`, { padding: "8px 12px", borderTop: "none", alignItems: "center" });
+
+/** Risk label and the show/hide toggle share the first row on a phone card; the command sits under both. */
+export const commandBlock = style({});
+globalStyle(`${compactApprovalCard} ${commandBlock}`, {
+  display: "grid",
+  gridTemplateColumns: "1fr auto",
+  alignItems: "center",
+});
+globalStyle(`${compactApprovalCard} ${commandBlock} > p`, { gridColumn: "1 / -1", gridRow: 2 });
+globalStyle(`${compactApprovalCard} ${commandBlock} > button`, { gridColumn: 2, gridRow: 1, alignSelf: "center" });
 
 export const commandText = style({
   margin: 0,
@@ -634,6 +660,11 @@ export const commandText = style({
   WebkitLineClamp: 4,
   WebkitBoxOrient: "vertical",
   overflow: "hidden",
+});
+// Collapsed phone command: exactly three 13px/1.4 lines (54.6px), never a scroller.
+globalStyle(`${compactApprovalCard} ${commandText}[data-expanded="false"]`, {
+  WebkitLineClamp: 3,
+  height: "calc(13px * 1.4 * 3)",
 });
 
 export const commandTextExpanded = style({
@@ -738,6 +769,10 @@ export const trayEntry = style({
     '&[data-content="more-row"], &[data-content="keyboard-chip"], &[data-undo="true"]': { flex: 1 },
   },
 });
+
+// Keyboard open: a single 40px strip so the terminal keeps the rest of the screen.
+globalStyle(`${trayEntry}[data-content="keyboard-chip"]`, { minHeight: "40px" });
+globalStyle(`${trayEntry}[data-content="keyboard-chip"] > button`, { minHeight: "40px" });
 
 /**
  * Phone: while the tray is open the deck steps aside (it stays mounted, so the entry
