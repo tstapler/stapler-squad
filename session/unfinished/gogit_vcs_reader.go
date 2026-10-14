@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -1124,11 +1125,13 @@ func (g *GoGitVCSReader) HasUncommitted(worktreePath string) (bool, error) {
 
 		// Phase 2: OS stat walk — entry.mu is NOT held here (released by hasUncommittedGoGitPhase).
 		indexedMap := make(map[string]struct{}, len(tracked))
+		stat := newDirStatter(worktreePath)
+		defer stat.close()
 		for _, tf := range tracked {
 			indexedMap[tf.name] = struct{}{}
-			info, serr := os.Lstat(filepath.Join(worktreePath, tf.name))
+			size, mtime, serr := stat.lstat(tf.name)
 			if serr != nil {
-				if os.IsNotExist(serr) {
+				if errors.Is(serr, fs.ErrNotExist) {
 					r := true // tracked file deleted
 					g.hasUncommittedCache.Store(worktreePath, hasUncommittedEntry{
 						result: r, expiry: time.Now().Add(diffStatCacheTTL),
@@ -1137,7 +1140,7 @@ func (g *GoGitVCSReader) HasUncommitted(worktreePath string) (bool, error) {
 				}
 				continue
 			}
-			if info.Size() != int64(tf.size) || !info.ModTime().Equal(tf.modifiedAt) {
+			if size != int64(tf.size) || !mtime.Equal(tf.modifiedAt) {
 				r := true
 				g.hasUncommittedCache.Store(worktreePath, hasUncommittedEntry{
 					result: r, expiry: time.Now().Add(diffStatCacheTTL),
