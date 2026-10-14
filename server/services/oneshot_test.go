@@ -193,7 +193,7 @@ func TestBatchCreateSessions_DuplicateTitlesRejected(t *testing.T) {
 	// the real "claude" binary (and everything it starts: MCP tool subprocesses,
 	// subagents) as an orphaned, unbounded background process.
 	testDir := t.TempDir()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	withIsolatedStateDirPath(t, testDir)
 	if err := os.WriteFile(filepath.Join(testDir, "config.json"),
 		[]byte(`{"default_program": "bash -c 'sleep 30'"}`), 0o644); err != nil {
 		t.Fatalf("write config.json: %v", err)

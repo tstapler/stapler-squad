@@ -14,7 +14,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
@@ -39,8 +38,8 @@ func TestCreateSession_CustomClaudeProgram_SettingsEnvReachesLaunchedProcess(t *
 	if _, err := exec.LookPath(tmuxBin); err != nil {
 		t.Skip("tmux not available")
 	}
-	envtest.NewIsolatedStateDir(t)
-	t.Setenv("HOME", t.TempDir())
+	withFakeHome(t)
+	withIsolatedStateDir(t)
 
 	tmp := t.TempDir()
 	argvOut := filepath.Join(tmp, "argv.txt")

@@ -105,7 +105,7 @@ func TestExportRulesToAntigravitySettings_should_WriteOwnerOnlyFile(t *testing.T
 // under the lock, so the last export to write reflects the last database change.
 func TestExportAntigravityRulesFromDB_should_NotResurrectDeletedRule_When_ExportsOverlap(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	withFakeHomePath(t, home)
 
 	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(t.TempDir(), "rules.db")))
 	require.NoError(t, err)

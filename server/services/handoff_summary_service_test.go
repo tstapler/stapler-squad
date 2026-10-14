@@ -49,7 +49,7 @@ func writeHandoffConversationFixture(t *testing.T, sessionID string) {
 	t.Helper()
 
 	tempHome := t.TempDir()
-	t.Setenv("HOME", tempHome)
+	withFakeHomePath(t, tempHome)
 
 	projectDir := filepath.Join(tempHome, ".claude", "projects", "test-project")
 	require.NoError(t, os.MkdirAll(projectDir, 0o755))
@@ -154,7 +154,7 @@ func TestGetHandoffSummary_LeavesFreshGeneratingRowUnchanged(t *testing.T) {
 
 func TestTriggerHandoffSummary_ReturnsFailedPreconditionWhenDisabled(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", dir)
+	withIsolatedStateDirPath(t, dir)
 	configPath := filepath.Join(dir, "config.json")
 	require.NoError(t, os.WriteFile(configPath, []byte(`{"handoff_summary": {"enabled": false}}`), 0600))
 
@@ -255,7 +255,7 @@ func TestTriggerHandoffSummary_DispatchesAsyncAndReturnsGeneratingRow(t *testing
 // race this test's own ent-client cleanup.
 func TestTriggerHandoffSummary_ReturnsGeneratingResponse_When_NoRowExistsYet(t *testing.T) {
 	tempHome := t.TempDir()
-	t.Setenv("HOME", tempHome)
+	withFakeHomePath(t, tempHome)
 
 	entClient := newTestHandoffSummaryEntClient(t)
 	gen := session.NewHandoffSummaryGenerator(entClient, &fakePoolClient{})

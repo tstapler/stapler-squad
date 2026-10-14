@@ -15,7 +15,6 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
@@ -696,7 +695,7 @@ func TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession(t *testing.T) {
 	)
 	// One isolated config dir shared by the write (UpsertProgramConfig) and the
 	// read (CreateSession -> resolveExtraEnvVars -> config.LoadConfig).
-	envtest.NewIsolatedStateDir(t)
+	withIsolatedStateDir(t)
 
 	ctx := context.Background()
 	_, err := NewDefaultsService().UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{

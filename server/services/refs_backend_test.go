@@ -122,7 +122,7 @@ func TestGitLogSummary_EmptyOnErrorOrMissingInput(t *testing.T) {
 func listBranchesVia(t *testing.T, includeRemote bool) (*connect.Response[sessionv1.ListBranchesResponse], error) {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	withFakeHomePath(t, home)
 	repo := filepath.Join(home, "repo")
 	require.NoError(t, os.Mkdir(repo, 0o755))
 	return NewWorkspaceService(nil, nil).ListBranches(context.Background(),

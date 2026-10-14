@@ -286,7 +286,7 @@ func TestResolveSessionPath_should_ErrorNotFallBackToRepoPath_When_GitManagedWor
 	// deterministically: os.MkdirAll(worktreesDir, ...) errors when a path
 	// component already exists as a regular file instead of a directory.
 	testDir := t.TempDir()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	withIsolatedStateDirPath(t, testDir)
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "worktrees"), []byte("not a directory"), 0o644))
 
 	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug", "")
