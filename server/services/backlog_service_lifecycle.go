@@ -698,7 +698,7 @@ func (s *BacklogService) attachUnresolvedBlockers(ctx context.Context, items []*
 // Watch stream, whose snapshot/event payloads would otherwise carry an empty
 // BlockedBy and make the UI drop its "blocked by" label on every live update.
 func attachUnresolvedBlockersTo(ctx context.Context, storage *session.Storage, items []*sessionv1.BacklogItem) {
-	if len(items) == 0 {
+	if storage == nil || len(items) == 0 {
 		return
 	}
 	ids := make([]string, len(items))
