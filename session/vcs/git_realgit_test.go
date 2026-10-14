@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -57,15 +58,21 @@ func TestGitClient_RealGit_StatusAndUncommittedChanges(t *testing.T) {
 }
 
 func TestGitClient_RealGit_RevisionsAndBookmarks(t *testing.T) {
-	_, run, c := newRealRepo(t)
+	dir, run, c := newRealRepo(t)
 	run("branch", "other")
+	// CI exports GIT_AUTHOR_NAME, which overrides the repo's user.name, so ask git who the author is.
+	authorCmd := safeexec.CommandContext(context.Background(), "git", "log", "-1", "--format=%an")
+	authorCmd.Dir = dir
+	authorOut, err := authorCmd.Output()
+	require.NoError(t, err)
+	wantAuthor := strings.TrimSpace(string(authorOut))
 
 	rev, err := c.GetCurrentRevision()
 	require.NoError(t, err)
 	assert.Len(t, rev.ID, 40)
 	assert.NotEmpty(t, rev.ShortID)
 	assert.Equal(t, "init", rev.Description)
-	assert.Equal(t, "Ada", rev.Author)
+	assert.Equal(t, wantAuthor, rev.Author)
 	assert.False(t, rev.Timestamp.IsZero())
 	assert.True(t, rev.IsCurrent)
 	assert.ElementsMatch(t, []string{"main", "other"}, rev.Bookmarks)
