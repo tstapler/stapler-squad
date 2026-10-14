@@ -1094,13 +1094,14 @@ func (g *GoGitVCSReader) hasUncommittedGoGitPhase(entry *cachedRepo, worktreePat
 // modified file in full.
 
 func (g *GoGitVCSReader) HasUncommitted(worktreePath string) (bool, error) {
-	defer g.guardInvalidation(worktreePath)()
 	if v, ok := g.hasUncommittedCache.Load(worktreePath); ok {
 		if e := v.(hasUncommittedEntry); time.Now().Before(e.expiry) {
 			return e.result, nil
 		}
 	}
 
+	// After the cache check: the guard allocates, and a hit must stay alloc-free.
+	defer g.guardInvalidation(worktreePath)()
 	result, sfErr := sfDo(&g.hasUncommittedSF, worktreePath, func() (bool, error) {
 		entry, err := g.openRepoEntry(worktreePath)
 		if err != nil {
@@ -1212,7 +1213,6 @@ func hasUntrackedFilesRec(root, dir string, indexed map[string]struct{}, matcher
 // then count commits between each tip and the merge base. This bounds the
 // walk to the diverged portion of history rather than the full reachable set.
 func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error) {
-	defer g.guardInvalidation(worktreePath)()
 	cacheKey := worktreePath + "\x00" + base
 	if v, ok := g.aheadBehindCache.Load(cacheKey); ok {
 		if e := v.(aheadBehindEntry); time.Now().Before(e.expiry) {
@@ -1221,6 +1221,8 @@ func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error
 	}
 
 	type abResult struct{ ahead, behind int }
+	// After the cache check: the guard allocates, and a hit must stay alloc-free.
+	defer g.guardInvalidation(worktreePath)()
 	result, err := sfDo(&g.aheadBehindSF, cacheKey, func() (abResult, error) {
 		entry, openErr := g.openRepoEntry(worktreePath)
 		if openErr != nil {
@@ -1277,7 +1279,6 @@ func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error
 }
 
 func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]string, error) {
-	defer g.guardInvalidation(worktreePath)()
 	cacheKey := fmt.Sprintf("%s\x00%s\x00%d", worktreePath, base, max)
 	if v, ok := g.commitMessagesCache.Load(cacheKey); ok {
 		if e := v.(commitMessagesEntry); time.Now().Before(e.expiry) {
@@ -1285,6 +1286,8 @@ func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]s
 		}
 	}
 
+	// After the cache check: the guard allocates, and a hit must stay alloc-free.
+	defer g.guardInvalidation(worktreePath)()
 	msgs, err := sfDo(&g.commitMessagesSF, cacheKey, func() ([]string, error) {
 		entry, openErr := g.openRepoEntry(worktreePath)
 		if openErr != nil {
@@ -1426,12 +1429,13 @@ func (g *GoGitVCSReader) ForgetWorktree(worktreePath string) {
 // calls from concurrent scanner workers, which was the top mutex hotspot (537M
 // cycles, 13,941 events in profiling).
 func (g *GoGitVCSReader) DiffShortstat(worktreePath string) (DiffStat, error) {
-	defer g.guardInvalidation(worktreePath)()
 	if v, ok := g.diffStatCache.Load(worktreePath); ok {
 		if e := v.(diffStatEntry); time.Now().Before(e.expiry) {
 			return e.result, nil
 		}
 	}
+	// After the cache check: the guard allocates, and a hit must stay alloc-free.
+	defer g.guardInvalidation(worktreePath)()
 	result, err := sfDo(&g.diffStatSF, worktreePath, func() (DiffStat, error) {
 		// diffShortstatUncached acquires entry.mu internally — do NOT add an outer lock here.
 		// It does not call DiffShortstat, so there is no recursive sfDo path for this key.
