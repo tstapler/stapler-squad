@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -986,5 +987,111 @@ func TestWorktreeGitDir_RelativeGitdirLine_ResolvedAgainstRepoPath(t *testing.T)
 	want := filepath.Join(repo, ".git", "worktrees", "relative-case")
 	if got != want {
 		t.Errorf("worktreeGitDir(%q) = %q, want %q (relative gitdir line resolved against repoPath)", repo, got, want)
+	}
+}
+
+// TestCachedReachableSet_ReusedWhileBaseUnchanged guards PerfFix-1: a base
+// hash's ancestry is immutable, so the set must be reused (no re-walk) until
+// the base moves, and a moved base must replace — not accumulate — the entry.
+func TestCachedReachableSet_ReusedWhileBaseUnchanged(t *testing.T) {
+	repo := initRepoInternal(t)
+	r := &GoGitVCSReader{}
+	entry, err := r.openRepoEntry(repo)
+	if err != nil {
+		t.Fatalf("openRepoEntry: %v", err)
+	}
+	headHash := func() plumbing.Hash {
+		t.Helper()
+		head, headErr := entry.repo.Head()
+		if headErr != nil {
+			t.Fatalf("Head: %v", headErr)
+		}
+		return head.Hash()
+	}
+	mapID := func(m map[plumbing.Hash]bool) uintptr { return reflect.ValueOf(m).Pointer() }
+
+	first := headHash()
+	set1, err := r.cachedReachableSet(entry, repo, first)
+	if err != nil {
+		t.Fatalf("cachedReachableSet: %v", err)
+	}
+	set2, err := r.cachedReachableSet(entry, repo, first)
+	if err != nil {
+		t.Fatalf("cachedReachableSet (repeat): %v", err)
+	}
+	if mapID(set1) != mapID(set2) {
+		t.Error("same base hash re-walked history; want the cached set reused")
+	}
+
+	if err := os.WriteFile(filepath.Join(repo, "next.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitRunInternal(t, repo, "add", ".")
+	gitRunInternal(t, repo, "commit", "-m", "move base")
+	second := headHash()
+	set3, err := r.cachedReachableSet(entry, repo, second)
+	if err != nil {
+		t.Fatalf("cachedReachableSet (moved base): %v", err)
+	}
+	if !set3[second] || mapID(set3) == mapID(set1) {
+		t.Error("moved base reused the stale set; want a fresh walk")
+	}
+
+	entries := 0
+	r.reachableSetCache.Range(func(_, _ any) bool { entries++; return true })
+	if entries != 1 {
+		t.Errorf("reachableSetCache holds %d entries after base moved, want 1 per worktree", entries)
+	}
+
+	// Re-adding an expiry would reintroduce the 30s full-history re-walk.
+	for f := range reflect.TypeFor[reachableSetEntry]().Fields() {
+		if f.Type == reflect.TypeFor[time.Time]() {
+			t.Errorf("reachableSetEntry.%s is a time.Time; the set is immutable per base hash and must not expire", f.Name)
+		}
+	}
+}
+
+// TestScannerInvalidateRepo_EvictsReaderCachesButKeepsReachableSet guards the
+// event-driven eviction: a .git change event must drop the reader's TTL-cached
+// results for the repo and its linked worktrees so the rescan re-populates them
+// from the new state, while the hash-validated reachable set survives (evicting
+// it per commit would repeat the 50k-commit walk). RemoveRepo then drops it.
+func TestScannerInvalidateRepo_EvictsReaderCachesButKeepsReachableSet(t *testing.T) {
+	repo := initRepoInternal(t)
+	linked := filepath.Join(t.TempDir(), "linked")
+	r := &GoGitVCSReader{}
+	s := NewScannerWithReader(nil, nil, r)
+	s.indexRepoWorktree(repo, linked)
+
+	for _, p := range []string{repo, linked} {
+		r.diffStatCache.Store(p, diffStatEntry{expiry: time.Now().Add(time.Hour)})
+		r.hasUncommittedCache.Store(p, hasUncommittedEntry{expiry: time.Now().Add(time.Hour)})
+		r.aheadBehindCache.Store(p+"\x00main", aheadBehindEntry{expiry: time.Now().Add(time.Hour)})
+		r.commitMessagesCache.Store(p+"\x00main\x005", commitMessagesEntry{expiry: time.Now().Add(time.Hour)})
+		r.reachableSetCache.Store(p, reachableSetEntry{})
+	}
+	r.diffStatCache.Store("/other/worktree", diffStatEntry{expiry: time.Now().Add(time.Hour)})
+
+	count := func(m *sync.Map) (n int) {
+		m.Range(func(_, _ any) bool { n++; return true })
+		return n
+	}
+
+	s.invalidateRepo(repo)
+	if n := count(&r.diffStatCache); n != 1 {
+		t.Errorf("diffStatCache holds %d entries, want only the unrelated worktree's", n)
+	}
+	for name, m := range map[string]*sync.Map{"hasUncommitted": &r.hasUncommittedCache, "aheadBehind": &r.aheadBehindCache, "commitMessages": &r.commitMessagesCache} {
+		if n := count(m); n != 0 {
+			t.Errorf("%sCache holds %d entries after invalidateRepo, want 0", name, n)
+		}
+	}
+	if n := count(&r.reachableSetCache); n != 2 {
+		t.Errorf("reachableSetCache holds %d entries after invalidateRepo, want 2 (hash-validated, kept)", n)
+	}
+
+	s.RemoveRepo(repo)
+	if n := count(&r.reachableSetCache); n != 0 {
+		t.Errorf("reachableSetCache holds %d entries after RemoveRepo, want 0", n)
 	}
 }

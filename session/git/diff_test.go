@@ -122,3 +122,30 @@ func TestGitWorktreeDiff_SanitizesInvalidUTF8_When_DiffContainsNonUTF8Bytes(t *t
 	assert.True(t, utf8.ValidString(stats.Content), "Diff().Content must always be valid UTF-8")
 	assert.NotEmpty(t, stats.Content)
 }
+
+// TestUntrackedWorktreePaths_ReusesCachedGitignoreUntilReset guards the CPU fix
+// for the diff-refresh path: ignore files must be served from gitignoreFS, not
+// re-read and re-parsed on every call. A .gitignore edit on disk stays invisible
+// until the cache is reset (what InvalidateDirtyCache does on commit/push).
+func TestUntrackedWorktreePaths_ReusesCachedGitignoreUntilReset(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("skip.txt\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "skip.txt"), []byte("x"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "keep.txt"), []byte("x"), 0o644))
+	wt := &GitWorktree{worktreePath: dir}
+
+	paths, err := wt.untrackedWorktreePaths(nil)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{".gitignore", "keep.txt"}, paths)
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), nil, 0o644))
+	paths, err = wt.untrackedWorktreePaths(nil)
+	require.NoError(t, err)
+	assert.NotContains(t, paths, "skip.txt", "ignore patterns were re-read from disk instead of the cache")
+
+	wt.gitignoreFS.Reset()
+	paths, err = wt.untrackedWorktreePaths(nil)
+	require.NoError(t, err)
+	assert.Contains(t, paths, "skip.txt", "reset must force a fresh read of the ignore files")
+}

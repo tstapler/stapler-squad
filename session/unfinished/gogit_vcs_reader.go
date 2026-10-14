@@ -204,9 +204,11 @@ type commitMessagesEntry struct {
 	expiry time.Time
 }
 
+// reachableSetEntry has no expiry: a commit's ancestry is fixed by its hash, so
+// an entry is valid for as long as baseHash is the worktree's current base.
 type reachableSetEntry struct {
-	set    map[plumbing.Hash]bool
-	expiry time.Time
+	baseHash plumbing.Hash
+	set      map[plumbing.Hash]bool
 }
 
 // repoCacheMaxEntries is the ABSOLUTE hard ceiling on repositories held in
@@ -521,15 +523,12 @@ type GoGitVCSReader struct {
 	// Eliminates packfile-reader lock contention on repeated commit log walks.
 	commitMessagesCache sync.Map // map[string]commitMessagesEntry
 
-	// reachableSetCache caches reachableSet results keyed by
-	// worktreePath+"\x00"+baseHash.String(), matching the pattern used by
-	// aheadBehindCache/commitMessagesCache — scoping the cache per-worktree
-	// prevents a hash collision across two different repos/worktrees that
-	// happen to share a base commit (e.g. a shallow clone and its full-clone
-	// origin) from returning one worktree's reachable set to the other.
-	// The reachable set for a given base ref is expensive (O(N) commit walk) and
-	// changes rarely; a 30s TTL matches diffStatCacheTTL and eliminates the
-	// mutex-held walk that was the #1 hotspot (47.4B cycles, 38 events).
+	// reachableSetCache caches reachableSet results, one entry per worktreePath,
+	// validated by the entry's baseHash. Per-worktree scoping prevents a shallow
+	// clone and its full-clone origin (same base hash, different reachable set)
+	// from sharing one set. The set is an expensive O(N) walk, but immutable for
+	// a given base hash, so there is no TTL; a moved base replaces the entry,
+	// which also bounds the cache to one set per worktree.
 	reachableSetCache sync.Map // map[string]reachableSetEntry
 
 	// hasUncommittedCache caches HasUncommitted results keyed by worktreePath.
@@ -1342,17 +1341,14 @@ func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]s
 }
 
 // cachedReachableSet returns the set of all commits reachable from baseHash,
-// using reachableSetCache to avoid repeating the O(N) walk within the TTL window.
-// The cache key is worktreePath+"\x00"+baseHash.String() (matching
-// aheadBehindCache/commitMessagesCache) rather than baseHash alone, so two
-// different worktrees that happen to share a base commit hash (e.g. a shallow
-// clone and its full-clone origin) never share one another's reachable set.
+// reusing the worktree's cached set while its base hash is unchanged.
+// Known limit: a shallow clone deepened in place keeps its truncated set until
+// the base moves or the process restarts (cosmetic, see maxReachableSetCommits).
 // On a cache miss it acquires entry.mu, runs the walk, then releases the lock.
 // The returned map must not be mutated by callers.
 func (g *GoGitVCSReader) cachedReachableSet(entry *cachedRepo, worktreePath string, baseHash plumbing.Hash) (map[plumbing.Hash]bool, error) {
-	cacheKey := worktreePath + "\x00" + baseHash.String()
-	if v, ok := g.reachableSetCache.Load(cacheKey); ok {
-		if e := v.(reachableSetEntry); time.Now().Before(e.expiry) {
+	if v, ok := g.reachableSetCache.Load(worktreePath); ok {
+		if e := v.(reachableSetEntry); e.baseHash == baseHash {
 			return e.set, nil
 		}
 	}
@@ -1363,8 +1359,33 @@ func (g *GoGitVCSReader) cachedReachableSet(entry *cachedRepo, worktreePath stri
 	if err != nil {
 		return nil, err
 	}
-	g.reachableSetCache.Store(cacheKey, reachableSetEntry{set: set, expiry: time.Now().Add(diffStatCacheTTL)})
+	g.reachableSetCache.Store(worktreePath, reachableSetEntry{baseHash: baseHash, set: set})
 	return set, nil
+}
+
+// InvalidateWorktree evicts worktreePath's TTL-cached results so the next call
+// re-reads git state; Scanner calls it when a .git change event arrives.
+// Leaves reachableSetCache alone: its entries are validated by base hash, and
+// evicting on every commit would repeat the 50k-commit walk it exists to avoid.
+func (g *GoGitVCSReader) InvalidateWorktree(worktreePath string) {
+	g.diffStatCache.Delete(worktreePath)
+	g.hasUncommittedCache.Delete(worktreePath)
+	prefix := worktreePath + "\x00"
+	for _, m := range []*sync.Map{&g.aheadBehindCache, &g.commitMessagesCache} {
+		m.Range(func(k, _ any) bool {
+			if key, _ := k.(string); strings.HasPrefix(key, prefix) {
+				m.Delete(k)
+			}
+			return true
+		})
+	}
+}
+
+// ForgetWorktree is InvalidateWorktree plus dropping the worktree's reachable
+// set, for a worktree that is gone (the set is MBs and nothing else evicts it).
+func (g *GoGitVCSReader) ForgetWorktree(worktreePath string) {
+	g.InvalidateWorktree(worktreePath)
+	g.reachableSetCache.Delete(worktreePath)
 }
 
 // DiffShortstat returns changed-file and line counts for the given worktree.

@@ -223,7 +223,10 @@ func (g *GitWorktree) buildWorkingTreePatch(baseCommit *object.Commit) (fdiff.Pa
 // Worktree.Status(), which hashes every untracked file's full content just to
 // classify it — unnecessary work here since only the path is needed.
 func (g *GitWorktree) untrackedWorktreePaths(baseFiles map[string]*object.File) ([]string, error) {
-	fsRoot := osfs.New(g.worktreePath)
+	// Cached like worktreeUntrackedMatcher's dirty check: the uncached read re-parsed
+	// every .gitignore on each diff refresh (3.1% of live CPU). Edits to ignore
+	// files show up after gitignoreCacheTTL or the next InvalidateDirtyCache.
+	fsRoot := newCachedFilesystem(osfs.New(g.worktreePath), &g.gitignoreFS)
 	patterns, err := gitignore.ReadPatterns(fsRoot, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read gitignore patterns: %w", err)

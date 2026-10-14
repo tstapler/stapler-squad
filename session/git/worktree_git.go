@@ -646,14 +646,14 @@ func (g *GitWorktree) findExistingPR() (string, int, error) {
 // not existing locally — so a check failure never causes a caller to skip PR
 // creation for a branch that may well need it.
 func (g *GitWorktree) HasCommitsAheadOfMain(mainBranch string) (bool, error) {
-	status, err := BranchAheadBehind(g.repoPath, g.branchName, mainBranch)
+	exists, ahead, err := BranchHasCommitsAhead(g.repoPath, g.branchName, mainBranch)
 	if err != nil {
 		return true, err
 	}
-	if !status.BranchExists {
+	if !exists {
 		return true, nil
 	}
-	return status.AheadOfMain > 0, nil
+	return ahead, nil
 }
 
 // reviewInfo captures the blocking review that tripped HasBlockingReviews.
