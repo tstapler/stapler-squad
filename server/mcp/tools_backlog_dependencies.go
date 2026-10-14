@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"connectrpc.com/connect"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -158,11 +160,11 @@ func (h *backlogHandlers) transitionBacklogItemStatus(ctx context.Context, req m
 	if expected == "" {
 		return errResult(ErrInvalidArgument, "expected_status is required", "Pass the status you last observed via get_backlog_item; the transition is rejected if the item has moved since."), nil
 	}
-	resp, err := h.backlogSvc.TransitionBacklogItemStatusAs(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+	resp, err := h.backlogSvc.TransitionBacklogItemStatus(services.WithTransitionActor(ctx, session.TriggeredByAgent), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:         itemID,
 		TargetStatus:   target,
 		ExpectedStatus: expected,
-	}), session.TriggeredByAgent)
+	}))
 	if err != nil {
 		return connectErrResult("transition_backlog_item_status", err), nil
 	}
@@ -250,4 +252,27 @@ func registerBacklogDependencyTools(s *mcpserver.MCPServer, h *backlogHandlers) 
 		),
 		h.transitionBacklogItemStatus,
 	)
+}
+
+// writeDependenciesSection renders blocked_by/blocking edges (id, title,
+// status) so an agent can see why an item is blocked. Titles come from other
+// items, so they are sanitized like any other agent-visible user text.
+func (h *backlogHandlers) writeDependenciesSection(ctx context.Context, sb *strings.Builder, itemID string) {
+	blockedBy, blocking, err := h.storage.ListBacklogItemDependencies(ctx, itemID)
+	if err != nil || (len(blockedBy) == 0 && len(blocking) == 0) {
+		return
+	}
+	sb.WriteString("## Dependencies\n")
+	writeRefs := func(label string, refs []session.BacklogItemDependencyRef) {
+		if len(refs) == 0 {
+			return
+		}
+		fmt.Fprintf(sb, "%s:\n", label)
+		for _, r := range refs {
+			fmt.Fprintf(sb, "- %s \"%s\" (status: %s)\n", r.ItemID, session.SanitizeForAgentContext(r.Title, 200), r.Status)
+		}
+	}
+	writeRefs("blocked_by", blockedBy)
+	writeRefs("blocking", blocking)
+	sb.WriteString("\n")
 }

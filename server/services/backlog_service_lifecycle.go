@@ -827,22 +827,28 @@ func isLiveBacklogStatusForSendBack(from session.BacklogStatus) bool {
 		from == session.BacklogStatusPRPending || from == session.BacklogStatusDone
 }
 
+type transitionActorKey struct{}
+
+// WithTransitionActor marks ctx so TransitionBacklogItemStatus records the given
+// audit actor (default TriggeredByUser), e.g. TriggeredByAgent for MCP callers.
+func WithTransitionActor(ctx context.Context, actor string) context.Context {
+	return context.WithValue(ctx, transitionActorKey{}, actor)
+}
+
+func transitionActorFromContext(ctx context.Context) string {
+	if a, ok := ctx.Value(transitionActorKey{}).(string); ok && a != "" {
+		return a
+	}
+	return session.TriggeredByUser
+}
+
 // TransitionBacklogItemStatus moves an item through the status state machine.
 // +api: backlog:transition-status
 func (s *BacklogService) TransitionBacklogItemStatus(
 	ctx context.Context,
 	req *connect.Request[sessionv1.TransitionBacklogItemStatusRequest],
 ) (*connect.Response[sessionv1.TransitionBacklogItemStatusResponse], error) {
-	return s.TransitionBacklogItemStatusAs(ctx, req, session.TriggeredByUser)
-}
-
-// TransitionBacklogItemStatusAs is TransitionBacklogItemStatus with an explicit
-// audit actor, so MCP-initiated moves are recorded as agent-triggered.
-func (s *BacklogService) TransitionBacklogItemStatusAs(
-	ctx context.Context,
-	req *connect.Request[sessionv1.TransitionBacklogItemStatusRequest],
-	triggeredBy string,
-) (*connect.Response[sessionv1.TransitionBacklogItemStatusResponse], error) {
+	triggeredBy := transitionActorFromContext(ctx)
 	if s.storage == nil {
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
 	}
