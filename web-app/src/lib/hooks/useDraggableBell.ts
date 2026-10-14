@@ -46,12 +46,21 @@ function safeInset(side: "top" | "bottom"): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function measureBounds(phone: boolean, handleHeight: number): BellBounds {
+interface SafeInsets {
+  top: number;
+  bottom: number;
+}
+
+function measureSafeInsets(): SafeInsets {
+  return { top: safeInset("top"), bottom: safeInset("bottom") };
+}
+
+function measureBounds(phone: boolean, handleHeight: number, insets: SafeInsets): BellBounds {
   const viewportHeight = cssPx("--viewport-height") || window.visualViewport?.height || window.innerHeight;
   return computeBounds({
     viewportHeight,
-    safeTop: safeInset("top"),
-    safeBottom: safeInset("bottom"),
+    safeTop: insets.top,
+    safeBottom: insets.bottom,
     bottomInset: phone ? cssPx("--bottom-nav-height") + PHONE_KEYS_BAR_RESERVE : 0,
     handleHeight,
   });
@@ -98,13 +107,19 @@ export function useDraggableBell(ref: React.RefObject<HTMLElement | null>, phone
   const [, setLayoutTick] = useState(0);
   const drag = useRef<DragState | null>(null);
   const suppressClick = useRef(false);
+  // Probed in effects only: render must not touch the DOM.
+  const insets = useRef<SafeInsets>({ top: 0, bottom: 0 });
 
   useEffect(() => {
     const reread = () => {
       setStored(readBellPos());
       setFloatingBellEnabled(readFloatingBell());
     };
-    const relayout = () => setLayoutTick((n) => n + 1);
+    const relayout = () => {
+      insets.current = measureSafeInsets();
+      setLayoutTick((n) => n + 1);
+    };
+    relayout();
     window.addEventListener(BELL_SETTINGS_EVENT, reread);
     window.addEventListener("resize", relayout);
     window.addEventListener("orientationchange", relayout);
@@ -164,7 +179,7 @@ export function useDraggableBell(ref: React.RefObject<HTMLElement | null>, phone
       if (!movedPastThreshold(dx, dy, d.pointerType)) return;
       d.active = true;
     }
-    setDragTop(clampTop(d.startTop + dy, measureBounds(phone, handleHeight())));
+    setDragTop(clampTop(d.startTop + dy, measureBounds(phone, handleHeight(), insets.current)));
   };
 
   const finish = (e: PointerEvent<HTMLElement>) => {
@@ -177,7 +192,7 @@ export function useDraggableBell(ref: React.RefObject<HTMLElement | null>, phone
       // Already released.
     }
     if (!d.active) return;
-    const b = measureBounds(phone, handleHeight());
+    const b = measureBounds(phone, handleHeight(), insets.current);
     const top = clampTop(d.startTop + (e.clientY - d.startY), b);
     suppressClick.current = true;
     setTimeout(() => (suppressClick.current = false), 0);
@@ -188,7 +203,7 @@ export function useDraggableBell(ref: React.RefObject<HTMLElement | null>, phone
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
     e.preventDefault();
-    const b = measureBounds(phone, handleHeight());
+    const b = measureBounds(phone, handleHeight(), insets.current);
     commit(stepY(currentY(b), e.key === "ArrowUp" ? "up" : "down", e.shiftKey), true);
   };
 
@@ -200,7 +215,7 @@ export function useDraggableBell(ref: React.RefObject<HTMLElement | null>, phone
 
   const style: CSSProperties = {};
   if (dragTop !== null || stored || phone) {
-    const b = measureBounds(phone, handleHeight());
+    const b = measureBounds(phone, handleHeight(), insets.current);
     style.top = dragTop ?? yToTop(stored ? stored.y : PHONE_DEFAULT_Y, b);
     if (dragTop !== null) style.transition = "none";
   }

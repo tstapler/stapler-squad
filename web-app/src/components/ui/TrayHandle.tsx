@@ -62,6 +62,7 @@ export function TrayHandle() {
       data-open={isPanelOpen}
       aria-expanded={isPanelOpen}
       aria-controls={TRAY_ID}
+      aria-keyshortcuts="ArrowUp ArrowDown"
       aria-label={trayEntryLabel(unreadCount, needsAttention, quietMode)}
       data-gesture-ignore
       data-dragging={bell.dragging}
