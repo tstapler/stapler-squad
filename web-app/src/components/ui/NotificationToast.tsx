@@ -25,6 +25,7 @@ import {
   swipeCard,
   swipeCardDragging,
   compactCard,
+  compactTrailing,
   decisionPair,
   actionError,
   inlineAction,
@@ -60,7 +61,7 @@ export interface NotificationToastProps {
   onClose: (options?: { acknowledge?: boolean }) => void;
   /** Inside the capped deck: laid out in flow, swipeable, with the phone and desktop deck controls. */
   stacked?: boolean;
-  /** Phone deck: the one-row card of at most 96px. Approval cards are exempt (they grow to show the command). */
+  /** Phone deck: the one-row card (title, preview, View and Tray). Approval cards are exempt (they grow to show the command). */
   compact?: boolean;
   /** When set, Approve and Deny (the server-bound actions) are disabled and this reason is shown. */
   offlineReason?: string;
@@ -274,7 +275,9 @@ export function NotificationToast({
   const closeControl = <ToastCloseControl stacked={stacked} pinned={pinned} onClose={() => onClose()} />;
 
   const phoneApproval = stacked && isApproval;
-  const showViewInline = !(phoneApproval && coarse);
+  // The phone's one-row card carries View/Reply beside the Tray control, not in an actions row.
+  const compactRow = stacked && compact && !isApproval;
+  const showViewInline = !(phoneApproval && coarse) && !compactRow;
   const showDismissButton = !isApproval ? !(stacked && compact) : !stacked;
 
   const card = (
@@ -325,7 +328,21 @@ export function NotificationToast({
             </span>
           </div>
         </div>
-        {closeControl}
+        {compactRow ? (
+          <div className={compactTrailing}>
+            <button className={viewButton} onClick={handleView} data-testid={viewTestId}>
+              {viewLabel}
+            </button>
+            {showReply && (
+              <button className={viewButton} onClick={handleView} data-testid="notification-reply">
+                Reply
+              </button>
+            )}
+            {closeControl}
+          </div>
+        ) : (
+          closeControl
+        )}
       </div>
 
       <div className={body} data-slot="body">

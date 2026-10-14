@@ -599,13 +599,19 @@ export const trayButton = style({
   selectors: { "&:hover": { background: vars.color.hoverBackground } },
 });
 
-/** Phone, non-approval: icon, title and one body line left; the primary action and close right. At most 96px. */
-export const compactCard = style({
-  maxHeight: "96px",
-  overflow: "hidden",
+/** Phone, non-approval: icon, title and one body line left; the primary action and close right. Never height-capped: a cap clipped the card's own buttons while leaving them focusable. */
+export const compactCard = style({});
+
+export const compactTrailing = style({
+  display: "flex",
+  alignItems: "center",
+  gap: "6px",
+  flexShrink: 0,
 });
 
-globalStyle(`${compactCard} [data-slot="body"]`, { padding: "0 16px 8px", maxHeight: "none", overflow: "hidden" });
+globalStyle(`${compactCard} > ${header}`, { padding: "8px 8px 4px 12px", gap: "8px" });
+globalStyle(`${compactTrailing} > button`, { flex: "0 0 auto", padding: "0 12px", fontSize: "13px" });
+globalStyle(`${compactCard} [data-slot="body"]`, { padding: "0 12px 8px", maxHeight: "none", overflow: "hidden" });
 globalStyle(`${compactCard} [data-slot="body"] p`, {
   display: "-webkit-box",
   WebkitLineClamp: 1,
@@ -613,7 +619,8 @@ globalStyle(`${compactCard} [data-slot="body"] p`, {
   overflow: "hidden",
 });
 globalStyle(`${compactCard} [data-slot="workdir"]`, { display: "none" });
-globalStyle(`${compactCard} [data-slot="actions"]`, { padding: "0 16px 8px", borderTop: "none" });
+globalStyle(`${compactCard} [data-slot="actions"]`, { padding: "0 12px 8px", borderTop: "none" });
+globalStyle(`${compactCard} [data-slot="actions"]:empty`, { display: "none" });
 
 export const commandText = style({
   margin: 0,

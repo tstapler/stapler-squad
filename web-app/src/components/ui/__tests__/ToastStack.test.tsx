@@ -825,4 +825,30 @@ describe("deck rules from the UX criteria (TD-5, TD-9, TB-2, T-TS-32)", () => {
     advance(8_000);
     expect(screen.getByTestId("toast-collapsed-chip")).toBeInTheDocument();
   });
+
+  it("pinned_collapse_should_not_be_held_by_a_touch_tap_that_leaves_focus_on_the_card", () => {
+    setPhone();
+    mount();
+    act(() => notifications.addNotification(toast(0, { notificationType: "error", isPendingDecision: true })));
+    const button = within(screen.getByTestId("toast")).getAllByRole("button")[0];
+    // jsdom has no PointerEvent, so pointerType is attached by hand.
+    const down = new Event("pointerdown", { bubbles: true });
+    Object.defineProperty(down, "pointerType", { value: "touch" });
+    act(() => {
+      button.dispatchEvent(down);
+    });
+    fireEvent.focus(button);
+    advance(8_000);
+    expect(screen.getByTestId("toast-collapsed-chip")).toBeInTheDocument();
+  });
+
+  it("phone_card_should_carry_view_beside_tray_in_one_row_with_no_height_clip", () => {
+    setPhone();
+    mount();
+    act(() => notifications.addNotification(toast(0, { notificationType: "error", isPendingDecision: true })));
+    const card = screen.getByTestId("toast");
+    const view = within(card).getByTestId("notification-view-session");
+    expect(within(card).getByTestId("toast-move-to-tray").parentElement).toBe(view.parentElement);
+    expect(card.querySelector('[data-slot="actions"]')?.contains(view)).toBe(false);
+  });
 });

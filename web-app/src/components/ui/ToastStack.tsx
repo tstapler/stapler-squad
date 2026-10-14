@@ -112,13 +112,22 @@ function ToastSlot({ notification, timers, onRemove, collapsible = false, offlin
 
   useEffect(() => () => timers.cancel(id), [id, timers]);
 
-  // Hover, focus and touch hold this toast's timers; the remaining time is kept.
+  // Hover and keyboard focus hold this toast's timers; the remaining time is kept.
+  // A touch tap is neither: it leaves the card "hovered" and focused until the next tap
+  // elsewhere, which would hold the pinned-card collapse indefinitely on a phone.
+  const touchFocus = useRef(false);
   const holdHandlers = useMemo(
     () => ({
-      onPointerEnter: () => timers.pause(id, "hover"),
+      onPointerDown: (e: React.PointerEvent) => {
+        touchFocus.current = e.pointerType === "touch";
+      },
+      onPointerEnter: (e: React.PointerEvent) => e.pointerType !== "touch" && timers.pause(id, "hover"),
       onPointerLeave: () => timers.resume(id, "hover"),
-      onFocus: () => timers.pause(id, "focus"),
-      onBlur: () => timers.resume(id, "focus"),
+      onFocus: () => !touchFocus.current && timers.pause(id, "focus"),
+      onBlur: () => {
+        touchFocus.current = false;
+        timers.resume(id, "focus");
+      },
     }),
     [id, timers],
   );
