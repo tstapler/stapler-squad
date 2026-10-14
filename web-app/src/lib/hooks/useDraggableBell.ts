@@ -56,7 +56,9 @@ function measureSafeInsets(): SafeInsets {
 }
 
 function measureBounds(phone: boolean, handleHeight: number, insets: SafeInsets): BellBounds {
-  const viewportHeight = cssPx("--viewport-height") || window.visualViewport?.height || window.innerHeight;
+  // Reached during render, so it must survive the server prerender (no window).
+  const viewportHeight =
+    cssPx("--viewport-height") || (typeof window === "undefined" ? 0 : window.visualViewport?.height || window.innerHeight);
   return computeBounds({
     viewportHeight,
     safeTop: insets.top,
