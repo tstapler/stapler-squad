@@ -170,7 +170,12 @@ type Scanner struct {
 	eventBus   *pkgevents.EventBus
 	stateStore *StateStore
 
-	triggerCh  chan struct{}  // signals coordinator to run a full scan now
+	triggerCh chan struct{} // signals coordinator to run a full scan now
+	// fsDebounce coalesces a burst of .git events per repo into one rescan;
+	// zero (tests) handles each event immediately. fsPending holds the repos
+	// with a flush timer armed, mapping repo root → *gitEventScope.
+	fsDebounce time.Duration
+	fsPending  sync.Map
 	scanDoneCh chan time.Time // emits timestamp after each full scan completes
 
 	tickInterval time.Duration // default 5 minutes, overridable in tests
@@ -245,6 +250,7 @@ func NewScannerWithReader(eventBus *pkgevents.EventBus, stateStore *StateStore, 
 		// to run every 30s. Tests override via SetTickInterval.
 		tickInterval:            5 * time.Minute,
 		maintenanceTickInterval: 1 * time.Minute,
+		fsDebounce:              fsnotifyDebounce,
 	}
 	s.autoSpiderEnabled.Store(true)
 	return s
@@ -534,15 +540,17 @@ func (s *Scanner) fsnotifyLoop(ctx context.Context) {
 			if !event.Has(fsnotify.Write) && !event.Has(fsnotify.Create) {
 				continue
 			}
+			scope, relevant := classifyGitEvent(filepath.Base(event.Name))
+			if !relevant {
+				continue
+			}
 			// Derive the repo root by walking up from the event path to the
 			// nearest ".git" component (mirrors WatchDirWatcher.fsnotifyLoop's
 			// event-handling shape in watcher.go).
 			dir := event.Name
 			for {
 				if filepath.Base(dir) == ".git" {
-					repoRoot := filepath.Dir(dir)
-					s.invalidateRepo(repoRoot)
-					s.EnqueueRepo(repoRoot)
+					s.scheduleGitEvent(ctx, filepath.Dir(dir), scope)
 					break
 				}
 				parent := filepath.Dir(dir)
@@ -558,6 +566,87 @@ func (s *Scanner) fsnotifyLoop(ctx context.Context) {
 			log.Warn("scanner fsnotify error", "err", err)
 		}
 	}
+}
+
+// fsnotifyDebounce is how long a repo's .git must stay quiet before its events
+// trigger one rescan; a single git command emits several events in a burst.
+const fsnotifyDebounce = 2 * time.Second
+
+// gitEventScope is what a .git write invalidates: just the repo's own
+// worktree, or every linked worktree too.
+type gitEventScope int
+
+const (
+	gitEventRepoRoot gitEventScope = iota
+	gitEventAllWorktrees
+)
+
+// classifyGitEvent decides whether a write to the named file directly under
+// <repo>/.git warrants a rescan. Lock files, git's index temp files and
+// watchman cookies are transient; the real file's own Create/Write follows
+// the lock's rename, so reacting to them only doubles the work. Only
+// packed-refs (default-branch tip) affects linked worktrees; index, HEAD,
+// COMMIT_EDITMSG etc. are the main worktree's own state.
+func classifyGitEvent(name string) (scope gitEventScope, relevant bool) {
+	switch {
+	case strings.HasSuffix(name, ".lock"),
+		strings.HasPrefix(name, "next-index-"),
+		strings.HasPrefix(name, ".watchman-cookie"):
+		return gitEventRepoRoot, false
+	case name == "packed-refs":
+		return gitEventAllWorktrees, true
+	default:
+		return gitEventRepoRoot, true
+	}
+}
+
+// scheduleGitEvent invalidates and enqueues repoRoot once fsDebounce has
+// passed with no further events for it, widening the scope if any event in the
+// burst needed it. Skipped after ctx is cancelled.
+func (s *Scanner) scheduleGitEvent(ctx context.Context, repoRoot string, scope gitEventScope) {
+	flush := func(scope gitEventScope) {
+		if ctx.Err() != nil {
+			return
+		}
+		if scope == gitEventAllWorktrees {
+			s.invalidateRepo(repoRoot)
+		} else {
+			s.InvalidateCache(repoRoot)
+		}
+		s.EnqueueRepo(repoRoot)
+	}
+	if s.fsDebounce <= 0 {
+		flush(scope)
+		return
+	}
+	pending := &gitEventState{scope: scope}
+	if v, loaded := s.fsPending.LoadOrStore(repoRoot, pending); loaded {
+		v.(*gitEventState).widen(scope)
+		return
+	}
+	time.AfterFunc(s.fsDebounce, func() {
+		s.fsPending.Delete(repoRoot)
+		flush(pending.get())
+	})
+}
+
+type gitEventState struct {
+	mu    sync.Mutex
+	scope gitEventScope
+}
+
+func (g *gitEventState) widen(scope gitEventScope) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if scope > g.scope {
+		g.scope = scope
+	}
+}
+
+func (g *gitEventState) get() gitEventScope {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.scope
 }
 
 // enqueueAll sends all known repos to the scan queue. force=true bypasses the
