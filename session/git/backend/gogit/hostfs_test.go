@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 )
 
@@ -110,7 +110,7 @@ func TestAlternateObjectStoreIsRead(t *testing.T) {
 func packedDeltaRepo(t *testing.T) (string, func(dir string, args ...string) string) {
 	dir := real(t, t.TempDir())
 	git := func(dir string, args ...string) string {
-		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd := safeexec.CommandContext(context.Background(), "git", append([]string{"-C", dir}, args...)...)
 		cmd.Env = append(hermetic(t), "PATH="+os.Getenv("PATH"), "GIT_AUTHOR_NAME=T", "GIT_AUTHOR_EMAIL=t@e.com", "GIT_COMMITTER_NAME=T", "GIT_COMMITTER_EMAIL=t@e.com")
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, string(out))
