@@ -111,13 +111,13 @@ func (hostFS) Symlink(string, string) error                { return billy.ErrRea
 func (hostFS) TempFile(string, string) (billy.File, error) { return nil, billy.ErrReadOnly }
 
 // hostFile adapts *os.File to billy.File. Locking is a no-op: the file is only ever read.
-// Name reports the root-relative name it was opened by, not the host path: go-git reopens a
-// pack with fs.Open(file.Name()), and a host path would be joined onto the root a second time.
 type hostFile struct {
 	*os.File
 	name string
 }
 
+// Name is the root-relative name the file was opened by, not the host path: go-git reopens a
+// pack with fs.Open(file.Name()), and a host path would be joined onto the root a second time.
 func (f hostFile) Name() string { return f.name }
 
 func (hostFile) Lock() error   { return nil }
