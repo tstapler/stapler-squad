@@ -342,9 +342,11 @@ func TestClassifyGitEvent(t *testing.T) {
 		{"next-index-72027.lock", gitEventRepoRoot, false},
 		{".watchman-cookie-host-1-2", gitEventRepoRoot, false},
 		{"index", gitEventRepoRoot, true},
-		{"HEAD", gitEventRepoRoot, true},
-		{"COMMIT_EDITMSG", gitEventRepoRoot, true},
-		{"FETCH_HEAD", gitEventRepoRoot, true},
+		{"config", gitEventRepoRoot, true},
+		{"MERGE_RR", gitEventRepoRoot, true},
+		{"HEAD", gitEventAllWorktrees, true},
+		{"COMMIT_EDITMSG", gitEventAllWorktrees, true},
+		{"FETCH_HEAD", gitEventAllWorktrees, true},
 		{"packed-refs", gitEventAllWorktrees, true},
 	}
 	for _, tt := range tests {
@@ -385,7 +387,7 @@ func TestScanner_scheduleGitEvent_should_scopeInvalidation_ByEventKind(t *testin
 	assert.Equal(t, []bool{false, true}, freshWorktrees(s, repo, linked), "index-style event must leave linked worktrees cached")
 
 	s.scheduleGitEvent(context.Background(), repo, gitEventAllWorktrees)
-	assert.Equal(t, []bool{false, false}, freshWorktrees(s, repo, linked), "packed-refs-style event invalidates every worktree")
+	assert.Equal(t, []bool{false, false}, freshWorktrees(s, repo, linked), "HEAD/FETCH_HEAD-style event invalidates every worktree")
 }
 
 func TestScanner_scheduleGitEvent_should_coalesceBurst_When_DebounceSet(t *testing.T) {
@@ -401,9 +403,11 @@ func TestScanner_scheduleGitEvent_should_coalesceBurst_When_DebounceSet(t *testi
 
 	assert.Equal(t, []bool{true}, freshWorktrees(s, repo), "nothing is invalidated before the debounce elapses")
 	assert.Empty(t, s.scanQueue)
-	v, ok := s.fsPending.Load(repo)
-	require.True(t, ok)
-	assert.Equal(t, gitEventAllWorktrees, v.(*gitEventState).get(), "burst keeps the widest scope")
+	s.fsMu.Lock()
+	widest, armed := s.fsPending[repo]
+	s.fsMu.Unlock()
+	require.True(t, armed)
+	assert.Equal(t, gitEventAllWorktrees, widest, "burst keeps the widest scope")
 }
 
 func TestScanner_scheduleGitEvent_should_flushOnce_When_DebounceElapses(t *testing.T) {
@@ -417,6 +421,8 @@ func TestScanner_scheduleGitEvent_should_flushOnce_When_DebounceElapses(t *testi
 	err := wait.WaitForCondition(func() bool { return len(s.scanQueue) == 1 }, wait.FastWaitConfig())
 	require.NoError(t, err, "expected exactly one rescan after the debounce")
 	assert.Equal(t, []bool{false}, freshWorktrees(s, repo))
-	_, pending := s.fsPending.Load(repo)
+	s.fsMu.Lock()
+	_, pending := s.fsPending[repo]
+	s.fsMu.Unlock()
 	assert.False(t, pending, "pending marker must clear so the next burst re-arms")
 }
