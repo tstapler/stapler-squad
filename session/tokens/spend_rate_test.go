@@ -58,6 +58,19 @@ func TestSpendRateUSDPerHour(t *testing.T) {
 		assert.True(t, ok)
 	})
 
+	t.Run("zero-stamped and out-of-order turns do not hide in-window spend", func(t *testing.T) {
+		t.Parallel()
+		r := &ParseResult{TurnTimeline: []TurnStats{
+			turn(time.Minute, "claude-sonnet-4-5"),
+			turn(3*time.Hour, "claude-sonnet-4-5"),
+			{Model: "claude-sonnet-4-5", CacheRead: 1_000_000}, // zero Timestamp
+			turn(-time.Minute, "claude-sonnet-4-5"),            // after now
+		}}
+		rate, ok := SpendRateUSDPerHour(r, pt, now, 30*time.Minute)
+		assert.True(t, ok)
+		assert.InDelta(t, 0.30/0.5, rate, 1e-9)
+	})
+
 	t.Run("nil inputs and non-positive window", func(t *testing.T) {
 		t.Parallel()
 		_, ok := SpendRateUSDPerHour(nil, pt, now, time.Minute)

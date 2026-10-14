@@ -347,3 +347,23 @@ func TestCapacityMonitor_SpendRateAlertRearmsAfterCoolingDown(t *testing.T) {
 	monitor.poll(context.Background())
 	assert.Len(t, drainSpendRateTitles(ch), 1, "second excursion alerts again")
 }
+
+func TestCapacityMonitor_StaleSessionRateDroppedWhenUnpriced(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 9, 22, 17, 0, 0, 0, time.UTC)
+	parseRes := parseResultFrom(cacheReadTimeline(30, 5_000_000, nil, start, time.Minute))
+	monitor, _, _, _ := newGuardrailMonitor(t, session.SessionRoleWork, config.CapacityConfig{}, parseRes)
+	monitor.poll(context.Background())
+	monitor.mu.RLock()
+	require.Contains(t, monitor.sessionRates, "sess-uuid-1")
+	monitor.mu.RUnlock()
+
+	// Session switches to a model with no price: its old rate must not linger.
+	parseRes.TurnTimeline = append(parseRes.TurnTimeline, tokens.TurnStats{
+		Timestamp: start.Add(31 * time.Minute), Model: "gpt-5.6-terra", Input: 1,
+	})
+	monitor.poll(context.Background())
+	monitor.mu.RLock()
+	defer monitor.mu.RUnlock()
+	assert.NotContains(t, monitor.sessionRates, "sess-uuid-1")
+}

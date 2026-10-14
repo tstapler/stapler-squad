@@ -341,6 +341,10 @@ func (m *CapacityMonitor) evaluateInstance(ctx context.Context, inst *session.In
 	if anthropicParseRes != nil {
 		m.checkIdleWaitLoop(ctx, inst, snap, anthropicParseRes, role)
 		m.checkSessionSpendRate(snap, anthropicParseRes)
+	} else {
+		m.mu.Lock()
+		delete(m.sessionRates, snap.UUID)
+		m.mu.Unlock()
 	}
 
 	// 4. Pipeline-role cost budget: stop and hand back instead of warning.
@@ -442,12 +446,16 @@ const (
 func (m *CapacityMonitor) checkSessionSpendRate(snap *session.InstanceSnapshot, parseRes *tokens.ParseResult) {
 	window := time.Duration(m.config.SpendRateWindowMinutes) * time.Minute
 	rate, ok := tokens.SpendRateUSDPerHour(parseRes, m.pricing, m.now(), window)
+	m.mu.Lock()
+	if ok {
+		m.sessionRates[snap.UUID] = rate
+	} else {
+		delete(m.sessionRates, snap.UUID) // never let a stale rate feed the total
+	}
+	m.mu.Unlock()
 	if !ok {
 		return
 	}
-	m.mu.Lock()
-	m.sessionRates[snap.UUID] = rate
-	m.mu.Unlock()
 
 	if !m.crossedSpendRate(spendRateSessionKeyPrefix+snap.UUID, rate, m.config.SessionSpendRateUSDPerHour) {
 		return
@@ -493,6 +501,8 @@ func (m *CapacityMonitor) crossedSpendRate(key string, rate, threshold float64) 
 	return false
 }
 
+// publishSpendRate sends the alert. The aggregate alert has no session, so the
+// delivery gate sees it as unresolved and fails open (always delivered).
 func (m *CapacityMonitor) publishSpendRate(sessionID, sessionName, title, msg string) {
 	m.eventBus.Publish(events.NewNotificationEvent(
 		sessionID, sessionName,

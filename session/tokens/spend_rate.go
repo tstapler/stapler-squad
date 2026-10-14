@@ -13,13 +13,10 @@ func SpendRateUSDPerHour(r *ParseResult, pt *PricingTable, now time.Time, window
 	}
 	cutoff := now.Add(-window)
 	var total float64
-	for i := len(r.TurnTimeline) - 1; i >= 0; i-- {
-		turn := r.TurnTimeline[i]
-		if !turn.Timestamp.After(cutoff) {
-			// Timeline is in transcript order; older turns can't re-enter the window.
-			break
-		}
-		if turn.Timestamp.After(now) {
+	// Full scan, not an early break: transcripts can carry out-of-order or
+	// unstamped turns, and undercounting would fail quiet.
+	for _, turn := range r.TurnTimeline {
+		if !turn.Timestamp.After(cutoff) || turn.Timestamp.After(now) {
 			continue
 		}
 		cost, priced := pt.EstimateTurnCost(turn)
