@@ -86,9 +86,6 @@ func applyTagsUpdate(msg *sessionv1.UpdateSessionRequest, instance *session.Inst
 // msg.Status is unset/UNSPECIFIED or already matches instance's current
 // status -- a no-op the caller treats as "nothing to record".
 func (s *SessionService) applyStatusTransition(msg *sessionv1.UpdateSessionRequest, instance *session.Instance) (bool, error) {
-	if msg.GetForceStop() && msg.GetStatus() != sessionv1.SessionStatus_SESSION_STATUS_STOPPED {
-		return false, connect.NewError(connect.CodeInvalidArgument, errors.New("force_stop requires status STOPPED"))
-	}
 	if msg.Status == nil || *msg.Status == sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
 		return false, nil
 	}
@@ -145,6 +142,10 @@ func (s *SessionService) UpdateSession(
 ) (*connect.Response[sessionv1.UpdateSessionResponse], error) {
 	if req.Msg.Id == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+	// Validate before any handler mutates the instance, so a rejected request leaves no partial state.
+	if req.Msg.GetForceStop() && req.Msg.GetStatus() != sessionv1.SessionStatus_SESSION_STATUS_STOPPED {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("force_stop requires status STOPPED"))
 	}
 
 	// Use the live poller list to avoid LoadInstances side-effects (Start() on Active

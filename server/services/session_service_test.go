@@ -1940,8 +1940,9 @@ func TestUpdateSession_should_RejectForceStop_When_StatusIsNotStopped(t *testing
 	addInstanceToPoller(fix.poller, inst)
 
 	force := true
+	steer := "must not be sent"
 	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
-		Id: "force-stop-bad-status", ForceStop: &force,
+		Id: "force-stop-bad-status", ForceStop: &force, SteerMessage: &steer,
 	}))
 	var connectErr *connect.Error
 	require.ErrorAs(t, err, &connectErr)
