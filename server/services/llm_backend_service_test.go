@@ -16,7 +16,7 @@ import (
 
 func isolateLLMConfig(t *testing.T) {
 	t.Helper()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	config.ResetLiveLLMBackendsForTest()
 	t.Cleanup(config.ResetLiveLLMBackendsForTest)
 }

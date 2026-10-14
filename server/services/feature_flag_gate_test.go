@@ -15,13 +15,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 )
 
 func newGatedFlagService(t *testing.T) *SessionService {
 	t.Helper()
-	envtest.NewIsolatedStateDir(t)
+	withIsolatedStateDir(t)
 	svc := newGatedSessionService(createTestStorage(t))
 	t.Cleanup(svc.Shutdown)
 	return svc
@@ -71,7 +70,7 @@ func TestGateFlag_ShouldRefuseEnableWhileStatsWriterNotRunningAndNeverRefuseDisa
 // T-FL-24: every gate flip appends a flag_change line carrying the request
 // record fields and the true previous value.
 func TestUpdateFeatureFlag_ShouldAppendFlagChangeLineForEveryHiddenSessionGateFlip_WhenSinkCoreFromPr2a2Present(t *testing.T) {
-	envtest.NewIsolatedStateDir(t)
+	withIsolatedStateDir(t)
 	dir, err := config.GetConfigDir()
 	require.NoError(t, err)
 	svc := newGatedSessionService(createTestStorage(t))

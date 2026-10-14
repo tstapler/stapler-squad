@@ -212,7 +212,7 @@ func newRemoteSessionFixture(t *testing.T, srv *remoteSessionTestSSHServer) *rem
 	keyring.MockInit()
 
 	testDir := t.TempDir()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	withIsolatedStateDirPath(t, testDir)
 
 	repoPath := t.TempDir()
 	initRemoteSessionTestRepo(t, repoPath)
@@ -281,7 +281,7 @@ func remoteHasSessionViaIndependentDial(t *testing.T, srv *remoteSessionTestSSHS
 // must reject the request before attempting to dial anything.
 func TestCreateSession_RemoteTarget_UnknownRemoteName_ReturnsInvalidArgument(t *testing.T) {
 	testDir := t.TempDir()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	withIsolatedStateDirPath(t, testDir)
 	require.NoError(t, config.SaveConfig(&config.Config{}))
 
 	fix := setupForkTestFixture(t)

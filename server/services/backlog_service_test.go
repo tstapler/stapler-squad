@@ -1637,7 +1637,7 @@ func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *te
 	// nativeFindExistingWorktreeForBranch, silently failing the async triage goroutine's git
 	// status check and leaving the item stuck below (never reaching "ready"). Same fix as
 	// TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession, below.
-	envtest.NewIsolatedStateDir(t)
+	withIsolatedStateDir(t)
 
 	storage := createTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
@@ -4288,7 +4288,7 @@ func TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession(t *t
 	// PID-scoped IsTestMode() fallback) to this test's own t.TempDir() gives every
 	// repetition a fully isolated worktree base dir, closing the collision at the
 	// test level without touching the shared worktree-reuse production code.
-	envtest.NewIsolatedStateDir(t)
+	withIsolatedStateDir(t)
 
 	storage := createTestStorage(t)
 	const slug = "widget-integration"

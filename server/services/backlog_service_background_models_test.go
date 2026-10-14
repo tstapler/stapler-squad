@@ -10,7 +10,7 @@ import (
 )
 
 func TestPinnedStageModel_should_PinOnlyClaudeWithoutModeModel(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	assert.Equal(t, "family:sonnet", pinnedStageModel(session.StageRoleReview, "", ""))
 	assert.Equal(t, "family:sonnet", pinnedStageModel(session.StageRoleReview, "claude", ""))
 	assert.Equal(t, "family:opus", pinnedStageModel(session.StageRoleReview, "", "family:opus"), "mode pin wins")
@@ -20,12 +20,12 @@ func TestPinnedStageModel_should_PinOnlyClaudeWithoutModeModel(t *testing.T) {
 }
 
 func TestPinnedWorkStageModel_should_SkipWhenExecutorProgramNotClaude(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	assert.Empty(t, pinnedWorkStageModel(t.TempDir(), "agy", ""))
 }
 
 func TestPinnedWorkStageModel_should_PinOnlyWhenDefaultProgramIsBareClaude(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	repo := t.TempDir()
 
 	cfg := config.LoadConfig()

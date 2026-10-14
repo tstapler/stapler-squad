@@ -15,7 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/session"
@@ -575,7 +574,7 @@ func TestJulesDispatchService_DispatchToJules_should_LeaveEgressAcknowledgedRepo
 // construction time, so this second dispatch would still fail with
 // ErrJulesEgressNotAcknowledged even after ConfirmEgressConsent succeeded.
 func TestJulesDispatchService_DispatchToJules_should_ObserveConfigWriteOnVeryNextCall_When_ConfirmEgressConsentRunsBetweenDispatches(t *testing.T) {
-	envtest.NewIsolatedStateDir(t)
+	withIsolatedStateDir(t)
 	storage := createTestStorage(t)
 	ctx := t.Context()
 

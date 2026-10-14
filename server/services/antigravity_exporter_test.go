@@ -127,7 +127,7 @@ func TestExportRulesToAntigravitySettings_MergesWithoutDuplicates(t *testing.T) 
 
 func TestExportAntigravityRulesFromDB_ExportsToHomeGemini(t *testing.T) {
 	homeDir := t.TempDir()
-	t.Setenv("HOME", homeDir)
+	withFakeHomePath(t, homeDir)
 
 	repo, err := session.NewEntRepository(session.WithDatabasePath(":memory:"))
 	require.NoError(t, err)

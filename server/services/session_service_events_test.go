@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
@@ -31,7 +30,7 @@ type crashEnv struct {
 
 func newCrashEnv(t *testing.T, gated bool) *crashEnv {
 	t.Helper()
-	envtest.NewIsolatedStateDir(t)
+	withIsolatedStateDir(t)
 	storage := createTestStorage(t)
 	var svc *SessionService
 	if gated {
