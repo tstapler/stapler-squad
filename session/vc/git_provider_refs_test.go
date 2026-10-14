@@ -36,6 +36,7 @@ func TestGitProviderGetBranch_DetachedHeadResolvesThroughBackend(t *testing.T) {
 	const sha = "0123456789abcdef0123456789abcdef01234567"
 	rig := gitfake.NewRig(t)
 	rig.Install(t)
+	rig.GoGit.OnHeadRef = func(backend.RepoLocation) (backend.RefName, error) { return "", backend.ErrDetachedHead }
 	rig.GoGit.OnResolveRef = func(backend.RepoLocation, backend.RefName) (backend.CommitSHA, error) { return sha, nil }
 	provider, err := NewGitProvider(dir)
 	require.NoError(t, err)
@@ -46,7 +47,7 @@ func TestGitProviderGetBranch_DetachedHeadResolvesThroughBackend(t *testing.T) {
 	assert.Equal(t, "(detached: "+truncateHash(sha)+")", branch)
 	assert.True(t, strings.HasPrefix(branch, "(detached: "))
 	rig.RequireOnlyGoGit(t, backend.OpResolveRef)
-	call := rig.GoGit.Calls()[0]
+	call := rig.GoGit.CallsTo(backend.OpResolveRef)[0]
 	assert.Equal(t, "HEAD", call.Arg)
 	assert.Equal(t, backend.Local{Root: backend.RepoRoot(provider.repoRoot)}, call.Loc)
 }

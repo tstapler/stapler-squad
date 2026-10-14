@@ -29,6 +29,7 @@ type Backend struct {
 	Name string
 
 	OnCurrentBranch func(loc backend.RepoLocation) (backend.BranchName, error)
+	OnHeadRef       func(loc backend.RepoLocation) (backend.RefName, error)
 	OnResolveRef    func(loc backend.RepoLocation, ref backend.RefName) (backend.CommitSHA, error)
 	OnRefExists     func(loc backend.RepoLocation, ref backend.RefName) (bool, error)
 	OnRepoRoot      func(loc backend.RepoLocation) (backend.RepoRoot, error)
@@ -80,6 +81,14 @@ func (f *Backend) CurrentBranch(_ context.Context, loc backend.RepoLocation) (ba
 		return "", ErrUnhandled
 	}
 	return f.OnCurrentBranch(loc)
+}
+
+func (f *Backend) HeadRef(_ context.Context, loc backend.RepoLocation) (backend.RefName, error) {
+	f.rec(backend.OpHeadRef, loc, "")
+	if f.OnHeadRef == nil {
+		return "", ErrUnhandled
+	}
+	return f.OnHeadRef(loc)
 }
 
 func (f *Backend) ResolveRef(_ context.Context, loc backend.RepoLocation, ref backend.RefName) (backend.CommitSHA, error) {

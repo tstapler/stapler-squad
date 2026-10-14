@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -157,7 +158,7 @@ func argvCases() []struct {
 		{"IsDirty", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			_, e := b.IsDirty(c, l, backend.IntentDisplay)
 			return e
-		}, "status --porcelain", ""},
+		}, "status --porcelain --untracked-files=normal", ""},
 		{"Status", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			_, e := b.Status(c, l, backend.IntentDestructive)
 			return e
@@ -277,6 +278,13 @@ func argvCases() []struct {
 		{"AddWorktree", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			return b.AddWorktree(c, l, backend.AddWorktreeRequest{Path: "/w", Branch: "b", Base: "main"})
 		}, "worktree add -b b -- /w main", ""},
+		{"AddWorktreeDefaultBranch", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
+			return b.AddWorktree(c, l, backend.AddWorktreeRequest{Path: "/w"})
+		}, "worktree add -- /w", ""},
+		{"LogDetail", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
+			_, e := b.Log(c, l, backend.LogRequest{Limit: 1, Detail: true})
+			return e
+		}, "log --format=%H%x1f%s%x1f%h%x1f%an%x1f%at -n 1 HEAD", sha1 + "\x1fs\x1fabc1234\x1fAda\x1f1700000000\n"},
 		{"AddWorktreeExisting", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			return b.AddWorktreeForExistingBranch(c, l, "/w", "b")
 		}, "worktree add -- /w b", ""},
@@ -529,6 +537,10 @@ func TestParseOutputs(t *testing.T) {
 		entries, err := cli.New(nil).Log(ctx, remoteAt(fake), backend.LogRequest{})
 		require.NoError(t, err)
 		assert.Equal(t, []backend.LogEntry{{SHA: sha1, Subject: "fix: a thing"}}, entries)
+		detail := newFake().on("log --format=%H%x1f%s%x1f%h%x1f%an%x1f%at -n 1 HEAD", sha1+"\x1fs\x1fabc1234\x1fAda\x1f1700000000\n", nil)
+		detailed, err := cli.New(nil).Log(ctx, remoteAt(detail), backend.LogRequest{Limit: 1, Detail: true})
+		require.NoError(t, err)
+		assert.Equal(t, []backend.LogEntry{{SHA: sha1, Subject: "s", ShortSHA: "abc1234", Author: "Ada", AuthorTime: time.Unix(1700000000, 0)}}, detailed)
 		brs, err := cli.New(nil).ListBranches(ctx, remoteAt(fake), backend.ListBranchesRequest{})
 		require.NoError(t, err)
 		assert.Equal(t, []backend.BranchInfo{{Name: "main", ShortSHA: "abc1234", Upstream: "origin/main"}}, brs)
