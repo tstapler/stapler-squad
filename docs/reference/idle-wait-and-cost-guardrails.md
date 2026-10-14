@@ -20,9 +20,14 @@ An idle-wait turn uses only `Monitor`, `ListAgents`, `TaskStop`, `SendMessage`, 
 
 First trip: `/compact` plus an info notification. If the run trips again strictly after the compact: one high-priority notification and, for a backlog-linked session, the session is stopped with end reason `idle_wait_loop_escalation`. Sessions with no backlog role are notified only. The escalation fires once per loop; a real (non-idle) turn clears the state.
 
-## Token ceiling
+## Spend-rate alert
 
-A critical `SESSION_TOKEN_CEILING` finding (`session/tokens/findings.go`) on a live session now also produces one notification per session, instead of surfacing only on the Insights page.
+A long session accumulates tokens by design, so a total-token ceiling says nothing about whether money is being burned now. The monitor instead estimates dollars per hour over a rolling window (`spend_rate_window_minutes`, default 30) from the priced cost of the turns in that window (`tokens.SpendRateUSDPerHour`). It sends one notification when:
+
+- a single session exceeds `session_spend_rate_usd_per_hour`, or
+- the sum across active sessions exceeds `total_spend_rate_usd_per_hour`.
+
+Each alert re-arms once the rate falls below 80% of its threshold. A negative threshold disables that alert. Sessions on an unpriced model are skipped. Config files that still carry the removed token-ceiling keys load normally; unknown keys are ignored.
 
 ## Config keys (`capacity` in `config.json`)
 
@@ -33,3 +38,6 @@ A critical `SESSION_TOKEN_CEILING` finding (`session/tokens/findings.go`) on a l
 | `idle_wait_turn_ceiling` | 15 | Consecutive idle turns before compact |
 | `role_idle_wait_turn_ceiling` | `{"triage": 10}` | Per-role ceiling |
 | `idle_wait_max_minutes` | 30 | Wall-clock span of an idle run that trips the guardrail |
+| `spend_rate_window_minutes` | 30 | Rolling window for the $/hour alerts |
+| `session_spend_rate_usd_per_hour` | 20 | Per-session $/hour alert; negative disables |
+| `total_spend_rate_usd_per_hour` | 80 | Aggregate $/hour alert; negative disables |

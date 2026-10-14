@@ -660,6 +660,17 @@ type CapacityConfig struct {
 	// below IdleWaitTurnCeiling — a slow wake cadence can burn an hour in few
 	// turns. Default: 30.
 	IdleWaitMaxMinutes int `json:"idle_wait_max_minutes,omitempty"`
+	// SpendRateWindowMinutes is the rolling window over which spend rate is
+	// measured for the $/hour alerts below. Default: 30.
+	SpendRateWindowMinutes int `json:"spend_rate_window_minutes,omitempty"`
+	// SessionSpendRateUSDPerHour notifies when one session's estimated spend
+	// rate over the window exceeds this many dollars per hour. 0 takes the
+	// default; negative disables. Default: 20 (observed p95 is about 14).
+	SessionSpendRateUSDPerHour float64 `json:"session_spend_rate_usd_per_hour,omitempty"`
+	// TotalSpendRateUSDPerHour is the same alert for the sum across all active
+	// sessions. 0 takes the default; negative disables. Default: 80 (observed
+	// p95 is about 64).
+	TotalSpendRateUSDPerHour float64 `json:"total_spend_rate_usd_per_hour,omitempty"`
 	// RoleCostBudgetUSD overrides CostBudgetUSD per backlog session role
 	// ("triage", "work", "review", ...). A role present in the map uses its
 	// value (0 = no limit); absent roles use CostBudgetUSD. Pipeline roles
@@ -813,6 +824,15 @@ func (c CapacityConfig) CapacityConfigOrDefault() CapacityConfig {
 	}
 	if out.IdleWaitMaxMinutes <= 0 {
 		out.IdleWaitMaxMinutes = 30
+	}
+	if out.SpendRateWindowMinutes <= 0 {
+		out.SpendRateWindowMinutes = 30
+	}
+	if out.SessionSpendRateUSDPerHour == 0 {
+		out.SessionSpendRateUSDPerHour = 20
+	}
+	if out.TotalSpendRateUSDPerHour == 0 {
+		out.TotalSpendRateUSDPerHour = 80
 	}
 	// Copy-on-default so the caller's maps are never mutated.
 	out.RoleCostBudgetUSD = withRoleDefault(c.RoleCostBudgetUSD, "triage", 10.0)

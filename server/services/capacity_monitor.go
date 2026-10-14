@@ -41,6 +41,8 @@ type CapacityMonitor struct {
 	idleWaitState   map[string]idleWaitTracker // keyed by session UUID (see checkIdleWaitLoop)
 	roleCache       map[string]string          // session UUID -> backlog role (hits only)
 	handledOnce     map[string]bool            // "<kind>:<session UUID>" one-shot guardrail actions
+	sessionRates    map[string]float64         // session UUID -> latest $/hour, rebuilt each evaluate
+	rateAlerted     map[string]bool            // "session:<UUID>" / "total" while above threshold (re-arms below)
 }
 
 // SessionRoleResolver returns the backlog session role ("triage", "work", ...)
@@ -120,6 +122,8 @@ func NewCapacityMonitor(p CapacityMonitorParams) *CapacityMonitor {
 		now:             time.Now,
 		roleCache:       make(map[string]string),
 		handledOnce:     make(map[string]bool),
+		sessionRates:    make(map[string]float64),
+		rateAlerted:     make(map[string]bool),
 		current:         make(map[string]ProviderLimits),
 		sessionLimits:   make(map[string]ProviderLimits),
 		lastWarningTime: make(map[string]time.Time),
@@ -222,6 +226,7 @@ func (m *CapacityMonitor) evaluate(ctx context.Context) {
 		m.evaluateInstance(ctx, inst)
 	}
 	m.pruneSessionState(active)
+	m.checkTotalSpendRate()
 }
 
 // pruneSessionState drops per-session guardrail state for sessions that are no
@@ -237,6 +242,16 @@ func (m *CapacityMonitor) pruneSessionState(active map[string]bool) {
 	for uuid := range m.roleCache {
 		if !active[uuid] {
 			delete(m.roleCache, uuid)
+		}
+	}
+	for uuid := range m.sessionRates {
+		if !active[uuid] {
+			delete(m.sessionRates, uuid)
+		}
+	}
+	for key := range m.rateAlerted {
+		if key != spendRateTotalKey && !active[strings.TrimPrefix(key, spendRateSessionKeyPrefix)] {
+			delete(m.rateAlerted, key)
 		}
 	}
 	for key := range m.handledOnce {
@@ -325,7 +340,7 @@ func (m *CapacityMonitor) evaluateInstance(ctx context.Context, inst *session.In
 	// trivial "still waiting" wake-up turn; see #882).
 	if anthropicParseRes != nil {
 		m.checkIdleWaitLoop(ctx, inst, snap, anthropicParseRes, role)
-		m.checkSessionTokenCeiling(snap, anthropicParseRes)
+		m.checkSessionSpendRate(snap, anthropicParseRes)
 	}
 
 	// 4. Pipeline-role cost budget: stop and hand back instead of warning.
@@ -413,26 +428,79 @@ func (m *CapacityMonitor) stopForGuardrail(ctx context.Context, inst *session.In
 	}
 }
 
-// checkSessionTokenCeiling surfaces a critical SESSION_TOKEN_CEILING finding
-// (otherwise visible only on the Insights page) as one notification per session.
-func (m *CapacityMonitor) checkSessionTokenCeiling(snap *session.InstanceSnapshot, parseRes *tokens.ParseResult) {
-	for _, f := range tokens.ComputeFindings(parseRes, m.pricing) {
-		if f.Type != tokens.FindingSessionTokenCeiling || f.Severity != tokens.SeverityCritical {
-			continue
-		}
-		if !m.firstTime("token_ceiling:" + snap.UUID) {
-			return
-		}
-		m.eventBus.Publish(events.NewNotificationEvent(
-			snap.UUID, snap.Title,
-			fmt.Sprintf("token-ceiling-%d", time.Now().Unix()),
-			8, 3,
-			"Session Token Ceiling Exceeded",
-			fmt.Sprintf("%s: %s", snap.Title, f.Message),
-			map[string]string{"type": "session_token_ceiling"},
-		))
+const (
+	spendRateTotalKey         = "total"
+	spendRateSessionKeyPrefix = "session:"
+	// spendRateRearmFraction: an alert re-arms once the rate falls below this
+	// fraction of its threshold, so a rate hovering at the line doesn't flap.
+	spendRateRearmFraction = 0.8
+)
+
+// checkSessionSpendRate records the session's trailing-window $/hour and
+// notifies when it crosses SessionSpendRateUSDPerHour. Unpriced models are
+// skipped (no rate) rather than reported as a partial figure.
+func (m *CapacityMonitor) checkSessionSpendRate(snap *session.InstanceSnapshot, parseRes *tokens.ParseResult) {
+	window := time.Duration(m.config.SpendRateWindowMinutes) * time.Minute
+	rate, ok := tokens.SpendRateUSDPerHour(parseRes, m.pricing, m.now(), window)
+	if !ok {
 		return
 	}
+	m.mu.Lock()
+	m.sessionRates[snap.UUID] = rate
+	m.mu.Unlock()
+
+	if !m.crossedSpendRate(spendRateSessionKeyPrefix+snap.UUID, rate, m.config.SessionSpendRateUSDPerHour) {
+		return
+	}
+	m.publishSpendRate(snap.UUID, snap.Title, "Session Spend Rate High",
+		fmt.Sprintf("%s is spending an estimated $%.2f/hour over the last %d minutes (alert threshold $%.2f/hour).",
+			snap.Title, rate, m.config.SpendRateWindowMinutes, m.config.SessionSpendRateUSDPerHour))
+}
+
+// checkTotalSpendRate sums the latest per-session rates and notifies when the
+// aggregate crosses TotalSpendRateUSDPerHour.
+func (m *CapacityMonitor) checkTotalSpendRate() {
+	m.mu.RLock()
+	var total float64
+	for _, r := range m.sessionRates {
+		total += r
+	}
+	m.mu.RUnlock()
+
+	if !m.crossedSpendRate(spendRateTotalKey, total, m.config.TotalSpendRateUSDPerHour) {
+		return
+	}
+	m.publishSpendRate("", "", "Total Spend Rate High",
+		fmt.Sprintf("Active sessions are spending an estimated $%.2f/hour combined over the last %d minutes (alert threshold $%.2f/hour).",
+			total, m.config.SpendRateWindowMinutes, m.config.TotalSpendRateUSDPerHour))
+}
+
+// crossedSpendRate reports true once per excursion above threshold (<= 0
+// disables), re-arming when the rate drops below spendRateRearmFraction of it.
+func (m *CapacityMonitor) crossedSpendRate(key string, rate, threshold float64) bool {
+	if threshold <= 0 {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	switch {
+	case rate > threshold && !m.rateAlerted[key]:
+		m.rateAlerted[key] = true
+		return true
+	case rate < threshold*spendRateRearmFraction:
+		delete(m.rateAlerted, key)
+	}
+	return false
+}
+
+func (m *CapacityMonitor) publishSpendRate(sessionID, sessionName, title, msg string) {
+	m.eventBus.Publish(events.NewNotificationEvent(
+		sessionID, sessionName,
+		fmt.Sprintf("spend-rate-%d", m.now().UnixNano()),
+		8, 3,
+		title, msg,
+		map[string]string{"type": "spend_rate"},
+	))
 }
 
 func (m *CapacityMonitor) checkThresholds(limits ProviderLimits, role string) string {

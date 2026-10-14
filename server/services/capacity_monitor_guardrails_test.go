@@ -127,6 +127,9 @@ func TestCapacityConfig_RoleDefaults(t *testing.T) {
 	assert.Equal(t, 40.0, cfg.CostBudgetFor("work"))
 	assert.Less(t, cfg.IdleWaitCeilingFor("triage"), cfg.IdleWaitCeilingFor("work"))
 	assert.Equal(t, 30, cfg.IdleWaitMaxMinutes)
+	assert.Equal(t, 30, cfg.SpendRateWindowMinutes)
+	assert.Equal(t, 20.0, cfg.SessionSpendRateUSDPerHour)
+	assert.Equal(t, 80.0, cfg.TotalSpendRateUSDPerHour)
 
 	override := config.CapacityConfig{RoleCostBudgetUSD: map[string]float64{"triage": 3}}.CapacityConfigOrDefault()
 	assert.Equal(t, 3.0, override.CostBudgetFor("triage"))
@@ -271,22 +274,76 @@ func TestCapacityMonitor_IdleWaitEscalation_NonBacklogSessionNotStopped(t *testi
 	assert.Empty(t, terminator.calls())
 }
 
-func TestCapacityMonitor_SessionTokenCeilingNotifiesOnce(t *testing.T) {
+// drainSpendRateTitles returns the title of every spend_rate notification queued on ch.
+func drainSpendRateTitles(ch <-chan *events.Event) []string {
+	var titles []string
+	for {
+		select {
+		case ev := <-ch:
+			if ev.NotificationMetadata["type"] == "spend_rate" {
+				titles = append(titles, ev.NotificationTitle)
+			}
+		case <-time.After(50 * time.Millisecond):
+			return titles
+		}
+	}
+}
+
+// spendRateTimeline is one sonnet turn per minute; the monitor clock sits one
+// minute after the last turn, so the 30-minute window holds 30 turns. Cache
+// reads at $0.30/Mtok make the rate cacheRead*0.3e-6*30/0.5 dollars/hour.
+func spendRateTimeline(cacheRead int64) []tokens.TurnStats {
+	return cacheReadTimeline(60, cacheRead, []string{"Edit"}, time.Date(2026, 9, 22, 17, 0, 0, 0, time.UTC), time.Minute)
+}
+
+func TestCapacityMonitor_SpendRateAlert(t *testing.T) {
 	t.Parallel()
-	// 3M cache-read tokens > ceiling; cost > $20 requires more.
-	tl := cacheReadTimeline(100, 1_000_000, []string{"Edit"}, time.Date(2026, 9, 22, 17, 0, 0, 0, time.UTC), time.Minute)
-	monitor, bus, _, _ := newGuardrailMonitor(t, session.SessionRoleWork, config.CapacityConfig{}, parseResultFrom(tl))
+	tests := []struct {
+		name       string
+		cacheRead  int64 // per turn: 5M => ~$90/h, 500k => ~$9/h
+		cfg        config.CapacityConfig
+		wantTitles []string
+	}{
+		{"above session threshold notifies once across polls", 5_000_000, config.CapacityConfig{TotalSpendRateUSDPerHour: -1}, []string{"Session Spend Rate High"}},
+		{"below both thresholds is silent", 500_000, config.CapacityConfig{}, nil},
+		{"session alert disabled by negative threshold", 5_000_000, config.CapacityConfig{SessionSpendRateUSDPerHour: -1, TotalSpendRateUSDPerHour: -1}, nil},
+		{"aggregate alert fires on its own threshold", 500_000, config.CapacityConfig{SessionSpendRateUSDPerHour: -1, TotalSpendRateUSDPerHour: 5}, []string{"Total Spend Rate High"}},
+		{"both fire when both exceeded", 5_000_000, config.CapacityConfig{}, []string{"Session Spend Rate High", "Total Spend Rate High"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			monitor, bus, _, _ := newGuardrailMonitor(t, session.SessionRoleWork, tt.cfg, parseResultFrom(spendRateTimeline(tt.cacheRead)))
+			ch, subID := bus.Subscribe(context.Background())
+			defer bus.Unsubscribe(subID)
+			for i := 0; i < 3; i++ {
+				monitor.poll(context.Background())
+			}
+			assert.ElementsMatch(t, tt.wantTitles, drainSpendRateTitles(ch))
+		})
+	}
+}
+
+func TestCapacityMonitor_SpendRateAlertRearmsAfterCoolingDown(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 9, 22, 17, 0, 0, 0, time.UTC)
+	hot := cacheReadTimeline(30, 5_000_000, nil, start, time.Minute)
+	parseRes := parseResultFrom(hot)
+	monitor, bus, _, _ := newGuardrailMonitor(t, session.SessionRoleWork, config.CapacityConfig{TotalSpendRateUSDPerHour: -1}, parseRes)
 	ch, subID := bus.Subscribe(context.Background())
 	defer bus.Unsubscribe(subID)
 
-	for i := 0; i < 3; i++ {
-		monitor.poll(context.Background())
-	}
-	var n int
-	for _, ty := range drainTypes(ch) {
-		if ty == "session_token_ceiling" {
-			n++
-		}
-	}
-	assert.Equal(t, 1, n)
+	monitor.poll(context.Background())
+	assert.Len(t, drainSpendRateTitles(ch), 1, "first excursion alerts")
+
+	// An hour of quiet pushes every hot turn out of the window.
+	parseRes.TurnTimeline = append(parseRes.TurnTimeline, tokens.TurnStats{
+		Timestamp: start.Add(2 * time.Hour), Model: "claude-sonnet-4-5", Input: 1, Output: 1,
+	})
+	monitor.poll(context.Background())
+	assert.Empty(t, drainSpendRateTitles(ch), "cooled down: no alert")
+
+	parseRes.TurnTimeline = append(parseRes.TurnTimeline, cacheReadTimeline(30, 5_000_000, nil, start.Add(3*time.Hour), time.Minute)...)
+	monitor.poll(context.Background())
+	assert.Len(t, drainSpendRateTitles(ch), 1, "second excursion alerts again")
 }
