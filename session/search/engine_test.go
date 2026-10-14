@@ -469,3 +469,99 @@ func BenchmarkSearchEngine_Search_LargeIndex(b *testing.B) {
 		engine.Search("docker error", SearchOptions{Limit: 20})
 	}
 }
+
+// seedPersistedIndex saves an index holding two "world" documents and returns
+// the store, for the lazy-load tests below.
+func seedPersistedIndex(t *testing.T) *IndexStore {
+	t.Helper()
+	indexStore, err := NewIndexStoreWithDir(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewIndexStoreWithDir: %v", err)
+	}
+	seed := NewSearchEngineWithPersistence(indexStore)
+	_ = seed.IndexMessage("session-1", 0, "user", "hello world", time.Now())
+	_ = seed.IndexMessage("session-1", 1, "assistant", "world peace", time.Now())
+	if err := seed.SaveIndex(); err != nil {
+		t.Fatalf("SaveIndex: %v", err)
+	}
+	return indexStore
+}
+
+// TestSearchEngine_LazyLoad_DefersDecodeUntilFirstUse guards PerfFix-5: the
+// persisted index must not be decoded at construction, but a search must still
+// see it, and the load callback must run once with the sync metadata.
+func TestSearchEngine_LazyLoad_DefersDecodeUntilFirstUse(t *testing.T) {
+	t.Parallel()
+	indexStore := seedPersistedIndex(t)
+
+	loads := 0
+	engine := NewSearchEngineWithPersistence(indexStore)
+	engine.EnableLazyLoad(func(_ *IndexSyncMetadata, err error) {
+		loads++
+		if err != nil {
+			t.Errorf("lazy load error: %v", err)
+		}
+	})
+	if got := engine.index.GetTotalDocs(); got != 0 || loads != 0 {
+		t.Fatalf("index decoded at construction: docs=%d loads=%d, want 0/0", got, loads)
+	}
+
+	for range 2 {
+		results, err := engine.Search("world", SearchOptions{})
+		if err != nil {
+			t.Fatalf("Search: %v", err)
+		}
+		if results.TotalMatches != 2 {
+			t.Errorf("TotalMatches = %d, want 2 (persisted docs)", results.TotalMatches)
+		}
+	}
+	if loads != 1 {
+		t.Errorf("load callback ran %d times, want exactly 1", loads)
+	}
+}
+
+// TestSearchEngine_LazyLoad_WriteLoadsBeforeSave guards the data-loss hazard of
+// lazy loading: indexing then saving on a never-searched engine must merge into
+// the persisted index, not overwrite it with only the new document.
+func TestSearchEngine_LazyLoad_WriteLoadsBeforeSave(t *testing.T) {
+	t.Parallel()
+	indexStore := seedPersistedIndex(t)
+
+	engine := NewSearchEngineWithPersistence(indexStore)
+	engine.EnableLazyLoad(nil)
+	if err := engine.IndexMessage("session-2", 0, "user", "world cup", time.Now()); err != nil {
+		t.Fatalf("IndexMessage: %v", err)
+	}
+	if err := engine.SaveIndex(); err != nil {
+		t.Fatalf("SaveIndex: %v", err)
+	}
+
+	reloaded := NewSearchEngineWithPersistence(indexStore)
+	if err := reloaded.LoadIndex(); err != nil {
+		t.Fatalf("LoadIndex: %v", err)
+	}
+	results, err := reloaded.Search("world", SearchOptions{})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if results.TotalMatches != 3 {
+		t.Errorf("TotalMatches = %d, want 3 (2 persisted + 1 new); the save clobbered the persisted index", results.TotalMatches)
+	}
+}
+
+// TestSearchEngine_LazyLoad_ClearIsNotUndoneByLaterLoad: Clear must win over
+// the pending lazy load, otherwise the next search resurrects cleared data.
+func TestSearchEngine_LazyLoad_ClearIsNotUndoneByLaterLoad(t *testing.T) {
+	t.Parallel()
+	engine := NewSearchEngineWithPersistence(seedPersistedIndex(t))
+	engine.EnableLazyLoad(nil)
+
+	engine.Clear()
+	results, err := engine.Search("world", SearchOptions{})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if results.TotalMatches != 0 {
+		t.Errorf("TotalMatches = %d after Clear, want 0", results.TotalMatches)
+	}
+}
