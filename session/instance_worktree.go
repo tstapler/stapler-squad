@@ -550,7 +550,9 @@ func (i *Instance) Workspace() Workspace {
 	existingDir := activeDir
 	if existingDir != repoRoot {
 		if _, err := os.Stat(existingDir); err != nil {
-			log.Warn("worktree path no longer exists on disk, falling back to repo path", "session", i.GetTitle(), "worktreePath", existingDir)
+			// Debug, not Warn: a paused or finished session's worktree is expected to be gone,
+			// and Workspace() runs on every poll — at Warn this was ~10% of the log.
+			log.Debug("worktree path no longer exists on disk, falling back to repo path", "session", i.GetTitle(), "worktreePath", existingDir)
 			existingDir = repoRoot
 		}
 	}
