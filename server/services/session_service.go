@@ -608,25 +608,34 @@ func newDefaultSearchEngine() *search.SearchEngine {
 		return search.NewSearchEngine()
 	}
 	searchEngine := search.NewSearchEngineWithPersistence(indexStore)
-	if loadErr := searchEngine.LoadIndex(); loadErr != nil {
-		var versionErr *search.IndexVersionMismatchError
-		if errors.As(loadErr, &versionErr) {
-			// The on-disk index predates a schema change (see CurrentIndexVersion)
-			// and was rejected rather than mis-decoded. This self-heals: the next
-			// search request finds syncMetadata unset and triggers a full rebuild
-			// (SearchEngine.IncrementalSync -> buildIndexLocked) from live session
-			// history, so results are only empty until that first search — not
-			// until new session activity occurs.
-			log.Warn("search index format changed; discarding incompatible on-disk index",
-				"old_version", versionErr.Got, "new_version", versionErr.Want, "path", versionErr.Path,
-				"impact", "search results empty until next search request triggers an automatic full reindex")
-		} else {
-			log.Warn("failed to load persisted search index", "err", loadErr)
-		}
-	} else if meta := searchEngine.GetSyncMetadata(); meta != nil {
-		log.Info("loaded persisted search index", "sessions", meta.TotalSessions, "documents", meta.TotalDocuments)
-	}
+	// Decoding the persisted index takes hundreds of MB of heap and seconds of CPU on
+	// every service start, and only the search RPC uses it, so defer it to first use.
+	searchEngine.EnableLazyLoad(logSearchIndexLoad)
 	return searchEngine
+}
+
+// logSearchIndexLoad reports the outcome of loading the persisted search index.
+func logSearchIndexLoad(meta *search.IndexSyncMetadata, loadErr error) {
+	if loadErr == nil {
+		if meta != nil {
+			log.Info("loaded persisted search index", "sessions", meta.TotalSessions, "documents", meta.TotalDocuments)
+		}
+		return
+	}
+	var versionErr *search.IndexVersionMismatchError
+	if errors.As(loadErr, &versionErr) {
+		// The on-disk index predates a schema change (see CurrentIndexVersion)
+		// and was rejected rather than mis-decoded. This self-heals: the next
+		// search request finds syncMetadata unset and triggers a full rebuild
+		// (SearchEngine.IncrementalSync -> buildIndexLocked) from live session
+		// history, so results are only empty until that first search — not
+		// until new session activity occurs.
+		log.Warn("search index format changed; discarding incompatible on-disk index",
+			"old_version", versionErr.Got, "new_version", versionErr.Want, "path", versionErr.Path,
+			"impact", "search results empty until next search request triggers an automatic full reindex")
+		return
+	}
+	log.Warn("failed to load persisted search index", "err", loadErr)
 }
 
 // claudeSettingsNotificationContent groups publishClaudeSettingsNotification's

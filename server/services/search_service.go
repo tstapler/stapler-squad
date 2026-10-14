@@ -545,6 +545,12 @@ func (ss *SearchService) SearchClaudeHistory(
 	syncStart := time.Now()
 	syncResult, err := ss.searchEngine.IncrementalSync(hist)
 	syncDuration := time.Since(syncStart)
+	if err != nil {
+		// IncrementalSync returns a nil result on a failed full rebuild.
+		syncSpan.RecordError(err)
+		syncSpan.End()
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to sync search index: %w", err))
+	}
 	syncSpan.SetAttributes(
 		attribute.Int64("sync.duration_ms", syncDuration.Milliseconds()),
 		attribute.Bool("sync.was_full_rebuild", syncResult.WasFullRebuild),
@@ -552,11 +558,6 @@ func (ss *SearchService) SearchClaudeHistory(
 		attribute.Int("sync.sessions_updated", syncResult.SessionsUpdated),
 		attribute.Int("sync.sessions_removed", syncResult.SessionsRemoved),
 	)
-	if err != nil {
-		syncSpan.RecordError(err)
-		syncSpan.End()
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to sync search index: %w", err))
-	}
 	syncSpan.End()
 
 	if syncResult.HasChanges() || syncResult.WasFullRebuild {
