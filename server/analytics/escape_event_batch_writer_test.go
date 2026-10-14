@@ -73,7 +73,7 @@ func TestFlushBatch_EnforcesPerSessionCap_DeletingOldestFirst(t *testing.T) {
 	got, err := client.EscapeEvent.Query().Order(escapeevent.ByWallTime()).All(ctx)
 	require.NoError(t, err)
 	require.Len(t, got, cap)
-	var seqs []string
+	seqs := make([]string, 0, len(got))
 	for _, e := range got {
 		seqs = append(seqs, fmt.Sprint(e.SessionSeq))
 	}
