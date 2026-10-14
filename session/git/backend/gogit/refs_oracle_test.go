@@ -182,7 +182,7 @@ func opsFor(fixture string) []gitoracle.Op {
 	_, rich := fixtureRevisions[fixture]
 	ops = append(ops, listRefOps(rich && fixture != "unborn" && fixture != "symlinked" && fixture != "subdirs" && fixture != "malformed")...)
 	switch fixture {
-	case "refs-rich", "annotated-tags", "linear", "diverged", "criss-cross", "unrelated-histories", "shallow", "random-dag", "dangling-head", "linked-worktrees", "bare", "submodule":
+	case "refs-rich", "annotated-tags", "linear", "diverged", "criss-cross", "unrelated-histories", "shallow", "random-dag", "dangling-head", "linked-worktrees", "bare", "submodule", "packed-deltas":
 		ops = append(ops, mergeBaseOps(fixture)...)
 	}
 	return ops
