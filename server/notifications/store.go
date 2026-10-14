@@ -419,6 +419,30 @@ func (s *NotificationHistoryStore) MarkRead(ids []string) (int, error) {
 	return count, nil
 }
 
+// MarkReadWhere marks every unread record for which match returns true as read
+// and persists once. match runs under the store lock, so it must not call back
+// into the store. Returns the number of records marked.
+func (s *NotificationHistoryStore) MarkReadWhere(match func(*NotificationRecord) bool) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	count := 0
+	for _, r := range s.records {
+		if !r.IsRead && match(r) {
+			r.IsRead = true
+			r.ReadAt = &now
+			count++
+		}
+	}
+	if count > 0 {
+		if err := s.saveToDisk(); err != nil {
+			return count, err
+		}
+	}
+	return count, nil
+}
+
 // Clear removes notifications. If before is nil, clears all. Otherwise clears
 // notifications created before the given time. Returns the number cleared.
 // Clear deletes notification records — every record when before is nil, or

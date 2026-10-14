@@ -345,6 +345,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			// adding meaningful overhead.
 			notifications.StartUrgencyDecaySweeper(serverCtx, notifStore, 5*time.Minute, &srv.backgroundTasksWG)
 
+			// Retire item-scoped notifications whose item is done/archived or no longer
+			// stuck; stuck-state resolution alone never did.
+			notifications.StartResolvedItemReaper(serverCtx, notifStore, backlogItemStateLookup(storage), 5*time.Minute, &srv.backgroundTasksWG)
+
 			// Wire the batch-fetch session-existence lookup used by the store's
 			// orphan-pruning sweep (enforceRetention → pruneOrphanedRecords).
 			// See buildSessionExistenceLookup for the uptime-gate rationale.
