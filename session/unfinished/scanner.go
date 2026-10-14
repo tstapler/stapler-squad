@@ -417,6 +417,9 @@ func (s *Scanner) persistCacheToDisk() {
 					s.deindexRepoWorktree(result.RepoPath, path)
 				}
 			}
+			if r, ok := s.reader.(worktreeInvalidator); ok {
+				r.ForgetWorktree(path)
+			}
 			s.cacheStore.Delete(k)
 			evicted++
 			return true
@@ -538,7 +541,7 @@ func (s *Scanner) fsnotifyLoop(ctx context.Context) {
 			for {
 				if filepath.Base(dir) == ".git" {
 					repoRoot := filepath.Dir(dir)
-					s.InvalidateCache(repoRoot)
+					s.invalidateRepo(repoRoot)
 					s.EnqueueRepo(repoRoot)
 					break
 				}
@@ -950,6 +953,7 @@ func (s *Scanner) IsTracked(repoPath string) bool {
 func (s *Scanner) RemoveRepo(repoPath string) {
 	s.repoSet.Delete(repoPath)
 	s.unwatchRepo(repoPath)
+	s.forgetRepoWorktrees(repoPath)
 	// Purge cached results for this repo.
 	s.resultStore.Range(func(k, _ any) bool {
 		key, _ := k.(string)
@@ -962,6 +966,26 @@ func (s *Scanner) RemoveRepo(repoPath string) {
 	// removed (not just missing one worktree) — without this, every repo
 	// ever tracked leaves an empty *sync.Map behind for the process lifetime.
 	s.repoWorktrees.Delete(repoPath)
+}
+
+// forgetRepoWorktrees drops the reader's cached state, including reachable
+// sets, for repoPath and its worktrees. Must run before repoWorktrees is cleared.
+func (s *Scanner) forgetRepoWorktrees(repoPath string) {
+	r, ok := s.reader.(worktreeInvalidator)
+	if !ok {
+		return
+	}
+	r.ForgetWorktree(repoPath)
+	if v, ok := s.repoWorktrees.Load(repoPath); ok {
+		if set, ok := v.(*sync.Map); ok {
+			set.Range(func(k, _ any) bool {
+				if wt, _ := k.(string); wt != "" {
+					r.ForgetWorktree(wt)
+				}
+				return true
+			})
+		}
+	}
 }
 
 // pruneRepoInterval is a var (not a const) so tests can shrink it instead of
@@ -1132,11 +1156,40 @@ func (s *Scanner) getOrCreateCache(worktreePath string) *worktreeCache {
 	return c
 }
 
-// InvalidateCache invalidates the cache for a given worktree path.
+// worktreeInvalidator is implemented by VCSReaders that keep their own
+// TTL-cached results (GoGitVCSReader), so a change event can evict them.
+type worktreeInvalidator interface {
+	InvalidateWorktree(worktreePath string)
+	ForgetWorktree(worktreePath string)
+}
+
+// InvalidateCache invalidates the scan cache and the reader's cached git
+// results for a given worktree path, so the rescan it triggers re-populates
+// them from the changed repo rather than serving a pre-change value.
 func (s *Scanner) InvalidateCache(worktreePath string) {
 	if v, ok := s.cacheStore.Load(worktreePath); ok {
 		if c, ok := v.(*worktreeCache); ok {
 			c.Invalidate()
+		}
+	}
+	if r, ok := s.reader.(worktreeInvalidator); ok {
+		r.InvalidateWorktree(worktreePath)
+	}
+}
+
+// invalidateRepo is InvalidateCache for repoPath and every linked worktree of
+// it: a write under the repo's .git dir (refs, packed objects) can change any
+// of them.
+func (s *Scanner) invalidateRepo(repoPath string) {
+	s.InvalidateCache(repoPath)
+	if v, ok := s.repoWorktrees.Load(repoPath); ok {
+		if set, ok := v.(*sync.Map); ok {
+			set.Range(func(k, _ any) bool {
+				if wt, _ := k.(string); wt != "" {
+					s.InvalidateCache(wt)
+				}
+				return true
+			})
 		}
 	}
 }

@@ -384,6 +384,38 @@ func BranchAheadBehind(repoPath, branchName, mainBranch string) (BranchStatus, e
 	return BranchStatus{BranchExists: true, AheadOfMain: ahead, BehindMain: behind}, nil
 }
 
+// BranchHasCommitsAhead reports whether branchName has any commit not on
+// mainBranch, with the same exists/error semantics as BranchAheadBehind. It
+// answers with one ancestry check on the branch tip instead of counting both
+// directions, for callers that only need ahead > 0.
+func BranchHasCommitsAhead(repoPath, branchName, mainBranch string) (branchExists, ahead bool, err error) {
+	repo, err := OpenRepo(repoPath)
+	if err != nil {
+		return false, false, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
+	}
+	branchRef, err := repo.Reference(plumbing.NewBranchReferenceName(branchName), true)
+	if err != nil {
+		return false, false, nil
+	}
+	mainRef, err := repo.Reference(plumbing.NewBranchReferenceName(mainBranch), true)
+	if err != nil {
+		return false, false, fmt.Errorf("failed to resolve local %s: %w", mainBranch, err)
+	}
+	branchCommit, err := repo.CommitObject(branchRef.Hash())
+	if err != nil {
+		return false, false, fmt.Errorf("failed to resolve commit for %s: %w", branchName, err)
+	}
+	mainCommit, err := repo.CommitObject(mainRef.Hash())
+	if err != nil {
+		return false, false, fmt.Errorf("failed to resolve commit for %s: %w", mainBranch, err)
+	}
+	onMain, err := branchCommit.IsAncestor(mainCommit)
+	if err != nil {
+		return true, false, fmt.Errorf("failed to check %s against %s: %w", branchName, mainBranch, err)
+	}
+	return true, !onMain, nil
+}
+
 // BehindOriginMain fetches mainBranch from origin into worktreePath and reports how
 // many commits origin/mainBranch has that worktreePath's currently checked-out HEAD
 // does not — i.e. how far the checked-out branch has drifted behind main. Unlike
@@ -432,21 +464,50 @@ func BehindOriginMain(worktreePath, mainBranch string) (int, error) {
 // a UI badge only ever needs to distinguish "a few commits" from "many".
 const countCommitsNotAncestorOfCap = 500
 
+// targetAncestorWalkCap bounds the one-time walk of target's history in
+// countCommitsNotAncestorOf. Past it a deep ancestor is treated as not-an-ancestor,
+// which can only inflate the count, and countCommitsNotAncestorOfCap already
+// bounds that.
+const targetAncestorWalkCap = 50_000
+
+// ancestorSet returns target plus up to targetAncestorWalkCap of its ancestors.
+func ancestorSet(target *object.Commit) (map[plumbing.Hash]bool, error) {
+	set := make(map[plumbing.Hash]bool, 64)
+	iter := object.NewCommitPreorderIter(target, nil, nil)
+	defer iter.Close()
+	err := iter.ForEach(func(c *object.Commit) error {
+		if len(set) >= targetAncestorWalkCap {
+			return storer.ErrStop
+		}
+		set[c.Hash] = true
+		return nil
+	})
+	// A shallow or partial clone is missing parents past its boundary. The old
+	// per-commit IsAncestor stopped at the first hit and never reached them, so
+	// keep the partial set (a conservative over-count) instead of failing.
+	if errors.Is(err, plumbing.ErrObjectNotFound) {
+		err = nil
+	}
+	return set, err
+}
+
 // countCommitsNotAncestorOf walks back from "from" via parent edges, counting
 // commits until each path reaches one that is an ancestor of "target" (i.e. the
 // merge-base on that path) — equivalent to `git rev-list from ^target --count`.
+// Walks target's history once instead of once per visited commit
+// (Commit.IsAncestor re-walks it on every call).
 func countCommitsNotAncestorOf(from, target *object.Commit) (int, error) {
+	targetAncestors, err := ancestorSet(target)
+	if err != nil {
+		return 0, err
+	}
 	seen := map[plumbing.Hash]bool{from.Hash: true}
 	queue := []*object.Commit{from}
 	count := 0
 	for len(queue) > 0 && count < countCommitsNotAncestorOfCap {
 		c := queue[0]
 		queue = queue[1:]
-		isAncestor, err := c.IsAncestor(target)
-		if err != nil {
-			return count, err
-		}
-		if isAncestor {
+		if targetAncestors[c.Hash] {
 			continue
 		}
 		count++
