@@ -114,7 +114,6 @@ function addMany(count: number, overrides: Partial<NotificationData> = {}) {
 
 beforeEach(() => {
   setDesktop();
-  mockFlags["notification_tray_v2"] = true;
   mockConnectivity = { state: "connected", isOffline: false };
 });
 
@@ -137,18 +136,11 @@ describe("ToastStack cap and chip (Story 3.3)", () => {
   });
 
   it("toast_stack_should_opt_deck_and_legacy_list_out_of_terminal_gestures_when_rendered", () => {
-    const { unmount } = mount();
+    mount();
     addMany(2);
     const deck = screen.getByTestId("toast-stack");
     expect(deck).toHaveAttribute("data-gesture-ignore");
     expect(screen.getAllByTestId("toast")[0].closest(GESTURE_IGNORE_SELECTOR)).toBe(deck);
-    unmount();
-
-    mockFlags["notification_tray_v2"] = false;
-    mount();
-    addMany(2);
-    const legacyToast = screen.getAllByTestId("toast")[0];
-    expect(legacyToast.closest(GESTURE_IGNORE_SELECTOR)).not.toBeNull();
   });
 
   it("toast_stack_should_cap_1_portrait_1_landscape_0_keyboard_when_viewport_variant_changes", () => {
@@ -206,32 +198,6 @@ describe("ToastStack cap and chip (Story 3.3)", () => {
     expect(source).not.toMatch(/nth-child/);
     expect(source).toMatch(/flexDirection: "column"/);
     expect(source).toMatch(/gap: "8px"/);
-  });
-
-  it("toast_stack_should_render_legacy_list_of_10_when_flag_off", () => {
-    mockFlags["notification_tray_v2"] = false;
-    mount();
-    addMany(10);
-
-    expect(screen.getAllByTestId("toast")).toHaveLength(10);
-    expect(screen.queryByTestId("toast-overflow-chip")).toBeNull();
-    expect(screen.queryByTestId("toast-stack")).toBeNull();
-  });
-
-  it("toast_stack_should_read_flag_live_and_apply_cap_without_reload_when_notification_tray_v2_toggled", () => {
-    mockFlags["notification_tray_v2"] = false;
-    const { rerender } = mount();
-    addMany(5);
-    expect(screen.getAllByTestId("toast")).toHaveLength(5);
-
-    mockFlags["notification_tray_v2"] = true;
-    rerender(
-      <Harness>
-        <Driver />
-      </Harness>,
-    );
-    expect(screen.getAllByTestId("toast")).toHaveLength(3);
-    expect(screen.getByTestId("toast-overflow-chip")).toHaveTextContent("+2 more");
   });
 
   it("toast_stack_should_hold_cap_and_update_chip_in_place_when_burst_of_50", () => {
@@ -403,8 +369,7 @@ describe("Move all to tray (Story 3.4)", () => {
     expect(notifications.notificationHistory).toHaveLength(3);
   });
 
-  it("clearAll_should_not_remove_pinned_question_toast_when_flag_off", () => {
-    mockFlags["notification_tray_v2"] = false;
+  it("clearAll_should_not_remove_pinned_question_toast", () => {
     mount();
     act(() =>
       notifications.addNotification(toast(0, { notificationType: "question", isPendingDecision: true })),
@@ -631,7 +596,6 @@ describe("ToastStack announcements (Story 3.6)", () => {
   afterEach(() => jest.useRealTimers());
 
   it("announcer_should_own_single_polite_and_assertive_region_and_coalesce_burst_once_with_no_surface_live_role", () => {
-    mockFlags["notification_tray_v2"] = false; // legacy list: all five cards render
     const { container } = mount();
     expect(screen.getAllByTestId("announcer-polite")).toHaveLength(1);
     expect(screen.getAllByTestId("announcer-assertive")).toHaveLength(1);
@@ -639,8 +603,8 @@ describe("ToastStack announcements (Story 3.6)", () => {
     act(() => {
       for (let i = 0; i < 5; i++) notifications.addNotification(toast(i));
     });
-    // Cards render, and none of them carries its own live role.
-    expect(screen.getAllByTestId("toast")).toHaveLength(5);
+    // Cards render (up to the cap), and none of them carries its own live role.
+    expect(screen.getAllByTestId("toast")).toHaveLength(3);
     for (const card of screen.getAllByTestId("toast")) {
       expect(card.closest("[role='status'], [role='alert']")).toBeNull();
       expect(card.querySelector("[role='status'], [role='alert']")).toBeNull();

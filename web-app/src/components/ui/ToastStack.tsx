@@ -2,7 +2,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { zIndex } from "@/styles/theme.css";
 import { NotificationToast } from "@/components/ui/NotificationToast";
 import {
   deckPlacement,
@@ -16,7 +15,6 @@ import {
   deckBesideTray,
 } from "@/components/ui/NotificationToast.css";
 import { useDeckViewport } from "@/lib/contexts/deckViewportContext";
-import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import { useNotificationState, useNotificationCommands } from "@/lib/contexts/notificationContexts";
 import { useNotificationConnectivity } from "@/lib/hooks/useNotificationConnectivity";
 import { useAnnounce } from "@/lib/hooks/useAnnounce";
@@ -30,11 +28,9 @@ import { readPinnedCollapseMs } from "@/lib/utils/deckSettings";
 import { TrayEntryChip } from "@/components/ui/TrayHandle";
 import { trayAffordanceVariant } from "@/components/ui/trayVariant";
 import {
-  NOTIFICATION_TRAY_V2_FLAG,
   isPinned,
   partitionToasts,
   toastAutoCloseMs,
-  toastAutoMinimizeMs,
   toastCapFor,
 } from "@/lib/notification-policy";
 import type { NotificationData } from "@/lib/types/notification";
@@ -49,8 +45,6 @@ interface ToastSlotProps {
   notification: NotificationData;
   timers: ToastTimerRegistry;
   onRemove: (id: string) => void;
-  /** Capped deck: cards sit in flow, and a pinned decision never auto-closes or minimizes. */
-  stacked: boolean;
   /** Phone deck: a pinned card with no interaction collapses to a chip so it cannot cover the terminal for long. */
   collapsible?: boolean;
   offlineReason?: string;
@@ -60,7 +54,7 @@ interface ToastSlotProps {
  * One toast and its timers. Every timer goes through the registry so the stack,
  * and not the card, decides when a toast closes, minimizes or exits.
  */
-function ToastSlot({ notification, timers, onRemove, stacked, collapsible = false, offlineReason }: ToastSlotProps) {
+function ToastSlot({ notification, timers, onRemove, collapsible = false, offlineReason }: ToastSlotProps) {
   const { id } = notification;
   // The audit-log object is new every render; a ref keeps timer effects from restarting.
   const auditLog = useAuditLog();
@@ -68,7 +62,6 @@ function ToastSlot({ notification, timers, onRemove, stacked, collapsible = fals
   auditLogRef.current = auditLog;
   const [presented, setPresented] = useState(false);
   const [exiting, setExiting] = useState(false);
-  const [minimized, setMinimized] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   // Once the user expands a collapsed card it stays open: no collapse loop.
   const expandedByUser = useRef(false);
@@ -101,21 +94,13 @@ function ToastSlot({ notification, timers, onRemove, stacked, collapsible = fals
 
   useEffect(() => {
     if (!presented) return;
-    // A pinned decision in the capped deck is never timed out: it leaves only by
-    // an explicit action (the tray keeps it either way).
-    if (stacked && pinned) return;
+    // A pinned decision is never timed out: it leaves only by an explicit action
+    // (the tray keeps it either way).
+    if (pinned) return;
     const autoClose = toastAutoCloseMs(notification.notificationType);
     if (autoClose > 0) timers.register(id, "close", autoClose, () => requestClose());
     return () => timers.cancel(id, "close");
-  }, [presented, stacked, pinned, id, notification.notificationType, requestClose, timers]);
-
-  useEffect(() => {
-    // The compact-pill minimize belongs to the legacy corner list; the deck keeps cards whole.
-    if (!presented || minimized || stacked) return;
-    const autoMinimize = toastAutoMinimizeMs(notification.notificationType);
-    if (autoMinimize > 0) timers.register(id, "minimize", autoMinimize, () => setMinimized(true));
-    return () => timers.cancel(id, "minimize");
-  }, [presented, minimized, stacked, id, notification.notificationType, timers]);
+  }, [presented, pinned, id, notification.notificationType, requestClose, timers]);
 
   useEffect(() => {
     if (!presented || !collapsible || !pinned || collapsed || busy || expandedByUser.current) return;
@@ -141,7 +126,7 @@ function ToastSlot({ notification, timers, onRemove, stacked, collapsible = fals
   return (
     <NotificationToast
       notification={notification}
-      stacked={stacked}
+      stacked
       compact={collapsible}
       offlineReason={offlineReason}
       collapsed={collapsed}
@@ -153,8 +138,6 @@ function ToastSlot({ notification, timers, onRemove, stacked, collapsible = fals
       onActionFailed={() => setActionFailed(true)}
       holdHandlers={holdHandlers}
       exiting={exiting}
-      minimized={minimized}
-      onExpand={() => setMinimized(false)}
       onClose={requestClose}
       onPresent={onPresent}
     />
@@ -260,7 +243,7 @@ function UndoBar({ count, timers, onUndo }: { count: number; timers: ToastTimerR
   );
 }
 
-/** The capped deck (notification_tray_v2): at most `cap` cards and a "+N more" chip for the rest. */
+/** The capped deck: at most `cap` cards and a "+N more" chip for the rest. */
 function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
   const viewport = useDeckViewport();
   const { isOffline } = useNotificationConnectivity();
@@ -333,7 +316,6 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
           notification={notification}
           timers={timers}
           onRemove={onRemove}
-          stacked
           collapsible={onPhone}
           offlineReason={isOffline ? "Offline" : undefined}
         />
@@ -357,37 +339,13 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
   );
 }
 
-/** Legacy corner list: every toast renders, as before the capped deck. */
-function LegacyList({ toasts, timers, onRemove }: Omit<DeckProps, "onOpenTray">) {
-  return (
-    <div
-      data-gesture-ignore
-      style={{
-        position: "fixed",
-        bottom: 0,
-        right: 0,
-        zIndex: zIndex.toast,
-        pointerEvents: "none",
-      }}
-    >
-      {toasts.map((notification) => (
-        <div key={notification.id} style={{ pointerEvents: "auto" }}>
-          <ToastSlot notification={notification} timers={timers} onRemove={onRemove} stacked={false} />
-        </div>
-      ))}
-    </div>
-  );
-}
-
 /**
  * Renders the active toasts. The provider owns the queue and the timer registry;
- * this owns presentation, per-toast timers and the cap. With `notification_tray_v2`
- * off it renders the legacy uncapped list.
+ * this owns presentation, per-toast timers and the cap.
  */
 export function ToastStack({ timers }: ToastStackProps) {
   const { notifications, isPanelOpen } = useNotificationState();
   const { removeNotification, togglePanel } = useNotificationCommands();
-  const v2 = useFeatureFlag(NOTIFICATION_TRAY_V2_FLAG);
   useAnnounceArrivals(notifications);
 
   // An open tray holds every toast timer; closing it resumes them with time preserved.
@@ -397,9 +355,5 @@ export function ToastStack({ timers }: ToastStackProps) {
     return () => timers.release("tray-open");
   }, [isPanelOpen, timers]);
 
-  return v2 ? (
-    <Deck toasts={notifications} timers={timers} onRemove={removeNotification} onOpenTray={togglePanel} />
-  ) : (
-    <LegacyList toasts={notifications} timers={timers} onRemove={removeNotification} />
-  );
+  return <Deck toasts={notifications} timers={timers} onRemove={removeNotification} onOpenTray={togglePanel} />;
 }

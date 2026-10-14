@@ -11,12 +11,10 @@ import { test, expect, type APIRequestContext } from '@playwright/test';
 import {
   NotificationTray,
   ToastDeck,
-  TRAY_V2_FLAG,
   installWebSocketSendCounter,
   openTerminalSession,
   readTerminalFacts,
   sendNotification,
-  setFeatureFlag,
   waitForIdleFrames,
   webSocketSends,
 } from './pages/NotificationPanel';
@@ -44,13 +42,8 @@ async function historyFor(request: APIRequestContext, prefix: string): Promise<H
 }
 
 test.describe('toast stack (desktop)', () => {
-  test.beforeEach(async ({ page, request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, true);
+  test.beforeEach(async ({ page }) => {
     await page.addInitScript((key) => localStorage.setItem(key, 'true'), ONBOARDED_KEY);
-  });
-
-  test.afterEach(async ({ request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, false);
   });
 
   test('toast_stack_should_show_exactly_3_toasts_and_chip_plus7_when_10_errors_seeded', async ({ page, request }) => {
@@ -116,13 +109,6 @@ test.describe('toast stack (desktop)', () => {
 
 test.describe('toast stack over a terminal (desktop)', () => {
   const MARKER = 'DECK-TERMINAL-MARKER';
-
-  test.beforeEach(async ({ request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, true);
-  });
-  test.afterEach(async ({ request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, false);
-  });
 
   async function seedDeck(page: import('@playwright/test').Page, request: APIRequestContext, prefix: string, count: number) {
     const deck = new ToastDeck(page);

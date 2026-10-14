@@ -1,48 +1,5 @@
-import { style, styleVariants, keyframes, globalStyle } from "@vanilla-extract/css";
+import { style, styleVariants, globalStyle } from "@vanilla-extract/css";
 import { vars, breakpoints, zIndex } from "@/styles/theme.css";
-
-const fadeIn = keyframes({
-  from: { opacity: 0 },
-  to: { opacity: 1 },
-});
-
-export const overlay = style({
-  position: "fixed",
-  top: 0,
-  left: 0,
-  right: 0,
-  bottom: 0,
-  backgroundColor: vars.color.overlayBackground,
-  zIndex: zIndex.slideOver,
-  animation: `${fadeIn} 0.3s ease-out`,
-});
-
-export const panel = style({
-  position: "fixed",
-  top: 0,
-  right: 0,
-  bottom: 0,
-  width: "400px",
-  maxWidth: "90vw",
-  backgroundColor: vars.color.background,
-  boxShadow: "-2px 0 10px rgba(0, 0, 0, 0.2)",
-  zIndex: zIndex.slideOver,
-  transform: "translateX(100%)",
-  transition: "transform 0.3s ease-out",
-  display: "flex",
-  flexDirection: "column",
-  overflow: "hidden",
-  "@media": {
-    [`screen and (max-width: ${breakpoints.md})`]: {
-      width: "100%",
-      maxWidth: "100vw",
-    },
-  },
-});
-
-export const panelOpen = style({
-  transform: "translateX(0)",
-});
 
 export const header = style({
   display: "flex",
@@ -926,7 +883,7 @@ export const needsDecisionClearFilterButton = style({
 });
 
 // ---------------------------------------------------------------------------
-// Notification tray (notification_tray_v2): non-modal, transform-only motion.
+// Notification tray: non-modal, transform-only motion.
 // Closed trays are `visibility: hidden`, so they leave the tab order and the
 // accessibility tree without a layout change.
 // ---------------------------------------------------------------------------

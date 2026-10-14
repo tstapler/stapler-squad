@@ -3,8 +3,6 @@
 import { useEffect, useRef, type RefObject } from "react";
 
 interface Options {
-  /** notification_tray_v2 is on. */
-  enabled: boolean;
   isOpen: boolean;
   /** The tray is a bottom sheet (owns a history entry for hardware Back). */
   isSheet: boolean;
@@ -21,7 +19,6 @@ interface Options {
  * the modal sheet's inert background.
  */
 export function useTrayDismissal({
-  enabled,
   isOpen,
   isSheet,
   modal,
@@ -29,7 +26,7 @@ export function useTrayDismissal({
   close,
 }: Options): { releaseHistoryEntry: () => void } {
   useEffect(() => {
-    if (!enabled || !isOpen) return;
+    if (!isOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
       const target = e.target as Node | null;
@@ -39,7 +36,7 @@ export function useTrayDismissal({
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [enabled, isOpen, trayRef, close]);
+  }, [isOpen, trayRef, close]);
 
   const closeRef = useRef(close);
   closeRef.current = close;
@@ -50,7 +47,7 @@ export function useTrayDismissal({
     ownsHistoryEntry.current = false;
   }).current;
   useEffect(() => {
-    if (!enabled || !isSheet || !isOpen) return;
+    if (!isSheet || !isOpen) return;
     window.history.pushState({ ...(window.history.state ?? {}), ssqTray: true }, "");
     ownsHistoryEntry.current = true;
     const onPopState = () => {
@@ -65,7 +62,7 @@ export function useTrayDismissal({
         window.history.back();
       }
     };
-  }, [enabled, isSheet, isOpen]);
+  }, [isSheet, isOpen]);
 
   useEffect(() => {
     if (!modal) return;

@@ -3,9 +3,7 @@
 
 import { useMemo, type ReactNode } from "react";
 import { useDeckViewport } from "@/lib/contexts/deckViewportContext";
-import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import { useNotificationCommands, useNotificationState } from "@/lib/contexts/notificationContexts";
-import { NOTIFICATION_TRAY_V2_FLAG } from "@/lib/notification-policy";
 import { countNeedsAttention } from "@/lib/utils/notificationGrouping";
 import { capBadgeCount } from "@/lib/utils/notificationMapping";
 import { trayHandle, trayHandleDot, trayQuietBadge } from "./NotificationPanel.css";
@@ -41,16 +39,14 @@ export function useTrayCounts() {
 /**
  * The desktop edge handle: a fixed 44px-wide band at 35% from the top (O6),
  * capped "99+" visually with the exact count in its accessible name. It overlays
- * the terminal; nothing reflows. Not rendered on a phone (the entry chip is) or
- * with `notification_tray_v2` off.
+ * the terminal; nothing reflows. Not rendered on a phone (the entry chip is).
  */
 export function TrayHandle() {
-  const v2 = useFeatureFlag(NOTIFICATION_TRAY_V2_FLAG);
   const { isInnerScreen } = useDeckViewport();
   const { isPanelOpen, quietMode } = useNotificationState();
   const { togglePanel } = useNotificationCommands();
   const { unreadCount, needsAttention } = useTrayCounts();
-  if (!v2 || !isInnerScreen) return null;
+  if (!isInnerScreen) return null;
 
   return (
     <button

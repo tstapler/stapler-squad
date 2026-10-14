@@ -8,7 +8,7 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { SessionClient } from './helpers/session-client';
-import { ToastDeck, TRAY_V2_FLAG, sendNotification, setFeatureFlag } from './pages/NotificationPanel';
+import { ToastDeck, sendNotification } from './pages/NotificationPanel';
 import { profiles, setKeyboardOpen } from './helpers/viewport-profiles';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
@@ -35,13 +35,6 @@ async function openSessionAndSeed(page: Page, request: Parameters<typeof sendNot
 }
 
 test.describe('toast stack (phone)', () => {
-  test.beforeEach(async ({ request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, true);
-  });
-  test.afterEach(async ({ request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, false);
-  });
-
   test.describe('V2 portrait', () => {
     test.use(profiles.V2.use);
 

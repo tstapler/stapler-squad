@@ -41,9 +41,8 @@ jest.mock("@/lib/utils/broadcastChannel", () => ({
   }),
 }));
 
-const mockFlags: Record<string, boolean> = {};
 jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
-  useFeatureFlag: (name: string) => mockFlags[name] ?? false,
+  useFeatureFlag: () => false,
 }));
 
 jest.mock("@/lib/utils/notificationStorage", () => ({
@@ -989,10 +988,6 @@ describe("Quiet mode (Story 4.5)", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     window.localStorage.clear();
-    mockFlags.notification_tray_v2 = true;
-  });
-  afterEach(() => {
-    mockFlags.notification_tray_v2 = false;
   });
 
   it("quiet_mode_should_demote_a_custom_toast_to_the_tray_and_still_toast_a_pending_decision", () => {
@@ -1045,15 +1040,6 @@ describe("Quiet mode (Story 4.5)", () => {
     set.mockRestore();
   });
 
-  it("quiet_mode_should_not_demote_anything_when_the_flag_is_off", () => {
-    mockFlags.notification_tray_v2 = false;
-    const { result } = renderHook(() => useNotifications(), { wrapper });
-    act(() => result.current.setQuietMode(true));
-    act(() => {
-      result.current.addNotification(makeNotification({ notificationType: "custom" }));
-    });
-    expect(result.current.notifications).toHaveLength(1);
-  });
 });
 
 describe("unread count floor (TH-1)", () => {

@@ -145,19 +145,17 @@ export function BottomNav() {
               </section>
             ))}
           <div className={styles.moreSheetUtilitySection}>
-            {flags.notification_tray_v2 && (
-              <button
-                className={styles.moreSheetItem}
-                data-testid="more-notifications"
-                onClick={() => {
-                  setMoreOpen(false);
-                  togglePanel();
-                }}
-              >
-                <span className={styles.moreSheetItemIcon} aria-hidden="true"><Bell size={20} /></span>
-                <span>Notifications ({unreadCount})</span>
-              </button>
-            )}
+            <button
+              className={styles.moreSheetItem}
+              data-testid="more-notifications"
+              onClick={() => {
+                setMoreOpen(false);
+                togglePanel();
+              }}
+            >
+              <span className={styles.moreSheetItemIcon} aria-hidden="true"><Bell size={20} /></span>
+              <span>Notifications ({unreadCount})</span>
+            </button>
             <button
               className={styles.moreSheetItem}
               onClick={toggleHandedness}
@@ -188,46 +186,27 @@ export function BottomNav() {
         data-left-handed={leftHanded || undefined}
       >
         {primaryPages.map(renderPrimaryItem)}
-        {flags.notification_tray_v2 ? (
-          // With the tray on, Alerts opens the tray instead of leaving the page (the page stays
-          // reachable from the tray's "Review all notifications"). preventDefault on mousedown keeps
-          // terminal focus, so opening it does not drop the soft keyboard.
-          <button
-            type="button"
-            className={`${styles.navItem} ${styles.notificationButton} ${isPanelOpen ? styles.navItemActive : ""}`}
-            data-testid="nav-alerts"
-            aria-expanded={isPanelOpen}
-            aria-controls="notification-tray"
-            aria-label={`${unreadCount > 0 ? `Notifications (${unreadCount} unread)` : "Notifications"}${quietMode ? ", quiet mode on" : ""}`}
-            onClick={() => togglePanel()}
-            onMouseDown={(e) => e.preventDefault()}
-          >
-            <span className={styles.notificationIconWrap} aria-hidden="true">
-              <Bell size={20} />
-              {unreadCount > 0 && (
-                <span className={styles.notificationBadge}>{capBadgeCount(unreadCount)}</span>
-              )}
-            </span>
-            <span className={styles.navItemLabel}>{quietMode ? "Quiet" : "Alerts"}</span>
-          </button>
-        ) : (
-          <AppLink
-            href={routes.notifications}
-            className={`${styles.navItem} ${styles.notificationButton} ${pathname === routes.notifications ? styles.navItemActive : ""}`}
-            aria-current={pathname === routes.notifications ? "page" : undefined}
-            aria-label={unreadCount > 0 ? `Notifications (${unreadCount} unread)` : "Notifications"}
-          >
-            <span className={styles.notificationIconWrap} aria-hidden="true">
-              <Bell size={20} />
-              {unreadCount > 0 && (
-                <span className={styles.notificationBadge} aria-label={`${unreadCount} unread`}>
-                  {unreadCount > 9 ? "9+" : unreadCount}
-                </span>
-              )}
-            </span>
-            <span className={styles.navItemLabel}>Alerts</span>
-          </AppLink>
-        )}
+        {/* Alerts opens the tray instead of leaving the page (the page stays reachable from the
+            tray's "Review all notifications"). preventDefault on mousedown keeps terminal focus,
+            so opening it does not drop the soft keyboard. */}
+        <button
+          type="button"
+          className={`${styles.navItem} ${styles.notificationButton} ${isPanelOpen ? styles.navItemActive : ""}`}
+          data-testid="nav-alerts"
+          aria-expanded={isPanelOpen}
+          aria-controls="notification-tray"
+          aria-label={`${unreadCount > 0 ? `Notifications (${unreadCount} unread)` : "Notifications"}${quietMode ? ", quiet mode on" : ""}`}
+          onClick={() => togglePanel()}
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          <span className={styles.notificationIconWrap} aria-hidden="true">
+            <Bell size={20} />
+            {unreadCount > 0 && (
+              <span className={styles.notificationBadge}>{capBadgeCount(unreadCount)}</span>
+            )}
+          </span>
+          <span className={styles.navItemLabel}>{quietMode ? "Quiet" : "Alerts"}</span>
+        </button>
         <button
           className={styles.newSessionButton}
           onClick={openOmnibar}

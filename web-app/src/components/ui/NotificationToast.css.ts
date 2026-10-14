@@ -339,7 +339,7 @@ export const undoButton = style([baseActionButton, {
 }]);
 
 // ---------------------------------------------------------------------------
-// Capped deck (notification_tray_v2): one fixed flex column, cards in normal flow.
+// Capped deck: one fixed flex column, cards in normal flow.
 // ---------------------------------------------------------------------------
 
 const deckBase = style({

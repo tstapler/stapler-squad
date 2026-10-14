@@ -13,7 +13,6 @@ import {
   HIDDEN_GATE_FLAG,
   NotificationTray,
   SEEDED_HIDDEN_SESSION,
-  TRAY_V2_FLAG,
   sendNotification,
   setFeatureFlag,
 } from './pages/NotificationPanel';
@@ -35,14 +34,12 @@ async function storedHistoryText(request: APIRequestContext): Promise<string> {
 
 test.describe('hidden session stays quiet', () => {
   test.beforeEach(async ({ page, request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, true);
     await setFeatureFlag(request, BASE_URL, HIDDEN_GATE_FLAG, true);
     await page.addInitScript((key) => localStorage.setItem(key, 'true'), ONBOARDED_KEY);
   });
 
   test.afterEach(async ({ request }) => {
     await setFeatureFlag(request, BASE_URL, HIDDEN_GATE_FLAG, false);
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, false);
   });
 
   test('hidden_session_completion_should_leave_toast_panel_and_notifications_page_empty_when_session_finishes', async ({
