@@ -219,6 +219,8 @@ export const zIndex = {
   // scrolling panel). Must stay below `slideOver`/`toast` so the notification tray and toast
   // deck are never painted over by terminal chrome (MC-1, notification-contrast-over-xterm.spec.ts).
   terminalPaneChrome: 25,
+  // Output-filter panel: covers the top of the pane, so it must paint over "Copy all".
+  terminalFilterPanel: 26,
   header: 100,
   dropdown: 500,
   slideOver: 700,

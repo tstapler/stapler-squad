@@ -6,7 +6,7 @@ export const panel = style({
   top: 0,
   left: 0,
   right: 0,
-  zIndex: zIndex.terminalPaneChrome,
+  zIndex: zIndex.terminalFilterPanel,
   display: "flex",
   flexDirection: "column",
   maxHeight: "50%",
