@@ -482,6 +482,12 @@ func ancestorSet(target *object.Commit) (map[plumbing.Hash]bool, error) {
 		set[c.Hash] = true
 		return nil
 	})
+	// A shallow or partial clone is missing parents past its boundary. The old
+	// per-commit IsAncestor stopped at the first hit and never reached them, so
+	// keep the partial set (a conservative over-count) instead of failing.
+	if errors.Is(err, plumbing.ErrObjectNotFound) {
+		err = nil
+	}
 	return set, err
 }
 

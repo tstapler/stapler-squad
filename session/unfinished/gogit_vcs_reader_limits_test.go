@@ -1095,3 +1095,27 @@ func TestScannerInvalidateRepo_EvictsReaderCachesButKeepsReachableSet(t *testing
 		t.Errorf("reachableSetCache holds %d entries after RemoveRepo, want 0", n)
 	}
 }
+
+// TestGuardInvalidation_EvictsResultCachedAcrossAnInvalidation guards the
+// invalidate-then-store race: a computation that finishes after
+// InvalidateWorktree has already cached a pre-change value, which must not
+// survive for the TTL.
+func TestGuardInvalidation_EvictsResultCachedAcrossAnInvalidation(t *testing.T) {
+	r := &GoGitVCSReader{}
+	const wt = "/repo/wt"
+
+	finish := r.guardInvalidation(wt)
+	r.InvalidateWorktree(wt)                                                    // event arrives mid-computation
+	r.diffStatCache.Store(wt, diffStatEntry{expiry: time.Now().Add(time.Hour)}) // stale Store lands afterwards
+	finish()
+	if _, ok := r.diffStatCache.Load(wt); ok {
+		t.Error("pre-change result cached across an invalidation was kept; want it re-evicted")
+	}
+
+	finish = r.guardInvalidation(wt)
+	r.diffStatCache.Store(wt, diffStatEntry{expiry: time.Now().Add(time.Hour)})
+	finish() // no invalidation during the call: keep the result
+	if _, ok := r.diffStatCache.Load(wt); !ok {
+		t.Error("result cached with no concurrent invalidation was evicted; want it kept")
+	}
+}

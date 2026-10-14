@@ -417,6 +417,9 @@ func (s *Scanner) persistCacheToDisk() {
 					s.deindexRepoWorktree(result.RepoPath, path)
 				}
 			}
+			if r, ok := s.reader.(worktreeInvalidator); ok {
+				r.ForgetWorktree(path)
+			}
 			s.cacheStore.Delete(k)
 			evicted++
 			return true

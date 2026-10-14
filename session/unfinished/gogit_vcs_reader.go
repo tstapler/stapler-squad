@@ -531,6 +531,11 @@ type GoGitVCSReader struct {
 	// which also bounds the cache to one set per worktree.
 	reachableSetCache sync.Map // map[string]reachableSetEntry
 
+	// invalidationGen counts InvalidateWorktree calls per worktreePath
+	// (*atomic.Uint64), so a computation that straddles an invalidation can
+	// re-evict the pre-change result it just cached. See guardInvalidation.
+	invalidationGen sync.Map
+
 	// hasUncommittedCache caches HasUncommitted results keyed by worktreePath.
 	// Eliminates repeated index walks within the TTL window.
 	hasUncommittedCache sync.Map // map[string]hasUncommittedEntry
@@ -1089,6 +1094,7 @@ func (g *GoGitVCSReader) hasUncommittedGoGitPhase(entry *cachedRepo, worktreePat
 // modified file in full.
 
 func (g *GoGitVCSReader) HasUncommitted(worktreePath string) (bool, error) {
+	defer g.guardInvalidation(worktreePath)()
 	if v, ok := g.hasUncommittedCache.Load(worktreePath); ok {
 		if e := v.(hasUncommittedEntry); time.Now().Before(e.expiry) {
 			return e.result, nil
@@ -1206,6 +1212,7 @@ func hasUntrackedFilesRec(root, dir string, indexed map[string]struct{}, matcher
 // then count commits between each tip and the merge base. This bounds the
 // walk to the diverged portion of history rather than the full reachable set.
 func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error) {
+	defer g.guardInvalidation(worktreePath)()
 	cacheKey := worktreePath + "\x00" + base
 	if v, ok := g.aheadBehindCache.Load(cacheKey); ok {
 		if e := v.(aheadBehindEntry); time.Now().Before(e.expiry) {
@@ -1270,6 +1277,7 @@ func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error
 }
 
 func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]string, error) {
+	defer g.guardInvalidation(worktreePath)()
 	cacheKey := fmt.Sprintf("%s\x00%s\x00%d", worktreePath, base, max)
 	if v, ok := g.commitMessagesCache.Load(cacheKey); ok {
 		if e := v.(commitMessagesEntry); time.Now().Before(e.expiry) {
@@ -1368,6 +1376,11 @@ func (g *GoGitVCSReader) cachedReachableSet(entry *cachedRepo, worktreePath stri
 // Leaves reachableSetCache alone: its entries are validated by base hash, and
 // evicting on every commit would repeat the 50k-commit walk it exists to avoid.
 func (g *GoGitVCSReader) InvalidateWorktree(worktreePath string) {
+	g.pathInvalidationGen(worktreePath).Add(1)
+	g.evictWorktreeResults(worktreePath)
+}
+
+func (g *GoGitVCSReader) evictWorktreeResults(worktreePath string) {
 	g.diffStatCache.Delete(worktreePath)
 	g.hasUncommittedCache.Delete(worktreePath)
 	prefix := worktreePath + "\x00"
@@ -1381,11 +1394,31 @@ func (g *GoGitVCSReader) InvalidateWorktree(worktreePath string) {
 	}
 }
 
+func (g *GoGitVCSReader) pathInvalidationGen(worktreePath string) *atomic.Uint64 {
+	v, _ := g.invalidationGen.LoadOrStore(worktreePath, new(atomic.Uint64))
+	return v.(*atomic.Uint64)
+}
+
+// guardInvalidation is deferred at the top of each cached public method:
+// `defer g.guardInvalidation(path)()`. If InvalidateWorktree ran while the
+// method was computing, the result it just cached predates the change, so
+// evict it again and let the next call re-populate from the new state.
+func (g *GoGitVCSReader) guardInvalidation(worktreePath string) func() {
+	gen := g.pathInvalidationGen(worktreePath)
+	start := gen.Load()
+	return func() {
+		if gen.Load() != start {
+			g.evictWorktreeResults(worktreePath)
+		}
+	}
+}
+
 // ForgetWorktree is InvalidateWorktree plus dropping the worktree's reachable
 // set, for a worktree that is gone (the set is MBs and nothing else evicts it).
 func (g *GoGitVCSReader) ForgetWorktree(worktreePath string) {
 	g.InvalidateWorktree(worktreePath)
 	g.reachableSetCache.Delete(worktreePath)
+	g.invalidationGen.Delete(worktreePath)
 }
 
 // DiffShortstat returns changed-file and line counts for the given worktree.
@@ -1393,6 +1426,7 @@ func (g *GoGitVCSReader) ForgetWorktree(worktreePath string) {
 // calls from concurrent scanner workers, which was the top mutex hotspot (537M
 // cycles, 13,941 events in profiling).
 func (g *GoGitVCSReader) DiffShortstat(worktreePath string) (DiffStat, error) {
+	defer g.guardInvalidation(worktreePath)()
 	if v, ok := g.diffStatCache.Load(worktreePath); ok {
 		if e := v.(diffStatEntry); time.Now().Before(e.expiry) {
 			return e.result, nil

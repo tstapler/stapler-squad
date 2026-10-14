@@ -1572,3 +1572,29 @@ func BenchmarkCountCommitsNotAncestorOf(b *testing.B) {
 		}
 	}
 }
+
+// TestCountCommitsNotAncestorOf_should_NotError_When_TargetHistoryIsShallow
+// guards a regression the ancestor-set rewrite introduced: the walk reached a
+// shallow clone's missing parents and errored where the per-commit IsAncestor
+// walk stopped at the first hit.
+func TestCountCommitsNotAncestorOf_should_NotError_When_TargetHistoryIsShallow(t *testing.T) {
+	origin := newDivergedAncestryRepo(t, 5, 2)
+	shallow := filepath.Join(t.TempDir(), "shallow")
+	runGit(t, filepath.Dir(shallow), "clone", "--depth", "2", "--no-local", "file://"+origin, shallow)
+	repo, err := OpenRepo(shallow)
+	require.NoError(t, err)
+	head, err := repo.Head()
+	require.NoError(t, err)
+	tip, err := repo.CommitObject(head.Hash())
+	require.NoError(t, err)
+	parent, err := tip.Parent(0)
+	require.NoError(t, err)
+
+	for name, from := range map[string]*object.Commit{"tip": tip, "parent": parent} {
+		got, err := countCommitsNotAncestorOf(from, tip)
+		require.NoError(t, err, name)
+		want, err := countCommitsNotAncestorOfPerCommitWalk(from, tip)
+		require.NoError(t, err, name)
+		assert.Equal(t, want, got, name)
+	}
+}
