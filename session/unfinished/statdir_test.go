@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -107,4 +108,45 @@ func BenchmarkTrackedFileStat(b *testing.B) {
 			st.close()
 		}
 	})
+}
+
+// TestDirStatter_SearchOnlyDirectory_StillStatsFiles: opening a directory needs read
+// permission but statting a file inside a search-only (0111) directory does not, so a
+// failed open must fall back to a full-path lstat rather than skip the file (a skipped
+// modified file would read as clean).
+func TestDirStatter_SearchOnlyDirectory_StillStatsFiles(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("permission bits are not enforced here")
+	}
+	root := t.TempDir()
+	dir := filepath.Join(root, "d")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("four"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o111); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	want, err := os.Lstat(filepath.Join(dir, "f"))
+	if err != nil {
+		t.Fatalf("os.Lstat on a search-only dir: %v", err)
+	}
+	st := newDirStatter(root)
+	defer st.close()
+	for range 2 { // second pass exercises the remembered-failed-directory path
+		size, mtime, err := st.lstat("d/f")
+		if err != nil {
+			t.Fatalf("lstat in search-only dir: %v (os.Lstat succeeded)", err)
+		}
+		if size != want.Size() || !mtime.Equal(want.ModTime()) {
+			t.Errorf("size/mtime = %d/%v, want %d/%v", size, mtime, want.Size(), want.ModTime())
+		}
+	}
+	if _, _, err := st.lstat("d/missing"); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("missing file in search-only dir: err = %v, want not-exist", err)
+	}
 }
