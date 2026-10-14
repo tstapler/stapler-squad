@@ -42,8 +42,13 @@ jest.mock("@/lib/contexts/AuthContext", () => ({
 
 // Mock NotificationContext
 const mockTogglePanel = jest.fn();
+let mockUnread = 0;
+let mockNeedsAttention = 0;
 jest.mock("@/lib/contexts/NotificationContext", () => ({
-  useNotifications: () => ({ togglePanel: mockTogglePanel, getUnreadCount: () => 0 }),
+  useNotifications: () => ({ togglePanel: mockTogglePanel, getUnreadCount: () => mockUnread }),
+}));
+jest.mock("@/lib/utils/notificationGrouping", () => ({
+  countNeedsAttention: () => mockNeedsAttention,
 }));
 
 // Mock useHandedness so tests don't depend on localStorage or document.documentElement
@@ -70,6 +75,7 @@ jest.mock("../BottomNav.css", () => ({
   notificationButton: "notificationButton",
   notificationIconWrap: "notificationIconWrap",
   notificationBadge: "notificationBadge",
+  notificationBadgeAttention: "notificationBadgeAttention",
   moreBackdrop: "moreBackdrop",
   moreSheet: "moreSheet",
   moreSheetOpen: "moreSheetOpen",
@@ -149,18 +155,15 @@ describe("BottomNav", () => {
     expect(sessionsLink).not.toHaveAttribute("aria-current", "page");
   });
 
-  it("more_sheet_should_list_notifications_row_that_opens_the_tray_when_tray_flag_on", () => {
-    mockFlags.notification_tray_v2 = true;
+  it("more_sheet_should_list_notifications_row_that_opens_the_tray", () => {
     render(<BottomNav />);
     const row = screen.getByTestId("more-notifications");
     expect(row).toHaveTextContent("Notifications (0)");
     fireEvent.click(row);
     expect(mockTogglePanel).toHaveBeenCalledTimes(1);
-    delete mockFlags.notification_tray_v2;
   });
 
-  it("alerts_tab_should_open_the_tray_instead_of_navigating_when_tray_flag_on", () => {
-    mockFlags.notification_tray_v2 = true;
+  it("alerts_tab_should_open_the_tray_instead_of_navigating", () => {
     mockTogglePanel.mockClear();
     render(<BottomNav />);
     const alerts = screen.getByTestId("nav-alerts");
@@ -168,18 +171,37 @@ describe("BottomNav", () => {
     expect(alerts).toHaveAttribute("aria-controls", "notification-tray");
     fireEvent.click(alerts);
     expect(mockTogglePanel).toHaveBeenCalledTimes(1);
-    delete mockFlags.notification_tray_v2;
   });
 
-  it("alerts_tab_should_link_to_the_notifications_page_when_tray_flag_off", () => {
-    render(<BottomNav />);
-    expect(screen.queryByTestId("nav-alerts")).toBeNull();
-    expect(screen.getByRole("link", { name: "Notifications" })).toHaveAttribute("href", "/notifications");
-  });
+  describe("alerts badge", () => {
+    afterEach(() => {
+      mockUnread = 0;
+      mockNeedsAttention = 0;
+    });
 
-  it("more_sheet_should_omit_notifications_row_when_tray_flag_off", () => {
-    render(<BottomNav />);
-    expect(screen.queryByTestId("more-notifications")).toBeNull();
+    it("shows no badge when nothing is unread", () => {
+      render(<BottomNav />);
+      expect(screen.getByTestId("nav-alerts")).toHaveAttribute("aria-label", "Notifications");
+      expect(document.querySelector(".notificationBadge, .notificationBadgeAttention")).toBeNull();
+    });
+
+    it("uses the neutral badge and the exact count in the name when nothing needs you", () => {
+      mockUnread = 150;
+      render(<BottomNav />);
+      const alerts = screen.getByTestId("nav-alerts");
+      expect(alerts).toHaveAttribute("aria-label", "Notifications (150 unread)");
+      expect(alerts.querySelector(".notificationBadge")).toHaveTextContent("99+");
+      expect(alerts.querySelector(".notificationBadgeAttention")).toBeNull();
+    });
+
+    it("uses the attention badge and names the need-you count when something needs a decision", () => {
+      mockUnread = 9;
+      mockNeedsAttention = 2;
+      render(<BottomNav />);
+      const alerts = screen.getByTestId("nav-alerts");
+      expect(alerts).toHaveAttribute("aria-label", "Notifications (9 unread, 2 need you)");
+      expect(alerts.querySelector(".notificationBadgeAttention")).toHaveTextContent("9");
+    });
   });
 
   it("renders the More button", () => {

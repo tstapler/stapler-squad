@@ -7,11 +7,6 @@ import { TrayHandle, trayEntryLabel } from "../TrayHandle";
 import { DeckViewportContext } from "@/lib/contexts/deckViewportContext";
 import type { NotificationHistoryItem } from "@/lib/types/notification";
 
-const mockFlags: Record<string, boolean> = {};
-jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
-  useFeatureFlag: (name: string) => mockFlags[name] ?? false,
-}));
-
 let mockHistory: NotificationHistoryItem[] = [];
 let mockOpen = false;
 let mockQuiet = false;
@@ -47,7 +42,6 @@ function renderHandle(isInnerScreen = true) {
 
 describe("TrayHandle", () => {
   beforeEach(() => {
-    mockFlags.notification_tray_v2 = true;
     mockHistory = [];
     mockOpen = false;
     mockQuiet = false;
@@ -86,12 +80,7 @@ describe("TrayHandle", () => {
     expect(notPrevented).toBe(false);
   });
 
-  it("handle_should_hide_when_flag_off_or_on_a_phone", () => {
-    mockFlags.notification_tray_v2 = false;
-    const { unmount } = renderHandle();
-    expect(screen.queryByTestId("tray-handle")).toBeNull();
-    unmount();
-    mockFlags.notification_tray_v2 = true;
+  it("handle_should_hide_on_a_phone", () => {
     renderHandle(false);
     expect(screen.queryByTestId("tray-handle")).toBeNull();
   });

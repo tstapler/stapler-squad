@@ -7,10 +7,8 @@ import { test, expect, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import {
   NotificationTray,
-  TRAY_V2_FLAG,
   installWebSocketSendCounter,
   openTerminalSession,
-  setFeatureFlag,
   waitForIdleFrames,
   webSocketSends,
 } from './pages/NotificationPanel';
@@ -55,21 +53,16 @@ test.describe('leader-key command bar', () => {
     await expect(barInput(page)).not.toHaveAttribute('aria-activedescendant', first ?? '');
   });
 
-  test('sequence_should_executeNotificationTrayToggle', async ({ page, request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, true);
-    try {
-      await gotoHome(page);
-      const tray = new NotificationTray(page);
-      await page.keyboard.press(LEADER);
-      await expect(bar(page)).toBeVisible();
-      await page.keyboard.press('n');
-      await expect(page.getByTestId('command-bar-path')).toContainText('Notifications');
-      await page.keyboard.press('t');
-      await expect(bar(page)).toBeHidden();
-      await tray.expectOpen();
-    } finally {
-      await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, false);
-    }
+  test('sequence_should_executeNotificationTrayToggle', async ({ page }) => {
+    await gotoHome(page);
+    const tray = new NotificationTray(page);
+    await page.keyboard.press(LEADER);
+    await expect(bar(page)).toBeVisible();
+    await page.keyboard.press('n');
+    await expect(page.getByTestId('command-bar-path')).toContainText('Notifications');
+    await page.keyboard.press('t');
+    await expect(bar(page)).toBeHidden();
+    await tray.expectOpen();
   });
 
   test('esc_should_closeBarAndReturnFocusToPreviousElement', async ({ page }) => {

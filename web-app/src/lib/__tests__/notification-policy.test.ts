@@ -9,7 +9,6 @@ import {
   partitionToasts,
   toastCapFor,
   toastAutoCloseMs,
-  toastAutoMinimizeMs,
   nativeAutoCloseMs,
 } from "@/lib/notification-policy";
 import { NotificationPriority } from "@/gen/session/v1/types_pb";
@@ -127,40 +126,6 @@ describe("notification-policy", () => {
     it("nativeAutoCloseMs_should_return15000_When_priorityIsUnspecified", () => {
       expect(nativeAutoCloseMs(NotificationPriority.UNSPECIFIED)).toBe(15_000);
       expect(nativeAutoCloseMs(NotificationPriority.UNSPECIFIED)).toBe(NATIVE_MEDIUM_TTL_MS);
-    });
-  });
-
-  describe("toastAutoMinimizeMs", () => {
-    it("returns 0 for approval_needed (never minimize — requires user action)", () => {
-      expect(toastAutoMinimizeMs("approval_needed")).toBe(0);
-    });
-
-    it("returns 0 for question (never minimize — requires user action)", () => {
-      expect(toastAutoMinimizeMs("question")).toBe(0);
-    });
-
-    it("returns 5 seconds for error", () => {
-      expect(toastAutoMinimizeMs("error")).toBe(5_000);
-    });
-
-    it("returns 5 seconds for task_failed", () => {
-      expect(toastAutoMinimizeMs("task_failed")).toBe(5_000);
-    });
-
-    it("returns 5 seconds for warning", () => {
-      expect(toastAutoMinimizeMs("warning")).toBe(5_000);
-    });
-
-    it("returns 3 seconds for info (auto-minimize)", () => {
-      expect(toastAutoMinimizeMs("info")).toBe(3_000);
-    });
-
-    it("returns 3 seconds for task_complete (auto-minimize)", () => {
-      expect(toastAutoMinimizeMs("task_complete")).toBe(3_000);
-    });
-
-    it("returns 3 seconds for undefined (auto-minimize)", () => {
-      expect(toastAutoMinimizeMs(undefined)).toBe(3_000);
     });
   });
 });

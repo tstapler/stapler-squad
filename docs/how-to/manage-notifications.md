@@ -1,13 +1,6 @@
 # Manage notifications: the toast deck and the tray
 
-Use this when a burst of notifications covers the terminal and you want the capped deck and the tray, or when you need to roll them back.
-
-## Turn the capped deck on or off
-
-1. Open **Settings > Features**.
-2. Toggle **Notifications: capped toast deck with Move all to tray**.
-
-The flag is `notification_tray_v2`. It is off by default and applies on the next render, with no reload. It switches the deck **and** the tray: off restores the legacy list that shows every toast and the original modal notification panel.
+Use this when a burst of notifications covers the terminal and you want to know how the capped deck and the tray behave. Both are always on; there is no feature flag.
 
 ## What the deck does
 
@@ -34,7 +27,7 @@ On a phone, a pinned card with no interaction shrinks to a one-line chip after t
 
 ## The tray
 
-With the flag on, the notification panel is a non-modal tray. Opening it never resizes or remounts the terminal, never dims the page and never takes focus from it when you open it with a pointer. `Esc` from inside the tray closes it and returns focus to the terminal.
+The notification panel is a non-modal tray. Opening it never resizes or remounts the terminal, never dims the page and never takes focus from it when you open it with a pointer. `Esc` from inside the tray closes it and returns focus to the terminal.
 
 | Where | Tray | Entry points |
 |---|---|---|
@@ -47,6 +40,8 @@ Only the sheet's grabber drags it. Hardware Back closes a sheet without leaving 
 
 ### What is in it
 
+- The tray header counts once, in words: "2 need you \u00b7 9 earlier" (decisions, then the other unread items; just "9 unread" when no decision is pending).
+- The phone bottom-nav Alerts badge shows the unread count (capped "99+", exact value in its accessible name). It is red only while a decision needs you; otherwise it is neutral grey.
 - **Needs attention (N)** is pinned at the top: every unread decision (the server's `is_pending_decision`). It has no dismiss control and no swipe, and it is excluded from every bulk action. An auto-remediating warning ("PR needs attention ... An automated fix attempt will run") is informational and sits in its session group.
 - One collapsible group per session, windowed so a few hundred rows stay fast. Collapse state is per tab.
 - Swipe a row or press `x` while the list has focus to dismiss it; **Undo** is available for the undo window.
@@ -133,4 +128,4 @@ Reply answers a single-select question from a background session with one tap; o
 
 ## Roll back
 
-Toggle the flag off. The tray, deck, handle, entry chip, Quiet mode and Pin all return to the legacy behavior. If the deck itself misbehaves on a device, the bottom-dock fallback for phones is a CSS and variant change recorded in ADR-009.
+The deck and tray have no switch. If the deck itself misbehaves on a device, the bottom-dock fallback for phones is a CSS and variant change recorded in ADR-009. The hidden-session flags above remain live-settable.

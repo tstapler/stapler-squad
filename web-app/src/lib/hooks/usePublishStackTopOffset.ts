@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, type RefObject } from "react";
+import { useEffect, useMemo, type RefObject } from "react";
 import { setDeckTopOffset, setStackTopOffset } from "@/lib/utils/toastDock";
 
 /**
@@ -12,20 +12,31 @@ import { setDeckTopOffset, setStackTopOffset } from "@/lib/utils/toastDock";
  * coalescing bursts into one frame.
  */
 export function usePublishStackTopOffset(ref: RefObject<HTMLElement | null>, enabled = true): void {
-  usePublishBottomEdge(ref, enabled, setStackTopOffset, false);
+  usePublishBottomEdge(ref, undefined, enabled, setStackTopOffset, false);
 }
 
 /**
- * Publishes the bottom edge of the terminal toolbar for the phone deck. A hidden
- * toolbar (display: none, an inactive pane) measures 0 tall and publishes nothing,
- * so the deck falls back to the tab-row anchor instead of jumping to the screen top.
+ * Publishes the lowest bottom edge of the terminal toolbar and, on a phone, the
+ * overflow row under it. A hidden toolbar (display: none, an inactive pane)
+ * measures 0 tall and publishes nothing, so the deck falls back to the tab-row
+ * anchor instead of jumping to the screen top. Pass `enabled = false` for a
+ * terminal that is not the visible one.
  */
-export function usePublishDeckTopOffset(ref: RefObject<HTMLElement | null>, enabled = true): void {
-  usePublishBottomEdge(ref, enabled, setDeckTopOffset, true);
+export function usePublishDeckTopOffset(
+  ref: RefObject<HTMLElement | null>,
+  enabled = true,
+  extraRef?: RefObject<HTMLElement | null>,
+): void {
+  const publish = useMemo(() => {
+    const owner = Symbol("deck-top-offset");
+    return (px: number | null) => setDeckTopOffset(px, owner);
+  }, []);
+  usePublishBottomEdge(ref, extraRef, enabled, publish, true);
 }
 
 function usePublishBottomEdge(
   ref: RefObject<HTMLElement | null>,
+  extraRef: RefObject<HTMLElement | null> | undefined,
   enabled: boolean,
   publish: (px: number | null) => void,
   nullWhenHidden: boolean,
@@ -38,7 +49,9 @@ function usePublishBottomEdge(
     const measure = () => {
       frame = 0;
       const rect = el.getBoundingClientRect();
-      publish(nullWhenHidden && rect.height === 0 ? null : Math.round(rect.bottom));
+      const extra = extraRef?.current?.getBoundingClientRect();
+      const bottom = extra && extra.height > 0 ? Math.max(rect.bottom, extra.bottom) : rect.bottom;
+      publish(nullWhenHidden && rect.height === 0 ? null : Math.round(bottom));
     };
     const schedule = () => {
       if (frame === 0) frame = requestAnimationFrame(measure);
@@ -59,5 +72,5 @@ function usePublishBottomEdge(
       window.removeEventListener("resize", schedule);
       publish(null);
     };
-  }, [ref, enabled, publish, nullWhenHidden]);
+  }, [ref, extraRef, enabled, publish, nullWhenHidden]);
 }

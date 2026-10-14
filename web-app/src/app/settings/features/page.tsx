@@ -1,7 +1,6 @@
 // +feature: settings-features
 "use client";
 
-import { NOTIFICATION_TRAY_V2_FLAG } from "@/lib/notification-policy";
 import { useCallback, useState } from "react";
 import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
 import { GLOBAL_SCOPE } from "@/lib/contexts/featureFlagScopes";
@@ -51,7 +50,6 @@ const FEATURE_META: Record<string, { label: string }> = {
   "terminal:resync-stagger": { label: "Terminal resync: stagger bursts" },
   "terminal:resync-compression": { label: "Terminal resync: wire compression" },
   "terminal:resync-batching": { label: "Terminal resync: batch requests" },
-  [NOTIFICATION_TRAY_V2_FLAG]: { label: "Notifications: capped toast deck with Move all to tray" },
   [HIDDEN_SESSION_GATE_FLAG]: { label: "Notifications: hidden-session delivery gate" },
 };
 
@@ -164,7 +162,7 @@ export default function FeaturesPage() {
                 {description && (
                   <div className={flagDescription}>{description}</div>
                 )}
-                {(name === NOTIFICATION_TRAY_V2_FLAG || name === HIDDEN_SESSION_GATE_FLAG) && (
+                {name === HIDDEN_SESSION_GATE_FLAG && (
                   <div className={flagDescription} data-testid="flag-live-note">
                     {LIVE_FLAG_NOTE}
                   </div>

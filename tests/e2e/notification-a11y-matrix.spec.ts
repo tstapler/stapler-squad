@@ -10,7 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import { test, expect, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { NotificationTray, ToastDeck, TRAY_V2_FLAG, sendNotification, setFeatureFlag } from './pages/NotificationPanel';
+import { NotificationTray, ToastDeck, sendNotification } from './pages/NotificationPanel';
 import { profiles, setKeyboardOpen } from './helpers/viewport-profiles';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
@@ -49,12 +49,6 @@ async function violationsIn(page: Page, selector: string): Promise<string[]> {
 
 test.describe('notification a11y matrix', () => {
   test.setTimeout(120_000);
-  test.beforeEach(async ({ request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, true);
-  });
-  test.afterEach(async ({ request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, false);
-  });
 
   for (const key of ['V1', 'V2', 'V3', 'V4'] as const) {
     test.describe(profiles[key].name, () => {
