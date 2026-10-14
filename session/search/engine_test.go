@@ -565,3 +565,38 @@ func TestSearchEngine_LazyLoad_ClearIsNotUndoneByLaterLoad(t *testing.T) {
 		t.Errorf("TotalMatches = %d after Clear, want 0", results.TotalMatches)
 	}
 }
+
+// TestSearchEngine_LazyLoad_MetadataAvailableBeforeSyncDecision: IncrementalSync
+// chooses between incremental sync and a full rebuild on syncMetadata == nil.
+// With lazy loading that read must happen after the load, so persisted metadata
+// has to be visible (and reach the callback) on the very first call.
+func TestSearchEngine_LazyLoad_MetadataAvailableBeforeSyncDecision(t *testing.T) {
+	t.Parallel()
+	indexStore, err := NewIndexStoreWithDir(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewIndexStoreWithDir: %v", err)
+	}
+	seed := NewSearchEngineWithPersistence(indexStore)
+	_ = seed.IndexMessage("session-1", 0, "user", "hello world", time.Now())
+	meta := NewIndexSyncMetadata()
+	meta.TotalSessions, meta.TotalDocuments = 1, 1
+	seed.syncMetadata = meta
+	if err := seed.SaveIndex(); err != nil {
+		t.Fatalf("SaveIndex: %v", err)
+	}
+	if err := seed.SaveSyncMetadata(); err != nil {
+		t.Fatalf("SaveSyncMetadata: %v", err)
+	}
+
+	var cbMeta *IndexSyncMetadata
+	engine := NewSearchEngineWithPersistence(indexStore)
+	engine.EnableLazyLoad(func(m *IndexSyncMetadata, _ error) { cbMeta = m })
+
+	got := engine.GetSyncMetadata()
+	if got == nil || got.TotalSessions != 1 {
+		t.Fatalf("GetSyncMetadata() = %+v on first call, want the persisted metadata", got)
+	}
+	if cbMeta == nil || cbMeta.TotalDocuments != 1 {
+		t.Errorf("load callback metadata = %+v, want the persisted metadata", cbMeta)
+	}
+}
