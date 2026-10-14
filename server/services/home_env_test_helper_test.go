@@ -14,12 +14,10 @@ import (
 
 // homeEnvMu guards every test in this package that mutates the process-global
 // HOME environment variable. HOME is read live (uncached) by
-// config.GetConfigDirForDir via os.UserHomeDir() (config/config.go:125), so
-// two tests that both point HOME somewhere else at the same time can each
-// observe the other's value mid-test — including during t.TempDir()'s
-// end-of-test os.RemoveAll, which then intermittently fails with "directory
-// not empty" because a concurrently-running test using the wrong (stale or
-// swapped) HOME wrote into it.
+// config.GetConfigDirForDir via os.UserHomeDir() (config/config.go:125), so a
+// writer that resolves its path under another test's HOME could plausibly make
+// t.TempDir()'s end-of-test os.RemoveAll fail with "directory not empty". That
+// mechanism is a hypothesis: the flake has not been reproduced on main.
 //
 // The lock is belt-and-braces: t.Setenv panics in parallel tests and serial
 // tests run one at a time, so two mutators rarely overlap. It does NOT stop a
@@ -86,8 +84,8 @@ func withFakeHomeAsFile(t *testing.T) string {
 // directory that other test owns and is tearing down. Use withIsolatedStateDir
 // rather than a bare t.Setenv or envtest.NewIsolatedStateDir.
 //
-// Lock order: when a test needs both, call withFakeHome before
-// withIsolatedStateDir so the two mutexes are always acquired in the same order.
+// Lock order: by convention withFakeHome before withIsolatedStateDir. It is
+// advisory: serial tests never overlap, so no deadlock is possible today.
 var stateEnvMu sync.Mutex
 
 // withIsolatedStateDir points STAPLER_SQUAD_TEST_DIR at a fresh temp directory
@@ -113,14 +111,9 @@ func withIsolatedStateDirPath(t *testing.T, dir string) string {
 }
 
 // TestWithFakeHome_ReleasesLockOnSuccessiveCalls proves homeEnvMu is released
-// after each call (AC1) by acquiring and releasing it twice in sequence; a
-// helper that failed to release via t.Cleanup would deadlock here. Each call
-// runs in its own subtest so t.Cleanup actually fires between them — t.Cleanup
-// callbacks registered on the same *testing.T all run at the end of that test
-// function (LIFO), not immediately after the call that registered them, so
-// calling withFakeHome(t) twice against one shared t would deadlock the
-// second Lock() waiting on a cleanup that can only run after the test
-// returns.
+// after each call by acquiring it from two successive subtests; a helper that
+// failed to release via t.Cleanup would deadlock here. Each call runs in its
+// own subtest so t.Cleanup (and therefore the unlock) fires between them.
 func TestWithFakeHome_ReleasesLockOnSuccessiveCalls(t *testing.T) {
 	var first, second string
 	t.Run("first", func(t *testing.T) {
@@ -251,8 +244,8 @@ func TestNoBareEnvMutationInServicesTests(t *testing.T) {
 	setters := map[string]bool{"Setenv": true, "Unsetenv": true}
 
 	files, err := filepath.Glob("*_test.go")
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no *_test.go files found (err=%v); guard would pass vacuously", err)
 	}
 	fset := token.NewFileSet()
 	for _, file := range files {
