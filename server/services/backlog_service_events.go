@@ -239,6 +239,7 @@ func backlogItemMatchesFilters(item *session.BacklogItemData, msg *sessionv1.Wat
 func snapshotEventForItem(ctx context.Context, storage *session.Storage, engine session.WorkflowEngine, item *session.BacklogItemData, costFor func(tmuxUUID string) float64, checkBudget func(itemID string, thresholdUSD *float64, totalCostUSD float64)) *sessionv1.BacklogItemEvent {
 	protoItem := backlogItemToProto(item, engine, costFor)
 	enrichItemSessionsWorktreeData(ctx, storage, protoItem)
+	attachUnresolvedBlockersTo(ctx, storage, []*sessionv1.BacklogItem{protoItem})
 	if checkBudget != nil {
 		checkBudget(item.ID, item.CostBudgetThresholdUsd, protoItem.TotalEstimatedCostUsd)
 	}
@@ -287,6 +288,9 @@ func convertEventToBacklogItemEvent(ctx context.Context, storage *session.Storag
 	}
 	protoItem := backlogItemToProtoOrNil(payload.Item, engine, costFor)
 	enrichItemSessionsWorktreeData(ctx, storage, protoItem)
+	if protoItem != nil {
+		attachUnresolvedBlockersTo(ctx, storage, []*sessionv1.BacklogItem{protoItem})
+	}
 	if checkBudget != nil && payload.Item != nil {
 		checkBudget(itemID, payload.Item.CostBudgetThresholdUsd, protoItem.TotalEstimatedCostUsd)
 	}

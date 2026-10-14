@@ -6,6 +6,7 @@ import {
   closeButton,
   closeButtonStacked,
   trayButton,
+  commandBlock,
   commandText,
   commandTextExpanded,
   disclosureButton,
@@ -62,7 +63,7 @@ export function ToastCloseControl({
   );
 }
 
-/** The command an approval is for: wrapped, clamped to four lines until "Show full command". */
+/** The command an approval is for: wrapped, clamped to four lines (three in the phone deck) until "Show full command". */
 export function ToastCommand({
   command,
   riskLevel,
@@ -79,7 +80,7 @@ export function ToastCommand({
       ? `Risk: ${RISK_LEVEL_LABELS[riskLevel as RiskLevel]}`
       : "Risk not recorded";
   return (
-    <>
+    <div className={commandBlock}>
       <span className={riskLabel} data-testid="toast-risk">
         {risk}
       </span>
@@ -99,7 +100,7 @@ export function ToastCommand({
       >
         {expanded ? "Hide full command" : "Show full command"}
       </button>
-    </>
+    </div>
   );
 }
 

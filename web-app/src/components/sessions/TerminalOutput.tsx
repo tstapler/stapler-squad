@@ -123,7 +123,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const { leftHanded, toggleHandedness } = useHandedness();
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
-  usePublishDeckTopOffset(toolbarRef);
+  const overflowRowRef = useRef<HTMLDivElement>(null);
+  // Only the visible terminal anchors the phone deck; a background pane must not move it.
+  usePublishDeckTopOffset(toolbarRef, isVisible !== false, overflowRowRef);
   // Story 3 (Task 3.4) — anchor <div> the pooled terminal docks into. A
   // plain, otherwise-childless node (see TerminalPool.tsx's module doc
   // comment for why it must never receive JSX children of its own): the
@@ -2208,7 +2210,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       </div>
       {/* Mobile overflow row — appears below toolbar when More is open; hidden on desktop */}
       {mobileOverflowOpen && toolbarExpanded && (
-        <div className={styles.mobileOverflowRow} data-testid="toolbar-overflow-row">
+        <div className={styles.mobileOverflowRow} data-testid="toolbar-overflow-row" ref={overflowRowRef}>
           {secondaryActions.map((action) => (
             // action.handler (defined in secondaryActions above) always calls track() itself
             // analytics-exempt

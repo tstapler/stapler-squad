@@ -5,7 +5,7 @@ function setup(isOpen: boolean) {
   const trayRef = { current: document.createElement("div") };
   return renderHook(
     ({ open }) =>
-      useTrayDismissal({ enabled: true, isOpen: open, isSheet: true, modal: false, trayRef, close: jest.fn() }),
+      useTrayDismissal({ isOpen: open, isSheet: true, modal: false, trayRef, close: jest.fn() }),
     { initialProps: { open: isOpen } },
   );
 }

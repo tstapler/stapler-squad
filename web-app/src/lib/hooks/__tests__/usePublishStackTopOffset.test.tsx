@@ -76,5 +76,36 @@ describe("usePublishStackTopOffset", () => {
       render(<Toolbar />);
       expect(deckVar()).toBe("");
     });
+
+    it("a disabled (background) terminal neither publishes nor clears the visible terminal's anchor", () => {
+      function Pane({ visible }: { visible: boolean }) {
+        const ref = useRef<HTMLDivElement>(null);
+        usePublishDeckTopOffset(ref, visible);
+        return <div ref={ref} />;
+      }
+      bottom = 330;
+      render(<Pane visible />);
+      expect(deckVar()).toBe("330px");
+      const background = render(<Pane visible={false} />);
+      background.unmount();
+      expect(deckVar()).toBe("330px");
+    });
+
+    it("only the owner may clear the anchor when two terminals are mounted", () => {
+      function Pane() {
+        const ref = useRef<HTMLDivElement>(null);
+        usePublishDeckTopOffset(ref);
+        return <div ref={ref} />;
+      }
+      bottom = 330;
+      const first = render(<Pane />);
+      bottom = 400;
+      const second = render(<Pane />);
+      expect(deckVar()).toBe("400px");
+      first.unmount(); // not the owner
+      expect(deckVar()).toBe("400px");
+      second.unmount();
+      expect(deckVar()).toBe("");
+    });
   });
 });

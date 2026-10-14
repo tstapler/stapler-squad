@@ -20,7 +20,7 @@ func refFixtures() []gitoracle.Fixture {
 		fixtureRefsRich, fixturePackedRefs, fixtureAmbiguousHead, fixtureSymlinkedRepo,
 		fixtureSubdirs, fixtureShallow, fixtureSubmodule, fixtureBare, fixtureNotARepo,
 		fixtureDanglingHead, fixtureUnrelatedHistories, fixtureCrissCross, fixtureDAG,
-		fixtureAnnotatedTags, fixtureLocalConfigIncludes, fixtureRemoteHeadDangling, fixtureHeadNames, fixtureConfigContinuation, fixtureSymrefDepth, fixtureMalformed,
+		fixtureAnnotatedTags, fixtureLocalConfigIncludes, fixtureRemoteHeadDangling, fixtureHeadNames, fixtureConfigContinuation, fixtureSymrefDepth, fixtureMalformed, fixturePackedDeltas,
 	)
 }
 
@@ -495,4 +495,19 @@ var fixtureMalformed = gitoracle.Fixture{Name: "malformed", Build: func(g gitora
 	d = newRepo("extension-in-v0")
 	appendConfig(g, d, "[extensions]\n\tobjectformat = sha1\n")
 	return places
+}}
+
+// fixturePackedDeltas: large, near-identical commit objects in an aggressively repacked history,
+// read from the main checkout and a linked worktree. go-git reopens such delta objects' pack by
+// name instead of inflating them, which once resolved the pack path against the wrong root.
+var fixturePackedDeltas = gitoracle.Fixture{Name: "packed-deltas", Build: func(g gitoracle.Git, root string) gitoracle.Places {
+	initMain(g, root)
+	body := strings.Repeat("a long, repetitive commit message body that deltifies well\n", 400)
+	for i := 0; i < 6; i++ {
+		g.Run(root, "commit", "-q", "--allow-empty", "-m", fmt.Sprintf("c%d\n\n%s", i, body))
+	}
+	g.Run(root, "branch", "side", "HEAD~2")
+	g.Run(root, "worktree", "add", "-q", "--detach", filepath.Join(root, "wt"), "HEAD")
+	g.Run(root, "gc", "-q", "--aggressive")
+	return gitoracle.Places{"main": root, "linked": filepath.Join(root, "wt")}
 }}

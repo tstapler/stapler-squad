@@ -9,11 +9,9 @@
 import { test, expect, type Page } from '@playwright/test';
 import {
   NotificationTray,
-  TRAY_V2_FLAG,
   installWebSocketSendCounter,
   readTerminalFacts,
   sendNotification,
-  setFeatureFlag,
   webSocketSends,
   waitForIdleFrames,
   openTerminalSession,
@@ -35,13 +33,6 @@ async function seed(request: Parameters<typeof sendNotification>[0], prefix: str
 }
 
 test.describe('notification tray variants', () => {
-  test.beforeEach(async ({ request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, true);
-  });
-  test.afterEach(async ({ request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, false);
-  });
-
   test.describe('V1 desktop', () => {
     test.use(profiles.V1.use);
 

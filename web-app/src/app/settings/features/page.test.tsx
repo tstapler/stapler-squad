@@ -370,28 +370,24 @@ describe("FeaturesPage - hidden_session_gate status line (FG-4)", () => {
 
 // Story 3.10 / 2.11 UX criteria FG-1, FG-5, FG-6.
 describe("FeaturesPage - notification flag rows (FG-1, FG-5, FG-6)", () => {
-  it("fg1_should_show_both_flags_as_toggles_with_a_description_and_takes_effect_without_reload", () => {
+  it("fg1_should_show_the_gate_as_a_toggle_with_a_description_and_takes_effect_without_reload", () => {
     mockFlags([
-      makeFlag({ name: "notification_tray_v2", enabled: true, description: "Capped toast deck and tray" }),
       makeFlag({ name: "hidden_session_gate", enabled: false, description: "Quiet hidden sessions" }),
       makeFlag({ name: "backlog", enabled: true, description: "Backlog" }),
     ]);
     render(<FeaturesPage />);
 
-    for (const label of [/disable notifications: capped toast deck with move all to tray/i, /enable notifications: hidden-session delivery gate/i]) {
-      expect(screen.getByRole("button", { name: label })).toHaveAttribute("aria-pressed");
-    }
+    expect(screen.getByRole("button", { name: /enable notifications: hidden-session delivery gate/i })).toHaveAttribute("aria-pressed");
     const rows = screen.getAllByTestId("feature-flag-row");
     const noteCount = rows.filter((row) => row.querySelector('[data-testid="flag-live-note"]')).length;
-    expect(noteCount).toBe(2);
+    expect(noteCount).toBe(1);
     expect(screen.getAllByTestId("flag-live-note")[0]).toHaveTextContent("Takes effect without reload");
-    expect(screen.getByText("Capped toast deck and tray")).toBeInTheDocument();
     expect(screen.getByText("Quiet hidden sessions")).toBeInTheDocument();
   });
 
   it("fg5_should_offer_the_session_kind_disclosure_only_under_the_gate_with_44px_labelled_controls", () => {
     mockFlags([
-      makeFlag({ name: "notification_tray_v2", enabled: true }),
+      makeFlag({ name: "backlog", enabled: true }),
       makeFlag({ name: "hidden_session_gate", enabled: true }),
     ]);
     render(<FeaturesPage />);

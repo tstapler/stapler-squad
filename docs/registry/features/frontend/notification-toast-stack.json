@@ -16,7 +16,6 @@
     "tests/e2e/toast-stack.spec.ts",
     "tests/e2e/toast-stack-mobile.spec.ts",
     "tests/e2e/notification-tray-bulk.spec.ts",
-    "tests/e2e/notification-flag-rollback.spec.ts",
     "tests/e2e/notification-triage-walkthrough.spec.ts"
   ],
   "lastModified": "2026-10-09T00:00:00Z"

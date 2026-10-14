@@ -612,9 +612,120 @@ func (s *BacklogService) AddBacklogItemDependency(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reload backlog item after adding dependency: %w", err))
 	}
 
-	return connect.NewResponse(&sessionv1.AddBacklogItemDependencyResponse{
-		Item: backlogItemToProto(updated, s.engine, s.buildCostLookup()),
+	pb := backlogItemToProto(updated, s.engine, s.buildCostLookup())
+	s.attachDependencies(ctx, pb)
+	return connect.NewResponse(&sessionv1.AddBacklogItemDependencyResponse{Item: pb}), nil
+}
+
+// RemoveBacklogItemDependency deletes the blocker->blocked edge. Idempotent:
+// removing an edge that does not exist succeeds and returns the blocked item.
+// +api: backlog:remove-item-dependency
+func (s *BacklogService) RemoveBacklogItemDependency(
+	ctx context.Context,
+	req *connect.Request[sessionv1.RemoveBacklogItemDependencyRequest],
+) (*connect.Response[sessionv1.RemoveBacklogItemDependencyResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+	if req.Msg.BlockerItemId == "" || req.Msg.BlockedItemId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("blocker_item_id and blocked_item_id are required"))
+	}
+	edge := session.BacklogItemDependencyEdge{
+		BlockerID: req.Msg.BlockerItemId,
+		BlockedID: req.Msg.BlockedItemId,
+	}
+	if err := s.storage.RemoveBacklogItemDependency(ctx, edge); err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item not found: %w", err))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to remove backlog item dependency: %w", err))
+	}
+	updated, err := s.storage.GetBacklogItem(ctx, req.Msg.BlockedItemId)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reload backlog item after removing dependency: %w", err))
+	}
+	pb := backlogItemToProto(updated, s.engine, s.buildCostLookup())
+	s.attachDependencies(ctx, pb)
+	return connect.NewResponse(&sessionv1.RemoveBacklogItemDependencyResponse{Item: pb}), nil
+}
+
+// ListBacklogItemDependencies returns both directions of an item's dependency edges.
+// +api: backlog:list-item-dependencies
+func (s *BacklogService) ListBacklogItemDependencies(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListBacklogItemDependenciesRequest],
+) (*connect.Response[sessionv1.ListBacklogItemDependenciesResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+	if req.Msg.ItemId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("item_id is required"))
+	}
+	blockedBy, blocking, err := s.storage.ListBacklogItemDependencies(ctx, req.Msg.ItemId)
+	if err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item not found: %w", err))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list backlog item dependencies: %w", err))
+	}
+	return connect.NewResponse(&sessionv1.ListBacklogItemDependenciesResponse{
+		BlockedBy: dependencyRefsToProto(blockedBy),
+		Blocking:  dependencyRefsToProto(blocking),
 	}), nil
+}
+
+// attachDependencies fills pb.BlockedBy/Blocking. Best-effort: a failed lookup
+// is logged and leaves the fields empty rather than failing the whole read.
+// Deliberately not called from ListBacklogItems (N+1).
+func (s *BacklogService) attachDependencies(ctx context.Context, pb *sessionv1.BacklogItem) {
+	blockedBy, blocking, err := s.storage.ListBacklogItemDependencies(ctx, pb.Id)
+	if err != nil {
+		log.ErrorLog().Printf("[attachDependencies] failed to load dependencies for %s: %v", pb.Id, err)
+		return
+	}
+	pb.BlockedBy = dependencyRefsToProto(blockedBy)
+	pb.Blocking = dependencyRefsToProto(blocking)
+}
+
+// attachUnresolvedBlockers fills BlockedBy on list results with each item's
+// still-unresolved blockers via one batched query. Best-effort like
+// attachDependencies.
+func (s *BacklogService) attachUnresolvedBlockers(ctx context.Context, items []*sessionv1.BacklogItem) {
+	attachUnresolvedBlockersTo(ctx, s.storage, items)
+}
+
+// attachUnresolvedBlockersTo is the storage-parameterised form shared with the
+// Watch stream, whose snapshot/event payloads would otherwise carry an empty
+// BlockedBy and make the UI drop its "blocked by" label on every live update.
+func attachUnresolvedBlockersTo(ctx context.Context, storage *session.Storage, items []*sessionv1.BacklogItem) {
+	if storage == nil || len(items) == 0 {
+		return
+	}
+	ids := make([]string, len(items))
+	for i, it := range items {
+		ids[i] = it.Id
+	}
+	blockers, err := storage.UnresolvedBlockersForItems(ctx, ids)
+	if err != nil {
+		log.ErrorLog().Printf("[attachUnresolvedBlockers] batched blocker lookup failed: %v", err)
+		return
+	}
+	for _, it := range items {
+		it.BlockedBy = dependencyRefsToProto(blockers[it.Id])
+	}
+}
+
+func dependencyRefsToProto(refs []session.BacklogItemDependencyRef) []*sessionv1.DependencyInfo {
+	out := make([]*sessionv1.DependencyInfo, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, &sessionv1.DependencyInfo{
+			ItemId:   r.ItemID,
+			PublicId: r.PublicID,
+			Title:    r.Title,
+			Status:   r.Status,
+		})
+	}
+	return out
 }
 
 // --- TransitionBacklogItemStatus ---
@@ -716,12 +827,28 @@ func isLiveBacklogStatusForSendBack(from session.BacklogStatus) bool {
 		from == session.BacklogStatusPRPending || from == session.BacklogStatusDone
 }
 
+type transitionActorKey struct{}
+
+// WithTransitionActor marks ctx so TransitionBacklogItemStatus records the given
+// audit actor (default TriggeredByUser), e.g. TriggeredByAgent for MCP callers.
+func WithTransitionActor(ctx context.Context, actor string) context.Context {
+	return context.WithValue(ctx, transitionActorKey{}, actor)
+}
+
+func transitionActorFromContext(ctx context.Context) string {
+	if a, ok := ctx.Value(transitionActorKey{}).(string); ok && a != "" {
+		return a
+	}
+	return session.TriggeredByUser
+}
+
 // TransitionBacklogItemStatus moves an item through the status state machine.
 // +api: backlog:transition-status
 func (s *BacklogService) TransitionBacklogItemStatus(
 	ctx context.Context,
 	req *connect.Request[sessionv1.TransitionBacklogItemStatusRequest],
 ) (*connect.Response[sessionv1.TransitionBacklogItemStatusResponse], error) {
+	triggeredBy := transitionActorFromContext(ctx)
 	if s.storage == nil {
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
 	}
@@ -811,7 +938,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		}
 	}
 
-	updated, err := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId, to, precondition, session.TriggeredByUser)
+	updated, err := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId, to, precondition, triggeredBy)
 	if err != nil {
 		if errors.Is(err, session.ErrPreconditionFailed) {
 			return nil, connect.NewError(connect.CodeAborted, err)

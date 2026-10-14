@@ -62,6 +62,15 @@ type BacklogItemDependencyEdge struct {
 	BlockedID string
 }
 
+// BacklogItemDependencyRef identifies the other end of a dependency edge with
+// just enough context (title, status) to render "blocked by <title>".
+type BacklogItemDependencyRef struct {
+	ItemID   string
+	PublicID string // "" when the item has no public ID yet
+	Title    string
+	Status   string
+}
+
 // ApprovalRuleData is the domain model for an auto-approval rule.
 type ApprovalRuleData struct {
 	ID             string

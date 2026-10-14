@@ -17,9 +17,8 @@ import { DeckViewportContext } from "@/lib/contexts/deckViewportContext";
 import { writeQuietMode } from "@/lib/utils/deckSettings";
 import type { NotificationHistoryItem } from "@/lib/types/notification";
 
-const mockFlags: Record<string, boolean> = {};
 jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
-  useFeatureFlag: (name: string) => mockFlags[name] ?? false,
+  useFeatureFlag: () => false,
 }));
 
 // jsdom has no layout, so the real virtualizer renders nothing. This stand-in
@@ -92,8 +91,6 @@ let mockHistoryLoading = false;
 let mockLastUpdatedAt: number | null = 1;
 let mockHasMore = false;
 const mockMarkAsRead = jest.fn();
-const mockRemoveFromHistory = jest.fn();
-const mockClearHistory = jest.fn();
 const mockTogglePanel = jest.fn();
 const mockClearByIds = jest.fn();
 const mockShowActionToast = jest.fn();
@@ -107,9 +104,7 @@ jest.mock("@/lib/contexts/NotificationContext", () => ({
     isPanelOpen: mockIsPanelOpen,
     togglePanel: mockTogglePanel,
     markAsRead: mockMarkAsRead,
-    removeFromHistory: mockRemoveFromHistory,
     acknowledgeNotification: jest.fn(),
-    clearHistory: mockClearHistory,
     clearHistoryByIds: mockClearByIds,
     showActionToast: mockShowActionToast,
     getUnreadCount: () => mockHistory.filter((n) => !n.isRead).length,
@@ -142,7 +137,7 @@ describe("NotificationPanel — scoped bulk-read (Task 3.1.5a)", () => {
     ];
 
     render(<NotificationPanel />);
-    fireEvent.click(screen.getByRole("button", { name: "Mark activity as read" }));
+    fireEvent.click(screen.getByRole("button", { name: "Mark activity read" }));
 
     expect(mockMarkAsRead).toHaveBeenCalledWith(["notif-complete"]);
   });
@@ -158,7 +153,7 @@ describe("NotificationPanel — scoped bulk-read (Task 3.1.5a)", () => {
     ];
 
     render(<NotificationPanel />);
-    expect(screen.queryByRole("button", { name: "Mark activity as read" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Mark activity read" })).not.toBeInTheDocument();
   });
 });
 
@@ -213,36 +208,8 @@ describe("NotificationPanel — Info filter excludes auto_approved (review findi
   });
 });
 
-describe("NotificationPanel — 'Clear history' confirm gate (Task 3.1.5d)", () => {
-  beforeEach(() => {
-    mockHistory = [makeNotification({ id: "notif-1", isRead: true })];
-    mockClearHistory.mockClear();
-  });
-
-  it("is a no-op when the confirm dialog is dismissed", () => {
-    jest.spyOn(window, "confirm").mockReturnValue(false);
-    render(<NotificationPanel />);
-    fireEvent.click(screen.getByRole("button", { name: "Clear notification history" }));
-    expect(mockClearHistory).not.toHaveBeenCalled();
-    (window.confirm as jest.Mock).mockRestore();
-  });
-
-  it("calls clearHistory once the confirm dialog is accepted", () => {
-    jest.spyOn(window, "confirm").mockReturnValue(true);
-    render(<NotificationPanel />);
-    fireEvent.click(screen.getByRole("button", { name: "Clear notification history" }));
-    expect(mockClearHistory).toHaveBeenCalled();
-    (window.confirm as jest.Mock).mockRestore();
-  });
-
-  it("renders the renamed 'Clear history' label", () => {
-    render(<NotificationPanel />);
-    expect(screen.getByText("Clear history")).toBeInTheDocument();
-  });
-});
-
 // ---------------------------------------------------------------------------
-// Tray (notification_tray_v2): Epic 4
+// Tray: Epic 4
 // ---------------------------------------------------------------------------
 
 function renderTray(viewport = { isInnerScreen: true, isVirtualKeyboardOpen: false }) {
@@ -276,16 +243,14 @@ function resetTrayState() {
   mockLastUpdatedAt = 1;
   mockHasMore = false;
   mockConnectivity = { state: "connected", isOffline: false };
-  mockFlags.notification_tray_v2 = true;
   mockQuiet = false;
   [mockMarkAsRead, mockClearByIds, mockShowActionToast, mockTogglePanel, mockLoadMore, mockRefresh, mockSetQuiet].forEach((m) => m.mockReset());
   window.localStorage.clear();
 }
 
-describe("tray (notification_tray_v2)", () => {
+describe("tray", () => {
   beforeEach(resetTrayState);
   afterEach(() => {
-    mockFlags.notification_tray_v2 = false;
     jest.useRealTimers();
   });
 
@@ -308,12 +273,6 @@ describe("tray (notification_tray_v2)", () => {
       expect(container.querySelector('[aria-hidden="true"][class*="overlay"]')).toBeNull();
       expect(document.getElementById("main-content")).toBeNull();
       expect(tray).not.toHaveAttribute("inert");
-    });
-
-    it("legacy_panel_should_stay_modal_when_flag_is_off", () => {
-      mockFlags.notification_tray_v2 = false;
-      renderTray();
-      expect(screen.getByRole("dialog", { name: "Notification Panel" })).toHaveAttribute("aria-modal", "true");
     });
 
     it("tray_should_use_the_zindex_token_and_no_numeric_9998_or_9999_literals", () => {
@@ -424,7 +383,7 @@ describe("tray (notification_tray_v2)", () => {
       ];
       renderTray();
 
-      expect(screen.getByTestId("tray-needs-attention")).toHaveTextContent("3 need attention");
+      expect(screen.getByTestId("tray-needs-attention")).toHaveTextContent("3 need you");
       expect(screen.getByTestId("tray-needs-attention-header")).toHaveTextContent("NEEDS ATTENTION (3)");
       const pinnedRows = screen.getAllByTestId("needs-attention-row");
       expect(pinnedRows).toHaveLength(3);
@@ -860,8 +819,7 @@ describe("tray Background segment (Story 5.4)", () => {
   });
 
   beforeEach(() => {
-    mockFlags.notification_tray_v2 = true;
-    mockIsPanelOpen = true;
+      mockIsPanelOpen = true;
     mockConnectivity = { state: "connected", isOffline: false };
     mockMarkAsRead.mockClear();
     mockTogglePanel.mockClear();
@@ -871,9 +829,6 @@ describe("tray Background segment (Story 5.4)", () => {
       makeNotification({ id: "f1", sessionId: "review:h1", sessionName: "review:h1", notificationType: "error", message: "boom" }),
       makeNotification({ id: "v1", sessionId: "vis", sessionName: "vis", notificationType: "info" }),
     ];
-  });
-  afterEach(() => {
-    mockFlags.notification_tray_v2 = false;
   });
 
   it("segment_should_not_poll_while_collapsed_and_poll_when_the_background_tab_is_selected", () => {
@@ -903,11 +858,11 @@ describe("tray Background segment (Story 5.4)", () => {
   it("background_badge_should_count_only_failure_and_needs_human_and_not_change_bell_count", () => {
     renderTray();
     expect(screen.getByTestId("tray-tab-background")).toHaveTextContent("Background (1)");
-    // bell/header unread badge is the plain unread total of history, unchanged by the join
-    expect(screen.getByRole("heading", { name: /Notifications/ })).toHaveTextContent("2");
+    // the header unread count is the plain unread total of history, unchanged by the join
+    expect(screen.getByTestId("tray-earlier-count")).toHaveTextContent("2 unread");
     fireEvent.click(screen.getByTestId("tray-tab-background"));
     expect(screen.getAllByTestId("background-row")).toHaveLength(1);
-    expect(screen.getByRole("heading", { name: /Notifications/ })).toHaveTextContent("2");
+    expect(screen.getByTestId("tray-earlier-count")).toHaveTextContent("2 unread");
   });
 
   it("opening_a_row_should_mark_its_records_read_and_close_the_tray", () => {
@@ -927,12 +882,6 @@ describe("tray Background segment (Story 5.4)", () => {
     expect(screen.getByTestId("background-row")).toHaveTextContent("Session no longer available");
   });
 
-  it("legacy_panel_has_no_segments", () => {
-    mockFlags.notification_tray_v2 = false;
-    render(<NotificationPanel />);
-    expect(screen.queryByTestId("tray-segments")).toBeNull();
-    expect(mockUseBackgroundSessions).toHaveBeenLastCalledWith(false);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -990,7 +939,6 @@ describe("tray spec gaps (Phase 5)", () => {
   afterEach(() => {
     jest.restoreAllMocks();
     jest.useRealTimers();
-    mockFlags.notification_tray_v2 = false;
   });
 
   it("group_collapse_should_be_per_viewer_and_not_shared_across_tabs_when_toggled", () => {
@@ -1128,7 +1076,7 @@ describe("tray spec gaps (Phase 5)", () => {
     ];
     render(tree());
 
-    expect(screen.getByTestId("tray-needs-attention")).toHaveTextContent("2 need attention");
+    expect(screen.getByTestId("tray-needs-attention")).toHaveTextContent("2 need you");
     const pinned = screen.getAllByTestId("needs-attention-row");
     expect(pinned.map((row) => row.textContent)).toEqual(expect.arrayContaining([expect.stringContaining("s-p"), expect.stringContaining("s-wr")]));
     for (const row of pinned) {
@@ -1430,8 +1378,7 @@ describe("tray spec gaps (Phase 5)", () => {
   });
 
   it("tray_error_boundary_should_show_open_notifications_page_link_and_keep_handle_usable_when_render_throws", () => {
-    mockFlags.notification_tray_v2 = true;
-    jest.spyOn(console, "error").mockImplementation(() => {});
+      jest.spyOn(console, "error").mockImplementation(() => {});
     function Broken(): React.ReactElement {
       throw new Error("tray render failed");
     }

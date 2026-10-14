@@ -123,17 +123,6 @@ func TestFeatureFlagService_should_ListProbeFlagDefaultOn_When_NeverPersisted(t 
 	require.True(t, featureFlagDefault(programCLIFlagProbeFlagName))
 }
 
-func TestFeatureFlagService_should_ListNotificationTrayV2DefaultOff_When_NeverPersisted(t *testing.T) {
-	registered := false
-	for _, kf := range knownFeatureFlags {
-		if kf.name == notificationTrayV2FlagName {
-			registered = true
-		}
-	}
-	require.True(t, registered, "notification_tray_v2 must be in knownFeatureFlags")
-	require.False(t, featureFlagDefault(notificationTrayV2FlagName))
-}
-
 // recordingObserver is a deliverygate.FlagObserver that records the names it is told about.
 type recordingObserver struct {
 	mu    sync.Mutex

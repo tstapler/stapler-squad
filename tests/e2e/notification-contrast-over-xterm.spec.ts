@@ -10,7 +10,7 @@
 import fs from 'fs';
 import path from 'path';
 import { test, expect, type Page } from '@playwright/test';
-import { NotificationTray, ToastDeck, TRAY_V2_FLAG, sendNotification, setFeatureFlag } from './pages/NotificationPanel';
+import { NotificationTray, ToastDeck, sendNotification } from './pages/NotificationPanel';
 import { SessionClient } from './helpers/session-client';
 import { profiles } from './helpers/viewport-profiles';
 
@@ -320,12 +320,6 @@ for (const vpKey of ['V1', 'V2'] as const) {
     });
     test.afterAll(async () => {
       for (const id of sessions.values()) await client.deleteSession(id, true).catch(() => undefined);
-    });
-    test.beforeEach(async ({ request }) => {
-      await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, true);
-    });
-    test.afterEach(async ({ request }) => {
-      await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, false);
     });
 
     for (const theme of THEMES) {

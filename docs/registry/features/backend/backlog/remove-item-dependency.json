@@ -1,0 +1,17 @@
+{
+  "id": "backlog:remove-item-dependency",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "RemoveBacklogItemDependency",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_lifecycle.go",
+  "tested": true,
+  "testIds": [
+    "TestRemoveBacklogItemDependency_should_RemoveEdgeAndBeIdempotent",
+    "TestRemoveBacklogItemDependency_should_ReturnNotFound_When_ItemMissing",
+    "TestRemoveBacklogItemDependency_should_DeleteEdge_When_EdgeExists",
+    "TestRemoveBacklogItemDependency_should_Succeed_When_EdgeDoesNotExist"
+  ],
+  "lastModified": "2026-10-13T08:28:02.156382128-07:00"
+}

@@ -2254,13 +2254,17 @@ type multiReasonRowSet struct {
 // categorizeOpenStuckRows partitions an item's open stuck-state rows into
 // the ones eligible to count toward multi-reason escalation (excluding
 // StuckReasonMultipleReasons and StuckReasonBounceCapExhausted, which are
-// derived signals rather than independent reasons) and tracks whether a
+// derived signals rather than independent reasons, and the waiting reasons
+// isWaitingStuckReason names) and tracks whether a
 // bouncing/abandoned-review pair is present for the structural-coupling
 // exclusion below.
 func categorizeOpenStuckRows(rows []OpenStuckStateData) multiReasonRowSet {
 	var set multiReasonRowSet
 	for _, row := range rows {
 		if row.Reason == domain.StuckReasonMultipleReasons || row.Reason == domain.StuckReasonBounceCapExhausted {
+			continue
+		}
+		if isWaitingStuckReason(row.Reason) {
 			continue
 		}
 		if row.Reason == domain.StuckReasonBouncing {
@@ -2273,6 +2277,15 @@ func categorizeOpenStuckRows(rows []OpenStuckStateData) multiReasonRowSet {
 		set.nonEscalation = append(set.nonEscalation, row)
 	}
 	return set
+}
+
+// isWaitingStuckReason reports whether reason only says "something else is
+// already acting or the item awaits a merge" — respawn_blocked_active (its own
+// notification is INFO, "no action needed") and pr_ready_unmerged — so it
+// never counts toward multi-reason escalation. Both co-occur on every healthy
+// item whose PR is waiting on review, which escalated them to ERROR.
+func isWaitingStuckReason(reason domain.StuckReason) bool {
+	return reason == domain.StuckReasonRespawnBlockedActive || reason == domain.StuckReasonPRReadyUnmerged
 }
 
 // excludeStructurallyCoupledAbandonedReview applies the ADR-001 exclusion
