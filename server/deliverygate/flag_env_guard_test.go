@@ -19,7 +19,6 @@ import (
 var rolloutFlagNames = map[string]bool{
 	"hidden_session_gate":            true,
 	"hidden_session_readonly_guards": true,
-	"notification_tray_v2":           true,
 }
 
 // rolloutFlagIdents are the identifiers that carry those names.

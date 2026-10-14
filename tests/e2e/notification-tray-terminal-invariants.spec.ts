@@ -11,11 +11,9 @@ import { test, expect } from '@playwright/test';
 import { SessionClient } from './helpers/session-client';
 import {
   NotificationTray,
-  TRAY_V2_FLAG,
   installWebSocketSendCounter,
   markTerminalRoot,
   readTerminalFacts,
-  setFeatureFlag,
   skipWithoutDomRenderer,
   waitForIdleFrames,
   webSocketSends,
@@ -29,13 +27,6 @@ const MARKER = 'TRAY-SCROLLBACK-MARKER';
 test.use(profiles.V1.use);
 
 test.describe('tray leaves the terminal untouched', () => {
-  test.beforeEach(async ({ request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, true);
-  });
-  test.afterEach(async ({ request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, false);
-  });
-
   test('tray_should_keep_terminal_cols_rows_node_scrollback_body_overflow_and_focus_when_opened_and_closed_with_esc', async ({ page }) => {
     skipWithoutDomRenderer();
     const client = new SessionClient(BASE_URL);

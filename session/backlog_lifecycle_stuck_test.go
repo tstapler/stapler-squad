@@ -5326,6 +5326,41 @@ func TestReconcileMultiReasonEscalation_should_ExcludeEscalationReasonsFromCount
 	assert.False(t, ok, "multiple_reasons must not count itself toward its own threshold — with only 1 real reason open, it must resolve")
 }
 
+// TestReconcileMultiReasonEscalation_should_NotEscalate_When_OnlyWaitingReasonsAccompanyOneRealReason
+// is the regression guard for the false ERROR on healthy PR-pending items:
+// respawn_blocked_active and pr_ready_unmerged only say "a session is acting /
+// the PR awaits merge", so beside one real reason they must not reach the threshold.
+func TestReconcileMultiReasonEscalation_should_NotEscalate_When_OnlyWaitingReasonsAccompanyOneRealReason(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "PR waiting on review",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	for _, reason := range []domain.StuckReason{
+		domain.StuckReasonPRNeedsFix,
+		domain.StuckReasonRespawnBlockedActive,
+		domain.StuckReasonPRReadyUnmerged,
+	} {
+		_, err = er.MarkStuck(ctx, item.ID, reason, BacklogStatusInProgress, string(reason))
+		require.NoError(t, err)
+	}
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileMultiReasonEscalation(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	assert.False(t, ok, "waiting reasons must not count toward multi-reason escalation")
+}
+
 // TestReconcileMultiReasonEscalation_should_NotEscalate_When_OnlyCoupledBouncingAndAbandonedReviewOpen
 // is the structural-coupling regression guard (Task 1.2.2a/e): bouncing and
 // abandoned_review co-occur on nearly every bouncing item whose reopen gate

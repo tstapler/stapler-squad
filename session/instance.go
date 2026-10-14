@@ -2529,11 +2529,20 @@ func (i *Instance) Resume() error {
 // Mirrors pauseLocked's cleanup (stop controller, commit-if-dirty, kill tmux, remove
 // worktree) but lands in Stopped instead of Paused.
 func (i *Instance) StopByUser() error {
-	return i.sendSyncErr(func(s *instanceState) error { return stopByUserLocked(s) })
+	return i.sendSyncErr(func(s *instanceState) error { return stopByUserLocked(s, false) })
 }
 
-// stopByUserLocked is the actor-safe body of StopByUser().
-func stopByUserLocked(s *instanceState) error {
+// ForceStopByUser is StopByUser for a session whose worktree is broken so git cannot
+// say whether it is dirty. It skips the dirty-state check only when that check
+// errored with ErrDirtyStateUnknown, then stops the session and leaves the worktree
+// and branch on disk untouched. A worktree known to be dirty is still committed
+// first, exactly as in StopByUser.
+func (i *Instance) ForceStopByUser() error {
+	return i.sendSyncErr(func(s *instanceState) error { return stopByUserLocked(s, true) })
+}
+
+// stopByUserLocked is the actor-safe body of StopByUser()/ForceStopByUser().
+func stopByUserLocked(s *instanceState, force bool) error {
 	i := s.inst
 	if !i.Permissions.CanPause {
 		return ErrPauseNotPermitted
@@ -2550,15 +2559,20 @@ func stopByUserLocked(s *instanceState) error {
 
 	// Fail closed before any side effect — see pauseLocked.
 	needsCommit, err := i.worktreeNeedsCommit()
+	keepWorktree := false
 	if err != nil {
-		log.Error("stop aborted: cannot determine worktree dirty state", "session", i.Title, "err", err)
-		return err
+		if !force || !errors.Is(err, ErrDirtyStateUnknown) {
+			log.Error("stop aborted: cannot determine worktree dirty state", "session", i.Title, "err", err)
+			return err
+		}
+		log.Warn("force stop: dirty state unknown; stopping session but keeping worktree and branch on disk", "session", i.Title, "err", err)
+		keepWorktree = true
 	}
 
 	stopControllerLocked(s)
 
 	var errs []error
-	if i.IsWorktree {
+	if i.IsWorktree && !keepWorktree {
 		if needsCommit {
 			commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s (stopped)", i.Title, time.Now().Format(time.RFC822))
 			if err := i.gitManager.CommitChanges(commitMsg); err != nil {
@@ -2573,7 +2587,7 @@ func stopByUserLocked(s *instanceState) error {
 		}
 	}
 
-	if i.IsWorktree {
+	if i.IsWorktree && !keepWorktree {
 		if _, err := os.Stat(i.gitManager.GetWorktreePath()); err == nil {
 			if err := i.commitBeforeRemove(fmt.Sprintf("[claudesquad] update from '%s' on %s (stopped)", i.Title, time.Now().Format(time.RFC822))); err != nil {
 				// Return err bare: combineErrors would flatten it and lose errors.Is.

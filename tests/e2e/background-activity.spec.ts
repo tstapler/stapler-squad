@@ -9,7 +9,7 @@
  */
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { BackgroundSegment, NotificationTray, ToastDeck, TRAY_V2_FLAG, sendNotification, setFeatureFlag } from './pages/NotificationPanel';
+import { BackgroundSegment, NotificationTray, ToastDeck, sendNotification } from './pages/NotificationPanel';
 import { profiles } from './helpers/viewport-profiles';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
@@ -95,12 +95,8 @@ for (const key of ['V1', 'V2'] as const) {
   test.describe(`background activity (${profiles[key].name})`, () => {
     test.use(profiles[key].use);
 
-    test.beforeEach(async ({ page, request }) => {
-      await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, true);
+    test.beforeEach(async ({ page }) => {
       await page.addInitScript((k) => localStorage.setItem(k, 'true'), ONBOARDED_KEY);
-    });
-    test.afterEach(async ({ request }) => {
-      await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, false);
     });
 
     test('background_row_should_appear_leave_on_open_and_main_list_should_exclude_hidden_when_failure_seeded', async ({ page, request }) => {

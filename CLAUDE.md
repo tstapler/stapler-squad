@@ -332,6 +332,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | State file isolation / multi-instance | `docs/reference/state-isolation.md` |
 | Tag-based session organization | `docs/reference/tag-organization.md` |
 | Backlog completion gate (AC-completeness check) + synchronous terminal-transition cleanup | `docs/reference/backlog-completion-gate-and-cleanup.md` |
+| Backlog dependencies: RPCs, MCP tools, `/api` prefix for direct Connect calls | `docs/reference/backlog-dependencies.md` |
 | Benchmark reference | `docs/reference/benchmarks.md` |
 | Hidden-session delivery gate (policy, counters, latency, guards) | `docs/reference/notification-delivery-gate.md` |
 | Nil safety & static analysis tools | `docs/how-to/run-nil-safety-analysis.md` |

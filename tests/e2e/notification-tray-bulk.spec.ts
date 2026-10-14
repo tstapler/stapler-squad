@@ -9,10 +9,8 @@ import { test, expect, type APIRequestContext } from '@playwright/test';
 import {
   NotificationTray,
   ToastDeck,
-  TRAY_V2_FLAG,
   openTerminalSession,
   sendNotification,
-  setFeatureFlag,
 } from './pages/NotificationPanel';
 import { profiles } from './helpers/viewport-profiles';
 
@@ -22,13 +20,6 @@ const ONBOARDED_KEY = 'stapler-squad:onboarded';
 test.use(profiles.V1.use);
 
 test.describe('notification bulk actions across tabs', () => {
-  test.beforeEach(async ({ request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, true);
-  });
-  test.afterEach(async ({ request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, false);
-  });
-
   test('second_tab_should_drop_exactly_broadcast_ids_and_keep_late_arrival_when_move_all_in_first_tab', async ({ context, request }) => {
     await context.addInitScript((key) => localStorage.setItem(key, 'true'), ONBOARDED_KEY);
     const prefix = `toast-xtab-${Date.now()}`;
@@ -82,8 +73,7 @@ async function historyFor(request: APIRequestContext, prefix: string): Promise<H
 const CLEAR_RPC = 'ClearNotificationHistory';
 
 test.describe('tray bulk actions with seeded decisions (Story 4.4)', () => {
-  test.beforeEach(async ({ page, request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, true);
+  test.beforeEach(async ({ page }) => {
     await page.addInitScript(
       ([onboarded, undoKey]) => {
         localStorage.setItem(onboarded, 'true');
@@ -91,9 +81,6 @@ test.describe('tray bulk actions with seeded decisions (Story 4.4)', () => {
       },
       [ONBOARDED_KEY, 'ssq.notifications.undoWindow'],
     );
-  });
-  test.afterEach(async ({ request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, false);
   });
 
   async function seedMixed(request: APIRequestContext, prefix: string) {
@@ -217,14 +204,7 @@ test.describe('tray bulk actions with seeded decisions (Story 4.4)', () => {
 });
 
 test.describe('Claude notification via tmux (OQ-2 characterization)', () => {
-  test.beforeEach(async ({ request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, true);
-  });
-  test.afterEach(async ({ request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, false);
-  });
-
-  test('claude_notification_via_tmux_toast_should_not_appear_but_history_row_should_when_visible_session_idle_hook_with_v2_on', async ({ page, request }) => {
+  test('claude_notification_via_tmux_toast_should_not_appear_but_history_row_should_when_visible_session_idle_hook', async ({ page, request }) => {
     const { client, session } = await openTerminalSession(page, BASE_URL, { marker: 'TMUX-HOOK-MARKER', titlePrefix: 'tmux-hook', waitForText: false });
     try {
       const deck = new ToastDeck(page);

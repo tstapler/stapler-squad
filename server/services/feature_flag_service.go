@@ -150,11 +150,6 @@ const worktreeChangeDetectionFlagName = "vcs:worktree-change-detection"
 // project_plans/app-scrollback-forwarding/implementation/plan.md, Epic 1.5.
 const terminalAppScrollForwardingClaudeFlagName = config.FeatureAppScrollForwardingClaude
 
-// notificationTrayV2FlagName gates the capped toast deck and the notification tray in
-// the web app (read there as a live flag via GetFeatureFlags). The server only registers
-// it; the client mirrors this literal in lib/notification-policy.ts. Default: off.
-const notificationTrayV2FlagName = "notification_tray_v2"
-
 // workspacePeersBlockFor is the single feature-flag gate for the workspace-peers nudge,
 // called by both SessionService.workspacePeersBlockFor (session_service.go) and
 // BacklogService.workspacePeersBlockFor (backlog_service_triage.go) so the two callers can't
@@ -283,10 +278,6 @@ var knownFeatureFlags = []struct {
 		name:         config.AutonomousStallNudgeFeatureFlag,
 		defaultValue: config.AutonomousStallNudgeDefault,
 		description:  "Autonomous stall nudge: when an autonomous work session stops while its pane sits idle at a prompt, type one fixed reminder into the pane and resume supervision instead of respawning it. Also requires Diagnose & Nudge to be on (that flag is the kill switch for every autonomous pane write). Read fresh at each stop. Default: off — every stall respawns as before.",
-	},
-	{
-		name:        notificationTrayV2FlagName,
-		description: "Notification tray v2: cap the toast deck at 3 (1 on phones) with a \"+N more\" chip and one \"Move all to tray\" control, instead of the uncapped legacy toast list. Applies on the next toast render, no reload. Default: off.",
 	},
 	{
 		name:         config.HiddenSessionGateFeatureFlag,

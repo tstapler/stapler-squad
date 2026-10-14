@@ -8,7 +8,7 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { SessionClient } from './helpers/session-client';
-import { ToastDeck, TRAY_V2_FLAG, sendNotification, setFeatureFlag } from './pages/NotificationPanel';
+import { ToastDeck, sendNotification } from './pages/NotificationPanel';
 import { profiles, setKeyboardOpen } from './helpers/viewport-profiles';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
@@ -35,13 +35,6 @@ async function openSessionAndSeed(page: Page, request: Parameters<typeof sendNot
 }
 
 test.describe('toast stack (phone)', () => {
-  test.beforeEach(async ({ request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, true);
-  });
-  test.afterEach(async ({ request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, false);
-  });
-
   test.describe('V2 portrait', () => {
     test.use(profiles.V2.use);
 
@@ -64,7 +57,9 @@ test.describe('toast stack (phone)', () => {
         if (keysBox) expect(intersects(deckBox!, keysBox)).toBe(false);
 
         const toastBox = await deck.toasts.first().boundingBox();
-        expect(toastBox!.height).toBeLessThanOrEqual(96);
+        // One-row card: border 4 + padding 8 + 44px content = 56px; chip row 44 + gap 8 above it.
+        expect(toastBox!.height).toBeLessThanOrEqual(64);
+        expect(deckBox!.height).toBeLessThanOrEqual(116);
       } finally {
         await client.deleteSession(session.id, true);
       }
@@ -158,7 +153,7 @@ test.describe('toast stack (phone)', () => {
   test.describe('V4 portrait with the keyboard open', () => {
     test.use(profiles.V4.use);
 
-    test('toast_stack_should_show_only_44px_chip_and_keep_textarea_focused_when_keyboard_open', async ({ page, request }) => {
+    test('toast_stack_should_show_only_a_40px_strip_and_keep_textarea_focused_when_keyboard_open', async ({ page, request }) => {
       const { client, session, deck } = await openSessionAndSeed(page, request, 3);
       try {
         const textarea = page.getByRole('textbox', { name: 'Terminal input' });
@@ -166,9 +161,10 @@ test.describe('toast stack (phone)', () => {
         await setKeyboardOpen(page, 300);
 
         await expect(deck.toasts).toHaveCount(0);
-        await expect(deck.chip).toContainText('notifications');
+        await expect(deck.chip).toContainText('Open tray');
+        await expect(page.getByTestId('toast-move-all-to-tray')).toHaveCount(0);
         const chipBox = await deck.chip.boundingBox();
-        expect(chipBox!.height).toBeGreaterThanOrEqual(44);
+        expect(chipBox!.height).toBeLessThanOrEqual(40);
         await expect(textarea).toBeFocused();
       } finally {
         await client.deleteSession(session.id, true);

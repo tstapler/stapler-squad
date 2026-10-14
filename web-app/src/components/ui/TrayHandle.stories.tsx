@@ -14,4 +14,4 @@ export default meta;
 type Story = StoryObj<typeof TrayEntryChip>;
 
 export const MoreRow: Story = { args: { content: "more-row" } };
-export const KeyboardChip: Story = { args: { content: "keyboard-chip", chipText: "3 notifications - 1 needs you" } };
+export const KeyboardChip: Story = { args: { content: "keyboard-chip", chipText: "Open tray - 1 needs you" } };

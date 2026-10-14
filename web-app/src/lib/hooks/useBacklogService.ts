@@ -10,6 +10,7 @@ import { useAbortableEffect } from "@/lib/hooks/useAbortableEffect";
 import {
   BacklogService,
   BacklogItem as BacklogItemProto,
+  DependencyInfo,
   AcCriterion as AcCriterionProto,
   ItemSession as ItemSessionProto,
   TriageTask as TriageTaskProto,
@@ -151,6 +152,14 @@ export interface LinkedSession {
   executorFallbackReason?: string;
 }
 
+/** The other end of a backlog dependency edge (mirrors proto DependencyInfo). */
+export interface ItemDependency {
+  itemId: string;
+  publicId: string;
+  title: string;
+  status: string;
+}
+
 export interface BacklogItem {
   id: string;
   /**
@@ -262,6 +271,10 @@ export interface BacklogItem {
   /** A report_duplicate claim awaits operator confirmation (item is in review). */
   duplicatePending?: boolean;
   duplicateRef?: string;
+  /** Blockers this item waits on. Lists carry only unresolved ones; detail carries all. */
+  blockedBy?: ItemDependency[];
+  /** Items waiting on this one. Detail reads only. */
+  blocking?: ItemDependency[];
   /**
    * Live-update generation counter (Epic 6.1, backlog-event-driven-updates).
    * Populated only by `useWatchBacklogItems` — incremented once per genuine
@@ -445,6 +458,10 @@ export interface ListBacklogItemsFilter {
 // ---------------------------------------------------------------------------
 // Proto ↔ domain mapping helpers
 // ---------------------------------------------------------------------------
+
+function toItemDependency(d: DependencyInfo): ItemDependency {
+  return { itemId: d.itemId, publicId: d.publicId, title: d.title, status: d.status };
+}
 
 function mapAcCriterion(c: AcCriterionProto): AcCriterion {
   return {
@@ -686,6 +703,8 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     costBudgetThresholdUsd: p.costBudgetThresholdUsd,
     duplicatePending: p.duplicatePending,
     duplicateRef: p.duplicateRef,
+    blockedBy: (p.blockedBy ?? []).map(toItemDependency),
+    blocking: (p.blocking ?? []).map(toItemDependency),
     externalId: p.externalId || undefined,
     externalUrl: p.externalUrl || undefined,
     labels: p.labels ?? [],

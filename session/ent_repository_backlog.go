@@ -640,6 +640,144 @@ func (r *EntRepository) AddBacklogItemDependency(ctx context.Context, edge Backl
 	return nil
 }
 
+// RemoveBacklogItemDependency deletes the blocker->blocked edge. Idempotent:
+// a missing edge is a no-op. Both items must exist (ErrNotFound otherwise) so
+// a typo'd ID is not silently reported as success. Removing an edge cannot
+// create a cycle, so no graph check is needed.
+func (r *EntRepository) RemoveBacklogItemDependency(ctx context.Context, edge BacklogItemDependencyEdge) error {
+	blockerID, err := r.resolveBacklogItemLookup(ctx, edge.BlockerID)
+	if err != nil {
+		return fmt.Errorf("%w: invalid blocker id %q: %v", ErrNotFound, edge.BlockerID, err)
+	}
+	blockedID, err := r.resolveBacklogItemLookup(ctx, edge.BlockedID)
+	if err != nil {
+		return fmt.Errorf("%w: invalid blocked id %q: %v", ErrNotFound, edge.BlockedID, err)
+	}
+	existingIDs, err := r.client.BacklogItem.Query().
+		Where(backlogitem.IDIn(blockerID, blockedID)).
+		IDs(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to verify backlog items exist for dependency %s -> %s: %w", edge.BlockerID, edge.BlockedID, err)
+	}
+	found := make(map[uuid.UUID]bool, len(existingIDs))
+	for _, id := range existingIDs {
+		found[id] = true
+	}
+	if !found[blockerID] {
+		return fmt.Errorf("%w: blocker item %s does not exist", ErrNotFound, edge.BlockerID)
+	}
+	if !found[blockedID] {
+		return fmt.Errorf("%w: blocked item %s does not exist", ErrNotFound, edge.BlockedID)
+	}
+	if _, err := r.client.BacklogItemDependency.Delete().
+		Where(
+			backlogitemdependency.BlockerIDEQ(blockerID),
+			backlogitemdependency.BlockedIDEQ(blockedID),
+		).
+		Exec(ctx); err != nil {
+		return fmt.Errorf("failed to remove backlog item dependency %s -> %s: %w", edge.BlockerID, edge.BlockedID, err)
+	}
+	return nil
+}
+
+// ListBacklogItemDependencies returns both directions of itemID's dependency
+// edges: blockedBy (items itemID waits on) and blocking (items waiting on
+// itemID). Resolved edges are included — callers decide from Status whether a
+// blocker is still unresolved. Results are ordered by edge creation time for a
+// stable display. Two queries total, each eager-loading the far end.
+func (r *EntRepository) ListBacklogItemDependencies(ctx context.Context, itemID string) (blockedBy, blocking []BacklogItemDependencyRef, err error) {
+	parsed, err := r.resolveBacklogItemLookup(ctx, itemID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+	}
+
+	inbound, err := r.client.BacklogItemDependency.Query().
+		Where(backlogitemdependency.BlockedIDEQ(parsed)).
+		WithBlocker().
+		Order(ent.Asc(backlogitemdependency.FieldCreatedAt)).
+		All(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to list blockers of %s: %w", itemID, err)
+	}
+	outbound, err := r.client.BacklogItemDependency.Query().
+		Where(backlogitemdependency.BlockerIDEQ(parsed)).
+		WithBlocked().
+		Order(ent.Asc(backlogitemdependency.FieldCreatedAt)).
+		All(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to list items blocked by %s: %w", itemID, err)
+	}
+
+	for _, row := range inbound {
+		if row.Edges.Blocker != nil {
+			blockedBy = append(blockedBy, dependencyRefFromItem(row.Edges.Blocker))
+		}
+	}
+	for _, row := range outbound {
+		if row.Edges.Blocked != nil {
+			blocking = append(blocking, dependencyRefFromItem(row.Edges.Blocked))
+		}
+	}
+	return blockedBy, blocking, nil
+}
+
+// UnresolvedBlockersForItems returns, per blocked item ID, the blockers that
+// have not yet reached done/archived (same resolved definition as
+// UnresolvedBlockerItemIDs), eager-loading each blocker's title/status in a
+// single query so list views avoid an N+1. Items with no unresolved blocker
+// are absent from the map.
+func (r *EntRepository) UnresolvedBlockersForItems(ctx context.Context, itemIDs []string) (map[string][]BacklogItemDependencyRef, error) {
+	result := make(map[string][]BacklogItemDependencyRef)
+	if len(itemIDs) == 0 {
+		return result, nil
+	}
+	byUUID := make(map[uuid.UUID]string, len(itemIDs))
+	parsed := make([]uuid.UUID, 0, len(itemIDs))
+	for _, id := range itemIDs {
+		u, err := r.resolveBacklogItemLookup(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+		}
+		byUUID[u] = id
+		parsed = append(parsed, u)
+	}
+	// Chunk the IN list to stay under SQLite's bound-variable limit.
+	const chunkSize = 500
+	var rows []*ent.BacklogItemDependency
+	for start := 0; start < len(parsed); start += chunkSize {
+		end := min(start+chunkSize, len(parsed))
+		chunk, err := r.client.BacklogItemDependency.Query().
+			Where(
+				backlogitemdependency.BlockedIDIn(parsed[start:end]...),
+				backlogitemdependency.HasBlockerWith(backlogitem.StatusNotIn(TerminalStatusStrings()...)),
+			).
+			WithBlocker().
+			Order(ent.Asc(backlogitemdependency.FieldCreatedAt)).
+			All(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load unresolved blockers: %w", err)
+		}
+		rows = append(rows, chunk...)
+	}
+	for _, row := range rows {
+		if row.Edges.Blocker == nil {
+			continue
+		}
+		key := byUUID[row.BlockedID]
+		result[key] = append(result[key], dependencyRefFromItem(row.Edges.Blocker))
+	}
+	return result, nil
+}
+
+func dependencyRefFromItem(item *ent.BacklogItem) BacklogItemDependencyRef {
+	return BacklogItemDependencyRef{
+		ItemID:   item.ID.String(),
+		PublicID: item.PublicID,
+		Title:    item.Title,
+		Status:   item.Status,
+	}
+}
+
 // dependencyReachable reports whether target is reachable from start by
 // following existing blocker->blocked edges forward (a breadth-first
 // traversal of "what does this item block, transitively"). Used to detect

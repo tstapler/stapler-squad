@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.5.0](https://github.com/tstapler/stapler-squad/compare/v2.4.0...v2.5.0) (2026-10-14)
+
+
+### Features
+
+* **backlog:** expose work-session base_commit_sha on ItemSession, MCP and detail UI ([#1023](https://github.com/tstapler/stapler-squad/issues/1023)) ([6a5d50f](https://github.com/tstapler/stapler-squad/commit/6a5d50fa44565ef6a44c58daff4d36d893856e48))
+* **session:** opt-in force_stop for sessions with unknown worktree dirty state ([#1025](https://github.com/tstapler/stapler-squad/issues/1025)) ([12e674a](https://github.com/tstapler/stapler-squad/commit/12e674a67286130227a1ec620da49247843a1772))
+
+
+### Bug Fixes
+
+* **capacity:** replace per-session token alert with a USD/hour spend-rate alert ([#1026](https://github.com/tstapler/stapler-squad/issues/1026)) ([a924b1f](https://github.com/tstapler/stapler-squad/commit/a924b1f2494c62635405183b93c315f773608149))
+* **notifications:** retire stale stuck notifications and stop false multi-reason escalation ([#1029](https://github.com/tstapler/stapler-squad/issues/1029)) ([1281b13](https://github.com/tstapler/stapler-squad/commit/1281b13fefd53e4ef13bf4bcc38e97165dd3b5a7))
+
 ## [2.4.0](https://github.com/tstapler/stapler-squad/compare/v2.3.0...v2.4.0) (2026-10-13)
 
 

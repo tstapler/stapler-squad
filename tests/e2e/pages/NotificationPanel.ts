@@ -29,11 +29,10 @@ export async function dismissNotificationInterference(page: Page): Promise<void>
 }
 
 // ---------------------------------------------------------------------------
-// Toast deck (notification_tray_v2)
+// Toast deck
 // ---------------------------------------------------------------------------
 
 
-export const TRAY_V2_FLAG = 'notification_tray_v2';
 export const HIDDEN_GATE_FLAG = 'hidden_session_gate';
 /** Title of the hidden review session seeded before the test server boots (tests/e2e/seed-hidden). */
 export const SEEDED_HIDDEN_SESSION = 'e2e-hidden-review';
@@ -100,7 +99,7 @@ export class ToastDeck {
 }
 
 // ---------------------------------------------------------------------------
-// Notification tray (notification_tray_v2)
+// Notification tray
 // ---------------------------------------------------------------------------
 
 /** The non-modal tray, its entry points and the terminal facts its invariants are about. */

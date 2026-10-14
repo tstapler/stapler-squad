@@ -6,6 +6,9 @@ import {
   UNDO_WINDOW_CHOICES_MS,
   readPinnedCollapseMs,
   readUndoWindowMs,
+  readFloatingBell,
+  resetBellPos,
+  writeFloatingBell,
   writePinnedCollapseMs,
   writeUndoWindowMs,
 } from "@/lib/utils/deckSettings";
@@ -26,6 +29,7 @@ const seconds = (ms: number) => `${ms / 1000}s`;
 export function TraySettings() {
   const [undoMs, setUndoMs] = useState(readUndoWindowMs);
   const [collapseMs, setCollapseMs] = useState<number | null>(readPinnedCollapseMs);
+  const [floatingBell, setFloatingBell] = useState(readFloatingBell);
 
   return (
     <div className={traySettings} data-testid="tray-settings">
@@ -66,6 +70,21 @@ export function TraySettings() {
           <option value="never">Never</option>
         </select>
       </label>
+      <label className={traySettingsRow}>
+        Floating bell (phone)
+        <input
+          type="checkbox"
+          data-testid="tray-floating-bell"
+          checked={floatingBell}
+          onChange={(e) => {
+            setFloatingBell(e.target.checked);
+            writeFloatingBell(e.target.checked);
+          }}
+        />
+      </label>
+      <button type="button" className={trayButton} data-testid="tray-reset-bell" onClick={() => resetBellPos()}>
+        Reset notification button position
+      </button>
     </div>
   );
 }

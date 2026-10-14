@@ -1,6 +1,7 @@
 // +feature: notification-tray
 "use client";
 
+import { resetBellPos } from "@/lib/utils/deckSettings";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
@@ -16,7 +17,6 @@ import { useBackgroundSessions } from "@/lib/hooks/useBackgroundSessions";
 import { useTrayFocus } from "@/lib/hooks/useTrayFocus";
 import { useTrayBulkActions } from "@/lib/hooks/useTrayBulkActions";
 import { useTrayDismissal } from "@/lib/hooks/useTrayDismissal";
-import { NOTIFICATION_TRAY_V2_FLAG } from "@/lib/notification-policy";
 import { routes } from "@/lib/routes";
 import { countNeedsAttention, groupNotifications, flattenGroups, type GroupedNotification } from "@/lib/utils/notificationGrouping";
 import {
@@ -26,7 +26,7 @@ import {
 import { selectBackgroundRows, type BackgroundRow } from "@/lib/utils/backgroundActivity";
 import { knownHiddenSessions } from "@/lib/utils/hiddenSessionRegistry";
 import { readQuietMode, readTrayPinned, readWhatChangedSeen, writeTrayPinned, writeWhatChangedSeen } from "@/lib/utils/deckSettings";
-import { NotificationItem, AutoHandledSection } from "./NotificationItem";
+import { AutoHandledSection } from "./NotificationItem";
 import { BackgroundActivity } from "./BackgroundActivity";
 import { segment, segments } from "./BackgroundActivity.css";
 import { TrayConfirm } from "./TrayConfirm";
@@ -37,15 +37,9 @@ import { TraySettings, WHAT_CHANGED_TEXT, WhatChangedCard } from "./TraySettings
 import { selectTrayBanner, selectTrayState } from "./trayState";
 import { selectTrayVariant } from "./trayVariant";
 import {
-  overlay,
-  panel,
-  panelOpen,
   header,
   title,
-  unreadBadge,
   headerActions,
-  markAllButton,
-  clearButton,
   closeButton,
   filterBar,
   searchInput,
@@ -57,14 +51,12 @@ import {
   emptyIcon,
   emptyText,
   emptySubtext,
-  list,
-  loadMore,
-  loadMoreButton,
   newPill,
   sheetGrabber,
   sheetGrabberRow,
   sheetScrim,
   trayAttention,
+  trayCounts,
   trayBanner,
   trayButton,
   trayFooter,
@@ -92,23 +84,19 @@ const OFFLINE_REASON = "Offline";
 /**
  * NotificationPanel - the notification history surface.
  *
- * With `notification_tray_v2` off it is the original modal slide-over. With it on
- * it is the non-modal tray (ADR-006): no backdrop, no `aria-modal`, `transform`
+ * The non-modal tray (ADR-006): no backdrop, no `aria-modal`, `transform`
  * only motion, grouped and virtualized rows, a pinned "Needs attention" group,
  * bulk actions guarded server-side with undo, and layout that never touches the
  * terminal.
  */
 export function NotificationPanel() {
-  const v2 = useFeatureFlag(NOTIFICATION_TRAY_V2_FLAG);
   const replyEnabled = useFeatureFlag("hidden_session_reply");
   const {
     notificationHistory,
     isPanelOpen,
     togglePanel,
     markAsRead,
-    removeFromHistory,
     acknowledgeNotification,
-    clearHistory,
     getUnreadCount,
     historyLoading,
     historyHasMore,
@@ -128,10 +116,10 @@ export function NotificationPanel() {
   const { isOffline } = useNotificationConnectivity();
   const coarse = useCoarsePointer();
   const variant = selectTrayVariant(viewport);
-  const isBottomSheet = v2 && variant === "bottom-sheet";
+  const isBottomSheet = variant === "bottom-sheet";
   // The phone sheet owns a history entry for hardware Back, and drags and expands.
-  const isSheet = v2 && variant === "bottom-sheet";
-  const isSideOverlay = v2 && variant === "side-overlay";
+  const isSheet = isBottomSheet;
+  const isSideOverlay = variant === "side-overlay";
 
   const trayRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -157,7 +145,7 @@ export function NotificationPanel() {
     acknowledgeNotification,
   });
 
-  useTrayFocus({ isOpen: v2 && isPanelOpen, trayRef, headingRef, coarse });
+  useTrayFocus({ isOpen: isPanelOpen, trayRef, headingRef, coarse });
 
   // Pin tray is read after mount so server and client render the same first frame.
   useEffect(() => setPinned(readTrayPinned()), []);
@@ -176,7 +164,6 @@ export function NotificationPanel() {
     if (isPanelOpen) togglePanel();
   }, [isPanelOpen, togglePanel]);
   const { releaseHistoryEntry } = useTrayDismissal({
-    enabled: v2,
     isOpen: isPanelOpen,
     isSheet,
     modal: modalSheet,
@@ -251,7 +238,7 @@ export function NotificationPanel() {
     const observer = new ResizeObserver(() => setHeadHeight(head.offsetHeight));
     observer.observe(head);
     return () => observer.disconnect();
-  }, [v2]);
+  }, []);
 
   // Closing resets the sheet so it reopens at peek.
   useEffect(() => {
@@ -271,7 +258,7 @@ export function NotificationPanel() {
     [notificationHistory, bulk.hiddenIds],
   );
 
-  const stable = useStableRowOrder(visibleHistory, v2 && isPanelOpen, scrolled);
+  const stable = useStableRowOrder(visibleHistory, isPanelOpen, scrolled);
 
   const filteredNotifications = useMemo(() => {
     let rows = stable.items.filter((n) => n.notificationType !== "auto_approved");
@@ -304,7 +291,7 @@ export function NotificationPanel() {
 
   // Background activity (Story 5.4): polled only while its segment is showing; the segment
   // badge is the same join over history, so it adds nothing to the bell count.
-  const backgroundVisible = v2 && isPanelOpen && traySegment === "background";
+  const backgroundVisible = isPanelOpen && traySegment === "background";
   const background = useBackgroundSessions(backgroundVisible && !isOffline);
   const backgroundView = useMemo(
     () =>
@@ -329,6 +316,9 @@ export function NotificationPanel() {
     [filteredNotifications, collapsed],
   );
 
+  // Unread items that are not pending decisions, so the two counts never overlap.
+  const earlierUnread = Math.max(0, unreadCount - needsAttention);
+
   const listRows: ListRow[] = useMemo(
     () => (historyHasMore ? [...flatRows, { kind: "load-more", key: "__load_more__" }] : flatRows),
     [flatRows, historyHasMore],
@@ -338,14 +328,6 @@ export function NotificationPanel() {
     for (const g of groupNotifications(filteredNotifications)) map.set(g.notification.id, g);
     return map;
   }, [filteredNotifications]);
-
-  const legacyClearHistory = () => {
-    // Irreversible, so gate behind a confirm — the actual exclusion of unread
-    // actionable records lives server-side.
-    if (window.confirm("Clear read notifications? This can't be undone. Items still needing a decision won't be cleared.")) {
-      clearHistory();
-    }
-  };
 
   const dismissGroup = (group: GroupedNotification) =>
     bulk.startUndoableClear(
@@ -410,11 +392,11 @@ export function NotificationPanel() {
   // The one-time "What changed" card is announced once, politely, with no focus move (TM-13).
   const announcedWhatChanged = useRef(false);
   useEffect(() => {
-    if (v2 && isPanelOpen && whatChangedOpen && !announcedWhatChanged.current) {
+    if (isPanelOpen && whatChangedOpen && !announcedWhatChanged.current) {
       announcedWhatChanged.current = true;
       announce(WHAT_CHANGED_TEXT, "polite", "what-changed");
     }
-  }, [v2, isPanelOpen, whatChangedOpen, announce]);
+  }, [isPanelOpen, whatChangedOpen, announce]);
 
   const menuGroups: TrayMenuItem[][] = [
     [
@@ -442,67 +424,19 @@ export function NotificationPanel() {
     ],
     [
       { key: "settings", label: "Tray settings", onSelect: () => setSettingsOpen((v) => !v) },
+      { key: "reset-bell", label: "Reset notification button position", onSelect: () => resetBellPos() },
       { key: "what-changed", label: "What changed", onSelect: () => setWhatChangedOpen(true) },
     ],
   ];
-
-  const legacyList = (
-    <div className={list}>
-      {groupNotifications(filteredNotifications).map((group) => (
-        <NotificationItem
-          key={group.notification.id}
-          group={group}
-          resolvedApprovals={resolvedApprovals}
-          pendingApprovals={pendingApprovals}
-          blockedApprovals={blockedApprovals}
-          failedApprovals={failedApprovals}
-          resolveApproval={resolveApproval}
-          removeFromHistory={group.notification.isPendingDecision === true ? undefined : removeFromHistory}
-          handleNotificationClick={handleNotificationClick}
-          onNavigate={togglePanel}
-          lookupHidden={isPanelOpen}
-        />
-      ))}
-      {historyHasMore && (
-        <div className={loadMore}>
-          <button className={loadMoreButton} onClick={loadMoreHistory} disabled={historyLoading}>
-            {historyLoading ? "Loading..." : "Load more"}
-          </button>
-        </div>
-      )}
-    </div>
-  );
 
   const emptyStateText = () => {
     if (trayState.kind === "empty-filtered") return { icon: "🔍", text: "No matching notifications", sub: "Try adjusting your search or filter" };
     if (trayState.kind === "offline") return { icon: "📡", text: "Offline - showing cached", sub: updatedAt ? `Updated ${updatedAt}` : "Reconnect to load notifications" };
     if (trayState.kind === "load-error") return { icon: "⚠", text: "Could not load notifications.", sub: "" };
-    return { icon: "🔔", text: v2 ? "All caught up" : "No notifications yet", sub: "You'll see notifications from your sessions here" };
+    return { icon: "🔔", text: "All caught up", sub: "You'll see notifications from your sessions here" };
   };
 
   const renderBody = () => {
-    if (!v2) {
-      if (historyLoading && notificationHistory.length === 0) {
-        return (
-          <div className={empty}>
-            <div className={emptyIcon} aria-hidden="true">⏳</div>
-            <p className={emptyText}>Loading notifications...</p>
-          </div>
-        );
-      }
-      if (filteredNotifications.length === 0) {
-        const e = emptyStateText();
-        return (
-          <div className={empty}>
-            <div className={emptyIcon} aria-hidden="true">{filtered ? "🔍" : "🔔"}</div>
-            <p className={emptyText}>{filtered ? "No matching notifications" : "No notifications yet"}</p>
-            <p className={emptySubtext}>{e.sub}</p>
-          </div>
-        );
-      }
-      return legacyList;
-    }
-
     if (trayState.kind === "loading") {
       return (
         <div className={empty} aria-busy="true" data-testid="tray-skeleton">
@@ -620,30 +554,26 @@ export function NotificationPanel() {
     "bottom-sheet": trayVariant.bottomSheet,
     "landscape-panel": trayVariant.landscapePanel,
   }[variant];
-  const panelClass = v2 ? variantClass : `${panel} ${isPanelOpen ? panelOpen : ""}`;
 
   return (
     <>
-      {/* Legacy overlay backdrop; the v2 tray has none. */}
-      {!v2 && isPanelOpen && <div className={overlay} onClick={togglePanel} aria-hidden="true" />}
       {modalSheet && <div className={sheetScrim} data-testid="tray-scrim" onClick={close} aria-hidden="true" />}
       <TrayHandle />
 
       <div
         ref={trayRef}
         id={TRAY_ID}
-        className={panelClass}
+        className={variantClass}
         data-testid="notification-tray"
         data-gesture-ignore
-        data-notification-tray={v2 ? "v2" : undefined}
-        data-variant={v2 ? variant : "legacy"}
+        data-notification-tray="v2"
+        data-variant={variant}
         data-state={isPanelOpen ? "open" : "closed"}
         data-sheet={isBottomSheet ? (expanded ? "expanded" : "peek") : undefined}
         data-keyboard={isBottomSheet && viewport.isVirtualKeyboardOpen ? "open" : undefined}
-        role={v2 && !modalSheet ? "complementary" : "dialog"}
-        aria-label={v2 ? undefined : "Notification Panel"}
-        aria-labelledby={v2 ? HEADING_ID : undefined}
-        aria-modal={v2 ? (modalSheet ? true : undefined) : true}
+        role={modalSheet ? "dialog" : "complementary"}
+        aria-labelledby={HEADING_ID}
+        aria-modal={modalSheet ? true : undefined}
         onKeyDown={trapTab}
       >
         {isBottomSheet && (
@@ -674,13 +604,20 @@ export function NotificationPanel() {
         <div className={header}>
           <h2 id={HEADING_ID} ref={headingRef} tabIndex={-1} className={title}>
             Notifications
-            {unreadCount > 0 && (
-              <span className={unreadBadge}>{unreadCount}</span>
-            )}
           </h2>
-          {v2 && needsAttention > 0 && (
-            <span className={trayAttention} data-testid="tray-needs-attention">
-              {needsAttention} need attention
+          {(needsAttention > 0 || earlierUnread > 0) && (
+            <span className={trayCounts}>
+              {needsAttention > 0 && (
+                <span className={trayAttention} data-testid="tray-needs-attention">
+                  {needsAttention} need you
+                </span>
+              )}
+              {needsAttention > 0 && earlierUnread > 0 && " \u00b7 "}
+              {earlierUnread > 0 && (
+                <span data-testid="tray-earlier-count">
+                  {earlierUnread} {needsAttention > 0 ? "earlier" : "unread"}
+                </span>
+              )}
             </span>
           )}
           <div className={headerActions}>
@@ -688,22 +625,13 @@ export function NotificationPanel() {
               <>
                 {scopedMarkReadIds.length > 0 && (
                   <button
-                    className={v2 ? trayButton : markAllButton}
-                    onClick={v2 && isOffline ? undefined : bulk.markActivityRead}
-                    aria-label={v2 ? "Mark activity read" : "Mark activity as read"}
-                    aria-disabled={v2 && isOffline ? true : undefined}
-                    title={v2 && isOffline ? OFFLINE_REASON : undefined}
+                    className={trayButton}
+                    onClick={isOffline ? undefined : bulk.markActivityRead}
+                    aria-label="Mark activity read"
+                    aria-disabled={isOffline ? true : undefined}
+                    title={isOffline ? OFFLINE_REASON : undefined}
                   >
                     Mark activity read
-                  </button>
-                )}
-                {!v2 && (
-                  <button
-                    className={clearButton}
-                    onClick={legacyClearHistory}
-                    aria-label="Clear notification history"
-                  >
-                    Clear history
                   </button>
                 )}
               </>
@@ -723,35 +651,33 @@ export function NotificationPanel() {
                 Pin
               </button>
             )}
-            {v2 && (
-              <button
-                type="button"
-                className={trayButton}
-                aria-pressed={quietMode}
-                data-testid="tray-quiet"
-                title="Quiet mode: send every non-urgent toast straight to the tray on this device. Push notifications are unchanged."
-                onClick={() => {
-                  const next = !quietMode;
-                  setQuietMode(next);
-                  setQuietUnsaved(next && !readQuietMode());
-                }}
-              >
-                Quiet mode{quietMode ? " on" : ""}
-              </button>
-            )}
-            {v2 && <TrayOverflowMenu groups={menuGroups} />}
+            <button
+              type="button"
+              className={trayButton}
+              aria-pressed={quietMode}
+              data-testid="tray-quiet"
+              title="Quiet mode: send every non-urgent toast straight to the tray on this device. Push notifications are unchanged."
+              onClick={() => {
+                const next = !quietMode;
+                setQuietMode(next);
+                setQuietUnsaved(next && !readQuietMode());
+              }}
+            >
+              Quiet mode{quietMode ? " on" : ""}
+            </button>
+            <TrayOverflowMenu groups={menuGroups} />
             <button
               className={closeButton}
               onClick={togglePanel}
               aria-label="Close notification panel"
-              style={v2 ? { minWidth: 44, minHeight: 44 } : undefined}
+              style={{ minWidth: 44, minHeight: 44 }}
             >
               ✕
             </button>
           </div>
         </div>
 
-        {v2 && (quietMode || quietUnsaved) && (
+        {(quietMode || quietUnsaved) && (
           <div className={trayBanner} data-testid="tray-quiet-banner">
             <span>
               <strong data-testid="tray-quiet-state">Quiet mode on</strong>
@@ -763,12 +689,12 @@ export function NotificationPanel() {
             {quietUnsaved && <span data-testid="tray-quiet-unsaved">Preference could not be saved</span>}
           </div>
         )}
-        {v2 && isOffline && (
+        {isOffline && (
           <div className={trayBanner} data-testid="tray-banner-offline">
             <span>Offline - showing cached{updatedAt ? `, updated ${updatedAt}` : ""}</span>
           </div>
         )}
-        {v2 && banner === "load-error" && (
+        {banner === "load-error" && (
           <div className={trayBanner} data-testid="tray-banner-load-error">
             <span>Could not load notifications.{updatedAt ? ` Showing cached - updated ${updatedAt}` : ""}</span>
             <button type="button" className={trayButton} onClick={() => refreshHistory()}>
@@ -776,7 +702,7 @@ export function NotificationPanel() {
             </button>
           </div>
         )}
-        {v2 && undoWindow.pending && (
+        {undoWindow.pending && (
           <div
             key={undoWindow.pending.id}
             className={trayUndoBar}
@@ -792,12 +718,12 @@ export function NotificationPanel() {
             </button>
           </div>
         )}
-        {v2 && bulk.keptLine && (
+        {bulk.keptLine && (
           <div className={trayBanner} data-testid="tray-kept-line">
             <span>{bulk.keptLine}</span>
           </div>
         )}
-        {v2 && clearError && (
+        {clearError && (
           <div className={trayBanner} data-testid="tray-clear-error">
             <span>Could not clear notifications</span>
             <button type="button" className={trayButton} onClick={() => bulk.startUndoableClear(clearError.label, clearError.ids)}>
@@ -805,7 +731,7 @@ export function NotificationPanel() {
             </button>
           </div>
         )}
-        {v2 && bulk.markReadError && (
+        {bulk.markReadError && (
           <div className={trayBanner} data-testid="tray-mark-read-error">
             <span>Could not mark read</span>
             <button type="button" className={trayButton} onClick={bulk.markActivityRead}>
@@ -813,7 +739,7 @@ export function NotificationPanel() {
             </button>
           </div>
         )}
-        {v2 && bulk.confirm === "informational" && (
+        {bulk.confirm === "informational" && (
           <TrayConfirm
             text={`Clear ${bulk.informationalIds.length} informational notifications? ${bulk.decisionCount} awaiting decision kept.`}
             confirmLabel={`Clear ${bulk.informationalIds.length}`}
@@ -821,7 +747,7 @@ export function NotificationPanel() {
             onCancel={bulk.cancelConfirm}
           />
         )}
-        {v2 && bulk.confirm === "history" && (
+        {bulk.confirm === "history" && (
           <TrayConfirm
             text={`Clear ${bulk.readIds.length} read notifications? This can't be undone. ${bulk.decisionCount} awaiting decision kept.`}
             confirmLabel={`Clear ${bulk.readIds.length}`}
@@ -830,59 +756,53 @@ export function NotificationPanel() {
             onCancel={bulk.cancelConfirm}
           />
         )}
-        {!v2 && filterBlock}
-
-        {v2 && (
-          <div className={segments} role="tablist" aria-label="Tray sections" data-testid="tray-segments">
-            {(["notifications", "background"] as const).map((id) => {
-              const selected = traySegment === id;
-              const count = id === "background" ? backgroundView.rows.length : 0;
-              return (
-                // analytics-exempt
-                <button
-                  key={id}
-                  type="button"
-                  role="tab"
-                  id={`tray-tab-${id}`}
-                  aria-selected={selected}
-                  aria-controls="tray-segment-panel"
-                  tabIndex={selected ? 0 : -1}
-                  className={segment}
-                  data-testid={`tray-tab-${id}`}
-                  onClick={() => setTraySegment(id)}
-                  onKeyDown={(e) => {
-                    if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
-                      e.preventDefault();
-                      const next = id === "notifications" ? "background" : "notifications";
-                      setTraySegment(next);
-                      document.getElementById(`tray-tab-${next}`)?.focus();
-                    }
-                  }}
-                >
-                  {id === "notifications" ? "Notifications" : count > 0 ? `Background (${count})` : "Background"}
-                </button>
-              );
-            })}
-          </div>
-        )}
+        <div className={segments} role="tablist" aria-label="Tray sections" data-testid="tray-segments">
+          {(["notifications", "background"] as const).map((id) => {
+            const selected = traySegment === id;
+            const count = id === "background" ? backgroundView.rows.length : 0;
+            return (
+              // analytics-exempt
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                id={`tray-tab-${id}`}
+                aria-selected={selected}
+                aria-controls="tray-segment-panel"
+                tabIndex={selected ? 0 : -1}
+                className={segment}
+                data-testid={`tray-tab-${id}`}
+                onClick={() => setTraySegment(id)}
+                onKeyDown={(e) => {
+                  if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+                    e.preventDefault();
+                    const next = id === "notifications" ? "background" : "notifications";
+                    setTraySegment(next);
+                    document.getElementById(`tray-tab-${next}`)?.focus();
+                  }
+                }}
+              >
+                {id === "notifications" ? "Notifications" : count > 0 ? `Background (${count})` : "Background"}
+              </button>
+            );
+          })}
+        </div>
 
         {/* Notification List */}
         <div
           ref={scrollRef}
           className={content}
           data-testid="tray-scroll"
-          id={v2 ? "tray-segment-panel" : undefined}
-          role={v2 ? "tabpanel" : undefined}
-          aria-labelledby={v2 ? `tray-tab-${traySegment}` : undefined}
+          id="tray-segment-panel"
+          role="tabpanel"
+          aria-labelledby={`tray-tab-${traySegment}`}
           onScroll={(e) => setScrolled((e.currentTarget as HTMLDivElement).scrollTop > 0)}
         >
-          {v2 && (
-            <div ref={headRef} data-testid="tray-scroll-head" hidden={traySegment === "background"}>
-              {cardsBlock}
-              {filterBlock}
-            </div>
-          )}
-          {v2 && traySegment === "background" ? (
+          <div ref={headRef} data-testid="tray-scroll-head" hidden={traySegment === "background"}>
+            {cardsBlock}
+            {filterBlock}
+          </div>
+          {traySegment === "background" ? (
             <BackgroundActivity
               view={backgroundView}
               hasHiddenSessions={background.sessions.length > 0 || background.departed.length > 0}
@@ -906,13 +826,11 @@ export function NotificationPanel() {
           onToggle={() => setAutoHandledOpen((v) => !v)}
         />
 
-        {v2 && (
-          <div className={trayFooter}>
-            <Link href={routes.notifications} onClick={close}>
-              Review all notifications
-            </Link>
-          </div>
-        )}
+        <div className={trayFooter}>
+          <Link href={routes.notifications} onClick={close}>
+            Review all notifications
+          </Link>
+        </div>
       </div>
     </>
   );

@@ -179,6 +179,8 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"GetPipelineMode":             "backlog:get-pipeline-mode",
 	"ListPipelineModes":           "backlog:list-pipeline-modes",
 	"AddBacklogItemDependency":    "backlog:add-item-dependency",
+	"RemoveBacklogItemDependency": "backlog:remove-item-dependency",
+	"ListBacklogItemDependencies": "backlog:list-item-dependencies",
 	"DispatchToJules":             "backlog:dispatch-to-jules",
 	// Jules config RPCs (google-jules-integration Epic 2.4)
 	"GetJulesConfig":       "jules:get-config",

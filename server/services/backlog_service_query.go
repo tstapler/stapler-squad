@@ -84,6 +84,7 @@ func (s *BacklogService) GetBacklogItem(
 	}
 
 	p := backlogItemToProto(item, s.engine, s.buildCostLookup())
+	s.attachDependencies(ctx, p)
 	enrichItemSessionsWorktreeData(ctx, s.storage, p)
 	s.checkWorkStageBudget(item.ID, item.CostBudgetThresholdUsd, p.TotalEstimatedCostUsd)
 
@@ -163,6 +164,7 @@ func (s *BacklogService) ListBacklogItems(
 		protoItems[i] = backlogItemSummaryToProto(&summaries[i], s.engine, costFor)
 		s.annotateDuplicatePending(ctx, protoItems[i])
 	}
+	s.attachUnresolvedBlockers(ctx, protoItems)
 
 	return connect.NewResponse(&sessionv1.ListBacklogItemsResponse{
 		Items: protoItems,

@@ -114,7 +114,6 @@ function addMany(count: number, overrides: Partial<NotificationData> = {}) {
 
 beforeEach(() => {
   setDesktop();
-  mockFlags["notification_tray_v2"] = true;
   mockConnectivity = { state: "connected", isOffline: false };
 });
 
@@ -137,18 +136,11 @@ describe("ToastStack cap and chip (Story 3.3)", () => {
   });
 
   it("toast_stack_should_opt_deck_and_legacy_list_out_of_terminal_gestures_when_rendered", () => {
-    const { unmount } = mount();
+    mount();
     addMany(2);
     const deck = screen.getByTestId("toast-stack");
     expect(deck).toHaveAttribute("data-gesture-ignore");
     expect(screen.getAllByTestId("toast")[0].closest(GESTURE_IGNORE_SELECTOR)).toBe(deck);
-    unmount();
-
-    mockFlags["notification_tray_v2"] = false;
-    mount();
-    addMany(2);
-    const legacyToast = screen.getAllByTestId("toast")[0];
-    expect(legacyToast.closest(GESTURE_IGNORE_SELECTOR)).not.toBeNull();
   });
 
   it("toast_stack_should_cap_1_portrait_1_landscape_0_keyboard_when_viewport_variant_changes", () => {
@@ -206,32 +198,6 @@ describe("ToastStack cap and chip (Story 3.3)", () => {
     expect(source).not.toMatch(/nth-child/);
     expect(source).toMatch(/flexDirection: "column"/);
     expect(source).toMatch(/gap: "8px"/);
-  });
-
-  it("toast_stack_should_render_legacy_list_of_10_when_flag_off", () => {
-    mockFlags["notification_tray_v2"] = false;
-    mount();
-    addMany(10);
-
-    expect(screen.getAllByTestId("toast")).toHaveLength(10);
-    expect(screen.queryByTestId("toast-overflow-chip")).toBeNull();
-    expect(screen.queryByTestId("toast-stack")).toBeNull();
-  });
-
-  it("toast_stack_should_read_flag_live_and_apply_cap_without_reload_when_notification_tray_v2_toggled", () => {
-    mockFlags["notification_tray_v2"] = false;
-    const { rerender } = mount();
-    addMany(5);
-    expect(screen.getAllByTestId("toast")).toHaveLength(5);
-
-    mockFlags["notification_tray_v2"] = true;
-    rerender(
-      <Harness>
-        <Driver />
-      </Harness>,
-    );
-    expect(screen.getAllByTestId("toast")).toHaveLength(3);
-    expect(screen.getByTestId("toast-overflow-chip")).toHaveTextContent("+2 more");
   });
 
   it("toast_stack_should_hold_cap_and_update_chip_in_place_when_burst_of_50", () => {
@@ -376,8 +342,8 @@ describe("Move all to tray (Story 3.4)", () => {
     expect(screen.queryByTestId("toast-undo-bar")).toBeNull();
   });
 
-  it("on a phone the undo replaces the chip row in place, also with the keyboard open", () => {
-    setPhone(true);
+  it("on a phone the undo replaces the chip row in place", () => {
+    setPhone();
     mount();
     addMany(3);
     expect(screen.getByTestId("toast-overflow-chip")).toBeInTheDocument();
@@ -403,8 +369,7 @@ describe("Move all to tray (Story 3.4)", () => {
     expect(notifications.notificationHistory).toHaveLength(3);
   });
 
-  it("clearAll_should_not_remove_pinned_question_toast_when_flag_off", () => {
-    mockFlags["notification_tray_v2"] = false;
+  it("clearAll_should_not_remove_pinned_question_toast", () => {
     mount();
     act(() =>
       notifications.addNotification(toast(0, { notificationType: "question", isPendingDecision: true })),
@@ -439,7 +404,7 @@ describe("Mobile and keyboard positioning (Story 3.7)", () => {
     expect(document.documentElement.style.getPropertyValue("--mobile-stack-top-offset")).toBe("120px");
   });
 
-  it("shows one line chip '3 notifications - 1 needs you' with the keyboard open and no card", () => {
+  it("shows one strip 'Open tray - 1 needs you' with the keyboard open, no card and no Move all", () => {
     setPhone(true);
     mount();
     act(() => {
@@ -449,7 +414,8 @@ describe("Mobile and keyboard positioning (Story 3.7)", () => {
     });
     expect(screen.queryAllByTestId("toast")).toHaveLength(0);
     const chip = screen.getByTestId("toast-overflow-chip");
-    expect(chip).toHaveTextContent("3 notifications - 1 needs you");
+    expect(chip).toHaveTextContent("Open tray - 1 needs you");
+    expect(screen.queryByTestId("toast-move-all-to-tray")).toBeNull();
   });
 
   it("keeps terminal focus when a deck control is pressed", () => {
@@ -570,7 +536,7 @@ describe("Timers pause and pinned collapse (Story 3.5)", () => {
       advance(7_999);
       expect(screen.queryByTestId("toast-collapsed-chip")).toBeNull();
       advance(1);
-      expect(screen.getByTestId("toast-collapsed-chip")).toHaveTextContent("1 needs you - Title 0");
+      expect(screen.getByTestId("toast-collapsed-chip")).toHaveTextContent("Session 0 needs you");
       expect(notifications.notifications).toHaveLength(1);
       expect(notifications.notificationHistory[0].isPendingDecision).toBe(true);
     });
@@ -631,7 +597,6 @@ describe("ToastStack announcements (Story 3.6)", () => {
   afterEach(() => jest.useRealTimers());
 
   it("announcer_should_own_single_polite_and_assertive_region_and_coalesce_burst_once_with_no_surface_live_role", () => {
-    mockFlags["notification_tray_v2"] = false; // legacy list: all five cards render
     const { container } = mount();
     expect(screen.getAllByTestId("announcer-polite")).toHaveLength(1);
     expect(screen.getAllByTestId("announcer-assertive")).toHaveLength(1);
@@ -639,8 +604,8 @@ describe("ToastStack announcements (Story 3.6)", () => {
     act(() => {
       for (let i = 0; i < 5; i++) notifications.addNotification(toast(i));
     });
-    // Cards render, and none of them carries its own live role.
-    expect(screen.getAllByTestId("toast")).toHaveLength(5);
+    // Cards render (up to the cap), and none of them carries its own live role.
+    expect(screen.getAllByTestId("toast")).toHaveLength(3);
     for (const card of screen.getAllByTestId("toast")) {
       expect(card.closest("[role='status'], [role='alert']")).toBeNull();
       expect(card.querySelector("[role='status'], [role='alert']")).toBeNull();
@@ -860,5 +825,52 @@ describe("deck rules from the UX criteria (TD-5, TD-9, TB-2, T-TS-32)", () => {
     fireEvent.blur(within(card).getAllByRole("button")[0]);
     advance(8_000);
     expect(screen.getByTestId("toast-collapsed-chip")).toBeInTheDocument();
+  });
+
+  it("pinned_collapse_should_not_be_held_by_a_touch_tap_that_leaves_focus_on_the_card", () => {
+    setPhone();
+    mount();
+    act(() => notifications.addNotification(toast(0, { notificationType: "error", isPendingDecision: true })));
+    const button = within(screen.getByTestId("toast")).getAllByRole("button")[0];
+    // jsdom has no PointerEvent, so pointerType is attached by hand.
+    const down = new Event("pointerdown", { bubbles: true });
+    Object.defineProperty(down, "pointerType", { value: "touch" });
+    act(() => {
+      button.dispatchEvent(down);
+    });
+    fireEvent.focus(button);
+    advance(8_000);
+    expect(screen.getByTestId("toast-collapsed-chip")).toBeInTheDocument();
+  });
+
+  it("phone_card_should_carry_view_beside_tray_in_one_row_with_no_height_clip", () => {
+    setPhone();
+    mount();
+    act(() => notifications.addNotification(toast(0, { notificationType: "error", isPendingDecision: true })));
+    const card = screen.getByTestId("toast");
+    const view = within(card).getByTestId("notification-view-session");
+    expect(within(card).getByTestId("toast-move-to-tray").parentElement).toBe(view.parentElement);
+    expect(card.querySelector('[data-slot="actions"]')?.contains(view)).toBe(false);
+  });
+
+  it("phone_card_should_be_one_row_with_the_preview_in_the_title_column_and_no_body_slot", () => {
+    setPhone();
+    mount();
+    act(() => notifications.addNotification(toast(0, { notificationType: "error", isPendingDecision: true })));
+    const card = screen.getByTestId("toast");
+    expect(card.querySelector('[data-slot="body"]')).toBeNull();
+    const preview = within(card).getByTestId("toast-preview");
+    expect(preview).toHaveTextContent("Message 0");
+    expect(within(card).getByText("Title 0").parentElement?.parentElement).toBe(preview.parentElement);
+  });
+
+  it("keeps the undo bar in the chip row's place so the deck does not grow", () => {
+    setPhone();
+    mount();
+    addMany(2);
+    const rowsBefore = screen.getByTestId("toast-stack").children.length;
+    fireEvent.click(screen.getByTestId("toast-move-all-to-tray"));
+    expect(screen.getByTestId("toast-undo-bar")).toBeInTheDocument();
+    expect(screen.getByTestId("toast-stack").children.length).toBeLessThanOrEqual(rowsBefore);
   });
 });
