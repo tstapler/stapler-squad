@@ -1,6 +1,7 @@
 // +feature: notification-tray
 "use client";
 
+import { resetBellPos } from "@/lib/utils/deckSettings";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
@@ -38,7 +39,6 @@ import { selectTrayVariant } from "./trayVariant";
 import {
   header,
   title,
-  unreadBadge,
   headerActions,
   closeButton,
   filterBar,
@@ -56,6 +56,7 @@ import {
   sheetGrabberRow,
   sheetScrim,
   trayAttention,
+  trayCounts,
   trayBanner,
   trayButton,
   trayFooter,
@@ -315,6 +316,9 @@ export function NotificationPanel() {
     [filteredNotifications, collapsed],
   );
 
+  // Unread items that are not pending decisions, so the two counts never overlap.
+  const earlierUnread = Math.max(0, unreadCount - needsAttention);
+
   const listRows: ListRow[] = useMemo(
     () => (historyHasMore ? [...flatRows, { kind: "load-more", key: "__load_more__" }] : flatRows),
     [flatRows, historyHasMore],
@@ -420,6 +424,7 @@ export function NotificationPanel() {
     ],
     [
       { key: "settings", label: "Tray settings", onSelect: () => setSettingsOpen((v) => !v) },
+      { key: "reset-bell", label: "Reset notification button position", onSelect: () => resetBellPos() },
       { key: "what-changed", label: "What changed", onSelect: () => setWhatChangedOpen(true) },
     ],
   ];
@@ -599,13 +604,20 @@ export function NotificationPanel() {
         <div className={header}>
           <h2 id={HEADING_ID} ref={headingRef} tabIndex={-1} className={title}>
             Notifications
-            {unreadCount > 0 && (
-              <span className={unreadBadge}>{unreadCount}</span>
-            )}
           </h2>
-          {needsAttention > 0 && (
-            <span className={trayAttention} data-testid="tray-needs-attention">
-              {needsAttention} need attention
+          {(needsAttention > 0 || earlierUnread > 0) && (
+            <span className={trayCounts}>
+              {needsAttention > 0 && (
+                <span className={trayAttention} data-testid="tray-needs-attention">
+                  {needsAttention} need you
+                </span>
+              )}
+              {needsAttention > 0 && earlierUnread > 0 && " \u00b7 "}
+              {earlierUnread > 0 && (
+                <span data-testid="tray-earlier-count">
+                  {earlierUnread} {needsAttention > 0 ? "earlier" : "unread"}
+                </span>
+              )}
             </span>
           )}
           <div className={headerActions}>

@@ -881,7 +881,9 @@ describe("NotificationContext", () => {
       act(() => {
         jest.advanceTimersByTime(1_500); // let the Announcer's one-second hold finish
       });
-      expect(jest.getTimerCount()).toBe(baseline + 1);
+      // The toast's auto-dismiss timer plus ToastStack's deck-anchor poll (setInterval,
+      // alive only while a deck shows); both must be gone after clearAll.
+      expect(jest.getTimerCount()).toBe(baseline + 2);
 
       act(() => {
         result.current.clearAll();

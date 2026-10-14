@@ -1043,6 +1043,11 @@ export const trayAttention = style({
   color: vars.color.errorText,
 });
 
+export const trayCounts = style({
+  fontSize: "0.8125rem",
+  color: vars.color.textMuted,
+});
+
 export const trayBanner = style({
   padding: "8px 16px",
   fontSize: "0.8125rem",

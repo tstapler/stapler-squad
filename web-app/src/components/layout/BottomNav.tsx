@@ -1,7 +1,7 @@
 "use client";
 // +feature: ui:bottom-nav
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import {
   Bell,
   Plus,
@@ -17,6 +17,7 @@ import { useAuth } from "@/lib/contexts/AuthContext";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useNotificationState } from "@/lib/contexts/notificationContexts";
 import { capBadgeCount } from "@/lib/utils/notificationMapping";
+import { countNeedsAttention } from "@/lib/utils/notificationGrouping";
 import { routes } from "@/lib/routes";
 import { BOTTOM_NAV_PRIMARY, BOTTOM_NAV_MORE, groupNavPages, NAV_GROUP_LABELS, NAV_GROUP_SORT_ORDER, type NavPage } from "@/lib/nav-pages";
 import * as styles from "./BottomNav.css";
@@ -29,7 +30,8 @@ export function BottomNav() {
   const { authenticated, authEnabled } = useAuth();
   const { getUnreadCount, togglePanel } = useNotifications();
   const unreadCount = getUnreadCount();
-  const { isPanelOpen, quietMode } = useNotificationState();
+  const { isPanelOpen, quietMode, notificationHistory } = useNotificationState();
+  const needsAttention = useMemo(() => countNeedsAttention(notificationHistory ?? []), [notificationHistory]);
   const [moreOpen, setMoreOpen] = useState(false);
   const { leftHanded, toggleHandedness } = useHandedness();
   const { flags } = useFeatureFlags();
@@ -195,14 +197,14 @@ export function BottomNav() {
           data-testid="nav-alerts"
           aria-expanded={isPanelOpen}
           aria-controls="notification-tray"
-          aria-label={`${unreadCount > 0 ? `Notifications (${unreadCount} unread)` : "Notifications"}${quietMode ? ", quiet mode on" : ""}`}
+          aria-label={`${unreadCount > 0 ? `Notifications (${unreadCount} unread${needsAttention > 0 ? `, ${needsAttention} need you` : ""})` : "Notifications"}${quietMode ? ", quiet mode on" : ""}`}
           onClick={() => togglePanel()}
           onMouseDown={(e) => e.preventDefault()}
         >
           <span className={styles.notificationIconWrap} aria-hidden="true">
             <Bell size={20} />
             {unreadCount > 0 && (
-              <span className={styles.notificationBadge}>{capBadgeCount(unreadCount)}</span>
+              <span className={needsAttention > 0 ? styles.notificationBadgeAttention : styles.notificationBadge}>{capBadgeCount(unreadCount)}</span>
             )}
           </span>
           <span className={styles.navItemLabel}>{quietMode ? "Quiet" : "Alerts"}</span>

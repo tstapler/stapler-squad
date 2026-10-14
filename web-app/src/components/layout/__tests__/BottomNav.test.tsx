@@ -42,8 +42,13 @@ jest.mock("@/lib/contexts/AuthContext", () => ({
 
 // Mock NotificationContext
 const mockTogglePanel = jest.fn();
+let mockUnread = 0;
+let mockNeedsAttention = 0;
 jest.mock("@/lib/contexts/NotificationContext", () => ({
-  useNotifications: () => ({ togglePanel: mockTogglePanel, getUnreadCount: () => 0 }),
+  useNotifications: () => ({ togglePanel: mockTogglePanel, getUnreadCount: () => mockUnread }),
+}));
+jest.mock("@/lib/utils/notificationGrouping", () => ({
+  countNeedsAttention: () => mockNeedsAttention,
 }));
 
 // Mock useHandedness so tests don't depend on localStorage or document.documentElement
@@ -70,6 +75,7 @@ jest.mock("../BottomNav.css", () => ({
   notificationButton: "notificationButton",
   notificationIconWrap: "notificationIconWrap",
   notificationBadge: "notificationBadge",
+  notificationBadgeAttention: "notificationBadgeAttention",
   moreBackdrop: "moreBackdrop",
   moreSheet: "moreSheet",
   moreSheetOpen: "moreSheetOpen",
@@ -165,6 +171,37 @@ describe("BottomNav", () => {
     expect(alerts).toHaveAttribute("aria-controls", "notification-tray");
     fireEvent.click(alerts);
     expect(mockTogglePanel).toHaveBeenCalledTimes(1);
+  });
+
+  describe("alerts badge", () => {
+    afterEach(() => {
+      mockUnread = 0;
+      mockNeedsAttention = 0;
+    });
+
+    it("shows no badge when nothing is unread", () => {
+      render(<BottomNav />);
+      expect(screen.getByTestId("nav-alerts")).toHaveAttribute("aria-label", "Notifications");
+      expect(document.querySelector(".notificationBadge, .notificationBadgeAttention")).toBeNull();
+    });
+
+    it("uses the neutral badge and the exact count in the name when nothing needs you", () => {
+      mockUnread = 150;
+      render(<BottomNav />);
+      const alerts = screen.getByTestId("nav-alerts");
+      expect(alerts).toHaveAttribute("aria-label", "Notifications (150 unread)");
+      expect(alerts.querySelector(".notificationBadge")).toHaveTextContent("99+");
+      expect(alerts.querySelector(".notificationBadgeAttention")).toBeNull();
+    });
+
+    it("uses the attention badge and names the need-you count when something needs a decision", () => {
+      mockUnread = 9;
+      mockNeedsAttention = 2;
+      render(<BottomNav />);
+      const alerts = screen.getByTestId("nav-alerts");
+      expect(alerts).toHaveAttribute("aria-label", "Notifications (9 unread, 2 need you)");
+      expect(alerts.querySelector(".notificationBadgeAttention")).toHaveTextContent("9");
+    });
   });
 
   it("renders the More button", () => {

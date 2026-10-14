@@ -383,7 +383,7 @@ describe("tray", () => {
       ];
       renderTray();
 
-      expect(screen.getByTestId("tray-needs-attention")).toHaveTextContent("3 need attention");
+      expect(screen.getByTestId("tray-needs-attention")).toHaveTextContent("3 need you");
       expect(screen.getByTestId("tray-needs-attention-header")).toHaveTextContent("NEEDS ATTENTION (3)");
       const pinnedRows = screen.getAllByTestId("needs-attention-row");
       expect(pinnedRows).toHaveLength(3);
@@ -858,11 +858,11 @@ describe("tray Background segment (Story 5.4)", () => {
   it("background_badge_should_count_only_failure_and_needs_human_and_not_change_bell_count", () => {
     renderTray();
     expect(screen.getByTestId("tray-tab-background")).toHaveTextContent("Background (1)");
-    // bell/header unread badge is the plain unread total of history, unchanged by the join
-    expect(screen.getByRole("heading", { name: /Notifications/ })).toHaveTextContent("2");
+    // the header unread count is the plain unread total of history, unchanged by the join
+    expect(screen.getByTestId("tray-earlier-count")).toHaveTextContent("2 unread");
     fireEvent.click(screen.getByTestId("tray-tab-background"));
     expect(screen.getAllByTestId("background-row")).toHaveLength(1);
-    expect(screen.getByRole("heading", { name: /Notifications/ })).toHaveTextContent("2");
+    expect(screen.getByTestId("tray-earlier-count")).toHaveTextContent("2 unread");
   });
 
   it("opening_a_row_should_mark_its_records_read_and_close_the_tray", () => {
@@ -1076,7 +1076,7 @@ describe("tray spec gaps (Phase 5)", () => {
     ];
     render(tree());
 
-    expect(screen.getByTestId("tray-needs-attention")).toHaveTextContent("2 need attention");
+    expect(screen.getByTestId("tray-needs-attention")).toHaveTextContent("2 need you");
     const pinned = screen.getAllByTestId("needs-attention-row");
     expect(pinned.map((row) => row.textContent)).toEqual(expect.arrayContaining([expect.stringContaining("s-p"), expect.stringContaining("s-wr")]));
     for (const row of pinned) {

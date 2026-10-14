@@ -40,6 +40,8 @@ Only the sheet's grabber drags it. Hardware Back closes a sheet without leaving 
 
 ### What is in it
 
+- The tray header counts once, in words: "2 need you \u00b7 9 earlier" (decisions, then the other unread items; just "9 unread" when no decision is pending).
+- The phone bottom-nav Alerts badge shows the unread count (capped "99+", exact value in its accessible name). It is red only while a decision needs you; otherwise it is neutral grey.
 - **Needs attention (N)** is pinned at the top: every unread decision (the server's `is_pending_decision`). It has no dismiss control and no swipe, and it is excluded from every bulk action. An auto-remediating warning ("PR needs attention ... An automated fix attempt will run") is informational and sits in its session group.
 - One collapsible group per session, windowed so a few hundred rows stay fast. Collapse state is per tab.
 - Swipe a row or press `x` while the list has focus to dismiss it; **Undo** is available for the undo window.
