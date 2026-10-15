@@ -4,7 +4,7 @@
 // "near-mechanical diff against demo-publish.yml" approach research/pitfalls.md
 // §4 calls for -- sufficient for a flat, 2-space-indented GitHub Actions file,
 // not a general-purpose YAML parser.
-import { test } from 'node:test';
+import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
