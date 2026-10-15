@@ -121,19 +121,53 @@ func sanitizeUserTheme(id string, t userTheme) userTheme {
 	return t
 }
 
-// registerUserThemesHandler serves GET /api/themes: user themes from <configDir>/themes/*.json.
+// mergeUserThemes loads each dir in order; a theme id in a later dir replaces the same id from an earlier one.
+func mergeUserThemes(dirs ...string) []userTheme {
+	byID := map[string]userTheme{}
+	for _, dir := range dirs {
+		for _, t := range loadUserThemes(dir) {
+			byID[t.ID] = t
+		}
+	}
+	merged := make([]userTheme, 0, len(byID))
+	for _, t := range byID {
+		merged = append(merged, t)
+	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].ID < merged[j].ID })
+	return merged
+}
+
+// globalThemesDir is ~/.stapler-squad/themes, shared by every workspace and instance. It is skipped under
+// STAPLER_SQUAD_TEST_DIR so isolated test servers never pick up the developer's real themes.
+func globalThemesDir() string {
+	if os.Getenv("STAPLER_SQUAD_TEST_DIR") != "" {
+		return ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".stapler-squad", userThemesDirName)
+}
+
+// registerUserThemesHandler serves GET /api/themes: the global themes dir merged with <configDir>/themes
+// (the workspace/instance dir wins on a matching id).
 func (s *Server) registerUserThemesHandler() {
 	s.mux.HandleFunc("/api/themes", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		themes := []userTheme{}
+		var dirs []string
+		if global := globalThemesDir(); global != "" {
+			dirs = append(dirs, global)
+		}
 		if configDir, err := config.GetConfigDir(); err != nil {
 			log.Warn("user-themes: config dir unavailable", "err", err)
 		} else {
-			themes = loadUserThemes(filepath.Join(configDir, userThemesDirName))
+			dirs = append(dirs, filepath.Join(configDir, userThemesDirName))
 		}
+		themes := mergeUserThemes(dirs...)
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(map[string]any{"themes": themes}); err != nil {
 			log.Error("user-themes: encode error", "err", err)

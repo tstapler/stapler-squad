@@ -1,6 +1,6 @@
 # Add a custom theme
 
-Drop a JSON file into `~/.stapler-squad/themes/` (the active config dir; see `docs/reference/state-isolation.md`). The server lists it at `GET /api/themes` and Settings → Appearance shows it next to the built-in themes. Reload the page after adding or editing a file.
+Drop a JSON file into `~/.stapler-squad/themes/` to make it available in every workspace and instance, or into `themes/` under the active config dir (`docs/reference/state-isolation.md`; for example `~/.stapler-squad/workspaces/<hash>/themes/`) for just that one. If both hold the same theme id, the config-dir one wins. Servers started with `--test-mode`/`STAPLER_SQUAD_TEST_DIR` read only their own test dir. The server lists it at `GET /api/themes` and Settings → Appearance shows it next to the built-in themes. Reload the page after adding or editing a file.
 
 ```json
 {

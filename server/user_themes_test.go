@@ -63,3 +63,32 @@ func TestLoadUserThemes_should_CapFilesAndTokens(t *testing.T) {
 	got := sanitizeUserTheme("big", userTheme{Tokens: tokens})
 	assert.LessOrEqual(t, len(got.Tokens), maxThemeTokens)
 }
+
+func TestMergeUserThemes_should_PreferLaterDirOnSameID(t *testing.T) {
+	global, workspace := t.TempDir(), t.TempDir()
+	put := func(dir, name, body string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600))
+	}
+	put(global, "shared.json", `{"label":"Global"}`)
+	put(global, "only-global.json", `{}`)
+	put(workspace, "shared.json", `{"label":"Workspace"}`)
+	put(workspace, "only-ws.json", `{}`)
+
+	got := mergeUserThemes(global, workspace)
+
+	require.Len(t, got, 3)
+	assert.Equal(t, []string{"only-global", "only-ws", "shared"}, []string{got[0].ID, got[1].ID, got[2].ID})
+	assert.Equal(t, "Workspace", got[2].Label)
+}
+
+func TestGlobalThemesDir_should_BeEmpty_When_TestDirSet(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	assert.Empty(t, globalThemesDir())
+}
+
+func TestGlobalThemesDir_should_UnderHome_When_NoTestDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", "")
+	t.Setenv("HOME", home)
+	assert.Equal(t, filepath.Join(home, ".stapler-squad", "themes"), globalThemesDir())
+}
