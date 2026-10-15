@@ -1888,3 +1888,26 @@ func TestLoadConfig_MalformedContextHealthBlockFallsBackToDefaults(t *testing.T)
 	require.NotPanics(t, func() { cfg = LoadConfig() })
 	assert.Equal(t, 3, cfg.ContextHealth.LoopRepeatThreshold)
 }
+
+func TestUpgradeLegacyLogRotation(t *testing.T) {
+	legacy := &Config{LogMaxSize: 10, LogMaxFiles: 5, LogMaxAge: 30}
+	upgradeLegacyLogRotation(legacy)
+	if legacy.LogMaxSize != DefaultLogMaxSizeMB || legacy.LogMaxFiles != DefaultLogMaxFiles || legacy.LogMaxAge != DefaultLogMaxAgeDays {
+		t.Fatalf("legacy defaults not upgraded: %+v", legacy)
+	}
+
+	custom := &Config{LogMaxSize: 10, LogMaxFiles: 20, LogMaxAge: 30}
+	upgradeLegacyLogRotation(custom)
+	if custom.LogMaxFiles != 20 {
+		t.Fatalf("customized rotation must be left alone: %+v", custom)
+	}
+}
+
+// log can't import config, so DefaultLogConfig carries literal copies of these defaults.
+func TestLogRotationDefaultsMatchLogPackage(t *testing.T) {
+	d := log.DefaultLogConfig()
+	if d.LogMaxSize != DefaultLogMaxSizeMB || d.LogMaxFiles != DefaultLogMaxFiles || d.LogMaxAge != DefaultLogMaxAgeDays {
+		t.Fatalf("log.DefaultLogConfig %d/%d/%d drifted from config defaults %d/%d/%d",
+			d.LogMaxSize, d.LogMaxFiles, d.LogMaxAge, DefaultLogMaxSizeMB, DefaultLogMaxFiles, DefaultLogMaxAgeDays)
+	}
+}

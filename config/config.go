@@ -797,10 +797,10 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	cfg.SessionDetectionInterval = 5000
 	cfg.StateRefreshInterval = 3000
 	cfg.LogsEnabled = true
-	cfg.LogsDir = ""    // Empty string means use default location
-	cfg.LogMaxSize = 10 // 10MB
-	cfg.LogMaxFiles = 5 // Keep 5 rotated files
-	cfg.LogMaxAge = 30  // 30 days
+	cfg.LogsDir = "" // Empty string means use default location
+	cfg.LogMaxSize = DefaultLogMaxSizeMB
+	cfg.LogMaxFiles = DefaultLogMaxFiles
+	cfg.LogMaxAge = DefaultLogMaxAgeDays
 	cfg.LogCompress = true
 	cfg.UseSessionLogs = true
 	cfg.TmuxSessionPrefix = "staplersquad_"  // Default prefix for backward compatibility
@@ -1598,6 +1598,8 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
+
+	upgradeLegacyLogRotation(&cfg)
 
 	// Apply zero-value defaults for newly-added fields.
 	if cfg.KeyCategories == nil {

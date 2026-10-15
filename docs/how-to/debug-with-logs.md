@@ -38,6 +38,29 @@ if a legacy call is reintroduced into any of them. If you find a line from
 one of these files that `jq` can't see, it's a regression — file a bug rather
 than reaching for `grep` as the permanent workaround.
 
+## Browser (client) logs
+
+The web UI ships `console.warn`, `console.error`, `window.onerror` and unhandled rejections to
+`POST /api/client-logs` (`web-app/src/lib/telemetry/clientLogShipper.ts`, mounted in `Providers.tsx`).
+They land in the same `staplersquad.log`, interleaved with server records, tagged `source=client`
+with `window` (the `?window=` id), `url`, `user_agent` and, for errors, `stack`:
+
+```bash
+jq -r 'select(.source=="client")' ~/.stapler-squad/workspaces/<hash>/logs/staplersquad.log
+jq -r 'select(.source=="client" and .window=="c76c8d49")' <log>
+```
+
+`console.log`/`info` are deliberately not shipped (the terminal code logs on every resize). The
+endpoint caps a request at 256 KB / 100 entries and the server at 600 entries per minute total,
+returning 429 beyond that; the browser re-queues a failed batch (max 200 buffered).
+
+## Retention
+
+Rotation is lumberjack: 50 MB per segment, gzip, at most 100 segments or 14 days. Before 2026-10-15
+the default was 10 MB x 5 segments, which at ~11 MB/hour kept about 4.5 hours of history. Existing
+`config.json` files holding exactly the old triple (`10/5/30`) are upgraded on load; any other
+values are treated as deliberate and kept.
+
 ## Filtering logs for one backlog/triage session
 
 Every `TriggerTriage`/`TriggerReReview`/`BacklogLifecycle` log line carries an
