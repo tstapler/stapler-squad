@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -49,6 +50,56 @@ func countRows(t *testing.T, r *EntRepository) (workflows, registrations, ledger
 	l, err := r.client.WebhookRequestLedger.Query().Count(ctx)
 	require.NoError(t, err)
 	return w, g, l
+}
+
+func TestWebhookWorkflowSpec_LegacyCanonicalBytes(t *testing.T) {
+	spec := baseReconcileInput(scopeA, "legacy").Workflow
+	raw, err := json.Marshal(spec)
+	require.NoError(t, err)
+	assert.Equal(t, `{"webhook_slug":"gh-signal-main","name":"gh-signal main","command":"handle the event","target_directory":"/tmp/repo","prompt_template":"{{.action}}","event_filter":"pull_request","label_filter":"","enabled":true}`, string(raw))
+}
+
+func TestReconcileWebhookRegistration_ExecutionTemplateOwnership(t *testing.T) {
+	r := NewTestEntRepository(t)
+	ctx := context.Background()
+	in := baseReconcileInput(scopeA, "exec-owner")
+	require.NoError(t, json.Unmarshal([]byte(`{"input_template":"review", "session_type":"new_worktree", "model":"family:sonnet", "agent_type":"claude"}`), &in.Workflow))
+	first, err := r.ReconcileWebhookRegistration(ctx, in)
+	require.NoError(t, err)
+	assert.Equal(t, "review", first.ChangedWorkflow.InputTemplate)
+	for _, scope := range []WebhookScope{scopeB, {PrincipalID: scopeA.PrincipalID, WorkspaceID: "ws-2"}} {
+		hostile := in
+		hostile.Scope = scope
+		_, err := r.ReconcileWebhookRegistration(ctx, hostile)
+		require.ErrorIs(t, err, ErrWebhookSlugUnavailable)
+		_, err = r.InspectWebhookRegistration(ctx, scope, in.InstanceID)
+		require.ErrorIs(t, err, ErrNotFound)
+	}
+	got, err := r.InspectWebhookRegistration(ctx, scopeA, in.InstanceID)
+	require.NoError(t, err)
+	assert.Equal(t, first.Registration, *got)
+}
+
+func TestReconcileWebhookRegistration_ExecutionTemplateLegacyUpdate(t *testing.T) {
+	r := NewTestEntRepository(t)
+	ctx := context.Background()
+	in := baseReconcileInput(scopeA, "exec-create")
+	require.NoError(t, json.Unmarshal([]byte(`{"input_template":"review", "session_type":"new_worktree", "model":"family:sonnet", "agent_type":"claude"}`), &in.Workflow))
+	first, err := r.ReconcileWebhookRegistration(ctx, in)
+	require.NoError(t, err)
+	legacy := baseReconcileInput(scopeA, "exec-legacy")
+	legacy.ExpectedVersion = 1
+	legacy.Workflow.Name = "renamed by legacy client"
+	updated, err := r.ReconcileWebhookRegistration(ctx, legacy)
+	require.NoError(t, err)
+	assert.Equal(t, WebhookOutcomeUpdated, updated.Outcome)
+	assert.Equal(t, first.Registration.Workflow.InputTemplate, updated.Registration.Workflow.InputTemplate)
+	assert.Equal(t, first.Registration.Workflow.SessionType, updated.Registration.Workflow.SessionType)
+	assert.Equal(t, first.Registration.Workflow.Model, updated.Registration.Workflow.Model)
+	assert.Equal(t, first.Registration.Workflow.AgentType, updated.Registration.Workflow.AgentType)
+	inspected, err := r.InspectWebhookRegistration(ctx, scopeA, in.InstanceID)
+	require.NoError(t, err)
+	assert.Equal(t, updated.Registration, *inspected)
 }
 
 func TestReconcileWebhookRegistration_should_CreateWebhookWorkflowAndRegistration_When_NoneExists(t *testing.T) {

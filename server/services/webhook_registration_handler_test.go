@@ -137,6 +137,140 @@ func workflowCount(t *testing.T, h *mgmtHarness) int {
 	return n
 }
 
+func executionRequest(t *testing.T, req WebhookReconcileRequest, fields map[string]any) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(req)
+	require.NoError(t, err)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(raw, &body))
+	for k, v := range fields {
+		body["webhook"].(map[string]any)[k] = v
+	}
+	return body
+}
+
+func TestWebhookManagement_ExecutionTemplateLifecycle(t *testing.T) {
+	h := newMgmtHarness(t)
+	fields := map[string]any{"input_template": "review {{input}}", "session_type": "new_worktree", "model": "family:sonnet", "agent_type": "claude"}
+	post := func(id string, version int64, secret string, execution map[string]any) *httptest.ResponseRecorder {
+		return h.do(t, http.MethodPost, mgmtBase+testInstance+"/reconcile", h.token,
+			executionRequest(t, h.reconcileReq(id, version, secret), execution))
+	}
+	check := func(rec *httptest.ResponseRecorder, expected map[string]any) {
+		t.Helper()
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+		if reg, ok := body["registration"]; ok {
+			body = reg.(map[string]any)
+		}
+		for k, v := range expected {
+			assert.Equal(t, v, body["webhook"].(map[string]any)[k], k)
+		}
+	}
+	created := post("exec-create-001", 0, testMgmtSecret, fields)
+	require.Equal(t, http.StatusCreated, created.Code, created.Body.String())
+	check(created, fields)
+	check(h.do(t, http.MethodGet, mgmtBase+testInstance, h.token, nil), fields)
+	wf, err := h.infra.entRepo.GetEntClient().Workflow.Query().Only(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"review {{input}}", "new_worktree", "family:sonnet", "claude"}, []string{wf.InputTemplate, wf.SessionType, wf.Model, wf.AgentType})
+	retry := post("exec-create-001", 0, testMgmtSecret, fields)
+	require.Equal(t, http.StatusOK, retry.Code, retry.Body.String())
+	assert.True(t, decodeBody[WebhookReconcileResponse](t, retry).Replayed)
+	for _, key := range []string{"input_template", "session_type", "model", "agent_type"} {
+		t.Run("key reuse "+key, func(t *testing.T) {
+			changed := map[string]any{}
+			for k, v := range fields {
+				changed[k] = v
+			}
+			changed[key] = map[string]string{"input_template": "changed", "session_type": "directory", "model": "family:opus", "agent_type": "aider"}[key]
+			rec := post("exec-create-001", 0, testMgmtSecret, changed)
+			require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+			assert.Equal(t, "IDEMPOTENCY_KEY_REUSED", errCode(t, rec))
+		})
+	}
+	noop := post("exec-noop-0001", 1, "", fields)
+	require.Equal(t, http.StatusOK, noop.Code, noop.Body.String())
+	assert.Equal(t, "unchanged", decodeBody[WebhookReconcileResponse](t, noop).Outcome)
+	legacy := post("exec-legacy-01", 1, "", nil)
+	require.Equal(t, http.StatusOK, legacy.Code, legacy.Body.String())
+	assert.Equal(t, "unchanged", decodeBody[WebhookReconcileResponse](t, legacy).Outcome)
+	check(legacy, fields)
+	cleared := map[string]any{"input_template": "", "session_type": "directory", "model": "", "agent_type": ""}
+	updated := post("exec-update-01", 1, "", cleared)
+	require.Equal(t, http.StatusOK, updated.Code, updated.Body.String())
+	assert.EqualValues(t, 2, decodeBody[WebhookReconcileResponse](t, updated).Registration.Version)
+	check(updated, cleared)
+	check(post("exec-legacy-01", 1, "", nil), fields) // replay is the original snapshot
+	stale := post("exec-stale-001", 1, "", fields)
+	require.Equal(t, http.StatusConflict, stale.Code)
+	assert.Equal(t, "VERSION_CONFLICT", errCode(t, stale))
+	check(h.do(t, http.MethodGet, mgmtBase+testInstance, h.token, nil), cleared)
+}
+
+func TestWebhookManagement_ExecutionTemplateValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name, field string
+		value       any
+	}{
+		{"oversized input", "input_template", strings.Repeat("x", (16<<10)+1)},
+		{"oversized model", "model", strings.Repeat("x", 257)},
+		{"model injection", "model", "sonnet; touch /tmp/no"},
+		{"invalid session", "session_type", "bogus"},
+		{"empty session", "session_type", ""},
+		{"agent injection", "agent_type", "claude --dangerously-skip-permissions"},
+		{"unknown agent", "agent_type", "bogus"},
+		{"wrong type", "input_template", 123},
+		{"unknown field", "input_templates", "review"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newMgmtHarness(t)
+			rec := h.do(t, http.MethodPost, mgmtBase+testInstance+"/reconcile", h.token,
+				executionRequest(t, h.reconcileReq("exec-invalid-01", 0, testMgmtSecret), map[string]any{tc.field: tc.value}))
+			require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+			assert.Zero(t, workflowCount(t, h))
+		})
+	}
+}
+
+func TestWebhookManagement_LegacyFingerprintAndLedgerReplay(t *testing.T) {
+	h := newMgmtHarness(t)
+	req := h.reconcileReq("legacy-replay-01", 0, testMgmtSecret)
+	caller := h.svc.Authenticate(context.Background(), h.token)
+	in, err := h.svc.buildReconcileInput(caller, testInstance, req)
+	require.NoError(t, err)
+	_, macKey, err := h.svc.secretKeys()
+	require.NoError(t, err)
+	canonical := fmt.Sprintf(`{"instance_id":%q,"expected_version":0,"compat_tuple_sha256":%q,"workflow":{"webhook_slug":"gh-signal-events","name":"gh-signal events","command":"handle the event","target_directory":%q,"prompt_template":"event {{.type}}","event_filter":"","label_filter":"","enabled":true},"secret_digest":%q}`, testInstance, in.CompatTupleSHA256, h.root, in.SecretDigest)
+	assert.Equal(t, keyedHex(macKey, []byte(canonical)), in.Fingerprint)
+	created := h.reconcile(t, h.token, req)
+	require.Equal(t, http.StatusCreated, created.Code, created.Body.String())
+	c := h.infra.entRepo.GetEntClient()
+	row, err := c.WebhookRequestLedger.Query().Only(context.Background())
+	require.NoError(t, err)
+	var stored map[string]any
+	require.NoError(t, json.Unmarshal([]byte(row.Result), &stored))
+	wf := stored["registration"].(map[string]any)["workflow"].(map[string]any)
+	for _, key := range []string{"input_template", "session_type", "model", "agent_type"} {
+		delete(wf, key)
+	}
+	raw, err := json.Marshal(stored)
+	require.NoError(t, err)
+	_, err = c.WebhookRequestLedger.UpdateOneID(row.ID).SetResult(string(raw)).Save(context.Background())
+	require.NoError(t, err)
+	replay := h.reconcile(t, h.token, req)
+	require.Equal(t, http.StatusOK, replay.Code, replay.Body.String())
+	got := decodeBody[WebhookReconcileResponse](t, replay)
+	assert.True(t, got.Replayed)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(replay.Body.Bytes(), &body))
+	assert.Equal(t, "directory", body["registration"].(map[string]any)["webhook"].(map[string]any)["session_type"])
+	altered := h.do(t, http.MethodPost, mgmtBase+testInstance+"/reconcile", h.token,
+		executionRequest(t, req, map[string]any{"input_template": ""}))
+	require.Equal(t, http.StatusConflict, altered.Code, altered.Body.String())
+	assert.Equal(t, "IDEMPOTENCY_KEY_REUSED", errCode(t, altered))
+}
+
 func TestWebhookManagement_should_Return401Uniformly_When_CredentialIsNotValid(t *testing.T) {
 	h := newMgmtHarness(t)
 	require.NoError(t, h.infra.entRepo.RevokeIntegrationCredential(context.Background(), "gh-signal"))
@@ -171,7 +305,7 @@ func TestWebhookManagement_should_ReportContractAndReceiverState_When_Capability
 	got := decodeBody[WebhookCapabilityResponse](t, rec)
 	assert.Equal(t, WebhookCapabilityResponse{
 		ContractVersion: "v1", CapabilityRevision: 1, ReceiverEnabled: true,
-		Operations: []string{"capability", "inspect", "reconcile", "disable", "delete", "emergency_cleanup"},
+		Operations: []string{"capability", "inspect", "reconcile", "disable", "delete", "emergency_cleanup", "execution_template_v1"},
 	}, got)
 }
 

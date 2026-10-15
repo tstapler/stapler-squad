@@ -58,6 +58,11 @@ type WebhookWorkflowSpec struct {
 	EventFilter     string `json:"event_filter"`
 	LabelFilter     string `json:"label_filter"`
 	Enabled         bool   `json:"enabled"`
+	// Omission must survive fingerprinting and updates; optional strings can explicitly clear.
+	InputTemplate *string `json:"input_template,omitempty"`
+	SessionType   *string `json:"session_type,omitempty"`
+	Model         *string `json:"model,omitempty"`
+	AgentType     *string `json:"agent_type,omitempty"`
 }
 
 // Reconcile outcomes.
@@ -120,6 +125,10 @@ func workflowSpecOf(wf *ent.Workflow) WebhookWorkflowSpec {
 		EventFilter:     wf.EventFilter,
 		LabelFilter:     wf.LabelFilter,
 		Enabled:         wf.Enabled,
+		InputTemplate:   &wf.InputTemplate,
+		SessionType:     &wf.SessionType,
+		Model:           &wf.Model,
+		AgentType:       &wf.AgentType,
 	}
 }
 
@@ -286,6 +295,10 @@ func createWebhookRegistration(ctx context.Context, tx *ent.Tx, in WebhookReconc
 		SetEventFilter(spec.EventFilter).
 		SetLabelFilter(spec.LabelFilter).
 		SetEnabled(spec.Enabled).
+		SetNillableInputTemplate(spec.InputTemplate).
+		SetNillableSessionType(spec.SessionType).
+		SetNillableModel(spec.Model).
+		SetNillableAgentType(spec.AgentType).
 		Save(ctx)
 	if err != nil {
 		if ent.IsConstraintError(err) {
@@ -312,6 +325,20 @@ func createWebhookRegistration(ctx context.Context, tx *ent.Tx, in WebhookReconc
 	}, nil
 }
 
+func webhookWorkflowMatches(wf *ent.Workflow, desired WebhookWorkflowSpec) bool {
+	current := workflowSpecOf(wf)
+	optionalMatches := func(want *string, have string) bool { return want == nil || *want == have }
+	if !optionalMatches(desired.InputTemplate, wf.InputTemplate) ||
+		!optionalMatches(desired.SessionType, wf.SessionType) ||
+		!optionalMatches(desired.Model, wf.Model) ||
+		!optionalMatches(desired.AgentType, wf.AgentType) {
+		return false
+	}
+	current.InputTemplate, current.SessionType, current.Model, current.AgentType = nil, nil, nil, nil
+	desired.InputTemplate, desired.SessionType, desired.Model, desired.AgentType = nil, nil, nil, nil
+	return current == desired
+}
+
 func updateWebhookRegistration(ctx context.Context, tx *ent.Tx, reg *ent.WebhookRegistration, in WebhookReconcileInput) (*WebhookReconcileResult, error) {
 	if reg.CompatTupleSha256 != in.CompatTupleSHA256 {
 		return nil, ErrCompatTupleMismatch
@@ -328,7 +355,7 @@ func updateWebhookRegistration(ctx context.Context, tx *ent.Tx, reg *ent.Webhook
 	}
 
 	secretRotated := in.SecretDigest != "" && in.SecretDigest != reg.SecretDigest
-	if workflowSpecOf(wf) == in.Workflow && !secretRotated {
+	if webhookWorkflowMatches(wf, in.Workflow) && !secretRotated {
 		return &WebhookReconcileResult{Outcome: WebhookOutcomeUnchanged, Registration: registrationView(reg, wf)}, nil
 	}
 
@@ -340,7 +367,11 @@ func updateWebhookRegistration(ctx context.Context, tx *ent.Tx, reg *ent.Webhook
 		SetPromptTemplate(spec.PromptTemplate).
 		SetEventFilter(spec.EventFilter).
 		SetLabelFilter(spec.LabelFilter).
-		SetEnabled(spec.Enabled)
+		SetEnabled(spec.Enabled).
+		SetNillableInputTemplate(spec.InputTemplate).
+		SetNillableSessionType(spec.SessionType).
+		SetNillableModel(spec.Model).
+		SetNillableAgentType(spec.AgentType)
 	regUpd := tx.WebhookRegistration.UpdateOneID(reg.ID).AddVersion(1)
 	if secretRotated {
 		upd.SetWebhookSecretEncrypted(in.SecretEncrypted)

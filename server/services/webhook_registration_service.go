@@ -41,9 +41,9 @@ var (
 	// dot-segments once the ID is placed in a URL path.
 	webhookInstanceIDPattern = `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`
 	webhookInstanceIDRe      = regexp.MustCompile(`^` + webhookInstanceIDPattern + `$`)
-	webhookRequestIDRe  = regexp.MustCompile(`^[A-Za-z0-9._-]{8,128}$`)
-	webhookLabelRe      = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
-	webhookSHA256Re     = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	webhookRequestIDRe       = regexp.MustCompile(`^[A-Za-z0-9._-]{8,128}$`)
+	webhookLabelRe           = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
+	webhookSHA256Re          = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
 // WebhookAPIError is the only error type the HTTP layer renders. Messages are fixed,
@@ -89,14 +89,18 @@ type WebhookCompat struct {
 
 // WebhookSpecBody is the desired webhook-trigger workflow. Enabled defaults to true.
 type WebhookSpecBody struct {
-	Slug            string `json:"slug"`
-	Name            string `json:"name"`
-	Command         string `json:"command"`
-	TargetDirectory string `json:"target_directory"`
-	PromptTemplate  string `json:"prompt_template"`
-	EventFilter     string `json:"event_filter"`
-	LabelFilter     string `json:"label_filter"`
-	Enabled         *bool  `json:"enabled,omitempty"`
+	Slug            string  `json:"slug"`
+	Name            string  `json:"name"`
+	Command         string  `json:"command"`
+	TargetDirectory string  `json:"target_directory"`
+	PromptTemplate  string  `json:"prompt_template"`
+	EventFilter     string  `json:"event_filter"`
+	LabelFilter     string  `json:"label_filter"`
+	Enabled         *bool   `json:"enabled,omitempty"`
+	InputTemplate   *string `json:"input_template,omitempty"`
+	SessionType     *string `json:"session_type,omitempty"`
+	Model           *string `json:"model,omitempty"`
+	AgentType       *string `json:"agent_type,omitempty"`
 }
 
 // WebhookReconcileRequest is the reconcile request body. Secret is write-only: it is
@@ -191,7 +195,7 @@ func (s *WebhookRegistrationService) Capability() WebhookCapabilityResponse {
 		ContractVersion:    WebhookManagementContractVersion,
 		CapabilityRevision: WebhookManagementCapabilityRevision,
 		ReceiverEnabled:    s.receiverEnabled,
-		Operations:         []string{"capability", "inspect", "reconcile", "disable", "delete", "emergency_cleanup"},
+		Operations:         []string{"capability", "inspect", "reconcile", "disable", "delete", "emergency_cleanup", "execution_template_v1"},
 	}
 }
 
@@ -382,6 +386,7 @@ const (
 	maxWebhookCommandBytes  = 4096
 	maxWebhookTemplateBytes = 16 << 10
 	maxWebhookFilterBytes   = 256
+	maxWebhookModelBytes    = 256
 )
 
 func validateWebhookSpec(b WebhookSpecBody, allowedRoot string) (session.WebhookWorkflowSpec, error) {
@@ -399,6 +404,24 @@ func validateWebhookSpec(b WebhookSpecBody, allowedRoot string) (session.Webhook
 	}
 	if len(b.PromptTemplate) > maxWebhookTemplateBytes || len(b.EventFilter) > maxWebhookFilterBytes || len(b.LabelFilter) > maxWebhookFilterBytes {
 		return invalid("webhook field exceeds its size limit")
+	}
+	if b.InputTemplate != nil && len(*b.InputTemplate) > maxWebhookTemplateBytes {
+		return invalid("webhook.input_template exceeds its size limit")
+	}
+	if b.SessionType != nil && !config.SessionType(*b.SessionType).IsValid() {
+		return invalid("webhook.session_type is not supported")
+	}
+	if b.Model != nil {
+		if len(*b.Model) > maxWebhookModelBytes || session.ValidateModel(*b.Model) != nil {
+			return invalid("webhook.model is invalid")
+		}
+	}
+	if b.AgentType != nil {
+		switch *b.AgentType {
+		case "", "claude", "pi", "aider", "opencode", "gemini", "agy", "bash":
+		default:
+			return invalid("webhook.agent_type is not supported")
+		}
 	}
 	if b.PromptTemplate != "" {
 		if err := workflows.ValidatePromptTemplate(b.PromptTemplate); err != nil {
@@ -418,6 +441,7 @@ func validateWebhookSpec(b WebhookSpecBody, allowedRoot string) (session.Webhook
 	return session.WebhookWorkflowSpec{
 		WebhookSlug: b.Slug, Name: b.Name, Command: b.Command, TargetDirectory: b.TargetDirectory,
 		PromptTemplate: b.PromptTemplate, EventFilter: b.EventFilter, LabelFilter: b.LabelFilter, Enabled: enabled,
+		InputTemplate: b.InputTemplate, SessionType: b.SessionType, Model: b.Model, AgentType: b.AgentType,
 	}, nil
 }
 
@@ -446,6 +470,19 @@ func (r dirRoot) contains(dir string) bool {
 
 func registrationBodyOf(v *session.WebhookRegistrationView) WebhookRegistrationBody {
 	enabled := v.Workflow.Enabled
+	inputTemplate, sessionType, model, agentType := "", "directory", "", ""
+	if v.Workflow.InputTemplate != nil {
+		inputTemplate = *v.Workflow.InputTemplate
+	}
+	if v.Workflow.SessionType != nil {
+		sessionType = *v.Workflow.SessionType
+	}
+	if v.Workflow.Model != nil {
+		model = *v.Workflow.Model
+	}
+	if v.Workflow.AgentType != nil {
+		agentType = *v.Workflow.AgentType
+	}
 	return WebhookRegistrationBody{
 		InstanceID:        v.InstanceID,
 		RegistrationID:    v.RegistrationID.String(),
@@ -459,6 +496,7 @@ func registrationBodyOf(v *session.WebhookRegistrationView) WebhookRegistrationB
 			Slug: v.Workflow.WebhookSlug, Name: v.Workflow.Name, Command: v.Workflow.Command,
 			TargetDirectory: v.Workflow.TargetDirectory, PromptTemplate: v.Workflow.PromptTemplate,
 			EventFilter: v.Workflow.EventFilter, LabelFilter: v.Workflow.LabelFilter, Enabled: &enabled,
+			InputTemplate: &inputTemplate, SessionType: &sessionType, Model: &model, AgentType: &agentType,
 		},
 	}
 }
