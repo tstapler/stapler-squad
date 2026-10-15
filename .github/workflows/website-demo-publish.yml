@@ -42,24 +42,24 @@ jobs:
         shard: [1, 2]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # ratchet:actions/checkout@v4
         with:
           lfs: true
           submodules: true
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # ratchet:actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
           cache: true
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # ratchet:pnpm/action-setup@v4
         with:
           version: 10.27.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # ratchet:actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'pnpm'
@@ -72,7 +72,7 @@ jobs:
         run: go build -o stapler-squad .
 
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # ratchet:actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/pnpm-lock.yaml') }}
@@ -157,7 +157,7 @@ jobs:
 
       - name: Upload GIFs (shard ${{ matrix.shard }})
         if: steps.convert-gifs.outputs.names != ''
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # ratchet:actions/upload-artifact@v7
         with:
           name: website-demo-gifs-shard${{ matrix.shard }}
           path: /tmp/demo-gifs/*.gif
@@ -176,10 +176,10 @@ jobs:
       # Needed (demo-publish.yml's publish-gifs job doesn't check out the
       # repo at all) because this job also commits the updated
       # AssetHealthManifest below.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # ratchet:actions/checkout@v4
 
       - name: Download demo GIFs from both shards
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # ratchet:actions/download-artifact@v4
         with:
           pattern: website-demo-gifs-shard*
           path: /tmp/demo-gifs
