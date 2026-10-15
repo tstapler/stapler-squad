@@ -1,0 +1,19 @@
+# ADR-004: Fork patches F1/F2 are additive, locally gated before tagging, and selected by a capability-probed build tag with a stock fallback
+
+**Status**: Accepted (plan phase; amended in repair iteration 1 and the Phase 4 patch: Stories 1.2.1 and 1.2.2 are themselves scheduling-gated by row SG1, and rollback is also rehearsed one tag back, `ssq.2 -> ssq.1`); F2 adoption gated by a local benchmark · **Plan**: Stories 1.2.1, 1.2.2, 1.2.3, 5.2.3
+
+## Context
+Policy: go-git only; gaps filled by additive fork patches (`tstapler/go-git` `ssq/v5`, `go.mod:231`, currently `v5.19.3-ssq.1`, zero source patches). `docs/how-to/roll-back-go-git-fork.md` forbids adopting a tag whose new exported symbol the app calls without a stock fallback that still builds after the `replace` is removed. **Removing the `replace` line alone does not build**: `go.sum` has no `github.com/go-git/go-git/v5` entries (only `go-git-fixtures` and `tstapler/go-git/v5`, VERIFIED `go.sum:148-149,358-359`), so the runbook's `go get ...@v5.19.3` + `go mod tidy` (network) is required. Header-only parsing cannot remove the inflate-side `MemoryObject.Write` copy (research/stack.md §1).
+
+## Decision
+- **F2** (`plumbing/object/commit_header.go`, new file only: `DecodeCommitHeader`) is first developed on a fork branch and benchmarked **locally** against the in-package stock reader through a path `replace` in a scratch `-modfile` (nothing committed, no tag). Only if `/fork` `B/op` is >= 10% below `/stock` is tag `-ssq.2` cut (after `ssq-ci`), and the `replace` bumped in the same PR as the first call site. Otherwise: no tag, no fork code, no Makefile change; this ADR is amended to "F2 not adopted". **F1** (commit-graph accessors) stays in a later tag `-ssq.3`, only if Story 5.2.3's gate fires.
+- Additivity of a fork patch is verified with go-git (a fork-side test running `object.DiffTree` between `upstream/main` and the branch tip, asserting only `Insert` changes), not with the git CLI.
+- `CommitParentsReader` interface in `unfinished` with two implementations: **stock** (always compiled, default) and **fork** (`//go:build ssqfork`). The Makefile derives `ssqfork` from a **capability probe** (`go doc github.com/go-git/go-git/v5/plumbing/object DecodeCommitHeader`), not a version regex: it keeps working at `ssq.10`, after an upstream rebase whose base already contains F2, and returns empty once the `replace` is removed; a numeric parse of `ssq.N` is the offline fallback. Every `go build|test|vet` line in the Makefile (49, VERIFIED) and `Makefile:357,361` (`-tags embed_tmux`) carry `$(SSQ_GO_TAGS)`; `make check-go-tags` greps for omissions. CI has a required leg with `-tags ssqfork` (type-checks the fork adapter, runs the differential corpus) and a leg without. Plain `go build`/IDE builds get the stock reader by design.
+- Rollback is **rehearsed**, not asserted: `go mod edit -dropreplace`, `go get ...@v5.19.3`, `go mod tidy`, then build and test without the tag, all through a scratch `-modfile` (Task 1.2.3c).
+- Release builds log and export the active implementation so a missing tag cannot be silent.
+
+## Alternatives rejected
+Call the fork symbol directly (breaks rollback); `go:linkname`/reflection tricks; making the fork reader the default build; `-ssq\.[2-9]` regex derivation (breaks at `ssq.10`); cutting the tag before measuring (a fork CI cycle and a tag on the critical path for a possibly negative result).
+
+## Consequences
+Two reader implementations to keep in lockstep, enforced by a differential test against `DecodeCommit` using one shared corpus helper; a CI leg per tag state; the retention gate runs before any tag exists.
