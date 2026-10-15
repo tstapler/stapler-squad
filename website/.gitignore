@@ -2,6 +2,9 @@
 dist/
 # generated types
 .astro/
+# Lighthouse CI report dumps (website/lighthouserc*.json's upload.outputDir)
+.lighthouseci/
+.lighthouseci-mobile/
 
 # dependencies
 node_modules/

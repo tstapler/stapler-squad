@@ -11,7 +11,10 @@
     "sync-content": "node scripts/sync-content.mjs",
     "test": "vitest run",
     "test:unit": "vitest run tests/unit --no-coverage",
-    "test:integration": "vitest run tests/integration --no-coverage"
+    "test:integration": "vitest run tests/integration --no-coverage",
+    "lhci:desktop": "astro preview --port 4321 && (npx lhci autorun --config=./lighthouserc.json; code=$?; astro preview stop; exit $code)",
+    "lhci:mobile": "astro preview --port 4321 && (npx lhci autorun --config=./lighthouserc.mobile.json; code=$?; astro preview stop; exit $code)",
+    "test:a11y": "astro preview --port 4321 && (npx playwright test tests/a11y.spec.ts; code=$?; astro preview stop; exit $code)"
   },
   "dependencies": {
     "@astrojs/mdx": "8.1.0",
@@ -20,6 +23,10 @@
     "sharp": "^0.35.3"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
+    "@lhci/cli": "^0.15.1",
+    "@playwright/test": "^1.64.1",
+    "js-yaml": "4.1.0",
     "jsdom": "^26.1.0",
     "vitest": "^5.0.5"
   }

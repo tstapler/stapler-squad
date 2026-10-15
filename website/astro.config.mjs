@@ -50,6 +50,81 @@ export default defineConfig({
 					],
 				},
 			],
+			// Phase 6 (Epic 6.2): fixes two axe-core `serious` violations found by
+			// a real scan against Starlight's own default markup (not something
+			// this project's own components introduced) -- see
+			// website/tests/a11y.spec.ts. Site-wide via `head` since both apply
+			// to every page: the search-trigger button (every page's header) and
+			// code blocks (most docs pages, this project's InstallCommand.astro).
+			head: [
+				{
+					tag: 'script',
+					content: `
+						function fixSearchButtonLabel() {
+							// Root cause, confirmed by reading axe-core's own
+							// label-content-name-mismatch check source (not guessed): it
+							// compares raw ON-SCREEN text (ignoring aria-hidden entirely --
+							// it calls visibleVirtual() with screenReader=false) against the
+							// accessible name from aria-label="Search". Once JS reveals the
+							// "Ctrl"/"K" <kbd> shortcut hint for non-touch devices, the
+							// button's on-screen text is "Search" immediately followed by
+							// "Ctrl" immediately followed by "K", with NO whitespace text
+							// node between any of them in Starlight's markup -- confirmed
+							// with axe-core's own visibleVirtual() called directly against
+							// this exact DOM, which returned the literal string
+							// "Search CtrlK" (the outer span/kbd boundary already had a gap;
+							// the two *inner* "Ctrl"/"K" <kbd> siblings did not). axe's
+							// word-tokenizer reads "CtrlK" as one unbroken token that can
+							// never match the two separate "ctrl"/"k" words in a
+							// multi-word accessible name. Fix both gaps: insert a real space
+							// at each missing boundary so every word tokenizes separately,
+							// and extend aria-label to include them (unconditionally --
+							// harmless when the hint is hidden on mobile/touch, since the
+							// check only requires visible text to be a subsequence of the
+							// name, not an exact match).
+							document.querySelectorAll('button[data-open-modal]').forEach((btn) => {
+								const kbdWrapper = btn.querySelector(':scope > kbd');
+								if (!kbdWrapper) return;
+								if (btn.dataset.a11yOriginalLabel === undefined) {
+									btn.dataset.a11yOriginalLabel = btn.getAttribute('aria-label') || 'Search';
+								}
+								const prev = kbdWrapper.previousSibling;
+								if (!prev || prev.nodeType !== Node.TEXT_NODE) {
+									btn.insertBefore(document.createTextNode(' '), kbdWrapper);
+								}
+								const innerKbds = Array.from(kbdWrapper.querySelectorAll(':scope > kbd'));
+								for (let i = 1; i < innerKbds.length; i++) {
+									const prevInner = innerKbds[i].previousSibling;
+									if (!prevInner || prevInner.nodeType !== Node.TEXT_NODE) {
+										kbdWrapper.insertBefore(document.createTextNode(' '), innerKbds[i]);
+									}
+								}
+								const shortcutWords = innerKbds.map((el) => el.textContent.trim()).filter(Boolean);
+								btn.setAttribute('aria-label', [btn.dataset.a11yOriginalLabel, ...shortcutWords].join(' '));
+							});
+						}
+						function fixScrollableCodeBlocks() {
+							// A <pre> wider than its box scrolls horizontally but isn't
+							// natively keyboard-focusable in Safari (axe's
+							// scrollable-region-focusable) -- only tag the ones that are
+							// actually overflowing, not every <pre>, so this doesn't add
+							// a pointless extra Tab stop on short code blocks.
+							document.querySelectorAll('pre').forEach((el) => {
+								if (!el.hasAttribute('tabindex') && el.scrollWidth > el.clientWidth) {
+									el.setAttribute('tabindex', '0');
+								}
+							});
+						}
+						function runA11yFixups() {
+							fixSearchButtonLabel();
+							fixScrollableCodeBlocks();
+						}
+						document.addEventListener('DOMContentLoaded', runA11yFixups);
+						window.addEventListener('load', runA11yFixups);
+						window.addEventListener('resize', runA11yFixups);
+					`,
+				},
+			],
 		}),
 		mdx(),
 	],
