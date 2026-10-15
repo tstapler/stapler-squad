@@ -797,10 +797,10 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	cfg.SessionDetectionInterval = 5000
 	cfg.StateRefreshInterval = 3000
 	cfg.LogsEnabled = true
-	cfg.LogsDir = ""    // Empty string means use default location
-	cfg.LogMaxSize = 10 // 10MB
-	cfg.LogMaxFiles = 5 // Keep 5 rotated files
-	cfg.LogMaxAge = 30  // 30 days
+	cfg.LogsDir = "" // Empty string means use default location
+	cfg.LogMaxSize = DefaultLogMaxSizeMB
+	cfg.LogMaxFiles = DefaultLogMaxFiles
+	cfg.LogMaxAge = DefaultLogMaxAgeDays
 	cfg.LogCompress = true
 	cfg.UseSessionLogs = true
 	cfg.TmuxSessionPrefix = "staplersquad_"  // Default prefix for backward compatibility
@@ -1599,6 +1599,8 @@ func LoadConfigFromPath(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
+	upgradeLegacyLogRotation(&cfg)
+
 	// Apply zero-value defaults for newly-added fields.
 	if cfg.KeyCategories == nil {
 		cfg.KeyCategories = getDefaultKeyCategories()
@@ -1978,4 +1980,29 @@ func ImportSessionEnabled() bool {
 // than switching every session's classification path on the next restart.
 func TmuxLifecycleV2Enabled() bool {
 	return os.Getenv("STAPLER_SQUAD_TMUX_LIFECYCLE_V2") == "true"
+}
+
+// Log rotation defaults. At ~11 MB/hour the old 10 MB x 5 policy kept only ~4.5 hours of history.
+const (
+	DefaultLogMaxSizeMB  = 50
+	DefaultLogMaxFiles   = 100
+	DefaultLogMaxAgeDays = 14
+)
+
+// The old defaults were written verbatim into every existing config.json, so raising the
+// constants alone would never reach installs that never customized them.
+const (
+	legacyLogMaxSizeMB  = 10
+	legacyLogMaxFiles   = 5
+	legacyLogMaxAgeDays = 30
+)
+
+// upgradeLegacyLogRotation replaces the exact old default triple with the current defaults;
+// any other combination is a deliberate user choice and is left alone.
+func upgradeLegacyLogRotation(cfg *Config) {
+	if cfg.LogMaxSize == legacyLogMaxSizeMB && cfg.LogMaxFiles == legacyLogMaxFiles && cfg.LogMaxAge == legacyLogMaxAgeDays {
+		cfg.LogMaxSize = DefaultLogMaxSizeMB
+		cfg.LogMaxFiles = DefaultLogMaxFiles
+		cfg.LogMaxAge = DefaultLogMaxAgeDays
+	}
 }

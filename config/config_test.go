@@ -1888,3 +1888,17 @@ func TestLoadConfig_MalformedContextHealthBlockFallsBackToDefaults(t *testing.T)
 	require.NotPanics(t, func() { cfg = LoadConfig() })
 	assert.Equal(t, 3, cfg.ContextHealth.LoopRepeatThreshold)
 }
+
+func TestUpgradeLegacyLogRotation(t *testing.T) {
+	legacy := &Config{LogMaxSize: 10, LogMaxFiles: 5, LogMaxAge: 30}
+	upgradeLegacyLogRotation(legacy)
+	if legacy.LogMaxSize != DefaultLogMaxSizeMB || legacy.LogMaxFiles != DefaultLogMaxFiles || legacy.LogMaxAge != DefaultLogMaxAgeDays {
+		t.Fatalf("legacy defaults not upgraded: %+v", legacy)
+	}
+
+	custom := &Config{LogMaxSize: 10, LogMaxFiles: 20, LogMaxAge: 30}
+	upgradeLegacyLogRotation(custom)
+	if custom.LogMaxFiles != 20 {
+		t.Fatalf("customized rotation must be left alone: %+v", custom)
+	}
+}
