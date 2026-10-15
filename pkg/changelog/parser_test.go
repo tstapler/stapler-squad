@@ -122,3 +122,11 @@ func TestNewer(t *testing.T) {
 		assert.Equal(t, c.want, Newer(c.a, c.b), "%s vs %s", c.a, c.b)
 	}
 }
+
+func TestIsNumericVersion(t *testing.T) {
+	for v, want := range map[string]bool{"2.5.0": true, "v2.5.0": true, "dev": false, "": false, "dev-abc123": false} {
+		if got := IsNumericVersion(v); got != want {
+			t.Errorf("IsNumericVersion(%q) = %v, want %v", v, got, want)
+		}
+	}
+}

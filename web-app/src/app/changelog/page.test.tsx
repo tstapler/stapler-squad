@@ -38,6 +38,8 @@ describe("ChangelogPage", () => {
     const current = screen.getByTestId("release-2.4.0");
     expect(current).toHaveAttribute("aria-current", "true");
     expect(current).toHaveTextContent("You are here");
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    expect((Element.prototype.scrollIntoView as jest.Mock).mock.instances[0]).toBe(current);
     expect(screen.getByText("fixed it")).toBeInTheDocument(); // current release expanded
     expect(screen.queryByText("new thing")).not.toBeInTheDocument();
 

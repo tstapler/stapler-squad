@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
@@ -24,17 +26,46 @@ type changelogResponse struct {
 	Releases       []changelog.Release `json:"releases"`
 }
 
-func changelogEnabled() bool {
-	return config.LoadConfig().GetFeatureFlagWithDefault(services.ChangelogFlagName, true)
+// flagSnapshotTTL bounds how often config.json is re-read: the header badge
+// polls /api/update-check and LoadConfig hits disk on every call.
+const flagSnapshotTTL = 5 * time.Second
+
+type changelogFlags struct{ changelog, updateCheck bool }
+
+var changelogFlagCache struct {
+	mu   sync.Mutex
+	at   time.Time
+	vals changelogFlags
 }
+
+func loadChangelogFlags() changelogFlags {
+	c := &changelogFlagCache
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if time.Since(c.at) < flagSnapshotTTL {
+		return c.vals
+	}
+	cfg := config.LoadConfig()
+	c.vals = changelogFlags{
+		changelog:   cfg.GetFeatureFlagWithDefault(services.ChangelogFlagName, true),
+		updateCheck: cfg.GetFeatureFlagWithDefault(services.UpdateCheckFlagName, false),
+	}
+	c.at = time.Now()
+	return c.vals
+}
+
+func changelogEnabled() bool { return loadChangelogFlags().changelog }
 
 func updateCheckEnabled() bool {
-	cfg := config.LoadConfig()
-	return cfg.GetFeatureFlagWithDefault(services.ChangelogFlagName, true) &&
-		cfg.GetFeatureFlagWithDefault(services.UpdateCheckFlagName, false)
+	f := loadChangelogFlags()
+	return f.changelog && f.updateCheck
 }
 
-func isSourceBuild() bool { return buildinfo.Branch != "" || buildinfo.Commit != "" }
+// isSourceBuild is true for anything that is not a release binary: Makefile
+// builds stamp Branch/Commit, while plain `go build` leaves Version "dev".
+func isSourceBuild() bool {
+	return buildinfo.Branch != "" || buildinfo.Commit != "" || !changelog.IsNumericVersion(buildinfo.Version)
+}
 
 // registerChangelogHandlers serves /api/changelog (embedded CHANGELOG.md,
 // parsed once) and /api/update-check (opt-in GitHub Releases poll). Both

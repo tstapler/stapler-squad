@@ -40,8 +40,12 @@ export const updateBadge = style({
   alignItems: "center",
   padding: "0.125rem 0.5rem",
   borderRadius: vars.radii.md,
+  minHeight: "44px",
+  maxWidth: "100%",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
   background: vars.color.primary,
-  color: "#fff",
+  color: vars.color.onPrimaryFill,
   fontSize: vars.fontSize.sm,
   textDecoration: "none",
   whiteSpace: "nowrap",
@@ -103,7 +107,7 @@ export const hereChip = style({
   padding: "0.0625rem 0.5rem",
   borderRadius: vars.radii.md,
   background: vars.color.primary,
-  color: "#fff",
+  color: vars.color.onPrimaryFill,
   fontSize: vars.fontSize.sm,
 });
 
@@ -133,3 +137,5 @@ export const scope = style({
 export const muted = style({
   color: vars.color.textMuted,
 });
+
+export const releaseHeading = style({ margin: 0 });

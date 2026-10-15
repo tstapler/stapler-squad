@@ -66,9 +66,7 @@ export default function ChangelogPage() {
         commit={data.commit}
         isSourceBuild={data.is_source_build}
       />
-      <p>
-        <UpdateBadge />
-      </p>
+      <UpdateBadge />
       {data.releases.length === 0 && <p className={styles.muted}>No release notes are bundled with this build.</p>}
       {data.releases.map((rel) => {
         const isCurrent = rel.version === current;
@@ -83,7 +81,7 @@ export default function ChangelogPage() {
             data-testid={`release-${rel.version}`}
             aria-current={isCurrent ? "true" : undefined}
           >
-            <h2 style={{ margin: 0 }}>
+            <h2 className={styles.releaseHeading}>
               <button
                 type="button"
                 className={styles.releaseHeader}

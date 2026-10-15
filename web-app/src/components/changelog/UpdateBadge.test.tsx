@@ -3,8 +3,9 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { UpdateBadge } from "./UpdateBadge";
 
 jest.mock("./changelog.css", () => new Proxy({}, { get: (_t, p) => (typeof p === "string" ? p : "") }));
+let mockFlags: Record<string, boolean> = { changelog: true };
 jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
-  useFeatureFlags: () => ({ flags: { changelog: true }, isLoading: false }),
+  useFeatureFlags: () => ({ flags: mockFlags, isLoading: false }),
 }));
 
 const respond = (body: object) => {
@@ -24,5 +25,14 @@ describe("UpdateBadge", () => {
     render(<UpdateBadge />);
     await waitFor(() => expect(global.fetch).toHaveBeenCalled());
     expect(screen.queryByTestId("update-badge")).not.toBeInTheDocument();
+  });
+
+  it("does not fetch or render when the changelog flag is off", async () => {
+    mockFlags = { changelog: false };
+    respond({ enabled: true, is_outdated: true, is_source_build: false, latest_version: "2.5.0" });
+    render(<UpdateBadge />);
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("update-badge")).not.toBeInTheDocument();
+    mockFlags = { changelog: true };
   });
 });

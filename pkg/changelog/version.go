@@ -23,6 +23,13 @@ func Newer(a, b string) bool {
 	return false
 }
 
+// IsNumericVersion reports whether v is a release-style version ("v1.2.3");
+// "dev", "" and "dev-abc123" are not.
+func IsNumericVersion(v string) bool {
+	_, ok := numericParts(v)
+	return ok
+}
+
 func numericParts(v string) (parts [3]int, ok bool) {
 	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
 	if i := strings.IndexAny(v, "-+"); i >= 0 {
