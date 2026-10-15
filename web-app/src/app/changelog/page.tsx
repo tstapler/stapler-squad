@@ -1,7 +1,7 @@
+// analytics-exempt
 "use client";
 // +feature: changelog
 
-// analytics-exempt
 import { useEffect, useRef, useState } from "react";
 import { BuildProvenance } from "@/components/changelog/BuildProvenance";
 import { UpdateBadge } from "@/components/changelog/UpdateBadge";
