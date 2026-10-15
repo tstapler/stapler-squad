@@ -1,4 +1,4 @@
-import { defaultSend, installClientLogShipper } from "./clientLogShipper";
+import { defaultSend, describePageLoad, installClientLogShipper } from "./clientLogShipper";
 
 describe("clientLogShipper", () => {
   beforeEach(() => jest.useFakeTimers());
@@ -14,6 +14,7 @@ describe("clientLogShipper", () => {
     expect(send).toHaveBeenCalledTimes(1);
     const body = JSON.parse(send.mock.calls[0][0]);
     expect(body.windowId).toBe("w9");
+    body.entries = body.entries.filter((e: { message: string }) => !e.message.startsWith("[lifecycle]"));
     expect(body.entries.map((e: { level: string; message: string }) => [e.level, e.message])).toEqual([
       ["warn", 'hello {"a":1}'],
       ["error", "boom"],
@@ -29,7 +30,7 @@ describe("clientLogShipper", () => {
     await jest.advanceTimersByTimeAsync(5000);
     await jest.advanceTimersByTimeAsync(5000);
     expect(send).toHaveBeenCalledTimes(2);
-    expect(JSON.parse(send.mock.calls[1][0]).entries[0].message).toBe("keep me");
+    expect(JSON.parse(send.mock.calls[1][0]).entries.map((e: { message: string }) => e.message)).toContain("keep me");
     uninstall();
   });
 
@@ -48,7 +49,8 @@ describe("clientLogShipper", () => {
     await jest.advanceTimersByTimeAsync(5000 * 10);
     expect(send.mock.calls.length).toBeGreaterThan(1);
     for (const [body] of send.mock.calls) expect(body.length).toBeLessThanOrEqual(48 * 1024);
-    expect(JSON.parse(send.mock.calls[0][0]).entries[0].stack.length).toBeLessThanOrEqual(4000);
+    const withStack = JSON.parse(send.mock.calls[0][0]).entries.find((e: { stack?: string }) => e.stack);
+    expect(withStack.stack.length).toBeLessThanOrEqual(4000);
     uninstall();
   });
 
@@ -87,6 +89,17 @@ describe("clientLogShipper", () => {
     await jest.advanceTimersByTimeAsync(5000 * 10);
     expect(send.mock.calls.length).toBeGreaterThan(1);
     for (const [body] of send.mock.calls) expect(new Blob([body]).size).toBeLessThanOrEqual(48 * 1024);
+    uninstall();
+  });
+
+  it("ships a lifecycle line with the navigation type and time since the previous page hid", async () => {
+    sessionStorage.setItem("ssq:pagehide-at", String(1000));
+    const msg = describePageLoad(1800);
+    expect(msg).toMatch(/^\[lifecycle\] page-load type=\S+ prevPageHiddenMsAgo=800$/);
+    const send = jest.fn().mockResolvedValue(undefined);
+    const uninstall = installClientLogShipper({ windowId: () => "w", send });
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(JSON.parse(send.mock.calls[0][0]).entries[0].message).toMatch(/^\[lifecycle\] page-load/);
     uninstall();
   });
 });
