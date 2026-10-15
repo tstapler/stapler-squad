@@ -79,4 +79,14 @@ describe("clientLogShipper", () => {
       globalThis.fetch = original;
     }
   });
+
+  it("measures the body cap in UTF-8 bytes, not characters", async () => {
+    const send = jest.fn().mockResolvedValue(undefined);
+    const uninstall = installClientLogShipper({ windowId: () => "w", send });
+    for (let i = 0; i < 60; i++) console.warn("日".repeat(1000)); // ~3KB UTF-8 each, ~1K chars
+    await jest.advanceTimersByTimeAsync(5000 * 10);
+    expect(send.mock.calls.length).toBeGreaterThan(1);
+    for (const [body] of send.mock.calls) expect(new Blob([body]).size).toBeLessThanOrEqual(48 * 1024);
+    uninstall();
+  });
 });

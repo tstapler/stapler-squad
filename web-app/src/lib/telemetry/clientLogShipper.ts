@@ -19,6 +19,8 @@ export interface ClientLogEntry {
   timeMs: number;
 }
 
+const utf8Bytes = (s: string): number => new Blob([s]).size;
+
 export function formatArg(arg: unknown): string {
   if (arg instanceof Error) return arg.message;
   if (typeof arg === "string") return arg;
@@ -69,7 +71,7 @@ export function installClientLogShipper(deps: ShipperDeps): () => void {
     let count = Math.min(buffer.length, MAX_BATCH);
     for (;;) {
       const body = JSON.stringify({ windowId: deps.windowId(), userAgent: navigator.userAgent, entries: buffer.slice(0, count) });
-      if (body.length <= MAX_BODY_BYTES || count === 1) return { body, count };
+      if (utf8Bytes(body) <= MAX_BODY_BYTES || count === 1) return { body, count };
       count = Math.max(1, Math.floor(count / 2));
     }
   };
