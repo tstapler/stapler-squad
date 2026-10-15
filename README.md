@@ -60,9 +60,10 @@ The result is opinionated toward supervised, human-in-the-loop agent work: appro
 | [claude-squad](https://github.com/smtg-ai/claude-squad) | Terminal UI | macOS, Linux | tmux + git worktrees | Manual diff/merge from the TUI | AGPL-3.0 |
 | [Conductor](https://conductor.build) | Native desktop app | macOS only | git worktrees | Diff viewer, manual review | Free, proprietary |
 | [Nimbalyst](https://nimbalyst.com) (successor to Crystal) | Desktop app + iOS companion | macOS, Windows, Linux | git worktrees | Diff viewer, manual review | MIT |
+| [Orca](https://www.onorca.dev) | Desktop IDE + iOS/Android companion | macOS, Windows, Linux | git worktrees (+ SSH remote worktrees, self-hosted servers) | Diff viewer with inline annotations back to the agent | MIT |
 | [Vibe Kanban](https://github.com/BloopAI/vibe-kanban) | Web UI (kanban board), local-first | Cross-platform (`npx`) | git worktrees | Inline diff comments back to the agent | Open source, community-maintained |
 
-If you want the smallest possible footprint and don't need approval gates, claude-squad (the project this forked from) is a solid pick. If you want a native Mac app, look at Conductor or Nimbalyst. If Stapler Squad's rules engine, review queue, and remote-access dashboard match how you work, you'll feel at home here — if not, any of the above are good alternatives.
+If you want the smallest possible footprint and don't need approval gates, claude-squad (the project this forked from) is a solid pick. If you want a native Mac app, look at Conductor or Nimbalyst. If you want the deepest feature set in a desktop IDE — mobile companion, SSH/remote worktrees, an embedded browser with a "Design Mode," native GitHub/Linear integration — Orca is the one to look at. If Stapler Squad's rules engine, review queue, and remote-access dashboard match how you work, you'll feel at home here — if not, any of the above are good alternatives.
 
 *(Comparison current as of October 2026 and based on each project's public docs/README, not hands-on testing of every one — this space moves fast, so check the linked project before deciding.)*
 
