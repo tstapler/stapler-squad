@@ -124,7 +124,13 @@ func sanitizeUserTheme(id string, t userTheme) userTheme {
 // mergeUserThemes loads each dir in order; a theme id in a later dir replaces the same id from an earlier one.
 func mergeUserThemes(dirs ...string) []userTheme {
 	byID := map[string]userTheme{}
+	seen := map[string]bool{}
 	for _, dir := range dirs {
+		if clean := filepath.Clean(dir); seen[clean] {
+			continue
+		} else {
+			seen[clean] = true
+		}
 		for _, t := range loadUserThemes(dir) {
 			byID[t.ID] = t
 		}
@@ -134,13 +140,20 @@ func mergeUserThemes(dirs ...string) []userTheme {
 		merged = append(merged, t)
 	}
 	sort.Slice(merged, func(i, j int) bool { return merged[i].ID < merged[j].ID })
+	if len(merged) > maxUserThemes {
+		merged = merged[:maxUserThemes]
+	}
 	return merged
 }
 
-// globalThemesDir is ~/.stapler-squad/themes, shared by every workspace and instance. It is skipped under
-// STAPLER_SQUAD_TEST_DIR so isolated test servers never pick up the developer's real themes.
+// globalThemesDir is ~/.stapler-squad/themes, shared by every workspace. It is skipped for isolated
+// instances (test mode, STAPLER_SQUAD_INSTANCE, STAPLER_SQUAD_TEST_DIR) so they never read the real home.
 func globalThemesDir() string {
-	if os.Getenv("STAPLER_SQUAD_TEST_DIR") != "" {
+	return globalThemesDirFor(config.IsIsolatedInstance())
+}
+
+func globalThemesDirFor(isolated bool) string {
+	if isolated {
 		return ""
 	}
 	home, err := os.UserHomeDir()

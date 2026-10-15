@@ -81,14 +81,26 @@ func TestMergeUserThemes_should_PreferLaterDirOnSameID(t *testing.T) {
 	assert.Equal(t, "Workspace", got[2].Label)
 }
 
-func TestGlobalThemesDir_should_BeEmpty_When_TestDirSet(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
-	assert.Empty(t, globalThemesDir())
+func TestMergeUserThemes_should_CapTotalAndSkipDuplicateDirs(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	for i := 0; i < maxUserThemes; i++ {
+		require.NoError(t, os.WriteFile(filepath.Join(a, fmt.Sprintf("a%03d.json", i)), []byte(`{}`), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(b, fmt.Sprintf("b%03d.json", i)), []byte(`{}`), 0o600))
+	}
+	assert.Len(t, mergeUserThemes(a, b), maxUserThemes)
+	assert.Len(t, mergeUserThemes(a, a+string(os.PathSeparator)), maxUserThemes)
 }
 
-func TestGlobalThemesDir_should_UnderHome_When_NoTestDir(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", "")
-	t.Setenv("HOME", home)
-	assert.Equal(t, filepath.Join(home, ".stapler-squad", "themes"), globalThemesDir())
+func TestGlobalThemesDirFor_should_BeEmpty_When_Isolated(t *testing.T) {
+	assert.Empty(t, globalThemesDirFor(true))
+}
+
+func TestGlobalThemesDirFor_should_EndInSharedThemes_When_NotIsolated(t *testing.T) {
+	got := globalThemesDirFor(false)
+	require.NotEmpty(t, got)
+	assert.Equal(t, filepath.Join(".stapler-squad", "themes"), filepath.Join(filepath.Base(filepath.Dir(got)), filepath.Base(got)))
+}
+
+func TestGlobalThemesDir_should_BeEmpty_UnderGoTest(t *testing.T) {
+	assert.Empty(t, globalThemesDir(), "go test binaries are isolated (config.IsTestMode)")
 }
