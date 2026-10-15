@@ -110,14 +110,6 @@ Inspect your current Stapler Squad configuration directly from the UI — no hun
 
 ---
 
-## Unfinished Work
-
-Surfaces every git worktree with uncommitted changes, commits ahead of main, or a branch behind main — across all active sessions and watched directories. Dismiss or snooze items; commit and push without leaving the browser.
-
-![Unfinished Work](../assets/demo-recording/09-unfinished.png)
-
----
-
 ## Isolated Git Workspaces
 
 Every agent gets its own git worktree. No branch conflicts, no dirty state bleed between sessions. Merge when you're ready.
