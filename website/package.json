@@ -7,11 +7,17 @@
     "start": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "astro": "astro"
+    "astro": "astro",
+    "sync-content": "node scripts/sync-content.mjs",
+    "test:unit": "vitest run tests/unit --no-coverage",
+    "test:integration": "vitest run tests/integration --no-coverage"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.42.6",
     "astro": "^7.2.10",
     "sharp": "^0.35.3"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.5"
   }
 }
