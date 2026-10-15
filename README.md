@@ -11,6 +11,8 @@
 
 → [Feature screenshots](docs/features.md)
 
+**Jump to:** [Highlights](#highlights) · [Why Stapler Squad?](#why-stapler-squad) · [How It Works](#how-it-works) · [Installation](#installation) · [Configuration](#configuration) · [Usage](#usage) · [Development](#development) · [FAQs](#faqs)
+
 ### Highlights
 
 **Visibility**
@@ -39,6 +41,37 @@
 - Each agent gets its own **isolated git workspace** — no branch conflicts
 
 <br />
+
+### Why Stapler Squad?
+
+Stapler Squad started as a fork of [claude-squad](https://github.com/smtg-ai/claude-squad), a terminal UI for managing multiple Claude Code sessions. Two things pushed me toward a full rewrite:
+
+**A browser is a better interface for this job.** It opens instantly in multiple windows, works over SSH without port-forwarding a terminal, and lets you check on agents from any device — including your phone, via the built-in WebAuthn passkey remote access. Terminal UIs are great for one focused session; less so when six agents are running across different services and you want to glance at all of them while doing something else.
+
+**Claude is better at building web UIs than TUIs.** The Bubble Tea/Charm ecosystem is relatively niche, which means less training data and slower iteration. React and Next.js are Claude's home turf — features that take days to wrangle in a TUI come together in hours.
+
+The result is opinionated toward supervised, human-in-the-loop agent work: approval gates before changes land, a rules engine to automate the repetitive stuff, and a review queue so nothing slips through unnoticed.
+
+#### How it compares
+
+|  | Interface | Platforms | Isolation | Review & approval | License |
+|---|---|---|---|---|---|
+| **Stapler Squad** | Web dashboard, self-hosted (+ remote access via WebAuthn passkey) | macOS, Linux | tmux + git worktrees | Auto-approval rules engine with risk classification, Review Queue, approval analytics | AGPL-3.0 |
+| [claude-squad](https://github.com/smtg-ai/claude-squad) | Terminal UI | macOS, Linux | tmux + git worktrees | Manual diff/merge from the TUI | AGPL-3.0 |
+| [Conductor](https://conductor.build) | Native desktop app | macOS only | git worktrees | Diff viewer, manual review | Free, proprietary |
+| [Nimbalyst](https://nimbalyst.com) (successor to Crystal) | Desktop app + iOS companion | macOS, Windows, Linux | git worktrees | Diff viewer, manual review | MIT |
+| [Orca](https://www.onorca.dev) | Desktop IDE + iOS/Android companion | macOS, Windows, Linux | git worktrees (+ SSH remote worktrees, self-hosted servers) | Diff viewer with inline annotations back to the agent | MIT |
+| [Vibe Kanban](https://github.com/BloopAI/vibe-kanban) | Web UI (kanban board), local-first | Cross-platform (`npx`) | git worktrees | Inline diff comments back to the agent | Open source, community-maintained |
+
+If you want the smallest possible footprint and don't need approval gates, claude-squad (the project this forked from) is a solid pick. If you want a native Mac app, look at Conductor or Nimbalyst. If you want the deepest feature set in a desktop IDE — mobile companion, SSH/remote worktrees, an embedded browser with a "Design Mode," native GitHub/Linear integration — Orca is the one to look at. If Stapler Squad's rules engine, review queue, and remote-access dashboard match how you work, you'll feel at home here — if not, any of the above are good alternatives.
+
+*(Comparison current as of October 2026 and based on each project's public docs/README, not hands-on testing of every one — this space moves fast, so check the linked project before deciding.)*
+
+### How It Works
+
+1. **tmux** to create isolated terminal sessions for each agent
+2. **git worktrees** to isolate codebases so each session works on its own branch
+3. A web UI for real-time session management, approvals, and review
 
 ### Installation
 
@@ -167,9 +200,10 @@ Stapler Squad stores all application data in `~/.stapler-squad/`:
 
 ```
 ~/.stapler-squad/
-├── logs/                    # Application logs (rotated automatically)
-│   ├── stapler-squad.log     # Main application log
-│   └── debug.log           # Detailed debug information
+├── logs/
+│   ├── staplersquad.log       # Main application log (JSON-lines)
+│   ├── staplersquad-*.log.gz  # Rotated log segments
+│   └── service.log            # Raw stdout/stderr of the managed service
 ├── worktrees/              # Git worktrees for isolated sessions
 │   ├── session-name_hash/  # Individual worktree directories
 │   └── ...
@@ -190,17 +224,7 @@ Logs are stored in `~/.stapler-squad/logs/` by default and include log rotation 
   "log_max_age": 30,  // Max age in days for rotated files
   "log_compress": true,  // Whether to compress rotated files
   "use_session_logs": true,  // Whether to create separate log files for each session
-  "tmux_session_prefix": "staplerssq_"  // Custom prefix for tmux session isolation
-}
-```
-
-#### Performance Configuration
-
-For process isolation when running multiple stapler-squad instances, configure a unique tmux session prefix:
-
-```json
-{
-  "tmux_session_prefix": "myproject_"
+  "tmux_session_prefix": "staplersquad_"  // Custom prefix for tmux session isolation
 }
 ```
 
@@ -221,6 +245,7 @@ Usage:
 
 Available Commands:
   debug            Print debug information like config paths
+  get-session      Get information about a session
   help             Help about any command
   list             List all sessions
   print-qr-codes   Generate a 1-hour setup token and print QR codes for all detected domains
@@ -229,222 +254,59 @@ Available Commands:
   version          Print the version number of stapler-squad
 
 Flags:
-      --discover-external    Enable external session discovery (tmux/screen sessions outside stapler-squad)
-      --discovery-mode       Enable session discovery mode
-  -h, --help                 help for stapler-squad
-      --listen string        Address to listen on
-      --mcp                  Run as an MCP server over stdio instead of starting the web server
-      --profile              Enable pprof profiling endpoints
-      --profile-port int     Port for pprof profiling endpoints (default 6060)
-      --remote-access        Enable remote access (WebAuthn passkey + QR code setup)
-      --remote-port int      Port for remote access (default 8444)
-      --rp-id string         WebAuthn relying party ID for remote access
-      --test-dir string      Directory to use for test-mode state
-      --test-mode            Run in an isolated test-mode state directory
-      --tmux-keep-server     Keep the tmux server alive after stapler-squad exits (default true)
-      --trace               Enable execution tracing
+      --discover-external         Enable external instance discovery (shorthand for --discovery-mode=all)
+      --discovery-mode string     Instance discovery mode: managed-only, external-only, or all (default "managed-only")
+  -h, --help                      help for stapler-squad
+      --list-known-hosts          Print known peer hosts from the local Workspace Host Registry, then exit
+      --listen string             Loopback address to listen on (e.g. 127.0.0.1:8543); overrides config listen_address
+      --mcp                       Run as an MCP server over stdio instead of starting the web server
+      --open-url string           Translate an ssq:// deep link to a local web UI URL and open it, then exit
+      --profile                   Enable pprof profiling endpoints
+      --profile-port int          Port for pprof profiling endpoints (default 6060)
+      --remote-access             Enable remote access (WebAuthn passkey + QR code setup)
+      --remote-port int            Port for remote access (default 8444)
+      --rp-id string               WebAuthn relying party ID for remote access
+      --test-dir string            Directory to use for test-mode state
+      --test-mode                  Run in an isolated test-mode state directory
+      --tmux-keep-server           Keep the tmux server alive after stapler-squad exits (default true)
+      --trace                      Enable execution tracing
+      --tymuxd-keep-server         Keep the tymuxd daemon running across a stapler-squad restart (default true)
 ```
 
-<br />
+#### Using other AI assistants
 
-<b>Using Stapler Squad with other AI assistants:</b>
-- For [Codex](https://github.com/openai/codex): Set your API key with `export OPENAI_API_KEY=<your_key>`
+- For [Codex](https://github.com/openai/codex): set your API key with `export OPENAI_API_KEY=<your_key>`.
 - Open the web UI, start a new session, and pick the assistant (Claude Code, Codex, Aider, Gemini, Amp, ...) from the program dropdown in the session-creation panel.
 - Set a default assistant for new sessions in the config file (locate with `ssq debug`) via the `default_program` key.
 
 ### Development
 
-#### Building from Source
-
-**Prerequisites** — install [Homebrew](https://brew.sh), then:
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full dev setup, code standards, and testing guide. Quick version:
 
 ```bash
-brew install tmux gh
-```
+brew install tmux gh    # go, buf, and node are installed automatically by the Makefile
 
-> `go`, `buf`, and `node` are installed automatically by the Makefile via Homebrew (or [asdf](https://asdf-vm.com) if you have it).
-
-```bash
-# Clone the repository
 git clone https://github.com/tstapler/stapler-squad.git
 cd stapler-squad
 
-# Build (auto-installs go, buf, and node via Homebrew if missing)
-make build
-
-# Install analysis and dev tools
-make dev-setup
-
-# Quick validation (build + test + lint)
-make quick-check
-
-# Run the server
-./stapler-squad
+make build        # compiles proto code, the web UI, and the Go binary
+make dev-setup     # install analysis/lint tools (nilaway, staticcheck, golangci-lint, gosec)
+make quick-check   # build + test + lint
+./stapler-squad    # run it
 ```
 
-#### Using the Makefile
+Run `make help` for the full target list — tests, coverage, static analysis, benchmarks (see `docs/reference/benchmarks.md`), and release tooling all go through the Makefile.
 
-The project includes a comprehensive Makefile for streamlined development:
+#### ssq-mux (external terminal multiplexer)
+
+`ssq-mux` wraps an AI assistant command with a PTY multiplexer so Stapler Squad can stream terminal output from an external terminal (IntelliJ, VS Code, etc.) into the web UI in real time:
 
 ```bash
-# Show all available commands
-make help
-
-# Development workflows
-make build         # Build the application
-make test          # Run tests
-make test-coverage # Generate HTML coverage report
-make pre-commit    # Full pre-commit validation
-make all           # Complete workflow: clean + build + test + analyze
-
-# Code quality and analysis
-make analyze       # Run all static analysis tools
-make nil-safety    # Comprehensive nil safety analysis
-make security      # Security vulnerability scanning
-make lint          # Code style and quality checks
-make format        # Format code with gofmt
-
-# Performance testing
-make benchmark         # Full benchmarks (runs in background)
-make profile-cpu       # CPU profiling analysis
-
-# Demo recording
-make demo-video        # Record demo, add browser chrome, export GIF (assets/demo.webm + assets/demo.gif)
-make demo-post-process # Re-run post-processing only (add chrome frame + regenerate GIF)
-
-# Tool management
-make install-tools # Install all development tools
-make validate-env  # Check tool installation status
-make clean         # Clean build artifacts
+./scripts/install-mux.sh   # installs to ~/.local/bin/ssq-mux
+alias claude='ssq-mux claude'   # add to ~/.zshrc or ~/.bashrc
 ```
 
-#### Manual Testing Commands
-
-```bash
-# Run all tests
-go test ./...
-
-# Run tests with coverage
-go test -cover ./...
-
-# Run specific package tests
-go test ./ui
-go test ./app
-go test ./session
-
-# Run core integration tests
-go test ./session -run "TestComprehensiveSessionCreation|TestSessionRecoveryScenarios" -v
-
-# Run performance benchmarks (WARNING: Long running - use make benchmark instead)
-go test -bench=BenchmarkNavigation -benchmem ./app -timeout=10m &
-go test -bench=BenchmarkInstanceChangedComponents -benchmem ./app -timeout=10m &
-go test -bench=BenchmarkListRendering -benchmem ./app -timeout=10m &
-```
-
-**Test Infrastructure:**
-- Tests use isolated tmux sockets to prevent conflicts with production sessions
-- Mock executors for fast, reliable testing without external dependencies
-- Comprehensive session lifecycle testing including git worktree integration
-- All tests complete in <30s (core session tests) with proper isolation
-
-#### Code Quality Tools
-
-Stapler Squad uses comprehensive static analysis for code quality:
-
-```bash
-# Install analysis tools
-make install-tools
-
-# Nil safety analysis (prevents panics)
-make nil-safety         # All nil safety tools
-make nilaway           # Advanced nil flow analysis
-go vet -nilness ./...  # Built-in Go nil analyzer
-
-# Comprehensive static analysis
-make staticcheck       # Production-grade analyzer
-make security          # Security vulnerability scan
-make lint             # Multi-tool linting suite
-```
-
-**Required Development Tools:**
-- [NilAway](https://github.com/uber-go/nilaway) - Advanced nil pointer safety
-- [Staticcheck](https://staticcheck.dev/) - Go static analyzer
-- [golangci-lint](https://golangci-lint.run/) - Meta-linter suite
-- [gosec](https://github.com/securego/gosec) - Security analyzer
-
-Install all tools with: `make install-tools`
-
-#### ssq-mux (External Terminal Multiplexer)
-
-`ssq-mux` wraps AI assistant commands with a PTY multiplexer so Stapler Squad can stream terminal output from any external terminal (IntelliJ, VS Code, etc.) into the web UI in real time.
-
-**Build and install:**
-
-```bash
-# Build the binary locally
-make build-mux
-
-# Build and install to ~/.local/bin
-make install-mux
-```
-
-Or run the install script directly from the project root:
-
-```bash
-./scripts/install-mux.sh
-```
-
-Ensure `~/.local/bin` is in your `PATH`:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-**Shell alias (recommended):**
-
-```bash
-alias claude='ssq-mux claude'
-```
-
-Add this to `~/.zshrc`, `~/.bashrc`, or equivalent, then reload: `source ~/.zshrc`.
-
-**Basic usage:**
-
-```bash
-# Start a Claude session — automatically discovered by Stapler Squad
-ssq-mux claude
-
-# Custom session name
-ssq-mux -n "api-refactor" claude
-
-# List active sessions
-ssq-mux --list
-
-# Reattach to an existing session after restart
-ssq-mux --attach <session-name>
-```
-
-**IDE configuration — IntelliJ IDEA / PyCharm / WebStorm:**
-
-1. Settings → Tools → Terminal
-2. Set **Shell path** to: `~/.local/bin/ssq-mux`
-3. Set **Shell arguments** to: `claude`
-4. Restart the IDE terminal
-
-**IDE configuration — VS Code:**
-
-Add to `settings.json`:
-
-```json
-"terminal.integrated.profiles.osx": {
-  "ssq-mux": {
-    "path": "~/.local/bin/ssq-mux",
-    "args": ["claude"]
-  }
-}
-```
-
-Set `terminal.integrated.defaultProfile.osx` to `"ssq-mux"`.
+See [docs/how-to/monitor-external-terminal-sessions.md](docs/how-to/monitor-external-terminal-sessions.md) for IDE setup (IntelliJ, VS Code) and the full command reference.
 
 <br />
 
@@ -455,7 +317,7 @@ Set `terminal.integrated.defaultProfile.osx` to `"ssq-mux"`.
 If you get an error like `failed to start new session: timed out waiting for tmux session`:
 
 1. **Update the underlying program**: Ensure you're using the latest version of `claude` or your chosen AI assistant
-2. **Check logs**: Review `~/.stapler-squad/logs/stapler-squad.log` for detailed error information
+2. **Check logs**: Review `~/.stapler-squad/logs/staplersquad.log` for detailed error information
 3. **Verify tmux**: Make sure tmux is installed and working (`tmux -V`)
 4. **Check for conflicts**: If running multiple stapler-squad instances, configure unique `tmux_session_prefix` values in config.json
 
@@ -464,35 +326,9 @@ If you get an error like `failed to start new session: timed out waiting for tmu
 - Look for patterns like "timed out waiting for tmux session" or external command hangs
 - Check if `which claude` or other external commands are blocking
 
-### Web UI
+### Contributing
 
-Stapler Squad's web UI is accessible at `http://localhost:8543` when running. It provides:
-
-- Real-time terminal streaming for all sessions
-- Session organization with tags, filtering, and search
-- **Auto-approval rules engine** — built-in and custom rules with risk-level classification
-- **Approval analytics dashboard** — visualise decision trends and classifier performance
-- **Review Queue** — triage pending agent actions before they're applied
-- **Workspace switcher** — manage multiple project contexts from one UI
-- Session logs and diff preview
-
-The web UI launches automatically when you run `ssq`.
-
-### How It Works
-
-1. **tmux** to create isolated terminal sessions for each agent
-2. **git worktrees** to isolate codebases so each session works on its own branch
-3. A web UI for real-time session management, approvals, and review
-
-### Background
-
-Stapler Squad started as a fork of [claude-squad](https://github.com/smtg-ai/claude-squad), a TUI for managing multiple Claude Code sessions. Two things pushed me toward a full rewrite:
-
-**A browser is a better interface for this job.** A web UI opens instantly in multiple windows, works over SSH without port-forwarding a terminal, and lets you monitor agents from any device. A Charm TUI is great for a single focused session — less so when you have six agents running across different services and you want to glance at all of them while doing something else.
-
-**Claude is better at building web UIs than TUIs.** The Charm/Bubble Tea ecosystem is relatively niche, which means less training data, less reliable code generation, and slower iteration. React and Next.js are Claude's home turf — features that would take days to wrangle in a TUI come together in hours.
-
-The result is opinionated toward my own workflow: approval gates before agent changes land, a rules engine to automate the repetitive stuff, and a review queue so nothing slips through unnoticed. If that matches how you think about running AI agents, you'll feel at home. If not, the original claude-squad may be a better fit.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, code standards, and how to add a new agent detector. Every PR needs exactly one semver label (`patch`/`minor`/`major`) before it can merge. Participation is governed by our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ### License
 
