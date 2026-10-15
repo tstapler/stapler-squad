@@ -1902,3 +1902,12 @@ func TestUpgradeLegacyLogRotation(t *testing.T) {
 		t.Fatalf("customized rotation must be left alone: %+v", custom)
 	}
 }
+
+// log can't import config, so DefaultLogConfig carries literal copies of these defaults.
+func TestLogRotationDefaultsMatchLogPackage(t *testing.T) {
+	d := log.DefaultLogConfig()
+	if d.LogMaxSize != DefaultLogMaxSizeMB || d.LogMaxFiles != DefaultLogMaxFiles || d.LogMaxAge != DefaultLogMaxAgeDays {
+		t.Fatalf("log.DefaultLogConfig %d/%d/%d drifted from config defaults %d/%d/%d",
+			d.LogMaxSize, d.LogMaxFiles, d.LogMaxAge, DefaultLogMaxSizeMB, DefaultLogMaxFiles, DefaultLogMaxAgeDays)
+	}
+}

@@ -6,6 +6,10 @@ const FLUSH_INTERVAL_MS = 5000;
 const MAX_BUFFER = 200; // oldest entries drop first if the server is unreachable
 const MAX_BATCH = 100; // matches the server's per-request cap
 const MAX_ARG_LEN = 2000;
+const MAX_STACK_LEN = 4000;
+// fetch keepalive bodies are capped at ~64KB by browsers; stay well under it.
+const MAX_BODY_BYTES = 48 * 1024;
+const MAX_CONSECUTIVE_FAILURES = 3;
 
 export interface ClientLogEntry {
   level: "warn" | "error";
@@ -19,9 +23,13 @@ export function formatArg(arg: unknown): string {
   if (arg instanceof Error) return arg.message;
   if (typeof arg === "string") return arg;
   try {
-    return JSON.stringify(arg) ?? String(arg);
+    return (JSON.stringify(arg) ?? String(arg)).slice(0, MAX_ARG_LEN);
   } catch {
-    return String(arg);
+    try {
+      return String(arg).slice(0, MAX_ARG_LEN);
+    } catch {
+      return "[unprintable]"; // e.g. Object.create(null) or a throwing toJSON
+    }
   }
 }
 
@@ -40,21 +48,46 @@ export function installClientLogShipper(deps: ShipperDeps): () => void {
   const now = deps.now ?? Date.now;
   let buffer: ClientLogEntry[] = [];
   let sending = false;
+  let failures = 0;
 
   const push = (level: ClientLogEntry["level"], message: string, stack?: string) => {
-    buffer.push({ level, message, stack, url: location.pathname + location.search, timeMs: now() });
+    buffer.push({ level, message, stack: stack?.slice(0, MAX_STACK_LEN), url: location.pathname + location.search, timeMs: now() });
     if (buffer.length > MAX_BUFFER) buffer = buffer.slice(-MAX_BUFFER);
+  };
+  // Logging must never break the caller's own console.* call.
+  const safePush = (level: ClientLogEntry["level"], build: () => [string, string?]) => {
+    try {
+      const [message, stack] = build();
+      push(level, message, stack);
+    } catch {
+      /* drop the entry */
+    }
+  };
+
+  // Takes entries until the serialized body would pass MAX_BODY_BYTES; always takes at least one.
+  const takeBatch = (): { body: string; count: number } => {
+    let count = Math.min(buffer.length, MAX_BATCH);
+    for (;;) {
+      const body = JSON.stringify({ windowId: deps.windowId(), userAgent: navigator.userAgent, entries: buffer.slice(0, count) });
+      if (body.length <= MAX_BODY_BYTES || count === 1) return { body, count };
+      count = Math.max(1, Math.floor(count / 2));
+    }
   };
 
   const flush = async () => {
     if (sending || buffer.length === 0) return;
     sending = true;
-    const batch = buffer.slice(0, MAX_BATCH);
-    buffer = buffer.slice(batch.length);
+    const { body, count } = takeBatch();
+    const batch = buffer.slice(0, count);
+    buffer = buffer.slice(count);
     try {
-      await deps.send(JSON.stringify({ windowId: deps.windowId(), userAgent: navigator.userAgent, entries: batch }));
+      await deps.send(body);
+      failures = 0;
     } catch {
-      buffer = [...batch, ...buffer].slice(-MAX_BUFFER); // never console.* here: that would feed the shipper
+      // Never console.* here: that would feed the shipper. Give up on a batch that keeps failing.
+      failures += 1;
+      if (failures < MAX_CONSECUTIVE_FAILURES) buffer = [...batch, ...buffer].slice(-MAX_BUFFER);
+      else failures = 0;
     } finally {
       sending = false;
     }
@@ -63,12 +96,11 @@ export function installClientLogShipper(deps: ShipperDeps): () => void {
   const origWarn = console.warn;
   const origError = console.error;
   console.warn = (...args: unknown[]) => {
-    push("warn", formatArgs(args));
+    safePush("warn", () => [formatArgs(args)]);
     origWarn.apply(console, args);
   };
   console.error = (...args: unknown[]) => {
-    const err = args.find((a): a is Error => a instanceof Error);
-    push("error", formatArgs(args), err?.stack);
+    safePush("error", () => [formatArgs(args), args.find((a): a is Error => a instanceof Error)?.stack]);
     origError.apply(console, args);
   };
 
@@ -94,8 +126,10 @@ export function installClientLogShipper(deps: ShipperDeps): () => void {
   };
 }
 
-export function defaultSend(body: string): Promise<Response> {
-  return fetch(ENDPOINT, { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true });
+/** Rejects on network errors and 5xx (retry); a 4xx (bad or over-budget batch) is dropped, not retried. */
+export async function defaultSend(body: string): Promise<void> {
+  const res = await fetch(ENDPOINT, { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true });
+  if (res.status >= 500) throw new Error(`client-logs ${res.status}`);
 }
 
 export function windowIdFromUrl(): string {

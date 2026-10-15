@@ -3,8 +3,10 @@ package services
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -63,9 +65,20 @@ func (h *ClientLogHandler) allow(n int) bool {
 	return true
 }
 
+// stripQuery drops the query string and fragment, which can carry tokens or ids.
+func stripQuery(u string) string {
+	if i := strings.IndexAny(u, "?#"); i >= 0 {
+		return u[:i]
+	}
+	return u
+}
+
 func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s
+	}
+	for max > 0 && !utf8.RuneStart(s[max]) { // don't cut a multi-byte rune in half
+		max--
 	}
 	return s[:max] + "…[truncated]"
 }
@@ -80,6 +93,14 @@ func (h *ClientLogHandler) HandlePost(w http.ResponseWriter, r *http.Request) {
 	if len(req.Entries) > maxClientLogBatch {
 		req.Entries = req.Entries[:maxClientLogBatch]
 	}
+	// Only warn/error are logged, so only they may spend the shared budget.
+	accepted := req.Entries[:0]
+	for _, e := range req.Entries {
+		if e.Level == "warn" || e.Level == "error" {
+			accepted = append(accepted, e)
+		}
+	}
+	req.Entries = accepted
 	if !h.allow(len(req.Entries)) {
 		http.Error(w, "client log budget exceeded", http.StatusTooManyRequests)
 		return
@@ -89,7 +110,7 @@ func (h *ClientLogHandler) HandlePost(w http.ResponseWriter, r *http.Request) {
 			"source", "client",
 			"window", truncate(req.WindowID, 64),
 			"session", truncate(req.SessionID, 128),
-			"url", truncate(e.URL, 512),
+			"url", truncate(stripQuery(e.URL), 512),
 			"user_agent", truncate(req.UserAgent, 256),
 		}
 		if e.TimeMs > 0 {

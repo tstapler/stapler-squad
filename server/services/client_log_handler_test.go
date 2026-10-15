@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func post(h *ClientLogHandler, body string) *httptest.ResponseRecorder {
@@ -44,5 +45,31 @@ func TestClientLogHandler_RateLimitsPerMinuteAndResets(t *testing.T) {
 	clock = clock.Add(clientLogBudgetInterval)
 	if rec := post(h, batch); rec.Code != http.StatusNoContent {
 		t.Fatalf("budget should reset after the interval, got %d", rec.Code)
+	}
+}
+
+func TestClientLogHandler_DroppedLevelsDoNotSpendBudget(t *testing.T) {
+	h := NewClientLogHandler()
+	h.now = func() time.Time { return time.Unix(1_000_000, 0) }
+	junk := `{"windowId":"w","entries":[` + strings.Repeat(`{"level":"debug","message":"x"},`, 99) + `{"level":"debug","message":"x"}]}`
+	for i := 0; i < 20; i++ {
+		if rec := post(h, junk); rec.Code != http.StatusNoContent {
+			t.Fatalf("debug-only batch %d should never be rate limited, got %d", i, rec.Code)
+		}
+	}
+}
+
+func TestStripQuery(t *testing.T) {
+	for in, want := range map[string]string{"/a?token=x": "/a", "/a#frag": "/a", "/a": "/a", "": ""} {
+		if got := stripQuery(in); got != want {
+			t.Errorf("stripQuery(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestTruncate_KeepsValidUTF8(t *testing.T) {
+	got := truncate("aé", 2) // é is 2 bytes starting at index 1; cutting at 2 would split it
+	if !utf8.ValidString(got) || !strings.HasPrefix(got, "a") {
+		t.Fatalf("truncate produced invalid UTF-8: %q", got)
 	}
 }
