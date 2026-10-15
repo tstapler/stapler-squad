@@ -5,8 +5,12 @@ import { fileURLToPath } from 'node:url';
 import { transformMarkdown } from '../../scripts/transform-markdown.mjs';
 import { syncContent } from '../../scripts/sync-content.mjs';
 
-const WEBSITE_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
-const REPO_ROOT = join(WEBSITE_DIR, '..', '..');
+// file is website/tests/integration/*.test.ts -- three dirname() calls to
+// reach website/ (not two: that resolved to website/tests, making
+// HELP_DOCS_DIR point at a nonexistent path and the skip-assertion below
+// pass vacuously regardless of the real curated-docs output).
+const WEBSITE_DIR = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+const REPO_ROOT = join(WEBSITE_DIR, '..');
 const HELP_DOCS_DIR = join(WEBSITE_DIR, 'src', 'content', 'docs', 'help');
 
 describe('sync-content.mjs against real on-disk content', () => {
