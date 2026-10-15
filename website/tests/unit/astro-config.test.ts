@@ -5,9 +5,7 @@
 // it ever reaches a live deploy.
 import { describe, expect, it } from 'vitest';
 import astroConfig from '../../astro.config.mjs';
-
-const EXPECTED_BASE = '/stapler-squad';
-const EXPECTED_SITE = 'https://tstapler.github.io';
+import { SITE_BASE as EXPECTED_BASE, SITE_ORIGIN as EXPECTED_SITE } from '../../src/site-config.mjs';
 
 /**
  * The invariant `deployWorkflow`/BasePath correctness depends on: every

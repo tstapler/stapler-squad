@@ -9,37 +9,17 @@
 // (wired as a step in .github/workflows/deploy-website.yml, between "Build
 // site" and "Check demo-asset health")
 
-import { access, readdir, readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { findHtmlFiles } from '../src/lib/release-asset.ts';
+import { SITE_BASE, SITE_ORIGIN } from '../src/site-config.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_DIST_DIR = path.join(__dirname, '..', 'dist');
-// Must match astro.config.mjs's `site`/`base` -- there is no runtime config
-// introspection here, same tradeoff check-asset-health.mjs makes for its own
-// hardcoded release-download base URL.
-export const SITE_ORIGIN = 'https://tstapler.github.io';
-export const SITE_BASE = '/stapler-squad';
-
-async function findHtmlFiles(dir) {
-	let entries;
-	try {
-		entries = await readdir(dir, { withFileTypes: true });
-	} catch {
-		return [];
-	}
-
-	const files = [];
-	for (const entry of entries) {
-		const fullPath = path.join(dir, entry.name);
-		if (entry.isDirectory()) {
-			files.push(...(await findHtmlFiles(fullPath)));
-		} else if (entry.isFile() && entry.name.endsWith('.html')) {
-			files.push(fullPath);
-		}
-	}
-	return files;
-}
+// Re-exported for transform-markdown.mjs, which imports SITE_BASE from this
+// module rather than site-config.mjs directly.
+export { SITE_BASE, SITE_ORIGIN };
 
 // Matches `<a ...href="...">` tags only -- not <link>/<script> src attributes,
 // which point at build-generated assets (CSS bundles, sitemap, favicon) with

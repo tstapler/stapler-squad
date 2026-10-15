@@ -20,7 +20,7 @@ export function releaseAssetUrl({ tag, name, ext }: ReleaseAssetRef): string {
 // Matches any releaseAssetUrl()-shaped URL embedded in rendered HTML.
 const RELEASE_ASSET_URL_PATTERN = /https:\/\/github\.com\/tstapler\/stapler-squad\/releases\/download\/[\w.-]+\/[\w.-]+/g;
 
-async function findHtmlFiles(dir: string): Promise<string[]> {
+export async function findHtmlFiles(dir: string): Promise<string[]> {
 	let entries;
 	try {
 		entries = await readdir(dir, { withFileTypes: true });

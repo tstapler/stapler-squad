@@ -2,15 +2,11 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import mdx from '@astrojs/mdx';
-
-// Single source for the Pages base path -- interpolated into the inline
-// zero-results-fallback script below so it can't drift from `base:` if
-// either one changes.
-const SITE_BASE = '/stapler-squad';
+import { SITE_BASE, SITE_ORIGIN } from './src/site-config.mjs';
 
 // https://astro.build/config
 export default defineConfig({
-	site: 'https://tstapler.github.io',
+	site: SITE_ORIGIN,
 	base: SITE_BASE,
 	integrations: [
 		starlight({
