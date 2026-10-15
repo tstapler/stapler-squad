@@ -1,40 +1,28 @@
 ---
-title: Welcome to Starlight
-description: Get started building your docs site with Starlight.
-template: splash # Remove or comment out this line to display the site sidebar on this page.
+title: Stapler Squad
+description: Web-based mission control for running multiple AI coding agents, with a real-time dashboard, automatic approval rules, and a structured review queue.
+template: splash
 hero:
-  tagline: Congrats on setting up a new Starlight project!
-  image:
-    file: ../../assets/houston.webp
+  tagline: Stapler Squad is a web-based mission control for running multiple AI coding agents (Claude Code, Codex, Gemini, Aider) simultaneously — with a real-time dashboard, automatic approval rules, and a structured review queue.
   actions:
-    - text: Example Guide
-      link: /guides/example/
-      icon: right-arrow
-    - text: Read the Starlight docs
-      link: https://starlight.astro.build
+    - text: View on GitHub
+      link: https://github.com/tstapler/stapler-squad
       icon: external
-      variant: minimal
+      variant: primary
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import InstallCommand from '../../components/InstallCommand.astro';
+import HeroVideo from '../../components/HeroVideo.astro';
+import FeatureGrid from '../../components/FeatureGrid.astro';
 
-## Next steps
+<InstallCommand command="brew tap tstapler/stapler-squad https://github.com/tstapler/stapler-squad && brew install tstapler/stapler-squad/stapler-squad" />
 
-<CardGrid stagger>
-	<Card title="Update content" icon="pencil">
-		Edit `src/content/docs/index.mdx` to see this page change.
-	</Card>
-	<Card title="Change page layout" icon="document">
-		Delete `template: splash` in `src/content/docs/index.mdx` to display a
-		sidebar on this page.
-	</Card>
-	<Card title="Add new content" icon="add-document">
-		Add Markdown or MDX files to `src/content/docs` to create new pages.
-	</Card>
-	<Card title="Configure your site" icon="setting">
-		Edit your `sidebar` and other config in `astro.config.mjs`.
-	</Card>
-	<Card title="Read the docs" icon="open-book">
-		Learn more in [the Starlight Docs](https://starlight.astro.build/).
-	</Card>
-</CardGrid>
+Works on macOS and Linux via the Homebrew tap and the prebuilt-binary installer above.
+_(Windows/WSL support hasn't been exercised and isn't claimed here — `install.sh`'s
+shell detection only branches on zsh/bash/fish/ash.)_
+
+<HeroVideo src="/stapler-squad/demo.webm" poster="/stapler-squad/screenshot.png" />
+
+## Features
+
+<FeatureGrid />

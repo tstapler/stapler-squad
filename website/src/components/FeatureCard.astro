@@ -1,0 +1,63 @@
+---
+// A single feature-grid tile. `screenshot` is omitted for the 9 sections
+// docs/features.md has no existing capture for (Task 3.3.1a's forward-looking
+// note: no <img>/<video> is invented for these -- they stay text-only until a
+// real asset exists for them). `alt` is required whenever `screenshot` is
+// set so a descriptive sentence, not the filename, is always what's wired up.
+export interface Props {
+	heading: string;
+	description: string;
+	category: string;
+	screenshot?: string;
+	alt?: string;
+}
+
+const { heading, description, screenshot, alt } = Astro.props;
+---
+
+<article class="feature-card" data-testid="feature-card">
+	{
+		screenshot && (
+			<img
+				src={screenshot}
+				alt={alt}
+				loading="lazy"
+				width="320"
+				height="200"
+				data-testid="feature-card-image"
+			/>
+		)
+	}
+	<h4>{heading}</h4>
+	<p>{description}</p>
+</article>
+
+<style>
+	.feature-card {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		padding: 1rem;
+		border: 1px solid var(--sl-color-gray-5, #3b3b43);
+		border-radius: 0.75rem;
+	}
+
+	.feature-card img {
+		width: 100%;
+		height: auto;
+		aspect-ratio: 16 / 10;
+		object-fit: cover;
+		border-radius: 0.5rem;
+	}
+
+	.feature-card h4 {
+		margin: 0;
+		font-size: var(--sl-text-lg, 1.125rem);
+	}
+
+	.feature-card p {
+		margin: 0;
+		color: var(--sl-color-gray-2, #c0c2c7);
+		font-size: var(--sl-text-sm, 0.875rem);
+	}
+</style>

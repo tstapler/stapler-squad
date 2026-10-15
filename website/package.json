@@ -19,6 +19,7 @@
     "sharp": "^0.35.3"
   },
   "devDependencies": {
+    "jsdom": "^26.1.0",
     "vitest": "^5.0.5"
   }
 }
