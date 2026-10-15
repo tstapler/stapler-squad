@@ -96,9 +96,9 @@ func TestGlobalThemesDirFor_should_BeEmpty_When_Isolated(t *testing.T) {
 }
 
 func TestGlobalThemesDirFor_should_EndInSharedThemes_When_NotIsolated(t *testing.T) {
-	got := globalThemesDirFor(false)
-	require.NotEmpty(t, got)
-	assert.Equal(t, filepath.Join(".stapler-squad", "themes"), filepath.Join(filepath.Base(filepath.Dir(got)), filepath.Base(got)))
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, ".stapler-squad", "themes"), globalThemesDirFor(false))
 }
 
 func TestGlobalThemesDir_should_BeEmpty_UnderGoTest(t *testing.T) {
