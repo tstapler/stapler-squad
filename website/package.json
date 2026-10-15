@@ -9,6 +9,7 @@
     "preview": "astro preview",
     "astro": "astro",
     "sync-content": "node scripts/sync-content.mjs",
+    "test": "vitest run",
     "test:unit": "vitest run tests/unit --no-coverage",
     "test:integration": "vitest run tests/integration --no-coverage"
   },
