@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/localtoken"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -75,7 +76,13 @@ type launchCommandBuilder interface {
 // checks before falling back to the default (shell-quote-and-run-as-is) path.
 // A future program's builder is appended here, never a new case in
 // buildLaunchCommand itself.
-var launchBuilders = []launchCommandBuilder{&claudeLaunchBuilder{}, &piLaunchBuilder{}}
+var launchBuilders = []launchCommandBuilder{
+	&claudeLaunchBuilder{},
+	&piLaunchBuilder{},
+	&opencodeLaunchBuilder{},
+	&agyLaunchBuilder{},
+	&geminiLaunchBuilder{},
+}
 
 // claudeLaunchBuilder implements launchCommandBuilder for the claude binary.
 type claudeLaunchBuilder struct{}
@@ -140,6 +147,89 @@ func piStderrLogPath(i *Instance) (string, error) {
 		return '-'
 	}, i.Title)
 	return filepath.Join(logDir, fmt.Sprintf("pi-stderr_%s.log", safeTitle)), nil
+}
+
+// opencodeLaunchBuilder implements launchCommandBuilder for OpenCode.
+type opencodeLaunchBuilder struct{}
+
+func (b *opencodeLaunchBuilder) Matches(program string) bool { return isOpencode(program) }
+
+func (b *opencodeLaunchBuilder) Build(i *Instance, base, resumeSessionID string) string {
+	parts := []string{base}
+	if resumeSessionID != "" {
+		parts = append(parts, "--session", shellQuote(resumeSessionID))
+	}
+	if i.AutoYes {
+		parts = append(parts, "--auto")
+	}
+	return strings.Join(parts, " ")
+}
+
+func (b *opencodeLaunchBuilder) StderrRedirect(i *Instance) string { return "" }
+
+// agyLaunchBuilder implements launchCommandBuilder for Antigravity (agy).
+type agyLaunchBuilder struct{}
+
+func (b *agyLaunchBuilder) Matches(program string) bool { return isAgy(program) }
+
+func (b *agyLaunchBuilder) Build(i *Instance, base, resumeSessionID string) string {
+	parts := []string{base}
+	if resumeSessionID != "" {
+		parts = append(parts, "--resume", shellQuote(resumeSessionID))
+	}
+	if i.AutoYes {
+		parts = append(parts, "--auto")
+	}
+	return strings.Join(parts, " ")
+}
+
+func (b *agyLaunchBuilder) StderrRedirect(i *Instance) string { return "" }
+
+// geminiLaunchBuilder implements launchCommandBuilder for Gemini CLI.
+type geminiLaunchBuilder struct{}
+
+func (b *geminiLaunchBuilder) Matches(program string) bool { return isGemini(program) }
+
+func (b *geminiLaunchBuilder) Build(i *Instance, base, resumeSessionID string) string {
+	parts := []string{base}
+	if resumeSessionID != "" {
+		parts = append(parts, "--resume", shellQuote(resumeSessionID))
+	}
+	if i.AutoYes {
+		parts = append(parts, "--auto")
+	}
+	return strings.Join(parts, " ")
+}
+
+func (b *geminiLaunchBuilder) StderrRedirect(i *Instance) string { return "" }
+
+// isOpencode reports whether the program command invokes the opencode binary.
+func isOpencode(program string) bool {
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
+		program = res.Command
+	}
+	return strings.Contains(strings.ToLower(program), "opencode")
+}
+
+// isAgy reports whether the program command invokes the agy / antigravity binary.
+func isAgy(program string) bool {
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
+		program = res.Command
+	}
+	p := strings.ToLower(program)
+	return strings.Contains(p, "agy") || strings.Contains(p, "antigravity")
+}
+
+// isGemini reports whether the program command invokes the gemini binary (excluding agy/antigravity).
+func isGemini(program string) bool {
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
+		program = res.Command
+	}
+	p := strings.ToLower(program)
+	return strings.Contains(p, "gemini") && !strings.Contains(p, "agy") && !strings.Contains(p, "antigravity")
 }
 
 // isClaude reports whether the program command invokes the claude binary.
@@ -546,12 +636,47 @@ func (i *Instance) cleanupPromptFile() {
 // session UUID passed as a request header. The server middleware at /mcp extracts
 // X-Stapler-Session-UUID and injects it into the request context for tool handlers.
 // Both "http" and "streamable-http" are accepted by the Claude CLI for --mcp-config.
+//
+// When the local API token exists (require_local_auth), the config carries an
+// Authorization header and is written to a 0600 file whose path is passed instead
+// of the JSON, so the token never appears in the process's argv.
 func (i *Instance) claudeMCPConfigArgs(mcpURL string) (string, string) {
-	cfg := fmt.Sprintf(
-		`{"mcpServers":{"stapler-squad":{"type":"http","url":%q,"headers":{"X-Stapler-Session-UUID":%q}}}}`,
-		mcpURL, i.UUID,
-	)
-	return "--mcp-config", shellQuote(cfg)
+	dir, err := config.GetConfigDir()
+	if err != nil {
+		dir = ""
+	}
+	token := ""
+	if dir != "" {
+		token = localtoken.FromConfigDir(dir)
+	}
+	return i.claudeMCPConfigArgsWithToken(mcpURL, dir, token)
+}
+
+func (i *Instance) claudeMCPConfigArgsWithToken(mcpURL, configDir, token string) (string, string) {
+	headers := map[string]string{"X-Stapler-Session-UUID": i.UUID}
+	if token != "" {
+		headers["Authorization"] = "Bearer " + token
+	}
+	cfg, err := json.Marshal(map[string]any{"mcpServers": map[string]any{"stapler-squad": map[string]any{
+		"type": "http", "url": mcpURL, "headers": headers,
+	}}})
+	if err != nil { // unreachable: only strings
+		return "--mcp-config", shellQuote("{}")
+	}
+	if token == "" || configDir == "" {
+		return "--mcp-config", shellQuote(string(cfg))
+	}
+	dir := filepath.Join(configDir, "mcp")
+	path := filepath.Join(dir, i.UUID+".json")
+	if err := os.MkdirAll(dir, 0700); err == nil {
+		if err = os.WriteFile(path, cfg, 0600); err == nil {
+			return "--mcp-config", shellQuote(path)
+		}
+	}
+	log.Warn("mcp config: could not write token-bearing config file; launching without Authorization", "path", path)
+	delete(headers, "Authorization")
+	cfg, _ = json.Marshal(map[string]any{"mcpServers": map[string]any{"stapler-squad": map[string]any{"type": "http", "url": mcpURL, "headers": headers}}})
+	return "--mcp-config", shellQuote(string(cfg))
 }
 
 // resolveMCPServerURLFrom returns the MCP server URL to pass to claude for
@@ -1453,6 +1578,16 @@ func (i *Instance) SendKeys(keys string) error {
 	}
 	_, err := i.pm().SendKeys(keys)
 	return err
+}
+
+// SendKeysN is SendKeys that keeps the byte count, so a caller can tell a write
+// that provably wrote nothing (0, err) from one that may have written. Its only
+// caller is SubmitReplyOnce.
+func (i *Instance) SendKeysN(keys string) (int, error) {
+	if !i.started.Load() || i.Status == Paused {
+		return 0, fmt.Errorf("cannot send keys to instance that has not been started or is paused")
+	}
+	return i.pm().SendKeys(keys)
 }
 
 // SendInputViaControlMode sends raw bytes through the existing control mode connection,

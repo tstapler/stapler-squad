@@ -10,10 +10,11 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 )
 
 // DiagnosticSpawner is the narrow slice of *SessionService DiagnosticService
@@ -327,7 +328,18 @@ func readRecentSessionLog(sessionUUID string) string {
 // gitLogOneLineCommits caps how many commits gitLogSummary includes.
 const gitLogOneLineCommits = 30
 
-// gitLogSummary returns a bounded `git log --oneline` of baseSHA..headRef in
+// onelineSHALen is git's minimum --oneline abbreviation; git lengthens it for large repos, so
+// a very large repository's summary now shows the minimum instead.
+const onelineSHALen = 7
+
+func onelineSHA(sha backend.CommitSHA) string {
+	if len(sha) > onelineSHALen {
+		return string(sha[:onelineSHALen])
+	}
+	return string(sha)
+}
+
+// gitLogSummary returns a bounded one-line-per-commit log of baseSHA..headRef in
 // dir, best-effort ("" on any error) — mirrors GetGitDiff's own
 // best-effort-on-failure convention for supplementary (not load-bearing)
 // bundle content.
@@ -337,10 +349,16 @@ func gitLogSummary(ctx context.Context, dir, baseSHA, headRef string) string {
 	}
 	logCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	rangeArg := fmt.Sprintf("%s..%s", baseSHA, headRef)
-	out, err := safeexec.CommandContext(logCtx, "git", "-C", dir, "log", "--oneline", "-n", fmt.Sprintf("%d", gitLogOneLineCommits), rangeArg).Output()
+	entries, err := gitprovider.Backend().Log(logCtx, backend.Local{Root: backend.RepoRoot(dir)}, backend.LogRequest{
+		Limit: gitLogOneLineCommits,
+		Range: backend.RangeSpec{Exclude: backend.RefName(baseSHA), Include: backend.RefName(headRef)},
+	})
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	lines := make([]string, len(entries))
+	for i, e := range entries {
+		lines[i] = onelineSHA(e.SHA) + " " + e.Subject
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }

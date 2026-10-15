@@ -92,7 +92,7 @@ func TestPTYConsumer_Stop_UnlocksBeforeWaitingOnPollLoop(t *testing.T) {
 		close(stopDone)
 	}()
 
-	time.Sleep(stopJoinTimeout / 2)
+	time.Sleep(stopJoinTimeout / 2) //nolint:notimesleeptest probes pc.mu partway through Stop()'s real stopJoinTimeout wait; a buggy deferred unlock is only distinguishable by wall-clock position within that window
 	locked := pc.mu.TryLock()
 	if locked {
 		pc.mu.Unlock()

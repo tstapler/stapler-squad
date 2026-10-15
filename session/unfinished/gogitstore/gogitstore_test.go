@@ -150,7 +150,7 @@ func gitRunErrCtx(parent context.Context, logf func(format string, args ...any),
 		if logf != nil {
 			logf("git %v failed (attempt %d/%d), retrying: %v\n%s", args, attempt, maxAttempts, err, out)
 		}
-		time.Sleep(gitRetryBackoff(attempt))
+		time.Sleep(gitRetryBackoff(attempt)) //nolint:notimesleeptest real-git-subprocess retry backoff (index.lock/gc contention); the wall-clock backoff is the behavior
 	}
 	if lastTimedOut {
 		return fmt.Errorf("git %v timed out after %s (subprocess never exited — killed): %w\n%s", args, timeout, lastErr, lastOut)
@@ -682,7 +682,7 @@ func retryOpWithBackoff(op func() error) error {
 		if attempt == retryOpMaxAttempts {
 			break
 		}
-		time.Sleep(gitRetryBackoff(attempt))
+		time.Sleep(gitRetryBackoff(attempt)) //nolint:notimesleeptest retry backoff for real filesystem contention is the behavior under test
 	}
 	return lastErr
 }

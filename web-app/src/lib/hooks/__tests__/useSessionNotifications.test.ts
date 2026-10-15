@@ -178,6 +178,17 @@ describe("useSessionNotifications", () => {
       }
     );
 
+    it("session_notifications_should_route_idle_info_to_history_only_when_visible_session_hook_fires", () => {
+      const { result } = renderHook(() => useSessionNotifications({ enableAudio: false }));
+      act(() => {
+        result.current({ ...makeEvent(NT.INFO), metadata: { source_app: "tmux" } } as never);
+      });
+      expect(mockAddToHistoryOnly).toHaveBeenCalledWith(
+        expect.objectContaining({ metadata: expect.objectContaining({ source_app: "tmux" }) }),
+      );
+      expect(mockAddNotification).not.toHaveBeenCalled();
+    });
+
     it("sessionless history-only event passes through empty sessionName, not a placeholder", () => {
       const { result } = renderHook(() =>
         useSessionNotifications({ enableAudio: false })
@@ -278,7 +289,21 @@ describe("useSessionNotifications", () => {
       const call = mockAddNotification.mock.calls[0][0];
       expect(typeof call.onView).toBe("function");
       call.onView();
-      expect(onViewSession).toHaveBeenCalledWith("test-session");
+      expect(onViewSession).toHaveBeenCalledWith("test-session", undefined);
+    });
+
+    it("onView carries the notification record id so the deep link can show a deleted session's own text (Story 5.3)", () => {
+      const onViewSession = jest.fn();
+      const { result } = renderHook(() =>
+        useSessionNotifications({ enableAudio: false, onViewSession })
+      );
+
+      act(() => {
+        result.current({ ...makeEvent(NT.WARNING), notificationId: "n-42" });
+      });
+
+      mockAddNotification.mock.calls[0][0].onView();
+      expect(onViewSession).toHaveBeenCalledWith("test-session", "n-42");
     });
 
     it("backlog-item notifications (metadata.item_id present) do not wire up onView — sessionId now holds the item's ID, not a real session, so navigating to /?session=<id> would 404", () => {
@@ -513,6 +538,41 @@ describe("useSessionNotifications", () => {
           requireInteraction: true,
           tag: `test-session:${NT.APPROVAL_NEEDED}`,
         })
+      );
+    });
+  });
+  // ── Story 3.2: the server-sent pending-decision field rides on the toast ──
+
+  describe("isPendingDecision", () => {
+    it("copies the live event's server-computed value onto the toast", () => {
+      const { result } = renderHook(() => useSessionNotifications({ enableAudio: false }));
+
+      act(() => {
+        result.current({ ...makeEvent(NT.WARNING, "s-warn"), isPendingDecision: true });
+      });
+      act(() => {
+        result.current({ ...makeEvent(NT.WARNING, "s-auto"), isPendingDecision: false });
+      });
+
+      expect(mockAddNotification).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ sessionId: "s-warn", isPendingDecision: true }),
+      );
+      expect(mockAddNotification).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ sessionId: "s-auto", isPendingDecision: false }),
+      );
+    });
+
+    it("copies the value onto history-only records too", () => {
+      const { result } = renderHook(() => useSessionNotifications({ enableAudio: false }));
+
+      act(() => {
+        result.current({ ...makeEvent(NT.INFO), isPendingDecision: false });
+      });
+
+      expect(mockAddToHistoryOnly).toHaveBeenCalledWith(
+        expect.objectContaining({ isPendingDecision: false }),
       );
     });
   });

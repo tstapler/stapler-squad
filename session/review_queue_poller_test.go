@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // makeAcknowledgedInstance creates a session instance with LastAcknowledged set after LastMeaningfulOutput,
@@ -526,17 +527,8 @@ func TestReviewQueuePoller_StartStop(t *testing.T) {
 	poller.Stop()
 
 	// Wait up to 2s for the goroutine to finish.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if !poller.IsRunning() {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	if poller.IsRunning() {
-		t.Error("expected IsRunning() == false after Stop(), still true after 2s")
-	}
+	wait.RequireEventually(t, func() bool { return !poller.IsRunning() }, 2*time.Second, 5*time.Millisecond,
+		"expected IsRunning() == false after Stop()")
 }
 
 // TestReviewQueuePoller_Start_Idempotent verifies that calling Start() twice does

@@ -19,7 +19,10 @@ import (
 // primaryDomain is the hostname used in the CA download filename so clients
 // know which server issued the cert (e.g. "myhost.local").
 // remotePort is the HTTPS port used when building invite URLs.
-func RegisterRoutes(mux *http.ServeMux, waHandler *Handler, sessions *SessionManager, store *CredentialStore, setup *SetupManager, invites *InviteManager, tlsCAPath, primaryDomain string, remotePort int) {
+//
+// With RequireLocalAuth, /auth/status stops treating loopback RemoteAddr as
+// proof of identity (see status).
+func RegisterRoutes(mux *http.ServeMux, waHandler *Handler, sessions *SessionManager, store *CredentialStore, setup *SetupManager, invites *InviteManager, tlsCAPath, primaryDomain string, remotePort int, opts ...RouteOption) {
 	h := &httpHandlers{
 		wa:            waHandler,
 		sessions:      sessions,
@@ -29,6 +32,9 @@ func RegisterRoutes(mux *http.ServeMux, waHandler *Handler, sessions *SessionMan
 		caPath:        tlsCAPath,
 		primaryDomain: primaryDomain,
 		remotePort:    remotePort,
+	}
+	for _, o := range opts {
+		o(h)
 	}
 
 	mux.HandleFunc("/auth/status", h.status)
@@ -54,6 +60,17 @@ type httpHandlers struct {
 	caPath        string
 	primaryDomain string
 	remotePort    int
+	// requireLocalAuth disables the loopback-RemoteAddr shortcut in status.
+	requireLocalAuth bool
+}
+
+// RouteOption customizes RegisterRoutes.
+type RouteOption func(*httpHandlers)
+
+// RequireLocalAuth makes /auth/status report the real auth state to loopback
+// callers too.
+func RequireLocalAuth(on bool) RouteOption {
+	return func(h *httpHandlers) { h.requireLocalAuth = on }
 }
 
 // IsLocalhostRequest returns true when the request originates from the loopback
@@ -80,7 +97,7 @@ func (h *httpHandlers) status(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Local clients bypass auth entirely.
-	if IsLocalhostRequest(r) {
+	if IsLocalhostRequest(r) && !h.requireLocalAuth {
 		jsonResponse(w, map[string]interface{}{
 			"auth_enabled":    false,
 			"has_credentials": h.store.HasCredentials(),
@@ -97,7 +114,7 @@ func (h *httpHandlers) status(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, map[string]interface{}{
-		"auth_enabled":    h.wa != nil,
+		"auth_enabled":    h.wa != nil || h.requireLocalAuth,
 		"has_credentials": h.store.HasCredentials(),
 		"authenticated":   authenticated,
 		"setup_active":    h.setup.IsActive(),

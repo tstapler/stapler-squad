@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os/exec"
 	"strings"
 	"testing"
@@ -12,8 +14,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/zalando/go-keyring"
 
+	"connectrpc.com/connect"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/envtest"
+	githubpkg "github.com/tstapler/stapler-squad/github"
+	logpkg "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
@@ -49,12 +56,7 @@ func TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueu
 		t.Fatalf("BuildDependencies: %v", err)
 	}
 
-	srv := NewServerWithDeps("localhost:0", deps)
-	t.Cleanup(func() {
-		if err := srv.Shutdown(); err != nil {
-			t.Logf("srv.Shutdown: %v", err)
-		}
-	})
+	srv := newShutdownOnCleanupServer(t, "localhost:0", deps)
 
 	if deps.SlackNotifier == nil {
 		t.Fatal("expected ServerDependencies.SlackNotifier to be wired")
@@ -494,12 +496,7 @@ func TestWireDepsIntoServer_should_NotConstructPoller_When_HeadlessPoolNil(t *te
 	require.NoError(t, err)
 	deps.SessionTagClassificationPoller = nil
 
-	srv := NewServerWithDeps("localhost:0", deps)
-	t.Cleanup(func() {
-		if err := srv.Shutdown(); err != nil {
-			t.Logf("srv.Shutdown: %v", err)
-		}
-	})
+	newShutdownOnCleanupServer(t, "localhost:0", deps)
 
 	assert.Nil(t, deps.SessionTagClassificationPoller, "a nil poller must stay unconstructed, never started")
 	assert.NotNil(t, deps.SessionService, "the rest of the server must start normally")
@@ -516,12 +513,88 @@ func TestWireDepsIntoServer_should_StartPollerExactlyOnce_When_HeadlessPoolPrese
 	deps.SessionTagClassificationPoller = session.NewSessionTagClassificationPoller(noopTagPoolClient{}, classifier.NewTaggingEngine())
 	require.False(t, deps.SessionTagClassificationPoller.Running(), "poller must not be running before the server wires it up")
 
-	srv := NewServerWithDeps("localhost:0", deps)
-	t.Cleanup(func() {
-		if err := srv.Shutdown(); err != nil {
-			t.Logf("srv.Shutdown: %v", err)
-		}
-	})
+	newShutdownOnCleanupServer(t, "localhost:0", deps)
 
 	assert.True(t, deps.SessionTagClassificationPoller.Running(), "wireDepsIntoServer must start the poller")
+}
+
+func TestAnnotateUserPRCache_should_PopulateStatusAndLastActiveFromSnapshot_When_RunningAndPausedInstances(t *testing.T) {
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "s-run", Path: t.TempDir(), Program: "true", SessionType: session.SessionTypeDirectory,
+	})
+	require.NoError(t, err)
+	snap := inst.Snapshot()
+	assert.Equal(t, githubpkg.LinkedSessionRunning, linkedStatusFor(snap.Status))
+	assert.False(t, snap.UpdatedAt.IsZero(), "LastActiveAt source (snapshot UpdatedAt) must be populated")
+
+	// A paused session (worktree removed, branch kept) still reports a status.
+	paused := *snap
+	paused.Status = session.Paused
+	assert.Equal(t, githubpkg.LinkedSessionPaused, linkedStatusFor(paused.Status))
+	assert.Equal(t, githubpkg.LinkedSessionStopped, linkedStatusFor(session.Crashed))
+}
+
+func TestAnnotateUserPRCache_should_LogUnmatchedSessionCount_When_SessionsHaveBranchButNoPR(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	var buf bytes.Buffer
+	prev := logpkg.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { logpkg.SetSlogDefaultForTest(prev) })
+
+	cache := githubpkg.NewUserPRCache()
+	cache.SeedPRsForTest([]githubpkg.UserPR{{Owner: "acme", Repo: "api", Number: 1, HeadRef: "has-pr"}})
+
+	poller := session.NewPRStatusPoller(nil)
+	titles := []string{"no-pr-one", "no-pr-two"}
+	instances := make([]*session.Instance, 0, len(titles))
+	for _, title := range titles {
+		inst, err := session.NewInstance(session.InstanceOptions{
+			Title:       title,
+			Path:        t.TempDir(),
+			Program:     "echo",
+			Branch:      "branch-" + title,
+			GitHubOwner: "acme",
+			GitHubRepo:  "api",
+		})
+		require.NoError(t, err)
+		instances = append(instances, inst)
+	}
+	poller.SetInstances(instances)
+
+	cache.Annotate(buildPRAnnotations(poller, nil))
+
+	out := buf.String()
+	assert.Contains(t, out, "sessions with a branch but no matching PR")
+	assert.Contains(t, out, "count=2")
+}
+
+// Dropping any of SetPRNudger/SetPRDetailFetcher/SetPRTokenResolver in
+// BuildDependencies would make every nudge answer Unavailable with no compile
+// error; an unknown PR instead reaches PR_NOT_FOUND only when all are wired.
+func TestBuildDependencies_should_WireNudgeCollaborators_When_DepsBuilt(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+	require.NotNil(t, deps.GitHubUserService)
+
+	resp, err := deps.GitHubUserService.NudgeSessionForPR(context.Background(), connect.NewRequest(&sessionv1.NudgeSessionForPRRequest{
+		Pr:        &sessionv1.PRKey{Owner: "acme", Repo: "api", Number: 1},
+		SessionId: "s",
+	}))
+
+	if err != nil {
+		assert.NotEqual(t, connect.CodeUnavailable, connect.CodeOf(err), "nudge collaborators are not wired: %v", err)
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assert.Equal(t, sessionv1.NudgeOutcome_NUDGE_OUTCOME_PR_NOT_FOUND, resp.Msg.GetOutcome())
+}
+
+func TestUserPRCacheConfigFromEnv_should_SelectDegradedDetails_When_EnvSet(t *testing.T) {
+	t.Setenv(prPollDegradedEnv, "")
+	assert.False(t, userPRCacheConfigFromEnv().DegradedDetails)
+	t.Setenv(prPollDegradedEnv, "true")
+	assert.True(t, userPRCacheConfigFromEnv().DegradedDetails)
+	t.Setenv(prPollDegradedEnv, "1")
+	assert.True(t, userPRCacheConfigFromEnv().DegradedDetails)
 }

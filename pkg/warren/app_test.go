@@ -144,13 +144,15 @@ func TestApp_GoBeforeStartPanics(t *testing.T) {
 }
 
 func TestApp_GoLeakDetected(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
 	app := warren.New()
 	app.ShutdownTimeout = 100 * time.Millisecond
 
 	app.Phase("run", func(_ context.Context, a *warren.App) error {
 		a.Go("leaky", func(ctx context.Context) {
 			// Ignores context cancellation — intentional leak for test.
-			time.Sleep(10 * time.Second)
+			<-release
 		})
 		return nil
 	})
@@ -267,10 +269,12 @@ func TestApp_HealthAllPassing(t *testing.T) {
 func TestApp_RunStartsAndStopsOnContextCancel(t *testing.T) {
 	var phaseRan atomic.Bool
 	var stopRan atomic.Bool
+	started := make(chan struct{})
 
 	app := warren.New()
 	app.Phase("work", func(_ context.Context, a *warren.App) error {
 		phaseRan.Store(true)
+		close(started)
 		a.OnStop("cleanup", func(_ context.Context) error {
 			stopRan.Store(true)
 			return nil
@@ -282,8 +286,7 @@ func TestApp_RunStartsAndStopsOnContextCancel(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- app.Run(ctx) }()
 
-	// Give Run() time to start, then cancel.
-	time.Sleep(20 * time.Millisecond)
+	<-started
 	cancel()
 
 	select {

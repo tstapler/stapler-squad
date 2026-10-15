@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"slices"
@@ -15,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/server"
 	serverauth "github.com/tstapler/stapler-squad/server/auth"
+	"github.com/tstapler/stapler-squad/server/middleware"
 	"go.uber.org/goleak"
 )
 
@@ -597,5 +599,197 @@ func TestHostnameRedetectInterval_FallsBackOnParseError(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "banana") {
 		t.Fatalf("expected log.Warn to name the offending value %q, got: %s", "banana", buf.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Verified hostname set (Task 1.8d; T-RP-65, T-RP-70, T-RP-71, T-RP-72)
+// ---------------------------------------------------------------------------
+
+// verifiedTestDetector builds a detector through NewHostnameDetector (so the
+// boot seeding runs) and then swaps in fakes for discovery and ownership.
+func verifiedTestDetector(srv *server.Server, cfg HostnameDetectorConfig,
+	detect func(context.Context) []string, resolve func(context.Context, string) []string,
+	validate func(context.Context, string) bool) *HostnameDetector {
+	cfg.Srv = srv
+	cfg.ValidateFn = validate
+	d := NewHostnameDetector(cfg)
+	d.detectFn = detect
+	d.resolveFn = resolve
+	d.certPublisher = nil
+	return d
+}
+
+func detectIPs(ips ...string) func(context.Context) []string {
+	return func(context.Context) []string { return ips }
+}
+
+// T-RP-65: a name resolveAndValidate returned as unverified is in GetHostnames()
+// but not in GetVerifiedHostnames(), and the verdict rejects it.
+func TestVerdict_ShouldRejectAHostnameThatResolveAndValidateReturnedAsUnverified_WhenTheRealDetectorRunsWithAStubResolver(t *testing.T) {
+	srv := &server.Server{}
+	validate := func(_ context.Context, name string) bool { return name == "good.lan" }
+	resolve := func(_ context.Context, _ string) []string { return []string{"good.lan", "attacker.example"} }
+	d := verifiedTestDetector(srv, HostnameDetectorConfig{}, detectIPs("10.0.0.5"), resolve, validate)
+
+	d.redetect(context.Background(), TriggerManual)
+
+	if !slices.Contains(srv.GetHostnames(), "attacker.example") {
+		t.Fatalf("precondition: the unverified name must be in GetHostnames(), got %v", srv.GetHostnames())
+	}
+	if got := srv.GetVerifiedHostnames(); !reflect.DeepEqual(got, []string{"good.lan"}) {
+		t.Fatalf("GetVerifiedHostnames = %v, want [good.lan]", got)
+	}
+	cfg := srv.LocalWriteVerdictConfig()
+	if reason := middleware.RebindingVerdict(middleware.CallerFacts{Host: "attacker.example:8543"}, cfg); reason != "host_not_allowed" {
+		t.Fatalf("verdict for the unverified name = %q, want host_not_allowed", reason)
+	}
+	if reason := middleware.RebindingVerdict(middleware.CallerFacts{Host: "good.lan:8543"}, cfg); reason != "" {
+		t.Fatalf("verdict for the verified name = %q, want allow", reason)
+	}
+}
+
+// T-RP-70: names seeded through InitialNetworks as startRemoteAccess seeds them
+// are validated, not trusted; literals and localhost are excluded by rule.
+func TestVerifiedHostnames_ShouldExcludeASeededUnverifiedNameAnIpLiteralAndLocalhost_WhenInitialNetworksIsSeededAsStartRemoteAccessSeedsItAndValidateFnRejectsOrAcceptsEverything(t *testing.T) {
+	seed := map[string][]string{"10.0.0.5": {"10.0.0.5", "ptr.attacker.example", "localhost"}}
+	noResolve := func(context.Context, string) []string { return nil }
+
+	t.Run("validateFn rejects everything", func(t *testing.T) {
+		srv := &server.Server{}
+		d := verifiedTestDetector(srv, HostnameDetectorConfig{InitialNetworks: seed}, detectIPs(), noResolve,
+			func(context.Context, string) bool { return false })
+		d.redetect(context.Background(), TriggerManual)
+		d.redetect(context.Background(), TriggerManual)
+		if got := srv.GetVerifiedHostnames(); len(got) != 0 {
+			t.Fatalf("verified set = %v, want empty", got)
+		}
+		if !slices.Contains(srv.GetHostnames(), "ptr.attacker.example") {
+			t.Fatalf("the seeded name is expected in GetHostnames(), got %v", srv.GetHostnames())
+		}
+	})
+	t.Run("validateFn accepts everything", func(t *testing.T) {
+		srv := &server.Server{}
+		d := verifiedTestDetector(srv, HostnameDetectorConfig{InitialNetworks: seed}, detectIPs(), noResolve,
+			func(context.Context, string) bool { return true })
+		d.redetect(context.Background(), TriggerManual)
+		if got := srv.GetVerifiedHostnames(); !reflect.DeepEqual(got, []string{"ptr.attacker.example"}) {
+			t.Fatalf("verified set = %v, want only the validated name (literal and localhost excluded by rule)", got)
+		}
+	})
+	t.Run("a literal and localhost are excluded from InitialVerified too", func(t *testing.T) {
+		srv := &server.Server{}
+		verifiedTestDetector(srv, HostnameDetectorConfig{InitialVerified: []string{"10.0.0.5", "localhost", "ok.lan"}},
+			detectIPs(), noResolve, func(context.Context, string) bool { return true })
+		if got := srv.GetVerifiedHostnames(); !reflect.DeepEqual(got, []string{"ok.lan"}) {
+			t.Fatalf("seeded verified set = %v, want [ok.lan]", got)
+		}
+	})
+}
+
+// T-RP-71: re-verification every cycle, two consecutive false results to drop,
+// a lookup cut by the cycle deadline is a timeout and keeps the previous state.
+func TestVerifiedHostnames_ShouldDropANameThatFailsReverificationAndReadmitItWhenItPassesAgainAndKeepUncheckedNamesWhenTheCycleTimesOut_WhenCyclesRunWithAFakeResolverAndValidateFn(t *testing.T) {
+	srv := &server.Server{}
+	result := map[string]bool{"a.lan": true, "b.lan": true}
+	var calls []string
+	var cancelOn string
+	var cancel context.CancelFunc
+	validate := func(_ context.Context, name string) bool {
+		calls = append(calls, name)
+		if name == cancelOn {
+			cancel()
+			return false
+		}
+		return result[name]
+	}
+	d := verifiedTestDetector(srv, HostnameDetectorConfig{InitialVerified: []string{"a.lan", "b.lan"}},
+		detectIPs(), func(context.Context, string) []string { return nil }, validate)
+
+	// Non-empty from construction, before any cycle ran, and matched on a normalized Host.
+	if got := srv.GetVerifiedHostnames(); !reflect.DeepEqual(got, []string{"a.lan", "b.lan"}) {
+		t.Fatalf("seeded set = %v", got)
+	}
+	if reason := middleware.RebindingVerdict(middleware.CallerFacts{Host: "A.Lan.:8543"}, srv.LocalWriteVerdictConfig()); reason != "" {
+		t.Fatalf("normalized Host rejected: %q", reason)
+	}
+
+	cycle := func() { d.redetect(context.Background(), TriggerManual) }
+
+	result["a.lan"] = false
+	cycle()
+	if got := srv.GetVerifiedHostnames(); !slices.Contains(got, "a.lan") {
+		t.Fatalf("one false result must not drop a name, got %v", got)
+	}
+	cycle()
+	if got := srv.GetVerifiedHostnames(); !reflect.DeepEqual(got, []string{"b.lan"}) {
+		t.Fatalf("two consecutive false results must drop a.lan, got %v", got)
+	}
+	result["a.lan"] = true
+	cycle()
+	if got := srv.GetVerifiedHostnames(); !reflect.DeepEqual(got, []string{"a.lan", "b.lan"}) {
+		t.Fatalf("a name that passes again must be re-admitted, got %v", got)
+	}
+
+	// The cycle deadline expires during a.lan's lookup: both names keep their state.
+	var ctx context.Context
+	ctx, cancel = context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	cancelOn, calls = "a.lan", nil
+	d.redetect(ctx, TriggerManual)
+	if !reflect.DeepEqual(calls, []string{"a.lan"}) {
+		t.Fatalf("lookups after the deadline = %v, want only the one in flight", calls)
+	}
+	if got := srv.GetVerifiedHostnames(); !reflect.DeepEqual(got, []string{"a.lan", "b.lan"}) {
+		t.Fatalf("a timed-out cycle must keep previous state, got %v", got)
+	}
+	// The cut lookup did not count as a miss: one real false result still keeps a.lan.
+	cancelOn, result["a.lan"] = "", false
+	cycle()
+	if got := srv.GetVerifiedHostnames(); !slices.Contains(got, "a.lan") {
+		t.Fatalf("a deadline-cut false must not count toward the drop, got %v", got)
+	}
+}
+
+// T-RP-72: with the loop disabled the set is the boot verifiedHostnames, static.
+func TestVerifiedHostnames_ShouldBeSeededAtBootFromVerifiedHostnamesOnlyAndStayStatic_WhenTheDetectorIsDisabled(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_HOSTNAME_REDETECT_DISABLE", "true")
+	srv := &server.Server{}
+	ra := &remoteAccessResult{
+		Networks:          map[string][]string{"10.0.0.5": {"10.0.0.5", "raw.ptr.example", "ok.lan"}},
+		VerifiedHostnames: []string{"ok.lan"},
+	}
+	var goCalls int
+	startHostnameDetector(http.NewServeMux(), srv, ra,
+		func() (NetworkChangeSource, error) { return nil, fmt.Errorf("unused when disabled") },
+		func(string, func(context.Context)) { goCalls++ },
+		func(string, func(context.Context) error) {})
+
+	if goCalls != 0 {
+		t.Fatalf("Run goroutine started %d times, want 0", goCalls)
+	}
+	if got := srv.GetVerifiedHostnames(); !reflect.DeepEqual(got, []string{"ok.lan"}) {
+		t.Fatalf("verified set = %v, want only the boot-verified names (raw candidates excluded)", got)
+	}
+}
+
+func TestRecomputeVerified_ShouldCountOneMissPerNamePerCycle_WhenANameIsListedUnderSeveralSources(t *testing.T) {
+	srv := &server.Server{}
+	calls := 0
+	validate := func(context.Context, string) bool { calls++; return false }
+	d := verifiedTestDetector(srv, HostnameDetectorConfig{InitialVerified: []string{"a.lan"}},
+		detectIPs(), func(context.Context, string) []string { return nil }, validate)
+	d.networks = map[string][]string{"10.0.0.1": {"a.lan"}, "10.0.0.2": {"A.lan."}}
+
+	d.recomputeVerified(context.Background())
+	if calls != 1 {
+		t.Fatalf("validateFn calls = %d, want 1 per distinct name", calls)
+	}
+	if got := srv.GetVerifiedHostnames(); !slices.Contains(got, "a.lan") {
+		t.Fatalf("one false cycle must not drop a boot-verified name, got %v", got)
+	}
+	d.recomputeVerified(context.Background())
+	if got := srv.GetVerifiedHostnames(); slices.Contains(got, "a.lan") {
+		t.Fatalf("two consecutive false cycles must drop it, got %v", got)
 	}
 }

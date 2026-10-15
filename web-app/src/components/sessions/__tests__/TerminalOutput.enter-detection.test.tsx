@@ -42,6 +42,7 @@ jest.mock("@/lib/contexts/ApprovalsContext", () => ({
 const mockXtermHandle = {
   terminal: null as null,
   fit: jest.fn(),
+  refit: jest.fn(),
   write: jest.fn(),
   writeln: jest.fn(),
   clear: jest.fn(),

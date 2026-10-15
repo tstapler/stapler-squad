@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"path"
+	"reflect"
 	"strings"
 )
 
@@ -40,6 +41,20 @@ func (c authConfig) skipsPasskey(r *http.Request) bool {
 	return c.selfAuthenticated != nil && isCanonicalPath(r) && c.selfAuthenticated(r.URL.Path)
 }
 
+// AuthRequires reports whether Auth(validator) enforces authentication: false
+// for a nil interface and for a typed nil pointer, which Auth would wrap.
+func AuthRequires(validator AuthValidator) bool {
+	if validator == nil {
+		return false
+	}
+	v := reflect.ValueOf(validator)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.Interface:
+		return !v.IsNil()
+	}
+	return true
+}
+
 // Auth returns middleware that enforces authentication on all non-exempt paths.
 // When auth is nil (auth disabled), the middleware is a no-op pass-through.
 func Auth(validator AuthValidator, opts ...AuthOption) func(http.Handler) http.Handler {
@@ -48,12 +63,12 @@ func Auth(validator AuthValidator, opts ...AuthOption) func(http.Handler) http.H
 		opt(&cfg)
 	}
 	return func(next http.Handler) http.Handler {
-		if validator == nil {
+		if !AuthRequires(validator) {
 			return next
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Always allow auth endpoints and static assets needed before login.
-			if isExempt(r.URL.Path) || cfg.skipsPasskey(r) {
+			if isExempt(r) || cfg.skipsPasskey(r) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -109,16 +124,27 @@ var exemptPeerPaths = map[string]struct{}{
 	"/internal/claim-lookup":        {},
 }
 
-func isExempt(path string) bool {
-	if _, ok := exemptPeerPaths[path]; ok {
+func isExempt(r *http.Request) bool {
+	if isGenericWebhookDelivery(r) {
+		return true
+	}
+	if _, ok := exemptPeerPaths[r.URL.Path]; ok {
 		return true
 	}
 	for _, prefix := range exemptPrefixes {
-		if strings.HasPrefix(path, prefix) {
+		if strings.HasPrefix(r.URL.Path, prefix) {
 			return true
 		}
 	}
 	return false
+}
+
+func isGenericWebhookDelivery(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	slug, ok := strings.CutPrefix(r.URL.Path, "/webhooks/")
+	return ok && slug != "" && !strings.Contains(slug, "/") && slug != "github"
 }
 
 func isAPIPath(path string) bool {

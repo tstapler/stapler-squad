@@ -638,7 +638,7 @@ func TestCreatePullRequest_should_SurfaceError_When_CommitFails(t *testing.T) {
 	t.Setenv("GIT_AUTHOR_NAME", "")
 	t.Setenv("GIT_AUTHOR_EMAIL", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("HOME", t.TempDir())
+	withFakeHome(t)
 
 	mock := &fakePRGitExecutor{}
 	wt := git.NewGitWorktreeFromStorageWithExecutor(dir, dir, "sess-commit-fail", "feature/commit-fail", "", git.WithCommandRunner(mock))

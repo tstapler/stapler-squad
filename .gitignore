@@ -6,6 +6,8 @@
 stapler-squad
 stapler-squad.prev
 stapler-squad-otel
+# analyzer fixtures mirror the module path, which the binary pattern above would hide
+!tools/lint/**/testdata/src/github.com/tstapler/stapler-squad/
 # otelc setup's per-checkout generated scaffolding (scripts/otel-auto-build.sh
 # removes these on exit, but ignore them too in case of an interrupted run)
 .otelc-build/
@@ -129,3 +131,4 @@ benchmarks/
 
 # Runtime session-data artifacts leaked into the repo root by local dev runs
 /session/*/scrollback.jsonl.zst
+/server/services/backlog_item_public_id_backfill.lock

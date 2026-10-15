@@ -22,7 +22,7 @@ type fakeTriageRespawner struct {
 	respawnedIDs []string
 }
 
-func (f *fakeTriageRespawner) AutoRespawnTriage(_ context.Context, itemID string) error {
+func (f *fakeTriageRespawner) ResumeTriage(_ context.Context, itemID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.respawnedIDs = append(f.respawnedIDs, itemID)
@@ -290,7 +290,7 @@ func TestAnswerGuidanceRequest_should_RespawnTriage_When_BacklogItemScopeAnswere
 
 	require.Eventually(t, func() bool {
 		return len(respawner.called()) == 1
-	}, time.Second, 10*time.Millisecond, "expected AutoRespawnTriage to be called exactly once")
+	}, time.Second, 10*time.Millisecond, "expected ResumeTriage to be called exactly once")
 	assert.Equal(t, []string{item.ID}, respawner.called())
 
 	notes, err := storage.ListActivityNotesForItem(ctx, item.ID)

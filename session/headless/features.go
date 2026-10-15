@@ -13,15 +13,20 @@ import (
 
 // Feature key constants for well-known AI features.
 const (
-	FeatureKeyReview             FeatureKey = "review"
-	FeatureKeySummarize          FeatureKey = "summarize"
-	FeatureKeyAC                 FeatureKey = "acceptance-criteria"
-	FeatureKeyPRDescription      FeatureKey = "pr-description"
-	FeatureKeyCommitMessage      FeatureKey = "commit-message"
-	FeatureKeyCustom             FeatureKey = "custom"
-	FeatureKeyAutonomousFix      FeatureKey = "autonomous_fix"
-	FeatureKeyAutonomousApproval FeatureKey = "autonomous_approval"
-	FeatureKeyTriage             FeatureKey = "triage"
+	FeatureKeyReview        FeatureKey = "review"
+	FeatureKeySummarize     FeatureKey = "summarize"
+	FeatureKeyAC            FeatureKey = "acceptance-criteria"
+	FeatureKeyPRDescription FeatureKey = "pr-description"
+	FeatureKeyCommitMessage FeatureKey = "commit-message"
+	FeatureKeyCustom        FeatureKey = "custom"
+	// FeatureKeyUnfinishedWorkSummary and FeatureKeyInstanceResume name the formerly
+	// hard-coded claude call sites so settings can override them per feature.
+	FeatureKeyUnfinishedWorkSummary FeatureKey = "unfinished-work-summary"
+	FeatureKeyInstanceResume        FeatureKey = "instance-resume"
+	FeatureKeyRulesGeneration       FeatureKey = "rules-generation"
+	FeatureKeyAutonomousFix         FeatureKey = "autonomous_fix"
+	FeatureKeyAutonomousApproval    FeatureKey = "autonomous_approval"
+	FeatureKeyTriage                FeatureKey = "triage"
 	// FeatureKeyBacklogIntentParse: excluded from AllowedFeatureKeys, same
 	// rationale as FeatureKeyTriage — called directly from BacklogService,
 	// not exposed via the public MCP headless-call gate.
@@ -243,7 +248,7 @@ func HeadlessTriageSystemPrompt() string { return headlessTriageSystemPrompt }
 
 // SummarizeBacklogItem calls the LLM to summarize a backlog item.
 // Returns the summary text from the JSON response.
-func SummarizeBacklogItem(ctx context.Context, pool *Pool, title, description string) (string, error) {
+func SummarizeBacklogItem(ctx context.Context, pool PoolClient, title, description string) (string, error) {
 	userPrompt := fmt.Sprintf("Title: %s\n\nDescription: %s", title, description)
 	raw, err := pool.CallBlocking(ctx, FeatureKeySummarize, summarizeSystemPrompt, userPrompt, CallOptions{}, DiscardCost)
 	if err != nil {
@@ -263,7 +268,7 @@ func SummarizeBacklogItem(ctx context.Context, pool *Pool, title, description st
 
 // GenerateAcceptanceCriteria calls the LLM to generate acceptance criteria.
 // Returns a slice of criterion strings.
-func GenerateAcceptanceCriteria(ctx context.Context, pool *Pool, title, description string) ([]string, error) {
+func GenerateAcceptanceCriteria(ctx context.Context, pool PoolClient, title, description string) ([]string, error) {
 	userPrompt := fmt.Sprintf("Title: %s\n\nDescription: %s", title, description)
 	raw, err := pool.CallBlocking(ctx, FeatureKeyAC, acSystemPrompt, userPrompt, CallOptions{}, DiscardCost)
 	if err != nil {
@@ -296,7 +301,7 @@ func GenerateAcceptanceCriteria(ctx context.Context, pool *Pool, title, descript
 // Returns the drafted body and the USD cost of the call (0 on error) — callers
 // with a session to attribute it to should persist it, e.g. via
 // session.CostSinkForSessionUUID.
-func DraftPRDescription(ctx context.Context, pool *Pool, itemTitle, itemDescription, diff, branchName string) (string, float64, error) {
+func DraftPRDescription(ctx context.Context, pool PoolClient, itemTitle, itemDescription, diff, branchName string) (string, float64, error) {
 	if strings.TrimSpace(diff) == "" {
 		return "", 0, fmt.Errorf("DraftPRDescription: empty diff, nothing to describe")
 	}
@@ -315,7 +320,7 @@ func DraftPRDescription(ctx context.Context, pool *Pool, itemTitle, itemDescript
 
 // SuggestCommitMessage calls the LLM to generate a Conventional Commit message.
 // Diffs longer than maxDiffSizeCommit bytes are truncated before sending.
-func SuggestCommitMessage(ctx context.Context, pool *Pool, diff string) (string, error) {
+func SuggestCommitMessage(ctx context.Context, pool PoolClient, diff string) (string, error) {
 	if len(diff) > maxDiffSizeCommit {
 		diff = diff[:maxDiffSizeCommit]
 	}

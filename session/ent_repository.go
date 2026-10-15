@@ -49,6 +49,12 @@ type EntRepository struct {
 	dbPath        string
 	migrationMode bool // When true, enables dual-write mode for migration
 
+	// seedURI, when set (tests only, via withSeedURI), names a fully migrated
+	// shared-cache in-memory database that NewEntRepository copies into its own
+	// database instead of running schema creation and startup migrations — see
+	// NewTestEntRepository.
+	seedURI string
+
 	// itemChangePublisher is nil-safe — every hooked backlog mutation method
 	// nil-checks before calling it (publish is best-effort and never blocks
 	// or fails the underlying mutation). Wired via SetItemChangePublisher,
@@ -168,6 +174,10 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(time.Hour)
 
+	if repo.seedURI != "" {
+		return newSeededEntRepository(db, repo)
+	}
+
 	// Must be read BEFORE client.Schema.Create() below, which is what adds the
 	// enabled column this signal depends on being absent — see
 	// workflow_enabled_field_migration.go's doc comment for why this exact
@@ -183,9 +193,11 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// connection, entgo.io/ent/dialect/sql/schema.(*Atlas) has internal
 	// package-level state that races under `go test -parallel` when many
 	// NewEntRepository calls run schema creation concurrently.
+	stopSlowWatch := watchSlowOp("ent schema create (incl. wait for EntSchemaCreateMu)", entSchemaCreateSlowAfter)
 	EntSchemaCreateMu.Lock()
 	err = client.Schema.Create(context.Background())
 	EntSchemaCreateMu.Unlock()
+	stopSlowWatch()
 	if err != nil {
 		_ = client.Close() // best-effort cleanup; we're already returning the real startup error
 		return nil, fmt.Errorf("failed to create schema: %w", err)

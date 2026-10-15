@@ -73,6 +73,8 @@ func toProtoStuckReason(reason domain.StuckReason) sessionv1.StuckReason {
 		return sessionv1.StuckReason_STUCK_REASON_WORKTREE_INCONSISTENT
 	case domain.StuckReasonRepeatedNoopDispatch:
 		return sessionv1.StuckReason_STUCK_REASON_REPEATED_NOOP_DISPATCH
+	case domain.StuckReasonMergedPRUnverified:
+		return sessionv1.StuckReason_STUCK_REASON_MERGED_PR_UNVERIFIED
 	default:
 		return sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED
 	}
@@ -128,6 +130,8 @@ func fromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason {
 		return domain.StuckReasonWorktreeInconsistent
 	case sessionv1.StuckReason_STUCK_REASON_REPEATED_NOOP_DISPATCH:
 		return domain.StuckReasonRepeatedNoopDispatch
+	case sessionv1.StuckReason_STUCK_REASON_MERGED_PR_UNVERIFIED:
+		return domain.StuckReasonMergedPRUnverified
 	default:
 		return ""
 	}

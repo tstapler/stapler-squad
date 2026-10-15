@@ -63,6 +63,8 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"ResolveApproval":           "approval:resolve",
 	"ListPendingApprovals":      "approval:list-pending",
 	"CreateDebugSnapshot":       "debug:create-snapshot",
+	"GetCaptureTap":             "debug:get-capture-tap",
+	"SetCaptureTap":             "debug:set-capture-tap",
 	"GetNotificationHistory":    "notification:get-history",
 	"MarkNotificationRead":      "notification:mark-read",
 	"ClearNotificationHistory":  "notification:clear-history",
@@ -177,6 +179,8 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"GetPipelineMode":             "backlog:get-pipeline-mode",
 	"ListPipelineModes":           "backlog:list-pipeline-modes",
 	"AddBacklogItemDependency":    "backlog:add-item-dependency",
+	"RemoveBacklogItemDependency": "backlog:remove-item-dependency",
+	"ListBacklogItemDependencies": "backlog:list-item-dependencies",
 	"DispatchToJules":             "backlog:dispatch-to-jules",
 	// Jules config RPCs (google-jules-integration Epic 2.4)
 	"GetJulesConfig":       "jules:get-config",
@@ -276,6 +280,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// GitHub user RPCs
 	"ListUserPRs":               "github-user:list-prs",
 	"WatchUserPRs":              "github-user:watch-prs",
+	"NudgeSessionForPR":         "github-user:nudge-session-for-pr",
 	"GetGitHubAuthState":        "github-user:get-auth-state",
 	"AddGitHubAccountWithToken": "github-user:add-account-with-token",
 	"ListGitHubCLIHosts":        "github-user:list-cli-hosts",
@@ -333,6 +338,8 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// Tagging-classifier RPCs (tagging_classifier_service.go).
 	"GetTaggingClassifierConfig":    "tagging-classifier:get-config",
 	"UpdateTaggingClassifierConfig": "tagging-classifier:update-config",
+	"GetBackgroundModels":           "background-models:get",
+	"UpdateBackgroundModels":        "background-models:update",
 	"ReclassifySessionTags":         "tagging-classifier:reclassify-session",
 	"ListTaggingRules":              "tagging-rule:list",
 	"UpsertTaggingRule":             "tagging-rule:upsert",
@@ -407,6 +414,16 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// server/services/session_service.go's ProbeProgram handler, so
 	// markerFound stays false for this entry until one is added separately.
 	"ProbeProgram": "program:probe",
+	// Gate RPCs match their "// +api:" markers; the rest keep the method-name id
+	// ScanProto already produced, so committed registry files stay identical.
+	"GetDeliveryGateStats":            "notification:gate-stats",
+	"PruneHiddenSessionNotifications": "notification:prune-hidden",
+	"ReplyToPendingQuestion":          "session:reply-to-question",
+	"GetCompactionStats":              "GetCompactionStats",
+	"GetContextHistory":               "GetContextHistory",
+	"ListSessionsByCeilingTime":       "ListSessionsByCeilingTime",
+	"GetLLMBackendSettings":           "GetLLMBackendSettings",
+	"UpdateLLMBackendSettings":        "UpdateLLMBackendSettings",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

@@ -318,11 +318,15 @@ func (th *terminalHandlers) writeToSession(ctx context.Context, req mcpgo.CallTo
 	// SendKeys writes (session.SubmitDriverContent), never concatenated into
 	// one. Both branches are timeout-bounded so a wedged PTY write can't hang
 	// this handler indefinitely.
+	lease, busy := acquireMCPWriteLease(inst, session.LeaseWriterMCP)
+	if busy != nil {
+		return busy, nil
+	}
 	var err error
 	if pressEnter {
-		err = session.SubmitContentWithEnter(ctx, inst, input)
+		err = session.SubmitContentWithEnter(ctx, inst, lease, input)
 	} else {
-		err = session.SendKeysWithTimeout(ctx, inst, input, session.DefaultSendKeysTimeout)
+		err = session.SendKeysWithTimeout(ctx, inst, lease, input, session.DefaultSendKeysTimeout)
 	}
 	if err != nil {
 		return submitErrResult(err, "input"), nil
@@ -332,6 +336,20 @@ func (th *terminalHandlers) writeToSession(ctx context.Context, req mcpgo.CallTo
 		MCPResult:    MCPResult{Success: true},
 		BytesWritten: len(input),
 	}), nil
+}
+
+// errWriteInProgress is the retryable MCP code returned while another writer
+// (a driver key, a steer, a nudge, a Reply) holds the session's write lease.
+const errWriteInProgress = "WRITE_IN_PROGRESS"
+
+// acquireMCPWriteLease is every MCP pane-writing tool's acquirer (Story 5.0):
+// the second return is the retryable busy result when the lease is held.
+func acquireMCPWriteLease(inst *session.Instance, writer string) (*session.HeldLease, *mcpgo.CallToolResult) {
+	lease, ok := inst.TryTerminalWriteLease(writer)
+	if !ok {
+		return nil, errResult(errWriteInProgress, session.ErrLeaseBusy.Error(), "Retry in a few seconds")
+	}
+	return lease, nil
 }
 
 // submitErrResult maps an error from session.SubmitContentWithEnter/
@@ -398,8 +416,15 @@ func (th *terminalHandlers) sendControl(_ context.Context, req mcpgo.CallToolReq
 		return errResult_, nil
 	}
 
+	lease, busy := acquireMCPWriteLease(inst, session.LeaseWriterMCP)
+	if busy != nil {
+		return busy, nil
+	}
 	errCh := make(chan error, 1)
-	go func() { errCh <- inst.SendKeys(char) }()
+	go func() {
+		defer lease.Release() // the writing goroutine owns the release
+		errCh <- inst.SendKeys(char)
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -588,7 +613,11 @@ func (th *terminalHandlers) runCommand(ctx context.Context, req mcpgo.CallToolRe
 	// Send the command via session.SubmitContentWithEnter (BUG-031/BUG-047):
 	// content and the submit keystroke must travel as two separate SendKeys
 	// writes, never concatenated into one.
-	if err := session.SubmitContentWithEnter(ctx, inst, command); err != nil {
+	lease, busy := acquireMCPWriteLease(inst, session.LeaseWriterMCP)
+	if busy != nil {
+		return busy, nil
+	}
+	if err := session.SubmitContentWithEnter(ctx, inst, lease, command); err != nil {
 		return submitErrResult(err, "command"), nil
 	}
 
@@ -723,7 +752,11 @@ func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallTool
 	// Fallback: send via PTY send-keys (interactive sessions or sessions
 	// without UUID), via session.SubmitContentWithEnter (BUG-031) so content
 	// and the submit keystroke travel as two separate SendKeys writes.
-	if err := session.SubmitContentWithEnter(ctx, inst, message); err != nil {
+	lease, busy := acquireMCPWriteLease(inst, session.LeaseWriterMCP)
+	if busy != nil {
+		return busy, nil
+	}
+	if err := session.SubmitContentWithEnter(ctx, inst, lease, message); err != nil {
 		return submitErrResult(err, "message"), nil
 	}
 

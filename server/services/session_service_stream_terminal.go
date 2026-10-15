@@ -362,6 +362,10 @@ func (s *SessionService) StreamTerminal(
 		}()
 	}
 
+	// A hidden (background) session streams read-only: writer is nil and the
+	// loop below drops Input and Resize frames (ADR-005, Story 5.1).
+	writer, _ := AccessFor(instance).Writer(nil)
+
 	// Goroutine 2: Receive from client and forward to PTY (terminal input + resize)
 	wg.Add(1)
 	go func() {
@@ -403,6 +407,10 @@ func (s *SessionService) StreamTerminal(
 
 				switch data := msg.Data.(type) {
 				case *sessionv1.TerminalData_Input:
+					if writer == nil {
+						log.Debug("[StreamTerminal] read-only attach: input frame dropped", "session", msg.SessionId, "bytes", len(data.Input.Data))
+						continue
+					}
 					// Update terminal activity timestamps with user input
 					// This ensures LastMeaningfulOutput reflects user interaction via web UI
 					instance.UpdateTerminalTimestamps(string(data.Input.Data), true)
@@ -446,6 +454,10 @@ func (s *SessionService) StreamTerminal(
 					))
 
 				case *sessionv1.TerminalData_Resize:
+					if writer == nil {
+						log.Debug("[StreamTerminal] read-only attach: resize frame dropped", "session", msg.SessionId, "cols", data.Resize.Cols, "rows", data.Resize.Rows)
+						continue
+					}
 					// Handle terminal resize
 					cols := int(data.Resize.Cols)
 					rows := int(data.Resize.Rows)

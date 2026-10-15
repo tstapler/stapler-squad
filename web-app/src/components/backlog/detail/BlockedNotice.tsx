@@ -35,7 +35,7 @@ const KIND_CONFIG: Record<BlockedNoticeKind, { icon: string; label: string; fall
 
 export interface BlockedNoticeProps {
   kind: BlockedNoticeKind;
-  session: Pick<LinkedSession, "reviewVerdict" | "endReason" | "failureCapturePath">;
+  session: Pick<LinkedSession, "reviewVerdict" | "endReason" | "failureCapturePath" | "errorDetail">;
 }
 
 /**
@@ -81,7 +81,7 @@ export function BlockedNotice({ kind, session }: BlockedNoticeProps) {
   const config = KIND_CONFIG[kind];
   const summary = session.reviewVerdict?.summary;
   const headlessFailureText = session.endReason
-    ? `Headless call failed (${session.endReason}).${
+    ? `Headless call failed (${session.endReason}${session.errorDetail ? `: ${session.errorDetail}` : ""}).${
         session.failureCapturePath ? ` Full raw output captured on the server at: ${session.failureCapturePath}` : ""
       }`
     : undefined;

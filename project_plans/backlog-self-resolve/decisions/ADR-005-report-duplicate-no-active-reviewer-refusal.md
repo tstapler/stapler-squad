@@ -74,3 +74,13 @@ would itself be a plan defect, not a faithful implementation of "every FR."
   (`request_review`) and FR5's messaging (`report_duplicate`) either way, so this decision
   doesn't add or remove any shared infrastructure, only whether `report_duplicate` consults
   it for a hard-refusal branch versus message-wording only.
+
+## Amendment (2026-10-04): report_duplicate archives directly from any stage and role
+
+`report_duplicate` no longer routes to `review`. It archives directly (CAS-guarded, recorded in `BacklogStatusEvent` with `triggered_by=agent`) for any caller — a session linked in any role (work, triage, review) or unlinked — on an item in any non-terminal status (idea, refining, ready, queued, in_progress, review, pr_pending). The review gate is never invoked, so an already-shipped item with an empty diff cannot spiral through UNVERIFIABLE/PARTIAL.
+
+- The caller's own open ItemSession is ended by the closure.
+- If any other session still has an open ItemSession, the call is refused naming that session's role and UUID; the item is unchanged.
+- `duplicate_ref` is still verified on GitHub before any mutation.
+- Idempotency is keyed on the archive status-event note (`duplicate of <ref>: …`). A done/archived item with a different ref is rejected.
+- This supersedes the "active-reviewer" wording above; no review is triggered at all.

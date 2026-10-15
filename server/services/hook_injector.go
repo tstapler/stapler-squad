@@ -1,14 +1,19 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/localtoken"
 )
 
 // HookName is a typed constant for the built-in hooks that can be injected.
@@ -304,7 +309,14 @@ func InjectHooksConfig(rootDir, sessionTitle string, hooks []HookName, opts ...I
 		remoteTargeted := cfg.remote != nil && hookName == HookPermissionApproval
 		curlCmd := buildHookCommand(remoteTargeted, cfg, url, sessionTitle)
 
-		if hookAlreadyPresent(hooksMap[eventKey], remoteTargeted, cfg.remote, url) {
+		if !remoteTargeted {
+			if merged, present, changed := reconcileLocalHook(hooksMap[eventKey], url, curlCmd); present {
+				if changed {
+					hooksMap[eventKey] = merged
+				}
+				continue
+			}
+		} else if hookAlreadyPresent(hooksMap[eventKey], remoteTargeted, cfg.remote, url) {
 			continue
 		}
 
@@ -370,16 +382,115 @@ func readExistingHooksSettings(settingsPath string) (raw map[string]json.RawMess
 }
 
 // buildHookCommand returns the shell command InjectHooksConfig writes for one hook event --
-// either remoteApprovalHookCommand's socat pipeline (remoteTargeted) or the local curl command,
-// unchanged from pre-Phase-5 behavior for every non-remote-targeted call.
+// either remoteApprovalHookCommand's socat pipeline (remoteTargeted) or the local curl command.
 func buildHookCommand(remoteTargeted bool, cfg injectHookOptions, url, sessionTitle string) string {
 	if remoteTargeted {
 		return remoteApprovalHookCommand(*cfg.remote)
 	}
-	return fmt.Sprintf(
-		"curl -s --max-time %d -X POST '%s' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s' -d @-",
-		hookTimeout, url, sessionTitle,
-	)
+	return buildLocalHookCommand(url, sessionTitle)
+}
+
+// shellSingleQuote quotes s for a POSIX shell: ' becomes '\”.
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// curlHeaderFileSupported is overridden by tests. curl reads `-H @file` since 7.55.
+var curlHeaderFileSupported = sync.OnceValue(func() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := safeexec.CommandContext(ctx, "curl", "--version").Output()
+	if err != nil {
+		return true // no curl to ask: hooks fail regardless, keep the proof branch
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) < 2 {
+		return true
+	}
+	var major, minor int
+	if _, err := fmt.Sscanf(fields[1], "%d.%d", &major, &minor); err != nil {
+		return true
+	}
+	return major > 7 || (major == 7 && minor >= 55)
+})
+
+// buildLocalHookCommand is the one producer of the local curl hook command, used by
+// InjectHooksConfig and InjectHookConfig so the two cannot drift. The proof and the
+// local-token header ride in files read through `-H @file`, never in argv, and every
+// branch is guarded by [ -f ] && [ -r ]: curl exits 26 without opening a connection
+// when a -H file is missing, which would stop the approval hook of every session.
+func buildLocalHookCommand(url, sessionTitle string) string {
+	var pre strings.Builder
+	dir, dirErr := config.GetConfigDir()
+	if dirErr == nil && curlHeaderFileSupported() {
+		pre.WriteString("F=" + shellSingleQuote(filepath.Join(dir, hookProofDirName)+"/") + `"$STAPLER_SESSION_UUID"; `)
+	}
+	if dirErr == nil {
+		if _, err := os.Stat(localtoken.HeaderPath(dir)); err == nil && curlHeaderFileSupported() {
+			pre.WriteString("T=" + shellSingleQuote(localtoken.HeaderPath(dir)) + "; ")
+		}
+	}
+	hasProof := strings.HasPrefix(pre.String(), "F=")
+	hasToken := strings.Contains(pre.String(), "T=")
+	var b strings.Builder
+	b.WriteString(pre.String())
+	if hasProof || hasToken {
+		b.WriteString("set --; ")
+	}
+	if hasProof {
+		b.WriteString(`[ -n "$STAPLER_SESSION_UUID" ] && [ -f "$F" ] && [ -r "$F" ] && set -- -H "@$F"; `)
+	}
+	if hasToken {
+		b.WriteString(`[ -f "$T" ] && [ -r "$T" ] && set -- "$@" -H "@$T"; `)
+	}
+	fmt.Fprintf(&b, "curl -s --max-time %d -X POST %s -H 'Content-Type: application/json' -H %s",
+		hookTimeout, shellSingleQuote(url), shellSingleQuote("X-CS-Session-ID: "+sessionTitle))
+	if hasProof || hasToken {
+		b.WriteString(` "$@"`)
+	}
+	b.WriteString(" -d @-")
+	return b.String()
+}
+
+// replaceStaleHookCommand rewrites, in place, every command hook of groups that
+// references url but differs from desired, so an entry written by an older
+// build gains the proof and token branches without a duplicate. It reports
+// whether any entry is present and whether any was rewritten.
+func replaceStaleHookCommand(groups []hookMatcherGroup, url, desired string) (present, changed bool) {
+	for gi := range groups {
+		for hi := range groups[gi].Hooks {
+			h := &groups[gi].Hooks[hi]
+			if h.Type != "command" || !hookCommandReferencesURL(h.Command, url) {
+				continue
+			}
+			present = true
+			if h.Command != desired {
+				h.Command = desired
+				changed = true
+			}
+		}
+	}
+	return present, changed
+}
+
+// reconcileLocalHook is replaceStaleHookCommand over one event's raw group list.
+func reconcileLocalHook(existingRaw json.RawMessage, url, desired string) (merged json.RawMessage, present, changed bool) {
+	if existingRaw == nil {
+		return existingRaw, false, false
+	}
+	var groups []hookMatcherGroup
+	if err := json.Unmarshal(existingRaw, &groups); err != nil {
+		return existingRaw, false, false
+	}
+	present, changed = replaceStaleHookCommand(groups, url, desired)
+	if !changed {
+		return existingRaw, present, false
+	}
+	out, err := json.Marshal(groups)
+	if err != nil {
+		return existingRaw, present, false
+	}
+	return json.RawMessage(out), present, true
 }
 
 // hookAlreadyPresent reports whether existingRaw (one event's current hookMatcherGroup list, or

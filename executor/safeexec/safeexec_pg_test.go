@@ -19,6 +19,8 @@ import (
 	"go.opentelemetry.io/otel"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // syncBuffer wraps bytes.Buffer with a mutex so it's safe to use as slog's
@@ -221,7 +223,7 @@ func Test_CommandContextPG_LogsSigtermAtDebug(t *testing.T) {
 
 	// Let the escalation timer resolve (it should no-op: sleep already exited
 	// on SIGTERM) before returning, so it can't fire during a later test.
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond) //nolint:notimesleeptest must outlast the real escalation timer so it cannot fire during a later test
 
 	if !strings.Contains(logs.String(), "sent SIGTERM to process group") {
 		t.Fatalf("expected Debug SIGTERM log, got: %s", logs.String())
@@ -245,7 +247,7 @@ func Test_CommandContextPG_SigtermSucceeds_NoEscalationSignal(t *testing.T) {
 	// shouldn't do anything, since sleep already exited on SIGTERM) before
 	// asserting the negative — generous bound per the flaky-test rule, not a
 	// tight race with the timer.
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond) //nolint:notimesleeptest negative assertion: must outlast the real escalation timer to prove it never logs
 
 	if strings.Contains(logs.String(), "level=WARN") {
 		t.Fatalf("expected no Warn-level escalation log when SIGTERM succeeds, got: %s", logs.String())
@@ -273,13 +275,9 @@ func Test_CommandContextPG_EscalatesToSigkill_LogsWarnWithSnapshot(t *testing.T)
 
 	// Wait past the grace period for the escalation to fire, with a
 	// generous margin over the deterministic minimum.
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if strings.Contains(logs.String(), "escalated to SIGKILL") {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	_ = wait.WaitForCondition(func() bool {
+		return strings.Contains(logs.String(), "escalated to SIGKILL")
+	}, wait.WaitConfig{Timeout: 3 * time.Second, PollInterval: 20 * time.Millisecond, Description: "SIGKILL escalation log"})
 
 	record := findJSONLogRecord(t, logs, "escalated to SIGKILL")
 	if record == nil {
@@ -332,7 +330,7 @@ func Test_CommandContextPG_CancelReturnsPromptly(t *testing.T) {
 	// Let the escalation timer resolve (sleep already exited on SIGTERM, so
 	// this is a no-op ESRCH) before returning, so it can't fire mid-suite
 	// against a later test's captured logger or a reused pgid.
-	time.Sleep(grace + 500*time.Millisecond)
+	time.Sleep(grace + 500*time.Millisecond) //nolint:notimesleeptest must outlast the real escalation timer so it cannot fire against a later test's logger or reused pgid
 }
 
 func Test_procStateSnapshot_ReturnsKnownStateForLiveProcess(t *testing.T) {

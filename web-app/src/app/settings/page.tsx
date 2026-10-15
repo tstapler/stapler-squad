@@ -13,6 +13,7 @@ import { PushNotificationSettings } from "@/components/settings/PushNotification
 import { SlackNotificationSettings } from "@/components/settings/SlackNotificationSettings";
 import { ThemePicker } from "@/components/settings/ThemePicker";
 import { InputModeSetting } from "@/components/settings/InputModeSetting";
+import { TerminalSettings } from "@/components/settings/TerminalSettings";
 import { ConfigPageContent } from "@/app/config/ConfigPageContent";
 import { KeyboardShortcutsTab } from "./KeyboardShortcutsTab";
 import { usePageView } from "@/lib/analytics/usePageView";
@@ -119,6 +120,16 @@ function SettingsPageInner() {
                 Tag Classification (AI tagging model) →
               </Link>
             </section>
+            <section className={styles.section}>
+              <Link href={routes.settingsLlmBackends} className={styles.helpLink} data-testid="settings-llm-backends-link">
+                LLM Backends (claude / consolette / agy / gemini / opencode) →
+              </Link>
+            </section>
+            <section className={styles.section}>
+              <Link href={routes.settingsBackgroundModels} className={styles.helpLink} data-testid="settings-background-models-link">
+                Background Models (cheaper models and effort for unattended work) →
+              </Link>
+            </section>
             {/* Help subsection */}
             <section className={styles.section}>
               <div className={styles.helpSection}>
@@ -154,6 +165,9 @@ function SettingsPageInner() {
             </section>
             <section className={styles.section}>
               <InputModeSetting />
+            </section>
+            <section className={styles.section}>
+              <TerminalSettings />
             </section>
             <section className={styles.section}>
               <PushNotificationSettings />

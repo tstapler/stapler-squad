@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -140,29 +141,14 @@ func (g *GitWorktree) runGHCommand(ctx context.Context, callSite string, args ..
 	return output, err
 }
 
-// runGitCommand executes a git command scoped to path and returns any error.
-// Routes through g.commandRunner() unconditionally, exactly like every other
-// call site in this file (PushChanges, PushBranch, OpenBranchURL, CreatePR,
-// findExistingPR, GetPRStatus, EnablePRAutoMerge, RequestCopilotReview,
-// ClosePR, IsPRMerged) — see ADR-002's addendum for the history here: this
-// was previously the one call site with a g.cmdExec-gated branch (an
-// executor.Executor test-injection seam, never circuit-breaker-wrapped
-// anywhere in this package, unlike session/tmux's genuinely orthogonal
-// cmdExec), which made it dead code for all ~25 production callers of this
-// method. IsDirtyWithHint, stageAndCommit, StageAllExceptScaffolding, and
-// HasStagedChanges have since moved onto go-git directly (no subprocess —
-// the `prefer-go-git-over-subshells` skill); RenameBranch and every
-// worktree_ops.go worktree add/remove/prune/list call remain on this seam.
-func (g *GitWorktree) runGitCommand(path string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	output, err := g.commandRunner().Run(ctx, path, "git", args...)
-	if err != nil {
-		return "", fmt.Errorf("git command failed: %s (%w)", output, err)
+// pushSetUpstream is `git push -u origin <branch>` from the worktree.
+func (g *GitWorktree) pushSetUpstream(ctx context.Context) error {
+	if g.branchName == "" {
+		return fmt.Errorf("worktree has no branch name to push")
 	}
-
-	return string(output), nil
+	return g.gitBackend().Push(ctx, g.locate(g.worktreePath), backend.PushRequest{
+		Remote: "origin", Branch: backend.BranchName(g.branchName), SetUpstream: true,
+	})
 }
 
 // PushChanges commits and pushes changes in the worktree to the remote branch
@@ -191,9 +177,9 @@ func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
 		// If sync fails, try creating the branch on remote first
 		gitPushCtx, gitPushCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer gitPushCancel()
-		if pushOutput, pushErr := g.commandRunner().Run(gitPushCtx, g.worktreePath, "git", "push", "-u", "origin", g.branchName); pushErr != nil {
+		if pushErr := g.pushSetUpstream(gitPushCtx); pushErr != nil {
 			log.Error("failed to push branch", "err", pushErr)
-			return fmt.Errorf("failed to push branch: %s (%w)", pushOutput, pushErr)
+			return fmt.Errorf("failed to push branch: %w", pushErr)
 		}
 	}
 
@@ -241,7 +227,9 @@ func (g *GitWorktree) CommitChanges(commitMessage string) error {
 // before the LLM call reveals the item's slug, then renames it afterward to the
 // same "backlog/<item>" branch a later SpawnSessionFromItem will look for.
 func (g *GitWorktree) RenameBranch(newBranchName string) error {
-	if _, err := g.runGitCommand(g.worktreePath, "branch", "-m", newBranchName); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := g.gitBackend().RenameCurrentBranch(ctx, g.locate(g.worktreePath), backend.BranchName(newBranchName)); err != nil {
 		return fmt.Errorf("failed to rename branch to %q: %w", newBranchName, err)
 	}
 	g.branchName = newBranchName
@@ -398,8 +386,8 @@ func (g *GitWorktree) PrimeDirtyCacheAt(t time.Time) {
 // manual commit, after running git operations, or in tests after writing files directly).
 func (g *GitWorktree) InvalidateDirtyCache() {
 	g.isDirtyCache.Store(dirtyCacheState{}) // zero time signals "cache invalid"
-	g.gitignoreFS.reset()
-	g.headTreeCache.v.Store(headTreeCacheEntry{}) //nolint:exhaustruct // zero entry, defensive reset — see headTreeCache's doc comment
+	g.gitignoreFS.Reset()
+	g.headTreeCache.Reset() // defensive reset — see headTreeCache's doc comment
 }
 
 // IsDirty checks if the worktree has uncommitted changes.
@@ -536,8 +524,8 @@ func (g *GitWorktree) OpenBranchURL() error {
 func (g *GitWorktree) PushBranch() error {
 	pushCtx, pushCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer pushCancel()
-	if out, err := g.commandRunner().Run(pushCtx, g.worktreePath, "git", "push", "-u", "origin", g.branchName); err != nil {
-		return fmt.Errorf("failed to push branch: %s (%w)", out, err)
+	if err := g.pushSetUpstream(pushCtx); err != nil {
+		return fmt.Errorf("failed to push branch: %w", err)
 	}
 	return nil
 }
@@ -658,14 +646,14 @@ func (g *GitWorktree) findExistingPR() (string, int, error) {
 // not existing locally — so a check failure never causes a caller to skip PR
 // creation for a branch that may well need it.
 func (g *GitWorktree) HasCommitsAheadOfMain(mainBranch string) (bool, error) {
-	status, err := BranchAheadBehind(g.repoPath, g.branchName, mainBranch)
+	exists, ahead, err := BranchHasCommitsAhead(g.repoPath, g.branchName, mainBranch)
 	if err != nil {
 		return true, err
 	}
-	if !status.BranchExists {
+	if !exists {
 		return true, nil
 	}
-	return status.AheadOfMain > 0, nil
+	return ahead, nil
 }
 
 // reviewInfo captures the blocking review that tripped HasBlockingReviews.
@@ -729,6 +717,10 @@ func parseFeedbackTimestamp(raw, fieldLabel string) time.Time {
 type PRStatus struct {
 	// CIFailing is true when at least one CI check has a terminal failure.
 	CIFailing bool
+	// CIPending is true when at least one check has not reached a terminal
+	// conclusion yet (queued/in progress, or a legacy status still PENDING).
+	// Without it, "CI still running" is indistinguishable from "no CI configured".
+	CIPending bool
 	// HasBlockingReviews is true when a reviewer has requested changes.
 	HasBlockingReviews bool
 	// HasConflicts is true when GitHub reports mergeStateStatus == "DIRTY" or
@@ -920,6 +912,16 @@ func ParsePRStatusPayload(raw []byte) (*PRStatus, error) {
 	return parsePRStatusPayload(raw)
 }
 
+// isCheckInFlight reports whether a check with no terminal conclusion is still
+// running (CheckRun status) or awaiting a result (legacy StatusContext state).
+func isCheckInFlight(status, state string) bool {
+	switch status {
+	case "QUEUED", "IN_PROGRESS", "PENDING", "WAITING", "REQUESTED":
+		return true
+	}
+	return state == "PENDING" || state == "EXPECTED"
+}
+
 // parsePRStatusPayload parses gh pr view's combined JSON output, evaluates
 // all PR-status signals into structured fields, and renders FeedbackText
 // from them. It has no I/O dependency and is directly unit-testable.
@@ -999,6 +1001,10 @@ func parsePRStatusPayload(raw []byte) (*PRStatus, error) {
 				entry += " (" + url + ")"
 			}
 			status.failedChecks = append(status.failedChecks, entry)
+			continue
+		}
+		if conclusion == "" && isCheckInFlight(strings.ToUpper(check.Status), state) {
+			status.CIPending = true
 		}
 	}
 

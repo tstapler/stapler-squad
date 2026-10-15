@@ -255,14 +255,34 @@ func (s *Scheduler) Remove(workflowID string) error {
 func (s *Scheduler) FireNow(ctx context.Context, wf *ent.Workflow, arg string) (string, error) {
 	title := deriveWorkflowSessionTitle(wf, arg)
 	prompt := buildTemplatedPrompt(wf, arg, title)
-	return s.fireTrigger(ctx, wf, fireParams{renderedPrompt: prompt, title: title})
+	return s.fireTrigger(ctx, wf, fireParams{
+		renderedPrompt: prompt,
+		title:          title,
+		rerender:       func(t string) string { return buildTemplatedPrompt(wf, arg, t) },
+	})
 }
 
 // defaultWorkflowSessionTitle is the timestamp-based title every workflow fire
 // used unconditionally before deriveWorkflowSessionTitle: still the fallback
-// when arg is empty or isn't a recognizable GitHub reference.
+// when arg is empty or isn't a recognizable GitHub reference. Seconds plus a
+// short random suffix keep concurrent same-minute runs from colliding on the
+// session-title uniqueness check.
 func defaultWorkflowSessionTitle(wf *ent.Workflow) string {
-	return fmt.Sprintf("%s — %s", wf.Name, time.Now().Format("2006-01-02 15:04"))
+	return fmt.Sprintf("%s — %s %s", wf.Name, time.Now().Format("2006-01-02 15:04:05"), uuid.NewString()[:titleRandomSuffixLen])
+}
+
+// titleRandomSuffixLen is the hex-char length of the default title's random suffix.
+const titleRandomSuffixLen = 4
+
+// maxTitleDedupeAttempts bounds fireTrigger's already_exists retries.
+const maxTitleDedupeAttempts = 20
+
+// dedupedTitle returns base with " (n)" appended for n >= 2.
+func dedupedTitle(base string, n int) string {
+	if n < 2 {
+		return base
+	}
+	return fmt.Sprintf("%s (%d)", base, n)
 }
 
 // deriveWorkflowSessionTitle picks the initial title for a workflow-fired
@@ -386,6 +406,7 @@ func (s *Scheduler) FireTriggerChained(ctx context.Context, wf *ent.Workflow, pr
 		renderedPrompt: prompt,
 		chainDepth:     chainDepth,
 		title:          title,
+		rerender:       func(t string) string { return buildTemplatedPrompt(wf, priorItemSummary, t) },
 	})
 }
 
@@ -400,6 +421,9 @@ type fireParams struct {
 	// title is the session's starting title (see
 	// deriveWorkflowSessionTitle/defaultWorkflowSessionTitle).
 	title string
+	// rerender rebuilds the prompt for a deduped title; nil means the prompt
+	// doesn't embed the title and is reused as-is.
+	rerender func(title string) string
 }
 
 // fireTrigger is FireTrigger/FireTriggerChained's shared implementation —
@@ -478,6 +502,18 @@ func (s *Scheduler) fireTrigger(ctx context.Context, wf *ent.Workflow, p firePar
 		TriggeredByChainDepth: chainDepth,
 	})
 	resp, err := s.sessionSvc.CreateSession(ctx, req)
+	// Auto-dedupe a title collision (e.g. re-running the same PR reference, or a
+	// racing sibling fire): retry with " (n)" appended. The prompt embeds the
+	// title via {{session_id}}, so re-render it to keep update_session targeting right.
+	baseTitle := title
+	for n := 2; n <= maxTitleDedupeAttempts && connect.CodeOf(err) == connect.CodeAlreadyExists; n++ {
+		title = dedupedTitle(baseTitle, n)
+		req.Msg.Title = title
+		if p.rerender != nil {
+			req.Msg.InitialPrompt = p.rerender(title)
+		}
+		resp, err = s.sessionSvc.CreateSession(ctx, req)
+	}
 	if err != nil {
 		log.Error("[WorkflowScheduler] FireTrigger: failed to create session", "slug", wf.Slug, "err", err)
 		return "", fmt.Errorf("create session for workflow %q: %w", wf.Slug, err)

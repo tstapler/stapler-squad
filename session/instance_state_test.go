@@ -144,7 +144,7 @@ func TestSetCreationProgress_should_UpdateTimestamp_When_Called(t *testing.T) {
 
 	// A second call bumps the timestamp again.
 	firstTimestamp := got
-	time.Sleep(time.Millisecond)
+	waitForClockDelta(t, time.Millisecond)
 	inst.SetCreationProgress("Starting tmux session...")
 	assert.True(t, inst.CreationProgressUpdatedAt().After(firstTimestamp), "second call must advance the timestamp")
 }

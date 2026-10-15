@@ -269,6 +269,7 @@ func TestNotifyReviewQueueItem_NoOps_When_WebhookNotConfigured(t *testing.T) {
 	}, 750*time.Millisecond, 20*time.Millisecond, "no send should have been attempted")
 }
 
+// T-OS-01: Slack payload characterization (see slack_gate_test.go).
 func TestNotifyReviewQueueItem_PostsExpectedBlockKitPayload_ToHTTPTestServer(t *testing.T) {
 	t.Parallel()
 	srv, ch := startCapturingSlackServer(t)
@@ -333,6 +334,7 @@ func TestNotifyApprovalPending_NoOps_When_WebhookNotConfigured(t *testing.T) {
 	}, 750*time.Millisecond, 20*time.Millisecond, "no send should have been attempted")
 }
 
+// T-OS-01: Slack payload characterization (see slack_gate_test.go).
 func TestNotifyApprovalPending_PostsExpectedPayload_ToHTTPTestServer(t *testing.T) {
 	t.Parallel()
 	srv, ch := startCapturingSlackServer(t)
@@ -488,11 +490,16 @@ func TestNotifyApprovalPending_OmitsActionsBlock_When_ApprovalDisabled(t *testin
 
 func TestSlackNotifier_SendFailure_DoesNotBlockCaller(t *testing.T) {
 	t.Parallel()
+	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(10 * time.Second)
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) }) // runs before srv.Close so a still-hanging handler returns
 
 	cfg := slackConfigWithWebhook(t, srv.URL)
 	n := NewSlackNotifier()

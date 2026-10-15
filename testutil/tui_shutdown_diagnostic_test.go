@@ -24,7 +24,7 @@ func TestTUIShutdownDiagnostic(t *testing.T) {
 		session, err := StartExpectSession(t, config)
 		require.NoError(t, err)
 
-		time.Sleep(1 * time.Second) // Let TUI initialize
+		awaitRunning(t, session)
 
 		// Measure quit sequence
 		quitStart := time.Now()

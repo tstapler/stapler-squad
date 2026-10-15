@@ -42,7 +42,7 @@ type GuidanceRequestService struct {
 // idea/queued status, so calling it unconditionally on every backlog-item
 // answer (not just ones that actually halted triage) is safe.
 type TriageRespawner interface {
-	AutoRespawnTriage(ctx context.Context, itemID string) error
+	ResumeTriage(ctx context.Context, itemID string) error
 }
 
 // NewGuidanceRequestService creates a GuidanceRequestService backed by
@@ -105,8 +105,8 @@ func (s *GuidanceRequestService) resumeTriageIfHalted(data *session.GuidanceRequ
 		if err := s.storage.AppendActivityNote(ctx, itemID, "", "Guidance Request", note); err != nil {
 			log.WarningLog().Printf("[GuidanceRequestService] resumeTriageIfHalted: AppendActivityNote item=%s: %v", itemID, err)
 		}
-		if err := s.triageRespawner.AutoRespawnTriage(ctx, itemID); err != nil {
-			log.WarningLog().Printf("[GuidanceRequestService] resumeTriageIfHalted: AutoRespawnTriage item=%s: %v", itemID, err)
+		if err := s.triageRespawner.ResumeTriage(ctx, itemID); err != nil {
+			log.WarningLog().Printf("[GuidanceRequestService] resumeTriageIfHalted: ResumeTriage item=%s: %v", itemID, err)
 		}
 	}()
 }

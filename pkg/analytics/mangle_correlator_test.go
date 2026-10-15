@@ -33,11 +33,28 @@ func TestMangleCorrelator_Mutated(t *testing.T) {
 	}
 }
 
+// ageCorrelator shifts every recorded timestamp back by d, simulating the
+// passage of time without sleeping.
+func ageCorrelator(c *MangleCorrelator, d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for k, obs := range c.pending {
+		obs.WallTime = obs.WallTime.Add(-d)
+		c.pending[k] = obs
+	}
+	for k, t := range c.ordinalLastSeen {
+		c.ordinalLastSeen[k] = t.Add(-d)
+	}
+	for k, t := range c.transportLastSeen {
+		c.transportLastSeen[k] = t.Add(-d)
+	}
+}
+
 func TestMangleCorrelator_DoesNotReportStrippedWithoutActiveTransport(t *testing.T) {
 	spy := &spyWriter{}
 	c := NewMangleCorrelator(20*time.Millisecond, 100)
 	c.RecordStage1("no-consumer", "SGR", "abc123", 20)
-	time.Sleep(40 * time.Millisecond)
+	ageCorrelator(c, 40*time.Millisecond)
 	c.EvictExpired(context.Background(), spy)
 	if len(spy.events) != 0 {
 		t.Fatalf("inactive transport produced false stripped events: %+v", spy.events)
@@ -49,8 +66,8 @@ func TestMangleCorrelator_Stripped(t *testing.T) {
 	c := NewMangleCorrelator(100*time.Millisecond, 100)
 	c.RecordStage1("sess1", "SGR", "abc123", 20)
 	c.ObserveTransport("sess1")
-	// Wait for TTL to expire
-	time.Sleep(200 * time.Millisecond)
+	// Age past the TTL
+	ageCorrelator(c, 200*time.Millisecond)
 	c.EvictExpired(context.Background(), spy)
 	if len(spy.events) != 1 || !spy.events[0].Mangled || spy.events[0].MangleType != "stripped" {
 		t.Errorf("expected 1 stripped event, got %+v", spy.events)
@@ -130,7 +147,7 @@ func TestMangleCorrelator_EvictExpired_PrunesStaleOrdinalCounters(t *testing.T) 
 		t.Fatalf("expected ordinal counters to be present immediately after use, s1=%v s2=%v", s1ok, s2ok)
 	}
 
-	time.Sleep(200 * time.Millisecond)
+	ageCorrelator(c, 200*time.Millisecond)
 	c.EvictExpired(context.Background(), spy)
 	c.PruneStaleOrdinals()
 
@@ -160,7 +177,7 @@ func TestMangleCorrelator_EvictExpired_DoesNotScanOrdinalMaps(t *testing.T) {
 	c.RecordStage1("sess1", "SGR", "hash-1", 5)
 	c.CheckStage2("sess1", "SGR", "hash-1", 5)
 
-	time.Sleep(200 * time.Millisecond)
+	ageCorrelator(c, 200*time.Millisecond)
 	c.EvictExpired(context.Background(), spy)
 
 	ok := ordinalKey{"sess1", "SGR"}

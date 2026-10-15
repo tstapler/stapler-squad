@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,6 +35,24 @@ func newAwaitTestInstance(t *testing.T, svc *SessionService, title string) *sess
 	return inst
 }
 
+// pollEnteredCtx closes entered the first time Done() is called. awaitCreationTerminal
+// calls Done() only when it first enters its select loop, i.e. after its immediate
+// initial check, so entered signals "the awaiter has observed the instance and is polling".
+type pollEnteredCtx struct {
+	context.Context
+	once    sync.Once
+	entered chan struct{}
+}
+
+func newPollEnteredCtx(parent context.Context) *pollEnteredCtx {
+	return &pollEnteredCtx{Context: parent, entered: make(chan struct{})}
+}
+
+func (c *pollEnteredCtx) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.entered) })
+	return c.Context.Done()
+}
+
 // Story 2.3.3: AwaitCreationTerminal — the bounded wait primitive.
 
 // TestAwaitCreationTerminal_should_ReturnActiveOutcome_When_InstanceTransitionsBeforeTimeout
@@ -47,14 +66,15 @@ func TestAwaitCreationTerminal_should_ReturnActiveOutcome_When_InstanceTransitio
 	inst := newAwaitTestInstance(t, svc, "await-active")
 	epoch := inst.CreationEpoch()
 
+	ctx := newPollEnteredCtx(context.Background())
 	go func() {
-		time.Sleep(30 * time.Millisecond)
+		<-ctx.entered
 		applied := inst.TryForceStatusIfEpoch(epoch, session.Active, "")
 		assert.True(t, applied)
 	}()
 
 	start := time.Now()
-	outcome, err := svc.awaitCreationTerminal(context.Background(), "await-active", 5*time.Second, 10*time.Millisecond)
+	outcome, err := svc.awaitCreationTerminal(ctx, "await-active", 5*time.Second, 10*time.Millisecond)
 	elapsed := time.Since(start)
 
 	require.NoError(t, err)
@@ -108,13 +128,14 @@ func TestAwaitCreationTerminal_should_ReturnErrCreationVanished_When_InstanceIsR
 	svc := newCreateTestService(t, storage)
 	newAwaitTestInstance(t, svc, "await-vanish")
 
+	ctx := newPollEnteredCtx(context.Background())
 	go func() {
-		time.Sleep(30 * time.Millisecond)
+		<-ctx.entered
 		svc.reviewQueuePoller.RemoveInstance("await-vanish")
 	}()
 
 	start := time.Now()
-	outcome, err := svc.awaitCreationTerminal(context.Background(), "await-vanish", 5*time.Second, 10*time.Millisecond)
+	outcome, err := svc.awaitCreationTerminal(ctx, "await-vanish", 5*time.Second, 10*time.Millisecond)
 	elapsed := time.Since(start)
 
 	require.ErrorIs(t, err, ErrCreationVanished)
@@ -132,9 +153,11 @@ func TestAwaitCreationTerminal_should_ReturnCtxErr_When_CallerContextEndsFirst(t
 	svc := newCreateTestService(t, storage)
 	newAwaitTestInstance(t, svc, "await-ctx-done")
 
-	ctx, cancel := context.WithCancel(context.Background())
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := newPollEnteredCtx(cancelCtx)
 	go func() {
-		time.Sleep(20 * time.Millisecond)
+		<-ctx.entered
 		cancel()
 	}()
 

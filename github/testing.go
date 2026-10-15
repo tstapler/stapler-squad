@@ -1,6 +1,9 @@
 package github
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // ResetRateLimiterForTest swaps in a fresh DefaultRateLimiter for the
 // duration of t, restoring the original via t.Cleanup. Any test — in this
@@ -27,4 +30,10 @@ func ResetRateLimiterForTest(t testing.TB) {
 func ResetPriorityAdmissionFlagCacheForTest() {
 	ghPriorityAdmissionFlagCacheVal.Store(false)
 	ghPriorityAdmissionFlagCacheAt.Store(0)
+}
+
+// SeedPRsForTest installs prs as the cache's current snapshot so a
+// consumer-package test can drive Annotate without a live GitHub fetch.
+func (c *UserPRCache) SeedPRsForTest(prs []UserPR) {
+	c.snapshot.Store(&userPRSnapshot{prs: prs, capturedAt: time.Now()})
 }

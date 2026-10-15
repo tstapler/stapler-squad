@@ -21,7 +21,7 @@ import (
 // so UpdateTaggingClassifierConfig's SaveConfig never touches the real config.json.
 func isolatedClassifierService(t *testing.T) *SessionService {
 	t.Helper()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(createTestStorage(t), bus)
@@ -168,7 +168,7 @@ func reclassifyFixture(t *testing.T, client headless.PoolClient, title string) (
 	svc := newCreateTestService(t, createTestStorage(t))
 	poller := session.NewSessionTagClassificationPoller(client, classifier.NewTaggingEngine())
 	svc.SetSessionTagPoller(poller)
-	inst, err := svc.CreateDirectorySession(context.Background(), title, t.TempDir(), "", nil, true, false, "")
+	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), SessionSpawnOptions{Title: title, OneShot: true})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 	return svc, inst

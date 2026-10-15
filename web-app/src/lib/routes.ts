@@ -25,6 +25,8 @@ export const routes = {
   settingsRemotes: "/settings/remotes",
   settingsJules: "/settings/jules",
   settingsTaggingClassifier: "/settings/tagging-classifier",
+  settingsLlmBackends: "/settings/llm-backends",
+  settingsBackgroundModels: "/settings/background-models",
   backlog: "/backlog",
   backlogBoard: "/backlog/board",
   sessionsImport: "/sessions/import",
@@ -41,6 +43,7 @@ export const routes = {
     return `/?${params.toString()}`;
   },
   unfinishedItem: (itemId: string) => `/unfinished?item=${encodeURIComponent(itemId)}`,
+  unfinishedTab: (tab: string) => `/unfinished?tab=${encodeURIComponent(tab)}`,
 } as const;
 
 export type Route = typeof routes;

@@ -39,7 +39,7 @@ func TestNotificationPushGateClassification(t *testing.T) {
 		h.broadcastQuestionNotification("sess-1", classifier.PermissionRequestPayload{
 			ToolName:  "AskUserQuestion",
 			ToolInput: map[string]interface{}{"prompt": "Which approach?"},
-		})
+		}, questionAttribution{})
 
 		ev := requireOneNotification(t, ch)
 		assert.Equal(t, "Claude has a question", ev.NotificationTitle)

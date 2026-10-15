@@ -443,6 +443,9 @@ func TestScanner_Start_should_persistPeriodically_When_MaintenanceTickFires(t *t
 	}, wait.WaitConfig{Timeout: time.Second, PollInterval: 5 * time.Millisecond, Description: "maintenance tick persist"})
 	require.NoError(t, err, "the maintenance ticker should have persisted the dirty cache entry")
 	cancel()
+	// The shutdown flush can still be writing into the store's TempDir; wait so
+	// TempDir cleanup doesn't race it ("directory not empty").
+	<-s.maintenanceDone
 }
 
 // TestScanner_Start_should_flushOnShutdown_When_ContextCancelled verifies the
@@ -473,6 +476,7 @@ func TestScanner_Start_should_flushOnShutdown_When_ContextCancelled(t *testing.T
 		return len(store.LoadScanCache()) == 1
 	}, wait.WaitConfig{Timeout: time.Second, PollInterval: 5 * time.Millisecond, Description: "shutdown flush persist"})
 	require.NoError(t, err, "cancelling ctx should trigger an immediate final persist")
+	<-s.maintenanceDone
 }
 
 // ---- Circuit breaker ----------------------------------------------------

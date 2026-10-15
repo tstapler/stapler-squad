@@ -19,7 +19,9 @@ import (
 // `go test ./...`): it starts real OS-level network monitoring goroutines,
 // which can flake on sandboxed CI runners lacking full netlink access.
 func TestTailscaleNetmonSource_Close_NoGoroutineLeak(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	// IgnoreCurrent: the process-wide template ent DB (session.NewTestEntRepository, #943) keeps
+	// database/sql goroutines alive for the whole binary once any earlier test seeded from it.
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
 	src, err := newTailscaleNetmonSource()
 	if err != nil {
@@ -53,7 +55,9 @@ func TestTailscaleNetmonSource_Close_NoGoroutineLeak(t *testing.T) {
 // Gated behind the integration build tag for the same reason as the leak
 // test above.
 func TestTailscaleNetmonSource_RegisterChangeCallback_FiresOnInjectedEvent(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	// IgnoreCurrent: the process-wide template ent DB (session.NewTestEntRepository, #943) keeps
+	// database/sql goroutines alive for the whole binary once any earlier test seeded from it.
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
 	src, err := newTailscaleNetmonSource()
 	if err != nil {

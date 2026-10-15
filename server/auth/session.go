@@ -168,6 +168,11 @@ func (sm *SessionManager) GetCeremony(key string) (webauthn.SessionData, bool) {
 
 // CreateAuthSession issues a new authenticated session token.
 func (sm *SessionManager) CreateAuthSession() (string, error) {
+	return sm.CreateAuthSessionTTL(authTokenTTL)
+}
+
+// CreateAuthSessionTTL issues a session token that expires after ttl.
+func (sm *SessionManager) CreateAuthSessionTTL(ttl time.Duration) (string, error) {
 	token, err := randomHex(sessionTokenLength)
 	if err != nil {
 		return "", err
@@ -180,7 +185,7 @@ func (sm *SessionManager) CreateAuthSession() (string, error) {
 	sm.authSessions[token] = &authSession{
 		Token:     token,
 		CreatedAt: now,
-		ExpiresAt: now.Add(authTokenTTL),
+		ExpiresAt: now.Add(ttl),
 	}
 	sm.saveToDisk()
 	return token, nil

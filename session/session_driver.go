@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -39,6 +40,23 @@ var spinnerTimeRe = regexp.MustCompile(`\(\d+[hms]`)
 // a work session, e.g. "✻ Perambulated for 1h 5m", "✽ Roosted for 9m", or
 // "* Moonwalked for 30s". Matches any leading symbol variant.
 var completionVerbRe = regexp.MustCompile(`[✻✽\*] \w+ed for \d+`)
+
+// driverTiming is the pair of driver timings tests need to shrink.
+type driverTiming struct {
+	pollInterval, readyTimeout time.Duration
+}
+
+// testDriverTiming overrides the production timings; nil means defaults. It is
+// an atomic pointer read once per driver start so leaked goroutines from other
+// tests cannot race a test that swaps it.
+var testDriverTiming atomic.Pointer[driverTiming]
+
+func currentDriverTiming() driverTiming {
+	if t := testDriverTiming.Load(); t != nil {
+		return *t
+	}
+	return driverTiming{pollInterval: driverPollInterval, readyTimeout: driverReadyTimeout}
+}
 
 const (
 	driverPollInterval  = 2 * time.Second
@@ -303,10 +321,11 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		}
 	}()
 
-	readyDeadline := time.Now().Add(driverReadyTimeout)
+	timing := currentDriverTiming()
+	readyDeadline := time.Now().Add(timing.readyTimeout)
 	totalDeadline := time.Now().Add(driverTotalTimeout)
 
-	ticker := time.NewTicker(driverPollInterval)
+	ticker := time.NewTicker(timing.pollInterval)
 	defer ticker.Stop()
 
 	// Once a PR URL is found in terminal output we stop scanning.
@@ -362,7 +381,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	// and approval-prompt menus) — hoisted once so there is a single definition
 	// shared by both answerDialogOnce calls instead of two independent literal
 	// closures.
-	sendAnswerKey := func() error { return inst.SendKeys("1\n") }
+	sendAnswerKey := func() error { return sendAnswerKeyUnderLease(inst) }
 
 	for {
 		st, detectedSt, exit := driverTickGate(inst, stop, ticker, totalDeadline)
@@ -683,6 +702,14 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 		return
 	}
 
+	// The lease is taken BEFORE the attempt counter: a busy lease must not burn
+	// one of the three attempts after which the prompt is dropped for good.
+	lease, leaseOK := inst.TryTerminalWriteLease(LeaseWriterDriver)
+	if !leaseOK {
+		log.Debug("SessionDriver: write lease busy, deferring initial prompt", "session", inst.Title)
+		return
+	}
+
 	*sendAttempts++
 
 	if timedOut && !claudeAtPrompt {
@@ -703,7 +730,15 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 	// that the keystrokes were actually received (read-back confirmation).
 	contentBefore, _ := inst.PreviewContext(ctx)
 
-	if err := SubmitDriverContent(ctx, inst, initialPrompt, DefaultPaneSettlePollInterval, DefaultPaneSettleMaxWait); err != nil {
+	if err := submitInitialPrompt(ctx, inst, lease, initialPrompt); err != nil {
+		if errors.Is(err, ErrNoLease) || errors.Is(err, ErrLeaseMismatch) {
+			// A programming error (the lease was acquired just above), not a
+			// failed delivery: it must neither count toward the attempt limit
+			// nor drop the prompt.
+			*sendAttempts--
+			log.Error("SessionDriver: lease API refused the initial prompt write", "session", inst.Title, "err", err)
+			return
+		}
 		log.Warn("SessionDriver: failed to send initial prompt",
 			"session", inst.Title,
 			"claudeAtPrompt", claudeAtPrompt,
@@ -863,6 +898,24 @@ func scanAndLinkPRURL(inst *Instance, sentInitial bool, prURLLinked bool, previe
 	return true
 }
 
+// submitInitialPrompt is a variable only so a test can force a lease-API error
+// out of the otherwise unreachable ErrNoLease/ErrLeaseMismatch branch.
+var submitInitialPrompt = func(ctx context.Context, inst *Instance, lease *HeldLease, prompt string) error {
+	return SubmitDriverContent(ctx, inst, lease, prompt, DefaultPaneSettlePollInterval, DefaultPaneSettleMaxWait)
+}
+
+// sendAnswerKeyUnderLease types the affirmative key for a dialog. It is the
+// chain's acquirer; a busy lease returns ErrLeaseBusy, which answerDialogOnce
+// does not count as an attempt.
+func sendAnswerKeyUnderLease(inst *Instance) error {
+	lease, ok := inst.TryTerminalWriteLease(LeaseWriterDriver)
+	if !ok {
+		return ErrLeaseBusy
+	}
+	defer lease.Release()
+	return inst.SendKeys("1\n")
+}
+
 // attemptBacklogNudge sends a backlog work session the "you appear to have paused"
 // task-reminder nudge and returns the value the caller should record as nudgeSentAt.
 //
@@ -881,7 +934,14 @@ func attemptBacklogNudge(ctx context.Context, inst *Instance, idle time.Duration
 	nudge := "You appear to have paused. Run `/backlog/status` to see remaining " +
 		"acceptance criteria. Mark each complete criterion with `/backlog/done-N`, " +
 		"then submit with `/backlog/review` once all are done."
-	if sendErr := SubmitDriverContent(ctx, inst, nudge, DefaultPaneSettlePollInterval, DefaultPaneSettleMaxWait); sendErr != nil {
+	lease, ok := inst.TryTerminalWriteLease(LeaseWriterNudge)
+	if !ok {
+		// Another writer holds the pane: skip this tick and nudge on the next
+		// (a zero time leaves the caller's nudgeSentAt unset).
+		log.Debug("SessionDriver: write lease busy, skipping backlog nudge", "session", inst.Title)
+		return time.Time{}
+	}
+	if sendErr := SubmitDriverContent(ctx, inst, lease, nudge, DefaultPaneSettlePollInterval, DefaultPaneSettleMaxWait); sendErr != nil {
 		log.Warn("SessionDriver: failed to send backlog nudge, will not retry — falling through to inactivity timeout",
 			"session", inst.Title, "err", sendErr)
 	} else {
@@ -1158,6 +1218,12 @@ func answerDialogOnce(state *dialogAnswerState, output string, send func() error
 	}
 
 	if err := send(); err != nil {
+		if errors.Is(err, ErrLeaseBusy) {
+			// Another writer holds the pane: not a failed attempt, or three
+			// busy ticks would abandon the dialog for good (sticky gave-up).
+			log.Debug("SessionDriver: write lease busy, will retry "+logContext, "session", sessionTitle)
+			return state.status
+		}
 		state.attempts++
 		log.Warn("SessionDriver: failed to answer "+logContext,
 			"session", sessionTitle,

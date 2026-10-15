@@ -19,7 +19,7 @@ export const scrollbackCopyButton = style({
   position: "absolute",
   top: vars.space["2"],
   right: vars.space["2"],
-  zIndex: zIndex.floatingTerminalUI,
+  zIndex: zIndex.terminalPaneChrome,
   padding: `${vars.space["1"]} ${vars.space["2"]}`,
   background: "rgba(0, 0, 0, 0.45)",
   color: "rgba(255, 255, 255, 0.75)",
@@ -54,10 +54,12 @@ export const terminal = style({
   boxSizing: "content-box",
   padding: 0,
   margin: 0,
-  // Prevent the browser from claiming touch events as window scroll.
-  // All touch handling is delegated to useTerminalGestures so the terminal
-  // scroll never leaks into the page scroll.
-  touchAction: "none",
+  // With gesture scrolling on, touch handling is delegated to useTerminalGestures,
+  // so the browser must not claim touches as window scroll. Off leaves the default.
+  selectors: {
+    '&[data-gesture-scroll="on"]': { touchAction: "none" },
+  },
+  overscrollBehavior: "contain",
 });
 
 // Global styles for xterm.js elements within the terminal container
@@ -179,7 +181,7 @@ export const scrollTrack = style({
   top: 0,
   bottom: 0,
   width: 8,
-  zIndex: zIndex.floatingTerminalUI,
+  zIndex: zIndex.terminalPaneChrome,
   // Track itself receives clicks (for jump-to-position); thumb overrides with its own handlers.
   pointerEvents: "auto",
   cursor: "pointer",

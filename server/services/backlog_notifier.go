@@ -2,6 +2,7 @@ package services
 
 import (
 	"github.com/google/uuid"
+	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
 )
 
@@ -49,5 +50,20 @@ func (n *EventBusNotifier) NotifySession(sessionID, title, message string, notif
 		notificationType, derivePriority(urgent, important),
 		title, message,
 		map[string]string{},
+	))
+}
+
+// NotifyAutoRemediating implements session.AutoRemediatingNotifier: Notify plus the
+// auto_remediating stamp, so the server's IsPendingDecision treats the WARNING as
+// informational while automation is still acting.
+func (n *EventBusNotifier) NotifyAutoRemediating(itemID, title, message string, notificationType int32, urgent, important bool) {
+	if n == nil || n.Bus == nil {
+		return
+	}
+	n.Bus.Publish(events.NewNotificationEvent(
+		itemID, "", uuid.New().String(),
+		notificationType, derivePriority(urgent, important),
+		title, message,
+		map[string]string{"item_id": itemID, pkgevents.MetadataKeyAutoRemediating: "true"},
 	))
 }

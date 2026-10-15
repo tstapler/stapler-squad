@@ -62,6 +62,15 @@ type BacklogItemDependencyEdge struct {
 	BlockedID string
 }
 
+// BacklogItemDependencyRef identifies the other end of a dependency edge with
+// just enough context (title, status) to render "blocked by <title>".
+type BacklogItemDependencyRef struct {
+	ItemID   string
+	PublicID string // "" when the item has no public ID yet
+	Title    string
+	Status   string
+}
+
 // ApprovalRuleData is the domain model for an auto-approval rule.
 type ApprovalRuleData struct {
 	ID             string
@@ -191,10 +200,14 @@ type ReviewVerdictSummary struct {
 //   - OverallOutcome: from the review_verdicts table (populated via ReviewVerdict edge)
 //   - ReviewVerdict: eagerly loaded when the query uses WithReviewVerdict()
 type ItemSessionSummary struct {
-	ID                       string
-	BacklogItemID            string
-	SessionUUID              string
-	Role                     string
+	ID            string
+	BacklogItemID string
+	SessionUUID   string
+	Role          string
+	// BranchName is the work session's git branch, stamped once at spawn
+	// time — see ItemSession.branch_name's schema comment. Empty for rows
+	// created before this field existed, or for a non-work role.
+	BranchName               string
 	AcSnapshot               AcCriteriaJSON
 	PipelineModeSnapshot     string
 	PipelineModeSnapshotHash string
@@ -223,6 +236,7 @@ type ItemSessionSummary struct {
 	StartedAt             *time.Time
 	EndedAt               *time.Time
 	EndReason             string // set alongside EndedAt for a headless call; see ItemSession.end_reason schema comment
+	ErrorDetail           string // truncated error text for end_reason "other"; see ItemSession.error_detail schema comment
 	FailureCapturePath    string // absolute path to a durable raw-output capture; see ItemSession.failure_capture_path schema comment
 	LastCommitAt          *time.Time
 	LastFileTouchAt       *time.Time

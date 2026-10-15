@@ -131,6 +131,12 @@ func (p *WorktreePRPoller) Start(ctx context.Context) {
 	log.Info("worktree PR poller started", "interval", p.config.PollInterval)
 }
 
+// Wait blocks until the poll loop launched by Start has exited. Unlike Stop it
+// does not cancel anything; call it after cancelling Start's ctx.
+func (p *WorktreePRPoller) Wait() {
+	p.wg.Wait()
+}
+
 // Stop gracefully shuts down the poller and waits for in-flight requests.
 func (p *WorktreePRPoller) Stop() {
 	if p.cancel != nil {

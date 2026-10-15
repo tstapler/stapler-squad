@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-
-	"github.com/tstapler/stapler-squad/log"
 )
 
 // ProbeGuardConfig supplies the guard's inputs as functions evaluated per
@@ -18,27 +16,22 @@ type ProbeGuardConfig struct {
 	AllowedHosts   func() []string
 }
 
-// ProbeGuard protects the single procedure at procedurePath (the full,
-// /api-prefixed request path) on the unauthenticated listener: POST only, a
+// ProbeGuard protects the single procedure at procedurePath; see ProbeGuardPaths.
+func ProbeGuard(procedurePath string, cfg ProbeGuardConfig) func(http.Handler) http.Handler {
+	return ProbeGuardPaths([]string{procedurePath}, cfg)
+}
+
+// ProbeGuardPaths protects the procedures at procedurePaths (full,
+// /api-prefixed request paths) on the unauthenticated listener: POST only, a
 // loopback-bound listener, and a Host and Origin that are loopback or
 // explicitly allowed. The Host check is what stops DNS rebinding, which CORS
 // does not. Every other path passes through untouched.
-func ProbeGuard(procedurePath string, cfg ProbeGuardConfig) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != procedurePath {
-				next.ServeHTTP(w, r)
-				return
-			}
-			if reason, status := probeGuardVerdict(r, cfg); reason != "" {
-				log.Warn("ProbeProgram request rejected", "reason", reason, "host", clipForLog(r.Host),
-					"origin", clipForLog(r.Header.Get("Origin")), "remote_addr", r.RemoteAddr)
-				http.Error(w, http.StatusText(status), status)
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
+func ProbeGuardPaths(procedurePaths []string, cfg ProbeGuardConfig) func(http.Handler) http.Handler {
+	procedures := make(map[string]GuardProfile, len(procedurePaths))
+	for _, p := range procedurePaths {
+		procedures[p] = ProfileProbe
 	}
+	return LocalWriteGuard(procedures, LocalWriteGuardConfig{Probe: cfg})
 }
 
 func probeGuardVerdict(r *http.Request, cfg ProbeGuardConfig) (reason string, status int) {

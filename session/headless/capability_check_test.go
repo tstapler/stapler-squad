@@ -266,9 +266,8 @@ func TestCodebaseReadCapabilitySelfCheck_CallerCtxAlreadyExpired_ProbeStillSucce
 
 	// A context that is already expired by the time Ensure is called — simulates the
 	// short-lived per-review ctx that triggered this bug in production.
-	expiredCtx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+	expiredCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
-	time.Sleep(5 * time.Millisecond)
 	require.Error(t, expiredCtx.Err(), "sanity check: ctx must actually be expired before calling Ensure")
 
 	assert.True(t, check.Ensure(expiredCtx, pool),

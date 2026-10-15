@@ -1,0 +1,12 @@
+{
+  "id": "background-models:get",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "GetBackgroundModels",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/background_models_service.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-10-07T20:50:52.177873772-07:00"
+}

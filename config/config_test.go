@@ -1805,3 +1805,86 @@ func TestGetAvailablePrograms_should_OmitAider_When_AiderNotOnPath(t *testing.T)
 
 	assert.Empty(t, programs)
 }
+
+func TestHeadlessTriageCeilings_DefaultOverrideDisable(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, DefaultHeadlessTriageMaxTurns, (&Config{}).HeadlessTriageMaxTurnsOrDefault())
+	assert.Equal(t, DefaultHeadlessTriageMaxSubagents, (&Config{}).HeadlessTriageMaxSubagentsOrDefault())
+	assert.Equal(t, 5, (&Config{HeadlessTriageMaxTurns: 5}).HeadlessTriageMaxTurnsOrDefault())
+	assert.Zero(t, (&Config{HeadlessTriageMaxSubagents: -1}).HeadlessTriageMaxSubagentsOrDefault())
+	assert.Zero(t, (*Config)(nil).HeadlessTriageMaxTurnsOrDefault())
+}
+
+func TestHeadlessTriageMaxCostUSDOrDefault(t *testing.T) {
+	var nilCfg *Config
+	assert.Equal(t, HeadlessTriageMaxCostUSDDefault, nilCfg.HeadlessTriageMaxCostUSDOrDefault())
+	assert.Equal(t, HeadlessTriageMaxCostUSDDefault, (&Config{}).HeadlessTriageMaxCostUSDOrDefault())
+	assert.Equal(t, 7.5, (&Config{HeadlessTriageMaxCostUSD: 7.5}).HeadlessTriageMaxCostUSDOrDefault())
+	assert.Zero(t, (&Config{HeadlessTriageMaxCostUSD: -1}).HeadlessTriageMaxCostUSDOrDefault(), "negative disables")
+}
+
+func TestTriageConcurrencyAndModelAccessors(t *testing.T) {
+	assert.Equal(t, 8, (*Config)(nil).MaxConcurrentTriageOrDefault())
+	assert.Equal(t, 8, (&Config{}).MaxConcurrentTriageOrDefault())
+	assert.Equal(t, 2, (&Config{MaxConcurrentTriage: 2}).MaxConcurrentTriageOrDefault())
+	assert.Equal(t, MaxConcurrentTriageCeiling, (&Config{MaxConcurrentTriage: 9999}).MaxConcurrentTriageOrDefault())
+
+	assert.Equal(t, "family:sonnet", (*Config)(nil).HeadlessTriageModelOrDefault())
+	assert.Equal(t, "family:sonnet", (&Config{}).HeadlessTriageModelOrDefault())
+	assert.Equal(t, "family:haiku", (&Config{HeadlessTriageModel: "family:haiku"}).HeadlessTriageModelOrDefault())
+	assert.Empty(t, (&Config{HeadlessTriageModel: "none"}).HeadlessTriageModelOrDefault(), "none opts out")
+}
+
+func TestGitBackendCohortsConfig_TolerantDecodeAndStableRoundTrip(t *testing.T) {
+	for _, body := range []string{`{"git_backend_cohorts":null}`, `{"git_backend_cohorts":"x"}`, `{"git_backend_cohorts":[1]}`} {
+		var cfg Config
+		if err := json.Unmarshal([]byte(body), &cfg); err != nil || len(cfg.GitBackendCohorts) != 0 {
+			t.Errorf("%s: err=%v cohorts=%v, want no error and empty", body, err, cfg.GitBackendCohorts)
+		}
+	}
+	var cfg Config
+	if err := json.Unmarshal([]byte(`{"git_backend_cohorts":{"refs":1,"network":"gogit","x":{"a":1}}}`), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GitBackendCohorts["network"] != "gogit" || cfg.GitBackendCohorts["refs"] != "1" || cfg.GitBackendCohorts["x"] != `{"a":1}` {
+		t.Errorf("unexpected decode: %v", cfg.GitBackendCohorts)
+	}
+	valid, _ := json.Marshal(Config{GitBackendCohorts: GitBackendCohortsConfig{"refs": "gogit"}})
+	if !strings.Contains(string(valid), `"git_backend_cohorts":{"refs":"gogit"}`) {
+		t.Errorf("valid map did not round-trip: %s", valid)
+	}
+	empty, _ := json.Marshal(Config{})
+	if strings.Contains(string(empty), "git_backend_cohorts") {
+		t.Errorf("omitempty lost: %s", empty)
+	}
+}
+
+func TestContextHealthConfigOrDefault_AppliesDefaultsToZeroAndNegativeFields(t *testing.T) {
+	got := ContextHealthConfig{LoopRepeatThreshold: 0, ConfusionPhraseThreshold: -4, MinToolCallSamples: 0}.ContextHealthConfigOrDefault()
+	assert.Equal(t, ContextHealthConfig{LoopRepeatThreshold: 3, ConfusionPhraseThreshold: 5, MinToolCallSamples: 5}, got)
+}
+
+func TestLoadConfigFromPath_PartialContextHealthBlockKeepsSetFieldAndDefaultsRest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ConfigFileName)
+	require.NoError(t, os.WriteFile(path, []byte(`{"context_health": {"loop_repeat_threshold": 7}}`), 0o600))
+
+	cfg, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.Equal(t, 7, cfg.ContextHealth.LoopRepeatThreshold)
+	assert.Equal(t, 5, cfg.ContextHealth.ConfusionPhraseThreshold)
+	assert.Equal(t, 5, cfg.ContextHealth.MinToolCallSamples)
+}
+
+func TestLoadConfig_MalformedContextHealthBlockFallsBackToDefaults(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+	require.NoError(t, os.Unsetenv("STAPLER_SQUAD_TEST_DIR"))
+	dir := filepath.Join(home, ".stapler-squad")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte(`{"context_health": "nonsense"}`), 0o600))
+
+	var cfg *Config
+	require.NotPanics(t, func() { cfg = LoadConfig() })
+	assert.Equal(t, 3, cfg.ContextHealth.LoopRepeatThreshold)
+}

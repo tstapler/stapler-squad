@@ -35,6 +35,8 @@ import { HandoffSummarySection } from "./HandoffSummarySection";
 import { GuidanceRequestPanel } from "@/components/guidance/GuidanceRequestPanel";
 import { useShells } from "@/lib/hooks/useShells";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
+import { markSessionViewed } from "@/lib/utils/viewedSessions";
+import { usePublishStackTopOffset } from "@/lib/hooks/usePublishStackTopOffset";
 import { ShellTabLabel } from "./ShellTab";
 import { NewShellDialog } from "./NewShellDialog";
 import { useWorkflows } from "@/lib/hooks/useWorkflows";
@@ -441,6 +443,13 @@ export function SessionDetailView({
   const [showNewShellDialog, setShowNewShellDialog] = useState(false);
   const { addNotification } = useNotifications();
 
+  // Tell the notification deck which session is on screen so it can skip redundant non-pinned toasts.
+  useEffect(() => markSessionViewed(session.id), [session.id]);
+
+  // The mobile toast deck docks directly under this tab row.
+  const tabRowRef = useRef<HTMLDivElement>(null);
+  usePublishStackTopOffset(tabRowRef);
+
   // Fire a toast notification when a shell exits with a non-zero exit code.
   // Track which shell IDs we've already notified to avoid duplicate toasts.
   const notifiedShellExitsRef = useRef<Set<string>>(new Set());
@@ -537,6 +546,11 @@ export function SessionDetailView({
   // Terminal instance pool: keeps up to 8 session terminals alive (LRU, oldest first)
   // Pool entries are either session IDs or "shell:<shellId>" strings.
   const [pooledSessionIds, setPooledSessionIds] = useState<string[]>([]);
+  // Pool ids whose session was hidden when it was current, so a pooled terminal stays
+  // read-only while another session is in front (Story 5.3).
+  const hiddenPoolIdsRef = useRef(new Set<string>());
+  if (session.hidden) hiddenPoolIdsRef.current.add(session.id);
+  else hiddenPoolIdsRef.current.delete(session.id);
   const [pooledMuxPaths, setPooledMuxPaths] = useState<string[]>([]);
   // Separate pool for shell PTY terminals, keyed by "shell:<shellId>"
   const [pooledShellKeys, setPooledShellKeys] = useState<string[]>([]);
@@ -871,7 +885,7 @@ export function SessionDetailView({
         </ActionBar>
       </div>}
 
-      <div className={styles.tabsWrapper}>
+      <div className={styles.tabsWrapper} ref={tabRowRef}>
       <div
         className={`${styles.tabs} ${isFullscreen ? styles.fullscreenMobileTabs : ""}`}
         role="tablist"
@@ -1038,6 +1052,7 @@ export function SessionDetailView({
                       baseUrl={getApiBaseUrl()}
                       isVisible={poolId === session.id}
                       scheduleResync={getScheduleResync(poolId)}
+                      readOnly={hiddenPoolIdsRef.current.has(poolId)}
                     />
                   </div>
                 ))}
@@ -1139,6 +1154,7 @@ export function SessionDetailView({
                 shellId={shellId}
                 isVisible={activeTabId === shellKey}
                 scheduleResync={getScheduleResync(shellKey)}
+                readOnly={session.hidden}
                 onShellStatusChange={(status, exitCode) => {
                   updateShellStatus(shellId, status, exitCode);
                 }}

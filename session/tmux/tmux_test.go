@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -372,7 +373,7 @@ func createSessionWithRetry(t *testing.T, serverSocket, sessionName string, extr
 			return
 		}
 		if i < attempts-1 {
-			time.Sleep(backoff)
+			time.Sleep(backoff) //nolint:notimesleeptest exponential backoff between retries of a real tmux subprocess under load; the wall-clock delay is the behavior
 			backoff *= 2
 			if backoff > backoffMax {
 				backoff = backoffMax
@@ -1180,8 +1181,10 @@ func TestCapturePaneSemaphore(t *testing.T) {
 			}
 			mu.Unlock()
 
-			// Hold the "subprocess" briefly so concurrency builds up.
-			time.Sleep(10 * time.Millisecond)
+			// Hold the "subprocess" briefly (scheduler yields) so concurrency builds up.
+			for i := 0; i < 200; i++ {
+				runtime.Gosched()
+			}
 
 			mu.Lock()
 			inflight--
@@ -1256,7 +1259,7 @@ func TestCapturePaneContentPriority_should_UseFastLaneGate_When_ExecGateFastLane
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		time.Sleep(150 * time.Millisecond)
+		time.Sleep(150 * time.Millisecond) //nolint:notimesleeptest the test asserts the call waited >=100ms of real elapsed time while the fast-lane slot was held
 		releaseFastLane()
 	}()
 
@@ -1695,8 +1698,11 @@ func TestCapturePaneContentContext_RespectsCancellation(t *testing.T) {
 	baseline := goleak.IgnoreCurrent()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	reachedMock := make(chan struct{})
+	var reachedOnce sync.Once
 	fakeCmdExec := MockCmdExec{
 		OutputFunc: func(*exec.Cmd) ([]byte, error) {
+			reachedOnce.Do(func() { close(reachedMock) })
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -1718,8 +1724,12 @@ func TestCapturePaneContentContext_RespectsCancellation(t *testing.T) {
 		errCh <- err
 	}()
 
-	// Give the call a moment to reach the blocking mock, then cancel.
-	time.Sleep(20 * time.Millisecond)
+	// Wait for the call to reach the blocking mock, then cancel.
+	select {
+	case <-reachedMock:
+	case <-time.After(5 * time.Second):
+		t.Fatal("CapturePaneContentContext never reached the blocking mock")
+	}
 	cancel()
 
 	select {

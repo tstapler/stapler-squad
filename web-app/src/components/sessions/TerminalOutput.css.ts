@@ -134,10 +134,33 @@ export const toolbarButton = style({
       minHeight: "var(--min-touch-target, 44px)",
       minWidth: "var(--min-touch-target, 44px)",
     },
+    "screen and (max-width: 480px)": {
+      padding: "0.4rem",
+    },
   },
 });
 
 export const debugActive = style({});
+
+// Text half of a toolbar button; drops to icon-only on portrait phones.
+export const toolbarButtonLabel = style({
+  "@media": {
+    "screen and (max-width: 480px)": {
+      display: "none",
+    },
+  },
+});
+
+// Wraps the inline Gallery/Files/Camera buttons: transparent to layout on desktop,
+// gone on mobile where the same buttons render in mobileOverflowRow instead.
+export const desktopOnlyUploads = style({
+  display: "contents",
+  "@media": {
+    "screen and (max-width: 768px)": {
+      display: "none",
+    },
+  },
+});
 
 // Camera button — hidden on fine-pointer devices (mouse/trackpad), visible on touch screens.
 // @media (pointer: fine) targets mice; touch-only devices have pointer: coarse.
@@ -258,14 +281,11 @@ export const mobileOverflowRow = style({
     "screen and (max-width: 768px)": {
       display: "flex",
       flexDirection: "row-reverse",
+      flexWrap: "wrap",
       gap: "0.25rem",
       padding: "0.3rem 0.75rem 0.4rem",
       background: vars.color.cardBackground,
       borderBottom: `1px solid ${vars.color.borderColor}`,
-      overflowX: "auto",
-      WebkitOverflowScrolling: "touch" as "auto",
-      scrollbarWidth: "none",
-      msOverflowStyle: "none",
       flexShrink: 0,
     },
   },
@@ -274,6 +294,12 @@ export const mobileOverflowRow = style({
       flexDirection: "row",
     },
   },
+});
+
+// Keep each button at natural width: shrunk buttons wrap their labels and drop below the 44px target.
+globalStyle(`${mobileOverflowRow} > button`, {
+  flexShrink: 0,
+  whiteSpace: "nowrap",
 });
 
 // Always visible — keyboard toggle and mouse mode toggle are useful on all screen sizes.

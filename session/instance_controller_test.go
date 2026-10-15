@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // TestStartController_DoesNotRaceWithDestroy is the regression guard for the
@@ -223,15 +224,18 @@ func TestStartController_PiStatusSourceNoDoubleStart(t *testing.T) {
 			// PR #697's commits (787a61165, a440ebce0, 292b086e2 -- none
 			// touch instance_controller.go/instance_pi_status.go/
 			// pi_status_source.go/this test file) as the cause.
-			deadline := time.Now().Add(15 * time.Second)
 			var pidLines []string
-			for time.Now().Before(deadline) {
+			pidsRecorded := func() bool {
 				data, readErr := os.ReadFile(pidLogFile)
 				if readErr == nil && len(strings.TrimSpace(string(data))) > 0 {
 					pidLines = strings.Fields(strings.TrimSpace(string(data)))
-					break
+					return true
 				}
-				time.Sleep(20 * time.Millisecond)
+				return false
+			}
+			// Don't Fatal on timeout: the cleanup below must still kill any stray PID.
+			if waitErr := wait.WaitForCondition(pidsRecorded, wait.WaitConfig{Timeout: 15 * time.Second, PollInterval: 10 * time.Millisecond, Description: "subprocess PID recorded"}); waitErr != nil {
+				t.Errorf("no subprocess PID was recorded within the deadline: %v", waitErr)
 			}
 
 			assert.Len(t, pidLines, 1, "exactly one real subprocess should have been spawned across both concurrent StartController() calls, got PIDs: %v", pidLines)

@@ -35,7 +35,7 @@ const (
 // goroutine off onSessionExited's synchronous path, bounded by
 // l.customCheckSem.
 func (l *BacklogLifecycleListener) runCustomGateCheck(ctx context.Context, gateID uuid.UUID, cfg CustomCheckConfig, targetStage BacklogStatus, item *BacklogItemData) {
-	pool := l.getHeadlessPool()
+	pool := l.getHeadlessCaller()
 	if pool == nil {
 		log.WarningLog().Printf("[BacklogLifecycle] runCustomGateCheck item=%s gate=%s: no headless pool configured", item.ID, gateID)
 		return

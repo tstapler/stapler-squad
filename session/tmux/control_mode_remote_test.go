@@ -114,6 +114,8 @@ waitForEcho:
 	captureName, captureArgs := wrapRemoteCommand(Binary(), captureArgs)
 
 	deadlineCapture := time.Now().Add(10 * time.Second)
+	captureTick := time.NewTicker(50 * time.Millisecond)
+	defer captureTick.Stop()
 	var paneContent string
 	for {
 		out, err := verifyRunner.Run(ctx, "", captureName, captureArgs...)
@@ -126,6 +128,6 @@ waitForEcho:
 		if time.Now().After(deadlineCapture) {
 			t.Fatalf("timed out waiting for %q to appear in remote tmux capture-pane (over a second, independent SSH dial); last content: %q, last err: %v", marker, paneContent, err)
 		}
-		time.Sleep(50 * time.Millisecond)
+		<-captureTick.C
 	}
 }

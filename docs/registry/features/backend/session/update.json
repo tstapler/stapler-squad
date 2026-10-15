@@ -5,7 +5,7 @@
   "method": "UpdateSession",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
-  "handlerFile": "server/services/session_service.go",
+  "handlerFile": "server/services/session_service_update.go",
   "tested": true,
   "testIds": [
     "TestUpdateSession_NoteUpdate",
@@ -28,5 +28,5 @@
     "TestUpdateSession_should_StopSession_When_TargetIsStoppedFromActive",
     "TestUpdateSession_should_RejectStop_When_TransitionIsIllegal"
   ],
-  "lastModified": "2026-08-27T00:00:00Z"
+  "lastModified": "2026-10-05T21:31:10.551579565-07:00"
 }

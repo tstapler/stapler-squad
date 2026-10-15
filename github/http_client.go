@@ -48,7 +48,7 @@ const githubPriorityAdmissionFlagName = "github:priority-admission-control"
 // into ghHTTPClient's Transport literal, so SetGHHTTPBaseTransportForTest can
 // swap it for a test-supplied http.RoundTripper while the telemetry and
 // rate-limit layers above it keep running unchanged.
-var ghInnerTransport = &rateLimitTransport{next: http.DefaultTransport}
+var ghInnerTransport = &rateLimitTransport{next: defaultBaseTransport()}
 
 var ghHTTPClient = &http.Client{
 	Timeout: 30 * time.Second,

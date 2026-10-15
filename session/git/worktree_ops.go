@@ -12,6 +12,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/git/native"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -26,7 +28,7 @@ import (
 // Deliberately NOT copied from headSHARetryAttempts/headSHARetryDelay (util.go:285-288,
 // 3 attempts / 20ms total) — that pair bounds an in-process go-git torn-read against a
 // local file write (microsecond-scale). This retry instead waits out a concurrent `git
-// worktree add` *subprocess*, which can run up to runGitCommand's 30s timeout under CI
+// worktree add` *subprocess*, which can run up to the 30s git timeout under CI
 // load. No local repro captured real contended-completion timing, so this is sized as a
 // materially larger bound than the unrelated precedent — a few seconds with backoff, not
 // tens of milliseconds — rather than reusing 20ms unexamined.
@@ -79,7 +81,7 @@ func branchRefExists(repo *git.Repository, branchRef plumbing.ReferenceName) (bo
 func (g *GitWorktree) branchExistsAfterAddFailure(branchRef plumbing.ReferenceName) bool {
 	for attempt := 0; attempt < worktreeAddRetryAttempts; attempt++ {
 		if attempt > 0 {
-			worktreeRetryTotal.Add(context.Background(), 1)
+			native.RecordWorktreeRetry(context.Background())
 			time.Sleep(worktreeAddRetryDelay)
 		}
 		repo, err := OpenRepo(g.repoPath)
@@ -210,11 +212,17 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 	// locked (initializing) by an interrupted `worktree add` — the exact state
 	// worktreeAlreadyRegisteredForBranch just rejected above — otherwise refuses
 	// `remove` regardless of -f, leaving the broken checkout stuck forever.
-	_ = g.unlockWorktree()                                                         // Ignore error if not locked
-	_, _ = g.runGitCommand(g.repoPath, "worktree", "remove", "-f", g.worktreePath) // Ignore error if worktree doesn't exist
+	_ = g.unlockWorktree() // Ignore error if not locked
+	repoLoc := g.locate(g.repoPath)
+	removeCtx, removeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer removeCancel()
+	// Ignore error if worktree doesn't exist
+	_ = g.gitBackend().RemoveWorktree(removeCtx, repoLoc, backend.RemoveWorktreeRequest{Path: backend.WorktreePath(g.worktreePath), Force: true})
 
 	// Create a new worktree from the existing branch
-	if _, err := g.runGitCommand(g.repoPath, "worktree", "add", g.worktreePath, g.branchName); err != nil {
+	addCtx, addCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer addCancel()
+	if err := g.gitBackend().AddWorktreeForExistingBranch(addCtx, repoLoc, backend.WorktreePath(g.worktreePath), backend.BranchName(g.branchName)); err != nil {
 		// Ground-Truth Re-Query (ADR-001): rather than gating on specific error text
 		// (git's "already checked out"/"already used by worktree" wording, which varies
 		// by version and locale — and, per this fix's root-cause finding, doesn't cover
@@ -258,13 +266,10 @@ func (g *GitWorktree) initBaseCommitSHA() {
 		// ambient checked-out branch can be anything a concurrent process left it on
 		// (mirrors the fix in resolveBaseCommitSHA, session/git/diff.go, which already
 		// does this correctly).
-		output, err := g.runGitCommand(g.worktreePath, "merge-base", "HEAD", branch)
-		if err == nil {
-			if sha := strings.TrimSpace(output); sha != "" {
-				g.baseCommitSHA = sha
-				log.Info("set base commit SHA for branch to merge-base", "branch", g.branchName, "with_branch", branch, "sha", sha[:min(8, len(sha))])
-				return
-			}
+		if sha := g.headMergeBase(branch); sha != "" {
+			g.baseCommitSHA = sha
+			log.Info("set base commit SHA for branch to merge-base", "branch", g.branchName, "with_branch", branch, "sha", sha[:min(8, len(sha))])
+			return
 		}
 	}
 	log.Warn("could not find merge-base for branch with any default branch (main/master/develop/trunk)", "branch", g.branchName)
@@ -280,7 +285,7 @@ func (g *GitWorktree) initBaseCommitSHA() {
 //   - NOT locked with git's "initializing" marker. `worktree add` briefly holds this
 //     lock while it populates the checkout and clears it on success; a worktree still
 //     locked here means an earlier `worktree add` was interrupted mid-checkout (e.g.
-//     killed by runGitCommand's 30s timeout under load) and left a half-populated
+//     killed by the 30s git timeout under load) and left a half-populated
 //     directory — reusing that in place would silently hand a broken checkout to the
 //     new session instead of self-healing via a fresh remove+add, exactly the failure
 //     this reuse-in-place logic exists to prevent for the *good* case.
@@ -288,67 +293,34 @@ func (g *GitWorktree) worktreeAlreadyRegisteredForBranch() bool {
 	if _, statErr := os.Stat(g.worktreePath); statErr != nil {
 		return false
 	}
-	output, err := g.runGitCommand(g.repoPath, "worktree", "list", "--porcelain")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	infos, err := g.gitBackend().ListWorktrees(ctx, g.locate(g.repoPath))
 	if err != nil {
 		return false
 	}
-	path, found := g.findWorktreeForBranch(output, g.branchName)
+	info, found := findWorktreeForBranch(infos, g.branchName)
 	// g.worktreePath may still be a raw, not-yet-migrated path (e.g. rehydrated
 	// from storage written before this normalization existed), while path always
 	// comes from git's realpath'd 'worktree list' output — canonicalize both
 	// sides so the comparison isn't defeated by a stale spelling difference.
-	if !found || CanonicalizeWorktreePath(path) != CanonicalizeWorktreePath(g.worktreePath) {
+	if !found || CanonicalizeWorktreePath(string(info.Path)) != CanonicalizeWorktreePath(g.worktreePath) {
 		return false
 	}
-	return !isWorktreeLocked(output, g.worktreePath)
+	return !info.Locked
 }
 
-// isWorktreeLocked reports whether the worktree at targetPath is marked "locked" in
-// 'git worktree list --porcelain' output (with or without a reason).
-func isWorktreeLocked(porcelainOutput, targetPath string) bool {
-	lines := strings.Split(strings.TrimSpace(porcelainOutput), "\n")
-	var currentWorktreePath string
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		switch {
-		case line == "":
-			currentWorktreePath = ""
-		case strings.HasPrefix(line, "worktree "):
-			currentWorktreePath = strings.TrimPrefix(line, "worktree ")
-		case currentWorktreePath == targetPath && (line == "locked" || strings.HasPrefix(line, "locked ")):
-			return true
+// findWorktreeForBranch returns the first listed worktree that has targetBranch checked out.
+func findWorktreeForBranch(infos []backend.WorktreeInfo, targetBranch string) (backend.WorktreeInfo, bool) {
+	if targetBranch == "" {
+		return backend.WorktreeInfo{}, false // detached and bare entries have an empty Branch
+	}
+	for _, info := range infos {
+		if strings.TrimPrefix(string(info.Branch), "refs/heads/") == targetBranch {
+			return info, true
 		}
 	}
-	return false
-}
-
-// findWorktreeForBranch parses the output of 'git worktree list --porcelain'
-// and returns the path of the worktree that has the specified branch checked out
-func (g *GitWorktree) findWorktreeForBranch(porcelainOutput, targetBranch string) (string, bool) {
-	lines := strings.Split(strings.TrimSpace(porcelainOutput), "\n")
-	var currentWorktreePath string
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			// Empty line separates worktree entries
-			currentWorktreePath = ""
-			continue
-		}
-
-		if strings.HasPrefix(line, "worktree ") {
-			// Extract worktree path
-			currentWorktreePath = strings.TrimPrefix(line, "worktree ")
-		} else if strings.HasPrefix(line, "branch ") && currentWorktreePath != "" {
-			// Extract branch name and check if it matches
-			branchName := strings.TrimPrefix(line, "branch refs/heads/")
-			if branchName == targetBranch {
-				return currentWorktreePath, true
-			}
-		}
-	}
-
-	return "", false
+	return backend.WorktreeInfo{}, false
 }
 
 // findLiveWorktreeForBranch looks up whether g.branchName is registered to a live worktree

@@ -192,6 +192,13 @@ func (p *SessionTagClassificationPoller) Running() bool {
 	return p.ctx != nil
 }
 
+// Wait blocks until the poll loop launched by Start has exited. Unlike Stop it
+// does not cancel anything or make the poller restartable; call it after
+// cancelling Start's ctx.
+func (p *SessionTagClassificationPoller) Wait() {
+	p.wg.Wait()
+}
+
 // Stop gracefully shuts down the poller and waits for in-flight calls.
 func (p *SessionTagClassificationPoller) Stop() {
 	p.mu.Lock()

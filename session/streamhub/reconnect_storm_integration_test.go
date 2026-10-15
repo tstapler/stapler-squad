@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // stormSessionCount is the number of real tmux sessions Story 3.3.3's storm
@@ -194,7 +195,18 @@ func TestMultiSessionReconnectStorm_should_NeverViolateOverlapInvariant_When_All
 	// Let the initial resize/quiescence/capture pipeline settle before the
 	// storm, so the storm phase below is measuring the reconnect itself,
 	// not overlapping with initial-attach negotiation.
-	time.Sleep(200 * time.Millisecond)
+	initialSize, err := streamhub.NewTerminalSize(80, 24)
+	if err != nil {
+		t.Fatalf("NewTerminalSize: %v", err)
+	}
+	wait.RequireEventually(t, func() bool {
+		for _, s := range sessions {
+			if s.hub.NegotiatedSize() != initialSize {
+				return false
+			}
+		}
+		return true
+	}, 5*time.Second, 5*time.Millisecond, "initial resize pipeline never settled for every session")
 
 	// Simulate the actual failure scenario that motivated this project
 	// (Task 3.3.3b): every session's subscriber detaches and a fresh one
@@ -234,14 +246,20 @@ func TestMultiSessionReconnectStorm_should_NeverViolateOverlapInvariant_When_All
 		}
 	}
 
-	// Give the post-reconnect resize/quiescence/capture pipeline time to
-	// complete for every session before asserting on NegotiatedSize.
-	time.Sleep(700 * time.Millisecond)
-
 	wantSize, err := streamhub.NewTerminalSize(100, 30)
 	if err != nil {
 		t.Fatalf("NewTerminalSize: %v", err)
 	}
+	// Wait for the post-reconnect resize/quiescence/capture pipeline to
+	// complete for every session before asserting on NegotiatedSize.
+	wait.RequireEventually(t, func() bool {
+		for _, s := range sessions {
+			if s.hub.NegotiatedSize() != wantSize {
+				return false
+			}
+		}
+		return true
+	}, 10*time.Second, 5*time.Millisecond, "post-reconnect resize pipeline never completed for every session")
 	for _, s := range sessions {
 		if got := s.hub.NegotiatedSize(); got != wantSize {
 			t.Errorf("session %s: expected resize→quiescence→capture pipeline to complete for the reconnecting subscriber, NegotiatedSize=%v, want %v", s.name, got, wantSize)

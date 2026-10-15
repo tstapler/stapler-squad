@@ -1,8 +1,6 @@
 package services
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -11,13 +9,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/vc"
 	"github.com/tstapler/stapler-squad/session/vcs"
 
@@ -68,6 +67,8 @@ type WorkspaceService struct {
 	storage    *session.Storage
 	eventBus   *events.EventBus
 	liveFinder LiveInstanceFinder
+	// guards is the live hidden_session_readonly_guards value; nil means on.
+	guards GuardsFlag
 	// inFlightSwitches tracks session IDs currently undergoing a workspace switch.
 	// Prevents concurrent SwitchWorkspace RPCs on the same session from corrupting state.
 	inFlightSwitches sync.Map
@@ -90,6 +91,11 @@ func NewWorkspaceService(storage *session.Storage, eventBus *events.EventBus) *W
 // SessionService so that read-only RPCs bypass LoadInstances().
 func (ws *WorkspaceService) SetLiveFinder(f LiveInstanceFinder) {
 	ws.liveFinder = f
+}
+
+// SetGuardsFlag injects the live read-only guards flag.
+func (ws *WorkspaceService) SetGuardsFlag(f GuardsFlag) {
+	ws.guards = f
 }
 
 // findInstanceFast returns the live instance for the given id. It tries the
@@ -349,17 +355,24 @@ func (ws *WorkspaceService) SwitchWorkspace(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("target is required"))
 	}
 
+	instance, err := ws.findInstanceFast(req.Msg.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	// Every switch type types into or restarts the pane, so a hidden target is
+	// refused before the in-flight entry, the checkpoint or any git-side change.
+	if _, err := AccessForUnary(instance, ws.guards).Writer(nil); err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("session %q is a background session and is read-only: %w", req.Msg.Id, err))
+	}
+
 	// Guard against concurrent switches on the same session.
 	if _, loaded := ws.inFlightSwitches.LoadOrStore(req.Msg.Id, true); loaded {
 		return nil, connect.NewError(connect.CodeUnavailable,
 			fmt.Errorf("workspace switch already in progress for session '%s'", req.Msg.Id))
 	}
 	defer ws.inFlightSwitches.Delete(req.Msg.Id)
-
-	instance, err := ws.findInstanceFast(req.Msg.Id)
-	if err != nil {
-		return nil, err
-	}
 
 	// ExistingDir despite the "never compare it" rule on Workspace: this keys the
 	// VCS status cache, and that status is genuinely a property of the directory
@@ -618,20 +631,15 @@ func (ws *WorkspaceService) ListBranches(
 	if req.Msg.GetIncludeRemote() {
 		refSpec = "refs/"
 	}
-	cmd := safeexec.CommandContext(cmdCtx, "git", "-C", absPath, "for-each-ref", refSpec, "--format=%(refname:short)")
-
-	var out bytes.Buffer
-	cmd.Stdout = &out
-
 	start := time.Now()
-	runErr := cmd.Run()
+	refNames, runErr := gitprovider.Backend().ListRefs(cmdCtx, backend.Local{Root: backend.RepoRoot(absPath)}, backend.ListRefsRequest{Pattern: backend.RefPattern(refSpec)})
 	latencyMs := time.Since(start).Milliseconds()
 	log.Info("[ListBranches] branch list", "latency_ms", latencyMs, "repo", absPath)
 
+	// A timeout returns an empty, truncated list: the backend yields no partial output.
 	truncated := false
 	if runErr != nil {
 		if cmdCtx.Err() == context.DeadlineExceeded {
-			// Timeout: return whatever partial output was collected.
 			truncated = true
 		} else {
 			// git failed (not a git repo, etc.): return empty list, not an error.
@@ -644,12 +652,10 @@ func (ws *WorkspaceService) ListBranches(
 		}
 	}
 
-	var all []string
-	scanner := bufio.NewScanner(&out)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line != "" {
-			all = append(all, line)
+	all := make([]string, 0, len(refNames))
+	for _, name := range refNames {
+		if short := shortRefName(string(name)); short != "" {
+			all = append(all, short)
 		}
 	}
 
@@ -663,6 +669,27 @@ func (ws *WorkspaceService) ListBranches(
 		TotalCount: int32(len(branches)),
 		Truncated:  truncated,
 	}), nil
+}
+
+// shortRefName reproduces `for-each-ref --format=%(refname:short)` for the ref kinds a branch
+// picker lists. Git's extra disambiguation (a branch and tag sharing a name show as "heads/x"
+// and "tags/x") is not reproduced; the Backend returns full names so the two stay distinct.
+func shortRefName(full string) string {
+	switch {
+	case strings.HasPrefix(full, "refs/heads/"):
+		return strings.TrimPrefix(full, "refs/heads/")
+	case strings.HasPrefix(full, "refs/remotes/"):
+		short := strings.TrimPrefix(full, "refs/remotes/")
+		// git abbreviates a remote's HEAD symref to the bare remote name.
+		if remote, ok := strings.CutSuffix(short, "/HEAD"); ok {
+			return remote
+		}
+		return short
+	case strings.HasPrefix(full, "refs/tags/"):
+		return strings.TrimPrefix(full, "refs/tags/")
+	default:
+		return strings.TrimPrefix(full, "refs/")
+	}
 }
 
 // filterBranches applies a case-insensitive substring filter and caps results at maxResults.

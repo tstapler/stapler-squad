@@ -1,0 +1,24 @@
+ ▐▛███▛█   Claude Code v2.1.296
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   /tmp/ssq-reply-cap
+
+
+❯ Call the MCP tool mcp__echo__echo with text 'hi'. Nothing else.
+
+● Calling echo… (ctrl+o to expand)
+
+────────────────────────────────────────────────────────────────────────────────
+ Tool use
+ echo — Echo Tool: (MCP)
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ text: "hi"
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ About the echo — Echo Tool:
+ │ Echo text back
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for echo — Echo commands in /tmp/ssq-rep…
+   3. No
+
+ Esc to cancel · Tab to amend

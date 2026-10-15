@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // TestBacklogStatusEvent_should_RenderOriginalStageName_When_ReferencedCustomStageIsLaterDeleted
@@ -59,6 +60,14 @@ func TestBacklogStatusEvent_should_RenderOriginalStageName_When_ReferencedCustom
 	require.NotNil(t, found, "expected a status event for the transition into design-review")
 	require.NotNil(t, found.StageNameSnapshot, "StageNameSnapshot must survive the stage row's deletion")
 	require.Equal(t, "Design Review", *found.StageNameSnapshot)
+}
+
+// waitForClockDelta polls until the wall clock has advanced by delta, so two
+// persisted timestamps taken around the call are guaranteed to differ.
+func waitForClockDelta(t *testing.T, delta time.Duration) {
+	t.Helper()
+	start := time.Now()
+	wait.RequireEventually(t, func() bool { return time.Since(start) >= delta }, delta+5*time.Second, time.Millisecond)
 }
 
 // TestResolveAllowedTransitionsSnapshot_should_ReturnSortedEnabledDestinationSlugs_When_StageHasOutgoingTransitions
@@ -191,7 +200,7 @@ func TestBuildStageConfigSnapshotFallback_should_ReturnMostRecentEntry_When_Item
 	require.NoError(t, err)
 
 	// Force a measurable CreatedAt delta between the two matching events.
-	time.Sleep(10 * time.Millisecond)
+	waitForClockDelta(t, 10*time.Millisecond)
 
 	// Leave review-a, then change its outgoing graph before re-entering.
 	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusIdea, nil, TriggeredByUser)
@@ -204,7 +213,7 @@ func TestBuildStageConfigSnapshotFallback_should_ReturnMostRecentEntry_When_Item
 	_, err = client.StageTransition.Create().SetFromStageID(fromStage.ID).SetToStageID(toStageV2.ID).SetEnabled(true).Save(ctx)
 	require.NoError(t, err)
 
-	time.Sleep(10 * time.Millisecond)
+	waitForClockDelta(t, 10*time.Millisecond)
 
 	// Second entry into review-a: must capture the v2 graph (review-a -> review-b-v2).
 	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("review-a"), nil, TriggeredByUser)

@@ -87,14 +87,16 @@ func TestRedetectHostnamesEndpoint_LoopbackRequestTriggersCycle(t *testing.T) {
 // deterministic-fast-tests skill.
 func waitForCalls(t *testing.T, calls *int32, want int32) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if atomic.LoadInt32(calls) >= want {
-			return
+	deadline := time.After(2 * time.Second)
+	tick := time.NewTicker(2 * time.Millisecond)
+	defer tick.Stop()
+	for atomic.LoadInt32(calls) < want {
+		select {
+		case <-tick.C:
+		case <-deadline:
+			t.Fatalf("timed out waiting for resolveFn call count to reach %d", want)
 		}
-		time.Sleep(2 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for resolveFn call count to reach %d", want)
 }
 
 // TestRedetectHostnamesEndpoint_NonLoopbackRequestRejected covers the second

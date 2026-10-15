@@ -1,0 +1,15 @@
+{
+  "id": "RecordClaimOverride",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "RecordClaimOverride",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_claim.go",
+  "tested": true,
+  "testIds": [
+    "TestRecordClaimOverride_should_LogOverrideWithClaimingHost_When_ClaimHeldByOther",
+    "TestRecordClaimOverride_should_ReturnInvalidArgument_When_URLEmptyOrReasonTooShort"
+  ],
+  "lastModified": "2026-10-05T20:00:00-07:00"
+}

@@ -1,0 +1,106 @@
+package server
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestLoadUserThemes_should_SanitizeAndSkipInvalid(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600))
+	}
+	write("netflix.json", `{"label":"Netflix","base":"dark","tokens":{
+		"color.primary":"#e50914",
+		"color.statusDot.running":"#46d369",
+		"color.background":"red; background:url(http://evil)",
+		"color.textPrimary":"image-set(\"https://evil/p\" 1x)",
+		"color.textMuted":"url(http://evil)",
+		"color.borderColor":"rgba(229,9,20,0.35)",
+		"shadow.sm":"0 1px 2px 0 rgba(0,0,0,0.3)",
+		"bad key":"#fff"}}`)
+	write("nobase.json", `{"base":"bogus","tokens":{}}`)
+	write("broken.json", `{not json`)
+	write("Bad_ID.json", `{}`)
+	write("notes.txt", `{}`)
+
+	got := loadUserThemes(dir)
+
+	require.Len(t, got, 2)
+	assert.Equal(t, "netflix", got[0].ID)
+	assert.Equal(t, "Netflix", got[0].Label)
+	assert.Equal(t, "dark", got[0].Base)
+	assert.Equal(t, map[string]string{
+		"color.primary": "#e50914", "color.statusDot.running": "#46d369",
+		"color.borderColor": "rgba(229,9,20,0.35)", "shadow.sm": "0 1px 2px 0 rgba(0,0,0,0.3)",
+	}, got[0].Tokens)
+	assert.Equal(t, "nobase", got[1].ID)
+	assert.Equal(t, defaultThemeBase, got[1].Base)
+}
+
+func TestLoadUserThemes_should_ReturnEmpty_When_DirMissing(t *testing.T) {
+	assert.Empty(t, loadUserThemes(filepath.Join(t.TempDir(), "nope")))
+}
+
+func TestLoadUserThemes_should_CapFilesAndTokens(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < maxUserThemes+5; i++ {
+		name := fmt.Sprintf("t%03d.json", i)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(`{}`), 0o600))
+	}
+	assert.Len(t, loadUserThemes(dir), maxUserThemes)
+
+	tokens := map[string]string{}
+	for i := 0; i < maxThemeTokens+10; i++ {
+		tokens[fmt.Sprintf("color.t%s", strings.Repeat("a", i%20+1)+fmt.Sprint(i))] = "#fff"
+	}
+	got := sanitizeUserTheme("big", userTheme{Tokens: tokens})
+	assert.LessOrEqual(t, len(got.Tokens), maxThemeTokens)
+}
+
+func TestMergeUserThemes_should_PreferLaterDirOnSameID(t *testing.T) {
+	global, workspace := t.TempDir(), t.TempDir()
+	put := func(dir, name, body string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600))
+	}
+	put(global, "shared.json", `{"label":"Global"}`)
+	put(global, "only-global.json", `{}`)
+	put(workspace, "shared.json", `{"label":"Workspace"}`)
+	put(workspace, "only-ws.json", `{}`)
+
+	got := mergeUserThemes(global, workspace)
+
+	require.Len(t, got, 3)
+	assert.Equal(t, []string{"only-global", "only-ws", "shared"}, []string{got[0].ID, got[1].ID, got[2].ID})
+	assert.Equal(t, "Workspace", got[2].Label)
+}
+
+func TestMergeUserThemes_should_CapTotalAndSkipDuplicateDirs(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	for i := 0; i < maxUserThemes; i++ {
+		require.NoError(t, os.WriteFile(filepath.Join(a, fmt.Sprintf("a%03d.json", i)), []byte(`{}`), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(b, fmt.Sprintf("b%03d.json", i)), []byte(`{}`), 0o600))
+	}
+	assert.Len(t, mergeUserThemes(a, b), maxUserThemes)
+	assert.Len(t, mergeUserThemes(a, a+string(os.PathSeparator)), maxUserThemes)
+}
+
+func TestGlobalThemesDirFor_should_BeEmpty_When_Isolated(t *testing.T) {
+	assert.Empty(t, globalThemesDirFor(true))
+}
+
+func TestGlobalThemesDirFor_should_EndInSharedThemes_When_NotIsolated(t *testing.T) {
+	got := globalThemesDirFor(false)
+	require.NotEmpty(t, got)
+	assert.Equal(t, filepath.Join(".stapler-squad", "themes"), filepath.Join(filepath.Base(filepath.Dir(got)), filepath.Base(got)))
+}
+
+func TestGlobalThemesDir_should_BeEmpty_UnderGoTest(t *testing.T) {
+	assert.Empty(t, globalThemesDir(), "go test binaries are isolated (config.IsTestMode)")
+}

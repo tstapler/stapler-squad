@@ -28,6 +28,10 @@ func (ItemSession) Fields() []ent.Field {
 			Optional().
 			Default("").
 			Comment("Claude conversation UUID (transcript JSONL name). Outlives the session row so Insights can still attribute a deleted session's transcript to this item/role."),
+		field.String("branch_name").
+			Optional().
+			Default("").
+			Comment("The work session's git branch, stamped once at spawn time from the worktree it was given. Outlives the session row for the same reason conversation_uuid does: ReconcilePRPending's post-merge branch-verification guard (backlog_lifecycle_pr.go) needs a tracked branch to re-check a merged PR's head branch against, but the Session/Worktree rows it used to read that from are gone once the session ends and is deleted (see EntRepository.Delete) — this left the guard permanently unable to verify, and therefore permanently unable to auto-complete, any item whose work session had already been deleted by the time its PR merged. Empty for rows created before this field existed."),
 		field.Time("started_at").
 			Optional().
 			Nillable(),
@@ -38,6 +42,10 @@ func (ItemSession) Fields() []ent.Field {
 			Optional().
 			Default("").
 			Comment("Set only alongside ended_at for a headless (triage/review) call: classifyHeadlessCallError's bucket (\"shutdown\", \"timeout\", \"subprocess_start_error\", \"claude_not_found\", \"other\") or \"\" for a successful end / not yet classified. Lets orphan-recovery sweeps distinguish a call killed by our own graceful shutdown (retry immediately, no penalty) from a call that actually failed on its own merits (apply the normal backoff)."),
+		field.String("error_detail").
+			Optional().
+			Default("").
+			Comment("For end_reason \"other\": the Go error chain text (err.Error(), truncated to 500 runes) from classifyHeadlessCallError's catch-all, so a post-incident DB query recovers it after log rotation. Never holds raw subprocess output (that is failure_capture_path). Empty for every other end_reason and for successful sessions."),
 		field.String("failure_capture_path").
 			Optional().
 			Default("").

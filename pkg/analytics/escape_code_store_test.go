@@ -2,9 +2,9 @@ package analytics
 
 import (
 	"encoding/json"
+	"runtime"
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestNewEscapeCodeStore(t *testing.T) {
@@ -304,7 +304,7 @@ func TestThreadSafety(t *testing.T) {
 			for j := 0; j < 50; j++ {
 				_ = store.GetAll()
 				_ = store.GetStats()
-				time.Sleep(time.Millisecond)
+				runtime.Gosched()
 			}
 		}()
 	}

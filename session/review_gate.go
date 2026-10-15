@@ -558,6 +558,9 @@ func (r *ReviewGateRunner) runDiffPreChecks(ctx context.Context, gateContext Gat
 			worktreeDiffErr = diffErr
 		}
 	}
+	if worktreeDiffErr == nil && strings.TrimSpace(diff) == "" && wtErr == nil && wt.BranchName != "" && wt.WorktreePath != "" {
+		diff, truncated = r.diffFromMergeBaseWhenResumed(ctx, item, wt.WorktreePath, wt.BranchName, wt.BaseCommitSHA, diff, truncated)
+	}
 	// Auto-repair: a broken base_commit_sha (stale/corrupted/garbage-collected — the
 	// exact failure found via manual QA on item ae1e2070) is recoverable in the common
 	// case, because the branch itself is still reachable from repoPath's object store
@@ -710,4 +713,27 @@ func WorktreeIdentityMismatch(worktreePath, branchName string) string {
 		return fmt.Sprintf("is checked out to %q, not the expected %q", actualBranch, branchName)
 	}
 	return ""
+}
+
+// diffFromMergeBaseWhenResumed re-diffs against the branch's merge-base with the
+// default branch when the spawn-time base yields nothing. A session resuming a
+// branch that already carries commits starts with base == tip, so base..HEAD is
+// empty even though the branch is ahead of main. A branch with zero commits ahead
+// of the merge-base still diffs empty, so the "no committed changes" gate holds.
+func (r *ReviewGateRunner) diffFromMergeBaseWhenResumed(ctx context.Context, item *BacklogItemData, worktreePath, branch, recordedBase, diff string, truncated bool) (string, bool) {
+	dir := item.RepoPath
+	if info, err := os.Stat(worktreePath); err == nil && info.IsDir() {
+		dir = worktreePath
+	}
+	mergeBase, err := RecoverBaseCommitSHA(ctx, dir, branch)
+	mergeBase = strings.TrimSpace(mergeBase)
+	if err != nil || mergeBase == "" || mergeBase == strings.TrimSpace(recordedBase) {
+		return diff, truncated
+	}
+	mbDiff, mbTruncated, err := GetGitDiffRef(ctx, dir, mergeBase, branch)
+	if err != nil || strings.TrimSpace(mbDiff) == "" {
+		return diff, truncated
+	}
+	log.InfoLog().Printf("[BacklogLifecycle] spawnReviewGate empty diff vs recorded base %s; using merge-base %s item=%s", recordedBase, mergeBase, item.ID)
+	return mbDiff, mbTruncated
 }

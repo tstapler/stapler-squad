@@ -3,12 +3,14 @@ package mcp
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/envtest"
+	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -55,6 +57,44 @@ func TestSubmitDiagnosisResult_should_RecordActivityNote_When_CallerIsDiagnoseRo
 	require.Len(t, notes, 1)
 	assert.Contains(t, notes[0].Message, "BUG_FILED")
 	assert.Contains(t, notes[0].Message, "tmux session collision")
+}
+
+// TestSubmitDiagnosisResult_should_PublishItemLinkedNotification_When_EventBusWired
+// guards the fix for "diagnose outcomes never show up in notifications":
+// submit_diagnosis_result must publish a real, outcome-specific notification
+// carrying metadata["item_id"] (so the UI renders "View in Backlog" instead
+// of a dead-end link to the hidden, one-shot diagnostic session) rather than
+// leaving the generic, uninformative "Session Completed" push as the only
+// signal a completed dispatch ever produces.
+func TestSubmitDiagnosisResult_should_PublishItemLinkedNotification_When_EventBusWired(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	itemID, sessUUID := setupDiagnoseSession(t, storage)
+	bus := events.NewEventBus(10)
+	dh := &diagnoseHandlers{storage: storage, eventBus: bus}
+	ctx := WithSessionUUID(context.Background(), sessUUID)
+
+	eventsCh, _ := bus.Subscribe(ctx)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": itemID,
+		"outcome": "BUG_FILED",
+		"summary": "Found a tmux session collision, filed as X.",
+	})
+
+	result, err := dh.submitDiagnosisResult(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	select {
+	case ev := <-eventsCh:
+		require.NotNil(t, ev)
+		assert.Equal(t, events.EventNotification, ev.Type)
+		assert.Equal(t, "Diagnosis: bug filed", ev.NotificationTitle)
+		assert.Contains(t, ev.NotificationMessage, "tmux session collision")
+		assert.Equal(t, itemID, ev.NotificationMetadata["item_id"])
+	case <-time.After(100 * time.Millisecond):
+		t.Error("expected a diagnosis-result notification to be published within 100ms")
+	}
 }
 
 func TestSubmitDiagnosisResult_should_RejectWrongRole_When_CallerIsWorkSession(t *testing.T) {
@@ -188,4 +228,28 @@ func TestNudgeSession_should_Refuse_When_TargetSessionNotLive(t *testing.T) {
 	require.False(t, m["success"].(bool), "nudge must be refused with no live-instance lookup available")
 	errObj := m["error"].(map[string]interface{})
 	assert.Equal(t, ErrSessionNotFound, errObj["code"])
+}
+
+// NDG-12: the gate now honours ctx, so a cancelled request ctx reaches
+// resolveNudgeTarget as a context error. It must surface as a defined
+// internal error with no write, not as a "not idle" or permission refusal.
+func TestWriteNudge_CancelledRequestCtx_ClassifiedCleanly(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	pm := &recordingPM{}
+	target := session.NewStartedInstanceForTest(t, "nudge-cancel-target", pm)
+	live := &fakeLiveInstanceFinder{instances: map[string]*session.Instance{"target-1": target}}
+	dh := &diagnoseHandlers{storage: storage, live: live}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	got, res := dh.resolveNudgeTarget(ctx, nudgeSessionArgs{targetSessionID: "target-1"})
+
+	require.NotNil(t, res)
+	assert.Nil(t, got)
+	errObj := parseResult(t, res)["error"].(map[string]interface{})
+	assert.Equal(t, ErrInternalError, errObj["code"])
+	assert.Contains(t, errObj["message"], "context canceled")
+	assert.NotContains(t, errObj["message"], "not idle")
+	assert.Empty(t, pm.writes())
 }

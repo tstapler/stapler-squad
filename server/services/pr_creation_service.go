@@ -34,7 +34,7 @@ const draftPRDescriptionTimeout = 30 * time.Second
 type PRCreationService struct {
 	storage                  session.InstanceStore
 	eventBus                 *events.EventBus
-	headlessPool             *headless.Pool
+	headlessPool             headless.PoolClient
 	backlogLifecycleListener *session.BacklogLifecycleListener
 	findInstance             func(string) *session.Instance
 	prCreationInFlight       sync.Map
@@ -59,14 +59,15 @@ func NewPRCreationService(
 	backlogLifecycleListener *session.BacklogLifecycleListener,
 	findInstance func(string) *session.Instance,
 ) *PRCreationService {
-	return &PRCreationService{
+	s := &PRCreationService{
 		storage:                  storage,
 		eventBus:                 eventBus,
-		headlessPool:             headlessPool,
 		backlogLifecycleListener: backlogLifecycleListener,
 		findInstance:             findInstance,
 		vcsReader:                &unfinished.GoGitVCSReader{},
 	}
+	s.SetHeadlessPool(headlessPool) // nil *Pool must stay an untyped-nil interface
+	return s
 }
 
 // SetHeadlessPool wires the headless LLM pool after construction, mirroring
@@ -74,7 +75,17 @@ func NewPRCreationService(
 // nil at NewPRCreationService construction time and only becomes available once
 // the server finishes startup wiring.
 func (s *PRCreationService) SetHeadlessPool(pool *headless.Pool) {
+	if pool == nil {
+		s.headlessPool = nil
+		return
+	}
 	s.headlessPool = pool
+}
+
+// SetHeadlessClient wires a backend-selecting client (headless.SelectingClient)
+// in place of the raw claude pool.
+func (s *PRCreationService) SetHeadlessClient(c headless.PoolClient) {
+	s.headlessPool = c
 }
 
 // SetBacklogLifecycleListener wires the listener after construction, mirroring

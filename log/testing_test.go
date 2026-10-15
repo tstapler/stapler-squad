@@ -1,6 +1,8 @@
 package log
 
 import (
+	"bytes"
+	"fmt"
 	stdlog "log"
 	"strings"
 	"sync"
@@ -124,4 +126,31 @@ func TestRedirectLogger_NoRaceUnderConcurrentWritersAndReader(t *testing.T) {
 	writers.Wait()
 	close(stop)
 	<-readerDone
+}
+
+func TestCaptureLogger_ConcurrentCapturersEachSeeTheirOwnLinesAndOutputIsRestored(t *testing.T) {
+	var sink bytes.Buffer
+	logger := stdlog.New(&sink, "ORIG: ", stdlog.LstdFlags)
+
+	t.Run("group", func(t *testing.T) {
+		for i := 0; i < 8; i++ {
+			t.Run(fmt.Sprintf("c%d", i), func(t *testing.T) {
+				t.Parallel()
+				buf := CaptureLogger(t, logger, "CAP: ")
+				mine := fmt.Sprintf("line-from-%d", i)
+				logger.Print(mine)
+				if !strings.Contains(buf.String(), "CAP: "+mine) {
+					t.Fatalf("capturer %d never saw its own line: %q", i, buf.String())
+				}
+			})
+		}
+	})
+
+	logger.Print("after")
+	if got := sink.String(); !strings.Contains(got, "ORIG: ") || !strings.Contains(got, "after") {
+		t.Fatalf("logger output/prefix not restored after capturers finished: %q", got)
+	}
+	if strings.Contains(sink.String(), "line-from-") {
+		t.Fatalf("captured lines leaked to the original writer: %q", sink.String())
+	}
 }

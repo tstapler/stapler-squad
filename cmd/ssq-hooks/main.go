@@ -22,9 +22,9 @@ import (
 	"github.com/tstapler/stapler-squad/internal/hookipc"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/pkg/localtoken"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
-	"gopkg.in/yaml.v3"
 )
 
 func main() {
@@ -142,10 +142,16 @@ func handleCheck() {
 }
 
 func handleClaudeIPCCheck(payload classifier.PermissionRequestPayload) {
+	classifyViaResident(payload, hookipc.DialUnix, os.LookupEnv, os.Stdout)
+}
+
+// classifyViaResident writes a decision to out only when the resident instance answers with
+// one; every failure writes nothing, so Claude Code falls back to its own permission prompt.
+func classifyViaResident(payload classifier.PermissionRequestPayload, dial hookipc.Dialer, lookupEnv func(string) (string, bool), out io.Writer) {
 	if payload.HookEventName == "" {
 		payload.HookEventName = "PreToolUse"
 	}
-	endpoint, err := hookipc.ResolveEndpoint(payload.Cwd)
+	endpoint, transport, err := dial(payload.Cwd)
 	if err != nil {
 		return
 	}
@@ -155,7 +161,7 @@ func handleClaudeIPCCheck(payload classifier.PermissionRequestPayload) {
 	}
 	selectedEnvironment := map[string]string(nil)
 	if command, ok := payload.ToolInput["command"].(string); ok {
-		selectedEnvironment = classifier.ReferencedEnvironment(command, os.LookupEnv)
+		selectedEnvironment = classifier.ReferencedEnvironment(command, lookupEnv)
 	}
 	envelope := hookipc.ClassificationEnvelope{
 		ProtocolVersion:     endpoint.ProtocolVersion,
@@ -167,16 +173,12 @@ func handleClaudeIPCCheck(payload classifier.PermissionRequestPayload) {
 			Env: selectedEnvironment,
 		},
 	}
-	client, err := hookipc.NewClient(endpoint)
-	if err != nil {
-		return
-	}
-	reply, err := client.Classify(context.Background(), envelope)
+	reply, err := transport.Classify(context.Background(), envelope)
 	if err != nil || reply.Output == nil {
 		return
 	}
-	if err := json.NewEncoder(os.Stdout).Encode(reply.Output); err != nil {
-		log.Warn("failed to write hook decision to stdout", "err", err)
+	if err := json.NewEncoder(out).Encode(reply.Output); err != nil {
+		log.Warn("failed to write hook decision", "err", err)
 	}
 }
 
@@ -708,78 +710,14 @@ func loadClassifier(storage *session.Storage) *classifier.RuleBasedClassifier {
 	}
 	c.AddRules(classifierRules)
 
-	// Also load config file rules from ~/.config/stapler-squad/shared_rules.yaml.
-	configPath := filepath.Join(os.Getenv("HOME"), ".config", "stapler-squad", "shared_rules.yaml")
-	if data, err := os.ReadFile(configPath); err == nil { // #nosec G304 -- configPath is built from $HOME plus a fixed filename, not caller input.
-		var configFile struct {
-			Rules []struct {
-				Name           string   `yaml:"name"`
-				Tool           string   `yaml:"tool"`
-				ToolPattern    string   `yaml:"tool_pattern"`
-				Programs       []string `yaml:"programs"`
-				Subcommands    []string `yaml:"subcommands"`
-				BlockedSubs    []string `yaml:"blocked_subcommands"`
-				CommandPattern string   `yaml:"command_pattern"`
-				FilePattern    string   `yaml:"file_pattern"`
-				Decision       string   `yaml:"decision"`
-				Priority       int      `yaml:"priority"`
-				Enabled        *bool    `yaml:"enabled"`
-			} `yaml:"rules"`
-		}
-		if yamlErr := yaml.Unmarshal(data, &configFile); yamlErr == nil {
-			var configRules []classifier.Rule
-			for _, r := range configFile.Rules {
-				if r.Name == "" {
-					continue
-				}
-				enabled := true
-				if r.Enabled != nil {
-					enabled = *r.Enabled
-				}
-				priority := r.Priority
-				if priority == 0 {
-					priority = 10
-				}
-				decision := classifier.Escalate
-				switch r.Decision {
-				case "allow":
-					decision = classifier.AutoAllow
-				case "deny":
-					decision = classifier.AutoDeny
-				}
-				cr := classifier.Rule{
-					ToolName: r.Tool,
-					Decision: decision,
-					RuleMeta: classifier.RuleMeta{ID: "config-" + strings.ReplaceAll(r.Name, " ", "-"), Name: r.Name, Priority: priority, Enabled: enabled, Source: "config"},
-				}
-				if r.ToolPattern != "" {
-					if compiled, err := regexp.Compile(r.ToolPattern); err == nil {
-						cr.ToolPattern = compiled
-					}
-				}
-				if r.CommandPattern != "" {
-					if compiled, err := regexp.Compile(r.CommandPattern); err == nil {
-						cr.CommandPattern = compiled
-					}
-				}
-				if r.FilePattern != "" {
-					if compiled, err := regexp.Compile(r.FilePattern); err == nil {
-						cr.FilePattern = compiled
-					}
-				}
-				if len(r.Programs) > 0 || len(r.Subcommands) > 0 || len(r.BlockedSubs) > 0 {
-					cr.Criteria = &classifier.CommandCriteria{
-						Programs:           r.Programs,
-						Subcommands:        r.Subcommands,
-						BlockedSubcommands: r.BlockedSubs,
-					}
-				}
-				configRules = append(configRules, cr)
-			}
-			if len(configRules) > 0 {
-				c.AddRules(configRules)
-			}
-		}
+	// shared_rules.yaml is parsed by the same loader the server hot-reloads, so the resident
+	// and local classification paths cannot drift apart.
+	configRules, err := classifier.LoadConfigFileRules(classifier.ConfigFileRulesPath(os.Getenv("HOME")))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+	}
+	if len(configRules) > 0 {
+		c.AddRules(configRules)
 	}
 
 	return c
@@ -1518,17 +1456,30 @@ const ssqApprovalExtensionTemplate = `// Generated by ssq-hooks install pi. Do n
 export default function ssqApproval(pi) {
   const permissionURL = %s;
   const healthURL = %s;
+  // Path of the local API token file (empty when none is configured). Read at call time,
+  // never embedded, so the secret stays out of this generated file.
+  const tokenPath = %s;
+  async function authHeaders() {
+    try {
+      if (!tokenPath) return {};
+      const fs = await import("node:fs");
+      const token = fs.readFileSync(tokenPath, "utf8").trim();
+      return token ? { Authorization: "Bearer " + token } : {};
+    } catch {
+      return {};
+    }
+  }
   // Keep in sync with piExtensionRepingInterval (server/services/pi_extension_health.go).
   const healthRepingIntervalMs = 120000;
 
   // Best-effort health ping — fire-and-forget, must never block extension load or
   // any tool call. Sent once at load time and then re-sent every
   // healthRepingIntervalMs for the lifetime of the pi process (Story 4.2.3).
-  function sendHealthPing() {
+  async function sendHealthPing() {
     try {
       fetch(healthURL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await authHeaders()) },
         body: JSON.stringify({ cwd: (typeof process !== "undefined" && process.cwd) ? process.cwd() : "" }),
       }).catch(() => {});
     } catch {
@@ -1553,7 +1504,7 @@ export default function ssqApproval(pi) {
       try {
         response = await fetch(permissionURL, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...(await authHeaders()) },
           body: JSON.stringify({
             session_id: (ctx && ctx.sessionManager && typeof ctx.sessionManager.getSessionId === "function" ? ctx.sessionManager.getSessionId() : "") || "",
             transcript_path: "",
@@ -1597,27 +1548,32 @@ export default function ssqApproval(pi) {
 // Go/strconv escaping — close to but not identical to JS string-literal escaping) so the
 // embedding is safe by construction, mirroring openCodePluginContent's rationale above.
 func ssqApprovalExtensionContent(permissionURL, healthURL string) string {
-	quotedPermissionURL, err := json.Marshal(permissionURL)
-	if err != nil {
-		quotedPermissionURL = []byte(`""`)
+	return ssqApprovalExtensionContentWithToken(permissionURL, healthURL, "")
+}
+
+// ssqApprovalExtensionContentWithToken is ssqApprovalExtensionContent plus the path the
+// extension reads the local API token from at run time ("" disables the Authorization header).
+func ssqApprovalExtensionContentWithToken(permissionURL, healthURL, tokenPath string) string {
+	quote := func(v string) []byte {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return []byte(`""`)
+		}
+		return b
 	}
-	quotedHealthURL, err := json.Marshal(healthURL)
-	if err != nil {
-		quotedHealthURL = []byte(`""`)
-	}
-	return fmt.Sprintf(ssqApprovalExtensionTemplate, quotedPermissionURL, quotedHealthURL)
+	return fmt.Sprintf(ssqApprovalExtensionTemplate, quote(permissionURL), quote(healthURL), quote(tokenPath))
 }
 
 // patchPiExtension writes the ssq-hooks pi approval extension to extensionPath. Safe to run
 // multiple times: the generated content is a pure function of permissionURL/healthURL, so
 // re-running with the same values produces byte-identical output — same reasoning as
 // patchOpenCodeHooks's doc comment above. The write is atomic (temp file + rename).
-func patchPiExtension(extensionPath, permissionURL, healthURL string) error {
+func patchPiExtension(extensionPath, permissionURL, healthURL, tokenPath string) error {
 	if err := os.MkdirAll(filepath.Dir(extensionPath), 0755); err != nil {
 		log.Error("failed to write pi approval extension", "path", extensionPath, "error", err)
 		return err
 	}
-	content := ssqApprovalExtensionContent(permissionURL, healthURL)
+	content := ssqApprovalExtensionContentWithToken(permissionURL, healthURL, tokenPath)
 	tmpPath := extensionPath + ".tmp"
 	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
 		log.Error("failed to write pi approval extension", "path", extensionPath, "error", err)
@@ -1681,7 +1637,11 @@ func installPi() {
 	extensionPath := filepath.Join(home, ".pi", "agent", "extensions", "ssq-approval.ts")
 	permissionURL := defaultSsqHooksBaseURL + "/api/hooks/permission-request"
 	healthURL := defaultSsqHooksBaseURL + "/api/hooks/pi-extension-loaded"
-	if err := patchPiExtension(extensionPath, permissionURL, healthURL); err != nil {
+	tokenPath := ""
+	if dir, dirErr := config.GetConfigDir(); dirErr == nil {
+		tokenPath = localtoken.Path(dir)
+	}
+	if err := patchPiExtension(extensionPath, permissionURL, healthURL, tokenPath); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing extension to %s: %v\n", extensionPath, err)
 		os.Exit(1)
 	}

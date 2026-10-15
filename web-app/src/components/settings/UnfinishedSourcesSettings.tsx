@@ -99,6 +99,8 @@ export function UnfinishedSourcesSettings() {
           <RepoPathInput
             value={newWatchDir}
             onChange={setNewWatchDir}
+            onEnter={handleAddWatchDir}
+            aria-label="New watch directory path"
             placeholder="/Users/you/code"
           />
           <button
@@ -138,14 +140,13 @@ export function UnfinishedSourcesSettings() {
         </div>
 
         <div className={styles.addRow}>
-          <input
-            type="text"
-            className={styles.input}
-            placeholder="/Users/you/my-project"
+          <RepoPathInput
             value={newPinnedRepo}
-            onChange={(e) => setNewPinnedRepo(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleAddPinnedRepo()}
+            onChange={setNewPinnedRepo}
+            onEnter={handleAddPinnedRepo}
             aria-label="New pinned repository path"
+            placeholder="/Users/you/my-project"
+            data-testid="pinned-repo-input"
           />
           <button
             className={styles.addBtn}

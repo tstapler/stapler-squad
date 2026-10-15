@@ -337,16 +337,32 @@ func TestPool_Call_MultiLineOutput_StreamsInOrder(t *testing.T) {
 	ch, err := pool.Call(context.Background(), "f1", "sys", "p2")
 	require.NoError(t, err)
 
-	var lines []string
+	var chunks []string
 	for chunk := range ch {
 		if chunk.Done {
 			break
 		}
 		if chunk.Text != "" {
-			lines = append(lines, chunk.Text)
+			chunks = append(chunks, chunk.Text)
 		}
 	}
-	assert.Equal(t, []string{"line1", "line2", "line3"}, lines)
+	// Each line after the first carries its leading newline separator.
+	assert.Equal(t, []string{"line1", "\nline2", "\nline3"}, chunks)
+}
+
+// TestPool_CallBlocking_ResumedCall_PreservesLineBreaks guards against the
+// resumed path collapsing multi-line plain-text stdout into one line (it once
+// ran a PR body's "## Summary" heading into the next paragraph).
+func TestPool_CallBlocking_ResumedCall_PreservesLineBreaks(t *testing.T) {
+	t.Parallel()
+	const body = "## Summary\n\nFixes the thing.\n\n## Test plan\n- run tests"
+	runner := NewFakeRunner(firstCallJSON("sess1", "first"), body+"\n")
+	pool := newTestPool(PoolConfig{}, runner)
+
+	pool.CallBlocking(context.Background(), "f1", "sys", "p1", CallOptions{}, DiscardCost) //nolint:errcheck
+	got, err := pool.CallBlocking(context.Background(), "f1", "sys", "p2", CallOptions{}, DiscardCost)
+	require.NoError(t, err)
+	assert.Equal(t, body, got)
 }
 
 // TestPool_CallBlocking_PropagatesSubprocessError verifies error propagation,

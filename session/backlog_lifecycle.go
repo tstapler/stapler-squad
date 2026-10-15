@@ -12,11 +12,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
@@ -65,6 +66,10 @@ type QueueDequeuer interface {
 type BacklogLifecycleListener struct {
 	storage *Storage
 
+	// triageParks tracks recent orphaned-triage retry-cap parkings so a burst can
+	// escalate as one batch notification; see recordTriageParkAndMaybeEscalate.
+	triageParks parkBurstTracker
+
 	// sessionCreatorMu guards sessionCreator for concurrent Set/get access, same
 	// pattern as autoReopener/notifier/prFixSpawner below. Needed because
 	// production wiring (server/dependencies.go) constructs this listener before
@@ -76,6 +81,9 @@ type BacklogLifecycleListener struct {
 	// poolMu guards headlessPool for concurrent Set/get access.
 	poolMu       sync.RWMutex
 	headlessPool *headless.Pool
+	// headlessClient, when set, takes precedence over headlessPool for gate and PR-draft
+	// calls so they honor the LLM backend selector. Guarded by poolMu.
+	headlessClient headless.PoolClient
 
 	// autoReopenMu guards autoReopener for concurrent Set/get access.
 	autoReopenMu sync.RWMutex
@@ -108,10 +116,15 @@ type BacklogLifecycleListener struct {
 	// dashboardBaseURLFnMu guards dashboardBaseURLFn for concurrent Set/get
 	// access. Resolves the base URL used to build a clickable deep link back
 	// to a backlog item from a PR body (see backlogItemLink in
-	// backlog_lifecycle_pr.go); defaults to localhost:8543 and is overridden
-	// at startup via SetDashboardBaseURLFn with the real bound address.
+	// backlog_lifecycle_pr.go). Defaults to "" (text-only footer); the server
+	// wires a non-loopback address via SetDashboardBaseURLFn, and loopback
+	// results are always dropped by getDashboardBaseURL.
 	dashboardBaseURLFnMu sync.RWMutex
 	dashboardBaseURLFn   func() string
+
+	// hostRefFn names this instance (host ID and hostname) in the PR footer;
+	// guarded by dashboardBaseURLFnMu. Nil means the footer carries no host.
+	hostRefFn func() (HostID, string)
 
 	// noopThresholdMu guards noopThresholdFn (see SetNoopDispatchThresholdFn).
 	noopThresholdMu sync.RWMutex
@@ -147,7 +160,7 @@ type BacklogLifecycleListener struct {
 	// prByNumberFinderMu guards prByNumberFinder for concurrent Set/get access.
 	prByNumberFinderMu sync.RWMutex
 	// prByNumberFinder looks up a PR by its immutable number — used by
-	// verifyPRHeadBranchMatchesTracked to re-verify, via a live GitHub lookup,
+	// verifyPRBelongsToItem to re-verify, via a live GitHub lookup,
 	// that item.PrNumber's real head branch still matches the item's
 	// currently-tracked branch before an automated reconciliation call site
 	// treats that PR number as ground truth (Story 6, adversarial-review.md's
@@ -194,6 +207,8 @@ type BacklogLifecycleListener struct {
 
 	// reviewSem limits concurrent review gate goroutines.
 	reviewSem chan struct{}
+	// reviewGuard keeps at most one review spawn per item in flight (see ReviewSpawnGuard).
+	reviewGuard *ReviewSpawnGuard
 
 	// customCheckSem limits concurrent custom-gate-check goroutines
 	// (runCustomGateCheck, session/backlog_lifecycle_gates.go), same pattern
@@ -321,7 +336,8 @@ func (l *BacklogLifecycleListener) SetHeadlessPool(p *headless.Pool) {
 }
 
 // SetDashboardBaseURLFn overrides the base URL used by backlogItemLink to
-// build a deep link back to a backlog item in agent-created PR bodies.
+// build a deep link back to a backlog item in agent-created PR bodies. fn must
+// return a non-loopback URL or ""; loopback URLs are discarded.
 func (l *BacklogLifecycleListener) SetDashboardBaseURLFn(fn func() string) {
 	l.dashboardBaseURLFnMu.Lock()
 	defer l.dashboardBaseURLFnMu.Unlock()
@@ -564,7 +580,7 @@ func (l *BacklogLifecycleListener) getOrphanedPRFinder() func(ctx context.Contex
 }
 
 // SetPRByNumberFinder overrides the function used to look up a PR by its
-// immutable number, used by verifyPRHeadBranchMatchesTracked (Story 6).
+// immutable number, used by verifyPRBelongsToItem (Story 6).
 // Overridable in tests to avoid real GitHub API calls or needing a real git
 // remote on disk; production code never needs to call this, since
 // newListenerBase installs defaultPRByNumberFinder.
@@ -620,6 +636,28 @@ func (l *BacklogLifecycleListener) notify(itemID, title, message string, notific
 	if n := l.getNotifier(); n != nil {
 		n.Notify(itemID, title, message, notificationType, urgent, important)
 	}
+}
+
+// AutoRemediatingNotifier is an optional Notifier extension for a WARNING whose
+// automation is already acting. The implementation stamps it so it is informational
+// (never a pending decision that pins and inflates the count); the escalation, an
+// unstamped notification, is what asks the operator to act.
+type AutoRemediatingNotifier interface {
+	NotifyAutoRemediating(itemID, title, message string, notificationType int32, urgent, important bool)
+}
+
+// notifyAutoRemediating falls back to a plain Notify when the wired notifier does
+// not implement AutoRemediatingNotifier, so older adapters keep working.
+func (l *BacklogLifecycleListener) notifyAutoRemediating(itemID, title, message string, notificationType int32, urgent, important bool) {
+	n := l.getNotifier()
+	if n == nil {
+		return
+	}
+	if ar, ok := n.(AutoRemediatingNotifier); ok {
+		ar.NotifyAutoRemediating(itemID, title, message, notificationType, urgent, important)
+		return
+	}
+	n.Notify(itemID, title, message, notificationType, urgent, important)
 }
 
 // notifyTransitionFailed publishes an operator-facing notification when a
@@ -708,17 +746,54 @@ func (l *BacklogLifecycleListener) getSessionLivenessChecker() func(sessionUUID 
 	return l.sessionLivenessChecker
 }
 
-// getHeadlessPool returns the current headless pool under a read lock.
-func (l *BacklogLifecycleListener) getHeadlessPool() *headless.Pool {
+// SetHeadlessClient routes custom-gate and PR-description calls through c
+// (normally a headless.SelectingClient) instead of the raw claude pool.
+func (l *BacklogLifecycleListener) SetHeadlessClient(c headless.PoolClient) {
+	l.poolMu.Lock()
+	defer l.poolMu.Unlock()
+	l.headlessClient = c
+}
+
+// getHeadlessCaller returns the selector client if wired, else the raw pool, else nil.
+func (l *BacklogLifecycleListener) getHeadlessCaller() headless.PoolClient {
 	l.poolMu.RLock()
 	defer l.poolMu.RUnlock()
-	return l.headlessPool
+	if l.headlessClient != nil {
+		return l.headlessClient
+	}
+	if l.headlessPool != nil {
+		return l.headlessPool
+	}
+	return nil
 }
 
 func (l *BacklogLifecycleListener) getDashboardBaseURL() string {
 	l.dashboardBaseURLFnMu.RLock()
 	defer l.dashboardBaseURLFnMu.RUnlock()
-	return l.dashboardBaseURLFn()
+	if l.dashboardBaseURLFn == nil {
+		return ""
+	}
+	return NonLoopbackBaseURL(l.dashboardBaseURLFn())
+}
+
+// SetHostRefFn wires the resolver that names this instance (host ID and
+// ssq:// hostname) in PR-body footers. Either value may be empty.
+func (l *BacklogLifecycleListener) SetHostRefFn(fn func() (HostID, string)) {
+	l.dashboardBaseURLFnMu.Lock()
+	defer l.dashboardBaseURLFnMu.Unlock()
+	l.hostRefFn = fn
+}
+
+// getPRFooterOrigin resolves who created a PR, for prFooter.
+func (l *BacklogLifecycleListener) getPRFooterOrigin() PRFooterOrigin {
+	origin := PRFooterOrigin{BaseURL: l.getDashboardBaseURL()}
+	l.dashboardBaseURLFnMu.RLock()
+	fn := l.hostRefFn
+	l.dashboardBaseURLFnMu.RUnlock()
+	if fn != nil {
+		origin.HostID, origin.Hostname = fn()
+	}
+	return origin
 }
 
 // Shutdown cancels in-flight review gate calls. Safe to call concurrently.
@@ -738,6 +813,7 @@ func newListenerBase(storage *Storage, pipelineEngine PipelineEngine, livenessEn
 		pipelineEngine:          pipelineEngine,
 		livenessEngine:          livenessEngine,
 		reviewSem:               make(chan struct{}, maxConcurrentReviewGates),
+		reviewGuard:             NewReviewSpawnGuard(),
 		customCheckSem:          make(chan struct{}, maxConcurrentCustomGateChecks),
 		shutdownCtx:             ctx,
 		shutdownCancel:          cancel,
@@ -746,7 +822,7 @@ func newListenerBase(storage *Storage, pipelineEngine PipelineEngine, livenessEn
 		branchReconciler:        git.MergeMainIntoWorktree,
 		orphanedPRFinder:        defaultOrphanedPRFinder,
 		prByNumberFinder:        defaultPRByNumberFinder,
-		dashboardBaseURLFn:      func() string { return "http://localhost:8543" },
+		dashboardBaseURLFn:      func() string { return "" },
 	}
 	l.runner = NewReviewGateRunner(storage, l.getAutoReopener, l.getNotifier, l.getSessionCreator, pipelineEngine)
 	return l
@@ -1744,14 +1820,19 @@ func (l *BacklogLifecycleListener) resolveLatestWorkCommit(ctx context.Context, 
 	if wt.BranchName == "" {
 		return ""
 	}
-	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "--verify", wt.BranchName)
-	cmd.Dir = repoPath
-	out, revErr := cmd.Output()
+	sha, revErr := ResolveBranchTip(ctx, repoPath, wt.BranchName)
 	if revErr != nil {
 		log.Warn("[BacklogLifecycle] resolveLatestWorkCommit: rev-parse failed", "branch", wt.BranchName, "repo_path", repoPath, "error", revErr)
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return sha
+}
+
+// ResolveBranchTip resolves branch to its commit SHA in repoPath. Worktrees share one ref
+// store, so repoPath may be any checkout of the repo. An absent branch is an error.
+func ResolveBranchTip(ctx context.Context, repoPath, branch string) (string, error) {
+	sha, err := gitprovider.Backend().ResolveRef(ctx, backend.Local{Root: backend.RepoRoot(repoPath)}, backend.RefName(branch))
+	return string(sha), err
 }
 
 // transitionBouncingItemToDone moves an item reconcileBouncingItems has
@@ -2085,7 +2166,7 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 			resolve = row.ItemStatus != BacklogStatusQueued
 		case domain.StuckReasonPRPendingNoPR:
 			resolve = row.ItemStatus != BacklogStatusPRPending
-		case domain.StuckReasonPRNeedsFix:
+		case domain.StuckReasonPRNeedsFix, domain.StuckReasonMergedPRUnverified:
 			resolve = row.ItemStatus != BacklogStatusPRPending
 		case domain.StuckReasonRepeatedNoopDispatch:
 			// Commit-landed resolution is reconcileRepeatedNoopDispatch's
@@ -2173,13 +2254,17 @@ type multiReasonRowSet struct {
 // categorizeOpenStuckRows partitions an item's open stuck-state rows into
 // the ones eligible to count toward multi-reason escalation (excluding
 // StuckReasonMultipleReasons and StuckReasonBounceCapExhausted, which are
-// derived signals rather than independent reasons) and tracks whether a
+// derived signals rather than independent reasons, and the waiting reasons
+// isWaitingStuckReason names) and tracks whether a
 // bouncing/abandoned-review pair is present for the structural-coupling
 // exclusion below.
 func categorizeOpenStuckRows(rows []OpenStuckStateData) multiReasonRowSet {
 	var set multiReasonRowSet
 	for _, row := range rows {
 		if row.Reason == domain.StuckReasonMultipleReasons || row.Reason == domain.StuckReasonBounceCapExhausted {
+			continue
+		}
+		if isWaitingStuckReason(row.Reason) {
 			continue
 		}
 		if row.Reason == domain.StuckReasonBouncing {
@@ -2192,6 +2277,15 @@ func categorizeOpenStuckRows(rows []OpenStuckStateData) multiReasonRowSet {
 		set.nonEscalation = append(set.nonEscalation, row)
 	}
 	return set
+}
+
+// isWaitingStuckReason reports whether reason only says "something else is
+// already acting or the item awaits a merge" — respawn_blocked_active (its own
+// notification is INFO, "no action needed") and pr_ready_unmerged — so it
+// never counts toward multi-reason escalation. Both co-occur on every healthy
+// item whose PR is waiting on review, which escalated them to ERROR.
+func isWaitingStuckReason(reason domain.StuckReason) bool {
+	return reason == domain.StuckReasonRespawnBlockedActive || reason == domain.StuckReasonPRReadyUnmerged
 }
 
 // excludeStructurallyCoupledAbandonedReview applies the ADR-001 exclusion

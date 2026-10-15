@@ -27,7 +27,9 @@ import (
 	"github.com/mark3labs/mcp-go/client/transport"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/localtoken"
 )
 
 // ErrProxyUnavailable wraps any failure to connect to the running HTTP MCP
@@ -64,6 +66,13 @@ func ProxyHeaders() map[string]string {
 	headers := map[string]string{}
 	if uuid := os.Getenv("STAPLER_SESSION_UUID"); uuid != "" {
 		headers["X-Stapler-Session-UUID"] = uuid
+	}
+	// Present the local API token when the server runs with require_local_auth;
+	// absent otherwise, so the unauthenticated default is unchanged.
+	if dir, err := config.GetConfigDir(); err == nil {
+		if tok := localtoken.FromConfigDir(dir); tok != "" {
+			headers["Authorization"] = "Bearer " + tok
+		}
 	}
 	return headers
 }

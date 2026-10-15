@@ -137,6 +137,25 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 		if cb != nil {
 			cb()
 		}
+	} else if dstAdapter.Name() == "opencode" {
+		uuidStr = i.GetClaudeConversationUUID()
+		i.claudeSessionMu.Lock()
+		if i.claudeSession == nil {
+			i.claudeSession = &ClaudeSessionData{}
+		}
+		i.claudeSession.ConversationUUID = uuidStr
+		i.claudeSession.ProjectName = i.Title
+		i.claudeSession.LastAttached = time.Now()
+		if i.claudeSession.Metadata == nil {
+			i.claudeSession.Metadata = make(map[string]string)
+		}
+		i.claudeSession.Metadata["working_dir"] = workspace
+		cb := i.claudeSessionIDSavedCallback
+		i.claudeSessionMu.Unlock()
+
+		if cb != nil {
+			cb()
+		}
 	}
 
 	log.Info("PortSessionHistory: ported session history using canonical formats", "from", srcAdapter.Name(), "to", dstAdapter.Name(), "session", i.Title)

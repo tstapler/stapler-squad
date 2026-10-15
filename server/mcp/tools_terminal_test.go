@@ -3,10 +3,12 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/sendkeysguard"
 	"github.com/tstapler/stapler-squad/session/streamhub"
@@ -678,5 +680,50 @@ func TestFindInstance_should_fallBackToStore_When_LiveFinderNil(t *testing.T) {
 	}
 	if got != staleInst {
 		t.Error("expected the LoadInstances()-sourced instance when th.live is nil")
+	}
+}
+
+// T-RO-16: the MCP write tools make no hidden-session distinction (the
+// read-only guarantee is a UI-stream concern, OS-2): for the same instance
+// state, write_to_session and send_control return the identical result for a
+// hidden and a visible session, and neither is a read-only refusal.
+func TestMCPWriteTools_ShouldBehaveAsBeforeForHidden_WhenWriteToSessionAndSendControlCalled(t *testing.T) {
+	store := &stubStore{instances: []*session.Instance{
+		{Title: "visible-s", Status: session.Active, Program: "claude"},
+		{Title: "hidden-s", Status: session.Active, Program: "claude", Hidden: true},
+	}}
+	th := &terminalHandlers{
+		store:      store,
+		scrollback: makeScrollbackMgr(t),
+		writeLim:   newTokenBucket(10, 10),
+	}
+
+	call := func(tool, id string) map[string]interface{} {
+		t.Helper()
+		var res *mcpgo.CallToolResult
+		var err error
+		switch tool {
+		case "write_to_session":
+			res, err = th.writeToSession(context.Background(), makeToolReq(map[string]interface{}{"session_id": id, "input": "ls"}))
+		case "send_control":
+			res, err = th.sendControl(context.Background(), makeToolReq(map[string]interface{}{"session_id": id, "key": "C"}))
+		}
+		if err != nil {
+			t.Fatalf("%s(%s): %v", tool, id, err)
+		}
+		return parseResult(t, res)
+	}
+
+	for _, tool := range []string{"write_to_session", "send_control"} {
+		visible, hidden := call(tool, "visible-s"), call(tool, "hidden-s")
+		if !reflect.DeepEqual(visible, hidden) {
+			t.Errorf("%s differs for a hidden session:\n visible=%v\n hidden=%v", tool, visible, hidden)
+		}
+		if errObj, ok := hidden["error"].(map[string]interface{}); ok {
+			code, _ := errObj["code"].(string)
+			if strings.Contains(strings.ToLower(code), "read_only") || strings.Contains(strings.ToLower(code), "precondition") {
+				t.Errorf("%s refused a hidden session as read-only: %v", tool, errObj)
+			}
+		}
 	}
 }

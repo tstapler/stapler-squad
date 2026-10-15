@@ -43,26 +43,18 @@ func (d *DiffStats) IsEmpty() bool {
 // with common default branches. Used as a fallback when baseCommitSHA was not set at
 // worktree creation time (e.g., sessions created with setupFromExistingBranch before the fix).
 //
-// Deliberately still a `git merge-base` subprocess rather than go-git's repo.Head() +
-// Commit.MergeBase, despite the rest of this file having moved to go-git: go-git's
-// direct HEAD-ref-file read has a documented torn-read race against a concurrent
-// writer to the SAME worktree's HEAD (see getHeadCommitSHA's doc comment,
-// session/git/util.go) — reproduced in production as a syntactically-valid but
-// entirely nonexistent commit hash, not just a stale one. getHeadCommitSHA already
-// hardens against that (retry + verify against the object store + CLI fallback) and
-// could be reused here, but this specific call additionally resolves a second,
-// less-instrumented ref (the candidate default branch, e.g. "main") shared across
-// every worktree of the repo, which the git CLI's atomic-rename ref reads simply
-// aren't exposed to. Given this file's brief was the working-tree-vs-commit diff
-// content, not ref resolution, converting this call is left for a future pass that
-// can add the same worktree-specific race coverage getHeadCommitSHA already has.
+// Deliberately not go-git's repo.Head() + Commit.MergeBase: go-git's direct HEAD-ref-file
+// read has a documented torn-read race against a concurrent writer to the SAME worktree's
+// HEAD (see getHeadCommitSHA's doc comment, session/git/util.go) — reproduced in production
+// as a syntactically-valid but entirely nonexistent commit hash — and this call also resolves
+// a second, shared ref (the candidate default branch, e.g. "main"). The lookup goes through
+// Backend.MergeBase instead: `git merge-base` under the default refs=cli, whose atomic-rename
+// ref reads are not exposed to that race, and the router's torn_read/object_missing fallback
+// to the CLI under refs=gogit.
 func (g *GitWorktree) resolveBaseCommitSHA() string {
 	for _, branch := range CandidateDefaultBranches {
-		output, err := g.runGitCommand(g.worktreePath, "merge-base", "HEAD", branch)
-		if err == nil {
-			if sha := strings.TrimSpace(output); sha != "" {
-				return sha
-			}
+		if sha := g.headMergeBase(branch); sha != "" {
+			return sha
 		}
 	}
 	return ""
@@ -80,7 +72,7 @@ func (g *GitWorktree) resolveBaseCommitSHA() string {
 // go-git equivalent existed for this working-tree case; this is that equivalent,
 // built from go-git's lower-level tree/gitignore/line-diff primitives rather than
 // a single library call. See resolveBaseCommitSHA's doc comment for the one piece
-// of this feature that deliberately stays on a subprocess (ref resolution, not
+// of this feature that deliberately stays on the git CLI by default (ref resolution, not
 // diff content — a real go-git race documented elsewhere in this package).
 func (g *GitWorktree) Diff() *DiffStats {
 	stats := &DiffStats{}

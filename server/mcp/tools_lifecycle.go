@@ -441,6 +441,7 @@ func (lh *lifecycleHandlers) resumeSession(ctx context.Context, req mcpgo.CallTo
 	if err := inst.Resume(); err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("resume session: %v", err), ""), nil
 	}
+	services.RefreshInstanceHookProof(inst)
 
 	if err := lh.store.SaveInstances([]*session.Instance{inst}); err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("save: %v", err), ""), nil

@@ -9,22 +9,19 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	fdiff "github.com/go-git/go-git/v5/plumbing/format/diff"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/git/internal/gittest"
 	"github.com/tstapler/stapler-squad/session/tmux"
-	"github.com/tstapler/stapler-squad/testutil/gitfixture"
 )
 
 // runGit runs a git command in dir and fails the test on error.
-func runGit(t *testing.T, dir string, args ...string) string {
+func runGit(t testing.TB, dir string, args ...string) string {
 	t.Helper()
-	cmd := safeexec.CommandContext(context.Background(), "git", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "git %s failed: %s", strings.Join(args, " "), out)
-	return string(out)
+	return gittest.RunGit(t, dir, args...)
 }
 
 // cloneTestRepo clones originDir into a fresh temp directory, giving the clone an
@@ -33,13 +30,7 @@ func runGit(t *testing.T, dir string, args ...string) string {
 // worktree, which always starts from the shared repo's checked-out branch.
 func cloneTestRepo(t *testing.T, originDir string) string {
 	t.Helper()
-	workDir := t.TempDir()
-	// t.TempDir() already creates the directory; `git clone` requires an empty or
-	// missing target, so clone into a subdirectory instead.
-	cloneDir := filepath.Join(workDir, "clone")
-	runGit(t, workDir, "clone", originDir, cloneDir)
-	gitfixture.ConfigureNativeIdentity(t, cloneDir)
-	return cloneDir
+	return gittest.CloneTestRepo(t, originDir)
 }
 
 // TestMergeMainIntoWorktree_should_ReportUpToDate_When_BranchAlreadyHasLatestMain
@@ -1438,4 +1429,172 @@ func TestDiffHashFromFilePatches_ShouldSkipEntry_WhenFilesAreNilButChunksNonEmpt
 		hash := diffHashFromFilePatches(patches)
 		assert.NotEmpty(t, hash)
 	})
+}
+
+// countCommitsNotAncestorOfPerCommitWalk is the pre-PerfFix implementation: one
+// full Commit.IsAncestor history walk per visited commit. Kept as the oracle
+// for the equivalence test and the baseline for the benchmark.
+func countCommitsNotAncestorOfPerCommitWalk(from, target *object.Commit) (int, error) {
+	seen := map[plumbing.Hash]bool{from.Hash: true}
+	queue := []*object.Commit{from}
+	count := 0
+	for len(queue) > 0 && count < countCommitsNotAncestorOfCap {
+		c := queue[0]
+		queue = queue[1:]
+		isAncestor, err := c.IsAncestor(target)
+		if err != nil {
+			return count, err
+		}
+		if isAncestor {
+			continue
+		}
+		count++
+		if err := c.Parents().ForEach(func(p *object.Commit) error {
+			if !seen[p.Hash] {
+				seen[p.Hash] = true
+				queue = append(queue, p)
+			}
+			return nil
+		}); err != nil {
+			return count, err
+		}
+	}
+	return count, nil
+}
+
+func commitFile(t testing.TB, dir, name string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(name+"\n"), 0o644))
+	runGit(t, dir, "add", name)
+	runGit(t, dir, "commit", "-m", name)
+}
+
+// newDivergedAncestryRepo builds mainCommits on main, a feature branch with
+// featureCommits (including one merge of main back in), and returns the repo
+// path. main then advances past the merge so both directions are non-zero.
+func newDivergedAncestryRepo(t testing.TB, mainCommits, featureCommits int) string {
+	t.Helper()
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	runGit(t, dir, "config", "commit.gpgsign", "false")
+	for i := range mainCommits {
+		commitFile(t, dir, fmt.Sprintf("main-%d.txt", i))
+	}
+	runGit(t, dir, "checkout", "-b", "feature")
+	for i := range featureCommits {
+		commitFile(t, dir, fmt.Sprintf("feature-%d.txt", i))
+	}
+	runGit(t, dir, "checkout", "main")
+	commitFile(t, dir, "main-advance-0.txt")
+	runGit(t, dir, "checkout", "feature")
+	runGit(t, dir, "merge", "--no-edit", "main")
+	commitFile(t, dir, "feature-after-merge.txt")
+	runGit(t, dir, "checkout", "main")
+	commitFile(t, dir, "main-advance-1.txt")
+	commitFile(t, dir, "main-advance-2.txt")
+	return dir
+}
+
+func ancestryCommits(t testing.TB, dir string) (feature, main *object.Commit) {
+	t.Helper()
+	repo, err := OpenRepo(dir)
+	require.NoError(t, err)
+	fRef, err := repo.Reference(plumbing.NewBranchReferenceName("feature"), true)
+	require.NoError(t, err)
+	mRef, err := repo.Reference(plumbing.NewBranchReferenceName("main"), true)
+	require.NoError(t, err)
+	feature, err = repo.CommitObject(fRef.Hash())
+	require.NoError(t, err)
+	main, err = repo.CommitObject(mRef.Hash())
+	require.NoError(t, err)
+	return feature, main
+}
+
+// TestCountCommitsNotAncestorOf_should_MatchPerCommitWalk_When_HistoryHasMerges
+// guards PerfFix-5's rewrite: the single ancestor-set walk must agree with the
+// per-commit IsAncestor oracle in both directions, merge commits included.
+func TestCountCommitsNotAncestorOf_should_MatchPerCommitWalk_When_HistoryHasMerges(t *testing.T) {
+	dir := newDivergedAncestryRepo(t, 6, 4)
+	feature, main := ancestryCommits(t, dir)
+
+	for _, tc := range []struct {
+		name         string
+		from, target *object.Commit
+	}{{"ahead", feature, main}, {"behind", main, feature}} {
+		want, err := countCommitsNotAncestorOfPerCommitWalk(tc.from, tc.target)
+		require.NoError(t, err)
+		got, err := countCommitsNotAncestorOf(tc.from, tc.target)
+		require.NoError(t, err)
+		assert.Equal(t, want, got, tc.name)
+		assert.NotZero(t, got, "%s: fixture must diverge in this direction", tc.name)
+	}
+}
+
+// TestBranchHasCommitsAhead_should_AgreeWithBranchAheadBehind covers the
+// branch-ahead, branch-merged and branch-deleted cases of the fast path.
+func TestBranchHasCommitsAhead_should_AgreeWithBranchAheadBehind(t *testing.T) {
+	dir := newDivergedAncestryRepo(t, 3, 2)
+	runGit(t, dir, "branch", "merged", "main")
+
+	for _, branch := range []string{"feature", "merged", "gone"} {
+		status, err := BranchAheadBehind(dir, branch, "main")
+		require.NoError(t, err)
+		exists, ahead, err := BranchHasCommitsAhead(dir, branch, "main")
+		require.NoError(t, err)
+		assert.Equal(t, status.BranchExists, exists, branch)
+		assert.Equal(t, status.AheadOfMain > 0, ahead, branch)
+	}
+}
+
+// BenchmarkCountCommitsNotAncestorOf compares the single ancestor-set walk
+// against the per-commit IsAncestor baseline across main-history depths.
+func BenchmarkCountCommitsNotAncestorOf(b *testing.B) {
+	for _, n := range []int{50, 200} {
+		dir := newDivergedAncestryRepo(b, n, 20)
+		feature, main := ancestryCommits(b, dir)
+		for _, impl := range []struct {
+			name string
+			fn   func(from, target *object.Commit) (int, error)
+		}{
+			{"PerCommitWalk", countCommitsNotAncestorOfPerCommitWalk},
+			{"AncestorSet", countCommitsNotAncestorOf},
+		} {
+			b.Run(fmt.Sprintf("%s/%dmain", impl.name, n), func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					if _, err := impl.fn(feature, main); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}
+
+// TestCountCommitsNotAncestorOf_should_NotError_When_TargetHistoryIsShallow
+// guards a regression the ancestor-set rewrite introduced: the walk reached a
+// shallow clone's missing parents and errored where the per-commit IsAncestor
+// walk stopped at the first hit.
+func TestCountCommitsNotAncestorOf_should_NotError_When_TargetHistoryIsShallow(t *testing.T) {
+	origin := newDivergedAncestryRepo(t, 5, 2)
+	shallow := filepath.Join(t.TempDir(), "shallow")
+	runGit(t, filepath.Dir(shallow), "clone", "--depth", "2", "--no-local", "file://"+origin, shallow)
+	repo, err := OpenRepo(shallow)
+	require.NoError(t, err)
+	head, err := repo.Head()
+	require.NoError(t, err)
+	tip, err := repo.CommitObject(head.Hash())
+	require.NoError(t, err)
+	parent, err := tip.Parent(0)
+	require.NoError(t, err)
+
+	for name, from := range map[string]*object.Commit{"tip": tip, "parent": parent} {
+		got, err := countCommitsNotAncestorOf(from, tip)
+		require.NoError(t, err, name)
+		want, err := countCommitsNotAncestorOfPerCommitWalk(from, tip)
+		require.NoError(t, err, name)
+		assert.Equal(t, want, got, name)
+	}
 }

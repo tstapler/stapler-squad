@@ -2566,3 +2566,22 @@ unchanged prompt after N identical failures) would close all four at once instea
 3. `sdd:fix-bug` — shared retry-escalation policy across `bouncing`/`push_failed`'s backoff gates (highest leverage, closes the most-repeated shape in this doc at once).
 4. `sdd:fix-bug` — bounded retry/expiry for `CodebaseReadCapabilitySelfCheck` instead of permanent `sync.Once` caching.
 5. Manual: fix `compute-nop`'s git remote/host config on the session-spawning host; manually reopen `61371a09` for its own AC2 regression once push is unblocked.
+
+## Update — 2026-10-09: merged PRs stuck in `pr_pending` — a stamped value that never equalled what it was compared to
+
+**Items:** `4daf7ced` (PR #960) and `229df75a` (PR #951) sat in `pr_pending` for 1–2 days after clean merges;
+`ReconcilePRPending` logged "head branch no longer verifiably matches the tracked branch" every tick.
+
+| Item | Why the Story 6 ownership guard failed closed |
+|---|---|
+| `4daf7ced` | `spawnSessionAfterGates` stamped `ItemSession.branch_name` with the bare slug; the real branch (and PR head ref) is `backlog/<slug>`. `4fa8c5b8b`'s "survive deleted rows" fix preferred that stamp, so the comparison was `slug != backlog/slug` forever. |
+| `229df75a` | Work session predates `branch_name` and its Session/Worktree rows were gone — no branch recorded anywhere. The PR head SHA did equal the session's `last_commit_sha`. |
+
+**Fix:** stamp `session.BacklogWorkBranchName(slug)` (single source for the prefix); the guard now matches on
+branch (with or without prefix) *or* the work session's tip commit; a still-unverifiable merged PR opens a
+durable `merged_pr_unverified` stuck row + one notification instead of a per-tick log line.
+
+**Recurring shape:** "swallowed status-transition" (see 2026-07-27, 2026-08-03) — the guard's refusal had no
+durable surface — **plus** a new sub-shape: two writers of the same logical value (a branch name) in different
+forms, compared by literal equality. `4fa8c5b8b` fixed the "row is gone" instance without a test that the stamp
+equals the real branch; `TestSpawnSessionFromItem_should_StampRealGitBranchOnItemSession` now pins that.

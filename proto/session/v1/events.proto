@@ -565,4 +565,8 @@ message NotificationEvent {
 
   // Unique notification ID (for tracking)
   string notification_id = 9;
+
+  // True when this event is an unread decision the operator must act on
+  // (same server predicate as NotificationHistoryRecord.is_pending_decision).
+  bool is_pending_decision = 10;
 }

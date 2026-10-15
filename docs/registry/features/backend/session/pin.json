@@ -5,7 +5,7 @@
   "method": "PinSession",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
-  "handlerFile": "server/services/session_service.go",
+  "handlerFile": "server/services/session_service_lifecycle.go",
   "tested": true,
   "testIds": [
     "TestPinSession_should_PersistPinnedTrue_When_RPCSucceeds",
@@ -13,5 +13,5 @@
     "TestPinSession_should_ReturnNotFoundOrInvalid_When_IDBad",
     "TestPinSession_should_PublishSessionUpdatedEvent_When_Pinned"
   ],
-  "lastModified": "2026-09-30T01:51:28.84815719-07:00"
+  "lastModified": "2026-10-05T21:31:10.551579565-07:00"
 }

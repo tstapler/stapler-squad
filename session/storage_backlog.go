@@ -85,7 +85,9 @@ const backlogItemPublicIDBackfillLockTimeout = 5 * time.Second
 // "" as "skip locking" — there is no filesystem location to coordinate on,
 // and no plausible second OS process to race against in either case.
 func (r *EntRepository) backfillLockFilePath(name string) string {
-	if r.dbPath == "" || strings.HasPrefix(r.dbPath, "file:") {
+	// A bare ":memory:" DSN has no directory; filepath.Dir would resolve it to the
+	// process cwd and litter the working tree with a lock file.
+	if r.dbPath == "" || r.dbPath == ":memory:" || strings.HasPrefix(r.dbPath, "file:") {
 		return ""
 	}
 	return filepath.Join(filepath.Dir(r.dbPath), name)
@@ -199,7 +201,12 @@ type ItemSessionData struct {
 	// (a headless call that has finished); "" otherwise — see EntRepository.Delete
 	// and UpdateItemSessionConversationUUID for the other ways it gets recorded.
 	ConversationUUID string
-	AcSnapshot       AcCriteriaJSON
+	// BranchName is the work session's git branch, stamped once at spawn
+	// time — see ItemSession.branch_name's schema comment for why this
+	// needs to outlive the Session/Worktree rows it would otherwise be
+	// read from.
+	BranchName string
+	AcSnapshot AcCriteriaJSON
 	// PipelineModeSnapshot/PipelineModeSnapshotHash freeze the resolved
 	// PipelineMode slug and its content hash at the moment this session
 	// first starts — see ItemSessionSummary.PipelineModeSnapshot(Hash).
@@ -257,6 +264,7 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionD
 		SetSessionUUID(data.SessionUUID).
 		SetSessionRole(data.SessionRole).
 		SetConversationUUID(data.ConversationUUID).
+		SetBranchName(data.BranchName).
 		SetBacklogItemID(parsedItemID).
 		SetNillableAcSnapshot(nilIfEmpty(string(data.AcSnapshot))).
 		SetPipelineModeSnapshot(data.PipelineModeSnapshot).
@@ -516,6 +524,27 @@ func (r *EntRepository) UpdateItemSessionEndedWithReason(ctx context.Context, id
 		Save(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to set ended_at on item session %s: %w", id, err)
+	}
+	return nil
+}
+
+// UpdateItemSessionEndedWithDetail is UpdateItemSessionEndedWithReason plus the
+// error_detail column — used only for classifyHeadlessCallError's "other" bucket so the
+// underlying error text survives log rotation. A separate method keeps the many
+// detail-less callers of UpdateItemSessionEndedWithReason unchanged.
+func (r *EntRepository) UpdateItemSessionEndedWithDetail(ctx context.Context, id string, endedAt time.Time, reason, detail string) error {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid id %q: %w", id, err)
+	}
+
+	_, err = r.client.ItemSession.UpdateOneID(parsedID).
+		SetEndedAt(endedAt).
+		SetEndReason(reason).
+		SetErrorDetail(detail).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to set ended_at/error_detail on item session %s: %w", id, err)
 	}
 	return nil
 }

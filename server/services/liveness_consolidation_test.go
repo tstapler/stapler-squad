@@ -382,7 +382,7 @@ func TestConversationOwnedByOtherLiveSession_should_ReportOwnership_When_LiveSib
 	t.Run("no reviewQueuePoller: nothing can be proven, so nothing may be reported owned", func(t *testing.T) {
 		t.Parallel()
 		svc := &SessionService{}
-		_, owned := svc.ConversationOwnedByOtherLiveSession("self-uuid", conversationUUID, sharedPath)
+		_, owned := svc.ConversationOwnedByOtherLiveSession(conversationOwnershipQuery{selfUUID: "self-uuid", conversationUUID: conversationUUID, path: sharedPath})
 		assert.False(t, owned)
 	})
 
@@ -394,7 +394,7 @@ func TestConversationOwnedByOtherLiveSession_should_ReportOwnership_When_LiveSib
 		poller.SetInstances([]*session.Instance{sibling})
 		svc := &SessionService{reviewQueuePoller: poller}
 
-		ownerUUID, owned := svc.ConversationOwnedByOtherLiveSession("self-uuid", conversationUUID, sharedPath)
+		ownerUUID, owned := svc.ConversationOwnedByOtherLiveSession(conversationOwnershipQuery{selfUUID: "self-uuid", conversationUUID: conversationUUID, path: sharedPath})
 
 		require.True(t, owned, "a live sibling that already owns this exact conversation UUID at this path must be reported")
 		assert.Equal(t, sibling.UUID, ownerUUID)
@@ -408,7 +408,7 @@ func TestConversationOwnedByOtherLiveSession_should_ReportOwnership_When_LiveSib
 		poller.SetInstances([]*session.Instance{self})
 		svc := &SessionService{reviewQueuePoller: poller}
 
-		_, owned := svc.ConversationOwnedByOtherLiveSession(self.UUID, conversationUUID, sharedPath)
+		_, owned := svc.ConversationOwnedByOtherLiveSession(conversationOwnershipQuery{selfUUID: self.UUID, conversationUUID: conversationUUID, path: sharedPath})
 
 		assert.False(t, owned, "cold-restore self-recovery must never be blocked by a session's own record")
 	})
@@ -421,7 +421,7 @@ func TestConversationOwnedByOtherLiveSession_should_ReportOwnership_When_LiveSib
 		poller.SetInstances([]*session.Instance{sibling})
 		svc := &SessionService{reviewQueuePoller: poller}
 
-		_, owned := svc.ConversationOwnedByOtherLiveSession("self-uuid", conversationUUID, sharedPath)
+		_, owned := svc.ConversationOwnedByOtherLiveSession(conversationOwnershipQuery{selfUUID: "self-uuid", conversationUUID: conversationUUID, path: sharedPath})
 
 		assert.False(t, owned, "path overlap alone must never be enough -- the sibling must own this exact UUID")
 	})
@@ -434,7 +434,7 @@ func TestConversationOwnedByOtherLiveSession_should_ReportOwnership_When_LiveSib
 		poller.SetInstances([]*session.Instance{dead})
 		svc := &SessionService{reviewQueuePoller: poller}
 
-		_, owned := svc.ConversationOwnedByOtherLiveSession("self-uuid", conversationUUID, sharedPath)
+		_, owned := svc.ConversationOwnedByOtherLiveSession(conversationOwnershipQuery{selfUUID: "self-uuid", conversationUUID: conversationUUID, path: sharedPath})
 
 		assert.False(t, owned, "a no-longer-live sibling must not block adoption")
 	})

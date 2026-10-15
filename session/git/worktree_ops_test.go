@@ -11,13 +11,35 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/git/internal/obstest"
+
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
+
+// createBranchNative creates branchName at HEAD through go-git, so a delayed "race winner" in a
+// retry-window test costs no fork (a forked git can stall past the loop's budget on a loaded host).
+func createBranchNative(t *testing.T, repoDir, branchName string) {
+	t.Helper()
+	repo, err := OpenRepo(repoDir)
+	if err != nil {
+		t.Errorf("open %s: %v", repoDir, err)
+		return
+	}
+	head, err := repo.Head()
+	if err != nil {
+		t.Errorf("head of %s: %v", repoDir, err)
+		return
+	}
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branchName), head.Hash())); err != nil {
+		t.Errorf("create branch %s: %v", branchName, err)
+	}
+}
 
 // corruptPackedRefs overwrites repoDir's .git/packed-refs with malformed content, forcing
 // repo.Reference() to return a non-ErrReferenceNotFound error for any branch that has no
@@ -391,9 +413,8 @@ func TestBranchExistsAfterAddFailure_ReturnsTrue_When_BranchAppearsDuringRetryWi
 	go func() {
 		// Past the loop's first two checks (attempt 0 has no pre-sleep; attempt 1
 		// sleeps once) but well within its total budget.
-		time.Sleep(2 * worktreeAddRetryDelay)
-		cmd := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", branchName)
-		_ = cmd.Run()
+		time.Sleep(2 * worktreeAddRetryDelay) //nolint:notimesleeptest must create the branch after the production retry loop's own wall-clock backoff (worktreeAddRetryDelay) has begun; no hook exposes loop progress
+		createBranchNative(t, repoDir, branchName)
 	}()
 
 	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-delayed-race-winner-layer1", branchName)
@@ -414,24 +435,33 @@ func TestBranchExistsAfterAddFailure_IncrementsRetryCounter_When_ItRetries(t *te
 	repoDir := setupTestRepo(t)
 	branchName := "backlog/retry-counter-fixture"
 
-	go func() {
-		time.Sleep(2 * worktreeAddRetryDelay)
-		cmd := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", branchName)
-		_ = cmd.Run()
-	}()
-
 	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-retry-counter-fixture", branchName)
 	require.NoError(t, err)
 
-	before := collectGitMetric(t, "git_worktree_retry_total")
-	baseline := sumGitCounter(t, before)
+	before := obstest.CollectMetric(t, "git_worktree_retry_total")
+	baseline := obstest.SumCounter(t, before)
+
+	// Create the branch only once the loop has recorded its first retry (so the
+	// attempt-0 check has already seen "not found"); this test is not parallel,
+	// so the counter only moves on this loop's own retries.
+	var racer sync.WaitGroup
+	racer.Add(1)
+	defer racer.Wait()
+	go func() {
+		defer racer.Done()
+		retried := func() bool {
+			return obstest.SumCounter(t, obstest.CollectMetric(t, "git_worktree_retry_total")) > baseline
+		}
+		_ = wait.WaitForCondition(retried, wait.WaitConfig{Timeout: 10 * time.Second, PollInterval: 10 * time.Millisecond, Description: "first retry recorded"})
+		createBranchNative(t, repoDir, branchName)
+	}()
 
 	assert.True(t, wt.branchExistsAfterAddFailure(plumbing.NewBranchReferenceName(branchName)),
 		"must self-heal once the delayed race winner's branch appears within the retry window")
 
-	after := collectGitMetric(t, "git_worktree_retry_total")
+	after := obstest.CollectMetric(t, "git_worktree_retry_total")
 	require.NotNil(t, after)
-	assert.Greater(t, sumGitCounter(t, after), baseline, "expected at least one Ground-Truth Re-Query retry to be recorded")
+	assert.Greater(t, obstest.SumCounter(t, after), baseline, "expected at least one Ground-Truth Re-Query retry to be recorded")
 }
 
 // TestBranchExistsAfterAddFailure_ReturnsFalse_When_BranchNeverAppears is Story 1.1.1's
@@ -454,7 +484,8 @@ func TestBranchExistsAfterAddFailure_ReturnsFalse_When_BranchNeverAppears(t *tes
 // to the "worktree unlock"/"worktree remove -f" cleanup calls that also route through the
 // same spy.
 func isWorktreeAddNoBranchCall(call gitSpyRunCall) bool {
-	return len(call.args) == 4 && call.args[0] == "worktree" && call.args[1] == "add"
+	// The backend inserts "--" before the path: worktree add -- <path> <branch>.
+	return len(call.args) == 5 && call.args[0] == "worktree" && call.args[1] == "add" && call.args[2] == "--"
 }
 
 // newWorktreeAddFailureSpy returns a gitSpyCommandRunner that fails
@@ -508,8 +539,13 @@ func TestSetupFromExistingBranch_SelfHeals_When_WorktreeRegisteredByDelayedRaceW
 	branchName := "backlog/delayed-race-winner-layer2"
 	winnerPath := CanonicalizeWorktreePath(filepath.Join(t.TempDir(), "winner-worktree"))
 
+	// The loser can see the winner's registration while the winner is still writing
+	// its checkout; the TempDir cleanup must wait for that goroutine or it races it.
+	winnerDone := make(chan struct{})
+	t.Cleanup(func() { <-winnerDone })
 	go func() {
-		time.Sleep(2 * worktreeAddRetryDelay)
+		defer close(winnerDone)
+		time.Sleep(2 * worktreeAddRetryDelay) //nolint:notimesleeptest must register the winner worktree after the production retry loop's own wall-clock backoff (worktreeAddRetryDelay) has begun; no hook exposes loop progress
 		winnerWt := NewGitWorktreeFromStorageWithExecutor(repoDir, winnerPath, "test-delayed-race-winner-layer2-winner", branchName, "")
 		_ = winnerWt.nativeSetupNewWorktree()
 	}()

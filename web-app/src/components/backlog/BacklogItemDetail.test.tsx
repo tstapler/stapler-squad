@@ -26,6 +26,13 @@ import { BacklogItemShipStatusSchema, StuckReason, type StuckBacklogItem } from 
 // focused on BacklogItemDetail's own render behavior.
 jest.mock("./SessionMonitor", () => ({ SessionMonitor: () => null }));
 jest.mock("./GateVerdictBox", () => ({ GateVerdictBox: () => null }));
+// Off by default; the action-reachability tests flip it so the real gate
+// section's position relative to ActionsSection can be asserted.
+let mockShowGateSection = false;
+jest.mock("./GateBlockingSection", () => ({
+  GateBlockingSection: () =>
+    mockShowGateSection ? <div data-testid="gate-blocking-section" /> : null,
+}));
 // Stubbed to a minimal interactive shim (rather than plain `() => null`) so
 // Task 1.1.2c's wiring test can exercise the real onAnswerQuestion prop
 // BacklogItemDetail passes down, without standing up the full real
@@ -1415,6 +1422,83 @@ describe("BacklogItemDetail — Story 3.1.5: auto-expand-on-status-change, first
     // status was "idea") — it must not retroactively open just because it
     // only became relevant after that.
     expect(screen.getByTestId("collapsible-header-reviewing")).toHaveAttribute("aria-expanded", "false");
+  });
+});
+
+describe("BacklogItemDetail — PR visibility and action reachability", () => {
+  async function renderItem(overrides: Partial<BacklogItem>) {
+    useVcsStatusMock.mockReturnValue({
+      data: create(VCSStatusSchema, { branch: "feat/x", isClean: true }),
+      loading: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+    getBacklogItem.mockReset().mockResolvedValue({ ...makeItem([]), ...overrides });
+    listPipelineModes.mockReset().mockResolvedValue([]);
+    const utils = render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    return utils;
+  }
+  const PR = { prUrl: "https://github.com/x/y/pull/42", prNumber: 42 };
+
+  it("BacklogItemDetail_should_AutoExpandVersionControlSection_When_StatusIsDoneAndPrUrlIsSet", async () => {
+    await renderItem({ status: "done", ...PR });
+    expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("BacklogItemDetail_should_NotAutoExpandVersionControlSection_When_StatusIsDoneAndPrUrlIsUndefined", async () => {
+    await renderItem({ status: "done", prUrl: undefined });
+    expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("BacklogItemDetail_should_KeepVersionControlCollapsed_When_UserCollapsedItBeforeReopeningWithPrUrl", async () => {
+    const first = await renderItem({ status: "done", ...PR });
+    fireEvent.click(screen.getByTestId("collapsible-header-version-control"));
+    expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "false");
+    first.unmount();
+
+    await renderItem({ status: "done", ...PR });
+    expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("BacklogItemDetail_should_AutoExpandVersionControlSection_When_StatusIsArchivedAndPrUrlIsSet", async () => {
+    await renderItem({ status: "archived", ...PR });
+    expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "true");
+  });
+
+  describe("ordering", () => {
+    afterEach(() => {
+      mockShowGateSection = false;
+    });
+
+    const follows = (a: HTMLElement, b: HTMLElement) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+    it("BacklogItemDetail_should_RenderActionsSectionBeforeGateBlockingSection_When_FullDetailRenders", async () => {
+      mockShowGateSection = true;
+      await renderItem({ status: "idea" });
+      const actions = screen.getByTestId("backlog-action-trigger-triage");
+      expect(follows(actions, screen.getByTestId("gate-blocking-section"))).toBe(true);
+      expect(follows(actions, screen.getByText(/^Acceptance Criteria/))).toBe(true);
+    });
+
+    it("BacklogItemDetail_should_RenderPlanDecisionControlsBeforeGateSection_When_PlanIsPendingReview", async () => {
+      mockShowGateSection = true;
+      await renderItem({
+        status: "ready",
+        planApproved: false,
+        planArtifactsPath: "/tmp/plans/item-1.md",
+      });
+      const reject = screen.getByTestId("backlog-action-reject-plan");
+      const approve = screen.getByTestId("backlog-action-approve-plan");
+      expect(follows(reject, approve)).toBe(true);
+      expect(follows(approve, screen.getByTestId("gate-blocking-section"))).toBe(true);
+      expect(follows(approve, screen.getByText(/^Acceptance Criteria/))).toBe(true);
+    });
   });
 });
 

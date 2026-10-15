@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -259,45 +260,49 @@ func TestStopTymuxd_IdempotentWhenNoPIDFile(t *testing.T) {
 // exactly once -- and every caller must observe the same result. Run with
 // `go test -race`.
 func TestEnsureDaemonRunning_should_CoalesceViaSingleflight_When_ConcurrentCallersRaceOnColdStart(t *testing.T) {
-	withFastRetryBounds(t, 5, time.Millisecond, 2*time.Millisecond)
+	// synctest's fake clock makes the leader's in-flight spawn last until every racer
+	// is durably blocked on the singleflight, so coalescing no longer depends on real timing.
+	synctest.Test(t, func(t *testing.T) {
+		withFastRetryBounds(t, 5, time.Millisecond, 2*time.Millisecond)
 
-	var spawned atomic.Bool
-	defer stubCheckDaemonHealthy(func(context.Context, DaemonConfig) bool {
-		return spawned.Load()
-	})()
+		var spawned atomic.Bool
+		defer stubCheckDaemonHealthy(func(context.Context, DaemonConfig) bool {
+			return spawned.Load()
+		})()
 
-	var spawnCalls int32
-	defer stubStartDaemonAttempt(func(DaemonConfig) (*os.Process, error) {
-		atomic.AddInt32(&spawnCalls, 1)
-		// Hold the singleflight leader in-flight long enough that every
-		// concurrent racer's cold-start check is guaranteed to land while
-		// this spawn is still outstanding, so they coalesce onto it instead
-		// of a lucky-timing race deciding whether they do.
-		time.Sleep(50 * time.Millisecond)
-		spawned.Store(true)
-		return &os.Process{}, nil // see sentinel-value note above
-	})()
+		var spawnCalls int32
+		defer stubStartDaemonAttempt(func(DaemonConfig) (*os.Process, error) {
+			atomic.AddInt32(&spawnCalls, 1)
+			// Hold the singleflight leader in-flight long enough that every
+			// concurrent racer's cold-start check is guaranteed to land while
+			// this spawn is still outstanding, so they coalesce onto it instead
+			// of a lucky-timing race deciding whether they do.
+			time.Sleep(50 * time.Millisecond) //nolint:notimesleeptest synctest fake clock: blocks the leader until all racers are parked on the singleflight
+			spawned.Store(true)
+			return &os.Process{}, nil // see sentinel-value note above
+		})()
 
-	cfg := DaemonConfig{Addr: "http://127.0.0.1:19996", BinaryPath: "tymuxd"}
+		cfg := DaemonConfig{Addr: "http://127.0.0.1:19996", BinaryPath: "tymuxd"}
 
-	const racers = 8
-	var wg sync.WaitGroup
-	results := make([]TymuxdReady, racers)
-	errs := make([]error, racers)
-	for i := 0; i < racers; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			results[i], errs[i] = EnsureDaemonRunning(context.Background(), cfg)
-		}(i)
-	}
-	wg.Wait()
+		const racers = 8
+		var wg sync.WaitGroup
+		results := make([]TymuxdReady, racers)
+		errs := make([]error, racers)
+		for i := 0; i < racers; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				results[i], errs[i] = EnsureDaemonRunning(context.Background(), cfg)
+			}(i)
+		}
+		wg.Wait()
 
-	for i := 0; i < racers; i++ {
-		require.NoError(t, errs[i])
-		require.Equal(t, TymuxdReady{Spawned: true}, results[i], "the coalesced spawn actually started tymuxd -- every coalesced caller must see Spawned true")
-	}
-	require.Equal(t, int32(1), atomic.LoadInt32(&spawnCalls), "concurrent cold-start callers must coalesce onto exactly one spawn attempt")
+		for i := 0; i < racers; i++ {
+			require.NoError(t, errs[i])
+			require.Equal(t, TymuxdReady{Spawned: true}, results[i], "the coalesced spawn actually started tymuxd -- every coalesced caller must see Spawned true")
+		}
+		require.Equal(t, int32(1), atomic.LoadInt32(&spawnCalls), "concurrent cold-start callers must coalesce onto exactly one spawn attempt")
+	})
 }
 
 // TestEnsureDaemonRunning_should_CoalesceViaSingleflight_When_ConcurrentCallersRaceOnFailure
@@ -305,35 +310,39 @@ func TestEnsureDaemonRunning_should_CoalesceViaSingleflight_When_ConcurrentCalle
 // cold daemon that never becomes healthy must still coalesce onto exactly
 // one spawn attempt and all observe the same (wrapped) error.
 func TestEnsureDaemonRunning_should_CoalesceViaSingleflight_When_ConcurrentCallersRaceOnFailure(t *testing.T) {
-	withFastRetryBounds(t, 3, time.Millisecond, 2*time.Millisecond)
+	// synctest's fake clock makes the leader's in-flight spawn last until every racer
+	// is durably blocked on the singleflight, so coalescing no longer depends on real timing.
+	synctest.Test(t, func(t *testing.T) {
+		withFastRetryBounds(t, 3, time.Millisecond, 2*time.Millisecond)
 
-	defer stubCheckDaemonHealthy(func(context.Context, DaemonConfig) bool { return false })()
-	defer stubPortListening(func(DaemonConfig) bool { return true })()
+		defer stubCheckDaemonHealthy(func(context.Context, DaemonConfig) bool { return false })()
+		defer stubPortListening(func(DaemonConfig) bool { return true })()
 
-	var spawnCalls int32
-	defer stubStartDaemonAttempt(func(DaemonConfig) (*os.Process, error) {
-		atomic.AddInt32(&spawnCalls, 1)
-		time.Sleep(50 * time.Millisecond)
-		return &os.Process{}, nil // see sentinel-value note above
-	})()
+		var spawnCalls int32
+		defer stubStartDaemonAttempt(func(DaemonConfig) (*os.Process, error) {
+			atomic.AddInt32(&spawnCalls, 1)
+			time.Sleep(50 * time.Millisecond) //nolint:notimesleeptest synctest fake clock: blocks the leader until all racers are parked on the singleflight
+			return &os.Process{}, nil         // see sentinel-value note above
+		})()
 
-	cfg := DaemonConfig{Addr: "http://127.0.0.1:19994", BinaryPath: "tymuxd"}
+		cfg := DaemonConfig{Addr: "http://127.0.0.1:19994", BinaryPath: "tymuxd"}
 
-	const racers = 8
-	var wg sync.WaitGroup
-	errs := make([]error, racers)
-	for i := 0; i < racers; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			_, errs[i] = EnsureDaemonRunning(context.Background(), cfg)
-		}(i)
-	}
-	wg.Wait()
+		const racers = 8
+		var wg sync.WaitGroup
+		errs := make([]error, racers)
+		for i := 0; i < racers; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				_, errs[i] = EnsureDaemonRunning(context.Background(), cfg)
+			}(i)
+		}
+		wg.Wait()
 
-	for i := 1; i < racers; i++ {
-		require.ErrorIs(t, errs[i], ErrTymuxdPortSquatted)
-		require.EqualError(t, errs[i], errs[0].Error(), "every coalesced caller must observe the identical error")
-	}
-	require.Equal(t, int32(1), atomic.LoadInt32(&spawnCalls), "concurrent cold-start callers must coalesce onto exactly one spawn attempt even on failure")
+		for i := 1; i < racers; i++ {
+			require.ErrorIs(t, errs[i], ErrTymuxdPortSquatted)
+			require.EqualError(t, errs[i], errs[0].Error(), "every coalesced caller must observe the identical error")
+		}
+		require.Equal(t, int32(1), atomic.LoadInt32(&spawnCalls), "concurrent cold-start callers must coalesce onto exactly one spawn attempt even on failure")
+	})
 }

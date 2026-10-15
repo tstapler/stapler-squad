@@ -6,15 +6,39 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/git/backend/cli"
+	"github.com/tstapler/stapler-squad/session/gitwiring"
 )
+
+// defaultGitBackend serves instances built without an injected backend (tests, legacy
+// construction sites): the CLI over the local runner. Remote locations carry their own runner.
+var defaultGitBackend = sync.OnceValue(func() backend.Backend { return cli.New(gitwiring.NewLocalRunner()) })
+
+// gitBackend returns the injected backend, defaulting to defaultGitBackend. GitBackend is set
+// once at construction and never reassigned, so reading it unlocked is safe.
+func (i *Instance) gitBackend() backend.Backend {
+	if i.GitBackend != nil {
+		return i.GitBackend
+	}
+	return defaultGitBackend()
+}
+
+// location is where path lives for this instance: Remote carrying the execution target's own
+// runner when the target is remote, Local otherwise.
+func (i *Instance) location(path string) backend.RepoLocation {
+	return locationFor(i.executionTarget(), path)
+}
 
 // RepoName returns the name of the git repository.
 // Returns an error if the instance has not been started or has no worktree.
@@ -112,9 +136,10 @@ func (i *Instance) setupFirstTimeWorktree() error {
 			// entirely over a cosmetic diff-stats field.
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			baseCommitSHA := "unknown"
-			if out, shaErr := runner.Run(ctx, i.ExistingWorktree, "git", "rev-parse", "HEAD"); shaErr == nil {
-				if sha := strings.TrimSpace(string(out)); sha != "" {
-					baseCommitSHA = sha
+			remoteLoc := i.location(i.ExistingWorktree)
+			if sha, shaErr := i.gitBackend().ResolveRef(ctx, remoteLoc, "HEAD"); shaErr == nil {
+				if sha != "" {
+					baseCommitSHA = string(sha)
 				}
 			} else {
 				log.Warn("failed to resolve remote worktree base commit SHA", "session", i.Title, "path", i.ExistingWorktree, "err", shaErr)
@@ -137,11 +162,12 @@ func (i *Instance) setupFirstTimeWorktree() error {
 				// i.mu.Lock()/RLock() caller (including the legacy-writer setters
 				// documented in instance_actor_setters.go) for up to that long.
 				branch := "unknown"
-				if out, brErr := runner.Run(ctx, i.ExistingWorktree, "git", "rev-parse", "--abbrev-ref", "HEAD"); brErr == nil {
-					if br := strings.TrimSpace(string(out)); br != "" && br != "HEAD" {
-						branch = br
+				// A detached HEAD keeps "unknown", as the old "HEAD" answer did, without a warning.
+				if br, brErr := i.gitBackend().CurrentBranch(ctx, remoteLoc); brErr == nil {
+					if br != "" {
+						branch = string(br)
 					}
-				} else {
+				} else if !errors.Is(brErr, backend.ErrDetachedHead) {
 					log.Warn("failed to resolve remote worktree branch name", "session", i.Title, "path", i.ExistingWorktree, "err", brErr)
 				}
 				i.mu.Lock()
@@ -299,6 +325,11 @@ func EnsureDirectorySessionPath(path string) error {
 // bug this once caused when the two sides used independently-duplicated logic.
 const BacklogBranchPrefix = "backlog/"
 
+// BacklogWorkBranchName is the full git branch a backlog work session for the
+// given slug lives on. Every writer or predictor of that branch name must go
+// through this, not concatenate BacklogBranchPrefix itself.
+func BacklogWorkBranchName(slug string) string { return BacklogBranchPrefix + slug }
+
 // CreateBacklogWorktree creates a git worktree for a backlog work session.
 // It creates a branch named BacklogBranchPrefix+branchSuffix and returns the
 // on-disk worktree path. The caller is responsible for writing files to the
@@ -358,7 +389,7 @@ func CreateBacklogWorktree(repoPath, branchSuffix, baseBranch string) (string, e
 		if err := RepairCorruptedGitRepo(resolvedRepo); err != nil {
 			return err
 		}
-		branchName := BacklogBranchPrefix + branchSuffix
+		branchName := BacklogWorkBranchName(branchSuffix)
 		var wt *git.GitWorktree
 		var err error
 		var defaultBranch, baseSHA string
@@ -519,7 +550,9 @@ func (i *Instance) Workspace() Workspace {
 	existingDir := activeDir
 	if existingDir != repoRoot {
 		if _, err := os.Stat(existingDir); err != nil {
-			log.Warn("worktree path no longer exists on disk, falling back to repo path", "session", i.GetTitle(), "worktreePath", existingDir)
+			// Debug, not Warn: a paused or finished session's worktree is expected to be gone,
+			// and Workspace() runs on every poll — at Warn this was ~10% of the log.
+			log.Debug("worktree path no longer exists on disk, falling back to repo path", "session", i.GetTitle(), "worktreePath", existingDir)
 			existingDir = repoRoot
 		}
 	}

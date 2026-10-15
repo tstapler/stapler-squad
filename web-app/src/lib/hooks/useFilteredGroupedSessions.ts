@@ -14,6 +14,7 @@ export interface UseFilteredGroupedSessionsParams {
   selectedTag: string | "all";
   hidePaused: boolean;
   showArchived: boolean;
+  showHidden: boolean;
   filterNeedsApproval: boolean;
   /** Optimistically-removed session IDs, excluded from the filtered result. */
   pendingDeleteIds: Set<string>;
@@ -52,6 +53,7 @@ export function useFilteredGroupedSessions({
   selectedTag,
   hidePaused,
   showArchived,
+  showHidden,
   filterNeedsApproval,
   pendingDeleteIds,
   sortField,
@@ -114,9 +116,16 @@ export function useFilteredGroupedSessions({
         return false;
       }
 
+      // Hidden filter — same shape as the archived filter above: excluded by
+      // default even if a prior includeHidden fetch left hidden sessions (e.g.
+      // Diagnose & Nudge, review dispatches) in the Redux store.
+      if (!showHidden && session.hidden) {
+        return false;
+      }
+
       return true;
     });
-  }, [sessions, searchQuery, selectedStatus, selectedCategory, selectedTag, hidePaused, filterNeedsApproval, showArchived, pendingDeleteIds]);
+  }, [sessions, searchQuery, selectedStatus, selectedCategory, selectedTag, hidePaused, filterNeedsApproval, showArchived, showHidden, pendingDeleteIds]);
 
   const sortedSessions = useMemo(() => {
     const sorted = [...filteredSessions];

@@ -30,6 +30,9 @@ type shellResizeReq struct{ cols, rows int }
 // ShellId to those) because a shell stream targets its own sibling tmux
 // session (shellSess) directly, not the parent Instance's PTY.
 type shellStreamParams struct {
+	// writer is nil for a read-only attach (hidden parent session): input,
+	// resize and the initial redraw nudge are dropped.
+	writer               TerminalWriter
 	stream               *connectWebSocketStream
 	instance             *session.Instance
 	shellSess            *tmux.TmuxSession
@@ -145,6 +148,10 @@ func (h *ConnectRPCWebSocketHandler) applyOneShellResize(p shellStreamParams, r 
 	p.resizeSettling.Store(true)
 	resizeDone := func() { p.resizeSettling.Store(false) }
 
+	if p.writer == nil {
+		resizeDone()
+		return false
+	}
 	if err := p.shellSess.SetWindowSize(r.cols, r.rows); err != nil {
 		log.Error("[streamShellViaControlMode] failed to resize", "err", err)
 		resizeDone()
@@ -290,6 +297,10 @@ func readShellWebSocketMessage(p shellStreamParams) (message []byte, stop bool) 
 // handleShellInput forwards one input frame to the shell's tmux session via
 // control mode, falling back to a subprocess send-keys on failure.
 func handleShellInput(p shellStreamParams, data []byte) {
+	if p.writer == nil {
+		log.Debug("[streamShellViaControlMode] read-only attach: input frame dropped", "session", p.sessionID, "shell", p.shellID, "bytes", len(data))
+		return
+	}
 	if !p.instance.Permissions.CanSendCommand {
 		log.Warn("[streamShellViaControlMode] send permission denied", "session", p.sessionID, "shell", p.shellID)
 		return
@@ -297,20 +308,24 @@ func handleShellInput(p shellStreamParams, data []byte) {
 	p.instance.UpdateTerminalTimestamps(string(data), true)
 
 	sendCtx, sendCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	sendErr := p.shellSess.SendInputViaControlMode(sendCtx, data)
+	_ = p.writer.SendInput(sendCtx, PaneInput{
+		ControlMode: p.shellSess,
+		TmuxSocket:  p.instance.Snapshot().TmuxServerSocket,
+		TmuxSession: p.shellTmuxSessionName,
+		LogPrefix:   "[streamShellViaControlMode]",
+		Data:        data,
+	})
 	sendCancel()
-	if sendErr != nil {
-		log.Warn("[streamShellViaControlMode] CM input failed, retrying via subprocess", "session", p.shellTmuxSessionName, "err", sendErr)
-		if fbErr := sendInputToTmux(p.instance.Snapshot().TmuxServerSocket, p.shellTmuxSessionName, data); fbErr != nil {
-			log.Error("[streamShellViaControlMode] subprocess fallback also failed", "session", p.shellTmuxSessionName, "err", fbErr)
-		}
-	}
 }
 
 // dispatchShellResize pushes a resize request to the coalescing worker, so
 // rapid window-drag events never stall input reading and don't pile up
 // unbounded goroutines.
 func dispatchShellResize(p shellStreamParams, cols, rows int) {
+	if p.writer == nil {
+		log.Debug("[streamShellViaControlMode] read-only attach: resize frame dropped", "session", p.sessionID, "shell", p.shellID, "cols", cols, "rows", rows)
+		return
+	}
 	dispatchResizeRequest(p.resizeCh, shellResizeReq{cols, rows})
 }
 
@@ -336,6 +351,7 @@ func handleShellScrollbackRequest(p shellStreamParams, req *sessionv1.Scrollback
 	startLine := fmt.Sprintf("-%d", offset+uint64(limit))
 	endLine := fmt.Sprintf("-%d", offset+1)
 	result, sbErr := scrollbackResultForRequest(scrollbackRequestParams{
+		writer:          p.writer,
 		instance:        p.instance,
 		subscriberCount: -1,
 		hub:             nil,
@@ -377,7 +393,7 @@ func handleShellMidStreamCurrentPaneRequest(p shellStreamParams, paneReq *sessio
 		attribute.String("shell_id", p.shellID),
 		attribute.String("resync_id", paneReq.GetResyncId()),
 	)
-	output, handleErr := handleCurrentPaneRequest(paneCtx, p.sessionID, p.cursorTarget, paneReq, currentResyncOptions())
+	output, handleErr := handleCurrentPaneRequest(paneCtx, p.sessionID, p.cursorTarget, paneReq, currentResyncOptionsFor(p.writer))
 	if handleErr != nil {
 		paneSpan.RecordError(handleErr)
 		log.Error("[streamShellViaControlMode] failed to handle mid-stream current pane request", "session", p.sessionID, "shell", p.shellID, "err", handleErr)
@@ -396,7 +412,8 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 	sessionID := snap.Title
 
 	shellSess := tmux.NewTmuxSessionFromExistingWithServerSocket(shellTmuxSessionName, snap.TmuxServerSocket)
-	cursorTarget := shellPanePTY{session: shellSess}
+	writer := h.writerFor(instance)
+	cursorTarget := shellPanePTY{session: shellSess, writer: writer}
 
 	log.Info("[streamShellViaControlMode] starting", "session", sessionID, "shell", shellID, "tmux", shellTmuxSessionName)
 
@@ -454,7 +471,10 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 		resizeSettling:  &resizeSettling,
 	})
 
-	if currentPaneReq.TargetCols != nil && currentPaneReq.TargetRows != nil {
+	if writer == nil {
+		// Read-only attach: capture at the pane's current size, never nudge it.
+		log.Debug("[streamShellViaControlMode] read-only attach: skipping the initial resize nudge", "session", sessionID, "shell", shellID)
+	} else if currentPaneReq.TargetCols != nil && currentPaneReq.TargetRows != nil {
 		targetCols := int(*currentPaneReq.TargetCols)
 		targetRows := int(*currentPaneReq.TargetRows)
 
@@ -509,6 +529,7 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 
 	resizeCh := make(chan shellResizeReq, 1)
 	shellParams := shellStreamParams{
+		writer:               writer,
 		stream:               stream,
 		instance:             instance,
 		shellSess:            shellSess,

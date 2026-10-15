@@ -103,3 +103,18 @@ func ResolveExecutorProgram(baseProgram, modelValue string, families map[string]
 	}
 	return program, nil
 }
+
+// ResolveExecutorProgramWithEffort is ResolveExecutorProgram plus "--effort <level>",
+// appended only when the result is a bare "claude --model ..." program. Other programs
+// (agy, gemini, proxy-claude, custom wrappers) are returned unchanged, since only the
+// claude CLI is verified to accept --effort. effort must already be a validated level.
+func ResolveExecutorProgramWithEffort(baseProgram, modelValue, effort string, families map[string]string) (string, error) {
+	program, err := ResolveExecutorProgram(baseProgram, modelValue, families)
+	if err != nil {
+		return "", err
+	}
+	if effort != "" && strings.HasPrefix(program, "claude --model ") {
+		program += " --effort " + effort
+	}
+	return program, nil
+}

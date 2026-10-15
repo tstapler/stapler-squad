@@ -6,7 +6,6 @@ import {
   notificationTypeLabel,
   priorityColor,
   notificationTypeFilter,
-  isActionableNotification,
   computeScopedMarkReadIds,
   capBadgeCount,
 } from "@/lib/utils/notificationMapping";
@@ -101,7 +100,7 @@ describe("notificationMapping", () => {
       const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
       const result = mapNotificationType(9999);
       expect(warnSpy).toHaveBeenCalledTimes(1);
-      expect(isActionableNotification(result)).toBe(true);
+      expect(result).toBe("warning");
       warnSpy.mockRestore();
     });
 
@@ -116,44 +115,16 @@ describe("notificationMapping", () => {
     });
   });
 
-  describe("isActionableNotification", () => {
-    it("classifies the five actionable types", () => {
-      expect(isActionableNotification("approval_needed")).toBe(true);
-      expect(isActionableNotification("question")).toBe(true);
-      expect(isActionableNotification("error")).toBe(true);
-      expect(isActionableNotification("task_failed")).toBe(true);
-      expect(isActionableNotification("warning")).toBe(true);
-    });
-
-    it("classifies non-actionable types as false", () => {
-      expect(isActionableNotification("info")).toBe(false);
-      expect(isActionableNotification("task_complete")).toBe(false);
-      expect(isActionableNotification("auto_approved")).toBe(false);
-    });
-
-    // Regression for the found "task_complete" gap: the first draft defined
-    // "info" as a second, independently-maintained 7-type list that (with
-    // ACTIONABLE_TYPES) covered only 12 of the 13 UITypes. "info" is now the
-    // literal complement of ACTIONABLE_TYPES, so this is structurally
-    // guaranteed — this test pins it against the type union drifting.
-    it("every UIType is classified by isActionableNotification, none fall through both notificationTypeFilter('info') and ACTIONABLE_TYPES", () => {
-      for (const type of ALL_UI_TYPES) {
-        const actionable = isActionableNotification(type);
-        const inInfo = notificationTypeFilter("info", [type]).includes(type);
-        expect(actionable).toBe(!inInfo);
-      }
-    });
-  });
-
   describe("computeScopedMarkReadIds", () => {
-    it("returns only unread non-actionable IDs", () => {
+    it("returns only unread IDs that are not a server-sent pending decision", () => {
       const notifications = [
-        { id: "a1", isRead: false, notificationType: "approval_needed" as UIType },
-        { id: "b2", isRead: false, notificationType: "task_complete" as UIType },
-        { id: "c3", isRead: true, notificationType: "task_complete" as UIType },
-        { id: "d4", isRead: false, notificationType: "question" as UIType },
+        { id: "a1", isRead: false, isPendingDecision: true },
+        { id: "b2", isRead: false, isPendingDecision: false },
+        { id: "c3", isRead: true, isPendingDecision: false },
+        { id: "d4", isRead: false, isPendingDecision: true },
+        { id: "e5", isRead: false },
       ];
-      expect(computeScopedMarkReadIds(notifications)).toEqual(["b2"]);
+      expect(computeScopedMarkReadIds(notifications)).toEqual(["b2", "e5"]);
     });
   });
 
@@ -332,7 +303,7 @@ describe("notificationMapping", () => {
     });
 
     // Task 3.1.1a converted "info" from a hand-maintained exclusion list to the
-    // literal complement of ACTIONABLE_TYPES (approval_needed, question, error,
+    // complement of the approval and error categories (approval_needed, question, error,
     // task_failed, warning) — it now excludes only those five actionable types.
     it("info category never includes question", () => {
       const result = notificationTypeFilter("info", ["question", "info", "auto_approved"]);
@@ -349,14 +320,14 @@ describe("notificationMapping", () => {
       expect(result).not.toContain("warning");
     });
 
-    it("'info' category includes progress, reminder, system, custom, info, task_complete, and auto_approved (allow-list complement)", () => {
+    it("'info' category includes progress, reminder, system, custom, info, task_complete, and auto_approved (complement of the attention categories)", () => {
       const result = notificationTypeFilter("info", [...allTypes]);
       expect(result).toContain("info");
       expect(result).toContain("progress");
       expect(result).toContain("reminder");
       expect(result).toContain("system");
       expect(result).toContain("custom");
-      // task_complete and auto_approved are not in ACTIONABLE_TYPES, so the
+      // task_complete and auto_approved are not in the attention categories, so the
       // allow-list complement includes them. Both call sites (NotificationsPage,
       // NotificationPanel) already filter auto_approved out of `items` before
       // ever calling notificationTypeFilter, so this is inert in the actual UI —
@@ -366,7 +337,7 @@ describe("notificationMapping", () => {
     });
 
     it("info category includes an unrecognized-but-mapped type", () => {
-      // "reminder" is not in ACTIONABLE_TYPES, so it must fall into "info".
+      // "reminder" is not in the attention categories, so it must fall into "info".
       const result = notificationTypeFilter("info", ["reminder"]);
       expect(result).toEqual(["reminder"]);
     });

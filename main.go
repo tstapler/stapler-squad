@@ -219,6 +219,10 @@ var (
 				log.Close()
 			}()
 
+			if err := tmux.LogEnvSocket(); err != nil {
+				return err
+			}
+
 			// Keep the launchd/systemd-captured raw stdout/stderr log bounded
 			// even when the process runs for a long time between installs --
 			// scripts/install-service.sh's own rotation only fires at
@@ -324,11 +328,8 @@ var (
 				address = listenAddrFlag
 			}
 
-			// Warn when binding to non-localhost
-			host, _, _ := net.SplitHostPort(address)
-			if host != "localhost" && host != "127.0.0.1" && host != "::1" {
-				log.Warn("WARNING: Binding to non-localhost address. Ensure firewall rules are configured.", "address", address)
-				fmt.Fprintf(os.Stderr, "\nWARNING: stapler-squad is listening on %s (all interfaces).\nEnsure this is intentional and your network is secured.\n\n", address)
+			if err := requireLoopbackListenAddr(address); err != nil {
+				return err
 			}
 
 			// --rp-id flag overrides config
@@ -474,6 +475,10 @@ var (
 						srv.SetOrigins(append(srv.GetOrigins(), validExtraOrigins...))
 					}
 					log.Info("CORS trusted origins", "origins", srv.GetOrigins())
+				}
+
+				if err := setupLocalAuth(srv, cfg, !remoteAccessFlag && !cfg.PasskeyEnabled); err != nil {
+					return err
 				}
 
 				// Start a second HTTPS server with passkey auth for remote access.
@@ -864,7 +869,7 @@ func init() {
 
 	// Remote access and passkey flags
 	rootCmd.Flags().StringVar(&listenAddrFlag, "listen", "",
-		"Address to listen on (e.g. '0.0.0.0:8543'). Overrides config listen_address.")
+		"Loopback address to listen on (e.g. '127.0.0.1:8543'); non-loopback is rejected. Overrides config listen_address.")
 	rootCmd.Flags().BoolVar(&remoteAccessFlag, "remote-access", false,
 		"Enable remote access: starts a second HTTPS server with passkey auth on --remote-port (default 8444). "+
 			"Local server on localhost remains unchanged.")
@@ -1364,6 +1369,9 @@ type remoteAccessResult struct {
 	Handler   *serverauth.Handler
 	CertStore *server.NetworkCertStore
 	Networks  map[string][]string
+	// VerifiedHostnames is the boot-time set that passed verifyHostnameOwnership;
+	// Networks holds the raw, unverified candidates and must not feed the verdict.
+	VerifiedHostnames []string
 }
 
 // remoteAuthSetup carries the auth-subsystem collaborators initRemoteAuth
@@ -1385,7 +1393,7 @@ type remoteAuthSetup struct {
 // gate -- this block is a self-contained "auth subsystem bring-up" unit with
 // no branching into the surrounding TLS/hostname-detection logic, so it can
 // be named and tested independently.
-func initRemoteAuth(ctx context.Context, srv *server.Server, allRPIDs, origins []string, hostnameValidator func(string) bool, caFile, displayHost string, remotePort int) (*remoteAuthSetup, error) {
+func initRemoteAuth(ctx context.Context, srv *server.Server, allRPIDs, origins []string, hostnameValidator func(string) bool, caFile, displayHost string, remotePort int, requireLocalAuth bool) (*remoteAuthSetup, error) {
 	store, err := serverauth.NewCredentialStore()
 	if err != nil {
 		return nil, fmt.Errorf("create credential store: %w", err)
@@ -1396,8 +1404,7 @@ func initRemoteAuth(ctx context.Context, srv *server.Server, allRPIDs, origins [
 	if err != nil {
 		return nil, fmt.Errorf("get config dir: %w", err)
 	}
-	sessionsPath := filepath.Join(configDir, "auth-sessions.json")
-	sessions := serverauth.NewSessionManager(sessionsPath)
+	sessions := sharedAuthSessions(configDir)
 
 	waHandler, err := serverauth.NewHandler(allRPIDs, origins, store, sessions, hostnameValidator)
 	if err != nil {
@@ -1417,7 +1424,7 @@ func initRemoteAuth(ctx context.Context, srv *server.Server, allRPIDs, origins [
 	go setupMgr.WatchFile(ctx, setupTokenPath)
 
 	// Register auth routes on the shared mux (accessible via both servers).
-	serverauth.RegisterRoutes(srv.Mux(), waHandler, sessions, store, setupMgr, inviteMgr, caFile, displayHost, remotePort)
+	serverauth.RegisterRoutes(srv.Mux(), waHandler, sessions, store, setupMgr, inviteMgr, caFile, displayHost, remotePort, serverauth.RequireLocalAuth(requireLocalAuth))
 
 	return &remoteAuthSetup{
 		ConfigDir: configDir,
@@ -1600,7 +1607,7 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 
 	srv.SetOrigins(append(srv.GetOrigins(), origins...))
 
-	auth, err := initRemoteAuth(ctx, srv, allRPIDs, origins, hostnameValidator, caFile, displayHost, remotePort)
+	auth, err := initRemoteAuth(ctx, srv, allRPIDs, origins, hostnameValidator, caFile, displayHost, remotePort, cfg.RequireLocalAuth)
 	if err != nil {
 		return nil, err
 	}
@@ -1609,7 +1616,7 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	startHostGossip(ctx, srv.Mux(), configDir, hostnames, lanIPs, remotePort, storage, backlogSvc)
 
 	// Start the remote HTTPS server with auth middleware applied.
-	if err := srv.StartRemote(ctx, remoteAddr, tlsCfg, middleware.Auth(sessions, middleware.WithSelfAuthenticatedPaths(srv.SelfAuthenticatedPath))); err != nil {
+	if err := srv.StartRemote(ctx, remoteAddr, tlsCfg, middleware.Auth(sessions, middleware.WithSelfAuthenticatedPaths(srv.SelfAuthenticatedPath)), middleware.AuthRequires(sessions)); err != nil {
 		return nil, fmt.Errorf("start remote server: %w", err)
 	}
 
@@ -1648,7 +1655,8 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 
 	log.Info("auth: remote access enabled", "port", remotePort, "rpID", rpID, "host", displayHost, "lan_ip", lanIPStr)
 	log.Info("auth: TLS CA cert", "path", caFile)
-	return &remoteAccessResult{Handler: waHandler, CertStore: certStore, Networks: networks}, nil
+	return &remoteAccessResult{Handler: waHandler, CertStore: certStore, Networks: networks,
+		VerifiedHostnames: append([]string(nil), verifiedHostnames...)}, nil
 }
 
 // startHostnameDetector wires up LAN hostname redetection: builds the
@@ -1670,7 +1678,9 @@ func startHostnameDetector(mux *http.ServeMux, srv *server.Server, remoteAccess 
 	initialNetworks := map[string][]string{}
 	var waHandler *serverauth.Handler
 	var certStore *server.NetworkCertStore
+	var initialVerified []string
 	if remoteAccess != nil {
+		initialVerified = remoteAccess.VerifiedHostnames
 		initialNetworks = remoteAccess.Networks
 		waHandler = remoteAccess.Handler
 		certStore = remoteAccess.CertStore
@@ -1698,6 +1708,7 @@ func startHostnameDetector(mux *http.ServeMux, srv *server.Server, remoteAccess 
 	detector := NewHostnameDetector(HostnameDetectorConfig{
 		Srv:             srv,
 		InitialNetworks: initialNetworks,
+		InitialVerified: initialVerified,
 		Tick:            time.NewTicker(hostnameRedetectInterval()).C,
 		Events:          netChangeEvents,
 		WAHandler:       waHandler,

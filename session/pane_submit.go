@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // DefaultPaneSettlePollInterval and DefaultPaneSettleMaxWait mirror
@@ -36,6 +38,7 @@ var ErrSubmitNotConfirmed = errors.New("submit keystroke sent but pane showed no
 // keySender is the narrow interface SendKeysWithTimeout needs — satisfied by
 // *Instance's existing SendKeys method.
 type keySender interface {
+	leaseOwner
 	SendKeys(keys string) error
 }
 
@@ -44,6 +47,22 @@ type keySender interface {
 type paneSubmitter interface {
 	paneSettleChecker
 	keySender
+}
+
+// paneOwnerVerifier is optionally implemented by paneSubmitters backed by a
+// real tmux pane; SubmitDriverContent calls it just before the first write.
+type paneOwnerVerifier interface {
+	VerifyPaneOwner(ctx context.Context) error
+}
+
+// VerifyPaneOwner re-checks, right before a write, that the tmux pane under
+// this instance's name is still stamped with this instance's UUID
+// (ce71ad1a). A no-op for non-tmux backends.
+func (i *Instance) VerifyPaneOwner(ctx context.Context) error {
+	if i.GetTmuxSession() == nil {
+		return nil
+	}
+	return VerifyPaneOwnershipBeforeWrite(ctx, i)
 }
 
 // SubmitDriverContent sends driver-generated content to inst, then submits it
@@ -74,9 +93,24 @@ type paneSubmitter interface {
 // double-submit a bare Enter if the first one actually registered but the
 // pane simply hadn't rendered within maxWait — a rarer failure than the one
 // this guards against.
-func SubmitDriverContent(ctx context.Context, inst paneSubmitter, content string, pollInterval, maxWait time.Duration) error {
+//
+// lease is the caller's held write lease for inst (Story 5.0): this function
+// only receives it and releases it exactly once on every return path, in the
+// goroutine that issues the write. A nil, zero or foreign lease is refused
+// with ErrNoLease/ErrLeaseMismatch and 0 writes.
+func SubmitDriverContent(ctx context.Context, inst paneSubmitter, lease *HeldLease, content string, pollInterval, maxWait time.Duration) error {
+	defer lease.Release()
+	if err := lease.check(inst); err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("submit cancelled before sending content: %w", err)
+	}
+	if v, ok := inst.(paneOwnerVerifier); ok {
+		if err := v.VerifyPaneOwner(ctx); err != nil {
+			log.Error("SubmitDriverContent: refusing to write, pane owner not verified", "err", err)
+			return fmt.Errorf("pane owner not verified, content not sent: %w", err)
+		}
 	}
 	if err := inst.SendKeys(content); err != nil {
 		return fmt.Errorf("send content: %w", err)
@@ -114,7 +148,16 @@ func SubmitDriverContent(ctx context.Context, inst paneSubmitter, content string
 // SendKeys call. Shared by server/mcp and server/services so both MCP-tool
 // and Connect-RPC call sites use identical submit mechanics instead of each
 // duplicating this goroutine+timeout wrapper.
-func SubmitContentWithEnter(ctx context.Context, inst paneSubmitter, content string) error {
+//
+// SubmitContentWithEnter does not release lease itself: it hands it to
+// SubmitDriverContent inside its goroutine, which owns the release, so the
+// lease stays held until an abandoned write's goroutine returns (a
+// DeadlineExceeded here does not mean the pane is free).
+func SubmitContentWithEnter(ctx context.Context, inst paneSubmitter, lease *HeldLease, content string) error {
+	if err := lease.check(inst); err != nil {
+		lease.Release()
+		return err
+	}
 	// timeoutCtx (not ctx) is handed to the goroutine so that once this
 	// function gives up on it, SubmitDriverContent's internal settle/confirm
 	// polls (which check ctx.Done()) stop promptly too, instead of
@@ -125,7 +168,7 @@ func SubmitContentWithEnter(ctx context.Context, inst paneSubmitter, content str
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- SubmitDriverContent(timeoutCtx, inst, content, DefaultPaneSettlePollInterval, DefaultPaneSettleMaxWait)
+		errCh <- SubmitDriverContent(timeoutCtx, inst, lease, content, DefaultPaneSettlePollInterval, DefaultPaneSettleMaxWait)
 	}()
 
 	select {
@@ -143,12 +186,22 @@ func SubmitContentWithEnter(ctx context.Context, inst paneSubmitter, content str
 // SubmitContentWithEnter — every SendKeys call from server/mcp and
 // server/services must go through one of the two, never inst.SendKeys bare,
 // so a blocking write can't hang a request handler.
-func SendKeysWithTimeout(ctx context.Context, inst keySender, content string, timeout time.Duration) error {
+//
+// The write goroutine releases lease when SendKeys returns, so a timed-out
+// caller leaves the lease held until the abandoned write actually finishes.
+func SendKeysWithTimeout(ctx context.Context, inst keySender, lease *HeldLease, content string, timeout time.Duration) error {
+	if err := lease.check(inst); err != nil {
+		lease.Release()
+		return err
+	}
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- inst.SendKeys(content) }()
+	go func() {
+		defer lease.Release()
+		errCh <- inst.SendKeys(content)
+	}()
 
 	select {
 	case err := <-errCh:

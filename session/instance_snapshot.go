@@ -31,6 +31,8 @@ import (
 
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session/artifacts"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
 // GitHubIntegration groups all GitHub PR / URL integration fields within
@@ -69,6 +71,8 @@ type AutonomousModeState struct {
 	AutonomousTurn     int32
 	AutonomousMaxTurns int32
 	AutonomousOutcome  string
+	// AutonomousStopReason is why the last autonomous run ended ("" if none).
+	AutonomousStopReason domain.StopReason
 }
 
 // InstanceSnapshot is a point-in-time, read-safe copy of all mutable Instance
@@ -161,6 +165,7 @@ type InstanceSnapshot struct {
 	ExternalMetadata *ExternalInstanceMetadata // copy of pointee — see buildSnapshot
 	Permissions      InstancePermissions       // RequiresConfirmation map deep-copied
 	Artifacts        *artifacts.SessionArtifactsBlob
+	ContextHealth    tokens.ContextHealthVerdict // flat value; no deep copy needed
 }
 
 // buildSnapshot builds a point-in-time InstanceSnapshot from i.
@@ -198,10 +203,11 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		TmuxServerSocket:          i.TmuxServerSocket,
 		Tags:                      append([]string(nil), i.Tags...),
 		Autonomous: AutonomousModeState{
-			AutonomousMode:     i.AutonomousMode,
-			AutonomousTurn:     i.AutonomousTurn,
-			AutonomousMaxTurns: i.AutonomousMaxTurns,
-			AutonomousOutcome:  i.AutonomousOutcome,
+			AutonomousMode:       i.AutonomousMode,
+			AutonomousTurn:       i.AutonomousTurn,
+			AutonomousMaxTurns:   i.AutonomousMaxTurns,
+			AutonomousOutcome:    i.AutonomousOutcome,
+			AutonomousStopReason: i.AutonomousStopReason,
 		},
 		GitHub: GitHubIntegration{
 			GitHubPRNumber:         i.GitHubPRNumber,
@@ -249,6 +255,7 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		InstanceType:               i.InstanceType,
 		IsManaged:                  i.IsManaged,
 		Artifacts:                  i.Artifacts,
+		ContextHealth:              i.ContextHealth,
 	}
 
 	// Deep copy RateLimitAutoResume *bool

@@ -106,6 +106,10 @@ function watchForFlashUnmount(container: HTMLElement) {
   };
 }
 
+/** Waits for transitionStatus -> rejectPlan -> triggerTriage -> reload to settle, however slow the host is. */
+const waitForPartialFailureCopy = () =>
+  waitFor(() => expect(screen.getByText("Sent back, but retriage didn't start")).toBeInTheDocument());
+
 async function renderItemAndOpenForm(item: BacklogItem) {
   getBacklogItemCallCount = 0;
   getBacklogItem.mockReset().mockImplementation(() => {
@@ -155,11 +159,8 @@ describe("BacklogItemDetail — actionError persists across load()'s async re-re
 
     await act(async () => {
       fireEvent.click(screen.getByTestId("backlog-action-send-back-feedback-submit"));
-      // Long enough for transitionStatus -> rejectPlan -> triggerTriage ->
-      // the inner catch's direct getBacklogItem() -> the outer catch's
-      // load() -> SendBackFeedbackBox's own catch to all settle in sequence.
-      await new Promise((r) => setTimeout(r, 200));
     });
+    await waitForPartialFailureCopy();
 
     watcher.stop();
 
@@ -181,8 +182,8 @@ describe("BacklogItemDetail — actionError persists across load()'s async re-re
 
     await act(async () => {
       fireEvent.click(screen.getByTestId("backlog-action-send-back-feedback-submit"));
-      await new Promise((r) => setTimeout(r, 200));
     });
+    await waitForPartialFailureCopy();
 
     watcher.stop();
 

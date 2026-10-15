@@ -67,3 +67,7 @@ committed changes were found for this session," even though the branch's
 cumulative diff against `main` is not empty. This is a pre-existing,
 separately-tracked infrastructure gap (see `docs/tasks/backlog-feature-improvement.md`),
 not something this gate/cleanup work changed or fixed.
+
+## Review spawn guard (one reviewer per item)
+
+`session.ReviewSpawnGuard` (`session/review_spawn_guard.go`) is a process-wide check-then-reserve map. `spawnReviewGate` reserves the item (refusing if a reservation is held or an open review `ItemSession` exists) and releases by `defer` only after `ReviewGateRunner.Run` returns, which is after the review row is persisted. `onSessionExited`, `TriggerReviewForSession` (which also no-ops unless the item is in `review`) and `ReconcileStuckItems` all go through it; `BacklogService.TriggerReReview`/`AutoRespawnReview` share the same guard via `SetReviewSpawnGuard`. Skips are logged at info. Single-process only; not durable across restarts.

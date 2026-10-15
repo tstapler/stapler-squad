@@ -12,7 +12,7 @@ func TestAwaitBounded_ClosesInTime_ReturnsTrue(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond) //nolint:notimesleeptest runs inside a synctest bubble: sleep advances a fake clock deterministically
 			close(done)
 		}()
 

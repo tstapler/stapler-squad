@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,16 +32,13 @@ import (
 
 // SessionCreator allows BacklogService to spawn sessions without importing handler internals.
 type SessionCreator interface {
-	// programOverride, when non-empty, replaces config.ResolveDefaults' resolved.Program
-	// as the spawned Instance's InstanceOptions.Program — set before session.NewInstance/
-	// instance.Start(true), never via a post-hoc SwitchProgram/Restart (see Epic 2.4's
-	// design note). Pass "" for callers unaffected by per-stage program overrides.
-	CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool, programOverride string) (*session.Instance, error)
+	// CreateDirectorySession creates a directory-type session at path. See
+	// SessionSpawnOptions.ProgramOverride's doc comment for how program overrides apply.
+	CreateDirectorySession(ctx context.Context, path string, opts SessionSpawnOptions) (*session.Instance, error)
 	// CreateWorktreeSession spawns a session inside an already-created git worktree at
 	// worktreePath. repoPath is the parent repo used for program resolution; worktreePath
-	// must already exist on disk before this is called. See programOverride's doc comment
-	// on CreateDirectorySession above.
-	CreateWorktreeSession(ctx context.Context, title, repoPath, worktreePath, prompt string, tags []string, oneShot bool, hidden bool, programOverride string) (*session.Instance, error)
+	// must already exist on disk before this is called.
+	CreateWorktreeSession(ctx context.Context, repoPath, worktreePath string, opts SessionSpawnOptions) (*session.Instance, error)
 }
 
 // AutonomousDriverStarter allows BacklogService to start an AutonomousDriver on an existing instance.
@@ -57,7 +55,10 @@ type SessionStopper interface {
 	// KillTmuxSessionByTitle kills a tmux session by its title, regardless of
 	// whether the Instance is still tracked in memory. Used to clear stale tmux
 	// sessions before re-triggering so the fresh session gets its --append-system-prompt.
-	KillTmuxSessionByTitle(ctx context.Context, title string) error
+	// allowedOwnerUUIDs are the Instance UUID(s) the caller trusts to be
+	// killed under this title -- see the implementation's doc comment
+	// (ce71ad1a: a name match alone isn't enough to prove ownership).
+	KillTmuxSessionByTitle(ctx context.Context, title string, allowedOwnerUUIDs ...string) error
 	// IsSessionLive returns true if the session UUID is currently tracked in the
 	// live in-memory poller. Used to distinguish genuinely-running sessions from
 	// sessions that exited but whose DB records were not closed (e.g. after a
@@ -98,13 +99,24 @@ type SessionStopper interface {
 // not wired, mirroring SessionStopper.
 type SessionSteerer interface {
 	SessionProgram(sessionUUID string) (program string, ok bool)
+	// IsHiddenSession reports whether sessionUUID is a live hidden
+	// (background) session. The automated steers refuse such a target: they
+	// write to the item's work session, never to a hidden review, diagnose or
+	// triage session (Story 5.1d, T-RO-39).
+	IsHiddenSession(sessionUUID string) bool
 	// IsReadyForSteer reports whether sessionUUID's pane is confirmed idle
 	// and safe for an unattended PTY write. False — including when
 	// readiness can't be determined — means the caller must not steer (see
 	// *SessionService.IsReadyForSteer's doc comment for why "unknown" must
 	// never default to true here).
 	IsReadyForSteer(sessionUUID string) bool
+	// SteerActiveSession writes message to the session unguarded (verdict steering).
 	SteerActiveSession(ctx context.Context, sessionUUID, message string) error
+	// SteerSessionGuarded delivers message under the per-session nudge guard
+	// shared with the manual PR nudge: sig is the reason signature used for
+	// the duplicate window, and a guard-caused outcome (SteerGuardBusy,
+	// SteerDuplicate) is not a delivery failure.
+	SteerSessionGuarded(ctx context.Context, sessionUUID, sig, message string) (SteerOutcome, error)
 }
 
 // RepoWatchRemover lets BacklogService tell the background unfinished-changes
@@ -128,12 +140,16 @@ type itemSourceBackend interface {
 
 // BacklogService handles Backlog RPCs.
 type BacklogService struct {
-	storage           *session.Storage
-	sourceBackend     itemSourceBackend
-	sessionCreator    SessionCreator
-	sessionStopper    SessionStopper
-	sessionSteerer    SessionSteerer
-	autonomousStarter AutonomousDriverStarter
+	storage        *session.Storage
+	sourceBackend  itemSourceBackend
+	sessionCreator SessionCreator
+	sessionStopper SessionStopper
+	sessionSteerer SessionSteerer
+	// verdictSteer* override the verdict-delivery readiness poll (zero = defaults); tests only.
+	verdictSteerPollInterval, verdictSteerReadyTimeout time.Duration
+	// verdictSteerLatest maps itemID -> latest verdict key (see dispatchVerdictSteer).
+	verdictSteerLatest sync.Map
+	autonomousStarter  AutonomousDriverStarter
 	// repoWatchRemover tells the unfinished-changes scanner to stop watching a
 	// worktree path once it's removed from disk (BUG-034). nil-safe — wired via
 	// SetRepoWatchRemover.
@@ -151,6 +167,9 @@ type BacklogService struct {
 	julesDispatcher JulesDispatcher
 	cfg             *config.Config
 	engine          session.WorkflowEngine
+	// reviewGuard is the listener's process-wide review-spawn reservation, so
+	// headless re-review honors the same one-reviewer-per-item rule. nil-safe.
+	reviewGuard *session.ReviewSpawnGuard
 	// worktreeMu serializes context-file writes to the same worktree path so that
 	// concurrent SpawnSessionFromItem / AttachSessionToItem calls cannot produce
 	// a partially-written .claude/backlog-context.md.
@@ -242,6 +261,9 @@ type BacklogService struct {
 	// Populated incrementally as dependencies.go wires each caller in, since
 	// GeminiCaller (Epic 3.1) is constructed after backlogSvc itself.
 	headlessCallers map[string]headless.PoolClient
+	// backendSelector, when set, routes stage programs and the default headless
+	// client through the live backend selection (nil in tests).
+	backendSelector *headless.Selector
 
 	// modelFamilies resolves a stage executor's "family:<alias>" Model value
 	// (e.g. "family:opus") to a concrete model ID via session.ResolveModel,
@@ -297,6 +319,11 @@ type BacklogService struct {
 	// by the time these persistence calls ran and every successful triage
 	// silently failed to ever mark the item ready.
 	triageCleanupTimeout time.Duration
+
+	// triageCleanupContextFn, when set, replaces the default timeout-bound context for
+	// TriggerTriage's post-call persistence writes. Tests use it to assert WHEN those
+	// contexts are created (after the LLM call returns) without sleeping past a real timeout.
+	triageCleanupContextFn func() (context.Context, context.CancelFunc)
 
 	// pluginRegistry and syncKeyFunc back TriggerSync / GetSyncHistory. Both are
 	// optional: if pluginRegistry is nil, TriggerSync degrades to CodeUnimplemented
@@ -564,7 +591,7 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 		pipelineModeRepo:     pipelineModeRepo,
 		shutdownCtx:          ctx,
 		shutdownCancel:       cancel,
-		triageSem:            make(chan struct{}, 8),
+		triageSem:            make(chan struct{}, cfg.MaxConcurrentTriageOrDefault()),
 		triageCleanupTimeout: defaultTriageCleanupTimeout,
 		resolveGitHubInput:   session.ResolveGitHubInput,
 		capabilityCheck:      headless.DefaultCapabilitySelfCheck,
@@ -588,6 +615,17 @@ func (s *BacklogService) SetHeadlessPool(pool headless.PoolClient) {
 		s.headlessCallers = make(map[string]headless.PoolClient)
 	}
 	s.headlessCallers["claude"] = pool
+}
+
+// SetBackendSelector routes the default headless client (empty stage program)
+// and every known backend name through sel, so per-feature settings and
+// capability/availability fallback apply. headlessCallers["claude"] keeps the
+// raw pool so a stage explicitly configured "claude" is never re-routed.
+func (s *BacklogService) SetBackendSelector(sel *headless.Selector) {
+	s.backendSelector = sel
+	if sel != nil {
+		s.headlessPool = &headless.SelectingClient{Selector: sel}
+	}
 }
 
 // SetGeminiCaller registers caller in headlessCallers under "gemini" so a
@@ -627,8 +665,22 @@ type availabilityChecker interface {
 // entirely). itemID/stage are for the log line and are not otherwise
 // interpreted.
 func (s *BacklogService) resolveHeadlessCaller(program, itemID, stage string) (caller headless.PoolClient, configuredProgram, fallbackReason string) {
+	if program == "claude" {
+		if raw, ok := s.headlessCallers["claude"]; ok {
+			return raw, "", ""
+		}
+	}
 	if program == "" || program == "claude" {
 		return s.headlessPool, "", ""
+	}
+	if s.backendSelector != nil && slices.Contains(headless.KnownBackendNames(), program) {
+		_, res := s.backendSelector.Resolve(headless.FeatureKey(stage), program, headless.Caps{})
+		reason := res.FallbackReason
+		if reason != "" {
+			log.Warn("[PipelineEngine] headless program fell back", "program", program, "item", itemID, "stage", stage, "reason", reason)
+			return &headless.SelectingClient{Selector: s.backendSelector}, program, reason
+		}
+		return &headless.SelectingClient{Selector: s.backendSelector, StageProgram: program}, "", ""
 	}
 	found, ok := s.headlessCallers[program]
 	if !ok {
@@ -690,6 +742,22 @@ func (s *BacklogService) SetCapabilityCheck(c *headless.CodebaseReadCapabilitySe
 // on the default.
 func (s *BacklogService) SetTriageCleanupTimeout(d time.Duration) {
 	s.triageCleanupTimeout = d
+}
+
+// SetTriageCleanupContextFactory overrides how TriggerTriage creates the contexts for its
+// post-LLM-call DB writes. Exposed for tests; production callers should rely on the default.
+func (s *BacklogService) SetTriageCleanupContextFactory(f func() (context.Context, context.CancelFunc)) {
+	s.triageCleanupContextFn = f
+}
+
+// newTriageCleanupContext returns a fresh context bounding one batch of post-call persistence
+// writes. Callers must invoke it after the LLM call returns, never before: see the
+// triageCleanupTimeout field comment.
+func (s *BacklogService) newTriageCleanupContext() (context.Context, context.CancelFunc) {
+	if s.triageCleanupContextFn != nil {
+		return s.triageCleanupContextFn()
+	}
+	return context.WithTimeout(context.Background(), s.triageCleanupTimeout)
 }
 
 // SetPluginRegistry wires the item-source plugin registry, enabling TriggerSync.
@@ -837,7 +905,9 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 		CostPriced:               is.CostPriced,
 		EndReason:                is.EndReason,
 		FailureCapturePath:       is.FailureCapturePath,
+		ErrorDetail:              is.ErrorDetail,
 		ClaimantHostId:           is.ClaimantHostID,
+		BaseCommitSha:            is.BaseCommitSha,
 	}
 	if is.StartedAt != nil {
 		p.StartedAt = timestamppb.New(*is.StartedAt)
@@ -914,7 +984,7 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 				ClarifyingQuestions: clarifying,
 				Tasks:               tasks,
 				// #nosec G115 -- triage rework iteration counter, bounded by the small
-				// configurable rework cap (config.MaxAutoReworkIterationsOrDefault, default 3).
+				// configurable rework cap (config.MaxAutoReworkIterationsOrDefault, default 5).
 				Iteration: int32(tr.Iteration),
 				Feedback:  tr.Feedback,
 			}
@@ -1416,4 +1486,10 @@ func duplicateRefPending(item *session.BacklogItemData) string {
 		return ""
 	}
 	return session.PendingDuplicateRef(item.ItemSessions)
+}
+
+// SetReviewSpawnGuard wires the lifecycle listener's review-spawn guard into the
+// headless re-review paths (TriggerReReview, AutoRespawnReview).
+func (s *BacklogService) SetReviewSpawnGuard(g *session.ReviewSpawnGuard) {
+	s.reviewGuard = g
 }

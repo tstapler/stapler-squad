@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // TestBuildLaunchCommand_LargePromptSurvivesRealTmuxNewSession is an
@@ -115,14 +116,9 @@ func TestBuildLaunchCommand_LargePromptSurvivesRealTmuxNewSession(t *testing.T) 
 	// accept a read once its content exactly matches the expected prompt
 	// (matching length alone wouldn't rule out a same-length, wrong-content
 	// torn read).
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if data, readErr := os.ReadFile(outFile); readErr == nil && string(data) == prompt {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("fake claude script never wrote the full %d-byte prompt to %s within the deadline", len(prompt), outFile)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	wait.RequireEventually(t, func() bool {
+		data, readErr := os.ReadFile(outFile)
+		return readErr == nil && string(data) == prompt
+	}, 5*time.Second, 10*time.Millisecond,
+		"fake claude script never wrote the full %d-byte prompt to %s", len(prompt), outFile)
 }

@@ -1,5 +1,249 @@
 # Changelog
 
+## [2.5.0](https://github.com/tstapler/stapler-squad/compare/v2.4.0...v2.5.0) (2026-10-14)
+
+
+### Features
+
+* **backlog:** expose work-session base_commit_sha on ItemSession, MCP and detail UI ([#1023](https://github.com/tstapler/stapler-squad/issues/1023)) ([6a5d50f](https://github.com/tstapler/stapler-squad/commit/6a5d50fa44565ef6a44c58daff4d36d893856e48))
+* **session:** opt-in force_stop for sessions with unknown worktree dirty state ([#1025](https://github.com/tstapler/stapler-squad/issues/1025)) ([12e674a](https://github.com/tstapler/stapler-squad/commit/12e674a67286130227a1ec620da49247843a1772))
+
+
+### Bug Fixes
+
+* **capacity:** replace per-session token alert with a USD/hour spend-rate alert ([#1026](https://github.com/tstapler/stapler-squad/issues/1026)) ([a924b1f](https://github.com/tstapler/stapler-squad/commit/a924b1f2494c62635405183b93c315f773608149))
+* **notifications:** retire stale stuck notifications and stop false multi-reason escalation ([#1029](https://github.com/tstapler/stapler-squad/issues/1029)) ([1281b13](https://github.com/tstapler/stapler-squad/commit/1281b13fefd53e4ef13bf4bcc38e97165dd3b5a7))
+
+## [2.4.0](https://github.com/tstapler/stapler-squad/compare/v2.3.0...v2.4.0) (2026-10-13)
+
+
+### Features
+
+* **backlog:** PR badge in header, actions first, auto-expand Version Control ([#1011](https://github.com/tstapler/stapler-squad/issues/1011)) ([c37806e](https://github.com/tstapler/stapler-squad/commit/c37806e566d4b2a5f459e15454ec4e24fd51fe4b))
+* **backlog:** suggest a known repo when creating a backlog item from the omnibar ([#1018](https://github.com/tstapler/stapler-squad/issues/1018)) ([433b309](https://github.com/tstapler/stapler-squad/commit/433b30954f76f8c2deaa90baacc6b0391ba0b392))
+* **git:** capability preflight with own gitconfig resolver (Story 1.3.4) ([#1008](https://github.com/tstapler/stapler-squad/issues/1008)) ([2ff0393](https://github.com/tstapler/stapler-squad/commit/2ff0393a411f2c08d62edc7631aa62d45bdf031c))
+* **git:** gogit backend serving ref reads in-process (Story 2.1.1) ([#1004](https://github.com/tstapler/stapler-squad/issues/1004)) ([d321b38](https://github.com/tstapler/stapler-squad/commit/d321b389898d6de68e0c81035502379a1cb071d9))
+* **git:** Locate and production wiring of remote git through Backend (Story 1.1.5) ([#1003](https://github.com/tstapler/stapler-squad/issues/1003)) ([2a5da51](https://github.com/tstapler/stapler-squad/commit/2a5da51e493000337afa3cccacf2be83ff3acc1f))
+* **git:** wire refs shadow mode into production router (Story 2.1.3) ([#1013](https://github.com/tstapler/stapler-squad/issues/1013)) ([0264041](https://github.com/tstapler/stapler-squad/commit/0264041185e66713e87100eb41bd4dbf49c08dde))
+* **services:** diagnose autonomous stalls, record stop reasons, nudge idle sessions instead of respawning ([#1020](https://github.com/tstapler/stapler-squad/issues/1020)) ([a895185](https://github.com/tstapler/stapler-squad/commit/a895185caf20a019861293592955326af81179bc))
+* **web:** dedicated compose widget for AI backlog items (draft preservation, attachments, background create) ([#1000](https://github.com/tstapler/stapler-squad/issues/1000)) ([4a85c12](https://github.com/tstapler/stapler-squad/commit/4a85c12c5982c9aab20e09e35f690330e9535b4d))
+* **web:** leader-key command bar (which-key + fuzzy palette) ([#1012](https://github.com/tstapler/stapler-squad/issues/1012)) ([a1f2d44](https://github.com/tstapler/stapler-squad/commit/a1f2d44b910959b342c0a0410d2425a15a03ba24))
+* **web:** remove the phone bell chip; Alerts is the standing entry to the tray ([#999](https://github.com/tstapler/stapler-squad/issues/999)) ([5689b77](https://github.com/tstapler/stapler-squad/commit/5689b771d1e99d71d1abe4d3d33d16d3525b3068))
+
+
+### Bug Fixes
+
+* **backlog:** don't flag pr_ready_unmerged while CI is running; surface PR-status lookup failures ([#1001](https://github.com/tstapler/stapler-squad/issues/1001)) ([38bf1dd](https://github.com/tstapler/stapler-squad/commit/38bf1dd69e79d3fbd6a954d8a5f6dd1355beaa40))
+* **git:** apply RequiredGitEnv to cli git spawns; fix macOS pid guard and triage test ([#1005](https://github.com/tstapler/stapler-squad/issues/1005)) ([d458406](https://github.com/tstapler/stapler-squad/commit/d458406c81774d90ab57c7c804dc6ba0b0e8c63f))
+* **git:** close review gaps in spawn counters, redaction and oracle ([#1002](https://github.com/tstapler/stapler-squad/issues/1002)) ([9cbfcd9](https://github.com/tstapler/stapler-squad/commit/9cbfcd91f8290e951eaaf92127bfe8c4a93a548a))
+* **git:** match git's not-a-repository error for dangling worktree gitdir in gogit ([#1014](https://github.com/tstapler/stapler-squad/issues/1014)) ([2c8852a](https://github.com/tstapler/stapler-squad/commit/2c8852a11d2efa40b204dcdde505a3de729bcecd))
+* **git:** not_implemented fallback reason and real system-gitconfig discovery ([#1006](https://github.com/tstapler/stapler-squad/issues/1006)) ([60de902](https://github.com/tstapler/stapler-squad/commit/60de9022675deee74a47666033843bf61033a4a7))
+* **git:** serve symlinked git directories in the gogit backend ([#1016](https://github.com/tstapler/stapler-squad/issues/1016)) ([f9124d8](https://github.com/tstapler/stapler-squad/commit/f9124d8212d29e6efaa9c8e01a9a2425f836ffdd))
+* **notifications:** stop calling a non-live stream 'offline' in the tray ([#995](https://github.com/tstapler/stapler-squad/issues/995)) ([a1a1add](https://github.com/tstapler/stapler-squad/commit/a1a1addf7c66abc143471096f9788223a2ee33f6))
+* **server:** join every background goroutine wireDepsIntoServer starts on Shutdown ([#1017](https://github.com/tstapler/stapler-squad/issues/1017)) ([5fd2a25](https://github.com/tstapler/stapler-squad/commit/5fd2a25df2718b3241ba0bd66e3993e4bb8a3df7))
+* **web:** anchor the phone toast deck to the terminal output, not the toolbar ([#996](https://github.com/tstapler/stapler-squad/issues/996)) ([3dd4343](https://github.com/tstapler/stapler-squad/commit/3dd43432c9f59f743b4c6f2db5653899ec6db022))
+* **web:** keep the phone tray a bottom sheet when the keyboard opens; Alerts opens the tray ([#998](https://github.com/tstapler/stapler-squad/issues/998)) ([ce77640](https://github.com/tstapler/stapler-squad/commit/ce7764047a6496c1ff175ec52483b213136dd15c))
+* **web:** Reply card refuses parallel questions and is not offline before first load ([#1019](https://github.com/tstapler/stapler-squad/issues/1019)) ([023a06b](https://github.com/tstapler/stapler-squad/commit/023a06b1db8e8f550db1d048539bf34c896d3803))
+
+## [2.3.0](https://github.com/tstapler/stapler-squad/compare/v2.2.0...v2.3.0) (2026-10-11)
+
+
+### Features
+
+* **context-health:** ContextHealth signal + proto surface ([#983](https://github.com/tstapler/stapler-squad/issues/983)) ([79cd52c](https://github.com/tstapler/stapler-squad/commit/79cd52cd8391bc1aa2374e9079ab13d102b0c245))
+* **git:** routed backend with fallback, remote routing and shadow mode (Story 1.1.3) ([#986](https://github.com/tstapler/stapler-squad/issues/986)) ([164ae8d](https://github.com/tstapler/stapler-squad/commit/164ae8d8165c0511f826cfa383bfd04bec37abeb))
+* **git:** spawn counters by operation/reason and oracle harness (Epic 1.3) ([#993](https://github.com/tstapler/stapler-squad/issues/993)) ([3b20f9c](https://github.com/tstapler/stapler-squad/commit/3b20f9c29e80231cb05d56eb439a6d1bbbd643c0))
+* **lint:** noarchivedrevival analyzer for automated session revival sites ([#975](https://github.com/tstapler/stapler-squad/issues/975)) ([975ac50](https://github.com/tstapler/stapler-squad/commit/975ac50ba43fd725a161f6c366c894f35a964bc2))
+* **lint:** norawgitcli analyzer forbidding raw git CLI call sites ([#992](https://github.com/tstapler/stapler-squad/issues/992)) ([d8c6b3d](https://github.com/tstapler/stapler-squad/commit/d8c6b3d11da58716ccfd54f8a218a04a5b3b146a))
+* **notifications:** delivery gate, notification tray and read-only hidden-session view ([#974](https://github.com/tstapler/stapler-squad/issues/974)) ([a9b19d8](https://github.com/tstapler/stapler-squad/commit/a9b19d863a44a42f6966b3e1616693d210ac7ef2))
+* **notifications:** enable the delivery gate by default and remove legacy hidden checks ([#987](https://github.com/tstapler/stapler-squad/issues/987)) ([0b3ad53](https://github.com/tstapler/stapler-squad/commit/0b3ad53879b82891071cd5a83373c54d4415df17))
+
+
+### Bug Fixes
+
+* **auth:** permit HMAC generic webhook delivery ([#978](https://github.com/tstapler/stapler-squad/issues/978)) ([9d2154d](https://github.com/tstapler/stapler-squad/commit/9d2154d77f1db1c1562abcc401be43f790236177))
+* **backlog-ui:** repo-qualify the external issue badge ([#979](https://github.com/tstapler/stapler-squad/issues/979)) ([447d146](https://github.com/tstapler/stapler-squad/commit/447d14624aab380c59952eb09862d72b843a4ec7))
+* **backlog:** backfill ExternalID/ExternalURL on legacy imported items ([#980](https://github.com/tstapler/stapler-squad/issues/980)) ([1e9f235](https://github.com/tstapler/stapler-squad/commit/1e9f235e1bd42ff121df7482b993c5b750d1a258))
+* **backlog:** preserve PR body newlines; footer names the creating instance and item ([#981](https://github.com/tstapler/stapler-squad/issues/981)) ([51385b0](https://github.com/tstapler/stapler-squad/commit/51385b078a4827082a6d38846a3a83e7b5f891fe))
+* **session:** close diagnose-session tmux leak and surface its outcome ([b8da2fd](https://github.com/tstapler/stapler-squad/commit/b8da2fddc789490cd5ec0d1bc36d051f4718d28c))
+* **session:** don't revive a Stopped one-shot session with a live tmux pane ([6a0423e](https://github.com/tstapler/stapler-squad/commit/6a0423e03eb31d9d67bdfdfa42ca5ef0264ad5fe))
+* **session:** fail closed when pause/stop cannot determine worktree dirty state ([#985](https://github.com/tstapler/stapler-squad/issues/985)) ([474b089](https://github.com/tstapler/stapler-squad/commit/474b089b1328034def9ff1e0346fe5d65fe00c74))
+* **test:** exclude .claude/worktrees from the delivery-gate ID-form scan ([f580dc9](https://github.com/tstapler/stapler-squad/commit/f580dc90b4b5000fbe1ff3ed0a5ad7f9d37ec4e4))
+* **test:** kill the real tmux server a SessionService test spawns on Shutdown ([a12daab](https://github.com/tstapler/stapler-squad/commit/a12daab560f35da35702748f3222d12c52afeba9))
+* **test:** make server/session/github test binaries hermetic (no real network, keychain or claude credentials) ([#989](https://github.com/tstapler/stapler-squad/issues/989)) ([bb249ed](https://github.com/tstapler/stapler-squad/commit/bb249ed5f7ab0536dc38733d939d7f5a4570ddea))
+* **test:** root-cause the server/services flaky test family (BUG-089 et al.) ([#984](https://github.com/tstapler/stapler-squad/issues/984)) ([0a2b96f](https://github.com/tstapler/stapler-squad/commit/0a2b96f5349785fa10a5adb7ddd8822ab25e31f7))
+* **web:** meet WCAG AA for toast deck and tray over the terminal (MC-1) ([#990](https://github.com/tstapler/stapler-squad/issues/990)) ([09ea728](https://github.com/tstapler/stapler-squad/commit/09ea728f66cc5527bef248554db4280f40193485))
+
+## [2.2.0](https://github.com/tstapler/stapler-squad/compare/v2.1.1...v2.2.0) (2026-10-10)
+
+
+### Features
+
+* **git:** Backend interface, RepoLocation and CLI implementation ([#966](https://github.com/tstapler/stapler-squad/issues/966)) ([668c84e](https://github.com/tstapler/stapler-squad/commit/668c84e2645b187af11e01b86962da3df4e1013f))
+* **git:** cohort types and config parsing for the git backend seam ([#964](https://github.com/tstapler/stapler-squad/issues/964)) ([a91e7e4](https://github.com/tstapler/stapler-squad/commit/a91e7e46a0d533d0918996772eb80dfa34c50c74))
+* load user themes from ~/.stapler-squad/themes at runtime ([#967](https://github.com/tstapler/stapler-squad/issues/967)) ([7ae7544](https://github.com/tstapler/stapler-squad/commit/7ae7544eb22b6f5d1a42ffa4c6d036ef4975c27b))
+* **triage:** persist error_detail for unclassified headless failures and escalate batch parking ([#960](https://github.com/tstapler/stapler-squad/issues/960)) ([4c64e92](https://github.com/tstapler/stapler-squad/commit/4c64e929aa529c6bc9676cb61a8c033143fb5a5f))
+
+
+### Bug Fixes
+
+* **backlog:** auto-complete merged PRs whose branch evidence was stamped wrong or never recorded ([#970](https://github.com/tstapler/stapler-squad/issues/970)) ([e96a1eb](https://github.com/tstapler/stapler-squad/commit/e96a1ebafb9acbe9c5d50cc2bb29e5906c54608b))
+* **backlog:** survive deleted work-session rows in PR-merge branch verification ([4fa8c5b](https://github.com/tstapler/stapler-squad/commit/4fa8c5b8b0556b143a5cf2f311bd255a71204739))
+* **git:** allow-list ref names, commit-only peels, scp scrub, faster real-git tests ([#968](https://github.com/tstapler/stapler-squad/issues/968)) ([2eeace1](https://github.com/tstapler/stapler-squad/commit/2eeace1ff19a16c5961c381b5a66186e76aa02c9))
+* **git:** resolve review follow-ups and failures from [#962](https://github.com/tstapler/stapler-squad/issues/962) ([#963](https://github.com/tstapler/stapler-squad/issues/963)) ([558c462](https://github.com/tstapler/stapler-squad/commit/558c46226166606d7494e78e67838e2c307f9788))
+* **unfinished:** wait for scanner maintenance goroutine before test TempDir cleanup ([#965](https://github.com/tstapler/stapler-squad/issues/965)) ([c9f6679](https://github.com/tstapler/stapler-squad/commit/c9f6679c0909a14dcd8fdb422cb115bbd291ede8))
+
+## [2.1.1](https://github.com/tstapler/stapler-squad/compare/v2.1.0...v2.1.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* **e2e:** stop vcs-widget and backlog-stuck-items failing on main; wrap long PR repo text ([#958](https://github.com/tstapler/stapler-squad/issues/958)) ([7f9b82a](https://github.com/tstapler/stapler-squad/commit/7f9b82a768fe7725020fe3ba8040fbbd711dde1e))
+* **nudge:** post-merge review follow-ups for tabbed Up Next ([#954](https://github.com/tstapler/stapler-squad/issues/954)) ([09c64a7](https://github.com/tstapler/stapler-squad/commit/09c64a79749e2ba9a31615e3706ae3b5f9b0ebe1))
+* **security:** Host guard on every :8543 route + opt-in require_local_auth ([#957](https://github.com/tstapler/stapler-squad/issues/957)) ([a04ea9f](https://github.com/tstapler/stapler-squad/commit/a04ea9f7aedda6f3a64295e34884bac79f466956))
+
+
+### Performance Improvements
+
+* **test:** cut session package wall time ~2.5-3x by removing test-infra serialization ([#955](https://github.com/tstapler/stapler-squad/issues/955)) ([08dcd83](https://github.com/tstapler/stapler-squad/commit/08dcd83aa8b8b4f48a9a69282ac0fca33acf440d))
+* **test:** strip the handshake binary and share one storage across the duplicate matrix ([#952](https://github.com/tstapler/stapler-squad/issues/952)) ([41ec4db](https://github.com/tstapler/stapler-squad/commit/41ec4db4db073bd25b1880f7af99e49c281b8e99))
+
+## [2.1.0](https://github.com/tstapler/stapler-squad/compare/v2.0.0...v2.1.0) (2026-10-08)
+
+
+### Features
+
+* **cost:** pin cheaper models and effort for background LLM work ([#950](https://github.com/tstapler/stapler-squad/issues/950)) ([fdd1d8d](https://github.com/tstapler/stapler-squad/commit/fdd1d8dde6d6fe45479243bded6df1a432c39cd6))
+* **settings:** expose autonomous max turns in global defaults ([#949](https://github.com/tstapler/stapler-squad/issues/949)) ([20955ea](https://github.com/tstapler/stapler-squad/commit/20955ea6580b07444a0faec2bd4cb1d72ab7c4d1))
+* **unfinished:** tabbed Up Next with PR session linking and ask-to-fix ([#947](https://github.com/tstapler/stapler-squad/issues/947)) ([ed4cf10](https://github.com/tstapler/stapler-squad/commit/ed4cf100682eb44d55af1e415d379c0dc9ae17c7))
+
+
+### Bug Fixes
+
+* **mcp:** stop idle review polling after request_review ([#948](https://github.com/tstapler/stapler-squad/issues/948)) ([0138562](https://github.com/tstapler/stapler-squad/commit/01385626926d6fdb19e23416eea1b2a78f07c6f8))
+* **server:** bridge WatchWorkflows and WatchUserPRs over WebSocket ([#945](https://github.com/tstapler/stapler-squad/issues/945)) ([264e989](https://github.com/tstapler/stapler-squad/commit/264e9892e2d746e66bfce14ddf9899fac6e5e33e))
+* **terminal:** repaint all webgl panes on atlas clear and cap live WebGL contexts ([#944](https://github.com/tstapler/stapler-squad/issues/944)) ([81a91a3](https://github.com/tstapler/stapler-squad/commit/81a91a3ed5669f0b9eb1cd259a13755cf5af0114))
+* **web:** raise the Omnibar "Create directory?" dialog above the Omnibar overlay ([af41ed5](https://github.com/tstapler/stapler-squad/commit/af41ed5ae67051b6ed4d512e8a6279864e77ca33))
+
+
+### Performance Improvements
+
+* **test:** seed NewTestEntRepository from a migrated template database ([#943](https://github.com/tstapler/stapler-squad/issues/943)) ([d059393](https://github.com/tstapler/stapler-squad/commit/d0593932c8c4926e8ced78405e351d14982d97da))
+
+## [2.0.0](https://github.com/tstapler/stapler-squad/compare/v1.55.0...v2.0.0) (2026-10-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **git:** native_git_worktree/native_git_merge feature flags no longer exist; any live session/worktree override forcing the legacy path is now a no-op.
+
+### Features
+
+* add multi-window support (tmux-style, tab strip + Alt+W leader key) ([#866](https://github.com/tstapler/stapler-squad/issues/866)) ([878fc51](https://github.com/tstapler/stapler-squad/commit/878fc511c2c563fd1614bdc2afc753aefeed336e))
+* **agy:** export AutoAllow rules to Antigravity permissions.allow and capture request source ([#876](https://github.com/tstapler/stapler-squad/issues/876)) ([6cac4d6](https://github.com/tstapler/stapler-squad/commit/6cac4d6e27a73178cf7a8fa697a0bdf0b50f8cd2))
+* **backlog:** add Diagnose & Nudge action for stuck backlog items ([#880](https://github.com/tstapler/stapler-squad/issues/880)) ([186699a](https://github.com/tstapler/stapler-squad/commit/186699a0a598103eb637394b833a893ba1de345b))
+* **backlog:** allow report_duplicate at any non-terminal stage and link role ([#913](https://github.com/tstapler/stapler-squad/issues/913)) ([bb7532b](https://github.com/tstapler/stapler-squad/commit/bb7532ba060e4cffe4b052f9c1356ada28a7b652))
+* **backlog:** cross-host claim/dedup for backlog items, GitHub issues and PRs ([#893](https://github.com/tstapler/stapler-squad/issues/893)) ([f56abbf](https://github.com/tstapler/stapler-squad/commit/f56abbfaf1969d1d7ec58b677615956ec76bfa20))
+* **backlog:** detect repeated no-op dispatch loops and surface pending duplicate claims ([#896](https://github.com/tstapler/stapler-squad/issues/896)) ([44bcdf7](https://github.com/tstapler/stapler-squad/commit/44bcdf726f2f0639ca3a37d09e1504e9864cbd4b))
+* **backlog:** list attached images as file paths in agent prompts ([#839](https://github.com/tstapler/stapler-squad/issues/839)) ([b84660c](https://github.com/tstapler/stapler-squad/commit/b84660c940f4a4b9b021e415b4e6cf87390e0e48))
+* **git:** remove native_git_worktree/native_git_merge feature flags ([#849](https://github.com/tstapler/stapler-squad/issues/849)) ([65edb5c](https://github.com/tstapler/stapler-squad/commit/65edb5c73f7e4e60f265fb6bb7db8dbf1e132d20))
+* **headless:** cost-aware ceiling for headless triage calls ([#918](https://github.com/tstapler/stapler-squad/issues/918)) ([8457cac](https://github.com/tstapler/stapler-squad/commit/8457cacb55cbcf5cc79e631dfc3f6b9fc92f77fe))
+* **hooks:** establish instance-scoped hook protocol ([eccb03e](https://github.com/tstapler/stapler-squad/commit/eccb03ed2d4c908746bd92e508cfecda559e1e7f))
+* **insights:** persist context-window history and /compact telemetry ([#920](https://github.com/tstapler/stapler-squad/issues/920)) ([ec89a79](https://github.com/tstapler/stapler-squad/commit/ec89a7986ab8f388f6173fe634d8b350b5a9575a))
+* **insights:** surface cache ROI as a first-class finding ([#890](https://github.com/tstapler/stapler-squad/issues/890)) ([f790e7d](https://github.com/tstapler/stapler-squad/commit/f790e7d26c874675dc20d250948975c209cf25fe))
+* **insights:** token breakdown bar, tag search/filter, role badge from summary, waste score tooltip ([#836](https://github.com/tstapler/stapler-squad/issues/836)) ([844457e](https://github.com/tstapler/stapler-squad/commit/844457e9aa38c2721e514349c5ff3a1aa88edb26))
+* **llm:** unified LLM backend selector for headless features ([#935](https://github.com/tstapler/stapler-squad/issues/935)) ([db3723c](https://github.com/tstapler/stapler-squad/commit/db3723c14dc80c3c86fe86c6b9f723a2f5c37ba3))
+* **mcp:** accept backlog:&lt;uuid&gt; as report_duplicate duplicate_ref ([#924](https://github.com/tstapler/stapler-squad/issues/924)) ([cb2b309](https://github.com/tstapler/stapler-squad/commit/cb2b30919a4f3e8cda3429f45d90d374a4484ab4))
+* **omnibar:** add visual affordances for backlog AI intake ([#900](https://github.com/tstapler/stapler-squad/issues/900)) ([3c9d6a8](https://github.com/tstapler/stapler-squad/commit/3c9d6a8edc79c3c469c82fdb12a0462d62308999))
+* **programs:** probe program binaries and discover CLI flags via --help ([#831](https://github.com/tstapler/stapler-squad/issues/831)) ([bb88ad8](https://github.com/tstapler/stapler-squad/commit/bb88ad8436c64d6777ebd8710f4bbeb5fa51cd53))
+* **rules:** export approval rules to Antigravity's permissions.allow ([#905](https://github.com/tstapler/stapler-squad/issues/905)) ([401d340](https://github.com/tstapler/stapler-squad/commit/401d3409313f985ea62b4a261b1647210aaf006e))
+* **session:** add multi-program history adapters and stale resume auto-recovery ([#915](https://github.com/tstapler/stapler-squad/issues/915)) ([60a535e](https://github.com/tstapler/stapler-squad/commit/60a535e4cf8f0b6573ade41e2c78162eb092bd3f))
+* **session:** auto-respawn crashed panes outside the startup grace window ([5f9b634](https://github.com/tstapler/stapler-squad/commit/5f9b634627a59d32cc1573912233af77102c5a23))
+* **session:** pin sessions to a dedicated Pinned section ([#903](https://github.com/tstapler/stapler-squad/issues/903)) ([3e01636](https://github.com/tstapler/stapler-squad/commit/3e016362ceea106b71edc42666faa7e68fc399a4))
+* **session:** show Claude conversation ID, prune stale backlog slash commands ([#840](https://github.com/tstapler/stapler-squad/issues/840)) ([84436a8](https://github.com/tstapler/stapler-squad/commit/84436a8634c6efec19d297ad1a1ad6e94ba3ef4a))
+* **sessions:** redesign session list/card density and truncation ([#872](https://github.com/tstapler/stapler-squad/issues/872)) ([9140689](https://github.com/tstapler/stapler-squad/commit/91406891aaf66b1b9596b9fcc0a248c3d53489ef))
+* **session:** worktree consistency reconciliation sweep ([#867](https://github.com/tstapler/stapler-squad/issues/867)) ([01cb651](https://github.com/tstapler/stapler-squad/commit/01cb6515e7f3121d65b6e2fd3aa4285fa393e34e))
+* **streamhub:** runtime-controllable capture tap for terminal drop diagnosis ([#895](https://github.com/tstapler/stapler-squad/issues/895)) ([018b7e2](https://github.com/tstapler/stapler-squad/commit/018b7e254e4c6b045338af19d5270ace69882e0b))
+* **tagging:** batched classify-once session tagger, classifier settings UI, agy prompt detection ([#825](https://github.com/tstapler/stapler-squad/issues/825)) ([cdfd4e5](https://github.com/tstapler/stapler-squad/commit/cdfd4e5cf293e5e0c2048d6f945e7153f821842d))
+* **terminal:** pool xterm.js instances across session switches (Story 3) ([#850](https://github.com/tstapler/stapler-squad/issues/850)) ([b81ee24](https://github.com/tstapler/stapler-squad/commit/b81ee24824ea200985e1e7687d956e14e0484ce5))
+* **tmux:** STAPLER_SQUAD_TMUX_SOCKET isolates a manual instance from the live tmux server ([#932](https://github.com/tstapler/stapler-squad/issues/932)) ([ef61208](https://github.com/tstapler/stapler-squad/commit/ef61208963953d40f00d73359789cbe632da4c2d))
+* **triage:** skip redundant automatic triage, cap concurrency, pin cheaper default model ([#926](https://github.com/tstapler/stapler-squad/issues/926)) ([d04889c](https://github.com/tstapler/stapler-squad/commit/d04889c1bdb2df90120786d3ab20223e5084cf28))
+* **watch-streams:** add keepalive+seq gap-recovery and unify client reconnect logic ([1c1ef11](https://github.com/tstapler/stapler-squad/commit/1c1ef114cd30ca5825bfd238262d6272169d0e3a))
+* **web-app:** add backlog-origin badge to session list and detail views ([#858](https://github.com/tstapler/stapler-squad/issues/858)) ([c444e1c](https://github.com/tstapler/stapler-squad/commit/c444e1cefc510556fba359c5c8b459302b368d8e))
+* **web-app:** audit page UX, component library stories, RepoPathInput consistency ([#908](https://github.com/tstapler/stapler-squad/issues/908)) ([48f3d13](https://github.com/tstapler/stapler-squad/commit/48f3d13945ab609130b88cb08e79b7dc6ec702ff))
+* **web-app:** mobile touch scrolling in both directions and reliable redraw after keyboard open ([#912](https://github.com/tstapler/stapler-squad/issues/912)) ([421cf88](https://github.com/tstapler/stapler-squad/commit/421cf881f82a2a6aa2d76b6691f66df5cdd42448))
+* **web:** session overflow menu — viewport fit, accordion sections, click tracking ([#835](https://github.com/tstapler/stapler-squad/issues/835)) ([f79cd39](https://github.com/tstapler/stapler-squad/commit/f79cd392ef1b3d2e9c8f25265d33edebf8503425))
+* **workflows:** let workflow-fired sessions name themselves from PR context ([1b13d0f](https://github.com/tstapler/stapler-squad/commit/1b13d0f04dc3547916674e1de6b96b0405a5cfdf))
+
+
+### Bug Fixes
+
+* **agy:** stop rule export from widening Antigravity permissions ([#916](https://github.com/tstapler/stapler-squad/issues/916)) ([6e19e8e](https://github.com/tstapler/stapler-squad/commit/6e19e8e510f8c6bfdce14723b3cadddd46eca39f))
+* **backlog-stuck:** fix WCAG contrast and keyboard focus-loss in StuckItemDetail ([#914](https://github.com/tstapler/stapler-squad/issues/914)) ([40cc5ae](https://github.com/tstapler/stapler-squad/commit/40cc5aea00c6a2f6e10e37df9084c2fc54c69cae))
+* **backlog:** cap concurrent live work sessions, guard worktree deletion ([#841](https://github.com/tstapler/stapler-squad/issues/841)) ([69f7c33](https://github.com/tstapler/stapler-squad/commit/69f7c332a50b2c368387b3776f29d059a9261265))
+* **backlog:** fix stuck diagnose/nudge dispatch and surface its session log ([67fb03d](https://github.com/tstapler/stapler-squad/commit/67fb03d4cdd79096adbd018e195a966714f21194))
+* **backlog:** lower default rework/turn caps and bound cold-retry respawns ([#928](https://github.com/tstapler/stapler-squad/issues/928)) ([5b3ae53](https://github.com/tstapler/stapler-squad/commit/5b3ae539c5b4965e335ef8e2ab3c4d727849b1b9))
+* **backlog:** one in-flight review spawn per item ([#933](https://github.com/tstapler/stapler-squad/issues/933)) ([f16251e](https://github.com/tstapler/stapler-squad/commit/f16251e7f9431bebec10bbd32f9de5a505c4f7ba))
+* **backlog:** steer work session with review verdict instead of wake-up polling ([#929](https://github.com/tstapler/stapler-squad/issues/929)) ([3a00521](https://github.com/tstapler/stapler-squad/commit/3a00521bf21be64d600b898d34d6fe409bb052ee))
+* **backlog:** stop stale user-scope /backlog commands shadowing per-item ones ([#911](https://github.com/tstapler/stapler-squad/issues/911)) ([4fcda79](https://github.com/tstapler/stapler-squad/commit/4fcda79e8921b0a1d1a54a8d674b93414ca730ef))
+* **backlog:** unstick stale review gate and stop lock-file leak ([#925](https://github.com/tstapler/stapler-squad/issues/925)) ([becc131](https://github.com/tstapler/stapler-squad/commit/becc1313817b54a19319cd1285bac2dd8c33f788))
+* cap idle-wait-loop cost pattern from [#882](https://github.com/tstapler/stapler-squad/issues/882) ([#885](https://github.com/tstapler/stapler-squad/issues/885)) ([59bbcf3](https://github.com/tstapler/stapler-squad/commit/59bbcf33fd2991e70f202c18a4f91ba01f472fea))
+* **capacity:** cap idle-wait loops and price cache reads in cost budgets ([#917](https://github.com/tstapler/stapler-squad/issues/917)) ([06f88fe](https://github.com/tstapler/stapler-squad/commit/06f88febb78f3b02e053e4843243b31fba1cd33e))
+* **diagnose:** close Diagnose & Nudge safety gaps left over from [#880](https://github.com/tstapler/stapler-squad/issues/880) ([#894](https://github.com/tstapler/stapler-squad/issues/894)) ([b1df034](https://github.com/tstapler/stapler-squad/commit/b1df034f24a3c9dec512c1d279bb0406a36bd9a2))
+* **errors:** normalize error fingerprints, prune stale ErrorEvent rows ([520009a](https://github.com/tstapler/stapler-squad/commit/520009a01971b1f9a90eda8b604993e19e83f48c))
+* **github:** remove newGHGraphQLRequest, orphaned by GHE-host threading ([#865](https://github.com/tstapler/stapler-squad/issues/865)) ([de6d227](https://github.com/tstapler/stapler-squad/commit/de6d2271c48154be2937bf93a080510e6e8de2bc))
+* **github:** resolve GHE repos' GraphQL PR info against their own host ([31e56e1](https://github.com/tstapler/stapler-squad/commit/31e56e1217a0b67ab6cafb2b60297a95a7f2d5df))
+* **headless:** stop triage sessions from re-checking subagents one at a time ([#883](https://github.com/tstapler/stapler-squad/issues/883)) ([411812f](https://github.com/tstapler/stapler-squad/commit/411812f96dffe9d2ea11ae6a6c168743175fe16f))
+* **hooks:** honor shared_rules.yaml in resident classifier; pluggable hook transport ([#906](https://github.com/tstapler/stapler-squad/issues/906)) ([7c640eb](https://github.com/tstapler/stapler-squad/commit/7c640eba4229d837aa45b85bd62c678d179d936a))
+* **hooks:** install ssq-notify alongside ssq-hook-handler ([#881](https://github.com/tstapler/stapler-squad/issues/881)) ([c691fbf](https://github.com/tstapler/stapler-squad/commit/c691fbf000fe1b285ccf67fc7ff895d0bc5db1a7))
+* **insights:** attribute cost to sessions/backlog items instead of 'unattributed' ([#846](https://github.com/tstapler/stapler-squad/issues/846)) ([ca02f01](https://github.com/tstapler/stapler-squad/commit/ca02f012118d6d8b4cbfe20970ea4668db0f1ff1))
+* **insights:** scroll, title size, and per-category cost in session detail ([#869](https://github.com/tstapler/stapler-squad/issues/869)) ([4f62faa](https://github.com/tstapler/stapler-squad/commit/4f62faad570c3bcc83c5135dd0d4572aadd954d0))
+* **jules:** resolve owner/repo from GitHub URLs in test-connection ([#834](https://github.com/tstapler/stapler-squad/issues/834)) ([dc1efe7](https://github.com/tstapler/stapler-squad/commit/dc1efe7e08a698e2380cf4d4740103947fd4ab0e))
+* **logging:** bound service.log and debug-snapshot growth continuously ([a1d3781](https://github.com/tstapler/stapler-squad/commit/a1d3781fec7f1b4044834d4b54567682caa78d0e))
+* **log:** thread ctx through to logger so trace correlation actually fires ([85a8e7a](https://github.com/tstapler/stapler-squad/commit/85a8e7a207306fd8ce04311fc050941a4532c18b))
+* **mcp:** accept any registered program in create_session/create_session_for_pr ([#886](https://github.com/tstapler/stapler-squad/issues/886)) ([1dced16](https://github.com/tstapler/stapler-squad/commit/1dced16a99e7a51691d4042055e623f2145b09bb))
+* **mcp:** fall back to live pane capture when scrollback is empty ([#897](https://github.com/tstapler/stapler-squad/issues/897)) ([d07e68f](https://github.com/tstapler/stapler-squad/commit/d07e68fda0e45b4e4cca4a99ac2c4da4df39ccd7))
+* **mcp:** give each proxy handshake step its own timeout ([#874](https://github.com/tstapler/stapler-squad/issues/874)) ([278faab](https://github.com/tstapler/stapler-squad/commit/278faab33571110d7e262f83cd0b6c2b5c9ae997))
+* **mcp:** report_duplicate ignores open links whose session is dead ([#938](https://github.com/tstapler/stapler-squad/issues/938)) ([89c0c18](https://github.com/tstapler/stapler-squad/commit/89c0c180415ad10b8670ce500da616b693b9fae6))
+* **mcp:** route steer_session/write_to_session/run_command through two-write submit ([#832](https://github.com/tstapler/stapler-squad/issues/832)) ([e2085de](https://github.com/tstapler/stapler-squad/commit/e2085dec46dbe1637df41f37050a4ea8392b681e))
+* **push:** gate Session Completed push on an actual status transition ([#864](https://github.com/tstapler/stapler-squad/issues/864)) ([d921cbb](https://github.com/tstapler/stapler-squad/commit/d921cbb5eb4fd6402dbb516329ea704f6405913e))
+* **remote:** isolate SSH client pool across concurrent RemoteService test instances ([#856](https://github.com/tstapler/stapler-squad/issues/856)) ([8e8afb2](https://github.com/tstapler/stapler-squad/commit/8e8afb2760d07a10fab6a5b3034816d1d30657e0))
+* **scanner:** map Get/SetCaptureTap RPCs so make ready passes ([#923](https://github.com/tstapler/stapler-squad/issues/923)) ([49464a5](https://github.com/tstapler/stapler-squad/commit/49464a5c7fd86bbafb30b4c89c89165aa490116c))
+* **scroll:** allowlist idle-equivalent statuses and require active controller in AppScrollGate ([#843](https://github.com/tstapler/stapler-squad/issues/843)) ([59e5ef3](https://github.com/tstapler/stapler-squad/commit/59e5ef38a416885a413c52a4c83e09fb7a377d2c))
+* **session,tmux:** remove stray conflict marker; fix test/prod type drift ([#855](https://github.com/tstapler/stapler-squad/issues/855)) ([6feca0e](https://github.com/tstapler/stapler-squad/commit/6feca0e78c52c0bd9003e63ea1a470213d10587b))
+* **session:** also override claude's settings.json env via --settings ([5da2af7](https://github.com/tstapler/stapler-squad/commit/5da2af7bf280ad7ec076e6affe6dcd277558632f))
+* **session:** close worktree-envvars-hijack silent-fallback/cross-session isolation vector ([#887](https://github.com/tstapler/stapler-squad/issues/887)) ([a6d5dbf](https://github.com/tstapler/stapler-squad/commit/a6d5dbfc1d0b0d4d43b9acad0c8610c730ab860b))
+* **session:** create sibling cwd on disk in worktree-guard liveness test ([2abdc99](https://github.com/tstapler/stapler-squad/commit/2abdc99559c51fc6cb2f57d41882b0abb1418e29))
+* **session:** eliminate Instance.Status data race in hibernate/resume ([#845](https://github.com/tstapler/stapler-squad/issues/845)) ([0b664a9](https://github.com/tstapler/stapler-squad/commit/0b664a9e08c9b244fc971105c96f4970bd0201bc))
+* **session:** event-driven cleanup for archived/hidden session notifications ([#854](https://github.com/tstapler/stapler-squad/issues/854)) ([c4a2737](https://github.com/tstapler/stapler-squad/commit/c4a2737e5cc5914ad83c49f07fc7a57054c4263a))
+* **session:** join ClaudeController/PTYConsumer goroutines on Stop() ([#859](https://github.com/tstapler/stapler-squad/issues/859)) ([946553b](https://github.com/tstapler/stapler-squad/commit/946553b99e718eea7ed1ba323a3cf3c77d0ac62f))
+* **session:** persist InitialPromptSentAt so a restart doesn't re-type it ([64430e1](https://github.com/tstapler/stapler-squad/commit/64430e1d282791cb1100bc14f766da5fa998b174))
+* **session:** re-resolve MCP server URL provider on every claude relaunch ([#863](https://github.com/tstapler/stapler-squad/issues/863)) ([dd1848f](https://github.com/tstapler/stapler-squad/commit/dd1848f9b216ede3d0eebcace0fdb7475908c53e))
+* **session:** resolve new_worktree base branch from origin, wire scrollback capture ([#833](https://github.com/tstapler/stapler-squad/issues/833)) ([1cc66c5](https://github.com/tstapler/stapler-squad/commit/1cc66c53d4c72d6195b1a515416f8096a34a0801))
+* **session:** resolve symlinks before comparing worktree-guard paths ([deaf140](https://github.com/tstapler/stapler-squad/commit/deaf1405fb7777bb37e35fd96c348f04b07f39fc))
+* **session:** verify tmux pane ownership before reattach/kill ([#927](https://github.com/tstapler/stapler-squad/issues/927)) ([c7d1ce8](https://github.com/tstapler/stapler-squad/commit/c7d1ce8b7928e17830365d726e2f631e72e20091))
+* **shutdown:** raise warren ShutdownTimeout above Server.Shutdown's own worst case ([de7da19](https://github.com/tstapler/stapler-squad/commit/de7da19252843096e4dc662efb94c7179258ec20))
+* skip startup control-mode kill and cdp-bins reconcile for isolated instances (BUG-116) ([#902](https://github.com/tstapler/stapler-squad/issues/902)) ([6b8e6d4](https://github.com/tstapler/stapler-squad/commit/6b8e6d42a2efedad71bad3a2d9840ee20e994628))
+* **terminal:** capture doneCh/stdout at control-mode spawn time, not inside the reader goroutine ([#847](https://github.com/tstapler/stapler-squad/issues/847)) ([eaae1d9](https://github.com/tstapler/stapler-squad/commit/eaae1d9f844d577e30ff6759d207801dd693aa10))
+* **terminal:** consolidate resize settling and control-mode subscriber lifecycle (BUG-101) ([#848](https://github.com/tstapler/stapler-squad/issues/848)) ([6b53ce2](https://github.com/tstapler/stapler-squad/commit/6b53ce216aa6801959b24830f9734d2a609c948b))
+* **terminal:** RedrawThrottler must not coalesce different-region redraws ([#844](https://github.com/tstapler/stapler-squad/issues/844)) ([e713216](https://github.com/tstapler/stapler-squad/commit/e713216dd2c8ea0e05d836d6b0460f9207fe3c75))
+* **terminal:** remove duplicate visualViewport resize listener ([#868](https://github.com/tstapler/stapler-squad/issues/868)) ([a8b32a5](https://github.com/tstapler/stapler-squad/commit/a8b32a5562872c010c9e74225939c275315b7595))
+* **terminal:** repaint and clear glyph atlas when tab becomes visible ([#937](https://github.com/tstapler/stapler-squad/issues/937)) ([87b7a4c](https://github.com/tstapler/stapler-squad/commit/87b7a4cebd6418ba90299b7cefe9910345146c6b))
+* **terminal:** retry fit-on-show until the pane anchor has real layout ([8225567](https://github.com/tstapler/stapler-squad/commit/8225567c064377fd9f80e3b5a32a3da1d5ce1285))
+* **test:** root-cause three deferred flakes in adaptive poller, mux, tmux ([#871](https://github.com/tstapler/stapler-squad/issues/871)) ([0357471](https://github.com/tstapler/stapler-squad/commit/03574716b682d612eeb269b2bf65f0f1120cc033))
+* **tmux:** add periodic sweeper for leaked control-mode clients (BUG-042 recurrence) ([e4945aa](https://github.com/tstapler/stapler-squad/commit/e4945aa21ae69e9313833b378820ae11f20075be))
+* **tmux:** prime pane PID and bound orphan-death wait before RestoreWithWorkDir relaunch ([#830](https://github.com/tstapler/stapler-squad/issues/830)) ([5c8da1f](https://github.com/tstapler/stapler-squad/commit/5c8da1f609d5e2a6908d3191606f513d09a4b973))
+* **tmux:** repair broken build in control_mode_test.go ([3d7fc12](https://github.com/tstapler/stapler-squad/commit/3d7fc1220885c15c6a6e04b67317d4213c5eac75))
+* **web-app:** collapse session row actions to a second row when narrow ([#891](https://github.com/tstapler/stapler-squad/issues/891)) ([bb02606](https://github.com/tstapler/stapler-squad/commit/bb0260629da51395d69fb894ea92fc2efe182ef4))
+* **web-app:** fix checkbox hit target and chip/action density in session list ([#875](https://github.com/tstapler/stapler-squad/issues/875)) ([f56f6f9](https://github.com/tstapler/stapler-squad/commit/f56f6f9c9c09dee57d3b2c6fa4c2c01fe630f026))
+* **workflows:** unique session titles for same-minute run_workflow calls ([#921](https://github.com/tstapler/stapler-squad/issues/921)) ([aaeeca6](https://github.com/tstapler/stapler-squad/commit/aaeeca68d5590e267306dd7c092adbec91faf7b3))
+
+
+### Performance Improvements
+
+* **hooks:** batch WAL analytics writes ([9c9c6cb](https://github.com/tstapler/stapler-squad/commit/9c9c6cb62aa9aa1829c052c01e094a10aca9bc31))
+* **hooks:** route classification through resident instance ([8231ddf](https://github.com/tstapler/stapler-squad/commit/8231ddfbffce315a6a3fe31f537907a0c2841c2a))
+
 ## [1.55.0](https://github.com/tstapler/stapler-squad/compare/v1.54.0...v1.55.0) (2026-09-20)
 
 

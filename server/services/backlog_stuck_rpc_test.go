@@ -830,6 +830,10 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 	// TriggerRemediationNow call could do differently. See
 	// session/worktree_consistency_sweep.go's resolveFinding/sweep.
 	domain.StuckReasonWorktreeInconsistent: true,
+	// StuckReasonMergedPRUnverified: ReconcilePRPending already re-verifies every
+	// tick, so a "retry now" would repeat the same check. The only resolution is an
+	// operator marking the item done (or fixing its recorded branch).
+	domain.StuckReasonMergedPRUnverified: true,
 }
 
 // TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded

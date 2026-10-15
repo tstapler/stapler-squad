@@ -28,102 +28,105 @@ type Appender interface {
 // converts them to NotificationRecords, coalesces rapid-fire events for the same
 // (sessionID, notificationType) key within a 500ms window, and flushes them to the store.
 // It stops when the context is canceled, flushing any remaining buffered records.
-func StartSubscriber(ctx context.Context, bus *events.EventBus, store *NotificationHistoryStore) {
-	StartSubscriberWithInterval(ctx, bus, store, DefaultCoalesceInterval)
+//
+// The returned channel is closed once the subscriber goroutine has exited, after
+// that final flush; callers that tear down the store's directory should wait on it.
+func StartSubscriber(ctx context.Context, bus *events.EventBus, store *NotificationHistoryStore) <-chan struct{} {
+	return StartSubscriberWithInterval(ctx, bus, store, DefaultCoalesceInterval)
 }
 
 // StartSubscriberWithInterval is like StartSubscriber but allows configuring the
 // coalescing interval. This is primarily useful for tests that need shorter intervals.
-func StartSubscriberWithInterval(ctx context.Context, bus *events.EventBus, store Appender, interval time.Duration) {
+func StartSubscriberWithInterval(ctx context.Context, bus *events.EventBus, store Appender, interval time.Duration) <-chan struct{} {
+	done := make(chan struct{})
 	if bus == nil || store == nil {
 		log.Warn("NotificationSubscriber EventBus or store is nil, not starting subscriber")
-		return
+		close(done)
+		return done
 	}
 
 	ch, _ := bus.Subscribe(ctx)
 
 	go func() {
+		defer close(done)
 		log.Info("NotificationSubscriber started", "coalesce_interval", interval)
 		defer log.Info("NotificationSubscriber stopped")
+		runSubscriber(ctx, ch, newCoalescingBuffer(store), interval)
+	}()
+	return done
+}
 
-		var mu sync.Mutex
-		buffer := make(map[string]*NotificationRecord)
+// coalescingBuffer holds the latest record per (sessionID, notificationType) key
+// until flushed to the store. Used only from the subscriber goroutine.
+type coalescingBuffer struct {
+	store   Appender
+	records map[string]*NotificationRecord
+}
 
-		// flush sends all buffered records to the store and clears the buffer.
-		// Must be called with mu held or when no concurrent access is possible.
-		flush := func() {
-			if len(buffer) == 0 {
+func newCoalescingBuffer(store Appender) *coalescingBuffer {
+	return &coalescingBuffer{store: store, records: make(map[string]*NotificationRecord)}
+}
+
+// add buffers the record for a notification event (latest wins) and reports
+// whether the buffer has reached maxBufferSize and should be flushed.
+func (b *coalescingBuffer) add(event *events.Event) (full bool) {
+	if event == nil || event.Type != events.EventNotification {
+		return false
+	}
+	record := eventToRecord(event)
+	if record == nil {
+		return false
+	}
+	b.records[coalesceKey(record.SessionID, record.NotificationType)] = record
+	return len(b.records) >= maxBufferSize
+}
+
+func (b *coalescingBuffer) flush() {
+	for key, record := range b.records {
+		if err := b.store.Append(record); err != nil {
+			log.Error("NotificationSubscriber failed to append notification", "err", err)
+		}
+		delete(b.records, key)
+	}
+}
+
+// drain buffers every event already queued on ch without blocking.
+func (b *coalescingBuffer) drain(ch <-chan *events.Event) {
+	for {
+		select {
+		case event, ok := <-ch:
+			if !ok {
 				return
 			}
-			for key, record := range buffer {
-				if err := store.Append(record); err != nil {
-					log.Error("NotificationSubscriber failed to append notification", "err", err)
-				}
-				delete(buffer, key)
-			}
+			b.add(event)
+		default:
+			return
 		}
+	}
+}
 
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		defer func() {
-			mu.Lock()
-			flush()
-			mu.Unlock()
-		}()
+// runSubscriber is the subscriber loop; it flushes the buffer on every return path.
+func runSubscriber(ctx context.Context, ch <-chan *events.Event, buf *coalescingBuffer, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	defer buf.flush()
 
-		for {
-			select {
-			case event, ok := <-ch:
-				if !ok {
-					return
-				}
-				if event == nil || event.Type != events.EventNotification {
-					continue
-				}
-
-				record := eventToRecord(event)
-				if record == nil {
-					continue
-				}
-
-				key := coalesceKey(record.SessionID, record.NotificationType)
-
-				mu.Lock()
-				buffer[key] = record // Latest wins
-				// If buffer exceeds max size, flush immediately to prevent memory growth
-				if len(buffer) >= maxBufferSize {
-					flush()
-				}
-				mu.Unlock()
-
-			case <-ticker.C:
-				mu.Lock()
-				flush()
-				mu.Unlock()
-
-			case <-ctx.Done():
-				// Drain any events already in the channel so the deferred flush captures them.
-				mu.Lock()
-				for {
-					select {
-					case event, ok := <-ch:
-						if !ok {
-							mu.Unlock()
-							return
-						}
-						if event != nil && event.Type == events.EventNotification {
-							if record := eventToRecord(event); record != nil {
-								buffer[coalesceKey(record.SessionID, record.NotificationType)] = record
-							}
-						}
-					default:
-						mu.Unlock()
-						return
-					}
-				}
+	for {
+		select {
+		case event, ok := <-ch:
+			if !ok {
+				return
 			}
+			if buf.add(event) {
+				buf.flush()
+			}
+		case <-ticker.C:
+			buf.flush()
+		case <-ctx.Done():
+			buf.drain(ch)
+			return
 		}
-	}()
+	}
 }
 
 // UrgentTTL is how long a notification's urgent axis stays push-eligible after it first

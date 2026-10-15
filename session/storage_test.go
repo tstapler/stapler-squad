@@ -39,7 +39,9 @@ var testDBCounter atomic.Int64
 func createTestStorage(t *testing.T) (*Storage, func()) {
 	t.Helper()
 	dsn := fmt.Sprintf("file:testdb_%d?mode=memory&cache=shared", testDBCounter.Add(1))
-	repo, err := NewEntRepository(WithDatabasePath(dsn))
+	seedURI, err := migratedTemplateDBURI()
+	require.NoError(t, err)
+	repo, err := NewEntRepository(WithDatabasePath(dsn), withSeedURI(seedURI))
 	require.NoError(t, err)
 
 	storage, err := NewStorageWithRepository(repo)

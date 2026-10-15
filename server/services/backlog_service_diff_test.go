@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // attachWorkSessionWithRange is attachWorkSessionWithCommit but takes an explicit
@@ -204,7 +205,7 @@ func TestGetBacklogItemDiff_should_ShowEarlierSessionWork_When_LatestReworkSessi
 	attachWorkSessionWithRange(t, storage, repo, item.ID, "work-session-1", repoPath, session1Path, "feature", baseSHA, branchTipSHA)
 
 	// Ensure session 2's CreatedAt is strictly later than session 1's.
-	time.Sleep(2 * time.Millisecond)
+	waitClockPast(t, time.Now(), 2*time.Millisecond)
 
 	// Session 2 (later, a reopen/rework session): made zero new commits. Its
 	// BaseCommitSHA was captured at spawn time, which is already the branch
@@ -217,4 +218,12 @@ func TestGetBacklogItemDiff_should_ShowEarlierSessionWork_When_LatestReworkSessi
 	assert.Contains(t, resp.Msg.Diff, "real implementation content", "diff must still reflect the earlier session's real committed work, not be empty just because the latest rework session made no commits")
 	assert.Equal(t, int32(1), resp.Msg.Added)
 	assert.Equal(t, int32(0), resp.Msg.Removed)
+}
+
+// waitClockPast blocks until the wall clock is at least d past t0, so rows
+// stamped from the real clock afterwards sort strictly later than anything
+// stamped before t0 (storage exposes no clock injection point).
+func waitClockPast(t testing.TB, t0 time.Time, d time.Duration) {
+	t.Helper()
+	wait.RequireEventually(t, func() bool { return time.Since(t0) >= d }, time.Second+d, time.Millisecond, "wall clock did not advance")
 }

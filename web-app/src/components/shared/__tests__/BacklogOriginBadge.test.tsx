@@ -32,6 +32,14 @@ describe("BacklogOriginBadge", () => {
     expect(screen.getByText("review")).toBeTruthy();
   });
 
+  // Guards the fix for hidden Diagnose & Nudge sessions being illegible in the
+  // session list ("diagnose" previously fell through to the generic "backlog"
+  // label since it wasn't in KNOWN_ROLES).
+  it("BacklogOriginBadge_should_RenderDiagnoseLabel_When_SessionRoleIsDiagnose", () => {
+    render(<BacklogOriginBadge entry={makeEntry({ sessionRole: "diagnose" })} />);
+    expect(screen.getByText("diagnose")).toBeTruthy();
+  });
+
   it("BacklogOriginBadge_should_LinkToBacklogItem_When_Linked", () => {
     render(<BacklogOriginBadge entry={makeEntry({ itemId: "abc-999" })} />);
     const link = screen.getByTestId("backlog-origin-badge");

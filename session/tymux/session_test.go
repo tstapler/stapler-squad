@@ -671,8 +671,8 @@ func TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredBeforePaneExits(t
 	// Give any errant second delivery a chance to land before asserting
 	// the count is exactly one (a pane only exits once in practice, but
 	// this is the seam that would catch a fire-more-than-once regression).
-	time.Sleep(20 * time.Millisecond)
-	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "callback must fire exactly once")
+	require.Never(t, func() bool { return atomic.LoadInt32(&calls) != 1 },
+		20*time.Millisecond, time.Millisecond, "callback must fire exactly once")
 }
 
 // TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredAfterPaneAlreadyExited
@@ -710,8 +710,8 @@ func TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredAfterPaneAlreadyE
 		t.Fatal("exit callback registered after exit must still fire once, not zero times")
 	}
 
-	time.Sleep(20 * time.Millisecond)
-	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "callback must fire exactly once")
+	require.Never(t, func() bool { return atomic.LoadInt32(&calls) != 1 },
+		20*time.Millisecond, time.Millisecond, "callback must fire exactly once")
 }
 
 // TestResetExitOnce_WithoutANewExit_DoesNotFireSpuriously covers plan.md
@@ -732,9 +732,8 @@ func TestResetExitOnce_WithoutANewExit_DoesNotFireSpuriously(t *testing.T) {
 	}, time.Second, time.Millisecond, "callback never fired for the original exit")
 
 	sess.ResetExitOnce()
-	time.Sleep(20 * time.Millisecond)
-
-	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "ResetExitOnce alone (no new exit) must not re-fire the callback")
+	require.Never(t, func() bool { return atomic.LoadInt32(&calls) != 1 },
+		20*time.Millisecond, time.Millisecond, "ResetExitOnce alone (no new exit) must not re-fire the callback")
 }
 
 // --- REQ-6 (validation.md): fake-transport-driven unit-level happy path ---

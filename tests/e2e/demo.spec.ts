@@ -405,7 +405,7 @@ test('Demo Flow', { timeout: 120_000 }, async ({ page }) => {
   await page.waitForTimeout(2500); // Clean ending frame for the video loop.
 
   // ── Scene 9: Unfinished Work — surface pending changes across worktrees ───
-  await page.goto(`${BASE_URL}/unfinished`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${BASE_URL}/unfinished?tab=worktrees`, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(1200);
 
   // If no real worktrees are present in the test server, inject representative

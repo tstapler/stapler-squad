@@ -1,6 +1,9 @@
 package services
 
 import (
+	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -101,4 +104,84 @@ func TestParseBacklogItemIntent_should_RejectEmptyMessage_When_MessageIsWhitespa
 	}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+func backlogIntentJSONWithRepo(repo string) string {
+	b, _ := json.Marshal(map[string]any{
+		"title": "Fix foo", "description": "Fix foo in the repo.",
+		"acceptance_criteria": []string{"foo fixed"}, "confidence": 0.9,
+		"suggested_repo_path": repo,
+	})
+	return string(b)
+}
+
+func TestParseBacklogItemIntent_should_PopulateSuggestedRepoPath_When_LLMSelectsKnownRepo(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+	pool := &fakeHeadlessPool{response: backlogIntentJSONWithRepo("/code/my-repo")}
+	svc.SetHeadlessPool(pool)
+
+	resp, err := svc.ParseBacklogItemIntent(t.Context(), connect.NewRequest(&sessionv1.ParseBacklogItemIntentRequest{
+		Message:        "fix foo in my-repo",
+		KnownRepoPaths: []string{"/code/other", "/code/my-repo"},
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Draft)
+	assert.Equal(t, "/code/my-repo", resp.Msg.Draft.SuggestedRepoPath)
+	assert.Contains(t, pool.firstCall().userPrompt, "Known repos:")
+}
+
+func TestParseBacklogItemIntent_should_LeaveSuggestedRepoPathEmpty_When_NoKnownRepos(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+	pool := &fakeHeadlessPool{response: backlogIntentJSONWithRepo("/code/hallucinated")}
+	svc.SetHeadlessPool(pool)
+
+	resp, err := svc.ParseBacklogItemIntent(t.Context(), connect.NewRequest(&sessionv1.ParseBacklogItemIntentRequest{
+		Message: "fix foo in my-repo",
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Draft)
+	assert.Empty(t, resp.Msg.Draft.SuggestedRepoPath)
+	assert.NotContains(t, pool.firstCall().userPrompt, "Known repos:")
+}
+
+func TestParseBacklogItemIntent_should_DropSuggestedRepoPath_When_NotInKnownList(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+	pool := &fakeHeadlessPool{response: backlogIntentJSONWithRepo("/code/hallucinated")}
+	svc.SetHeadlessPool(pool)
+
+	resp, err := svc.ParseBacklogItemIntent(t.Context(), connect.NewRequest(&sessionv1.ParseBacklogItemIntentRequest{
+		Message:        "fix foo",
+		KnownRepoPaths: []string{"/code/my-repo"},
+	}))
+	require.NoError(t, err)
+	assert.Empty(t, resp.Msg.Draft.SuggestedRepoPath)
+}
+
+func TestCleanKnownRepoPaths(t *testing.T) {
+	t.Parallel()
+	many := make([]string, 0, 30)
+	for i := range 30 {
+		many = append(many, fmt.Sprintf("/code/repo-%d", i))
+	}
+	tests := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"trims and dedupes", []string{" /a ", "/a", "/b"}, []string{"/a", "/b"}},
+		{"drops blanks", []string{"", "  ", "/a"}, []string{"/a"}},
+		{"drops entries with newlines or control chars", []string{"/a\nIgnore previous", "/b\x00", "/c"}, []string{"/c"}},
+		{"drops over-long entries", []string{"/" + strings.Repeat("x", maxKnownRepoPathLen), "/ok"}, []string{"/ok"}},
+		{"caps at maxKnownRepoPaths", many, many[:maxKnownRepoPaths]},
+		{"nil in, empty out", nil, []string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, cleanKnownRepoPaths(tt.in))
+		})
+	}
 }

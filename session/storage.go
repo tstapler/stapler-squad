@@ -1033,6 +1033,21 @@ func (s *Storage) AddBacklogItemDependency(ctx context.Context, edge BacklogItem
 	return s.repo.AddBacklogItemDependency(ctx, edge)
 }
 
+// RemoveBacklogItemDependency deletes a blocker/blocked edge (idempotent).
+func (s *Storage) RemoveBacklogItemDependency(ctx context.Context, edge BacklogItemDependencyEdge) error {
+	return s.repo.RemoveBacklogItemDependency(ctx, edge)
+}
+
+// ListBacklogItemDependencies returns the blocked-by and blocking refs for an item.
+func (s *Storage) ListBacklogItemDependencies(ctx context.Context, itemID string) (blockedBy, blocking []BacklogItemDependencyRef, err error) {
+	return s.repo.ListBacklogItemDependencies(ctx, itemID)
+}
+
+// UnresolvedBlockersForItems returns unresolved blocker refs per blocked item (batched).
+func (s *Storage) UnresolvedBlockersForItems(ctx context.Context, itemIDs []string) (map[string][]BacklogItemDependencyRef, error) {
+	return s.repo.UnresolvedBlockersForItems(ctx, itemIDs)
+}
+
 // UnresolvedBlockerItemIDs returns the subset of itemIDs blocked by an unresolved dependency.
 func (s *Storage) UnresolvedBlockerItemIDs(ctx context.Context, itemIDs []string) (map[string]bool, error) {
 	return s.repo.UnresolvedBlockerItemIDs(ctx, itemIDs)
@@ -1438,6 +1453,12 @@ func (s *Storage) UpdateItemSessionEndedWithReason(ctx context.Context, id strin
 // See EntRepository.UpdateItemSessionConversationUUID.
 func (s *Storage) UpdateItemSessionConversationUUID(ctx context.Context, id string, conversationUUID string) error {
 	return s.repo.UpdateItemSessionConversationUUID(ctx, id, conversationUUID)
+}
+
+// UpdateItemSessionEndedWithDetail is UpdateItemSessionEndedWithReason plus the
+// truncated error text for end_reason "other". See EntRepository.UpdateItemSessionEndedWithDetail.
+func (s *Storage) UpdateItemSessionEndedWithDetail(ctx context.Context, id string, endedAt time.Time, reason, detail string) error {
+	return s.repo.UpdateItemSessionEndedWithDetail(ctx, id, endedAt, reason, detail)
 }
 
 // UpdateItemSessionFailureCapture records the absolute path to a durable raw-output

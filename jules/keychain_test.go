@@ -12,6 +12,8 @@ import (
 	"github.com/zalando/go-keyring"
 
 	"github.com/tstapler/stapler-squad/log"
+
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // swapKeyringSeams overrides the package-level keyringGet/Set/Delete test
@@ -84,15 +86,12 @@ func installWarnHandler(t *testing.T, message string) *warnHandler {
 // background probe goroutine's log write without a dedicated done channel.
 func waitForCount(t *testing.T, timeout time.Duration, get func() int, want int) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for {
-		if got := get(); got >= want {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for count to reach %d (last was %d)", want, get())
-		}
-		time.Sleep(2 * time.Millisecond)
+	if err := wait.WaitForCondition(func() bool { return get() >= want }, wait.WaitConfig{
+		Timeout:      timeout,
+		PollInterval: 2 * time.Millisecond,
+		Description:  "count to reach want",
+	}); err != nil {
+		t.Fatalf("timed out waiting for count to reach %d (last was %d): %v", want, get(), err)
 	}
 }
 
@@ -321,14 +320,12 @@ func TestKeyringTokenSource_APIKey_should_ReturnErrJulesKeychainPausedAndLogOnce
 	// The one background probe fails and extends the cooldown. Calls during
 	// that new cooldown must not immediately launch another probe.
 	waitForCount(t, time.Second, handler.Count, 1)
-	for {
+	if err := wait.WaitForCondition(func() bool {
 		s.stateMu.Lock()
-		inFlight := s.probeInFlight
-		s.stateMu.Unlock()
-		if !inFlight {
-			break
-		}
-		time.Sleep(time.Millisecond)
+		defer s.stateMu.Unlock()
+		return !s.probeInFlight
+	}, wait.WaitConfig{Timeout: 5 * time.Second, PollInterval: time.Millisecond, Description: "probe no longer in flight"}); err != nil {
+		t.Fatal(err)
 	}
 	_, err := s.APIKey(context.Background())
 	if !errors.Is(err, ErrJulesKeychainPaused) {
@@ -466,7 +463,7 @@ func TestKeyringTokenSource_APIKey_should_CoalesceSynchronousResolves_When_ManyG
 	}
 	// Give the other 49 goroutines a chance to reach the shared singleflight
 	// call before it completes.
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond) //nolint:notimesleeptest no observable signal that the other goroutines reached the singleflight call
 	close(block)
 
 	doneWG.Wait()

@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -178,6 +179,6 @@ func TestArchiveExcessSessions_should_NotArchiveActiveSession_When_RevivedBetwee
 func TestRunRetentionSweep_NilGuard_DoesNotPanic(t *testing.T) {
 	// Passing nil ent client or nil repo should not panic (StartRetentionEnforcer guards these).
 	assert.NotPanics(t, func() {
-		StartRetentionEnforcer(context.Background(), nil, nil, time.Second)
+		StartRetentionEnforcer(context.Background(), nil, nil, time.Second, &sync.WaitGroup{})
 	})
 }

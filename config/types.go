@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"slices"
 	"time"
 
@@ -655,6 +656,85 @@ type CapacityConfig struct {
 	// cadence while tolerating a normal handful of status check-ins.
 	// Default: 15.
 	IdleWaitTurnCeiling int `json:"idle_wait_turn_ceiling,omitempty"`
+	// IdleWaitMaxMinutes is the wall-clock span of one idle-wait run (first to
+	// last idle turn, needing at least 3 turns) that counts as a loop even
+	// below IdleWaitTurnCeiling — a slow wake cadence can burn an hour in few
+	// turns. Default: 30.
+	IdleWaitMaxMinutes int `json:"idle_wait_max_minutes,omitempty"`
+	// RoleCostBudgetUSD overrides CostBudgetUSD per backlog session role
+	// ("triage", "work", "review", ...). A role present in the map uses its
+	// value (0 = no limit); absent roles use CostBudgetUSD. Pipeline roles
+	// (triage/review/diagnose) are stopped and handed back to the orchestrator
+	// on breach; other sessions get the capacity notification only.
+	// Default: {"triage": 10}.
+	RoleCostBudgetUSD map[string]float64 `json:"role_cost_budget_usd,omitempty"`
+	// RoleIdleWaitTurnCeiling overrides IdleWaitTurnCeiling per role; absent
+	// roles use IdleWaitTurnCeiling. Default: {"triage": 10}.
+	RoleIdleWaitTurnCeiling map[string]int `json:"role_idle_wait_turn_ceiling,omitempty"`
+	// SpendRateAlertUSDPerHour notifies once per cooldown when a live session's
+	// spend over the trailing SpendRateWindowMinutes, scaled to USD/hour,
+	// exceeds it. Unlike a total-token ceiling it does not punish long-running
+	// sessions, only fast burn. A negative value disables the alert.
+	// Default: 15 (between p90 and p95 of per-session peak 60-minute rates
+	// measured over 228 sessions in a 14-day window).
+	SpendRateAlertUSDPerHour float64 `json:"spend_rate_alert_usd_per_hour,omitempty"`
+	// SpendRateWindowMinutes is the rolling window the spend rate is measured
+	// over, also the per-session cooldown between repeat alerts. Default: 60;
+	// clamped to [5, 1440].
+	SpendRateWindowMinutes int `json:"spend_rate_window_minutes,omitempty"`
+}
+
+const (
+	defaultSpendRateAlertUSDPerHour = 15.0
+	defaultSpendRateWindowMinutes   = 60
+	minSpendRateWindowMinutes       = 5
+	maxSpendRateWindowMinutes       = 24 * 60
+)
+
+// SpendRateThreshold returns the USD/hour alert line and whether the alert is
+// enabled. Zero and non-finite values take the default; only a negative
+// value disables it. Works on a config that bypassed CapacityConfigOrDefault.
+func (c CapacityConfig) SpendRateThreshold() (usdPerHour float64, enabled bool) {
+	v := c.SpendRateAlertUSDPerHour
+	switch {
+	case v < 0:
+		return 0, false
+	case v == 0 || math.IsNaN(v) || math.IsInf(v, 0):
+		return defaultSpendRateAlertUSDPerHour, true
+	}
+	return v, true
+}
+
+// SpendRateWindow returns the rolling spend-rate window, applying the default
+// and clamping for a config that bypassed CapacityConfigOrDefault.
+func (c CapacityConfig) SpendRateWindow() time.Duration {
+	m := c.SpendRateWindowMinutes
+	if m == 0 {
+		m = defaultSpendRateWindowMinutes
+	}
+	if m < minSpendRateWindowMinutes {
+		m = minSpendRateWindowMinutes
+	}
+	if m > maxSpendRateWindowMinutes {
+		m = maxSpendRateWindowMinutes
+	}
+	return time.Duration(m) * time.Minute
+}
+
+// CostBudgetFor returns the USD cost budget for role (0 = unlimited).
+func (c CapacityConfig) CostBudgetFor(role string) float64 {
+	if v, ok := c.RoleCostBudgetUSD[role]; ok {
+		return v
+	}
+	return c.CostBudgetUSD
+}
+
+// IdleWaitCeilingFor returns the consecutive idle-turn ceiling for role.
+func (c CapacityConfig) IdleWaitCeilingFor(role string) int {
+	if v, ok := c.RoleIdleWaitTurnCeiling[role]; ok && v > 0 {
+		return v
+	}
+	return c.IdleWaitTurnCeiling
 }
 
 // QuotaConfig holds configuration for the account-wide Claude Code session-quota
@@ -780,11 +860,65 @@ func (c CapacityConfig) CapacityConfigOrDefault() CapacityConfig {
 	if out.IdleWaitTurnCeiling <= 0 {
 		out.IdleWaitTurnCeiling = 15
 	}
+	if out.IdleWaitMaxMinutes <= 0 {
+		out.IdleWaitMaxMinutes = 30
+	}
+	if v, enabled := c.SpendRateThreshold(); enabled {
+		out.SpendRateAlertUSDPerHour = v
+	}
+	out.SpendRateWindowMinutes = int(c.SpendRateWindow() / time.Minute)
+	// Copy-on-default so the caller's maps are never mutated.
+	out.RoleCostBudgetUSD = withRoleDefault(c.RoleCostBudgetUSD, "triage", 10.0)
+	out.RoleIdleWaitTurnCeiling = withRoleDefault(c.RoleIdleWaitTurnCeiling, "triage", 10)
 	if len(out.ProviderPriority) == 0 {
 		out.ProviderPriority = []ProviderPriority{
 			{CLI: "agy", Model: "gemini-2.0-flash"},
 			{CLI: "claude", Model: "claude-3-5-sonnet-20241022"},
 		}
+	}
+	return out
+}
+
+// ContextHealthConfig holds the thresholds for the per-session ContextHealth
+// signal (green/amber/red). Fields <= 0 mean "unset" and take the default.
+type ContextHealthConfig struct {
+	// LoopRepeatThreshold is the number of consecutive identical tool calls
+	// that raises the level. Default 3.
+	LoopRepeatThreshold int `json:"loop_repeat_threshold,omitempty"`
+	// ConfusionPhraseThreshold is the number of apology/self-correction
+	// messages in the trailing window that raises the level. Default 5.
+	ConfusionPhraseThreshold int `json:"confusion_phrase_threshold,omitempty"`
+	// MinToolCallSamples is the minimum number of tool calls in the window
+	// before any level other than unknown is reported. Default 5.
+	MinToolCallSamples int `json:"min_tool_call_samples,omitempty"`
+}
+
+const (
+	defaultLoopRepeatThreshold      = 3
+	defaultConfusionPhraseThreshold = 5
+	defaultMinToolCallSamples       = 5
+)
+
+// ContextHealthConfigOrDefault returns a copy with defaults applied to unset fields.
+func (c ContextHealthConfig) ContextHealthConfigOrDefault() ContextHealthConfig {
+	out := c
+	if out.LoopRepeatThreshold <= 0 {
+		out.LoopRepeatThreshold = defaultLoopRepeatThreshold
+	}
+	if out.ConfusionPhraseThreshold <= 0 {
+		out.ConfusionPhraseThreshold = defaultConfusionPhraseThreshold
+	}
+	if out.MinToolCallSamples <= 0 {
+		out.MinToolCallSamples = defaultMinToolCallSamples
+	}
+	return out
+}
+
+func withRoleDefault[V int | float64](m map[string]V, role string, def V) map[string]V {
+	out := make(map[string]V, len(m)+1)
+	out[role] = def
+	for k, v := range m {
+		out[k] = v
 	}
 	return out
 }

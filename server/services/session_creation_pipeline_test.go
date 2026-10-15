@@ -224,12 +224,11 @@ func BenchmarkBackgroundResolutionPipeline_PlainDirectorySession(b *testing.B) {
 			b.Fatalf("CreateSession: %v", err)
 		}
 
-		for {
+		if err := wait.WaitForCondition(func() bool {
 			inst := fix.svc.FindLiveInstance(resp.Msg.Session.Id)
-			if inst != nil && session.Status(inst.GetStatus()) == session.Active {
-				break
-			}
-			time.Sleep(time.Millisecond)
+			return inst != nil && session.Status(inst.GetStatus()) == session.Active
+		}, wait.WaitConfig{Timeout: wait.SlowTimeout, PollInterval: time.Millisecond, Description: "session Active"}); err != nil {
+			b.Fatalf("session never became Active: %v", err)
 		}
 
 		destroyCreatedSession(b, fix.svc, resp.Msg.Session.Id)

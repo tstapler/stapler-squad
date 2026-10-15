@@ -189,6 +189,6 @@ full-suite runs must not reproduce the `TempDir RemoveAll cleanup` failure for t
 - `docs/bugs/open/BUG-090-hubregistry-restartpump-reconnect-flake-under-full-suite-load.md` — sibling
   full-suite-only flake discovered the day before, same discovery method (running the full package as a
   verification step for unrelated work).
-- `docs/bugs/open/BUG-089-server-shutdown-joins-background-tickers-flake.md` — prior art for the
+- `docs/bugs/fixed/BUG-089-server-shutdown-joins-background-tickers-flake.md` — prior art for the
   "Shutdown() doesn't join every background goroutine" failure family this bug's leading hypothesis
   belongs to.

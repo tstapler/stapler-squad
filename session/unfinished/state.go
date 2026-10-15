@@ -11,9 +11,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/tstapler/stapler-squad/executor"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 )
 
 // dismissEntry is a persisted dismiss record.
@@ -336,13 +336,14 @@ func (s *StateStore) SaveScanCache(entries []scanCacheEntry) error {
 
 // ComputeDiffHash runs `git -C path diff HEAD` and SHA256-hashes the output.
 func ComputeDiffHash(worktreePath string) (string, error) {
-	exec3s := executor.MakeTimeoutExecutor(5 * time.Second)
-	cmd := safeexec.CommandContext(context.Background(), "git", "-C", worktreePath, "diff", "HEAD")
-	out, err := exec3s.CombinedOutput(cmd)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := gitprovider.Backend().Diff(ctx, backend.Local{Root: backend.RepoRoot(worktreePath)},
+		backend.DiffSpec{Base: "HEAD", Intent: backend.IntentDisplay})
 	if err != nil {
 		return "", fmt.Errorf("git diff HEAD: %w", err)
 	}
-	sum := sha256.Sum256(out)
+	sum := sha256.Sum256([]byte(out))
 	return fmt.Sprintf("%x", sum), nil
 }
 
