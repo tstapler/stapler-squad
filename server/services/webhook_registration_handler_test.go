@@ -342,11 +342,11 @@ func TestWebhookManagement_should_NeverStoreSecretInPlaintext_When_RegistrationC
 	ctx := context.Background()
 	c := h.infra.entRepo.GetEntClient()
 
-	wfs, err := c.Workflow.Query().All(ctx)
+	wfs, err := c.Workflow.Query().All(ctx) //nolint:entfullscan inspect every row in the isolated fixture for plaintext secret leakage
 	require.NoError(t, err)
-	regs, err := c.WebhookRegistration.Query().All(ctx)
+	regs, err := c.WebhookRegistration.Query().All(ctx) //nolint:entfullscan inspect every row in the isolated fixture for plaintext secret leakage
 	require.NoError(t, err)
-	ledger, err := c.WebhookRequestLedger.Query().All(ctx)
+	ledger, err := c.WebhookRequestLedger.Query().All(ctx) //nolint:entfullscan inspect every row in the isolated fixture for plaintext secret leakage
 	require.NoError(t, err)
 
 	for _, wf := range wfs {
