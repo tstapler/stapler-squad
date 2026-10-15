@@ -97,6 +97,12 @@ jobs:
         working-directory: website
         run: pnpm run test:a11y
 
+      # 19 UX acceptance criteria from design/ux.md §5 / validation.md's
+      # "UX Acceptance Tests" table -- website/tests/e2e/*.spec.ts.
+      - name: E2E UX acceptance tests
+        working-directory: website
+        run: pnpm run test:e2e
+
       - name: Configure Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # ratchet:actions/configure-pages@v6
 
