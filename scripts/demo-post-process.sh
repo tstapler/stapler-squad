@@ -88,7 +88,9 @@ capitalize_spec_name() {
   base="${base//[-_]/ }"
   local word result=""
   for word in $base; do
-    result+="${word^}"$' '
+    # ${word^} (capitalize first letter) needs Bash 4+; macOS ships Bash 3.2 by
+    # default, so use tr+substring instead for portability.
+    result+="$(tr '[:lower:]' '[:upper:]' <<<"${word:0:1}")${word:1} "
   done
   printf '%s' "${result% }"
 }
@@ -232,11 +234,20 @@ if [[ "$TITLE_CARD_REQUESTED" -eq 1 ]]; then
   fi
 
   rasterize_svg() {
-    # rasterize_svg <svg-path> <out-png> <height>
+    # rasterize_svg <svg-path> <out-png> <height> [width]
+    local width="${4:-}"
     if [[ "$RSVG_CONVERT" == "rsvg-convert" ]]; then
-      rsvg-convert -h "$3" --keep-aspect-ratio -o "$2" "$1"
+      if [[ -n "$width" ]]; then
+        rsvg-convert -w "$width" -h "$3" -o "$2" "$1"
+      else
+        rsvg-convert -h "$3" --keep-aspect-ratio -o "$2" "$1"
+      fi
     else
-      inkscape "$1" --export-type=png --export-height="$3" --export-filename="$2" &>/dev/null
+      if [[ -n "$width" ]]; then
+        inkscape "$1" --export-type=png --export-height="$3" --export-width="$width" --export-filename="$2" &>/dev/null
+      else
+        inkscape "$1" --export-type=png --export-height="$3" --export-filename="$2" &>/dev/null
+      fi
     fi
   }
 
@@ -258,7 +269,7 @@ if [[ "$TITLE_CARD_REQUESTED" -eq 1 ]]; then
         fill="#ffffff">$(xml_escape "$TITLE_CARD_TEXT")</text>
 </svg>
 EOF
-  rsvg-convert -w "$WIDTH" -h "$TEXT_H" -o "$TEXT_PNG" "$TEXT_SVG"
+  rasterize_svg "$TEXT_SVG" "$TEXT_PNG" "$TEXT_H" "$WIDTH"
 
   TITLE_TMP="$(mktemp "${TMPDIR:-/tmp}/demo-titlecard-XXXXXX.webm")"
   ffmpeg -y \
@@ -275,6 +286,11 @@ EOF
     -cpu-used 2 \
     -an \
     "$TITLE_TMP" 2>&1 | grep -E "^(ffmpeg|Input|Output|Stream|frame=|video:)" || true
+  ffmpeg_status=${PIPESTATUS[0]}
+  if [[ "$ffmpeg_status" -ne 0 ]]; then
+    echo "❌  Title-card ffmpeg stage exited with status $ffmpeg_status" >&2
+    exit 1
+  fi
 
   if [[ ! -s "$TITLE_TMP" ]]; then
     echo "❌  Title-card ffmpeg stage produced no output" >&2
