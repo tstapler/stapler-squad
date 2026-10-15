@@ -141,6 +141,7 @@ func mergeUserThemes(dirs ...string) []userTheme {
 	}
 	sort.Slice(merged, func(i, j int) bool { return merged[i].ID < merged[j].ID })
 	if len(merged) > maxUserThemes {
+		log.Warn("user-themes: too many themes, keeping the first by id", "max", maxUserThemes, "found", len(merged))
 		merged = merged[:maxUserThemes]
 	}
 	return merged
