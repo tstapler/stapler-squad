@@ -167,9 +167,10 @@ Stapler Squad stores all application data in `~/.stapler-squad/`:
 
 ```
 ~/.stapler-squad/
-├── logs/                    # Application logs (rotated automatically)
-│   ├── stapler-squad.log     # Main application log
-│   └── debug.log           # Detailed debug information
+├── logs/
+│   ├── staplersquad.log       # Main application log (JSON-lines)
+│   ├── staplersquad-*.log.gz  # Rotated log segments
+│   └── service.log            # Raw stdout/stderr of the managed service
 ├── worktrees/              # Git worktrees for isolated sessions
 │   ├── session-name_hash/  # Individual worktree directories
 │   └── ...
@@ -190,7 +191,7 @@ Logs are stored in `~/.stapler-squad/logs/` by default and include log rotation 
   "log_max_age": 30,  // Max age in days for rotated files
   "log_compress": true,  // Whether to compress rotated files
   "use_session_logs": true,  // Whether to create separate log files for each session
-  "tmux_session_prefix": "staplerssq_"  // Custom prefix for tmux session isolation
+  "tmux_session_prefix": "staplersquad_"  // Custom prefix for tmux session isolation
 }
 ```
 
@@ -221,6 +222,7 @@ Usage:
 
 Available Commands:
   debug            Print debug information like config paths
+  get-session      Get information about a session
   help             Help about any command
   list             List all sessions
   print-qr-codes   Generate a 1-hour setup token and print QR codes for all detected domains
@@ -229,20 +231,23 @@ Available Commands:
   version          Print the version number of stapler-squad
 
 Flags:
-      --discover-external    Enable external session discovery (tmux/screen sessions outside stapler-squad)
-      --discovery-mode       Enable session discovery mode
-  -h, --help                 help for stapler-squad
-      --listen string        Address to listen on
-      --mcp                  Run as an MCP server over stdio instead of starting the web server
-      --profile              Enable pprof profiling endpoints
-      --profile-port int     Port for pprof profiling endpoints (default 6060)
-      --remote-access        Enable remote access (WebAuthn passkey + QR code setup)
-      --remote-port int      Port for remote access (default 8444)
-      --rp-id string         WebAuthn relying party ID for remote access
-      --test-dir string      Directory to use for test-mode state
-      --test-mode            Run in an isolated test-mode state directory
-      --tmux-keep-server     Keep the tmux server alive after stapler-squad exits (default true)
-      --trace               Enable execution tracing
+      --discover-external         Enable external instance discovery (shorthand for --discovery-mode=all)
+      --discovery-mode string     Instance discovery mode: managed-only, external-only, or all (default "managed-only")
+  -h, --help                      help for stapler-squad
+      --list-known-hosts          Print known peer hosts from the local Workspace Host Registry, then exit
+      --listen string             Loopback address to listen on (e.g. 127.0.0.1:8543); overrides config listen_address
+      --mcp                       Run as an MCP server over stdio instead of starting the web server
+      --open-url string           Translate an ssq:// deep link to a local web UI URL and open it, then exit
+      --profile                   Enable pprof profiling endpoints
+      --profile-port int          Port for pprof profiling endpoints (default 6060)
+      --remote-access             Enable remote access (WebAuthn passkey + QR code setup)
+      --remote-port int            Port for remote access (default 8444)
+      --rp-id string               WebAuthn relying party ID for remote access
+      --test-dir string            Directory to use for test-mode state
+      --test-mode                  Run in an isolated test-mode state directory
+      --tmux-keep-server           Keep the tmux server alive after stapler-squad exits (default true)
+      --trace                      Enable execution tracing
+      --tymuxd-keep-server         Keep the tymuxd daemon running across a stapler-squad restart (default true)
 ```
 
 <br />
@@ -321,31 +326,26 @@ make clean         # Clean build artifacts
 #### Manual Testing Commands
 
 ```bash
-# Run all tests
+# Run all tests (make build must have run first — tests depend on generated proto/ent code)
 go test ./...
 
 # Run tests with coverage
 go test -cover ./...
 
-# Run specific package tests
-go test ./ui
-go test ./app
+# Run a single package, or a single test within it
 go test ./session
+go test ./server/services -run TestSomeSpecificCase -v
 
-# Run core integration tests
-go test ./session -run "TestComprehensiveSessionCreation|TestSessionRecoveryScenarios" -v
-
-# Run performance benchmarks (WARNING: Long running - use make benchmark instead)
-go test -bench=BenchmarkNavigation -benchmem ./app -timeout=10m &
-go test -bench=BenchmarkInstanceChangedComponents -benchmem ./app -timeout=10m &
-go test -bench=BenchmarkListRendering -benchmem ./app -timeout=10m &
+# Run performance benchmarks (WARNING: long running — always run with &)
+go test -bench=. -benchmem ./session -timeout=10m &
 ```
+
+See `docs/reference/benchmarks.md` for the current benchmark catalog, and `make test-race` / `make test-coverage` / `make test-integration` for the gotestsum-backed variants used in CI.
 
 **Test Infrastructure:**
 - Tests use isolated tmux sockets to prevent conflicts with production sessions
 - Mock executors for fast, reliable testing without external dependencies
 - Comprehensive session lifecycle testing including git worktree integration
-- All tests complete in <30s (core session tests) with proper isolation
 
 #### Code Quality Tools
 
@@ -455,7 +455,7 @@ Set `terminal.integrated.defaultProfile.osx` to `"ssq-mux"`.
 If you get an error like `failed to start new session: timed out waiting for tmux session`:
 
 1. **Update the underlying program**: Ensure you're using the latest version of `claude` or your chosen AI assistant
-2. **Check logs**: Review `~/.stapler-squad/logs/stapler-squad.log` for detailed error information
+2. **Check logs**: Review `~/.stapler-squad/logs/staplersquad.log` for detailed error information
 3. **Verify tmux**: Make sure tmux is installed and working (`tmux -V`)
 4. **Check for conflicts**: If running multiple stapler-squad instances, configure unique `tmux_session_prefix` values in config.json
 
@@ -493,6 +493,10 @@ Stapler Squad started as a fork of [claude-squad](https://github.com/smtg-ai/cla
 **Claude is better at building web UIs than TUIs.** The Charm/Bubble Tea ecosystem is relatively niche, which means less training data, less reliable code generation, and slower iteration. React and Next.js are Claude's home turf — features that would take days to wrangle in a TUI come together in hours.
 
 The result is opinionated toward my own workflow: approval gates before agent changes land, a rules engine to automate the repetitive stuff, and a review queue so nothing slips through unnoticed. If that matches how you think about running AI agents, you'll feel at home. If not, the original claude-squad may be a better fit.
+
+### Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, code standards, and how to add a new agent detector. Every PR needs exactly one semver label (`patch`/`minor`/`major`) before it can merge. Participation is governed by our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ### License
 
