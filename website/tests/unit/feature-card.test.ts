@@ -39,4 +39,25 @@ describe('FeatureCard', () => {
 		expect(html).not.toContain('<img');
 		expect(html).toContain('Live Terminal Streaming');
 	});
+
+	// Story 3.3.1's second AC: a screenshot-less card with a `demoClip` field
+	// renders a <video> whose src is releaseAssetUrl()'s output, never a
+	// hardcoded literal duplicated from that helper.
+	it('featureCard_should_RenderVideoViaReleaseAssetUrl_When_DemoClipFieldPresent', async () => {
+		const container = await AstroContainer.create();
+		const html = await container.renderToString(FeatureCard, {
+			props: {
+				heading: 'Live Terminal Streaming',
+				description: 'Full xterm.js terminal per session with real-time output streaming.',
+				category: 'Visibility',
+				demoClip: { tag: 'website-demo-gifs-latest', name: 'terminal-streaming', ext: 'webm' },
+			},
+		});
+
+		expect(html).not.toContain('<img');
+		expect(html).toContain(
+			'src="https://github.com/tstapler/stapler-squad/releases/download/website-demo-gifs-latest/terminal-streaming.webm"',
+		);
+		expect(html).toContain('<video');
+	});
 });

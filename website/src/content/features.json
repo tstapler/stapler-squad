@@ -9,7 +9,12 @@
 	{
 		"heading": "Live Terminal Streaming",
 		"description": "Full xterm.js terminal per session with real-time output streaming. Attach and reprompt any agent without leaving the browser.",
-		"category": "Visibility"
+		"category": "Visibility",
+		"demoClip": {
+			"tag": "website-demo-gifs-latest",
+			"name": "terminal-streaming",
+			"ext": "webm"
+		}
 	},
 	{
 		"heading": "Diff Viewer",

@@ -102,7 +102,22 @@ const ALT_TEXT_BY_HEADING = {
 };
 
 /**
- * @typedef {{heading: string, description: string, category: string, screenshot?: string, alt?: string}} FeatureCard
+ * Story 3.3.1's second AC: exactly one of the 9 screenshot-less sections gets
+ * a `DemoClip` video embed (via `ReleaseAssetRef`), proving the embed wiring
+ * exists and is exercised -- the other 8 stay text-only per
+ * research/features.md §4. "Live Terminal Streaming" is the plan's own
+ * example. The clip itself (`terminal-streaming.webm`) isn't published yet
+ * (Phase 5 is deferred), so `check-asset-health.mjs` is expected to fail on
+ * it until then.
+ *
+ * @type {Record<string, {tag: string, name: string, ext: string}>}
+ */
+const DEMO_CLIP_BY_HEADING = {
+	'Live Terminal Streaming': { tag: 'website-demo-gifs-latest', name: 'terminal-streaming', ext: 'webm' },
+};
+
+/**
+ * @typedef {{heading: string, description: string, category: string, screenshot?: string, alt?: string, demoClip?: {tag: string, name: string, ext: string}}} FeatureCard
  */
 
 /**
@@ -236,6 +251,11 @@ export function buildFeaturesJson(options = {}) {
 			card.alt = ALT_TEXT_BY_HEADING[heading];
 			if (!card.alt) {
 				throw new Error(`"${heading}" has a screenshot but no ALT_TEXT_BY_HEADING entry`);
+			}
+		} else {
+			const demoClip = DEMO_CLIP_BY_HEADING[heading];
+			if (demoClip) {
+				card.demoClip = demoClip;
 			}
 		}
 		return card;

@@ -1,23 +1,30 @@
 ---
-// A single feature-grid tile. `screenshot` is omitted for the 9 sections
+// A single feature-grid tile. `screenshot` is omitted for 8 of the 9 sections
 // docs/features.md has no existing capture for (Task 3.3.1a's forward-looking
 // note: no <img>/<video> is invented for these -- they stay text-only until a
 // real asset exists for them). `alt` is required whenever `screenshot` is
 // set so a descriptive sentence, not the filename, is always what's wired up.
+//
+// Story 3.3.1's second AC: the one remaining screenshot-less card can instead
+// carry a `demoClip` (a ReleaseAssetRef) rendered as a <video>, its src always
+// built via releaseAssetUrl() -- never a hardcoded literal.
+import { releaseAssetUrl, type ReleaseAssetRef } from '../lib/release-asset.ts';
+
 export interface Props {
 	heading: string;
 	description: string;
 	category: string;
 	screenshot?: string;
 	alt?: string;
+	demoClip?: ReleaseAssetRef;
 }
 
-const { heading, description, screenshot, alt } = Astro.props;
+const { heading, description, screenshot, alt, demoClip } = Astro.props;
 ---
 
 <article class="feature-card" data-testid="feature-card">
 	{
-		screenshot && (
+		screenshot ? (
 			<img
 				src={screenshot}
 				alt={alt}
@@ -26,6 +33,17 @@ const { heading, description, screenshot, alt } = Astro.props;
 				height="200"
 				data-testid="feature-card-image"
 			/>
+		) : (
+			demoClip && (
+				<video
+					src={releaseAssetUrl(demoClip)}
+					controls
+					muted
+					loop
+					playsinline
+					data-testid="feature-card-video"
+				/>
+			)
 		)
 	}
 	<h4>{heading}</h4>
@@ -42,7 +60,8 @@ const { heading, description, screenshot, alt } = Astro.props;
 		border-radius: 0.75rem;
 	}
 
-	.feature-card img {
+	.feature-card img,
+	.feature-card video {
 		width: 100%;
 		height: auto;
 		aspect-ratio: 16 / 10;

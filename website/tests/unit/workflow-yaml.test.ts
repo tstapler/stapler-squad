@@ -161,3 +161,32 @@ test('deployWorkflow_should_FlagMissingStep_When_AssetHealthCheckStepRemoved', (
     'removing the asset-health-check step must be caught by the same order check',
   );
 });
+
+// Story 1.1.2: deploy-website.yml must trigger only on push to main --
+// repo's existing `github-pages` environment branch policy rejects anything
+// else, so a stray pull_request trigger would just fail at deploy time
+// instead of being caught here. Uses js-yaml like the two tests above
+// (not the raw-text extractOnTriggerKeys() helper website-demo-publish.yml's
+// tests use), since js-yaml parses this file's unquoted `on:` key as the
+// string "on", not a YAML-1.1 boolean -- confirmed directly against this file.
+test('deployWorkflow_should_TriggerOnlyOnPushToMain_When_YamlParsed', () => {
+  const doc = yaml.load(readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8)) as {
+    on: Record<string, unknown>;
+  };
+
+  assert.deepEqual(Object.keys(doc.on), ['push'], 'on: block must declare only a push trigger');
+  assert.deepEqual((doc.on.push as { branches: string[] }).branches, ['main']);
+});
+
+// Story 1.1.2: the deploy job needs id-token: write to mint the OIDC token
+// actions/deploy-pages requires. Named for the failure mode this test is
+// designed to catch (a YAML missing that permission) -- it's written against
+// the real file's current state, which already has it, so this passes today
+// and would fail the moment the permission is removed.
+test('deployWorkflow_should_RequestIdTokenWritePermission_When_YamlMissingPermissionsBlock', () => {
+  const doc = yaml.load(readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8)) as {
+    permissions: Record<string, string>;
+  };
+
+  assert.equal(doc.permissions['id-token'], 'write');
+});

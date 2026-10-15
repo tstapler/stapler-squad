@@ -1,9 +1,9 @@
 // Integration test: runs the real Astro build, scans the real dist/ output,
-// and (since no DemoClip is embedded in site content yet -- Phase 3.3 hasn't
-// landed) also seeds one extra fixture page referencing a not-yet-published
-// clip so the genuine HEAD request this test issues against
-// github.com/tstapler/stapler-squad/releases/download/... has something to
-// exercise. No fetch mocking anywhere in this file -- real network call.
+// and also seeds one extra fixture page referencing a different
+// not-yet-published clip, so the genuine HEAD request this test issues
+// against github.com/tstapler/stapler-squad/releases/download/... has two
+// independent cases to exercise. No fetch mocking anywhere in this file --
+// real network call.
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,12 +37,17 @@ describe('checkAssetHealth against real build output', () => {
 	});
 
 	it('checkAssetHealth_should_ScanBuiltDistAndValidateRealReleaseUrls_When_RunAgainstDistOutput', async () => {
-		// Sanity: the real site build currently embeds zero release-asset URLs
-		// (Phase 3.3 demo embeds haven't landed), so scanning it alone proves
-		// nothing by itself -- hence the fixture below for the genuine network
-		// assertion.
+		// Story 3.3.1's second AC: the real site build now embeds exactly one
+		// release-asset URL -- the "Live Terminal Streaming" FeatureCard's
+		// terminal-streaming.webm DemoClip. It isn't published yet (Phase 5's
+		// demo-recording workflow is a separate, already-deferred task), so this
+		// genuine HEAD request is expected to 404 until that clip ships.
 		const realBuildResults = await checkAssetHealth({ distDir: REAL_DIST_DIR });
-		expect(realBuildResults).toEqual([]);
+		expect(realBuildResults).toHaveLength(1);
+		const [realResult] = realBuildResults;
+		expect(realResult.ok).toBe(false);
+		expect(realResult.url).toContain('terminal-streaming.webm');
+		expect(realResult.reason).toContain('404');
 
 		const fixtureResults = await checkAssetHealth({ distDir: fixtureDir });
 
