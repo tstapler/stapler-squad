@@ -43,3 +43,28 @@ export function extractInstallCommand(markdown: string): string {
 	}
 	return match[1].trim();
 }
+
+// Story 4.1.1: getting-started.md must match README's "Manual (pre-built
+// binary)" and "Build from Source" subsections 1:1, same drift-guard
+// reasoning as the Homebrew pattern above.
+const MANUAL_INSTALL_COMMAND_PATTERN = /```bash\n(curl -fsSL https:\/\/raw\.githubusercontent\.com\/tstapler\/stapler-squad\/main\/install\.sh \| bash)\n```/;
+const BUILD_FROM_SOURCE_COMMAND_PATTERN =
+	/```bash\n(curl -fsSL https:\/\/raw\.githubusercontent\.com\/tstapler\/stapler-squad\/main\/install\.sh \| bash -s -- --from-source)\n```/;
+
+/** Extracts README.md's exact manual pre-built-binary install command (the one-line `curl ... | bash`). */
+export function extractManualInstallCommand(markdown: string): string {
+	const match = markdown.match(MANUAL_INSTALL_COMMAND_PATTERN);
+	if (!match) {
+		throw new Error('Could not find the manual install-script command in README.md');
+	}
+	return match[1].trim();
+}
+
+/** Extracts README.md's exact build-from-source one-liner (`curl ... | bash -s -- --from-source`). */
+export function extractBuildFromSourceCommand(markdown: string): string {
+	const match = markdown.match(BUILD_FROM_SOURCE_COMMAND_PATTERN);
+	if (!match) {
+		throw new Error('Could not find the build-from-source command in README.md');
+	}
+	return match[1].trim();
+}

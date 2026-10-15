@@ -4,13 +4,13 @@
 // clip so the genuine HEAD request this test issues against
 // github.com/tstapler/stapler-squad/releases/download/... has something to
 // exercise. No fetch mocking anywhere in this file -- real network call.
-import { execFileSync } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { releaseAssetUrl } from '../../src/lib/release-asset.ts';
 import { checkAssetHealth } from '../../scripts/check-asset-health.mjs';
+import { runRealBuild } from '../helpers/run-build.ts';
 
 const WEBSITE_ROOT = join(import.meta.dirname, '..', '..');
 const REAL_DIST_DIR = join(WEBSITE_ROOT, 'dist');
@@ -19,7 +19,7 @@ describe('checkAssetHealth against real build output', () => {
 	let fixtureDir: string;
 
 	beforeAll(async () => {
-		execFileSync('pnpm', ['run', 'build'], { cwd: WEBSITE_ROOT, stdio: 'inherit' });
+		runRealBuild(WEBSITE_ROOT);
 
 		fixtureDir = await mkdtemp(join(tmpdir(), 'check-asset-health-integration-'));
 		const unpublishedUrl = releaseAssetUrl({

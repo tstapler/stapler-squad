@@ -47,6 +47,10 @@ jobs:
         working-directory: website
         run: pnpm run build
 
+      - name: Check internal links
+        working-directory: website
+        run: node scripts/check-internal-links.mjs
+
       - name: Check demo-asset health
         working-directory: website
         run: node scripts/check-asset-health.mjs

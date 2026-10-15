@@ -27,7 +27,7 @@ covers both features.
 
 Every `/api/hooks/*` receiver (`/api/hooks/permission-request`, `/api/hooks/stop`,
 `/api/hooks/slack-interactive`, etc.) is documented elsewhere (see
-[`slack-phase2-public-reachability.md`](slack-phase2-public-reachability.md) for the
+[Slack interactive-approvals public reachability](/stapler-squad/help/expose-slack-interactive-endpoint/) for the
 Slack case). `/webhooks/github` is the same shape of problem: a genuinely
 internet-facing endpoint that needs its own scoped tunnel, not a side effect of
 exposing the whole app. Signature verification (`VerifyGitHubSignature`, HMAC-SHA256

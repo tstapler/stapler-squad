@@ -81,4 +81,4 @@ that exceeds its max runtime, is ended automatically and the item returns to
 `ready` with a progress note explaining why, so you can just retry dispatch
 rather than digging through logs. For log-level debugging, every step is
 logged under the `jules` logger — see
-[`docs/how-to/debug-with-logs.md`](debug-with-logs.md).
+[Debugging logs](/stapler-squad/help/debug-with-logs/).
