@@ -72,6 +72,8 @@ type Server struct {
 	finalStatsFlush            func()                          // delivery-gate stats flush; deferred at the top of Shutdown
 	backgroundTasksWG          sync.WaitGroup                  // joined by Shutdown() — every goroutine wireDepsIntoServer starts (sweepers, pollers, watchers, tickers)
 	backgroundTasksJoinTimeout time.Duration                   // bounds Shutdown's join of backgroundTasksWG; defaults to defaultBackgroundTasksJoinTimeout, overridable in tests
+	selfAuthMu                 sync.RWMutex                    // guards selfAuthPaths
+	selfAuthPaths              []func(path string) bool        // routes that authenticate every request themselves; the remote listener's passkey middleware steps aside for them (see SelfAuthenticatedPath)
 	hookIPC                    *hookIPCState                   // resident instance-scoped PreToolUse classifier; started with the HTTP server
 }
 
@@ -1043,6 +1045,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 				log.Warn("pr_event_webhooks is enabled but webhook_triggers is not — /webhooks/github is not registered, PR-fix webhook events will silently 404")
 			}
 		}
+		// Must share webhookCfg with the receivers above: each *config.Config lazily
+		// generates its own machine encryption key when none is persisted, so a separate
+		// instance would encrypt secrets with a key the receiver can never decrypt with.
+		registerWebhookManagement(srv, deps, webhookCfg)
 	}
 
 	// Register session-aware image upload endpoint (multipart/form-data, saves to worktree).
