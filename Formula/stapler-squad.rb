@@ -6,7 +6,7 @@ class StaplerSquad < Formula
   desc "Manage multiple AI terminal agents like Claude Code, Aider, Codex, OpenCode, and Amp."
   homepage "https://github.com/tstapler/stapler-squad"
   version "2.2.0"
-  license "AGPL-3.0-only"
+  license "MIT"
 
   on_macos do
     if Hardware::CPU.intel?
