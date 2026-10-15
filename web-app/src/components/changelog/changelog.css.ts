@@ -13,6 +13,9 @@ export const provenance = style({
   borderRadius: vars.radii.md,
   fontSize: vars.fontSize.sm,
   color: vars.color.textPrimary,
+  "@media": {
+    "(max-width: 640px)": { flexDirection: "column", alignItems: "stretch", gap: vars.space["2"] },
+  },
 });
 
 export const provenanceItem = style({
@@ -60,6 +63,9 @@ export const page = style({
   overflowY: "auto",
   overflowX: "hidden",
   boxSizing: "border-box",
+  "@media": {
+    "(max-width: 640px)": { padding: "1rem 0.75rem" },
+  },
 });
 
 export const title = style({
@@ -67,6 +73,9 @@ export const title = style({
   fontSize: "1.5rem",
   fontWeight: 700,
   margin: `0 0 ${vars.space["4"]}`,
+  "@media": {
+    "(max-width: 640px)": { fontSize: "1.25rem" },
+  },
 });
 
 export const release = style({
