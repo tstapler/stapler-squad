@@ -14,7 +14,7 @@
 // names cross-checked against CATEGORY_BY_HEADING's values, so a renamed
 // README category is caught at build time instead of silently drifting.
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -25,6 +25,7 @@ const REPO_ROOT = join(WEBSITE_ROOT, '..');
 const DEFAULT_README_PATH = join(REPO_ROOT, 'README.md');
 const DEFAULT_FEATURES_MD_PATH = join(REPO_ROOT, 'docs', 'features.md');
 const DEFAULT_OUTPUT_PATH = join(WEBSITE_ROOT, 'src', 'content', 'features.json');
+const PUBLIC_FEATURES_DIR = join(WEBSITE_ROOT, 'public', 'features');
 const ENCODING = 'utf8';
 
 // README.md's 5 Highlights category names, named once here so
@@ -36,6 +37,11 @@ const CATEGORY = {
 	HISTORY_DEBUGGING: 'History & Debugging',
 	INFRASTRUCTURE: 'Infrastructure',
 };
+
+// Display order for FeatureGrid.astro's category headings. Derived from
+// CATEGORY (not re-declared) so a renamed/added/removed category can't drift
+// out of sync between the two files the way it did before.
+export const CATEGORY_ORDER = Object.values(CATEGORY);
 
 /**
  * README's 5 Highlights categories, reconciling docs/features.md's 17
@@ -175,13 +181,25 @@ export function extractSectionDescription(body) {
  * Extracts a section's screenshot reference (if any), rewritten from the
  * source's `../assets/demo-recording/0N-*.png` relative path to the
  * `/features/0N-*.png` path it's copied to under website/public/features/.
+ * Throws if the rewritten path's target file is missing from
+ * website/public/features/, so a stale/typo'd filename in docs/features.md
+ * fails the build instead of producing a silently dead <img> on the live site.
  *
  * @param {string} body
+ * @param {string} heading
  * @returns {string | undefined}
  */
-export function extractSectionScreenshot(body) {
+export function extractSectionScreenshot(body, heading) {
 	const match = body.match(/!\[[^\]]*\]\(\.\.\/assets\/demo-recording\/([\w.-]+)\)/);
-	return match ? `/features/${match[1]}` : undefined;
+	if (!match) return undefined;
+	const filename = match[1];
+	if (!existsSync(join(PUBLIC_FEATURES_DIR, filename))) {
+		throw new Error(
+			`"${heading}" references screenshot "${filename}", which does not exist under ` +
+				`website/public/features/`,
+		);
+	}
+	return `/features/${filename}`;
 }
 
 /**
@@ -245,7 +263,7 @@ export function buildFeaturesJson(options = {}) {
 			description: extractSectionDescription(body),
 			category,
 		};
-		const screenshot = extractSectionScreenshot(body);
+		const screenshot = extractSectionScreenshot(body, heading);
 		if (screenshot) {
 			card.screenshot = screenshot;
 			card.alt = ALT_TEXT_BY_HEADING[heading];

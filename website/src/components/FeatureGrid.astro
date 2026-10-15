@@ -5,14 +5,7 @@
 // to a single column at phone width (no horizontal scroll).
 import FeatureCard from './FeatureCard.astro';
 import features from '../content/features.json';
-
-const CATEGORY_ORDER = [
-	'Visibility',
-	'Organisation',
-	'Review & Approval',
-	'History & Debugging',
-	'Infrastructure',
-];
+import { CATEGORY_ORDER } from '../../scripts/build-features.mjs';
 
 const groups = CATEGORY_ORDER.map((category) => ({
 	category,
