@@ -330,6 +330,8 @@ If you get an error like `failed to start new session: timed out waiting for tmu
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, code standards, and how to add a new agent detector. Every PR needs exactly one semver label (`patch`/`minor`/`major`) before it can merge. Participation is governed by our [Code of Conduct](CODE_OF_CONDUCT.md).
 
+Found a security issue? Please don't open a public issue — see [SECURITY.md](SECURITY.md) for how to report it privately.
+
 ### License
 
 [AGPL-3.0](LICENSE.md)
