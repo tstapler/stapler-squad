@@ -1,6 +1,10 @@
-// Config for website/tests/a11y.spec.ts (Epic 6.2). `website/` is a
-// standalone package from `web-app/`, so this is its own Playwright config
-// rather than an addition to the root `tests/e2e/` suite.
+// Config for website/tests/a11y.spec.ts (Epic 6.2) and website/tests/e2e/**
+// (the UX-acceptance suite closing validation.md's "UX Acceptance Tests"
+// gap). `website/` is a standalone package from `web-app/`, so this is its
+// own Playwright config rather than an addition to the root `tests/e2e/`
+// suite -- extended in place here rather than duplicated, per
+// e2e-test-conventions' page-helper/no-waitForTimeout/@feature conventions
+// ported from that root suite.
 //
 // Deliberately NOT using Playwright's built-in `webServer` option: `astro
 // preview` daemonizes itself (its CLI invocation returns once the detached
@@ -20,7 +24,7 @@ const BASE_PATH = '/stapler-squad';
 
 export default defineConfig({
 	testDir: './tests',
-	testMatch: 'a11y.spec.ts',
+	testMatch: ['a11y.spec.ts', 'e2e/**/*.spec.ts'],
 	timeout: 60_000,
 	fullyParallel: false,
 	retries: process.env.CI ? 1 : 0,

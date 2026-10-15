@@ -14,7 +14,8 @@
     "test:integration": "vitest run tests/integration --no-coverage",
     "lhci:desktop": "astro preview --port 4321 && (npx lhci autorun --config=./lighthouserc.json; code=$?; astro preview stop; exit $code)",
     "lhci:mobile": "astro preview --port 4321 && (npx lhci autorun --config=./lighthouserc.mobile.json; code=$?; astro preview stop; exit $code)",
-    "test:a11y": "astro preview --port 4321 && (npx playwright test tests/a11y.spec.ts; code=$?; astro preview stop; exit $code)"
+    "test:a11y": "astro preview --port 4321 && (npx playwright test tests/a11y.spec.ts; code=$?; astro preview stop; exit $code)",
+    "test:e2e": "astro preview --port 4321 && (npx playwright test tests/e2e; code=$?; astro preview stop; exit $code)"
   },
   "dependencies": {
     "@astrojs/mdx": "8.1.0",

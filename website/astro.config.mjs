@@ -3,10 +3,15 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import mdx from '@astrojs/mdx';
 
+// Single source for the Pages base path -- interpolated into the inline
+// zero-results-fallback script below so it can't drift from `base:` if
+// either one changes.
+const SITE_BASE = '/stapler-squad';
+
 // https://astro.build/config
 export default defineConfig({
 	site: 'https://tstapler.github.io',
-	base: '/stapler-squad',
+	base: SITE_BASE,
 	integrations: [
 		starlight({
 			title: 'Stapler Squad',
@@ -122,6 +127,53 @@ export default defineConfig({
 						document.addEventListener('DOMContentLoaded', runA11yFixups);
 						window.addEventListener('load', runA11yFixups);
 						window.addEventListener('resize', runA11yFixups);
+
+						// design/ux.md §5 criterion 9 / validation.md row 9: the
+						// zero-results state must offer a docs-home link and a
+						// file-an-issue link, never a dead-end panel. Pagefind's
+						// svelte UI (@pagefind/default-ui's ui.svelte) renders its
+						// "zero_results" translation string with plain Svelte text
+						// interpolation ({translate(...)}, no {@html}), so the
+						// translation string in src/content/i18n/en.json can never
+						// carry a clickable link itself -- confirmed by reading
+						// ui.svelte directly, not guessed. This observer appends the
+						// two required links as a sibling element immediately after
+						// Pagefind's own message paragraph whenever it renders the
+						// "No results for ..." text, and removes them again once the
+						// query changes to something with results.
+						function initSearchZeroResultsFallback() {
+							const root = document.getElementById('starlight__search');
+							if (!root) return;
+							const docsHomeHref = '${SITE_BASE}/';
+							const issueHref = 'https://github.com/tstapler/stapler-squad/issues/new';
+							function enhance() {
+								const msg = root.querySelector('.pagefind-ui__message');
+								const existing = root.querySelector('[data-testid="search-zero-results-links"]');
+								const isZero = !!msg && /^No results for/.test(msg.textContent || '');
+								if (!isZero) {
+									if (existing) existing.remove();
+									return;
+								}
+								if (existing) return;
+								const links = document.createElement('p');
+								links.className = 'pagefind-ui__message';
+								links.setAttribute('data-testid', 'search-zero-results-links');
+								const homeLink = document.createElement('a');
+								homeLink.href = docsHomeHref;
+								homeLink.textContent = 'Go to the docs home';
+								const sep = document.createTextNode(' · ');
+								const issueLink = document.createElement('a');
+								issueLink.href = issueHref;
+								issueLink.target = '_blank';
+								issueLink.rel = 'noopener';
+								issueLink.textContent = 'File a GitHub issue';
+								links.append(homeLink, sep, issueLink);
+								msg.insertAdjacentElement('afterend', links);
+							}
+							new MutationObserver(enhance).observe(root, { childList: true, subtree: true, characterData: true });
+							enhance();
+						}
+						document.addEventListener('DOMContentLoaded', initSearchZeroResultsFallback);
 					`,
 				},
 			],

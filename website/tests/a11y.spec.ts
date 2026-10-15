@@ -61,4 +61,76 @@ test.describe('Accessibility (WCAG 2.1 AA) — stapler-squad-website', () => {
 
 		expect(results.violations).toHaveLength(0);
 	});
+
+	// design/ux.md §5 criterion 15: every <img> has descriptive alt text or
+	// alt="" (purely decorative) -- axe's `image-alt` rule, run across both
+	// pages above.
+	test('images_should_HaveDescriptiveAltOrEmptyAlt_When_AxeScanRun', async ({ page }) => {
+		for (const [label, path] of Object.entries(PAGES)) {
+			await page.goto(path, { waitUntil: 'load' });
+
+			const results = await new AxeBuilder({ page }).withRules(['image-alt']).analyze();
+			logViolations(`${path} (${label})`, results.violations);
+
+			expect(results.violations).toHaveLength(0);
+		}
+	});
+
+	// design/ux.md §5 criterion 15: every icon-only button (search trigger,
+	// copy button) has an aria-label describing its action, not just a
+	// visual glyph -- axe's `button-name` rule.
+	test('iconButtons_should_HaveAriaLabel_When_AxeScanRun', async ({ page }) => {
+		for (const [label, path] of Object.entries(PAGES)) {
+			await page.goto(path, { waitUntil: 'load' });
+
+			const results = await new AxeBuilder({ page }).withRules(['button-name']).analyze();
+			logViolations(`${path} (${label})`, results.violations);
+
+			expect(results.violations).toHaveLength(0);
+		}
+	});
+
+	// design/ux.md §5 criterion 16: color contrast >=4.5:1 normal /
+	// >=3:1 large text, verified before merge rather than fixed post-hoc
+	// (the two theme.css.ts precedents the existing contrast test above
+	// warns against repeating). Broader than that test: this one scans the
+	// CTA link AND the docs sidebar link text, with no severity filter, to
+	// catch a moderate/minor contrast issue the critical/serious-only full
+	// scans above wouldn't flag.
+	test('ctaAndLinkText_should_PassWcagAAContrast_When_AxeScanRunBeforeMerge', async ({ page }) => {
+		await page.goto(PAGES.landing, { waitUntil: 'load' });
+		const landingResults = await new AxeBuilder({ page })
+			.include('.hero')
+			.withRules(['color-contrast'])
+			.analyze();
+		expect(landingResults.violations).toHaveLength(0);
+
+		await page.goto(PAGES.gettingStarted, { waitUntil: 'load' });
+		const docsResults = await new AxeBuilder({ page }).withRules(['color-contrast']).analyze();
+		logViolations(PAGES.gettingStarted, docsResults.violations);
+		expect(docsResults.violations).toHaveLength(0);
+	});
+
+	// design/ux.md §5 criterion 19: the combined CI gate -- Lighthouse
+	// accessibility/performance/best-practices >=0.90 (enforced separately
+	// by lighthouserc.json + lighthouserc.mobile.json via `pnpm run
+	// lhci:desktop`/`lhci:mobile`, website/tests/unit/lighthouserc.test.ts,
+	// and website/tests/integration/lighthouse.integration.test.ts -- not
+	// re-implemented here) plus zero critical/serious axe-core violations on
+	// the landing page and at least one docs page template. This test
+	// enforces the axe half of that combined gate across both pages in one
+	// assertion, matching the set of pages Lighthouse's own config scans.
+	test('lighthouseAndAxeGate_should_PassOnLandingAndOneDocsPage_When_CiRuns', async ({ page }) => {
+		for (const [label, path] of Object.entries(PAGES)) {
+			await page.goto(path, { waitUntil: 'load' });
+
+			const results = await new AxeBuilder({ page }).analyze();
+			const criticalViolations = results.violations.filter(
+				(v) => v.impact === 'critical' || v.impact === 'serious',
+			);
+			logViolations(`${path} (${label})`, criticalViolations);
+
+			expect(criticalViolations).toHaveLength(0);
+		}
+	});
 });
