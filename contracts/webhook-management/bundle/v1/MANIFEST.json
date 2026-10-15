@@ -5,8 +5,8 @@
   "files": [
     {
       "path": "fixtures/capability-response.json",
-      "sha256": "61d3e18d7b59b402a78deff59f3d84e40f5b31158230490aad38ab5241c55188",
-      "size_bytes": 185
+      "sha256": "7d9a19d2db24a5313fa13c51461b4650bdb36312b4d8c6a39974d35a31a3f474",
+      "size_bytes": 210
     },
     {
       "path": "fixtures/emergency-cleanup-request.delete.json",
@@ -35,13 +35,13 @@
     },
     {
       "path": "fixtures/reconcile-response.created.json",
-      "sha256": "45b5d3d9590e1ba26516b16e609167db862774a234ae9c4c4ddd4702f7390f54",
-      "size_bytes": 789
+      "sha256": "7b5cc8b5c231e50f138df53c45bb534f71b23af4515640a2e6120a2cc820d617",
+      "size_bytes": 895
     },
     {
       "path": "schemas/capability-response.schema.json",
-      "sha256": "fda368c0748c51d63500644e572be0169f48db73a22383fddf4bb7d08593f4a5",
-      "size_bytes": 626
+      "sha256": "1e95ba73f852dba2c8b3c159ceb9538dcfa2e6603fdbd78c814b23f3c3ff705a",
+      "size_bytes": 651
     },
     {
       "path": "schemas/emergency-cleanup-request.schema.json",
@@ -60,8 +60,8 @@
     },
     {
       "path": "schemas/reconcile-request.schema.json",
-      "sha256": "df1ed49082a660d7ae2bf154856d4f620055bd626c2a75e9b275aa9aac76c6e1",
-      "size_bytes": 2059
+      "sha256": "857d5d8cdddcec12780c6c14d2bee8fe8f260fffb2604d66db9e0f38c8c9cf59",
+      "size_bytes": 2400
     },
     {
       "path": "schemas/reconcile-response.schema.json",
@@ -70,8 +70,8 @@
     },
     {
       "path": "schemas/registration.schema.json",
-      "sha256": "312570688765cdb5c0a28f6e0f6241b730987cd9ee93756ac190bff4a5be0b97",
-      "size_bytes": 1570
+      "sha256": "4159fa913a1f66aaefa1d1a276cc93bbe325e0686de4f7806828f8dd3309eaa7",
+      "size_bytes": 1873
     }
   ]
 }

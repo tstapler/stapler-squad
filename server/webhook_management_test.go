@@ -193,7 +193,7 @@ func newRemoteHarness(t *testing.T, flags map[string]bool) *remoteHarness {
 		w.WriteHeader(http.StatusOK)
 	})
 	registerWebhookManagement(h.srv, h.deps, h.cfg)
-	h.chain = h.srv.remoteChain(middleware.Auth(passkeyStub{}, middleware.WithSelfAuthenticatedPaths(h.srv.SelfAuthenticatedPath)))
+	h.chain = h.srv.remoteChain(middleware.Auth(passkeyStub{}, middleware.WithSelfAuthenticatedPaths(h.srv.SelfAuthenticatedPath)), true)
 	return h
 }
 
