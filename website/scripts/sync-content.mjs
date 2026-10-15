@@ -105,6 +105,28 @@ export function loadManifest(manifestPath) {
 }
 
 /**
+ * Maps every include:true decision's repo-root-relative source path to its
+ * CuratedDoc slug (e.g. "docs/how-to/debug-with-logs.md" -> "help/debug-with-logs"),
+ * so transformMarkdown can rewrite a sibling SourceDoc cross-reference
+ * (`[Debugging logs](debug-with-logs.md)`, the normal GitHub-relative-link
+ * convention for docs/how-to/*.md) into that doc's actual published site
+ * path instead of leaving a dead `.md` link in the CuratedDoc (Starlight
+ * renders routes, not literal `.md` files).
+ *
+ * @param {IncludeDecision[]} decisions
+ * @returns {Map<string, string>}
+ */
+export function buildSiblingSlugMap(decisions) {
+	const map = new Map();
+	for (const decision of decisions) {
+		if (decision.include) {
+			map.set(decision.source, decision.slug);
+		}
+	}
+	return map;
+}
+
+/**
  * Transforms a single IncludedDecision into its CuratedDoc text, reading the
  * SourceDoc from disk. Fails loudly (throws, naming the missing path) if the
  * source no longer exists — ADR-003's explicit requirement, so a stale
@@ -112,9 +134,10 @@ export function loadManifest(manifestPath) {
  *
  * @param {IncludedDecision} decision
  * @param {string} repoRoot
+ * @param {Map<string, string>} [siblingSlugMap]
  * @returns {{slug: string, content: string}}
  */
-export function buildCuratedDoc(decision, repoRoot) {
+export function buildCuratedDoc(decision, repoRoot, siblingSlugMap = new Map()) {
 	const absoluteSourcePath = join(repoRoot, decision.source);
 	if (!existsSync(absoluteSourcePath)) {
 		throw new Error(`Manifest source does not exist: ${decision.source}`);
@@ -124,6 +147,7 @@ export function buildCuratedDoc(decision, repoRoot) {
 	const { content } = transformMarkdown(markdown, {
 		sourcePath: decision.source,
 		sourceDir,
+		siblingSlugMap,
 	});
 	return { slug: decision.slug, content };
 }
@@ -149,12 +173,13 @@ export function syncContent(options = {}) {
 	const check = options.check ?? false;
 
 	const decisions = loadManifest(manifestPath);
+	const siblingSlugMap = buildSiblingSlugMap(decisions);
 	const results = [];
 	for (const decision of decisions) {
 		if (!decision.include) {
 			continue;
 		}
-		const { slug, content } = buildCuratedDoc(decision, repoRoot);
+		const { slug, content } = buildCuratedDoc(decision, repoRoot, siblingSlugMap);
 		const outputPath = slugToOutputPath(slug, repoRoot);
 		const existing = existsSync(outputPath) ? readFileSync(outputPath, ENCODING) : null;
 		const changed = existing !== content;

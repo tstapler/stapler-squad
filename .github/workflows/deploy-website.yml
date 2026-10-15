@@ -1,15 +1,18 @@
 name: Deploy Website
 
 # Builds and deploys the Astro+Starlight site in website/ to GitHub Pages.
-# Path-filtered to website/** for now -- Phase 2 (docs-curation sync, see
-# project_plans/stapler-squad-website/implementation/plan.md Epic 2.1) adds
-# docs/** paths later once CuratedDocs start getting generated from there.
+# Phase 6 (Story 6.3.1) finalized the path filters -- docs/how-to/** and
+# docs/features.md are CuratedDoc sources (Epic 2.1's sync-content.mjs /
+# content-manifest.json), so a change there without a `website/**` change
+# must still trigger a rebuild+resync, not silently drift.
 
 on:
   push:
     branches: [main]
     paths:
       - 'website/**'
+      - 'docs/how-to/**'
+      - 'docs/features.md'
       - '.github/workflows/deploy-website.yml'
 
 concurrency:
@@ -43,6 +46,17 @@ jobs:
         working-directory: website
         run: pnpm install --frozen-lockfile
 
+      # Story 6.3.1: catches a committed CuratedDoc that no longer matches
+      # what sync-content.mjs would produce from its SourceDoc right now --
+      # e.g. someone edited docs/how-to/debug-with-logs.md without re-running
+      # `pnpm run sync-content` and committing the regenerated
+      # website/src/content/docs/help/debug-with-logs.md. `--check` runs the
+      # same transform in verify-only mode (no writes) and fails the build on
+      # any drift; see sync-content.mjs's own module doc comment.
+      - name: Verify content sync
+        working-directory: website
+        run: pnpm run sync-content -- --check
+
       - name: Build site
         working-directory: website
         run: pnpm run build
@@ -55,9 +69,39 @@ jobs:
         working-directory: website
         run: node scripts/check-asset-health.mjs
 
-      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # ratchet:actions/configure-pages@v6
+      # Epic 6.1: both configs assert performance/accessibility/best-practices
+      # >= 0.90 at error (blocking) level -- see website/lighthouserc.json's
+      # and lighthouserc.mobile.json's own comments, and
+      # website/tests/unit/lighthouserc.test.ts for the regression guard that
+      # these thresholds stay independent of web-app/lighthouserc.json's
+      # lower, warn-only ones. `astro preview` daemonizes itself (returns
+      # once the server is confirmed up rather than blocking in the
+      # foreground), so each npm script below can safely chain
+      # start -> check -> stop in one step.
+      - name: Lighthouse CI (desktop)
+        working-directory: website
+        run: pnpm run lhci:desktop
 
-      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # ratchet:actions/upload-pages-artifact@v5
+      - name: Lighthouse CI (mobile)
+        working-directory: website
+        run: pnpm run lhci:mobile
+
+      # Epic 6.2: same @axe-core/playwright library and critical/serious
+      # severity gate as tests/e2e/accessibility.spec.ts -- see
+      # website/tests/a11y.spec.ts.
+      - name: Install Playwright browsers
+        working-directory: website
+        run: npx playwright install chromium --with-deps
+
+      - name: Accessibility scan (axe-core)
+        working-directory: website
+        run: pnpm run test:a11y
+
+      - name: Configure Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # ratchet:actions/configure-pages@v6
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # ratchet:actions/upload-pages-artifact@v5
         with:
           path: website/dist
 
@@ -68,5 +112,6 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-22.04
     steps:
-      - id: deployment
+      - name: Deploy to GitHub Pages
+        id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # ratchet:actions/deploy-pages@v5

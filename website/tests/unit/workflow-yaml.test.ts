@@ -9,12 +9,14 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import yaml from 'js-yaml';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../..');
 
 const WEBSITE_WORKFLOW_PATH = path.join(repoRoot, '.github/workflows/website-demo-publish.yml');
 const DEMO_PUBLISH_WORKFLOW_PATH = path.join(repoRoot, '.github/workflows/demo-publish.yml');
+const DEPLOY_WEBSITE_WORKFLOW_PATH = path.join(repoRoot, '.github/workflows/deploy-website.yml');
 const UTF8 = 'utf8';
 
 /** Raw body lines of a top-level (column-0) `key:` block, up to the next column-0 line. */
@@ -88,5 +90,74 @@ test('websiteDemoWorkflow_should_RejectUnvettedSpec_When_FeatureSpecsListDiffers
   assert.ok(
     !specsMatch(tampered, demoPublishSpecs),
     'a 6th, unvetted spec added to FEATURE_SPECS must be detected as a mismatch',
+  );
+});
+
+// Phase 6, Story 6.3.1: deploy-website.yml's build job must run its
+// blocking checks in the exact dependency order plan.md specifies --
+// sync-content verify (before anything reads the CuratedDocs it checks) ->
+// build (before any check needs dist/) -> check-internal-links ->
+// check-asset-health -> Lighthouse CI -> upload the artifact only once every
+// earlier gate has passed. Uses js-yaml (unlike the raw-text block
+// extraction above) because this job has many more steps in a deeper,
+// list-of-maps structure than the simple top-level on:/env: blocks those
+// older tests were written against -- real parsing is less brittle here
+// than another ad hoc indentation-counting walk.
+type WorkflowStep = { name?: string; uses?: string; run?: string };
+
+/** Ordered list of the build job's step labels (name, falling back to uses/run). */
+function extractBuildStepLabels(yamlText: string): string[] {
+  const doc = yaml.load(yamlText) as { jobs: { build: { steps: WorkflowStep[] } } };
+  return doc.jobs.build.steps.map((step) => step.name ?? step.uses ?? step.run ?? '(unnamed step)');
+}
+
+/**
+ * Asserts every label in `requiredInOrder` appears in `stepLabels`, in that
+ * relative order (other steps may appear between/around them). Returns the
+ * missing label's text on failure, or null if the whole sequence is present
+ * and ordered correctly.
+ */
+function findOrderViolation(stepLabels: string[], requiredInOrder: string[]): string | null {
+  let searchFrom = 0;
+  for (const required of requiredInOrder) {
+    const foundAt = stepLabels.findIndex(
+      (label, i) => i >= searchFrom && label.includes(required),
+    );
+    if (foundAt === -1) {
+      return `missing step (or out of order): "${required}"`;
+    }
+    searchFrom = foundAt + 1;
+  }
+  return null;
+}
+
+const REQUIRED_BUILD_STEP_ORDER = [
+  'Verify content sync',
+  'Build site',
+  'Check internal links',
+  'Check demo-asset health',
+  'Lighthouse CI (desktop)',
+  'Lighthouse CI (mobile)',
+  'Upload Pages artifact',
+];
+
+test('deployWorkflow_should_RunChecksInDependencyOrder_When_YamlParsed', () => {
+  const stepLabels = extractBuildStepLabels(readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8));
+
+  assert.equal(
+    findOrderViolation(stepLabels, REQUIRED_BUILD_STEP_ORDER),
+    null,
+    `deploy-website.yml step order was: ${JSON.stringify(stepLabels)}`,
+  );
+});
+
+test('deployWorkflow_should_FlagMissingStep_When_AssetHealthCheckStepRemoved', () => {
+  const stepLabels = extractBuildStepLabels(readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8));
+  const tampered = stepLabels.filter((label) => !label.includes('Check demo-asset health'));
+
+  const violation = findOrderViolation(tampered, REQUIRED_BUILD_STEP_ORDER);
+  assert.ok(
+    violation && violation.includes('Check demo-asset health'),
+    'removing the asset-health-check step must be caught by the same order check',
   );
 });

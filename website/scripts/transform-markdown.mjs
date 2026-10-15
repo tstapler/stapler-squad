@@ -4,6 +4,8 @@
 // with frontmatter (title derived from the first `# ` heading, description)
 // and internal-only cross-references stripped per ADR-003.
 
+import { SITE_BASE } from './check-internal-links.mjs';
+
 /**
  * Paths that are out of scope for the public site (ADR-003 / requirements.md
  * "Out of Scope"). A link target is matched if it contains one of these as a
@@ -124,6 +126,36 @@ function isOutOfScope(resolvedPath) {
 }
 
 /**
+ * Rewrites a Markdown link that points at another curated SourceDoc (e.g. a
+ * same-directory `[Debugging logs](debug-with-logs.md)` reference -- the
+ * normal GitHub-relative-link convention these docs/how-to/*.md files use)
+ * into that doc's published Starlight route, so the CuratedDoc doesn't carry
+ * a dead `.md` link forward (Starlight serves routes like
+ * `/stapler-squad/help/debug-with-logs/`, never literal `.md` files).
+ * `siblingSlugMap` keys are repo-root-relative SourceDoc paths (e.g.
+ * "docs/how-to/debug-with-logs.md"), values are their CuratedDoc slugs (e.g.
+ * "help/debug-with-logs") -- see sync-content.mjs's buildSiblingSlugMap.
+ *
+ * @param {string} markdown
+ * @param {string} sourceDir POSIX-style directory of the SourceDoc, relative to repo root
+ * @param {Map<string, string>} siblingSlugMap
+ * @returns {string}
+ */
+export function rewriteSiblingDocLinks(markdown, sourceDir, siblingSlugMap) {
+	if (siblingSlugMap.size === 0) {
+		return markdown;
+	}
+	return markdown.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (fullMatch, text, target) => {
+		const resolved = resolveLinkTarget(sourceDir, target);
+		const slug = siblingSlugMap.get(resolved);
+		if (!slug) {
+			return fullMatch;
+		}
+		return `[${text}](${SITE_BASE}/${slug}/)`;
+	});
+}
+
+/**
  * Removes or rewrites Markdown links that point at an out-of-scope internal
  * path (ADR-003: `project_plans/`, `CLAUDE.md`, dev-only explanation docs).
  * A matching link `[text](target)` is replaced with its bare link text, so
@@ -211,15 +243,18 @@ function serialize(frontmatter, body) {
  * (frontmatter + body), per ADR-003's copy-and-transform decision.
  *
  * @param {string} markdown raw SourceDoc content
- * @param {{sourcePath: string, sourceDir: string}} options
+ * @param {{sourcePath: string, sourceDir: string, siblingSlugMap?: Map<string, string>}} options
  *   sourcePath is used only for error messages; sourceDir (POSIX, relative to
- *   repo root) anchors relative-link resolution for out-of-scope stripping.
+ *   repo root) anchors relative-link resolution for out-of-scope stripping
+ *   and sibling-doc rewriting; siblingSlugMap resolves same-repo cross-
+ *   references to other curated docs (see rewriteSiblingDocLinks).
  * @returns {{title: string, description: string, content: string}}
  */
-export function transformMarkdown(markdown, { sourcePath, sourceDir }) {
+export function transformMarkdown(markdown, { sourcePath, sourceDir, siblingSlugMap = new Map() }) {
 	const title = extractTitle(markdown, sourcePath);
 	const description = extractDescription(markdown, title);
-	const linksStripped = stripOutOfScopeLinks(markdown, sourceDir);
+	const siblingLinksRewritten = rewriteSiblingDocLinks(markdown, sourceDir, siblingSlugMap);
+	const linksStripped = stripOutOfScopeLinks(siblingLinksRewritten, sourceDir);
 	const strippedBody = stripOutOfScopeSentences(linksStripped);
 	const content = serialize({ title, description }, strippedBody);
 	return { title, description, content };
