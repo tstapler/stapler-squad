@@ -1,6 +1,6 @@
 # Add a custom theme
 
-Drop a JSON file into `~/.stapler-squad/themes/` (the active config dir; see `docs/reference/state-isolation.md`). The server lists it at `GET /api/themes` and Settings → Appearance shows it next to the built-in themes. Reload the page after adding or editing a file.
+Drop a JSON file into `~/.stapler-squad/themes/` to make it available in every workspace and instance, or into `themes/` under the active config dir (`docs/reference/state-isolation.md`; for example `~/.stapler-squad/workspaces/<hash>/themes/`) for just that one. If both hold the same theme id, the config-dir one wins. Isolated servers (`--test-mode`/`STAPLER_SQUAD_TEST_DIR`, a named `STAPLER_SQUAD_INSTANCE`, `go test` binaries) skip the shared folder and read only their own config dir. The server lists it at `GET /api/themes` and Settings → Appearance shows it next to the built-in themes. Reload the page after adding or editing a file.
 
 ```json
 {
@@ -18,4 +18,4 @@ Drop a JSON file into `~/.stapler-squad/themes/` (the active config dir; see `do
 - `base` is a built-in theme (`matrix`, `cyberpunk77`, `wh40k`, `clean`, `light`, `dark`); omitted or unknown falls back to `clean`. Tokens you don't set come from the base.
 - `tokens` keys are dotted paths into the theme contract, `web-app/src/styles/theme-contract.css.ts` (for example `color.background`, `color.statusDot.running`, `shadow.sm`). Unknown paths are ignored.
 - Values may use letters, digits, whitespace and `# % . , ( ) / ' " _ + * -` only, and only these CSS functions: `rgb rgba hsl hsla hwb lab lch oklab oklch color-mix var calc min max clamp`. Anything else (`url()`, `image-set()`, `;`, `{}`) drops that token and logs a warning.
-- Limits: 64 KB per file, 50 files, 300 tokens per theme. Symlinked files work, so a dotfiles repo can link its theme in.
+- Limits: 64 KB per file, 50 themes in total across both folders, 300 tokens per theme. Symlinked files work, so a dotfiles repo can link its theme in.
