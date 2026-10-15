@@ -182,6 +182,15 @@ var knownFeatureFlags = []struct {
 		defaultValue: true,
 	},
 	{
+		name:         ChangelogFlagName,
+		description:  "Built-in changelog: the /changelog page, GET /api/changelog, and the update badge. Turn off to hide all three. Default: on.",
+		defaultValue: true,
+	},
+	{
+		name:        UpdateCheckFlagName,
+		description: "Update check: poll GitHub Releases (ETag-conditional, at most every 6 hours) and show a badge when a newer release exists. Contacts api.github.com, so it is opt-in. Never runs on source builds. Requires the changelog flag. Default: off.",
+	},
+	{
 		name:        "backlog",
 		description: "Backlog management with external sync sources and AI-driven triage",
 	},
