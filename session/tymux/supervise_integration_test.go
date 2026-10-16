@@ -186,7 +186,9 @@ func dumpTymuxdOutputOnFailure(t *testing.T, bin string) {
 // output log shows it lost the port to another process between
 // reserveLoopbackAddr's release and tymuxd's bind (that TOCTOU is inherent to
 // reserve-then-release; under ephemeral-port churn it fails ~5% of runs).
-// Any other failure is returned as-is.
+// The bind-failure text differs by build: ~/.local/bin/tymuxd prints "Address
+// already in use", the cached v1.1.0 prints "AddrInUse". Any other failure is
+// returned as-is.
 func ensureDaemonOnFreshLoopbackPort(t *testing.T, bin string) (DaemonConfig, TymuxdReady, error) {
 	t.Helper()
 	const maxPortAttempts = 5
@@ -198,7 +200,7 @@ func ensureDaemonOnFreshLoopbackPort(t *testing.T, bin string) (DaemonConfig, Ty
 	for attempt := 0; attempt < maxPortAttempts; attempt++ {
 		cfg = DaemonConfig{Addr: "http://" + reserveLoopbackAddr(t), BinaryPath: bin}
 		ready, err = EnsureDaemonRunning(context.Background(), cfg)
-		if err == nil || !tymuxdOutputLogContains(t, "Address already in use") {
+		if err == nil || !(tymuxdOutputLogContains(t, "Address already in use") || tymuxdOutputLogContains(t, "AddrInUse")) {
 			return cfg, ready, err
 		}
 		t.Logf("port %s was taken before tymuxd could bind it; retrying on a fresh port (attempt %d/%d)", cfg.Addr, attempt+1, maxPortAttempts)
