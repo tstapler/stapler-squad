@@ -1043,3 +1043,9 @@ func TestGetWorktreeDirtyPaths_NonGitDirectory_ReturnsNilNil(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, paths)
 }
+
+func TestRunPreGateSecurityCheck_should_ReturnNil_When_DiffContainsNoThreatPatterns(t *testing.T) {
+	if err := RunPreGateSecurityCheck("+func main() { fmt.Println(\"hi\") }"); err != nil {
+		t.Fatalf("clean diff returned error: %v", err)
+	}
+}

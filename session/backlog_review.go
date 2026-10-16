@@ -7,48 +7,25 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/threatscan"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/vc"
 )
-
-// secretPatterns lists compiled regexes for obvious secret patterns.
-// The pattern name is used in the error message (not the matched value).
-var secretPatterns = []struct {
-	name string
-	re   *regexp.Regexp
-}{
-	{"aws_access_key_id", regexp.MustCompile(`(?i)aws_access_key_id`)},
-	{"AKIA_key", regexp.MustCompile(`AKIA[0-9A-Z]{16}`)},
-	{"private_key_pem", regexp.MustCompile(`-----BEGIN .{0,30}PRIVATE KEY-----`)},
-	{"github_pat", regexp.MustCompile(`ghp_[a-zA-Z0-9]{36}`)},
-	{"openai_key", regexp.MustCompile(`sk-[a-zA-Z0-9]{48}`)},
-	// Additional patterns for common credential types.
-	{"stripe_secret_key", regexp.MustCompile(`sk_live_[a-zA-Z0-9]{24,}`)},
-	{"slack_token", regexp.MustCompile(`xox[baprs]-[a-zA-Z0-9-]+`)},
-	{"npm_token", regexp.MustCompile(`npm_[a-zA-Z0-9]{36}`)},
-	{"sendgrid_key", regexp.MustCompile(`SG\.[a-zA-Z0-9_-]{22}\.[a-zA-Z0-9_-]{43}`)},
-	{"twilio_sid", regexp.MustCompile(`AC[a-f0-9]{32}`)},
-	{"generic_bearer", regexp.MustCompile(`(?i)Authorization:\s*Bearer\s+[a-zA-Z0-9_.+/=-]{20,}`)},
-	{"database_url", regexp.MustCompile(`(?i)(postgres|mysql|mongodb|redis)://[^@\s]+:[^@\s]+@`)},
-}
 
 // RunPreGateSecurityCheck scans a git diff for obvious secret patterns before
 // sending to the review LLM. Returns a non-nil error if any pattern matches,
 // blocking the review gate from spawning. This is a best-effort check — it does
 // not replace a full secret scanner.
 func RunPreGateSecurityCheck(diff string) error {
-	for _, p := range secretPatterns {
-		if p.re.MatchString(diff) {
-			return fmt.Errorf("secret pattern detected: %s", p.name)
-		}
+	if matches := threatscan.Scan(diff, threatscan.ScopeStrict); len(matches) > 0 {
+		return fmt.Errorf("secret pattern detected: %s", matches[0].PatternID)
 	}
 	return nil
 }
