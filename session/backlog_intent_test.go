@@ -115,3 +115,7 @@ func TestParseBacklogItemIntentDraft_ParsesSuggestedRepoPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "/code/a", draft.SuggestedRepoPath)
 }
+
+func TestBuildBacklogIntentSystemPrompt_AsksForTwoToFiveCriteria(t *testing.T) {
+	assert.Contains(t, BuildBacklogIntentSystemPrompt(), "acceptance_criteria: 2-5")
+}
