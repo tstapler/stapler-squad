@@ -1293,6 +1293,55 @@ func (r *EntRepository) FindOpenStuckStates(ctx context.Context) ([]OpenStuckSta
 	return result, nil
 }
 
+// StuckStateHistoryData is a single BacklogStuckState row for one item,
+// open or resolved — the full-history counterpart to OpenStuckStateData,
+// which deliberately filters to open-only. Used by
+// ListStuckStatesForItem for stuck-item root-cause reporting, where a
+// resolved row (e.g. an exhausted bounce or a since-fixed PR check) is
+// exactly the history a human or diagnose session needs to see.
+type StuckStateHistoryData struct {
+	ID                  string
+	Reason              domain.StuckReason
+	FirstDetectedAt     time.Time
+	LastCheckedAt       time.Time
+	ResolvedAt          *time.Time
+	Context             string
+	RemediationAttempts int32
+	DiagnoseNudgeCount  int32
+}
+
+// ListStuckStatesForItem returns every BacklogStuckState row for itemID,
+// open or resolved, ordered oldest-first. Unlike FindOpenStuckStates this
+// applies no resolved_at/snoozed_until filter — it's a single-item history
+// read, not a sweep's work queue.
+func (r *EntRepository) ListStuckStatesForItem(ctx context.Context, itemID string) ([]StuckStateHistoryData, error) {
+	id, err := uuid.Parse(itemID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid item id: %w", err)
+	}
+	rows, err := r.client.BacklogStuckState.Query().
+		Where(backlogstuckstate.ItemIDEQ(id)).
+		Order(ent.Asc(backlogstuckstate.FieldFirstDetectedAt)).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query stuck states for item %s: %w", itemID, err)
+	}
+	result := make([]StuckStateHistoryData, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, StuckStateHistoryData{
+			ID:                  row.ID.String(),
+			Reason:              domain.StuckReason(row.Reason),
+			FirstDetectedAt:     row.FirstDetectedAt,
+			LastCheckedAt:       row.LastCheckedAt,
+			ResolvedAt:          row.ResolvedAt,
+			Context:             row.Context,
+			RemediationAttempts: row.RemediationAttempts,
+			DiagnoseNudgeCount:  row.DiagnoseNudgeCount,
+		})
+	}
+	return result, nil
+}
+
 // --- ReviewVerdict lookup ---
 
 // GetMostRecentReviewVerdictForItem returns the OverallOutcome from the
