@@ -34,7 +34,7 @@ func (s *Server) registerActuatorRoutes() {
 
 // handleActuatorUnfinishedScanner serves the unfinished-work scanner's counters as JSON, read
 // from atomics, so soak decisions need neither OpenTelemetry nor a profile
-// (docs/reference/unfinished-scanner-observability.md).
+// (docs/how-to/tune-unfinished-scanner-caches.md).
 func handleActuatorUnfinishedScanner(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(unfinished.BuildReport())
