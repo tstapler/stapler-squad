@@ -2724,7 +2724,7 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 
 	i.LaunchCommand = program
 
-	if err := i.updateProcessManagerForRestart(migrating, backendOverride, program, tmuxPrefix); err != nil {
+	if err := i.updateProcessManagerForRestart(migrating, backendOverride, program); err != nil {
 		return err
 	}
 	if migrating {
@@ -2782,11 +2782,15 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 // different backend, or reconfigures the existing one in place otherwise.
 // Holds i.pmMu across all three branches so a concurrent Restart's pointer
 // swap can never be observed mid-assignment by this call's type assertions.
-func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverride ProcessManagerBackend, program, tmuxPrefix string) error {
+func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverride ProcessManagerBackend, program string) error {
 	i.pmMu.Lock()
 	defer i.pmMu.Unlock()
 
 	if migrating {
+		tmuxPrefix := i.TmuxPrefix
+		if tmuxPrefix == "" {
+			tmuxPrefix = "staplersquad_"
+		}
 		// A different backend means a different daemon entirely (tmux vs.
 		// tymuxd) -- no live hand-off is possible, so build a brand-new
 		// ProcessManager via the same factory CreateSession uses.
