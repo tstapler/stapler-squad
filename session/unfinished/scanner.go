@@ -201,6 +201,10 @@ type Scanner struct {
 	// case, degrading to relying solely on the (still-present) ticker.
 	fsWatcher *fsnotify.Watcher
 
+	// gitwatch holds the Tier A linked-worktree watch state and test seam
+	// (scanner_gitwatch.go).
+	gitwatch gitwatchState
+
 	// severePressureWarned rate-limits the "skipping scan under memory
 	// pressure" log line to once per pressure episode rather than once per
 	// skipped repo, so the warning itself can't contribute to log-driven

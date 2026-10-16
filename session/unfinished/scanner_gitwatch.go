@@ -2,46 +2,210 @@ package unfinished
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/tstapler/stapler-squad/log"
 )
 
+// gitWatcher is the seam over *fsnotify.Watcher so tests can inject a fake
+// with no real filesystem events. Remove is an addition to the plan's
+// four-method sketch: unwatchRepo needs it.
+type gitWatcher interface {
+	Add(name string) error
+	Remove(name string) error
+	Events() <-chan fsnotify.Event
+	Errors() <-chan error
+	Close() error
+}
+
+type fsnotifyWatcher struct{ w *fsnotify.Watcher }
+
+func (f fsnotifyWatcher) Add(name string) error         { return f.w.Add(name) }
+func (f fsnotifyWatcher) Remove(name string) error      { return f.w.Remove(name) }
+func (f fsnotifyWatcher) Events() <-chan fsnotify.Event { return f.w.Events }
+func (f fsnotifyWatcher) Errors() <-chan error          { return f.w.Errors }
+func (f fsnotifyWatcher) Close() error                  { return f.w.Close() }
+
+// worktreeTarget says what a change in one linked worktree's admin gitdir
+// (<common>/.git/worktrees/<name>) invalidates: that worktree's cache, then a
+// rescan of repoRoot, whose ListWorktrees scan covers it.
+type worktreeTarget struct{ repoRoot, worktree string }
+
+// gitwatchState is the Tier A (linked-worktree gitdir) state. The zero value
+// is the default behaviour: only <repo>/.git is watched, exactly as before.
+type gitwatchState struct {
+	// override replaces the watcher derived from Scanner.fsWatcher (tests).
+	override gitWatcher
+	// watchWorktreeGitdirs gates every Tier A behaviour: linked gitdir
+	// watches, Rename events, and overflow rescans. The config flag wires in
+	// here later; it must be set before Start.
+	watchWorktreeGitdirs bool
+	// targets maps an admin gitdir to what its events invalidate (guarded by
+	// Scanner.fsMu).
+	targets map[string]worktreeTarget
+	// overflowRescans counts fsnotify.ErrEventOverflow full-rescan sweeps.
+	overflowRescans atomic.Int64
+}
+
+// activeWatcher returns the injected watcher, else one over fsWatcher, else
+// nil (fsnotify unavailable: tick-only polling).
+func (s *Scanner) activeWatcher() gitWatcher {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.gitwatch.override != nil {
+		return s.gitwatch.override
+	}
+	if s.fsWatcher == nil {
+		return nil
+	}
+	return fsnotifyWatcher{s.fsWatcher}
+}
+
 // watchRepo best-effort registers repoPath's .git dir with the fsnotify
 // watcher so a real change triggers an immediate targeted rescan. No-op if
-// fsnotify is unavailable on this platform (s.fsWatcher == nil) — that's the
+// fsnotify is unavailable on this platform (no active watcher) — that's the
 // graceful-degradation path back to relying solely on the ticker. Errors are
 // logged at Debug, not Warn: many repo paths won't have a .git dir yet at
 // the moment they're first tracked (e.g. auto-spidered from a session whose
 // worktree is still being created), which is a normal transient condition,
 // not a fault.
 func (s *Scanner) watchRepo(repoPath string) {
-	s.mu.RLock()
-	w := s.fsWatcher
-	s.mu.RUnlock()
+	w := s.activeWatcher()
 	if w == nil {
 		return
 	}
 	gitDir := filepath.Join(repoPath, ".git")
+	if s.gitwatch.watchWorktreeGitdirs {
+		if s.watchTierA(w, repoPath, gitDir) {
+			return
+		}
+	}
 	if err := w.Add(gitDir); err != nil {
 		log.Debug("could not watch git dir", "dir", gitDir, "err", err)
 	}
 }
 
-// unwatchRepo best-effort removes repoPath's .git dir from the fsnotify
-// watcher, avoiding a slow leak of watch descriptors as repos come and go.
-// No-op if fsnotify is unavailable.
+// watchTierA watches the gitdirs HEAD/index changes land in for linked
+// worktrees. It reports false when .git is neither a directory nor a pointer
+// file, leaving the caller's plain Add to log the transient condition.
+func (s *Scanner) watchTierA(w gitWatcher, repoPath, gitDir string) bool {
+	fi, err := os.Lstat(gitDir)
+	if err != nil {
+		return false
+	}
+	if !fi.IsDir() {
+		// Registered path is itself a linked worktree: watch its resolved
+		// admin gitdir, not the pointer file.
+		admin := worktreeGitDir(repoPath)
+		s.addWorktreeGitdir(w, admin, worktreeTarget{repoRoot: repoPath, worktree: repoPath})
+		return true
+	}
+	if err := w.Add(gitDir); err != nil {
+		log.Debug("could not watch git dir", "dir", gitDir, "err", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(gitDir, "worktrees"))
+	if err != nil {
+		return true
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		admin := filepath.Join(gitDir, "worktrees", e.Name())
+		wt, ok := linkedWorktreePath(admin)
+		if !ok {
+			continue
+		}
+		s.addWorktreeGitdir(w, admin, worktreeTarget{repoRoot: repoPath, worktree: wt})
+	}
+	return true
+}
+
+func (s *Scanner) addWorktreeGitdir(w gitWatcher, admin string, t worktreeTarget) {
+	if err := w.Add(admin); err != nil {
+		log.Debug("could not watch linked worktree gitdir", "dir", admin, "err", err)
+		return
+	}
+	s.fsMu.Lock()
+	if s.gitwatch.targets == nil {
+		s.gitwatch.targets = make(map[string]worktreeTarget)
+	}
+	s.gitwatch.targets[admin] = t
+	s.fsMu.Unlock()
+}
+
+// linkedWorktreePath reads <admin>/gitdir, which holds "<worktree>/.git".
+func linkedWorktreePath(admin string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(admin, "gitdir")) // #nosec G304 -- admin is a subdirectory of a tracked repo's .git/worktrees
+	if err != nil {
+		return "", false
+	}
+	line := strings.TrimSpace(string(data))
+	if line == "" {
+		return "", false
+	}
+	return filepath.Dir(line), true
+}
+
+func (s *Scanner) worktreeTargetFor(admin string) (worktreeTarget, bool) {
+	s.fsMu.Lock()
+	defer s.fsMu.Unlock()
+	t, ok := s.gitwatch.targets[admin]
+	return t, ok
+}
+
+// unwatchRepo best-effort removes repoPath's .git dir (and, under Tier A, its
+// linked gitdirs) from the fsnotify watcher, avoiding a slow leak of watch
+// descriptors as repos come and go. No-op if fsnotify is unavailable.
 func (s *Scanner) unwatchRepo(repoPath string) {
-	s.mu.RLock()
-	w := s.fsWatcher
-	s.mu.RUnlock()
+	w := s.activeWatcher()
 	if w == nil {
 		return
 	}
 	_ = w.Remove(filepath.Join(repoPath, ".git"))
+	var admins []string
+	s.fsMu.Lock()
+	for admin, t := range s.gitwatch.targets {
+		if t.repoRoot == repoPath {
+			admins = append(admins, admin)
+			delete(s.gitwatch.targets, admin)
+		}
+	}
+	s.fsMu.Unlock()
+	for _, admin := range admins {
+		_ = w.Remove(admin)
+	}
+}
+
+// eventWanted filters the fsnotify op. Rename counts only under Tier A: macOS
+// git lockfile renames (packed-refs.lock -> packed-refs) arrive as Rename.
+func (s *Scanner) eventWanted(ev fsnotify.Event) bool {
+	if ev.Has(fsnotify.Write) || ev.Has(fsnotify.Create) {
+		return true
+	}
+	return s.gitwatch.watchWorktreeGitdirs && ev.Has(fsnotify.Rename)
+}
+
+// rescanAllOnOverflow handles a lost-events error: every tracked repo and all
+// of its worktrees are invalidated and force-enqueued.
+func (s *Scanner) rescanAllOnOverflow(ctx context.Context) {
+	s.gitwatch.overflowRescans.Add(1)
+	s.repoSet.Range(func(k, _ any) bool {
+		if ctx.Err() != nil {
+			return false
+		}
+		if repo, _ := k.(string); repo != "" {
+			s.invalidateRepo(repo)
+			s.enqueueRepo(repo, true)
+		}
+		return true
+	})
 }
 
 // fsnotifyLoop handles fsnotify events on every watched repo's .git dir and
@@ -49,50 +213,64 @@ func (s *Scanner) unwatchRepo(repoPath string) {
 // things change" trigger; the coordinator's tick is now a pure backstop.
 // Exits cleanly when ctx is cancelled, per this package's goroutine convention.
 func (s *Scanner) fsnotifyLoop(ctx context.Context) {
-	s.mu.RLock()
-	w := s.fsWatcher
-	s.mu.RUnlock()
+	w := s.activeWatcher()
 	if w == nil {
 		return
 	}
 	defer w.Close()
+	events, errs := w.Events(), w.Errors()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case event, ok := <-w.Events:
+		case event, ok := <-events:
 			if !ok {
 				return
 			}
-			if !event.Has(fsnotify.Write) && !event.Has(fsnotify.Create) {
-				continue
-			}
-			scope, relevant := classifyGitEvent(filepath.Base(event.Name))
-			if !relevant {
-				continue
-			}
-			// Derive the repo root by walking up from the event path to the
-			// nearest ".git" component (mirrors WatchDirWatcher.fsnotifyLoop's
-			// event-handling shape in watcher.go).
-			dir := event.Name
-			for {
-				if filepath.Base(dir) == ".git" {
-					s.scheduleGitEvent(ctx, filepath.Dir(dir), scope)
-					break
-				}
-				parent := filepath.Dir(dir)
-				if parent == dir {
-					break
-				}
-				dir = parent
-			}
-		case err, ok := <-w.Errors:
+			s.handleEvent(ctx, event)
+		case err, ok := <-errs:
 			if !ok {
 				return
 			}
 			log.Warn("scanner fsnotify error", "err", err)
+			if s.gitwatch.watchWorktreeGitdirs && errors.Is(err, fsnotify.ErrEventOverflow) {
+				s.rescanAllOnOverflow(ctx)
+			}
 		}
+	}
+}
+
+func (s *Scanner) handleEvent(ctx context.Context, event fsnotify.Event) {
+	if !s.eventWanted(event) {
+		return
+	}
+	scope, relevant := classifyGitEvent(filepath.Base(event.Name))
+	if !relevant {
+		return
+	}
+	if t, ok := s.worktreeTargetFor(filepath.Dir(event.Name)); ok {
+		s.scheduleWorktreeEvent(ctx, t)
+		return
+	}
+	// Derive the repo root by walking up from the event path to the
+	// nearest ".git" component (mirrors WatchDirWatcher.fsnotifyLoop's
+	// event-handling shape in watcher.go).
+	dir := event.Name
+	for {
+		if filepath.Base(dir) == ".git" {
+			repoRoot := filepath.Dir(dir)
+			s.scheduleGitEvent(ctx, repoRoot, scope)
+			if s.gitwatch.watchWorktreeGitdirs && scope == gitEventAllWorktrees {
+				s.watchRepo(repoRoot) // picks up linked worktrees added since the last pass
+			}
+			return
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return
+		}
+		dir = parent
 	}
 }
 
@@ -135,36 +313,52 @@ func classifyGitEvent(name string) (scope gitEventScope, relevant bool) {
 // a repo), widening the scope if any event in the
 // burst needed it. Skipped after ctx is cancelled.
 func (s *Scanner) scheduleGitEvent(ctx context.Context, repoRoot string, scope gitEventScope) {
-	flush := func(scope gitEventScope) {
-		if ctx.Err() != nil {
-			return
-		}
+	s.debounce(ctx, repoRoot, scope, func(scope gitEventScope) {
 		if scope == gitEventAllWorktrees {
 			s.invalidateRepo(repoRoot)
 		} else {
 			s.InvalidateCache(repoRoot)
 		}
 		s.EnqueueRepo(repoRoot)
+	})
+}
+
+// scheduleWorktreeEvent is the Tier A burst scoped to one linked worktree:
+// only its cache is invalidated, then its repo is enqueued.
+func (s *Scanner) scheduleWorktreeEvent(ctx context.Context, t worktreeTarget) {
+	s.debounce(ctx, "wt:"+t.worktree, gitEventRepoRoot, func(gitEventScope) {
+		s.InvalidateCache(t.worktree)
+		s.EnqueueRepo(t.repoRoot)
+	})
+}
+
+// debounce runs flush once, fsDebounce after the first call for key.
+func (s *Scanner) debounce(ctx context.Context, key string, scope gitEventScope, flushScope func(gitEventScope)) {
+	flush := func(scope gitEventScope) {
+		if ctx.Err() != nil {
+			return
+		}
+		flushScope(scope)
 	}
 	if s.fsDebounce <= 0 {
 		flush(scope)
 		return
 	}
 	s.fsMu.Lock()
-	if cur, armed := s.fsPending[repoRoot]; armed {
-		s.fsPending[repoRoot] = max(cur, scope)
+	if cur, armed := s.fsPending[key]; armed {
+		s.fsPending[key] = max(cur, scope)
 		s.fsMu.Unlock()
 		return
 	}
 	if s.fsPending == nil {
 		s.fsPending = make(map[string]gitEventScope)
 	}
-	s.fsPending[repoRoot] = scope
+	s.fsPending[key] = scope
 	s.fsMu.Unlock()
 	time.AfterFunc(s.fsDebounce, func() {
 		s.fsMu.Lock()
-		widest := s.fsPending[repoRoot]
-		delete(s.fsPending, repoRoot)
+		widest := s.fsPending[key]
+		delete(s.fsPending, key)
 		s.fsMu.Unlock()
 		flush(widest)
 	})
