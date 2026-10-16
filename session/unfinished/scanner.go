@@ -205,6 +205,8 @@ type Scanner struct {
 	// RefSnapshot while a scan runs.
 	scanRecords sync.Map // map[string]*repoScanRecord (key = repoPath)
 	scanStats   scanStateStats
+	// clock is the injected time source for signature expiry (nil: time.Now).
+	clock func() time.Time
 
 	// gitwatch holds the Tier A linked-worktree watch state and test seam
 	// (scanner_gitwatch.go).
@@ -555,7 +557,7 @@ func (s *Scanner) enqueueRepo(repoPath string, force bool) {
 			})
 		}
 	}
-	if recent && !force {
+	if recent && !force && !s.siblingSignatureChanged(repoPath) {
 		return
 	}
 
@@ -616,7 +618,7 @@ func (s *Scanner) scanRepo(repoPath string, force bool) []ScanResult {
 	defer s.endBurst(repoPath)
 
 	var results []ScanResult
-	for _, wt := range worktrees {
+	for _, wt := range s.changedFirst(repoPath, worktrees) {
 		if wt.IsBare || wt.IsDetached || wt.IsPrunable {
 			continue
 		}
@@ -695,17 +697,7 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string, 
 	result.HasUncommitted = uncommitted
 
 	if defaultBranch != "" {
-		ahead, behind, aErr := s.aheadBehind(s.burstSnapshot(repoPath), wt.Path, defaultBranch)
-		if aErr == nil {
-			result.AheadCount = ahead
-			result.BehindCount = behind
-		}
-		if result.AheadCount > 0 {
-			msgs, mErr := s.reader.CommitMessages(wt.Path, defaultBranch, 5)
-			if mErr == nil {
-				result.AheadMessages = msgs
-			}
-		}
+		s.fillCommittedState(&result, repoPath, wt.Path, defaultBranch)
 	}
 
 	// Skip when uncommitted is false: DiffShortstat re-derives the identical

@@ -83,7 +83,9 @@ func TestBurst_ShouldResolveBaseOnceAndEachHeadOnce_WhenFourWorktrees(t *testing
 	assert.EqualValues(t, 1, shallowStats.Load(), "the statFn seam saw exactly one shallow stat")
 	assert.EqualValues(t, 4, r.resolved.Load(), "phase 2 ran from the snapshot's hashes for every worktree")
 	assert.Zero(t, r.full.Load(), "phase 1 is skipped for the Burst")
-	assert.Equal(t, ScanStateStats{SnapshotsBuilt: 1}, s.ScanStateStats())
+	st := s.ScanStateStats()
+	assert.EqualValues(t, 1, st.SnapshotsBuilt)
+	assert.Zero(t, st.ReusedAcrossBursts)
 	assert.Nil(t, s.burstSnapshot(p.mainDir), "the snapshot is discarded when the Burst ends")
 }
 
