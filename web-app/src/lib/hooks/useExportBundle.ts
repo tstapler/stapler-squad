@@ -42,14 +42,23 @@ function triggerBrowserDownload(blob: Blob, filename: string): void {
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 async function deliverBlob(blob: Blob, filename: string): Promise<void> {
   const file = new File([blob], filename, { type: ZIP_MIME_TYPE });
   if (typeof navigator !== "undefined" && navigator.canShare?.({ files: [file] })) {
-    await navigator.share({ files: [file] });
+    try {
+      await navigator.share({ files: [file] });
+    } catch (err: unknown) {
+      const name = err instanceof DOMException ? err.name : "";
+      if (name === "AbortError") return; // user dismissed the share sheet
+      if (name !== "NotAllowedError") throw err;
+      triggerBrowserDownload(blob, filename); // user activation expired during the stream
+    }
   } else {
     triggerBrowserDownload(blob, filename);
   }

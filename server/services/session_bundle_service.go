@@ -444,6 +444,17 @@ func (s *SessionBundleService) assembleBundle(
 	return buf.Bytes(), manifest, nil
 }
 
+// acquireExportSlot caps concurrent in-memory ZIP assemblies (export and save
+// share the cap, since both hold the whole archive in memory).
+func (s *SessionBundleService) acquireExportSlot() (release func(), err error) {
+	select {
+	case s.exportSem <- struct{}{}:
+		return func() { <-s.exportSem }, nil
+	default:
+		return nil, connect.NewError(connect.CodeResourceExhausted, errors.New("too many concurrent bundle exports"))
+	}
+}
+
 // ExportSessionBundle assembles a RUMSessionBundle ZIP and streams it to the
 // browser as fixed-size 64 KB BundleChunk messages. The final chunk has
 // Final=true.
@@ -454,13 +465,11 @@ func (s *SessionBundleService) ExportSessionBundle(
 	req *connect.Request[sessionv1.ExportSessionBundleRequest],
 	stream *connect.ServerStream[sessionv1.BundleChunk],
 ) error {
-	// Acquire semaphore — caps concurrent in-memory assemblies at 3.
-	select {
-	case s.exportSem <- struct{}{}:
-		defer func() { <-s.exportSem }()
-	default:
-		return connect.NewError(connect.CodeResourceExhausted, errors.New("too many concurrent bundle exports"))
+	release, err := s.acquireExportSlot()
+	if err != nil {
+		return err
 	}
+	defer release()
 
 	inst := s.findInstance(req.Msg.SessionUuid)
 	if inst == nil {
@@ -517,6 +526,12 @@ func (s *SessionBundleService) SaveSessionBundle(
 	ctx context.Context,
 	req *connect.Request[sessionv1.SaveSessionBundleRequest],
 ) (*connect.Response[sessionv1.SaveSessionBundleResponse], error) {
+	release, err := s.acquireExportSlot()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	inst := s.findInstance(req.Msg.SessionUuid)
 	if inst == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionUuid))
@@ -540,6 +555,12 @@ func (s *SessionBundleService) SaveSessionBundle(
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid output_dir: %w", err))
 		}
+		// Resolve symlinks on both sides (nearest existing ancestor for absDir) so a
+		// symlink inside the config dir cannot redirect the write elsewhere.
+		if resolved, rerr := filepath.EvalSymlinks(configDir); rerr == nil {
+			configDir = resolved
+		}
+		absDir = resolveExistingPrefix(absDir)
 		// Ensure prefix check includes a separator so /foo/bar doesn't match /foo/baz.
 		if !strings.HasPrefix(absDir+string(filepath.Separator), configDir+string(filepath.Separator)) {
 			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("output_dir must be within the server config directory"))
@@ -580,7 +601,7 @@ func (s *SessionBundleService) SaveSessionBundle(
 		slug = snap.UUID
 	}
 	ts := time.Now().UTC().Format("20060102-150405")
-	filename := slug + "-" + ts + ".zip"
+	filename := slug + "-" + ts + "-" + shortID(snap.UUID) + ".zip"
 
 	// Atomic write: write to .tmp, then rename.
 	tmpPath := filepath.Join(outputDir, filename+".tmp")
@@ -601,6 +622,28 @@ func (s *SessionBundleService) SaveSessionBundle(
 		FileSizeBytes: int64(len(zipBytes)),
 		ContentHash:   contentHash,
 	}), nil
+}
+
+// resolveExistingPrefix evaluates symlinks on the longest existing ancestor of
+// path and re-appends the not-yet-created remainder.
+func resolveExistingPrefix(path string) string {
+	rest := ""
+	for p := path; ; p = filepath.Dir(p) {
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(resolved, rest)
+		}
+		if filepath.Dir(p) == p {
+			return path
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+	}
+}
+
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
 
 // RunDiagnosticsRetention deletes *.zip files in dir whose mtime is older than

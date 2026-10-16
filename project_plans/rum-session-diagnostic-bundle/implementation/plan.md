@@ -95,7 +95,7 @@ No data migration required.
 
 - **Feature flag**: None required. The feature is additive (new RPC + new UI control in an action sheet). It cannot be triggered accidentally. If a rollback is needed, revert the server binary and the web-app build; the feature disappears.
 - **Rollback procedure**: Revert commits to `server/services/session_bundle_service.go`, `proto/session/v1/rum_bundle.proto`, and the web-app bundle. No data to clean up (saved bundles in `~/.stapler-squad/diagnostics/` are harmless but can be manually deleted).
-- **PII risk**: The export modal must display a consent notice before initiating any download or server-save: "This bundle may contain raw terminal output including typed credentials. Do not share it with untrusted parties." Scrollback is capped at 500 lines (tail only — limits historical exposure). A best-effort secrets scan (entropy heuristic + AWS key prefix pattern) logs a `WARN` to `manifest.json` if triggered patterns are found, but does not block the export; the user is shown a banner.
+- **PII risk**: The export modal must display a consent notice before initiating any download or server-save: "This bundle may contain raw terminal output including typed credentials. Do not share it with untrusted parties." Scrollback is capped at 500 lines (tail only — limits historical exposure). The best-effort secrets scan originally planned here is **deferred** (sdd:6-verify decision): the mandatory consent notice is the PII control for this release.
 
 ---
 

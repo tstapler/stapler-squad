@@ -1,7 +1,6 @@
 "use client";
 
 // +feature: ui:web-vitals
-import { useRef } from "react";
 import { useReportWebVitals } from "next/dist/client/web-vitals";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { getActiveSessionUUID } from "@/lib/telemetry/active-session";
@@ -10,11 +9,6 @@ type WebVital = Parameters<Parameters<typeof useReportWebVitals>[0]>[0];
 
 export function WebVitalsReporter() {
   const analytics = useAnalytics();
-
-  // Capture the active session UUID at mount time so Web Vitals events fired
-  // later (after the user navigates away) still report the session that was
-  // in focus when measurement started, not the one currently in focus.
-  const sessionUUIDRef = useRef(getActiveSessionUUID());
 
   useReportWebVitals((metric: WebVital) => {
     // Store as a named Performance measure so it appears in DevTools > Performance
@@ -45,7 +39,7 @@ export function WebVitalsReporter() {
       name: `web_vital.${metric.name.toLowerCase()}`,
       category: "performance",
       durationMs: isCLS ? Math.round(metric.value * 10000) : Math.round(metric.value),
-      sessionId: sessionUUIDRef.current ?? undefined,
+      sessionId: getActiveSessionUUID() ?? undefined,
       labels: {
         rating: metric.rating,
         id: metric.id,

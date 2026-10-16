@@ -49,6 +49,8 @@ export function ExportBundleModal({ open, onOpenChange, sessionId, sessionTitle,
 
   const handleExport = async () => {
     setFailed(false);
+    setSaved(null);
+    setBacklogItemId(null);
     try {
       if (mode === "download") {
         const ok = await download(sessionId, sessionTitle);
@@ -68,12 +70,16 @@ export function ExportBundleModal({ open, onOpenChange, sessionId, sessionTitle,
     if (!saved) return;
     setCreating(true);
     const filename = basename(saved.filePath);
-    const result = await createBacklogItem({
-      title: `Diagnostic bundle: ${sessionTitle} (${ymd(new Date())})`,
-      notes: `Bundle: ${filename} (SHA-256: ${saved.contentHash})`,
-      repoPath,
-    });
-    setCreating(false);
+    let result: Awaited<ReturnType<typeof createBacklogItem>> = null;
+    try {
+      result = await createBacklogItem({
+        title: `Diagnostic bundle: ${sessionTitle} (${ymd(new Date())})`,
+        notes: `Bundle: ${filename} (SHA-256: ${saved.contentHash})`,
+        repoPath,
+      });
+    } finally {
+      setCreating(false);
+    }
     if (result) {
       setBacklogItemId(result.item.id);
       showActionToast("Backlog item created.", "success", toastKey);
@@ -108,9 +114,7 @@ export function ExportBundleModal({ open, onOpenChange, sessionId, sessionTitle,
           />
           <span>{CONSENT_TEXT}</span>
         </label>
-        {loading && (
-          <div role="status" aria-live="polite">Assembling bundle…</div>
-        )}
+        <div role="status" aria-live="polite">{loading ? "Assembling bundle…" : ""}</div>
         {(failed || error) && (
           <div role="alert" className={styles.errorBanner}>
             <span>{error ?? "Export failed"}</span>
