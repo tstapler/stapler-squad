@@ -807,6 +807,67 @@ func (i *Instance) wireTmuxSession(program string) *tmux.TmuxSession {
 	return session
 }
 
+// updateProcessManagerForRestart swaps i.processManager and persists
+// i.Backend when migrating to a different backend, or reconfigures the
+// existing manager in place otherwise. Holds i.pmMu across all branches so a
+// concurrent Restart's pointer swap can never be observed mid-assignment by
+// this call's type assertions. Nests i.mu *inside* i.pmMu for the Backend
+// write below -- no call site anywhere else in the package nests the other
+// way (mu-then-pmMu), so keep that ordering if this ever changes.
+func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverride ProcessManagerBackend, program string) error {
+	i.pmMu.Lock()
+	defer i.pmMu.Unlock()
+
+	if !migrating {
+		// Same choke point initTmuxSession uses -- handles both TmuxBackend
+		// (SetSession, with the orphan-process guard and extra env) and
+		// TymuxBackend (SetCommand) dispatch internally.
+		i.wireTmuxSession(program)
+		return nil
+	}
+
+	tmuxPrefix := i.TmuxPrefix
+	if tmuxPrefix == "" {
+		tmuxPrefix = "staplersquad_"
+	}
+	// A different backend means a different daemon entirely (tmux vs.
+	// tymuxd) -- no live hand-off is possible, so build a brand-new
+	// ProcessManager via the same factory CreateSession uses.
+	newPM, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{
+		Backend:      backendOverride,
+		SessionName:  i.Title,
+		Program:      program,
+		Prefix:       tmuxPrefix,
+		ServerSocket: i.TmuxServerSocket,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to construct %q process manager for migration: %w", backendOverride, err)
+	}
+	i.processManager = newPM
+
+	i.mu.Lock()
+	i.Backend = backendOverride
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.snapshot.Store(snap)
+	return nil
+}
+
+// validateBackendOverride rejects an unrecognized backendOverride before
+// Restart tears down the live session -- NewProcessManager's own validation
+// runs too late for this call path, after KillSession has already run.
+func validateBackendOverride(backendOverride ProcessManagerBackend) error {
+	if backendOverride == "" {
+		return nil
+	}
+	switch backendOverride {
+	case BackendTmux, BackendNative, BackendTymux:
+		return nil
+	default:
+		return fmt.Errorf("%w: %q", ErrUnrecognizedBackend, backendOverride)
+	}
+}
+
 // initTmuxSession creates (or reuses) the tmux.TmuxSession object without starting it.
 // Reuse needs HasSession() AND (cached IsAlive() OR IsBackendProcessAlive()): the pointer
 // stays non-nil after the tmux server dies, which once skipped the --resume rebuild (#791).

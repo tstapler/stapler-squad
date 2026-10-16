@@ -2616,6 +2616,35 @@ func stopByUserLocked(s *instanceState, force bool) error {
 	return nil
 }
 
+// resolveRestartWorktreePath picks Restart's working directory and, for a
+// paused session being recreated, clears the stale Claude UUID (the
+// recreated worktree's path won't match history recorded under the old
+// one, so --resume with it would fail with "no conversation found").
+func (i *Instance) resolveRestartWorktreePath(waspaused bool, claudeSessionID *string) (string, error) {
+	var worktreePath string
+	if i.gitManager.HasWorktree() {
+		if waspaused {
+			if err := i.gitManager.Setup(); err != nil {
+				return "", fmt.Errorf("failed to recreate worktree for paused session: %w", err)
+			}
+			*claudeSessionID = ""
+			if i.claudeSession != nil {
+				i.claudeSession.ConversationUUID = ""
+				i.HistoryFilePath = ""
+			}
+		}
+		worktreePath = i.gitManager.GetWorktreePath()
+	} else if i.SessionType == SessionTypeExistingWorktree && i.ExistingWorktree != "" {
+		worktreePath = i.ExistingWorktree
+	} else {
+		worktreePath = i.Path
+	}
+	if worktreePath == "" {
+		return "", fmt.Errorf("cannot restart session '%s': no working directory configured", i.Title)
+	}
+	return worktreePath, nil
+}
+
 // Restart kills and recreates the session's process-manager session,
 // preserving the git worktree. If preserveOutput, captures terminal
 // output first; for Claude sessions, resumes via --resume.
@@ -2629,12 +2658,8 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 		return ErrCannotRestart
 	}
 
-	if backendOverride != "" {
-		switch backendOverride {
-		case BackendTmux, BackendNative, BackendTymux:
-		default:
-			return fmt.Errorf("%w: %q", ErrUnrecognizedBackend, backendOverride)
-		}
+	if err := validateBackendOverride(backendOverride); err != nil {
+		return err
 	}
 
 	migrating := backendOverride != "" && backendOverride != i.Backend
@@ -2667,35 +2692,9 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 	}
 
 	// Determine the working directory
-	var worktreePath string
-	if i.gitManager.HasWorktree() {
-		// Paused sessions have their worktree directory removed by Pause().
-		// Recreate it now so the new tmux session starts in the right place.
-		if waspaused {
-			if err := i.gitManager.Setup(); err != nil {
-				return fmt.Errorf("failed to recreate worktree for paused session: %w", err)
-			}
-			// Claude stores conversation history keyed by the project directory path.
-			// After worktree recreation the encoded path matches the worktree, not the
-			// main repo, so --resume with a UUID that was captured in the main repo
-			// (or a previous worktree incarnation) will fail with "no conversation found"
-			// and cause Claude to exit immediately.  Clear the UUID so Claude starts
-			// fresh instead.
-			claudeSessionID = ""
-			if i.claudeSession != nil {
-				i.claudeSession.ConversationUUID = ""
-				i.HistoryFilePath = ""
-			}
-		}
-		worktreePath = i.gitManager.GetWorktreePath()
-	} else if i.SessionType == SessionTypeExistingWorktree && i.ExistingWorktree != "" {
-		worktreePath = i.ExistingWorktree
-	} else {
-		worktreePath = i.Path
-	}
-
-	if worktreePath == "" {
-		return fmt.Errorf("cannot restart session '%s': no working directory configured", i.Title)
+	worktreePath, err := i.resolveRestartWorktreePath(waspaused, &claudeSessionID)
+	if err != nil {
+		return err
 	}
 
 	// Suppress pi's --session resume injection (buildLaunchCommand reads
@@ -2726,13 +2725,6 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 
 	if err := i.updateProcessManagerForRestart(migrating, backendOverride, program); err != nil {
 		return err
-	}
-	if migrating {
-		i.mu.Lock()
-		i.Backend = backendOverride
-		snap := buildSnapshot(i)
-		i.mu.Unlock()
-		i.snapshot.Store(snap)
 	}
 
 	// Start the new session
@@ -2775,41 +2767,5 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 	i.mu.Unlock()
 
 	log.Info("successfully restarted session", "session", i.Title)
-	return nil
-}
-
-// updateProcessManagerForRestart swaps i.processManager when migrating to a
-// different backend, or reconfigures the existing one in place otherwise.
-// Holds i.pmMu across all three branches so a concurrent Restart's pointer
-// swap can never be observed mid-assignment by this call's type assertions.
-func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverride ProcessManagerBackend, program string) error {
-	i.pmMu.Lock()
-	defer i.pmMu.Unlock()
-
-	if migrating {
-		tmuxPrefix := i.TmuxPrefix
-		if tmuxPrefix == "" {
-			tmuxPrefix = "staplersquad_"
-		}
-		// A different backend means a different daemon entirely (tmux vs.
-		// tymuxd) -- no live hand-off is possible, so build a brand-new
-		// ProcessManager via the same factory CreateSession uses.
-		newPM, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{
-			Backend:      backendOverride,
-			SessionName:  i.Title,
-			Program:      program,
-			Prefix:       tmuxPrefix,
-			ServerSocket: i.TmuxServerSocket,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to construct %q process manager for migration: %w", backendOverride, err)
-		}
-		i.processManager = newPM
-		return nil
-	}
-	// Same choke point initTmuxSession uses -- handles both TmuxBackend
-	// (SetSession, with the orphan-process guard and extra env) and
-	// TymuxBackend (SetCommand) dispatch internally.
-	i.wireTmuxSession(program)
 	return nil
 }
