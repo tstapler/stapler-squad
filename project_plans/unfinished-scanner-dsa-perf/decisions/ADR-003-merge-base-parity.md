@@ -8,7 +8,7 @@
 ## Decision
 - Story 0.0.1 commits the lockstep walk alone and retains the **committed old walk** verbatim as a test-only oracle (`legacyStack*`). A seeded differential test (>= 500 DAGs plus criss-cross/octopus/shallow) records every divergence old-vs-lockstep as a golden file. Divergences on linear/single-merge DAGs fail; divergences elsewhere are listed here as the behaviour change the lockstep commit introduced and reported to the owner. Golden divergence set: `session/unfinished/testdata/mergebase_lockstep_divergences.golden` (see "Behaviour change introduced by the lockstep commit" below).
 - Moving the walk to interned ids (Story 2.1.3) must equal the **lockstep** exactly (queue order, parent order, cap semantics) and may add **no** divergence against the committed-old walk beyond the golden set.
-- `MergeBaseMode` is a sum type: `LockstepFirstCommon` (default) and `PaintDownBest` (generation-ordered paint-down, generation computed on demand). `PaintDownBest` ships only behind `best_merge_base` (default off) with a differential test against `object.Commit.MergeBase`; generation 0 disables pruning. Flipping it is an owner decision and a documented user-visible behaviour change; the story is conditional on owner interest.
+- Amended 2026-10-16 (owner Q3): the "preserve semantics" premise is replaced by "match the oracle". `findMergeBase` is paint-down-to-common (commit `fef7bb90f`), matching `object.Commit.MergeBase` on 100% of 600 cases. `MergeBaseMode`, the `best_merge_base` flag and Story 2.2.3 are dropped; there is one walk and no generation column.
 - BFS (not DFS) stays for the "within L per side" failure condition.
 
 ## Consequences
