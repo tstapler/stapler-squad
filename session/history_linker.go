@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"math"
 	"os"
 	"sync"
@@ -47,6 +48,10 @@ type HistoryLinker struct {
 	instances      []*Instance
 	backoffs       map[string]*sessionBackoff
 	extraCallbacks []func(string) // additional per-file callbacks (e.g. TokenStore)
+
+	// correlateMu serializes correlateSession so two new sessions in one directory
+	// can't both pick the same unclaimed file.
+	correlateMu deadlock.Mutex
 
 	runWG sync.WaitGroup // tracks the run goroutine launched by Start; see Wait
 }
@@ -256,6 +261,9 @@ func (hl *HistoryLinker) scanAllSessions() {
 // re-checked so that UUID changes from /clear are detected and stored promptly. This
 // ensures cold restores use the correct --resume UUID rather than a stale pre-/clear one.
 func (hl *HistoryLinker) correlateSession(inst *Instance, force bool) {
+	hl.correlateMu.Lock()
+	defer hl.correlateMu.Unlock()
+
 	alreadyLinked := inst.HasClaudeSession()
 
 	// In non-force polling mode, skip already-linked sessions for performance.
@@ -302,7 +310,7 @@ func (hl *HistoryLinker) correlateSession(inst *Instance, force bool) {
 		(inst.Status != Paused && inst.Status != Hibernated && inst.Status != Stopped)
 	if info == nil && pathFallbackAllowed {
 		if effectivePath := inst.GetEffectiveRootDir(); effectivePath != "" {
-			info, err = hl.detectUnclaimedByPath(inst, effectivePath)
+			info, err = hl.detectUnclaimedByPath(inst, effectivePath, !alreadyLinked)
 			if err != nil {
 				log.Warn("HistoryLinker: path-based detect error", "session", inst.Title, "err", err)
 			}
@@ -346,20 +354,17 @@ func (hl *HistoryLinker) correlateSession(inst *Instance, force bool) {
 	inst.SetHistoryInfo(info.ConversationUUID, info.HistoryFilePath)
 }
 
-// detectUnclaimedByPath is DetectByPath minus conversations already linked to a
-// different monitored instance. "Most recently modified JSONL in the directory"
-// otherwise hands a new session whichever sibling last wrote there (e.g. a review
-// session resuming in the main repo while a worktree session is still being created).
-// Returns nil, nil when every candidate is claimed.
-func (hl *HistoryLinker) detectUnclaimedByPath(inst *Instance, path string) (*HistoryFileInfo, error) {
+// detectUnclaimedByPath is DetectByPath minus conversations linked to another
+// monitored instance and, for a never-linked session, ones that began before it
+// existed. Returns nil, nil when no candidate qualifies.
+func (hl *HistoryLinker) detectUnclaimedByPath(inst *Instance, path string, neverLinked bool) (*HistoryFileInfo, error) {
 	candidates, err := hl.detector.DetectAllByPath(path)
 	if err != nil || len(candidates) == 0 {
 		return nil, err
 	}
 
-	hl.mu.RLock()
-	claimed := make(map[string]bool, len(hl.instances))
-	for _, other := range hl.instances {
+	claimed := make(map[string]bool)
+	for _, other := range hl.Instances() {
 		if other == inst {
 			continue
 		}
@@ -367,12 +372,12 @@ func (hl *HistoryLinker) detectUnclaimedByPath(inst *Instance, path string) (*Hi
 			claimed[uuid] = true
 		}
 	}
-	hl.mu.RUnlock()
 
-	// A session that has never had a conversation can't own one that began before
-	// it existed; only established sessions may recover older files.
+	// Linked sessions are excluded: a resume_id session's file carries pre-creation
+	// timestamps. Sessions that lost their UUID before EverHadConversationHistory
+	// existed are not protected from this filter.
 	var notBefore time.Time
-	if snap := inst.Snapshot(); !snap.EverHadConversationHistory {
+	if snap := inst.Snapshot(); neverLinked && !snap.EverHadConversationHistory {
 		notBefore = snap.CreatedAt
 	}
 
@@ -382,21 +387,26 @@ func (hl *HistoryLinker) detectUnclaimedByPath(inst *Instance, path string) (*Hi
 				"session", inst.Title, "conv_uuid", candidates[i].ConversationUUID)
 			continue
 		}
-		if !notBefore.IsZero() {
-			if started, ok := jsonlStartTime(candidates[i].HistoryFilePath); ok && started.Before(notBefore) {
-				log.Debug("HistoryLinker: skipping conversation that predates session",
-					"session", inst.Title, "conv_uuid", candidates[i].ConversationUUID, "started", started)
-				continue
-			}
+		if notBefore.IsZero() {
+			return &candidates[i], nil
+		}
+		if started, ok := jsonlStartTime(candidates[i].HistoryFilePath); ok && started.Before(notBefore) {
+			log.Debug("HistoryLinker: skipping conversation that predates session",
+				"session", inst.Title, "conv_uuid", candidates[i].ConversationUUID)
+			continue
 		}
 		return &candidates[i], nil
 	}
 	return nil, nil //nolint:nilnil
 }
 
-// jsonlStartTime returns the timestamp of the first entry in a Claude JSONL file
-// that carries one. ok is false when the file is unreadable or has none, so callers
-// fail open (accept the file) rather than hiding a conversation they can't date.
+const (
+	jsonlStartScanEntries = 20      // entries to scan for a timestamp
+	jsonlStartScanBytes   = 1 << 20 // read cap; entries can embed multi-MB pasted content
+)
+
+// jsonlStartTime returns the first timestamp in a Claude JSONL file. ok=false means
+// undatable (unreadable, none found, or past the read cap), so callers fail open.
 func jsonlStartTime(path string) (t time.Time, ok bool) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -404,17 +414,13 @@ func jsonlStartTime(path string) (t time.Time, ok bool) {
 	}
 	defer f.Close()
 
-	const maxEntries = 20
-	dec := json.NewDecoder(f)
-	for range maxEntries {
+	dec := json.NewDecoder(io.LimitReader(f, jsonlStartScanBytes))
+	for range jsonlStartScanEntries {
 		var entry struct {
 			Timestamp string `json:"timestamp"`
 		}
 		if err := dec.Decode(&entry); err != nil {
 			return time.Time{}, false
-		}
-		if entry.Timestamp == "" {
-			continue
 		}
 		if ts, err := time.Parse(time.RFC3339Nano, entry.Timestamp); err == nil {
 			return ts, true
