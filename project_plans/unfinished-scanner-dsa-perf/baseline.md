@@ -27,3 +27,13 @@ This gain belongs to the lockstep commit, not to this project; the 24 h profile 
 ## Real-worktree differential (reporting only)
 
 Opt-in: `MERGEBASE_REAL_REPOS=1 go test ./session/unfinished/ -run RealWorktree -v`. Current repo plus `~/code/github.com/tstapler/*` (excluding `stapler-squad-*` sibling clones), 6 refs per repo, read-only via go-git. Run on the machine at commit time: 13 repos, 55 pairs; 44 identical, 8 divergent or error-mismatched (3 pairs had an error on at least one side); vs `object.Commit.MergeBase` over 52 pairs: legacy-in-best 48, lockstep-in-best 46. Not repeatable bit-for-bit (refs change).
+
+## Native-git inventory under `session/unfinished/**` (Task 0.0.3a, re-derived by grep)
+
+`grep -rlE 'safeexec|"os/exec"' session/unfinished --include='*.go'` listed 15 files, all `_test.go`, matching the plan: top-level `gogit_vcs_reader_gitignore_test.go`, `gogit_vcs_reader_limits_test.go`, `gogit_vcs_reader_shellout_bench_test.go` (deleted by this task), `state_test.go`, `vcsreader_bench_test.go`, `vcsreader_test.go`; `gogitstore/` `crash_subprocess_test.go` (re-execs `os.Args[0]`, the one allow-listed file), `gogitstore_test.go`, `mmap_adversarial_test.go`, `mmap_realrepo_test.go`, `mmap_stage2_test.go`, `mmap_truncation_test.go`, `mmapindex_test.go`, `registry_eviction_test.go`, `soak_test.go`. `repostate/` does not exist yet.
+
+`gitRunInternal` counts (`grep -rc`, non-zero only): `gogit_vcs_reader_limits_test.go` 20, `gogit_vcs_reader_objectcache_test.go` 1 (a call, no own import), `gogitstore/gogitstore_test.go` 1 (a comment reference at `:33`, not a call).
+
+Custom linters and `_test.go`: `norawgitcli` skips `_test.go` explicitly (`tools/lint/norawgitcli/analyzer.go:93`); `norawexec` only flags raw `os/exec.Command*` calls (not `safeexec`), so every `safeexec.CommandContext(..., "git", ...)` test site passes it; `nocommandpattern` checks `Rule.CommandPattern` literals and is unrelated to git. None enforces the go-git-only policy for tests, so `TestNoNativeGitInPackage` (`session/unfinished/no_native_git_test.go`) is the enforcement.
+
+`TestNoNativeGitInPackage` is red at this commit by design (14 offending files listed in its output) and turns green at Task 0.0.3f. `BenchmarkDiffShortstat_GoGitVsNative` is gone; `go test -list BenchmarkDiffShortstat ./session/unfinished` now lists exactly `BenchmarkDiffShortstat` and `BenchmarkDiffShortstatCached`.
