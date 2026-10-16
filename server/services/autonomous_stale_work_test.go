@@ -147,6 +147,31 @@ func TestRecordDeadPane_should_writeStuckRow_When_WorkSessionLive(t *testing.T) 
 	assert.Zero(t, f.nudger.callCount(), "a dead pane is never nudged")
 }
 
+func TestRecordDeadPane_should_storeSanitizedTail_When_SnapshotCarriesPaneTail(t *testing.T) {
+	cases := map[string]struct {
+		tail string
+		want string
+	}{
+		"plain tail folded onto one line": {"building\npanic: boom", "building ⏎ panic: boom"},
+		"secret tail withheld":            {"ok\nAPI_TOKEN=abcdef123456\nok", stopTailWithheldMarker},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newStallNudgeFixture(t, "dead-pane-tail", session.BacklogStatusInProgress, true, true)
+			snap := snapshotFor(domain.ObservedCrashed)
+			snap.PaneTail = tc.tail
+
+			f.svc.autonomousSvc.RecordDeadPane(f.inst.UUID, f.title, snap, domain.ObservedCrashed)
+
+			got := f.rowContext(t)
+			assert.Contains(t, got, tc.want)
+			if tc.want == stopTailWithheldMarker {
+				assert.NotContains(t, got, "abcdef123456")
+			}
+		})
+	}
+}
+
 func TestRecordDeadPane_should_beNoop_When_SessionHasNoLiveWorkItemSession(t *testing.T) {
 	f := newStallNudgeFixture(t, "dead-pane-noop", session.BacklogStatusInProgress, true, true)
 
