@@ -137,3 +137,22 @@ func TestTryBeginRecovery_should_refuseAndKeepLiveEntry_When_RecoveryAlreadyRegi
 	release()
 	assert.False(t, a.recoveryLive("s"))
 }
+
+func TestRecordDeadPane_should_writeStuckRow_When_WorkSessionLive(t *testing.T) {
+	f := newStallNudgeFixture(t, "dead-pane-row", session.BacklogStatusInProgress, true, true)
+
+	f.svc.autonomousSvc.RecordDeadPane(f.inst.UUID, f.title, snapshotFor(domain.ObservedCrashed), domain.ObservedCrashed)
+
+	assert.Contains(t, f.rowContext(t), "stop_reason=dead_pane state=crashed action=respawned")
+	assert.Zero(t, f.nudger.callCount(), "a dead pane is never nudged")
+}
+
+func TestRecordDeadPane_should_beNoop_When_SessionHasNoLiveWorkItemSession(t *testing.T) {
+	f := newStallNudgeFixture(t, "dead-pane-noop", session.BacklogStatusInProgress, true, true)
+
+	f.svc.autonomousSvc.RecordDeadPane("unlinked-uuid", f.title, snapshotFor(domain.ObservedCrashed), domain.ObservedCrashed)
+
+	open, err := f.storage.FindOpenStuckStates(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, open)
+}

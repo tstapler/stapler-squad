@@ -132,3 +132,35 @@ func (a *AutonomousOrchestrationService) nudgeStaleWork(ctx context.Context, sto
 // staleWorkInspectTimeout bounds snapshot + planning + nudge delivery; generous so a
 // nudge that is delivering is not cut short and then answered with a restart.
 const staleWorkInspectTimeout = 2 * time.Minute
+
+// RecordDeadPane writes the dead-pane stop snapshot to the stuck row of the
+// session's backlog item, so the operator sees why the health checker respawned
+// it. Only a live work ItemSession qualifies; anything else is a no-op. The
+// health checker still respawns regardless — this is record-only.
+func (a *AutonomousOrchestrationService) RecordDeadPane(sessionUUID, title string, snap domain.StopSnapshot, state domain.ObservedState) {
+	storage := a.concreteStorage()
+	if storage == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(a.driverCtx(), deadPaneRecordTimeout)
+	defer cancel()
+	is, err := storage.GetItemSessionBySessionUUID(ctx, sessionUUID)
+	if err != nil || is.Role != session.SessionRoleWork || is.EndedAt != nil {
+		return
+	}
+	item, err := storage.GetBacklogItem(ctx, is.BacklogItemID)
+	if err != nil || item == nil {
+		return
+	}
+	a.refreshStuckRow(ctx, storage, item, stopRecord{
+		Session:  title,
+		ItemID:   item.ID,
+		Role:     session.SessionRoleWork,
+		Outcome:  session.AutonomousDriverOutcome{StopReason: domain.StopReasonDeadPane, Snapshot: snap},
+		State:    state,
+		Tail:     sanitizeStopTail(snap.PaneTail),
+		Recovery: stopRecovery{Action: stopActionRespawned},
+	})
+}
+
+const deadPaneRecordTimeout = 5 * time.Second
