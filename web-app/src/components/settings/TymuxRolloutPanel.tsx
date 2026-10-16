@@ -49,6 +49,8 @@ export function TymuxRolloutPanel() {
   const [sessionNames, setSessionNames] = useState<string[]>([]);
   const [newOverrideName, setNewOverrideName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [migrateTitle, setMigrateTitle] = useState("");
+  const [migrateStatus, setMigrateStatus] = useState<string | null>(null);
 
   const applyStatus = useCallback((status: {
     rollbackRehearsalCompletedAt?: Timestamp;
@@ -132,6 +134,26 @@ export function TymuxRolloutPanel() {
     }
   }, [client, applyStatus, track]);
 
+  // kibitzer:ignore replace-magic-literal -- this is a TS union type literal (the two valid
+  // ProcessManagerBackend values), not a repeated data literal; the other flagged occurrences
+  // (testIdPrefix/subjectLabel props below) are unrelated pre-existing JSX attributes.
+  const migrateSessionBackend = useCallback(async (backendOverride: "tmux" | "tymux") => {
+    const id = migrateTitle.trim();
+    if (!id) return;
+    track({ name: "tymux_session_migrated", category: "user_action", component: "TymuxRolloutPanel", labels: { backendOverride } });
+    setBusy(true);
+    setError(null);
+    setMigrateStatus(null);
+    try {
+      await sessionClient.restartSession({ id, preserveOutput: true, backendOverride });
+      setMigrateStatus(`"${id}" restarted on ${backendOverride}.`);
+    } catch {
+      setError(`Failed to migrate "${id}" to ${backendOverride}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [sessionClient, migrateTitle, track]);
+
   const removeOverride = useCallback(async (sessionName: string) => {
     track({ name: "tymux_override_removed", category: "user_action", component: "TymuxRolloutPanel" });
     setBusy(true);
@@ -212,6 +234,42 @@ export function TymuxRolloutPanel() {
           sanitized tmux session name a session with this title resolves to.
         </p>
       )}
+
+      <h3 className={styles.heading}>Migrate a live session</h3>
+      <p className={styles.description}>
+        Restarts an existing session under the target backend right now — kills the
+        current process, rebuilds it on tmux or tymux, and resumes. There is no live
+        hand-off between backends (they&apos;re different daemons), so this is a restart,
+        not an in-place swap.
+      </p>
+      <div className={styles.addRow}>
+        <input
+          className={styles.input}
+          list="tymux-session-names"
+          placeholder="Session title to migrate"
+          aria-label="Session title to migrate"
+          value={migrateTitle}
+          onChange={(e) => setMigrateTitle(e.target.value)}
+          data-testid="tymux-migrate-input"
+        />
+        <button
+          className={styles.actionButton}
+          disabled={busy || !migrateTitle.trim()}
+          onClick={() => migrateSessionBackend("tymux")}
+          data-testid="tymux-migrate-to-tymux"
+        >
+          Restart on tymux
+        </button>
+        <button
+          className={styles.actionButton}
+          disabled={busy || !migrateTitle.trim()}
+          onClick={() => migrateSessionBackend("tmux")}
+          data-testid="tymux-migrate-to-tmux"
+        >
+          Restart on tmux
+        </button>
+      </div>
+      {migrateStatus && <p className={styles.hint}>{migrateStatus}</p>}
     </section>
   );
 }
