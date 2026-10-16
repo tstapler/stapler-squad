@@ -15,6 +15,7 @@ import (
 type dag struct {
 	hashes  []plumbing.Hash
 	parents map[plumbing.Hash][]plumbing.Hash
+	when    map[plumbing.Hash]int64 // committer times; nil means all zero
 }
 
 func testHash(seed int64, i int) plumbing.Hash {
@@ -66,17 +67,17 @@ type mapSource struct {
 	onParents func(ctx context.Context, h plumbing.Hash) error
 }
 
-func (s *mapSource) Parents(ctx context.Context, h plumbing.Hash) ([]plumbing.Hash, bool, error) {
+func (s *mapSource) Parents(ctx context.Context, h plumbing.Hash) ([]plumbing.Hash, int64, bool, error) {
 	s.calls.Add(1)
 	if s.onParents != nil {
 		if err := s.onParents(ctx, h); err != nil {
-			return nil, false, err
+			return nil, 0, false, err
 		}
 	}
 	if s.truncated != nil && s.truncated(h) {
-		return nil, true, nil
+		return nil, 0, true, nil
 	}
-	return s.d.parents[h], false, nil
+	return s.d.parents[h], s.d.when[h], false, nil
 }
 
 // hashesOf resolves ids back to hashes through the generation.

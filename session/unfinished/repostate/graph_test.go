@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -102,13 +103,16 @@ func assertPointerFree(t *testing.T, typ reflect.Type) {
 	}
 }
 
-func TestGraphNoGenerationColumn_ShouldHold_WhenBestMergeBaseOff(t *testing.T) {
+// The paint-down merge base (the only walk, Q3) orders its queue by committer
+// time, so the segment carries a `when` column; there is still no generation
+// column (parents-first order cannot be guaranteed by lazy fill).
+func TestGraphColumns_ShouldBeHashParentsWhenState_WithNoGenerationColumn(t *testing.T) {
 	typ := reflect.TypeOf(segment{})
 	got := map[string]bool{}
 	for i := 0; i < typ.NumField(); i++ {
 		got[typ.Field(i).Name] = true
 	}
-	want := map[string]bool{"hash": true, "parents": true, "state": true}
+	want := map[string]bool{"hash": true, "parents": true, "when": true, "state": true}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("segment columns = %v, want exactly %v", got, want)
 	}
@@ -219,7 +223,7 @@ func TestGraph_ShouldRollBackToPending_WhenFillExitsWithoutPublishing(t *testing
 func TestGraph_ShouldNotStrandWaiter_WhenHolderFailsMidFill(t *testing.T) {
 	d := newDAG(5, 3)
 	h := d.hashes[2]
-	g := NewGraph(Options{}).Load()
+	g := NewGraph(Options{ClaimWait: time.Millisecond}).Load() // the stuck holder never wakes the waiter
 	id := mustIntern(t, g, h)
 
 	inside, release := make(chan struct{}), make(chan struct{})
@@ -245,8 +249,8 @@ func TestGraph_ShouldNotStrandWaiter_WhenHolderFailsMidFill(t *testing.T) {
 		ids, st, err := g.Fill(context.Background(), id, &mapSource{d: d}, 0, nil)
 		waiter <- res{ids, st, err}
 	}()
-	// The waiter spins a bounded number of rounds, so it may finish (by local
-	// decode) before or after the holder rolls back; either way it must return.
+	// The waiter waits at most ClaimWait, so it may finish (by local decode)
+	// before or after the holder rolls back; either way it must return.
 	r := <-waiter
 	close(release)
 	if err := <-holderErr; err == nil {

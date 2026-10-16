@@ -71,6 +71,7 @@ func unpackState(w uint32) (RowState, StampOrd) {
 type segment struct {
 	hash    [segRows]plumbing.Hash
 	parents [segRows][2]uint32
+	when    [segRows]int64 // committer unix seconds, written with parents
 	state   [segRows]atomic.Uint32
 }
 

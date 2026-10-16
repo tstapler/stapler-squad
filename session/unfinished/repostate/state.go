@@ -38,6 +38,52 @@ type RepoState struct {
 	budget   int64
 	products atomic.Pointer[productSet]
 	closed   atomic.Bool
+	graph    atomic.Pointer[Graph]
+	shallow  atomic.Pointer[ShallowStamp]
+	scratch  scratchPool
+}
+
+// ShallowStamp fingerprints `<commondir>/shallow`; the zero value means the
+// file is absent. It is repo-level: git keeps `shallow` in the common dir.
+type ShallowStamp struct {
+	Exists  bool
+	Size    int64
+	MtimeNs int64
+}
+
+// Graph returns the commit graph, creating it (bounded by Options.MaxGraphCommits)
+// and registering it in TierGraph on first use. After Close it returns an
+// unregistered graph, so a late caller still has a working one.
+func (s *RepoState) Graph() *Graph {
+	if g := s.graph.Load(); g != nil {
+		return g
+	}
+	fresh := NewGraph(s.opts)
+	if !s.graph.CompareAndSwap(nil, fresh) {
+		return s.graph.Load()
+	}
+	s.Register(TierGraph, fresh)
+	return fresh
+}
+
+// ObserveShallow records the current shallow stamp and returns the stamp
+// ordinal to walk under. A change bumps the graph's ordinal once (stale
+// Truncated rows then re-probe lazily); a racing observer may return the
+// pre-bump ordinal, which only costs it an extra re-probe.
+func (s *RepoState) ObserveShallow(cur ShallowStamp) StampOrd {
+	g := s.Graph()
+	for {
+		old := s.shallow.Load()
+		if old != nil && *old == cur {
+			return g.Load().StampOrd()
+		}
+		if s.shallow.CompareAndSwap(old, &cur) {
+			if old == nil {
+				return g.Load().StampOrd() // first observation: nothing recorded under another stamp
+			}
+			return g.Load().BumpStamp()
+		}
+	}
 }
 
 // NewRepoState returns an empty state. budgetBytes is the size above which a

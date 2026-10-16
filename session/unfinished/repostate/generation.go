@@ -3,6 +3,7 @@ package repostate
 import (
 	"errors"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/puzpuzpuz/xsync/v4"
@@ -11,6 +12,10 @@ import (
 // ErrGraphFull means the arena reached Options.MaxGraphCommits (or its side
 // arena is exhausted); callers fall back to the plain walk for that call.
 var ErrGraphFull = errors.New("repostate: commit graph full")
+
+// ErrPressure means severe memory pressure forbade filling a new row; callers
+// run the plain walk for that call. Rows already published are still served.
+var ErrPressure = errors.New("repostate: severe memory pressure")
 
 // GraphEpoch names one assignment of ids. Ids are stable and never reused
 // within an epoch; a Drop starts a new one.
@@ -22,6 +27,8 @@ type graphHooks struct {
 	Yield func()
 	// PayloadWritten is called by the claim holder after it writes a row's payload.
 	PayloadWritten func(id uint32)
+	// ClaimWait is the loser's bounded wait for the holder (see Options.ClaimWait).
+	ClaimWait time.Duration
 }
 
 // bindingIndexBytesPerRow estimates the pointer-bearing hash->id index
@@ -38,6 +45,8 @@ type graphStats struct {
 	rollback       padded[atomic.Uint64]
 	casRetries     padded[atomic.Uint64]
 	graphFull      padded[atomic.Uint64]
+	rowHits        padded[atomic.Uint64] // walk reads served from a Filled/Truncated row
+	rowMisses      padded[atomic.Uint64] // walk reads that had to Fill a row
 }
 
 // GraphStats is a point-in-time copy of the contention counters, cumulative
@@ -64,6 +73,10 @@ type Generation struct {
 
 	segs       atomic.Int64
 	sideChunks atomic.Int64
+
+	// waiters are striped wake channels: a claim loser registers one per
+	// stripe, the holder closes it after publishing (Generation.awaitPublish).
+	waiters [waiterStripes]atomic.Pointer[chan struct{}]
 
 	next     padded[atomic.Uint64]
 	sideNext padded[atomic.Uint64]
@@ -103,8 +116,13 @@ func (g *Generation) Len() int { return int(g.next.V.Load()) }
 // Cap is the fixed row capacity.
 func (g *Generation) Cap() int { return int(g.cap) }
 
-// Bytes estimates the heap held by this generation without walking rows.
+// Bytes estimates the heap held by this generation without walking rows. An
+// empty generation reports zero: its fixed pointer directories (about 10 KB at
+// the default capacity) are not worth a nonzero floor on every idle RepoState.
 func (g *Generation) Bytes() int64 {
+	if g.Len() == 0 {
+		return 0
+	}
 	dir := int64(len(g.dir)+len(g.side)) * 8
 	return g.segs.Load()*segmentBytes + g.sideChunks.Load()*sideChunkBytes + dir +
 		int64(g.Len())*bindingIndexBytesPerRow
@@ -231,9 +249,15 @@ func (g *Generation) AppendParents(dst []uint32, id uint32) ([]uint32, RowState)
 	return dst, Filled
 }
 
-// writePayload stores ids as the row's parents. Only the claim holder calls it,
-// before the publishing store.
-func (g *Generation) writePayload(id uint32, ids []uint32) error {
+// When returns the committer time of a row observed Filled; it is meaningless
+// for any other state. Written with the payload, before the publishing store.
+func (g *Generation) When(id uint32) int64 {
+	return g.dir[id>>segShift].Load().when[id&segMask]
+}
+
+// writePayload stores ids and the committer time as the row's payload. Only
+// the claim holder calls it, before the publishing store.
+func (g *Generation) writePayload(id uint32, ids []uint32, when int64) error {
 	var word [2]uint32
 	switch {
 	case len(ids) == 0:
@@ -253,7 +277,9 @@ func (g *Generation) writePayload(id uint32, ids []uint32) error {
 		copy(chunk[off+1:], ids[1:])
 		word = [2]uint32{ids[0], sideFlag | uint32(start)}
 	}
-	g.segmentFor(uint64(id) >> segShift).parents[id&segMask] = word
+	seg := g.segmentFor(uint64(id) >> segShift)
+	seg.parents[id&segMask] = word
+	seg.when[id&segMask] = when
 	if g.hooks.PayloadWritten != nil {
 		g.hooks.PayloadWritten(id)
 	}
@@ -320,6 +346,10 @@ func newGraph(opts Options, hooks graphHooks) *Graph {
 	if n > maxRows {
 		n = maxRows
 	}
+	hooks.ClaimWait = opts.ClaimWait
+	if hooks.ClaimWait <= 0 {
+		hooks.ClaimWait = defaultClaimWait
+	}
 	g := &Graph{maxRows: n, hooks: hooks, stats: &graphStats{}}
 	g.gen.Store(newGeneration(1, n, hooks, g.stats))
 	return g
@@ -340,6 +370,19 @@ func (g *Graph) Drop() {
 		if g.gen.CompareAndSwap(old, newGeneration(old.epoch+1, g.maxRows, g.hooks, g.stats)) {
 			return
 		}
+	}
+}
+
+// CacheStats reports the arena as a cache: a hit is a walk read served from a
+// published row, a miss one that had to fill it (the engagement signal the
+// shared-path tests assert on). Entries is the allocated row count.
+func (g *Graph) CacheStats() CacheStats {
+	gen := g.Load()
+	return CacheStats{
+		Hits:    int64(g.stats.rowHits.V.Load()),
+		Misses:  int64(g.stats.rowMisses.V.Load()),
+		Entries: gen.Len(),
+		Bytes:   gen.Bytes(),
 	}
 }
 

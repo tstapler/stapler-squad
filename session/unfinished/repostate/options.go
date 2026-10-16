@@ -13,6 +13,10 @@ type Options struct {
 	PressureFunc func() bool
 	// MaxGraphCommits bounds the commit graph (consumed by the graph, Story 2.1.x).
 	MaxGraphCommits int
+	// ClaimWait bounds how long a loser of a row's fill claim waits for the
+	// holder to publish before decoding the commit itself without publishing;
+	// zero means defaultClaimWait.
+	ClaimWait time.Duration
 }
 
 func (o Options) now() time.Time {
