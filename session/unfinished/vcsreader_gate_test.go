@@ -3,6 +3,7 @@
 package unfinished
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -49,4 +50,50 @@ func TestHasUncommittedClean_ShouldReparse_WhenIndexMtimeWithin2sOfParse(t *test
 
 	assert.Zero(t, g.ScanSkipStats().IndexHits)
 	assert.Greater(t, skip, 0.60*legacy, "a racy index is re-parsed, so the saving must vanish (legacy=%.0f skip=%.0f)", legacy, skip)
+}
+
+// GA7, the one deterministic "scales with changes, not files" shape gate. The
+// per-file lstat pass stays O(files) by the ADR-006 hard rule and costs exactly
+// one heap allocation per call (x/sys/unix.Fstatat copies the name into a
+// NUL-terminated buffer), so total allocs/op cannot be sublinear; the gate
+// bounds everything else: the allocations beyond one per tracked file must not
+// grow with the file count once the index and directory caches hit.
+func TestHasUncommittedAllocs_ShouldGrowSublinearlyInFiles_WhenIndexCacheHits(t *testing.T) {
+	residual := func(n int) float64 {
+		_, dir := trackedRepo(t, manyFiles(n))
+		g := newSkipReader()
+		allocs := scanAllocs(t, g, dir)
+		s := g.ScanSkipStats()
+		require.Greater(t, s.IndexHits, int64(0), "engagement: index cache (n=%d)", n)
+		require.Greater(t, s.DirsSkipped, int64(0), "engagement: untracked directory cache (n=%d)", n)
+		return allocs - float64(n)
+	}
+	small, large := residual(5000), residual(20000)
+	t.Logf("allocs beyond one lstat per file: 5,000 files=%.0f, 20,000 files=%.0f (ratio %.2f)", small, large, large/small)
+	assert.LessOrEqual(t, large/small, 1.5)
+}
+
+// The untracked walk is 34.1% of diffShortstatUncached CPU in the S1 profile
+// (baseline.md). Warm, the verdict cache replaces per-directory ReadDir and
+// per-entry matcher/lookup work with one stat per directory.
+func TestUntrackedWalkSkip_ShouldAllocAtMost25PctOfLegacy_WhenWarm(t *testing.T) {
+	f := newWalkFixture(t)
+	f.write(".gitignore", "*.log\n")
+	f.track(".gitignore")
+	for i := range 20000 {
+		rel := fmt.Sprintf("d%02d/s%d/f%05d.go", i%50, i%3, i)
+		f.write(rel, "x\n")
+		f.track(rel)
+	}
+	f.write("d07/untracked.txt", "u\n")
+	f.refreshMatcher()
+	noop := func(string) {}
+	require.NoError(t, f.g.walkUntrackedSkip(f.root, f.indexed, f.matcher, f.tg, noop)) // cold fill
+
+	legacy := testing.AllocsPerRun(5, func() { _ = walkUntracked(f.root, f.indexed, f.matcher, noop) })
+	skip := testing.AllocsPerRun(5, func() { _ = f.g.walkUntrackedSkip(f.root, f.indexed, f.matcher, f.tg, noop) })
+
+	require.Greater(t, f.stats().DirsSkipped, int64(0), "engagement")
+	t.Logf("untracked walk, 20,000 files / 200 dirs: legacy=%.0f allocs/op, cached=%.0f allocs/op (%.1f%%)", legacy, skip, 100*skip/legacy)
+	assert.LessOrEqual(t, skip, 0.25*legacy)
 }
