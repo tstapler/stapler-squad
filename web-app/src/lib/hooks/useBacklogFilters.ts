@@ -1,4 +1,5 @@
 import { usePersistedViewState, type PersistedFieldsConfig } from "@/lib/hooks/usePersistedViewState";
+import { isFilterableSourceId, resolveSourceId } from "@/lib/backlog/sourceBadge";
 import type { BacklogItem, BacklogItemStatus } from "@/lib/hooks/useBacklogService";
 
 // ---------------------------------------------------------------------------
@@ -47,7 +48,7 @@ export const BACKLOG_FILTER_FIELDS: PersistedFieldsConfig<BacklogFilterState> = 
   sourceFilter: {
     key: "stapler-squad-backlog-source-filter",
     defaultValue: [],
-    isValid: (v) => Array.isArray(v) && v.every((s) => typeof s === "string"),
+    isValid: (v) => Array.isArray(v) && v.every(isFilterableSourceId),
   },
   showArchived: {
     key: "stapler-squad-backlog-show-archived",
@@ -66,7 +67,7 @@ export function filterBacklogItems(items: BacklogItem[], filters: BacklogFilterS
     if (!filters.showArchived && item.status === "archived") return false;
     if (filters.statusFilter.length > 0 && !filters.statusFilter.includes(item.status)) return false;
     if (filters.priorityFilter.length > 0 && !filters.priorityFilter.includes(item.priority)) return false;
-    if (filters.sourceFilter.length > 0 && !filters.sourceFilter.includes(item.pluginId ?? "")) return false;
+    if (filters.sourceFilter.length > 0 && !filters.sourceFilter.includes(resolveSourceId(item) ?? "")) return false;
     if (q && !item.title.toLowerCase().includes(q) && !(item.description ?? "").toLowerCase().includes(q)) {
       return false;
     }

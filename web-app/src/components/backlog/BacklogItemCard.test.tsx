@@ -1013,3 +1013,28 @@ describe("BacklogItemCard source badge", () => {
     expect(screen.getByLabelText("Imported from GitHub issue acme/widgets#22")).toBeInTheDocument();
   });
 });
+
+describe("BacklogItemCard source badge URL safety and fallbacks", () => {
+  it("renders no link for a javascript: externalUrl", () => {
+    const { container } = render(
+      <BacklogItemCard
+        item={makeItem({ pluginId: "linear", externalId: "ENG-1", externalUrl: "javascript:alert(1)" })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+    expect(container.querySelector("a")).toBeNull();
+    expect(screen.getByText("ENG-1")).toBeInTheDocument();
+  });
+
+  it("uses a neutral External badge for an unknown non-empty plugin id", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ pluginId: "constructor", externalId: "X-1", externalUrl: "https://example.com/x/1" })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+    expect(screen.getByLabelText("Imported from External issue X-1")).toBeInTheDocument();
+  });
+});

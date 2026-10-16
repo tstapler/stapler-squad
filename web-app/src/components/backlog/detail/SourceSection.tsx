@@ -8,8 +8,8 @@
 // assumed exists (see BacklogItemCard.tsx for the same substitution).
 import { CircleDot } from "lucide-react";
 import { CollapsibleSection } from "@/components/ui/Collapsible";
-import { parseExternalRef } from "../externalRef";
-import { getSourceBadgeConfig } from "@/lib/backlog/sourceBadge";
+import { safeExternalHref } from "../externalRef";
+import { buildExternalRefLabels, getSourceBadgeConfig } from "@/lib/backlog/sourceBadge";
 import * as styles from "./SourceSection.css";
 
 export interface SourceSectionProps {
@@ -34,21 +34,24 @@ export interface SourceSectionProps {
  */
 export function SourceSection({ externalUrl, externalId, pluginId, labels, defaultExpanded }: SourceSectionProps) {
   const source = getSourceBadgeConfig(pluginId);
-  const ref = pluginId && pluginId !== "github_issues" ? undefined : parseExternalRef(externalUrl);
-  const refLabel = !externalId ? "" : ref ? `${ref.repo}#${ref.number}` : `${source.idPrefix}${externalId}`;
+  const refLabel = externalId ? buildExternalRefLabels(pluginId, externalUrl, externalId).fullRef : "";
+  const href = safeExternalHref(externalUrl);
+  const content = (
+    <>
+      <CircleDot aria-hidden="true" size={14} />
+      {refLabel ? `Issue ${refLabel}` : "Issue"}
+    </>
+  );
   return (
     <CollapsibleSection sectionKey="source" title="Source" defaultExpanded={defaultExpanded}>
       <div className={styles.section}>
-        <a
-          href={externalUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={styles.link}
-          title={source.openLabel}
-        >
-          <CircleDot aria-hidden="true" size={14} />
-          {refLabel ? `Issue ${refLabel}` : "Issue"}
-        </a>
+        {href ? (
+          <a href={href} target="_blank" rel="noopener noreferrer" className={styles.link} title={source.openLabel}>
+            {content}
+          </a>
+        ) : (
+          <span className={styles.link}>{content}</span>
+        )}
         {labels.length > 0 && (
           <div className={styles.labels}>
             {labels.map((label) => (

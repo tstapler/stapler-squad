@@ -15,6 +15,9 @@ export interface PluginSchema {
   // BacklogSourcesSettings.tsx renders a link to that page instead of a
   // token input when this is set.
   credentialsManagedExternally?: boolean;
+  // With credentialsManagedExternally, replaces the GitHub-accounts link for
+  // plugins whose credentials come from the server's keychain/environment.
+  credentialsHelp?: string;
 }
 
 // Adding a source type for a new plugin (e.g. Jira, Linear) means adding one entry
@@ -43,6 +46,20 @@ export const PLUGIN_SCHEMAS: PluginSchema[] = [
     requiresToken: true,
     tokenLabel: "Linear API key",
     credentialsManagedExternally: true,
+    credentialsHelp: "Credentials are read from the server's keychain or the LINEAR_API_KEY environment variable.",
+  },
+  {
+    id: "jira",
+    label: "JIRA",
+    fields: [
+      { key: "base_url", label: "Base URL", placeholder: "Base URL (e.g. https://acme.atlassian.net)" },
+      { key: "project_key", label: "Project Key", placeholder: "Project key (e.g. ENG)" },
+    ],
+    requiresToken: true,
+    tokenLabel: "JIRA API token",
+    credentialsManagedExternally: true,
+    credentialsHelp:
+      "Credentials are read from the server's keychain or the JIRA_BASE_URL, JIRA_EMAIL and JIRA_API_TOKEN environment variables.",
   },
   {
     id: "github_prs",

@@ -142,6 +142,15 @@ describe("filterBacklogItems sourceFilter", () => {
     expect(out.map((i) => i.id)).toEqual(["a"]);
   });
 
+  it("matches an imported item lacking pluginId under the GitHub chip", () => {
+    const legacy = [
+      makeItem({ id: "legacy", externalUrl: "https://github.com/acme/w/issues/1", externalId: "1" }),
+      makeItem({ id: "manual" }),
+    ] as BacklogItem[];
+    const out = filterBacklogItems(legacy, { ...NO_OP_FILTERS, sourceFilter: ["github_issues"] });
+    expect(out.map((i) => i.id)).toEqual(["legacy"]);
+  });
+
   it("shows everything when no source is selected", () => {
     expect(filterBacklogItems(items, NO_OP_FILTERS)).toHaveLength(3);
   });
