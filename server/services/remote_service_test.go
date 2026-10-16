@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session/sshremote"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // startRemoteTestSSHServer starts a minimal in-process SSH server on an
@@ -585,4 +586,98 @@ func TestSplitHostPort(t *testing.T) {
 			require.Equal(t, tt.wantPort, gotPort)
 		})
 	}
+}
+
+// startRotatableRemoteTestSSHServer is startRemoteTestSSHServer plus a rotate
+// func that re-listens on the SAME address with a fresh host key. Only the
+// listener is closed on rotate; connections already accepted stay alive, so a
+// client pooled before rotation remains live -- the state a real remote is in
+// when its key changes while a session is connected.
+func startRotatableRemoteTestSSHServer(t *testing.T) (addr string, hostKey ssh.PublicKey, rotate func() ssh.PublicKey) {
+	t.Helper()
+
+	serve := func(ln net.Listener) (*gliderssh.Server, ssh.PublicKey) {
+		_, priv, err := ed25519.GenerateKey(rand.Reader)
+		require.NoError(t, err)
+		signer, err := ssh.NewSignerFromSigner(priv)
+		require.NoError(t, err)
+		srv := &gliderssh.Server{
+			Handler:          func(s gliderssh.Session) { _ = s.Exit(0) },
+			PublicKeyHandler: func(gliderssh.Context, gliderssh.PublicKey) bool { return true },
+		}
+		srv.AddHostKey(signer)
+		go func() { _ = srv.Serve(ln) }()
+		return srv, signer.PublicKey()
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr = ln.Addr().String()
+	srv, hostKey := serve(ln)
+	servers := []*gliderssh.Server{srv}
+	t.Cleanup(func() {
+		for _, s := range servers {
+			_ = s.Close()
+		}
+	})
+
+	rotate = func() ssh.PublicKey {
+		_ = ln.Close()
+		newLn, err := net.Listen("tcp", addr)
+		require.NoError(t, err)
+		ln = newLn
+		newSrv, newKey := serve(newLn)
+		servers = append(servers, newSrv)
+		return newKey
+	}
+	return addr, hostKey, rotate
+}
+
+// TestTestRemoteConnection_PoolHit_DoesNotMaskRotatedHostKey: a live pooled
+// connection under the remote's name (e.g. an active session) must not let
+// TestRemoteConnection report Success after the remote's host key rotated.
+func TestTestRemoteConnection_PoolHit_DoesNotMaskRotatedHostKey(t *testing.T) {
+	remoteName := uniqueRemoteName(t)
+	addr, oldKey, rotate := startRotatableRemoteTestSSHServer(t)
+	cfg := &config.Config{Remotes: []config.RemoteConfig{
+		{Name: remoteName, Host: addr, User: "testuser", IdentityRef: remoteName},
+	}}
+	svc, knownHosts, keyStore := newTestRemoteService(t, cfg)
+	_, err := keyStore.GenerateAndStoreIdentity(context.Background(), remoteName)
+	require.NoError(t, err)
+	require.NoError(t, knownHosts.Trust(addr, oldKey))
+
+	// Stand-in for an active session: pool a live connection under the name.
+	pool := tmux.DefaultSSHClientPool()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	signer, err := ssh.NewSignerFromSigner(priv)
+	require.NoError(t, err)
+	pooled, err := pool.GetOrDial(context.Background(), tmux.SSHTarget{Name: remoteName, Addr: addr}, &ssh.ClientConfig{
+		User:            "testuser",
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback: knownHosts.HostKeyCallback(),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = pool.Remove(remoteName); _ = pooled.Close() })
+
+	rotate()
+	refsBefore := pool.RefCount(remoteName)
+
+	resp, err := svc.TestRemoteConnection(context.Background(), connect.NewRequest(&sessionv1.TestRemoteConnectionRequest{
+		RemoteName: remoteName,
+	}))
+	require.NoError(t, err)
+	require.False(t, resp.Msg.Success, "pooled connection masked the rotated host key")
+	require.False(t, resp.Msg.HostKeyUnknown)
+	require.NotEmpty(t, resp.Msg.ErrorMessage)
+
+	// The probe must not disturb the active session's pooled connection.
+	require.Equal(t, refsBefore, pool.RefCount(remoteName))
+	live, ok := pool.Peek(remoteName)
+	require.True(t, ok)
+	require.Same(t, pooled, live)
+	sess, err := live.NewSession()
+	require.NoError(t, err, "pooled connection must stay usable")
+	_ = sess.Close()
 }

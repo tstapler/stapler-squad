@@ -61,9 +61,11 @@ func NewRemoteService(knownHosts *sshremote.KnownHostsStore, keyStore *sshremote
 }
 
 // +api: remote:test-connection
-// TestRemoteConnection attempts to dial the named remote via a real
-// tmux.SSHRunner, using s.knownHosts.HostKeyCallback() as the connection's
-// trust check. An unknown host key is mapped to the structured
+// TestRemoteConnection attempts a fresh dial of the named remote via
+// tmux.DialFresh, using s.knownHosts.HostKeyCallback() as the connection's
+// trust check. It deliberately never uses the shared SSHClientPool: a pooled
+// hit skips HostKeyCallback, which would mask a rotated or MITM'd host key
+// behind a live session's connection. An unknown host key is mapped to the structured
 // host_key_unknown/fingerprint response shape rather than surfaced as a raw
 // ConnectRPC error, per Epic 3.3's TOFU confirmation flow -- the frontend
 // renders that as a "Trust and connect" / "Cancel" dialog rather than an
@@ -87,9 +89,12 @@ func (s *RemoteService) TestRemoteConnection(
 		Auth:            resolveIdentityAuthMethods(ctx, s.keyStore, target.identityRef),
 		HostKeyCallback: s.knownHosts.HostKeyCallback(),
 	}
-	runner := tmux.NewSSHRunner(sshTarget, clientConfig)
 
-	if err := runner.Dial(ctx); err != nil {
+	client, err := tmux.DialFresh(ctx, sshTarget, clientConfig)
+	if err == nil {
+		_ = client.Close()
+	}
+	if err != nil {
 		var unknownErr *tmux.ErrUnknownHostKey
 		if errors.As(err, &unknownErr) {
 			return connect.NewResponse(&sessionv1.TestRemoteConnectionResponse{
