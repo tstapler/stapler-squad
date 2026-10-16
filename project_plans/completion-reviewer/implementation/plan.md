@@ -858,3 +858,19 @@ a visible trace per firing.
   `ScanForPromptInjection` (per `project_plans/operator-memory/implementation/plan.md`'s Epic 1 +
   Epic 2) before `server/services/completion_reviewer_memory.go` compiles. See
   [ADR-002](../decisions/ADR-002-memory-write-ownership.md).
+
+---
+
+## Addendum (implementation time): live ACs supersede this plan's mechanism
+
+The backlog item's live acceptance criteria (post-triage) differ from the plan above; they win:
+
+- **Restricted call**: `headless.Pool.CallBlocking` with the new `CallOptions.NoTools` (one-shot subprocess,
+  `--tools "" --strict-mcp-config --disable-slash-commands`, run in an empty temp dir) instead of the direct
+  `AnthropicAIClient` (ADR-001 option b). No credential plumbing is needed; the claude CLI's own auth is used.
+  Self-check: `TestPool_RealClaude_NoTools_CannotRunBash` (integration tag) plus `WithNoTools` arg-shape unit tests.
+- **Rollout flag** `backlog:completion-reviewer` (default off) in `knownFeatureFlags`, read per event.
+- **Panic recovery** inside the semaphore-bounded goroutine (`safeReview`); `ParseReviewOutcome` tolerates fences/prose.
+- **Memory store**: `session/opmemory` does not exist, so `fileMemoryStore` (append-only, flock, 64KB cap, injection
+  deny-list) writes `<config>/completion-reviews/<repo>-<hash>.md` behind the `MemoryStore` seam. AC7 is vacuous as before.
+- Dropped from the plan: `Tags`, the Anthropic credential chain, `AIClient` reuse.

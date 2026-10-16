@@ -51,6 +51,10 @@ type CallOptions struct {
 	// UUID once known, so a caller can persist it for later cost attribution. Not
 	// invoked when the call fails before producing a result.
 	OnConversationID func(conversationID string)
+	// NoTools makes the call text-only: no built-in tools, no MCP servers, no skills (see
+	// ProcessRunner.WithNoTools). Requires WorkDir (the one-shot path); the caller should
+	// point WorkDir at an empty directory. Overrides AllowedTools/DisallowedTools.
+	NoTools bool
 	// MaxTurns and MaxSubagents abort the call with ErrFanoutCeilingExceeded once
 	// the stream shows more than that many assistant turns / subagent launches.
 	// Zero disables the limit. Like AllowedTools, only applied when WorkDir is set.
@@ -758,6 +762,9 @@ func (p *Pool) CallWithOptions(ctx context.Context, key FeatureKey, systemPrompt
 		dirRunner := pr.WithWorkDir(opts.WorkDir)
 		if opts.AllowedTools != "" || opts.PermissionMode != "" || opts.DisallowedTools != "" {
 			dirRunner = dirRunner.WithToolAccess(opts.AllowedTools, opts.PermissionMode, opts.DisallowedTools)
+		}
+		if opts.NoTools {
+			dirRunner = dirRunner.WithNoTools()
 		}
 		oneShot := NewPoolWithRunner(PoolConfig{MaxCallsPerSession: 1, MaxConcurrentSessions: 1, DefaultModel: opts.Model}, dirRunner)
 		oneShot.fanout = FanoutLimits{MaxTurns: opts.MaxTurns, MaxSubagents: opts.MaxSubagents}

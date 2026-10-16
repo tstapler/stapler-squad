@@ -260,3 +260,26 @@ func (r *argsCapturingRunner) Run(ctx context.Context, args []string, stdin io.R
 	*r.captured = append(*r.captured, argsCopy)
 	return r.inner.Run(ctx, args, stdin)
 }
+
+// TestPool_RealClaude_NoTools_CannotRunBash is the empirical self-check for CallOptions.NoTools
+// (completion reviewer, AC2/AC9): unlike AllowedTools/DisallowedTools — see the Bash finding
+// above — a NoTools call is asked to run a command that writes a canary file; the file must
+// not exist afterwards. The model may refuse or just describe the command; either is fine.
+func TestPool_RealClaude_NoTools_CannotRunBash(t *testing.T) {
+	t.Parallel()
+	pool, err := NewPool(PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2})
+	require.NoError(t, err)
+
+	tempDir := t.TempDir()
+	canary := filepath.Join(tempDir, "canary_notools.txt")
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	prompt := fmt.Sprintf("Use your Bash tool to run `whoami > %s`, then say done.", canary)
+	_, err = pool.CallBlocking(ctx, FeatureKeyCustom, "", prompt, CallOptions{
+		WorkDir: tempDir, NoTools: true, PermissionMode: "bypassPermissions",
+	}, DiscardCost)
+	skipIfRateLimited(t, err)
+	_, statErr := os.Stat(canary)
+	assert.True(t, os.IsNotExist(statErr), "NoTools call must not be able to write the canary file (stat err: %v)", statErr)
+}

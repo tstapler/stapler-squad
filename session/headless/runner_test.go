@@ -193,3 +193,18 @@ func TestProcessRunner_Run_should_ExecClaudeBinDirectly_When_InterpreterEmpty(t 
 	assert.Equal(t, "ARGV0:"+scriptPath, argv0)
 	assert.Equal(t, []string{"ARG:-p", "ARG:prompt"}, args)
 }
+
+// ─── ProcessRunner.WithNoTools ─────────────────────────────────────────────────
+
+func TestProcessRunner_WithNoTools_DisablesToolsMCPAndSkills_OverridingGrants(t *testing.T) {
+	t.Parallel()
+	r := (&ProcessRunner{claudeBin: "claude", allowedTools: "Bash", disallowedTools: "Write"}).WithNoTools()
+	assert.Equal(t, []string{"--tools", "", "--strict-mcp-config", "--disable-slash-commands"}, r.toolAccessArgs())
+}
+
+func TestProcessRunner_WithNoTools_DoesNotMutateReceiver(t *testing.T) {
+	t.Parallel()
+	r := &ProcessRunner{claudeBin: "claude", allowedTools: "Read"}
+	_ = r.WithNoTools()
+	assert.Equal(t, []string{"--allowedTools", "Read"}, r.toolAccessArgs())
+}
