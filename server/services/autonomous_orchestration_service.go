@@ -75,6 +75,8 @@ type AutonomousOrchestrationService struct {
 	diagnoseNudgeEnabled func() bool
 	stallNudgeEnabled    func() bool
 	restartDriver        func(*session.Instance, time.Duration) error
+	// staleSnapshot replaces the real pane capture of InspectStaleWork (tests).
+	staleSnapshot func(*session.Instance) domain.StopSnapshot
 	// recoveries holds the cancel of each in-flight stall recovery, by session title (guarded by mu).
 	recoveries map[string]*stallRecovery
 }
