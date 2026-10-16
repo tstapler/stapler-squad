@@ -1888,3 +1888,22 @@ func TestLoadConfig_MalformedContextHealthBlockFallsBackToDefaults(t *testing.T)
 	require.NotPanics(t, func() { cfg = LoadConfig() })
 	assert.Equal(t, 3, cfg.ContextHealth.LoopRepeatThreshold)
 }
+
+// TestUnfinishedCachesConfig_ShouldDefaultAllFalse_AndLoadPerInstanceConfigJson
+// verifies the scanner rollback-unit flags default off and load from config.json.
+func TestUnfinishedCachesConfig_ShouldDefaultAllFalse_AndLoadPerInstanceConfigJson(t *testing.T) {
+	assert.Equal(t, UnfinishedCaches{}, DefaultConfig().UnfinishedCaches)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{}`), 0600))
+	cfg, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.Equal(t, UnfinishedCaches{}, cfg.UnfinishedCaches)
+
+	content := `{"unfinished_caches": {"shared_commit_state": true, "scan_skip": true}}`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+	cfg, err = LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.Equal(t, UnfinishedCaches{SharedCommitState: true, ScanSkip: true}, cfg.UnfinishedCaches)
+}

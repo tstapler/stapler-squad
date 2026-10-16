@@ -192,6 +192,23 @@ func resolveDefaultConfigDir(dir, baseDir string) (string, error) {
 	return result.Dir, nil
 }
 
+// UnfinishedCaches are the rollback-unit flags of the unfinished-work scanner
+// (project_plans/unfinished-scanner-dsa-perf ADR-008). Each unit can be turned
+// off in config.json without a deploy; dependents are normalized by
+// unfinished.EffectiveFlags.
+type UnfinishedCaches struct {
+	// SharedCommitState enables the per-repository shared commit state (graph,
+	// reach, ahead/behind memos, shared HEAD tree maps).
+	SharedCommitState bool `json:"shared_commit_state"`
+	// DiffCounter enables the Myers diff counter and per-file diff memo.
+	DiffCounter bool `json:"diff_counter"`
+	// ScanSkip enables scan skipping (ref snapshot, scan signature, index cache,
+	// untracked pruning, single stat pass).
+	ScanSkip bool `json:"scan_skip"`
+	// WatchWorktreeGitdirs enables Tier A linked-worktree gitdir watching.
+	WatchWorktreeGitdirs bool `json:"watch_worktree_gitdirs"`
+}
+
 // Config represents the application configuration
 type Config struct {
 	// executor is the command executor used for shell command discovery.
@@ -292,6 +309,10 @@ type Config struct {
 	// Empty string (the default) disables continuous profiling.
 	// Example: "http://localhost:4040"
 	PyroscopeServerAddress string `json:"pyroscope_server_address,omitempty"`
+	// UnfinishedCaches holds the rollback-unit flags for the unfinished-work
+	// scanner's shared caches. Read once at startup (restart-only); every flag
+	// defaults to false. See session/unfinished/flags.go for dependencies.
+	UnfinishedCaches UnfinishedCaches `json:"unfinished_caches"`
 	// NewProjectBaseDir is the base directory where new project directories are created.
 	// Default: "~/Projects". Tilde is expanded at runtime. Created on first use.
 	// Zero-value (empty string) is backwards-compatible — existing configs load without change.
