@@ -143,3 +143,42 @@ func TestJiraPlugin_MapToBacklogItem_should_TruncateLongText(t *testing.T) {
 	require.Len(t, got.Title, 200)
 	require.Len(t, got.Description, 2000)
 }
+
+func TestParseJiraIssueRef(t *testing.T) {
+	t.Parallel()
+	base, key, err := ParseJiraIssueRef("https://acme.atlassian.net/browse/ENG-123?focusedCommentId=1")
+	require.NoError(t, err)
+	require.Equal(t, "https://acme.atlassian.net", base)
+	require.Equal(t, "ENG-123", key)
+	base, key, err = ParseJiraIssueRef("eng-7")
+	require.NoError(t, err)
+	require.Equal(t, "", base)
+	require.Equal(t, "ENG-7", key)
+	for _, bad := range []string{"", "ftp://x/browse/ENG-1", "https://acme.atlassian.net/projects/ENG", "nope"} {
+		_, _, err := ParseJiraIssueRef(bad)
+		require.Error(t, err, bad)
+	}
+}
+
+func TestJiraPlugin_FetchIssue_should_ReturnItem_And_ClassifyErrors(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/ENG-404") {
+			w.WriteHeader(404)
+			return
+		}
+		adf := `{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"hello"}]}]}`
+		fmt.Fprint(w, jiraIssueJSON("ENG-5", "2026-08-01T10:00:00.000+0000", "High", adf))
+	}))
+	defer ts.Close()
+	cfg := jiraCfg(ts)
+	item, err := NewJiraPlugin().FetchIssue(context.Background(), cfg, "ENG-5")
+	require.NoError(t, err)
+	require.Equal(t, "hello", item.Description)
+	require.Equal(t, ts.URL+"/browse/ENG-5", item.URL)
+	_, err = NewJiraPlugin().FetchIssue(context.Background(), cfg, "ENG-404")
+	require.ErrorContains(t, err, "not found")
+	_, err = NewJiraPlugin().FetchIssue(context.Background(), PluginConfig{Raw: `{"base_url":"https://nocreds.atlassian.net"}`}, "ENG-5")
+	require.ErrorContains(t, err, "not configured")
+	_, err = NewJiraPlugin().FetchIssue(context.Background(), PluginConfig{}, "ENG-5")
+	require.ErrorContains(t, err, "base_url")
+}

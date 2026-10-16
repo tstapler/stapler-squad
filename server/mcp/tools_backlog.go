@@ -306,6 +306,12 @@ type backlogHandlers struct {
 	// link_session_to_item return ErrUnavailable (stdio fallback, see ADR-001).
 	backlogSvc *services.BacklogService
 
+	// fetchLinearIssue / fetchJiraIssue back import_linear_issue / import_jira_issue.
+	// Default to the real plugins' FetchIssue when nil; overridable in tests to
+	// avoid real network calls.
+	fetchLinearIssue func(ctx context.Context, identifier string) (session.ExternalItem, error)
+	fetchJiraIssue   func(ctx context.Context, baseURL, key string) (session.ExternalItem, error)
+
 	// verifyPRMatchesBranch backs report_pr_created's GitHub cross-check.
 	// Defaults to VerifyPRMatchesBranch (tools_github.go) when nil;
 	// overridable in tests to avoid making real GitHub API calls.
@@ -2809,6 +2815,8 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 
 // registerBacklogTools registers all backlog-related MCP tools on the server.
 func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
+	h.registerTrackerImportTools(s)
+
 	registerBacklogDependencyTools(s, h)
 
 	s.AddTool(

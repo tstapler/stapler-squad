@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -260,4 +262,55 @@ func linearPriorityToBacklog(p int) int {
 // MapToBacklogItem converts a Linear ExternalItem to a BacklogItemData.
 func (l *LinearPlugin) MapToBacklogItem(item ExternalItem, sourceID string) BacklogItemData {
 	return mapExternalToBacklogItem(item, sourceID)
+}
+
+const linearIssueByIDQuery = `query Issue($id: String!) {
+  issue(id: $id) {
+    identifier title description url priority updatedAt state { name type } labels { nodes { name } }
+  }
+}`
+
+var linearIdentifierRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*-\d+$`)
+
+// ParseLinearIssueRef extracts the issue identifier ("ENG-123") from either a
+// Linear issue URL (https://linear.app/<org>/issue/ENG-123[/slug]) or a bare
+// identifier.
+func ParseLinearIssueRef(ref string) (string, error) {
+	ref = strings.TrimSpace(ref)
+	if linearIdentifierRe.MatchString(ref) {
+		return strings.ToUpper(ref), nil
+	}
+	u, err := url.Parse(ref)
+	if err != nil || u.Host != "linear.app" {
+		return "", fmt.Errorf("not a Linear issue URL or identifier: %q", ref)
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	for i, p := range parts {
+		if p == "issue" && i+1 < len(parts) && linearIdentifierRe.MatchString(parts[i+1]) {
+			return strings.ToUpper(parts[i+1]), nil
+		}
+	}
+	return "", fmt.Errorf("no issue identifier found in Linear URL %q", ref)
+}
+
+// FetchIssue retrieves one Linear issue by identifier for one-off import.
+func (l *LinearPlugin) FetchIssue(ctx context.Context, config PluginConfig, identifier string) (ExternalItem, error) {
+	cfg, disabled, err := decodeLinearFetchConfig(config)
+	if err != nil {
+		return ExternalItem{}, err
+	}
+	if disabled {
+		return ExternalItem{}, fmt.Errorf("linear: API key not configured (store it in the keychain)")
+	}
+	var out struct {
+		Issue *linearIssue `json:"issue"`
+	}
+	if err := doLinearGraphQL(ctx, cfg.Token, linearIssueByIDQuery, map[string]any{"id": identifier}, &out); err != nil {
+		return ExternalItem{}, err
+	}
+	if out.Issue == nil {
+		return ExternalItem{}, fmt.Errorf("linear: issue %s not found", identifier)
+	}
+	items, _ := convertLinearIssues([]linearIssue{*out.Issue}, "")
+	return items[0], nil
 }

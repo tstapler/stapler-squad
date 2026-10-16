@@ -237,3 +237,77 @@ func jiraPriorityToBacklog(name string) int {
 func (j *JiraPlugin) MapToBacklogItem(item ExternalItem, sourceID string) BacklogItemData {
 	return mapExternalToBacklogItem(item, sourceID)
 }
+
+var jiraIssueKeyRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*-\d+$`)
+
+// ParseJiraIssueRef extracts (baseURL, key) from a JIRA browse URL
+// (https://org.atlassian.net/browse/ENG-123). A bare key ("ENG-123") returns
+// an empty baseURL, which the caller must supply separately.
+func ParseJiraIssueRef(ref string) (baseURL, key string, err error) {
+	ref = strings.TrimSpace(ref)
+	if jiraIssueKeyRe.MatchString(ref) {
+		return "", strings.ToUpper(ref), nil
+	}
+	u, perr := url.Parse(ref)
+	if perr != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+		return "", "", fmt.Errorf("not a JIRA issue URL or key: %q", ref)
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	for i, p := range parts {
+		if p == "browse" && i+1 < len(parts) && jiraIssueKeyRe.MatchString(parts[i+1]) {
+			return u.Scheme + "://" + u.Host, strings.ToUpper(parts[i+1]), nil
+		}
+	}
+	return "", "", fmt.Errorf("no issue key found in JIRA URL %q", ref)
+}
+
+// FetchIssue retrieves one JIRA issue by key for one-off import. config needs
+// base_url only (project_key is not required); credentials come from the
+// keychain (or legacy config fields) as in Fetch.
+func (j *JiraPlugin) FetchIssue(ctx context.Context, config PluginConfig, key string) (ExternalItem, error) {
+	var cfg jiraPluginConfig
+	if config.Raw != "" {
+		if err := json.Unmarshal([]byte(config.Raw), &cfg); err != nil {
+			return ExternalItem{}, fmt.Errorf("jira: parse config: %w", err)
+		}
+	}
+	if cfg.BaseURL == "" {
+		return ExternalItem{}, fmt.Errorf("jira: base_url is required")
+	}
+	if email, token, ok := jira.GetKeychainTokenForHost(cfg.BaseURL); ok {
+		cfg.Email, cfg.Token = email, token
+	}
+	if cfg.Email == "" || cfg.Token == "" {
+		return ExternalItem{}, fmt.Errorf("jira: credentials not configured for %s (store email and API token in the keychain)", jira.NormalizeHost(cfg.BaseURL))
+	}
+	cfg.BaseURL = strings.TrimSuffix(strings.TrimSpace(cfg.BaseURL), "/")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		cfg.BaseURL+"/rest/api/3/issue/"+url.PathEscape(key)+"?fields=summary,description,labels,priority,updated", nil)
+	if err != nil {
+		return ExternalItem{}, fmt.Errorf("jira: build request: %w", err)
+	}
+	req.SetBasicAuth(cfg.Email, cfg.Token)
+	req.Header.Set("Accept", "application/json")
+	resp, err := jiraHTTPClient.Do(req)
+	if err != nil {
+		return ExternalItem{}, fmt.Errorf("jira: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		return ExternalItem{}, fmt.Errorf("jira: issue %s not found", key)
+	case resp.StatusCode == http.StatusTooManyRequests:
+		return ExternalItem{}, fmt.Errorf("jira: rate limited (status %d)", resp.StatusCode)
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		return ExternalItem{}, fmt.Errorf("jira: authentication failed (%d)", resp.StatusCode)
+	case resp.StatusCode != http.StatusOK:
+		return ExternalItem{}, fmt.Errorf("jira: unexpected status %d", resp.StatusCode)
+	}
+	var is jiraIssue
+	if err := json.NewDecoder(resp.Body).Decode(&is); err != nil {
+		return ExternalItem{}, fmt.Errorf("jira: decode response: %w", err)
+	}
+	items, _ := convertJiraIssues([]jiraIssue{is}, cfg.BaseURL, "")
+	return items[0], nil
+}

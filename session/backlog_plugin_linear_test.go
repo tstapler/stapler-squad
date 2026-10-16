@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -172,4 +173,41 @@ func TestLinearPlugin_MapToBacklogItem_should_MapPriorityTable(t *testing.T) {
 	require.Equal(t, "https://linear.app/o/issue/ENG-123", got.ExternalURL)
 	require.Equal(t, "src1", got.SourceID)
 	require.Equal(t, string(BacklogStatusIdea), got.Status)
+}
+
+func TestParseLinearIssueRef(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{
+		"https://linear.app/acme/issue/ENG-123":           "ENG-123",
+		"https://linear.app/acme/issue/eng-123/fix-a-bug": "ENG-123",
+		"ENG-9": "ENG-9",
+	} {
+		got, err := ParseLinearIssueRef(in)
+		require.NoError(t, err, in)
+		require.Equal(t, want, got)
+	}
+	for _, bad := range []string{"", "https://example.com/issue/ENG-1", "https://linear.app/acme/projects/x", "notanissue"} {
+		_, err := ParseLinearIssueRef(bad)
+		require.Error(t, err, bad)
+	}
+}
+
+func TestLinearPlugin_FetchIssue_should_ReturnItem_And_ErrorWhenNotFoundOrNoKey(t *testing.T) {
+	withLinearTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(b), `"ENG-404"`) {
+			fmt.Fprint(w, `{"data":{"issue":null}}`)
+			return
+		}
+		fmt.Fprint(w, `{"data":{"issue":{"identifier":"ENG-5","title":"Five","description":"d","url":"https://linear.app/o/issue/ENG-5","priority":2,"updatedAt":"2026-08-01T00:00:00.000Z","labels":{"nodes":[]}}}}`)
+	})
+	cfg := PluginConfig{Raw: `{"token":"k"}`}
+	item, err := NewLinearPlugin().FetchIssue(context.Background(), cfg, "ENG-5")
+	require.NoError(t, err)
+	require.Equal(t, "ENG-5", item.ExternalID)
+	require.Equal(t, 4, item.Priority)
+	_, err = NewLinearPlugin().FetchIssue(context.Background(), cfg, "ENG-404")
+	require.ErrorContains(t, err, "not found")
+	_, err = NewLinearPlugin().FetchIssue(context.Background(), PluginConfig{}, "ENG-5")
+	require.ErrorContains(t, err, "not configured")
 }
