@@ -34,7 +34,7 @@ event invalidates it, and the scanner multiplies it by W.
 
 | Operation | Cost | Notes and improvement levers |
 |---|---|---|
-| `findMergeBase` | O(d1 + d2) commit decodes, capped at L per side | Lockstep landed in commit `f0a75ac10` (after `39fa33a11`). Was O(min(L, history)) before it: ~2000 decodes per call. Measured on a 2500-commit history: 114,780 → 657 allocs/op, 7.8 MB → 54 KB/op. |
+| `findMergeBase` | O(d1 + d2) commit decodes, capped at 2L visits | Git-style paint-down-to-common (newest-first heap, FIFO ties, stale propagation); returns a best common ancestor, matching the `object.Commit.MergeBase` oracle on 100% of 600 single-merge/general cases (the pre-lockstep walk: 550/600). Was O(min(L, history)): ~2000 decodes per call. On a 2500-commit history: 114,780 → 8,347 allocs/op for the full ahead/behind, 57 decodes. |
 | `countCommitsTo` ×2 | O(a) + O(b), capped at L | `b` can reach L when base moves far ahead. `parentMemo` removes re-decodes, not the walk. Lever: cache `behind` per (base hash, merge base). |
 | Commit decode (go-git) | one inflate + full message/signature parse per commit | Allocs profile: `bytes.growSlice` 30.8%, `MemoryObject.Write` 10.8%, `bufio.ReadBytes` 10.3%, `continuationCont` 9.2%. Only parents are needed here. **Fork lever:** add a header-only parents reader that stops at the first blank line and skips the message buffer and gpgsig parsing. The fork already ships `plumbing/format/commitgraph`; whether these repos have a commit-graph file is UNVERIFIED. |
 | `HasUncommitted` | O(n) index/HEAD compares + O(n) `lstat` + O(f) untracked walk | Cheapest exits first (staged, deleted, size/mtime). Lever: use watcher events to stat only changed paths, O(changed) instead of O(n). |

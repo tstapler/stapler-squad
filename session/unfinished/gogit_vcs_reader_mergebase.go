@@ -55,94 +55,218 @@ func reachableSet(repo *git.Repository, start plumbing.Hash) (map[plumbing.Hash]
 // repo with thousands of real commits to exercise the cap.
 var mergeBaseBFSLimit = 2000
 
-// parentMemo caches commit parent lists for the duration of one ahead/behind
+// commitInfo is the part of a decoded commit the merge-base walks need.
+type commitInfo struct {
+	parents []plumbing.Hash
+	when    int64 // committer time, unix seconds; orders the paint-down queue
+}
+
+// parentMemo caches decoded commit info for the duration of one ahead/behind
 // computation, so findMergeBase and the two countCommitsTo walks decode each
 // commit at most once (go-git's Commit decode dominated the allocs profile).
 // Not safe for concurrent use; callers hold the repo entry's lock.
 type parentMemo struct {
 	repo    *git.Repository
-	parents map[plumbing.Hash][]plumbing.Hash
+	parents map[plumbing.Hash]commitInfo
 }
 
 func newParentMemo(repo *git.Repository) *parentMemo {
-	return &parentMemo{repo: repo, parents: make(map[plumbing.Hash][]plumbing.Hash, 64)}
+	return &parentMemo{repo: repo, parents: make(map[plumbing.Hash]commitInfo, 64)}
 }
 
-func (pm *parentMemo) get(h plumbing.Hash) ([]plumbing.Hash, error) {
-	if ps, ok := pm.parents[h]; ok {
-		return ps, nil
+func (pm *parentMemo) info(h plumbing.Hash) (commitInfo, error) {
+	if ci, ok := pm.parents[h]; ok {
+		return ci, nil
 	}
 	c, err := pm.repo.CommitObject(h)
 	if err != nil {
-		return nil, err
+		return commitInfo{}, err
 	}
-	pm.parents[h] = c.ParentHashes
-	return c.ParentHashes, nil
+	ci := commitInfo{parents: c.ParentHashes, when: c.Committer.When.Unix()}
+	pm.parents[h] = ci
+	return ci, nil
 }
 
-// bfsSide is one frontier of findMergeBase's two-sided walk.
-type bfsSide struct {
-	queue   []plumbing.Hash
-	seen    map[plumbing.Hash]struct{}
-	visited int
+func (pm *parentMemo) get(h plumbing.Hash) ([]plumbing.Hash, error) {
+	ci, err := pm.info(h)
+	return ci.parents, err
 }
 
-func newBFSSide(start plumbing.Hash) *bfsSide {
-	return &bfsSide{queue: []plumbing.Hash{start}, seen: make(map[plumbing.Hash]struct{}, 32)}
+const (
+	paintFromHead uint8 = 1 << iota
+	paintFromBase
+	paintStale
+)
+
+type paintItem struct {
+	hash plumbing.Hash
+	when int64
+	seq  int // insertion order; breaks committer-time ties FIFO so equal-time history walks breadth-first
 }
 
-// advance visits one new commit on s. It reports (hit, true) when that commit is
-// already in other.seen, and progressed=false once s is exhausted or at the bound.
-func (s *bfsSide) advance(pm *parentMemo, other *bfsSide) (hit plumbing.Hash, found, progressed bool, err error) {
-	for len(s.queue) > 0 && s.visited < mergeBaseBFSLimit {
-		h := s.queue[0]
-		s.queue = s.queue[1:]
-		if _, dup := s.seen[h]; dup {
-			continue
+// paintQueue is a max-heap on committer time (newest first, then oldest insertion),
+// like git's paint_down_to_common priority queue.
+type paintQueue struct {
+	items []paintItem
+	next  int
+}
+
+func (a paintItem) before(b paintItem) bool {
+	return a.when > b.when || (a.when == b.when && a.seq < b.seq)
+}
+
+func (q *paintQueue) push(it paintItem) {
+	it.seq = q.next
+	q.next++
+	q.items = append(q.items, it)
+	i := len(q.items) - 1
+	for i > 0 {
+		p := (i - 1) / 2
+		if !q.items[i].before(q.items[p]) {
+			break
 		}
-		s.seen[h] = struct{}{}
-		s.visited++
-		if _, ok := other.seen[h]; ok {
-			return h, true, true, nil
-		}
-		ps, perr := pm.get(h)
-		if perr != nil {
-			if errors.Is(perr, plumbing.ErrObjectNotFound) {
-				return plumbing.ZeroHash, false, true, nil // missing from shallow clone or pack — skip
-			}
-			return plumbing.ZeroHash, false, true, fmt.Errorf("commit object %s: %w", h, perr)
-		}
-		s.queue = append(s.queue, ps...)
-		return plumbing.ZeroHash, false, true, nil
+		q.items[p], q.items[i] = q.items[i], q.items[p]
+		i = p
 	}
-	return plumbing.ZeroHash, false, false, nil
 }
 
-// findMergeBase returns a common ancestor of h1 and h2 by walking both sides
-// breadth-first in lockstep and stopping at the first commit either side has
-// already seen. Cost scales with the distance to the merge base, not with
-// mergeBaseBFSLimit: the previous implementation fully marked h1's bounded
-// ancestry before looking at h2, decoding ~2000 commits per call on any
-// long-lived repo. If no merge base is found within the limit per side, an
-// error is returned.
+func (q *paintQueue) pop() paintItem {
+	top := q.items[0]
+	n := len(q.items) - 1
+	q.items[0] = q.items[n]
+	q.items = q.items[:n]
+	i := 0
+	for {
+		l, r, m := 2*i+1, 2*i+2, i
+		if l < n && q.items[l].before(q.items[m]) {
+			m = l
+		}
+		if r < n && q.items[r].before(q.items[m]) {
+			m = r
+		}
+		if m == i {
+			break
+		}
+		q.items[m], q.items[i] = q.items[i], q.items[m]
+		i = m
+	}
+	return top
+}
+
+// findMergeBase returns a best common ancestor of h1 and h2 (one that is not an
+// ancestor of another common ancestor) using git's paint-down-to-common: walk
+// newest-first from both tips, flag each commit with the sides that reach it, and
+// stop once only stale (already-common) commits remain. Cost scales with the
+// distance to the merge base, not with history depth. The walk visits at most
+// 2*mergeBaseBFSLimit commits; if no merge base is found within that, an error is
+// returned. With clock skew the result can differ from a full-graph answer, as in git.
 func findMergeBase(pm *parentMemo, h1, h2 plumbing.Hash) (plumbing.Hash, error) {
 	if h1 == h2 {
 		return h1, nil
 	}
-	s1, s2 := newBFSSide(h1), newBFSSide(h2)
-	for {
-		hit, found, p1, err := s1.advance(pm, s2)
-		if err != nil || found {
-			return hit, err
+	flags := map[plumbing.Hash]uint8{h1: paintFromHead, h2: paintFromBase}
+	var q paintQueue
+	for _, h := range []plumbing.Hash{h1, h2} {
+		ci, err := pm.info(h)
+		if err != nil && !errors.Is(err, plumbing.ErrObjectNotFound) {
+			return plumbing.ZeroHash, fmt.Errorf("commit object %s: %w", h, err)
 		}
-		hit, found, p2, err := s2.advance(pm, s1)
-		if err != nil || found {
-			return hit, err
+		q.push(paintItem{hash: h, when: ci.when})
+	}
+	var candidates []plumbing.Hash
+	visited := 0
+	for len(q.items) > 0 && anyFresh(q, flags) {
+		if visited >= 2*mergeBaseBFSLimit {
+			break
 		}
-		if !p1 && !p2 {
-			return plumbing.ZeroHash, fmt.Errorf("merge base not found within %d commits", mergeBaseBFSLimit)
+		it := q.pop()
+		visited++
+		f := flags[it.hash]
+		if f&paintStale != 0 {
+			f = paintStale | paintFromHead | paintFromBase
+		} else if f&(paintFromHead|paintFromBase) == paintFromHead|paintFromBase {
+			candidates = append(candidates, it.hash)
+			f |= paintStale
+			flags[it.hash] = f
+		}
+		ci, err := pm.info(it.hash)
+		if err != nil {
+			if errors.Is(err, plumbing.ErrObjectNotFound) {
+				continue // missing from shallow clone or pack — skip
+			}
+			return plumbing.ZeroHash, fmt.Errorf("commit object %s: %w", it.hash, err)
+		}
+		for _, p := range ci.parents {
+			if flags[p]|f == flags[p] {
+				continue
+			}
+			flags[p] |= f
+			pci, perr := pm.info(p)
+			if perr != nil {
+				if errors.Is(perr, plumbing.ErrObjectNotFound) {
+					continue
+				}
+				return plumbing.ZeroHash, fmt.Errorf("commit object %s: %w", p, perr)
+			}
+			q.push(paintItem{hash: p, when: pci.when})
 		}
 	}
+	// Re-check staleness: a candidate painted stale by a later candidate is redundant.
+	best := candidates[:0:0]
+	for _, c := range candidates {
+		if flags[c]&paintStale != 0 && isAncestorOfOther(pm, c, candidates) {
+			continue
+		}
+		best = append(best, c)
+	}
+	if len(best) == 0 {
+		return plumbing.ZeroHash, fmt.Errorf("merge base not found within %d commits", mergeBaseBFSLimit)
+	}
+	return best[0], nil
+}
+
+// anyFresh reports whether q holds a commit not yet marked stale.
+func anyFresh(q paintQueue, flags map[plumbing.Hash]uint8) bool {
+	for _, it := range q.items {
+		if flags[it.hash]&paintStale == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// isAncestorOfOther reports whether c is a strict ancestor of any other candidate.
+// Only runs when several common ancestors were found (criss-cross merges).
+func isAncestorOfOther(pm *parentMemo, c plumbing.Hash, candidates []plumbing.Hash) bool {
+	if len(candidates) < 2 {
+		return false
+	}
+	for _, o := range candidates {
+		if o == c {
+			continue
+		}
+		seen := map[plumbing.Hash]struct{}{}
+		stack := []plumbing.Hash{o}
+		for len(stack) > 0 && len(seen) < mergeBaseBFSLimit {
+			h := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if _, dup := seen[h]; dup {
+				continue
+			}
+			seen[h] = struct{}{}
+			ps, err := pm.get(h)
+			if err != nil {
+				continue
+			}
+			for _, p := range ps {
+				if p == c {
+					return true
+				}
+				stack = append(stack, p)
+			}
+		}
+	}
+	return false
 }
 
 // countCommitsTo counts commits reachable from start that are not reachable from
