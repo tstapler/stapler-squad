@@ -52,3 +52,20 @@ event invalidates it, and the scanner multiplies it by W.
 - Singleflight and TTL-cache expensive results (`sfDo`, `*Cache` fields); a cache hit must stay
   allocation-free.
 - Do not add `time.Sleep`-based tests; follow the `deterministic-fast-tests` skill.
+
+## FILE_OWNERSHIP
+
+Hot files are split so each shared file has one editing story per wave
+(`project_plans/unfinished-scanner-dsa-perf/implementation/plan.md`, "File ownership and serialization table"). New code goes in new files; edits to the split files are small call-site switches. Story ids below refer to that plan; files marked (planned) do not exist yet.
+
+| File | Holds | Editing stories, in order |
+|---|---|---|
+| `gogit_vcs_reader.go` | cache lifecycle, open/prune, `AheadBehind`/`CommitMessages` wrappers, `RepoCacheStats` | 1.1.4 -> 1.1.3b -> 5.1.1a -> 5.3.1 |
+| `gogit_vcs_reader_diff.go` | `DiffShortstat`, LCS/line-diff helpers | 3.2.2 -> 3.2.3b -> 4.4.1 rows |
+| `gogit_vcs_reader_trees.go` | `resolveHeadTreeHashes` | 3.1.1b |
+| `gogit_vcs_reader_dirty.go` | `HasUncommitted`, `hasUncommittedGoGitPhase`, `trackedFile`, `getOrBuildUntrackedMatcher` | 4.2.2b -> 4.3.2b -> 4.2.4b -> 3.3.1b |
+| `gogit_vcs_reader_walkers.go` | untracked/tracked walkers | 0.1.2b -> 4.2.3b -> 4.4.1 rows |
+| `gogit_vcs_reader_mergebase.go` | `parentMemo`, `findMergeBase`, `countCommitsTo`, `reachableSet` | 2.1.3b -> 2.2.1b -> 2.2.2b -> 2.2.3b |
+| `aheadbehind.go` (planned) | ahead/behind extraction | 1.1.4a -> 2.1.2b -> 2.1.3b -> 2.2.1b -> 2.2.2b -> 2.2.3b |
+| `scanner.go` | scan/enqueue/`scanWorktree` | 4.2.4b -> 4.1.1 -> 4.1.2 -> 5.1.1b |
+| `scanner_gitwatch.go` | `watchRepo`/`unwatchRepo`, fsnotify loop, `classifyGitEvent`, debounce | 4.3.1 -> 4.3.2b (DirtyGen bump only) -> 4.3.3 |
