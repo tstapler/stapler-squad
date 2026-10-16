@@ -36,6 +36,7 @@ import { GuidanceRequestPanel } from "@/components/guidance/GuidanceRequestPanel
 import { useShells } from "@/lib/hooks/useShells";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { markSessionViewed } from "@/lib/utils/viewedSessions";
+import { setActiveSessionUUID } from "@/lib/telemetry/active-session";
 import { usePublishStackTopOffset } from "@/lib/hooks/usePublishStackTopOffset";
 import { ShellTabLabel } from "./ShellTab";
 import { NewShellDialog } from "./NewShellDialog";
@@ -445,6 +446,16 @@ export function SessionDetailView({
 
   // Tell the notification deck which session is on screen so it can skip redundant non-pinned toasts.
   useEffect(() => markSessionViewed(session.id), [session.id]);
+
+  // Attach the active session UUID to all OTel spans created while this view
+  // is mounted, so traces are queryable by session. Cleared on unmount so
+  // spans from unrelated pages do not carry a stale session UUID.
+  useEffect(() => {
+    setActiveSessionUUID(session.id);
+    return () => {
+      setActiveSessionUUID(null);
+    };
+  }, [session.id]);
 
   // The mobile toast deck docks directly under this tab row.
   const tabRowRef = useRef<HTMLDivElement>(null);
