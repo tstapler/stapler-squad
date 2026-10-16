@@ -240,12 +240,10 @@ func TestTestRemoteConnection_PoolHit_DoesNotSkipHostKeyCallback_When_NameReused
 }
 
 // TestTestRemoteConnection_TwoServiceInstances_DoNotShareAPoolEntry is the
-// actual regression test for the CI flake: two RemoteService instances
-// (standing in for two tests in the same process) reuse the same remote
-// name against different servers. Both
-// shared tmux.DefaultSSHClientPool(), so svc2 could get svc1's pooled
-// client for addrA and report Success against addrB without ever dialing
-// it. With the seam, svc2's dial is untouched by svc1's pool activity.
+// regression test for the CI flake: two RemoteService instances (standing in
+// for two tests in the same process) reuse one remote name against different
+// servers. svc2 must dial its own addrB and report HostKeyUnknown, never
+// reuse a client svc1 left for addrA.
 func TestTestRemoteConnection_TwoServiceInstances_DoNotShareAPoolEntry(t *testing.T) {
 	remoteName := uniqueRemoteName(t)
 	addrA, _ := startRemoteTestSSHServer(t)
