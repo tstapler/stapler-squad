@@ -34,7 +34,9 @@ func (g *GoGitVCSReader) reachMembership(entry *cachedRepo, worktreePath string,
 		if keyer, ok := entry.repo.Storer.(commonDirKeyer); ok {
 			ord, shallow := g.observeShallow(entry, rs)
 			want := repostate.ReachKey{Repo: repostate.RepoKey(keyer.CommonDirKey()), Base: baseHash, Cap: maxReachableSetCommits}
-			b, err := rs.Reach(context.Background(), newGraphSource(entry.repo.Storer, shallow), ord, want)
+			src := newGraphSource(entry.repo.Storer, shallow)
+			b, err := rs.Reach(context.Background(), src, ord, want)
+			src.done()
 			if err == nil {
 				return b, nil
 			}
@@ -75,6 +77,7 @@ func (g *GoGitVCSReader) commitMessagesShared(entry *cachedRepo, head, base plum
 	ctx := context.Background()
 	ord, shallow := g.observeShallow(entry, rs)
 	src := newGraphSource(entry.repo.Storer, shallow)
+	defer src.done()
 	reach, err := rs.Reach(ctx, src, ord, repostate.ReachKey{Repo: repo, Base: base, Cap: maxReachableSetCommits})
 	if err != nil {
 		return nil, !errors.Is(err, repostate.ErrFallback), err

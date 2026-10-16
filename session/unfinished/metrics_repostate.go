@@ -37,6 +37,9 @@ type repostateInputs struct {
 	parity       ParityStats
 	tierBArmed   int64
 	internerSize int64
+	reachBuilds  repostate.ReachStats
+	statCalls    int64
+	graphExt     OpDurationStats
 }
 
 func newRepostateInputs() repostateInputs {
@@ -61,9 +64,14 @@ func collectRepostateInputs() repostateInputs {
 	in := newRepostateInputs()
 	if r := currentReader.Load(); r != nil {
 		in.repoStates, in.repoBytes = r.repoStateTotals()
-		r.forEachRepoState(func(rs *repostate.RepoState) { in.addGraph(rs) })
+		r.forEachRepoState(func(rs *repostate.RepoState) {
+			in.addGraph(rs)
+			in.addProducts(rs)
+		})
 		in.skip = r.ScanSkipStats()
+		in.statCalls = r.StatCalls()
 	}
+	in.graphExt = GraphExtensionDurations()
 	m := DiffMemoStats()
 	in.caches["diffmemo"] = repostate.CacheStats{Hits: m.Hits, Misses: m.Misses, Evictions: m.Evictions}
 	in.decoded = DecodedCommitsTotal()
@@ -106,6 +114,51 @@ func (in *repostateInputs) addGraph(rs *repostate.RepoState) {
 			in.graphEpoch = max(in.graphEpoch, int64(gen.Epoch())) //nolint:gosec // epoch counts bumps, nowhere near int64
 		}
 	}
+}
+
+func addCacheStats(dst *repostate.CacheStats, c repostate.CacheStats) {
+	dst.Hits += c.Hits
+	dst.Misses += c.Misses
+	dst.Evictions += c.Evictions
+	dst.Coalesced += c.Coalesced
+	dst.Entries += c.Entries
+	dst.Bytes += c.Bytes
+	dst.CASRetries += c.CASRetries
+}
+
+// addProducts folds one RepoState's reach cache and memo products into the
+// per-cache totals. It never allocates a cache that was not already built.
+func (in *repostateInputs) addProducts(rs *repostate.RepoState) {
+	if rc := rs.ReachCacheIfBuilt(); rc != nil {
+		reach := in.caches["reach"]
+		addCacheStats(&reach, rc.Stats())
+		in.caches["reach"] = reach
+		b := rc.BuildStats()
+		in.reachBuilds.Scratch += b.Scratch
+		in.reachBuilds.Incremental += b.Incremental
+	}
+	ps := rs.ProductStats()
+	for name, c := range map[string]repostate.CacheStats{
+		"aheadbehind": ps.AheadBehind, "behind": ps.Behind, "messages": ps.Messages,
+	} {
+		cur := in.caches[name]
+		addCacheStats(&cur, c)
+		in.caches[name] = cur
+	}
+	// Line memos back the messages product; report them together.
+	msgs := in.caches["messages"]
+	addCacheStats(&msgs, ps.Lines)
+	in.caches["messages"] = msgs
+}
+
+// casRetries sums lost CASes across the graph arena and the CLOCK caches
+// (RepoCache.ClockStats shares the counter CacheStats.CASRetries reports).
+func (in repostateInputs) casRetries() int64 {
+	n := int64(in.graph.CASRetries) //nolint:gosec // counters never approach int64
+	for _, c := range in.caches {
+		n += c.CASRetries
+	}
+	return n
 }
 
 // decodedCommitsTotal counts full commit decodes in production paths.
@@ -198,6 +251,11 @@ var repostateCatalog = []seriesSpec{
 	{"shadow_verify_oracle_errors_total", "Oracle reads that failed (comparisons that did not happen)", "", kindCounter},
 	{"parity_mismatch_total", "Stable disagreements between the new path and the legacy oracle", "field", kindCounter},
 	{"parity_transient_total", "Disagreements discarded because the oracle disagreed with itself", "field", kindCounter},
+	{"reach_builds_total", "Reach sets built, by how (scratch walk or incremental extension)", "kind", kindCounter},
+	{"stat_calls_total", "File stats issued by the scan loop", "", kindCounter},
+	{"stat_calls_per_scan", "File stats per completed scan cycle (integer mean since start)", "", kindGauge},
+	{"graph_extension_total", "Walks that decoded commits, extending the shared graph", "", kindCounter},
+	{"graph_extension_over_100ms_total", "Graph-extending walks slower than 100 ms", "", kindCounter},
 	{"commit_parents_reader", "Active CommitParentsReader implementation (1 for the active impl)", "impl", kindGauge},
 }
 
@@ -226,7 +284,7 @@ func (in repostateInputs) points() []seriesPoint {
 	add("fill_lost_decode_total", "", int64(g.FillLostDecode)) //nolint:gosec // counters never approach int64
 	add("reprobe_total", "", int64(g.Reprobe))                 //nolint:gosec // counters never approach int64
 	add("fill_rollback_total", "", int64(g.Rollback))          //nolint:gosec // counters never approach int64
-	add("cas_retries_total", "", int64(g.CASRetries))          //nolint:gosec // counters never approach int64
+	add("cas_retries_total", "", in.casRetries())
 	add("decoded_commits_total", "", in.decoded)
 	add("graph_epoch", "", in.graphEpoch)
 	add("graph_commits", "", in.graphCommits)
@@ -248,9 +306,23 @@ func (in repostateInputs) points() []seriesPoint {
 		add("parity_mismatch_total", f.String(), in.parity.Mismatch[f])
 		add("parity_transient_total", f.String(), in.parity.Transient[f])
 	}
+	add("reach_builds_total", "scratch", int64(in.reachBuilds.Scratch))         //nolint:gosec // counters never approach int64
+	add("reach_builds_total", "incremental", int64(in.reachBuilds.Incremental)) //nolint:gosec // counters never approach int64
+	add("stat_calls_total", "", in.statCalls)
+	add("stat_calls_per_scan", "", perScan(in.statCalls, ScanCyclesTotal()))
+	add("graph_extension_total", "", in.graphExt.Count)
+	add("graph_extension_over_100ms_total", "", in.graphExt.SlowOver100ms)
 	add("commit_parents_reader", "stock", 1)
 	add("commit_parents_reader", "fork", 0)
 	return pts
+}
+
+// perScan is total/cycles, 0 before the first cycle.
+func perScan(total, cycles int64) int64 {
+	if cycles <= 0 {
+		return 0
+	}
+	return total / cycles
 }
 
 // registerRepostateMetrics creates every catalog instrument and the
@@ -264,6 +336,10 @@ func registerRepostateMetrics(meter metric.Meter, collect func() repostateInputs
 		return err
 	}
 	scanCycleSeconds.Store(&hist)
+	if err := graphExtensionDuration.register(meter, "graph_extension_seconds",
+		"Wall time of walks that extended the shared commit graph"); err != nil {
+		return err
+	}
 
 	instruments := make(map[string]metric.Int64Observable, len(repostateCatalog))
 	observables := make([]metric.Observable, 0, len(repostateCatalog))
@@ -298,3 +374,14 @@ func registerRepostateMetrics(meter metric.Meter, collect func() repostateInputs
 	}, observables...)
 	return err
 }
+
+// noteStat counts one file stat and forwards it to the test seam.
+func (g *GoGitVCSReader) noteStat(rel string) {
+	g.statCalls.Add(1)
+	if g.statFn != nil {
+		g.statFn(rel)
+	}
+}
+
+// StatCalls returns the file stats issued by the scan loop since process start.
+func (g *GoGitVCSReader) StatCalls() int64 { return g.statCalls.Load() }

@@ -612,6 +612,10 @@ type GoGitVCSReader struct {
 	// DiffShortstat). Observer-only test seam for StatCount; nil in production.
 	statFn func(rel string)
 
+	// statCalls counts every file stat the scan loop issues (statFn's sites),
+	// feeding stat_calls_per_scan; atomic, so it is safe on the hot path.
+	statCalls atomic.Int64
+
 	// scanSkip holds the scan_skip rollback unit's caches (index, untracked
 	// dirs, DirtyGen) and its clock/flag test seams; see scanskip_state.go.
 	scanSkip scanSkipState

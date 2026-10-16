@@ -1261,6 +1261,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 				unfinished.SetFlags(cfg.UnfinishedCaches) // restart-only, read once
 			}
 			unfinishedScanner = unfinished.NewScanner(eventBus, unfinishedStateStore)
+			// The shadow-verify sampler arms itself at 1/50 when any rollback unit is on
+			// (Scanner.shadowEvery); the startup line reports the effective rate.
+			unfinished.LogStartup()
 			unfinishedWatchDirWatcher = unfinished.NewWatchDirWatcher(unfinishedScanner, unfinishedStateStore)
 			unfinishedWorkSvc = services.NewUnfinishedWorkService(unfinishedScanner, unfinishedStateStore, eventBus, storage, unfinishedWatchDirWatcher)
 			log.Info("UnfinishedWorkService initialized", "state", statePath)

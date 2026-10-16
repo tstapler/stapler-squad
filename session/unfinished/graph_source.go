@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/storer"
@@ -32,10 +33,12 @@ type graphSource struct {
 	reader  CommitParentsReader
 	shallow bool
 	buf     []plumbing.Hash
+	decodes int       // commits decoded by this walk; non-zero means it extended the graph
+	born    time.Time // walk start, for the graph-extension duration
 }
 
 func newGraphSource(st storer.EncodedObjectStorer, shallow bool) *graphSource {
-	return &graphSource{st: st, reader: stockCommitParents, shallow: shallow}
+	return &graphSource{st: st, reader: stockCommitParents, shallow: shallow, born: time.Now()}
 }
 
 var _ repostate.ParentsSource = (*graphSource)(nil)
@@ -46,6 +49,7 @@ var _ repostate.ParentsSource = (*graphSource)(nil)
 func (s *graphSource) Parents(_ context.Context, h plumbing.Hash) ([]plumbing.Hash, int64, bool, error) {
 	parents, when, err := s.reader.Parents(s.st, h, s.buf[:0])
 	s.buf = parents
+	s.decodes++
 	if err != nil {
 		if s.shallow && errors.Is(err, plumbing.ErrObjectNotFound) {
 			return nil, 0, true, nil
@@ -64,9 +68,7 @@ type commonDirKeyer interface{ CommonDirKey() string }
 func (g *GoGitVCSReader) observeShallow(entry *cachedRepo, rs *repostate.RepoState) (repostate.StampOrd, bool) {
 	var stamp repostate.ShallowStamp
 	if k, ok := entry.repo.Storer.(commonDirKeyer); ok {
-		if g.statFn != nil {
-			g.statFn("shallow")
-		}
+		g.noteStat("shallow")
 		if fi, err := os.Stat(filepath.Join(k.CommonDirKey(), "shallow")); err == nil {
 			stamp = repostate.ShallowStamp{Exists: true, Size: fi.Size(), MtimeNs: fi.ModTime().UnixNano()}
 		}

@@ -32,6 +32,7 @@ func (stockParentsReader) Parents(s storer.EncodedObjectStorer, h plumbing.Hash,
 	if err != nil {
 		return buf[:0], zeroCommitTime, err
 	}
+	RecordDecodedCommits(1)
 	return parseCommitHeader(o, buf)
 }
 

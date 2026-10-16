@@ -108,6 +108,8 @@ func expectedSeriesKeys() []string {
 			for f := range numParityFields {
 				keys = append(keys, fmt.Sprintf("%s{%s}", spec.name, f))
 			}
+		case "kind":
+			keys = append(keys, spec.name+"{scratch}", spec.name+"{incremental}")
 		case "impl":
 			keys = append(keys, spec.name+"{stock}", spec.name+"{fork}")
 		}

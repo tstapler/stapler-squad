@@ -136,6 +136,10 @@ func (s *RepoState) reachCache() *ReachCache {
 	return fresh
 }
 
+// ReachCacheIfBuilt returns the reach cache or nil when none was created yet;
+// unlike ReachCache it never allocates, so metrics reads leave no trace.
+func (s *RepoState) ReachCacheIfBuilt() *ReachCache { return s.reach.Load() }
+
 // ReachCache exposes the repository's reach cache for metrics and tests.
 func (s *RepoState) ReachCache() *ReachCache { return s.reachCache() }
 

@@ -85,9 +85,7 @@ func (g *GoGitVCSReader) lstatTracked(c *passCursor, name, wtPath string) (os.Fi
 		}
 		return r, nil
 	}
-	if g.statFn != nil {
-		g.statFn(name)
-	}
+	g.noteStat(name)
 	return os.Lstat(wtPath)
 }
 

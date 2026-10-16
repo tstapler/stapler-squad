@@ -116,9 +116,7 @@ func (g *GoGitVCSReader) HasUncommitted(worktreePath string) (bool, error) {
 		defer stat.close()
 		for _, tf := range tracked {
 			indexedMap[tf.name] = struct{}{}
-			if g.statFn != nil {
-				g.statFn(tf.name)
-			}
+			g.noteStat(tf.name)
 			size, mtime, serr := stat.lstat(tf.name)
 			if serr != nil {
 				if errors.Is(serr, fs.ErrNotExist) {

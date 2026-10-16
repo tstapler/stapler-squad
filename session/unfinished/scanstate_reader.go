@@ -87,9 +87,7 @@ func (g *GoGitVCSReader) ResolveRefSnapshot(repoPath, base string, worktrees []s
 // common dir), counted by the statFn seam like every other stat.
 func (g *GoGitVCSReader) statShallow(repoPath string) repostate.ShallowStamp {
 	g.scanSkip.refs.shallowStats.Add(1)
-	if g.statFn != nil {
-		g.statFn("shallow")
-	}
+	g.noteStat("shallow")
 	fi, err := os.Stat(filepath.Join(gitCommonDir(repoPath), "shallow"))
 	if err != nil {
 		return repostate.ShallowStamp{}

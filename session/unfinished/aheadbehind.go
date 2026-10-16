@@ -96,7 +96,9 @@ func (g *GoGitVCSReader) aheadBehindShared(entry *cachedRepo, key aheadBehindKey
 		return ahead, behind, nil
 	}
 	ord, shallow := g.observeShallow(entry, rs)
-	ahead, behind, err := aheadBehindOnShared(rs, entry, newGraphSource(entry.repo.Storer, shallow), ord, head, baseHash)
+	src := newGraphSource(entry.repo.Storer, shallow)
+	defer src.done()
+	ahead, behind, err := aheadBehindOnShared(rs, entry, src, ord, head, baseHash)
 	if errors.Is(err, repostate.ErrFallback) {
 		entry.mu.Lock()
 		defer entry.mu.Unlock()

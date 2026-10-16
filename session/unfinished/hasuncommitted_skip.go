@@ -66,9 +66,7 @@ func (g *GoGitVCSReader) statTrackedFiles(worktreePath string, pass *statPass, c
 	stat := newDirStatter(worktreePath)
 	defer stat.close()
 	for i, tf := range pass.tracked {
-		if g.statFn != nil {
-			g.statFn(tf.name)
-		}
+		g.noteStat(tf.name)
 		size, mtime, serr := stat.lstat(tf.name)
 		var differs bool
 		switch {
