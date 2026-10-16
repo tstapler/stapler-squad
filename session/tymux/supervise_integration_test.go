@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -152,15 +153,87 @@ func shortSocketPath(t *testing.T, label string) string {
 	return filepath.Join(dir, "tymuxd.sock")
 }
 
+// dumpTymuxdOutputOnFailure registers a cleanup that, if the test failed,
+// logs the spawned binary's identity and the tymuxd stdout/stderr captured
+// by startDaemonAttempt -- "did not become healthy" alone says nothing about
+// why the daemon never answered. Call after envtest.NewIsolatedStateDir so
+// config.GetConfigDir resolves to the test's own state dir.
+func dumpTymuxdOutputOnFailure(t *testing.T, bin string) {
+	t.Helper()
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		if data, err := os.ReadFile(bin); err == nil { //nolint:gosec // bin comes from findTymuxdBinary, not user input
+			t.Logf("tymuxd binary: %s sha256=%x", bin, sha256.Sum256(data))
+		}
+		configDir, err := config.GetConfigDir()
+		if err != nil {
+			t.Logf("tymuxd output log unavailable: %v", err)
+			return
+		}
+		out, err := os.ReadFile(filepath.Join(configDir, tymuxdOutputLogName)) //nolint:gosec // configDir + a hardcoded constant
+		if err != nil {
+			t.Logf("tymuxd output log unreadable: %v", err)
+			return
+		}
+		t.Logf("tymuxd output log (%s):\n%s", tymuxdOutputLogName, out)
+	})
+}
+
+// ensureDaemonOnFreshLoopbackPort runs EnsureDaemonRunning against a newly
+// reserved loopback port, retrying with another port only when tymuxd's own
+// output log shows it lost the port to another process between
+// reserveLoopbackAddr's release and tymuxd's bind (that TOCTOU is inherent to
+// reserve-then-release; under ephemeral-port churn it fails ~5% of runs).
+// Any other failure is returned as-is.
+func ensureDaemonOnFreshLoopbackPort(t *testing.T, bin string) (DaemonConfig, TymuxdReady, error) {
+	t.Helper()
+	const maxPortAttempts = 5
+	var (
+		cfg   DaemonConfig
+		ready TymuxdReady
+		err   error
+	)
+	for attempt := 0; attempt < maxPortAttempts; attempt++ {
+		cfg = DaemonConfig{Addr: "http://" + reserveLoopbackAddr(t), BinaryPath: bin}
+		ready, err = EnsureDaemonRunning(context.Background(), cfg)
+		if err == nil || !tymuxdOutputLogContains(t, "Address already in use") {
+			return cfg, ready, err
+		}
+		t.Logf("port %s was taken before tymuxd could bind it; retrying on a fresh port (attempt %d/%d)", cfg.Addr, attempt+1, maxPortAttempts)
+		_ = stopTymuxdFn()
+		truncateTymuxdOutputLog(t)
+	}
+	return cfg, ready, err
+}
+
+func tymuxdOutputLogPath(t *testing.T) string {
+	t.Helper()
+	configDir, err := config.GetConfigDir()
+	require.NoError(t, err)
+	return filepath.Join(configDir, tymuxdOutputLogName)
+}
+
+func tymuxdOutputLogContains(t *testing.T, substr string) bool {
+	t.Helper()
+	data, err := os.ReadFile(tymuxdOutputLogPath(t)) //nolint:gosec // configDir + a hardcoded constant
+	return err == nil && strings.Contains(string(data), substr)
+}
+
+func truncateTymuxdOutputLog(t *testing.T) {
+	t.Helper()
+	require.NoError(t, os.Truncate(tymuxdOutputLogPath(t), 0))
+}
+
 func TestIntegration_EnsureDaemonRunning_ColdStart_SpawnsRealTymuxdAndBecomesHealthy(t *testing.T) {
 	bin := findTymuxdBinary(t)
 	envtest.NewIsolatedStateDir(t)
+	dumpTymuxdOutputOnFailure(t, bin)
 	withFastRetryBounds(t, 8, 50*time.Millisecond, 300*time.Millisecond)
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir()) // no SocketPath below: isolate tymuxd's own default socket from any real daemon already on this machine
-	addr := "http://" + reserveLoopbackAddr(t)
 
-	cfg := DaemonConfig{Addr: addr, BinaryPath: bin}
-	ready, err := EnsureDaemonRunning(context.Background(), cfg)
+	cfg, ready, err := ensureDaemonOnFreshLoopbackPort(t, bin)
 	t.Cleanup(func() { _ = stopTymuxdFn() })
 
 	require.NoError(t, err)
@@ -171,12 +244,11 @@ func TestIntegration_EnsureDaemonRunning_ColdStart_SpawnsRealTymuxdAndBecomesHea
 func TestIntegration_EnsureDaemonRunning_ReuseCase_DoesNotRespawnHealthyRealTymuxd(t *testing.T) {
 	bin := findTymuxdBinary(t)
 	envtest.NewIsolatedStateDir(t)
+	dumpTymuxdOutputOnFailure(t, bin)
 	withFastRetryBounds(t, 8, 50*time.Millisecond, 300*time.Millisecond)
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir()) // no SocketPath below: isolate tymuxd's own default socket from any real daemon already on this machine
-	addr := "http://" + reserveLoopbackAddr(t)
-	cfg := DaemonConfig{Addr: addr, BinaryPath: bin}
 
-	_, err := EnsureDaemonRunning(context.Background(), cfg)
+	cfg, _, err := ensureDaemonOnFreshLoopbackPort(t, bin)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = stopTymuxdFn() })
 	firstPID := readTymuxdPID(t)
