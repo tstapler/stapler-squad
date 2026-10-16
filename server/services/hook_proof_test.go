@@ -101,7 +101,7 @@ func runHookCommand(t *testing.T, command, binDir string, env ...string) []strin
 // argv, and a missing file still POSTs.
 func TestBuildLocalHookCommand_ShouldAddProofHeaderFromFileAndNeverPutItInArgv(t *testing.T) {
 	cfgDir := t.TempDir()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", cfgDir)
+	withIsolatedStateDirPath(t, cfgDir)
 	dir, err := config.GetConfigDir()
 	require.NoError(t, err)
 	setCurlHeaderFileSupport(t, true)
@@ -136,7 +136,7 @@ func TestBuildLocalHookCommand_ShouldAddProofHeaderFromFileAndNeverPutItInArgv(t
 	t.Run("path with a space and a quote", func(t *testing.T) {
 		weird := filepath.Join(cfgDir, "we ird'dir")
 		require.NoError(t, os.MkdirAll(filepath.Join(weird, hookProofDirName), 0o700))
-		t.Setenv("STAPLER_SQUAD_TEST_DIR", weird)
+		withIsolatedStateDirPath(t, weird)
 		d2, err := config.GetConfigDir()
 		require.NoError(t, err)
 		p2, err := NewHookProofs(d2)
@@ -149,7 +149,7 @@ func TestBuildLocalHookCommand_ShouldAddProofHeaderFromFileAndNeverPutItInArgv(t
 
 // A curl older than 7.55 gets the command without the proof branch.
 func TestBuildLocalHookCommand_ShouldOmitProofBranch_WhenCurlCannotReadHeaderFiles(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	setCurlHeaderFileSupport(t, false)
 	cmd := buildLocalHookCommand("http://x/y", "t")
 	assert.NotContains(t, cmd, "STAPLER_SESSION_UUID")
@@ -159,7 +159,7 @@ func TestBuildLocalHookCommand_ShouldOmitProofBranch_WhenCurlCannotReadHeaderFil
 // T-RP-73: an entry from before the proof branch is rewritten in place (one
 // entry, no duplicate), and the rewritten entry is a fixed point.
 func TestInjectHooks_ShouldReplaceAStaleEntryInPlaceAndKeepACurrentOne(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	setCurlHeaderFileSupport(t, true)
 	root := t.TempDir()
 	url := hookApprovalURL()

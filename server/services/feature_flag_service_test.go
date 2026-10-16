@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/interceptors"
@@ -30,7 +29,7 @@ import (
 // (connectrpc_websocket_test.go) already established for "was AppScrollGate
 // reached" -- decisive because AppScrollGate(nil, ...) panics immediately.
 func TestFeatureFlagService_should_ToggleForwardingBehaviorForNextRequestOnly_When_UpdateFeatureFlagCalledMidSession(t *testing.T) {
-	envtest.NewIsolatedStateDir(t)
+	withIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(terminalAppScrollForwardingClaudeFlagName, true))
 	assertScrollbackRequestReachesAppScrollGate(t, "native")
 
@@ -100,7 +99,7 @@ func (probeStubHandler) ProbeProgram(context.Context, *connect.Request[sessionv1
 // TestProgramCLIFlagProbe_should_GateProbeProgramPerRequest_When_FlagToggled drives a real
 // Connect handler wrapped with the same scoped interceptor server.go registers.
 func TestProgramCLIFlagProbe_should_GateProbeProgramPerRequest_When_FlagToggled(t *testing.T) {
-	envtest.NewIsolatedStateDir(t)
+	withIsolatedStateDir(t)
 	path, handler := sessionv1connect.NewSessionServiceHandler(probeStubHandler{}, connect.WithInterceptors(
 		interceptors.NewScopedFeatureFlagInterceptor(programCLIFlagProbeFlagName, ProgramCLIFlagProbeEnabled, ProgramCLIFlagProbeGatedMethod)))
 	mux := http.NewServeMux()
@@ -122,17 +121,6 @@ func TestProgramCLIFlagProbe_should_GateProbeProgramPerRequest_When_FlagToggled(
 
 func TestFeatureFlagService_should_ListProbeFlagDefaultOn_When_NeverPersisted(t *testing.T) {
 	require.True(t, featureFlagDefault(programCLIFlagProbeFlagName))
-}
-
-func TestFeatureFlagService_should_ListNotificationTrayV2DefaultOff_When_NeverPersisted(t *testing.T) {
-	registered := false
-	for _, kf := range knownFeatureFlags {
-		if kf.name == notificationTrayV2FlagName {
-			registered = true
-		}
-	}
-	require.True(t, registered, "notification_tray_v2 must be in knownFeatureFlags")
-	require.False(t, featureFlagDefault(notificationTrayV2FlagName))
 }
 
 // recordingObserver is a deliverygate.FlagObserver that records the names it is told about.
@@ -173,7 +161,7 @@ func statusDetailOf(t *testing.T, svc *FeatureFlagService, name string) string {
 }
 
 func TestUpdateFeatureFlag_ShouldNotifyTheFlagObserverAfterEveryPersistedChange_WhenFlagIsFlippedOrRolledBack(t *testing.T) {
-	envtest.NewIsolatedStateDir(t)
+	withIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	obs := &recordingObserver{}
 	svc.SetFlagObserver(obs)
@@ -187,7 +175,7 @@ func TestUpdateFeatureFlag_ShouldNotifyTheFlagObserverAfterEveryPersistedChange_
 }
 
 func TestUpdateFeatureFlag_ShouldRefuseOnlyEnablingWithFailedPrecondition_WhenEnableGuardReportsAReason(t *testing.T) {
-	envtest.NewIsolatedStateDir(t)
+	withIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	reason := "stats writer not running"
 	svc.SetEnableGuard("backlog", func() string { return reason })
@@ -206,7 +194,7 @@ func TestUpdateFeatureFlag_ShouldRefuseOnlyEnablingWithFailedPrecondition_WhenEn
 }
 
 func TestStatusDetail_ShouldJoinEverySourceInRegistrationOrderAndKeepTheSetterSlot_WhenCompositeProviderUsed(t *testing.T) {
-	envtest.NewIsolatedStateDir(t)
+	withIsolatedStateDir(t)
 	sources := map[string]func() string{
 		"stats writer not running":    func() string { return "stats writer not running" },
 		"Gate is OFF":                 func() string { return "Gate is OFF" },

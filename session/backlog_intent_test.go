@@ -9,14 +9,14 @@ import (
 
 func TestBuildBacklogIntentUserPrompt_IncludesRepoPath_When_RepoPathSet(t *testing.T) {
 	t.Parallel()
-	prompt := BuildBacklogIntentUserPrompt("fix the login bug", "/home/user/my-repo")
+	prompt := BuildBacklogIntentUserPrompt("fix the login bug", "/home/user/my-repo", nil)
 	assert.Contains(t, prompt, "/home/user/my-repo")
 	assert.Contains(t, prompt, "fix the login bug")
 }
 
 func TestBuildBacklogIntentUserPrompt_OmitsRepoLine_When_RepoPathEmpty(t *testing.T) {
 	t.Parallel()
-	prompt := BuildBacklogIntentUserPrompt("fix the login bug", "")
+	prompt := BuildBacklogIntentUserPrompt("fix the login bug", "", nil)
 	assert.NotContains(t, prompt, "Repo:")
 }
 
@@ -92,4 +92,30 @@ func TestParseBacklogItemIntentDraft_EmptyAcceptanceCriteriaOK(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, draft.AcceptanceCriteria)
 	assert.InDelta(t, 0.2, draft.Confidence, 0.001)
+}
+
+func TestBuildBacklogIntentUserPrompt_ListsKnownRepos_When_KnownRepoPathsSet(t *testing.T) {
+	t.Parallel()
+	prompt := BuildBacklogIntentUserPrompt("fix foo", "", []string{"/code/a", "/code/b"})
+	assert.Contains(t, prompt, "Known repos:")
+	assert.Contains(t, prompt, "/code/a")
+	assert.Contains(t, prompt, "/code/b")
+}
+
+func TestBuildBacklogIntentUserPrompt_OmitsKnownRepos_When_KnownRepoPathsEmpty(t *testing.T) {
+	t.Parallel()
+	prompt := BuildBacklogIntentUserPrompt("fix foo", "", nil)
+	assert.NotContains(t, prompt, "Known repos:")
+}
+
+func TestParseBacklogItemIntentDraft_ParsesSuggestedRepoPath(t *testing.T) {
+	t.Parallel()
+	raw := `{"title":"T","description":"D","acceptance_criteria":[],"confidence":0.9,"suggested_repo_path":"/code/a"}`
+	draft, err := ParseBacklogItemIntentDraft(raw)
+	require.NoError(t, err)
+	assert.Equal(t, "/code/a", draft.SuggestedRepoPath)
+}
+
+func TestBuildBacklogIntentSystemPrompt_AsksForTwoToFiveCriteria(t *testing.T) {
+	assert.Contains(t, BuildBacklogIntentSystemPrompt(), "acceptance_criteria: 2-5")
 }

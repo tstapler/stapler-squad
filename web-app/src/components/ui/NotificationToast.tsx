@@ -25,6 +25,9 @@ import {
   swipeCard,
   swipeCardDragging,
   compactCard,
+  compactApprovalCard,
+  compactPreview,
+  compactTrailing,
   decisionPair,
   actionError,
   inlineAction,
@@ -60,7 +63,7 @@ export interface NotificationToastProps {
   onClose: (options?: { acknowledge?: boolean }) => void;
   /** Inside the capped deck: laid out in flow, swipeable, with the phone and desktop deck controls. */
   stacked?: boolean;
-  /** Phone deck: the one-row card of at most 96px. Approval cards are exempt (they grow to show the command). */
+  /** Phone deck: the one-row card (title, preview, View and Tray). Approval cards are exempt (they grow to show the command). */
   compact?: boolean;
   /** When set, Approve and Deny (the server-bound actions) are disabled and this reason is shown. */
   offlineReason?: string;
@@ -197,7 +200,7 @@ export function NotificationToast({
           data-testid="toast-collapsed-chip"
           onClick={onExpandCollapsed}
         >
-          1 needs you - {displayTitle}
+          {notification.sessionName || displayTitle} needs you
         </button>
       </div>
     );
@@ -223,6 +226,7 @@ export function NotificationToast({
     stacked ? swipeCard : "",
     stacked && swipe.dragging ? swipeCardDragging : "",
     stacked && compact && !isApproval ? compactCard : "",
+    stacked && compact && isApproval ? compactApprovalCard : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -274,7 +278,9 @@ export function NotificationToast({
   const closeControl = <ToastCloseControl stacked={stacked} pinned={pinned} onClose={() => onClose()} />;
 
   const phoneApproval = stacked && isApproval;
-  const showViewInline = !(phoneApproval && coarse);
+  // The phone's one-row card carries View/Reply beside the Tray control, not in an actions row.
+  const compactRow = stacked && compact && !isApproval;
+  const showViewInline = !(phoneApproval && coarse) && !compactRow;
   const showDismissButton = !isApproval ? !(stacked && compact) : !stacked;
 
   const card = (
@@ -316,18 +322,39 @@ export function NotificationToast({
             <span className={typeLabel}>{notificationTypeLabel(notification.notificationType)}</span>
             {sessionHidden && <BackgroundChip />}
           </div>
-          <div className={subtitleRow}>
-            {subtitleText && (
-              <span className={sourceApp}>{subtitleText}</span>
-            )}
-            <span className={timestamp} title={new Date(notification.timestamp).toLocaleTimeString()}>
-              {relativeTime}
-            </span>
-          </div>
+          {compactRow ? (
+            <p className={compactPreview} data-testid="toast-preview">
+              {notification.message}
+            </p>
+          ) : (
+            <div className={subtitleRow}>
+              {subtitleText && (
+                <span className={sourceApp}>{subtitleText}</span>
+              )}
+              <span className={timestamp} title={new Date(notification.timestamp).toLocaleTimeString()}>
+                {relativeTime}
+              </span>
+            </div>
+          )}
         </div>
-        {closeControl}
+        {compactRow ? (
+          <div className={compactTrailing}>
+            <button className={viewButton} onClick={handleView} data-testid={viewTestId}>
+              {viewLabel}
+            </button>
+            {showReply && (
+              <button className={viewButton} onClick={handleView} data-testid="notification-reply">
+                Reply
+              </button>
+            )}
+            {closeControl}
+          </div>
+        ) : (
+          closeControl
+        )}
       </div>
 
+      {!compactRow && (
       <div className={body} data-slot="body">
         {phoneApproval ? (
           <ToastCommand
@@ -345,6 +372,7 @@ export function NotificationToast({
           </p>
         )}
       </div>
+      )}
 
       <div className={actions} data-slot="actions">
         {phoneApproval ? (

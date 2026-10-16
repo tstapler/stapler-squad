@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/notifications"
@@ -1629,7 +1628,7 @@ func TestReloadClaudeSettingsRules_WatcherNotConfigured_ReturnsUnimplemented(t *
 func TestReloadClaudeSettingsRules_ValidSettings_ReturnsSuccessAndRuleCount(t *testing.T) {
 	svc := newSimpleRulesService(t)
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	withFakeHomePath(t, home)
 	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
 		`{"permissions":{"allow":["Bash(git *)","Bash(npm test*)"]}}`)
 	svc.SetClaudeSettingsWatcher(NewClaudeSettingsWatcher("", func(rules []classifier.Rule, origin string, notify bool) {
@@ -1647,7 +1646,7 @@ func TestReloadClaudeSettingsRules_ValidSettings_ReturnsSuccessAndRuleCount(t *t
 func TestReloadClaudeSettingsRules_MalformedPath_ReturnsFailureWithLastKnownGoodCount(t *testing.T) {
 	svc := newSimpleRulesService(t)
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	withFakeHomePath(t, home)
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	writeSettingsFile(t, settingsPath, `{"permissions":{"allow":["Bash(git *)"]}}`)
 	svc.SetClaudeSettingsWatcher(NewClaudeSettingsWatcher("", func(rules []classifier.Rule, origin string, notify bool) {
@@ -2239,7 +2238,7 @@ func TestReconcilePendingApprovals_PanicIsRecovered(t *testing.T) {
 // declined_by_ci_guard_count, never lost_to_concurrent_pass_count, and must leave the item
 // pending.
 func TestReconcilePendingApprovals_CIRedGuardDecline_LoggedAndCountedSeparately(t *testing.T) {
-	envtest.NewIsolatedStateDir(t)
+	withIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
 	store := NewApprovalStore("")

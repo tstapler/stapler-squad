@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,8 +30,34 @@ func TestCurrentBranchRemoteArgv(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, backend.BranchName("feature/x"), got)
 	require.Len(t, fake.calls, 1)
-	assert.Equal(t, call{Dir: "/p", Name: "git", Args: []string{"rev-parse", "--abbrev-ref", "HEAD"}}, fake.calls[0])
+	assert.Equal(t, call{Dir: "/p", Name: "git", Args: []string{"rev-parse", "--abbrev-ref", "HEAD"}, Env: backend.RequiredGitEnv()}, fake.calls[0])
 	assert.Empty(t, local.calls, "a Remote location must never touch the local runner")
+}
+
+// A remote runner cannot carry env, so the cli backend puts RequiredGitEnv on the command line;
+// a Local location leaves env to the local runner and sends bare git.
+func TestRemoteGitCarriesRequiredEnvLocalDoesNot(t *testing.T) {
+	ctx := context.Background()
+	remote, local := &rawRecorder{}, &rawRecorder{}
+	b := cli.New(local)
+
+	_, _ = b.CurrentBranch(ctx, remoteAt(remote))
+	_, _ = b.CurrentBranch(ctx, backend.Local{Root: "/r"})
+
+	assert.Equal(t, "env", remote.name)
+	assert.Equal(t, append(backend.RequiredGitEnv(), "git", "rev-parse", "--abbrev-ref", "HEAD"), remote.args)
+	assert.Equal(t, "git", local.name)
+	assert.Equal(t, []string{"rev-parse", "--abbrev-ref", "HEAD"}, local.args)
+}
+
+type rawRecorder struct {
+	name string
+	args []string
+}
+
+func (r *rawRecorder) Run(_ context.Context, _, name string, args ...string) ([]byte, error) {
+	r.name, r.args = name, args
+	return []byte("main\n"), nil
 }
 
 func TestLocationErrors(t *testing.T) {
@@ -131,7 +158,7 @@ func argvCases() []struct {
 		{"IsDirty", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			_, e := b.IsDirty(c, l, backend.IntentDisplay)
 			return e
-		}, "status --porcelain", ""},
+		}, "status --porcelain --untracked-files=normal", ""},
 		{"Status", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			_, e := b.Status(c, l, backend.IntentDestructive)
 			return e
@@ -251,6 +278,13 @@ func argvCases() []struct {
 		{"AddWorktree", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			return b.AddWorktree(c, l, backend.AddWorktreeRequest{Path: "/w", Branch: "b", Base: "main"})
 		}, "worktree add -b b -- /w main", ""},
+		{"AddWorktreeDefaultBranch", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
+			return b.AddWorktree(c, l, backend.AddWorktreeRequest{Path: "/w"})
+		}, "worktree add -- /w", ""},
+		{"LogDetail", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
+			_, e := b.Log(c, l, backend.LogRequest{Limit: 1, Detail: true})
+			return e
+		}, "log --format=%H%x1f%s%x1f%h%x1f%an%x1f%at -n 1 HEAD", sha1 + "\x1fs\x1fabc1234\x1fAda\x1f1700000000\n"},
 		{"AddWorktreeExisting", func(c context.Context, b backend.Backend, l backend.RepoLocation) error {
 			return b.AddWorktreeForExistingBranch(c, l, "/w", "b")
 		}, "worktree add -- /w b", ""},
@@ -284,7 +318,7 @@ func TestClone(t *testing.T) {
 	fake := newFake()
 	err := cli.New(nil).Clone(context.Background(), remoteAt(fake), backend.CloneRequest{URL: "https://h/x.git"})
 	require.NoError(t, err)
-	assert.Equal(t, call{Dir: "", Name: "git", Args: []string{"clone", "--", "https://h/x.git", "/p"}}, fake.last())
+	assert.Equal(t, call{Dir: "", Name: "git", Args: []string{"clone", "--", "https://h/x.git", "/p"}, Env: backend.RequiredGitEnv()}, fake.last())
 }
 
 func TestDiscardChangesSequence(t *testing.T) {
@@ -503,6 +537,10 @@ func TestParseOutputs(t *testing.T) {
 		entries, err := cli.New(nil).Log(ctx, remoteAt(fake), backend.LogRequest{})
 		require.NoError(t, err)
 		assert.Equal(t, []backend.LogEntry{{SHA: sha1, Subject: "fix: a thing"}}, entries)
+		detail := newFake().on("log --format=%H%x1f%s%x1f%h%x1f%an%x1f%at -n 1 HEAD", sha1+"\x1fs\x1fabc1234\x1fAda\x1f1700000000\n", nil)
+		detailed, err := cli.New(nil).Log(ctx, remoteAt(detail), backend.LogRequest{Limit: 1, Detail: true})
+		require.NoError(t, err)
+		assert.Equal(t, []backend.LogEntry{{SHA: sha1, Subject: "s", ShortSHA: "abc1234", Author: "Ada", AuthorTime: time.Unix(1700000000, 0)}}, detailed)
 		brs, err := cli.New(nil).ListBranches(ctx, remoteAt(fake), backend.ListBranchesRequest{})
 		require.NoError(t, err)
 		assert.Equal(t, []backend.BranchInfo{{Name: "main", ShortSHA: "abc1234", Upstream: "origin/main"}}, brs)
@@ -519,4 +557,17 @@ func TestParseOutputs(t *testing.T) {
 		_, err := cli.New(nil).CountCommits(ctx, remoteAt(fake), backend.RangeSpec{})
 		assert.Error(t, err)
 	})
+}
+
+// Combined-output runners get stderr banners stripped, but an indented diff context line that
+// merely looks like one is data and must survive.
+func TestDiffKeepsIndentedWarningContextLine(t *testing.T) {
+	diff := "diff --git a/f b/f\n@@ -1,2 +1,2 @@\n warning: keep me\n-old\n+new\n"
+	fake := newFake().on("diff --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ HEAD",
+		"warning: LF will be replaced by CRLF\n"+diff, nil)
+
+	got, err := cli.New(fake).Diff(context.Background(), backend.Local{Root: "/r"}, backend.DiffSpec{Base: "HEAD"})
+
+	require.NoError(t, err)
+	assert.Equal(t, diff, got)
 }

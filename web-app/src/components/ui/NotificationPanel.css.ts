@@ -1,48 +1,5 @@
-import { style, styleVariants, keyframes, globalStyle } from "@vanilla-extract/css";
+import { style, styleVariants, globalStyle } from "@vanilla-extract/css";
 import { vars, breakpoints, zIndex } from "@/styles/theme.css";
-
-const fadeIn = keyframes({
-  from: { opacity: 0 },
-  to: { opacity: 1 },
-});
-
-export const overlay = style({
-  position: "fixed",
-  top: 0,
-  left: 0,
-  right: 0,
-  bottom: 0,
-  backgroundColor: vars.color.overlayBackground,
-  zIndex: zIndex.slideOver,
-  animation: `${fadeIn} 0.3s ease-out`,
-});
-
-export const panel = style({
-  position: "fixed",
-  top: 0,
-  right: 0,
-  bottom: 0,
-  width: "400px",
-  maxWidth: "90vw",
-  backgroundColor: vars.color.background,
-  boxShadow: "-2px 0 10px rgba(0, 0, 0, 0.2)",
-  zIndex: zIndex.slideOver,
-  transform: "translateX(100%)",
-  transition: "transform 0.3s ease-out",
-  display: "flex",
-  flexDirection: "column",
-  overflow: "hidden",
-  "@media": {
-    [`screen and (max-width: ${breakpoints.md})`]: {
-      width: "100%",
-      maxWidth: "100vw",
-    },
-  },
-});
-
-export const panelOpen = style({
-  transform: "translateX(0)",
-});
 
 export const header = style({
   display: "flex",
@@ -926,7 +883,7 @@ export const needsDecisionClearFilterButton = style({
 });
 
 // ---------------------------------------------------------------------------
-// Notification tray (notification_tray_v2): non-modal, transform-only motion.
+// Notification tray: non-modal, transform-only motion.
 // Closed trays are `visibility: hidden`, so they leave the tab order and the
 // accessibility tree without a layout change.
 // ---------------------------------------------------------------------------
@@ -980,27 +937,17 @@ export const trayVariant = styleVariants({
       borderTopRightRadius: "12px",
       // The bottom nav's measured height already includes the inset; pad only what it does not cover (TS-7).
       paddingBottom: "max(0px, calc(env(safe-area-inset-bottom, 0px) - var(--bottom-nav-height, 0px)))",
+      // Height and bottom follow the keyboard, so ease them; transform stays the open/close motion.
+      transition:
+        "transform 0.25s ease-out, height 0.2s ease-out, bottom 0.2s ease-out, visibility 0s linear 0.25s",
+      "@media": { "(prefers-reduced-motion: reduce)": { transition: "none" } },
       selectors: {
         '&[data-state="open"]': { transform: "translateY(0)" },
         '&[data-sheet="expanded"]': { height: "calc(var(--viewport-height, 100dvh) * 0.85)" },
+        // Keyboard up: the sheet rides its top edge (bottom already tracks --keyboard-height) and
+        // takes the room above it, so the search results stay visible instead of a 27% sliver.
+        '&[data-keyboard="open"]': { height: "calc(var(--viewport-height, 100dvh) * 0.85)" },
       },
-    },
-  ],
-  /** Soft keyboard open on a phone: anchored under the tab row so the keyboard never covers it. */
-  topSheet: [
-    trayBase,
-    {
-      left: 0,
-      right: 0,
-      top: "max(var(--mobile-stack-top-offset, 0px), env(safe-area-inset-top, 0px))",
-      height: "calc(var(--viewport-height, 100dvh) * 0.5)",
-      maxHeight:
-        "calc(var(--viewport-height, 100dvh) - max(var(--mobile-stack-top-offset, 0px), env(safe-area-inset-top, 0px)))",
-      transform: "translateY(-100%)",
-      borderBottom: `1px solid ${vars.color.borderColor}`,
-      borderBottomLeftRadius: "12px",
-      borderBottomRightRadius: "12px",
-      selectors: { '&[data-state="open"]': { transform: "translateY(0)" } },
     },
   ],
   /** Phone on its side: a right-hand column that honors the notch insets. */
@@ -1094,6 +1041,11 @@ export const trayAttention = style({
   fontSize: "0.8125rem",
   fontWeight: 600,
   color: vars.color.errorText,
+});
+
+export const trayCounts = style({
+  fontSize: "0.8125rem",
+  color: vars.color.textMuted,
 });
 
 export const trayBanner = style({

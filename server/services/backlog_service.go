@@ -158,6 +158,9 @@ type BacklogService struct {
 	// self-service "Ship PR" action on the item detail page. nil (the default)
 	// makes TriggerShipPR return CodeUnimplemented; wired via SetOneShotRunner.
 	oneShotRunner PRRunner
+	// staleWorkInspector snapshots and nudges a stale work session before
+	// RemediateStaleWorkSession restarts it. nil keeps the plain restart.
+	staleWorkInspector StaleWorkInspector
 	// julesDispatcher drives DispatchToJules (backlog_service_jules.go). nil
 	// (the default — Jules disabled, or its dependencies unresolvable at
 	// startup) makes DispatchToJules return CodeFailedPrecondition pointing at
@@ -319,6 +322,11 @@ type BacklogService struct {
 	// by the time these persistence calls ran and every successful triage
 	// silently failed to ever mark the item ready.
 	triageCleanupTimeout time.Duration
+
+	// triageCleanupContextFn, when set, replaces the default timeout-bound context for
+	// TriggerTriage's post-call persistence writes. Tests use it to assert WHEN those
+	// contexts are created (after the LLM call returns) without sleeping past a real timeout.
+	triageCleanupContextFn func() (context.Context, context.CancelFunc)
 
 	// pluginRegistry and syncKeyFunc back TriggerSync / GetSyncHistory. Both are
 	// optional: if pluginRegistry is nil, TriggerSync degrades to CodeUnimplemented
@@ -739,6 +747,22 @@ func (s *BacklogService) SetTriageCleanupTimeout(d time.Duration) {
 	s.triageCleanupTimeout = d
 }
 
+// SetTriageCleanupContextFactory overrides how TriggerTriage creates the contexts for its
+// post-LLM-call DB writes. Exposed for tests; production callers should rely on the default.
+func (s *BacklogService) SetTriageCleanupContextFactory(f func() (context.Context, context.CancelFunc)) {
+	s.triageCleanupContextFn = f
+}
+
+// newTriageCleanupContext returns a fresh context bounding one batch of post-call persistence
+// writes. Callers must invoke it after the LLM call returns, never before: see the
+// triageCleanupTimeout field comment.
+func (s *BacklogService) newTriageCleanupContext() (context.Context, context.CancelFunc) {
+	if s.triageCleanupContextFn != nil {
+		return s.triageCleanupContextFn()
+	}
+	return context.WithTimeout(context.Background(), s.triageCleanupTimeout)
+}
+
 // SetPluginRegistry wires the item-source plugin registry, enabling TriggerSync.
 func (s *BacklogService) SetPluginRegistry(registry *session.PluginRegistry) {
 	s.pluginRegistry = registry
@@ -762,6 +786,11 @@ func (s *BacklogService) SetSyncFeatureEnabledCheck(check func() bool) {
 // waiting on the triage semaphore.
 func (s *BacklogService) Shutdown() {
 	s.shutdownCancel()
+}
+
+// SetStaleWorkInspector wires the optional inspect-and-nudge step of RemediateStaleWorkSession.
+func (s *BacklogService) SetStaleWorkInspector(i StaleWorkInspector) {
+	s.staleWorkInspector = i
 }
 
 // SetSessionStopper wires the optional session stopper used to kill orphaned sessions on re-triage.
@@ -886,6 +915,7 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 		FailureCapturePath:       is.FailureCapturePath,
 		ErrorDetail:              is.ErrorDetail,
 		ClaimantHostId:           is.ClaimantHostID,
+		BaseCommitSha:            is.BaseCommitSha,
 	}
 	if is.StartedAt != nil {
 		p.StartedAt = timestamppb.New(*is.StartedAt)

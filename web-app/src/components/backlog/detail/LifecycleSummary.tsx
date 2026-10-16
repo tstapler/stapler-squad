@@ -6,6 +6,7 @@ import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 import type { PipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
 import { routes } from "@/lib/routes";
 import { resolveReworkCapOverride } from "@/lib/backlog/formatReworkCapOverride";
+import { GitHubBadge } from "@/components/shared/GitHubBadge";
 import { BlockerChip } from "../BlockerChip";
 import { StageTracker } from "./StageTracker";
 import { LivenessLine } from "./LivenessLine";
@@ -87,6 +88,26 @@ function StuckBlock({
         View in Unfinished
       </a>
     </>
+  );
+}
+
+/**
+ * PR link for the sticky header. Omitted for pr_pending because
+ * PullRequestSection already renders the link expanded in the scroll area.
+ * Falls back to a plain link when prNumber is unknown (GitHubBadge needs it).
+ */
+function PrBadge({ item }: { item: BacklogItem }) {
+  if (!item.prUrl || item.status === "pr_pending") return null;
+  return (
+    <span data-testid="lifecycle-pr-badge">
+      {item.prNumber && item.prNumber > 0 ? (
+        <GitHubBadge prNumber={item.prNumber} prUrl={item.prUrl} />
+      ) : (
+        <a href={item.prUrl} target="_blank" rel="noopener noreferrer" className={styles.pipelineBadge}>
+          Pull request
+        </a>
+      )}
+    </span>
   );
 }
 
@@ -195,6 +216,7 @@ export function LifecycleSummary({
         configuredPipelineModeName={configuredPipelineModeName}
       />
       <ReworkCapBadge reworkCapOverride={item.reworkCapOverride} />
+      <PrBadge item={item} />
       <LivenessLine item={item} />
     </div>
   );

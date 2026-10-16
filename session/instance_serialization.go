@@ -200,11 +200,12 @@ func (i *Instance) ToInstanceData() InstanceData {
 	}
 
 	// Only include diff stats if they exist
-	if i.gitManager.diffStats != nil {
+	// GetDiffStats takes gm.mu; the bare field races with SetDiffStats.
+	if ds := i.gitManager.GetDiffStats(); ds != nil {
 		data.DiffStats = DiffStatsData{
-			Added:   i.gitManager.diffStats.Added,
-			Removed: i.gitManager.diffStats.Removed,
-			Content: i.gitManager.diffStats.Content,
+			Added:   ds.Added,
+			Removed: ds.Removed,
+			Content: ds.Content,
 		}
 	}
 

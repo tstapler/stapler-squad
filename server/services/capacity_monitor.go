@@ -34,13 +34,14 @@ type CapacityMonitor struct {
 	terminator      SessionTerminator
 	now             func() time.Time
 
-	mu              sync.RWMutex
-	current         map[string]ProviderLimits
-	sessionLimits   map[string]ProviderLimits  // keyed by session title
-	lastWarningTime map[string]time.Time       // keyed by session title to rate-limit events
-	idleWaitState   map[string]idleWaitTracker // keyed by session UUID (see checkIdleWaitLoop)
-	roleCache       map[string]string          // session UUID -> backlog role (hits only)
-	handledOnce     map[string]bool            // "<kind>:<session UUID>" one-shot guardrail actions
+	mu                 sync.RWMutex
+	current            map[string]ProviderLimits
+	sessionLimits      map[string]ProviderLimits  // keyed by session title
+	lastWarningTime    map[string]time.Time       // keyed by session title to rate-limit events
+	idleWaitState      map[string]idleWaitTracker // keyed by session UUID (see checkIdleWaitLoop)
+	roleCache          map[string]string          // session UUID -> backlog role (hits only)
+	handledOnce        map[string]bool            // "<kind>:<session UUID>" one-shot guardrail actions
+	spendRateAlertedAt map[string]time.Time       // session UUID -> last spend-rate alert (cooldown)
 }
 
 // SessionRoleResolver returns the backlog session role ("triage", "work", ...)
@@ -107,23 +108,24 @@ func NewCapacityMonitor(p CapacityMonitorParams) *CapacityMonitor {
 		}
 	}
 	return &CapacityMonitor{
-		clients:         make(map[string]ProviderLimitsClient),
-		config:          p.Config,
-		eventBus:        p.EventBus,
-		poller:          p.Poller,
-		tokenStore:      p.TokenStore,
-		sessionSwitcher: p.SessionSwitcher,
-		compactor:       compactor,
-		pricing:         tokens.DefaultPricingTable(),
-		roleResolver:    p.RoleResolver,
-		terminator:      p.Terminator,
-		now:             time.Now,
-		roleCache:       make(map[string]string),
-		handledOnce:     make(map[string]bool),
-		current:         make(map[string]ProviderLimits),
-		sessionLimits:   make(map[string]ProviderLimits),
-		lastWarningTime: make(map[string]time.Time),
-		idleWaitState:   make(map[string]idleWaitTracker),
+		clients:            make(map[string]ProviderLimitsClient),
+		config:             p.Config,
+		eventBus:           p.EventBus,
+		poller:             p.Poller,
+		tokenStore:         p.TokenStore,
+		sessionSwitcher:    p.SessionSwitcher,
+		compactor:          compactor,
+		pricing:            tokens.DefaultPricingTable(),
+		roleResolver:       p.RoleResolver,
+		terminator:         p.Terminator,
+		now:                time.Now,
+		roleCache:          make(map[string]string),
+		handledOnce:        make(map[string]bool),
+		spendRateAlertedAt: make(map[string]time.Time),
+		current:            make(map[string]ProviderLimits),
+		sessionLimits:      make(map[string]ProviderLimits),
+		lastWarningTime:    make(map[string]time.Time),
+		idleWaitState:      make(map[string]idleWaitTracker),
 	}
 }
 
@@ -239,6 +241,11 @@ func (m *CapacityMonitor) pruneSessionState(active map[string]bool) {
 			delete(m.roleCache, uuid)
 		}
 	}
+	for uuid := range m.spendRateAlertedAt {
+		if !active[uuid] {
+			delete(m.spendRateAlertedAt, uuid)
+		}
+	}
 	for key := range m.handledOnce {
 		if !active[key[strings.LastIndex(key, ":")+1:]] {
 			delete(m.handledOnce, key)
@@ -325,7 +332,7 @@ func (m *CapacityMonitor) evaluateInstance(ctx context.Context, inst *session.In
 	// trivial "still waiting" wake-up turn; see #882).
 	if anthropicParseRes != nil {
 		m.checkIdleWaitLoop(ctx, inst, snap, anthropicParseRes, role)
-		m.checkSessionTokenCeiling(snap, anthropicParseRes)
+		m.checkSpendRate(snap, anthropicParseRes)
 	}
 
 	// 4. Pipeline-role cost budget: stop and hand back instead of warning.
@@ -413,26 +420,37 @@ func (m *CapacityMonitor) stopForGuardrail(ctx context.Context, inst *session.In
 	}
 }
 
-// checkSessionTokenCeiling surfaces a critical SESSION_TOKEN_CEILING finding
-// (otherwise visible only on the Insights page) as one notification per session.
-func (m *CapacityMonitor) checkSessionTokenCeiling(snap *session.InstanceSnapshot, parseRes *tokens.ParseResult) {
-	for _, f := range tokens.ComputeFindings(parseRes, m.pricing) {
-		if f.Type != tokens.FindingSessionTokenCeiling || f.Severity != tokens.SeverityCritical {
-			continue
-		}
-		if !m.firstTime("token_ceiling:" + snap.UUID) {
-			return
-		}
-		m.eventBus.Publish(events.NewNotificationEvent(
-			snap.UUID, snap.Title,
-			fmt.Sprintf("token-ceiling-%d", time.Now().Unix()),
-			8, 3,
-			"Session Token Ceiling Exceeded",
-			fmt.Sprintf("%s: %s", snap.Title, f.Message),
-			map[string]string{"type": "session_token_ceiling"},
-		))
+// checkSpendRate notifies when a live session's rolling spend rate exceeds the
+// configured USD/hour line, at most once per window per session. Sessions with
+// no priced turns in the window never alert.
+func (m *CapacityMonitor) checkSpendRate(snap *session.InstanceSnapshot, parseRes *tokens.ParseResult) {
+	threshold, enabled := m.config.SpendRateThreshold()
+	if !enabled {
 		return
 	}
+	window := m.config.SpendRateWindow()
+	now := m.now()
+	rate, ok := tokens.RollingSpendRate(parseRes, m.pricing, now, window)
+	if !ok || rate <= threshold {
+		return
+	}
+	m.mu.Lock()
+	last, seen := m.spendRateAlertedAt[snap.UUID]
+	if seen && now.Sub(last) < window {
+		m.mu.Unlock()
+		return
+	}
+	m.spendRateAlertedAt[snap.UUID] = now
+	m.mu.Unlock()
+	m.eventBus.Publish(events.NewNotificationEvent(
+		snap.UUID, snap.Title,
+		fmt.Sprintf("spend-rate-%d", now.Unix()),
+		8, 3,
+		"Session Spend Rate High",
+		fmt.Sprintf("%s is spending $%.2f/hour over the last %d minutes (alert line $%.2f/hour).",
+			snap.Title, rate, int(window/time.Minute), threshold),
+		map[string]string{"type": "spend_rate"},
+	))
 }
 
 func (m *CapacityMonitor) checkThresholds(limits ProviderLimits, role string) string {

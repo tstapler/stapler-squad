@@ -593,7 +593,7 @@ func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testi
 
 	port := testutil.FindFreePort(t)
 	addr := fmt.Sprintf("localhost:%d", port)
-	srv := NewServerWithDeps(addr, deps)
+	srv := newShutdownOnCleanupServer(t, addr, deps)
 	if got := srv.GetAddr(); got != addr {
 		t.Fatalf("expected GetAddr() to report the configured explicit address before Start(), got %q, want %q", got, addr)
 	}

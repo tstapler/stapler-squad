@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 
@@ -20,6 +21,12 @@ const (
 	metaQuestionShape    = "question_shape"
 	metaQuestionOptions  = "question_options"
 	metaReplyUnavailable = "reply_unavailable"
+	// metaQuestionPending is how many questions of the session were asked together
+	// with this one (PendingQuestionStore.PendingCount): above 1 the card cannot
+	// know which one is on screen. Unlike the notification's occurrence count it
+	// does not accumulate over answered questions. The web client reads it as the
+	// literal "question_pending_count" in web-app/src/lib/reply/replyQuestion.ts.
+	metaQuestionPending = "question_pending_count"
 )
 
 // questionWiring is the optional Reply dependencies of an ApprovalHandler.
@@ -110,6 +117,10 @@ func (h *ApprovalHandler) registerQuestion(sessionID string, qa questionAttribut
 		if h.questions.unreplyable != nil {
 			h.questions.unreplyable(cause)
 		}
+		if h.questions.store != nil {
+			// On screen but not registrable: it still counts toward "parallel".
+			h.questions.store.NoteUnreplyable(qa.uuid)
+		}
 		return meta
 	}
 	labels, err := json.Marshal(asked.Labels)
@@ -118,13 +129,14 @@ func (h *ApprovalHandler) registerQuestion(sessionID string, qa questionAttribut
 		return meta
 	}
 	id := NewQuestionID()
-	h.questions.store.Register(PendingQuestion{
+	pending := h.questions.store.Register(PendingQuestion{
 		QuestionID:  id,
 		SessionUUID: sessionID,
 		Dialog:      session.QuestionDialog{Question: asked.Question, Header: asked.Header, Labels: asked.Labels},
 		Token:       QuestionToken(asked.Question),
 	})
 	meta[metaQuestionID] = id
+	meta[metaQuestionPending] = strconv.Itoa(pending)
 	meta[metaQuestionOptions] = string(labels)
 	return meta
 }

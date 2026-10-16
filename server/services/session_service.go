@@ -27,6 +27,9 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitwiring"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/search"
@@ -356,6 +359,11 @@ type SessionService struct {
 	// test call sites.
 	testTmuxServerSocket string
 
+	// gitBackend is the git backend remote session creation routes through. Built lazily
+	// from config by gitBackendOrDefault; tests replace it with setGitBackend before use.
+	gitBackendOnce sync.Once
+	gitBackend     backend.Backend
+
 	// githubResolver performs the actual GitHub-URL-to-local-clone resolution
 	// (network clone/fetch). Defaults to session.ResolveGitHubInputCtxWithHosts;
 	// overridable in tests to simulate a slow/instant resolution without
@@ -600,25 +608,34 @@ func newDefaultSearchEngine() *search.SearchEngine {
 		return search.NewSearchEngine()
 	}
 	searchEngine := search.NewSearchEngineWithPersistence(indexStore)
-	if loadErr := searchEngine.LoadIndex(); loadErr != nil {
-		var versionErr *search.IndexVersionMismatchError
-		if errors.As(loadErr, &versionErr) {
-			// The on-disk index predates a schema change (see CurrentIndexVersion)
-			// and was rejected rather than mis-decoded. This self-heals: the next
-			// search request finds syncMetadata unset and triggers a full rebuild
-			// (SearchEngine.IncrementalSync -> buildIndexLocked) from live session
-			// history, so results are only empty until that first search — not
-			// until new session activity occurs.
-			log.Warn("search index format changed; discarding incompatible on-disk index",
-				"old_version", versionErr.Got, "new_version", versionErr.Want, "path", versionErr.Path,
-				"impact", "search results empty until next search request triggers an automatic full reindex")
-		} else {
-			log.Warn("failed to load persisted search index", "err", loadErr)
-		}
-	} else if meta := searchEngine.GetSyncMetadata(); meta != nil {
-		log.Info("loaded persisted search index", "sessions", meta.TotalSessions, "documents", meta.TotalDocuments)
-	}
+	// Decoding the persisted index takes hundreds of MB of heap and seconds of CPU on
+	// every service start, and only the search RPC uses it, so defer it to first use.
+	searchEngine.EnableLazyLoad(logSearchIndexLoad)
 	return searchEngine
+}
+
+// logSearchIndexLoad reports the outcome of loading the persisted search index.
+func logSearchIndexLoad(meta *search.IndexSyncMetadata, loadErr error) {
+	if loadErr == nil {
+		if meta != nil {
+			log.Info("loaded persisted search index", "sessions", meta.TotalSessions, "documents", meta.TotalDocuments)
+		}
+		return
+	}
+	var versionErr *search.IndexVersionMismatchError
+	if errors.As(loadErr, &versionErr) {
+		// The on-disk index predates a schema change (see CurrentIndexVersion)
+		// and was rejected rather than mis-decoded. This self-heals: the next
+		// search request finds syncMetadata unset and triggers a full rebuild
+		// (SearchEngine.IncrementalSync -> buildIndexLocked) from live session
+		// history, so results are only empty until that first search — not
+		// until new session activity occurs.
+		log.Warn("search index format changed; discarding incompatible on-disk index",
+			"old_version", versionErr.Got, "new_version", versionErr.Want, "path", versionErr.Path,
+			"impact", "search results empty until next search request triggers an automatic full reindex")
+		return
+	}
+	log.Warn("failed to load persisted search index", "err", loadErr)
 }
 
 // claudeSettingsNotificationContent groups publishClaudeSettingsNotification's
@@ -1221,4 +1238,31 @@ func maybeAutoMigrateToEnt(repo *session.EntRepository) error {
 
 	log.Info("auto-migration to Ent complete")
 	return nil
+}
+
+// gitBackendOrDefault returns the git backend, defaulting to the process-wide router built from
+// config.GitBackendCohorts (every cohort defaults to the CLI; the config is read at first use,
+// so edits need a restart). Its local runner serves Local locations only; Remote locations
+// carry the SSH runner they were built from.
+func (s *SessionService) gitBackendOrDefault() backend.Backend {
+	s.gitBackendOnce.Do(func() {
+		s.gitBackend = gitwiring.Shared()
+	})
+	return s.gitBackend
+}
+
+// setGitBackend injects the backend. It only takes effect before the first
+// gitBackendOrDefault call (the Once is spent after that), which keeps it race-free.
+// b must be non-nil.
+func (s *SessionService) setGitBackend(b backend.Backend) {
+	if b == nil {
+		panic("services: setGitBackend called with a nil backend")
+	}
+	s.gitBackendOnce.Do(func() { s.gitBackend = b })
+}
+
+// remoteWorktreeOps builds the worktree ops for a remote runner, routing git through the
+// service's backend. The runner passed here is the value that reaches Backend as Remote.Runner.
+func (s *SessionService) remoteWorktreeOps(runner tmux.CommandRunner, host string) *git.RemoteWorktreeOps {
+	return git.NewRemoteWorktreeOps(runner, git.WithGitBackend(s.gitBackendOrDefault()), git.WithRemoteHost(host))
 }

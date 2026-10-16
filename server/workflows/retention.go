@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -23,17 +24,19 @@ import (
 //   - archive_after_hours == 0 means disabled (skip time-based archival for that workflow)
 //   - keep_sessions == 0 means disabled (keep all sessions)
 //
-// The goroutine exits when ctx is cancelled.
+// The goroutine exits when ctx is cancelled and is tracked on wg so the caller
+// can join it.
 func StartRetentionEnforcer(
 	ctx context.Context,
 	entClient *ent.Client,
 	workflowRepo session.WorkflowRepository,
 	interval time.Duration,
+	wg *sync.WaitGroup,
 ) {
 	if entClient == nil || workflowRepo == nil {
 		return
 	}
-	go func() {
+	wg.Go(func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
@@ -48,7 +51,7 @@ func StartRetentionEnforcer(
 				runRetentionSweep(ctx, entClient, workflowRepo)
 			}
 		}
-	}()
+	})
 	log.Info("[workflows/retention] retention enforcer started", "interval", interval)
 }
 

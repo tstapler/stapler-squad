@@ -13,6 +13,7 @@ import { PushNotificationSettings } from "@/components/settings/PushNotification
 import { SlackNotificationSettings } from "@/components/settings/SlackNotificationSettings";
 import { ThemePicker } from "@/components/settings/ThemePicker";
 import { InputModeSetting } from "@/components/settings/InputModeSetting";
+import { TerminalSettings } from "@/components/settings/TerminalSettings";
 import { ConfigPageContent } from "@/app/config/ConfigPageContent";
 import { KeyboardShortcutsTab } from "./KeyboardShortcutsTab";
 import { usePageView } from "@/lib/analytics/usePageView";
@@ -143,6 +144,11 @@ function SettingsPageInner() {
                   <Link href={routes.help} className={styles.helpLink}>
                     View documentation
                   </Link>
+                  {flags["changelog"] && (
+                    <Link href={routes.changelog} className={styles.helpLink} data-testid="settings-changelog-link">
+                      What&apos;s new (changelog)
+                    </Link>
+                  )}
                 </div>
               </div>
             </section>
@@ -164,6 +170,9 @@ function SettingsPageInner() {
             </section>
             <section className={styles.section}>
               <InputModeSetting />
+            </section>
+            <section className={styles.section}>
+              <TerminalSettings />
             </section>
             <section className={styles.section}>
               <PushNotificationSettings />

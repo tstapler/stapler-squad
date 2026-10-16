@@ -957,6 +957,15 @@ message UpdateSessionRequest {
   // not updatable). Toggling this on an Active session restarts it so the
   // flag takes effect (see SetAutoApprove's doc comment).
   optional bool auto_approve = 13;
+
+  // Opt-in escape hatch for stopping a session whose worktree is broken (git
+  // cannot determine whether it has uncommitted changes). Only meaningful when
+  // status is STOPPED. Skips the fail-closed dirty-state check solely when that
+  // check errored; the worktree and branch are kept on disk. A worktree known
+  // to be dirty is still committed first. Rejected with InvalidArgument unless
+  // status is STOPPED. The kept worktree is not protected from a later explicit
+  // session delete, which removes it without a dirty check.
+  optional bool force_stop = 14;
 }
 
 message UpdateSessionResponse {

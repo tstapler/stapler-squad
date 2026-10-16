@@ -11,7 +11,7 @@ import (
 )
 
 func TestUpdateBackgroundModels_ValidatesAndPersists(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	s := &SessionService{}
 	upd := func(p *sessionv1.BackgroundModelsProto) error {
 		_, err := s.UpdateBackgroundModels(context.Background(),

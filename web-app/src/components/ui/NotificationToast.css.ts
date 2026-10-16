@@ -140,7 +140,7 @@ export const typeLabel = style({
   borderRadius: "4px",
   // Fixed white on a darkened fill: primaryText is black in some themes, which the darkening would sink below 4.5:1.
   background: `linear-gradient(rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0.5)), var(--priority-color, ${vars.color.primary})`,
-  color: "#ffffff",
+  color: "white",
   whiteSpace: "nowrap",
   flexShrink: 0,
   selectors: {
@@ -261,7 +261,7 @@ const baseActionButton = style({
 export const viewButton = style([baseActionButton, {
   // Fixed white on a darkened fill: primaryText is black in some themes, which the darkening would sink below 4.5:1.
   background: `linear-gradient(rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0.5)), var(--priority-color, ${vars.color.primary})`,
-  color: "#ffffff",
+  color: "white",
   selectors: {
     "&:hover": {
       filter: "brightness(1.1)",
@@ -339,7 +339,7 @@ export const undoButton = style([baseActionButton, {
 }]);
 
 // ---------------------------------------------------------------------------
-// Capped deck (notification_tray_v2): one fixed flex column, cards in normal flow.
+// Capped deck: one fixed flex column, cards in normal flow.
 // ---------------------------------------------------------------------------
 
 const deckBase = style({
@@ -356,7 +356,7 @@ const deckBase = style({
 /**
  * Where the deck docks (ADR-009):
  *  - desktop: bottom-right, 360px wide, clear of the xterm scrollbar;
- *  - mobileTop: under the session tab row (`--mobile-stack-top-offset`, published
+ *  - mobileTop: under the terminal toolbar (`--mobile-deck-top-offset`), else the session tab row (`--mobile-stack-top-offset`, published
  *    by the session layout), never above the safe-area inset;
  *  - mobileBottom: a phone page with no terminal, above the bottom nav.
  */
@@ -366,7 +366,7 @@ export const deckPlacement = styleVariants({
     {
       bottom: "24px",
       // Clear of the 44px tray handle on the right edge.
-      right: "calc(60px + var(--terminal-scrollbar-width, 0px))",
+      right: "calc(var(--tray-handle-inset, 60px) + var(--terminal-scrollbar-width, 0px))",
       width: "360px",
       maxHeight: "calc(var(--viewport-height, 100dvh) - 48px)",
     },
@@ -376,7 +376,7 @@ export const deckPlacement = styleVariants({
     {
       top: "64px",
       // Clear of the 44px tray handle on the right edge.
-      right: "calc(60px + var(--terminal-scrollbar-width, 0px))",
+      right: "calc(var(--tray-handle-inset, 60px) + var(--terminal-scrollbar-width, 0px))",
       width: "360px",
       maxHeight: "calc(var(--viewport-height, 100dvh) - 96px)",
     },
@@ -384,7 +384,7 @@ export const deckPlacement = styleVariants({
   mobileTop: [
     deckBase,
     {
-      top: "calc(max(var(--mobile-stack-top-offset, 0px), env(safe-area-inset-top, 0px)) + 8px)",
+      top: "calc(max(var(--mobile-deck-top-offset, var(--mobile-stack-top-offset, 0px)), env(safe-area-inset-top, 0px)) + 8px)",
       left: "max(16px, env(safe-area-inset-left, 0px))",
       right: "max(16px, env(safe-area-inset-right, 0px))",
       maxHeight: "calc(var(--viewport-height, 100dvh) * 0.4)",
@@ -599,21 +599,54 @@ export const trayButton = style({
   selectors: { "&:hover": { background: vars.color.hoverBackground } },
 });
 
-/** Phone, non-approval: icon, title and one body line left; the primary action and close right. At most 96px. */
-export const compactCard = style({
-  maxHeight: "96px",
-  overflow: "hidden",
+/** Phone, non-approval: icon, title and one body line left; the primary action and close right. Never height-capped: a cap clipped the card's own buttons while leaving them focusable. */
+export const compactCard = style({});
+
+export const compactTrailing = style({
+  display: "flex",
+  alignItems: "center",
+  gap: "6px",
+  flexShrink: 0,
 });
 
-globalStyle(`${compactCard} [data-slot="body"]`, { padding: "0 16px 8px", maxHeight: "none", overflow: "hidden" });
-globalStyle(`${compactCard} [data-slot="body"] p`, {
-  display: "-webkit-box",
-  WebkitLineClamp: 1,
-  WebkitBoxOrient: "vertical",
+// One row: border 2+2, header padding 4+4, content 44 (the Tray/View hit targets) = 56px.
+globalStyle(`${compactCard} > ${header}`, { padding: "4px 8px 4px 12px", gap: "8px", borderBottom: "none" });
+globalStyle(`${compactCard} ${typeLabel}`, { display: "none" });
+globalStyle(`${compactTrailing} > button`, { flex: "0 0 auto", padding: "0 12px", fontSize: "13px" });
+globalStyle(`${compactCard} [data-slot="actions"]`, { padding: "0 12px 8px", borderTop: "none" });
+globalStyle(`${compactCard} [data-slot="actions"]:empty`, { display: "none" });
+
+/** The one-line preview that sits under the title inside the compact row's title column. */
+export const compactPreview = style({
+  margin: 0,
+  fontSize: "12px",
+  lineHeight: "16px",
+  color: vars.color.textSecondary,
+  whiteSpace: "nowrap",
   overflow: "hidden",
+  textOverflow: "ellipsis",
 });
-globalStyle(`${compactCard} [data-slot="workdir"]`, { display: "none" });
-globalStyle(`${compactCard} [data-slot="actions"]`, { padding: "0 16px 8px", borderTop: "none" });
+
+/**
+ * Phone approval card: the command gets a fixed three-line region (no nested scroller) and
+ * Approve/Deny stay in view. Border 4 + header 56 + body 8+99 + actions 8+44+8 = 227px.
+ */
+export const compactApprovalCard = style({});
+globalStyle(`${compactApprovalCard} > ${header}`, { padding: "4px 8px 4px 12px", gap: "8px", borderBottom: "none" });
+globalStyle(`${compactApprovalCard} ${typeLabel}`, { display: "none" });
+globalStyle(`${compactApprovalCard} [data-slot="body"]`, { padding: "4px 12px", maxHeight: "none", overflow: "visible" });
+globalStyle(`${compactApprovalCard} [data-slot="workdir"]`, { display: "none" });
+globalStyle(`${compactApprovalCard} [data-slot="actions"]`, { padding: "8px 12px", borderTop: "none", alignItems: "center" });
+
+/** Risk label and the show/hide toggle share the first row on a phone card; the command sits under both. */
+export const commandBlock = style({});
+globalStyle(`${compactApprovalCard} ${commandBlock}`, {
+  display: "grid",
+  gridTemplateColumns: "1fr auto",
+  alignItems: "center",
+});
+globalStyle(`${compactApprovalCard} ${commandBlock} > p`, { gridColumn: "1 / -1", gridRow: 2 });
+globalStyle(`${compactApprovalCard} ${commandBlock} > button`, { gridColumn: 2, gridRow: 1, alignSelf: "center" });
 
 export const commandText = style({
   margin: 0,
@@ -627,6 +660,11 @@ export const commandText = style({
   WebkitLineClamp: 4,
   WebkitBoxOrient: "vertical",
   overflow: "hidden",
+});
+// Collapsed phone command: exactly three 13px/1.4 lines (54.6px), never a scroller.
+globalStyle(`${compactApprovalCard} ${commandText}[data-expanded="false"]`, {
+  WebkitLineClamp: 3,
+  height: "calc(13px * 1.4 * 3)",
 });
 
 export const commandTextExpanded = style({
@@ -732,18 +770,9 @@ export const trayEntry = style({
   },
 });
 
-export const trayEntryBell = style({
-  ...chipBase,
-  width: "44px",
-  minWidth: "44px",
-  padding: 0,
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  gap: "4px",
-  borderRadius: "22px",
-  selectors: { "&:hover": { background: vars.color.hoverBackground } },
-});
+// Keyboard open: a single 40px strip so the terminal keeps the rest of the screen.
+globalStyle(`${trayEntry}[data-content="keyboard-chip"]`, { minHeight: "40px" });
+globalStyle(`${trayEntry}[data-content="keyboard-chip"] > button`, { minHeight: "40px" });
 
 /**
  * Phone: while the tray is open the deck steps aside (it stays mounted, so the entry

@@ -22,6 +22,8 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tokens"
@@ -333,6 +335,9 @@ type Instance struct {
 	AutonomousMaxTurns int32 `json:"autonomous_max_turns,omitempty"`
 	// AutonomousOutcome is the result of the last autonomous run: "", "done", or "stuck".
 	AutonomousOutcome string `json:"autonomous_outcome,omitempty"`
+	// AutonomousStopReason is why the last autonomous run ended. In-memory only
+	// (not persisted, not on the wire); written through the actor setters.
+	AutonomousStopReason domain.StopReason `json:"-"`
 
 	// GitHub integration fields for PR/URL-based session creation
 	// GitHubPRNumber is the PR number if this session was created from a PR URL
@@ -834,6 +839,11 @@ type Instance struct {
 	// this field directly, outside of construction/serialization code.
 	ExecutionTarget ExecutionTarget `json:"-"`
 
+	// GitBackend runs this session's git operations that have migrated to the backend seam.
+	// Set once at construction from InstanceOptions.GitBackend; nil means the default CLI
+	// backend (see gitBackend()). Read via gitBackend().
+	GitBackend backend.Backend `json:"-"`
+
 	// remoteApprovalRelay is the per-session *sshremote.RemoteApprovalRelay
 	// (ssh-remote-workspaces Phase 5, session/sshremote) server/services.
 	// SessionService wires up for a remote session's PermissionRequest hook
@@ -1099,6 +1109,10 @@ type InstanceOptions struct {
 	// Set by server/services/session_service.go's CreateSession mode-specific block when
 	// req.Msg.Remote names a configured remote.
 	ExecutionTarget ExecutionTarget
+
+	// GitBackend is the backend git operations route through (production: the gitwiring
+	// router). nil means the default CLI backend.
+	GitBackend backend.Backend
 }
 
 // ResolveSessionPath expands a leading "~" to the current user's home directory
@@ -1209,6 +1223,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		CLIFlags:             opts.CLIFlags,
 		ExtraArgs:            opts.ExtraArgs,
 		ExecutionTarget:      opts.ExecutionTarget,
+		GitBackend:           opts.GitBackend,
 		// Restart-from-session lineage (Story 2.3.1)
 		RestartedFromSessionID: opts.RestartedFromSessionID,
 	}
@@ -2264,6 +2279,52 @@ func (i *Instance) Pause() error {
 	return i.sendSyncErr(func(s *instanceState) error { return pauseLocked(s) })
 }
 
+// worktreeNeedsCommit reports whether the session's worktree holds uncommitted work
+// that must be committed before the worktree is removed. It fails closed: if the
+// dirty state cannot be determined it returns ErrDirtyStateUnknown so the caller
+// keeps the worktree. It bypasses IsDirty's TTL cache (a clean result is trusted
+// for minutes) because a stale "clean" would skip the commit and lose files.
+func (i *Instance) worktreeNeedsCommit() (bool, error) {
+	if !i.IsWorktree {
+		return false, nil
+	}
+	if !i.gitManager.HasWorktree() {
+		return false, fmt.Errorf("%w: git worktree not initialized", ErrDirtyStateUnknown)
+	}
+	if _, err := os.Stat(i.gitManager.GetWorktreePath()); errors.Is(err, os.ErrNotExist) {
+		return false, nil // nothing on disk to lose
+	} else if err != nil {
+		return false, fmt.Errorf("%w: %w", ErrDirtyStateUnknown, err)
+	}
+	dirty, err := i.gitManager.IsDirtyUncached()
+	if err != nil {
+		return false, fmt.Errorf("%w: %w", ErrDirtyStateUnknown, err)
+	}
+	if dirty {
+		// CommitChanges gates on the cached IsDirty; a stale "clean" there would
+		// skip the commit and Remove() would then delete the files.
+		i.gitManager.InvalidateDirtyCache()
+	}
+	return dirty, nil
+}
+
+// commitBeforeRemove re-checks after the agent's tmux session is gone (it could
+// write between the first check and teardown) and commits anything found. A
+// failure here leaves tmux already killed but the worktree intact; a retry of
+// pause/stop is safe and goes through the same checks.
+func (i *Instance) commitBeforeRemove(commitMsg string) error {
+	needs, err := i.worktreeNeedsCommit()
+	if err != nil {
+		return err
+	}
+	if needs {
+		if err := i.gitManager.CommitChanges(commitMsg); err != nil {
+			return fmt.Errorf("failed to commit changes: %w", err)
+		}
+	}
+	return nil
+}
+
 // pauseLocked is the actor-safe body of Pause().
 func pauseLocked(s *instanceState) error {
 	i := s.inst
@@ -2286,16 +2347,21 @@ func pauseLocked(s *instanceState) error {
 		return nil
 	}
 
+	// Fail closed before any side effect: an unknown dirty state must never fall
+	// through to Remove(), which would delete uncommitted work.
+	needsCommit, err := i.worktreeNeedsCommit()
+	if err != nil {
+		log.Error("pause aborted: cannot determine worktree dirty state", "session", i.Title, "err", err)
+		return err
+	}
+
 	stopControllerLocked(s)
 
 	var errs []error
 
 	// Git operations only apply to worktree sessions.
 	if i.IsWorktree {
-		if dirty, err := i.gitManager.IsDirty(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to check if worktree is dirty: %w", err))
-			log.Error("failed to check if worktree is dirty", "session", i.Title, "err", err)
-		} else if dirty {
+		if needsCommit {
 			commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s (paused)", i.Title, time.Now().Format(time.RFC822))
 			if err := i.gitManager.CommitChanges(commitMsg); err != nil {
 				errs = append(errs, fmt.Errorf("failed to commit changes: %w", err))
@@ -2317,6 +2383,11 @@ func pauseLocked(s *instanceState) error {
 	// Check if worktree exists before trying to remove it.
 	if i.IsWorktree {
 		if _, err := os.Stat(i.gitManager.GetWorktreePath()); err == nil {
+			if err := i.commitBeforeRemove(fmt.Sprintf("[claudesquad] update from '%s' on %s (paused)", i.Title, time.Now().Format(time.RFC822))); err != nil {
+				// Return err bare: combineErrors would flatten it and lose errors.Is.
+				log.Warn("aborting before worktree removal; worktree kept", "session", i.Title, "prior_errs", errs, "err", err)
+				return err
+			}
 			if err := i.gitManager.Remove(); err != nil {
 				errs = append(errs, fmt.Errorf("failed to remove git worktree: %w", err))
 				log.Error("failed to remove git worktree", "err", err)
@@ -2458,11 +2529,20 @@ func (i *Instance) Resume() error {
 // Mirrors pauseLocked's cleanup (stop controller, commit-if-dirty, kill tmux, remove
 // worktree) but lands in Stopped instead of Paused.
 func (i *Instance) StopByUser() error {
-	return i.sendSyncErr(func(s *instanceState) error { return stopByUserLocked(s) })
+	return i.sendSyncErr(func(s *instanceState) error { return stopByUserLocked(s, false) })
 }
 
-// stopByUserLocked is the actor-safe body of StopByUser().
-func stopByUserLocked(s *instanceState) error {
+// ForceStopByUser is StopByUser for a session whose worktree is broken so git cannot
+// say whether it is dirty. It skips the dirty-state check only when that check
+// errored with ErrDirtyStateUnknown, then stops the session and leaves the worktree
+// and branch on disk untouched. A worktree known to be dirty is still committed
+// first, exactly as in StopByUser.
+func (i *Instance) ForceStopByUser() error {
+	return i.sendSyncErr(func(s *instanceState) error { return stopByUserLocked(s, true) })
+}
+
+// stopByUserLocked is the actor-safe body of StopByUser()/ForceStopByUser().
+func stopByUserLocked(s *instanceState, force bool) error {
 	i := s.inst
 	if !i.Permissions.CanPause {
 		return ErrPauseNotPermitted
@@ -2477,13 +2557,23 @@ func stopByUserLocked(s *instanceState) error {
 		return ErrInvalidTransition{From: i.Status, To: Stopped}
 	}
 
+	// Fail closed before any side effect — see pauseLocked.
+	needsCommit, err := i.worktreeNeedsCommit()
+	keepWorktree := false
+	if err != nil {
+		if !force || !errors.Is(err, ErrDirtyStateUnknown) {
+			log.Error("stop aborted: cannot determine worktree dirty state", "session", i.Title, "err", err)
+			return err
+		}
+		log.Warn("force stop: dirty state unknown; stopping session but keeping worktree and branch on disk", "session", i.Title, "err", err)
+		keepWorktree = true
+	}
+
 	stopControllerLocked(s)
 
 	var errs []error
-	if i.IsWorktree {
-		if dirty, err := i.gitManager.IsDirty(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to check if worktree is dirty: %w", err))
-		} else if dirty {
+	if i.IsWorktree && !keepWorktree {
+		if needsCommit {
 			commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s (stopped)", i.Title, time.Now().Format(time.RFC822))
 			if err := i.gitManager.CommitChanges(commitMsg); err != nil {
 				return i.combineErrors(append(errs, fmt.Errorf("failed to commit changes: %w", err)))
@@ -2497,8 +2587,13 @@ func stopByUserLocked(s *instanceState) error {
 		}
 	}
 
-	if i.IsWorktree {
+	if i.IsWorktree && !keepWorktree {
 		if _, err := os.Stat(i.gitManager.GetWorktreePath()); err == nil {
+			if err := i.commitBeforeRemove(fmt.Sprintf("[claudesquad] update from '%s' on %s (stopped)", i.Title, time.Now().Format(time.RFC822))); err != nil {
+				// Return err bare: combineErrors would flatten it and lose errors.Is.
+				log.Warn("aborting before worktree removal; worktree kept", "session", i.Title, "prior_errs", errs, "err", err)
+				return err
+			}
 			if err := i.gitManager.Remove(); err != nil {
 				return i.combineErrors(append(errs, fmt.Errorf("failed to remove git worktree: %w", err)))
 			}

@@ -1421,3 +1421,95 @@ func TestMigrationShouldBeReversible_WhenPipelineModeAndItemSessionGainStageExec
 	assert.True(t, fetchedAfterUpdate.CostPriced, "cost_priced must be undisturbed by an update that never references it")
 	assert.Equal(t, "", fetchedAfterUpdate.ResolvedProgram, "ResolvedProgram must be undisturbed by an update that never references it")
 }
+
+// ─── RemoveBacklogItemDependency / ListBacklogItemDependencies ─────────────────
+
+func TestRemoveBacklogItemDependency_should_DeleteEdge_When_EdgeExists(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	blocker, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "blocker"})
+	require.NoError(t, err)
+	blocked, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "blocked"})
+	require.NoError(t, err)
+	edge := BacklogItemDependencyEdge{BlockerID: blocker.ID, BlockedID: blocked.ID}
+	require.NoError(t, repo.AddBacklogItemDependency(ctx, edge))
+
+	require.NoError(t, repo.RemoveBacklogItemDependency(ctx, edge))
+
+	unresolved, err := repo.UnresolvedBlockerItemIDs(ctx, []string{blocked.ID})
+	require.NoError(t, err)
+	assert.False(t, unresolved[blocked.ID])
+}
+
+func TestRemoveBacklogItemDependency_should_Succeed_When_EdgeDoesNotExist(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	a, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "a"})
+	require.NoError(t, err)
+	b, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "b"})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.RemoveBacklogItemDependency(ctx, BacklogItemDependencyEdge{BlockerID: a.ID, BlockedID: b.ID}))
+}
+
+func TestRemoveBacklogItemDependency_should_ReturnNotFound_When_ItemMissing(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	a, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "a"})
+	require.NoError(t, err)
+
+	err = repo.RemoveBacklogItemDependency(ctx, BacklogItemDependencyEdge{
+		BlockerID: a.ID,
+		BlockedID: "00000000-0000-0000-0000-000000000000",
+	})
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestListBacklogItemDependencies_should_ReturnBothDirections_When_EdgesExist(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	a, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "A"})
+	require.NoError(t, err)
+	b, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "B"})
+	require.NoError(t, err)
+	c, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "C"})
+	require.NoError(t, err)
+	require.NoError(t, repo.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{BlockerID: a.ID, BlockedID: b.ID}))
+	require.NoError(t, repo.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{BlockerID: b.ID, BlockedID: c.ID}))
+
+	blockedBy, blocking, err := repo.ListBacklogItemDependencies(ctx, b.ID)
+	require.NoError(t, err)
+	require.Len(t, blockedBy, 1)
+	assert.Equal(t, a.ID, blockedBy[0].ItemID)
+	assert.Equal(t, "A", blockedBy[0].Title)
+	assert.Equal(t, a.Status, blockedBy[0].Status)
+	require.Len(t, blocking, 1)
+	assert.Equal(t, c.ID, blocking[0].ItemID)
+}
+
+func TestListBacklogItemDependencies_should_ReturnEmpty_When_NoEdges(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	a, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "solo"})
+	require.NoError(t, err)
+
+	blockedBy, blocking, err := repo.ListBacklogItemDependencies(ctx, a.ID)
+	require.NoError(t, err)
+	assert.Empty(t, blockedBy)
+	assert.Empty(t, blocking)
+}

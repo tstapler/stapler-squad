@@ -57,7 +57,7 @@ func SetupTestRepoWithIdentity(t *testing.T, configureIdentity bool) string {
 }
 
 // RunGit runs a real git command in dir and fails the test on error.
-func RunGit(t *testing.T, dir string, args ...string) string {
+func RunGit(t testing.TB, dir string, args ...string) string {
 	t.Helper()
 	cmd := safeexec.CommandContext(context.Background(), "git", args...)
 	cmd.Dir = dir

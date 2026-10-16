@@ -1,15 +1,14 @@
 // +feature: notification-tray
 "use client";
 
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useRef, type ReactNode } from "react";
+import { useDraggableBell } from "@/lib/hooks/useDraggableBell";
 import { useDeckViewport } from "@/lib/contexts/deckViewportContext";
-import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import { useNotificationCommands, useNotificationState } from "@/lib/contexts/notificationContexts";
-import { NOTIFICATION_TRAY_V2_FLAG } from "@/lib/notification-policy";
 import { countNeedsAttention } from "@/lib/utils/notificationGrouping";
 import { capBadgeCount } from "@/lib/utils/notificationMapping";
 import { trayHandle, trayHandleDot, trayQuietBadge } from "./NotificationPanel.css";
-import { overflowChip, trayEntry, trayEntryBell } from "./NotificationToast.css";
+import { overflowChip, trayEntry } from "./NotificationToast.css";
 import type { TrayAffordance } from "./trayVariant";
 
 /** A mousedown on a button would blur xterm's textarea (and collapse a soft keyboard). */
@@ -41,27 +40,43 @@ export function useTrayCounts() {
 /**
  * The desktop edge handle: a fixed 44px-wide band at 35% from the top (O6),
  * capped "99+" visually with the exact count in its accessible name. It overlays
- * the terminal; nothing reflows. Not rendered on a phone (the entry chip is) or
- * with `notification_tray_v2` off.
+ * the terminal; nothing reflows. Draggable (see useDraggableBell). On a phone it renders only when the opt-in floating bell is on.
  */
 export function TrayHandle() {
-  const v2 = useFeatureFlag(NOTIFICATION_TRAY_V2_FLAG);
   const { isInnerScreen } = useDeckViewport();
   const { isPanelOpen, quietMode } = useNotificationState();
   const { togglePanel } = useNotificationCommands();
   const { unreadCount, needsAttention } = useTrayCounts();
-  if (!v2 || !isInnerScreen) return null;
+  const { isVirtualKeyboardOpen } = useDeckViewport();
+  const ref = useRef<HTMLButtonElement>(null);
+  const bell = useDraggableBell(ref, !isInnerScreen);
+  // The phone's standing entry is the bottom nav; the floating bell is opt-in and yields to the keyboard.
+  if (!isInnerScreen && (!bell.floatingBellEnabled || isVirtualKeyboardOpen)) return null;
 
   return (
     <button
+      ref={ref}
       type="button"
       className={trayHandle}
       data-testid="tray-handle"
       data-open={isPanelOpen}
       aria-expanded={isPanelOpen}
       aria-controls={TRAY_ID}
+      aria-keyshortcuts="ArrowUp ArrowDown"
       aria-label={trayEntryLabel(unreadCount, needsAttention, quietMode)}
-      onClick={() => togglePanel()}
+      data-gesture-ignore
+      data-dragging={bell.dragging}
+      style={{
+        touchAction: "none",
+        userSelect: "none",
+        WebkitTouchCallout: "none",
+        ...bell.style,
+      }}
+      onClick={() => {
+        if (bell.consumeClickSuppression()) return;
+        togglePanel();
+      }}
+      {...bell.handlers}
       {...keepTerminalFocus}
     >
       <BellIcon />
@@ -81,50 +96,24 @@ interface TrayEntryChipProps {
   /** Text of the "+N more" row or the 1-line keyboard chip. */
   chipText: string;
   chipLabel: string;
-  /** The deck's "Moved N to tray" undo, rendered inside the entry with a trailing bell. */
+  /** The deck's "Moved N to tray" undo; replaces the chip in place. */
   undo?: ReactNode;
   onOpen: () => void;
 }
 
 /**
- * The one phone tray entry (D10). A single wrapper stays mounted while `content`
- * changes inside it, so no frame shows two entries or none and nothing relocates.
- * Rendered by the deck's dock, never by a page.
+ * The phone deck's tray entry: the "+N more" row, the keyboard chip, or the undo bar.
+ * There is no bell here; the bottom nav's Alerts tab is the standing entry to the tray.
+ * Renders nothing when there is nothing to say. Rendered by the deck's dock, never by a page.
  */
 export function TrayEntryChip({ content, chipText, chipLabel, undo, onOpen }: TrayEntryChipProps) {
-  const { isPanelOpen, quietMode } = useNotificationState();
-  const { unreadCount, needsAttention } = useTrayCounts();
-  const bellProps = {
-    type: "button" as const,
-    className: trayEntryBell,
-    "data-testid": "tray-entry-open",
-    "aria-expanded": isPanelOpen,
-    "aria-controls": TRAY_ID,
-    "aria-label": trayEntryLabel(unreadCount, needsAttention, quietMode),
-    onClick: onOpen,
-    ...keepTerminalFocus,
-  };
-  const bell = (
-    <button {...bellProps}>
-      <BellIcon />
-      {quietMode && (
-        <span className={trayQuietBadge} data-testid="tray-entry-quiet" aria-hidden="true">
-          Quiet
-        </span>
-      )}
-      {unreadCount > 0 && <span>{capBadgeCount(unreadCount)}</span>}
-    </button>
-  );
+  const { isPanelOpen } = useNotificationState();
   const wide = content === "more-row" || content === "keyboard-chip";
+  if (!undo && !wide) return null;
 
   return (
     <div className={trayEntry} data-testid="tray-entry" data-content={content} data-undo={undo ? "true" : "false"}>
-      {undo ? (
-        <>
-          {undo}
-          {bell}
-        </>
-      ) : wide ? (
+      {undo ?? (
         <button
           type="button"
           className={overflowChip}
@@ -137,8 +126,6 @@ export function TrayEntryChip({ content, chipText, chipLabel, undo, onOpen }: Tr
         >
           {chipText}
         </button>
-      ) : (
-        bell
       )}
     </div>
   );

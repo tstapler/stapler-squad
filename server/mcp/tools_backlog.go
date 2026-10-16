@@ -366,6 +366,12 @@ type backlogHandlers struct {
 	// 2.3 hasn't landed) falls back to the fixed built-in 9-entry
 	// validBacklogStatuses list (Story 2.1.4).
 	stageEngine stageLister
+
+	// prCheckerFactory backs get_backlog_stuck_report's live CI cross-check.
+	// Defaults to a real *git.GitWorktree bound to the item's repo_path when
+	// nil; overridable in tests to avoid shelling out to the real `gh` CLI —
+	// mirrors verifyPRMatchesBranch's existing shape.
+	prCheckerFactory func(repoPath string) stuckReportPRChecker
 }
 
 // --- get_backlog_item ---
@@ -378,17 +384,28 @@ type backlogHandlers struct {
 // rendered text envelope is capped.
 const maxActivityLogEntriesRendered = 20
 
+// requireItemIDArg extracts and validates a required item_id argument — the
+// boilerplate shared by every MCP tool keyed on a single backlog item. When
+// validation fails, the returned result is ready to return unchanged.
+func requireItemIDArg(req mcpgo.CallToolRequest) (itemID string, errRes *mcpgo.CallToolResult, ok bool) {
+	args := req.GetArguments()
+	raw, has := args["item_id"].(string)
+	if !has || raw == "" {
+		return "", errResult(ErrInvalidArgument, "item_id is required", ""), false
+	}
+	if err := validateUUID(raw); err != nil {
+		return "", errResult(ErrInvalidArgument, err.Error(), "Provide a valid UUID (e.g. from list_backlog_items or get_backlog_item)."), false
+	}
+	return raw, nil, true
+}
+
 func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	if r := featureDisabledResult(h.enabledCheck); r != nil {
 		return r, nil
 	}
-	args := req.GetArguments()
-	itemID, ok := args["item_id"].(string)
-	if !ok || itemID == "" {
-		return errResult(ErrInvalidArgument, "item_id is required", ""), nil
-	}
-	if err := validateUUID(itemID); err != nil {
-		return errResult(ErrInvalidArgument, err.Error(), "Provide a valid UUID (e.g. from list_backlog_items or get_backlog_item)."), nil
+	itemID, errRes, ok := requireItemIDArg(req)
+	if !ok {
+		return errRes, nil
 	}
 
 	item, err := h.storage.GetBacklogItem(ctx, itemID)
@@ -428,6 +445,8 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		session.WriteDescriptionSection(&sb, item.Description, 2000)
 	}
 
+	h.writeDependenciesSection(ctx, &sb, itemID)
+
 	// Latest review verdict, if one has been submitted. This is the primary way a
 	// still-running work session discovers review feedback without being killed and
 	// respawned — see request_review's guidance below.
@@ -450,6 +469,27 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 			fmt.Fprintf(&sb, "  Criterion %d (%s): %s\n", v.CriterionIndex, v.Outcome, session.SanitizeForAgentContext(v.Evidence, 300))
 		}
 		sb.WriteString("\n")
+	}
+
+	// Base commit each work session branched from, so an operator can confirm
+	// work started from an up-to-date base. Best-effort like the sections around it.
+	if sessions, sessErr := h.storage.ListItemSessions(ctx, itemID); sessErr != nil {
+		log.WarningLog().Printf("get_backlog_item: failed to list item sessions for %s: %v", itemID, sessErr)
+	} else {
+		wroteHeader := false
+		for _, is := range sessions {
+			if is.Role != "work" || is.BaseCommitSha == "" {
+				continue
+			}
+			if !wroteHeader {
+				sb.WriteString("## Work Sessions\n")
+				wroteHeader = true
+			}
+			fmt.Fprintf(&sb, "- session %s: base commit %s\n", is.SessionUUID, is.BaseCommitSha)
+		}
+		if wroteHeader {
+			sb.WriteString("\n")
+		}
 	}
 
 	// Activity log: free-form notes posted via post_backlog_update (ADR-001).
@@ -866,14 +906,11 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 	if r := featureDisabledResult(h.enabledCheck); r != nil {
 		return r, nil
 	}
+	itemID, errRes, ok := requireItemIDArg(req)
+	if !ok {
+		return errRes, nil
+	}
 	args := req.GetArguments()
-	itemID, ok := args["item_id"].(string)
-	if !ok || itemID == "" {
-		return errResult(ErrInvalidArgument, "item_id is required", ""), nil
-	}
-	if err := validateUUID(itemID); err != nil {
-		return errResult(ErrInvalidArgument, err.Error(), "Provide a valid UUID (e.g. from list_backlog_items or get_backlog_item)."), nil
-	}
 
 	eventTypeFilter := eventTypeAny
 	if v, ok := args["event_type"].(string); ok && v != "" {
@@ -2167,6 +2204,10 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid acceptance_criteria: %v", err), ""), nil
 	}
 
+	dependsOn, bad := h.parseDependsOn(ctx, args)
+	if bad != nil {
+		return bad, nil
+	}
 	created, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
 		Title:              title,
 		Description:        description,
@@ -2183,6 +2224,22 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 	}
 
 	log.InfoLog().Printf("[mcp:create_backlog_item] session=%s item=%s title=%q", callerUUID, created.ID, created.Title)
+	var depNote, depFailures string
+	for _, blocker := range dependsOn {
+		edge := session.BacklogItemDependencyEdge{BlockerID: blocker, BlockedID: created.ID}
+		if err := h.storage.AddBacklogItemDependency(ctx, edge); err != nil {
+			depFailures += fmt.Sprintf(" Failed to add dependency on %s: %v.", blocker, err)
+			continue
+		}
+		depNote += fmt.Sprintf(" Blocked by %s.", blocker)
+	}
+	if depFailures != "" {
+		// Item exists but is not fully gated: surface as an error naming it so the
+		// caller can fix the edges or delete it instead of assuming it is blocked.
+		return errResult(ErrInternalError,
+			fmt.Sprintf("Created backlog item %s but dependency setup failed.%s%s", created.ID, depNote, depFailures),
+			"Use add_backlog_item_dependency to retry the failed edges."), nil
+	}
 
 	triageTriggered := false
 	if h.backlogSvc != nil {
@@ -2194,7 +2251,7 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 		triageNote = " Auto-triage started."
 	}
 	return mcpgo.NewToolResultText(fmt.Sprintf(
-		"Created backlog item %s: %q (status: idea, priority: P%d).%s", created.ID, created.Title, created.Priority, triageNote,
+		"Created backlog item %s: %q (status: idea, priority: P%d).%s%s", created.ID, created.Title, created.Priority, depNote, triageNote,
 	)), nil
 }
 
@@ -2766,6 +2823,8 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 
 // registerBacklogTools registers all backlog-related MCP tools on the server.
 func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
+	registerBacklogDependencyTools(s, h)
+
 	s.AddTool(
 		mcpgo.NewTool("get_backlog_item",
 			mcpgo.WithDescription("Fetch full details for a backlog item: title, description, acceptance criteria, priority, and status. Call this first in any backlog-linked session to orient yourself. Returns role-specific workflow guidance when your session is linked to the item (triage/work/review role instructions)."),
@@ -3009,6 +3068,10 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			),
 			mcpgo.WithString("notes",
 				mcpgo.Description("Freeform operator notes, e.g. where this request came from."),
+			),
+			mcpgo.WithArray("depends_on",
+				mcpgo.Description("Optional UUIDs of existing items that must reach done or archived before this item can start. A missing UUID fails the call before anything is created."),
+				mcpgo.Items(map[string]any{"type": "string"}),
 			),
 			mcpgo.WithBoolean("skip_triage",
 				mcpgo.Description("Skip auto-triage on creation (default false: an item with a repo_path is triaged automatically, same as the web UI's \"New Idea\" form). Set true to leave the item in idea status untouched, e.g. when filing several related items you intend to triage together later."),

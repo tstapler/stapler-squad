@@ -21,7 +21,7 @@ import (
 // so UpdateTaggingClassifierConfig's SaveConfig never touches the real config.json.
 func isolatedClassifierService(t *testing.T) *SessionService {
 	t.Helper()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(createTestStorage(t), bus)

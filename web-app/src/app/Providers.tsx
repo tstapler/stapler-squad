@@ -21,6 +21,7 @@ import { ConsoleAnalyticsProvider } from "@/lib/analytics/ConsoleAnalyticsProvid
 import { PageViewTracker } from "@/components/analytics/PageViewTracker";
 import { WebVitalsReporter } from "@/components/telemetry/WebVitalsReporter";
 import { OtelInit } from "@/components/telemetry/OtelInit";
+import { ClientLogShipper } from "@/components/telemetry/ClientLogShipper";
 import { OnboardingProvider } from "@/lib/contexts/OnboardingContext";
 import { TerminalPoolProvider, DEFAULT_TERMINAL_POOL_MAX_SIZE } from "@/lib/terminal/TerminalPool";
 
@@ -37,6 +38,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <AnalyticsContextProvider provider={analyticsProviderRef.current}>
       <OtelInit />
+      <ClientLogShipper />
       <WebVitalsReporter />
       <PageViewTracker />
       <PushClickHandoff />

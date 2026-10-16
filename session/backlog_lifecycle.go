@@ -12,11 +12,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
@@ -142,6 +143,11 @@ type BacklogLifecycleListener struct {
 	// prPendingCheckerMu guards prPendingCheckerFactory for concurrent Set/get access.
 	prPendingCheckerMu      sync.RWMutex
 	prPendingCheckerFactory func(repoPath string) prPendingChecker
+
+	// ciRerunner/ciReruns back maybeFlakyCheckRerun (ci_flaky_rerun.go); a nil
+	// ciRerunner disables the free-rerun shortcut.
+	ciRerunner ciRerunClient
+	ciReruns   ciRerunLedger
 
 	// prCreatorMu guards prCreatorFactory for concurrent Set/get access.
 	prCreatorMu      sync.RWMutex
@@ -817,6 +823,7 @@ func newListenerBase(storage *Storage, pipelineEngine PipelineEngine, livenessEn
 		shutdownCtx:             ctx,
 		shutdownCancel:          cancel,
 		prPendingCheckerFactory: defaultPRPendingCheckerFactory,
+		ciRerunner:              ghCIRerunClient{},
 		prCreatorFactory:        defaultPRCreatorFactory,
 		branchReconciler:        git.MergeMainIntoWorktree,
 		orphanedPRFinder:        defaultOrphanedPRFinder,
@@ -1819,14 +1826,19 @@ func (l *BacklogLifecycleListener) resolveLatestWorkCommit(ctx context.Context, 
 	if wt.BranchName == "" {
 		return ""
 	}
-	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "--verify", wt.BranchName)
-	cmd.Dir = repoPath
-	out, revErr := cmd.Output()
+	sha, revErr := ResolveBranchTip(ctx, repoPath, wt.BranchName)
 	if revErr != nil {
 		log.Warn("[BacklogLifecycle] resolveLatestWorkCommit: rev-parse failed", "branch", wt.BranchName, "repo_path", repoPath, "error", revErr)
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return sha
+}
+
+// ResolveBranchTip resolves branch to its commit SHA in repoPath. Worktrees share one ref
+// store, so repoPath may be any checkout of the repo. An absent branch is an error.
+func ResolveBranchTip(ctx context.Context, repoPath, branch string) (string, error) {
+	sha, err := gitprovider.Backend().ResolveRef(ctx, backend.Local{Root: backend.RepoRoot(repoPath)}, backend.RefName(branch))
+	return string(sha), err
 }
 
 // transitionBouncingItemToDone moves an item reconcileBouncingItems has
@@ -2248,13 +2260,17 @@ type multiReasonRowSet struct {
 // categorizeOpenStuckRows partitions an item's open stuck-state rows into
 // the ones eligible to count toward multi-reason escalation (excluding
 // StuckReasonMultipleReasons and StuckReasonBounceCapExhausted, which are
-// derived signals rather than independent reasons) and tracks whether a
+// derived signals rather than independent reasons, and the waiting reasons
+// isWaitingStuckReason names) and tracks whether a
 // bouncing/abandoned-review pair is present for the structural-coupling
 // exclusion below.
 func categorizeOpenStuckRows(rows []OpenStuckStateData) multiReasonRowSet {
 	var set multiReasonRowSet
 	for _, row := range rows {
 		if row.Reason == domain.StuckReasonMultipleReasons || row.Reason == domain.StuckReasonBounceCapExhausted {
+			continue
+		}
+		if isWaitingStuckReason(row.Reason) {
 			continue
 		}
 		if row.Reason == domain.StuckReasonBouncing {
@@ -2267,6 +2283,15 @@ func categorizeOpenStuckRows(rows []OpenStuckStateData) multiReasonRowSet {
 		set.nonEscalation = append(set.nonEscalation, row)
 	}
 	return set
+}
+
+// isWaitingStuckReason reports whether reason only says "something else is
+// already acting or the item awaits a merge" — respawn_blocked_active (its own
+// notification is INFO, "no action needed") and pr_ready_unmerged — so it
+// never counts toward multi-reason escalation. Both co-occur on every healthy
+// item whose PR is waiting on review, which escalated them to ERROR.
+func isWaitingStuckReason(reason domain.StuckReason) bool {
+	return reason == domain.StuckReasonRespawnBlockedActive || reason == domain.StuckReasonPRReadyUnmerged
 }
 
 // excludeStructurallyCoupledAbandonedReview applies the ADR-001 exclusion

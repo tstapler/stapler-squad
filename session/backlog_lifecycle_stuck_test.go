@@ -248,6 +248,54 @@ func TestBackfillStuckStates_should_beIdempotent_When_RunTwice(t *testing.T) {
 
 // --- Story 2.1.1: pr_ready_unmerged ---
 
+// TestReconcilePRPending_should_logWarning_When_PRStatusLookupFails pins the
+// detection-failure signal: a failed IsPRMerged/GetPRStatus must be operator-visible.
+func TestReconcilePRPending_should_logWarning_When_PRStatusLookupFails(t *testing.T) {
+	t.Parallel()
+	for name, checker := range map[string]*fakePRPendingChecker{
+		"IsPRMerged":  {mergedErr: errors.New("gh: auth expired")},
+		"GetPRStatus": {statusErr: errors.New("gh: rate limited")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			storage, cleanup := createTestStorage(t)
+			defer cleanup()
+			newPRPendingTestItem(t, storage, 150)
+
+			listener := NewBacklogLifecycleListener(storage)
+			overridePRPendingChecker(t, listener, checker)
+			buf := tslog.RedirectLogger(t, tslog.WarningLog(), "WARNING: ")
+
+			listener.ReconcilePRPending(context.Background(), storage.repo)
+
+			assert.Contains(t, buf.String(), "ReconcilePRPending "+name)
+		})
+	}
+}
+
+// TestReconcilePRPending_should_notMarkStuck_When_CIStillPending guards the
+// "CI running looks like no CI configured" gap: a mergeable PR whose checks are
+// still in flight must not be flagged pr_ready_unmerged.
+func TestReconcilePRPending_should_notMarkStuck_When_CIStillPending(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	newPRPendingTestItem(t, storage, 149)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		status: &git.PRStatus{Mergeable: "MERGEABLE", CIPending: true},
+	})
+
+	er := storage.repo
+	listener.ReconcilePRPending(ctx, er)
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "pending CI must not flag pr_ready_unmerged")
+}
+
 // TestReconcilePRPending_should_markStuck_When_PRGreenMergeableUnapproved
 // verifies the flagship single-user case (pre-mortem F1): a PR that is green,
 // mergeable, no changes requested, not draft, and has ZERO approvals (Tyler
@@ -5276,6 +5324,41 @@ func TestReconcileMultiReasonEscalation_should_ExcludeEscalationReasonsFromCount
 	require.NoError(t, err)
 	_, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
 	assert.False(t, ok, "multiple_reasons must not count itself toward its own threshold — with only 1 real reason open, it must resolve")
+}
+
+// TestReconcileMultiReasonEscalation_should_NotEscalate_When_OnlyWaitingReasonsAccompanyOneRealReason
+// is the regression guard for the false ERROR on healthy PR-pending items:
+// respawn_blocked_active and pr_ready_unmerged only say "a session is acting /
+// the PR awaits merge", so beside one real reason they must not reach the threshold.
+func TestReconcileMultiReasonEscalation_should_NotEscalate_When_OnlyWaitingReasonsAccompanyOneRealReason(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "PR waiting on review",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	for _, reason := range []domain.StuckReason{
+		domain.StuckReasonPRNeedsFix,
+		domain.StuckReasonRespawnBlockedActive,
+		domain.StuckReasonPRReadyUnmerged,
+	} {
+		_, err = er.MarkStuck(ctx, item.ID, reason, BacklogStatusInProgress, string(reason))
+		require.NoError(t, err)
+	}
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileMultiReasonEscalation(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	assert.False(t, ok, "waiting reasons must not count toward multi-reason escalation")
 }
 
 // TestReconcileMultiReasonEscalation_should_NotEscalate_When_OnlyCoupledBouncingAndAbandonedReviewOpen

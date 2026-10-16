@@ -1,7 +1,7 @@
 "use client";
 // +feature: ui:bottom-nav
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import {
   Bell,
   Plus,
@@ -15,6 +15,9 @@ import { ReviewQueueNavBadge } from "@/components/sessions/ReviewQueueNavBadge";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
+import { useNotificationState } from "@/lib/contexts/notificationContexts";
+import { capBadgeCount } from "@/lib/utils/notificationMapping";
+import { countNeedsAttention } from "@/lib/utils/notificationGrouping";
 import { routes } from "@/lib/routes";
 import { BOTTOM_NAV_PRIMARY, BOTTOM_NAV_MORE, groupNavPages, NAV_GROUP_LABELS, NAV_GROUP_SORT_ORDER, type NavPage } from "@/lib/nav-pages";
 import * as styles from "./BottomNav.css";
@@ -27,6 +30,8 @@ export function BottomNav() {
   const { authenticated, authEnabled } = useAuth();
   const { getUnreadCount, togglePanel } = useNotifications();
   const unreadCount = getUnreadCount();
+  const { isPanelOpen, quietMode, notificationHistory } = useNotificationState();
+  const needsAttention = useMemo(() => countNeedsAttention(notificationHistory ?? []), [notificationHistory]);
   const [moreOpen, setMoreOpen] = useState(false);
   const { leftHanded, toggleHandedness } = useHandedness();
   const { flags } = useFeatureFlags();
@@ -142,19 +147,17 @@ export function BottomNav() {
               </section>
             ))}
           <div className={styles.moreSheetUtilitySection}>
-            {flags.notification_tray_v2 && (
-              <button
-                className={styles.moreSheetItem}
-                data-testid="more-notifications"
-                onClick={() => {
-                  setMoreOpen(false);
-                  togglePanel();
-                }}
-              >
-                <span className={styles.moreSheetItemIcon} aria-hidden="true"><Bell size={20} /></span>
-                <span>Notifications ({unreadCount})</span>
-              </button>
-            )}
+            <button
+              className={styles.moreSheetItem}
+              data-testid="more-notifications"
+              onClick={() => {
+                setMoreOpen(false);
+                togglePanel();
+              }}
+            >
+              <span className={styles.moreSheetItemIcon} aria-hidden="true"><Bell size={20} /></span>
+              <span>Notifications ({unreadCount})</span>
+            </button>
             <button
               className={styles.moreSheetItem}
               onClick={toggleHandedness}
@@ -185,22 +188,27 @@ export function BottomNav() {
         data-left-handed={leftHanded || undefined}
       >
         {primaryPages.map(renderPrimaryItem)}
-        <AppLink
-          href={routes.notifications}
-          className={`${styles.navItem} ${styles.notificationButton} ${pathname === routes.notifications ? styles.navItemActive : ""}`}
-          aria-current={pathname === routes.notifications ? "page" : undefined}
-          aria-label={unreadCount > 0 ? `Notifications (${unreadCount} unread)` : "Notifications"}
+        {/* Alerts opens the tray instead of leaving the page (the page stays reachable from the
+            tray's "Review all notifications"). preventDefault on mousedown keeps terminal focus,
+            so opening it does not drop the soft keyboard. */}
+        <button
+          type="button"
+          className={`${styles.navItem} ${styles.notificationButton} ${isPanelOpen ? styles.navItemActive : ""}`}
+          data-testid="nav-alerts"
+          aria-expanded={isPanelOpen}
+          aria-controls="notification-tray"
+          aria-label={`${unreadCount > 0 ? `Notifications (${unreadCount} unread${needsAttention > 0 ? `, ${needsAttention} need you` : ""})` : "Notifications"}${quietMode ? ", quiet mode on" : ""}`}
+          onClick={() => togglePanel()}
+          onMouseDown={(e) => e.preventDefault()}
         >
           <span className={styles.notificationIconWrap} aria-hidden="true">
             <Bell size={20} />
             {unreadCount > 0 && (
-              <span className={styles.notificationBadge} aria-label={`${unreadCount} unread`}>
-                {unreadCount > 9 ? "9+" : unreadCount}
-              </span>
+              <span className={needsAttention > 0 ? styles.notificationBadgeAttention : styles.notificationBadge}>{capBadgeCount(unreadCount)}</span>
             )}
           </span>
-          <span className={styles.navItemLabel}>Alerts</span>
-        </AppLink>
+          <span className={styles.navItemLabel}>{quietMode ? "Quiet" : "Alerts"}</span>
+        </button>
         <button
           className={styles.newSessionButton}
           onClick={openOmnibar}

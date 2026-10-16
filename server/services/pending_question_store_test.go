@@ -176,3 +176,38 @@ func TestParseAskUserQuestion_ShouldClassifyTheRealPayloadShapes(t *testing.T) {
 	assert.Equal(t, "Pick", got.Header)
 	assert.Equal(t, []string{"A", "B"}, got.Labels)
 }
+
+func TestPendingCount_ShouldCountOnlyParallelWindowQuestions_WhenOlderOnesWereAnsweredInTheTerminal(t *testing.T) {
+	clock := newGateTestClock()
+	s := NewPendingQuestionStore(clock.Now)
+
+	assert.Equal(t, 0, s.PendingCount("unknown"))
+	assert.Equal(t, 1, s.Register(testQuestion("s1", "q1")))
+	assert.Equal(t, 2, s.Register(testQuestion("s1", "q2")), "parallel question in the same turn")
+	assert.Equal(t, 1, s.Register(testQuestion("other", "q9")), "another session is never counted")
+
+	// q1/q2 were answered in the terminal: nothing consumed them, only time passes.
+	clock.Advance(pendingParallelWindow + time.Second)
+	assert.Equal(t, 1, s.Register(testQuestion("s1", "q3")), "stale entries stop disabling Reply long before the TTL")
+}
+
+func TestPendingCount_ShouldCountUnregisteredQuestions_WhenTheyArePartOfTheSameTurn(t *testing.T) {
+	clock := newGateTestClock()
+	s := NewPendingQuestionStore(clock.Now)
+
+	s.NoteUnreplyable("s1") // multi-select question on screen
+	assert.Equal(t, 2, s.Register(testQuestion("s1", "q1")))
+
+	clock.Advance(pendingParallelWindow + time.Second)
+	assert.Equal(t, 0, s.PendingCount("s1"), "the note and the registered question both leave with the window")
+	s.NoteUnreplyable("")
+	assert.Equal(t, 0, s.PendingCount(""), "an unattributed question is not tracked")
+}
+
+func TestPendingCount_ShouldNotCountClaimedQuestions(t *testing.T) {
+	s := NewPendingQuestionStore(newGateTestClock().Now)
+	s.Register(testQuestion("s1", "q1"))
+	_, res := s.Claim(QuestionKey{SessionUUID: "s1", QuestionID: "q1"})
+	require.Equal(t, ClaimOK, res)
+	assert.Equal(t, 0, s.PendingCount("s1"))
+}

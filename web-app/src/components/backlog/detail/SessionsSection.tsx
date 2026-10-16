@@ -336,6 +336,11 @@ export function SessionsSection({
                             {s.worktreeBranch}
                           </span>
                         )}
+                        {s.baseCommitSha && (
+                          <span className={styles.branchBadge} title={`Branched from ${s.baseCommitSha}`}>
+                            from {s.baseCommitSha.slice(0, 7)}
+                          </span>
+                        )}
                         {s.startedAt && <span className={styles.sessionDate}>{formatDate(s.startedAt)}</span>}
                         {s.estimatedCostUsd > 0 && (
                           <span className={styles.sessionCost} title="Estimated session cost">

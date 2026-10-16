@@ -150,11 +150,6 @@ const worktreeChangeDetectionFlagName = "vcs:worktree-change-detection"
 // project_plans/app-scrollback-forwarding/implementation/plan.md, Epic 1.5.
 const terminalAppScrollForwardingClaudeFlagName = config.FeatureAppScrollForwardingClaude
 
-// notificationTrayV2FlagName gates the capped toast deck and the notification tray in
-// the web app (read there as a live flag via GetFeatureFlags). The server only registers
-// it; the client mirrors this literal in lib/notification-policy.ts. Default: off.
-const notificationTrayV2FlagName = "notification_tray_v2"
-
 // workspacePeersBlockFor is the single feature-flag gate for the workspace-peers nudge,
 // called by both SessionService.workspacePeersBlockFor (session_service.go) and
 // BacklogService.workspacePeersBlockFor (backlog_service_triage.go) so the two callers can't
@@ -187,6 +182,15 @@ var knownFeatureFlags = []struct {
 		defaultValue: true,
 	},
 	{
+		name:         ChangelogFlagName,
+		description:  "Built-in changelog: the /changelog page, GET /api/changelog, and the update badge. Turn off to hide all three. Default: on.",
+		defaultValue: true,
+	},
+	{
+		name:        UpdateCheckFlagName,
+		description: "Update check: poll GitHub Releases (ETag-conditional, at most every 6 hours) and show a badge when a newer release exists. Contacts api.github.com, so it is opt-in. Never runs on source builds. Requires the changelog flag. Default: off.",
+	},
+	{
 		name:        "backlog",
 		description: "Backlog management with external sync sources and AI-driven triage",
 	},
@@ -213,6 +217,10 @@ var knownFeatureFlags = []struct {
 	{
 		name:        workspacePeersNudgeFlagName,
 		description: "Auto-inject an 'Other Active Sessions In This Workspace' nudge into every new session's initial prompt. Off by default — use the list_workspace_peers MCP tool on demand instead. Default: off.",
+	},
+	{
+		name:        completionReviewerFlagName,
+		description: "Background completion reviewer: when a backlog item reaches done, run a tool-less one-shot model call that distills learnings for future triage/work/review sessions and appends them to a per-repo memory file under the config dir. Failures are logged, never surfaced. Default: off.",
 	},
 	{
 		name:        crossHostClaimDedupFlagName,
@@ -277,11 +285,12 @@ var knownFeatureFlags = []struct {
 	},
 	{
 		name:        config.DiagnoseNudgeFeatureFlag,
-		description: "Diagnose & Nudge: allow a dispatched diagnostic agent to autonomously send a redirect message (diagnose_nudge_session) to a linked stuck session. Read fresh at the write instant, so flipping this off blocks an already-dispatched agent too. Default: off — until enabled, a dispatch can still investigate and file a bug or post a note, but never nudge.",
+		description: "Diagnose & Nudge: allow a dispatched diagnostic agent to autonomously send a redirect message (diagnose_nudge_session) to a linked stuck session, and the autonomous stall path to type its in-process nudge (also needs autonomous_stall_nudge_enabled). Read fresh at the write instant, so flipping this off blocks an already-dispatched agent too. Default: off — until enabled, a dispatch can still investigate and file a bug or post a note, but never nudge.",
 	},
 	{
-		name:        notificationTrayV2FlagName,
-		description: "Notification tray v2: cap the toast deck at 3 (1 on phones) with a \"+N more\" chip and one \"Move all to tray\" control, instead of the uncapped legacy toast list. Applies on the next toast render, no reload. Default: off.",
+		name:         config.AutonomousStallNudgeFeatureFlag,
+		defaultValue: config.AutonomousStallNudgeDefault,
+		description:  "Autonomous stall nudge: when an autonomous work session stops while its pane sits idle at a prompt, type one fixed reminder into the pane and resume supervision instead of respawning it. Also requires Diagnose & Nudge to be on (that flag is the kill switch for every autonomous pane write). Read fresh at each stop. Default: off — every stall respawns as before.",
 	},
 	{
 		name:         config.HiddenSessionGateFeatureFlag,

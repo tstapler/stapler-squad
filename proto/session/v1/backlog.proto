@@ -148,6 +148,11 @@ message ItemSession {
   // diagnostic signal once the log rotates. Empty for every other end_reason
   // and for successful sessions. (Field 19 is failure_capture_path.)
   string error_detail = 27;
+  // base_commit_sha is the worktree's HEAD at spawn — what this session
+  // branched from, so an operator can verify work started from an up-to-date
+  // base. Falls back to the cached origin ref when origin was unreachable at
+  // spawn. Empty for pre-existing rows and non-work sessions.
+  string base_commit_sha = 28;
 }
 
 // BacklogStatusEvent records a single status transition for a backlog item.
@@ -293,6 +298,24 @@ message BacklogItem {
   bool duplicate_pending = 40;
   // duplicate_ref is the claimed duplicate's URL when duplicate_pending.
   string duplicate_ref = 41;
+  // blocked_by lists the items this item waits on. GetBacklogItem and the
+  // dependency RPCs return every edge (resolved or not; check
+  // DependencyInfo.status). ListBacklogItems returns only still-unresolved
+  // blockers, loaded in one batched query, so boards can render "blocked by
+  // <title>" without per-item calls.
+  repeated DependencyInfo blocked_by = 42;
+  // blocking lists the items waiting on this item. Populated only by
+  // GetBacklogItem and the dependency RPCs, never by ListBacklogItems.
+  repeated DependencyInfo blocking = 43;
+}
+
+// DependencyInfo is a lightweight reference to the other end of a dependency
+// edge, carrying just enough to render "blocked by <title>".
+message DependencyInfo {
+  string item_id = 1;
+  string public_id = 2;
+  string title = 3;
+  string status = 4;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -524,6 +547,9 @@ message ParseBacklogItemIntentRequest {
   // repo_path optionally narrows title/AC phrasing to a known repo. Unset is
   // fine — the LLM parses from the message text alone.
   string repo_path = 2;
+  // known_repo_paths are repo paths the caller already knows about (e.g. from
+  // existing sessions). When set, the LLM may pick one as suggested_repo_path.
+  repeated string known_repo_paths = 3;
 }
 
 // ParsedBacklogItemDraft is the LLM's structured read of a free-text message,
@@ -535,6 +561,9 @@ message ParsedBacklogItemDraft {
   // confidence is 0..1; a low value is a hint for the review UI to flag the
   // draft for closer scrutiny, not a threshold that blocks creation.
   float confidence = 4;
+  // suggested_repo_path is an exact entry from the request's known_repo_paths,
+  // or empty when none matched the message.
+  string suggested_repo_path = 5;
 }
 
 message ParseBacklogItemIntentResponse {
@@ -733,6 +762,25 @@ message AddBacklogItemDependencyRequest {
 
 message AddBacklogItemDependencyResponse {
   BacklogItem item = 1;
+}
+
+message RemoveBacklogItemDependencyRequest {
+  string blocker_item_id = 1;
+  string blocked_item_id = 2;
+}
+
+message RemoveBacklogItemDependencyResponse {
+  // The blocked item after removal, with blocked_by/blocking populated.
+  BacklogItem item = 1;
+}
+
+message ListBacklogItemDependenciesRequest {
+  string item_id = 1;
+}
+
+message ListBacklogItemDependenciesResponse {
+  repeated DependencyInfo blocked_by = 1;
+  repeated DependencyInfo blocking = 2;
 }
 
 message TransitionBacklogItemStatusRequest {
@@ -1753,6 +1801,14 @@ service BacklogService {
   // archived status, or is deleted). Rejects self-dependency and any edge
   // that would close a dependency cycle.
   rpc AddBacklogItemDependency(AddBacklogItemDependencyRequest) returns (AddBacklogItemDependencyResponse) {}
+
+  // RemoveBacklogItemDependency deletes the blocker→blocked edge. Idempotent:
+  // removing an edge that does not exist succeeds. Both items must exist.
+  rpc RemoveBacklogItemDependency(RemoveBacklogItemDependencyRequest) returns (RemoveBacklogItemDependencyResponse) {}
+
+  // ListBacklogItemDependencies returns both directions of an item's
+  // dependency edges with title/status of the other end.
+  rpc ListBacklogItemDependencies(ListBacklogItemDependenciesRequest) returns (ListBacklogItemDependenciesResponse) {}
 
   // WatchBacklogItems streams real-time backlog item events (status changes,
   // verdicts, session attachments, updates, archival, removal).

@@ -95,6 +95,10 @@ help: ## Show this help message
 	@echo "================================="
 	@grep -E '^[a-zA-Z0-9._-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
+.PHONY: git-soak-status
+git-soak-status: ## Print the git backend shadow-soak counters and flip verdict (running service; exit 1 = not ready)
+	@scripts/git-soak-status.sh
+
 .PHONY: ports
 ports: ## Show reserved manual dev port block (see CLAUDE.md's "Manual dev port block")
 	@base=$$(python3 -c "import zlib; print(61000 + zlib.crc32(b'stapler-squad') % 4525)" 2>/dev/null || echo 62871); \
@@ -700,6 +704,13 @@ test-integration: ensure-tools proto-gen $(GOTESTSUM_BIN) ## Run integration tes
 	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags integration -timeout 20m -p 1 ./session ./session/tmux
 	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags integration -timeout 20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/tmux)$$')
 
+# Differential oracle tests (go-git fork plan Story 1.3.3): files tagged `//go:build gitoracle`
+# run a candidate git backend against the real git CLI over temp repositories. Needs git only,
+# no generated code, so CI calls it directly.
+.PHONY: test-oracle
+test-oracle: $(GOTESTSUM_BIN) ## Run the gitoracle-tagged differential tests against real git
+	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags gitoracle -timeout 10m ./testutil/gitoracle/... ./session/git/backend/gogit/... ./session/gitwiring/... ./session/git/native/gitconfig/... ./session/git/native/capability/...
+
 # Type-based delivery-gate and terminal-write guards (Story 2.6 / Story 5.1d).
 # Runs only the Test* funcs declared in files tagged `//go:build sinkguard`
 # (selected per package with -run), so it does not re-run the untagged suite.
@@ -830,9 +841,10 @@ LINTER_BIN := $(CURDIR)/bin/linter
 # running a stale binary that predates the change forever.
 LINTER_SRC := $(shell find $(CURDIR)/tools/lint -name '*.go' -not -path '*/testdata/*')
 
-lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (entfullscan, hotpolllog, noarchivedrevival, nocommandpattern, nolegacylog, noliveinstanceraw, norawexec, norawghrequest, norawgitopen, notimesleeptest, novartestseam, silenttransition, tmuxsocketscope) in a single pass
+lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (entfullscan, hotpolllog, noarchivedrevival, nocommandpattern, nolegacylog, noliveinstanceraw, norawexec, norawghrequest, norawgitcli, norawgitopen, notimesleeptest, novartestseam, silenttransition, tmuxsocketscope) in a single pass
 	@echo "Running custom lint..."
 	@$(LINTER_BIN) ./...
+	@go -C tools/lint test -count=1 ./norawgitcli/...
 	@echo "custom lint: ok"
 
 $(LINTER_BIN): $(LINTER_SRC)
@@ -977,7 +989,7 @@ dev-setup: install-tools ## Set up development environment
 	@echo "Development environment setup complete!"
 	@echo "Run 'make help' to see available commands"
 
-ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration test-delivery-guards test-shell fmt-check registry-generate actor-field-guard ptmx-field-guard otel-auto-isolation-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
+ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration test-delivery-guards test-oracle test-shell fmt-check registry-generate actor-field-guard ptmx-field-guard otel-auto-isolation-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
 
 # ready: everything `make ci` runs, plus the CI-only checks that have no local
 # equivalent yet — .github/workflows/lint.yml's complexity gate (gocyclo/

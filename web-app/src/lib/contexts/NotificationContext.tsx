@@ -17,14 +17,14 @@ import {
 import { ReviewItem, AttentionReason } from "@/gen/session/v1/types_pb";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import { useNotificationHistory } from "@/lib/hooks/useNotificationHistory";
+import { useStreamConnectionState } from "@/lib/hooks/useNotificationConnectivity";
 import { useToastQueue } from "@/lib/hooks/useToastQueue";
 import { useToastTimers } from "@/lib/hooks/useToastTimers";
 import { useAnnounce } from "@/lib/hooks/useAnnounce";
 import { createToastTrayCommands, MOVE_UNDO_TIMER_ID, type MovedBatch } from "@/lib/contexts/toastTray";
 import { groupNotifications } from "@/lib/utils/notificationGrouping";
 import { mapPriority } from "@/lib/utils/notificationMapping";
-import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
-import { NOTIFICATION_TRAY_V2_FLAG, isPinned } from "@/lib/notification-policy";
+import { isPinned } from "@/lib/notification-policy";
 import { isSessionViewed } from "@/lib/utils/viewedSessions";
 import { mergeBackendHistory, recordToHistoryItem } from "@/lib/utils/notificationHistoryMerge";
 import { createNotificationSyncChannel } from "@/lib/utils/broadcastChannel";
@@ -131,14 +131,13 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
   announceRef.current = announce;
 
   const auditLog = useAuditLog();
-  const history = useNotificationHistory();
+  const streamLive = useStreamConnectionState() === "connected";
+  const history = useNotificationHistory({ streamLive });
   // Commands read these through refs so their identities stay stable across renders.
   const auditLogRef = useRef(auditLog);
   auditLogRef.current = auditLog;
   const historyRef = useRef(history);
   historyRef.current = history;
-  const trayV2Ref = useRef(false);
-  trayV2Ref.current = useFeatureFlag(NOTIFICATION_TRAY_V2_FLAG);
   const [quietMode, setQuietModeState] = useState(false);
   const quietRef = useRef(false);
   // Read after mount so server and client render the same first frame.
@@ -197,7 +196,7 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
       // Under the capped deck a non-pinned toast for the session already on screen adds
       // nothing, and Quiet mode demotes every non-pinned toast; a pending decision always
       // toasts. The history row is recorded either way.
-      const suppressed = trayV2Ref.current && !isPinned(next) && (quietRef.current || isSessionViewed(next.sessionId));
+      const suppressed = !isPinned(next) && (quietRef.current || isSessionViewed(next.sessionId));
       if (!suppressed) dispatch({ type: "add", notification: next });
       addToHistory(next);
     };
@@ -348,7 +347,7 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
   // TOAST_STALE_MS, approval/question toasts after ACTIONABLE_TOAST_STALE_MS.
   useEffect(() => {
     const interval = setInterval(
-      () => dispatch({ type: "prune", now: Date.now(), keep: trayV2Ref.current ? isPinned : undefined }),
+      () => dispatch({ type: "prune", now: Date.now(), keep: isPinned }),
       SWEEP_INTERVAL_MS,
     );
     return () => clearInterval(interval);

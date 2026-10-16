@@ -9,6 +9,7 @@ package session
 // claude_controller_test.go) instead of a real tmux session/PTY.
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -106,4 +107,36 @@ func TestCheckNudgeEligibleWithSettleWindow_RejectsWhenStatusFlipsDuringWindow(t
 	err := CheckNudgeEligibleWithSettleWindow(inst, settleWindow, pollInterval)
 	require.Error(t, err, "a status flip partway through the settle window must refuse the nudge, not pass on the early safe poll")
 	assert.ErrorIs(t, err, ErrNudgeTargetNotIdle)
+}
+
+// NDG-10: a cancelled ctx ends the settle wait instead of sleeping it out; a
+// live ctx behaves exactly as CheckNudgeEligibleWithSettleWindow did.
+func TestCheckNudgeEligibleWithSettleWindowCtx_HonoursCancel(t *testing.T) {
+	t.Parallel()
+	cc, _ := newControllerWithMock("I've fixed the null check in validator.go.\n> ")
+	inst := nudgeGateTestInstance(cc)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := CheckNudgeEligibleWithSettleWindowCtx(cancelled, inst, time.Hour, time.Millisecond)
+	require.ErrorIs(t, err, context.Canceled)
+
+	// Cancelled inside the wait: an hour-long window would hang on time.Sleep.
+	midWait := newCancelAfterDoneCalls(2)
+	err = runWithWatchdog(t, func() error {
+		return CheckNudgeEligibleWithSettleWindowCtx(midWait, inst, time.Hour, time.Millisecond)
+	})
+	require.ErrorIs(t, err, context.Canceled)
+
+	require.NoError(t, CheckNudgeEligibleWithSettleWindowCtx(context.Background(), inst, 5*time.Millisecond, time.Millisecond))
+}
+
+// NDG-11: the MCP-path entry points keep their signature and not-idle error.
+func TestCheckNudgeEligible_MCPPathUnchanged(t *testing.T) {
+	t.Parallel()
+	cc, _ := newControllerWithMock("tstapler@dev-box:~/stapler-squad$ ")
+	inst := nudgeGateTestInstance(cc)
+
+	require.ErrorIs(t, CheckNudgeEligible(inst), ErrNudgeTargetNotIdle)
+	require.ErrorIs(t, CheckNudgeEligibleWithSettleWindow(inst, 0, time.Millisecond), ErrNudgeTargetNotIdle)
 }

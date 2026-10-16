@@ -9,11 +9,9 @@
 import { test, expect, type Page } from '@playwright/test';
 import {
   NotificationTray,
-  TRAY_V2_FLAG,
   installWebSocketSendCounter,
   readTerminalFacts,
   sendNotification,
-  setFeatureFlag,
   webSocketSends,
   waitForIdleFrames,
   openTerminalSession,
@@ -35,13 +33,6 @@ async function seed(request: Parameters<typeof sendNotification>[0], prefix: str
 }
 
 test.describe('notification tray variants', () => {
-  test.beforeEach(async ({ request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, true);
-  });
-  test.afterEach(async ({ request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, false);
-  });
-
   test.describe('V1 desktop', () => {
     test.use(profiles.V1.use);
 
@@ -179,15 +170,21 @@ test.describe('notification tray variants', () => {
   test.describe('V2 portrait', () => {
     test.use(profiles.V2.use);
 
-    test('entry_chip_should_be_the_single_stable_node_and_sheet_should_peek_then_expand_when_phone', async ({ page, request }) => {
+    test('entry_chip_should_be_absent_when_idle_then_a_single_stable_node_and_sheet_should_peek_then_expand_when_phone', async ({ page, request }) => {
       const { client, session } = await openSession(page);
       try {
         const tray = new NotificationTray(page);
-        await expect(tray.entry).toHaveCount(1);
-        await expect(tray.entry).toHaveAttribute('data-content', 'bell');
+        // No bell chip on a phone: nothing to say means no entry (Alerts in the bottom nav is the way in).
+        await expect(tray.entry).toHaveCount(0);
+        await expect(page.getByTestId('tray-entry-open')).toHaveCount(0);
         await expect(tray.handle).toHaveCount(0);
 
-        // Observe the dock: the entry node must never be removed or inserted while content changes.
+        const prefix = `tray-v2-${Date.now()}`;
+        await seed(request, prefix, 3);
+        await expect(tray.entry).toHaveAttribute('data-content', 'more-row');
+        await expect(tray.entry).toHaveCount(1);
+
+        // Observe the dock: the entry node must not be removed or inserted once it exists, while its content changes.
         await page.evaluate(() => {
           const w = window as unknown as { __entryMutations: number; __entryNode: Element | null };
           w.__entryNode = document.querySelector('[data-testid="tray-entry"]');
@@ -202,10 +199,6 @@ test.describe('notification tray variants', () => {
           }).observe(document.body, { childList: true, subtree: true });
         });
 
-        const prefix = `tray-v2-${Date.now()}`;
-        await seed(request, prefix, 3);
-        await expect(tray.entry).toHaveAttribute('data-content', 'more-row');
-        await expect(tray.entry).toHaveCount(1);
         await setKeyboardOpen(page, 300);
         await expect(tray.entry).toHaveAttribute('data-content', 'keyboard-chip');
         await setKeyboardOpen(page, 0);
@@ -304,10 +297,15 @@ test.describe('notification tray variants', () => {
       }
     });
 
-    test('entry_should_be_one_visible_element_in_every_frame_and_hold_its_top_right_anchor_across_state_changes', async ({ page, request }) => {
+    test('entry_should_be_one_visible_element_in_every_frame_once_it_exists_and_hold_its_anchor_across_state_changes', async ({ page, request }) => {
       const { client, session } = await openSession(page, { waitForText: false });
       try {
         const tray = new NotificationTray(page);
+        // none (0 toasts) -> more-row -> keyboard-chip -> more-row -> undo -> more-row. Sampling starts
+        // once the entry exists; from then on exactly one is visible in every frame and it holds its anchor.
+        await expect(tray.entry).toHaveCount(0);
+        await seed(request, `tray-th8-${Date.now()}`, 3);
+        await expect(tray.entry).toHaveAttribute('data-content', 'more-row');
         await page.evaluate(() => {
           const w = window as unknown as { __entryFrames: Array<{ visible: number; right: number; top: number }>; __entryStop: boolean };
           w.__entryFrames = [];
@@ -323,10 +321,6 @@ test.describe('notification tray variants', () => {
           requestAnimationFrame(sample);
         });
 
-        // bell (0 toasts) -> more-row -> keyboard-chip -> more-row -> bell with undo -> bell
-        await expect(tray.entry).toHaveAttribute('data-content', 'bell');
-        await seed(request, `tray-th8-${Date.now()}`, 3);
-        await expect(tray.entry).toHaveAttribute('data-content', 'more-row');
         await setKeyboardOpen(page, 300);
         await expect(tray.entry).toHaveAttribute('data-content', 'keyboard-chip');
         await setKeyboardOpen(page, 0);
@@ -364,7 +358,7 @@ test.describe('notification tray variants', () => {
   test.describe('V4 portrait with the keyboard open', () => {
     test.use(profiles.V4.use);
 
-    test('top_sheet_should_sit_above_the_keyboard_and_keep_textarea_focus_when_keyboard_open', async ({ page, request }) => {
+    test('bottom_sheet_should_sit_on_the_keyboard_and_keep_textarea_focus_when_keyboard_open', async ({ page, request }) => {
       const { client, session } = await openSession(page);
       try {
         const tray = new NotificationTray(page);
@@ -376,7 +370,9 @@ test.describe('notification tray variants', () => {
 
         await page.getByTestId('toast-overflow-chip').click();
         await tray.expectOpen();
-        await expect(tray.tray).toHaveAttribute('data-variant', 'top-sheet');
+        // The keyboard does not change the variant: the sheet rides its top edge.
+        await expect(tray.tray).toHaveAttribute('data-variant', 'bottom-sheet');
+        await expect(tray.tray).toHaveAttribute('data-keyboard', 'open');
         // Pointer open on a touch device never takes focus from the terminal (TK-1).
         expect(await page.evaluate(() => document.activeElement?.getAttribute('aria-label'))).toBe('Terminal input');
 
@@ -389,8 +385,9 @@ test.describe('notification tray variants', () => {
             return b!.y + b!.height;
           })
           .toBeLessThanOrEqual(keyboardTop + 1);
-        // Anchored at the top: the keyboard can never cover it (TK-2).
-        expect((await tray.tray.boundingBox())!.y).toBeLessThan(vp.height / 2);
+        // Flush on the keyboard, not floating above it: no terminal shows through the gap (TK-2).
+        const box = (await tray.tray.boundingBox())!;
+        expect(Math.abs(box.y + box.height - keyboardTop)).toBeLessThanOrEqual(2);
         expect(await page.evaluate(() => document.activeElement?.getAttribute('aria-label'))).toBe('Terminal input');
       } finally {
         await client.deleteSession(session.id, true);

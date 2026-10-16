@@ -12,7 +12,7 @@
  * ships with Epic 5; this script gains that leg when it does.
  */
 import { test, expect } from '@playwright/test';
-import { ToastDeck, TRAY_V2_FLAG, sendNotification, setFeatureFlag } from './pages/NotificationPanel';
+import { ToastDeck, sendNotification } from './pages/NotificationPanel';
 import { profiles } from './helpers/viewport-profiles';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
@@ -22,12 +22,8 @@ const PENDING_DECISIONS = 3;
 test.use(profiles.V1.use);
 
 test.describe('notification triage walkthrough', () => {
-  test.beforeEach(async ({ request, page }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, true);
+  test.beforeEach(async ({ page }) => {
     await page.addInitScript((key) => localStorage.setItem(key, 'true'), ONBOARDED_KEY);
-  });
-  test.afterEach(async ({ request }) => {
-    await setFeatureFlag(request, BASE_URL, TRAY_V2_FLAG, false);
   });
 
   test('triage_burst_should_reach_an_empty_deck_within_the_tap_budget_when_6_info_3_approvals_1_failure', async ({ page, request }) => {

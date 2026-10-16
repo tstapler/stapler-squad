@@ -8,6 +8,7 @@ package session
 // already exist as separate files in this package.
 
 import (
+	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -129,3 +130,14 @@ var (
 	_ ExecutionTarget = LocalTarget{}
 	_ ExecutionTarget = RemoteExecutionTarget{}
 )
+
+// locationFor builds the git RepoLocation for path on t. A remote target yields a Remote that
+// carries t.Runner() itself (the identical value, not a copy), so the backend runs git through
+// the SSH runner this target dialed and can never fall back to a local run.
+func locationFor(t ExecutionTarget, path string) backend.RepoLocation {
+	host := ""
+	if remote, ok := t.(RemoteExecutionTarget); ok {
+		host = remote.target.Name
+	}
+	return backend.Locate(t.Runner(), host, path)
+}

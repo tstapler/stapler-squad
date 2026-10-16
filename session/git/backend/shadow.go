@@ -72,9 +72,20 @@ type FileMismatchRecorder struct {
 	seq atomic.Uint64
 }
 
+// maxRecordsPerProcess caps files written per process so a deterministic mismatch on a hot read
+// cannot fill the disk; the counters keep counting past it.
+const maxRecordsPerProcess = 200
+
 // Record implements MismatchRecorder. Failures are logged, never returned: recording must not
 // affect the call that triggered it.
 func (f *FileMismatchRecorder) Record(rec MismatchRecord) {
+	n := f.seq.Add(1)
+	if n > maxRecordsPerProcess {
+		if n == maxRecordsPerProcess+1 {
+			log.Warn("shadow mismatch record cap reached, further repro records are dropped until restart", "cap", maxRecordsPerProcess)
+		}
+		return
+	}
 	if err := os.MkdirAll(f.Dir, 0o700); err != nil {
 		log.Warn("cannot create shadow mismatch dir", "err", redact.Git(err.Error()))
 		return
@@ -84,7 +95,7 @@ func (f *FileMismatchRecorder) Record(rec MismatchRecord) {
 		log.Warn("cannot encode shadow mismatch record", "err", err)
 		return
 	}
-	name := fmt.Sprintf("%s-%06d-%s.json", time.Now().UTC().Format("20060102T150405Z"), f.seq.Add(1), rec.Operation)
+	name := fmt.Sprintf("%s-%06d-%s.json", time.Now().UTC().Format("20060102T150405Z"), n, rec.Operation)
 	if err := os.WriteFile(filepath.Join(f.Dir, name), data, 0o600); err != nil {
 		log.Warn("cannot write shadow mismatch record", "err", redact.Git(err.Error()))
 	}
@@ -117,13 +128,25 @@ func (o outcome[T]) summary() string {
 // the returned value nor panic its way out.
 func shadowCall[T any](r *Router, ctx context.Context, op OperationName, d decision, spec readSpec[T], call func(context.Context, Backend) (T, error)) (T, error) {
 	r.metrics.countShadowCall(op)
+	// The CLI answers the caller in shadow mode, so its spawns are the configured default.
+	cliCtx := WithCallInfo(ctx, CallInfo{Op: op, Reason: ReasonConfig})
+	var cliTook, goTook time.Duration
 	read := func() (outcome[T], outcome[T]) {
-		c, cerr := call(ctx, r.cli)
-		return outcome[T]{c, cerr}, safeGoGitRead(ctx, r.gogit, call)
+		start := time.Now()
+		c, cerr := call(cliCtx, r.cli)
+		cliTook = time.Since(start)
+		start = time.Now()
+		g := safeGoGitRead(ctx, r.gogit, call)
+		goTook = time.Since(start)
+		return outcome[T]{c, cerr}, g
 	}
 
 	pin0 := r.pin(ctx, d.local)
 	cliFirst, goFirst := read()
+	if ctx.Err() == nil {
+		r.metrics.recordShadowDuration(op, ImplCLI, cliTook)
+		r.metrics.recordShadowDuration(op, ImplGoGit, goTook)
+	}
 	if ctx.Err() != nil || outcomesEqual(cliFirst, goFirst) {
 		r.noteError(ctx, op, ImplCLI, cliFirst.err)
 		return cliFirst.res, cliFirst.err

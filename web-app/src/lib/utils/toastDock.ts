@@ -24,3 +24,27 @@ export function subscribeStackTopOffset(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
+
+/**
+ * Bottom edge (px) of the terminal's own toolbar, or null when none is visible.
+ * The phone deck docks here, over the terminal output, so it never covers the
+ * toolbar controls. Only the CSS variable is needed: the deck's presence is
+ * still decided by `getStackTopOffset`.
+ *
+ * Several terminals can be mounted at once, so the last non-null publisher owns
+ * the value and only the owner may clear it: a hidden instance unmounting or
+ * measuring 0 must not blank the visible one's anchor.
+ */
+let deckOwner: symbol | null = null;
+
+export function setDeckTopOffset(px: number | null, owner?: symbol): void {
+  if (typeof document === "undefined") return;
+  if (px === null) {
+    if (owner !== undefined && owner !== deckOwner) return;
+    deckOwner = null;
+    document.documentElement.style.removeProperty("--mobile-deck-top-offset");
+    return;
+  }
+  if (owner !== undefined) deckOwner = owner;
+  document.documentElement.style.setProperty("--mobile-deck-top-offset", `${px}px`);
+}

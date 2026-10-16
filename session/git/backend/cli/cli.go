@@ -14,19 +14,42 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/git/redact"
+	"github.com/tstapler/stapler-squad/telemetry"
 )
 
 // Backend is the CLI implementation of backend.Backend.
 type Backend struct {
-	local backend.Runner
+	local  backend.Runner
+	spawns *backend.SpawnCounter
+}
+
+// Option configures New.
+type Option func(*Backend)
+
+// WithMeter registers git_backend_cli_spawn_total on meter instead of telemetry.GetMeter().
+func WithMeter(meter metric.Meter) Option {
+	return func(b *Backend) { b.spawns = backend.NewSpawnCounter(meter) }
 }
 
 // New returns a CLI backend. local serves backend.Local locations; it may be nil if the
 // backend only ever sees Remote locations (Local locations then fail with ErrNoLocalRunner).
-func New(local backend.Runner) *Backend { return &Backend{local: local} }
+func New(local backend.Runner, opts ...Option) *Backend {
+	b := &Backend{local: local}
+	for _, opt := range opts {
+		opt(b)
+	}
+	if b.spawns == nil {
+		b.spawns = backend.NewSpawnCounter(telemetry.GetMeter())
+	}
+	return b
+}
 
 const maxErrorOutput = 2000
 
@@ -34,6 +57,8 @@ const maxErrorOutput = 2000
 type target struct {
 	runner backend.Runner
 	dir    string
+	spawns *backend.SpawnCounter
+	remote bool
 }
 
 func (b *Backend) resolve(loc backend.RepoLocation) (target, error) {
@@ -45,7 +70,7 @@ func (b *Backend) resolve(loc backend.RepoLocation) (target, error) {
 		if b.local == nil {
 			return target{}, backend.ErrNoLocalRunner
 		}
-		return target{runner: b.local, dir: string(l.Root)}, nil
+		return target{runner: b.local, dir: string(l.Root), spawns: b.spawns}, nil
 	case backend.Remote:
 		if l.Runner == nil {
 			return target{}, backend.ErrNoRemoteRunner
@@ -53,7 +78,7 @@ func (b *Backend) resolve(loc backend.RepoLocation) (target, error) {
 		if l.Path == "" {
 			return target{}, fmt.Errorf("%w: empty remote path", backend.ErrInvalidArgument)
 		}
-		return target{runner: l.Runner, dir: string(l.Path)}, nil
+		return target{runner: l.Runner, dir: string(l.Path), spawns: b.spawns, remote: true}, nil
 	default:
 		return target{}, fmt.Errorf("%w: unsupported location %T", backend.ErrInvalidArgument, loc)
 	}
@@ -90,10 +115,16 @@ func (t target) exec(ctx context.Context, op backend.OperationName, strip bool, 
 		out []byte
 		err error
 	)
+	// The one sanctioned git spawn site: every Run of git is counted here, once.
+	t.spawns.Count(ctx, op, t.remote)
+	name, argv := "git", args
+	if t.remote {
+		name, argv = remoteGitArgv(args)
+	}
 	if sr, ok := t.runner.(backend.StdoutRunner); ok {
-		out, err = sr.RunStdout(ctx, t.dir, "git", args...)
+		out, err = sr.RunStdout(ctx, t.dir, name, argv...)
 	} else {
-		out, err = t.runner.Run(ctx, t.dir, "git", args...)
+		out, err = t.runner.Run(ctx, t.dir, name, argv...)
 		if strip {
 			out = stripNoise(out)
 		}
@@ -102,6 +133,15 @@ func (t target) exec(ctx context.Context, op backend.OperationName, strip bool, 
 		return result{out: out}, classify(op, out, err)
 	}
 	return result{out: out, combined: !isStdoutRunner(t.runner)}, nil
+}
+
+// remoteGitArgv prefixes git with `env RequiredGitEnv...`. An SSH runner cannot carry environment
+// (session.Setenv needs sshd AcceptEnv, off by default; see tmux.SSHRunner.Start), so the contract
+// is met on the command line. Local runs get the env from the local runner instead, where it is
+// scoped to git alone.
+func remoteGitArgv(args []string) (string, []string) {
+	argv := append(backend.RequiredGitEnv(), "git")
+	return "env", append(argv, args...)
 }
 
 func isStdoutRunner(r backend.Runner) bool {
@@ -145,6 +185,8 @@ func hasNoisePrefix(s string) bool {
 }
 
 // stripNoise drops warning:/hint: lines git (or an ssh banner) wrote to stderr into combined output.
+// Only column-0 lines count: git's own banners start there, while an indented line is real data
+// (e.g. a diff context line " warning: x").
 func stripNoise(out []byte) []byte {
 	if len(out) == 0 {
 		return out
@@ -152,27 +194,14 @@ func stripNoise(out []byte) []byte {
 	lines := strings.Split(string(out), "\n")
 	kept := lines[:0]
 	for _, ln := range lines {
-		if !hasNoisePrefix(strings.TrimSpace(ln)) {
+		if !hasNoisePrefix(ln) {
 			kept = append(kept, ln)
 		}
 	}
 	return []byte(strings.Join(kept, "\n"))
 }
 
-// credentialInURL matches scheme://userinfo@ through the LAST '@' of the token, so a password
-// containing '@' or '/' is hidden entirely. scpCredential covers scp-style user:token@host:path.
-var (
-	credentialInURL = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^\s'"]*@`)
-	scpCredential   = regexp.MustCompile(`\b[A-Za-z0-9._~-]+:[^\s'"/]+@`)
-	lockPath        = regexp.MustCompile(`Unable to create '([^']+\.lock)'`)
-)
-
-// scrub hides URL userinfo (tokens, passwords) before output reaches an error message.
-// Stand-in for session/git/redact.Git until that package exists (plan Story 1.3.1).
-func scrub(s string) string {
-	s = credentialInURL.ReplaceAllString(s, "${1}***@")
-	return scpCredential.ReplaceAllString(s, "***@")
-}
+var lockPath = regexp.MustCompile(`Unable to create '([^']+\.lock)'`)
 
 // classify turns a runner error into *CommandError, additionally wrapping a sentinel the
 // output identifies. The raw runner error stays reachable through errors.As/Unwrap.
@@ -184,15 +213,25 @@ func classify(op backend.OperationName, out []byte, err error) error {
 	}
 	text = strings.TrimSpace(text)
 	lower := strings.ToLower(text)
-	shown := scrub(text) // scrub first: truncating before could cut a credential in half
-	if len(shown) > maxErrorOutput {
-		shown = strings.ToValidUTF8(shown[:maxErrorOutput], "") + "..."
-	}
+	shown := redact.Git(text) // redact first: truncating before could cut a credential in half
+	shown = truncateKeepingEnds(shown, maxErrorOutput)
 	cerr := &backend.CommandError{Operation: op, Output: shown, Err: err}
 	if s := sentinelFor(lower, text); s != nil {
 		return fmt.Errorf("%w: %w", s, cerr)
 	}
 	return cerr
+}
+
+// truncateKeepingEnds shortens s to about max bytes, keeping its head and its tail: a failing
+// hook or pre-push run prints the cause last, so a head-only cut would lose it.
+func truncateKeepingEnds(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	half := max / 2
+	head := strings.ToValidUTF8(s[:half], "")
+	tail := strings.ToValidUTF8(s[len(s)-half:], "")
+	return head + "\n...[" + strconv.Itoa(len(s)-2*half) + " bytes omitted]...\n" + tail
 }
 
 func sentinelFor(lower, original string) error {
@@ -220,7 +259,12 @@ func sentinelFor(lower, original string) error {
 	return nil
 }
 
-type exitCoder interface{ ExitCode() int }
+type (
+	exitCoder interface{ ExitCode() int }
+	// exitStatuser is golang.org/x/crypto/ssh.ExitError's accessor: an SSH runner's non-zero
+	// exit has ExitStatus, not ExitCode.
+	exitStatuser interface{ ExitStatus() int }
+)
 
 // exitCode returns the process exit status carried by err, or -1 when it carries none
 // (a dial failure, a cancelled context).
@@ -228,6 +272,10 @@ func exitCode(err error) int {
 	var ec exitCoder
 	if errors.As(err, &ec) {
 		return ec.ExitCode()
+	}
+	var es exitStatuser
+	if errors.As(err, &es) {
+		return es.ExitStatus()
 	}
 	return -1
 }

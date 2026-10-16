@@ -74,8 +74,7 @@ func TestLocalChain_should_Reject_RebindingAndProxyHosts_OnEveryRegisteredRoute(
 	envtest.NewIsolatedStateDir(t)
 	deps, err := BuildDependencies()
 	require.NoError(t, err)
-	srv := NewServerWithDeps("localhost:0", deps)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	srv := newShutdownOnCleanupServer(t, "localhost:0", deps)
 
 	patterns := registeredPatterns(srv.Mux())
 	require.Greater(t, len(patterns), 40, "route enumeration found too few patterns; did net/http's routing tree change?")

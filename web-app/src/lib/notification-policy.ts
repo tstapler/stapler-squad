@@ -79,17 +79,6 @@ export function nativeAutoCloseMs(priority: NotificationPriority): number {
 }
 
 /**
- * How long (ms) before a toast minimizes to a compact pill. 0 = never.
- * Actionable types never minimize because they need user interaction.
- */
-export function toastAutoMinimizeMs(type: NotificationData["notificationType"]): number {
-  if (hasLongToastLifetime(type)) return 0;
-  if (type === "error" || type === "task_failed") return 5_000;
-  if (type === "warning") return 5_000;
-  return 3_000;
-}
-
-/**
  * A toast is pinned (it never auto-closes and is never cleared in bulk) exactly
  * when the server marked it a pending decision. Presentational policy only: the
  * server's `IsPendingDecision` is the one definition, so this reads the field
@@ -124,9 +113,6 @@ export function partitionToasts<T extends { isPendingDecision?: boolean }>(
   const visible = [...shownPinned, ...shownRest];
   return { visible, overflow: toasts.length - visible.length, pinnedCount: pinned.length };
 }
-
-/** Live-settable rollout flag (Settings > Features) for the capped deck and tray. */
-export const NOTIFICATION_TRAY_V2_FLAG = "notification_tray_v2";
 
 export const DESKTOP_TOAST_CAP = 3;
 export const MOBILE_TOAST_CAP = 1;

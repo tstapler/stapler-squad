@@ -624,6 +624,32 @@ jobs:
       - name: Run sinkguard-tagged guard tests
         run: make test-delivery-guards-run
 
+  # test-oracle: the `//go:build gitoracle` differential tests (go-git fork plan Story 1.3.3).
+  # They compare a candidate git backend with the real git CLI over temp repositories, so the
+  # job needs git only: no generated code, no tmux.
+  test-oracle:
+    name: Test (git oracle)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Install gotestsum
+        run: |
+          go install gotest.tools/gotestsum@v1.13.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Run gitoracle-tagged tests
+        run: make test-oracle
+
   # test-rest's budget was raised 22m->30m (job timeout 25->35) on 2026-09-05
   # (PR #697): the retry-on-any-failure fallback below re-runs the entire
   # -race suite a second time in verbose mode, so a single flaky test hit

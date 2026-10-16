@@ -10,9 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/git/native"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -251,19 +252,21 @@ func findGitRepoRoot(path string) (string, error) {
 // returning the worktree's own path as if it were the repo root — corrupting the
 // worktree's link to its real branch/history entirely.
 //
-// Resolves via `git rev-parse --git-common-dir`, which is the shared .git directory a
+// Resolves via Backend.CommonDir (`git rev-parse --git-common-dir`), which is the shared .git directory a
 // worktree and its main repo both point to; the main repo root is its parent.
 func findMainRepoPathForWorktree(worktreePath string) (string, error) {
+	return mainRepoPathForWorktree(gitprovider.Backend(), worktreePath)
+}
+
+// mainRepoPathForWorktree is findMainRepoPathForWorktree over an explicit backend.
+func mainRepoPathForWorktree(refs backend.Backend, worktreePath string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "--path-format=absolute", "--git-common-dir")
-	cmd.Dir = worktreePath
-	out, err := cmd.Output()
+	commonDir, err := refs.CommonDir(ctx, backend.Local{Root: backend.RepoRoot(worktreePath)})
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve git-common-dir for worktree %s: %w", worktreePath, err)
 	}
-	commonDir := strings.TrimSpace(string(out))
-	return filepath.Dir(commonDir), nil
+	return filepath.Dir(string(commonDir)), nil
 }
 
 // GetCurrentBranchName returns the current branch name for a git repository or worktree.
@@ -331,6 +334,11 @@ const (
 // it. That fix is orthogonal to the retry/CLI-fallback above, which guards against the
 // two races described above and stays in place as defense-in-depth.
 func getHeadCommitSHA(path string) (string, error) {
+	return headCommitSHA(gitprovider.Backend(), path)
+}
+
+// headCommitSHA is getHeadCommitSHA over an explicit backend for its fallback.
+func headCommitSHA(refs backend.Backend, path string) (string, error) {
 	// A failed open (path doesn't exist / isn't a git repo at all) is not retryable —
 	// only the subsequent Head() resolution and object-existence check are, since those
 	// are what were observed to fail transiently for worktrees.
@@ -362,7 +370,7 @@ func getHeadCommitSHA(path string) (string, error) {
 		lastErr = fmt.Errorf("go-git resolved HEAD to %s at %s, which is not a real commit object", hash, path)
 	}
 	log.Warn("getHeadCommitSHA: go-git repeatedly resolved HEAD to a nonexistent object, falling back to git CLI", "path", path, "err", lastErr)
-	return getHeadCommitSHAViaCLI(path)
+	return getHeadCommitSHAViaBackend(refs, path)
 }
 
 // repoHasAnyRef reports whether the git repository at path has at least one
@@ -372,6 +380,11 @@ func getHeadCommitSHA(path string) (string, error) {
 // repo, so counting it would always report true. Retry/CLI-fallback shape
 // mirrors getHeadCommitSHA (same underlying go-git flakiness class).
 func repoHasAnyRef(path string) (bool, error) {
+	return repoHasAnyRefIn(gitprovider.Backend(), path)
+}
+
+// repoHasAnyRefIn is repoHasAnyRef over an explicit backend for its fallback.
+func repoHasAnyRefIn(b backend.Backend, path string) (bool, error) {
 	if _, err := OpenRepo(path); err != nil {
 		return false, fmt.Errorf("failed to open git repo at %s: %w", path, err)
 	}
@@ -407,39 +420,37 @@ func repoHasAnyRef(path string) (bool, error) {
 		return found, nil
 	}
 	log.Warn("repoHasAnyRef: go-git repeatedly failed to read refs, falling back to git CLI", "path", path, "err", lastErr)
-	return repoHasAnyRefViaCLI(path)
+	return repoHasAnyRefViaBackend(b, path)
 }
 
-// repoHasAnyRefViaCLI is repoHasAnyRef's fallback when go-git repeatedly fails to read
-// the ref store — see getHeadCommitSHAViaCLI's identical rationale (atomic-rename ref
+// repoHasAnyRefViaBackend is repoHasAnyRef's fallback when go-git repeatedly fails to read
+// the ref store — see getHeadCommitSHAViaBackend's identical rationale (atomic-rename ref
 // updates mean the CLI doesn't observe the torn-read race go-git is susceptible to).
 // `git for-each-ref` does not enumerate the symbolic HEAD pseudo-ref, matching
 // repoHasAnyRef's own HashReference-only filter.
-func repoHasAnyRefViaCLI(path string) (bool, error) {
+func repoHasAnyRefViaBackend(refs backend.Backend, path string) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "git", "for-each-ref", "--count=1")
-	cmd.Dir = path
-	out, err := cmd.Output()
+	names, err := refs.ListRefs(ctx, backend.Local{Root: backend.RepoRoot(path)}, backend.ListRefsRequest{Limit: 1})
 	if err != nil {
 		return false, fmt.Errorf("failed to list refs at %s: %w", path, err)
 	}
-	return len(strings.TrimSpace(string(out))) > 0, nil
+	return len(names) > 0, nil
 }
 
-// getHeadCommitSHAViaCLI is the fallback path for getHeadCommitSHA when go-git
-// repeatedly fails to resolve HEAD to a real object. The git CLI relies on atomic-rename
-// ref updates, so it doesn't observe the torn-read race go-git is susceptible to.
-func getHeadCommitSHAViaCLI(path string) (string, error) {
+// getHeadCommitSHAViaBackend is the fallback path for getHeadCommitSHA when go-git
+// repeatedly fails to resolve HEAD to a real object. It goes through the injected backend:
+// under the default refs=cli that is `git rev-parse`, which relies on atomic-rename ref
+// updates and so doesn't observe the torn-read race go-git is susceptible to; under
+// refs=gogit the router's own torn_read/object_missing handling serves the CLI instead.
+func getHeadCommitSHAViaBackend(refs backend.Backend, path string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "HEAD")
-	cmd.Dir = path
-	out, err := cmd.Output()
+	sha, err := refs.ResolveRef(ctx, backend.Local{Root: backend.RepoRoot(path)}, "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("failed to read HEAD at %s: %w", path, err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return string(sha), nil
 }
 
 // InitializeProjectDirectory creates a directory and initializes it as a git repository.

@@ -16,6 +16,7 @@ import {
   FolderOpen,
   ToggleLeft,
   Import,
+  FileText,
 } from "lucide-react";
 import { routes } from "./routes";
 
@@ -66,6 +67,7 @@ export const NAV_PAGES: NavPage[] = [
   { href: routes.logs,    label: "Logs",    icon: ScrollText,  headerNav: false, group: "settings" },
   { href: routes.errors,  label: "Errors",  icon: AlertTriangle, headerNav: false, group: "settings" },
   { href: routes.help,    label: "Help",    icon: HelpCircle,  headerNav: false, group: "settings" },
+  { href: routes.changelog, label: "Changelog", icon: FileText, headerNav: false, featureFlag: "changelog", group: "settings" },
   { href: routes.escapeAnalytics, label: "Escape Analytics", icon: BarChart2, headerNav: false, group: "insights" },
   { href: routes.files,           label: "Files",            icon: FolderOpen,   headerNav: false, group: "settings" },
   { href: routes.settingsFeatures, label: "Feature Flags",   icon: ToggleLeft,   headerNav: false, group: "settings" },

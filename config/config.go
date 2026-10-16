@@ -556,6 +556,21 @@ func EffectiveDiagnoseNudgeEnabled(cfg *Config) bool {
 	return cfg.GetFeatureFlagWithDefault(DiagnoseNudgeFeatureFlag, false)
 }
 
+// AutonomousStallNudgeFeatureFlag gates the in-process nudge the autonomous
+// stall path may type into an idle work session instead of respawning it.
+// It is AND-ed with DiagnoseNudgeFeatureFlag, which stays the kill switch for
+// every autonomous pane write.
+const AutonomousStallNudgeFeatureFlag = "autonomous_stall_nudge_enabled"
+
+// AutonomousStallNudgeDefault is the shipped default: off until soaked.
+const AutonomousStallNudgeDefault = false
+
+// EffectiveAutonomousStallNudgeEnabled reports whether the stall path may nudge.
+// Read it at the decision instant, never cached.
+func EffectiveAutonomousStallNudgeEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(AutonomousStallNudgeFeatureFlag, AutonomousStallNudgeDefault)
+}
+
 // EffectiveTymuxEnabled reports whether the global tymux process-manager
 // backend default is active. Resolved fresh on every call (session.getSelectedBackend)
 // via SetTymuxGlobalOverride — live-settable, no process restart required.
@@ -782,10 +797,10 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	cfg.SessionDetectionInterval = 5000
 	cfg.StateRefreshInterval = 3000
 	cfg.LogsEnabled = true
-	cfg.LogsDir = ""    // Empty string means use default location
-	cfg.LogMaxSize = 10 // 10MB
-	cfg.LogMaxFiles = 5 // Keep 5 rotated files
-	cfg.LogMaxAge = 30  // 30 days
+	cfg.LogsDir = "" // Empty string means use default location
+	cfg.LogMaxSize = DefaultLogMaxSizeMB
+	cfg.LogMaxFiles = DefaultLogMaxFiles
+	cfg.LogMaxAge = DefaultLogMaxAgeDays
 	cfg.LogCompress = true
 	cfg.UseSessionLogs = true
 	cfg.TmuxSessionPrefix = "staplersquad_"  // Default prefix for backward compatibility
@@ -1584,6 +1599,8 @@ func LoadConfigFromPath(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
+	upgradeLegacyLogRotation(&cfg)
+
 	// Apply zero-value defaults for newly-added fields.
 	if cfg.KeyCategories == nil {
 		cfg.KeyCategories = getDefaultKeyCategories()
@@ -1815,6 +1832,9 @@ const FeaturePiSupport = "pi-support"
 // (":pi"/":agy") are separate flag keys, not covered by this one.
 const FeatureAppScrollForwardingClaude = "terminal:app-scrollback-forwarding:claude"
 
+// FeatureWebhookManagement gates the webhook-registration management API.
+const FeatureWebhookManagement = "webhook_management"
+
 // GetFeatureFlag returns the persisted enabled state of the named feature flag.
 // Absent key returns false — all feature flags default to disabled.
 // Currently recognized flags:
@@ -1826,6 +1846,9 @@ const FeatureAppScrollForwardingClaude = "terminal:app-scrollback-forwarding:cla
 //	  item, instead of waiting for PRStatusPoller's next tick. Independently toggleable from
 //	  "webhook_triggers", but has no effect unless "webhook_triggers" is also enabled (that
 //	  flag gates whether the route is registered at all).
+//	"webhook_management" (FeatureWebhookManagement) — registers the credential-authenticated
+//	  webhook-registration API under /api/integrations/webhooks/v1/. Off by default, and its
+//	  reconcile refuses to create endpoints unless "webhook_triggers" is also on.
 //	"pi-support" (FeaturePiSupport) — pi-coding-agent support, off by default.
 //	"terminal:app-scrollback-forwarding:claude" (FeatureAppScrollForwardingClaude) —
 //	  app-scrollback forwarding for Claude Code sessions, off by default.
