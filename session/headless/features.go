@@ -27,6 +27,9 @@ const (
 	FeatureKeyAutonomousFix         FeatureKey = "autonomous_fix"
 	FeatureKeyAutonomousApproval    FeatureKey = "autonomous_approval"
 	FeatureKeyTriage                FeatureKey = "triage"
+	// FeatureKeyCompletionReview: excluded from AllowedFeatureKeys like FeatureKeyTriage —
+	// called directly by the completion reviewer subscriber, never via the MCP headless gate.
+	FeatureKeyCompletionReview FeatureKey = "completion-review"
 	// FeatureKeyBacklogIntentParse: excluded from AllowedFeatureKeys, same
 	// rationale as FeatureKeyTriage — called directly from BacklogService,
 	// not exposed via the public MCP headless-call gate.
