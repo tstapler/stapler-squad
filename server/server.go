@@ -1210,6 +1210,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.BacklogService != nil {
 		forwardSyncDone := services.StartBacklogGitHubForwardSyncSubscriber(serverCtx, deps.EventBus, deps.BacklogService.Registry(), deps.BacklogService.SyncLoopForForwardSync(), deps.Storage)
 		srv.backgroundTasksWG.Go(func() { <-forwardSyncDone })
+
+		// Completion reviewer (rollout flag backlog:completion-reviewer, default off): reads the
+		// flag per event, so it is live-togglable from Settings > Feature Flags.
+		completionReviewDone := services.StartCompletionReviewerSubscriber(serverCtx, deps.EventBus, deps.Storage, services.NewHeadlessCompletionReviewCall(), services.NewFileMemoryStore(), &services.EventBusNotifier{Bus: deps.EventBus})
+		srv.backgroundTasksWG.Go(func() { <-completionReviewDone })
 	}
 
 	// Register analytics HTTP handler (POST /api/analytics, GET /api/analytics/summary).

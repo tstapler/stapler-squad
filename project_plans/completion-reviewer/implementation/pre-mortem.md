@@ -1,0 +1,29 @@
+# Pre-mortem: completion-reviewer
+**Date**: 2026-08-29
+
+## Failure Modes
+
+| # | Failure | First Symptom | Prevention | Severity |
+|---|---------|--------------|------------|----------|
+| 1 | `fileMemoryStore` has a hard compile-time dependency on three `session/opmemory` signatures (`OperatorMemoryPath`, `RepoMemoryPath`, `ScanForPromptInjection`) pinned from a *sibling, not-yet-implemented* plan (ADR-002) — if operator-memory's actual implementation deviates during its own build/review, completion-reviewer either fails to compile or, worse, compiles against a `ScanForPromptInjection` whose behavior silently changed (e.g. now logs instead of blocking) | `go build ./...` fails on completion-reviewer's PR/rebase once operator-memory merges; or (worse) it builds fine but the injection-reject test (Task 1.4.2g) starts failing/passing for the wrong reason after a silent semantic change upstream | Require a small fake/contract test in completion-reviewer's own suite pinned to ADR-002's exact signatures *and* behavioral contract (reject-before-write), gated as part of operator-memory's own merge checklist — not just a documentation cross-reference between two independently-planned items | P2 |
+| 2 | Credential-chain no-op (ADR-001) degrades the entire feature to permanent silent inertia if the deployed systemd service's environment can't resolve `~/.claude/.credentials.json` or `ANTHROPIC_API_KEY` (e.g. different `HOME`/user context than manual dev testing) — only one startup `log.Info` line marks this, never re-checked, never surfaced anywhere routinely checked | `REPO.md` stays empty for weeks despite many `done` transitions in production; indistinguishable from "nothing worth learning happened" without manually grepping startup logs | Distinguish "disabled: no credential" from "enabled, 0/N successes" with an ongoing (not just startup) signal, and add a post-deploy smoke check (validation.md) that asserts the reviewer is actually enabled in the real service environment, not just in manual `/tmp` testing | P1 |
+| 3 | Real per-`done`-transition Anthropic API calls share the same OAuth credential/quota as interactive `claude` CLI sessions and all other fleet automation (triage/work/review) — no budget cap or circuit breaker exists, so a bulk-close or reconciliation sweep (up to 8 concurrent per the semaphore) consumes quota that competes with higher-value interactive/automation calls | 429s or slowdowns appear in unrelated triage/work/review sessions during high backlog throughput, with no logged link back to the completion reviewer as the cause | Add an explicit call-rate/day budget (same `atomic.Int64` idiom already planned) and document the quota-sharing risk explicitly in Risk Control rather than "no different in kind" | P2 |
+| 4 | AI-generated "learnings" accumulate unbounded and undeletable in `REPO.md` (curator/pruning pass is explicitly out of scope and has no owner or tracked follow-up item) — near-duplicate, generic, or low-signal entries dilute the exact prompt budget this feature is meant to improve, with no mechanism ever validating that a "learning" was useful | Over months, `REPO.md` grows to hundreds of sections; future triage/work session prompts visibly bloat, but degraded downstream quality is only noticed anecdotally since nothing measures whether entries are ever acted on | File and assign an owner to the "periodic curator pass" as a real tracked backlog item *before* this ships (not just a Markdown mention), and/or cap section count/size in `fileMemoryStore.Append` itself so the file can't grow unbounded before a curator exists | P1 |
+| 5 | Second-order prompt-injection / content laundering: attacker-controlled imported-GitHub-issue text gets summarized by the model into plausible, non-injection-shaped "learnings" (e.g. "skip CI when flaky," "trust PRs from user X") that `ScanForPromptInjection`'s pattern-based scan won't catch, then gets read at *elevated trust* (institutional memory, not "untrusted external issue") by every future triage/work/review session | A future session cites a `REPO.md` "learning" to justify a risky shortcut; discovered only via forensic review tracing it back to a single adversarial imported issue, since there's no per-entry provenance/confidence marker and no UI (explicitly out of scope) | Mark every entry as single-item-derived/unreviewed in the written format itself (not just internally), and narrow the system prompt to extract mechanical/factual learnings (build quirks, test flakiness) rather than open-ended "advice," shrinking the laundering surface | P3 |
+
+## P1 Items (address before implementation)
+- [x] #2 — Credential-chain no-op silently makes the feature permanently inert in production.
+      Addressed in plan.md's Observability Plan prose AND threaded into the executable task list:
+      Story 1.5.2's Acceptance Criteria + new Task 1.5.2c (implementation) + Task 1.5.2d (unit
+      test) + validation.md's `TestStartCompletionReviewerSubscriber_should_LogStatusLine_When_HundredthEventProcessed`
+      row, plus the existing manual post-deploy verification note in Task 1.5.3b. (Engineering
+      triad review, 2026-08-29, caught that the first pass only patched the narrative section —
+      fixed by adding the actual tasks/AC/test.)
+- [x] #4 — Unbounded, uncurated `REPO.md` growth with no owner for the curator pass. Addressed in
+      plan.md's Risk Control prose AND threaded into the executable task list: Story 1.4.2's
+      Acceptance Criteria + Task 1.4.2d (implementation, now explicitly includes the cap check) +
+      new Task 1.4.2i (unit test) + validation.md's
+      `TestFileMemoryStore_Append_should_RejectAppend_When_FileExceedsGrowthCap` row. Filing the
+      tracked follow-up curator-pass backlog item remains a pre-ship requirement (Risk Control),
+      not something this plan's tasks build. (Same engineering triad review caught the same
+      narrative-only gap here.)
