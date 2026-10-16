@@ -99,7 +99,7 @@ func (i *Instance) SwitchProgram(ctx context.Context, rawProgram string, persist
 	}
 
 	if i.Status == Active {
-		if restartErr := i.Restart(true); restartErr != nil {
+		if restartErr := i.Restart(true, ""); restartErr != nil {
 			return true, resolvedProgram, restartErr
 		}
 	}

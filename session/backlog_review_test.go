@@ -1045,6 +1045,12 @@ func TestGetWorktreeDirtyPaths_NonGitDirectory_ReturnsNilNil(t *testing.T) {
 	assert.Nil(t, paths)
 }
 
+func TestRunPreGateSecurityCheck_should_ReturnNil_When_DiffContainsNoThreatPatterns(t *testing.T) {
+	if err := RunPreGateSecurityCheck("+func main() { fmt.Println(\"hi\") }"); err != nil {
+		t.Fatalf("clean diff returned error: %v", err)
+	}
+}
+
 // TestRecoverBaseCommitSHA_UsesExplicitBranchRef_NotAmbientHEAD is a regression test
 // for backlog item e7664cbf: RecoverBaseCommitSHA used to compute
 // `git merge-base HEAD <branch>`, so its result depended on whatever branch a

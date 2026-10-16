@@ -177,6 +177,7 @@ func convertEventToWorkflowEvent(evt *events.Event) *sessionv1.WorkflowEvent {
 	out := &sessionv1.WorkflowEvent{
 		Timestamp: timestamppb.New(evt.Timestamp),
 		Seq:       evt.Seq,
+		DeployId:  deployID,
 	}
 
 	payload := evt.WorkflowPayload

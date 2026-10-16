@@ -1402,6 +1402,12 @@ message BacklogItemEvent {
   // Synthetic marker (oneof left unset) sent periodically on an otherwise-
   // idle connection -- see SessionEvent.heartbeat's identical doc comment.
   bool heartbeat = 11;
+
+  // Identifies the server process that produced this event; constant for the process lifetime and
+  // different after every restart or redeploy. A change between events means the server restarted
+  // and seq has reset, so clients can tell a redeploy from a real seq anomaly. Empty from servers
+  // that predate this field.
+  string deploy_id = 12;
 }
 
 // BacklogItemStatusChangedEvent is emitted when an item's status transitions

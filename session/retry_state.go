@@ -371,7 +371,7 @@ func restartForRetry(inst *Instance, allowedPath, continuationPrompt string, pol
 			}
 		}
 	} else {
-		restartErr = inst.Restart(false)
+		restartErr = inst.Restart(false, "")
 	}
 
 	if restartErr != nil {
