@@ -2,12 +2,14 @@ package unfinished
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -150,12 +152,6 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 	}
 
 	// ── Phase 2: build change target list (no lock, no blob reads) ───────────
-	type changeTarget struct {
-		name      string
-		headHash  plumbing.Hash // zero = new file not in HEAD
-		isDeleted bool          // no working-tree file exists
-	}
-
 	stagedTargets := make([]changeTarget, 0, len(stagedDels))
 	for _, m := range metas {
 		if m.staged {
@@ -209,102 +205,29 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 			unstagedTargets = append(unstagedTargets, changeTarget{m.name, m.indexHash, false})
 			continue
 		}
-		wtData, ok := readFileIfSmall(wtPath)
-		if !ok {
-			// Unreadable or raced past the cap; treat as changed conservatively.
-			unstagedTargets = append(unstagedTargets, changeTarget{m.name, m.indexHash, false})
-			continue
-		}
-		if plumbing.ComputeHash(plumbing.BlobObject, wtData) != m.indexHash {
+		if !racyFileMatchesIndex(wtPath, m.indexHash) {
+			// Unreadable, raced past the cap, or content differs: changed.
 			unstagedTargets = append(unstagedTargets, changeTarget{m.name, m.indexHash, false})
 		}
 	}
 
-	// ── Phase 3: batch-read all needed blobs under a single lock hold ────────
-	// Collecting all hashes first and reading them in one critical section
-	// eliminates the N lock-acquire/release cycles (one per changed file) that
-	// was the #2 mutex hotspot: 9.87B cycles, 1641 events in pprof profiling.
-	// Peak memory is bounded by the sum of changed-file blobs (M << N typical),
-	// which is acceptable since blobs > maxUntrackedFileSize are still skipped.
-	allTargets := append(stagedTargets, unstagedTargets...) //nolint:gocritic // intentional ephemeral append
-	blobMap := make(map[plumbing.Hash][]byte, len(allTargets))
-	func() {
-		// Deferred unlock (rather than an explicit entry.mu.Unlock() at the
-		// end of this block): a panic partway through the loop below would
-		// otherwise leave entry.mu permanently held, deadlocking every future
-		// operation on this repo entry.
-		entry.mu.Lock()
-		defer entry.mu.Unlock()
-		for _, t := range allTargets {
-			if t.headHash == (plumbing.Hash{}) {
-				continue
-			}
-			if _, already := blobMap[t.headHash]; already {
-				continue
-			}
-			// Blob content is keyed by its content-addressed hash, so a cache hit
-			// is always correct — no invalidation needed, ever. This skips
-			// re-decompressing the same HEAD blob from the packfile on every poll
-			// for a file that stays modified across several consecutive polls.
-			if cached, ok := entry.blobCache.get(t.headHash); ok {
-				blobMap[t.headHash] = cached
-				atomic.AddInt64(&g.blobCacheHits, 1)
-				continue
-			}
-			missStart := time.Now()
-			blob, berr := entry.repo.BlobObject(t.headHash)
-			if berr != nil {
-				continue
-			}
-			// Skip blobs larger than maxUntrackedFileSize to avoid reading large
-			// binaries or auto-generated files (e.g. package-lock.json, JARs).
-			if blob.Size > maxUntrackedFileSize {
-				continue
-			}
-			r, rerr := blob.Reader()
-			if rerr != nil {
-				continue
-			}
-			var buf bytes.Buffer
-			_, _ = buf.ReadFrom(r)
-			_ = r.Close()
-			data := bytes.Clone(buf.Bytes())
-			blobMap[t.headHash] = data
-			atomic.AddInt64(&g.blobCacheMisses, 1)
-			atomic.AddInt64(&g.blobCacheMissNanos, int64(time.Since(missStart)))
-			entry.blobCache.put(t.headHash, data, g.effectiveBlobCacheMaxBytes())
-		}
-	}()
-
+	// ── Phase 3: memo lookup, then batch-read the needed blobs ───────────────
+	// With diff_counter on, files whose stat identity and HEAD blob are
+	// unchanged since a prior diff are answered from the memo and cost neither
+	// a blob read nor a file read.
 	var d DiffStat
-
-	applyDiff := func(t changeTarget) {
-		d.Files++
-		headData := blobMap[t.headHash] // nil for zero hash or skipped blobs
-		if t.isDeleted {
-			d.Deletions += countBytesLines(headData)
-			return
-		}
-		wtData, ok := readFileIfSmall(filepath.Join(worktreePath, t.name))
-		if !ok {
-			d.Deletions += countBytesLines(headData)
-			return
-		}
-		// F7: surface when the LCS cap forces a "fully replaced" approximation
-		// instead of an exact diff, so this is discoverable without reading code.
-		if oldLines, newLines := countBytesLines(headData), countBytesLines(wtData); oldLines > maxLCSLines || newLines > maxLCSLines {
-			log.DebugLog().Printf("[GoGitVCSReader] LCS cap hit for %s (old=%d new=%d lines, cap=%d): reporting a fully-replaced approximation instead of an exact line diff", t.name, oldLines, newLines, maxLCSLines)
-		}
-		ins, del := linesDiffBytes(headData, wtData)
-		d.Insertions += ins
-		d.Deletions += del
+	var memo *fileDiffMemo
+	if EffectiveFlags().DiffCounter {
+		memo = diffMemoInstance()
 	}
-
-	for _, t := range stagedTargets {
-		applyDiff(t)
+	pending := make([]pendingTarget, 0, len(stagedTargets)+len(unstagedTargets))
+	for _, ts := range [][]changeTarget{stagedTargets, unstagedTargets} {
+		pending = g.resolveMemoHits(memo, worktreePath, ts, pending, &d)
 	}
-	for _, t := range unstagedTargets {
-		applyDiff(t)
+	blobMap := g.loadHeadBlobs(entry, pending)
+
+	for _, p := range pending {
+		g.applyDiff(&d, p, blobMap, memo, worktreePath)
 	}
 
 	// Untracked files: count lines as pure insertions (no HEAD version).
@@ -317,12 +240,160 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 	// untrackedMatcher was resolved in Phase 1 above (cached on entry, F6).
 	_ = walkUntracked(worktreePath, indexedNames, untrackedMatcher, func(absPath string) {
 		d.Files++
-		if data, ok := readFileIfSmall(absPath); ok {
-			d.Insertions += countBytesLines(data)
+		if n, ok := countFileLines(absPath); ok {
+			d.Insertions += n
 		}
 	})
 
 	return d, nil
+}
+
+// changeTarget is one file whose diff against HEAD must be counted.
+type changeTarget struct {
+	name      string
+	headHash  plumbing.Hash // zero = new file not in HEAD
+	isDeleted bool          // no working-tree file exists
+}
+
+// pendingTarget is a changeTarget the memo could not answer. keyed reports
+// whether key is valid for storing the result afterwards.
+type pendingTarget struct {
+	changeTarget
+	key   FileDiffMemoKey
+	keyed bool
+}
+
+// resolveMemoHits adds memo-answered targets straight to d and appends the
+// rest to pending. A nil memo (diff_counter off) passes everything through.
+func (g *GoGitVCSReader) resolveMemoHits(memo *fileDiffMemo, root string, targets []changeTarget, pending []pendingTarget, d *DiffStat) []pendingTarget {
+	for _, t := range targets {
+		p := pendingTarget{changeTarget: t}
+		if memo != nil && !t.isDeleted {
+			if key, ok := memo.keyFor(filepath.Join(root, t.name), t.headHash); ok {
+				if c, hit := memo.lookup(key); hit {
+					d.Files++
+					d.Insertions += c.Insertions
+					d.Deletions += c.Deletions
+					continue
+				}
+				p.key, p.keyed = key, true
+			}
+		}
+		pending = append(pending, p)
+	}
+	return pending
+}
+
+// loadHeadBlobs reads every distinct HEAD blob the pending targets need under
+// a single lock hold. Collecting all hashes first and reading them in one
+// critical section eliminates the N lock-acquire/release cycles (one per
+// changed file) that was the #2 mutex hotspot: 9.87B cycles, 1641 events in
+// pprof profiling. Peak memory is bounded by the sum of changed-file blobs
+// (M << N typical); blobs > maxUntrackedFileSize are skipped.
+func (g *GoGitVCSReader) loadHeadBlobs(entry *cachedRepo, pending []pendingTarget) map[plumbing.Hash][]byte {
+	blobMap := make(map[plumbing.Hash][]byte, len(pending))
+	// Deferred unlock: a panic partway through the loop would otherwise leave
+	// entry.mu permanently held, deadlocking every future operation on this repo.
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	for _, t := range pending {
+		if t.headHash == (plumbing.Hash{}) {
+			continue
+		}
+		if _, already := blobMap[t.headHash]; already {
+			continue
+		}
+		// Blob content is keyed by its content-addressed hash, so a cache hit
+		// is always correct — no invalidation needed, ever. This skips
+		// re-decompressing the same HEAD blob from the packfile on every poll
+		// for a file that stays modified across several consecutive polls.
+		if cached, ok := entry.blobCache.get(t.headHash); ok {
+			blobMap[t.headHash] = cached
+			atomic.AddInt64(&g.blobCacheHits, 1)
+			continue
+		}
+		missStart := time.Now()
+		data, ok := readBlobExact(entry.repo, t.headHash)
+		if !ok {
+			continue
+		}
+		blobMap[t.headHash] = data
+		atomic.AddInt64(&g.blobCacheMisses, 1)
+		atomic.AddInt64(&g.blobCacheMissNanos, int64(time.Since(missStart)))
+		entry.blobCache.put(t.headHash, data, g.effectiveBlobCacheMaxBytes())
+	}
+	return blobMap
+}
+
+// readBlobExact reads a blob into one right-sized slice (the object header
+// carries the size, so no growth steps and no second clone). Blobs larger than
+// maxUntrackedFileSize are skipped to avoid reading large binaries or
+// auto-generated files (e.g. package-lock.json, JARs).
+func readBlobExact(repo *git.Repository, h plumbing.Hash) ([]byte, bool) {
+	blob, err := repo.BlobObject(h)
+	if err != nil || blob.Size > maxUntrackedFileSize {
+		return nil, false
+	}
+	r, err := blob.Reader()
+	if err != nil {
+		return nil, false
+	}
+	defer r.Close()
+	data := make([]byte, blob.Size)
+	n, _ := io.ReadFull(r, data)
+	return data[:n], true
+}
+
+// applyDiff folds one pending target's line counts into d, storing the result
+// in the memo when the target is keyed.
+func (g *GoGitVCSReader) applyDiff(d *DiffStat, t pendingTarget, blobMap map[plumbing.Hash][]byte, memo *fileDiffMemo, root string) {
+	d.Files++
+	headData := blobMap[t.headHash] // nil for zero hash or skipped blobs
+	if t.isDeleted {
+		d.Deletions += countBytesLines(headData)
+		return
+	}
+	bp, ok := readSmallFilePooled(filepath.Join(root, t.name))
+	if !ok {
+		d.Deletions += countBytesLines(headData)
+		return
+	}
+	defer releaseFileBuf(bp)
+	wtData := *bp
+	// F7: surface when the LCS cap forces a "fully replaced" approximation
+	// instead of an exact diff, so this is discoverable without reading code.
+	// A file has at most len(bytes) lines, so the byte-length test skips the
+	// newline counts for every file that cannot reach the cap.
+	if len(headData) > maxLCSLines || len(wtData) > maxLCSLines {
+		if oldLines, newLines := countBytesLines(headData), countBytesLines(wtData); oldLines > maxLCSLines || newLines > maxLCSLines {
+			log.DebugLog().Printf("[GoGitVCSReader] LCS cap hit for %s (old=%d new=%d lines, cap=%d): reporting a fully-replaced approximation instead of an exact line diff", t.name, oldLines, newLines, maxLCSLines)
+		}
+	}
+	var ins, del int
+	if memo != nil {
+		memo.diffs.Add(1)
+		ins, del = linesDiffMyers(headData, wtData)
+		// A head blob that failed to load would be diffed as empty; never
+		// memoize that, or a transient read error becomes a sticky wrong answer.
+		if _, headLoaded := blobMap[t.headHash]; t.keyed && (headLoaded || t.headHash == (plumbing.Hash{})) {
+			memo.store(t.key, EditCounts{Insertions: ins, Deletions: del})
+		}
+	} else {
+		ins, del = linesDiffBytes(headData, wtData)
+	}
+	d.Insertions += ins
+	d.Deletions += del
+}
+
+// racyFileMatchesIndex reports whether the file at path hashes to indexHash;
+// unreadable files and files past the size cap report false (treated as changed).
+func racyFileMatchesIndex(path string, indexHash plumbing.Hash) bool {
+	bp, ok := readSmallFilePooled(path)
+	if !ok {
+		return false
+	}
+	defer releaseFileBuf(bp)
+	return plumbing.ComputeHash(plumbing.BlobObject, *bp) == indexHash
 }
 
 // fileNeedsContentCheck reports whether a stat-clean file (size and mtime both
