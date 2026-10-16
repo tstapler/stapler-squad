@@ -168,6 +168,16 @@ func (d *DirtyGen) ShouldRunStatPass() bool { return true }
 // Decide evaluates the fallback rule and, when it forces a full walk,
 // increments dirty_full_walk_total{reason}. Call once per scan.
 func (d *DirtyGen) Decide() DirtyDecision {
+	dec := d.Peek()
+	if dec.FullWalk {
+		recordDirtyFullWalk(dec.Reason)
+	}
+	return dec
+}
+
+// Peek is Decide without the metric: a second consumer of the same scan (the
+// diff walk) asks whether a full walk is pending without double-counting it.
+func (d *DirtyGen) Peek() DirtyDecision {
 	now := d.now()
 	pending := d.pending.Load()
 	last := time.Time{}
@@ -183,10 +193,21 @@ func (d *DirtyGen) Decide() DirtyDecision {
 		pending:   pending,
 		at:        now,
 	}
-	if dec.FullWalk {
-		recordDirtyFullWalk(reason)
-	}
 	return dec
+}
+
+// AckHint clears the dirty-hint bit dec observed once the scan re-validated
+// the state the hint pointed at (it never counts as a full walk).
+func (d *DirtyGen) AckHint(dec DirtyDecision) {
+	if dec.pending&pendDirtyHint == 0 {
+		return
+	}
+	for {
+		old := d.pending.Load()
+		if d.pending.CompareAndSwap(old, old&^pendDirtyHint) {
+			return
+		}
+	}
 }
 
 // CompleteFullWalk records a finished full walk that began at decision dec.

@@ -258,6 +258,7 @@ func NewScannerWithReader(eventBus *pkgevents.EventBus, stateStore *StateStore, 
 		fsDebounce:              fsnotifyDebounce,
 	}
 	s.autoSpiderEnabled.Store(true)
+	s.gitwatch.watchWorktreeGitdirs = EffectiveFlags().WatchWorktreeGitdirs
 	return s
 }
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -67,6 +68,48 @@ func (s *Scanner) activeWatcher() gitWatcher {
 	return fsnotifyWatcher{s.fsWatcher}
 }
 
+// dirtyTracker returns the reader's DirtyGen sink, or nil for readers (fakes,
+// tests) that keep none.
+func (s *Scanner) dirtyTracker() dirtyTracker {
+	d, _ := s.reader.(dirtyTracker)
+	return d
+}
+
+// noteDirty feeds one watcher observation for worktree into DirtyGen.
+func (s *Scanner) noteDirty(worktree string, kind EventKind) {
+	if d := s.dirtyTracker(); d != nil && s.gitwatch.watchWorktreeGitdirs {
+		d.NoteDirty(worktree, kind)
+	}
+}
+
+// noteDirtyRepo notes kind for repoPath and every linked worktree known for it.
+func (s *Scanner) noteDirtyRepo(repoPath string, kind EventKind) {
+	s.noteDirty(repoPath, kind)
+	if v, ok := s.repoWorktrees.Load(repoPath); ok {
+		if set, ok := v.(*sync.Map); ok {
+			set.Range(func(k, _ any) bool {
+				if wt, _ := k.(string); wt != "" && wt != repoPath {
+					s.noteDirty(wt, kind)
+				}
+				return true
+			})
+		}
+	}
+}
+
+// armDirty marks worktree's watcher live once its watch registered (Tier A only).
+func (s *Scanner) armDirty(worktree string) {
+	if d := s.dirtyTracker(); d != nil && s.gitwatch.watchWorktreeGitdirs {
+		d.ArmDirty(worktree)
+	}
+}
+
+func (s *Scanner) disarmDirty(worktree string) {
+	if d := s.dirtyTracker(); d != nil && s.gitwatch.watchWorktreeGitdirs {
+		d.DisarmDirty(worktree)
+	}
+}
+
 // watchRepo best-effort registers repoPath's .git dir with the fsnotify
 // watcher so a real change triggers an immediate targeted rescan. No-op if
 // fsnotify is unavailable on this platform (no active watcher) — that's the
@@ -108,6 +151,8 @@ func (s *Scanner) watchTierA(w gitWatcher, repoPath, gitDir string) bool {
 	}
 	if err := w.Add(gitDir); err != nil {
 		log.Debug("could not watch git dir", "dir", gitDir, "err", err)
+	} else {
+		s.armDirty(repoPath)
 	}
 	entries, err := os.ReadDir(filepath.Join(gitDir, "worktrees"))
 	if err != nil {
@@ -138,6 +183,7 @@ func (s *Scanner) addWorktreeGitdir(w gitWatcher, admin string, t worktreeTarget
 	}
 	s.gitwatch.targets[admin] = t
 	s.fsMu.Unlock()
+	s.armDirty(t.worktree)
 }
 
 // linkedWorktreePath reads <admin>/gitdir, which holds "<worktree>/.git".
@@ -169,17 +215,20 @@ func (s *Scanner) unwatchRepo(repoPath string) {
 		return
 	}
 	_ = w.Remove(filepath.Join(repoPath, ".git"))
-	var admins []string
+	s.disarmDirty(repoPath)
+	type removal struct{ admin, worktree string }
+	var removals []removal
 	s.fsMu.Lock()
 	for admin, t := range s.gitwatch.targets {
 		if t.repoRoot == repoPath {
-			admins = append(admins, admin)
+			removals = append(removals, removal{admin, t.worktree})
 			delete(s.gitwatch.targets, admin)
 		}
 	}
 	s.fsMu.Unlock()
-	for _, admin := range admins {
-		_ = w.Remove(admin)
+	for _, r := range removals {
+		_ = w.Remove(r.admin)
+		s.disarmDirty(r.worktree)
 	}
 }
 
@@ -201,6 +250,7 @@ func (s *Scanner) rescanAllOnOverflow(ctx context.Context) {
 			return false
 		}
 		if repo, _ := k.(string); repo != "" {
+			s.noteDirtyRepo(repo, EventOverflow)
 			s.invalidateRepo(repo)
 			s.enqueueRepo(repo, true)
 		}
@@ -236,9 +286,23 @@ func (s *Scanner) fsnotifyLoop(ctx context.Context) {
 			log.Warn("scanner fsnotify error", "err", err)
 			if s.gitwatch.watchWorktreeGitdirs && errors.Is(err, fsnotify.ErrEventOverflow) {
 				s.rescanAllOnOverflow(ctx)
+			} else {
+				s.noteErrorAll()
 			}
 		}
 	}
+}
+
+// noteErrorAll records a non-overflow watcher error against every tracked
+// repo and worktree: events may have been lost, so no clean verdict is trusted
+// until the next full walk.
+func (s *Scanner) noteErrorAll() {
+	s.repoSet.Range(func(k, _ any) bool {
+		if repo, _ := k.(string); repo != "" {
+			s.noteDirtyRepo(repo, EventError)
+		}
+		return true
+	})
 }
 
 func (s *Scanner) handleEvent(ctx context.Context, event fsnotify.Event) {
@@ -250,6 +314,7 @@ func (s *Scanner) handleEvent(ctx context.Context, event fsnotify.Event) {
 		return
 	}
 	if t, ok := s.worktreeTargetFor(filepath.Dir(event.Name)); ok {
+		s.noteDirty(t.worktree, EventTrackedPath)
 		s.scheduleWorktreeEvent(ctx, t)
 		return
 	}
@@ -260,6 +325,7 @@ func (s *Scanner) handleEvent(ctx context.Context, event fsnotify.Event) {
 	for {
 		if filepath.Base(dir) == ".git" {
 			repoRoot := filepath.Dir(dir)
+			s.noteGitEvent(repoRoot, event, scope)
 			s.scheduleGitEvent(ctx, repoRoot, scope)
 			if s.gitwatch.watchWorktreeGitdirs && scope == gitEventAllWorktrees {
 				s.watchRepo(repoRoot) // picks up linked worktrees added since the last pass
@@ -272,6 +338,21 @@ func (s *Scanner) handleEvent(ctx context.Context, event fsnotify.Event) {
 		}
 		dir = parent
 	}
+}
+
+// noteGitEvent feeds a <repo>/.git event into DirtyGen: a new or removed linked
+// worktree admin dir is a directory change; anything else is a hint on the
+// worktrees whose caches the event invalidates.
+func (s *Scanner) noteGitEvent(repoRoot string, event fsnotify.Event, scope gitEventScope) {
+	if filepath.Base(event.Name) == "worktrees" {
+		s.noteDirtyRepo(repoRoot, EventDirChange)
+		return
+	}
+	if scope == gitEventAllWorktrees {
+		s.noteDirtyRepo(repoRoot, EventTrackedPath)
+		return
+	}
+	s.noteDirty(repoRoot, EventTrackedPath)
 }
 
 // fsnotifyDebounce is the window after a repo's first .git event in which
