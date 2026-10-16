@@ -46,3 +46,14 @@ Before implementation, verify:
 - `make quick-check` passes
 - Manual smoke test confirms the parsing spinner and review form appear
 - No new lint warnings introduced
+
+## Readiness Gate
+
+**Verdict: PASS.** Pre-flight checks resolved before code was written:
+- `createBacklogInBackground` had a single caller (the compose `onSubmit`); the hook was removed.
+- The replaced tests in `Omnibar.backlogCompose.test.tsx` were located by title.
+- Server side needs no change: `CreateBacklogItem` calls `MaybeTriggerTriage` with the item's
+  `RepoPath` (`server/services/backlog_service_lifecycle.go:240`).
+
+No pre-mortem blockers. Residual risks are the ones tabled above (LLM latency, cancel loses draft),
+both accepted.

@@ -104,3 +104,11 @@ is set but `BacklogItemIntentReview.onDone` never fires (e.g. network error)?
 **Challenge:** Does `createBacklogInBackground` import become unused and cause a build error?
 **Answer:** Check if `createBacklogInBackground` is used elsewhere in `Omnibar.tsx` before
 removing the import. If the compose path is its only use, remove the import too.
+
+### Adversarial Review Result
+
+**Verdict: PASS (not BLOCKED).** All four challenges above have answers grounded in existing
+behavior; none requires a plan change. Two additions made during implementation:
+`useBacklogBackgroundCreate` had no other caller (the import-usage challenge), so the hook was
+deleted rather than left orphaned, and `docs/reference/feature-testing-registry.md` was updated
+to describe the new compose flow.
