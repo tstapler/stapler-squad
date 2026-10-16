@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync/atomic"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/tstapler/stapler-squad/telemetry"
@@ -19,6 +20,24 @@ func recordScanCycle() { scanCyclesTotal.Add(1) }
 
 // ScanCyclesTotal returns the number of scan cycles completed since process start.
 func ScanCyclesTotal() int64 { return scanCyclesTotal.Load() }
+
+// dirtyFullWalkTotal counts forced full walks per FullWalkReason
+// (dirty_full_walk_total{reason}).
+var dirtyFullWalkTotal [numFullWalkReasons]atomic.Int64
+
+func recordDirtyFullWalk(r FullWalkReason) {
+	if r > ReasonNone && r < numFullWalkReasons {
+		dirtyFullWalkTotal[r].Add(1)
+	}
+}
+
+// DirtyFullWalkTotal returns the forced-full-walk count for reason r.
+func DirtyFullWalkTotal(r FullWalkReason) int64 {
+	if r >= numFullWalkReasons {
+		return 0
+	}
+	return dirtyFullWalkTotal[r].Load()
+}
 
 // RegisterMetrics wires blobCache effectiveness (see BlobCacheStatsSnapshot)
 // into the process's OTel MeterProvider as observable gauges, so it shows up
@@ -79,6 +98,12 @@ func RegisterMetrics() error {
 		return err
 	}
 
+	dirtyFullWalks, err := meter.Int64ObservableCounter("unfinished.dirty_full_walk_total",
+		metric.WithDescription("Cumulative forced full walks by reason (overflow|error|dir_event|age|unarmed)"))
+	if err != nil {
+		return err
+	}
+
 	_, err = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 		stats := BlobCacheStatsSnapshot()
 		o.ObserveInt64(hits, stats.Hits)
@@ -90,7 +115,11 @@ func RegisterMetrics() error {
 		o.ObserveInt64(repoCacheColdOpens, rc.ColdOpens)
 		o.ObserveInt64(repoCacheEvictions, rc.Evictions)
 		o.ObserveInt64(scanCycles, ScanCyclesTotal())
+		for r := ReasonOverflow; r < numFullWalkReasons; r++ {
+			o.ObserveInt64(dirtyFullWalks, DirtyFullWalkTotal(r),
+				metric.WithAttributes(attribute.String("reason", r.String())))
+		}
 		return nil
-	}, hits, misses, timeSavedMs, repoCacheSize, repoCacheColdOpens, repoCacheEvictions, scanCycles)
+	}, hits, misses, timeSavedMs, repoCacheSize, repoCacheColdOpens, repoCacheEvictions, scanCycles, dirtyFullWalks)
 	return err
 }
