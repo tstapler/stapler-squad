@@ -34,6 +34,9 @@ type SessionHealthChecker struct {
 	// deadPaneRecorder, when set, persists the dead-pane stop snapshot (the stuck
 	// row lives in the service layer, which this package cannot import).
 	deadPaneRecorder DeadPaneRecorder
+
+	// stopSourceFor builds the pane reader for a snapshot; nil means the live instance (tests inject fakes).
+	stopSourceFor func(*Instance) stopSource
 }
 
 // DeadPaneRecorder is told, before a dead pane is respawned, what its snapshot held.
@@ -460,7 +463,7 @@ func (h *SessionHealthChecker) handleDeadPane(instance *Instance, exitCode int, 
 		return
 	}
 
-	h.recordDeadPane(instance, instanceStopSource{inst: instance, controller: instance.GetController()}, exitCode, exitSignal)
+	h.recordDeadPane(instance, exitCode, exitSignal)
 
 	// Only a session that already existed before this checker started could
 	// have been affected by a restart race; one created afterward was never
@@ -489,7 +492,13 @@ func logDeadPaneSnapshot(title string, src stopSource, exitCode int, exitSignal 
 }
 
 // recordDeadPane logs the snapshot and hands it to the recorder, if any.
-func (h *SessionHealthChecker) recordDeadPane(instance *Instance, src stopSource, exitCode int, exitSignal string) {
+func (h *SessionHealthChecker) recordDeadPane(instance *Instance, exitCode int, exitSignal string) {
+	var src stopSource
+	if h.stopSourceFor != nil {
+		src = h.stopSourceFor(instance)
+	} else {
+		src = instanceStopSource{inst: instance, controller: instance.GetController()}
+	}
 	snap, state := observeDeadPane(instance.Title, src, exitCode, exitSignal)
 	if h.deadPaneRecorder != nil {
 		h.deadPaneRecorder(instance.UUID, instance.Title, snap, state)

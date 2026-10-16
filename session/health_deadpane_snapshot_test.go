@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -100,5 +101,39 @@ func TestHandleDeadPane_should_recordSnapshotBeforeRespawn_When_PaneCrashed(t *t
 				}))
 			}
 		})
+	}
+}
+
+// Every detector status the pane could last have shown, through handleDeadPane
+// itself: the recorder always sees exited/crashed (never a nudgeable state) and
+// the decision is respawn, whatever the detector last saw.
+func TestHandleDeadPane_should_neverBeNudgeable_When_AnyLastDetectedStatus(t *testing.T) {
+	statuses := []detection.DetectedStatus{
+		detection.StatusIdle, detection.StatusExecuting, detection.StatusError,
+		detection.StatusNeedsApproval, detection.StatusUnknown,
+	}
+	for _, st := range statuses {
+		for _, exit := range []int{1, 137} {
+			t.Run(fmt.Sprintf("%v/exit_%d", st, exit), func(t *testing.T) {
+				var got []domain.ObservedState
+				h := NewSessionHealthChecker(nil, WithDeadPaneRecorder(
+					func(_, _ string, snap domain.StopSnapshot, state domain.ObservedState) {
+						got = append(got, state)
+						assert.NotEmpty(t, snap.PaneTail, "BoundedStopTail-processed tail is carried to the recorder")
+					}))
+				h.stopSourceFor = func(*Instance) stopSource {
+					return &fakeStopSource{status: st, tmuxAlive: true, ctrlActive: true, tail: "last words"}
+				}
+				inst := makeTestInstance("dead-any-status")
+				for i := 0; i < failureThreshold; i++ {
+					h.handleDeadPane(inst, exit, "", &HealthCheckResult{})
+				}
+				require.Equal(t, []domain.ObservedState{domain.ObservedCrashed}, got)
+				assert.Equal(t, domain.StallActionRespawn, domain.DecideStallAction(domain.StallDecisionInput{
+					Reason: domain.StopReasonDeadPane, State: got[0],
+					NudgeEnabled: true, NudgeAllowed: true, ItemInWorkStatus: true,
+				}))
+			})
+		}
 	}
 }
