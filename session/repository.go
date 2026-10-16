@@ -416,8 +416,10 @@ type BacklogItemData struct {
 	Labels     []string
 	ArchivedAt *time.Time
 	SourceID   string
-	PrURL      string
-	PrNumber   int
+	// SourcePluginID is the source plugin id, denormalized from the Source edge.
+	SourcePluginID string
+	PrURL          string
+	PrNumber       int
 	// ShippedCheckConclusion holds the durable GitHub CI-conclusion snapshot
 	// captured at ship time — genuine GitHub CI-conclusion values only, never
 	// a capture-failure sentinel. See ShippedSnapshotCaptureFailed.
@@ -507,6 +509,7 @@ type BacklogItemSummary struct {
 	PublicIDRaw         string               `json:"public_id"`
 	ExternalID          string               `json:"external_id"`
 	ExternalURL         string               `json:"external_url"`
+	SourcePluginID      string               `json:"source_plugin_id"`
 	Labels              []string             `json:"labels"`
 	Title               string               `json:"title"`
 	Status              BacklogStatus        `json:"status"`
@@ -570,6 +573,8 @@ type BacklogItemFilter struct {
 	Statuses []string
 	// Priorities restricts results to these priority values. Empty means no restriction.
 	Priorities []int
+	// SourcePluginIDs restricts results to items whose source plugin is one of these. Empty means no restriction.
+	SourcePluginIDs []string
 	// SortBy controls ordering ("priority", "updated_at"). Empty means default ordering.
 	SortBy string
 	// ExcludeDone, when true and Statuses is empty, excludes items with status

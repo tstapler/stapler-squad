@@ -1,0 +1,13 @@
+{
+  "id": "backlog:import-jira-issue",
+  "type": "backend",
+  "service": "MCP",
+  "method": "import_jira_issue",
+  "markerFound": false,
+  "handlerFile": "server/mcp/tools_backlog_import_tracker.go",
+  "tested": true,
+  "testIds": [
+    "TestImportJiraIssue_should_CreateItemFromURL_And_BareKeyWithBaseURL"
+  ],
+  "lastModified": "2026-10-16T00:00:00-07:00"
+}

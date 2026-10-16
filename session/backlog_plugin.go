@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"time"
+	"unicode/utf8"
 )
 
 // ItemSourcePlugin is the interface all external source integrations must implement.
@@ -80,5 +81,48 @@ func NewDefaultRegistry() *PluginRegistry {
 	r := NewPluginRegistry()
 	r.Register(NewGitHubIssuesPlugin())
 	r.Register(NewGitHubPRsPlugin())
+	r.Register(NewLinearPlugin())
+	r.Register(NewJiraPlugin())
 	return r
+}
+
+const (
+	maxImportedTitleBytes       = 200
+	maxImportedDescriptionBytes = 2000
+)
+
+// BoundImportedText truncates tracker-supplied title/description to the sizes
+// the sync path stores, for import paths that bypass MapToBacklogItem.
+func BoundImportedText(title, description string) (string, string) {
+	return truncateUTF8(title, maxImportedTitleBytes), truncateUTF8(description, maxImportedDescriptionBytes)
+}
+
+// mapExternalToBacklogItem is the shared ExternalItem→BacklogItemData mapping
+// used by the tracker plugins (title/description truncated to 200/2000).
+func mapExternalToBacklogItem(item ExternalItem, sourceID string) BacklogItemData {
+	title, description := BoundImportedText(item.Title, item.Description)
+	return BacklogItemData{
+		Title:       title,
+		Description: description,
+		Priority:    item.Priority,
+		Status:      string(BacklogStatusIdea),
+		ExternalID:  item.ExternalID,
+		ExternalURL: item.URL,
+		Labels:      item.Labels,
+		SourceID:    sourceID,
+	}
+}
+
+// maxTrackerResponseBytes caps any single tracker API response body.
+const maxTrackerResponseBytes = 8 << 20
+
+// truncateUTF8 cuts s to at most limit bytes without splitting a multibyte rune.
+func truncateUTF8(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	for limit > 0 && !utf8.RuneStart(s[limit]) {
+		limit--
+	}
+	return s[:limit]
 }
