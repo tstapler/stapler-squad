@@ -3,6 +3,8 @@ package unfinished
 import (
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // racyWindow is git's racy-timestamp rule: a stat signature only proves
@@ -65,6 +67,10 @@ type scanSkipState struct {
 	untracked  lazyMap[string, *untrackedCache]
 	dirtyGens  lazyMap[string, *DirtyGen]
 	stats      scanSkipCounters
+
+	// passSF coalesces HasUncommittedPass callers; its result type differs
+	// from hasUncommittedSF's, so it needs its own group.
+	passSF singleflight.Group //nolint:exhaustruct
 }
 
 func (s *scanSkipState) now() time.Time {

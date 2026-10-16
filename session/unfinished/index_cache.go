@@ -48,6 +48,9 @@ func (p *parsedIndex) gen() trackedGen {
 // currentTrackedGen stats the worktree's index now. Call it before reading
 // the index so the signature can only predate the data it describes.
 func (g *GoGitVCSReader) currentTrackedGen(worktreePath string) trackedGen {
+	if !g.effectiveFlags().ScanSkip {
+		return trackedGen{}
+	}
 	observedAt := g.scanSkip.now()
 	sig, ok := statPathSig(filepath.Join(worktreeGitDir(worktreePath), "index"))
 	return trackedGen{sig: sig, observedAt: observedAt, ok: ok}

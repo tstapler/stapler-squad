@@ -669,7 +669,7 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string, 
 		}
 	}
 
-	uncommitted, err := s.reader.HasUncommitted(wt.Path)
+	uncommitted, pass, err := s.hasUncommitted(wt.Path)
 	if err != nil {
 		if strings.Contains(err.Error(), "timed out") {
 			result.Status = ScanResultStatusTimeout
@@ -708,7 +708,7 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string, 
 	// gogit_vcs_reader_shellout_bench_test.go) — pure waste on the common case
 	// of an idle, already-clean worktree in a large fleet.
 	if uncommitted {
-		if d, dErr := s.reader.DiffShortstat(wt.Path); dErr == nil {
+		if d, dErr := s.diffShortstat(wt.Path, pass); dErr == nil {
 			result.ChangedFiles = d.Files
 			result.LinesAdded = d.Insertions
 			result.LinesRemoved = d.Deletions

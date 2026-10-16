@@ -59,10 +59,17 @@ func (g *GoGitVCSReader) DiffShortstat(worktreePath string) (DiffStat, error) {
 //  3. Loads HEAD blobs only for the M actually-changed files (M << N typical).
 //  4. Computes line diffs on []byte directly, avoiding string conversion overhead.
 func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, error) {
+	return g.diffShortstatUncachedPass(worktreePath, nil)
+}
+
+// diffShortstatUncachedPass is diffShortstatUncached taking the lstat results
+// HasUncommittedPass already gathered in this scan (nil: stat every file here).
+func (g *GoGitVCSReader) diffShortstatUncachedPass(worktreePath string, pass *statPass) (DiffStat, error) {
 	entry, err := g.openRepoEntry(worktreePath)
 	if err != nil {
 		return DiffStat{}, err
 	}
+	tg := g.currentTrackedGen(worktreePath) // before the index read: the signature may only predate it
 
 	// ── Phase 1: go-git metadata reads under lock (no blob loading) ──────────
 	entry.mu.Lock()
@@ -163,15 +170,13 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 	}
 
 	unstagedTargets := make([]changeTarget, 0)
+	passCursor := pass.cursor()
 	for _, m := range metas {
 		if m.staged {
 			continue
 		}
 		wtPath := filepath.Join(worktreePath, m.name)
-		if g.statFn != nil {
-			g.statFn(m.name)
-		}
-		info, serr := os.Lstat(wtPath)
+		info, serr := g.lstatTracked(&passCursor, m.name, wtPath)
 		if serr != nil {
 			if os.IsNotExist(serr) {
 				unstagedTargets = append(unstagedTargets, changeTarget{m.name, m.indexHash, true})
@@ -238,7 +243,7 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 	// largest allocator in the app (~163GB cum in one profiling session),
 	// since ignored build trees were read just like any other untracked file.
 	// untrackedMatcher was resolved in Phase 1 above (cached on entry, F6).
-	_ = walkUntracked(worktreePath, indexedNames, untrackedMatcher, func(absPath string) {
+	_ = g.walkUntrackedSkip(worktreePath, indexedNames, untrackedMatcher, tg, func(absPath string) {
 		d.Files++
 		if n, ok := countFileLines(absPath); ok {
 			d.Insertions += n
