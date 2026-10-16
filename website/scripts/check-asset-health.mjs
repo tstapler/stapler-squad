@@ -1,13 +1,9 @@
 #!/usr/bin/env node
-// AssetHealthCheck (ADR-002, pre-mortem.md Failure #5): verifies every
-// ReleaseAssetRef URL referenced in the built site not only resolves (HEAD)
-// but still serves the exact bytes recorded in asset-health-manifest.json at
-// publish time. A --clobber re-publish can leave a URL 200-ing with silently
-// different content, which a status-code-only check would report as passing.
-//
-// Run standalone: node website/scripts/check-asset-health.mjs
-// (wired as a step in .github/workflows/deploy-website.yml, between build
-// and upload-pages-artifact)
+// Verifies every ReleaseAssetRef URL in the built site serves the exact bytes
+// recorded in asset-health-manifest.json, not just a 200 -- a --clobber
+// re-publish can leave a URL 200-ing with silently different content. See
+// ADR-002 and project_plans/stapler-squad-website/implementation/pre-mortem.md
+// Failure #5.
 
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';

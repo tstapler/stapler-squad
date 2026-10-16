@@ -1,18 +1,7 @@
 #!/usr/bin/env node
-// build-features.mjs
-//
 // Reconciles README.md's 5-category "Highlights" grouping with
-// docs/features.md's flat 17-section detail (research/features.md §4's
-// "two different taxonomies of the same feature set") into one
-// FeatureCard[] array, written to website/src/content/features.json.
-//
-// Headings and descriptions are parsed live from docs/features.md so this
-// never drifts from the real file; category and alt-text are a hand-curated
-// lookup (CATEGORY_BY_HEADING / ALT_TEXT_BY_HEADING below) since reconciling
-// two human-authored taxonomies and writing a real descriptive sentence
-// isn't mechanically derivable. README.md is also read and its five category
-// names cross-checked against CATEGORY_BY_HEADING's values, so a renamed
-// README category is caught at build time instead of silently drifting.
+// docs/features.md's flat 17-section detail into website/src/content/features.json
+// -- see project_plans/stapler-squad-website/research/features.md §4.
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -44,20 +33,10 @@ const CATEGORY = {
 export const CATEGORY_ORDER = Object.values(CATEGORY);
 
 /**
- * README's 5 Highlights categories, reconciling docs/features.md's 17
- * sections against them. Two sections have no direct README bullet of their
- * own (README folds them into a sibling's one-liner) and needed a judgment
- * call, noted here rather than left implicit:
- *   - "Status Filtering" -> Organisation (it's a filtering/organisation
- *     feature, grouped with Instant Search/Tag-Based Grouping).
- *   - "Custom Rules" -> Organisation, not Review & Approval. README's
- *     "Review & Approval" bullet list names exactly 3 items (Auto-approval
- *     rules engine, Review Queue, Approval analytics), and Custom Rules is
- *     mentioned only inline inside the Auto-approval bullet's one-liner, not
- *     as its own top-level item -- so grouping it under Review & Approval
- *     here would silently inflate that category past what README documents.
- *     Organisation is the next-best fit: it's about customizing/organizing
- *     rule behavior, same family as the other user-configuration features.
+ * Maps docs/features.md's 17 section headings to README's 5 Highlights
+ * categories. "Status Filtering" and "Custom Rules" have no direct README
+ * bullet, so their mapping is a judgment call -- see
+ * project_plans/stapler-squad-website/research/features.md §4.
  *
  * @type {Record<string, string>}
  */

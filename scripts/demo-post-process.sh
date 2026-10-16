@@ -210,17 +210,8 @@ ffmpeg -y -i "$INPUT" \
   "$TMP" 2>&1 | grep -E "^(ffmpeg|Input|Output|Stream|frame=|video:)" || true
 
 # ── Title-card stage (Story 5.2.1): prepend a static branded frame ─────────
-# Layered as an additional stage AHEAD of the browser-chrome output above, not a
-# parallel script — $TMP already has the chrome frame baked in, so the title card
-# just needs to match its dimensions/fps and get concatenated onto the front.
-#
-# Text is rendered via rsvg-convert (which this stage already requires, to
-# rasterize the logo) rather than ffmpeg's drawtext filter: drawtext needs ffmpeg
-# built with libfreetype/fontconfig, which isn't guaranteed across every ffmpeg
-# build (confirmed absent from this repo's own Homebrew ffmpeg — "No such filter:
-# 'drawtext'"). ffmpeg's `overlay` filter (always present) composites both the
-# logo and the rendered text PNG onto the background, then `concat` prepends the
-# result to the chrome-stage footage.
+# Uses rsvg-convert + ffmpeg's overlay/concat instead of drawtext: drawtext
+# needs libfreetype/fontconfig, absent from this repo's own Homebrew ffmpeg.
 if [[ "$TITLE_CARD_REQUESTED" -eq 1 ]]; then
   echo "    Building title card: \"$TITLE_CARD_TEXT\" …"
 

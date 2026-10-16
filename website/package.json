@@ -12,10 +12,16 @@
     "test": "vitest run",
     "test:unit": "vitest run tests/unit --no-coverage",
     "test:integration": "vitest run tests/integration --no-coverage",
-    "lhci:desktop": "astro build && astro preview --port 4321 && (npx lhci autorun --config=./lighthouserc.json; code=$?; astro preview stop; exit $code)",
-    "lhci:mobile": "astro build && astro preview --port 4321 && (npx lhci autorun --config=./lighthouserc.mobile.json; code=$?; astro preview stop; exit $code)",
-    "test:a11y": "astro build && astro preview --port 4321 && (npx playwright test tests/a11y.spec.ts; code=$?; astro preview stop; exit $code)",
-    "test:e2e": "astro build && astro preview --port 4321 && (npx playwright test tests/e2e; code=$?; astro preview stop; exit $code)"
+    "preview:start": "astro build && astro preview --port 4321",
+    "preview:stop": "astro preview stop",
+    "lhci:desktop": "pnpm run preview:start && (npx lhci autorun --config=./lighthouserc.json; code=$?; pnpm run preview:stop; exit $code)",
+    "lhci:mobile": "pnpm run preview:start && (npx lhci autorun --config=./lighthouserc.mobile.json; code=$?; pnpm run preview:stop; exit $code)",
+    "test:a11y": "pnpm run preview:start && (npx playwright test tests/a11y.spec.ts; code=$?; pnpm run preview:stop; exit $code)",
+    "test:e2e": "pnpm run preview:start && (npx playwright test tests/e2e; code=$?; pnpm run preview:stop; exit $code)",
+    "lhci:desktop:ci": "npx lhci autorun --config=./lighthouserc.json",
+    "lhci:mobile:ci": "npx lhci autorun --config=./lighthouserc.mobile.json",
+    "test:a11y:ci": "npx playwright test tests/a11y.spec.ts",
+    "test:e2e:ci": "npx playwright test tests/e2e"
   },
   "dependencies": {
     "@astrojs/mdx": "8.1.0",

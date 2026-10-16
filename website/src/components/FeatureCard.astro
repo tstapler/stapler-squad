@@ -1,13 +1,7 @@
 ---
-// A single feature-grid tile. `screenshot` is omitted for 8 of the 9 sections
-// docs/features.md has no existing capture for (Task 3.3.1a's forward-looking
-// note: no <img>/<video> is invented for these -- they stay text-only until a
-// real asset exists for them). `alt` is required whenever `screenshot` is
-// set so a descriptive sentence, not the filename, is always what's wired up.
-//
-// Story 3.3.1's second AC: the one remaining screenshot-less card can instead
-// carry a `demoClip` (a ReleaseAssetRef) rendered as a <video>, its src always
-// built via releaseAssetUrl() -- never a hardcoded literal.
+// A single feature-grid tile. `screenshot`/`demoClip` are omitted for
+// sections with no existing capture (text-only until a real asset exists);
+// `alt` is required whenever `screenshot` is set.
 import { releaseAssetUrl, type ReleaseAssetRef } from '../lib/release-asset.ts';
 
 export interface Props {

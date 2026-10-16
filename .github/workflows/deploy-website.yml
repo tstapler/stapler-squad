@@ -74,17 +74,21 @@ jobs:
       # and lighthouserc.mobile.json's own comments, and
       # website/tests/unit/lighthouserc.test.ts for the regression guard that
       # these thresholds stay independent of web-app/lighthouserc.json's
-      # lower, warn-only ones. `astro preview` daemonizes itself (returns
-      # once the server is confirmed up rather than blocking in the
-      # foreground), so each npm script below can safely chain
-      # start -> check -> stop in one step.
+      # lower, warn-only ones. The site is already built above; start one
+      # `astro preview` server here (it daemonizes itself) and let
+      # lhci/a11y/e2e below reuse it via their `:ci` scripts instead of each
+      # rebuilding and re-previewing the identical site.
+      - name: Start preview server
+        working-directory: website
+        run: pnpm run preview -- --port 4321
+
       - name: Lighthouse CI (desktop)
         working-directory: website
-        run: pnpm run lhci:desktop
+        run: pnpm run lhci:desktop:ci
 
       - name: Lighthouse CI (mobile)
         working-directory: website
-        run: pnpm run lhci:mobile
+        run: pnpm run lhci:mobile:ci
 
       # Epic 6.2: same @axe-core/playwright library and critical/serious
       # severity gate as tests/e2e/accessibility.spec.ts -- see
@@ -95,13 +99,18 @@ jobs:
 
       - name: Accessibility scan (axe-core)
         working-directory: website
-        run: pnpm run test:a11y
+        run: pnpm run test:a11y:ci
 
       # 19 UX acceptance criteria from design/ux.md §5 / validation.md's
       # "UX Acceptance Tests" table -- website/tests/e2e/*.spec.ts.
       - name: E2E UX acceptance tests
         working-directory: website
-        run: pnpm run test:e2e
+        run: pnpm run test:e2e:ci
+
+      - name: Stop preview server
+        working-directory: website
+        if: always()
+        run: pnpm run preview:stop
 
       - name: Configure Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # ratchet:actions/configure-pages@v6
