@@ -74,15 +74,15 @@ func isAssertionCall(c *ast.CallExpr) bool {
 
 var (
 	posType     = reflect.TypeOf(token.NoPos)
-	objectType  = reflect.TypeOf((*ast.Object)(nil))
-	scopeType   = reflect.TypeOf((*ast.Scope)(nil))
+	objectType  = reflect.TypeOf((*ast.Object)(nil)) //nolint:staticcheck // deliberately skipped when hashing: Object/Scope are position-dependent
+	scopeType   = reflect.TypeOf((*ast.Scope)(nil))  //nolint:staticcheck // deliberately skipped when hashing: Object/Scope are position-dependent
 	commentType = reflect.TypeOf((*ast.CommentGroup)(nil))
 )
 
 // canon writes a position-, comment- and resolution-independent encoding of v.
 func canon(sb *strings.Builder, v reflect.Value) {
 	switch v.Kind() {
-	case reflect.Interface, reflect.Ptr:
+	case reflect.Interface, reflect.Pointer:
 		if v.IsNil() {
 			sb.WriteString("nil;")
 			return

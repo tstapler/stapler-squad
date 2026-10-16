@@ -136,7 +136,7 @@ func TestExtension_ShouldCloseOnce_WhenLRUTrimmed(t *testing.T) {
 func TestExtensionsDo_ShouldNotHoldRegistryLockDuringCallback(t *testing.T) {
 	t.Parallel()
 	reg := NewRegistry()
-	var want []Extension
+	want := make([]Extension, 0, 3)
 	for _, k := range []string{"a", "b", "c"} {
 		e := &atomicExt{}
 		reg.acquire(k, osfs.New(t.TempDir())).Extension(func() Extension { return e })

@@ -36,7 +36,7 @@ const (
 	timeLayout       = time.RFC3339
 )
 
-var csvHeader = []string{"timestamp_utc", "load1", "load5", "load15", "proc_cpu_user_s", "proc_cpu_sys_s", "proc_cpu_total_s"}
+var csvHeader = []string{"timestamp_utc", "load1", "load5", "load15", "proc_cpu_user_s", "proc_cpu_sys_s", "proc_cpu_total_s"} //nolint:gochecknoglobals // read-only column list shared by writer, parser and tests
 
 // sample is one row of the output.
 type sample struct {

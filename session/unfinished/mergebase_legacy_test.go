@@ -261,7 +261,7 @@ func namedDivergenceCases() []divergenceCase {
 }
 
 func seededDivergenceCases() []divergenceCase {
-	var cs []divergenceCase
+	cs := make([]divergenceCase, 0, 1200)
 	for i := range 200 {
 		rng := rand.New(rand.NewSource(int64(9000 + i)))
 		spec, h, b := randomGeneral(rng)

@@ -99,7 +99,7 @@ func TestMergeBaseOracle_ShouldRecordGoldenAgainstMergeBase_WhenCorpusRuns(t *te
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	var sum []string
+	sum := make([]string, 0, len(keys))
 	for _, k := range keys {
 		sum = append(sum, fmt.Sprintf("%s=%d", k, tally[k]))
 	}

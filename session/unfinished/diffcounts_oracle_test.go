@@ -38,15 +38,16 @@ type lineSliceCase struct {
 func lineSliceCorpus(maxN int) []lineSliceCase {
 	rng := rand.New(rand.NewSource(424242))
 	same := randomLines(rng, maxN, 50, "s")
-	cs := []lineSliceCase{
-		{"both-empty", nil, nil},
-		{"a-empty", nil, []string{"x", "y"}},
-		{"b-empty", []string{"x", "y"}, nil},
-		{"identical", same, append([]string(nil), same...)},
-		{"disjoint", randomLines(rng, maxN, 10, "a"), randomLines(rng, maxN, 10, "b")},
-		{"all-repeated", make([]string, 40), make([]string, 25)},
-		{"max-size", randomLines(rand.New(rand.NewSource(1)), 2000, 30, "m"), randomLines(rand.New(rand.NewSource(2)), 2000, 30, "m")},
-	}
+	cs := make([]lineSliceCase, 0, 157)
+	cs = append(cs,
+		lineSliceCase{"both-empty", nil, nil},
+		lineSliceCase{"a-empty", nil, []string{"x", "y"}},
+		lineSliceCase{"b-empty", []string{"x", "y"}, nil},
+		lineSliceCase{"identical", same, append([]string(nil), same...)},
+		lineSliceCase{"disjoint", randomLines(rng, maxN, 10, "a"), randomLines(rng, maxN, 10, "b")},
+		lineSliceCase{"all-repeated", make([]string, 40), make([]string, 25)},
+		lineSliceCase{"max-size", randomLines(rand.New(rand.NewSource(1)), 2000, 30, "m"), randomLines(rand.New(rand.NewSource(2)), 2000, 30, "m")},
+	)
 	for i := range 150 {
 		r := rand.New(rand.NewSource(int64(7000 + i)))
 		alpha := []int{2, 5, 40, 1000}[i%4]

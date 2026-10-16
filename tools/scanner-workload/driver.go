@@ -50,7 +50,7 @@ type immediateClock struct{}
 func (immediateClock) WaitUntil(ctx context.Context, _ time.Duration) error { return ctx.Err() }
 
 // logicalEpoch is the base for commit timestamps.
-var logicalEpoch = time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+var logicalEpoch = time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC) //nolint:gochecknoglobals // immutable constant-like time value; Go has no const time.Time
 
 // Target is one directory the driver may touch: a copied repo or one of its
 // linked worktrees. Name is relative to the corpus root so logs from two
@@ -316,6 +316,8 @@ func (s *runState) dispatch(op Op, dir string) (string, error) {
 		return editGitignore(dir, op)
 	case OpMoveBase:
 		return moveBase(dir, op, when)
+	case OpIdle:
+		// Idle ops only advance logical time; they touch no files.
 	}
 	return "", fmt.Errorf("unknown op kind %q", op.Kind)
 }
@@ -375,7 +377,7 @@ func commitInWorktree(dir string, op Op, when time.Time) (string, error) {
 	return h.String(), nil
 }
 
-var editableExt = map[string]bool{".go": true, ".md": true, ".txt": true, ".ts": true, ".tsx": true, ".json": true, ".yml": true, ".yaml": true, ".sh": true, ".py": true, ".rs": true}
+var editableExt = map[string]bool{".go": true, ".md": true, ".txt": true, ".ts": true, ".tsx": true, ".json": true, ".yml": true, ".yaml": true, ".sh": true, ".py": true, ".rs": true} //nolint:gochecknoglobals // read-only lookup table
 
 const maxEditBytes = 1 << 20
 
