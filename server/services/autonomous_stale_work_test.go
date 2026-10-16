@@ -124,3 +124,16 @@ func TestRemediateStaleWorkSession_should_leaveSessionOpen_When_InspectorNudgesO
 		})
 	}
 }
+
+func TestTryBeginRecovery_should_refuseAndKeepLiveEntry_When_RecoveryAlreadyRegistered(t *testing.T) {
+	a := &AutonomousOrchestrationService{}
+	_, release, ok := a.tryBeginRecovery("s")
+	require.True(t, ok)
+
+	_, _, ok2 := a.tryBeginRecovery("s")
+	assert.False(t, ok2, "second registration must not overwrite the live recovery")
+	assert.True(t, a.recoveryLive("s"))
+
+	release()
+	assert.False(t, a.recoveryLive("s"))
+}

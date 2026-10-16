@@ -2226,10 +2226,14 @@ func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID s
 	}
 
 	// Look before restarting: snapshot the pane, and nudge an idle-at-prompt
-	// session instead of killing it. The capture is deadline-bound and runs
-	// before UpdateItemSessionEnded, so BUG-064's ordering is unaffected.
+	// session instead of killing it. It runs before UpdateItemSessionEnded, so
+	// BUG-064's ordering is unaffected; the deadline stops a hung pane from
+	// stalling the sweep (expiry falls through to the plain restart).
 	if s.staleWorkInspector != nil {
-		if s.staleWorkInspector.InspectStaleWork(ctx, active.SessionUUID, item) != StaleWorkRespawn {
+		inspectCtx, cancel := context.WithTimeout(ctx, staleWorkInspectTimeout)
+		disposition := s.staleWorkInspector.InspectStaleWork(inspectCtx, active.SessionUUID, item)
+		cancel()
+		if disposition != StaleWorkRespawn {
 			return nil
 		}
 	}

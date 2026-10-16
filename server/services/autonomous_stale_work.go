@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"time"
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
@@ -102,10 +103,16 @@ func (a *AutonomousOrchestrationService) concreteStorage() *session.Storage {
 // cancels it) and falls back to a restart when the nudge cannot be delivered.
 func (a *AutonomousOrchestrationService) nudgeStaleWork(ctx context.Context, storage *session.Storage, inst *session.Instance, item *session.BacklogItemData, rec stopRecord) StaleWorkDisposition {
 	title := rec.Session
+	// Register before touching the row: a driver recovery that registered since the
+	// early recoveryLive check must not be overwritten (its cancel would be lost).
+	recoveryCtx, release, ok := a.tryBeginRecovery(title)
+	if !ok {
+		log.Info("[StaleWork] skipping — stall recovery started during inspection", "session", title, "item", item.ID)
+		return StaleWorkSkipped
+	}
+	defer release()
 	rec.Recovery.Action = stopActionNudging
 	a.refreshStuckRow(ctx, storage, item, rec)
-	recoveryCtx, release := a.beginRecovery(title)
-	defer release()
 	respawn, _ := a.nudgeStalledWorkSession(ctx, recoveryCtx, storage, inst, item, &rec)
 	if respawn {
 		rec.Recovery.Action = stopActionRespawned
@@ -121,3 +128,7 @@ func (a *AutonomousOrchestrationService) nudgeStaleWork(ctx context.Context, sto
 		return StaleWorkSkipped
 	}
 }
+
+// staleWorkInspectTimeout bounds snapshot + planning + nudge delivery; generous so a
+// nudge that is delivering is not cut short and then answered with a restart.
+const staleWorkInspectTimeout = 2 * time.Minute

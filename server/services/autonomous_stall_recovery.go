@@ -73,18 +73,42 @@ func (a *AutonomousOrchestrationService) beginRecovery(title string) (context.Co
 	ctx, cancel := context.WithCancel(a.driverCtx())
 	self := &stallRecovery{cancel: cancel}
 	a.mu.Lock()
+	a.installRecoveryLocked(title, self)
+	a.mu.Unlock()
+	return ctx, a.releaseRecovery(title, self)
+}
+
+// tryBeginRecovery is beginRecovery that refuses (ok=false) when a recovery is already
+// live for title, checking and registering under one lock hold.
+func (a *AutonomousOrchestrationService) tryBeginRecovery(title string) (ctx context.Context, release func(), ok bool) {
+	ctx, cancel := context.WithCancel(a.driverCtx())
+	self := &stallRecovery{cancel: cancel}
+	a.mu.Lock()
+	if _, live := a.recoveries[title]; live {
+		a.mu.Unlock()
+		cancel()
+		return nil, nil, false
+	}
+	a.installRecoveryLocked(title, self)
+	a.mu.Unlock()
+	return ctx, a.releaseRecovery(title, self), true
+}
+
+func (a *AutonomousOrchestrationService) installRecoveryLocked(title string, r *stallRecovery) {
 	if a.recoveries == nil {
 		a.recoveries = make(map[string]*stallRecovery)
 	}
-	a.recoveries[title] = self
-	a.mu.Unlock()
-	return ctx, func() {
+	a.recoveries[title] = r
+}
+
+func (a *AutonomousOrchestrationService) releaseRecovery(title string, self *stallRecovery) func() {
+	return func() {
 		a.mu.Lock()
 		if a.recoveries[title] == self { // a newer recovery may own the slot
 			delete(a.recoveries, title)
 		}
 		a.mu.Unlock()
-		cancel()
+		self.cancel()
 	}
 }
 
