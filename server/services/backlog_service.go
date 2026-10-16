@@ -158,6 +158,9 @@ type BacklogService struct {
 	// self-service "Ship PR" action on the item detail page. nil (the default)
 	// makes TriggerShipPR return CodeUnimplemented; wired via SetOneShotRunner.
 	oneShotRunner PRRunner
+	// staleWorkInspector snapshots and nudges a stale work session before
+	// RemediateStaleWorkSession restarts it. nil keeps the plain restart.
+	staleWorkInspector StaleWorkInspector
 	// julesDispatcher drives DispatchToJules (backlog_service_jules.go). nil
 	// (the default — Jules disabled, or its dependencies unresolvable at
 	// startup) makes DispatchToJules return CodeFailedPrecondition pointing at
@@ -783,6 +786,11 @@ func (s *BacklogService) SetSyncFeatureEnabledCheck(check func() bool) {
 // waiting on the triage semaphore.
 func (s *BacklogService) Shutdown() {
 	s.shutdownCancel()
+}
+
+// SetStaleWorkInspector wires the optional inspect-and-nudge step of RemediateStaleWorkSession.
+func (s *BacklogService) SetStaleWorkInspector(i StaleWorkInspector) {
+	s.staleWorkInspector = i
 }
 
 // SetSessionStopper wires the optional session stopper used to kill orphaned sessions on re-triage.

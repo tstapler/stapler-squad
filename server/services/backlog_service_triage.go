@@ -2225,6 +2225,15 @@ func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID s
 		return nil
 	}
 
+	// Look before restarting: snapshot the pane, and nudge an idle-at-prompt
+	// session instead of killing it. The capture is deadline-bound and runs
+	// before UpdateItemSessionEnded, so BUG-064's ordering is unaffected.
+	if s.staleWorkInspector != nil {
+		if s.staleWorkInspector.InspectStaleWork(ctx, active.SessionUUID, item) != StaleWorkRespawn {
+			return nil
+		}
+	}
+
 	// End the ItemSession row BEFORE killing the pane (BUG-064 — see doc
 	// comment above): this ordering is what lets onSessionExited's
 	// already-ended guard close the race with AutoRespawnAutonomousWork below.

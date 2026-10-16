@@ -215,6 +215,10 @@ func (s *SessionService) SetReviewGateTrigger(t ReviewGateTrigger) {
 	s.autonomousSvc.SetReviewGateTrigger(t)
 }
 
+// StaleWorkInspector exposes the autonomous service's inspect-and-nudge step
+// for BacklogService.SetStaleWorkInspector.
+func (s *SessionService) StaleWorkInspector() StaleWorkInspector { return s.autonomousSvc }
+
 // SetAutonomousStuckRespawner wires the respawner into the autonomous orchestration
 // service so a turn-cap-stopped work session gets a fresh turn budget instead of
 // being forced into review.

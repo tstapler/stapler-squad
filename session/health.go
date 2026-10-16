@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"os"
 	"strings"
@@ -439,6 +440,8 @@ func (h *SessionHealthChecker) handleDeadPane(instance *Instance, exitCode int, 
 		return
 	}
 
+	logDeadPaneSnapshot(instance.Title, instanceStopSource{inst: instance, controller: instance.GetController()}, exitCode, exitSignal)
+
 	// Only a session that already existed before this checker started could
 	// have been affected by a restart race; one created afterward was never
 	// "previously alive" from this process's perspective and gets no grace
@@ -454,6 +457,21 @@ func (h *SessionHealthChecker) handleDeadPane(instance *Instance, exitCode int, 
 	}
 
 	handleCrashedPane(instance, exitCode, exitSignal, result)
+}
+
+// logDeadPaneSnapshot records what the pane held before it is torn down and
+// respawned. A dead pane is never nudged: the dead flag and exit code are
+// forced from the health check, so the state reads exited/crashed whatever
+// the detector last saw. The tail is logged by size only (it is unredacted).
+func logDeadPaneSnapshot(title string, src stopSource, exitCode int, exitSignal string) domain.ObservedState {
+	snap := captureStopSnapshot(src, 0)
+	snap.PaneDead, snap.ExitCode = true, exitCode
+	state := domain.ClassifyObserved(snap)
+	log.Warn("health check: dead pane stop snapshot", "session", title,
+		"stop_reason", domain.StopReasonDeadPane.String(), "state", state.String(),
+		"exit_code", exitCode, "exit_signal", exitSignal,
+		"capture_err", snap.CaptureErr, "tail_bytes", len(snap.PaneTail))
+	return state
 }
 
 // handleCrashedPane is handleDeadPane's post-grace-window branch: a pane that
