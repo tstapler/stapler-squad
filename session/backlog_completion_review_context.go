@@ -28,7 +28,8 @@ func BuildCompletionReviewContext(item *BacklogItemData, sessions []ItemSessionS
 	}
 	writeCompletionVerdictSection(&sb, sessions)
 	writeCompletionDiffSection(&sb, sessions)
-	return sb.String()
+	// Item text is untrusted: neutralize the prompt envelope's closing tag everywhere.
+	return strings.ReplaceAll(sb.String(), "</completed_item>", "[/completed_item]")
 }
 
 func writeCompletionVerdictSection(sb *strings.Builder, sessions []ItemSessionSummary) {

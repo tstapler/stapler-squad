@@ -731,6 +731,11 @@ func (p *Pool) readResumedCallStream(ctx context.Context, key FeatureKey, stdout
 // When opts.WorkDir is empty, opts.Model is forwarded to the pool's acquireSession
 // so the correct model is used for the first-call (session-initialisation) request.
 func (p *Pool) CallWithOptions(ctx context.Context, key FeatureKey, systemPrompt, userPrompt string, opts CallOptions) (<-chan StreamChunk, error) {
+	if opts.NoTools && opts.WorkDir == "" {
+		ch := make(chan StreamChunk)
+		close(ch)
+		return ch, errors.New("CallWithOptions: NoTools requires WorkDir (one-shot path); refusing to run with full tool access")
+	}
 	// Resolved here, not in call(): the WorkDir branch's one-shot pool has no FeatureModel.
 	opts.Model = p.modelFor(key, opts.Model)
 	if opts.WorkDir != "" {

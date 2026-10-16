@@ -208,3 +208,10 @@ func TestProcessRunner_WithNoTools_DoesNotMutateReceiver(t *testing.T) {
 	_ = r.WithNoTools()
 	assert.Equal(t, []string{"--allowedTools", "Read"}, r.toolAccessArgs())
 }
+
+func TestPool_CallWithOptions_NoTools_FailsClosed_When_WorkDirEmpty(t *testing.T) {
+	t.Parallel()
+	pool := NewPoolWithRunner(PoolConfig{MaxCallsPerSession: 1, MaxConcurrentSessions: 1}, NewFakeRunner("x"))
+	_, err := pool.CallWithOptions(context.Background(), FeatureKeyCustom, "", "hi", CallOptions{NoTools: true})
+	assert.Error(t, err)
+}

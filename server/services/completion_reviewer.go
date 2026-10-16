@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -101,6 +102,11 @@ func (r *completionReviewer) start(ctx context.Context, bus *events.EventBus) <-
 	ch, _ := bus.Subscribe(ctx)
 	go func() {
 		defer close(done)
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Warn("completion_reviewer: subscriber loop panic recovered, reviewer stopped", "panic", fmt.Sprint(rec))
+			}
+		}()
 		r.loop(ctx, ch)
 	}()
 	return done
@@ -131,14 +137,15 @@ func (r *completionReviewer) loop(ctx context.Context, ch <-chan *events.Event) 
 				log.Debug("completion_reviewer: skipped (dedup window)", "item", p.Item.ID)
 				continue
 			}
+			// Acquire before spawning so a burst cannot pile up blocked goroutines.
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
 			wg.Add(1)
 			go func(item *session.BacklogItemData) {
 				defer wg.Done()
-				select {
-				case sem <- struct{}{}:
-				case <-ctx.Done():
-					return
-				}
 				defer func() { <-sem }()
 				r.safeReview(ctx, item)
 			}(p.Item)
@@ -209,7 +216,7 @@ func (r *completionReviewer) review(ctx context.Context, item *session.BacklogIt
 	}
 	log.Info("completion_reviewer: reviewed item", "item", item.ID, "repo", item.RepoPath)
 	if r.notifier != nil {
-		r.notifier.Notify(item.ID, "Completion review recorded", "Recorded learnings for future sessions.", 10 /* INFO */, false, false)
+		r.notifier.Notify(item.ID, "Completion review recorded", "Recorded learnings for future sessions.", int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO), false, false)
 	}
 }
 
@@ -224,7 +231,9 @@ func (r *completionReviewer) fail(stage, itemID string, err error) {
 func (r *completionReviewer) maybeLogStatus() {
 	now := time.Now().UnixNano()
 	last := r.lastStatusLog.Load()
-	if (r.attempts.Load()%100 != 0 && now-last < int64(completionReviewStatusLogPeriod)) || !r.lastStatusLog.CompareAndSwap(last, now) {
+	n := r.attempts.Load()
+	due := now-last >= int64(completionReviewStatusLogPeriod) || (n > 0 && n%100 == 0)
+	if !due || !r.lastStatusLog.CompareAndSwap(last, now) {
 		return
 	}
 	log.Info("completion_reviewer: status", "enabled", r.call != nil && r.memory != nil,
