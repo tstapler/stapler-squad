@@ -576,6 +576,7 @@ func (s *Scanner) worker(ctx context.Context) {
 			}
 			results := s.scanRepo(task.repoPath, task.force)
 			s.publishResults(results)
+			recordScanCycle()
 			s.inFlight.Delete(task.repoPath)
 		}
 	}

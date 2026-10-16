@@ -2,11 +2,23 @@ package unfinished
 
 import (
 	"context"
+	"sync/atomic"
 
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/tstapler/stapler-squad/telemetry"
 )
+
+// scanCyclesTotal counts completed scan cycles (one worker task: scanRepo +
+// publishResults) since process start. Diagnostic normalisation only: gives
+// "scanner CPU per scan" a denominator for the baseline and A/B windows.
+var scanCyclesTotal atomic.Int64
+
+// recordScanCycle is called by Scanner.worker after each completed task.
+func recordScanCycle() { scanCyclesTotal.Add(1) }
+
+// ScanCyclesTotal returns the number of scan cycles completed since process start.
+func ScanCyclesTotal() int64 { return scanCyclesTotal.Load() }
 
 // RegisterMetrics wires blobCache effectiveness (see BlobCacheStatsSnapshot)
 // into the process's OTel MeterProvider as observable gauges, so it shows up
@@ -61,6 +73,12 @@ func RegisterMetrics() error {
 		return err
 	}
 
+	scanCycles, err := meter.Int64ObservableCounter("unfinished.scan_cycles_total",
+		metric.WithDescription("Cumulative scan cycles completed by the unfinished-work scanner (one per repo scan task)"))
+	if err != nil {
+		return err
+	}
+
 	_, err = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 		stats := BlobCacheStatsSnapshot()
 		o.ObserveInt64(hits, stats.Hits)
@@ -71,7 +89,8 @@ func RegisterMetrics() error {
 		o.ObserveInt64(repoCacheSize, rc.CurrentSize)
 		o.ObserveInt64(repoCacheColdOpens, rc.ColdOpens)
 		o.ObserveInt64(repoCacheEvictions, rc.Evictions)
+		o.ObserveInt64(scanCycles, ScanCyclesTotal())
 		return nil
-	}, hits, misses, timeSavedMs, repoCacheSize, repoCacheColdOpens, repoCacheEvictions)
+	}, hits, misses, timeSavedMs, repoCacheSize, repoCacheColdOpens, repoCacheEvictions, scanCycles)
 	return err
 }
