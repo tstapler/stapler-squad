@@ -1,0 +1,23 @@
+{
+  "request_id": "fixture-create-0001",
+  "expected_version": 0,
+  "compat": {
+    "contract_version": "v1",
+    "capability_revision": 1,
+    "manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "signer_key_id": "fixture-signer-1",
+    "client_name": "example-client",
+    "client_version": "0.0.0"
+  },
+  "webhook": {
+    "slug": "example-events",
+    "name": "Example events",
+    "command": "Handle the incoming event.",
+    "target_directory": "/srv/example/repo",
+    "prompt_template": "Event {{.type}} received.",
+    "event_filter": "",
+    "label_filter": "",
+    "enabled": true
+  },
+  "secret": "EXAMPLE-ONLY-not-a-credential-000000000"
+}

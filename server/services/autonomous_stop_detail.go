@@ -213,6 +213,8 @@ const (
 	reasonSentenceRateLimitExhausted = "The autonomous run gave up waiting for the AI service's rate limit to clear."
 	reasonSentencePanic              = "The autonomous run crashed unexpectedly."
 	reasonSentenceUnspecified        = "The autonomous run stopped without recording a reason."
+	reasonSentenceStaleWork          = "The session made no progress for a long time."
+	reasonSentenceDeadPane           = "The session's terminal process exited."
 )
 
 // reasonSentence returns the plain sentence for a stalling reason, "" for done
@@ -233,6 +235,10 @@ func reasonSentence(r domain.StopReason) string {
 		return reasonSentenceRateLimitExhausted
 	case domain.StopReasonPanic:
 		return reasonSentencePanic
+	case domain.StopReasonStaleWork:
+		return reasonSentenceStaleWork
+	case domain.StopReasonDeadPane:
+		return reasonSentenceDeadPane
 	case "":
 		return reasonSentenceUnspecified
 	default:

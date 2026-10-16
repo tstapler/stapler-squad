@@ -409,13 +409,13 @@ func TestWaitForQuiescenceReturnsOnChannelClose(t *testing.T) {
 func TestWaitForQuiescenceResetsTimerOnUpdates(t *testing.T) {
 	t.Parallel()
 	updates := make(chan struct{}, 4)
-	// Use 100ms intervals / 200ms quiet — 5× larger than the original values so
-	// the OS scheduler has real slack. With 20ms/40ms the scheduler jitter alone
-	// could delay an update past the quiet window, causing a spurious early return.
-	const updateInterval = 100 * time.Millisecond
-	const quietFor = 200 * time.Millisecond
+	// A scheduler stall longer than (quietFor - updateInterval) between two
+	// updates legitimately ends the wait, so keep that margin wide: 350ms here.
+	// Without any reset the wait would end at quietFor (600ms); with resets it
+	// runs to ~3*updateInterval + quietFor (1350ms).
+	const updateInterval = 250 * time.Millisecond
+	const quietFor = 600 * time.Millisecond
 
-	// Send 3 updates 100ms apart; each should reset the 200ms quiet timer.
 	go func() {
 		for i := 0; i < 3; i++ {
 			<-time.After(updateInterval)
@@ -427,10 +427,7 @@ func TestWaitForQuiescenceResetsTimerOnUpdates(t *testing.T) {
 	waitForQuiescence(updates, 5*time.Second, quietFor)
 	elapsed := time.Since(start)
 
-	// 3 updates × 100ms + final 200ms quiet = ~500ms minimum.
-	// We check > 400ms (80% of theoretical minimum) to leave headroom for
-	// scheduler jitter while still catching a broken reset.
-	const minExpected = 400 * time.Millisecond
+	const minExpected = 1100 * time.Millisecond
 	if elapsed < minExpected {
 		t.Errorf("waitForQuiescence returned too early (%v < %v); timer not being reset on updates", elapsed, minExpected)
 	}

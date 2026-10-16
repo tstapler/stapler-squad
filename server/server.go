@@ -72,6 +72,8 @@ type Server struct {
 	finalStatsFlush            func()                          // delivery-gate stats flush; deferred at the top of Shutdown
 	backgroundTasksWG          sync.WaitGroup                  // joined by Shutdown() — every goroutine wireDepsIntoServer starts (sweepers, pollers, watchers, tickers)
 	backgroundTasksJoinTimeout time.Duration                   // bounds Shutdown's join of backgroundTasksWG; defaults to defaultBackgroundTasksJoinTimeout, overridable in tests
+	selfAuthMu                 sync.RWMutex                    // guards selfAuthPaths
+	selfAuthPaths              []func(path string) bool        // routes that authenticate every request themselves; the remote listener's passkey middleware steps aside for them (see SelfAuthenticatedPath)
 	hookIPC                    *hookIPCState                   // resident instance-scoped PreToolUse classifier; started with the HTTP server
 }
 
@@ -163,6 +165,7 @@ func NewServerWithDeps(addr string, deps *ServerDependencies) *Server {
 	srv, connCtx := newServerBase(addr)
 	wireDepsIntoServer(srv, deps, connCtx)
 	registerStaticRoutes(srv)
+	srv.registerChangelogHandlers().Start(connCtx)
 	return srv
 }
 
@@ -221,7 +224,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// checker was constructed only in tests and never actually started in
 	// production -- see session/health.go.
 	if deps.Storage != nil {
-		healthChecker := session.NewSessionHealthChecker(deps.Storage)
+		healthChecker := session.NewSessionHealthChecker(deps.Storage, session.WithDeadPaneRecorder(deps.SessionService.DeadPaneRecorder()))
 		srv.goBackground(func() {
 			healthChecker.ScheduledHealthCheck(sessionHealthCheckInterval, serverCtx.Done())
 		})
@@ -1043,6 +1046,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 				log.Warn("pr_event_webhooks is enabled but webhook_triggers is not — /webhooks/github is not registered, PR-fix webhook events will silently 404")
 			}
 		}
+		// Must share webhookCfg with the receivers above: each *config.Config lazily
+		// generates its own machine encryption key when none is persisted, so a separate
+		// instance would encrypt secrets with a key the receiver can never decrypt with.
+		registerWebhookManagement(srv, deps, webhookCfg)
 	}
 
 	// Register session-aware image upload endpoint (multipart/form-data, saves to worktree).
@@ -1204,6 +1211,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.BacklogService != nil {
 		forwardSyncDone := services.StartBacklogGitHubForwardSyncSubscriber(serverCtx, deps.EventBus, deps.BacklogService.Registry(), deps.BacklogService.SyncLoopForForwardSync(), deps.Storage)
 		srv.backgroundTasksWG.Go(func() { <-forwardSyncDone })
+
+		// Completion reviewer (rollout flag backlog:completion-reviewer, default off): reads the
+		// flag per event, so it is live-togglable from Settings > Feature Flags.
+		completionReviewDone := services.StartCompletionReviewerSubscriber(serverCtx, deps.EventBus, deps.Storage, services.NewHeadlessCompletionReviewCall(), services.NewFileMemoryStore(), &services.EventBusNotifier{Bus: deps.EventBus})
+		srv.backgroundTasksWG.Go(func() { <-completionReviewDone })
 	}
 
 	// Register analytics HTTP handler (POST /api/analytics, GET /api/analytics/summary).

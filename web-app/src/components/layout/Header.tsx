@@ -19,6 +19,7 @@ import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { WorkspaceSwitcher } from "@/components/layout/WorkspaceSwitcher";
 import { BottomNav } from "@/components/layout/BottomNav";
+import { UpdateBadge } from "@/components/changelog/UpdateBadge";
 import { ConnectionIndicator } from "@/components/layout/ConnectionIndicator";
 import { ApprovalDrawer } from "@/components/sessions/ApprovalDrawer";
 import * as styles from "./Header.css";
@@ -114,6 +115,7 @@ export function Header() {
           </nav>
 
           <div className={styles.actions}>
+            <UpdateBadge />
             <MemoryNavBadge />
             <ConnectionIndicator />
             <WorkspaceSwitcher />

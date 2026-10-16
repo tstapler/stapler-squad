@@ -11,7 +11,7 @@ import (
 // is REQ-14's happy-path fire case (validation.md): a DELIVERED outcome whose
 // before/after differ only in a spinner/elapsed-time indicator -- the known
 // false-redraw signature -- fires exactly once per session, mirroring
-// compactingCanaryLogged's once-per-session guard.
+// shellMonitorCanaryLogged's once-per-session guard.
 func TestScrollForwardKeybindingCanary_should_FireOnce_When_RedrawChangeMatchesKnownFalseRedrawSignature(t *testing.T) {
 	sessionKey := t.Name()
 	before := []byte("some earlier line\nsome later line\n✻ Cogitated for 29s · done 11:49 AM\n")

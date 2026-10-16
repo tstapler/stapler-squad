@@ -366,6 +366,12 @@ type backlogHandlers struct {
 	// 2.3 hasn't landed) falls back to the fixed built-in 9-entry
 	// validBacklogStatuses list (Story 2.1.4).
 	stageEngine stageLister
+
+	// prCheckerFactory backs get_backlog_stuck_report's live CI cross-check.
+	// Defaults to a real *git.GitWorktree bound to the item's repo_path when
+	// nil; overridable in tests to avoid shelling out to the real `gh` CLI —
+	// mirrors verifyPRMatchesBranch's existing shape.
+	prCheckerFactory func(repoPath string) stuckReportPRChecker
 }
 
 // --- get_backlog_item ---
@@ -378,17 +384,28 @@ type backlogHandlers struct {
 // rendered text envelope is capped.
 const maxActivityLogEntriesRendered = 20
 
+// requireItemIDArg extracts and validates a required item_id argument — the
+// boilerplate shared by every MCP tool keyed on a single backlog item. When
+// validation fails, the returned result is ready to return unchanged.
+func requireItemIDArg(req mcpgo.CallToolRequest) (itemID string, errRes *mcpgo.CallToolResult, ok bool) {
+	args := req.GetArguments()
+	raw, has := args["item_id"].(string)
+	if !has || raw == "" {
+		return "", errResult(ErrInvalidArgument, "item_id is required", ""), false
+	}
+	if err := validateUUID(raw); err != nil {
+		return "", errResult(ErrInvalidArgument, err.Error(), "Provide a valid UUID (e.g. from list_backlog_items or get_backlog_item)."), false
+	}
+	return raw, nil, true
+}
+
 func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	if r := featureDisabledResult(h.enabledCheck); r != nil {
 		return r, nil
 	}
-	args := req.GetArguments()
-	itemID, ok := args["item_id"].(string)
-	if !ok || itemID == "" {
-		return errResult(ErrInvalidArgument, "item_id is required", ""), nil
-	}
-	if err := validateUUID(itemID); err != nil {
-		return errResult(ErrInvalidArgument, err.Error(), "Provide a valid UUID (e.g. from list_backlog_items or get_backlog_item)."), nil
+	itemID, errRes, ok := requireItemIDArg(req)
+	if !ok {
+		return errRes, nil
 	}
 
 	item, err := h.storage.GetBacklogItem(ctx, itemID)
@@ -889,14 +906,11 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 	if r := featureDisabledResult(h.enabledCheck); r != nil {
 		return r, nil
 	}
+	itemID, errRes, ok := requireItemIDArg(req)
+	if !ok {
+		return errRes, nil
+	}
 	args := req.GetArguments()
-	itemID, ok := args["item_id"].(string)
-	if !ok || itemID == "" {
-		return errResult(ErrInvalidArgument, "item_id is required", ""), nil
-	}
-	if err := validateUUID(itemID); err != nil {
-		return errResult(ErrInvalidArgument, err.Error(), "Provide a valid UUID (e.g. from list_backlog_items or get_backlog_item)."), nil
-	}
 
 	eventTypeFilter := eventTypeAny
 	if v, ok := args["event_type"].(string); ok && v != "" {

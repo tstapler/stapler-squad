@@ -939,3 +939,44 @@ func TestRunGHCommand_NilInstruments_DoesNotPanic(t *testing.T) {
 		t.Errorf("runGHCommand output = %q, want %q", out, "ok\n")
 	}
 }
+
+func TestExtractActionsRunID(t *testing.T) {
+	tests := []struct {
+		url  string
+		want int64
+	}{
+		{"https://github.com/o/r/actions/runs/38730353308/jobs/1", 38730353308},
+		{"https://github.com/o/r/actions/runs/1/jobs/2", 1},
+		{"https://github.com/o/r/actions/runs/7", 7},
+		{"https://circleci.com/workflow-run/xxx", 0},
+		{"", 0},
+		{"https://github.com/o/r/actions/runs/notanumber/jobs/1", 0},
+	}
+	for _, tc := range tests {
+		if got := extractActionsRunID(tc.url); got != tc.want {
+			t.Errorf("extractActionsRunID(%q) = %d, want %d", tc.url, got, tc.want)
+		}
+	}
+}
+
+func TestParsePRStatusPayload_FailedRunIDs(t *testing.T) {
+	raw := []byte(`{"statusCheckRollup":[
+		{"name":"a","conclusion":"FAILURE","detailsUrl":"https://github.com/o/r/actions/runs/11/jobs/1"},
+		{"name":"b","conclusion":"FAILURE","detailsUrl":"https://github.com/o/r/actions/runs/11/jobs/2"},
+		{"name":"c","conclusion":"SUCCESS","detailsUrl":"https://github.com/o/r/actions/runs/12/jobs/3"}
+	],"reviews":[],"comments":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
+	s, err := parsePRStatusPayload(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, all := s.FailedRunIDs()
+	if len(ids) != 1 || ids[0] != 11 || !all {
+		t.Fatalf("got ids=%v all=%v", ids, all)
+	}
+
+	raw = []byte(`{"statusCheckRollup":[{"context":"ci/x","state":"FAILURE","targetUrl":"https://circleci.com/x"}],"reviews":[],"comments":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
+	s, _ = parsePRStatusPayload(raw)
+	if _, all := s.FailedRunIDs(); all {
+		t.Fatal("non-Actions failure must report allActions=false")
+	}
+}

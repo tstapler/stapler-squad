@@ -144,6 +144,11 @@ type BacklogLifecycleListener struct {
 	prPendingCheckerMu      sync.RWMutex
 	prPendingCheckerFactory func(repoPath string) prPendingChecker
 
+	// ciRerunner/ciReruns back maybeFlakyCheckRerun (ci_flaky_rerun.go); a nil
+	// ciRerunner disables the free-rerun shortcut.
+	ciRerunner ciRerunClient
+	ciReruns   ciRerunLedger
+
 	// prCreatorMu guards prCreatorFactory for concurrent Set/get access.
 	prCreatorMu      sync.RWMutex
 	prCreatorFactory func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator
@@ -818,6 +823,7 @@ func newListenerBase(storage *Storage, pipelineEngine PipelineEngine, livenessEn
 		shutdownCtx:             ctx,
 		shutdownCancel:          cancel,
 		prPendingCheckerFactory: defaultPRPendingCheckerFactory,
+		ciRerunner:              ghCIRerunClient{},
 		prCreatorFactory:        defaultPRCreatorFactory,
 		branchReconciler:        git.MergeMainIntoWorktree,
 		orphanedPRFinder:        defaultOrphanedPRFinder,

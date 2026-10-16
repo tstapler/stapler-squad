@@ -766,8 +766,15 @@ type PRStatus struct {
 	// FeedbackText is a combined human-readable summary for the fix agent.
 	FeedbackText string
 
-	failedChecks    []string     // unexported; captured CI failures, consumed by render()
-	blockingReviews []reviewInfo // unexported; one entry per CHANGES_REQUESTED review
+	failedChecks []string // unexported; captured CI failures, consumed by render()
+	// failedRunIDs holds the distinct GitHub Actions run IDs behind failed
+	// checks (parsed from their details URLs); checks from other CI systems
+	// have no run ID and are tracked only via nonActionsFailure.
+	failedRunIDs []int64
+	// nonActionsFailure is true when any failed check has no Actions run ID,
+	// so a rerun of the Actions runs alone could not clear CIFailing.
+	nonActionsFailure bool
+	blockingReviews   []reviewInfo // unexported; one entry per CHANGES_REQUESTED review
 	// conflictMergeStateStatus is the raw mergeStateStatus value that tripped
 	// HasConflicts; only meaningful when HasConflicts is true. A plain string
 	// rather than a nil-checked pointer, since HasConflicts is already the
@@ -881,6 +888,67 @@ func (s *PRStatus) FeedbackAuthors() []string {
 		authors = append(authors, gc.author)
 	}
 	return authors
+}
+
+// FailedChecks returns a copy of the human-readable "<name> FAILED (<url>)"
+// entries captured for every CI check with a terminal failure on the most
+// recent GetPRStatus call. Exported for stuck-item root-cause reporting
+// (get_backlog_stuck_report), which needs the per-check detail URL to look
+// up the failing job's log — FeedbackText only renders these into prose.
+func (s *PRStatus) FailedChecks() []string {
+	return append([]string(nil), s.failedChecks...)
+}
+
+// GetPRDiffFiles returns the list of file paths changed by prNumber's diff
+// (`gh pr diff --name-only`), used to tell whether a failing check's test
+// touches the PR's own changed files or is a pre-existing/flaky failure
+// elsewhere in the repo (see get_backlog_stuck_report).
+func (g *GitWorktree) GetPRDiffFiles(ctx context.Context, prNumber int) ([]string, error) {
+	// kibitzer:ignore go-error-context -- matches GetPRStatus's identical unwrapped checkGHCLI error, just above
+	if err := g.checkGHCLI(); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	raw, err := g.runGHCommand(ctx, "pr.diff.nameonly", "pr", "diff", strconv.Itoa(prNumber), "--name-only")
+	if err != nil {
+		return nil, fmt.Errorf("gh pr diff failed: %s (%w)", raw, err)
+	}
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	return files, nil
+}
+
+// CheckRunRef identifies one GitHub Actions job within a run — the pair
+// GetCheckRunLog needs together to fetch a single failing check's log, and
+// the shape its callers parse out of a check's details URL
+// (".../actions/runs/<RunID>/job/<JobID>").
+type CheckRunRef struct {
+	RunID string
+	JobID string
+}
+
+// GetCheckRunLog fetches only the failed-step log for one CI job
+// (`gh run view --job <jobID> --log-failed`), used to identify which test(s)
+// actually failed inside a check GetPRStatus reported as failing.
+func (g *GitWorktree) GetCheckRunLog(ctx context.Context, ref CheckRunRef) (string, error) {
+	// kibitzer:ignore go-error-context -- matches GetPRStatus's identical unwrapped checkGHCLI error, above
+	if err := g.checkGHCLI(); err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	raw, err := g.runGHCommand(ctx, "run.view.logfailed", "run", "view", ref.RunID, "--job", ref.JobID, "--log-failed")
+	if err != nil {
+		return "", fmt.Errorf("gh run view --log-failed failed: %s (%w)", raw, err)
+	}
+	return string(raw), nil
 }
 
 // GetPRStatus fetches the combined CI check status, reviewer decisions,
@@ -1001,6 +1069,11 @@ func parsePRStatusPayload(raw []byte) (*PRStatus, error) {
 				entry += " (" + url + ")"
 			}
 			status.failedChecks = append(status.failedChecks, entry)
+			if id := extractActionsRunID(url); id == 0 {
+				status.nonActionsFailure = true
+			} else if !containsInt64(status.failedRunIDs, id) {
+				status.failedRunIDs = append(status.failedRunIDs, id)
+			}
 			continue
 		}
 		if conclusion == "" && isCheckInFlight(strings.ToUpper(check.Status), state) {
@@ -1128,4 +1201,36 @@ func (g *GitWorktree) IsPRMerged(ctx context.Context, prNumber int) (bool, error
 		return false, fmt.Errorf("gh pr view failed: %s (%w)", out, err)
 	}
 	return strings.TrimSpace(string(out)) == "MERGED", nil
+}
+
+// FailedRunIDs returns the distinct GitHub Actions run IDs behind failed
+// checks, and whether every failed check was an Actions check (false when any
+// failure came from another CI system or carried no parseable URL).
+func (s *PRStatus) FailedRunIDs() (ids []int64, allActions bool) {
+	return append([]int64(nil), s.failedRunIDs...), !s.nonActionsFailure
+}
+
+func containsInt64(xs []int64, x int64) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
+		}
+	}
+	return false
+}
+
+var actionsRunURLRe = regexp.MustCompile(`/actions/runs/(\d+)(?:/|$)`)
+
+// extractActionsRunID returns the workflow run ID in a GitHub Actions check
+// URL, or 0 when url is not one.
+func extractActionsRunID(url string) int64 {
+	m := actionsRunURLRe.FindStringSubmatch(url)
+	if m == nil {
+		return 0
+	}
+	id, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return id
 }

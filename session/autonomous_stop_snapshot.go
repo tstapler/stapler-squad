@@ -160,3 +160,10 @@ func readStopSnapshot(ctx context.Context, src stopSource) domain.StopSnapshot {
 	snap.PaneTail = BoundedStopTail(tail)
 	return snap
 }
+
+// CaptureInstanceStopSnapshot reads inst once for a restart path that has no
+// driver (stale-work remediation, dead-pane respawn). It never blocks past
+// timeout (<=0 means stopCaptureTimeout); failures land in CaptureErr.
+func CaptureInstanceStopSnapshot(inst *Instance, timeout time.Duration) domain.StopSnapshot {
+	return captureStopSnapshot(instanceStopSource{inst: inst, controller: inst.GetController()}, timeout)
+}
