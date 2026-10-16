@@ -12,7 +12,6 @@ func TestDeployID_StableAndStamped(t *testing.T) {
 	if first == "" {
 		t.Fatal("deploy id must not be empty")
 	}
-	time.Sleep(time.Millisecond)
 	if again := DeployID(); again != first {
 		t.Fatalf("deploy id changed within a process: %q then %q", first, again)
 	}
