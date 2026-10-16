@@ -29,6 +29,15 @@ func (s *Server) registerActuatorRoutes() {
 	s.mux.HandleFunc("/actuator/health", handleActuatorHealth)
 	s.mux.HandleFunc("/actuator/metrics", handleActuatorMetrics)
 	s.mux.HandleFunc("/actuator/git-backend", handleActuatorGitBackend)
+	s.mux.HandleFunc("/actuator/unfinished-scanner", handleActuatorUnfinishedScanner)
+}
+
+// handleActuatorUnfinishedScanner serves the unfinished-work scanner's counters as JSON, read
+// from atomics, so soak decisions need neither OpenTelemetry nor a profile
+// (docs/reference/unfinished-scanner-observability.md).
+func handleActuatorUnfinishedScanner(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(unfinished.BuildReport())
 }
 
 // handleActuatorGitBackend serves the git backend shadow-soak counters and the mechanical flip
