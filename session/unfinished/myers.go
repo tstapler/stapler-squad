@@ -38,7 +38,14 @@ func MyersEditCounts(a, b []string) EditCounts {
 // myersDistance returns the shortest edit script length (insertions plus
 // deletions) between non-empty a and b.
 func myersDistance(a, b []string) int {
-	n, m := len(a), len(b)
+	return myersCore(len(a), len(b), func(x, y int) bool { return a[x] == b[y] }, -1)
+}
+
+// myersCore is Myers' greedy forward algorithm over index-addressed sequences
+// of lengths n, m >= 1, with same(x, y) reporting a[x] == b[y]. It returns -1
+// once the distance exceeds maxD (maxD < 0 means unbounded), which lets
+// callers bail out to a different algorithm.
+func myersCore(n, m int, same func(x, y int) bool, maxD int) int {
 	limit := n + m
 	off := limit + 1
 
@@ -50,6 +57,9 @@ func myersDistance(a, b []string) int {
 	v[off+1] = 0
 	delta := n - m
 	for d := 0; d <= limit; d++ {
+		if maxD >= 0 && d > maxD {
+			return -1
+		}
 		for k := -d; k <= d; k += 2 {
 			var x int
 			if k == -d || (k != d && v[off+k-1] < v[off+k+1]) {
@@ -58,7 +68,7 @@ func myersDistance(a, b []string) int {
 				x = v[off+k-1] + 1
 			}
 			y := x - k
-			for x < n && y < m && a[x] == b[y] {
+			for x < n && y < m && same(x, y) {
 				x++
 				y++
 			}
