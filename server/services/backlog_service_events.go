@@ -124,6 +124,7 @@ func (s *BacklogService) watchBacklogItems(
 			if evt.Type != events.EventBacklogItemChanged || evt.BacklogItemPayload == nil {
 				continue
 			}
+			evt = withSourcePlugin(ctx, s.storage, evt)
 			if !backlogItemMatchesFilters(evt.BacklogItemPayload.Item, msg) {
 				continue
 			}
@@ -200,6 +201,7 @@ func (s *BacklogService) watchBacklogItems(
 			if evt.Type != events.EventBacklogItemChanged || evt.BacklogItemPayload == nil {
 				continue
 			}
+			evt = withSourcePlugin(ctx, s.storage, evt)
 			if !backlogItemMatchesFilters(evt.BacklogItemPayload.Item, msg) {
 				continue
 			}
@@ -224,6 +226,9 @@ func backlogItemMatchesFilters(item *session.BacklogItemData, msg *sessionv1.Wat
 		return false
 	}
 	if categoryFilter := msg.GetCategoryFilter(); len(categoryFilter) > 0 && !slices.Contains(categoryFilter, item.RepoPath) {
+		return false
+	}
+	if pluginFilter := msg.GetSourcePluginFilter(); len(pluginFilter) > 0 && !slices.Contains(pluginFilter, item.SourcePluginID) {
 		return false
 	}
 	return true
@@ -466,4 +471,27 @@ func forceIsSnapshot(evt *sessionv1.BacklogItemEvent) {
 	case *sessionv1.BacklogItemEvent_ItemArchived:
 		e.ItemArchived.IsSnapshot = true
 	}
+}
+
+// withSourcePlugin returns evt with the payload item's SourcePluginID filled
+// in. Mutation paths publish items re-read without the Source edge (see
+// handleForwardSyncClose), so without this the plugin_id badge/filter would
+// vanish on every live update. Copies rather than mutating: the event is
+// shared across subscribers.
+func withSourcePlugin(ctx context.Context, storage *session.Storage, evt *events.Event) *events.Event {
+	payload := evt.BacklogItemPayload
+	if storage == nil || payload == nil || payload.Item == nil || payload.Item.SourcePluginID != "" {
+		return evt
+	}
+	current, err := storage.GetBacklogItem(ctx, payload.Item.ID)
+	if err != nil || current.SourcePluginID == "" {
+		return evt
+	}
+	itemCopy := *payload.Item
+	itemCopy.SourcePluginID = current.SourcePluginID
+	payloadCopy := *payload
+	payloadCopy.Item = &itemCopy
+	evtCopy := *evt
+	evtCopy.BacklogItemPayload = &payloadCopy
+	return &evtCopy
 }

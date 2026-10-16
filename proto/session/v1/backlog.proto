@@ -307,6 +307,10 @@ message BacklogItem {
   // blocking lists the items waiting on this item. Populated only by
   // GetBacklogItem and the dependency RPCs, never by ListBacklogItems.
   repeated DependencyInfo blocking = 43;
+  // plugin_id is the ItemSourcePlugin id ("github_issues", "linear", ...) of
+  // the item's source, denormalized for the source badge/filter. Empty for
+  // locally-created items.
+  string plugin_id = 44;
 }
 
 // DependencyInfo is a lightweight reference to the other end of a dependency
@@ -674,6 +678,9 @@ message ListBacklogItemsRequest {
   // session list's "Show Archived" toggle). Ignored when `status` is set
   // explicitly — an explicit status filter always wins.
   bool include_archived = 5;
+  // source_plugin_filter restricts results to items whose source plugin id is
+  // in this list. Empty means no restriction.
+  repeated string source_plugin_filter = 6;
 }
 
 message ListBacklogItemsResponse {
@@ -1492,6 +1499,9 @@ message WatchBacklogItemsRequest {
   // Optional: resume a stream after this sequence number instead of
   // receiving a fresh initial snapshot (see pkg/events.EventsSince).
   uint64 after_seq = 3;
+
+  // Optional: only receive events for items whose source plugin id is in this list.
+  repeated string source_plugin_filter = 4;
 }
 
 // BacklogService manages backlog items and their lifecycle through AI-assisted

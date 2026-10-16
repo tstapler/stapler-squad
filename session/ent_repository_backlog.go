@@ -361,6 +361,7 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 	// Resolve source ID from the eager-loaded edge when available.
 	if item.Edges.Source != nil {
 		data.SourceID = item.Edges.Source.ID.String()
+		data.SourcePluginID = item.Edges.Source.PluginID
 	}
 	// Propagate eagerly-loaded status events when present.
 	if item.Edges.StatusEvents != nil {
@@ -959,6 +960,9 @@ func (r *EntRepository) ListBacklogItems(ctx context.Context, filter BacklogItem
 		q = q.Where(backlogitem.StatusNotIn(excluded...))
 	}
 
+	if len(filter.SourcePluginIDs) > 0 {
+		q = q.Where(backlogitem.HasSourceWith(itemsource.PluginIDIn(filter.SourcePluginIDs...)))
+	}
 	if len(filter.Priorities) > 0 {
 		q = q.Where(backlogitem.PriorityIn(filter.Priorities...))
 	}
@@ -1046,6 +1050,9 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter Bac
 	} else if excluded := excludedTerminalStatuses(filter); len(excluded) > 0 {
 		q = q.Where(backlogitem.StatusNotIn(excluded...))
 	}
+	if len(filter.SourcePluginIDs) > 0 {
+		q = q.Where(backlogitem.HasSourceWith(itemsource.PluginIDIn(filter.SourcePluginIDs...)))
+	}
 	if len(filter.Priorities) > 0 {
 		q = q.Where(backlogitem.PriorityIn(filter.Priorities...))
 	}
@@ -1079,7 +1086,7 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter Bac
 	}
 
 	// Phase 1: load scalar fields; avoid Select/Scan to sidestep nullable-time pitfalls.
-	items, err := q.All(ctx)
+	items, err := q.WithSource().All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list backlog item summaries: %w", err)
 	}
@@ -1092,6 +1099,7 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter Bac
 			PublicIDRaw:         item.PublicID,
 			ExternalID:          item.ExternalID,
 			ExternalURL:         item.ExternalURL,
+			SourcePluginID:      sourcePluginIDOf(item),
 			Labels:              item.Labels,
 			Title:               item.Title,
 			Status:              BacklogStatus(item.Status),
@@ -3179,4 +3187,13 @@ func (r *EntRepository) GetWorktreeDataBySessionUUID(ctx context.Context, sessio
 		BranchName:    sess.Edges.Worktree.BranchName,
 		BaseCommitSHA: sess.Edges.Worktree.BaseCommitSha,
 	}, nil
+}
+
+// sourcePluginIDOf returns the eager-loaded source's plugin id, or "" when the
+// item is locally created or the Source edge was not loaded.
+func sourcePluginIDOf(item *ent.BacklogItem) string {
+	if item.Edges.Source == nil {
+		return ""
+	}
+	return item.Edges.Source.PluginID
 }
