@@ -30,23 +30,29 @@ describe('website/lighthouserc.json and lighthouserc.mobile.json', () => {
 		});
 	}
 
-	it('lighthouseRc_should_NotMatchWebAppWarnOnlyThresholds_When_ConfigsCompared', () => {
+	it('lighthouseRc_should_BeStricterThanWebAppThresholds_When_ConfigsCompared', () => {
 		const websiteAssertions = loadAssertions(join(WEBSITE_ROOT, DESKTOP_CONFIG));
 		const webAppAssertions = loadAssertions(join(REPO_ROOT, 'web-app', 'lighthouserc.json'));
 
-		// Happy path: web-app's own config is still the warn-only 0.70/0.80 bar
-		// this project's config must be stricter than, not a value that moved
-		// out from under this regression guard.
-		expect(webAppAssertions['categories:performance']).toEqual(['warn', { minScore: 0.7 }]);
-		expect(webAppAssertions['categories:accessibility']).toEqual(['warn', { minScore: 0.8 }]);
-		expect(webAppAssertions['categories:best-practices']).toEqual(['warn', { minScore: 0.8 }]);
-
-		// Error path: website/'s config must differ from web-app/'s for every
-		// category -- if a future edit copy-pastes web-app/'s block verbatim,
-		// this comparison catches it.
+		// The actual invariant: website/'s thresholds must be a strictly higher
+		// bar than whatever web-app/ currently enforces, and web-app/'s severity
+		// must still be advisory (warn), not blocking (error). Asserting the
+		// *relationship* rather than web-app's literal numbers means a
+		// legitimate, unrelated change to web-app/lighthouserc.json doesn't
+		// break this website test with no visible connection between the two.
 		for (const category of CATEGORIES) {
 			const key = `categories:${category}`;
-			expect(websiteAssertions[key]).not.toEqual(webAppAssertions[key]);
+			const [websiteSeverity, { minScore: websiteMinScore }] = websiteAssertions[key] as [
+				string,
+				{ minScore: number },
+			];
+			const [webAppSeverity, { minScore: webAppMinScore }] = webAppAssertions[key] as [
+				string,
+				{ minScore: number },
+			];
+
+			expect(webAppSeverity).toBe('warn');
+			expect(websiteMinScore).toBeGreaterThan(webAppMinScore);
 		}
 	});
 });

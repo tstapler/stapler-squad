@@ -122,6 +122,30 @@ test_demoPostProcess_should_FallBackToCapitalizedSpecName_When_TitleCardTextNotP
     return
   fi
 
+  # Reuse the happy-path test's AE pixel-diff pattern above: the log line
+  # proves the right text was *chosen*, not that it was actually *rendered*.
+  # Compare the fallback-path frame against a frame from an explicit
+  # --title-card "Review Queue" run on an equivalent fixture -- they should be
+  # pixel-identical (same text, same filter graph).
+  if command -v compare &>/dev/null; then
+    local dir_explicit="$WORK/t2-explicit"
+    make_fixture "$dir_explicit" "clip.webm"
+    if ! "$POSTPROCESS" --title-card "Review Queue" "$dir_explicit/clip.webm" &>/dev/null; then
+      fail "$name: explicit-flag comparison run exited non-zero"
+      return
+    fi
+
+    ffmpeg -y -ss 0.3 -i "$dir/review-queue-chromium.webm" -frames:v 1 "$dir/frame_fallback.png" &>/dev/null
+    ffmpeg -y -ss 0.3 -i "$dir_explicit/clip.webm" -frames:v 1 "$dir_explicit/frame_explicit.png" &>/dev/null
+    local ae
+    ae="$(compare -metric AE "$dir/frame_fallback.png" "$dir_explicit/frame_explicit.png" "$dir/diff.png" 2>&1 || true)"
+    ae="${ae%% *}"
+    if [[ -z "$ae" ]] || (( ae > 5000 )); then
+      fail "$name: fallback-rendered title card isn't pixel-identical to an explicit --title-card \"Review Queue\" frame (AE=$ae)"
+      return
+    fi
+  fi
+
   ok "$name"
 }
 
@@ -224,6 +248,74 @@ test_demoPostProcess_should_MatchPreEpicBaseline_When_NoFlagsGiven() {
   ok "$name"
 }
 
+# ── Regression: --title-card and --trim-start-frames combined ─────────────
+# Neither Story 5.2.1 nor 5.2.2's tests above exercise both flags together.
+# demo-post-process.sh's own comment above its title-card stage says it's
+# "Layered as an additional stage AHEAD of the browser-chrome output" -- i.e.
+# trim runs first, inside the chrome-stage ffmpeg pass, and the title card is
+# concatenated onto the front of that already-trimmed+chromed output. Wrong
+# ordering (trim eating into the title card instead of the footage) would
+# show up as a frame-count/duration mismatch here.
+test_demoPostProcess_should_PrependTitleCardAfterTrim_When_BothFlagsGiven() {
+  local name="demoPostProcess_should_PrependTitleCardAfterTrim_When_BothFlagsGiven"
+  local dir="$WORK/t7" out
+  make_fixture "$dir" "clip.webm" 3
+
+  local before_frames before_dur
+  before_frames="$(webm_frame_count "$dir/clip.webm")"
+  before_dur="$(webm_duration "$dir/clip.webm")"
+
+  local trim_n=30
+  if ! out="$("$POSTPROCESS" --title-card "Combined Flags" --trim-start-frames "$trim_n" "$dir/clip.webm" 2>&1)"; then
+    fail "$name: script exited non-zero: $out"
+    return
+  fi
+
+  if ! echo "$out" | grep -q 'Title card prepended'; then
+    fail "$name: no title-card stage ran: $out"
+    return
+  fi
+
+  local after_frames after_dur
+  after_frames="$(webm_frame_count "$dir/clip.webm")"
+  after_dur="$(webm_duration "$dir/clip.webm")"
+
+  # Title card adds ~45 frames (~1.5s @ 30fps); trim removes $trim_n frames
+  # from the footage before the chrome stage, not from the title card.
+  local expected_frames=$((before_frames - trim_n + 45))
+  local frame_delta=$((after_frames - expected_frames))
+  if (( frame_delta < -3 || frame_delta > 3 )); then
+    fail "$name: expected ~${expected_frames} frames (before=${before_frames}, trim=${trim_n}, +~45 title-card), got ${after_frames}"
+    return
+  fi
+
+  local expected_dur dur_delta
+  expected_dur="$(echo "$before_dur - $trim_n/30 + 1.5" | bc -l)"
+  dur_delta="$(echo "$after_dur - ($expected_dur)" | bc -l)"
+  if (( $(echo "$dur_delta < -0.3 || $dur_delta > 0.3" | bc -l) )); then
+    fail "$name: expected duration ~${expected_dur}s, got ${after_dur}s"
+    return
+  fi
+
+  if command -v compare &>/dev/null; then
+    # The frame just after the title-card window ends must be captured
+    # (trimmed) footage, visibly distinct from the static title-card frame --
+    # proof the title card is a genuinely separate stage on top of the
+    # already-trimmed footage, not folded into or replacing it.
+    ffmpeg -y -ss 0.3 -i "$dir/clip.webm" -frames:v 1 "$dir/frame_titlecard.png" &>/dev/null
+    ffmpeg -y -ss 1.6 -i "$dir/clip.webm" -frames:v 1 "$dir/frame_footage.png" &>/dev/null
+    local ae
+    ae="$(compare -metric AE "$dir/frame_titlecard.png" "$dir/frame_footage.png" "$dir/diff.png" 2>&1 || true)"
+    ae="${ae%% *}"
+    if [[ -z "$ae" ]] || (( ae < 10000 )); then
+      fail "$name: title-card frame doesn't look visibly distinct from trimmed footage (AE=$ae)"
+      return
+    fi
+  fi
+
+  ok "$name"
+}
+
 # ── Integration: real ffmpeg run against a sample fixture ──────────────────
 test_demoPostProcess_should_ProduceValidWebmWithTitleCardFrame_When_RunAgainstSampleCapturedVideo() {
   local name="demoPostProcess_should_ProduceValidWebmWithTitleCardFrame_When_RunAgainstSampleCapturedVideo"
@@ -269,6 +361,7 @@ test_demoPostProcess_should_FallBackToCapitalizedSpecName_When_TitleCardTextNotP
 test_demoPostProcess_should_UseSetptsFrameOffset_When_PacingStageApplied
 test_demoPostProcess_should_ProduceByteIdenticalOutput_When_RunTwiceAgainstSameInput
 test_demoPostProcess_should_MatchPreEpicBaseline_When_NoFlagsGiven
+test_demoPostProcess_should_PrependTitleCardAfterTrim_When_BothFlagsGiven
 test_demoPostProcess_should_ProduceValidWebmWithTitleCardFrame_When_RunAgainstSampleCapturedVideo
 
 echo

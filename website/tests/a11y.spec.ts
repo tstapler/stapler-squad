@@ -31,37 +31,6 @@ function logViolations(path: string, violations: import('axe-core').Result[]): v
 }
 
 test.describe('Accessibility (WCAG 2.1 AA) — stapler-squad-website', () => {
-	for (const [label, path] of Object.entries(PAGES)) {
-		test(`a11yScan_should_FailOnCriticalOrSeriousViolations_When_RunAgainstLandingPage (${label})`, async ({
-			page,
-		}) => {
-			await page.goto(path, { waitUntil: 'load' });
-
-			const results = await new AxeBuilder({ page }).analyze();
-			const criticalViolations = results.violations.filter(
-				(v) => v.impact === 'critical' || v.impact === 'serious',
-			);
-			logViolations(path, criticalViolations);
-
-			expect(criticalViolations).toHaveLength(0);
-		});
-	}
-
-	// research/ux.md §3's explicit pre-ship contrast check: the CTA button's
-	// text against its background must clear WCAG AA (4.5:1) before merge,
-	// not fixed in a follow-up PR (the two documented web-app/theme.css.ts
-	// precedents this note warns against repeating).
-	test('a11yScan_should_PassContrastCheck_When_RunAgainstCtaButtonBeforeMerge', async ({ page }) => {
-		await page.goto(PAGES.landing, { waitUntil: 'load' });
-
-		const results = await new AxeBuilder({ page })
-			.include('.hero')
-			.withRules(['color-contrast'])
-			.analyze();
-
-		expect(results.violations).toHaveLength(0);
-	});
-
 	// design/ux.md §5 criterion 15: every <img> has descriptive alt text or
 	// alt="" (purely decorative) -- axe's `image-alt` rule, run across both
 	// pages above.
@@ -91,25 +60,28 @@ test.describe('Accessibility (WCAG 2.1 AA) — stapler-squad-website', () => {
 	});
 
 	// design/ux.md §5 criterion 16: color contrast >=4.5:1 normal /
-	// >=3:1 large text, verified before merge rather than fixed post-hoc
-	// (the two theme.css.ts precedents the existing contrast test above
-	// warns against repeating). Broader than that test: this one scans the
-	// CTA link AND the docs sidebar link text, with no severity filter, to
-	// catch a moderate/minor contrast issue the critical/serious-only full
-	// scans above wouldn't flag.
-	test('ctaAndLinkText_should_PassWcagAAContrast_When_AxeScanRunBeforeMerge', async ({ page }) => {
-		await page.goto(PAGES.landing, { waitUntil: 'load' });
-		const landingResults = await new AxeBuilder({ page })
-			.include('.hero')
-			.withRules(['color-contrast'])
-			.analyze();
-		expect(landingResults.violations).toHaveLength(0);
+	// >=3:1 large text, verified before merge rather than fixed post-hoc (the
+	// two theme.css.ts precedents this test warns against repeating), with no
+	// severity filter -- catches a moderate/minor contrast issue the
+	// critical/serious-only scan below wouldn't flag. Scoped to `.hero` on the
+	// landing page (research/ux.md §3's CTA-button check) and the whole page
+	// on docs (its sidebar link text has no equivalent container to scope to).
+	const CONTRAST_SCANS = {
+		landing: { path: PAGES.landing, include: '.hero' },
+		gettingStarted: { path: PAGES.gettingStarted, include: undefined },
+	} as const;
+	for (const [label, { path, include }] of Object.entries(CONTRAST_SCANS)) {
+		test(`ctaAndLinkText_should_PassWcagAAContrast_When_AxeScanRunBeforeMerge (${label})`, async ({ page }) => {
+			await page.goto(path, { waitUntil: 'load' });
 
-		await page.goto(PAGES.gettingStarted, { waitUntil: 'load' });
-		const docsResults = await new AxeBuilder({ page }).withRules(['color-contrast']).analyze();
-		logViolations(PAGES.gettingStarted, docsResults.violations);
-		expect(docsResults.violations).toHaveLength(0);
-	});
+			let builder = new AxeBuilder({ page }).withRules(['color-contrast']);
+			if (include) builder = builder.include(include);
+			const results = await builder.analyze();
+			logViolations(`${path} (${label})`, results.violations);
+
+			expect(results.violations).toHaveLength(0);
+		});
+	}
 
 	// design/ux.md §5 criterion 19: the combined CI gate -- Lighthouse
 	// accessibility/performance/best-practices >=0.90 (enforced separately
