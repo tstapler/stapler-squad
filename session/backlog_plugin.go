@@ -80,5 +80,30 @@ func NewDefaultRegistry() *PluginRegistry {
 	r := NewPluginRegistry()
 	r.Register(NewGitHubIssuesPlugin())
 	r.Register(NewGitHubPRsPlugin())
+	r.Register(NewLinearPlugin())
+	r.Register(NewJiraPlugin())
 	return r
+}
+
+// mapExternalToBacklogItem is the shared ExternalItem→BacklogItemData mapping
+// used by the tracker plugins (title/description truncated to 200/2000).
+func mapExternalToBacklogItem(item ExternalItem, sourceID string) BacklogItemData {
+	title := item.Title
+	if len(title) > 200 {
+		title = title[:200]
+	}
+	desc := item.Description
+	if len(desc) > 2000 {
+		desc = desc[:2000]
+	}
+	return BacklogItemData{
+		Title:       title,
+		Description: desc,
+		Priority:    item.Priority,
+		Status:      string(BacklogStatusIdea),
+		ExternalID:  item.ExternalID,
+		ExternalURL: item.URL,
+		Labels:      item.Labels,
+		SourceID:    sourceID,
+	}
 }
