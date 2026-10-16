@@ -26,10 +26,23 @@ import (
 // was already moved to createSessionWithRetry (#871); this covers the remaining budgets.
 // Never shrinks below base, so local runs keep their original budget.
 func controlModeTestBudget(base time.Duration) time.Duration {
-	if scaled := base * sessionCreateTimeout / sessionCreateTimeoutDefault; scaled > base {
+	return scaleControlModeBudget(base, sessionCreateTimeout)
+}
+
+// scaleControlModeBudget uses float math: Duration*Duration overflows int64 (5s*30s > 9.2e18ns).
+func scaleControlModeBudget(base, override time.Duration) time.Duration {
+	scaled := time.Duration(float64(base) * float64(override) / float64(sessionCreateTimeoutDefault))
+	if scaled > base {
 		return scaled
 	}
 	return base
+}
+
+func TestScaleControlModeBudget(t *testing.T) {
+	require.Equal(t, 5*time.Second, scaleControlModeBudget(5*time.Second, sessionCreateTimeoutDefault))
+	require.Equal(t, 15*time.Second, scaleControlModeBudget(5*time.Second, 30*time.Second))
+	require.Equal(t, 30*time.Second, scaleControlModeBudget(10*time.Second, 30*time.Second))
+	require.Equal(t, 10*time.Second, scaleControlModeBudget(10*time.Second, time.Second), "never shrinks below base")
 }
 
 // TestKillOrphanedControlModeClients is a regression test for BUG-042: a fresh process
