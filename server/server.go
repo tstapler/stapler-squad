@@ -628,6 +628,19 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered DiagnosticService handler", "path", diagnosticAPIPath)
 	}
 
+	// Register SessionBundleService handler (RUM session diagnostic bundle
+	// export, Epic 1.2): ExportSessionBundle (server-streaming, browser
+	// download) and SaveSessionBundle (unary, server-side write). The assembler
+	// pipeline is wired in Epic 1.3; these stubs return CodeUnimplemented until
+	// then so the registration plumbing can be verified independently.
+	if deps.Storage != nil {
+		bundleSvc := services.NewSessionBundleService(deps.Storage)
+		bundlePath, bundleHandler := sessionv1connect.NewSessionBundleServiceHandler(bundleSvc, ConnectOptions(deps.ErrorRegistry)...)
+		bundleAPIPath := "/api" + bundlePath
+		srv.RegisterConnectHandler(bundleAPIPath, http.StripPrefix("/api", bundleHandler))
+		log.Info("Registered SessionBundleService handler", "path", bundleAPIPath)
+	}
+
 	// Register RemoteService handler (ssh-remote-workspaces Epic 3.3: TOFU
 	// host-key confirmation flow for configured SSH remotes). KnownHostsStore
 	// construction is the only fallible step (it touches disk under

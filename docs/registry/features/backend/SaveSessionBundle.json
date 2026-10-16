@@ -1,0 +1,11 @@
+{
+  "id": "SaveSessionBundle",
+  "type": "backend",
+  "service": "SessionBundleService",
+  "method": "SaveSessionBundle",
+  "protoFile": "proto/session/v1/rum_bundle.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-10-16T11:28:35.006415926-07:00"
+}
