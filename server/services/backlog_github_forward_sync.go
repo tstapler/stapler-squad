@@ -1,8 +1,8 @@
 package services
 
 // backlog_github_forward_sync.go — EventBus subscriber implementing forward
-// sync (AC3): closing the linked GitHub issue when a backlog item transitions
-// to done, if the item's source has ForwardSyncEnabled. Covers plan.md's
+// sync (AC3): closing the linked GitHub issue (or moving the linked Linear
+// issue to its done state, ADR-002) when a backlog item transitions to done, if the item's source has ForwardSyncEnabled. Covers plan.md's
 // Phase 1 Epics 1.2 (subscriber) and 1.3 (bot comment, via PostIssueComment).
 
 import (
@@ -14,6 +14,14 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 )
+
+// externalIssueStateUpdater is implemented by ItemSourcePlugins whose done
+// state is a named, per-workflow target (Linear workflow states, JIRA
+// transitions) rather than GitHub's binary close. See ADR-002.
+type externalIssueStateUpdater interface {
+	UpdateIssueState(ctx context.Context, config session.PluginConfig, externalID string, targetState string) (time.Time, error)
+	PostIssueComment(ctx context.Context, config session.PluginConfig, externalID string, body string) error
+}
 
 // externalIssueCloser is implemented by ItemSourcePlugins that support
 // closing their linked external issue and leaving a comment explaining the
@@ -30,6 +38,9 @@ type externalIssueCloser interface {
 // close, per the "no silent automated action" convention (pitfalls research
 // §7 / AC3 Story 1.1.2).
 const forwardSyncCloseComment = "Closed automatically — the linked backlog item was marked done in stapler-squad."
+
+// forwardSyncStateComment is the equivalent comment for state-update trackers.
+const forwardSyncStateComment = "Moved to %q automatically — the linked backlog item was marked done in stapler-squad."
 
 // StartBacklogGitHubForwardSyncSubscriber subscribes to the EventBus and
 // closes the GitHub issue linked to a backlog item when that item transitions
@@ -131,9 +142,27 @@ func handleForwardSyncClose(ctx context.Context, registry *session.PluginRegistr
 		log.Debug("backlog_github_forward_sync: no plugin registered, skip", "plugin_id", source.PluginID, "item", current.ID)
 		return
 	}
-	closer, ok := plugin.(externalIssueCloser)
-	if !ok {
-		log.Info("backlog_github_forward_sync: plugin does not support closing issues, skip", "plugin_id", source.PluginID, "item", current.ID)
+	var (
+		poster interface {
+			PostIssueComment(ctx context.Context, config session.PluginConfig, externalID string, body string) error
+		}
+		update         func(config session.PluginConfig) (time.Time, error)
+		comment        string
+		failureSubject string
+	)
+	switch p := plugin.(type) {
+	case externalIssueCloser:
+		poster, comment, failureSubject = p, forwardSyncCloseComment, "close"
+		update = func(config session.PluginConfig) (time.Time, error) {
+			return p.CloseIssue(ctx, config, current.ExternalID, current.Labels, source.ForwardSyncCloseLabel)
+		}
+	case externalIssueStateUpdater:
+		poster, comment, failureSubject = p, fmt.Sprintf(forwardSyncStateComment, source.ForwardSyncCloseLabel), "state update"
+		update = func(config session.PluginConfig) (time.Time, error) {
+			return p.UpdateIssueState(ctx, config, current.ExternalID, source.ForwardSyncCloseLabel)
+		}
+	default:
+		log.Info("backlog_github_forward_sync: plugin does not support forward sync, skip", "plugin_id", source.PluginID, "item", current.ID)
 		return
 	}
 
@@ -144,16 +173,16 @@ func handleForwardSyncClose(ctx context.Context, registry *session.PluginRegistr
 	}
 	config := session.PluginConfig{Raw: decryptedConfig}
 
-	issueUpdatedAt, closeErr := closer.CloseIssue(ctx, config, current.ExternalID, current.Labels, source.ForwardSyncCloseLabel)
+	issueUpdatedAt, closeErr := update(config)
 	if closeErr != nil {
-		log.Warn("backlog_github_forward_sync: close issue failed", "item", current.ID, "err", closeErr)
-		if recErr := storage.RecordSourceSyncFailure(ctx, source.ID, fmt.Sprintf("forward-sync close failed for item %s: %v", current.ID, closeErr)); recErr != nil {
+		log.Warn("backlog_github_forward_sync: "+failureSubject+" failed", "item", current.ID, "err", closeErr)
+		if recErr := storage.RecordSourceSyncFailure(ctx, source.ID, fmt.Sprintf("forward-sync %s failed for item %s: %v", failureSubject, current.ID, closeErr)); recErr != nil {
 			log.Error("backlog_github_forward_sync: failed to record sync failure", "source_id", source.ID, "err", recErr)
 		}
 		return
 	}
 
-	if commentErr := closer.PostIssueComment(ctx, config, current.ExternalID, forwardSyncCloseComment); commentErr != nil {
+	if commentErr := poster.PostIssueComment(ctx, config, current.ExternalID, comment); commentErr != nil {
 		// The close itself already succeeded — a failed follow-up comment is
 		// best-effort and must not block persisting the loop-prevention
 		// watermark below.
