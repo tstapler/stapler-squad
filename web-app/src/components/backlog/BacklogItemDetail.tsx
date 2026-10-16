@@ -1818,6 +1818,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             <SourceSection
               externalUrl={item.externalUrl}
               externalId={item.externalId}
+              pluginId={item.pluginId}
               labels={item.labels ?? []}
               defaultExpanded={sourceExpanded}
             />

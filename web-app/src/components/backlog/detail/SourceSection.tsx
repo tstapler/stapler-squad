@@ -9,11 +9,13 @@
 import { CircleDot } from "lucide-react";
 import { CollapsibleSection } from "@/components/ui/Collapsible";
 import { parseExternalRef } from "../externalRef";
+import { getSourceBadgeConfig } from "@/lib/backlog/sourceBadge";
 import * as styles from "./SourceSection.css";
 
 export interface SourceSectionProps {
   externalUrl: string;
   externalId?: string;
+  pluginId?: string;
   labels: string[];
   defaultExpanded: boolean;
 }
@@ -30,9 +32,10 @@ export interface SourceSectionProps {
  * defensively: only shown when externalId is actually present, to avoid a
  * literal "Issue #undefined".
  */
-export function SourceSection({ externalUrl, externalId, labels, defaultExpanded }: SourceSectionProps) {
-  const ref = parseExternalRef(externalUrl);
-  const refLabel = !externalId ? "" : ref ? `${ref.repo}#${ref.number}` : `#${externalId}`;
+export function SourceSection({ externalUrl, externalId, pluginId, labels, defaultExpanded }: SourceSectionProps) {
+  const source = getSourceBadgeConfig(pluginId);
+  const ref = pluginId && pluginId !== "github_issues" ? undefined : parseExternalRef(externalUrl);
+  const refLabel = !externalId ? "" : ref ? `${ref.repo}#${ref.number}` : `${source.idPrefix}${externalId}`;
   return (
     <CollapsibleSection sectionKey="source" title="Source" defaultExpanded={defaultExpanded}>
       <div className={styles.section}>
@@ -41,7 +44,7 @@ export function SourceSection({ externalUrl, externalId, labels, defaultExpanded
           target="_blank"
           rel="noopener noreferrer"
           className={styles.link}
-          title="Open on GitHub"
+          title={source.openLabel}
         >
           <CircleDot aria-hidden="true" size={14} />
           {refLabel ? `Issue ${refLabel}` : "Issue"}

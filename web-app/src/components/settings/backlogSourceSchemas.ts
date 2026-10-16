@@ -37,6 +37,14 @@ export const PLUGIN_SCHEMAS: PluginSchema[] = [
     credentialsManagedExternally: true,
   },
   {
+    id: "linear",
+    label: "Linear",
+    fields: [{ key: "team_key", label: "Team Key", placeholder: "Team key (e.g. ENG)" }],
+    requiresToken: true,
+    tokenLabel: "Linear API key",
+    credentialsManagedExternally: true,
+  },
+  {
     id: "github_prs",
     label: "GitHub Pull Requests",
     fields: [

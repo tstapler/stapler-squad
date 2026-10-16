@@ -987,3 +987,29 @@ describe("BacklogItemCard — blocked-by label", () => {
     expect(screen.queryByTestId("backlog-card-blocked-by")).not.toBeInTheDocument();
   });
 });
+
+describe("BacklogItemCard source badge", () => {
+  it("labels a Linear item with its tracker and bare identifier", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ pluginId: "linear", externalId: "ENG-123", externalUrl: "https://linear.app/acme/issue/ENG-123/x" })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+    const badge = screen.getByLabelText("Imported from Linear issue ENG-123");
+    expect(badge).toHaveTextContent("ENG-123");
+    expect(badge).toHaveAttribute("href", "https://linear.app/acme/issue/ENG-123/x");
+  });
+
+  it("keeps the repo-qualified GitHub label for github_issues items", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ pluginId: "github_issues", externalId: "22", externalUrl: "https://github.com/acme/widgets/issues/22" })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+    expect(screen.getByLabelText("Imported from GitHub issue acme/widgets#22")).toBeInTheDocument();
+  });
+});
