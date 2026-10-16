@@ -42,6 +42,7 @@ type RepoState struct {
 	shallow  atomic.Pointer[ShallowStamp]
 	scratch  scratchPool
 	reach    atomic.Pointer[ReachCache]
+	memo     atomic.Pointer[productCaches]
 }
 
 // ShallowStamp fingerprints `<commondir>/shallow`; the zero value means the

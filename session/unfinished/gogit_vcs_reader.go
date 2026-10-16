@@ -1020,6 +1020,16 @@ func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]s
 			return nil, err
 		}
 
+		// Shared path: reach bitset plus hash-keyed message memos on the shared
+		// id graph. A graph fallback continues on the legacy phases below.
+		if msgs, handled, sharedErr := g.commitMessagesShared(entry, headHash, baseHash, max); handled {
+			if sharedErr != nil {
+				return nil, sharedErr
+			}
+			g.commitMessagesCache.Store(cacheKey, commitMessagesEntry{msgs: msgs, expiry: time.Now().Add(diffStatCacheTTL)})
+			return msgs, nil
+		}
+
 		// Phase 2: reachable set for base. cachedReachableSet acquires entry.mu
 		// only on a cache miss, so repeated calls within the TTL window skip the
 		// O(N) walk entirely and return the cached map without touching the mutex.

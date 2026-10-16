@@ -20,6 +20,9 @@ type Options struct {
 	// ReachBudgetBytes bounds the repository's cached reach sets; zero means
 	// defaultReachBudgetBytes.
 	ReachBudgetBytes int64
+	// ProductBudgetBytes bounds each of the ahead/behind, behind and message
+	// memos; zero means the per-memo defaults.
+	ProductBudgetBytes int64
 }
 
 func (o Options) now() time.Time {

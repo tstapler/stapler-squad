@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/tstapler/stapler-squad/session/unfinished/repostate"
 )
@@ -47,4 +48,53 @@ func (g *GoGitVCSReader) reachMembership(entry *cachedRepo, worktreePath string,
 		return nil, err
 	}
 	return hashSet(set), nil
+}
+
+// repoKeyOf is the registry's canonical repository key for entry's storer.
+func repoKeyOf(entry *cachedRepo) (repostate.RepoKey, bool) {
+	k, ok := entry.repo.Storer.(commonDirKeyer)
+	if !ok {
+		return "", false
+	}
+	return repostate.RepoKey(k.CommonDirKey()), true
+}
+
+// commitMessagesShared answers CommitMessages from the shared reach set and
+// message memos. handled is false when the flag is off, the storer has no
+// shared state, or the graph fell back (full arena, severe pressure, a missing
+// commit): the caller then runs the legacy phases, which report their own errors.
+func (g *GoGitVCSReader) commitMessagesShared(entry *cachedRepo, head, base plumbing.Hash, max int) (msgs []string, handled bool, err error) {
+	rs := g.repoState(entry)
+	if rs == nil {
+		return nil, false, nil
+	}
+	repo, ok := repoKeyOf(entry)
+	if !ok {
+		return nil, false, nil
+	}
+	ctx := context.Background()
+	ord, shallow := g.observeShallow(entry, rs)
+	src := newGraphSource(entry.repo.Storer, shallow)
+	reach, err := rs.Reach(ctx, src, ord, repostate.ReachKey{Repo: repo, Base: base, Cap: maxReachableSetCommits})
+	if err != nil {
+		return nil, !errors.Is(err, repostate.ErrFallback), err
+	}
+	in := repostate.MessageInputs{Src: src, Ord: ord, Reach: reach, Line: commitFirstLine(entry)}
+	msgs, err = rs.CommitMessages(ctx, in, repostate.MessageKey{Repo: repo, Head: head, Base: base, Max: max, Cap: maxReachableSetCommits})
+	if err != nil {
+		return nil, !errors.Is(err, repostate.ErrFallback), err
+	}
+	return msgs, true, nil
+}
+
+// commitFirstLine reads a commit's first message line straight from the storer,
+// which self-locks (like graphSource), so it never takes entry.mu.
+func commitFirstLine(entry *cachedRepo) repostate.LineFunc {
+	return func(h plumbing.Hash) (string, error) {
+		c, err := object.GetCommit(entry.repo.Storer, h)
+		if err != nil {
+			return "", err
+		}
+		return firstLine(c.Message), nil
+	}
 }

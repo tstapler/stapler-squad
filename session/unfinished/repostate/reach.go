@@ -147,14 +147,26 @@ func (s *RepoState) ReachCache() *ReachCache { return s.reachCache() }
 // Any walk failure is an ErrFallback error and the caller runs the legacy walk.
 func (s *RepoState) Reach(ctx context.Context, src ParentsSource, ord StampOrd, want ReachKey) (*ReachBitset, error) {
 	rc := s.reachCache()
-	w := s.NewWalk(ctx, src, ord, want.Cap)
-	defer w.Close()
 	key := want
-	key.Shallow, key.Epoch = s.ShallowStamp(), w.gen.Epoch()
+	key.Shallow, key.Epoch = s.ShallowStamp(), s.Graph().Load().Epoch()
 	if b, ok := rc.cache.Get(key); ok {
 		return b, nil
 	}
-	return rc.cache.GetOrCompute(key, func() (*ReachBitset, error) { return rc.build(&w, key) })
+	return s.reachMiss(ctx, rc, src, ord, key)
+}
+
+// reachMiss builds on a miss. It is separate so the hit path allocates nothing
+// (the walk and the compute closure live only here).
+func (s *RepoState) reachMiss(ctx context.Context, rc *ReachCache, src ParentsSource, ord StampOrd, key ReachKey) (*ReachBitset, error) {
+	w := s.NewWalk(ctx, src, ord, key.Cap)
+	defer w.Close()
+	if e := w.gen.Epoch(); e != key.Epoch { // the graph was dropped since the key was made
+		key.Epoch = e
+		if b, ok := rc.cache.Get(key); ok {
+			return b, nil
+		}
+	}
+	return rc.cache.computeMiss(key, func() (*ReachBitset, error) { return rc.build(&w, key) })
 }
 
 func (c *ReachCache) build(w *Walk, key ReachKey) (*ReachBitset, error) {

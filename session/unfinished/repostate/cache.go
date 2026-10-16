@@ -204,6 +204,12 @@ func (c *RepoCache[K, V]) GetOrCompute(key K, fn func() (V, error)) (V, error) {
 	if v, ok := c.Get(key); ok {
 		return v, nil
 	}
+	return c.computeMiss(key, fn)
+}
+
+// computeMiss is GetOrCompute for a caller that already saw a miss from Get
+// (so the miss is not counted twice and the hit path stays closure-free).
+func (c *RepoCache[K, V]) computeMiss(key K, fn func() (V, error)) (V, error) {
 	var led bool // written by the flight goroutine, read after <-ch
 	ch := c.sf.DoChan(fmt.Sprint(key), func() (out any, doErr error) {
 		defer func() {

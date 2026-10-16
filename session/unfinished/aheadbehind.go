@@ -96,7 +96,7 @@ func (g *GoGitVCSReader) aheadBehindShared(entry *cachedRepo, key aheadBehindKey
 		return ahead, behind, nil
 	}
 	ord, shallow := g.observeShallow(entry, rs)
-	ahead, behind, err := aheadBehindOnGraph(rs, newGraphSource(entry.repo.Storer, shallow), ord, head, baseHash)
+	ahead, behind, err := aheadBehindOnShared(rs, entry, newGraphSource(entry.repo.Storer, shallow), ord, head, baseHash)
 	if errors.Is(err, repostate.ErrFallback) {
 		entry.mu.Lock()
 		defer entry.mu.Unlock()
@@ -114,6 +114,17 @@ func (g *GoGitVCSReader) resolveRefsLocked(entry *cachedRepo, base string) (head
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 	return resolveAheadBehindRefs(entry, base)
+}
+
+// aheadBehindOnShared runs phase 2 through the shared (head, base) memo, which
+// answers a second worktree at the same head and base without a walk.
+func aheadBehindOnShared(rs *repostate.RepoState, entry *cachedRepo, src repostate.ParentsSource, ord repostate.StampOrd, head, base plumbing.Hash) (int, int, error) {
+	repo, ok := repoKeyOf(entry)
+	if !ok {
+		return aheadBehindOnGraph(rs, src, ord, head, base)
+	}
+	res, err := rs.AheadBehind(context.Background(), src, ord, repostate.ABKey{Repo: repo, Head: head, Base: base, Cap: mergeBaseBFSLimit})
+	return res.Ahead, res.Behind, err
 }
 
 // aheadBehindOnGraph runs phase 2 on the id graph; it reads no cachedRepo.
