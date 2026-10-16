@@ -320,6 +320,7 @@ export function useTerminalStream({
     // message-processing loop (started below) can identify itself as "the
     // current attempt" and detect being superseded by a later connect().
     const myGeneration = ++connectionGenerationRef.current;
+    const connectStartedAt = Date.now();
 
     let targetCols = overrideCols ?? initialCols;
     let targetRows = overrideRows ?? initialRows;
@@ -582,6 +583,12 @@ export function useTerminalStream({
           }
         } finally {
           if (myGeneration === connectionGenerationRef.current) {
+            // A superseded generation is a deliberate reconnect; reaching here means this stream ended on its own.
+            console.warn(
+              `[stream-disconnect] session=${sessionId} shell=${shellId ?? ""} livedMs=${Date.now() - connectStartedAt} ` +
+              `foreground=${foregroundRef.current} visibility=${document.visibilityState} willReconnect=${shouldReconnectRef.current} ` +
+              `hardFailed=${isHardFailedRef.current} connectTimeoutAbort=${connectTimeoutAbortedRef.current}`,
+            );
             isConnectedRef.current = false; // sync ref before state setter to prevent reconnect guard race
             isConnectingRef.current = false;
             setIsConnected(false);

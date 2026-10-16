@@ -323,6 +323,8 @@ export interface SessionDetailViewProps {
   backlogItemId?: string;
   /** Resolved backlog-origin index entry for this session, if dispatched by backlog automation. Drives the header badge. */
   backlogEntry?: BacklogIndexEntry;
+  /** Whether this is the focused pane. Defaults to true for callers that mount a single view. */
+  isActive?: boolean;
 }
 
 // Terminal per the SessionStatus doc comment: "Session has been stopped
@@ -385,6 +387,7 @@ export function SessionDetailView({
   canGoBack,
   backlogItemId,
   backlogEntry,
+  isActive = true,
 }: SessionDetailViewProps) {
   // activeTabId is either a static SessionDetailTab or a shell tab id "shell:<shellId>"
   const [activeTabId, setActiveTabId] = useState<string>(initialTab);
@@ -636,7 +639,7 @@ export function SessionDetailView({
     label: "Spawn new shell",
     context: "terminal",
     action: handleOpenNewShellDialog,
-  });
+  }, isActive);
 
   const handleSpawnShell = useCallback(async (params: { name?: string; command?: string; workingDir?: string }) => {
     const tab = await spawnShell(params);

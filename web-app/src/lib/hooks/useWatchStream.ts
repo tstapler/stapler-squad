@@ -26,6 +26,7 @@
 // (returned below) revives it, e.g. once that fallback poll confirms the
 // server is reachable again.
 
+import { noteDeployId } from "./deployId";
 import { useEffect, useMemo, useRef } from "react";
 
 export type WatchConnectionState = "connecting" | "live" | "reconnecting" | "stale" | "exhausted";
@@ -43,6 +44,10 @@ export interface WatchStreamOptions<TEvent> {
   isHeartbeat: (event: TEvent) => boolean;
   /** Extracts the message's seq for afterSeq replay on reconnect. Omit for streams with no replay buffer (e.g. ReviewQueueEvent). */
   getSeq?: (event: TEvent) => bigint;
+  /** Extracts the message's server deploy_id. When it changes the server restarted, so the afterSeq cursor is dropped. Omit for streams whose messages carry none. */
+  getDeployId?: (event: TEvent) => string;
+  /** Label for deploy-change log lines. */
+  name?: string;
   /** ms of total silence (no event, no heartbeat) before the periodic watchdog forces a reconnect. Default 45s. */
   staleThresholdMs?: number;
   /** ms of total silence before a tab-refocus/online event forces a reconnect. Defaults to staleThresholdMs. Split out because a caller may want to react faster to the user actively looking at the tab than to the periodic background check. */
@@ -76,6 +81,7 @@ const NO_SEQ: bigint = 0n;
 interface LoopState<TEvent> {
   optionsRef: { current: WatchStreamOptions<TEvent> };
   lastSeqRef: { current: bigint };
+  lastDeployIdRef: { current: string };
   abortController: AbortController;
   retries: number;
   stopped: boolean;
@@ -107,8 +113,11 @@ function scheduleReconnect<TEvent>(state: LoopState<TEvent>): void {
 /** Dispatches one received message: seq bookkeeping, then onEvent unless it's a heartbeat. */
 function handleMessage<TEvent>(state: LoopState<TEvent>, event: TEvent): void {
   state.lastActivity = Date.now();
-  const { getSeq, isHeartbeat, onEvent } = state.optionsRef.current;
+  const { getSeq, getDeployId, name, isHeartbeat, onEvent } = state.optionsRef.current;
 
+  if (getDeployId && noteDeployId(state.lastDeployIdRef, getDeployId(event), name ?? "watch")) {
+    state.lastSeqRef.current = NO_SEQ; // new server process: its seq restarted from zero
+  }
   if (getSeq) {
     const seq = getSeq(event);
     if (seq > NO_SEQ) state.lastSeqRef.current = seq;
@@ -181,6 +190,7 @@ function newLoopState<TEvent>(
   return {
     optionsRef,
     lastSeqRef,
+    lastDeployIdRef: { current: "" },
     abortController: new AbortController(),
     retries: 0,
     stopped: false,
