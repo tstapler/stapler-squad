@@ -563,6 +563,11 @@ type RuntimeDeps struct {
 	// SessionTagClassificationPoller drives the Phase 4 LLM fallback tag classification
 	// (session-classifier-pipeline). Nil when HeadlessPool is nil (no claude binary found).
 	SessionTagClassificationPoller *session.SessionTagClassificationPoller
+
+	// CtxHistoryStore persists per-turn context-window occupancy samples for use
+	// in diagnostic bundles (RUM session bundle Epic 1.1). Nil when analytics is
+	// disabled or when the ent client is unavailable.
+	CtxHistoryStore *contexthistory.Store
 }
 
 // reviewQueueLookupAdapter adapts session.Storage's ItemSession/ReviewVerdict
@@ -1929,6 +1934,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		HandoffSummaryGenerator:        handoffSummaryGenerator,
 		BacklogLifecycleListener:       backlogLifecycleListener,
 		SessionTagClassificationPoller: sessionTagPoller,
+		CtxHistoryStore:                ctxHistoryStore,
 	}, nil
 }
 
