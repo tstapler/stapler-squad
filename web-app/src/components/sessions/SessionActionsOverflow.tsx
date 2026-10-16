@@ -8,6 +8,7 @@ import type { Session, CheckpointProto } from "@/gen/session/v1/types_pb";
 import { SessionStatus } from "@/gen/session/v1/types_pb";
 import { TagEditor } from "./TagEditor";
 import { CreatePullRequestModal } from "./CreatePullRequestModal";
+import { ExportBundleModal } from "./ExportBundleModal";
 import { AnalyticsContext } from "@/lib/contexts/AnalyticsContext";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useAvailablePrograms } from "@/lib/hooks/useAvailablePrograms";
@@ -184,6 +185,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const [isCheckpointOpen, setIsCheckpointOpen] = useState(false);
+  const [isExportBundleOpen, setIsExportBundleOpen] = useState(false);
   const [checkpointLabel, setCheckpointLabel] = useState("");
   const [isCreatingCheckpoint, setIsCreatingCheckpoint] = useState(false);
   const [checkpointError, setCheckpointError] = useState("");
@@ -532,6 +534,15 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
         document.body
       )}
 
+      {isExportBundleOpen && (
+        <ExportBundleModal
+          open={isExportBundleOpen}
+          onOpenChange={setIsExportBundleOpen}
+          sessionId={session.id}
+          sessionTitle={session.title}
+          repoPath={session.path}
+        />
+      )}
       {isCheckpointOpen && createPortal(
         <div className={renameDialog} onClick={(e) => { e.stopPropagation(); setIsCheckpointOpen(false); setCheckpointError(""); }}>
           <div
@@ -947,6 +958,16 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   <span aria-hidden="true">📍</span> Checkpoint
                 </button>
               )}
+              <button
+                role="menuitem"
+                className={overflowMenuItem}
+                onClick={(e) => { e.stopPropagation(); close(); setIsExportBundleOpen(true); }}
+                aria-label={`Export diagnostics for session ${session.title}`}
+                aria-haspopup="dialog"
+                data-testid="export-diagnostics-menu-item"
+              >
+                <span aria-hidden="true">📦</span> Export Diagnostics
+              </button>
                 </MenuSection>
               )}
               {hasOrganize && (

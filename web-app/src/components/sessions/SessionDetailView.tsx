@@ -24,6 +24,7 @@ import { getProgramDisplay, isKnownProgram } from "@/lib/constants/programs";
 import { useAvailablePrograms } from "@/lib/hooks/useAvailablePrograms";
 import { Modal, ModalContent, ModalTitle, ModalFooter } from "@/components/ui/Modal";
 import { ResumeSessionModal } from "./ResumeSessionModal";
+import { ExportBundleModal } from "./ExportBundleModal";
 import { TagEditor } from "./TagEditor";
 import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
 import { BacklogOriginBadge } from "@/components/shared/BacklogOriginBadge";
@@ -522,6 +523,7 @@ export function SessionDetailView({
   const [workingDirValue, setWorkingDirValue] = useState(session.workingDir || "");
   // Action sheet state
   const [actionSheetOpen, setActionSheetOpen] = useState(false);
+  const [exportBundleOpen, setExportBundleOpen] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showResumeModal, setShowResumeModal] = useState(false);
   const resumeTriggerRef = useRef<HTMLElement | null>(null);
@@ -1719,6 +1721,16 @@ export function SessionDetailView({
       )}
       </div>
 
+      {exportBundleOpen && (
+        <ExportBundleModal
+          open={exportBundleOpen}
+          onOpenChange={setExportBundleOpen}
+          sessionId={session.id}
+          sessionTitle={session.title}
+          repoPath={session.path}
+        />
+      )}
+
       {/* Workspace Switch Modal */}
       {showWorkspaceSwitchModal && (
         <WorkspaceSwitchModal
@@ -1804,6 +1816,13 @@ export function SessionDetailView({
               data-testid="action-spawn-shell"
             >
               &gt;_ Spawn new shell
+            </button>
+            <button
+              className={styles.actionSheetItem}
+              onClick={() => { setActionSheetOpen(false); setExportBundleOpen(true); }}
+              data-testid="export-diagnostics-action"
+            >
+              📦 Export Diagnostics
             </button>
             <hr className={styles.actionDivider} />
             <button
