@@ -32,7 +32,7 @@ type BacklogItemEventPublisher struct {
 func (p *BacklogItemEventPublisher) PublishItemChanged(item *session.BacklogItemData, change session.BacklogItemChange) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.WarningLog.Printf("[BacklogItemEventPublisher] PublishItemChanged panicked (recovered): %v", r)
+			log.WarningLog().Printf("[BacklogItemEventPublisher] PublishItemChanged panicked (recovered): %v", r)
 		}
 	}()
 

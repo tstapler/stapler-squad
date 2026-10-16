@@ -1,35 +1,45 @@
+// +feature: notification-tray
 "use client";
 
+import { resetBellPos } from "@/lib/utils/deckSettings";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Code, ConnectError, createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
-import { SessionService } from "@/gen/session/v1/session_pb";
-import { ResolveApprovalRequest, ResolveApprovalRequestSchema } from "@/gen/session/v1/session_pb";
-import { create } from "@bufbuild/protobuf";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
+import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
+import { useDeckViewport } from "@/lib/contexts/deckViewportContext";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
-import { formatRelativeTime } from "@/lib/utils/datetime";
-import { groupNotifications } from "@/lib/utils/notificationGrouping";
-import { getApiBaseUrl } from "@/lib/config";
-import { NotificationData } from "@/lib/types/notification";
+import { useApprovalResolution } from "@/lib/hooks/useApprovalResolution";
+import { useAnnounce } from "@/lib/hooks/useAnnounce";
+import { useNotificationConnectivity } from "@/lib/hooks/useNotificationConnectivity";
+import { useStableRowOrder } from "@/lib/hooks/useStableRowOrder";
+import { useCoarsePointer } from "@/lib/hooks/useCoarsePointer";
+import { useBackgroundSessions } from "@/lib/hooks/useBackgroundSessions";
+import { useTrayFocus } from "@/lib/hooks/useTrayFocus";
+import { useTrayBulkActions } from "@/lib/hooks/useTrayBulkActions";
+import { useTrayDismissal } from "@/lib/hooks/useTrayDismissal";
+import { routes } from "@/lib/routes";
+import { countNeedsAttention, groupNotifications, flattenGroups, type GroupedNotification } from "@/lib/utils/notificationGrouping";
 import {
-  notificationTypeIcon,
-  notificationTypeLabel,
-  priorityColor,
   notificationTypeFilter,
-  splitCIBlockMessage,
+  computeScopedMarkReadIds,
 } from "@/lib/utils/notificationMapping";
+import { selectBackgroundRows, type BackgroundRow } from "@/lib/utils/backgroundActivity";
+import { knownHiddenSessions } from "@/lib/utils/hiddenSessionRegistry";
+import { readQuietMode, readTrayPinned, readWhatChangedSeen, writeTrayPinned, writeWhatChangedSeen } from "@/lib/utils/deckSettings";
+import { AutoHandledSection } from "./NotificationItem";
+import { BackgroundActivity } from "./BackgroundActivity";
+import { segment, segments } from "./BackgroundActivity.css";
+import { TrayConfirm } from "./TrayConfirm";
+import { TrayHandle } from "./TrayHandle";
+import { TrayList, type ListRow } from "./TrayList";
+import { TrayOverflowMenu, type TrayMenuItem } from "./TrayOverflowMenu";
+import { TraySettings, WHAT_CHANGED_TEXT, WhatChangedCard } from "./TraySettings";
+import { selectTrayBanner, selectTrayState } from "./trayState";
+import { selectTrayVariant } from "./trayVariant";
 import {
-  overlay,
-  panel,
-  panelOpen,
   header,
   title,
-  unreadBadge,
   headerActions,
-  markAllButton,
-  clearButton,
   closeButton,
   filterBar,
   searchInput,
@@ -41,51 +51,17 @@ import {
   emptyIcon,
   emptyText,
   emptySubtext,
-  list,
-  item,
-  read,
-  unread,
-  itemHeader,
-  itemTitle,
-  unreadDot,
-  typeIcon,
-  typeLabel,
-  countBadge,
-  removeButton,
-  itemSubtitle,
-  itemContext,
-  itemMessage,
-  approvalDetails,
-  approvalTool,
-  approvalCommand,
-  approvalCwd,
-  itemWorkingDir,
-  itemFooter,
-  timestamp,
-  itemActions,
-  resolvedBadge,
-  approveButton,
-  denyButton,
-  ciBlockedRow,
-  ciBlockedText,
-  ciBlockedLink,
-  focusButton,
-  viewButton,
-  loadMore,
-  loadMoreButton,
-  autoHandledSection,
-  autoHandledHeader,
-  autoHandledHeaderLeft,
-  autoHandledBadge,
-  autoHandledChevron,
-  autoHandledChevronOpen,
-  autoHandledList,
-  autoHandledItem,
-  autoHandledDecision,
-  autoHandledContent,
-  autoHandledTitle,
-  autoHandledMeta,
-  autoHandledTimestamp,
+  newPill,
+  sheetGrabber,
+  sheetGrabberRow,
+  sheetScrim,
+  trayAttention,
+  trayCounts,
+  trayBanner,
+  trayButton,
+  trayFooter,
+  trayUndoBar,
+  trayVariant,
 } from "./NotificationPanel.css";
 
 type TypeFilter = "all" | "approval_needed" | "error" | "task_complete" | "info";
@@ -98,111 +74,205 @@ const TYPE_FILTER_LABELS: Record<TypeFilter, string> = {
   info: "Info",
 };
 
+type TraySegment = "notifications" | "background";
+
+const TRAY_ID = "notification-tray";
+const HEADING_ID = "notification-tray-heading";
+const GRABBER_DRAG_PX = 80;
+const OFFLINE_REASON = "Offline";
+
 /**
- * NotificationPanel - A sidebar that displays notification history
- * Similar to Android's notification panel, persists notifications for review.
- * Now backed by server-side persistent storage that survives page refreshes.
+ * NotificationPanel - the notification history surface.
+ *
+ * The non-modal tray (ADR-006): no backdrop, no `aria-modal`, `transform`
+ * only motion, grouped and virtualized rows, a pinned "Needs attention" group,
+ * bulk actions guarded server-side with undo, and layout that never touches the
+ * terminal.
  */
 export function NotificationPanel() {
+  const replyEnabled = useFeatureFlag("hidden_session_reply");
   const {
     notificationHistory,
     isPanelOpen,
     togglePanel,
     markAsRead,
-    markAllAsRead,
-    removeFromHistory,
     acknowledgeNotification,
-    clearHistory,
     getUnreadCount,
     historyLoading,
     historyHasMore,
+    historyError,
+    historyLastUpdatedAt,
     loadMoreHistory,
+    refreshHistory,
+    clearHistoryByIds,
+    showActionToast,
+    quietMode,
+    setQuietMode,
   } = useNotifications();
 
   const auditLog = useAuditLog();
+  const { announce } = useAnnounce();
+  const viewport = useDeckViewport();
+  const { isOffline } = useNotificationConnectivity();
+  const coarse = useCoarsePointer();
+  const variant = selectTrayVariant(viewport);
+  const isBottomSheet = variant === "bottom-sheet";
+  // The phone sheet owns a history entry for hardware Back, and drags and expands.
+  const isSheet = isBottomSheet;
+  const isSideOverlay = variant === "side-overlay";
 
-  // Lightweight RPC client for resolving approvals directly from the panel
-  const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
-  const getClient = useCallback(() => {
-    if (!clientRef.current) {
-      const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
-      clientRef.current = createClient(SessionService, transport);
-    }
-    return clientRef.current;
-  }, []);
+  const trayRef = useRef<HTMLDivElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const headRef = useRef<HTMLDivElement>(null);
+  const [headHeight, setHeadHeight] = useState(0);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [autoHandledOpen, setAutoHandledOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  const [scrolled, setScrolled] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [whatChangedOpen, setWhatChangedOpen] = useState(() => !readWhatChangedSeen());
+  const [pinned, setPinned] = useState(false);
+  // True when a Quiet toggle did not persist (storage blocked): it still applies until reload.
+  const [quietUnsaved, setQuietUnsaved] = useState(false);
+  const [traySegment, setTraySegment] = useState<TraySegment>("notifications");
 
-  // Track per-approval resolution state so buttons update after the user decides.
-  // "allow" / "deny" = user resolved it; "expired" = already resolved or timed out.
-  const [resolvedApprovals, setResolvedApprovals] = useState<Record<string, "allow" | "deny" | "expired">>({});
-  // Track which approval IDs have an in-flight RPC so we can disable buttons while waiting.
-  const [pendingApprovals, setPendingApprovals] = useState<Record<string, boolean>>({});
-  // Track approvals blocked by the CI-red guard (AC5) so we can show the inline
-  // explanation + "Approve anyway" affordance instead of the generic "expired" state.
-  const [blockedApprovals, setBlockedApprovals] = useState<Record<string, string>>({});
+  const { resolvedApprovals, pendingApprovals, blockedApprovals, failedApprovals, resolveApproval } = useApprovalResolution({
+    notificationHistory,
+    acknowledgeNotification,
+  });
 
-  // Seed resolvedApprovals from persisted metadata when history loads or updates.
-  // The server stamps "approval_decision" on the notification record when an approval
-  // is resolved, so this survives page refreshes.
-  // "timeout" and "canceled" are server-side outcomes where the approval was not handled
-  // via the UI; we map them to "expired" for display (same "Expired" badge).
+  useTrayFocus({ isOpen: isPanelOpen, trayRef, headingRef, coarse });
+
+  // Pin tray is read after mount so server and client render the same first frame.
+  useEffect(() => setPinned(readTrayPinned()), []);
+  const docked = isSideOverlay && pinned && isPanelOpen;
   useEffect(() => {
-    const seeded: Record<string, "allow" | "deny" | "expired"> = {};
-    for (const n of notificationHistory) {
-      const decision = n.metadata?.["approval_decision"];
-      const approvalId = n.metadata?.["approval_id"];
-      if (!approvalId || !decision) continue;
-      if (decision === "allow" || decision === "deny") {
-        seeded[approvalId] = decision;
-      } else if (decision === "timeout" || decision === "canceled") {
-        seeded[approvalId] = "expired";
-      }
-    }
-    if (Object.keys(seeded).length > 0) {
-      setResolvedApprovals(prev => ({ ...seeded, ...prev }));
-    }
-  }, [notificationHistory]);
+    if (!docked) return;
+    document.documentElement.dataset.trayPinned = "true";
+    return () => {
+      delete document.documentElement.dataset.trayPinned;
+    };
+  }, [docked]);
 
-  const resolveApproval = useCallback(async (approvalId: string, decision: "allow" | "deny", notificationIds: string | string[], overrideCiBlock?: boolean) => {
-    setPendingApprovals(prev => ({ ...prev, [approvalId]: true }));
-    try {
-      await getClient().resolveApproval(create(ResolveApprovalRequestSchema, { approvalId, decision, overrideCiBlock }));
-      setResolvedApprovals(prev => ({ ...prev, [approvalId]: decision }));
-      setBlockedApprovals(prev => { const next = { ...prev }; delete next[approvalId]; return next; });
-      // Single call: marks as read in history AND closes the active toast
-      acknowledgeNotification(notificationIds);
-    } catch (err) {
-      // AC5: CI-red block — show an inline explanation next to Approve/Deny instead of
-      // collapsing into the generic "expired" state (not a silent no-op).
-      if (err instanceof ConnectError && err.code === Code.FailedPrecondition) {
-        setBlockedApprovals(prev => ({ ...prev, [approvalId]: err.rawMessage || err.message }));
-        return;
-      }
-      console.error("Failed to resolve approval:", err);
-      // Approval already timed out or was resolved elsewhere — mark as expired.
-      setResolvedApprovals(prev => ({ ...prev, [approvalId]: "expired" }));
-    } finally {
-      setPendingApprovals(prev => { const next = { ...prev }; delete next[approvalId]; return next; });
+  const modalSheet = isBottomSheet && expanded && !coarse && isPanelOpen;
+
+  const close = useCallback(() => {
+    if (isPanelOpen) togglePanel();
+  }, [isPanelOpen, togglePanel]);
+  const { releaseHistoryEntry } = useTrayDismissal({
+    isOpen: isPanelOpen,
+    isSheet,
+    modal: modalSheet,
+    trayRef,
+    close,
+  });
+  const closeForNavigation = useCallback(() => {
+    releaseHistoryEntry();
+    close();
+  }, [releaseHistoryEntry, close]);
+
+  const trapTab = (e: React.KeyboardEvent) => {
+    if (!modalSheet || e.key !== "Tab") return;
+    const focusable = Array.from(
+      trayRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input, select, [tabindex]:not([tabindex="-1"])') ?? [],
+    ).filter((el) => el.offsetParent !== null || el === document.activeElement);
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
     }
-  }, [getClient, acknowledgeNotification]);
+  };
+
+  // Only the grabber drags the sheet; list content never does (C12).
+  const dragStartY = useRef<number | null>(null);
+  const onGrabberDown = (e: React.PointerEvent) => {
+    dragStartY.current = e.clientY;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  };
+  const onGrabberUp = (e: React.PointerEvent) => {
+    const start = dragStartY.current;
+    dragStartY.current = null;
+    if (start === null) return;
+    const dy = e.clientY - start;
+    if (dy >= GRABBER_DRAG_PX) {
+      if (expanded) setExpanded(false);
+      else close();
+    } else if (dy <= -GRABBER_DRAG_PX) setExpanded(true);
+  };
+
+  // Reuses the one scoping helper the Notifications page calls — never a second
+  // hand-written filter that could drift.
+  const scopedMarkReadIds = useMemo(
+    () => computeScopedMarkReadIds(notificationHistory),
+    [notificationHistory]
+  );
+
+  const bulk = useTrayBulkActions({
+    notificationHistory,
+    isOffline,
+    needsAttention: countNeedsAttention(notificationHistory),
+    scopedMarkReadIds,
+    announce,
+    markAsRead,
+    clearHistoryByIds,
+    showActionToast,
+  });
+  const { undoWindow, clearError } = bulk;
+
+  // The search bar, filters and cards scroll with the list (a peek sheet has little height to spare),
+  // so the virtualizer needs their height as its scroll margin.
+  useLayoutEffect(() => {
+    const head = headRef.current;
+    if (!head) return;
+    setHeadHeight(head.offsetHeight);
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => setHeadHeight(head.offsetHeight));
+    observer.observe(head);
+    return () => observer.disconnect();
+  }, []);
+
+  // Closing resets the sheet so it reopens at peek.
+  useEffect(() => {
+    if (!isPanelOpen) {
+      setExpanded(false);
+      setSettingsOpen(false);
+      bulk.reset();
+    }
+    // `bulk.reset` only sets state to its initial values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPanelOpen]);
+
   // Filter notifications by search query and type; auto_approved records are always excluded
   // from the main list and shown in a separate collapsible section.
+  const visibleHistory = useMemo(
+    () => (bulk.hiddenIds.size === 0 ? notificationHistory : notificationHistory.filter((n) => !bulk.hiddenIds.has(n.id))),
+    [notificationHistory, bulk.hiddenIds],
+  );
+
+  const stable = useStableRowOrder(visibleHistory, isPanelOpen, scrolled);
+
   const filteredNotifications = useMemo(() => {
-    let list = notificationHistory.filter((n) => n.notificationType !== "auto_approved");
+    let rows = stable.items.filter((n) => n.notificationType !== "auto_approved");
 
     if (typeFilter !== "all") {
       const allowed = new Set(
-        notificationTypeFilter(typeFilter, list.map((n) => n.notificationType))
+        notificationTypeFilter(typeFilter, rows.map((n) => n.notificationType))
       );
-      list = list.filter((n) => allowed.has(n.notificationType));
+      rows = rows.filter((n) => allowed.has(n.notificationType));
     }
 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      list = list.filter(
+      rows = rows.filter(
         (n) =>
           (n.sessionName || "").toLowerCase().includes(q) ||
           (n.message || "").toLowerCase().includes(q) ||
@@ -210,14 +280,68 @@ export function NotificationPanel() {
       );
     }
 
-    return list;
-  }, [notificationHistory, typeFilter, searchQuery]);
+    return rows;
+  }, [stable.items, typeFilter, searchQuery]);
 
   const autoHandledNotifications = useMemo(() => {
     return notificationHistory.filter((n) => n.notificationType === "auto_approved");
   }, [notificationHistory]);
 
   const unreadCount = getUnreadCount();
+
+  // Background activity (Story 5.4): polled only while its segment is showing; the segment
+  // badge is the same join over history, so it adds nothing to the bell count.
+  const backgroundVisible = isPanelOpen && traySegment === "background";
+  const background = useBackgroundSessions(backgroundVisible && !isOffline);
+  const backgroundView = useMemo(
+    () =>
+      selectBackgroundRows(
+        notificationHistory,
+        background.sessions,
+        background.lastUpdatedAt === null ? knownHiddenSessions() : background.departed,
+      ),
+    [notificationHistory, background.sessions, background.departed, background.lastUpdatedAt],
+  );
+  const announcedBackgroundLoad = useRef(false);
+  useEffect(() => {
+    if (backgroundVisible && background.loading && !announcedBackgroundLoad.current) {
+      announcedBackgroundLoad.current = true;
+      announce("Loading background activity", "polite", "background-loading");
+    }
+    if (!background.loading) announcedBackgroundLoad.current = false;
+  }, [backgroundVisible, background.loading, announce]);
+
+  const { rows: flatRows, needsAttention, setSize } = useMemo(
+    () => flattenGroups(filteredNotifications, collapsed),
+    [filteredNotifications, collapsed],
+  );
+
+  // Unread items that are not pending decisions, so the two counts never overlap.
+  const earlierUnread = Math.max(0, unreadCount - needsAttention);
+
+  const listRows: ListRow[] = useMemo(
+    () => (historyHasMore ? [...flatRows, { kind: "load-more", key: "__load_more__" }] : flatRows),
+    [flatRows, historyHasMore],
+  );
+  const groupsById = useMemo(() => {
+    const map = new Map<string, GroupedNotification>();
+    for (const g of groupNotifications(filteredNotifications)) map.set(g.notification.id, g);
+    return map;
+  }, [filteredNotifications]);
+
+  const dismissGroup = (group: GroupedNotification) =>
+    bulk.startUndoableClear(
+      group.allIds.length > 1 ? `Dismissed ${group.allIds.length} notifications` : "Dismissed 1 notification",
+      group.allIds,
+    );
+
+  const dismissSession = (sessionKey: string) => {
+    const ids: string[] = [];
+    for (const g of groupNotifications(filteredNotifications)) {
+      if ((g.notification.sessionId || "__no_session__") === sessionKey && !g.notification.isPendingDecision) ids.push(...g.allIds);
+    }
+    bulk.startUndoableClear(`Dismissed ${ids.length} informational`, ids);
+  };
 
   const handleNotificationClick = (ids: string | string[], onView?: () => void, sessionId?: string) => {
     markAsRead(ids);
@@ -231,83 +355,174 @@ export function NotificationPanel() {
     }
   };
 
-  const getPriorityColor = (priority?: NotificationData["priority"]) => priorityColor(priority);
-  const getTypeIcon = (type?: NotificationData["notificationType"]) => notificationTypeIcon(type);
-  const getTypeLabel = (type?: NotificationData["notificationType"]) => notificationTypeLabel(type);
-
-  // Build context string for notification (project/directory via app)
-  const getContextString = (notification: NotificationData) => {
-    const projectName = notification.sourceProject;
-    const workingDirName = notification.sourceWorkingDir
-      ? notification.sourceWorkingDir.split('/').pop()
-      : null;
-    const contextName = projectName || workingDirName;
-
-    const parts: string[] = [];
-    if (contextName) {
-      parts.push(contextName);
-    }
-    if (notification.sourceApp) {
-      parts.push(`via ${notification.sourceApp}`);
-    }
-    return parts.join(' ');
+  const openBackgroundRow = (row: BackgroundRow) => {
+    markAsRead(row.recordIds);
+    auditLog.logNotificationSessionViewed(row.primaryRecordId, row.sessionId);
+    closeForNavigation();
   };
 
+  const toggleGroup = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
 
-  return (
-    <>
-      {/* Overlay backdrop */}
-      {isPanelOpen && (
-        <div className={overlay} onClick={togglePanel} aria-hidden="true" />
-      )}
+  const sessionKeys = useMemo(
+    () => flatRows.filter((r) => r.kind === "header" && !r.pinned).map((r) => r.key),
+    [flatRows],
+  );
 
-      {/* Notification Panel */}
-      <div
-        className={`${panel} ${isPanelOpen ? panelOpen : ""}`}
-        role="dialog"
-        aria-label="Notification Panel"
-        aria-modal="true"
-      >
-        {/* Header */}
-        <div className={header}>
-          <h2 className={title}>
-            Notifications
-            {unreadCount > 0 && (
-              <span className={unreadBadge}>{unreadCount}</span>
-            )}
-          </h2>
-          <div className={headerActions}>
-            {notificationHistory.length > 0 && (
-              <>
-                {unreadCount > 0 && (
-                  <button
-                    className={markAllButton}
-                    onClick={markAllAsRead}
-                    aria-label="Mark all as read"
-                  >
-                    Mark all read
-                  </button>
-                )}
-                <button
-                  className={clearButton}
-                  onClick={clearHistory}
-                  aria-label="Clear all notifications"
-                >
-                  Clear all
-                </button>
-              </>
-            )}
-            <button
-              className={closeButton}
-              onClick={togglePanel}
-              aria-label="Close notification panel"
-            >
-              ✕
-            </button>
-          </div>
+  const filtered = !!searchQuery.trim() || typeFilter !== "all";
+  const trayState = selectTrayState({
+    isOffline,
+    loading: historyLoading,
+    hasLoadError: historyError !== null,
+    hasLoadedOnce: historyLastUpdatedAt !== null,
+    rowCount: filteredNotifications.length,
+    filtered,
+    needsAttentionCount: needsAttention,
+    hasMore: historyHasMore,
+  });
+  const banner = selectTrayBanner({ isOffline, hasLoadError: historyError !== null, rowCount: notificationHistory.length });
+  const updatedAt = historyLastUpdatedAt ? new Date(historyLastUpdatedAt).toLocaleTimeString() : null;
+  const offlineReason = isOffline ? OFFLINE_REASON : undefined;
+
+  // The one-time "What changed" card is announced once, politely, with no focus move (TM-13).
+  const announcedWhatChanged = useRef(false);
+  useEffect(() => {
+    if (isPanelOpen && whatChangedOpen && !announcedWhatChanged.current) {
+      announcedWhatChanged.current = true;
+      announce(WHAT_CHANGED_TEXT, "polite", "what-changed");
+    }
+  }, [isPanelOpen, whatChangedOpen, announce]);
+
+  const menuGroups: TrayMenuItem[][] = [
+    [
+      {
+        key: "clear-informational",
+        label: `Clear informational (${bulk.informationalIds.length})`,
+        caption: "Undo available",
+        disabledReason: isOffline ? OFFLINE_REASON : bulk.informationalIds.length === 0 ? "Nothing to clear" : undefined,
+        onSelect: () => bulk.openConfirm("informational"),
+      },
+    ],
+    [
+      {
+        key: "clear-history",
+        label: "Clear history...",
+        icon: <span aria-hidden="true">⚠ </span>,
+        caption: "cannot be undone",
+        disabledReason: isOffline ? OFFLINE_REASON : bulk.readIds.length === 0 ? "Nothing to clear" : undefined,
+        onSelect: () => bulk.openConfirm("history"),
+      },
+    ],
+    [
+      { key: "collapse-all", label: "Collapse all groups", onSelect: () => setCollapsed(new Set(sessionKeys)) },
+      { key: "expand-all", label: "Expand all groups", onSelect: () => setCollapsed(new Set()) },
+    ],
+    [
+      { key: "settings", label: "Tray settings", onSelect: () => setSettingsOpen((v) => !v) },
+      { key: "reset-bell", label: "Reset notification button position", onSelect: () => resetBellPos() },
+      { key: "what-changed", label: "What changed", onSelect: () => setWhatChangedOpen(true) },
+    ],
+  ];
+
+  const emptyStateText = () => {
+    if (trayState.kind === "empty-filtered") return { icon: "🔍", text: "No matching notifications", sub: "Try adjusting your search or filter" };
+    if (trayState.kind === "offline") return { icon: "📡", text: "Offline - showing cached", sub: updatedAt ? `Updated ${updatedAt}` : "Reconnect to load notifications" };
+    if (trayState.kind === "load-error") return { icon: "⚠", text: "Could not load notifications.", sub: "" };
+    return { icon: "🔔", text: "All caught up", sub: "You'll see notifications from your sessions here" };
+  };
+
+  const renderBody = () => {
+    if (trayState.kind === "loading") {
+      return (
+        <div className={empty} aria-busy="true" data-testid="tray-skeleton">
+          <div className={emptyIcon} aria-hidden="true">⏳</div>
+          <p className={emptyText}>Loading notifications...</p>
         </div>
+      );
+    }
+    if (filteredNotifications.length === 0) {
+      const e = emptyStateText();
+      return (
+        <div className={empty} data-testid={`tray-empty-${trayState.kind}`}>
+          <div className={emptyIcon} aria-hidden="true">{e.icon}</div>
+          <p className={emptyText}>{e.text}</p>
+          {e.sub && <p className={emptySubtext}>{e.sub}</p>}
+          {trayState.exit === "retry" && (
+            <button type="button" className={trayButton} onClick={() => refreshHistory()}>
+              Retry
+            </button>
+          )}
+          {trayState.exit === "clear-filters" && (
+            <button
+              type="button"
+              className={trayButton}
+              onClick={() => {
+                setSearchQuery("");
+                setTypeFilter("all");
+              }}
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+      );
+    }
+    return (
+      <>
+        {stable.heldCount > 0 && (
+          <button type="button" className={newPill} data-testid="tray-new-pill" onClick={stable.release}>
+            {stable.heldCount} new
+          </button>
+        )}
+        <TrayList
+          rows={listRows}
+          setSize={setSize}
+          itemProps={{
+            resolvedApprovals,
+            pendingApprovals,
+            blockedApprovals,
+            failedApprovals,
+            resolveApproval,
+            handleNotificationClick,
+            onNavigate: closeForNavigation,
+            lookupHidden: isPanelOpen,
+          }}
+          offlineReason={offlineReason}
+          scrollRef={scrollRef}
+          scrollMargin={headHeight}
+          hasMore={historyHasMore}
+          loading={historyLoading}
+          onLoadMore={loadMoreHistory}
+          onToggleGroup={toggleGroup}
+          onDismissGroup={dismissGroup}
+          onDismissSession={dismissSession}
+          groupForId={(id) => groupsById.get(id)}
+        />
+      </>
+    );
+  };
 
-        {/* Search + Filter Bar */}
+  const cardsBlock = (
+    <>
+{settingsOpen && <TraySettings />}
+{whatChangedOpen && (
+          <WhatChangedCard
+            onDismiss={() => {
+              writeWhatChangedSeen();
+              setWhatChangedOpen(false);
+            }}
+          />
+        )}
+
+    </>
+  );
+  const filterBlock = (
+    <>
         <div className={filterBar}>
           <input
             className={searchInput}
@@ -331,315 +546,291 @@ export function NotificationPanel() {
           </div>
         </div>
 
-        {/* Notification List */}
-        <div className={content}>
-          {historyLoading && notificationHistory.length === 0 ? (
-            <div className={empty}>
-              <div className={emptyIcon}>⏳</div>
-              <p className={emptyText}>Loading notifications...</p>
-            </div>
-          ) : filteredNotifications.length === 0 ? (
-            <div className={empty}>
-              <div className={emptyIcon}>{searchQuery || typeFilter !== "all" ? "🔍" : "🔔"}</div>
-              <p className={emptyText}>
-                {searchQuery || typeFilter !== "all" ? "No matching notifications" : "No notifications yet"}
-              </p>
-              <p className={emptySubtext}>
-                {searchQuery || typeFilter !== "all"
-                  ? "Try adjusting your search or filter"
-                  : "You'll see notifications from your sessions here"}
-              </p>
-            </div>
-          ) : (
-            <div className={list}>
-              {groupNotifications(filteredNotifications).map((group) => {
-                const notification = group.notification;
-                const contextString = getContextString(notification);
-                const hasSourceApp = notification.sourceApp || notification.sourceBundleId;
+    </>
+  );
 
-                // Always show the session name as the primary title so users know
-                // which session generated the notification. If the stored title is a
-                // generic placeholder (e.g. "Claude Notification") or absent, fall
-                // back to the session name; otherwise show the specific title.
-                const GENERIC_TITLES = new Set([
-                  "Claude Notification", "Notification", "Alert", "claude notification"
-                ]);
-                const primaryTitle = notification.sessionName
-                  || (notification.title && !GENERIC_TITLES.has(notification.title) ? notification.title : null)
-                  || notification.sessionId
-                  || "Notification";
-                const subtitleText = notification.title && !GENERIC_TITLES.has(notification.title) && notification.title !== primaryTitle
-                  ? notification.title
-                  : null;
+  const variantClass = {
+    "side-overlay": trayVariant.sideOverlay,
+    "bottom-sheet": trayVariant.bottomSheet,
+    "landscape-panel": trayVariant.landscapePanel,
+  }[variant];
 
-                return (
-                  <div
-                    key={notification.id}
-                    className={`${item} ${notification.isRead ? read : unread}`}
-                    style={
-                      {
-                        "--priority-color": getPriorityColor(notification.priority),
-                      } as React.CSSProperties
-                    }
-                  >
-                    <div className={itemHeader}>
-                      <div className={itemTitle}>
-                        {!notification.isRead && (
-                          <span className={unreadDot} role="img" aria-label="Unread" />
-                        )}
-                        <span className={typeIcon}>{getTypeIcon(notification.notificationType)}</span>
-                        <strong>{primaryTitle}</strong>
-                        <span className={typeLabel} style={{ backgroundColor: getPriorityColor(notification.priority) }}>
-                          {getTypeLabel(notification.notificationType)}
-                        </span>
-                        {group.count > 1 && (
-                          <span className={countBadge} aria-label={`${group.count} occurrences`}>
-                            x{group.count}
-                          </span>
-                        )}
-                      </div>
-                      <button
-                        className={removeButton}
-                        onClick={() => removeFromHistory(notification.id)}
-                        aria-label="Remove notification"
-                      >
-                        ✕
-                      </button>
-                    </div>
+  return (
+    <>
+      {modalSheet && <div className={sheetScrim} data-testid="tray-scrim" onClick={close} aria-hidden="true" />}
+      <TrayHandle />
 
-                    {/* Specific notification title (e.g. "Permission Required: Bash") */}
-                    {subtitleText && (
-                      <div className={itemSubtitle}>{subtitleText}</div>
-                    )}
+      <div
+        ref={trayRef}
+        id={TRAY_ID}
+        className={variantClass}
+        data-testid="notification-tray"
+        data-gesture-ignore
+        data-notification-tray="v2"
+        data-variant={variant}
+        data-state={isPanelOpen ? "open" : "closed"}
+        data-sheet={isBottomSheet ? (expanded ? "expanded" : "peek") : undefined}
+        data-keyboard={isBottomSheet && viewport.isVirtualKeyboardOpen ? "open" : undefined}
+        role={modalSheet ? "dialog" : "complementary"}
+        aria-labelledby={HEADING_ID}
+        aria-modal={modalSheet ? true : undefined}
+        onKeyDown={trapTab}
+      >
+        {isBottomSheet && (
+          <div className={sheetGrabberRow}>
+            <button
+              type="button"
+              className={sheetGrabber}
+              data-testid="tray-grabber"
+              aria-label="Drag to resize notifications sheet"
+              tabIndex={-1}
+              onPointerDown={onGrabberDown}
+              onPointerUp={onGrabberUp}
+              onPointerCancel={() => (dragStartY.current = null)}
+            />
+            <button
+              type="button"
+              className={trayButton}
+              data-testid="tray-expand"
+              aria-pressed={expanded}
+              onClick={() => setExpanded((v) => !v)}
+            >
+              {expanded ? "Collapse" : "Expand"}
+            </button>
+          </div>
+        )}
 
-                    {contextString && (
-                      <div className={itemContext}>
-                        {contextString}
-                      </div>
-                    )}
-
-                    <p className={itemMessage}>{notification.message}</p>
-
-                    {/* Approval metadata: tool name + command/file details */}
-                    {notification.notificationType === "approval_needed" && notification.metadata && (
-                      <div className={approvalDetails}>
-                        {notification.metadata.tool_name && (
-                          <span className={approvalTool}>
-                            🔧 {notification.metadata.tool_name}
-                          </span>
-                        )}
-                        {notification.metadata.tool_input_command && (
-                          <code className={approvalCommand}>
-                            {notification.metadata.tool_input_command}
-                          </code>
-                        )}
-                        {notification.metadata.tool_input_file && !notification.metadata.tool_input_command && (
-                          <code className={approvalCommand}>
-                            {notification.metadata.tool_input_file}
-                          </code>
-                        )}
-                        {notification.metadata.cwd && (
-                          <span className={approvalCwd} title={notification.metadata.cwd}>
-                            📁 {notification.metadata.cwd.split('/').slice(-2).join('/')}
-                          </span>
-                        )}
-                      </div>
-                    )}
-
-                    {notification.sourceWorkingDir && (
-                      <div className={itemWorkingDir} title={notification.sourceWorkingDir}>
-                        📁 {notification.sourceWorkingDir.split('/').slice(-2).join('/')}
-                      </div>
-                    )}
-
-                    <div className={itemFooter}>
-                      <span className={timestamp}>
-                        {formatRelativeTime(notification.timestamp)}
-                      </span>
-                      <div className={itemActions}>
-                        {/* Approve/Deny for approval notifications that have a live approval_id */}
-                        {notification.notificationType === "approval_needed" && notification.metadata?.approval_id && (() => {
-                          const approvalId = notification.metadata!.approval_id;
-                          const resolved = resolvedApprovals[approvalId];
-                          const isPending = !!pendingApprovals[approvalId];
-                          const blockedMessage = blockedApprovals[approvalId];
-
-                          if (resolved === "allow") {
-                            return <span className={resolvedBadge} data-decision="allow">✓ Approved</span>;
-                          }
-                          if (resolved === "deny") {
-                            return <span className={resolvedBadge} data-decision="deny">✗ Denied</span>;
-                          }
-                          if (resolved === "expired") {
-                            return <span className={resolvedBadge} data-decision="expired">Expired</span>;
-                          }
-                          if (blockedMessage) {
-                            // AC5/Story 2.2.4: visible inline explanation (not a silent no-op or
-                            // disabled button) plus an audited "Approve anyway" override.
-                            const { text: blockedText, checksUrl } = splitCIBlockMessage(blockedMessage);
-                            return (
-                              <div className={ciBlockedRow} data-testid="ci-block-message">
-                                <span className={ciBlockedText}>⚠️ {blockedText}</span>
-                                {checksUrl && (
-                                  <a
-                                    href={checksUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className={ciBlockedLink}
-                                    data-testid="ci-block-view-run-link"
-                                  >
-                                    View CI run
-                                  </a>
-                                )}
-                                <div className={itemActions}>
-                                  <button
-                                    className={approveButton}
-                                    onClick={() => resolveApproval(approvalId, "allow", group.allIds, true)}
-                                    disabled={isPending}
-                                    title="Approve despite failing CI"
-                                  >
-                                    {isPending ? "…" : "Approve anyway"}
-                                  </button>
-                                  <button
-                                    className={denyButton}
-                                    onClick={() => resolveApproval(approvalId, "deny", group.allIds)}
-                                    disabled={isPending}
-                                    title="Deny this tool use"
-                                  >
-                                    {isPending ? "…" : "✗ Deny"}
-                                  </button>
-                                </div>
-                              </div>
-                            );
-                          }
-                          return (
-                            <>
-                              <button
-                                className={approveButton}
-                                onClick={() => resolveApproval(approvalId, "allow", group.allIds)}
-                                disabled={isPending}
-                                title="Approve this tool use"
-                              >
-                                {isPending ? "…" : "✓ Approve"}
-                              </button>
-                              <button
-                                className={denyButton}
-                                onClick={() => resolveApproval(approvalId, "deny", group.allIds)}
-                                disabled={isPending}
-                                title="Deny this tool use"
-                              >
-                                {isPending ? "…" : "✗ Deny"}
-                              </button>
-                            </>
-                          );
-                        })()}
-                        {hasSourceApp && notification.onFocusWindow && (
-                          <button
-                            className={focusButton}
-                            onClick={notification.onFocusWindow}
-                            title="Focus the source application window"
-                          >
-                            🔗 Focus
-                          </button>
-                        )}
-                        {notification.metadata?.["item_id"] && (
-                          <Link
-                            href={`/backlog?item=${encodeURIComponent(notification.metadata["item_id"])}`}
-                            className={viewButton}
-                            onClick={() => {
-                              handleNotificationClick(group.allIds, undefined, notification.sessionId);
-                              togglePanel();
-                            }}
-                            data-testid="notification-view-backlog"
-                          >
-                            View in Backlog
-                          </Link>
-                        )}
-                        {!notification.metadata?.["item_id"] && notification.sessionId && (
-                          <Link
-                            href={`/?session=${encodeURIComponent(notification.sessionId)}`}
-                            className={viewButton}
-                            onClick={() => {
-                              handleNotificationClick(
-                                group.allIds,
-                                notification.onView,
-                                notification.sessionId
-                              );
-                              togglePanel(); // Close panel after clicking
-                            }}
-                          >
-                            View Session
-                          </Link>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {/* Load more button */}
-              {historyHasMore && (
-                <div className={loadMore}>
-                  <button
-                    className={loadMoreButton}
-                    onClick={loadMoreHistory}
-                    disabled={historyLoading}
-                  >
-                    {historyLoading ? "Loading..." : "Load more"}
-                  </button>
-                </div>
+        {/* Header */}
+        <div className={header}>
+          <h2 id={HEADING_ID} ref={headingRef} tabIndex={-1} className={title}>
+            Notifications
+          </h2>
+          {(needsAttention > 0 || earlierUnread > 0) && (
+            <span className={trayCounts}>
+              {needsAttention > 0 && (
+                <span className={trayAttention} data-testid="tray-needs-attention">
+                  {needsAttention} need you
+                </span>
               )}
-            </div>
+              {needsAttention > 0 && earlierUnread > 0 && " \u00b7 "}
+              {earlierUnread > 0 && (
+                <span data-testid="tray-earlier-count">
+                  {earlierUnread} {needsAttention > 0 ? "earlier" : "unread"}
+                </span>
+              )}
+            </span>
+          )}
+          <div className={headerActions}>
+            {notificationHistory.length > 0 && (
+              <>
+                {scopedMarkReadIds.length > 0 && (
+                  <button
+                    className={trayButton}
+                    onClick={isOffline ? undefined : bulk.markActivityRead}
+                    aria-label="Mark activity read"
+                    aria-disabled={isOffline ? true : undefined}
+                    title={isOffline ? OFFLINE_REASON : undefined}
+                  >
+                    Mark activity read
+                  </button>
+                )}
+              </>
+            )}
+            {isSideOverlay && (
+              <button
+                type="button"
+                className={trayButton}
+                aria-pressed={pinned}
+                aria-label={pinned ? "Unpin notifications tray" : "Pin notifications tray"}
+                data-testid="tray-pin"
+                onClick={() => {
+                  writeTrayPinned(!pinned);
+                  setPinned(!pinned);
+                }}
+              >
+                Pin
+              </button>
+            )}
+            <button
+              type="button"
+              className={trayButton}
+              aria-pressed={quietMode}
+              data-testid="tray-quiet"
+              title="Quiet mode: send every non-urgent toast straight to the tray on this device. Push notifications are unchanged."
+              onClick={() => {
+                const next = !quietMode;
+                setQuietMode(next);
+                setQuietUnsaved(next && !readQuietMode());
+              }}
+            >
+              Quiet mode{quietMode ? " on" : ""}
+            </button>
+            <TrayOverflowMenu groups={menuGroups} />
+            <button
+              className={closeButton}
+              onClick={togglePanel}
+              aria-label="Close notification panel"
+              style={{ minWidth: 44, minHeight: 44 }}
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+
+        {(quietMode || quietUnsaved) && (
+          <div className={trayBanner} data-testid="tray-quiet-banner">
+            <span>
+              <strong data-testid="tray-quiet-state">Quiet mode on</strong>
+              <span data-testid="tray-quiet-hint">
+                {" "}
+                - hides toasts on this device. Push notifications are unchanged.
+              </span>
+            </span>
+            {quietUnsaved && <span data-testid="tray-quiet-unsaved">Preference could not be saved</span>}
+          </div>
+        )}
+        {isOffline && (
+          <div className={trayBanner} data-testid="tray-banner-offline">
+            <span>Offline - showing cached{updatedAt ? `, updated ${updatedAt}` : ""}</span>
+          </div>
+        )}
+        {banner === "load-error" && (
+          <div className={trayBanner} data-testid="tray-banner-load-error">
+            <span>Could not load notifications.{updatedAt ? ` Showing cached - updated ${updatedAt}` : ""}</span>
+            <button type="button" className={trayButton} onClick={() => refreshHistory()}>
+              Retry
+            </button>
+          </div>
+        )}
+        {undoWindow.pending && (
+          <div
+            key={undoWindow.pending.id}
+            className={trayUndoBar}
+            data-testid="tray-undo-bar"
+            onPointerEnter={() => undoWindow.pause("hover")}
+            onPointerLeave={() => undoWindow.resume("hover")}
+            onFocus={() => undoWindow.pause("focus")}
+            onBlur={() => undoWindow.resume("focus")}
+          >
+            <span>{undoWindow.pending.label}</span>
+            <button type="button" className={trayButton} data-testid="tray-undo" onClick={bulk.undo}>
+              Undo
+            </button>
+          </div>
+        )}
+        {bulk.keptLine && (
+          <div className={trayBanner} data-testid="tray-kept-line">
+            <span>{bulk.keptLine}</span>
+          </div>
+        )}
+        {clearError && (
+          <div className={trayBanner} data-testid="tray-clear-error">
+            <span>Could not clear notifications</span>
+            <button type="button" className={trayButton} onClick={() => bulk.startUndoableClear(clearError.label, clearError.ids)}>
+              Retry
+            </button>
+          </div>
+        )}
+        {bulk.markReadError && (
+          <div className={trayBanner} data-testid="tray-mark-read-error">
+            <span>Could not mark read</span>
+            <button type="button" className={trayButton} onClick={bulk.markActivityRead}>
+              Retry
+            </button>
+          </div>
+        )}
+        {bulk.confirm === "informational" && (
+          <TrayConfirm
+            text={`Clear ${bulk.informationalIds.length} informational notifications? ${bulk.decisionCount} awaiting decision kept.`}
+            confirmLabel={`Clear ${bulk.informationalIds.length}`}
+            onConfirm={bulk.confirmClearInformational}
+            onCancel={bulk.cancelConfirm}
+          />
+        )}
+        {bulk.confirm === "history" && (
+          <TrayConfirm
+            text={`Clear ${bulk.readIds.length} read notifications? This can't be undone. ${bulk.decisionCount} awaiting decision kept.`}
+            confirmLabel={`Clear ${bulk.readIds.length}`}
+            error={bulk.confirmError}
+            onConfirm={bulk.confirmClearHistory}
+            onCancel={bulk.cancelConfirm}
+          />
+        )}
+        <div className={segments} role="tablist" aria-label="Tray sections" data-testid="tray-segments">
+          {(["notifications", "background"] as const).map((id) => {
+            const selected = traySegment === id;
+            const count = id === "background" ? backgroundView.rows.length : 0;
+            return (
+              // analytics-exempt
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                id={`tray-tab-${id}`}
+                aria-selected={selected}
+                aria-controls="tray-segment-panel"
+                tabIndex={selected ? 0 : -1}
+                className={segment}
+                data-testid={`tray-tab-${id}`}
+                onClick={() => setTraySegment(id)}
+                onKeyDown={(e) => {
+                  if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+                    e.preventDefault();
+                    const next = id === "notifications" ? "background" : "notifications";
+                    setTraySegment(next);
+                    document.getElementById(`tray-tab-${next}`)?.focus();
+                  }
+                }}
+              >
+                {id === "notifications" ? "Notifications" : count > 0 ? `Background (${count})` : "Background"}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Notification List */}
+        <div
+          ref={scrollRef}
+          className={content}
+          data-testid="tray-scroll"
+          id="tray-segment-panel"
+          role="tabpanel"
+          aria-labelledby={`tray-tab-${traySegment}`}
+          onScroll={(e) => setScrolled((e.currentTarget as HTMLDivElement).scrollTop > 0)}
+        >
+          <div ref={headRef} data-testid="tray-scroll-head" hidden={traySegment === "background"}>
+            {cardsBlock}
+            {filterBlock}
+          </div>
+          {traySegment === "background" ? (
+            <BackgroundActivity
+              view={backgroundView}
+              hasHiddenSessions={background.sessions.length > 0 || background.departed.length > 0}
+              loading={background.loading}
+              failed={background.failed}
+              offline={isOffline}
+              lastUpdatedAt={background.lastUpdatedAt}
+              onRefresh={background.refresh}
+              onOpenRow={openBackgroundRow}
+              replyEnabled={replyEnabled}
+            />
+          ) : (
+            renderBody()
           )}
         </div>
 
         {/* Auto-handled section — collapsible, always below main list */}
-        {autoHandledNotifications.length > 0 && (
-          <div className={autoHandledSection}>
-            <button
-              className={autoHandledHeader}
-              onClick={() => setAutoHandledOpen((v) => !v)}
-              aria-expanded={autoHandledOpen}
-              aria-controls="auto-handled-list"
-            >
-              <span className={autoHandledHeaderLeft}>
-                Auto-handled
-                <span className={autoHandledBadge}>{autoHandledNotifications.length}</span>
-              </span>
-              <span className={`${autoHandledChevron} ${autoHandledOpen ? autoHandledChevronOpen : ""}`}>
-                ▼
-              </span>
-            </button>
-            {autoHandledOpen && (
-              <div id="auto-handled-list" className={autoHandledList}>
-                {autoHandledNotifications.map((n) => {
-                  const decision = n.metadata?.["approval_decision"] ?? "allow";
-                  const ruleName = n.metadata?.["classifier_rule_name"];
-                  const toolName = n.metadata?.["tool_name"] ?? n.title;
-                  return (
-                    <div key={n.id} className={autoHandledItem}>
-                      <span className={autoHandledDecision}>
-                        {decision === "deny" ? "✗" : "✓"}
-                      </span>
-                      <div className={autoHandledContent}>
-                        <div className={autoHandledTitle}>{toolName}</div>
-                        {(n.message || ruleName) && (
-                          <div className={autoHandledMeta}>
-                            {n.message && <span>{n.message}</span>}
-                            {ruleName && <span>· {ruleName}</span>}
-                          </div>
-                        )}
-                      </div>
-                      <span className={autoHandledTimestamp}>
-                        {formatRelativeTime(n.timestamp)}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
+        <AutoHandledSection
+          notifications={autoHandledNotifications}
+          isOpen={autoHandledOpen}
+          onToggle={() => setAutoHandledOpen((v) => !v)}
+        />
+
+        <div className={trayFooter}>
+          <Link href={routes.notifications} onClick={close}>
+            Review all notifications
+          </Link>
+        </div>
       </div>
     </>
   );

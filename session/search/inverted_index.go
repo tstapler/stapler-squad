@@ -97,12 +97,14 @@ func (idx *InvertedIndex) AddDocument(docID int32, tokens []string, positions ma
 
 		// Add this document to the posting list
 		postingList.DocIDs = append(postingList.DocIDs, docID)
+		// #nosec G115 -- freq is a per-term occurrence count within a single document (tokens); no realistic document has anywhere near 2^31 tokens
 		postingList.Frequency = append(postingList.Frequency, int32(freq))
 
 		// Append positions (if any) to the flat slice and record the new offset
 		if pos, ok := positions[term]; ok {
 			postingList.Positions = append(postingList.Positions, pos...)
 		}
+		// #nosec G115 -- Positions is an in-memory, per-process search index over local session/scrollback content; reaching 2^31 accumulated positions for one term would require terabytes of indexed text, far beyond this process's practical memory footprint
 		postingList.PosOffsets = append(postingList.PosOffsets, int32(len(postingList.Positions)))
 	}
 }

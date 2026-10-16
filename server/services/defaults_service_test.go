@@ -22,7 +22,7 @@ import (
 // directory, preventing config state from leaking between tests.
 func newIsolatedDefaultsService(t *testing.T) *DefaultsService {
 	t.Helper()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	return NewDefaultsService()
 }
 
@@ -206,6 +206,56 @@ func TestGetSessionDefaults_ResolvesStaleSessionDefaults(t *testing.T) {
 	assert.True(t, resp.Msg.Defaults.StaleSessionNotifyEnabled)
 }
 
+// TestGetSessionDefaults_ServesRuntimeReworkCapDefault pins the settings form's
+// value to the cap the server enforces (single source of truth).
+func TestGetSessionDefaults_ServesRuntimeReworkCapDefault(t *testing.T) {
+	svc := newIsolatedDefaultsService(t)
+
+	resp, err := svc.GetSessionDefaults(context.Background(), connect.NewRequest(&sessionv1.GetSessionDefaultsRequest{}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Defaults)
+	assert.Equal(t, int32(config.DefaultMaxAutoReworkIterations), resp.Msg.Defaults.MaxAutoReworkIterations)
+	assert.Equal(t, config.DefaultMaxAutoReworkIterations, (*config.Config)(nil).MaxAutoReworkIterationsOrDefault())
+}
+
+// TestGetSessionDefaults_ServesRuntimeAutonomousMaxTurnsDefault pins the settings
+// form's turn-cap value to the cap the server enforces.
+func TestGetSessionDefaults_ServesRuntimeAutonomousMaxTurnsDefault(t *testing.T) {
+	svc := newIsolatedDefaultsService(t)
+
+	resp, err := svc.GetSessionDefaults(context.Background(), connect.NewRequest(&sessionv1.GetSessionDefaultsRequest{}))
+	require.NoError(t, err)
+	assert.Equal(t, int32((*config.Config)(nil).AutonomousMaxTurnsOrDefault()), resp.Msg.Defaults.AutonomousMaxTurns)
+}
+
+func TestUpdateGlobalDefaults_AutonomousMaxTurns(t *testing.T) {
+	update := func(t *testing.T, svc *DefaultsService, turns int32) int32 {
+		t.Helper()
+		_, err := svc.UpdateGlobalDefaults(context.Background(), connect.NewRequest(&sessionv1.UpdateGlobalDefaultsRequest{AutonomousMaxTurns: turns}))
+		require.NoError(t, err)
+		// Re-read via the getter so persistence, not just the response echo, is asserted.
+		got, err := svc.GetSessionDefaults(context.Background(), connect.NewRequest(&sessionv1.GetSessionDefaultsRequest{}))
+		require.NoError(t, err)
+		return got.Msg.Defaults.AutonomousMaxTurns
+	}
+	def := int32((*config.Config)(nil).AutonomousMaxTurnsOrDefault())
+
+	t.Run("ExplicitValuePersists", func(t *testing.T) {
+		assert.Equal(t, int32(50), update(t, newIsolatedDefaultsService(t), 50))
+	})
+	t.Run("ZeroResetsPreviouslySetValue", func(t *testing.T) {
+		svc := newIsolatedDefaultsService(t)
+		require.Equal(t, int32(50), update(t, svc, 50))
+		assert.Equal(t, def, update(t, svc, 0))
+	})
+	t.Run("AboveCeilingClampsTo200", func(t *testing.T) {
+		assert.Equal(t, int32(200), update(t, newIsolatedDefaultsService(t), 500))
+	})
+	t.Run("NegativeFallsBackToDefault", func(t *testing.T) {
+		assert.Equal(t, def, update(t, newIsolatedDefaultsService(t), -5))
+	})
+}
+
 // TestUpdateGlobalDefaults_ZeroStaleSessionThreshold_UsesServerDefault verifies the
 // "0 means use the server default" convention (matching max_auto_rework_iterations
 // and max_concurrent_backlog_work_items): sending 0 leaves the persisted config.json
@@ -312,6 +362,35 @@ func TestUpdateGlobalDefaults_PersistsExplicitStaleSessionOverride(t *testing.T)
 	assert.Equal(t, 45, persisted.StaleSession.ThresholdMinutes)
 	require.NotNil(t, persisted.StaleSession.NotifyEnabled)
 	assert.False(t, *persisted.StaleSession.NotifyEnabled)
+}
+
+// TestUpdateGlobalDefaults_NormalizesInvalidRetryBackoffBeforePersisting pins the
+// fix for an invalid RetryPolicy.Backoff value (e.g. a typo) persisting
+// un-normalized in config.json: LoadConfigFromPath normalizes via
+// BackoffOrWarn() at boot, but UpdateGlobalDefaults stored rp.Backoff
+// verbatim, so an invalid value would sit un-normalized until the next
+// restart. It must be normalized to "exponential" immediately, matching
+// boot-time behavior.
+func TestUpdateGlobalDefaults_NormalizesInvalidRetryBackoffBeforePersisting(t *testing.T) {
+	svc := newIsolatedDefaultsService(t)
+
+	resp, err := svc.UpdateGlobalDefaults(context.Background(), connect.NewRequest(&sessionv1.UpdateGlobalDefaultsRequest{
+		RetryPolicy: &sessionv1.RetryPolicyConfig{
+			Backoff: "not-a-real-strategy",
+		},
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Defaults)
+	assert.Equal(t, "exponential", resp.Msg.Defaults.RetryPolicy.Backoff)
+
+	configDir, err := config.GetConfigDir()
+	require.NoError(t, err)
+	data, err := os.ReadFile(filepath.Join(configDir, config.ConfigFileName))
+	require.NoError(t, err)
+
+	var persisted config.Config
+	require.NoError(t, json.Unmarshal(data, &persisted))
+	assert.Equal(t, "exponential", persisted.RetryPolicy.Backoff)
 }
 
 // TestUpsertProfile_EmptyName verifies that UpsertProfile with an empty profile name
@@ -856,4 +935,127 @@ func TestDeleteAlias_CaseInsensitive(t *testing.T) {
 
 	cfg := config.LoadConfig()
 	assert.Empty(t, cfg.SessionDefaults.Aliases)
+}
+
+func TestListProgramsConfig_ReturnsBuiltInsAndCustomPrograms(t *testing.T) {
+	svc := newIsolatedDefaultsService(t)
+	ctx := context.Background()
+
+	resp, err := svc.ListProgramsConfig(ctx, connect.NewRequest(&sessionv1.ListProgramsConfigRequest{}))
+	require.NoError(t, err)
+	require.NotEmpty(t, resp.Msg.Programs)
+
+	// Built-in programs present
+	var builtInIDs []string
+	for _, p := range resp.Msg.Programs {
+		if p.IsBuiltin {
+			builtInIDs = append(builtInIDs, p.Id)
+		}
+	}
+	assert.Contains(t, builtInIDs, "claude")
+	assert.Contains(t, builtInIDs, "pi")
+	assert.Contains(t, builtInIDs, "aider")
+
+	// Upsert custom program
+	_, err = svc.UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
+		Program: &sessionv1.ProgramConfigProto{
+			Id:          "my-agent",
+			Label:       "My Agent",
+			Command:     "custom-agent-bin",
+			CliFlags:    "--verbose",
+			Description: "Custom CLI agent",
+			Env:         map[string]string{"FOO": "BAR"},
+		},
+	}))
+	require.NoError(t, err)
+
+	resp, err = svc.ListProgramsConfig(ctx, connect.NewRequest(&sessionv1.ListProgramsConfigRequest{}))
+	require.NoError(t, err)
+
+	var custom *sessionv1.ProgramConfigProto
+	for _, p := range resp.Msg.Programs {
+		if p.Id == "my-agent" {
+			custom = p
+			break
+		}
+	}
+	require.NotNil(t, custom)
+	assert.False(t, custom.IsBuiltin)
+	assert.Equal(t, "My Agent", custom.Label)
+	assert.Equal(t, "custom-agent-bin", custom.Command)
+	assert.Equal(t, "--verbose", custom.CliFlags)
+	assert.Equal(t, "Custom CLI agent", custom.Description)
+	assert.Equal(t, "BAR", custom.Env["FOO"])
+}
+
+func TestUpsertProgramConfig_ValidationErrors(t *testing.T) {
+	svc := newIsolatedDefaultsService(t)
+	ctx := context.Background()
+
+	// Nil program
+	_, err := svc.UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{Program: nil}))
+	require.Error(t, err)
+
+	// Empty ID
+	_, err = svc.UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
+		Program: &sessionv1.ProgramConfigProto{Id: "", Label: "Label", Command: "cmd"},
+	}))
+	require.Error(t, err)
+
+	// Invalid ID characters
+	_, err = svc.UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
+		Program: &sessionv1.ProgramConfigProto{Id: "invalid ID!", Label: "Label", Command: "cmd"},
+	}))
+	require.Error(t, err)
+
+	// Empty Label
+	_, err = svc.UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
+		Program: &sessionv1.ProgramConfigProto{Id: "valid-id", Label: "", Command: "cmd"},
+	}))
+	require.Error(t, err)
+
+	// Empty Command
+	_, err = svc.UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
+		Program: &sessionv1.ProgramConfigProto{Id: "valid-id", Label: "Label", Command: ""},
+	}))
+	require.Error(t, err)
+
+	// Override built-in program
+	_, err = svc.UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
+		Program: &sessionv1.ProgramConfigProto{Id: "claude", Label: "Label", Command: "cmd"},
+	}))
+	require.Error(t, err)
+}
+
+func TestDeleteProgramConfig_SuccessAndErrors(t *testing.T) {
+	svc := newIsolatedDefaultsService(t)
+	ctx := context.Background()
+
+	// Upsert a custom program first
+	_, err := svc.UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
+		Program: &sessionv1.ProgramConfigProto{
+			Id:      "temp-agent",
+			Label:   "Temp Agent",
+			Command: "temp-bin",
+		},
+	}))
+	require.NoError(t, err)
+
+	// Delete built-in fails
+	_, err = svc.DeleteProgramConfig(ctx, connect.NewRequest(&sessionv1.DeleteProgramConfigRequest{Id: "claude"}))
+	require.Error(t, err)
+
+	// Delete non-existent fails
+	_, err = svc.DeleteProgramConfig(ctx, connect.NewRequest(&sessionv1.DeleteProgramConfigRequest{Id: "non-existent"}))
+	require.Error(t, err)
+
+	// Delete custom program succeeds
+	_, err = svc.DeleteProgramConfig(ctx, connect.NewRequest(&sessionv1.DeleteProgramConfigRequest{Id: "temp-agent"}))
+	require.NoError(t, err)
+
+	// Verify deleted
+	cfg := config.LoadConfig()
+	for _, p := range cfg.SessionDefaults.Programs {
+		assert.NotEqual(t, "temp-agent", p.ID)
+	}
 }

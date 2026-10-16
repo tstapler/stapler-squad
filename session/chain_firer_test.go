@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // blockingTriggerFirer is a TriggerFirer whose FireTriggerChained call signals
@@ -116,6 +117,9 @@ func TestTransitionBacklogItemStatus_should_returnBeforeChainFireCreateSessionBe
 
 	started := make(chan struct{})
 	unblock := make(chan struct{})
+	var unblockOnce sync.Once
+	releaseFirer := func() { unblockOnce.Do(func() { close(unblock) }) }
+	t.Cleanup(releaseFirer) // frees the blocked firer goroutine if an assertion fails first
 	firer := &blockingTriggerFirer{started: started, unblock: unblock}
 
 	cf := NewChainFirer(fx.repo, fx.workflows, fx.fireEvents, firer, enabledCfg())
@@ -131,34 +135,36 @@ func TestTransitionBacklogItemStatus_should_returnBeforeChainFireCreateSessionBe
 	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{NextWorkflowID: &wfID}, nil)
 	require.NoError(t, err)
 
-	transitionStart := time.Now()
-	_, err = fx.repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone,
-		&BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusReview)}, TriggeredBySystem)
-	transitionElapsed := time.Since(transitionStart)
-	require.NoError(t, err)
-
-	// The transition must return quickly — well under the time the blocking
-	// FireTriggerChained call would take (it cannot return until `unblock` is
-	// closed, which has NOT happened yet at this point in the test). A
-	// synchronous, buggy implementation would make this assertion fail by
-	// taking however long the test's own timeout below allows.
-	assert.Less(t, transitionElapsed, 500*time.Millisecond,
-		"TransitionBacklogItemStatus must not block on the chain-fire's CreateSession-equivalent call (AC9)")
+	// The firer is still blocked on `unblock` here, so the transition can only
+	// return if it does not await the chain-fire. Completion is the proof; a
+	// wall-clock latency bound flaked under load, so only hang-detect.
+	transitionDone := make(chan error, 1)
+	go func() {
+		_, transitionErr := fx.repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone,
+			&BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusReview)}, TriggeredBySystem)
+		transitionDone <- transitionErr
+	}()
+	select {
+	case transitionErr := <-transitionDone:
+		require.NoError(t, transitionErr)
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
+		t.Fatal("TransitionBacklogItemStatus blocked on the chain-fire's CreateSession-equivalent call (AC9)")
+	}
 
 	// Confirm the chain-fire really was dispatched (not silently dropped) —
 	// it should be in-flight right now, blocked on `unblock`.
 	select {
 	case <-started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("chain-fire was never dispatched from TransitionBacklogItemStatus")
 	}
 
-	close(unblock)
+	releaseFirer()
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		latest, getErr := fx.repo.GetBacklogItem(ctx, item.ID)
 		return getErr == nil && latest.ChainFired
-	}, 2*time.Second, 20*time.Millisecond, "ChainFired must eventually be persisted once the async fire completes")
+	}, 10*time.Second, 20*time.Millisecond, "ChainFired must eventually be persisted once the async fire completes")
 }
 
 // TestChainFirer_Fire_should_rejectAndMarkChainFired_When_DepthAtOrAboveMax
@@ -299,6 +305,15 @@ func TestChainFirer_Fire_should_createSessionAndMarkChainFired_When_ValidChainCo
 	assert.True(t, final.ChainFired)
 }
 
+// waitChainFirerIdle blocks until every goroutine spawned by Dispatch has
+// finished: Dispatch reserves its inFlight slot synchronously and releases it
+// only when the fire goroutine exits, so an empty semaphore means quiescence.
+func waitChainFirerIdle(t *testing.T, cf *ChainFirer) {
+	t.Helper()
+	wait.RequireEventually(t, func() bool { return len(cf.inFlight) == 0 }, 5*time.Second, 5*time.Millisecond,
+		"ChainFirer dispatch goroutines never drained")
+}
+
 // TestTriggerChainReconciler_should_completeInterruptedChain_When_DoneItemHasUnfiredChain
 // simulates the AC5 restart-recovery scenario: a done item with
 // NextWorkflowID set and ChainFired still false (as if the process crashed
@@ -331,18 +346,18 @@ func TestTriggerChainReconciler_should_completeInterruptedChain_When_DoneItemHas
 	// happy path.
 	reconciler.ReconcileChains(ctx, fx.repo)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return firer.callCount() == 1
 	}, 2*time.Second, 20*time.Millisecond, "TriggerChainReconciler must fire the interrupted chain")
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		latest, getErr := fx.repo.GetBacklogItem(ctx, item.ID)
 		return getErr == nil && latest.ChainFired
 	}, 2*time.Second, 20*time.Millisecond)
 
 	// A second reconcile tick must be a no-op — the chain already fired.
 	reconciler.ReconcileChains(ctx, fx.repo)
-	time.Sleep(100 * time.Millisecond)
+	waitChainFirerIdle(t, cf)
 	assert.Equal(t, 1, firer.callCount(), "an already-fired chain must never be re-fired by a later reconcile tick")
 }
 
@@ -400,7 +415,7 @@ func TestTriggerChainReconciler_should_findPendingChain_When_MoreThan1000DoneIte
 
 	reconciler.ReconcileChains(ctx, fx.repo)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return firer.callCount() == 1
 	}, 5*time.Second, 20*time.Millisecond, "the pending chain item must still be found and fired despite 1000 more-recently-updated done items ranking ahead of it")
 
@@ -456,13 +471,14 @@ func TestChainFirer_should_fireExactlyOnce_When_DispatchAndReconcilerRaceOnSameI
 	}
 	wg.Wait()
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return firer.callCount() >= 1
 	}, 2*time.Second, 10*time.Millisecond)
 
-	// Give any losing goroutine a chance to (incorrectly) also fire, if the
-	// claim-before-fire CAS weren't actually closing the race.
-	time.Sleep(300 * time.Millisecond)
+	// Wait for every goroutine (including would-be losers that would
+	// incorrectly also fire if the claim-before-fire CAS weren't closing the
+	// race) to finish.
+	waitChainFirerIdle(t, cf)
 
 	assert.Equal(t, 1, firer.callCount(), "exactly one concurrent Dispatch may ever reach FireTriggerChained for a given item")
 
@@ -497,7 +513,7 @@ func TestChainFirer_Dispatch_should_noOp_When_FeatureFlagDisabled(t *testing.T) 
 	require.NoError(t, err)
 
 	cf.Dispatch(latest)
-	time.Sleep(200 * time.Millisecond)
+	waitChainFirerIdle(t, cf)
 	assert.Equal(t, 0, firer.callCount())
 
 	final, err := fx.repo.GetBacklogItem(ctx, item.ID)

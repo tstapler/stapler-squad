@@ -9,6 +9,11 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 )
 
+// maxHostAdvertisementBody caps an advertisement POST body. The endpoint is
+// exempt from the passkey wall (see middleware.exemptPeerPaths), so it must not
+// read unbounded input.
+const maxHostAdvertisementBody = 64 << 10
+
 // RegisterHostAdvertisementRoute registers the gossip-style host
 // advertisement endpoint (ADR-002, plan.md Story 3.2) on mux.
 //
@@ -19,7 +24,7 @@ import (
 // (DB + `tmux list-sessions`, no network transport). So the advertisement
 // endpoint is served here, as a sibling registration alongside RegisterRoutes
 // (not folded into it, to avoid growing that function's already-long
-// parameter list -- see .claude/rules/primitive-obsession-checklist.md),
+// parameter list -- see the `primitive-obsession-checklist` skill),
 // rather than a new listener or a piggyback on WorkspacePeer.
 //
 // advertiser may be nil (e.g. in tests exercising only accept/reject
@@ -29,6 +34,7 @@ import (
 func RegisterHostAdvertisementRoute(mux *http.ServeMux, identity session.HostIdentity, registry *session.HostRegistry, advertiser *session.HostAdvertiser, addresses []string) {
 	mux.HandleFunc("POST "+session.AdvertisementEndpointPath, func(w http.ResponseWriter, r *http.Request) {
 		var record session.AdvertisementRecord
+		r.Body = http.MaxBytesReader(w, r.Body, maxHostAdvertisementBody)
 		if err := json.NewDecoder(r.Body).Decode(&record); err != nil {
 			log.Debug("host_advertisement.received", "err", err)
 			http.Error(w, "malformed advertisement payload", http.StatusBadRequest)

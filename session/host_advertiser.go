@@ -15,7 +15,7 @@ import (
 // server-side handler (server/auth/host_advertisement.go) so the two can't
 // drift out of sync.
 //
-// Per ADR-002 and plan.md Story 3.2 Task 1: this is served on the existing
+// Per docs/adr/ADR-002-workspace-host-registry-gossip.md and plan.md Story 3.2 Task 1: this is served on the existing
 // --remote-port HTTPS server (main.go's startRemoteAccess, registered via
 // server/auth.RegisterRoutes's shared mux) -- confirmed as the only
 // cross-host-reachable HTTP surface in this codebase. It is deliberately
@@ -24,7 +24,7 @@ import (
 const AdvertisementEndpointPath = "/internal/host-advertisement"
 
 // HostAdvertiser is the client side of the gossip-style advertisement
-// exchange described in ADR-002: it periodically POSTs this instance's own
+// exchange described in docs/adr/ADR-002-workspace-host-registry-gossip.md: it periodically POSTs this instance's own
 // signed AdvertisementRecord to every peer currently known to HostRegistry,
 // and performs the bounded one-hop re-gossip of records it learns about for
 // the first time.
@@ -55,13 +55,13 @@ func NewHostAdvertiser(identity HostIdentity, registry *HostRegistry, addresses 
 		// locally-minted self-signed CA (server/tls.go) -- there is no
 		// shared CA between independently-provisioned hosts for per-
 		// connection certificate verification to succeed against. Per
-		// ADR-002, peer identity is instead authenticated at the
+		// docs/adr/ADR-002-workspace-host-registry-gossip.md, peer identity is instead authenticated at the
 		// application layer: HostRegistry.Advertise only accepts a record
 		// whose Ed25519 signature verifies against a TOFU-pinned public
 		// key. TLS here provides transport encryption only.
 		client: &http.Client{
 			Timeout:   5 * time.Second,
-			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, //nolint:gosec // see comment above
+			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, // #nosec G402 -- see comment above: TLS is transport-only, identity is Ed25519/TOFU-verified at the application layer
 		},
 		interval: interval,
 	}
@@ -105,7 +105,7 @@ func (a *HostAdvertiser) SendAdvertisement(ctx context.Context, addr string, rec
 	if err != nil {
 		return fmt.Errorf("failed to marshal advertisement: %w", err)
 	}
-	// addr is a bare "host:port" (see main.go's selfAddresses, per ADR-002's
+	// addr is a bare "host:port" (see main.go's selfAddresses, per docs/adr/ADR-002-workspace-host-registry-gossip.md's
 	// AdvertisedAddress format) -- it needs an explicit scheme before it's a
 	// valid absolute URL; without one, http.NewRequestWithContext fails to
 	// parse it ("first path segment in URL cannot contain colon").

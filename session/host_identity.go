@@ -190,7 +190,7 @@ func LoadOrCreateHostIdentity(stateDir string) (HostIdentity, error) {
 	defer func() { _ = lockFile.Unlock() }()
 
 	path := filepath.Join(stateDir, hostIdentityFileName)
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- stateDir is the server's own config.GetConfigDir() resolved at startup, hostIdentityFileName is a package constant; neither is externally supplied per-request
 	if err == nil {
 		var identity HostIdentity
 		if unmarshalErr := json.Unmarshal(data, &identity); unmarshalErr != nil {
@@ -215,7 +215,7 @@ func LoadOrCreateHostIdentity(stateDir string) (HostIdentity, error) {
 	}
 	identity := HostIdentity{ID: id, PublicKey: pub, PrivateKey: priv}
 
-	if err := os.MkdirAll(stateDir, 0755); err != nil {
+	if err := os.MkdirAll(stateDir, 0750); err != nil {
 		return HostIdentity{}, fmt.Errorf("failed to create state directory: %w", err)
 	}
 	out, err := json.MarshalIndent(identity, "", "  ")
@@ -228,7 +228,7 @@ func LoadOrCreateHostIdentity(stateDir string) (HostIdentity, error) {
 		return HostIdentity{}, fmt.Errorf("failed to write temporary host identity file: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return HostIdentity{}, fmt.Errorf("failed to atomically write host identity file: %w", err)
 	}
 	log.Info("host_identity.generated", "host_id", identity.ID.String(), "state_dir", stateDir)

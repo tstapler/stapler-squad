@@ -29,8 +29,8 @@ done
 
 # Auto-detect the canonical remote if not given explicitly. Remote naming has
 # drifted across machines for this repo (some call the fork "origin" and the
-# work repo "upstream-fanatics", others use "personal" -- see
-# .claude/rules/... or ask if unsure which one this machine treats as
+# work repo "upstream-fanatics", others use "personal" -- see CLAUDE.md's Git
+# Remotes section, or ask if unsure which one this machine treats as
 # canonical). Prefer origin, then the two names this project's other tooling
 # already knows about.
 if [ -z "$REMOTE" ]; then

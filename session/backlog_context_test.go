@@ -32,6 +32,37 @@ func makeEndedItemSession(role string, commitCount int, lastMsg string) ItemSess
 	}
 }
 
+// TestBuildSessionInitialPrompt_should_IncludeItemID_When_Called verifies the normal
+// (non-triage) initial prompt embeds the item's own id, matching the triage-mode prompt
+// builder's existing behavior — so a session whose item_sessions row is later lost still
+// has a reliable, MCP-independent channel to recover its own item_id for
+// link_session_to_item/get_linked_item.
+func TestBuildSessionInitialPrompt_should_IncludeItemID_When_Called(t *testing.T) {
+	ac := `[{"index":0,"text":"Do the thing","status":"pending"}]`
+	item := makeTestBacklogItem("My Feature", "Do the thing", ac, "ready", 1, "")
+
+	output := BuildSessionInitialPrompt(item, nil)
+
+	want := fmt.Sprintf("item_id: %s", item.ID)
+	if !strings.Contains(output, want) {
+		t.Errorf("expected initial prompt to contain %q, got:\n%s", want, output)
+	}
+}
+
+// TestBuildSessionInitialPrompt_should_IncludeItemID_When_ItemFieldsEmpty verifies the
+// item_id line does not depend on other fields (Description, Notes, AcceptanceCriteria)
+// being populated.
+func TestBuildSessionInitialPrompt_should_IncludeItemID_When_ItemFieldsEmpty(t *testing.T) {
+	item := makeTestBacklogItem("", "", `[]`, "ready", 1, "")
+
+	output := BuildSessionInitialPrompt(item, nil)
+
+	want := fmt.Sprintf("item_id: %s", item.ID)
+	if !strings.Contains(output, want) {
+		t.Errorf("expected initial prompt to contain %q even with empty item fields, got:\n%s", want, output)
+	}
+}
+
 // UT-038a: output must contain the task protocol block sentinel strings.
 func TestBuildSessionInitialPrompt_ContainsTaskProtocolBlock(t *testing.T) {
 	t.Parallel()
@@ -204,6 +235,123 @@ func TestBuildSessionInitialPrompt_OlderPriorAttempts_OmitFullEvidence(t *testin
 	lastIdx := len(sessions) - 1
 	if !strings.Contains(out, fmt.Sprintf("summary-marker-%d", lastIdx)) {
 		t.Errorf("expected full evidence for most recent prior attempt\nOutput:\n%s", out)
+	}
+}
+
+// TestBuildSessionInitialPrompt_should_includeEscalationNotice_When_ExactlyTwoIdenticalReviewFailures
+// is the regression test for docs/tasks/backlog-feature-improvement.md's "no
+// escalation, no awareness that the last N attempts failed the same way"
+// finding: on the escalated retry AutoReopenAfterFailedReview now grants
+// after a streak of exactly RepeatedFailureEscalationThreshold (2) identical
+// review failures, the respawned session's own prompt must explicitly say
+// so and nudge toward a different approach — not silently repeat the same
+// "Prior Attempts" framing every earlier retry already got. No new
+// SpawnSessionFromItemRequest field is involved: this is computed straight
+// from priorSessions, the same argument every prompt-building call site
+// already passes in.
+func TestBuildSessionInitialPrompt_should_includeEscalationNotice_When_ExactlyTwoIdenticalReviewFailures(t *testing.T) {
+	t.Parallel()
+	ac := `[{"index":0,"text":"Do something","status":"pending"}]`
+	item := makeTestBacklogItem("Feature", "desc", ac, "in_progress", 2, "")
+
+	var sessions []ItemSessionSummary
+	for i := 0; i < 2; i++ {
+		s := makeEndedItemSession(SessionRoleReview, 0, "")
+		s.ID = fmt.Sprintf("test-review-session-%d", i)
+		s.ReviewVerdict = &ReviewVerdictSummary{
+			OverallOutcome: string(ReviewOutcomeFail),
+			Summary:        "diff computation failed",
+		}
+		sessions = append(sessions, s)
+	}
+
+	out := BuildSessionInitialPrompt(item, sessions)
+
+	if !strings.Contains(out, "Escalation Notice") {
+		t.Errorf("expected an Escalation Notice after 2 identical review failures\nOutput:\n%s", out)
+	}
+	if !strings.Contains(out, "diff computation failed") {
+		t.Errorf("expected the escalation notice to name the repeated failure reason\nOutput:\n%s", out)
+	}
+	if !strings.Contains(out, "genuinely different approach") {
+		t.Errorf("expected the escalation notice to instruct a different approach\nOutput:\n%s", out)
+	}
+}
+
+// TestBuildSessionInitialPrompt_should_omitEscalationNotice_When_OnlyOneReviewFailure
+// is the negative case: a single review failure is the normal, non-escalated
+// shape and must not render the notice.
+func TestBuildSessionInitialPrompt_should_omitEscalationNotice_When_OnlyOneReviewFailure(t *testing.T) {
+	t.Parallel()
+	ac := `[{"index":0,"text":"Do something","status":"pending"}]`
+	item := makeTestBacklogItem("Feature", "desc", ac, "in_progress", 2, "")
+
+	s := makeEndedItemSession(SessionRoleReview, 0, "")
+	s.ReviewVerdict = &ReviewVerdictSummary{
+		OverallOutcome: string(ReviewOutcomeFail),
+		Summary:        "diff computation failed",
+	}
+
+	out := BuildSessionInitialPrompt(item, []ItemSessionSummary{s})
+	if strings.Contains(out, "Escalation Notice") {
+		t.Errorf("did not expect an Escalation Notice after only 1 review failure\nOutput:\n%s", out)
+	}
+}
+
+// TestBuildSessionInitialPrompt_should_omitEscalationNotice_When_ThreeIdenticalReviewFailures
+// is the far-side negative case: AutoReopenAfterFailedReview never respawns
+// (and so never builds this prompt at all) once the streak reaches
+// RepeatedFailureParkThreshold (3) — it parks instead. The notice is
+// deliberately scoped to fire only at streak == 2 (see escalationNotice's
+// doc comment), so this asserts it does not also fire at streak == 3, which
+// would render a stale "second attempt" framing on a prompt that in
+// practice is never built for that streak length.
+func TestBuildSessionInitialPrompt_should_omitEscalationNotice_When_ThreeIdenticalReviewFailures(t *testing.T) {
+	t.Parallel()
+	ac := `[{"index":0,"text":"Do something","status":"pending"}]`
+	item := makeTestBacklogItem("Feature", "desc", ac, "in_progress", 2, "")
+
+	var sessions []ItemSessionSummary
+	for i := 0; i < 3; i++ {
+		s := makeEndedItemSession(SessionRoleReview, 0, "")
+		s.ID = fmt.Sprintf("test-review-session-%d", i)
+		s.ReviewVerdict = &ReviewVerdictSummary{
+			OverallOutcome: string(ReviewOutcomeFail),
+			Summary:        "diff computation failed",
+		}
+		sessions = append(sessions, s)
+	}
+
+	out := BuildSessionInitialPrompt(item, sessions)
+	if strings.Contains(out, "Escalation Notice") {
+		t.Errorf("did not expect an Escalation Notice at streak length 3 — AutoReopenAfterFailedReview parks instead of respawning at this point\nOutput:\n%s", out)
+	}
+}
+
+// TestBuildSessionInitialPrompt_should_includeEscalationNotice_When_ExactlyTwoNoVerdictReviews
+// is the no-verdict-shape companion: two consecutive review sessions that
+// exited without ever writing a verdict must trigger the same escalation
+// framing, via a different signal (NoVerdictStreakLen) than the
+// identical-summary streak above.
+func TestBuildSessionInitialPrompt_should_includeEscalationNotice_When_ExactlyTwoNoVerdictReviews(t *testing.T) {
+	t.Parallel()
+	ac := `[{"index":0,"text":"Do something","status":"pending"}]`
+	item := makeTestBacklogItem("Feature", "desc", ac, "in_progress", 2, "")
+
+	var sessions []ItemSessionSummary
+	for i := 0; i < 2; i++ {
+		s := makeEndedItemSession(SessionRoleReview, 0, "")
+		s.ID = fmt.Sprintf("test-review-session-%d", i)
+		s.ReviewVerdict = nil
+		sessions = append(sessions, s)
+	}
+
+	out := BuildSessionInitialPrompt(item, sessions)
+	if !strings.Contains(out, "Escalation Notice") {
+		t.Errorf("expected an Escalation Notice after 2 consecutive no-verdict review sessions\nOutput:\n%s", out)
+	}
+	if !strings.Contains(out, "without ever recording a verdict") {
+		t.Errorf("expected the escalation notice to name the no-verdict failure shape\nOutput:\n%s", out)
 	}
 }
 

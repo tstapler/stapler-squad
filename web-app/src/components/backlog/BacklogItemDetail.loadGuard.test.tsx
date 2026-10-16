@@ -102,6 +102,7 @@ const baseItem: BacklogItem = {
   skipReviewGate: false,
   autoSpawnSession: false,
   autoCreatePR: false,
+  autoApprovePlan: false,
   planApproved: false,
   triageStatus: undefined,
   acCriteria: [],

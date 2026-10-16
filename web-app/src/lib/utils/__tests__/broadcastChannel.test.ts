@@ -118,3 +118,52 @@ describe("createNotificationSyncChannel", () => {
     });
   });
 });
+
+describe("createNotificationSyncChannel without BroadcastChannel", () => {
+  let original: typeof globalThis.BroadcastChannel;
+
+  beforeEach(() => {
+    original = global.BroadcastChannel;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (global as any).BroadcastChannel = undefined;
+  });
+
+  afterEach(() => {
+    global.BroadcastChannel = original;
+    window.localStorage.clear();
+  });
+
+  it("moved_kind_should_drop_toast_but_not_touch_history_and_storage_fallback_should_deliver_when_no_BroadcastChannel", () => {
+    const handler = jest.fn();
+    const message: NotificationSyncMessage = { type: "NOTIFICATIONS_BULK_DISMISSED", kind: "moved", ids: ["a", "b"] };
+    createNotificationSyncChannel().subscribe(handler);
+
+    // A storage event is what another tab's setItem produces here; jsdom does not
+    // deliver it to the writing window, so fire it by hand.
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: "stapler-squad:notification-sync",
+        newValue: JSON.stringify({ nonce: 1, message }),
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledWith(message);
+  });
+
+  it("broadcast writes the message through localStorage and ignores unrelated storage keys", () => {
+    const setItem = jest.spyOn(Storage.prototype, "setItem");
+    const handler = jest.fn();
+    const channel = createNotificationSyncChannel();
+    channel.subscribe(handler);
+
+    channel.broadcast({ type: "NOTIFICATIONS_BULK_DISMISSED", kind: "dismissed", ids: ["x"] });
+    expect(setItem).toHaveBeenCalledWith(
+      "stapler-squad:notification-sync",
+      expect.stringContaining("NOTIFICATIONS_BULK_DISMISSED"),
+    );
+
+    window.dispatchEvent(new StorageEvent("storage", { key: "other", newValue: "{}" }));
+    expect(handler).not.toHaveBeenCalled();
+    setItem.mockRestore();
+  });
+});

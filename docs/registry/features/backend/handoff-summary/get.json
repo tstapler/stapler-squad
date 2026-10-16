@@ -1,0 +1,16 @@
+{
+  "id": "handoff-summary:get",
+  "type": "backend",
+  "service": "HandoffSummaryService",
+  "method": "GetHandoffSummary",
+  "protoFile": "proto/session/v1/handoff_summary.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/handoff_summary_service.go",
+  "tested": true,
+  "testIds": [
+    "TestGetHandoffSummary_ReturnsNilWhenNoRowExists",
+    "TestGetHandoffSummary_ReconcilesStaleGeneratingRowToError_When_PastStaleTimeout",
+    "TestGetHandoffSummary_LeavesFreshGeneratingRowUnchanged"
+  ],
+  "lastModified": "2026-08-24T02:49:04.646013312-07:00"
+}

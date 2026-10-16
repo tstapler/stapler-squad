@@ -19,7 +19,7 @@ var _ sessionv1connect.ImportServiceHandler = (*ImportService)(nil)
 
 // ProcessCreateTimeReader is the subset of procinfo.ProcessInspector needed
 // to mint a PIDIdentity at preview time. Scoped to the one method this
-// service actually calls (see .claude/rules/interface-pollution-checklist.md
+// service actually calls (see the `interface-pollution-checklist` skill
 // smell #1 -- this is deliberately narrow, not a general process-inspection
 // interface).
 type ProcessCreateTimeReader interface {
@@ -140,7 +140,8 @@ func (s *ImportService) PreviewImportExternalSession(
 		// omitted (zero value). Commit will attempt the same read again.
 		if historyPath, err := s.detector.ResolveFilePath(candidate.Path, result.UUID); err == nil {
 			if turns, err := session.ReadCanonicalTurnsFromFile(historyPath); err == nil {
-				resp.TurnCount = int32(len(turns)) //nolint:gosec // turn counts are bounded by transcript size, never near int32 max
+				// #nosec G115 -- turn counts are bounded by transcript size, never near int32 max.
+				resp.TurnCount = int32(len(turns))
 				resp.LastMessageExcerpt = lastMessageExcerpt(turns)
 			}
 		}

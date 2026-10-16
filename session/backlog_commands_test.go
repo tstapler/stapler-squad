@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,7 +21,7 @@ import (
 // configured test identity, mirroring session/git/worktree_creation_test.go's
 // setupTestRepo helper (duplicated here rather than imported since that one lives in
 // package git and is unexported). Uses go-git directly rather than shelling out — see
-// .claude/rules/prefer-go-git-over-subshells.md.
+// the `prefer-go-git-over-subshells` skill.
 func setupTestGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -229,6 +230,175 @@ func TestWriteSlashCommands_BlockAndDuplicateFilesContainItemIDAndGatingLanguage
 	}
 }
 
+// TestPruneStaleSlashCommandFiles_should_RemoveExtraFiles_When_NewItemHasFewerCriteria
+// verifies pruneStaleSlashCommandFiles deletes done-N.md/fail-N.md files whose index is
+// not present in the newly generated file set, while leaving unrelated always-present
+// files (status.md) untouched.
+func TestPruneStaleSlashCommandFiles_should_RemoveExtraFiles_When_NewItemHasFewerCriteria(t *testing.T) {
+	cmdDir := t.TempDir()
+	for i := 0; i < 8; i++ {
+		for _, prefix := range []string{"done", "fail"} {
+			name := fmt.Sprintf("%s-%d.md", prefix, i)
+			if err := os.WriteFile(filepath.Join(cmdDir, name), []byte("old content"), 0o644); err != nil {
+				t.Fatalf("seed %s: %v", name, err)
+			}
+		}
+	}
+	if err := os.WriteFile(filepath.Join(cmdDir, "status.md"), []byte("status"), 0o644); err != nil {
+		t.Fatalf("seed status.md: %v", err)
+	}
+
+	newFiles := map[string]string{
+		"status.md": "status", "done-0.md": "new", "fail-0.md": "new",
+		"done-1.md": "new", "fail-1.md": "new", "done-2.md": "new", "fail-2.md": "new",
+	}
+	pruneStaleSlashCommandFiles(cmdDir, newFiles)
+
+	for i := 3; i < 8; i++ {
+		for _, prefix := range []string{"done", "fail"} {
+			path := filepath.Join(cmdDir, fmt.Sprintf("%s-%d.md", prefix, i))
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Errorf("expected %s to be pruned, but it still exists", filepath.Base(path))
+			}
+		}
+	}
+	for i := 0; i < 3; i++ {
+		for _, prefix := range []string{"done", "fail"} {
+			path := filepath.Join(cmdDir, fmt.Sprintf("%s-%d.md", prefix, i))
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				t.Errorf("expected %s to be preserved, but it was removed", filepath.Base(path))
+			}
+		}
+	}
+	if _, err := os.Stat(filepath.Join(cmdDir, "status.md")); os.IsNotExist(err) {
+		t.Error("status.md should never be pruned by index-based logic")
+	}
+}
+
+func TestPruneStaleSlashCommandFiles_should_RemoveNonCriterionFiles_When_NotInNewSet(t *testing.T) {
+	cmdDir := t.TempDir()
+	for _, name := range []string{"ship.md", "old-mode-step.md", "status.md"} {
+		if err := os.WriteFile(filepath.Join(cmdDir, name), []byte("old"), 0o644); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+
+	pruneStaleSlashCommandFiles(cmdDir, map[string]string{"status.md": "new"})
+
+	for _, name := range []string{"ship.md", "old-mode-step.md"} {
+		if _, err := os.Stat(filepath.Join(cmdDir, name)); !os.IsNotExist(err) {
+			t.Errorf("expected stale %s to be pruned", name)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(cmdDir, "status.md")); err != nil {
+		t.Errorf("status.md is in the new set and must survive: %v", err)
+	}
+}
+
+// TestPruneStaleSlashCommandFiles_should_PreserveAllFiles_When_NewItemHasMoreOrEqualCriteria
+// verifies pruneStaleSlashCommandFiles never deletes a file that's about to be rewritten.
+func TestPruneStaleSlashCommandFiles_should_PreserveAllFiles_When_NewItemHasMoreOrEqualCriteria(t *testing.T) {
+	cmdDir := t.TempDir()
+	for i := 0; i < 3; i++ {
+		for _, prefix := range []string{"done", "fail"} {
+			name := fmt.Sprintf("%s-%d.md", prefix, i)
+			if err := os.WriteFile(filepath.Join(cmdDir, name), []byte("old"), 0o644); err != nil {
+				t.Fatalf("seed %s: %v", name, err)
+			}
+		}
+	}
+
+	newFiles := map[string]string{}
+	for i := 0; i < 10; i++ {
+		newFiles[fmt.Sprintf("done-%d.md", i)] = "new"
+		newFiles[fmt.Sprintf("fail-%d.md", i)] = "new"
+	}
+	pruneStaleSlashCommandFiles(cmdDir, newFiles)
+
+	for i := 0; i < 3; i++ {
+		for _, prefix := range []string{"done", "fail"} {
+			path := filepath.Join(cmdDir, fmt.Sprintf("%s-%d.md", prefix, i))
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				t.Errorf("expected %s to survive when the new set is a superset, but it was removed", filepath.Base(path))
+			}
+		}
+	}
+}
+
+// TestWriteSlashCommands_should_MatchExactFileSet_When_CalledTwiceWithDifferentCriteriaCounts
+// exercises pruneStaleSlashCommandFiles through the real WriteSlashCommands entry point:
+// an 8-AC item's files followed by a 3-AC item's must leave exactly the 3-AC file set on
+// disk, with done-0.md content carrying the second item's id.
+func TestWriteSlashCommands_should_MatchExactFileSet_When_CalledTwiceWithDifferentCriteriaCounts(t *testing.T) {
+	worktree := t.TempDir()
+
+	buildAC := func(n int) string {
+		var sb strings.Builder
+		sb.WriteString("[")
+		for i := 0; i < n; i++ {
+			if i > 0 {
+				sb.WriteString(",")
+			}
+			fmt.Fprintf(&sb, `{"index":%d,"text":"Criterion %d","status":"pending"}`, i, i)
+		}
+		sb.WriteString("]")
+		return sb.String()
+	}
+
+	oldItemID := "old-item-id"
+	oldItem := makeTestBacklogItemWithID(oldItemID, "Old item", buildAC(8))
+	if err := WriteSlashCommands(nil, oldItem, worktree); err != nil {
+		t.Fatalf("WriteSlashCommands (first call, 8 AC) failed: %v", err)
+	}
+
+	newItemID := "new-item-id"
+	newItem := makeTestBacklogItemWithID(newItemID, "New item", buildAC(3))
+	if err := WriteSlashCommands(nil, newItem, worktree); err != nil {
+		t.Fatalf("WriteSlashCommands (second call, 3 AC) failed: %v", err)
+	}
+
+	cmdDir := filepath.Join(worktree, backlogCommandsDir)
+	entries, err := os.ReadDir(cmdDir)
+	if err != nil {
+		t.Fatalf("read command dir: %v", err)
+	}
+	wantFiles := map[string]bool{
+		"status.md": true, "review.md": true, "ship.md": true, "help.md": true,
+		"block.md": true, "duplicate.md": true,
+		"done-0.md": true, "fail-0.md": true, "done-1.md": true, "fail-1.md": true,
+		"done-2.md": true, "fail-2.md": true,
+	}
+	got := map[string]bool{}
+	for _, e := range entries {
+		got[e.Name()] = true
+	}
+	if len(got) != len(wantFiles) {
+		t.Errorf("expected exactly %d files for the 3-AC item, got %d: %v", len(wantFiles), len(got), got)
+	}
+	for name := range wantFiles {
+		if !got[name] {
+			t.Errorf("expected %s to exist after relink to the 3-AC item", name)
+		}
+	}
+	for name := range got {
+		if !wantFiles[name] {
+			t.Errorf("stale file %s from the 8-AC item leaked into the 3-AC item's file set", name)
+		}
+	}
+
+	data, err := os.ReadFile(filepath.Join(cmdDir, "done-0.md"))
+	if err != nil {
+		t.Fatalf("read done-0.md: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, newItemID) {
+		t.Errorf("done-0.md should contain the second item's id %q, got:\n%s", newItemID, content)
+	}
+	if strings.Contains(content, oldItemID) {
+		t.Errorf("done-0.md should not contain the stale first item's id %q, got:\n%s", oldItemID, content)
+	}
+}
+
 // TestWriteSlashCommands_ReviewFileInstructsShipOnPassAndAfterAttemptCap verifies
 // review.md tells the agent to run /backlog/ship both immediately on a PASS
 // verdict and as a bounded escape hatch once the server-tracked attempt count
@@ -308,6 +478,46 @@ func TestWriteBacklogContextFile_WritesFileWithExpectedContent(t *testing.T) {
 	}
 	if !strings.Contains(content, "MCP tools are unavailable") {
 		t.Errorf("expected fallback text in context file\nContent:\n%s", content)
+	}
+}
+
+// TestWriteBacklogContextFile_ConcurrentCallsToSameWorktree_NeverLeaveFileMissingOrTruncated
+// is a regression test for the fixed-tmp-filename write race WriteBacklogContextFile used
+// to have (destPath+".tmp") — it's called on every spawn AND re-attach for the same
+// worktreePath, so two concurrent callers must never interleave writes and rename a
+// torn/truncated .backlog-context.md into place. Mirrors config_test.go's
+// TestSaveConfig_ConcurrentWritesToSamePath.
+func TestWriteBacklogContextFile_ConcurrentCallsToSameWorktree_NeverLeaveFileMissingOrTruncated(t *testing.T) {
+	t.Parallel()
+	worktree := t.TempDir()
+	item := &BacklogItemData{ID: "concurrent-test-item", Title: "Concurrent Test", Status: "ready"}
+
+	const n = 20
+	var wg sync.WaitGroup
+	errCh := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errCh <- WriteBacklogContextFile(item, nil, worktree)
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		if err != nil {
+			t.Errorf("WriteBacklogContextFile must not error under concurrent callers targeting the same worktree: %v", err)
+		}
+	}
+
+	contextPath := filepath.Join(worktree, ".backlog-context.md")
+	data, err := os.ReadFile(contextPath)
+	if err != nil {
+		t.Fatalf(".backlog-context.md must exist after concurrent WriteBacklogContextFile calls: %v", err)
+	}
+	if !strings.Contains(string(data), "Fallback Instructions") {
+		t.Errorf(".backlog-context.md must contain the full fallback instructions block, not a torn/truncated write:\n%s", data)
 	}
 }
 
@@ -708,5 +918,184 @@ func TestGetWorktreeDirtyPaths_EmptyForScaffoldingOnlyLinkedWorktree(t *testing.
 	}
 	if len(paths) != 0 {
 		t.Errorf("expected no dirty paths for a scaffolding-only worktree, got %v", paths)
+	}
+}
+
+func TestWriteSlashCommands_should_RegenerateWithNewItemID_When_WorkspaceReusedForSecondItem(t *testing.T) {
+	t.Parallel()
+	worktree := t.TempDir()
+	acA := `[{"index":0,"text":"a0","status":"pending"},{"index":1,"text":"a1","status":"pending"},{"index":2,"text":"a2","status":"pending"},{"index":3,"text":"a3","status":"pending"}]`
+	acB := `[{"index":0,"text":"b0","status":"pending"},{"index":1,"text":"b1","status":"pending"}]`
+	itemA := makeTestBacklogItemWithID("aaaaaaaa-0000-0000-0000-000000000001", "A", acA)
+	itemB := makeTestBacklogItemWithID("bbbbbbbb-0000-0000-0000-000000000002", "B", acB)
+
+	if err := WriteSlashCommands(nil, itemA, worktree); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteSlashCommands(nil, itemB, worktree); err != nil {
+		t.Fatal(err)
+	}
+
+	cmdDir := filepath.Join(worktree, backlogCommandsDir)
+	entries, err := os.ReadDir(cmdDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"status.md", "done-0.md", "done-1.md", "review.md", "ship.md", "block.md", "duplicate.md"} {
+		b, err := os.ReadFile(filepath.Join(cmdDir, name))
+		if err != nil {
+			t.Fatalf("%s missing: %v", name, err)
+		}
+		if !strings.Contains(string(b), itemB.ID) {
+			t.Errorf("%s does not contain new item ID", name)
+		}
+	}
+	// help.md embeds no item ID; it must instead list only the new item's commands.
+	help, hErr := os.ReadFile(filepath.Join(cmdDir, "help.md"))
+	if hErr != nil {
+		t.Fatalf("help.md missing: %v", hErr)
+	}
+	if !strings.Contains(string(help), "/backlog/done-1") || strings.Contains(string(help), "/backlog/done-2") {
+		t.Errorf("help.md should list done-0..1 only, got:\n%s", help)
+	}
+	for _, e := range entries {
+		b, rErr := os.ReadFile(filepath.Join(cmdDir, e.Name()))
+		if rErr != nil {
+			t.Fatalf("read %s: %v", e.Name(), rErr)
+		}
+		if strings.Contains(string(b), itemA.ID) {
+			t.Errorf("%s still contains old item ID", e.Name())
+		}
+		if e.Name() == "done-2.md" || e.Name() == "fail-3.md" {
+			t.Errorf("stale file %s not pruned", e.Name())
+		}
+	}
+}
+
+func TestWriteSlashCommands_should_Refuse_When_TargetIsHomeDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
+	item := makeTestBacklogItemWithID("x", "X", `[{"index":0,"text":"t","status":"pending"}]`)
+	if err := WriteSlashCommands(nil, item, home); err == nil {
+		t.Fatal("expected error writing commands into home dir")
+	}
+	if _, err := os.Stat(filepath.Join(home, backlogCommandsDir)); !os.IsNotExist(err) {
+		t.Fatalf("commands dir must not be created in home: %v", err)
+	}
+}
+
+func TestRemoveStaleUserLevelBacklogCommands(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, backlogCommandsDir)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"status.md", "done-0.md", "fail-7.md", "ship.md"} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("item_id=old"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	removed, err := RemoveStaleUserLevelBacklogCommands(home)
+	if err != nil || !removed {
+		t.Fatalf("removed=%v err=%v", removed, err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal("dir should be gone")
+	}
+
+	// A user-authored file keeps the directory untouched.
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"status.md", "mine.md"} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("item_id=x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	removed, err = RemoveStaleUserLevelBacklogCommands(home)
+	if err != nil || removed {
+		t.Fatalf("removed=%v err=%v", removed, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "status.md")); err != nil {
+		t.Fatal("must not touch dir with user files")
+	}
+	if removed, err := RemoveStaleUserLevelBacklogCommands(t.TempDir()); removed || err != nil {
+		t.Fatalf("absent dir: removed=%v err=%v", removed, err)
+	}
+}
+
+func TestRemoveStaleUserLevelBacklogCommands_should_Skip_When_CommandsDirSymlinkedOutsideHome(t *testing.T) {
+	home := t.TempDir()
+	outside := t.TempDir() // stands in for a dotfiles repo
+	outBacklog := filepath.Join(outside, "commands", "backlog")
+	if err := os.MkdirAll(outBacklog, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outBacklog, "status.md"), []byte("item_id=old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "commands"), filepath.Join(home, ".claude", "commands")); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := RemoveStaleUserLevelBacklogCommands(home)
+	if err != nil || removed {
+		t.Fatalf("removed=%v err=%v", removed, err)
+	}
+	if _, err := os.Stat(filepath.Join(outBacklog, "status.md")); err != nil {
+		t.Fatal("file outside home must be untouched")
+	}
+}
+
+func TestRemoveStaleUserLevelBacklogCommands_should_Skip_When_FileLacksItemIDMarker(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, backlogCommandsDir)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "status.md"), []byte("my own command"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := RemoveStaleUserLevelBacklogCommands(home); removed || err != nil {
+		t.Fatalf("removed=%v err=%v", removed, err)
+	}
+}
+
+func TestIsGeneratedSlashCommandName_should_CoverEveryGeneratedFile(t *testing.T) {
+	t.Parallel()
+	item := makeTestBacklogItemWithID("drift-id", "Drift", `[{"index":0,"text":"a","status":"pending"},{"index":11,"text":"b","status":"pending"}]`)
+	files, err := buildDefaultSlashCommandSet(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range buildBlockAndDuplicateCommands(item.ID) {
+		files[name] = content
+	}
+	for name := range files {
+		if !isGeneratedSlashCommandName(name) {
+			t.Errorf("generated file %q is not recognized by the user-scope cleanup allowlist", name)
+		}
+	}
+	for _, n := range []string{"mine.md", "status.txt", "done-x.md"} {
+		if isGeneratedSlashCommandName(n) {
+			t.Errorf("%q must not be treated as generated", n)
+		}
+	}
+}
+
+func TestRemoveStaleUserLevelBacklogCommands_should_LeaveEmptyDir(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, backlogCommandsDir)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := RemoveStaleUserLevelBacklogCommands(home); removed || err != nil {
+		t.Fatalf("removed=%v err=%v", removed, err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatal("empty dir must be left in place")
 	}
 }

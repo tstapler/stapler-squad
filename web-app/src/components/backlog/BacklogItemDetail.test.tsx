@@ -15,7 +15,7 @@
 
 import React from "react";
 import { render, screen, act, fireEvent, within, waitFor } from "@testing-library/react";
-import { create } from "@bufbuild/protobuf";
+import { create, type MessageInitShape } from "@bufbuild/protobuf";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { BacklogItemDetail } from "./BacklogItemDetail";
 import type { BacklogItem, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
@@ -26,6 +26,13 @@ import { BacklogItemShipStatusSchema, StuckReason, type StuckBacklogItem } from 
 // focused on BacklogItemDetail's own render behavior.
 jest.mock("./SessionMonitor", () => ({ SessionMonitor: () => null }));
 jest.mock("./GateVerdictBox", () => ({ GateVerdictBox: () => null }));
+// Off by default; the action-reachability tests flip it so the real gate
+// section's position relative to ActionsSection can be asserted.
+let mockShowGateSection = false;
+jest.mock("./GateBlockingSection", () => ({
+  GateBlockingSection: () =>
+    mockShowGateSection ? <div data-testid="gate-blocking-section" /> : null,
+}));
 // Stubbed to a minimal interactive shim (rather than plain `() => null`) so
 // Task 1.1.2c's wiring test can exercise the real onAnswerQuestion prop
 // BacklogItemDetail passes down, without standing up the full real
@@ -79,6 +86,13 @@ jest.mock("@/lib/hooks/useBacklogItemShipStatus", () => ({
 const useStuckBacklogItemsMock = jest.fn();
 jest.mock("@/lib/hooks/useStuckBacklogItems", () => ({
   useStuckBacklogItems: (...args: unknown[]) => useStuckBacklogItemsMock(...args),
+}));
+
+// Story 5.2.3: BacklogItemDetail's own Insights fetch for ItemStageCostTable
+// — stub so this suite never opens a real WatchInsights transport.
+const useInsightsSummaryMock = jest.fn();
+jest.mock("@/lib/hooks/useInsightsService", () => ({
+  useInsightsSummary: (...args: unknown[]) => useInsightsSummaryMock(...args),
 }));
 
 // The edit-mode branch renders BacklogItemForm -> RepoPathInput, which uses
@@ -197,6 +211,7 @@ jest.mock("@connectrpc/connect-web", () => ({
   createConnectTransport: jest.fn().mockReturnValue({}),
 }));
 
+
 // The jest styleMock for `.css.ts` files wraps every export (including plain
 // `style()` string exports) in a callable proxy function, which triggers a
 // benign "Invalid value for prop className" React warning. Pre-existing
@@ -217,6 +232,13 @@ beforeEach(() => {
   mockTerminalStreamEvents = [];
   updateBacklogItem.mockClear().mockResolvedValue(null);
   useStuckBacklogItemsMock.mockReturnValue({ items: [], isLoading: false, error: null });
+  useInsightsSummaryMock.mockReturnValue({
+    summary: { roleBreakdown: [] },
+    loading: false,
+    isLiveUpdating: false,
+    error: null,
+    refetch: jest.fn(),
+  });
   overrideVerdict.mockReset();
   triggerTriage.mockClear().mockResolvedValue(undefined);
   rejectPlan.mockReset().mockResolvedValue(null);
@@ -263,6 +285,20 @@ function makeSession(overrides: Partial<LinkedSession> = {}): LinkedSession {
   };
 }
 
+function makeShippedSnapshot(overrides: MessageInitShape<typeof BacklogItemShipStatusSchema> = {}) {
+  return create(BacklogItemShipStatusSchema, {
+    shipped: true,
+    shippedVia: "pr",
+    branchName: "feature/foo",
+    branchExists: false,
+    prUrl: "https://github.com/tstapler/stapler-squad/pull/999",
+    shippedCheckConclusion: "success",
+    shippedApprovedCount: 2,
+    shippedChangesReqCount: 1,
+    ...overrides,
+  });
+}
+
 function makeItem(linkedSessions: LinkedSession[]): BacklogItem {
   return {
     id: "item-1",
@@ -275,6 +311,7 @@ function makeItem(linkedSessions: LinkedSession[]): BacklogItem {
     skipReviewGate: false,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     planApproved: false,
     acCriteria: [],
     linkedSessions,
@@ -486,6 +523,57 @@ describe("BacklogItemDetail — Story 2.2.3: VcsWidget wiring", () => {
 
     expect(screen.getByTestId("file-browser-modal-stub")).toBeInTheDocument();
   });
+
+  it("BacklogItemDetail_should_RenderShippedCiConclusionAndReviewCounts_When_ShipStatusHasSnapshot", async () => {
+    useVcsStatusMock.mockReturnValue({ data: null, loading: false, error: null, refetch: jest.fn() });
+    useBacklogItemShipStatusMock.mockReturnValue({
+      data: makeShippedSnapshot({
+        snapshotAt: timestampFromDate(new Date("2026-07-17T10:00:00Z")),
+        snapshotCaptureFailed: false,
+      }),
+      loading: false,
+      refetch: jest.fn(),
+    });
+
+    const session = makeSession({ role: "work", worktreePath: "/tmp/repo-wt" });
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([session]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId("collapsible-header-version-control"));
+
+    expect(screen.getByText("CI: success")).toBeInTheDocument();
+    expect(screen.getByLabelText("2 approved")).toBeInTheDocument();
+    expect(screen.getByLabelText("1 changes requested")).toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_RenderCaptureFailedCopy_When_ShipStatusSnapshotCaptureFailedTrue", async () => {
+    useVcsStatusMock.mockReturnValue({ data: null, loading: false, error: null, refetch: jest.fn() });
+    useBacklogItemShipStatusMock.mockReturnValue({
+      data: makeShippedSnapshot({ snapshotCaptureFailed: true }),
+      loading: false,
+      refetch: jest.fn(),
+    });
+
+    const session = makeSession({ role: "work", worktreePath: "/tmp/repo-wt" });
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([session]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId("collapsible-header-version-control"));
+
+    expect(screen.getByText("Couldn't capture PR status at ship time")).toBeInTheDocument();
+  });
 });
 
 // project_plans/backlog-event-driven-updates Epic 5.3: Story 5.3.1 removes
@@ -675,6 +763,71 @@ describe("BacklogItemDetail — Story 5.3.2: edit-mode buffering", () => {
     // Returns to view mode (not still editing) with the buffered data applied.
     expect(screen.getByRole("button", { name: "Edit item" })).toBeInTheDocument();
     expect(screen.getByText("Refactor auth middleware (renamed live)")).toBeInTheDocument();
+  });
+
+  // Regression test for the 2026-09-11 UI audit finding: BacklogItemDetail's
+  // loading gate is `loading && !item` (not just `loading`) so a stale entry
+  // already sitting in the shared backlogItemsSlice store (e.g. left over
+  // from a category-less snapshot cached before triage classified the item)
+  // can populate `item` before the authoritative getBacklogItem() fetch
+  // resolves. If Edit were clickable during that window, BacklogItemForm
+  // would mount from the stale snapshot's category — and a correction that
+  // lands afterward, while editMode is already true, only gets buffered
+  // (Story 5.3.2's `if (editMode) { setBufferedItem(...); return; }`), never
+  // applied to the open form. The fix: block Edit specifically (not the
+  // read-only view, preserving #146's no-remount-on-background-refresh
+  // behavior) until the authoritative fetch has confirmed `item` at least
+  // once for this itemId.
+  it("disables Edit until the authoritative getBacklogItem() fetch confirms the item, even if a stale store entry already populated it", async () => {
+    // The shared store already has a category-less snapshot for this item
+    // present *before* the component even mounts (e.g. left by an earlier,
+    // pre-triage live event or list-view load).
+    mockLiveItemsMap = {
+      "item-1": {
+        id: "item-1",
+        title: "Refactor auth middleware",
+        status: "idea",
+        priority: 3,
+        repoPath: "/tmp/repo",
+        category: "",
+      },
+    };
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    // getBacklogItem's authoritative response (category: "bugfix") is held
+    // back so the test can inspect the window before it resolves.
+    let resolveFetch!: (item: BacklogItem) => void;
+    getBacklogItem.mockReset().mockReturnValue(
+      new Promise<BacklogItem>((resolve) => {
+        resolveFetch = resolve;
+      })
+    );
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    // Flush just the synchronous liveRawItem-effect hydration, without
+    // letting the still-pending getBacklogItem() promise resolve.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // The stale snapshot is already showing (view mode isn't blocked)...
+    expect(screen.getByText("Refactor auth middleware")).toBeInTheDocument();
+    // ...but Edit is disabled until the server has actually been consulted.
+    expect(screen.getByRole("button", { name: "Edit item" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Edit item" }));
+    expect(screen.queryByTestId("backlog-item-form")).not.toBeInTheDocument();
+
+    // The authoritative fetch lands with the item's real category.
+    await act(async () => {
+      resolveFetch({ ...makeItem([]), category: "bugfix" });
+      await Promise.resolve();
+    });
+
+    // Edit is now safe to open, and correctly shows "bugfix".
+    expect(screen.getByRole("button", { name: "Edit item" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Edit item" }));
+    expect(screen.getByTestId("backlog-category-bugfix")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("backlog-category-uncategorized")).toHaveAttribute("aria-checked", "false");
   });
 });
 
@@ -984,6 +1137,41 @@ describe("BacklogItemDetail — Story 2.1.4: LifecycleSummary replaces the old s
     expect(triggerRemediationNow).toHaveBeenCalledTimes(1);
     expect(triggerRemediationNow).toHaveBeenCalledWith("item-1", StuckReason.STALE_WORK);
   });
+
+  it("BacklogItemDetail_should_ResolveBounceCapExhaustedAsPrimaryAndIndicateOthers_When_ItemHasFourOpenStuckReasons", async () => {
+    // BUG-105: live item 09e91e3e-e13d-4166-a5f2-447242447f77 had 4 reasons
+    // open at once. See BacklogItemCard.test.tsx's matching BacklogBoard
+    // test — both must resolve the same primary reason from this fixture.
+    const baseRow = {
+      title: "Refactor auth middleware",
+      status: "in_progress",
+      firstDetectedAt: timestampFromDate(new Date(Date.now() - 4 * 60 * 60 * 1000)),
+      lastCheckedAt: timestampFromDate(new Date()),
+      prNumber: 0,
+      prUrl: "",
+      context: "",
+    };
+    const stuckRows: StuckBacklogItem[] = [
+      { itemId: "item-1", ...baseRow, reason: StuckReason.BOUNCING } as StuckBacklogItem,
+      { itemId: "item-1", ...baseRow, reason: StuckReason.REWORK_BLOCKED_STALE } as StuckBacklogItem,
+      { itemId: "item-1", ...baseRow, reason: StuckReason.MULTIPLE_REASONS } as StuckBacklogItem,
+      { itemId: "item-1", ...baseRow, reason: StuckReason.BOUNCE_CAP_EXHAUSTED } as StuckBacklogItem,
+    ];
+    useStuckBacklogItemsMock.mockReturnValue({ items: stuckRows, isLoading: false, error: null });
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("Bounce cap exhausted")).toBeInTheDocument();
+    expect(screen.queryByText("Not converging")).not.toBeInTheDocument();
+    // The 3 dropped reasons must be indicated, not silently invisible.
+    expect(screen.getByTestId("blocker-chip-more")).toHaveTextContent("+3 more");
+  });
 });
 
 describe("BacklogItemDetail — Story 3.1.3: polling suspends for manual-review + in-flight actions", () => {
@@ -1234,6 +1422,83 @@ describe("BacklogItemDetail — Story 3.1.5: auto-expand-on-status-change, first
     // status was "idea") — it must not retroactively open just because it
     // only became relevant after that.
     expect(screen.getByTestId("collapsible-header-reviewing")).toHaveAttribute("aria-expanded", "false");
+  });
+});
+
+describe("BacklogItemDetail — PR visibility and action reachability", () => {
+  async function renderItem(overrides: Partial<BacklogItem>) {
+    useVcsStatusMock.mockReturnValue({
+      data: create(VCSStatusSchema, { branch: "feat/x", isClean: true }),
+      loading: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+    getBacklogItem.mockReset().mockResolvedValue({ ...makeItem([]), ...overrides });
+    listPipelineModes.mockReset().mockResolvedValue([]);
+    const utils = render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    return utils;
+  }
+  const PR = { prUrl: "https://github.com/x/y/pull/42", prNumber: 42 };
+
+  it("BacklogItemDetail_should_AutoExpandVersionControlSection_When_StatusIsDoneAndPrUrlIsSet", async () => {
+    await renderItem({ status: "done", ...PR });
+    expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("BacklogItemDetail_should_NotAutoExpandVersionControlSection_When_StatusIsDoneAndPrUrlIsUndefined", async () => {
+    await renderItem({ status: "done", prUrl: undefined });
+    expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("BacklogItemDetail_should_KeepVersionControlCollapsed_When_UserCollapsedItBeforeReopeningWithPrUrl", async () => {
+    const first = await renderItem({ status: "done", ...PR });
+    fireEvent.click(screen.getByTestId("collapsible-header-version-control"));
+    expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "false");
+    first.unmount();
+
+    await renderItem({ status: "done", ...PR });
+    expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("BacklogItemDetail_should_AutoExpandVersionControlSection_When_StatusIsArchivedAndPrUrlIsSet", async () => {
+    await renderItem({ status: "archived", ...PR });
+    expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "true");
+  });
+
+  describe("ordering", () => {
+    afterEach(() => {
+      mockShowGateSection = false;
+    });
+
+    const follows = (a: HTMLElement, b: HTMLElement) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+    it("BacklogItemDetail_should_RenderActionsSectionBeforeGateBlockingSection_When_FullDetailRenders", async () => {
+      mockShowGateSection = true;
+      await renderItem({ status: "idea" });
+      const actions = screen.getByTestId("backlog-action-trigger-triage");
+      expect(follows(actions, screen.getByTestId("gate-blocking-section"))).toBe(true);
+      expect(follows(actions, screen.getByText(/^Acceptance Criteria/))).toBe(true);
+    });
+
+    it("BacklogItemDetail_should_RenderPlanDecisionControlsBeforeGateSection_When_PlanIsPendingReview", async () => {
+      mockShowGateSection = true;
+      await renderItem({
+        status: "ready",
+        planApproved: false,
+        planArtifactsPath: "/tmp/plans/item-1.md",
+      });
+      const reject = screen.getByTestId("backlog-action-reject-plan");
+      const approve = screen.getByTestId("backlog-action-approve-plan");
+      expect(follows(reject, approve)).toBe(true);
+      expect(follows(approve, screen.getByTestId("gate-blocking-section"))).toBe(true);
+      expect(follows(approve, screen.getByText(/^Acceptance Criteria/))).toBe(true);
+    });
   });
 });
 
@@ -1584,5 +1849,68 @@ describe("BacklogItemDetail — Copy ID/Copy Link (backlog-deep-linking Story 2.
       expect(copyLinkButton).toHaveAttribute("aria-label", "Copied link to clipboard");
     });
     expect(screen.getByTestId("copy-status-announcement")).toHaveTextContent("Link copied to clipboard");
+  });
+});
+
+describe("BacklogItemDetail — Story 5.2.3: per-item cost-by-stage table", () => {
+  it("BacklogItemDetail_should_RenderItemStageCostTable_When_RoleBreakdownHasMatchingItemEntries", async () => {
+    useInsightsSummaryMock.mockReturnValue({
+      summary: {
+        roleBreakdown: [
+          {
+            sessionRole: "triage",
+            items: [{ itemId: "item-1", itemTitle: "Refactor auth middleware", estimatedCostUsd: 0.02, sessionCount: 3, unpricedSessionCount: 0 }],
+          },
+          {
+            sessionRole: "review",
+            items: [{ itemId: "item-1", itemTitle: "Refactor auth middleware", estimatedCostUsd: 0.15, sessionCount: 1, unpricedSessionCount: 0 }],
+          },
+          {
+            sessionRole: "work",
+            items: [{ itemId: "item-2", itemTitle: "Some other item", estimatedCostUsd: 9.0, sessionCount: 1, unpricedSessionCount: 0 }],
+          },
+        ],
+      },
+      loading: false,
+      isLiveUpdating: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+
+    await renderWithSession(makeSession(), []);
+
+    const costTable = screen.getByTestId("item-stage-cost-table");
+    expect(within(costTable).getByText("Triage")).toBeInTheDocument();
+    expect(within(costTable).getByText("Review")).toBeInTheDocument();
+    expect(within(costTable).queryByText("Work")).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_OmitItemStageCostTable_When_NoMatchingRoleBreakdownEntries", async () => {
+    useInsightsSummaryMock.mockReturnValue({
+      summary: { roleBreakdown: [] },
+      loading: false,
+      isLiveUpdating: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+
+    await renderWithSession(makeSession(), []);
+
+    expect(screen.queryByTestId("item-stage-cost-table")).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_ShowErrorState_When_InsightsFetchFails", async () => {
+    useInsightsSummaryMock.mockReturnValue({
+      summary: null,
+      loading: false,
+      isLiveUpdating: false,
+      error: "network error",
+      refetch: jest.fn(),
+    });
+
+    await renderWithSession(makeSession(), []);
+
+    expect(screen.getByTestId("item-stage-cost-error")).toHaveTextContent("Couldn't load cost data.");
+    expect(screen.queryByTestId("item-stage-cost-table")).not.toBeInTheDocument();
   });
 });

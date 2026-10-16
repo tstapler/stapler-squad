@@ -4,7 +4,7 @@ Tool-generated evidence of coupling, complexity, and cohesion issues in the
 `stapler-squad` Go backend, evaluated against:
 - Martin Fowler's *Patterns of Enterprise Application Architecture* / DDD Entity–Value
   Object–Aggregate–Repository framework (`architecture-best-practices` skill)
-- Go idiom (Effective Go, Go Code Review Comments, Go Proverbs) (`go-development` skill)
+- Go idiom (Effective Go, Go Code Review Comments, Go Proverbs) (`golang-development` skill)
 
 This report is **read-only analysis**. No application code was modified. It is
 separate from the in-flight `session.Instance` actor/concurrency migration tracked

@@ -1,6 +1,12 @@
 package config
 
-import "time"
+import (
+	"math"
+	"slices"
+	"time"
+
+	"github.com/tstapler/stapler-squad/log"
+)
 
 // NotificationPrefs holds the user's notification delivery preferences.
 type NotificationPrefs struct {
@@ -80,6 +86,49 @@ type SlackConfig struct {
 	DashboardBaseURL string `json:"dashboard_base_url,omitempty"`
 }
 
+// TaggingClassifierConfig holds the LLM model hierarchy for session-tag
+// classification (config.Config.TaggingClassifier). The primary model is tried
+// first; each fallback is tried in order until one succeeds. Model names are
+// passed as --model to the headless CLI; a free local proxy is used by naming
+// its model here (ANTHROPIC_BASE_URL already flows to the subprocess).
+type TaggingClassifierConfig struct {
+	// Model is the primary classification model (e.g. "haiku"). Empty means
+	// the server default ("haiku").
+	Model string `json:"model,omitempty"`
+	// FallbackModels is the ordered fallback hierarchy tried after Model fails.
+	FallbackModels []string `json:"fallback_models,omitempty"`
+}
+
+// JulesConfig holds configuration for the Google Jules dispatch-and-poll
+// integration (config.Config.Jules). The API key is deliberately absent from
+// this struct — it lives in the OS keychain (jules.KeyringTokenSource,
+// ADR-003), never in config.json.
+type JulesConfig struct {
+	// Enabled gates the whole feature: even a resolvable API key and
+	// acknowledged repos are refused while this is false (Risk Control's
+	// three-part AND gate). Default: false (opt-in).
+	Enabled bool `json:"enabled,omitempty"`
+	// EgressAcknowledgedRepos is the list of local backlog-item RepoPath
+	// values the user has explicitly confirmed may leave the machine for
+	// Google's cloud VM. Entries are full local paths, not owner/repo —
+	// consent is granted per local checkout, since that is what is actually
+	// read from disk and sent. The only writer is ConfirmEgressConsent
+	// (Story 2.4.2); DispatchToJules's checkEgressConsent only ever reads
+	// this slice (pre-mortem P1 #3).
+	EgressAcknowledgedRepos []string `json:"egress_acknowledged_repos,omitempty"`
+	// MaxConcurrentJulesSessions caps how many jules_work ItemSessions may be
+	// open (not yet ended) at the same time. 0 = use the default (2). Values
+	// above maxConcurrentJulesSessionsHardCeiling are clamped to the ceiling.
+	MaxConcurrentJulesSessions int `json:"max_concurrent_jules_sessions,omitempty"`
+	// MaxJulesSessionsPerDay caps how many jules_work ItemSessions may be
+	// *created* in a trailing 24h window, bounding creation rate rather than
+	// concurrency (a retry-loop bug that always ends its sessions quickly
+	// would sail past a concurrency-only cap). 0 = use the default (15).
+	// Values above maxJulesSessionsPerDayHardCeiling are clamped to the
+	// ceiling.
+	MaxJulesSessionsPerDay int `json:"max_jules_sessions_per_day,omitempty"`
+}
+
 // defaultSessionRetentionDays is used by RetentionDaysOrDefault whenever
 // RetentionDays is unset (zero), including for configs saved before this field
 // existed.
@@ -152,6 +201,152 @@ func (c StaleSessionConfig) NotifyEnabledOrDefault() bool {
 	return *c.NotifyEnabled
 }
 
+// defaultRetryMaxAttempts is used by MaxAttemptsOrDefault whenever
+// MaxAttempts is unset (<=0), including for configs saved before this field
+// existed. 1 preserves today's exact single-retry behavior (AC7).
+const defaultRetryMaxAttempts = 1
+
+// defaultRetryMaxDelaySeconds is used by MaxDelaySecondsOrDefault whenever
+// MaxDelaySeconds is unset (<=0).
+const defaultRetryMaxDelaySeconds = 300
+
+// validRetryOnReasons is the complete vocabulary RetryOnOrDefault accepts;
+// used both as the all-three fallback and to filter out typos.
+var validRetryOnReasons = []string{"crashed", "stalled", "tmux_exited"} //nolint:gochecknoglobals // read-only vocabulary, never mutated; callers only get defensive copies (see append([]string(nil), ...) below)
+
+// RetryPolicyConfig holds configuration for the automated crash/stall retry
+// policy: how many attempts, what backoff, and which failure reasons are
+// eligible. Global default in config.json; may be overridden per-session via
+// session.Instance.RetryPolicyOverride.
+type RetryPolicyConfig struct {
+	// Enabled controls whether automated retry runs at all. A pointer so a
+	// config saved before this field existed (nil) can be distinguished from
+	// an explicit false — nil defaults to enabled, matching
+	// SessionRetentionConfig's pattern.
+	Enabled *bool `json:"enabled,omitempty"`
+	// MaxAttempts is the number of automated retries before the session
+	// transitions to PermanentlyFailed. Default: 1 (preserves today's exact
+	// single-retry behavior — AC7).
+	MaxAttempts int `json:"max_attempts,omitempty"`
+	// Backoff selects the backoff strategy. Only "exponential" is implemented;
+	// see BackoffOrWarn.
+	Backoff string `json:"backoff,omitempty"`
+	// InitialDelaySeconds is the backoff formula's base delay. Default: 0
+	// (preserves today's immediate-restart behavior).
+	InitialDelaySeconds int `json:"initial_delay_seconds,omitempty"`
+	// MaxDelaySeconds caps the backoff formula's computed delay. Default: 300.
+	MaxDelaySeconds int `json:"max_delay_seconds,omitempty"`
+	// RetryOn is the subset of ["crashed","stalled","tmux_exited"] eligible
+	// for automated retry. Empty/nil defaults to all three.
+	RetryOn []string `json:"retry_on,omitempty"`
+	// StaleTriggersRetry is an opt-in flag that, once a stale-session
+	// notification's config (config.StaleSessionConfig) crosses its threshold,
+	// treats that as an additional "stalled"-classified trigger. Currently
+	// unconsumed — StaleSessionConfig (see StaleSessionConfig above) has no
+	// wiring into the retry driver yet; this field exists so a config can
+	// opt in ahead of that integration landing without a later schema change.
+	StaleTriggersRetry *bool `json:"stale_triggers_retry,omitempty"`
+}
+
+// EnabledOrDefault returns whether automated retry is enabled, defaulting to
+// true when unset.
+func (c RetryPolicyConfig) EnabledOrDefault() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
+// MaxAttemptsOrDefault returns MaxAttempts, falling back to
+// defaultRetryMaxAttempts when unset (<=0) — a fat-fingered 0/negative value
+// must not silently disable retry.
+func (c RetryPolicyConfig) MaxAttemptsOrDefault() int {
+	if c.MaxAttempts <= 0 {
+		return defaultRetryMaxAttempts
+	}
+	return c.MaxAttempts
+}
+
+// MaxDelaySecondsOrDefault returns MaxDelaySeconds, falling back to
+// defaultRetryMaxDelaySeconds when unset (<=0).
+func (c RetryPolicyConfig) MaxDelaySecondsOrDefault() int {
+	if c.MaxDelaySeconds <= 0 {
+		return defaultRetryMaxDelaySeconds
+	}
+	return c.MaxDelaySeconds
+}
+
+// FilteredRetryOn returns RetryOn with any entry that isn't one of the three
+// known reasons dropped (with a logged warning, not a hard error) — a config
+// typo like "crashd" would otherwise silently produce a policy that never
+// matches that reason, with no error/warning/UI signal anywhere that the
+// entry is being ignored. Unlike RetryOnOrDefault, this does NOT widen an
+// empty result back to all three reasons: session.resolveRetryPolicy's
+// per-session override path needs the filtered result on its own, so an
+// override where every entry is a typo falls back to the already-resolved
+// *global* value instead of silently widening back to all three reasons.
+func (c RetryPolicyConfig) FilteredRetryOn() []string {
+	if len(c.RetryOn) == 0 {
+		return nil
+	}
+	filtered := make([]string, 0, len(c.RetryOn))
+	for _, reason := range c.RetryOn {
+		if slices.Contains(validRetryOnReasons, reason) {
+			filtered = append(filtered, reason)
+		} else {
+			log.Warn("RetryPolicyConfig.RetryOn: ignoring unknown retry reason", "reason", reason)
+		}
+	}
+	return filtered
+}
+
+// RetryOnOrDefault returns RetryOn, defaulting to all three known reasons
+// when empty or when every entry is unknown. See FilteredRetryOn for the
+// filtering-without-fallback variant used by the override-resolution path.
+func (c RetryPolicyConfig) RetryOnOrDefault() []string {
+	if filtered := c.FilteredRetryOn(); len(filtered) > 0 {
+		return filtered
+	}
+	return append([]string(nil), validRetryOnReasons...)
+}
+
+// BackoffOrWarn validates Backoff at config-load time: if it's set and isn't
+// "exponential" (the only implemented strategy), logs a warning and falls
+// back to "exponential" rather than silently accepting a value that has no
+// behavior behind it.
+func (c RetryPolicyConfig) BackoffOrWarn() string {
+	if c.Backoff == "" || c.Backoff == "exponential" {
+		return "exponential"
+	}
+	log.Warn("RetryPolicyConfig.Backoff: unknown strategy, falling back to exponential", "backoff", c.Backoff)
+	return "exponential"
+}
+
+// defaultCreationStaleThresholdMinutes is used by ThresholdMinutesOrDefault
+// whenever ThresholdMinutes is unset (zero or negative), including for
+// configs saved before this field existed.
+const defaultCreationStaleThresholdMinutes = 10
+
+// CreationStaleConfig holds configuration for the Stale-Creation Sweeper
+// (Epic 4.1): how long a session may sit in Creating status without a
+// progress update before it's automatically flipped to Failed/Stale.
+// Mirrors StaleSessionConfig's shape.
+type CreationStaleConfig struct {
+	// ThresholdMinutes is how many minutes a Creating instance may go without
+	// a creation-progress update before the sweeper flips it to Failed/Stale.
+	// Default: 10.
+	ThresholdMinutes int `json:"threshold_minutes,omitempty"`
+}
+
+// ThresholdMinutesOrDefault returns ThresholdMinutes, falling back to
+// defaultCreationStaleThresholdMinutes when unset (<=0).
+func (c CreationStaleConfig) ThresholdMinutesOrDefault() int {
+	if c.ThresholdMinutes <= 0 {
+		return defaultCreationStaleThresholdMinutes
+	}
+	return c.ThresholdMinutes
+}
+
 // TmuxExecGateConfig bounds how many tmux subprocesses may run concurrently
 // against one tmux server, across every process on the machine (the main
 // daemon and every --mcp process) — tmux's server is single-threaded, so
@@ -168,6 +363,14 @@ type TmuxExecGateConfig struct {
 	// Zero or unset means "use the default" — see ResyncFastLaneSlotsOrDefault.
 	// Default: 4.
 	ResyncFastLaneSlots int `json:"resyncFastLaneSlots"`
+
+	// InputFastLaneSlots is the number of concurrent tmux subprocess execution
+	// slots reserved for keystroke input traffic (the legacy per-keystroke
+	// send-keys path used when STAPLER_SQUAD_USE_CONTROL_MODE=false), so a
+	// poller flooding the shared Slots pool with capture-pane calls never
+	// makes user keystrokes queue behind it. Zero or unset means "use the
+	// default" — see InputFastLaneSlotsOrDefault. Default: 4.
+	InputFastLaneSlots int `json:"inputFastLaneSlots"`
 }
 
 // defaultTmuxExecGateSlots is used whenever Slots is unset (zero), including
@@ -177,6 +380,10 @@ const defaultTmuxExecGateSlots = 8
 // defaultResyncFastLaneSlots is used whenever ResyncFastLaneSlots is unset
 // (zero), including for configs saved before this field existed.
 const defaultResyncFastLaneSlots = 4
+
+// defaultInputFastLaneSlots is used whenever InputFastLaneSlots is unset
+// (zero), including for configs saved before this field existed.
+const defaultInputFastLaneSlots = 4
 
 // SlotsOrDefault returns Slots, falling back to defaultTmuxExecGateSlots when
 // unset (covers both a fresh zero-value struct and a config.json saved before
@@ -197,6 +404,17 @@ func (c TmuxExecGateConfig) ResyncFastLaneSlotsOrDefault() int {
 		return defaultResyncFastLaneSlots
 	}
 	return c.ResyncFastLaneSlots
+}
+
+// InputFastLaneSlotsOrDefault returns InputFastLaneSlots, falling back to
+// defaultInputFastLaneSlots when unset (covers both a fresh zero-value
+// struct and a config.json saved before this field existed, which unmarshals
+// the same way).
+func (c TmuxExecGateConfig) InputFastLaneSlotsOrDefault() int {
+	if c.InputFastLaneSlots <= 0 {
+		return defaultInputFastLaneSlots
+	}
+	return c.InputFastLaneSlots
 }
 
 // BrowserPassthroughCDPConfig holds tunable parameters for the Chrome DevTools
@@ -266,6 +484,16 @@ func (c *BrowserPassthroughConfig) IsEnabled() bool {
 	return *c.Enabled
 }
 
+// ProgramConfig defines a user-configured executable program.
+type ProgramConfig struct {
+	ID          string            `json:"id"`
+	Label       string            `json:"label"`
+	Command     string            `json:"command"`
+	CLIFlags    string            `json:"cli_flags,omitempty"`
+	Description string            `json:"description,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+}
+
 // SessionDefaults is the top-level container for all session default configuration.
 type SessionDefaults struct {
 	// Program is the default AI program (e.g., "claude", "aider").
@@ -284,6 +512,8 @@ type SessionDefaults struct {
 	DirectoryRules []DirectoryRule `json:"directory_rules,omitempty"`
 	// Aliases are named session presets invoked via @name in the omnibar.
 	Aliases []AliasConfig `json:"aliases,omitempty"`
+	// Programs holds custom program definitions.
+	Programs []ProgramConfig `json:"programs,omitempty"`
 }
 
 // ProfileDefaults holds the configurable fields for a named profile.
@@ -417,6 +647,94 @@ type CapacityConfig struct {
 	PollIntervalSeconds int `json:"poll_interval_seconds,omitempty"`
 	// ProviderPriority lists fallback providers in order of preference.
 	ProviderPriority []ProviderPriority `json:"provider_priority,omitempty"`
+	// IdleWaitTurnCeiling is how many consecutive "still waiting on
+	// background work" turns (see server/services/capacity_monitor.go's
+	// isIdleWaitTurn) trigger an auto-compact, then an escalation if the
+	// pattern continues past a second ceiling's worth of turns after that.
+	// A real incident ran into the hundreds of such turns before anyone
+	// noticed; 15 catches it within a couple of poll cycles at typical wake
+	// cadence while tolerating a normal handful of status check-ins.
+	// Default: 15.
+	IdleWaitTurnCeiling int `json:"idle_wait_turn_ceiling,omitempty"`
+	// IdleWaitMaxMinutes is the wall-clock span of one idle-wait run (first to
+	// last idle turn, needing at least 3 turns) that counts as a loop even
+	// below IdleWaitTurnCeiling — a slow wake cadence can burn an hour in few
+	// turns. Default: 30.
+	IdleWaitMaxMinutes int `json:"idle_wait_max_minutes,omitempty"`
+	// RoleCostBudgetUSD overrides CostBudgetUSD per backlog session role
+	// ("triage", "work", "review", ...). A role present in the map uses its
+	// value (0 = no limit); absent roles use CostBudgetUSD. Pipeline roles
+	// (triage/review/diagnose) are stopped and handed back to the orchestrator
+	// on breach; other sessions get the capacity notification only.
+	// Default: {"triage": 10}.
+	RoleCostBudgetUSD map[string]float64 `json:"role_cost_budget_usd,omitempty"`
+	// RoleIdleWaitTurnCeiling overrides IdleWaitTurnCeiling per role; absent
+	// roles use IdleWaitTurnCeiling. Default: {"triage": 10}.
+	RoleIdleWaitTurnCeiling map[string]int `json:"role_idle_wait_turn_ceiling,omitempty"`
+	// SpendRateAlertUSDPerHour notifies once per cooldown when a live session's
+	// spend over the trailing SpendRateWindowMinutes, scaled to USD/hour,
+	// exceeds it. Unlike a total-token ceiling it does not punish long-running
+	// sessions, only fast burn. A negative value disables the alert.
+	// Default: 15 (between p90 and p95 of per-session peak 60-minute rates
+	// measured over 228 sessions in a 14-day window).
+	SpendRateAlertUSDPerHour float64 `json:"spend_rate_alert_usd_per_hour,omitempty"`
+	// SpendRateWindowMinutes is the rolling window the spend rate is measured
+	// over, also the per-session cooldown between repeat alerts. Default: 60;
+	// clamped to [5, 1440].
+	SpendRateWindowMinutes int `json:"spend_rate_window_minutes,omitempty"`
+}
+
+const (
+	defaultSpendRateAlertUSDPerHour = 15.0
+	defaultSpendRateWindowMinutes   = 60
+	minSpendRateWindowMinutes       = 5
+	maxSpendRateWindowMinutes       = 24 * 60
+)
+
+// SpendRateThreshold returns the USD/hour alert line and whether the alert is
+// enabled. Zero and non-finite values take the default; only a negative
+// value disables it. Works on a config that bypassed CapacityConfigOrDefault.
+func (c CapacityConfig) SpendRateThreshold() (usdPerHour float64, enabled bool) {
+	v := c.SpendRateAlertUSDPerHour
+	switch {
+	case v < 0:
+		return 0, false
+	case v == 0 || math.IsNaN(v) || math.IsInf(v, 0):
+		return defaultSpendRateAlertUSDPerHour, true
+	}
+	return v, true
+}
+
+// SpendRateWindow returns the rolling spend-rate window, applying the default
+// and clamping for a config that bypassed CapacityConfigOrDefault.
+func (c CapacityConfig) SpendRateWindow() time.Duration {
+	m := c.SpendRateWindowMinutes
+	if m == 0 {
+		m = defaultSpendRateWindowMinutes
+	}
+	if m < minSpendRateWindowMinutes {
+		m = minSpendRateWindowMinutes
+	}
+	if m > maxSpendRateWindowMinutes {
+		m = maxSpendRateWindowMinutes
+	}
+	return time.Duration(m) * time.Minute
+}
+
+// CostBudgetFor returns the USD cost budget for role (0 = unlimited).
+func (c CapacityConfig) CostBudgetFor(role string) float64 {
+	if v, ok := c.RoleCostBudgetUSD[role]; ok {
+		return v
+	}
+	return c.CostBudgetUSD
+}
+
+// IdleWaitCeilingFor returns the consecutive idle-turn ceiling for role.
+func (c CapacityConfig) IdleWaitCeilingFor(role string) int {
+	if v, ok := c.RoleIdleWaitTurnCeiling[role]; ok && v > 0 {
+		return v
+	}
+	return c.IdleWaitTurnCeiling
 }
 
 // QuotaConfig holds configuration for the account-wide Claude Code session-quota
@@ -484,6 +802,43 @@ func (c QuotaConfig) QuotaConfigOrDefault() QuotaConfig {
 	return out
 }
 
+// RemoteConfig registers one SSH-reachable remote host that sessions can be
+// created against (ssh-remote-workspaces feature). It holds only connection
+// coordinates and a pointer to credential material — never the credential
+// material itself. See sshremote.KeyStore (Phase 3.2) for where the actual
+// SSH private key/passphrase bytes live (OS keychain), and
+// Config.RemoteByName for the lookup helper consumed by session creation
+// (Phase 4) and Settings UI validation (Phase 6).
+type RemoteConfig struct {
+	// Name is the unique, user-chosen identifier for this remote (e.g.
+	// "prod-box"), referenced by session-creation flows. Not a hostname and
+	// not required to resolve as one.
+	Name string `json:"name"`
+	// Host is the SSH-reachable hostname or address (e.g. "prod.example.com"
+	// or "10.0.0.5"). Not a full "user@host" string — see User for the
+	// login name — and not a URL (no scheme, no path, no port suffix; use a
+	// standard SSH config Host block for non-default ports).
+	Host string `json:"host"`
+	// User is the SSH login username on the remote host. Not a local
+	// username and not validated against the remote's actual user list at
+	// save time.
+	User string `json:"user"`
+	// BasePath is the absolute filesystem path on the remote host under
+	// which session worktrees/directories are created (e.g.
+	// "/srv/workspaces"). Not a local path and not created automatically by
+	// saving this config — it must already exist (or be creatable) on the
+	// remote.
+	BasePath string `json:"base_path"`
+	// IdentityRef is an opaque, non-secret pointer to the SSH identity
+	// (private key + optional passphrase) that authenticates to this
+	// remote, resolved at connection time via sshremote.KeyStore against the
+	// OS keychain. It is NOT a filesystem path to a key file, NOT the key's
+	// raw bytes, and NOT the passphrase itself — no key material is ever
+	// stored in config.json. An empty value means no identity has been
+	// registered yet for this remote.
+	IdentityRef string `json:"identity_ref"`
+}
+
 // CapacityConfigOrDefault returns a CapacityConfig with standard defaults applied to zero fields.
 func (c CapacityConfig) CapacityConfigOrDefault() CapacityConfig {
 	out := c
@@ -502,11 +857,102 @@ func (c CapacityConfig) CapacityConfigOrDefault() CapacityConfig {
 	if out.PollIntervalSeconds <= 0 {
 		out.PollIntervalSeconds = 60
 	}
+	if out.IdleWaitTurnCeiling <= 0 {
+		out.IdleWaitTurnCeiling = 15
+	}
+	if out.IdleWaitMaxMinutes <= 0 {
+		out.IdleWaitMaxMinutes = 30
+	}
+	if v, enabled := c.SpendRateThreshold(); enabled {
+		out.SpendRateAlertUSDPerHour = v
+	}
+	out.SpendRateWindowMinutes = int(c.SpendRateWindow() / time.Minute)
+	// Copy-on-default so the caller's maps are never mutated.
+	out.RoleCostBudgetUSD = withRoleDefault(c.RoleCostBudgetUSD, "triage", 10.0)
+	out.RoleIdleWaitTurnCeiling = withRoleDefault(c.RoleIdleWaitTurnCeiling, "triage", 10)
 	if len(out.ProviderPriority) == 0 {
 		out.ProviderPriority = []ProviderPriority{
 			{CLI: "agy", Model: "gemini-2.0-flash"},
 			{CLI: "claude", Model: "claude-3-5-sonnet-20241022"},
 		}
+	}
+	return out
+}
+
+// ContextHealthConfig holds the thresholds for the per-session ContextHealth
+// signal (green/amber/red). Fields <= 0 mean "unset" and take the default.
+type ContextHealthConfig struct {
+	// LoopRepeatThreshold is the number of consecutive identical tool calls
+	// that raises the level. Default 3.
+	LoopRepeatThreshold int `json:"loop_repeat_threshold,omitempty"`
+	// ConfusionPhraseThreshold is the number of apology/self-correction
+	// messages in the trailing window that raises the level. Default 5.
+	ConfusionPhraseThreshold int `json:"confusion_phrase_threshold,omitempty"`
+	// MinToolCallSamples is the minimum number of tool calls in the window
+	// before any level other than unknown is reported. Default 5.
+	MinToolCallSamples int `json:"min_tool_call_samples,omitempty"`
+}
+
+const (
+	defaultLoopRepeatThreshold      = 3
+	defaultConfusionPhraseThreshold = 5
+	defaultMinToolCallSamples       = 5
+)
+
+// ContextHealthConfigOrDefault returns a copy with defaults applied to unset fields.
+func (c ContextHealthConfig) ContextHealthConfigOrDefault() ContextHealthConfig {
+	out := c
+	if out.LoopRepeatThreshold <= 0 {
+		out.LoopRepeatThreshold = defaultLoopRepeatThreshold
+	}
+	if out.ConfusionPhraseThreshold <= 0 {
+		out.ConfusionPhraseThreshold = defaultConfusionPhraseThreshold
+	}
+	if out.MinToolCallSamples <= 0 {
+		out.MinToolCallSamples = defaultMinToolCallSamples
+	}
+	return out
+}
+
+func withRoleDefault[V int | float64](m map[string]V, role string, def V) map[string]V {
+	out := make(map[string]V, len(m)+1)
+	out[role] = def
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+// HandoffSummaryConfig holds configuration for the restart-with-handoff-summary feature.
+type HandoffSummaryConfig struct {
+	// Enabled toggles the feature. nil defaults to enabled, matching
+	// AutoSpawnReadyItems's pattern — see EnabledOrDefault. A plain `bool` here
+	// would make "explicitly false" indistinguishable from "key absent" (e.g. a
+	// config.json written before this feature existed), silently defaulting
+	// every pre-existing installation to disabled instead of the stated
+	// default of enabled.
+	Enabled *bool `json:"enabled,omitempty"`
+	// MaxMiddleExcerptTokens caps the proportional middle-transcript excerpt fed
+	// to the summarizer. Default: 12000.
+	MaxMiddleExcerptTokens int `json:"max_middle_excerpt_tokens,omitempty"`
+}
+
+// EnabledOrDefault reports whether the restart-with-handoff-summary feature is
+// enabled. Defaults to true (nil, or unset config.json key); pass explicit
+// false to disable.
+func (c HandoffSummaryConfig) EnabledOrDefault() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
+// HandoffSummaryConfigOrDefault returns a HandoffSummaryConfig with standard
+// defaults applied to zero fields.
+func (c HandoffSummaryConfig) HandoffSummaryConfigOrDefault() HandoffSummaryConfig {
+	out := c
+	if out.MaxMiddleExcerptTokens <= 0 {
+		out.MaxMiddleExcerptTokens = 12000
 	}
 	return out
 }

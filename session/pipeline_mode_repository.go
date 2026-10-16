@@ -34,6 +34,10 @@ type PipelineModeCreateInput struct {
 	TriagePromptTemplate  string
 	ReviewPromptTemplate  string
 	InitialPromptTemplate string
+
+	// StageExecutors holds the per-role program/model override for this mode.
+	// A nil/empty map means no stage has an override configured.
+	StageExecutors map[StageRole]PipelineStageExecutor
 }
 
 // PipelineModeUpdateInput holds optional fields for updating an existing pipeline mode.
@@ -52,4 +56,9 @@ type PipelineModeUpdateInput struct {
 	TriagePromptTemplate  *string
 	ReviewPromptTemplate  *string
 	InitialPromptTemplate *string
+
+	// StageExecutors is nil-means-untouched: leave nil to leave existing
+	// stage executor overrides alone, or point at an (possibly empty) map to
+	// replace them entirely.
+	StageExecutors *map[StageRole]PipelineStageExecutor
 }

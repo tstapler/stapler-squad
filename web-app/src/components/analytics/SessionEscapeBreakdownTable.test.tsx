@@ -9,6 +9,7 @@ function makeRow(overrides: Partial<SessionEscapeSummary>): SessionEscapeSummary
     sessionId: "session-a",
     totalSequences: 100n,
     totalMangled: 1n,
+    correlationOutcomes: 100n,
     mangleRate: 0.01,
     ...overrides,
   } as SessionEscapeSummary;

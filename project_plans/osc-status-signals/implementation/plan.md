@@ -56,7 +56,8 @@ Decisions table below, with the same reasoning.
 | `ClaudeController.classifyOSC` | New private method: wraps `ExtractLastOSC` + `ClassifyOSCTitle` against the controller's current raw tail, gated on `cc.IsStarted()` AND on real PTY liveness (`oscStaleThreshold`, see below) — not `IsStarted()` alone. | Returns `(dtypes.OSCStatusNone, false)` whenever the controller isn't started, the PTY has produced no bytes in over `oscStaleThreshold`, no OSC title is present, or the title is unrecognized — the fallback gate for AC7 and the liveness fix for the adversarial-review BLOCKER (stuck-Executing-forever on a crashed process). |
 | `oscStaleThreshold` | New `const time.Duration = 5 * time.Second` in `session/claude_controller.go`. | Compared against `IdleDetector.GetLastActivityNs()` — a timestamp already updated on *every real PTY read* via `rs.SetOnOutput`'s existing `detector.RecordActivity()` call (line ~312), independent of status classification. A crashed/killed process stops producing PTY bytes, so this clock freezes with it — reusing it costs zero new state. 5s is ~33x `OSCDebounceDelay` (150ms) and ~10x the estimated spinner redraw interval (80-100ms), so no legitimate in-progress spinner can trip it, while a dead process's stale spinner title stops being trusted well within one operator-visible interval. |
 | `applyOSCStatusOverride` | New free function in `session/claude_controller.go`: `func applyOSCStatusOverride(textStatus detection.DetectedStatus, textDesc string, osc dtypes.OSCStatus) (detection.DetectedStatus, string)`. Implements the asymmetric, upgrade-only priority policy (see Pattern Decisions). | Never demotes a higher-urgency text-pattern result; only promotes "boring" outcomes toward Executing/Idle. |
-| `IdleDetector.ApplyOSCStatus` | New method on `session/detection/idle.go`'s `IdleDetector`: `func (id *IdleDetector) ApplyOSCStatus(osc dtypes.OSCStatus) IdleState`. Applies an OSC-derived signal to the idle state machine, gated by `OSCDebounceDelay` instead of `DebounceDelay`, sharing the same `lastStateChange` timestamp field as the text-pattern path. | See ADR-002 for why it shares the timestamp field rather than tracking a second one. |
+| `IdleDetector.DetectStateFromContentWithOSC` | New method on `session/detection/idle.go`'s `IdleDetector`: `func (id *IdleDetector) DetectStateFromContentWithOSC(content string, osc dtypes.OSCStatus) IdleState`. Computes the text-derived candidate state (same logic `DetectStateFromContent` uses) and, if `osc` is promotable against the text-derived `DetectedStatus` (see `IsOSCExecutingPromotable`/`IsOSCIdlePromotable`), the OSC-derived candidate state, then performs exactly **one** lock-protected write using whichever debounce window (`DebounceDelay` or `OSCDebounceDelay`) applies to the winning source. `DetectStateFromContent` becomes `return id.DetectStateFromContentWithOSC(content, dtypes.OSCStatusNone)` — a thin wrapper, so its no-OSC behavior (AC7) is unchanged by construction. | **Design correction (2026-08-28, architecture-review.md BLOCKER 1/2):** replaces the originally-planned standalone `ApplyOSCStatus(osc) IdleState` method, which the architecture review found races `lastStateChange` against `DetectStateFromContent` when both are called sequentially per poll (as Stories 4.1.3/4.1.4 originally specified), and lacked BLOCKER 2's protected-status guard. See ADR-002 for why the OSC and text-pattern gates share one `lastStateChange` field rather than tracking two. |
+| `detection.IsOSCExecutingPromotable` / `detection.IsOSCIdlePromotable` | New package-level functions in `session/detection` (e.g. `detector.go` or a new `osc_priority.go`): `func IsOSCExecutingPromotable(status DetectedStatus) bool` (true for `StatusReady, StatusUnknown, StatusIdle, StatusProcessing`) and `func IsOSCIdlePromotable(status DetectedStatus) bool` (true for `StatusReady, StatusUnknown`). | **Added in the 2026-08-28 design correction.** Single source of truth for the promotable-status sets, called by both `applyOSCStatusOverride` (`DetectedStatus` side) and `DetectStateFromContentWithOSC` (`IdleState` side) — closes architecture-review.md BLOCKER 2 and the related "Concerns" note about the two overlays being able to independently drift. |
 | `IdleDetectorConfig.OSCDebounceDelay` | New `time.Duration` field, default `150 * time.Millisecond`. The debounce window applied specifically to OSC-derived transitions, distinct from (and shorter than) `DebounceDelay` (500ms, text-pattern transitions). | See ADR-002. |
 
 ---
@@ -419,70 +420,133 @@ on instead of reusing `DebounceDelay`.
   reasoning (order-of-magnitude of a spinner redraw interval, ~3x faster than `DebounceDelay`).
 - Files: `session/detection/idle.go`
 
-#### Story 3.1.2: `IdleDetector.ApplyOSCStatus`
+#### Story 3.1.2: `IdleDetector.DetectStateFromContentWithOSC`
 
-**As a** `ClaudeController`, **I want** to push an OSC-derived classification directly into the idle
-state machine with its own debounce window, **so that** AC5/AC6's false-idle fix reaches
-`IdleState` (not just the displayed `DetectedStatus`).
+**As a** `ClaudeController`, **I want** to feed an OSC-derived classification into the idle state
+machine alongside the text-derived one, resolved as a single write, **so that** AC5/AC6's
+false-idle fix reaches `IdleState` (not just the displayed `DetectedStatus`) without the two
+signals racing `lastStateChange` (architecture-review.md BLOCKER 1) or bypassing the
+protected-status guard (BLOCKER 2).
 
 **Acceptance Criteria**:
 - AC6 — OSC transitions bypass the text-pattern debounce.
   - *Given* an `IdleDetector` with `currentState = IdleStateWaiting` and `lastStateChange` set 200ms
     in the past (using the package's existing fake-clock test helper), *When*
-    `id.ApplyOSCStatus(dtypes.OSCStatusExecuting)` is called, *Then* `id.currentState` becomes
-    `IdleStateActive` immediately — even though the same 200ms elapsed would NOT satisfy the
-    text-pattern path's 500ms `DebounceDelay` (only the 150ms `OSCDebounceDelay` needs to have
+    `id.DetectStateFromContentWithOSC(content, dtypes.OSCStatusExecuting)` is called with `content`
+    whose text-pattern result is itself promotable (e.g. a bare prompt), *Then* `id.currentState`
+    becomes `IdleStateActive` immediately — even though the same 200ms elapsed would NOT satisfy
+    the text-pattern path's 500ms `DebounceDelay` (only the 150ms `OSCDebounceDelay` needs to have
     elapsed, and 200ms ≥ 150ms).
 - First transition out of `IdleStateUnknown` is never debounced (parity with the existing gate).
   - *Given* a freshly-constructed `IdleDetector` (`currentState == IdleStateUnknown`), *When*
-    `id.ApplyOSCStatus(dtypes.OSCStatusExecuting)` is called immediately, *Then* `id.currentState`
-    becomes `IdleStateActive` with no wait.
-- `OSCStatusExecuting` bumps `lastActivity` (parity with `mapStatusToIdleState`'s existing
-  `StatusExecuting` branch).
-  - *Given* an `IdleDetector` with a known `lastActivity`, *When*
-    `id.ApplyOSCStatus(dtypes.OSCStatusExecuting)` is called, *Then* `id.GetLastActivityNs()`
-    reflects the call time.
-- `OSCStatusNone` is a caller-error no-op guard.
-  - *Given* any `IdleDetector` state, *When* `id.ApplyOSCStatus(dtypes.OSCStatusNone)` is called,
-    *Then* `id.currentState` is unchanged and the method returns the unchanged current state
-    (`ClassifyOSCTitle`/`classifyOSC` should never actually pass `OSCStatusNone` here — this guard
-    exists so a future caller mistake is a no-op, not a corrupting write).
+    `id.DetectStateFromContentWithOSC(content, dtypes.OSCStatusExecuting)` is called immediately,
+    *Then* `id.currentState` becomes `IdleStateActive` with no wait.
+- `OSCStatusExecuting` bumps `lastActivity` when it wins (parity with `mapStatusToIdleState`'s
+  existing `StatusExecuting` branch).
+  - *Given* an `IdleDetector` with a known `lastActivity` and promotable text content, *When*
+    `id.DetectStateFromContentWithOSC(content, dtypes.OSCStatusExecuting)` is called, *Then*
+    `id.GetLastActivityNs()` reflects the call time.
+- `OSCStatusNone` reduces to plain text-pattern behavior (no-op guard, and the byte-for-byte
+  equivalence AC7 requires).
+  - *Given* any `IdleDetector` state and content, *When*
+    `id.DetectStateFromContentWithOSC(content, dtypes.OSCStatusNone)` is called, *Then* the result
+    is identical to `id.DetectStateFromContent(content)` on a detector in the same state (proven
+    directly since `DetectStateFromContent` delegates to this method with `OSCStatusNone`).
+- Non-promotable text status blocks the OSC override (BLOCKER 2 regression test).
+  - *Given* content whose text pattern resolves to `StatusNeedsApproval` (→ `IdleStateWaiting` via
+    `mapStatusToIdleState`), *When*
+    `id.DetectStateFromContentWithOSC(content, dtypes.OSCStatusExecuting)` is called, *Then*
+    `id.currentState` stays `IdleStateWaiting` — `StatusNeedsApproval` is not in
+    `IsOSCExecutingPromotable`'s set, so the OSC spinner does not force `IdleStateActive` over a
+    state that needs user attention.
 
-**Files**: `session/detection/idle.go`, `session/detection/idle_test.go`
+**Files**: `session/detection/idle.go`, `session/detection/idle_test.go`, `session/detection/detector.go` (or a new `session/detection/osc_priority.go`)
 
-##### Task 3.1.2a: Implement `ApplyOSCStatus` (~5 min)
+##### Task 3.1.2a: Add `IsOSCExecutingPromotable`/`IsOSCIdlePromotable` (~3 min)
+- Add to `session/detection` (e.g. a new small file `session/detection/osc_priority.go`):
+  ```go
+  package detection
+
+  // IsOSCExecutingPromotable reports whether a text-pattern-derived DetectedStatus
+  // is eligible to be promoted to Executing by an OSC-derived spinner signal.
+  // Single source of truth shared by applyOSCStatusOverride (session package,
+  // DetectedStatus side) and IdleDetector.DetectStateFromContentWithOSC (IdleState
+  // side) — see osc-status-signals architecture-review.md BLOCKER 2.
+  func IsOSCExecutingPromotable(status DetectedStatus) bool {
+      switch status {
+      case StatusReady, StatusUnknown, StatusIdle, StatusProcessing:
+          return true
+      }
+      return false
+  }
+
+  // IsOSCIdlePromotable reports whether a text-pattern-derived DetectedStatus is
+  // eligible to be promoted to Idle by an OSC-derived ✳ signal.
+  func IsOSCIdlePromotable(status DetectedStatus) bool {
+      switch status {
+      case StatusReady, StatusUnknown:
+          return true
+      }
+      return false
+  }
+  ```
+- Files: `session/detection/osc_priority.go`
+
+##### Task 3.1.2b: Implement `DetectStateFromContentWithOSC` (~6 min)
 - In `session/detection/idle.go`, add `"github.com/tstapler/stapler-squad/session/detection/dtypes"`
   to the import block.
-- Add:
+- Replace `DetectStateFromContent`'s body with a thin delegation, and add the new method:
   ```go
-  // ApplyOSCStatus updates idle state from an OSC-derived signal (see
-  // ClaudeController.classifyOSC), bypassing DebounceDelay (the text-pattern
-  // debounce) in favor of the much shorter OSCDebounceDelay — both gates
-  // compare against the same lastStateChange field (see ADR-002). osc must be
-  // OSCStatusExecuting or OSCStatusIdle; OSCStatusNone is a no-op guard.
-  func (id *IdleDetector) ApplyOSCStatus(osc dtypes.OSCStatus) IdleState {
+  // DetectStateFromContent analyzes provided terminal content and returns the current idle state.
+  // Equivalent to DetectStateFromContentWithOSC(content, dtypes.OSCStatusNone).
+  func (id *IdleDetector) DetectStateFromContent(content string) IdleState {
+      return id.DetectStateFromContentWithOSC(content, dtypes.OSCStatusNone)
+  }
+
+  // DetectStateFromContentWithOSC analyzes content the same way DetectStateFromContent
+  // does, then folds in an OSC-derived signal (see ClaudeController.classifyOSC) as an
+  // asymmetric, upgrade-only overlay — gated by IsOSCExecutingPromotable/IsOSCIdlePromotable,
+  // the same predicates applyOSCStatusOverride uses for DetectedStatus, so the two overlays
+  // can never disagree about which text-pattern statuses are eligible for promotion. Computes
+  // both candidate states and performs exactly one lock-protected write with the correct
+  // debounce window (DebounceDelay or OSCDebounceDelay) for whichever source is authoritative
+  // on this call — see osc-status-signals architecture-review.md BLOCKER 1 for why two
+  // sequential state-committing calls sharing lastStateChange is unsafe.
+  func (id *IdleDetector) DetectStateFromContentWithOSC(content string, osc dtypes.OSCStatus) IdleState {
+      if content == "" {
+          id.mu.RLock()
+          s := id.currentState
+          id.mu.RUnlock()
+          return s
+      }
+
+      lines := strings.Split(content, "\n")
+      textStatus := id.statusDetector.DetectFromLines(lines)
+
       id.mu.Lock()
       defer id.mu.Unlock()
 
-      var newState IdleState
-      switch osc {
-      case dtypes.OSCStatusExecuting:
+      newState := id.mapStatusToIdleState(textStatus)
+      debounce := id.config.DebounceDelay
+
+      switch {
+      case osc == dtypes.OSCStatusExecuting && IsOSCExecutingPromotable(textStatus):
           id.lastActivity = id.timeNow()
           id.lastActivityNs.Store(id.lastActivity.UnixNano())
           newState = IdleStateActive
-      case dtypes.OSCStatusIdle:
+          debounce = id.config.OSCDebounceDelay
+      case osc == dtypes.OSCStatusIdle && IsOSCIdlePromotable(textStatus):
           idleDuration := id.timeNow().Sub(id.lastActivity)
           if idleDuration > id.config.IdleThreshold {
               newState = IdleStateTimeout
           } else {
               newState = IdleStateWaiting
           }
-      default:
-          return id.currentState // OSCStatusNone: caller-error guard, no-op
+          debounce = id.config.OSCDebounceDelay
       }
 
       if newState != id.currentState {
-          if id.currentState == IdleStateUnknown || id.timeNow().Sub(id.lastStateChange) >= id.config.OSCDebounceDelay {
+          if id.currentState == IdleStateUnknown || id.timeNow().Sub(id.lastStateChange) >= debounce {
               id.currentState = newState
               id.lastStateChange = id.timeNow()
           }
@@ -492,30 +556,38 @@ state machine with its own debounce window, **so that** AC5/AC6's false-idle fix
   ```
 - Files: `session/detection/idle.go`
 
-##### Task 3.1.2b: Tests for `ApplyOSCStatus` (~5 min)
+##### Task 3.1.2c: Tests for `DetectStateFromContentWithOSC` (~6 min)
 - In `session/detection/idle_test.go`, using the existing `newDetectorWithFakeClock` helper, add:
-  - `TestIdleDetector_ApplyOSCStatus_FirstTransitionNeverDebounced` — from `IdleStateUnknown`,
-    `ApplyOSCStatus(OSCStatusExecuting)` commits immediately.
-  - `TestIdleDetector_ApplyOSCStatus_BypassesTextDebounceViaShorterWindow` — the exact AC6 scenario:
-    set `currentState = IdleStateWaiting`, advance the fake clock 200ms past `lastStateChange`, call
-    `ApplyOSCStatus(OSCStatusExecuting)`, assert `IdleStateActive`. In the same test (or an adjacent
-    one), advance a *fresh* detector's clock by the same 200ms and call `DetectStateFromContent`
-    with content that would newly compute `StatusExecuting` from `IdleStateWaiting` (or any
-    change-in-progress); assert it is still `IdleStateWaiting` (blocked by the unmet 500ms
-    `DebounceDelay`) — the contrast that proves the two windows are genuinely independent.
-  - `TestIdleDetector_ApplyOSCStatus_BumpsLastActivity` — asserts `GetLastActivityNs()` after
-    `ApplyOSCStatus(OSCStatusExecuting)`.
-  - `TestIdleDetector_ApplyOSCStatus_NoneIsNoOp` — `ApplyOSCStatus(OSCStatusNone)` leaves
-    `currentState`/`lastStateChange` unchanged.
-  - `TestIdleDetector_ApplyOSCStatus_RepeatedSameStatusDoesNotChurnClock` — two consecutive
-    `ApplyOSCStatus(OSCStatusExecuting)` calls (same classification) within the `OSCDebounceDelay`
-    window: `lastStateChange` only updates on the first call, since `newState == id.currentState`
-    on the second skips the gate entirely — proves same-class spinner redraws don't churn state.
+  - `TestIdleDetector_DetectStateFromContentWithOSC_FirstTransitionNeverDebounced` — from
+    `IdleStateUnknown`, an OSC-executing call with promotable content commits immediately.
+  - `TestIdleDetector_DetectStateFromContentWithOSC_BypassesTextDebounceViaShorterWindow` — the
+    exact AC6 scenario: set `currentState = IdleStateWaiting`, advance the fake clock 200ms past
+    `lastStateChange`, call with `dtypes.OSCStatusExecuting` and promotable content, assert
+    `IdleStateActive`. In an adjacent test, advance a *fresh* detector's clock by the same 200ms
+    and call `DetectStateFromContent` (no OSC) with content that would newly compute
+    `StatusExecuting`; assert it is still blocked by the unmet 500ms `DebounceDelay` — the contrast
+    that proves the two windows are genuinely independent.
+  - `TestIdleDetector_DetectStateFromContentWithOSC_BumpsLastActivity` — asserts
+    `GetLastActivityNs()` after an `OSCStatusExecuting` call that wins.
+  - `TestIdleDetector_DetectStateFromContentWithOSC_NoneMatchesPlainDetectStateFromContent` —
+    `dtypes.OSCStatusNone` produces the identical result to `DetectStateFromContent` on an
+    equivalently-seeded detector.
+  - `TestIdleDetector_DetectStateFromContentWithOSC_NonPromotableTextBlocksOverride` — the BLOCKER 2
+    regression test: `StatusNeedsApproval`-shaped content + `OSCStatusExecuting` stays
+    `IdleStateWaiting`, not `IdleStateActive`.
+  - `TestIdleDetector_DetectStateFromContentWithOSC_RepeatedSameStatusDoesNotChurnClock` — two
+    consecutive same-classification calls within the `OSCDebounceDelay` window: `lastStateChange`
+    only updates on the first, since `newState == id.currentState` on the second skips the gate.
+  - `TestIdleDetector_DetectStateFromContentWithOSC_IdleNeverDowngradesActive` — text content that
+    resolves to `IdleStateActive` (e.g. `StatusExecuting`) plus `dtypes.OSCStatusIdle`: state stays
+    `IdleStateActive` (the idle-direction symmetric counterpart to AC5's asymmetric-safety test;
+    `StatusExecuting` is not in `IsOSCIdlePromotable`'s set, so this also exercises the "idle
+    direction" gap the adversarial review flagged as untested).
 - Files: `session/detection/idle_test.go`
 
-##### Task 3.1.2c: Run and fix (~2 min)
+##### Task 3.1.2d: Run and fix (~2 min)
 - Run `go test ./session/detection/...`; fix any failures.
-- Files: `session/detection/idle.go`, `session/detection/idle_test.go`
+- Files: `session/detection/idle.go`, `session/detection/idle_test.go`, `session/detection/osc_priority.go`
 
 ---
 
@@ -608,17 +680,18 @@ call sites (Stories 4.1.2–4.1.4) don't each hand-roll the same logic.
   // higher-urgency text-pattern result (Error, NeedsApproval, InputRequired,
   // TestsFailing, Success, WaitingForAgent, Executing) — see osc-status-signals
   // plan.md Pattern Decisions for why this is asymmetric rather than a pure
-  // OSC-wins short-circuit.
+  // OSC-wins short-circuit. Uses detection.IsOSCExecutingPromotable/
+  // IsOSCIdlePromotable — the same predicates IdleDetector.DetectStateFromContentWithOSC
+  // uses for the IdleState side — so the two overlays can never independently
+  // drift (architecture-review.md BLOCKER 2).
   func applyOSCStatusOverride(textStatus detection.DetectedStatus, textDesc string, osc dtypes.OSCStatus) (detection.DetectedStatus, string) {
       switch osc {
       case dtypes.OSCStatusExecuting:
-          switch textStatus {
-          case detection.StatusReady, detection.StatusUnknown, detection.StatusIdle, detection.StatusProcessing:
+          if detection.IsOSCExecutingPromotable(textStatus) {
               return detection.StatusExecuting, "osc_title: spinner glyph detected"
           }
       case dtypes.OSCStatusIdle:
-          switch textStatus {
-          case detection.StatusReady, detection.StatusUnknown:
+          if detection.IsOSCIdlePromotable(textStatus) {
               return detection.StatusIdle, "osc_title: idle marker (✳) detected"
           }
       }
@@ -687,20 +760,21 @@ pipeline too, not just the displayed badge.
 - In the `!statusHit` branch, after the existing Case A/Case B block, apply the same override as
   Task 4.1.2a (`if oscOK { status, desc = applyOSCStatusOverride(status, desc, osc); ... }`, with
   the same conditional debug log).
-- In the `!idleHit` branch, immediately after `idleState = id.DetectStateFromContent(filtered)`,
-  add:
+- In the `!idleHit` branch, replace the existing
+  `idleState = id.DetectStateFromContent(filtered)` call with:
   ```go
-  if oscOK && id != nil {
-      if osc == dtypes.OSCStatusExecuting {
-          idleState = id.ApplyOSCStatus(osc)
-      } else if osc == dtypes.OSCStatusIdle && idleState != detection.IdleStateActive {
-          idleState = id.ApplyOSCStatus(osc)
-      }
+  if oscOK {
+      idleState = id.DetectStateFromContentWithOSC(filtered, osc)
+  } else {
+      idleState = id.DetectStateFromContent(filtered)
   }
   ```
-  (The `idleState != detection.IdleStateActive` guard is what Story 4.1.3's second acceptance
-  criterion tests — it's the asymmetric safety policy applied to the idle-state side, mirroring
-  `applyOSCStatusOverride`'s own asymmetry for `DetectedStatus`.)
+  (**Design correction, 2026-08-28**: this replaces the originally-planned two-call
+  `DetectStateFromContent` then `ApplyOSCStatus` sequence, which architecture-review.md's BLOCKER 1
+  found races the shared `lastStateChange` clock. `DetectStateFromContentWithOSC` resolves both
+  candidates and performs one write — see Story 3.1.2. The asymmetric safety policy this task's
+  second acceptance criterion tests is now enforced inside `DetectStateFromContentWithOSC` via
+  `IsOSCIdlePromotable`, not by an `idleState != IdleStateActive` guard at this call site.)
 - Files: `session/claude_controller.go`
 
 #### Story 4.1.4: Wire into `GetIdleState`
@@ -719,9 +793,11 @@ consistent (no path where OSC is silently ignored).
 
 ##### Task 4.1.4a: Apply OSC override in `GetIdleState` (~3 min)
 - In `GetIdleState`'s cache-miss branch (`if n > 0 { ... state = id.DetectStateFromContent(filtered)
-  ... }`), immediately after `state = id.DetectStateFromContent(filtered)`, add the same
-  osc-classification-and-asymmetric-apply block as Task 4.1.3's idle branch (`osc, oscOK :=
-  cc.classifyOSC(tail)`, then the `OSCStatusExecuting` / guarded-`OSCStatusIdle` `if`).
+  ... }`), compute `osc, oscOK := cc.classifyOSC(tail)` and replace
+  `state = id.DetectStateFromContent(filtered)` with the same
+  `if oscOK { state = id.DetectStateFromContentWithOSC(filtered, osc) } else { state =
+  id.DetectStateFromContent(filtered) }` pattern as Task 4.1.3's idle branch (2026-08-28 design
+  correction — see that task for why).
 - Files: `session/claude_controller.go`
 
 #### Task 4.1.5: Build check (~3 min)

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -387,13 +388,44 @@ func TestPTYDiscovery_StartStop(t *testing.T) {
 	}
 }
 
+// blockingSessionLister is a tmux.SessionLister test double that signals
+// enteredCh on its first call (proving monitorLoop is inside Refresh(),
+// holding PTYDiscovery.mu) then blocks until releaseCh is closed, giving
+// TestPTYDiscovery_Stop_JoinsMonitorLoop a deterministic window to call
+// Stop() against an in-flight monitorLoop instead of guessing with a sleep.
+// enteredOnce defensively guards against a second ListSessions() call
+// double-closing enteredCh.
+type blockingSessionLister struct {
+	enteredOnce sync.Once
+	enteredCh   chan struct{}
+	releaseCh   chan struct{}
+}
+
+func (b *blockingSessionLister) ListSessions() map[string]bool {
+	b.enteredOnce.Do(func() { close(b.enteredCh) })
+	<-b.releaseCh
+	return nil
+}
+
+func (b *blockingSessionLister) IsHealthy() bool { return true }
+
+var _ tmux.SessionLister = (*blockingSessionLister)(nil)
+
 // TestPTYDiscovery_Stop_JoinsMonitorLoop pins the regression this fix
 // addresses: monitorLoop() used to be signaled via close(stopCh) but never
 // joined, so Stop() could return while monitorLoop was still mid-tick and
 // about to touch tmux exec-gate paths derived from STAPLER_SQUAD_TEST_DIR —
 // racing a test's t.TempDir() cleanup (RemoveAll) that runs right after Stop
-// returns. A short refreshRate drives multiple ticks during the test, and
-// goleak.VerifyNone after Stop confirms no monitorLoop goroutine survives it.
+// returns.
+//
+// blockingSessionLister pins monitorLoop's initial Refresh() call mid-flight
+// (inside ListSessions(), holding pd.mu) so the test can assert Stop() does
+// not return while that call is still in progress, and does return once it
+// completes. This is a genuine regression proof: if Stop() were changed back
+// to close(stopCh) without joining monitorWG, it would return almost
+// immediately, well inside the bounded wait below, causing the first select
+// to observe stopReturned instead of the timeout.
+//
 // Not t.Parallel(): same reasoning as session.TestActorNoLeak.
 // goleak.IgnoreCurrent()'s baseline only covers goroutines alive at capture
 // time; a sibling top-level test's own t.Parallel() call spawns a goroutine
@@ -406,28 +438,52 @@ func TestPTYDiscovery_StartStop(t *testing.T) {
 func TestPTYDiscovery_Stop_JoinsMonitorLoop(t *testing.T) {
 	baseline := goleak.IgnoreCurrent()
 
-	// A healthy fakeSessionLister avoids starting the real process-global
-	// TmuxServerRegistry singleton (and its reconnectLoop goroutine), which
-	// would otherwise register as an unrelated goleak false-positive.
-	lister := &fakeSessionLister{healthy: true}
+	lister := &blockingSessionLister{
+		enteredCh: make(chan struct{}),
+		releaseCh: make(chan struct{}),
+	}
+	// Ensures releaseCh is closed even if a t.Fatal below exits via
+	// runtime.Goexit before reaching the close() later in this function —
+	// otherwise monitorLoop stays blocked in ListSessions() forever and
+	// goleak.VerifyNone never runs to catch the leak.
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(lister.releaseCh) }) })
+
 	pd := NewPTYDiscoveryWithConfig(PTYDiscoveryConfig{DiscoveryInterval: time.Millisecond}, WithSessionLister(lister))
 	pd.Start()
-	time.Sleep(20 * time.Millisecond) // let several ticks fire
-	pd.Stop()
 
-	// Deterministic check: Stop() must not return until monitorWG has already
-	// hit zero. Stop() itself only returns after its own internal
-	// waitGroupWithTimeout(&pd.monitorWG, stopJoinTimeout) call unblocks, so by
-	// this point the counter is guaranteed to already be 0 — this call cannot
-	// block in the success case. It's a direct wg.Wait() rather than
-	// waitGroupWithTimeout with a short timeout: a zero/short-duration timeout
-	// races a freshly spawned goroutine against time.After, which can lose
-	// even when the counter is already zero (observed intermittently in local
-	// runs, especially under -race). If a real regression reintroduces the
-	// join gap, this call hangs until the test's own -timeout kills it —
-	// still catches the regression, just via test timeout instead of an
-	// assertion message.
-	pd.monitorWG.Wait()
+	// Block until monitorLoop's initial Refresh() call reaches
+	// ListSessions() — from this point on, monitorLoop is guaranteed to be
+	// actively executing Refresh() (holding pd.mu).
+	select {
+	case <-lister.enteredCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("monitorLoop never reached ListSessions()")
+	}
+
+	stopReturned := make(chan struct{})
+	go func() {
+		pd.Stop()
+		close(stopReturned)
+	}()
+
+	// Stop() must not return while monitorLoop is still blocked inside
+	// Refresh(). 50ms is a large margin over ordinary goroutine-scheduling
+	// latency (sub-millisecond), so a Stop() that returns within it can only
+	// mean the join was skipped.
+	select {
+	case <-stopReturned:
+		t.Fatal("Stop() returned before monitorLoop finished its in-flight Refresh() call — Stop() must join monitorLoop before returning")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	releaseOnce.Do(func() { close(lister.releaseCh) })
+
+	select {
+	case <-stopReturned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop() did not return after monitorLoop's in-flight Refresh() call was unblocked")
+	}
 
 	// os/exec's internal watchCtx goroutine doesn't synchronize its own exit
 	// with cmd.Wait()/cmd.Output() returning, so it can still be winding down

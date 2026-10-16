@@ -77,7 +77,6 @@ jest.mock("@codemirror/state", () => ({
 }));
 
 jest.mock("codemirror", () => ({ basicSetup: {} }));
-jest.mock("@codemirror/theme-one-dark", () => ({ oneDark: {} }));
 
 jest.mock("@codemirror/language", () => ({
   HighlightStyle: { define: jest.fn(() => ({})) },

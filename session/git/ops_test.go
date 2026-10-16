@@ -3,25 +3,25 @@ package git
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	fdiff "github.com/go-git/go-git/v5/plumbing/format/diff"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/git/internal/gittest"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // runGit runs a git command in dir and fails the test on error.
-func runGit(t *testing.T, dir string, args ...string) string {
+func runGit(t testing.TB, dir string, args ...string) string {
 	t.Helper()
-	cmd := safeexec.CommandContext(context.Background(), "git", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "git %s failed: %s", strings.Join(args, " "), out)
-	return string(out)
+	return gittest.RunGit(t, dir, args...)
 }
 
 // cloneTestRepo clones originDir into a fresh temp directory, giving the clone an
@@ -30,14 +30,7 @@ func runGit(t *testing.T, dir string, args ...string) string {
 // worktree, which always starts from the shared repo's checked-out branch.
 func cloneTestRepo(t *testing.T, originDir string) string {
 	t.Helper()
-	workDir := t.TempDir()
-	// t.TempDir() already creates the directory; `git clone` requires an empty or
-	// missing target, so clone into a subdirectory instead.
-	cloneDir := filepath.Join(workDir, "clone")
-	runGit(t, workDir, "clone", originDir, cloneDir)
-	runGit(t, cloneDir, "config", "user.email", "test@example.com")
-	runGit(t, cloneDir, "config", "user.name", "Test User")
-	return cloneDir
+	return gittest.CloneTestRepo(t, originDir)
 }
 
 // TestMergeMainIntoWorktree_should_ReportUpToDate_When_BranchAlreadyHasLatestMain
@@ -185,6 +178,137 @@ func TestMergeMainIntoWorktree_should_ReturnError_When_MergeFailsForNonConflictR
 	assert.Equal(t, "uncommitted local edit\n", string(content))
 }
 
+// findRealGitBinary scans PATH for the first executable "git" candidate that is not a
+// script, skipping any shell-script wrapper along the way (this dev environment's own `git`
+// resolves through ~/.local/bin/git, a git-ssh-fallback wrapper script that re-invokes
+// "git" via PATH internally — exec'ing that wrapper from installGitSubcommandLogger's own
+// script would have it resolve back to the shadowed PATH and recurse into itself forever,
+// confirmed by reproducing the hang directly against this repo's real git-ssh-fallback
+// script before writing this scan).
+func findRealGitBinary(t *testing.T) string {
+	t.Helper()
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		candidate := filepath.Join(dir, "git")
+		resolved, err := filepath.EvalSymlinks(candidate)
+		if err != nil {
+			continue
+		}
+		if isNativeExecutable(resolved) {
+			return resolved
+		}
+	}
+	t.Fatal("findRealGitBinary: no real (non-script) git binary found on PATH")
+	return ""
+}
+
+// isNativeExecutable rejects script wrappers while accepting native binaries on every
+// supported platform (ELF on Linux, Mach-O on macOS, and PE on Windows).
+func isNativeExecutable(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.Mode()&0o111 == 0 {
+		return false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+	var prefix [2]byte
+	if _, err := io.ReadFull(f, prefix[:]); err != nil {
+		return false
+	}
+	return string(prefix[:]) != "#!"
+}
+
+// installGitSubcommandLogger prepends a fake "git" wrapper script to PATH that appends
+// its first argument (the git subcommand, e.g. "fetch"/"merge") to logPath, one per line,
+// then execs a real git binary (found via findRealGitBinary, never a PATH-following
+// wrapper) — every existing fixture helper (runGit, cloneTestRepo, FetchBranch) keeps
+// working unmodified, since only the subcommand name is recorded, not its behavior. This
+// gives TestMergeMainIntoWorktree_NativeFlagOn_UsesNativePipeline a real subprocess-level
+// assertion that no `git merge`/`git merge --abort` ran, without needing a command-runner
+// DI seam for this package-level free function (unlike GitWorktree's own
+// gitSpyCommandRunner, which only instruments that struct's methods).
+func installGitSubcommandLogger(t *testing.T, logPath string) {
+	t.Helper()
+	realGit := findRealGitBinary(t)
+
+	binDir := t.TempDir()
+	script := fmt.Sprintf("#!/bin/sh\necho \"$1\" >> %q\nexec %q \"$@\"\n", logPath, realGit)
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "git"), []byte(script), 0o755))
+
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// assertNoGitMergeSubcommand asserts logPath (written by installGitSubcommandLogger)
+// never recorded a "merge" invocation.
+func assertNoGitMergeSubcommand(t *testing.T, logPath string) {
+	t.Helper()
+	logged, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	for _, line := range strings.Split(strings.TrimSpace(string(logged)), "\n") {
+		assert.NotEqual(t, "merge", strings.TrimSpace(line), "native flag on must never invoke `git merge`; full log: %s", logged)
+	}
+}
+
+// TestMergeMainIntoWorktree_UsesNativePipeline covers Story 3.4.2's acceptance criterion:
+// the public MergeMainIntoWorktree dispatches to the native pipeline instead of shelling
+// out to `git merge`/`git merge --abort` (`git fetch` may still run) — verified at the
+// real subprocess level via installGitSubcommandLogger, not just by checking the outcome.
+func TestMergeMainIntoWorktree_UsesNativePipeline(t *testing.T) {
+	// Not t.Parallel(): installGitSubcommandLogger uses t.Setenv, which
+	// panics when combined with t.Parallel().
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "main-fix.txt"), []byte("fix on main\n"), 0o644))
+	runGit(t, origin, "add", "main-fix.txt")
+	runGit(t, origin, "commit", "-m", "fix landed on main")
+
+	logPath := filepath.Join(t.TempDir(), "git-invocations.log")
+	installGitSubcommandLogger(t, logPath)
+
+	result, err := MergeMainIntoWorktree(work, "main")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.Merged)
+
+	assertNoGitMergeSubcommand(t, logPath)
+}
+
+// TestMergeMainIntoWorktree_TransitivelyUsedByRealCallSites covers Story 3.4.2's second
+// acceptance criterion: drift.go's EnsureBranchSyncedWithMain calls the exact same
+// package-level MergeMainIntoWorktree the dispatch test above exercises directly, and
+// session/backlog_lifecycle.go's branchReconciler field is assigned this exact function
+// value (git.MergeMainIntoWorktree, session/backlog_lifecycle.go:672) with no wrapper of
+// its own — so proving EnsureBranchSyncedWithMain actually merges here, in-package, is
+// sufficient: neither real call site has a separate code path left unexercised.
+func TestMergeMainIntoWorktree_TransitivelyUsedByRealCallSites(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+
+	// Drift past DefaultBranchDriftThreshold so EnsureBranchSyncedWithMain actually
+	// attempts a sync instead of short-circuiting on "not drifted yet".
+	for i := 0; i <= DefaultBranchDriftThreshold; i++ {
+		fname := fmt.Sprintf("main-fix-%d.txt", i)
+		require.NoError(t, os.WriteFile(filepath.Join(origin, fname), []byte("fix\n"), 0o644))
+		runGit(t, origin, "add", fname)
+		runGit(t, origin, "commit", "-m", fmt.Sprintf("fix %d", i))
+	}
+
+	beforeSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+	wantSHA := strings.TrimSpace(runGit(t, origin, "rev-parse", "main"))
+
+	_, _ = EnsureBranchSyncedWithMain(work, "feature", "main", DefaultBranchDriftThreshold)
+
+	afterSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "feature"))
+	assert.NotEqual(t, beforeSHA, afterSHA, "the native pipeline must have actually merged, regardless of the subsequent push outcome")
+	assert.Equal(t, wantSHA, afterSHA, "native merge must fast-forward to main's tip")
+}
+
 // TestResolveOriginBranchSHA_ReturnsFetchedTip_When_OriginHasAdvanced is the regression
 // test for the stale-HEAD backlog-spawn bug's fetch primitive: it must return origin's
 // true current tip, not whatever repoPath's cached origin/main ref happened to be at
@@ -210,8 +334,8 @@ func TestResolveOriginBranchSHA_ReturnsFetchedTip_When_OriginHasAdvanced(t *test
 
 // TestResolveOriginBranchSHA_ReturnsError_When_FetchFails verifies that an unreachable
 // origin surfaces as an error rather than silently returning a stale or empty SHA —
-// CreateBacklogWorktree relies on this to know when to fall back to the old
-// ambient-HEAD behavior instead of branching from a bogus commit.
+// CreateBacklogWorktree relies on this to know when to fall back to a local branch
+// lookup instead of branching from a bogus commit.
 func TestResolveOriginBranchSHA_ReturnsError_When_FetchFails(t *testing.T) {
 	t.Parallel()
 	origin := setupTestRepo(t)
@@ -221,6 +345,342 @@ func TestResolveOriginBranchSHA_ReturnsError_When_FetchFails(t *testing.T) {
 	sha, err := ResolveOriginBranchSHA(work, "main")
 	require.Error(t, err)
 	assert.Empty(t, sha)
+}
+
+// TestResolveDefaultBranchSHA_FindsNonMainDefaultBranch is the regression test for the
+// hardcoded-"main" bug: a repo whose default branch is "master" (e.g. this repo's own
+// sibling dotfiles project) must still resolve correctly instead of failing every fetch
+// and silently falling through to CreateBacklogWorktree's caller's ambient HEAD.
+func TestResolveDefaultBranchSHA_FindsNonMainDefaultBranch(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	runGit(t, origin, "branch", "-m", "main", "master")
+	work := cloneTestRepo(t, origin)
+
+	branch, sha, err := ResolveDefaultBranchSHA(work)
+	require.NoError(t, err)
+	assert.Equal(t, "master", branch)
+	wantSHA := strings.TrimSpace(runGit(t, origin, "rev-parse", "master"))
+	assert.Equal(t, wantSHA, sha)
+}
+
+// TestResolveDefaultBranchSHA_ReturnsError_When_NoCandidateExistsOnOrigin verifies a
+// repo whose default branch isn't any known candidate name surfaces as a loud error
+// rather than a false positive.
+func TestResolveDefaultBranchSHA_ReturnsError_When_NoCandidateExistsOnOrigin(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	runGit(t, origin, "branch", "-m", "main", "release")
+	work := cloneTestRepo(t, origin)
+
+	branch, sha, err := ResolveDefaultBranchSHA(work)
+	require.Error(t, err)
+	assert.Empty(t, branch)
+	assert.Empty(t, sha)
+}
+
+// TestResolveDefaultLocalBranchSHA_FindsNonMainDefaultBranchOffline verifies the
+// fully-offline fallback also tries non-"main" candidate names, not just "main".
+func TestResolveDefaultLocalBranchSHA_FindsNonMainDefaultBranchOffline(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	runGit(t, origin, "branch", "-m", "main", "master")
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "does-not-exist"))
+
+	branch, sha, err := ResolveDefaultLocalBranchSHA(work)
+	require.NoError(t, err)
+	assert.Equal(t, "master", branch)
+	wantSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "master"))
+	assert.Equal(t, wantSHA, sha)
+}
+
+// TestResolveWorktreeBaseCommit_UsesOriginDefaultBranch is the same
+// regression as TestResolveDefaultBranchSHA_FindsNonMainDefaultBranch, one
+// level up: the combined resolver (as used by CreateBacklogWorktree and
+// TriggerTriage's isolated triage worktree) must still branch from origin's
+// tip when work's own checked-out branch (e.g. a feature branch) is
+// something else entirely.
+func TestResolveWorktreeBaseCommit_UsesOriginDefaultBranch(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "some-other-feature-branch")
+
+	branch, sha, err := ResolveWorktreeBaseCommit(work)
+	require.NoError(t, err)
+	assert.Equal(t, "main", branch)
+	wantSHA := strings.TrimSpace(runGit(t, origin, "rev-parse", "main"))
+	assert.Equal(t, wantSHA, sha)
+}
+
+// TestResolveWorktreeBaseCommit_FallsBackToLocal_When_OriginFetchFails covers
+// the offline/no-remote fallback chain end to end.
+func TestResolveWorktreeBaseCommit_FallsBackToLocal_When_OriginFetchFails(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "does-not-exist"))
+
+	branch, sha, err := ResolveWorktreeBaseCommit(work)
+	require.NoError(t, err)
+	assert.Equal(t, "main", branch)
+	wantSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "main"))
+	assert.Equal(t, wantSHA, sha)
+}
+
+// TestResolveWorktreeBaseCommit_ReturnsEmptySHA_When_RepoIsUnborn verifies the
+// one case callers should still fall back to ambient HEAD for: a repo with no
+// commits anywhere has no other branch to accidentally fork from instead.
+func TestResolveWorktreeBaseCommit_ReturnsEmptySHA_When_RepoIsUnborn(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+
+	branch, sha, err := ResolveWorktreeBaseCommit(dir)
+	require.NoError(t, err)
+	assert.Empty(t, branch)
+	assert.Empty(t, sha)
+}
+
+// TestResolveWorktreeBaseCommit_ReturnsError_When_NoCandidateAndNotUnborn
+// verifies a repo with real history but no known-name default branch surfaces
+// a loud error instead of silently falling back to ambient HEAD.
+func TestResolveWorktreeBaseCommit_ReturnsError_When_NoCandidateAndNotUnborn(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	runGit(t, origin, "branch", "-m", "main", "release")
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "does-not-exist"))
+
+	branch, sha, err := ResolveWorktreeBaseCommit(work)
+	require.Error(t, err)
+	assert.Empty(t, branch)
+	assert.Empty(t, sha)
+}
+
+// TestAmbientHEADDivergesFromBase_True_When_CheckedOutBranchDiffersFromBase
+// covers the bug report's exact scenario: work's ambient checked-out branch
+// has its own commit not on the resolved base, so a caller who branched from
+// ambient HEAD instead of baseSHA would have silently forked from unrelated
+// in-progress work.
+func TestAmbientHEADDivergesFromBase_True_When_CheckedOutBranchDiffersFromBase(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "unrelated-in-progress-work")
+	require.NoError(t, os.WriteFile(filepath.Join(work, "unrelated.txt"), []byte("unrelated\n"), 0o644))
+	runGit(t, work, "add", "unrelated.txt")
+	runGit(t, work, "commit", "-m", "unrelated in-progress commit")
+
+	_, baseSHA, err := ResolveWorktreeBaseCommit(work)
+	require.NoError(t, err)
+
+	diverged, ambientBranch := AmbientHEADDivergesFromBase(work, baseSHA)
+	assert.True(t, diverged)
+	assert.Equal(t, "unrelated-in-progress-work", ambientBranch)
+}
+
+// TestAmbientHEADDivergesFromBase_False_When_AmbientHEADIsBase verifies the
+// no-divergence case reports false, so a session created from a repo already
+// on its default branch gets no spurious warning.
+func TestAmbientHEADDivergesFromBase_False_When_AmbientHEADIsBase(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+
+	_, baseSHA, err := ResolveWorktreeBaseCommit(work)
+	require.NoError(t, err)
+
+	diverged, ambientBranch := AmbientHEADDivergesFromBase(work, baseSHA)
+	assert.False(t, diverged)
+	assert.Empty(t, ambientBranch)
+}
+
+// TestResolveRemoteWorktreeBaseCommit_MatchesLocalResolution verifies the
+// remote (CommandRunner-based) resolver reaches the same answer as
+// ResolveWorktreeBaseCommit for the same repo, using tmux.LocalRunner{} to
+// exercise the exact command sequence a real SSH runner would run, without
+// needing a real SSH server.
+func TestResolveRemoteWorktreeBaseCommit_MatchesLocalResolution(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "some-other-feature-branch")
+
+	wantBranch, wantSHA, err := ResolveWorktreeBaseCommit(work)
+	require.NoError(t, err)
+
+	gotBranch, gotSHA, err := ResolveRemoteWorktreeBaseCommit(context.Background(), tmux.LocalRunner{}, work)
+	require.NoError(t, err)
+	assert.Equal(t, wantBranch, gotBranch)
+	assert.Equal(t, wantSHA, gotSHA)
+}
+
+// TestResolveRemoteWorktreeBaseCommit_ReturnsEmptySHA_When_RepoIsUnborn
+// mirrors TestResolveWorktreeBaseCommit_ReturnsEmptySHA_When_RepoIsUnborn:
+// a repo with no commits anywhere is the one case safe to fall back to
+// ambient HEAD for.
+func TestResolveRemoteWorktreeBaseCommit_ReturnsEmptySHA_When_RepoIsUnborn(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+
+	branch, sha, err := ResolveRemoteWorktreeBaseCommit(context.Background(), tmux.LocalRunner{}, dir)
+	require.NoError(t, err)
+	assert.Empty(t, branch)
+	assert.Empty(t, sha)
+}
+
+// TestResolveRemoteWorktreeBaseCommit_ReturnsError_When_RunnerFailsEntirely
+// is the regression this bug's remote-path fix needed: a runner that fails
+// every single command (simulating a dead/rejected SSH connection, not a
+// genuinely unborn repo) must surface a hard error, not be silently
+// misclassified as "unborn repo, fall back to ambient HEAD" -- the same
+// class of misattribution this whole bug report is about, just one layer
+// deeper. Before the symbolic-ref check, a connection failure on the final
+// `git rev-parse HEAD` looked identical to an unborn repo's failure.
+func TestResolveRemoteWorktreeBaseCommit_ReturnsError_When_RunnerFailsEntirely(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@localhost")
+	runGit(t, dir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("x\n"), 0o644))
+	runGit(t, dir, "add", "README.md")
+	runGit(t, dir, "commit", "-m", "initial commit")
+
+	branch, sha, err := ResolveRemoteWorktreeBaseCommit(context.Background(), alwaysFailRunner{}, dir)
+	require.Error(t, err)
+	assert.Empty(t, branch)
+	assert.Empty(t, sha)
+}
+
+// alwaysFailRunner is a tmux.CommandRunner whose every Run call fails,
+// simulating a dead or resource-exhausted remote connection.
+type alwaysFailRunner struct{}
+
+func (alwaysFailRunner) Run(context.Context, string, string, ...string) ([]byte, error) {
+	return nil, fmt.Errorf("simulated connection failure")
+}
+
+func (alwaysFailRunner) Start(context.Context, string, string, ...string) (io.WriteCloser, io.ReadCloser, func() error, error) {
+	return nil, nil, nil, fmt.Errorf("simulated connection failure")
+}
+
+func (alwaysFailRunner) IsRemote() bool { return true }
+
+// TestResolveExplicitBranchSHA_UsesOrigin verifies the explicit-override
+// resolver (BacklogItem.BaseBranch) fetches the named branch from origin
+// rather than assuming it's already fresh locally.
+func TestResolveExplicitBranchSHA_UsesOrigin(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	runGit(t, origin, "checkout", "-b", "release-2.0")
+	runGit(t, origin, "commit", "--allow-empty", "-m", "release commit")
+	work := cloneTestRepo(t, origin)
+
+	sha, err := ResolveExplicitBranchSHA(work, "release-2.0")
+	require.NoError(t, err)
+	wantSHA := strings.TrimSpace(runGit(t, origin, "rev-parse", "release-2.0"))
+	assert.Equal(t, wantSHA, sha)
+}
+
+// TestResolveExplicitBranchSHA_FallsBackToLocal_When_OriginFetchFails covers
+// the offline/no-remote fallback.
+func TestResolveExplicitBranchSHA_FallsBackToLocal_When_OriginFetchFails(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "my-feature")
+	runGit(t, work, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "does-not-exist"))
+
+	sha, err := ResolveExplicitBranchSHA(work, "my-feature")
+	require.NoError(t, err)
+	wantSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "my-feature"))
+	assert.Equal(t, wantSHA, sha)
+}
+
+// TestResolveExplicitBranchSHA_ReturnsError_When_BranchDoesNotExistAnywhere
+// verifies an explicitly requested branch that doesn't exist anywhere is a
+// hard error, never silently substituted with the default branch or ambient
+// HEAD — the caller opted out of the default on purpose.
+func TestResolveExplicitBranchSHA_ReturnsError_When_BranchDoesNotExistAnywhere(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+
+	sha, err := ResolveExplicitBranchSHA(work, "does-not-exist-anywhere")
+	require.Error(t, err)
+	assert.Empty(t, sha)
+}
+
+// TestResolveExplicitBranchSHA_RejectsFlagLikeBranchName is the regression
+// test for a git argument-injection class (same family as CVE-2017-1000117):
+// BacklogItem.BaseBranch is a caller-controlled string that used to reach
+// `git fetch origin <branchName>` with no "--" separator, so a value like
+// "--upload-pack=..." would be parsed by git as an option rather than a ref
+// name. Verifies ResolveExplicitBranchSHA rejects such input before it ever
+// reaches a git subprocess, rather than passing it through.
+func TestResolveExplicitBranchSHA_RejectsFlagLikeBranchName(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+
+	sha, err := ResolveExplicitBranchSHA(work, "--upload-pack=touch /tmp/pwned")
+	require.Error(t, err)
+	assert.Empty(t, sha)
+}
+
+// TestCheckoutBranch_RejectsFlagLikeBranchName is CheckoutBranch's sibling
+// regression test — see TestResolveExplicitBranchSHA_RejectsFlagLikeBranchName.
+// CheckoutBranch can't use FetchBranch's "--" guard (verified empirically:
+// `git checkout -- <name>` puts checkout into path-restore mode instead of
+// switching branches), so ValidateBranchName is its only defense.
+func TestCheckoutBranch_RejectsFlagLikeBranchName(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+
+	err := CheckoutBranch(origin, "--upload-pack=touch /tmp/pwned")
+	require.Error(t, err)
+}
+
+// TestCheckoutBranch_SwitchesToRealBranch is the companion positive case:
+// a normal branch name must still check out successfully after the
+// ValidateBranchName guard was added (the guard must not reject legitimate
+// names).
+func TestCheckoutBranch_SwitchesToRealBranch(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	runGit(t, origin, "checkout", "-b", "feature-x")
+	runGit(t, origin, "checkout", "main")
+
+	err := CheckoutBranch(origin, "feature-x")
+	require.NoError(t, err)
+	branch := strings.TrimSpace(runGit(t, origin, "branch", "--show-current"))
+	assert.Equal(t, "feature-x", branch)
+}
+
+// TestIsUnbornRepo_should_ReturnTrue_When_RepoHasZeroCommits verifies the case
+// CreateBacklogWorktree relies on to know it's safe to fall back to ambient HEAD
+// (nothing to misattribute in a repo with no commits at all).
+func TestIsUnbornRepo_should_ReturnTrue_When_RepoHasZeroCommits(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+
+	assert.True(t, IsUnbornRepo(dir))
+}
+
+// TestIsUnbornRepo_should_ReturnFalse_When_RepoHasCommits guards against a repo with
+// real commit history (just no known-name default branch) being mistaken for unborn,
+// which would route it into CreateBacklogWorktree's ambient-HEAD fallback — the exact
+// risk that fallback exists to avoid for a repo with actual history.
+func TestIsUnbornRepo_should_ReturnFalse_When_RepoHasCommits(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+
+	assert.False(t, IsUnbornRepo(origin))
 }
 
 // TestIsCommitOnMain_should_ReturnTrue_When_CommitIsMainTipLocally verifies the
@@ -365,9 +825,10 @@ func TestListShippedCommits_should_ReturnNewestFirst_When_MultipleCommitsShipped
 	}
 	headSHA := shas[len(shas)-1]
 
-	commits, err := ListShippedCommits(work, baseSHA, headSHA)
+	commits, truncated, err := ListShippedCommits(context.Background(), work, baseSHA, headSHA)
 	require.NoError(t, err)
 	require.Len(t, commits, 3)
+	assert.False(t, truncated, "3 commits is well under the cap; must not report truncated")
 	assert.Equal(t, headSHA, commits[0].SHA, "newest commit must come first")
 	assert.Equal(t, "feature commit 2", commits[0].Summary)
 	assert.Equal(t, "feature commit 0", commits[2].Summary, "oldest of the three shipped commits must be last")
@@ -382,15 +843,66 @@ func TestListShippedCommits_should_ReturnEmpty_When_HeadEqualsBase(t *testing.T)
 	work := cloneTestRepo(t, origin)
 	sha := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
 
-	commits, err := ListShippedCommits(work, sha, sha)
+	commits, truncated, err := ListShippedCommits(context.Background(), work, sha, sha)
 	require.NoError(t, err)
 	assert.Empty(t, commits)
+	assert.False(t, truncated)
+}
+
+// TestListShippedCommits_should_ReportTruncatedTrue_When_CommitCountExceedsCap verifies
+// truncated is exercisable in a unit test without a 100+-commit fixture: calling
+// listShippedCommitsWithCap directly with a small injected cap against a small fixture
+// repo must stop at the cap and report truncated == true.
+func TestListShippedCommits_should_ReportTruncatedTrue_When_CommitCountExceedsCap(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	runGit(t, work, "checkout", "-b", "feature")
+	var headSHA string
+	for i := 0; i < 5; i++ {
+		fname := fmt.Sprintf("feature-%d.txt", i)
+		require.NoError(t, os.WriteFile(filepath.Join(work, fname), []byte("work\n"), 0o644))
+		runGit(t, work, "add", fname)
+		runGit(t, work, "commit", "-m", fmt.Sprintf("feature commit %d", i))
+		headSHA = strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+	}
+
+	commits, truncated, err := listShippedCommitsWithCap(context.Background(), work, baseSHA, headSHA, 3)
+	require.NoError(t, err)
+	assert.Len(t, commits, 3)
+	assert.True(t, truncated, "5 commits against a cap of 3 must report truncated")
+}
+
+// TestListShippedCommits_should_ReturnContextError_When_ContextAlreadyCanceled
+// covers the new ctx.Err() check inside listShippedCommitsWithCap's walk
+// loop (added for the live-session VCS-tab call site) — previously
+// unexercised by any test, so a broken check (inverted condition, wrong
+// return arity) would compile and pass everything else.
+func TestListShippedCommits_should_ReturnContextError_When_ContextAlreadyCanceled(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	runGit(t, work, "checkout", "-b", "feature")
+	require.NoError(t, os.WriteFile(filepath.Join(work, "feature.txt"), []byte("work\n"), 0o644))
+	runGit(t, work, "add", "feature.txt")
+	runGit(t, work, "commit", "-m", "feature commit")
+	headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, _, err := listShippedCommitsWithCap(ctx, work, baseSHA, headSHA, 100)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 // TestFileStatsBetween_ShouldReturnPerFileCounts_WhenCommitsAddAndDeleteLines
 // verifies the happy path (Story 3.2.1): a two-commit range that adds 5 lines to one
 // file and deletes 2 from another must report per-file addition/deletion counts with
-// no error, and without shelling out to git (.claude/rules/prefer-go-git-over-subshells.md).
+// no error, and without shelling out to git (the `prefer-go-git-over-subshells` skill).
 func TestFileStatsBetween_ShouldReturnPerFileCounts_WhenCommitsAddAndDeleteLines(t *testing.T) {
 	t.Parallel()
 	origin := setupTestRepo(t)
@@ -527,6 +1039,212 @@ func TestFileStatsBetween_ShouldOmitBinaryFiles_WhenBinaryContentChanges(t *test
 	require.NoError(t, err, "a changed binary file must not cause an error")
 	require.Len(t, stats, 1, "the binary file must be omitted, leaving only notes.txt: got %+v", stats)
 	assert.Equal(t, "notes.txt", stats[0].Path)
+}
+
+// TestDiffStatBetween covers DiffStatBetween's summation of FileStatsBetween's
+// per-file counts into an aggregate AggregateDiffStat: additions-only, deletions-only,
+// mixed, zero-diff, and error passthrough from an invalid SHA.
+func TestDiffStatBetween(t *testing.T) {
+	t.Parallel()
+
+	t.Run("additions only", func(t *testing.T) {
+		t.Parallel()
+		origin := setupTestRepo(t)
+		work := cloneTestRepo(t, origin)
+		baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		require.NoError(t, os.WriteFile(filepath.Join(work, "foo.go"), []byte("a\nb\nc\n"), 0o644))
+		runGit(t, work, "add", "foo.go")
+		runGit(t, work, "commit", "-m", "add foo.go")
+		headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		stat, err := DiffStatBetween(context.Background(), work, baseSHA, headSHA)
+		require.NoError(t, err)
+		assert.Equal(t, AggregateDiffStat{FilesChanged: 1, Additions: 3, Deletions: 0}, stat)
+	})
+
+	t.Run("deletions only", func(t *testing.T) {
+		t.Parallel()
+		origin := setupTestRepo(t)
+		work := cloneTestRepo(t, origin)
+
+		require.NoError(t, os.WriteFile(filepath.Join(work, "bar.go"), []byte("line1\nline2\nline3\n"), 0o644))
+		runGit(t, work, "add", "bar.go")
+		runGit(t, work, "commit", "-m", "add bar.go")
+		baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		require.NoError(t, os.WriteFile(filepath.Join(work, "bar.go"), []byte("line1\n"), 0o644))
+		runGit(t, work, "add", "bar.go")
+		runGit(t, work, "commit", "-m", "trim bar.go")
+		headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		stat, err := DiffStatBetween(context.Background(), work, baseSHA, headSHA)
+		require.NoError(t, err)
+		assert.Equal(t, AggregateDiffStat{FilesChanged: 1, Additions: 0, Deletions: 2}, stat)
+	})
+
+	t.Run("mixed additions and deletions across files", func(t *testing.T) {
+		t.Parallel()
+		origin := setupTestRepo(t)
+		work := cloneTestRepo(t, origin)
+
+		require.NoError(t, os.WriteFile(filepath.Join(work, "bar.go"), []byte("line1\nline2\nline3\n"), 0o644))
+		runGit(t, work, "add", "bar.go")
+		runGit(t, work, "commit", "-m", "add bar.go")
+		baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		require.NoError(t, os.WriteFile(filepath.Join(work, "foo.go"), []byte("a\nb\nc\nd\ne\n"), 0o644))
+		runGit(t, work, "add", "foo.go")
+		require.NoError(t, os.WriteFile(filepath.Join(work, "bar.go"), []byte("line1\n"), 0o644))
+		runGit(t, work, "add", "bar.go")
+		runGit(t, work, "commit", "-m", "add foo.go, trim bar.go")
+		headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		stat, err := DiffStatBetween(context.Background(), work, baseSHA, headSHA)
+		require.NoError(t, err)
+		assert.Equal(t, AggregateDiffStat{FilesChanged: 2, Additions: 5, Deletions: 2}, stat)
+	})
+
+	t.Run("zero diff when base equals head", func(t *testing.T) {
+		t.Parallel()
+		origin := setupTestRepo(t)
+		work := cloneTestRepo(t, origin)
+		sha := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		stat, err := DiffStatBetween(context.Background(), work, sha, sha)
+		require.NoError(t, err)
+		assert.Equal(t, AggregateDiffStat{}, stat)
+	})
+
+	t.Run("FileStatsBetween error passthrough on invalid SHA", func(t *testing.T) {
+		t.Parallel()
+		origin := setupTestRepo(t)
+		work := cloneTestRepo(t, origin)
+		headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		stat, err := DiffStatBetween(context.Background(), work, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", headSHA)
+		require.Error(t, err)
+		assert.Equal(t, AggregateDiffStat{}, stat)
+	})
+
+	t.Run("context already canceled", func(t *testing.T) {
+		// Covers the new ctx.Err() check added for the live-session VCS-tab
+		// call site — previously unexercised by any test.
+		t.Parallel()
+		origin := setupTestRepo(t)
+		work := cloneTestRepo(t, origin)
+		sha := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		stat, err := DiffStatBetween(ctx, work, sha, sha)
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Equal(t, AggregateDiffStat{}, stat)
+	})
+}
+
+// TestDiffContentBetween covers the go-git replacement for
+// session/instance_worktree.go's computeDirDiffStats, which previously shelled
+// out to `git diff baseSHA..HEAD` (see the `prefer-go-git-over-subshells` skill).
+func TestDiffContentBetween(t *testing.T) {
+	t.Parallel()
+
+	t.Run("added and removed line counts match git diff semantics", func(t *testing.T) {
+		t.Parallel()
+		origin := setupTestRepo(t)
+		work := cloneTestRepo(t, origin)
+
+		require.NoError(t, os.WriteFile(filepath.Join(work, "bar.go"), []byte("line1\nline2\nline3\n"), 0o644))
+		runGit(t, work, "add", "bar.go")
+		runGit(t, work, "commit", "-m", "add bar.go")
+		baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		require.NoError(t, os.WriteFile(filepath.Join(work, "bar.go"), []byte("line1\nreplaced\n"), 0o644))
+		runGit(t, work, "add", "bar.go")
+		runGit(t, work, "commit", "-m", "edit bar.go")
+		headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		stats, err := DiffContentBetween(work, baseSHA, headSHA)
+		require.NoError(t, err)
+		assert.Equal(t, 1, stats.Added)
+		assert.Equal(t, 2, stats.Removed)
+		assert.Contains(t, stats.Content, "bar.go")
+	})
+
+	t.Run("zero diff when base equals head", func(t *testing.T) {
+		t.Parallel()
+		origin := setupTestRepo(t)
+		work := cloneTestRepo(t, origin)
+		sha := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		stats, err := DiffContentBetween(work, sha, sha)
+		require.NoError(t, err)
+		assert.True(t, stats.IsEmpty())
+	})
+
+	t.Run("error on invalid SHA", func(t *testing.T) {
+		t.Parallel()
+		origin := setupTestRepo(t)
+		work := cloneTestRepo(t, origin)
+		headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		stats, err := DiffContentBetween(work, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", headSHA)
+		require.Error(t, err)
+		assert.Nil(t, stats)
+	})
+
+	// Regression test for a code-review finding: without EnableDotGitCommonDir, go-git
+	// silently resolves objects against the wrong gitdir for a linked worktree (`git
+	// worktree add`), returning a real-but-wrong result rather than an error — see
+	// getHeadCommitSHA's doc comment in util.go.
+	t.Run("resolves commits correctly against a linked worktree, not the main checkout", func(t *testing.T) {
+		t.Parallel()
+		origin := setupTestRepo(t)
+		baseSHA := strings.TrimSpace(runGit(t, origin, "rev-parse", "HEAD"))
+
+		worktreePath := filepath.Join(t.TempDir(), "linked-worktree")
+		runGit(t, origin, "worktree", "add", "-b", "wt-branch", worktreePath, "main")
+
+		require.NoError(t, os.WriteFile(filepath.Join(worktreePath, "wt.go"), []byte("in worktree\n"), 0o644))
+		runGit(t, worktreePath, "add", "wt.go")
+		runGit(t, worktreePath, "commit", "-m", "commit made in the linked worktree")
+		wantHeadSHA := strings.TrimSpace(runGit(t, worktreePath, "rev-parse", "HEAD"))
+		require.NotEqual(t, baseSHA, wantHeadSHA)
+
+		gotHeadSHA, err := GetHeadCommitSHA(worktreePath)
+		require.NoError(t, err)
+		assert.Equal(t, wantHeadSHA, gotHeadSHA, "GetHeadCommitSHA must resolve HEAD against the worktree's own history, not the main checkout's")
+
+		stats, err := DiffContentBetween(worktreePath, baseSHA, gotHeadSHA)
+		require.NoError(t, err)
+		assert.Equal(t, 1, stats.Added)
+		assert.Contains(t, stats.Content, "wt.go")
+	})
+
+	// Regression test for a code-review finding: prefix-scanning patch.String() for
+	// "+"/"-" misclassifies a content line that itself starts with "++"/"--" as a diff
+	// header line and silently drops it from the count.
+	t.Run("counts a content line starting with -- or ++ correctly", func(t *testing.T) {
+		t.Parallel()
+		origin := setupTestRepo(t)
+		work := cloneTestRepo(t, origin)
+
+		require.NoError(t, os.WriteFile(filepath.Join(work, "script.lua"), []byte("-- old comment\nkeep\n"), 0o644))
+		runGit(t, work, "add", "script.lua")
+		runGit(t, work, "commit", "-m", "add script.lua")
+		baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		require.NoError(t, os.WriteFile(filepath.Join(work, "script.lua"), []byte("keep\n++i;\n"), 0o644))
+		runGit(t, work, "add", "script.lua")
+		runGit(t, work, "commit", "-m", "edit script.lua")
+		headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		stats, err := DiffContentBetween(work, baseSHA, headSHA)
+		require.NoError(t, err)
+		assert.Equal(t, 1, stats.Removed, "the '-- old comment' line must count as removed, not be mistaken for a diff file header")
+		assert.Equal(t, 1, stats.Added, "the '++i;' line must count as added, not be mistaken for a diff file header")
+	})
 }
 
 // TestDiffHashBetween_ShouldReturnSameHash_WhenSameCommitRangeHashedTwice verifies the
@@ -711,4 +1429,172 @@ func TestDiffHashFromFilePatches_ShouldSkipEntry_WhenFilesAreNilButChunksNonEmpt
 		hash := diffHashFromFilePatches(patches)
 		assert.NotEmpty(t, hash)
 	})
+}
+
+// countCommitsNotAncestorOfPerCommitWalk is the pre-PerfFix implementation: one
+// full Commit.IsAncestor history walk per visited commit. Kept as the oracle
+// for the equivalence test and the baseline for the benchmark.
+func countCommitsNotAncestorOfPerCommitWalk(from, target *object.Commit) (int, error) {
+	seen := map[plumbing.Hash]bool{from.Hash: true}
+	queue := []*object.Commit{from}
+	count := 0
+	for len(queue) > 0 && count < countCommitsNotAncestorOfCap {
+		c := queue[0]
+		queue = queue[1:]
+		isAncestor, err := c.IsAncestor(target)
+		if err != nil {
+			return count, err
+		}
+		if isAncestor {
+			continue
+		}
+		count++
+		if err := c.Parents().ForEach(func(p *object.Commit) error {
+			if !seen[p.Hash] {
+				seen[p.Hash] = true
+				queue = append(queue, p)
+			}
+			return nil
+		}); err != nil {
+			return count, err
+		}
+	}
+	return count, nil
+}
+
+func commitFile(t testing.TB, dir, name string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(name+"\n"), 0o644))
+	runGit(t, dir, "add", name)
+	runGit(t, dir, "commit", "-m", name)
+}
+
+// newDivergedAncestryRepo builds mainCommits on main, a feature branch with
+// featureCommits (including one merge of main back in), and returns the repo
+// path. main then advances past the merge so both directions are non-zero.
+func newDivergedAncestryRepo(t testing.TB, mainCommits, featureCommits int) string {
+	t.Helper()
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	runGit(t, dir, "config", "commit.gpgsign", "false")
+	for i := range mainCommits {
+		commitFile(t, dir, fmt.Sprintf("main-%d.txt", i))
+	}
+	runGit(t, dir, "checkout", "-b", "feature")
+	for i := range featureCommits {
+		commitFile(t, dir, fmt.Sprintf("feature-%d.txt", i))
+	}
+	runGit(t, dir, "checkout", "main")
+	commitFile(t, dir, "main-advance-0.txt")
+	runGit(t, dir, "checkout", "feature")
+	runGit(t, dir, "merge", "--no-edit", "main")
+	commitFile(t, dir, "feature-after-merge.txt")
+	runGit(t, dir, "checkout", "main")
+	commitFile(t, dir, "main-advance-1.txt")
+	commitFile(t, dir, "main-advance-2.txt")
+	return dir
+}
+
+func ancestryCommits(t testing.TB, dir string) (feature, main *object.Commit) {
+	t.Helper()
+	repo, err := OpenRepo(dir)
+	require.NoError(t, err)
+	fRef, err := repo.Reference(plumbing.NewBranchReferenceName("feature"), true)
+	require.NoError(t, err)
+	mRef, err := repo.Reference(plumbing.NewBranchReferenceName("main"), true)
+	require.NoError(t, err)
+	feature, err = repo.CommitObject(fRef.Hash())
+	require.NoError(t, err)
+	main, err = repo.CommitObject(mRef.Hash())
+	require.NoError(t, err)
+	return feature, main
+}
+
+// TestCountCommitsNotAncestorOf_should_MatchPerCommitWalk_When_HistoryHasMerges
+// guards PerfFix-5's rewrite: the single ancestor-set walk must agree with the
+// per-commit IsAncestor oracle in both directions, merge commits included.
+func TestCountCommitsNotAncestorOf_should_MatchPerCommitWalk_When_HistoryHasMerges(t *testing.T) {
+	dir := newDivergedAncestryRepo(t, 6, 4)
+	feature, main := ancestryCommits(t, dir)
+
+	for _, tc := range []struct {
+		name         string
+		from, target *object.Commit
+	}{{"ahead", feature, main}, {"behind", main, feature}} {
+		want, err := countCommitsNotAncestorOfPerCommitWalk(tc.from, tc.target)
+		require.NoError(t, err)
+		got, err := countCommitsNotAncestorOf(tc.from, tc.target)
+		require.NoError(t, err)
+		assert.Equal(t, want, got, tc.name)
+		assert.NotZero(t, got, "%s: fixture must diverge in this direction", tc.name)
+	}
+}
+
+// TestBranchHasCommitsAhead_should_AgreeWithBranchAheadBehind covers the
+// branch-ahead, branch-merged and branch-deleted cases of the fast path.
+func TestBranchHasCommitsAhead_should_AgreeWithBranchAheadBehind(t *testing.T) {
+	dir := newDivergedAncestryRepo(t, 3, 2)
+	runGit(t, dir, "branch", "merged", "main")
+
+	for _, branch := range []string{"feature", "merged", "gone"} {
+		status, err := BranchAheadBehind(dir, branch, "main")
+		require.NoError(t, err)
+		exists, ahead, err := BranchHasCommitsAhead(dir, branch, "main")
+		require.NoError(t, err)
+		assert.Equal(t, status.BranchExists, exists, branch)
+		assert.Equal(t, status.AheadOfMain > 0, ahead, branch)
+	}
+}
+
+// BenchmarkCountCommitsNotAncestorOf compares the single ancestor-set walk
+// against the per-commit IsAncestor baseline across main-history depths.
+func BenchmarkCountCommitsNotAncestorOf(b *testing.B) {
+	for _, n := range []int{50, 200} {
+		dir := newDivergedAncestryRepo(b, n, 20)
+		feature, main := ancestryCommits(b, dir)
+		for _, impl := range []struct {
+			name string
+			fn   func(from, target *object.Commit) (int, error)
+		}{
+			{"PerCommitWalk", countCommitsNotAncestorOfPerCommitWalk},
+			{"AncestorSet", countCommitsNotAncestorOf},
+		} {
+			b.Run(fmt.Sprintf("%s/%dmain", impl.name, n), func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					if _, err := impl.fn(feature, main); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}
+
+// TestCountCommitsNotAncestorOf_should_NotError_When_TargetHistoryIsShallow
+// guards a regression the ancestor-set rewrite introduced: the walk reached a
+// shallow clone's missing parents and errored where the per-commit IsAncestor
+// walk stopped at the first hit.
+func TestCountCommitsNotAncestorOf_should_NotError_When_TargetHistoryIsShallow(t *testing.T) {
+	origin := newDivergedAncestryRepo(t, 5, 2)
+	shallow := filepath.Join(t.TempDir(), "shallow")
+	runGit(t, filepath.Dir(shallow), "clone", "--depth", "2", "--no-local", "file://"+origin, shallow)
+	repo, err := OpenRepo(shallow)
+	require.NoError(t, err)
+	head, err := repo.Head()
+	require.NoError(t, err)
+	tip, err := repo.CommitObject(head.Hash())
+	require.NoError(t, err)
+	parent, err := tip.Parent(0)
+	require.NoError(t, err)
+
+	for name, from := range map[string]*object.Commit{"tip": tip, "parent": parent} {
+		got, err := countCommitsNotAncestorOf(from, tip)
+		require.NoError(t, err, name)
+		want, err := countCommitsNotAncestorOfPerCommitWalk(from, tip)
+		require.NoError(t, err, name)
+		assert.Equal(t, want, got, name)
+	}
 }

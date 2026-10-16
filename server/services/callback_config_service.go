@@ -15,7 +15,7 @@ import (
 // CallbackConfigService handles the GetCallbackConfig/UpdateCallbackConfig RPCs
 // (webhook-triggers Phase 5, FR7). Delegated to from SessionService exactly like
 // DefaultsService — a config-backed handler with no second implementation, so a
-// concrete type per .claude/rules/interface-pollution-checklist.md.
+// concrete type per the `interface-pollution-checklist` skill.
 type CallbackConfigService struct {
 	// sharedCfg and sharedCfgMu, when wired via SetSharedCallbackConfig, are the
 	// SAME *config.Config instance (and guarding mutex) CallbackDispatcher reads

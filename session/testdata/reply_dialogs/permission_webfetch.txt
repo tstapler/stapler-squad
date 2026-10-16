@@ -1,0 +1,35 @@
+ ▐▛███▛█   Claude Code v2.1.296
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   /tmp/ssq-reply-cap
+
+
+❯ Using the Edit tool, in /tmp/ssq-reply-outside/x.txt replace the line 'two'
+  with 'TWO'. Nothing else.
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(/tmp/ssq-reply-outside/x.txt)
+  ⎿  User rejected update to ../ssq-reply-outside/x.txt
+      1  one
+      2 -two
+      2 +TWO
+      3  three
+
+✻ Worked for 1s · done 10:57 AM
+
+❯ Use the WebFetch tool to fetch https://example.com and tell me its title.
+  Nothing else.
+
+● Fetch(https://example.com)
+
+────────────────────────────────────────────────────────────────────────────────
+ Fetch
+ Claude wants to fetch content from example.com
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ url: https://example.com/
+ prompt: What is the title of this page? Reply with only the title.
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to allow Claude to fetch this content?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for example.com
+   3. No, and tell Claude what to do differently (esc)

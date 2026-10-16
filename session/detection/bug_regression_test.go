@@ -653,6 +653,150 @@ func TestBug_ShellsStillRunning(t *testing.T) {
 	}
 }
 
+// TestBug_ShellsAndMonitorsStillRunning verifies that the turn-completion long form's
+// comma-joined "N shell, M monitor still running" suffix is detected as
+// StatusWaitingForAgent with the correctly SUMMED count (shells + monitors), not just the
+// monitor count alone.
+//
+// Observed: "✻ Cogitated for 1m 6s · done 3:06 PM · 1 shell, 1 monitor still running" was
+// undercounted to 1 (monitor only) because shells_still_running required "running"
+// immediately after the shell count/word, so it never matched a comma-joined monitor
+// suffix; the loop fell through to monitors_still_running, discarding the shell.
+func TestBug_ShellsAndMonitorsStillRunning(t *testing.T) {
+	t.Parallel()
+	sd := NewStatusDetector()
+
+	cases := []struct {
+		name  string
+		input string
+		want  DetectedStatus
+		count int
+	}{
+		{
+			name:  "1 shell, 1 monitor combined",
+			input: "✻ Cogitated for 1m 6s · done 3:06 PM · 1 shell, 1 monitor still running",
+			want:  StatusWaitingForAgent,
+			count: 2,
+		},
+		{
+			name:  "2 shells, 3 monitors combined (plural)",
+			input: "✻ Baked for 3m · 2 shells, 3 monitors still running",
+			want:  StatusWaitingForAgent,
+			count: 5,
+		},
+		{
+			name:  "monitor-only, no shell mention (regression guard)",
+			input: "✻ Churned for 52s · 1 monitor still running",
+			want:  StatusWaitingForAgent,
+			count: 1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status, _, count := sd.DetectWithContextAndCountFromLines([]string{tc.input})
+			if status != tc.want {
+				t.Errorf("DetectWithContextAndCountFromLines(%q) status = %s, want %s", tc.input, status, tc.want)
+			}
+			if count != tc.count {
+				t.Errorf("DetectWithContextAndCountFromLines(%q) count = %d, want %d", tc.input, count, tc.count)
+			}
+		})
+	}
+}
+
+// TestBug_ShellsAndMonitorsStillRunning_ClearsOnRealisticIdleScreen verifies AC3: once a
+// realistic idle screen (prompt line + the "? for shortcuts" footer hint that appears on
+// every real Claude Code idle screen) follows the "still running" line, the indicator
+// clears to StatusIdle with count 0. A bare "❯ " prompt alone is NOT sufficient — see
+// project_plans/monitor-waiting-indicator/implementation/plan.md's Known Limitations.
+func TestBug_ShellsAndMonitorsStillRunning_ClearsOnRealisticIdleScreen(t *testing.T) {
+	t.Parallel()
+	sd := NewStatusDetector()
+
+	lines := []string{
+		"✻ Cogitated for 1m 6s · done 3:06 PM · 1 shell, 1 monitor still running",
+		"❯ ",
+		"  ? for shortcuts",
+	}
+
+	status, _, count := sd.DetectWithContextAndCountFromLines(lines)
+	if status != StatusIdle {
+		t.Errorf("DetectWithContextAndCountFromLines(still-running followed by realistic idle screen) status = %s, want StatusIdle", status)
+	}
+	if count != 0 {
+		t.Errorf("DetectWithContextAndCountFromLines(still-running followed by realistic idle screen) count = %d, want 0", count)
+	}
+}
+
+// TestBug_MatchWaitingForAgent_ZeroCountFallsThrough verifies the zero-count guard added to
+// matchWaitingForAgent: a WaitingForAgent pattern whose captured groups all resolve to a
+// non-positive count must fall through to no-match (ok=false) rather than returning
+// ok=true with count=0 — mirrors footerAgentCount's existing total<=0 contract, exercised
+// here for a monitors_still_running-shaped line with an explicit "0 monitors".
+func TestBug_MatchWaitingForAgent_ZeroCountFallsThrough(t *testing.T) {
+	t.Parallel()
+	sd := NewStatusDetector()
+
+	status := sd.Detect([]byte("✻ Churned for 52s · 0 monitors still running"))
+	if status == StatusWaitingForAgent {
+		t.Errorf("Detect(%q) = StatusWaitingForAgent, want fallthrough (zero count is nothing to wait for)", "✻ Churned for 52s · 0 monitors still running")
+	}
+}
+
+// TestBug_ShellsAndMonitorsStillRunning_WrappedLineNotDetected documents a known,
+// pre-existing, accepted limitation (not fixed by this change): MatchLines matches one
+// physical line at a time, so if a narrow terminal pane wraps the turn-completion line
+// across two physical lines, neither shells_still_running nor monitors_still_running
+// matches either fragment. See plan.md's Known Limitations — CONCERN #1.
+func TestBug_ShellsAndMonitorsStillRunning_WrappedLineNotDetected(t *testing.T) {
+	t.Parallel()
+	sd := NewStatusDetector()
+
+	// The real single line "✻ Cogitated for 1m 6s · done 3:06 PM · 1 shell, 1 monitor
+	// still running" wrapped mid-word inside "monitor", so neither fragment contains a
+	// complete "shell...running" or "monitor...running" phrase. A wrap that instead splits
+	// cleanly before "1 shell" would leave "1 shell, 1 monitor still running" intact on the
+	// second fragment, which does match — this case specifically exercises a split that
+	// breaks the phrase itself.
+	lines := []string{
+		"✻ Cogitated for 1m 6s · done 3:06 PM · 1 shell, 1 mon",
+		"itor still running",
+	}
+
+	status, _, count := sd.DetectWithContextAndCountFromLines(lines)
+	if status == StatusWaitingForAgent {
+		t.Errorf("DetectWithContextAndCountFromLines(wrapped still-running line) = StatusWaitingForAgent (count=%d); "+
+			"documented as undetected today — if this now passes, update plan.md's Known Limitations", count)
+	}
+}
+
+// TestBug_ReversedOrderShellsAndMonitors_KnownUndercount documents today's known,
+// accepted-as-out-of-scope undercount for a reversed-order comma-joined phrase ("N monitor,
+// M shell still running" instead of "N shell, M monitor still running") — no live evidence
+// this format exists yet (see plan.md's Out of Scope), but pins the current behavior
+// explicitly rather than leaving it undocumented, per pre-mortem finding #1.
+//
+// The surviving count is the SHELL count, not the monitor count: shells_still_running
+// matches the trailing "1 shell still running" substring (skipping the leading "1 monitor, "),
+// while monitors_still_running never matches at all here because "still running" doesn't
+// immediately follow "monitor" in this ordering.
+func TestBug_ReversedOrderShellsAndMonitors_KnownUndercount(t *testing.T) {
+	t.Parallel()
+	sd := NewStatusDetector()
+
+	status, _, count := sd.DetectWithContextAndCountFromLines([]string{
+		"✻ Cogitated for 1m 6s · done 3:06 PM · 1 monitor, 1 shell still running",
+	})
+	if status != StatusWaitingForAgent {
+		t.Fatalf("DetectWithContextAndCountFromLines(reversed-order) status = %s, want StatusWaitingForAgent", status)
+	}
+	if count != 1 {
+		t.Errorf("DetectWithContextAndCountFromLines(reversed-order) count = %d, want 1 (documented undercount — "+
+			"shells_still_running matches only the trailing \"1 shell still running\" substring, skipping the "+
+			"leading \"1 monitor, \"; if this now returns 2, add a real fix and update this test/plan.md)", count)
+	}
+}
+
 // TestBug_ThinkingWithStillThinkingSuffix documents that a Claude Code spinner line
 // with a "· still thinking" suffix in the duration annotation is still detected as
 // StatusExecuting, not silently dropped.
@@ -1125,5 +1269,126 @@ func TestBug_BatchedToolCallSummary_WithContextFromLines(t *testing.T) {
 	gotCtx, _ := sd.DetectWithContextFromLines(lines)
 	if gotCtx != StatusExecuting {
 		t.Errorf("DetectWithContextFromLines(batched summary + esc-to-interrupt footer) = %s, want StatusExecuting", gotCtx)
+	}
+}
+
+// TestBug_AutoModeFooter_WaitingWhenIdleWithBackgroundShells reproduces a real observed
+// mismatch: the session list showed a stale/wrong "Waiting for 1 Task" chip for a session
+// whose live pane (verified via tmux capture-pane against the real running session) never
+// contains the WaitingForAgent glyph-marker patterns at all — Claude Code's current CLI
+// instead shows a persistent "⏵⏵ auto mode on · N shells[, M monitors] · ..." footer bar
+// pinned at the bottom of the pane, and per-agent "◯ general-purpose ..." rows, with no
+// aggregate count line in either the old spinner-marker or "N shells running" shape.
+//
+// Because the footer is present at all times (not just at turn-end), it must only override
+// the detected status when the rest of the scan already concluded the turn is idle — never
+// while "esc to interrupt"/a thinking verb is active. See autoModeFooterRegex.
+func TestBug_AutoModeFooter_WaitingWhenIdleWithBackgroundShells(t *testing.T) {
+	t.Parallel()
+	sd := NewStatusDetector()
+
+	lines := []string{
+		"❯ ",
+		"──────────────────────────────────────────────────────────────────────────────",
+		"  all tools: $237 MTD (as of 19h ago) · session: $75.62, 21h, 61 turns",
+		"  ⏵⏵ auto mode on · 2 shells, 1 monitor · ← for agents · 1 feedback draft",
+		"",
+		"  ⏺ main",
+		"  ◯ general-purpose  Checking server/services test FAIL output   38m 49s",
+	}
+
+	status, desc, count := sd.DetectWithContextAndCountFromLines(lines)
+	if status != StatusWaitingForAgent {
+		t.Fatalf("DetectWithContextAndCountFromLines(idle + auto-mode footer) = %s, want StatusWaitingForAgent (desc=%q)", status, desc)
+	}
+	if count != 3 {
+		t.Errorf("DetectWithContextAndCountFromLines(idle + auto-mode footer) count = %d, want 3 (2 shells + 1 monitor)", count)
+	}
+}
+
+// TestBug_AutoModeFooter_DoesNotOverrideActiveTurn ensures the auto-mode footer never
+// masks a genuinely active turn — the whole point of gating the override on idle/unknown.
+func TestBug_AutoModeFooter_DoesNotOverrideActiveTurn(t *testing.T) {
+	t.Parallel()
+	sd := NewStatusDetector()
+
+	lines := []string{
+		"✶ Deciphering… (5m 7s · ↓ 2.8k tokens)",
+		"  esc to interrupt · ↓ to manage  ● main",
+		"  ⏵⏵ auto mode on · 2 shells, 1 monitor · ← for agents · 1 feedback draft",
+		"",
+		"  ⏺ main",
+		"  ◯ general-purpose  Checking server/services test FAIL output   38m 49s",
+	}
+
+	status, _, _ := sd.DetectWithContextAndCountFromLines(lines)
+	if status != StatusExecuting {
+		t.Errorf("DetectWithContextAndCountFromLines(active turn + auto-mode footer) = %s, want StatusExecuting — the footer must not override a genuinely active turn", status)
+	}
+}
+
+// TestBug_AutoModeFooter_SingularShell verifies footerAgentCount handles the singular
+// "1 shell" phrasing (no trailing "s") — the regex's `shells?` alternation.
+func TestBug_AutoModeFooter_SingularShell(t *testing.T) {
+	t.Parallel()
+	sd := NewStatusDetector()
+
+	lines := []string{
+		"❯ ",
+		"──────────────────────────────────────────────────────────────────────────────",
+		"  ⏵⏵ auto mode on · 1 shell · ← for agents · 1 feedback draft",
+	}
+
+	status, desc, count := sd.DetectWithContextAndCountFromLines(lines)
+	if status != StatusWaitingForAgent {
+		t.Fatalf("DetectWithContextAndCountFromLines(idle + singular '1 shell' footer) = %s, want StatusWaitingForAgent (desc=%q)", status, desc)
+	}
+	if count != 1 {
+		t.Errorf("DetectWithContextAndCountFromLines(idle + singular '1 shell' footer) count = %d, want 1", count)
+	}
+}
+
+// TestBug_AutoModeFooter_NoFooterLine_NotOverridden verifies that when no auto-mode
+// footer line is present at all, applyFooterIdleOverride leaves the status untouched
+// (footerAgentCount's ok=false branch) — the idle/unknown baseline is not overridden
+// to StatusWaitingForAgent.
+func TestBug_AutoModeFooter_NoFooterLine_NotOverridden(t *testing.T) {
+	t.Parallel()
+	sd := NewStatusDetector()
+
+	lines := []string{
+		"❯ ",
+		"──────────────────────────────────────────────────────────────────────────────",
+		"  ? for shortcuts",
+	}
+
+	status, _, count := sd.DetectWithContextAndCountFromLines(lines)
+	if status == StatusWaitingForAgent {
+		t.Errorf("DetectWithContextAndCountFromLines(no auto-mode footer line) = StatusWaitingForAgent, want unchanged idle/unknown baseline")
+	}
+	if count != 0 {
+		t.Errorf("DetectWithContextAndCountFromLines(no auto-mode footer line) count = %d, want 0", count)
+	}
+}
+
+// TestBug_AutoModeFooter_ZeroShells_NotOverridden verifies that an explicit "0 shells"
+// footer (footerAgentCount's total<=0 branch) does not override the idle/unknown status
+// to StatusWaitingForAgent — there is nothing to wait for.
+func TestBug_AutoModeFooter_ZeroShells_NotOverridden(t *testing.T) {
+	t.Parallel()
+	sd := NewStatusDetector()
+
+	lines := []string{
+		"❯ ",
+		"──────────────────────────────────────────────────────────────────────────────",
+		"  ⏵⏵ auto mode on · 0 shells · ← for agents",
+	}
+
+	status, _, count := sd.DetectWithContextAndCountFromLines(lines)
+	if status == StatusWaitingForAgent {
+		t.Errorf("DetectWithContextAndCountFromLines(idle + '0 shells' footer) = StatusWaitingForAgent, want unchanged idle/unknown baseline")
+	}
+	if count != 0 {
+		t.Errorf("DetectWithContextAndCountFromLines(idle + '0 shells' footer) count = %d, want 0", count)
 	}
 }

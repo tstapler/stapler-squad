@@ -18,5 +18,16 @@ export function useShortcut(id: string, shortcut: Shortcut): void {
     return cleanup;
     // Re-register when shortcut identity changes. Callers should useCallback their action.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, shortcut.key, shortcut.modifiers, shortcut.context, shortcut.label, shortcut.action]);
+  }, [
+    id,
+    shortcut.key,
+    shortcut.code,
+    shortcut.modifiers,
+    shortcut.context,
+    shortcut.label,
+    shortcut.action,
+    shortcut.sequence?.join("\u0000"),
+    shortcut.group,
+    shortcut.hidden,
+  ]);
 }

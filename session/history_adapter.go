@@ -25,5 +25,14 @@ func resolveHistoryAdapter(program string) HistoryAdapter {
 	if agy := NewAgyAdapter(); agy.CanHandle(program) {
 		return agy
 	}
+	if opencode := NewOpencodeAdapter(); opencode.CanHandle(program) {
+		return opencode
+	}
+	if gemini := NewGeminiAdapter(); gemini.CanHandle(program) {
+		return gemini
+	}
+	if pi := NewPiAdapter(); pi.CanHandle(program) {
+		return pi
+	}
 	return nil
 }

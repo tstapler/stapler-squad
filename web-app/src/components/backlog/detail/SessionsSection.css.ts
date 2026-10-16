@@ -15,6 +15,26 @@ export const diagnosticRowWrapper = style({
   minWidth: 0,
 });
 
+/**
+ * Jules session row content (Story 3.3.2, Task 3.3.2a) -- takes the same
+ * flex slot `sessionLink`'s <a> occupies for a local session row, but there
+ * is no PTY to link into, so this is a plain div wrapping JulesStatusBadge
+ * plus the row's date/cost metadata.
+ */
+export const julesRowContent = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["1"],
+  flex: 1,
+  minWidth: 0,
+});
+
+export const julesRowMeta = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["3"],
+});
+
 export const diagnosticRowTitle = style({
   display: "flex",
   alignItems: "center",
@@ -64,7 +84,7 @@ export const sessionSteerBtn = style({
  * (Gap 1's same disclosure pattern). Stacks full-width below breakpoints.sm
  * instead of wrapping the input/buttons awkwardly on one line, via a plain
  * media query on the container's flex-direction (no inline style, per
- * .claude/rules/css-architecture.md).
+ * docs/reference/css-architecture.md).
  */
 export const steerComposer = style({
   display: "flex",

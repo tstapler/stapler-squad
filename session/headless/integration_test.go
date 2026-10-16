@@ -8,12 +8,19 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func skipIfRateLimited(t *testing.T, err error) {
+	if err != nil && (strings.Contains(err.Error(), "weekly limit") || strings.Contains(err.Error(), "rate limit") || strings.Contains(err.Error(), "credit balance") || strings.Contains(err.Error(), "429")) {
+		t.Skipf("skipping live API integration test due to external limit: %v", err)
+	}
+}
 
 // TestPool_RealClaude_SimplePrompt calls the real claude binary with a trivial prompt.
 // Requires CLAUDE_INTEGRATION_TESTS=true and claude in PATH.
@@ -25,7 +32,8 @@ func TestPool_RealClaude_SimplePrompt(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	result, _, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", "Say hello in exactly 3 words.", CallOptions{})
+	result, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", "Say hello in exactly 3 words.", CallOptions{}, DiscardCost)
+	skipIfRateLimited(t, err)
 	require.NoError(t, err)
 	assert.NotEmpty(t, result, "result should be non-empty")
 	t.Logf("claude response: %q", result)
@@ -47,23 +55,25 @@ func TestPool_RealClaude_SessionResumption(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	_, _, err = realPool.CallBlocking(ctx, "integration-test", "", "Say 'first call'", CallOptions{})
+	_, err = realPool.CallBlocking(ctx, "integration-test", "", "Say 'first call'", CallOptions{}, DiscardCost)
+	skipIfRateLimited(t, err)
 	require.NoError(t, err, "first call should succeed")
 
-	_, _, err = realPool.CallBlocking(ctx, "integration-test", "", "Say 'second call'", CallOptions{})
+	_, err = realPool.CallBlocking(ctx, "integration-test", "", "Say 'second call'", CallOptions{}, DiscardCost)
+	skipIfRateLimited(t, err)
 	require.NoError(t, err, "second call should succeed")
 
 	require.Len(t, capturedArgs, 2, "should have captured 2 calls")
 
-	// First call: should have --output-format json.
+	// First call: should have --output-format stream-json.
 	found := false
 	for i, a := range capturedArgs[0] {
-		if a == "--output-format" && i+1 < len(capturedArgs[0]) && capturedArgs[0][i+1] == "json" {
+		if a == "--output-format" && i+1 < len(capturedArgs[0]) && capturedArgs[0][i+1] == "stream-json" {
 			found = true
 			break
 		}
 	}
-	assert.True(t, found, "first call should use --output-format json; got: %v", capturedArgs[0])
+	assert.True(t, found, "first call should use --output-format stream-json; got: %v", capturedArgs[0])
 
 	// Second call: should have --resume.
 	foundResume := false
@@ -91,7 +101,8 @@ func TestPool_RealClaude_WorkDirOnly_GrantsReadAccess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	result, _, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", "Read the file marker.txt in your current working directory and output ONLY its exact contents, nothing else.", CallOptions{WorkDir: tempDir})
+	result, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", "Read the file marker.txt in your current working directory and output ONLY its exact contents, nothing else.", CallOptions{WorkDir: tempDir}, DiscardCost)
+	skipIfRateLimited(t, err)
 	require.NoError(t, err)
 	require.Contains(t, result, markerValue)
 }
@@ -117,11 +128,12 @@ func TestPool_RealClaude_WorkDirWithToolFlags_GrantsReadAccess(t *testing.T) {
 	// session.PermissionModeBypassPermissions == "bypassPermissions", but the
 	// session package imports session/headless, so importing session here
 	// would create an import cycle; use the literal value instead.
-	result, _, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", "Read the file marker.txt in your current working directory and output ONLY its exact contents, nothing else.", CallOptions{
+	result, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", "Read the file marker.txt in your current working directory and output ONLY its exact contents, nothing else.", CallOptions{
 		WorkDir:        tempDir,
 		AllowedTools:   "Read,Grep,Glob",
 		PermissionMode: "bypassPermissions",
-	})
+	}, DiscardCost)
+	skipIfRateLimited(t, err)
 	require.NoError(t, err)
 	require.Contains(t, result, markerValue)
 }
@@ -185,12 +197,12 @@ func TestPool_RealClaude_UnlistedBashCommand_BlockedOrAllowed(t *testing.T) {
 			canaryPath, canaryPath,
 		)
 
-		result, _, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", prompt, CallOptions{
+		result, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", prompt, CallOptions{
 			WorkDir:         tempDir,
 			AllowedTools:    testCodebaseReadAllowedToolsWithBash,
 			PermissionMode:  "bypassPermissions",
 			DisallowedTools: testCodebaseReadDisallowedTools,
-		})
+		}, DiscardCost)
 
 		t.Logf("[UnlistedCommand] CallBlocking err: %v", err)
 		t.Logf("[UnlistedCommand] raw result: %q", result)
@@ -215,12 +227,12 @@ func TestPool_RealClaude_UnlistedBashCommand_BlockedOrAllowed(t *testing.T) {
 			canaryPath, canaryPath,
 		)
 
-		result, _, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", prompt, CallOptions{
+		result, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", prompt, CallOptions{
 			WorkDir:         tempDir,
 			AllowedTools:    testCodebaseReadAllowedToolsWithBash,
 			PermissionMode:  "bypassPermissions",
 			DisallowedTools: testCodebaseReadDisallowedTools,
-		})
+		}, DiscardCost)
 
 		t.Logf("[ChainedAfterAllowed] CallBlocking err: %v", err)
 		t.Logf("[ChainedAfterAllowed] raw result: %q", result)
@@ -247,4 +259,27 @@ func (r *argsCapturingRunner) Run(ctx context.Context, args []string, stdin io.R
 	}
 	*r.captured = append(*r.captured, argsCopy)
 	return r.inner.Run(ctx, args, stdin)
+}
+
+// TestPool_RealClaude_NoTools_CannotRunBash is the empirical self-check for CallOptions.NoTools
+// (completion reviewer, AC2/AC9): unlike AllowedTools/DisallowedTools — see the Bash finding
+// above — a NoTools call is asked to run a command that writes a canary file; the file must
+// not exist afterwards. The model may refuse or just describe the command; either is fine.
+func TestPool_RealClaude_NoTools_CannotRunBash(t *testing.T) {
+	t.Parallel()
+	pool, err := NewPool(PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2})
+	require.NoError(t, err)
+
+	tempDir := t.TempDir()
+	canary := filepath.Join(tempDir, "canary_notools.txt")
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	prompt := fmt.Sprintf("Use your Bash tool to run `whoami > %s`, then say done.", canary)
+	_, err = pool.CallBlocking(ctx, FeatureKeyCustom, "", prompt, CallOptions{
+		WorkDir: tempDir, NoTools: true, PermissionMode: "bypassPermissions",
+	}, DiscardCost)
+	skipIfRateLimited(t, err)
+	_, statErr := os.Stat(canary)
+	assert.True(t, os.IsNotExist(statErr), "NoTools call must not be able to write the canary file (stat err: %v)", statErr)
 }

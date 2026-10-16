@@ -175,7 +175,7 @@ func (g *GitHubPRsPlugin) fetchCILabel(ctx context.Context, cfg githubPRPluginCo
 	resp, err := github.HTTPClient().Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		if resp != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 		return ""
 	}

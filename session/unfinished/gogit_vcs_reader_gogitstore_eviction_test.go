@@ -56,6 +56,68 @@ func TestPruneRepoCache_ReleasesGogitstoreRef(t *testing.T) {
 	}
 }
 
+// TestRepoCacheStats_ColdOpensCountsFreshPathsOnly proves RepoCacheStats'
+// ColdOpens counts a path opened from disk exactly once, not on every
+// openRepoEntry call — a still-cached path must be a no-op for this counter.
+// This is the instrumentation added to root-cause BlobCacheStats' low hit
+// rate before deciding whether blobCache needs decoupling from cachedRepo's
+// lifetime the way matcherCache already is (see RepoCacheStats' doc comment).
+func TestRepoCacheStats_ColdOpensCountsFreshPathsOnly(t *testing.T) {
+	t.Parallel()
+	mainRepo := initRepoInternal(t)
+
+	g := &GoGitVCSReader{}
+	if got := g.RepoCacheStats(); got.ColdOpens != 0 {
+		t.Fatalf("RepoCacheStats().ColdOpens before any open = %d, want 0", got.ColdOpens)
+	}
+
+	if _, err := g.openRepoEntry(mainRepo); err != nil {
+		t.Fatalf("openRepoEntry: %v", err)
+	}
+	if got := g.RepoCacheStats(); got.ColdOpens != 1 {
+		t.Fatalf("RepoCacheStats().ColdOpens after first open = %d, want 1", got.ColdOpens)
+	}
+
+	// Re-opening the same, still-cached path must NOT count as another cold open.
+	if _, err := g.openRepoEntry(mainRepo); err != nil {
+		t.Fatalf("openRepoEntry (cache hit): %v", err)
+	}
+	if got := g.RepoCacheStats(); got.ColdOpens != 1 {
+		t.Fatalf("RepoCacheStats().ColdOpens after cache-hit reopen = %d, want 1 (unchanged)", got.ColdOpens)
+	}
+}
+
+// TestRepoCacheStats_EvictionIncrementsThenNextOpenIsCold proves
+// pruneRepoCache's TTL pass increments RepoCacheStats.Evictions, and that the
+// next openRepoEntry for that now-evicted path is itself a second cold open —
+// together, the pair of counters that would confirm eviction churn (not a low
+// same-blob-revisit workload) is why blobCache never warms up in production.
+func TestRepoCacheStats_EvictionIncrementsThenNextOpenIsCold(t *testing.T) {
+	t.Parallel()
+	mainRepo := initRepoInternal(t)
+
+	g := &GoGitVCSReader{}
+	entry, err := g.openRepoEntry(mainRepo)
+	if err != nil {
+		t.Fatalf("openRepoEntry: %v", err)
+	}
+
+	// Force the entry past repoCacheTTL and prune — this is the eviction path
+	// that discards the entry's blobCache along with the *cachedRepo itself.
+	atomic.StoreInt64(&entry.accessedAtNs, time.Now().Add(-repoCacheTTL-time.Minute).UnixNano())
+	g.pruneRepoCache()
+	if got := g.RepoCacheStats(); got.Evictions != 1 {
+		t.Fatalf("RepoCacheStats().Evictions after TTL prune = %d, want 1", got.Evictions)
+	}
+
+	if _, err := g.openRepoEntry(mainRepo); err != nil {
+		t.Fatalf("openRepoEntry (post-eviction reopen): %v", err)
+	}
+	if got := g.RepoCacheStats(); got.ColdOpens != 2 {
+		t.Fatalf("RepoCacheStats().ColdOpens after post-eviction reopen = %d, want 2", got.ColdOpens)
+	}
+}
+
 // TestPruneRepoCache_LRUTrim_ReleasesGogitstoreRef mirrors the TTL test
 // above but exercises pruneRepoCache's LRU-trim branch (over
 // effectiveCacheMaxEntries, not past TTL) instead — the second code path in

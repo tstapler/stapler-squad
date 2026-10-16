@@ -30,7 +30,7 @@ var cdpUpgrader = websocket.Upgrader{
 	ReadBufferSize:  4 * 1024,
 	WriteBufferSize: 128 * 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		return true // auth middleware is the access gate
+		return true // Origin is enforced upstream: HostGuard on :8543, auth on :8444
 	},
 }
 

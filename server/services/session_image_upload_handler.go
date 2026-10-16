@@ -188,17 +188,17 @@ func (h *SessionImageUploadHandler) HandleUpload(w http.ResponseWriter, r *http.
 	var writeErr error
 	defer func() {
 		if writeErr != nil {
-			os.Remove(savedPath) //nolint:errcheck
+			_ = os.Remove(savedPath)
 		}
 	}()
 
 	if _, writeErr = io.Copy(f, file); writeErr != nil {
-		f.Close()
+		_ = f.Close()
 		log.Error("[SessionImageUpload] write failed", "err", writeErr)
 		http.Error(w, "failed to save file", http.StatusInternalServerError)
 		return
 	}
-	f.Close()
+	_ = f.Close()
 
 	if err := os.Chmod(savedPath, sessionUploadFileMode); err != nil {
 		log.Error("[SessionImageUpload] chmod failed (non-fatal)", "err", err)

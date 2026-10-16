@@ -1,0 +1,14 @@
+{
+  "id": "tymux-rollout:complete-rehearsal",
+  "type": "backend",
+  "service": "TymuxRolloutService",
+  "method": "CompleteTymuxRollbackRehearsal",
+  "protoFile": "proto/session/v1/tymux_rollout.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/tymux_rollout_service.go",
+  "tested": true,
+  "testIds": [
+    "TestCompleteTymuxRollbackRehearsal_PersistsTimestamp"
+  ],
+  "lastModified": "2026-08-25T14:21:24.626536551-07:00"
+}

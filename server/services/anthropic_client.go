@@ -6,14 +6,29 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
+
+	"github.com/tstapler/stapler-squad/config"
 )
 
 const (
 	anthropicAPIURL  = "https://api.anthropic.com/v1/messages"
 	anthropicModel   = "claude-haiku-4-5-20251001"
 	anthropicVersion = "2023-06-01"
+	// anthropicMessagesPath is appended to the configurable base URL.
+	anthropicMessagesPath = "/v1/messages"
 )
+
+// anthropicMessagesURL returns the Messages endpoint, honoring the live
+// llm_backends.anthropic_base_url setting. Used by AnthropicAIClient only; the
+// capacity monitor's probe keeps the fixed anthropicAPIURL.
+func anthropicMessagesURL() string {
+	if base := strings.TrimRight(strings.TrimSpace(config.LiveLLMBackends().AnthropicBaseURL), "/"); base != "" {
+		return base + anthropicMessagesPath
+	}
+	return anthropicAPIURL
+}
 
 // AnthropicAIClient implements AIClient using the Anthropic Messages API.
 // It accepts a Credential rather than a raw API key string so that both
@@ -107,7 +122,7 @@ func (c *AnthropicAIClient) Complete(ctx context.Context, systemPrompt, userProm
 		return "", fmt.Errorf("anthropic: marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyBytes))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, anthropicMessagesURL(), bytes.NewReader(bodyBytes))
 	if err != nil {
 		return "", fmt.Errorf("anthropic: create request: %w", err)
 	}

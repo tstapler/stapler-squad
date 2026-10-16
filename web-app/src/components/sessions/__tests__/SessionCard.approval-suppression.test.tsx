@@ -19,59 +19,27 @@ import { SessionStatus, SubStatus, DetectedStatus } from "@/gen/session/v1/types
 // Mocks
 // ---------------------------------------------------------------------------
 
-jest.mock("@connectrpc/connect", () => ({
-  createClient: jest.fn(() => ({})),
-}));
+jest.mock("@connectrpc/connect", () => require("./sessionCardTestFixtures").mockConnect());
 
-jest.mock("@connectrpc/connect-web", () => ({
-  createConnectTransport: jest.fn(() => ({ unary: jest.fn(), stream: jest.fn() })),
-}));
+jest.mock("@connectrpc/connect-web", () => require("./sessionCardTestFixtures").mockConnectWeb());
 
-jest.mock("@/lib/contexts/ReviewQueueContext", () => ({
-  useReviewQueueContext: () => ({ items: [] }),
-}));
+jest.mock("@/lib/contexts/ReviewQueueContext", () => require("./sessionCardTestFixtures").mockReviewQueueContext());
 
-jest.mock("@/lib/store", () => ({
-  useAppSelector: jest.fn(() => ({})),
-}));
+jest.mock("@/lib/contexts/SessionServiceContext", () => require("./sessionCardTestFixtures").mockSessionServiceContext());
 
-jest.mock("@/lib/store/sessionsSlice", () => ({
-  selectDetectedStatusMap: jest.fn(),
-}));
+jest.mock("@/lib/store", () => require("./sessionCardTestFixtures").mockStore());
 
-jest.mock("@/lib/hooks/useTerminalSnapshot", () => ({
-  useTerminalSnapshot: () => ({ snapshot: null, loading: false }),
-}));
+jest.mock("@/lib/store/sessionsSlice", () => require("./sessionCardTestFixtures").mockSessionsSlice());
 
-jest.mock("@/lib/hooks/useFocusTrap", () => ({
-  useFocusTrap: () => {},
-}));
+jest.mock("@/lib/hooks/useTerminalSnapshot", () => require("./sessionCardTestFixtures").mockUseTerminalSnapshot());
 
-jest.mock("@/components/ui/AppLink", () => ({
-  AppLink: ({ href, children, ...rest }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) => (
-    <a href={href} {...rest}>{children}</a>
-  ),
-}));
+jest.mock("@/lib/hooks/useFocusTrap", () => require("./sessionCardTestFixtures").mockUseFocusTrap());
 
-jest.mock("@/components/ui/Modal", () => ({
-  Modal: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ModalContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ModalTitle: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ModalFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
+jest.mock("@/components/ui/AppLink", () => require("./sessionCardTestFixtures").mockAppLink());
 
-jest.mock("@/lib/hooks/useSessionActions", () => ({
-  useSessionActions: () => ({
-    pause: jest.fn(),
-    resume: jest.fn(),
-    delete: jest.fn(),
-    rename: jest.fn(),
-    restart: jest.fn(),
-    createCheckpoint: jest.fn(),
-    updateTags: jest.fn(),
-    update: jest.fn(),
-  }),
-}));
+jest.mock("@/components/ui/Modal", () => require("./sessionCardTestFixtures").mockModal());
+
+jest.mock("@/lib/hooks/useSessionActions", () => require("./sessionCardTestFixtures").mockUseSessionActions());
 
 // ---------------------------------------------------------------------------
 // Fixtures

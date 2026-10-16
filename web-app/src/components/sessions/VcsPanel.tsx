@@ -1,9 +1,11 @@
 "use client";
 
+import type { MouseEvent } from "react";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { useSessionVcsContext } from "@/lib/contexts/SessionVcsContext";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { fromSessionVcs } from "@/lib/vcs/adapters";
+import { getGitHubRateLimitMessage } from "@/lib/vcs/githubRateLimit";
 import { VcsWidget } from "@/components/shared/VcsWidget";
 import * as styles from "./VcsPanel.css";
 
@@ -12,9 +14,13 @@ interface VcsPanelProps {
   onNavigateToFile?: (path: string) => void;
   /** Session object for displaying GitHub PR/repo info. */
   session?: Session;
+  /** Receives the click event so the caller can capture `event.currentTarget`
+   * as the focus-restoration trigger (mirrors VersionControlSection's
+   * onBrowseFiles) — typically switches to the Files tab. */
+  onBrowseFiles?: (event: MouseEvent<HTMLButtonElement>) => void;
 }
 
-export function VcsPanel({ onNavigateToFile, session }: VcsPanelProps) {
+export function VcsPanel({ onNavigateToFile, session, onBrowseFiles }: VcsPanelProps) {
   const { status, statusLoading, error, refresh } = useSessionVcsContext();
   const { track } = useAnalytics();
 
@@ -38,9 +44,9 @@ export function VcsPanel({ onNavigateToFile, session }: VcsPanelProps) {
   if (error) {
     return (
       <div className={styles.container}>
-        <div className={styles.error}>
+        <div className={styles.error} role="status" aria-live="polite">
           <span className={styles.errorIcon}>⚠️</span>
-          <span>{error.message}</span>
+          <span>{getGitHubRateLimitMessage(error, error.message)}</span>
           <button className={styles.retryButton} onClick={handleRetry}>
             Retry
           </button>
@@ -66,6 +72,9 @@ export function VcsPanel({ onNavigateToFile, session }: VcsPanelProps) {
         mode="full"
         onNavigateToFile={onNavigateToFile}
         onRefresh={refresh}
+        worktreePath={session?.gitWorktree?.worktreePath}
+        onBrowseFiles={onBrowseFiles}
+        sessionId={session?.id}
       />
     </div>
   );

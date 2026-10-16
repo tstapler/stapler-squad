@@ -14,7 +14,7 @@ import (
 func (ae *ArtifactExtractor) scanFile(filePath string) {
 	defer ae.inflight.Delete(filePath)
 
-	f, err := os.Open(filePath)
+	f, err := os.Open(filePath) // #nosec G304 -- filePath comes from HistoryLinker's filesystem watch of ~/.claude/projects, an enumerated existing conversation file path, not external request input
 	if err != nil {
 		return // file may have been deleted
 	}

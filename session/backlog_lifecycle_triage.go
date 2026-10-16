@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -52,16 +53,18 @@ const headlessTriageSessionUUIDPrefix = "headless-triage-"
 // maxHeadlessTriageSessionStaleness bounds how long an open headless-triage session is
 // trusted before reconcileOrphanedTriageItems flags it as orphaned. MUST stay strictly
 // greater than server/services.triageCallBudget (the real per-call LLM budget, currently
-// 30m) with real margin — confirmed live 2026-08-01 (BUG-055) that headless triage calls
-// routinely run right up to that full 30m budget (27m41s, 27m53s, 30m38s observed across
-// distinct items in one incident), not the 7-15 minutes this constant was originally tuned
-// against. At exactly 30m (this constant's prior value, matching triageCallBudget with zero
-// margin), this sweep's periodic tick raced the call's own natural
-// completion/timeout on every slow call. IsTriageLive (checked by the shape-1 branch below)
-// is the structural fix for that race — this margin is a defense-in-depth belt-and-suspenders
-// measure on top of it, not a substitute: even with a real liveness check, there's no reason
-// to court the race in the first place when a full call is still plausibly finishing.
-const maxHeadlessTriageSessionStaleness = 35 * time.Minute
+// 3h — raised 2026-09-08 alongside headless.idleTimeout, which is now the primary defense
+// against a hung call; see triageCallBudget's own doc comment) with real margin —
+// confirmed live 2026-08-01 (BUG-055) that headless triage calls routinely run right up
+// to their full call budget (27m41s, 27m53s, 30m38s observed against the old 30m budget
+// in one incident), not the 7-15 minutes this constant was originally tuned against. At a
+// value equal to or below triageCallBudget, this sweep's periodic tick races the call's
+// own natural completion/timeout on every slow call. IsTriageLive (checked by the shape-1
+// branch below) is the structural fix for that race — this margin is a defense-in-depth
+// belt-and-suspenders measure on top of it, not a substitute: even with a real liveness
+// check, there's no reason to court the race in the first place when a full call is still
+// plausibly finishing.
+const maxHeadlessTriageSessionStaleness = 3*time.Hour + 15*time.Minute
 
 // latestTriageSession returns the most recent triage-role ItemSession (by
 // CreatedAt), regardless of whether it has ended yet, or nil if none exists.
@@ -81,6 +84,17 @@ func latestTriageSession(sessions []ItemSessionSummary) *ItemSessionSummary {
 	return latest
 }
 
+// TriageEndReasonFanoutCeiling is the ItemSession.EndReason server/services'
+// classifyHeadlessCallError records for headless.ErrFanoutCeilingExceeded.
+const TriageEndReasonFanoutCeiling = "fanout_ceiling"
+
+// TriageEndReasonCostCeiling is the end_reason for headless.ErrCostCeilingExceeded.
+const TriageEndReasonCostCeiling = "cost_ceiling"
+
+// TriageEndReasonOther is the catch-all end_reason for unclassified headless failures;
+// only this bucket carries ItemSession.ErrorDetail.
+const TriageEndReasonOther = "other"
+
 // triageEndReasonOrUnknown formats a persisted ItemSession.EndReason (the
 // errType bucket TriggerTriage's classifyHeadlessCallError writes via
 // UpdateItemSessionEndedWithReason — server/services/backlog_service_triage.go)
@@ -96,6 +110,72 @@ func triageEndReasonOrUnknown(endReason string) string {
 		return "unknown"
 	}
 	return endReason
+}
+
+// triageEndReasonWithDetail is triageEndReasonOrUnknown plus, for the unclassified
+// "other" bucket, the persisted error_detail — so the stuck context names the actual
+// failure instead of just the bucket.
+func triageEndReasonWithDetail(endReason, errorDetail string) string {
+	out := triageEndReasonOrUnknown(endReason)
+	if endReason == TriageEndReasonOther && errorDetail != "" {
+		out += ": " + errorDetail
+	}
+	return out
+}
+
+const (
+	// batchParkThreshold parkings within batchParkWindow suggest a shared root cause
+	// (e.g. a bulk import hitting one infrastructure fault) rather than independent failures.
+	batchParkThreshold = 3
+	batchParkWindow    = 10 * time.Minute
+)
+
+// parkBurstTracker counts distinct items parked inside a sliding window and fires at most
+// once per window. In-memory only: a restart resets it, acceptable for a best-effort heads-up.
+type parkBurstTracker struct {
+	mu          sync.Mutex
+	parkedAt    map[string]time.Time // itemID -> latest park time
+	lastFiredAt time.Time
+}
+
+// record notes itemID parked at now, drops items older than window, and reports how many
+// distinct items are in the window and whether the caller should escalate (threshold reached
+// and nothing fired within the last window).
+func (p *parkBurstTracker) record(itemID string, now time.Time, window time.Duration, threshold int) (count int, fire bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.parkedAt == nil {
+		p.parkedAt = make(map[string]time.Time)
+	}
+	cutoff := now.Add(-window)
+	for id, t := range p.parkedAt {
+		if !t.After(cutoff) {
+			delete(p.parkedAt, id)
+		}
+	}
+	p.parkedAt[itemID] = now
+	count = len(p.parkedAt)
+	if count >= threshold && now.Sub(p.lastFiredAt) >= window {
+		p.lastFiredAt = now
+		return count, true
+	}
+	return count, false
+}
+
+// recordTriageParkAndMaybeEscalate emits one aggregated notification, on top of the
+// per-item ones, when batchParkThreshold distinct items have parked within the window.
+// It fires at most once per window so a bulk import yields one batch alert.
+func (l *BacklogLifecycleListener) recordTriageParkAndMaybeEscalate(itemID string, now time.Time) {
+	count, fire := l.triageParks.record(itemID, now, batchParkWindow, batchParkThreshold)
+	if !fire {
+		return
+	}
+	l.notify("",
+		"Multiple auto-triage retries exhausted",
+		fmt.Sprintf("%d items hit the auto-triage retry cap within %d minutes — they may share a root cause. Check item_sessions.error_detail for end_reason='other' (see docs/how-to/debug-with-logs.md), then Reset the items.", count, int(batchParkWindow.Minutes())),
+		8,
+		true, true,
+	)
 }
 
 // reconcileOrphanedTriageItems flags items gated on plan approval (no
@@ -135,9 +215,10 @@ func triageEndReasonOrUnknown(endReason string) string {
 //     triage on the item; this is the standing-sweep equivalent. Pure staleness
 //     gate — no liveness checker — matching reconcileStaleWorkSessions' established
 //     pattern for the closest analogous detector in this file: a headless triage
-//     call routinely runs 7-15 minutes, so per-tick liveness signals are noisy
-//     here; staleness alone is the reliable signal. Headless-triage sessions (the
-//     common case) get the much shorter maxHeadlessTriageSessionStaleness (35m)
+//     call can legitimately run up to triageCallBudget (3h) now, so per-tick
+//     liveness signals are noisy here; staleness alone is the reliable signal.
+//     Headless-triage sessions (the common case) get the shorter
+//     maxHeadlessTriageSessionStaleness (3h15m)
 //     rather than the general-purpose maxWorkSessionStaleness (2h): an open
 //     headless row found later reliably means dead, not slow (see that constant's
 //     doc comment). Not generalized beyond idea: nothing in this codebase creates
@@ -171,14 +252,14 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 		Statuses: []string{string(BacklogStatusIdea), string(BacklogStatusQueued)},
 	})
 	if err != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems list error: %v", err)
+		log.Warn("[BacklogLifecycle] reconcileOrphanedTriageItems list error", "error", err)
 		return
 	}
 
 	for _, item := range items {
 		sessions, sessErr := l.storage.ListItemSessions(ctx, item.ID)
 		if sessErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems ListItemSessions item=%s: %v", item.ID, sessErr)
+			log.Warn("[BacklogLifecycle] reconcileOrphanedTriageItems ListItemSessions failed", "item", item.ID, "error", sessErr)
 			continue
 		}
 		// Find the most recent triage-role session regardless of whether it has
@@ -189,6 +270,18 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 		latestTriage := latestTriageSession(sessions)
 		if latestTriage == nil {
 			continue // no triage session has ever run for this item
+		}
+
+		// durable-guidance-request AC2/Story 5.1.3: a triage session that ended
+		// (or is sitting open) with an open GuidanceRequest against this item is
+		// expected once triage_guidance_halt is on — it deliberately halted to
+		// ask instead of guessing — not an anomaly. Skip it entirely this tick
+		// rather than tombstoning/MarkStuck-ing it, which would retry-with-
+		// backoff-penalize a legitimately-halted item and defeat the halt.
+		if _, pendingCount, _, guidanceErr := l.storage.ListPendingGuidanceRequests(ctx, domain.RequestScopeBacklogItem, item.ID, 0); guidanceErr != nil {
+			log.Warn("[BacklogLifecycle] reconcileOrphanedTriageItems ListPendingGuidanceRequests failed", "item", item.ID, "error", guidanceErr)
+		} else if pendingCount > 0 {
+			continue
 		}
 
 		isIdea := item.Status == string(BacklogStatusIdea)
@@ -203,7 +296,15 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 			isHeadless := strings.HasPrefix(latestTriage.SessionUUID, headlessTriageSessionUUIDPrefix)
 			staleness := maxWorkSessionStaleness
 			if isHeadless {
+				// Shape A (LivenessKindDurationBudget), keyed BacklogStatusIdea — Epic 1.4,
+				// Story 1.4.1. Nil-guarded: an unwired/unresolvable engine falls back to the
+				// literal maxHeadlessTriageSessionStaleness constant, unchanged from before.
 				staleness = maxHeadlessTriageSessionStaleness
+				if l.livenessEngine != nil {
+					if def, defErr := l.livenessEngine.LivenessFor(BacklogStatusIdea, PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
+						staleness = def.StalenessThreshold()
+					}
+				}
 			}
 			if time.Since(latestTriage.CreatedAt) <= staleness {
 				continue // still plausibly running
@@ -227,7 +328,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 			// tombstoneOrphanTriageSessions in server/services). Past staleness with no
 			// live record IS the confirmed-dead signal for this detector.
 			if endErr := l.storage.UpdateItemSessionEnded(ctx, latestTriage.ID, time.Now()); endErr != nil { //nolint:silenttransition best-effort tombstone; MarkStuck+notify below runs unconditionally regardless of this write's outcome, so the item is surfaced either way
-				log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems UpdateItemSessionEnded item=%s session=%s: %v", item.ID, latestTriage.ID, endErr)
+				log.Warn("[BacklogLifecycle] reconcileOrphanedTriageItems UpdateItemSessionEnded failed", "item", item.ID, "session", latestTriage.ID, "error", endErr)
 			}
 			reasonDetail = fmt.Sprintf("triage session %s still open after %s", latestTriage.SessionUUID, staleness)
 		} else {
@@ -245,10 +346,10 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 				// "may be stuck" notification for what is an expected, self-inflicted event.
 				respawner := l.getTriageRespawner()
 				if respawner != nil {
-					log.InfoLog.Printf("[BacklogLifecycle] item %s triage session %s orphaned by graceful shutdown, respawning immediately with no penalty", item.ID, latestTriage.SessionUUID)
+					log.Info("[BacklogLifecycle] item triage session orphaned by graceful shutdown, respawning immediately with no penalty", "item", item.ID, "session", latestTriage.SessionUUID)
 					go func(itemID string) {
 						if err := respawner.AutoRespawnTriage(l.shutdownCtx, itemID); err != nil {
-							log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems shutdown-respawn item=%s: %v", itemID, err)
+							log.Warn("[BacklogLifecycle] reconcileOrphanedTriageItems shutdown-respawn failed", "item", itemID, "error", err)
 						}
 					}(item.ID)
 				}
@@ -265,7 +366,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 				// diagnostic value. See triageEndReasonOrUnknown's doc comment for
 				// why an empty EndReason still renders instead of being omitted.
 				reasonDetail = fmt.Sprintf("triage session %s ended (%s) without moving the item out of idea",
-					latestTriage.SessionUUID, triageEndReasonOrUnknown(latestTriage.EndReason))
+					latestTriage.SessionUUID, triageEndReasonWithDetail(latestTriage.EndReason, latestTriage.ErrorDetail))
 			} else {
 				// Shape 3 (generalized): item advanced past idea (queued) but is
 				// still gated on plan approval, and its most recent triage session
@@ -283,7 +384,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 
 		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatus(item.Status), reasonDetail)
 		if markErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems MarkStuck item=%s: %v", item.ID, markErr)
+			log.Warn("[BacklogLifecycle] reconcileOrphanedTriageItems MarkStuck failed", "item", item.ID, "error", markErr)
 			continue
 		}
 		if !applied {
@@ -291,7 +392,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 		}
 		rows, findErr := er.FindOpenStuckStates(ctx)
 		if findErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems FindOpenStuckStates item=%s: %v", item.ID, findErr)
+			log.Warn("[BacklogLifecycle] reconcileOrphanedTriageItems FindOpenStuckStates failed", "item", item.ID, "error", findErr)
 			continue
 		}
 		row, ok := findOpenStuckStateFor(rows, item.ID, domain.StuckReasonOrphanedTriage)
@@ -299,15 +400,15 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 			continue
 		}
 
-		log.WarningLog.Printf("[BacklogLifecycle] item %s triage session %s orphaned (%s)", item.ID, latestTriage.SessionUUID, reasonDetail)
+		log.Warn("[BacklogLifecycle] item triage session orphaned", "item", item.ID, "session", latestTriage.SessionUUID, "reason", reasonDetail)
 		l.notify(item.ID,
 			"Triage may be stuck",
 			fmt.Sprintf("%s — its triage session ended without producing a usable plan and nothing is running. Re-trigger triage or investigate.", item.Title),
-			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-			2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
+			8,            // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			false, false, // urgent, important — routine stuck-poll, matches "Work session may be stuck"
 		)
 		if _, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonOrphanedTriage); notifyErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems MarkStuckNotified item=%s: %v", item.ID, notifyErr)
+			log.Warn("[BacklogLifecycle] reconcileOrphanedTriageItems MarkStuckNotified failed", "item", item.ID, "error", notifyErr)
 		}
 	}
 	// No resolve pass needed here: selfHealStuck (status-anchored) clears this
@@ -330,7 +431,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 func (l *BacklogLifecycleListener) reconcileOrphanedTriageRemediation(ctx context.Context, er *EntRepository) {
 	open, err := er.FindOpenStuckStates(ctx)
 	if err != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageRemediation FindOpenStuckStates error: %v", err)
+		log.Warn("[BacklogLifecycle] reconcileOrphanedTriageRemediation FindOpenStuckStates error", "error", err)
 		return
 	}
 	for _, row := range open {
@@ -364,27 +465,38 @@ func (l *BacklogLifecycleListener) retryOrphanedTriageWithBackoffGate(ctx contex
 		return
 	}
 
+	// A fan-out- or cost-ceiling abort is deterministic evidence a retry overruns again
+	// (ADR-029): the shared backoff would re-spend up to the ceiling on every
+	// attempt and, once parked, on the cold heartbeat forever. Leave it for a human.
+	if sessions, sessErr := l.storage.ListItemSessions(ctx, itemID); sessErr == nil {
+		if latest := latestTriageSession(sessions); latest != nil && (latest.EndReason == TriageEndReasonFanoutCeiling || latest.EndReason == TriageEndReasonCostCeiling) {
+			log.Info("[BacklogLifecycle] retryOrphanedTriageWithBackoffGate: latest triage hit a spend/fan-out ceiling, not auto-retrying", "item", itemID, "endReason", latest.EndReason)
+			return
+		}
+	}
+
 	due, justParked, gateErr := l.storage.RemediationDue(ctx, itemID, domain.StuckReasonOrphanedTriage)
 	if gateErr != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] retryOrphanedTriageWithBackoffGate RemediationDue item=%s: %v", itemID, gateErr)
+		log.Warn("[BacklogLifecycle] retryOrphanedTriageWithBackoffGate RemediationDue failed", "item", itemID, "error", gateErr)
 		due = true // fail open — see retryPushFailedWithBackoffGate's identical rationale
 	}
 	if justParked {
+		l.recordTriageParkAndMaybeEscalate(itemID, time.Now())
 		l.notify(itemID,
 			"Auto-triage paused",
 			fmt.Sprintf("%s — automated triage retry has been attempted %d times over an extended period without resolving. It now needs manual attention; use Reset to try again automatically.", itemTitle, MaxRemediationAttempts),
-			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+			8,          // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			true, true, // urgent, important — automated retry gave up; a genuine dead end
 		)
 	}
 	if !due {
-		log.InfoLog.Printf("[BacklogLifecycle] retryOrphanedTriageWithBackoffGate item=%s: orphaned_triage remediation backoff not yet due, skipping retry", itemID)
+		log.Info("[BacklogLifecycle] retryOrphanedTriageWithBackoffGate: orphaned_triage remediation backoff not yet due, skipping retry", "item", itemID)
 		return
 	}
 
 	go func() {
 		if err := respawner.AutoRespawnTriage(l.shutdownCtx, itemID); err != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] retryOrphanedTriageWithBackoffGate AutoRespawnTriage item=%s: %v", itemID, err)
+			log.Warn("[BacklogLifecycle] retryOrphanedTriageWithBackoffGate AutoRespawnTriage failed", "item", itemID, "error", err)
 		}
 	}()
 }

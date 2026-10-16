@@ -14,7 +14,8 @@
  */
 
 import { EscapeSequenceParser } from '../EscapeSequenceParser';
-import { TerminalStreamManager, type ITerminal } from '../TerminalStreamManager';
+import { TerminalStreamManager } from '../TerminalStreamManager';
+import { MockTerminal } from './mockTerminal';
 
 // ---------------------------------------------------------------------------
 // RAF mock helpers (same pattern as TerminalStreamManager.test.ts)
@@ -41,64 +42,6 @@ function flushRAF(): void {
     const cb = rafCallback;
     rafCallback = null;
     cb(performance.now());
-  }
-}
-
-// ---------------------------------------------------------------------------
-// MockTerminal - captures everything written
-// ---------------------------------------------------------------------------
-
-class MockTerminal implements ITerminal {
-  rows = 24;
-  cols = 80;
-  private written: Array<{ data: string; callback?: () => void }> = [];
-  private cleared = false;
-  private refreshed: Array<{ start: number; end: number }> = [];
-  private scrolledToBottom = false;
-
-  write(data: string | Uint8Array, callback?: () => void): void {
-    const str = typeof data === 'string' ? data : new TextDecoder().decode(data);
-    this.written.push({ data: str, callback });
-    // Auto-invoke callback to simulate xterm.js processing
-    callback?.();
-  }
-
-  clear(): void {
-    this.cleared = true;
-  }
-
-  refresh(start: number, end: number): void {
-    this.refreshed.push({ start, end });
-  }
-
-  scrollToBottom(): void {
-    this.scrolledToBottom = true;
-  }
-
-  get buffer() {
-    return {
-      active: { cursorY: 0, viewportY: 0, length: 0 },
-      normal: { length: 0 },
-    };
-  }
-
-  getWrittenData(): string[] {
-    return this.written.map(w => w.data);
-  }
-
-  getAllWrittenText(): string {
-    return this.written.map(w => w.data).join('');
-  }
-
-  wasCleared(): boolean {
-    return this.cleared;
-  }
-
-  resetTracking(): void {
-    this.written = [];
-    this.cleared = false;
-    this.refreshed = [];
-    this.scrolledToBottom = false;
   }
 }
 

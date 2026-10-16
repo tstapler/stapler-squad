@@ -13,9 +13,14 @@ import {
   ClearNotificationHistoryRequestSchema,
 } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
-import { getConnectTransport } from "@/lib/api/transport";
+import { getConnectTransport, getKeepaliveConnectTransport } from "@/lib/api/transport";
+import type { ClearByIdsResult } from "@/lib/hooks/useClearResultLine";
 
 const DEFAULT_PAGE_SIZE = 50;
+/** Minimum gap between automatic refreshes, so a burst of focus/online events fetches once. */
+const AUTO_REFRESH_MIN_GAP_MS = 5_000;
+/** Poll cadence while the live stream is down (new notifications otherwise stop arriving). */
+const FALLBACK_POLL_MS = 30_000;
 
 interface UseNotificationHistoryReturn {
   notifications: NotificationHistoryRecord[];
@@ -23,9 +28,13 @@ interface UseNotificationHistoryReturn {
   loading: boolean;
   error: Error | null;
   hasMore: boolean;
-  markAsRead: (ids: string[]) => Promise<void>;
-  markAllAsRead: () => Promise<void>;
+  /** Timestamp (Date.now()) of the last *successful* fetchHistory completion — null until the first one. Never touched on failure, so it always reflects the last-known-good data (Task 3.1.2h, AC38). */
+  lastUpdatedAt: number | null;
+  /** Resolves true when the server accepted the write, false after a rollback refetch. */
+  markAsRead: (ids: string[]) => Promise<boolean>;
   clearHistory: (beforeTimestamp?: string) => Promise<void>;
+  /** Deletes exactly these ids server-side; pending decisions come back in `kept`. Throws on RPC failure. */
+  clearByIds: (ids: string[], options?: { keepalive?: boolean }) => Promise<ClearByIdsResult>;
   loadMore: () => Promise<void>;
   refresh: () => Promise<void>;
 }
@@ -36,13 +45,15 @@ interface UseNotificationHistoryReturn {
  * Fetches notification history from the GetNotificationHistory RPC on mount
  * and exposes methods to mark as read, clear, and paginate.
  */
-export function useNotificationHistory(): UseNotificationHistoryReturn {
+export function useNotificationHistory(options: { streamLive?: boolean } = {}): UseNotificationHistoryReturn {
+  const { streamLive = true } = options;
   const [notifications, setNotifications] = useState<NotificationHistoryRecord[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [offset, setOffset] = useState(0);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
 
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
 
@@ -84,6 +95,7 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
 
       setUnreadCount(response.unreadCount);
       setHasMore(response.hasMore);
+      setLastUpdatedAt(Date.now());
     } catch (err) {
       const fetchError =
         err instanceof Error
@@ -109,6 +121,30 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
     await fetchHistory(true);
   }, [fetchHistory]);
 
+  // The stream delivers new notifications, so history is not polled while it is live. Any
+  // other time (tab refocus, network back, stream down) the list is re-fetched by RPC so a
+  // cached list cannot sit stale and the tray can tell "unreachable" from "stream paused".
+  const lastAutoRefreshRef = useRef(0);
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+  useEffect(() => {
+    const autoRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      const now = Date.now();
+      if (now - lastAutoRefreshRef.current < AUTO_REFRESH_MIN_GAP_MS) return;
+      lastAutoRefreshRef.current = now;
+      void refreshRef.current();
+    };
+    document.addEventListener("visibilitychange", autoRefresh);
+    window.addEventListener("online", autoRefresh);
+    const poll = streamLive ? null : setInterval(autoRefresh, FALLBACK_POLL_MS);
+    return () => {
+      document.removeEventListener("visibilitychange", autoRefresh);
+      window.removeEventListener("online", autoRefresh);
+      if (poll) clearInterval(poll);
+    };
+  }, [streamLive]);
+
   // Load more: append next page
   const loadMore = useCallback(async () => {
     await fetchHistory(false);
@@ -116,12 +152,13 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
 
   // Mark specific notifications as read
   const markAsRead = useCallback(async (ids: string[]) => {
-    if (!clientRef.current) return;
+    if (!clientRef.current) return false;
 
-    // Optimistic update
+    // Optimistic update; reading a row also resolves it as a pending decision, so the
+    // merge into the context history does not resurrect the server's stale flag.
     setNotifications((prev) =>
       prev.map((n) =>
-        ids.includes(n.id) ? { ...n, isRead: true } as unknown as NotificationHistoryRecord : n
+        ids.includes(n.id) ? { ...n, isRead: true, isPendingDecision: false } as unknown as NotificationHistoryRecord : n
       )
     );
     setUnreadCount((prev) => Math.max(0, prev - ids.length));
@@ -131,32 +168,12 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
         notificationIds: ids,
       });
       await clientRef.current.markNotificationRead(request);
+      return true;
     } catch (err) {
       console.error("Failed to mark notifications as read:", err);
       // Rollback on failure
       await fetchHistory(true);
-    }
-  }, [fetchHistory]);
-
-  // Mark all notifications as read
-  const markAllAsRead = useCallback(async () => {
-    if (!clientRef.current) return;
-
-    // Optimistic update
-    setNotifications((prev) =>
-      prev.map((n) => ({ ...n, isRead: true }) as unknown as NotificationHistoryRecord)
-    );
-    setUnreadCount(0);
-
-    try {
-      const request = create(MarkNotificationReadRequestSchema, {
-        notificationIds: [], // empty = mark all
-      });
-      await clientRef.current.markNotificationRead(request);
-    } catch (err) {
-      console.error("Failed to mark all notifications as read:", err);
-      // Rollback on failure
-      await fetchHistory(true);
+      return false;
     }
   }, [fetchHistory]);
 
@@ -183,15 +200,30 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
     }
   }, [notifications, fetchHistory]);
 
+  const clearByIds = useCallback(async (ids: string[], options?: { keepalive?: boolean }) => {
+    const client = options?.keepalive
+      ? createClient(SessionService, getKeepaliveConnectTransport())
+      : clientRef.current;
+    if (!client) throw new Error("notification client not ready");
+    const response = await client.clearNotificationHistory(
+      create(ClearNotificationHistoryRequestSchema, { notificationIds: ids }),
+    );
+    const kept = response.keptIds ?? [];
+    const gone = new Set(ids.filter((id) => !kept.includes(id)));
+    setNotifications((prev) => prev.filter((n) => !gone.has(n.id)));
+    return { deleted: response.clearedCount, kept };
+  }, []);
+
   return {
     notifications,
     unreadCount,
     loading,
     error,
     hasMore,
+    lastUpdatedAt,
     markAsRead,
-    markAllAsRead,
     clearHistory,
+    clearByIds,
     loadMore,
     refresh,
   };

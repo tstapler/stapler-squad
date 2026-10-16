@@ -12,6 +12,7 @@ import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAnalytics } from "@/lib/analytics";
 import { useCurrentWorkSession } from "@/lib/backlog/currentWorkSession";
 import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
+import { summarizeStuckItemGroup } from "@/components/backlog-stuck/stuckReason";
 import { classifySessionKind } from "@/lib/backlog/sessionKind";
 import { resolvePipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
 import { formatDate } from "@/lib/backlog/formatDate";
@@ -20,6 +21,8 @@ import { useBacklogItemShipStatus } from "@/lib/hooks/useBacklogItemShipStatus";
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
+import { GuidanceRequestPanel } from "@/components/guidance/GuidanceRequestPanel";
+import { SessionService } from "@/gen/session/v1/session_pb";
 import { useAppSelector } from "@/lib/store";
 import { store } from "@/lib/store/store";
 import { selectBacklogItemById } from "@/lib/store/backlogItemsSlice";
@@ -28,9 +31,11 @@ import { fromSessionVcs, fromShipStatus } from "@/lib/vcs/adapters";
 import { useSectionExpandState } from "@/lib/hooks/useSectionExpandState";
 import { copyToClipboard } from "@/lib/clipboard";
 import { getErrorMessage } from "@/lib/utils/connectError";
+import { SendBackError } from "./detail/SendBackError";
 import { CollapsibleGroup } from "@/components/ui/Collapsible";
 import { InlineNotice } from "@/components/common/InlineNotice";
 import { ConnectionIndicator } from "./ConnectionIndicator";
+import { ItemClaimBanner } from "./ItemClaimBanner";
 import { BacklogItemForm } from "./BacklogItemForm";
 import { AcCriteriaList } from "./AcCriteriaList";
 import { InlineError } from "./InlineError";
@@ -39,7 +44,9 @@ import { TriageReviewPanel } from "./TriageReviewPanel";
 import { ChatRefinementPanel } from "./ChatRefinementPanel";
 import { ReviewChangesModal } from "./ReviewChangesModal";
 import { BacklogFileBrowserModal } from "./BacklogFileBrowserModal";
+import { JulesDispatchDialog } from "./JulesDispatchDialog";
 import { LifecycleSummary } from "./detail/LifecycleSummary";
+import { DependenciesSection } from "./detail/DependenciesSection";
 import { PlanningSection } from "./detail/PlanningSection";
 import { ReviewingSection } from "./detail/ReviewingSection";
 import { LastReviewResultSection } from "./detail/LastReviewResultSection";
@@ -49,6 +56,7 @@ import { DescriptionSection } from "./detail/DescriptionSection";
 import { ActionsSection } from "./detail/ActionsSection";
 import { PlanVerdictBox } from "./PlanVerdictBox";
 import { derivePlanReviewStatus } from "@/lib/backlog/planReviewStatus";
+import { resolveJulesDispatchGate } from "@/lib/backlog/julesDispatchGate";
 import { PlanArtifactsSection } from "./detail/PlanArtifactsSection";
 import { VersionControlSection } from "./detail/VersionControlSection";
 import { SessionsSection } from "./detail/SessionsSection";
@@ -58,6 +66,12 @@ import { ProgressHistorySection } from "./detail/ProgressHistorySection";
 import { ActivityLogSection } from "./detail/ActivityLogSection";
 import { NotesSection } from "./detail/NotesSection";
 import { ManualOverrideSection } from "./detail/ManualOverrideSection";
+import { GateBlockingSection } from "./GateBlockingSection";
+import { ItemBudgetWarning } from "@/app/insights/ItemBudgetWarning";
+import { ItemStageCostTable, type ItemStageCostRow } from "@/app/insights/ItemStageCostTable";
+import { errorState as itemStageCostErrorState } from "@/app/insights/ItemStageCostTable.css";
+import { useInsightsSummary } from "@/lib/hooks/useInsightsService";
+import { Skeleton } from "@/components/ui/Skeleton";
 import * as styles from "./BacklogItemDetail.css";
 
 interface BacklogItemDetailProps {
@@ -83,9 +97,18 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   unarchive: "Unarchived — back in the idea column. Needs a fresh session.",
   reopen: "Reopened for review.",
   send_back_idea: "Sent back to triage.",
-  send_back_refining: "Sent back to refining.",
-  send_back_ready: "Sent back to ready.",
 };
+
+/**
+ * The server refuses a steer to a hidden review session when it cannot write
+ * the audit line first (Internal, "audit log unavailable"). Show that as one
+ * explicit sentence instead of the raw RPC error.
+ */
+export const STEER_AUDIT_UNAVAILABLE_MESSAGE = "Audit log unavailable, steer not sent";
+
+export function steerFailureMessage(raw: string): string {
+  return /audit log unavailable/i.test(raw) ? STEER_AUDIT_UNAVAILABLE_MESSAGE : raw;
+}
 
 export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const { track } = useAnalytics();
@@ -114,6 +137,19 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [item, setItem] = useState<BacklogItem | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Guards the Edit action against the #146 loading-gate's other half: `item`
+  // can become non-null (and the full detail view, including Edit, render)
+  // from the shared backlogItemsSlice store's synchronous hydration (the
+  // liveRawItem effect below) *before* this item's own authoritative
+  // getBacklogItem() fetch has resolved even once. If that store entry is a
+  // stale/incomplete snapshot (e.g. cached before triage assigned a
+  // category), opening Edit against it seeds BacklogItemForm's local state
+  // from stale data — and, worse, a correction that lands afterward while
+  // editMode is true only gets buffered (Story 5.3.2), never applied to the
+  // open form. Blocking Edit specifically (not the read-only view) until at
+  // least one authoritative response has confirmed `item` closes that
+  // window without reintroducing #146's remount/loading-flash regression.
+  const [itemConfirmed, setItemConfirmed] = useState(false);
   /** The action key currently in flight (e.g. "mark_ready"), or null when idle. */
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
@@ -178,6 +214,22 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [showFileBrowser, setShowFileBrowser] = useState(false);
   const fileBrowserTriggerRef = useRef<HTMLElement | null>(null);
 
+  // Jules dispatch dialog (Story 3.2.2)
+  const [showJulesDispatch, setShowJulesDispatch] = useState(false);
+  const julesDispatchTriggerRef = useRef<HTMLElement | null>(null);
+  const [julesConfig, setJulesConfig] = useState<{
+    enabled: boolean;
+    hasApiKey: boolean;
+    egressAcknowledgedRepos: string[];
+    /**
+     * Story 3.3.2: mirrors GetJulesConfigResponse.config.auth_reconnect_required
+     * (JulesSessionPoller.AuthReconnectRequired()) — read by SessionsSection
+     * to override every open jules_work row's badge to "reconnect-required"
+     * account-wide, per ux.md §4.2 step 6.
+     */
+    authReconnectRequired: boolean;
+  } | null>(null);
+
   // Manual review form
   const [showManualReview, setShowManualReview] = useState(false);
   const [manualReviewOutcome, setManualReviewOutcome] = useState("PASS");
@@ -196,8 +248,15 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // than LifecycleSummary standing up its own transport/client and 60s poll
   // on every remount (this component remounts via `key={selectedItemId}` on
   // every backlog item click — see stapler-squad PR #208 review).
-  const { items: stuckItems, triggerRemediationNow } = useStuckBacklogItems();
-  const stuckItem = item ? stuckItems.find((i) => i.itemId === item.id) : undefined;
+  const { items: stuckItems, triggerRemediationNow, overrideClaimBlock } = useStuckBacklogItems();
+  // BUG-105: an item can have several simultaneous open StuckBacklogItem rows
+  // (e.g. BOUNCING + BOUNCE_CAP_EXHAUSTED + MULTIPLE_REASONS all open at
+  // once) — `summarizeStuckItemGroup` resolves the SAME shared-priority
+  // primary reason BacklogBoard/BacklogItemCard resolve for the same item,
+  // instead of this component picking array order 0 (`.find()`) on its own.
+  const stuckItemGroup = item ? stuckItems.filter((i) => i.itemId === item.id) : [];
+  const stuckSummary = summarizeStuckItemGroup(stuckItemGroup);
+  const stuckItem = stuckSummary?.primary;
 
   // Version control state for the most recent work session's worktree.
   const latestWorkSession = useCurrentWorkSession(item);
@@ -205,6 +264,13 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // one work session is currently active — the heuristic above is unchanged, this
   // only makes it visible via VcsWidgetHeader's "N active sessions" indicator.
   const activeWorkSessionCount = (item?.linkedSessions ?? []).filter((s) => s.role === "work" && !s.endedAt).length;
+
+  // Story 3.2.2: "Dispatch to Jules" gate — see resolveJulesDispatchGate's
+  // own doc comment for the precedence order. Extracted to
+  // lib/backlog/julesDispatchGate.ts (mirrors derivePlanReviewStatus) so it
+  // is unit-testable without rendering this whole component.
+  const julesDispatchGate = resolveJulesDispatchGate(julesConfig, item?.linkedSessions ?? []);
+
   const { data: vcsStatus } = useVcsStatus(latestWorkSession?.sessionId ?? "", getApiBaseUrl());
   // Fallback for once the live session's worktree has been cleaned up (the normal
   // state for a done item) — vcsStatus above comes back null in that case since
@@ -218,6 +284,39 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const pipelineDisplay = latestWorkSession
     ? resolvePipelineModeDisplay(latestWorkSession, pipelineModes)
     : undefined;
+
+  // CONFIGURABILITY GAP fix (UX audit 2026-09-11): the item's own configured
+  // pipeline mode, resolved to a display name for LifecycleSummary's
+  // automation-profile chips. Distinct from pipelineDisplay above — that
+  // reflects what actually ran in the latest work session (or is undefined
+  // before any session exists), while this reflects the item's current
+  // configuration regardless of session history, so it's the only glanceable
+  // signal available before a session has ever spawned.
+  const configuredPipelineModeName = item?.pipelineMode
+    ? (pipelineModes.find((m) => m.slug === item.pipelineMode)?.name ?? item.pipelineMode)
+    : undefined;
+
+  // Story 5.2.3: this item's cost broken down by stage, sourced from
+  // GetInsightsSummaryResponse.role_breakdown[].items filtered to item.id —
+  // no new RPC (per plan.md), reusing the same Insights fetch the
+  // dashboard's own StageCostChart consumes. This is BacklogItemDetail.tsx's
+  // first Insights-summary fetch (ux.md Surface I), so its own
+  // loading/error states are handled explicitly below rather than assumed
+  // to piggyback on an existing fetch.
+  const { summary: insightsSummary, loading: insightsLoading, error: insightsError } = useInsightsSummary();
+  const itemStageCostRows: ItemStageCostRow[] = (insightsSummary?.roleBreakdown ?? [])
+    .map((bucket) => {
+      const entry = bucket.items.find((i) => i.itemId === item?.id);
+      return entry
+        ? {
+            role: bucket.sessionRole,
+            costUsd: entry.estimatedCostUsd,
+            sessionCount: entry.sessionCount,
+            unpricedSessionCount: entry.unpricedSessionCount,
+          }
+        : null;
+    })
+    .filter((row): row is ItemStageCostRow => row !== null);
 
   // Epic 5.3 (Story 5.3.1, backlog-event-driven-updates): live updates
   // replace the old 5s poll entirely. Subscribed unfiltered (no status/
@@ -399,8 +498,10 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     if (item.status !== "review" && item.gateVerdict && !hasStoredPreference("last-review-result")) {
       setLastReviewResultExpanded(true);
     }
+    // A set prUrl expands it for every status (done/archived included) so the
+    // PR is visible; a stored manual choice still wins.
     if (
-      ["in_progress", "review", "pr_pending"].includes(item.status) &&
+      (["in_progress", "review", "pr_pending"].includes(item.status) || !!item.prUrl) &&
       !hasStoredPreference("version-control")
     ) {
       setVersionControlExpanded(true);
@@ -462,6 +563,11 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           setItem(result);
           setNotesValue(result.notes ?? "");
         }
+        // Set regardless of whether this particular result "won" the
+        // staleness comparison above: either way, the server has now been
+        // consulted at least once for this itemId, so whatever `item` holds
+        // has been reconciled against it — safe to allow editing.
+        setItemConfirmed(true);
       }
     } catch (e) {
       if (mountedRef.current) setError(getErrorMessage(e, "Failed to load item."));
@@ -469,6 +575,13 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       if (mountedRef.current) setLoading(false);
     }
   }, [itemId, getBacklogItem]);
+
+  // Re-arms the itemConfirmed gate whenever the viewed item changes, so a
+  // second item opened in the same mounted component instance can't inherit
+  // the previous item's already-confirmed state.
+  useEffect(() => {
+    setItemConfirmed(false);
+  }, [itemId]);
 
   useEffect(() => {
     void load();
@@ -532,7 +645,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         }
         showActionToast("Steering message sent.", "success", toastKey);
       } catch (err) {
-        const msg = getErrorMessage(err, "Failed to steer session.");
+        const msg = steerFailureMessage(getErrorMessage(err, "Failed to steer session."));
         showActionToast(msg, "error", toastKey);
         throw err instanceof Error ? err : new Error(msg);
       } finally {
@@ -559,6 +672,47 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       cancelled = true;
     };
   }, [listPipelineModes]);
+
+  // Story 3.2.2: fetch Jules config once, for the "Dispatch to Jules" gate
+  // below (ux.md §3.1's precedence order). Fetched here rather than reusing
+  // JulesSettings.tsx's own load (that panel isn't mounted on this page) —
+  // same raw createClient(SessionService, ...) pattern that file uses,
+  // since GetJulesConfig has no wrapper on useBacklogService/useSessionService.
+  // A fetch failure leaves julesConfig null, which resolveJulesDispatchGate
+  // below treats the same as "feature off" (button hidden) rather than
+  // surfacing a load error on an otherwise-unrelated page — deliberately
+  // silent (no console.warn), unlike listPipelineModes below, since this
+  // page's own test suites assert zero console.warn calls across a wide
+  // range of unrelated scenarios (BacklogItemDetail.test.tsx's Collapsible
+  // regression suite) and their `createClient` mocks predate this RPC.
+  // Wrapped in try/catch (not just .catch()) because such a mock throws
+  // synchronously when getJulesConfig doesn't exist on it, before a
+  // `.then/.catch` chain would ever attach.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const transport = createConnectTransport({
+          baseUrl: getApiBaseUrl(),
+          interceptors: [createAuthInterceptor()],
+        });
+        const client = createClient(SessionService, transport);
+        const resp = await client.getJulesConfig({});
+        if (cancelled || !resp.config) return;
+        setJulesConfig({
+          enabled: resp.config.enabled,
+          hasApiKey: resp.config.hasApiKey,
+          egressAcknowledgedRepos: resp.config.egressAcknowledgedRepos,
+          authReconnectRequired: resp.config.authReconnectRequired,
+        });
+      } catch {
+        // Silent — see comment above.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Track triage progress: increment elapsed time while triageStatus === "running"
   useEffect(() => {
@@ -677,12 +831,6 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           case "send_back_idea":
             await transitionStatus(item.id, "idea");
             break;
-          case "send_back_refining":
-            await transitionStatus(item.id, "refining");
-            break;
-          case "send_back_ready":
-            await transitionStatus(item.id, "ready");
-            break;
           default:
             return;
         }
@@ -722,17 +870,18 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     }
   }, [item, manualReviewOutcome, manualReviewSummary, submitManualReview, showActionToast, load]);
 
-  // The backend writes skipPlanning/skipReviewGate/autoSpawnSession/autoCreatePR
-  // unconditionally on every UpdateBacklogItem call (they're plain proto bools, not
-  // optional — no "unset" wire representation), so any partial update that omits them
-  // silently resets them to false. Every partial updateBacklogItem call below must
-  // spread these current values.
+  // The backend writes skipPlanning/skipReviewGate/autoSpawnSession/autoCreatePR/
+  // autoApprovePlan unconditionally on every UpdateBacklogItem call (they're plain
+  // proto bools, not optional — no "unset" wire representation), so any partial
+  // update that omits them silently resets them to false. Every partial
+  // updateBacklogItem call below must spread these current values.
   const currentFlags = useCallback(
     () => ({
       skipPlanning: item?.skipPlanning ?? false,
       skipReviewGate: item?.skipReviewGate ?? false,
       autoSpawnSession: item?.autoSpawnSession ?? false,
       autoCreatePR: item?.autoCreatePR ?? false,
+      autoApprovePlan: item?.autoApprovePlan ?? false,
     }),
     [item]
   );
@@ -890,6 +1039,68 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       }
     },
     [item, rejectPlan, load, showActionToast]
+  );
+
+  // Story 2.2.1: chains transitionStatus -> rejectPlan -> triggerTriage as
+  // one operator action. Each call is wrapped in its own try/catch (not one
+  // shared try) so the outer catch knows exactly which of the three failed
+  // (resolves BLOCKER 5.2) — SendBackFeedbackBox renders distinct recovery
+  // copy per failedAt. See ux.md Surface 7 and pre-mortem P1 #1.
+  const handleSendBackWithFeedback = useCallback(
+    async (feedback: string) => {
+      if (!item) return;
+      const toastKey = `${item.id}:send_back_ready`;
+      setActionLoading("send_back_ready");
+      try {
+        try {
+          await transitionStatus(item.id, "ready", {
+            expectedStatus: item.status,
+            expectedUpdatedAt: item.updatedAtRaw,
+            overrideReason: feedback,
+          });
+        } catch (e) {
+          // Nothing has changed server-side — item.status is still accurate.
+          throw new SendBackError("transition", item.status, e);
+        }
+        try {
+          await rejectPlan(item.id, feedback);
+        } catch (e) {
+          // transitionStatus committed; the item is "ready" even though this
+          // call failed (rejectPlan doesn't change status).
+          throw new SendBackError("reject", "ready", e);
+        }
+        try {
+          await triggerTriage(item.id, feedback);
+        } catch (e) {
+          // Can't assume "ready" here (pre-mortem P1 #1): triggerTriage's own
+          // internal CAS may have already moved the item to "idea" before
+          // this failure. Re-fetch directly (not via load(), whose result
+          // isn't returned to this scope) to learn the real status.
+          const fresh = await getBacklogItem(item.id);
+          throw new SendBackError("triage", fresh?.status ?? "ready", e);
+        }
+        showActionToast("Feedback sent — retriage started.", "success", toastKey);
+        await load();
+      } catch (e) {
+        // Re-fetch unconditionally: once transitionStatus (call 1) commits, a
+        // stale local `item` would replay it with an outdated CAS precondition
+        // on retry, failing again with a confusing ErrPreconditionFailed.
+        await load();
+        // Partial failure (call 1 committed, call 2/3 failed) gets a neutral
+        // toast so it doesn't contradict SendBackFeedbackBox's more specific
+        // in-form message (ux.md Surface 7); only a true call-1 failure keeps
+        // the "Failed to send back." framing.
+        const toastMessage =
+          e instanceof SendBackError && e.failedAt !== "transition"
+            ? "Send-back needs attention — see details below."
+            : getErrorMessage(e, "Failed to send back.");
+        showActionToast(toastMessage, "error", toastKey);
+        throw e; // still a SendBackError (or the original error) — SendBackFeedbackBox's catch reads it
+      } finally {
+        if (mountedRef.current) setActionLoading(null);
+      }
+    },
+    [item, transitionStatus, rejectPlan, triggerTriage, getBacklogItem, load, showActionToast]
   );
 
   const handleRegeneratePlanWithFeedback = useCallback(async () => {
@@ -1303,6 +1514,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 {copiedField === "link" && "Link copied to clipboard"}
               </span>
             </div>
+            {item.externalUrl && <ItemClaimBanner externalUrl={item.externalUrl} />}
           </div>
           <div className={styles.headerActions}>
             <ConnectionIndicator connectionState={connectionState} />
@@ -1310,6 +1522,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               <button
                 className={styles.editButton}
                 onClick={() => setEditMode(true)}
+                disabled={!itemConfirmed}
+                title={itemConfirmed ? undefined : "Confirming latest data before editing…"}
                 aria-label="Edit item"
                 data-testid="backlog-detail-edit"
               >
@@ -1333,12 +1547,81 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         <LifecycleSummary
           item={item}
           pipelineDisplay={pipelineDisplay}
+          configuredPipelineModeName={configuredPipelineModeName}
           stuckItem={stuckItem}
+          otherStuckReasons={stuckSummary?.otherReasons}
           onTriggerRemediationNow={triggerRemediationNow}
+          onOverrideClaimBlock={overrideClaimBlock}
+        />
+        {/* Epic 5.3 (D2): per-item soft-budget warning — renders null until
+            costBudgetThresholdUsd is configured and crossed. Pinned here
+            alongside LifecycleSummary so it stays visible while scrolling,
+            same rationale as the edit-mode bannerBar above. */}
+        <ItemBudgetWarning
+          thresholdUsd={item.costBudgetThresholdUsd}
+          totalCostUsd={item.totalEstimatedCostUsd}
         />
       </div>
 
       <div className={styles.scrollArea}>
+        {/* Decision-making content FIRST: PlanVerdictBox sits right above
+            ActionsSection so approve_plan and reject_plan stay co-located, and
+            both are reachable with zero scroll, before gate/reference content. */}
+        {(item.status === "ready" ||
+          item.status === "queued" ||
+          derivePlanReviewStatus(item) !== "no_plan") && (
+          <PlanVerdictBox
+            status={derivePlanReviewStatus(item)}
+            rejectionReason={item.planRejectionReason}
+            readOnly={terminalState !== null}
+            actionPending={actionLoading === "reject_plan"}
+            onReject={handleRejectPlan}
+            onRegenerateWithFeedback={handleRegeneratePlanWithFeedback}
+          />
+        )}
+
+        {/* Actions */}
+        <ActionsSection
+          item={item}
+          actionLoading={actionLoading}
+          latestWorkSession={latestWorkSession}
+          showManualReview={showManualReview}
+          manualReviewOutcome={manualReviewOutcome}
+          manualReviewSummary={manualReviewSummary}
+          onAction={handleAction}
+          onManualReviewOutcomeChange={setManualReviewOutcome}
+          onManualReviewSummaryChange={setManualReviewSummary}
+          onManualReviewSubmit={() => { void handleManualReviewSubmit(); }}
+          onManualReviewCancel={() => { setShowManualReview(false); setManualReviewSummary(""); }}
+          terminalState={terminalState}
+          julesDispatchGate={julesDispatchGate}
+          onDispatchToJulesClick={(event) => {
+            julesDispatchTriggerRef.current = event.currentTarget;
+            setShowJulesDispatch(true);
+          }}
+          activeWorkSessionCount={activeWorkSessionCount}
+          onSendBackWithFeedback={handleSendBackWithFeedback}
+        />
+
+        {/* ADR-005: "what's blocking this transition" gate checklist —
+            immediately below LifecycleSummary (which occupies the
+            top-billed liveness-panel slot) and above the rest of the
+            scroll-area content. */}
+        <GateBlockingSection item={item} />
+
+        <DependenciesSection item={item} />
+
+        {/* Durable guidance requests scoped to this item (AC3) — same shared
+            component also embedded in TriageReviewPanel and SessionDetailView.
+            Skipped here while TriageReviewPanel is shown below — that panel
+            renders its own copy inline with the triage-generated content it's
+            about, instead of showing the list twice for the same scope. */}
+        {!(item.triageStatus === "completed" && item.status === "idea" && item.triageResult) && (
+          <div className={styles.section}>
+            <GuidanceRequestPanel scope="backlog-item" scopeKey={item.id} />
+          </div>
+        )}
+
         {/* Inline action error banner */}
         {error && (
           <div className={styles.errorBanner} role="alert">
@@ -1461,6 +1744,19 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           />
         )}
 
+        {showJulesDispatch && julesConfig && (
+          <JulesDispatchDialog
+            itemId={item.id}
+            itemTitle={item.title}
+            acCriteria={item.acCriteria}
+            repoPath={item.repoPath ?? ""}
+            initialBranch={julesDispatchGate?.branch ?? ""}
+            egressAcknowledged={julesConfig.egressAcknowledgedRepos.includes(item.repoPath ?? "")}
+            onClose={() => setShowJulesDispatch(false)}
+            triggerRef={julesDispatchTriggerRef}
+          />
+        )}
+
         {/* Acceptance Criteria */}
         <div className={styles.section}>
           <h3 className={styles.sectionTitle}>
@@ -1468,44 +1764,6 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           </h3>
           <AcCriteriaList criteria={item.acCriteria} />
         </div>
-
-        {/* Plan Review (Story 4.3.1): rendered immediately before Actions,
-            NOT after PlanArtifactsSection's plan-artifacts display as
-            plan.md originally described — Story 3.1.3's later refactor
-            (see the CollapsibleGroup comment below) already pulled
-            ActionsSection out ahead of the collapsible group so it stays
-            reachable without expanding anything; PlanVerdictBox follows the
-            same always-visible convention and sits right above it, so
-            Approve (in ActionsSection) and Request Changes (here) are both
-            reachable without navigating away (AC3). */}
-        {(item.status === "ready" ||
-          item.status === "queued" ||
-          derivePlanReviewStatus(item) !== "no_plan") && (
-          <PlanVerdictBox
-            status={derivePlanReviewStatus(item)}
-            rejectionReason={item.planRejectionReason}
-            readOnly={terminalState !== null}
-            actionPending={actionLoading === "reject_plan"}
-            onReject={handleRejectPlan}
-            onRegenerateWithFeedback={handleRegeneratePlanWithFeedback}
-          />
-        )}
-
-        {/* Actions */}
-        <ActionsSection
-          item={item}
-          actionLoading={actionLoading}
-          latestWorkSession={latestWorkSession}
-          showManualReview={showManualReview}
-          manualReviewOutcome={manualReviewOutcome}
-          manualReviewSummary={manualReviewSummary}
-          onAction={handleAction}
-          onManualReviewOutcomeChange={setManualReviewOutcome}
-          onManualReviewSummaryChange={setManualReviewSummary}
-          onManualReviewSubmit={() => { void handleManualReviewSubmit(); }}
-          onManualReviewCancel={() => { setShowManualReview(false); setManualReviewSummary(""); }}
-          terminalState={terminalState}
-        />
 
         {/* Secondary sections — sibling CollapsibleSections sharing one
             CollapsibleGroup so their headers get Home/End/Arrow roving-
@@ -1552,6 +1810,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               actionLoading={actionLoading}
               onMarkDone={() => handleAction("mark_done")}
               readOnly={terminalState !== null}
+              stuckReasons={stuckItemGroup.map((i) => i.reason)}
             />
           )}
 
@@ -1588,6 +1847,23 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
 
           <AutonomousHealthStrip item={item} />
 
+          {/* Story 5.2.3: per-item cost-by-stage table. Placed alongside
+              ItemBudgetWarning above (both are per-item cost surfaces on this
+              view) — three states per ux.md Surface I: loading (Skeleton,
+              sized to the table's row height), error (distinct from "no
+              data" so a failed fetch never reads as "this item has no
+              sessions yet"), and the legitimate empty case (table omitted
+              entirely, handled inside ItemStageCostTable itself). */}
+          {insightsLoading && !insightsSummary ? (
+            <Skeleton variant="rectangular" width="100%" height={96} />
+          ) : insightsError ? (
+            <div className={itemStageCostErrorState} data-testid="item-stage-cost-error">
+              Couldn&apos;t load cost data.
+            </div>
+          ) : (
+            <ItemStageCostTable rows={itemStageCostRows} />
+          )}
+
           <SessionsSection
             item={item}
             pipelineModes={pipelineModes}
@@ -1597,6 +1873,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             onDeleteSession={handleDeleteSession}
             onSteerSession={handleSteerSession}
             steeringSessionId={steeringSessionId}
+            authReconnectRequired={julesConfig?.authReconnectRequired ?? false}
           />
 
           <WorkflowHistorySection item={item} defaultExpanded={workflowExpanded} />

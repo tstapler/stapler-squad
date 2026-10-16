@@ -19,6 +19,7 @@ import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { WorkspaceSwitcher } from "@/components/layout/WorkspaceSwitcher";
 import { BottomNav } from "@/components/layout/BottomNav";
+import { UpdateBadge } from "@/components/changelog/UpdateBadge";
 import { ConnectionIndicator } from "@/components/layout/ConnectionIndicator";
 import { ApprovalDrawer } from "@/components/sessions/ApprovalDrawer";
 import * as styles from "./Header.css";
@@ -30,7 +31,7 @@ export function Header() {
   const debugButtonTriggerRef = useRef<HTMLElement | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isApprovalDrawerOpen, setIsApprovalDrawerOpen] = useState(false);
-  const { togglePanel, getUnreadCount } = useNotifications();
+  const { togglePanel, getUnreadCount, isPanelOpen } = useNotifications();
   const { flags } = useFeatureFlags();
   const visibleNavPages = NAV_PAGES.filter((p) => !p.featureFlag || flags[p.featureFlag]);
   const { open: openOmnibar } = useOmnibar();
@@ -114,6 +115,7 @@ export function Header() {
           </nav>
 
           <div className={styles.actions}>
+            <UpdateBadge />
             <MemoryNavBadge />
             <ConnectionIndicator />
             <WorkspaceSwitcher />
@@ -130,7 +132,11 @@ export function Header() {
             <button
               className={styles.notificationButton}
               onClick={togglePanel}
+              // A mousedown would blur the terminal's textarea; the tray never takes focus on pointer open.
+              onMouseDown={(e) => e.preventDefault()}
               aria-label="Open notifications"
+              aria-expanded={isPanelOpen}
+              aria-controls="notification-tray"
               title="Notifications"
             >
               <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

@@ -1,10 +1,16 @@
 import { style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
 
+// flex/minHeight/overflowY: the app shell (CockpitShell) wraps every page in
+// nested `overflow: hidden` containers pinned to the viewport height — a page
+// only scrolls if it opts in itself. Mirrors SessionDetail.css.ts's `content`.
 export const container = style({
   maxWidth: "900px",
   margin: "0 auto",
   padding: "2rem 1.5rem",
+  flex: 1,
+  minHeight: 0,
+  overflowY: "auto",
 });
 
 export const title = style({
@@ -104,4 +110,68 @@ export const emptyMessage = style({
   color: vars.color.textSecondary,
   fontSize: "0.875rem",
   padding: "1.5rem 0",
+});
+
+export const overrides = style({
+  marginTop: "0.75rem",
+});
+
+export const overridesSummary = style({
+  color: vars.color.textPrimary,
+  fontSize: "0.8125rem",
+  fontWeight: 600,
+  cursor: "pointer",
+  minHeight: "2.75rem",
+  display: "flex",
+  alignItems: "center",
+});
+
+export const overrideRow = style({
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "0.5rem 1rem",
+  padding: "0.5rem 0",
+});
+
+export const overrideLabel = style({
+  color: vars.color.textPrimary,
+  fontSize: "0.8125rem",
+  fontWeight: 600,
+});
+
+export const overrideSegments = style({
+  display: "inline-flex",
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: vars.radii.md,
+  overflow: "hidden",
+});
+
+export const overrideSegment = style({
+  minHeight: "2.75rem",
+  minWidth: "2.75rem",
+  padding: "0 0.75rem",
+  border: "none",
+  background: "transparent",
+  color: vars.color.textPrimary,
+  fontSize: "0.8125rem",
+  cursor: "pointer",
+});
+
+export const overrideSegmentActive = style({
+  background: vars.color.primary,
+  color: "white",
+});
+
+export const resetButton = style({
+  minHeight: "2.75rem",
+  padding: "0 0.75rem",
+  marginTop: "0.5rem",
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: vars.radii.md,
+  background: "transparent",
+  color: vars.color.textPrimary,
+  fontSize: "0.8125rem",
+  cursor: "pointer",
 });

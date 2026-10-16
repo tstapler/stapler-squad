@@ -6,13 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
@@ -118,7 +121,17 @@ const (
 	ErrItemNotFound           = "ITEM_NOT_FOUND"
 	ErrFeatureDisabled        = "FEATURE_DISABLED"
 	ErrEventStreamUnavailable = "EVENT_STREAM_UNAVAILABLE"
+	ErrConflict               = "CONFLICT"
+	ErrUnavailable            = "UNAVAILABLE"
+	ErrFailedPrecondition     = "FAILED_PRECONDITION"
 )
+
+// itemNotFoundRemediation is the shared ITEM_NOT_FOUND remediation text for
+// getBacklogItem's own existence check and resolveItemLink's fallback
+// existence check — kept as one constant so the two call sites can't drift.
+const itemNotFoundRemediation = "This item id does not exist — do not retry any backlog MCP tool call against it. " +
+	"If you were given this item id at session start, report it in your final summary; it may have been " +
+	"deleted or archived out from under this session."
 
 // featureDisabledResult returns a FEATURE_DISABLED error result if enabledCheck
 // is set and currently reports false. A nil enabledCheck means always-enabled
@@ -132,8 +145,21 @@ func featureDisabledResult(enabledCheck func() bool) *mcpgo.CallToolResult {
 
 // --- list_backlog_items validation ---
 
-// validBacklogStatuses is the whitelist list_backlog_items validates the
-// status filter against, matching session.BacklogStatus's full value set.
+// stageLister is a minimal seam so list_backlog_items' status-filter
+// validation can recognize an operator-configured custom stage once Epic
+// 2.3's ConfiguredWorkflowEngine exists, without this package depending on
+// Epic 2.3's (not-yet-written) package. ConfiguredWorkflowEngine is expected
+// to satisfy this interface when it lands (Story 2.1.4, Task 2.1.4a).
+type stageLister interface {
+	// ListEnabledStageSlugs returns every stage slug — built-in and custom —
+	// currently enabled in the operator's configured workflow.
+	ListEnabledStageSlugs() []string
+}
+
+// validBacklogStatuses is the built-in-only fallback list_backlog_items
+// validates the status filter against when no stageLister is wired (see
+// backlogHandlers.stageEngine and validateBacklogStatus) — matching
+// session.BacklogStatus's 9 built-in values.
 var validBacklogStatuses = []session.BacklogStatus{
 	session.BacklogStatusIdea,
 	session.BacklogStatusRefining,
@@ -146,15 +172,32 @@ var validBacklogStatuses = []session.BacklogStatus{
 	session.BacklogStatusArchived,
 }
 
-// validateBacklogStatus rejects a typo'd status value fast instead of letting
-// it silently fall through to an empty result (the RPC applies no validation
-// of its own).
-func validateBacklogStatus(statuses []string) error {
-	valid := make(map[string]bool, len(validBacklogStatuses))
+// validStatusFilterNames returns the status-filter values list_backlog_items
+// accepts: engine's live enabled-stage list when a stageLister is wired
+// (recognizing custom stages), else the fixed built-in 9.
+func validStatusFilterNames(engine stageLister) []string {
+	if engine != nil {
+		if slugs := engine.ListEnabledStageSlugs(); len(slugs) > 0 {
+			return slugs
+		}
+	}
 	names := make([]string, len(validBacklogStatuses))
 	for i, s := range validBacklogStatuses {
-		valid[string(s)] = true
 		names[i] = string(s)
+	}
+	return names
+}
+
+// validateBacklogStatus rejects a typo'd status value fast instead of letting
+// it silently fall through to an empty result (the RPC applies no validation
+// of its own). Sourced from h.stageEngine's live stage list when wired
+// (Story 2.1.4, Task 2.1.4a), falling back to the fixed built-in 9-entry
+// validBacklogStatuses list when no engine is available.
+func (h *backlogHandlers) validateBacklogStatus(statuses []string) error {
+	names := validStatusFilterNames(h.stageEngine)
+	valid := make(map[string]bool, len(names))
+	for _, s := range names {
+		valid[s] = true
 	}
 	for _, s := range statuses {
 		if !valid[s] {
@@ -194,29 +237,27 @@ func paginateBacklogItems(items []*sessionv1.BacklogItem, limit, offset int) (pa
 
 // --- Self-resolve source-status validation ---
 //
-// allowedSelfResolveSourceStatuses is the whitelist of source statuses a
-// self-resolve tool (request_review, report_duplicate) may transition an
-// item out of. Consulted only from inside validateSelfResolveSource.
+// allowedSelfResolveSourceStatuses is the whitelist of source statuses
+// request_review may transition an item out of. Consulted only from inside validateSelfResolveSource.
+//
+// Scope boundary (Story 2.1.4): intentionally built-in-only, not sourced
+// from any stage engine. Per requirements.md's resolved Open Question, a
+// custom stage is a full transition/liveness graph citizen but does not
+// automatically inherit MCP self-resolve eligibility — that requires an
+// explicit gate-model attachment, out of this project's scope.
 var allowedSelfResolveSourceStatuses = map[session.BacklogStatus]bool{
 	session.BacklogStatusInProgress: true,
 	session.BacklogStatusPRPending:  true,
 }
 
-// reportPRCreatedAllowedSourceStatuses is the whitelist of source statuses
-// report_pr_created may act on. Consulted before any PR verification or
-// storage write so a structurally ineligible status (e.g. ready, idea, done)
-// gets a specific rejection instead of falling through to the generic
-// CAS-race message.
-var reportPRCreatedAllowedSourceStatuses = map[session.BacklogStatus]bool{
-	session.BacklogStatusReview:    true,
-	session.BacklogStatusPRPending: true,
-}
-
-// validateSelfResolveSource is the single chokepoint both request_review and
-// report_duplicate call to obtain a validated source status. Downstream code
+// validateSelfResolveSource is the chokepoint request_review calls to obtain a validated source status. Downstream code
 // must use only its returned session.BacklogStatus for a transition's
 // ExpectedStatus — never item.Status directly — so that the CAS precondition
 // is never trivially self-satisfying for a disallowed status.
+//
+// Scope boundary (Story 2.1.4): validates against allowedSelfResolveSourceStatuses,
+// which is intentionally built-in-only — see that map's doc comment for the
+// "does not automatically inherit" resolution a custom stage falls under.
 func validateSelfResolveSource(item *session.BacklogItemData, toolName string) (session.BacklogStatus, error) {
 	s := session.BacklogStatus(item.Status)
 	if !allowedSelfResolveSourceStatuses[s] {
@@ -251,25 +292,27 @@ type backlogHandlers struct {
 	reviewStopper ReviewCompletionSignaler // optional; nil means no driver stop on review verdict
 	enabledCheck  func() bool              // optional; nil means always-enabled (tests)
 	reviewTrigger ReviewTrigger            // optional; nil means review gate waits for the next reconcile tick
+	// waitTimeouts counts consecutive wait_for_backlog_event timeouts per
+	// session+item so a session that keeps re-waiting is parked; see waitCapKey.
+	waitMu       sync.Mutex
+	waitTimeouts map[string]int
 
-	// backlogSvc backs createBacklogItem/importGitHubIssue's post-create
-	// auto-triage trigger (BUG-061: these two MCP tools used to call
-	// h.storage.CreateBacklogItem directly and skip triage entirely, unlike
-	// the RPC handlers of the same name — see BacklogService.MaybeTriggerTriage's
-	// doc comment). Held as the concrete type (not a narrower interface) to
-	// match this package's existing pattern for *services.SessionService
-	// (svc field on workflowHandlers/rulesHandlers/lifecycleHandlers) — a
-	// single-purpose interface here would have exactly one implementation and
-	// no near-term second one. Optional; nil means auto-triage is skipped and
-	// the item is created exactly as before this fix (matches enabledCheck's
-	// "nil means always-enabled (tests)" convention for other optional deps
-	// on this struct).
+	liveCheck func(sessionUUID string) bool // optional; nil means treat every EndedAt==nil ItemSession row as live (today's behavior); backs link_session_to_item's exclusivity check
+
+	// backlogSvc backs createBacklogItem/importGitHubIssue's post-create auto-triage
+	// trigger (BUG-061; see BacklogService.MaybeTriggerTriage) and link_session_to_item's
+	// AttachSessionToItem call. Concrete type per this package's existing convention
+	// (see interface-pollution-checklist.md). Optional; nil skips auto-triage and makes
+	// link_session_to_item return ErrUnavailable (stdio fallback, see ADR-001).
 	backlogSvc *services.BacklogService
 
 	// verifyPRMatchesBranch backs report_pr_created's GitHub cross-check.
 	// Defaults to VerifyPRMatchesBranch (tools_github.go) when nil;
 	// overridable in tests to avoid making real GitHub API calls.
-	verifyPRMatchesBranch func(ctx context.Context, owner, repo string, prNumber int, expectedBranch string) (PRVerification, error)
+	verifyPRMatchesBranch func(ctx context.Context, ref githubpkg.RepoRef, prNumber int, expectedBranch string) (PRVerification, error)
+	// postPRComment backs report_pr_created's best-effort provenance stamp.
+	// Defaults to githubpkg.PostPRCommentREST when nil; overridable in tests.
+	postPRComment func(ctx context.Context, ref githubpkg.RepoRef, prNumber int, body string) error
 	// resolveSessionBranch resolves the git branch a session UUID is working
 	// on, used by report_pr_created to determine "this item's own branch"
 	// before trusting a self-reported PR against it. Defaults to
@@ -316,6 +359,13 @@ type backlogHandlers struct {
 	// making the call. Defaults to githubpkg.GetCurrentUserLogin when nil;
 	// overridable in tests to avoid making a real GitHub API call.
 	resolveCallerGitHubLogin func(ctx context.Context) (string, error)
+
+	// stageEngine backs list_backlog_items' status-filter validation with a
+	// live enabled-stage list once Epic 2.3's ConfiguredWorkflowEngine
+	// exists and is wired here. Optional; nil (today's only wiring — Epic
+	// 2.3 hasn't landed) falls back to the fixed built-in 9-entry
+	// validBacklogStatuses list (Story 2.1.4).
+	stageEngine stageLister
 }
 
 // --- get_backlog_item ---
@@ -344,7 +394,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 	item, err := h.storage.GetBacklogItem(ctx, itemID)
 	if err != nil {
 		if errors.Is(err, session.ErrNotFound) {
-			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil
+			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), itemNotFoundRemediation), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", err), ""), nil
 	}
@@ -375,10 +425,10 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 
 	// Description.
 	if item.Description != "" {
-		sb.WriteString("## Description\n")
-		sb.WriteString(session.SanitizeForAgentContext(item.Description, 2000))
-		sb.WriteString("\n\n")
+		session.WriteDescriptionSection(&sb, item.Description, 2000)
 	}
+
+	h.writeDependenciesSection(ctx, &sb, itemID)
 
 	// Latest review verdict, if one has been submitted. This is the primary way a
 	// still-running work session discovers review feedback without being killed and
@@ -392,7 +442,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		var perCriterion []session.CriterionVerdict
 		if verdict.PerCriterion != "" {
 			if jsonErr := json.Unmarshal([]byte(verdict.PerCriterion), &perCriterion); jsonErr != nil {
-				log.WarningLog.Printf("get_backlog_item: failed to parse per-criterion verdicts for item %s: %v", itemID, jsonErr)
+				log.WarningLog().Printf("get_backlog_item: failed to parse per-criterion verdicts for item %s: %v", itemID, jsonErr)
 			}
 		}
 		for _, v := range perCriterion {
@@ -404,12 +454,33 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("\n")
 	}
 
+	// Base commit each work session branched from, so an operator can confirm
+	// work started from an up-to-date base. Best-effort like the sections around it.
+	if sessions, sessErr := h.storage.ListItemSessions(ctx, itemID); sessErr != nil {
+		log.WarningLog().Printf("get_backlog_item: failed to list item sessions for %s: %v", itemID, sessErr)
+	} else {
+		wroteHeader := false
+		for _, is := range sessions {
+			if is.Role != "work" || is.BaseCommitSha == "" {
+				continue
+			}
+			if !wroteHeader {
+				sb.WriteString("## Work Sessions\n")
+				wroteHeader = true
+			}
+			fmt.Fprintf(&sb, "- session %s: base commit %s\n", is.SessionUUID, is.BaseCommitSha)
+		}
+		if wroteHeader {
+			sb.WriteString("\n")
+		}
+	}
+
 	// Activity log: free-form notes posted via post_backlog_update (ADR-001).
 	// Best-effort — a lookup failure logs and skips the section rather than
 	// failing the whole get_backlog_item call, matching latestReviewVerdict's
 	// own fail-open behavior above.
 	if notes, notesErr := h.storage.ListActivityNotesForItem(ctx, itemID); notesErr != nil {
-		log.WarningLog.Printf("get_backlog_item: failed to list activity notes for %s: %v", itemID, notesErr)
+		log.WarningLog().Printf("get_backlog_item: failed to list activity notes for %s: %v", itemID, notesErr)
 	} else if len(notes) > 0 {
 		sb.WriteString("## Activity Log\n")
 		start := 0
@@ -445,6 +516,13 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("1. Run parallel research subagents → write research/*.md files\n")
 		sb.WriteString("2. Synthesize into plan.md + validation.md\n")
 		sb.WriteString("3. Write acceptance criteria: call submit_triage_result with item_id, summary, acceptance_criteria (full AC list), suggestions (gaps/questions), tasks (max 12), plan_artifact_path, priority (1-5, real assessment — this drives automatic implementation order), item_category (bugfix/feature/chore/refactor)\n")
+		// durable-guidance-request AC2: read fresh at the exact halt-decision
+		// instant, not cached earlier in this (potentially long-running)
+		// triage pass — a config change mid-pass must take effect for the
+		// very next prompt build, not the one already in flight.
+		if config.EffectiveTriageGuidanceHaltEnabled(config.LoadConfig()) {
+			sb.WriteString("4. If this item is genuinely ambiguous (not merely under-specified in a way you can resolve with reasonable judgment), do NOT guess: call create_guidance_request(scope=\"backlog-item\", item_id=<this item>, question_type, question_text) describing exactly what you need clarified, then end your turn WITHOUT calling submit_triage_result. You will be automatically re-triaged once the human answers — the answer will appear in this item's Activity Log on your next run.\n")
+		}
 	case "work":
 		sb.WriteString("## Your Role: Work\n")
 		sb.WriteString("Implement the acceptance criteria. Do NOT call submit_triage_result or submit_review_verdict.\n\n")
@@ -452,7 +530,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("1. Work through each AC criterion\n")
 		sb.WriteString("2. After completing each criterion, call report_progress with criteria_index + status=pass\n")
 		sb.WriteString("3. When all criteria are done, call request_review with a summary of what you built\n")
-		fmt.Fprintf(&sb, "4. Do NOT end your session after request_review. Call wait_for_backlog_event(item_id, event_type=\"verdict_recorded\") instead of polling — it blocks until the verdict lands (or times out) and returns the outcome directly, or returns immediately if a verdict is already recorded. PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution) — shipping the PR is part of this task, do not stop here. FAIL/PARTIAL → fix the noted gaps yourself in this same session and call request_review again — its response tells you which attempt number you're on out of %d cycles allowed in this session; once you've hit that cap, run /backlog/ship anyway to hand the PR to a human instead of retrying indefinitely.\n", session.MaxSameSessionReviewAttempts)
+		fmt.Fprintf(&sb, "4. After request_review, end your turn and stay idle (do not exit). Do NOT poll, and do NOT use ScheduleWakeup or /loop to wait — every wake re-reads your whole context; the app sends you a message with the verdict as soon as it is recorded. PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution) — shipping the PR is part of this task, do not stop here. FAIL/PARTIAL → fix the noted gaps yourself in this same session and call request_review again — its response tells you which attempt number you're on out of %d cycles allowed in this session; once you've hit that cap, run /backlog/ship anyway to hand the PR to a human instead of retrying indefinitely.\n", session.MaxSameSessionReviewAttempts)
 		sb.WriteString("5. If you create the PR yourself (via /backlog/ship or a manual `gh pr create`) rather than letting the system create one for you, you MUST call report_pr_created with item_id, pr_url, pr_number, and a summary as the final step — otherwise the item never shows the PR and stays invisible to the reviewer/operator. If the PR's head branch differs from your tracked branch (e.g. you had to open it from a clean fallback branch), pass override_reason explaining why — do not just retry report_pr_created unchanged. This only works for a PR you opened yourself.\n")
 	case "review":
 		sb.WriteString("## Your Role: Review\n")
@@ -486,16 +564,80 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 func latestReviewVerdict(ctx context.Context, storage *session.Storage, itemID string) *session.ReviewVerdictSummary {
 	sessions, err := storage.ListItemSessions(ctx, itemID)
 	if err != nil {
-		log.WarningLog.Printf("get_backlog_item: failed to list item sessions for %s: %v", itemID, err)
+		log.WarningLog().Printf("get_backlog_item: failed to list item sessions for %s: %v", itemID, err)
 		return nil
 	}
+	return latestVerdictFromSessions(sessions)
+}
+
+// latestVerdictFromSessions picks the newest verdict by CreatedAt rather than by
+// session order, which a later-created session without a verdict can't skew.
+func latestVerdictFromSessions(sessions []session.ItemSessionSummary) *session.ReviewVerdictSummary {
 	var latest *session.ReviewVerdictSummary
 	for _, s := range sessions {
-		if s.ReviewVerdict != nil {
+		if s.ReviewVerdict != nil && (latest == nil || !s.ReviewVerdict.CreatedAt.Before(latest.CreatedAt)) {
 			latest = s.ReviewVerdict
 		}
 	}
 	return latest
+}
+
+// latestReviewEntryTime returns when item most recently entered review — the
+// moment of the latest request_review (or equivalent routing) — from its status
+// history. ok is false when the history holds no such transition.
+func latestReviewEntryTime(item *session.BacklogItemData) (t time.Time, ok bool) {
+	for _, ev := range item.StatusEvents {
+		if ev.ToStatus == string(session.BacklogStatusReview) && ev.CreatedAt.After(t) {
+			t, ok = ev.CreatedAt, true
+		}
+	}
+	return t, ok
+}
+
+// isStaleVerdict reports whether verdict was recorded before item's latest entry
+// into review, i.e. it answers an earlier review request, not the current one.
+func isStaleVerdict(item *session.BacklogItemData, verdict *session.ReviewVerdictSummary) bool {
+	if verdict == nil {
+		return false
+	}
+	entered, ok := latestReviewEntryTime(item)
+	return ok && verdict.CreatedAt.Before(entered)
+}
+
+// canRecoverFromReview reports whether an item sitting in review can be
+// re-requested: no reviewer is live and the latest verdict is missing, stale, or
+// not a PASS. A fresh PASS is awaiting ship and must not be re-reviewed.
+func canRecoverFromReview(item *session.BacklogItemData, sessions []session.ItemSessionSummary, verdict *session.ReviewVerdictSummary) bool {
+	if services.HasActiveReviewSession(sessions) {
+		return false
+	}
+	return verdict == nil || isStaleVerdict(item, verdict) || verdict.OverallOutcome != string(session.ReviewVerdictPass)
+}
+
+// resolveItemLink verifies that callerUUID is linked to itemID, returning the
+// ItemSession on success. On failure it returns a ready-to-return
+// *mcpgo.CallToolResult that distinguishes ITEM_NOT_FOUND (the item itself
+// doesn't exist) from PERMISSION_DENIED (the item exists but this session has
+// no link to it). A thin adapter over session.ResolveItemLink, which holds
+// the actual disambiguation logic — see that function's doc comment and
+// project_plans/backlog-link-error-consistency/research/stack.md. Extracted
+// (not reimplemented) so the ConnectRPC GuidanceRequestService's own
+// backlog-item ownership check shares this exact logic instead of an
+// independently-maintained copy (durable-guidance-request plan, Task
+// 2.1.2a-pre).
+func (h *backlogHandlers) resolveItemLink(ctx context.Context, callerUUID, itemID string) (session.ItemSessionSummary, *mcpgo.CallToolResult) {
+	itemSession, linkErr := session.ResolveItemLink(ctx, h.storage, callerUUID, itemID)
+	if linkErr == nil {
+		return itemSession, nil
+	}
+	switch linkErr.Code {
+	case session.ItemLinkNotFound:
+		return session.ItemSessionSummary{}, errResult(ErrItemNotFound, linkErr.Message, linkErr.Remediation)
+	case session.ItemLinkPermissionDenied:
+		return session.ItemSessionSummary{}, errResult(ErrPermissionDenied, linkErr.Message, linkErr.Remediation)
+	default:
+		return session.ItemSessionSummary{}, errResult(ErrInternalError, linkErr.Message, "")
+	}
 }
 
 // --- wait_for_backlog_event ---
@@ -564,7 +706,7 @@ func buildMatchedWaitResult(itemID string, payload *events.BacklogItemEventPaylo
 	if payload.Item != nil {
 		res.Status = payload.Item.Status
 		status := session.BacklogStatus(payload.Item.Status)
-		if status == session.BacklogStatusDone || status == session.BacklogStatusArchived {
+		if session.IsTerminalStatus(status) {
 			res.IsTerminal = true
 		}
 	}
@@ -597,7 +739,7 @@ func buildMatchedWaitResult(itemID string, payload *events.BacklogItemEventPaylo
 // pre-satisfies.
 func currentStateWaitResult(item *session.BacklogItemData, verdict *session.ReviewVerdictSummary, eventTypeFilter string) *WaitForBacklogEventResult {
 	status := session.BacklogStatus(item.Status)
-	terminal := status == session.BacklogStatusDone || status == session.BacklogStatusArchived
+	terminal := session.IsTerminalStatus(status)
 
 	if (eventTypeFilter == eventTypeAny || eventTypeFilter == eventTypeVerdictRecorded) && verdict != nil {
 		return &WaitForBacklogEventResult{
@@ -612,6 +754,11 @@ func currentStateWaitResult(item *session.BacklogItemData, verdict *session.Revi
 			IsTerminal:       terminal,
 		}
 	}
+	// Deliberately Archived-only, not session.IsTerminalStatus: this branch
+	// matches the "item_archived" event kind specifically, not general
+	// terminal-ness — a "done" (or custom-terminal) item must not satisfy an
+	// eventTypeItemArchived wait (Epic 2.1, Story 2.1.3 sweep — reviewed,
+	// benign).
 	if (eventTypeFilter == eventTypeAny || eventTypeFilter == eventTypeItemArchived) && status == session.BacklogStatusArchived {
 		return &WaitForBacklogEventResult{
 			MCPResult:        MCPResult{Success: true},
@@ -644,11 +791,100 @@ func withTestAfterWaitSubscribeHook(ctx context.Context, hook func()) context.Co
 	return context.WithValue(ctx, testAfterWaitSubscribeHookKey{}, hook)
 }
 
+// maxWaitTimeoutsPerSession caps consecutive wait_for_backlog_event timeouts
+// for one session+item: each re-wait is another turn that re-reads the full
+// context, so past this the session is told to stop and wait for the app's
+// steer instead.
+const maxWaitTimeoutsPerSession = 3
+
+// maxWaitCapEntries bounds the in-memory counter map; hitting it only forgives
+// old counts, which is harmless.
+const maxWaitCapEntries = 4096
+
+func waitCapKey(ctx context.Context, itemID string) string {
+	sessionUUID, _ := sessionUUIDFromContext(ctx)
+	return sessionUUID + "|" + itemID
+}
+
+func (h *backlogHandlers) waitCapReached(ctx context.Context, itemID string) bool {
+	h.waitMu.Lock()
+	defer h.waitMu.Unlock()
+	return h.waitTimeouts[waitCapKey(ctx, itemID)] >= maxWaitTimeoutsPerSession
+}
+
+func (h *backlogHandlers) resetWaitTimeouts(ctx context.Context, itemID string) {
+	h.waitMu.Lock()
+	defer h.waitMu.Unlock()
+	delete(h.waitTimeouts, waitCapKey(ctx, itemID))
+}
+
+// waitTimeoutResult records a timeout and, on the one that reaches the cap,
+// raises an operator notification so the parked session is visible.
+func (h *backlogHandlers) waitTimeoutResult(ctx context.Context, itemID, eventTypeFilter string, timeoutSecs int) WaitForBacklogEventResult {
+	h.waitMu.Lock()
+	if h.waitTimeouts == nil || len(h.waitTimeouts) >= maxWaitCapEntries {
+		h.waitTimeouts = make(map[string]int)
+	}
+	key := waitCapKey(ctx, itemID)
+	h.waitTimeouts[key]++
+	n := h.waitTimeouts[key]
+	h.waitMu.Unlock()
+	if n >= maxWaitTimeoutsPerSession {
+		h.notifyWaitCapReached(ctx, itemID)
+		return h.waitCapResult(itemID)
+	}
+	return WaitForBacklogEventResult{
+		MCPResult: MCPResult{Success: true, Error: &MCPError{
+			Code:    "WAIT_TIMEOUT",
+			Message: fmt.Sprintf("no new %s event on item %s within %d seconds — end your turn and stay idle; the app messages this session when the event arrives. Do not poll, and do not use ScheduleWakeup or /loop to wait", eventTypeFilter, itemID, timeoutSecs),
+		}},
+		EventReceived: false,
+		ItemID:        itemID,
+	}
+}
+
+// reviewWaitRefusedResult reuses WAIT_CAP_REACHED so existing clients already treat it as "stop waiting".
+func (h *backlogHandlers) reviewWaitRefusedResult(itemID string) WaitForBacklogEventResult {
+	return WaitForBacklogEventResult{
+		MCPResult: MCPResult{Success: true, Error: &MCPError{
+			Code:    "WAIT_CAP_REACHED",
+			Message: fmt.Sprintf("item %s is in review; waiting is refused — end your turn and stay idle, the app messages this session when the verdict lands. Do not poll, and do not use ScheduleWakeup or /loop", itemID),
+		}},
+		EventReceived: false,
+		ItemID:        itemID,
+	}
+}
+
+func (h *backlogHandlers) waitCapResult(itemID string) WaitForBacklogEventResult {
+	return WaitForBacklogEventResult{
+		MCPResult: MCPResult{Success: true, Error: &MCPError{
+			Code:    "WAIT_CAP_REACHED",
+			Message: fmt.Sprintf("this session has waited on item %s %d times without an event; further waits are refused — end your turn and stay idle, the app messages this session when the verdict lands. Do not poll, and do not use ScheduleWakeup or /loop", itemID, maxWaitTimeoutsPerSession),
+		}},
+		EventReceived: false,
+		ItemID:        itemID,
+	}
+}
+
+func (h *backlogHandlers) notifyWaitCapReached(ctx context.Context, itemID string) {
+	if h.eventBus == nil {
+		return
+	}
+	sessionUUID, _ := sessionUUIDFromContext(ctx)
+	h.eventBus.Publish(events.NewNotificationEvent(
+		sessionUUID, "", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
+		"Session parked after repeated waits",
+		fmt.Sprintf("Session %s waited %d times on backlog item %s with no event and was told to stop polling; it resumes when the app steers it with the verdict.", sessionUUID, maxWaitTimeoutsPerSession, itemID),
+		map[string]string{"item_id": itemID},
+	))
+}
+
 // waitForBacklogEvent blocks until a matching backlog item event fires (or
 // the current state already satisfies eventTypeFilter, or timeout_seconds
-// elapses). Replaces the ScheduleWakeup + get_backlog_item polling loop
-// sessions previously had to use to wait on a review verdict or status
-// change — see docs/registry N/A, project_plans/backlog-event-subscribe.
+// elapses). Short, bounded wait; post-request_review sessions should end their
+// turn and be steered by the app instead (BacklogService.StartVerdictSteering).
 func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	if r := featureDisabledResult(h.enabledCheck); r != nil {
 		return r, nil
@@ -676,7 +912,7 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 	}
 
 	if h.eventBus == nil {
-		log.WarningLog.Printf("[mcp:wait_for_backlog_event] eventBus is nil (stdio fallback path) item=%s", itemID)
+		log.WarningLog().Printf("[mcp:wait_for_backlog_event] eventBus is nil (stdio fallback path) item=%s", itemID)
 		return errResult(ErrEventStreamUnavailable, "backlog event stream is not available on this connection", "This session's MCP call is on the stdio fallback path (daemon unreachable). Fall back to get_backlog_item polling until the daemon is reachable again."), nil
 	}
 
@@ -698,21 +934,28 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", err), ""), nil
 	}
 	verdict := latestReviewVerdict(waitCtx, h.storage, itemID)
+	if isStaleVerdict(item, verdict) {
+		verdict = nil
+	}
 	if res := currentStateWaitResult(item, verdict, eventTypeFilter); res != nil {
+		h.resetWaitTimeouts(ctx, itemID)
 		return okResult(*res), nil
+	}
+	// A verdict wait on a review-status item never needs polling: the app steers the work session when
+	// the verdict lands. After the current-state check so an existing verdict is still returned; skips
+	// the cap counter on purpose. Other filters (archived, status_changed, ...) get no steer, so they still wait.
+	if item.Status == string(session.BacklogStatusReview) && (eventTypeFilter == eventTypeAny || eventTypeFilter == eventTypeVerdictRecorded) {
+		return okResult(h.reviewWaitRefusedResult(itemID)), nil
+	}
+	// After the current-state check so a capped session still sees a verdict that already exists.
+	if h.waitCapReached(ctx, itemID) {
+		return okResult(h.waitCapResult(itemID)), nil
 	}
 
 	for {
 		select {
 		case <-waitCtx.Done():
-			return okResult(WaitForBacklogEventResult{
-				MCPResult: MCPResult{Success: true, Error: &MCPError{
-					Code:    "WAIT_TIMEOUT",
-					Message: fmt.Sprintf("no new %s event on item %s within %d seconds — call ScheduleWakeup for a longer interval before checking again, or call wait_for_backlog_event again only if you intend to keep this session blocked", eventTypeFilter, itemID, timeoutSecs),
-				}},
-				EventReceived: false,
-				ItemID:        itemID,
-			}), nil
+			return okResult(h.waitTimeoutResult(ctx, itemID, eventTypeFilter, timeoutSecs)), nil
 		case evt, ok := <-eventCh:
 			if !ok {
 				return okResult(WaitForBacklogEventResult{
@@ -744,6 +987,7 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 			if eventTypeFilter != eventTypeAny && kind != eventTypeFilter {
 				continue
 			}
+			h.resetWaitTimeouts(ctx, itemID)
 			return okResult(buildMatchedWaitResult(itemID, payload)), nil
 		}
 	}
@@ -771,7 +1015,7 @@ func (h *backlogHandlers) listBacklogItems(ctx context.Context, req mcpgo.CallTo
 			statuses = append(statuses, s)
 		}
 	}
-	if err := validateBacklogStatus(statuses); err != nil {
+	if err := h.validateBacklogStatus(statuses); err != nil {
 		return errResult(ErrInvalidArgument, err.Error(), ""), nil
 	}
 
@@ -889,13 +1133,9 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 
 	note, _ := args["note"].(string)
 
-	// Verify session is linked to item.
-	_, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
-	if linkErr != nil {
-		if errors.Is(linkErr, session.ErrNotFound) {
-			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", "Only sessions assigned to the item may report progress."), nil
-		}
-		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
+	// Verify session is linked to item (disambiguates ITEM_NOT_FOUND vs PERMISSION_DENIED).
+	if _, errRes := h.resolveItemLink(ctx, callerUUID, itemID); errRes != nil {
+		return errRes, nil
 	}
 
 	// Map status to AC criterion status values.
@@ -916,12 +1156,187 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 	// a work session), not part of report_progress's primary contract — a failure here
 	// must not fail the call that already succeeded above.
 	if appendErr := h.storage.AppendProgressNote(ctx, itemID, criteriaIndex, note, acStatus); appendErr != nil {
-		log.WarningLog.Printf("[mcp:report_progress] failed to append progress note history item=%s criterion=%d: %v", itemID, criteriaIndex, appendErr)
+		log.WarningLog().Printf("[mcp:report_progress] failed to append progress note history item=%s criterion=%d: %v", itemID, criteriaIndex, appendErr)
 	}
 
 	return mcpgo.NewToolResultText(fmt.Sprintf(
 		"Criterion %d updated to %q on item %s.", criteriaIndex, status, itemID,
 	)), nil
+}
+
+// --- link_session_to_item / get_linked_item ---
+
+// activeWorkSessionOwner returns the UUID of another live work-role ItemSession on the item,
+// if any. A row with EndedAt == nil only conflicts if liveCheck is nil or reports it alive —
+// a liveness-dead owner is stale, not a conflict, so resuming crashed work isn't blocked.
+func activeWorkSessionOwner(sessions []session.ItemSessionSummary, callerUUID string, liveCheck func(sessionUUID string) bool) (string, bool) {
+	for _, s := range sessions {
+		if s.Role != session.SessionRoleWork || s.EndedAt != nil || s.SessionUUID == callerUUID {
+			continue
+		}
+		if liveCheck != nil && !liveCheck(s.SessionUUID) {
+			continue // EndedAt not yet updated (crash/kill), but liveness check confirms it's dead — not a conflict
+		}
+		return s.SessionUUID, true
+	}
+	return "", false
+}
+
+// linkSessionToItem (re)links the calling session to a backlog item, thin-wrapping
+// AttachSessionToItem with an idempotency short-circuit and an exclusivity precheck so
+// two live work sessions can never both hold the same item.
+func (h *backlogHandlers) linkSessionToItem(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
+	callerUUID, err := callerSessionUUID(ctx)
+	if err != nil {
+		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
+	}
+	if h.backlogSvc == nil {
+		return errResult(ErrUnavailable, "link_session_to_item is not available over this transport", "Retry once the Stapler Squad HTTP daemon is reachable — this tool requires the HTTP-connected MCP server."), nil
+	}
+
+	args := req.GetArguments()
+	itemID, ok := args["item_id"].(string)
+	if !ok || itemID == "" {
+		return errResult(ErrInvalidArgument, "item_id is required", ""), nil
+	}
+	if err := validateUUID(itemID); err != nil {
+		return errResult(ErrInvalidArgument, err.Error(), ""), nil
+	}
+
+	// Idempotency short-circuit: already linked to this exact item is a no-op success.
+	if existing, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID); linkErr == nil {
+		return okResult(LinkSessionToItemResult{
+			MCPResult: MCPResult{Success: true},
+			ItemID:    itemID, SessionUUID: callerUUID, ItemSessionID: existing.ID,
+			AlreadyLinked: true, SlashCommandsRegenerated: false, ItemStatus: h.lookupItemStatus(ctx, itemID),
+		}), nil
+	}
+	var previousItemID string
+	if prior, priorErr := h.storage.GetItemSessionBySessionUUID(ctx, callerUUID); priorErr == nil && prior.BacklogItemID != itemID {
+		previousItemID = prior.BacklogItemID
+	}
+
+	// Exclusivity precheck: reject if a different, still-live work session already holds the item.
+	// Check-then-act, no lock/transaction — two concurrent first-link calls on the same item can
+	// both pass this and both attach. Accepted, documented gap (rare in practice); see plan.md.
+	itemSessions, listErr := h.storage.ListItemSessions(ctx, itemID)
+	if listErr != nil && !errors.Is(listErr, session.ErrNotFound) {
+		return errResult(ErrInternalError, fmt.Sprintf("list item sessions: %v", listErr), ""), nil
+	}
+	if owner, conflict := activeWorkSessionOwner(itemSessions, callerUUID, h.liveCheck); conflict {
+		// Omits the owning session's UUID from the response: it doubles as this MCP
+		// layer's bearer credential, so leaking it here would let a caller impersonate it.
+		log.InfoLog().Printf("[mcp:link_session_to_item] session=%s item=%s conflict owner=%s", callerUUID, itemID, owner)
+		return errResult(ErrConflict,
+			fmt.Sprintf("item %s already has a live work session", itemID),
+			"get_linked_item only reports your own session's linkage, not other sessions' — it cannot resolve this. If you believe this is stale (the other session crashed or was force-restarted), wait for the backlog reconciler to clear it, or escalate to a human rather than retrying — this tool has no force-relink override by design."), nil
+	}
+
+	// Determined BEFORE calling the attacher using the exact same condition
+	// AttachSessionToItem's own step 6 uses to decide whether to write slash
+	// commands (inst.UUID == sessionUUID && inst.Path != "") — findSessionTitleByUUID
+	// checks UUID only, which would report true for an instance AttachSessionToItem
+	// wouldn't have written to.
+	slashCommandsRegenerated := sessionHasWritableInstance(h.store, callerUUID)
+	resp, attachErr := h.backlogSvc.AttachSessionToItem(ctx, connect.NewRequest(&sessionv1.AttachSessionToItemRequest{
+		ItemId: itemID, SessionUuid: callerUUID,
+	}))
+	if attachErr != nil {
+		switch connect.CodeOf(attachErr) {
+		case connect.CodeNotFound:
+			return errResult(ErrItemNotFound, attachErr.Error(), ""), nil
+		case connect.CodeFailedPrecondition:
+			return errResult(ErrFailedPrecondition, attachErr.Error(), "The item's status doesn't currently allow attaching a session."), nil
+		case connect.CodeInvalidArgument:
+			return errResult(ErrInvalidArgument, attachErr.Error(), ""), nil
+		default:
+			return errResult(ErrInternalError, fmt.Sprintf("attach session to item: %v", attachErr), ""), nil
+		}
+	}
+	is := resp.Msg.GetItemSession()
+	log.InfoLog().Printf("[mcp:link_session_to_item] session=%s item=%s already_linked=false slash_commands_regenerated=%v", callerUUID, itemID, slashCommandsRegenerated)
+	return okResult(LinkSessionToItemResult{
+		MCPResult: MCPResult{Success: true},
+		ItemID:    itemID, SessionUUID: callerUUID, ItemSessionID: is.GetId(),
+		AlreadyLinked: false, PreviouslyLinkedItemID: previousItemID,
+		SlashCommandsRegenerated: slashCommandsRegenerated, ItemStatus: h.lookupItemStatus(ctx, itemID),
+	}), nil
+}
+
+// lookupItemStatus returns itemID's current status, or "" if the lookup fails.
+func (h *backlogHandlers) lookupItemStatus(ctx context.Context, itemID string) string {
+	item, err := h.storage.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		return ""
+	}
+	return item.Status
+}
+
+// sessionHasWritableInstance reports whether store has a live instance for sessionUUID
+// with a resolvable path, mirroring the exact condition AttachSessionToItem's own step 6
+// uses to decide whether to write slash commands. A nil store or lookup failure reports
+// false rather than panicking or erroring.
+func sessionHasWritableInstance(store session.InstanceStore, sessionUUID string) bool {
+	if store == nil {
+		return false
+	}
+	instances, err := store.ListInstanceData()
+	if err != nil {
+		return false
+	}
+	for _, d := range instances {
+		if d.UUID == sessionUUID && d.Path != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// getLinkedItem is a read-only lookup of which backlog item(s) the calling session is
+// linked to, so an agent can discover its own linkage without SQLite access.
+func (h *backlogHandlers) getLinkedItem(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
+	callerUUID, err := callerSessionUUID(ctx)
+	if err != nil {
+		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
+	}
+
+	args := req.GetArguments()
+	itemID, _ := args["item_id"].(string)
+	if itemID != "" {
+		if err := validateUUID(itemID); err != nil {
+			return errResult(ErrInvalidArgument, err.Error(), ""), nil
+		}
+	}
+
+	var is session.ItemSessionSummary
+	var lookupErr error
+	if itemID != "" {
+		is, lookupErr = h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
+	} else {
+		is, lookupErr = h.storage.GetItemSessionBySessionUUID(ctx, callerUUID)
+	}
+	if lookupErr != nil {
+		if errors.Is(lookupErr, session.ErrNotFound) {
+			return okResult(GetLinkedItemResult{MCPResult: MCPResult{Success: true}, Linked: false, ItemID: itemID}), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("lookup item session: %v", lookupErr), ""), nil
+	}
+
+	title, status := "", ""
+	if item, itemErr := h.storage.GetBacklogItem(ctx, is.BacklogItemID); itemErr == nil {
+		title, status = item.Title, item.Status
+	}
+	return okResult(GetLinkedItemResult{
+		MCPResult: MCPResult{Success: true},
+		Linked:    true, ItemID: is.BacklogItemID, ItemTitle: title, ItemStatus: status,
+		Role: is.Role, StartedAt: is.StartedAt,
+	}), nil
 }
 
 // --- request_review ---
@@ -944,6 +1359,8 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	if err := validateUUID(itemID); err != nil {
 		return errResult(ErrInvalidArgument, err.Error(), ""), nil
 	}
+	// A new review cycle starts a fresh wait budget.
+	h.resetWaitTimeouts(ctx, itemID)
 
 	message, ok := args["message"].(string)
 	if !ok || message == "" {
@@ -961,13 +1378,10 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 		return errResult(ErrInvalidArgument, "verification_notes must be <= 4000 characters", ""), nil
 	}
 
-	// Verify session is linked to item.
-	itemSession, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
-	if linkErr != nil {
-		if errors.Is(linkErr, session.ErrNotFound) {
-			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", ""), nil
-		}
-		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
+	// Verify session is linked to item (disambiguates ITEM_NOT_FOUND vs PERMISSION_DENIED).
+	itemSession, errRes := h.resolveItemLink(ctx, callerUUID, itemID)
+	if errRes != nil {
+		return errRes, nil
 	}
 
 	// Belt-and-suspenders layer 1: reject if the worktree has uncommitted changes.
@@ -981,10 +1395,10 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	if wt, wtErr := h.storage.GetWorktreeDataBySessionUUID(ctx, callerUUID); wtErr == nil && wt.WorktreePath != "" {
 		paths, pathsErr := session.GetWorktreeDirtyPaths(wt.WorktreePath)
 		if pathsErr != nil {
-			log.WarningLog.Printf("[mcp:request_review] GetWorktreeDirtyPaths failed for session=%s worktree=%s: %v", callerUUID, wt.WorktreePath, pathsErr)
+			log.WarningLog().Printf("[mcp:request_review] GetWorktreeDirtyPaths failed for session=%s worktree=%s: %v", callerUUID, wt.WorktreePath, pathsErr)
 		}
 		if pathsErr == nil && len(paths) > 0 {
-			log.InfoLog.Printf("[mcp:request_review] rejected: uncommitted changes in worktree for session=%s item=%s paths=%v", callerUUID, itemID, paths)
+			log.InfoLog().Printf("[mcp:request_review] rejected: uncommitted changes in worktree for session=%s item=%s paths=%v", callerUUID, itemID, paths)
 			return errResult(ErrInvalidArgument, formatDirtyPathsRejectionMessage(paths), ""), nil
 		}
 	}
@@ -1008,6 +1422,23 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// precondition, so the CAS check is never trivially self-satisfying (FR1,
 	// FR9 — see validateSelfResolveSource).
 	validStatus, valErr := validateSelfResolveSource(item, "request_review")
+	recoverFromReview := false
+	if valErr != nil && session.BacklogStatus(item.Status) == session.BacklogStatusReview {
+		// A session stuck in review (stale/blocked verdict, no live reviewer) must be
+		// able to re-request. Fail closed on a lookup error, like the pr_pending guard.
+		itemSessions, lsErr := h.itemSessionsFor(ctx, itemID)
+		if lsErr != nil {
+			log.WarningLog().Printf("request_review: failed to list item sessions for %s: %v", itemID, lsErr)
+			return errResult(ErrInternalError, "could not verify active-reviewer state for this item — retry", ""), nil
+		}
+		if services.HasActiveReviewSession(itemSessions) {
+			return errResult(ErrInvalidArgument, "an active review session already exists for this item — wait for it to finish, or check get_backlog_item if this persists", ""), nil
+		}
+		if canRecoverFromReview(item, itemSessions, latestVerdictFromSessions(itemSessions)) {
+			recoverFromReview = true
+			validStatus, valErr = session.BacklogStatusInProgress, nil
+		}
+	}
 	if valErr != nil {
 		return errResult(ErrInvalidArgument, valErr.Error(), ""), nil
 	}
@@ -1020,22 +1451,49 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	if validStatus == session.BacklogStatusPRPending {
 		itemSessions, lsErr := h.itemSessionsFor(ctx, itemID)
 		if lsErr != nil {
-			return errResult(ErrInternalError, fmt.Sprintf("could not verify active-reviewer state for this item — retry: %v", lsErr), ""), nil
+			log.WarningLog().Printf("request_review: failed to list item sessions for %s: %v", itemID, lsErr)
+			return errResult(ErrInternalError, "could not verify active-reviewer state for this item — retry", ""), nil
 		}
 		if services.HasActiveReviewSession(itemSessions) {
 			return errResult(ErrInvalidArgument, "an active review session already exists for this item — wait for it to finish, or check get_backlog_item if this persists", ""), nil
 		}
 	}
 
+	// Belt-and-suspenders layer 2: reject if any acceptance criterion isn't
+	// marked pass via report_progress yet. Applies to the SkipReviewGate
+	// branch too — that flag skips the independent LLM review, not this
+	// deterministic completeness check, otherwise a SkipReviewGate item could
+	// self-declare done with zero verification of any kind.
+	if err := unmetAcCriteriaError(item); err != nil {
+		log.InfoLog().Printf("[mcp:request_review] rejected: %v session=%s item=%s", err, callerUUID, itemID)
+		h.recordRejectedRequestReview(ctx, item, err)
+		return errResult(ErrInvalidArgument, err.Error(), ""), nil
+	}
+
+	// Scope boundary (Story 2.1.4): review/done are hardcoded built-in
+	// targets, not sourced from any stage engine — same "does not
+	// automatically inherit" resolution as allowedSelfResolveSourceStatuses
+	// (a custom stage is never chosen here even if it were otherwise a
+	// plausible "review-like" destination).
 	targetStatus := session.BacklogStatusReview
 	if item.SkipReviewGate {
 		targetStatus = session.BacklogStatusDone
 	}
 
+	// Recovery: reopen the stuck review first so the transition below writes a fresh
+	// review-entry event, making the earlier verdict stale to wait_for_backlog_event.
+	if recoverFromReview {
+		reopen := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview), Note: "request_review recovering stale/blocked review"}
+		if _, reopenErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, reopen, session.TriggeredByAgent); reopenErr != nil {
+			log.InfoLog().Printf("[mcp:request_review] recovery reopen failed: %v", reopenErr)
+			return errResult(ErrInternalError, "item state changed since your last read — call get_backlog_item to see its current status", ""), nil
+		}
+	}
+
 	// Transition item from its validated source status to the target status.
 	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(validStatus), Note: fmt.Sprintf("request_review from %s", message)}
 	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, targetStatus, precondition, session.TriggeredByAgent); transErr != nil {
-		log.InfoLog.Printf("[mcp:request_review] transition to %s failed: %v", targetStatus, transErr)
+		log.InfoLog().Printf("[mcp:request_review] transition to %s failed: %v", targetStatus, transErr)
 		if errors.Is(transErr, session.ErrPreconditionFailed) {
 			return errResult(ErrInternalError, "item state changed since your last read (another action already transitioned it) — call get_backlog_item to see its current status", ""), nil
 		}
@@ -1055,11 +1513,11 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 			notes = itemSession.VerificationNotes + "\n\n---\n\n" + verificationNotes
 		}
 		if updateErr := h.storage.UpdateItemSessionVerificationNotes(ctx, itemSession.ID, notes); updateErr != nil {
-			log.WarningLog.Printf("[mcp:request_review] failed to persist verification_notes session=%s item=%s: %v", callerUUID, itemID, updateErr)
+			log.WarningLog().Printf("[mcp:request_review] failed to persist verification_notes session=%s item=%s: %v", callerUUID, itemID, updateErr)
 		}
 	}
 
-	log.InfoLog.Printf("[mcp:request_review] session=%s item=%s transitioned to %s message=%q verification_notes_len=%d", callerUUID, itemID, targetStatus, message, len(verificationNotes))
+	log.InfoLog().Printf("[mcp:request_review] session=%s item=%s transitioned to %s message=%q verification_notes_len=%d", callerUUID, itemID, targetStatus, message, len(verificationNotes))
 
 	if targetStatus == session.BacklogStatusDone {
 		return mcpgo.NewToolResultText(fmt.Sprintf(
@@ -1075,7 +1533,9 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	}
 
 	return mcpgo.NewToolResultText(fmt.Sprintf(
-		"Review requested for item %s. The item has been moved to review status.", itemID,
+		"Review requested for item %s. The item has been moved to review status.\n\n"+
+			"End your turn now and stay idle. Do NOT call wait_for_backlog_event, ScheduleWakeup, or /loop to poll — "+
+			"every wake re-reads your whole context. The app messages this session as soon as the verdict is recorded.", itemID,
 	)), nil
 }
 
@@ -1087,7 +1547,9 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 // keeps landing back in ready for the same external-blocker reason needs a
 // human/reviewer to look at it rather than looping through work sessions
 // indefinitely (the same failure shape the 78-bounce incident documented in
-// docs/tasks/backlog-feature-improvement.md motivated a breaker for).
+// docs/tasks/backlog-feature-improvement.md motivated a breaker for). Also
+// the threshold a rejected request_review call escalates against — see
+// rejectedNoteMarker and countBlockedCycles.
 const blockedCycleThreshold = 3
 
 // blockedNoteMarker prefixes every note report_blocked appends to
@@ -1096,12 +1558,27 @@ const blockedCycleThreshold = 3
 // convention) without needing a dedicated DB column.
 const blockedNoteMarker = "[report_blocked]"
 
-// countBlockedCycles counts how many blockedNoteMarker-prefixed lines already
-// exist in notes.
+// countBlockedCycles counts how many blockedNoteMarker- or
+// rejectedNoteMarker-prefixed lines exist in notes since the most recent
+// resumeNoteMarker line (or from the start, if there is none) — a successful
+// resume_work call starts a fresh blocked count, since a block reported after
+// a resume is a new blocking episode, not a continuation of whatever sent the
+// item to ready before. The two markers share one counter deliberately: a
+// session that fails request_review's AC-completeness gate twice and then
+// calls report_blocked once must escalate on the 3rd combined cycle, not stay
+// under threshold forever by never accumulating more than 1 in either
+// marker's own count.
 func countBlockedCycles(notes string) int {
+	lines := strings.Split(notes, "\n")
+	start := 0
+	for i, line := range lines {
+		if strings.HasPrefix(line, resumeNoteMarker) {
+			start = i + 1
+		}
+	}
 	count := 0
-	for _, line := range strings.Split(notes, "\n") {
-		if strings.HasPrefix(line, blockedNoteMarker) {
+	for _, line := range lines[start:] {
+		if strings.HasPrefix(line, blockedNoteMarker) || strings.HasPrefix(line, rejectedNoteMarker) {
 			count++
 		}
 	}
@@ -1144,12 +1621,10 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 		return errResult(ErrInvalidArgument, "rationale must be <= 2000 characters", ""), nil
 	}
 
-	itemSession, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
-	if linkErr != nil {
-		if errors.Is(linkErr, session.ErrNotFound) {
-			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", ""), nil
-		}
-		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
+	// Verify session is linked to item (disambiguates ITEM_NOT_FOUND vs PERMISSION_DENIED).
+	itemSession, errRes := h.resolveItemLink(ctx, callerUUID, itemID)
+	if errRes != nil {
+		return errRes, nil
 	}
 	if itemSession.Role != session.SessionRoleWork {
 		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'work' role may report a blocked item", itemSession.Role), ""), nil
@@ -1159,6 +1634,12 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 	if itemErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("failed to load item: %v", itemErr), ""), nil
 	}
+	// Scope boundary (Story 2.1.4): this source-status check is its own
+	// hardcoded switch, separate from validateSelfResolveSource/
+	// allowedSelfResolveSourceStatuses — deliberately built-in-only for the
+	// same "does not automatically inherit" resolution: a custom stage is
+	// never an eligible report_blocked source even if it were otherwise
+	// in_progress-like.
 	currentStatus := session.BacklogStatus(item.Status)
 	switch currentStatus {
 	case session.BacklogStatusInProgress, session.BacklogStatusReview:
@@ -1167,6 +1648,9 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 		return errResult(ErrInvalidArgument, fmt.Sprintf("item is at status %q — report_blocked only allowed from in_progress or review", item.Status), ""), nil
 	}
 
+	// Scope boundary (Story 2.1.4): ready/review are hardcoded built-in
+	// targets, same rationale as request_review's targetStatus above — a
+	// custom stage is never chosen here.
 	priorBlockedCycles := countBlockedCycles(item.Notes)
 	escalated := priorBlockedCycles+1 >= blockedCycleThreshold
 	targetStatus := session.BacklogStatusReady
@@ -1176,7 +1660,7 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 
 	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(currentStatus), Note: fmt.Sprintf("report_blocked from %s", rationale)}
 	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, targetStatus, precondition, session.TriggeredByAgent); transErr != nil {
-		log.InfoLog.Printf("[mcp:report_blocked] transition to %s failed: %v", targetStatus, transErr)
+		log.InfoLog().Printf("[mcp:report_blocked] transition to %s failed: %v", targetStatus, transErr)
 		if errors.Is(transErr, session.ErrPreconditionFailed) {
 			return errResult(ErrInternalError, "item state changed since your last read (another action already transitioned it) — call get_backlog_item to see its current status", ""), nil
 		}
@@ -1196,15 +1680,147 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 		newNotes += fmt.Sprintf("\n%s escalated to review after %d blocked cycles", blockedNoteMarker, priorBlockedCycles+1)
 	}
 	if _, updateErr := h.storage.UpdateBacklogItem(ctx, itemID, session.BacklogItemUpdate{Notes: &newNotes}, nil); updateErr != nil {
-		log.WarningLog.Printf("[mcp:report_blocked] failed to persist rationale notes session=%s item=%s: %v", callerUUID, itemID, updateErr)
+		log.WarningLog().Printf("[mcp:report_blocked] failed to persist rationale notes session=%s item=%s: %v", callerUUID, itemID, updateErr)
 	}
 
-	log.InfoLog.Printf("[mcp:report_blocked] session=%s item=%s transitioned to %s rationale=%q escalated=%v", callerUUID, itemID, targetStatus, rationale, escalated)
+	log.InfoLog().Printf("[mcp:report_blocked] session=%s item=%s transitioned to %s rationale=%q escalated=%v", callerUUID, itemID, targetStatus, rationale, escalated)
 
 	if escalated {
 		return mcpgo.NewToolResultText(fmt.Sprintf("Item %s has been blocked %d times — escalated to review for a human/reviewer to look at instead of returning to ready.", itemID, priorBlockedCycles+1)), nil
 	}
 	return mcpgo.NewToolResultText(fmt.Sprintf("Item %s reported blocked and returned to ready status.", itemID)), nil
+}
+
+// rejectedNoteMarker prefixes the note request_review appends to
+// BacklogItemData.Notes when the AC-completeness gate rejects a call.
+// Unlike report_blocked, a rejection here leaves the item's status
+// unchanged, so without this note the rejection would otherwise leave no
+// trace anywhere a human or a later session could see it — violating the
+// project's "document AI decisions in edge cases" convention (visible
+// comment, not silent). countBlockedCycles counts this marker together with
+// blockedNoteMarker so the two share one escalation counter (see its doc
+// comment).
+const rejectedNoteMarker = "[request_review:rejected]"
+
+// recordRejectedRequestReview persists rejectErr's message as a
+// rejectedNoteMarker-prefixed line on item's Notes. Best-effort: a failure to
+// persist the audit note must not turn an already-correct rejection into a
+// harder failure for the calling session — it still gets the same error
+// result either way, it just won't be visible in Notes to anyone else.
+func (h *backlogHandlers) recordRejectedRequestReview(ctx context.Context, item *session.BacklogItemData, rejectErr error) {
+	noteLine := fmt.Sprintf("%s %s", rejectedNoteMarker, rejectErr.Error())
+	newNotes := noteLine
+	if item.Notes != "" {
+		newNotes = item.Notes + "\n" + noteLine
+	}
+	if _, updateErr := h.storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{Notes: &newNotes}, nil); updateErr != nil {
+		log.WarningLog().Printf("[mcp:request_review] failed to persist rejection note item=%s: %v", item.ID, updateErr)
+	}
+}
+
+// unmetAcCriteriaError reports which acceptance criteria on item aren't yet
+// marked done (report_progress's "pass") — pending, in_progress, or
+// explicitly failed all count as unmet. Returns nil when every criterion is
+// done, including when the item has zero criteria (nothing to verify, and
+// items created before ACs were mandatory must not be rejected forever).
+// Malformed criteria JSON fails open (logged, not rejected) rather than
+// permanently blocking an item on a parse bug.
+func unmetAcCriteriaError(item *session.BacklogItemData) error {
+	criteria, err := session.ParseAcCriteria(item.AcceptanceCriteria)
+	if err != nil {
+		log.WarningLog().Printf("[mcp:request_review] failed to parse acceptance criteria for item=%s: %v", item.ID, err)
+		return nil
+	}
+	var unmet []string
+	for _, c := range criteria {
+		if c.Status != session.AcStatusDone {
+			unmet = append(unmet, fmt.Sprintf("%d: %s (status=%s)", c.Index, c.Text, c.Status))
+		}
+	}
+	if len(unmet) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"request_review rejected: %d acceptance criteria are not yet marked pass via report_progress: %s. "+
+			"Call report_progress for each remaining criterion, or report_blocked if genuinely stuck",
+		len(unmet), strings.Join(unmet, "; "),
+	)
+}
+
+// --- resume_work ---
+
+// resumeNoteMarker prefixes the note resume_work appends when it transitions
+// an item ready -> in_progress. Also the reset point countBlockedCycles
+// scans from (see that function's doc comment).
+const resumeNoteMarker = "[resume_work]"
+
+// resumeWork is report_blocked's inverse: it lets the linked work-role
+// session move an item back from ready to in_progress once whatever blocked
+// it (per report_blocked) is resolved, so request_review/report_pr_created
+// become reachable again. Without this, a session that reported blocked had
+// no way to record finished work — both of those tools reject 'ready' as a
+// source status. See this tool's originating bug report for the repro.
+func (h *backlogHandlers) resumeWork(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
+	callerUUID, err := callerSessionUUID(ctx)
+	if err != nil {
+		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
+	}
+	args := req.GetArguments()
+	itemID, ok := args["item_id"].(string)
+	if !ok || itemID == "" {
+		return errResult(ErrInvalidArgument, "item_id is required", ""), nil
+	}
+	if err := validateUUID(itemID); err != nil {
+		return errResult(ErrInvalidArgument, err.Error(), ""), nil
+	}
+
+	// Verify session is linked to item (disambiguates ITEM_NOT_FOUND vs PERMISSION_DENIED).
+	itemSession, errRes := h.resolveItemLink(ctx, callerUUID, itemID)
+	if errRes != nil {
+		return errRes, nil
+	}
+	if itemSession.Role != session.SessionRoleWork {
+		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'work' role may resume work on an item", itemSession.Role), ""), nil
+	}
+
+	item, itemErr := h.getBacklogItemFor(ctx, itemID)
+	if itemErr != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("failed to load item: %v", itemErr), ""), nil
+	}
+	// Scope boundary (Story 2.1.4 precedent): hardcoded built-in-only source
+	// status, same rationale as report_blocked's switch above — resume_work
+	// only ever bridges ready -> in_progress.
+	if session.BacklogStatus(item.Status) != session.BacklogStatusReady {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("item is at status %q — resume_work only allowed from ready", item.Status), ""), nil
+	}
+
+	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady), Note: "resume_work"}
+	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, precondition, session.TriggeredByAgent); transErr != nil {
+		log.InfoLog().Printf("[mcp:resume_work] transition to in_progress failed: %v", transErr)
+		if errors.Is(transErr, session.ErrPreconditionFailed) {
+			return errResult(ErrInternalError, "item state changed since your last read (another action already transitioned it) — call get_backlog_item to see its current status", ""), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("transition to in_progress failed: %v", transErr), ""), nil
+	}
+
+	// Best-effort: persists a resume marker that also resets the blocked-cycle
+	// count (see countBlockedCycles). A failure here should not undo the
+	// status transition that already succeeded.
+	priorBlockedCycles := countBlockedCycles(item.Notes)
+	noteLine := fmt.Sprintf("%s resumed after %d blocked cycle(s)", resumeNoteMarker, priorBlockedCycles)
+	newNotes := noteLine
+	if item.Notes != "" {
+		newNotes = item.Notes + "\n" + noteLine
+	}
+	if _, updateErr := h.storage.UpdateBacklogItem(ctx, itemID, session.BacklogItemUpdate{Notes: &newNotes}, nil); updateErr != nil {
+		log.WarningLog().Printf("[mcp:resume_work] failed to persist resume note session=%s item=%s: %v", callerUUID, itemID, updateErr)
+	}
+
+	log.InfoLog().Printf("[mcp:resume_work] session=%s item=%s transitioned to in_progress", callerUUID, itemID)
+	return mcpgo.NewToolResultText(fmt.Sprintf("Item %s resumed — transitioned from ready to in_progress.", itemID)), nil
 }
 
 // maxRejectionMessagePaths caps how many dirty paths formatDirtyPathsRejectionMessage
@@ -1307,13 +1923,10 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 		inputs = append(inputs, vi)
 	}
 
-	// Verify session is linked to item with role=review.
-	itemSession, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
-	if linkErr != nil {
-		if errors.Is(linkErr, session.ErrNotFound) {
-			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", ""), nil
-		}
-		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
+	// Verify session is linked to item (disambiguates ITEM_NOT_FOUND vs PERMISSION_DENIED).
+	itemSession, errRes := h.resolveItemLink(ctx, callerUUID, itemID)
+	if errRes != nil {
+		return errRes, nil
 	}
 	if itemSession.Role != "review" {
 		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'review' role may submit verdicts", itemSession.Role), ""), nil
@@ -1394,7 +2007,7 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 			// connection.
 			reopenCtx, reopenCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			if reopenErr := h.autoReopener.AutoReopenAfterFailedReview(reopenCtx, itemID); reopenErr != nil {
-				log.WarningLog.Printf("[submitReviewVerdict] AutoReopenAfterFailedReview item=%s: %v", itemID, reopenErr)
+				log.WarningLog().Printf("[submitReviewVerdict] AutoReopenAfterFailedReview item=%s: %v", itemID, reopenErr)
 			}
 			reopenCancel()
 		}
@@ -1428,361 +2041,6 @@ func findSessionTitleByUUID(store session.InstanceStore, uuid string) (string, e
 		}
 	}
 	return "", fmt.Errorf("no session found with UUID %s", uuid)
-}
-
-// --- report_pr_created ---
-
-// sessionBranch resolves the branch sessionUUID is working on, via the
-// overridable resolveSessionBranch seam when set, otherwise the real
-// worktree lookup. See backlogHandlers.resolveSessionBranch's doc comment.
-func (h *backlogHandlers) sessionBranch(ctx context.Context, sessionUUID string) (string, error) {
-	if h.resolveSessionBranch != nil {
-		return h.resolveSessionBranch(ctx, sessionUUID)
-	}
-	wt, err := h.storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
-	if err != nil {
-		return "", err
-	}
-	return wt.BranchName, nil
-}
-
-// verifyPR runs the GitHub cross-check via the overridable verifyPRMatchesBranch
-// seam when set, otherwise the real VerifyPRMatchesBranch (tools_github.go).
-func (h *backlogHandlers) verifyPR(ctx context.Context, owner, repo string, prNumber int, expectedBranch string) (PRVerification, error) {
-	if h.verifyPRMatchesBranch != nil {
-		return h.verifyPRMatchesBranch(ctx, owner, repo, prNumber, expectedBranch)
-	}
-	return VerifyPRMatchesBranch(ctx, owner, repo, prNumber, expectedBranch)
-}
-
-// callerGitHubLogin resolves the GitHub login this server is authenticated
-// as, via the overridable resolveCallerGitHubLogin seam when set, otherwise
-// the real githubpkg.GetCurrentUserLogin.
-func (h *backlogHandlers) callerGitHubLogin(ctx context.Context) (string, error) {
-	if h.resolveCallerGitHubLogin != nil {
-		return h.resolveCallerGitHubLogin(ctx)
-	}
-	return githubpkg.GetCurrentUserLogin(ctx)
-}
-
-// decideOverridePolicy is the pure decision function behind
-// report_pr_created's fallback-branch override path. It takes the
-// GitHub-verified PRVerification plus the caller's override_reason and
-// resolved GitHub identity, and decides whether the self-reported PR may be
-// recorded even though its head branch (per GitHub) doesn't match this
-// item's tracked branch. It is a pure function of its three inputs (no ctx,
-// no I/O) so the branching itself — the part architecture-review.md flagged
-// as needing isolation from reportPRCreated's storage/item/session
-// machinery — is directly unit-testable (see TestDecideOverridePolicy).
-//
-// Every accept==false outcome here ends up surfaced by reportPRCreated as
-// ErrInvalidArgument; code is not that MCP-level code but an internal
-// discriminator distinguishing *which* of the four rejection reasons fired,
-// since reportPRCreated needs to build a different, prNumber/branch-specific
-// message for each and none of that request context is available inside
-// this function. msg carries whatever case-specific text decideOverridePolicy
-// *can* build from v/overrideReason/callerLogin alone; reportPRCreated
-// composes the final, exact message around it.
-//
-// Check ordering — exists, then matched (fast path), then reason, then
-// author, then state — is load-bearing: existence can never be overridden,
-// so it's checked first regardless of everything else. Author-match is
-// checked before the state gate so a PR failing both surfaces the more
-// fundamental "this isn't your PR" reason rather than a "not open/merged,
-// try again later" reason that invites a misleading retry.
-//
-// forceOverride skips the Matched fast path — reportPRCreated sets it true
-// on the reassignment path (item already pr_pending, correcting the tracked
-// PR to a different number), where a matching branch alone is not enough:
-// AC1/AC9 require override_reason and self-authorship on every reassignment,
-// not just ones whose head branch happens to differ from the tracked branch.
-func decideOverridePolicy(v PRVerification, overrideReason, callerLogin string, forceOverride bool) (accept bool, code connect.Code, msg string) {
-	if !v.Exists {
-		return false, connect.CodeNotFound, "PR does not exist"
-	}
-	if v.Matched && !forceOverride {
-		return true, connect.Code(0), ""
-	}
-	if overrideReason == "" {
-		return false, connect.CodeInvalidArgument, "override_reason is required when the PR's head branch does not match this item's tracked branch"
-	}
-	if callerLogin == "" || v.Author == "" || v.Author != callerLogin {
-		return false, connect.CodePermissionDenied, fmt.Sprintf(
-			"PR was authored by %q, not your own GitHub identity (%q) — the override path can only attach PRs you authored yourself. Refusing to record it.",
-			v.Author, callerLogin)
-	}
-	if v.State != githubpkg.PRStateOpen && v.State != githubpkg.PRStateMerged {
-		return false, connect.CodeFailedPrecondition, fmt.Sprintf(
-			"PR is %s (not open or merged) — refusing to record it even with override_reason.", v.State)
-	}
-	return true, connect.Code(0), ""
-}
-
-// reportPRCreated records a PR the calling work session created itself
-// (typically via /backlog:ship -> gh pr create, outside the mechanical
-// pushAndCreatePR path — see session/backlog_lifecycle.go) back onto the
-// backlog item. Role: work only. This closes the gap named in "PR Metadata
-// Capture Fix" (project_plans/backlog-agent-communication, Epic 3.1): only
-// the system-driven mechanical push path used to write pr_url/pr_number, so
-// an agent-driven PR could exist on GitHub with the item never reflecting
-// it. See SetBacklogItemPRAndTransition for the shared primary-write path
-// (also used by the reconciliation backstop, Epic 3.2) and
-// VerifyPRMatchesBranch for the GitHub cross-check this handler performs
-// before trusting the self-reported pr_url/pr_number.
-func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	if r := featureDisabledResult(h.enabledCheck); r != nil {
-		return r, nil
-	}
-	callerUUID, err := callerSessionUUID(ctx)
-	if err != nil {
-		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
-	}
-
-	args := req.GetArguments()
-
-	itemID, ok := args["item_id"].(string)
-	if !ok || itemID == "" {
-		return errResult(ErrInvalidArgument, "item_id is required", ""), nil
-	}
-	if err := validateUUID(itemID); err != nil {
-		return errResult(ErrInvalidArgument, err.Error(), ""), nil
-	}
-
-	prURL, ok := args["pr_url"].(string)
-	if !ok || prURL == "" {
-		return errResult(ErrInvalidArgument, "pr_url is required", ""), nil
-	}
-
-	prNumberF, ok := args["pr_number"].(float64)
-	if !ok || prNumberF <= 0 {
-		return errResult(ErrInvalidArgument, "pr_number is required and must be > 0", ""), nil
-	}
-	prNumber := int(prNumberF)
-
-	summary, ok := args["summary"].(string)
-	if !ok || summary == "" {
-		return errResult(ErrInvalidArgument, "summary is required", ""), nil
-	}
-	if len(summary) > 1000 {
-		return errResult(ErrInvalidArgument, "summary must be <= 1000 characters", ""), nil
-	}
-
-	// override_reason is optional — only required when GitHub's view of the
-	// PR's head branch doesn't match this item's tracked branch. See
-	// decideOverridePolicy below.
-	overrideReason, _ := args["override_reason"].(string)
-	overrideReason = strings.TrimSpace(overrideReason)
-	if len(overrideReason) > 500 {
-		return errResult(ErrInvalidArgument, "override_reason must be <= 500 characters", ""), nil
-	}
-
-	// Verify session is linked to item with role=work.
-	itemSession, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
-	if linkErr != nil {
-		if errors.Is(linkErr, session.ErrNotFound) {
-			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", ""), nil
-		}
-		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
-	}
-	if itemSession.Role != session.SessionRoleWork {
-		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'work' role may report a created PR", itemSession.Role), ""), nil
-	}
-
-	item, getErr := h.getBacklogItemFor(ctx, itemID)
-	if getErr != nil {
-		if errors.Is(getErr, session.ErrNotFound) {
-			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil
-		}
-		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", getErr), ""), nil
-	}
-
-	// AC6: reject a structurally ineligible status with a message naming the
-	// item's actual status, before any PR verification or storage write is
-	// attempted — without this, an item in e.g. ready/idea/done would fall
-	// through to SetBacklogItemPRAndTransition's ErrPreconditionFailed and
-	// surface as the generic "item state changed since your last read..."
-	// CAS-race message below, indistinguishable from a genuine concurrent
-	// write race (AC7's message, which this check must not alter).
-	if !reportPRCreatedAllowedSourceStatuses[session.BacklogStatus(item.Status)] {
-		return errResult(ErrInvalidArgument, fmt.Sprintf(
-			"item %s is at status %q — report_pr_created is only allowed from status 'review' or 'pr_pending'", itemID, item.Status), ""), nil
-	}
-
-	// Idempotency: already pr_pending with this exact PR number is a no-op success.
-	if item.Status == string(session.BacklogStatusPRPending) && item.PrNumber == prNumber {
-		return mcpgo.NewToolResultText(fmt.Sprintf(
-			"PR #%d already recorded for item %s (status already pr_pending) — no changes made.", prNumber, itemID,
-		)), nil
-	}
-
-	// Reassignment: the item already has a *different* PR tracked
-	// (status already pr_pending — the idempotent same-number case returned
-	// above). This requires strictly more than the first-time recording
-	// path: override_reason is mandatory unconditionally (AC1, checked here
-	// before any network call — even a matching branch doesn't excuse it),
-	// and the currently tracked PR is hard-checked for already being merged
-	// (AC2) before anything else, since a merged PR's association must never
-	// be silently swapped.
-	isReassignment := item.Status == string(session.BacklogStatusPRPending)
-	if isReassignment && overrideReason == "" {
-		return errResult(ErrInvalidArgument, fmt.Sprintf(
-			"item %s already has PR #%d tracked (status pr_pending) — reassigning it to PR #%d requires override_reason explaining why, even if the new PR's branch matches this item's tracked branch. "+
-				"Retry with override_reason set, e.g. override_reason=\"tracked branch was polluted by another session; opened a clean PR instead and closed the original\".",
-			itemID, item.PrNumber, prNumber), ""), nil
-	}
-	if isReassignment && item.PrNumber > 0 {
-		// Fail CLOSED on a parse failure here, same as a verification
-		// failure below — this is the one check the tool description
-		// promises has no override, so an unparseable stored PrURL must
-		// never silently skip it and let the reassignment through.
-		curRef, curParseErr := session.ParseGitHubURLWithHosts(item.PrURL, h.enterpriseHosts())
-		if curParseErr != nil {
-			return errResult(ErrInternalError, fmt.Sprintf(
-				"could not parse the currently tracked PR URL (%q) to verify it isn't merged before reassigning — retry, or contact an operator if this persists: %v",
-				item.PrURL, curParseErr), ""), nil
-		}
-		curVerification, curErr := h.verifyPR(ctx, curRef.Owner, curRef.Repo, item.PrNumber, "")
-		if curErr != nil {
-			return errResult(ErrInternalError, fmt.Sprintf("could not verify the currently tracked PR #%d against GitHub — retry: %v", item.PrNumber, curErr), ""), nil
-		}
-		if curVerification.State == githubpkg.PRStateMerged {
-			return errResult(ErrInvalidArgument, fmt.Sprintf(
-				"item %s's currently tracked PR #%d is already merged — refusing to reassign it to PR #%d, even with override_reason. "+
-					"A merged PR's association with this item cannot be changed; open a new backlog item if further work is needed.",
-				itemID, item.PrNumber, prNumber), ""), nil
-		}
-	}
-
-	// Parse the reported URL to extract owner/repo, and cross-check it
-	// against the reported pr_number — a typo'd URL/number pair fails fast
-	// here, before any network call.
-	ref, parseErr := session.ParseGitHubURLWithHosts(prURL, h.enterpriseHosts())
-	if parseErr != nil || ref.Owner == "" || ref.Repo == "" {
-		return errResult(ErrInvalidArgument, fmt.Sprintf("pr_url is not a recognizable GitHub PR URL: %v", parseErr), ""), nil
-	}
-	if ref.PRNumber != 0 && ref.PRNumber != prNumber {
-		return errResult(ErrInvalidArgument, fmt.Sprintf("pr_url references PR #%d but pr_number=%d was given — these must match", ref.PRNumber, prNumber), ""), nil
-	}
-
-	// Resolve this session's own branch to verify the reported PR against —
-	// the whole point of this check is to refuse a self-reported PR number
-	// for a branch that isn't even this item's own.
-	branch, branchErr := h.sessionBranch(ctx, callerUUID)
-	if branchErr != nil || branch == "" {
-		return errResult(ErrInternalError, "could not resolve this session's git branch to verify the reported PR", ""), nil
-	}
-
-	verification, verifyErr := h.verifyPR(ctx, ref.Owner, ref.Repo, prNumber, branch)
-	if verifyErr != nil {
-		return errResult(ErrInternalError, fmt.Sprintf("could not verify PR #%d against GitHub — retry: %v", prNumber, verifyErr), ""), nil
-	}
-
-	// Only resolve the caller's own GitHub identity when we're actually on a
-	// path decideOverridePolicy could accept: never on the fast path (no
-	// identity lookup needed — the item's own tracked branch is already
-	// trusted), never when the PR doesn't exist (existence can never be
-	// overridden regardless of authorship), and never when override_reason
-	// is empty (a call already doomed to reject for a missing reason
-	// shouldn't pay for a GitHub API call it doesn't need). On the
-	// reassignment path (AC9), the identity check is mandatory even when the
-	// branch matches — isReassignment is already only ever true here with a
-	// non-empty overrideReason (the early reject above guarantees it).
-	var callerLogin string
-	if verification.Exists && overrideReason != "" && (isReassignment || !verification.Matched) {
-		login, loginErr := h.callerGitHubLogin(ctx)
-		if loginErr != nil {
-			return errResult(ErrInternalError, fmt.Sprintf("could not resolve your GitHub identity to verify the override — retry: %v", loginErr), ""), nil
-		}
-		callerLogin = login
-	}
-
-	accept, code, _ := decideOverridePolicy(verification, overrideReason, callerLogin, isReassignment)
-	if !accept {
-		var msg string
-		switch code {
-		case connect.CodeNotFound:
-			msg = fmt.Sprintf("PR #%d does not exist in %s/%s on GitHub — refusing to record it. Double-check the PR number/URL.",
-				prNumber, ref.Owner, ref.Repo)
-		case connect.CodePermissionDenied:
-			msg = fmt.Sprintf(
-				"PR #%d was authored by %q, not your own GitHub identity (%q) — the override path can only attach PRs you authored yourself. Refusing to record it.",
-				prNumber, verification.Author, callerLogin)
-		case connect.CodeFailedPrecondition:
-			msg = fmt.Sprintf("PR #%d is %s (not open or merged) — refusing to record it even with override_reason.",
-				prNumber, verification.State)
-		default: // connect.CodeInvalidArgument — missing override_reason (AC3)
-			msg = fmt.Sprintf(
-				"PR #%d's head branch on GitHub is %q, not this item's tracked branch %q — refusing to record it. "+
-					"If %q was polluted (e.g. by another session sharing this worktree) and you opened this PR from a clean fallback branch instead, "+
-					"retry this exact call with an additional override_reason argument explaining why, e.g. "+
-					"override_reason=\"tracked branch had unrelated commits from a shared worktree; opened PR from a clean branch instead\". "+
-					"The override path additionally requires that PR #%d was authored by your own GitHub identity — it cannot be used to attach a PR someone/something else opened. "+
-					"If PR #%d is unrelated to this item, do not retry — find and report the correct PR instead.",
-				prNumber, verification.ActualHeadBranch, branch, branch, prNumber, prNumber)
-		}
-		return errResult(ErrInvalidArgument, msg, ""), nil
-	}
-
-	// Build the reassignment guard from what was already verified above:
-	// override_reason is non-empty (rejected earlier otherwise), the
-	// currently tracked PR is confirmed not merged (rejected earlier
-	// otherwise — or there was no PR to check), and decideOverridePolicy
-	// just accepted with forceOverride=true, which requires
-	// verification.Author == callerLogin. nil when this isn't a
-	// reassignment — SetBacklogItemPRAndTransition ignores it in that case.
-	var guard *session.PRReassignmentGuard
-	if isReassignment {
-		guard = &session.PRReassignmentGuard{
-			OverrideReason:      overrideReason,
-			CurrentPRMerged:     false,
-			NewPRAuthorVerified: true,
-		}
-	}
-
-	if setErr := h.storage.SetBacklogItemPRAndTransition(ctx, item, prURL, prNumber, summary, guard); setErr != nil {
-		if errors.Is(setErr, session.ErrPreconditionFailed) {
-			// AC8: the item's status changed out from under this call between
-			// our read above and the atomic write (another action resolved it,
-			// or a racing report_pr_created call won first) — a friendly,
-			// actionable message, not a raw internal error (mirrors
-			// report_duplicate's identical CAS-failure message).
-			return errResult(ErrInternalError, "item state changed since your last read (another action already resolved it, or a concurrent report_pr_created call won first) — call get_backlog_item to see its current status", ""), nil
-		}
-		if errors.Is(setErr, session.ErrPRReassignmentNotAllowed) {
-			// Should be unreachable — this handler always constructs a valid
-			// guard whenever isReassignment is true — but surfaces distinctly
-			// rather than as a generic internal error if storage's own
-			// contract check ever disagrees with the handler's.
-			return errResult(ErrInternalError, fmt.Sprintf("reassignment rejected by storage layer: %v", setErr), ""), nil
-		}
-		return errResult(ErrInternalError, fmt.Sprintf("record PR: %v", setErr), ""), nil
-	}
-
-	log.InfoLog.Printf("[mcp:report_pr_created] session=%s item=%s PR #%d %s", callerUUID, itemID, prNumber, prURL)
-
-	if isReassignment || !verification.Matched {
-		// The override path was actually taken (not the fast path) — audit
-		// it, since this path has no technical human gate. Gated on
-		// isReassignment too (not just !verification.Matched): a
-		// same-branch reassignment still went through the mandatory
-		// override_reason + author-identity check (forceOverride), so it
-		// must be audited even though verification.Matched is true.
-		log.Warn("report_pr_created: recording PR via override",
-			"session", callerUUID,
-			"item", itemID,
-			"reassignment", isReassignment,
-			"previous_pr_number", item.PrNumber,
-			"pr_number", prNumber,
-			"actual_head_branch", verification.ActualHeadBranch,
-			"tracked_branch", branch,
-			"pr_author", verification.Author,
-			"override_reason", overrideReason,
-		)
-	}
-
-	return mcpgo.NewToolResultText(fmt.Sprintf(
-		"PR #%d recorded for item %s. Item transitioned to pr_pending.", prNumber, itemID,
-	)), nil
 }
 
 // --- post_backlog_update ---
@@ -1855,7 +2113,7 @@ func (h *backlogHandlers) postBacklogUpdate(ctx context.Context, req mcpgo.CallT
 		return errResult(ErrInternalError, fmt.Sprintf("post backlog update: %v", err), ""), nil
 	}
 
-	log.InfoLog.Printf("[mcp:post_backlog_update] session=%s item=%s message=%q", authorUUID, itemID, sanitizedMessage)
+	log.InfoLog().Printf("[mcp:post_backlog_update] session=%s item=%s message=%q", authorUUID, itemID, sanitizedMessage)
 
 	return mcpgo.NewToolResultText(fmt.Sprintf(
 		"Posted activity update to backlog item %s.", itemID,
@@ -1903,6 +2161,7 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 
 	description, _ := args["description"].(string)
 	repoPath, _ := args["repo_path"].(string)
+	baseBranch, _ := args["base_branch"].(string)
 	notes, _ := args["notes"].(string)
 	category, _ := args["category"].(string)
 	if category != "" && !session.IsValidBacklogCategory(category) {
@@ -1931,6 +2190,10 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid acceptance_criteria: %v", err), ""), nil
 	}
 
+	dependsOn, bad := h.parseDependsOn(ctx, args)
+	if bad != nil {
+		return bad, nil
+	}
 	created, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
 		Title:              title,
 		Description:        description,
@@ -1938,6 +2201,7 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 		Priority:           priority,
 		Status:             string(session.BacklogStatusIdea),
 		RepoPath:           repoPath,
+		BaseBranch:         baseBranch,
 		Category:           category,
 		Notes:              notes,
 	})
@@ -1945,7 +2209,23 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 		return errResult(ErrInternalError, fmt.Sprintf("create backlog item: %v", err), ""), nil
 	}
 
-	log.InfoLog.Printf("[mcp:create_backlog_item] session=%s item=%s title=%q", callerUUID, created.ID, created.Title)
+	log.InfoLog().Printf("[mcp:create_backlog_item] session=%s item=%s title=%q", callerUUID, created.ID, created.Title)
+	var depNote, depFailures string
+	for _, blocker := range dependsOn {
+		edge := session.BacklogItemDependencyEdge{BlockerID: blocker, BlockedID: created.ID}
+		if err := h.storage.AddBacklogItemDependency(ctx, edge); err != nil {
+			depFailures += fmt.Sprintf(" Failed to add dependency on %s: %v.", blocker, err)
+			continue
+		}
+		depNote += fmt.Sprintf(" Blocked by %s.", blocker)
+	}
+	if depFailures != "" {
+		// Item exists but is not fully gated: surface as an error naming it so the
+		// caller can fix the edges or delete it instead of assuming it is blocked.
+		return errResult(ErrInternalError,
+			fmt.Sprintf("Created backlog item %s but dependency setup failed.%s%s", created.ID, depNote, depFailures),
+			"Use add_backlog_item_dependency to retry the failed edges."), nil
+	}
 
 	triageTriggered := false
 	if h.backlogSvc != nil {
@@ -1957,7 +2237,7 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 		triageNote = " Auto-triage started."
 	}
 	return mcpgo.NewToolResultText(fmt.Sprintf(
-		"Created backlog item %s: %q (status: idea, priority: P%d).%s", created.ID, created.Title, created.Priority, triageNote,
+		"Created backlog item %s: %q (status: idea, priority: P%d).%s%s", created.ID, created.Title, created.Priority, depNote, triageNote,
 	)), nil
 }
 
@@ -1998,6 +2278,17 @@ func (h *backlogHandlers) importGitHubIssue(ctx context.Context, req mcpgo.CallT
 		return errResult(ErrInternalError, fmt.Sprintf("fetch GitHub issue: %v", fetchErr), "Retry — this is usually transient. If it names missing credentials, that is not transient; configure GitHub access for this session instead."), nil
 	}
 
+	if h.backlogSvc != nil {
+		// Same live check the web import runs; a disabled flag, an error or an
+		// indeterminate result never blocks (LookupCrossHostClaim reports those
+		// as unclaimed or an error we ignore).
+		if verdict, claimErr := h.backlogSvc.LookupCrossHostClaim(ctx, issue.URL); claimErr == nil && verdict.Kind == services.ClaimHeldByOther {
+			return errResult(ErrInvalidArgument,
+				fmt.Sprintf("issue %s is already claimed by host %s (see %s)", issue.URL, verdict.Record.ClaimingHostID.String(), verdict.Record.ItemDeepLink),
+				"Open that link to see the owning item, or import from the web UI with an override reason."), nil
+		}
+	}
+
 	created, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
 		Title:       issue.Title,
 		Description: issue.Body,
@@ -2005,12 +2296,14 @@ func (h *backlogHandlers) importGitHubIssue(ctx context.Context, req mcpgo.CallT
 		Status:      string(session.BacklogStatusIdea),
 		RepoPath:    repoPath,
 		Notes:       fmt.Sprintf("Imported from %s", issue.URL),
+		ExternalID:  strconv.Itoa(ref.IssueNumber),
+		ExternalURL: issue.URL, // lets Storage.CreateBacklogItem record the cross-host claim
 	})
 	if err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("create backlog item: %v", err), ""), nil
 	}
 
-	log.InfoLog.Printf("[mcp:import_github_issue] session=%s item=%s issue=%s", callerUUID, created.ID, issue.URL)
+	log.InfoLog().Printf("[mcp:import_github_issue] session=%s item=%s issue=%s", callerUUID, created.ID, issue.URL)
 
 	triageTriggered := false
 	if h.backlogSvc != nil {
@@ -2065,13 +2358,46 @@ func (h *backlogHandlers) verifyGitHubRefExists(ctx context.Context, ref *github
 	}
 }
 
-// reportDuplicate lets a work session self-resolve a backlog item it
-// discovers is a duplicate of an already-shipped PR/issue/commit, routing the
-// item to review (never done/archived directly, ADR-001) instead of
-// continuing the (now redundant) work. Role: work only. See ADR-002
-// (GitHub verification), ADR-004 (idempotency: reject, don't merge, a
-// differing second ref), ADR-005 (no FR2-style active-reviewer refusal — only
-// the success-message wording changes).
+// backlogDuplicateRefPrefix marks a duplicate_ref that names another backlog
+// item ("backlog:<uuid>") instead of a GitHub URL, to archive an item in favor
+// of a surviving twin.
+const backlogDuplicateRefPrefix = "backlog:"
+
+// duplicateClosureNotePrefix is the delimited head of the status-event note
+// reportDuplicate writes on archive. Idempotency matches on it exactly
+// (ref followed by ": ") so .../pull/27 never matches a recorded .../pull/272.
+func duplicateClosureNotePrefix(duplicateRef string) string {
+	return "duplicate of " + duplicateRef + ": "
+}
+
+// recordedDuplicateClosure reports whether item's status history already
+// records an archive as a duplicate of duplicateRef.
+func recordedDuplicateClosure(item *session.BacklogItemData, duplicateRef string) bool {
+	prefix := duplicateClosureNotePrefix(duplicateRef)
+	for _, ev := range item.StatusEvents {
+		if ev.ToStatus == string(session.BacklogStatusArchived) && ev.Note != nil && strings.HasPrefix(*ev.Note, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// reportDuplicate closes a backlog item as a duplicate of an existing GitHub
+// PR/issue/commit, or of another non-archived backlog item ("backlog:<uuid>"). Any caller may use it — a session linked in any role, or an
+// unlinked passerby — on an item in any non-terminal status. It archives
+// directly and never routes through the review gate: a work session that finds
+// its item already shipped has no diff to review, and an empty-diff review
+// would FAIL and reopen the item in a loop.
+//
+// Safety rails instead of a human review: duplicate_ref must verify on GitHub
+// (see resolveDuplicateRef) or, for a backlog: ref, name an existing
+// non-archived item (verifyBacklogDuplicateTarget — read before the archive, so
+// two items pointing at each other concurrently can both be archived); the archive is CAS-guarded on the status read;
+// and the call is refused while any session other than the caller still has an
+// open ItemSession on the item, so another session's active work is never
+// archived out from under it. The caller's own open link(s) are ended.
+// Idempotency is keyed on the archive's status-event note (ADR-004: a
+// differing second ref is rejected, not merged).
 func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	if r := featureDisabledResult(h.enabledCheck); r != nil {
 		return r, nil
@@ -2107,157 +2433,175 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 		return errResult(ErrInvalidArgument, "reason must be <= 1000 characters", ""), nil
 	}
 
-	// Verify session is linked to item with role=work.
-	itemSession, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
-	if linkErr != nil {
-		if errors.Is(linkErr, session.ErrNotFound) {
-			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", ""), nil
-		}
-		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
-	}
-	if itemSession.Role != session.SessionRoleWork {
-		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'work' role may report a duplicate", itemSession.Role), ""), nil
+	// Lowercase a backlog: ref so idempotency matches the recorded note
+	// regardless of the UUID case the caller used.
+	if targetID, isBacklogRef := strings.CutPrefix(duplicateRef, backlogDuplicateRefPrefix); isBacklogRef {
+		duplicateRef = backlogDuplicateRefPrefix + strings.ToLower(targetID)
 	}
 
-	// Routed through the same overridable getBacklogItemFor seam request_review
-	// uses (not h.storage.GetBacklogItem directly) so tests can inject a
-	// readBarrier to deterministically force two racing report_duplicate calls'
-	// pre-transition reads to both land before either's write — see
-	// TestReportDuplicate_ReportsDistinctMessage_WhenCASPreconditionFails and its
-	// request_review analogue for why this matters: without it, a sufficiently
-	// delayed loser can observe the winner's already-committed status+notes and
-	// take the idempotency short-circuit above instead of racing the CAS write.
+	// Routed through the overridable getBacklogItemFor seam so tests can force
+	// two racing calls' reads to land before either write (CAS-failure test).
 	item, getErr := h.getBacklogItemFor(ctx, itemID)
 	if getErr != nil {
 		if errors.Is(getErr, session.ErrNotFound) {
+			// Reuse the shared helper's ITEM_NOT_FOUND result so remediation
+			// text stays consistent with every other mutating tool.
+			if _, errRes := h.resolveItemLink(ctx, callerUUID, itemID); errRes != nil {
+				return errRes, nil
+			}
 			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", getErr), ""), nil
 	}
 
-	// report_duplicate is unavailable for SkipReviewGate items — the opposite
-	// of request_review's pattern (which routes them straight to done): a
-	// duplicate claim must always land in front of a human/reviewer, so it
-	// cannot use the SkipReviewGate short-circuit at all.
-	if item.SkipReviewGate {
-		return errResult(ErrInvalidArgument, "report_duplicate is unavailable for items with SkipReviewGate enabled — use request_review instead.", ""), nil
-	}
-
-	// Idempotency (ADR-004): an exact retry of an already-succeeded call is a
-	// no-op success. Match on an exact, delimited line — not strings.Contains
-	// — so a shorter ref that happens to be a literal prefix of a longer,
-	// different ref sharing the same URL (e.g. .../pull/27 vs .../pull/272)
-	// is never misclassified as the same duplicate report.
-	notesMarker := "duplicate_ref=" + duplicateRef
-	if item.Status == string(session.BacklogStatusReview) {
-		for _, line := range strings.Split(itemSession.VerificationNotes, "\n") {
-			if strings.HasPrefix(line, notesMarker+" ") {
-				return mcpgo.NewToolResultText(fmt.Sprintf(
-					"duplicate report for %s already recorded for item %s (status already review) — no changes made.", duplicateRef, itemID,
-				)), nil
-			}
+	status := session.BacklogStatus(item.Status)
+	if status == session.BacklogStatusArchived || status == session.BacklogStatusDone {
+		if status == session.BacklogStatusArchived && recordedDuplicateClosure(item, duplicateRef) {
+			return mcpgo.NewToolResultText(fmt.Sprintf(
+				"item %s is already archived as a duplicate of %s — no changes made.", itemID, duplicateRef,
+			)), nil
 		}
+		return errResult(ErrInvalidArgument, fmt.Sprintf(
+			"item is already %s and was not closed as a duplicate of %s — report_duplicate only acts on non-terminal items (call get_backlog_item to see how it was closed)",
+			item.Status, duplicateRef,
+		), ""), nil
 	}
 
-	// Reject calls from a disallowed source status before any GitHub call or
-	// mutation — the same chokepoint request_review uses (see
-	// validateSelfResolveSource). This is also what makes ADR-004's "reject a
-	// differing second ref" behavior fall out for free: once the item has
-	// left the whitelist (e.g. already routed to review by a first
-	// successful call), any further report_duplicate call — matching or not
-	// — hits this branch unless it matched the idempotency check above.
-	validStatus, valErr := validateSelfResolveSource(item, "report_duplicate")
-	if valErr != nil {
-		return errResult(ErrInvalidArgument, valErr.Error(), ""), nil
+	// Refuse while any other live session still has an open link; fail closed on a
+	// lookup error. The caller's own links are collected to end after archive.
+	itemSessions, lsErr := h.itemSessionsFor(ctx, itemID)
+	if lsErr != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("could not verify no other session is active on this item — retry: %v", lsErr), ""), nil
 	}
-
-	// Parse + type-validate duplicate_ref before any network call (mirrors
-	// report_pr_created's pre-network sanity check).
-	ref, parseErr := githubpkg.ParseGitHubRefWithHosts(duplicateRef, h.enterpriseHosts())
-	if parseErr != nil {
-		return errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref is not a recognizable GitHub PR/issue/commit URL: %v", parseErr), ""), nil
-	}
-	if ref.Type != githubpkg.RefTypePR && ref.Type != githubpkg.RefTypeIssue && ref.Type != githubpkg.RefTypeCommit {
-		return errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref must be a GitHub PR, issue, or commit URL — got a %s reference", ref.Type), ""), nil
-	}
-
-	// Verify duplicate_ref actually exists on GitHub before any mutation
-	// (FR3). Three-channel split (FR4): no-credentials (non-retryable,
-	// distinct from a generic transient failure — see ADR-002's Negative
-	// consequences and pre-mortem F1), definitively-not-found/access-denied
-	// (non-retryable), or a plain transient error (retryable).
-	if verifyErr := h.verifyRef(ctx, ref); verifyErr != nil {
-		if errors.Is(verifyErr, githubpkg.ErrNotAuthenticated) {
-			return errResult(ErrInternalError, fmt.Sprintf("this session has no configured GitHub credentials (no GITHUB_TOKEN/GH_TOKEN and no connected account) — report_duplicate cannot verify %s. This is not a transient failure: retrying will not help until credentials are configured. Leave the item as-is and note this in your summary for an operator to configure GitHub access for this session.", duplicateRef), ""), nil
+	var ownOpenLinks []session.ItemSessionSummary
+	for _, is := range itemSessions {
+		if is.EndedAt != nil {
+			continue
 		}
-		if errors.Is(verifyErr, githubpkg.ErrGitHubRefNotFound) {
-			return errResult(ErrInvalidArgument, fmt.Sprintf("%s does not exist on GitHub (404) — double-check the URL. Note: a private/inaccessible repo also returns 404.", duplicateRef), ""), nil
+		if is.SessionUUID == callerUUID {
+			ownOpenLinks = append(ownOpenLinks, is)
+			continue
 		}
-		if errors.Is(verifyErr, githubpkg.ErrGitHubAccessDenied) {
-			return errResult(ErrInvalidArgument, fmt.Sprintf("GitHub denied access verifying %s — this session's GitHub credentials may not have access to that repo; retrying will not help unless credentials change.", duplicateRef), ""), nil
+		// An unended link whose session is stopped, failed, or paused owns no work to protect.
+		if !h.linkedSessionLive(itemID, is) {
+			continue
 		}
-		return errResult(ErrInternalError, fmt.Sprintf("could not verify %s against GitHub — retry: %v", duplicateRef, verifyErr), ""), nil
+		return errResult(ErrInvalidArgument, fmt.Sprintf(
+			"item %s still has an open %s session %s — that session owns work on it; report_duplicate will not archive the item out from under it. Ask it to finish or end it first.",
+			itemID, is.Role, is.SessionUUID,
+		), ""), nil
 	}
 
-	// Transition item from its validated source status to review, with a
-	// human-legible Note (FR3, FR7) — never done/archived directly (ADR-001).
-	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(validStatus), Note: fmt.Sprintf("duplicate of %s: %s", duplicateRef, reason)}
-	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReview, precondition, session.TriggeredByAgent); transErr != nil {
-		log.InfoLog.Printf("[mcp:report_duplicate] transition to review failed: %v", transErr)
-		if errors.Is(transErr, session.ErrPreconditionFailed) {
+	// Verify before any mutation.
+	if targetID, isBacklogRef := strings.CutPrefix(duplicateRef, backlogDuplicateRefPrefix); isBacklogRef {
+		if errRes := h.verifyBacklogDuplicateTarget(ctx, item, targetID); errRes != nil {
+			return errRes, nil
+		}
+	} else if _, errRes := h.resolveDuplicateRef(ctx, duplicateRef); errRes != nil {
+		return errRes, nil
+	}
+
+	note := fmt.Sprintf("%s%s — archived by session %s", duplicateClosureNotePrefix(duplicateRef), reason, callerUUID)
+	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(status), Note: note}
+	if _, archErr := h.storage.ArchiveBacklogItem(ctx, itemID, precondition, session.TriggeredByAgent, note); archErr != nil {
+		log.InfoLog().Printf("[mcp:report_duplicate] archive failed item=%s: %v", itemID, archErr)
+		if errors.Is(archErr, session.ErrPreconditionFailed) {
 			return errResult(ErrInternalError, "item state changed since your last read (another action already resolved it) — call get_backlog_item to see its current status", ""), nil
 		}
-		return errResult(ErrInternalError, fmt.Sprintf("transition to review failed: %v", transErr), ""), nil
+		return errResult(ErrInternalError, fmt.Sprintf("archive failed: %v", archErr), ""), nil
 	}
 
-	// Persist duplicate_ref/reason into VerificationNotes so the review gate
-	// surfaces it in the reviewer's prompt (FR7). Append, don't overwrite,
-	// any notes already on this ItemSession (e.g. left by an earlier
-	// request_review call before a rework cycle) — UpdateItemSessionVerificationNotes
-	// is a plain overwrite, not an append. Best-effort: a failure here must
-	// not fail the transition that already succeeded.
-	newEntry := fmt.Sprintf("duplicate_ref=%s reason=%s", duplicateRef, reason)
-	notes := newEntry
-	if itemSession.VerificationNotes != "" {
-		notes = itemSession.VerificationNotes + "\n\n---\n\n" + newEntry
-	}
-	if updateErr := h.storage.UpdateItemSessionVerificationNotes(ctx, itemSession.ID, notes); updateErr != nil {
-		log.WarningLog.Printf("[mcp:report_duplicate] failed to persist verification notes session=%s item=%s: %v", callerUUID, itemID, updateErr)
+	// Best-effort: the item is already archived, so a failed bookkeeping write
+	// must not fail the call.
+	now := time.Now()
+	for _, is := range ownOpenLinks {
+		if endErr := h.storage.UpdateItemSessionEnded(ctx, is.ID, now); endErr != nil { //nolint:silenttransition best-effort bookkeeping; the item is already archived and the caller is told so
+			log.WarningLog().Printf("[mcp:report_duplicate] failed to end own link session=%s item=%s: %v", callerUUID, itemID, endErr)
+		}
 	}
 
-	// FR5: both the success-message wording and whether to trigger the review
-	// gate depend on whether a review-role session is already active. Fail
-	// conservative on a ListItemSessions error — never claim "Reviewer
-	// notified" without evidence, and treat an unknown state the same as "a
-	// reviewer might be active" so the trigger call below is also skipped.
-	itemSessions, lsErr := h.itemSessionsFor(ctx, itemID)
-	activeReview := lsErr != nil || services.HasActiveReviewSession(itemSessions)
+	log.InfoLog().Printf("[mcp:report_duplicate] session=%s item=%s from=%s duplicate_ref=%s archived", callerUUID, itemID, item.Status, duplicateRef)
 
-	// Trigger the review gate immediately only when no reviewer is already
-	// active. TriggerReviewForSession (-> spawnReviewGate -> ReviewGateRunner.Run)
-	// has no dedup check against an existing active review-role ItemSession —
-	// confirmed by reading the full function body, including every
-	// CreateItemSession/CreateItemSessionWithVerdict call site in it — so
-	// calling it unconditionally here (unlike request_review, which is
-	// refused outright before reaching its own trigger call whenever a
-	// reviewer is active on the pr_pending path, per FR2) would spawn a
-	// genuine second, concurrent review session for the same item.
-	if h.reviewTrigger != nil && !activeReview {
-		h.reviewTrigger.TriggerReviewForSession(callerUUID)
-	}
-
-	log.InfoLog.Printf("[mcp:report_duplicate] session=%s item=%s duplicate_ref=%s transitioned to review activeReviewSkipped=%v", callerUUID, itemID, duplicateRef, activeReview)
-
-	if activeReview {
-		return mcpgo.NewToolResultText(fmt.Sprintf(
-			"Item %s routed to review as a duplicate of %s. This will be picked up on the next review pass (a review session is already running and won't see this update live).",
-			itemID, duplicateRef,
-		)), nil
-	}
 	return mcpgo.NewToolResultText(fmt.Sprintf(
-		"Item %s routed to review as a duplicate of %s. Reviewer notified.",
-		itemID, duplicateRef,
+		"Item %s (status %q) archived as a duplicate of %s. No review needed; this is logged on the item's status history. You can end your session.",
+		itemID, item.Status, duplicateRef,
 	)), nil
+}
+
+// linkedSessionLive reports whether is still owns work on itemID. Only roles
+// whose sessions are tmux-backed (work, review, diagnose) can be judged dead by
+// the tmux liveCheck. Headless triage has a synthetic UUID and no tmux session,
+// so it is checked against the service's in-flight record; headless re-review
+// has no liveness signal; and any other role (e.g. Jules, which runs remotely)
+// is treated as live. With no liveCheck/backlogSvc wired it fails closed.
+func (h *backlogHandlers) linkedSessionLive(itemID string, is session.ItemSessionSummary) bool {
+	switch {
+	case strings.HasPrefix(is.SessionUUID, services.HeadlessTriageUUIDPrefix):
+		return h.backlogSvc == nil || h.backlogSvc.IsTriageLive(itemID)
+	case strings.HasPrefix(is.SessionUUID, services.HeadlessReReviewUUIDPrefix):
+		return true
+	}
+	switch is.Role {
+	case session.SessionRoleWork, session.SessionRoleReview, session.SessionRoleDiagnose, session.SessionRoleTriage:
+		return h.liveCheck == nil || h.liveCheck(is.SessionUUID)
+	}
+	return true
+}
+
+// verifyBacklogDuplicateTarget checks a "backlog:<uuid>" duplicate_ref names a
+// different, existing, non-archived item — the evidence bar for a backlog-to-
+// backlog duplicate, in place of GitHub existence. It does not move the
+// duplicate's dependencies, notes, or tags to the survivor.
+func (h *backlogHandlers) verifyBacklogDuplicateTarget(ctx context.Context, item *session.BacklogItemData, targetID string) *mcpgo.CallToolResult {
+	if err := validateUUID(targetID); err != nil {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref %q: %v", backlogDuplicateRefPrefix+targetID, err), "")
+	}
+	if strings.EqualFold(targetID, item.ID) {
+		return errResult(ErrInvalidArgument, "an item cannot be a duplicate of itself", "")
+	}
+	target, err := h.getBacklogItemFor(ctx, targetID)
+	if err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			return errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref target backlog item %q not found", targetID), "")
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("get duplicate_ref target: %v", err), "")
+	}
+	if session.BacklogStatus(target.Status) == session.BacklogStatusArchived {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref target %q is archived — point at the surviving item instead", targetID), "")
+	}
+	return nil
+}
+
+// resolveDuplicateRef parses and GitHub-verifies a report_duplicate
+// duplicate_ref (a real, existing GitHub PR/issue/commit) before reportDuplicate
+// touches the item; backlog: refs are checked by verifyBacklogDuplicateTarget
+// instead. Returns a non-nil *mcpgo.CallToolResult (to return verbatim) on any
+// failure.
+func (h *backlogHandlers) resolveDuplicateRef(ctx context.Context, duplicateRef string) (*githubpkg.ParsedGitHubRef, *mcpgo.CallToolResult) {
+	ref, parseErr := githubpkg.ParseGitHubRefWithHosts(duplicateRef, h.enterpriseHosts())
+	if parseErr != nil {
+		return nil, errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref is not a recognizable GitHub PR/issue/commit URL: %v", parseErr), "")
+	}
+	if ref.Type != githubpkg.RefTypePR && ref.Type != githubpkg.RefTypeIssue && ref.Type != githubpkg.RefTypeCommit {
+		return nil, errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref must be a GitHub PR, issue, or commit URL — got a %s reference", ref.Type), "")
+	}
+
+	// Three-channel split (FR4, ADR-002): no-credentials (non-retryable,
+	// distinct from a generic transient failure), definitively-not-found/
+	// access-denied (non-retryable), or a plain transient error (retryable).
+	if verifyErr := h.verifyRef(ctx, ref); verifyErr != nil {
+		if errors.Is(verifyErr, githubpkg.ErrNotAuthenticated) {
+			return nil, errResult(ErrInternalError, fmt.Sprintf("this session has no configured GitHub credentials (no GITHUB_TOKEN/GH_TOKEN and no connected account) — report_duplicate cannot verify %s. This is not a transient failure: retrying will not help until credentials are configured. Leave the item as-is and note this in your summary for an operator to configure GitHub access for this session.", duplicateRef), "")
+		}
+		if errors.Is(verifyErr, githubpkg.ErrGitHubRefNotFound) {
+			return nil, errResult(ErrInvalidArgument, fmt.Sprintf("%s does not exist on GitHub (404) — double-check the URL. Note: a private/inaccessible repo also returns 404.", duplicateRef), "")
+		}
+		if errors.Is(verifyErr, githubpkg.ErrGitHubAccessDenied) {
+			return nil, errResult(ErrInvalidArgument, fmt.Sprintf("GitHub denied access verifying %s — this session's GitHub credentials may not have access to that repo; retrying will not help unless credentials change.", duplicateRef), "")
+		}
+		return nil, errResult(ErrInternalError, fmt.Sprintf("could not verify %s against GitHub — retry: %v", duplicateRef, verifyErr), "")
+	}
+	return ref, nil
 }
 
 // --- submit_triage_result ---
@@ -2286,13 +2630,10 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 		return errResult(ErrInvalidArgument, "summary is required", ""), nil
 	}
 
-	// Verify session is linked to item with role=triage.
-	itemSession, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
-	if linkErr != nil {
-		if errors.Is(linkErr, session.ErrNotFound) {
-			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", ""), nil
-		}
-		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
+	// Verify session is linked to item (disambiguates ITEM_NOT_FOUND vs PERMISSION_DENIED).
+	itemSession, errRes := h.resolveItemLink(ctx, callerUUID, itemID)
+	if errRes != nil {
+		return errRes, nil
 	}
 	if itemSession.Role != "triage" {
 		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'triage' role may submit triage results", itemSession.Role), ""), nil
@@ -2433,10 +2774,10 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 
 	// Persist triage result JSON on the ItemSession.
 	if updateErr := h.storage.UpdateItemSessionTriageResult(ctx, itemSession.ID, string(payloadJSON)); updateErr != nil {
-		log.ErrorLog.Printf("[mcp:submit_triage_result] failed to save triage result: %v", updateErr)
+		log.ErrorLog().Printf("[mcp:submit_triage_result] failed to save triage result: %v", updateErr)
 		return errResult(ErrInternalError, fmt.Sprintf("save triage result: %v", updateErr), ""), nil
 	}
-	log.InfoLog.Printf("[mcp:submit_triage_result] session=%s item=%s triage_result=%s", callerUUID, itemID, string(payloadJSON))
+	log.InfoLog().Printf("[mcp:submit_triage_result] session=%s item=%s triage_result=%s", callerUUID, itemID, string(payloadJSON))
 
 	// Publish triage-complete notification if EventBus is wired.
 	if h.eventBus != nil {
@@ -2468,6 +2809,8 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 
 // registerBacklogTools registers all backlog-related MCP tools on the server.
 func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
+	registerBacklogDependencyTools(s, h)
+
 	s.AddTool(
 		mcpgo.NewTool("get_backlog_item",
 			mcpgo.WithDescription("Fetch full details for a backlog item: title, description, acceptance criteria, priority, and status. Call this first in any backlog-linked session to orient yourself. Returns role-specific workflow guidance when your session is linked to the item (triage/work/review role instructions)."),
@@ -2546,6 +2889,27 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 	)
 
 	s.AddTool(
+		mcpgo.NewTool("link_session_to_item",
+			mcpgo.WithDescription("Link (or relink) this session to a backlog item as a work session. Call this if a report_progress/request_review/submit_triage_result call fails with PERMISSION_DENIED. Get the item_id from the task/item description you were given at session start, or from get_linked_item if you have a prior link — do NOT infer it from your git branch name, which does not embed the item id in this repo. Rejects with ITEM_NOT_FOUND if item_id doesn't exist, CONFLICT if another live session already holds the item, and FAILED_PRECONDITION if the item's status doesn't allow attaching (must be idea, ready, or in_progress)."),
+			mcpgo.WithString("item_id",
+				mcpgo.Description("UUID of the backlog item to link this session to"),
+				mcpgo.Required(),
+			),
+		),
+		h.linkSessionToItem,
+	)
+
+	s.AddTool(
+		mcpgo.NewTool("get_linked_item",
+			mcpgo.WithDescription("Check which backlog item this session is currently linked to. Omit item_id to get the most recent link; pass item_id to check linkage to that specific item. Read-only — use this before link_session_to_item to confirm you're not already correctly linked, or to discover what item you're working on without SQLite access."),
+			mcpgo.WithString("item_id",
+				mcpgo.Description("Optional UUID of a specific backlog item to check linkage against. Omit to get the most recent link for this session."),
+			),
+		),
+		h.getLinkedItem,
+	)
+
+	s.AddTool(
 		mcpgo.NewTool("request_review",
 			mcpgo.WithDescription("Signal that implementation is complete and the item is ready for review. Role: work only. Call after all acceptance criteria are marked pass. Transitions the item to 'review' status and notifies the reviewer. Do not call until all AC criteria are done. "+
 				"The reviewer only sees the committed diff plus what you report here — it CANNOT see command output or UI behavior you observed. "+
@@ -2587,6 +2951,17 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			),
 		),
 		h.reportBlocked,
+	)
+
+	s.AddTool(
+		mcpgo.NewTool("resume_work",
+			mcpgo.WithDescription("Resume work on an item you previously reported blocked (or that is otherwise sitting at ready while still linked to you) once the blocker is resolved — transitions it from ready back to in_progress. Role: work only. Call this before request_review or report_pr_created if the item is at ready; both reject that status."),
+			mcpgo.WithString("item_id",
+				mcpgo.Description("UUID of the backlog item"),
+				mcpgo.Required(),
+			),
+		),
+		h.resumeWork,
 	)
 
 	s.AddTool(
@@ -2674,8 +3049,15 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			mcpgo.WithString("repo_path",
 				mcpgo.Description("Absolute local filesystem path this item targets, e.g. /home/user/Programming/my-repo — NOT a bare repo name or owner/repo shorthand (triage will reject those with a clear error). Omit for a repo-less item."),
 			),
+			mcpgo.WithString("base_branch",
+				mcpgo.Description("Explicit opt-in override for the branch triage's isolated worktree and the eventual work session fork from, e.g. \"release-2.0\". Omit for the default: origin's default branch tip (main/master/etc) — NOT your own current branch, even if repo_path happens to be your own in-progress worktree. Only set this when you deliberately want new work to build on top of a specific non-default branch."),
+			),
 			mcpgo.WithString("notes",
 				mcpgo.Description("Freeform operator notes, e.g. where this request came from."),
+			),
+			mcpgo.WithArray("depends_on",
+				mcpgo.Description("Optional UUIDs of existing items that must reach done or archived before this item can start. A missing UUID fails the call before anything is created."),
+				mcpgo.Items(map[string]any{"type": "string"}),
 			),
 			mcpgo.WithBoolean("skip_triage",
 				mcpgo.Description("Skip auto-triage on creation (default false: an item with a repo_path is triaged automatically, same as the web UI's \"New Idea\" form). Set true to leave the item in idea status untouched, e.g. when filing several related items you intend to triage together later."),
@@ -2724,14 +3106,14 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 
 	s.AddTool(
 		mcpgo.NewTool("report_duplicate",
-			mcpgo.WithDescription("Report that this item's work is a duplicate of an already-existing PR/issue/commit, routing the item to review instead of continuing it. "+
-				"Role: work only. "+
-				"Refuses if the item has SkipReviewGate enabled (use request_review instead), if the item isn't at in_progress or pr_pending, or if duplicate_ref cannot be verified to exist on GitHub — verification happens BEFORE any state change. "+
-				"On success, transitions the item to 'review' status (never done/archived directly) so a human/reviewer confirms the duplicate before closing it out. "+
-				"Calling this again with the same duplicate_ref after it already succeeded is safe (no-op). "+
-				"If verifying duplicate_ref against GitHub fails with INTERNAL_ERROR, this is transient — retry the call with the same arguments. "+
+			mcpgo.WithDescription("Close a backlog item as a duplicate of an already-existing GitHub PR/issue/commit by archiving it directly (never via the review gate, no diff needed). "+
+				"Supported callers: a session linked to the item in ANY role (work, triage, review), or an unlinked session. "+
+				"Supported stages: any non-terminal status — idea, refining, ready, queued, in_progress, review, pr_pending. Items already done/archived are rejected, except a retry with the same duplicate_ref, which is a safe no-op. "+
+				"Your own open link to the item is ended by the closure. If ANY OTHER live session still has an open link to the item (links whose session is stopped, failed, or paused/hibernated — no live tmux session, and no in-flight headless triage — are ignored), the call is refused with that session's role and UUID and nothing changes — do not archive an item another session is actively working. "+
+				"duplicate_ref must be a single full GitHub URL, or \"backlog:<item-uuid>\" naming another existing, non-archived backlog item (this only archives the item — it does NOT move dependencies, notes, or tags to the survivor). It is verified BEFORE any state change; if it cannot be verified, nothing changes. "+
+				"If verifying duplicate_ref fails with INTERNAL_ERROR, this is transient — retry the call with the same arguments. "+
 				"If the result says this session has no configured GitHub credentials, that is not transient — do not retry. Leave the item as-is and note the missing-credentials issue in your summary so an operator can configure GitHub access for this session. "+
-				"This only confirms duplicate_ref exists on GitHub — it does not verify relevance to this item's work; that judgment is yours."),
+				"This only confirms duplicate_ref exists (on GitHub, or as a backlog item) — it does not verify relevance to this item's work; that judgment is yours."),
 			mcpgo.WithString("item_id",
 				mcpgo.Description("UUID of the backlog item"),
 				mcpgo.Required(),
@@ -2809,7 +3191,7 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 
 	s.AddTool(
 		mcpgo.NewTool("wait_for_backlog_event",
-			mcpgo.WithDescription("Block until a backlog item changes (e.g. a review verdict lands), or until timeout. Returns the event directly — status, verdict outcome/summary, or archival/removal reason — so a follow-up get_backlog_item call is usually unnecessary. If the awaited condition (e.g. a verdict) is already true when this is called, returns immediately with from_current_state=true instead of waiting out the full timeout. On timeout, returns event_received=false with a message naming the next move (a longer ScheduleWakeup interval, or one more bounded wait) — this is an expected outcome, not an error. Use this instead of a ScheduleWakeup + get_backlog_item polling loop when waiting on a specific item's outcome, e.g. after request_review."),
+			mcpgo.WithDescription("Block until a backlog item changes (e.g. a review verdict lands), or until timeout. Returns the event directly — status, verdict outcome/summary, or archival/removal reason — so a follow-up get_backlog_item call is usually unnecessary. If the awaited condition (e.g. a verdict) is already true when this is called, returns immediately with from_current_state=true instead of waiting out the full timeout. On timeout, returns event_received=false telling the session to end its turn; after repeated timeouts for the same session+item further waits are refused (WAIT_CAP_REACHED). Not for waiting on a review verdict after request_review: a wait on an item in review status is refused immediately (WAIT_CAP_REACHED); end your turn instead and the app steers the session with the verdict. Never pair with ScheduleWakeup or /loop."),
 			mcpgo.WithString("item_id",
 				mcpgo.Description("UUID of the backlog item"),
 				mcpgo.Required(),

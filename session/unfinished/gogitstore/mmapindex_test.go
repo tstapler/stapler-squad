@@ -388,7 +388,12 @@ func runMmapCrashHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	buildPackedFixture(t, dir, 60)
+	// 30 commits (this package's common fixture size — see mmap_stage2_test.go)
+	// is enough to guarantee a non-empty pack; the crash this test proves out
+	// depends on the mmap being unmapped while a slice into it is held, not
+	// on fixture size, and this build can't hit the golden-fixture cache (see
+	// the skip comment above), so every commit here is pure per-run cost.
+	buildPackedFixture(t, dir, 30)
 
 	_, commonFs, _, commonDirAbs, err := resolveGitFilesystems(dir)
 	if err != nil {

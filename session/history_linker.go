@@ -4,10 +4,11 @@ import (
 	"context"
 	"math"
 	"os"
-	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/linkdata/deadlock"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -45,10 +46,13 @@ type HistoryLinker struct {
 	instances      []*Instance
 	backoffs       map[string]*sessionBackoff
 	extraCallbacks []func(string) // additional per-file callbacks (e.g. TokenStore)
+
+	runWG sync.WaitGroup // tracks the run goroutine launched by Start; see Wait
 }
 
 // NewHistoryLinkerFromRealInspector creates a HistoryLinker backed by the real
-// gopsutil-based process inspector and an fsnotify watcher on ~/.claude/projects/.
+// gopsutil-based process inspector and an fsnotify watcher on ~/.claude/projects/
+// (redirected into the isolated config dir under test isolation).
 // This is the production constructor; use NewHistoryLinker in tests.
 func NewHistoryLinkerFromRealInspector() *HistoryLinker {
 	detector := NewHistoryFileDetectorWithRealInspector()
@@ -62,7 +66,20 @@ func NewHistoryLinkerFromRealInspector() *HistoryLinker {
 			backoffs:  make(map[string]*sessionBackoff),
 		}
 	}
-	watchDir := filepath.Join(homeDir, ".claude", "projects")
+	// Under test isolation this resolves inside the isolated config dir rather
+	// than the operator's real ~/.claude/projects, so booting a real server in
+	// a test doesn't recursively watch that large tree. Same helper (and same
+	// directory) as the TokenStore/ArtifactExtractor side in
+	// server.BuildRuntimeDeps.
+	watchDir, err := config.ResolveClaudeHistoryDir(homeDir, config.IsIsolatedInstance())
+	if err != nil {
+		log.Warn("HistoryLinker: failed to resolve history watch dir, watcher disabled", "err", err)
+		return &HistoryLinker{
+			detector:  detector,
+			instances: make([]*Instance, 0),
+			backoffs:  make(map[string]*sessionBackoff),
+		}
+	}
 
 	// Build the linker first so the watcher callback can close over it.
 	hl := &HistoryLinker{
@@ -166,7 +183,16 @@ func (hl *HistoryLinker) Start(ctx context.Context) {
 		}
 	}
 
-	go hl.run(ctx)
+	hl.runWG.Go(func() { hl.run(ctx) })
+}
+
+// Wait blocks until the goroutines Start launched (the poll loop and the file
+// watcher) have exited. Call it after cancelling Start's ctx.
+func (hl *HistoryLinker) Wait() {
+	hl.runWG.Wait()
+	if hl.watcher != nil {
+		<-hl.watcher.Stopped()
+	}
 }
 
 // run is the polling loop goroutine.
@@ -301,18 +327,21 @@ func (hl *HistoryLinker) correlateSession(inst *Instance, force bool) {
 	}
 
 	// SetHistoryInfo is idempotent: if UUID and path already match it returns early.
-	// Log only when we are actually updating a linked session's UUID (e.g., after /clear).
+	// Log only when we are actually updating a linked session's UUID (e.g., after /clear) —
+	// correlateSession runs on every poll/force-rescan, so an unconditional log here would
+	// re-announce the same unchanged link on every tick for every already-linked session.
 	if alreadyLinked {
 		cs := inst.GetClaudeSession()
 		if cs != nil && cs.ConversationUUID != info.ConversationUUID {
 			log.Info("HistoryLinker: updating session UUID after conversation change",
 				"session", inst.Title, "old_uuid", cs.ConversationUUID, "new_uuid", info.ConversationUUID)
+			log.ForSession(inst.Title).Info("UUID linked by HistoryLinker", "conv_uuid", info.ConversationUUID, "path", info.HistoryFilePath)
 		}
 	} else {
 		log.Info("HistoryLinker: linked session to conversation UUID",
 			"session", inst.Title, "conv_uuid", info.ConversationUUID)
+		log.ForSession(inst.Title).Info("UUID linked by HistoryLinker", "conv_uuid", info.ConversationUUID, "path", info.HistoryFilePath)
 	}
-	log.ForSession(inst.Title).Info("UUID linked by HistoryLinker", "conv_uuid", info.ConversationUUID, "path", info.HistoryFilePath)
 	inst.SetHistoryInfo(info.ConversationUUID, info.HistoryFilePath)
 }
 

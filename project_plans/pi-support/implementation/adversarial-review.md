@@ -1,0 +1,30 @@
+# Adversarial Review: pi-support
+
+**Date**: 2026-09-02
+**Verdict**: CONCERNS
+
+## Blockers
+
+None — the 4 previously-blocked items were re-checked against the current `plan.md`/ADR-003 edits and are all RESOLVED:
+
+- Go/no-go gate for `tool_call` execution-gating (Story 1.1.2's AC now has an explicit go/no-go gate escalating to the user/requirements owner before Phase 4 starts).
+- Uncaught-exception behavior (new Task 1.1.2c probe + Task 4.1.1a's required try/catch defaulting to block + ADR-003's residual-risk note).
+- `PiExtensionHealthTracker` restart survival (new Story 4.2.3: periodic re-ping from the extension, grace window sized to tolerate a missed re-ping, tracker-reset recovery test).
+- Status-subprocess death handling (new Story 5.2.3: `cmd.Wait()` goroutine, bounded relaunch with backoff, three-state known-good/stale-unknown/confirmed-dead surfacing).
+
+## Concerns
+
+- [ ] **Parallel-map pattern (`piSources` alongside `controllers`) will scale linearly worse with each future agent, and a narrower shared interface was dismissed without considering a middle ground.** The Pattern Decisions table rejects a shared `ProgramStatusController` interface because `ClaudeController`'s full surface (`GetQueuedCommandsCount`, `GetCurrentCommand`, PTY-scrollback concepts) doesn't fit pi — true, but that argument only rules out reusing *that* interface, not a much smaller one (e.g. `CurrentStatus() (DetectedStatus, string)`) that `InstanceStatusManager.GetStatus()` could dispatch through uniformly instead of hand-rolling a second `if`-branch per agent. Today it's one extra branch; a 3rd/4th agent means `GetStatus()` keeps accumulating parallel maps and fallback chains. Recommendation: at minimum, document this as intentional technical debt with a trigger condition for revisiting (e.g. "extract a minimal status interface if a 3rd status-bearing agent is added"), not just leave it implicit in a rejected-alternative row.
+- [ ] **No pi-version compatibility gate despite requirements and PITFALL-3 explicitly calling for one.** requirements.md's Open Questions and PITFALL-3's mitigation both call for "a version check at session-start, logged and/or surfaced similarly to the health signal," but no story/task in the plan implements it. A user with `pi-support` on but an installed pi predating `--mode json`/extensions gets no specific diagnostic — just an ambiguous downstream failure (unknown flag error, or extension health silently `Failed` with no explanation of *why*).
+- [ ] **Doubling per-session process count (interactive pi + a second `--mode json` pi) is unanalyzed against the "same order of magnitude" performance NFR.** Task 5.2.1c itself flags this as an open question ("confirm during implementation whether pi supports attaching... if latter, note the resource/process-count implication in a code comment") and defers it to a comment rather than resolving it before Phase 5 is scheduled. This should be resolved as part of Phase 1's spike, not discovered mid-Phase-5.
+- [ ] **No in-terminal discoverability for a user who only watches pi's own tmux pane.** ADR-003 resolves "hangs forever" with a ~4-minute timeout-then-deny, but nothing in the plan gives the user, inside pi's own terminal, any indication that the tool call is waiting on a human decision in the stapler-squad web UI rather than just being slow. The disambiguation lives entirely in a separate UI surface (the SessionCard health badge), which a CLI-only user may never look at.
+- [ ] **Health-tracker state across session resume/restart is unspecified.** Task 2.2.1e wires resume-flag capture for `piSessionID`, spawning a fresh pi process (and thus a fresh extension load) on resume — but nothing says whether `PiExtensionHealthTracker`'s per-session state resets to `Unknown` at that point, or whether a stale `Loaded` from the prior run persists and masks a real load failure on the resumed run.
+- [ ] **ADR-002's "extension applies to every pi invocation on the machine, not just stapler-squad's" consequence has no corresponding disclosure task.** The ADR says this "is worth calling out explicitly in user-facing docs/UI copy so it isn't a surprise," but Phase 6's doc story (6.2.2) doesn't name this as a required section of the how-to doc — it's easy for this to fall out during implementation since it's only mentioned in the ADR, not the plan's own acceptance criteria.
+- [ ] **Story 1.1.3 (resume-flag syntax) has no documented fallback if neither `--session <id>` nor `-c` works**, unlike the explicit "ADR-002 must be revisited" language given to the trust-gate finding. Lower stakes than the approval-blocking unknowns, but the plan is inconsistent about which spike outcomes get a named contingency and which don't.
+- [ ] **Epic 4.3's `PermissionRequestPayload.Source` field touches shared Claude-side infrastructure** (`pkg/classifier/classifier.go`, `server/services/approval_handler.go`) that requirements.md's Out of Scope section says should not be "changed or redesigned... beyond what's needed to let pi share the same webhook/classifier backend." The change is additive/backward-compatible and plausibly within that carve-out, but reviewers should explicitly confirm this framing at review time since it's the one place the plan edits Claude's existing hook path.
+
+## Minors
+
+- The "multi-agent-in-one-session UX" requirement is resolved via "no new widget, just rank pi in the existing picker" — a reasonable timeboxed call, but worth a final confirmation with whoever wrote that requirement line that a dropdown entry actually satisfies the original ask's spirit, not just its letter.
+- Story 6.1.1's metric label scheme for unrecognized `--mode json` event types is left as "decide and document" rather than specified now — fine to defer, but it's a loose end that could get skipped under time pressure.
+- Task 4.1.2d's idempotency test assumes the two baked-in URLs never change; if the server's resolved base URL changes (different port/host across a manual-instance restart, per this repo's own manual-testing port-block convention), the installed extension goes stale with no drift-detection or reinstall reminder.

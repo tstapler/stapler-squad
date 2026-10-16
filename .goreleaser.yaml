@@ -61,7 +61,7 @@ brews:
     commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
     homepage: "https://github.com/{{ .Env.GITHUB_REPOSITORY }}"
     description: "Manage multiple AI terminal agents like Claude Code, Aider, Codex, OpenCode, and Amp."
-    license: "MIT"
+    license: "AGPL-3.0-only"
     install: |
       bin.install "stapler-squad"
       bin.install_symlink bin/"stapler-squad" => "ssq"

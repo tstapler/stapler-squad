@@ -1,11 +1,21 @@
 "use client";
 
+import type { MouseEvent } from "react";
 import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
 import { InlineNotice } from "@/components/common/InlineNotice";
 import { getAvailableActions } from "@/lib/backlog/itemActions";
 import { derivePlanReviewStatus } from "@/lib/backlog/planReviewStatus";
+import type { JulesDispatchGate } from "@/lib/backlog/julesDispatchGate";
 import * as styles from "../BacklogItemDetail.css";
 import { ActionButtonLabel } from "./ActionButtonLabel";
+import { SendBackFeedbackBox } from "./SendBackFeedbackBox";
+
+// Story 3.2.2's Jules gating result type — resolved by
+// lib/backlog/julesDispatchGate.ts's resolveJulesDispatchGate, called from
+// BacklogItemDetail.tsx (no data-fetching or gating computation lives in
+// this presentational component). Re-exported here so existing importers of
+// `./ActionsSection` don't need to know the type moved.
+export type { JulesDispatchGate };
 
 export interface ActionsSectionProps {
   item: BacklogItem;
@@ -27,6 +37,16 @@ export interface ActionsSectionProps {
    * item is archived/removed elsewhere there is nothing left to act on.
    */
   terminalState: "archived" | "removed" | null;
+  /**
+   * Story 3.2.2: undefined (including simply omitted, so pre-existing
+   * ActionsSection callers/tests unrelated to Jules don't need to know
+   * about it) while GetJulesConfig hasn't resolved yet — treated the same
+   * as `hidden: true`.
+   */
+  julesDispatchGate?: JulesDispatchGate;
+  onDispatchToJulesClick?: (event: MouseEvent<HTMLButtonElement>) => void;
+  activeWorkSessionCount: number;
+  onSendBackWithFeedback: (feedback: string) => Promise<void>;
 }
 
 /**
@@ -53,6 +73,10 @@ export function ActionsSection({
   onManualReviewSubmit,
   onManualReviewCancel,
   terminalState,
+  julesDispatchGate,
+  onDispatchToJulesClick,
+  activeWorkSessionCount,
+  onSendBackWithFeedback,
 }: ActionsSectionProps) {
   // getAvailableActions (web-app/src/lib/backlog/itemActions.ts) is the single
   // source of truth for which actions this item's current status + gate flags
@@ -178,6 +202,32 @@ export function ActionsSection({
           >
             <ActionButtonLabel pending={actionLoading === "spawn_session_autonomous"} label="Run Autonomously" />
           </button>
+        )}
+
+        {/* Dispatch to Jules (Story 3.2.2): gating precedence resolved by
+            BacklogItemDetail.tsx's resolveJulesDispatchGate over
+            GetJulesConfig + the item's already-loaded sessions (ux.md §3.1)
+            — feature off (hidden) -> no key -> Jules session already open
+            -> no known branch -> enabled. Never rendered at all when
+            hidden, matching the "no dead button" wireframe note. */}
+        {julesDispatchGate && !julesDispatchGate.hidden && (
+          <>
+            <button
+              className={styles.actionButton}
+              onClick={onDispatchToJulesClick}
+              disabled={actionLoading !== null || julesDispatchGate.disabled}
+              aria-describedby={julesDispatchGate.reason ? "jules-dispatch-gate-reason" : undefined}
+              title={julesDispatchGate.reason ?? undefined}
+              data-testid="dispatch-to-jules"
+            >
+              Dispatch to Jules
+            </button>
+            {julesDispatchGate.reason && (
+              <p id="jules-dispatch-gate-reason" className={styles.emptyText} data-testid="dispatch-to-jules-reason">
+                {julesDispatchGate.reason}
+              </p>
+            )}
+          </>
         )}
 
         {/* Approve Plan / Retry Triage: mutually exclusive, both driven by
@@ -392,18 +442,13 @@ export function ActionsSection({
             <ActionButtonLabel pending={actionLoading === "send_back_idea"} label="↩ Return to Triage" />
           </button>
         )}
-        {actions.has("send_back_ready") && (
-          <button
-            className={`${styles.actionButton} ${styles.actionButtonSecondary}`}
-            onClick={() => onAction("send_back_ready")}
-            disabled={actionLoading !== null}
-            aria-busy={actionLoading === "send_back_ready"}
-            title="Move back to Ready to re-spawn without full re-triage"
-            data-testid="backlog-action-send-back-ready"
-          >
-            <ActionButtonLabel pending={actionLoading === "send_back_ready"} label="↩ Back to Ready" />
-          </button>
-        )}
+        <SendBackFeedbackBox
+          visible={actions.has("send_back_ready")}
+          activeWorkSessionCount={activeWorkSessionCount}
+          disabled={actionLoading !== null && actionLoading !== "send_back_ready"}
+          actionPending={actionLoading === "send_back_ready"}
+          onSubmit={onSendBackWithFeedback}
+        />
 
         <button
           className={styles.actionButtonDanger}

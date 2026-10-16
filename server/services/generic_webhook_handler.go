@@ -14,7 +14,7 @@ import (
 // GenericWebhookHandler handles POST /webhooks/{slug}: generic `webhook`-type Workflow
 // triggers, matched by event/label_filter, rendered against arbitrary JSON. Concrete
 // type, not an interface — one implementation, per
-// .claude/rules/interface-pollution-checklist.md.
+// the `interface-pollution-checklist` skill.
 type GenericWebhookHandler struct {
 	repo       session.WorkflowRepository
 	scheduler  *workflows.Scheduler

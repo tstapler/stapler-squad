@@ -3,9 +3,14 @@ package session
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/envtest"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // newNotFoundDetector returns a HistoryFileDetector that will resolve any
@@ -85,7 +90,7 @@ func TestCommitImportExternalSession_ReturnsErrPathNotExist_When_CandidatePathMi
 }
 
 func TestCommitImportExternalSession_PersistsAndLinksAndSuspends_When_StartAndSuspendSucceed(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	suspended, err := NewSuspendedProcessStore()
 	require.NoError(t, err)
@@ -143,8 +148,62 @@ func TestCommitImportExternalSession_PersistsAndLinksAndSuspends_When_StartAndSu
 	_ = ResumeOriginalProcess(pid)
 }
 
+// TestCommitImportExternalSession_HonorsSessionNameOverrideMap verifies that
+// CommitImportExternalSession wires session.ResolveSessionBackend
+// (tymux-bundled-integration Epic 4.4.3): with no per-request override
+// concept for this restore-from-state path, a TymuxSessionOverrides entry
+// keyed by the sanitized tmux session name still forces the resulting
+// instance's backend even though the process-wide default is registered as
+// tymux.
+func TestCommitImportExternalSession_HonorsSessionNameOverrideMap(t *testing.T) {
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+
+	suspended, err := NewSuspendedProcessStore()
+	require.NoError(t, err)
+
+	linker := NewHistoryLinker(newNotFoundDetector(t), nil)
+
+	store := &fakeInstanceStore{}
+	detector := newNotFoundDetector(t)
+
+	cmd := spawnSleeper(t)
+	pid := int32(cmd.Process.Pid)
+
+	path := t.TempDir()
+	candidate := ExternalSessionCandidate{
+		Path:        path,
+		Program:     "true",
+		TmuxSession: "",
+		PID:         0, // see importInstanceTitle: with TmuxSession=="" and PID==0, title is deterministic.
+	}
+	title := importInstanceTitle(candidate)
+	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"feature_flags": {"tymux": true}, "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+
+	result, err := CommitImportExternalSession(context.Background(), CommitImportParams{
+		Detector:         detector,
+		Storage:          store,
+		Linker:           linker,
+		Suspended:        suspended,
+		AliveChecker:     &fakeAliveChecker{alive: true},
+		Candidate:        candidate,
+		OriginalPID:      pid,
+		TmuxServerSocket: coldRestoreSocket(t),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result.Instance)
+	t.Cleanup(func() { _ = result.Instance.Kill() })
+
+	assert.Equal(t, BackendTmux, result.Instance.Backend,
+		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend even though the process-wide default is tymux")
+
+	_ = ResumeOriginalProcess(pid)
+}
+
 func TestCommitImportExternalSession_CompensatingDeletesInstance_When_SuspendOriginalProcessFails(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	suspended, err := NewSuspendedProcessStore()
 	require.NoError(t, err)
@@ -212,7 +271,7 @@ func TestCommitImportExternalSession_CompensatingDeletesInstance_When_SuspendOri
 // longer identify the same process, CommitImportExternalSession must error
 // out and must never reach SuspendOriginalProcess/Suspended.Add.
 func TestCommitImportExternalSession_ReturnsError_When_AliveCheckerRejectsOriginalPID(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	suspended, err := NewSuspendedProcessStore()
 	require.NoError(t, err)

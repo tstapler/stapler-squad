@@ -25,16 +25,17 @@ type fakeHeadlessPool struct {
 	firstCallOnce sync.Once
 }
 
-func (f *fakeHeadlessPool) CallBlocking(_ context.Context, key headless.FeatureKey, _, _ string, _ headless.CallOptions) (string, float64, error) {
+func (f *fakeHeadlessPool) CallBlocking(_ context.Context, key headless.FeatureKey, _, _ string, _ headless.CallOptions, sink headless.CostSink) (string, error) {
 	if f.firstCallCh != nil {
 		f.firstCallOnce.Do(func() { close(f.firstCallCh) })
 	}
 	idx := int(atomic.AddInt32(&f.callCount, 1)) - 1
 	f.capturedKeys = append(f.capturedKeys, key)
+	sink(0, true)
 	if idx < len(f.responses) {
-		return f.responses[idx], 0, nil
+		return f.responses[idx], nil
 	}
-	return "NEXT_MESSAGE: keep going", 0, nil
+	return "NEXT_MESSAGE: keep going", nil
 }
 
 func TestParseOrchestrationResponse_NextMessage(t *testing.T) {
@@ -228,21 +229,36 @@ func TestExtractPRURL_NoURL(t *testing.T) {
 // exercising run()'s real-send path (nudge suppression / distinct-send
 // behavior) without a real tmux backend. Embeds a nil ProcessManager, per
 // fakePauseResumeProcessManager's precedent, so any unexpected method call
-// panics loudly. HasUpdated is intentionally NOT overridden: Instance.HasUpdated
-// short-circuits via !TmuxAlive() before ever reaching the embedded
-// ProcessManager, so waitForPaneSettle never touches this fake's HasUpdated.
+// panics loudly. HasSession/IsAlive report the pane as live and HasUpdated
+// simulates a real pane changing once in response to each SendKeys call, so
+// SubmitDriverContent's pane-changed confirmation check (session/pane_submit.go)
+// sees the same "content changed after I typed" signal a real tmux pane would
+// give it — without this, Instance.HasUpdated() always reported false and
+// every submit looked swallowed, driving the AutonomousDriver loop to "max
+// turns reached" instead of completing (see the 4
+// TestAutonomousDriver_run_should_*/TestAutonomousDriver_SuppressesDuplicateNudge_When_PaneUnchanged
+// tests below).
 type fakeSendKeysProcessManager struct {
 	ProcessManager
-	mu       sync.Mutex
-	sent     []string
-	failOn   map[int]bool // 1-based call index -> force an error for that call
-	sendCall int
+	mu            sync.Mutex
+	sent          []string
+	failOn        map[int]bool // 1-based call index -> force an error for that call
+	sendCall      int
+	pendingUpdate bool // set by SendKeys, consumed once by the next HasUpdated poll
 }
 
-// HasSession reports false so Instance.TmuxAlive() short-circuits to false
-// cleanly, which in turn makes Instance.HasUpdated() short-circuit before
-// ever reaching this fake's (unstubbed) HasUpdated/IsAlive methods.
-func (f *fakeSendKeysProcessManager) HasSession() bool { return false }
+// HasSession and IsAlive report the fake pane as live so Instance.TmuxAlive()
+// proceeds far enough to reach this fake's HasUpdated, rather than
+// short-circuiting to "never updated". HasMeaningfulContent/FilterBanners are
+// stubbed too: Instance.HasUpdated's UpdateTerminalTimestamps calls them once
+// HasSession() is true, and the embedded nil ProcessManager panics on any
+// unstubbed call.
+func (f *fakeSendKeysProcessManager) HasSession() bool                         { return true }
+func (f *fakeSendKeysProcessManager) IsAlive() bool                            { return true }
+func (f *fakeSendKeysProcessManager) HasMeaningfulContent(content string) bool { return false }
+func (f *fakeSendKeysProcessManager) FilterBanners(content string) (string, int) {
+	return content, 0
+}
 
 func (f *fakeSendKeysProcessManager) SendKeys(keys string) (int, error) {
 	f.mu.Lock()
@@ -252,7 +268,23 @@ func (f *fakeSendKeysProcessManager) SendKeys(keys string) (int, error) {
 		return 0, errTestSendKeysFailure
 	}
 	f.sent = append(f.sent, keys)
+	f.pendingUpdate = true
 	return len(keys), nil
+}
+
+// HasUpdated reports a single pane change immediately after each SendKeys
+// call, then reports no further change until the next SendKeys — mirroring a
+// real pane's render-then-settle behavior closely enough for
+// waitForPaneSettle/waitForPaneUpdate (session/pane_submit.go) to behave as
+// they would against a real tmux pane.
+func (f *fakeSendKeysProcessManager) HasUpdated() (updated bool, hasPrompt bool, content string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.pendingUpdate {
+		f.pendingUpdate = false
+		return true, false, "updated"
+	}
+	return false, false, ""
 }
 
 func (f *fakeSendKeysProcessManager) recorded() []string {
@@ -820,7 +852,7 @@ func TestAutonomousDriver_PanicRecovery(t *testing.T) {
 }
 
 func TestAutonomousDriver_Stop_CancelsLoop(t *testing.T) {
-	pool := &fakeHeadlessPool{}
+	pool := &fakeHeadlessPool{firstCallCh: make(chan struct{})}
 
 	inst := &Instance{Title: "test-stop", UUID: "abcdefgh-stop0"}
 	cc, _ := NewClaudeController(inst)
@@ -845,7 +877,11 @@ func TestAutonomousDriver_Stop_CancelsLoop(t *testing.T) {
 		t.Fatalf("Start() failed: %v", err)
 	}
 
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-pool.firstCallCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("driver never reached its first LLM call")
+	}
 	driver.Stop()
 
 	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -916,11 +952,19 @@ func TestAutonomousDriver_Stop_CancelsLoop_DuringNudgeSuppression(t *testing.T) 
 // cancelled, letting a test hold the driver's run() goroutine open for as
 // long as it wants — used to prove Wait() actually blocks on goroutine exit
 // rather than returning as soon as it's called.
-type blockingPool struct{}
+type blockingPool struct {
+	// entered, if non-nil, is closed on the first CallBlocking — a readiness
+	// signal for "the driver is now parked inside its first LLM call".
+	entered     chan struct{}
+	enteredOnce sync.Once
+}
 
-func (p *blockingPool) CallBlocking(ctx context.Context, _ headless.FeatureKey, _, _ string, _ headless.CallOptions) (string, float64, error) {
+func (p *blockingPool) CallBlocking(ctx context.Context, _ headless.FeatureKey, _, _ string, _ headless.CallOptions, _ headless.CostSink) (string, error) {
+	if p.entered != nil {
+		p.enteredOnce.Do(func() { close(p.entered) })
+	}
 	<-ctx.Done()
-	return "", 0, ctx.Err()
+	return "", ctx.Err()
 }
 
 // TestAutonomousDriver_Wait_BlocksUntilRunExits proves Wait() is a real join
@@ -928,7 +972,7 @@ func (p *blockingPool) CallBlocking(ctx context.Context, _ headless.FeatureKey, 
 // must not report the driver stopped until well after Stop() is called, and
 // only once run() has actually finished.
 func TestAutonomousDriver_Wait_BlocksUntilRunExits(t *testing.T) {
-	pool := &blockingPool{}
+	pool := &blockingPool{entered: make(chan struct{})}
 
 	inst := &Instance{Title: "test-wait-blocks", UUID: "abcdefgh-wait0"}
 	cc, _ := NewClaudeController(inst)
@@ -957,7 +1001,11 @@ func TestAutonomousDriver_Wait_BlocksUntilRunExits(t *testing.T) {
 	// run() goroutine actually exits — record how long it took and confirm
 	// Wait() didn't return instantly (which would indicate it isn't really
 	// synchronizing on goroutine exit).
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-pool.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("driver never reached its first LLM call")
+	}
 	stopStart := time.Now()
 	driver.Stop()
 
@@ -1035,7 +1083,7 @@ func TestAutonomousDriver_Wait_RespectsOwnContextTimeout(t *testing.T) {
 // panicPool panics on the first call to simulate a driver panic.
 type panicPool struct{}
 
-func (p *panicPool) CallBlocking(_ context.Context, _ headless.FeatureKey, _, _ string, _ headless.CallOptions) (string, float64, error) {
+func (p *panicPool) CallBlocking(_ context.Context, _ headless.FeatureKey, _, _ string, _ headless.CallOptions, _ headless.CostSink) (string, error) {
 	panic("simulated panic in headless pool")
 }
 
@@ -1206,11 +1254,8 @@ func TestWaitForIdle_should_requireSustainedIdle_When_SettleWindowIsSet(t *testi
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	go func() {
-		time.Sleep(settleWindow / 2)
-		// Now go genuinely idle and stay there.
-		statusCh <- detection.StatusIdle
-	}()
+	// Now go genuinely idle and stay there.
+	statusCh <- detection.StatusIdle
 
 	start := time.Now()
 	ok := waitForIdle(ctx, statusCh, cc, settleWindow, testIdleSettlePollInterval)

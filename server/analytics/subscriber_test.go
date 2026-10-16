@@ -35,15 +35,16 @@ func (r *recordingProvider) recorded() []Event {
 // deadline is exceeded.
 func (r *recordingProvider) waitForCount(n int, deadline time.Duration) bool {
 	timeout := time.After(deadline)
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
 	for {
+		if len(r.recorded()) >= n {
+			return true
+		}
 		select {
 		case <-timeout:
 			return false
-		default:
-			if len(r.recorded()) >= n {
-				return true
-			}
-			time.Sleep(5 * time.Millisecond)
+		case <-tick.C:
 		}
 	}
 }
@@ -115,9 +116,8 @@ func TestSubscriber_StatusChanged(t *testing.T) {
 	// First event: seeds lastStatusByID — no transition recorded.
 	bus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
 
-	// Wait for first event to be processed before sending the second.
-	time.Sleep(30 * time.Millisecond)
-
+	// The subscriber drains a single FIFO channel, so the second event is
+	// always processed after the first; no wait needed in between.
 	// Second event: status changes Active → Stopped — transition should be recorded.
 	inst2 := &session.Instance{ID: "sess-status", Title: "status-session", Status: session.Stopped}
 	bus.Publish(events.NewSessionUpdatedEvent(inst2, []string{"status"}))
@@ -152,10 +152,15 @@ func TestSubscriber_UnknownEventSkipped(t *testing.T) {
 		"sess-1", "Session", "notif-id", 0, 0, "title", "body", nil,
 	))
 
-	// Give the goroutine time to process the event.
-	time.Sleep(50 * time.Millisecond)
+	// Sentinel: events are processed in order, so once the sentinel is recorded
+	// the notification has already been handled (and skipped).
+	bus.Publish(events.NewSessionDeletedEvent("sentinel"))
+	if !provider.waitForCount(1, 500*time.Millisecond) {
+		t.Fatal("timed out waiting for sentinel Record call")
+	}
 
-	if n := len(provider.recorded()); n != 0 {
-		t.Errorf("want 0 events recorded, got %d", n)
+	got := provider.recorded()
+	if len(got) != 1 || got[0].SessionID != "sentinel" {
+		t.Errorf("want only the sentinel event recorded, got %+v", got)
 	}
 }

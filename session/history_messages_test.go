@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -408,10 +409,14 @@ func TestReadLastNMessages_MatchesForwardRead(t *testing.T) {
 // --- GetMessagesFromConversationFile (via real session history) ---------------
 
 func TestGetMessagesFromConversationFile_NotFound(t *testing.T) {
-	t.Parallel()
-	// Use a directory that doesn't exist as the projects dir.
-	// We can't easily inject the path, so test via findConversationFilePath directly.
-	_, err := findConversationFilePath("nonexistent-session-id-xyz")
+	// findConversationFilePath walks the real $HOME/.claude/projects tree and
+	// substring-matches sessionID against file contents, so it must run against
+	// an isolated HOME — otherwise a coincidental match in the developer's own
+	// project history (e.g. this test's sessionID literal showing up in an
+	// unrelated session transcript) makes the test flakily pass. t.Setenv
+	// forbids t.Parallel() in the same test, so this test can't be parallel.
+	t.Setenv("HOME", t.TempDir())
+	_, err := findConversationFilePath(context.Background(), "nonexistent-session-id-xyz")
 	if err == nil {
 		t.Fatal("expected error for non-existent session")
 	}

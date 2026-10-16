@@ -15,6 +15,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // newIsolatedCallbackConfigService creates a CallbackConfigService backed by a
@@ -22,7 +23,7 @@ import (
 // (same isolation pattern as newIsolatedDefaultsService, defaults_service_test.go).
 func newIsolatedCallbackConfigService(t *testing.T) *CallbackConfigService {
 	t.Helper()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	return NewCallbackConfigService()
 }
 
@@ -147,7 +148,7 @@ func (rt *recordingRoundTripper) urls() []string {
 // CallbackConfigService saved to disk and to its own fresh cfg, but never wrote
 // into the dispatcher's pointer.
 func TestUpdateCallbackConfig_TakesEffectOnDispatchWithoutRestart(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 
 	const newURL = "https://example.com/hook" // publicly-resolvable, real DNS lookup passes ValidateCallbackURL's save-time check; no real delivery happens (recordingRoundTripper intercepts it).
 	rt := &recordingRoundTripper{}
@@ -169,7 +170,7 @@ func TestUpdateCallbackConfig_TakesEffectOnDispatchWithoutRestart(t *testing.T) 
 
 	// Sanity: before any update, Dispatch has nowhere to send.
 	d.Dispatch("session_complete", map[string]any{"phase": "before"})
-	time.Sleep(50 * time.Millisecond)
+	require.Empty(t, d.inFlight, "no delivery slot may be reserved when no URL is configured")
 	require.Empty(t, rt.urls(), "no URL configured yet — nothing should be delivered")
 
 	_, err := c.UpdateCallbackConfig(context.Background(), connect.NewRequest(&sessionv1.UpdateCallbackConfigRequest{
@@ -181,7 +182,7 @@ func TestUpdateCallbackConfig_TakesEffectOnDispatchWithoutRestart(t *testing.T) 
 	// now reach the newly-saved URL.
 	d.Dispatch("session_complete", map[string]any{"phase": "after"})
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		urls := rt.urls()
 		return len(urls) == 1 && urls[0] == newURL
 	}, 2*time.Second, 10*time.Millisecond, "dispatch after config update must reach the newly-saved URL without a restart")

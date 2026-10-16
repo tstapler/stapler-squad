@@ -22,5 +22,5 @@ func runSigkillHelperProcess() {
 	signal.Ignore(syscall.SIGTERM)
 	fmt.Println("ready")
 	os.Stdout.Sync()
-	time.Sleep(time.Hour) // block until SIGKILLed by the test
+	time.Sleep(time.Hour) //nolint:notimesleeptest helper subprocess blocks until SIGKILLed by the test
 }

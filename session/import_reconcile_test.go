@@ -3,10 +3,12 @@ package session
 import (
 	"context"
 	"testing"
+
+	"github.com/tstapler/stapler-squad/envtest"
 )
 
 func TestReconcileSuspendedProcesses_ResumesProcessAndRemovesRecord_When_ProcessStillExists(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	suspended, err := NewSuspendedProcessStore()
 	if err != nil {
@@ -35,7 +37,7 @@ func TestReconcileSuspendedProcesses_ResumesProcessAndRemovesRecord_When_Process
 }
 
 func TestReconcileSuspendedProcesses_ReturnsErrorButContinues_When_OneResumeFails(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	suspended, err := NewSuspendedProcessStore()
 	if err != nil {
@@ -90,7 +92,7 @@ func TestReconcileSuspendedProcesses_ReturnsNil_When_StoreIsNil(t *testing.T) {
 // Instance's lifecycle (confirm-kill/cancel), risking a dual-writer scenario.
 // The record must be left untouched instead.
 func TestReconcileSuspendedProcesses_LeavesProcessSuspended_When_CommittedInstanceStillManaged(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	suspended, err := NewSuspendedProcessStore()
 	if err != nil {

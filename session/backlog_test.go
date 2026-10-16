@@ -20,6 +20,7 @@ func TestIsTmuxBackedSessionRole(t *testing.T) {
 	}{
 		{"work session is tmux-backed", SessionRoleWork, true},
 		{"review session is tmux-backed", SessionRoleReview, true},
+		{"diagnose session is tmux-backed", SessionRoleDiagnose, true},
 		{"triage session is headless, not tmux-backed", SessionRoleTriage, false},
 		{"unknown role is not tmux-backed", "bogus", false},
 		{"empty role is not tmux-backed", "", false},
@@ -29,6 +30,52 @@ func TestIsTmuxBackedSessionRole(t *testing.T) {
 			t.Parallel()
 			if got := IsTmuxBackedSessionRole(tc.role); got != tc.want {
 				t.Errorf("IsTmuxBackedSessionRole(%q) = %v, want %v", tc.role, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestIsTmuxBackedSessionRole_should_ReturnFalse_When_RoleIsJulesWork verifies a
+// Jules session (runs on Google's infrastructure, no local tmux pane) is excluded
+// from the tmux-cleanup predicate, while work/review remain included.
+func TestIsTmuxBackedSessionRole_should_ReturnFalse_When_RoleIsJulesWork(t *testing.T) {
+	t.Parallel()
+	if got := IsTmuxBackedSessionRole(SessionRoleJulesWork); got != false {
+		t.Errorf("IsTmuxBackedSessionRole(%q) = %v, want false", SessionRoleJulesWork, got)
+	}
+	if got := IsTmuxBackedSessionRole(SessionRoleWork); got != true {
+		t.Errorf("IsTmuxBackedSessionRole(%q) = %v, want true", SessionRoleWork, got)
+	}
+	if got := IsTmuxBackedSessionRole(SessionRoleReview); got != true {
+		t.Errorf("IsTmuxBackedSessionRole(%q) = %v, want true", SessionRoleReview, got)
+	}
+}
+
+// TestIsTmuxBackedSessionRole_should_CoverEveryDeclaredRole_When_RolesEnumerated
+// enumerates all five declared, ItemSession-persisted session role constants
+// (SessionRoleExternal is excluded — it's a synthetic Insights-only label never
+// written to ItemSession.session_role, see its doc comment) and asserts an exact
+// expected truth value for each, so a future role addition to the const block
+// cannot silently default into (or out of) the tmux-cleanup path without this
+// table also growing.
+func TestIsTmuxBackedSessionRole_should_CoverEveryDeclaredRole_When_RolesEnumerated(t *testing.T) {
+	t.Parallel()
+	declaredRoles := map[string]bool{
+		SessionRoleWork:      true,
+		SessionRoleTriage:    false,
+		SessionRoleReview:    true,
+		SessionRoleJulesWork: false,
+		SessionRoleDiagnose:  true,
+	}
+	if len(declaredRoles) != 5 {
+		t.Fatalf("expected exactly 5 declared session role constants, got %d", len(declaredRoles))
+	}
+	for role, want := range declaredRoles {
+		role, want := role, want
+		t.Run(role, func(t *testing.T) {
+			t.Parallel()
+			if got := IsTmuxBackedSessionRole(role); got != want {
+				t.Errorf("IsTmuxBackedSessionRole(%q) = %v, want %v", role, got, want)
 			}
 		})
 	}

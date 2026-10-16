@@ -388,6 +388,8 @@ func workflowServiceErrResult(err error) (*mcpgo.CallToolResult, error) {
 			return errResult(ErrItemNotFound, connectErr.Message(), ""), nil
 		case connect.CodeInvalidArgument:
 			return errResult(ErrInvalidArgument, connectErr.Message(), ""), nil
+		case connect.CodeAlreadyExists:
+			return errResult(ErrConflict, connectErr.Message(), ""), nil
 		case connect.CodeUnavailable:
 			return errResult(ErrFeatureDisabled, connectErr.Message(), ""), nil
 		}

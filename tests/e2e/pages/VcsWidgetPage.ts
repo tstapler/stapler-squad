@@ -4,7 +4,7 @@ import { Page, Locator, expect } from '@playwright/test';
  * Page-helper for the unified VcsWidget (web-app/src/components/shared/VcsWidget.tsx),
  * shared across Session detail (VcsPanel), Backlog item detail, and Unfinished item
  * detail (compact mode). Locators use data-testid or ARIA roles only, per
- * .claude/rules/e2e-test-conventions.md — VcsWidgetFileList/VcsWidgetCommitList render
+ * the `e2e-test-conventions` skill — VcsWidgetFileList/VcsWidgetCommitList render
  * native <ul>/<li> elements with no explicit `role` attribute, which still resolve via
  * getByRole('list')/getByRole('listitem') through the browser's implicit ARIA mapping.
  */
@@ -15,6 +15,17 @@ export class VcsWidgetPage {
   constructor(page: Page) {
     this.page = page;
     this.widget = page.getByTestId('vcs-widget-loaded');
+  }
+
+  /** Backlog item detail collapses the "Version Control" section by default; expand it if needed. */
+  async expandBacklogSection() {
+    const toggle = this.page
+      .getByTestId('backlog-item-detail')
+      .getByRole('button', { name: 'Version Control' });
+    if ((await toggle.getAttribute('aria-expanded')) !== 'true') {
+      await toggle.click();
+    }
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   }
 
   async waitForLoaded(timeout = 10000) {

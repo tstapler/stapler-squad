@@ -14,3 +14,18 @@ export function isAutoApproveSupported(program: string): boolean {
   const base = program.trim().split(/\s+/)[0]?.split("/").pop() ?? "";
   return AUTO_APPROVE_SUPPORTED_AGENTS.includes(base);
 }
+
+// Programs the pi approval extension (ssq-approval.ts, Phase 4) covers. Deliberately
+// narrower than AUTO_APPROVE_SUPPORTED_AGENTS above -- "claude" enforces approval rules
+// via its own hook mechanism (not this extension), and "opencode" has its own out-of-scope
+// hook, so neither belongs here even though both are legitimate agents elsewhere.
+const APPROVAL_EXTENSION_SUPPORTED_AGENTS = ["pi"];
+
+// isApprovalExtensionSupported reports whether program is a recognized agent the pi
+// approval extension applies to. Used to decide whether the creation panel's capability
+// warning area is even eligible to render for the selected program (Story 3.1.2) -- the
+// warning itself still depends on the program's live extension-health signal (Phase 4).
+export function isApprovalExtensionSupported(program: string): boolean {
+  const base = program.trim().split(/\s+/)[0]?.split("/").pop() ?? "";
+  return APPROVAL_EXTENSION_SUPPORTED_AGENTS.includes(base);
+}

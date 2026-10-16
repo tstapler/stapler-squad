@@ -29,6 +29,9 @@ type ExternalSessionDiscovery struct {
 	// Context for lifecycle management
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	// pollDone is closed when the polling goroutine launched by Start exits.
+	pollDone <-chan struct{}
 }
 
 // NewExternalSessionDiscovery creates a new external session discovery service.
@@ -71,7 +74,7 @@ func (e *ExternalSessionDiscovery) Start(interval time.Duration) {
 	}
 
 	// Start polling
-	e.discovery.StartPolling(e.ctx, interval)
+	e.pollDone = e.discovery.StartPolling(e.ctx, interval)
 
 	log.Info("external session discovery started", "interval", interval)
 }
@@ -82,6 +85,14 @@ func (e *ExternalSessionDiscovery) Stop() {
 		e.cancel()
 	}
 	log.Info("external session discovery stopped")
+}
+
+// Wait blocks until the polling goroutine has exited, after Stop. It returns
+// immediately if Start was never called.
+func (e *ExternalSessionDiscovery) Wait() {
+	if e.pollDone != nil {
+		<-e.pollDone
+	}
 }
 
 // GetSessions returns all currently discovered external sessions.
@@ -161,8 +172,16 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 		Permissions: GetMuxExternalPermissions(),
 	}
 
-	// Initialize the process manager for external instances.
-	instance.processManager = NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{})
+	// Initialize the process manager for external instances. An unrecognized
+	// instance.Backend value here means genuinely corrupted/unexpected data —
+	// log it loudly and skip wrapping this discovered session rather than
+	// registering an Instance with no process manager.
+	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend})
+	if err != nil {
+		log.Error("failed to construct process manager for external session", "tmux_session", discovered.Metadata.TmuxSession, "title", title, "err", err)
+		return
+	}
+	instance.processManager = pm
 
 	// UNIFIED ARCHITECTURE: Attach to the existing tmux session so external sessions
 	// use the same streaming/resize infrastructure as regular sessions.

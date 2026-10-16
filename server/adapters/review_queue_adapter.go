@@ -66,22 +66,23 @@ func ReviewItemToProto(item *session.ReviewItem, extraMetadata map[string]string
 		PatternName: item.PatternName,
 		Metadata:    metadata,
 		// Session details for rich display
-		Program:      item.Program,
-		Branch:       item.Branch,
-		Path:         item.Path,
-		WorkingDir:   item.WorkingDir,
-		Status:       StatusStringToProto(item.Status),
-		Tags:         item.Tags,
-		Category:     item.Category,
-		LastActivity: timestamppb.New(item.LastActivity),
-		SubStatus:    subStatusFromItem(item),
+		Program:         item.Program,
+		Branch:          item.Branch,
+		Path:            item.Path,
+		WorkingDir:      item.WorkingDir,
+		Status:          StatusStringToProto(item.Status),
+		Tags:            item.Tags,
+		Category:        item.Category,
+		LastActivity:    timestamppb.New(item.LastActivity),
+		SubStatus:       subStatusFromItem(item),
+		HasCommitsAhead: item.HasCommitsAhead,
 	}
 
 	// Add diff stats if available
 	if item.DiffStats != nil {
 		protoItem.DiffStats = &sessionv1.DiffStats{
-			Added:   int32(item.DiffStats.Added),
-			Removed: int32(item.DiffStats.Removed),
+			Added:   int32(item.DiffStats.Added),   //#nosec G115 -- diff line count, bounded well under int32 max
+			Removed: int32(item.DiffStats.Removed), //#nosec G115 -- diff line count, bounded well under int32 max
 			Content: item.DiffStats.Content,
 		}
 	}
@@ -120,18 +121,18 @@ func ReviewQueueToProto(queue *session.ReviewQueue, approvalIDs map[string]strin
 	byPriority := make(map[int32]int32)
 	for priority, count := range stats.ByPriority {
 		protoP := priorityToProto(priority)
-		byPriority[int32(protoP)] = int32(count)
+		byPriority[int32(protoP)] = int32(count) //#nosec G115 -- review-queue item count, bounded by live session count
 	}
 
 	// Convert reason stats to map
 	byReason := make(map[int32]int32)
 	for reason, count := range stats.ByReason {
 		protoR := attentionReasonToProto(reason)
-		byReason[int32(protoR)] = int32(count)
+		byReason[int32(protoR)] = int32(count) //#nosec G115 -- review-queue item count, bounded by live session count
 	}
 
 	protoQueue := &sessionv1.ReviewQueue{
-		TotalItems:        int32(stats.TotalItems),
+		TotalItems:        int32(stats.TotalItems), //#nosec G115 -- review-queue item count, bounded by live session count
 		Items:             protoItems,
 		ByPriority:        byPriority,
 		ByReason:          byReason,

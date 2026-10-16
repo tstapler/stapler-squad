@@ -72,6 +72,7 @@ export function BacklogFileBrowserModal({ sessionId, sessionTitle, onClose, trig
         role="dialog"
         aria-modal="true"
         aria-labelledby="file-browser-title"
+        data-testid="file-browser-modal"
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >

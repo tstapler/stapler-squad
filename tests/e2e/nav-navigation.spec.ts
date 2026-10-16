@@ -67,6 +67,7 @@ test.describe('nav-navigation', () => {
     await expect(link).toBeVisible({ timeout: 10000 });
     await link.click();
 
-    await expect(page).toHaveURL(/^\/?$|^\/?[?#]/, { timeout: 5000 });
+    // page.url() is absolute, so match the pathname, not the whole URL.
+    await expect(page).toHaveURL((url) => url.pathname === '/', { timeout: 5000 });
   });
 });

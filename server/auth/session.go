@@ -39,6 +39,8 @@ type SessionManager struct {
 	ceremonies   map[string]*ceremony    // key → ceremony session
 	authSessions map[string]*authSession // token → auth session
 	sessionsPath string                  // file path for persistence; empty = in-memory only
+	stopCleanup  chan struct{}           // closed by Close to stop the cleanup goroutine
+	closeOnce    sync.Once
 }
 
 type ceremony struct {
@@ -68,6 +70,7 @@ func NewSessionManager(sessionsPath string) *SessionManager {
 		ceremonies:   make(map[string]*ceremony),
 		authSessions: make(map[string]*authSession),
 		sessionsPath: sessionsPath,
+		stopCleanup:  make(chan struct{}),
 	}
 	if sessionsPath != "" {
 		sm.loadFromDisk()
@@ -165,6 +168,11 @@ func (sm *SessionManager) GetCeremony(key string) (webauthn.SessionData, bool) {
 
 // CreateAuthSession issues a new authenticated session token.
 func (sm *SessionManager) CreateAuthSession() (string, error) {
+	return sm.CreateAuthSessionTTL(authTokenTTL)
+}
+
+// CreateAuthSessionTTL issues a session token that expires after ttl.
+func (sm *SessionManager) CreateAuthSessionTTL(ttl time.Duration) (string, error) {
 	token, err := randomHex(sessionTokenLength)
 	if err != nil {
 		return "", err
@@ -177,7 +185,7 @@ func (sm *SessionManager) CreateAuthSession() (string, error) {
 	sm.authSessions[token] = &authSession{
 		Token:     token,
 		CreatedAt: now,
-		ExpiresAt: now.Add(authTokenTTL),
+		ExpiresAt: now.Add(ttl),
 	}
 	sm.saveToDisk()
 	return token, nil
@@ -224,22 +232,43 @@ func AuthTokenTTL() time.Duration {
 func (sm *SessionManager) cleanup() {
 	ticker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
-	for range ticker.C {
-		now := time.Now()
-		sm.mu.Lock()
-		for k, c := range sm.ceremonies {
-			if now.After(c.expiresAt) {
-				delete(sm.ceremonies, k)
-			}
+	for {
+		select {
+		case <-sm.stopCleanup:
+			return
+		case <-ticker.C:
+			sm.removeExpired()
 		}
-		for k, s := range sm.authSessions {
-			if now.After(s.ExpiresAt) {
-				delete(sm.authSessions, k)
-			}
-		}
-		sm.saveToDisk()
-		sm.mu.Unlock()
 	}
+}
+
+// removeExpired deletes expired ceremonies/auth sessions and persists the result.
+func (sm *SessionManager) removeExpired() {
+	now := time.Now()
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	for k, c := range sm.ceremonies {
+		if now.After(c.expiresAt) {
+			delete(sm.ceremonies, k)
+		}
+	}
+	for k, s := range sm.authSessions {
+		if now.After(s.ExpiresAt) {
+			delete(sm.authSessions, k)
+		}
+	}
+	sm.saveToDisk()
+}
+
+// Close stops the background cleanup goroutine. Safe to call more than once
+// or concurrently -- guarded by closeOnce so a second call is a no-op instead
+// of a double-close panic. Production callers hold a SessionManager for the
+// process lifetime and never call this, but tests that construct many
+// short-lived SessionManagers in the same binary need it to avoid leaking one
+// ticker-driven goroutine per instance (caught by goleak in a sibling
+// package's tests).
+func (sm *SessionManager) Close() {
+	sm.closeOnce.Do(func() { close(sm.stopCleanup) })
 }
 
 func randomHex(n int) (string, error) {
