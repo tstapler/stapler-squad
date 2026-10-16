@@ -759,3 +759,12 @@ Phase 5: Testing & Registry (spans all phases, sequenced last per story)
 ##### Task 5.3.1b: Add `data-testid="backlog-item-card"` if missing + registry entries (~3 min)
 - Confirm `BacklogItemCard.tsx` already exposes a stable test ID (grep first); add per-feature registry files (`docs/registry/features/frontend/backlog-item-source-badge.json`, `backlog-filter-by-source.json`) with `testIds` referencing the new spec's `describe`/`test` names.
 - Files: `web-app/src/components/backlog/BacklogItemCard.tsx` (if needed), `docs/registry/features/frontend/backlog-item-source-badge.json` (new), `docs/registry/features/frontend/backlog-filter-by-source.json` (new)
+
+---
+
+## Implementation Notes (first PR: Phase 1 + Phase 3, both trackers)
+
+- **No `go-jira/v2`**: its `SearchV2JQL` targets `rest/api/2` and `IssueFields.Description` is a `string`, so it cannot carry ADF. `JiraPlugin` hand-rolls `rest/api/3/search/jql` over `net/http` (nextPageToken loop, bounded). Supersedes Pattern Decision "JIRA HTTP client" and Task 1.3.1a.
+- **Credentials**: keychain, then env (`LINEAR_API_KEY`; `JIRA_EMAIL`/`JIRA_API_TOKEN`/`JIRA_BASE_URL`, env creds only sent to the `JIRA_BASE_URL` host). `PluginConfig.Raw` token fields are ignored (AC6).
+- **Deferred by the single-tracker-first gate (AC10)**: Phase 2 (forward-sync, AC5) and Phase 4 (frontend badge/filter, AC7). Neither PR may open until a real Linear or JIRA `ItemSource` row exists in a non-test config.
+- **AC9**: this PR adds no proto RPC; `make registry-generate-backend` produces no diff (the scanner tracks RPCs, not MCP tools).
