@@ -53,6 +53,17 @@ event invalidates it, and the scanner multiplies it by W.
   allocation-free.
 - Do not add `time.Sleep`-based tests; follow the `deterministic-fast-tests` skill.
 
+## Gates
+
+The real performance gates are deterministic tests run by `go test`: `DecodeCount` (commit reads through
+`countingStorer`, `countingstorer_test.go`), `StatCount` (the `statFn` seam on the tracked-file stat passes),
+and `testing.AllocsPerRun` / `runtime.ReadMemStats` deltas, each compared against a retained oracle (the
+committed old walk, `legacyStack*`) or a numeric ceiling that can fail. `AllocsPerRun == 0` assertions live in
+`//go:build !race` files and check `raceEnabled` (`racetag_test.go` / `norace_test.go`) so `-race` builds skip
+them; they are never behind `-short`. `-bench` output (`decodes/op`, `stats/op`, `allocs/op`) is advisory:
+`go test -bench` never fails on a number, the Tier 1 `benchstat` step in `.github/workflows/benchmark.yml` ends
+in `|| true`, and its PR comment step is `continue-on-error: true`. Do not cite a benchmark delta as a gate.
+
 ## FILE_OWNERSHIP
 
 Hot files are split so each shared file has one editing story per wave
