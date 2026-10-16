@@ -384,7 +384,7 @@ func (cq *CommandQueue) saveSnapshot(commands []*Command) error {
 
 	// Create directory if it doesn't exist
 	dir := filepath.Dir(cq.persistPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return fmt.Errorf("failed to create persist directory: %w", err)
 	}
 
@@ -407,7 +407,7 @@ func (cq *CommandQueue) saveSnapshot(commands []*Command) error {
 
 	// Write to file atomically (write to temp file then rename)
 	tempPath := cq.persistPath + ".tmp"
-	if err := os.WriteFile(tempPath, jsonData, 0644); err != nil {
+	if err := os.WriteFile(tempPath, jsonData, 0600); err != nil {
 		return fmt.Errorf("failed to write queue data: %w", err)
 	}
 

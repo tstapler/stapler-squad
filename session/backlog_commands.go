@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 )
 
 // backlogCommandsDir is the relative path from worktree root for slash command files.
@@ -29,6 +31,12 @@ const backlogCommandsDir = ".claude/commands/backlog"
 // instance (BacklogService.pipelineEngine) — passing two different engines would
 // reintroduce the "2 independent callers can drift" regression this seam closes.
 func WriteSlashCommands(engine PipelineEngine, item *BacklogItemData, worktreePath string) error {
+	// Writing into $HOME would create ~/.claude/commands/backlog/, which Claude Code loads as
+	// user-scope commands for EVERY session — a later item's sessions then see this item's ID.
+	if isUserHomeDir(worktreePath) {
+		return fmt.Errorf("WriteSlashCommands: refusing to write per-item commands into the home directory %s", worktreePath)
+	}
+
 	// Self-heal before writing: if a prior version of this branch ever got any backlog
 	// scaffolding file committed (see git.ScaffoldingExcludePatterns), untrack it now so this
 	// spawn doesn't perpetuate the pollution forward. See selfHealWorktreeScaffolding's doc comment.
@@ -38,7 +46,7 @@ func WriteSlashCommands(engine PipelineEngine, item *BacklogItemData, worktreePa
 
 	var mkErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		mkErr = os.MkdirAll(cmdDir, 0o755)
+		mkErr = os.MkdirAll(cmdDir, 0o750)
 		if mkErr == nil {
 			break
 		}
@@ -70,6 +78,8 @@ func WriteSlashCommands(engine PipelineEngine, item *BacklogItemData, worktreePa
 		files[name] = content
 	}
 
+	pruneStaleSlashCommandFiles(cmdDir, files)
+
 	for name, content := range files {
 		if err := writeFile(filepath.Join(cmdDir, name), content); err != nil {
 			return err
@@ -77,6 +87,112 @@ func WriteSlashCommands(engine PipelineEngine, item *BacklogItemData, worktreePa
 	}
 
 	return nil
+}
+
+func isUserHomeDir(path string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" || path == "" {
+		return false
+	}
+	a, errA := filepath.EvalSymlinks(path)
+	b, errB := filepath.EvalSymlinks(home)
+	if errA != nil || errB != nil {
+		return filepath.Clean(path) == filepath.Clean(home)
+	}
+	return a == b
+}
+
+// fixedSlashCommandNames are the non-per-criterion files WriteSlashCommands generates; the
+// per-criterion done-N/fail-N files match perCriterionSlashCommandName. Kept next to the
+// generators and cross-checked by TestIsGeneratedSlashCommandName_should_CoverEveryGeneratedFile,
+// so a new generated command can't silently escape the user-scope cleanup.
+var fixedSlashCommandNames = map[string]bool{
+	"status.md": true, "review.md": true, "ship.md": true,
+	"help.md": true, "block.md": true, "duplicate.md": true,
+}
+
+var perCriterionSlashCommandName = regexp.MustCompile(`^(done|fail)-\d+\.md$`)
+
+func isGeneratedSlashCommandName(name string) bool {
+	return fixedSlashCommandNames[name] || perCriterionSlashCommandName.MatchString(name)
+}
+
+// Root cause of the wrong-item-ID report (backlog item 3fe1321c): a ~/.claude/commands/backlog/
+// written 2026-08-12 by an old build that used $HOME as the target held item b608ab1e's ID in every
+// file. Claude Code treats it as user-scope, so any session lacking project-level copies (triage
+// worktrees, or sessions started before the per-item files were written) listed those commands.
+// The per-worktree generator was correct; see also the $HOME guard in WriteSlashCommands.
+//
+// RemoveStaleUserLevelBacklogCommands deletes <home>/.claude/commands/backlog when it holds only
+// stapler-squad-generated command files. Per-item commands belong in the session worktree; a copy
+// at user scope (written by an old build that targeted $HOME) is loaded by every session lacking
+// its own project-level copy and embeds one long-gone item's ID. A directory containing anything
+// else — or one that resolves outside home (e.g. ~/.claude/commands symlinked into a dotfiles
+// repo, where these files may be version-controlled) — is left untouched. Returns whether the
+// directory was removed.
+func RemoveStaleUserLevelBacklogCommands(home string) (bool, error) {
+	dir := filepath.Join(home, backlogCommandsDir)
+	realHome, errH := filepath.EvalSymlinks(home)
+	realDir, errD := filepath.EvalSymlinks(dir)
+	if errD != nil {
+		if os.IsNotExist(errD) {
+			return false, nil
+		}
+		return false, errD
+	}
+	if errH != nil {
+		return false, errH
+	}
+	if rel, err := filepath.Rel(realHome, realDir); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false, nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if len(entries) == 0 {
+		return false, nil // an empty directory holds nothing generated; leave it alone
+	}
+	for _, e := range entries {
+		if !e.Type().IsRegular() || !isGeneratedSlashCommandName(e.Name()) {
+			return false, nil
+		}
+		// Name alone is a weak ownership signal; require the generator's item_id= marker.
+		b, rErr := os.ReadFile(filepath.Join(dir, e.Name())) // #nosec G304 -- name is a regexp-matched entry of the fixed user commands dir
+		if rErr != nil || !strings.Contains(string(b), "item_id=") {
+			return false, nil
+		}
+	}
+	if err := os.RemoveAll(realDir); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// pruneStaleSlashCommandFiles removes every file in cmdDir not present in newFiles: leftovers
+// from a prior item (more acceptance criteria) or a different pipeline mode's template set
+// would otherwise keep a stale item_id callable. cmdDir is stapler-squad-owned scaffolding.
+// Best-effort — logs and continues past a single removal failure rather than failing the write.
+func pruneStaleSlashCommandFiles(cmdDir string, newFiles map[string]string) {
+	entries, err := os.ReadDir(cmdDir)
+	if err != nil {
+		return // directory just created / unreadable — nothing to prune
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if _, keep := newFiles[name]; keep {
+			continue
+		}
+		if rmErr := os.Remove(filepath.Join(cmdDir, name)); rmErr != nil {
+			log.WarningLog().Printf("[pruneStaleSlashCommandFiles] failed to remove stale %s: %v", name, rmErr)
+		}
+	}
 }
 
 // buildDefaultSlashCommandSet returns the filename→rendered-content map for
@@ -115,9 +231,9 @@ func buildDefaultSlashCommandSet(item *BacklogItemData) (map[string]string, erro
 
 	// review.md
 	files["review.md"] = fmt.Sprintf("Call request_review with item_id=%s and a 2-3 sentence summary of what was built.\n\n"+
-		"Do NOT end your session after this. Call wait_for_backlog_event(item_id, event_type=\"verdict_recorded\") "+
-		"instead of polling — it blocks until the verdict lands (or times out) and returns the outcome directly, "+
-		"or returns immediately if a verdict is already recorded.\n\n"+
+		"Then end your turn and stay idle (do not exit). Do NOT poll, and do NOT use ScheduleWakeup or /loop to "+
+		"wait: every wake re-reads your whole context. The app sends you a message with the verdict as soon as it "+
+		"is recorded.\n\n"+
 		"PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local "+
 		"CI, code review, remote CI, and merge-conflict resolution) — do not stop here; shipping the PR is part "+
 		"of this task, not a separate step someone else does.\n\n"+
@@ -203,18 +319,17 @@ func buildBlockAndDuplicateCommands(itemID string) map[string]string {
 // CleanupSlashCommands removes the backlog slash command directory.
 // Logs but does not return an error if the directory is absent.
 //
-// Called from ReconcilePRPending (session/backlog_lifecycle.go) once an item's PR has
-// merged and the item transitions to done — NOT from review exit or any earlier
-// teardown path. shipViaAgentOrFallback relies on ship.md still being present in the
-// worktree after a work session exits review, so it can re-invoke `/backlog/ship` as a
-// one-shot headless call; by the time ReconcilePRPending sees a merged PR, that flow has
-// already completed and ship.md is no longer needed. Also exported for direct/manual
-// invocation and exercised by tests.
+// Called from ReconcilePRPending (session/backlog_lifecycle_pr.go) once an item's PR
+// merges, and from cleanupItemWorktreesExcept (server/services/backlog_service.go) on
+// archive/reopen/tombstone. Both exclude worktrees with a live/EndedAt==nil work
+// session, so ship.md — which shipViaAgentOrFallback needs present to re-invoke
+// `/backlog/ship` as a one-shot headless call — is never removed out from under it.
+// Also exported for direct/manual invocation and exercised by tests.
 func CleanupSlashCommands(worktreePath string) error {
 	cmdDir := filepath.Join(worktreePath, backlogCommandsDir)
 	if err := os.RemoveAll(cmdDir); err != nil {
 		if !os.IsNotExist(err) {
-			log.WarningLog.Printf("CleanupSlashCommands: failed to remove %s: %v", cmdDir, err)
+			log.WarningLog().Printf("CleanupSlashCommands: failed to remove %s: %v", cmdDir, err)
 		}
 	}
 	return nil
@@ -243,12 +358,32 @@ func WriteBacklogContextFile(item *BacklogItemData, priorSessions []ItemSessionS
 	content := sb.String()
 
 	destPath := filepath.Join(worktreePath, ".backlog-context.md")
-	tmpPath := destPath + ".tmp"
 
-	if err := os.WriteFile(tmpPath, []byte(content), 0o644); err != nil {
-		return fmt.Errorf("WriteBacklogContextFile: failed to write tmp file: %w", err)
+	// Unique tmp name (not destPath+".tmp"): this is called on every spawn AND re-attach
+	// for the same worktreePath (see doc comment above), so two concurrent callers writing
+	// the same fixed name could interleave writes and rename a torn/corrupt file into place.
+	// Mirrors config.go's saveConfigLocked fix for the identical hazard.
+	tmpFile, err := os.CreateTemp(worktreePath, ".backlog-context.md.*.tmp")
+	if err != nil {
+		return fmt.Errorf("WriteBacklogContextFile: failed to create tmp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	_, writeErr := tmpFile.Write([]byte(content))
+	closeErr := tmpFile.Close()
+	if writeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("WriteBacklogContextFile: failed to write tmp file: %w", writeErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("WriteBacklogContextFile: failed to close tmp file: %w", closeErr)
+	}
+	if err := os.Chmod(tmpPath, 0o600); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("WriteBacklogContextFile: failed to chmod tmp file: %w", err)
 	}
 	if err := os.Rename(tmpPath, destPath); err != nil {
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("WriteBacklogContextFile: failed to rename tmp to dest: %w", err)
 	}
 	return nil
@@ -257,21 +392,21 @@ func WriteBacklogContextFile(item *BacklogItemData, priorSessions []ItemSessionS
 // CleanupBacklogContextFile removes .backlog-context.md from the worktree root.
 // Logs but does not fail if the file is absent.
 //
-// Called from ReconcilePRPending (session/backlog_lifecycle.go) once an item's PR has
-// merged and the item transitions to done. Worktree teardown (Instance.Kill, Instance.Pause)
-// often already removes the entire worktree directory by that point, so this is frequently a
-// no-op — the file is untracked anyway (via addWorktreeExcludes + selfHealWorktreeScaffolding
-// + the commit-time staging guard), so it never appears in a git diff/PR regardless of how
-// long it lingers on disk. Kept as a best-effort cleanup for the case where the worktree is
-// still around, and exported for direct/manual invocation and exercised by tests. Do not wire
-// this into a review-exit or ship-time teardown path — see CleanupSlashCommands' doc comment
-// for why (ship.md in particular is deliberately relied on to still exist after a work session
-// ends, until the PR actually merges).
+// Called from ReconcilePRPending (session/backlog_lifecycle_pr.go) once an item's PR
+// merges, and from cleanupItemWorktreesExcept (server/services/backlog_service.go) on
+// archive/reopen/tombstone — see CleanupSlashCommands' doc comment for why neither call
+// site can race a live ship.md-dependent session. Worktree teardown (Instance.Kill,
+// Instance.Pause) often already removes the entire worktree directory by that point, so
+// this is frequently a no-op — the file is untracked anyway (via addWorktreeExcludes +
+// selfHealWorktreeScaffolding + the commit-time staging guard), so it never appears in a
+// git diff/PR regardless of how long it lingers on disk. Kept as a best-effort cleanup
+// for the case where the worktree is still around, and exported for direct/manual
+// invocation and exercised by tests.
 func CleanupBacklogContextFile(worktreePath string) error {
 	path := filepath.Join(worktreePath, ".backlog-context.md")
 	if err := os.Remove(path); err != nil {
 		if !os.IsNotExist(err) {
-			log.WarningLog.Printf("CleanupBacklogContextFile: failed to remove %s: %v", path, err)
+			log.WarningLog().Printf("CleanupBacklogContextFile: failed to remove %s: %v", path, err)
 		}
 	}
 	return nil
@@ -279,7 +414,7 @@ func CleanupBacklogContextFile(worktreePath string) error {
 
 // writeFile is a helper that writes content to a file, creating it if needed.
 func writeFile(path, content string) error {
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("writeFile: failed to write %s: %w", path, err)
 	}
 	return nil
@@ -296,27 +431,25 @@ func writeFile(path, content string) error {
 func addWorktreeExcludes(worktreePath string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "--path-format=absolute", "--git-common-dir")
-	cmd.Dir = worktreePath
-	out, err := cmd.Output()
+	commonDir, err := gitprovider.Backend().CommonDir(ctx, backend.Local{Root: backend.RepoRoot(worktreePath)})
 	if err != nil {
-		log.WarningLog.Printf("[addWorktreeExcludes] git rev-parse --git-common-dir in %s: %v", worktreePath, err)
+		log.WarningLog().Printf("[addWorktreeExcludes] git rev-parse --git-common-dir in %s: %v", worktreePath, err)
 		return
 	}
-	gitCommonDir := strings.TrimSpace(string(out))
+	gitCommonDir := string(commonDir)
 
 	excludeFile := filepath.Join(gitCommonDir, "info", "exclude")
-	if mkErr := os.MkdirAll(filepath.Dir(excludeFile), 0o755); mkErr != nil {
-		log.WarningLog.Printf("[addWorktreeExcludes] mkdir %s: %v", filepath.Dir(excludeFile), mkErr)
+	if mkErr := os.MkdirAll(filepath.Dir(excludeFile), 0o750); mkErr != nil {
+		log.WarningLog().Printf("[addWorktreeExcludes] mkdir %s: %v", filepath.Dir(excludeFile), mkErr)
 		return
 	}
 
-	existingBytes, _ := os.ReadFile(excludeFile)
+	existingBytes, _ := os.ReadFile(excludeFile) // #nosec G304 -- excludeFile is derived from `git rev-parse --git-common-dir` output for the session's own worktree, not external input
 	existing := string(existingBytes)
 
-	f, openErr := os.OpenFile(excludeFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, openErr := os.OpenFile(excludeFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G304 -- same excludeFile as above, derived from git's own git-common-dir resolution
 	if openErr != nil {
-		log.WarningLog.Printf("[addWorktreeExcludes] open %s: %v", excludeFile, openErr)
+		log.WarningLog().Printf("[addWorktreeExcludes] open %s: %v", excludeFile, openErr)
 		return
 	}
 	defer f.Close()
@@ -342,9 +475,9 @@ func addWorktreeExcludes(worktreePath string) {
 func selfHealWorktreeScaffolding(worktreePath string) {
 	removed, err := git.UntrackScaffolding(worktreePath, git.ScaffoldingExcludePatterns)
 	if err != nil {
-		log.WarningLog.Printf("[selfHealWorktreeScaffolding] untrack in %s: %v", worktreePath, err)
+		log.WarningLog().Printf("[selfHealWorktreeScaffolding] untrack in %s: %v", worktreePath, err)
 	} else if len(removed) > 0 {
-		log.InfoLog.Printf("[selfHealWorktreeScaffolding] auto-untracked previously committed scaffolding file(s) in %s: %v", worktreePath, removed)
+		log.InfoLog().Printf("[selfHealWorktreeScaffolding] auto-untracked previously committed scaffolding file(s) in %s: %v", worktreePath, removed)
 	}
 	addWorktreeExcludes(worktreePath)
 }

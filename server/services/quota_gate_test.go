@@ -700,7 +700,7 @@ func TestReconcile_should_DetectManualOverrideOnlyOnce_When_ExternalStateStaysCh
 
 	// Wait long enough that a re-detection (bug) would produce an observably
 	// later timestamp than a correctly-latched-once one.
-	time.Sleep(2 * time.Millisecond)
+	waitClockPast(t, firstOverrideAt, 2*time.Millisecond)
 	qg.Reconcile(context.Background())
 
 	qg.mu.Lock()

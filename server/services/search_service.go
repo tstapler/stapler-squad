@@ -5,16 +5,16 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/session/vc"
 	"github.com/tstapler/stapler-squad/telemetry"
@@ -124,7 +124,7 @@ func (ss *SearchService) SetInstanceProvider(fn func() []*session.Instance) {
 // cachedBranch returns the current git branch for projectPath, caching the
 // result for branchCacheTTL (60 s). Returns "" on error or detached HEAD.
 // Uses sync.Map for lock-free concurrent reads; git is invoked outside any lock.
-func (ss *SearchService) cachedBranch(projectPath string) string {
+func (ss *SearchService) cachedBranch(ctx context.Context, projectPath string) string {
 	if projectPath == "" {
 		return ""
 	}
@@ -136,15 +136,13 @@ func (ss *SearchService) cachedBranch(projectPath string) string {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	out, err := safeexec.CommandContext(ctx, "git", "-C", projectPath, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	// An error (including a detached or unborn HEAD) leaves branch empty: nothing useful to display.
+	name, err := gitprovider.Backend().CurrentBranch(ctx, backend.Local{Root: backend.RepoRoot(projectPath)})
 	branch := ""
 	if err == nil {
-		branch = strings.TrimSpace(string(out))
-		if branch == "HEAD" {
-			branch = "" // detached HEAD — not useful to display
-		}
+		branch = string(name)
 	}
 
 	ss.branchCache.Store(projectPath, &historyBranchEntry{branch: branch, expiresAt: now.Add(ss.branchCacheTTL)})
@@ -160,7 +158,12 @@ func (ss *SearchService) liveSessionStatus(conversationID string) sessionv1.Sess
 	}
 	for _, inst := range ss.getInstances() {
 		if inst.GetConversationUUID() == conversationID {
-			return adapters.StatusToProto(inst.Status)
+			proto, err := adapters.StatusToProto(inst.Status)
+			if err != nil {
+				log.Error("liveSessionStatus: unrecognized session.Status", "status", int(inst.Status), "err", err)
+				return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
+			}
+			return proto
 		}
 	}
 	return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
@@ -317,20 +320,24 @@ func (ss *SearchService) ListClaudeHistory(
 	protoEntries := make([]*sessionv1.ClaudeHistoryEntry, 0, len(entries))
 	for _, entry := range entries {
 		protoEntries = append(protoEntries, &sessionv1.ClaudeHistoryEntry{
-			Id:            entry.ID,
-			Name:          entry.Name,
-			Project:       entry.Project,
-			CreatedAt:     timestamppb.New(entry.CreatedAt),
-			UpdatedAt:     timestamppb.New(entry.UpdatedAt),
-			Model:         entry.Model,
+			Id:        entry.ID,
+			Name:      entry.Name,
+			Project:   entry.Project,
+			CreatedAt: timestamppb.New(entry.CreatedAt),
+			UpdatedAt: timestamppb.New(entry.UpdatedAt),
+			Model:     entry.Model,
+			// #nosec G115 -- entry.MessageCount is a per-conversation message
+			// count, far below int32 range.
 			MessageCount:  int32(entry.MessageCount),
-			Branch:        ss.cachedBranch(entry.Project),
+			Branch:        ss.cachedBranch(ctx, entry.Project),
 			SessionStatus: ss.liveSessionStatus(entry.ID),
 		})
 	}
 
 	return connect.NewResponse(&sessionv1.ListClaudeHistoryResponse{
-		Entries:       protoEntries,
+		Entries: protoEntries,
+		// #nosec G115 -- totalCount is the number of matching Claude history
+		// entries on disk, far below int32 range.
 		TotalCount:    int32(totalCount),
 		NextPageToken: nextPageToken,
 	}), nil
@@ -388,12 +395,14 @@ func (ss *SearchService) GetClaudeHistoryDetail(
 	}
 
 	protoEntry := &sessionv1.ClaudeHistoryEntry{
-		Id:           entry.ID,
-		Name:         entry.Name,
-		Project:      entry.Project,
-		CreatedAt:    timestamppb.New(entry.CreatedAt),
-		UpdatedAt:    timestamppb.New(entry.UpdatedAt),
-		Model:        entry.Model,
+		Id:        entry.ID,
+		Name:      entry.Name,
+		Project:   entry.Project,
+		CreatedAt: timestamppb.New(entry.CreatedAt),
+		UpdatedAt: timestamppb.New(entry.UpdatedAt),
+		Model:     entry.Model,
+		// #nosec G115 -- entry.MessageCount is a per-conversation message
+		// count, far below int32 range.
 		MessageCount: int32(entry.MessageCount),
 	}
 
@@ -490,7 +499,9 @@ func (ss *SearchService) GetClaudeHistoryMessages(
 	protoMessages := toProtoClaudeMessages(messages)
 
 	return connect.NewResponse(&sessionv1.GetClaudeHistoryMessagesResponse{
-		Messages:   protoMessages,
+		Messages: protoMessages,
+		// #nosec G115 -- totalCount is the message count in one conversation,
+		// far below int32 range.
 		TotalCount: int32(totalCount),
 	}), nil
 }
@@ -534,6 +545,12 @@ func (ss *SearchService) SearchClaudeHistory(
 	syncStart := time.Now()
 	syncResult, err := ss.searchEngine.IncrementalSync(hist)
 	syncDuration := time.Since(syncStart)
+	if err != nil {
+		// IncrementalSync returns a nil result on a failed full rebuild.
+		syncSpan.RecordError(err)
+		syncSpan.End()
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to sync search index: %w", err))
+	}
 	syncSpan.SetAttributes(
 		attribute.Int64("sync.duration_ms", syncDuration.Milliseconds()),
 		attribute.Bool("sync.was_full_rebuild", syncResult.WasFullRebuild),
@@ -541,11 +558,6 @@ func (ss *SearchService) SearchClaudeHistory(
 		attribute.Int("sync.sessions_updated", syncResult.SessionsUpdated),
 		attribute.Int("sync.sessions_removed", syncResult.SessionsRemoved),
 	)
-	if err != nil {
-		syncSpan.RecordError(err)
-		syncSpan.End()
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to sync search index: %w", err))
-	}
 	syncSpan.End()
 
 	if syncResult.HasChanges() || syncResult.WasFullRebuild {
@@ -624,8 +636,10 @@ func (ss *SearchService) SearchClaudeHistory(
 			highlightRanges := make([]*sessionv1.HighlightRange, 0, len(snippet.HighlightRanges))
 			for _, hr := range snippet.HighlightRanges {
 				highlightRanges = append(highlightRanges, &sessionv1.HighlightRange{
+					// #nosec G115 -- Start is a byte offset within one search snippet's text, far below int32 range.
 					Start: int32(hr.Start),
-					End:   int32(hr.End),
+					// #nosec G115 -- see Start above.
+					End: int32(hr.End),
 				})
 			}
 			protoSnippets = append(protoSnippets, &sessionv1.SearchSnippet{
@@ -648,9 +662,11 @@ func (ss *SearchService) SearchClaudeHistory(
 		}
 
 		protoResults = append(protoResults, &sessionv1.SearchResult{
-			SessionId:    result.SessionID,
-			SessionName:  sessionName,
-			Project:      project,
+			SessionId:   result.SessionID,
+			SessionName: sessionName,
+			Project:     project,
+			// #nosec G115 -- MessageIndex is a position within one conversation's
+			// message list, far below int32 range.
 			MessageIndex: int32(result.MessageIndex),
 			Score:        float32(result.Score),
 			Snippets:     protoSnippets,
@@ -666,7 +682,9 @@ func (ss *SearchService) SearchClaudeHistory(
 	protoResults = ss.applyResultPostProcessing(protoResults, req.Msg, hist, requestedLimit, needsPostProcessing)
 
 	return connect.NewResponse(&sessionv1.SearchClaudeHistoryResponse{
-		Results:      protoResults,
+		Results: protoResults,
+		// #nosec G115 -- TotalMatches is the number of search hits across local
+		// Claude history, far below int32 range.
 		TotalMatches: int32(searchResults.TotalMatches),
 		QueryTimeMs:  searchResults.QueryTime.Milliseconds(),
 		HasMore:      searchResults.TotalMatches > offset+len(protoResults),

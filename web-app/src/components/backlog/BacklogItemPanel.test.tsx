@@ -93,6 +93,7 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     skipReviewGate: false,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     planApproved: false,
     acCriteria: [{ index: 0, text: "Do the thing", status: "pending" }],
     linkedSessions: [],

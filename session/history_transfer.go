@@ -19,32 +19,6 @@ import (
 // treat this as an expected, low-severity no-op (log and continue), not a hard failure.
 var ErrNoHistoryAdapter = errors.New("no history adapter resolves for this program")
 
-// ConversationID represents a validated Claude/Antigravity conversation UUID.
-type ConversationID string
-
-// ParseConversationID parses and validates a raw string as a ConversationID.
-func ParseConversationID(s string) (ConversationID, error) {
-	if !isValidUUID(s) {
-		return "", fmt.Errorf("invalid conversation ID format: %q", s)
-	}
-	return ConversationID(s), nil
-}
-
-// WorkspacePath represents a cleaned, resolved workspace root path.
-type WorkspacePath string
-
-// NewWorkspacePath resolves symlinks and cleans a path to guarantee a single canonical representation.
-func NewWorkspacePath(s string) (WorkspacePath, error) {
-	if s == "" {
-		return "", fmt.Errorf("workspace path cannot be empty")
-	}
-	resolved, err := filepath.EvalSymlinks(s)
-	if err != nil {
-		resolved = s
-	}
-	return WorkspacePath(filepath.Clean(resolved)), nil
-}
-
 // PortSessionHistory translates and syncs history between Claude Code and Antigravity CLI.
 func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *Instance) error {
 	srcAdapter := resolveHistoryAdapter(oldProgram)
@@ -96,18 +70,20 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 				log.Warn("PortSessionHistory: failed to marshal agy history entry", "error", marshalErr)
 				return marshalErr
 			}
-			if f, err := os.OpenFile(agyHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+			if f, err := os.OpenFile(agyHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600); err == nil { // #nosec G304 -- agyHistoryPath is home dir + hardcoded constant components only
 				if _, werr := f.Write(historyData); werr != nil {
-					f.Close()
+					_ = f.Close()
 					log.Warn("PortSessionHistory: failed to write agy history data", "error", werr)
 					return werr
 				}
 				if _, werr := f.Write([]byte("\n")); werr != nil {
-					f.Close()
+					_ = f.Close()
 					log.Warn("PortSessionHistory: failed to write agy history newline", "error", werr)
 					return werr
 				}
-				f.Close()
+				if err := f.Close(); err != nil {
+					log.Warn("PortSessionHistory: failed to close agy history file", "error", err)
+				}
 			}
 		}
 	} else if dstAdapter.Name() == "claude" {
@@ -126,22 +102,43 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 				log.Warn("PortSessionHistory: failed to marshal claude history entry", "error", marshalErr)
 				return marshalErr
 			}
-			if hf, err := os.OpenFile(claudeHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+			if hf, err := os.OpenFile(claudeHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600); err == nil { // #nosec G304 -- claudeHistoryPath is home dir + hardcoded constant components only
 				if _, werr := hf.Write(historyData); werr != nil {
-					hf.Close()
+					_ = hf.Close()
 					log.Warn("PortSessionHistory: failed to write claude history data", "error", werr)
 					return werr
 				}
 				if _, werr := hf.Write([]byte("\n")); werr != nil {
-					hf.Close()
+					_ = hf.Close()
 					log.Warn("PortSessionHistory: failed to write claude history newline", "error", werr)
 					return werr
 				}
-				hf.Close()
+				if err := hf.Close(); err != nil {
+					log.Warn("PortSessionHistory: failed to close claude history file", "error", err)
+				}
 			}
 		}
 
 		// Update Claude session data on the Instance
+		i.claudeSessionMu.Lock()
+		if i.claudeSession == nil {
+			i.claudeSession = &ClaudeSessionData{}
+		}
+		i.claudeSession.ConversationUUID = uuidStr
+		i.claudeSession.ProjectName = i.Title
+		i.claudeSession.LastAttached = time.Now()
+		if i.claudeSession.Metadata == nil {
+			i.claudeSession.Metadata = make(map[string]string)
+		}
+		i.claudeSession.Metadata["working_dir"] = workspace
+		cb := i.claudeSessionIDSavedCallback
+		i.claudeSessionMu.Unlock()
+
+		if cb != nil {
+			cb()
+		}
+	} else if dstAdapter.Name() == "opencode" {
+		uuidStr = i.GetClaudeConversationUUID()
 		i.claudeSessionMu.Lock()
 		if i.claudeSession == nil {
 			i.claudeSession = &ClaudeSessionData{}

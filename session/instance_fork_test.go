@@ -169,7 +169,7 @@ func TestForkFromCheckpoint_ForkedFileHasCorrectContent(t *testing.T) {
 		Title:           "src-session",
 		Path:            t.TempDir(),
 		HistoryFilePath: historyFile,
-		claudeSession:   &ClaudeSessionData{ConversationUUID: "conv-real"},
+		claudeExtension: claudeExtension{claudeSession: &ClaudeSessionData{ConversationUUID: "conv-real"}},
 	}
 	srcInst.started.Store(true)
 

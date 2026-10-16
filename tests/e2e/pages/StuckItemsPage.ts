@@ -3,7 +3,7 @@ import { APIRequestContext, Page, Locator } from "@playwright/test";
 const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
 
 /**
- * Page object for the "Stuck Backlog Items" section on /unfinished
+ * Page object for the "Stuck Backlog Items" section on the /unfinished Stuck tab
  * (backlog-stuck-item-visibility, Epic 4.1).
  */
 export class StuckItemsPage {
@@ -30,7 +30,8 @@ export class StuckItemsPage {
   }
 
   async goto() {
-    await this.page.goto(`${BASE_URL}/unfinished`, { waitUntil: "domcontentloaded" });
+    // Stuck items live on the Stuck tab, which is not the default (PRs).
+    await this.page.goto(`${BASE_URL}/unfinished?tab=stuck`, { waitUntil: "domcontentloaded" });
     await this.page.waitForSelector('[data-testid="stuck-items-section"]', { timeout: 15000 });
   }
 
@@ -50,6 +51,22 @@ export class StuckItemsPage {
 
   navBadge(): Locator {
     return this.page.getByTestId("stuck-nav-badge");
+  }
+}
+
+const seededItemIds: string[] = [];
+
+/** Deletes every item seeded since the last call so tests sharing one server don't see each other's rows. */
+export async function deleteSeededStuckItems(request: APIRequestContext): Promise<void> {
+  for (const itemId of seededItemIds.splice(0)) {
+    const resp = await request.post(`${BASE_URL}/api/session.v1.BacklogService/DeleteBacklogItem`, {
+      headers: { "Content-Type": "application/json" },
+      data: { itemId },
+    });
+    // 404 = backlog feature disabled by the test itself; its rows are not served while disabled.
+    if (!resp.ok() && resp.status() !== 404) {
+      throw new Error(`deleteSeededStuckItems failed for ${itemId} (${resp.status()}): ${await resp.text().catch(() => "")}`);
+    }
   }
 }
 
@@ -104,6 +121,7 @@ export async function seedStuckItem(
     );
   }
   const body = (await resp.json()) as { itemId: string };
+  seededItemIds.push(body.itemId);
   return body.itemId;
 }
 

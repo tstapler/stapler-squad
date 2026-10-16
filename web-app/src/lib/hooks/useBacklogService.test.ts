@@ -20,8 +20,15 @@
  */
 import { create } from "@bufbuild/protobuf";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
+import { renderHook, waitFor } from "@testing-library/react";
 import { BacklogItemSchema, ItemSessionSchema, TriageResultSchema } from "@/gen/session/v1/backlog_pb";
-import { mapBacklogItem } from "./useBacklogService";
+import { mapBacklogItem, useBacklogSessionIndex } from "./useBacklogService";
+
+const mockGetSessionBacklogIndex = jest.fn();
+jest.mock("@connectrpc/connect", () => ({
+  createClient: () => ({ getSessionBacklogIndex: mockGetSessionBacklogIndex }),
+}));
+jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));
 
 describe("mapBacklogItem triageStatus derivation", () => {
   it("mapBacklogItem_should_LeaveTriageStatusUndefined_When_NoTriageSessionExists", () => {
@@ -249,5 +256,34 @@ describe("mapItemSession telemetry field mapping (mapBacklogItem.linkedSessions)
 
     expect(session.lastCommitAt).toBeUndefined();
     expect(session.lastFileTouchAt).toBe(lastFileTouchAt.toISOString());
+  });
+});
+
+describe("useBacklogSessionIndex dedup reducer", () => {
+  beforeEach(() => {
+    mockGetSessionBacklogIndex.mockReset();
+  });
+
+  it("useBacklogSessionIndex_should_KeepFirstSeenEntry_When_SessionUuidReparentedFromTriageToWork", async () => {
+    // Entries arrive newest-first; a session re-parented from triage -> work should
+    // resolve to the newer "work" entry, not the stale "triage" one.
+    mockGetSessionBacklogIndex.mockResolvedValue({
+      entries: [
+        { sessionUuid: "uuid-1", itemId: "item-2", itemTitle: "Second item", itemStatus: "in_progress", sessionRole: "work" },
+        { sessionUuid: "uuid-1", itemId: "item-1", itemTitle: "First item", itemStatus: "done", sessionRole: "triage" },
+      ],
+    });
+
+    const { result } = renderHook(() => useBacklogSessionIndex());
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.index.size).toBe(1);
+    expect(result.current.index.get("uuid-1")).toEqual({
+      itemId: "item-2",
+      itemTitle: "Second item",
+      itemStatus: "in_progress",
+      sessionRole: "work",
+    });
   });
 });

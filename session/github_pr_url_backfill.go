@@ -67,16 +67,16 @@ func runGitHubPRURLBackfill(ctx context.Context, er *EntRepository) error {
 		if _, saveErr := er.client.Session.UpdateOneID(row.ID).
 			SetGithubPrURL(url).
 			Save(ctx); saveErr != nil {
-			log.WarningLog.Printf("[Migration] github pr url backfill: session=%d: %v", row.ID, saveErr)
+			log.WarningLog().Printf("[Migration] github pr url backfill: session=%d: %v", row.ID, saveErr)
 			continue
 		}
 		migrated++
 	}
 	if migrated > 0 {
-		log.InfoLog.Printf("[Migration] github pr url backfill: populated %d row(s)", migrated)
+		log.InfoLog().Printf("[Migration] github pr url backfill: populated %d row(s)", migrated)
 	}
 	if skipped > 0 {
-		log.InfoLog.Printf("[Migration] github pr url backfill: skipped %d row(s) with unrecoverable host", skipped)
+		log.InfoLog().Printf("[Migration] github pr url backfill: skipped %d row(s) with unrecoverable host", skipped)
 	}
 	return nil
 }

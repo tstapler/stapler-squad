@@ -17,6 +17,14 @@ type SearchEngine struct {
 	indexStore   *IndexStore
 	syncMetadata *IndexSyncMetadata
 	mu           sync.RWMutex
+
+	// lazyLoad defers the persisted-index decode (hundreds of MB of gob) from
+	// startup to the first method that touches the index. Every method that
+	// reads or writes index state calls ensureLoaded first, so a SaveIndex can
+	// never overwrite the persisted index with an unloaded, empty one.
+	lazyLoad     bool
+	lazyLoadOnce sync.Once
+	onLazyLoad   func(meta *IndexSyncMetadata, err error)
 }
 
 // SearchOptions configures search behavior.
@@ -79,9 +87,43 @@ func NewSearchEngineWithPersistence(indexStore *IndexStore) *SearchEngine {
 	return engine
 }
 
+// EnableLazyLoad makes the engine load its persisted index on first use instead
+// of at startup. onLoad, if non-nil, receives the load error and the loaded
+// sync metadata (both nil when there is no persisted index); it runs inside the
+// load, so it must not call back into the engine. Must be called before the
+// engine is shared.
+func (e *SearchEngine) EnableLazyLoad(onLoad func(meta *IndexSyncMetadata, err error)) {
+	e.lazyLoad = true
+	e.onLazyLoad = onLoad
+}
+
+// ensureLoaded performs the deferred load at most once. Call it before taking
+// e.mu: the load acquires the write lock itself.
+func (e *SearchEngine) ensureLoaded() {
+	if !e.lazyLoad {
+		return
+	}
+	e.lazyLoadOnce.Do(func() {
+		err := e.loadIndexFromDisk()
+		if e.onLazyLoad != nil {
+			e.mu.RLock()
+			meta := e.syncMetadata
+			e.mu.RUnlock()
+			e.onLazyLoad(meta, err)
+		}
+	})
+}
+
+// markLoaded records that the persisted index no longer needs loading (the
+// caller is about to replace the whole index).
+func (e *SearchEngine) markLoaded() {
+	e.lazyLoadOnce.Do(func() {})
+}
+
 // BuildIndex indexes all messages from the provided history.
 // This replaces any existing index.
 func (e *SearchEngine) BuildIndex(history *session.ClaudeSessionHistory) error {
+	e.ensureLoaded()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -125,6 +167,7 @@ func (e *SearchEngine) BuildIndex(history *session.ClaudeSessionHistory) error {
 			tokenPositions := e.tokenizer.TokenizeWithPositions(msg.Content)
 			positions := make(map[string][]int32)
 			for _, tp := range tokenPositions {
+				// #nosec G115 -- tp.Start is a byte offset into a single chat/scrollback message string; reaching 2^31 would require a single message over 2GB, far beyond any realistic message size
 				positions[tp.Token] = append(positions[tp.Token], int32(tp.Start))
 			}
 
@@ -149,6 +192,7 @@ func (e *SearchEngine) BuildIndex(history *session.ClaudeSessionHistory) error {
 // IndexMessage adds a single message to the index.
 // Use for incremental updates when new messages arrive.
 func (e *SearchEngine) IndexMessage(sessionID string, msgIdx int, role, content string, timestamp time.Time) error {
+	e.ensureLoaded()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -175,6 +219,7 @@ func (e *SearchEngine) IndexMessage(sessionID string, msgIdx int, role, content 
 	tokenPositions := e.tokenizer.TokenizeWithPositions(content)
 	positions := make(map[string][]int32)
 	for _, tp := range tokenPositions {
+		// #nosec G115 -- tp.Start is a byte offset into a single chat/scrollback message string; reaching 2^31 would require a single message over 2GB, far beyond any realistic message size
 		positions[tp.Token] = append(positions[tp.Token], int32(tp.Start))
 	}
 
@@ -189,6 +234,7 @@ func (e *SearchEngine) IndexMessage(sessionID string, msgIdx int, role, content 
 
 // Search performs a full-text search on the indexed messages.
 func (e *SearchEngine) Search(query string, opts SearchOptions) (*SearchResults, error) {
+	e.ensureLoaded()
 	startTime := time.Now()
 
 	e.mu.RLock()
@@ -261,6 +307,11 @@ func (e *SearchEngine) Search(query string, opts SearchOptions) (*SearchResults,
 // LoadIndex loads a previously persisted index from disk.
 // Also loads sync metadata if available.
 func (e *SearchEngine) LoadIndex() error {
+	e.markLoaded() // an explicit load supersedes any pending lazy load
+	return e.loadIndexFromDisk()
+}
+
+func (e *SearchEngine) loadIndexFromDisk() error {
 	if e.indexStore == nil {
 		return nil
 	}
@@ -294,6 +345,7 @@ func (e *SearchEngine) LoadIndex() error {
 
 // SaveIndex persists the current index to disk.
 func (e *SearchEngine) SaveIndex() error {
+	e.ensureLoaded()
 	if e.indexStore == nil {
 		return nil
 	}
@@ -306,6 +358,7 @@ func (e *SearchEngine) SaveIndex() error {
 
 // GetStats returns statistics about the search engine.
 func (e *SearchEngine) GetStats() SearchEngineStats {
+	e.ensureLoaded()
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
@@ -334,6 +387,7 @@ type SearchEngineStats struct {
 
 // Clear removes all indexed data.
 func (e *SearchEngine) Clear() {
+	e.markLoaded()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -344,6 +398,7 @@ func (e *SearchEngine) Clear() {
 
 // RemoveSession removes all documents from a session.
 func (e *SearchEngine) RemoveSession(sessionID string) {
+	e.ensureLoaded()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -364,6 +419,7 @@ func (e *SearchEngine) RemoveSession(sessionID string) {
 
 // HasSession returns true if the session is indexed.
 func (e *SearchEngine) HasSession(sessionID string) bool {
+	e.ensureLoaded()
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
@@ -372,6 +428,7 @@ func (e *SearchEngine) HasSession(sessionID string) bool {
 
 // GetDocument returns a document by its ID.
 func (e *SearchEngine) GetDocument(docID int32) *Document {
+	e.ensureLoaded()
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
@@ -380,11 +437,13 @@ func (e *SearchEngine) GetDocument(docID int32) *Document {
 
 // GetIndex returns the underlying inverted index (for advanced usage).
 func (e *SearchEngine) GetIndex() *InvertedIndex {
+	e.ensureLoaded()
 	return e.index
 }
 
 // GetDocStore returns the underlying document store (for advanced usage).
 func (e *SearchEngine) GetDocStore() *DocumentStore {
+	e.ensureLoaded()
 	return e.docStore
 }
 
@@ -397,6 +456,7 @@ func (e *SearchEngine) GetTokenizer() *Tokenizer {
 // It only indexes new/modified sessions and removes deleted ones.
 // On first run or when metadata is missing, falls back to full rebuild.
 func (e *SearchEngine) IncrementalSync(history *session.ClaudeSessionHistory) (*SyncResult, error) {
+	e.ensureLoaded()
 	startTime := time.Now()
 	result := &SyncResult{}
 
@@ -561,6 +621,7 @@ func (e *SearchEngine) indexSessionLocked(history *session.ClaudeSessionHistory,
 		tokenPositions := e.tokenizer.TokenizeWithPositions(msg.Content)
 		positions := make(map[string][]int32)
 		for _, tp := range tokenPositions {
+			// #nosec G115 -- tp.Start is a byte offset into a single chat/scrollback message string; reaching 2^31 would require a single message over 2GB, far beyond any realistic message size
 			positions[tp.Token] = append(positions[tp.Token], int32(tp.Start))
 		}
 
@@ -584,6 +645,7 @@ func (e *SearchEngine) removeSessionLocked(sessionID string) {
 // ShouldRebuild returns true if a full rebuild is recommended.
 // This happens when: no sync metadata, version mismatch, or corruption.
 func (e *SearchEngine) ShouldRebuild() bool {
+	e.ensureLoaded()
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.ShouldRebuildLocked()
@@ -658,6 +720,7 @@ func (e *SearchEngine) buildIndexLocked(history *session.ClaudeSessionHistory) e
 
 // LoadSyncMetadata loads persisted sync metadata from the index store.
 func (e *SearchEngine) LoadSyncMetadata() error {
+	e.ensureLoaded()
 	if e.indexStore == nil {
 		return nil
 	}
@@ -675,6 +738,7 @@ func (e *SearchEngine) LoadSyncMetadata() error {
 
 // SaveSyncMetadata persists current sync metadata to disk.
 func (e *SearchEngine) SaveSyncMetadata() error {
+	e.ensureLoaded()
 	if e.indexStore == nil || e.syncMetadata == nil {
 		return nil
 	}
@@ -687,6 +751,7 @@ func (e *SearchEngine) SaveSyncMetadata() error {
 
 // GetSyncMetadata returns the current sync metadata (for inspection).
 func (e *SearchEngine) GetSyncMetadata() *IndexSyncMetadata {
+	e.ensureLoaded()
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.syncMetadata

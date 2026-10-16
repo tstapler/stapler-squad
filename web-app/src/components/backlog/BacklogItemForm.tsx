@@ -13,13 +13,12 @@ import { RadioGroup } from "@/components/ui/RadioGroup";
 import type { RadioGroupOption } from "@/components/ui/RadioGroup";
 import { radioBtn, radioBtnActive } from "@/components/ui/RadioGroup.css";
 import { isGitHubRef } from "@/lib/github/urlParser";
-import { getApiBaseUrl } from "@/lib/config";
+import { useGitHubEnterpriseHosts } from "@/lib/hooks/useGitHubEnterpriseHosts";
+import { useBacklogImageAttachment } from "@/lib/hooks/useBacklogImageAttachment";
 import { routes } from "@/lib/routes";
 import { BACKLOG_CATEGORIES, CATEGORY_DEFAULTS } from "@/lib/backlog/categoryDefaults";
 import * as styles from "./BacklogItemForm.css";
 import * as markdownStyles from "./markdownBody.css";
-
-const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB — matches server-side cap
 
 // The 9 content-template fields on PipelineMode — used to detect whether the
 // selected mode's rendered content depends on {{repo_path}} (G-1).
@@ -68,12 +67,15 @@ interface BacklogItemFormProps {
   onSubmit: (data: BacklogItemInput) => Promise<void>;
   onCancel: () => void;
   isLoading?: boolean;
+  /** Repo path inferred by the intent parser; shows a dismissible "suggested" chip while repoPath still equals it. */
+  autoSuggestedRepoPath?: string;
 }
 
 interface FormErrors {
   title?: string;
   repoPath?: string;
   acCriteria?: string;
+  costBudgetThreshold?: string;
 }
 
 const AC_STATUS_OPTIONS: { value: AcCriterionStatus; label: string }[] = [
@@ -87,31 +89,59 @@ export function BacklogItemForm({
   onSubmit,
   onCancel,
   isLoading = false,
+  autoSuggestedRepoPath,
 }: BacklogItemFormProps) {
   const [title, setTitle] = useState(initialValues?.title ?? "");
   const [description, setDescription] = useState(initialValues?.description ?? "");
   const [repoPath, setRepoPath] = useState(initialValues?.repoPath ?? "");
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false);
   const [priority, setPriority] = useState<number>(initialValues?.priority ?? 3);
   const [skipPlanning, setSkipPlanning] = useState(initialValues?.skipPlanning ?? false);
   const [skipReviewGate, setSkipReviewGate] = useState(initialValues?.skipReviewGate ?? false);
   const [autoSpawnSession, setAutoSpawnSession] = useState(initialValues?.autoSpawnSession ?? false);
   const [autoCreatePR, setAutoCreatePR] = useState(initialValues?.autoCreatePR ?? false);
+  const [autoApprovePlan, setAutoApprovePlan] = useState(initialValues?.autoApprovePlan ?? false);
   const [acCriteria, setAcCriteria] = useState<AcCriterion[]>(
     initialValues?.acCriteria ?? []
   );
   const [pipelineMode, setPipelineMode] = useState(initialValues?.pipelineMode ?? "");
   const [category, setCategory] = useState(initialValues?.category ?? "");
+  const [costBudgetThreshold, setCostBudgetThreshold] = useState(
+    initialValues?.costBudgetThresholdUsd !== undefined ? String(initialValues.costBudgetThresholdUsd) : ""
+  );
+  // Same presence-gating rationale as categoryTouchedRef above: only send
+  // cost_budget_threshold_usd on an existing item's Update when the operator
+  // actually touched this session's input, so a possibly-stale
+  // initialValues.costBudgetThresholdUsd never overwrites the item's real
+  // stored threshold with itself (a no-op resend is harmless, but resending a
+  // stale value is not).
+  const costBudgetThresholdTouchedRef = useRef(false);
   // Guards the one-shot SDD default pre-selection below from ever re-firing
   // after either the user has manually touched the selector, or the
   // pre-selection has already applied once — see handlePipelineModeChange
   // and the effect below.
   const pipelineModeTouchedRef = useRef(!!initialValues?.id);
+  // Edit-mode-only guard against submitting a stale `category` (see
+  // handleCategoryChange and handleSubmit below): initialValues.category can
+  // lag the item's real, server-side category if the caller passed a
+  // not-yet-reconciled snapshot (BacklogItemDetail.tsx's `item` can be
+  // populated from the shared live-item store before its own authoritative
+  // fetch resolves). Only an explicit click on the category selector — never
+  // this state's initial mount value — sets this true.
+  const categoryTouchedRef = useRef(false);
   const [errors, setErrors] = useState<FormErrors>({});
   const [submitting, setSubmitting] = useState(false);
   const [descriptionTab, setDescriptionTab] = useState<"write" | "preview">("write");
-  const [attachmentError, setAttachmentError] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
   const descriptionRef = useRef<HTMLTextAreaElement>(null);
+  const {
+    error: attachmentError,
+    uploading,
+    onFileInputChange: handleFileInputChange,
+    onPaste: handleDescriptionPaste,
+  } = useBacklogImageAttachment({
+    textareaRef: descriptionRef,
+    setValue: setDescription,
+  });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { listPipelineModes } = useBacklogService();
@@ -200,6 +230,7 @@ export function BacklogItemForm({
   // are intentionally left untouched.
   const handleCategoryChange = useCallback(
     (value: string) => {
+      categoryTouchedRef.current = true;
       setCategory(value);
       if (initialValues?.id) return;
       const defaults = CATEGORY_DEFAULTS[value];
@@ -208,6 +239,7 @@ export function BacklogItemForm({
       setSkipPlanning(defaults.skipPlanning);
       setAutoSpawnSession(defaults.autoSpawnSession);
       setAutoCreatePR(defaults.autoCreatePR);
+      setAutoApprovePlan(defaults.autoApprovePlan);
       pipelineModeTouchedRef.current = true;
       setPipelineMode(defaults.pipelineMode);
     },
@@ -295,8 +327,15 @@ export function BacklogItemForm({
     if (!initialValues?.id && !repoPath.trim()) {
       errs.repoPath = "Repository path is required for automated triage.";
     }
+    const trimmedThreshold = costBudgetThreshold.trim();
+    if (trimmedThreshold !== "") {
+      const parsed = Number(trimmedThreshold);
+      if (isNaN(parsed) || parsed < 0) {
+        errs.costBudgetThreshold = "Budget threshold must be zero or greater.";
+      }
+    }
     return errs;
-  }, [title, repoPath, initialValues?.id]);
+  }, [title, repoPath, initialValues?.id, costBudgetThreshold]);
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -312,6 +351,32 @@ export function BacklogItemForm({
         // Evaluate vagueness before submitting: short description + no AC = vague
         const descriptionText = description.trim();
         const isVague = descriptionText.length < 80 && acCriteria.length === 0;
+        // On an existing item, only send `category` if the user actually
+        // touched the selector this session. `category`'s local state is
+        // seeded once from initialValues.category at mount, which can be
+        // stale (see categoryTouchedRef's comment above); omitting an
+        // untouched field lets the server's presence-gated partial-update
+        // semantics (session.v1.UpdateBacklogItemRequest.category is an
+        // `optional string`) leave the item's real, already-stored category
+        // — and thus whatever automation profile it implies — untouched,
+        // instead of silently overwriting it with a possibly-wrong value on
+        // every save. Create mode has no existing value to protect, so it
+        // always sends the current selection (including "" for
+        // Uncategorized).
+        const categoryForSubmit =
+          !initialValues?.id || categoryTouchedRef.current ? category : undefined;
+        // Same "only send if touched (or creating)" gating as categoryForSubmit
+        // above — see costBudgetThresholdTouchedRef's comment. An empty input
+        // is sent as `undefined` (omitted from the request), which the server
+        // treats as "leave the existing threshold untouched," not "clear it" —
+        // this control cannot yet clear an already-configured threshold back
+        // to unset, only set or change it (same limitation reworkCapOverride's
+        // single-pointer-presence convention already has for its own sentinel
+        // value).
+        const trimmedThreshold = costBudgetThreshold.trim();
+        const parsedThreshold = trimmedThreshold === "" ? undefined : Number(trimmedThreshold);
+        const costBudgetThresholdForSubmit =
+          !initialValues?.id || costBudgetThresholdTouchedRef.current ? parsedThreshold : undefined;
         await onSubmit({
           title: title.trim(),
           description: descriptionText || undefined,
@@ -321,16 +386,35 @@ export function BacklogItemForm({
           skipReviewGate,
           autoSpawnSession,
           autoCreatePR,
+          autoApprovePlan,
           acCriteria: acCriteria.map((c, i) => ({ ...c, index: i })),
           skipTriage: isVague,
           pipelineMode,
-          category,
+          category: categoryForSubmit,
+          costBudgetThresholdUsd: costBudgetThresholdForSubmit,
         });
       } finally {
         setSubmitting(false);
       }
     },
-    [title, description, repoPath, priority, skipPlanning, skipReviewGate, autoSpawnSession, autoCreatePR, acCriteria, pipelineMode, category, onSubmit, validate]
+    [
+      title,
+      description,
+      repoPath,
+      priority,
+      skipPlanning,
+      skipReviewGate,
+      autoSpawnSession,
+      autoCreatePR,
+      autoApprovePlan,
+      acCriteria,
+      pipelineMode,
+      category,
+      costBudgetThreshold,
+      initialValues?.id,
+      onSubmit,
+      validate,
+    ]
   );
 
   const addCriterion = useCallback(() => {
@@ -356,84 +440,12 @@ export function BacklogItemForm({
     );
   }, []);
 
-  // Uploads a single image and inserts a markdown image reference at the cursor.
-  // ponytail: cursor position is captured once at upload start, so two uploads
-  // fired back-to-back can land at a stale offset relative to each other —
-  // acceptable for the rare double-paste case; revisit with an insertion-token
-  // queue if that turns out to matter in practice.
-  const uploadAttachment = useCallback(
-    async (file: File) => {
-      if (!file.type.startsWith("image/")) {
-        setAttachmentError("Only image files can be attached.");
-        return;
-      }
-      if (file.size > MAX_ATTACHMENT_BYTES) {
-        setAttachmentError("Image is too large (max 10 MB).");
-        return;
-      }
-      const el = descriptionRef.current;
-      const start = el?.selectionStart ?? description.length;
-      const end = el?.selectionEnd ?? description.length;
-      setAttachmentError(null);
-      setUploading(true);
-      try {
-        const formData = new FormData();
-        formData.append("file", file);
-        const resp = await fetch(`${getApiBaseUrl()}/v1/upload-backlog-attachment`, {
-          method: "POST",
-          body: formData,
-        });
-        if (!resp.ok) {
-          const msg =
-            resp.status === 413
-              ? "Image is too large (max 10 MB)."
-              : resp.status === 415
-                ? "Unsupported image type — use PNG, JPEG, GIF, or WebP."
-                : "Upload failed.";
-          setAttachmentError(msg);
-          return;
-        }
-        const data = (await resp.json()) as { path: string; filename: string };
-        const url = encodeURI(`/api/local/serve${data.path}`);
-        const markdown = `![${data.filename}](${url})`;
-        setDescription((prev) => prev.slice(0, start) + markdown + prev.slice(end));
-        requestAnimationFrame(() => {
-          el?.focus();
-          const pos = start + markdown.length;
-          el?.setSelectionRange(pos, pos);
-        });
-      } catch {
-        setAttachmentError("Network error — upload failed.");
-      } finally {
-        setUploading(false);
-      }
-    },
-    [description.length]
-  );
-
-  const handleFileInputChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      e.target.value = "";
-      if (file) void uploadAttachment(file);
-    },
-    [uploadAttachment]
-  );
-
-  const handleDescriptionPaste = useCallback(
-    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-      const item = Array.from(e.clipboardData.items).find((i) => i.type.startsWith("image/"));
-      if (!item) return;
-      const file = item.getAsFile();
-      if (!file) return;
-      e.preventDefault();
-      void uploadAttachment(file);
-    },
-    [uploadAttachment]
-  );
-
   const busy = submitting || isLoading;
-  const isCloningRepo = useMemo(() => isGitHubRef(repoPath), [repoPath]);
+  const { hosts: enterpriseHosts } = useGitHubEnterpriseHosts();
+  const isCloningRepo = useMemo(
+    () => isGitHubRef(repoPath, enterpriseHosts),
+    [repoPath, enterpriseHosts]
+  );
 
   return (
     <form
@@ -565,6 +577,25 @@ export function BacklogItemForm({
             detectGitHubUrl
             data-testid="backlog-repo-path-input"
           />
+          {autoSuggestedRepoPath && !suggestionDismissed && repoPath === autoSuggestedRepoPath && (
+            <span className={styles.repoSuggestionChip} data-testid="repo-suggestion-chip">
+              Suggested from your sessions
+              <button
+                type="button"
+                className={styles.repoSuggestionDismiss}
+                data-testid="repo-suggestion-dismiss"
+                aria-label="Dismiss suggested repository"
+                disabled={busy}
+                onClick={() => {
+                  setSuggestionDismissed(true);
+                  setRepoPath("");
+                  document.getElementById("backlog-repo-path")?.focus();
+                }}
+              >
+                <span aria-hidden="true">✕</span>
+              </button>
+            </span>
+          )}
           {errors.repoPath && (
             <span id="backlog-repo-path-error" className={styles.errorMessage} role="alert">
               {errors.repoPath}
@@ -626,6 +657,39 @@ export function BacklogItemForm({
             <Link href={routes.settingsPipelineModes} className={styles.pipelineModeEmptyHintLink}>
               Create one in Settings →
             </Link>
+          </span>
+        )}
+      </div>
+
+      {/* Per-item soft budget warning threshold (Epic 5.3, design/ux.md Surface D2) */}
+      <div className={styles.fieldGroup}>
+        <label htmlFor="backlog-cost-budget-threshold" className={styles.label}>
+          Budget threshold (USD)
+        </label>
+        <input
+          id="backlog-cost-budget-threshold"
+          type="number"
+          min="0"
+          step="0.01"
+          className={styles.input}
+          value={costBudgetThreshold}
+          onChange={(e) => {
+            costBudgetThresholdTouchedRef.current = true;
+            setCostBudgetThreshold(e.target.value);
+          }}
+          placeholder="No threshold configured"
+          aria-label="Budget threshold in USD for this item"
+          aria-invalid={!!errors.costBudgetThreshold}
+          aria-describedby={errors.costBudgetThreshold ? "backlog-cost-budget-threshold-error" : undefined}
+          disabled={busy}
+          data-testid="backlog-cost-budget-threshold-input"
+        />
+        <span className={styles.checkboxHint}>
+          Show a warning banner on this item once its total cost reaches this amount. Leave blank for no budget tracking.
+        </span>
+        {errors.costBudgetThreshold && (
+          <span id="backlog-cost-budget-threshold-error" className={styles.errorMessage} role="alert">
+            {errors.costBudgetThreshold}
           </span>
         )}
       </div>
@@ -703,6 +767,24 @@ export function BacklogItemForm({
             </label>
             <span className={styles.checkboxHint}>
               Skip the manual Review Queue &quot;Create PR&quot; click — a PR is opened automatically once a work session finishes. The prompt still runs unattended, so review the diff before merging.
+            </span>
+          </div>
+
+          <div className={styles.fieldGroup}>
+            <label className={styles.checkboxRow} htmlFor="backlog-auto-approve-plan">
+              <input
+                id="backlog-auto-approve-plan"
+                type="checkbox"
+                className={styles.checkboxInput}
+                checked={autoApprovePlan}
+                onChange={(e) => setAutoApprovePlan(e.target.checked)}
+                disabled={busy}
+                data-testid="backlog-auto-approve-plan-checkbox"
+              />
+              <span className={styles.checkboxLabel}>Auto-approve plan</span>
+            </label>
+            <span className={styles.checkboxHint}>
+              Skip the manual &quot;Approve Plan&quot; click — a plan produced by triage is approved automatically and moves straight to implementation. Review the plan afterward instead of before.
             </span>
           </div>
         </div>

@@ -2,30 +2,51 @@
 
 import { useEffect, useRef, useCallback, useState } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getWatchTransport } from "@/lib/api/transport";
 import { GitHubUserService } from "@/gen/session/v1/github_user_pb";
 import {
   WatchUserPRsRequestSchema,
+  type AccountPollStatus,
   type GitHubAuthState,
 } from "@/gen/session/v1/github_user_pb";
 import { type UserPR } from "@/gen/session/v1/types_pb";
 import { create } from "@bufbuild/protobuf";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 
 export interface UseGitHubPRsReturn {
   prs: UserPR[];
   authState: GitHubAuthState | undefined;
+  /** Per-account outcome of the latest poll; empty until the first event. */
+  accountStatuses: AccountPollStatus[];
+  /** Epoch ms of the last event received; undefined before the first. */
+  lastUpdatedAt: number | undefined;
+  /** Set when the stream failed; `prs` keeps the last snapshot. Cleared by the next event. */
+  error: string | undefined;
+  /** A user-requested refresh is in flight (cleared by the next event or error). */
+  refreshing: boolean;
   refresh: () => void;
 }
+
+export interface UseGitHubPRsOptions {
+  /** Injected clock for `lastUpdatedAt` (tests). */
+  now?: () => number;
+}
+
+const RECONNECT_DELAY_MS = 5000;
 
 /**
  * Subscribes to WatchUserPRs server-streaming RPC.
  * Replaces the full PR list on each snapshot event.
  * Reconnects automatically on disconnect.
  */
-export function useGitHubPRs(): UseGitHubPRsReturn {
+export function useGitHubPRs({ now = Date.now }: UseGitHubPRsOptions = {}): UseGitHubPRsReturn {
   const [prs, setPrs] = useState<UserPR[]>([]);
   const [authState, setAuthState] = useState<GitHubAuthState | undefined>(undefined);
+  const [accountStatuses, setAccountStatuses] = useState<AccountPollStatus[]>([]);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | undefined>(undefined);
+  const [error, setError] = useState<string | undefined>(undefined);
+  const [refreshing, setRefreshing] = useState(false);
+  const nowRef = useRef(now);
+  nowRef.current = now;
 
   const abortRef = useRef<AbortController | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -35,11 +56,7 @@ export function useGitHubPRs(): UseGitHubPRsReturn {
     const abort = new AbortController();
     abortRef.current = abort;
 
-    const transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-      interceptors: [createAuthInterceptor()],
-    });
-    const client = createClient(GitHubUserService, transport);
+    const client = createClient(GitHubUserService, getWatchTransport());
 
     (async () => {
       try {
@@ -48,13 +65,21 @@ export function useGitHubPRs(): UseGitHubPRsReturn {
         for await (const event of stream) {
           if (abort.signal.aborted) break;
           if (event.authState) setAuthState(event.authState);
+          if (event.eventType === "snapshot" || event.accountStatuses.length > 0) {
+            setAccountStatuses(event.accountStatuses);
+          }
           setPrs(event.prs);
+          setLastUpdatedAt(nowRef.current());
+          setError(undefined);
+          setRefreshing(false);
         }
-      } catch {
+      } catch (err) {
         if (abort.signal.aborted) return;
+        setError(err instanceof Error ? err.message : String(err));
+        setRefreshing(false);
         reconnectTimerRef.current = setTimeout(() => {
           if (!abort.signal.aborted) startWatch();
-        }, 5000);
+        }, RECONNECT_DELAY_MS);
       }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -68,5 +93,10 @@ export function useGitHubPRs(): UseGitHubPRsReturn {
     };
   }, [startWatch]);
 
-  return { prs, authState, refresh: startWatch };
+  const refresh = useCallback(() => {
+    setRefreshing(true);
+    startWatch();
+  }, [startWatch]);
+
+  return { prs, authState, accountStatuses, lastUpdatedAt, error, refreshing, refresh };
 }

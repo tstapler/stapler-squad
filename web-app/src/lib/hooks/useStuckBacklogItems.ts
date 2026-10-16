@@ -22,6 +22,7 @@ import {
   ResetStuckRemediationRequestSchema,
   BulkResetStuckRemediationRequestSchema,
   TriggerRemediationNowRequestSchema,
+  OverrideClaimBlockRequestSchema,
   type StuckBacklogItem,
   type StuckReason,
 } from "@/gen/session/v1/backlog_pb";
@@ -38,8 +39,13 @@ export interface UseStuckBacklogItemsReturn {
   snooze: (itemId: string, reason: StuckReason, until: Date) => Promise<boolean>;
   /** Clears remediation_attempts/next_remediation_at/notified_at on a single open row. */
   resetRemediation: (itemId: string, reason: StuckReason) => Promise<boolean>;
-  /** Resets every open row hitting the attempt cap (parked); returns the count reset. */
-  bulkResetParkedRemediation: () => Promise<number>;
+  /**
+   * Resets every open row hitting the attempt cap (parked); returns the
+   * count reset. An optional `reason` scopes the reset to just that
+   * StuckReason's parked rows, leaving every other reason's parked rows
+   * untouched — omit it for the existing "every reason" behavior.
+   */
+  bulkResetParkedRemediation: (reason?: StuckReason) => Promise<number>;
   /**
    * Immediately runs the reason's remediation action, bypassing only the
    * backoff timer — still subject to the 5-attempt cap and the wrapped
@@ -47,6 +53,12 @@ export interface UseStuckBacklogItemsReturn {
    * callers can show a specific error, e.g. "already parked — use Reset".
    */
   triggerRemediationNow: (itemId: string, reason: StuckReason) => Promise<void>;
+  /**
+   * Dequeues an item skipped for STUCK_REASON_BLOCKED_BY_CLAIM despite the
+   * other host's claim. `reason` is required (>= 5 chars) and audit-logged
+   * server-side. Throws on failure so the form can show the message.
+   */
+  overrideClaimBlock: (itemId: string, reason: string) => Promise<void>;
 }
 
 /**
@@ -152,11 +164,12 @@ function useStuckBacklogItemsImpl(
     [client, fetchItems]
   );
 
-  const bulkResetParkedRemediation = useCallback(async (): Promise<number> => {
+  const bulkResetParkedRemediation = useCallback(async (reason?: StuckReason): Promise<number> => {
     try {
       const req = create(BulkResetStuckRemediationRequestSchema, {
         onlyParked: true,
         onlyParkedExplicitlySet: true,
+        ...(reason !== undefined ? { reason } : {}),
       });
       const res = await client.bulkResetStuckRemediation(req);
       if (res.resetCount > 0) {
@@ -181,6 +194,14 @@ function useStuckBacklogItemsImpl(
     [client, fetchItems]
   );
 
+  const overrideClaimBlock = useCallback(
+    async (itemId: string, reason: string): Promise<void> => {
+      await client.overrideClaimBlock(create(OverrideClaimBlockRequestSchema, { itemId, reason }));
+      await fetchItems();
+    },
+    [client, fetchItems]
+  );
+
   return {
     items,
     isLoading,
@@ -191,6 +212,7 @@ function useStuckBacklogItemsImpl(
     resetRemediation,
     bulkResetParkedRemediation,
     triggerRemediationNow,
+    overrideClaimBlock,
   };
 }
 

@@ -2,13 +2,12 @@
 
 import { createContext, useContext, ReactNode } from "react";
 import { useReviewQueue } from "@/lib/hooks/useReviewQueue";
-import { getApiBaseUrl } from "@/lib/config";
 
 type ReviewQueueContextValue = ReturnType<typeof useReviewQueue>;
 const ReviewQueueContext = createContext<ReviewQueueContextValue | null>(null);
 
 export function ReviewQueueProvider({ children }: { children: ReactNode }) {
-  const value = useReviewQueue({ baseUrl: getApiBaseUrl(), useWebSocketPush: true, autoRefresh: true });
+  const value = useReviewQueue({ useWebSocketPush: true, autoRefresh: true });
   return <ReviewQueueContext.Provider value={value}>{children}</ReviewQueueContext.Provider>;
 }
 

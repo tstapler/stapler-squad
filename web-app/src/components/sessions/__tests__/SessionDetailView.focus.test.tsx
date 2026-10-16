@@ -34,6 +34,11 @@ jest.mock("../FilesTab", () => ({ FilesTab: () => null }));
 jest.mock("../ArtifactsTab", () => ({ ArtifactsTab: () => null }));
 jest.mock("../BrowserTab", () => ({ BrowserTab: () => null }));
 jest.mock("../SessionSummaryPanel", () => ({ SessionSummaryPanel: () => null }));
+// HandoffSummarySection (Info tab) embeds RestartWithSummaryButton, which
+// calls useSessionService -> useAnalytics -- unavailable without an
+// AnalyticsContextProvider wrapper, which this file's render tree doesn't
+// set up (it isn't relevant to focus restoration, this file's own concern).
+jest.mock("../HandoffSummarySection", () => ({ HandoffSummarySection: () => null }));
 jest.mock("@/components/ui/ActionBar", () => ({
   ActionBar: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));

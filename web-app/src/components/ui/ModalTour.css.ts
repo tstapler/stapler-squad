@@ -1,7 +1,7 @@
 // Shared modal chrome + step-indicator styles for multi-step walkthrough
 // modals (e.g. OnboardingModal, BacklogTourModal). Extracted so a new tour
 // doesn't have to reach into another feature's implementation-detail CSS
-// module — see .claude/rules/css-architecture.md.
+// module — see docs/reference/css-architecture.md.
 import { style, keyframes } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
 import { zIndex } from "@/styles/theme-contract.css";

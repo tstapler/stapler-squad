@@ -50,8 +50,11 @@ func SlowWaitConfig() WaitConfig {
 }
 
 // WaitForCondition polls a condition until it returns true or timeout occurs.
+// config.Timeout is scaled by ScaleTimeout before use, so the effective bound
+// stretches under real machine load instead of assuming an idle CPU.
 func WaitForCondition(condition func() bool, config WaitConfig) error {
-	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
+	timeout := ScaleTimeout(config.Timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	ticker := time.NewTicker(config.PollInterval)
@@ -62,11 +65,13 @@ func WaitForCondition(condition func() bool, config WaitConfig) error {
 		return nil
 	}
 
+	tr := timeoutReport{description: config.Description, baseTimeout: config.Timeout, scaledTimeout: timeout, pollInterval: config.PollInterval, start: time.Now()}
 	for {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("timeout waiting for %s after %v", config.Description, config.Timeout)
+			return tr.err()
 		case <-ticker.C:
+			tr.polls++
 			if condition() {
 				return nil
 			}
@@ -75,8 +80,11 @@ func WaitForCondition(condition func() bool, config WaitConfig) error {
 }
 
 // WaitForConditionWithError polls a condition that can return an error.
+// config.Timeout is scaled by ScaleTimeout before use, so the effective bound
+// stretches under real machine load instead of assuming an idle CPU.
 func WaitForConditionWithError(condition func() (bool, error), config WaitConfig) error {
-	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
+	timeout := ScaleTimeout(config.Timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	ticker := time.NewTicker(config.PollInterval)
@@ -91,14 +99,14 @@ func WaitForConditionWithError(condition func() (bool, error), config WaitConfig
 		return nil
 	}
 
+	tr := timeoutReport{description: config.Description, baseTimeout: config.Timeout, scaledTimeout: timeout, pollInterval: config.PollInterval, start: time.Now()}
 	for {
 		select {
 		case <-ctx.Done():
-			if lastErr != nil {
-				return fmt.Errorf("timeout waiting for %s after %v (last error: %v)", config.Description, config.Timeout, lastErr)
-			}
-			return fmt.Errorf("timeout waiting for %s after %v", config.Description, config.Timeout)
+			tr.lastErr = lastErr
+			return tr.err()
 		case <-ticker.C:
+			tr.polls++
 			if ok, err := condition(); err != nil {
 				lastErr = err
 			} else if ok {
@@ -106,4 +114,37 @@ func WaitForConditionWithError(condition func() (bool, error), config WaitConfig
 			}
 		}
 	}
+}
+
+// timeoutReport builds a timeout error that reports enough for a human to
+// tell "this was scheduler contention" from "this condition genuinely never
+// became true" without re-running anything: the scaled vs. base timeout
+// (non-1.0 scaling implicates load), and how many polls actually happened
+// vs. how many the poll interval alone would predict -- a poll count far
+// below that expectation means ticks themselves were delayed by scheduler
+// contention, not that the condition was checked and found false repeatedly.
+type timeoutReport struct {
+	description                string
+	baseTimeout, scaledTimeout time.Duration
+	pollInterval               time.Duration
+	start                      time.Time
+	polls                      int
+	lastErr                    error
+}
+
+func (tr timeoutReport) err() error {
+	elapsed := time.Since(tr.start)
+	expectedPolls := int(elapsed / tr.pollInterval)
+	scaleNote := ""
+	if tr.scaledTimeout != tr.baseTimeout {
+		scaleNote = fmt.Sprintf(" (base %v, scaled to %v for load)", tr.baseTimeout, tr.scaledTimeout)
+	}
+	contentionNote := ""
+	if expectedPolls > 0 && tr.polls < expectedPolls/2 {
+		contentionNote = fmt.Sprintf(" -- only %d of ~%d expected polls ran, indicating scheduler contention delayed ticks rather than the condition being repeatedly false", tr.polls, expectedPolls)
+	}
+	if tr.lastErr != nil {
+		return fmt.Errorf("timeout waiting for %s after %v%s (last error: %v)%s", tr.description, elapsed, scaleNote, tr.lastErr, contentionNote)
+	}
+	return fmt.Errorf("timeout waiting for %s after %v%s%s", tr.description, elapsed, scaleNote, contentionNote)
 }

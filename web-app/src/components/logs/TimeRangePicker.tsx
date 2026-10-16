@@ -202,5 +202,3 @@ export function TimeRangePicker({ value, onChange, className }: TimeRangePickerP
     </div>
   );
 }
-
-export default TimeRangePicker;

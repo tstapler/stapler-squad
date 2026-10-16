@@ -17,7 +17,7 @@ import (
 
 // initGitRepo creates a temporary directory with an initialised git repository
 // that has at least one commit so that git commands succeed. Uses go-git
-// directly rather than shelling out — see .claude/rules/prefer-go-git-over-subshells.md.
+// directly rather than shelling out — see the `prefer-go-git-over-subshells` skill.
 func initGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -52,7 +52,7 @@ func initGitRepo(t *testing.T) string {
 
 // runGit runs an arbitrary git subcommand against dir. Used for git operations
 // go-git doesn't cover directly (e.g. rev-parse); prefer go-git per
-// .claude/rules/prefer-go-git-over-subshells.md when a native call exists.
+// the `prefer-go-git-over-subshells` skill when a native call exists.
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := safeexec.CommandContext(context.Background(), "git", args...)

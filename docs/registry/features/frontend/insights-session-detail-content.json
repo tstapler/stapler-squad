@@ -1,0 +1,19 @@
+{
+  "id": "insights-session-detail-content",
+  "type": "frontend",
+  "component": "SessionDetailContent",
+  "path": "web-app/src/app/insights/SessionDetailContent.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "SessionDetailContent > SessionDetailContent_should_renderPerTurnBreakdownTable_when_turnsPresent",
+    "SessionDetailContent > SessionDetailContent_should_showExactEmptyStateCopy_when_noTurnData",
+    "SessionDetailContent > SessionDetailContent_should_renderHighestTokenTurnFirst_when_turnsVarySize",
+    "SessionDetailContent > SessionDetailContent_should_flagOutlierCell_when_turnExceedsTwiceMean",
+    "SessionDetailContent > Tools Breakdown cost column > SessionDetailContent_should_showEstimatedMarker_when_toolCostMayDoubleCount",
+    "SessionDetailContent > Tools Breakdown cost column > SessionDetailContent_should_showDashNotZeroDollar_when_toolCostUnpriced",
+    "SessionDetailContent > SessionDetailContent_should_renderBacklogItemSection_when_backlogEntryProvided",
+    "SessionDetailContent > SessionDetailContent_should_renderSameOutputForSameProps_when_calledTwice"
+  ],
+  "lastModified": "2026-09-03T00:00:00.000Z"
+}

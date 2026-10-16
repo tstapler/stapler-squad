@@ -18,12 +18,18 @@ interface ReviewQueueState {
   loading: boolean;
   error: string | null;
   stats: ReviewQueueStats;
+  // Set to Date.now() by setReviewQueue (only reached on a successful fetch) —
+  // null means "never completed a successful fetch." Distinguishes a first-load
+  // failure (full takeover) from a background poll failure on top of good data
+  // (staleness indicator instead), independent of item count (Task 3.2.1d, AC38).
+  lastUpdatedAt: number | null;
 }
 
 const initialState: ReviewQueueState = {
   reviewQueue: null,
   loading: false,
   error: null,
+  lastUpdatedAt: null,
   stats: {
     totalItems: 0,
     byPriority: {},
@@ -43,6 +49,7 @@ const reviewQueueSlice = createSlice({
       if (action.payload) {
         state.stats.totalItems = action.payload.totalItems;
       }
+      state.lastUpdatedAt = Date.now();
     },
     setReviewQueueStats(state, action: PayloadAction<ReviewQueueStats>) {
       state.stats = action.payload;
@@ -106,6 +113,7 @@ export const selectReviewQueueItems = (state: RootState) =>
 export const selectReviewQueueStats = (state: RootState) => state.reviewQueue.stats;
 export const selectReviewQueueLoading = (state: RootState) => state.reviewQueue.loading;
 export const selectReviewQueueError = (state: RootState) => state.reviewQueue.error;
+export const selectReviewQueueLastUpdatedAt = (state: RootState) => state.reviewQueue.lastUpdatedAt;
 
 // selectReviewQueueItemsWithLiveStatus joins review queue items with live session state from
 // sessionsSlice. It overrides each item's workingState using the live detectedStatus from

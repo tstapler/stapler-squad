@@ -44,3 +44,25 @@ func (c *worktreeCache) Invalidate() {
 	c.hasValue = false
 	c.scanTime = time.Time{}
 }
+
+// snapshot returns the entry's current value and scan time for persistence.
+// hasValue mirrors Get's notion of "has a result ever been stored here",
+// independent of TTL -- staleness is judged by the caller when reloading.
+func (c *worktreeCache) snapshot() (ScanResult, time.Time, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.result, c.scanTime, c.hasValue
+}
+
+// restore seeds the cache with a result carrying its original scan time
+// (rather than time.Now(), as Set does), used to hydrate from a persisted
+// snapshot. TTL freshness is judged the same way as any other entry --
+// restoring an entry older than the TTL just means the next Get treats it as
+// expired, same as if it had aged out in memory.
+func (c *worktreeCache) restore(result ScanResult, scanTime time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.result = result
+	c.scanTime = scanTime
+	c.hasValue = true
+}

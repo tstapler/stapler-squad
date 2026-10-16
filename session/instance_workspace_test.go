@@ -26,8 +26,10 @@ func TestTryExtractConversationUUID_SkipsWhenAlreadyHasID(t *testing.T) {
 
 	inst := &Instance{
 		Title: "test-skip-existing-id",
-		claudeSession: &ClaudeSessionData{
-			ConversationUUID: existingID,
+		claudeExtension: claudeExtension{
+			claudeSession: &ClaudeSessionData{
+				ConversationUUID: existingID,
+			},
 		},
 		// tmuxManager.session is nil — DoesSessionExist() would return false,
 		// but the guard fires before we ever reach the tmux check.
@@ -73,8 +75,10 @@ func TestTryExtractConversationUUID_EmptySessionIDTriesTmux(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{
 		Title: "test-empty-session-id",
-		claudeSession: &ClaudeSessionData{
-			ConversationUUID: "", // Explicitly empty — guard should NOT fire.
+		claudeExtension: claudeExtension{
+			claudeSession: &ClaudeSessionData{
+				ConversationUUID: "", // Explicitly empty — guard should NOT fire.
+			},
 		},
 		// tmuxManager.session is nil — DoesSessionExist() returns false.
 	}
@@ -103,8 +107,10 @@ func TestSwitchWorkspace_GuardPreventsExtractionWhenIDPopulated(t *testing.T) {
 
 	inst := &Instance{
 		Title: "test-guard-at-call-site",
-		claudeSession: &ClaudeSessionData{
-			ConversationUUID: preexistingID,
+		claudeExtension: claudeExtension{
+			claudeSession: &ClaudeSessionData{
+				ConversationUUID: preexistingID,
+			},
 		},
 	}
 
@@ -127,8 +133,9 @@ func TestSwitchWorkspace_GuardPreventsExtractionWhenIDPopulated(t *testing.T) {
 func TestSwitchWorkspace_GuardAllowsExtractionWhenIDMissing(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{
-		Title:         "test-guard-allows-call",
-		claudeSession: nil, // Triggers the guard condition.
+		Title: "test-guard-allows-call",
+		// claudeSession (via embedded claudeExtension) defaults to nil,
+		// triggering the guard condition.
 	}
 
 	// tryExtractConversationUUID is reachable when guard condition fires.
@@ -170,7 +177,7 @@ func TestTryExtractConversationUUID_PathFallbackRepopulatesAfterClear(t *testing
 		historyDetector: NewHistoryFileDetectorWithHomeDir(nil, tempHome),
 		// Simulates the state right after a cold restore clears the old ID —
 		// no live tmux pane, so the fast path is skipped and DetectByPath runs.
-		claudeSession: &ClaudeSessionData{ConversationUUID: ""},
+		claudeExtension: claudeExtension{claudeSession: &ClaudeSessionData{ConversationUUID: ""}},
 	}
 
 	inst.tryExtractConversationUUID()

@@ -72,7 +72,7 @@ func TestMarkStuck_should_updateLastCheckedOnly_When_OpenRowExists(t *testing.T)
 	firstDetected := first.FirstDetectedAt
 
 	// Force a measurable delta.
-	time.Sleep(10 * time.Millisecond)
+	waitForClockDelta(t, 10*time.Millisecond)
 
 	applied, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonPRReadyUnmerged, BacklogStatusPRPending, "second pass")
 	require.NoError(t, err)
@@ -120,7 +120,7 @@ func TestMarkStuck_should_reopenRowInPlace_When_ExistingRowResolved(t *testing.T
 	require.NotNil(t, resolvedRow.ResolvedAt)
 	require.NotNil(t, resolvedRow.NotifiedAt)
 
-	time.Sleep(10 * time.Millisecond)
+	waitForClockDelta(t, 10*time.Millisecond)
 
 	applied, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, BacklogStatusInProgress, "bouncing again")
 	require.NoError(t, err)

@@ -1,13 +1,12 @@
 import { connectApi } from "./connectApi";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
 import {
   ListPendingApprovalsRequestSchema,
   ResolveApprovalRequestSchema,
 } from "@/gen/session/v1/session_pb";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 import { toPlainObject } from "@/lib/api/serialization";
 
 export interface PlainApproval {
@@ -24,8 +23,7 @@ export interface PlainApproval {
 }
 
 function getClient() {
-  const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
-  return createClient(SessionService, transport);
+  return createClient(SessionService, getConnectTransport());
 }
 
 export const approvalsApi = connectApi.injectEndpoints({

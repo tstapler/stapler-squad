@@ -47,11 +47,15 @@ export function ApprovalsProvider({ children }: { children: ReactNode }) {
   const clearCountRef = useRef<Record<string, number>>({});
 
   const approve = useCallback(async (approvalId: string) => {
-    await resolveApproval({ approvalId, decision: "allow" });
+    // .unwrap() is required for the returned promise to actually reject on failure --
+    // an RTK Query mutation trigger resolves to a {data}/{error} result object by default,
+    // it never rejects on its own, which silently broke every try/catch caller expecting
+    // this Promise<void> contract to reject (e.g. SessionBoard.tsx's approveNeedsReview).
+    await resolveApproval({ approvalId, decision: "allow" }).unwrap();
   }, [resolveApproval]);
 
   const deny = useCallback(async (approvalId: string, message?: string) => {
-    await resolveApproval({ approvalId, decision: "deny", message });
+    await resolveApproval({ approvalId, decision: "deny", message }).unwrap();
   }, [resolveApproval]);
 
   const refresh = useCallback(async () => {

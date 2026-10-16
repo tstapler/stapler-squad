@@ -2,8 +2,8 @@ import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { SessionList } from "../SessionList";
 import type { Session } from "@/gen/session/v1/types_pb";
-import type { Timestamp } from "@bufbuild/protobuf/wkt";
 import { timestampNow } from "@bufbuild/protobuf/wkt";
+import { makeSession } from "./sessionListTestFixtures";
 
 // Heavy dependency mocks for SessionList — mirrors SessionList.mobile.test.tsx, except
 // ActionBar renders its children (the mobile test mocks it to null, which hides the
@@ -16,101 +16,38 @@ jest.mock("@connectrpc/connect", () => ({
   })),
 }));
 
-jest.mock("@connectrpc/connect-web", () => ({
-  createConnectTransport: jest.fn(() => ({ unary: jest.fn(), stream: jest.fn() })),
-}));
+jest.mock("@connectrpc/connect-web", () => require("./sessionListTestFixtures").mockConnectWeb());
 
-jest.mock("@/lib/contexts/ReviewQueueContext", () => ({
-  useReviewQueueContext: () => ({ items: [] }),
-}));
+jest.mock("@/lib/contexts/ReviewQueueContext", () => require("./sessionListTestFixtures").mockReviewQueueContext());
 
-jest.mock("@/lib/contexts/NotificationContext", () => ({
-  useNotifications: () => ({
-    showUndoToast: jest.fn(() => "toast-id"),
-    removeNotification: jest.fn(),
-    addNotification: jest.fn(),
-  }),
-}));
+jest.mock("@/lib/contexts/NotificationContext", () => require("./sessionListTestFixtures").mockNotificationContext());
 
-jest.mock("@/lib/store", () => ({
-  useAppSelector: jest.fn(() => ({})),
-}));
+jest.mock("@/lib/store", () => require("./sessionListTestFixtures").mockStore());
 
-jest.mock("@/lib/store/sessionsSlice", () => ({
-  selectDetectedStatusMap: jest.fn(),
-}));
+jest.mock("@/lib/store/sessionsSlice", () => require("./sessionListTestFixtures").mockSessionsSlice());
 
-jest.mock("../SessionCard", () => ({
-  SessionCard: ({ session }: { session: { title: string } }) => (
-    <div data-testid="session-card">{session.title}</div>
-  ),
-}));
+jest.mock("../SessionCard", () => require("./sessionListTestFixtures").mockSessionCard());
 
-jest.mock("../SessionRow", () => ({
-  SessionRow: ({ session }: { session: { title: string } }) => (
-    <div data-testid="session-row">{session.title}</div>
-  ),
-}));
+jest.mock("../SessionRow", () => require("./sessionListTestFixtures").mockSessionRow());
 
-jest.mock("../BulkActions", () => ({
-  BulkActions: () => null,
-}));
+jest.mock("../BulkActions", () => require("./sessionListTestFixtures").mockBulkActions());
 
-jest.mock("../TagEditor", () => ({
-  TagEditor: () => null,
-}));
+jest.mock("../TagEditor", () => require("./sessionListTestFixtures").mockTagEditor());
 
-jest.mock("@/components/ui/ActionBar", () => ({
-  ActionBar: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
+jest.mock("@/components/ui/ActionBar", () => require("./sessionListTestFixtures").mockActionBarPassthrough());
 
-jest.mock("@/components/ui/Modal", () => ({
-  Modal: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ModalContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ModalTitle: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ModalFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
+jest.mock("@/components/ui/Modal", () => require("./sessionListTestFixtures").mockModal());
 
-jest.mock("@/components/ui/AppLink", () => ({
-  AppLink: ({ href, children, ...rest }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) => (
-    <a href={href} {...rest}>{children}</a>
-  ),
-}));
+jest.mock("@/components/ui/AppLink", () => require("./sessionListTestFixtures").mockAppLink());
 
-jest.mock("@/lib/contexts/ApprovalsContext", () => ({
-  useApprovalsContext: () => ({ clearedSessions: new Set() }),
-}));
+jest.mock("@/lib/contexts/ApprovalsContext", () => require("./sessionListTestFixtures").mockApprovalsContext());
 
 // SessionList's row mode virtualizes with @tanstack/react-virtual, which measures a
 // real scroll container to decide the visible range — jsdom's zero-size layout means
 // it never renders any row. Replace it with a non-virtualized stand-in that renders
 // every item, matching the shape SessionList actually consumes (getTotalSize,
 // getVirtualItems, measureElement).
-jest.mock("@tanstack/react-virtual", () => ({
-  useVirtualizer: (opts: { count: number }) => ({
-    getTotalSize: () => opts.count * 50,
-    getVirtualItems: () =>
-      Array.from({ length: opts.count }, (_, index) => ({
-        index,
-        key: index,
-        start: index * 50,
-        size: 50,
-      })),
-    measureElement: () => undefined,
-  }),
-}));
-
-const makeSession = (id: string, title: string, archivedAt?: Timestamp): Partial<Session> => ({
-  id,
-  title,
-  status: 1 as Session["status"],
-  tags: [],
-  category: "",
-  path: "/tmp/session",
-  branch: "",
-  program: "claude",
-  archivedAt,
-});
+jest.mock("@tanstack/react-virtual", () => require("./sessionListTestFixtures").mockReactVirtual());
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -120,7 +57,7 @@ describe("SessionList — show archived toggle", () => {
   it("SessionList_should_hideArchivedSessions_When_showArchivedIsOff", () => {
     const sessions = [
       makeSession("s1", "Active Session") as Session,
-      makeSession("s2", "Archived Session", timestampNow()) as Session,
+      makeSession("s2", "Archived Session", { archivedAt: timestampNow() }) as Session,
     ];
     render(<SessionList sessions={sessions} />);
 
@@ -131,7 +68,7 @@ describe("SessionList — show archived toggle", () => {
   it("SessionList_should_showArchivedSessions_When_toggleEnabled", () => {
     const sessions = [
       makeSession("s1", "Active Session") as Session,
-      makeSession("s2", "Archived Session", timestampNow()) as Session,
+      makeSession("s2", "Archived Session", { archivedAt: timestampNow() }) as Session,
     ];
     render(<SessionList sessions={sessions} />);
 
@@ -165,5 +102,61 @@ describe("SessionList — show archived toggle", () => {
     );
 
     expect(onFetchArchivedSessions).not.toHaveBeenCalled();
+  });
+});
+
+// Same shape as "show archived toggle" above, in the same file (rather than a
+// separate one) to reuse this file's mock preamble instead of duplicating its
+// jest.mock(...) block — those calls are jest-hoisted per-file and can't be
+// extracted into a shared helper (see CLAUDE.md's jscpd-gate notes).
+describe("SessionList — show hidden toggle", () => {
+  it("SessionList_should_hideHiddenSessions_When_showHiddenIsOff", () => {
+    const sessions = [
+      makeSession("s1", "Active Session") as Session,
+      makeSession("s2", "diagnose:abc123:1", { hidden: true }) as Session,
+    ];
+    render(<SessionList sessions={sessions} />);
+
+    expect(screen.getByText("Active Session")).toBeInTheDocument();
+    expect(screen.queryByText("diagnose:abc123:1")).not.toBeInTheDocument();
+  });
+
+  it("SessionList_should_showHiddenSessions_When_toggleEnabled", () => {
+    const sessions = [
+      makeSession("s1", "Active Session") as Session,
+      makeSession("s2", "diagnose:abc123:1", { hidden: true }) as Session,
+    ];
+    render(<SessionList sessions={sessions} />);
+
+    fireEvent.click(screen.getByTestId("show-hidden-toggle"));
+
+    expect(screen.getByText("Active Session")).toBeInTheDocument();
+    expect(screen.getByText("diagnose:abc123:1")).toBeInTheDocument();
+  });
+
+  it("SessionList_should_callOnFetchHiddenSessions_When_toggleEnabled", () => {
+    const onFetchHiddenSessions = jest.fn();
+    render(
+      <SessionList
+        sessions={[makeSession("s1", "Active Session") as Session]}
+        onFetchHiddenSessions={onFetchHiddenSessions}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("show-hidden-toggle"));
+
+    expect(onFetchHiddenSessions).toHaveBeenCalledWith(true);
+  });
+
+  it("SessionList_should_notCallOnFetchHiddenSessions_When_notToggled", () => {
+    const onFetchHiddenSessions = jest.fn();
+    render(
+      <SessionList
+        sessions={[makeSession("s1", "Active Session") as Session]}
+        onFetchHiddenSessions={onFetchHiddenSessions}
+      />
+    );
+
+    expect(onFetchHiddenSessions).not.toHaveBeenCalled();
   });
 });

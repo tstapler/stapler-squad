@@ -21,7 +21,7 @@ import (
 // callback_config_service_test.go).
 func newIsolatedSlackConfigService(t *testing.T) *SlackConfigService {
 	t.Helper()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	return NewSlackConfigService(NewSlackNotifier())
 }
 

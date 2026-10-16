@@ -440,3 +440,51 @@ only at the coordinator-unit level.
 - `cd web-app && npx jest --no-coverage --testPathPatterns="useSessionService.test"` — all Phase 2/3 tests green, including the 3 new integration-level tests.
 - `cd web-app && npx tsc --noEmit` (or the project's standard type-check command) — confirms `RefreshCoordinator<ListSessionsResponse>`'s generic wiring type-checks across all 4 call sites.
 - No changes to `proto/`, `session/`, `server/` — confirmed via `git status` before commit (frontend-only per `requirements.md` Constraints).
+
+## Implementation Notes (2026-08-24)
+
+Two deviations from the task breakdown above, made during implementation:
+
+1. **`guarded` option and `LIST_SESSIONS_TIMEOUT_MS`, not in the original Epic 1/2 tasks.**
+   These were required to resolve adversarial-review's two BLOCKERs (see ADR-001's Amendment
+   section) — the original Phase 1/2 tasks above predate that review and don't include them.
+2. **Story 2.1.4c's dedicated "success-path and error-path resync fire close together"
+   integration test was not written as a separate test.** Both resync call sites now route
+   through the identical `refreshCoordinatorRef.current.request(..., { guarded: true })` call
+   (Tasks 2.1.4a/2.1.4b), so "two guarded requests overlap and coalesce" is exactly the scenario
+   already covered by `refreshCoordinator.test.ts`'s
+   `request_should_overwriteAGuardedPendingFetcher_When_ALaterGuardedCallerCoalesces` plus the
+   real-hook-level `backstopReconnect_should_coalesceWithAnInFlightInitialSnapshotFetch_When_bothInvokeStartStreamConcurrently`
+   (Story 3.1.1a, which exercises two concurrent `watchSessions()`/`startStream()` invocations
+   end-to-end). Driving the mocked WebSocket stream to completion on both the success and error
+   paths simultaneously to construct Story 2.1.4c's literal scenario would have added test
+   complexity for coverage already proven by the above.
+
+Also: `validation.md`'s literal test-body description for
+`request_should_discardStaleOnResult_When_aSupersededFetchResolvesAfterANewerOne` (2-caller
+pA/pB, "B resolves before A") describes an interleaving that's unreachable under the finalized
+≤1-in-flight-serialized design (Pattern Decisions' "Generation increment point" row) — a
+superseded fetcher's `fetcher()` is never even invoked, so it can't "resolve after" anything.
+Implemented as a 3-caller scenario (A running, B queued, C supersedes B before B's fetcher ever
+runs) instead, which proves the same requirement (a superseded response's `onResult` is never
+invoked) via the guarantee the finalized design actually provides.
+
+## Follow-up (not fixed here): premature `loading:false` under coalescing
+
+Found by `code:review`'s architecture pass during shipping (2026-08-24), not by the original
+plan/adversarial-review: site #1's `finally { dispatch(setLoading(false)) }`
+(`useSessionService.ts`'s `listSessions()`) clears as soon as *that caller's own* `request()`
+settles — not when a coalesced-behind rerun whose data will actually land in Redux next
+finishes. Under the coordinator's deferred-execution model this window is a full RPC
+round-trip (wider than pre-diff, where each concurrent `listSessions()` call fired its own
+already-running RPC). UI-only: Redux `sessions` data is never wrong, only `loading` can read
+`false` for one or more ticks mid-refresh (spinner flicker). Out of scope for this item's
+acceptance criteria (AC3 is about the stuck-`true`-forever failure mode, which is fixed).
+
+The "obvious" fix — gate the clear on a `RefreshCoordinator.isBusy` getter — is wrong: the
+coordinator's `state`/`pending` are shared across all 4 call sites, including the 3
+stream-lifecycle sites that never touch `loading` and fire routinely on WebSocket reconnects;
+gating on global busy-ness would keep `loading` stuck `true` on unrelated background activity.
+A correct fix needs a site-#1-scoped "is my own request (including anything it got coalesced
+into) actually done" signal, not the coordinator's shared busy state. Left as a scoped
+follow-up, documented inline at `useSessionService.ts`'s `listSessions()` `finally` block.

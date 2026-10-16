@@ -8,6 +8,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tokens"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // ---- BuildDiffSnapshot ----
@@ -131,9 +132,9 @@ func (f *fakeTokenStoreReader) GetAll() []*tokens.ParseResult { return nil }
 func (f *fakeTokenStoreReader) GetByUUID(uuid string) *tokens.ParseResult {
 	return f.byUUID[uuid]
 }
-func (f *fakeTokenStoreReader) IsLoading() bool                { return false }
-func (f *fakeTokenStoreReader) Subscribe() <-chan struct{}     { return nil }
-func (f *fakeTokenStoreReader) Unsubscribe(ch <-chan struct{}) {}
+func (f *fakeTokenStoreReader) IsLoading() bool                           { return false }
+func (f *fakeTokenStoreReader) Subscribe() <-chan *tokens.ParseResult     { return nil }
+func (f *fakeTokenStoreReader) Unsubscribe(ch <-chan *tokens.ParseResult) {}
 
 func TestBuildCostSnapshot_should_ReturnDataUnavailable_When_TokenStoreReturnsNil(t *testing.T) {
 	t.Parallel()
@@ -174,13 +175,7 @@ func TestBuildCostSnapshot_should_ReturnTotalTokensAndCost_When_RealTranscriptPa
 	// resulting UUID is "valid_session" (its basename minus .jsonl).
 	store.OnHistoryFileChanged("tokens/testdata/valid_session.jsonl")
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if store.GetByUUID("valid_session") != nil {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	wait.RequireEventually(t, func() bool { return store.GetByUUID("valid_session") != nil }, 5*time.Second, 10*time.Millisecond)
 
 	snapshot := BuildCostSnapshot("valid_session", store)
 	if snapshot.DataUnavailable {

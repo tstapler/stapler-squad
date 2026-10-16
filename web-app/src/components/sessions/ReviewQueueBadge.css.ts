@@ -60,8 +60,6 @@ export const priority = style([
   },
 ]);
 
-export const reason = style([sharedBadge]);
-
 export const priorityUrgent = style({
   background: vars.statusBadge.approvalBg,
   color: vars.statusBadge.approvalFg,
@@ -92,38 +90,3 @@ export const priorityUnspecified = style({
   border: `1px solid ${vars.statusBadge.idleBorder}`,
 });
 
-export const reasonApproval = style({
-  background: vars.statusBadge.uncommittedBg,
-  color: vars.statusBadge.uncommittedFg,
-  border: `1px solid ${vars.statusBadge.uncommittedBorder}`,
-});
-
-export const reasonInput = style({
-  background: vars.statusBadge.inputBg,
-  color: vars.statusBadge.inputFg,
-  border: `1px solid ${vars.statusBadge.inputBorder}`,
-});
-
-export const reasonError = style({
-  background: vars.statusBadge.approvalBg,
-  color: vars.statusBadge.approvalFg,
-  border: `1px solid ${vars.statusBadge.approvalBorder}`,
-});
-
-export const reasonIdle = style({
-  background: vars.statusBadge.processingBg,
-  color: vars.statusBadge.processingFg,
-  border: `1px solid ${vars.statusBadge.processingBorder}`,
-});
-
-export const reasonComplete = style({
-  background: vars.statusBadge.completeBg,
-  color: vars.statusBadge.completeFg,
-  border: `1px solid ${vars.statusBadge.completeBorder}`,
-});
-
-export const reasonUnspecified = style({
-  background: vars.statusBadge.idleBg,
-  color: vars.statusBadge.idleFg,
-  border: `1px solid ${vars.statusBadge.idleBorder}`,
-});

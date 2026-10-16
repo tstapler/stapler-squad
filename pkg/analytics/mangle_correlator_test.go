@@ -33,12 +33,41 @@ func TestMangleCorrelator_Mutated(t *testing.T) {
 	}
 }
 
+// ageCorrelator shifts every recorded timestamp back by d, simulating the
+// passage of time without sleeping.
+func ageCorrelator(c *MangleCorrelator, d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for k, obs := range c.pending {
+		obs.WallTime = obs.WallTime.Add(-d)
+		c.pending[k] = obs
+	}
+	for k, t := range c.ordinalLastSeen {
+		c.ordinalLastSeen[k] = t.Add(-d)
+	}
+	for k, t := range c.transportLastSeen {
+		c.transportLastSeen[k] = t.Add(-d)
+	}
+}
+
+func TestMangleCorrelator_DoesNotReportStrippedWithoutActiveTransport(t *testing.T) {
+	spy := &spyWriter{}
+	c := NewMangleCorrelator(20*time.Millisecond, 100)
+	c.RecordStage1("no-consumer", "SGR", "abc123", 20)
+	ageCorrelator(c, 40*time.Millisecond)
+	c.EvictExpired(context.Background(), spy)
+	if len(spy.events) != 0 {
+		t.Fatalf("inactive transport produced false stripped events: %+v", spy.events)
+	}
+}
+
 func TestMangleCorrelator_Stripped(t *testing.T) {
 	spy := &spyWriter{}
 	c := NewMangleCorrelator(100*time.Millisecond, 100)
 	c.RecordStage1("sess1", "SGR", "abc123", 20)
-	// Wait for TTL to expire
-	time.Sleep(200 * time.Millisecond)
+	c.ObserveTransport("sess1")
+	// Age past the TTL
+	ageCorrelator(c, 200*time.Millisecond)
 	c.EvictExpired(context.Background(), spy)
 	if len(spy.events) != 1 || !spy.events[0].Mangled || spy.events[0].MangleType != "stripped" {
 		t.Errorf("expected 1 stripped event, got %+v", spy.events)
@@ -118,8 +147,9 @@ func TestMangleCorrelator_EvictExpired_PrunesStaleOrdinalCounters(t *testing.T) 
 		t.Fatalf("expected ordinal counters to be present immediately after use, s1=%v s2=%v", s1ok, s2ok)
 	}
 
-	time.Sleep(200 * time.Millisecond)
+	ageCorrelator(c, 200*time.Millisecond)
 	c.EvictExpired(context.Background(), spy)
+	c.PruneStaleOrdinals()
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -131,6 +161,33 @@ func TestMangleCorrelator_EvictExpired_PrunesStaleOrdinalCounters(t *testing.T) 
 	}
 	if _, ok := c.ordinalLastSeen[ordinalKey{"sess1", "SGR"}]; ok {
 		t.Error("expected ordinalLastSeen entry to be pruned once its (session, type) pair went quiet")
+	}
+}
+
+// TestMangleCorrelator_EvictExpired_DoesNotScanOrdinalMaps is the enforcement for the
+// mutex-contention fix: EvictExpired must NOT prune ordinal counters itself — that scan
+// moved to the separate, less-frequent PruneStaleOrdinals so the hot maxAge/2 eviction tick's
+// critical section stays limited to the pending map. A regression that merges the two back
+// together would make this fail (ordinals pruned by EvictExpired alone, before
+// PruneStaleOrdinals ever runs).
+func TestMangleCorrelator_EvictExpired_DoesNotScanOrdinalMaps(t *testing.T) {
+	spy := &spyWriter{}
+	c := NewMangleCorrelator(100*time.Millisecond, 100)
+
+	c.RecordStage1("sess1", "SGR", "hash-1", 5)
+	c.CheckStage2("sess1", "SGR", "hash-1", 5)
+
+	ageCorrelator(c, 200*time.Millisecond)
+	c.EvictExpired(context.Background(), spy)
+
+	ok := ordinalKey{"sess1", "SGR"}
+	c.mu.Lock()
+	_, s1ok := c.stage1Ordinals[ok]
+	_, s2ok := c.stage2Ordinals[ok]
+	_, lastSeenOk := c.ordinalLastSeen[ok]
+	c.mu.Unlock()
+	if !s1ok || !s2ok || !lastSeenOk {
+		t.Errorf("expected EvictExpired alone to leave stale ordinal entries in place (pruning belongs to PruneStaleOrdinals), got s1=%v s2=%v lastSeen=%v", s1ok, s2ok, lastSeenOk)
 	}
 }
 

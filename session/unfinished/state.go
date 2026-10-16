@@ -11,9 +11,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/tstapler/stapler-squad/executor"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 )
 
 // dismissEntry is a persisted dismiss record.
@@ -40,14 +40,23 @@ type aiCacheEntry struct {
 	GeneratedAt time.Time `json:"generated_at"`
 }
 
+// scanCacheEntry is a persisted snapshot of one worktree's last scan result,
+// used only to prime the in-memory worktreeCache after a restart (see
+// Scanner.hydrateCacheFromDisk, which restores an entry only within its TTL).
+type scanCacheEntry struct {
+	Result   ScanResult `json:"result"`
+	ScanTime time.Time  `json:"scan_time"`
+}
+
 // unfinishedState is the on-disk JSON shape.
 type unfinishedState struct {
-	Dismissed   []dismissEntry `json:"dismissed"`
-	Snoozed     []snoozeEntry  `json:"snoozed"`
-	WatchDirs   []string       `json:"watch_dirs"`
-	PinnedRepos []string       `json:"pinned_repos"`
-	AICache     []aiCacheEntry `json:"ai_summary_cache"`
-	AutoSpider  bool           `json:"auto_spider_sessions"`
+	Dismissed   []dismissEntry   `json:"dismissed"`
+	Snoozed     []snoozeEntry    `json:"snoozed"`
+	WatchDirs   []string         `json:"watch_dirs"`
+	PinnedRepos []string         `json:"pinned_repos"`
+	AICache     []aiCacheEntry   `json:"ai_summary_cache"`
+	AutoSpider  bool             `json:"auto_spider_sessions"`
+	ScanCache   []scanCacheEntry `json:"scan_cache,omitempty"`
 }
 
 // StateStore manages persistent state for the unfinished-work feature.
@@ -103,11 +112,11 @@ func (s *StateStore) save() error {
 		return fmt.Errorf("marshal unfinished state: %w", err)
 	}
 	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return fmt.Errorf("create state dir: %w", err)
 	}
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return fmt.Errorf("write temp state file: %w", err)
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
@@ -302,15 +311,39 @@ func (s *StateStore) CacheSummary(repoPath, branch, diffHash, summary string) er
 	return s.save()
 }
 
+// --- Scan Result Cache (restart persistence) ---
+
+// LoadScanCache returns the persisted worktree scan cache from the last save.
+func (s *StateStore) LoadScanCache() []scanCacheEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]scanCacheEntry, len(s.state.ScanCache))
+	copy(out, s.state.ScanCache)
+	return out
+}
+
+// SaveScanCache atomically replaces the persisted worktree scan cache with
+// entries and writes it to disk in one batch. Callers should snapshot the
+// whole in-memory cache and call this periodically (e.g. once a minute)
+// rather than on every individual scan -- writing on every scan would trade
+// the CPU hotspot this cache exists to avoid for a new per-scan I/O one.
+func (s *StateStore) SaveScanCache(entries []scanCacheEntry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state.ScanCache = entries
+	return s.save()
+}
+
 // ComputeDiffHash runs `git -C path diff HEAD` and SHA256-hashes the output.
 func ComputeDiffHash(worktreePath string) (string, error) {
-	exec3s := executor.MakeTimeoutExecutor(5 * time.Second)
-	cmd := safeexec.CommandContext(context.Background(), "git", "-C", worktreePath, "diff", "HEAD")
-	out, err := exec3s.CombinedOutput(cmd)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := gitprovider.Backend().Diff(ctx, backend.Local{Root: backend.RepoRoot(worktreePath)},
+		backend.DiffSpec{Base: "HEAD", Intent: backend.IntentDisplay})
 	if err != nil {
 		return "", fmt.Errorf("git diff HEAD: %w", err)
 	}
-	sum := sha256.Sum256(out)
+	sum := sha256.Sum256([]byte(out))
 	return fmt.Sprintf("%x", sum), nil
 }
 

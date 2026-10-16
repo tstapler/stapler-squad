@@ -60,19 +60,24 @@ func StartProfiling(cfg Config) (func(), error) {
 		if traceFile == "" {
 			traceFile = fmt.Sprintf("/tmp/stapler-squad-trace-%d.out", os.Getpid())
 		}
+		// #nosec G304 -- traceFile is either the fixed /tmp/stapler-squad-trace-<pid>.out
+		// default above or cfg.TraceFile, which is only ever set to "" by main.go (a
+		// compile-time constant); not derived from RPC/network/user request input.
 		f, err := os.Create(traceFile)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create trace file: %w", err)
 		}
 		if err := trace.Start(f); err != nil {
-			f.Close()
+			_ = f.Close() // trace never started, so there's nothing buffered to lose
 			return nil, fmt.Errorf("failed to start trace: %w", err)
 		}
 		log.Info("Execution trace enabled", "file", traceFile)
 		log.Info("View with: go tool trace <file>", "file", traceFile)
 		cleanupFuncs = append(cleanupFuncs, func() {
 			trace.Stop()
-			f.Close()
+			if err := f.Close(); err != nil {
+				log.Warn("Failed to close trace file; trace data may be incomplete", "file", traceFile, "err", err)
+			}
 			log.Info("Trace saved", "file", traceFile)
 		})
 	}
@@ -117,12 +122,21 @@ func StartProfiling(cfg Config) (func(), error) {
 			if total > 0 {
 				hitRate = float64(s.Hits) / float64(total)
 			}
+			// repo_cache_* fields root-cause a low hit_rate: blobCache lives inside
+			// *cachedRepo, so if repo_cache_evictions tracks repo_cache_cold_opens
+			// closely, repo evictions (not a low same-blob-revisit workload) are
+			// wiping the blob cache before it can warm up. See RepoCacheStats' doc
+			// comment.
+			rc := unfinished.RepoCacheStatsSnapshot()
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"hits":                    s.Hits,
 				"misses":                  s.Misses,
 				"hit_rate":                hitRate,
 				"estimated_time_saved_ms": s.EstimatedTimeSaved.Milliseconds(),
+				"repo_cache_current_size": rc.CurrentSize,
+				"repo_cache_cold_opens":   rc.ColdOpens,
+				"repo_cache_evictions":    rc.Evictions,
 			})
 		})
 
@@ -180,14 +194,6 @@ func StartContinuousProfiling(appName, serverAddr string) (func(), error) {
 		return func() {}, fmt.Errorf("pyroscope: %w", err)
 	}
 	return func() { _ = profiler.Stop() }, nil
-}
-
-// PrintGoroutineStacks prints all goroutine stacks to logs
-// Useful for debugging hangs
-func PrintGoroutineStacks() {
-	buf := make([]byte, 1<<20) // 1MB buffer
-	stacklen := runtime.Stack(buf, true)
-	log.Info("=== Goroutine Stacks ===", "stacks", string(buf[:stacklen]))
 }
 
 // MonitorGoroutines periodically logs goroutine counts

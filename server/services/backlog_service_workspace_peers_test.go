@@ -15,7 +15,7 @@ import (
 // production choke point: BacklogService.initialPromptFor, called by SpawnSessionFromItem
 // to build inst.Prompt.
 func TestInitialPromptFor_should_IncludeWorkspacePeersNudge_When_FlagEnabledAndPeerExists(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(workspacePeersNudgeFlagName, true))
 
 	repoPath := t.TempDir()
@@ -57,7 +57,7 @@ func TestInitialPromptFor_should_IncludeWorkspacePeersNudge_When_FlagEnabledAndP
 // AC0: even with a peer present, the nudge must not appear unless the feature flag is
 // explicitly enabled.
 func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_FlagDisabledByDefault(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 
 	repoPath := t.TempDir()
 	initGitRepoWithCommit(t, repoPath)
@@ -89,7 +89,7 @@ func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_FlagDisabledByDefa
 }
 
 func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_NoPeersExist(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(workspacePeersNudgeFlagName, true))
 
 	repoPath := t.TempDir()
@@ -112,7 +112,7 @@ func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_NoPeersExist(t *te
 }
 
 func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_RepoPathIsEmpty(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(workspacePeersNudgeFlagName, true))
 
 	storage := createTestStorage(t)
@@ -135,7 +135,7 @@ func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_RepoPathIsEmpty(t 
 // regression where every backlog item on the box would see every other item's sessions
 // as "peers" (AC1).
 func TestWorkspacePeersBlockFor_should_ExcludeSessionsOnDifferentRepos(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(workspacePeersNudgeFlagName, true))
 
 	repoA := t.TempDir()

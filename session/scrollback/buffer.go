@@ -78,7 +78,19 @@ func (b *CircularBuffer) GetRange(fromSeq uint64, limit int) []ScrollbackEntry {
 		return nil
 	}
 
-	result := make([]ScrollbackEntry, 0, limit)
+	// The result can never hold more than b.size entries regardless of what
+	// limit the caller passes, so cap the pre-allocation to that -- a caller
+	// that clamps an out-of-range requested limit to, say, math.MaxInt
+	// (see ScrollbackManager.GetScrollbackBefore) would otherwise crash this
+	// make() with "makeslice: cap out of range" instead of just being
+	// harmlessly capped by the loop below.
+	capHint := limit
+	if capHint < 0 {
+		capHint = 0
+	} else if b.size < capHint {
+		capHint = b.size
+	}
+	result := make([]ScrollbackEntry, 0, capHint)
 	idx := b.tail
 
 	for i := 0; i < b.size && len(result) < limit; i++ {

@@ -1,0 +1,16 @@
+# Custom otelc Function Hook Rule (Spike E,
+# project_plans/go-auto-instrumentation/implementation/spike-verdicts.md) —
+# wraps this module's own subprocess choke point, executor/safeexec.CommandContext,
+# with a span per invocation. Loaded via scripts/otel-auto-build.sh's two-pass
+# `otelc setup` (see that script's header comment) so it composes with otelc's
+# own built-in rules (net/http, database/sql, ...) in the same weave, rather
+# than replacing them the way --rules/OTELC_RULES would.
+hook_command_context:
+  target: github.com/tstapler/stapler-squad/executor/safeexec
+  where:
+    func: CommandContext
+  do:
+    - inject_hooks:
+        before: BeforeCommandContext
+        after: AfterCommandContext
+        path: "github.com/tstapler/stapler-squad/instrumentation/otelc/safeexec"

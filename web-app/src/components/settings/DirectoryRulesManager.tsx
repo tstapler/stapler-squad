@@ -10,6 +10,7 @@ import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { getApiBaseUrl } from "@/lib/config";
 import { PROGRAMS } from "@/lib/constants/programs";
+import { RepoPathInput } from "@/components/ui/RepoPathInput";
 import {
   container,
   heading,
@@ -290,19 +291,17 @@ export function DirectoryRulesManager() {
               <label className={labelClass} htmlFor="rule-path">
                 Directory Path *
               </label>
-              <input
+              <RepoPathInput
                 id="rule-path"
-                type="text"
-                className={`${input}${pathError ? ` ${inputError}` : ""}`}
                 placeholder="/Users/you/projects/myrepo"
                 value={form.path}
-                onChange={(e) => {
-                  setForm({ ...form, path: e.target.value });
-                  if (pathError) setPathError(validatePath(e.target.value));
+                onChange={(v) => {
+                  setForm({ ...form, path: v });
+                  if (pathError) setPathError(validatePath(v));
                 }}
                 disabled={!!editingPath}
+                error={pathError || undefined}
               />
-              {pathError && <span className={fieldError}>{pathError}</span>}
             </div>
             <div className={field}>
               <label className={labelClass} htmlFor="rule-profile">

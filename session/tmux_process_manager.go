@@ -10,8 +10,18 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/procinfo"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
+
+// panePIDInspector supplies the OS-level process introspection backing
+// TmuxProcessManager's orphan-detection cache below -- narrower than
+// procinfo's own inspector type so tests can inject a fake without touching
+// real OS processes.
+type panePIDInspector interface {
+	CreateTime(pid int32) (int64, error)
+	IsAlive(pid int32, expectedCreateTimeMs int64) bool
+}
 
 // capturePaneCacheTTL is the TTL for the CapturePaneContent result cache.
 // Avoids spawning a tmux subprocess on every poll tick.
@@ -44,6 +54,23 @@ type TmuxProcessManager struct {
 	// panePID caches the foreground PID after first successful lookup (stable per pane).
 	panePIDCached atomic.Int32
 	panePIDSet    atomic.Bool
+	// panePIDCreateTimeMs caches that PID's process-start timestamp (epoch ms),
+	// captured alongside it, so CachedPanePIDStillAlive can rule out PID reuse
+	// rather than trusting a bare "some process with this number exists".
+	panePIDCreateTimeMs atomic.Int64
+	// processInspector backs CachedPanePIDStillAlive/TerminateCachedPanePID.
+	// Nil (every construction site today) falls back to the real
+	// procinfo.NewProcessInspector() via inspector() below; tests inject a fake.
+	processInspector panePIDInspector
+}
+
+// inspector returns processInspector, defaulting to the real OS-backed
+// procinfo implementation when unset.
+func (tm *TmuxProcessManager) inspector() panePIDInspector {
+	if tm.processInspector != nil {
+		return tm.processInspector
+	}
+	return procinfo.NewProcessInspector()
 }
 
 // HasSession reports whether a tmux session has been initialized.
@@ -56,8 +83,7 @@ func (tm *TmuxProcessManager) Session() *tmux.TmuxSession {
 	return tm.session.Load()
 }
 
-// SetSession replaces the underlying tmux session.  Used by tests and by
-// Instance.start() when reusing a pre-created session.
+// SetSession replaces the underlying tmux session.
 func (tm *TmuxProcessManager) SetSession(s *tmux.TmuxSession) {
 	tm.session.Store(s)
 	// Invalidate the capture-pane cache and PID cache under mu.
@@ -128,6 +154,15 @@ func (tm *TmuxProcessManager) DoesSessionExist() bool {
 	return s.DoesSessionExist()
 }
 
+// DoesSessionExistNoCache is DoesSessionExist with any cached answer bypassed.
+func (tm *TmuxProcessManager) DoesSessionExistNoCache() bool {
+	s := tm.session.Load()
+	if s == nil {
+		return false
+	}
+	return s.DoesSessionExistNoCache()
+}
+
 // SetDetachedSize updates the tmux window dimensions without attaching.
 // Rate-limits PTY-not-initialized warnings to avoid log spam.
 func (tm *TmuxProcessManager) SetDetachedSize(width, height int, instanceTitle string) error {
@@ -169,6 +204,17 @@ func (tm *TmuxProcessManager) Attach() (chan struct{}, error) {
 	return s.Attach()
 }
 
+// cacheCaptureContent stores content in the capture-pane cache under mu and
+// returns it, so CapturePaneContent's cache-populating variants share one
+// implementation of the lock/store/unlock sequence.
+func (tm *TmuxProcessManager) cacheCaptureContent(content string) string {
+	tm.mu.Lock()
+	tm.captureContent = content
+	tm.captureContentAt = time.Now()
+	tm.mu.Unlock()
+	return content
+}
+
 // CapturePaneContent returns the current visible pane content.
 // Results are cached for capturePaneCacheTTL to reduce subprocess/forkLock
 // contention when called per-session on every poll tick.
@@ -188,14 +234,10 @@ func (tm *TmuxProcessManager) CapturePaneContent() (string, error) {
 	}
 	content, err := s.CapturePaneContent()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to capture pane content: %w", err)
 	}
 
-	tm.mu.Lock()
-	tm.captureContent = content
-	tm.captureContentAt = time.Now()
-	tm.mu.Unlock()
-	return content, nil
+	return tm.cacheCaptureContent(content), nil
 }
 
 // CapturePaneContentContext mirrors CapturePaneContent (including its
@@ -220,14 +262,10 @@ func (tm *TmuxProcessManager) CapturePaneContentContext(ctx context.Context) (st
 	}
 	content, err := s.CapturePaneContentContext(ctx)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to capture pane content via context: %w", err)
 	}
 
-	tm.mu.Lock()
-	tm.captureContent = content
-	tm.captureContentAt = time.Now()
-	tm.mu.Unlock()
-	return content, nil
+	return tm.cacheCaptureContent(content), nil
 }
 
 // CapturePaneContentPriority mirrors CapturePaneContent but routes the
@@ -243,14 +281,10 @@ func (tm *TmuxProcessManager) CapturePaneContentPriority() (string, error) {
 	}
 	content, err := s.CapturePaneContentPriority()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to capture pane content with priority: %w", err)
 	}
 
-	tm.mu.Lock()
-	tm.captureContent = content
-	tm.captureContentAt = time.Now()
-	tm.mu.Unlock()
-	return content, nil
+	return tm.cacheCaptureContent(content), nil
 }
 
 // CapturePaneContentRaw returns pane content with ANSI escape codes preserved.
@@ -260,6 +294,31 @@ func (tm *TmuxProcessManager) CapturePaneContentRaw() (string, error) {
 		return "", fmt.Errorf("tmux session not initialized")
 	}
 	return s.CapturePaneContentRaw()
+}
+
+// CapturePaneContentRawPriority mirrors CapturePaneContentPriority but
+// without -J — see TmuxSession.CapturePaneContentRawPriority's doc comment.
+// ctx is caller-supplied and forwarded as-is — see that same doc comment for
+// why this must share its deadline with sibling fast-lane calls.
+func (tm *TmuxProcessManager) CapturePaneContentRawPriority(ctx context.Context) (string, error) {
+	s := tm.session.Load()
+	if s == nil {
+		return "", fmt.Errorf("tmux session not initialized")
+	}
+	return s.CapturePaneContentRawPriority(ctx)
+}
+
+// IsAlternateScreenActive delegates to TmuxSession.IsAlternateScreenActive.
+// Not part of the TmuxManager interface (see Instance.IsAlternateScreenActiveBootstrap's
+// doc comment) -- called via a direct type assertion to *TmuxProcessManager
+// so this one-off addition doesn't ripple through TmuxManager's several test
+// mocks.
+func (tm *TmuxProcessManager) IsAlternateScreenActive() (bool, error) {
+	s := tm.session.Load()
+	if s == nil {
+		return false, fmt.Errorf("tmux session not initialized")
+	}
+	return s.IsAlternateScreenActive()
 }
 
 // CapturePaneContentWithOptions captures pane content between startLine and endLine.
@@ -278,6 +337,19 @@ func (tm *TmuxProcessManager) GetPaneDimensions() (width, height int, err error)
 		return 0, 0, fmt.Errorf("tmux session not initialized")
 	}
 	return s.GetPaneDimensions()
+}
+
+// GetPaneDimensionsPriority mirrors GetPaneDimensions but routes its
+// subprocess fallback through the resync exec-gate fast lane — see
+// TmuxSession.GetPaneDimensionsPriority's doc comment. ctx is caller-supplied
+// and forwarded as-is, for the same shared-deadline reason as
+// CapturePaneContentRawPriority.
+func (tm *TmuxProcessManager) GetPaneDimensionsPriority(ctx context.Context) (width, height int, err error) {
+	s := tm.session.Load()
+	if s == nil {
+		return 0, 0, fmt.Errorf("tmux session not initialized")
+	}
+	return s.GetPaneDimensionsPriority(ctx)
 }
 
 // GetCursorPosition returns the current cursor column and row (0-based).
@@ -336,13 +408,14 @@ func (tm *TmuxProcessManager) RefreshClient() error {
 
 // RefreshClientPriority mirrors RefreshClient but routes the subprocess call
 // through the resync exec-gate fast lane instead of the default pool
-// (Epic 4.2, terminal:resync-exec-gate-fast-lane).
-func (tm *TmuxProcessManager) RefreshClientPriority() error {
+// (Epic 4.2, terminal:resync-exec-gate-fast-lane). ctx is caller-supplied and
+// forwarded as-is — see CapturePaneContentRawPriority's doc comment.
+func (tm *TmuxProcessManager) RefreshClientPriority(ctx context.Context) error {
 	s := tm.session.Load()
 	if s == nil {
 		return nil
 	}
-	return s.RefreshClientPriority()
+	return s.RefreshClientPriority(ctx)
 }
 
 // TapEnter sends an Enter key to the session.
@@ -369,7 +442,20 @@ func (tm *TmuxProcessManager) RestoreWithWorkDir(workDir string) error {
 	if s == nil {
 		return fmt.Errorf("tmux session not initialized")
 	}
-	return s.RestoreWithWorkDir(workDir)
+	err := s.RestoreWithWorkDir(workDir)
+	if err == nil {
+		tm.primePanePID()
+	}
+	return err
+}
+
+// primePanePID caches the pane PID while tmux is reachable so the orphan guard
+// still has a PID to check after the tmux server dies (e.g. post server
+// restart, when nothing else has called GetPanePID yet). Best-effort.
+func (tm *TmuxProcessManager) primePanePID() {
+	if !tm.panePIDSet.Load() {
+		_, _ = tm.GetPanePID()
+	}
 }
 
 // Start creates and starts the tmux session in the given directory.
@@ -378,7 +464,11 @@ func (tm *TmuxProcessManager) Start(dir string) error {
 	if s == nil {
 		return fmt.Errorf("tmux session not initialized")
 	}
-	return s.Start(dir)
+	err := s.Start(dir)
+	if err == nil {
+		tm.primePanePID()
+	}
+	return err
 }
 
 // FilterBanners strips banner/header content from terminal output.
@@ -419,7 +509,9 @@ func (tm *TmuxProcessManager) CaptureViewport(lines int) (string, error) {
 }
 
 // SendPromptWithEnter sends text to the session followed by Enter key.
-// Includes a brief pause between text and Enter to prevent interpretation issues.
+// Waits for the pane to settle between text and Enter (rather than a fixed
+// sleep) to give Claude Code's TUI paste-detector a chance to close first —
+// see waitForPaneSettleTPM's doc comment.
 func (tm *TmuxProcessManager) SendPromptWithEnter(prompt string) error {
 	s := tm.session.Load()
 	if s == nil {
@@ -428,11 +520,54 @@ func (tm *TmuxProcessManager) SendPromptWithEnter(prompt string) error {
 	if _, err := s.SendKeys(prompt); err != nil {
 		return fmt.Errorf("error sending keys to tmux session: %w", err)
 	}
-	time.Sleep(100 * time.Millisecond)
+	waitForPaneSettleTPM(tm, defaultTPMPaneSettlePollInterval, defaultTPMPaneSettleMaxWait)
 	if err := s.TapEnter(); err != nil {
 		return fmt.Errorf("error tapping enter: %w", err)
 	}
 	return nil
+}
+
+// defaultTPMPaneSettlePollInterval and defaultTPMPaneSettleMaxWait mirror
+// DefaultPaneSettlePollInterval/DefaultPaneSettleMaxWait (pane_submit.go),
+// scaled down to stay close to the fixed 100ms this replaced — the
+// significantly larger driver-content defaults aren't warranted here since
+// SendPromptWithEnter's callers send comparatively short prompts.
+const (
+	defaultTPMPaneSettlePollInterval = 25 * time.Millisecond
+	defaultTPMPaneSettleMaxWait      = 300 * time.Millisecond
+)
+
+// tpmPaneSettleChecker is the narrow interface waitForPaneSettleTPM needs —
+// satisfied by *TmuxProcessManager's HasUpdated, and by a test fake so this
+// settle-wait logic is unit-testable without a real tmux session.
+type tpmPaneSettleChecker interface {
+	HasUpdated() (updated bool, hasPrompt bool, content string)
+}
+
+// waitForPaneSettleTPM polls tm.HasUpdated until the pane stops changing for
+// two consecutive polls, or maxWait elapses — the TmuxProcessManager-layer
+// equivalent of waitForPaneSettle (autonomous_driver.go), which needs
+// *Instance's 2-return-value HasUpdated rather than TmuxProcessManager's
+// 3-return-value one. Best-effort: a pane that never settles is left alone
+// once the deadline passes, same as its Instance-layer counterpart.
+// Not context-cancellable, unlike pane_submit.go's settle-wait family —
+// SendPromptWithEnter takes no context.Context to plumb through, and maxWait
+// is bounded at 300ms so the practical cost of that is low.
+func waitForPaneSettleTPM(tm tpmPaneSettleChecker, pollInterval, maxWait time.Duration) {
+	deadline := time.Now().Add(maxWait)
+	stableCount := 0
+	for time.Now().Before(deadline) {
+		time.Sleep(pollInterval)
+		updated, _, _ := tm.HasUpdated()
+		if updated {
+			stableCount = 0
+			continue
+		}
+		stableCount++
+		if stableCount >= 2 {
+			return
+		}
+	}
 }
 
 // GetPanePID returns the PID of the foreground process in the pane.
@@ -448,11 +583,43 @@ func (tm *TmuxProcessManager) GetPanePID() (int32, error) {
 	}
 	pid, err := s.GetPanePID()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to get pane pid: %w", err)
 	}
 	tm.panePIDCached.Store(pid)
+	if createTimeMs, ctErr := tm.inspector().CreateTime(pid); ctErr == nil {
+		tm.panePIDCreateTimeMs.Store(createTimeMs)
+	}
 	tm.panePIDSet.Store(true)
 	return pid, nil
+}
+
+// CachedPanePIDStillAlive reports whether the most recently cached pane PID
+// (see GetPanePID) is still running as the same process it was when cached
+// -- the cached creation timestamp rules out a PID-reuse false positive.
+// False if no PID has ever been cached.
+//
+// This is RestoreWithWorkDir's orphan guard (wired via
+// tmux.WithOrphanProcessGuard in initTmuxSession): `tmux has-session` failing
+// proves tmux lost track of the session, not that the process it originally
+// launched is dead -- if the tmux server was killed/restarted out from under
+// it, that child can survive as an orphan and keep writing its own
+// transcript alongside a freshly relaunched duplicate (2026-09-12 incident).
+func (tm *TmuxProcessManager) CachedPanePIDStillAlive() bool {
+	if !tm.panePIDSet.Load() {
+		return false
+	}
+	return tm.inspector().IsAlive(tm.panePIDCached.Load(), tm.panePIDCreateTimeMs.Load())
+}
+
+// TerminateCachedPanePID sends SIGTERM to the most recently cached pane PID
+// (see CachedPanePIDStillAlive) so RestoreWithWorkDir can reap a confirmed
+// orphan before launching its replacement. No-op if no PID has ever been
+// cached.
+func (tm *TmuxProcessManager) TerminateCachedPanePID() error {
+	if !tm.panePIDSet.Load() {
+		return nil
+	}
+	return terminateProcess(tm.panePIDCached.Load())
 }
 
 // SetOnExitCallback registers a callback that fires when the tmux session exits
@@ -518,8 +685,8 @@ func (tm *TmuxProcessManager) UnsubscribeFromControlModeUpdates(id string) {
 }
 
 // TmuxManager is the interface satisfied by *TmuxProcessManager.
-// It covers all tmux session operations used by Instance and can be implemented
-// by test doubles to avoid requiring a real tmux server.
+// It covers all tmux session operations and can be implemented by test
+// doubles to avoid requiring a real tmux server.
 type TmuxManager interface {
 	HasSession() bool
 	Session() *tmux.TmuxSession
@@ -529,19 +696,22 @@ type TmuxManager interface {
 	Close() error
 	DetachSafely() error
 	DoesSessionExist() bool
+	DoesSessionExistNoCache() bool
 	SetDetachedSize(width, height int, instanceTitle string) error
 	Attach() (chan struct{}, error)
 	CapturePaneContent() (string, error)
 	CapturePaneContentPriority() (string, error)
 	CapturePaneContentRaw() (string, error)
+	CapturePaneContentRawPriority(ctx context.Context) (string, error)
 	CapturePaneContentWithOptions(startLine, endLine string) (string, error)
 	GetPaneDimensions() (width, height int, err error)
+	GetPaneDimensionsPriority(ctx context.Context) (width, height int, err error)
 	GetCursorPosition() (x, y int, err error)
 	GetPTY() (*os.File, error)
 	SendKeys(keys string) (int, error)
 	SetWindowSize(cols, rows int) error
 	RefreshClient() error
-	RefreshClientPriority() error
+	RefreshClientPriority(ctx context.Context) error
 	TapEnter() error
 	HasUpdated() (updated bool, hasPrompt bool, content string)
 	RestoreWithWorkDir(workDir string) error

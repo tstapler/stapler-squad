@@ -170,6 +170,53 @@ export const tagText = style({
   fontWeight: 500,
 });
 
+/** Unclassified row (ux.md Surface 2): dashed border, muted — no remove button rendered. */
+export const tagItemUnclassified = style({
+  border: `1px dashed ${vars.color.borderMuted}`,
+  background: "transparent",
+});
+
+export const unclassifiedCaption = style({
+  fontSize: "12px",
+  color: vars.color.textTertiary,
+  fontStyle: "italic",
+});
+
+/** Expanded row shown while a rule-provenance tag's removal is pending confirmation (Surface 3). */
+export const tagItemConfirming = style({
+  flexDirection: "column",
+  alignItems: "flex-start",
+  gap: "8px",
+  width: "100%",
+});
+
+export const confirmCaption = style({
+  fontSize: "13px",
+  color: vars.color.textSecondary,
+});
+
+export const keepButton = style({
+  padding: "4px 12px",
+  background: vars.color.surfaceSubtle,
+  color: vars.color.textPrimary,
+  border: `1px solid ${vars.color.borderMuted}`,
+  borderRadius: "6px",
+  fontSize: "13px",
+  fontWeight: 600,
+  cursor: "pointer",
+});
+
+export const removeAnywayButton = style({
+  padding: "4px 12px",
+  background: vars.color.errorBg,
+  color: vars.color.errorText,
+  border: `1px solid ${vars.color.error}`,
+  borderRadius: "6px",
+  fontSize: "13px",
+  fontWeight: 600,
+  cursor: "pointer",
+});
+
 export const removeButton = style({
   padding: 0,
   width: "20px",

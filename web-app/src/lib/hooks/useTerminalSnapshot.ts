@@ -2,10 +2,9 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient, type Client } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import AnsiToHtml from "ansi-to-html";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 
 interface SnapshotCacheEntry {
   html: string;
@@ -28,20 +27,13 @@ function getCached(sessionId: string): SnapshotCacheEntry | null {
   return null;
 }
 
-// Shared client, built once and reused by every card instead of once per
-// fetch — createClient/createConnectTransport are non-trivial object graphs
-// and this hook is instantiated per visible session card, polling every 5s.
+// Shared client, built once and reused by every card — this hook is
+// instantiated per visible session card, polling every 5s.
 let sharedClient: Client<typeof SessionService> | null = null;
 
 function getSharedClient(): Client<typeof SessionService> {
   if (!sharedClient) {
-    sharedClient = createClient(
-      SessionService,
-      createConnectTransport({
-        baseUrl: getApiBaseUrl(),
-        interceptors: [createAuthInterceptor()],
-      })
-    );
+    sharedClient = createClient(SessionService, getConnectTransport());
   }
   return sharedClient;
 }

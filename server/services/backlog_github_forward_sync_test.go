@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // fakeForwardSyncCloserPlugin implements session.ItemSourcePlugin plus the
@@ -170,13 +171,13 @@ func TestForwardSyncSubscriber_ClosesIssueOnDoneTransition_WhenEnabled(t *testin
 		NewStatus: string(session.BacklogStatusDone),
 	}))
 
-	require.Eventually(t, func() bool { return fake.closeCallCount() == 1 }, 2*time.Second, 10*time.Millisecond, "expected CloseIssue to be called")
+	wait.RequireEventually(t, func() bool { return fake.closeCallCount() == 1 }, 2*time.Second, 10*time.Millisecond, "expected CloseIssue to be called")
 	call := fake.lastCloseCall()
 	require.Equal(t, "42", call.externalID)
 	require.Equal(t, []string{"bug"}, call.existingLabels)
 	require.Equal(t, "shipped", call.closeLabel)
 
-	require.Eventually(t, func() bool { return fake.commentCallCount() == 1 }, 2*time.Second, 10*time.Millisecond, "expected PostIssueComment to be called")
+	wait.RequireEventually(t, func() bool { return fake.commentCallCount() == 1 }, 2*time.Second, 10*time.Millisecond, "expected PostIssueComment to be called")
 }
 
 // TestForwardSyncSubscriber_NoOpWhenForwardSyncDisabled is the integration
@@ -209,7 +210,7 @@ func TestForwardSyncSubscriber_NoOpWhenForwardSyncDisabled(t *testing.T) {
 
 	// Negative assertion: give the subscriber goroutine a window to (wrongly)
 	// act, then confirm it never did.
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond) //nolint:notimesleeptest negative assertion on a subscriber goroutine with no completion signal
 	require.Equal(t, 0, fake.closeCallCount(), "no GitHub call should be made when ForwardSyncEnabled is false")
 }
 

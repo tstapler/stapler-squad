@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package session.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// TymuxRolloutService is the operator-facing RPC surface for the
+// tymux-bundled-integration rollout, mirroring StreamHubRolloutService's
+// shape (proto/session/v1/session.proto) exactly: a live, config.json-backed
+// "tymux" feature flag for the global default (config.EffectiveTymuxEnabled),
+// no env var, no rollback-rehearsal gate — banked as a historical record
+// only — plus per-session canary overrides.
+service TymuxRolloutService {
+  // GetTymuxRolloutStatus reports the current rollout status: the effective
+  // global default, any explicit global override, whether the rollback
+  // rehearsal has been completed, and the current per-session canary
+  // overrides.
+  rpc GetTymuxRolloutStatus(GetTymuxRolloutStatusRequest) returns (TymuxRolloutStatus) {}
+
+  // CompleteTymuxRollbackRehearsal records that the tymux backend's rollback
+  // rehearsal has been performed. Historical record only — the global
+  // default no longer gates on it.
+  rpc CompleteTymuxRollbackRehearsal(CompleteTymuxRollbackRehearsalRequest) returns (TymuxRolloutStatus) {}
+
+  // SetTymuxSessionOverride sets or clears a per-session canary override.
+  rpc SetTymuxSessionOverride(SetTymuxSessionOverrideRequest) returns (TymuxRolloutStatus) {}
+
+  // SetTymuxGlobalOverride sets or clears the "tymux" feature flag. Takes
+  // effect immediately for sessions created after this call — no process
+  // restart required. Mirrors SetStreamHubGlobalOverride exactly.
+  rpc SetTymuxGlobalOverride(SetTymuxGlobalOverrideRequest) returns (TymuxRolloutStatus) {}
+}
+
+message GetTymuxRolloutStatusRequest {}
+
+message TymuxSessionOverrideEntry {
+  string session_name = 1;
+  bool force_tymux = 2;
+}
+
+message TymuxRolloutStatus {
+  // Deprecated: the STAPLER_SQUAD_USE_TYMUX env var was removed in favor of
+  // the "tymux" feature flag (see global_override). Always false now.
+  bool global_env_var_set = 1;
+  // Unset when the rollback rehearsal has never been completed. Historical
+  // record only — no longer gates the global default.
+  google.protobuf.Timestamp rollback_rehearsal_completed_at = 2;
+  // The current per-session canary overrides (config.TymuxSessionOverrides).
+  repeated TymuxSessionOverrideEntry session_overrides = 3;
+  // The live, config.json-backed "tymux" feature flag override
+  // (config.EffectiveTymuxEnabled), settable via SetTymuxGlobalOverride with
+  // no restart required. Unset means no explicit override — the flag
+  // defaults to false.
+  optional bool global_override = 4;
+}
+
+message CompleteTymuxRollbackRehearsalRequest {}
+
+message SetTymuxSessionOverrideRequest {
+  string session_name = 1;
+  // Unset clears any existing override for session_name (falls back to the
+  // global default). true pins the session onto the tymux-owned path; false
+  // pins it onto the legacy tmux path — either way, regardless of the
+  // global default. Mirrors SetStreamHubSessionOverrideRequest's convention.
+  optional bool force_tymux = 2;
+}
+
+message SetTymuxGlobalOverrideRequest {
+  // Unset clears the global override, reverting to the "tymux" feature
+  // flag's default (false). true/false forces the global default for every
+  // session created from now on. Mirrors SetStreamHubGlobalOverrideRequest.
+  optional bool force_tymux = 1;
+}

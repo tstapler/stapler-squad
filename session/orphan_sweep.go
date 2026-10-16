@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,10 +16,14 @@ import (
 //
 // Orphans accumulate when DeleteSession removes the DB record but the server is
 // restarted before (or while) the live in-memory instance is available — leaving
-// the Claude process running inside a tmux pane with no owner. This sweep is called
-// once during server startup, after all DB sessions have been loaded and re-adopted
-// (steps 6/6b of BuildRuntimeDeps), so there is no risk of killing a session that
-// is mid-adoption.
+// the Claude process running inside a tmux pane with no owner. This was originally
+// called only once during server startup, after all DB sessions have been loaded
+// and re-adopted (steps 6/6b of BuildRuntimeDeps), specifically because at that
+// point in the sequence no new session creation can be racing it. OrphanedTmuxSweeper
+// now also calls this periodically during live operation to catch orphans that
+// accumulate between restarts (e.g. a crash mid-DeleteSession, or a KillTmuxPaneOnly
+// call in archiveItemWorkSessions that silently failed) — see its doc comment for
+// why minAge exists and is mandatory there.
 //
 // Identification strategy:
 //  1. Tmux session has STAPLER_SESSION_UUID env var → compare against known UUIDs.
@@ -28,7 +33,17 @@ import (
 //
 // The staplersquad_keepalive sentinel is always preserved — it keeps the tmux
 // server alive between sessions and is never tracked in the DB.
-func ReconcileOrphanedTmuxSessions(instances []*Instance) {
+//
+// minAge is a grace period: a candidate orphan whose tmux session is younger than
+// minAge is never killed, regardless of whether it appears in instances. This
+// closes an unavoidable race for any periodic (post-startup) caller — CreateSession
+// calls instance.Start() (which creates the tmux session) before it registers the
+// new instance with the live provider a periodic sweep reads from (AddInstance),
+// so a sweep tick landing in that window would otherwise see a legitimate
+// brand-new session as an orphan. Pass 0 only for the one-time startup call, where
+// this race cannot occur (no new session creation is possible before BuildRuntimeDeps
+// finishes). Any periodic caller MUST pass a nonzero minAge.
+func ReconcileOrphanedTmuxSessions(instances []*Instance, minAge time.Duration) {
 	// Resolve once, here -- not per-command below. This is what actually makes this
 	// function test-safe: inside a `go test` binary it targets a per-process
 	// isolated socket instead of the real shared default, so it can never again
@@ -59,7 +74,9 @@ func ReconcileOrphanedTmuxSessions(instances []*Instance) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	out, err := safeexec.CommandContext(ctx, tmux.Binary(), socketArgs("list-sessions", "-F", "#{session_name}")...).Output()
+	// #{session_created} (unix seconds) rides along in the same call so the age
+	// check below needs no extra per-candidate subprocess round-trip.
+	out, err := safeexec.CommandContext(ctx, tmux.Binary(), socketArgs("list-sessions", "-F", "#{session_name}\t#{session_created}")...).Output()
 	if err != nil {
 		// tmux not running or no sessions — nothing to sweep
 		return
@@ -68,8 +85,13 @@ func ReconcileOrphanedTmuxSessions(instances []*Instance) {
 	keepalive := tmux.TmuxPrefix + "keepalive"
 
 	killed := 0
+	skippedYoung := 0
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		sessionName := strings.TrimSpace(line)
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		sessionName, createdRaw, _ := strings.Cut(line, "\t")
 		if sessionName == "" || !strings.HasPrefix(sessionName, tmux.TmuxPrefix) {
 			continue
 		}
@@ -80,6 +102,20 @@ func ReconcileOrphanedTmuxSessions(instances []*Instance) {
 		// Session name matches a known DB session → re-adopted, leave alone.
 		if _, known := knownTmuxNames[sessionName]; known {
 			continue
+		}
+
+		// Grace period: never treat a session younger than minAge as an orphan —
+		// see the doc comment above for the registration-race this closes.
+		if minAge > 0 {
+			if createdUnix, parseErr := strconv.ParseInt(createdRaw, 10, 64); parseErr == nil {
+				age := time.Since(time.Unix(createdUnix, 0))
+				if age < minAge {
+					log.Debug("orphan sweep: skipping recently created session, still within grace period",
+						"session", sessionName, "age", age.Round(time.Second))
+					skippedYoung++
+					continue
+				}
+			}
 		}
 
 		// Try to match via STAPLER_SESSION_UUID from the tmux session environment.
@@ -104,7 +140,7 @@ func ReconcileOrphanedTmuxSessions(instances []*Instance) {
 		killCancel()
 	}
 
-	if killed > 0 {
-		log.Info("orphan sweep: complete", "killed", killed)
+	if killed > 0 || skippedYoung > 0 {
+		log.Info("orphan sweep: complete", "killed", killed, "skipped_within_grace_period", skippedYoung)
 	}
 }

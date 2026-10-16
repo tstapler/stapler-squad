@@ -1,11 +1,9 @@
 package daemon
 
 import (
-	"context"
 	"fmt"
 	"github.com/fsnotify/fsnotify"
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"os"
@@ -155,7 +153,7 @@ func setupStateFileWatcher() (*fsnotify.Watcher, error) {
 
 	// Make sure the config directory exists before watching it
 	if _, err := os.Stat(configDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(configDir, 0755); err != nil {
+		if err := os.MkdirAll(configDir, 0750); err != nil {
 			return nil, fmt.Errorf("failed to create config directory: %w", err)
 		}
 	}
@@ -332,53 +330,6 @@ func detectAndAddNewSessions(currentInstances *[]*session.Instance, storage *ses
 	return nil
 }
 
-// LaunchDaemon launches the daemon process.
-func LaunchDaemon() error {
-	// Find the claude squad binary.
-	execPath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("failed to get executable path: %w", err)
-	}
-
-	// Use context.Background(): this is a daemon launch; we only need a context for the
-	// safeexec.CommandContext API. The daemon process runs indefinitely after Start() returns.
-	cmd := safeexec.CommandContext(context.Background(), execPath, "--daemon")
-
-	// Detach the process from the parent
-	cmd.Stdin = nil
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-
-	// Set process group to prevent signals from propagating
-	cmd.SysProcAttr = getSysProcAttr()
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start child process: %w", err)
-	}
-
-	log.Info("started daemon child process", "pid", cmd.Process.Pid)
-
-	// Save PID to a file for later management
-	pidDir, err := config.GetConfigDir()
-	if err != nil {
-		return fmt.Errorf("failed to get config directory: %w", err)
-	}
-
-	pidFile := filepath.Join(pidDir, "daemon.pid")
-	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", cmd.Process.Pid)), 0644); err != nil {
-		return fmt.Errorf("failed to write PID file: %w", err)
-	}
-
-	// Release the process so it won't become a zombie when it exits
-	// This tells the OS that the parent won't wait for the child
-	if err := cmd.Process.Release(); err != nil {
-		log.Warn("failed to release daemon process (may become zombie on exit)", "err", err)
-	}
-
-	// Don't wait for the child to exit, it's detached and released
-	return nil
-}
-
 // StopDaemon attempts to stop a running daemon process if it exists. Returns no error if the daemon is not found
 // (assumes the daemon does not exist).
 func StopDaemon() error {
@@ -388,6 +339,8 @@ func StopDaemon() error {
 	}
 
 	pidFile := filepath.Join(pidDir, "daemon.pid")
+	// #nosec G304 -- pidFile is GetConfigDir() plus the constant "daemon.pid",
+	// not caller/user-controlled input.
 	data, err := os.ReadFile(pidFile)
 	if err != nil {
 		if os.IsNotExist(err) {

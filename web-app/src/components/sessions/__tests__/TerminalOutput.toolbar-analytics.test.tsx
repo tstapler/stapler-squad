@@ -5,60 +5,36 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
-const mockXtermHandle = {
-  terminal: null as null,
-  fit: jest.fn(),
-  write: jest.fn(),
-  writeln: jest.fn(),
-  clear: jest.fn(),
-  focus: jest.fn(),
-  search: jest.fn().mockReturnValue(false),
-  searchNext: jest.fn().mockReturnValue(false),
-  searchPrevious: jest.fn().mockReturnValue(false),
-};
+const mockXtermHandle = require("./terminalOutputTestMocks").createMockXtermHandle();
 
-jest.mock("../XtermTerminal", () => {
-  const React = require("react");
-  const XtermTerminal = React.forwardRef((props: any, ref: any) => {
-    React.useImperativeHandle(ref, () => mockXtermHandle);
-    return React.createElement("div", { "data-testid": "mock-xterm" });
-  });
-  XtermTerminal.displayName = "XtermTerminal";
-  return { XtermTerminal };
-});
+jest.mock("../XtermTerminal", () =>
+  require("./terminalOutputTestMocks").xtermTerminalMockModule(mockXtermHandle)
+);
 
-jest.mock("@/lib/hooks/useTerminalStream", () => ({
-  useTerminalStream: jest.fn(),
-}));
+jest.mock("@/lib/hooks/useTerminalStream", () =>
+  require("./terminalOutputTestMocks").useTerminalStreamMockModule()
+);
 
-jest.mock("@/lib/terminal/TerminalDimensionCache", () => ({
-  getCachedDimensions: jest.fn().mockReturnValue(null),
-  saveDimensions: jest.fn(),
-}));
+jest.mock("@/lib/terminal/TerminalDimensionCache", () =>
+  require("./terminalOutputTestMocks").terminalDimensionCacheMockModule()
+);
 
-jest.mock("@/lib/terminal/TerminalStreamManager", () => ({
-  TerminalStreamManager: jest.fn().mockImplementation(() => ({
-    setOnFirstOutput: jest.fn(),
-    installDebugMonitor: jest.fn(),
-    writeInitialContent: jest.fn().mockResolvedValue(undefined),
-    write: jest.fn(),
-    cleanup: jest.fn(),
-    updateSendFlowControl: jest.fn(),
-  })),
-}));
+jest.mock("@/lib/terminal/TerminalStreamManager", () =>
+  require("./terminalOutputTestMocks").terminalStreamManagerMockModule()
+);
 
 const mockTrack = jest.fn();
-jest.mock("@/lib/contexts/AnalyticsContext", () => ({
-  useAnalytics: () => ({ track: mockTrack }),
-}));
+jest.mock("@/lib/contexts/AnalyticsContext", () =>
+  require("./terminalOutputTestMocks").analyticsContextMockModule(mockTrack)
+);
 
-jest.mock("@/lib/hooks/useBrowserLogStream", () => ({
-  useBrowserLogStream: jest.fn(),
-}));
+jest.mock("@/lib/hooks/useBrowserLogStream", () =>
+  require("./terminalOutputTestMocks").browserLogStreamMockModule()
+);
 
 const mockUseViewport = jest.fn();
 jest.mock("@/components/providers/ViewportProvider", () => ({
@@ -69,6 +45,7 @@ jest.mock("@/components/providers/ViewportProvider", () => ({
 
 // eslint-disable-next-line import/first
 import { TerminalOutput } from "../TerminalOutput";
+import { TerminalPoolProvider } from "@/lib/terminal/TerminalPool";
 // eslint-disable-next-line import/first
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
 
@@ -96,9 +73,14 @@ function makeStreamMock(overrides = {}) {
   };
 }
 
+// Story 3 — TerminalOutput now sources its xterm.js instance from
+// TerminalPoolProvider (see TerminalPool.tsx); every render in this file
+// must be wrapped in one, matching production's app-level provider.
 function renderTerminal(sessionId = "session-abc", baseUrl = "/api") {
   return render(
-    <TerminalOutput sessionId={sessionId} baseUrl={baseUrl} isVisible={false} />
+    <TerminalPoolProvider>
+      <TerminalOutput sessionId={sessionId} baseUrl={baseUrl} isVisible={false} />
+    </TerminalPoolProvider>
   );
 }
 
@@ -214,7 +196,7 @@ describe("toolbar analytics", () => {
 
   it("fires track with button:resize when Resize clicked (in dev panel)", () => {
     renderTerminal();
-    fireEvent.click(screen.getByRole("button", { name: /resize terminal/i }));
+    fireEvent.click(screen.getByRole("button", { name: /redraw terminal/i }));
     expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({
       name: "toolbar_button_click",
       category: "user_action",
@@ -262,7 +244,7 @@ describe("toolbar analytics", () => {
 
   it("fires track with button:log-stream state:on when Log Stream enabled", () => {
     renderTerminal();
-    fireEvent.click(screen.getByRole("button", { name: /enable verbose debug log streaming/i }));
+    fireEvent.click(screen.getByRole("button", { name: /enable verbose debug trace streaming/i }));
     expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({
       labels: expect.objectContaining({ button: "log-stream", state: "on" }),
     }));
@@ -437,5 +419,27 @@ describe("compact toolbar auto-collapse", () => {
     renderTerminal();
     expect(screen.getByTestId("toolbar-toggle")).toHaveAttribute("aria-expanded", "true");
     expect(screen.queryAllByTestId("mobile-key").length).toBeGreaterThan(0);
+  });
+});
+
+describe("TerminalOutput — mobile overflow row upload buttons", () => {
+  it("renders Gallery and Files in the overflow row once More is opened", () => {
+    renderTerminal();
+    expect(screen.queryByTestId("toolbar-overflow-row")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("toolbar-more-button"));
+
+    const row = within(screen.getByTestId("toolbar-overflow-row"));
+    expect(row.getByLabelText("Attach images from gallery")).toBeInTheDocument();
+    expect(row.getByLabelText("Attach files")).toBeInTheDocument();
+    expect(row.getByLabelText("Take photo with camera")).toBeInTheDocument();
+  });
+
+  it("keeps aria-label and title on the Redraw button", () => {
+    renderTerminal();
+    expect(screen.getByLabelText("Redraw terminal (fixes a blank screen)")).toHaveAttribute(
+      "title",
+      "Redraw terminal (fixes a blank screen)"
+    );
   });
 });

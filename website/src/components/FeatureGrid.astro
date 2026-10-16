@@ -1,0 +1,66 @@
+---
+// Renders website/src/content/features.json's 17 FeatureCard entries,
+// grouped by README's 5 Highlights categories (design/ux.md §1's wireframe:
+// "grouped by the 5 README categories"), in a responsive grid that collapses
+// to a single column at phone width (no horizontal scroll).
+import FeatureCard from './FeatureCard.astro';
+import features from '../content/features.json';
+import { CATEGORY_ORDER } from '../../scripts/build-features.mjs';
+
+const groups = CATEGORY_ORDER.map((category) => ({
+	category,
+	cards: features.filter((card) => card.category === category),
+})).filter((group) => group.cards.length > 0);
+---
+
+<section class="feature-grid-section" data-testid="feature-grid">
+	{
+		groups.map(({ category, cards }) => (
+			<div class="feature-category">
+				<h3 class="feature-category-heading">{category}</h3>
+				<div class="feature-grid">
+					{cards.map((card) => (
+						<FeatureCard
+							heading={card.heading}
+							description={card.description}
+							category={card.category}
+							screenshot={card.screenshot}
+							alt={card.alt}
+							demoClip={card.demoClip}
+						/>
+					))}
+				</div>
+			</div>
+		))
+	}
+</section>
+
+<style>
+	.feature-grid-section {
+		overflow-x: hidden;
+		max-width: 100%;
+	}
+
+	.feature-category {
+		margin-top: 2rem;
+	}
+
+	.feature-category-heading {
+		margin-bottom: 1rem;
+	}
+
+	.feature-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+		gap: 1.5rem;
+		max-width: 100%;
+	}
+
+	/* Explicit single-column fallback at phone width (375px-class viewports),
+	   rather than relying only on auto-fit's implicit collapse. */
+	@media (max-width: 480px) {
+		.feature-grid {
+			grid-template-columns: 1fr;
+		}
+	}
+</style>

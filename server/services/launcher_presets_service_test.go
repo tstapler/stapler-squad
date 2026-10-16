@@ -16,7 +16,7 @@ import (
 func newIsolatedLauncherPresetsService(t *testing.T) (*LauncherPresetsService, string) {
 	t.Helper()
 	dir := t.TempDir()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", dir)
+	withIsolatedStateDirPath(t, dir)
 	return NewLauncherPresetsService(), dir
 }
 

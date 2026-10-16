@@ -29,6 +29,7 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     skipReviewGate: false,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     planApproved: false,
     acCriteria: [],
     linkedSessions: [],
@@ -194,5 +195,79 @@ describe("LifecycleSummary", () => {
     render(<LifecycleSummary item={makeItem({ id: "itm_a1b2c3", reworkCapOverride: undefined })} />);
 
     expect(screen.queryByTestId("lifecycle-rework-cap-badge")).not.toBeInTheDocument();
+  });
+
+  it("LifecycleSummary_should_RenderAutomationBadges_When_ItemHasNonDefaultSettings", () => {
+    render(
+      <LifecycleSummary
+        item={makeItem({
+          id: "itm_a1b2c3",
+          skipPlanning: true,
+          skipReviewGate: true,
+          autoSpawnSession: true,
+          autoCreatePR: true,
+        })}
+      />
+    );
+
+    expect(screen.getByTestId("lifecycle-skip-planning-badge")).toHaveTextContent("Skip planning");
+    expect(screen.getByTestId("lifecycle-skip-review-badge")).toHaveTextContent("Skip review gate");
+    expect(screen.getByTestId("lifecycle-auto-spawn-badge")).toHaveTextContent("Auto-spawn");
+    expect(screen.getByTestId("lifecycle-auto-create-pr-badge")).toHaveTextContent("Auto-create PR");
+  });
+
+  it("LifecycleSummary_should_OmitAutomationBadges_When_ItemHasDefaultSettings", () => {
+    render(<LifecycleSummary item={makeItem({ id: "itm_a1b2c3" })} />);
+
+    expect(screen.queryByTestId("lifecycle-skip-planning-badge")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("lifecycle-skip-review-badge")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("lifecycle-auto-spawn-badge")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("lifecycle-auto-create-pr-badge")).not.toBeInTheDocument();
+  });
+
+  it("LifecycleSummary_should_RenderConfiguredPipelineBadge_When_NoSessionPipelineDisplayYet", () => {
+    render(<LifecycleSummary item={makeItem({ id: "itm_a1b2c3" })} configuredPipelineModeName="Fast Track" />);
+
+    expect(screen.getByTestId("lifecycle-configured-pipeline-badge")).toHaveTextContent("Pipeline: Fast Track");
+  });
+
+  it("LifecycleSummary_should_OmitConfiguredPipelineBadge_When_SessionPipelineBadgeAlreadyShown", () => {
+    render(
+      <LifecycleSummary
+        item={makeItem({ id: "itm_a1b2c3" })}
+        pipelineDisplay={{ kind: "resolved", name: "Fast Track", drifted: false }}
+        configuredPipelineModeName="Fast Track"
+      />
+    );
+
+    expect(screen.getByTestId("lifecycle-pipeline-badge")).toHaveTextContent("Pipeline: Fast Track");
+    expect(screen.queryByTestId("lifecycle-configured-pipeline-badge")).not.toBeInTheDocument();
+  });
+
+  describe("PR badge", () => {
+    const prUrl = "https://github.com/x/y/pull/42";
+
+    it.each(["done", "archived", "review"] as const)(
+      "LifecycleSummary_should_RenderPrBadgeLinkingToPr_When_PrUrlSetAndStatusIs_%s",
+      (status) => {
+        render(<LifecycleSummary item={makeItem({ status, prUrl, prNumber: 42 })} />);
+        expect(screen.getByTestId("lifecycle-pr-badge").querySelector("a")).toHaveAttribute("href", prUrl);
+      }
+    );
+
+    it("LifecycleSummary_should_FallBackToPlainLink_When_PrNumberUnknown", () => {
+      render(<LifecycleSummary item={makeItem({ status: "done", prUrl })} />);
+      expect(screen.getByTestId("lifecycle-pr-badge").querySelector("a")).toHaveAttribute("href", prUrl);
+    });
+
+    it("LifecycleSummary_should_NotRenderPrBadge_When_StatusIsPrPending", () => {
+      render(<LifecycleSummary item={makeItem({ status: "pr_pending", prUrl, prNumber: 42 })} />);
+      expect(screen.queryByTestId("lifecycle-pr-badge")).not.toBeInTheDocument();
+    });
+
+    it("LifecycleSummary_should_NotRenderPrBadge_When_PrUrlIsUndefined", () => {
+      render(<LifecycleSummary item={makeItem({ status: "done", prUrl: undefined })} />);
+      expect(screen.queryByTestId("lifecycle-pr-badge")).not.toBeInTheDocument();
+    });
   });
 });

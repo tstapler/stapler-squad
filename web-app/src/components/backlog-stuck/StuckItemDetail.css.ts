@@ -38,7 +38,10 @@ export const actionCopy = style({
 });
 
 export const prLink = style({
-  color: vars.color.primary,
+  // primary on cardBackground measures 4.32:1, fails WCAG AA (needs >=4.5:1);
+  // accentText is ~9.35:1 on the same background. See theme.css.ts's
+  // accentText comment for the identical prior fix.
+  color: vars.color.accentText,
   textDecoration: "none",
   ":hover": {
     textDecoration: "underline",
@@ -78,9 +81,13 @@ export const overrideButton = style({
   fontSize: vars.fontSize.sm,
   fontWeight: 600,
   cursor: "pointer",
-  ":disabled": {
-    opacity: 0.6,
-    cursor: "not-allowed",
+  selectors: {
+    // This button uses aria-disabled instead of disabled so it stays
+    // focusable while busy.
+    '&[aria-disabled="true"]': {
+      opacity: 0.6,
+      cursor: "not-allowed",
+    },
   },
 });
 
@@ -93,9 +100,11 @@ export const overrideUnlimitedButton = style({
   color: vars.color.textPrimary,
   fontSize: vars.fontSize.sm,
   cursor: "pointer",
-  ":disabled": {
-    opacity: 0.6,
-    cursor: "not-allowed",
+  selectors: {
+    '&[aria-disabled="true"]': {
+      opacity: 0.6,
+      cursor: "not-allowed",
+    },
   },
 });
 

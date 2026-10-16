@@ -8,6 +8,7 @@
 // assumed exists (see BacklogItemCard.tsx for the same substitution).
 import { CircleDot } from "lucide-react";
 import { CollapsibleSection } from "@/components/ui/Collapsible";
+import { parseExternalRef } from "../externalRef";
 import * as styles from "./SourceSection.css";
 
 export interface SourceSectionProps {
@@ -30,6 +31,8 @@ export interface SourceSectionProps {
  * literal "Issue #undefined".
  */
 export function SourceSection({ externalUrl, externalId, labels, defaultExpanded }: SourceSectionProps) {
+  const ref = parseExternalRef(externalUrl);
+  const refLabel = !externalId ? "" : ref ? `${ref.repo}#${ref.number}` : `#${externalId}`;
   return (
     <CollapsibleSection sectionKey="source" title="Source" defaultExpanded={defaultExpanded}>
       <div className={styles.section}>
@@ -41,7 +44,7 @@ export function SourceSection({ externalUrl, externalId, labels, defaultExpanded
           title="Open on GitHub"
         >
           <CircleDot aria-hidden="true" size={14} />
-          {externalId ? `Issue #${externalId}` : "Issue"}
+          {refLabel ? `Issue ${refLabel}` : "Issue"}
         </a>
         {labels.length > 0 && (
           <div className={styles.labels}>

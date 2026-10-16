@@ -580,7 +580,7 @@ func TestReviewQueue_Observer(t *testing.T) {
 		onAdd: func(item *ReviewItem) {
 			addedCount++
 		},
-		onRemove: func(sessionID string) {
+		onRemove: func(sessionID string, info RemovalInfo) {
 			removedCount++
 		},
 		onUpdate: func(items []*ReviewItem) {
@@ -618,10 +618,65 @@ func TestReviewQueue_Observer(t *testing.T) {
 	}
 }
 
+func TestReviewQueue_RemoveWithInfo_CarriesRuleName(t *testing.T) {
+	t.Parallel()
+	rq := NewReviewQueue()
+	rq.Add(&ReviewItem{SessionID: "s1", Priority: PriorityHigh})
+
+	var gotSessionID string
+	var gotInfo RemovalInfo
+	observer := &testObserver{
+		onRemove: func(sessionID string, info RemovalInfo) {
+			gotSessionID = sessionID
+			gotInfo = info
+		},
+	}
+	rq.Subscribe(observer)
+
+	removed := rq.RemoveWithInfo("s1", AutoResolvedByRuleRemoval("some rule"))
+	if !removed {
+		t.Fatal("Expected RemoveWithInfo to return true")
+	}
+	if gotSessionID != "s1" {
+		t.Errorf("Expected sessionID %q, got %q", "s1", gotSessionID)
+	}
+	if gotInfo.Reason() != "auto_resolved_by_rule" {
+		t.Errorf("Expected reason %q, got %q", "auto_resolved_by_rule", gotInfo.Reason())
+	}
+	if gotInfo.RuleName() != "some rule" {
+		t.Errorf("Expected rule name %q, got %q", "some rule", gotInfo.RuleName())
+	}
+}
+
+func TestReviewQueue_Remove_StillReportsUserAction(t *testing.T) {
+	t.Parallel()
+	rq := NewReviewQueue()
+	rq.Add(&ReviewItem{SessionID: "s1", Priority: PriorityHigh})
+
+	var gotInfo RemovalInfo
+	observer := &testObserver{
+		onRemove: func(sessionID string, info RemovalInfo) {
+			gotInfo = info
+		},
+	}
+	rq.Subscribe(observer)
+
+	removed := rq.Remove("s1")
+	if !removed {
+		t.Fatal("Expected Remove to return true")
+	}
+	if gotInfo.Reason() != "user_action" {
+		t.Errorf("Expected reason %q, got %q", "user_action", gotInfo.Reason())
+	}
+	if gotInfo.RuleName() != "" {
+		t.Errorf("Expected empty rule name, got %q", gotInfo.RuleName())
+	}
+}
+
 // testObserver is a test implementation of ReviewQueueObserver
 type testObserver struct {
 	onAdd    func(*ReviewItem)
-	onRemove func(string)
+	onRemove func(string, RemovalInfo)
 	onUpdate func([]*ReviewItem)
 }
 
@@ -631,9 +686,9 @@ func (o *testObserver) OnItemAdded(item *ReviewItem) {
 	}
 }
 
-func (o *testObserver) OnItemRemoved(sessionID string) {
+func (o *testObserver) OnItemRemoved(sessionID string, info RemovalInfo) {
 	if o.onRemove != nil {
-		o.onRemove(sessionID)
+		o.onRemove(sessionID, info)
 	}
 }
 

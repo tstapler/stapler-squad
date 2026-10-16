@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
@@ -27,7 +28,7 @@ func spawnSleeper(t *testing.T) *exec.Cmd {
 }
 
 func TestCancelPendingKill_DeletesInstanceBeforeResumingProcess_When_DeleteSucceeds(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	suspended, err := NewSuspendedProcessStore()
 	if err != nil {
@@ -70,7 +71,7 @@ func TestCancelPendingKill_DeletesInstanceBeforeResumingProcess_When_DeleteSucce
 }
 
 func TestCancelPendingKill_SkipsResume_When_DeleteFails(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	suspended, err := NewSuspendedProcessStore()
 	if err != nil {

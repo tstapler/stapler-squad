@@ -11,8 +11,20 @@
 import React from "react";
 import { render } from "@testing-library/react";
 import { PaneSplitRenderer } from "../PaneSplitRenderer";
+import { SessionViewModeProvider } from "@/lib/contexts/SessionViewModeContext";
 import type { PaneState } from "@/lib/pane/paneTypes";
 import type { Session } from "@/gen/session/v1/types_pb";
+
+// PaneSplitRenderer's SessionListPaneBody consumes SessionViewModeContext (the List/Board
+// toggle state lifted to page.tsx in production) — provide a fixed "list" value here since
+// this suite only exercises the pre-board scroll-wrapper behavior.
+function renderWithProviders(ui: React.ReactElement) {
+  return render(
+    <SessionViewModeProvider value={{ viewMode: "list", setViewMode: jest.fn() }}>
+      {ui}
+    </SessionViewModeProvider>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -59,6 +71,7 @@ jest.mock("@/components/pane/PaneContext", () => ({
     triggerPicker: jest.fn(),
     triggerPickerForceNew: jest.fn(),
     cancelPicker: jest.fn(),
+    backlogIndex: new Map(),
   }),
 }));
 
@@ -95,7 +108,7 @@ const makeSession = (id: string, title: string): Partial<Session> => ({
 
 describe("SessionListPaneBody — scroll wrapper", () => {
   it("SessionListPaneBody_should_renderScrollContainer_When_sessionsExist", () => {
-    const { getByTestId } = render(
+    const { getByTestId } = renderWithProviders(
       <PaneSplitRenderer
         state={sessionListPaneState}
         dispatch={jest.fn()}
@@ -106,7 +119,7 @@ describe("SessionListPaneBody — scroll wrapper", () => {
   });
 
   it("SessionListPaneBody_should_renderSessionListInsideScrollWrapper", () => {
-    const { getByTestId } = render(
+    const { getByTestId } = renderWithProviders(
       <PaneSplitRenderer
         state={sessionListPaneState}
         dispatch={jest.fn()}
@@ -121,7 +134,7 @@ describe("SessionListPaneBody — scroll wrapper", () => {
   it("SessionListPaneBody_should_notSetOverflowX_on_scrollWrapper", () => {
     // TC-2.3: REQ-2c — scroll wrapper must not set inline overflowX;
     // vanilla-extract controls Y-axis scroll only at build time.
-    const { getByTestId } = render(
+    const { getByTestId } = renderWithProviders(
       <PaneSplitRenderer
         state={sessionListPaneState}
         dispatch={jest.fn()}
@@ -133,7 +146,7 @@ describe("SessionListPaneBody — scroll wrapper", () => {
   });
 
   it("SessionListPaneBody_should_notWrapNonSessionListPane", () => {
-    const { queryByTestId } = render(
+    const { queryByTestId } = renderWithProviders(
       <PaneSplitRenderer
         state={sessionDetailPaneState}
         dispatch={jest.fn()}

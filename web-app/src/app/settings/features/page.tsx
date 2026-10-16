@@ -1,9 +1,17 @@
 // +feature: settings-features
 "use client";
 
+import { useCallback, useState } from "react";
 import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
+import { GLOBAL_SCOPE } from "@/lib/contexts/featureFlagScopes";
 import { usePageView } from "@/lib/analytics";
 import { vars } from "@/styles/theme.css";
+import { StreamHubRolloutPanel } from "@/components/settings/StreamHubRolloutPanel";
+import { TymuxRolloutPanel } from "@/components/settings/TymuxRolloutPanel";
+import { PiDisableWarningDialog } from "@/components/settings/PiDisableWarningDialog";
+import { PI_SUPPORT_FLAG_NAME } from "@/lib/constants/programs";
+import { GateStatusLine } from "./GateStatusLine";
+import { GateKindOverrides, type OverrideMode } from "./GateKindOverrides";
 import {
   container,
   title,
@@ -21,8 +29,16 @@ import {
   emptyMessage,
 } from "./page.css";
 
+// Mirrors config.HiddenSessionGateFeatureFlag on the server.
+const HIDDEN_SESSION_GATE_FLAG = "hidden_session_gate";
+
+// The notification flags are read live by the page (FG-1): no reload after a flip.
+const LIVE_FLAG_NOTE = "Takes effect without reload";
+
 const FEATURE_META: Record<string, { label: string }> = {
   backlog: { label: "Backlog" },
+  "programs:cli-flag-probe": { label: "Program flag discovery (check binary and read --help)" },
+  "pi-support": { label: "pi coding agent" },
   "backlog:sdd-default-pipeline": { label: "Backlog: default new items to SDD pipeline" },
   "review:block-approval-on-ci-failure": { label: "Block Approve when CI is failing" },
   "terminal:resync-visibility-scope": { label: "Terminal resync: scope to visible terminal" },
@@ -34,11 +50,83 @@ const FEATURE_META: Record<string, { label: string }> = {
   "terminal:resync-stagger": { label: "Terminal resync: stagger bursts" },
   "terminal:resync-compression": { label: "Terminal resync: wire compression" },
   "terminal:resync-batching": { label: "Terminal resync: batch requests" },
+  [HIDDEN_SESSION_GATE_FLAG]: { label: "Notifications: hidden-session delivery gate" },
 };
+
 
 export default function FeaturesPage() {
   usePageView();
   const { flagList, isLoading, error, setFlag } = useFeatureFlags();
+  const [pendingPiDisable, setPendingPiDisable] = useState(false);
+
+  // Story 2.1.2: toggling pi-support off is gated on a mandatory warning ONLY
+  // when the global pi approval extension is actually installed on disk —
+  // otherwise this behaves exactly like toggling any other flag. The check
+  // runs server-side (~/.pi is on the server's filesystem, not the browser's)
+  // via GET /api/pi-extension-status.
+  const handleToggle = useCallback(
+    async (name: string, currentEnabled: boolean) => {
+      const disablingPiSupport = name === PI_SUPPORT_FLAG_NAME && currentEnabled;
+      if (!disablingPiSupport) {
+        // The scopable gate flag always sends the explicit "global" scope, so a
+        // dropped scope can never write the global value by accident.
+        setFlag(
+          name,
+          name === HIDDEN_SESSION_GATE_FLAG
+            ? { mutation: "set", scope: GLOBAL_SCOPE, enabled: !currentEnabled }
+            : !currentEnabled,
+        );
+        return;
+      }
+      try {
+        const res = await fetch("/api/pi-extension-status");
+        if (!res.ok) {
+          // Fail closed: a non-2xx response (e.g. a 500) means we can't trust
+          // the body's `installed` field — show the warning rather than
+          // silently falling through to a disable. Matches ADR-003's
+          // fail-closed posture elsewhere in this feature.
+          setPendingPiDisable(true);
+          return;
+        }
+        const data: { installed?: boolean } = await res.json();
+        if (data.installed) {
+          setPendingPiDisable(true);
+          return;
+        }
+      } catch {
+        // Fail closed: if the status check itself fails, show the warning
+        // rather than silently disabling — matches this feature's fail-closed
+        // posture elsewhere (ADR-003) rather than assuming "not installed".
+        setPendingPiDisable(true);
+        return;
+      }
+      setFlag(name, false);
+    },
+    [setFlag],
+  );
+
+  const confirmPiDisable = useCallback(() => {
+    setPendingPiDisable(false);
+    setFlag(PI_SUPPORT_FLAG_NAME, false);
+  }, [setFlag]);
+
+  const changeKindOverride = useCallback(
+    (scope: string, mode: OverrideMode) => {
+      setFlag(
+        HIDDEN_SESSION_GATE_FLAG,
+        mode === "inherit" ? { mutation: "clear", scope } : { mutation: "set", scope, enabled: mode === "on" },
+      );
+    },
+    [setFlag],
+  );
+
+  const resetGateDefault = useCallback(() => {
+    setFlag(HIDDEN_SESSION_GATE_FLAG, { mutation: "reset" });
+  }, [setFlag]);
+
+  const cancelPiDisable = useCallback(() => {
+    setPendingPiDisable(false);
+  }, []);
 
   return (
     <main id="main-content" className={container}>
@@ -56,7 +144,7 @@ export default function FeaturesPage() {
       ) : !error && flagList.length === 0 ? (
         <p className={emptyMessage}>No feature flags configured.</p>
       ) : (
-        flagList.map(({ name, enabled, description, statusDetail }) => {
+        flagList.map(({ name, enabled, description, statusDetail, scopes }) => {
           const meta = FEATURE_META[name];
           const label = meta?.label ?? name;
           return (
@@ -74,8 +162,24 @@ export default function FeaturesPage() {
                 {description && (
                   <div className={flagDescription}>{description}</div>
                 )}
+                {name === HIDDEN_SESSION_GATE_FLAG && (
+                  <div className={flagDescription} data-testid="flag-live-note">
+                    {LIVE_FLAG_NOTE}
+                  </div>
+                )}
                 {statusDetail && (
                   <div className={flagDescription}>{statusDetail}</div>
+                )}
+                {name === HIDDEN_SESSION_GATE_FLAG && (
+                  <GateStatusLine className={flagDescription} />
+                )}
+                {name === HIDDEN_SESSION_GATE_FLAG && (
+                  <GateKindOverrides
+                    scopes={scopes}
+                    globalEnabled={enabled}
+                    onChange={changeKindOverride}
+                    onReset={resetGateDefault}
+                  />
                 )}
               </div>
               <button
@@ -85,7 +189,7 @@ export default function FeaturesPage() {
                 }}
                 aria-label={`${enabled ? "Disable" : "Enable"} ${label}`}
                 aria-pressed={enabled}
-                onClick={() => setFlag(name, !enabled)}
+                onClick={() => handleToggle(name, enabled)}
               >
                 <span
                   className={toggleThumb}
@@ -95,6 +199,13 @@ export default function FeaturesPage() {
             </div>
           );
         })
+      )}
+
+      <StreamHubRolloutPanel />
+      <TymuxRolloutPanel />
+
+      {pendingPiDisable && (
+        <PiDisableWarningDialog onAcknowledge={confirmPiDisable} onCancel={cancelPiDisable} />
       )}
     </main>
   );

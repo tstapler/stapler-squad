@@ -297,7 +297,7 @@ func TestImportService_CommitImportExternalSession_ReturnsFailedStatus_When_Path
 // deterministic AlreadyGone branch and asserting the persisted
 // SuspendedProcessRecord is cleaned up as a result.
 func TestImportService_ConfirmKillExternalSession_ReturnsAlreadyGone_When_AliveCheckerReportsProcessGone(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	suspended, err := session.NewSuspendedProcessStore()
 	require.NoError(t, err)
 	require.NoError(t, suspended.Add(session.SuspendedProcessRecord{
@@ -331,7 +331,7 @@ func TestImportService_ConfirmKillExternalSession_ReturnsAlreadyGone_When_AliveC
 // regressed and the client-supplied PID were used instead,
 // ResumeOriginalProcess would fail (ESRCH) and resumed would be false.
 func TestImportService_CancelPendingKill_PrefersPersistedRecordPID_When_RecordExists(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	suspended, err := session.NewSuspendedProcessStore()
 	require.NoError(t, err)
 

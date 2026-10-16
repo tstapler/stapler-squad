@@ -50,8 +50,7 @@ type testConvSession struct {
 // the constructed *session.ClaudeSessionHistory for direct use.
 func seedClaudeHome(t *testing.T, sessions map[string]testConvSession) *session.ClaudeSessionHistory {
 	t.Helper()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := withFakeHome(t)
 
 	claudeDir := filepath.Join(home, ".claude")
 	require.NoError(t, os.MkdirAll(claudeDir, 0o755))

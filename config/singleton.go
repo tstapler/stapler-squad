@@ -23,7 +23,7 @@ const (
 
 // AcquireInstanceLock takes an exclusive lock on instance.lock in configDir,
 // retrying until timeout elapses. Unlike the PID/port-based liveness checks
-// documented in .claude/rules/service-restart-orphan-process.md, the OS
+// documented in docs/explanation/service-restart-orphan-process.md, the OS
 // releases a flock the moment the holding process's file descriptors close —
 // including on an unclean exit or reparenting to PID 1 — so a prior process
 // that launchd/systemd has lost track of still can't hold this lock forever.
@@ -42,7 +42,7 @@ func AcquireInstanceLock(configDir string, timeout time.Duration) (*flock.Flock,
 		return nil, fmt.Errorf("failed to acquire instance lock at %s: %w", lockPath, err)
 	}
 	if !locked {
-		return nil, fmt.Errorf("another stapler-squad process already holds the instance lock at %s (timed out after %s) — check for an orphaned process (see .claude/rules/service-restart-orphan-process.md)", lockPath, timeout)
+		return nil, fmt.Errorf("another stapler-squad process already holds the instance lock at %s (timed out after %s) — check for an orphaned process (see docs/explanation/service-restart-orphan-process.md)", lockPath, timeout)
 	}
 	return fileLock, nil
 }

@@ -1,0 +1,12 @@
+{
+  "id": "backlog:delete-stage-transition",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "DeleteStageTransition",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_transitions.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-09-04T10:04:45.755274291-07:00"
+}

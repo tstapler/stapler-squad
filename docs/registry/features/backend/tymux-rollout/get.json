@@ -1,0 +1,14 @@
+{
+  "id": "tymux-rollout:get",
+  "type": "backend",
+  "service": "TymuxRolloutService",
+  "method": "GetTymuxRolloutStatus",
+  "protoFile": "proto/session/v1/tymux_rollout.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/tymux_rollout_service.go",
+  "tested": true,
+  "testIds": [
+    "TestGetTymuxRolloutStatus_ReportsRehearsalState"
+  ],
+  "lastModified": "2026-08-25T14:21:24.626536551-07:00"
+}
