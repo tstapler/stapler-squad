@@ -1,7 +1,6 @@
 package unfinished_test
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,10 +9,12 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
+	"github.com/go-git/go-git/v5/plumbing/format/index"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/unfinished"
+	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 )
 
 // initRepo creates a git repo at path with one commit and returns its path.
@@ -81,6 +82,174 @@ func addCommit(t *testing.T, repoPath, filename, message string) {
 		Author: &object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
 	}); err != nil {
 		t.Fatalf("Commit: %v", err)
+	}
+}
+
+// openGoGit opens the repo at path through the shared go-git entry point.
+func openGoGit(t testing.TB, path string) *git.Repository {
+	t.Helper()
+	repo, err := gitutil.OpenRepo(path)
+	if err != nil {
+		t.Fatalf("PlainOpen: %v", err)
+	}
+	return repo
+}
+
+// branchAtHead creates refs/heads/<name> at the current HEAD (git branch <name>).
+func branchAtHead(t testing.TB, repoPath, name string) {
+	t.Helper()
+	repo := openGoGit(t, repoPath)
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatalf("Head: %v", err)
+	}
+	testrepo.SetBranch(t, repo, name, head.Hash())
+}
+
+// checkoutBranch is git checkout [-b] <branch>.
+func checkoutBranch(t testing.TB, repoPath, branch string, create bool) {
+	t.Helper()
+	testrepo.Checkout(t, openGoGit(t, repoPath), branch, create)
+}
+
+// commitAll is `git add . && git commit -m msg`.
+func commitAll(t testing.TB, repoPath, msg string) {
+	t.Helper()
+	wt, err := openGoGit(t, repoPath).Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	sig := &object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()}
+	if _, err := wt.Commit(msg, &git.CommitOptions{Author: sig, Committer: sig}); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+}
+
+// assertBehindFixtureShape checks the topology TestGoGitVCSReader_AheadBehind_BehindCount
+// relies on: main has the single initial commit, base is exactly one commit
+// ahead of it, and HEAD is main.
+func assertBehindFixtureShape(t testing.TB, repoPath string) {
+	t.Helper()
+	repo := openGoGit(t, repoPath)
+	head, err := repo.Head()
+	if err != nil || head.Name() != plumbing.NewBranchReferenceName("main") {
+		t.Fatalf("fixture: HEAD = %v (%v), want refs/heads/main", head, err)
+	}
+	mainCommit, err := repo.CommitObject(head.Hash())
+	if err != nil {
+		t.Fatalf("fixture: main commit: %v", err)
+	}
+	if len(mainCommit.ParentHashes) != 0 {
+		t.Fatalf("fixture: main has %d parents, want 0 (single root commit)", len(mainCommit.ParentHashes))
+	}
+	baseRef, err := repo.Reference(plumbing.NewBranchReferenceName("base"), true)
+	if err != nil {
+		t.Fatalf("fixture: base ref: %v", err)
+	}
+	baseCommit, err := repo.CommitObject(baseRef.Hash())
+	if err != nil {
+		t.Fatalf("fixture: base commit: %v", err)
+	}
+	if len(baseCommit.ParentHashes) != 1 || baseCommit.ParentHashes[0] != head.Hash() {
+		t.Fatalf("fixture: base parents = %v, want exactly [%s]", baseCommit.ParentHashes, head.Hash())
+	}
+	n := 0
+	iter, err := repo.Log(&git.LogOptions{From: baseRef.Hash()})
+	if err != nil {
+		t.Fatalf("fixture: log: %v", err)
+	}
+	_ = iter.ForEach(func(*object.Commit) error { n++; return nil })
+	if n != 2 {
+		t.Fatalf("fixture: base reaches %d commits, want 2", n)
+	}
+}
+
+// stageMergeConflict rewrites the index and worktree for path as an unresolved
+// `git merge theirsBranch` into HEAD would: stage 1/2/3 entries from the merge
+// base, HEAD and theirsBranch, conflict markers on disk, and MERGE_HEAD set.
+func stageMergeConflict(t testing.TB, repoPath, theirsBranch, path string) {
+	t.Helper()
+	repo := openGoGit(t, repoPath)
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatalf("Head: %v", err)
+	}
+	theirsRef, err := repo.Reference(plumbing.NewBranchReferenceName(theirsBranch), true)
+	if err != nil {
+		t.Fatalf("theirs ref: %v", err)
+	}
+	ours, err := repo.CommitObject(head.Hash())
+	if err != nil {
+		t.Fatalf("ours commit: %v", err)
+	}
+	theirs, err := repo.CommitObject(theirsRef.Hash())
+	if err != nil {
+		t.Fatalf("theirs commit: %v", err)
+	}
+	bases, err := ours.MergeBase(theirs)
+	if err != nil || len(bases) != 1 {
+		t.Fatalf("merge base: %v (%d results)", err, len(bases))
+	}
+	blobOf := func(c *object.Commit) plumbing.Hash {
+		f, err := c.File(path)
+		if err != nil {
+			t.Fatalf("File %s@%s: %v", path, c.Hash, err)
+		}
+		return f.Hash
+	}
+	idx, err := repo.Storer.Index()
+	if err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+	if _, err := idx.Remove(path); err != nil {
+		t.Fatalf("index remove %s: %v", path, err)
+	}
+	now := time.Now()
+	for _, e := range []struct {
+		stage index.Stage
+		hash  plumbing.Hash
+	}{
+		{index.AncestorMode, blobOf(bases[0])},
+		{index.OurMode, blobOf(ours)},
+		{index.TheirMode, blobOf(theirs)},
+	} {
+		idx.Entries = append(idx.Entries, &index.Entry{
+			Name: path, Hash: e.hash, Mode: filemode.Regular, Stage: e.stage,
+			CreatedAt: now, ModifiedAt: now,
+		})
+	}
+	if err := repo.Storer.SetIndex(idx); err != nil {
+		t.Fatalf("SetIndex: %v", err)
+	}
+	markers := "<<<<<<< HEAD\nmain content\n=======\nbranch-a content\n>>>>>>> " + theirsBranch + "\n"
+	if err := os.WriteFile(filepath.Join(repoPath, path), []byte(markers), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Storer.SetReference(plumbing.NewHashReference("MERGE_HEAD", theirsRef.Hash())); err != nil {
+		t.Fatalf("MERGE_HEAD: %v", err)
+	}
+}
+
+// assertConflictFixtureShape checks the index holds exactly stages 1, 2 and 3
+// (and no stage 0) for path, the equivalent of `git status --porcelain` UU.
+func assertConflictFixtureShape(t testing.TB, repoPath, path string) {
+	t.Helper()
+	idx, err := openGoGit(t, repoPath).Storer.Index()
+	if err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+	var stages []index.Stage
+	for _, e := range idx.Entries {
+		if e.Name == path {
+			stages = append(stages, e.Stage)
+		}
+	}
+	want := []index.Stage{index.AncestorMode, index.OurMode, index.TheirMode}
+	if len(stages) != 3 || stages[0] != want[0] || stages[1] != want[1] || stages[2] != want[2] {
+		t.Fatalf("fixture: %s stages = %v, want %v (unresolved conflict)", path, stages, want)
 	}
 }
 
@@ -179,11 +348,7 @@ func testVCSReaderContract(t *testing.T, r unfinished.VCSReader) {
 	t.Run("AheadBehind_zero_on_single_commit_repo", func(t *testing.T) {
 		repo := initRepo(t)
 		// Set up a "base" branch pointing at the same commit.
-		cmd := safeexec.CommandContext(context.Background(), "git", "branch", "base")
-		cmd.Dir = repo
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git branch: %v\n%s", err, out)
-		}
+		branchAtHead(t, repo, "base")
 		ahead, behind, err := r.AheadBehind(repo, "base")
 		if err != nil {
 			t.Fatalf("AheadBehind: %v", err)
@@ -197,11 +362,7 @@ func testVCSReaderContract(t *testing.T, r unfinished.VCSReader) {
 		repo := initRepo(t)
 
 		// Create base branch at initial commit.
-		cmd := safeexec.CommandContext(context.Background(), "git", "branch", "base")
-		cmd.Dir = repo
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git branch: %v\n%s", err, out)
-		}
+		branchAtHead(t, repo, "base")
 
 		// Add 2 commits on main.
 		addCommit(t, repo, "a.txt", "commit a")
@@ -222,11 +383,7 @@ func testVCSReaderContract(t *testing.T, r unfinished.VCSReader) {
 	t.Run("CommitMessages_returns_messages_ahead", func(t *testing.T) {
 		repo := initRepo(t)
 
-		cmd := safeexec.CommandContext(context.Background(), "git", "branch", "base")
-		cmd.Dir = repo
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git branch: %v\n%s", err, out)
-		}
+		branchAtHead(t, repo, "base")
 
 		addCommit(t, repo, "x.txt", "feat: add x")
 		addCommit(t, repo, "y.txt", "fix: add y")
@@ -320,20 +477,7 @@ func TestDiffShortstat_MultiBlobWorktree(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	run := func(args ...string) {
-		t.Helper()
-		cmd := safeexec.CommandContext(context.Background(), "git", args...)
-		cmd.Dir = repo
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
-			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-	run("add", ".")
-	run("commit", "-m", "add five files")
+	commitAll(t, repo, "add five files")
 
 	// Modify each file: replace 3 lines with 2 distinct lines → 3 deletions + 2 insertions per file.
 	// Use "a\nb\n" (4 bytes) instead of a same-size string to ensure size-based
@@ -369,24 +513,12 @@ func TestGoGitVCSReader_AheadBehind_BehindCount(t *testing.T) {
 	repo := initRepo(t)
 	r := &unfinished.GoGitVCSReader{}
 
-	run := func(args ...string) {
-		t.Helper()
-		cmd := safeexec.CommandContext(context.Background(), "git", args...)
-		cmd.Dir = repo
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
-			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-
 	// Create base branch at initial commit, then add a commit to base only.
-	run("branch", "base")
-	run("checkout", "base")
+	branchAtHead(t, repo, "base")
+	checkoutBranch(t, repo, "base", false)
 	addCommit(t, repo, "base-only.txt", "commit on base")
-	run("checkout", "main")
+	checkoutBranch(t, repo, "main", false)
+	assertBehindFixtureShape(t, repo)
 
 	// main is 0 ahead, 1 behind base.
 	ahead, behind, err := r.AheadBehind(repo, "base")
@@ -471,44 +603,23 @@ func TestGoGitVCSReader_HasUncommitted_MergeConflict(t *testing.T) {
 	repo := initRepo(t)
 	r := &unfinished.GoGitVCSReader{}
 
-	run := func(args ...string) string {
-		t.Helper()
-		cmd := safeexec.CommandContext(context.Background(), "git", args...)
-		cmd.Dir = repo
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
-			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
-		)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Logf("git %v: %v\n%s", args, err, out) // merge step may "fail" due to conflict
-		}
-		return string(out)
-	}
-
 	// Create diverging branches that conflict on README.md.
-	run("checkout", "-b", "branch-a")
+	checkoutBranch(t, repo, "branch-a", true)
 	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("branch-a content\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	run("add", "README.md")
-	run("commit", "-m", "branch-a commit")
+	commitAll(t, repo, "branch-a commit")
 
-	run("checkout", "main")
+	checkoutBranch(t, repo, "main", false)
 	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("main content\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	run("add", "README.md")
-	run("commit", "-m", "main commit")
+	commitAll(t, repo, "main commit")
 
-	// Merge branch-a into main; this will conflict on README.md.
-	run("merge", "--no-ff", "branch-a")
-
-	// Confirm the repo is in a conflicted state before asserting HasUncommitted.
-	statusOut := run("status", "--porcelain")
-	if !strings.Contains(statusOut, "UU") && !strings.Contains(statusOut, "AA") {
-		t.Skipf("merge did not produce a conflict (git output: %s); skipping conflict test", statusOut)
-	}
+	// go-git cannot merge, so reproduce the state `git merge --no-ff branch-a`
+	// leaves behind: README.md carries stage 1/2/3 index entries.
+	stageMergeConflict(t, repo, "branch-a", "README.md")
+	assertConflictFixtureShape(t, repo, "README.md")
 
 	dirty, err := r.HasUncommitted(repo)
 	if err != nil {

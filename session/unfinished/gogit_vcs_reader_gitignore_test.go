@@ -10,7 +10,6 @@ package unfinished
 // allocation claim from unrelated go-git index/HEAD-resolution cost.
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,45 +17,18 @@ import (
 
 	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 )
 
 // newGitignoreBenchRepo creates a repo with a small set of tracked files plus
 // a large ignored subtree (simulating node_modules/vendor build artifacts).
 func newGitignoreBenchRepo(tb testing.TB, ignoredFileCount int) string {
 	tb.Helper()
-	raw := tb.TempDir()
-	dir, err := filepath.EvalSymlinks(raw)
-	if err != nil {
-		tb.Fatalf("EvalSymlinks: %v", err)
-	}
-
-	run := func(args ...string) {
-		tb.Helper()
-		cmd := safeexec.CommandContext(context.Background(), args[0], args[1:]...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=Bench", "GIT_AUTHOR_EMAIL=bench@test.com",
-			"GIT_COMMITTER_NAME=Bench", "GIT_COMMITTER_EMAIL=bench@test.com",
-		)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			tb.Fatalf("%v: %v\n%s", args, err, out)
-		}
-	}
-
-	run("git", "init", "-b", "main")
-	run("git", "config", "user.email", "bench@test.com")
-	run("git", "config", "user.name", "Bench")
-
-	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("ignored/\n"), 0644); err != nil {
-		tb.Fatalf("write .gitignore: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0644); err != nil {
-		tb.Fatalf("write README.md: %v", err)
-	}
-	run("git", "add", ".")
-	run("git", "commit", "-m", "initial")
+	repo, dir := testrepo.NewRepo(tb)
+	testrepo.Commit(tb, repo, map[string]string{
+		".gitignore": "ignored/\n",
+		"README.md":  "hello\n",
+	}, "initial", testrepo.Epoch)
 
 	ignoredDir := filepath.Join(dir, "ignored")
 	if err := os.MkdirAll(ignoredDir, 0755); err != nil {

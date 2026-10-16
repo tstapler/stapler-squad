@@ -1,15 +1,15 @@
 package unfinished_test
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/unfinished"
+	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 )
 
 // benchRepo holds a controlled git repo used for all benchmarks.
@@ -23,43 +23,16 @@ type benchRepo struct {
 // plus one untracked file and one modified tracked file.
 func newBenchRepo(b *testing.B, nCommits int) *benchRepo {
 	b.Helper()
-	raw := b.TempDir()
-	dir, err := filepath.EvalSymlinks(raw)
-	if err != nil {
-		b.Fatalf("EvalSymlinks: %v", err)
-	}
-
-	run := func(args ...string) string {
-		b.Helper()
-		cmd := safeexec.CommandContext(context.Background(), args[0], args[1:]...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=Bench", "GIT_AUTHOR_EMAIL=bench@test.com",
-			"GIT_COMMITTER_NAME=Bench", "GIT_COMMITTER_EMAIL=bench@test.com",
-		)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			b.Fatalf("%v: %v\n%s", args, err, out)
-		}
-		return string(out)
-	}
-
-	run("git", "init", "-b", "main")
-	run("git", "config", "user.email", "bench@test.com")
-	run("git", "config", "user.name", "Bench")
+	repo, dir := testrepo.NewRepo(b)
 
 	// Initial commit — becomes the base.
-	_ = os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0644)
-	run("git", "add", ".")
-	run("git", "commit", "-m", "initial")
-	run("git", "branch", "base")
+	initial := testrepo.Commit(b, repo, map[string]string{"README.md": "hello\n"}, "initial", testrepo.Epoch)
+	testrepo.SetBranch(b, repo, "base", initial)
 
 	// Add nCommits ahead of base.
 	for i := range nCommits {
 		name := fmt.Sprintf("file%d.txt", i)
-		_ = os.WriteFile(filepath.Join(dir, name), []byte(strconv.Itoa(i)+"\n"), 0644)
-		run("git", "add", ".")
-		run("git", "commit", "-m", fmt.Sprintf("commit %d", i))
+		testrepo.Commit(b, repo, map[string]string{name: strconv.Itoa(i) + "\n"}, fmt.Sprintf("commit %d", i), testrepo.Epoch.Add(time.Duration(i+1)*time.Minute))
 	}
 
 	// Dirty working tree: modify a tracked file + leave one untracked.
