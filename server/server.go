@@ -224,7 +224,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// checker was constructed only in tests and never actually started in
 	// production -- see session/health.go.
 	if deps.Storage != nil {
-		healthChecker := session.NewSessionHealthChecker(deps.Storage)
+		healthChecker := session.NewSessionHealthChecker(deps.Storage, session.WithDeadPaneRecorder(deps.SessionService.DeadPaneRecorder()))
 		srv.goBackground(func() {
 			healthChecker.ScheduledHealthCheck(sessionHealthCheckInterval, serverCtx.Done())
 		})

@@ -1,5 +1,38 @@
 # Changelog
 
+## [2.6.0](https://github.com/tstapler/stapler-squad/compare/v2.5.0...v2.6.0) (2026-10-16)
+
+
+### Features
+
+* also read user themes from shared ~/.stapler-squad/themes ([#1047](https://github.com/tstapler/stapler-squad/issues/1047)) ([5cd897e](https://github.com/tstapler/stapler-squad/commit/5cd897e48f0ff31d759c7b54b2f8ffa2dea1943c))
+* **backlog:** background completion reviewer builds institutional memory ([#1052](https://github.com/tstapler/stapler-squad/issues/1052)) ([f08caa0](https://github.com/tstapler/stapler-squad/commit/f08caa0f04446681085920884df2fc1597a3a3bd))
+* **backlog:** show blockers, remove/list dependency RPCs, MCP dependency/triage/transition tools ([#1030](https://github.com/tstapler/stapler-squad/issues/1030)) ([0a4c261](https://github.com/tstapler/stapler-squad/commit/0a4c26110f36413463930e82c4f58a0d844e16eb))
+* **changelog:** built-in changelog page, build provenance, opt-in update check ([#1049](https://github.com/tstapler/stapler-squad/issues/1049)) ([69eb331](https://github.com/tstapler/stapler-squad/commit/69eb33124ccde926e72996795c77b79d24250674))
+* **log:** ship browser warn/error to the server log; keep days of history ([#1048](https://github.com/tstapler/stapler-squad/issues/1048)) ([ea645de](https://github.com/tstapler/stapler-squad/commit/ea645de0cbb17c82aabbd1679846ab9fa1f57337))
+* **scripts:** add backlog-stuck-report.py for stuck-item root-causing ([6dab4c7](https://github.com/tstapler/stapler-squad/commit/6dab4c721282d68872bcc0543c3f2ed5741d54a7))
+* **webhooks:** add transactional management lifecycle and execution templates ([#1050](https://github.com/tstapler/stapler-squad/issues/1050)) ([5806e5b](https://github.com/tstapler/stapler-squad/commit/5806e5b257dfa2880903a9e2319e8277c8bc4d35))
+* **web:** notification tray is the default; fix phone deck overlap; draggable bell ([#1031](https://github.com/tstapler/stapler-squad/issues/1031)) ([666a7a5](https://github.com/tstapler/stapler-squad/commit/666a7a54cb80bc4d0e57a789288cd5d2b55ba1a9))
+* **website:** GitHub Pages landing site, curated help docs, demo-recording pipeline ([#1051](https://github.com/tstapler/stapler-squad/issues/1051)) ([e02bfdf](https://github.com/tstapler/stapler-squad/commit/e02bfdf5766901089260d6c9ea21b3949eae7261))
+
+
+### Bug Fixes
+
+* **git:** gogit hostFile.Name returns root-relative name so packs reopen ([#1032](https://github.com/tstapler/stapler-squad/issues/1032)) ([7c35927](https://github.com/tstapler/stapler-squad/commit/7c35927112bc53e9483c567b1e7d25b6b39cddf8))
+* **terminal:** keep output filter panel above Copy all so its close button is clickable ([#1040](https://github.com/tstapler/stapler-squad/issues/1040)) ([ba52a5c](https://github.com/tstapler/stapler-squad/commit/ba52a5cebe841a72d4222bd5f748b5d26c7c8761))
+* warn when theme cap truncates; tighten global dir test ([02cef8d](https://github.com/tstapler/stapler-squad/commit/02cef8d171a234f042fa44d48a841a7644195a14))
+
+
+### Performance Improvements
+
+* **analytics:** index (session_id, wall_time) so escape-event cap enforcement stops sorting 10k rows per flush ([#1037](https://github.com/tstapler/stapler-squad/issues/1037)) ([f9a16eb](https://github.com/tstapler/stapler-squad/commit/f9a16eb7d7a61bc3b75ef81374ac0498bf74e788))
+* **git,unfinished:** cut commit-walk CPU; evict scanner caches on .git events ([#1028](https://github.com/tstapler/stapler-squad/issues/1028)) ([45884d3](https://github.com/tstapler/stapler-squad/commit/45884d389d549a054082bfd1867b2f2b0f7f9ebb))
+* **gogitstore:** check the decoded-object cache before probing the loose-object path ([#1036](https://github.com/tstapler/stapler-squad/issues/1036)) ([901cb98](https://github.com/tstapler/stapler-squad/commit/901cb98ea5b1f046af6c0ac8e99c22a3d73dad89))
+* **search:** load the persisted search index lazily instead of at startup ([#1035](https://github.com/tstapler/stapler-squad/issues/1035)) ([a01cdf8](https://github.com/tstapler/stapler-squad/commit/a01cdf8a55aadbc44493910c22441948300e669a))
+* **unfinished:** cut per-entry allocations in the untracked-file walkers ([#1039](https://github.com/tstapler/stapler-squad/issues/1039)) ([196c7a8](https://github.com/tstapler/stapler-squad/commit/196c7a8b311a4bbf9b3c8278a9b9436d2c23a0cc))
+* **unfinished:** filter and debounce .git fsnotify events ([#1041](https://github.com/tstapler/stapler-squad/issues/1041)) ([ab4c452](https://github.com/tstapler/stapler-squad/commit/ab4c4520f5a0907cc52035f82c22e9b56535be47))
+* **unfinished:** stat tracked files relative to a directory fd in HasUncommitted ([#1038](https://github.com/tstapler/stapler-squad/issues/1038)) ([a71ae62](https://github.com/tstapler/stapler-squad/commit/a71ae621c343ad8c45e8447f9b780ebcc9ddc63b))
+
 ## [2.5.0](https://github.com/tstapler/stapler-squad/compare/v2.4.0...v2.5.0) (2026-10-14)
 
 

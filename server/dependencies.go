@@ -1571,6 +1571,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// being forced into a doomed review cycle (see AutonomousStuckRespawner's
 	// doc comment in autonomous_orchestration_service.go).
 	sessionService.SetAutonomousStuckRespawner(backlogSvc)
+	backlogSvc.SetStaleWorkInspector(sessionService.StaleWorkInspector())
 	// Wire the zombie-session liveness checker (pre-mortem F3, Task 2.1.3d):
 	// reuses the existing session.Registry + Instance.TmuxSessionExists rather
 	// than inventing a new liveness mechanism. Acquire failure (session not

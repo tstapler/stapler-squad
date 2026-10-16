@@ -54,6 +54,7 @@ var reviewedConsumers = map[finding]string{
 	"consumer: " + svcPkgPath + ".waitForEvent":                            "generic wait for a caller-supplied match predicate on a session transition; forwards nothing to a client",
 	"consumer: " + svcPkgPath + ".watchBacklogItems":                       "backlog item stream; ignores notifications",
 	"consumer: " + svcPkgPath + ".watchWorkflows":                          "workflow stream; ignores notifications",
+	"consumer: " + svcPkgPath + ".start":                                   "completion reviewer; reacts only to backlog item done-transitions, ignores notifications",
 }
 
 // reviewedAppendCallers are the concrete NotificationHistoryStore.Append* call

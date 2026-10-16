@@ -1,0 +1,108 @@
+[
+	{
+		"heading": "Dashboard",
+		"description": "See all your AI agents at a glance. Status badges, diff stats, tags, and categories give you a complete picture without opening a single terminal.",
+		"category": "Visibility",
+		"screenshot": "/features/01-dashboard.png",
+		"alt": "Dashboard showing status badges, diff stats, tags, and approvals for all agents at a glance"
+	},
+	{
+		"heading": "Live Terminal Streaming",
+		"description": "Full xterm.js terminal per session with real-time output streaming. Attach and reprompt any agent without leaving the browser.",
+		"category": "Visibility",
+		"demoClip": {
+			"tag": "website-demo-gifs-latest",
+			"name": "terminal-streaming",
+			"ext": "webm"
+		}
+	},
+	{
+		"heading": "Diff Viewer",
+		"description": "Per-session git diff with VCS context. See exactly what each agent has changed before you approve or merge.",
+		"category": "Visibility"
+	},
+	{
+		"heading": "Notifications",
+		"description": "Real-time alerts when agents need attention — approvals pending, sessions paused, or errors detected — without polling.",
+		"category": "Visibility"
+	},
+	{
+		"heading": "Instant Search",
+		"description": "Type to filter sessions in real time across titles, paths, branches, and tags. \"payment\" narrows 6 agents down to 2 immediately.",
+		"category": "Organisation",
+		"screenshot": "/features/02-search-payment.png",
+		"alt": "Instant search narrowing the session list from 6 agents down to 2 as the query \"payment\" is typed"
+	},
+	{
+		"heading": "Status Filtering",
+		"description": "Filter by status to surface agents that need your attention — spot every `Needs Approval` gate without scrolling through the full list.",
+		"category": "Organisation",
+		"screenshot": "/features/03-needs-approval.png",
+		"alt": "Status filter showing every session with a Needs Approval gate, with other statuses hidden"
+	},
+	{
+		"heading": "Tag-Based Grouping",
+		"description": "Switch between 8 grouping strategies — tag, category, status, branch, path, program, session type, or flat list. A single session can appear under multiple tags simultaneously.",
+		"category": "Organisation",
+		"screenshot": "/features/04-group-by-tag.png",
+		"alt": "Sessions grouped by tag, with a single session appearing under more than one tag group"
+	},
+	{
+		"heading": "Workspace Switcher",
+		"description": "Manage multiple project contexts from one UI. Each workspace gets its own isolated session state, configuration, and approval history.",
+		"category": "Organisation"
+	},
+	{
+		"heading": "Bulk Actions",
+		"description": "Select multiple sessions and act on them together — pause, resume, delete, or tag in one operation.",
+		"category": "Organisation"
+	},
+	{
+		"heading": "Review Queue",
+		"description": "Structured triage for every pending agent action. Review diffs and approve or reject before anything reaches your codebase.",
+		"category": "Review & Approval",
+		"screenshot": "/features/05-review-queue.png",
+		"alt": "Review Queue listing pending agent actions with diffs ready to approve or reject before they reach the codebase"
+	},
+	{
+		"heading": "Auto-Approval Rules",
+		"description": "42 built-in rules block dangerous operations automatically. Read-only commands, safe git operations, and common dev tasks are pre-approved out of the box.",
+		"category": "Review & Approval",
+		"screenshot": "/features/06-rules.png",
+		"alt": "List of 42 built-in auto-approval rules covering read-only commands, safe git operations, and common dev tasks"
+	},
+	{
+		"heading": "Custom Rules",
+		"description": "Teach Stapler Squad what's always safe for your project. Add a pattern like `^git log` once and never review it again.",
+		"category": "Organisation",
+		"screenshot": "/features/07-add-rule.png",
+		"alt": "Adding a custom approval-rule pattern like ^git log so it is never flagged for manual review again"
+	},
+	{
+		"heading": "Approval Analytics",
+		"description": "Visualise decision trends and classifier performance over time. See which rules fire most, how often agents are approved vs. blocked, and where your review time is going.",
+		"category": "Review & Approval"
+	},
+	{
+		"heading": "History Search",
+		"description": "Searchable, filterable record of every agent action across all sessions. Filter by session, time range, action type, or free-text search to find exactly what happened and when.",
+		"category": "History & Debugging"
+	},
+	{
+		"heading": "Logs Viewer",
+		"description": "Live-tail application logs with time range picker, multi-select filters, export, and density controls. No need to SSH in to debug an agent.",
+		"category": "History & Debugging"
+	},
+	{
+		"heading": "Config Viewer",
+		"description": "Inspect your current Stapler Squad configuration directly from the UI — no hunting for JSON files.",
+		"category": "History & Debugging"
+	},
+	{
+		"heading": "Isolated Git Workspaces",
+		"description": "Every agent gets its own git worktree. No branch conflicts, no dirty state bleed between sessions. Merge when you're ready.",
+		"category": "Infrastructure",
+		"screenshot": "/features/08-final.png",
+		"alt": "Each agent session running in its own isolated git worktree with no branch conflicts between sessions"
+	}
+]

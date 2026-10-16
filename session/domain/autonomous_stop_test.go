@@ -19,6 +19,8 @@ func TestStopReason_Class_CoversEveryValue(t *testing.T) {
 		StopReasonCancelledExternal:  OutcomeClassCancelled,
 		StopReasonCancelledShutdown:  OutcomeClassCancelled,
 		StopReasonPanic:              OutcomeClassStall,
+		StopReasonStaleWork:          OutcomeClassStall,
+		StopReasonDeadPane:           OutcomeClassStall,
 		StopReason(""):               OutcomeClassStall,
 	}
 
@@ -68,6 +70,7 @@ func TestStopReason_AllValuesListed_ExhaustiveSwitch(t *testing.T) {
 		StopReasonOrchestratorError: true, StopReasonSubmitFailed: true, StopReasonLeaseTimeout: true,
 		StopReasonRateLimitExhausted: true, StopReasonCancelledExternal: true,
 		StopReasonCancelledShutdown: true, StopReasonPanic: true,
+		StopReasonStaleWork: true, StopReasonDeadPane: true,
 	}
 	if len(AllStopReasons) != len(expected) {
 		t.Fatalf("AllStopReasons has %d entries, hand-listed set has %d", len(AllStopReasons), len(expected))

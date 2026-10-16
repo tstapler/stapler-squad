@@ -1,0 +1,87 @@
+---
+// A single feature-grid tile. `screenshot`/`demoClip` are omitted for
+// sections with no existing capture (text-only until a real asset exists);
+// `alt` is required whenever `screenshot` is set.
+import { releaseAssetUrl, type ReleaseAssetRef } from '../lib/release-asset.ts';
+
+export interface Props {
+	heading: string;
+	description: string;
+	category: string;
+	screenshot?: string;
+	alt?: string;
+	demoClip?: ReleaseAssetRef;
+}
+
+const { heading, description, screenshot, alt, demoClip } = Astro.props;
+
+// scripts/build-features.mjs emits `screenshot` as a root-relative path
+// (e.g. "/features/01-dashboard.png") with no knowledge of the Pages base
+// path, so it must be prefixed here at render time -- found via a live
+// preview run under base: '/stapler-squad', where the un-prefixed <img src>
+// 404'd (confirmed in the browser console, not guessed). Strip BASE_URL's
+// trailing slash before concatenating: the real build's BASE_URL has none
+// ("/stapler-squad"), but AstroContainer's unit-test default is "/", which
+// would otherwise double up with screenshot's own leading slash.
+const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
+const screenshotSrc = screenshot ? `${basePath}${screenshot}` : undefined;
+---
+
+<article class="feature-card" data-testid="feature-card">
+	{
+		screenshot ? (
+			<img
+				src={screenshotSrc}
+				alt={alt}
+				loading="lazy"
+				width="320"
+				height="200"
+				data-testid="feature-card-image"
+			/>
+		) : (
+			demoClip && (
+				<video
+					src={releaseAssetUrl(demoClip)}
+					controls
+					muted
+					loop
+					playsinline
+					data-testid="feature-card-video"
+				/>
+			)
+		)
+	}
+	<h4>{heading}</h4>
+	<p>{description}</p>
+</article>
+
+<style>
+	.feature-card {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		padding: 1rem;
+		border: 1px solid var(--sl-color-gray-5, #3b3b43);
+		border-radius: 0.75rem;
+	}
+
+	.feature-card img,
+	.feature-card video {
+		width: 100%;
+		height: auto;
+		aspect-ratio: 16 / 10;
+		object-fit: cover;
+		border-radius: 0.5rem;
+	}
+
+	.feature-card h4 {
+		margin: 0;
+		font-size: var(--sl-text-lg, 1.125rem);
+	}
+
+	.feature-card p {
+		margin: 0;
+		color: var(--sl-color-gray-2, #c0c2c7);
+		font-size: var(--sl-text-sm, 0.875rem);
+	}
+</style>
