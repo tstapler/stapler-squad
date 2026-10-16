@@ -34,13 +34,46 @@ event invalidates it, and the scanner multiplies it by W.
 
 | Operation | Cost | Notes and improvement levers |
 |---|---|---|
-| `findMergeBase` | O(d1 + d2) commit decodes, capped at 2L visits | Git-style paint-down-to-common (newest-first heap, FIFO ties, stale propagation); returns a best common ancestor, matching the `object.Commit.MergeBase` oracle on 100% of 600 single-merge/general cases (the pre-lockstep walk: 550/600). Was O(min(L, history)): ~2000 decodes per call. On a 2500-commit history: 114,780 → 8,347 allocs/op for the full ahead/behind, 57 decodes. |
-| `countCommitsTo` ×2 | O(a) + O(b), capped at L | `b` can reach L when base moves far ahead. `parentMemo` removes re-decodes, not the walk. Lever: cache `behind` per (base hash, merge base). |
-| Commit decode (go-git) | one inflate + full message/signature parse per commit | Allocs profile: `bytes.growSlice` 30.8%, `MemoryObject.Write` 10.8%, `bufio.ReadBytes` 10.3%, `continuationCont` 9.2%. Only parents are needed here. **Fork lever:** add a header-only parents reader that stops at the first blank line and skips the message buffer and gpgsig parsing. The fork already ships `plumbing/format/commitgraph`; whether these repos have a commit-graph file is UNVERIFIED. |
-| `HasUncommitted` | O(n) index/HEAD compares + O(n) `lstat` + O(f) untracked walk | Cheapest exits first (staged, deleted, size/mtime). Lever: use watcher events to stat only changed paths, O(changed) instead of O(n). |
-| `diffShortstatUncached` | per modified file, LCS DP O(m·k) time, guarded by `maxLCSLines` | Lever: Myers diff, O((m+k)·D), in the fork or here. |
-| `CommitMessages` / `reachableSet` | O(R) commit decodes per (worktree, base hash) | With `shared_commit_state` on, the set is a `repostate.ReachBitset` keyed `{RepoKey, base, cap, ShallowStamp, GraphEpoch}`: one build per (repo, base), O(delta) when base advances from a complete set (~6 KB at 50,000 commits); message lists and first lines are hash-keyed memos. Flag off keeps the per-worktree map: O(W·R). Not hot in the 2026-10-15 profile. |
+| `findMergeBase` | O(d1 + d2) commit decodes, capped at 2L visits; with `shared_commit_state` an id walk over the shared graph (`repostate/walk.go`), so a repeat costs 0 decodes | Git-style paint-down-to-common (newest-first heap, FIFO ties, stale propagation); returns a best common ancestor, matching the `object.Commit.MergeBase` oracle on 100% of 600 single-merge/general cases (the pre-lockstep walk: 550/600). Was O(min(L, history)): ~2000 decodes per call. On a 2500-commit history: 114,780 → 8,347 allocs/op for the full ahead/behind, 57 decodes. |
+| `countCommitsTo` ×2 | O(a) + O(b), capped at L | `b` can reach L when base moves far ahead. Flag on: the `behind` count is memoized per (base, merge base) and the whole result per `(head, base)` (`repostate/products.go`), so a second worktree at the same pair walks nothing and a hit allocates 0. |
+| Commit decode (go-git) | one inflate + full message/signature parse per commit | Replaced on the walk path by the stock header-only reader (`commit_parents_stock.go`: stops at the committer line, no message or gpgsig parse). Every decode is counted in `decoded_commits_total`. The fork header reader (F2) is deferred (`plan.md` Story 1.2.2). |
+| `HasUncommitted` | O(n) index/HEAD compares + O(n) `lstat` + O(f) untracked walk | Cheapest exits first (staged, deleted, size/mtime). `scan_skip`: parsed-index cache by `IndexStatSig`, per-directory untracked verdict cache, and one stat pass shared with `DiffShortstat`. Stats are counted in `stat_calls_total`. |
+| `diffShortstatUncached` | per modified file, LCS DP O(m·k) time, guarded by `maxLCSLines` | `diff_counter`: hybrid Myers byte-line counter, O((m+k)·D), with a DP fallback, plus a per-file diff memo (`myers_bytes.go`, `diffmemo.go`). |
+| `CommitMessages` / `reachableSet` | O(R) commit decodes per (worktree, base hash) | With `shared_commit_state` on, the set is a `repostate.ReachBitset` keyed `{RepoKey, base, cap, ShallowStamp, GraphEpoch}`: one build per (repo, base), O(delta) when base advances from a complete set (6,352 bytes at 50,000 commits; three worktrees cold `CommitMessages`: DecodeCount 7,521 flag-off vs 2,515 shared; `plan.md` "Epic 2.2/2.3 status"). Message lists and first lines are hash-keyed memos. Flag off keeps the per-worktree map: O(W·R). A cold 50,000-commit build over a primed graph measured 0.33 ms (`BenchmarkReachScratch50000`). |
 | Scanner total | Σ over W worktrees of the costs above × event rate | The biggest multiplier is the event rate. Filtering and debouncing `.git` events (`watcher.go`) cuts the miss count for every row at once. |
+
+## Flags
+
+Four rollback units, all default off, read once at startup (restart-only reload): `shared_commit_state`,
+`diff_counter`, `scan_skip`, `watch_worktree_gitdirs` (`flags.go`, `FlagSpecs`; each has a `RemoveBy` date
+that `flags_test.go` enforces). `normalizeFlags` turns dependent sub-features off with a startup WARN.
+Operator runbook: `docs/how-to/tune-unfinished-scanner-caches.md`.
+
+## Lock chain (ADR-001, ADR-009)
+
+`entry.mu` is held only in phase 1 of `AheadBehind`/`CommitMessages` (ref resolution and the `shallow`
+stat) and released before any graph work. `repostate` has no mutex on its read and fill paths (chunked
+arena, per-row atomic state, lock-free CLOCK eviction in `repostate/cache_clock.go`); its only locks are
+leaves: `xsync` bucket locks and `singleflight` internals. `SharedObjectStore.mu`
+(`gogitstore/store.go`) is the innermost leaf, reached only through `EncodedObject`. No path takes
+`entry.mu` while inside a `Fill` or holding a repostate lock (`graph_source.go` header,
+`project_plans/unfinished-scanner-dsa-perf/decisions/ADR-001-repostate-seam.md`).
+
+## Where the counters live
+
+- `report.go`: `BuildReport` (served at `/actuator/unfinished-scanner`, `server/actuator.go`) and the
+  one startup INFO line (`LogStartup`).
+- `metrics_repostate.go`: the `unfinished.repostate.*` OTel catalog and its per-cache inputs;
+  `metrics_duration.go`: graph-extension timing; `metrics.go`: scan cycles, full-walk reasons.
+- Scan-loop logging is debug level only (hot-poll rule); the per-Burst `scan cycle` line is in `scanstate.go`.
+
+## Shadow verify
+
+`shadow_verify.go` samples 1 scan in 50 (`defaultShadowVerifyEvery`) when any rollback unit is on, runs the
+legacy oracle beside the new path, and counts disagreements in `parity_mismatch_total{field}`
+(`parity_transient_total` when the oracle disagrees with itself). It skips under severe memory pressure.
+`Scanner.SetShadowVerifyEvery(n)` overrides the rate (`n <= 0` off). Zero mismatches is a flip criterion for
+any flag default (`plan.md` Story 5.1.1).
 
 ## Rules for changes here
 
