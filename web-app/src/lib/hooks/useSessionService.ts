@@ -1,5 +1,6 @@
 "use client";
 
+import { noteDeployId } from "./deployId";
 import { useEffect, useCallback, useRef, useMemo, useState } from "react";
 import { createClient, ConnectError, Code } from "@connectrpc/connect";
 import { createSessionWatchTransport } from "@/lib/transport/watch-ws-transport";
@@ -289,6 +290,7 @@ export function useSessionService(
   // Kept separately from useWatchStream's own internal afterSeq bookkeeping
   // because this copy is also used for backwards-jump detection (below).
   const lastSeqRef = useRef<bigint>(0n);
+  const lastDeployIdRef = useRef<string>("");
   // Stores current watch options so reconnects use the latest options without stale closure
   const watchOptionsRef = useRef<{ categoryFilter?: string; statusFilter?: SessionStatus } | undefined>(undefined);
   // True once watchSessions() has been called (autoWatch, or a manual call) and
@@ -1078,8 +1080,12 @@ export function useSessionService(
   const handleSessionEvent = useCallback((event: SessionEvent) => {
     lastActivityRef.current = Date.now();
 
+    // A new deploy_id means the server restarted and seq reset: start the cursor over rather than
+    // reading the lower seq as an anomaly below.
+    const redeployed = noteDeployId(lastDeployIdRef, event.deployId, "sessions");
+
     // Advance the sequence cursor so reconnects can request a targeted replay.
-    const prevSeq = lastSeqRef.current;
+    const prevSeq = redeployed ? 0n : lastSeqRef.current;
     if (event.seq > prevSeq) {
       lastSeqRef.current = event.seq;
     }
