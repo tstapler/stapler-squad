@@ -1,6 +1,6 @@
 /**
  * Compose mode (dedicated textarea) opened by the omnibar's "Create Backlog
- * Item" button: text preservation, immediate close + background creation,
+ * Item" button: text preservation, hand-off to the AI intent review,
  * and no regression to the "backlog: " prefix path (see
  * Omnibar.backlogIntentReview.test.tsx).
  */
@@ -221,12 +221,13 @@ describe("Omnibar compose mode", () => {
     expect(screen.getByTestId("backlog-compose-textarea")).toHaveValue("draft");
   });
 
-  it("closes immediately on Create, then notifies with a deep link when creation finishes", async () => {
-    let resolveCreate: (v: unknown) => void = () => {};
-    const createBacklogItemFromChat = jest.fn(
-      () => new Promise((resolve) => { resolveCreate = resolve; })
-    );
-    mockBacklogService({ createBacklogItemFromChat: createBacklogItemFromChat as never });
+  it("routes Create to the AI intent review: parses the text, keeps the omnibar open, skips direct creation", async () => {
+    const parseBacklogItemIntent = jest.fn(() => new Promise(() => {}));
+    const createBacklogItemFromChat = jest.fn();
+    mockBacklogService({
+      parseBacklogItemIntent: parseBacklogItemIntent as never,
+      createBacklogItemFromChat: createBacklogItemFromChat as never,
+    });
     const onClose = jest.fn();
     renderOmnibar({ onClose });
 
@@ -236,32 +237,25 @@ describe("Omnibar compose mode", () => {
     });
     fireEvent.click(screen.getByTestId("backlog-compose-submit"));
 
-    expect(onClose).toHaveBeenCalledTimes(1);
-    expect(createBacklogItemFromChat).toHaveBeenCalledWith("add dark mode");
-    expect(mockAddNotification).not.toHaveBeenCalled();
-
-    await act(async () => {
-      resolveCreate({ item: { id: "item-9", title: "Add dark mode" }, triageTriggered: false });
-    });
-
-    await waitFor(() => expect(mockAddNotification).toHaveBeenCalledTimes(1));
-    const n = mockAddNotification.mock.calls[0][0];
-    expect(n.message).toBe("Add dark mode");
-    expect(n.notificationType).toBe("task_complete");
-    n.onView();
-    expect(mockPush).toHaveBeenCalledWith("/backlog?item=item-9");
+    expect(screen.queryByTestId("backlog-compose-widget")).not.toBeInTheDocument();
+    expect(screen.getByText(/Parsing your message into a backlog item/)).toBeInTheDocument();
+    await waitFor(() => expect(parseBacklogItemIntent).toHaveBeenCalledTimes(1));
+    expect(parseBacklogItemIntent.mock.calls[0]).toContain("add dark mode");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(createBacklogItemFromChat).not.toHaveBeenCalled();
   });
 
-  it("raises an error notification when creation fails", async () => {
-    mockBacklogService({ createBacklogItemFromChat: jest.fn().mockResolvedValue(null) });
+  it("falls back to the raw text in the review form when parsing fails", async () => {
+    mockBacklogService({ parseBacklogItemIntent: jest.fn().mockResolvedValue(null) as never });
     renderOmnibar();
 
     fireEvent.click(screen.getByTestId("mock-create-backlog"));
-    fireEvent.change(screen.getByTestId("backlog-compose-textarea"), { target: { value: "x" } });
+    fireEvent.change(screen.getByTestId("backlog-compose-textarea"), { target: { value: "raw idea" } });
     fireEvent.click(screen.getByTestId("backlog-compose-submit"));
 
-    await waitFor(() => expect(mockAddNotification).toHaveBeenCalledTimes(1));
-    expect(mockAddNotification.mock.calls[0][0].notificationType).toBe("error");
+    await waitFor(() =>
+      expect(screen.getByTestId("backlog-intent-review-parse-failed-banner")).toBeInTheDocument()
+    );
   });
 
   it("rejects an image over 10 MB client-side without uploading", () => {
