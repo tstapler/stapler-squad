@@ -1257,6 +1257,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		statePath := filepath.Join(configDir, "unfinished_state.json")
 		unfinishedStateStore, _ = unfinished.NewStateStore(statePath)
 		if unfinishedStateStore != nil {
+			if cfg != nil {
+				unfinished.SetFlags(cfg.UnfinishedCaches) // restart-only, read once
+			}
 			unfinishedScanner = unfinished.NewScanner(eventBus, unfinishedStateStore)
 			unfinishedWatchDirWatcher = unfinished.NewWatchDirWatcher(unfinishedScanner, unfinishedStateStore)
 			unfinishedWorkSvc = services.NewUnfinishedWorkService(unfinishedScanner, unfinishedStateStore, eventBus, storage, unfinishedWatchDirWatcher)

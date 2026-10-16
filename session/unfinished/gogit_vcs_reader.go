@@ -455,6 +455,7 @@ func (g *GoGitVCSReader) pruneRepoCache() {
 // ClearCache remains available as a rarely-used emergency escape valve.
 func (g *GoGitVCSReader) PruneToMemoryBudget() {
 	g.pruneRepoCache()
+	g.pruneRepoStates()
 }
 
 // ClearCache evicts ALL cached *git.Repository entries, allowing their
@@ -477,6 +478,7 @@ func (g *GoGitVCSReader) ClearCache() {
 		releaseGogitstoreRef(v.(*cachedRepo))
 		return true
 	})
+	g.dropAllRepoStates()
 }
 
 // GoGitVCSReader implements VCSReader using the go-git library.
@@ -703,13 +705,20 @@ type RepoCacheStats struct {
 	CurrentSize int64
 	ColdOpens   int64
 	Evictions   int64
+	// RepoStates and RepoStateBytes count live shared RepoState extensions and
+	// their summed Bytes(); both are 0 while shared_commit_state is off.
+	RepoStates     int64
+	RepoStateBytes int64
 }
 
 func (g *GoGitVCSReader) RepoCacheStats() RepoCacheStats {
+	states, stateBytes := g.repoStateTotals()
 	return RepoCacheStats{
-		CurrentSize: atomic.LoadInt64(&g.repoCacheSize),
-		ColdOpens:   atomic.LoadInt64(&g.repoCacheColdOpens),
-		Evictions:   atomic.LoadInt64(&g.repoCacheEvictions),
+		CurrentSize:    atomic.LoadInt64(&g.repoCacheSize),
+		ColdOpens:      atomic.LoadInt64(&g.repoCacheColdOpens),
+		Evictions:      atomic.LoadInt64(&g.repoCacheEvictions),
+		RepoStates:     states,
+		RepoStateBytes: stateBytes,
 	}
 }
 
