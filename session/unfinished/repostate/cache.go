@@ -90,7 +90,7 @@ type RepoCache[K comparable, V any] struct {
 	mu      sync.Mutex
 	entries map[K]cacheEntry[V]
 	order   evictor[K]
-	bytes   int64
+	bytes   atomic.Int64 // written under mu; atomic so Bytes() is lock-free (Extension callback contract)
 
 	sf        singleflight.Group //nolint:exhaustruct
 	hits      atomic.Int64
@@ -156,8 +156,8 @@ func (c *RepoCache[K, V]) Put(key K, val V) {
 	}
 	c.entries[key] = e
 	c.order.Insert(key)
-	c.bytes += size
-	for c.bytes > c.budget {
+	c.bytes.Add(size)
+	for c.bytes.Load() > c.budget {
 		victim, ok := c.order.Victim()
 		if !ok {
 			break
@@ -176,19 +176,25 @@ func (c *RepoCache[K, V]) Delete(key K) {
 	}
 }
 
+// Bytes returns the bytes currently held, without taking the cache mutex.
+func (c *RepoCache[K, V]) Bytes() int64 { return c.bytes.Load() }
+
+// Drop discards every entry (the Product eviction hook).
+func (c *RepoCache[K, V]) Drop() { c.Clear() }
+
 // Clear drops every entry.
 func (c *RepoCache[K, V]) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries = make(map[K]cacheEntry[V])
 	c.order = newLRUEvictor[K]()
-	c.bytes = 0
+	c.bytes.Store(0)
 }
 
 func (c *RepoCache[K, V]) removeLocked(key K, e cacheEntry[V]) {
 	delete(c.entries, key)
 	c.order.Remove(key)
-	c.bytes -= e.size
+	c.bytes.Add(-e.size)
 }
 
 // GetOrCompute returns the cached value or runs fn once for all concurrent
@@ -229,7 +235,7 @@ func (c *RepoCache[K, V]) GetOrCompute(key K, fn func() (V, error)) (V, error) {
 // Stats returns a snapshot of the counters.
 func (c *RepoCache[K, V]) Stats() CacheStats {
 	c.mu.Lock()
-	entries, bytes := len(c.entries), c.bytes
+	entries := len(c.entries)
 	c.mu.Unlock()
 	return CacheStats{
 		Hits:      c.hits.Load(),
@@ -237,7 +243,7 @@ func (c *RepoCache[K, V]) Stats() CacheStats {
 		Evictions: c.evictions.Load(),
 		Coalesced: c.coalesced.Load(),
 		Entries:   entries,
-		Bytes:     bytes,
+		Bytes:     c.bytes.Load(),
 	}
 }
 
