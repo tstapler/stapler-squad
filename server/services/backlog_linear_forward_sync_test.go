@@ -81,6 +81,25 @@ func TestForwardSync_should_RecordFailureAndSkipComment_When_UpdateIssueStateFai
 	require.Contains(t, history[0].ErrorMessage, "forward-sync state update failed")
 }
 
+func TestForwardSync_should_RecordFailureAndSkipUpdate_When_TargetStateEmpty(t *testing.T) {
+	t.Parallel()
+	storage := newForwardSyncTestStorage(t)
+	sourceID := createForwardSyncTestSource(t, storage, "fake_linear", true, "")
+	item := createForwardSyncTestItem(t, storage, sourceID, "ENG-1", nil)
+	fake := &fakeStateUpdaterPlugin{pluginID: "fake_linear"}
+	registry := session.NewPluginRegistry()
+	registry.Register(fake)
+
+	handleForwardSyncClose(context.Background(), registry, session.NewSyncLoop(storage, registry), storage, item)
+
+	require.Empty(t, fake.targets)
+	require.Empty(t, fake.comments)
+	history, _, err := storage.ListSourceSyncEvents(context.Background(), sourceID)
+	require.NoError(t, err)
+	require.Len(t, history, 1)
+	require.Contains(t, history[0].ErrorMessage, "target state not configured")
+}
+
 // Both tracker plugins must be dispatched by the state-updater branch of
 // handleForwardSyncClose (ADR-002).
 var (

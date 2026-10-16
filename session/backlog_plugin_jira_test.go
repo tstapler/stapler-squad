@@ -78,7 +78,7 @@ func TestJiraPlugin_Fetch_should_BuildJQLFromCursor_And_UseBasicAuth(t *testing.
 	defer ts.Close()
 	_, cursor, err := NewJiraPlugin().Fetch(context.Background(), jiraCfg(t, ts), "2026-07-01 00:00")
 	require.NoError(t, err)
-	require.Equal(t, `project = ENG AND updated >= "2026-07-01 00:00" ORDER BY updated ASC`, gotJQL)
+	require.Equal(t, `project = "ENG" AND updated >= "2026-07-01 00:00" ORDER BY updated ASC`, gotJQL)
 	require.Equal(t, "/rest/api/3/search/jql", gotPath)
 	require.Equal(t, "a@b.c", gotUser)
 	require.Equal(t, "jira_secret", gotPass)
@@ -86,7 +86,7 @@ func TestJiraPlugin_Fetch_should_BuildJQLFromCursor_And_UseBasicAuth(t *testing.
 
 	_, _, err = NewJiraPlugin().Fetch(context.Background(), jiraCfg(t, ts), "")
 	require.NoError(t, err)
-	require.Equal(t, `project = ENG ORDER BY updated ASC`, gotJQL)
+	require.Equal(t, `project = "ENG" ORDER BY updated ASC`, gotJQL)
 }
 
 func TestJiraPlugin_Fetch_should_FollowNextPageToken_AcrossAllPages(t *testing.T) {

@@ -1,11 +1,9 @@
 package session
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,48 +11,6 @@ import (
 
 	"github.com/tstapler/stapler-squad/jira"
 )
-
-// jiraIssueRequest sends one authenticated JSON request to the issue endpoint
-// and returns the body of a 2xx response.
-func jiraIssueRequest(ctx context.Context, cfg jiraPluginConfig, method, path string, payload any) ([]byte, error) {
-	var body io.Reader
-	if payload != nil {
-		b, err := json.Marshal(payload)
-		if err != nil {
-			return nil, fmt.Errorf("jira: encode request: %w", err)
-		}
-		body = bytes.NewReader(b)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, cfg.BaseURL+path, body)
-	if err != nil {
-		return nil, fmt.Errorf("jira: build request: %w", err)
-	}
-	req.SetBasicAuth(cfg.Email, cfg.Token)
-	req.Header.Set("Accept", "application/json")
-	if payload != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := jiraHTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("jira: request failed: %w", err)
-	}
-	defer resp.Body.Close()
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, maxTrackerResponseBytes))
-	switch {
-	case resp.StatusCode == http.StatusTooManyRequests:
-		return nil, fmt.Errorf("jira: rate limited (status %d, retry-after %q)", resp.StatusCode, resp.Header.Get("Retry-After"))
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return nil, fmt.Errorf("jira: authentication failed (%d)", resp.StatusCode)
-	case resp.StatusCode == http.StatusNotFound:
-		return nil, fmt.Errorf("jira: %s not found", path)
-	case resp.StatusCode < 200 || resp.StatusCode > 299:
-		if len(data) > 512 {
-			data = data[:512]
-		}
-		return nil, fmt.Errorf("jira: unexpected status %d: %s", resp.StatusCode, string(data))
-	}
-	return data, nil
-}
 
 // UpdateIssueState transitions the issue to the workflow transition whose name
 // (or destination status name) matches targetState, case-insensitively, and

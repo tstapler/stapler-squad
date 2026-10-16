@@ -27,7 +27,7 @@ func linearForwardSyncToken(config PluginConfig) (string, error) {
 		return "", err
 	}
 	if disabled {
-		return "", fmt.Errorf("linear: API key not configured (store it in the keychain)")
+		return "", fmt.Errorf("linear: API key not configured (set LINEAR_API_KEY or store it in the keychain)")
 	}
 	return cfg.Token, nil
 }

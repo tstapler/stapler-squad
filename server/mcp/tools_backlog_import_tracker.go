@@ -29,9 +29,10 @@ func (h *backlogHandlers) importTrackerIssue(ctx context.Context, toolName, trac
 		}
 	}
 
+	title, description := session.BoundImportedText(ext.Title, ext.Description)
 	created, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
-		Title:       ext.Title,
-		Description: ext.Description,
+		Title:       title,
+		Description: description,
 		Priority:    ext.Priority,
 		Status:      string(session.BacklogStatusIdea),
 		RepoPath:    repoPath,
@@ -55,7 +56,7 @@ func (h *backlogHandlers) importTrackerIssue(ctx context.Context, toolName, trac
 
 func trackerFetchError(tracker string, err error) *mcpgo.CallToolResult {
 	return errResult(ErrInternalError, fmt.Sprintf("fetch %s issue: %v", tracker, err),
-		"Retry — rate limits and network errors are usually transient. If it names missing credentials or a failed authentication, that is not transient; store the credentials in the keychain instead.")
+		"Retry — rate limits and network errors are usually transient. If it names missing credentials or a failed authentication, that is not transient; set LINEAR_API_KEY (Linear) or JIRA_BASE_URL/JIRA_EMAIL/JIRA_API_TOKEN (JIRA), or store them in the keychain.")
 }
 
 // importLinearIssue is the one-off Linear import (the sync loop's ItemSource
@@ -127,7 +128,7 @@ func (h *backlogHandlers) registerTrackerImportTools(s *mcpserver.MCPServer) {
 
 	s.AddTool(
 		mcpgo.NewTool("import_linear_issue",
-			mcpgo.WithDescription("Create a backlog item pre-populated from a Linear issue (title, description, labels, priority, and a link back as ExternalURL). Requires the Linear API key in the keychain."),
+			mcpgo.WithDescription("Create a backlog item pre-populated from a Linear issue (title, description, labels, priority, and a link back as ExternalURL). Requires LINEAR_API_KEY (or the key stored in the keychain)."),
 			mcpgo.WithString("issue_url", mcpgo.Description("Linear issue URL, e.g. https://linear.app/org/issue/ENG-123, or an identifier like ENG-123"), mcpgo.Required()),
 			mcpgo.WithString("repo_path", mcpgo.Description(repoPathDesc)),
 			mcpgo.WithBoolean("skip_triage", mcpgo.Description(skipTriageDesc)),
@@ -136,7 +137,7 @@ func (h *backlogHandlers) registerTrackerImportTools(s *mcpserver.MCPServer) {
 	)
 	s.AddTool(
 		mcpgo.NewTool("import_jira_issue",
-			mcpgo.WithDescription("Create a backlog item pre-populated from a JIRA Cloud issue (summary, ADF description as plaintext, labels, priority, and a link back as ExternalURL). Requires the JIRA email + API token for the site in the keychain."),
+			mcpgo.WithDescription("Create a backlog item pre-populated from a JIRA Cloud issue (summary, ADF description as plaintext, labels, priority, and a link back as ExternalURL). Requires JIRA_BASE_URL, JIRA_EMAIL and JIRA_API_TOKEN (or the credentials stored in the keychain for that site)."),
 			mcpgo.WithString("issue_url", mcpgo.Description("JIRA issue URL, e.g. https://org.atlassian.net/browse/ENG-123, or a bare key like ENG-123 together with base_url"), mcpgo.Required()),
 			mcpgo.WithString("base_url", mcpgo.Description("JIRA site base URL, e.g. https://org.atlassian.net. Only needed when issue_url is a bare key.")),
 			mcpgo.WithString("repo_path", mcpgo.Description(repoPathDesc)),

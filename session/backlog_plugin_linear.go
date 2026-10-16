@@ -28,7 +28,12 @@ var maxLinearFetchPages = 200
 // tests that mutate it must not run with t.Parallel().
 var linearGraphQLURL = "https://api.linear.app/graphql"
 
-var linearHTTPClient = &http.Client{Timeout: 30 * time.Second}
+// Redirects are refused: the API never needs them, and a followed same-site
+// redirect would carry the Authorization header along.
+var linearHTTPClient = &http.Client{
+	Timeout:       30 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
 
 // linearPluginConfig is the decoded PluginConfig.Raw for the Linear plugin.
 // The API key is deliberately not a config field (AC6): it is resolved from
@@ -164,7 +169,7 @@ func doLinearGraphQL(ctx context.Context, token, query string, variables map[str
 		return fmt.Errorf("linear: request failed: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxTrackerResponseBytes))
 	if err != nil {
 		return fmt.Errorf("linear: read response: %w", err)
 	}
@@ -298,7 +303,7 @@ func (l *LinearPlugin) FetchIssue(ctx context.Context, config PluginConfig, iden
 		return ExternalItem{}, err
 	}
 	if disabled {
-		return ExternalItem{}, fmt.Errorf("linear: API key not configured (store it in the keychain)")
+		return ExternalItem{}, fmt.Errorf("linear: API key not configured (set LINEAR_API_KEY or store it in the keychain)")
 	}
 	var out struct {
 		Issue *linearIssue `json:"issue"`

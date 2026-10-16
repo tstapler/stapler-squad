@@ -86,12 +86,24 @@ func NewDefaultRegistry() *PluginRegistry {
 	return r
 }
 
+const (
+	maxImportedTitleBytes       = 200
+	maxImportedDescriptionBytes = 2000
+)
+
+// BoundImportedText truncates tracker-supplied title/description to the sizes
+// the sync path stores, for import paths that bypass MapToBacklogItem.
+func BoundImportedText(title, description string) (string, string) {
+	return truncateUTF8(title, maxImportedTitleBytes), truncateUTF8(description, maxImportedDescriptionBytes)
+}
+
 // mapExternalToBacklogItem is the shared ExternalItem→BacklogItemData mapping
 // used by the tracker plugins (title/description truncated to 200/2000).
 func mapExternalToBacklogItem(item ExternalItem, sourceID string) BacklogItemData {
+	title, description := BoundImportedText(item.Title, item.Description)
 	return BacklogItemData{
-		Title:       truncateUTF8(item.Title, 200),
-		Description: truncateUTF8(item.Description, 2000),
+		Title:       title,
+		Description: description,
 		Priority:    item.Priority,
 		Status:      string(BacklogStatusIdea),
 		ExternalID:  item.ExternalID,
@@ -101,13 +113,16 @@ func mapExternalToBacklogItem(item ExternalItem, sourceID string) BacklogItemDat
 	}
 }
 
-// truncateUTF8 cuts s to at most max bytes without splitting a multibyte rune.
-func truncateUTF8(s string, max int) string {
-	if len(s) <= max {
+// maxTrackerResponseBytes caps any single tracker API response body.
+const maxTrackerResponseBytes = 8 << 20
+
+// truncateUTF8 cuts s to at most limit bytes without splitting a multibyte rune.
+func truncateUTF8(s string, limit int) string {
+	if len(s) <= limit {
 		return s
 	}
-	for max > 0 && !utf8.RuneStart(s[max]) {
-		max--
+	for limit > 0 && !utf8.RuneStart(s[limit]) {
+		limit--
 	}
-	return s[:max]
+	return s[:limit]
 }

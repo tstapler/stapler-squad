@@ -1,8 +1,10 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,15 +20,21 @@ import (
 
 const jiraIssuesPerPage = 50
 
-// maxTrackerResponseBytes caps any single tracker API response body.
-const maxTrackerResponseBytes = 8 << 20
-
 // maxJiraFetchPages bounds one sync tick's pagination (var so tests can
 // shrink it). Results are ordered by updated ASC, so a truncated fetch just
 // resumes from the advanced cursor on the next tick.
 var maxJiraFetchPages = 20
 
-var jiraHTTPClient = &http.Client{Timeout: 30 * time.Second}
+// Redirects are refused: the API never needs them, and a followed same-site
+// redirect would carry the Authorization header along.
+var jiraHTTPClient = &http.Client{
+	Timeout:       30 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
+
+// errJiraNotFound is returned by jiraIssueRequest for a 404 so callers can
+// name the issue in their own message.
+var errJiraNotFound = errors.New("jira: not found")
 
 // jiraCursorLayout is JQL's minute-resolution date literal. The cursor is the
 // max `updated` seen, rendered in the issue's own UTC offset (the same
@@ -106,15 +114,26 @@ func NewJiraPlugin() *JiraPlugin { return &JiraPlugin{} }
 // PluginID returns the unique identifier for this plugin.
 func (j *JiraPlugin) PluginID() string { return "jira" }
 
-// decodeJiraFetchConfig parses config; disabled is true when credentials are
-// absent (source disabled, not an error).
-func decodeJiraFetchConfig(config PluginConfig) (cfg jiraPluginConfig, disabled bool, err error) {
+// loadJiraConfig parses Raw, resolves credentials and validates base_url.
+// Credentials may still be empty; callers decide what that means.
+func loadJiraConfig(config PluginConfig) (jiraPluginConfig, error) {
+	var cfg jiraPluginConfig
 	if config.Raw != "" {
 		if err := json.Unmarshal([]byte(config.Raw), &cfg); err != nil {
-			return jiraPluginConfig{}, false, fmt.Errorf("jira: parse config: %w", err)
+			return cfg, fmt.Errorf("jira: parse config: %w", err)
 		}
 	}
 	resolveJiraCredentials(&cfg)
+	return cfg, nil
+}
+
+// decodeJiraFetchConfig parses config; disabled is true when credentials are
+// absent (source disabled, not an error).
+func decodeJiraFetchConfig(config PluginConfig) (cfg jiraPluginConfig, disabled bool, err error) {
+	cfg, err = loadJiraConfig(config)
+	if err != nil {
+		return jiraPluginConfig{}, false, err
+	}
 	if cfg.Token == "" || cfg.Email == "" {
 		return jiraPluginConfig{}, true, nil
 	}
@@ -134,7 +153,7 @@ func decodeJiraFetchConfig(config PluginConfig) (cfg jiraPluginConfig, disabled 
 var jiraCursorRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$`)
 
 func jiraBuildJQL(projectKey, cursor string) string {
-	jql := "project = " + projectKey
+	jql := fmt.Sprintf("project = %q", projectKey)
 	if cursor != "" {
 		jql += fmt.Sprintf(" AND updated >= %q", cursor)
 	}
@@ -191,41 +210,67 @@ func fetchJiraPage(ctx context.Context, cfg jiraPluginConfig, jql, pageToken str
 	if pageToken != "" {
 		q.Set("nextPageToken", pageToken)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.BaseURL+"/rest/api/3/search/jql?"+q.Encode(), nil)
+	data, err := jiraIssueRequest(ctx, cfg, http.MethodGet, "/rest/api/3/search/jql?"+q.Encode(), nil)
 	if err != nil {
-		return nil, "", fmt.Errorf("jira: build request: %w", err)
+		return nil, "", err
 	}
-	req.SetBasicAuth(cfg.Email, cfg.Token)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := jiraHTTPClient.Do(req)
-	if err != nil {
-		return nil, "", fmt.Errorf("jira: request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	switch {
-	case resp.StatusCode == http.StatusTooManyRequests:
-		return nil, "", fmt.Errorf("jira: rate limited (status %d, retry-after %q)", resp.StatusCode, resp.Header.Get("Retry-After"))
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return nil, "", fmt.Errorf("jira: authentication failed (%d)", resp.StatusCode)
-	case resp.StatusCode != http.StatusOK:
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, "", fmt.Errorf("jira: unexpected status %d: %s", resp.StatusCode, string(body))
-	}
-
 	var out struct {
 		Issues        []jiraIssue `json:"issues"`
 		NextPageToken string      `json:"nextPageToken"`
 		IsLast        bool        `json:"isLast"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxTrackerResponseBytes)).Decode(&out); err != nil {
+	if err := json.Unmarshal(data, &out); err != nil {
 		return nil, "", fmt.Errorf("jira: decode response: %w", err)
 	}
 	if out.IsLast {
 		out.NextPageToken = ""
 	}
 	return out.Issues, out.NextPageToken, nil
+}
+
+// jiraIssueRequest sends one authenticated JSON request to the issue endpoint
+// and returns the body of a 2xx response.
+func jiraIssueRequest(ctx context.Context, cfg jiraPluginConfig, method, path string, payload any) ([]byte, error) {
+	var body io.Reader
+	if payload != nil {
+		b, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("jira: encode request: %w", err)
+		}
+		body = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, cfg.BaseURL+path, body)
+	if err != nil {
+		return nil, fmt.Errorf("jira: build request: %w", err)
+	}
+	req.SetBasicAuth(cfg.Email, cfg.Token)
+	req.Header.Set("Accept", "application/json")
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := jiraHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("jira: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxTrackerResponseBytes))
+	if err != nil {
+		return nil, fmt.Errorf("jira: read response: %w", err)
+	}
+	switch {
+	case resp.StatusCode == http.StatusTooManyRequests:
+		return nil, fmt.Errorf("jira: rate limited (status %d, retry-after %q)", resp.StatusCode, resp.Header.Get("Retry-After"))
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		return nil, fmt.Errorf("jira: authentication failed (%d)", resp.StatusCode)
+	case resp.StatusCode == http.StatusNotFound:
+		return nil, errJiraNotFound
+	case resp.StatusCode < 200 || resp.StatusCode > 299:
+		if len(data) > 512 {
+			data = data[:512]
+		}
+		return nil, fmt.Errorf("jira: unexpected status %d: %s", resp.StatusCode, string(data))
+	}
+	return data, nil
 }
 
 func parseJiraTime(s string) (time.Time, bool) {
@@ -324,13 +369,10 @@ func ParseJiraIssueRef(ref string) (JiraIssueRef, error) {
 // decodeJiraIssueConfig resolves config for single-issue calls (import and
 // forward-sync): base_url and credentials are required, project_key is not.
 func decodeJiraIssueConfig(config PluginConfig) (jiraPluginConfig, error) {
-	var cfg jiraPluginConfig
-	if config.Raw != "" {
-		if err := json.Unmarshal([]byte(config.Raw), &cfg); err != nil {
-			return cfg, fmt.Errorf("jira: parse config: %w", err)
-		}
+	cfg, err := loadJiraConfig(config)
+	if err != nil {
+		return cfg, err
 	}
-	resolveJiraCredentials(&cfg)
 	if cfg.BaseURL == "" {
 		return cfg, fmt.Errorf("jira: base_url is required")
 	}
@@ -338,7 +380,7 @@ func decodeJiraIssueConfig(config PluginConfig) (jiraPluginConfig, error) {
 		return cfg, err
 	}
 	if cfg.Email == "" || cfg.Token == "" {
-		return cfg, fmt.Errorf("jira: credentials not configured for %s (store email and API token in the keychain)", jira.NormalizeHost(cfg.BaseURL))
+		return cfg, fmt.Errorf("jira: credentials not configured for %s (set JIRA_BASE_URL, JIRA_EMAIL and JIRA_API_TOKEN, or store them in the keychain)", jira.NormalizeHost(cfg.BaseURL))
 	}
 	cfg.BaseURL = strings.TrimSuffix(strings.TrimSpace(cfg.BaseURL), "/")
 	return cfg, nil
@@ -353,30 +395,16 @@ func (j *JiraPlugin) FetchIssue(ctx context.Context, config PluginConfig, key st
 		return ExternalItem{}, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		cfg.BaseURL+"/rest/api/3/issue/"+url.PathEscape(key)+"?fields=summary,description,labels,priority,updated", nil)
-	if err != nil {
-		return ExternalItem{}, fmt.Errorf("jira: build request: %w", err)
-	}
-	req.SetBasicAuth(cfg.Email, cfg.Token)
-	req.Header.Set("Accept", "application/json")
-	resp, err := jiraHTTPClient.Do(req)
-	if err != nil {
-		return ExternalItem{}, fmt.Errorf("jira: request failed: %w", err)
-	}
-	defer resp.Body.Close()
-	switch {
-	case resp.StatusCode == http.StatusNotFound:
+	data, err := jiraIssueRequest(ctx, cfg, http.MethodGet,
+		"/rest/api/3/issue/"+url.PathEscape(key)+"?fields=summary,description,labels,priority,updated", nil)
+	if errors.Is(err, errJiraNotFound) {
 		return ExternalItem{}, fmt.Errorf("jira: issue %s not found", key)
-	case resp.StatusCode == http.StatusTooManyRequests:
-		return ExternalItem{}, fmt.Errorf("jira: rate limited (status %d)", resp.StatusCode)
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return ExternalItem{}, fmt.Errorf("jira: authentication failed (%d)", resp.StatusCode)
-	case resp.StatusCode != http.StatusOK:
-		return ExternalItem{}, fmt.Errorf("jira: unexpected status %d", resp.StatusCode)
+	}
+	if err != nil {
+		return ExternalItem{}, err
 	}
 	var is jiraIssue
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxTrackerResponseBytes)).Decode(&is); err != nil {
+	if err := json.Unmarshal(data, &is); err != nil {
 		return ExternalItem{}, fmt.Errorf("jira: decode response: %w", err)
 	}
 	if is.Key == "" {

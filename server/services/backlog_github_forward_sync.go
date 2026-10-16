@@ -1,9 +1,9 @@
 package services
 
 // backlog_github_forward_sync.go — EventBus subscriber implementing forward
-// sync (AC3): closing the linked GitHub issue (or moving the linked Linear
-// issue to its done state, ADR-002) when a backlog item transitions to done, if the item's source has ForwardSyncEnabled. Covers plan.md's
-// Phase 1 Epics 1.2 (subscriber) and 1.3 (bot comment, via PostIssueComment).
+// sync (AC3): closing the linked GitHub issue (or moving the linked Linear/JIRA
+// issue to its target state, ADR-002) when a backlog item transitions to done,
+// if the item's source has ForwardSyncEnabled. Covers plan.md's Phase 1 Epics 1.2 (subscriber) and 1.3 (bot comment, via PostIssueComment).
 
 import (
 	"context"
@@ -15,12 +15,18 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 )
 
+// issueCommenter posts the visible comment that accompanies every automated
+// forward-sync action.
+type issueCommenter interface {
+	PostIssueComment(ctx context.Context, config session.PluginConfig, externalID string, body string) error
+}
+
 // externalIssueStateUpdater is implemented by ItemSourcePlugins whose done
 // state is a named, per-workflow target (Linear workflow states, JIRA
 // transitions) rather than GitHub's binary close. See ADR-002.
 type externalIssueStateUpdater interface {
 	UpdateIssueState(ctx context.Context, config session.PluginConfig, externalID string, targetState string) (time.Time, error)
-	PostIssueComment(ctx context.Context, config session.PluginConfig, externalID string, body string) error
+	issueCommenter
 }
 
 // externalIssueCloser is implemented by ItemSourcePlugins that support
@@ -143,9 +149,7 @@ func handleForwardSyncClose(ctx context.Context, registry *session.PluginRegistr
 		return
 	}
 	var (
-		poster interface {
-			PostIssueComment(ctx context.Context, config session.PluginConfig, externalID string, body string) error
-		}
+		poster         issueCommenter
 		update         func(config session.PluginConfig) (time.Time, error)
 		comment        string
 		failureSubject string
@@ -157,6 +161,15 @@ func handleForwardSyncClose(ctx context.Context, registry *session.PluginRegistr
 			return p.CloseIssue(ctx, config, current.ExternalID, current.Labels, source.ForwardSyncCloseLabel)
 		}
 	case externalIssueStateUpdater:
+		// ForwardSyncCloseLabel doubles as the target workflow state/transition name.
+		if source.ForwardSyncCloseLabel == "" {
+			msg := fmt.Sprintf("forward-sync target state not configured for item %s", current.ID)
+			log.Warn("backlog_github_forward_sync: "+msg, "source_id", source.ID)
+			if recErr := storage.RecordSourceSyncFailure(ctx, source.ID, msg); recErr != nil {
+				log.Error("backlog_github_forward_sync: failed to record sync failure", "source_id", source.ID, "err", recErr)
+			}
+			return
+		}
 		poster, comment, failureSubject = p, fmt.Sprintf(forwardSyncStateComment, source.ForwardSyncCloseLabel), "state update"
 		update = func(config session.PluginConfig) (time.Time, error) {
 			return p.UpdateIssueState(ctx, config, current.ExternalID, source.ForwardSyncCloseLabel)
