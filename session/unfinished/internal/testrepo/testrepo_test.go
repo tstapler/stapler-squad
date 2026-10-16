@@ -1,0 +1,297 @@
+package testrepo_test
+
+import (
+	"bufio"
+	"go/build"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+	"time"
+
+	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
+
+	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
+)
+
+func TestTestrepoAge_ShouldChangeMtimeNotContent_WhenBackdated(t *testing.T) {
+	dir := testrepo.TempDir(t)
+	file := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(file, []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.Stat(file)
+
+	testrepo.Age(t, file, time.Hour)
+	testrepo.Age(t, dir, 2*time.Hour)
+
+	after, err := os.Stat(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := time.Since(after.ModTime()); got < 59*time.Minute || got > 61*time.Minute {
+		t.Errorf("file mtime age = %v, want about 1h", got)
+	}
+	if !after.ModTime().Before(before.ModTime()) {
+		t.Errorf("mtime did not move back: before %v after %v", before.ModTime(), after.ModTime())
+	}
+	if content, _ := os.ReadFile(file); string(content) != "payload" || after.Size() != before.Size() {
+		t.Errorf("content changed: %q size %d->%d", content, before.Size(), after.Size())
+	}
+	dirInfo, _ := os.Stat(dir)
+	if got := time.Since(dirInfo.ModTime()); got < 119*time.Minute || got > 121*time.Minute {
+		t.Errorf("dir mtime age = %v, want about 2h", got)
+	}
+}
+
+func TestNewLinkedWorktree_ShouldProduceIndexedWorktree_WhenBuiltWithGoGitOnly(t *testing.T) {
+	repo, dir := testrepo.NewRepo(t)
+	hashes := testrepo.Linear(t, repo, 2)
+	testrepo.Commit(t, repo, map[string]string{"pkg/a.go": "package pkg\n"}, "add pkg", testrepo.Epoch.Add(time.Hour))
+
+	linked := testrepo.NewLinkedWorktree(t, dir, "wt1", "feature")
+
+	admin := filepath.Join(dir, ".git", "worktrees", "wt1")
+	for _, name := range []string{"HEAD", "commondir", "gitdir", "index"} {
+		if _, err := os.Stat(filepath.Join(admin, name)); err != nil {
+			t.Errorf("missing %s in linked admin dir: %v", name, err)
+		}
+	}
+	pointer, _ := os.ReadFile(filepath.Join(linked, ".git"))
+	if want := "gitdir: " + admin + "\n"; string(pointer) != want {
+		t.Errorf(".git pointer = %q, want %q", pointer, want)
+	}
+	for _, f := range []string{"linear.txt", "pkg/a.go"} {
+		if _, err := os.Stat(filepath.Join(linked, filepath.FromSlash(f))); err != nil {
+			t.Errorf("file %s not populated in linked worktree: %v", f, err)
+		}
+	}
+
+	lrepo := testrepo.OpenLinked(t, linked)
+	head, err := lrepo.Head()
+	if err != nil {
+		t.Fatalf("linked Head: %v", err)
+	}
+	if head.Name().Short() != "feature" {
+		t.Errorf("linked HEAD = %s, want feature", head.Name())
+	}
+	mainHead, _ := repo.Head()
+	if head.Hash() != mainHead.Hash() || mainHead.Name().Short() != testrepo.DefaultBranch {
+		t.Errorf("linked head %s, main head %s %s", head.Hash(), mainHead.Name(), mainHead.Hash())
+	}
+	if hashes[0] == head.Hash() {
+		t.Fatalf("fixture sanity: branch should not start at the first commit")
+	}
+
+	wt, _ := lrepo.Worktree()
+	status, err := wt.Status()
+	if err != nil {
+		t.Fatalf("linked Status: %v", err)
+	}
+	if !status.IsClean() {
+		t.Errorf("linked worktree not clean: %s", status)
+	}
+	idx, err := lrepo.Storer.Index()
+	if err != nil || len(idx.Entries) != 2 {
+		t.Errorf("per-worktree index entries = %d (err %v), want 2", len(idx.Entries), err)
+	}
+}
+
+func TestCrissCross_ShouldHaveTwoMergeBases_WhenDAndEMergeBAndCInOppositeOrder(t *testing.T) {
+	repo, _ := testrepo.NewRepo(t)
+	h := testrepo.CrissCross(t, repo)
+
+	d, _ := repo.CommitObject(h.D)
+	e, _ := repo.CommitObject(h.E)
+	bases, err := d.MergeBase(e)
+	if err != nil {
+		t.Fatalf("MergeBase: %v", err)
+	}
+	got := hashStrings(bases)
+	want := []string{h.B.String(), h.C.String()}
+	sort.Strings(want)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("merge bases = %v, want %v", got, want)
+	}
+}
+
+func hashStrings(commits []*object.Commit) []string {
+	out := make([]string, 0, len(commits))
+	for _, c := range commits {
+		out = append(out, c.Hash.String())
+	}
+	sort.Strings(out)
+	return out
+}
+
+func TestLinear_ShouldBuildChainWithIncreasingTimes_WhenNCommits(t *testing.T) {
+	repo, _ := testrepo.NewRepo(t)
+	hashes := testrepo.Linear(t, repo, 5)
+	if len(hashes) != 5 {
+		t.Fatalf("got %d hashes", len(hashes))
+	}
+	for i, h := range hashes {
+		c, err := repo.CommitObject(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantParents := 1
+		if i == 0 {
+			wantParents = 0
+		}
+		if c.NumParents() != wantParents {
+			t.Errorf("commit %d parents = %d, want %d", i, c.NumParents(), wantParents)
+		}
+		if want := testrepo.Epoch.Add(time.Duration(i) * time.Minute); !c.Committer.When.Equal(want) {
+			t.Errorf("commit %d time = %v, want %v", i, c.Committer.When, want)
+		}
+	}
+}
+
+func TestBranchy_ShouldBuildMergeWithTwoParents_WhenFeatureMergedIntoMain(t *testing.T) {
+	repo, _ := testrepo.NewRepo(t)
+	h := testrepo.Branchy(t, repo)
+
+	merge, err := repo.CommitObject(h.Merge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []plumbing.Hash{h.MainTip, h.FeatureTip}; len(merge.ParentHashes) != 2 ||
+		merge.ParentHashes[0] != want[0] || merge.ParentHashes[1] != want[1] {
+		t.Errorf("merge parents = %v, want %v", merge.ParentHashes, want)
+	}
+	head, _ := repo.Head()
+	if head.Name().Short() != testrepo.DefaultBranch || head.Hash() != h.Merge {
+		t.Errorf("HEAD = %s %s, want main at merge", head.Name(), head.Hash())
+	}
+	feature, _ := repo.CommitObject(h.FeatureTip)
+	base, _ := repo.CommitObject(h.Base)
+	if ok, _ := base.IsAncestor(feature); !ok {
+		t.Errorf("feature tip should descend from base")
+	}
+	if wt, _ := repo.Worktree(); true {
+		if st, _ := wt.Status(); !st.IsClean() {
+			t.Errorf("worktree not clean after Branchy: %s", st)
+		}
+	}
+}
+
+func TestShallow_ShouldWriteShallowFile_WhenBoundarySet(t *testing.T) {
+	repo, dir := testrepo.NewRepo(t)
+	hashes := testrepo.Linear(t, repo, 3)
+	testrepo.Shallow(t, repo, hashes[1])
+
+	fh, err := os.Open(filepath.Join(dir, ".git", "shallow"))
+	if err != nil {
+		t.Fatalf("shallow file: %v", err)
+	}
+	defer fh.Close()
+	var lines []string
+	sc := bufio.NewScanner(fh)
+	for sc.Scan() {
+		lines = append(lines, sc.Text())
+	}
+	if len(lines) != 1 || lines[0] != hashes[1].String() {
+		t.Errorf("shallow file lines = %v, want [%s]", lines, hashes[1])
+	}
+}
+
+func TestRepack_ShouldPackObjectsAndKeepThemReadable_WhenLooseObjectsExist(t *testing.T) {
+	repo, dir := testrepo.NewRepo(t)
+	hashes := testrepo.Linear(t, repo, 4)
+
+	testrepo.Repack(t, repo)
+
+	objects := filepath.Join(dir, ".git", "objects")
+	loose, _ := filepath.Glob(filepath.Join(objects, "??", "*"))
+	packs, _ := filepath.Glob(filepath.Join(objects, "pack", "*.pack"))
+	if len(loose) != 0 || len(packs) != 1 {
+		t.Errorf("loose objects = %d, packs = %d, want 0 and 1", len(loose), len(packs))
+	}
+	reopened, err := git.PlainOpen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range hashes {
+		if _, err := reopened.CommitObject(h); err != nil {
+			t.Errorf("commit %s unreadable after repack: %v", h, err)
+		}
+	}
+}
+
+// TestTestrepoDeps_ShouldNotImportExecOrSafeexec_WhenResolvedWithGoBuild walks
+// imports in-process (go/build.ImportDir reads directories, it does not run
+// `go list`). It follows testrepo and every in-module package it reaches.
+// Limitation: go-git itself transitively imports os/exec (plumbing/transport/file)
+// and module-cache packages are not resolved here, so external dependencies
+// are only checked at the point they are imported by an in-module package.
+func TestTestrepoDeps_ShouldNotImportExecOrSafeexec_WhenResolvedWithGoBuild(t *testing.T) {
+	root, module := moduleRoot(t)
+	forbidden := func(p string) bool {
+		return p == "os/exec" || strings.HasSuffix(p, "/executor/safeexec") || strings.HasSuffix(p, "/executor")
+	}
+	banned := []string{
+		module + "/session/unfinished",
+		module + "/session/unfinished/gogitstore",
+		module + "/session/unfinished/repostate",
+	}
+
+	seen := map[string]bool{}
+	var visit func(pkgPath string)
+	visit = func(pkgPath string) {
+		if seen[pkgPath] {
+			return
+		}
+		seen[pkgPath] = true
+		dir := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(pkgPath, module+"/")))
+		pkg, err := build.ImportDir(dir, 0)
+		if err != nil {
+			t.Errorf("ImportDir %s: %v", pkgPath, err)
+			return
+		}
+		for _, imp := range pkg.Imports {
+			if forbidden(imp) {
+				t.Errorf("%s imports %s", pkgPath, imp)
+			}
+			for _, b := range banned {
+				if imp == b {
+					t.Errorf("%s imports %s (import cycle risk)", pkgPath, imp)
+				}
+			}
+			if strings.HasPrefix(imp, module+"/") {
+				visit(imp)
+			}
+		}
+	}
+	visit(module + "/session/unfinished/internal/testrepo")
+	if len(seen) == 0 {
+		t.Fatal("walk visited nothing")
+	}
+}
+
+func moduleRoot(t *testing.T) (root, module string) {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+		if err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				if rest, ok := strings.CutPrefix(line, "module "); ok {
+					return dir, strings.TrimSpace(rest)
+				}
+			}
+			t.Fatal("go.mod has no module line")
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("go.mod not found")
+		}
+		dir = parent
+	}
+}
