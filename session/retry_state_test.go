@@ -16,21 +16,22 @@ import (
 // fakeLivenessProcessManager reuses stuckDialogProcessManager's full
 // ProcessManager implementation (session_driver_test.go) and overrides only
 // IsAlive, so classifyFailureReason's tests don't need to hand-roll every
-// interface method. restoreDelay, when set, is slept inside
-// RestoreWithWorkDir() -- see TestRestartForRetry_..._TwoCallersRaceRetryInFlight
-// for why a real concurrency test needs this.
+// interface method. restoreRelease, when set, blocks RestoreWithWorkDir() until
+// closed -- see
+// TestRestartForRetry_..._TwoCallersRaceRetryInFlight for why a real
+// concurrency test needs this.
 type fakeLivenessProcessManager struct {
 	stuckDialogProcessManager
-	alive        bool
-	restoreDelay time.Duration
+	alive          bool
+	restoreRelease chan struct{}
 }
 
 func (m *fakeLivenessProcessManager) IsAlive() bool               { return m.alive }
 func (m *fakeLivenessProcessManager) HasLiveSessionNoCache() bool { return m.alive }
 
 func (m *fakeLivenessProcessManager) RestoreWithWorkDir(dir string) error {
-	if m.restoreDelay > 0 {
-		time.Sleep(m.restoreDelay)
+	if m.restoreRelease != nil {
+		<-m.restoreRelease
 	}
 	return m.stuckDialogProcessManager.RestoreWithWorkDir(dir)
 }
@@ -503,16 +504,19 @@ func TestRetryNow_should_ReturnErrRetryInFlight_When_RetryInFlightAlreadyClaimed
 // parallel tests. That isn't a bug in the CAS guard (mutual exclusion is
 // still correctly enforced whenever the two calls actually overlap); it's a
 // test that needs its critical section to have nonzero, real duration to
-// make that overlap reliable regardless of system load. restoreDelay widens
-// the window pm().RestoreWithWorkDir spends holding retryInFlight so the
-// second goroutine's CAS attempt reliably lands while the first still holds
-// it, without relying on scheduler timing.
+// make that overlap reliable regardless of system load. restoreRelease holds
+// pm().RestoreWithWorkDir open while retryInFlight is held until the second
+// caller has been observed losing its CAS, without relying on scheduler timing.
 func TestRestartForRetry_should_PreventConcurrentRestart_When_TwoCallersRaceRetryInFlight(t *testing.T) {
 	t.Parallel()
+	release := make(chan struct{})
 	inst := &Instance{
-		Title:          "t",
-		Status:         Stopped,
-		processManager: &fakeLivenessProcessManager{alive: true, restoreDelay: 50 * time.Millisecond},
+		Title:  "t",
+		Status: Stopped,
+		processManager: &fakeLivenessProcessManager{
+			alive:          true,
+			restoreRelease: release,
+		},
 	}
 	policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}}
 
@@ -526,13 +530,18 @@ func TestRestartForRetry_should_PreventConcurrentRestart_When_TwoCallersRaceRetr
 	}
 	close(start)
 
+	// The winner is parked inside Restore holding retryInFlight, so the first
+	// result to arrive is necessarily the loser's. Release the winner after.
 	var inFlightCount, otherCount int
-	for range 2 {
+	for i := range 2 {
 		err := <-results
 		if errors.Is(err, ErrRetryInFlight) {
 			inFlightCount++
 		} else {
 			otherCount++
+		}
+		if i == 0 {
+			close(release)
 		}
 	}
 	if inFlightCount != 1 {

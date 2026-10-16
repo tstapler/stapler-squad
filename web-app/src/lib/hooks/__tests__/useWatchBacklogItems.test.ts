@@ -39,6 +39,7 @@ jest.mock("@/lib/config", () => ({
 }));
 
 import { useWatchBacklogItems } from "../useWatchBacklogItems";
+import { getPrimaryCardAction } from "@/lib/backlog/itemActions";
 
 // ── Store factory ──────────────────────────────────────────────────────────
 
@@ -885,6 +886,63 @@ describe("useWatchBacklogItems", () => {
       "ready",
       "refining",
     ]);
+  });
+
+  /** A ready item with an unapproved-but-existing plan ("Approve Plan" case). */
+  function makeReadyItemWithPlan(planArtifactsPath: string) {
+    return { id: "item-1", status: "ready", skipPlanning: false, planApproved: false, planArtifactsPath } as any;
+  }
+
+  /** Emits `item` on `stream` as a live (non-snapshot) itemUpdated event and flushes. */
+  async function emitItemUpdate(stream: ReturnType<typeof makeControllableStream>, item: unknown) {
+    await act(async () => {
+      stream.emit(makeEvent("itemUpdated", { item, itemId: "item-1", updatedFields: [], isSnapshot: false }, 1n));
+      await flush();
+    });
+  }
+
+  // Regression (2026-09-11 live-audit bug): navigating into a board item's
+  // detail panel and back mounted a second useWatchBacklogItems() instance,
+  // whose own listBacklogItems() REST refresh raced the first instance's
+  // live stream. Both dispatch into the same shared backlogItemsSlice store,
+  // so a sparse ListBacklogItems response (backlogItemSummaryToProto
+  // previously zero-valued planArtifactsPath — see server/services/
+  // backlog_service_test.go's matching Go regression test) landing after the
+  // full one flipped every READY card's primary action from "Approve Plan"
+  // to "Trigger Triage" even though the plan was never touched. Asserts both
+  // that the store keeps planArtifactsPath and that the derived card action
+  // (itemActions.ts's getPrimaryCardAction, what BacklogItemCard actually
+  // renders) stays "Approve Plan" across the sparse resync.
+  it("does not clobber planArtifactsPath with an empty string from a same-timestamp fallback poll, keeping the card action Approve Plan", async () => {
+    jest.useFakeTimers();
+    const stream = makeControllableStream();
+    mockWatchBacklogItems.mockReturnValueOnce(stream.stream);
+    mockWatchBacklogItems.mockReturnValue(makeHangingStream());
+
+    const store = makeStore();
+    const { result } = renderHook(() => useWatchBacklogItems(), { wrapper: makeWrapper(store) });
+    await act(async () => {
+      await flush();
+    });
+
+    // Full item, as the watch stream's fresh-connection snapshot delivers it.
+    await emitItemUpdate(stream, makeReadyItemWithPlan("/repo/.stapler-squad/plans/item-1"));
+    let item1 = result.current.items.find((i) => i.id === "item-1");
+    expect(item1?.planArtifactsPath).toBe("/repo/.stapler-squad/plans/item-1");
+    expect(getPrimaryCardAction(item1 as any).action).toBe("approve_plan");
+
+    // A fallback-poll resync returns the item with an empty planArtifactsPath
+    // (the pre-fix ListBacklogItems DTO shape) — must not blank the value the
+    // store already has, and the card action must not flip to Trigger Triage.
+    mockListBacklogItems.mockResolvedValueOnce({ items: [makeReadyItemWithPlan("")] });
+    await act(async () => {
+      jest.advanceTimersByTime(30_000);
+      await flush();
+    });
+
+    item1 = result.current.items.find((i) => i.id === "item-1");
+    expect(item1?.planArtifactsPath).toBe("/repo/.stapler-squad/plans/item-1");
+    expect(getPrimaryCardAction(item1 as any).action).toBe("approve_plan");
   });
 
   // Story 6.2.2 (backlog-item-activity-log): activityNoteAdded is a dedicated

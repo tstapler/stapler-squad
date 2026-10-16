@@ -26,6 +26,7 @@ export function createMockXtermHandle() {
   return {
     terminal: null as null,
     fit: jest.fn(),
+    refit: jest.fn(),
     write: jest.fn(),
     writeln: jest.fn(),
     clear: jest.fn(),
@@ -39,6 +40,18 @@ export function createMockXtermHandle() {
 export function xtermTerminalMockModule(mockXtermHandle: unknown) {
   const React = require("react");
   const XtermTerminal = React.forwardRef((_props: unknown, ref: unknown) => {
+    React.useImperativeHandle(ref, () => mockXtermHandle);
+    return React.createElement("div", { "data-testid": "mock-xterm" });
+  });
+  XtermTerminal.displayName = "XtermTerminal";
+  return { XtermTerminal };
+}
+
+/** Like xtermTerminalMockModule, but hands every render's props to `capture` so tests can drive the callbacks. */
+export function capturingXtermTerminalMockModule(mockXtermHandle: unknown, capture: (props: any) => void) {
+  const React = require("react");
+  const XtermTerminal = React.forwardRef((props: any, ref: unknown) => {
+    capture(props);
     React.useImperativeHandle(ref, () => mockXtermHandle);
     return React.createElement("div", { "data-testid": "mock-xterm" });
   });
@@ -61,8 +74,13 @@ export function terminalStreamManagerMockModule() {
   return {
     TerminalStreamManager: jest.fn().mockImplementation(() => ({
       setOnFirstOutput: jest.fn(),
+      setOnFullSnapshot: jest.fn(),
+      setOnAltScreenChange: jest.fn(),
+      setOnAppScrollback: jest.fn(),
+      handleAppScrollback: jest.fn(),
       installDebugMonitor: jest.fn(),
       writeInitialContent: jest.fn().mockResolvedValue(undefined),
+      prependScrollbackBatch: jest.fn().mockResolvedValue(undefined),
       write: jest.fn(),
       cleanup: jest.fn(),
       updateSendFlowControl: jest.fn(),
@@ -84,18 +102,38 @@ export function terminalDimensionCacheWithValidationMockModule() {
   };
 }
 
+// Story 1.4.0/1.4.1 — the mock TerminalStreamManager instance captures the
+// callbacks TerminalOutput.tsx registers (setOnAltScreenChange,
+// setOnAppScrollback) onto itself, and this module exposes the latest
+// constructed instance via __mockManagerState so a test can drive them
+// directly (mirrors __mockXtermState's pattern in TerminalOutput.test.tsx).
 export function terminalStreamManagerWithSerializeAddonMockModule() {
-  return {
-    TerminalStreamManager: jest.fn().mockImplementation(() => ({
+  const state: { instance: any } = { instance: null };
+  const TerminalStreamManager = jest.fn().mockImplementation(() => {
+    const instance: any = {
       setOnFirstOutput: jest.fn(),
+      setOnFullSnapshot: jest.fn(),
+      setOnAltScreenChange: jest.fn((cb: (active: boolean) => void) => {
+        instance.__onAltScreenChange = cb;
+      }),
+      setOnAppScrollback: jest.fn((cb: (frame: unknown) => void) => {
+        instance.__onAppScrollback = cb;
+      }),
+      handleAppScrollback: jest.fn((frame: unknown) => {
+        instance.__onAppScrollback?.(frame);
+      }),
       setSerializeAddon: jest.fn(),
       installDebugMonitor: jest.fn(),
       writeInitialContent: jest.fn().mockResolvedValue(undefined),
+      prependScrollbackBatch: jest.fn().mockResolvedValue(undefined),
       write: jest.fn(),
       cleanup: jest.fn(),
       updateSendFlowControl: jest.fn(),
-    })),
-  };
+    };
+    state.instance = instance;
+    return instance;
+  });
+  return { TerminalStreamManager, __mockManagerState: state };
 }
 
 export function analyticsContextPlainMockModule() {

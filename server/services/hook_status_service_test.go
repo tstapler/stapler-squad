@@ -52,7 +52,6 @@ func TestGetHookStatus_ReflectsAgyAndGemini(t *testing.T) {
 		t.Error("agy and gemini rules should not be installed on fresh HOME")
 	}
 }
-
 func TestInstallHooks_MissingBinary_ReportsManualFallback(t *testing.T) {
 	home := withFakeHome(t)
 	t.Setenv("PATH", filepath.Join(home, "empty-bin")) // ensure ssq-hooks is not discoverable

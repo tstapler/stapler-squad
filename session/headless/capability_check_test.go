@@ -217,11 +217,27 @@ printf '{"type":"result","session_id":"s1","result":"%%s","total_cost_usd":0}\n'
 }
 
 // TestCodebaseReadCapabilitySelfCheck_NilPool_ReturnsFalse verifies Ensure degrades
-// gracefully (rather than panicking) when called with a nil pool.
+// gracefully (rather than panicking) when called with a nil pool, and — the actual
+// bug this guards against — does NOT cache that as a failure. A nil pool means the
+// caller (e.g. BacklogService, between construction and its later SetHeadlessPool
+// call) isn't wired up yet, not that a real probe failed; caching it would poison
+// DefaultCapabilitySelfCheck's shared failure window for every other caller.
 func TestCodebaseReadCapabilitySelfCheck_NilPool_ReturnsFalse(t *testing.T) {
 	t.Parallel()
 	check := &CodebaseReadCapabilitySelfCheck{}
 	assert.False(t, check.Ensure(context.Background(), nil))
+	assert.False(t, check.Checked(), "nil pool must not mark/cache a result")
+
+	scriptDir := t.TempDir()
+	countPath := filepath.Join(scriptDir, "count.txt")
+	resultPath := filepath.Join(scriptDir, "result.txt")
+	require.NoError(t, os.WriteFile(resultPath, []byte(capabilityCheckMarkerValue), 0o600))
+	scriptPath := writeSwappableCapabilityCheckFakeClaudeScript(t, scriptDir, countPath, resultPath)
+	runner := NewShellWrappedProcessRunnerForTesting(scriptPath)
+	pool := NewPoolWithRunner(PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2}, runner)
+
+	assert.True(t, check.Ensure(context.Background(), pool),
+		"a later call with a real, working pool must still get a genuine probe rather than a poisoned cached failure")
 }
 
 // TestCodebaseReadCapabilitySelfCheck_CallerCtxAlreadyExpired_ProbeStillSucceeds is the
@@ -250,9 +266,8 @@ func TestCodebaseReadCapabilitySelfCheck_CallerCtxAlreadyExpired_ProbeStillSucce
 
 	// A context that is already expired by the time Ensure is called — simulates the
 	// short-lived per-review ctx that triggered this bug in production.
-	expiredCtx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+	expiredCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
-	time.Sleep(5 * time.Millisecond)
 	require.Error(t, expiredCtx.Err(), "sanity check: ctx must actually be expired before calling Ensure")
 
 	assert.True(t, check.Ensure(expiredCtx, pool),

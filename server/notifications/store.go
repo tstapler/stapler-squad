@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/events"
 )
 
 const (
@@ -38,6 +39,12 @@ const (
 	notifTypeError            = int32(7) // NOTIFICATION_TYPE_ERROR
 	notifTypeWarning          = int32(8) // NOTIFICATION_TYPE_WARNING
 	notifTypeFailure          = int32(9) // NOTIFICATION_TYPE_FAILURE (maps to UI "error")
+
+	// priorityUrgent/priorityHigh mirror sessionv1.NotificationPriority's URGENT(4)/HIGH(3)
+	// values as raw ints, matching the mirror-constant pattern server/push/
+	// trigger_constants.go already uses to avoid a proto import here.
+	priorityUrgent = int32(4)
+	priorityHigh   = int32(3)
 )
 
 // IsActionableType reports whether t is one of the backend NotificationType values
@@ -54,6 +61,13 @@ func IsActionableType(t int32) bool {
 	default:
 		return false
 	}
+}
+
+// IsPendingDecision is the single server definition of "the operator must act on
+// this": an unread actionable type not stamped auto_remediating=true. The history
+// record field, the live event field, Clear and the prune all call it (ADR-008).
+func IsPendingDecision(t int32, metadata map[string]string, read bool) bool {
+	return !read && IsActionableType(t) && metadata[events.MetadataKeyAutoRemediating] != "true"
 }
 
 // NotificationRecord is the persisted representation of a notification event.
@@ -113,6 +127,10 @@ type NotificationHistoryStore struct {
 	mu       sync.RWMutex
 	records  []*NotificationRecord
 
+	// pruneMu serializes PruneByPredicate calls so its audit and backup I/O can
+	// run without mu.
+	pruneMu sync.Mutex
+
 	// existenceChecker, when non-nil, is called at most once per orphanPruneInterval
 	// from enforceRetention to batch-fetch the set of currently-existing session IDs
 	// for orphan pruning. See SetSessionExistenceLookup and PruneOrphaned.
@@ -170,15 +188,25 @@ func NewNotificationHistoryStore(filePath string) (*NotificationHistoryStore, er
 // For APPROVAL_NEEDED notifications the record ID is also updated to the incoming
 // approval UUID so that SetMetadata outcome-stamping (which looks up by record ID)
 // continues to correlate with the most recent approval for this session.
+//
+// Callers that use a stable, caller-chosen ID across a whole episode (e.g.
+// fork-pressure's "fork-pressure-status" -- see server/server.go's
+// buildForkPressureNotification) hit the exact-ID-match branch below instead:
+// identical content is a true no-op (idempotent retry), but changed content
+// (e.g. an escalation from Warning to Critical under the same ID) still merges
+// into the existing record rather than being silently dropped.
 func (s *NotificationHistoryStore) Append(record *NotificationRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Check for exact duplicates by ID (idempotency guard)
 	for _, existing := range s.records {
-		if existing.ID == record.ID {
-			return nil // Already exists, skip
+		if existing.ID != record.ID {
+			continue
 		}
+		if recordContentEqual(existing, record) {
+			return nil // Genuinely unchanged -- idempotent no-op.
+		}
+		return s.mergeOccurrence(existing, record)
 	}
 
 	// Check for a duplicate by (sessionID, notificationType) and collapse.
@@ -188,25 +216,7 @@ func (s *NotificationHistoryStore) Append(record *NotificationRecord) error {
 		if record.NotificationType == notifTypeApprovalNeeded {
 			existing.ID = record.ID
 		}
-		// Update existing record with latest data
-		existing.OccurrenceCount++
-		existing.LastOccurredAt = &record.CreatedAt
-		existing.Message = record.Message
-		existing.Metadata = record.Metadata
-		existing.Title = record.Title
-		// A recurrence means the event happened again -- surface it as unread again,
-		// except for AUTO_APPROVED, which stays silently pre-read across recurrence.
-		if record.NotificationType != notifTypeAutoApproved {
-			existing.IsRead = false
-			existing.ReadAt = nil
-		}
-		// Sweep retention on the collapse path too, not just the new-record path below --
-		// otherwise a frequently-recurring record only gets swept when some other,
-		// unrelated new notification happens to arrive.
-		s.enforceRetention()
-		// Move updated record to front (newest-first ordering)
-		s.moveToFront(existing)
-		return s.saveToDisk()
+		return s.mergeOccurrence(existing, record)
 	}
 
 	// No duplicate found -- insert as new record with count=1
@@ -220,12 +230,55 @@ func (s *NotificationHistoryStore) Append(record *NotificationRecord) error {
 	return s.saveToDisk()
 }
 
+// recordContentEqual reports whether two records carry the same user-visible
+// content, used by Append's exact-ID-match branch to tell a true idempotent
+// retry (safe to no-op) apart from a stable-ID record whose content changed.
+func recordContentEqual(a, b *NotificationRecord) bool {
+	if a.Title != b.Title || a.Message != b.Message || a.NotificationType != b.NotificationType {
+		return false
+	}
+	if len(a.Metadata) != len(b.Metadata) {
+		return false
+	}
+	for k, v := range a.Metadata {
+		if b.Metadata[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// mergeOccurrence folds record's latest data into existing (occurrence count,
+// message/title/metadata, unread state) and persists -- the update-in-place
+// path shared by Append's exact-ID-match and (sessionID, notificationType)
+// collapse branches. Must be called with s.mu held.
+func (s *NotificationHistoryStore) mergeOccurrence(existing, record *NotificationRecord) error {
+	existing.OccurrenceCount++
+	existing.LastOccurredAt = &record.CreatedAt
+	existing.Message = record.Message
+	existing.Metadata = record.Metadata
+	existing.Title = record.Title
+	// A recurrence means the event happened again -- surface it as unread again,
+	// except for AUTO_APPROVED, which stays silently pre-read across recurrence.
+	if record.NotificationType != notifTypeAutoApproved {
+		existing.IsRead = false
+		existing.ReadAt = nil
+	}
+	// Sweep retention on the collapse path too, not just the new-record path in
+	// Append -- otherwise a frequently-recurring record only gets swept when
+	// some other, unrelated new notification happens to arrive.
+	s.enforceRetention()
+	// Move updated record to front (newest-first ordering)
+	s.moveToFront(existing)
+	return s.saveToDisk()
+}
+
 // AppendAutoApproved writes a silent NOTIFICATION_TYPE_AUTO_APPROVED record directly to
 // history without publishing to the event bus. The record is immediately marked as read so
 // it never appears in the active notification feed — only in the auto-handled history view.
-func (s *NotificationHistoryStore) AppendAutoApproved(sessionID, sessionName, toolName, filePath, ruleID, ruleName, ruleSource, decision string) error {
+func (s *NotificationHistoryStore) AppendAutoApproved(sessionID, sessionName, toolName, detail, ruleID, ruleName, ruleSource, decision string) error {
 	title := "Auto-" + decision + "d: " + toolName
-	msg := filePath
+	msg := detail
 	if msg == "" {
 		msg = toolName
 	}
@@ -366,6 +419,30 @@ func (s *NotificationHistoryStore) MarkRead(ids []string) (int, error) {
 	return count, nil
 }
 
+// MarkReadWhere marks every unread record for which match returns true as read
+// and persists once. match runs under the store lock, so it must not call back
+// into the store. Returns the number of records marked.
+func (s *NotificationHistoryStore) MarkReadWhere(match func(*NotificationRecord) bool) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	count := 0
+	for _, r := range s.records {
+		if !r.IsRead && match(r) {
+			r.IsRead = true
+			r.ReadAt = &now
+			count++
+		}
+	}
+	if count > 0 {
+		if err := s.saveToDisk(); err != nil {
+			return count, err
+		}
+	}
+	return count, nil
+}
+
 // Clear removes notifications. If before is nil, clears all. Otherwise clears
 // notifications created before the given time. Returns the number cleared.
 // Clear deletes notification records — every record when before is nil, or
@@ -383,7 +460,7 @@ func (s *NotificationHistoryStore) Clear(before *time.Time) (int, error) {
 
 	var kept []*NotificationRecord
 	for _, r := range s.records {
-		if !r.IsRead && IsActionableType(r.NotificationType) {
+		if IsPendingDecision(r.NotificationType, r.Metadata, r.IsRead) {
 			kept = append(kept, r) // never delete a still-pending decision
 			continue
 		}
@@ -404,6 +481,50 @@ func (s *NotificationHistoryStore) Clear(before *time.Time) (int, error) {
 	}
 
 	return cleared, nil
+}
+
+// ClearByIDs deletes the listed records except those that are still pending
+// decisions (ADR-008), which are returned in kept in request order. Unknown ids
+// are ignored; records not listed are never touched.
+func (s *NotificationHistoryStore) ClearByIDs(ids []string) (deleted int, kept []string, err error) {
+	if len(ids) == 0 {
+		return 0, nil, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	byID := make(map[string]*NotificationRecord, len(s.records))
+	for _, r := range s.records {
+		byID[r.ID] = r
+	}
+	remove := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		r, ok := byID[id]
+		if !ok {
+			continue
+		}
+		if IsPendingDecision(r.NotificationType, r.Metadata, r.IsRead) {
+			kept = append(kept, id)
+			continue
+		}
+		remove[id] = struct{}{}
+	}
+	if len(remove) == 0 {
+		return 0, kept, nil
+	}
+
+	remaining := s.records[:0:0]
+	for _, r := range s.records {
+		if _, drop := remove[r.ID]; !drop {
+			remaining = append(remaining, r)
+		}
+	}
+	s.records = remaining
+	deleted = len(remove)
+	if err := s.saveToDisk(); err != nil {
+		return deleted, kept, err
+	}
+	return deleted, kept, nil
 }
 
 // SetSessionExistenceLookup registers the batch-fetch function used by the orphan-pruning
@@ -578,6 +699,41 @@ func (s *NotificationHistoryStore) deduplicateExisting() error {
 	s.records = cleaned
 
 	return s.saveToDisk()
+}
+
+// DemoteExpiredUrgency downgrades URGENT-priority records whose urgency has aged past ttl
+// (measured from LastOccurredAt, falling back to CreatedAt, same effective-time rule as
+// enforceRetention) from URGENT to HIGH. It never deletes, archives, or marks a record
+// read — urgency is time-bound ("a 1-hour-old notification is no longer urgent") but
+// importance isn't, so a demoted record stays exactly as visible in the unread/in-app
+// list, just no longer eligible for push (server/push/subscriber.go's shouldNotify gates
+// push on priority == URGENT). Returns the number of records demoted and persists to disk
+// if any changed.
+func (s *NotificationHistoryStore) DemoteExpiredUrgency(now time.Time, ttl time.Duration) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	demoted := 0
+	for _, r := range s.records {
+		if r.Priority != priorityUrgent {
+			continue
+		}
+		effective := r.CreatedAt
+		if r.LastOccurredAt != nil {
+			effective = *r.LastOccurredAt
+		}
+		if now.Sub(effective) >= ttl {
+			r.Priority = priorityHigh
+			demoted++
+		}
+	}
+
+	if demoted > 0 {
+		if err := s.saveToDisk(); err != nil {
+			log.Warn("NotificationHistoryStore: failed to persist urgency demotion", "err", err)
+		}
+	}
+	return demoted
 }
 
 // enforceRetention trims records to MaxNotifications and prunes expired entries.

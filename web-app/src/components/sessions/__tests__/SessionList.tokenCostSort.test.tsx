@@ -23,6 +23,13 @@ jest.mock("@connectrpc/connect", () => ({
   })),
 }));
 
+// jest.setup.js globally stubs useInsightsSummary (Story 5.2.3) so most
+// consumers don't open a real WatchInsights transport by default — this
+// file exercises the real hook (via SessionList's AC-2 cost join) against
+// the mocked transport above, so it must opt back out of that stub (same
+// pattern as useInsightsService.test.ts).
+jest.unmock("@/lib/hooks/useInsightsService");
+
 jest.mock("@connectrpc/connect-web", () => require("./sessionListTestFixtures").mockConnectWeb());
 
 jest.mock("@tanstack/react-virtual", () => require("./sessionListTestFixtures").mockReactVirtual());

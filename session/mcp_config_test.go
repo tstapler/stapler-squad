@@ -87,9 +87,10 @@ func TestMCPConfigFlagRejectedByOldFormat(t *testing.T) {
 // TestClaudeBinaryAcceptsMCPConfig is an integration test that runs the real claude
 // binary and confirms it does not reject our --mcp-config JSON with a schema error.
 //
-// When the API proxy is available at localhost:47000 and the MCP server is available
-// at localhost:8543/mcp, the test exercises full end-to-end connectivity. Otherwise
-// it falls back to schema-only validation (unreachable MCP URL, no API proxy).
+// Hermetic by design: the MCP URL is deliberately unreachable and TestMain's
+// envtest.IsolateClaudeCLI points the CLI at an empty config dir and a dead
+// loopback API endpoint, so the schema check runs without the developer's
+// credentials, the live service, or any real API call.
 // Skipped when claude is not installed.
 func TestClaudeBinaryAcceptsMCPConfig(t *testing.T) {
 	t.Parallel()
@@ -98,38 +99,18 @@ func TestClaudeBinaryAcceptsMCPConfig(t *testing.T) {
 		t.Skip("claude not in PATH — skipping binary integration test")
 	}
 
-	mcpURL := "http://localhost:8543/mcp"
-	if !serverReachable(mcpURL) {
-		mcpURL = "http://localhost:19999/mcp" // unreachable fallback; still validates schema
-	}
-
-	cfg := fmt.Sprintf(`{"mcpServers":{"stapler-squad":{"type":"http","url":%q}}}`, mcpURL)
+	cfg := `{"mcpServers":{"stapler-squad":{"type":"http","url":"http://127.0.0.1:19999/mcp"}}}`
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cmd := safeexec.CommandContext(ctx, claudePath, "--mcp-config", cfg, "--print", "test")
-	// Route through the local Claude API proxy when available so the test can get
-	// a real response without hardcoding credentials.
-	if serverReachable("http://localhost:47000") {
-		cmd.Env = append(cmd.Environ(), "ANTHROPIC_BASE_URL=http://localhost:47000")
-	}
-	out, _ := cmd.CombinedOutput()
+	out, _ := safeexec.CommandContext(ctx, claudePath, "--mcp-config", cfg, "--strict-mcp-config", "--print", "test").CombinedOutput()
 	output := string(out)
 
 	if strings.Contains(output, "Does not adhere to MCP server configuration schema") ||
 		strings.Contains(output, "Invalid MCP configuration") {
 		t.Errorf("claude rejected MCP config as invalid schema:\n%s", output)
 	}
-}
-
-// serverReachable returns true if curl can reach url within 1 second.
-func serverReachable(url string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "1", url)
-	out, err := cmd.Output()
-	return err == nil && string(out) != "000"
 }
 
 func keys[K comparable, V any](m map[K]V) []K {

@@ -237,4 +237,21 @@ describe("SessionDetailContent", () => {
     const second = render(<SessionDetailContent session={session} turns={turns} />);
     expect(second.container.innerHTML).toBe(firstHtml);
   });
+
+  it("renders a labelled four-segment token breakdown", () => {
+    const session = makeSession({
+      totalInputTokens: 100n,
+      totalOutputTokens: 50n,
+      cacheCreationTokens: 25n,
+      cacheReadTokens: 25n,
+    });
+    render(<SessionDetailContent session={session} turns={[]} />);
+    expect(screen.getByRole("img", { name: /Input 100.*Output 50.*Cache write 25.*Cache read 25/ })).toBeInTheDocument();
+    expect(screen.getByTestId("token-segment-input")).toHaveStyle({ width: "50%" });
+  });
+
+  it("renders an empty state when a session has zero tokens", () => {
+    render(<SessionDetailContent session={makeSession()} turns={[]} />);
+    expect(screen.getByTestId("token-breakdown-empty")).toBeInTheDocument();
+  });
 });

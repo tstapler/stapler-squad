@@ -1,6 +1,7 @@
 package session
 
 import (
+	"sort"
 	"strings"
 	"time"
 
@@ -386,4 +387,63 @@ func prReadyToMergeSolo(info *github.PRInfo) bool {
 		return false
 	}
 	return strings.EqualFold(info.Mergeable, "MERGEABLE")
+}
+
+// DefaultNoopDispatchThreshold is the consecutive no-op work-session count that
+// flags repeated_noop_dispatch when no configured override is wired.
+const DefaultNoopDispatchThreshold = 3
+
+// isNoopWorkSession reports whether is is a finished work session that
+// produced no commits (nothing beyond its spawn-time base).
+func isNoopWorkSession(is ItemSessionSummary) bool {
+	if is.Role != string(SessionRoleWork) || is.EndedAt == nil {
+		return false
+	}
+	return is.CommitCountSinceSpawn == 0 && (is.LastCommitSha == "" || is.LastCommitSha == is.BaseCommitSha)
+}
+
+// consecutiveNoopWorkSessions counts the unbroken run of finished no-op work
+// sessions, newest first. Non-work sessions and still-running work sessions are
+// skipped; the first finished work session that committed ends the run.
+func consecutiveNoopWorkSessions(sessions []ItemSessionSummary) int {
+	sorted := append([]ItemSessionSummary(nil), sessions...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].CreatedAt.After(sorted[j].CreatedAt) })
+	n := 0
+	for _, is := range sorted {
+		if is.Role != string(SessionRoleWork) || is.EndedAt == nil {
+			continue
+		}
+		if !isNoopWorkSession(is) {
+			break
+		}
+		n++
+	}
+	return n
+}
+
+// isRepeatedNoopDispatch reports whether an item with a PASS verdict has had
+// at least threshold consecutive work sessions end with no new commits.
+func isRepeatedNoopDispatch(noopCount, threshold int, hasPass bool) bool {
+	return hasPass && threshold > 0 && noopCount >= threshold
+}
+
+// PendingDuplicateRef returns the duplicate_ref of the most recent
+// report_duplicate claim recorded in sessions' VerificationNotes, or "" when
+// none. Callers gate on the item still being in review: the claim only awaits
+// confirmation while the item has not left review.
+func PendingDuplicateRef(sessions []ItemSessionSummary) string {
+	sorted := append([]ItemSessionSummary(nil), sessions...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].CreatedAt.After(sorted[j].CreatedAt) })
+	for _, is := range sorted {
+		lines := strings.Split(is.VerificationNotes, "\n")
+		for i := len(lines) - 1; i >= 0; i-- {
+			if rest, ok := strings.CutPrefix(lines[i], "duplicate_ref="); ok {
+				if ref, _, found := strings.Cut(rest, " "); found {
+					return ref
+				}
+				return rest
+			}
+		}
+	}
+	return ""
 }

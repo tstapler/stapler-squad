@@ -10,6 +10,10 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
+
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // TestMain re-execs this same test binary as a disposable "stuck server"
@@ -38,7 +42,7 @@ func runHelperProcess(portStr string) {
 		os.Exit(2)
 	}
 	defer func() { _ = ln.Close() }()
-	time.Sleep(30 * time.Second)
+	time.Sleep(30 * time.Second) //nolint:notimesleeptest helper subprocess holds the port until killed by the test; not a timing wait
 }
 
 func freePort(t *testing.T) int {
@@ -57,7 +61,7 @@ func startHelper(t *testing.T, port int, ignoreTerm bool) *exec.Cmd {
 	// -test.run matches no actual Test function (TestMain is special-cased
 	// and always runs regardless of -run) — we only want TestMain's early
 	// env-var check below to fire, not the rest of the test suite.
-	cmd := exec.Command(os.Args[0], "-test.run=^NoSuchTest$")
+	cmd := safeexec.CommandContext(context.Background(), os.Args[0], "-test.run=^NoSuchTest$")
 	cmd.Env = append(os.Environ(), "PORTGUARD_TEST_HELPER_PORT="+strconv.Itoa(port))
 	if ignoreTerm {
 		cmd.Env = append(cmd.Env, "PORTGUARD_TEST_HELPER_IGNORE_TERM=1")
@@ -70,11 +74,12 @@ func startHelper(t *testing.T, port int, ignoreTerm bool) *exec.Cmd {
 		_ = cmd.Wait()
 	})
 
-	for i := 0; i < 250 && PortFree(port); i++ {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if PortFree(port) {
-		t.Fatalf("helper process never bound port %d", port)
+	if err := wait.WaitForCondition(func() bool { return !PortFree(port) }, wait.WaitConfig{
+		Timeout:      5 * time.Second,
+		PollInterval: 20 * time.Millisecond,
+		Description:  "helper process binding port",
+	}); err != nil {
+		t.Fatalf("helper process never bound port %d: %v", port, err)
 	}
 	return cmd
 }
@@ -143,5 +148,25 @@ func TestEnsureReleased_NoHolderIsANoop(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 1*time.Second {
 		t.Fatalf("EnsureReleased took %v for an already-free port; want near-instant", elapsed)
+	}
+}
+
+func TestEnsureReleased_StopsWaitingWhenContextCanceled(t *testing.T) {
+	port := freePort(t)
+	startHelper(t, port, false)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	err := EnsureReleased(ctx, Options{
+		Ports:        []int{port},
+		Timeout:      10 * time.Second,
+		PollInterval: 20 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatal("EnsureReleased returned nil for a canceled context")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("EnsureReleased ignored cancellation for %v", elapsed)
 	}
 }

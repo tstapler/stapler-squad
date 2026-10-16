@@ -256,5 +256,3 @@ export const LogViewer = forwardRef<LogViewerHandle, LogViewerProps>(function Lo
     </div>
   );
 });
-
-export default LogViewer;

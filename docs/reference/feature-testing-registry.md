@@ -14,6 +14,10 @@ This project has two complementary frontend registries for omnibar capabilities.
 
 **Special case: `create_session` with `sessionType: "one_off"`** — One-off sessions use `oneOff: true` flag rather than a new action type. The dispatch case maps `sessionType === "one_off"` to `{ oneOff: true, sessionType: undefined }`.
 
+**Special case: `parse_backlog_item`** — unlike every other action's fire-and-`deps.close()` pattern, this one deliberately does NOT close the omnibar: it opens `BacklogItemIntentReview` (an LLM-parsed draft the user reviews/edits before creation), replacing the omnibar body until the user confirms or cancels. Added as a sibling to `chat_backlog_item` (which stays as the raw-text-no-review fast path used by `BacklogItemDetail`'s chat refinement flow) rather than overloading it, since the two have materially different behavior.
+
+**Special case: compose mode** — the omnibar's "Create Backlog Item" button/row opens `BacklogComposeWidget` (state `backlogComposeText` in `Omnibar.tsx`), which bypasses the dispatcher: Create hands the text to `BacklogItemIntentReview` (`setBacklogReviewText`), the same AI intent-review step as the `backlog: ` prefix path, so it calls `parseBacklogItemIntent` then `createBacklogItem`. No `OmnibarAction` or detector exists for it. Feature marker: `backlog:compose-widget`.
+
 ### When to add a new action type
 
 Add to the `OmnibarAction` union when:

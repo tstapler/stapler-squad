@@ -458,9 +458,9 @@ func TestReconnectLoop_DoesNotFire_OnDeliberateDetach(t *testing.T) {
 	sess, _, transport := startedSessionWithStream(t)
 
 	require.NoError(t, sess.DetachSafely())
-	time.Sleep(20 * time.Millisecond) // let any (incorrect) reconnect attempt start
-
-	assert.EqualValues(t, 1, transport.attachCalls, "DetachSafely must not trigger ReconnectLoop — no second Attach call")
+	// Watch for any (incorrect) reconnect attempt.
+	require.Never(t, func() bool { return atomic.LoadInt32(&transport.attachCalls) != 1 },
+		20*time.Millisecond, time.Millisecond, "DetachSafely must not trigger ReconnectLoop — no second Attach call")
 }
 
 func TestReconnectLoop_Fires_OnTransportErrorNotPrecededByDetach(t *testing.T) {
@@ -754,11 +754,12 @@ func TestReconnectLoop_OrdinaryDrop_DoesNotSetBackendRestarted(t *testing.T) {
 	wait.RequireEventually(t, func() bool {
 		return atomic.LoadInt32(&transport.attachCalls) >= 2
 	}, time.Second, time.Millisecond)
-	time.Sleep(50 * time.Millisecond)
 
 	concrete := sess.(*tymuxGRPCSession)
-	restarted, _ := concrete.BackendRestarted()
-	assert.False(t, restarted, "an ordinary transport blip must not be surfaced as a daemon restart")
+	require.Never(t, func() bool {
+		restarted, _ := concrete.BackendRestarted()
+		return restarted
+	}, 50*time.Millisecond, time.Millisecond, "an ordinary transport blip must not be surfaced as a daemon restart")
 }
 
 // --- Phase 2 (session-lifecycle-state-machine): classifyStreamEnd, lifecycle wiring ---
@@ -903,6 +904,27 @@ func TestOpenStandingStream_TearDownForReopen_DoesNotDeadlock_WhenOldStreamWould
 		"reopen must open exactly one new Attach stream, not trigger the old reader's ReconnectLoop")
 }
 
+// settledCount returns read() once it has held the same value for
+// settledPolls consecutive polls. The generation gauge is process-global, so
+// earlier tests' background goroutines can still be ending generations when
+// a test samples its baseline; an unsettled baseline makes "baseline+1" unreachable.
+func settledCount(t *testing.T, read func() int64) int64 {
+	t.Helper()
+	const settledPolls = 20
+	var last int64 = -1
+	stable := 0
+	wait.RequireEventually(t, func() bool {
+		cur := read()
+		if cur == last {
+			stable++
+		} else {
+			last, stable = cur, 0
+		}
+		return stable >= settledPolls
+	}, 5*time.Second, time.Millisecond, "generation count never settled before sampling the baseline")
+	return last
+}
+
 // TestOpenStandingStream_TearDownForReopen_ProceedsAnyway_WhenOldReaderIsWedged
 // is incident #3's regression test: a reader goroutine whose Receive()
 // never returns, even once its stream's ctx is canceled (a transport that
@@ -924,12 +946,21 @@ func TestOpenStandingStream_TearDownForReopen_ProceedsAnyway_WhenOldReaderIsWedg
 	}
 	transport.attachFn = func(ctx context.Context) attachStream { return wedged }
 
+	active := func() int64 {
+		return sumForSubsystem(t, collectMetric(t, "session_lifecycle_active_generations"), "tymux_stream", "")
+	}
+	baseline := settledCount(t, active)
+
 	sess := NewTymuxGRPCSession(transport)
 	setTeardownWait(sess, 50*time.Millisecond)
 	require.NoError(t, sess.Start(dir))
 	t.Cleanup(func() { _ = sess.Close() })
 
-	before := sumForSubsystem(t, collectMetric(t, "session_lifecycle_active_generations"), "tymux_stream", "")
+	// Start counts the generation from a goroutine; sampling before it lands
+	// would make the reopen look like two new generations.
+	wait.RequireEventually(t, func() bool { return active() == baseline+1 }, 5*time.Second, time.Millisecond,
+		"the first generation must be counted before the reopen")
+	before := baseline + 1
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -949,7 +980,7 @@ func TestOpenStandingStream_TearDownForReopen_ProceedsAnyway_WhenOldReaderIsWedg
 	wait.RequireEventually(t, func() bool {
 		after := sumForSubsystem(t, collectMetric(t, "session_lifecycle_active_generations"), "tymux_stream", "")
 		return after == before+1
-	}, time.Second, time.Millisecond,
+	}, 5*time.Second, time.Millisecond,
 		"the abandoned generation must stay counted as active — its EndGeneration is never reached")
 }
 

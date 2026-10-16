@@ -8,6 +8,91 @@
  * for the inline `jest.mock` wiring.
  */
 
+import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
+
+export function makeSession(overrides: Partial<LinkedSession> = {}): LinkedSession {
+  return {
+    entityId: "session-entity-1",
+    sessionId: "session-1",
+    role: "work",
+    estimatedCostUsd: 0,
+    pipelineModeSnapshot: "",
+    pipelineModeSnapshotHash: "",
+    ...overrides,
+  };
+}
+
+export function makeReviewItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
+  return {
+    id: "item-42",
+    title: "Fix mobile layout",
+    description: "desc",
+    status: "review",
+    priority: 3,
+    repoPath: "/tmp/repo",
+    skipPlanning: false,
+    skipReviewGate: false,
+    autoSpawnSession: false,
+    autoCreatePR: false,
+    autoApprovePlan: false,
+    planApproved: false,
+    acCriteria: [{ index: 0, text: "AC 1", status: "done" }],
+    linkedSessions: [makeSession()],
+    notes: "",
+    createdAt: "2026-07-12T14:02:00.000Z",
+    updatedAt: "2026-07-12T14:02:00.000Z",
+    statusEvents: [],
+    progressNotes: [],
+    activityNotes: [],
+    totalEstimatedCostUsd: 0,
+    ...overrides,
+  };
+}
+
+/**
+ * Shared body for the `jest.mock("@/lib/hooks/useBacklogService", ...)` block
+ * every send-back test file needs. `getMocks` is a closure (not a plain
+ * object) so it's read lazily on each `useBacklogService()` call — matching
+ * the existing direct-closure pattern in this file, since the module-scope
+ * `jest.fn()` consts a test file passes in aren't assigned until after
+ * babel-jest's hoisted `jest.mock(...)` calls have already registered this
+ * factory.
+ */
+export function useBacklogServiceMock(
+  getMocks: () => {
+    getBacklogItem: jest.Mock;
+    transitionStatus: jest.Mock;
+    rejectPlan: jest.Mock;
+    triggerTriage: jest.Mock;
+    listPipelineModes?: jest.Mock;
+  }
+) {
+  return {
+    useBacklogService: () => {
+      const m = getMocks();
+      return {
+        getBacklogItem: m.getBacklogItem,
+        transitionStatus: m.transitionStatus,
+        triggerTriage: m.triggerTriage,
+        rejectPlan: m.rejectPlan,
+        cancelTriage: jest.fn(),
+        spawnSessionFromItem: jest.fn(),
+        approvePlan: jest.fn(),
+        overrideVerdict: jest.fn(),
+        triggerReReview: jest.fn(),
+        triggerShipPR: jest.fn(),
+        submitManualReview: jest.fn(),
+        archiveBacklogItem: jest.fn(),
+        unarchiveBacklogItem: jest.fn(),
+        deleteBacklogItem: jest.fn(),
+        updateBacklogItem: jest.fn().mockResolvedValue(null),
+        listPipelineModes: m.listPipelineModes ?? jest.fn().mockResolvedValue([]),
+        lastError: null,
+      };
+    },
+  };
+}
+
 export function sessionMonitorMock() {
   return { SessionMonitor: () => null };
 }

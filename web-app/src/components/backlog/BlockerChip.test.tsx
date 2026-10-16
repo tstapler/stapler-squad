@@ -156,4 +156,66 @@ describe("BlockerChip", () => {
     expect(screen.getByTestId("blocker-chip")).toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
+  describe("claim-blocked reason", () => {
+    const claimItem = () => makeItem({ reason: StuckReason.BLOCKED_BY_CLAIM });
+
+    it("BlockerChip_should_OpenReasonFormInsteadOfFiringImmediately_When_ReasonIsBlockedByClaim", async () => {
+      const user = userEvent.setup();
+      const onOverrideClaimBlock = jest.fn().mockResolvedValue(undefined);
+      const onTriggerRemediationNow = jest.fn().mockResolvedValue(undefined);
+      render(
+        <BlockerChip
+          item={claimItem()}
+          variant="full"
+          onTriggerRemediationNow={onTriggerRemediationNow}
+          onOverrideClaimBlock={onOverrideClaimBlock}
+        />
+      );
+
+      await user.click(screen.getByTestId("blocker-chip-claim-override"));
+
+      expect(screen.getByTestId("claim-override-form")).toBeInTheDocument();
+      expect(onOverrideClaimBlock).not.toHaveBeenCalled();
+      expect(onTriggerRemediationNow).not.toHaveBeenCalled();
+    });
+
+    it("keeps Confirm disabled below 5 characters, then submits the trimmed reason", async () => {
+      const user = userEvent.setup();
+      const onOverrideClaimBlock = jest.fn().mockResolvedValue(undefined);
+      render(<BlockerChip item={claimItem()} variant="full" onOverrideClaimBlock={onOverrideClaimBlock} />);
+
+      await user.click(screen.getByTestId("blocker-chip-claim-override"));
+      const confirm = screen.getByTestId("claim-override-confirm");
+      expect(confirm).toBeDisabled();
+
+      await user.type(screen.getByTestId("claim-override-reason"), "  ab  ");
+      expect(confirm).toBeDisabled();
+
+      await user.type(screen.getByTestId("claim-override-reason"), "cdef");
+      expect(confirm).toBeEnabled();
+      await user.click(confirm);
+
+      await waitFor(() => expect(onOverrideClaimBlock).toHaveBeenCalledWith(claimItem().itemId, "ab  cdef"));
+      await waitFor(() => expect(screen.queryByTestId("claim-override-form")).not.toBeInTheDocument());
+    });
+
+    it("shows the server error and keeps the form open when the override fails", async () => {
+      const user = userEvent.setup();
+      const onOverrideClaimBlock = jest.fn().mockRejectedValue(new Error("no free work slot"));
+      render(<BlockerChip item={claimItem()} variant="full" onOverrideClaimBlock={onOverrideClaimBlock} />);
+
+      await user.click(screen.getByTestId("blocker-chip-claim-override"));
+      await user.type(screen.getByTestId("claim-override-reason"), "valid reason");
+      await user.click(screen.getByTestId("claim-override-confirm"));
+
+      expect(await screen.findByTestId("claim-override-error")).toHaveTextContent("no free work slot");
+      expect(screen.getByTestId("claim-override-form")).toBeInTheDocument();
+    });
+
+    it("renders read-only when no override handler is supplied", () => {
+      render(<BlockerChip item={claimItem()} variant="full" />);
+      expect(screen.getByTestId("blocker-chip")).toBeInTheDocument();
+      expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    });
+  });
 });

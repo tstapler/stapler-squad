@@ -66,7 +66,7 @@ func (s *BacklogService) CreateBacklogItemFromChat(
 		}
 
 		return connect.NewResponse(&sessionv1.CreateBacklogItemFromChatResponse{
-			Item:            backlogItemToProto(updated, s.buildCostLookup()),
+			Item:            backlogItemToProto(updated, s.engine, s.buildCostLookup()),
 			TriageTriggered: true,
 		}), nil
 	}
@@ -80,7 +80,8 @@ func (s *BacklogService) CreateBacklogItemFromChat(
 	}
 
 	return connect.NewResponse(&sessionv1.CreateBacklogItemFromChatResponse{
-		Item:            createResp.Msg.Item,
-		TriageTriggered: createResp.Msg.TriageTriggered,
+		Item:                    createResp.Msg.Item,
+		TriageTriggered:         createResp.Msg.TriageTriggered,
+		AlreadyClaimedElsewhere: createResp.Msg.AlreadyClaimedElsewhere,
 	}), nil
 }

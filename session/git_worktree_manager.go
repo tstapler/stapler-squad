@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 )
 
 // GitWorktreeManager owns the git worktree and diff-stats state that were
@@ -365,6 +365,16 @@ func (gm *GitWorktreeManager) IsDirty() (bool, error) {
 	return wt.IsDirty()
 }
 
+// IsDirtyUncached is IsDirty without the TTL cache. Use it where a stale "clean"
+// would be destructive (pause/stop remove the worktree).
+func (gm *GitWorktreeManager) IsDirtyUncached() (bool, error) {
+	wt := gm.GetWorktree()
+	if wt == nil {
+		return false, fmt.Errorf("git worktree not initialized")
+	}
+	return wt.IsDirtyUncached()
+}
+
 // InvalidateDirtyCache clears the IsDirty TTL cache so the next call re-runs git status.
 // Call after transitions that may change worktree dirty state (Resume, Stop).
 // No-op if no worktree is set.
@@ -522,6 +532,7 @@ type GitManager interface {
 	Remove() error
 	Prune() error
 	IsDirty() (bool, error)
+	IsDirtyUncached() (bool, error)
 	InvalidateDirtyCache()
 	CommitChanges(commitMsg string) error
 	PushChanges(commitMsg string, open bool) error
@@ -561,11 +572,10 @@ func (gm *GitWorktreeManager) GetCurrentCommitSHA() (string, error) {
 
 	revCtx, revCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer revCancel()
-	cmd := safeexec.CommandContext(revCtx, "git", "-C", dir, "rev-parse", "HEAD")
-	output, err := cmd.Output()
+	sha, err := gitprovider.Backend().ResolveRef(revCtx, backend.Local{Root: backend.RepoRoot(dir)}, "HEAD")
 	if err != nil {
 		// Not a fatal error — repo may have no commits yet.
 		return "", nil
 	}
-	return strings.TrimSpace(string(output)), nil
+	return string(sha), nil
 }

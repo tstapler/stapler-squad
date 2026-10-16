@@ -3,6 +3,7 @@ package tymux
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 )
@@ -28,6 +29,14 @@ func (s *tymuxGRPCSession) applySnapshotResync(snap *v1.PaneSnapshot) error {
 	if err != nil {
 		return fmt.Errorf("tymux: resync: CellsToSGR: %w", err)
 	}
+	// CellsToSGR joins rows with a bare "\n" (a text-capture contract shared
+	// with rowsToPlainText and the tmux backend's capture-pane -p -e) -- but
+	// this redraw is broadcast to a live vt100 parser (e.g. xterm.js) over
+	// ClientFanout, where "\n" is Line Feed only and doesn't return the
+	// cursor to column 0. Without this upgrade to "\r\n", every row after
+	// the first starts at the previous row's ending column, staggering and
+	// overlapping the redrawn text on screen.
+	sgr = strings.ReplaceAll(sgr, "\n", "\r\n")
 	s.fanout.Broadcast([]byte(resyncClearAndHomeSeq + sgr))
 	return nil
 }

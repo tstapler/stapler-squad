@@ -2,9 +2,9 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -22,12 +22,19 @@ type TerminalService struct {
 	// SetExternalDiscovery, forwarded from SessionService's own setters.
 	poller       *session.ReviewQueuePoller
 	extDiscovery *session.ExternalSessionDiscovery
+	// guards is the live hidden_session_readonly_guards value; nil means on.
+	guards GuardsFlag
 }
 
 // NewTerminalService creates a TerminalService. Wire poller and externalDiscovery
 // after construction via SetPoller and SetExternalDiscovery.
 func NewTerminalService() *TerminalService {
 	return &TerminalService{}
+}
+
+// SetGuardsFlag injects the live read-only guards flag.
+func (ts *TerminalService) SetGuardsFlag(f GuardsFlag) {
+	ts.guards = f
 }
 
 // SetPoller wires the live-instance poller for instance lookup.
@@ -115,25 +122,57 @@ func (ts *TerminalService) WriteToSession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
 	}
 
+	// A hidden (background) session is read-only for UI input; the flag
+	// hidden_session_readonly_guards turns this off at runtime.
+	if _, err := AccessForUnary(inst, ts.guards).Writer(nil); err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("session %q is a background session and is read-only: %w", req.Msg.SessionId, err))
+	}
+
 	// BUG-047: must use session.EnterKeySequence ('\r'), not a bare '\n' —
-	// the Claude Code CLI's raw-mode TUI only recognizes '\r' as submit, so a
-	// trailing '\n' leaves the text sitting unsubmitted in the input buffer.
-	text := session.BuildSubmittableInput(req.Msg.Input, req.Msg.PressEnter)
-
-	errCh := make(chan error, 1)
-	go func() { errCh <- inst.SendKeys(text) }()
-
-	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	select {
-	case err := <-errCh:
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("send keys failed: %w", err))
-		}
-	case <-timeoutCtx.Done():
-		return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("timed out writing to session PTY"))
+	// the Claude Code CLI's raw-mode TUI only recognizes '\r' as submit.
+	// BUG-031: when PressEnter is set, content and the submit keystroke must
+	// travel as two separate SendKeys writes (session.SubmitDriverContent),
+	// never concatenated into one. Both branches are timeout-bounded so a
+	// wedged PTY write can't hang this handler indefinitely.
+	//
+	// This handler is the chain's acquirer (Story 5.0): the primitives only
+	// receive the lease and release it in the goroutine that writes.
+	lease, ok := inst.TryTerminalWriteLease(session.LeaseWriterOther)
+	if !ok {
+		return nil, submitErrToConnectError(session.ErrLeaseBusy)
+	}
+	var err error
+	if req.Msg.PressEnter {
+		err = session.SubmitContentWithEnter(ctx, inst, lease, req.Msg.Input)
+	} else {
+		err = session.SendKeysWithTimeout(ctx, inst, lease, req.Msg.Input, session.DefaultSendKeysTimeout)
+	}
+	if err != nil {
+		return nil, submitErrToConnectError(err)
 	}
 
 	return connect.NewResponse(&sessionv1.WriteToSessionResponse{Success: true}), nil
+}
+
+// submitErrToConnectError maps an error from session.SubmitContentWithEnter/
+// SendKeysWithTimeout to the matching connect error: ErrSubmitNotConfirmed
+// (BUG-031's swallowed-submit case) becomes CodeAborted, a context deadline
+// becomes CodeDeadlineExceeded, a held write lease (session.ErrLeaseBusy) is a
+// retryable CodeFailedPrecondition, anything else is CodeInternal. Mirrors
+// server/mcp/tools_terminal.go's submitErrResult, which does the same
+// three-way mapping for the MCP error-result shape instead of a connect
+// error.
+func submitErrToConnectError(err error) error {
+	if errors.Is(err, session.ErrLeaseBusy) {
+		// Retryable: another writer (a driver key, a steer, a nudge) holds the pane.
+		return connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+	if errors.Is(err, session.ErrSubmitNotConfirmed) {
+		return connect.NewError(connect.CodeAborted, err)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("timed out writing to session PTY"))
+	}
+	return connect.NewError(connect.CodeInternal, fmt.Errorf("send keys failed: %w", err))
 }

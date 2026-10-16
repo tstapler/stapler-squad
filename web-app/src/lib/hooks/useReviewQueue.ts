@@ -37,6 +37,7 @@ import {
   selectReviewQueueItemsWithLiveStatus,
 } from "@/lib/store/reviewQueueSlice";
 import { isReviewQueueVisible } from "@/lib/utils/reviewQueueVisibility";
+import { useWatchStream } from "@/lib/hooks/useWatchStream";
 
 // How long a reconciled row stays visible-but-disabled (ux.md Surface 9) before the
 // deferred removeItem dispatch actually removes it from the store.
@@ -180,13 +181,7 @@ export function useReviewQueue(
 
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
   const lastUpdateRef = useRef<number>(Date.now());
-  // Stream reconnect state — shared between the WebSocket effect and the fallback poll.
-  // streamDeadRef is set when MAX_RETRIES are exhausted; the fallback poll clears it
-  // and triggers a reconnect after a successful REST fetch.
-  const streamDeadRef = useRef<boolean>(false);
-  const streamRetriesRef = useRef<number>(0);
 
   // Initialize ConnectRPC client — uses HTTP for unary, WebSocket for streaming Watch* RPCs
   useEffect(() => {
@@ -373,87 +368,37 @@ export function useReviewQueue(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dispatch]);
 
-  // Setup WebSocket push updates with dedicated WatchReviewQueue stream
-  useEffect(() => {
-    if (!useWebSocketPush || !clientRef.current) return;
+  // Setup WebSocket push updates with dedicated WatchReviewQueue stream.
+  // Connection mechanics (backoff reconnect, idle-staleness watchdog) live in
+  // the shared useWatchStream.ts -- this only supplies the request shape and
+  // event dispatch. ReviewQueueEvent has no seq/afterSeq replay buffer (the
+  // review queue manager isn't built on pkg/events.EventBus like the other
+  // three Watch* streams), so getSeq is omitted; a stall or filter change
+  // just reconnects to a fresh initialSnapshot.
+  const subscribeReviewQueue = useCallback(
+    (_afterSeq: bigint, signal: AbortSignal) => {
+      const request = create(WatchReviewQueueRequestSchema, {
+        priorityFilter: priorityFilter !== undefined ? [priorityFilter] : [],
+        reasonFilter: reasonFilter !== undefined ? [reasonFilter] : [],
+        initialSnapshot: true,
+        includeStatistics: true,
+      });
+      return clientRef.current!.watchReviewQueue(request, { signal });
+    },
+    [priorityFilter, reasonFilter]
+  );
 
-    // Stop any existing watch
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
+  const onReviewQueueEvent = useCallback((event: ReviewQueueEvent) => {
+    handleReviewQueueEventRef.current?.(event);
+  }, []);
 
-    abortControllerRef.current = new AbortController();
-    const signal = abortControllerRef.current.signal;
-
-    // Reset reconnect state when the effect re-runs (e.g. filter change).
-    streamDeadRef.current = false;
-    streamRetriesRef.current = 0;
-    const MAX_RETRIES = 5;
-
-    const connect = async () => {
-      if (signal.aborted) return;
-      try {
-        const request = create(WatchReviewQueueRequestSchema, {
-          // Apply current filters
-          priorityFilter: priorityFilter !== undefined ? [priorityFilter] : [],
-          reasonFilter: reasonFilter !== undefined ? [reasonFilter] : [],
-          // Get initial snapshot for immediate UI sync
-          initialSnapshot: true,
-          // Include statistics for queue metrics
-          includeStatistics: true,
-        });
-
-        const stream = clientRef.current!.watchReviewQueue(request, { signal });
-
-        for await (const event of stream) {
-          handleReviewQueueEventRef.current?.(event);
-        }
-        // Clean close — reset retry counter
-        streamRetriesRef.current = 0;
-      } catch (err) {
-        // Ignore abort errors (intentional cleanup)
-        if (err instanceof Error && err.name === "AbortError") return;
-        if (signal.aborted) return;
-
-        console.error("WatchReviewQueue stream error:", err);
-
-        if (streamRetriesRef.current < MAX_RETRIES) {
-          const delay = Math.min(1000 * Math.pow(2, streamRetriesRef.current), 30000);
-          streamRetriesRef.current++;
-          setTimeout(() => {
-            // F5: Re-check the abort signal before reconnecting — the effect may
-            // have cleaned up (filter change, unmount) between the timer being
-            // scheduled and firing. Without this check the old closure's connect()
-            // would race against the new effect's connect() on the same signal.
-            if (signal.aborted) return;
-            void connect();
-          }, delay);
-        } else {
-          // Exhausted retries — fallback polling will handle consistency and
-          // attempt a reconnect after the next successful REST fetch (F4).
-          streamDeadRef.current = true;
-          console.warn("WatchReviewQueue: max reconnect attempts reached, relying on fallback poll");
-        }
-      }
-    };
-
-    // Expose reconnect for the fallback poll to call after a successful REST fetch
-    // when the stream has given up (streamDeadRef = true). The fallback poll resets
-    // streamDeadRef and streamRetriesRef before calling this.
-    streamReconnectRef.current = () => void connect();
-
-    void connect();
-
-    return () => {
-      streamReconnectRef.current = null;
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-        abortControllerRef.current = null;
-      }
-    };
-  // streamDeadRef, streamRetriesRef, and streamReconnectRef are stable refs — no need to list them.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [useWebSocketPush, priorityFilter, reasonFilter]);
+  useWatchStream<ReviewQueueEvent>({
+    subscribe: subscribeReviewQueue,
+    onEvent: onReviewQueueEvent,
+    isHeartbeat: (event) => event.heartbeat,
+    enabled: useWebSocketPush,
+    restartKey: `${priorityFilter ?? ""}:${reasonFilter ?? ""}`,
+  });
 
   // Keep a ref to the latest refresh so interval callbacks are always current
   // without needing refresh in the interval-setup effect's dep array.
@@ -471,34 +416,20 @@ export function useReviewQueue(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // intentionally empty -- run once on mount
 
-  // Ref to a reconnect function that the WebSocket effect exposes for the
-  // fallback poll to call when the stream is dead and REST confirms reachability.
-  const streamReconnectRef = useRef<(() => void) | null>(null);
-
   // Setup fallback polling or legacy auto-refresh.
   // Intentionally excludes `refresh` from deps; uses refreshRef.current instead
   // so that filter changes (which change `refresh` identity) don't cause an
   // immediate duplicate fetch -- the WatchReviewQueue stream re-connects on
-  // filter changes and delivers a fresh initialSnapshot.
+  // filter changes and delivers a fresh initialSnapshot. useWatchStream's own
+  // backoff + idle-staleness watchdog self-heal the stream independently, so
+  // this poll no longer needs to coordinate a reconnect -- it's just a REST
+  // consistency backstop (hybrid mode) or the sole refresh source (legacy).
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
 
     if (useWebSocketPush) {
-      // Hybrid mode: Use longer fallback polling interval.
-      // After a successful REST fetch, if the stream has given up (streamDeadRef),
-      // reset retry state and invoke the reconnect thunk (F4).
-      interval = setInterval(async () => {
-        try {
-          await refreshRef.current();
-          // REST succeeded — if the stream is dead, attempt reconnect now.
-          if (streamDeadRef.current) {
-            streamDeadRef.current = false;
-            streamRetriesRef.current = 0;
-            streamReconnectRef.current?.();
-          }
-        } catch {
-          // fetch error — stream recovery deferred to next poll
-        }
+      interval = setInterval(() => {
+        void refreshRef.current();
       }, fallbackPollInterval);
     } else if (autoRefresh) {
       // Legacy mode: Use original refresh interval
@@ -512,8 +443,6 @@ export function useReviewQueue(
         clearInterval(interval);
       }
     };
-  // streamDeadRef, streamRetriesRef, streamReconnectRef are stable refs.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [useWebSocketPush, autoRefresh, refreshInterval, fallbackPollInterval]);
 
   // Acknowledge session with optimistic update

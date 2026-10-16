@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -223,12 +224,11 @@ func BenchmarkBackgroundResolutionPipeline_PlainDirectorySession(b *testing.B) {
 			b.Fatalf("CreateSession: %v", err)
 		}
 
-		for {
+		if err := wait.WaitForCondition(func() bool {
 			inst := fix.svc.FindLiveInstance(resp.Msg.Session.Id)
-			if inst != nil && session.Status(inst.GetStatus()) == session.Active {
-				break
-			}
-			time.Sleep(time.Millisecond)
+			return inst != nil && session.Status(inst.GetStatus()) == session.Active
+		}, wait.WaitConfig{Timeout: wait.SlowTimeout, PollInterval: time.Millisecond, Description: "session Active"}); err != nil {
+			b.Fatalf("session never became Active: %v", err)
 		}
 
 		destroyCreatedSession(b, fix.svc, resp.Msg.Session.Id)
@@ -458,4 +458,236 @@ drain:
 	}
 
 	assert.Equal(t, 1, terminalCount, "exactly one terminal SessionUpdatedEvent must publish under a cancel/success race")
+}
+
+// TestBackgroundResolutionPipeline_should_TargetWorktreeDir_When_InjectingHookConfig
+// is worktree-envvars-hijack Epic 4.2's regression test for Epic 2's
+// stale-instanceRootDir fix (session_creation_pipeline.go:284): a plain
+// SessionTypeNewWorktree session's instanceRootDir must be re-derived AFTER
+// Start() completes worktree creation, or InjectHookConfig below writes
+// .claude/settings.local.json into the stale, pre-Start() root (the bare
+// repo) instead of the session's real worktree directory -- clobbering
+// whatever sibling session already owns that shared repo root's hook config.
+func TestBackgroundResolutionPipeline_should_TargetWorktreeDir_When_InjectingHookConfig(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	repoDir := t.TempDir()
+	initGitRepoWithCommit(t, repoDir)
+
+	instance, err := session.CreateManagedInstance(context.Background(), session.CreateManagedInstanceParams{
+		Options: session.InstanceOptions{
+			Title:            "epic42-hook-config-worktree",
+			Path:             repoDir,
+			Program:          "sh",
+			SessionType:      session.SessionTypeNewWorktree,
+			Branch:           "feature-hook-test",
+			TmuxServerSocket: fix.svc.testTmuxServerSocket,
+		},
+		Storage: fix.storage,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, instance.GetStableID()) })
+
+	fix.svc.runBackgroundResolutionPipeline(context.Background(), creationPipelineParams{
+		instance:        instance,
+		epoch:           instance.CreationEpoch(),
+		instanceTitle:   instance.Title,
+		instanceRootDir: instance.GetEffectiveRootDir(),
+	})
+
+	wait.RequireEventually(t, func() bool {
+		return session.Status(instance.GetStatus()) == session.Active
+	}, pipelineEventuallyTimeout, 20*time.Millisecond, "pipeline must reach Active for a plain SessionTypeNewWorktree session")
+
+	worktreeDir := instance.Workspace().WorktreeDir
+	require.NotEmpty(t, worktreeDir, "a successful SessionTypeNewWorktree session must resolve a real worktree directory")
+	assert.NotEqual(t, repoDir, worktreeDir, "the worktree directory must be distinct from the bare repo root")
+
+	assert.FileExists(t, filepath.Join(worktreeDir, ".claude", "settings.local.json"),
+		"hook config must be injected into the resolved worktree directory")
+	assert.NoFileExists(t, filepath.Join(repoDir, ".claude", "settings.local.json"),
+		"hook config must never be written into the bare repo root a sibling session might share")
+}
+
+// TestSessionCreationPipeline_should_FailWithDirectoryCollision_When_WorktreeCollidesWithLiveSibling
+// is worktree-envvars-hijack Epic 4.5's end-to-end regression test: it proves
+// SessionService.wireCallbacks actually wires Instance.SetPreSpawnCollisionGuard
+// before every Start() call in production, not just that the guard's own logic
+// works in isolation (Epic 4.4, session package). Session A is a real, live
+// Directory-mode session (created via the full CreateSession RPC, so it gets a
+// genuine tmux pane and is registered with the ReviewQueuePoller the guard
+// closure reads). Session B is a SessionTypeExistingWorktree instance forced,
+// via its ExistingWorktree option, to attach to session A's exact real
+// directory -- SessionTypeExistingWorktree is used (not SessionTypeNewWorktree)
+// specifically because startLocked's real, I/O-performing gitManager.Setup()
+// call only runs when SessionType != SessionTypeExistingWorktree, so no second
+// real worktree needs to be created to force this collision; reusing session
+// A's own repo directory as B's ExistingWorktree target (rather than a
+// SetGitWorktree-forced path) is required because startLocked's firstTimeSetup
+// branch unconditionally calls finishFirstTimeSetup -> setupFirstTimeWorktree
+// for a first-time Start(true), which for SessionTypeExistingWorktree performs
+// its own real (but read-only) git.NewGitWorktreeFromExisting discovery against
+// Options.ExistingWorktree and would silently overwrite any gitManager set by
+// SetGitWorktree beforehand.
+func TestSessionCreationPipeline_should_FailWithDirectoryCollision_When_WorktreeCollidesWithLiveSibling(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	repoDir := t.TempDir()
+	initGitRepoWithCommit(t, repoDir)
+
+	// Session A: a real, live Directory-mode session at repoDir, created via
+	// the full CreateSession RPC (mirroring ModeIsRestart/Story 4.1.1's
+	// technique of exercising the real pipeline rather than a hand-built
+	// struct) so it has a genuine tmux pane and is registered with
+	// fix.svc's ReviewQueuePoller -- the exact data source
+	// OtherLiveSessionInsideWorktree reads.
+	respA, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:       "epic45-collision-sibling",
+		Path:        repoDir,
+		Program:     "sh",
+		SessionType: sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, respA.Msg.Session.Id) })
+
+	wait.RequireEventually(t, func() bool {
+		inst := fix.svc.FindLiveInstance(respA.Msg.Session.Id)
+		return inst != nil && session.Status(inst.GetStatus()) == session.Active
+	}, pipelineEventuallyTimeout, 20*time.Millisecond, "session A must reach Active before the collision attempt")
+
+	sessionA := fix.svc.FindLiveInstance(respA.Msg.Session.Id)
+	require.NotNil(t, sessionA)
+	collisionPath := sessionA.Workspace().ActiveDir
+	require.Equal(t, repoDir, collisionPath)
+	require.True(t, sessionA.IsBackendProcessAlive(), "session A must have a genuinely live backend process for the guard to detect")
+
+	// Session B: forced to resolve to the identical, already-live directory.
+	instanceB, err := session.CreateManagedInstance(context.Background(), session.CreateManagedInstanceParams{
+		Options: session.InstanceOptions{
+			Title:            "epic45-collision-target",
+			Path:             repoDir,
+			Program:          "sh",
+			SessionType:      session.SessionTypeExistingWorktree,
+			ExistingWorktree: collisionPath,
+			TmuxServerSocket: fix.svc.testTmuxServerSocket,
+		},
+		Storage: fix.storage,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, instanceB.GetStableID()) })
+
+	fix.svc.runBackgroundResolutionPipeline(context.Background(), creationPipelineParams{
+		instance:        instanceB,
+		epoch:           instanceB.CreationEpoch(),
+		instanceTitle:   instanceB.Title,
+		instanceRootDir: instanceB.GetEffectiveRootDir(),
+	})
+
+	require.Equal(t, session.Failed, session.Status(instanceB.GetStatus()),
+		"session B must fail, not silently spawn into session A's already-occupied directory")
+	// "DirectoryCollision" is session_creation_pipeline.go's classification for
+	// errors.Is(startErr, session.ErrDirectoryCollision) (its only source) --
+	// asserting on it here is the integration-level proof that Start()'s
+	// error actually wrapped that sentinel and was correctly classified by
+	// the pipeline's failure branch.
+	assert.Equal(t, "DirectoryCollision", instanceB.FailureReason())
+	assert.False(t, instanceB.IsBackendProcessAlive(),
+		"no tmux/process may ever be spawned for the instance the collision guard refused")
+
+	loaded, err := fix.storage.LoadInstances()
+	require.NoError(t, err)
+	found := false
+	for _, l := range loaded {
+		if l.GetStableID() == instanceB.GetStableID() {
+			found = true
+			assert.Equal(t, session.Failed, l.Status, "persisted row must reflect the classified Failed/DirectoryCollision outcome")
+		}
+	}
+	assert.True(t, found)
+
+	// Session A's own state must be completely unaffected by B's refused spawn.
+	assert.Equal(t, session.Active, session.Status(sessionA.GetStatus()))
+	assert.Equal(t, collisionPath, sessionA.Workspace().ActiveDir)
+	assert.True(t, sessionA.IsBackendProcessAlive(), "session A's real tmux pane must still be alive after B's refused spawn")
+}
+
+// TestCreateSession_should_AllowOnlyOneWinner_When_ConcurrentRequestsTargetSameWorktreePath
+// is worktree-envvars-hijack Epic 4.6's concurrency regression test for Task
+// 3.3.2c's TOCTOU fix: two goroutines racing runBackgroundResolutionPipeline
+// for the same SessionTypeExistingWorktree path must produce exactly one
+// Active winner and one Failed/DirectoryCollision loser -- never both Active
+// (two live tmux panes/claude processes sharing one worktree, the exact bug
+// this epic exists to close) and never both Failed (the reservation leaking
+// and blocking a legitimate solo creation). Both instances target the same
+// repo's own directory (not a second, separately created worktree) as their
+// ExistingWorktree path -- an identical, non-timestamped, real git-repo path,
+// exactly the shape Story 3.3.2's own AC names as most reachable -- released
+// simultaneously via a shared start channel to maximize the chance both
+// goroutines reach SessionService.wireCallbacks's worktreeSpawnReservation
+// closure's shared inFlightWorktreeSpawns sync.Map concurrently. Run with
+// `go test -race` per validation.md to also confirm that sync.Map claim/
+// release has no data race.
+func TestCreateSession_should_AllowOnlyOneWinner_When_ConcurrentRequestsTargetSameWorktreePath(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	repoDir := t.TempDir()
+	initGitRepoWithCommit(t, repoDir)
+
+	newContender := func(title string) *session.Instance {
+		t.Helper()
+		inst, err := session.CreateManagedInstance(context.Background(), session.CreateManagedInstanceParams{
+			Options: session.InstanceOptions{
+				Title:            title,
+				Path:             repoDir,
+				Program:          "sh",
+				SessionType:      session.SessionTypeExistingWorktree,
+				ExistingWorktree: repoDir,
+				TmuxServerSocket: fix.svc.testTmuxServerSocket,
+			},
+			Storage: fix.storage,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { destroyCreatedSession(t, fix.svc, inst.GetStableID()) })
+		return inst
+	}
+
+	instA := newContender("epic46-concurrent-a")
+	instB := newContender("epic46-concurrent-b")
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for _, inst := range []*session.Instance{instA, instB} {
+		inst := inst
+		go func() {
+			defer wg.Done()
+			<-start
+			fix.svc.runBackgroundResolutionPipeline(context.Background(), creationPipelineParams{
+				instance:        inst,
+				epoch:           inst.CreationEpoch(),
+				instanceTitle:   inst.Title,
+				instanceRootDir: inst.GetEffectiveRootDir(),
+			})
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	results := map[session.Status]int{}
+	var failureReasons []string
+	for _, inst := range []*session.Instance{instA, instB} {
+		status := session.Status(inst.GetStatus())
+		results[status]++
+		if status == session.Failed {
+			failureReasons = append(failureReasons, inst.FailureReason())
+		}
+	}
+
+	require.Equal(t, 1, results[session.Active], "exactly one contender must reach Active; observed=%v", results)
+	require.Equal(t, 1, results[session.Failed], "exactly one contender must reach Failed; observed=%v", results)
+	assert.Equal(t, []string{"DirectoryCollision"}, failureReasons,
+		"the loser must be classified as DirectoryCollision, not a generic StartupError")
 }

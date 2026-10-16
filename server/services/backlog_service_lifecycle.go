@@ -14,7 +14,6 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
@@ -196,21 +195,41 @@ func (s *BacklogService) CreateBacklogItem(
 		baseBranch = *req.Msg.BaseBranch
 	}
 
+	var externalURL string
+	if req.Msg.ExternalUrl != nil {
+		externalURL = *req.Msg.ExternalUrl
+	}
+	gate, claimErr := s.gateOnClaim(ctx, preCreateClaimCheck{
+		ExternalURL: externalURL,
+		Override:    req.Msg.OverrideClaim,
+		Reason:      req.Msg.OverrideReason,
+		LogPrefix:   "nl_create",
+	})
+	if claimErr != nil {
+		return nil, claimErr
+	}
+	if gate.Claimed != nil {
+		return connect.NewResponse(&sessionv1.CreateBacklogItemResponse{AlreadyClaimedElsewhere: gate.Claimed}), nil
+	}
+
 	data := session.BacklogItemData{
-		Title:              req.Msg.Title,
-		Description:        req.Msg.Description,
-		AcceptanceCriteria: acJSON,
-		Priority:           priority,
-		Status:             string(session.BacklogStatusIdea),
-		RepoPath:           repoPath,
-		BaseBranch:         baseBranch,
-		SkipReviewGate:     req.Msg.SkipReviewGate,
-		SkipPlanning:       req.Msg.SkipPlanning,
-		AutoSpawnSession:   req.Msg.AutoSpawnSession,
-		AutoCreatePR:       req.Msg.AutoCreatePr,
-		PipelineMode:       defaultPipelineModeForNewItem(req.Msg.PipelineMode),
-		Category:           category,
-		Notes:              req.Msg.Notes,
+		Title:                  req.Msg.Title,
+		Description:            req.Msg.Description,
+		ExternalURL:            externalURL,
+		AcceptanceCriteria:     acJSON,
+		Priority:               priority,
+		Status:                 string(session.BacklogStatusIdea),
+		RepoPath:               repoPath,
+		BaseBranch:             baseBranch,
+		SkipReviewGate:         req.Msg.SkipReviewGate,
+		SkipPlanning:           req.Msg.SkipPlanning,
+		AutoSpawnSession:       req.Msg.AutoSpawnSession,
+		AutoCreatePR:           req.Msg.AutoCreatePr,
+		AutoApprovePlan:        req.Msg.AutoApprovePlan,
+		PipelineMode:           defaultPipelineModeForNewItem(req.Msg.PipelineMode),
+		Category:               category,
+		Notes:                  req.Msg.Notes,
+		CostBudgetThresholdUsd: req.Msg.CostBudgetThresholdUsd,
 	}
 
 	created, err := s.storage.CreateBacklogItem(ctx, data)
@@ -221,7 +240,7 @@ func (s *BacklogService) CreateBacklogItem(
 	triageTriggered := s.MaybeTriggerTriage(ctx, created.ID, req.Msg.SkipTriage, created.RepoPath)
 
 	return connect.NewResponse(&sessionv1.CreateBacklogItemResponse{
-		Item:            backlogItemToProto(created, s.buildCostLookup()),
+		Item:            backlogItemToProto(created, s.engine, s.buildCostLookup()),
 		TriageTriggered: triageTriggered,
 	}), nil
 }
@@ -311,6 +330,8 @@ func (s *BacklogService) UpdateBacklogItem(
 	update.AutoSpawnSession = &autoSpawn
 	autoCreatePR := req.Msg.AutoCreatePr
 	update.AutoCreatePR = &autoCreatePR
+	autoApprovePlan := req.Msg.AutoApprovePlan
+	update.AutoApprovePlan = &autoApprovePlan
 	// PipelineMode is presence-gated (optional string on the wire): only set
 	// update.PipelineMode when the field was explicitly present on the
 	// request, so an omitted pipeline_mode never clobbers the item's existing
@@ -341,6 +362,12 @@ func (s *BacklogService) UpdateBacklogItem(
 	if req.Msg.ReworkCapOverride != nil {
 		override := int(*req.Msg.ReworkCapOverride)
 		update.ReworkCapOverride = &override
+	}
+	// CostBudgetThresholdUsd is presence-gated the same way as ReworkCapOverride
+	// above: only set when the client explicitly sent it, so an omitted field
+	// never clobbers the item's existing threshold.
+	if req.Msg.CostBudgetThresholdUsd != nil {
+		update.CostBudgetThresholdUsd = req.Msg.CostBudgetThresholdUsd
 	}
 	if req.Msg.Notes != "" {
 		notes := req.Msg.Notes
@@ -465,7 +492,7 @@ func (s *BacklogService) UpdateBacklogItem(
 	}
 
 	return connect.NewResponse(&sessionv1.UpdateBacklogItemResponse{
-		Item: backlogItemToProto(updated, s.buildCostLookup()),
+		Item: backlogItemToProto(updated, s.engine, s.buildCostLookup()),
 	}), nil
 }
 
@@ -500,7 +527,7 @@ func (s *BacklogService) ArchiveBacklogItem(
 	}
 
 	return connect.NewResponse(&sessionv1.ArchiveBacklogItemResponse{
-		Item: backlogItemToProto(archived, s.buildCostLookup()),
+		Item: backlogItemToProto(archived, s.engine, s.buildCostLookup()),
 	}), nil
 }
 
@@ -526,7 +553,7 @@ func (s *BacklogService) UnarchiveBacklogItem(
 	}
 
 	return connect.NewResponse(&sessionv1.UnarchiveBacklogItemResponse{
-		Item: backlogItemToProto(unarchived, s.buildCostLookup()),
+		Item: backlogItemToProto(unarchived, s.engine, s.buildCostLookup()),
 	}), nil
 }
 
@@ -585,9 +612,120 @@ func (s *BacklogService) AddBacklogItemDependency(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reload backlog item after adding dependency: %w", err))
 	}
 
-	return connect.NewResponse(&sessionv1.AddBacklogItemDependencyResponse{
-		Item: backlogItemToProto(updated, s.buildCostLookup()),
+	pb := backlogItemToProto(updated, s.engine, s.buildCostLookup())
+	s.attachDependencies(ctx, pb)
+	return connect.NewResponse(&sessionv1.AddBacklogItemDependencyResponse{Item: pb}), nil
+}
+
+// RemoveBacklogItemDependency deletes the blocker->blocked edge. Idempotent:
+// removing an edge that does not exist succeeds and returns the blocked item.
+// +api: backlog:remove-item-dependency
+func (s *BacklogService) RemoveBacklogItemDependency(
+	ctx context.Context,
+	req *connect.Request[sessionv1.RemoveBacklogItemDependencyRequest],
+) (*connect.Response[sessionv1.RemoveBacklogItemDependencyResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+	if req.Msg.BlockerItemId == "" || req.Msg.BlockedItemId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("blocker_item_id and blocked_item_id are required"))
+	}
+	edge := session.BacklogItemDependencyEdge{
+		BlockerID: req.Msg.BlockerItemId,
+		BlockedID: req.Msg.BlockedItemId,
+	}
+	if err := s.storage.RemoveBacklogItemDependency(ctx, edge); err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item not found: %w", err))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to remove backlog item dependency: %w", err))
+	}
+	updated, err := s.storage.GetBacklogItem(ctx, req.Msg.BlockedItemId)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reload backlog item after removing dependency: %w", err))
+	}
+	pb := backlogItemToProto(updated, s.engine, s.buildCostLookup())
+	s.attachDependencies(ctx, pb)
+	return connect.NewResponse(&sessionv1.RemoveBacklogItemDependencyResponse{Item: pb}), nil
+}
+
+// ListBacklogItemDependencies returns both directions of an item's dependency edges.
+// +api: backlog:list-item-dependencies
+func (s *BacklogService) ListBacklogItemDependencies(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListBacklogItemDependenciesRequest],
+) (*connect.Response[sessionv1.ListBacklogItemDependenciesResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+	if req.Msg.ItemId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("item_id is required"))
+	}
+	blockedBy, blocking, err := s.storage.ListBacklogItemDependencies(ctx, req.Msg.ItemId)
+	if err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item not found: %w", err))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list backlog item dependencies: %w", err))
+	}
+	return connect.NewResponse(&sessionv1.ListBacklogItemDependenciesResponse{
+		BlockedBy: dependencyRefsToProto(blockedBy),
+		Blocking:  dependencyRefsToProto(blocking),
 	}), nil
+}
+
+// attachDependencies fills pb.BlockedBy/Blocking. Best-effort: a failed lookup
+// is logged and leaves the fields empty rather than failing the whole read.
+// Deliberately not called from ListBacklogItems (N+1).
+func (s *BacklogService) attachDependencies(ctx context.Context, pb *sessionv1.BacklogItem) {
+	blockedBy, blocking, err := s.storage.ListBacklogItemDependencies(ctx, pb.Id)
+	if err != nil {
+		log.ErrorLog().Printf("[attachDependencies] failed to load dependencies for %s: %v", pb.Id, err)
+		return
+	}
+	pb.BlockedBy = dependencyRefsToProto(blockedBy)
+	pb.Blocking = dependencyRefsToProto(blocking)
+}
+
+// attachUnresolvedBlockers fills BlockedBy on list results with each item's
+// still-unresolved blockers via one batched query. Best-effort like
+// attachDependencies.
+func (s *BacklogService) attachUnresolvedBlockers(ctx context.Context, items []*sessionv1.BacklogItem) {
+	attachUnresolvedBlockersTo(ctx, s.storage, items)
+}
+
+// attachUnresolvedBlockersTo is the storage-parameterised form shared with the
+// Watch stream, whose snapshot/event payloads would otherwise carry an empty
+// BlockedBy and make the UI drop its "blocked by" label on every live update.
+func attachUnresolvedBlockersTo(ctx context.Context, storage *session.Storage, items []*sessionv1.BacklogItem) {
+	if storage == nil || len(items) == 0 {
+		return
+	}
+	ids := make([]string, len(items))
+	for i, it := range items {
+		ids[i] = it.Id
+	}
+	blockers, err := storage.UnresolvedBlockersForItems(ctx, ids)
+	if err != nil {
+		log.ErrorLog().Printf("[attachUnresolvedBlockers] batched blocker lookup failed: %v", err)
+		return
+	}
+	for _, it := range items {
+		it.BlockedBy = dependencyRefsToProto(blockers[it.Id])
+	}
+}
+
+func dependencyRefsToProto(refs []session.BacklogItemDependencyRef) []*sessionv1.DependencyInfo {
+	out := make([]*sessionv1.DependencyInfo, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, &sessionv1.DependencyInfo{
+			ItemId:   r.ItemID,
+			PublicId: r.PublicID,
+			Title:    r.Title,
+			Status:   r.Status,
+		})
+	}
+	return out
 }
 
 // --- TransitionBacklogItemStatus ---
@@ -627,14 +765,12 @@ func (s *BacklogService) resolveLatestWorkCommit(ctx context.Context, sessionUUI
 	if wt.BranchName == "" {
 		return ""
 	}
-	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "--verify", wt.BranchName)
-	cmd.Dir = repoPath
-	out, revErr := cmd.Output()
+	sha, revErr := session.ResolveBranchTip(ctx, repoPath, wt.BranchName)
 	if revErr != nil {
 		log.WarningLog().Printf("resolveLatestWorkCommit: rev-parse %s in %s: %v", wt.BranchName, repoPath, revErr)
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return sha
 }
 
 // isCodeShippedToMain reports whether itemID's most recent work session's
@@ -681,12 +817,38 @@ func (s *BacklogService) isCodeShippedToMain(ctx context.Context, itemID, repoPa
 	return onMain
 }
 
+// isLiveBacklogStatusForSendBack is deliberately a superset of
+// superseded_session_sweeper.go's InProgress||Review sweep scope: a PRPending
+// or Done item can still carry a stale, never-torn-down session row (the
+// terminal-transition archive sweep kills the tmux pane but never calls
+// UpdateItemSessionEnded) that this send-back path must stop too.
+func isLiveBacklogStatusForSendBack(from session.BacklogStatus) bool {
+	return from == session.BacklogStatusInProgress || from == session.BacklogStatusReview ||
+		from == session.BacklogStatusPRPending || from == session.BacklogStatusDone
+}
+
+type transitionActorKey struct{}
+
+// WithTransitionActor marks ctx so TransitionBacklogItemStatus records the given
+// audit actor (default TriggeredByUser), e.g. TriggeredByAgent for MCP callers.
+func WithTransitionActor(ctx context.Context, actor string) context.Context {
+	return context.WithValue(ctx, transitionActorKey{}, actor)
+}
+
+func transitionActorFromContext(ctx context.Context) string {
+	if a, ok := ctx.Value(transitionActorKey{}).(string); ok && a != "" {
+		return a
+	}
+	return session.TriggeredByUser
+}
+
 // TransitionBacklogItemStatus moves an item through the status state machine.
 // +api: backlog:transition-status
 func (s *BacklogService) TransitionBacklogItemStatus(
 	ctx context.Context,
 	req *connect.Request[sessionv1.TransitionBacklogItemStatusRequest],
 ) (*connect.Response[sessionv1.TransitionBacklogItemStatusResponse], error) {
+	triggeredBy := transitionActorFromContext(ctx)
 	if s.storage == nil {
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
 	}
@@ -702,8 +864,9 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 
 	from := session.BacklogStatus(item.Status)
 	to := session.BacklogStatus(req.Msg.TargetStatus)
+	fallback := session.BuildStageConfigSnapshotFallback(item)
 
-	if !s.engine.CanTransition(from, to) {
+	if !s.engine.CanTransition(from, to, fallback) {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
 			fmt.Errorf("invalid transition from %q to %q", from, to))
 	}
@@ -738,18 +901,12 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	}
 
 	// Run transition guard for business rules.
-	guardInput := session.BacklogItemTransitionInput{
-		Status:                from,
-		AcCriteria:            item.AcceptanceCriteria,
-		PlanApproved:          item.PlanApproved,
-		SkipPlanning:          item.SkipPlanning,
-		PlanArtifactsPath:     item.PlanArtifactsPath,
-		OverallOutcome:        overallOutcome,
-		OverrideReason:        req.Msg.OverrideReason,
-		HasUnshippedCode:      hasUnshippedCode,
-		HasUnresolvedBlockers: hasUnresolvedBlockers,
-	}
-	if guardErr := s.engine.ValidateGates(guardInput, to); guardErr != nil {
+	guardInput := session.NewBacklogItemTransitionInput(item, from)
+	guardInput.OverallOutcome = overallOutcome
+	guardInput.OverrideReason = req.Msg.OverrideReason
+	guardInput.HasUnshippedCode = hasUnshippedCode
+	guardInput.HasUnresolvedBlockers = hasUnresolvedBlockers
+	if guardErr := s.engine.ValidateGates(guardInput, to, fallback); guardErr != nil {
 		if errors.Is(guardErr, session.ErrACRequired) ||
 			errors.Is(guardErr, session.ErrPlanRequired) ||
 			errors.Is(guardErr, session.ErrPlanArtifactsRequired) ||
@@ -781,7 +938,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		}
 	}
 
-	updated, err := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId, to, precondition, session.TriggeredByUser)
+	updated, err := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId, to, precondition, triggeredBy)
 	if err != nil {
 		if errors.Is(err, session.ErrPreconditionFailed) {
 			return nil, connect.NewError(connect.CodeAborted, err)
@@ -807,10 +964,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	// — this reuses that epic's ArchivedAt mechanism, extended to backlog work
 	// sessions which it originally excluded).
 	if session.IsTerminalStatus(to) {
-		if sessions, lsErr := s.storage.ListItemSessions(ctx, req.Msg.ItemId); lsErr == nil {
-			s.cleanupItemWorktrees(ctx, sessions)
-			s.archiveItemWorkSessions(ctx, sessions)
-		}
+		s.CleanupTerminalItem(ctx, req.Msg.ItemId)
 	}
 
 	// Backward to idea/refining: reset planning approval so triage must re-run.
@@ -831,8 +985,17 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		}
 	}
 
+	// Backward from a live status to ready: stop any live work/review session so
+	// it doesn't keep running against a now-superseded plan (mirrors
+	// forceResetItem's teardown for "Restart Session" — see pitfalls.md §1: the
+	// 2026-07-29 OOM leak shape this closes, and hasActiveWorkSession's later
+	// spawn-block this prevents).
+	if to == session.BacklogStatusReady && isLiveBacklogStatusForSendBack(from) {
+		s.stopLiveWorkAndReviewSessions(ctx, req.Msg.ItemId)
+	}
+
 	return connect.NewResponse(&sessionv1.TransitionBacklogItemStatusResponse{
-		Item: backlogItemToProto(updated, s.buildCostLookup()),
+		Item: backlogItemToProto(updated, s.engine, s.buildCostLookup()),
 	}), nil
 }
 
@@ -881,7 +1044,7 @@ func (s *BacklogService) ApprovePlan(
 	}
 
 	return connect.NewResponse(&sessionv1.ApprovePlanResponse{
-		Item: backlogItemToProto(updated, s.buildCostLookup()),
+		Item: backlogItemToProto(updated, s.engine, s.buildCostLookup()),
 	}), nil
 }
 
@@ -944,7 +1107,7 @@ func (s *BacklogService) RejectPlan(
 	}
 
 	return connect.NewResponse(&sessionv1.RejectPlanResponse{
-		Item: backlogItemToProto(updated, s.buildCostLookup()),
+		Item: backlogItemToProto(updated, s.engine, s.buildCostLookup()),
 	}), nil
 }
 
@@ -1120,7 +1283,7 @@ func (s *BacklogService) OverrideVerdict(
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load item for transition: %w", currentErr))
 		}
 		from := session.BacklogStatus(currentItem.Status)
-		if !s.engine.CanTransition(from, toStatus) {
+		if !s.engine.CanTransition(from, toStatus, session.BuildStageConfigSnapshotFallback(currentItem)) {
 			return nil, connect.NewError(connect.CodeInvalidArgument,
 				fmt.Errorf("cannot transition item from %q to %q", from, toStatus))
 		}
@@ -1151,7 +1314,7 @@ func (s *BacklogService) OverrideVerdict(
 	}
 
 	return connect.NewResponse(&sessionv1.OverrideVerdictResponse{
-		Item: backlogItemToProto(updatedItem, s.buildCostLookup()),
+		Item: backlogItemToProto(updatedItem, s.engine, s.buildCostLookup()),
 	}), nil
 }
 
@@ -1265,6 +1428,6 @@ func (s *BacklogService) SubmitManualReview(
 	}
 
 	return connect.NewResponse(&sessionv1.SubmitManualReviewResponse{
-		Item: backlogItemToProto(updated, s.buildCostLookup()),
+		Item: backlogItemToProto(updated, s.engine, s.buildCostLookup()),
 	}), nil
 }

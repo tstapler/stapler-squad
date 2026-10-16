@@ -275,7 +275,7 @@ func TestGetWorktreeDiff_SessionNotFound(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// expandTildePath
+// expandLocalTildePath / rejectRemoteTildePath
 // ---------------------------------------------------------------------------
 
 func TestExpandTildePath(t *testing.T) {
@@ -328,7 +328,7 @@ func TestExpandTildePath(t *testing.T) {
 			input: "~/../../etc/passwd",
 			check: func(t *testing.T, got string) {
 				// Path traversal escaping the home directory must be rejected:
-				// expandTildePath returns the original input string unmodified.
+				// expandLocalTildePath returns the original input string unmodified.
 				assert.Equal(t, "~/../../etc/passwd", got, "path traversal must return original input")
 			},
 		},
@@ -337,7 +337,7 @@ func TestExpandTildePath(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := expandTildePath(tc.input, false)
+			got, err := expandLocalTildePath(tc.input)
 			require.NoError(t, err)
 			tc.check(t, got)
 		})
@@ -351,32 +351,32 @@ func TestExpandTildePath(t *testing.T) {
 func TestExpandTildePath_RemoteRejectsTilde(t *testing.T) {
 	t.Parallel()
 	for _, input := range []string{"~", "~/foo/bar"} {
-		_, err := expandTildePath(input, true)
-		require.Error(t, err, "expandTildePath(%q, remote=true) must reject tilde expansion", input)
+		_, err := rejectRemoteTildePath(input)
+		require.Error(t, err, "rejectRemoteTildePath(%q) must reject tilde expansion", input)
 	}
-	// An absolute path is unaffected by the remote flag.
-	got, err := expandTildePath("/absolute/path", true)
+	// An absolute path is unaffected.
+	got, err := rejectRemoteTildePath("/absolute/path")
 	require.NoError(t, err)
 	assert.Equal(t, "/absolute/path", got)
 }
 
 // TestExpandTildePath_AliasPathCallSite documents the tilde expansion that
-// occurs at CreateSession (session_service.go:1084) for alias configs that
-// contain tilde-prefixed paths. This test ensures that if the call site is
-// accidentally removed, this scenario will fail explicitly.
+// occurs at CreateSession for alias configs that contain tilde-prefixed
+// paths. This test ensures that if the call site is accidentally removed,
+// this scenario will fail explicitly.
 func TestExpandTildePath_AliasPathCallSite(t *testing.T) {
 	t.Parallel()
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
 
-	// Simulate the pattern at CreateSession:1083-1084:
+	// Simulate CreateSession's resolveSessionDefaults alias-path pattern:
 	//   if resolvedPath == "" && resolved.Path != "" {
-	//       resolvedPath, err = expandTildePath(resolved.Path, remoteRequested)
+	//       resolvedPath, err = expandLocalTildePath(resolved.Path) // or rejectRemoteTildePath, if remote
 	//   }
 	aliasPath := "~/projects/myrepo"
 	var resolvedPath string
 	if resolvedPath == "" && aliasPath != "" {
-		expanded, expandErr := expandTildePath(aliasPath, false)
+		expanded, expandErr := expandLocalTildePath(aliasPath)
 		require.NoError(t, expandErr)
 		resolvedPath = expanded
 	}

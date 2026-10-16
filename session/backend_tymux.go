@@ -47,14 +47,18 @@ func (b *TymuxBackend) TymuxManager() tymux.TymuxManager { return b.mgr }
 // ensureDaemonReady calls tymux.EnsureDaemonRunning under tymuxColdStartTimeout,
 // shared by Start and RestoreWithWorkDir (both need the identical
 // daemon-check-before-delegate contract; see Start's doc comment for why it
-// lives here and not in NewProcessManager).
+// lives here and not in NewProcessManager). Wrapped in its own span/metric
+// (BUG-108) so a slow Start/RestoreWithWorkDir can be attributed to daemon
+// cold-start specifically, distinct from mgr.Start's own steady-state work.
 func (b *TymuxBackend) ensureDaemonReady() error {
 	ctx, cancel := context.WithTimeout(context.Background(), tymuxColdStartTimeout)
 	defer cancel()
-	if _, err := ensureDaemonRunningFn(ctx, tymux.ResolveDaemonConfig()); err != nil {
-		return fmt.Errorf("tymux backend requested but daemon unavailable: %w", err)
-	}
-	return nil
+	return withBackendOperationSpan(ctx, backendLabelTymux, "session.backend.tymux_daemon_ready", func() error {
+		if _, err := ensureDaemonRunningFn(ctx, tymux.ResolveDaemonConfig()); err != nil {
+			return fmt.Errorf("tymux backend requested but daemon unavailable: %w", err)
+		}
+		return nil
+	})
 }
 
 // Start calls tymux.EnsureDaemonRunning before delegating to the wrapped
@@ -67,19 +71,23 @@ func (b *TymuxBackend) ensureDaemonReady() error {
 // synchronous CreateSession RPC path — so the bounded wait here does not
 // regress RPC latency.
 func (b *TymuxBackend) Start(dir string) error {
-	if err := b.ensureDaemonReady(); err != nil {
-		return fmt.Errorf("start: %w", err)
-	}
-	return b.mgr.Start(dir)
+	return withBackendOperationSpan(context.Background(), backendLabelTymux, "session.backend.start", func() error {
+		if err := b.ensureDaemonReady(); err != nil {
+			return fmt.Errorf("start: %w", err)
+		}
+		return b.mgr.Start(dir)
+	})
 }
 
 // RestoreWithWorkDir mirrors Start's daemon-check-before-delegate contract
 // for the restore path.
 func (b *TymuxBackend) RestoreWithWorkDir(w string) error {
-	if err := b.ensureDaemonReady(); err != nil {
-		return fmt.Errorf("restore: %w", err)
-	}
-	return b.mgr.RestoreWithWorkDir(w)
+	return withBackendOperationSpan(context.Background(), backendLabelTymux, "session.backend.restore", func() error {
+		if err := b.ensureDaemonReady(); err != nil {
+			return fmt.Errorf("restore: %w", err)
+		}
+		return b.mgr.RestoreWithWorkDir(w)
+	})
 }
 
 func (b *TymuxBackend) Close() error  { return b.mgr.Close() }
@@ -168,8 +176,17 @@ func (b *TymuxBackend) UnsubscribeFromControlModeUpdates(id string) {
 
 // --- Attach ---
 
-func (b *TymuxBackend) Attach() (chan struct{}, error) { return b.mgr.Attach() }
-func (b *TymuxBackend) DetachSafely() error            { return b.mgr.DetachSafely() }
+func (b *TymuxBackend) Attach() (chan struct{}, error) {
+	var ch chan struct{}
+	err := withBackendOperationSpan(context.Background(), backendLabelTymux, "session.backend.attach", func() error {
+		var attachErr error
+		ch, attachErr = b.mgr.Attach()
+		return attachErr
+	})
+	return ch, err
+}
+
+func (b *TymuxBackend) DetachSafely() error { return b.mgr.DetachSafely() }
 
 // --- Exit notifications ---
 

@@ -39,6 +39,7 @@ func OpenAnalyticsDB(ctx context.Context, dataDir string) (*ent.Client, error) {
 		WithForeignKeys().
 		WithBusyTimeout(5000*time.Millisecond).
 		WithPragma("wal_autocheckpoint", "1000").
+		WithPragma("auto_vacuum", "incremental").
 		Build()
 
 	db, err := sql.Open("sqlite", dsn)
@@ -66,6 +67,12 @@ func OpenAnalyticsDB(ctx context.Context, dataDir string) (*ent.Client, error) {
 	if err != nil {
 		_ = client.Close()
 		return nil, fmt.Errorf("analytics db: schema migration: %w", err)
+	}
+	// Bounded compaction for databases created with incremental auto-vacuum.
+	// This is a no-op for legacy databases until their next maintenance VACUUM.
+	if _, err := db.ExecContext(ctx, "PRAGMA incremental_vacuum(4096)"); err != nil {
+		_ = client.Close()
+		return nil, fmt.Errorf("analytics db: incremental vacuum: %w", err)
 	}
 
 	return client, nil

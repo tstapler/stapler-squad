@@ -24,6 +24,16 @@ func noTokenEnv(t *testing.T) {
 	resetGHTokenCache()
 }
 
+// testRepoRef builds a RepoRef for "owner/repo" test fixtures, panicking on
+// the never-expected empty-field error since callers always pass literals.
+func testRepoRef() RepoRef {
+	ref, err := NewRepoRef("owner", "repo")
+	if err != nil {
+		panic(err)
+	}
+	return ref
+}
+
 // failOnRequest returns a server that records whether it was hit, plus its
 // URL. The caller must assert on *reached from the test goroutine after the
 // call under test returns — the httptest handler runs on its own goroutine,
@@ -43,7 +53,7 @@ func TestGetPRForBranchConditional_NoToken_FailsFast(t *testing.T) {
 	defer ts.Close()
 	defer resetGhBaseURL(ts)()
 
-	_, _, changed, err := GetPRForBranchConditional(context.Background(), "owner", "repo", "branch", "")
+	_, _, changed, err := GetPRForBranchConditional(context.Background(), testRepoRef(), "branch", "")
 	if *reached {
 		t.Fatal("unexpected HTTP request sent with no token configured")
 	}
@@ -61,7 +71,7 @@ func TestGetPRInfoConditional_NoToken_FailsFast(t *testing.T) {
 	defer ts.Close()
 	defer resetGhBaseURL(ts)()
 
-	_, changed, err := GetPRInfoConditional(context.Background(), "owner", "repo", 1, NewETagCache())
+	_, changed, err := GetPRInfoConditional(context.Background(), testRepoRef(), 1, NewETagCache())
 	if *reached {
 		t.Fatal("unexpected HTTP request sent with no token configured")
 	}
@@ -85,7 +95,7 @@ func TestGetPRForBranchConditional_TokenPresent_RateLimitExhausted(t *testing.T)
 	defer ts.Close()
 	defer resetGhBaseURL(ts)()
 
-	_, _, _, err := GetPRForBranchConditional(context.Background(), "owner", "repo", "branch", "")
+	_, _, _, err := GetPRForBranchConditional(context.Background(), testRepoRef(), "branch", "")
 	if err == nil {
 		t.Fatalf("err = nil, want rate-limit error")
 	}
@@ -110,7 +120,7 @@ func TestGetPRInfoConditional_TokenPresent_RateLimitExhausted(t *testing.T) {
 	defer ts.Close()
 	defer resetGhBaseURL(ts)()
 
-	_, _, err := GetPRInfoConditional(context.Background(), "owner", "repo", 1, NewETagCache())
+	_, _, err := GetPRInfoConditional(context.Background(), testRepoRef(), 1, NewETagCache())
 	if err == nil {
 		t.Fatalf("err = nil, want rate-limit error")
 	}

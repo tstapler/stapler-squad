@@ -342,7 +342,14 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 		}
 
 		if errors.Is(lookupErr, ErrNotFound) || existing == nil {
-			// New item — create it.
+			// New item — create it, unless another host already holds the claim.
+			// Local-only on purpose: a background sweep must not fan out to peers.
+			if claim, blocked := sl.storage.ForeignClaim(data.ExternalURL); blocked {
+				log.Info("sync.blocked_by_claim", "external_id", extItem.ExternalID,
+					"claiming_host_id", claim.ClaimingHostID.String(), "external_url", data.ExternalURL)
+				skipped++
+				continue
+			}
 			if _, createErr := sl.storage.CreateBacklogItem(ctx, data); createErr != nil {
 				log.ErrorLog().Printf("[SyncLoop] CreateBacklogItem external_id=%s error: %v", extItem.ExternalID, createErr)
 				errored++

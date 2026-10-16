@@ -87,3 +87,81 @@ Not needed — low risk, single-user internal tool, no production rollout proces
 - What is the exact mechanism for reading hidden/headless session output today (RPC name, whether it already supports non-interactive sessions)? → Phase 2 research.
 - What is the precise list of currently-duplicated fields across the panel's 12+ sections? → Phase 2 research / Phase 3 UX design.
 - Should the redesigned detail view remain a panel/drawer, or would a different presentation (e.g. tabs, a dedicated page) serve progressive disclosure better? → Phase 3 UX design.
+
+---
+
+## Phase 2 Follow-up: Action Reachability + PR Visibility (2026-10-12)
+
+**Source**: Operator feedback after Phase 1 implementation shipped. Three concrete friction points
+reported in use:
+
+### New Problem Statement
+
+Despite the progressive-disclosure redesign, three interaction problems remain after Phase 1:
+
+1. **Actions buried below the fold**: `ActionsSection` (Spawn Session, Approve, etc.) requires
+   scrolling past GateBlockingSection, GuidanceRequestPanel, TriageLoadingIndicator,
+   TriageReviewPanel, ChatRefinementPanel, PlanningSection, AcCriteriaList, and PlanVerdictBox
+   before it is reachable. For a `review`-status item, the primary action ("Approve") is
+   the most important thing in the view — it should not require a scroll.
+
+2. **PR link not visible without expansion**: When `item.prUrl` is set and `item.status`
+   is `done` or `archived`, `PullRequestSection` does not render (it is status-gated to
+   `pr_pending` only) and `VersionControlSection` defaults to collapsed (not in the
+   `["in_progress", "review", "pr_pending"]` auto-expand set). The user sees no PR link
+   without first expanding a section. For `review` status the VCS auto-expands but the
+   PR link is still below the fold.
+
+3. **VersionControl/PullRequest section coordination confusion**: When an item has a PR
+   (`item.prUrl` set) but is not `pr_pending`, the user must hunt through sections for
+   the PR link. The D4 fix (`showPrLink={false}` in VCS when `pr_pending`) is correct
+   but the inverse state — prUrl set, status `done`/`review`/`archived`, no
+   `PullRequestSection` rendered — leaves the PR link only in a collapsed VCS section.
+
+4. **Visual flow**: The scroll area ordering deprioritizes decision-making content
+   (ActionsSection, PlanVerdictBox) in favor of reference content (description, planning,
+   criteria) that rarely changes per review cycle.
+
+### New Success Metrics
+
+- From the sticky header, the user can trigger the primary lifecycle action (triage,
+  session start, review approval, mark-done) without scrolling — 0 scrolls to reach the
+  primary action button.
+- When `item.prUrl` is set, a clickable PR link is visible in the sticky header (or
+  immediately adjacent to LifecycleSummary) without expanding any section, regardless of
+  `item.status`.
+- Section ordering puts ActionsSection + PlanVerdictBox as the first content in the
+  scroll area, before any reference/secondary content.
+
+### New Scope
+
+**In Scope (Phase 2 additions)**:
+- Add a compact primary-action chip to the sticky header region (inline with LifecycleSummary
+  or just below it) that renders the single most-important action for the current lifecycle
+  state — not the full ActionsSection, just the primary button.
+- Add a compact PR link badge to LifecycleSummary (or sticky header) whenever `item.prUrl`
+  is set, regardless of `item.status`. Badge: `PR #<n> →` linking to `item.prUrl`.
+- Reorder the scroll area: move ActionsSection + PlanVerdictBox to the top of the scroll
+  area (immediately after the sticky header, before GateBlockingSection, TriageReviewPanel,
+  etc.), consistent with the principle that decision-making content outranks reference content.
+- Expand VersionControlSection by default whenever `item.prUrl` is set (any status), not
+  only for `["in_progress", "review", "pr_pending"]` — a PR exists means VCS context is
+  relevant.
+
+**Out of Scope**:
+- Removing or restructuring the existing ActionsSection in the scroll area — the primary-action
+  chip in the header is an *additive* affordance, not a replacement (some statuses have
+  multiple relevant actions; the header chip shows the single most-common one, ActionsSection
+  shows all of them).
+- Changing the D4 `showPrLink` logic in VersionControlSection — the duplication-elimination
+  is correct. The PR badge in the header is the primary fix.
+
+### New Constraints
+
+All existing constraints in requirements.md apply. Additional:
+- The primary-action chip in the sticky header must not duplicate the full ActionsSection
+  UI — it is a compact affordance with a label only (no manual-review form, no Jules
+  dispatch dialog trigger, no send-back box) that delegates to the scroll-area ActionsSection
+  for anything beyond the single primary action.
+- The PR badge must use `GitHubBadge` (already used in PullRequestSection) or equivalent,
+  not invent a new PR chip visual language.

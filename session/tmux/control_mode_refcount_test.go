@@ -29,7 +29,7 @@ func newRefcountTestSession(t *testing.T) *TmuxSession {
 		controlModeCmd:         fakeCmd,
 		controlModeDone:        doneCh,
 		controlModeRefCount:    1,
-		controlModeSubscribers: make(map[string]chan []byte),
+		controlModeSubscribers: make(map[string]*controlModeSubscriber),
 		highPriSendCh:          make(chan cmSendReq, 64),
 		normPriSendCh:          make(chan cmSendReq, 256),
 		cmSenderExited:         make(chan struct{}),
@@ -289,6 +289,21 @@ func TestBroadcast_NoSendOnClosedPanic(t *testing.T) {
 	sess.UnsubscribeFromControlModeUpdates(id1)
 }
 
+// isSlowSendInFlightLocked reports whether subscriberID currently has a
+// drainSlowSubscriber goroutine resolving for it -- either still Draining in
+// the live subscriber map, or already moved to controlModeClosingSubscribers
+// pending that goroutine's resolution (see transitionSubscriberLocked's doc
+// comment for why a subscriber whose close was decided mid-drain moves there
+// instead of being deleted outright). Callers must hold controlModeSubMu (or
+// its RLock).
+func isSlowSendInFlightLocked(sess *TmuxSession, subscriberID string) bool {
+	if sub, ok := sess.controlModeSubscribers[subscriberID]; ok && sub.state == subscriberDraining {
+		return true
+	}
+	_, closing := sess.controlModeClosingSubscribers[subscriberID]
+	return closing
+}
+
 // waitForSlowSendResolved blocks until subscriberID's drainSlowSubscriber goroutine (if any)
 // has finished, bounded by timeout.
 func waitForSlowSendResolved(t *testing.T, sess *TmuxSession, subscriberID string, timeout time.Duration) {
@@ -296,7 +311,7 @@ func waitForSlowSendResolved(t *testing.T, sess *TmuxSession, subscriberID strin
 	deadline := time.After(timeout)
 	for {
 		sess.controlModeSubMu.RLock()
-		inFlight := sess.slowSendInFlight[subscriberID]
+		inFlight := isSlowSendInFlightLocked(sess, subscriberID)
 		sess.controlModeSubMu.RUnlock()
 		if !inFlight {
 			return
@@ -497,10 +512,7 @@ func TestBroadcastControlModeUpdate_NeverSendsWhileOlderFrameStillDraining(t *te
 	<-ch
 
 	sess.controlModeSubMu.Lock()
-	if sess.slowSendInFlight == nil {
-		sess.slowSendInFlight = make(map[string]bool)
-	}
-	sess.slowSendInFlight[id] = true // simulates frame A's drain still in flight
+	sess.controlModeSubscribers[id].state = subscriberDraining // simulates frame A's drain still in flight
 	sess.controlModeSubMu.Unlock()
 
 	// Frame B arrives while frame A is still draining. The freed slot exists -- pre-fix,
@@ -551,7 +563,7 @@ func TestBroadcastControlModeUpdate_UnsubscribeDuringSlowDrainDefersClose(t *tes
 	sess.broadcastControlModeUpdate([]byte("y")) // spawns drainSlowSubscriber, returns immediately
 
 	sess.controlModeSubMu.RLock()
-	inFlight := sess.slowSendInFlight[id]
+	inFlight := isSlowSendInFlightLocked(sess, id)
 	sess.controlModeSubMu.RUnlock()
 	if !inFlight {
 		t.Fatal("expected drainSlowSubscriber still in flight right after broadcast returned")
@@ -561,7 +573,7 @@ func TestBroadcastControlModeUpdate_UnsubscribeDuringSlowDrainDefersClose(t *tes
 
 	sess.controlModeSubMu.RLock()
 	_, stillSubscribed := sess.controlModeSubscribers[id]
-	_, deferred := sess.pendingCloseAfterDrain[id]
+	_, deferred := sess.controlModeClosingSubscribers[id]
 	sess.controlModeSubMu.RUnlock()
 	if stillSubscribed {
 		t.Error("Unsubscribe did not remove the subscriber immediately")

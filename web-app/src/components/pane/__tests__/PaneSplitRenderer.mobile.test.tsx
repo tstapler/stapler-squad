@@ -42,6 +42,7 @@ jest.mock("@/components/pane/PaneContext", () => ({
     pickerPendingSession: null,
     triggerPicker: jest.fn(),
     cancelPicker: jest.fn(),
+    backlogIndex: new Map(),
   }),
 }));
 

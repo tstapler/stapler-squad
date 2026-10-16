@@ -62,6 +62,7 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     totalEstimatedCostUsd: 0,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     ...overrides,
   };
 }
@@ -74,6 +75,7 @@ function makeIssue(overrides: Partial<GitHubIssue> = {}): GitHubIssue {
     url: "",
     labels: [],
     isPR: false,
+    host: "",
     ...overrides,
   };
 }

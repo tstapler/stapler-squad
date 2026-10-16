@@ -35,6 +35,24 @@ func (d *GeminiDetector) Patterns() dtypes.StatusPatterns {
 		},
 		NeedsApproval: []dtypes.StatusPattern{
 			{
+				Name:        "gemini_requesting_permission",
+				Pattern:     `(?i)Requesting permission for:`,
+				Description: "Gemini requesting permission header",
+				Priority:    18,
+			},
+			{
+				Name:        "gemini_run_this_command",
+				Pattern:     `(?i)Run this command\?`,
+				Description: "Gemini command approval prompt",
+				Priority:    18,
+			},
+			{
+				Name:        "gemini_run_command_option",
+				Pattern:     `(?i)Yes,\s*run\s*command`,
+				Description: "Gemini run command selection option",
+				Priority:    17,
+			},
+			{
 				Name:        "gemini_permission",
 				Pattern:     `(?i)Yes, allow once`,
 				Description: "Gemini permission prompt",
@@ -45,6 +63,24 @@ func (d *GeminiDetector) Patterns() dtypes.StatusPatterns {
 				Pattern:     `(?i)Allow execution of:`,
 				Description: "Gemini tool execution permission prompt",
 				Priority:    19,
+			},
+			{
+				Name:        "gemini_needs_approval_for",
+				Pattern:     `(?i)needs\s+approval\s+for`,
+				Description: "Gemini subagent needs approval indicator",
+				Priority:    19,
+			},
+			{
+				Name:        "gemini_ctrl_k_approve",
+				Pattern:     `(?i)ctrl\+k\s+approve`,
+				Description: "Gemini ctrl+k approve shortcut prompt",
+				Priority:    18,
+			},
+			{
+				Name:        "gemini_agent_blocked",
+				Pattern:     `(?i)Blocked\s*·`,
+				Description: "Gemini agent blocked status indicator",
+				Priority:    18,
 			},
 		},
 		InputRequired: []dtypes.StatusPattern{},

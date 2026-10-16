@@ -95,3 +95,20 @@ The pre-existing pollution in `~/.stapler-squad/headless-failures` and `~/.stapl
 cleaned up automatically — tests should never delete real user directories, and a one-time cleanup
 is a manual, explicit action for whoever owns that machine's `~/.stapler-squad`, not something to
 script into the fix itself.
+
+## Network and credential isolation
+
+State directories are only half of hermetic tests; a `go test` binary must also not reach real hosts
+or use the developer's credentials. Four mechanisms enforce this (`go test ./server/... ./session/...
+./github/...` previously dialed `api.github.com` and ran the real `claude` CLI with the developer's login):
+
+- `envtest.DenyNonLoopbackNetwork()` in `TestMain` (server, server/services, session): non-loopback
+  dials through `http.DefaultTransport` fail and fail the run, with a stack trace. It does not cover
+  transports built with their own dialer or subprocesses.
+- `github/test_hermetic.go`: under `testing.Testing()` the shared GitHub client's base transport is
+  loopback-only and the OS keychain is replaced by go-keyring's in-memory mock at `init`.
+- `envtest.IsolateClaudeCLI()`: points spawned `claude` processes at an empty `CLAUDE_CONFIG_DIR` and a
+  dead loopback `ANTHROPIC_BASE_URL`, so restart/resume tests that launch the real binary make no API calls.
+- `server/services` replaces the callback-URL DNS resolver with a fixed fake.
+
+Set `STAPLER_SQUAD_TEST_ALLOW_NETWORK=1` to run a suite against real hosts on purpose.

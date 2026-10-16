@@ -1,7 +1,6 @@
 package github
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -197,23 +196,6 @@ func (r *RateLimiter) IsLimited() (bool, time.Time) {
 		return true, r.rateLimitedUntil
 	}
 	return false, time.Time{}
-}
-
-// WaitIfLimited blocks until the rate limit clears or ctx is cancelled.
-func (r *RateLimiter) WaitIfLimited(ctx context.Context) error {
-	r.mu.RLock()
-	until := r.rateLimitedUntil
-	r.mu.RUnlock()
-	wait := time.Until(until)
-	if wait <= 0 {
-		return nil
-	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(wait):
-		return nil
-	}
 }
 
 func (r *RateLimiter) setLimitedUntil(t time.Time) {

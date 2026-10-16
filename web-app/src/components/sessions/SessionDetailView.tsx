@@ -26,12 +26,17 @@ import { Modal, ModalContent, ModalTitle, ModalFooter } from "@/components/ui/Mo
 import { ResumeSessionModal } from "./ResumeSessionModal";
 import { TagEditor } from "./TagEditor";
 import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
+import { BacklogOriginBadge } from "@/components/shared/BacklogOriginBadge";
+import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 import { GoalPanel } from "./GoalPanel";
 import { NotePanel } from "./NotePanel";
 import { WorkspacePeersPanel } from "./WorkspacePeersPanel";
 import { HandoffSummarySection } from "./HandoffSummarySection";
+import { GuidanceRequestPanel } from "@/components/guidance/GuidanceRequestPanel";
 import { useShells } from "@/lib/hooks/useShells";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
+import { markSessionViewed } from "@/lib/utils/viewedSessions";
+import { usePublishStackTopOffset } from "@/lib/hooks/usePublishStackTopOffset";
 import { ShellTabLabel } from "./ShellTab";
 import { NewShellDialog } from "./NewShellDialog";
 import { useWorkflows } from "@/lib/hooks/useWorkflows";
@@ -314,6 +319,10 @@ export interface SessionDetailViewProps {
   canGoBack?: boolean;
   /** Backlog item ID to display in right-side panel. If provided, shows BacklogItemPanel. */
   backlogItemId?: string;
+  /** Resolved backlog-origin index entry for this session, if dispatched by backlog automation. Drives the header badge. */
+  backlogEntry?: BacklogIndexEntry;
+  /** Whether this is the focused pane. Defaults to true for callers that mount a single view. */
+  isActive?: boolean;
 }
 
 // Terminal per the SessionStatus doc comment: "Session has been stopped
@@ -375,6 +384,8 @@ export function SessionDetailView({
   onBack,
   canGoBack,
   backlogItemId,
+  backlogEntry,
+  isActive = true,
 }: SessionDetailViewProps) {
   // activeTabId is either a static SessionDetailTab or a shell tab id "shell:<shellId>"
   const [activeTabId, setActiveTabId] = useState<string>(initialTab);
@@ -434,6 +445,13 @@ export function SessionDetailView({
   const { shells, spawnShell, stopShell, restartShell, deleteShell, updateShellStatus } = useShells(session.id);
   const [showNewShellDialog, setShowNewShellDialog] = useState(false);
   const { addNotification } = useNotifications();
+
+  // Tell the notification deck which session is on screen so it can skip redundant non-pinned toasts.
+  useEffect(() => markSessionViewed(session.id), [session.id]);
+
+  // The mobile toast deck docks directly under this tab row.
+  const tabRowRef = useRef<HTMLDivElement>(null);
+  usePublishStackTopOffset(tabRowRef);
 
   // Fire a toast notification when a shell exits with a non-zero exit code.
   // Track which shell IDs we've already notified to avoid duplicate toasts.
@@ -531,6 +549,11 @@ export function SessionDetailView({
   // Terminal instance pool: keeps up to 8 session terminals alive (LRU, oldest first)
   // Pool entries are either session IDs or "shell:<shellId>" strings.
   const [pooledSessionIds, setPooledSessionIds] = useState<string[]>([]);
+  // Pool ids whose session was hidden when it was current, so a pooled terminal stays
+  // read-only while another session is in front (Story 5.3).
+  const hiddenPoolIdsRef = useRef(new Set<string>());
+  if (session.hidden) hiddenPoolIdsRef.current.add(session.id);
+  else hiddenPoolIdsRef.current.delete(session.id);
   const [pooledMuxPaths, setPooledMuxPaths] = useState<string[]>([]);
   // Separate pool for shell PTY terminals, keyed by "shell:<shellId>"
   const [pooledShellKeys, setPooledShellKeys] = useState<string[]>([]);
@@ -603,7 +626,7 @@ export function SessionDetailView({
     label: "Spawn new shell",
     context: "terminal",
     action: handleOpenNewShellDialog,
-  });
+  }, isActive);
 
   const handleSpawnShell = useCallback(async (params: { name?: string; command?: string; workingDir?: string }) => {
     const tab = await spawnShell(params);
@@ -758,6 +781,7 @@ export function SessionDetailView({
           <span className={styles.statusBadge} data-testid="session-status-badge">
             {getStatusLabel(session.status)}
           </span>
+          <BacklogOriginBadge entry={backlogEntry} compact />
         </h2>
         <ActionBar gap="sm" justify="end" scroll className={`${styles.headerActions} ${isFullscreen ? styles.fullscreenMobileHeaderActions : ""}`}>
           {/* Fullscreen — most used when viewing terminal/diff/vcs */}
@@ -864,7 +888,7 @@ export function SessionDetailView({
         </ActionBar>
       </div>}
 
-      <div className={styles.tabsWrapper}>
+      <div className={styles.tabsWrapper} ref={tabRowRef}>
       <div
         className={`${styles.tabs} ${isFullscreen ? styles.fullscreenMobileTabs : ""}`}
         role="tablist"
@@ -1031,6 +1055,7 @@ export function SessionDetailView({
                       baseUrl={getApiBaseUrl()}
                       isVisible={poolId === session.id}
                       scheduleResync={getScheduleResync(poolId)}
+                      readOnly={hiddenPoolIdsRef.current.has(poolId)}
                     />
                   </div>
                 ))}
@@ -1132,6 +1157,7 @@ export function SessionDetailView({
                 shellId={shellId}
                 isVisible={activeTabId === shellKey}
                 scheduleResync={getScheduleResync(shellKey)}
+                readOnly={session.hidden}
                 onShellStatusChange={(status, exitCode) => {
                   updateShellStatus(shellId, status, exitCode);
                 }}
@@ -1651,6 +1677,10 @@ export function SessionDetailView({
                 if (!result) throw new Error("Failed to save note");
               }}
             />
+            {/* Durable guidance requests scoped to this session (AC3) — same
+                shared component also embedded in BacklogItemDetail and
+                TriageReviewPanel. */}
+            <GuidanceRequestPanel scope="session" scopeKey={session.id} />
             {/* Other sessions sharing this workspace — shown when peers exist */}
             <WorkspacePeersPanel session={session} />
             {/* Restart-handoff summary record (Story 3.3.1) — always rendered,

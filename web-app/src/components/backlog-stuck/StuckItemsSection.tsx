@@ -5,8 +5,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
+import { useDiagnoseAction } from "@/lib/hooks/useDiagnoseAction";
 import { getStuckReasonLabel } from "./stuckReason";
 import { StuckItem } from "./StuckItem";
+import { itemKey, isEscalationReason } from "./stuckItemsSectionShared";
+import { useResolvedGhosts } from "./useResolvedGhosts";
+import { useReworkCapOverrides } from "./useReworkCapOverrides";
+import { useBulkResetParked } from "./useBulkResetParked";
 import * as styles from "./StuckItemsSection.css";
 
 type FilterValue = "all" | StuckReason;
@@ -47,33 +52,16 @@ const GROUP_ORDER: StuckReason[] = [
   StuckReason.RESPAWN_BLOCKED_ACTIVE,
   StuckReason.LIKELY_FLAKY,
   StuckReason.BLOCKED_BY_DEPENDENCY,
+  StuckReason.BLOCKED_BY_CLAIM,
+  StuckReason.WORKTREE_INCONSISTENT,
+  StuckReason.REPEATED_NOOP_DISPATCH,
+  StuckReason.MERGED_PR_UNVERIFIED,
 ];
-
-function itemKey(item: Pick<StuckBacklogItem, "itemId" | "reason">): string {
-  return `${item.itemId}::${item.reason}`;
-}
-
-// multiple_reasons / bounce_cap_exhausted are synthetic aggregate rows over an
-// item's *other* stuck reasons, not independent reasons themselves — they
-// must be excluded from "other reasons" counting/labeling, mirroring the
-// backend's own self-exclusion in reconcileMultiReasonEscalation. Without
-// this, an item with 2 real reasons plus its own multiple_reasons escalation
-// row would show "+2 other reasons" instead of "+1" (plan.md Task 2.1.1c).
-function isEscalationReason(reason: StuckReason): boolean {
-  return reason === StuckReason.MULTIPLE_REASONS || reason === StuckReason.BOUNCE_CAP_EXHAUSTED;
-}
 
 function firstDetectedMs(item: StuckBacklogItem): number {
   const ts = item.firstDetectedAt;
   if (!ts) return 0;
   return Number(ts.seconds) * 1000;
-}
-
-interface ResolvedGhost {
-  item: StuckBacklogItem;
-  message: string;
-  /** Overrides StuckItem's default "It will be removed from this list shortly." trailing copy — used for de-escalation, where only this card (not the whole item) is going away. */
-  trailingMessage?: string;
 }
 
 /**
@@ -105,122 +93,21 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     snooze,
     bulkResetParkedRemediation,
     triggerRemediationNow,
+    overrideClaimBlock,
   } = useStuckBacklogItems();
   const { updateBacklogItem, transitionStatus, spawnSessionFromItem, approvePlan, getBacklogItem } =
     useBacklogService();
+  const { dispatchDiagnose } = useDiagnoseAction();
   const [filter, setFilter] = useState<FilterValue>("all");
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
-  const [resolvedGhosts, setResolvedGhosts] = useState<Map<string, ResolvedGhost>>(new Map());
+  const resolvedGhosts = useResolvedGhosts(items, expandedKeys, setExpandedKeys);
   // Populated lazily on expand for REWORK_CAP items only — StuckBacklogItem
   // (the list-fetch shape) doesn't carry reworkCapOverride, so the current
   // value has to be fetched via getBacklogItem (full BacklogItem) on demand.
-  const [reworkCapOverrides, setReworkCapOverrides] = useState<Map<string, number | undefined>>(new Map());
+  const reworkCapOverrides = useReworkCapOverrides(items, expandedKeys, getBacklogItem);
+  const { bulkResetState, bulkResetMessage, resettingReason, anyResetPending, handleBulkResetParked } =
+    useBulkResetParked(bulkResetParkedRemediation);
   const appliedFocusItemIdRef = useRef<string | undefined>(undefined);
-  // Mirrors reworkCapOverrides synchronously so the fetch-on-expand effect's
-  // cleanup (below) can check "was this item actually committed?" without
-  // depending on a stale closure over the state value — the effect
-  // deliberately excludes reworkCapOverrides from its dependency array (see
-  // that effect's comment), so its own closure only ever sees the map as of
-  // when the effect instance started, not later commits made mid-batch.
-  const reworkCapOverridesRef = useRef<Map<string, number | undefined>>(new Map());
-  const [bulkResetState, setBulkResetState] = useState<"idle" | "pending" | "error">("idle");
-  const [bulkResetMessage, setBulkResetMessage] = useState<string | null>(null);
-  // Which single reason's "Reset parked (N)" button is mid-flight — kept
-  // separate from bulkResetState (the global "Reset all parked" button's own
-  // pending flag) so each button can show its own label/spinner, but both are
-  // combined below into anyResetPending so the two families still can't fire
-  // overlapping resets that would clobber the single shared bulkResetMessage.
-  const [resettingReason, setResettingReason] = useState<StuckReason | null>(null);
-
-  const prevItemsRef = useRef<StuckBacklogItem[]>([]);
-  const ghostTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  // Tracks itemIds already fetched-or-in-flight for the reworkCapOverrides
-  // fetch-on-expand effect below. Deliberately NOT derived from
-  // reworkCapOverrides state — see that effect's comment for why.
-  const reworkCapFetchStartedRef = useRef<Set<string>>(new Set());
-
-  // Surface 12: an item that resolves while its card is expanded gets a brief
-  // "was just resolved" confirmation instead of being yanked out immediately.
-  //
-  // Task 2.1.4a: `itemKey` is per-(itemId, reason), so a `multiple_reasons`
-  // row de-escalating (resolving while the item itself remains open under
-  // other reasons) is *already* caught by this same "row disappeared while
-  // expanded" comparison below — each reason is its own list entry. The only
-  // extension needed is distinguishing that case (item still present under
-  // another reason) from true full-item resolution, so the copy doesn't
-  // falsely claim the whole item is going away.
-  useEffect(() => {
-    const prevItems = prevItemsRef.current;
-    const nextKeys = new Set(items.map(itemKey));
-    const nextItemIds = new Set(items.map((i) => i.itemId));
-    const newlyMissingExpanded = prevItems.filter(
-      (p) => expandedKeys.has(itemKey(p)) && !nextKeys.has(itemKey(p))
-    );
-
-    if (newlyMissingExpanded.length > 0) {
-      setResolvedGhosts((prev) => {
-        const next = new Map(prev);
-        for (const item of newlyMissingExpanded) {
-          const key = itemKey(item);
-          if (next.has(key)) continue;
-
-          // Only MULTIPLE_REASONS gets de-escalation copy, not
-          // BOUNCE_CAP_EXHAUSTED — intentional, not an oversight:
-          // bounce_cap_exhausted can only ever coexist with an open bouncing
-          // row (backend invariant, see reconcileBouncingItems' paired
-          // resolve), so it never resolves independently while the item
-          // still has open non-escalation reasons. If that invariant ever
-          // changes, this condition needs the same OR as isEscalationReason.
-          const isDeescalation =
-            item.reason === StuckReason.MULTIPLE_REASONS && nextItemIds.has(item.itemId);
-
-          let message: string;
-          let trailingMessage: string | undefined;
-          if (isDeescalation) {
-            const remainingReasons = items.filter(
-              (i) => i.itemId === item.itemId && !isEscalationReason(i.reason)
-            ).length;
-            message = `No longer critical — down to ${remainingReasons} open reason${
-              remainingReasons !== 1 ? "s" : ""
-            }.`;
-            trailingMessage =
-              "This card will be removed shortly; the item itself is still open elsewhere in the list.";
-          } else {
-            message =
-              item.reason === StuckReason.PR_READY_UNMERGED && item.prNumber > 0
-                ? `PR #${item.prNumber} was merged.`
-                : "This item was just resolved.";
-          }
-          next.set(key, { item, message, trailingMessage });
-
-          const timer = setTimeout(() => {
-            setResolvedGhosts((p) => {
-              const n = new Map(p);
-              n.delete(key);
-              return n;
-            });
-            setExpandedKeys((p) => {
-              const n = new Set(p);
-              n.delete(key);
-              return n;
-            });
-            ghostTimersRef.current.delete(key);
-          }, 2800);
-          ghostTimersRef.current.set(key, timer);
-        }
-        return next;
-      });
-    }
-
-    prevItemsRef.current = items;
-  }, [items, expandedKeys]);
-
-  useEffect(() => {
-    const timers = ghostTimersRef.current;
-    return () => {
-      for (const t of timers.values()) clearTimeout(t);
-    };
-  }, []);
 
   const toggleExpand = useCallback((key: string) => {
     setExpandedKeys((prev) => {
@@ -233,83 +120,6 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
       return next;
     });
   }, []);
-
-  // Fetches the current reworkCapOverride for newly-expanded REWORK_CAP items
-  // so StuckItemDetail can show it instead of guessing blind. Skips items
-  // already present in the map (including a resolved `undefined`) so
-  // re-expanding doesn't re-fetch.
-  //
-  // reworkCapOverrides is deliberately NOT a dependency here even though it's
-  // read below (via reworkCapFetchStartedRef.current instead) — it used to
-  // be, but every successful per-item fetch changed the map reference and
-  // re-fired this effect while the previous invocation's for-loop was still
-  // mid-flight on later items, causing O(N^2) duplicate getBacklogItem calls
-  // when several REWORK_CAP items were expanded at once. reworkCapFetchStartedRef
-  // (a ref, so mutating it can't trigger a re-render/re-run) tracks "already
-  // fetched or in-flight" instead, updated synchronously before the async
-  // fetch starts so an overlapping effect invocation (from items/expandedKeys
-  // changing mid-batch) can't double-fetch the same item either.
-  useEffect(() => {
-    // Captured once per effect instance (not re-read from the ref inside the
-    // cleanup) purely to satisfy react-hooks/exhaustive-deps's "ref value may
-    // have changed by cleanup time" check — reworkCapFetchStartedRef.current
-    // is a single long-lived Set that's only ever mutated in place, never
-    // reassigned, so this alias and `.current` always point at the same Set.
-    const fetchStarted = reworkCapFetchStartedRef.current;
-    const toFetch = items.filter(
-      (item) =>
-        item.reason === StuckReason.REWORK_CAP &&
-        expandedKeys.has(itemKey(item)) &&
-        !reworkCapOverrides.has(item.itemId) &&
-        !fetchStarted.has(item.itemId)
-    );
-    if (toFetch.length === 0) return;
-    for (const item of toFetch) fetchStarted.add(item.itemId);
-    let cancelled = false;
-    void (async () => {
-      for (const item of toFetch) {
-        const full = await getBacklogItem(item.itemId);
-        if (cancelled) return;
-        if (full === null) {
-          // getBacklogItem swallows RPC errors (and "client not ready yet")
-          // as null (see useBacklogService.ts's getBacklogItem) — caching
-          // that as a resolved `undefined` would be indistinguishable from a
-          // genuinely-unset override and StuckItemDetail would confidently
-          // (and wrongly) render "No override set" after a transient
-          // network failure. Leave it out of the map entirely so it's
-          // absent from `reworkCapOverrides`, and release the started-marker
-          // so a later effect invocation (e.g. the item being re-expanded)
-          // retries instead of being stuck permanently unfetched.
-          fetchStarted.delete(item.itemId);
-          continue;
-        }
-        setReworkCapOverrides((prev) => {
-          if (prev.has(item.itemId)) return prev;
-          const next = new Map(prev);
-          next.set(item.itemId, full.reworkCapOverride);
-          reworkCapOverridesRef.current = next;
-          return next;
-        });
-      }
-    })();
-    return () => {
-      cancelled = true;
-      // This invocation was interrupted (items/expandedKeys changed) before
-      // finishing its whole batch — release the started-marker for anything
-      // it didn't get to commit, so a later invocation can still fetch it
-      // instead of leaving it stuck marked "in flight" forever.
-      // reworkCapOverridesRef (not the possibly-stale `reworkCapOverrides`
-      // closed over by this effect instance) reflects every commit made up
-      // to this exact moment, including ones from this same batch.
-      for (const item of toFetch) {
-        if (!reworkCapOverridesRef.current.has(item.itemId)) {
-          fetchStarted.delete(item.itemId);
-        }
-      }
-    };
-    // reworkCapOverrides is deliberately excluded; see the doc comment above this effect.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, expandedKeys, getBacklogItem]);
 
   const handleClearFilter = useCallback(() => setFilter("all"), []);
 
@@ -372,7 +182,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
   // BUG-038 follow-up: the only "Approve Plan" UI action lived inside the
   // item-detail page's `status === "ready"` block, but items this reason
   // flags are stuck in `status === "queued"` — so that button was never
-  // reachable. This is the fix: approve directly from the stuck-item card.
+  // reachable from here. Approve directly from the stuck-item card instead.
   //
   // Deliberately NOT try/catch-swallowed (unlike the other handlers in this
   // file): useBacklogService's approvePlan rethrows the backend's
@@ -383,13 +193,30 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     async (itemId: string): Promise<void> => {
       // approvePlan resolves null (without throwing) if the RPC client isn't
       // ready yet — must not let that silently read as success, which would
-      // reintroduce the exact "looks approved but isn't" flicker this PR
-      // fixes elsewhere.
+      // reintroduce the "looks approved but isn't" flicker (see
+      // backlog/plan-approval-flicker).
       const updated = await approvePlan(itemId);
       if (!updated) throw new Error("Approve plan did not return an updated item.");
       await refetch();
     },
     [approvePlan, refetch]
+  );
+
+  // Diagnose & Nudge (backlog item 68964304): dispatches a diagnostic agent
+  // scoped to this card's own StuckReason. Deliberately NOT
+  // try/catch-swallowed, same rationale as handleApprovePlan above — the
+  // card needs the specific dispatch failure, not a generic one. Does not
+  // refetch(): dispatching a diagnostic session doesn't change this item's
+  // stuck-state row by itself (a nudge, if the agent performs one, is what
+  // eventually resolves the condition on a later poll tick). Returns the
+  // dispatched session's UUID so StuckItemDetail can link straight to it —
+  // see onDiagnose's doc comment (StuckItem.tsx) for why that link matters.
+  const handleDiagnose = useCallback(
+    async (itemId: string, reason: StuckReason): Promise<string> => {
+      const resp = await dispatchDiagnose(itemId, reason);
+      return resp.diagnosticSessionUuid;
+    },
+    [dispatchDiagnose]
   );
 
   // Visible items: the filtered set actually rendered. Cross-reference badges
@@ -439,8 +266,12 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     const map = new Map<StuckReason, StuckBacklogItem[]>();
     for (const reason of GROUP_ORDER) map.set(reason, []);
     for (const item of visibleItems) {
-      if (!map.has(item.reason)) map.set(item.reason, []);
-      map.get(item.reason)!.push(item);
+      const list = map.get(item.reason);
+      if (list) {
+        list.push(item);
+      } else {
+        map.set(item.reason, [item]);
+      }
     }
     for (const list of map.values()) {
       list.sort((a, b) => firstDetectedMs(a) - firstDetectedMs(b));
@@ -473,44 +304,6 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     return counts;
   }, [items]);
 
-  // True while either the global or a per-reason reset is in flight — gates
-  // both button families so an operator can't fire two overlapping
-  // BulkResetStuckRemediation calls whose resulting toasts would clobber the
-  // single shared bulkResetMessage state.
-  const anyResetPending = bulkResetState === "pending" || resettingReason !== null;
-
-  // Shared by both the global "Reset all parked" button and each
-  // per-reason-group "Reset parked (N)" button — reason omitted resets
-  // across every reason (unchanged existing behavior), reason set scopes
-  // the reset (and the resulting message) to just that bucket.
-  const handleBulkResetParked = useCallback(
-    async (reason?: StuckReason) => {
-      if (anyResetPending) {
-        return;
-      }
-      if (reason !== undefined) {
-        setResettingReason(reason);
-      } else {
-        setBulkResetState("pending");
-      }
-      setBulkResetMessage(null);
-      try {
-        const n = await bulkResetParkedRemediation(reason);
-        setBulkResetState("idle");
-        const scope = reason !== undefined ? ` in ${getStuckReasonLabel(reason)}` : "";
-        setBulkResetMessage(
-          n > 0 ? `Reset ${n} parked item${n !== 1 ? "s" : ""}${scope}.` : "No parked items to reset."
-        );
-      } catch (err) {
-        setBulkResetState("error");
-        setBulkResetMessage(err instanceof Error ? err.message : "Bulk reset failed");
-      } finally {
-        setResettingReason(null);
-      }
-    },
-    [anyResetPending, bulkResetParkedRemediation]
-  );
-
   const chips: { value: FilterValue; label: string; count: number }[] = [
     { value: "all", label: "All", count: totalCount },
     ...GROUP_ORDER.map((reason) => ({
@@ -529,9 +322,12 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     body = (
       <div className={styles.errorBannerFullBody} data-testid="stuck-items-error-full">
         <span>⚠ Couldn&apos;t check for stuck items right now.</span>
-        <button className={styles.retryBtn} onClick={refetch} data-testid="stuck-items-retry">
-          Retry
-        </button>
+        {
+          // analytics-exempt
+          <button className={styles.retryBtn} onClick={refetch} data-testid="stuck-items-retry">
+            Retry
+          </button>
+        }
       </div>
     );
   } else if (showInitialLoading) {
@@ -551,13 +347,16 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     body = (
       <div className={styles.filteredEmpty} data-testid="stuck-items-filtered-empty">
         <span>No stuck items match &quot;{activeFilterLabel}&quot;.</span>
-        <button
-          className={styles.clearFilterBtn}
-          onClick={handleClearFilter}
-          data-testid="stuck-items-clear-filter"
-        >
-          Clear filter
-        </button>
+        {
+          // analytics-exempt
+          <button
+            className={styles.clearFilterBtn}
+            onClick={handleClearFilter}
+            data-testid="stuck-items-clear-filter"
+          >
+            Clear filter
+          </button>
+        }
       </div>
     );
   } else {
@@ -573,6 +372,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
                   {getStuckReasonLabel(reason)} ({groupItems.length})
                 </h3>
                 {parkedInGroup > 0 && (
+                  // analytics-exempt
                   <button
                     type="button"
                     className={styles.resetParkedReasonBtn}
@@ -611,7 +411,9 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
                       currentReworkCapOverride={reworkCapOverrides.get(item.itemId)}
                       reworkCapOverrideLoaded={reworkCapOverrides.has(item.itemId)}
                       onTriggerRemediationNow={triggerRemediationNow}
+                      onOverrideClaimBlock={overrideClaimBlock}
                       onApprovePlan={handleApprovePlan}
+                      onDiagnose={handleDiagnose}
                       focusItemId={focusItemId}
                     />
                   );
@@ -632,6 +434,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
           {totalCount} stuck
         </span>
         {parkedCount > 0 && (
+          // analytics-exempt
           <button
             type="button"
             className={styles.resetParkedBtn}
@@ -660,15 +463,19 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
             Couldn&apos;t refresh stuck items (last updated{" "}
             {Math.max(0, Math.floor((Date.now() - lastFetched.getTime()) / 60000))}m ago).
           </span>
-          <button className={styles.retryBtn} onClick={refetch} data-testid="stuck-items-retry">
-            Retry
-          </button>
+          {
+            // analytics-exempt
+            <button className={styles.retryBtn} onClick={refetch} data-testid="stuck-items-retry">
+              Retry
+            </button>
+          }
         </div>
       )}
 
       {!showFirstLoadError && !showInitialLoading && totalCount > 0 && (
         <div className={styles.filterRow} role="group" aria-label="Filter stuck items by reason">
           {chips.map(({ value, label, count }) => (
+            // analytics-exempt
             <button
               key={String(value)}
               className={`${styles.chip} ${filter === value ? styles.chipActive : ""}`}

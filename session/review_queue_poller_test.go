@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // makeAcknowledgedInstance creates a session instance with LastAcknowledged set after LastMeaningfulOutput,
@@ -526,17 +527,8 @@ func TestReviewQueuePoller_StartStop(t *testing.T) {
 	poller.Stop()
 
 	// Wait up to 2s for the goroutine to finish.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if !poller.IsRunning() {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	if poller.IsRunning() {
-		t.Error("expected IsRunning() == false after Stop(), still true after 2s")
-	}
+	wait.RequireEventually(t, func() bool { return !poller.IsRunning() }, 2*time.Second, 5*time.Millisecond,
+		"expected IsRunning() == false after Stop()")
 }
 
 // TestReviewQueuePoller_Start_Idempotent verifies that calling Start() twice does
@@ -1506,5 +1498,111 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByTitleFallback(t *testing.T
 	}
 	if got := item.Metadata["pending_approval_id"]; got != "approval-title-fallback" {
 		t.Errorf("pending_approval_id = %q, want %q (queried keys: %v)", got, "approval-title-fallback", provider.queried)
+	}
+}
+
+// If this fails, an archived session whose pane outlived its archive-time kill
+// is ratcheted back off Stopped on every poll tick (ADR-001,
+// superseded-rework-session-retirement). reconcileSessions never calls
+// shouldSkipSession, the file's only other ArchivedAt reader, so the guard has
+// to live here.
+func TestReviewQueuePoller_ReconcileSessions_ArchivedStoppedWithLivePane_StaysStopped(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	mock := &mockTmuxManager{
+		tmuxSessionName:  "session-archived-live-pane",
+		isAliveReturn:    true,
+		hasSessionReturn: true,
+		paneExitDead:     false, // wrapped program still running — the incident's shape
+	}
+	archivedAt := time.Now()
+	inst := &Instance{
+		Title:      "archived-live-pane-session",
+		Status:     Stopped,
+		IsManaged:  true,
+		ArchivedAt: &archivedAt,
+	}
+	inst.processManager = NewTmuxBackend(mock)
+	inst.started.Store(true)
+	poller.SetInstances([]*Instance{inst})
+
+	querier.setLiveSessions("", "session-archived-live-pane")
+
+	poller.reconcileSessions()
+
+	if got := inst.Snapshot().Status; got != Stopped {
+		t.Errorf("got status %v, want Stopped (an archived session must never be revived to Active)", got)
+	}
+}
+
+// TestReviewQueuePoller_ReconcileSessions_ArchivedActiveWithNoPane_StillTransitionsToStopped
+// proves guard 3 did not over-apply: the Active → Stopped correction arm is
+// deliberately left unguarded, so an archived row that is still Active with no
+// tmux session must keep converging to Stopped rather than being stranded.
+func TestReviewQueuePoller_ReconcileSessions_ArchivedActiveWithNoPane_StillTransitionsToStopped(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	archivedAt := time.Now()
+	inst := makeSocketTestInstance("archived-active-no-pane", "session-archived-gone", "", Active)
+	inst.ArchivedAt = &archivedAt
+	inst.started.Store(true)
+	poller.SetInstances([]*Instance{inst})
+
+	// No live sessions on this socket at all.
+	querier.setLiveSessions("")
+
+	poller.reconcileSessions()
+
+	if got := inst.Snapshot().Status; got != Stopped {
+		t.Errorf("got status %v, want Stopped (archived rows must still converge when their pane is gone)", got)
+	}
+}
+
+// If this fails, warnArchivedLivePaneOnce's sync.Map throttle is not holding and
+// every poll tick re-runs its tmux probe for the same archived session.
+func TestReviewQueuePoller_WarnArchivedLivePane_ThrottledPerProcess(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	mock := &mockTmuxManager{
+		tmuxSessionName:  "session-archived-warn-once",
+		isAliveReturn:    true,
+		hasSessionReturn: true,
+		paneExitDead:     false,
+	}
+	archivedAt := time.Now()
+	inst := &Instance{
+		Title:      "archived-warn-once-session",
+		Status:     Stopped,
+		IsManaged:  true,
+		ArchivedAt: &archivedAt,
+	}
+	inst.processManager = NewTmuxBackend(mock)
+	inst.started.Store(true)
+	poller.SetInstances([]*Instance{inst})
+	querier.setLiveSessions("", "session-archived-warn-once")
+
+	poller.reconcileSessions()
+	poller.reconcileSessions()
+
+	if mock.paneExitStatusCalls != 1 {
+		t.Errorf("got %d PaneExitStatus() probes across two ticks, want 1 (the warning is throttled per process)", mock.paneExitStatusCalls)
+	}
+
+	// RemoveInstance prunes the entry, so a re-added session warns again.
+	poller.RemoveInstance(inst.Title)
+	poller.SetInstances([]*Instance{inst})
+	poller.reconcileSessions()
+
+	if mock.paneExitStatusCalls != 2 {
+		t.Errorf("got %d PaneExitStatus() probes after RemoveInstance, want 2 (removal must prune the throttle entry)", mock.paneExitStatusCalls)
 	}
 }

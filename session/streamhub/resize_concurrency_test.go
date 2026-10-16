@@ -51,6 +51,14 @@ type reentrancyTrackingController struct {
 	pipelineRuns atomic.Int64
 }
 
+// yieldToOtherGoroutines widens the race window without a wall-clock sleep:
+// repeated scheduler yields give any concurrent caller ample opportunity to run.
+func yieldToOtherGoroutines() {
+	for i := 0; i < 200; i++ {
+		runtime.Gosched()
+	}
+}
+
 func (c *reentrancyTrackingController) enterPipeline() {
 	gid := goroutineID()
 	c.mu.Lock()
@@ -74,14 +82,14 @@ func (c *reentrancyTrackingController) SetWindowSizeContext(_ context.Context, _
 	// RequestResize end to end, this sleep gives a second concurrent
 	// caller ample time to also observe changed == true and enter its own
 	// SetWindowSize call before this one exits the pipeline.
-	time.Sleep(2 * time.Millisecond)
+	yieldToOtherGoroutines()
 	return nil
 }
 
 func (c *reentrancyTrackingController) ResizePTY(_, _ int) error { return nil }
 
 func (c *reentrancyTrackingController) CapturePaneContentRawContext(_ context.Context) (streamhub.RawPaneContent, error) {
-	time.Sleep(2 * time.Millisecond)
+	yieldToOtherGoroutines()
 	c.pipelineRuns.Add(1)
 	c.exitPipeline()
 	return "snapshot", nil

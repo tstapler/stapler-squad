@@ -27,7 +27,7 @@ import { useSlashCommands } from "@/lib/hooks/useSlashCommands";
 import { useSlashCommandSuggestions } from "@/lib/hooks/useSlashCommandSuggestions";
 import type { LauncherPresetEntry } from "@/lib/hooks/useLauncherPresets";
 import { OmnibarPresetList } from "./OmnibarPresetList";
-import * as presetListStyles from "./OmnibarPresetList.css";
+import { ProgramProbeSection, PROGRAM_PROBE_STATUS_ID } from "./ProgramProbeSection";
 
 // ─── Session Type Radio Group ────────────────────────────────────────────────
 
@@ -347,7 +347,6 @@ export function OmnibarCreationPanel({
       setPresetsOpen(true);
     }
   }, [shouldAutoOpenPresets]);
-  const isProgramRecognized = !program || availablePrograms.some((p) => p.value === program);
 
   // ─── File attachment state ────────────────────────────────────────────────
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
@@ -942,17 +941,14 @@ export function OmnibarCreationPanel({
                   id="omnibar-program"
                   className={selectClass}
                   value={program}
+                  aria-describedby={PROGRAM_PROBE_STATUS_ID}
                   onChange={(e) => setFormField("program", e.target.value)}
                 >
                   {pickerPrograms.map((p) => (
                     <option key={p.value} value={p.value}>{p.label}</option>
                   ))}
                 </select>
-                {!isProgramRecognized && (
-                  <span className={presetListStyles.programWarning} data-testid="preset-program-warning">
-                    &quot;{program}&quot; not found in PATH — check it&apos;s installed
-                  </span>
-                )}
+                <ProgramProbeSection option={availablePrograms.find((p) => p.value === program)} />
                 {/* Story 3.1.2 / Phase 3: placeholder capability warning. piApprovalExtensionFailed
                     is a stubbed prop (always false today) — Story 4.2.2 will wire the real
                     per-session extension-health signal here; the UI/AC (role="alert", exact

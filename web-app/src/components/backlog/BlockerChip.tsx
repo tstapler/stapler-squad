@@ -10,6 +10,7 @@ import {
   formatStuckDuration,
   isRemediationParked,
 } from "@/components/backlog-stuck/stuckReason";
+import { ClaimOverrideForm } from "./ClaimOverrideForm";
 import * as styles from "./BlockerChip.css";
 
 interface BlockerChipProps {
@@ -28,6 +29,13 @@ interface BlockerChipProps {
    * sites share one useStuckBacklogItems() poller's triggerRemediationNow.
    */
   onTriggerRemediationNow?: (itemId: string, reason: StuckReason) => Promise<void>;
+  /**
+   * When provided (and variant is "full"), a BLOCKED_BY_CLAIM chip renders as
+   * a control that opens a reason form (>= 5 characters, audit-logged) instead
+   * of firing immediately like "Retry now" — overriding another host's claim
+   * is an audited action. Ignored for every other reason.
+   */
+  onOverrideClaimBlock?: (itemId: string, reason: string) => Promise<void>;
   /**
    * Every OTHER currently-open StuckReason for this same item, from
    * `summarizeStuckItemGroup` (stuckReason.ts) — a backlog item can have
@@ -147,6 +155,67 @@ function InteractiveChip({
   );
 }
 
+/** BLOCKED_BY_CLAIM chip: toggles a reason form rather than acting immediately. */
+function ClaimBlockChip({
+  item,
+  icon,
+  label,
+  chipClass,
+  otherReasons,
+  onOverrideClaimBlock,
+}: ChipVisualProps & { onOverrideClaimBlock: (itemId: string, reason: string) => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const handleConfirm = useCallback(
+    async (reason: string) => {
+      setPending(true);
+      setErrorMessage(null);
+      try {
+        await onOverrideClaimBlock(item.itemId, reason);
+        setOpen(false);
+      } catch (err) {
+        setErrorMessage(getErrorMessage(err, "Override failed"));
+      } finally {
+        setPending(false);
+      }
+    },
+    [onOverrideClaimBlock, item.itemId]
+  );
+
+  return (
+    <span className={styles.wrapper}>
+      <button
+        type="button"
+        className={chipClass}
+        aria-label={`${label} — override`}
+        aria-expanded={open}
+        title={item.context || undefined}
+        data-testid="blocker-chip-claim-override"
+        onClick={() => setOpen((prev) => !prev)}
+      >
+        <span aria-hidden="true">{icon}</span>
+        <span>{label}</span>
+        <span className={styles.duration} data-testid="blocker-chip-duration">
+          {formatStuckDuration(item.firstDetectedAt)}
+        </span>
+      </button>
+      <MoreReasonsBadge otherReasons={otherReasons} />
+      {open && (
+        <ClaimOverrideForm
+          label="Reason for working on this despite the other host's claim (required)"
+          confirmLabel="Override claim block"
+          onConfirm={handleConfirm}
+          onCancel={() => setOpen(false)}
+          busy={pending}
+          errorMessage={errorMessage}
+        />
+      )}
+    </span>
+  );
+}
+
 /**
  * Derived (never stored) "waiting on X" indicator, sourced from
  * useStuckBacklogItems()/StuckBacklogItem.reason. Reuses
@@ -154,7 +223,7 @@ function InteractiveChip({
  * verbatim — one source of truth shared by the detail view and board card,
  * instead of two independent implementations drifting apart.
  */
-export function BlockerChip({ item, variant, onTriggerRemediationNow, otherReasons = [] }: BlockerChipProps) {
+export function BlockerChip({ item, variant, onTriggerRemediationNow, onOverrideClaimBlock, otherReasons = [] }: BlockerChipProps) {
   const visual: ChipVisualProps = {
     item,
     icon: getStuckReasonIcon(item.reason),
@@ -163,6 +232,9 @@ export function BlockerChip({ item, variant, onTriggerRemediationNow, otherReaso
     otherReasons,
   };
 
+  if (variant === "full" && item.reason === StuckReason.BLOCKED_BY_CLAIM && onOverrideClaimBlock) {
+    return <ClaimBlockChip {...visual} onOverrideClaimBlock={onOverrideClaimBlock} />;
+  }
   if (variant === "full" && onTriggerRemediationNow) {
     return <InteractiveChip {...visual} onTriggerRemediationNow={onTriggerRemediationNow} />;
   }

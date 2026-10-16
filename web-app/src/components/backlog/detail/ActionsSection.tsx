@@ -8,6 +8,7 @@ import { derivePlanReviewStatus } from "@/lib/backlog/planReviewStatus";
 import type { JulesDispatchGate } from "@/lib/backlog/julesDispatchGate";
 import * as styles from "../BacklogItemDetail.css";
 import { ActionButtonLabel } from "./ActionButtonLabel";
+import { SendBackFeedbackBox } from "./SendBackFeedbackBox";
 
 // Story 3.2.2's Jules gating result type — resolved by
 // lib/backlog/julesDispatchGate.ts's resolveJulesDispatchGate, called from
@@ -44,6 +45,8 @@ export interface ActionsSectionProps {
    */
   julesDispatchGate?: JulesDispatchGate;
   onDispatchToJulesClick?: (event: MouseEvent<HTMLButtonElement>) => void;
+  activeWorkSessionCount: number;
+  onSendBackWithFeedback: (feedback: string) => Promise<void>;
 }
 
 /**
@@ -72,6 +75,8 @@ export function ActionsSection({
   terminalState,
   julesDispatchGate,
   onDispatchToJulesClick,
+  activeWorkSessionCount,
+  onSendBackWithFeedback,
 }: ActionsSectionProps) {
   // getAvailableActions (web-app/src/lib/backlog/itemActions.ts) is the single
   // source of truth for which actions this item's current status + gate flags
@@ -437,18 +442,13 @@ export function ActionsSection({
             <ActionButtonLabel pending={actionLoading === "send_back_idea"} label="↩ Return to Triage" />
           </button>
         )}
-        {actions.has("send_back_ready") && (
-          <button
-            className={`${styles.actionButton} ${styles.actionButtonSecondary}`}
-            onClick={() => onAction("send_back_ready")}
-            disabled={actionLoading !== null}
-            aria-busy={actionLoading === "send_back_ready"}
-            title="Move back to Ready to re-spawn without full re-triage"
-            data-testid="backlog-action-send-back-ready"
-          >
-            <ActionButtonLabel pending={actionLoading === "send_back_ready"} label="↩ Back to Ready" />
-          </button>
-        )}
+        <SendBackFeedbackBox
+          visible={actions.has("send_back_ready")}
+          activeWorkSessionCount={activeWorkSessionCount}
+          disabled={actionLoading !== null && actionLoading !== "send_back_ready"}
+          actionPending={actionLoading === "send_back_ready"}
+          onSubmit={onSendBackWithFeedback}
+        />
 
         <button
           className={styles.actionButtonDanger}

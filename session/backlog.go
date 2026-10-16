@@ -51,6 +51,17 @@ const (
 	SessionRoleTriage    = "triage"
 	SessionRoleReview    = "review"
 	SessionRoleJulesWork = "jules_work"
+	// SessionRoleDiagnose is the Diagnose & Nudge dispatched session's role
+	// (backlog item 68964304): a hidden, one-shot investigation agent, never
+	// a work/review/triage session. submit_diagnosis_result checks this role
+	// the same way submit_review_verdict checks SessionRoleReview.
+	SessionRoleDiagnose = "diagnose"
+	// SessionRoleExternal is never persisted to ItemSession.session_role — it's
+	// Insights' synthetic label (server/services/insights_service.go's
+	// groupUnattributed) for a session with no backlog attribution at all,
+	// distinct from the empty-string "" (never linked to an item, but still
+	// inside a stapler-squad worktree).
+	SessionRoleExternal = "external"
 )
 
 // IsTmuxBackedSessionRole reports whether role identifies a session that runs as a
@@ -58,11 +69,16 @@ const (
 // archived AND have its tmux pane killed once its backlog item goes terminal, or it
 // leaks indefinitely (root cause of the 2026-07-29 OOM: dozens of done/archived
 // items' work and review sessions still running, each with its own MCP subprocess
-// fleet). Work and review sessions are tmux-backed. Triage sessions are not: they run
-// as bounded one-shot headless subprocess calls (see headlessTriageUUIDPrefix) that
-// exit on their own when the call returns, so they were never tracked as a live
-// Instance in the first place and have nothing to kill — their own failure mode
-// (a crashed/hung goroutine leaving a stale DB row) is handled separately by
+// fleet). Work, review, and diagnose sessions are all tmux-backed — diagnose was
+// missed when this predicate was introduced (it's Hidden+OneShot like review, but
+// dispatched via a separate path, DiagnosticService.DispatchDiagnose) and had no
+// cleanup at all as a result: a finished Diagnose & Nudge dispatch just sits as a
+// Stopped+Hidden session forever, the same leak class this predicate exists to
+// prevent. Triage sessions are not tmux-backed: they run as bounded one-shot
+// headless subprocess calls (see headlessTriageUUIDPrefix) that exit on their own
+// when the call returns, so they were never tracked as a live Instance in the first
+// place and have nothing to kill — their own failure mode (a crashed/hung goroutine
+// leaving a stale DB row) is handled separately by
 // reconcileOrphanedTriageItems/reconcileOrphanedTriageRemediation. Jules sessions are
 // not tmux-backed either: they run on Google's infrastructure, so like triage there is
 // no local pane to kill.
@@ -74,7 +90,7 @@ const (
 // they already did once (the archive-and-kill fix originally covered work sessions
 // only; review sessions kept leaking until this predicate unified both call sites).
 func IsTmuxBackedSessionRole(role string) bool {
-	return role == SessionRoleWork || role == SessionRoleReview
+	return role == SessionRoleWork || role == SessionRoleReview || role == SessionRoleDiagnose
 }
 
 // HasActiveJulesSession reports whether sessions contains an open (not yet ended)
@@ -239,6 +255,26 @@ var (
 // BacklogItemTransitionInput carries the fields needed by TransitionGuard.
 // Type alias — session.BacklogItemTransitionInput and domain.BacklogItemTransitionInput are identical types.
 type BacklogItemTransitionInput = domain.BacklogItemTransitionInput
+
+// NewBacklogItemTransitionInput builds a BacklogItemTransitionInput from item,
+// always setting ItemID alongside the fields every transition-guard call site
+// needs. ItemID must be set for ConfiguredWorkflowEngine's evaluateRecordedGate
+// to look up a persisted GateSatisfactionRecord for automated_review/custom
+// gates (session/configured_workflow_engine.go) — a hand-built literal that
+// forgets it silently and permanently blocks those gate kinds. status is the
+// item's current ("from") status; callers needing OverallOutcome,
+// OverrideReason, HasUnshippedCode, or HasUnresolvedBlockers set those on the
+// returned value afterward.
+func NewBacklogItemTransitionInput(item *BacklogItemData, status BacklogStatus) BacklogItemTransitionInput {
+	return BacklogItemTransitionInput{
+		ItemID:            item.ID,
+		Status:            status,
+		AcCriteria:        item.AcceptanceCriteria,
+		PlanApproved:      item.PlanApproved,
+		SkipPlanning:      item.SkipPlanning,
+		PlanArtifactsPath: item.PlanArtifactsPath,
+	}
+}
 
 // TransitionGuard validates business rules before a status transition.
 var TransitionGuard = domain.TransitionGuard

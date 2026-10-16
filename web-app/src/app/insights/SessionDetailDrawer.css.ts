@@ -45,7 +45,7 @@ export const drawerTitle = style({
   display: "flex",
   alignItems: "center",
   gap: vars.space[2],
-  fontSize: vars.fontSize.sm,
+  fontSize: vars.fontSize.xl,
   fontWeight: vars.fontWeight.semibold,
   color: vars.color.textPrimary,
 });

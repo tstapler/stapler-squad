@@ -50,7 +50,7 @@ const THEME_META: Record<ThemeName, { label: string; description: string }> = {
  * border and checkmark. Switching themes is instant via ThemeContext.setTheme.
  */
 export function ThemePicker() {
-  const { theme, setTheme, availableThemes } = useTheme();
+  const { theme, setTheme, availableThemes, customThemes } = useTheme();
 
   return (
     <div className={container}>
@@ -82,6 +82,37 @@ export function ThemePicker() {
               <div className={previewSwatch[swatchKey]} aria-hidden="true" />
               <span className={themeName}>{meta.label}</span>
               <span className={themeDescription}>{meta.description}</span>
+            </button>
+          );
+        })}
+        {customThemes.map((custom) => {
+          const id = `custom:${custom.id}`;
+          const isActive = theme === id;
+          const swatchKey = custom.base as keyof typeof previewSwatch;
+          return (
+            <button
+              key={id}
+              role="radio"
+              aria-checked={isActive}
+              className={`${themeButton}${isActive ? ` ${themeButtonActive}` : ""}`}
+              onClick={() => setTheme(id)}
+              title={custom.description}
+            >
+              {isActive && (
+                <span className={activeCheckmark} aria-hidden="true">
+                  ✓
+                </span>
+              )}
+              <div
+                className={previewSwatch[swatchKey]}
+                style={{
+                  background: custom.tokens["color.background"],
+                  borderColor: custom.tokens["color.primary"],
+                }}
+                aria-hidden="true"
+              />
+              <span className={themeName}>{custom.label}</span>
+              <span className={themeDescription}>{custom.description ?? "Custom theme"}</span>
             </button>
           );
         })}

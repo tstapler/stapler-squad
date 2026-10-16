@@ -5,6 +5,7 @@ import (
 	"time"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 )
@@ -170,5 +171,42 @@ func TestConvertEventToProto_RemoteHealthChanged_NilPayload(t *testing.T) {
 	}
 	if protoEvent.Event != nil {
 		t.Errorf("expected nil oneof for nil RemoteHealthPayload, got %T", protoEvent.Event)
+	}
+}
+
+// T-CT-02: the live event carries the same pending-decision answer the history
+// record will, so a toast shown before any record exists agrees with it.
+func TestEventConverter_ShouldStampIsPendingDecision_WhenLiveApprovalNeededOrUnstampedWarningAndNotWhenWarningIsAutoRemediating(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		typ  sessionv1.NotificationType
+		md   map[string]string
+		want bool
+	}{
+		{"approval needed", sessionv1.NotificationType_NOTIFICATION_TYPE_APPROVAL_NEEDED, nil, true},
+		{"unstamped warning", sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING, nil, true},
+		{"auto-remediating warning", sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING, map[string]string{pkgevents.MetadataKeyAutoRemediating: "true"}, false},
+		{"info", sessionv1.NotificationType_NOTIFICATION_TYPE_INFO, nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			protoEvent := convertEventToProto(&events.Event{
+				Type:                 events.EventNotification,
+				Timestamp:            time.Unix(1700000000, 0),
+				SessionID:            "s1",
+				NotificationType:     int32(tc.typ),
+				NotificationMetadata: tc.md,
+				NotificationID:       "n1",
+			})
+			n, ok := protoEvent.Event.(*sessionv1.SessionEvent_Notification)
+			if !ok {
+				t.Fatalf("expected *SessionEvent_Notification, got %T", protoEvent.Event)
+			}
+			if got := n.Notification.IsPendingDecision; got != tc.want {
+				t.Errorf("IsPendingDecision = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

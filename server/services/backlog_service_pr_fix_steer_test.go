@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"strings"
 	"testing"
 	"time"
@@ -640,4 +641,275 @@ func requireNotificationEvent(t *testing.T, ch <-chan *events.Event) *events.Eve
 		t.Fatal("expected a notification event")
 		return &events.Event{}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Characterization ("PinnedBaseline") of steerActiveSessionForPRFix, captured
+// on the code BEFORE the per-session nudge guard (Task 2.2.1c). They must stay
+// green and unedited after the guarded call-site swap (Task 2.2.1e).
+// ---------------------------------------------------------------------------
+
+func pinnedBaselineSteer(t *testing.T, svc *BacklogService, itemID, fixContext string) {
+	t.Helper()
+	svc.steerActiveSessionForPRFix(context.Background(), itemID, "pinned item", session.BacklogStatusPRPending,
+		&session.ItemSessionSummary{SessionUUID: activeSessionUUIDPrimary, Role: session.SessionRoleWork}, fixContext)
+}
+
+func TestSteerActiveSessionForPRFix_should_DeliverWhenReady_When_PinnedBaseline(t *testing.T) {
+	svc, steerer, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
+	itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
+
+	pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
+
+	calls := steerer.calls()
+	require.Len(t, calls, 1)
+	assert.Equal(t, activeSessionUUIDPrimary, calls[0].uuid)
+	assert.Contains(t, calls[0].message, "## Failing CI checks")
+	assert.Empty(t, openStuckReasons(t, svc))
+}
+
+func TestSteerActiveSessionForPRFix_should_DedupByItem_When_SameSignatureTwice_PinnedBaseline(t *testing.T) {
+	svc, steerer, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
+	itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
+
+	pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
+	pinnedBaselineSteer(t, svc, itemID, "## Failing CI checks\n- a different check name\n")
+
+	assert.Len(t, steerer.calls(), 1, "same reason signature within the cooldown must be delivered once")
+}
+
+func TestSteerActiveSessionForPRFix_should_MarkSteerFailedNotRespawnBlocked_When_GenuineDeliveryError_PinnedBaseline(t *testing.T) {
+	svc, steerer, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
+	itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
+	steerer.steerErr[activeSessionUUIDPrimary] = fmt.Errorf("SendKeys failed: pty closed")
+
+	pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
+
+	assert.Len(t, steerer.calls(), 1)
+	reasons := openStuckReasons(t, svc)
+	assert.True(t, reasons[domain.StuckReasonSteerFailed])
+	assert.False(t, reasons[domain.StuckReasonRespawnBlockedActive])
+}
+
+func TestSteerActiveSessionForPRFix_should_NotWriteAndDegradeToRespawnBlocked_When_SessionNotReady_PinnedBaseline(t *testing.T) {
+	svc, steerer, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
+	itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
+	steerer.notReady = map[string]bool{activeSessionUUIDPrimary: true}
+
+	pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
+
+	assert.Empty(t, steerer.calls())
+	reasons := openStuckReasons(t, svc)
+	assert.True(t, reasons[domain.StuckReasonRespawnBlockedActive])
+	assert.False(t, reasons[domain.StuckReasonSteerFailed])
+}
+
+// ---------------------------------------------------------------------------
+// Guarded steering (Story 2.2.1)
+// ---------------------------------------------------------------------------
+
+// guardBackedSteerer is a mockSessionSteerer whose SteerSessionGuarded runs a
+// real sessionNudgeGuard, standing in for SessionService's shared guard.
+type guardBackedSteerer struct {
+	*mockSessionSteerer
+	guard *sessionNudgeGuard
+}
+
+func (g *guardBackedSteerer) SteerSessionGuarded(ctx context.Context, uuid, sig, message string) (SteerOutcome, error) {
+	release, outcome := g.guard.TryBegin(uuid, sig)
+	switch outcome {
+	case GuardBusy:
+		return SteerGuardBusy, nil
+	case GuardDuplicate:
+		return SteerDuplicate, nil
+	case GuardCoolingDown:
+		return SteerCoolingDown, nil
+	}
+	err := g.recordSteer(ctx, uuid, message)
+	release(err == nil)
+	if err != nil {
+		return SteerFailed, err
+	}
+	return SteerDelivered, nil
+}
+
+func TestSteerActiveSessionForPRFix_should_ReturnWithoutDegradingOrMarkingFailed_When_GuardDuplicateFromJustDeliveredManualNudge(t *testing.T) {
+	svc, steerer, bus := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
+	subCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+	itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
+	steerer.guardedOutcome = map[string]SteerOutcome{activeSessionUUIDPrimary: SteerDuplicate}
+
+	pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
+
+	assert.Empty(t, steerer.calls())
+	assert.Empty(t, openStuckReasons(t, svc), "neither respawn_blocked_active nor steer_failed")
+	assert.Empty(t, drainNotifications(ch))
+}
+
+func TestSteerActiveSessionForPRFix_should_NotCallDegradeAndKeepItemUnblocked_When_GuardBusyOrDuplicate(t *testing.T) {
+	for name, outcome := range map[string]SteerOutcome{"busy": SteerGuardBusy, "duplicate": SteerDuplicate} {
+		t.Run(name, func(t *testing.T) {
+			svc, steerer, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
+			itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
+			steerer.guardedOutcome = map[string]SteerOutcome{activeSessionUUIDPrimary: outcome}
+
+			pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
+
+			assert.Empty(t, openStuckReasons(t, svc))
+			requireItemStatus(t, svc.storage, itemID, string(session.BacklogStatusPRPending))
+
+			// Not recorded as delivered: the next tick, once the guard clears, delivers.
+			steerer.guardedOutcome = nil
+			pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
+			assert.Len(t, steerer.calls(), 1)
+		})
+	}
+}
+
+func TestSteerActiveSessionForPRFix_should_PassFullReasonSignatureToGuard_When_Called(t *testing.T) {
+	svc, steerer, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
+	itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
+
+	pinnedBaselineSteer(t, svc, itemID, "## Failing CI checks\n- lint\n\n## Reviewer comments\n- nit\n")
+
+	require.Equal(t, []string{"|FAILING_CHECKS,UNRESOLVED_THREADS"}, steerer.guardedSigs, "item has no PR URL, so the PR part is empty")
+}
+
+func TestSteerActiveSessionForPRFix_should_ReturnWithoutDegradingOrMarkingFailed_When_ManualNudgeInFlight(t *testing.T) {
+	svc, steerer, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
+	guard := &sessionNudgeGuard{}
+	svc.SetSessionSteerer(&guardBackedSteerer{mockSessionSteerer: steerer, guard: guard})
+	itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
+	release, outcome := guard.TryBegin(activeSessionUUIDPrimary, "manual")
+	require.Equal(t, GuardOK, outcome)
+
+	pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
+
+	assert.Empty(t, steerer.calls())
+	assert.Empty(t, openStuckReasons(t, svc))
+
+	release(false)
+	steerer.guardedSigs = nil
+	pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
+	assert.Len(t, steerer.calls(), 1, "retried on the next tick after the manual nudge finished")
+}
+
+func TestSteerActiveSessionForPRFix_should_DeliverBothSignatures_When_FailingChecksThenMergeConflictWithin30s(t *testing.T) {
+	svc, steerer, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
+	clk := &fakeGuardClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	svc.SetSessionSteerer(&guardBackedSteerer{mockSessionSteerer: steerer, guard: &sessionNudgeGuard{now: clk.Now}})
+	itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
+
+	pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
+	clk.Advance(30 * time.Second)
+	// A newly seen conflict needs two confirming ticks before it is steered.
+	pinnedBaselineSteer(t, svc, itemID, conflictOnlyFixContext)
+	pinnedBaselineSteer(t, svc, itemID, conflictOnlyFixContext)
+
+	calls := steerer.calls()
+	require.Len(t, calls, 2)
+	assert.Contains(t, calls[0].message, "## Failing CI checks")
+	assert.Contains(t, calls[1].message, "## Merge conflict")
+}
+
+func TestGuardKey_should_Match_When_GetStableIDEqualsActiveSessionUUID(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+	inst := &session.Instance{UUID: "stable-uuid-1", Title: "guard-key-session", Program: "claude", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	addInstanceToPoller(fix.poller, inst)
+	active := &session.ItemSessionSummary{SessionUUID: inst.UUID, Role: session.SessionRoleWork}
+
+	live := fix.svc.FindLiveInstance(active.SessionUUID)
+
+	require.NotNil(t, live, "backlog path resolves the instance by active.SessionUUID")
+	assert.Equal(t, active.SessionUUID, live.GetStableID(), "manual (GetStableID) and automatic (SessionUUID) paths share one guard key")
+}
+
+func testPRKey(t *testing.T, n int) githubpkg.PRKey {
+	t.Helper()
+	k, err := githubpkg.NewPRKey("github.com", "acme", "api", n)
+	require.NoError(t, err)
+	return k
+}
+
+func TestReasonSignatureKey_should_MatchManualNudgeSignature_When_SameProblemSetAndPR(t *testing.T) {
+	pr := testPRKey(t, 7)
+	auto := buildReasonSignature("## Merge conflict\nx\n## Failing CI checks\n- lint\n").key(pr.Key())
+	manual := nudgeSignature(pr, []sessionv1.NudgeReason{
+		sessionv1.NudgeReason_NUDGE_REASON_FAILING_CHECKS,
+		sessionv1.NudgeReason_NUDGE_REASON_MERGE_CONFLICT,
+	})
+	require.Equal(t, manual, auto)
+}
+
+func TestSharedGuard_should_DedupeAutoSteerAfterManualNudgeAndViceVersa_ForSamePR(t *testing.T) {
+	pr := testPRKey(t, 7)
+	manual := nudgeSignature(pr, []sessionv1.NudgeReason{sessionv1.NudgeReason_NUDGE_REASON_FAILING_CHECKS})
+	auto := buildReasonSignature("## Failing CI checks\n- lint\n").key(pr.Key())
+
+	g := &sessionNudgeGuard{}
+	rel, out := g.TryBegin("s", manual)
+	require.Equal(t, GuardOK, out)
+	rel(true)
+	_, out = g.TryBegin("s", auto)
+	assert.Equal(t, GuardDuplicate, out, "auto-steer after a delivered manual nudge")
+
+	g2 := &sessionNudgeGuard{}
+	rel, out = g2.TryBegin("s", auto)
+	require.Equal(t, GuardOK, out)
+	rel(true)
+	_, out = g2.TryBegin("s", manual)
+	assert.Equal(t, GuardDuplicate, out, "manual nudge after a delivered auto-steer")
+}
+
+func TestSharedGuard_should_NotDedupe_When_SessionIsLinkedToTwoPRs(t *testing.T) {
+	reasons := []sessionv1.NudgeReason{sessionv1.NudgeReason_NUDGE_REASON_FAILING_CHECKS}
+	g := &sessionNudgeGuard{}
+	rel, out := g.TryBegin("s", nudgeSignature(testPRKey(t, 7), reasons))
+	require.Equal(t, GuardOK, out)
+	rel(true)
+	_, out = g.TryBegin("s", nudgeSignature(testPRKey(t, 8), reasons))
+	assert.Equal(t, GuardOK, out, "a nudge for the second PR is not a repeat of the first")
+	_, out = g.TryBegin("s", buildReasonSignature("## Failing CI checks\n").key(testPRKey(t, 8).Key()))
+	assert.Equal(t, GuardBusy, out, "second claim is still in flight")
+}
+
+func TestCanonicalReasonForHeader_should_KeepChangesRequestedSeparateFromThreads(t *testing.T) {
+	pr := testPRKey(t, 7).Key()
+	changes := buildReasonSignature("## Review: changes requested by @bob\nx\n").key(pr)
+	threads := nudgeSignature(testPRKey(t, 7), []sessionv1.NudgeReason{sessionv1.NudgeReason_NUDGE_REASON_UNRESOLVED_THREADS})
+	assert.NotEqual(t, threads, changes)
+
+	g := &sessionNudgeGuard{}
+	rel, out := g.TryBegin("s", changes)
+	require.Equal(t, GuardOK, out)
+	rel(true)
+	_, out = g.TryBegin("s", threads)
+	assert.Equal(t, GuardOK, out, "changes-requested steer must not suppress a thread nudge")
+}
+
+func TestLinkKeyFromPRURL_should_MatchPRKeyKey(t *testing.T) {
+	assert.Equal(t, testPRKey(t, 7).Key(), linkKeyFromPRURL("https://github.com/Acme/API/pull/7"))
+	assert.Equal(t, githubpkg.LinkKey(""), linkKeyFromPRURL("not a url"))
+}
+
+func TestReasonSignatureKey_ChangesRequestedWithThreads_MatchesManualNudgeKey(t *testing.T) {
+	prk, err := githubpkg.NewPRKey("github.com", "o", "r", 1)
+	require.NoError(t, err)
+	pr := prk.Key()
+	manual := guardSignature(pr, reasonSetSignature(reasonNameUnresolvedThreads))
+	cr := "## Review: changes requested by @a"
+	for _, headers := range [][]string{{cr, "## Reviewer comments"}, {"## Reviewer comments", cr}} {
+		require.Equal(t, manual, reasonSignature{headers: headers}.key(pr))
+	}
+}
+
+func TestReasonSignatureKey_ChangesRequestedOnly_DoesNotMatchManualThreadKey(t *testing.T) {
+	prk, err := githubpkg.NewPRKey("github.com", "o", "r", 1)
+	require.NoError(t, err)
+	pr := prk.Key()
+	manual := guardSignature(pr, reasonSetSignature(reasonNameUnresolvedThreads))
+	require.NotEqual(t, manual, reasonSignature{headers: []string{"## Review: changes requested by @a"}}.key(pr))
 }

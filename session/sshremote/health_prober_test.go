@@ -436,7 +436,7 @@ func TestRemoteHealthProber_NoOpTransitionDoesNotRepublish(t *testing.T) {
 	publisher.waitForState(t, RemoteConnectionStateConnected, 5*time.Second)
 
 	// Let several liveness-check ticks elapse while nothing changes.
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond) //nolint:notimesleeptest absence check across ticks of the prober's real 10ms liveness ticker; nothing observable marks a no-op tick
 
 	if got := publisher.count(); got != 1 {
 		t.Errorf("publisher recorded %d events, want exactly 1 (no repeated connected publishes across ticks)", got)

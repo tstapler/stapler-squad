@@ -290,9 +290,10 @@ func TestSSHRunner_Dial_HungHandshake_TimesOutWithinBudget(t *testing.T) {
 		t.Errorf("Dial() took %v, want well under ctx's 1s budget plus scheduling slack", elapsed)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for liveConns() != 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+	liveTick := time.NewTicker(10 * time.Millisecond)
+	defer liveTick.Stop()
+	for deadline := time.Now().Add(2 * time.Second); liveConns() != 0 && time.Now().Before(deadline); {
+		<-liveTick.C
 	}
 	if n := liveConns(); n != 0 {
 		t.Errorf("live stalling connections = %d after Dial timeout, want 0 (connection not force-closed)", n)
@@ -438,9 +439,21 @@ func TestSSHRunner_Run_MaxSessionsRejection_DoesNotEvictSharedClient(t *testing.
 		t.Logf("wait() on the closed long-lived session returned: %v (expected)", err)
 	}
 
-	out, err := runner.Run(ctx, "", "echo", "-n", "still-works")
-	if err != nil {
-		t.Fatalf("Run() after freeing the slot on the same connection: %v", err)
+	// The server releases the slot asynchronously after the client closes the
+	// session, so retry the rejection until it frees (bounded by ctx).
+	var out []byte
+	for {
+		out, err = runner.Run(ctx, "", "echo", "-n", "still-works")
+		if err == nil {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("Run() after freeing the slot on the same connection: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 	if string(out) != "still-works" {
 		t.Errorf("Run() after freeing the slot = %q, want %q", out, "still-works")

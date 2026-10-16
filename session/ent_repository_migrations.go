@@ -83,4 +83,5 @@ var startupMigrations = []Migration{ //nolint:gochecknoglobals
 	}},
 	funcMigration{"backlog item repo_path canonicalization", runBacklogItemRepoPathCanonicalizationBackfill},
 	funcMigration{"status corruption repair", runStatusCorruptionRepair},
+	funcMigration{"backlog item legacy import external backfill", runBacklogItemLegacyImportExternalBackfill},
 }

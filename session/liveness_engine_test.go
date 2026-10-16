@@ -2,7 +2,6 @@ package session
 
 import (
 	"bytes"
-	stdlog "log"
 	"testing"
 	"time"
 
@@ -134,9 +133,8 @@ func TestLivenessFor_should_EmitExactlyOneWarnLine_When_FallingBackToDefaultEngi
 		embeddedDefault: NewDefaultLivenessEngine(),
 	}
 
-	var buf bytes.Buffer
-	orig := tslog.SetWarningLogForTest(stdlog.New(&buf, "WARNING: ", 0))
-	t.Cleanup(func() { tslog.SetWarningLogForTest(orig) })
+	// Not t.Parallel(): shares WarningLog() with sibling tests via RedirectLogger.
+	buf := tslog.RedirectLogger(t, tslog.WarningLog(), "WARNING: ")
 
 	got, err := engine.LivenessFor(BacklogStatusIdea, PipelineMode("sdd"))
 
@@ -163,9 +161,8 @@ func TestLivenessFor_should_NotEmitDuplicateWarnLines_When_CalledRepeatedlyForSa
 		embeddedDefault: NewDefaultLivenessEngine(),
 	}
 
-	var buf bytes.Buffer
-	orig := tslog.SetWarningLogForTest(stdlog.New(&buf, "WARNING: ", 0))
-	t.Cleanup(func() { tslog.SetWarningLogForTest(orig) })
+	// Not t.Parallel(): shares WarningLog() with sibling tests via RedirectLogger.
+	buf := tslog.RedirectLogger(t, tslog.WarningLog(), "WARNING: ")
 
 	const calls = 3
 	for i := 0; i < calls; i++ {

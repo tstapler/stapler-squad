@@ -155,6 +155,7 @@ function makeItem(overrides: Partial<BacklogItem>, linkedSessions: LinkedSession
     skipReviewGate: false,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     planApproved: false,
     acCriteria: [],
     linkedSessions,

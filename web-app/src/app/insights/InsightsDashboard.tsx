@@ -13,6 +13,7 @@ import { FindingsPanel } from "./FindingsPanel";
 import { TopNTable } from "./TopNTables";
 import { ActivityBreakdownTable } from "./ActivityBreakdownTable";
 import { SessionsTable } from "./SessionsTable";
+import { UnattributedByTitleTable } from "./UnattributedByTitleTable";
 import { SessionDetailDrawer } from "./SessionDetailDrawer";
 import { ProjectedCostCard } from "./ProjectedCostCard";
 import { TimeRangeFilter, resolveTimeRangeDates } from "./TimeRangeFilter";
@@ -52,6 +53,10 @@ const ModelBreakdownChart = dynamic(
 );
 const ModelOverTimeChart = dynamic(
   () => import("./ModelOverTimeChart").then((m) => m.ModelOverTimeChart),
+  { ssr: false, loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
+);
+const StageCostChart = dynamic(
+  () => import("./StageCostChart").then((m) => m.StageCostChart),
   { ssr: false, loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
 );
 
@@ -107,6 +112,16 @@ function InsightsDashboardInner() {
     threshold > 0 &&
     projection !== null &&
     projection.projectedMonthly > threshold;
+
+  // Bar-click cross-filter (Task 5.2.2b) — lifted here so both StageCostChart
+  // and SessionsTable share it. Clicking the already-active role's bar again
+  // clears the filter (ux.md's "clicking the same bar again... returns to
+  // unfiltered view").
+  const [roleFilter, setRoleFilter] = useState<string | undefined>(undefined);
+  const handleRoleClick = useCallback((role: string) => {
+    setRoleFilter((prev) => (prev === role ? undefined : role));
+  }, []);
+  const clearRoleFilter = useCallback(() => setRoleFilter(undefined), []);
 
   const [selectedSession, setSelectedSession] = useState<SessionTokenSummary | null>(null);
   // Stable identity — SessionDetailDrawer's keydown-handling effect has this
@@ -208,7 +223,22 @@ function InsightsDashboardInner() {
             <div className={grid2}>
               <DailySpendChart daily={summary.daily} />
               <ModelBreakdownChart models={summary.models} />
+              <StageCostChart
+                roles={summary.roleBreakdown}
+                activeRole={roleFilter}
+                onRoleClick={handleRoleClick}
+              />
             </div>
+            <UnattributedByTitleTable
+              title="Unattributed Cost by Session"
+              testId="unattributed-by-title-table"
+              items={summary.roleBreakdown.find((r) => r.sessionRole === "")?.items ?? []}
+            />
+            <UnattributedByTitleTable
+              title="External (Non-Stapler-Squad) Cost by Session"
+              testId="external-by-title-table"
+              items={summary.roleBreakdown.find((r) => r.sessionRole === "external")?.items ?? []}
+            />
           </section>
 
           <section className={section}>
@@ -265,6 +295,8 @@ function InsightsDashboardInner() {
               sessions={summary.sessions}
               onSessionClick={(s) => setSelectedSession(s)}
               backlogIndex={backlogIndex}
+              roleFilter={roleFilter}
+              onClearRoleFilter={clearRoleFilter}
             />
           </section>
         </>

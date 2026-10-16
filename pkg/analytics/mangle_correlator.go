@@ -8,11 +8,13 @@ import (
 
 // Stage1Observation records a sequence seen at Stage 1 (PTY read) for later correlation with Stage 2.
 type Stage1Observation struct {
-	PayloadHash  string
-	ByteLen      int
-	WallTime     time.Time
-	SessionID    string
-	SequenceType string
+	PayloadHash       string
+	ByteLen           int
+	WallTime          time.Time
+	SessionID         string
+	ProjectPath       string
+	SequenceType      string
+	SequenceSignature string
 }
 
 // MangleCorrelator correlates Stage 1 and Stage 2 escape sequence observations to detect
@@ -60,26 +62,34 @@ type MangleCorrelator struct {
 	// pruned pending. Confirmed as the #1 live-heap consumer (25.18% inuse_space)
 	// before this field was added: sessions come and go, but their ordinal
 	// counters never did.
-	ordinalLastSeen map[ordinalKey]time.Time
-	maxAge          time.Duration
-	maxSize         int
+	ordinalLastSeen   map[ordinalKey]time.Time
+	transportLastSeen map[string]time.Time
+	maxAge            time.Duration
+	maxSize           int
 }
 
 // NewMangleCorrelator creates a correlator with the given TTL and max pending size.
 func NewMangleCorrelator(maxAge time.Duration, maxSize int) *MangleCorrelator {
 	return &MangleCorrelator{
-		pending:         make(map[pendingKey]Stage1Observation),
-		stage1Ordinals:  make(map[ordinalKey]int64),
-		stage2Ordinals:  make(map[ordinalKey]int64),
-		ordinalLastSeen: make(map[ordinalKey]time.Time),
-		maxAge:          maxAge,
-		maxSize:         maxSize,
+		pending:           make(map[pendingKey]Stage1Observation),
+		stage1Ordinals:    make(map[ordinalKey]int64),
+		stage2Ordinals:    make(map[ordinalKey]int64),
+		ordinalLastSeen:   make(map[ordinalKey]time.Time),
+		transportLastSeen: make(map[string]time.Time),
+		maxAge:            maxAge,
+		maxSize:           maxSize,
 	}
 }
 
 // RecordStage1 records a Stage 1 observation for later correlation. It is assigned the next
 // ordinal for this (sessionID, sequenceType) pair.
 func (c *MangleCorrelator) RecordStage1(sessionID, sequenceType, hash string, byteLen int) {
+	c.RecordStage1WithMetadata(sessionID, "", sequenceType, "", hash, byteLen)
+}
+
+// RecordStage1WithMetadata preserves project and normalized command attribution
+// when an unmatched observation is later emitted as stripped.
+func (c *MangleCorrelator) RecordStage1WithMetadata(sessionID, projectPath, sequenceType, sequenceSignature, hash string, byteLen int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -98,12 +108,23 @@ func (c *MangleCorrelator) RecordStage1(sessionID, sequenceType, hash string, by
 	c.ordinalLastSeen[ok] = time.Now()
 
 	c.pending[pendingKey{sessionID, sequenceType, ordinal}] = Stage1Observation{
-		PayloadHash:  hash,
-		ByteLen:      byteLen,
-		WallTime:     time.Now(),
-		SessionID:    sessionID,
-		SequenceType: sequenceType,
+		PayloadHash:       hash,
+		ByteLen:           byteLen,
+		WallTime:          time.Now(),
+		SessionID:         sessionID,
+		ProjectPath:       projectPath,
+		SequenceType:      sequenceType,
+		SequenceSignature: sequenceSignature,
 	}
+}
+
+// ObserveTransport records that a transport is actively carrying output for
+// the session. This prevents sessions with no consumer from being reported as
+// stripped merely because Stage 2 was never expected.
+func (c *MangleCorrelator) ObserveTransport(sessionID string) {
+	c.mu.Lock()
+	c.transportLastSeen[sessionID] = time.Now()
+	c.mu.Unlock()
 }
 
 // CheckStage2 checks whether the next Stage 2 observation for this (sessionID, sequenceType)
@@ -156,7 +177,12 @@ func (c *MangleCorrelator) EvictExpired(ctx context.Context, writer EscapeEventW
 	cutoff := time.Now().Add(-c.maxAge)
 	for key, obs := range c.pending {
 		if obs.WallTime.Before(cutoff) {
-			expired = append(expired, obs)
+			// Absence is only evidence of stripping while a transport was
+			// active near this observation. Otherwise discard the pending
+			// correlation without manufacturing a false failure.
+			if seen, ok := c.transportLastSeen[obs.SessionID]; ok && seen.After(obs.WallTime.Add(-c.maxAge)) {
+				expired = append(expired, obs)
+			}
 			delete(c.pending, key)
 		}
 	}
@@ -164,14 +190,16 @@ func (c *MangleCorrelator) EvictExpired(ctx context.Context, writer EscapeEventW
 
 	for _, obs := range expired {
 		writer.WriteEscapeEvent(ctx, EscapeEventRecord{
-			SessionID:    obs.SessionID,
-			Stage:        StageTransport,
-			SequenceType: obs.SequenceType,
-			ByteLen:      obs.ByteLen,
-			PayloadHash:  obs.PayloadHash,
-			Mangled:      true,
-			MangleType:   "stripped",
-			WallTime:     obs.WallTime,
+			SessionID:         obs.SessionID,
+			ProjectPath:       obs.ProjectPath,
+			Stage:             StageTransport,
+			SequenceType:      obs.SequenceType,
+			SequenceSignature: obs.SequenceSignature,
+			ByteLen:           obs.ByteLen,
+			PayloadHash:       obs.PayloadHash,
+			Mangled:           true,
+			MangleType:        "stripped",
+			WallTime:          obs.WallTime,
 		})
 	}
 }
@@ -192,6 +220,11 @@ func (c *MangleCorrelator) PruneStaleOrdinals() {
 			delete(c.ordinalLastSeen, key)
 			delete(c.stage1Ordinals, key)
 			delete(c.stage2Ordinals, key)
+		}
+	}
+	for sessionID, lastSeen := range c.transportLastSeen {
+		if lastSeen.Before(cutoff) {
+			delete(c.transportLastSeen, sessionID)
 		}
 	}
 }

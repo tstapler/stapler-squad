@@ -52,12 +52,9 @@ type ExternalApprovalMonitor struct {
 
 // monitoredSession tracks approval monitoring state for one external session.
 type monitoredSession struct {
-	streamer        *ExternalStreamer     // Socket-based streamer (legacy)
 	tmuxStreamer    *ExternalTmuxStreamer // Tmux-based streamer
 	title           string
 	source          ExternalApprovalSource
-	consumer        OutputConsumer       // For socket-based
-	consumerKey     string               // Token for removing socket consumer
 	tmuxConsumer    func(content string) // For tmux-based
 	tmuxConsumerKey string               // Token for removing tmux consumer
 	lastDetect      time.Time
@@ -78,70 +75,11 @@ func (m *ExternalApprovalMonitor) Start() {
 	log.Info("external approval monitor started")
 }
 
-// Stop stops all monitoring.
-func (m *ExternalApprovalMonitor) Stop() {
-	if m.cancel != nil {
-		m.cancel()
-	}
-
-	// Unregister all consumers
-	m.sessionsMu.Lock()
-	for socketPath, session := range m.sessions {
-		if session.streamer != nil && session.consumerKey != "" {
-			session.streamer.RemoveConsumer(session.consumerKey)
-		}
-		if session.tmuxStreamer != nil && session.tmuxConsumerKey != "" {
-			session.tmuxStreamer.RemoveConsumer(session.tmuxConsumerKey)
-		}
-		delete(m.sessions, socketPath)
-	}
-	m.sessionsMu.Unlock()
-
-	log.Info("external approval monitor stopped")
-}
-
 // OnApproval registers a callback for approval events.
 func (m *ExternalApprovalMonitor) OnApproval(callback ExternalApprovalCallback) {
 	m.callbacksMu.Lock()
 	m.callbacks = append(m.callbacks, callback)
 	m.callbacksMu.Unlock()
-}
-
-// MonitorSession starts monitoring an external session for approval requests.
-func (m *ExternalApprovalMonitor) MonitorSession(
-	streamer *ExternalStreamer,
-	title string,
-	source ExternalApprovalSource,
-) error {
-	socketPath := streamer.SocketPath()
-
-	m.sessionsMu.Lock()
-	defer m.sessionsMu.Unlock()
-
-	// Check if already monitoring
-	if _, exists := m.sessions[socketPath]; exists {
-		return nil // Already monitoring
-	}
-
-	// Create monitored session
-	monitored := &monitoredSession{
-		streamer: streamer,
-		title:    title,
-		source:   source,
-		pending:  make([]*detection.ApprovalRequest, 0),
-	}
-
-	// Create consumer that processes output for approvals
-	monitored.consumer = m.createConsumer(socketPath, monitored)
-
-	// Register consumer with streamer; store key for reliable removal
-	monitored.consumerKey = streamer.AddConsumer(monitored.consumer, false)
-
-	m.sessions[socketPath] = monitored
-
-	log.Info("started approval monitoring for external session", "title", title, "source", source)
-
-	return nil
 }
 
 // StopMonitoringSession stops monitoring a specific session.
@@ -150,9 +88,6 @@ func (m *ExternalApprovalMonitor) StopMonitoringSession(socketPath string) {
 	defer m.sessionsMu.Unlock()
 
 	if session, exists := m.sessions[socketPath]; exists {
-		if session.streamer != nil && session.consumerKey != "" {
-			session.streamer.RemoveConsumer(session.consumerKey)
-		}
 		if session.tmuxStreamer != nil && session.tmuxConsumerKey != "" {
 			session.tmuxStreamer.RemoveConsumer(session.tmuxConsumerKey)
 		}
@@ -190,84 +125,6 @@ func (m *ExternalApprovalMonitor) GetAllPendingApprovals() map[string][]*detecti
 	}
 
 	return result
-}
-
-// GetMonitoredSessions returns the socket paths of all monitored sessions.
-func (m *ExternalApprovalMonitor) GetMonitoredSessions() []string {
-	m.sessionsMu.RLock()
-	defer m.sessionsMu.RUnlock()
-
-	paths := make([]string, 0, len(m.sessions))
-	for path := range m.sessions {
-		paths = append(paths, path)
-	}
-	return paths
-}
-
-// createConsumer creates an OutputConsumer that detects approvals in output.
-func (m *ExternalApprovalMonitor) createConsumer(socketPath string, session *monitoredSession) OutputConsumer {
-	// Buffer for accumulating partial lines
-	var buffer []byte
-	var bufferMu sync.Mutex
-
-	return func(data []byte) {
-		bufferMu.Lock()
-		defer bufferMu.Unlock()
-
-		// Add data to buffer
-		buffer = append(buffer, data...)
-
-		// Convert to string and detect
-		output := string(buffer)
-
-		// Only process if we have enough content (avoid partial line issues)
-		// Process when we have a newline or enough content
-		if len(buffer) > 1024 || containsNewline(buffer) {
-			requests := m.detector.Detect(output)
-
-			if len(requests) > 0 {
-				session.lastDetect = time.Now()
-
-				for _, request := range requests {
-					// Track as pending
-					session.pending = append(session.pending, request)
-
-					// Create event
-					event := &ExternalApprovalEvent{
-						Request:      request,
-						SessionID:    socketPath,
-						SessionTitle: session.title,
-						Source:       session.source,
-					}
-
-					// Get metadata if available
-					if meta := session.streamer.GetMetadata(); meta != nil {
-						event.Cwd = meta.Cwd
-						event.Command = meta.Command
-					}
-
-					// Notify callbacks
-					m.notifyCallbacks(event)
-				}
-
-				// Clear buffer after processing
-				buffer = nil
-			} else if len(buffer) > 4096 {
-				// If buffer is getting too large without detections, trim old content
-				buffer = buffer[len(buffer)-2048:]
-			}
-		}
-	}
-}
-
-// containsNewline checks if the buffer contains a newline character.
-func containsNewline(data []byte) bool {
-	for _, b := range data {
-		if b == '\n' {
-			return true
-		}
-	}
-	return false
 }
 
 // notifyCallbacks sends an event to all registered callbacks.
@@ -324,11 +181,6 @@ func (m *ExternalApprovalMonitor) MarkApprovalHandled(socketPath, requestID stri
 	return nil
 }
 
-// GetDetector returns the underlying approval detector for configuration.
-func (m *ExternalApprovalMonitor) GetDetector() *detection.ApprovalDetector {
-	return m.detector
-}
-
 // guessSource attempts to identify the source terminal from metadata.
 func guessSource(sourceTerminal string) ExternalApprovalSource {
 	switch sourceTerminal {
@@ -343,45 +195,6 @@ func guessSource(sourceTerminal string) ExternalApprovalSource {
 	default:
 		return SourceUnknown
 	}
-}
-
-// IntegrateWithDiscovery connects the approval monitor to external session discovery.
-// This auto-monitors new external sessions as they're discovered.
-func (m *ExternalApprovalMonitor) IntegrateWithDiscovery(
-	discovery *ExternalSessionDiscovery,
-	streamerManager *ExternalStreamerManager,
-) {
-	discovery.OnSessionAdded(func(instance *Instance) {
-		if instance.ExternalMetadata == nil || !instance.ExternalMetadata.MuxEnabled {
-			return
-		}
-
-		socketPath := instance.ExternalMetadata.MuxSocketPath
-
-		// Get or create streamer
-		streamer, err := streamerManager.GetOrCreate(socketPath)
-		if err != nil {
-			log.Warn("failed to create streamer for approval monitoring", "err", err)
-			return
-		}
-
-		// Determine source
-		source := guessSource(instance.ExternalMetadata.SourceTerminal)
-
-		// Start monitoring
-		if err := m.MonitorSession(streamer, instance.Title, source); err != nil {
-			log.Warn("failed to start approval monitoring", "title", instance.Title, "err", err)
-		}
-	})
-
-	discovery.OnSessionRemoved(func(instance *Instance) {
-		if instance.ExternalMetadata == nil {
-			return
-		}
-
-		socketPath := instance.ExternalMetadata.MuxSocketPath
-		m.StopMonitoringSession(socketPath)
-	})
 }
 
 // IntegrateWithDiscoveryTmux connects the approval monitor to external session discovery

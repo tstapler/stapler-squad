@@ -2,14 +2,14 @@
 
 import { createClient, ConnectError } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import { TerminalData, TerminalDataSchema, CurrentPaneRequest, CurrentPaneRequestSchema } from "@/gen/session/v1/events_pb";
+import { TerminalData, TerminalDataSchema, CurrentPaneRequest, CurrentPaneRequestSchema, ScrollForwardOutcome, ScrollBlockedReason } from "@/gen/session/v1/events_pb";
 import { create } from "@bufbuild/protobuf";
 import { createWebsocketBasedTransport } from "@/lib/transport/websocket-transport";
 import { createAuthInterceptor } from "@/lib/config";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { BackoffState, connectTimeoutMs, isNonRetriableConnectError, isWorktreeMissingError } from "@/lib/utils/backoff";
 import { MessageQueue } from "@/lib/terminal/MessageQueue";
-import { useTerminalFlowControl } from "./useTerminalFlowControl";
+import { useTerminalFlowControl, type ResizeOptions } from "./useTerminalFlowControl";
 import { useTerminalMetrics } from "./useTerminalMetrics";
 import type { Terminal } from '@xterm/xterm';
 import { ShellStatus } from "@/gen/session/v1/types_pb";
@@ -41,6 +41,8 @@ interface UseTerminalStreamOptions {
   /** Callback invoked when a ShellStatusUpdate is received for this shell. */
   onShellStatusChange?: (status: "running" | "stopped" | "error", exitCode?: number) => void;
   getTerminal?: () => Terminal | null; // Getter function for terminal instance (evaluated at connect time)
+  /** Hidden-session view: no Input or Resize frames are sent (Story 5.3). */
+  readOnly?: boolean;
   scrollbackLines?: number; // Number of lines to request from scrollback
   onError?: (error: Error) => void;
   onScrollbackReceived?: (scrollback: string, metadata?: ScrollbackMetadata) => void; // Callback when scrollback is received
@@ -51,6 +53,31 @@ interface UseTerminalStreamOptions {
    * otherwise.
    */
   onOutput?: (output: string, resyncId?: string) => void;
+  /**
+   * Server-authoritative alt-screen-active hint (events.proto's
+   * TerminalOutput.alt_screen_active) — set only on an initial-connect or
+   * post-resize snapshot, since a capture-pane-derived snapshot can never
+   * itself carry the DECSET 1049h marker the client's own byte-scanning
+   * (TerminalStreamManager.updateAltScreenActive) watches for on live
+   * output. Without this, a client connecting to (or resizing) a session
+   * that entered alt screen before this connection existed never learns it.
+   */
+  onAltScreenActiveHint?: (active: boolean) => void;
+  /**
+   * Story 1.4.1 — callback when an AppScrollbackResponse frame (Epic 1.3's
+   * `Instance.ForwardScroll`) is received. Dispatched from a distinct branch
+   * of this hook's message loop (never through onOutput/onScrollbackReceived)
+   * so a resize resync's onFullSnapshot can't fire for it and vice versa
+   * (research/architecture.md §6, mirrored by TerminalStreamManager's own
+   * handleAppScrollback/onFullSnapshot isolation).
+   */
+  onAppScrollback?: (
+    content: string,
+    outcome: ScrollForwardOutcome,
+    program: string,
+    forwardId: string,
+    blockedReason: ScrollBlockedReason,
+  ) => void;
   /**
    * Shared with useVisibilityResync.ts (Epic 3.1, Task 3.1.2.1) — forwarded
    * to useTerminalFlowControl so both visibility- and resize-triggered
@@ -79,7 +106,9 @@ interface TerminalStreamResult {
   isConnected: boolean;
   error: Error | null;
   sendInput: (input: string) => void;
-  resize: (cols: number, rows: number, force?: boolean) => void;
+  /** True while a chunked paste is in flight (see useTerminalFlowControl). */
+  isInputChunking: () => boolean;
+  resize: (cols: number, rows: number, force?: boolean, opts?: ResizeOptions) => void;
   connect: (cols?: number, rows?: number) => Promise<void>; // Optional dimensions to override initial values
   disconnect: () => Promise<void>;
   scrollbackLoaded: boolean; // Indicates if scrollback has been loaded
@@ -114,12 +143,15 @@ export function useTerminalStream({
   onError,
   onScrollbackReceived,
   onOutput,
+  onAppScrollback,
+  onAltScreenActiveHint,
   autoConnect = true,
   initialCols,
   initialRows,
   onInputDropped,
   foreground = false,
   outstandingResyncIdsRef,
+  readOnly = false,
 }: UseTerminalStreamOptions): TerminalStreamResult {
   // ---- Connection state ----
   const [isConnected, setIsConnected] = useState(false);
@@ -249,6 +281,7 @@ export function useTerminalStream({
     isConnectedRef,
     onError,
     outstandingResyncIdsRef,
+    readOnly,
   });
 
   const metrics = useTerminalMetrics({ onOutput });
@@ -287,6 +320,7 @@ export function useTerminalStream({
     // message-processing loop (started below) can identify itself as "the
     // current attempt" and detect being superseded by a later connect().
     const myGeneration = ++connectionGenerationRef.current;
+    const connectStartedAt = Date.now();
 
     let targetCols = overrideCols ?? initialCols;
     let targetRows = overrideRows ?? initialRows;
@@ -430,6 +464,12 @@ export function useTerminalStream({
                 setConnectionCount(msg.data.value.connectionCount);
               }
 
+              // See onAltScreenActiveHint's doc comment — only ever present
+              // on an initial-connect/post-resize snapshot.
+              if (msg.data.value.altScreenActive !== undefined) {
+                onAltScreenActiveHint?.(msg.data.value.altScreenActive);
+              }
+
               // Handle raw output
               const decodedData = msg.data.value.data;
               if (decodedData.length === 0) {
@@ -486,6 +526,15 @@ export function useTerminalStream({
               }
               // Scrollback response received — return to STABLE
               setTerminalState((prev) => prev === 'FETCHING_SCROLLBACK' ? 'STABLE' : prev);
+            } else if (msg.data.case === "appScrollbackResponse") {
+              // Story 1.4.1 — a captured redraw from Instance.ForwardScroll, sent
+              // instead of scrollbackResponse when AppScrollGate passes. Decoded
+              // and dispatched through its own callback so it can never be
+              // confused with either the raw output or tmux-native scrollback path.
+              const resp = msg.data.value;
+              const text = resp.content.length > 0 ? new TextDecoder().decode(resp.content) : "";
+              onAppScrollback?.(text, resp.outcome, resp.program, resp.forwardId, resp.blockedReason);
+              setTerminalState((prev) => prev === 'FETCHING_SCROLLBACK' ? 'STABLE' : prev);
             } else if (msg.data.case === "error") {
               const err = new Error(msg.data.value.message);
               setError(err);
@@ -534,6 +583,12 @@ export function useTerminalStream({
           }
         } finally {
           if (myGeneration === connectionGenerationRef.current) {
+            // A superseded generation is a deliberate reconnect; reaching here means this stream ended on its own.
+            console.warn(
+              `[stream-disconnect] session=${sessionId} shell=${shellId ?? ""} livedMs=${Date.now() - connectStartedAt} ` +
+              `foreground=${foregroundRef.current} visibility=${document.visibilityState} willReconnect=${shouldReconnectRef.current} ` +
+              `hardFailed=${isHardFailedRef.current} connectTimeoutAbort=${connectTimeoutAbortedRef.current}`,
+            );
             isConnectedRef.current = false; // sync ref before state setter to prevent reconnect guard race
             isConnectingRef.current = false;
             setIsConnected(false);
@@ -601,8 +656,8 @@ export function useTerminalStream({
       handleError(err);
       setIsConnected(false);
     }
-  }, [sessionId, shellId, onShellStatusChange, getTerminal, onError, onScrollbackReceived, onOutput,
-      flowControl, metrics, handleError, initialCols, initialRows, onInputDropped, clearConnectTimeout]);
+  }, [sessionId, shellId, onShellStatusChange, getTerminal, onError, onScrollbackReceived, onOutput, onAppScrollback,
+      onAltScreenActiveHint, flowControl, metrics, handleError, initialCols, initialRows, onInputDropped, clearConnectTimeout]);
 
   // Keep connectRef in sync so visibility/online listeners always call the current closure
   connectRef.current = connect;
@@ -728,6 +783,7 @@ export function useTerminalStream({
     isConnected,
     error,
     sendInput: flowControl.sendInput,
+    isInputChunking: flowControl.isInputChunking,
     resize: flowControl.resize,
     connect,
     disconnect,

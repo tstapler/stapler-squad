@@ -173,16 +173,16 @@ func TestIsDirtyUncached_should_ReuseHeadTreeCache_When_HeadUnchangedAcrossCalls
 
 	_, err := g.IsDirtyUncached()
 	require.NoError(t, err)
-	first, ok := g.headTreeCache.v.Load().(headTreeCacheEntry)
+	first, ok := g.headTreeCache.CachedHashes()
 	require.True(t, ok, "IsDirtyUncached must populate g.headTreeCache, not leave it empty")
-	require.NotNil(t, first.hashes, "cached entry must carry a real hashes map")
+	require.NotNil(t, first, "cached entry must carry a real hashes map")
 
 	_, err = g.IsDirtyUncached()
 	require.NoError(t, err)
-	second, ok := g.headTreeCache.v.Load().(headTreeCacheEntry)
+	second, ok := g.headTreeCache.CachedHashes()
 	require.True(t, ok)
 
-	assert.Equal(t, fmt.Sprintf("%p", first.hashes), fmt.Sprintf("%p", second.hashes),
+	assert.Equal(t, fmt.Sprintf("%p", first), fmt.Sprintf("%p", second),
 		"a second IsDirtyUncached call against an unchanged HEAD must reuse the cached hashes map, not recompute it")
 }
 
@@ -335,6 +335,30 @@ func TestParsePRStatusPayload_CIFailing(t *testing.T) {
 		}
 		if !strings.Contains(status.FeedbackText, "build FAILED") {
 			t.Errorf("FeedbackText missing %q; got %q", "build FAILED", status.FeedbackText)
+		}
+	})
+
+	t.Run("in-flight checks set CIPending, completed success does not", func(t *testing.T) {
+		cases := map[string]struct {
+			rollup  string
+			pending bool
+		}{
+			"in progress":      {`[{"name":"build","status":"IN_PROGRESS"}]`, true},
+			"queued":           {`[{"name":"build","status":"QUEUED"}]`, true},
+			"legacy pending":   {`[{"context":"ci/x","state":"PENDING"}]`, true},
+			"mixed":            {`[{"name":"a","status":"COMPLETED","conclusion":"SUCCESS"},{"name":"b","status":"IN_PROGRESS"}]`, true},
+			"completed":        {`[{"name":"a","status":"COMPLETED","conclusion":"SUCCESS"}]`, false},
+			"no CI configured": {`[]`, false},
+		}
+		for name, tc := range cases {
+			raw := []byte(`{"statusCheckRollup":` + tc.rollup + `,"reviews":[],"comments":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
+			status, err := parsePRStatusPayload(raw)
+			if err != nil {
+				t.Fatalf("%s: parsePRStatusPayload() error = %v", name, err)
+			}
+			if status.CIPending != tc.pending || status.CIFailing {
+				t.Errorf("%s: CIPending=%v CIFailing=%v; want CIPending=%v CIFailing=false", name, status.CIPending, status.CIFailing, tc.pending)
+			}
 		}
 	})
 
@@ -822,7 +846,7 @@ var _ tmux.CommandRunner = (*gitSpyCommandRunner)(nil)
 // NewGitWorktreeFromStorageWithExecutor with WithCommandRunner(spy), calls
 // PushBranch() (a call site with no cmdExec dependency at all -- see
 // worktree_git.go), and asserts the spy -- not tmux.LocalRunner -- actually
-// received the "git push -u origin <branch>" call, scoped to the worktree
+// received the "git push --set-upstream origin <branch>" call, scoped to the worktree
 // path. Proves injection is wired all the way through to a real call site,
 // not just stored on the struct.
 func TestWithCommandRunner_InjectedRunnerIsActuallyUsed(t *testing.T) {
@@ -843,46 +867,7 @@ func TestWithCommandRunner_InjectedRunnerIsActuallyUsed(t *testing.T) {
 		t.Fatalf("spy.Run call count = %d, want 1 (PushBranch should route through the injected CommandRunner)", len(spy.runCalls))
 	}
 	call := spy.runCalls[0]
-	wantArgs := []string{"push", "-u", "origin", "test-branch"}
-	if call.dir != "/fake/worktree" || call.name != "git" || len(call.args) != len(wantArgs) {
-		t.Fatalf("spy.Run call = %+v, want {dir: \"/fake/worktree\", name: \"git\", args: %v}", call, wantArgs)
-	}
-	for i, arg := range wantArgs {
-		if call.args[i] != arg {
-			t.Errorf("spy.Run args[%d] = %q, want %q", i, call.args[i], arg)
-		}
-	}
-}
-
-// TestRunGitCommand_UsesInjectedCommandRunner is the positive proof required
-// by the FIX-FIRST re-review: runGitCommand (session/git/worktree_git.go),
-// the sole remaining call site with a g.cmdExec-gated branch before this fix,
-// now routes through g.commandRunner() unconditionally, for real. runGitCommand
-// still backs RenameBranch and every worktree_ops.go worktree
-// add/remove/prune/list call (stageAndCommit, StageAllExceptScaffolding,
-// HasStagedChanges, and IsDirtyWithHint have since moved onto go-git directly —
-// see worktree_git.go), so this is the seam Phase 2's RemoteWorktreeOps depends
-// on actually being live.
-func TestRunGitCommand_UsesInjectedCommandRunner(t *testing.T) {
-	spy := &gitSpyCommandRunner{runOut: []byte("output\n")}
-	g := NewGitWorktreeFromStorageWithExecutor(
-		"/fake/repo", "/fake/worktree", "test-session", "test-branch", "",
-		WithCommandRunner(spy),
-	)
-
-	out, err := g.runGitCommand("/fake/worktree", "status", "--porcelain")
-	if err != nil {
-		t.Fatalf("runGitCommand returned error: %v", err)
-	}
-	if out != "output\n" {
-		t.Errorf("runGitCommand output = %q, want %q", out, "output\n")
-	}
-
-	if len(spy.runCalls) != 1 {
-		t.Fatalf("spy.Run call count = %d, want 1 (runGitCommand should route through the injected CommandRunner unconditionally)", len(spy.runCalls))
-	}
-	call := spy.runCalls[0]
-	wantArgs := []string{"status", "--porcelain"}
+	wantArgs := []string{"push", "--set-upstream", "origin", "test-branch"}
 	if call.dir != "/fake/worktree" || call.name != "git" || len(call.args) != len(wantArgs) {
 		t.Fatalf("spy.Run call = %+v, want {dir: \"/fake/worktree\", name: \"git\", args: %v}", call, wantArgs)
 	}
@@ -952,5 +937,46 @@ func TestRunGHCommand_NilInstruments_DoesNotPanic(t *testing.T) {
 	}
 	if string(out) != "ok\n" {
 		t.Errorf("runGHCommand output = %q, want %q", out, "ok\n")
+	}
+}
+
+func TestExtractActionsRunID(t *testing.T) {
+	tests := []struct {
+		url  string
+		want int64
+	}{
+		{"https://github.com/o/r/actions/runs/38730353308/jobs/1", 38730353308},
+		{"https://github.com/o/r/actions/runs/1/jobs/2", 1},
+		{"https://github.com/o/r/actions/runs/7", 7},
+		{"https://circleci.com/workflow-run/xxx", 0},
+		{"", 0},
+		{"https://github.com/o/r/actions/runs/notanumber/jobs/1", 0},
+	}
+	for _, tc := range tests {
+		if got := extractActionsRunID(tc.url); got != tc.want {
+			t.Errorf("extractActionsRunID(%q) = %d, want %d", tc.url, got, tc.want)
+		}
+	}
+}
+
+func TestParsePRStatusPayload_FailedRunIDs(t *testing.T) {
+	raw := []byte(`{"statusCheckRollup":[
+		{"name":"a","conclusion":"FAILURE","detailsUrl":"https://github.com/o/r/actions/runs/11/jobs/1"},
+		{"name":"b","conclusion":"FAILURE","detailsUrl":"https://github.com/o/r/actions/runs/11/jobs/2"},
+		{"name":"c","conclusion":"SUCCESS","detailsUrl":"https://github.com/o/r/actions/runs/12/jobs/3"}
+	],"reviews":[],"comments":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
+	s, err := parsePRStatusPayload(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, all := s.FailedRunIDs()
+	if len(ids) != 1 || ids[0] != 11 || !all {
+		t.Fatalf("got ids=%v all=%v", ids, all)
+	}
+
+	raw = []byte(`{"statusCheckRollup":[{"context":"ci/x","state":"FAILURE","targetUrl":"https://circleci.com/x"}],"reviews":[],"comments":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
+	s, _ = parsePRStatusPayload(raw)
+	if _, all := s.FailedRunIDs(); all {
+		t.Fatal("non-Actions failure must report allActions=false")
 	}
 }

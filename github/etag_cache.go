@@ -49,8 +49,12 @@ func NewETagCache() *ETagCache {
 	return &ETagCache{}
 }
 
-func (c *ETagCache) cacheKey(owner, repo string, prNumber int) string {
-	return fmt.Sprintf("%s/%s/%d", owner, repo, prNumber)
+func (c *ETagCache) cacheKey(ref RepoRef, prNumber int) string {
+	host := ref.Host()
+	if host == "" {
+		host = "github.com"
+	}
+	return fmt.Sprintf("%s/%s/%s/%d", host, ref.Owner(), ref.Repo(), prNumber)
 }
 
 func (c *ETagCache) get(key string) (etagEntry, bool) {
@@ -85,12 +89,12 @@ func (c *ETagCache) sweepExpired(now time.Time) int {
 	return removed
 }
 
-// Invalidate drops the cached entry for (owner, repo, prNumber), safe to call
+// Invalidate drops the cached entry for (ref, prNumber), safe to call
 // concurrently with get/set. The next GetPRInfoConditional call for that key
 // omits If-None-Match, forcing a fresh, unconditional 200 fetch instead of a
 // stale 304.
-func (c *ETagCache) Invalidate(owner, repo string, prNumber int) {
-	c.store.Delete(c.cacheKey(owner, repo, prNumber))
+func (c *ETagCache) Invalidate(ref RepoRef, prNumber int) {
+	c.store.Delete(c.cacheKey(ref, prNumber))
 }
 
 // GetPRInfoConditional fetches PR info using ETag conditional requests.
@@ -99,20 +103,21 @@ func (c *ETagCache) Invalidate(owner, repo string, prNumber int) {
 //   - changed=false means 304 Not Modified; info contains the cached value.
 //   - changed=true means 200 OK; info contains freshly fetched data.
 //   - Both info and changed may be zero values when an error is returned.
-func GetPRInfoConditional(ctx context.Context, owner, repo string, prNumber int, cache *ETagCache) (*PRInfo, bool, error) {
+func GetPRInfoConditional(ctx context.Context, ref RepoRef, prNumber int, cache *ETagCache) (*PRInfo, bool, error) {
 	ctx = WithGitHubCallSite(ctx, "pr.view.conditional")
 
-	if getGHToken(ctx) == "" {
+	owner, repo, host := ref.Owner(), ref.Repo(), ref.Host()
+	if getGHTokenForAccount(ctx, AccountRef{Host: host}) == "" {
 		return nil, false, ErrNotAuthenticated
 	}
 
-	key := cache.cacheKey(owner, repo, prNumber)
+	key := cache.cacheKey(ref, prNumber)
 
 	entry, hasCached := cache.get(key)
 
 	apiPath := fmt.Sprintf("repos/%s/%s/pulls/%d",
 		url.PathEscape(owner), url.PathEscape(repo), prNumber)
-	req, err := newGHRequest(ctx, apiPath)
+	req, err := newGHRequestForHost(ctx, host, apiPath)
 	if err != nil {
 		return nil, false, fmt.Errorf("build conditional PR request: %w", err)
 	}
@@ -157,7 +162,7 @@ func GetPRInfoConditional(ctx context.Context, owner, repo string, prNumber int,
 		// Drain body so the connection can be reused.
 		_, _ = io.Copy(io.Discard, resp.Body)
 		// Fall back to a full fetch.
-		info, fetchErr := GetPRInfoCtx(ctx, owner, repo, prNumber)
+		info, fetchErr := GetPRInfoCtx(ctx, ref, prNumber)
 		if fetchErr != nil {
 			return nil, false, fetchErr
 		}
@@ -170,7 +175,7 @@ func GetPRInfoConditional(ctx context.Context, owner, repo string, prNumber int,
 	newEtag := resp.Header.Get("ETag")
 
 	// PR changed — fetch full review/CI data (requires gh CLI for reviews+statusCheckRollup).
-	newInfo, err := GetPRInfoCtx(ctx, owner, repo, prNumber)
+	newInfo, err := GetPRInfoCtx(ctx, ref, prNumber)
 	if err != nil {
 		return nil, false, err
 	}

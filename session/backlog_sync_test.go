@@ -1,14 +1,18 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+
+	ssqlog "github.com/tstapler/stapler-squad/log"
 )
 
 // fakeSyncPlugin lets tests control exactly what Fetch returns and inspect the
@@ -1252,14 +1256,18 @@ func TestSyncOne_BackwardSync_GenuinelyNewerExternalCloseIsProcessed(t *testing.
 // determineBackwardSyncTarget-returns-false branch, a different code path.
 type alwaysDenyWorkflowEngine struct{}
 
-func (alwaysDenyWorkflowEngine) CanTransition(from, to BacklogStatus) bool { return false }
-func (alwaysDenyWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus) ([]GateStatus, error) {
+func (alwaysDenyWorkflowEngine) CanTransition(from, to BacklogStatus, _ *StageConfigSnapshot) bool {
+	return false
+}
+func (alwaysDenyWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, _ *StageConfigSnapshot) ([]GateStatus, error) {
 	return nil, nil
 }
-func (alwaysDenyWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus) error {
+func (alwaysDenyWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus, _ *StageConfigSnapshot) error {
 	return nil
 }
-func (alwaysDenyWorkflowEngine) AllowedTransitions(from BacklogStatus) []BacklogStatus { return nil }
+func (alwaysDenyWorkflowEngine) AllowedTransitions(from BacklogStatus, _ *StageConfigSnapshot) []BacklogStatus {
+	return nil
+}
 
 // TestSyncOne_BackwardSync_GuardDeniedTransitionIsSkippedNotApplied is the
 // regression test for the GuardedTransitionAllowed-returns-false branch
@@ -1407,4 +1415,71 @@ func TestSyncOne_BackwardSync_ClosedIssueTransitionCountsAsUpdatedOnce(t *testin
 	require.Equal(t, 0, events[0].ItemsSkipped, "the archived item must not ALSO be counted as skipped")
 	require.Equal(t, 0, events[0].ItemsErrored)
 	require.Equal(t, 1, events[0].ItemsCreated+events[0].ItemsUpdated+events[0].ItemsSkipped+events[0].ItemsErrored, "aggregate counts must partition the single synced item exactly once")
+}
+
+type fakeForeignClaims map[string]ClaimRecord
+
+func (f fakeForeignClaims) ForeignClaim(url string) (ClaimRecord, bool) {
+	r, ok := f[url]
+	return r, ok
+}
+
+func TestSyncOne_should_SkipCreateBacklogItemAndLogBlockedByClaim_When_LocalClaimIndexShowsDifferentHostForFetchedItemURL(t *testing.T) {
+	plugin := &fakeSyncPlugin{
+		id: "fake",
+		items: []ExternalItem{
+			{ExternalID: "ext-claimed", Title: "Claimed elsewhere", URL: "https://github.com/o/r/issues/1"},
+			{ExternalID: "ext-free", Title: "Free", URL: "https://github.com/o/r/issues/2"},
+		},
+		newCursor: "c",
+	}
+	storage, cleanup, sl, sourceID := newTestSyncSetup(t, plugin)
+	defer cleanup()
+
+	hostA := newTestIdentity(t)
+	storage.SetForeignClaimLookup(fakeForeignClaims{
+		"https://github.com/o/r/issues/1": NewSignedClaimRecord(hostA, "https://github.com/o/r/issues/1", "ssq://hostA/x", time.Now()),
+	})
+
+	var buf bytes.Buffer
+	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(prev) })
+
+	ctx := context.Background()
+	src, err := storage.repo.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+	require.NoError(t, sl.SyncOne(ctx, src))
+
+	_, err = storage.repo.GetBacklogItemByExternalID(ctx, sourceID, "ext-claimed")
+	require.ErrorIs(t, err, ErrNotFound, "claimed-elsewhere item must not be created")
+	_, err = storage.repo.GetBacklogItemByExternalID(ctx, sourceID, "ext-free")
+	require.NoError(t, err)
+
+	logs := buf.String()
+	require.Contains(t, logs, "sync.blocked_by_claim")
+	require.Contains(t, logs, hostA.ID.String())
+	require.Contains(t, logs, "ext-claimed")
+
+	events, _, err := storage.repo.ListSourceSyncEvents(ctx, sourceID)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.Equal(t, 1, events[0].ItemsCreated)
+	require.Equal(t, 1, events[0].ItemsSkipped)
+}
+
+func TestSyncOne_should_CreateItem_When_NoForeignClaimLookupWired(t *testing.T) {
+	plugin := &fakeSyncPlugin{
+		id:        "fake",
+		items:     []ExternalItem{{ExternalID: "ext-1", Title: "One", URL: "https://github.com/o/r/issues/1"}},
+		newCursor: "c",
+	}
+	storage, cleanup, sl, sourceID := newTestSyncSetup(t, plugin)
+	defer cleanup()
+
+	ctx := context.Background()
+	src, err := storage.repo.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+	require.NoError(t, sl.SyncOne(ctx, src))
+	_, err = storage.repo.GetBacklogItemByExternalID(ctx, sourceID, "ext-1")
+	require.NoError(t, err)
 }

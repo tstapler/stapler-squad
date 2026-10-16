@@ -20,6 +20,7 @@ export interface CockpitActions {
   onForkFromCheckpoint: (sessionId: string, checkpointId: string, newTitle: string) => Promise<Session | null>;
   onSetRateLimitEnabled: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode: (sessionId: string, enabled: boolean) => void;
+  onTogglePinned: (sessionId: string, pinned: boolean) => void;
   onToggleAutoApprove: (sessionId: string, enabled: boolean) => void;
   onSteerAutonomousSession: (sessionId: string, message: string) => Promise<boolean> | void;
   onClearConversationState: (sessionId: string) => Promise<boolean>;

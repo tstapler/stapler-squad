@@ -165,3 +165,16 @@ export const group = style({
   flexDirection: "column",
   gap: vars.space["3"],
 });
+
+export const notice = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: vars.space["3"],
+  padding: `${vars.space["2"]} ${vars.space["3"]}`,
+  marginBottom: vars.space["3"],
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: "6px",
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textPrimary,
+});

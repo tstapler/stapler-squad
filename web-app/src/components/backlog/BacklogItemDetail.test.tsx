@@ -26,6 +26,13 @@ import { BacklogItemShipStatusSchema, StuckReason, type StuckBacklogItem } from 
 // focused on BacklogItemDetail's own render behavior.
 jest.mock("./SessionMonitor", () => ({ SessionMonitor: () => null }));
 jest.mock("./GateVerdictBox", () => ({ GateVerdictBox: () => null }));
+// Off by default; the action-reachability tests flip it so the real gate
+// section's position relative to ActionsSection can be asserted.
+let mockShowGateSection = false;
+jest.mock("./GateBlockingSection", () => ({
+  GateBlockingSection: () =>
+    mockShowGateSection ? <div data-testid="gate-blocking-section" /> : null,
+}));
 // Stubbed to a minimal interactive shim (rather than plain `() => null`) so
 // Task 1.1.2c's wiring test can exercise the real onAnswerQuestion prop
 // BacklogItemDetail passes down, without standing up the full real
@@ -79,6 +86,13 @@ jest.mock("@/lib/hooks/useBacklogItemShipStatus", () => ({
 const useStuckBacklogItemsMock = jest.fn();
 jest.mock("@/lib/hooks/useStuckBacklogItems", () => ({
   useStuckBacklogItems: (...args: unknown[]) => useStuckBacklogItemsMock(...args),
+}));
+
+// Story 5.2.3: BacklogItemDetail's own Insights fetch for ItemStageCostTable
+// — stub so this suite never opens a real WatchInsights transport.
+const useInsightsSummaryMock = jest.fn();
+jest.mock("@/lib/hooks/useInsightsService", () => ({
+  useInsightsSummary: (...args: unknown[]) => useInsightsSummaryMock(...args),
 }));
 
 // The edit-mode branch renders BacklogItemForm -> RepoPathInput, which uses
@@ -197,6 +211,7 @@ jest.mock("@connectrpc/connect-web", () => ({
   createConnectTransport: jest.fn().mockReturnValue({}),
 }));
 
+
 // The jest styleMock for `.css.ts` files wraps every export (including plain
 // `style()` string exports) in a callable proxy function, which triggers a
 // benign "Invalid value for prop className" React warning. Pre-existing
@@ -217,6 +232,13 @@ beforeEach(() => {
   mockTerminalStreamEvents = [];
   updateBacklogItem.mockClear().mockResolvedValue(null);
   useStuckBacklogItemsMock.mockReturnValue({ items: [], isLoading: false, error: null });
+  useInsightsSummaryMock.mockReturnValue({
+    summary: { roleBreakdown: [] },
+    loading: false,
+    isLiveUpdating: false,
+    error: null,
+    refetch: jest.fn(),
+  });
   overrideVerdict.mockReset();
   triggerTriage.mockClear().mockResolvedValue(undefined);
   rejectPlan.mockReset().mockResolvedValue(null);
@@ -289,6 +311,7 @@ function makeItem(linkedSessions: LinkedSession[]): BacklogItem {
     skipReviewGate: false,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     planApproved: false,
     acCriteria: [],
     linkedSessions,
@@ -1402,6 +1425,83 @@ describe("BacklogItemDetail — Story 3.1.5: auto-expand-on-status-change, first
   });
 });
 
+describe("BacklogItemDetail — PR visibility and action reachability", () => {
+  async function renderItem(overrides: Partial<BacklogItem>) {
+    useVcsStatusMock.mockReturnValue({
+      data: create(VCSStatusSchema, { branch: "feat/x", isClean: true }),
+      loading: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+    getBacklogItem.mockReset().mockResolvedValue({ ...makeItem([]), ...overrides });
+    listPipelineModes.mockReset().mockResolvedValue([]);
+    const utils = render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    return utils;
+  }
+  const PR = { prUrl: "https://github.com/x/y/pull/42", prNumber: 42 };
+
+  it("BacklogItemDetail_should_AutoExpandVersionControlSection_When_StatusIsDoneAndPrUrlIsSet", async () => {
+    await renderItem({ status: "done", ...PR });
+    expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("BacklogItemDetail_should_NotAutoExpandVersionControlSection_When_StatusIsDoneAndPrUrlIsUndefined", async () => {
+    await renderItem({ status: "done", prUrl: undefined });
+    expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("BacklogItemDetail_should_KeepVersionControlCollapsed_When_UserCollapsedItBeforeReopeningWithPrUrl", async () => {
+    const first = await renderItem({ status: "done", ...PR });
+    fireEvent.click(screen.getByTestId("collapsible-header-version-control"));
+    expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "false");
+    first.unmount();
+
+    await renderItem({ status: "done", ...PR });
+    expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("BacklogItemDetail_should_AutoExpandVersionControlSection_When_StatusIsArchivedAndPrUrlIsSet", async () => {
+    await renderItem({ status: "archived", ...PR });
+    expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "true");
+  });
+
+  describe("ordering", () => {
+    afterEach(() => {
+      mockShowGateSection = false;
+    });
+
+    const follows = (a: HTMLElement, b: HTMLElement) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+    it("BacklogItemDetail_should_RenderActionsSectionBeforeGateBlockingSection_When_FullDetailRenders", async () => {
+      mockShowGateSection = true;
+      await renderItem({ status: "idea" });
+      const actions = screen.getByTestId("backlog-action-trigger-triage");
+      expect(follows(actions, screen.getByTestId("gate-blocking-section"))).toBe(true);
+      expect(follows(actions, screen.getByText(/^Acceptance Criteria/))).toBe(true);
+    });
+
+    it("BacklogItemDetail_should_RenderPlanDecisionControlsBeforeGateSection_When_PlanIsPendingReview", async () => {
+      mockShowGateSection = true;
+      await renderItem({
+        status: "ready",
+        planApproved: false,
+        planArtifactsPath: "/tmp/plans/item-1.md",
+      });
+      const reject = screen.getByTestId("backlog-action-reject-plan");
+      const approve = screen.getByTestId("backlog-action-approve-plan");
+      expect(follows(reject, approve)).toBe(true);
+      expect(follows(approve, screen.getByTestId("gate-blocking-section"))).toBe(true);
+      expect(follows(approve, screen.getByText(/^Acceptance Criteria/))).toBe(true);
+    });
+  });
+});
+
 describe("BacklogItemDetail — regression: Collapsible's defaultExpanded-in-group dev warning", () => {
   it("BacklogItemDetail_should_NotWarn_When_AllGroupedSectionsRenderWithTheirOwnDefaultExpanded", async () => {
     // 1d8b6cd1 added a dev-mode console.warn in Collapsible.tsx for any
@@ -1749,5 +1849,68 @@ describe("BacklogItemDetail — Copy ID/Copy Link (backlog-deep-linking Story 2.
       expect(copyLinkButton).toHaveAttribute("aria-label", "Copied link to clipboard");
     });
     expect(screen.getByTestId("copy-status-announcement")).toHaveTextContent("Link copied to clipboard");
+  });
+});
+
+describe("BacklogItemDetail — Story 5.2.3: per-item cost-by-stage table", () => {
+  it("BacklogItemDetail_should_RenderItemStageCostTable_When_RoleBreakdownHasMatchingItemEntries", async () => {
+    useInsightsSummaryMock.mockReturnValue({
+      summary: {
+        roleBreakdown: [
+          {
+            sessionRole: "triage",
+            items: [{ itemId: "item-1", itemTitle: "Refactor auth middleware", estimatedCostUsd: 0.02, sessionCount: 3, unpricedSessionCount: 0 }],
+          },
+          {
+            sessionRole: "review",
+            items: [{ itemId: "item-1", itemTitle: "Refactor auth middleware", estimatedCostUsd: 0.15, sessionCount: 1, unpricedSessionCount: 0 }],
+          },
+          {
+            sessionRole: "work",
+            items: [{ itemId: "item-2", itemTitle: "Some other item", estimatedCostUsd: 9.0, sessionCount: 1, unpricedSessionCount: 0 }],
+          },
+        ],
+      },
+      loading: false,
+      isLiveUpdating: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+
+    await renderWithSession(makeSession(), []);
+
+    const costTable = screen.getByTestId("item-stage-cost-table");
+    expect(within(costTable).getByText("Triage")).toBeInTheDocument();
+    expect(within(costTable).getByText("Review")).toBeInTheDocument();
+    expect(within(costTable).queryByText("Work")).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_OmitItemStageCostTable_When_NoMatchingRoleBreakdownEntries", async () => {
+    useInsightsSummaryMock.mockReturnValue({
+      summary: { roleBreakdown: [] },
+      loading: false,
+      isLiveUpdating: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+
+    await renderWithSession(makeSession(), []);
+
+    expect(screen.queryByTestId("item-stage-cost-table")).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_ShowErrorState_When_InsightsFetchFails", async () => {
+    useInsightsSummaryMock.mockReturnValue({
+      summary: null,
+      loading: false,
+      isLiveUpdating: false,
+      error: "network error",
+      refetch: jest.fn(),
+    });
+
+    await renderWithSession(makeSession(), []);
+
+    expect(screen.getByTestId("item-stage-cost-error")).toHaveTextContent("Couldn't load cost data.");
+    expect(screen.queryByTestId("item-stage-cost-table")).not.toBeInTheDocument();
   });
 });

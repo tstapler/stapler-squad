@@ -15,9 +15,11 @@ func (EscapeEvent) Fields() []ent.Field {
 	return []ent.Field{
 		field.String("id").Unique().NotEmpty().Immutable(),
 		field.String("session_id").NotEmpty(),
+		field.String("project_path").Optional(),
 		field.String("stage").NotEmpty(),
 		field.String("sequence_type").NotEmpty(),
 		field.String("sequence_subtype").Optional(),
+		field.String("sequence_signature").Optional(),
 		field.Int("byte_length"),
 		field.String("payload_hash").Optional(),
 		field.Bytes("raw_bytes").Optional(),
@@ -33,8 +35,13 @@ func (EscapeEvent) Indexes() []ent.Index {
 		index.Fields("session_id"),
 		index.Fields("session_id", "stage"),
 		index.Fields("session_id", "session_seq"),
+		// Serves deleteOldestRows' per-session "oldest N by wall_time": without it
+		// SQLite reads and temp-sorts every row of the session (up to the 10,000-row cap)
+		// on each flush of a capped session.
+		index.Fields("session_id", "wall_time"),
 		index.Fields("wall_time"),
 		index.Fields("mangled"),
 		index.Fields("sequence_type"),
+		index.Fields("project_path"),
 	}
 }

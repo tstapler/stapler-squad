@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/notifications"
@@ -64,7 +63,7 @@ func newRulesServiceWithAI(t *testing.T, aiClient AIClient) *RulesService {
 	analyticsStore.Start(context.Background())
 	t.Cleanup(analyticsStore.Stop)
 	c := classifier.NewRuleBasedClassifier()
-	return NewRulesService(rulesStore, nil, analyticsStore, c, &DefaultRulePromptBuilder{}, aiClient)
+	return withoutAntigravityExport(NewRulesService(rulesStore, nil, analyticsStore, c, &DefaultRulePromptBuilder{}, aiClient))
 }
 
 // fixture2ElementJSON is a valid 2-element JSON array matching the AI response format.
@@ -138,7 +137,7 @@ func TestGenerateSuggestedRule_NilAIClient_ReturnsUnimplemented(t *testing.T) {
 	require.NoError(t, err)
 	analyticsStore := NewAnalyticsStore(storage)
 	c := classifier.NewRuleBasedClassifier()
-	svc := NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil) // nil AI
+	svc := withoutAntigravityExport(NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil)) // nil AI
 
 	_, err = svc.GenerateSuggestedRule(context.Background(), connect.NewRequest(&sessionv1.GenerateSuggestedRuleRequest{
 		Source: sessionv1.SuggestionSource_SUGGESTION_SOURCE_ANALYTICS_GAPS,
@@ -194,7 +193,7 @@ func TestBuildPromptContext_IncludesRulesAndGaps(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond, "analytics entries must be persisted within 2s")
 
 	c := classifier.NewRuleBasedClassifier()
-	svc := NewRulesService(rulesStore, nil, analyticsStore, c, &DefaultRulePromptBuilder{}, &mockAIClient{response: "[]"})
+	svc := withoutAntigravityExport(NewRulesService(rulesStore, nil, analyticsStore, c, &DefaultRulePromptBuilder{}, &mockAIClient{response: "[]"}))
 
 	req := &sessionv1.GenerateSuggestedRuleRequest{
 		Source: sessionv1.SuggestionSource_SUGGESTION_SOURCE_ANALYTICS_GAPS,
@@ -403,7 +402,7 @@ func TestAttachConflictInfo_SeedRuleAtHigherPriority_ShadowsSuggestion(t *testin
 
 	analyticsStore := NewAnalyticsStore(storage)
 	c := classifier.NewRuleBasedClassifier()
-	svc := NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil)
+	svc := withoutAntigravityExport(NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil))
 
 	suggestion := &sessionv1.SuggestedRuleProto{
 		ToolName:       "Bash",
@@ -442,7 +441,7 @@ func newRulesServiceForCoverage(t *testing.T, specs []RuleSpec) *RulesService {
 	}
 	analyticsStore := NewAnalyticsStore(storage)
 	c := classifier.NewRuleBasedClassifier()
-	return NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil)
+	return withoutAntigravityExport(NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil))
 }
 
 // testProg is an arbitrary program name that has no seed rules, so seed-rule
@@ -659,7 +658,7 @@ func newSimpleRulesService(t *testing.T) *RulesService {
 	analyticsStore.Start(context.Background())
 	t.Cleanup(analyticsStore.Stop)
 	c := classifier.NewRuleBasedClassifier()
-	return NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil)
+	return withoutAntigravityExport(NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil))
 }
 
 const validYAML3Rules = `rules:
@@ -1629,7 +1628,7 @@ func TestReloadClaudeSettingsRules_WatcherNotConfigured_ReturnsUnimplemented(t *
 func TestReloadClaudeSettingsRules_ValidSettings_ReturnsSuccessAndRuleCount(t *testing.T) {
 	svc := newSimpleRulesService(t)
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	withFakeHomePath(t, home)
 	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
 		`{"permissions":{"allow":["Bash(git *)","Bash(npm test*)"]}}`)
 	svc.SetClaudeSettingsWatcher(NewClaudeSettingsWatcher("", func(rules []classifier.Rule, origin string, notify bool) {
@@ -1647,7 +1646,7 @@ func TestReloadClaudeSettingsRules_ValidSettings_ReturnsSuccessAndRuleCount(t *t
 func TestReloadClaudeSettingsRules_MalformedPath_ReturnsFailureWithLastKnownGoodCount(t *testing.T) {
 	svc := newSimpleRulesService(t)
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	withFakeHomePath(t, home)
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	writeSettingsFile(t, settingsPath, `{"permissions":{"allow":["Bash(git *)"]}}`)
 	svc.SetClaudeSettingsWatcher(NewClaudeSettingsWatcher("", func(rules []classifier.Rule, origin string, notify bool) {
@@ -1761,8 +1760,8 @@ func TestRebuildMu_ForcesSerialization_ConcurrentPathBlocksUntilFirstCompletes(t
 	go func() {
 		defer close(aDone)
 		svc.rebuildClaudeSettingsRules([]classifier.Rule{{
-			ID: "cs-a", ToolName: "Read", Decision: classifier.AutoAllow, Enabled: true,
-			Source: "claude-settings", Priority: 150,
+			RuleMeta: classifier.RuleMeta{ID: "cs-a", Enabled: true, Source: "claude-settings", Priority: 150},
+			ToolName: "Read", Decision: classifier.AutoAllow,
 		}})
 	}()
 	<-hookEntered // A is now paused mid-critical-section, holding rebuildMu.
@@ -1890,8 +1889,8 @@ func bashApproval(id, sessionID, command string, createdAt time.Time) *PendingAp
 // RPC path (upsertAllowRule below).
 func addBashRuleDirect(svc *RulesService, id, name, commandPattern string) {
 	rule := classifier.Rule{
-		ID: id, Name: name, ToolName: "Bash",
-		Decision: classifier.AutoAllow, Enabled: true, Source: "user", Priority: 999,
+		RuleMeta: classifier.RuleMeta{ID: id, Name: name, Enabled: true, Source: "user", Priority: 999},
+		ToolName: "Bash", Decision: classifier.AutoAllow,
 	}
 	if commandPattern != "" {
 		rule.CommandPattern = regexp.MustCompile(commandPattern)
@@ -2239,7 +2238,7 @@ func TestReconcilePendingApprovals_PanicIsRecovered(t *testing.T) {
 // declined_by_ci_guard_count, never lost_to_concurrent_pass_count, and must leave the item
 // pending.
 func TestReconcilePendingApprovals_CIRedGuardDecline_LoggedAndCountedSeparately(t *testing.T) {
-	envtest.NewIsolatedStateDir(t)
+	withIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
 	store := NewApprovalStore("")
@@ -2317,17 +2316,18 @@ func TestReconcilePendingApprovals_WorktreeSettingsChange_DoesNotTrigger(t *test
 	// there is no async reconciliation to wait for: if none of the production call sites
 	// that spawn reconcilePendingApprovalsSafe ran, nothing ever will.
 	rulesSvc.classifier.ReplaceRules(append(rulesSvc.classifier.Rules(), classifier.Rule{
-		ID:             "worktree-rule",
-		Name:           "Auto-allow safe git status checks",
+		RuleMeta:       classifier.RuleMeta{ID: "worktree-rule", Name: "Auto-allow safe git status checks", Enabled: true, Source: "user", Priority: 999},
 		ToolName:       "Bash",
 		CommandPattern: regexp.MustCompile("^git status$"),
 		Decision:       classifier.AutoAllow,
-		Enabled:        true,
-		Source:         "user",
-		Priority:       999,
 	}))
 
 	all := store.ListAll()
 	require.Len(t, all, 1, "item must still be pending — reconciliation must never have run for a worktree-scoped settings change")
 	assert.Equal(t, "appr-worktree", all[0].ID)
+}
+
+func withoutAntigravityExport(rs *RulesService) *RulesService {
+	rs.exportAntigravity = nil
+	return rs
 }

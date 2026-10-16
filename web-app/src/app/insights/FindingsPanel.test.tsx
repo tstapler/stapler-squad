@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { create, type MessageInitShape } from "@bufbuild/protobuf";
 import {
@@ -10,6 +10,12 @@ import {
 } from "@/gen/session/v1/insights_pb";
 import { FindingsPanel } from "./FindingsPanel";
 
+const mockDismissFinding = jest.fn().mockResolvedValue(undefined);
+
+jest.mock("@/lib/hooks/useInsightsService", () => ({
+  useDismissFinding: () => ({ dismissFinding: mockDismissFinding }),
+}));
+
 function makeFinding(overrides: MessageInitShape<typeof WasteFindingSchema> = {}) {
   return create(WasteFindingSchema, {
     findingType: FindingType.CACHE_HIT_FLOOR_BREACH,
@@ -17,6 +23,7 @@ function makeFinding(overrides: MessageInitShape<typeof WasteFindingSchema> = {}
     dollarImpactUsd: 4.2,
     sessionId: "session-1",
     conversationId: "conv-1",
+    findingId: "finding-1",
     message: "Cache hit rate 9% is below the 40% floor over 6 turns — an estimated $4.20 in avoidable input-token cost.",
     ...overrides,
   });
@@ -30,6 +37,11 @@ function makeSession(overrides: MessageInitShape<typeof SessionTokenSummarySchem
     ...overrides,
   });
 }
+
+beforeEach(() => {
+  mockDismissFinding.mockClear();
+  mockDismissFinding.mockResolvedValue(undefined);
+});
 
 describe("FindingsPanel", () => {
   it("FindingsPanel_should_showSkeleton_when_loading", () => {
@@ -161,5 +173,97 @@ describe("FindingsPanel", () => {
     const unpricedText = screen.getByText(/could not be evaluated/i).textContent;
 
     expect(cleanText).not.toEqual(unpricedText);
+  });
+
+  // Bug 1: FindingCard must cross-reference the sessions array already passed
+  // into FindingsPanel and render the session's project path, not just a
+  // generic action link.
+  it("FindingsPanel_should_renderSessionProjectPathBasename_when_matchingSessionPresent", () => {
+    const finding = makeFinding({ sessionId: "session-1", conversationId: "conv-1" });
+    const session = makeSession({
+      sessionId: "session-1",
+      conversationId: "conv-1",
+      projectPath: "/home/user/code/stapler-squad",
+    });
+
+    render(<FindingsPanel findings={[finding]} sessions={[session]} loading={false} error={null} />);
+
+    expect(screen.getByText("stapler-squad")).toBeInTheDocument();
+    expect(screen.queryByText("/home/user/code/stapler-squad")).not.toBeInTheDocument();
+  });
+
+  it("FindingsPanel_should_crossReferenceViaConversationId_when_findingSessionIdIsEmptyOrphan", () => {
+    const finding = makeFinding({ sessionId: "", conversationId: "conv-999" });
+    const session = makeSession({ sessionId: "", conversationId: "conv-999", projectPath: "/proj/orphan-repo" });
+
+    render(<FindingsPanel findings={[finding]} sessions={[session]} loading={false} error={null} />);
+
+    expect(screen.getByText("orphan-repo")).toBeInTheDocument();
+  });
+
+  it("FindingsPanel_should_omitSessionLabel_when_noMatchingSessionFound", () => {
+    const finding = makeFinding({ sessionId: "session-missing", conversationId: "conv-missing" });
+    const session = makeSession({ sessionId: "session-1", conversationId: "conv-1", projectPath: "/proj/other" });
+
+    render(<FindingsPanel findings={[finding]} sessions={[session]} loading={false} error={null} />);
+
+    expect(screen.queryByText("other")).not.toBeInTheDocument();
+  });
+
+  // Bug 2: FindingCard exposes a Dismiss action that calls the DismissFinding
+  // RPC and removes the card from the rendered list.
+  it("FindingsPanel_should_callDismissFindingRpc_when_dismissButtonClicked", async () => {
+    const user = userEvent.setup();
+    const finding = makeFinding({
+      findingId: "finding-abc",
+      sessionId: "session-1",
+      conversationId: "conv-1",
+      findingType: FindingType.CACHE_HIT_FLOOR_BREACH,
+    });
+    const session = makeSession();
+
+    render(<FindingsPanel findings={[finding]} sessions={[session]} loading={false} error={null} />);
+
+    const dismissButton = screen.getByRole("button", { name: /dismiss/i });
+    await user.click(dismissButton);
+
+    expect(mockDismissFinding).toHaveBeenCalledWith(
+      "finding-abc",
+      "session-1",
+      "conv-1",
+      FindingType.CACHE_HIT_FLOOR_BREACH
+    );
+  });
+
+  it("FindingsPanel_should_removeCardOptimistically_when_dismissButtonClicked", async () => {
+    const user = userEvent.setup();
+    const finding = makeFinding({ findingId: "finding-abc" });
+    const session = makeSession();
+
+    render(<FindingsPanel findings={[finding]} sessions={[session]} loading={false} error={null} />);
+
+    expect(screen.getByRole("listitem")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /dismiss/i }));
+
+    expect(screen.queryByRole("listitem")).not.toBeInTheDocument();
+    expect(screen.getByText(/no waste patterns detected/i)).toBeInTheDocument();
+  });
+
+  it("FindingsPanel_should_restoreCard_when_dismissRpcFails", async () => {
+    mockDismissFinding.mockRejectedValueOnce(new Error("network error"));
+    const consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    const user = userEvent.setup();
+    const finding = makeFinding({ findingId: "finding-abc" });
+    const session = makeSession();
+
+    render(<FindingsPanel findings={[finding]} sessions={[session]} loading={false} error={null} />);
+
+    await user.click(screen.getByRole("button", { name: /dismiss/i }));
+
+    // Restored once the RPC rejects — a failed dismiss must not silently
+    // leave the finding hidden.
+    await waitFor(() => expect(screen.getByRole("listitem")).toBeInTheDocument());
+
+    consoleErrorSpy.mockRestore();
   });
 });

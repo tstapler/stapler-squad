@@ -111,7 +111,13 @@ func TestCapacityMonitor_PollAndEvaluate(t *testing.T) {
 		},
 	}
 
-	monitor := NewCapacityMonitor(cfg, eventBus, poller, fakeStore, switcher)
+	monitor := NewCapacityMonitor(CapacityMonitorParams{
+		Config:          cfg,
+		EventBus:        eventBus,
+		Poller:          poller,
+		TokenStore:      fakeStore,
+		SessionSwitcher: switcher,
+	})
 
 	anthropicClient := &mockLimitsClient{
 		contextWindow: 10000, // 9000 used -> 90%
@@ -204,7 +210,13 @@ func TestCapacityMonitor_AutoTransition(t *testing.T) {
 		},
 	}
 
-	monitor := NewCapacityMonitor(cfg, eventBus, poller, fakeStore, switcher)
+	monitor := NewCapacityMonitor(CapacityMonitorParams{
+		Config:          cfg,
+		EventBus:        eventBus,
+		Poller:          poller,
+		TokenStore:      fakeStore,
+		SessionSwitcher: switcher,
+	})
 
 	anthropicClient := &mockLimitsClient{
 		contextWindow: 10000,
@@ -259,7 +271,13 @@ func TestCapacityMonitor_RateLimitWarning(t *testing.T) {
 		RateLimitWarnRemaining: 5,
 	}
 
-	monitor := NewCapacityMonitor(cfg, eventBus, poller, fakeStore, switcher)
+	monitor := NewCapacityMonitor(CapacityMonitorParams{
+		Config:          cfg,
+		EventBus:        eventBus,
+		Poller:          poller,
+		TokenStore:      fakeStore,
+		SessionSwitcher: switcher,
+	})
 
 	anthropicClient := &mockLimitsClient{
 		contextWindow: 100000,
@@ -285,4 +303,260 @@ func TestCapacityMonitor_RateLimitWarning(t *testing.T) {
 	case <-time.After(1 * time.Second):
 		t.Fatal("expected notification event for rate limit warning, but none received")
 	}
+}
+
+func TestIsIdleWaitTurn(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		turn tokens.TurnStats
+		want bool
+	}{
+		{"no tool calls counts as idle", tokens.TurnStats{ToolNames: nil}, true},
+		{"only Monitor counts as idle", tokens.TurnStats{ToolNames: []string{"Monitor"}}, true},
+		{"only ListAgents counts as idle", tokens.TurnStats{ToolNames: []string{"ListAgents"}}, true},
+		{"Monitor plus ListAgents counts as idle", tokens.TurnStats{ToolNames: []string{"Monitor", "ListAgents"}}, true},
+		{"Read is real work", tokens.TurnStats{ToolNames: []string{"Read"}}, false},
+		{"Bash is real work", tokens.TurnStats{ToolNames: []string{"Bash"}}, false},
+		{"Monitor plus Read is real work", tokens.TurnStats{ToolNames: []string{"Monitor", "Read"}}, false},
+		{"unrecognized tool is real work, not silently idle", tokens.TurnStats{ToolNames: []string{"SomeNewTool"}}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, isIdleWaitTurn(tt.turn))
+		})
+	}
+}
+
+func TestConsecutiveIdleWaitTurns(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2026, 9, 22, 17, 0, 0, 0, time.UTC)
+	turn := func(offsetSec int, tools ...string) tokens.TurnStats {
+		return tokens.TurnStats{Timestamp: base.Add(time.Duration(offsetSec) * time.Second), ToolNames: tools}
+	}
+
+	t.Run("counts trailing idle turns, stops at real work", func(t *testing.T) {
+		t.Parallel()
+		timeline := []tokens.TurnStats{
+			turn(0, "Read"),
+			turn(1),
+			turn(2, "Monitor"),
+			turn(3),
+		}
+		assert.Equal(t, 3, consecutiveIdleWaitTurns(timeline, time.Time{}))
+	})
+
+	t.Run("all-idle timeline counts everything", func(t *testing.T) {
+		t.Parallel()
+		timeline := []tokens.TurnStats{turn(0), turn(1, "ListAgents"), turn(2)}
+		assert.Equal(t, 3, consecutiveIdleWaitTurns(timeline, time.Time{}))
+	})
+
+	t.Run("no trailing idle turns counts zero", func(t *testing.T) {
+		t.Parallel()
+		timeline := []tokens.TurnStats{turn(0), turn(1, "Write")}
+		assert.Equal(t, 0, consecutiveIdleWaitTurns(timeline, time.Time{}))
+	})
+
+	t.Run("since cutoff excludes turns at or before it", func(t *testing.T) {
+		t.Parallel()
+		timeline := []tokens.TurnStats{
+			turn(0), // idle, but at-or-before cutoff -> excluded
+			turn(10),
+			turn(20),
+		}
+		since := base.Add(5 * time.Second)
+		assert.Equal(t, 2, consecutiveIdleWaitTurns(timeline, since))
+	})
+
+	t.Run("since cutoff prevents merging a pre-compact run with a post-compact one", func(t *testing.T) {
+		t.Parallel()
+		// Idle turns both before and after "since" with no real-work turn in
+		// between: without the cutoff these would merge into one run.
+		timeline := []tokens.TurnStats{turn(0), turn(1), turn(10), turn(11)}
+		since := base.Add(5 * time.Second)
+		assert.Equal(t, 2, consecutiveIdleWaitTurns(timeline, since))
+	})
+}
+
+// fakeCompactor records every SessionCompactor invocation for assertions,
+// standing in for session.SubmitContentWithEnter (which needs a real
+// tmux-backed *session.Instance) so idle-wait-loop tests can run against the
+// same struct-literal *session.Instance the other CapacityMonitor tests use.
+type fakeCompactor struct {
+	mu    sync.Mutex
+	calls []string // session titles compacted, in call order
+	err   error
+}
+
+func (f *fakeCompactor) compact(_ context.Context, inst *session.Instance, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, inst.Snapshot().Title)
+	return f.err
+}
+
+func (f *fakeCompactor) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
+func idleTimeline(count int, startAt time.Time) []tokens.TurnStats {
+	timeline := make([]tokens.TurnStats, count)
+	for i := range timeline {
+		timeline[i] = tokens.TurnStats{Timestamp: startAt.Add(time.Duration(i) * time.Second), ToolNames: []string{"ListAgents"}}
+	}
+	return timeline
+}
+
+func newIdleWaitTestMonitor(t *testing.T, ceiling int, parseRes *tokens.ParseResult, compactor *fakeCompactor) (*CapacityMonitor, *events.EventBus, *mockInstancePoller) {
+	t.Helper()
+	eventBus := events.NewEventBus(10)
+	poller := &mockInstancePoller{
+		instances: []*session.Instance{
+			{Title: "idle-wait-session", UUID: "sess-uuid-1", Program: "claude", Status: session.Active},
+		},
+	}
+	poller.instances[0].SetClaudeConversationUUID("conv-uuid-1")
+	parseRes.SessionUUID = "conv-uuid-1"
+
+	monitor := NewCapacityMonitor(CapacityMonitorParams{
+		Config: config.CapacityConfig{
+			TransitionMode:      config.TransitionModeManual,
+			PollIntervalSeconds: 60,
+			IdleWaitTurnCeiling: ceiling,
+		},
+		EventBus:   eventBus,
+		Poller:     poller,
+		TokenStore: &fakeTokenStore{results: []*tokens.ParseResult{parseRes}},
+		Compactor:  compactor.compact,
+	})
+	// Clock tracks the newest turn so fixed-date fixtures count as live runs.
+	monitor.now = func() time.Time {
+		if n := len(parseRes.TurnTimeline); n > 0 {
+			return parseRes.TurnTimeline[n-1].Timestamp.Add(time.Minute)
+		}
+		return time.Now()
+	}
+	monitor.RegisterClient("anthropic", &mockLimitsClient{
+		contextWindow: 1_000_000,
+		limits:        ProviderLimits{Provider: "anthropic", Available: true, RequestsRemaining: 100},
+	})
+	return monitor, eventBus, poller
+}
+
+func TestCapacityMonitor_IdleWaitLoop_FirstCrossingCompacts(t *testing.T) {
+	t.Parallel()
+	compactor := &fakeCompactor{}
+	base := time.Date(2026, 9, 22, 17, 0, 0, 0, time.UTC)
+	parseRes := &tokens.ParseResult{TurnTimeline: idleTimeline(15, base)}
+
+	monitor, eventBus, _ := newIdleWaitTestMonitor(t, 15, parseRes, compactor)
+	ch, subID := eventBus.Subscribe(context.Background())
+	defer eventBus.Unsubscribe(subID)
+
+	monitor.poll(context.Background())
+
+	require.Equal(t, 1, compactor.callCount(), "expected /compact to be sent once on first ceiling crossing")
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, "idle_wait_loop_compact", ev.NotificationMetadata["type"])
+	case <-time.After(1 * time.Second):
+		t.Fatal("expected idle_wait_loop_compact notification, but none received")
+	}
+}
+
+func TestCapacityMonitor_IdleWaitLoop_BelowCeilingDoesNotCompact(t *testing.T) {
+	t.Parallel()
+	compactor := &fakeCompactor{}
+	base := time.Date(2026, 9, 22, 17, 0, 0, 0, time.UTC)
+	parseRes := &tokens.ParseResult{TurnTimeline: idleTimeline(14, base)} // one short of the ceiling
+
+	monitor, _, _ := newIdleWaitTestMonitor(t, 15, parseRes, compactor)
+	monitor.poll(context.Background())
+
+	assert.Equal(t, 0, compactor.callCount())
+}
+
+func TestCapacityMonitor_IdleWaitLoop_RecurrenceAfterCompactEscalates(t *testing.T) {
+	t.Parallel()
+	compactor := &fakeCompactor{}
+	base := time.Date(2026, 9, 22, 17, 0, 0, 0, time.UTC)
+	parseRes := &tokens.ParseResult{TurnTimeline: idleTimeline(15, base)}
+
+	monitor, eventBus, _ := newIdleWaitTestMonitor(t, 15, parseRes, compactor)
+
+	// First poll: crosses the ceiling, compacts.
+	monitor.poll(context.Background())
+	require.Equal(t, 1, compactor.callCount())
+
+	// Simulate the intervention timestamp landing between the pre- and
+	// post-compact turns, then 15 more idle turns after it — the loop
+	// continuing right through the compact instead of breaking.
+	monitor.mu.Lock()
+	tracker := monitor.idleWaitState["sess-uuid-1"]
+	tracker.lastInterventionAt = base.Add(15*time.Second + 500*time.Millisecond)
+	monitor.idleWaitState["sess-uuid-1"] = tracker
+	monitor.mu.Unlock()
+
+	postCompact := idleTimeline(15, base.Add(16*time.Second))
+	parseRes.TurnTimeline = append(parseRes.TurnTimeline, postCompact...)
+
+	ch, subID := eventBus.Subscribe(context.Background())
+	defer eventBus.Unsubscribe(subID)
+
+	monitor.poll(context.Background())
+
+	// Still only the one /compact — recurrence escalates, it doesn't compact again.
+	assert.Equal(t, 1, compactor.callCount())
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, "idle_wait_loop_escalation", ev.NotificationMetadata["type"])
+	case <-time.After(1 * time.Second):
+		t.Fatal("expected idle_wait_loop_escalation notification, but none received")
+	}
+
+	// The loop persists: further polls must not re-notify or re-compact.
+	monitor.poll(context.Background())
+	assert.Equal(t, 1, compactor.callCount())
+	select {
+	case ev := <-ch:
+		t.Fatalf("unexpected repeat notification: %v", ev.NotificationMetadata["type"])
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestCapacityMonitor_IdleWaitLoop_RealWorkAfterCompactClearsTracker(t *testing.T) {
+	t.Parallel()
+	compactor := &fakeCompactor{}
+	base := time.Date(2026, 9, 22, 17, 0, 0, 0, time.UTC)
+	parseRes := &tokens.ParseResult{TurnTimeline: idleTimeline(15, base)}
+
+	monitor, _, _ := newIdleWaitTestMonitor(t, 15, parseRes, compactor)
+	monitor.poll(context.Background())
+	require.Equal(t, 1, compactor.callCount())
+
+	monitor.mu.Lock()
+	tracker := monitor.idleWaitState["sess-uuid-1"]
+	tracker.lastInterventionAt = base.Add(15*time.Second + 500*time.Millisecond)
+	monitor.idleWaitState["sess-uuid-1"] = tracker
+	monitor.mu.Unlock()
+
+	// A real (non-idle) turn after the compact: the loop broke on its own.
+	parseRes.TurnTimeline = append(parseRes.TurnTimeline, tokens.TurnStats{
+		Timestamp: base.Add(16 * time.Second),
+		ToolNames: []string{"Edit"},
+	})
+
+	monitor.poll(context.Background())
+
+	monitor.mu.RLock()
+	_, stillTracked := monitor.idleWaitState["sess-uuid-1"]
+	monitor.mu.RUnlock()
+	assert.False(t, stillTracked, "tracker should clear once real work happens after the compact")
+	assert.Equal(t, 1, compactor.callCount(), "should not have compacted again")
 }

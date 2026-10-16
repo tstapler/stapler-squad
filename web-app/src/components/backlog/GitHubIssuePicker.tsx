@@ -203,6 +203,7 @@ function RepoPhase({
                   {highlightMatch(`${repo.owner}/${repo.repo}`, picker.repoQuery)}
                 </span>
                 {repo.isLocal && <span className={styles.localBadge}>local</span>}
+                {repo.host && <span className={styles.localBadge}>{repo.host}</span>}
                 {repo.description && (
                   <span className={styles.listItemMeta}>
                     {highlightMatch(repo.description, picker.repoQuery)}
@@ -277,6 +278,7 @@ function IssuePhase({
         </button>
         <span className={styles.repoChip} aria-label="Selected repository">
           {picker.selectedRepo?.owner}/{picker.selectedRepo?.repo}
+          {picker.selectedRepo?.host ? ` (${picker.selectedRepo.host})` : ""}
         </span>
       </div>
 

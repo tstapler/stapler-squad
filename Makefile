@@ -87,13 +87,17 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: help ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build ent-gen web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks build-otel-auto build-otel-auto-embedded otel-auto-isolation-guard otel-auto-isolation-guard-selftest otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
+.PHONY: help ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build proto-breaking ent-gen web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks build-otel-auto build-otel-auto-embedded otel-auto-isolation-guard otel-auto-isolation-guard-selftest otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
 
 # Default target
 help: ## Show this help message
 	@echo "Stapler Squad Development Makefile"
 	@echo "================================="
 	@grep -E '^[a-zA-Z0-9._-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+
+.PHONY: git-soak-status
+git-soak-status: ## Print the git backend shadow-soak counters and flip verdict (running service; exit 1 = not ready)
+	@scripts/git-soak-status.sh
 
 .PHONY: ports
 ports: ## Show reserved manual dev port block (see CLAUDE.md's "Manual dev port block")
@@ -264,6 +268,10 @@ install-hooks: ## Build and install ssq-hooks + ssq-hook-handler to ~/.local/bin
 	@# Stable path for the notification hook handler so the server can register
 	@# it during onboarding (InstallHooks RPC). See internal/claudehooks.
 	install -m 0755 scripts/ssq-hook-handler ~/.local/bin/ssq-hook-handler
+	@# ssq-hook-handler looks for ssq-notify in its own directory (scripts/ssq-hook-handler:51)
+	@# — without this, every Stop/Notification hook silently no-ops (exit 0, "don't block Claude
+	@# on hook errors") and no notification is ever sent.
+	install -m 0755 scripts/ssq-notify ~/.local/bin/ssq-notify
 
 build-mux: ensure-tools ## Build the claude-mux PTY multiplexer binary
 	@echo "Building claude-mux..."
@@ -310,7 +318,15 @@ build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build 
 # Bump this and the github.com/tstapler/tymux/clients/go/gen/tymux/v1 require
 # in go.mod together — nothing enforces this automatically; see ADR-001
 # (project_plans/tymux-bundled-integration/decisions/ADR-001-prebuilt-tymuxd-binary-download.md).
-TYMUX_VERSION ?= v1.0.0
+# v1.1.0 bump (from v1.0.0): go.mod's client pin (clients/go v0.1.0) is
+# unchanged — it's the only tagged Go client version that exists, and it's
+# confirmed empirically compatible with the v1.1.0 server (full integration
+# suite, session/tymux/supervise_integration_test.go, passes against it).
+# v1.1.0 still lacks the Unix-socket control plane -- see
+# docs/bugs/open/BUG-112-*.md and tstapler/tymux#46 -- which only affects
+# DaemonConfig.SocketPath's collision protection, not the TCP-based session
+# I/O this repo's tymux backend actually depends on.
+TYMUX_VERSION ?= v1.1.0
 BIN_TYMUXD        := session/tymux/embed/tymuxd
 TYMUXD_FETCH_STAMP := .tymuxd-fetch.stamp
 
@@ -335,7 +351,7 @@ fetch-tymuxd: $(BIN_TYMUXD) ## Fetch pinned tymuxd release binary (no cargo/rust
 build-tymuxd-embed: fetch-tymuxd ## Confirm tymuxd is present in the embed dir for go build -tags embed_tymux
 	@echo "✅ session/tymux/embed/tymuxd ready ($(shell du -h $(BIN_TYMUXD) 2>/dev/null | cut -f1 || echo unknown))"
 
-build-embedded: build-tmux-embed ## Build stapler-squad with tmux bundled inside the binary
+build-embedded: ensure-tools proto-gen ent-gen server/web/dist build-tmux-embed ## Build stapler-squad with tmux bundled inside the binary
 ifeq ($(UNAME_S),Darwin)
 	CGO_LDFLAGS="-sectcreate __TEXT __info_plist $(CURDIR)/macos/Info.plist" \
 		go build -tags embed_tmux -ldflags "$(LDFLAGS)" -o stapler-squad .
@@ -351,7 +367,7 @@ endif
 # CI/release artifacts depending on -tags embed_tmux alone are unaffected.
 # Darwin CGO_LDFLAGS/Info.plist branch mirrors build-embedded unchanged —
 # tymuxd embedding doesn't touch TCC entitlement plumbing.
-build-embedded-tymux: build-tmux-embed build-tymuxd-embed ## Build stapler-squad with tmux AND tymuxd bundled inside the binary
+build-embedded-tymux: ensure-tools proto-gen ent-gen server/web/dist build-tmux-embed build-tymuxd-embed ## Build stapler-squad with tmux AND tymuxd bundled inside the binary
 ifeq ($(UNAME_S),Darwin)
 	CGO_LDFLAGS="-sectcreate __TEXT __info_plist $(CURDIR)/macos/Info.plist" \
 		go build -tags "embed_tmux embed_tymux" -ldflags "$(LDFLAGS)" -o stapler-squad .
@@ -420,7 +436,7 @@ backup-binary: ## Snapshot the current binary to stapler-squad.prev before a new
 		echo "==> Saved current binary to ./stapler-squad.prev"; \
 	fi
 
-install-service: backup-binary build install-hooks ## Install stapler-squad as a system service (systemd on Linux, LaunchAgent on macOS)
+install-service: backup-binary build-embedded-tymux install-hooks ## Install stapler-squad as a system service (systemd on Linux, LaunchAgent on macOS)
 ifeq ($(UNAME_S),Darwin)
 	@$(MAKE) _codesign-binary
 endif
@@ -566,6 +582,9 @@ proto-lint: ensure-tools ## Lint protocol buffer files
 proto-build: ensure-tools ## Build/validate protocol buffer files
 	buf build proto
 
+proto-breaking: ensure-tools ## Fail on breaking proto changes versus origin/main (needs a reachable origin/main)
+	buf breaking proto --against '.git#branch=origin/main,subdir=proto'
+
 proto-clean: ## Clean generated protocol buffer code
 	rm -rf gen/proto/go
 	rm -rf web/src/gen
@@ -685,6 +704,29 @@ test-integration: ensure-tools proto-gen $(GOTESTSUM_BIN) ## Run integration tes
 	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags integration -timeout 20m -p 1 ./session ./session/tmux
 	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags integration -timeout 20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/tmux)$$')
 
+# Differential oracle tests (go-git fork plan Story 1.3.3): files tagged `//go:build gitoracle`
+# run a candidate git backend against the real git CLI over temp repositories. Needs git only,
+# no generated code, so CI calls it directly.
+.PHONY: test-oracle
+test-oracle: $(GOTESTSUM_BIN) ## Run the gitoracle-tagged differential tests against real git
+	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags gitoracle -timeout 10m ./testutil/gitoracle/... ./session/git/backend/gogit/... ./session/gitwiring/... ./session/git/native/gitconfig/... ./session/git/native/capability/...
+
+# Type-based delivery-gate and terminal-write guards (Story 2.6 / Story 5.1d).
+# Runs only the Test* funcs declared in files tagged `//go:build sinkguard`
+# (selected per package with -run), so it does not re-run the untagged suite.
+.PHONY: test-delivery-guards test-delivery-guards-run
+test-delivery-guards: ensure-tools proto-gen ent-gen ## Run the sinkguard-tagged type-based guard tests
+	@$(MAKE) --no-print-directory test-delivery-guards-run
+
+# The run half has no tool/codegen prerequisites so CI can call it directly
+# after downloading the generated-code artifact (build.yml, test-delivery-guards).
+test-delivery-guards-run: $(GOTESTSUM_BIN)
+	@set -e; for d in $$(grep -rl --include='*_test.go' '^//go:build sinkguard' server session cmd pkg 2>/dev/null | xargs -r -n1 dirname | sort -u); do \
+		names=$$(grep -h -oE '^func (Test[A-Za-z0-9_]+)' $$(grep -l '^//go:build sinkguard' $$d/*_test.go) | sed 's/^func //' | paste -sd'|' -); \
+		[ -n "$$names" ] || continue; \
+		$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -tags sinkguard -timeout 20m -run "^($$names)$$" ./$$d; \
+	done
+
 test-triage-harness: proto-gen ## Run all backlog triage harness phases (no UI/browser needed)
 	go test -v -tags=harness -run TestTriageHarness ./server/services/
 
@@ -793,20 +835,30 @@ lint: ensure-tools proto-gen ent-gen server/web/dist lint-custom lint-shell ## R
 	CGO_ENABLED=0 golangci-lint run --enable=nilnil,staticcheck,ineffassign,govet
 
 LINTER_BIN := $(CURDIR)/bin/linter
+# Every non-testdata .go file under tools/lint — a real prerequisite list, not
+# just $(LINTER_BIN)'s own existence, so editing or adding an analyzer (e.g.
+# nolegacylog) triggers a rebuild instead of `make lint-custom` silently
+# running a stale binary that predates the change forever.
+LINTER_SRC := $(shell find $(CURDIR)/tools/lint -name '*.go' -not -path '*/testdata/*')
 
-lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (entfullscan, hotpolllog, nocommandpattern, norawexec, norawgitopen, silenttransition, tmuxsocketscope) in a single pass
+lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (entfullscan, hotpolllog, noarchivedrevival, nocommandpattern, nolegacylog, noliveinstanceraw, norawexec, norawghrequest, norawgitcli, norawgitopen, notimesleeptest, novartestseam, silenttransition, tmuxsocketscope) in a single pass
 	@echo "Running custom lint..."
-	@$(LINTER_BIN) $(shell go list ./... | grep -v "^github.com/tstapler/stapler-squad$$")
+	@$(LINTER_BIN) ./...
+	@go -C tools/lint test -count=1 ./norawgitcli/...
 	@echo "custom lint: ok"
 
-$(LINTER_BIN):
+$(LINTER_BIN): $(LINTER_SRC)
 	@mkdir -p $(CURDIR)/bin
 	@go -C tools/lint build -o $(LINTER_BIN) ./cmd/linter
 
-# Excludes third_party/ (vendored tmux source — not ours to lint) and
-# node_modules/. Includes scripts/ssq-hook-handler, which has no .sh
-# extension but is a real bash script (installed as a hook handler).
-SHELL_SCRIPTS := $(shell find . -not -path "./third_party/*" -not -path "*/node_modules/*" -not -path "./.git/*" -type f \( -name "*.sh" -o -name "ssq-hook-handler" \))
+# Excludes third_party/ (vendored tmux source — not ours to lint),
+# node_modules/, and .claude/worktrees/ (each entry there is itself a full
+# repo checkout with its own nested third_party/ -- *third_party/* rather
+# than ./third_party/* catches those regardless of depth, but worktrees are
+# excluded outright since scanning them just re-lints scripts already
+# covered by their own branch). Includes scripts/ssq-hook-handler, which has
+# no .sh extension but is a real bash script (installed as a hook handler).
+SHELL_SCRIPTS := $(shell find . -not -path "*/third_party/*" -not -path "*/node_modules/*" -not -path "./.git/*" -not -path "./.claude/worktrees/*" -type f \( -name "*.sh" -o -name "ssq-hook-handler" \))
 
 lint-shell: ## Run shellcheck over all first-party shell scripts
 	@which shellcheck >/dev/null 2>&1 || (echo "shellcheck not installed; run 'brew install shellcheck' (macOS) or see https://github.com/koalaman/shellcheck#installing" && exit 1)
@@ -824,17 +876,6 @@ test-shell: ## Run shell-script regression tests (*.test.sh) — currently: dev-
 actor-lint: ## Detect actor self-deadlock patterns using ast-grep (sg)
 	@which sg >/dev/null 2>&1 || (echo "sg (ast-grep) not installed; run: cargo install ast-grep" && exit 1)
 	sg scan --rule session/.sg-rules/actor-lint.yml session/
-
-lint-no-sleep-tests: ## ADR-003 audit: count time.Sleep calls in test files outside testutil/ (target: 0)
-	@violations=$$(grep -rn 'time\.Sleep(' --include='*_test.go' . \
-	  | grep -v 'vendor\|web-app\|third_party\|bin/\|testutil/' \
-	  | grep -v ':[[:space:]]*//' \
-	  | wc -l | tr -d ' '); \
-	echo "⏱  time.Sleep in test files (excluding testutil/): $$violations (target: 0, per ADR-003)"; \
-	if [ "$$violations" -gt 0 ]; then \
-	  grep -rn 'time\.Sleep(' --include='*_test.go' . | grep -v 'vendor\|web-app\|third_party\|bin/\|testutil/' | grep -v ':[[:space:]]*//' ; \
-	  exit 1; \
-	fi
 
 lint-css-tokens: ## Fail if any component .css.ts file uses hardcoded hex colors instead of vars.color.*
 	@echo "Checking for hardcoded colors in component .css.ts files..."
@@ -948,7 +989,7 @@ dev-setup: install-tools ## Set up development environment
 	@echo "Development environment setup complete!"
 	@echo "Run 'make help' to see available commands"
 
-ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration test-shell fmt-check registry-generate actor-field-guard ptmx-field-guard otel-auto-isolation-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
+ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration test-delivery-guards test-oracle test-shell fmt-check registry-generate actor-field-guard ptmx-field-guard otel-auto-isolation-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
 
 # ready: everything `make ci` runs, plus the CI-only checks that have no local
 # equivalent yet — .github/workflows/lint.yml's complexity gate (gocyclo/
@@ -957,7 +998,7 @@ ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration t
 # local equivalent (the external go-test-coverage action, the E2E-coverage PR
 # comment) — those only run in CI. `--new-from-rev=origin/main` requires a
 # reachable origin/main; `git fetch origin main` first if it's stale.
-ready: ci ready-complexity-gate ready-duplication-gate-web ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites)
+ready: ci proto-breaking ready-complexity-gate ready-duplication-gate-web ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites)
 	cd web-app && npx next lint
 	cd web-app && pnpm run lint:css && pnpm run lint:css-vars
 	cd tools/scanner && go test ./...
@@ -999,6 +1040,7 @@ actor-field-guard: ## IAC Epic 5 guard: fail if direct Instance field writes exi
 	@echo "actor-field-guard: scanning for direct Instance field writes..."
 	@if grep -rEn '\b(inst|instance|liveInst)\.[A-Z][a-zA-Z0-9]+ = [^=]' \
 	    server/services/session_service.go \
+	    server/services/workflow_service.go \
 	    session/pr_status_poller.go \
 	    session/review_queue_poller.go \
 	    session/autonomous_driver.go \

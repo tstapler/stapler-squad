@@ -196,14 +196,6 @@ func StartContinuousProfiling(appName, serverAddr string) (func(), error) {
 	return func() { _ = profiler.Stop() }, nil
 }
 
-// PrintGoroutineStacks prints all goroutine stacks to logs
-// Useful for debugging hangs
-func PrintGoroutineStacks() {
-	buf := make([]byte, 1<<20) // 1MB buffer
-	stacklen := runtime.Stack(buf, true)
-	log.Info("=== Goroutine Stacks ===", "stacks", string(buf[:stacklen]))
-}
-
 // MonitorGoroutines periodically logs goroutine counts
 func MonitorGoroutines(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)

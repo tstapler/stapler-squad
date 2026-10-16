@@ -42,7 +42,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          CHANGED=$(gh api "repos/${{ github.repository }}/compare/$BASE_SHA...$HEAD_SHA" --paginate --jq '.files[] | select(.status != "removed") | .filename')
+          CHANGED=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[] | select(.status != "removed") | .filename')
           if [ -z "$CHANGED" ]; then
             echo "No added/modified files detected"
             exit 0

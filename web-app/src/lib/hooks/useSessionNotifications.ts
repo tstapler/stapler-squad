@@ -26,7 +26,8 @@ const HISTORY_ONLY_TYPES = new Set([
 ]);
 
 /**
- * Calls resolveApproval RPC to allow or deny a pending tool use.
+ * Calls resolveApproval RPC to allow or deny a pending tool use. A failure is
+ * logged and rethrown so the toast can show "Could not approve - Retry".
  */
 async function resolveApproval(approvalId: string, decision: "allow" | "deny"): Promise<void> {
   try {
@@ -37,6 +38,7 @@ async function resolveApproval(approvalId: string, decision: "allow" | "deny"): 
     await client.resolveApproval({ approvalId, decision });
   } catch (error) {
     console.error(`[resolveApproval] Failed to resolve approval ${approvalId}:`, error);
+    throw error;
   }
 }
 
@@ -69,7 +71,8 @@ interface UseSessionNotificationsOptions {
   /** Enable audio chimes (default: true) */
   enableAudio?: boolean;
   /** Callback when user clicks "View" on a notification */
-  onViewSession?: (sessionId: string) => void;
+  /** `notificationId` is the server record id, carried into the deep link (Story 5.3). */
+  onViewSession?: (sessionId: string, notificationId?: string) => void;
 }
 
 /**
@@ -134,6 +137,7 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
     if (HISTORY_ONLY_TYPES.has(event.notificationType)) {
       if (isDuplicate) return;
       addToHistoryOnly({
+        id: event.notificationId || undefined,
         sessionId: event.sessionId,
         // Empty, not "Unknown Session": a placeholder here would win the
         // NotificationPanel fallback chain over the event's real title for
@@ -144,8 +148,9 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
         priority: mapPriority(event.priority),
         notificationType: mapNotificationType(event.notificationType),
         metadata: event.metadata,
+        isPendingDecision: event.isPendingDecision,
         onView: (onViewSessionRef.current && !isBacklogItemNotification)
-          ? () => onViewSessionRef.current?.(event.sessionId)
+          ? () => onViewSessionRef.current?.(event.sessionId, event.notificationId || undefined)
           : undefined,
       });
       return;
@@ -159,7 +164,9 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
     const approvalId = event.metadata?.["approval_id"];
 
     // Build the notification data with all available fields
-    const notificationData: Omit<NotificationData, "id" | "timestamp"> = {
+    const notificationData: Omit<NotificationData, "id" | "timestamp"> & { id?: string } = {
+      // The server's id names the same toast in every open tab (cross-tab bulk sync).
+      id: event.notificationId || undefined,
       sessionId: event.sessionId,
       // See the comment on the history-only branch above.
       sessionName: event.sessionName || "",
@@ -172,8 +179,9 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
       sourceWorkingDir: sourceWorkingDir,
       sourceProject: sourceProject,
       metadata: event.metadata,
+      isPendingDecision: event.isPendingDecision,
       onView: (onViewSessionRef.current && !isBacklogItemNotification)
-        ? () => onViewSessionRef.current?.(event.sessionId)
+        ? () => onViewSessionRef.current?.(event.sessionId, event.notificationId || undefined)
         : undefined,
       // Add focus window handler if we have source app info
       onFocusWindow: (sourceApp || sourceBundleId)

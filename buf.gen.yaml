@@ -11,13 +11,9 @@ plugins:
     opt:
       - paths=source_relative
 
-  # Go ConnectRPC generation. Pinned to v1.20.0 -- matching go.mod's
-  # connectrpc.com/connect v1.20.0 exactly -- because the unpinned remote
-  # plugin floats to BSR's latest release independently of this repo's
-  # dependency pin, and that latest release now generates against
-  # connectrpc.com/connect/v2 (a breaking major-version jump: different
-  # import path, incompatible with v1.20.0), which doesn't build. Bump this
-  # alongside go.mod's connect-go version, not independently.
+  # Go ConnectRPC generation. Pinned to the connect-go version in go.mod: the
+  # unpinned plugin began emitting connectrpc.com/connect/v2 imports when
+  # connect-go v2.0.0 shipped, breaking every CI job that regenerates protos.
   - remote: buf.build/connectrpc/go:v1.20.0
     out: gen/proto/go
     opt:

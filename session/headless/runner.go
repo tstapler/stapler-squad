@@ -21,6 +21,9 @@ type StreamChunk struct {
 	Err     error
 	Done    bool
 	CostUSD float64 // non-zero only on the final chunk from a first-call JSON response
+	// ConversationID is the Claude session_id of the call (its transcript's file
+	// name); set only on the final chunk of a first-call JSON response.
+	ConversationID string
 }
 
 // ClaudeRunner abstracts how claude -p subprocesses are started.
@@ -72,10 +75,15 @@ type ProcessRunner struct {
 	allowedTools    string // optional --allowedTools value; empty = not passed
 	permissionMode  string // optional --permission-mode value; empty = not passed
 	disallowedTools string // optional --disallowedTools value; empty = not passed
+	// noTools strips every built-in tool, MCP server, and skill from the call — see WithNoTools.
+	noTools bool
 	// interpreter, when non-empty, is exec'd instead of claudeBin, with claudeBin
 	// prepended to argv. Opt-in, test-only — see NewShellWrappedProcessRunnerForTesting
 	// in fake_runner.go. Zero value for every production ProcessRunner.
 	interpreter string
+	// extraEnv is appended to the filtered environment (later entries win), e.g.
+	// ANTHROPIC_BASE_URL for the consolette backend. Empty for the claude backend.
+	extraEnv []string
 }
 
 // WithWorkDir returns a copy of this ProcessRunner that sets the subprocess working
@@ -97,9 +105,24 @@ func (r *ProcessRunner) WithToolAccess(allowedTools, permissionMode, disallowedT
 	return &cp
 }
 
+// WithNoTools returns a copy of this ProcessRunner whose calls can only emit text: all
+// built-in tools are disabled (--tools ""), only MCP servers named by --mcp-config are
+// loaded (none are passed, --strict-mcp-config), and skills are off. Unlike
+// allowedTools/disallowedTools this does not rely on permission-mode semantics — there is
+// no tool to grant or deny. It overrides any allowedTools/disallowedTools already set.
+func (r *ProcessRunner) WithNoTools() *ProcessRunner {
+	cp := *r
+	cp.noTools = true
+	cp.allowedTools, cp.disallowedTools = "", ""
+	return &cp
+}
+
 // toolAccessArgs returns the --allowedTools/--permission-mode/--disallowedTools flag
 // pairs for r's configured values, in that order.
 func (r *ProcessRunner) toolAccessArgs() []string {
+	if r.noTools {
+		return []string{"--tools", "", "--strict-mcp-config", "--disable-slash-commands"}
+	}
 	var extra []string
 	if r.allowedTools != "" {
 		extra = append(extra, "--allowedTools", r.allowedTools)
@@ -147,7 +170,7 @@ func (r *ProcessRunner) Run(ctx context.Context, args []string, stdin io.Reader)
 	var stderrBuf bytes.Buffer
 	opts := []executor.ProcessOption{
 		executor.WithNewSession(),
-		executor.WithProcessReplaceEnv(filteredEnv()),
+		executor.WithProcessReplaceEnv(append(filteredEnv(), r.extraEnv...)),
 		executor.WithConsumeStderr(&stderrBuf),
 	}
 	if r.workDir != "" {

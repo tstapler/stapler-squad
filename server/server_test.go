@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,15 +20,15 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 	"go.uber.org/goleak"
 )
 
 // syncBuffer wraps bytes.Buffer with a mutex so it's safe to read via
-// String() from the test goroutine while background goroutines the server
-// under test spawned (SessionRetentionSweeper, MemoryPressureNotifier, etc.)
-// are still writing to it via the default slog logger — a plain
-// bytes.Buffer is not safe for that, and Server.Shutdown() does not
-// guarantee every such goroutine has exited by the time it returns.
+// String() from the test goroutine while background goroutines (the server's
+// own until Shutdown() joins them, and BuildRuntimeDeps' process-lifetime
+// ones always) write to it via the default slog logger — a plain
+// bytes.Buffer is not safe for that.
 type syncBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -45,35 +44,6 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
-}
-
-// tempDirTolerantOfStragglers behaves like t.TempDir() but replaces its
-// cleanup with a few retries on ENOTEMPTY. wireDepsIntoServer starts several
-// background goroutines (SessionRetentionSweeper, StaleSessionNotifier,
-// MemoryPressureNotifier, the hibernation sweeper) as bare `go X.Start(ctx)`
-// calls never registered with Server.backgroundTasksWG, so Shutdown() cannot
-// guarantee they've stopped touching files under this directory before it
-// returns — a pre-existing gap (backgroundTasksWG's own doc comment lists
-// only "fork-pressure logger, zombie watcher, zombie reaper" as joined), not
-// something introduced by the Jules tests using this helper. Properly fixing
-// it means auditing and rewiring four unrelated services' shutdown
-// registration, out of scope here — this local retry keeps that pre-existing
-// gap from flaking these two Jules-specific tests.
-func tempDirTolerantOfStragglers(t *testing.T) string {
-	t.Helper()
-	dir, err := os.MkdirTemp("", strings.ReplaceAll(t.Name(), "/", "_"))
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		var lastErr error
-		for i := 0; i < 5; i++ {
-			if lastErr = os.RemoveAll(dir); lastErr == nil {
-				return
-			}
-			time.Sleep(20 * time.Millisecond)
-		}
-		t.Logf("tempDirTolerantOfStragglers: cleanup of %s did not converge: %v", dir, lastErr)
-	})
-	return dir
 }
 
 // captureDefaultLog swaps slog's default handler for one that writes to a
@@ -116,15 +86,14 @@ func Test_Start_should_BindOSAssignedPort_And_UpdateAddr_When_ListenAddressEndsI
 	}()
 
 	// Poll for the address to be updated away from the requested ":0" address.
-	deadline := time.Now().Add(5 * time.Second)
 	var addr string
-	for time.Now().Before(deadline) {
+	wait.RequireEventually(t, func() bool {
 		addr = srv.GetAddr()
 		if addr != "localhost:0" && addr != "" {
-			break
+			return true
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "server did not become reachable")
 
 	if addr == "localhost:0" || addr == "" {
 		t.Fatalf("expected GetAddr() to reflect a real bound port, got %q", addr)
@@ -179,15 +148,14 @@ func Test_Start_should_BindExplicitPort_When_PortIsAlreadyKnown(t *testing.T) {
 		errCh <- srv.Start(ctx)
 	}()
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	wait.RequireEventually(t, func() bool {
 		resp, gerr := http.Get("http://" + addr + "/")
 		if gerr == nil {
 			resp.Body.Close()
-			break
+			return true
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "server did not become reachable")
 
 	if got := srv.GetAddr(); got != addr {
 		t.Fatalf("expected GetAddr() to remain %q, got %q", addr, got)
@@ -256,7 +224,7 @@ func Test_Shutdown_should_BlockUntilBackgroundTasksExit_When_BackgroundTaskIsRun
 	go func() {
 		defer srv.backgroundTasksWG.Done()
 		// Simulate a background task still mid-tick when shutdown begins.
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond) //nolint:notimesleeptest simulated in-flight task must outlast Shutdown's synchronous cancel to prove the join blocks; no observable signal exists
 		exited.Store(true)
 	}()
 
@@ -329,9 +297,14 @@ func runGoleakTolerant(t *testing.T, check func()) {
 // trigger Go's own stack-trace elision (e.g. tests that fork subprocesses,
 // like tmux.StartZombieWatcher's `ps` calls). See
 // goleakElidedStackPanicMarker and runGoleakTolerant for the full rationale.
-func verifyNoLeaksTolerant(t *testing.T, baseline goleak.Option) {
+func verifyNoLeaksTolerant(t *testing.T, baseline goleak.Option, options ...goleak.Option) {
 	t.Helper()
-	runGoleakTolerant(t, func() { goleak.VerifyNone(t, baseline) })
+	opts := append([]goleak.Option{
+		baseline,
+		goleak.IgnoreAnyFunction("net/http.(*http2clientConnReadLoop).run"),
+		goleak.IgnoreAnyFunction("net/http.(*http2ClientConn).readLoop"),
+	}, options...)
+	runGoleakTolerant(t, func() { goleak.VerifyNone(t, opts...) })
 }
 
 // ignoreCurrentTolerant is goleak.IgnoreCurrent wrapped in the same
@@ -394,7 +367,7 @@ func TestServer_Shutdown_JoinsBackgroundTickers(t *testing.T) {
 	tmux.StartZombieWatcher(serverCtx, time.Millisecond, noop, &srv.backgroundTasksWG)
 	tmux.StartZombieReaper(serverCtx, time.Millisecond, noop, &srv.backgroundTasksWG)
 
-	time.Sleep(20 * time.Millisecond) // let several ticks fire
+	time.Sleep(20 * time.Millisecond) //nolint:notimesleeptest ticks of the production tickers are unobservable (noop log fn); the wall-clock lets them be mid-run when Shutdown joins
 
 	if err := srv.Shutdown(); err != nil {
 		t.Fatalf("Shutdown() returned unexpected error: %v", err)
@@ -481,12 +454,9 @@ func Test_runGoleakTolerant_should_SkipInsteadOfCrash_When_GoleakHitsElidedStack
 		deepRecurse(150, func() { close(ready) }, block)
 	}()
 	<-ready
-	// Not load-bearing: deepRecurse's done() callback (which closes ready)
-	// only fires once the goroutine has already reached full depth and is
-	// about to block on <-block, so the happens-before edge from closing
-	// ready already guarantees full depth here. This sleep is a defensive
-	// margin, not a synchronization point.
-	time.Sleep(10 * time.Millisecond)
+	// deepRecurse's done() callback (which closes ready) only fires once the
+	// goroutine has reached full depth and is about to block on <-block, so
+	// the happens-before edge from closing ready guarantees full depth here.
 
 	// Unblock and wait for the deep goroutine to fully exit before this test
 	// returns — otherwise it can still be mid-unwind (a still-deep, still-live
@@ -638,7 +608,7 @@ func Test_runGoleakTolerant_should_RepanicUnrelatedPanics(t *testing.T) {
 // never log a "jules poll tick" line (which only the poller's own tick()
 // loop, never started, could produce).
 func TestServer_should_LeaveJulesSessionPollerNil_When_JulesConfigDisabled(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", tempDirTolerantOfStragglers(t))
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	buf := captureDefaultLog(t)
 
 	deps, err := BuildDependencies()
@@ -662,7 +632,7 @@ func TestServer_should_LeaveJulesSessionPollerNil_When_JulesConfigDisabled(t *te
 // startup, "JulesSessionPoller started" must be logged beside the existing
 // "WorktreePRPoller started" line (server.go's wireDepsIntoServer).
 func TestServer_should_LogJulesSessionPollerStarted_When_JulesEnabledAndKeyResolvable(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", tempDirTolerantOfStragglers(t))
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	keyring.MockInit()
 	require.NoError(t, jules.NewKeyringTokenSource().SetJulesAPIKey(context.Background(), "AIzaSyD-TEST"))
 

@@ -17,6 +17,17 @@ export class VcsWidgetPage {
     this.widget = page.getByTestId('vcs-widget-loaded');
   }
 
+  /** Backlog item detail collapses the "Version Control" section by default; expand it if needed. */
+  async expandBacklogSection() {
+    const toggle = this.page
+      .getByTestId('backlog-item-detail')
+      .getByRole('button', { name: 'Version Control' });
+    if ((await toggle.getAttribute('aria-expanded')) !== 'true') {
+      await toggle.click();
+    }
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  }
+
   async waitForLoaded(timeout = 10000) {
     await expect(this.widget).toBeVisible({ timeout });
   }

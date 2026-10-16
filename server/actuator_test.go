@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/gitwiring"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -35,10 +37,11 @@ func TestGoroutineHealthStatus(t *testing.T) {
 // case (no fork pressure, ordinary goroutine count during a test run):
 // 200 OK with an "ok" status and both components reporting "ok".
 func TestHandleActuatorHealth_ReturnsOK_InNormalConditions(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/actuator/health", nil)
 	rec := httptest.NewRecorder()
 
-	handleActuatorHealth(rec, req)
+	// Inputs are pinned: the live goroutine count and fork pressure are
+	// process-global, so other tests' leftovers made this flaky under -count=N.
+	writeActuatorHealth(rec, tmux.ForkPressureOK, 10)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -81,5 +84,28 @@ func TestHandleActuatorMetrics_ReturnsExpectedShape(t *testing.T) {
 		if _, ok := body[key]; !ok {
 			t.Errorf("missing top-level key %q in /actuator/metrics response", key)
 		}
+	}
+}
+
+func TestWriteGitBackendSoak_JSONAndText(t *testing.T) {
+	report := gitwiring.SoakReport{Cohorts: map[string]string{"refs": "shadow"}}
+
+	rec := httptest.NewRecorder()
+	writeGitBackendSoak(rec, httptest.NewRequest(http.MethodGet, "/actuator/git-backend", nil), report)
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("JSON body: %v", err)
+	}
+	if rec.Header().Get("X-Git-Soak-Ready") != "false" {
+		t.Errorf("a report with no shadowed cohort must not be ready, header = %q", rec.Header().Get("X-Git-Soak-Ready"))
+	}
+	if rec.Header().Get("Content-Type") != "application/json" || got["cohorts"] == nil {
+		t.Errorf("json response = %q %v", rec.Header().Get("Content-Type"), got)
+	}
+
+	rec = httptest.NewRecorder()
+	writeGitBackendSoak(rec, httptest.NewRequest(http.MethodGet, "/actuator/git-backend?format=text", nil), report)
+	if !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/plain") || !strings.Contains(rec.Body.String(), "git backend soak") {
+		t.Errorf("text response = %q %q", rec.Header().Get("Content-Type"), rec.Body.String())
 	}
 }

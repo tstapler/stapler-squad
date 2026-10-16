@@ -41,6 +41,7 @@ jest.mock("@/lib/hooks/useBrowserLogStream", () =>
 
 // eslint-disable-next-line import/first
 import { TerminalOutput } from "../TerminalOutput";
+import { TerminalPoolProvider } from "@/lib/terminal/TerminalPool";
 // eslint-disable-next-line import/first
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
 
@@ -68,9 +69,14 @@ function makeStreamMock(overrides = {}) {
   };
 }
 
+// Story 3 — TerminalOutput now sources its xterm.js instance from
+// TerminalPoolProvider (see TerminalPool.tsx); every render in this file
+// must be wrapped in one, matching production's app-level provider.
 function renderTerminal(sessionId = "session-abc", baseUrl = "/api") {
   return render(
-    <TerminalOutput sessionId={sessionId} baseUrl={baseUrl} isVisible={false} />
+    <TerminalPoolProvider>
+      <TerminalOutput sessionId={sessionId} baseUrl={baseUrl} isVisible={false} />
+    </TerminalPoolProvider>
   );
 }
 

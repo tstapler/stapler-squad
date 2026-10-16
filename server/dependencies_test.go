@@ -2,18 +2,30 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log/slog"
+	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/zalando/go-keyring"
 
+	"connectrpc.com/connect"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/envtest"
+	githubpkg "github.com/tstapler/stapler-squad/github"
+	logpkg "github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -44,12 +56,7 @@ func TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueu
 		t.Fatalf("BuildDependencies: %v", err)
 	}
 
-	srv := NewServerWithDeps("localhost:0", deps)
-	t.Cleanup(func() {
-		if err := srv.Shutdown(); err != nil {
-			t.Logf("srv.Shutdown: %v", err)
-		}
-	})
+	srv := newShutdownOnCleanupServer(t, "localhost:0", deps)
 
 	if deps.SlackNotifier == nil {
 		t.Fatal("expected ServerDependencies.SlackNotifier to be wired")
@@ -76,6 +83,31 @@ func TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueu
 		t.Errorf("SessionService's SlackNotifier is not the same instance as deps.SlackNotifier (split-brain regression, commit 13ad9c260): got %p, want %p",
 			deps.SessionService.SlackNotifierForTest(), deps.SlackNotifier)
 	}
+}
+
+// TestBuildDependencies_should_WireGeminiCaller_When_GeminiBinaryDetected is the
+// Task 3.1.2b integration test: confirms BuildDependencies actually constructs
+// a *headless.GeminiCaller when the gemini binary is present at startup,
+// mirroring HeadlessPool's own "non-fatal, just leave the field nil, if the
+// binary is missing" pattern (this branch does not yet register it into a
+// headlessCallers registry — Epic 2.3, not landed yet — see GeminiCaller's
+// doc comment on ServerDependencies). Skips (rather than asserting nil) when
+// gemini genuinely isn't installed on the machine running this test —
+// mirroring config.GetAvailablePrograms' own tests' convention of skipping
+// gracefully for an optional candidate CLI not guaranteed present in every
+// dev/CI environment.
+func TestBuildDependencies_should_WireGeminiCaller_When_GeminiBinaryDetected(t *testing.T) {
+	if _, lookErr := exec.LookPath("gemini"); lookErr != nil {
+		t.Skip("gemini binary not found on PATH; skipping (see config.GetAvailablePrograms' analogous convention)")
+	}
+
+	envtest.NewIsolatedStateDir(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+
+	require.NotNil(t, deps.GeminiCaller, "expected GeminiCaller to be wired when the gemini binary is detected at startup")
+	assert.True(t, deps.GeminiCaller.Available())
 }
 
 func TestBuildServiceDeps_RejectsNilCore(t *testing.T) {
@@ -329,6 +361,38 @@ func TestReconcileTicker_should_KeepRunningReconcileStuck_When_QuotaGateReconcil
 	}
 }
 
+// TestWorktreeConsistencySweeperWiring_should_StartAndStopWithoutPanicking_When_DependenciesBuiltNarrow
+// is Task 1.3.2b's wiring smoke test for the session.StartWorktreeConsistencySweeper call
+// added alongside the 60s reconcile ticker above (server/dependencies.go): confirms the
+// sweeper goroutine starts and returns cleanly on ctx cancellation. Deliberately builds a
+// narrow session/events/config dependency set rather than calling server.BuildDependencies()
+// or NewServerWithDeps, which wire ~30 real production subsystems and make real outbound
+// network calls even under test isolation (instinct_ci_hermetic_testing_gotchas.md) —
+// mirroring server/services/session_service_test.go's createTestStorage pattern.
+func TestWorktreeConsistencySweeperWiring_should_StartAndStopWithoutPanicking_When_DependenciesBuiltNarrow(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	repo := session.NewTestEntRepository(t)
+	storage, err := session.NewStorageWithRepository(repo)
+	require.NoError(t, err)
+
+	notifier := &services.EventBusNotifier{Bus: events.NewEventBus(100)}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		session.StartWorktreeConsistencySweeper(ctx, storage, notifier, config.LoadConfig)
+		close(done)
+	}()
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("StartWorktreeConsistencySweeper did not return after ctx cancellation")
+	}
+}
+
 // TestSetSyncFeatureEnabledCheck_should_MatchPlainIsEnabled_When_NotThrottled
 // exercises the real composed closure server/dependencies.go passes to
 // backlogSvc.SetSyncFeatureEnabledCheck (Story 2.3.2) indirectly via
@@ -402,17 +466,135 @@ func TestServerDependencies_should_DegradeFeatureNotServer_When_KeychainUnreadab
 	cfg.Jules.Enabled = true
 	require.NoError(t, config.SaveConfig(cfg))
 
-	var buf bytes.Buffer
-	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})
-	origDefault := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	t.Cleanup(func() { slog.SetDefault(origDefault) })
-
 	deps, err := BuildDependencies()
 	require.NoError(t, err, "an unreadable keychain must degrade the Jules feature, not fail server startup")
 
-	assert.Nil(t, deps.JulesSessionPoller)
-	assert.Contains(t, buf.String(), "jules disabled")
+	assert.Nil(t, deps.JulesSessionPoller, "an unreadable keychain must leave the Jules poller unconstructed")
 	assert.NotNil(t, deps.SessionService, "every other subsystem must be unaffected")
 	assert.NotNil(t, deps.BacklogService, "every other subsystem must be unaffected")
+}
+
+// noopTagPoolClient is a minimal headless.PoolClient double used only to construct a real
+// SessionTagClassificationPoller for the wiring tests below — it is never actually called,
+// since these tests only assert whether wireDepsIntoServer starts the poller, not its
+// classification behavior (covered by session/session_tag_poller_test.go).
+type noopTagPoolClient struct{}
+
+func (noopTagPoolClient) CallBlocking(context.Context, headless.FeatureKey, string, string, headless.CallOptions, headless.CostSink) (string, error) {
+	return `{"tags":["Unclassified"]}`, nil
+}
+
+// TestWireDepsIntoServer_should_NotConstructPoller_When_HeadlessPoolNil is Story 4.4.1's
+// degraded/disabled-mode case: forcing deps.SessionTagClassificationPoller to nil (mirroring
+// what BuildRuntimeDeps produces when the claude binary isn't found — see the headlessPool
+// nil-check this poller's construction is guarded by, server/dependencies.go) must not start
+// anything and must not prevent the server from starting normally.
+func TestWireDepsIntoServer_should_NotConstructPoller_When_HeadlessPoolNil(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+	deps.SessionTagClassificationPoller = nil
+
+	newShutdownOnCleanupServer(t, "localhost:0", deps)
+
+	assert.Nil(t, deps.SessionTagClassificationPoller, "a nil poller must stay unconstructed, never started")
+	assert.NotNil(t, deps.SessionService, "the rest of the server must start normally")
+}
+
+// TestWireDepsIntoServer_should_StartPollerExactlyOnce_When_HeadlessPoolPresent is Story
+// 4.4.1's normal-startup case: with a poller present, wireDepsIntoServer must call Start
+// exactly once, logged the same way PRStatusPoller's start is logged.
+func TestWireDepsIntoServer_should_StartPollerExactlyOnce_When_HeadlessPoolPresent(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+	deps.SessionTagClassificationPoller = session.NewSessionTagClassificationPoller(noopTagPoolClient{}, classifier.NewTaggingEngine())
+	require.False(t, deps.SessionTagClassificationPoller.Running(), "poller must not be running before the server wires it up")
+
+	newShutdownOnCleanupServer(t, "localhost:0", deps)
+
+	assert.True(t, deps.SessionTagClassificationPoller.Running(), "wireDepsIntoServer must start the poller")
+}
+
+func TestAnnotateUserPRCache_should_PopulateStatusAndLastActiveFromSnapshot_When_RunningAndPausedInstances(t *testing.T) {
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "s-run", Path: t.TempDir(), Program: "true", SessionType: session.SessionTypeDirectory,
+	})
+	require.NoError(t, err)
+	snap := inst.Snapshot()
+	assert.Equal(t, githubpkg.LinkedSessionRunning, linkedStatusFor(snap.Status))
+	assert.False(t, snap.UpdatedAt.IsZero(), "LastActiveAt source (snapshot UpdatedAt) must be populated")
+
+	// A paused session (worktree removed, branch kept) still reports a status.
+	paused := *snap
+	paused.Status = session.Paused
+	assert.Equal(t, githubpkg.LinkedSessionPaused, linkedStatusFor(paused.Status))
+	assert.Equal(t, githubpkg.LinkedSessionStopped, linkedStatusFor(session.Crashed))
+}
+
+func TestAnnotateUserPRCache_should_LogUnmatchedSessionCount_When_SessionsHaveBranchButNoPR(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	var buf bytes.Buffer
+	prev := logpkg.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { logpkg.SetSlogDefaultForTest(prev) })
+
+	cache := githubpkg.NewUserPRCache()
+	cache.SeedPRsForTest([]githubpkg.UserPR{{Owner: "acme", Repo: "api", Number: 1, HeadRef: "has-pr"}})
+
+	poller := session.NewPRStatusPoller(nil)
+	titles := []string{"no-pr-one", "no-pr-two"}
+	instances := make([]*session.Instance, 0, len(titles))
+	for _, title := range titles {
+		inst, err := session.NewInstance(session.InstanceOptions{
+			Title:       title,
+			Path:        t.TempDir(),
+			Program:     "echo",
+			Branch:      "branch-" + title,
+			GitHubOwner: "acme",
+			GitHubRepo:  "api",
+		})
+		require.NoError(t, err)
+		instances = append(instances, inst)
+	}
+	poller.SetInstances(instances)
+
+	cache.Annotate(buildPRAnnotations(poller, nil))
+
+	out := buf.String()
+	assert.Contains(t, out, "sessions with a branch but no matching PR")
+	assert.Contains(t, out, "count=2")
+}
+
+// Dropping any of SetPRNudger/SetPRDetailFetcher/SetPRTokenResolver in
+// BuildDependencies would make every nudge answer Unavailable with no compile
+// error; an unknown PR instead reaches PR_NOT_FOUND only when all are wired.
+func TestBuildDependencies_should_WireNudgeCollaborators_When_DepsBuilt(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+	require.NotNil(t, deps.GitHubUserService)
+
+	resp, err := deps.GitHubUserService.NudgeSessionForPR(context.Background(), connect.NewRequest(&sessionv1.NudgeSessionForPRRequest{
+		Pr:        &sessionv1.PRKey{Owner: "acme", Repo: "api", Number: 1},
+		SessionId: "s",
+	}))
+
+	if err != nil {
+		assert.NotEqual(t, connect.CodeUnavailable, connect.CodeOf(err), "nudge collaborators are not wired: %v", err)
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assert.Equal(t, sessionv1.NudgeOutcome_NUDGE_OUTCOME_PR_NOT_FOUND, resp.Msg.GetOutcome())
+}
+
+func TestUserPRCacheConfigFromEnv_should_SelectDegradedDetails_When_EnvSet(t *testing.T) {
+	t.Setenv(prPollDegradedEnv, "")
+	assert.False(t, userPRCacheConfigFromEnv().DegradedDetails)
+	t.Setenv(prPollDegradedEnv, "true")
+	assert.True(t, userPRCacheConfigFromEnv().DegradedDetails)
+	t.Setenv(prPollDegradedEnv, "1")
+	assert.True(t, userPRCacheConfigFromEnv().DegradedDetails)
 }

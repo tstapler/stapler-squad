@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/pkg/events"
 )
 
 // newTestStore creates a NotificationHistoryStore backed by a temp file for testing.
@@ -43,6 +46,10 @@ const notifTypeApprovalNeededTest = int32(1)
 
 // TestAppendDedup_SameSessionAndType verifies that two appends with the same
 // (sessionID, notificationType) produce one record with OccurrenceCount=2.
+//
+// T-E2-34 (OS-1, characterization): the delivery gate filters at bus publish, upstream of
+// this store (ADR-001), so #738's coalescing by session and type is the same with the
+// gate on; this test is that unchanged behavior.
 func TestAppendDedup_SameSessionAndType(t *testing.T) {
 	store := newTestStore(t)
 
@@ -206,6 +213,82 @@ func TestAppendDedup_MetadataUpdated(t *testing.T) {
 	}
 	if rec.Message != "New Message" {
 		t.Errorf("expected Message='New Message', got '%s'", rec.Message)
+	}
+}
+
+// TestAppendDedup_ExactIDMatch_UpdatesInPlace verifies that two appends sharing
+// an ID (fork-pressure's stable per-episode alert ID, e.g. on Warning->Critical
+// escalation) collapse to one record with the newer content, even when
+// SessionID/NotificationType differ -- proving the ID-match branch fires
+// independently of the (sessionID, notificationType) dedup path.
+func TestAppendDedup_ExactIDMatch_UpdatesInPlace(t *testing.T) {
+	store := newTestStore(t)
+
+	r1 := makeRecord("episode-1", "fork-pressure", notifTypeDedup)
+	r1.Title = "Fork Pressure: warning"
+	r1.Metadata = map[string]string{"level": "warning"}
+
+	r2 := makeRecord("episode-1", "fork-pressure", notifTypeDedup+1)
+	r2.Title = "Fork Pressure: critical"
+	r2.Metadata = map[string]string{"level": "critical"}
+
+	if err := store.Append(r1); err != nil {
+		t.Fatalf("Append r1: %v", err)
+	}
+	if err := store.Append(r2); err != nil {
+		t.Fatalf("Append r2: %v", err)
+	}
+
+	records, total, err := store.List(ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("expected 1 record, got %d", total)
+	}
+	if records[0].ID != "episode-1" {
+		t.Errorf("expected ID='episode-1', got %q", records[0].ID)
+	}
+	if records[0].Title != "Fork Pressure: critical" {
+		t.Errorf("expected escalated title, got %q", records[0].Title)
+	}
+	if records[0].Metadata["level"] != "critical" {
+		t.Errorf("expected metadata level='critical', got %q", records[0].Metadata["level"])
+	}
+	if records[0].OccurrenceCount != 2 {
+		t.Errorf("expected OccurrenceCount=2, got %d", records[0].OccurrenceCount)
+	}
+}
+
+// TestAppendDedup_ExactIDMatch_IdenticalContentIsNoOp verifies that re-appending
+// the same ID with unchanged Title/Message/Metadata does not bump OccurrenceCount
+// -- a sustained-pressure re-check at the same level shouldn't look like a new
+// occurrence.
+func TestAppendDedup_ExactIDMatch_IdenticalContentIsNoOp(t *testing.T) {
+	store := newTestStore(t)
+
+	r1 := makeRecord("episode-1", "fork-pressure", notifTypeDedup)
+	r2 := makeRecord("episode-1", "fork-pressure", notifTypeDedup)
+	r2.Title = r1.Title
+	r2.Message = r1.Message
+	r2.Metadata = map[string]string{"key": "value-episode-1"}
+
+	if err := store.Append(r1); err != nil {
+		t.Fatalf("Append r1: %v", err)
+	}
+	if err := store.Append(r2); err != nil {
+		t.Fatalf("Append r2: %v", err)
+	}
+
+	records, total, err := store.List(ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("expected 1 record, got %d", total)
+	}
+	if records[0].OccurrenceCount != 1 {
+		t.Errorf("expected OccurrenceCount=1 (no-op on identical content), got %d", records[0].OccurrenceCount)
 	}
 }
 
@@ -1234,5 +1317,285 @@ func TestIsActionableType(t *testing.T) {
 		if IsActionableType(ty) {
 			t.Errorf("expected NotificationType %d to be non-actionable", ty)
 		}
+	}
+}
+
+// TestDemoteExpiredUrgency_should_DemoteToHigh_When_OlderThanTTL verifies the urgency-decay
+// half of the push-gate redesign: a URGENT record older than the TTL is demoted to HIGH —
+// dropped from the push path but never deleted, archived, or marked read, since importance
+// (unlike urgency) doesn't decay.
+func TestDemoteExpiredUrgency_should_DemoteToHigh_When_OlderThanTTL(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now()
+
+	record := makeRecord("aged-urgent", "session-1", notifTypeWarning)
+	record.Priority = priorityUrgent
+	record.CreatedAt = now.Add(-2 * time.Hour)
+	if err := store.Append(record); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	demoted := store.DemoteExpiredUrgency(now, UrgentTTL)
+	if demoted != 1 {
+		t.Fatalf("expected 1 record demoted, got %d", demoted)
+	}
+
+	got, ok := store.GetByID("aged-urgent")
+	if !ok {
+		t.Fatal("record must still exist after demotion — DemoteExpiredUrgency must never delete")
+	}
+	if got.Priority != priorityHigh {
+		t.Errorf("expected priority demoted to HIGH (%d), got %d", priorityHigh, got.Priority)
+	}
+	if got.IsRead {
+		t.Error("demotion must not mark the record read — importance is preserved, not archived")
+	}
+}
+
+// TestDemoteExpiredUrgency_should_NotDemote_When_WithinTTL is the 5-minutes-old
+// counterpart: a fresh URGENT record must stay URGENT (and therefore push-eligible).
+func TestDemoteExpiredUrgency_should_NotDemote_When_WithinTTL(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now()
+
+	record := makeRecord("fresh-urgent", "session-1", notifTypeWarning)
+	record.Priority = priorityUrgent
+	record.CreatedAt = now.Add(-5 * time.Minute)
+	if err := store.Append(record); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	demoted := store.DemoteExpiredUrgency(now, UrgentTTL)
+	if demoted != 0 {
+		t.Fatalf("expected 0 records demoted, got %d", demoted)
+	}
+
+	got, ok := store.GetByID("fresh-urgent")
+	if !ok {
+		t.Fatal("record must still exist")
+	}
+	if got.Priority != priorityUrgent {
+		t.Errorf("expected priority to remain URGENT (%d), got %d", priorityUrgent, got.Priority)
+	}
+}
+
+// TestDemoteExpiredUrgency_should_IgnoreNonUrgentRecords verifies only URGENT records are
+// touched — a HIGH/MEDIUM/LOW record's priority (and importance) is never time-boxed.
+func TestDemoteExpiredUrgency_should_IgnoreNonUrgentRecords(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now()
+
+	record := makeRecord("aged-high", "session-1", notifTypeWarning)
+	record.Priority = priorityHigh
+	record.CreatedAt = now.Add(-2 * time.Hour)
+	if err := store.Append(record); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	demoted := store.DemoteExpiredUrgency(now, UrgentTTL)
+	if demoted != 0 {
+		t.Fatalf("expected 0 records demoted, got %d", demoted)
+	}
+	got, _ := store.GetByID("aged-high")
+	if got.Priority != priorityHigh {
+		t.Errorf("expected priority to remain HIGH (%d), got %d", priorityHigh, got.Priority)
+	}
+}
+
+// TestAppendDedup_ExactIDMatch_ChangedContentMergesInPlace is the regression
+// test for backlog item cfda07b7-73fb-42e1-a21b-7fdf8a052a14 (AC2): a caller
+// using a stable, caller-chosen ID across an episode (e.g. fork-pressure's
+// "fork-pressure-status") must have a second Append() with the SAME ID but
+// DIFFERENT content (e.g. an escalation from Warning to Critical) merge into
+// the existing record — occurrence count incremented, fields updated, surfaced
+// unread again — not silently no-op as a duplicate.
+func TestAppendDedup_ExactIDMatch_ChangedContentMergesInPlace(t *testing.T) {
+	store := newTestStore(t)
+
+	r1 := makeRecord("fork-pressure-status", "fork-pressure", notifTypeWarning)
+	r1.Title = "Fork Pressure: warning"
+	r1.Message = "Spawns: 130/30s"
+	r1.Metadata = map[string]string{"fork_pressure_level": "warning"}
+	if err := store.Append(r1); err != nil {
+		t.Fatalf("Append r1: %v", err)
+	}
+	if _, err := store.MarkRead([]string{"fork-pressure-status"}); err != nil {
+		t.Fatalf("MarkRead: %v", err)
+	}
+
+	r2 := makeRecord("fork-pressure-status", "fork-pressure", notifTypeWarning)
+	r2.Title = "Fork Pressure: critical"
+	r2.Message = "Failures: 12/30s"
+	r2.Metadata = map[string]string{"fork_pressure_level": "critical"}
+	if err := store.Append(r2); err != nil {
+		t.Fatalf("Append r2: %v", err)
+	}
+
+	records, total, err := store.List(ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("expected exactly 1 record (updated in place, not duplicated), got %d", total)
+	}
+
+	rec := records[0]
+	if rec.Title != "Fork Pressure: critical" {
+		t.Errorf("expected Title updated to escalated content, got %q", rec.Title)
+	}
+	if rec.Metadata["fork_pressure_level"] != "critical" {
+		t.Errorf("expected metadata updated to escalated content, got %q", rec.Metadata["fork_pressure_level"])
+	}
+	if rec.OccurrenceCount != 2 {
+		t.Errorf("expected OccurrenceCount=2, got %d", rec.OccurrenceCount)
+	}
+	if rec.IsRead {
+		t.Error("expected escalation to surface the record as unread again")
+	}
+}
+
+// TestAppendDedup_ExactIDMatch_UnchangedContentIsNoOp verifies that a genuinely
+// idempotent retry (same stable ID, identical content) does not bump
+// OccurrenceCount or flip the record back to unread — distinguishing it from
+// the changed-content merge path above.
+func TestAppendDedup_ExactIDMatch_UnchangedContentIsNoOp(t *testing.T) {
+	store := newTestStore(t)
+
+	r1 := makeRecord("fork-pressure-status", "fork-pressure", notifTypeWarning)
+	if err := store.Append(r1); err != nil {
+		t.Fatalf("Append r1: %v", err)
+	}
+	if _, err := store.MarkRead([]string{"fork-pressure-status"}); err != nil {
+		t.Fatalf("MarkRead: %v", err)
+	}
+
+	// Identical content, same ID -- a true idempotent retry.
+	r2 := makeRecord("fork-pressure-status", "fork-pressure", notifTypeWarning)
+	if err := store.Append(r2); err != nil {
+		t.Fatalf("Append r2: %v", err)
+	}
+
+	rec, ok := store.GetByID("fork-pressure-status")
+	if !ok {
+		t.Fatal("GetByID: record not found")
+	}
+	if rec.OccurrenceCount != 1 {
+		t.Errorf("expected OccurrenceCount to stay 1 for an unchanged retry, got %d", rec.OccurrenceCount)
+	}
+	if !rec.IsRead {
+		t.Error("expected an unchanged retry to leave the record's read state untouched")
+	}
+}
+
+// T-CT-01: IsPendingDecision must equal "unread AND actionable AND NOT auto_remediating"
+// for every NotificationType the proto knows about.
+func TestHistory_ShouldSetIsPendingDecisionEqualIsPendingDecisionPredicate_WhenRangingEveryNotificationType(t *testing.T) {
+	t.Parallel()
+	actionable := map[sessionv1.NotificationType]bool{
+		sessionv1.NotificationType_NOTIFICATION_TYPE_APPROVAL_NEEDED:     true,
+		sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED:      true,
+		sessionv1.NotificationType_NOTIFICATION_TYPE_CONFIRMATION_NEEDED: true,
+		sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR:               true,
+		sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING:             true,
+		sessionv1.NotificationType_NOTIFICATION_TYPE_FAILURE:             true,
+	}
+	stamped := map[string]string{events.MetadataKeyAutoRemediating: "true"}
+	for v, name := range sessionv1.NotificationType_name {
+		for _, read := range []bool{false, true} {
+			for _, md := range []map[string]string{nil, stamped, {events.MetadataKeyAutoRemediating: "false"}} {
+				want := actionable[sessionv1.NotificationType(v)] && !read && md[events.MetadataKeyAutoRemediating] != "true"
+				if got := IsPendingDecision(v, md, read); got != want {
+					t.Errorf("IsPendingDecision(%s, %v, read=%v) = %v, want %v", name, md, read, got, want)
+				}
+			}
+		}
+	}
+}
+
+// T-CT-07: one predicate backs Clear, so a stamped auto-remediating WARNING is
+// deleted while an unstamped unread WARNING is kept.
+func TestClear_ShouldDeleteUnreadAutoRemediatingWarningAndKeepUnstampedWarning_WhenOnePredicateShared(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	const warning = int32(8)
+
+	stampedRec := makeRecord("stamped", "s1", warning)
+	stampedRec.Metadata = map[string]string{events.MetadataKeyAutoRemediating: "true"}
+	plainRec := makeRecord("plain", "s2", warning)
+	for _, r := range []*NotificationRecord{stampedRec, plainRec} {
+		if err := store.Append(r); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+
+	cleared, err := store.Clear(nil)
+	if err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+	if cleared != 1 {
+		t.Fatalf("cleared = %d, want 1", cleared)
+	}
+	if _, ok := store.GetByID("stamped"); ok {
+		t.Error("auto-remediating WARNING should have been cleared")
+	}
+	if _, ok := store.GetByID("plain"); !ok {
+		t.Error("unstamped unread WARNING must be kept")
+	}
+}
+
+// T-PR-11: ClearByIDs deletes only the listed ids that are not pending decisions
+// and returns the listed pending ones as kept; unlisted rows are untouched.
+func TestClearByIDs_ShouldDeleteOnlyReadOrNonActionableAndReturnKept_WhenPendingIdIncluded(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	const warning = int32(8)
+	approval, info := notifTypeApprovalNeededTest, notifTypeTaskCompleteTest
+
+	pendingWarning := makeRecord("pending-warning", "s1", warning)
+	pendingApproval := makeRecord("pending-approval", "s2", approval)
+	informational := makeRecord("info", "s3", info)
+	remediating := makeRecord("remediating", "s4", warning)
+	remediating.Metadata = map[string]string{events.MetadataKeyAutoRemediating: "true"}
+	unlisted := makeRecord("unlisted", "s5", info)
+	for _, r := range []*NotificationRecord{pendingWarning, pendingApproval, informational, remediating, unlisted} {
+		if err := store.Append(r); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+
+	deleted, kept, err := store.ClearByIDs([]string{"pending-warning", "pending-approval", "info", "remediating", "missing"})
+	if err != nil {
+		t.Fatalf("ClearByIDs: %v", err)
+	}
+	if deleted != 2 {
+		t.Errorf("deleted = %d, want 2 (info and the auto-remediating warning)", deleted)
+	}
+	if len(kept) != 2 || kept[0] != "pending-warning" || kept[1] != "pending-approval" {
+		t.Errorf("kept = %v, want [pending-warning pending-approval]", kept)
+	}
+	for _, id := range []string{"pending-warning", "pending-approval", "unlisted"} {
+		if _, ok := store.GetByID(id); !ok {
+			t.Errorf("%s must survive ClearByIDs", id)
+		}
+	}
+	for _, id := range []string{"info", "remediating"} {
+		if _, ok := store.GetByID(id); ok {
+			t.Errorf("%s should have been deleted", id)
+		}
+	}
+}
+
+func TestClearByIDs_ShouldBeNoOp_WhenIdsEmpty(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	if err := store.Append(makeRecord("a", "s1", notifTypeTaskCompleteTest)); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	deleted, kept, err := store.ClearByIDs(nil)
+	if err != nil || deleted != 0 || len(kept) != 0 {
+		t.Fatalf("ClearByIDs(nil) = %d, %v, %v; want 0, nil, nil", deleted, kept, err)
+	}
+	if _, ok := store.GetByID("a"); !ok {
+		t.Error("an empty id list must delete nothing")
 	}
 }

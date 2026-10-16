@@ -40,6 +40,54 @@ export const icon = style({
   marginRight: vars.space["1"],
 });
 
+export const textClamp = style({
+  display: "-webkit-box",
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: "vertical",
+  overflow: "hidden",
+});
+
+export const pager = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+});
+
+export const pagerButton = styleVariants(severityColors, (c) => ({
+  background: "none",
+  border: "none",
+  color: c.text,
+  cursor: "pointer",
+  fontSize: vars.fontSize.base,
+  lineHeight: 1,
+  padding: `0 ${vars.space["1"]}`,
+  ":hover": {
+    opacity: 0.85,
+  },
+}));
+
+export const pagerLabel = styleVariants(severityColors, (c) => ({
+  color: c.text,
+  fontSize: vars.fontSize.sm,
+  opacity: 0.85,
+  whiteSpace: "nowrap",
+}));
+
+export const toggleButton = styleVariants(severityColors, (c) => ({
+  background: "none",
+  border: "none",
+  color: c.text,
+  cursor: "pointer",
+  fontSize: vars.fontSize.sm,
+  fontWeight: vars.fontWeight.medium,
+  textDecoration: "underline",
+  whiteSpace: "nowrap",
+  padding: `0 ${vars.space["1"]}`,
+  ":hover": {
+    opacity: 0.85,
+  },
+}));
+
 export const rowActions = style({
   display: "flex",
   alignItems: "center",

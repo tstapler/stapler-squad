@@ -24,6 +24,7 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     skipReviewGate: false,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     planApproved: true,
     acCriteria: [],
     linkedSessions: [],
@@ -54,6 +55,8 @@ function renderActionsSection(julesDispatchGate: JulesDispatchGate | undefined, 
       terminalState={null}
       julesDispatchGate={julesDispatchGate}
       onDispatchToJulesClick={noop}
+      activeWorkSessionCount={0}
+      onSendBackWithFeedback={async () => {}}
     />
   );
 }

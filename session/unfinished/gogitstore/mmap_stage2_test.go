@@ -27,6 +27,8 @@ import (
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/cache"
+
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // forceIndexBuild resolves repo's HEAD commit, forcing an actual
@@ -322,20 +324,13 @@ func TestPackWatch_FsnotifyTriggersRefresh(t *testing.T) {
 	writeAndCommit(t, dir, "fsnotify-marker.txt", "trigger a repack\n", "trigger repack")
 	gitRun(t, dir, "gc", "-q", "--aggressive")
 
-	deadline := time.Now().Add(10 * time.Second)
-	for {
+	wait.RequireEventually(t, func() bool {
 		store.mu.Lock()
 		_, oldStillPresent := store.index[oldHash]
 		numPacks := len(store.index)
 		store.mu.Unlock()
-		if !oldStillPresent && numPacks == 1 {
-			return // success: the background watcher picked up the repack on its own
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for the background pack watcher to detect the repack (oldStillPresent=%v, numPacks=%d)", oldStillPresent, numPacks)
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+		return !oldStillPresent && numPacks == 1
+	}, 10*time.Second, 50*time.Millisecond, "timed out waiting for the background pack watcher to detect the repack on its own")
 }
 
 // --- the generation/refcount safety property under real concurrent load ---
@@ -453,7 +448,7 @@ func TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack(t *testing.T) {
 	// the readers' own pin/unpin cadence, so readers must still be active
 	// for a little while after retiring is set, not just during the gc
 	// subprocess itself.
-	const readerGrace = 2 * time.Second
+	const readerGrace = 2 * time.Second // unmap-wait budget scales from this (x10)
 	var mismatch atomic.Bool
 	var mismatchDetail atomic.Value // string
 
@@ -618,6 +613,8 @@ func TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack(t *testing.T) {
 	// count would indicate a double-release bug, the pack-mapping-level
 	// analogue of TestRegistry_ConcurrentOpenClose_NeverEvictsInUseStore's
 	// whole-store-level check.
+	checkerTick := time.NewTicker(time.Millisecond)
+	defer checkerTick.Stop()
 	bgWG.Add(1)
 	go func() {
 		defer bgWG.Done()
@@ -635,7 +632,7 @@ func TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack(t *testing.T) {
 				mismatchDetail.Store("handle.pins went negative — double-release bug")
 				return
 			}
-			time.Sleep(time.Millisecond)
+			<-checkerTick.C
 		}
 	}()
 
@@ -646,6 +643,8 @@ func TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack(t *testing.T) {
 	// timeout plus readerGrace and slack, so a regression that breaks
 	// unmapping fails loudly instead of hanging the suite.
 	proberDeadline := time.Now().Add(5*time.Minute + readerGrace + 30*time.Second)
+	proberTick := time.NewTicker(time.Millisecond)
+	defer proberTick.Stop()
 	bgWG.Add(1)
 	go func() {
 		defer bgWG.Done()
@@ -692,7 +691,7 @@ func TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack(t *testing.T) {
 				mismatchDetail.Store("prober: handle was never unmapped before deadline")
 				return
 			}
-			time.Sleep(time.Millisecond)
+			<-proberTick.C
 		}
 	}()
 
@@ -707,11 +706,18 @@ func TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack(t *testing.T) {
 	case <-time.After(5 * time.Minute):
 		t.Fatal("repack was never detected (repackDone never closed) within 5m")
 	}
-	// Readers must still be cycling for a bit after retirement is detected
-	// so the zero-pins-triggered unmap (maybeUnmapLocked) actually fires
-	// while at least one of them is live to observe the resulting empty
-	// read.
-	time.Sleep(readerGrace)
+	// Readers must still be cycling after retirement is detected so the
+	// zero-pins-triggered unmap (maybeUnmapLocked) actually fires while at
+	// least one of them is live to observe the resulting empty read: wait
+	// for exactly that outcome (or a failure) rather than a fixed grace.
+	wait.RequireEventually(t, func() bool {
+		if mismatch.Load() {
+			return true
+		}
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return li.handle.unmapped && sawEmptyRead.Load()
+	}, readerGrace*10, time.Millisecond, "retired pack was never unmapped and observed empty by a live reader")
 	close(stop)
 	readerWG.Wait()
 	bgWG.Wait()

@@ -337,16 +337,32 @@ func TestPool_Call_MultiLineOutput_StreamsInOrder(t *testing.T) {
 	ch, err := pool.Call(context.Background(), "f1", "sys", "p2")
 	require.NoError(t, err)
 
-	var lines []string
+	var chunks []string
 	for chunk := range ch {
 		if chunk.Done {
 			break
 		}
 		if chunk.Text != "" {
-			lines = append(lines, chunk.Text)
+			chunks = append(chunks, chunk.Text)
 		}
 	}
-	assert.Equal(t, []string{"line1", "line2", "line3"}, lines)
+	// Each line after the first carries its leading newline separator.
+	assert.Equal(t, []string{"line1", "\nline2", "\nline3"}, chunks)
+}
+
+// TestPool_CallBlocking_ResumedCall_PreservesLineBreaks guards against the
+// resumed path collapsing multi-line plain-text stdout into one line (it once
+// ran a PR body's "## Summary" heading into the next paragraph).
+func TestPool_CallBlocking_ResumedCall_PreservesLineBreaks(t *testing.T) {
+	t.Parallel()
+	const body = "## Summary\n\nFixes the thing.\n\n## Test plan\n- run tests"
+	runner := NewFakeRunner(firstCallJSON("sess1", "first"), body+"\n")
+	pool := newTestPool(PoolConfig{}, runner)
+
+	pool.CallBlocking(context.Background(), "f1", "sys", "p1", CallOptions{}, DiscardCost) //nolint:errcheck
+	got, err := pool.CallBlocking(context.Background(), "f1", "sys", "p2", CallOptions{}, DiscardCost)
+	require.NoError(t, err)
+	assert.Equal(t, body, got)
 }
 
 // TestPool_CallBlocking_PropagatesSubprocessError verifies error propagation,
@@ -1064,10 +1080,12 @@ func TestPool_CallBlocking_ZeroValueOptions_MatchesLegacyCallBlockingBehavior(t 
 	pool := newTestPool(PoolConfig{MaxCallsPerSession: 25}, runner)
 
 	var cost float64
-	result, err := pool.CallBlocking(context.Background(), "feat-zero", "system", "user prompt", CallOptions{}, func(usd float64) { cost = usd })
+	var priced bool
+	result, err := pool.CallBlocking(context.Background(), "feat-zero", "system", "user prompt", CallOptions{}, func(usd float64, p bool) { cost = usd; priced = p })
 	require.NoError(t, err)
 	assert.Equal(t, "hello", result)
 	assert.InDelta(t, 0.001, cost, 1e-9, "cost_usd from the JSON result must be forwarded")
+	assert.True(t, priced, "Claude's total_cost_usd is always authoritative, so sink must fire with priced=true")
 
 	pool.mu.Lock()
 	state := pool.sessions["feat-zero"]
@@ -1101,8 +1119,22 @@ func TestPool_CallBlocking_WithWorkDir_ReturnsCostAndUsesWorkDir(t *testing.T) {
 	pool := NewPoolWithRunner(PoolConfig{MaxCallsPerSession: 25, MaxConcurrentSessions: 2}, runner)
 
 	var cost float64
-	result, err := pool.CallBlocking(context.Background(), "feat-workdir", "sys", "prompt", CallOptions{WorkDir: workDir}, func(usd float64) { cost = usd })
+	var priced bool
+	result, err := pool.CallBlocking(context.Background(), "feat-workdir", "sys", "prompt", CallOptions{WorkDir: workDir}, func(usd float64, p bool) { cost = usd; priced = p })
 	require.NoError(t, err)
 	assert.Equal(t, workDir, result, "subprocess must run with cwd set to opts.WorkDir")
 	assert.InDelta(t, 0.0077, cost, 1e-9, "cost_usd must be returned for WorkDir calls too")
+	assert.True(t, priced, "Claude's total_cost_usd is always authoritative, so sink must fire with priced=true")
+}
+
+func TestPool_CallBlocking_ReportsConversationIDViaOnConversationID(t *testing.T) {
+	t.Parallel()
+	pool := newTestPool(PoolConfig{}, NewFakeRunner(firstCallJSON("conv-42", "ok")))
+
+	var got string
+	_, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt",
+		CallOptions{OnConversationID: func(id string) { got = id }}, DiscardCost)
+
+	require.NoError(t, err)
+	assert.Equal(t, "conv-42", got)
 }
