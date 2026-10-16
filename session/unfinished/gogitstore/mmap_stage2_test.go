@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -27,6 +26,7 @@ import (
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/cache"
+	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -49,9 +49,6 @@ func forceIndexBuild(t *testing.T, repo *git.Repository) {
 // --- toggle: default off, opt-in engages the mmap path --------------------
 
 func TestRegistry_UseMmapIndex_DefaultFalse_FallsBackToCopyLoader(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
-	}
 	dir := t.TempDir()
 	buildPackedFixture(t, dir, 30)
 
@@ -79,9 +76,6 @@ func TestRegistry_UseMmapIndex_DefaultFalse_FallsBackToCopyLoader(t *testing.T) 
 }
 
 func TestRegistry_UseMmapIndex_True_EngagesMmapLoader(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
-	}
 	dir := t.TempDir()
 	buildPackedFixture(t, dir, 30)
 
@@ -137,13 +131,10 @@ func TestRegistry_UseMmapIndex_True_EngagesMmapLoader(t *testing.T) {
 //
 // Run explicitly with `go test -run '^$' -bench BenchmarkMmapIndex_HeapAllocation
 // -benchmem ./session/unfinished/gogitstore/...` — not part of any -short or
-// default `go test` run, and not gated on CI's `git gc --aggressive` fixture
+// default `go test` run, and not gated on CI's repack fixture
 // corruption issue (see PR #162) since it never runs in the default `go test`
 // CI lane either.
 func BenchmarkMmapIndex_HeapAllocation_CopyVsMmap(b *testing.B) {
-	if _, err := exec.LookPath("git"); err != nil {
-		b.Skip("git binary not available")
-	}
 	dir := b.TempDir()
 	buildPackedFixture(b, dir, 600) // large enough for the copy's O(n) cost to be clearly visible
 
@@ -181,9 +172,6 @@ func BenchmarkMmapIndex_HeapAllocation_CopyVsMmap(b *testing.B) {
 // bookkeeping — an object that only exists in the NEW pack is actually
 // readable end-to-end via the repository afterward.
 func TestSharedIndex_MmapMode_RefreshDetectsRepack(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
-	}
 	dir := t.TempDir()
 	buildPackedFixture(t, dir, 30)
 
@@ -224,10 +212,10 @@ func TestSharedIndex_MmapMode_RefreshDetectsRepack(t *testing.T) {
 	}
 
 	// Add a new commit with distinctive, easily-findable content, then force
-	// a fresh repack — real git, real unlink-of-the-old-pack-files behavior.
+	// a fresh repack — go-git repack, real unlink-of-the-old-pack-files behavior.
 	newBlobContent := "stage-2-staleness-marker-object\n"
 	writeAndCommit(t, dir, "staleness-marker.txt", newBlobContent, "add staleness marker")
-	gitRun(t, dir, "gc", "-q", "--aggressive")
+	repackDir(t, dir)
 
 	if err := store.refreshIndexes(); err != nil {
 		t.Fatalf("refreshIndexes: %v", err)
@@ -291,9 +279,6 @@ func TestSharedIndex_MmapMode_RefreshDetectsRepack(t *testing.T) {
 // retry loop rather than a fixed sleep, since fsnotify delivery plus the
 // debounce timer are inherently asynchronous.
 func TestPackWatch_FsnotifyTriggersRefresh(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
-	}
 	dir := t.TempDir()
 	buildPackedFixture(t, dir, 30)
 
@@ -322,7 +307,7 @@ func TestPackWatch_FsnotifyTriggersRefresh(t *testing.T) {
 	}
 
 	writeAndCommit(t, dir, "fsnotify-marker.txt", "trigger a repack\n", "trigger repack")
-	gitRun(t, dir, "gc", "-q", "--aggressive")
+	repackDir(t, dir)
 
 	wait.RequireEventually(t, func() bool {
 		store.mu.Lock()
@@ -338,7 +323,7 @@ func TestPackWatch_FsnotifyTriggersRefresh(t *testing.T) {
 // TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack is the single most
 // important test in this package's stage-2 addition. It holds many
 // concurrent Entries() iterators open on a pack's mmap-backed index (pinning
-// its generation) while, from other goroutines, a REAL `git gc --aggressive`
+// its generation) while, from other goroutines, a REAL go-git repack
 // repack and repeated refreshIndexes() calls race to retire and unmap that
 // exact generation. Every reader continuously verifies the bytes it reads
 // match a reference snapshot taken before any concurrency started — a
@@ -357,15 +342,12 @@ func TestPackWatch_FsnotifyTriggersRefresh(t *testing.T) {
 // joining.
 func TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack(t *testing.T) {
 	if testing.Short() {
-		// This test's cost is dominated by driving a REAL `git gc --aggressive`
+		// This test's cost is dominated by driving a REAL go-git repack
 		// repack concurrently with many pinned readers (see the doc comment
 		// above), not by the now-cached fixture build — fixture caching does
 		// not fix that. See session/unfinished/gogitstore/soak_test.go for the
 		// established -short convention in this package.
 		t.Skip("skipped under -short: too slow for make test/quick-check")
-	}
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
 	}
 	dir := t.TempDir()
 	buildPackedFixture(t, dir, 80)
@@ -456,7 +438,7 @@ func TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack(t *testing.T) {
 	// repackDone is closed once the repacker's first post-gc
 	// refreshIndexes() call returns, i.e. once retirement of the old
 	// generation has actually been detected. Reader lifetime used to be a
-	// fixed 2s wall-clock deadline based on an assumption that `git gc
+	// fixed 2s wall-clock deadline based on an assumption that a repack
 	// --aggressive` "reliably takes tens to hundreds of milliseconds" —
 	// on a slower machine (or one with per-file EDR/AV syscall hooking
 	// overhead, see docs/how-to/fix-playwright-chromium-install-stall.md
@@ -572,13 +554,13 @@ func TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack(t *testing.T) {
 			mismatchDetail.Store("commit: " + cerr.Error())
 			return
 		}
-		if gerr := runGitCmd(dir, "gc", "-q", "--aggressive"); gerr != nil {
+		if gerr := repackErr(dir); gerr != nil {
 			mismatch.Store(true)
 			mismatchDetail.Store("gc: " + gerr.Error())
 			return
 		}
 		// Call refreshIndexes at least once, unconditionally, before ever
-		// checking `stop` — git gc above is a real subprocess whose
+		// checking `stop` — the repack above is a real operation whose
 		// duration is unpredictable (observed anywhere from tens of
 		// milliseconds to ~90s on this fixture depending on the machine);
 		// if `stop` happened to already be closed by the time this
@@ -593,7 +575,7 @@ func TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack(t *testing.T) {
 		// Signal that retirement has been detected — the main goroutine
 		// waits on this (not a wall-clock guess) before winding readers
 		// down, so readers are guaranteed to still be running through the
-		// actual repack regardless of how long `git gc` took.
+		// actual repack regardless of how long the repack took.
 		close(repackDone)
 		for {
 			select {
@@ -772,37 +754,33 @@ func storeIndexHas(store *SharedObjectStore, h plumbing.Hash) (*lockedIndex, boo
 }
 
 // writeAndCommit writes content to a file in the fixture repo and commits
-// it, using *testing.T reporting — ONLY safe to call from the goroutine
-// actually running the test function. See runGitCmd/commitFileNoT below for
+// it with go-git, using *testing.T reporting — ONLY safe to call from the
+// goroutine actually running the test function. See commitFileNoT below for
 // the background-goroutine-safe equivalent.
 func writeAndCommit(t *testing.T, repoDir, relPath, content, message string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(repoDir, relPath), []byte(content), 0o644); err != nil {
-		t.Fatalf("write %s: %v", relPath, err)
+	if err := commitFileNoT(repoDir, relPath, content, message); err != nil {
+		t.Fatalf("writeAndCommit %s: %v", relPath, err)
 	}
-	gitRun(t, repoDir, "add", relPath)
-	gitRun(t, repoDir, "commit", "-q", "-m", message)
 }
 
-// runGitCmd runs git in dir and returns an error instead of calling
-// *testing.T reporting methods — the ONLY safe way to shell out to git from
-// a background goroutine during a test (see
-// TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack's doc comment).
-// Thin wrapper over gogitstore_test.go's gitRunErr (nil logf — no
-// *testing.T available here) — see that function's doc comment for the
-// retry policy and its documented limits (in-place retry vs.
-// buildPackedFixture's separate whole-fixture-rebuild retry).
-func runGitCmd(dir string, args ...string) error {
-	return gitRunErr(nil, dir, args...)
-}
-
-// commitFileNoT is writeAndCommit's background-goroutine-safe equivalent.
+// commitFileNoT is writeAndCommit's background-goroutine-safe equivalent: it
+// returns an error instead of calling *testing.T reporting methods.
 func commitFileNoT(repoDir, relPath, content, message string) error {
 	if err := os.WriteFile(filepath.Join(repoDir, relPath), []byte(content), 0o644); err != nil {
 		return err
 	}
-	if err := runGitCmd(repoDir, "add", relPath); err != nil {
+	repo, err := git.PlainOpen(repoDir)
+	if err != nil {
 		return err
 	}
-	return runGitCmd(repoDir, "commit", "-q", "-m", message)
+	wt, err := repo.Worktree()
+	if err != nil {
+		return err
+	}
+	if _, err := wt.Add(relPath); err != nil {
+		return err
+	}
+	_, err = wt.Commit(message, &git.CommitOptions{Author: &object.Signature{Name: "test", Email: "test@test.local", When: time.Now()}})
+	return err
 }

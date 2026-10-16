@@ -24,7 +24,6 @@ package gogitstore
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -113,9 +112,6 @@ const minRealisticIdxBytes = 250 * 1024
 // a failure, is correct here.
 func realRepoIdxOrSkip(b *testing.B) (repoRoot, idxPath string, idxSize int64) {
 	b.Helper()
-	if _, err := exec.LookPath("git"); err != nil {
-		b.Skip("git binary not available")
-	}
 
 	repoRoot = realRepoRootForBench(b)
 	gitDir := filepath.Join(repoRoot, ".git")
