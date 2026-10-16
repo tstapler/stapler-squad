@@ -456,6 +456,7 @@ func (g *GoGitVCSReader) pruneRepoCache() {
 func (g *GoGitVCSReader) PruneToMemoryBudget() {
 	g.pruneRepoCache()
 	g.pruneRepoStates()
+	g.pruneScanSkip(g.UnderSeverePressure())
 }
 
 // ClearCache evicts ALL cached *git.Repository entries, allowing their
@@ -479,6 +480,7 @@ func (g *GoGitVCSReader) ClearCache() {
 		return true
 	})
 	g.dropAllRepoStates()
+	g.pruneScanSkip(true)
 }
 
 // GoGitVCSReader implements VCSReader using the go-git library.
@@ -609,6 +611,10 @@ type GoGitVCSReader struct {
 	// per-file lstat of the tracked-file stat passes (HasUncommitted and
 	// DiffShortstat). Observer-only test seam for StatCount; nil in production.
 	statFn func(rel string)
+
+	// scanSkip holds the scan_skip rollback unit's caches (index, untracked
+	// dirs, DirtyGen) and its clock/flag test seams; see scanskip_state.go.
+	scanSkip scanSkipState
 }
 
 // matcherCacheEntry is the value type stored in GoGitVCSReader.matcherCache.
@@ -1120,6 +1126,7 @@ func (g *GoGitVCSReader) ForgetWorktree(worktreePath string) {
 	g.InvalidateWorktree(worktreePath)
 	g.reachableSetCache.Delete(worktreePath)
 	g.invalidationGen.Delete(worktreePath)
+	g.forgetScanSkip(worktreePath)
 }
 
 // worktreeGitDir returns the path to this worktree's own gitdir — the main

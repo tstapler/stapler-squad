@@ -171,3 +171,41 @@ func CommitAll(t testing.TB, repo *git.Repository, files map[string]string, msg 
 	}
 	return h
 }
+
+// CommitManyFast is CommitAll for tens of thousands of files: it writes them,
+// builds the index entries straight from stat and the content hash, and
+// commits. Blob objects are NOT stored, so use it for index/stat/walk
+// fixtures only, never where HEAD blobs are read (diff counting).
+func CommitManyFast(t testing.TB, repo *git.Repository, files map[string]string, msg string, when time.Time) plumbing.Hash {
+	t.Helper()
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("testrepo: Worktree: %v", err)
+	}
+	root := wt.Filesystem.Root()
+	WriteFiles(t, root, files)
+	idx := &index.Index{Version: 2}
+	for _, name := range sortedKeys(files) {
+		fi, err := os.Lstat(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatalf("testrepo: stat %s: %v", name, err)
+		}
+		idx.Entries = append(idx.Entries, &index.Entry{
+			Hash:       plumbing.ComputeHash(plumbing.BlobObject, []byte(files[name])),
+			Name:       name,
+			Mode:       filemode.Regular,
+			Size:       uint32(fi.Size()), //nolint:gosec // fixture files are tiny
+			ModifiedAt: fi.ModTime(),
+			CreatedAt:  fi.ModTime(),
+		})
+	}
+	if err := repo.Storer.SetIndex(idx); err != nil {
+		t.Fatalf("testrepo: SetIndex: %v", err)
+	}
+	sig := Signature(when)
+	h, err := wt.Commit(msg, &git.CommitOptions{Author: sig, Committer: sig, AllowEmptyCommits: true})
+	if err != nil {
+		t.Fatalf("testrepo: Commit: %v", err)
+	}
+	return h
+}

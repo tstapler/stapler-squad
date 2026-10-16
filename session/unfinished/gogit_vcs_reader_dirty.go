@@ -17,6 +17,8 @@ type trackedFile struct {
 	name       string
 	size       uint32
 	modifiedAt time.Time
+	// skipWorktree marks a sparse-checkout entry; set only by the scan_skip index cache.
+	skipWorktree bool
 }
 
 // hasUncommittedGoGitPhase runs the go-git index phase of HasUncommitted.
@@ -70,7 +72,7 @@ func (g *GoGitVCSReader) hasUncommittedGoGitPhase(entry *cachedRepo, worktreePat
 	// must happen in the caller after this function returns.
 	result := make([]trackedFile, len(idx.Entries))
 	for i, idxEntry := range idx.Entries {
-		result[i] = trackedFile{idxEntry.Name, idxEntry.Size, idxEntry.ModifiedAt}
+		result[i] = trackedFile{name: idxEntry.Name, size: idxEntry.Size, modifiedAt: idxEntry.ModifiedAt}
 	}
 	return result, false, false, matcher, nil
 }
@@ -88,6 +90,10 @@ func (g *GoGitVCSReader) HasUncommitted(worktreePath string) (bool, error) {
 		entry, err := g.openRepoEntry(worktreePath)
 		if err != nil {
 			return false, fmt.Errorf("open repo %s: %w", worktreePath, err)
+		}
+
+		if g.effectiveFlags().ScanSkip {
+			return g.hasUncommittedSkip(entry, worktreePath)
 		}
 
 		// Phase 1: go-git index phase — entry.mu is held only inside this call.
