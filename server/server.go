@@ -634,7 +634,20 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// pipeline is wired in Epic 1.3; these stubs return CodeUnimplemented until
 	// then so the registration plumbing can be verified independently.
 	if deps.Storage != nil {
-		bundleSvc := services.NewSessionBundleService(deps.Storage)
+		// Wrap concrete pointers in their interface types here so a nil concrete
+		// pointer becomes a nil interface value — not a non-nil interface holding
+		// a nil pointer, which would bypass the nil guards inside SessionBundleService.
+		var bundleCtxHistory services.ContextHistoryReader
+		if deps.CtxHistoryStore != nil {
+			bundleCtxHistory = deps.CtxHistoryStore
+		}
+		var bundleScrollback services.ScrollbackReader
+		if deps.ScrollbackManager != nil {
+			bundleScrollback = deps.ScrollbackManager
+		}
+		bundleSvc := services.NewSessionBundleService(deps.Storage, bundleCtxHistory, bundleScrollback)
+		bundleSvc.SetPoller(deps.ReviewQueuePoller)
+		bundleSvc.SetExternalDiscovery(deps.ExternalDiscovery)
 		bundlePath, bundleHandler := sessionv1connect.NewSessionBundleServiceHandler(bundleSvc, ConnectOptions(deps.ErrorRegistry)...)
 		bundleAPIPath := "/api" + bundlePath
 		srv.RegisterConnectHandler(bundleAPIPath, http.StripPrefix("/api", bundleHandler))
