@@ -115,6 +115,7 @@ type sigFake struct {
 	base      plumbing.Hash
 	shallow   repostate.ShallowStamp
 	index     map[string]statSig
+	flags     *Flags   // nil means preludeFlags
 	order     []string // HasUncommitted call order
 	resolved  atomic.Int64
 	inFlight  atomic.Int64
@@ -132,7 +133,12 @@ func newSigFake(paths ...string) *sigFake {
 
 func hashOf(b byte) plumbing.Hash { var h plumbing.Hash; h[0] = b; return h }
 
-func (f *sigFake) effectiveFlags() Flags { return preludeFlags }
+func (f *sigFake) effectiveFlags() Flags {
+	if f.flags != nil {
+		return *f.flags
+	}
+	return preludeFlags
+}
 func (f *sigFake) ListWorktrees(string) ([]WorktreeInfo, error) {
 	return f.wts, nil
 }
@@ -277,4 +283,38 @@ func TestScanSignature_ShouldEngageForUnchangedSiblings_OnScriptedFixture(t *tes
 	st := s.ScanStateStats()
 	assert.EqualValues(t, (rounds+1)*len(paths), st.SignatureChecks)
 	assert.EqualValues(t, rounds*(len(paths)-1), st.SignatureSkips, "engagement = 60/84 = 71.4 percent of lookups")
+}
+
+// The skip is worth something measurable: after a commit in one of four
+// worktrees and a repo-wide invalidation (what a .git event does), the
+// signature path decodes strictly fewer commits than the legacy path.
+func TestScanSignature_ShouldDecodeFewerCommits_WhenSiblingCommits(t *testing.T) {
+	t.Parallel()
+	decodesAfterSiblingCommit := func(t *testing.T, flags Flags) int64 {
+		t.Helper()
+		p := newPreludeRepo(t, 3)
+		c := NewCountingReader()
+		c.scanSkip.flags = &flags
+		for i, wt := range p.all() {
+			c.Track(t, wt)
+			testrepo.CommitAll(t, testrepo.OpenLinked(t, wt), map[string]string{"f.txt": "x\n"}, "ahead", testrepo.Epoch.Add(time.Duration(i+1)*time.Hour))
+		}
+		s := NewScannerWithReader(nil, nil, c)
+		s.scanRepo(p.mainDir, true)
+
+		testrepo.CommitAll(t, testrepo.OpenLinked(t, p.wts[0]), map[string]string{"g.txt": "y\n"}, "second", testrepo.Epoch.Add(9*time.Hour))
+		for _, wt := range p.all() {
+			c.InvalidateWorktree(wt)
+		}
+		before := c.DecodeCount()
+		s.scanRepo(p.mainDir, true)
+		return c.DecodeCount() - before
+	}
+
+	off := decodesAfterSiblingCommit(t, Flags{})
+	on := decodesAfterSiblingCommit(t, preludeFlags)
+
+	t.Logf("commit decodes in the scan after a sibling commit: flags off %d, signature skip %d", off, on)
+	assert.Positive(t, off)
+	assert.Less(t, on, off)
 }

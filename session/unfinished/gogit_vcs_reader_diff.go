@@ -222,7 +222,7 @@ func (g *GoGitVCSReader) diffShortstatUncachedPass(worktreePath string, pass *st
 	// a blob read nor a file read.
 	var d DiffStat
 	var memo *fileDiffMemo
-	if EffectiveFlags().DiffCounter {
+	if g.effectiveFlags().DiffCounter {
 		memo = diffMemoInstance()
 	}
 	pending := make([]pendingTarget, 0, len(stagedTargets)+len(unstagedTargets))

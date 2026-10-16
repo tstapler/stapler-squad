@@ -208,6 +208,12 @@ type Scanner struct {
 	// clock is the injected time source for signature expiry (nil: time.Now).
 	clock func() time.Time
 
+	// shadow is the sampled legacy-path verifier (shadow_verify.go).
+	shadow shadowVerifier
+	// debugLog and debugOn are the debug-log seam; nil use the process logger.
+	debugLog func(msg string, args ...any)
+	debugOn  func() bool
+
 	// gitwatch holds the Tier A linked-worktree watch state and test seam
 	// (scanner_gitwatch.go).
 	gitwatch gitwatchState
@@ -265,6 +271,7 @@ func NewScannerWithReader(eventBus *pkgevents.EventBus, stateStore *StateStore, 
 		fsDebounce:              fsnotifyDebounce,
 	}
 	s.autoSpiderEnabled.Store(true)
+	currentScanner.Store(s)
 	s.gitwatch.watchWorktreeGitdirs = EffectiveFlags().WatchWorktreeGitdirs
 	return s
 }
@@ -586,9 +593,11 @@ func (s *Scanner) worker(ctx context.Context) {
 			if !ok {
 				return
 			}
+			started := s.now()
 			results := s.scanRepo(task.repoPath, task.force)
 			s.publishResults(results)
 			recordScanCycle()
+			recordScanCycleDuration(s.now().Sub(started))
 			s.inFlight.Delete(task.repoPath)
 		}
 	}
@@ -616,6 +625,7 @@ func (s *Scanner) scanRepo(repoPath string, force bool) []ScanResult {
 	// The Burst's RefSnapshot lives exactly as long as this call.
 	s.beginBurst(repoPath, defaultBranch, worktreePaths(worktrees))
 	defer s.endBurst(repoPath)
+	defer s.logScanCycle(repoPath, len(worktrees))()
 
 	var results []ScanResult
 	for _, wt := range s.changedFirst(repoPath, worktrees) {
@@ -680,6 +690,8 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string, 
 		}
 	}
 
+	shadow := s.beginShadow(repoPath, wt.Path)
+
 	uncommitted, pass, err := s.hasUncommitted(wt.Path)
 	if err != nil {
 		if strings.Contains(err.Error(), "timed out") {
@@ -717,6 +729,7 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string, 
 	}
 
 	result.Status = ScanResultStatusOK
+	shadow.finish(&result, defaultBranch)
 	s.setCache(cache, result)
 	return result
 }

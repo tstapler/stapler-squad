@@ -217,7 +217,5 @@ func scanResultFor(t *testing.T, s *Scanner, repoPath, wt string) ScanResult {
 
 func openRepo(t *testing.T, dir string) *git.Repository {
 	t.Helper()
-	repo, err := git.PlainOpen(dir)
-	require.NoError(t, err)
-	return repo
+	return testrepo.OpenLinked(t, dir)
 }

@@ -421,3 +421,25 @@ func worktreePaths(wts []WorktreeInfo) []string {
 	}
 	return paths
 }
+
+// currentScanner is the process's most recently constructed Scanner, read by
+// the metrics callback (the production process has exactly one).
+var currentScanner atomic.Pointer[Scanner]
+
+// logScanCycle starts the per-Burst debug line and returns the function that
+// emits it: repo, worktrees, duration, decodes and graph rows filled. Disabled
+// (the default level) it costs one level check and no counter reads.
+func (s *Scanner) logScanCycle(repoPath string, worktrees int) func() {
+	if !s.debugEnabled() {
+		return func() {}
+	}
+	started := s.now()
+	decodes0, rows0 := cycleCounters()
+	return func() {
+		decodes1, rows1 := cycleCounters()
+		s.logDebug("scan cycle",
+			"repo", repoPath, "worktrees", worktrees,
+			"duration", s.now().Sub(started),
+			"decodes", decodes1-decodes0, "graph_rows_filled", rows1-rows0)
+	}
+}

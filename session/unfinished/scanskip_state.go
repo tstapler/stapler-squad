@@ -68,6 +68,8 @@ type scanSkipState struct {
 	dirtyGens  lazyMap[string, *DirtyGen]
 	stats      scanSkipCounters
 	refs       refResolveCounters
+	// oracle is the lazily built legacy-path reader of the shadow-verify sampler.
+	oracle atomic.Pointer[GoGitVCSReader]
 
 	// passSF coalesces HasUncommittedPass callers; its result type differs
 	// from hasUncommittedSF's, so it needs its own group.

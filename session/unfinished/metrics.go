@@ -121,5 +121,8 @@ func RegisterMetrics() error {
 		}
 		return nil
 	}, hits, misses, timeSavedMs, repoCacheSize, repoCacheColdOpens, repoCacheEvictions, scanCycles, dirtyFullWalks)
-	return err
+	if err != nil {
+		return err
+	}
+	return registerRepostateMetrics(meter, collectRepostateInputs)
 }
