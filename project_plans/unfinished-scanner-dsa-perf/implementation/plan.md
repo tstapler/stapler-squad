@@ -77,7 +77,7 @@ Q12 (commit carve-out) and Q13 (gogitstore interop coverage) stay in "Unresolved
 | `DecodeCount` | Count of `EncodedObject(CommitObject, h)` reads through a test-only counting storer | The deterministic gate metric |
 | `Gate` | A pass/fail threshold on `allocs/op`, `B/op`, `DecodeCount`, `StatCount` or `AllocsPerRun` — never wall-clock — expressed **relative to a retained oracle or a numeric ceiling that can fail** | Defined in Story 0.1.1/0.1.2; `AllocsPerRun==0` gates run only in non-`-race` builds |
 | `LegacyOracle` | Test-only retained old implementation: the committed stack-based `findMergeBase`/`countCommitsTo` from `39fa33a11`, `lcsLength`, the `map` reach set. The lockstep walk is **not** an oracle-only artifact: it stays in production as `plainWalk` (next row) and is also compared against | The thing new code must match (results) and not exceed (decode/alloc counts) |
-| `plainWalk` | The lockstep `findMergeBase` + `countCommitsTo` with a per-call `parentMemo` (landed by Story 0.0.1), **kept in production permanently** as the fallback for `ErrGraphFull`, `ErrPressure`, a closed storer and an over-cap restart, and as the walk used when `shared_commit_state` is off | Story 5.3.1 never deletes it; its callers are asserted by a test (pre-mortem P1 #2) |
+| `plainWalk` | The lockstep `findMergeBase` + `countCommitsTo` with a per-call `parentMemo` (landed in commit `f0a75ac10` (after `39fa33a11`)), **kept in production permanently** as the fallback for `ErrGraphFull`, `ErrPressure`, a closed storer and an over-cap restart, and as the walk used when `shared_commit_state` is off | Story 5.3.1 never deletes it; its callers are asserted by a test (pre-mortem P1 #2) |
 
 (36 terms.) **Research names -> plan names** (the research files predate the plan and use the left-hand names): `repoState` -> `RepoState` (package `repostate`); `commitGraph`/`graphSnap` (snapshot + writer mutex) -> `Graph`/`Generation` (lock-free arena, no snapshots; superseded by ADR-001/ADR-009); `refSnapshot`/`repoSnapshot` -> `RefSnapshot` (package `unfinished`, one Burst); `dirtyPaths set[pathID]` -> `DirtySet` (Tier B only); `delta segment` -> none in the baseline (the lazy demand-filled arena replaces it; only Story 5.2.3's optional base segment survives); `legacy walk` -> `plainWalk` (production fallback) or `legacyStack*` (test oracle).
 
@@ -1707,3 +1707,8 @@ Deferred, with reason: none of the nine gaps; two choices are owner decisions by
 ### Counts (recomputed by regex over this file after the triad patch)
 
 `grep -c '^##### Task'` = 106, `grep -c '^#### Story'` = 45, `grep -c '^### Epic'` = 17; effort table rows sum to 106 tasks, 9,515k raw, 9,799k CU; x1.75 = 17,148k CU (~17.1M). Supersedes the 102-task and ~17.0M figures above.
+
+
+## Story 0.0.1 patch log
+
+- Contradiction found by Task 0.0.1a: Story 0.0.1 AC (a) says the lockstep walk is identical to the old committed walk on every linear and single-merge DAG. Measured: identical on linear forks and merge-free trees (600 DAGs), but **5 of 400 single-merge (head, base) pairs diverge** (lockstep returns the first commit both frontiers have seen, which can be an older common ancestor than `base` itself). The differential test therefore enforces identity only for linear/merge-free DAGs and records single-merge divergences in `session/unfinished/testdata/mergebase_lockstep_divergences.golden`; see ADR-003 "Behaviour change introduced by the lockstep commit". Owner decision pending (accept, or restore nearest-to-base semantics before Story 2.1.3). Lockstep commit: `f0a75ac10`.
