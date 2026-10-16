@@ -36,7 +36,7 @@ import (
 //
 // Uses go-git directly rather than shelling out — see
 // the `prefer-go-git-over-subshells` skill.
-func initRepoInternal(t *testing.T) string {
+func initRepoInternal(t testing.TB) string {
 	t.Helper()
 	raw := t.TempDir()
 	dir, err := filepath.EvalSymlinks(raw)
@@ -891,7 +891,7 @@ func TestCountCommitsTo_StopsAtBoundOnDeeplyDivergedBranch(t *testing.T) {
 	mergeBaseBFSLimit = 3
 	defer func() { mergeBaseBFSLimit = origLimit }()
 
-	n, err := countCommitsTo(gitRepo, head.Hash(), stop)
+	n, err := countCommitsTo(newParentMemo(gitRepo), head.Hash(), stop)
 	if err != nil {
 		t.Fatalf("countCommitsTo: %v", err)
 	}

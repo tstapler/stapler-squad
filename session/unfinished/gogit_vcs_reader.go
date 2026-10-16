@@ -1288,15 +1288,16 @@ func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error
 				return abResult{e.ahead, e.behind}, nil
 			}
 		}
-		mb, mbErr := findMergeBase(repo, headRef.Hash(), baseHash)
+		pm := newParentMemo(repo)
+		mb, mbErr := findMergeBase(pm, headRef.Hash(), baseHash)
 		if mbErr != nil {
 			return abResult{}, fmt.Errorf("merge base: %w", mbErr)
 		}
-		ahead, aheadErr := countCommitsTo(repo, headRef.Hash(), mb)
+		ahead, aheadErr := countCommitsTo(pm, headRef.Hash(), mb)
 		if aheadErr != nil {
 			return abResult{}, aheadErr
 		}
-		behind, behindErr := countCommitsTo(repo, baseHash, mb)
+		behind, behindErr := countCommitsTo(pm, baseHash, mb)
 		if behindErr != nil {
 			return abResult{}, behindErr
 		}
@@ -2187,62 +2188,94 @@ func firstLine(s string) string {
 // repo with thousands of real commits to exercise the cap.
 var mergeBaseBFSLimit = 2000
 
-// findMergeBase returns the most-recent common ancestor of h1 and h2 using BFS.
-// It first marks ancestors of h1 (up to mergeBaseBFSLimit), then walks ancestors
-// of h2 until it finds one that is already marked. If no merge base is found
-// within the depth limit, a sentinel error is returned.
-func findMergeBase(repo *git.Repository, h1, h2 plumbing.Hash) (plumbing.Hash, error) {
+// parentMemo caches commit parent lists for the duration of one ahead/behind
+// computation, so findMergeBase and the two countCommitsTo walks decode each
+// commit at most once (go-git's Commit decode dominated the allocs profile).
+// Not safe for concurrent use; callers hold the repo entry's lock.
+type parentMemo struct {
+	repo    *git.Repository
+	parents map[plumbing.Hash][]plumbing.Hash
+}
+
+func newParentMemo(repo *git.Repository) *parentMemo {
+	return &parentMemo{repo: repo, parents: make(map[plumbing.Hash][]plumbing.Hash, 64)}
+}
+
+func (pm *parentMemo) get(h plumbing.Hash) ([]plumbing.Hash, error) {
+	if ps, ok := pm.parents[h]; ok {
+		return ps, nil
+	}
+	c, err := pm.repo.CommitObject(h)
+	if err != nil {
+		return nil, err
+	}
+	pm.parents[h] = c.ParentHashes
+	return c.ParentHashes, nil
+}
+
+// bfsSide is one frontier of findMergeBase's two-sided walk.
+type bfsSide struct {
+	queue   []plumbing.Hash
+	seen    map[plumbing.Hash]struct{}
+	visited int
+}
+
+func newBFSSide(start plumbing.Hash) *bfsSide {
+	return &bfsSide{queue: []plumbing.Hash{start}, seen: make(map[plumbing.Hash]struct{}, 32)}
+}
+
+// advance visits one new commit on s. It reports (hit, true) when that commit is
+// already in other.seen, and progressed=false once s is exhausted or at the bound.
+func (s *bfsSide) advance(pm *parentMemo, other *bfsSide) (hit plumbing.Hash, found, progressed bool, err error) {
+	for len(s.queue) > 0 && s.visited < mergeBaseBFSLimit {
+		h := s.queue[0]
+		s.queue = s.queue[1:]
+		if _, dup := s.seen[h]; dup {
+			continue
+		}
+		s.seen[h] = struct{}{}
+		s.visited++
+		if _, ok := other.seen[h]; ok {
+			return h, true, true, nil
+		}
+		ps, perr := pm.get(h)
+		if perr != nil {
+			if errors.Is(perr, plumbing.ErrObjectNotFound) {
+				return plumbing.ZeroHash, false, true, nil // missing from shallow clone or pack — skip
+			}
+			return plumbing.ZeroHash, false, true, fmt.Errorf("commit object %s: %w", h, perr)
+		}
+		s.queue = append(s.queue, ps...)
+		return plumbing.ZeroHash, false, true, nil
+	}
+	return plumbing.ZeroHash, false, false, nil
+}
+
+// findMergeBase returns a common ancestor of h1 and h2 by walking both sides
+// breadth-first in lockstep and stopping at the first commit either side has
+// already seen. Cost scales with the distance to the merge base, not with
+// mergeBaseBFSLimit: the previous implementation fully marked h1's bounded
+// ancestry before looking at h2, decoding ~2000 commits per call on any
+// long-lived repo. If no merge base is found within the limit per side, an
+// error is returned.
+func findMergeBase(pm *parentMemo, h1, h2 plumbing.Hash) (plumbing.Hash, error) {
 	if h1 == h2 {
 		return h1, nil
 	}
-
-	// Mark ancestors of h1 (bounded).
-	anc := make(map[plumbing.Hash]bool, mergeBaseBFSLimit)
-	q := []plumbing.Hash{h1}
-	visited := 0
-	for len(q) > 0 && visited < mergeBaseBFSLimit {
-		h := q[len(q)-1]
-		q = q[:len(q)-1]
-		if anc[h] {
-			continue
+	s1, s2 := newBFSSide(h1), newBFSSide(h2)
+	for {
+		hit, found, p1, err := s1.advance(pm, s2)
+		if err != nil || found {
+			return hit, err
 		}
-		anc[h] = true
-		visited++
-		c, err := repo.CommitObject(h)
-		if err != nil {
-			if !errors.Is(err, plumbing.ErrObjectNotFound) {
-				return plumbing.ZeroHash, fmt.Errorf("commit object %s: %w", h, err)
-			}
-			continue // object missing from shallow clone or pack — skip
+		hit, found, p2, err := s2.advance(pm, s1)
+		if err != nil || found {
+			return hit, err
 		}
-		q = append(q, c.ParentHashes...)
+		if !p1 && !p2 {
+			return plumbing.ZeroHash, fmt.Errorf("merge base not found within %d commits", mergeBaseBFSLimit)
+		}
 	}
-
-	// Walk from h2 breadth-first; first ancestor in anc is the nearest merge base.
-	seen := make(map[plumbing.Hash]bool, mergeBaseBFSLimit)
-	q = []plumbing.Hash{h2}
-	visited = 0
-	for len(q) > 0 && visited < mergeBaseBFSLimit {
-		h := q[0]
-		q = q[1:]
-		if seen[h] {
-			continue
-		}
-		seen[h] = true
-		visited++
-		if anc[h] {
-			return h, nil
-		}
-		c, err := repo.CommitObject(h)
-		if err != nil {
-			if !errors.Is(err, plumbing.ErrObjectNotFound) {
-				return plumbing.ZeroHash, fmt.Errorf("commit object %s: %w", h, err)
-			}
-			continue
-		}
-		q = append(q, c.ParentHashes...)
-	}
-	return plumbing.ZeroHash, fmt.Errorf("merge base not found within %d commits", mergeBaseBFSLimit)
 }
 
 // countCommitsTo counts commits reachable from start that are not reachable from
@@ -2252,7 +2285,7 @@ func findMergeBase(repo *git.Repository, h1, h2 plumbing.Hash) (plumbing.Hash, e
 // commit back to the repo root. When the bound is hit the count is capped rather
 // than exact — callers display it as "mergeBaseBFSLimit+" ahead/behind, which is
 // the correct signal for "diverged a lot" without paying for an exact count.
-func countCommitsTo(repo *git.Repository, start, stop plumbing.Hash) (int, error) {
+func countCommitsTo(pm *parentMemo, start, stop plumbing.Hash) (int, error) {
 	seen := make(map[plumbing.Hash]bool, 32)
 	q := []plumbing.Hash{start}
 	n := 0
@@ -2264,11 +2297,11 @@ func countCommitsTo(repo *git.Repository, start, stop plumbing.Hash) (int, error
 		}
 		seen[h] = true
 		n++
-		c, err := repo.CommitObject(h)
+		parents, err := pm.get(h)
 		if err != nil {
 			return 0, err
 		}
-		for _, p := range c.ParentHashes {
+		for _, p := range parents {
 			if !seen[p] && p != stop {
 				q = append(q, p)
 			}
