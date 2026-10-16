@@ -766,8 +766,15 @@ type PRStatus struct {
 	// FeedbackText is a combined human-readable summary for the fix agent.
 	FeedbackText string
 
-	failedChecks    []string     // unexported; captured CI failures, consumed by render()
-	blockingReviews []reviewInfo // unexported; one entry per CHANGES_REQUESTED review
+	failedChecks []string // unexported; captured CI failures, consumed by render()
+	// failedRunIDs holds the distinct GitHub Actions run IDs behind failed
+	// checks (parsed from their details URLs); checks from other CI systems
+	// have no run ID and are tracked only via nonActionsFailure.
+	failedRunIDs []int64
+	// nonActionsFailure is true when any failed check has no Actions run ID,
+	// so a rerun of the Actions runs alone could not clear CIFailing.
+	nonActionsFailure bool
+	blockingReviews   []reviewInfo // unexported; one entry per CHANGES_REQUESTED review
 	// conflictMergeStateStatus is the raw mergeStateStatus value that tripped
 	// HasConflicts; only meaningful when HasConflicts is true. A plain string
 	// rather than a nil-checked pointer, since HasConflicts is already the
@@ -1001,6 +1008,11 @@ func parsePRStatusPayload(raw []byte) (*PRStatus, error) {
 				entry += " (" + url + ")"
 			}
 			status.failedChecks = append(status.failedChecks, entry)
+			if id := extractActionsRunID(url); id == 0 {
+				status.nonActionsFailure = true
+			} else if !containsInt64(status.failedRunIDs, id) {
+				status.failedRunIDs = append(status.failedRunIDs, id)
+			}
 			continue
 		}
 		if conclusion == "" && isCheckInFlight(strings.ToUpper(check.Status), state) {
@@ -1128,4 +1140,36 @@ func (g *GitWorktree) IsPRMerged(ctx context.Context, prNumber int) (bool, error
 		return false, fmt.Errorf("gh pr view failed: %s (%w)", out, err)
 	}
 	return strings.TrimSpace(string(out)) == "MERGED", nil
+}
+
+// FailedRunIDs returns the distinct GitHub Actions run IDs behind failed
+// checks, and whether every failed check was an Actions check (false when any
+// failure came from another CI system or carried no parseable URL).
+func (s *PRStatus) FailedRunIDs() (ids []int64, allActions bool) {
+	return append([]int64(nil), s.failedRunIDs...), !s.nonActionsFailure
+}
+
+func containsInt64(xs []int64, x int64) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
+		}
+	}
+	return false
+}
+
+var actionsRunURLRe = regexp.MustCompile(`/actions/runs/(\d+)(?:/|$)`)
+
+// extractActionsRunID returns the workflow run ID in a GitHub Actions check
+// URL, or 0 when url is not one.
+func extractActionsRunID(url string) int64 {
+	m := actionsRunURLRe.FindStringSubmatch(url)
+	if m == nil {
+		return 0
+	}
+	id, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return id
 }
