@@ -705,7 +705,7 @@ func (i *Instance) SetAutoApprove(v bool, persist func() error) error {
 		}
 	}
 	if i.Status == Active {
-		return i.Restart(true)
+		return i.Restart(true, "")
 	}
 	return nil
 }
