@@ -3,11 +3,13 @@ package services_test
 import (
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -394,5 +396,25 @@ func exportForTest(t *testing.T, svc *services.SessionBundleService, inst *sessi
 
 func exportForTestCtx(t *testing.T, ctx context.Context, svc *services.SessionBundleService, inst *session.Instance, maxScrollbackLines int) ([]byte, services.BundleManifest, error) {
 	t.Helper()
-	return svc.ExportBundleForTest(ctx, inst, maxScrollbackLines)
+	return svc.ExportBundleForTest(ctx, inst, maxScrollbackLines, []byte(`[{"name":"t"}]`))
+}
+
+// ─── AC2: traces and profiles are in the archive and readable ────────────────
+
+func TestAssembleBundle_IncludesTracesAndProfiles(t *testing.T) {
+	svc := services.NewSessionBundleService(&fakeBundleStorage{}, nil, &fakeScrollback{lines: []byte("x")})
+	zipBytes, manifest, err := exportForTest(t, svc, newTestInstance("uuid-traces"), 10)
+	require.NoError(t, err)
+
+	entries := readZIP(t, zipBytes)
+	assert.JSONEq(t, `[{"name":"t"}]`, string(entries["client_traces.json"]))
+	assert.Contains(t, entries, "runtime_stats.json")
+
+	gz, err := gzip.NewReader(bytes.NewReader(entries["profiles/heap.pb.gz"]))
+	require.NoError(t, err, "heap profile must be readable gzip pprof")
+	raw, err := io.ReadAll(gz)
+	require.NoError(t, err)
+	assert.NotEmpty(t, raw)
+	assert.Contains(t, manifest.IncludedSections, "client_traces")
+	assert.Contains(t, manifest.IncludedSections, "profile_goroutine")
 }

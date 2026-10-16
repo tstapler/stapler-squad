@@ -12,6 +12,7 @@ import {
 import type { SaveSessionBundleResponse } from "@/gen/session/v1/rum_bundle_pb";
 import { create } from "@bufbuild/protobuf";
 import { getConnectTransport } from "@/lib/api/transport";
+import { getSessionSpansJson } from "@/lib/telemetry/span-buffer";
 
 export interface UseExportBundleReturn {
   download: (sessionUuid: string, sessionTitle: string) => Promise<boolean>;
@@ -86,6 +87,7 @@ export function useExportBundle(): UseExportBundleReturn {
       const req = create(ExportSessionBundleRequestSchema, {
         sessionUuid,
         maxScrollbackLines: 0, // server default (500 lines)
+        clientSpansJson: getSessionSpansJson(sessionUuid),
       });
       const chunks: Uint8Array<ArrayBuffer>[] = [];
       for await (const chunk of clientRef.current.exportSessionBundle(req)) {
@@ -109,7 +111,7 @@ export function useExportBundle(): UseExportBundleReturn {
     setLoading(true);
     setError(null);
     try {
-      const req = create(SaveSessionBundleRequestSchema, { sessionUuid, outputDir: "" });
+      const req = create(SaveSessionBundleRequestSchema, { sessionUuid, outputDir: "", clientSpansJson: getSessionSpansJson(sessionUuid) });
       return await clientRef.current.saveSessionBundle(req);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Save failed");

@@ -142,12 +142,20 @@ var sectionFileName = map[string]string{
 	"analytics":        "analytics.json",
 	"context_history":  "context_history.json",
 	"artifacts":        "artifacts.json",
+	"client_traces":    "client_traces.json",
+	"runtime_stats":    "runtime_stats.json",
+	// Profiles are already gzip-compressed pprof protos.
+	"profile_heap":      "profiles/heap.pb.gz",
+	"profile_goroutine": "profiles/goroutine.pb.gz",
 }
 
 // dropOrder is the reverse-priority order for dropping sections when the
 // total uncompressed size exceeds maxUncompressedBytes (45 MB). Sections
 // listed first are dropped first.
 var dropOrder = []string{
+	"client_traces",
+	"profile_goroutine",
+	"profile_heap",
 	"analytics",
 	"scrollback",
 	"context_history",
@@ -163,6 +171,7 @@ func (s *SessionBundleService) assembleBundle(
 	ctx context.Context,
 	inst *session.Instance,
 	maxScrollbackLines int,
+	clientSpans []byte,
 ) ([]byte, BundleManifest, error) {
 	snap := inst.Snapshot()
 	sessionUUID := snap.UUID
@@ -342,6 +351,22 @@ func (s *SessionBundleService) assembleBundle(
 		return nil, BundleManifest{}, ctx.Err()
 	}
 
+	// Step 7b: Traces and profiles (omittable).
+	if reason := validateClientSpans(clientSpans); reason == "" {
+		addSection("client_traces", clientSpans)
+	} else {
+		omit("client_traces", reason)
+	}
+	if profiles, err := captureProfiles(); err == nil {
+		for _, name := range []string{"profile_heap", "profile_goroutine", "runtime_stats"} {
+			if data, ok := profiles[name]; ok {
+				addSection(name, data)
+			}
+		}
+	} else {
+		omit("profiles", fmt.Sprintf("capture error: %v", err))
+	}
+
 	// Step 8: Session artifacts (omittable).
 	if s.storage != nil {
 		if artBlob, err := s.storage.GetSessionArtifactsByUUID(ctx, sessionUUID); err == nil {
@@ -483,7 +508,7 @@ func (s *SessionBundleService) ExportSessionBundle(
 		maxLines = 500
 	}
 
-	zipBytes, _, err := s.assembleBundle(ctx, inst, maxLines)
+	zipBytes, _, err := s.assembleBundle(ctx, inst, maxLines, req.Msg.ClientSpansJson)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return connect.NewError(connect.CodeCanceled, err)
@@ -581,7 +606,7 @@ func (s *SessionBundleService) SaveSessionBundle(
 		return nil, connect.NewError(connect.CodeResourceExhausted, errors.New("diagnostics directory has less than 100MB free"))
 	}
 
-	zipBytes, _, err := s.assembleBundle(ctx, inst, 500)
+	zipBytes, _, err := s.assembleBundle(ctx, inst, 500, req.Msg.ClientSpansJson)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, connect.NewError(connect.CodeCanceled, err)
@@ -682,8 +707,8 @@ func RunDiagnosticsRetention(dir string, maxAge time.Duration) error {
 
 // ExportBundleForTest calls assembleBundle and exposes it for package-level tests
 // that cannot call the private method directly. It is not part of the public API.
-func (s *SessionBundleService) ExportBundleForTest(ctx context.Context, inst *session.Instance, maxScrollbackLines int) ([]byte, BundleManifest, error) {
-	return s.assembleBundle(ctx, inst, maxScrollbackLines)
+func (s *SessionBundleService) ExportBundleForTest(ctx context.Context, inst *session.Instance, maxScrollbackLines int, clientSpans []byte) ([]byte, BundleManifest, error) {
+	return s.assembleBundle(ctx, inst, maxScrollbackLines, clientSpans)
 }
 
 // bundleSlugify converts s to a lowercase alphanumeric-plus-hyphen string

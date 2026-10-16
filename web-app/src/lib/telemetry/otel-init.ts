@@ -5,9 +5,10 @@ import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import { BatchSpanProcessor, WebTracerProvider } from "@opentelemetry/sdk-trace-web";
-import type { SpanProcessor, Span } from "@opentelemetry/sdk-trace-web";
+import type { SpanProcessor, Span, ReadableSpan } from "@opentelemetry/sdk-trace-web";
 import { ZoneContextManager } from "@opentelemetry/context-zone";
 import { getActiveSessionUUID } from "./active-session";
+import { recordSpan } from "./span-buffer";
 
 // Same-origin by default: the Go server proxies this to the real collector
 // (server/handlers/otel_proxy_handler.go) so the browser never needs CORS
@@ -26,7 +27,19 @@ class SessionSpanProcessor implements SpanProcessor {
     }
   }
 
-  onEnd(): void {}
+  onEnd(span: ReadableSpan): void {
+    if (span.attributes["session.uuid"] === undefined) return;
+    recordSpan({
+      name: span.name,
+      traceId: span.spanContext().traceId,
+      spanId: span.spanContext().spanId,
+      parentSpanId: span.parentSpanContext?.spanId,
+      startTimeMs: span.startTime[0] * 1000 + span.startTime[1] / 1e6,
+      durationMs: span.duration[0] * 1000 + span.duration[1] / 1e6,
+      status: span.status.code,
+      attributes: { ...span.attributes },
+    });
+  }
 
   shutdown(): Promise<void> {
     return Promise.resolve();
