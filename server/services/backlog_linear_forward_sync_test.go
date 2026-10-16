@@ -80,3 +80,10 @@ func TestForwardSync_should_RecordFailureAndSkipComment_When_UpdateIssueStateFai
 	require.Len(t, history, 1)
 	require.Contains(t, history[0].ErrorMessage, "forward-sync state update failed")
 }
+
+// Both tracker plugins must be dispatched by the state-updater branch of
+// handleForwardSyncClose (ADR-002).
+var (
+	_ externalIssueStateUpdater = (*session.LinearPlugin)(nil)
+	_ externalIssueStateUpdater = (*session.JiraPlugin)(nil)
+)

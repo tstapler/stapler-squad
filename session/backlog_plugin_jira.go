@@ -321,27 +321,37 @@ func ParseJiraIssueRef(ref string) (JiraIssueRef, error) {
 	return JiraIssueRef{}, fmt.Errorf("no issue key found in JIRA URL %q", ref)
 }
 
-// FetchIssue retrieves one JIRA issue by key for one-off import. config needs
-// base_url only (project_key is not required); credentials come from the
-// keychain (or legacy config fields) as in Fetch.
-func (j *JiraPlugin) FetchIssue(ctx context.Context, config PluginConfig, key string) (ExternalItem, error) {
+// decodeJiraIssueConfig resolves config for single-issue calls (import and
+// forward-sync): base_url and credentials are required, project_key is not.
+func decodeJiraIssueConfig(config PluginConfig) (jiraPluginConfig, error) {
 	var cfg jiraPluginConfig
 	if config.Raw != "" {
 		if err := json.Unmarshal([]byte(config.Raw), &cfg); err != nil {
-			return ExternalItem{}, fmt.Errorf("jira: parse config: %w", err)
+			return cfg, fmt.Errorf("jira: parse config: %w", err)
 		}
 	}
 	resolveJiraCredentials(&cfg)
 	if cfg.BaseURL == "" {
-		return ExternalItem{}, fmt.Errorf("jira: base_url is required")
+		return cfg, fmt.Errorf("jira: base_url is required")
 	}
 	if err := validateJiraBaseURL(cfg.BaseURL); err != nil {
-		return ExternalItem{}, err
+		return cfg, err
 	}
 	if cfg.Email == "" || cfg.Token == "" {
-		return ExternalItem{}, fmt.Errorf("jira: credentials not configured for %s (store email and API token in the keychain)", jira.NormalizeHost(cfg.BaseURL))
+		return cfg, fmt.Errorf("jira: credentials not configured for %s (store email and API token in the keychain)", jira.NormalizeHost(cfg.BaseURL))
 	}
 	cfg.BaseURL = strings.TrimSuffix(strings.TrimSpace(cfg.BaseURL), "/")
+	return cfg, nil
+}
+
+// FetchIssue retrieves one JIRA issue by key for one-off import. config needs
+// base_url only (project_key is not required); credentials come from the
+// keychain (or legacy config fields) as in Fetch.
+func (j *JiraPlugin) FetchIssue(ctx context.Context, config PluginConfig, key string) (ExternalItem, error) {
+	cfg, err := decodeJiraIssueConfig(config)
+	if err != nil {
+		return ExternalItem{}, err
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		cfg.BaseURL+"/rest/api/3/issue/"+url.PathEscape(key)+"?fields=summary,description,labels,priority,updated", nil)
