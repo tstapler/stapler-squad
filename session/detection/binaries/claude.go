@@ -363,9 +363,9 @@ func (d *ClaudeDetector) Patterns() dtypes.StatusPatterns {
 		Compacting: []dtypes.StatusPattern{
 			{
 				Name: "compacting_conversation",
-				// INFERRED, not verified against a live Claude Code capture — see Story 1.1.1
-				// in project_plans/context-compaction-detection/implementation/plan.md for
-				// provenance and the required follow-up verification item. Requires
+				// Verified against live captures of "✶ Compacting conversation… (18m 0s · ↑ 20.2k
+				// tokens)" (testdata/claude_compacting.txt); the live line carries a timer and
+				// token count, not "(esc to interrupt)". Requires
 				// "Compacting" capitalized at/near line start (optionally after a spinner
 				// glyph) so this does NOT match the unrelated "NN% until auto-compact"
 				// approaching-threshold indicator (lowercase "compact", mid-line) — see
