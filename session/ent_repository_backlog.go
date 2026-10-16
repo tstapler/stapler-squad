@@ -361,6 +361,7 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 	// Resolve source ID from the eager-loaded edge when available.
 	if item.Edges.Source != nil {
 		data.SourceID = item.Edges.Source.ID.String()
+		data.SourcePluginID = item.Edges.Source.PluginID
 	}
 	// Propagate eagerly-loaded status events when present.
 	if item.Edges.StatusEvents != nil {
@@ -959,6 +960,7 @@ func (r *EntRepository) ListBacklogItems(ctx context.Context, filter BacklogItem
 		q = q.Where(backlogitem.StatusNotIn(excluded...))
 	}
 
+	q = applySourcePluginFilter(q, filter.SourcePluginIDs)
 	if len(filter.Priorities) > 0 {
 		q = q.Where(backlogitem.PriorityIn(filter.Priorities...))
 	}
@@ -1046,6 +1048,7 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter Bac
 	} else if excluded := excludedTerminalStatuses(filter); len(excluded) > 0 {
 		q = q.Where(backlogitem.StatusNotIn(excluded...))
 	}
+	q = applySourcePluginFilter(q, filter.SourcePluginIDs)
 	if len(filter.Priorities) > 0 {
 		q = q.Where(backlogitem.PriorityIn(filter.Priorities...))
 	}
@@ -1079,7 +1082,7 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter Bac
 	}
 
 	// Phase 1: load scalar fields; avoid Select/Scan to sidestep nullable-time pitfalls.
-	items, err := q.All(ctx)
+	items, err := q.WithSource().All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list backlog item summaries: %w", err)
 	}
@@ -1092,6 +1095,7 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter Bac
 			PublicIDRaw:         item.PublicID,
 			ExternalID:          item.ExternalID,
 			ExternalURL:         item.ExternalURL,
+			SourcePluginID:      sourcePluginIDOf(item),
 			Labels:              item.Labels,
 			Title:               item.Title,
 			Status:              BacklogStatus(item.Status),

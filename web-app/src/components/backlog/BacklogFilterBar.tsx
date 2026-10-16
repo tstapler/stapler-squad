@@ -4,6 +4,7 @@ import { useAnalytics } from "@/lib/analytics";
 import { getStatusLabel } from "@/lib/backlog/status";
 import { ALL_STATUSES } from "@/lib/hooks/useBacklogFilters";
 import type { BacklogItemStatus } from "@/lib/hooks/useBacklogService";
+import { FILTERABLE_SOURCE_IDS, SOURCE_BADGE_CONFIG } from "@/lib/backlog/sourceBadge";
 import * as styles from "./BacklogFilterBar.css";
 
 export type BacklogGroupBy = "none" | "repoPath";
@@ -83,6 +84,36 @@ function PriorityFilterChips({
   );
 }
 
+function SourceFilterChips({
+  selected,
+  onChange,
+}: {
+  selected: string[];
+  onChange: (s: string[]) => void;
+}) {
+  const toggle = (id: string) =>
+    onChange(selected.includes(id) ? selected.filter((s) => s !== id) : [...selected, id]);
+  return (
+    <div className={styles.filterChipGroup} role="group" aria-label="Filter by issue source">
+      {FILTERABLE_SOURCE_IDS.map((id) => {
+        const active = selected.includes(id);
+        return (
+          <button
+            key={id}
+            type="button"
+            className={`${styles.filterChip} ${active ? styles.filterChipActive : ""}`}
+            onClick={() => toggle(id)}
+            aria-pressed={active}
+            data-testid={`backlog-filter-source-${id}`}
+          >
+            {SOURCE_BADGE_CONFIG[id].label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export interface BacklogFilterBarProps {
   search: string;
   onSearchChange: (v: string) => void;
@@ -90,6 +121,9 @@ export interface BacklogFilterBarProps {
   onStatusFilterChange: (v: BacklogItemStatus[]) => void;
   priorityFilter: number[];
   onPriorityFilterChange: (v: number[]) => void;
+  /** Source (issue tracker) filter; the chips render only when onSourceFilterChange is provided. */
+  sourceFilter?: string[];
+  onSourceFilterChange?: (v: string[]) => void;
   showArchived: boolean;
   onShowArchivedChange: (v: boolean) => void;
   onResetView: () => void;
@@ -112,6 +146,8 @@ export function BacklogFilterBar({
   onStatusFilterChange,
   priorityFilter,
   onPriorityFilterChange,
+  sourceFilter = [],
+  onSourceFilterChange,
   showArchived,
   onShowArchivedChange,
   onResetView,
@@ -133,6 +169,7 @@ export function BacklogFilterBar({
       />
       <StatusFilterChips selected={statusFilter} onChange={onStatusFilterChange} />
       <PriorityFilterChips selected={priorityFilter} onChange={onPriorityFilterChange} />
+      {onSourceFilterChange && <SourceFilterChips selected={sourceFilter} onChange={onSourceFilterChange} />}
       {/* Archived items are excluded from the default view client-side
           (Epic 5.1); enabling this re-includes them from the live store. */}
       {showArchivedControl && (

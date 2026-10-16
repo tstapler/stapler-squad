@@ -139,6 +139,7 @@ func (s *BacklogService) ListBacklogItems(
 		SortBy:          req.Msg.SortBy,
 		ExcludeDone:     !req.Msg.IncludeTerminal,
 		ExcludeArchived: !req.Msg.IncludeArchived,
+		SourcePluginIDs: req.Msg.SourcePluginFilter,
 	}
 	if len(req.Msg.Status) > 0 {
 		filter.Statuses = req.Msg.Status

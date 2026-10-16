@@ -234,6 +234,8 @@ export interface BacklogItem {
   prNumber?: number;
   /** Source tracker's identifier for this item (e.g. a GitHub issue number), populated for imported items only. */
   externalId?: string;
+  /** Source plugin id ("github_issues", "linear", ...), populated for imported items only. */
+  pluginId?: string;
   /** Deep link to the source tracker's issue for this item (e.g. a GitHub issue's html_url), populated for imported items only. */
   externalUrl?: string;
   /** Labels mirrored from the source tracker (e.g. GitHub issue labels), populated for imported items only. */
@@ -706,6 +708,7 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     blockedBy: (p.blockedBy ?? []).map(toItemDependency),
     blocking: (p.blocking ?? []).map(toItemDependency),
     externalId: p.externalId || undefined,
+    pluginId: p.pluginId || undefined,
     externalUrl: p.externalUrl || undefined,
     labels: p.labels ?? [],
     allowedTransitions: p.allowedTransitions ?? [],

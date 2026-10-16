@@ -48,8 +48,13 @@ for path in glob.glob(os.path.join(tmp, "**", "*.json"), recursive=True):
 removed = 0
 for path in glob.glob(os.path.join(committed, "**", "*.json"), recursive=True):
     try:
-        fid = json.load(open(path))["id"]
+        entry = json.load(open(path))
+        fid = entry["id"]
     except Exception:
+        continue
+    # MCP tools have no proto RPC, so the scanner can never regenerate them;
+    # their entries are hand-maintained and must not be pruned.
+    if entry.get("service") == "MCP":
         continue
     if fid not in valid:
         os.remove(path)
