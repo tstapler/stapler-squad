@@ -17,3 +17,7 @@ Call the fork symbol directly (breaks rollback); `go:linkname`/reflection tricks
 
 ## Consequences
 Two reader implementations to keep in lockstep, enforced by a differential test against `DecodeCommit` using one shared corpus helper; a CI leg per tag state; the retention gate runs before any tag exists.
+
+## Addendum 2026-10-16: F2 (Stories 1.2.2, 1.2.3) accepted, not worth it, deferred
+The S1 profile (`baseline.md`, S1 section) puts `DecodeCommit` at 0.0% of scanner CPU (0 samples, row "`DecodeCommit`") and at 4.9% of scanner `alloc_space` (1.95% of process, row `d1`). The stock header-only reader that Story 1.2.1 landed (`session/unfinished/commit_parents_stock.go`) already allocates 4.7% of `object.GetCommit`'s bytes and 4% of its allocations on the 2,500-commit fixture (`TestCommitParentsStock_ShouldUseAtMost70PctBytesOfDecode_When2500Commits`, in-memory storer). A fork tag could remove at most the remaining sliver of a 4.9% allocation bucket, so no fork branch, no `-ssq.2` tag, no `ssqfork` build tag and no Makefile change. The `CommitParentsReader` interface stays, with the stock reader as its only implementation. Reopen only if a later S-profile shows decode back above the SG1 threshold.
+The interface returns the committer time as well as the parents (`Parents(storer, h, buf) (parents, when, err)`): the paint-down merge base orders its queue by it, so a parents-only reader could not replace a decode.

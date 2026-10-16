@@ -631,6 +631,7 @@ Tasks 0.0.3b-0.0.3f are split per importer group (triad patch) so each fits one 
 - Files: `commit_parents_test.go`.
 
 #### Story 1.2.2: Fork patch F2 — local evaluation with a path replace (no tag) (gated: SG1 via Story 1.2.1)
+**Status 2026-10-16: accepted, not worth it, deferred (with Story 1.2.3).** S1 profile: `DecodeCommit` is 0 CPU samples and 4.9% of scanner `alloc_space` (`baseline.md`, S1 section); the stock reader of Story 1.2.1 already cuts decode bytes to 4.7%. See ADR-004's 2026-10-16 addendum.
 **As a** perf owner, **I want** to benchmark the fork reader locally against the stock reader before spending a tag and a fork CI cycle, **so that** F2 is adopted only if it clears its gate.
 **Acceptance Criteria**:
 - Fork patch is additive and verified with go-git, not the git CLI.
