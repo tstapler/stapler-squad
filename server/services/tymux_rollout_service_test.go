@@ -16,7 +16,7 @@ import (
 // tests (same isolation pattern as newIsolatedStreamHubRolloutService).
 func newIsolatedTymuxRolloutService(t *testing.T) *TymuxRolloutService {
 	t.Helper()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	return NewTymuxRolloutService()
 }
 

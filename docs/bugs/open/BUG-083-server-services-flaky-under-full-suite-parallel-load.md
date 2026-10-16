@@ -80,3 +80,7 @@ consistent with this bug's own scope boundary.
 ## Related
 
 - Filed per `.claude/rules/fix-flaky-tests-dont-defer.md` — found during BUG-051 remediation validation but out of scope to fix in that change (different package, different root cause per-test, would expand that change's blast radius).
+
+## Recurrence — 2026-10-10 (PR #974): root cause found and fixed for one test
+
+`TestDeleteSession_LiveInstance_LogsWarningOnSlowCleanupButStillWaits` failed again in CI's "affected packages" job. Root cause: `waitForDestroyLoggingSlowCleanup` selected between `done` and `time.After(timeout)`; with the test's 1ns timeout and an instantly finishing cleanup both cases are ready and Go picks one at random, so the slow-cleanup warning was sometimes not logged. Fixed by judging slowness from elapsed time in the `done` branch. The other tests listed above are not addressed by this change.

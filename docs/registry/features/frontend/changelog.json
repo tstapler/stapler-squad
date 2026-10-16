@@ -1,0 +1,19 @@
+{
+  "id": "changelog",
+  "type": "frontend",
+  "name": "Built-in changelog page, build provenance, and opt-in update badge",
+  "component": "ChangelogPage",
+  "path": "web-app/src/app/changelog/page.tsx",
+  "filePath": "web-app/src/app/changelog/page.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "ChangelogPage > renders releases and marks the running version",
+    "ChangelogPage > shows the Source build badge with branch and commit",
+    "ChangelogPage > shows an alert when the API fails",
+    "UpdateBadge > links to the release when outdated",
+    "UpdateBadge > renders nothing for a source build",
+    "UpdateBadge > does not fetch or render when the changelog flag is off"
+  ],
+  "lastModified": "2026-10-15T00:00:00Z"
+}

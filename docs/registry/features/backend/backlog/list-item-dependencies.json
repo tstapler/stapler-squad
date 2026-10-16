@@ -1,0 +1,16 @@
+{
+  "id": "backlog:list-item-dependencies",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "ListBacklogItemDependencies",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_lifecycle.go",
+  "tested": true,
+  "testIds": [
+    "TestListBacklogItemDependencies_should_ReturnBothDirections",
+    "TestListBacklogItemDependencies_should_ReturnBothDirections_When_EdgesExist",
+    "TestListBacklogItemDependencies_should_ReturnEmpty_When_NoEdges"
+  ],
+  "lastModified": "2026-10-13T08:28:02.156382128-07:00"
+}

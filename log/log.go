@@ -224,7 +224,7 @@ func InfoLog() *log.Logger { return infoLog.Load() }
 func ErrorLog() *log.Logger { return errorLog.Load() }
 
 // DebugLog returns the current debug-level logger. Safe to call concurrently
-// with SetDebugLogForTest or initializeWithConfig replacing it.
+// with initializeWithConfig replacing it.
 func DebugLog() *log.Logger { return debugLog.Load() }
 
 // SetWarningLogForTest atomically replaces the warning logger and returns the
@@ -247,10 +247,6 @@ func SetInfoLogForTest(l *log.Logger) *log.Logger { return infoLog.Swap(l) }
 // SetErrorLogForTest atomically replaces the error logger and returns the
 // previous value, so callers can restore it via t.Cleanup.
 func SetErrorLogForTest(l *log.Logger) *log.Logger { return errorLog.Swap(l) }
-
-// SetDebugLogForTest atomically replaces the debug logger and returns the
-// previous value, so callers can restore it via t.Cleanup.
-func SetDebugLogForTest(l *log.Logger) *log.Logger { return debugLog.Swap(l) }
 
 // LogConfig holds logging configuration
 type LogConfig struct {
@@ -277,9 +273,9 @@ func DefaultLogConfig() *LogConfig {
 	return &LogConfig{
 		LogsEnabled:    true,
 		LogsDir:        "",
-		LogMaxSize:     10, // 10MB
-		LogMaxFiles:    5,  // 5 backups
-		LogMaxAge:      30, // 30 days
+		LogMaxSize:     50,  // MB; keep in sync with config.DefaultLogMaxSizeMB (log can't import config)
+		LogMaxFiles:    100, // backups
+		LogMaxAge:      14,  // days
 		LogCompress:    true,
 		UseSessionLogs: true,
 		LogLevel:       INFO,  // Deprecated: kept for backward compatibility
@@ -378,20 +374,6 @@ func (sl *StructuredLogger) Log(level LogLevel, message string, fields map[strin
 	_, _ = sl.writer.Write([]byte("\n"))
 }
 
-// LogWithFields logs a message with additional fields
-func (sl *StructuredLogger) LogWithFields(level LogLevel, message string, fields map[string]interface{}) {
-	sl.Log(level, message, fields)
-}
-
-// Debug logs a debug message
-func (sl *StructuredLogger) Debug(message string, fields ...map[string]interface{}) {
-	var f map[string]interface{}
-	if len(fields) > 0 {
-		f = fields[0]
-	}
-	sl.Log(DEBUG, message, f)
-}
-
 // Info logs an info message
 func (sl *StructuredLogger) Info(message string, fields ...map[string]interface{}) {
 	var f map[string]interface{}
@@ -399,33 +381,6 @@ func (sl *StructuredLogger) Info(message string, fields ...map[string]interface{
 		f = fields[0]
 	}
 	sl.Log(INFO, message, f)
-}
-
-// Warning logs a warning message
-func (sl *StructuredLogger) Warning(message string, fields ...map[string]interface{}) {
-	var f map[string]interface{}
-	if len(fields) > 0 {
-		f = fields[0]
-	}
-	sl.Log(WARNING, message, f)
-}
-
-// Error logs an error message
-func (sl *StructuredLogger) Error(message string, fields ...map[string]interface{}) {
-	var f map[string]interface{}
-	if len(fields) > 0 {
-		f = fields[0]
-	}
-	sl.Log(ERROR, message, f)
-}
-
-// Fatal logs a fatal message
-func (sl *StructuredLogger) Fatal(message string, fields ...map[string]interface{}) {
-	var f map[string]interface{}
-	if len(fields) > 0 {
-		f = fields[0]
-	}
-	sl.Log(FATAL, message, f)
 }
 
 // GetConfigDir returns the path to the application's configuration directory,
@@ -696,17 +651,6 @@ type SessionLoggers struct {
 	LogFile    io.Closer
 }
 
-// SessionLogger is a session-scoped logger that automatically injects the session ID
-// into every log call, eliminating the need to pass the session ID manually.
-//
-// Usage:
-//
-//	logger := log.ForSession(i.Title)
-//	logger.Error("Failed to setup git worktree: %v", err)
-type SessionLogger struct {
-	sessionID string
-}
-
 // ForSession returns a *slog.Logger pre-populated with "session" = sessionID.
 // All calls route through the async slog handler — no stdlib mutex serialization.
 // Session-specific log files still receive the entry via LogForSession when needed.
@@ -714,38 +658,18 @@ func ForSession(sessionID string) *slog.Logger {
 	return slogDefault.Load().With("session", sessionID)
 }
 
-// ForSessionLegacy returns the old SessionLogger for callers that write to
-// per-session log files. New code should use ForSession instead.
-//
-// Deprecated: use ForSession.
-func ForSessionLegacy(sessionID string) *SessionLogger {
-	return &SessionLogger{sessionID: sessionID}
-}
-
-func (sl *SessionLogger) Debug(format string, v ...interface{}) {
-	LogForSession(sl.sessionID, "debug", format, v...)
-}
-
-func (sl *SessionLogger) Info(format string, v ...interface{}) {
-	LogForSession(sl.sessionID, "info", format, v...)
-}
-
-func (sl *SessionLogger) Warning(format string, v ...interface{}) {
-	LogForSession(sl.sessionID, "warning", format, v...)
-}
-
-func (sl *SessionLogger) Error(format string, v ...interface{}) {
-	LogForSession(sl.sessionID, "error", format, v...)
-}
-
 // logAt builds and emits a slog.Record with the PC of Info/Warn/Error/Debug's
 // caller (not this function, and not Info/Warn/etc. themselves) so
 // PackageLevelHandler can resolve per-package overrides correctly (skip=3:
 // Callers, logAt, Info/Warn/Error/Debug, caller).
 // See also: https://pkg.go.dev/log/slog#hdr-Wrapping_output_methods.
-func logAt(level slog.Level, msg string, args ...any) {
+//
+// ctx is passed through to the handler chain (TraceIDHandler reads a span
+// out of it) -- callers that have a real request/RPC ctx in scope should use
+// the *Context variants below instead of Info/Warn/Error/Debug, or
+// TraceIDHandler can never find a span to correlate the log line with.
+func logAt(ctx context.Context, level slog.Level, msg string, args ...any) {
 	logger := slogDefault.Load()
-	ctx := context.Background()
 	if !logger.Enabled(ctx, level) {
 		return
 	}
@@ -758,53 +682,47 @@ func logAt(level slog.Level, msg string, args ...any) {
 
 // Info logs an info-level message through the default slog handler (async, no mutex hold).
 // args are alternating key-value pairs: log.Info("msg", "key", val, "key2", val2)
-func Info(msg string, args ...any) { logAt(slog.LevelInfo, msg, args...) }
+func Info(msg string, args ...any) { logAt(context.Background(), slog.LevelInfo, msg, args...) }
 
 // Warn logs a warning-level message through the default slog handler.
-func Warn(msg string, args ...any) { logAt(slog.LevelWarn, msg, args...) }
+func Warn(msg string, args ...any) { logAt(context.Background(), slog.LevelWarn, msg, args...) }
 
 // Error logs an error-level message through the default slog handler.
-func Error(msg string, args ...any) { logAt(slog.LevelError, msg, args...) }
+func Error(msg string, args ...any) { logAt(context.Background(), slog.LevelError, msg, args...) }
 
 // Debug logs a debug-level message through the default slog handler.
 // The handler drops debug records when the runtime level is above DEBUG, so
 // this is safe to call without an IsDebugEnabled() guard.
-func Debug(msg string, args ...any) { logAt(slog.LevelDebug, msg, args...) }
+func Debug(msg string, args ...any) { logAt(context.Background(), slog.LevelDebug, msg, args...) }
+
+// InfoContext logs an info-level message with ctx threaded to the handler
+// chain, so TraceIDHandler can inject trace_id/span_id when ctx carries a
+// live OTel span. Prefer this over Info inside a traced request/RPC path.
+func InfoContext(ctx context.Context, msg string, args ...any) {
+	logAt(ctx, slog.LevelInfo, msg, args...)
+}
+
+// WarnContext is Warn's ctx-threading counterpart. See InfoContext.
+func WarnContext(ctx context.Context, msg string, args ...any) {
+	logAt(ctx, slog.LevelWarn, msg, args...)
+}
+
+// ErrorContext is Error's ctx-threading counterpart. See InfoContext.
+func ErrorContext(ctx context.Context, msg string, args ...any) {
+	logAt(ctx, slog.LevelError, msg, args...)
+}
+
+// DebugContext is Debug's ctx-threading counterpart. See InfoContext.
+func DebugContext(ctx context.Context, msg string, args ...any) {
+	logAt(ctx, slog.LevelDebug, msg, args...)
+}
 
 // Global convenience functions for structured logging (legacy — prefer Info/Warn/Error/Debug)
-
-// DebugS logs a structured debug message
-func DebugS(message string, fields ...map[string]interface{}) {
-	if structuredLogger != nil {
-		structuredLogger.Debug(message, fields...)
-	}
-}
 
 // InfoS logs a structured info message
 func InfoS(message string, fields ...map[string]interface{}) {
 	if structuredLogger != nil {
 		structuredLogger.Info(message, fields...)
-	}
-}
-
-// WarningS logs a structured warning message
-func WarningS(message string, fields ...map[string]interface{}) {
-	if structuredLogger != nil {
-		structuredLogger.Warning(message, fields...)
-	}
-}
-
-// ErrorS logs a structured error message
-func ErrorS(message string, fields ...map[string]interface{}) {
-	if structuredLogger != nil {
-		structuredLogger.Error(message, fields...)
-	}
-}
-
-// FatalS logs a structured fatal message
-func FatalS(message string, fields ...map[string]interface{}) {
-	if structuredLogger != nil {
-		structuredLogger.Fatal(message, fields...)
 	}
 }
 
@@ -1087,7 +1005,10 @@ func initializeWithConfig(daemon bool, cfg *LogConfig) {
 	// Handler ordering: TraceIDHandler (outermost, captures trace IDs at call time)
 	// → PackageLevelHandler (per-package level overrides, see log/package_level.go)
 	// → AsyncHandler → JSONHandler (innermost, writes to combinedWriter).
-	// TraceIDHandler is a no-op identity handler until E2-S2 adds the real implementation.
+	// TraceIDHandler injects trace_id/span_id when the ctx passed into a log
+	// call carries a live OTel span -- which only happens via InfoContext/
+	// WarnContext/ErrorContext/DebugContext (Info/Warn/Error/Debug pass
+	// context.Background(), so it's a no-op for those callers).
 	jsonHandler := slog.NewJSONHandler(combinedWriter, &slog.HandlerOptions{Level: slog.LevelDebug})
 	asyncHandler := NewAsyncHandler(jsonHandler, defaultAsyncBufSize)
 	asyncHandler.StartDrain()

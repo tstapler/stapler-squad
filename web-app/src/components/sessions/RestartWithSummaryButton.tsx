@@ -8,6 +8,7 @@ import { HandoffSummaryStatus } from "@/gen/session/v1/handoff_summary_pb";
 import { useSessionService } from "@/lib/hooks/useSessionService";
 import type { CreateSessionRequest } from "@/gen/session/v1/session_pb";
 import { routes } from "@/lib/routes";
+import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { srOnly } from "@/components/ui/LiveRegion.css";
 import * as styles from "./RestartWithSummaryButton.css";
 
@@ -71,6 +72,7 @@ function restartFailureReason(err: unknown): string {
 export function RestartWithSummaryButton({ sessionId, handoff }: RestartWithSummaryButtonProps) {
   const { data, neverResolved, trigger } = handoff;
   const { createSession } = useSessionService();
+  const { track } = useAnalytics();
   const router = useRouter();
 
   const [featureDisabled, setFeatureDisabled] = useState(false);
@@ -107,6 +109,7 @@ export function RestartWithSummaryButton({ sessionId, handoff }: RestartWithSumm
 
   const handleRestart = useCallback(async () => {
     if (!data) return;
+    track({ name: "session_restart_with_summary", category: "user_action", component: "RestartWithSummaryButton", sessionId });
     setRestarting(true);
     setRestartErrorMessage(null);
     setLiveMessage("Starting new session…");
@@ -142,13 +145,19 @@ export function RestartWithSummaryButton({ sessionId, handoff }: RestartWithSumm
     } finally {
       setRestarting(false);
     }
-  }, [createSession, data, router, sessionId]);
+  }, [createSession, data, router, sessionId, track]);
 
   // Fires only from the "Restart anyway" button below, i.e. only after the
   // user has explicitly seen and dismissed the live-source warning -- this
   // IS the confirmation the still-live-source guard exists to require.
   const handleConfirmRestart = useCallback(async () => {
     if (!data) return;
+    track({
+      name: "session_restart_with_summary_confirmed",
+      category: "user_action",
+      component: "RestartWithSummaryButton",
+      sessionId,
+    });
     setRestarting(true);
     setRestartErrorMessage(null);
     setLiveMessage("Starting new session…");
@@ -170,7 +179,7 @@ export function RestartWithSummaryButton({ sessionId, handoff }: RestartWithSumm
     } finally {
       setRestarting(false);
     }
-  }, [createSession, data, router, sessionId]);
+  }, [createSession, data, router, sessionId, track]);
 
   let phase: ButtonPhase;
   if (triggerErrorMessage !== null || (data && data.status === HandoffSummaryStatus.ERROR)) {

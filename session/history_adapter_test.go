@@ -15,8 +15,9 @@ func TestResolveHistoryAdapter(t *testing.T) {
 		{"claude", "claude"},
 		{"agy", "agy"},
 		{"antigravity", "agy"},
-		{"gemini", ""},
-		{"opencode", ""},
+		{"gemini", "gemini"},
+		{"opencode", "opencode"},
+		{"pi", "pi"},
 		{"aider", ""},
 		{"bash", ""},
 	}

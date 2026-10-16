@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/testutil"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // newNarrowServerDeps builds the minimal *server.ServerDependencies graph
@@ -161,7 +162,7 @@ func sessionIDFromEvent(ev *sessionv1.SessionEvent) string {
 // upgrade request at all; StreamingWSBridge.Handler forwards any non-upgrade
 // request straight to the wrapped Connect handler, see ws_stream_bridge_test.go).
 func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_CalledThroughStartRemoteTLSListener(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	services.WithIsolatedStateDir(t)
 	// wireDepsIntoServer unconditionally calls SessionService.SetLifecycleContext,
 	// which starts CapacityMonitor's real Anthropic/Gemini QueryLimits polling
 	// (server/services/capacity_monitor.go, session_service.go:1387-1389) --
@@ -179,7 +180,7 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 	// than reused because that helper is unexported to package services and
 	// this file must stay in the external services_test package (see the
 	// package doc comment above) to avoid an import cycle with server.
-	t.Setenv("HOME", t.TempDir())
+	services.WithFakeHome(t)
 
 	// wireDepsIntoServer (invoked synchronously below via NewServerWithDeps)
 	// unconditionally starts PRStatusPoller.Start (server.go, no nil guard --
@@ -246,7 +247,7 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 	// check occasionally raced this and failed; polling gives it the extra
 	// moment it actually needs without weakening what's being verified.
 	defer func() {
-		require.Eventually(t, func() bool {
+		wait.RequireEventually(t, func() bool {
 			return goleak.Find(baseline) == nil
 		}, 2*time.Second, 20*time.Millisecond, "background goroutines did not exit within 2s")
 	}()
@@ -268,7 +269,7 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 
 	port := testutil.FindFreePort(t)
 	remoteAddr := fmt.Sprintf("127.0.0.1:%d", port)
-	require.NoError(t, srv.StartRemote(srvCtx, remoteAddr, tlsCfg, nil))
+	require.NoError(t, srv.StartRemote(srvCtx, remoteAddr, tlsCfg, nil, false))
 
 	h2Transport := &http2.Transport{
 		TLSClientConfig: &tls.Config{

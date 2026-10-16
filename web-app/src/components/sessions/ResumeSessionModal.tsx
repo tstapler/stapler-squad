@@ -203,11 +203,11 @@ export function ResumeSessionModal({
                   </span>
                 </div>
               )}
-              {session.path && (
+              {session.existingDir && (
                 <div className={styles.contextRow}>
                   <span className={styles.contextLabel}>Path:</span>
-                  <span className={styles.contextValue} title={session.path}>
-                    {session.path}
+                  <span className={styles.contextValue} title={session.existingDir}>
+                    {session.existingDir}
                   </span>
                 </div>
               )}

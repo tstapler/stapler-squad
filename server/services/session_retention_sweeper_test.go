@@ -235,7 +235,7 @@ func TestSessionRetentionSweeper_SkipsWorktreeSharedWithSiblingRound(t *testing.
 	})
 
 	// New round: still active (never archived), sharing the exact same worktree path —
-	// e.g. a rework/reopen that reused the branch per findExistingWorktreeForBranch.
+	// e.g. a rework/reopen that reused the branch per nativeFindExistingWorktreeForBranch.
 	newUUID := "new-round-uuid"
 	_, err = fix.storage.CreateItemSession(ctx, session.ItemSessionData{
 		ItemID:      item.ID,
@@ -266,7 +266,7 @@ func TestSessionRetentionSweeper_SkipsWorktreeSharedWithSiblingRound(t *testing.
 // TestSessionRetentionSweeper_ConvergesWhenAllSiblingsBecomeEligible is a regression test
 // for the group-convergence fix (PR #303 review): a naive "skip if ANY sibling still
 // references this worktree path" check never converges for an item reopened 2+ times,
-// because every round shares the identical path (see findExistingWorktreeForBranch) --
+// because every round shares the identical path (see nativeFindExistingWorktreeForBranch) --
 // each round would always find some OTHER round still referencing it and block forever,
 // even once the whole group is independently archived, past retention, clean, and
 // PR-terminal. This test builds exactly that group (3 sibling rounds sharing one real
@@ -287,7 +287,7 @@ func TestSessionRetentionSweeper_ConvergesWhenAllSiblingsBecomeEligible(t *testi
 	headSHA := strings.TrimSpace(runGitTestCmd(t, mainRepoDir, "rev-parse", "HEAD"))
 
 	// A single real linked worktree, shared by every round below -- mirroring
-	// findExistingWorktreeForBranch's reuse-by-branch-name behavior: reopen/rework
+	// nativeFindExistingWorktreeForBranch's reuse-by-branch-name behavior: reopen/rework
 	// never creates a second worktree, it reuses this exact directory.
 	worktreeDir := filepath.Join(t.TempDir(), "shared-worktree")
 	runGit(t, mainRepoDir, "worktree", "add", "-q", "-b", "shared-branch", worktreeDir, "HEAD")

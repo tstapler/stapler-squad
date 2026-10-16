@@ -2,11 +2,14 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"go.opentelemetry.io/otel/codes"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -86,7 +89,6 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 	defer span.End()
 
 	startedAt := time.Now()
-	instanceRootDir := p.instanceRootDir
 
 	// terminal is the pipeline's one terminal-write call site (Story 2.2.3):
 	// every exit path (success, per-phase failure, timeout, panic recovery)
@@ -140,7 +142,7 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error("[session pipeline] panic recovered, writing terminal Failed",
-				"session", p.instanceTitle, "panic", r)
+				"session", p.instanceTitle, "panic", r, "stack", string(debug.Stack()))
 			span.AddEvent("panic_recovered")
 			terminal(pipelineOutcome{session.Failed, "StartupError", SessionCreationOutcomeFailed})
 		}
@@ -194,7 +196,6 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 			PRNumber:       ref.PRNumber,
 			PRURL:          prURL,
 		})
-		instanceRootDir = p.instance.GetEffectiveRootDir()
 		s.eventBus.Publish(events.NewSessionUpdatedEvent(p.instance, []string{"path", "branch", "github_owner", "github_repo"}))
 		log.Info("[session pipeline] resolved deferred GitHub URL", "session", p.instanceTitle, "path", localPath, "branch", branch)
 	}
@@ -257,12 +258,45 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 	if startErr := p.instance.Start(true); startErr != nil {
 		log.Error("[session pipeline] async start failed", "session", p.instanceTitle, "err", startErr)
 		setPhase(fmt.Sprintf("Startup failed: %s", startErr.Error()))
-		terminal(pipelineOutcome{session.Failed, "StartupError", SessionCreationOutcomeFailed})
+		// Classify via errors.Is (sentinel matching, not string parsing) into a fixed,
+		// short failureReason/metricsOutcome distinct from the generic "StartupError"
+		// (worktree-envvars-hijack Task 3.3.3a) -- never interpolate the detailed
+		// title/path/blocking-UUID text from startErr.Error() into these wire-level
+		// values; that text is still logged in full above for debugging.
+		failureReason := "StartupError"
+		switch {
+		case errors.Is(startErr, session.ErrWorktreeResolutionFailed):
+			failureReason = "WorktreeResolutionFailed"
+		case errors.Is(startErr, session.ErrDirectoryCollision):
+			failureReason = "DirectoryCollision"
+		}
+		terminal(pipelineOutcome{session.Failed, failureReason, SessionCreationOutcomeFailed})
 		return
 	}
 
+	// Derived only here, after Start() has completed worktree creation --
+	// any earlier point is stale for a plain SessionTypeNewWorktree session,
+	// leaving InjectHookConfig/StartSessionDriver below pointed at the bare
+	// repo path instead of the freshly-created worktree.
+	instanceRootDir := p.instance.GetEffectiveRootDir()
+
 	// Clear progress message now that we are about to become Active.
 	p.instance.SetCreationProgress("")
+
+	// Persist the full instance row (branch/worktree/etc. resolved during
+	// Start()) here, before the wiring below, not after: startLocked flips
+	// the in-memory Status to Active as a side effect of Start() itself,
+	// out-of-band from commitTerminalStatus's fencing, so any reader can
+	// already observe Active the instant Start() returns. Persisting later
+	// left a window where the row still read Creating while the instance
+	// read Active -- the live-session/stale-row split ADR-002's
+	// durable-first terminal write exists to rule out. None of the wiring
+	// below mutates a field this call captures.
+	if storage := s.GetStorage(); storage != nil {
+		if err := storage.UpdateInstance(p.instance); err != nil {
+			log.Warn("[session pipeline] failed to persist instance after successful start", "session", p.instanceTitle, "err", err)
+		}
+	}
 
 	// Inject Claude Code HTTP hook config for remote approval from the web UI.
 	// Non-fatal: session is fully functional even without this config.
@@ -277,7 +311,7 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 		if err := s.setupRemoteApprovalHooks(p.instance, instanceRootDir, p.instanceTitle); err != nil {
 			log.Warn("[session pipeline] failed to set up remote approval relay", "session", p.instanceTitle, "err", err)
 		}
-	} else if err := InjectHookConfig(instanceRootDir, p.instanceTitle); err != nil {
+	} else if err := InjectHookConfig(instanceRootDir, p.instanceTitle, p.instance.UUID); err != nil {
 		log.Warn("[session pipeline] failed to inject hook config", "session", p.instanceTitle, "err", err)
 	}
 
@@ -310,7 +344,7 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 		if concreteStorage := s.GetStorage(); concreteStorage != nil {
 			costOpt = session.WithCostSink(session.CostSinkForSessionUUID(concreteStorage, p.instance.UUID))
 		}
-		driver := session.NewAutonomousDriver(p.instance, s.headlessPool, p.instance.Prompt, 0, costOpt)
+		driver := session.NewAutonomousDriver(p.instance, s.autonomousDriverClient(), p.instance.Prompt, config.LoadConfig().AutonomousMaxTurnsOrDefault(), costOpt)
 		driver.RegisterCompletionCallback(s.autonomousSvc.onAutonomousDriverComplete)
 		if driverErr := driver.Start(s.autonomousSvc.driverCtx()); driverErr != nil {
 			log.Warn("[session pipeline] failed to start autonomous driver", "session", p.instanceTitle, "err", driverErr)
@@ -319,23 +353,6 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 		}
 	} else if p.instance.AutonomousMode {
 		log.Warn("[session pipeline] autonomous_mode requested but headlessPool is nil", "session", p.instanceTitle)
-	}
-
-	// Persist the full instance row (branch/worktree/etc. resolved during
-	// Start(), e.g. an existing-worktree remote session's discovered branch
-	// name) before the terminal write -- commitTerminalStatus's own
-	// UpdateInstanceIfEpoch only sets status/failure_reason/updated_at (an
-	// intentionally narrow, epoch-gated conditional UPDATE, see its doc
-	// comment), not the rest of the row. Mirrors the pre-Epic-2.2 code's
-	// final storage.SaveInstances([]*session.Instance{instance}) call, which
-	// this UpdateInstance takes the place of now that the instance is
-	// definitely Started() (SaveInstances would otherwise be equally
-	// correct here, but UpdateInstance has no Started()-gate to reason
-	// about).
-	if storage := s.GetStorage(); storage != nil {
-		if err := storage.UpdateInstance(p.instance); err != nil {
-			log.Warn("[session pipeline] failed to persist instance after successful start", "session", p.instanceTitle, "err", err)
-		}
 	}
 
 	terminal(pipelineOutcome{session.Active, "", SessionCreationOutcomeSuccess})

@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // TestSessionRestartWithConversationContinuity verifies that sessions restart
@@ -719,7 +720,7 @@ func TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux(t *testing.T) 
 	// never actually wait for the server) — this mirrors exactly what
 	// FromInstanceData's restore path does: construct a fresh object and
 	// immediately check aliveness on it.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		probe := tmux.NewTmuxSessionWithServerSocket(instance.Title, instance.Program, "staplersquad_", instance.TmuxServerSocket, tmux.WithRegistry(nil))
 		return probe.DoesSessionExist()
 	}, 2*time.Second, 10*time.Millisecond, "tmux server should stabilize so a freshly-constructed session object can see it")

@@ -2,6 +2,10 @@ export interface ProgramOption {
   value: string;
   label: string;
   description?: string;
+  /** Saved command line (client resolves program ID to command for ProbeProgram). */
+  command?: string;
+  /** Saved cli_flags string. */
+  cliFlags?: string;
 }
 
 // pi-support's flag name (mirrors config.FeaturePiSupport / feature_flag_service.go's

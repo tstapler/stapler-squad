@@ -9,20 +9,19 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	fdiff "github.com/go-git/go-git/v5/plumbing/format/diff"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/git/internal/gittest"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // runGit runs a git command in dir and fails the test on error.
-func runGit(t *testing.T, dir string, args ...string) string {
+func runGit(t testing.TB, dir string, args ...string) string {
 	t.Helper()
-	cmd := safeexec.CommandContext(context.Background(), "git", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "git %s failed: %s", strings.Join(args, " "), out)
-	return string(out)
+	return gittest.RunGit(t, dir, args...)
 }
 
 // cloneTestRepo clones originDir into a fresh temp directory, giving the clone an
@@ -31,14 +30,7 @@ func runGit(t *testing.T, dir string, args ...string) string {
 // worktree, which always starts from the shared repo's checked-out branch.
 func cloneTestRepo(t *testing.T, originDir string) string {
 	t.Helper()
-	workDir := t.TempDir()
-	// t.TempDir() already creates the directory; `git clone` requires an empty or
-	// missing target, so clone into a subdirectory instead.
-	cloneDir := filepath.Join(workDir, "clone")
-	runGit(t, workDir, "clone", originDir, cloneDir)
-	runGit(t, cloneDir, "config", "user.email", "test@example.com")
-	runGit(t, cloneDir, "config", "user.name", "Test User")
-	return cloneDir
+	return gittest.CloneTestRepo(t, originDir)
 }
 
 // TestMergeMainIntoWorktree_should_ReportUpToDate_When_BranchAlreadyHasLatestMain
@@ -186,8 +178,8 @@ func TestMergeMainIntoWorktree_should_ReturnError_When_MergeFailsForNonConflictR
 	assert.Equal(t, "uncommitted local edit\n", string(content))
 }
 
-// findRealGitBinary scans PATH for the first "git" candidate that is a real ELF binary,
-// skipping any shell-script wrapper along the way (this dev environment's own `git`
+// findRealGitBinary scans PATH for the first executable "git" candidate that is not a
+// script, skipping any shell-script wrapper along the way (this dev environment's own `git`
 // resolves through ~/.local/bin/git, a git-ssh-fallback wrapper script that re-invokes
 // "git" via PATH internally — exec'ing that wrapper from installGitSubcommandLogger's own
 // script would have it resolve back to the shadowed PATH and recurse into itself forever,
@@ -201,7 +193,7 @@ func findRealGitBinary(t *testing.T) string {
 		if err != nil {
 			continue
 		}
-		if isELFBinary(resolved) {
+		if isNativeExecutable(resolved) {
 			return resolved
 		}
 	}
@@ -209,18 +201,23 @@ func findRealGitBinary(t *testing.T) string {
 	return ""
 }
 
-// isELFBinary reports whether path's first 4 bytes are the ELF magic number.
-func isELFBinary(path string) bool {
+// isNativeExecutable rejects script wrappers while accepting native binaries on every
+// supported platform (ELF on Linux, Mach-O on macOS, and PE on Windows).
+func isNativeExecutable(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.Mode()&0o111 == 0 {
+		return false
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return false
 	}
 	defer func() { _ = f.Close() }()
-	var magic [4]byte
-	if _, err := io.ReadFull(f, magic[:]); err != nil {
+	var prefix [2]byte
+	if _, err := io.ReadFull(f, prefix[:]); err != nil {
 		return false
 	}
-	return string(magic[:]) == "\x7fELF"
+	return string(prefix[:]) != "#!"
 }
 
 // installGitSubcommandLogger prepends a fake "git" wrapper script to PATH that appends
@@ -254,12 +251,13 @@ func assertNoGitMergeSubcommand(t *testing.T, logPath string) {
 	}
 }
 
-// TestMergeMainIntoWorktree_NativeFlagOn_UsesNativePipeline covers Story 3.4.2's
-// acceptance criterion: with the merge flag on for worktreePath, the public
-// MergeMainIntoWorktree dispatches to the native pipeline instead of shelling out to
-// `git merge`/`git merge --abort` (`git fetch` may still run) — verified at the real
-// subprocess level via installGitSubcommandLogger, not just by checking the outcome.
-func TestMergeMainIntoWorktree_NativeFlagOn_UsesNativePipeline(t *testing.T) {
+// TestMergeMainIntoWorktree_UsesNativePipeline covers Story 3.4.2's acceptance criterion:
+// the public MergeMainIntoWorktree dispatches to the native pipeline instead of shelling
+// out to `git merge`/`git merge --abort` (`git fetch` may still run) — verified at the
+// real subprocess level via installGitSubcommandLogger, not just by checking the outcome.
+func TestMergeMainIntoWorktree_UsesNativePipeline(t *testing.T) {
+	// Not t.Parallel(): installGitSubcommandLogger uses t.Setenv, which
+	// panics when combined with t.Parallel().
 	origin := setupTestRepo(t)
 	work := cloneTestRepo(t, origin)
 	runGit(t, work, "checkout", "-b", "feature")
@@ -271,10 +269,6 @@ func TestMergeMainIntoWorktree_NativeFlagOn_UsesNativePipeline(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "git-invocations.log")
 	installGitSubcommandLogger(t, logPath)
 
-	prevUseNativeMerge := useNativeMerge
-	useNativeMerge = func(worktreePath string) bool { return worktreePath == work }
-	t.Cleanup(func() { useNativeMerge = prevUseNativeMerge })
-
 	result, err := MergeMainIntoWorktree(work, "main")
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -283,15 +277,15 @@ func TestMergeMainIntoWorktree_NativeFlagOn_UsesNativePipeline(t *testing.T) {
 	assertNoGitMergeSubcommand(t, logPath)
 }
 
-// TestMergeMainIntoWorktree_NativeFlagOn_TransitivelyUsedByRealCallSites covers Story
-// 3.4.2's second acceptance criterion: drift.go's EnsureBranchSyncedWithMain calls the
-// exact same package-level MergeMainIntoWorktree the dispatch test above exercises
-// directly, and session/backlog_lifecycle.go's branchReconciler field is assigned this
-// exact function value (git.MergeMainIntoWorktree, session/backlog_lifecycle.go:672)
-// with no wrapper of its own — so proving EnsureBranchSyncedWithMain picks up the native
-// flag here, in-package, is sufficient: neither real call site has a separate code path
-// left unexercised.
-func TestMergeMainIntoWorktree_NativeFlagOn_TransitivelyUsedByRealCallSites(t *testing.T) {
+// TestMergeMainIntoWorktree_TransitivelyUsedByRealCallSites covers Story 3.4.2's second
+// acceptance criterion: drift.go's EnsureBranchSyncedWithMain calls the exact same
+// package-level MergeMainIntoWorktree the dispatch test above exercises directly, and
+// session/backlog_lifecycle.go's branchReconciler field is assigned this exact function
+// value (git.MergeMainIntoWorktree, session/backlog_lifecycle.go:672) with no wrapper of
+// its own — so proving EnsureBranchSyncedWithMain actually merges here, in-package, is
+// sufficient: neither real call site has a separate code path left unexercised.
+func TestMergeMainIntoWorktree_TransitivelyUsedByRealCallSites(t *testing.T) {
+	t.Parallel()
 	origin := setupTestRepo(t)
 	work := cloneTestRepo(t, origin)
 	runGit(t, work, "checkout", "-b", "feature")
@@ -308,17 +302,8 @@ func TestMergeMainIntoWorktree_NativeFlagOn_TransitivelyUsedByRealCallSites(t *t
 	beforeSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
 	wantSHA := strings.TrimSpace(runGit(t, origin, "rev-parse", "main"))
 
-	prevUseNativeMerge := useNativeMerge
-	var nativeCalledFor string
-	useNativeMerge = func(worktreePath string) bool {
-		nativeCalledFor = worktreePath
-		return true
-	}
-	t.Cleanup(func() { useNativeMerge = prevUseNativeMerge })
-
 	_, _ = EnsureBranchSyncedWithMain(work, "feature", "main", DefaultBranchDriftThreshold)
 
-	assert.Equal(t, work, nativeCalledFor, "EnsureBranchSyncedWithMain must dispatch through the shared MergeMainIntoWorktree seam that branchReconciler is also assigned directly")
 	afterSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "feature"))
 	assert.NotEqual(t, beforeSHA, afterSHA, "the native pipeline must have actually merged, regardless of the subsequent push outcome")
 	assert.Equal(t, wantSHA, afterSHA, "native merge must fast-forward to main's tip")
@@ -473,6 +458,117 @@ func TestResolveWorktreeBaseCommit_ReturnsError_When_NoCandidateAndNotUnborn(t *
 	assert.Empty(t, branch)
 	assert.Empty(t, sha)
 }
+
+// TestAmbientHEADDivergesFromBase_True_When_CheckedOutBranchDiffersFromBase
+// covers the bug report's exact scenario: work's ambient checked-out branch
+// has its own commit not on the resolved base, so a caller who branched from
+// ambient HEAD instead of baseSHA would have silently forked from unrelated
+// in-progress work.
+func TestAmbientHEADDivergesFromBase_True_When_CheckedOutBranchDiffersFromBase(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "unrelated-in-progress-work")
+	require.NoError(t, os.WriteFile(filepath.Join(work, "unrelated.txt"), []byte("unrelated\n"), 0o644))
+	runGit(t, work, "add", "unrelated.txt")
+	runGit(t, work, "commit", "-m", "unrelated in-progress commit")
+
+	_, baseSHA, err := ResolveWorktreeBaseCommit(work)
+	require.NoError(t, err)
+
+	diverged, ambientBranch := AmbientHEADDivergesFromBase(work, baseSHA)
+	assert.True(t, diverged)
+	assert.Equal(t, "unrelated-in-progress-work", ambientBranch)
+}
+
+// TestAmbientHEADDivergesFromBase_False_When_AmbientHEADIsBase verifies the
+// no-divergence case reports false, so a session created from a repo already
+// on its default branch gets no spurious warning.
+func TestAmbientHEADDivergesFromBase_False_When_AmbientHEADIsBase(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+
+	_, baseSHA, err := ResolveWorktreeBaseCommit(work)
+	require.NoError(t, err)
+
+	diverged, ambientBranch := AmbientHEADDivergesFromBase(work, baseSHA)
+	assert.False(t, diverged)
+	assert.Empty(t, ambientBranch)
+}
+
+// TestResolveRemoteWorktreeBaseCommit_MatchesLocalResolution verifies the
+// remote (CommandRunner-based) resolver reaches the same answer as
+// ResolveWorktreeBaseCommit for the same repo, using tmux.LocalRunner{} to
+// exercise the exact command sequence a real SSH runner would run, without
+// needing a real SSH server.
+func TestResolveRemoteWorktreeBaseCommit_MatchesLocalResolution(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "some-other-feature-branch")
+
+	wantBranch, wantSHA, err := ResolveWorktreeBaseCommit(work)
+	require.NoError(t, err)
+
+	gotBranch, gotSHA, err := ResolveRemoteWorktreeBaseCommit(context.Background(), tmux.LocalRunner{}, work)
+	require.NoError(t, err)
+	assert.Equal(t, wantBranch, gotBranch)
+	assert.Equal(t, wantSHA, gotSHA)
+}
+
+// TestResolveRemoteWorktreeBaseCommit_ReturnsEmptySHA_When_RepoIsUnborn
+// mirrors TestResolveWorktreeBaseCommit_ReturnsEmptySHA_When_RepoIsUnborn:
+// a repo with no commits anywhere is the one case safe to fall back to
+// ambient HEAD for.
+func TestResolveRemoteWorktreeBaseCommit_ReturnsEmptySHA_When_RepoIsUnborn(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+
+	branch, sha, err := ResolveRemoteWorktreeBaseCommit(context.Background(), tmux.LocalRunner{}, dir)
+	require.NoError(t, err)
+	assert.Empty(t, branch)
+	assert.Empty(t, sha)
+}
+
+// TestResolveRemoteWorktreeBaseCommit_ReturnsError_When_RunnerFailsEntirely
+// is the regression this bug's remote-path fix needed: a runner that fails
+// every single command (simulating a dead/rejected SSH connection, not a
+// genuinely unborn repo) must surface a hard error, not be silently
+// misclassified as "unborn repo, fall back to ambient HEAD" -- the same
+// class of misattribution this whole bug report is about, just one layer
+// deeper. Before the symbolic-ref check, a connection failure on the final
+// `git rev-parse HEAD` looked identical to an unborn repo's failure.
+func TestResolveRemoteWorktreeBaseCommit_ReturnsError_When_RunnerFailsEntirely(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@localhost")
+	runGit(t, dir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("x\n"), 0o644))
+	runGit(t, dir, "add", "README.md")
+	runGit(t, dir, "commit", "-m", "initial commit")
+
+	branch, sha, err := ResolveRemoteWorktreeBaseCommit(context.Background(), alwaysFailRunner{}, dir)
+	require.Error(t, err)
+	assert.Empty(t, branch)
+	assert.Empty(t, sha)
+}
+
+// alwaysFailRunner is a tmux.CommandRunner whose every Run call fails,
+// simulating a dead or resource-exhausted remote connection.
+type alwaysFailRunner struct{}
+
+func (alwaysFailRunner) Run(context.Context, string, string, ...string) ([]byte, error) {
+	return nil, fmt.Errorf("simulated connection failure")
+}
+
+func (alwaysFailRunner) Start(context.Context, string, string, ...string) (io.WriteCloser, io.ReadCloser, func() error, error) {
+	return nil, nil, nil, fmt.Errorf("simulated connection failure")
+}
+
+func (alwaysFailRunner) IsRemote() bool { return true }
 
 // TestResolveExplicitBranchSHA_UsesOrigin verifies the explicit-override
 // resolver (BacklogItem.BaseBranch) fetches the named branch from origin
@@ -1333,4 +1429,172 @@ func TestDiffHashFromFilePatches_ShouldSkipEntry_WhenFilesAreNilButChunksNonEmpt
 		hash := diffHashFromFilePatches(patches)
 		assert.NotEmpty(t, hash)
 	})
+}
+
+// countCommitsNotAncestorOfPerCommitWalk is the pre-PerfFix implementation: one
+// full Commit.IsAncestor history walk per visited commit. Kept as the oracle
+// for the equivalence test and the baseline for the benchmark.
+func countCommitsNotAncestorOfPerCommitWalk(from, target *object.Commit) (int, error) {
+	seen := map[plumbing.Hash]bool{from.Hash: true}
+	queue := []*object.Commit{from}
+	count := 0
+	for len(queue) > 0 && count < countCommitsNotAncestorOfCap {
+		c := queue[0]
+		queue = queue[1:]
+		isAncestor, err := c.IsAncestor(target)
+		if err != nil {
+			return count, err
+		}
+		if isAncestor {
+			continue
+		}
+		count++
+		if err := c.Parents().ForEach(func(p *object.Commit) error {
+			if !seen[p.Hash] {
+				seen[p.Hash] = true
+				queue = append(queue, p)
+			}
+			return nil
+		}); err != nil {
+			return count, err
+		}
+	}
+	return count, nil
+}
+
+func commitFile(t testing.TB, dir, name string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(name+"\n"), 0o644))
+	runGit(t, dir, "add", name)
+	runGit(t, dir, "commit", "-m", name)
+}
+
+// newDivergedAncestryRepo builds mainCommits on main, a feature branch with
+// featureCommits (including one merge of main back in), and returns the repo
+// path. main then advances past the merge so both directions are non-zero.
+func newDivergedAncestryRepo(t testing.TB, mainCommits, featureCommits int) string {
+	t.Helper()
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	runGit(t, dir, "config", "commit.gpgsign", "false")
+	for i := range mainCommits {
+		commitFile(t, dir, fmt.Sprintf("main-%d.txt", i))
+	}
+	runGit(t, dir, "checkout", "-b", "feature")
+	for i := range featureCommits {
+		commitFile(t, dir, fmt.Sprintf("feature-%d.txt", i))
+	}
+	runGit(t, dir, "checkout", "main")
+	commitFile(t, dir, "main-advance-0.txt")
+	runGit(t, dir, "checkout", "feature")
+	runGit(t, dir, "merge", "--no-edit", "main")
+	commitFile(t, dir, "feature-after-merge.txt")
+	runGit(t, dir, "checkout", "main")
+	commitFile(t, dir, "main-advance-1.txt")
+	commitFile(t, dir, "main-advance-2.txt")
+	return dir
+}
+
+func ancestryCommits(t testing.TB, dir string) (feature, main *object.Commit) {
+	t.Helper()
+	repo, err := OpenRepo(dir)
+	require.NoError(t, err)
+	fRef, err := repo.Reference(plumbing.NewBranchReferenceName("feature"), true)
+	require.NoError(t, err)
+	mRef, err := repo.Reference(plumbing.NewBranchReferenceName("main"), true)
+	require.NoError(t, err)
+	feature, err = repo.CommitObject(fRef.Hash())
+	require.NoError(t, err)
+	main, err = repo.CommitObject(mRef.Hash())
+	require.NoError(t, err)
+	return feature, main
+}
+
+// TestCountCommitsNotAncestorOf_should_MatchPerCommitWalk_When_HistoryHasMerges
+// guards PerfFix-5's rewrite: the single ancestor-set walk must agree with the
+// per-commit IsAncestor oracle in both directions, merge commits included.
+func TestCountCommitsNotAncestorOf_should_MatchPerCommitWalk_When_HistoryHasMerges(t *testing.T) {
+	dir := newDivergedAncestryRepo(t, 6, 4)
+	feature, main := ancestryCommits(t, dir)
+
+	for _, tc := range []struct {
+		name         string
+		from, target *object.Commit
+	}{{"ahead", feature, main}, {"behind", main, feature}} {
+		want, err := countCommitsNotAncestorOfPerCommitWalk(tc.from, tc.target)
+		require.NoError(t, err)
+		got, err := countCommitsNotAncestorOf(tc.from, tc.target)
+		require.NoError(t, err)
+		assert.Equal(t, want, got, tc.name)
+		assert.NotZero(t, got, "%s: fixture must diverge in this direction", tc.name)
+	}
+}
+
+// TestBranchHasCommitsAhead_should_AgreeWithBranchAheadBehind covers the
+// branch-ahead, branch-merged and branch-deleted cases of the fast path.
+func TestBranchHasCommitsAhead_should_AgreeWithBranchAheadBehind(t *testing.T) {
+	dir := newDivergedAncestryRepo(t, 3, 2)
+	runGit(t, dir, "branch", "merged", "main")
+
+	for _, branch := range []string{"feature", "merged", "gone"} {
+		status, err := BranchAheadBehind(dir, branch, "main")
+		require.NoError(t, err)
+		exists, ahead, err := BranchHasCommitsAhead(dir, branch, "main")
+		require.NoError(t, err)
+		assert.Equal(t, status.BranchExists, exists, branch)
+		assert.Equal(t, status.AheadOfMain > 0, ahead, branch)
+	}
+}
+
+// BenchmarkCountCommitsNotAncestorOf compares the single ancestor-set walk
+// against the per-commit IsAncestor baseline across main-history depths.
+func BenchmarkCountCommitsNotAncestorOf(b *testing.B) {
+	for _, n := range []int{50, 200} {
+		dir := newDivergedAncestryRepo(b, n, 20)
+		feature, main := ancestryCommits(b, dir)
+		for _, impl := range []struct {
+			name string
+			fn   func(from, target *object.Commit) (int, error)
+		}{
+			{"PerCommitWalk", countCommitsNotAncestorOfPerCommitWalk},
+			{"AncestorSet", countCommitsNotAncestorOf},
+		} {
+			b.Run(fmt.Sprintf("%s/%dmain", impl.name, n), func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					if _, err := impl.fn(feature, main); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}
+
+// TestCountCommitsNotAncestorOf_should_NotError_When_TargetHistoryIsShallow
+// guards a regression the ancestor-set rewrite introduced: the walk reached a
+// shallow clone's missing parents and errored where the per-commit IsAncestor
+// walk stopped at the first hit.
+func TestCountCommitsNotAncestorOf_should_NotError_When_TargetHistoryIsShallow(t *testing.T) {
+	origin := newDivergedAncestryRepo(t, 5, 2)
+	shallow := filepath.Join(t.TempDir(), "shallow")
+	runGit(t, filepath.Dir(shallow), "clone", "--depth", "2", "--no-local", "file://"+origin, shallow)
+	repo, err := OpenRepo(shallow)
+	require.NoError(t, err)
+	head, err := repo.Head()
+	require.NoError(t, err)
+	tip, err := repo.CommitObject(head.Hash())
+	require.NoError(t, err)
+	parent, err := tip.Parent(0)
+	require.NoError(t, err)
+
+	for name, from := range map[string]*object.Commit{"tip": tip, "parent": parent} {
+		got, err := countCommitsNotAncestorOf(from, tip)
+		require.NoError(t, err, name)
+		want, err := countCommitsNotAncestorOfPerCommitWalk(from, tip)
+		require.NoError(t, err, name)
+		assert.Equal(t, want, got, name)
+	}
 }

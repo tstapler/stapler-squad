@@ -4,13 +4,53 @@ import { createContext, useContext, useState, useEffect, useCallback, useMemo, R
 import { useRouter } from "next/navigation";
 import { createClient } from "@connectrpc/connect";
 import { getConnectTransport } from "@/lib/api/transport";
-import { SessionService } from "@/gen/session/v1/session_pb";
+import { FlagMutation, SessionService } from "@/gen/session/v1/session_pb";
+import type { FeatureFlag } from "@/gen/session/v1/session_pb";
+import { GLOBAL_SCOPE } from "./featureFlagScopes";
 
 export interface FeatureFlagMeta {
   name: string;
   enabled: boolean;
   description: string;
   statusDetail: string;
+  /** Explicit per-scope values read back from the server ("kind:review" -> true). */
+  scopes?: Record<string, boolean>;
+}
+
+/**
+ * A scoped or mutation-style flag change. `scope` is "global" for the global
+ * value or "kind:<name>"; a bare boolean passed to setFlag is the legacy
+ * global set.
+ */
+export type FlagChange =
+  | { mutation: "set"; scope: string; enabled: boolean }
+  | { mutation: "clear"; scope: string }
+  | { mutation: "reset" };
+
+
+function scopesOf(flag: FeatureFlag): Record<string, boolean> {
+  return Object.fromEntries(flag.scopes.map((s) => [s.scope, s.enabled]));
+}
+
+function metaOf(f: FeatureFlag): FeatureFlagMeta {
+  return {
+    name: f.name,
+    enabled: f.enabled,
+    description: f.description,
+    statusDetail: f.statusDetail,
+    scopes: scopesOf(f),
+  };
+}
+
+/** What the server must have persisted for `change`, or null when the read-back agrees. */
+export function readbackMismatch(change: FlagChange, flag: FeatureFlag): string | null {
+  if (change.mutation === "reset") return null;
+  if (change.scope === GLOBAL_SCOPE) {
+    return change.mutation === "set" && flag.enabled !== change.enabled ? "global value" : null;
+  }
+  const entry = flag.scopes.find((s) => s.scope === change.scope);
+  if (change.mutation === "clear") return entry ? change.scope : null;
+  return entry?.enabled === change.enabled ? null : change.scope;
 }
 
 interface FeatureFlagsContextValue {
@@ -18,7 +58,7 @@ interface FeatureFlagsContextValue {
   flagList: FeatureFlagMeta[];
   isLoading: boolean;
   error: string | null;
-  setFlag: (name: string, enabled: boolean) => Promise<void>;
+  setFlag: (name: string, change: boolean | FlagChange) => Promise<void>;
 }
 
 const FeatureFlagsContext = createContext<FeatureFlagsContextValue>({
@@ -47,7 +87,7 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
       const list: FeatureFlagMeta[] = [];
       for (const f of res.flags) {
         map[f.name] = f.enabled;
-        list.push({ name: f.name, enabled: f.enabled, description: f.description, statusDetail: f.statusDetail });
+        list.push(metaOf(f));
       }
       setFlags(map);
       setFlagList(list);
@@ -60,19 +100,40 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => { fetchFlags(); }, [fetchFlags]);
 
-  const setFlag = useCallback(async (name: string, enabled: boolean) => {
+  // The displayed state is always the server's read-back, never an optimistic
+  // value: a failed or ignored change leaves the previous state and re-reads it.
+  const setFlag = useCallback(async (name: string, change: boolean | FlagChange) => {
+    const req =
+      typeof change === "boolean"
+        ? { name, enabled: change }
+        : change.mutation === "set"
+          ? {
+              name,
+              scope: change.scope,
+              mutation: change.enabled ? FlagMutation.SET_ENABLED : FlagMutation.SET_DISABLED,
+            }
+          : change.mutation === "clear"
+            ? { name, scope: change.scope, mutation: FlagMutation.CLEAR_SCOPE }
+            : { name, mutation: FlagMutation.RESET_GLOBAL };
     try {
-      const res = await client.updateFeatureFlag({ name, enabled });
+      const res = await client.updateFeatureFlag(req);
       const flag = res.flag;
-      if (flag) {
-        setFlags((prev) => ({ ...prev, [flag.name]: flag.enabled }));
-        setFlagList((prev) => prev.map((f) => f.name === flag.name ? { ...f, enabled: flag.enabled } : f));
+      if (!flag) throw new Error("response carried no flag");
+      if (typeof change !== "boolean") {
+        const bad = readbackMismatch(change, flag);
+        if (bad) {
+          // An older server that ignores `scope` answers with success and no entry.
+          throw new Error(`server read-back does not show the change for ${bad}`);
+        }
       }
+      setFlags((prev) => ({ ...prev, [flag.name]: flag.enabled }));
+      setFlagList((prev) => prev.map((f) => (f.name === flag.name ? { ...f, ...metaOf(flag) } : f)));
     } catch (err) {
       console.error("Failed to update feature flag", name, err);
       setError("Failed to update feature flag");
+      void fetchFlags();
     }
-  }, [client]);
+  }, [client, fetchFlags]);
 
   const value = useMemo(
     () => ({ flags, flagList, isLoading, error, setFlag }),

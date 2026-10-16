@@ -63,6 +63,9 @@ type CreateSessionForPRResult struct {
 	// Background Resolution Pipeline reached a terminal status — see
 	// CreateSessionResult.StillCreating's doc comment in tools_lifecycle.go.
 	StillCreating bool `json:"still_creating,omitempty"`
+	// ProgramWarning is set (non-fatally) when program isn't among the
+	// programs currently registered — see programWarningFor.
+	ProgramWarning string `json:"program_warning,omitempty"`
 }
 
 func registerGitHubTools(s *mcpserver.MCPServer, gh *githubHandlers) {
@@ -75,7 +78,7 @@ func registerGitHubTools(s *mcpserver.MCPServer, gh *githubHandlers) {
 
 	s.AddTool(
 		mcpgo.NewTool("create_session_for_pr",
-			mcpgo.WithDescription("Create a new Stapler Squad worktree session for a GitHub pull request. Checks out the PR's branch in a git worktree so work is isolated. If an existing session is already associated with the PR, returns that session's ID instead of creating a duplicate. Auto-detects the local repo path from existing sessions if not provided. Waits up to 150s for the session to finish starting up; if it's still resolving after that, returns a still_creating result (session_id present, safe to poll with get_session) rather than an error or an open-ended hang."),
+			mcpgo.WithDescription("Create a new Stapler Squad worktree session for a GitHub pull request. Checks out the PR's branch in a git worktree so work is isolated. If an existing session is already associated with the PR, returns that session's ID instead of creating a duplicate. Auto-detects the local repo path from existing sessions if not provided. Waits up to 150s for the session to finish starting up; if it's still resolving after that, returns a still_creating result (session_id present, safe to poll with get_session) rather than an error or an open-ended hang.\n\nIf the result includes program_warning, the session was still created but the program value isn't among the programs currently registered — check for a typo before assuming the session is running normally."),
 			mcpgo.WithString("owner",
 				mcpgo.Description("GitHub owner (user or org) of the repository"),
 				mcpgo.Required(),
@@ -98,10 +101,7 @@ func registerGitHubTools(s *mcpserver.MCPServer, gh *githubHandlers) {
 			mcpgo.WithString("title",
 				mcpgo.Description("Session title (default: owner/repo#number)"),
 			),
-			mcpgo.WithString("program",
-				mcpgo.Description("Program to run: claude or aider (default: claude)"),
-				mcpgo.Enum("claude", "aider"),
-			),
+			mcpgo.WithString("program", programSchemaOptions(gh.svc)...),
 		),
 		gh.createSessionForPR,
 	)
@@ -214,22 +214,16 @@ func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context
 		title = fmt.Sprintf("%s/%s#%d", owner, repo, prNumber)
 	}
 	if program == "" {
-		program = "claude"
+		program = defaultProgramID
 	}
 
-	// Check for title collision. Fast, agent-friendly pre-check in addition to
-	// CreateSession's own synchronous title-uniqueness check below -- see
-	// create_session's identical pre-check in tools_lifecycle.go for the
-	// TOCTOU rationale (async-session-creation Epic 2.3, Story 2.3.2).
-	existing, err := gh.store.ListInstanceData()
-	if err != nil {
-		return errResult(ErrInternalError, fmt.Sprintf("load sessions: %v", err), ""), nil
-	}
-	for _, data := range existing {
-		if data.Title == title {
-			return errResult(ErrInvalidArgument, fmt.Sprintf("session with title %q already exists", title),
-				"The PR may already have a session. Check list_github_prs for existing_session_id."), nil
-		}
+	// Soft (non-fatal) check: same reasoning as create_session's identical
+	// check in tools_lifecycle.go — a custom program registered after this
+	// process started must still be allowed to launch.
+	programWarning := programWarningFor(ctx, gh.svc, program)
+
+	if errRes := titleCollisionResult(gh.store, title); errRes != nil {
+		return errRes, nil
 	}
 
 	if gh.svc == nil {
@@ -262,7 +256,8 @@ func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context
 				Title:  title,
 				Status: session.Creating.String(),
 			}},
-			StillCreating: true,
+			StillCreating:  true,
+			ProgramWarning: programWarning,
 		}), nil
 	}
 	if result := mapCreationOutcome(outcome, awaitErr); result != nil {
@@ -275,9 +270,6 @@ func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context
 			fmt.Sprintf("session %q reached Active but is no longer findable", sessionID), ""), nil
 	}
 
-	if injErr := injectMCPConfig(inst.GetEffectiveRootDir()); injErr != nil {
-		log.Warn("mcp MCP injection failed for PR session", "title", title, "err", injErr)
-	}
 	if err := services.InjectHooksConfig(inst.GetEffectiveRootDir(), inst.Title, nil); err != nil {
 		log.Warn("mcp hook injection failed for PR session", "title", title, "err", err)
 	}
@@ -288,8 +280,9 @@ func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context
 
 	detail := instanceToDetail(inst)
 	return okResult(CreateSessionForPRResult{
-		MCPResult: MCPResult{Success: true},
-		Session:   &detail,
+		MCPResult:      MCPResult{Success: true},
+		Session:        &detail,
+		ProgramWarning: programWarning,
 	}), nil
 }
 
@@ -367,7 +360,7 @@ func NewPRVerification(exists, matched bool, actualHeadBranch, state, author str
 //
 // Returns:
 //   - (NewPRVerification(false, false, "", "", ""), nil): no PR exists for
-//     prNumber in owner/repo at all (githubpkg.ErrNoPR). Callers must NOT
+//     prNumber in ref's repo at all (githubpkg.ErrNoPR). Callers must NOT
 //     persist on this result, with or without an override — re-asking
 //     GitHub the same question will not change the answer.
 //   - (NewPRVerification(true, ..., info.HeadRef, info.State, info.Author), nil):
@@ -375,8 +368,8 @@ func NewPRVerification(exists, matched bool, actualHeadBranch, state, author str
 //   - (PRVerification{}, err): the lookup itself failed (rate limit, network,
 //     auth) — transient. Callers should surface a retryable error rather
 //     than treating this as a confirmed mismatch or a confirmed non-existence.
-func VerifyPRMatchesBranch(ctx context.Context, owner, repo string, prNumber int, expectedBranch string) (PRVerification, error) {
-	info, err := githubpkg.GetPRByNumber(ctx, owner, repo, prNumber)
+func VerifyPRMatchesBranch(ctx context.Context, ref githubpkg.RepoRef, prNumber int, expectedBranch string) (PRVerification, error) {
+	info, err := githubpkg.GetPRByNumber(ctx, ref, prNumber)
 	if err != nil {
 		if errors.Is(err, githubpkg.ErrNoPR) {
 			return NewPRVerification(false, false, "", "", ""), nil
@@ -398,8 +391,9 @@ func detectRepoPath(store session.InstanceStore, owner, repo string) string {
 		if strings.Contains(strings.ToLower(inst.Path), strings.ToLower(repo)) {
 			return inst.Path
 		}
-		if strings.Contains(strings.ToLower(inst.GetWorkingDirectory()), target) {
-			dir := inst.GetWorkingDirectory()
+		activeDir := inst.ActiveDir()
+		if strings.Contains(strings.ToLower(activeDir), target) {
+			dir := activeDir
 			// Walk up to find the git root.
 			for dir != "/" && dir != "." {
 				if _, statErr := os.Stat(filepath.Join(dir, ".git")); statErr == nil {

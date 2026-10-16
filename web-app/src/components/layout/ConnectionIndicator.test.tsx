@@ -24,6 +24,7 @@ function createTestStore(connectionState: "connected" | "stale" | "disconnected"
         ids: [],
         entities: {},
         loading: false,
+        hasLoadedOnce: false,
         error: null,
         connectionState,
         detectedStatusMap: {},

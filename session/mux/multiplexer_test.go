@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // readySignalConn wraps a net.Conn and closes ready on the first Read call, immediately
@@ -258,7 +259,7 @@ func TestMultiplexer_StartSessionMonitor_ContextCancel(t *testing.T) {
 	// The goroutine must exit. Give it a moment.
 	// We detect leaks by checking that the fake has no live subscriptions
 	// after a short grace period (the goroutine removes its entry on ctx.Done).
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		fake.mu.Lock()
 		defer fake.mu.Unlock()
 		return len(fake.subs["test-session"]) == 0

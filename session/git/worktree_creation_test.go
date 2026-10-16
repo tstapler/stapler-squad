@@ -6,11 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/tstapler/stapler-squad/session/git/internal/gittest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -23,25 +21,17 @@ import (
 // the `prefer-go-git-over-subshells` skill.
 func setupTestRepo(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
+	return setupTestRepoWithIdentity(t, true)
+}
 
-	repo, err := git.PlainInitWithOptions(dir, &git.PlainInitOptions{
-		InitOptions: git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
-	})
-	require.NoError(t, err)
+func setupTestRepoWithoutIdentity(t *testing.T) string {
+	t.Helper()
+	return setupTestRepoWithIdentity(t, false)
+}
 
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test"), 0644))
-
-	wt, err := repo.Worktree()
-	require.NoError(t, err)
-	_, err = wt.Add(".")
-	require.NoError(t, err)
-	_, err = wt.Commit("Initial commit", &git.CommitOptions{
-		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
-	})
-	require.NoError(t, err)
-
-	return dir
+func setupTestRepoWithIdentity(t *testing.T, configureIdentity bool) string {
+	t.Helper()
+	return gittest.SetupTestRepoWithIdentity(t, configureIdentity)
 }
 
 // TestNewGitWorktreeWithBranch_should_Error_When_RepoPathIsEmpty guards against a
@@ -377,12 +367,12 @@ func TestNewGitWorktreeFromExisting_DetectsBranchAndBase(t *testing.T) {
 
 // TestNewGitWorktreeWithBranch_FreshPathMatchesGitRediscoveredPath verifies AC1: a
 // worktree path computed fresh via joinWithinDir(worktreeDir, sanitizedName) at creation
-// time, and the same directory rediscovered later via `git worktree list --porcelain`
-// (the "already checked out elsewhere" fallback in findExistingWorktreeForBranch), must
-// be byte-identical strings -- not merely equal after a test-side filepath.EvalSymlinks
-// normalization. On macOS this is only true because getWorktreeDirectory() resolves
-// symlinks on the base dir up front (see its doc comment) and the rediscovery path
-// canonicalizes git's porcelain output the same way before returning it.
+// time, and the same directory rediscovered later via nativeFindExistingWorktreeForBranch
+// (the "already checked out elsewhere" fallback), must be byte-identical strings -- not
+// merely equal after a test-side filepath.EvalSymlinks normalization. On macOS this is
+// only true because getWorktreeDirectory() resolves symlinks on the base dir up front (see
+// its doc comment) and the rediscovery path canonicalizes git's reported view the same way
+// before returning it.
 func TestNewGitWorktreeWithBranch_FreshPathMatchesGitRediscoveredPath(t *testing.T) {
 	repoDir := setupTestRepo(t)
 	const branch = "backlog/ac1-fresh-vs-rediscovered"
@@ -393,10 +383,8 @@ func TestNewGitWorktreeWithBranch_FreshPathMatchesGitRediscoveredPath(t *testing
 	freshPath := wt1.GetWorktreePath()
 	defer func() { _ = wt1.Cleanup() }()
 
-	// Rediscover the same worktree the way a second, independent construction would:
-	// findExistingWorktreeForBranch parses `git worktree list --porcelain`, which
-	// reports git's own realpath'd view of the directory.
-	rediscoveredPath, found := findExistingWorktreeForBranch(repoDir, branch)
+	// Rediscover the same worktree the way a second, independent construction would.
+	rediscoveredPath, found := nativeFindExistingWorktreeForBranch(repoDir, branch)
 	require.True(t, found, "git must report the worktree just created via Setup()")
 	rediscoveredPath = CanonicalizeWorktreePath(rediscoveredPath)
 
@@ -474,8 +462,7 @@ func TestWorktreeSetup_RecreatesLockedInterruptedWorktree(t *testing.T) {
 	// Simulate an interrupted `worktree add`: lock the worktree as git itself would
 	// mid-checkout, then delete a real tracked file to simulate a half-populated
 	// directory left behind by the kill.
-	_, err = wt1.runGitCommand(repoDir, "worktree", "lock", "--reason", "initializing", path)
-	require.NoError(t, err)
+	runRealGit(t, repoDir, "worktree", "lock", "--reason", "initializing", path)
 	trackedFile := filepath.Join(path, "README.md")
 	require.NoError(t, os.Remove(trackedFile))
 

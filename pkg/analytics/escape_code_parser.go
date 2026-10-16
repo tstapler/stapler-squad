@@ -7,7 +7,9 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -53,15 +55,30 @@ type EscapeCodeParser struct {
 	// goroutines and written by SetStableSessionID once the owning session's stable UUID
 	// becomes known (after construction, before or after Start — either is safe).
 	sessionID         atomic.Pointer[string]
+	projectPath       atomic.Pointer[string]
 	enabled           bool
-	partialBuffer     []byte // Buffer for partial escape sequences between chunks
+	partialBuffer     []byte // Buffer for partial Stage 1 escape sequences between chunks
+	stage2Mu          sync.Mutex
+	stage2Partial     []byte // Buffer for partial Stage 2 escape sequences between frames
 	writer            EscapeEventWriter
 	captureLevel      string // "full", "summary", "off"
 	redactOSCPayloads bool
 	samplingRate      float64
 	chunkSeqNum       int64 // incremented per Parse call (Stage 1 goroutine only)
 	stage2ChunkSeqNum int64 // incremented per ParseStage2 call (Stage 2 goroutine only)
-	correlator        *MangleCorrelator
+	// stage1CodesBuf/stage2CodesBuf are extractEscapeSequences' reused output buffers, one
+	// per goroutine (same split as chunkSeqNum/stage2ChunkSeqNum — never touched by the other
+	// stage's goroutine, so no lock is needed). Passed by pointer and reset to length 0
+	// before each call, keeping the backing array's capacity across calls instead of
+	// allocating a fresh slice per chunk: live profiling on a busy instance (~50-100
+	// concurrent sessions) showed this the single largest stapler-squad-owned flat
+	// allocator (extractEscapeSequences, 1.26% of all process allocations over a 30-minute
+	// window) — every PTY read chunk paid a fresh append-driven grow, even though a
+	// session's steady-state code count per chunk is stable enough for the capacity to
+	// converge and stop growing after a few calls.
+	stage1CodesBuf []ParsedEscapeCode
+	stage2CodesBuf []ParsedEscapeCode
+	correlator     *MangleCorrelator
 	// totalSequences/totalMangled are written from both the Stage 1 (PTY read) and
 	// Stage 2 (WebSocket output) goroutines via emitEventWithStageAndSeq, so they
 	// must be atomic rather than plain int64.
@@ -115,10 +132,22 @@ func (p *EscapeCodeParser) SetStableSessionID(id string) {
 	p.sessionID.Store(&id)
 }
 
+// SetProjectPath records the canonical project path alongside future events.
+func (p *EscapeCodeParser) SetProjectPath(path string) {
+	p.projectPath.Store(&path)
+}
+
 // currentSessionID returns the session identifier to record on emitted events.
 func (p *EscapeCodeParser) currentSessionID() string {
 	if id := p.sessionID.Load(); id != nil {
 		return *id
+	}
+	return ""
+}
+
+func (p *EscapeCodeParser) currentProjectPath() string {
+	if path := p.projectPath.Load(); path != nil {
+		return *path
 	}
 	return ""
 }
@@ -179,7 +208,8 @@ func (p *EscapeCodeParser) Parse(data []byte, sessionSeq int64) []byte {
 	}
 
 	// Extract all escape sequences
-	codes, trailingIncomplete := p.extractEscapeSequences(parseData)
+	p.stage1CodesBuf = p.stage1CodesBuf[:0]
+	codes, trailingIncomplete := p.extractEscapeSequences(parseData, &p.stage1CodesBuf)
 
 	// Record each code to the store and emit events
 	sessionID := p.currentSessionID()
@@ -211,12 +241,34 @@ func (p *EscapeCodeParser) ParseStage2(data []byte, sessionSeq int64) {
 	if !p.enabled || p.writer == nil || p.captureLevel == "off" || len(data) == 0 {
 		return
 	}
+	p.correlator.ObserveTransport(p.currentSessionID())
 
+	// Legacy streaming can invoke Stage 2 from more than one WebSocket goroutine.
+	// Serialize its ordinal, reusable buffer, and partial-frame state.
+	p.stage2Mu.Lock()
+	defer p.stage2Mu.Unlock()
 	p.stage2ChunkSeqNum++
 
-	codes, _ := p.extractEscapeSequences(data)
+	parseData := data
+	partialLen := len(p.stage2Partial)
+	if partialLen > 0 {
+		parseData = make([]byte, partialLen+len(data))
+		copy(parseData, p.stage2Partial)
+		copy(parseData[partialLen:], data)
+		p.stage2Partial = nil
+		sessionSeq -= int64(partialLen)
+	}
+
+	p.stage2CodesBuf = p.stage2CodesBuf[:0]
+	codes, trailingIncomplete := p.extractEscapeSequences(parseData, &p.stage2CodesBuf)
 	for _, code := range codes {
 		p.emitEventWithStageAndSeq(code, sessionSeq, StageTransport, p.stage2ChunkSeqNum)
+	}
+	if trailingIncomplete >= 0 {
+		p.stage2Partial = append(p.stage2Partial[:0], parseData[trailingIncomplete:]...)
+		if len(p.stage2Partial) > 4096 {
+			p.stage2Partial = nil
+		}
 	}
 }
 
@@ -244,13 +296,15 @@ func (p *EscapeCodeParser) emitEventWithStageAndSeq(code ParsedEscapeCode, sessi
 	}
 
 	record := EscapeEventRecord{
-		SessionID:       p.currentSessionID(),
-		Stage:           stage,
-		SequenceType:    string(code.Category),
-		SequenceSubtype: subtype,
-		ByteLen:         len(code.RawBytes),
-		WallTime:        time.Now(),
-		SessionSeq:      sessionSeq + int64(code.StartOffset),
+		SessionID:         p.currentSessionID(),
+		ProjectPath:       p.currentProjectPath(),
+		Stage:             stage,
+		SequenceType:      string(code.Category),
+		SequenceSubtype:   subtype,
+		SequenceSignature: normalizedSequenceSignature(code),
+		ByteLen:           len(code.RawBytes),
+		WallTime:          time.Now(),
+		SessionSeq:        sessionSeq + int64(code.StartOffset),
 	}
 
 	// Compute payload hash — FNV-64a for summary (fast), SHA-256 for full (collision-resistant)
@@ -289,7 +343,7 @@ func (p *EscapeCodeParser) emitEventWithStageAndSeq(code ParsedEscapeCode, sessi
 	if p.correlator != nil && record.PayloadHash != "" {
 		switch stage {
 		case StagePTYRead:
-			p.correlator.RecordStage1(record.SessionID, record.SequenceType, record.PayloadHash, record.ByteLen)
+			p.correlator.RecordStage1WithMetadata(record.SessionID, record.ProjectPath, record.SequenceType, record.SequenceSignature, record.PayloadHash, record.ByteLen)
 		case StageTransport:
 			mangled, mangleType := p.correlator.CheckStage2(record.SessionID, record.SequenceType, record.PayloadHash, record.ByteLen)
 			record.Mangled = mangled
@@ -307,6 +361,42 @@ func (p *EscapeCodeParser) emitEventWithStageAndSeq(code ParsedEscapeCode, sessi
 
 // extractOSCCommand extracts the OSC command number string from raw OSC bytes.
 // Raw bytes are: ESC ] <cmd> ; <payload> <terminator>
+func normalizedSequenceSignature(code ParsedEscapeCode) string {
+	raw := code.RawBytes
+	if len(raw) < 2 {
+		return string(code.Category)
+	}
+
+	switch code.Category {
+	case CategoryOSC:
+		return "OSC:" + extractOSCCommand(raw)
+	case CategoryCSI, CategorySGR, CategoryCursor, CategoryErase, CategoryScroll, CategoryDECPriv:
+		if len(raw) > 2 {
+			command := raw[2:]
+			if len(command) > 128 {
+				command = command[:128]
+			}
+			for _, b := range command {
+				if b < 0x20 || b > 0x7e {
+					return string(code.Category)
+				}
+			}
+			return "CSI:" + string(command)
+		}
+	case CategoryDCS, CategoryPM, CategoryAPC, CategorySOS:
+		// String-mode payloads may contain titles, paths, or application data.
+		// Retain only the command family, never its payload.
+		return string(code.Category)
+	default:
+		limit := len(raw)
+		if limit > 8 {
+			limit = 8
+		}
+		return fmt.Sprintf("%s:%x", code.Category, raw[:limit])
+	}
+	return string(code.Category)
+}
+
 func extractOSCCommand(rawBytes []byte) string {
 	if len(rawBytes) < 4 {
 		return ""
@@ -330,13 +420,17 @@ func extractOSCCommand(rawBytes []byte) string {
 	return string(content[:end])
 }
 
-// extractEscapeSequences finds all escape sequences in the data.
+// extractEscapeSequences finds all escape sequences in the data, appending them to
+// *buf (which the caller must reset to length 0 first — reusing its capacity across
+// calls instead of allocating a fresh slice every time; see stage1CodesBuf's doc
+// comment). The returned slice aliases *buf's backing array and is only valid until
+// the next call through the same buffer.
 // It also returns the offset of a trailing ESC byte that did not resolve to a
 // complete sequence by the end of data (or -1 if none) — this is the position
 // a subsequent chunk's data must be prepended to via partialBuffer, since the
 // sequence may simply have been split across a PTY read boundary.
-func (p *EscapeCodeParser) extractEscapeSequences(data []byte) ([]ParsedEscapeCode, int) {
-	var codes []ParsedEscapeCode
+func (p *EscapeCodeParser) extractEscapeSequences(data []byte, buf *[]ParsedEscapeCode) ([]ParsedEscapeCode, int) {
+	codes := *buf
 	i := 0
 	trailingIncomplete := -1
 
@@ -361,6 +455,7 @@ func (p *EscapeCodeParser) extractEscapeSequences(data []byte) ([]ParsedEscapeCo
 		}
 	}
 
+	*buf = codes
 	return codes, trailingIncomplete
 }
 

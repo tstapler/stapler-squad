@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config/workspacepath"
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -25,6 +26,18 @@ func TestMain(m *testing.M) {
 	// Initialize the logger for tests with ERROR level to reduce noise
 	log.InitializeForTests(log.ERROR, log.ERROR)
 	defer log.Close()
+
+	// See envtest.ClearAmbientStaplerSquadStateEnv's doc comment: an ambient
+	// STAPLER_SQUAD_TEST_DIR wins over GetConfigDirForDir's other priorities
+	// (including a test's own explicit STAPLER_SQUAD_INSTANCE/HOME override —
+	// Priority 1 is checked before Priority 2), so a value left set in the
+	// shell silently redirects config saves/loads to someone else's shared
+	// directory. Confirmed to break TestSetFeatureFlag_InitializesMap and
+	// TestSetFeatureFlag_UpdatesExistingMap, which set HOME + a "shared"
+	// STAPLER_SQUAD_INSTANCE but don't know to also guard against
+	// STAPLER_SQUAD_TEST_DIR.
+	restoreStaplerSquadEnv := envtest.ClearAmbientStaplerSquadStateEnv()
+	defer restoreStaplerSquadEnv()
 
 	exitCode := m.Run()
 	os.Exit(exitCode)
@@ -886,6 +899,56 @@ func TestOneOffBaseDirOrDefault_CustomAbsolutePath(t *testing.T) {
 	assert.Equal(t, "/tmp/my-custom-oneoffs", result)
 }
 
+// TestStateSubdirsOrDefault_should_RouteThroughGetConfigDir_When_NoOverride is a
+// regression test for the bug fixed alongside BUG-103 item 2: these five helpers
+// used to always resolve against os.UserHomeDir() + a hardcoded ".stapler-squad"
+// prefix, ignoring GetConfigDir()'s test/instance/workspace isolation entirely —
+// every `go test` run that exercised one wrote real files into the developer's
+// actual ~/.stapler-squad, and concurrent test processes shared that one real
+// directory with each other and the live production service. Setting
+// STAPLER_SQUAD_TEST_DIR here must be enough to redirect every one of them; if any
+// helper still resolves under t's real home directory, this fails.
+func TestStateSubdirsOrDefault_should_RouteThroughGetConfigDir_When_NoOverride(t *testing.T) {
+	testDir := envtest.NewIsolatedStateDir(t)
+	cfg := &Config{}
+
+	tests := []struct {
+		name    string
+		fn      func() (string, error)
+		subpath string
+	}{
+		{"HibernationCheckpointDirOrDefault", cfg.HibernationCheckpointDirOrDefault, "checkpoints"},
+		{"TriageArtifactDirOrDefault", cfg.TriageArtifactDirOrDefault, "triage-artifacts"},
+		{"HeadlessFailureCaptureDirOrDefault", cfg.HeadlessFailureCaptureDirOrDefault, "headless-failures"},
+		{"BacklogAttachmentDirOrDefault", cfg.BacklogAttachmentDirOrDefault, "backlog-attachments"},
+		{"PromptCacheDirOrDefault", cfg.PromptCacheDirOrDefault, "prompt-cache"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := tt.fn()
+			require.NoError(t, err)
+			assert.Equal(t, filepath.Join(testDir, tt.subpath), result,
+				"%s must resolve under STAPLER_SQUAD_TEST_DIR, not the real home directory", tt.name)
+		})
+	}
+}
+
+// TestHibernationCheckpointDirOrDefault_CustomOverride_StillExpandsRealHomeTilde
+// verifies HibernationCheckpointDirOrDefault's one behavioral difference from its
+// four siblings above: an explicit CheckpointDir override is a user-configured
+// absolute/tilde path, not app state, so it deliberately expands "~" against the
+// real home directory even under STAPLER_SQUAD_TEST_DIR isolation.
+func TestHibernationCheckpointDirOrDefault_CustomOverride_StillExpandsRealHomeTilde(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	cfg := &Config{Hibernation: HibernationConfig{CheckpointDir: "~/my-checkpoints"}}
+
+	result, err := cfg.HibernationCheckpointDirOrDefault()
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, "my-checkpoints"), result)
+}
+
 // TestMaxConcurrentJulesSessionsOrDefault_should_ClampToHardCeilingOrDefault_When_ConfigOutOfRange
 // verifies Story 2.2.2's clamp table: an out-of-range value never reaches the
 // spend-guard check raw.
@@ -1251,7 +1314,7 @@ func TestFeatureFlag_PiSupport_DefaultsFalseAndPersists(t *testing.T) {
 	})
 
 	t.Run("SetFeatureFlag persists and is re-readable, including on disk", func(t *testing.T) {
-		t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+		envtest.NewIsolatedStateDir(t)
 
 		cfg := LoadConfig()
 		require.NoError(t, cfg.SetFeatureFlag(FeaturePiSupport, true))
@@ -1270,6 +1333,41 @@ func TestFeatureFlag_PiSupport_DefaultsFalseAndPersists(t *testing.T) {
 
 		reloaded := LoadConfig()
 		assert.True(t, reloaded.GetFeatureFlag(FeaturePiSupport))
+	})
+}
+
+// TestConfig_GetFeatureFlag_should_ReturnFalse_When_AppScrollForwardingClaudeFlagNotSet
+// and its "SetFeatureFlag persists" subtest cover REQ-13/Story 1.5.1's two
+// acceptance criteria for terminal:app-scrollback-forwarding:claude: it
+// defaults to false on a config with no explicit setting, and SetFeatureFlag
+// round-trips it through the on-disk config.json's feature_flags object --
+// mirrors TestFeatureFlag_PiSupport_DefaultsFalseAndPersists' structure.
+func TestConfig_GetFeatureFlag_should_ReturnFalse_When_AppScrollForwardingClaudeFlagNotSet(t *testing.T) {
+	t.Run("defaults false on a config with no explicit setting", func(t *testing.T) {
+		cfg := &Config{FeatureFlags: nil}
+		assert.False(t, cfg.GetFeatureFlag(FeatureAppScrollForwardingClaude))
+	})
+
+	t.Run("SetFeatureFlag persists and is re-readable, including on disk", func(t *testing.T) {
+		envtest.NewIsolatedStateDir(t)
+
+		cfg := LoadConfig()
+		require.NoError(t, cfg.SetFeatureFlag(FeatureAppScrollForwardingClaude, true))
+		assert.True(t, cfg.GetFeatureFlag(FeatureAppScrollForwardingClaude))
+
+		configDir, err := GetConfigDir()
+		require.NoError(t, err)
+		data, err := os.ReadFile(filepath.Join(configDir, ConfigFileName))
+		require.NoError(t, err)
+
+		var onDisk struct {
+			FeatureFlags map[string]bool `json:"feature_flags"`
+		}
+		require.NoError(t, json.Unmarshal(data, &onDisk))
+		assert.True(t, onDisk.FeatureFlags[FeatureAppScrollForwardingClaude], "feature_flags.%q must be persisted true on disk", FeatureAppScrollForwardingClaude)
+
+		reloaded := LoadConfig()
+		assert.True(t, reloaded.GetFeatureFlag(FeatureAppScrollForwardingClaude))
 	})
 }
 
@@ -1657,172 +1755,159 @@ func TestSetTymuxSessionOverride_ForceTrueThenForceFalse(t *testing.T) {
 	}
 }
 
-// TestEffectiveNativeWorktreeEnabled_DefaultsFalse verifies ADR-002's "both
-// flags default off" decision (Phase 4, Epic 4.1): a fresh config with no
-// FeatureFlags set must resolve native-worktree to false.
-func TestEffectiveNativeWorktreeEnabled_DefaultsFalse(t *testing.T) {
-	if got := EffectiveNativeWorktreeEnabled(&Config{}); got != false {
-		t.Fatalf("expected default-off, got %v", got)
+// TestGetAvailablePrograms_should_IncludeAider_When_AiderIsOnPath (plan Task
+// 1.3.2b): GetAvailablePrograms' candidate list includes "aider" so the
+// settings UI's program dropdown can detect it if installed — mirrors this
+// repo's existing pattern for other candidates (skip gracefully if not
+// found, verified here via a mocked executor rather than the real PATH).
+func TestGetAvailablePrograms_should_IncludeAider_When_AiderIsOnPath(t *testing.T) {
+	originalShell := os.Getenv("SHELL")
+	defer os.Setenv("SHELL", originalShell)
+	os.Setenv("SHELL", "/bin/bash")
+
+	aiderPath := "/usr/local/bin/aider"
+	mockExecutor := &mockCommandExecutor{
+		CommandFunc: func(name string, args ...string) *exec.Cmd {
+			return exec.Command(name, args...) //nolint:norawexec // test mock helper
+		},
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			shellCmd := cmd.Args[len(cmd.Args)-1]
+			if strings.Contains(shellCmd, "aider") {
+				return []byte(aiderPath), nil
+			}
+			return []byte(""), nil
+		},
+	}
+
+	programs := NewConfigWithExecutor(mockExecutor).GetAvailablePrograms()
+
+	assert.Contains(t, programs, aiderPath)
+}
+
+// TestGetAvailablePrograms_should_OmitAider_When_AiderNotOnPath is the
+// zero-regression companion: an undetected "aider" candidate is silently
+// skipped, same as any other undetected candidate, never an error.
+func TestGetAvailablePrograms_should_OmitAider_When_AiderNotOnPath(t *testing.T) {
+	originalShell := os.Getenv("SHELL")
+	defer os.Setenv("SHELL", originalShell)
+	os.Setenv("SHELL", "/bin/bash")
+
+	mockExecutor := &mockCommandExecutor{
+		CommandFunc: func(name string, args ...string) *exec.Cmd {
+			return exec.Command(name, args...) //nolint:norawexec // test mock helper
+		},
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			return []byte(""), nil
+		},
+	}
+
+	programs := NewConfigWithExecutor(mockExecutor).GetAvailablePrograms()
+
+	assert.Empty(t, programs)
+}
+
+func TestHeadlessTriageCeilings_DefaultOverrideDisable(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, DefaultHeadlessTriageMaxTurns, (&Config{}).HeadlessTriageMaxTurnsOrDefault())
+	assert.Equal(t, DefaultHeadlessTriageMaxSubagents, (&Config{}).HeadlessTriageMaxSubagentsOrDefault())
+	assert.Equal(t, 5, (&Config{HeadlessTriageMaxTurns: 5}).HeadlessTriageMaxTurnsOrDefault())
+	assert.Zero(t, (&Config{HeadlessTriageMaxSubagents: -1}).HeadlessTriageMaxSubagentsOrDefault())
+	assert.Zero(t, (*Config)(nil).HeadlessTriageMaxTurnsOrDefault())
+}
+
+func TestHeadlessTriageMaxCostUSDOrDefault(t *testing.T) {
+	var nilCfg *Config
+	assert.Equal(t, HeadlessTriageMaxCostUSDDefault, nilCfg.HeadlessTriageMaxCostUSDOrDefault())
+	assert.Equal(t, HeadlessTriageMaxCostUSDDefault, (&Config{}).HeadlessTriageMaxCostUSDOrDefault())
+	assert.Equal(t, 7.5, (&Config{HeadlessTriageMaxCostUSD: 7.5}).HeadlessTriageMaxCostUSDOrDefault())
+	assert.Zero(t, (&Config{HeadlessTriageMaxCostUSD: -1}).HeadlessTriageMaxCostUSDOrDefault(), "negative disables")
+}
+
+func TestTriageConcurrencyAndModelAccessors(t *testing.T) {
+	assert.Equal(t, 8, (*Config)(nil).MaxConcurrentTriageOrDefault())
+	assert.Equal(t, 8, (&Config{}).MaxConcurrentTriageOrDefault())
+	assert.Equal(t, 2, (&Config{MaxConcurrentTriage: 2}).MaxConcurrentTriageOrDefault())
+	assert.Equal(t, MaxConcurrentTriageCeiling, (&Config{MaxConcurrentTriage: 9999}).MaxConcurrentTriageOrDefault())
+
+	assert.Equal(t, "family:sonnet", (*Config)(nil).HeadlessTriageModelOrDefault())
+	assert.Equal(t, "family:sonnet", (&Config{}).HeadlessTriageModelOrDefault())
+	assert.Equal(t, "family:haiku", (&Config{HeadlessTriageModel: "family:haiku"}).HeadlessTriageModelOrDefault())
+	assert.Empty(t, (&Config{HeadlessTriageModel: "none"}).HeadlessTriageModelOrDefault(), "none opts out")
+}
+
+func TestGitBackendCohortsConfig_TolerantDecodeAndStableRoundTrip(t *testing.T) {
+	for _, body := range []string{`{"git_backend_cohorts":null}`, `{"git_backend_cohorts":"x"}`, `{"git_backend_cohorts":[1]}`} {
+		var cfg Config
+		if err := json.Unmarshal([]byte(body), &cfg); err != nil || len(cfg.GitBackendCohorts) != 0 {
+			t.Errorf("%s: err=%v cohorts=%v, want no error and empty", body, err, cfg.GitBackendCohorts)
+		}
+	}
+	var cfg Config
+	if err := json.Unmarshal([]byte(`{"git_backend_cohorts":{"refs":1,"network":"gogit","x":{"a":1}}}`), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GitBackendCohorts["network"] != "gogit" || cfg.GitBackendCohorts["refs"] != "1" || cfg.GitBackendCohorts["x"] != `{"a":1}` {
+		t.Errorf("unexpected decode: %v", cfg.GitBackendCohorts)
+	}
+	valid, _ := json.Marshal(Config{GitBackendCohorts: GitBackendCohortsConfig{"refs": "gogit"}})
+	if !strings.Contains(string(valid), `"git_backend_cohorts":{"refs":"gogit"}`) {
+		t.Errorf("valid map did not round-trip: %s", valid)
+	}
+	empty, _ := json.Marshal(Config{})
+	if strings.Contains(string(empty), "git_backend_cohorts") {
+		t.Errorf("omitempty lost: %s", empty)
 	}
 }
 
-// TestEffectiveNativeMergeEnabled_DefaultsFalse is the merge equivalent of
-// TestEffectiveNativeWorktreeEnabled_DefaultsFalse — ADR-002 requires both
-// flags, not just worktree, to default off.
-func TestEffectiveNativeMergeEnabled_DefaultsFalse(t *testing.T) {
-	if got := EffectiveNativeMergeEnabled(&Config{}); got != false {
-		t.Fatalf("expected default-off, got %v", got)
-	}
+func TestContextHealthConfigOrDefault_AppliesDefaultsToZeroAndNegativeFields(t *testing.T) {
+	got := ContextHealthConfig{LoopRepeatThreshold: 0, ConfusionPhraseThreshold: -4, MinToolCallSamples: 0}.ContextHealthConfigOrDefault()
+	assert.Equal(t, ContextHealthConfig{LoopRepeatThreshold: 3, ConfusionPhraseThreshold: 5, MinToolCallSamples: 5}, got)
 }
 
-// TestGetNativeWorktreeSessionOverride_should_ReturnFalseFalse_When_KeyAbsent
-// distinguishes "no override" from "overridden false" — a session with no
-// entry in NativeWorktreeSessionOverrides reports (false, false), not
-// (false, true).
-func TestGetNativeWorktreeSessionOverride_should_ReturnFalseFalse_When_KeyAbsent(t *testing.T) {
-	cfg := &Config{}
-	if got, ok := cfg.GetNativeWorktreeSessionOverride("sess-1"); ok || got {
-		t.Fatalf("expected (false, false) for an absent key, got (%v, %v)", got, ok)
-	}
+func TestLoadConfigFromPath_PartialContextHealthBlockKeepsSetFieldAndDefaultsRest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ConfigFileName)
+	require.NoError(t, os.WriteFile(path, []byte(`{"context_health": {"loop_repeat_threshold": 7}}`), 0o600))
+
+	cfg, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.Equal(t, 7, cfg.ContextHealth.LoopRepeatThreshold)
+	assert.Equal(t, 5, cfg.ContextHealth.ConfusionPhraseThreshold)
+	assert.Equal(t, 5, cfg.ContextHealth.MinToolCallSamples)
 }
 
-// TestGetNativeWorktreeSessionOverride_TakesPrecedence verifies a session
-// override wins over an unset global default (ADR-002/plan.md Story 4.1.1).
-func TestGetNativeWorktreeSessionOverride_TakesPrecedence(t *testing.T) {
-	cfg := &Config{NativeWorktreeSessionOverrides: map[string]bool{"sess-1": true}}
-	got, ok := cfg.GetNativeWorktreeSessionOverride("sess-1")
-	if !ok || !got {
-		t.Fatalf("expected (true, true), got (%v, %v)", got, ok)
-	}
-}
-
-// TestGetNativeMergeWorktreeOverride_KeyedByPath verifies the merge override
-// is keyed by worktreePath, not sessionName, per ADR-002.
-func TestGetNativeMergeWorktreeOverride_KeyedByPath(t *testing.T) {
-	cfg := &Config{NativeMergeWorktreeOverrides: map[string]bool{"/tmp/wt1": true}}
-	got, ok := cfg.GetNativeMergeWorktreeOverride("/tmp/wt1")
-	if !ok || !got {
-		t.Fatalf("expected (true, true), got (%v, %v)", got, ok)
-	}
-}
-
-// TestSetNativeWorktreeSessionOverride_ForceTrueThenForceFalse mirrors
-// TestSetTymuxSessionOverride_ForceTrueThenForceFalse: both directions must
-// actually flip the stored value and persist, and nil must clear it.
-func TestSetNativeWorktreeSessionOverride_ForceTrueThenForceFalse(t *testing.T) {
-	tempHome := t.TempDir()
-	t.Setenv("HOME", tempHome)
+func TestLoadConfig_MalformedContextHealthBlockFallsBackToDefaults(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	t.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
-	configPath := filepath.Join(tempHome, ".stapler-squad", ConfigFileName)
+	require.NoError(t, os.Unsetenv("STAPLER_SQUAD_TEST_DIR"))
+	dir := filepath.Join(home, ".stapler-squad")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte(`{"context_health": "nonsense"}`), 0o600))
 
-	cfg := &Config{}
-	if err := cfg.SetNativeWorktreeSessionOverride("sess-1", boolPtr(true)); err != nil {
-		t.Fatalf("SetNativeWorktreeSessionOverride(true) returned error: %v", err)
-	}
-	if got, ok := cfg.GetNativeWorktreeSessionOverride("sess-1"); !ok || !got {
-		t.Fatalf("expected override to force native, got (%v, %v)", got, ok)
-	}
-	reloaded, err := LoadConfigFromPath(configPath)
-	if err != nil {
-		t.Fatalf("LoadConfigFromPath after forcing true: %v", err)
-	}
-	if got, ok := reloaded.GetNativeWorktreeSessionOverride("sess-1"); !ok || !got {
-		t.Fatalf("expected persisted override to force native, got (%v, %v)", got, ok)
-	}
+	var cfg *Config
+	require.NotPanics(t, func() { cfg = LoadConfig() })
+	assert.Equal(t, 3, cfg.ContextHealth.LoopRepeatThreshold)
+}
 
-	if err := cfg.SetNativeWorktreeSessionOverride("sess-1", boolPtr(false)); err != nil {
-		t.Fatalf("SetNativeWorktreeSessionOverride(false) returned error: %v", err)
-	}
-	if got, ok := cfg.GetNativeWorktreeSessionOverride("sess-1"); !ok || got {
-		t.Fatalf("expected override to force legacy (false), got (%v, %v)", got, ok)
+func TestUpgradeLegacyLogRotation(t *testing.T) {
+	legacy := &Config{LogMaxSize: 10, LogMaxFiles: 5, LogMaxAge: 30}
+	upgradeLegacyLogRotation(legacy)
+	if legacy.LogMaxSize != DefaultLogMaxSizeMB || legacy.LogMaxFiles != DefaultLogMaxFiles || legacy.LogMaxAge != DefaultLogMaxAgeDays {
+		t.Fatalf("legacy defaults not upgraded: %+v", legacy)
 	}
 
-	if err := cfg.SetNativeWorktreeSessionOverride("sess-1", nil); err != nil {
-		t.Fatalf("SetNativeWorktreeSessionOverride(nil) returned error: %v", err)
-	}
-	if _, ok := cfg.GetNativeWorktreeSessionOverride("sess-1"); ok {
-		t.Fatal("expected override to be cleared")
+	custom := &Config{LogMaxSize: 10, LogMaxFiles: 20, LogMaxAge: 30}
+	upgradeLegacyLogRotation(custom)
+	if custom.LogMaxFiles != 20 {
+		t.Fatalf("customized rotation must be left alone: %+v", custom)
 	}
 }
 
-// TestSetNativeMergeWorktreeOverride_ForceTrueThenForceFalse is the merge
-// equivalent of TestSetNativeWorktreeSessionOverride_ForceTrueThenForceFalse,
-// keyed by worktreePath instead of sessionName.
-func TestSetNativeMergeWorktreeOverride_ForceTrueThenForceFalse(t *testing.T) {
-	tempHome := t.TempDir()
-	t.Setenv("HOME", tempHome)
-	t.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
-	configPath := filepath.Join(tempHome, ".stapler-squad", ConfigFileName)
-
-	cfg := &Config{}
-	if err := cfg.SetNativeMergeWorktreeOverride("/tmp/wt1", boolPtr(true)); err != nil {
-		t.Fatalf("SetNativeMergeWorktreeOverride(true) returned error: %v", err)
-	}
-	if got, ok := cfg.GetNativeMergeWorktreeOverride("/tmp/wt1"); !ok || !got {
-		t.Fatalf("expected override to force native, got (%v, %v)", got, ok)
-	}
-	reloaded, err := LoadConfigFromPath(configPath)
-	if err != nil {
-		t.Fatalf("LoadConfigFromPath after forcing true: %v", err)
-	}
-	if got, ok := reloaded.GetNativeMergeWorktreeOverride("/tmp/wt1"); !ok || !got {
-		t.Fatalf("expected persisted override to force native, got (%v, %v)", got, ok)
-	}
-
-	if err := cfg.SetNativeMergeWorktreeOverride("/tmp/wt1", boolPtr(false)); err != nil {
-		t.Fatalf("SetNativeMergeWorktreeOverride(false) returned error: %v", err)
-	}
-	if got, ok := cfg.GetNativeMergeWorktreeOverride("/tmp/wt1"); !ok || got {
-		t.Fatalf("expected override to force legacy (false), got (%v, %v)", got, ok)
-	}
-
-	if err := cfg.SetNativeMergeWorktreeOverride("/tmp/wt1", nil); err != nil {
-		t.Fatalf("SetNativeMergeWorktreeOverride(nil) returned error: %v", err)
-	}
-	if _, ok := cfg.GetNativeMergeWorktreeOverride("/tmp/wt1"); ok {
-		t.Fatal("expected override to be cleared")
-	}
-}
-
-// TestGetNativeWorktreeGlobalOverride_should_ReportUnset_Then_Set mirrors
-// TestGetTymuxGlobalOverride_should_ReportUnset_Then_Set for the
-// native_git_worktree flag.
-func TestGetNativeWorktreeGlobalOverride_should_ReportUnset_Then_Set(t *testing.T) {
-	cfg := &Config{}
-	if _, ok := cfg.GetNativeWorktreeGlobalOverride(); ok {
-		t.Fatal("expected no override on a fresh config")
-	}
-	if err := cfg.SetNativeWorktreeGlobalOverride(boolPtr(true)); err != nil {
-		t.Fatalf("SetNativeWorktreeGlobalOverride: %v", err)
-	}
-	if got, ok := cfg.GetNativeWorktreeGlobalOverride(); !ok || got != true {
-		t.Fatalf("expected (true, true), got (%v, %v)", got, ok)
-	}
-	if err := cfg.SetNativeWorktreeGlobalOverride(nil); err != nil {
-		t.Fatalf("SetNativeWorktreeGlobalOverride(nil): %v", err)
-	}
-	if _, ok := cfg.GetNativeWorktreeGlobalOverride(); ok {
-		t.Fatal("expected clearing the override to remove it")
-	}
-}
-
-// TestGetNativeMergeGlobalOverride_should_ReportUnset_Then_Set is the merge
-// equivalent of TestGetNativeWorktreeGlobalOverride_should_ReportUnset_Then_Set.
-func TestGetNativeMergeGlobalOverride_should_ReportUnset_Then_Set(t *testing.T) {
-	cfg := &Config{}
-	if _, ok := cfg.GetNativeMergeGlobalOverride(); ok {
-		t.Fatal("expected no override on a fresh config")
-	}
-	if err := cfg.SetNativeMergeGlobalOverride(boolPtr(true)); err != nil {
-		t.Fatalf("SetNativeMergeGlobalOverride: %v", err)
-	}
-	if got, ok := cfg.GetNativeMergeGlobalOverride(); !ok || got != true {
-		t.Fatalf("expected (true, true), got (%v, %v)", got, ok)
-	}
-	if err := cfg.SetNativeMergeGlobalOverride(nil); err != nil {
-		t.Fatalf("SetNativeMergeGlobalOverride(nil): %v", err)
-	}
-	if _, ok := cfg.GetNativeMergeGlobalOverride(); ok {
-		t.Fatal("expected clearing the override to remove it")
+// log can't import config, so DefaultLogConfig carries literal copies of these defaults.
+func TestLogRotationDefaultsMatchLogPackage(t *testing.T) {
+	d := log.DefaultLogConfig()
+	if d.LogMaxSize != DefaultLogMaxSizeMB || d.LogMaxFiles != DefaultLogMaxFiles || d.LogMaxAge != DefaultLogMaxAgeDays {
+		t.Fatalf("log.DefaultLogConfig %d/%d/%d drifted from config defaults %d/%d/%d",
+			d.LogMaxSize, d.LogMaxFiles, d.LogMaxAge, DefaultLogMaxSizeMB, DefaultLogMaxFiles, DefaultLogMaxAgeDays)
 	}
 }

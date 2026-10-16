@@ -162,7 +162,7 @@ func TestUpdateSession_ProgramUpdate_EmptyString_ResolvesDefault(t *testing.T) {
 	// this test uses that instead) -- t.Setenv panics if called on a parallel test, and
 	// main's t.Parallel()-only version has no isolation of its own, so combining or
 	// preferring it would reintroduce the exact flake this Setenv call fixes.
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 

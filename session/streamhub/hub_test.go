@@ -3,9 +3,11 @@ package streamhub_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
 	"github.com/tstapler/stapler-squad/session/streamhub"
@@ -95,10 +97,8 @@ func TestStreamHub_should_SuppressBroadcast_When_ResizeIsInProgress(t *testing.T
 
 	// Raw output arriving mid-resize must not be broadcast.
 	hub.OnRawOutput([]byte("mid-resize-noise"))
-	time.Sleep(20 * time.Millisecond)
-	if got := transport.receivedCount(); got != 0 {
-		t.Fatalf("expected 0 frames delivered while resize is in progress, got %d", got)
-	}
+	require.Never(t, func() bool { return transport.receivedCount() != 0 },
+		20*time.Millisecond, time.Millisecond, "expected 0 frames delivered while resize is in progress")
 
 	<-resizeDone
 
@@ -268,7 +268,10 @@ func TestStreamHub_should_StayAliveAndRetryLater_When_CapturePaneContentErrorsWi
 	// Give applyNegotiatedSize's goroutine time to run and (incorrectly, pre-fix)
 	// tear the hub down; then assert it's still alive and neither subscriber was
 	// sent the stream-ended sentinel.
-	time.Sleep(100 * time.Millisecond)
+	require.Never(t, func() bool {
+		return hub.State() == streamhub.HubTornDown || transport1.receivedCount() != 0 || transport2.receivedCount() != 0
+	}, 100*time.Millisecond, 5*time.Millisecond,
+		"hub torn down (or sentinel sent) after a session-not-started capture error — this exact transient condition must not kill the hub")
 	if got := hub.State(); got == streamhub.HubTornDown {
 		t.Fatalf("hub torn down after a session-not-started capture error — this exact transient condition must not kill the hub")
 	}
@@ -287,5 +290,176 @@ func TestStreamHub_should_StayAliveAndRetryLater_When_CapturePaneContentErrorsWi
 
 	if !waitFor(t, time.Second, func() bool { return controller.resizeCallCount(120, 40) == 1 }) {
 		t.Fatalf("expected the hub to still service a later resize once the controller recovers")
+	}
+}
+
+// TestStreamHub_AttachSubscriber_should_BlockUntilForwardScrollReleases_When_ScrollForwardAttachBarrierHeld
+// is the architecture-review BLOCKER regression test for Story 1.3.1's
+// ScrollForwardAttachBarrier: a second client's AttachSubscriber call must
+// never observe a mid-scroll pane as its catch-up snapshot. Simulates an
+// in-flight Instance.ForwardScroll call by holding BeginScrollForward's
+// release directly (ForwardScroll itself lives in the session package, which
+// imports streamhub, so it can't be exercised from here without an import
+// cycle -- the barrier's own mechanism is what this test verifies, not
+// ForwardScroll's orchestration around it, which session's own
+// TestForwardScroll_should_ReleaseLeaseAndAttachBarrier_When_* tests cover).
+func TestStreamHub_AttachSubscriber_should_BlockUntilForwardScrollReleases_When_ScrollForwardAttachBarrierHeld(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	controller := newFakeSessionController()
+	hub := streamhub.NewStreamHub("test-session", controller, streamhub.WithTeardownGrace(time.Hour))
+	defer hub.ForceTeardown()
+
+	release := hub.BeginScrollForward()
+
+	attachReturned := make(chan streamhub.SubscriberID, 1)
+	go func() {
+		id := hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{CanResize: true})
+		attachReturned <- id
+	}()
+
+	// AttachSubscriber must not return while the barrier is held.
+	select {
+	case <-attachReturned:
+		t.Fatalf("AttachSubscriber returned while ScrollForwardAttachBarrier was still held")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	release()
+
+	select {
+	case <-attachReturned:
+	case <-time.After(time.Second):
+		t.Fatalf("AttachSubscriber did not return after ScrollForwardAttachBarrier was released")
+	}
+}
+
+// slowCaptureSessionController wraps fakeSessionController, making its
+// CapturePaneContentRawContext call block until release closes -- gives a
+// concurrent BeginScrollForward call a deterministic window to attempt to
+// acquire the barrier while an in-flight AttachSubscriber's catch-up
+// snapshot capture is still running, instead of relying on a sleep-based
+// race.
+type slowCaptureSessionController struct {
+	*fakeSessionController
+	captureStarted chan struct{}
+	release        chan struct{}
+	once           sync.Once
+}
+
+func (c *slowCaptureSessionController) CapturePaneContentRawContext(ctx context.Context) (streamhub.RawPaneContent, error) {
+	c.once.Do(func() { close(c.captureStarted) })
+	<-c.release
+	return c.fakeSessionController.CapturePaneContentRawContext(ctx)
+}
+
+// TestStreamHub_BeginScrollForward_should_BlockUntilAttachSubscriberCatchUpSnapshotCompletes_When_AttachStartedFirst
+// is the reverse-direction regression test for Fix 4 (architecture-review
+// BLOCKER): TestStreamHub_AttachSubscriber_should_BlockUntilForwardScrollReleases_When_ScrollForwardAttachBarrierHeld
+// above only covers a forward that starts before an attach. This covers the
+// other direction the bug actually lived in -- an attach that starts first
+// and is still mid catch-up-snapshot capture when a forward tries to begin
+// -- asserting BeginScrollForward blocks until the attach's catch-up
+// snapshot has actually completed, not just until an initial barrier check
+// passes.
+func TestStreamHub_BeginScrollForward_should_BlockUntilAttachSubscriberCatchUpSnapshotCompletes_When_AttachStartedFirst(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	base := newFakeSessionController()
+	base.captureContent = "pane content"
+	controller := &slowCaptureSessionController{
+		fakeSessionController: base,
+		captureStarted:        make(chan struct{}),
+		release:               make(chan struct{}),
+	}
+	hub := streamhub.NewStreamHub("test-session", controller, streamhub.WithTeardownGrace(time.Hour))
+	defer hub.ForceTeardown()
+
+	attachReturned := make(chan streamhub.SubscriberID, 1)
+	go func() {
+		id := hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{CanResize: true})
+		attachReturned <- id
+	}()
+
+	select {
+	case <-controller.captureStarted:
+	case <-time.After(time.Second):
+		t.Fatalf("AttachSubscriber never reached its catch-up snapshot capture")
+	}
+
+	forwardAcquired := make(chan struct{}, 1)
+	go func() {
+		release := hub.BeginScrollForward()
+		forwardAcquired <- struct{}{}
+		release()
+	}()
+
+	// BeginScrollForward must not acquire the barrier while the in-flight
+	// attach's catch-up snapshot capture is still running.
+	select {
+	case <-forwardAcquired:
+		t.Fatalf("BeginScrollForward acquired the barrier while AttachSubscriber's catch-up snapshot capture was still in flight")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(controller.release)
+
+	select {
+	case <-attachReturned:
+	case <-time.After(time.Second):
+		t.Fatalf("AttachSubscriber did not return after its catch-up snapshot capture completed")
+	}
+
+	select {
+	case <-forwardAcquired:
+	case <-time.After(time.Second):
+		t.Fatalf("BeginScrollForward did not acquire the barrier after AttachSubscriber released it")
+	}
+}
+
+// T-RO-03 (Story 5.1e): a read-only subscriber's size is never a vote, at attach or later.
+func TestAttachSubscriber_ShouldIgnoreSizeVote_WhenReadOnly200x50(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	controller := newFakeSessionController()
+	controller.captureContent = "snapshot"
+	hub := streamhub.NewStreamHub("ro-hub", controller,
+		streamhub.WithTeardownGrace(time.Hour),
+		streamhub.WithQuiescenceTimeout(30*time.Millisecond),
+		streamhub.WithQuiescenceQuietPeriod(5*time.Millisecond),
+	)
+	defer hub.ForceTeardown()
+
+	writerID := hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{CanResize: true})
+	hub.RequestResize(context.Background(), writerID, mustSize(t, 80, 24))
+	callsBefore := controller.setWindowSizeCalls.Load()
+
+	readOnlyID := hub.AttachSubscriber(newMemoryTransport(), streamhub.ReadOnlyCapability())
+	hub.RequestResize(context.Background(), readOnlyID, mustSize(t, 200, 50))
+
+	if got := controller.resizeCallCount(200, 50); got != 0 {
+		t.Fatalf("a read-only subscriber's 200x50 vote reached SetWindowSize %d times", got)
+	}
+	if got := controller.setWindowSizeCalls.Load(); got != callsBefore {
+		t.Fatalf("pane size changed after a read-only vote: %d calls before, %d after", callsBefore, got)
+	}
+	if size := hub.NegotiatedSize(); size != mustSize(t, 80, 24) {
+		t.Fatalf("negotiated size moved to %v", size)
+	}
+}
+
+// T-RO-05: a read-only subscriber still receives the pane's output.
+func TestStream_ShouldStreamOutputToClient_WhenHiddenPaneProducesOutput(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	hub := streamhub.NewStreamHub("ro-output", newFakeSessionController(), streamhub.WithTeardownGrace(time.Hour))
+	defer hub.ForceTeardown()
+
+	transport := newMemoryTransport()
+	hub.AttachSubscriber(transport, streamhub.ReadOnlyCapability())
+	hub.OnRawOutput([]byte("agent output"))
+
+	if !waitFor(t, time.Second, func() bool { return transport.receivedCount() >= 1 }) {
+		t.Fatal("a read-only subscriber received no output")
 	}
 }

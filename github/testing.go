@@ -1,6 +1,9 @@
 package github
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // ResetRateLimiterForTest swaps in a fresh DefaultRateLimiter for the
 // duration of t, restoring the original via t.Cleanup. Any test — in this
@@ -17,4 +20,20 @@ func ResetRateLimiterForTest(t testing.TB) {
 	orig := DefaultRateLimiter
 	DefaultRateLimiter = &RateLimiter{}
 	t.Cleanup(func() { DefaultRateLimiter = orig })
+}
+
+// ResetPriorityAdmissionFlagCacheForTest clears priorityAdmissionEnabled's
+// TTL cache so a consumer-package test that flips
+// githubPriorityAdmissionFlagName sees the change immediately. Exported
+// because _test.go files (where this package keeps its own copy) aren't
+// importable across packages.
+func ResetPriorityAdmissionFlagCacheForTest() {
+	ghPriorityAdmissionFlagCacheVal.Store(false)
+	ghPriorityAdmissionFlagCacheAt.Store(0)
+}
+
+// SeedPRsForTest installs prs as the cache's current snapshot so a
+// consumer-package test can drive Annotate without a live GitHub fetch.
+func (c *UserPRCache) SeedPRsForTest(prs []UserPR) {
+	c.snapshot.Store(&userPRSnapshot{prs: prs, capturedAt: time.Now()})
 }

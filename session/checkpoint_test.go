@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -304,7 +305,7 @@ func TestCreateCheckpoint_LegitimateTitle_WritesUnderConfigDir(t *testing.T) {
 // even though ForkFromCheckpoint itself still succeeds (scrollback forking is
 // best-effort).
 func TestForkFromCheckpoint_NewTitleEscapingConfigDir_SkipsScrollbackFork(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	testConfigDir := t.TempDir()
 
 	const srcTitle = "checkpoint-fork-escape-src"

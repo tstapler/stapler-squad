@@ -62,11 +62,13 @@ const dismissedKey = (sessionId: string) => `workspace-peers-dismissed-${session
 
 /**
  * WorkspacePeersPanel lists other active sessions in this exact working directory
- * (session.path), live-updated via the existing WatchSessions Redux store — no extra
- * polling or RPC needed. Scoped to the literal path, not workspaceKey (which also
- * matches sibling worktrees/branches of the same repo) — a peer editing a different
- * worktree isn't touching this directory's files. Renders nothing when the session has
- * no path, no peers, or the user dismissed it for this session.
+ * (session.activeDir), live-updated via the existing WatchSessions Redux store — no
+ * extra polling or RPC needed. Scoped to the literal active directory, not workspaceKey
+ * (which also matches sibling worktrees/branches of the same repo) — a peer editing a
+ * different worktree isn't touching this directory's files. activeDir is populated
+ * regardless of session state, so stopped sessions with an already-cleaned-up worktree
+ * still compare correctly instead of collapsing onto the shared repo root. Renders
+ * nothing when the session has no active dir, no peers, or the user dismissed it.
  */
 export function WorkspacePeersPanel({ session, now }: WorkspacePeersPanelProps) {
   const allSessions = useAppSelector(selectAllSessions);
@@ -77,13 +79,13 @@ export function WorkspacePeersPanel({ session, now }: WorkspacePeersPanelProps) 
   });
 
   const peers = useMemo(() => {
-    if (!session.path) return [];
+    if (!session.activeDir) return [];
     return allSessions.filter(
-      (s) => s.id !== session.id && s.path === session.path
+      (s) => s.id !== session.id && s.activeDir === session.activeDir
     );
-  }, [allSessions, session.path, session.id]);
+  }, [allSessions, session.activeDir, session.id]);
 
-  if (!session.path || peers.length === 0 || dismissed) return null;
+  if (!session.activeDir || peers.length === 0 || dismissed) return null;
 
   return (
     <div className={panelContainer} data-testid="workspace-peers-panel">
@@ -116,7 +118,7 @@ export function WorkspacePeersPanel({ session, now }: WorkspacePeersPanelProps) 
                   {LIFECYCLE_LABELS[lifecycle]}
                 </span>
               </div>
-              <span className={peerMeta}>{peer.branch || peer.path}</span>
+              <span className={peerMeta}>{peer.branch || peer.existingDir}</span>
               {peer.goal?.goalText && (
                 <span className={peerGoal}>{peer.goal.goalText}</span>
               )}

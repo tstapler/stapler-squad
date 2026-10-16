@@ -21,6 +21,9 @@ type StreamChunk struct {
 	Err     error
 	Done    bool
 	CostUSD float64 // non-zero only on the final chunk from a first-call JSON response
+	// ConversationID is the Claude session_id of the call (its transcript's file
+	// name); set only on the final chunk of a first-call JSON response.
+	ConversationID string
 }
 
 // ClaudeRunner abstracts how claude -p subprocesses are started.
@@ -47,6 +50,22 @@ var (
 	// failure is bucketed as "subprocess_start_error" in logs instead of falling
 	// through to an undiagnosable "other".
 	ErrSubprocessStart = errors.New("headless subprocess failed to start")
+	// ErrPoolSaturated is returned when a call never got a shot at running the LLM
+	// subprocess: it waited for a concurrency-pool slot until maxQueueWait
+	// (caller.go) elapsed, without the caller's own ctx expiring first. Distinct
+	// from a genuine subprocess timeout so classifyHeadlessCallError
+	// (server/services/backlog_service_triage.go) can bucket "starved behind
+	// other concurrent calls" separately from "ran and hung" — see BUG-093.
+	ErrPoolSaturated = errors.New("headless pool: timed out waiting for a concurrency slot")
+	// ErrIdleTimeout is returned when a stream-json subprocess produced no new
+	// output line for idleTimeout (pool.go) — a real progress signal, distinct
+	// from the caller's own ctx deadline, so classifyHeadlessCallError can bucket
+	// "genuinely stalled" separately from "hit the ceiling while still active."
+	ErrIdleTimeout = errors.New("headless pool: no output for the idle timeout window")
+	// ErrOutputCapExceeded is returned when a first-call subprocess's cumulative
+	// stream-json output exceeds maxFirstCallOutputBytes (pool.go) — a memory
+	// safeguard independent of idleTimeout for a long-running, non-idle stream.
+	ErrOutputCapExceeded = errors.New("headless pool: cumulative output exceeded the byte cap")
 )
 
 // ProcessRunner implements ClaudeRunner using executor.StartProcess.
@@ -56,10 +75,15 @@ type ProcessRunner struct {
 	allowedTools    string // optional --allowedTools value; empty = not passed
 	permissionMode  string // optional --permission-mode value; empty = not passed
 	disallowedTools string // optional --disallowedTools value; empty = not passed
+	// noTools strips every built-in tool, MCP server, and skill from the call — see WithNoTools.
+	noTools bool
 	// interpreter, when non-empty, is exec'd instead of claudeBin, with claudeBin
 	// prepended to argv. Opt-in, test-only — see NewShellWrappedProcessRunnerForTesting
 	// in fake_runner.go. Zero value for every production ProcessRunner.
 	interpreter string
+	// extraEnv is appended to the filtered environment (later entries win), e.g.
+	// ANTHROPIC_BASE_URL for the consolette backend. Empty for the claude backend.
+	extraEnv []string
 }
 
 // WithWorkDir returns a copy of this ProcessRunner that sets the subprocess working
@@ -81,9 +105,24 @@ func (r *ProcessRunner) WithToolAccess(allowedTools, permissionMode, disallowedT
 	return &cp
 }
 
+// WithNoTools returns a copy of this ProcessRunner whose calls can only emit text: all
+// built-in tools are disabled (--tools ""), only MCP servers named by --mcp-config are
+// loaded (none are passed, --strict-mcp-config), and skills are off. Unlike
+// allowedTools/disallowedTools this does not rely on permission-mode semantics — there is
+// no tool to grant or deny. It overrides any allowedTools/disallowedTools already set.
+func (r *ProcessRunner) WithNoTools() *ProcessRunner {
+	cp := *r
+	cp.noTools = true
+	cp.allowedTools, cp.disallowedTools = "", ""
+	return &cp
+}
+
 // toolAccessArgs returns the --allowedTools/--permission-mode/--disallowedTools flag
 // pairs for r's configured values, in that order.
 func (r *ProcessRunner) toolAccessArgs() []string {
+	if r.noTools {
+		return []string{"--tools", "", "--strict-mcp-config", "--disable-slash-commands"}
+	}
 	var extra []string
 	if r.allowedTools != "" {
 		extra = append(extra, "--allowedTools", r.allowedTools)
@@ -131,7 +170,7 @@ func (r *ProcessRunner) Run(ctx context.Context, args []string, stdin io.Reader)
 	var stderrBuf bytes.Buffer
 	opts := []executor.ProcessOption{
 		executor.WithNewSession(),
-		executor.WithProcessReplaceEnv(filteredEnv()),
+		executor.WithProcessReplaceEnv(append(filteredEnv(), r.extraEnv...)),
 		executor.WithConsumeStderr(&stderrBuf),
 	}
 	if r.workDir != "" {

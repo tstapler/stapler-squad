@@ -78,7 +78,7 @@ func GetCLIToken(ctx context.Context, host string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	cmd := safeexec.CommandContext(ctx, "gh", "auth", "token", "--hostname", NormalizeHost(host))
-	out, err := cmd.Output()
+	out, err := runGHCLICommand(ctx, "auth.token", func() ([]byte, error) { return cmd.Output() })
 	if err != nil {
 		return "", fmt.Errorf("gh auth token --hostname %s: %w", host, err)
 	}

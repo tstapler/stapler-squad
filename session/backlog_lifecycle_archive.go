@@ -33,6 +33,24 @@ type SessionArchiver interface {
 	KillTmuxPaneOnly(ctx context.Context, sessionUUID string) error
 }
 
+// WorktreeCleaner removes git worktrees for a backlog item's work-role
+// sessions and archives its work/review sessions, once the item has reached
+// a terminal status. Implemented by server/services.BacklogService (it owns
+// cleanupItemWorktrees/archiveItemWorkSessions — session/ cannot perform
+// those git-worktree operations directly or import server/services/, per
+// this codebase's package-cycle constraint); wired via SetWorktreeCleaner
+// from server/dependencies.go. Used by internal transition paths
+// (transitionBouncingItemToDone, the PR-merge-detected done path) that call
+// the storage layer's TransitionBacklogItemStatus directly and would
+// otherwise rely solely on the 60s reconcileTerminalItemSessions sweep to
+// eventually notice and clean up — this makes cleanup synchronous with the
+// transition itself, matching the manual RPC path's existing behavior.
+type WorktreeCleaner interface {
+	// CleanupTerminalItem is best-effort: internal failures are logged, never
+	// returned, matching the RPC call site's existing contract.
+	CleanupTerminalItem(ctx context.Context, itemID string)
+}
+
 // maxDoneAge is how long a backlog item remains in "done" status before the
 // auto_archive_done detector (see archiveStaleDoneItems) transitions it to
 // "archived". A fixed constant rather than a Settings/Defaults config knob

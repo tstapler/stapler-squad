@@ -18,7 +18,7 @@ import (
 // between tests (same isolation pattern as newIsolatedSlackConfigService).
 func newIsolatedStreamHubRolloutService(t *testing.T) *StreamHubRolloutService {
 	t.Helper()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	return NewStreamHubRolloutService(nil)
 }
 
@@ -93,7 +93,7 @@ func TestSetStreamHubSessionOverride_SetsAndClears(t *testing.T) {
 func TestSetStreamHubSessionOverride_HonorsCustomTmuxPrefix(t *testing.T) {
 	inst := &session.Instance{Title: "my-session", TmuxPrefix: "custom_"}
 	s := NewStreamHubRolloutService(nil)
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	s.findInstance = func(title string) *session.Instance {
 		if title == "my-session" {
 			return inst

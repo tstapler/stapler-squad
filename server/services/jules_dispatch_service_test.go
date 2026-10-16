@@ -82,7 +82,7 @@ func (f *fakeJulesSessionCreator) CreateSession(_ context.Context, _ jules.Creat
 		f.beforeCreate()
 	}
 	if f.delay > 0 {
-		time.Sleep(f.delay)
+		time.Sleep(f.delay) //nolint:notimesleeptest simulates a slow Jules API call whose wall-clock duration is under test
 	}
 	if f.err != nil {
 		return nil, f.err
@@ -574,7 +574,7 @@ func TestJulesDispatchService_DispatchToJules_should_LeaveEgressAcknowledgedRepo
 // construction time, so this second dispatch would still fail with
 // ErrJulesEgressNotAcknowledged even after ConfirmEgressConsent succeeded.
 func TestJulesDispatchService_DispatchToJules_should_ObserveConfigWriteOnVeryNextCall_When_ConfirmEgressConsentRunsBetweenDispatches(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	storage := createTestStorage(t)
 	ctx := t.Context()
 
@@ -778,4 +778,11 @@ func TestBacklogService_DispatchToJules_should_ReturnFailedPreconditionDirecting
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "dispatch dialog")
+}
+
+func TestResolveJulesOwnerRepo_GitHubURL(t *testing.T) {
+	ref, err := resolveJulesOwnerRepo("https://github.com/tstapler/stapler-squad")
+	require.NoError(t, err)
+	assert.Equal(t, "tstapler", ref.Owner())
+	assert.Equal(t, "stapler-squad", ref.Repo())
 }

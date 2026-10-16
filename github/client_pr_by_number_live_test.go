@@ -30,7 +30,7 @@ import (
 //
 //	go test -tags live_github -run TestGetPRByNumber_should_MatchRealGitHubPR_When_LivePR326 -v ./github/...
 func TestGetPRByNumber_should_MatchRealGitHubPR_When_LivePR326(t *testing.T) {
-	info, err := GetPRByNumber(context.Background(), "tstapler", "stapler-squad", 326)
+	info, err := GetPRByNumber(context.Background(), tstaplerSquadRef(), 326)
 	if err != nil {
 		t.Fatalf("GetPRByNumber returned error: %v", err)
 	}

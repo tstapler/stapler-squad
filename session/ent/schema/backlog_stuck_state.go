@@ -67,6 +67,13 @@ func (BacklogStuckState) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("The server boot time (session.serverStartTime) of the most recent restart-grace pass consumed by this row, if any. A restart-grace pass lets a remediation action run without consuming remediation_attempts/advancing next_remediation_at when the detected failure coincides with a service restart (in-flight AutonomousDriver goroutines are lost on restart, not a real remediation failure) — at most one free pass per boot, tracked by comparing this field to the current boot time."),
+		field.Int32("diagnose_nudge_count").
+			Default(0).
+			Comment("Count of Diagnose & Nudge nudge attempts actually made for this open row (incremented per nudge, not per Diagnose dispatch — a dispatch that files a bug or posts a note instead of nudging does not increment this), pinned at config.DiagnoseNudgeMaxAttemptsOrDefault() once reached. Mirrors remediation_attempts' own cap-tracking convention but is a distinct counter: Diagnose & Nudge dispatches are user/agent-initiated, not the automated FAST remediation loop remediation_attempts tracks."),
+		field.Time("diagnose_next_eligible_at").
+			Optional().
+			Nillable().
+			Comment("When this row becomes eligible for the next Diagnose & Nudge nudge attempt. NULL while diagnose_nudge_count is 0 means 'eligible immediately'. Mirrors next_remediation_at's cooldown convention. Once diagnose_nudge_count reaches the configured cap, further dispatches are still allowed but the dispatched agent's action space is narrowed to file-a-bug/post-a-note only (AC4) rather than blocked outright."),
 	}
 }
 

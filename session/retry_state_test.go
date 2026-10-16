@@ -16,20 +16,22 @@ import (
 // fakeLivenessProcessManager reuses stuckDialogProcessManager's full
 // ProcessManager implementation (session_driver_test.go) and overrides only
 // IsAlive, so classifyFailureReason's tests don't need to hand-roll every
-// interface method. restoreDelay, when set, is slept inside
-// RestoreWithWorkDir() -- see TestRestartForRetry_..._TwoCallersRaceRetryInFlight
-// for why a real concurrency test needs this.
+// interface method. restoreRelease, when set, blocks RestoreWithWorkDir() until
+// closed -- see
+// TestRestartForRetry_..._TwoCallersRaceRetryInFlight for why a real
+// concurrency test needs this.
 type fakeLivenessProcessManager struct {
 	stuckDialogProcessManager
-	alive        bool
-	restoreDelay time.Duration
+	alive          bool
+	restoreRelease chan struct{}
 }
 
-func (m *fakeLivenessProcessManager) IsAlive() bool { return m.alive }
+func (m *fakeLivenessProcessManager) IsAlive() bool               { return m.alive }
+func (m *fakeLivenessProcessManager) HasLiveSessionNoCache() bool { return m.alive }
 
 func (m *fakeLivenessProcessManager) RestoreWithWorkDir(dir string) error {
-	if m.restoreDelay > 0 {
-		time.Sleep(m.restoreDelay)
+	if m.restoreRelease != nil {
+		<-m.restoreRelease
 	}
 	return m.stuckDialogProcessManager.RestoreWithWorkDir(dir)
 }
@@ -332,6 +334,47 @@ func TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromPerma
 	}
 }
 
+// TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromFailed
+// is TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromPermanentlyFailedWithDeadSession's
+// sibling for the Failed status (the stale-creation sweeper's terminal
+// status, distinct from PermanentlyFailed — see instance.go's Failed doc
+// comment and state_machine.go's registered Failed→Creating edge).
+// restartForRetry's cold-recovery branch used to check only
+// Stopped/PermanentlyFailed, so RetryNow()/"Retry now" against a Failed
+// session fell into the Restart()-in-place branch instead and always
+// returned ErrCannotRestart ("session cannot be restarted in current
+// state") — the session could never be revived, only deleted and
+// recreated. This proves the fix: restartForRetry must treat Failed the
+// same as PermanentlyFailed/Stopped.
+func TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromFailed(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:  "t",
+		Status: Failed,
+		// alive: false simulates the bootstrap failures that led to Failed
+		// (e.g. tymuxd unresolvable) never having left a live session behind.
+		processManager: &fakeLivenessProcessManager{alive: false},
+	}
+	inst.LastFailureReason = "cold restore Start failed: executable file not found in $PATH"
+	// started is left at its zero value (false): if the bug regresses and
+	// Restart() is wrongly taken, Restart() bails out immediately with
+	// ErrCannotRestart and Status is left untouched at Failed.
+
+	err := inst.RetryNow("/tmp")
+	if errors.Is(err, ErrCannotRestart) {
+		t.Fatalf("RetryNow() err = %v: took the Restart()-in-place path instead of RecoverFromStopped()+Start() — the Failed/dead-session branch-selection bug has regressed", err)
+	}
+	if err != nil {
+		t.Fatalf("RetryNow() err = %v, want nil (cold-recovery Start() should succeed against the fake ProcessManager)", err)
+	}
+	if inst.Status != Active {
+		t.Errorf("Status = %v, want Active — RecoverFromStopped()+Start() should have advanced Creating→Active", inst.Status)
+	}
+	if !inst.Started() {
+		t.Error("Started() = false, want true after a successful cold-recovery Start()")
+	}
+}
+
 // TestRestartForRetry_should_RecreateMissingWorktree_When_DirectoryWasDeleted
 // is the regression test for the "aimee crash loop" fix: a session whose git
 // worktree directory was deleted from disk (e.g. a pruned worktree) used to
@@ -461,16 +504,19 @@ func TestRetryNow_should_ReturnErrRetryInFlight_When_RetryInFlightAlreadyClaimed
 // parallel tests. That isn't a bug in the CAS guard (mutual exclusion is
 // still correctly enforced whenever the two calls actually overlap); it's a
 // test that needs its critical section to have nonzero, real duration to
-// make that overlap reliable regardless of system load. restoreDelay widens
-// the window pm().RestoreWithWorkDir spends holding retryInFlight so the
-// second goroutine's CAS attempt reliably lands while the first still holds
-// it, without relying on scheduler timing.
+// make that overlap reliable regardless of system load. restoreRelease holds
+// pm().RestoreWithWorkDir open while retryInFlight is held until the second
+// caller has been observed losing its CAS, without relying on scheduler timing.
 func TestRestartForRetry_should_PreventConcurrentRestart_When_TwoCallersRaceRetryInFlight(t *testing.T) {
 	t.Parallel()
+	release := make(chan struct{})
 	inst := &Instance{
-		Title:          "t",
-		Status:         Stopped,
-		processManager: &fakeLivenessProcessManager{alive: true, restoreDelay: 50 * time.Millisecond},
+		Title:  "t",
+		Status: Stopped,
+		processManager: &fakeLivenessProcessManager{
+			alive:          true,
+			restoreRelease: release,
+		},
 	}
 	policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}}
 
@@ -484,18 +530,84 @@ func TestRestartForRetry_should_PreventConcurrentRestart_When_TwoCallersRaceRetr
 	}
 	close(start)
 
+	// The winner is parked inside Restore holding retryInFlight, so the first
+	// result to arrive is necessarily the loser's. Release the winner after.
 	var inFlightCount, otherCount int
-	for range 2 {
+	for i := range 2 {
 		err := <-results
 		if errors.Is(err, ErrRetryInFlight) {
 			inFlightCount++
 		} else {
 			otherCount++
 		}
+		if i == 0 {
+			close(release)
+		}
 	}
 	if inFlightCount != 1 {
 		t.Errorf("expected exactly 1 of 2 concurrent restartForRetry calls to observe ErrRetryInFlight, got %d (other=%d)", inFlightCount, otherCount)
 	}
+}
+
+// newCrashLoopInstance builds the Instance/ReviewQueue/notifier fixture shared
+// by the crash-loop test's escalating-retry and exhaustion phases.
+func newCrashLoopInstance() (*Instance, *ReviewQueue, *fakeNotifier) {
+	rq := NewReviewQueue()
+	notifier := &fakeNotifier{}
+	inst := &Instance{
+		Title:       "crash-loop",
+		UUID:        "test-uuid-crash-loop",
+		reviewQueue: rq,
+		Status:      Active,
+	}
+	inst.RetryMaxAttempts = 3
+	inst.SetNotifier(notifier)
+	return inst, rq, notifier
+}
+
+// assertCrashRetryScheduled drives handleDriverFailure for one simulated
+// crash and checks the resulting attempt count/status/history, plus that the
+// scheduled backoff delay falls within the jittered window and grew over the
+// previous attempt's delay. It returns the delay so the caller can feed it
+// back in as prevDelay for the next attempt.
+func assertCrashRetryScheduled(t *testing.T, inst *Instance, attempt int, policy RetryPolicy, prevDelay time.Duration) time.Duration {
+	t.Helper()
+	before := time.Now()
+	handleDriverFailure(inst, "/tmp", policy, "crashed", make(chan struct{}))
+
+	if inst.RetryAttempt != attempt {
+		t.Fatalf("after crash #%d: RetryAttempt = %d, want %d", attempt, inst.RetryAttempt, attempt)
+	}
+	if inst.Status == PermanentlyFailed {
+		t.Fatalf("after crash #%d: session marked PermanentlyFailed too early (max_attempts=3)", attempt)
+	}
+	if len(inst.RetryHistory) != attempt {
+		t.Fatalf("after crash #%d: len(RetryHistory) = %d, want %d", attempt, len(inst.RetryHistory), attempt)
+	}
+
+	delay := inst.NextRetryAt.Sub(before)
+	base := policy.InitialDelay * time.Duration(int64(1)<<uint(attempt-1))
+	if base > policy.MaxDelay {
+		base = policy.MaxDelay
+	}
+	// backoffDelay applies +/-10% jitter (defaultJitterFraction); allow a
+	// generous slop on top for wall-clock scheduling noise between
+	// `before` and handleDriverFailure's own now.
+	lower := time.Duration(float64(base)*0.9) - time.Second
+	upper := time.Duration(float64(base)*1.1) + time.Second
+	if delay < lower || delay > upper {
+		t.Errorf("after crash #%d: backoff delay = %v, want in [%v, %v] (base %v)", attempt, delay, lower, upper, base)
+	}
+	if attempt > 1 && delay <= prevDelay/2 {
+		t.Errorf("after crash #%d: backoff delay %v did not increase over previous attempt's %v", attempt, delay, prevDelay)
+	}
+
+	// The real driver poll loop clears NextRetryAt once it consumes a
+	// pending retry and restarts the session (clearNextRetryAt, called
+	// from the restart path) — simulate that here so the next simulated
+	// crash starts from a clean pending-retry state.
+	inst.NextRetryAt = time.Time{}
+	return delay
 }
 
 // TestSessionDriver_should_RetryThreeTimesWithIncreasingBackoffThenPermanentlyFail_When_SessionCrashesRepeatedly
@@ -510,16 +622,7 @@ func TestRestartForRetry_should_PreventConcurrentRestart_When_TwoCallersRaceRetr
 // again on a later tick.
 func TestSessionDriver_should_RetryThreeTimesWithIncreasingBackoffThenPermanentlyFail_When_SessionCrashesRepeatedly(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
-	notifier := &fakeNotifier{}
-	inst := &Instance{
-		Title:       "crash-loop",
-		UUID:        "test-uuid-crash-loop",
-		reviewQueue: rq,
-		Status:      Active,
-	}
-	inst.RetryMaxAttempts = 3
-	inst.SetNotifier(notifier)
+	inst, rq, notifier := newCrashLoopInstance()
 
 	policy := RetryPolicy{
 		Enabled:      true,
@@ -531,42 +634,7 @@ func TestSessionDriver_should_RetryThreeTimesWithIncreasingBackoffThenPermanentl
 
 	var prevDelay time.Duration
 	for attempt := 1; attempt <= 3; attempt++ {
-		before := time.Now()
-		handleDriverFailure(inst, "/tmp", policy, "crashed", make(chan struct{}))
-
-		if inst.RetryAttempt != attempt {
-			t.Fatalf("after crash #%d: RetryAttempt = %d, want %d", attempt, inst.RetryAttempt, attempt)
-		}
-		if inst.Status == PermanentlyFailed {
-			t.Fatalf("after crash #%d: session marked PermanentlyFailed too early (max_attempts=3)", attempt)
-		}
-		if len(inst.RetryHistory) != attempt {
-			t.Fatalf("after crash #%d: len(RetryHistory) = %d, want %d", attempt, len(inst.RetryHistory), attempt)
-		}
-
-		delay := inst.NextRetryAt.Sub(before)
-		base := policy.InitialDelay * time.Duration(int64(1)<<uint(attempt-1))
-		if base > policy.MaxDelay {
-			base = policy.MaxDelay
-		}
-		// backoffDelay applies +/-10% jitter (defaultJitterFraction); allow a
-		// generous slop on top for wall-clock scheduling noise between
-		// `before` and handleDriverFailure's own now.
-		lower := time.Duration(float64(base)*0.9) - time.Second
-		upper := time.Duration(float64(base)*1.1) + time.Second
-		if delay < lower || delay > upper {
-			t.Errorf("after crash #%d: backoff delay = %v, want in [%v, %v] (base %v)", attempt, delay, lower, upper, base)
-		}
-		if attempt > 1 && delay <= prevDelay/2 {
-			t.Errorf("after crash #%d: backoff delay %v did not increase over previous attempt's %v", attempt, delay, prevDelay)
-		}
-		prevDelay = delay
-
-		// The real driver poll loop clears NextRetryAt once it consumes a
-		// pending retry and restarts the session (clearNextRetryAt, called
-		// from the restart path) — simulate that here so the next simulated
-		// crash starts from a clean pending-retry state.
-		inst.NextRetryAt = time.Time{}
+		prevDelay = assertCrashRetryScheduled(t, inst, attempt, policy, prevDelay)
 	}
 
 	// A 4th crash arrives with RetryAttempt already at the resolved cap (3):

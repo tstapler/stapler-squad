@@ -28,6 +28,13 @@ type SubscriberCapability struct {
 	CanWrite bool
 }
 
+// ReadOnlyCapability is the capability of a viewer that must never change the
+// pane: it casts no resize vote (its size is ignored, including at attach) and
+// sends no input. Hidden sessions attach with it (ADR-005).
+func ReadOnlyCapability() SubscriberCapability {
+	return SubscriberCapability{CanResize: false, CanWrite: false}
+}
+
 // HubLifecycleState is the exhaustive set of states a StreamHub can be in.
 // Every switch over it must include a default: panic("unhandled
 // HubLifecycleState") case so a new state can't silently fall through

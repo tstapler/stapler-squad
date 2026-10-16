@@ -319,4 +319,97 @@ describe("SessionsTable", () => {
       expect(firstRow.querySelector("td")?.getAttribute("title")).toBe("session-2");
     });
   });
+
+  // ─── Story 5.2.2: role cross-filter ────────────────────────────────────
+  describe("SessionsTable_should_ApplyRoleFilter_When_RoleFilterPropSet", () => {
+    it("shows only sessions matching roleFilter and renders the active-filter chip", () => {
+      const workSession = makeSession({
+        sessionId: "sess-work",
+        conversationId: "sess-work",
+        sessionRole: "work",
+      });
+      const triageSession = makeSession({
+        sessionId: "sess-triage",
+        conversationId: "sess-triage",
+        sessionRole: "triage",
+      });
+      render(<SessionsTable sessions={[workSession, triageSession]} roleFilter="work" />);
+
+      expect(screen.getByTestId("role-filter-chip")).toHaveTextContent("Filtered to: work");
+      const rows = document.querySelectorAll("tbody tr");
+      expect(rows).toHaveLength(1);
+      expect(rows[0].querySelector("td")?.getAttribute("title")).toBe("sess-work");
+    });
+
+    it("does not render the chip when roleFilter is unset", () => {
+      render(<SessionsTable sessions={[makeSession({ sessionRole: "work" })]} />);
+
+      expect(screen.queryByTestId("role-filter-chip")).not.toBeInTheDocument();
+    });
+
+    it("calls onClearRoleFilter when the chip's clear button is clicked", async () => {
+      const user = userEvent.setup();
+      const onClearRoleFilter = jest.fn();
+      render(
+        <SessionsTable
+          sessions={[makeSession({ sessionRole: "work" })]}
+          roleFilter="work"
+          onClearRoleFilter={onClearRoleFilter}
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: /clear filter: work/i }));
+      expect(onClearRoleFilter).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("SessionsTable_should_UseControlledSearchText_When_SearchTextPropAndOnChangeBothProvided", () => {
+    it("reflects the controlled searchText value and calls onSearchTextChange on input", async () => {
+      const user = userEvent.setup();
+      const onSearchTextChange = jest.fn();
+      render(
+        <SessionsTable
+          sessions={[makeSession()]}
+          searchText=""
+          onSearchTextChange={onSearchTextChange}
+        />
+      );
+
+      const input = screen.getByLabelText("Search sessions by project path");
+      await user.type(input, "x");
+      expect(onSearchTextChange).toHaveBeenCalledWith("x");
+    });
+  });
+
+  describe("tags, role badge, waste tooltip", () => {
+    const tagged = [
+      makeSession({ sessionId: "a", conversationId: "ca", projectPath: "/x/alpha", tags: ["backend"] }),
+      makeSession({ sessionId: "b", conversationId: "cb", projectPath: "/x/beta", tags: ["frontend"] }),
+    ];
+
+    it("matches search text against tags", async () => {
+      render(<SessionsTable sessions={tagged} />);
+      await userEvent.type(screen.getByLabelText("Search sessions by project path"), "frontend");
+      expect(screen.getByText("Sessions (1 of 2)")).toBeInTheDocument();
+    });
+
+    it("narrows by tag filter and clears", async () => {
+      render(<SessionsTable sessions={tagged} />);
+      await userEvent.selectOptions(screen.getByLabelText("Filter by tag"), "backend");
+      expect(screen.getByText("Sessions (1 of 2)")).toBeInTheDocument();
+      await userEvent.click(screen.getByText("Clear filters"));
+      expect(screen.getByText("Sessions (2)")).toBeInTheDocument();
+    });
+
+    it("shows role badge from summary.sessionRole with an empty backlog index", () => {
+      render(<SessionsTable sessions={[makeSession({ sessionRole: "triage" })]} backlogIndex={new Map()} />);
+      expect(screen.getByTestId("role-badge")).toHaveTextContent("triage");
+    });
+
+    it("explains Waste Score in a header tooltip", () => {
+      render(<SessionsTable sessions={tagged} />);
+      const th = screen.getByText(/Waste Score/).closest("th");
+      expect(th?.getAttribute("title")).toMatch(/not dollars.*Higher is worse.*Not evaluated/);
+    });
+  });
 });

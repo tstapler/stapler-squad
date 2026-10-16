@@ -65,7 +65,7 @@ func TestSlackInteractiveRoute_ResolvesApproval_When_ApprovalEnabledAndSignature
 		ToolName:  "Bash",
 	}))
 
-	srv := NewServerWithDeps("localhost:0", deps)
+	srv := newShutdownOnCleanupServer(t, "localhost:0", deps)
 
 	payloadJSON := `{"actions":[{"action_id":"approve","value":"appr-int-1:allow"}]}`
 	body := "payload=" + url.QueryEscape(payloadJSON)
@@ -114,7 +114,7 @@ func TestSlackInteractiveRoute_Returns404_When_ApprovalDisabled(t *testing.T) {
 		ToolName:  "Bash",
 	}))
 
-	srv := NewServerWithDeps("localhost:0", deps)
+	srv := newShutdownOnCleanupServer(t, "localhost:0", deps)
 
 	payloadJSON := `{"actions":[{"action_id":"approve","value":"appr-int-2:allow"}]}`
 	body := "payload=" + url.QueryEscape(payloadJSON)

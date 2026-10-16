@@ -1,0 +1,16 @@
+{
+  "id": "ui:fork-pressure-status-banner",
+  "type": "frontend",
+  "description": "Persistent status banner for Fork Pressure and memory-pressure system-health monitors, rendered via the SystemBanner primitive, distinct from the discrete notification feed/toast stack",
+  "component": "ForkPressureStatusBanner",
+  "path": "web-app/src/components/system/ForkPressureStatusBanner.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "ForkPressureStatusBanner > renders an active Fork Pressure warning via SystemBanner",
+    "ForkPressureStatusBanner > renders nothing once the episode's cleared signal lands",
+    "ForkPressureStatusBanner > ignores notifications from other sessions",
+    "ForkPressureStatusBanner > renders a memory pressure banner independently of Fork Pressure"
+  ],
+  "lastModified": "2026-09-12T18:51:52Z"
+}

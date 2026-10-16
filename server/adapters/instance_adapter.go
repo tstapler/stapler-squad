@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
+	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/session/vnc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -58,12 +59,21 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	// synchronisation and are left as-is. Fields absent from InstanceSnapshot
 	// (LaunchCommand, CreationProgress) remain as direct reads.
 	snap := inst.Snapshot()
+	// One Workspace() call for every path field, so the conversion keeps
+	// costing at most the single os.Stat it always did.
+	ws := inst.Workspace()
 
 	protoSession := &sessionv1.Session{
-		Id:                 inst.GetStableID(),
-		Title:              snap.Title,
-		Path:               inst.Workspace().EffectivePath,
-		WorkingDir:         inst.GetWorkingDirectory(),
+		Id:         inst.GetStableID(),
+		Title:      snap.Title,
+		Path:       ws.ExistingDir,
+		WorkingDir: ws.ActiveDir,
+
+		RepoRoot:    ws.RepoRoot,
+		WorktreeDir: ws.WorktreeDir,
+		ActiveDir:   ws.ActiveDir,
+		ExistingDir: ws.ExistingDir,
+
 		Branch:             snap.Branch,
 		Status:             statusToProto(inst.GetEffectiveStatus()),
 		Program:            snap.Program,
@@ -84,7 +94,8 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		IsExpanded:         snap.IsExpanded,
 		SessionType:        sessionTypeToProto(snap.SessionType),
 		TmuxPrefix:         snap.TmuxPrefix,
-		Tags:               snap.Tags, // Tag-based organization
+		Tags:               snap.Tags,              // Tag-based organization
+		RuleTagProvenance:  snap.RuleTagProvenance, // session-classifier-pipeline: tag -> owning rule ID / "llm"
 		// Terminal activity timestamps for staleness detection
 		LastTerminalUpdate:   timestamppb.New(snap.LastTerminalUpdate),
 		LastMeaningfulOutput: timestamppb.New(snap.LastMeaningfulOutput),
@@ -93,6 +104,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		GithubPrUrl:     snap.GitHub.GitHubPRURL,
 		GithubOwner:     snap.GitHub.GitHubOwner,
 		GithubRepo:      snap.GitHub.GitHubRepo,
+		GithubHost:      snap.GitHub.GitHubHost,
 		GithubSourceRef: snap.GitHub.GitHubSourceRef,
 		ClonedRepoPath:  snap.GitHub.ClonedRepoPath,
 		// Instance type and external metadata
@@ -249,6 +261,13 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		protoSession.DetectedContext = statusInfo.StatusContext
 	}
 
+	// ContextHealth / ContextHealthReason (fields 97–98): left UNSPECIFIED until a
+	// verdict with enough samples exists (e.g. never for non-Claude sessions).
+	if snap.ContextHealth.Level != tokens.HealthUnknown {
+		protoSession.ContextHealth = tokens.ContextHealthLevelToProto(snap.ContextHealth.Level)
+		protoSession.ContextHealthReason = snap.ContextHealth.Reason
+	}
+
 	// SubagentCount (field 75): count of background agents/shells/monitors from the
 	// WaitingForAgent detector. Set unconditionally — InstanceStatusInfo.SubagentCount is
 	// already 0 by construction when the controller is inactive or status isn't
@@ -257,6 +276,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 
 	// Hidden flag — system/background sessions excluded from default list/review queue.
 	protoSession.Hidden = snap.Hidden
+	protoSession.Pinned = snap.Pinned
 
 	// Workflow linkage, name, and archive state.
 	protoSession.WorkflowId = snap.WorkflowID
@@ -524,20 +544,6 @@ func ProtoToStatus(status sessionv1.SessionStatus) session.Status {
 		return session.PermanentlyFailed
 	default:
 		return session.Creating // Default to Creating for unknown statuses
-	}
-}
-
-// ProtoToSessionType converts proto SessionType enum to session.SessionType.
-func ProtoToSessionType(sessionType sessionv1.SessionType) session.SessionType {
-	switch sessionType {
-	case sessionv1.SessionType_SESSION_TYPE_DIRECTORY:
-		return session.SessionTypeDirectory
-	case sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE:
-		return session.SessionTypeNewWorktree
-	case sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE:
-		return session.SessionTypeExistingWorktree
-	default:
-		return session.SessionTypeDirectory // Default to Directory for unknown types
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -583,10 +584,19 @@ func (m *cdpStreamManager) ReconcileOrphans(activeSessionIDs []string) error {
 	return reconcileOrphanDirs(activeSessionIDs)
 }
 
+// isIsolatedInstance is a var so tests can exercise the live-instance path (go test itself reports test mode).
+var isIsolatedInstance = config.IsIsolatedInstance
+
 // reconcileOrphanDirs is the shared implementation of orphan cleanup used by
 // both cdpStreamManager and noopCDPManager. It does not depend on any Chrome
 // binary — filesystem access only.
 func reconcileOrphanDirs(activeSessionIDs []string) error {
+	// cdp-bins is shared across instances; an isolated instance only knows its own
+	// sessions and would delete the live instance's dirs (BUG-116).
+	if isIsolatedInstance() {
+		log.Info("cdp: ReconcileOrphans: skipped for isolated instance (cdp-bins is shared)")
+		return nil
+	}
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("cdp: ReconcileOrphans: cannot determine home dir: %w", err)

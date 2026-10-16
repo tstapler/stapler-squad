@@ -1,0 +1,17 @@
+{
+  "id": "terminal-scroll-settings",
+  "type": "frontend",
+  "name": "Terminal touch scroll settings (route chip, picker, panel, first-drag hint)",
+  "component": "ScrollingPanel",
+  "path": "web-app/src/components/sessions/ScrollingPanel.tsx",
+  "filePath": "web-app/src/components/sessions/ScrollingPanel.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "panel_should_UseNativeRadiosInLabelledFieldsetWithDescriptions_And_AnnounceChange",
+    "toggle_should_RouteNextDragToPgKeys_When_TuiSelected",
+    "chip_should_OpenPicker_When_Tapped",
+    "hint_should_ShowOnceOnFirstDragWithRouteText_And_NotOfferEscOrQ"
+  ],
+  "lastModified": "2026-10-02T00:00:00Z"
+}

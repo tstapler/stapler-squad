@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -120,7 +122,7 @@ func newControlModeOutputTestSession(t *testing.T) (*TmuxSession, io.WriteCloser
 		sanitizedName:          "cm_output_test",
 		controlModeStdout:      pr,
 		controlModeDone:        make(chan struct{}),
-		controlModeSubscribers: make(map[string]chan []byte),
+		controlModeSubscribers: make(map[string]*controlModeSubscriber),
 		onExit:                 rec.record,
 	}
 	t.Cleanup(func() {
@@ -132,11 +134,18 @@ func newControlModeOutputTestSession(t *testing.T) (*TmuxSession, io.WriteCloser
 // startReader runs sess.readControlModeOutput() in a goroutine and returns a
 // channel closed once it returns, so tests can deterministically wait for the
 // generation to end instead of polling onExit call counts on a timer.
+// doneCh/stdout are read from sess's fields here (single-threaded test setup,
+// no concurrent Start/Stop in flight) and passed as the same explicit
+// parameters production code now captures at spawn time -- see
+// readControlModeOutput's doc comment for why it no longer reads them from
+// the struct itself.
 func startReader(sess *TmuxSession) <-chan struct{} {
 	done := make(chan struct{})
+	doneCh := sess.controlModeDone
+	stdout := sess.controlModeStdout
 	go func() {
 		defer close(done)
-		sess.readControlModeOutput()
+		sess.readControlModeOutput(doneCh, stdout)
 	}()
 	return done
 }
@@ -294,6 +303,64 @@ func syncWriteControlModeLine(t *testing.T, pw io.WriteCloser, line string) {
 		}
 	case <-time.After(wait.FastTimeout):
 		t.Fatalf("write of control-mode line %q did not complete -- reader not consuming", line)
+	}
+}
+
+// TestControlMode_NilDoneChAtCapture_PostLoopCleanupDoesNotPanic is a
+// regression test for the "pre-existing (out-of-scope) nil-channel race"
+// called out in runStopControlModeIntentionalStopScenario's doc comment
+// above -- it stopped being out-of-scope on 2026-09-16, when it panicked
+// ("close of nil channel" in readControlModeOutput's post-loop cleanup) and
+// crash-looped the live stapler-squad service.
+//
+// The race: StopControlMode could close-and-nil t.controlModeDone before a
+// freshly spawned readControlModeOutput goroutine captured that field, so
+// doneCh was captured as nil. Post-loop cleanup's `if t.controlModeDone ==
+// doneCh` guard then saw nil == nil -- true for Go channel comparison -- and
+// used to unconditionally close(doneCh), i.e. close(nil), which panics.
+// doneCh/stdout are now parameters captured by the caller
+// (StartControlMode/startRemoteControlMode, serialized against
+// StopControlMode by controlModeStartMu -- see readControlModeOutput's doc
+// comment) rather than read from the struct fields inside the goroutine, so
+// this test reproduces the capture-time-nil scenario directly by passing nil
+// as doneCh and asserts the post-loop cleanup's nil guard tolerates it.
+func TestControlMode_NilDoneChAtCapture_PostLoopCleanupDoesNotPanic(t *testing.T) {
+	pr, pw := io.Pipe()
+	sess := &TmuxSession{
+		sanitizedName:          "nil_donech_test",
+		controlModeStdout:      pr,
+		controlModeSubscribers: make(map[string]*controlModeSubscriber),
+	}
+	t.Cleanup(func() { _ = pw.Close() })
+
+	readerDone := make(chan struct{})
+	panicVal := make(chan any, 1)
+	go func() {
+		defer close(readerDone)
+		defer func() {
+			if r := recover(); r != nil {
+				panicVal <- r
+			}
+		}()
+		sess.readControlModeOutput(nil, pr) // nil doneCh simulates capture-time-nil
+	}()
+
+	// EOF the pipe immediately so the scan loop falls straight through to
+	// post-loop cleanup without ever needing doneCh to become ready.
+	if err := pw.Close(); err != nil {
+		t.Fatalf("closing pipe: %v", err)
+	}
+
+	select {
+	case <-readerDone:
+	case <-time.After(wait.FastTimeout):
+		t.Fatal("readControlModeOutput did not return")
+	}
+
+	select {
+	case r := <-panicVal:
+		t.Fatalf("readControlModeOutput panicked with nil controlModeDone: %v", r)
+	default:
 	}
 }
 
@@ -457,11 +524,9 @@ func TestReadControlModeOutput_GoroutineNeverReachesExitSites_ActiveGenerationsG
 	// Give the (intentionally wedged) goroutine a moment to prove it does
 	// NOT end the generation on its own -- the gauge must stay elevated for
 	// as long as the goroutine never reaches an exit site.
-	time.Sleep(20 * time.Millisecond)
-	after := sumTmuxControlModeMetric(t, collectLifecycleMetric(t, gaugeName), "")
-	if after != baseline+1 {
-		t.Errorf("gauge = baseline+%d, want baseline+1 (still elevated for the abandoned generation)", after-baseline)
-	}
+	require.Never(t, func() bool {
+		return sumTmuxControlModeMetric(t, collectLifecycleMetric(t, gaugeName), "") != baseline+1
+	}, 20*time.Millisecond, 5*time.Millisecond, "gauge must stay at baseline+1 (still elevated for the abandoned generation)")
 
 	// Unblock the wedged goroutine and join it within this test's own body,
 	// rather than leaving it to t.Cleanup's unordered pipe close -- otherwise
@@ -537,7 +602,7 @@ func TestControlMode_ScanLoopDoneChRace_EndsGenerationWithoutFiringOnExit(t *tes
 		sanitizedName:          "cm_donech_race_test",
 		controlModeStdout:      reader,
 		controlModeDone:        doneCh,
-		controlModeSubscribers: make(map[string]chan []byte),
+		controlModeSubscribers: make(map[string]*controlModeSubscriber),
 		onExit:                 rec.record,
 	}
 	t.Cleanup(func() { _ = reader.Close() })
@@ -557,5 +622,125 @@ func TestControlMode_ScanLoopDoneChRace_EndsGenerationWithoutFiringOnExit(t *tes
 	afterActive := sumTmuxControlModeMetric(t, collectLifecycleMetric(t, "session_lifecycle_active_generations"), "")
 	if afterActive != beforeActive {
 		t.Errorf("session_lifecycle_active_generations delta = %d, want 0 (gauge must return to baseline, not stay elevated by the leaked generation)", afterActive-beforeActive)
+	}
+}
+
+// TestSendInputViaControlMode_ReturnsError_When_PipeAcceptsWritesButNeverAcks
+// guards against the input-silent-drop bug (fixed alongside this test): a
+// wedged control-mode pipe that accepts the enqueue and the stdin write
+// without ever erroring used to make SendInputViaControlMode return nil
+// immediately (its old "fire-and-forget" contract), so the caller's
+// subprocess fallback (sendInputToTmux, in connectrpc_websocket.go) never
+// ran -- keystrokes vanished with the UI still showing "Connected".
+//
+// highPriSendCh here is a live, buffered channel with nothing ever draining
+// it -- the enqueue succeeds (room in the buffer), but no %begin/%end ack
+// can ever arrive, faithfully modeling a real wedged tmux -C attach-session
+// pipe (confirmed live: one that accepts stdin writes but never completes
+// even a capture-pane/resize round trip) without needing a real tmux
+// process.
+func TestSendInputViaControlMode_ReturnsError_When_PipeAcceptsWritesButNeverAcks(t *testing.T) {
+	sess := &TmuxSession{
+		sanitizedName: "cm_wedged_input_test",
+		highPriSendCh: make(chan cmSendReq, 64),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	err := sess.SendInputViaControlMode(ctx, []byte("x"))
+	if err == nil {
+		t.Fatal("SendInputViaControlMode() error = nil, want a timeout error -- a wedged CM pipe must be reported as a failure so the caller's subprocess fallback runs, not silently swallowed")
+	}
+}
+
+// TestSendInputViaControlMode_ReturnsNil_When_AckArrives is the happy-path companion:
+// it asserts SendInputViaControlMode builds the correct "send-keys -t <name> -H <hex>"
+// line and returns nil once the %begin/%end ack arrives, guarding against a broken
+// args-construction mutation slipping past the wedged-pipe test alone.
+func TestSendInputViaControlMode_ReturnsNil_When_AckArrives(t *testing.T) {
+	ch := make(chan cmSendReq, 64)
+	sess := &TmuxSession{sanitizedName: "cm_ack_test", highPriSendCh: ch}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		req := <-ch
+		if !strings.HasPrefix(req.line, "send-keys -t cm_ack_test -H ") {
+			t.Errorf("enqueued line = %q, want send-keys -t <name> -H <hex>", req.line)
+		}
+		req.resultCh <- cmdResult{body: ""}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := sess.SendInputViaControlMode(ctx, []byte("x")); err != nil {
+		t.Fatalf("SendInputViaControlMode() error = %v, want nil when ack arrives", err)
+	}
+	<-done
+}
+
+func TestNormalizeTmuxVersion(t *testing.T) {
+	cases := map[string]string{
+		"tmux 3.6a\n": "3.6a",
+		"tmux 3.4":    "3.4",
+		"  3.6a  \n":  "3.6a", // display-message's #{version} has no "tmux " prefix
+		"":            "",
+	}
+	for input, want := range cases {
+		if got := normalizeTmuxVersion(input); got != want {
+			t.Errorf("normalizeTmuxVersion(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+// TestCheckControlModeVersionMatchOnce_DisablesControlMode_When_ClientServerVersionsDiffer
+// guards the root cause of a confirmed, previously-invisible production
+// incident: a tmux client mismatched with the already-running server's
+// version makes control mode's %begin/%end handshake never complete, so
+// every command silently times out at its ctx deadline for as long as that
+// server lives (see version_check.go's doc comment). This asserts the
+// detection+short-circuit half; StartControlMode's own use of it is exercised
+// live by the production incident this guards against, not re-mocked here.
+func TestCheckControlModeVersionMatchOnce_DisablesControlMode_When_ClientServerVersionsDiffer(t *testing.T) {
+	socket := "version_mismatch_test_socket"
+	sess := &TmuxSession{
+		sanitizedName: "version_mismatch_test",
+		serverSocket:  socket,
+		cmdExec: MockCmdExec{
+			OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+				for _, arg := range cmd.Args {
+					if arg == "-V" {
+						return []byte("tmux 3.6a\n"), nil
+					}
+				}
+				return []byte("3.4\n"), nil // display-message -p '#{version}'
+			},
+		},
+	}
+
+	sess.checkControlModeVersionMatchOnce(context.Background())
+
+	if !sess.controlModeDisabledForSocket() {
+		t.Fatal("controlModeDisabledForSocket() = false, want true after detecting a client/server version mismatch")
+	}
+}
+
+func TestCheckControlModeVersionMatchOnce_LeavesControlModeEnabled_When_VersionsMatch(t *testing.T) {
+	socket := "version_match_test_socket"
+	sess := &TmuxSession{
+		sanitizedName: "version_match_test",
+		serverSocket:  socket,
+		cmdExec: MockCmdExec{
+			OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+				return []byte("tmux 3.6a\n"), nil
+			},
+		},
+	}
+
+	sess.checkControlModeVersionMatchOnce(context.Background())
+
+	if sess.controlModeDisabledForSocket() {
+		t.Fatal("controlModeDisabledForSocket() = true, want false when client and server versions match")
 	}
 }

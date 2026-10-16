@@ -51,6 +51,44 @@ func TestSSHClientPool_GetOrDial_SharesOneClientAcrossCallers(t *testing.T) {
 	}
 }
 
+// TestSSHClientPool_GetOrDial_HitIgnoresAddrAndHostKeyCallback pins the
+// pool-layer half of backlog item 09e91e3e-e13d-4166-a5f2-447242447f77: a
+// Peek hit for an already-pooled name returns the existing client without
+// dialing Addr or invoking HostKeyCallback at all, even when Addr points
+// elsewhere. The second call targets an unreachable address with a
+// HostKeyCallback that fails the test if invoked, so a regression here
+// fails fast without needing a real second SSH server.
+func TestSSHClientPool_GetOrDial_HitIgnoresAddrAndHostKeyCallback(t *testing.T) {
+	srv := startTestSSHServer(t)
+	cfg := newTestClientConfig(t, srv.HostKey)
+	pool := NewSSHClientPool()
+	name := "reused-name"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	first, err := pool.GetOrDial(ctx, SSHTarget{Name: name, Addr: srv.Addr}, &cfg)
+	if err != nil {
+		t.Fatalf("GetOrDial() first call error: %v", err)
+	}
+
+	unreachable := SSHTarget{Name: name, Addr: "127.0.0.1:1"}
+	poisonedCfg := ssh.ClientConfig{
+		User: "test",
+		Auth: []ssh.AuthMethod{testClientAuth(t)},
+		HostKeyCallback: func(string, net.Addr, ssh.PublicKey) error {
+			t.Error("HostKeyCallback invoked -- a pool hit must not dial or verify the host key at all")
+			return errors.New("unexpected host key callback")
+		},
+	}
+	second, err := pool.GetOrDial(ctx, unreachable, &poisonedCfg)
+	if err != nil {
+		t.Fatalf("GetOrDial() second call (same name, unreachable addr) error: %v -- pool hit should have short-circuited before dialing", err)
+	}
+	if second != first {
+		t.Error("GetOrDial() second call returned a different client -- expected the pooled entry for the reused name")
+	}
+}
+
 // TestSSHClientPool_Release_DoesNotCloseClient verifies Release only
 // decrements the reference count -- the shared connection survives even
 // after every caller has released it, per the Design Decision ("the last

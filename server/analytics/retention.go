@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -20,35 +21,37 @@ import (
 //   - escapeRetentionDays:  escape_event rows older than this many days are deleted.
 //     Use 0 to disable escape event age-based eviction.
 //
-// The goroutine exits when ctx is cancelled.
-func StartRetentionEnforcer(ctx context.Context, client *ent.Client, maxRows int, maxAgeDays int, escapeRetentionDays int) {
+// The goroutine exits when ctx is cancelled and is tracked on wg so the caller
+// can join it.
+func StartRetentionEnforcer(ctx context.Context, client *ent.Client, maxRows int, maxAgeDays int, escapeRetentionDays int, escapeMaxRowsPerSession int, wg *sync.WaitGroup) {
 	if client == nil {
 		return
 	}
-	go func() {
+	wg.Go(func() {
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
 
 		// Run once immediately so limits are enforced right after startup.
-		runRetention(ctx, client, maxRows, maxAgeDays, escapeRetentionDays)
+		runRetention(ctx, client, maxRows, maxAgeDays, escapeRetentionDays, escapeMaxRowsPerSession)
 
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				runRetention(ctx, client, maxRows, maxAgeDays, escapeRetentionDays)
+				runRetention(ctx, client, maxRows, maxAgeDays, escapeRetentionDays, escapeMaxRowsPerSession)
 			}
 		}
-	}()
+	})
 }
 
 // runRetention performs one enforcement cycle: age-based eviction first, then
 // count-based eviction if still over limit. Also deletes escape_event rows
 // older than escapeRetentionDays.
-func runRetention(ctx context.Context, client *ent.Client, maxRows int, maxAgeDays int, escapeRetentionDays int) {
-	// Phase 0: delete escape_event rows older than escapeRetentionDays.
+func runRetention(ctx context.Context, client *ent.Client, maxRows int, maxAgeDays int, escapeRetentionDays int, escapeMaxRowsPerSession int) {
+	// Phase 0: enforce escape-event age and durable per-session limits.
 	runEscapeEventRetention(ctx, client, escapeRetentionDays)
+	runEscapeEventPerSessionRetention(ctx, client, escapeMaxRowsPerSession)
 
 	// Phase 1: delete rows older than maxAgeDays.
 	if maxAgeDays > 0 {
@@ -96,6 +99,51 @@ func runRetention(ctx context.Context, client *ent.Client, maxRows int, maxAgeDa
 		return
 	}
 	log.Info("analytics/retention count eviction deleted rows", "deleted", deleted, "was", count, "limit", maxRows)
+}
+
+// runEscapeEventPerSessionRetention removes the oldest rows above the durable
+// per-session cap. Unlike the writer's cache, this remains correct across restarts.
+func runEscapeEventPerSessionRetention(ctx context.Context, client *ent.Client, maxRows int) {
+	if maxRows <= 0 {
+		return
+	}
+	sessionIDs, err := client.EscapeEvent.Query().Unique(true).Select(escapeevent.FieldSessionID).Strings(ctx)
+	if err != nil {
+		log.Warn("analytics/retention escape_event session query failed", "err", err)
+		return
+	}
+	for _, sessionID := range sessionIDs {
+		count, err := client.EscapeEvent.Query().Where(escapeevent.SessionID(sessionID)).Count(ctx)
+		if err != nil || count <= maxRows {
+			continue
+		}
+		excess, deletedTotal := count-maxRows, 0
+		for excess > 0 {
+			limit := excess
+			if limit > 500 {
+				limit = 500
+			}
+			ids, err := client.EscapeEvent.Query().Where(escapeevent.SessionID(sessionID)).
+				Order(escapeevent.ByWallTime()).Limit(limit).IDs(ctx)
+			if err != nil || len(ids) == 0 {
+				log.Warn("analytics/retention escape_event oldest rows query failed", "err", err, "session_id", sessionID)
+				break
+			}
+			deleted, err := client.EscapeEvent.Delete().Where(escapeevent.IDIn(ids...)).Exec(ctx)
+			if err != nil {
+				log.Warn("analytics/retention escape_event per-session eviction failed", "err", err, "session_id", sessionID)
+				break
+			}
+			if deleted == 0 {
+				break
+			}
+			deletedTotal += deleted
+			excess -= deleted
+		}
+		if deletedTotal > 0 {
+			log.Info("analytics/retention escape_event per-session eviction deleted rows", "deleted", deletedTotal, "session_id", sessionID, "limit", maxRows)
+		}
+	}
 }
 
 // runEscapeEventRetention deletes escape_event rows older than retentionDays.

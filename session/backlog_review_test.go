@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
@@ -1060,12 +1061,8 @@ func TestRecoverBaseCommitSHA_UsesExplicitBranchRef_NotAmbientHEAD(t *testing.T)
 	ctx := context.Background()
 
 	repoDir := t.TempDir()
-	runGitOrFail(t, repoDir, "init", "-b", "main")
-	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
-	runGitOrFail(t, repoDir, "config", "user.name", "Test")
-	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("base\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "README.md")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+	initConfiguredRepo(t, repoDir, "main")
+	commitFile(t, repoDir, "README.md", "base\n", "initial")
 	mainSHA := strings.TrimSpace(runGitCapture(t, repoDir, "rev-parse", "main"))
 
 	// The session's own dedicated worktree, branched from main, with real committed work.
@@ -1145,7 +1142,7 @@ func TestIsPathUnderAnyRoot(t *testing.T) {
 // before any file is read -- readPlanFile must return "" rather than the
 // content of a plan.md that happens to live outside the sandbox.
 func TestReadPlanFile_RejectsPathEscapingAllowedRoots(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	repoPath := t.TempDir()
 
 	// A directory entirely unrelated to repoPath, the worktrees dir, or the
@@ -1162,7 +1159,7 @@ func TestReadPlanFile_RejectsPathEscapingAllowedRoots(t *testing.T) {
 // works: an artifactsDir under repoPath (one of planArtifactsAllowedRoots)
 // is read normally.
 func TestReadPlanFile_AllowsPathUnderRepoPath(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	repoPath := t.TempDir()
 	artifactsDir := filepath.Join(repoPath, "triage-artifacts")
 	require.NoError(t, os.MkdirAll(artifactsDir, 0o755))
@@ -1170,4 +1167,29 @@ func TestReadPlanFile_AllowsPathUnderRepoPath(t *testing.T) {
 
 	got := readPlanFile(artifactsDir, repoPath)
 	assert.Equal(t, "legit plan content", got)
+}
+
+// A root commit has no parent, so the empty-baseSHA fallback (headRef~1..headRef) must fail
+// rather than silently diff something else; a two-commit history returns just the last commit.
+func TestGetGitDiffRef_EmptyBaseSHA_DiffsLastCommit(t *testing.T) {
+	t.Parallel()
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-b", "main")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("one\n"), 0o644))
+	runGit(t, repo, "add", "a.txt")
+	runGit(t, repo, "commit", "-m", "first")
+
+	_, _, err := GetGitDiffRef(context.Background(), repo, "", "HEAD")
+	require.Error(t, err, "root commit has no HEAD~1")
+
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("two\n"), 0o644))
+	runGit(t, repo, "commit", "-am", "second")
+
+	diff, truncated, err := GetGitDiffRef(context.Background(), repo, "", "HEAD")
+	require.NoError(t, err)
+	assert.False(t, truncated)
+	assert.Contains(t, diff, "+two")
+	assert.Contains(t, diff, "-one")
 }

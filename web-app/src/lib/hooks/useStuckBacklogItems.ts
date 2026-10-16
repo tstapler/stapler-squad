@@ -22,6 +22,7 @@ import {
   ResetStuckRemediationRequestSchema,
   BulkResetStuckRemediationRequestSchema,
   TriggerRemediationNowRequestSchema,
+  OverrideClaimBlockRequestSchema,
   type StuckBacklogItem,
   type StuckReason,
 } from "@/gen/session/v1/backlog_pb";
@@ -52,6 +53,12 @@ export interface UseStuckBacklogItemsReturn {
    * callers can show a specific error, e.g. "already parked — use Reset".
    */
   triggerRemediationNow: (itemId: string, reason: StuckReason) => Promise<void>;
+  /**
+   * Dequeues an item skipped for STUCK_REASON_BLOCKED_BY_CLAIM despite the
+   * other host's claim. `reason` is required (>= 5 chars) and audit-logged
+   * server-side. Throws on failure so the form can show the message.
+   */
+  overrideClaimBlock: (itemId: string, reason: string) => Promise<void>;
 }
 
 /**
@@ -187,6 +194,14 @@ function useStuckBacklogItemsImpl(
     [client, fetchItems]
   );
 
+  const overrideClaimBlock = useCallback(
+    async (itemId: string, reason: string): Promise<void> => {
+      await client.overrideClaimBlock(create(OverrideClaimBlockRequestSchema, { itemId, reason }));
+      await fetchItems();
+    },
+    [client, fetchItems]
+  );
+
   return {
     items,
     isLoading,
@@ -197,6 +212,7 @@ function useStuckBacklogItemsImpl(
     resetRemediation,
     bulkResetParkedRemediation,
     triggerRemediationNow,
+    overrideClaimBlock,
   };
 }
 

@@ -152,6 +152,15 @@ type Scanner struct {
 	cacheStore   sync.Map // map[string]*worktreeCache (key = worktreePath)
 	breakerStore sync.Map // map[string]*circuitBreaker (key = repoPath)
 
+	// repoWorktrees indexes which worktreePaths belong to each repoPath, kept
+	// in sync with cacheStore at every site that populates it (getOrCreateCache,
+	// restoreCacheFromDisk) and pruned alongside cacheStore's own eviction in
+	// persistCacheToDisk. Lets enqueueRepo's freshness check look up only the
+	// handful of worktrees a given repo actually has instead of Range-scanning
+	// every worktree cache entry system-wide on every enqueue — see
+	// enqueueRepo's doc comment for the O(N) scan this replaces.
+	repoWorktrees sync.Map // map[string]*sync.Map  (repoPath -> set[worktreePath]struct{})
+
 	// inFlight tracks repos currently queued or being scanned (key = repoPath)
 	// so a burst of triggers (fsnotify + manual Refresh + periodic tick landing
 	// close together) coalesces into one scan per repo instead of queuing a
@@ -161,7 +170,14 @@ type Scanner struct {
 	eventBus   *pkgevents.EventBus
 	stateStore *StateStore
 
-	triggerCh  chan struct{}  // signals coordinator to run a full scan now
+	triggerCh chan struct{} // signals coordinator to run a full scan now
+	// fsDebounce coalesces a burst of .git events per repo into one rescan;
+	// zero (tests) handles each event immediately. fsPending holds the repos
+	// with a flush timer armed, mapping repo root → widest scope seen so far
+	// (guarded by fsMu so the timer's read-and-delete can't lose a widening).
+	fsDebounce time.Duration
+	fsMu       sync.Mutex
+	fsPending  map[string]gitEventScope
 	scanDoneCh chan time.Time // emits timestamp after each full scan completes
 
 	tickInterval time.Duration // default 5 minutes, overridable in tests
@@ -199,6 +215,14 @@ type Scanner struct {
 	// state file every minute forever.
 	cacheDirty atomic.Bool
 
+	// maintenanceDone is closed once the maintenance goroutine (including its
+	// shutdown flush) has exited, so tests can wait before their temp dirs are
+	// removed. Set by Start; nil before Start.
+	maintenanceDone chan struct{}
+
+	// wg tracks every goroutine Start launches; see Wait.
+	wg sync.WaitGroup
+
 	mu deadlock.RWMutex
 }
 
@@ -228,6 +252,7 @@ func NewScannerWithReader(eventBus *pkgevents.EventBus, stateStore *StateStore, 
 		// to run every 30s. Tests override via SetTickInterval.
 		tickInterval:            5 * time.Minute,
 		maintenanceTickInterval: 1 * time.Minute,
+		fsDebounce:              fsnotifyDebounce,
 	}
 	s.autoSpiderEnabled.Store(true)
 	return s
@@ -261,11 +286,11 @@ func (s *Scanner) Start(ctx context.Context) {
 
 	const numWorkers = 4
 	for i := 0; i < numWorkers; i++ {
-		go s.worker(ctx)
+		s.wg.Go(func() { s.worker(ctx) })
 	}
-	go s.coordinator(ctx)
-	go s.subscribeToSessionEvents(ctx)
-	go s.pruneMissingRepos(ctx)
+	s.wg.Go(func() { s.coordinator(ctx) })
+	s.wg.Go(func() { s.subscribeToSessionEvents(ctx) })
+	s.wg.Go(func() { s.pruneMissingRepos(ctx) })
 
 	if w, err := fsnotify.NewWatcher(); err != nil {
 		log.Warn("fsnotify unavailable, scanner falling back to tick-only polling", "err", err)
@@ -273,13 +298,16 @@ func (s *Scanner) Start(ctx context.Context) {
 		s.mu.Lock()
 		s.fsWatcher = w
 		s.mu.Unlock()
-		go s.fsnotifyLoop(ctx)
+		s.wg.Go(func() { s.fsnotifyLoop(ctx) })
 	}
 
 	// Runs unconditionally (not gated on reader type) so cache persistence
 	// works with any VCSReader; the repo-cache pruning below only applies
 	// when the reader is the real GoGitVCSReader.
-	go func() {
+	done := make(chan struct{})
+	s.maintenanceDone = done
+	s.wg.Go(func() {
+		defer close(done)
 		s.mu.RLock()
 		maintenanceInterval := s.maintenanceTickInterval
 		s.mu.RUnlock()
@@ -318,7 +346,14 @@ func (s *Scanner) Start(ctx context.Context) {
 				s.persistCacheToDisk()
 			}
 		}
-	}()
+	})
+}
+
+// Wait blocks until every goroutine Start launched has exited, including the
+// maintenance goroutine's final cache flush. Call it after cancelling Start's
+// ctx; without a cancelled ctx it blocks forever.
+func (s *Scanner) Wait() {
+	s.wg.Wait()
 }
 
 // hydrateCacheFromDisk primes the in-memory worktreeCache from the state
@@ -346,6 +381,7 @@ func (s *Scanner) hydrateCacheFromDisk() {
 		c := &worktreeCache{ttl: ttl}
 		c.restore(e.Result, e.ScanTime)
 		s.cacheStore.Store(e.Result.WorktreePath, c)
+		s.indexRepoWorktree(e.Result.RepoPath, e.Result.WorktreePath)
 		restored++
 	}
 	if restored > 0 {
@@ -384,6 +420,14 @@ func (s *Scanner) persistCacheToDisk() {
 	s.cacheStore.Range(func(k, v any) bool {
 		path, _ := k.(string)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
+			if c, ok := v.(*worktreeCache); ok {
+				if result, _, hasValue := c.snapshot(); hasValue {
+					s.deindexRepoWorktree(result.RepoPath, path)
+				}
+			}
+			if r, ok := s.reader.(worktreeInvalidator); ok {
+				r.ForgetWorktree(path)
+			}
 			s.cacheStore.Delete(k)
 			evicted++
 			return true
@@ -498,15 +542,17 @@ func (s *Scanner) fsnotifyLoop(ctx context.Context) {
 			if !event.Has(fsnotify.Write) && !event.Has(fsnotify.Create) {
 				continue
 			}
+			scope, relevant := classifyGitEvent(filepath.Base(event.Name))
+			if !relevant {
+				continue
+			}
 			// Derive the repo root by walking up from the event path to the
 			// nearest ".git" component (mirrors WatchDirWatcher.fsnotifyLoop's
 			// event-handling shape in watcher.go).
 			dir := event.Name
 			for {
 				if filepath.Base(dir) == ".git" {
-					repoRoot := filepath.Dir(dir)
-					s.InvalidateCache(repoRoot)
-					s.EnqueueRepo(repoRoot)
+					s.scheduleGitEvent(ctx, filepath.Dir(dir), scope)
 					break
 				}
 				parent := filepath.Dir(dir)
@@ -522,6 +568,80 @@ func (s *Scanner) fsnotifyLoop(ctx context.Context) {
 			log.Warn("scanner fsnotify error", "err", err)
 		}
 	}
+}
+
+// fsnotifyDebounce is the window after a repo's first .git event in which
+// further events fold into one rescan; one git command emits several.
+const fsnotifyDebounce = 2 * time.Second
+
+// gitEventScope is what a .git write invalidates: just the repo's own
+// worktree, or every linked worktree too.
+type gitEventScope int
+
+const (
+	gitEventRepoRoot gitEventScope = iota
+	gitEventAllWorktrees
+)
+
+// classifyGitEvent decides whether a write to the named file directly under
+// <repo>/.git warrants a rescan. Lock files, git's index temp files and
+// watchman cookies are transient; the real file's own Create/Write follows
+// the lock's rename, so reacting to them only doubles the work. index, config
+// and MERGE_RR churn constantly but only describe the main worktree; every
+// other file (HEAD, FETCH_HEAD, COMMIT_EDITMSG, packed-refs, ...) is a
+// commit/fetch/ref signal that can move linked worktrees' ahead/behind too,
+// and loose refs under .git/refs are not watched, so these are the proxy.
+func classifyGitEvent(name string) (scope gitEventScope, relevant bool) {
+	switch {
+	case strings.HasSuffix(name, ".lock"),
+		strings.HasPrefix(name, "next-index-"),
+		strings.HasPrefix(name, ".watchman-cookie"):
+		return gitEventRepoRoot, false
+	case name == "index", name == "config", name == "MERGE_RR":
+		return gitEventRepoRoot, true
+	default:
+		return gitEventAllWorktrees, true
+	}
+}
+
+// scheduleGitEvent invalidates and enqueues repoRoot once, fsDebounce after
+// the first event of a burst (fixed window, so continuous events cannot starve
+// a repo), widening the scope if any event in the
+// burst needed it. Skipped after ctx is cancelled.
+func (s *Scanner) scheduleGitEvent(ctx context.Context, repoRoot string, scope gitEventScope) {
+	flush := func(scope gitEventScope) {
+		if ctx.Err() != nil {
+			return
+		}
+		if scope == gitEventAllWorktrees {
+			s.invalidateRepo(repoRoot)
+		} else {
+			s.InvalidateCache(repoRoot)
+		}
+		s.EnqueueRepo(repoRoot)
+	}
+	if s.fsDebounce <= 0 {
+		flush(scope)
+		return
+	}
+	s.fsMu.Lock()
+	if cur, armed := s.fsPending[repoRoot]; armed {
+		s.fsPending[repoRoot] = max(cur, scope)
+		s.fsMu.Unlock()
+		return
+	}
+	if s.fsPending == nil {
+		s.fsPending = make(map[string]gitEventScope)
+	}
+	s.fsPending[repoRoot] = scope
+	s.fsMu.Unlock()
+	time.AfterFunc(s.fsDebounce, func() {
+		s.fsMu.Lock()
+		widest := s.fsPending[repoRoot]
+		delete(s.fsPending, repoRoot)
+		s.fsMu.Unlock()
+		flush(widest)
+	})
 }
 
 // enqueueAll sends all known repos to the scan queue. force=true bypasses the
@@ -563,23 +683,29 @@ func (s *Scanner) enqueueRepo(repoPath string, force bool) {
 	}
 	s.severePressureWarned.Store(false)
 
-	// Check worktree-level TTL cache: if all worktrees for this repo are fresh, skip.
-	// We do a lightweight check by looking for any result stored recently.
+	// Check worktree-level TTL cache: if any worktree for this repo is fresh,
+	// skip. Looks up repoWorktrees' per-repo index (populated by
+	// indexRepoWorktree at every cacheStore write site) instead of Range-
+	// scanning every worktree cache entry system-wide — enqueueAll calls this
+	// once per tracked repo, so the old approach cost O(repos × total cached
+	// worktrees) per tick; this is O(worktrees for this one repo).
 	recent := false
-	s.cacheStore.Range(func(k, v any) bool {
-		c, ok := v.(*worktreeCache)
-		if !ok {
-			return true
+	if v, ok := s.repoWorktrees.Load(repoPath); ok {
+		if set, ok := v.(*sync.Map); ok {
+			set.Range(func(k, _ any) bool {
+				worktreePath, _ := k.(string)
+				if cv, ok := s.cacheStore.Load(worktreePath); ok {
+					if c, ok := cv.(*worktreeCache); ok {
+						if _, fresh := c.Get(); fresh {
+							recent = true
+							return false // stop iteration
+						}
+					}
+				}
+				return true
+			})
 		}
-		// Check if this cache entry belongs to the given repo (by path prefix—approximate).
-		if strings.HasPrefix(k.(string), repoPath+"/") || k == repoPath {
-			if _, ok := c.Get(); ok {
-				recent = true
-				return false // stop iteration
-			}
-		}
-		return true
-	})
+	}
 	if recent && !force {
 		return
 	}
@@ -691,6 +817,7 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string, 
 	// button, ScanUnfinishedWork RPC) always re-reads live git state instead of
 	// returning up-to-30s-stale data.
 	cache := s.getOrCreateCache(wt.Path)
+	s.indexRepoWorktree(repoPath, wt.Path)
 	if !force {
 		if cached, ok := cache.Get(); ok {
 			return cached
@@ -727,10 +854,20 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string, 
 		}
 	}
 
-	if d, dErr := s.reader.DiffShortstat(wt.Path); dErr == nil {
-		result.ChangedFiles = d.Files
-		result.LinesAdded = d.Insertions
-		result.LinesRemoved = d.Deletions
+	// Skip when uncommitted is false: DiffShortstat re-derives the identical
+	// staged/unstaged/untracked classification HasUncommitted just computed
+	// (same index, same HEAD tree, same disk stat pass) purely to report a
+	// stat that's necessarily {0,0,0} for a clean worktree. Benchmarked at
+	// ~1.7-2x the allocations and ~20-67% more wall time versus HasUncommitted
+	// alone (BenchmarkScanWorktree_DuplicateClassificationWork,
+	// gogit_vcs_reader_shellout_bench_test.go) — pure waste on the common case
+	// of an idle, already-clean worktree in a large fleet.
+	if uncommitted {
+		if d, dErr := s.reader.DiffShortstat(wt.Path); dErr == nil {
+			result.ChangedFiles = d.Files
+			result.LinesAdded = d.Insertions
+			result.LinesRemoved = d.Deletions
+		}
 	}
 
 	result.Status = ScanResultStatusOK
@@ -888,11 +1025,19 @@ func (s *Scanner) AddRepo(repoPath string) {
 	s.EnqueueRepo(repoPath)
 }
 
+// IsTracked reports whether repoPath is currently in the scan set, regardless
+// of which source (pinned, watch-dir, session auto-spider) added it.
+func (s *Scanner) IsTracked(repoPath string) bool {
+	_, tracked := s.repoSet.Load(repoPath)
+	return tracked
+}
+
 // RemoveRepo removes a repo from the scan set, purges its results, and
 // unregisters its fsnotify watch.
 func (s *Scanner) RemoveRepo(repoPath string) {
 	s.repoSet.Delete(repoPath)
 	s.unwatchRepo(repoPath)
+	s.forgetRepoWorktrees(repoPath)
 	// Purge cached results for this repo.
 	s.resultStore.Range(func(k, _ any) bool {
 		key, _ := k.(string)
@@ -901,6 +1046,30 @@ func (s *Scanner) RemoveRepo(repoPath string) {
 		}
 		return true
 	})
+	// repoWorktrees has no other eviction path for a repo that's fully
+	// removed (not just missing one worktree) — without this, every repo
+	// ever tracked leaves an empty *sync.Map behind for the process lifetime.
+	s.repoWorktrees.Delete(repoPath)
+}
+
+// forgetRepoWorktrees drops the reader's cached state, including reachable
+// sets, for repoPath and its worktrees. Must run before repoWorktrees is cleared.
+func (s *Scanner) forgetRepoWorktrees(repoPath string) {
+	r, ok := s.reader.(worktreeInvalidator)
+	if !ok {
+		return
+	}
+	r.ForgetWorktree(repoPath)
+	if v, ok := s.repoWorktrees.Load(repoPath); ok {
+		if set, ok := v.(*sync.Map); ok {
+			set.Range(func(k, _ any) bool {
+				if wt, _ := k.(string); wt != "" {
+					r.ForgetWorktree(wt)
+				}
+				return true
+			})
+		}
+	}
 }
 
 // pruneRepoInterval is a var (not a const) so tests can shrink it instead of
@@ -1071,11 +1240,70 @@ func (s *Scanner) getOrCreateCache(worktreePath string) *worktreeCache {
 	return c
 }
 
-// InvalidateCache invalidates the cache for a given worktree path.
+// worktreeInvalidator is implemented by VCSReaders that keep their own
+// TTL-cached results (GoGitVCSReader), so a change event can evict them.
+type worktreeInvalidator interface {
+	InvalidateWorktree(worktreePath string)
+	ForgetWorktree(worktreePath string)
+}
+
+// InvalidateCache invalidates the scan cache and the reader's cached git
+// results for a given worktree path, so the rescan it triggers re-populates
+// them from the changed repo rather than serving a pre-change value.
 func (s *Scanner) InvalidateCache(worktreePath string) {
 	if v, ok := s.cacheStore.Load(worktreePath); ok {
 		if c, ok := v.(*worktreeCache); ok {
 			c.Invalidate()
+		}
+	}
+	if r, ok := s.reader.(worktreeInvalidator); ok {
+		r.InvalidateWorktree(worktreePath)
+	}
+}
+
+// invalidateRepo is InvalidateCache for repoPath and every linked worktree of
+// it: a write under the repo's .git dir (refs, packed objects) can change any
+// of them.
+func (s *Scanner) invalidateRepo(repoPath string) {
+	s.InvalidateCache(repoPath)
+	if v, ok := s.repoWorktrees.Load(repoPath); ok {
+		if set, ok := v.(*sync.Map); ok {
+			set.Range(func(k, _ any) bool {
+				if wt, _ := k.(string); wt != "" {
+					s.InvalidateCache(wt)
+				}
+				return true
+			})
+		}
+	}
+}
+
+// indexRepoWorktree records that worktreePath belongs to repoPath in
+// repoWorktrees, so enqueueRepo can look up exactly this repo's worktrees
+// instead of scanning every cache entry system-wide. Safe to call
+// redundantly — LoadOrStore/Store are idempotent for an already-indexed pair.
+func (s *Scanner) indexRepoWorktree(repoPath, worktreePath string) {
+	if repoPath == "" || worktreePath == "" {
+		return
+	}
+	v, _ := s.repoWorktrees.LoadOrStore(repoPath, &sync.Map{})
+	set, _ := v.(*sync.Map)
+	if set != nil {
+		set.Store(worktreePath, struct{}{})
+	}
+}
+
+// deindexRepoWorktree removes worktreePath from repoPath's entry in
+// repoWorktrees. Called alongside cacheStore's own eviction (see
+// persistCacheToDisk) so the index doesn't grow unbounded across worktrees
+// that no longer exist on disk.
+func (s *Scanner) deindexRepoWorktree(repoPath, worktreePath string) {
+	if repoPath == "" {
+		return
+	}
+	if v, ok := s.repoWorktrees.Load(repoPath); ok {
+		if set, ok := v.(*sync.Map); ok {
+			set.Delete(worktreePath)
 		}
 	}
 }

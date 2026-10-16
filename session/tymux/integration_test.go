@@ -14,6 +14,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // TestTymuxGRPCSession_LiveTymuxd_StartSendKeysCaptureClose is Task
@@ -44,7 +46,7 @@ func TestTymuxGRPCSession_LiveTymuxd_StartSendKeysCaptureClose(t *testing.T) {
 	assert.Greater(t, n, 0)
 
 	var content string
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		content, err = sess.CapturePaneContentRaw()
 		return err == nil && strings.Contains(content, marker)
 	}, 5*time.Second, 100*time.Millisecond, "expected the echoed marker in captured pane content; last content: %q", content)
@@ -128,7 +130,7 @@ func startLiveTymuxd(t *testing.T, bin, xdgStateHome, addr string) *liveTymuxd {
 	require.NoError(t, cmd.Start(), "failed to start tymuxd at %s", bin)
 
 	lt := &liveTymuxd{cmd: cmd, addr: addr}
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		conn, dialErr := net.DialTimeout("tcp", lt.addr, 200*time.Millisecond)
 		if dialErr != nil {
 			return false
@@ -197,7 +199,7 @@ func TestBackendTymux_DaemonRestart_RevivesWithFreshProcess_SurfacedDistinctly(t
 	_, err := sess.SendKeys("echo marker-$$\r")
 	require.NoError(t, err)
 	var before string
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		before, err = sess.CapturePaneContentRaw()
 		return err == nil && pidMarkerRe.MatchString(before)
 	}, 5*time.Second, 100*time.Millisecond, "expected the pre-restart marker; last content: %q", before)
@@ -222,7 +224,7 @@ func TestBackendTymux_DaemonRestart_RevivesWithFreshProcess_SurfacedDistinctly(t
 	case <-time.After(6 * time.Second):
 	}
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		restarted, _ := concrete.BackendRestarted()
 		return restarted
 	}, 5*time.Second, 100*time.Millisecond, "BackendRestarted() must report true after the live daemon-restart drill")
@@ -230,7 +232,7 @@ func TestBackendTymux_DaemonRestart_RevivesWithFreshProcess_SurfacedDistinctly(t
 	_, err = sess.SendKeys("echo marker-$$\r")
 	require.NoError(t, err)
 	var after string
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		after, err = sess.CapturePaneContentRaw()
 		return err == nil && pidMarkerRe.MatchString(after) && !strings.Contains(after, "marker-"+pidBefore)
 	}, 8*time.Second, 100*time.Millisecond, "expected a fresh post-restart marker distinct from the pre-restart one; last content: %q", after)

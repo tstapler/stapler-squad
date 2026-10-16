@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/dtypes"
@@ -720,7 +721,7 @@ func TestClaudeController_IsIdle_should_returnFalse_When_BatchedToolCallSummaryD
 // a future regression at that exact line (e.g. reverting to `rs.SetStableSessionID(cc.sessionName)`)
 // would pass the entire existing suite.
 func TestClaudeController_Start_TagsEscapeAnalyticsWithStableID(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	spy := &escapeEventSpy{}
 	prev := analytics.GetGlobalEscapeWriter()
@@ -786,7 +787,7 @@ func TestClaudeController_Start_TagsEscapeAnalyticsWithStableID(t *testing.T) {
 // exact same code path (detection.ResolveDetectorForProgram resolving cc.instance.GetProgram()
 // against the live snapshot) with zero global state to leak into other tests.
 func TestClaudeController_Start_UsesPerProgramDetector_WhenRegistered(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	reader, writer, err := mockPTY()
 	if err != nil {
@@ -837,7 +838,7 @@ func TestClaudeController_Start_UsesPerProgramDetector_WhenRegistered(t *testing
 // patterns — so every session that isn't running a program with a registered
 // detector sees no behavior change from this story.
 func TestClaudeController_Start_FallsBackToDefaultDetector_WhenProgramUnregistered(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	reader, writer, err := mockPTY()
 	if err != nil {
@@ -1175,7 +1176,11 @@ func TestClaudeController_StatusChangeListener_SuppressedOnNoChange(t *testing.T
 		callCount <- struct{}{}
 	})
 
-	go cc.runStatusChangeLoop(ctx, make(chan struct{}))
+	loopDone := make(chan struct{})
+	go func() {
+		defer close(loopDone)
+		cc.runStatusChangeLoop(ctx, make(chan struct{}))
+	}()
 
 	// Send two signals with the same preview content (same status both times).
 	cc.statusCheckCh <- struct{}{}
@@ -1193,20 +1198,17 @@ func TestClaudeController_StatusChangeListener_SuppressedOnNoChange(t *testing.T
 	// Wait for the goroutine to consume the second signal from the channel (without sleeping a
 	// fixed duration). Once the channel is empty the goroutine has processed the signal and
 	// decided — correctly — not to call the listener again.
-	deadline := time.After(2 * time.Second)
-	for len(cc.statusCheckCh) > 0 {
-		select {
-		case <-deadline:
-			// Timed out waiting for channel to drain — fall through to the assertion below.
-			goto checkResult
-		default:
-			time.Sleep(1 * time.Millisecond)
-		}
+	wait.RequireEventually(t, func() bool { return len(cc.statusCheckCh) == 0 }, 2*time.Second, time.Millisecond,
+		"status loop never consumed the second signal")
+	// The loop is a single goroutine, so once it has exited after cancel() the
+	// dequeued second signal is guaranteed to have been fully processed.
+	cancel()
+	select {
+	case <-loopDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("status loop did not exit after cancel")
 	}
-	// Give the goroutine a brief window (10ms) to potentially call the listener after draining.
-	time.Sleep(10 * time.Millisecond)
 
-checkResult:
 	select {
 	case <-callCount:
 		t.Error("StatusChangeListener fired a second time for the same status")
@@ -1258,6 +1260,56 @@ func TestClaudeController_StatusChangeListener_NotCalledAfterStop(t *testing.T) 
 		t.Error("StatusChangeListener called after Stop()")
 	case <-time.After(200 * time.Millisecond):
 		// Expected: silence after stop.
+	}
+}
+
+// TestClaudeController_Stop_BlocksUntilRunStatusChangeLoopExits covers
+// backlog item 1cea70ed-3127-48db-8e68-f02eac685510 AC1: Stop() must not
+// return until runStatusChangeLoop has actually exited, not just until ctx
+// is cancelled — the flake this closes came from Stop() returning while the
+// loop was still unwinding into a later test's goleak snapshot.
+func TestClaudeController_Stop_BlocksUntilRunStatusChangeLoopExits(t *testing.T) {
+	t.Parallel()
+
+	reader, writer, err := mockPTY()
+	if err != nil {
+		t.Fatalf("failed to create mock PTY: %v", err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+
+	inst := &mockInstance{title: "wg-join-test", ptyReader: reader}
+	cc, err := NewClaudeController(inst)
+	if err != nil {
+		t.Fatalf("NewClaudeController() failed: %v", err)
+	}
+	if err := cc.Start(context.Background()); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+	// Safety net: if a t.Fatal below exits before the explicit Stop() call runs,
+	// this still tears the controller down so its background goroutines don't
+	// leak into a later test's goleak snapshot — the same bug class this test
+	// exists to catch. A second Stop() call after the explicit one is a
+	// harmless no-op (cc.lifecycle.cancel is already nil by then).
+	defer cc.Stop()
+
+	var statusLoopDone chan struct{}
+	cc.lifecycle.Read(func(l controllerLifecycle) {
+		statusLoopDone = l.statusLoopDone
+	})
+	if statusLoopDone == nil {
+		t.Fatal("statusLoopDone was not set by Start()")
+	}
+
+	if err := cc.Stop(); err != nil {
+		t.Fatalf("Stop() failed: %v", err)
+	}
+
+	select {
+	case <-statusLoopDone:
+		// Expected: runStatusChangeLoop had already closed it by the time Stop() returned.
+	default:
+		t.Fatal("runStatusChangeLoop had not closed statusLoopDone by the time Stop() returned")
 	}
 }
 

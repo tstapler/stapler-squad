@@ -71,6 +71,10 @@ func (s *BacklogService) AttachSessionToItem(
 	// shared main checkout, used by countless other things), so a re-review
 	// computed its diff against whatever unrelated commits had landed there
 	// between review rounds — a wrong verdict, not a stuck one.
+	// attachedBranchName feeds the ItemSession's branch_name (step 5 below) — see
+	// ItemSession.branch_name's schema comment for why this needs to be captured
+	// at attach time rather than read back later from the Session/Worktree rows.
+	var attachedBranchName string
 	if instances, loadErr := s.storage.LoadInstances(); loadErr == nil {
 		for _, inst := range instances {
 			if inst.UUID != req.Msg.SessionUuid {
@@ -82,6 +86,7 @@ func (s *BacklogService) AttachSessionToItem(
 					fmt.Errorf("session %q's working directory is the item's shared repo checkout (%q) — attach requires a dedicated worktree or directory so review diffs, reopen, and ship stay scoped to this item's own work",
 						req.Msg.SessionUuid, item.RepoPath))
 			}
+			attachedBranchName = inst.Snapshot().Branch
 			break
 		}
 	}
@@ -104,6 +109,7 @@ func (s *BacklogService) AttachSessionToItem(
 		ItemID:         item.ID,
 		SessionUUID:    req.Msg.SessionUuid,
 		SessionRole:    session.SessionRoleWork,
+		BranchName:     attachedBranchName,
 		AcSnapshot:     acSnapshot,
 		ClaimantHostID: s.claimantHostID(),
 	})
@@ -148,7 +154,7 @@ func (s *BacklogService) AttachSessionToItem(
 	}
 
 	// 7. Transition item to in_progress (only if the state machine permits it).
-	if s.engine.CanTransition(session.BacklogStatus(item.Status), session.BacklogStatusInProgress) {
+	if s.engine.CanTransition(session.BacklogStatus(item.Status), session.BacklogStatusInProgress, session.BuildStageConfigSnapshotFallback(item)) {
 		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem); transErr != nil {
 			log.ErrorLog().Printf("[AttachSessionToItem] failed to transition item to in_progress: %v", transErr)
 			// Same shape as SpawnSessionFromItem's fresh-spawn path: a real
@@ -277,11 +283,24 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 	// needed since a manual import has no source row to scope by.
 	if existing, lookupErr := s.storage.GetBacklogItemByExternalURL(ctx, issue.URL); lookupErr == nil {
 		return connect.NewResponse(&sessionv1.ImportGitHubIssueResponse{
-			Item:           backlogItemToProto(existing, s.buildCostLookup()),
+			Item:           backlogItemToProto(existing, s.engine, s.buildCostLookup()),
 			AlreadyExisted: true,
 		}), nil
 	} else if !errors.Is(lookupErr, session.ErrNotFound) {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to check for existing import: %w", lookupErr))
+	}
+
+	gate, claimErr := s.gateOnClaim(ctx, preCreateClaimCheck{
+		ExternalURL: issue.URL,
+		Override:    req.Msg.Override,
+		Reason:      req.Msg.OverrideReason,
+		LogPrefix:   "import_github_issue",
+	})
+	if claimErr != nil {
+		return nil, claimErr
+	}
+	if gate.Claimed != nil {
+		return connect.NewResponse(&sessionv1.ImportGitHubIssueResponse{AlreadyClaimedElsewhere: gate.Claimed}), nil
 	}
 
 	repoPath := req.Msg.RepoPath
@@ -311,7 +330,7 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 	triageTriggered := s.MaybeTriggerTriage(ctx, created.ID, req.Msg.SkipPlanning, created.RepoPath)
 
 	return connect.NewResponse(&sessionv1.ImportGitHubIssueResponse{
-		Item:            backlogItemToProto(created, s.buildCostLookup()),
+		Item:            backlogItemToProto(created, s.engine, s.buildCostLookup()),
 		TriageTriggered: triageTriggered,
 	}), nil
 }

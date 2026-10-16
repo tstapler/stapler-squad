@@ -53,6 +53,7 @@ func TestReviveOutcomeForColdRestore(t *testing.T) {
 // set LastReviveOutcome to ReviveOutcomeFreshLostHistory and fire
 // EventStarted with ReasonColdRestoreLostHistory.
 func TestColdRestore_SignalsFreshLostHistory_When_RecoveryFailsButEverHadHistory(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
@@ -127,6 +128,7 @@ func TestColdRestore_SignalsFreshLostHistory_When_RecoveryFailsButEverHadHistory
 // start fresh with ReviveOutcomeFreshExpected and no ReasonColdRestoreLostHistory
 // signal — a legitimate first-time-equivalent fresh start is not lost history.
 func TestColdRestore_NoSignal_When_GenuinelyNeverHadHistory(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
@@ -172,6 +174,7 @@ func TestColdRestore_NoSignal_When_GenuinelyNeverHadHistory(t *testing.T) {
 // restart's outcome" requirement. LastReviveOutcome must now be set in every
 // branch (ColdRestore, HotRestore, firstTimeSetup) of every start cycle.
 func TestColdRestore_LastReviveOutcomeClears_When_LaterCycleIsHotRestore(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}

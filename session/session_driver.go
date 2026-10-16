@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -39,6 +40,23 @@ var spinnerTimeRe = regexp.MustCompile(`\(\d+[hms]`)
 // a work session, e.g. "✻ Perambulated for 1h 5m", "✽ Roosted for 9m", or
 // "* Moonwalked for 30s". Matches any leading symbol variant.
 var completionVerbRe = regexp.MustCompile(`[✻✽\*] \w+ed for \d+`)
+
+// driverTiming is the pair of driver timings tests need to shrink.
+type driverTiming struct {
+	pollInterval, readyTimeout time.Duration
+}
+
+// testDriverTiming overrides the production timings; nil means defaults. It is
+// an atomic pointer read once per driver start so leaked goroutines from other
+// tests cannot race a test that swaps it.
+var testDriverTiming atomic.Pointer[driverTiming]
+
+func currentDriverTiming() driverTiming {
+	if t := testDriverTiming.Load(); t != nil {
+		return *t
+	}
+	return driverTiming{pollInterval: driverPollInterval, readyTimeout: driverReadyTimeout}
+}
 
 const (
 	driverPollInterval  = 2 * time.Second
@@ -303,10 +321,11 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		}
 	}()
 
-	readyDeadline := time.Now().Add(driverReadyTimeout)
+	timing := currentDriverTiming()
+	readyDeadline := time.Now().Add(timing.readyTimeout)
 	totalDeadline := time.Now().Add(driverTotalTimeout)
 
-	ticker := time.NewTicker(driverPollInterval)
+	ticker := time.NewTicker(timing.pollInterval)
 	defer ticker.Stop()
 
 	// Once a PR URL is found in terminal output we stop scanning.
@@ -324,15 +343,27 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	var initialPromptSentAt time.Time
 	if sentInitial {
 		initialPromptSentAt = time.Now()
+	} else if persisted := inst.GetInitialPromptSentAt(); !persisted.IsZero() {
+		// Persisted record of an actual send in a previous service run --
+		// authoritative, checked before the output/JSONL heuristics below
+		// (which only exist for sessions that predate this field, or for the
+		// rare case a send happened but the persist call itself failed).
+		sentInitial = true
+		initialPromptSentAt = persisted
 	} else {
 		// Check if the prompt was already delivered in a previous service run.
 		// Use live terminal output first (no disk latency), then fall back to JSONL file.
+		// Persist the result via SetInitialPromptSentAt either way, so this
+		// session (predating the persisted field, or hit by an earlier failed
+		// persist call) doesn't have to re-run these heuristics again next restart.
 		if startOutput, err := inst.PreviewContext(ctx); err == nil && outputShowsConversationStarted(startOutput) {
 			sentInitial = true
 			initialPromptSentAt = time.Now()
+			inst.SetInitialPromptSentAt(initialPromptSentAt)
 		} else if _, err := FindConversationFilePath(ctx, inst.GetStableID()); err == nil {
 			sentInitial = true
 			initialPromptSentAt = time.Now()
+			inst.SetInitialPromptSentAt(initialPromptSentAt)
 		}
 	}
 	var sendAttempts int
@@ -350,7 +381,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	// and approval-prompt menus) — hoisted once so there is a single definition
 	// shared by both answerDialogOnce calls instead of two independent literal
 	// closures.
-	sendAnswerKey := func() error { return inst.SendKeys("1\n") }
+	sendAnswerKey := func() error { return sendAnswerKeyUnderLease(inst) }
 
 	for {
 		st, detectedSt, exit := driverTickGate(inst, stop, ticker, totalDeadline)
@@ -411,7 +442,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		// Inactivity detection: only after initial prompt sent.
 		// Use GetEffectiveStatus() (acquires stateMutex.RLock) to avoid data race on Status field.
 		if st == Ready {
-			cont, ret := handleInactivityTick(inst, allowedPath, policy, stop, initialPromptSentAt, &nudgeSentAt)
+			cont, ret := handleInactivityTick(ctx, inst, allowedPath, policy, stop, initialPromptSentAt, &nudgeSentAt)
 			if ret {
 				return
 			}
@@ -486,6 +517,16 @@ func handleRetryPendingTick(inst *Instance, allowedPath string, policy RetryPoli
 	}
 	if !elapsed {
 		return true, false
+	}
+	// A retry scheduled before the archive landed must be dropped, not fired
+	// (ADR-001). Placed after the pending/elapsed gates so a non-pending
+	// session pays no snapshot read on every tick; the only observable
+	// difference is that the pending NextRetryAt is cleared at its deadline
+	// rather than the moment the archive lands — no restart happens between.
+	if inst.IsArchived() {
+		inst.clearNextRetryAt()
+		log.Info("SessionDriver: dropping scheduled retry, session is archived", "session", inst.Title)
+		return false, true
 	}
 	reason := inst.lastRetryFailureReason()
 	prompt := buildRetryContinuationPrompt(inst, reason)
@@ -607,6 +648,17 @@ func handleStartupDialogTick(inst *Instance, tailed string, startupLatch *dialog
 // already started underneath us, sending the prompt, and read-back
 // verification. The caller always `continue`s the loop after calling this.
 func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt string, output string, detectedSt detection.DetectedStatus, readyDeadline time.Time, sentInitial *bool, initialPromptSentAt *time.Time, sendAttempts *int) {
+	// markSent records every "we're done trying to send" transition below
+	// through the same path so it's always durably persisted (via
+	// Instance.SetInitialPromptSentAt's injected repo) -- not just reflected
+	// in this tick's local pointers, which reset on the next service restart.
+	markSent := func() {
+		now := time.Now()
+		*sentInitial = true
+		*initialPromptSentAt = now
+		inst.SetInitialPromptSentAt(now)
+	}
+
 	// Wait for StatusIdle specifically: the `^>\s*▌?\s*$` pattern confirms
 	// Claude Code's readline is showing the input prompt and is listening.
 	//
@@ -638,8 +690,7 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 		log.Info("SessionDriver: terminal output shows conversation already active, skipping injection",
 			"session", inst.Title,
 		)
-		*sentInitial = true
-		*initialPromptSentAt = time.Now()
+		markSent()
 		return
 	}
 
@@ -647,8 +698,15 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 		log.Info("SessionDriver: conversation file exists, skipping initial prompt injection",
 			"session", inst.Title,
 		)
-		*sentInitial = true
-		*initialPromptSentAt = time.Now()
+		markSent()
+		return
+	}
+
+	// The lease is taken BEFORE the attempt counter: a busy lease must not burn
+	// one of the three attempts after which the prompt is dropped for good.
+	lease, leaseOK := inst.TryTerminalWriteLease(LeaseWriterDriver)
+	if !leaseOK {
+		log.Debug("SessionDriver: write lease busy, deferring initial prompt", "session", inst.Title)
 		return
 	}
 
@@ -672,7 +730,15 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 	// that the keystrokes were actually received (read-back confirmation).
 	contentBefore, _ := inst.PreviewContext(ctx)
 
-	if err := inst.SendKeys(initialPrompt + EnterKeySequence); err != nil {
+	if err := submitInitialPrompt(ctx, inst, lease, initialPrompt); err != nil {
+		if errors.Is(err, ErrNoLease) || errors.Is(err, ErrLeaseMismatch) {
+			// A programming error (the lease was acquired just above), not a
+			// failed delivery: it must neither count toward the attempt limit
+			// nor drop the prompt.
+			*sendAttempts--
+			log.Error("SessionDriver: lease API refused the initial prompt write", "session", inst.Title, "err", err)
+			return
+		}
 		log.Warn("SessionDriver: failed to send initial prompt",
 			"session", inst.Title,
 			"claudeAtPrompt", claudeAtPrompt,
@@ -684,8 +750,7 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 			log.Error("SessionDriver: giving up on initial prompt after 3 failed attempts",
 				"session", inst.Title,
 			)
-			*sentInitial = true
-			*initialPromptSentAt = time.Now()
+			markSent()
 		}
 		// sentInitial stays false → retry next tick
 		return
@@ -704,39 +769,45 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 	// cannot reliably verify (Claude may not be at a prompt).
 	if !claudeAtPrompt || *sendAttempts >= 3 {
 		// Timeout-triggered send or max retries: accept without verification.
-		*sentInitial = true
-		*initialPromptSentAt = time.Now()
+		markSent()
 		return
 	}
 
-	// Wait for PTY echo + pane-capture latency before reading back.
-	time.Sleep(500 * time.Millisecond)
-	contentAfter, verifyErr := inst.PreviewContext(ctx)
-	if verifyErr == nil && contentBefore != "" && contentAfter == contentBefore {
-		// Terminal content identical to before the send — the
-		// keystrokes were likely swallowed before readline consumed
-		// them.  Retry on the next tick.
-		log.Warn("SessionDriver: terminal content unchanged after send — keystrokes may have been swallowed, retrying",
-			"session", inst.Title,
-			"attempt", *sendAttempts,
-		)
-		// sentInitial stays false
-		return
+	// Wait for PTY echo + pane-capture latency before reading back. Adaptive
+	// (poll for an actual pane change, up to 1.5s) rather than a fixed sleep:
+	// a fixed 500ms sleep is a race — a slower-than-usual capture-pane round
+	// trip under load makes a genuinely successful send look "swallowed,"
+	// which resent the identical prompt on the next tick (the user-visible
+	// "same message delivered repeatedly" bug this replaces the sleep to fix).
+	// Only fall back to the exact-content comparison (the real swallow case)
+	// if the pane never reported any change at all within the wait window.
+	if !waitForPaneUpdate(ctx, inst, DefaultPaneSettlePollInterval, 1500*time.Millisecond) {
+		contentAfter, verifyErr := inst.PreviewContext(ctx)
+		if verifyErr == nil && contentBefore != "" && contentAfter == contentBefore {
+			// Terminal content identical to before the send — the
+			// keystrokes were likely swallowed before readline consumed
+			// them.  Retry on the next tick.
+			log.Warn("SessionDriver: terminal content unchanged after send — keystrokes may have been swallowed, retrying",
+				"session", inst.Title,
+				"attempt", *sendAttempts,
+			)
+			// sentInitial stays false
+			return
+		}
 	}
 	// Content changed (or verification read failed) — treat as success.
 	log.Info("SessionDriver: read-back confirmed initial prompt received",
 		"session", inst.Title,
 		"attempt", *sendAttempts,
 	)
-	*sentInitial = true
-	*initialPromptSentAt = time.Now()
+	markSent()
 }
 
 // handleInactivityTick checks for driver inactivity once the initial prompt
 // has been sent, sending a backlog-work nudge or escalating to
 // handleDriverFailure as needed. shouldContinue and shouldReturn tell the
 // caller which loop control-flow to apply; at most one is ever true.
-func handleInactivityTick(inst *Instance, allowedPath string, policy RetryPolicy, stop <-chan struct{}, initialPromptSentAt time.Time, nudgeSentAt *time.Time) (shouldContinue, shouldReturn bool) {
+func handleInactivityTick(ctx context.Context, inst *Instance, allowedPath string, policy RetryPolicy, stop <-chan struct{}, initialPromptSentAt time.Time, nudgeSentAt *time.Time) (shouldContinue, shouldReturn bool) {
 	last := inst.LastMeaningfulOutputTime()
 	// Use the later of initialPromptSentAt or LastMeaningfulOutput as the activity
 	// reference. After a service restart, LastMeaningfulOutput may be stale (loaded
@@ -757,7 +828,7 @@ func handleInactivityTick(inst *Instance, allowedPath string, policy RetryPolicy
 	// This preserves conversational context when Claude finishes but forgets to
 	// call /backlog/review or report_progress.
 	if inst.HasTag(TagBacklogWork) && nudgeSentAt.IsZero() && idle > driverBacklogNudgeDelay {
-		*nudgeSentAt = attemptBacklogNudge(inst, idle)
+		*nudgeSentAt = attemptBacklogNudge(ctx, inst, idle)
 		return true, false
 	}
 
@@ -827,6 +898,24 @@ func scanAndLinkPRURL(inst *Instance, sentInitial bool, prURLLinked bool, previe
 	return true
 }
 
+// submitInitialPrompt is a variable only so a test can force a lease-API error
+// out of the otherwise unreachable ErrNoLease/ErrLeaseMismatch branch.
+var submitInitialPrompt = func(ctx context.Context, inst *Instance, lease *HeldLease, prompt string) error {
+	return SubmitDriverContent(ctx, inst, lease, prompt, DefaultPaneSettlePollInterval, DefaultPaneSettleMaxWait)
+}
+
+// sendAnswerKeyUnderLease types the affirmative key for a dialog. It is the
+// chain's acquirer; a busy lease returns ErrLeaseBusy, which answerDialogOnce
+// does not count as an attempt.
+func sendAnswerKeyUnderLease(inst *Instance) error {
+	lease, ok := inst.TryTerminalWriteLease(LeaseWriterDriver)
+	if !ok {
+		return ErrLeaseBusy
+	}
+	defer lease.Release()
+	return inst.SendKeys("1\n")
+}
+
 // attemptBacklogNudge sends a backlog work session the "you appear to have paused"
 // task-reminder nudge and returns the value the caller should record as nudgeSentAt.
 //
@@ -841,11 +930,18 @@ func scanAndLinkPRURL(inst *Instance, sentInitial bool, prURLLinked bool, previe
 // driverBacklogNudgeGrace of continued silence it logs "session stuck" and calls
 // handleDriverFailure, which restarts the session once and marks it for human attention
 // on a second failure — the give-up signal this nudge path previously lacked.
-func attemptBacklogNudge(inst *Instance, idle time.Duration) time.Time {
+func attemptBacklogNudge(ctx context.Context, inst *Instance, idle time.Duration) time.Time {
 	nudge := "You appear to have paused. Run `/backlog/status` to see remaining " +
 		"acceptance criteria. Mark each complete criterion with `/backlog/done-N`, " +
 		"then submit with `/backlog/review` once all are done."
-	if sendErr := inst.SendKeys(nudge + EnterKeySequence); sendErr != nil {
+	lease, ok := inst.TryTerminalWriteLease(LeaseWriterNudge)
+	if !ok {
+		// Another writer holds the pane: skip this tick and nudge on the next
+		// (a zero time leaves the caller's nudgeSentAt unset).
+		log.Debug("SessionDriver: write lease busy, skipping backlog nudge", "session", inst.Title)
+		return time.Time{}
+	}
+	if sendErr := SubmitDriverContent(ctx, inst, lease, nudge, DefaultPaneSettlePollInterval, DefaultPaneSettleMaxWait); sendErr != nil {
 		log.Warn("SessionDriver: failed to send backlog nudge, will not retry — falling through to inactivity timeout",
 			"session", inst.Title, "err", sendErr)
 	} else {
@@ -874,6 +970,17 @@ func attemptBacklogNudge(inst *Instance, idle time.Duration) time.Time {
 // The caller must apply the returned signal immediately (continue/return),
 // mirroring handleInactivityTick's existing pattern.
 func handleDriverFailure(inst *Instance, allowedPath string, policy RetryPolicy, reason string, stop <-chan struct{}) (shouldContinue, shouldReturn bool) {
+	// An archived session is deliberately retired — archiveItemWorkSessions
+	// kills its pane without stopping this driver, so the kill arrives here
+	// looking like a crash. Never answer that with a restart (ADR-001).
+	// Returns "this goroutine is done" rather than falling through to
+	// markSessionPermanentlyFailed: writing a failure status and firing a
+	// notification for a session the system already retired is noise.
+	if inst.IsArchived() {
+		log.Info("SessionDriver: session is archived; not retrying", "session", inst.Title, "reason", reason)
+		return false, true
+	}
+
 	now := time.Now()
 	inst.mu.RLock()
 	rs := inst.RetryState
@@ -957,8 +1064,8 @@ func markSessionPermanentlyFailed(inst *Instance, reason string) {
 		n.Notify(inst.UUID,
 			"Session gave up after repeated failures",
 			fmt.Sprintf("%s failed to recover after %d attempt(s) (last reason: %s) and will not be retried automatically. Use \"Retry now\" to try again.", inst.Title, attempt, reason),
-			7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+			7,          // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+			true, true, // urgent, important — automatic recovery gave up; a genuine dead end
 		)
 	}
 }
@@ -1020,7 +1127,7 @@ func markSessionNeedsAttention(inst *Instance, reason string) {
 // conversation log and produces a brief prompt summarizing the last assistant
 // turn. Falls back to a generic prompt if the log is unavailable.
 func buildContinuationPrompt(inst *Instance) string {
-	histPath := inst.HistoryFilePath
+	histPath := inst.Snapshot().HistoryFilePath
 	if histPath == "" {
 		return "Your previous session exited unexpectedly. Please continue from where you left off."
 	}
@@ -1111,6 +1218,12 @@ func answerDialogOnce(state *dialogAnswerState, output string, send func() error
 	}
 
 	if err := send(); err != nil {
+		if errors.Is(err, ErrLeaseBusy) {
+			// Another writer holds the pane: not a failed attempt, or three
+			// busy ticks would abandon the dialog for good (sticky gave-up).
+			log.Debug("SessionDriver: write lease busy, will retry "+logContext, "session", sessionTitle)
+			return state.status
+		}
 		state.attempts++
 		log.Warn("SessionDriver: failed to answer "+logContext,
 			"session", sessionTitle,

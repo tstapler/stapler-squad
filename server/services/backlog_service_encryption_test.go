@@ -49,7 +49,7 @@ func (tsr *testStorageRecorder) UpdateItemSource(ctx context.Context, id string,
 func TestCreateItemSourceEncryptsToken(t *testing.T) {
 	// Isolate config so GetOrCreateEncryptionKey's SaveConfig call does not write a
 	// zero-value DefaultProgram to the shared test-mode config dir.
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 
 	// Create a test config with encryption key
 	cfg := &config.Config{}
@@ -121,7 +121,7 @@ func TestCreateItemSourceEncryptsToken(t *testing.T) {
 
 // TestUpdateItemSourceEncryptsToken verifies tokens are encrypted in UpdateItemSource
 func TestUpdateItemSourceEncryptsToken(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 
 	cfg := &config.Config{}
 	key, err := cfg.GetOrCreateEncryptionKey()
@@ -232,7 +232,7 @@ func TestCreateItemSourceWithoutConfigDoesNotEncrypt(t *testing.T) {
 // TestCreateItemSourceEncryptionRoundTrip verifies the full store-and-retrieve cycle:
 // a token stored via CreateItemSource can be decrypted back to the original plaintext.
 func TestCreateItemSourceEncryptionRoundTrip(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 
 	cfg := &config.Config{}
 	key, err := cfg.GetOrCreateEncryptionKey()

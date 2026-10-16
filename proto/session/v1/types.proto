@@ -13,11 +13,20 @@ message Session {
   // Human-readable session title.
   string title = 2;
 
-  // Path to workspace repository root.
-  string path = 3;
+  // Deprecated: use existing_dir to open files, or active_dir to compare
+  // sessions. Despite the name this is NOT the repository root — it carries
+  // Workspace().ExistingDir, which falls back to the repo root when a worktree
+  // is gone from disk.
+  string path = 3 [deprecated = true];
 
-  // Directory within repository to start in.
-  string working_dir = 4;
+  // Deprecated: use active_dir, which this now duplicates exactly.
+  //
+  // Despite the name it is an absolute directory, not the "directory within the
+  // repository to start in" — that is the relative subdirectory
+  // UpdateSessionRequest.working_dir writes into Instance.WorkingDir. Reading
+  // this field and saving it back therefore corrupts the value; see the
+  // read/write asymmetry noted on UpdateSessionRequest.
+  string working_dir = 4 [deprecated = true];
 
   // Git branch name for this session.
   string branch = 5;
@@ -91,6 +100,42 @@ message Session {
 
   // Repository name.
   string github_repo = 28;
+
+  // GitHub Enterprise host owning github_owner/github_repo, e.g.
+  // "github.netflix.net". Empty means github.com.
+  string github_host = 90;
+
+  // Where this session's code lives. Four concepts, because the domain has
+  // four — picking the wrong one has already shipped a bug.
+  //
+  //   comparing two sessions' locations -> active_dir
+  //   reading or writing files          -> existing_dir
+  //   "same repository?"                -> repo_root, or workspace_key
+
+  // The path this session was created against. For a session created from a
+  // pre-existing worktree this is that worktree, not the main checkout.
+  string repo_root = 91;
+
+  // The git worktree created for this session, empty when it works directly in
+  // repo_root.
+  //
+  // Differs from git_worktree.worktree_path, which is only populated once the
+  // session has started — this field is set for stopped sessions too, so it is
+  // the one to use when a session may not be running.
+  string worktree_dir = 92;
+
+  // Where this session works: worktree_dir if it has one, else repo_root.
+  // Stable whether or not the directory currently exists, so this is the
+  // correct key for comparing, correlating, or identifying sessions — and the
+  // right default when unsure.
+  string active_dir = 93;
+
+  // active_dir when that directory exists on disk, else repo_root. Use it only
+  // to open files.
+  //
+  // Lossy by construction: two sessions whose worktrees were both cleaned up
+  // share an existing_dir without being in the same place. Never compare it.
+  string existing_dir = 94;
 
   // Original URL or reference used to create this session.
   // Could be a PR URL, repository URL, or git URL.
@@ -314,6 +359,27 @@ message Session {
   // server restart legitimately resets it back to Unknown until the extension's
   // periodic re-ping (Story 4.2.3) re-arms it.
   PiExtensionHealth pi_extension_health = 89;
+
+  // Maps a tag value in `tags` to the rule/mechanism that applied it: a
+  // TaggingRule.ID for rule-derived tags, or the sentinel "llm" for
+  // LLM-classifier-derived tags (session-classifier-pipeline Epic 6.2).
+  // Absent entries mean the tag was added manually. Mirrors
+  // session.Instance's RuleTagProvenance field.
+  map<string, string> rule_tag_provenance = 95;
+
+  // Server-owned pin flag: pinned sessions render in the Pinned section.
+  bool pinned = 96;
+
+  // Derived green/amber/red signal that the agent's reasoning is degrading
+  // (repeated identical tool calls, apology/self-correction phrasing). Computed
+  // from the Claude Code JSONL transcript only, so it is UNSPECIFIED for
+  // Aider/Gemini/OpenCode sessions and until enough tool calls have been seen.
+  // Not persisted; recomputed on every transcript parse.
+  ContextHealth context_health = 97;
+
+  // Human-readable explanation for context_health. Empty when context_health
+  // is UNSPECIFIED or GREEN.
+  string context_health_reason = 98;
 }
 
 // PiExtensionHealth mirrors server/services.PiExtensionHealth: whether a pi
@@ -489,6 +555,16 @@ enum InstanceType {
   INSTANCE_TYPE_MANAGED = 1;
   // Session discovered externally (e.g., via ssq-mux) with limited interaction.
   INSTANCE_TYPE_EXTERNAL = 2;
+}
+
+// ContextHealth is the per-session degradation signal derived from the
+// transcript. UNSPECIFIED means "not enough data / not a Claude Code session",
+// never "healthy".
+enum ContextHealth {
+  CONTEXT_HEALTH_UNSPECIFIED = 0;
+  CONTEXT_HEALTH_GREEN = 1;
+  CONTEXT_HEALTH_AMBER = 2;
+  CONTEXT_HEALTH_RED = 3;
 }
 
 // DetectedStatus represents the fine-grained activity state detected from PTY output analysis.
@@ -1325,6 +1401,28 @@ message ApprovalRuleProto {
   int32 min_session_idle_minutes = 30;
 }
 
+// TaggingRuleProto represents a single session-tagging rule. Mirrors
+// ApprovalRuleProto's field shape for the sibling auto-tagging rule system.
+message TaggingRuleProto {
+  string id = 1;
+  string name = 2;
+  string name_pattern = 3;
+  string branch_pattern = 4;
+  string path_pattern = 5;
+  string program_pattern = 6;
+  repeated string required_tags = 7;
+  string output_tag = 8;
+  int32 priority = 9;
+  bool enabled = 10;
+  string source = 11;
+  google.protobuf.Timestamp created_at = 12;
+  // fire_count_7d is the number of times this rule matched in the last 7
+  // days; populated server-side by ListTaggingRules from
+  // AnalyticsStore.GetTaggingRuleFireCounts (ux.md Surface 6's "Fires(7d)"
+  // column).
+  int32 fire_count_7d = 13;
+}
+
 // AnalyticsSummaryProto aggregates classification decisions over a time window.
 message AnalyticsSummaryProto {
   int32 total_decisions = 1;
@@ -1707,4 +1805,37 @@ message UserPR {
   google.protobuf.Timestamp merged_at           = 15;
   repeated string           session_ids          = 16; // local sessions checked out on this branch
   string                    local_worktree_path  = 17; // local worktree path, if any
+  repeated FailingCheck     failing_checks       = 18; // capped at 10
+  optional int32            unresolved_thread_count = 19; // unset = unknown (distinct from 0)
+  optional bool             has_merge_conflict   = 20; // unset = GitHub mergeable UNKNOWN
+  bool                      details_loaded       = 21;
+  repeated LinkedSession    linked_sessions      = 22;
+  string                    host                 = 23; // never empty; "github.com" for github.com
+  string                    account_login        = 24; // login name, never a token
+  bool                      unresolved_threads_truncated = 25; // true when count was capped at 50
+}
+
+// FailingCheck is a failed CheckRun or legacy StatusContext on a PR head.
+message FailingCheck {
+  string name       = 1;
+  string url        = 2;
+  string conclusion = 3;
+}
+
+enum LinkedSessionStatus {
+  LINKED_SESSION_STATUS_UNSPECIFIED = 0;
+  LINKED_SESSION_STATUS_RUNNING     = 1;
+  LINKED_SESSION_STATUS_PAUSED      = 2;
+  LINKED_SESSION_STATUS_STOPPED     = 3;
+}
+
+// LinkedSession is a local session linked to a PR.
+message LinkedSession {
+  string                    session_id     = 1;
+  LinkedSessionStatus       status         = 2;
+  google.protobuf.Timestamp last_active_at = 3;
+  // steer_ready is true only when the session is live, linked by title, runs
+  // a steerable program and is confirmed idle by the same gate the nudge uses.
+  // False includes "unknown": the UI then leads with "Open session".
+  bool                      steer_ready    = 4;
 }

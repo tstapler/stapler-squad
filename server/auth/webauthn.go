@@ -128,6 +128,12 @@ func (h *Handler) webauthnForHost(r *http.Request) (*webauthn.WebAuthn, error) {
 	if wa, ok := h.webauthn[hostname]; ok {
 		return wa, nil
 	}
+	return h.registerRPIDLocked(hostname)
+}
+
+// registerRPIDLocked adds hostname to h.webauthn/h.rpIDs/h.origins. Callers
+// must already hold h.mu.Lock().
+func (h *Handler) registerRPIDLocked(hostname string) (*webauthn.WebAuthn, error) {
 	// go-webauthn requires an exact origin match (no suffix/wildcard support --
 	// see IsOriginInHaystack in go-webauthn/protocol/client.go), so a hostname
 	// accepted as a new rpID also needs its own origin added here, or every
@@ -152,6 +158,24 @@ func (h *Handler) webauthnForHost(r *http.Request) (*webauthn.WebAuthn, error) {
 	h.origins = origins
 	log.Info("auth: dynamically registered new rpID", "rpID", hostname, "origin", newOrigin)
 	return wa, nil
+}
+
+// RegisterHostname proactively registers hostname as a trusted rpID, using
+// the same add-only logic webauthnForHost applies reactively at request
+// time. Callers MUST have already validated hostname (e.g. via
+// verifyHostnameOwnership) -- unlike webauthnForHost's request path,
+// RegisterHostname performs no DNS validation and is not rate-limited,
+// since it has no untrusted caller (only HostnameDetector calls this).
+func (h *Handler) RegisterHostname(hostname string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, rpID := range h.rpIDs {
+		if hostnameMatchesRPID(hostname, rpID) {
+			return nil // already registered
+		}
+	}
+	_, err := h.registerRPIDLocked(hostname)
+	return err
 }
 
 // hostnameMatchesRPID reports whether hostname is rpID itself or a subdomain

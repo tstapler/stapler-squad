@@ -37,6 +37,7 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     skipReviewGate: false,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     planApproved: false,
     acCriteria: [],
     linkedSessions: [],
@@ -63,6 +64,9 @@ function makeStuckItem(overrides: Partial<StuckBacklogItem> = {}): StuckBacklogI
   } as StuckBacklogItem;
 }
 
+// Stable identity: the page effect depends on it, like the real memoized hook.
+const mockListForeignClaims = jest.fn().mockResolvedValue([]);
+
 jest.mock("@/lib/hooks/useBacklogService", () => {
   const actual = jest.requireActual("@/lib/hooks/useBacklogService");
   return {
@@ -72,6 +76,7 @@ jest.mock("@/lib/hooks/useBacklogService", () => {
       triggerTriage: jest.fn(),
       spawnSessionFromItem: jest.fn(),
       cancelTriage: jest.fn(),
+      listForeignClaims: mockListForeignClaims,
     }),
   };
 });

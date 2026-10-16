@@ -27,6 +27,11 @@ module.exports = {
         "\\.css\\.ts$": "<rootDir>/src/__mocks__/styleMock.js",
         "\\.module\\.css$": "identity-obj-proxy",
         "\\.css$": "<rootDir>/src/__mocks__/styleMock.js",
+        // GuidanceRequestPanel (AC3, embedded in BacklogItemDetail/TriageReviewPanel/
+        // SessionDetailView) uses RTK Query hooks needing a real Redux <Provider> most
+        // suites don't set up — map globally instead of per-suite jest.mock calls. A
+        // suite wanting realistic data can still override with its own jest.mock.
+        "^@/lib/api/guidanceApi$": "<rootDir>/src/__mocks__/guidanceApiMock.js",
         // Path alias
         "^@/(.*)$": "<rootDir>/src/$1",
       },

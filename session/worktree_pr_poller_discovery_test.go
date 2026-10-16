@@ -9,6 +9,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -38,6 +41,94 @@ func newTestWorktreePRPoller() *WorktreePRPoller {
 	return p
 }
 
+// installFakeGHForTest puts a stub `gh` executable at the front of PATH that
+// prints ghJSON for any invocation, standing in for the real `gh pr view
+// --json ...` subprocess GetPRInfoCtx shells out to whenever a conditional
+// fetch sees a changed (200) response.
+func installFakeGHForTest(t *testing.T, ghJSON string) {
+	t.Helper()
+	binDir := t.TempDir()
+	script := "#!/bin/sh\ncat <<'GH_FAKE_EOF'\n" + ghJSON + "\nGH_FAKE_EOF\n"
+	ghPath := filepath.Join(binDir, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("failed to write fake gh script: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// TestWorktreePRPoller_InvalidateCache_NextFetchIsCacheMiss covers Story
+// 5.2.1's acceptance criterion: InvalidateCache clears the shared ETagCache
+// entry so the *next* fetchAndStore call sends no If-None-Match header (a
+// cache miss forcing a fresh 200) — not that a refetch happens immediately;
+// InvalidateCache itself dispatches nothing.
+func TestWorktreePRPoller_InvalidateCache_NextFetchIsCacheMiss(t *testing.T) {
+	const prNumber = 42
+	const etag = `"cached-etag-v1"`
+	const ghJSON = `{
+		"number": 42,
+		"title": "Test PR",
+		"headRefName": "feature-branch",
+		"headRefOid": "abc123",
+		"baseRefName": "main",
+		"state": "open",
+		"url": "https://github.com/acme/widgets/pull/42",
+		"createdAt": "2026-08-20T12:00:00Z",
+		"updatedAt": "2026-08-21T12:00:00Z",
+		"author": {"login": "carol"}
+	}`
+
+	var sawIfNoneMatch atomic.Bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/user" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		inm := r.Header.Get("If-None-Match")
+		sawIfNoneMatch.Store(inm != "")
+		if inm == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+	withGhBaseURL(t, ts)
+	installFakeGHForTest(t, ghJSON)
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+
+	repoPath := newDiscoveryTestRepo(t)
+	p := newTestWorktreePRPoller()
+	item := WorktreeScanItem{RepoPath: repoPath, Branch: "feature-branch", WorktreePath: repoPath}
+	key := worktreeCacheKey(repoPath, "feature-branch")
+	// Seed p.data so fetchAndStore takes the conditional-by-number path
+	// straight away, skipping PR discovery.
+	p.data.Store(key, &github.PRInfo{Number: prNumber})
+
+	// First call: no cached ETag yet — a cache miss (200, populates the
+	// shared ETagCache).
+	p.fetchAndStore(context.Background(), item)
+	if sawIfNoneMatch.Load() {
+		t.Fatal("expected the first fetch to be a cache miss (no If-None-Match)")
+	}
+
+	// Second call: the cache now holds the ETag from the first response — a
+	// cache hit (304).
+	sawIfNoneMatch.Store(false)
+	p.fetchAndStore(context.Background(), item)
+	if !sawIfNoneMatch.Load() {
+		t.Fatal("expected the second fetch to reuse the cached ETag (If-None-Match)")
+	}
+
+	// Invalidate — the *next* fetchAndStore call must see a cache miss again.
+	p.InvalidateCache("acme", "widgets", prNumber)
+	sawIfNoneMatch.Store(false)
+	p.fetchAndStore(context.Background(), item)
+	if sawIfNoneMatch.Load() {
+		t.Fatal("expected a cache miss (no If-None-Match) on the fetchAndStore call after InvalidateCache")
+	}
+}
+
 func TestWorktreePRPoller_FetchAndStore_DiscoveryError_NotMisreadAsNoPR(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
@@ -50,7 +141,7 @@ func TestWorktreePRPoller_FetchAndStore_DiscoveryError_NotMisreadAsNoPR(t *testi
 	p := newTestWorktreePRPoller()
 	item := WorktreeScanItem{RepoPath: repoPath, Branch: "feature-branch", WorktreePath: repoPath}
 
-	p.fetchAndStore(item)
+	p.fetchAndStore(context.Background(), item)
 
 	key := worktreeCacheKey(repoPath, "feature-branch")
 	p.mu.Lock()
@@ -89,7 +180,7 @@ func TestWorktreePRPoller_FetchAndStore_StaleNoPRCache_NotReusedOnError(t *testi
 	t.Setenv("GITHUB_TOKEN", "fake-token")
 
 	item := WorktreeScanItem{RepoPath: repoPath, Branch: "feature-branch", WorktreePath: repoPath}
-	p.fetchAndStore(item)
+	p.fetchAndStore(context.Background(), item)
 
 	p.mu.Lock()
 	_, backoffArmed := p.noPRPollAfter[key]
@@ -117,7 +208,7 @@ func TestWorktreePRPoller_FetchAndStore_True304_ArmsBackoff(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "fake-token")
 
 	item := WorktreeScanItem{RepoPath: repoPath, Branch: "feature-branch", WorktreePath: repoPath}
-	p.fetchAndStore(item)
+	p.fetchAndStore(context.Background(), item)
 
 	p.mu.Lock()
 	_, backoffArmed := p.noPRPollAfter[key]
@@ -143,7 +234,7 @@ func TestWorktreePRPoller_FetchAndStore_ErrNoPR_SetsBackoff(t *testing.T) {
 	p := newTestWorktreePRPoller()
 	item := WorktreeScanItem{RepoPath: repoPath, Branch: "feature-branch", WorktreePath: repoPath}
 
-	p.fetchAndStore(item)
+	p.fetchAndStore(context.Background(), item)
 
 	key := worktreeCacheKey(repoPath, "feature-branch")
 	p.mu.Lock()

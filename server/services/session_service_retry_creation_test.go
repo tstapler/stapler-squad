@@ -14,6 +14,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // Epic 3.3 (async-session-creation): RetrySessionCreation RPC. See
@@ -63,7 +64,7 @@ func newRetryTestInstance(t *testing.T, svc *SessionService, storage *session.St
 	// package uses to poll status concurrently with a live pipeline
 	// goroutine (e.g.
 	// TestBackgroundResolutionPipeline_should_ContinueRunning_When_RPCContextIsCanceled).
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return session.Status(inst.GetStatus()) == session.Active
 	}, 10*time.Second, 20*time.Millisecond, "precondition: original CreateSession attempt must reach Active before this test forces it to Failed")
 
@@ -130,7 +131,7 @@ drain:
 	// doc comment: this polls concurrently with the just-respawned pipeline
 	// goroutine, and this fixture's instance has no live actor to make
 	// StatusAndFailureReason's read safe.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		status := session.Status(inst.GetStatus())
 		return status == session.Active || status == session.Failed
 	}, 10*time.Second, 20*time.Millisecond, "retried pipeline must reach a terminal status")
@@ -220,7 +221,7 @@ func TestRetrySessionCreation_should_SpawnExactlyOnePipeline_When_CalledConcurre
 	// GetStatus(), not StatusAndFailureReason() -- same no-live-actor
 	// rationale as newRetryTestInstance's doc comment: this polls
 	// concurrently with the winning call's freshly-spawned pipeline goroutine.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		status := session.Status(inst.GetStatus())
 		return status == session.Active || status == session.Failed
 	}, 10*time.Second, 20*time.Millisecond, "the one spawned pipeline must reach a terminal status")

@@ -121,7 +121,7 @@ func (l *sourceIPLimiter) evictOldestLocked() {
 }
 
 // sourceIP extracts the client IP from a request, stripping the port if
-// present. Mirrors isLocalhostRequest's RemoteAddr handling (handlers.go).
+// present. Mirrors IsLocalhostRequest's RemoteAddr handling (handlers.go).
 func sourceIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

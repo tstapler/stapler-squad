@@ -27,7 +27,7 @@ interface DiscoveredRow {
 }
 
 function toCandidate(session: {
-  path: string;
+  existingDir: string;
   program: string;
   externalMetadata?: {
     originalPid: number;
@@ -44,7 +44,7 @@ function toCandidate(session: {
 
   return {
     sourceKind,
-    path: session.path,
+    path: session.existingDir,
     program: session.program,
     pid: meta?.originalPid ?? 0,
     tmuxSession: meta?.tmuxSessionName ?? "",
@@ -66,7 +66,7 @@ export function ImportExternalSessionsPanel({
         key: session.id,
         sessionId: session.id,
         title: session.title,
-        path: session.path,
+        path: session.existingDir,
         program: session.program,
         sourceTerminal: session.externalMetadata?.sourceTerminal ?? "",
         candidate: toCandidate(session),

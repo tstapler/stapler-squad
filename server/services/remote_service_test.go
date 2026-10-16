@@ -103,7 +103,7 @@ func newTestRemoteService(t *testing.T, cfg *config.Config) (*RemoteService, *ss
 	// TestRemoteConnection to reject it, which silently passes for the
 	// wrong reason if that addr already carried a real trusted entry left
 	// over from another test. A per-test temp dir removes the shared file.
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	keyring.MockInit()
 
 	knownHosts, err := sshremote.NewKnownHostsStore()
@@ -200,6 +200,81 @@ func TestTrustRemoteHostKey_RejectsMismatchedFingerprint(t *testing.T) {
 	require.Error(t, unknownErr)
 	var unknownHostErr *sshremote.ErrUnknownHostKey
 	require.ErrorAs(t, unknownErr, &unknownHostErr)
+}
+
+// TestTestRemoteConnection_PoolHit_DoesNotSkipHostKeyCallback_When_NameReused
+// guards the original CI flake (backlog item 09e91e3e): a client pooled under
+// the same remote name against a DIFFERENT server must not mask the real
+// target's untrusted host key. TestRemoteConnection dials via tmux.DialFresh,
+// bypassing the name-keyed pool, so the real dial to addrB always runs.
+func TestTestRemoteConnection_PoolHit_DoesNotSkipHostKeyCallback_When_NameReused(t *testing.T) {
+	remoteName := uniqueRemoteName(t)
+	addrA, _ := startRemoteTestSSHServer(t)
+	addrB, _ := startRemoteTestSSHServer(t)
+
+	cfg := &config.Config{Remotes: []config.RemoteConfig{
+		{Name: remoteName, Host: addrB, User: "testuser"},
+	}}
+	svc, _, _ := newTestRemoteService(t, cfg)
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	signer, err := ssh.NewSignerFromSigner(priv)
+	require.NoError(t, err)
+	pool := tmux.DefaultSSHClientPool()
+	staleClient, err := pool.GetOrDial(context.Background(), tmux.SSHTarget{Name: remoteName, Addr: addrA}, &ssh.ClientConfig{
+		User:            "testuser",
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = pool.Remove(remoteName); _ = staleClient.Close() })
+
+	// addrB's host key was never trusted, so a real dial reports HostKeyUnknown.
+	resp, err := svc.TestRemoteConnection(context.Background(), connect.NewRequest(&sessionv1.TestRemoteConnectionRequest{
+		RemoteName: remoteName,
+	}))
+	require.NoError(t, err)
+	require.False(t, resp.Msg.Success, "pool-by-name hit for %q masked the real dial to untrusted addrB", remoteName)
+	require.True(t, resp.Msg.HostKeyUnknown)
+}
+
+// TestTestRemoteConnection_TwoServiceInstances_DoNotShareAPoolEntry is the
+// actual regression test for the CI flake: two RemoteService instances
+// (standing in for two tests in the same process) reuse the same remote
+// name against different servers. Both
+// shared tmux.DefaultSSHClientPool(), so svc2 could get svc1's pooled
+// client for addrA and report Success against addrB without ever dialing
+// it. With the seam, svc2's dial is untouched by svc1's pool activity.
+func TestTestRemoteConnection_TwoServiceInstances_DoNotShareAPoolEntry(t *testing.T) {
+	remoteName := uniqueRemoteName(t)
+	addrA, _ := startRemoteTestSSHServer(t)
+	addrB, _ := startRemoteTestSSHServer(t)
+
+	svc1, _, _ := newTestRemoteService(t, &config.Config{Remotes: []config.RemoteConfig{
+		{Name: remoteName, Host: addrA, User: "testuser"},
+	}})
+	svc2, _, _ := newTestRemoteService(t, &config.Config{Remotes: []config.RemoteConfig{
+		{Name: remoteName, Host: addrB, User: "testuser"},
+	}})
+
+	// svc1 trusts and connects to addrA, pooling a client under remoteName
+	// in svc1's own pool.
+	first, err := svc1.TestRemoteConnection(context.Background(), connect.NewRequest(&sessionv1.TestRemoteConnectionRequest{RemoteName: remoteName}))
+	require.NoError(t, err)
+	require.True(t, first.Msg.HostKeyUnknown)
+	_, err = svc1.TrustRemoteHostKey(context.Background(), connect.NewRequest(&sessionv1.TrustRemoteHostKeyRequest{
+		RemoteName: remoteName, Fingerprint: first.Msg.Fingerprint,
+	}))
+	require.NoError(t, err)
+
+	// svc2 dials the SAME remoteName against addrB. If it shared svc1's
+	// pool it would get svc1's addrA client back and report Success; since
+	// svc2 has never trusted anything, it must instead report
+	// HostKeyUnknown for its own real target.
+	second, err := svc2.TestRemoteConnection(context.Background(), connect.NewRequest(&sessionv1.TestRemoteConnectionRequest{RemoteName: remoteName}))
+	require.NoError(t, err)
+	require.True(t, second.Msg.HostKeyUnknown, "svc2 reported Success for %q -- it reused svc1's pooled connection to addrA instead of dialing its own addrB", remoteName)
 }
 
 func TestTestRemoteConnection_ReportsMismatch_NotHostKeyUnknown_When_TrustedKeyChanged(t *testing.T) {

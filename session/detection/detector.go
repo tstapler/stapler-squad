@@ -34,6 +34,13 @@ import (
 // already concluded the main turn is idle/unknown, never overriding a genuinely active turn.
 var autoModeFooterRegex = regexp.MustCompile(`auto mode on\s*·\s*(\d+)\s+shells?(?:,\s*(\d+)\s+monitors?)?`)
 
+// shellMonitorTokenRegex matches any "N shell(s)"/"N monitor(s)" token.
+var shellMonitorTokenRegex = regexp.MustCompile(`\d+\s+(?:shells?|monitors?)`)
+
+// turnCompletionRunningRegex matches the turn-completion marker (mirrors
+// verb_duration_completion, binaries/claude.go) followed later in the line by "running".
+var turnCompletionRunningRegex = regexp.MustCompile(`[✻◉✦]\s+\w+\s+for\s+\d+[hms].*running`)
+
 // footerAgentCount scans lines (most recent first) for the auto-mode footer bar and, if
 // found, returns the combined shell+monitor count. ok is false if the footer isn't present
 // or reports zero shells/monitors (nothing to wait for).
@@ -119,6 +126,10 @@ type StatusDetector struct {
 	// compactingCanaryLogged guards the TEMPORARY compacting-regex drift canary (see
 	// compactingCanary) so it fires at most once per detector/session, not once per scan.
 	compactingCanaryLogged atomic.Bool
+
+	// shellMonitorCanaryLogged guards shellMonitorWordingCanary so it fires at most once
+	// per detector/session, not once per scan.
+	shellMonitorCanaryLogged atomic.Bool
 }
 
 // NewStatusDetector creates a new status detector with default patterns.
@@ -323,6 +334,7 @@ func (sd *StatusDetector) detectFromText(text string, rawPTY []byte) (DetectedSt
 	ps := sd.patternSet.Load()
 	status, name, desc, count := ps.MatchLines(text, rawPTY)
 	sd.compactingCanary(status, text)
+	sd.shellMonitorWordingCanary(status, text)
 	return status, name, desc, count
 }
 
@@ -362,6 +374,40 @@ func (sd *StatusDetector) compactingCanary(status DetectedStatus, text string) {
 		return
 	}
 	log.Debug("detection: line mentions 'compact' but did not classify as StatusCompacting — possible regex near-miss", "byte_offset", idx, "text_len", len(text))
+}
+
+// shellMonitorWordingCanary is a bake-in canary for the shells_still_running/
+// monitors_still_running patterns: this is the fourth documented brush with Claude Code CLI
+// wording drift on this exact status line (PR #678 + two follow-ups + the comma-joined-form
+// fix in project_plans/monitor-waiting-indicator/implementation/plan.md), so it's cheap to
+// hedge against a fifth. Fires when either (a) a WaitingForAgent pattern matched but the line
+// still contains an unmatched "N shell(s)"/"N monitor(s)" token afterward (e.g. a future
+// reversed-order "N monitor, M shell still running" form only partially matching), or (b) the
+// line has the turn-completion marker followed by "running" but no WaitingForAgent pattern
+// matched at all — surfacing the next wording change via logs instead of a silent undercount.
+// Mirrors compactingCanary's two safeguards: fires at most once per detector, and never logs
+// the raw matched text.
+func (sd *StatusDetector) shellMonitorWordingCanary(status DetectedStatus, text string) {
+	if sd.shellMonitorCanaryLogged.Load() {
+		return
+	}
+	tokens := shellMonitorTokenRegex.FindAllString(text, -1)
+	suspicious := false
+	switch {
+	case status == StatusWaitingForAgent && len(tokens) > 2:
+		// The winning pattern accounts for at most 2 tokens (shell + monitor); a third
+		// distinct token in the same line means something went unmatched.
+		suspicious = true
+	case status != StatusWaitingForAgent && turnCompletionRunningRegex.MatchString(text):
+		suspicious = true
+	}
+	if !suspicious {
+		return
+	}
+	if !sd.shellMonitorCanaryLogged.CompareAndSwap(false, true) {
+		return
+	}
+	log.Debug("detection: line mentions shell/monitor+running but did not fully classify as StatusWaitingForAgent — possible wording drift", "status", status, "token_count", len(tokens), "text_len", len(text))
 }
 
 // appendDetectionEvent records the outcome of a detection call to the ring buffer.

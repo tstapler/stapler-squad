@@ -32,6 +32,7 @@ import (
 	"github.com/tstapler/stapler-squad/jules"
 	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // capturingSlogHandler is a minimal slog.Handler that records every handled
@@ -326,7 +327,7 @@ func TestJulesUsageCounter_Snapshot_should_IncrementDispatchedAndAPIErrorExactly
 	poller.Start(ctx)
 	t.Cleanup(poller.Stop)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return usage.Snapshot().APIError == 1
 	}, time.Second, 2*time.Millisecond, "the one failed poll must increment jules.api.error")
 

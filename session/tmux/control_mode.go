@@ -68,7 +68,14 @@ var cmCommandsEnabled atomic.Bool
 const controlModeSlowSubscriberGrace = 250 * time.Millisecond
 
 func init() {
-	cmCommandsEnabled.Store(os.Getenv("STAPLER_SQUAD_CM_COMMANDS") != "false")
+	cmCommandsEnabled.Store(parseCMCommandsEnabled(os.Getenv("STAPLER_SQUAD_CM_COMMANDS")))
+}
+
+// parseCMCommandsEnabled implements cmCommandsEnabled's default-on policy:
+// only the exact value "false" opts out, so an unset/empty/misspelled env var
+// never silently disables the zero-fork control-mode command path.
+func parseCMCommandsEnabled(raw string) bool {
+	return raw != "false"
 }
 
 // StartControlMode begins streaming terminal output via tmux control mode (-C flag).
@@ -118,6 +125,25 @@ func (t *TmuxSession) StartControlMode() error {
 		return t.startRemoteControlMode()
 	}
 
+	// A tmux client/server version mismatch (see version_check.go's doc
+	// comment) makes control mode's %begin/%end handshake never complete,
+	// silently timing out every command for as long as the server lives.
+	// Detect it once per socket and skip straight to "not running" so every
+	// existing caller's already-correct subprocess fallback fires
+	// immediately instead of each command separately discovering the same
+	// dead end. controlModeCmd/highPriSendCh/normPriSendCh are left nil
+	// (their zero value), which is exactly what every downstream caller
+	// already treats as "control mode unavailable" -- refcount is still
+	// bumped so the paired StopControlMode() call stays balanced instead of
+	// logging a spurious "called with refcount already 0" warning.
+	t.checkControlModeVersionMatchOnce(context.Background())
+	if t.controlModeDisabledForSocket() {
+		t.controlModeSubMu.Lock()
+		t.controlModeRefCount++
+		t.controlModeSubMu.Unlock()
+		return nil
+	}
+
 	// Build tmux -C attach command
 	cmd := t.buildTmuxCommand("-C", "attach-session", "-t", t.sanitizedName)
 
@@ -159,24 +185,25 @@ func (t *TmuxSession) StartControlMode() error {
 	t.normPriSendCh = make(chan cmSendReq, 256)
 	t.cmSenderExited = make(chan struct{})
 	if t.controlModeSubscribers == nil {
-		t.controlModeSubscribers = make(map[string]chan []byte)
+		t.controlModeSubscribers = make(map[string]*controlModeSubscriber)
 	}
 	t.controlModeExited = false
 	t.controlModeRefCount = 1
 	t.controlModeSubMu.Unlock()
 
 	// Start goroutines: priority sender, output reader, stderr monitor.
-	// highPriSendCh/normPriSendCh are captured here (not read from the struct
-	// fields inside runCMSender) so a later StartControlMode call reassigning
-	// those fields for a fresh session can never race with this goroutine's
-	// own reads of its own channels -- see runCMSender's doc comment.
+	// doneCh/highPriSendCh/normPriSendCh/stdout are captured here (not read
+	// from the struct fields inside each goroutine) so a later
+	// StartControlMode call reassigning those fields for a fresh session can
+	// never race with this goroutine's own reads of its own channels/pipe --
+	// see runCMSender's and readControlModeOutput's doc comments.
 	doneCh := t.controlModeDone
 	highPriSendCh := t.highPriSendCh
 	normPriSendCh := t.normPriSendCh
 	cmSenderExited := t.cmSenderExited
 	go t.runCMSender(doneCh, stdin, highPriSendCh, normPriSendCh, cmSenderExited)
-	go t.readControlModeOutput()
-	go t.monitorControlModeErrors(stderr)
+	go t.readControlModeOutput(doneCh, stdout)
+	go t.monitorControlModeErrors(stderr, doneCh)
 
 	return nil
 }
@@ -234,7 +261,7 @@ func (t *TmuxSession) startRemoteControlMode() error {
 	t.normPriSendCh = make(chan cmSendReq, 256)
 	t.cmSenderExited = make(chan struct{})
 	if t.controlModeSubscribers == nil {
-		t.controlModeSubscribers = make(map[string]chan []byte)
+		t.controlModeSubscribers = make(map[string]*controlModeSubscriber)
 	}
 	t.controlModeExited = false
 	t.controlModeRefCount = 1
@@ -245,7 +272,7 @@ func (t *TmuxSession) startRemoteControlMode() error {
 	normPriSendCh := t.normPriSendCh
 	cmSenderExited := t.cmSenderExited
 	go t.runCMSender(doneCh, stdin, highPriSendCh, normPriSendCh, cmSenderExited)
-	go t.readControlModeOutput()
+	go t.readControlModeOutput(doneCh, stdout)
 
 	log.Info("successfully started remote control mode", "session", t.sanitizedName)
 
@@ -260,8 +287,10 @@ func (t *TmuxSession) StopControlMode() error {
 	t.controlModeStartMu.Lock()
 	defer t.controlModeStartMu.Unlock()
 
-	// Decrement refcount under the lock. Only proceed to teardown when the count
-	// reaches zero (i.e., this is the last caller).
+	// Decrement refcount and snapshot the cmd/remoteProc pointers under the same
+	// lock readControlModeOutput's unilateral-exit teardown path (control_mode.go's
+	// %exit/EOF handlers) nils them under -- re-reading the bare t.controlModeCmd/
+	// t.controlModeRemoteProc fields after unlocking here raced with that write.
 	t.controlModeSubMu.Lock()
 	if t.controlModeRefCount > 0 {
 		t.controlModeRefCount--
@@ -269,13 +298,15 @@ func (t *TmuxSession) StopControlMode() error {
 		log.Warn("StopControlMode called with refcount already 0", "session", t.sanitizedName)
 	}
 	remaining := t.controlModeRefCount
+	cmd := t.controlModeCmd
+	remoteProc := t.controlModeRemoteProc
 	t.controlModeSubMu.Unlock()
 
 	if remaining > 0 {
 		return nil // Other callers still active; leave the process running.
 	}
 
-	if t.controlModeCmd == nil && t.controlModeRemoteProc == nil {
+	if cmd == nil && remoteProc == nil {
 		return nil // Not running (or already stopped by a prior call).
 	}
 
@@ -324,21 +355,21 @@ func (t *TmuxSession) StopControlMode() error {
 	}
 	t.cmdSendMu.Unlock()
 
-	// Wait for process to exit (with timeout). Exactly one of
-	// t.controlModeCmd/t.controlModeRemoteProc is non-nil here (guarded by
-	// the early-return above); wait/kill are resolved to the matching
-	// local (*exec.Cmd) or remote (SSH-channel) implementation.
+	// Wait for process to exit (with timeout). Exactly one of cmd/remoteProc
+	// is non-nil here (guarded by the early-return above) -- use the pointers
+	// snapshotted under the lock earlier rather than re-reading t.controlModeCmd/
+	// t.controlModeRemoteProc, which raced with readControlModeOutput's teardown
+	// write. wait/kill are resolved to the matching local (*exec.Cmd) or remote
+	// (SSH-channel) implementation.
 	var wait func() error
 	var kill func()
-	if t.controlModeCmd != nil {
-		UntrackChildPID(t.controlModeCmd.Process.Pid)
-		cmd := t.controlModeCmd
+	if cmd != nil {
+		UntrackChildPID(cmd.Process.Pid)
 		wait = cmd.Wait
 		kill = func() { _ = cmd.Process.Kill() }
 	} else {
-		proc := t.controlModeRemoteProc
-		wait = proc.wait
-		kill = proc.kill
+		wait = remoteProc.wait
+		kill = remoteProc.kill
 	}
 
 	done := make(chan error, 1)
@@ -410,7 +441,22 @@ func (t *TmuxSession) endControlModeGenerationV2(span trace.Span, reason lifecyc
 //	%output %0 hello world
 //	%session-changed $13 session-name
 //	%exit
-func (t *TmuxSession) readControlModeOutput() {
+//
+// doneCh/stdout are passed as parameters -- captured by the caller
+// (StartControlMode/startRemoteControlMode) under controlModeSubMu at the
+// same moment the fields are assigned -- rather than read from
+// t.controlModeDone/t.controlModeStdout here. Reading those fields directly
+// from inside this goroutine raced against a concurrent StopControlMode
+// (which nils/closes controlModeDone and closes+nils controlModeStdout with
+// no lock at all on the latter) in the window between `go
+// t.readControlModeOutput()` returning and this goroutine actually being
+// scheduled: BUG-086's repro (session/tmux/control_mode_interleaved_start_stop_test.go)
+// hit exactly this window under -race, observing doneCh as nil and later
+// panicking on close(nil) in the scanner-EOF cleanup below. Mirrors the fix
+// already applied to runCMSender's doneCh/highPriSendCh/normPriSendCh/
+// cmSenderExited parameters for the identical bug class (see its doc
+// comment).
+func (t *TmuxSession) readControlModeOutput(doneCh chan struct{}, stdout io.ReadCloser) {
 	// Captured once, like doneCh below, so every decision in this generation
 	// (whether to open the span, the scanner-EOF fallback, the doneCh-closed
 	// exit, and processControlModeLineWithV2's %exit/%session-closed cases)
@@ -429,14 +475,7 @@ func (t *TmuxSession) readControlModeOutput() {
 		_, span = lifecycle.StartGeneration(context.Background(), "tmux_control_mode")
 	}
 
-	// Capture under RLock — StopControlMode nils/closes controlModeDone under
-	// controlModeSubMu.Lock(), so reading the field without a lock races against
-	// that write. The comment below predates the fix; the snapshot itself (using
-	// a possibly-stale channel value after unlock) remains safe and intentional.
-	t.controlModeSubMu.RLock()
-	doneCh := t.controlModeDone // capture before StopControlMode can nil it
-	t.controlModeSubMu.RUnlock()
-	scanner := bufio.NewScanner(t.controlModeStdout)
+	scanner := bufio.NewScanner(stdout)
 
 	for scanner.Scan() {
 		select {
@@ -532,22 +571,31 @@ func (t *TmuxSession) readControlModeOutput() {
 	// unconditionally would close the wrong (newer) generation's doneCh
 	// instead of unblocking this (older) generation's runCMSender.
 	//
+	//   - doneCh == nil: this generation's own controlModeDone was already
+	//     nil at capture time (StopControlMode raced StartControlMode's
+	//     goroutine spawn and closed-and-nilled it before this goroutine's
+	//     RLock capture ran) -- there is nothing to close; falling through
+	//     to the equality check below would compare nil == nil and
+	//     wrongly close(nil), panicking.
 	//   - t.controlModeDone == doneCh: nothing has replaced or closed it
 	//     yet. Close-and-nil under the lock, same as StopControlMode's own
 	//     guard -- whichever of the two gets here first wins; the other
 	//     sees nil and skips, so this shared-field case can't double-close.
-	//   - t.controlModeDone == nil: StopControlMode already closed and
-	//     nilled it (same generation) -- already handled, skip.
+	//   - t.controlModeDone == nil (and doneCh != nil): StopControlMode
+	//     already closed and nilled it (same generation) -- already
+	//     handled, skip.
 	//   - t.controlModeDone is some other non-nil channel: a newer
 	//     generation already replaced the field. Our doneCh is now
 	//     orphaned from it entirely -- this is the only goroutine that
 	//     ever holds this specific reference (monitorControlModeErrors
 	//     never closes doneCh), so it's safe to close directly.
-	if t.controlModeDone == doneCh {
-		close(doneCh)
-		t.controlModeDone = nil
-	} else if t.controlModeDone != nil {
-		close(doneCh)
+	if doneCh != nil {
+		if t.controlModeDone == doneCh {
+			close(doneCh)
+			t.controlModeDone = nil
+		} else if t.controlModeDone != nil {
+			close(doneCh)
+		}
 	}
 	// Reset so that the next StartControlMode() call sees a clean slate.
 	t.controlModeRefCount = 0
@@ -582,13 +630,10 @@ func (t *TmuxSession) pendingCommandDepth() int {
 	return len(t.pendingCmds)
 }
 
-// monitorControlModeErrors monitors stderr for control mode errors.
-func (t *TmuxSession) monitorControlModeErrors(stderr io.ReadCloser) {
-	// Capture under RLock — see readControlModeOutput for why the raw field
-	// read races against StopControlMode's write under controlModeSubMu.
-	t.controlModeSubMu.RLock()
-	doneCh := t.controlModeDone // capture before StopControlMode can nil it
-	t.controlModeSubMu.RUnlock()
+// monitorControlModeErrors monitors stderr for control mode errors. doneCh is
+// passed as a parameter -- see readControlModeOutput's doc comment for why
+// reading t.controlModeDone directly from inside this goroutine is unsafe.
+func (t *TmuxSession) monitorControlModeErrors(stderr io.ReadCloser, doneCh <-chan struct{}) {
 	defer stderr.Close()
 
 	scanner := bufio.NewScanner(stderr)
@@ -1052,6 +1097,159 @@ func (t *TmuxSession) decodeControlModeOutput(encoded []byte) []byte {
 	return result
 }
 
+// subscriberState is a control-mode WebSocket subscriber's position in its
+// send/teardown lifecycle (BUG-101): attached and receiving broadcasts, or
+// draining -- a drainSlowSubscriber goroutine is blocked trying to deliver
+// one frame within controlModeSlowSubscriberGrace, off the synchronous tmux
+// read loop (see broadcastControlModeUpdate). There is no explicit
+// torn-down state here: a subscriber whose close is decided is removed from
+// controlModeSubscribers immediately (so it stops receiving broadcasts and
+// this type's states no longer apply to it), even though the underlying
+// channel's close() may still be pending in controlModeClosingSubscribers --
+// see transitionSubscriberLocked's doc comment for why.
+type subscriberState int
+
+const (
+	subscriberAttached subscriberState = iota
+	subscriberDraining
+)
+
+// subscriberEvent is everything that can move a subscriber between states.
+type subscriberEvent int
+
+const (
+	// evSendFull fires when broadcastControlModeUpdate's fast-path send finds
+	// an Attached subscriber's channel full. A subscriber already Draining
+	// goes through evCloseRequested instead (see broadcastControlModeUpdate),
+	// since a second full-buffer hit while draining is the same "close it"
+	// decision as an explicit unsubscribe, not a fresh drain to spawn.
+	evSendFull subscriberEvent = iota
+	// evCloseRequested fires when an external caller (UnsubscribeFromControlModeUpdates,
+	// control-mode teardown, or broadcastControlModeUpdate's second-full-while-draining
+	// check) asks to close this subscriber.
+	evCloseRequested
+	// evDrainSucceeded fires when a drainSlowSubscriber goroutine delivers
+	// its frame before the grace period elapses.
+	evDrainSucceeded
+	// evDrainTimedOut fires when a drainSlowSubscriber goroutine's grace
+	// period elapses with no room.
+	evDrainTimedOut
+)
+
+// subscriberAction is the single side effect transitionSubscriberLocked asks
+// its caller to perform. The transition function itself never spawns a
+// goroutine or closes a channel -- it only decides state and hands the
+// action back, so the state table stays the one place a future fix touches.
+type subscriberAction int
+
+const (
+	actionNone subscriberAction = iota
+	actionSpawnDrain
+	// actionCloseNow closes ch with no log line -- either an explicit close
+	// request (Attached), or a deferred close honored once a drain resolves.
+	actionCloseNow
+	// actionCloseTimedOut closes ch AND logs the "grace period elapsed"
+	// warning -- the grace period expired with nobody having asked to close
+	// this subscriber, i.e. a genuinely stalled consumer.
+	actionCloseTimedOut
+)
+
+// controlModeSubscriber is one WebSocket client's record while it is live
+// (Attached or Draining) in the control-mode subscriber lifecycle.
+type controlModeSubscriber struct {
+	ch    chan []byte
+	state subscriberState
+}
+
+// transitionSubscriberLocked is the single state-transition function for
+// every control-mode subscriber (BUG-101): the send/teardown lifecycle
+// (attached / draining / torn down, plus the in-flight-slow-send state) used
+// to be modeled by three independently-guarded fields (controlModeSubscribers,
+// slowSendInFlight, pendingCloseAfterDrain), each added by a separate
+// historical fix (6e6a9f676, b0416e224, c6bc8585c). All mutation of that
+// lifecycle now flows through here instead of being scattered across every
+// function that touched one of those fields directly.
+//
+// Two maps remain underneath (controlModeSubscribers, and
+// controlModeClosingSubscribers below) for a real performance reason, not an
+// incomplete consolidation: controlModeSubscribers is what
+// broadcastControlModeUpdate iterates on every single tmux output line (the
+// hot path), so a subscriber whose close has already been decided is removed
+// from it immediately -- otherwise a subscriber mid-close would keep costing
+// a map visit and a log line on every frame for up to
+// controlModeSlowSubscriberGrace. controlModeClosingSubscribers holds just
+// the channel for a subscriber whose close was decided while a
+// drainSlowSubscriber goroutine still held a blocking send on it -- closing
+// it immediately there would race that blocked send and panic, so the close
+// is deferred until evDrainSucceeded/evDrainTimedOut resolves it. It is
+// never iterated, only looked up by ID, so it costs nothing on the hot path.
+//
+// Callers must hold controlModeSubMu. Returns the one action the caller must
+// perform (spawn a drain goroutine, or close the channel, optionally logging
+// first) plus the affected channel.
+func (t *TmuxSession) transitionSubscriberLocked(subscriberID string, event subscriberEvent) (subscriberAction, chan []byte) {
+	switch event {
+	case evSendFull:
+		sub, ok := t.controlModeSubscribers[subscriberID]
+		if !ok {
+			return actionNone, nil
+		}
+		if sub.state == subscriberDraining {
+			// Callers should route an already-draining subscriber through
+			// evCloseRequested instead (see broadcastControlModeUpdate) --
+			// guarded here too so a future call site can't accidentally
+			// spawn a second concurrent drain goroutine for the same channel.
+			return t.transitionSubscriberLocked(subscriberID, evCloseRequested)
+		}
+		sub.state = subscriberDraining
+		return actionSpawnDrain, sub.ch
+
+	case evCloseRequested:
+		sub, ok := t.controlModeSubscribers[subscriberID]
+		if !ok {
+			return actionNone, nil
+		}
+		delete(t.controlModeSubscribers, subscriberID)
+		if sub.state == subscriberAttached {
+			return actionCloseNow, sub.ch
+		}
+		// Draining: the drain goroutine still holds ch. Move it to the
+		// closing registry rather than closing here, so
+		// evDrainSucceeded/evDrainTimedOut can honor exactly one close once
+		// that goroutine resolves.
+		if t.controlModeClosingSubscribers == nil {
+			t.controlModeClosingSubscribers = make(map[string]chan []byte)
+		}
+		t.controlModeClosingSubscribers[subscriberID] = sub.ch
+		return actionNone, sub.ch
+
+	case evDrainSucceeded, evDrainTimedOut:
+		if ch, ok := t.controlModeClosingSubscribers[subscriberID]; ok {
+			// A close was requested while this drain was in flight (whether
+			// it ultimately succeeded or timed out doesn't matter) -- honor
+			// it now, silently: this wasn't a stalled consumer, it was an
+			// explicit unsubscribe/teardown or a reordering-guard second
+			// full-buffer hit.
+			delete(t.controlModeClosingSubscribers, subscriberID)
+			return actionCloseNow, ch
+		}
+		if event == evDrainSucceeded {
+			if sub, ok := t.controlModeSubscribers[subscriberID]; ok {
+				sub.state = subscriberAttached
+			}
+			return actionNone, nil
+		}
+		// evDrainTimedOut, nobody asked to close: the grace period elapsed
+		// with no room -- a genuinely stalled consumer.
+		if sub, ok := t.controlModeSubscribers[subscriberID]; ok {
+			delete(t.controlModeSubscribers, subscriberID)
+			return actionCloseTimedOut, sub.ch
+		}
+		return actionNone, nil
+	}
+	return actionNone, nil
+}
+
 // broadcastControlModeUpdate sends terminal output to all subscribed WebSocket clients.
 // A subscriber whose channel is full is closed rather than silently dropped, since any
 // gap corrupts the ANSI stream; the grace-period drain and close both run off this call
@@ -1061,20 +1259,20 @@ func (t *TmuxSession) broadcastControlModeUpdate(data []byte) {
 	t.controlModeSubMu.Lock()
 	defer t.controlModeSubMu.Unlock()
 
-	for subscriberID, ch := range t.controlModeSubscribers {
+	for subscriberID, sub := range t.controlModeSubscribers {
 		// Check this before ever attempting the fast-path send below: a goroutine
 		// spawned for an older frame may not have parked on ch yet, so trying a
 		// send here first could win a freed slot and deliver this frame ahead of
 		// that older one. An older frame still draining means the subscriber
 		// isn't keeping up, so close it instead of racing frame order.
-		if t.slowSendInFlight[subscriberID] {
+		if sub.state == subscriberDraining {
 			log.Warn("control mode subscriber channel still full while a previous frame was draining, closing subscriber", "subscriber", subscriberID, "session", t.sanitizedName)
-			t.closeSubscriberLocked(subscriberID, ch)
+			t.closeSubscriberLocked(subscriberID)
 			continue
 		}
 
 		select {
-		case ch <- data:
+		case sub.ch <- data:
 			// Successfully sent
 			continue
 		default:
@@ -1082,35 +1280,29 @@ func (t *TmuxSession) broadcastControlModeUpdate(data []byte) {
 			// subscriber is stuck on a single snapshot.
 		}
 
-		if t.slowSendInFlight == nil {
-			t.slowSendInFlight = make(map[string]bool)
+		if action, ch := t.transitionSubscriberLocked(subscriberID, evSendFull); action == actionSpawnDrain {
+			go t.drainSlowSubscriber(subscriberID, ch, data)
 		}
-		t.slowSendInFlight[subscriberID] = true
-		go t.drainSlowSubscriber(subscriberID, ch, data)
 	}
 }
 
-// closeSubscriberLocked closes and removes subscriberID's channel, deferring the close
-// via pendingCloseAfterDrain if a drainSlowSubscriber goroutine is still blocked sending
-// on it (avoids a send-on-closed-channel panic). Callers must hold controlModeSubMu.
-func (t *TmuxSession) closeSubscriberLocked(subscriberID string, ch chan []byte) {
-	delete(t.controlModeSubscribers, subscriberID)
-	if t.slowSendInFlight[subscriberID] {
-		if t.pendingCloseAfterDrain == nil {
-			t.pendingCloseAfterDrain = make(map[string]chan []byte)
-		}
-		t.pendingCloseAfterDrain[subscriberID] = ch
-		return
+// closeSubscriberLocked requests subscriberID's teardown via the subscriber
+// state machine: closes its channel now if it was attached, or defers the
+// close (via the subscriber record's pendingClose flag) until an in-flight
+// drainSlowSubscriber goroutine resolves if it was draining (avoids a
+// send-on-closed-channel panic). Callers must hold controlModeSubMu.
+func (t *TmuxSession) closeSubscriberLocked(subscriberID string) {
+	if action, ch := t.transitionSubscriberLocked(subscriberID, evCloseRequested); action == actionCloseNow {
+		close(ch)
 	}
-	close(ch)
 }
 
 // closeAllSubscribersLocked closes and removes every current subscriber
 // channel, safely against any in-flight drainSlowSubscriber goroutines (see
 // closeSubscriberLocked). Callers must hold controlModeSubMu.
 func (t *TmuxSession) closeAllSubscribersLocked() {
-	for id, ch := range t.controlModeSubscribers {
-		t.closeSubscriberLocked(id, ch)
+	for id := range t.controlModeSubscribers {
+		t.closeSubscriberLocked(id)
 	}
 }
 
@@ -1126,29 +1318,20 @@ func (t *TmuxSession) drainSlowSubscriber(subscriberID string, ch chan []byte, d
 	}
 
 	// One critical section for the whole post-wait decision: a concurrent close
-	// request (recorded in pendingCloseAfterDrain while we waited) must resolve
-	// to exactly one close(ch) below, never two.
+	// request (recorded in controlModeClosingSubscribers while we waited) must
+	// resolve to exactly one close(ch) below, never two.
 	t.controlModeSubMu.Lock()
 	defer t.controlModeSubMu.Unlock()
 
-	delete(t.slowSendInFlight, subscriberID)
-	closeCh, deferredClose := t.pendingCloseAfterDrain[subscriberID]
-	delete(t.pendingCloseAfterDrain, subscriberID)
-
-	if cur, ok := t.controlModeSubscribers[subscriberID]; !sent && ok && cur == ch {
-		// Grace period elapsed with no room, and no concurrent closeSubscriberLocked
-		// call has already removed this subscriber (which would have set
-		// deferredClose instead — see closeSubscriberLocked).
-		delete(t.controlModeSubscribers, subscriberID)
-		close(ch)
-		log.Warn("control mode subscriber channel full after grace period, closing subscriber", "subscriber", subscriberID, "session", t.sanitizedName)
-		return
+	event := evDrainTimedOut
+	if sent {
+		event = evDrainSucceeded
 	}
-
-	// Either the send succeeded, or a concurrent closeSubscriberLocked call already
-	// removed this subscriber and deferred the close to us. Honor exactly one such
-	// deferred close, if any.
-	if deferredClose {
+	switch action, closeCh := t.transitionSubscriberLocked(subscriberID, event); action {
+	case actionCloseTimedOut:
+		log.Warn("control mode subscriber channel full after grace period, closing subscriber", "subscriber", subscriberID, "session", t.sanitizedName)
+		close(closeCh)
+	case actionCloseNow:
 		close(closeCh)
 	}
 }
@@ -1172,9 +1355,9 @@ func (t *TmuxSession) SubscribeToControlModeUpdates() (string, chan []byte) {
 	}
 
 	if t.controlModeSubscribers == nil {
-		t.controlModeSubscribers = make(map[string]chan []byte)
+		t.controlModeSubscribers = make(map[string]*controlModeSubscriber)
 	}
-	t.controlModeSubscribers[subscriberID] = ch
+	t.controlModeSubscribers[subscriberID] = &controlModeSubscriber{ch: ch, state: subscriberAttached}
 
 	return subscriberID, ch
 }
@@ -1184,18 +1367,17 @@ func (t *TmuxSession) UnsubscribeFromControlModeUpdates(subscriberID string) {
 	t.controlModeSubMu.Lock()
 	defer t.controlModeSubMu.Unlock()
 
-	if ch, exists := t.controlModeSubscribers[subscriberID]; exists {
-		t.closeSubscriberLocked(subscriberID, ch)
-	}
+	t.closeSubscriberLocked(subscriberID)
 }
 
 // SendInputViaControlMode sends raw bytes to the active pane through the already-open
 // control mode connection. Uses the HIGH-PRIORITY queue so user keystrokes always
 // jump ahead of any queued background operations (capture-pane, resize, etc.).
 //
-// Fire-and-forget: enqueues the send-keys command and returns immediately without
-// waiting for the tmux %begin/%end ack. The ack is consumed by the reader goroutine
-// and discarded. This eliminates one CM round-trip from the interactive input path.
+// Waits for the tmux %begin/%end ack (bounded by ctx) instead of firing-and-forgetting:
+// a wedged control-mode pipe can accept the enqueue and stdin write without ever
+// erroring, so callers rely on this returning an error to trigger their subprocess
+// send-keys fallback instead of silently dropping the keystroke.
 func (t *TmuxSession) SendInputViaControlMode(ctx context.Context, data []byte) error {
 	if len(data) == 0 {
 		return nil
@@ -1210,15 +1392,6 @@ func (t *TmuxSession) SendInputViaControlMode(ctx context.Context, data []byte) 
 	for _, b := range data {
 		args = append(args, fmt.Sprintf("%02x", b))
 	}
-	// resultCh is buffered(1): the reader goroutine delivers the ack into it and
-	// moves on; nobody reads it, and Go GCs it. Safe because all send sites use
-	// `select { case ch <- result: default: }` (non-blocking).
-	resultCh := make(chan cmdResult, 1)
-	req := cmSendReq{line: strings.Join(args, " "), resultCh: resultCh}
-	select {
-	case ch <- req:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	_, err := t.enqueueCMCommand(ctx, ch, args...)
+	return err
 }

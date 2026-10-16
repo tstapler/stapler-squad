@@ -274,25 +274,28 @@ func TestManagedProcess_ScanLines_callsCallbackPerLine(t *testing.T) {
 func TestManagedProcess_ScanLines_ctxCancellation_stops(t *testing.T) {
 	t.Parallel()
 
-	// Start a long-running process.
-	p, err := StartProcess(context.Background(), helperBin, []string{"--sleep", "10s"}, WithGracePeriod(200*time.Millisecond))
+	// Print one line, then block, so ScanLines is parked in a read when cancelled.
+	p, err := StartProcess(context.Background(), "sh", []string{"-c", "echo ready; exec sleep 10"}, WithGracePeriod(200*time.Millisecond))
 	if err != nil {
 		t.Fatalf("StartProcess failed: %v", err)
 	}
 	defer p.Stop() //nolint:errcheck
 
-	// Redirect stdout to discard since we don't expect any output.
-	// The process sleeps, so Stdout() will block.
-	// We cancel the context to unblock ScanLines.
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
+	started := make(chan struct{})
+	var once sync.Once
 	scanDone := make(chan error, 1)
 	go func() {
-		scanDone <- p.ScanLines(ctx, func(_ string) {})
+		scanDone <- p.ScanLines(ctx, func(_ string) { once.Do(func() { close(started) }) })
 	}()
 
-	// Cancel context after a brief moment.
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ScanLines never delivered the first line")
+	}
 	cancel()
 
 	select {

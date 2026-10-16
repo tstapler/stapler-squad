@@ -45,6 +45,8 @@ export interface CachedRepoEntry {
   owner: string;
   repo: string;
   description: string;
+  /** GitHub host this repo lives on ("" or absent means github.com). */
+  host?: string;
 }
 
 export function getCachedRepos(): CachedRepoEntry[] | null {
@@ -72,6 +74,8 @@ export interface CachedIssueEntry {
   createdAt?: string;
   updatedAt?: string;
   isPR?: boolean;
+  /** GitHub host this issue lives on ("" or absent means github.com). */
+  host?: string;
 }
 
 export function getCachedIssues(

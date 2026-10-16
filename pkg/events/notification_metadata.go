@@ -11,7 +11,32 @@ const (
 	// MetadataKeyItemID carries the backlog item ID a session-scoped
 	// notification's session is linked to, when known.
 	MetadataKeyItemID = "item_id"
+	// MetadataKeyAutoRemediating marks a WARNING whose automation is already
+	// acting; it is informational, not a pending decision.
+	MetadataKeyAutoRemediating = "auto_remediating"
+	// MetadataKeyRiskLevel carries an approval's classifier risk level (low,
+	// medium, high, critical) so a phone approval confirms the risky ones.
+	MetadataKeyRiskLevel = "risk_level"
+	// MetadataKeyDeliveryClass is an optional producer stamp (DeliveryClassFailure
+	// or DeliveryClassRoutine) the hidden-session delivery gate honors for hidden
+	// sessions only: it promotes a hard-stop WARNING or demotes per-tool noise.
+	MetadataKeyDeliveryClass = "delivery_class"
+	// MetadataKeySSQNotifySchema is sent by ssq-notify so SendNotification can
+	// detect a stale installed script whose type numbers collide with the proto.
+	MetadataKeySSQNotifySchema = "ssq_notify_schema"
+	// MetadataKeyUntrustedType is written only by SendNotification (client values
+	// are stripped) on a request without MetadataKeySSQNotifySchema.
+	MetadataKeyUntrustedType = "ssq_untrusted_type"
 )
+
+// Values of MetadataKeyDeliveryClass.
+const (
+	DeliveryClassFailure = "failure"
+	DeliveryClassRoutine = "routine"
+)
+
+// SSQNotifySchemaVersion is the ssq_notify_schema value the current script sends.
+const SSQNotifySchemaVersion = "2"
 
 // SessionScopedMetadata builds a fresh metadata map for a session-scoped
 // notification, copying any entries from base (never mutating base — base may

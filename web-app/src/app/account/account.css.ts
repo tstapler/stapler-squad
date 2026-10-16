@@ -25,13 +25,6 @@ export const sectionTitle = style({
   borderBottom: `1px solid ${vars.color.borderColor}`,
 });
 
-export const card = style({
-  background: vars.color.cardBackground,
-  border: `1px solid ${vars.color.borderColor}`,
-  borderRadius: vars.radii.lg,
-  padding: vars.space["4"],
-});
-
 // Credential list
 export const credentialList = style({
   display: "flex",

@@ -292,42 +292,6 @@ export const groupHeaderCell = style({
   borderTop: `1px solid ${vars.color.borderColor}`,
 });
 
-export const emptyState = style({
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: vars.space["12"],
-  gap: vars.space["3"],
-  color: vars.color.textMuted,
-  textAlign: "center",
-});
-
-export const emptyTitle = style({
-  fontSize: vars.fontSize.lg,
-  fontWeight: vars.fontWeight.medium,
-  color: vars.color.textSecondary,
-});
-
-export const emptySubtitle = style({
-  fontSize: vars.fontSize.sm,
-});
-
-export const emptyActionButton = style({
-  padding: `${vars.space["2"]} ${vars.space["4"]}`,
-  background: vars.color.primary,
-  color: vars.color.primaryText,
-  border: "none",
-  borderRadius: vars.radii.md,
-  fontSize: vars.fontSize.sm,
-  fontWeight: vars.fontWeight.medium,
-  cursor: "pointer",
-  marginTop: vars.space["2"],
-  ":hover": {
-    background: vars.color.primaryHover,
-  },
-});
-
 // Modal overlay for item form
 export const modalOverlay = style({
   position: "fixed",

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"go.uber.org/goleak"
 	"golang.org/x/net/http2"
 
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil"
@@ -90,39 +92,91 @@ func TestServer_should_NegotiateALPNHTTP2_When_StartRemoteServesOverRealTLS(t *t
 	// ignored baseline. Registered before the cancel() defer below so it
 	// runs last (LIFO) -- after cancel() has had a chance to unwind them.
 	baseline := goleak.IgnoreCurrent()
-	defer goleak.VerifyNone(t, baseline)
-	defer cancel()
 
 	port := testutil.FindFreePort(t)
 	remoteAddr := fmt.Sprintf("127.0.0.1:%d", port)
-	require.NoError(t, srv.StartRemote(ctx, remoteAddr, tlsCfg, nil))
+	require.NoError(t, srv.StartRemote(ctx, remoteAddr, tlsCfg, nil, false))
 
+	tlsClientCfg := &tls.Config{
+		RootCAs:    caPool,
+		ServerName: "127.0.0.1",
+		NextProtos: []string{"h2"},
+	}
+	var ownConn closeTrackingConn
 	transport := &http2.Transport{
-		TLSClientConfig: &tls.Config{
-			RootCAs:    caPool,
-			ServerName: "127.0.0.1",
+		TLSClientConfig: tlsClientCfg,
+		DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
+			c, dialErr := (&tls.Dialer{Config: cfg}).DialContext(ctx, network, addr)
+			if dialErr != nil {
+				return nil, dialErr
+			}
+			ownConn.set(c.(*tls.Conn))
+			return &ownConn, nil
 		},
 	}
-	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport}
+
+	// Teardown: shut the server down, release our client conn, then prove OUR
+	// conn is closed (which is what ends our client read loop) before goleak
+	// runs. goleak then ignores every http2 client read loop: this package's
+	// tests also make real outbound HTTPS calls through http.DefaultTransport
+	// (api.github.com, generativelanguage.googleapis.com, ...) from background
+	// goroutines, and a pooled keep-alive h2 conn from one of those that
+	// happens to be dialed inside this test's window is indistinguishable by
+	// stack from ours and lives for the transport's 90s idle timeout.
+	defer func() {
+		cancel()
+		wait.RequireEventually(t, func() bool {
+			transport.CloseIdleConnections()
+			return ownConn.isClosed()
+		}, 5*time.Second, 5*time.Millisecond, "client conn to the remote server was not closed after shutdown")
+		goleak.VerifyNone(t, baseline,
+			goleak.IgnoreAnyFunction("net/http.(*http2clientConnReadLoop).run"),
+			goleak.IgnoreAnyFunction("net/http.(*http2ClientConn).readLoop"),
+		)
+	}()
 
 	url := fmt.Sprintf("https://%s/health", remoteAddr)
 	var resp *http.Response
 	var err error
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	wait.RequireEventually(t, func() bool {
 		resp, err = client.Get(url) //nolint:noctx
-		if err == nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return err == nil
+	}, 5*time.Second, 10*time.Millisecond, "server did not become reachable")
 	require.NoError(t, err, "expected StartRemote's TLS listener to become reachable")
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, 2, resp.ProtoMajor,
 		"expected real ALPN-negotiated HTTP/2 (pre-existing stdlib behavior), got ProtoMajor=%d", resp.ProtoMajor)
+}
+
+// closeTrackingConn wraps a *tls.Conn to record whether it has been closed,
+// preserving ConnectionState so the http2 transport still sees the negotiated
+// ALPN protocol.
+type closeTrackingConn struct {
+	*tls.Conn
+	mu     sync.Mutex
+	closed bool
+}
+
+func (c *closeTrackingConn) set(conn *tls.Conn) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Conn = conn
+}
+
+func (c *closeTrackingConn) Close() error {
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+	return c.Conn.Close()
+}
+
+func (c *closeTrackingConn) isClosed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
 }
 
 // TestServer_should_RejectHTTP2PriorKnowledge_When_StartServesOverPlainHTTP is
@@ -159,14 +213,13 @@ func TestServer_should_RejectHTTP2PriorKnowledge_When_StartServesOverPlainHTTP(t
 	}()
 
 	var addr string
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	wait.RequireEventually(t, func() bool {
 		addr = srv.GetAddr()
 		if addr != "" && addr != "localhost:0" {
-			break
+			return true
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "server did not become reachable")
 	require.NotEmpty(t, addr, "expected Start() to resolve a real bound address")
 
 	// h2c "prior knowledge" dial: send the HTTP/2 client preface directly over
@@ -221,20 +274,19 @@ func TestServer_should_ServeHealthCheck_When_StartedWithPortZero(t *testing.T) {
 	}()
 
 	// Wait for the real bound address to be resolved and reachable.
-	deadline := time.Now().Add(5 * time.Second)
 	var addr string
 	var resp *http.Response
 	var lastErr error
-	for time.Now().Before(deadline) {
+	wait.RequireEventually(t, func() bool {
 		addr = srv.GetAddr()
 		if addr != "" && addr != "localhost:0" {
 			resp, lastErr = http.Get("http://" + addr + "/health")
 			if lastErr == nil {
-				break
+				return true
 			}
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "server did not become reachable")
 
 	if lastErr != nil || resp == nil {
 		t.Fatalf("expected /health to become reachable on the resolved address %q, last error: %v", addr, lastErr)
@@ -291,26 +343,25 @@ func TestServer_should_AllowCrossOriginRequest_When_ExtraOriginConfiguredViaEnvV
 	}()
 
 	// Wait for the real bound address to be resolved and reachable.
-	deadline := time.Now().Add(5 * time.Second)
 	var addr string
 	var resp *http.Response
 	var lastErr error
-	for time.Now().Before(deadline) {
+	wait.RequireEventually(t, func() bool {
 		addr = srv.GetAddr()
 		if addr != "" && addr != "localhost:0" {
 			req, reqErr := http.NewRequest(http.MethodGet, "http://"+addr+"/health", nil)
 			if reqErr != nil {
 				lastErr = reqErr
-				break
+				return true
 			}
 			req.Header.Set("Origin", extraOrigin)
 			resp, lastErr = http.DefaultClient.Do(req)
 			if lastErr == nil {
-				break
+				return true
 			}
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "server did not become reachable")
 
 	if lastErr != nil || resp == nil {
 		t.Fatalf("expected /health to become reachable on the resolved address %q, last error: %v", addr, lastErr)
@@ -366,26 +417,25 @@ func TestServer_should_KeepSingleOriginAllowlist_When_ExtraOriginsEnvVarUnset(t 
 	}()
 
 	// Wait for the real bound address to be resolved and reachable.
-	deadline := time.Now().Add(5 * time.Second)
 	var addr string
 	var resp *http.Response
 	var lastErr error
-	for time.Now().Before(deadline) {
+	wait.RequireEventually(t, func() bool {
 		addr = srv.GetAddr()
 		if addr != "" && addr != "localhost:0" {
 			req, reqErr := http.NewRequest(http.MethodGet, "http://"+addr+"/health", nil)
 			if reqErr != nil {
 				lastErr = reqErr
-				break
+				return true
 			}
 			req.Header.Set("Origin", "http://localhost:54212") // not in the allowlist
 			resp, lastErr = http.DefaultClient.Do(req)
 			if lastErr == nil {
-				break
+				return true
 			}
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "server did not become reachable")
 
 	if lastErr != nil || resp == nil {
 		t.Fatalf("expected /health to become reachable on the resolved address %q, last error: %v", addr, lastErr)
@@ -430,7 +480,7 @@ func TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPo
 	// below: without a per-test SQLite file, this test contends on the shared PID-scoped store
 	// with every other concurrently-running test in this package during a full-suite run, which
 	// can push the 60s hook-write poll in waitForPermissionRequestHookCommand past its budget.
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	deps, err := BuildDependencies()
 	if err != nil {
@@ -534,7 +584,7 @@ func TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPo
 //	kill %1 %2 %3
 func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testing.T) {
 	installFakeClaudeBinary(t)
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	deps, err := BuildDependencies()
 	if err != nil {
@@ -543,7 +593,7 @@ func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testi
 
 	port := testutil.FindFreePort(t)
 	addr := fmt.Sprintf("localhost:%d", port)
-	srv := NewServerWithDeps(addr, deps)
+	srv := newShutdownOnCleanupServer(t, addr, deps)
 	if got := srv.GetAddr(); got != addr {
 		t.Fatalf("expected GetAddr() to report the configured explicit address before Start(), got %q, want %q", got, addr)
 	}
@@ -604,7 +654,7 @@ func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testi
 // under -race's slowdown can exceed the 5s busy_timeout ("database is locked").
 func TestSessionService_CreateThenImmediateDelete_NoDataRace(t *testing.T) {
 	installFakeClaudeBinary(t)
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	deps, err := BuildDependencies()
 	if err != nil {
 		t.Fatalf("BuildDependencies: %v", err)
@@ -658,7 +708,7 @@ func waitForResolvedAddr(t *testing.T, srv *Server, timeout time.Duration) strin
 func waitForLiveInstance(t *testing.T, deps *ServerDependencies, sessionID string, timeout time.Duration) *session.Instance {
 	t.Helper()
 	var inst *session.Instance
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		if got := deps.SessionService.FindLiveInstance(sessionID); got != nil {
 			inst = got
 			return true
@@ -682,7 +732,7 @@ func waitForLiveInstance(t *testing.T, deps *ServerDependencies, sessionID strin
 func waitForPermissionRequestHookCommand(t *testing.T, settingsPath string, timeout time.Duration) string {
 	t.Helper()
 	var hookCmd string
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		data, err := os.ReadFile(settingsPath)
 		if err != nil {
 			return false
@@ -771,5 +821,64 @@ func waitForTmuxTeardown(t *testing.T, inst *session.Instance, timeout time.Dura
 	})
 	if err != nil {
 		t.Logf("tmux session for %q still reported alive %s after DeleteSession; teardown may still be in flight: %v", inst.Title, timeout, err)
+	}
+}
+
+// The real Start() handler (not just localChain) must reject a rebinding Host on
+// registered and unregistered paths alike, so no route can bypass the guard by
+// being served from a different chain.
+func TestServer_should_RejectRebindingHost_When_StartedOnRealListener(t *testing.T) {
+	srv, _ := newServerBase("localhost:0")
+	srv.mux.HandleFunc("/api/registered", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Start(ctx) }()
+	defer func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(5 * time.Second):
+			t.Errorf("server did not shut down within 5s")
+		}
+	}()
+
+	var addr string
+	wait.RequireEventually(t, func() bool {
+		addr = srv.GetAddr()
+		if addr == "" || addr == "localhost:0" {
+			return false
+		}
+		resp, err := http.Get("http://" + addr + "/health")
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return true
+	}, 5*time.Second, 10*time.Millisecond, "server did not become reachable")
+
+	status := func(path, host string) int {
+		req, err := http.NewRequest(http.MethodGet, "http://"+addr+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Host = host
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET %s Host %s: %v", path, host, err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+	for _, host := range []string{"evil.example", "8543--main--ws--user.coder.prod.netflix.net"} {
+		for _, path := range []string{"/api/registered", "/api/not-registered", "/", "/mcp"} {
+			if got := status(path, host); got != http.StatusForbidden {
+				t.Errorf("GET %s with Host %q = %d, want 403", path, host, got)
+			}
+		}
+	}
+	if got := status("/api/registered", addr); got != http.StatusOK {
+		t.Errorf("GET /api/registered with loopback Host = %d, want 200", got)
 	}
 }

@@ -18,12 +18,29 @@ type MCPResult struct {
 
 // SessionSummary is returned by list_sessions and search_sessions.
 type SessionSummary struct {
-	ID             string    `json:"id"`
-	Title          string    `json:"title"`
-	Status         string    `json:"status"`
-	Tags           []string  `json:"tags"`
-	Branch         string    `json:"branch,omitempty"`
-	Path           string    `json:"path"`
+	ID     string   `json:"id"`
+	Title  string   `json:"title"`
+	Status string   `json:"status"`
+	Tags   []string `json:"tags"`
+	Branch string   `json:"branch,omitempty"`
+	// Path is the session's original/logical repo path, set once at creation
+	// and never updated to reflect an actual worktree location — it identifies
+	// the repo, not where the session's process is running. Kept unchanged for
+	// backward compatibility with external MCP consumers.
+	// Deprecated: use ActiveDir (where the session runs) or ExistingDir (where
+	// to read/write files); see [[docs/reference/state-isolation.md]]'s path
+	// vocabulary, mirrored from ConnectRPC's Session.active_dir/existing_dir.
+	Path string `json:"path"`
+	// ActiveDir is where this session's process is actually running: its git
+	// worktree directory if it has one, else Path. Use this to compare whether
+	// two sessions occupy the same location.
+	ActiveDir string `json:"active_dir"`
+	// ExistingDir is ActiveDir when that directory still exists on disk, else
+	// Path. Use this only to open/read files — pause_session deletes a
+	// worktree's directory while keeping the session's branch, so two
+	// paused sessions in independently cleaned-up worktrees can share an
+	// ExistingDir without being in the same place; never compare it.
+	ExistingDir    string    `json:"existing_dir"`
 	CreatedAt      time.Time `json:"created_at"`
 	LastActivityAt time.Time `json:"last_activity_at"`
 }
@@ -33,7 +50,24 @@ type SessionDetail struct {
 	SessionSummary
 	Program     string `json:"program"`
 	SessionType string `json:"session_type"`
-	WorkingDir  string `json:"working_dir,omitempty"`
+	// WorkingDir here is the user-configured subdirectory to start in,
+	// relative to Path (Instance.WorkingDir in session/instance.go) — NOT the
+	// resolved, worktree-aware absolute path that ConnectRPC's identically
+	// named Session.working_dir field carries (that one is populated from
+	// Workspace().ActiveDir; see instance_adapter.go). Same field name,
+	// different source field, different meaning. Kept unchanged for backward
+	// compatibility with external MCP consumers.
+	// Deprecated: use SessionSummary.ActiveDir/ExistingDir for the resolved
+	// path; this field's relative-subdirectory meaning has no ActiveDir-style
+	// replacement here yet.
+	WorkingDir string `json:"working_dir,omitempty"`
+	// CreationWarning is set once, at create_session time, when a
+	// new_worktree session's source repo had an ambient checked-out HEAD
+	// that diverged from the default branch it actually branched from (see
+	// session.Instance.CreationWarning) — a non-fatal signal, distinct from
+	// silent success, that the caller should double check nothing unrelated
+	// was expected to carry into this worktree.
+	CreationWarning string `json:"creation_warning,omitempty"`
 }
 
 // ListSessionsResult is returned by list_sessions.
@@ -110,6 +144,14 @@ const (
 	// timeout, or a vanish — distinct from both of the above and from the
 	// timeout's still_creating success result.
 	ErrSessionCreationAwaitCanceled = "SESSION_CREATION_AWAIT_CANCELED"
+	// ErrSessionNotReady: the session's PTY/tmux stream hasn't produced a
+	// single byte of scrollback since creation — read_session_output/
+	// run_command return this instead of an empty-output success, so a
+	// caller can tell "still initializing" from "the command legitimately
+	// printed nothing" (session/scrollback.ScrollbackManager.CurrentSequence
+	// == 0). Never returned once the session has emitted anything at all,
+	// even if a later command is itself silent.
+	ErrSessionNotReady = "SESSION_NOT_READY"
 )
 
 // BacklogItemSummaryResult is a trimmed backlog item shown in list_backlog_items results.

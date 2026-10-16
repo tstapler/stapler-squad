@@ -22,6 +22,7 @@ import (
 	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // slackTestEncryptionKey is a fixed 32-byte key used to pre-populate
@@ -268,6 +269,7 @@ func TestNotifyReviewQueueItem_NoOps_When_WebhookNotConfigured(t *testing.T) {
 	}, 750*time.Millisecond, 20*time.Millisecond, "no send should have been attempted")
 }
 
+// T-OS-01: Slack payload characterization (see slack_gate_test.go).
 func TestNotifyReviewQueueItem_PostsExpectedBlockKitPayload_ToHTTPTestServer(t *testing.T) {
 	t.Parallel()
 	srv, ch := startCapturingSlackServer(t)
@@ -332,6 +334,7 @@ func TestNotifyApprovalPending_NoOps_When_WebhookNotConfigured(t *testing.T) {
 	}, 750*time.Millisecond, 20*time.Millisecond, "no send should have been attempted")
 }
 
+// T-OS-01: Slack payload characterization (see slack_gate_test.go).
 func TestNotifyApprovalPending_PostsExpectedPayload_ToHTTPTestServer(t *testing.T) {
 	t.Parallel()
 	srv, ch := startCapturingSlackServer(t)
@@ -487,11 +490,16 @@ func TestNotifyApprovalPending_OmitsActionsBlock_When_ApprovalDisabled(t *testin
 
 func TestSlackNotifier_SendFailure_DoesNotBlockCaller(t *testing.T) {
 	t.Parallel()
+	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(10 * time.Second)
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) }) // runs before srv.Close so a still-hanging handler returns
 
 	cfg := slackConfigWithWebhook(t, srv.URL)
 	n := NewSlackNotifier()
@@ -506,7 +514,7 @@ func TestSlackNotifier_SendFailure_DoesNotBlockCaller(t *testing.T) {
 	// Drain the background dispatch (bounded by the 5s http client timeout)
 	// before the test returns, so it can't outlive this test and race with a
 	// later test's use of the global slog default via log.Warn.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		attempted, _, _, _ := n.GetDeliveryStatus()
 		return attempted
 	}, 7*time.Second, 50*time.Millisecond, "background send never completed")

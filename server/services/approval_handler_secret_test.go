@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // newTestHandlerWithAnalytics creates an ApprovalHandler with an in-memory AnalyticsStore.
@@ -70,7 +71,7 @@ func TestApprovalHandler_SecretNotPersistedToAnalytics(t *testing.T) {
 	assert.Equal(t, "deny", resp.HookSpecificOutput.Decision.Behavior, "secret command must be denied")
 
 	// Wait for the async analytics write to complete.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		entries, err := analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1*time.Hour))
 		if err != nil {
 			return false
@@ -111,7 +112,7 @@ func TestApprovalHandler_LoadWindow_ContainsNoSecret(t *testing.T) {
 	_ = postPermissionRequestWithCommand(t, h, "session-2", "Bash", secretCmd)
 
 	// Wait for the async analytics write to complete.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		entries, err := analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1*time.Hour))
 		if err != nil {
 			return false

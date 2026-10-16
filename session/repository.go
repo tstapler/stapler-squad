@@ -62,6 +62,15 @@ type BacklogItemDependencyEdge struct {
 	BlockedID string
 }
 
+// BacklogItemDependencyRef identifies the other end of a dependency edge with
+// just enough context (title, status) to render "blocked by <title>".
+type BacklogItemDependencyRef struct {
+	ItemID   string
+	PublicID string // "" when the item has no public ID yet
+	Title    string
+	Status   string
+}
+
 // ApprovalRuleData is the domain model for an auto-approval rule.
 type ApprovalRuleData struct {
 	ID             string
@@ -92,6 +101,37 @@ type ApprovalRuleData struct {
 	SafePythonImportsOnly bool
 	RequireCIPassing      bool
 	MinSessionIdleMinutes int32
+}
+
+// TaggingRuleData is the domain model for a user-editable tagging rule.
+// Sibling of ApprovalRuleData — same shape convention, same unique-rule_id +
+// atomic-upsert concurrency guarantee.
+type TaggingRuleData struct {
+	RuleID         string
+	Name           string
+	NamePattern    string
+	BranchPattern  string
+	PathPattern    string
+	ProgramPattern string
+	RequiredTags   []string
+	OutputTag      string
+	Priority       int
+	Enabled        bool
+	Source         string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+// DismissedFindingData is the domain model for a dismissed WasteFinding
+// record. FindingID is the stable content-addressed dismissal key (see
+// tokens.ComputeFindingID); SessionID/ConversationID/FindingType are kept
+// alongside it only for debuggability, not for lookups.
+type DismissedFindingData struct {
+	FindingID      string
+	SessionID      string
+	ConversationID string
+	FindingType    int32
+	DismissedAt    time.Time
 }
 
 // SubcommandDecisionCount holds a (subcommand, decision) aggregate count.
@@ -160,13 +200,27 @@ type ReviewVerdictSummary struct {
 //   - OverallOutcome: from the review_verdicts table (populated via ReviewVerdict edge)
 //   - ReviewVerdict: eagerly loaded when the query uses WithReviewVerdict()
 type ItemSessionSummary struct {
-	ID                       string
-	BacklogItemID            string
-	SessionUUID              string
-	Role                     string
+	ID            string
+	BacklogItemID string
+	SessionUUID   string
+	Role          string
+	// BranchName is the work session's git branch, stamped once at spawn
+	// time — see ItemSession.branch_name's schema comment. Empty for rows
+	// created before this field existed, or for a non-work role.
+	BranchName               string
 	AcSnapshot               AcCriteriaJSON
 	PipelineModeSnapshot     string
 	PipelineModeSnapshotHash string
+	// ResolvedProgram/ResolvedModel/ExecutorSnapshotHash/ConfiguredProgram/
+	// ExecutorFallbackReason mirror ItemSession's ent schema fields of the
+	// same name — see their schema comments for the full "what ran"
+	// provenance discipline. Independent of PipelineModeSnapshot(Hash), which
+	// covers only content templates, not execution config.
+	ResolvedProgram        string
+	ResolvedModel          string
+	ExecutorSnapshotHash   string
+	ConfiguredProgram      string
+	ExecutorFallbackReason string
 	// BaseCommitSha is the worktree's pre-work HEAD, captured once at spawn —
 	// the base of the review gate's base..HEAD diff, and by construction always
 	// already an ancestor of main. Never use it as evidence that this session's
@@ -182,17 +236,22 @@ type ItemSessionSummary struct {
 	StartedAt             *time.Time
 	EndedAt               *time.Time
 	EndReason             string // set alongside EndedAt for a headless call; see ItemSession.end_reason schema comment
+	ErrorDetail           string // truncated error text for end_reason "other"; see ItemSession.error_detail schema comment
 	FailureCapturePath    string // absolute path to a durable raw-output capture; see ItemSession.failure_capture_path schema comment
 	LastCommitAt          *time.Time
 	LastFileTouchAt       *time.Time
 	LastProgressAt        *time.Time
 	CreatedAt             time.Time
 	EstimatedCostUsd      float64
-	TriageResult          string // raw JSON stored in triage_result column
-	TriageResultSummary   string // summary field parsed from TriageResult
-	VerificationNotes     string // freeform verification evidence reported via request_review
-	OverallOutcome        string // from linked review_verdict (empty if none)
-	ReviewVerdict         *ReviewVerdictSummary
+	// CostPriced mirrors ItemSession.cost_priced — false when the most recent
+	// cost-contributing headless call could not produce a trustworthy dollar
+	// figure. See the ent schema field's comment for the full rationale.
+	CostPriced          bool
+	TriageResult        string // raw JSON stored in triage_result column
+	TriageResultSummary string // summary field parsed from TriageResult
+	VerificationNotes   string // freeform verification evidence reported via request_review
+	OverallOutcome      string // from linked review_verdict (empty if none)
+	ReviewVerdict       *ReviewVerdictSummary
 	// ClaimantHostID identifies the physical stapler-squad process/host that claimed or
 	// attached this session. See ItemSession.claimant_host_id's schema comment for the
 	// full disambiguation against STAPLER_SQUAD_INSTANCE and CloudContext.InstanceID.
@@ -206,7 +265,21 @@ type BacklogStatusEventData struct {
 	ToStatus    string
 	TriggeredBy string
 	Note        *string
-	CreatedAt   time.Time
+	// StageNameSnapshot is Epic 2.5's frozen-at-transition-time human-readable
+	// name of the destination BacklogStage, so item-detail history keeps
+	// rendering the original stage name after that stage row is later renamed
+	// or deleted. Nil for a row written before this field existed, or when no
+	// matching BacklogStage row was found at write time.
+	StageNameSnapshot *string
+	// AllowedTransitionsSnapshot is ADR-004's sibling snapshot: the destination
+	// BacklogStage's legal outgoing transition slugs (as BacklogStatus string
+	// values) at the moment of this transition, so CanTransition/
+	// AllowedTransitions/PendingGates can fall back to it when that stage is
+	// later deleted. Nil (not just empty) for a row written before this field
+	// existed, or when no matching BacklogStage row was found at write time —
+	// distinguishing "no snapshot captured" from "captured, zero transitions."
+	AllowedTransitionsSnapshot []string
+	CreatedAt                  time.Time
 }
 
 // ProgressNoteData is the domain DTO replacing *ent.BacklogProgressNote in Storage returns.
@@ -275,12 +348,24 @@ type BacklogItemData struct {
 	// deliberate opt-in, since it removes the human review-the-prompt
 	// checkpoint before an LLM-authored PR is created.
 	AutoCreatePR bool
+	// AutoApprovePlan, when true, approves a plan TriggerTriage produces
+	// automatically (PlanApproved set true, mirroring a manual "Approve Plan"
+	// click) once its artifacts exist on disk — no human review checkpoint.
+	// Off by default, same opt-in rationale as AutoCreatePR. See the
+	// auto-approve call site in server/services/backlog_service_triage.go's
+	// TriggerTriage.
+	AutoApprovePlan bool
 	// ReworkCapOverride is a per-item override for the auto-rework cap
 	// (config.Config.MaxAutoReworkIterationsOrDefault). Nil = use the global
 	// default. 0 = unlimited retries for this item. >0 = this item's own cap,
 	// replacing (not adding to) the global value. See effectiveReworkCap in
 	// server/services/backlog_service_triage.go.
 	ReworkCapOverride *int
+	// CostBudgetThresholdUsd is a per-item, optional soft-budget-warning
+	// threshold in USD. Nil = no threshold configured, no warning ever fires
+	// for this item. Same single-pointer-presence convention as
+	// ReworkCapOverride. See session.EvaluateBudgetThreshold.
+	CostBudgetThresholdUsd *float64
 	// PipelineMode is the slug of the PipelineMode this item uses to drive
 	// triage/work/review content (see session/pipeline_engine.go). Empty
 	// string (PipelineModeDefault) means the built-in, hardcoded pipeline.
@@ -404,36 +489,79 @@ type BacklogItemData struct {
 }
 
 // BacklogItemSummary is a lightweight projection of BacklogItemData for list views.
-// It omits large text fields (Description, plan artifacts) and status-event history,
-// but eagerly includes ItemSessions (with ReviewVerdict) for cost/status display.
+// It omits large text fields (Description, plan artifact *contents*) and
+// status-event history, but eagerly includes ItemSessions (with ReviewVerdict)
+// for cost/status display. PlanApproved/PlanArtifactsPath/SkipPlanning/
+// PlanRejectionReason ARE included despite the "lightweight" framing — they're
+// short scalar fields (a bool and two strings holding a path/short reason, not
+// file content), and board/list-view card actions gate on them directly (see
+// getAvailableActions in web-app/src/lib/backlog/itemActions.ts). Omitting
+// them here previously left backlogItemSummaryToProto silently zero-valuing
+// all four — the same class of bug fixed once already for AllowedTransitions
+// (#585); see this type's ent_repository_backlog.go and
+// backlog_service.go:backlogItemSummaryToProto call sites, which must keep
+// setting every one of these fields to stay in parity with the full
+// BacklogItemData/backlogItemToProto path.
 type BacklogItemSummary struct {
-	ID                 string               `json:"id"`
-	PublicIDRaw        string               `json:"public_id"`
-	ExternalID         string               `json:"external_id"`
-	ExternalURL        string               `json:"external_url"`
-	Labels             []string             `json:"labels"`
-	Title              string               `json:"title"`
-	Status             BacklogStatus        `json:"status"`
-	Priority           int                  `json:"priority"`
-	RepoPath           string               `json:"repo_path"`
-	AcceptanceCriteria AcCriteriaJSON       `json:"acceptance_criteria"`
-	Notes              string               `json:"notes"`
-	PrURL              string               `json:"pr_url"`
-	PrNumber           int                  `json:"pr_number"`
-	CreatedAt          time.Time            `json:"created_at"`
-	UpdatedAt          time.Time            `json:"updated_at"`
-	ArchivedAt         *time.Time           `json:"archived_at"`
-	ItemSessions       []ItemSessionSummary `json:"-"`
+	ID                  string               `json:"id"`
+	PublicIDRaw         string               `json:"public_id"`
+	ExternalID          string               `json:"external_id"`
+	ExternalURL         string               `json:"external_url"`
+	Labels              []string             `json:"labels"`
+	Title               string               `json:"title"`
+	Status              BacklogStatus        `json:"status"`
+	Priority            int                  `json:"priority"`
+	RepoPath            string               `json:"repo_path"`
+	AcceptanceCriteria  AcCriteriaJSON       `json:"acceptance_criteria"`
+	Notes               string               `json:"notes"`
+	PrURL               string               `json:"pr_url"`
+	PrNumber            int                  `json:"pr_number"`
+	CreatedAt           time.Time            `json:"created_at"`
+	UpdatedAt           time.Time            `json:"updated_at"`
+	ArchivedAt          *time.Time           `json:"archived_at"`
+	ItemSessions        []ItemSessionSummary `json:"-"`
+	SkipPlanning        bool                 `json:"skip_planning"`
+	PlanApproved        bool                 `json:"plan_approved"`
+	PlanArtifactsPath   string               `json:"plan_artifacts_path"`
+	PlanRejectionReason string               `json:"plan_rejection_reason"`
 }
 
 // ItemSessionBacklogEntry is a lightweight join record linking a tmux session UUID
 // to its parent backlog item's metadata. Returned by GetAllItemSessionsWithBacklogInfo.
 type ItemSessionBacklogEntry struct {
-	SessionUUID string
-	SessionRole string
-	ItemID      string
-	ItemTitle   string
-	ItemStatus  string
+	ItemSessionID string // the item_sessions row's own ID
+	SessionUUID   string
+	// ConversationUUID is the Claude transcript UUID ("" if never recorded);
+	// it survives the session row's deletion, unlike SessionUUID's join target.
+	ConversationUUID string
+	SessionRole      string
+	ItemID           string
+	ItemTitle        string
+	ItemStatus       string
+	// EstimatedCostUsd, CostPriced, and CreatedAt mirror the underlying
+	// ItemSession row's own fields (session/ent/schema/item_session.go).
+	EstimatedCostUsd float64
+	CostPriced       bool
+	CreatedAt        time.Time
+}
+
+// DeletedItemSessionCostEntry is a ledger row preserving one deleted
+// ItemSession's cost attribution — written by DeleteBacklogItem just before
+// the item's ItemSession rows are hard-deleted. Returned by
+// GetDeletedItemSessionCostLedger. Field names mirror ItemSessionBacklogEntry
+// so callers can fold both shapes through the same SessionMeta path.
+type DeletedItemSessionCostEntry struct {
+	ConversationUUID string
+	SessionUUID      string
+	SessionRole      string
+	ItemID           string
+	ItemTitle        string
+	EstimatedCostUsd float64
+	CostPriced       bool
+	// CreatedAt is the original ItemSession's created_at (not this ledger
+	// row's deleted_at) — Insights' time-range filter needs the work's
+	// original timestamp.
+	CreatedAt time.Time
 }
 
 // BacklogItemFilter controls which items ListBacklogItems returns.
@@ -489,6 +617,7 @@ type BacklogItemUpdate struct {
 	SkipPlanning     *bool
 	AutoSpawnSession *bool
 	AutoCreatePR     *bool
+	AutoApprovePlan  *bool
 	// PipelineMode is a pointer for partial-update presence: nil means "leave
 	// the item's stored pipeline_mode untouched", while a non-nil pointer
 	// (including one pointing at "") explicitly sets/resets it. See
@@ -560,6 +689,13 @@ type BacklogItemUpdate struct {
 	// default" via this struct — a deliberate simplification; add a
 	// ClearReworkCapOverride bool alongside this if that's needed later.
 	ReworkCapOverride *int
+	// CostBudgetThresholdUsd follows the same single-pointer presence
+	// convention as ReworkCapOverride: nil means "leave untouched", a
+	// non-nil pointer sets the item's threshold (0.0 is a legitimate
+	// configured threshold, distinct from nil/"unset"). There is currently
+	// no way to explicitly clear a threshold back to "unset" via this
+	// struct — same deliberate simplification as ReworkCapOverride.
+	CostBudgetThresholdUsd *float64
 	// UserModifiedFields follows the same partial-update-presence convention:
 	// nil means "leave untouched", a non-nil pointer sets the stored
 	// JSON-encoded set of user-modified field names (e.g. `["title"]`). Build
@@ -633,6 +769,14 @@ type ShellRepository interface {
 	UpdateShellStatus(ctx context.Context, shellID, status string, exitCode *int) error
 	// DeleteShell removes the shell record with the given ID.
 	DeleteShell(ctx context.Context, shellID string) error
+}
+
+// InitialPromptRepository is the minimal persistence interface for recording when
+// Instance.InitialPrompt was actually sent. It is implemented by EntRepository;
+// pass nil to disable persistence (e.g., tests).
+type InitialPromptRepository interface {
+	// UpdateInitialPromptSentAt sets the initial_prompt_sent_at field for a session.
+	UpdateInitialPromptSentAt(ctx context.Context, title string, t time.Time) error
 }
 
 // RepositoryOption is a function that configures a repository

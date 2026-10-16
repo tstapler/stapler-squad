@@ -8,6 +8,10 @@ import { NotificationHistoryItem } from "@/lib/types/notification";
 
 export type ApprovalDecisionState = "allow" | "deny" | "expired";
 
+/** Shown for any resolveApproval rejection that isn't the FailedPrecondition
+ *  reconciliation-race case — a transient failure the user can retry. */
+export const APPROVAL_RETRY_MESSAGE = "Couldn't record your decision — try again.";
+
 export interface UseApprovalResolutionOptions {
   notificationHistory: NotificationHistoryItem[];
   /** Marks the given notification id(s) as read/acknowledged and closes any active toast. */
@@ -21,6 +25,13 @@ export interface UseApprovalResolutionResult {
   pendingApprovals: Record<string, boolean>;
   /** Approvals blocked by the CI-red guard (AC5), keyed by approval ID, valued by the block message. */
   blockedApprovals: Record<string, string>;
+  /**
+   * Approvals whose last resolveApproval attempt failed transiently (any
+   * rejection that isn't the FailedPrecondition reconciliation-race case),
+   * keyed by approval ID, valued by the retry message. The item stays
+   * actionable — buttons remain enabled — unlike the "expired" state.
+   */
+  failedApprovals: Record<string, string>;
   resolveApproval: (
     approvalId: string,
     decision: "allow" | "deny",
@@ -50,6 +61,7 @@ export function useApprovalResolution({
   const [resolvedApprovals, setResolvedApprovals] = useState<Record<string, ApprovalDecisionState>>({});
   const [pendingApprovals, setPendingApprovals] = useState<Record<string, boolean>>({});
   const [blockedApprovals, setBlockedApprovals] = useState<Record<string, string>>({});
+  const [failedApprovals, setFailedApprovals] = useState<Record<string, string>>({});
 
   // Seed resolvedApprovals from persisted metadata when history loads or updates.
   // The server stamps "approval_decision" on the notification record when an approval
@@ -82,6 +94,7 @@ export function useApprovalResolution({
       await getClient().resolveApproval(create(ResolveApprovalRequestSchema, { approvalId, decision, overrideCiBlock }));
       setResolvedApprovals(prev => ({ ...prev, [approvalId]: decision }));
       setBlockedApprovals(prev => { const next = { ...prev }; delete next[approvalId]; return next; });
+      setFailedApprovals(prev => { const next = { ...prev }; delete next[approvalId]; return next; });
       // Single call: marks as read in history AND closes the active toast
       acknowledgeNotification(notificationIds);
     } catch (err) {
@@ -92,12 +105,14 @@ export function useApprovalResolution({
         return;
       }
       console.error("Failed to resolve approval:", err);
-      // Approval already timed out or was resolved elsewhere — mark as expired.
-      setResolvedApprovals(prev => ({ ...prev, [approvalId]: "expired" }));
+      // Any other rejection (network error, RPC 5xx, etc.) is a transient
+      // failure, not evidence the approval expired — keep it actionable so
+      // the user can retry rather than dead-ending on a misleading "Expired" badge.
+      setFailedApprovals(prev => ({ ...prev, [approvalId]: APPROVAL_RETRY_MESSAGE }));
     } finally {
       setPendingApprovals(prev => { const next = { ...prev }; delete next[approvalId]; return next; });
     }
   }, [getClient, acknowledgeNotification]);
 
-  return { resolvedApprovals, pendingApprovals, blockedApprovals, resolveApproval };
+  return { resolvedApprovals, pendingApprovals, blockedApprovals, failedApprovals, resolveApproval };
 }

@@ -11,13 +11,16 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -52,12 +55,13 @@ type ReviewQueueChecker interface {
 type approvalNotificationStamper interface {
 	SetMetadata(id, key, value string) error
 	MarkRead(ids []string) (int, error)
+	GetByID(id string) (*notifications.NotificationRecord, bool)
 }
 
 // autoApprovalLogger is a narrow interface for writing silent auto-approval records
 // directly to notification history without triggering toasts or push notifications.
 type autoApprovalLogger interface {
-	AppendAutoApproved(sessionID, sessionName, toolName, filePath, ruleID, ruleName, ruleSource, decision string) error
+	AppendAutoApproved(sessionID, sessionName, toolName, detail, ruleID, ruleName, ruleSource, decision string) error
 }
 
 // headlessPoolApprover is the narrow interface ApprovalHandler needs from the headless pool.
@@ -86,6 +90,20 @@ type ApprovalHandler struct {
 	slackNotifier       *SlackNotifier              // optional: notifies a configured Slack webhook about new pending approvals; concrete type (no interface) since both live in this package
 	dashboardBaseURLFn  func() string               // optional: lazily-read fallback for the Slack dashboard-link base URL, used only when cfg.Slack.DashboardBaseURL is unset. Mirrors ReactiveQueueManager.dashboardBaseURLFn exactly (server.go wires the same hookBaseURLFn into both).
 	piHealthTracker     *PiExtensionHealthTracker   // optional: records pi approval-extension health pings (pi-support Epic 4.2)
+	autoApprovedGate    AutoApprovedGate            // optional: drops hidden-session auto-allow history rows (nil = append all)
+	questions           questionWiring              // optional: Reply's pending-question registry and hook-proof verification
+}
+
+// AutoApprovedGate decides whether an auto-approved history row is recorded for
+// a session. Implemented by the delivery gate; declared here so tests fake it
+// with one func literal. A deny is the audit trail and is never gated by callers.
+type AutoApprovedGate interface {
+	AllowAutoApprovedRow(sessionID, decision string) bool
+}
+
+// SetAutoApprovedGate wires the hidden-session gate for auto-approved rows.
+func (h *ApprovalHandler) SetAutoApprovedGate(g AutoApprovedGate) {
+	h.autoApprovedGate = g
 }
 
 // NewApprovalHandler creates a new ApprovalHandler.
@@ -232,6 +250,65 @@ func buildApprovalQuery(toolName string, toolInput map[string]interface{}, sessi
 	)
 }
 
+// piToolNameAliases maps pi's native tool names (@earendil-works/pi-coding-agent
+// dist/core/tools/index.js's allToolNames: read, bash, powershell, edit, write, grep,
+// find, ls) to the Claude tool name a classifier rule actually targets, wherever the
+// two differ. Most of pi's names already match a rule's ToolName/ToolPattern via
+// matchesRule's case-insensitive strings.EqualFold (pi's "bash" == "Bash", "read" ==
+// "Read", "write" == "Write", "edit" == "Edit", "grep" == "Grep" — all listed as-is in
+// classifier.go's ToolPattern regexes), so only the two genuine mismatches are aliased:
+//   - "find" -> "Glob": pi's glob-pattern file finder has no name overlap with Claude's
+//     "Glob" tool, which classifier.go:1328's read-only ToolPattern explicitly lists.
+//   - "powershell" -> "Bash": pi's Windows shell tool is a distinct name from Claude's
+//     single cross-platform "Bash" tool; aliasing it lets classifier.go:826's ToolName:
+//     "Bash" rule and line 472's deep AST security audit apply to PowerShell commands
+//     too, since powershell's arg is already keyed "command" (see piPathToFilePathTools
+//     below for the one field pi does NOT share with Claude's convention).
+var piToolNameAliases = map[string]string{
+	"find":       "Glob",
+	"powershell": "Bash",
+}
+
+// normalizePiPayload rewrites payload in place from pi's native tool vocabulary to
+// Claude's, so classifier.RuleBasedClassifier's rules — written entirely against
+// Claude's ToolName strings and ToolInput key names — actually match pi tool calls
+// instead of falling through to "no matching rule" on every single one.
+//
+// Root cause (2026-09-12 investigation): pi's approval extension
+// (cmd/ssq-hooks/main.go's ssqApprovalExtensionTemplate) forwards event.toolName/
+// event.input verbatim with no translation, unlike every other non-Claude agent
+// (Gemini/OpenCode/Antigravity), which go through cmd/ssq-hooks's own per-agent parsers
+// (see normalizeOpenCodeToolInput there for the equivalent fix, already shipped, for
+// OpenCode's "filePath" vs. Claude's "file_path"). pi never had an equivalent because
+// its extension POSTs directly to this HTTP endpoint (ADR-001) rather than going
+// through ssq-hooks's stdin-based parser chain at all.
+//
+// Confirmed against the real installed package
+// (~/.local/share/pi/lib/node_modules/@earendil-works/pi-coding-agent/dist/core/tools/*.js,
+// pi 0.84.4): pi's read/edit/write/grep/find/ls tools all key their target path as
+// "path" (Type.String({description:"Path to the file..."})) — never "file_path". Since
+// matchesRule (pkg/classifier/classifier.go) reads payload.ToolInput["file_path"]
+// verbatim for every FilePattern rule, every pi file-targeting tool call previously
+// matched filePath == "" and silently failed FilePattern rules exactly like the
+// OpenCode gap did — before falling through to Escalate (classifyInternal's
+// "No matching rule" path) and blocking for the full 4-minute manual-review timeout
+// (ApprovalHandler.approvalTimeout()) with no reviewer able to resolve it, which is the
+// "everything getting hung up and timing out" symptom this fixes.
+func normalizePiPayload(payload *classifier.PermissionRequestPayload) {
+	if alias, ok := piToolNameAliases[strings.ToLower(payload.ToolName)]; ok {
+		payload.ToolName = alias
+	}
+	if payload.ToolInput == nil {
+		return
+	}
+	if _, hasFilePath := payload.ToolInput["file_path"]; hasFilePath {
+		return
+	}
+	if p, ok := payload.ToolInput["path"]; ok {
+		payload.ToolInput["file_path"] = p
+	}
+}
+
 // HandlePermissionRequest handles POST /api/hooks/permission-request.
 // This endpoint is configured as an HTTP hook in Claude Code's settings.
 // It blocks until the user approves/denies or the context is canceled.
@@ -267,6 +344,13 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 	source := payload.Source
 	if source == "" {
 		source = "claude"
+	}
+
+	// pi sends its own native tool vocabulary (payload.Source == "pi") — normalize it
+	// to Claude's conventions in place, unlike "claude"/"" which are passed through
+	// unmodified. See normalizePiPayload's doc comment for why this is needed at all.
+	if payload.Source == "pi" {
+		normalizePiPayload(&payload)
 	}
 
 	// Secret scan: auto-deny any command that appears to contain a plaintext secret.
@@ -355,7 +439,11 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 	// no Approve/Deny buttons.
 	if strings.EqualFold(payload.ToolName, "AskUserQuestion") {
 		log.ForSession(sessionID).Info("[ApprovalHandler] AskUserQuestion — notifying and deferring to native dialog")
-		h.broadcastQuestionNotification(sessionID, payload)
+		qa := h.attributeQuestion(r, sessionID)
+		if qa.uuid != "" {
+			sessionID = qa.uuid // a verified proof's UUID is the attribution; the title header is ignored
+		}
+		h.broadcastQuestionNotification(sessionID, payload, qa)
 		h.writeDeferDecision(w)
 		return
 	}
@@ -404,10 +492,9 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 
 		switch result.Decision {
 		case classifier.AutoAllow:
-			log.ForSession(sessionID).Info("[ApprovalHandler] auto-allowed", "tool", payload.ToolName, "rule", result.RuleID)
-			if h.autoApprovalLog != nil {
-				filePath, _ := payload.ToolInput["file_path"].(string)
-				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, filePath, result.RuleID, result.RuleName, result.Source, "allow")
+			log.ForSession(sessionID).Info("[ApprovalHandler] auto-allowed", "tool", payload.ToolName, "rule", result.RuleID, "detail", approvalDetail(payload.ToolInput))
+			if h.autoApprovalLog != nil && (h.autoApprovedGate == nil || h.autoApprovedGate.AllowAutoApprovedRow(sessionID, "allow")) {
+				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, approvalDetail(payload.ToolInput), result.RuleID, result.RuleName, result.Source, "allow")
 			}
 			h.writeDecision(w, "allow", "")
 			return
@@ -416,10 +503,11 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			if result.Alternative != "" {
 				msg = fmt.Sprintf("%s %s", msg, result.Alternative)
 			}
-			log.ForSession(sessionID).Info("[ApprovalHandler] auto-denied", "tool", payload.ToolName, "rule", result.RuleID, "msg", msg)
+			log.ForSession(sessionID).Info("[ApprovalHandler] auto-denied", "tool", payload.ToolName, "rule", result.RuleID, "msg", msg, "detail", approvalDetail(payload.ToolInput))
+			// Never gated: a deny row is the only record that a rule blocked a tool
+			// in a background session.
 			if h.autoApprovalLog != nil {
-				filePath, _ := payload.ToolInput["file_path"].(string)
-				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, filePath, result.RuleID, result.RuleName, result.Source, "deny")
+				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, approvalDetail(payload.ToolInput), result.RuleID, result.RuleName, result.Source, "deny")
 			}
 			h.writeDecision(w, "deny", msg)
 			return
@@ -643,6 +731,10 @@ func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approv
 		"cwd":         approval.Cwd,
 	}
 
+	if approval.RiskLevel != "" {
+		metadata[pkgevents.MetadataKeyRiskLevel] = approval.RiskLevel
+	}
+
 	// Extract tool-specific display fields
 	if cmd, ok := approval.ToolInput["command"].(string); ok && cmd != "" {
 		metadata["tool_input_command"] = cmd
@@ -662,7 +754,7 @@ func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approv
 		h.resolveSessionName(sessionID),
 		approval.ID, // Use approval ID as notification ID for correlation
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_APPROVAL_NEEDED),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT),
+		derivePriority(true, true), // urgent, important — a pending permission request blocks the session right now
 		title,
 		message,
 		metadata,
@@ -688,23 +780,34 @@ func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approv
 const maxNotificationMessageLen = 120
 
 // broadcastQuestionNotification fires an INPUT_REQUIRED notification when Claude uses
-// AskUserQuestion. It omits approval_id from metadata so no Approve/Deny buttons are shown —
-// only a ❓ toast directing the user to respond in the terminal.
-func (h *ApprovalHandler) broadcastQuestionNotification(sessionID string, payload classifier.PermissionRequestPayload) {
+// AskUserQuestion. It omits approval_id from metadata so no Approve/Deny buttons are shown.
+// The title and body come from questions[0] (Spike 1.3g: the real payload has no "prompt"
+// key). A single-select question whose sender proof verified is registered for Reply and
+// stamps question_id, question_shape and question_options; every other question stamps
+// question_shape and reply_unavailable so the card says "Answer in the terminal".
+func (h *ApprovalHandler) broadcastQuestionNotification(sessionID string, payload classifier.PermissionRequestPayload, qa questionAttribution) {
+	asked := ParseAskUserQuestion(payload.ToolInput)
 	message := "Check the terminal to respond."
-	if prompt, ok := payload.ToolInput["prompt"].(string); ok && prompt != "" {
-		message = truncateString(prompt, maxNotificationMessageLen)
+	switch {
+	case asked.Question != "":
+		message = truncateString(asked.Question, maxNotificationMessageLen)
+	default:
+		if prompt, ok := payload.ToolInput["prompt"].(string); ok && prompt != "" {
+			message = truncateString(prompt, maxNotificationMessageLen)
+		}
 	}
+	meta := h.registerQuestion(sessionID, qa, asked)
+	logQuestionRegistered(sessionID, string(asked.Shape), meta[metaReplyUnavailable])
 
 	event := events.NewNotificationEvent(
 		sessionID,
 		h.resolveSessionName(sessionID),
-		uuid.New().String(),
+		newQuestionNotificationID(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
+		derivePriority(true, true), // urgent, important — Claude is blocked waiting on the user right now
 		"Claude has a question",
 		message,
-		nil,
+		meta,
 	)
 	h.eventBus.Publish(event)
 }
@@ -744,13 +847,25 @@ func sanitizeNotificationText(s string) string {
 	}, s)
 }
 
-// buildApprovalMessage builds the human-readable message for an approval notification.
-func buildApprovalMessage(approval *PendingApproval) string {
-	if cmd, ok := approval.ToolInput["command"].(string); ok && cmd != "" {
+// approvalDetail extracts the human-meaningful part of a tool call — the full command
+// (including every sub-command of a compound &&/;/pipe chain, since this is the raw
+// string before classifier.ExtractAllCommands splits it) for Bash/PowerShell, or the
+// target path for file-targeting tools. Returns "" if toolInput has neither, letting the
+// caller supply its own fallback.
+func approvalDetail(toolInput map[string]interface{}) string {
+	if cmd, ok := toolInput["command"].(string); ok && cmd != "" {
 		return truncateString(cmd, maxNotificationMessageLen)
 	}
-	if filePath, ok := approval.ToolInput["file_path"].(string); ok && filePath != "" {
+	if filePath, ok := toolInput["file_path"].(string); ok && filePath != "" {
 		return filePath
+	}
+	return ""
+}
+
+// buildApprovalMessage builds the human-readable message for an approval notification.
+func buildApprovalMessage(approval *PendingApproval) string {
+	if detail := approvalDetail(approval.ToolInput); detail != "" {
+		return detail
 	}
 	return fmt.Sprintf("Claude needs permission to use %s", approval.ToolName)
 }
@@ -847,8 +962,8 @@ func (h *ApprovalHandler) writeDecision(w http.ResponseWriter, behavior, message
 
 // StartExpirationCleanup starts a background goroutine that periodically removes expired approvals.
 // The goroutine stops when ctx is canceled.
-func StartExpirationCleanup(ctx context.Context, store *ApprovalStore) {
-	go func() {
+func StartExpirationCleanup(ctx context.Context, store *ApprovalStore, wg *sync.WaitGroup) {
+	wg.Go(func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -861,7 +976,7 @@ func StartExpirationCleanup(ctx context.Context, store *ApprovalStore) {
 				return
 			}
 		}
-	}()
+	})
 }
 
 // hookEntry is the individual hook definition within a matcher group.
@@ -907,7 +1022,10 @@ func hookApprovalURL() string {
 // local path as "file doesn't exist" and this then writes a settings file
 // nobody remote will ever read), which was the ssh-remote-workspaces Phase
 // 5 bug this pair of functions exists to fix. See ADR-003's addendum.
-func InjectHookConfig(rootDir, sessionTitle string) error {
+func InjectHookConfig(rootDir, sessionTitle, sessionUUID string) error {
+	// The proof file is (re)written first, so an entry that gains the proof
+	// branch below finds its file at the next dialog.
+	ensureHookProofFile(sessionUUID)
 	claudeDir := filepath.Join(rootDir, ".claude")
 	settingsPath := filepath.Join(claudeDir, "settings.local.json")
 	// Serializes the read-merge-write sequence below against InjectHooksConfig and
@@ -919,10 +1037,7 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 	url := hookApprovalURL()
 	// Desired hook entry for this session.
 	// settings.local.json only supports "command" type hooks; use curl to POST to the approval URL.
-	curlCmd := fmt.Sprintf(
-		"curl -s --max-time %d -X POST '%s' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s' -d @-",
-		hookTimeout, url, sessionTitle,
-	)
+	curlCmd := buildLocalHookCommand(url, sessionTitle)
 	entry := hookEntry{Type: "command", Command: curlCmd, Timeout: hookTimeout}
 
 	// Read existing settings (if any).
@@ -941,8 +1056,12 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 		return err
 	}
 	if alreadyPresent {
-		log.Debug("[InjectHookConfig] hook already present", "path", settingsPath)
-		return nil
+		replaced, changed := replaceStaleHookInSettings(data, url, curlCmd)
+		if !changed {
+			log.Debug("[InjectHookConfig] hook already present", "path", settingsPath)
+			return nil
+		}
+		out = replaced
 	}
 
 	// Re-parse out back into a raw map so this shares writeSettingsAtomic's
@@ -961,6 +1080,36 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 	}
 	log.Info("[InjectHookConfig] wrote hook config", "path", settingsPath, "session", sessionTitle)
 	return nil
+}
+
+// replaceStaleHookInSettings rewrites, in place, a PermissionRequest command hook
+// for url whose command differs from desired (an entry from before the proof
+// branch existed). changed is false when nothing needed rewriting.
+func replaceStaleHookInSettings(existingData []byte, url, desired string) (out []byte, changed bool) {
+	raw := parseSettingsWithRepair(existingData, "replaceStaleHookInSettings")
+	groups := permissionRequestGroupsFromSettings(raw)
+	if _, changed = replaceStaleHookCommand(groups, url, desired); !changed {
+		return nil, false
+	}
+	hooksMap := map[string]json.RawMessage{}
+	if hooksRaw, ok := raw["hooks"]; ok {
+		_ = json.Unmarshal(hooksRaw, &hooksMap)
+	}
+	prJSON, err := json.Marshal(groups)
+	if err != nil {
+		return nil, false
+	}
+	hooksMap["PermissionRequest"] = json.RawMessage(prJSON)
+	hooksJSON, err := json.Marshal(hooksMap)
+	if err != nil {
+		return nil, false
+	}
+	raw["hooks"] = json.RawMessage(hooksJSON)
+	out, err = json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 // mergeHookEntryIntoSettings computes the merged settings.local.json bytes

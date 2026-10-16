@@ -4,6 +4,9 @@ import { HandoffSummarySection } from "./HandoffSummarySection";
 import { HandoffSummaryStatus } from "@/gen/session/v1/handoff_summary_pb";
 import type { HandoffSummaryProto } from "@/gen/session/v1/handoff_summary_pb";
 
+const mockTrack = jest.fn();
+jest.mock("@/lib/contexts/AnalyticsContext", () => ({ useAnalytics: () => ({ track: mockTrack }) }));
+
 // ---------------------------------------------------------------------------
 // Mocks -- HandoffSummarySection calls useHandoffSummary(sessionId) itself
 // (mocked here) and passes the result down as the `handoff` prop to every

@@ -10,14 +10,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -28,11 +32,13 @@ import (
 
 // SessionCreator allows BacklogService to spawn sessions without importing handler internals.
 type SessionCreator interface {
-	CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool) (*session.Instance, error)
+	// CreateDirectorySession creates a directory-type session at path. See
+	// SessionSpawnOptions.ProgramOverride's doc comment for how program overrides apply.
+	CreateDirectorySession(ctx context.Context, path string, opts SessionSpawnOptions) (*session.Instance, error)
 	// CreateWorktreeSession spawns a session inside an already-created git worktree at
 	// worktreePath. repoPath is the parent repo used for program resolution; worktreePath
 	// must already exist on disk before this is called.
-	CreateWorktreeSession(ctx context.Context, title, repoPath, worktreePath, prompt string, tags []string, oneShot bool, hidden bool) (*session.Instance, error)
+	CreateWorktreeSession(ctx context.Context, repoPath, worktreePath string, opts SessionSpawnOptions) (*session.Instance, error)
 }
 
 // AutonomousDriverStarter allows BacklogService to start an AutonomousDriver on an existing instance.
@@ -49,7 +55,10 @@ type SessionStopper interface {
 	// KillTmuxSessionByTitle kills a tmux session by its title, regardless of
 	// whether the Instance is still tracked in memory. Used to clear stale tmux
 	// sessions before re-triggering so the fresh session gets its --append-system-prompt.
-	KillTmuxSessionByTitle(ctx context.Context, title string) error
+	// allowedOwnerUUIDs are the Instance UUID(s) the caller trusts to be
+	// killed under this title -- see the implementation's doc comment
+	// (ce71ad1a: a name match alone isn't enough to prove ownership).
+	KillTmuxSessionByTitle(ctx context.Context, title string, allowedOwnerUUIDs ...string) error
 	// IsSessionLive returns true if the session UUID is currently tracked in the
 	// live in-memory poller. Used to distinguish genuinely-running sessions from
 	// sessions that exited but whose DB records were not closed (e.g. after a
@@ -90,13 +99,24 @@ type SessionStopper interface {
 // not wired, mirroring SessionStopper.
 type SessionSteerer interface {
 	SessionProgram(sessionUUID string) (program string, ok bool)
+	// IsHiddenSession reports whether sessionUUID is a live hidden
+	// (background) session. The automated steers refuse such a target: they
+	// write to the item's work session, never to a hidden review, diagnose or
+	// triage session (Story 5.1d, T-RO-39).
+	IsHiddenSession(sessionUUID string) bool
 	// IsReadyForSteer reports whether sessionUUID's pane is confirmed idle
 	// and safe for an unattended PTY write. False — including when
 	// readiness can't be determined — means the caller must not steer (see
 	// *SessionService.IsReadyForSteer's doc comment for why "unknown" must
 	// never default to true here).
 	IsReadyForSteer(sessionUUID string) bool
+	// SteerActiveSession writes message to the session unguarded (verdict steering).
 	SteerActiveSession(ctx context.Context, sessionUUID, message string) error
+	// SteerSessionGuarded delivers message under the per-session nudge guard
+	// shared with the manual PR nudge: sig is the reason signature used for
+	// the duplicate window, and a guard-caused outcome (SteerGuardBusy,
+	// SteerDuplicate) is not a delivery failure.
+	SteerSessionGuarded(ctx context.Context, sessionUUID, sig, message string) (SteerOutcome, error)
 }
 
 // RepoWatchRemover lets BacklogService tell the background unfinished-changes
@@ -120,12 +140,16 @@ type itemSourceBackend interface {
 
 // BacklogService handles Backlog RPCs.
 type BacklogService struct {
-	storage           *session.Storage
-	sourceBackend     itemSourceBackend
-	sessionCreator    SessionCreator
-	sessionStopper    SessionStopper
-	sessionSteerer    SessionSteerer
-	autonomousStarter AutonomousDriverStarter
+	storage        *session.Storage
+	sourceBackend  itemSourceBackend
+	sessionCreator SessionCreator
+	sessionStopper SessionStopper
+	sessionSteerer SessionSteerer
+	// verdictSteer* override the verdict-delivery readiness poll (zero = defaults); tests only.
+	verdictSteerPollInterval, verdictSteerReadyTimeout time.Duration
+	// verdictSteerLatest maps itemID -> latest verdict key (see dispatchVerdictSteer).
+	verdictSteerLatest sync.Map
+	autonomousStarter  AutonomousDriverStarter
 	// repoWatchRemover tells the unfinished-changes scanner to stop watching a
 	// worktree path once it's removed from disk (BUG-034). nil-safe — wired via
 	// SetRepoWatchRemover.
@@ -134,6 +158,9 @@ type BacklogService struct {
 	// self-service "Ship PR" action on the item detail page. nil (the default)
 	// makes TriggerShipPR return CodeUnimplemented; wired via SetOneShotRunner.
 	oneShotRunner PRRunner
+	// staleWorkInspector snapshots and nudges a stale work session before
+	// RemediateStaleWorkSession restarts it. nil keeps the plain restart.
+	staleWorkInspector StaleWorkInspector
 	// julesDispatcher drives DispatchToJules (backlog_service_jules.go). nil
 	// (the default — Jules disabled, or its dependencies unresolvable at
 	// startup) makes DispatchToJules return CodeFailedPrecondition pointing at
@@ -143,6 +170,9 @@ type BacklogService struct {
 	julesDispatcher JulesDispatcher
 	cfg             *config.Config
 	engine          session.WorkflowEngine
+	// reviewGuard is the listener's process-wide review-spawn reservation, so
+	// headless re-review honors the same one-reviewer-per-item rule. nil-safe.
+	reviewGuard *session.ReviewSpawnGuard
 	// worktreeMu serializes context-file writes to the same worktree path so that
 	// concurrent SpawnSessionFromItem / AttachSessionToItem calls cannot produce
 	// a partially-written .claude/backlog-context.md.
@@ -165,6 +195,14 @@ type BacklogService struct {
 	// the WIP cap by each computing freeSlots from their own stale snapshot
 	// (PR #199 review F2).
 	dequeueMu sync.Mutex
+
+	// claimWiring holds the cross_host_claim_dedup checker and dispute resolver
+	// (backlog_service_claim.go). It is atomic because SetClaimChecker runs at
+	// startup while RPCs and the dequeue sweep already read it. nil means
+	// unimplemented: everything reads as unclaimed. claimDedupFlag overrides the
+	// live feature-flag read (tests only).
+	claimWiring    atomic.Pointer[claimWiring]
+	claimDedupFlag func() bool
 
 	// spawnInFlight is a per-backlog-item "at most one work-session spawn in
 	// flight" set, keyed by item ID, storing struct{} — the same LoadOrStore/
@@ -218,6 +256,27 @@ type BacklogService struct {
 	shutdownCancel context.CancelFunc
 	triageSem      chan struct{}
 
+	// headlessCallers maps a stage executor's configured program name (e.g.
+	// "gemini") to the headless.PoolClient that runs it, consulted by
+	// resolveHeadlessCaller. Always contains at least "claude" -> headlessPool
+	// once SetHeadlessPool has run (see NewBacklogService's degradation
+	// contract: a nil creator/headlessPool is expected in test environments).
+	// Populated incrementally as dependencies.go wires each caller in, since
+	// GeminiCaller (Epic 3.1) is constructed after backlogSvc itself.
+	headlessCallers map[string]headless.PoolClient
+	// backendSelector, when set, routes stage programs and the default headless
+	// client through the live backend selection (nil in tests).
+	backendSelector *headless.Selector
+
+	// modelFamilies resolves a stage executor's "family:<alias>" Model value
+	// (e.g. "family:opus") to a concrete model ID via session.ResolveModel,
+	// mirroring server/workflows.Scheduler's own modelFamilies field.
+	// Defaults to workflows.DefaultModelFamilies() in NewBacklogService;
+	// overridable via SetModelFamilies from the same
+	// model_family_overrides.json dependencies.go loads for the Scheduler, so
+	// both fire paths resolve a given alias identically.
+	modelFamilies map[string]string
+
 	// triageInFlight tracks, per item ID, whether a headless triage call this
 	// process itself started is still genuinely running. tombstoneOrphanTriageSessions
 	// has no other way to tell a still-running headless call apart from a dead one —
@@ -234,11 +293,23 @@ type BacklogService struct {
 	// goroutine in the new process could possibly still be running an old triage call.
 	triageInFlight sync.Map
 
-	// capabilityCheck gates the first codebase-read call per process lifetime (Story
-	// 2.2.6). Defaults to headless.DefaultCapabilitySelfCheck (shared with
-	// ReviewGateRunner so a failure discovered via either call site short-circuits
-	// the other) but is a field — not a hardcoded package-var reference — so tests
-	// can inject a fresh instance instead of fighting the singleton's sync.Once.
+	// budgetWarnedItems tracks, per item ID, whether the work-stage soft
+	// budget warning (Story 4.2.3, ADR-003) has already fired for that item's
+	// current over-threshold streak — deduped for the process lifetime so a
+	// recurring poll/push of WatchBacklogItems/GetBacklogItem doesn't re-log
+	// on every read while an item stays over threshold. Mirrors
+	// InsightsService.warnNewUnpricedFamilies' per-process-lifetime dedup
+	// convention. checkWorkStageBudget deletes an item's entry once its cost
+	// drops back under threshold, so a future re-crossing warns again.
+	budgetWarnedItems sync.Map
+
+	// capabilityCheck gates codebase-read calls with a cached smoke-test result
+	// (Story 2.2.6): a success is cached for the process lifetime, a failure only
+	// for a bounded window before it's re-attempted. Defaults to
+	// headless.DefaultCapabilitySelfCheck (shared with ReviewGateRunner so a
+	// failure discovered via either call site short-circuits the other) but is a
+	// field — not a hardcoded package-var reference — so tests can inject a fresh
+	// instance instead of fighting the shared singleton's cached state.
 	capabilityCheck *headless.CodebaseReadCapabilitySelfCheck
 
 	// triageCleanupTimeout bounds the post-LLM-call DB writes in TriggerTriage's
@@ -251,6 +322,11 @@ type BacklogService struct {
 	// by the time these persistence calls ran and every successful triage
 	// silently failed to ever mark the item ready.
 	triageCleanupTimeout time.Duration
+
+	// triageCleanupContextFn, when set, replaces the default timeout-bound context for
+	// TriggerTriage's post-call persistence writes. Tests use it to assert WHEN those
+	// contexts are created (after the LLM call returns) without sleeping past a real timeout.
+	triageCleanupContextFn func() (context.Context, context.CancelFunc)
 
 	// pluginRegistry and syncKeyFunc back TriggerSync / GetSyncHistory. Both are
 	// optional: if pluginRegistry is nil, TriggerSync degrades to CodeUnimplemented
@@ -518,16 +594,107 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 		pipelineModeRepo:     pipelineModeRepo,
 		shutdownCtx:          ctx,
 		shutdownCancel:       cancel,
-		triageSem:            make(chan struct{}, 8),
+		triageSem:            make(chan struct{}, cfg.MaxConcurrentTriageOrDefault()),
 		triageCleanupTimeout: defaultTriageCleanupTimeout,
 		resolveGitHubInput:   session.ResolveGitHubInput,
 		capabilityCheck:      headless.DefaultCapabilitySelfCheck,
+		modelFamilies:        workflows.DefaultModelFamilies(),
 	}
 }
 
-// SetHeadlessPool wires the headless pool for autonomous triage calls.
+// SetModelFamilies replaces the family alias -> concrete model ID map used to
+// resolve a stage executor's "family:<alias>" Model value. See the
+// modelFamilies field's doc comment.
+func (s *BacklogService) SetModelFamilies(families map[string]string) {
+	s.modelFamilies = families
+}
+
+// SetHeadlessPool wires the headless pool for autonomous triage calls and
+// registers it in headlessCallers under "claude" — the fallback target every
+// resolveHeadlessCaller branch degrades to.
 func (s *BacklogService) SetHeadlessPool(pool headless.PoolClient) {
 	s.headlessPool = pool
+	if s.headlessCallers == nil {
+		s.headlessCallers = make(map[string]headless.PoolClient)
+	}
+	s.headlessCallers["claude"] = pool
+}
+
+// SetBackendSelector routes the default headless client (empty stage program)
+// and every known backend name through sel, so per-feature settings and
+// capability/availability fallback apply. headlessCallers["claude"] keeps the
+// raw pool so a stage explicitly configured "claude" is never re-routed.
+func (s *BacklogService) SetBackendSelector(sel *headless.Selector) {
+	s.backendSelector = sel
+	if sel != nil {
+		s.headlessPool = &headless.SelectingClient{Selector: sel}
+	}
+}
+
+// SetGeminiCaller registers caller in headlessCallers under "gemini" so a
+// PipelineMode stage executor configured with program="gemini" resolves to it
+// (Epic 3.1/2.3). Takes the concrete *headless.GeminiCaller type rather than
+// the headless.PoolClient interface so a nil caller (gemini binary not found
+// at startup — see server/dependencies.go) is caught by this ordinary nil
+// check: wrapping a typed nil pointer in an interface first would make an
+// interface-level `== nil` check pass a non-nil caller through by mistake.
+func (s *BacklogService) SetGeminiCaller(caller *headless.GeminiCaller) {
+	if caller == nil {
+		return
+	}
+	if s.headlessCallers == nil {
+		s.headlessCallers = make(map[string]headless.PoolClient)
+	}
+	s.headlessCallers["gemini"] = caller
+}
+
+// availabilityChecker is satisfied by a headless.PoolClient that can re-probe
+// its own runtime availability at call time (e.g. GeminiCaller.Available(),
+// Task 3.1.1g) — not part of the headless.PoolClient interface itself since
+// Claude's Pool has no equivalent "goes missing mid-run" failure mode (see
+// GeminiCaller.Available's doc comment).
+type availabilityChecker interface {
+	Available() bool
+}
+
+// resolveHeadlessCaller picks the headless.PoolClient to run a stage's
+// configured program, failing closed to Claude — loudly, via a Warn log and a
+// returned fallbackReason for persistence onto the ItemSession row — rather
+// than silently no-op'ing, crashing, or trusting a startup-time-only
+// availability check that can go stale (Story 2.3.1).
+//
+// program is the raw value ExecutorFor returned (empty or "claude" is the
+// overwhelmingly common case and skips the map lookup and availability probe
+// entirely). itemID/stage are for the log line and are not otherwise
+// interpreted.
+func (s *BacklogService) resolveHeadlessCaller(program, itemID, stage string) (caller headless.PoolClient, configuredProgram, fallbackReason string) {
+	if program == "claude" {
+		if raw, ok := s.headlessCallers["claude"]; ok {
+			return raw, "", ""
+		}
+	}
+	if program == "" || program == "claude" {
+		return s.headlessPool, "", ""
+	}
+	if s.backendSelector != nil && slices.Contains(headless.KnownBackendNames(), program) {
+		_, res := s.backendSelector.Resolve(headless.FeatureKey(stage), program, headless.Caps{})
+		reason := res.FallbackReason
+		if reason != "" {
+			log.Warn("[PipelineEngine] headless program fell back", "program", program, "item", itemID, "stage", stage, "reason", reason)
+			return &headless.SelectingClient{Selector: s.backendSelector}, program, reason
+		}
+		return &headless.SelectingClient{Selector: s.backendSelector, StageProgram: program}, "", ""
+	}
+	found, ok := s.headlessCallers[program]
+	if !ok {
+		log.Warn("[PipelineEngine] unsupported headless program", "program", program, "item", itemID, "stage", stage, "fallback", "claude")
+		return s.headlessPool, program, "unsupported_program"
+	}
+	if ac, ok := found.(availabilityChecker); ok && !ac.Available() {
+		log.Warn("[PipelineEngine] headless program unavailable", "program", program, "item", itemID, "stage", stage, "fallback", "claude")
+		return s.headlessPool, program, program + "_unavailable"
+	}
+	return found, "", ""
 }
 
 // claimantHostID returns the stable per-host/per-instance identifier for the
@@ -580,6 +747,22 @@ func (s *BacklogService) SetTriageCleanupTimeout(d time.Duration) {
 	s.triageCleanupTimeout = d
 }
 
+// SetTriageCleanupContextFactory overrides how TriggerTriage creates the contexts for its
+// post-LLM-call DB writes. Exposed for tests; production callers should rely on the default.
+func (s *BacklogService) SetTriageCleanupContextFactory(f func() (context.Context, context.CancelFunc)) {
+	s.triageCleanupContextFn = f
+}
+
+// newTriageCleanupContext returns a fresh context bounding one batch of post-call persistence
+// writes. Callers must invoke it after the LLM call returns, never before: see the
+// triageCleanupTimeout field comment.
+func (s *BacklogService) newTriageCleanupContext() (context.Context, context.CancelFunc) {
+	if s.triageCleanupContextFn != nil {
+		return s.triageCleanupContextFn()
+	}
+	return context.WithTimeout(context.Background(), s.triageCleanupTimeout)
+}
+
 // SetPluginRegistry wires the item-source plugin registry, enabling TriggerSync.
 func (s *BacklogService) SetPluginRegistry(registry *session.PluginRegistry) {
 	s.pluginRegistry = registry
@@ -603,6 +786,11 @@ func (s *BacklogService) SetSyncFeatureEnabledCheck(check func() bool) {
 // waiting on the triage semaphore.
 func (s *BacklogService) Shutdown() {
 	s.shutdownCancel()
+}
+
+// SetStaleWorkInspector wires the optional inspect-and-nudge step of RemediateStaleWorkSession.
+func (s *BacklogService) SetStaleWorkInspector(i StaleWorkInspector) {
+	s.staleWorkInspector = i
 }
 
 // SetSessionStopper wires the optional session stopper used to kill orphaned sessions on re-triage.
@@ -717,9 +905,17 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 		CreatedAt:                timestamppb.New(is.CreatedAt),
 		PipelineModeSnapshot:     is.PipelineModeSnapshot,
 		PipelineModeSnapshotHash: is.PipelineModeSnapshotHash,
+		ResolvedProgram:          is.ResolvedProgram,
+		ResolvedModel:            is.ResolvedModel,
+		ExecutorSnapshotHash:     is.ExecutorSnapshotHash,
+		ConfiguredProgram:        is.ConfiguredProgram,
+		ExecutorFallbackReason:   is.ExecutorFallbackReason,
+		CostPriced:               is.CostPriced,
 		EndReason:                is.EndReason,
 		FailureCapturePath:       is.FailureCapturePath,
+		ErrorDetail:              is.ErrorDetail,
 		ClaimantHostId:           is.ClaimantHostID,
+		BaseCommitSha:            is.BaseCommitSha,
 	}
 	if is.StartedAt != nil {
 		p.StartedAt = timestamppb.New(*is.StartedAt)
@@ -796,7 +992,7 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 				ClarifyingQuestions: clarifying,
 				Tasks:               tasks,
 				// #nosec G115 -- triage rework iteration counter, bounded by the small
-				// configurable rework cap (config.MaxAutoReworkIterationsOrDefault, default 3).
+				// configurable rework cap (config.MaxAutoReworkIterationsOrDefault, default 5).
 				Iteration: int32(tr.Iteration),
 				Feedback:  tr.Feedback,
 			}
@@ -826,7 +1022,12 @@ type triageResultJSON struct {
 
 // backlogItemSummaryToProto maps a BacklogItemSummary to the proto BacklogItem message.
 // Used by ListBacklogItems to avoid over-hydrating description/plan fields.
-func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
+// engine must be the caller's s.engine (see allowedTransitionStrings); no
+// per-item StageConfigSnapshot fallback is passed here — unlike
+// backlogItemToProto, BacklogItemSummary doesn't carry StatusEvents (that's
+// the whole point of the "summary" — avoid over-hydration), so
+// BuildStageConfigSnapshotFallback has nothing to reconstruct from.
+func backlogItemSummaryToProto(item *session.BacklogItemSummary, engine session.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
 		Id:       item.ID,
 		PublicId: item.PublicIDRaw,
@@ -844,7 +1045,21 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tm
 		PrNumber:           int32(item.PrNumber),
 		CreatedAt:          timestamppb.New(item.CreatedAt),
 		UpdatedAt:          timestamppb.New(item.UpdatedAt),
-		AllowedTransitions: allowedTransitionStrings(item.Status),
+		AllowedTransitions: allowedTransitionStrings(engine, item.Status, nil),
+		// Plan-gating fields: board/list-view cards derive their primary
+		// action (getAvailableActions in itemActions.ts) from
+		// SkipPlanning/PlanApproved/PlanArtifactsPath directly, so this
+		// "lightweight" summary must carry them too, not just GetBacklogItem's
+		// full backlogItemToProto — omitting them here silently zero-valued
+		// PlanArtifactsPath for any item whose data reached the client via
+		// ListBacklogItems (or a WatchBacklogItems reconnect resync, which
+		// shares this same conversion), flipping a ready item with an
+		// approved-pending plan to show "Trigger Triage" instead of "Approve
+		// Plan". Same class of gap as AllowedTransitions (#585).
+		SkipPlanning:        item.SkipPlanning,
+		PlanApproved:        item.PlanApproved,
+		PlanArtifactsPath:   item.PlanArtifactsPath,
+		PlanRejectionReason: item.PlanRejectionReason,
 	}
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
@@ -882,18 +1097,15 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tm
 	return p
 }
 
-// protoWorkflowEngine is a stateless, read-only WorkflowEngine used only to
-// surface AllowedTransitions on the wire (backlogItemToProto below) — package
-// state is safe here since the underlying transitions map is never mutated
-// after construction. Not s.engine: backlogItemToProto is a free function
-// called from many BacklogService methods, and threading an engine parameter
-// through every call site would be a much larger change for the same result.
-var protoWorkflowEngine = session.NewDefaultWorkflowEngine()
-
 // allowedTransitionStrings returns the string form of
-// protoWorkflowEngine.AllowedTransitions(from), for BacklogItem.allowed_transitions.
-func allowedTransitionStrings(from session.BacklogStatus) []string {
-	targets := protoWorkflowEngine.AllowedTransitions(from)
+// engine.AllowedTransitions(from, fallback), for BacklogItem.allowed_transitions.
+// engine must be the caller's real, request-scoped s.engine (not a hardcoded
+// DefaultWorkflowEngine) so a CUSTOM-stage item gets its actual configured
+// transitions rather than an empty slice (#585) — see the docstrings on
+// backlogItemToProto/backlogItemSummaryToProto below for how fallback is
+// derived per caller.
+func allowedTransitionStrings(engine session.WorkflowEngine, from session.BacklogStatus, fallback *session.StageConfigSnapshot) []string {
+	targets := engine.AllowedTransitions(from, fallback)
 	out := make([]string, len(targets))
 	for i, t := range targets {
 		out[i] = string(t)
@@ -902,7 +1114,8 @@ func allowedTransitionStrings(from session.BacklogStatus) []string {
 }
 
 // backlogItemToProto maps a BacklogItemData to the proto BacklogItem message.
-func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
+// engine must be the caller's s.engine — see allowedTransitionStrings.
+func backlogItemToProto(item *session.BacklogItemData, engine session.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
 		Id:          item.ID,
 		Title:       item.Title,
@@ -915,6 +1128,7 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		SkipPlanning:        item.SkipPlanning,
 		AutoSpawnSession:    item.AutoSpawnSession,
 		AutoCreatePr:        item.AutoCreatePR,
+		AutoApprovePlan:     item.AutoApprovePlan,
 		PipelineMode:        &item.PipelineMode,
 		Category:            &item.Category,
 		PlanApproved:        item.PlanApproved,
@@ -930,7 +1144,9 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		PrNumber:           int32(item.PrNumber),
 		CreatedAt:          timestamppb.New(item.CreatedAt),
 		UpdatedAt:          timestamppb.New(item.UpdatedAt),
-		AllowedTransitions: allowedTransitionStrings(session.BacklogStatus(item.Status)),
+		AllowedTransitions: allowedTransitionStrings(engine, session.BacklogStatus(item.Status), session.BuildStageConfigSnapshotFallback(item)),
+		DuplicateRef:       duplicateRefPending(item),
+		DuplicatePending:   duplicateRefPending(item) != "",
 		PublicId:           item.PublicIDRaw,
 	}
 	if item.ExternalURL != "" {
@@ -954,6 +1170,10 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		// int -> int32 round trip cannot lose information.
 		override := int32(*item.ReworkCapOverride)
 		p.ReworkCapOverride = &override
+	}
+	if item.CostBudgetThresholdUsd != nil {
+		threshold := *item.CostBudgetThresholdUsd
+		p.CostBudgetThresholdUsd = &threshold
 	}
 
 	// Parse acceptance criteria JSON into repeated AcCriterion.
@@ -992,12 +1212,14 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		protoEvents := make([]*sessionv1.BacklogStatusEvent, len(item.StatusEvents))
 		for i, ev := range item.StatusEvents {
 			protoEvents[i] = &sessionv1.BacklogStatusEvent{
-				Id:          ev.ID,
-				FromStatus:  ev.FromStatus,
-				ToStatus:    ev.ToStatus,
-				TriggeredBy: ev.TriggeredBy,
-				CreatedAt:   timestamppb.New(ev.CreatedAt),
-				Note:        ev.Note,
+				Id:                         ev.ID,
+				FromStatus:                 ev.FromStatus,
+				ToStatus:                   ev.ToStatus,
+				TriggeredBy:                ev.TriggeredBy,
+				CreatedAt:                  timestamppb.New(ev.CreatedAt),
+				Note:                       ev.Note,
+				StageNameSnapshot:          ev.StageNameSnapshot,
+				AllowedTransitionsSnapshot: ev.AllowedTransitionsSnapshot,
 			}
 		}
 		p.StatusEvents = protoEvents
@@ -1085,7 +1307,10 @@ func (s *BacklogService) cleanupItemWorktrees(ctx context.Context, sessions []se
 }
 
 // cleanupItemWorktreesExcept is cleanupItemWorktrees with one path exempted from
-// removal. Reopen/rework spawns reuse the same "backlog/<item>" branch and worktree
+// removal. It also owns backlog-scaffolding cleanup (CleanupSlashCommands,
+// CleanupBacklogContextFile) for every worktree it removes — a second responsibility
+// beyond worktree removal itself; see CleanupSlashCommands' doc comment for why that's
+// safe here. Reopen/rework spawns reuse the same "backlog/<item>" branch and worktree
 // directory across revisions (see SpawnSessionFromItem step 10's comment) rather than
 // creating a fresh one, so a prior work session's worktree row can point at the exact
 // path the brand-new session just started using. Cleaning that up unconditionally —
@@ -1104,12 +1329,36 @@ func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, session
 			continue
 		}
 		wt, err := s.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
-		if err != nil || wt.WorktreePath == "" {
+		if err != nil {
+			continue
+		}
+		if wt.WorktreePath == "" {
+			// Epic 2.1: previously silently skipped here even when a worktree row was
+			// expected. Extra lookup needed since ItemSessionSummary lacks
+			// SessionType/Branch; a lookup failure falls back to silent skip.
+			if sessionData, lookupErr := s.storage.FindInstanceDataByID(is.SessionUUID); lookupErr == nil && session.ExpectsWorktree(*sessionData) {
+				log.Warn("[cleanupItemWorktreesExcept] worktree row missing but expected",
+					"session_id", is.SessionUUID, "item_id", is.BacklogItemID)
+				if s.eventBus != nil {
+					s.eventBus.Publish(events.NewNotificationEvent(
+						is.BacklogItemID, "", uuid.New().String(),
+						int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
+						derivePriority(true, true), // urgent, important — cleanup silently could not find anything to remove
+						"Worktree row missing during item archival",
+						fmt.Sprintf("Session %s expected a git worktree but has no worktree row, so its on-disk directory (if any) could not be cleaned up.", is.SessionUUID),
+						map[string]string{"item_id": is.BacklogItemID},
+					))
+				}
+			}
 			continue
 		}
 		if exceptPath != "" && wt.WorktreePath == exceptPath {
 			continue
 		}
+		// Scaffolding first: if Cleanup below fails or the path isn't a removable
+		// worktree, the item-pinned /backlog:* files must not outlive the item.
+		_ = session.CleanupSlashCommands(wt.WorktreePath)
+		_ = session.CleanupBacklogContextFile(wt.WorktreePath)
 		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)
 		if cleanErr := g.Cleanup(); cleanErr != nil {
 			log.WarningLog().Printf("[cleanupItemWorktrees] failed to cleanup worktree path=%s: %v", wt.WorktreePath, cleanErr)
@@ -1123,6 +1372,25 @@ func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, session
 			s.repoWatchRemover.RemoveRepo(wt.WorktreePath)
 		}
 	}
+}
+
+// CleanupTerminalItem removes git worktrees and archives/kills the tmux panes
+// of every work/review session on itemID — the same synchronous cleanup
+// TransitionBacklogItemStatus runs inline on a terminal transition, exported
+// so it can also be invoked from the session/ package (see
+// session.WorktreeCleaner) by internal transition paths that call the
+// storage layer directly (bounce-to-done, PR-merge done) and would otherwise
+// depend solely on the 60s reconcileTerminalItemSessions safety-net sweep.
+// Best-effort: a listing failure is logged, never returned — mirrors
+// cleanupItemWorktrees's and archiveItemWorkSessions's own contract.
+func (s *BacklogService) CleanupTerminalItem(ctx context.Context, itemID string) {
+	sessions, err := s.storage.ListItemSessions(ctx, itemID)
+	if err != nil {
+		log.WarningLog().Printf("[CleanupTerminalItem] ListItemSessions item=%s: %v", itemID, err)
+		return
+	}
+	s.cleanupItemWorktrees(ctx, sessions)
+	s.archiveItemWorkSessions(ctx, sessions)
 }
 
 // archiveItemWorkSessions soft-archives every work- or review-role session in
@@ -1158,4 +1426,78 @@ func (s *BacklogService) archiveItemWorkSessions(ctx context.Context, sessions [
 			log.WarningLog().Printf("[archiveItemWorkSessions] failed to kill tmux pane session=%s: %v", is.SessionUUID, err)
 		}
 	}
+}
+
+// cumulativeItemSpendUSD sums EstimatedCostUsd across sessions and counts how
+// many of them are unpriced (cost_priced == false). Per Epic 2.5, an unpriced
+// session's EstimatedCostUsd is always 0 by construction (never incremented),
+// so summing every session's EstimatedCostUsd unconditionally already yields
+// the correct known-spend total — unpricedCount exists only so callers can
+// surface the gap in a log line rather than silently treating it as "under
+// threshold" (Task 4.2.2b).
+func cumulativeItemSpendUSD(sessions []session.ItemSessionSummary) (totalUSD float64, unpricedCount int) {
+	for _, is := range sessions {
+		totalUSD += is.EstimatedCostUsd
+		if !is.CostPriced {
+			unpricedCount++
+		}
+	}
+	return totalUSD, unpricedCount
+}
+
+// logBudgetWarningIfCrossed evaluates the per-item soft budget threshold
+// (ADR-003) inline at cost-recording time for a headless triage/review call:
+// priorSessions is that item's ItemSession set fetched before this call's own
+// row was created/persisted, so priorSessions' cost sum plus callCostUSD is
+// the item's new cumulative spend. Purely observational — never blocks,
+// retries, or errors the call that triggered it (see EvaluateBudgetThreshold's
+// own doc comment).
+func logBudgetWarningIfCrossed(itemID, stage string, thresholdUSD *float64, priorSessions []session.ItemSessionSummary, callCostUSD float64) {
+	priorTotal, unpricedCount := cumulativeItemSpendUSD(priorSessions)
+	cumulative := priorTotal + callCostUSD
+	if !session.EvaluateBudgetThreshold(itemID, stage, thresholdUSD, cumulative) {
+		return
+	}
+	suffix := ""
+	if unpricedCount > 0 {
+		suffix = fmt.Sprintf(" (excludes %d unpriced session(s))", unpricedCount)
+	}
+	log.WarningLog().Printf("[BudgetWarning] item=%s stage=%s threshold=%.2f spent=%.2f%s", itemID, stage, *thresholdUSD, cumulative, suffix)
+}
+
+// checkWorkStageBudget evaluates the per-item soft budget threshold (ADR-003)
+// for an active work-stage session at live-cost-recompute time (Story 4.2.3)
+// — called from WatchBacklogItems's snapshot/live paths and GetBacklogItem,
+// the smallest set of call sites that already recompute an item's live
+// TotalEstimatedCostUsd on a recurring/subscribed basis. Deduped via
+// budgetWarnedItems so a repeated poll while still over threshold doesn't
+// re-log; deleting the item's entry once its cost drops back under threshold
+// lets a future re-crossing warn again. No-ops when thresholdUSD is nil.
+func (s *BacklogService) checkWorkStageBudget(itemID string, thresholdUSD *float64, totalCostUSD float64) {
+	if thresholdUSD == nil {
+		return
+	}
+	if !session.EvaluateBudgetThreshold(itemID, "work", thresholdUSD, totalCostUSD) {
+		s.budgetWarnedItems.Delete(itemID)
+		return
+	}
+	if _, alreadyWarned := s.budgetWarnedItems.LoadOrStore(itemID, struct{}{}); alreadyWarned {
+		return
+	}
+	log.WarningLog().Printf("[BudgetWarning] item=%s stage=work threshold=%.2f spent=%.2f", itemID, *thresholdUSD, totalCostUSD)
+}
+
+// duplicateRefPending returns the claimed duplicate_ref while item sits in
+// review awaiting confirmation, "" otherwise. Needs eagerly loaded ItemSessions.
+func duplicateRefPending(item *session.BacklogItemData) string {
+	if item.Status != string(session.BacklogStatusReview) {
+		return ""
+	}
+	return session.PendingDuplicateRef(item.ItemSessions)
+}
+
+// SetReviewSpawnGuard wires the lifecycle listener's review-spawn guard into the
+// headless re-review paths (TriggerReReview, AutoRespawnReview).
+func (s *BacklogService) SetReviewSpawnGuard(g *session.ReviewSpawnGuard) {
+	s.reviewGuard = g
 }

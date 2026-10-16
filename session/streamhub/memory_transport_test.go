@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/streamhub"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 func TestMemoryTransport_should_SatisfyTransportInterface_When_SendAndCloseAreCalled(t *testing.T) {
@@ -89,7 +91,15 @@ func TestMemoryTransport_should_UnblockPendingSend_When_CloseIsCalled(t *testing
 		sendReturned <- mt.Send([]byte("blocked"))
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	// Send must stay blocked until Close releases it.
+	require.Never(t, func() bool {
+		select {
+		case <-sendReturned:
+			return true
+		default:
+			return false
+		}
+	}, 20*time.Millisecond, time.Millisecond, "Send returned before Close was called")
 	if err := mt.Close(); err != nil {
 		t.Fatalf("Close() returned unexpected error: %v", err)
 	}
@@ -134,10 +144,8 @@ func TestMemoryTransport_should_AttachToHubAndReceiveBroadcastFrame(t *testing.T
 	id := hub.AttachSubscriber(mt, streamhub.SubscriberCapability{})
 	hub.Broadcast([]byte("output-1"))
 
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) && len(mt.ReceivedFrames()) == 0 {
-		time.Sleep(time.Millisecond)
-	}
+	wait.RequireEventually(t, func() bool { return len(mt.ReceivedFrames()) > 0 }, time.Second, time.Millisecond,
+		"no frame delivered to the attached transport")
 
 	got := mt.ReceivedFrames()
 	if len(got) != 1 || string(got[0]) != "output-1" {

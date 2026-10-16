@@ -47,7 +47,7 @@ func (f *fakeFeatureController) IsEnabled() bool { return f.enabled }
 // tests are isolated from the developer's real ~/.stapler-squad config.
 func newFeatureFlagService(t *testing.T) *SessionService {
 	t.Helper()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)

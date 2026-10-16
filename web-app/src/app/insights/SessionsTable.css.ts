@@ -192,6 +192,33 @@ export const clickableRow = style({
   },
 });
 
+// "Filtered to: <role> ×" chip (Task 5.2.2e) — shown when StageCostChart's
+// bar/legend cross-filter is active, so a user who clicked a bar and looked
+// away doesn't forget the table is filtered.
+export const roleFilterChip = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space[1],
+  padding: `${vars.space[1]} ${vars.space[2]}`,
+  borderRadius: vars.radii.sm,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.medium,
+  background: vars.color.accentBg,
+  color: vars.color.accentText,
+  border: `1px solid ${vars.color.borderSubtle}`,
+});
+
+export const roleFilterChipClear = style({
+  background: "transparent",
+  border: "none",
+  cursor: "pointer",
+  color: "inherit",
+  fontSize: vars.fontSize.sm,
+  lineHeight: 1,
+  padding: 0,
+  marginLeft: vars.space[1],
+});
+
 export const backlogBadge = style({
   display: "inline-flex",
   alignItems: "center",

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -92,5 +93,28 @@ func Test_translateDeepLinkURL_should_ReturnError_When_GivenMalformedURL(t *test
 	_, err := translateDeepLinkURL("http://not-ssq-scheme/foo")
 	if !errors.Is(err, deeplink.ErrMalformed) {
 		t.Errorf("translateDeepLinkURL() error = %v, want wrapping deeplink.ErrMalformed", err)
+	}
+}
+
+func TestWriteLoginRedirectPage_should_KeepCodeOutOfPathAndBe0600(t *testing.T) {
+	loginURL := "http://localhost:8543/auth/local-login?code=abc123&next=%2Fbacklog%3Fitem%3D1"
+	path, err := writeLoginRedirectPage(loginURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
+	if strings.Contains(path, "abc123") {
+		t.Errorf("code leaked into file path %q", path)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Errorf("mode = %o, want 0600", info.Mode().Perm())
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), "code=abc123&amp;next=") {
+		t.Errorf("page does not forward to the login URL (html-escaped): %s", data)
 	}
 }

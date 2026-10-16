@@ -38,6 +38,20 @@ export interface SessionVcsState extends AsyncResult {
 }
 
 
+/** Fallback poll interval for the currently-focused/visible session. */
+const ACTIVE_STATUS_POLL_MS = 60_000;
+
+/**
+ * Fallback poll interval for a session whose pane is open but not focused
+ * (e.g. a background split-pane, or a peeked session behind the active
+ * one). Event-driven refetches (Redux `sessionUpdatedAt`) still fire
+ * regardless of focus, so this is just the backstop for state changes the
+ * push stream might miss — 10x looser than the active interval is enough
+ * for a pane the user isn't looking at, and cuts N-1 background panes'
+ * contribution to GetVCSStatus/server load by the same factor.
+ */
+const INACTIVE_STATUS_POLL_MS = 600_000;
+
 /**
  * Single source of truth for a session's VCS status and diff data.
  *
@@ -45,8 +59,15 @@ export interface SessionVcsState extends AsyncResult {
  * and consumed by VcsPanel, FilesTab, and DiffViewer through
  * useSessionVcsContext(). This eliminates the 3 independent, uncached fetches
  * those components previously made independently.
+ *
+ * @param isActive - Whether this session's pane currently has focus.
+ * Defaults to true (matches prior always-poll-every-60s behavior) so every
+ * caller except a multi-pane layout is unaffected. A multi-pane layout
+ * should pass the focused pane's own focus state so unfocused panes fall
+ * back to INACTIVE_STATUS_POLL_MS instead of polling as if the user were
+ * watching them.
  */
-export function useSessionVcs(sessionId: string, baseUrl: string): SessionVcsState {
+export function useSessionVcs(sessionId: string, baseUrl: string, isActive = true): SessionVcsState {
   const [status, setStatus] = useState<VCSStatus | null>(null);
   const [diff, setDiff] = useState<SessionDiff | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
@@ -153,22 +174,26 @@ export function useSessionVcs(sessionId: string, baseUrl: string): SessionVcsSta
   });
 
   // VCS status: re-fetch on mount and whenever the session changes in Redux.
-  // Event-driven is the primary trigger; the 60s fallback catches git commits
-  // that happen mid-session without changing the session's status field.
+  // Event-driven is the primary trigger; the fallback interval catches git
+  // commits that happen mid-session without changing the session's status
+  // field. isActive controls the fallback's cadence, not whether it fires —
+  // a backgrounded pane still needs a backstop, just not one tuned for a
+  // user actively watching it.
   useEffect(() => {
     stoppedRef.current = false;
     setStatusLoading(true);
     fetchStatus();
+    const pollMs = isActive ? ACTIVE_STATUS_POLL_MS : INACTIVE_STATUS_POLL_MS;
     const fallback = setInterval(() => {
       if (stoppedRef.current) {
         clearInterval(fallback);
         return;
       }
       if (!document.hidden) fetchStatus();
-    }, 60_000);
+    }, pollMs);
     return () => clearInterval(fallback);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchStatus, sessionStatus, sessionUpdatedAt]);
+  }, [fetchStatus, sessionStatus, sessionUpdatedAt, isActive]);
 
   // Diff: fetch once on mount; consumers call refreshDiff() when needed.
   // Cancellation on unmount/re-run is handled by startDiff's useAbortableRequest.

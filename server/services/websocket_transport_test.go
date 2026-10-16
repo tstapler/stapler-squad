@@ -12,6 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/session/streamhub"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // fakeSessionController is a minimal streamhub.SessionController test double
@@ -98,7 +99,7 @@ func TestWebSocketTransport_should_DetachSubscriberExactlyOnce_When_CloseCalledA
 	require.NoError(t, transport.Close())
 	require.NoError(t, transport.Close()) // second call must be a no-op, not a deadlock or double-detach
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return hub.SubscriberCount() == 0
 	}, time.Second, 5*time.Millisecond, "subscriber should be detached exactly once")
 }

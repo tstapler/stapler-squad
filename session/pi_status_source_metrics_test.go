@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -83,18 +84,9 @@ func TestPiStatusSource_ShouldIncrementEventCounter_ForEveryEventIncludingUnreco
 	require.NoError(t, src.Start())
 	defer src.Stop()
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
+	wait.RequireEventually(t, func() bool {
 		after := collectPiEventsMetric(t)
-		if sumForEventType(t, after, "agent_start") > baselineKnown &&
-			sumForEventType(t, after, piEventTypeUnrecognized) > baselineUnknown {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	after := collectPiEventsMetric(t)
-	t.Errorf("counter did not increment for both event types in time: agent_start=%d (baseline %d), unrecognized=%d (baseline %d)",
-		sumForEventType(t, after, "agent_start"), baselineKnown,
-		sumForEventType(t, after, piEventTypeUnrecognized), baselineUnknown)
+		return sumForEventType(t, after, "agent_start") > baselineKnown &&
+			sumForEventType(t, after, piEventTypeUnrecognized) > baselineUnknown
+	}, 2*time.Second, 10*time.Millisecond, "counter did not increment for both event types in time")
 }

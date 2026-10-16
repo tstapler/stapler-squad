@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection/binaries"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 	"go.uber.org/goleak"
 )
 
@@ -202,9 +204,9 @@ func TestCreateSession_should_RejectSecondDuplicate_When_TwoRapidCallsShareTitle
 	// that other process's config.json instead of getting a fresh
 	// testModeSentinelProgram default -- an empty/real DefaultProgram there
 	// fails Session.program's NotEmpty validator. Matches the same
-	// t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir()) pattern used elsewhere
-	// in this file (e.g. the "ModeIsAlias" subtest) for the identical reason.
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	// withIsolatedStateDir(t) call used elsewhere in this file (e.g.
+	// the "ModeIsAlias" subtest) for the identical reason.
+	withIsolatedStateDir(t)
 
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
@@ -763,7 +765,7 @@ func TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil(t *testing.T) {
 	var mu sync.Mutex
 	finished := false
 	svc.trackCleanup(func() {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond) //nolint:notimesleeptest simulated in-flight cleanup Shutdown must block on
 		mu.Lock()
 		finished = true
 		mu.Unlock()
@@ -820,7 +822,7 @@ func TestShutdown_WaitsForDeleteSessionCleanup_LiveInstancePresent(t *testing.T)
 	var mu sync.Mutex
 	finished := false
 	svc.trackCleanup(func() {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond) //nolint:notimesleeptest simulated in-flight cleanup Shutdown must block on
 		mu.Lock()
 		finished = true
 		mu.Unlock()
@@ -853,7 +855,7 @@ func TestShutdown_BlocksUntilTrackedCleanupCompletes(t *testing.T) {
 	var mu sync.Mutex
 	finished := false
 	svc.trackCleanup(func() {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond) //nolint:notimesleeptest simulated in-flight cleanup Shutdown must block on
 		mu.Lock()
 		finished = true
 		mu.Unlock()
@@ -883,7 +885,7 @@ func TestDestroyWithTimeout_ReturnsTimeoutError_When_WorkExceedsTimeout(t *testi
 	workDone := make(chan struct{})
 	start := time.Now()
 	err := destroyWithTimeout(func() error {
-		time.Sleep(workDuration)
+		time.Sleep(workDuration) //nolint:notimesleeptest simulated slow work whose wall-clock timeout handling is under test
 		close(workDone)
 		return nil
 	}, testTimeout)
@@ -919,7 +921,7 @@ func TestWaitForDestroyLoggingSlowCleanup_DoesNotAbandonWorkAfterTimeout(t *test
 	workDone := make(chan struct{})
 	start := time.Now()
 	err := waitForDestroyLoggingSlowCleanup(func() error {
-		time.Sleep(workDuration)
+		time.Sleep(workDuration) //nolint:notimesleeptest simulated slow work whose wall-clock timeout handling is under test
 		close(workDone)
 		return nil
 	}, testTimeout, func() {
@@ -1553,6 +1555,27 @@ func TestUpdateSession_TitleRename_DoesNotOrphanOldRow(t *testing.T) {
 		"rename must not leave an orphaned row under the old title (found: %v)", matches)
 }
 
+// A title-only UpdateSession must refresh the delivery gate's visibility index, or
+// events keyed by the new title resolve Unresolved (delivered) until the backstop.
+func TestUpdateSession_TitleRename_ShouldIndexNewTitleForDeliveryGate(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+	gate := deliverygate.NewGate()
+	fix.svc.deliveryGate = gate
+
+	addPausedSession(t, fix, "gate-old-title")
+	newTitle := "gate-new-title"
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:    "gate-old-title",
+		Title: &newTitle,
+	}))
+	require.NoError(t, err)
+
+	res := gate.Resolver().Resolve(newTitle, nil)
+	assert.Equal(t, deliverygate.VisibilityVisible, res.Visibility)
+}
+
 // TestUpdateSession_TitleAndProgramCombo_DoesNotDuplicateRow is the regression test for a
 // bug found in code review: when a single UpdateSession request changes both Title and
 // Program, the Program branch's SwitchProgram callback used to persist via SaveInstances
@@ -1863,6 +1886,68 @@ func TestUpdateSession_should_StopSession_When_TargetIsStoppedFromActive(t *test
 	assert.Equal(t, sessionv1.SessionStatus_SESSION_STATUS_STOPPED, resp.Msg.Session.Status)
 }
 
+// TestUpdateSession_should_ForceStopBrokenWorktree_Only_When_ForceStopSet proves the
+// handler selects ForceStopByUser: without the flag a broken worktree is refused
+// (FailedPrecondition); with it the session stops. Files survive both calls.
+func TestUpdateSession_should_ForceStopBrokenWorktree_Only_When_ForceStopSet(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	wtDir := t.TempDir()
+	precious := filepath.Join(wtDir, "precious.txt")
+	require.NoError(t, os.WriteFile(precious, []byte("uncommitted"), 0o644))
+	inst := &session.Instance{
+		Title:       "force-stop-session",
+		Path:        "/tmp/test",
+		Status:      session.Active,
+		Program:     "claude",
+		IsWorktree:  true,
+		Permissions: session.GetManagedPermissions(),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	inst.SetGitWorktree(git.NewGitWorktreeFromStorage(t.TempDir(), wtDir, "force-stop-session", "branch", ""))
+	addInstanceToPoller(fix.poller, inst)
+
+	stopped := sessionv1.SessionStatus_SESSION_STATUS_STOPPED
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id: "force-stop-session", Status: &stopped,
+	}))
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
+	assert.FileExists(t, precious)
+
+	force := true
+	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id: "force-stop-session", Status: &stopped, ForceStop: &force,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, sessionv1.SessionStatus_SESSION_STATUS_STOPPED, resp.Msg.Session.Status)
+	assert.FileExists(t, precious)
+}
+
+func TestUpdateSession_should_RejectForceStop_When_StatusIsNotStopped(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+	inst := &session.Instance{
+		Title: "force-stop-bad-status", Path: "/tmp/test", Status: session.Active, Program: "claude",
+		Permissions: session.GetManagedPermissions(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	force := true
+	steer := "must not be sent"
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id: "force-stop-bad-status", ForceStop: &force, SteerMessage: &steer,
+	}))
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
+}
+
 // TestUpdateSession_should_RejectStop_When_TransitionIsIllegal verifies that an
 // illegal target (Restoring -> Stopped, which has no entry in transitionDefs) is
 // classified as FailedPrecondition, not CodeInternal.
@@ -1919,7 +2004,7 @@ func TestUpdateSession_SteerMessage_NonAutonomousSession_SendsViaSendKeys(t *tes
 	}
 
 	testDir := t.TempDir()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	withIsolatedStateDirPath(t, testDir)
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"), []byte(`{"process_manager_backend": "native"}`), 0o644))
 
 	fix := setupForkTestFixture(t)
@@ -2061,7 +2146,7 @@ func TestUpdateSession_SteerMessage_AutonomousNilController_NowReturnsError(t *t
 }
 
 // --------------------------------------------------------------------------
-// steerInstance — autonomous branch error/timeout paths (Story 1.1.2)
+// steerInternal — autonomous branch error/timeout paths (Story 1.1.2)
 // --------------------------------------------------------------------------
 
 // fakeControllerInstance is a minimal session.InstanceContext double that lets
@@ -2096,13 +2181,13 @@ func (f *fakeControllerInstance) GetProgram() string                  { return "
 //     SendCommandImmediate's underlying executeCommand loop then observes
 //     ctx.Done() as the only ready select case on its very first iteration —
 //     deterministic, no real PTY-timing race — giving a fast, genuine
-//     "success" outcome (steerInstance's autonomous branch treats a nil
+//     "success" outcome (steerInternal's autonomous branch treats a nil
 //     SendCommandImmediate error as success regardless of the
 //     *ExecutionResult's own internal Error field; see ExecuteImmediate in
 //     session/command_executor.go). An earlier version of this helper
 //     instead closed the slave fd immediately to force an EOF/hangup on the
 //     master read — that raced the kernel's hangup delivery against
-//     steerInstance's 5s bound and flaked under -count=5. Used by
+//     steerInternal's 5s bound and flaked under -count=5. Used by
 //     TestUpdateSession_SteerMessage_AutonomousSession_StillUsesController.
 //   - false: the context is left live and the slave stays open for the whole
 //     test body (closed only in t.Cleanup, after assertions already ran), so
@@ -2161,12 +2246,12 @@ func TestSteerInstance_AutonomousNilController_ReturnsError(t *testing.T) {
 		UpdatedAt:      time.Now(),
 	}
 
-	err := fix.svc.steerInstance(context.Background(), inst, "fix the conflict")
+	err := fix.svc.steerInternal(context.Background(), inst, "fix the conflict")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "controller not started")
 
 	var connectErr *connect.Error
-	assert.False(t, errors.As(err, &connectErr), "steerInstance must never return a connect.Error — UpdateSession alone translates to a connect.Code")
+	assert.False(t, errors.As(err, &connectErr), "steerInternal must never return a connect.Error — UpdateSession alone translates to a connect.Code")
 }
 
 // TestSteerInstance_AutonomousSendCommandImmediateError_ReturnsError verifies
@@ -2191,18 +2276,18 @@ func TestSteerInstance_AutonomousSendCommandImmediateError_ReturnsError(t *testi
 	}
 	inst.SetControllerForTest(ctrl)
 
-	steerErr := fix.svc.steerInstance(context.Background(), inst, "fix the conflict")
+	steerErr := fix.svc.steerInternal(context.Background(), inst, "fix the conflict")
 	require.Error(t, steerErr)
 	assert.Contains(t, steerErr.Error(), "steer autonomous session")
 
 	var connectErr *connect.Error
-	assert.False(t, errors.As(steerErr, &connectErr), "steerInstance must never return a connect.Error")
+	assert.False(t, errors.As(steerErr, &connectErr), "steerInternal must never return a connect.Error")
 }
 
 // TestSteerInstance_AutonomousSendCommandImmediateHangs_TimesOutRatherThanBlockingForever
 // is the regression test for the unbounded-PTY-write bug: a wedged controller
 // (real, started, but nothing ever drains/responds on its pty) must not be
-// able to hang steerInstance forever — it must return within ~5s wrapping
+// able to hang steerInternal forever — it must return within ~5s wrapping
 // context.DeadlineExceeded.
 func TestSteerInstance_AutonomousSendCommandImmediateHangs_TimesOutRatherThanBlockingForever(t *testing.T) {
 	fix := setupForkTestFixture(t)
@@ -2224,7 +2309,7 @@ func TestSteerInstance_AutonomousSendCommandImmediateHangs_TimesOutRatherThanBlo
 	done := make(chan result, 1)
 	start := time.Now()
 	go func() {
-		done <- result{err: fix.svc.steerInstance(context.Background(), inst, "fix the conflict")}
+		done <- result{err: fix.svc.steerInternal(context.Background(), inst, "fix the conflict")}
 	}()
 
 	select {
@@ -2232,19 +2317,19 @@ func TestSteerInstance_AutonomousSendCommandImmediateHangs_TimesOutRatherThanBlo
 		elapsed := time.Since(start)
 		require.Error(t, r.err)
 		assert.True(t, errors.Is(r.err, context.DeadlineExceeded), "expected error to wrap context.DeadlineExceeded, got: %v", r.err)
-		assert.Less(t, elapsed, 10*time.Second, "steerInstance must bound the PTY write to ~5s, not block indefinitely")
+		assert.Less(t, elapsed, 10*time.Second, "steerInternal must bound the PTY write to ~5s, not block indefinitely")
 	case <-time.After(15 * time.Second):
-		t.Fatal("steerInstance did not return within 15s — the PTY write timeout did not fire")
+		t.Fatal("steerInternal did not return within 15s — the PTY write timeout did not fire")
 	}
 }
 
 // --------------------------------------------------------------------------
-// SessionSteerer (Story 1.2.1) — SessionProgram / SteerActiveSession
+// SessionSteerer (Story 1.2.1) — SessionProgram
 // --------------------------------------------------------------------------
 //
 // validation.md flags these as a coverage gap: plan.md's Tasks 1.2.1a-d name
 // only a compile-time interface assertion (var _ SessionSteerer =
-// (*SessionService)(nil)) for SessionProgram/SteerActiveSession, with no
+// (*SessionService)(nil)) for SessionProgram, with no
 // direct Test... function for their own return-value behavior. Added here
 // per validation.md's explicit recommendation.
 
@@ -2280,18 +2365,6 @@ func TestSessionService_SessionProgram_ReturnsNotOkForUnknownUUID(t *testing.T) 
 	program, ok := fix.svc.SessionProgram("no-such-session")
 	assert.False(t, ok)
 	assert.Empty(t, program)
-}
-
-// TestSessionService_SteerActiveSession_ReturnsErrorForUnknownUUID verifies
-// SteerActiveSession returns a non-nil error (and does not panic) when no
-// live instance is tracked for the given UUID.
-func TestSessionService_SteerActiveSession_ReturnsErrorForUnknownUUID(t *testing.T) {
-	t.Parallel()
-	fix := setupForkTestFixture(t)
-	t.Cleanup(fix.cleanup)
-
-	err := fix.svc.SteerActiveSession(context.Background(), "missing-uuid", "hello")
-	require.Error(t, err)
 }
 
 // --------------------------------------------------------------------------
@@ -2541,7 +2614,7 @@ func TestResumeHibernatedSession_DoesNotTouchOtherSessions(t *testing.T) {
 	// effect. Best-effort clean it up so repeated test runs don't leave orphaned tmux
 	// sessions, mirroring TestResumeCrashedSession_TransitionsCrashedToActive.
 	t.Cleanup(func() {
-		time.Sleep(100 * time.Millisecond)
+		_ = wait.WaitForCondition(hibernated.Started, wait.WaitConfig{Timeout: time.Second, PollInterval: 10 * time.Millisecond, Description: "relaunch goroutine to start tmux"})
 		_ = hibernated.KillSession()
 	})
 
@@ -2569,6 +2642,65 @@ func TestResumeHibernatedSession_DoesNotTouchOtherSessions(t *testing.T) {
 				beforeOtherUpdatedAt, inst.UpdatedAt)
 		}
 	}
+}
+
+// TestResumeHibernatedSession_WiresProvider is the regression test for
+// backlog e6c2a88e: ResumeHibernatedSession loads its instance raw from
+// storage, bypassing Registry.Acquire/WireInstanceCallbacks entirely, so
+// without an explicit SetMCPServerURLProvider call the relaunched claude
+// process would permanently omit --mcp-config.
+//
+// The instance ResumeHibernatedSession actually relaunches is a fresh object
+// LoadInstances() constructs internally (Storage.LoadInstances never returns
+// a cached pointer), not the *session.Instance this test constructed and
+// passed to AddInstance -- so this asserts via the log line
+// initTmuxSession() emits (session/instance_tmux.go's "creating session",
+// which includes the full built command) rather than reading a LaunchCommand
+// field this test has no pointer to. Not t.Parallel(): captureLogs swaps the
+// process-wide slog default.
+func TestResumeHibernatedSession_WiresProvider(t *testing.T) {
+	logs := captureLogs(t)
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+	svc.SetMCPServerURL(func() string { return "http://localhost:19191/mcp" })
+
+	const sessionUUID = "eeeeeeee-0000-0000-0000-000000000005"
+	hibernated := &session.Instance{
+		Title:     "hibernated-provider-session",
+		UUID:      sessionUUID,
+		Path:      "/tmp/test",
+		Status:    session.Hibernated,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		// MCPServerURL deliberately left empty -- this instance was loaded
+		// raw from storage, never through WireInstanceCallbacks.
+	}
+	require.NoError(t, storage.AddInstance(hibernated))
+	// ResumeFromHibernation relaunches on a DIFFERENT Instance object (see
+	// doc comment below), so hibernated.KillSession() here is best-effort at
+	// most, mirroring TestResumeCrashedSession_TransitionsCrashedToActive --
+	// not a guarantee the spawned tmux session gets torn down.
+	t.Cleanup(func() {
+		_ = hibernated.KillSession()
+	})
+
+	_, err := svc.ResumeHibernatedSession(context.Background(), connect.NewRequest(&sessionv1.ResumeHibernatedSessionRequest{Id: sessionUUID}))
+	require.NoError(t, err)
+
+	// The relaunch itself runs on a goroutine spawned by a DIFFERENT Instance
+	// object than `hibernated`, so nothing on our own pointer observes it;
+	// poll the shared log stream instead.
+	wait.RequireEventually(t, func() bool {
+		return strings.Contains(logs.String(), "creating session") && strings.Contains(logs.String(), "hibernated-provider-session")
+	}, 15*time.Second, 20*time.Millisecond, "relaunch's initTmuxSession log line must appear")
+
+	assert.Contains(t, logs.String(), "--mcp-config",
+		"relaunch command must carry --mcp-config even though MCPServerURL was empty at load time")
+	assert.Contains(t, logs.String(), "19191",
+		"relaunch command must use the wired provider's URL")
 }
 
 // TestResumeCrashedSession_TransitionsCrashedToActive verifies that resuming a
@@ -2601,7 +2733,7 @@ func TestResumeCrashedSession_TransitionsCrashedToActive(t *testing.T) {
 	// test runs don't leave orphaned tmux sessions on the machine; the goroutine
 	// isn't awaited, so this is a short grace delay, not a guarantee.
 	t.Cleanup(func() {
-		time.Sleep(100 * time.Millisecond)
+		_ = wait.WaitForCondition(testInstance.Started, wait.WaitConfig{Timeout: time.Second, PollInterval: 10 * time.Millisecond, Description: "relaunch goroutine to start tmux"})
 		_ = testInstance.KillSession()
 	})
 
@@ -2609,6 +2741,90 @@ func TestResumeCrashedSession_TransitionsCrashedToActive(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp.Msg.Session)
 	assert.Equal(t, sessionv1.SessionStatus_SESSION_STATUS_ACTIVE, resp.Msg.Session.Status)
+}
+
+// TestResumeCrashedSession_WiresProvider mirrors
+// TestResumeHibernatedSession_WiresProvider for the crash-resume path:
+// ResumeCrashedSession also loads its instance raw from storage, bypassing
+// WireInstanceCallbacks, so it needs the same explicit provider wiring. See
+// that test's doc comment for why this asserts against the captured log
+// stream rather than a LaunchCommand field on this test's own pointer. Not
+// t.Parallel(): captureLogs swaps the process-wide slog default.
+func TestResumeCrashedSession_WiresProvider(t *testing.T) {
+	logs := captureLogs(t)
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+	svc.SetMCPServerURL(func() string { return "http://localhost:19192/mcp" })
+
+	const sessionUUID = "ffffffff-0000-0000-0000-000000000006"
+	crashed := &session.Instance{
+		Title:      "crashed-provider-session",
+		UUID:       sessionUUID,
+		Path:       "/tmp/test",
+		Status:     session.Crashed,
+		ExitReason: "signal SIGKILL (exit code 137)",
+		Program:    "claude",
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+		// MCPServerURL deliberately left empty -- this instance was loaded
+		// raw from storage, never through WireInstanceCallbacks.
+	}
+	require.NoError(t, storage.AddInstance(crashed))
+	// ResumeFromCrash relaunches on a DIFFERENT Instance object than `crashed`
+	// (see doc comment below), so this cleanup is best-effort at most, same
+	// as TestResumeCrashedSession_TransitionsCrashedToActive -- not a
+	// guarantee the spawned tmux session gets torn down.
+	t.Cleanup(func() { _ = crashed.KillSession() })
+
+	_, err := svc.ResumeCrashedSession(context.Background(), connect.NewRequest(&sessionv1.ResumeCrashedSessionRequest{Id: sessionUUID}))
+	require.NoError(t, err)
+
+	wait.RequireEventually(t, func() bool {
+		return strings.Contains(logs.String(), "creating session") && strings.Contains(logs.String(), "crashed-provider-session")
+	}, 15*time.Second, 20*time.Millisecond, "relaunch's initTmuxSession log line must appear")
+
+	assert.Contains(t, logs.String(), "--mcp-config",
+		"relaunch command must carry --mcp-config even though MCPServerURL was empty at load time")
+	assert.Contains(t, logs.String(), "19192",
+		"relaunch command must use the wired provider's URL")
+}
+
+// TestWireCallbacks_WiresMCPServerURLProvider is the regression test for the
+// chokepoint gap found in review: wireCallbacks (not just the 4 raw-load
+// resume/fork paths above) must also wire the MCP provider, since it's the
+// single callback chokepoint CreateSession, CreateDirectorySession, and
+// CreateWorktreeSession all route through -- previously only the one-shot
+// MCPServerURL field was ever set for those paths, so a session created via
+// any of them and later relaunched in-process (without a server restart)
+// could get permanently stuck the same way the raw-load paths did.
+func TestWireCallbacks_WiresMCPServerURLProvider(t *testing.T) {
+	logs := captureLogs(t)
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+	svc.SetMCPServerURL(func() string { return "http://localhost:19194/mcp" })
+
+	inst := &session.Instance{
+		Title:       "wire-callbacks-provider-session",
+		UUID:        "11111111-0000-0000-0000-000000000007",
+		Path:        "/tmp/test",
+		Program:     "claude",
+		SessionType: session.SessionTypeDirectory, // NewInstance() would default this; this raw literal must too, or setupFirstTimeWorktree's stricter default: (worktree-envvars-hijack Story 3.2.1) now errors on the zero value instead of silently treating it as directory
+		// MCPServerURL deliberately left empty -- exercises the provider
+		// path, not the one-shot-field fallback.
+	}
+	t.Cleanup(func() { _ = inst.KillSession() })
+
+	svc.wireCallbacks(inst)
+	_ = inst.Start(true) // directory-validation error, if any, is irrelevant -- only the launch command matters here
+
+	assert.Contains(t, logs.String(), "--mcp-config",
+		"a session wired only via wireCallbacks (the CreateSession/CreateDirectorySession/CreateWorktreeSession chokepoint) must still get --mcp-config")
+	assert.Contains(t, logs.String(), "19194",
+		"launch command must use the wired provider's URL")
 }
 
 // --------------------------------------------------------------------------
@@ -3046,7 +3262,7 @@ func TestCreateSession_HonorsExplicitBackendOverride(t *testing.T) {
 	svc := newCreateTestService(t, storage)
 
 	testDir := t.TempDir()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	withIsolatedStateDirPath(t, testDir)
 	const title = "explicit-override-session"
 	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
 	// The session's own override forces tmux; the request override must still win.
@@ -3078,7 +3294,7 @@ func TestCreateSession_HonorsSessionNameOverrideMap(t *testing.T) {
 	svc := newCreateTestService(t, storage)
 
 	testDir := t.TempDir()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	withIsolatedStateDirPath(t, testDir)
 	const title = "session-override-map-test"
 	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
@@ -3107,7 +3323,7 @@ func TestCreateSession_FallsBackToGlobalDefaultWhenNoOverrides(t *testing.T) {
 	svc := newCreateTestService(t, storage)
 
 	testDir := t.TempDir()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	withIsolatedStateDirPath(t, testDir)
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"), []byte(`{"feature_flags": {"tymux": true}}`), 0o644))
 
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
@@ -3142,13 +3358,13 @@ func TestCreateDirectorySession_HonorsSessionNameOverrideMap(t *testing.T) {
 	svc := newCreateTestService(t, storage)
 
 	testDir := t.TempDir()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	withIsolatedStateDirPath(t, testDir)
 	const title = "directory-session-override-map-test"
 	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
 		[]byte(`{"default_program": "claude", "feature_flags": {"tymux": true}, "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
 
-	inst, err := svc.CreateDirectorySession(context.Background(), title, t.TempDir(), "", nil, true, false)
+	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), SessionSpawnOptions{Title: title, OneShot: true})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
@@ -3163,7 +3379,7 @@ func TestCreateWorktreeSession_HonorsSessionNameOverrideMap(t *testing.T) {
 	svc := newCreateTestService(t, storage)
 
 	testDir := t.TempDir()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	withIsolatedStateDirPath(t, testDir)
 	const title = "worktree-session-override-map-test"
 	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
@@ -3172,12 +3388,83 @@ func TestCreateWorktreeSession_HonorsSessionNameOverrideMap(t *testing.T) {
 	worktreePath := t.TempDir()
 	initGitRepoWithCommit(t, worktreePath)
 
-	inst, err := svc.CreateWorktreeSession(context.Background(), title, t.TempDir(), worktreePath, "", nil, true, false)
+	inst, err := svc.CreateWorktreeSession(context.Background(), t.TempDir(), worktreePath, SessionSpawnOptions{Title: title, OneShot: true})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
 	assert.Equal(t, session.BackendTmux, inst.Backend,
 		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend even though the process-wide default is tymux")
+}
+
+// --------------------------------------------------------------------------
+// CreateDirectorySession / CreateWorktreeSession — programOverride (Epic 2.4,
+// Story 2.4.1): the narrowest seam for confirming the kickoff prompt (Prompt,
+// a CLI arg baked in at process-spawn time via buildClaudeCommand) survives a
+// spawn that carries a work-stage program override, since both are set on the
+// same InstanceOptions value before NewInstance/Start(true) — never via a
+// later SwitchProgram/Restart call. See Epic 2.4's design note.
+// --------------------------------------------------------------------------
+
+// TestCreateDirectorySession_should_SetProgramFromOverride_When_ProgramOverrideNonEmpty
+// proves a non-empty programOverride replaces resolved.Program on
+// InstanceOptions, and that Prompt (the kickoff prompt argument) is passed
+// through unaffected by the override.
+func TestCreateDirectorySession_should_SetProgramFromOverride_When_ProgramOverrideNonEmpty(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), SessionSpawnOptions{
+		Title: "program-override-directory-session", Prompt: "do the thing", OneShot: true, ProgramOverride: "claude --model claude-sonnet-4-6",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	assert.Equal(t, "claude --model claude-sonnet-4-6", inst.Program,
+		"a non-empty programOverride must replace resolved.Program on InstanceOptions before NewInstance/Start")
+	assert.Equal(t, "do the thing", inst.Prompt,
+		"the kickoff prompt must survive unaffected by the program override — both are set on the same InstanceOptions value before spawn")
+}
+
+// TestCreateDirectorySession_should_UseResolvedProgram_When_ProgramOverrideEmpty
+// is the byte-identical-to-today counterpart: an empty programOverride leaves
+// resolved.Program (config.ResolveDefaults' default) untouched.
+func TestCreateDirectorySession_should_UseResolvedProgram_When_ProgramOverrideEmpty(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	testDir := t.TempDir()
+	withIsolatedStateDirPath(t, testDir)
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"), []byte(`{"default_program": "claude"}`), 0o644))
+
+	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), SessionSpawnOptions{
+		Title: "no-override-directory-session", Prompt: "do the thing", OneShot: true,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	assert.Equal(t, "claude", inst.Program,
+		"an empty programOverride must leave resolved.Program byte-identical to pre-Epic-2.4 behavior")
+}
+
+// TestCreateWorktreeSession_should_SetProgramFromOverride_When_ProgramOverrideNonEmpty
+// is the CreateWorktreeSession analogue of the CreateDirectorySession test above.
+func TestCreateWorktreeSession_should_SetProgramFromOverride_When_ProgramOverrideNonEmpty(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	worktreePath := t.TempDir()
+	initGitRepoWithCommit(t, worktreePath)
+
+	inst, err := svc.CreateWorktreeSession(context.Background(), t.TempDir(), worktreePath, SessionSpawnOptions{
+		Title: "program-override-worktree-session", Prompt: "do the thing", OneShot: true, ProgramOverride: "claude --model claude-sonnet-4-6",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	assert.Equal(t, "claude --model claude-sonnet-4-6", inst.Program,
+		"a non-empty programOverride must replace resolved.Program on InstanceOptions before NewInstance/Start")
+	assert.Equal(t, "do the thing", inst.Prompt,
+		"the kickoff prompt must survive unaffected by the program override — both are set on the same InstanceOptions value before spawn")
 }
 
 // TestSessionService_CreateSession_DelegatesToCreateManagedInstance_When_HandlerInvoked
@@ -3249,7 +3536,7 @@ func TestCreateSession_RestartFromSessionId_DerivesPathFromSource(t *testing.T) 
 	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
 
-	assert.Equal(t, sourcePath, resp.Msg.Session.Path, "path should be derived from the source session")
+	assert.Equal(t, sourcePath, resp.Msg.Session.RepoRoot, "path should be derived from the source session")
 	assert.Equal(t, "restart-source", resp.Msg.Session.RestartedFromSessionId)
 }
 
@@ -3280,7 +3567,7 @@ func TestCreateSession_RestartFromSessionId_ExplicitPathWins(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
 
-	assert.Equal(t, explicitPath, resp.Msg.Session.Path, "explicit path must win over the restart-derived path")
+	assert.Equal(t, explicitPath, resp.Msg.Session.RepoRoot, "explicit path must win over the restart-derived path")
 	assert.Equal(t, "restart-source-explicit", resp.Msg.Session.RestartedFromSessionId, "lineage must still be recorded even when path is explicit")
 }
 
@@ -3370,7 +3657,7 @@ func TestCreateSession_RestartFromSessionId_ProceedsWhenLiveSourceConfirmed(t *t
 	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
 
-	assert.Equal(t, sourcePath, resp.Msg.Session.Path, "path should be derived from the confirmed live source")
+	assert.Equal(t, sourcePath, resp.Msg.Session.RepoRoot, "path should be derived from the confirmed live source")
 	assert.Equal(t, "restart-source-live-confirmed", resp.Msg.Session.RestartedFromSessionId)
 }
 
@@ -3511,7 +3798,7 @@ func TestSpawnReviewSession_SetsBacklogCategory(t *testing.T) {
 	// Isolate config to this test and use a trivial program so the tmux pane
 	// doesn't need the real "claude" binary to exist.
 	testDir := t.TempDir()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	withIsolatedStateDirPath(t, testDir)
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
 		[]byte(`{"default_program": "bash -c 'sleep 30'"}`), 0o644))
 
@@ -3523,6 +3810,37 @@ func TestSpawnReviewSession_SetsBacklogCategory(t *testing.T) {
 	t.Cleanup(func() { _ = inst.Destroy() })
 
 	assert.Equal(t, session.CategoryBacklog, inst.Category)
+}
+
+// TestSpawnDiagnosticSession_RestrictsAllowedTools is gap #1(a)'s
+// defense-in-depth regression guard: a dispatched Diagnose & Nudge session
+// must launch with --allowedTools restricted to diagnosticSessionAllowedTools
+// (client-side layer), unlike SpawnReviewSession's unrestricted default. The
+// real, server-side enforcement is denyIfDiagnoseCaller (server/mcp) — this
+// only proves the client-side restriction is actually wired at dispatch, not
+// that it alone would be sufficient.
+func TestSpawnDiagnosticSession_RestrictsAllowedTools(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts a real tmux session")
+	}
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	testDir := t.TempDir()
+	withIsolatedStateDirPath(t, testDir)
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"default_program": "bash -c 'sleep 30'"}`), 0o644))
+
+	repoPath := t.TempDir()
+	item := &session.BacklogItemData{ID: uuid.New().String(), RepoPath: repoPath}
+
+	inst, err := fix.svc.SpawnDiagnosticSession(context.Background(), item, "diagnose this")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	assert.Equal(t, session.CategoryBacklog, inst.Category)
+	assert.Equal(t, diagnosticSessionAllowedTools, inst.AllowedTools)
+	assert.NotContains(t, inst.AllowedTools, "write_to_session", "diagnostic sessions must not be allowed the general-purpose terminal-control tools")
 }
 
 // drainNotificationEvents reads every event currently queued on ch (with a short
@@ -3599,15 +3917,14 @@ func newRateLimitHiddenTestFixture(t *testing.T, title string) (*SessionService,
 		UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
+	installOnGate(eventBus, deliverygate.Entry{UUID: inst.UUID, Title: title, Hidden: true, Kind: deliverygate.KindOther})
 	return svc, eventBus, inst
 }
 
 // TestWireRateLimitCallbacks_SuppressesNotification_When_InstanceHidden verifies
-// the Epic 5 Story 5.1 Hidden gate: a Hidden instance (e.g. a headless review
-// session spawned via SpawnReviewSession) must never receive a rate-limit
-// detected/recovery notification, since rate-limit events have no
-// AttentionReason to preserve as a narrowing safety net — suppression here is
-// unconditional on Hidden, matching Epic 3's generic done/stuck notifier.
+// the Epic 5 Story 5.1 Hidden behavior: a Hidden instance (e.g. a headless
+// review session spawned via SpawnReviewSession) never receives a rate-limit
+// detected/recovery notification. The delivery gate on the bus drops them.
 func TestWireRateLimitCallbacks_SuppressesNotification_When_InstanceHidden(t *testing.T) {
 	t.Parallel()
 
@@ -3631,7 +3948,7 @@ func TestWireRateLimitCallbacks_SuppressesNotification_When_InstanceHidden(t *te
 		defer cancel()
 		ch, _ := eventBus.Subscribe(subCtx)
 
-		svc.onRateLimitRecovery(inst, inst.UUID, true, "")
+		svc.onRateLimitRecoverySucceeded(inst, inst.UUID)
 
 		notifs := drainNotificationEvents(ch)
 		assert.Empty(t, notifs, "a Hidden instance must never receive a rate-limit-recovery notification")
@@ -3677,6 +3994,7 @@ func TestWireRateLimitCallbacks_StillPublishesSessionUpdated_When_InstanceHidden
 		svc := NewSessionService(storage, eventBus)
 		t.Cleanup(func() { svc.Shutdown() })
 		inst := newHiddenInstance(t, storage, "rl-hidden-detected-sync")
+		installOnGate(eventBus, deliverygate.Entry{UUID: inst.UUID, Title: inst.Title, Hidden: true, Kind: deliverygate.KindOther})
 		subCtx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		ch, _ := eventBus.Subscribe(subCtx)
@@ -3701,11 +4019,12 @@ func TestWireRateLimitCallbacks_StillPublishesSessionUpdated_When_InstanceHidden
 		svc := NewSessionService(storage, eventBus)
 		t.Cleanup(func() { svc.Shutdown() })
 		inst := newHiddenInstance(t, storage, "rl-hidden-recovery-sync")
+		installOnGate(eventBus, deliverygate.Entry{UUID: inst.UUID, Title: inst.Title, Hidden: true, Kind: deliverygate.KindOther})
 		subCtx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		ch, _ := eventBus.Subscribe(subCtx)
 
-		svc.onRateLimitRecovery(inst, inst.UUID, true, "")
+		svc.onRateLimitRecoverySucceeded(inst, inst.UUID)
 
 		all := drainAllEvents(ch)
 		notifs := filterEventsByType(all, events.EventNotification)
@@ -3771,12 +4090,12 @@ func TestWireRateLimitCallbacks_StampsItemIDMetadata_When_BacklogLinkedAndNotHid
 	assert.Equal(t, "true", notifs[0].NotificationMetadata[events.MetadataKeySessionScoped])
 }
 
-// TestOnColdRestoreLostHistory_PublishesNotification_UnlessHidden verifies the
-// session-revive-uuid-loss AC3 notification: a non-Hidden instance whose cold
-// restore was forced fresh despite prior conversation history gets a durable
-// WARNING/MEDIUM notification, while a Hidden instance (e.g. a headless
-// review session) never does — mirroring onRateLimitRecovery's Hidden gate.
-func TestOnColdRestoreLostHistory_PublishesNotification_UnlessHidden(t *testing.T) {
+// TestOnColdRestoreLostHistory_PublishesNotification verifies the
+// session-revive-uuid-loss AC3 notification: an instance whose cold restore was
+// forced fresh despite prior conversation history gets a durable
+// WARNING/MEDIUM notification. A hidden instance's copy is dropped by the
+// delivery gate (see TestHiddenSessionEvents_ShouldDeliverOnlyRecoveryFailure_WhenGateOn).
+func TestOnColdRestoreLostHistory_PublishesNotification(t *testing.T) {
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(8)
 	svc := NewSessionService(storage, eventBus)
@@ -3808,20 +4127,8 @@ func TestOnColdRestoreLostHistory_PublishesNotification_UnlessHidden(t *testing.
 		notifs := drainNotificationEvents(ch)
 		require.Len(t, notifs, 1, "expected exactly one cold-restore-lost-history notification")
 		assert.Equal(t, int32(8), notifs[0].NotificationType, "must be NotificationType_WARNING")
-		assert.Equal(t, int32(2), notifs[0].NotificationPriority, "must be NotificationPriority_MEDIUM")
+		assert.Equal(t, int32(3), notifs[0].NotificationPriority, "must be NotificationPriority_HIGH (important-but-not-urgent)")
 		assert.Contains(t, notifs[0].NotificationTitle, inst.Title)
-	})
-
-	t.Run("hidden suppresses notification", func(t *testing.T) {
-		inst := newInstance("cold-restore-hidden", true)
-		subCtx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		ch, _ := eventBus.Subscribe(subCtx)
-
-		svc.onColdRestoreLostHistory(inst)
-
-		notifs := drainNotificationEvents(ch)
-		assert.Empty(t, notifs, "a Hidden instance must never receive a cold-restore-lost-history notification")
 	})
 }
 
@@ -3907,7 +4214,7 @@ func TestSessionService_Shutdown_StopsAnalyticsFlushGoroutine(t *testing.T) {
 // see loadClaudeSettingsRulesAtStartup's call site in NewSessionServiceWithSearchEngine.
 func TestLoadClaudeSettingsRulesAtStartup_MergesRulesIntoClassifier(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	withFakeHomePath(t, home)
 	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
 		`{"permissions":{"allow":["Bash(git log*)"]}}`)
 
@@ -3932,7 +4239,7 @@ func TestLoadClaudeSettingsRulesAtStartup_MergesRulesIntoClassifier(t *testing.T
 // lifecycle context.
 func TestNewSessionService_ClaudeSettingsWatcherWiredAndReachable(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	withFakeHomePath(t, home)
 
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
@@ -3940,6 +4247,24 @@ func TestNewSessionService_ClaudeSettingsWatcherWiredAndReachable(t *testing.T) 
 	t.Cleanup(func() { svc.Shutdown() })
 
 	assert.NotNil(t, svc.GetClaudeSettingsWatcher())
+}
+
+// TestNewSessionService_WiresApprovalServiceIntoRulesService is the
+// construction-order regression guard for Task 2.1.2b (validation.md Scope 4 /
+// Epic 2.1.2 — "gap — add"): after NewSessionService returns, rulesSvc's
+// approvalSvc field must be non-nil, so a future edit can't silently drop the
+// rulesSvc.SetApprovalService(approvalSvc) call without a test noticing.
+func TestNewSessionService_WiresApprovalServiceIntoRulesService(t *testing.T) {
+	home := t.TempDir()
+	withFakeHomePath(t, home)
+
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	require.NotNil(t, svc.rulesSvc)
+	assert.NotNil(t, svc.rulesSvc.approvalSvc, "rulesSvc.approvalSvc must be wired by NewSessionService")
 }
 
 // TestLoadClaudeSettingsRulesAtStartup_CwdEqualsHome_NoDuplicateClaudeSettingsRules is the
@@ -3951,7 +4276,7 @@ func TestNewSessionService_ClaudeSettingsWatcherWiredAndReachable(t *testing.T) 
 // TestLoadClaudeSettingsRulesAtStartup_MergesRulesIntoClassifier's doc comment for why.
 func TestLoadClaudeSettingsRulesAtStartup_CwdEqualsHome_NoDuplicateClaudeSettingsRules(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	withFakeHomePath(t, home)
 	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
 		`{"permissions":{"allow":["Bash(git *)"]}}`)
 
@@ -3997,7 +4322,7 @@ func TestClaudeSettingsWatcher_StartsWiredCallback_InitialPrimingReloadPublishes
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
-			t.Setenv("HOME", home)
+			withFakeHomePath(t, home)
 			if tc.withRules {
 				writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
 					`{"permissions":{"allow":["Bash(git log*)"]}}`)
@@ -4137,6 +4462,90 @@ func TestCreateSession_should_ReachActiveViaPipeline(t *testing.T) {
 			"creation_progress must be observed transitioning at least once before Active (Story 6.1.1's restart acceptance criterion); observed phases=%v", phases)
 	})
 
+	// ModeIsNewWorktree is worktree-envvars-hijack's Epic 4.1/Story 4.1.1
+	// end-to-end regression test: the exact request shape the original bug
+	// report used (SESSION_TYPE_NEW_WORKTREE + non-empty EnvVars + Program
+	// "claude") against a repo that already hosts a live SessionTypeDirectory
+	// session, asserting both directory-path isolation (a real, distinct
+	// worktree, never the bare repo path) and conversation-content isolation
+	// (the new session's ConversationUUID/HistoryFilePath never adopt the
+	// pre-existing sibling's) in both directions.
+	t.Run("ModeIsNewWorktree", func(t *testing.T) {
+		fix := setupForkTestFixture(t)
+		t.Cleanup(fix.cleanup)
+		wireRegistryForActorSerialization(fix)
+		home := withFakeHome(t) // the pre-existing session's fake JSONL fixture resolves under here
+
+		repoDir := t.TempDir()
+		initGitRepoWithCommit(t, repoDir)
+
+		// Seed the pre-existing sibling's fake conversation JSONL fixture,
+		// following TestHistoryFileDetector_DetectByPath_*'s pattern
+		// (session/history_detector_test.go): ~/.claude/projects/<encoded
+		// repoDir>/<uuid>.jsonl.
+		const preExistingUUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+		projDir := filepath.Join(home, ".claude", "projects", session.ClaudeProjectDirName(repoDir))
+		require.NoError(t, os.MkdirAll(projDir, 0o755))
+		preExistingHistoryPath := filepath.Join(projDir, preExistingUUID+".jsonl")
+		require.NoError(t, os.WriteFile(preExistingHistoryPath, []byte(`{"sessionId":"`+preExistingUUID+`"}`+"\n"), 0o644))
+
+		// A real, live SessionTypeDirectory instance already running at
+		// repoDir -- real tmux backend via fix.svc.testTmuxServerSocket, not
+		// a struct-literal double, so IsBackendProcessAlive()/liveness checks
+		// see it as genuinely live. SetHistoryInfo seeds its conversation
+		// state deterministically rather than depending on a HistoryLinker
+		// poll to discover the JSONL fixture above.
+		preExisting, err := session.NewInstance(session.InstanceOptions{
+			Title:            "epic61-preexisting-directory",
+			Path:             repoDir,
+			Program:          "sh",
+			SessionType:      session.SessionTypeDirectory,
+			TmuxServerSocket: fix.svc.testTmuxServerSocket,
+		})
+		require.NoError(t, err)
+		require.NoError(t, preExisting.Start(true))
+		t.Cleanup(func() { _ = preExisting.Destroy() })
+		preExisting.SetHistoryInfo(preExistingUUID, preExistingHistoryPath)
+		require.NoError(t, fix.storage.AddInstance(preExisting))
+
+		resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+			Title:       "epic61-new-worktree-session",
+			Path:        repoDir,
+			Program:     "claude",
+			SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE,
+			Branch:      "epic61-new-worktree",
+			EnvVars:     map[string]string{"ANTHROPIC_BASE_URL": "http://127.0.0.1:47000"},
+		}))
+		require.NoError(t, err)
+		id := resp.Msg.Session.Id
+		t.Cleanup(func() { destroyCreatedSession(t, fix.svc, id) })
+
+		assertReachesActiveViaPipeline(t, fix.svc, resp.Msg.Session, awaitTimeout, awaitPollInterval)
+
+		inst := fix.svc.FindLiveInstance(id)
+		require.NotNil(t, inst)
+
+		ws := inst.Workspace()
+		assert.NotEqual(t, repoDir, ws.ActiveDir,
+			"the new worktree session must resolve to a real, distinct worktree path, never the bare repo path")
+		assert.Equal(t, "http://127.0.0.1:47000", inst.EnvVars["ANTHROPIC_BASE_URL"],
+			"envVars-based program configuration must still work (issue #852's out-of-scope-but-must-not-worsen concern)")
+
+		// Conversation-content isolation half: if the new session has any
+		// conversation UUID/history path at all, it must never be the
+		// pre-existing sibling's -- proving no cross-session attach occurred.
+		assert.NotEqual(t, preExistingUUID, inst.GetClaudeConversationUUID(),
+			"new session must never adopt the pre-existing sibling's conversation UUID")
+		assert.NotEqual(t, preExistingHistoryPath, inst.Snapshot().HistoryFilePath,
+			"new session must never adopt the pre-existing sibling's history file path")
+
+		// The pre-existing sibling's own state must be untouched -- proving
+		// no cross-attach occurred in the OTHER direction either.
+		assert.Equal(t, session.Active, session.Status(preExisting.GetStatus()))
+		assert.Equal(t, repoDir, preExisting.Workspace().ActiveDir)
+		assert.Equal(t, preExistingUUID, preExisting.GetClaudeConversationUUID())
+	})
+
 	t.Run("ModeIsFork", func(t *testing.T) {
 		fix := setupForkTestFixture(t)
 		t.Cleanup(fix.cleanup)
@@ -4200,7 +4609,7 @@ func TestCreateSession_should_ReachActiveViaPipeline(t *testing.T) {
 		t.Cleanup(fix.cleanup)
 		wireRegistryForActorSerialization(fix)
 
-		t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+		withIsolatedStateDir(t)
 		aliasPath := t.TempDir()
 		cfg := config.DefaultConfig()
 		cfg.SessionDefaults.Aliases = []config.AliasConfig{
@@ -4347,7 +4756,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 	// STAPLER_SQUAD_TEST_DIR/STAPLER_SQUAD_INSTANCE leaking in from elsewhere
 	// (e.g. a live e2e/demo run in the same shell) would otherwise make this
 	// test read that other process's config.json instead.
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 
 	fix := setupForkTestFixture(t)
 	wireRegistryForActorSerialization(fix)
@@ -4382,7 +4791,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 
 		inst := fix.svc.FindLiveInstance(id)
 		require.NotNil(t, inst)
-		require.Eventually(t, func() bool {
+		wait.RequireEventually(t, func() bool {
 			return session.Status(inst.GetStatus()) == session.Active
 		}, awaitTimeout, pollInterval, "precondition: fixture instance must reach Active before being forced to Failed")
 
@@ -4392,7 +4801,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 				Id: id,
 			}))
 			require.NoError(t, retryErr)
-			require.Eventually(t, func() bool {
+			wait.RequireEventually(t, func() bool {
 				status := session.Status(inst.GetStatus())
 				return status == session.Active || status == session.Failed
 			}, awaitTimeout, pollInterval, "retried pipeline must reach a terminal status")
@@ -4432,7 +4841,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 		// well-defined to clean up.
 		inst := fix.svc.FindLiveInstance(id)
 		if inst != nil {
-			require.Eventually(t, func() bool {
+			wait.RequireEventually(t, func() bool {
 				return session.Status(inst.GetStatus()) == session.Failed
 			}, awaitTimeout, pollInterval, "pipeline must still reach Failed after losing the cancel race")
 		}
@@ -4460,7 +4869,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 		// The pipeline's Active write won the race instead.
 		inst := fix.svc.FindLiveInstance(id)
 		if inst != nil {
-			require.Eventually(t, func() bool {
+			wait.RequireEventually(t, func() bool {
 				return session.Status(inst.GetStatus()) == session.Active
 			}, awaitTimeout, pollInterval, "pipeline must still reach Active after winning the cancel race")
 		}
@@ -4581,4 +4990,91 @@ func TestCreateSession_should_PersistCreationProgressUpdatedAt_When_PhaseTransit
 			"creation_progress_updated_at must be persisted to storage, not left zero, once a phase transition has occurred")
 	}
 	require.True(t, found, "created instance must be present in storage")
+}
+
+// --------------------------------------------------------------------------
+// ListTaggingRules / UpsertTaggingRule / DeleteTaggingRule (Story 5.2.1)
+// --------------------------------------------------------------------------
+
+// TestSessionService_ListTaggingRules_should_ReturnUpsertedRule_When_UpsertTaggingRuleRPCCalledFirst
+// covers Story 5.2.1's Given-When-Then: a rule upserted via the UpsertTaggingRule RPC with
+// output_tag "Hotfix" appears in a subsequent ListTaggingRules RPC call.
+func TestSessionService_ListTaggingRules_should_ReturnUpsertedRule_When_UpsertTaggingRuleRPCCalledFirst(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	upsertResp, err := svc.UpsertTaggingRule(context.Background(), connect.NewRequest(&sessionv1.UpsertTaggingRuleRequest{
+		Rule: &sessionv1.TaggingRuleProto{
+			Name:          "Hotfix branch",
+			BranchPattern: "^hotfix/",
+			OutputTag:     "Hotfix",
+			Priority:      50,
+			Enabled:       true,
+		},
+	}))
+	require.NoError(t, err)
+	require.NotEmpty(t, upsertResp.Msg.GetRule().GetId(), "an id should be generated when the caller omits one")
+
+	listResp, err := svc.ListTaggingRules(context.Background(), connect.NewRequest(&sessionv1.ListTaggingRulesRequest{}))
+	require.NoError(t, err)
+
+	var found bool
+	for _, r := range listResp.Msg.GetRules() {
+		if r.GetOutputTag() == "Hotfix" {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected a rule with output_tag=Hotfix in ListTaggingRules, got: %+v", listResp.Msg.GetRules())
+}
+
+// TestSessionService_UpsertTaggingRule_should_ReturnValidationError_When_OutputTagEmpty
+// covers Story 5.2.1's validation acceptance criterion: an empty output_tag is rejected
+// with a client-visible error, not silently accepted.
+func TestSessionService_UpsertTaggingRule_should_ReturnValidationError_When_OutputTagEmpty(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	_, err := svc.UpsertTaggingRule(context.Background(), connect.NewRequest(&sessionv1.UpsertTaggingRuleRequest{
+		Rule: &sessionv1.TaggingRuleProto{
+			Name: "Missing output tag",
+		},
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// TestSessionService_DeleteTaggingRule_should_RemoveRule_When_RuleExists covers the delete
+// half of the CRUD surface Story 5.2.1 exposes.
+func TestSessionService_DeleteTaggingRule_should_RemoveRule_When_RuleExists(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	upsertResp, err := svc.UpsertTaggingRule(context.Background(), connect.NewRequest(&sessionv1.UpsertTaggingRuleRequest{
+		Rule: &sessionv1.TaggingRuleProto{
+			Name:      "To delete",
+			OutputTag: "ToDelete",
+		},
+	}))
+	require.NoError(t, err)
+
+	deleteResp, err := svc.DeleteTaggingRule(context.Background(), connect.NewRequest(&sessionv1.DeleteTaggingRuleRequest{
+		Id: upsertResp.Msg.GetRule().GetId(),
+	}))
+	require.NoError(t, err)
+	assert.True(t, deleteResp.Msg.GetSuccess())
+
+	listResp, err := svc.ListTaggingRules(context.Background(), connect.NewRequest(&sessionv1.ListTaggingRulesRequest{}))
+	require.NoError(t, err)
+	for _, r := range listResp.Msg.GetRules() {
+		assert.NotEqual(t, upsertResp.Msg.GetRule().GetId(), r.GetId(), "deleted rule must not reappear in ListTaggingRules")
+	}
 }

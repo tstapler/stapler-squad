@@ -84,6 +84,7 @@ func (p *Parser) ParseReader(r io.Reader) (*ParseResult, error) {
 	}
 
 	modelCounts := make(map[string]int)
+	healthRing := &healthTurnRing{}
 	humanTurnIndex := 0
 
 	for scanner.Scan() {
@@ -107,15 +108,20 @@ func (p *Parser) ParseReader(r io.Reader) (*ParseResult, error) {
 
 		switch entryType {
 		case "assistant":
-			p.processAssistantEntry(entry, result, modelCounts)
+			p.processAssistantEntry(entry, result, modelCounts, healthRing)
 		case "user":
 			p.processUserEntry(entry, result, humanTurnIndex)
 			humanTurnIndex++
+		case "system":
+			p.processSystemEntry(entry, result)
 		}
 	}
 
 	// Ignore scanner errors for partial writes (EOF mid-line).
 	_ = scanner.Err()
+
+	resolveCompactTokensAfter(result)
+	result.ContextHealth = extractContextHealthSignals(healthRing)
 
 	// Determine primary model (most frequently used).
 	result.PrimaryModel = primaryModel(modelCounts)
@@ -127,7 +133,7 @@ func (p *Parser) ParseReader(r io.Reader) (*ParseResult, error) {
 }
 
 // processAssistantEntry extracts token counts and tool usage from an assistant turn.
-func (p *Parser) processAssistantEntry(entry jsonlEntry, result *ParseResult, modelCounts map[string]int) {
+func (p *Parser) processAssistantEntry(entry jsonlEntry, result *ParseResult, modelCounts map[string]int, healthRing *healthTurnRing) {
 	if len(entry.Message) == 0 {
 		return
 	}
@@ -167,12 +173,21 @@ func (p *Parser) processAssistantEntry(entry jsonlEntry, result *ParseResult, mo
 		result.CacheRead += turn.CacheRead
 	}
 
+	var health healthTurnRecord
 	// Extract tool use names from content.
 	for _, c := range msg.Content {
+		if c.Type == "text" && c.Text != "" {
+			if hit := matchConfusionPatterns(c.Text); hit != "" {
+				health.ConfusionHits = append(health.ConfusionHits, hit)
+			}
+			continue
+		}
 		if c.Type != "tool_use" || c.Name == "" {
 			continue
 		}
 		turn.ToolNames = append(turn.ToolNames, c.Name)
+		health.Fingerprints = append(health.Fingerprints, toolCallFingerprint(c.Name, c.Input))
+		health.ToolNames = append(health.ToolNames, c.Name)
 
 		stat := result.ToolUsage[c.Name]
 		stat.ToolName = c.Name
@@ -194,7 +209,45 @@ func (p *Parser) processAssistantEntry(entry jsonlEntry, result *ParseResult, mo
 	result.MessageCount++
 	if msg.Model != syntheticModelSentinel {
 		result.TurnTimeline = append(result.TurnTimeline, turn)
+		health.At = turn.Timestamp
+		healthRing.push(health)
 	}
+}
+
+// processSystemEntry records compact_boundary entries as CompactEvents.
+// When postTokens is absent, TokensAfter is left zero and resolved by
+// resolveCompactTokensAfter once the following turn is known.
+func (p *Parser) processSystemEntry(entry jsonlEntry, result *ParseResult) {
+	if entry.Subtype != "compact_boundary" || entry.CompactMetadata == nil {
+		return
+	}
+	ev := CompactEvent{
+		Trigger:      entry.CompactMetadata.Trigger,
+		TurnIndex:    len(result.TurnTimeline),
+		TokensBefore: entry.CompactMetadata.PreTokens,
+		TokensAfter:  entry.CompactMetadata.PostTokens,
+	}
+	ev.Timestamp = parseTimestamp(entry.Timestamp)
+	result.CompactEvents = append(result.CompactEvents, ev)
+}
+
+// resolveCompactTokensAfter fills TokensAfter from the first post-compaction
+// turn's context size for events whose transcript had no postTokens.
+func resolveCompactTokensAfter(result *ParseResult) {
+	for i := range result.CompactEvents {
+		ev := &result.CompactEvents[i]
+		if ev.TokensAfter == 0 && ev.TurnIndex < len(result.TurnTimeline) {
+			ev.TokensAfter = result.TurnTimeline[ev.TurnIndex].ContextTokens()
+		}
+	}
+}
+
+// parseTimestamp parses an RFC3339 (optionally nano) timestamp; zero time on failure.
+func parseTimestamp(s string) time.Time {
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t
+	}
+	return time.Time{}
 }
 
 // processUserEntry detects skill activations and /commands in user turns.

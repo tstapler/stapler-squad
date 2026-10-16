@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	pkganalytics "github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent/escapeevent"
 )
 
 // EscapeEventBatchWriter persists escape events to SQLite via batched ent writes.
@@ -59,13 +60,6 @@ func (w *EscapeEventBatchWriter) Start(ctx context.Context) {
 	for {
 		select {
 		case ev := <-w.ch:
-			// Check per-session row cap (in-memory)
-			if w.maxRowsPerSession > 0 {
-				if w.sessionRowCounts[ev.SessionID] >= w.maxRowsPerSession {
-					continue
-				}
-				w.sessionRowCounts[ev.SessionID]++
-			}
 			batch = append(batch, ev)
 			if len(batch) >= 100 {
 				flush()
@@ -77,12 +71,6 @@ func (w *EscapeEventBatchWriter) Start(ctx context.Context) {
 			for {
 				select {
 				case ev := <-w.ch:
-					if w.maxRowsPerSession > 0 {
-						if w.sessionRowCounts[ev.SessionID] >= w.maxRowsPerSession {
-							continue
-						}
-						w.sessionRowCounts[ev.SessionID]++
-					}
 					batch = append(batch, ev)
 				default:
 					flush()
@@ -104,6 +92,7 @@ func (w *EscapeEventBatchWriter) flushBatch(ctx context.Context, batch []pkganal
 	}
 
 	creators := make([]*ent.EscapeEventCreate, 0, len(batch))
+	addedBySession := make(map[string]int)
 	for _, ev := range batch {
 		id := generateEscapeEventID()
 		c := w.client.EscapeEvent.Create().
@@ -116,8 +105,14 @@ func (w *EscapeEventBatchWriter) flushBatch(ctx context.Context, batch []pkganal
 			SetWallTime(ev.WallTime).
 			SetSessionSeq(ev.SessionSeq)
 
+		if ev.ProjectPath != "" {
+			c = c.SetProjectPath(ev.ProjectPath)
+		}
 		if ev.SequenceSubtype != "" {
 			c = c.SetSequenceSubtype(ev.SequenceSubtype)
+		}
+		if ev.SequenceSignature != "" {
+			c = c.SetSequenceSignature(ev.SequenceSignature)
 		}
 		if ev.PayloadHash != "" {
 			c = c.SetPayloadHash(ev.PayloadHash)
@@ -130,11 +125,63 @@ func (w *EscapeEventBatchWriter) flushBatch(ctx context.Context, batch []pkganal
 		}
 
 		creators = append(creators, c)
+		addedBySession[ev.SessionID]++
 	}
 
 	if err := w.client.EscapeEvent.CreateBulk(creators...).Exec(ctx); err != nil {
 		log.Warn("escape analytics: flush batch failed", "err", err, "batch_size", len(batch))
+		return
 	}
+	if w.maxRowsPerSession <= 0 {
+		return
+	}
+	for sessionID, added := range addedBySession {
+		count, known := w.sessionRowCounts[sessionID]
+		if !known {
+			var err error
+			count, err = w.client.EscapeEvent.Query().Where(escapeevent.SessionID(sessionID)).Count(ctx)
+			if err != nil {
+				log.Warn("escape analytics: count rows for cap failed", "err", err, "session_id", sessionID)
+				continue
+			}
+		} else {
+			count += added
+		}
+		if count > w.maxRowsPerSession {
+			if err := w.deleteOldestRows(ctx, sessionID, count-w.maxRowsPerSession); err != nil {
+				log.Warn("escape analytics: enforce per-session row cap failed", "err", err, "session_id", sessionID)
+				continue
+			}
+			count = w.maxRowsPerSession
+		}
+		w.sessionRowCounts[sessionID] = count
+	}
+}
+
+func (w *EscapeEventBatchWriter) deleteOldestRows(ctx context.Context, sessionID string, count int) error {
+	if count <= 0 {
+		return nil
+	}
+	const deleteChunkSize = 500
+	for count > 0 {
+		limit := count
+		if limit > deleteChunkSize {
+			limit = deleteChunkSize
+		}
+		ids, err := w.client.EscapeEvent.Query().
+			Where(escapeevent.SessionID(sessionID)).
+			Order(escapeevent.ByWallTime()).
+			Limit(limit).
+			IDs(ctx)
+		if err != nil || len(ids) == 0 {
+			return err
+		}
+		if _, err = w.client.EscapeEvent.Delete().Where(escapeevent.IDIn(ids...)).Exec(ctx); err != nil {
+			return err
+		}
+		count -= len(ids)
+	}
+	return nil
 }
 
 func generateEscapeEventID() string {

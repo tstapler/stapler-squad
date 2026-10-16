@@ -71,7 +71,7 @@ func newWebhookTestInfra(t *testing.T) *webhookTestInfra {
 	t.Helper()
 	// Isolate config so GetOrCreateEncryptionKey's SaveConfig call does not write to
 	// the shared test-mode config dir (mirrors backlog_service_encryption_test.go).
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 
 	entRepo := session.NewTestEntRepository(t)
 

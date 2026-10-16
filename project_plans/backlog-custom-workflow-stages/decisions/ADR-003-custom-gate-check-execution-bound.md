@@ -3,7 +3,9 @@
 **Status**: Accepted
 **Date**: 2026-09-03
 **Deciders**: Tyler Stapler (via SDD Phase 3 planning, `backlog-custom-workflow-stages`)
-**Related**: `ADR-001-liveness-engine-sibling-interface.md` (the timeout primitive this ADR reuses)
+**Related**: `docs/adr/013-workflow-engine-replaces-valid-transitions.md` (ADR-013, the
+`WorkflowEngine`/`ConfiguredWorkflowEngine` this gate kind is one branch of),
+`ADR-001-liveness-engine-sibling-interface.md` (the timeout primitive this ADR reuses)
 
 ---
 

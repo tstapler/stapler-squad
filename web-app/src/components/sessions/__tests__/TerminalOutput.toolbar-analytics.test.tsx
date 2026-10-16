@@ -5,7 +5,7 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -45,6 +45,7 @@ jest.mock("@/components/providers/ViewportProvider", () => ({
 
 // eslint-disable-next-line import/first
 import { TerminalOutput } from "../TerminalOutput";
+import { TerminalPoolProvider } from "@/lib/terminal/TerminalPool";
 // eslint-disable-next-line import/first
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
 
@@ -72,9 +73,14 @@ function makeStreamMock(overrides = {}) {
   };
 }
 
+// Story 3 — TerminalOutput now sources its xterm.js instance from
+// TerminalPoolProvider (see TerminalPool.tsx); every render in this file
+// must be wrapped in one, matching production's app-level provider.
 function renderTerminal(sessionId = "session-abc", baseUrl = "/api") {
   return render(
-    <TerminalOutput sessionId={sessionId} baseUrl={baseUrl} isVisible={false} />
+    <TerminalPoolProvider>
+      <TerminalOutput sessionId={sessionId} baseUrl={baseUrl} isVisible={false} />
+    </TerminalPoolProvider>
   );
 }
 
@@ -190,7 +196,7 @@ describe("toolbar analytics", () => {
 
   it("fires track with button:resize when Resize clicked (in dev panel)", () => {
     renderTerminal();
-    fireEvent.click(screen.getByRole("button", { name: /resize terminal/i }));
+    fireEvent.click(screen.getByRole("button", { name: /redraw terminal/i }));
     expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({
       name: "toolbar_button_click",
       category: "user_action",
@@ -413,5 +419,27 @@ describe("compact toolbar auto-collapse", () => {
     renderTerminal();
     expect(screen.getByTestId("toolbar-toggle")).toHaveAttribute("aria-expanded", "true");
     expect(screen.queryAllByTestId("mobile-key").length).toBeGreaterThan(0);
+  });
+});
+
+describe("TerminalOutput — mobile overflow row upload buttons", () => {
+  it("renders Gallery and Files in the overflow row once More is opened", () => {
+    renderTerminal();
+    expect(screen.queryByTestId("toolbar-overflow-row")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("toolbar-more-button"));
+
+    const row = within(screen.getByTestId("toolbar-overflow-row"));
+    expect(row.getByLabelText("Attach images from gallery")).toBeInTheDocument();
+    expect(row.getByLabelText("Attach files")).toBeInTheDocument();
+    expect(row.getByLabelText("Take photo with camera")).toBeInTheDocument();
+  });
+
+  it("keeps aria-label and title on the Redraw button", () => {
+    renderTerminal();
+    expect(screen.getByLabelText("Redraw terminal (fixes a blank screen)")).toHaveAttribute(
+      "title",
+      "Redraw terminal (fixes a blank screen)"
+    );
   });
 });

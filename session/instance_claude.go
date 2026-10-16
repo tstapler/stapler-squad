@@ -4,20 +4,17 @@ package session
 // history file detection, UUID extraction, and conversation reattachment.
 
 import (
-	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/headless"
 )
-
-// staleResumePattern is the prefix Claude CLI emits when --resume is used with a
-// conversation ID that no longer exists in Claude's backend.
-const staleResumePattern = "No conversation found with session ID"
 
 // claudeExtension holds Claude Code conversation-resume session state.
 // Unlike piExtension (instance_pi_status.go), this is populated for a
@@ -71,14 +68,11 @@ const (
 	ReviveOutcomeFreshLostHistory ReviveOutcome = "fresh_lost_history"
 )
 
-// isStaleResumeExit returns true when the PTY exit tail contains the Claude CLI error
-// that indicates a stale or expired --resume argument.  ANSI escape sequences are
-// stripped before the check so colour output does not prevent matching.
-func isStaleResumeExit(exitContent []byte) bool {
-	if len(exitContent) == 0 {
-		return false
-	}
-	return bytes.Contains(stripANSISimple(exitContent), []byte(staleResumePattern))
+// isStaleResumeExit returns true when the PTY exit tail contains CLI errors
+// indicating a stale or expired resume argument for program.
+func isStaleResumeExit(program string, exitContent []byte) bool {
+	detector := resolveStaleResumeDetector(program)
+	return detector.IsStaleResumeExit(exitContent)
 }
 
 // stripANSISimple removes ANSI CSI/OSC/single-char escape sequences so that
@@ -129,6 +123,16 @@ func stripANSISimple(b []byte) []byte {
 // fresh (without --resume) so it does not loop forever on the same bad UUID.
 // Safe to call from a goroutine; uses startMu to serialise concurrent calls.
 func (i *Instance) recoverFromStaleResume() {
+	// An archived session is deliberately retired; a stale --resume on its way
+	// out is not a reason to spawn a brand-new (un-resumed) conversation
+	// (ADR-001, superseded-rework-session-retirement). KillTmuxPaneOnly closes
+	// the pane without stopping the controller, so the archive's own kill is
+	// what delivers the PTY EOF that gets here.
+	if i.IsArchived() {
+		log.Info("stale --resume uuid on an archived session; not restarting", "session", i.Title)
+		return
+	}
+
 	log.Info("stale --resume uuid detected, clearing and restarting fresh", "session", i.Title)
 	log.ForSession(i.Title).Info("stale --resume uuid detected, clearing conversation state and restarting fresh")
 
@@ -418,6 +422,22 @@ func (i *Instance) tryExtractConversationUUID() {
 		if info != nil {
 			log.Info("tryextractconversationuuid: found conversation via path fallback", "session", i.Title)
 		}
+		// Cross-session ownership guard (worktree-envvars-hijack Story 1.4.2):
+		// DetectByPath is a path-keyed, "most recently modified JSONL" scan with no
+		// per-session ownership check of its own -- if another live Instance already
+		// owns this exact conversation UUID at this exact effective path, adopting it
+		// here would silently attribute that sibling's conversation to this instance.
+		// i.conversationOwnershipGuard's own inst.UUID == selfUUID exclusion (see
+		// SessionService.ConversationOwnedByOtherLiveSession) means a session
+		// re-detecting its OWN conversation UUID during cold-restore self-recovery is
+		// never blocked -- only silently adopting a still-live sibling's UUID is.
+		if info != nil && i.conversationOwnershipGuard != nil {
+			if ownerUUID, ownedByOther := i.conversationOwnershipGuard(info.ConversationUUID, effectivePath); ownedByOther {
+				log.Warn("tryextractconversationuuid: conversation UUID owned by another live session, not adopting",
+					"session", i.Title, "path", effectivePath, "owner_uuid", ownerUUID)
+				info = nil
+			}
+		}
 	}
 
 	if info == nil {
@@ -486,6 +506,13 @@ func (i *Instance) RunWithResume(ctx context.Context, message string) (string, e
 
 	cmd := safeexec.CommandContext(ctx, claudePath, "-p", "--resume", uuid, "--output-format", "json", message)
 	cmd.Dir = i.GetEffectiveRootDir()
+	// Resume is a claude-CLI conversation; the selector may only keep it on a
+	// backend that declares Resume (claude, or consolette via ANTHROPIC_BASE_URL).
+	if env, err := headless.ResumeEnv(headless.FeatureKeyInstanceResume); err != nil {
+		return "", err
+	} else if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 
 	out, runErr := cmd.Output()
 	output := string(out)
@@ -535,6 +562,15 @@ func (i *Instance) SetClaudeSessionIDSavedCallback(fn func()) {
 	i.claudeSessionIDSavedCallback = fn
 }
 
+// currentConversationUUIDLocked returns i.claudeSession's ConversationUUID
+// ("" if unset). Caller must hold claudeSessionMu (R or exclusive).
+func (i *Instance) currentConversationUUIDLocked() string {
+	if i.claudeSession == nil {
+		return ""
+	}
+	return i.claudeSession.ConversationUUID
+}
+
 // SetHistoryInfo updates the conversation UUID and history file path.
 // Thread-safe: acquires stateMutex write lock.
 // No-op if the UUID is already set to the same value.
@@ -545,12 +581,22 @@ func (i *Instance) SetClaudeSessionIDSavedCallback(fn func()) {
 // a tmux pane killed before that sweep runs would otherwise resume with no
 // conversation UUID to pass to --resume.
 func (i *Instance) SetHistoryInfo(conversationUUID, historyFilePath string) {
+	// Fast path: check the no-op condition under RLock first. HistoryLinker
+	// calls this on every scan tick, and most ticks find nothing changed —
+	// taking claudeSessionMu.Lock() (exclusive) just to discover that blocks
+	// every concurrent reader (e.g. GetHistoryInfo) for no reason. Re-checked
+	// below once the exclusive lock is actually held, since the value could
+	// change between the RUnlock and the Lock.
+	i.claudeSessionMu.RLock()
+	noop := i.currentConversationUUIDLocked() == conversationUUID && i.HistoryFilePath == historyFilePath
+	i.claudeSessionMu.RUnlock()
+	if noop {
+		return
+	}
+
 	i.claudeSessionMu.Lock()
 
-	currentUUID := ""
-	if i.claudeSession != nil {
-		currentUUID = i.claudeSession.ConversationUUID
-	}
+	currentUUID := i.currentConversationUUIDLocked()
 	if currentUUID == conversationUUID && i.HistoryFilePath == historyFilePath {
 		i.claudeSessionMu.Unlock()
 		return

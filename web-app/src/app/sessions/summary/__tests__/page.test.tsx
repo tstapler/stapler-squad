@@ -64,4 +64,12 @@ describe("SessionSummaryPage", () => {
     expect(mockSessionSummaryPanel).not.toHaveBeenCalled();
     expect(screen.queryByTestId("mock-session-summary-panel")).not.toBeInTheDocument();
   });
+
+  it("explains the missing sessionId instead of rendering a blank page", () => {
+    mockUseSearchParams.mockReturnValue(searchParamsWith(null));
+
+    render(<SessionSummaryPage />);
+
+    expect(screen.getByTestId("summary-missing-session")).toHaveTextContent(/No session specified/);
+  });
 });

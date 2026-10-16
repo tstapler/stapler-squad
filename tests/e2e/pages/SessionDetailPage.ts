@@ -65,6 +65,40 @@ export class SessionDetailPage {
   }
 
   // ---------------------------------------------------------------------
+  // Scroll-forward (app-scrollback-forwarding) — Story 1.4.0-1.4.5,
+  // design/ux.md Surfaces 1-4. See tests/e2e/scroll-forward-*.spec.ts and
+  // tests/e2e/helpers/scroll-forward-fixture.ts.
+  // ---------------------------------------------------------------------
+
+  /** Story 1.4.5 — shared loading pill (tmux-native + app-forwarded paths). */
+  getScrollLoadingPill(): Locator {
+    return this.page.getByTestId("scroll-loading-pill");
+  }
+
+  getScrollLoadingPillCancel(): Locator {
+    return this.page.getByTestId("scroll-loading-pill-cancel");
+  }
+
+  /** Story 1.4.2 — persistent "Viewing <Program>'s own history" banner. */
+  getScrollSourceIndicator(): Locator {
+    return this.page.getByTestId("scroll-source-indicator");
+  }
+
+  /** Story 1.4.4 (Task 1.4.4b) — AT_TOP-only "No more history available" line. */
+  getNoMoreAppHistory(): Locator {
+    return this.page.getByTestId("no-more-app-history");
+  }
+
+  /** Story 1.4.3 — BLOCKED-outcome toast, portal-rendered to document.body. */
+  getScrollBlockedToast(): Locator {
+    return this.page.getByTestId("scroll-blocked-toast");
+  }
+
+  getScrollBlockedToastDismiss(): Locator {
+    return this.page.getByTestId("scroll-blocked-toast-dismiss");
+  }
+
+  // ---------------------------------------------------------------------
   // Terminal tab — added for session-completion-summary.spec.ts, which
   // types `exit` into a plain-shell one-off session's terminal to end it
   // naturally (EventExited) and trigger session-summary generation.
