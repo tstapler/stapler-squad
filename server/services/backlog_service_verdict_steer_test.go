@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -151,6 +152,15 @@ func TestVerdictSteering_NewerVerdictSupersedesWaitingOne(t *testing.T) {
 
 	publishVerdict(bus, item, session.ReviewOutcomeFail, "first")
 	publishVerdict(bus, item, session.ReviewOutcomePass, "second")
+
+	// Events are consumed asynchronously; release the session only once the
+	// second verdict has superseded the first, or the first is legitimately
+	// delivered when the session goes idle before the dispatcher sees event 2.
+	require.Eventually(t, func() bool {
+		latest, _ := svc.verdictSteerLatest.Load(item.ID)
+		key, _ := latest.(string)
+		return strings.Contains(key, "|"+string(session.ReviewOutcomePass)+"|")
+	}, 3*time.Second, 5*time.Millisecond)
 
 	steerer.mu.Lock()
 	steerer.notReady[verdictSteerSessionUUID] = false

@@ -165,6 +165,7 @@ func NewServerWithDeps(addr string, deps *ServerDependencies) *Server {
 	srv, connCtx := newServerBase(addr)
 	wireDepsIntoServer(srv, deps, connCtx)
 	registerStaticRoutes(srv)
+	srv.registerChangelogHandlers().Start(connCtx)
 	return srv
 }
 
