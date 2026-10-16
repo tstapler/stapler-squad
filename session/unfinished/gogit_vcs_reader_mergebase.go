@@ -160,7 +160,7 @@ func (q *paintQueue) pop() paintItem {
 // distance to the merge base, not with history depth. The walk visits at most
 // 2*mergeBaseBFSLimit commits; if no merge base is found within that, an error is
 // returned. With clock skew the result can differ from a full-graph answer, as in git.
-func findMergeBase(pm *parentMemo, h1, h2 plumbing.Hash) (plumbing.Hash, error) {
+func findMergeBase(pm parentSource, h1, h2 plumbing.Hash) (plumbing.Hash, error) {
 	if h1 == h2 {
 		return h1, nil
 	}
@@ -237,7 +237,7 @@ func anyFresh(q paintQueue, flags map[plumbing.Hash]uint8) bool {
 
 // isAncestorOfOther reports whether c is a strict ancestor of any other candidate.
 // Only runs when several common ancestors were found (criss-cross merges).
-func isAncestorOfOther(pm *parentMemo, c plumbing.Hash, candidates []plumbing.Hash) bool {
+func isAncestorOfOther(pm parentSource, c plumbing.Hash, candidates []plumbing.Hash) bool {
 	if len(candidates) < 2 {
 		return false
 	}
@@ -276,7 +276,7 @@ func isAncestorOfOther(pm *parentMemo, c plumbing.Hash, candidates []plumbing.Ha
 // commit back to the repo root. When the bound is hit the count is capped rather
 // than exact — callers display it as "mergeBaseBFSLimit+" ahead/behind, which is
 // the correct signal for "diverged a lot" without paying for an exact count.
-func countCommitsTo(pm *parentMemo, start, stop plumbing.Hash) (int, error) {
+func countCommitsTo(pm parentSource, start, stop plumbing.Hash) (int, error) {
 	seen := make(map[plumbing.Hash]bool, 32)
 	q := []plumbing.Hash{start}
 	n := 0

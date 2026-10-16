@@ -18,8 +18,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/cache"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
-	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session/unfinished/gogitstore"
 	"golang.org/x/sync/singleflight"
@@ -176,6 +174,19 @@ type diffStatEntry struct {
 type hasUncommittedEntry struct {
 	result bool
 	expiry time.Time
+}
+
+// aheadBehindKey and commitMessagesKey are comparable struct keys: building one
+// for a cache probe allocates nothing, unlike the fmt.Sprintf keys they replace.
+type aheadBehindKey struct {
+	worktree string
+	base     string
+}
+
+type commitMessagesKey struct {
+	worktree string
+	base     string
+	max      int
 }
 
 type aheadBehindEntry struct {
@@ -502,13 +513,14 @@ type GoGitVCSReader struct {
 	// Races on a cache miss are benign: last writer wins; both compute the same value.
 	diffStatCache sync.Map // map[string]diffStatEntry
 
-	// aheadBehindCache caches AheadBehind results keyed by worktreePath+"\x00"+base.
+	// aheadBehindCache caches AheadBehind results keyed by (worktreePath, base).
 	// Eliminates packfile-reader lock contention on repeated calls within TTL.
-	aheadBehindCache sync.Map // map[string]aheadBehindEntry
+	// Struct keys keep a hit allocation-free.
+	aheadBehindCache lazyMap[aheadBehindKey, aheadBehindEntry]
 
-	// commitMessagesCache caches CommitMessages results keyed by worktreePath+"\x00"+base.
+	// commitMessagesCache caches CommitMessages results keyed by (worktreePath, base, max).
 	// Eliminates packfile-reader lock contention on repeated commit log walks.
-	commitMessagesCache sync.Map // map[string]commitMessagesEntry
+	commitMessagesCache lazyMap[commitMessagesKey, commitMessagesEntry]
 
 	// reachableSetCache caches reachableSet results, one entry per worktreePath,
 	// validated by the entry's baseHash. Per-worktree scoping prevents a shallow
@@ -536,6 +548,11 @@ type GoGitVCSReader struct {
 	hasUncommittedSF singleflight.Group //nolint:exhaustruct
 	// commitMessagesSF deduplicates concurrent CommitMessages calls for the same key.
 	commitMessagesSF singleflight.Group //nolint:exhaustruct
+	// reachableSetSF coalesces concurrent cold reachable-set walks for one (worktree, base).
+	reachableSetSF singleflight.Group //nolint:exhaustruct
+	// reachableSetJoined counts callers registered in a reachableSetSF flight;
+	// tests wait on it instead of sleeping.
+	reachableSetJoined atomic.Int64
 
 	// gogitstoreReg shares both the decoded-object cache AND the parsed
 	// pack-index across every worktree of the same repo (keyed by resolved
@@ -771,6 +788,27 @@ func sfDo[T any](sf *singleflight.Group, key string, fn func() (T, error)) (T, e
 	return val.(T), nil
 }
 
+// sfDoJoined is sfDo with a flight-registration counter: joined is incremented
+// once the caller is registered in the flight, so tests can wait for every
+// caller to join before releasing a blocked computation.
+func sfDoJoined[T any](sf *singleflight.Group, key string, joined *atomic.Int64, fn func() (T, error)) (T, error) {
+	ch := sf.DoChan(key, func() (v any, doErr error) {
+		defer func() {
+			if r := recover(); r != nil {
+				doErr = fmt.Errorf("go-git panic: %v", r)
+			}
+		}()
+		return fn()
+	})
+	joined.Add(1)
+	res := <-ch
+	if res.Err != nil {
+		var zero T
+		return zero, res.Err
+	}
+	return res.Val.(T), nil
+}
+
 func (g *GoGitVCSReader) ListWorktrees(repoPath string) ([]WorktreeInfo, error) {
 	repo, err := g.openWorktree(repoPath)
 	if err != nil {
@@ -918,17 +956,15 @@ func gitignoreEntriesChanged(old, newer map[string]plumbing.Hash) bool {
 // then count commits between each tip and the merge base. This bounds the
 // walk to the diverged portion of history rather than the full reachable set.
 func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error) {
-	cacheKey := worktreePath + "\x00" + base
-	if v, ok := g.aheadBehindCache.Load(cacheKey); ok {
-		if e := v.(aheadBehindEntry); time.Now().Before(e.expiry) {
-			return e.ahead, e.behind, nil
-		}
+	cacheKey := aheadBehindKey{worktree: worktreePath, base: base}
+	if e, ok := g.aheadBehindCache.Load(cacheKey); ok && time.Now().Before(e.expiry) {
+		return e.ahead, e.behind, nil
 	}
 
 	type abResult struct{ ahead, behind int }
 	// After the cache check: the guard allocates, and a hit must stay alloc-free.
 	defer g.guardInvalidation(worktreePath)()
-	result, err := sfDo(&g.aheadBehindSF, cacheKey, func() (abResult, error) {
+	result, err := sfDo(&g.aheadBehindSF, worktreePath+"\x00"+base, func() (abResult, error) {
 		entry, openErr := g.openRepoEntry(worktreePath)
 		if openErr != nil {
 			return abResult{}, fmt.Errorf("open repo %s: %w", worktreePath, openErr)
@@ -937,46 +973,8 @@ func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error
 		entry.mu.Lock()
 		defer entry.mu.Unlock() // REQUIRED: defer, never explicit unlocks — ensures mutex releases on panic
 
-		repo := entry.repo
-		headRef, headErr := repo.Head()
-		if headErr != nil {
-			return abResult{}, fmt.Errorf("head: %w", headErr)
-		}
-		baseHash, baseErr := resolveRef(repo, base)
-		if baseErr != nil {
-			return abResult{}, fmt.Errorf("resolve base %q: %w", base, baseErr)
-		}
-		if headRef.Hash() == baseHash {
-			g.aheadBehindCache.Store(cacheKey, aheadBehindEntry{headHash: headRef.Hash(), baseHash: baseHash, expiry: time.Now().Add(diffStatCacheTTL)})
-			return abResult{0, 0}, nil
-		}
-		// A TTL-expired entry whose head/base hashes still match the current
-		// ones means neither ref moved since the last computation — the BFS
-		// result can't have changed, so reuse it instead of re-running
-		// findMergeBase + two countCommitsTo walks (the actual expensive work;
-		// resolving HEAD/base above is cheap by comparison).
-		if v, ok := g.aheadBehindCache.Load(cacheKey); ok {
-			if e := v.(aheadBehindEntry); e.headHash == headRef.Hash() && e.baseHash == baseHash {
-				e.expiry = time.Now().Add(diffStatCacheTTL)
-				g.aheadBehindCache.Store(cacheKey, e)
-				return abResult{e.ahead, e.behind}, nil
-			}
-		}
-		pm := newParentMemo(repo)
-		mb, mbErr := findMergeBase(pm, headRef.Hash(), baseHash)
-		if mbErr != nil {
-			return abResult{}, fmt.Errorf("merge base: %w", mbErr)
-		}
-		ahead, aheadErr := countCommitsTo(pm, headRef.Hash(), mb)
-		if aheadErr != nil {
-			return abResult{}, aheadErr
-		}
-		behind, behindErr := countCommitsTo(pm, baseHash, mb)
-		if behindErr != nil {
-			return abResult{}, behindErr
-		}
-		g.aheadBehindCache.Store(cacheKey, aheadBehindEntry{ahead: ahead, behind: behind, headHash: headRef.Hash(), baseHash: baseHash, expiry: time.Now().Add(diffStatCacheTTL)})
-		return abResult{ahead, behind}, nil
+		ahead, behind, abErr := g.aheadBehindLocked(entry, cacheKey)
+		return abResult{ahead, behind}, abErr
 	})
 	if err != nil {
 		return 0, 0, err
@@ -985,38 +983,24 @@ func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error
 }
 
 func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]string, error) {
-	cacheKey := fmt.Sprintf("%s\x00%s\x00%d", worktreePath, base, max)
-	if v, ok := g.commitMessagesCache.Load(cacheKey); ok {
-		if e := v.(commitMessagesEntry); time.Now().Before(e.expiry) {
-			return e.msgs, nil
-		}
+	cacheKey := commitMessagesKey{worktree: worktreePath, base: base, max: max}
+	if e, ok := g.commitMessagesCache.Load(cacheKey); ok && time.Now().Before(e.expiry) {
+		return e.msgs, nil
 	}
 
 	// After the cache check: the guard allocates, and a hit must stay alloc-free.
 	defer g.guardInvalidation(worktreePath)()
-	msgs, err := sfDo(&g.commitMessagesSF, cacheKey, func() ([]string, error) {
+	sfKey := fmt.Sprintf("%s\x00%s\x00%d", worktreePath, base, max)
+	msgs, err := sfDo(&g.commitMessagesSF, sfKey, func() ([]string, error) {
 		entry, openErr := g.openRepoEntry(worktreePath)
 		if openErr != nil {
 			return nil, openErr
 		}
 
-		// Phase 1: snapshot HEAD and base as plain hash values under a brief lock.
-		// These are cheap reference-store reads; holding the lock only here avoids
-		// keeping it across the far more expensive graph walks below.
-		var headHash plumbing.Hash
-		var baseHash plumbing.Hash
-		if err := func() error {
-			entry.mu.Lock()
-			defer entry.mu.Unlock()
-			headRef, headErr := entry.repo.Head()
-			if headErr != nil {
-				return headErr
-			}
-			headHash = headRef.Hash() // plumbing.Hash is a plain [20]byte value type
-			var baseErr error
-			baseHash, baseErr = resolveRef(entry.repo, base)
-			return baseErr
-		}(); err != nil {
+		// Phase 1: HEAD and base as plain hash values under a brief lock, so the
+		// far more expensive graph walks below never run under it.
+		headHash, baseHash, err := resolveCommitMessageRefs(entry, base)
+		if err != nil {
 			return nil, err
 		}
 
@@ -1028,26 +1012,8 @@ func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]s
 			return nil, reachErr
 		}
 
-		// Phase 3: log walk from HEAD. go-git's packfile reader requires the lock.
-		entry.mu.Lock()
-		defer entry.mu.Unlock()
-		iter, iterErr := entry.repo.Log(&git.LogOptions{From: headHash})
-		if iterErr != nil {
-			return nil, iterErr
-		}
-		defer iter.Close()
-
-		var result []string
-		walkErr := iter.ForEach(func(c *object.Commit) error {
-			if baseReachable[c.Hash] {
-				return storer.ErrStop
-			}
-			if len(result) < max {
-				// Mimic `git log --oneline`: short hash + first line of message.
-				result = append(result, c.Hash.String()[:7]+" "+firstLine(c.Message))
-			}
-			return nil
-		})
+		// Phase 3: log walk from HEAD (takes entry.mu itself).
+		result, walkErr := commitMessagesFrom(entry, headHash, baseReachable, max)
 		if walkErr != nil {
 			return nil, walkErr
 		}
@@ -1061,23 +1027,37 @@ func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]s
 // reusing the worktree's cached set while its base hash is unchanged.
 // Known limit: a shallow clone deepened in place keeps its truncated set until
 // the base moves or the process restarts (cosmetic, see maxReachableSetCommits).
-// On a cache miss it acquires entry.mu, runs the walk, then releases the lock.
+// On a cache miss one caller per (worktree, base) acquires entry.mu and runs the
+// walk; concurrent callers with other CommitMessages limits wait for its result.
 // The returned map must not be mutated by callers.
 func (g *GoGitVCSReader) cachedReachableSet(entry *cachedRepo, worktreePath string, baseHash plumbing.Hash) (map[plumbing.Hash]bool, error) {
+	if set, ok := g.loadReachableSet(worktreePath, baseHash); ok {
+		return set, nil
+	}
+	sfKey := worktreePath + "\x00" + baseHash.String()
+	return sfDoJoined(&g.reachableSetSF, sfKey, &g.reachableSetJoined, func() (map[plumbing.Hash]bool, error) {
+		// A flight that finished between our miss and joining this one stored it.
+		if set, ok := g.loadReachableSet(worktreePath, baseHash); ok {
+			return set, nil
+		}
+		entry.mu.Lock()
+		set, err := reachableSet(entry.repo, baseHash)
+		entry.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		g.reachableSetCache.Store(worktreePath, reachableSetEntry{baseHash: baseHash, set: set})
+		return set, nil
+	})
+}
+
+func (g *GoGitVCSReader) loadReachableSet(worktreePath string, baseHash plumbing.Hash) (map[plumbing.Hash]bool, bool) {
 	if v, ok := g.reachableSetCache.Load(worktreePath); ok {
 		if e := v.(reachableSetEntry); e.baseHash == baseHash {
-			return e.set, nil
+			return e.set, true
 		}
 	}
-
-	entry.mu.Lock()
-	set, err := reachableSet(entry.repo, baseHash)
-	entry.mu.Unlock()
-	if err != nil {
-		return nil, err
-	}
-	g.reachableSetCache.Store(worktreePath, reachableSetEntry{baseHash: baseHash, set: set})
-	return set, nil
+	return nil, false
 }
 
 // InvalidateWorktree evicts worktreePath's TTL-cached results so the next call
@@ -1092,15 +1072,18 @@ func (g *GoGitVCSReader) InvalidateWorktree(worktreePath string) {
 func (g *GoGitVCSReader) evictWorktreeResults(worktreePath string) {
 	g.diffStatCache.Delete(worktreePath)
 	g.hasUncommittedCache.Delete(worktreePath)
-	prefix := worktreePath + "\x00"
-	for _, m := range []*sync.Map{&g.aheadBehindCache, &g.commitMessagesCache} {
-		m.Range(func(k, _ any) bool {
-			if key, _ := k.(string); strings.HasPrefix(key, prefix) {
-				m.Delete(k)
-			}
-			return true
-		})
-	}
+	g.aheadBehindCache.Range(func(k aheadBehindKey, _ aheadBehindEntry) bool {
+		if k.worktree == worktreePath {
+			g.aheadBehindCache.Delete(k)
+		}
+		return true
+	})
+	g.commitMessagesCache.Range(func(k commitMessagesKey, _ commitMessagesEntry) bool {
+		if k.worktree == worktreePath {
+			g.commitMessagesCache.Delete(k)
+		}
+		return true
+	})
 }
 
 func (g *GoGitVCSReader) pathInvalidationGen(worktreePath string) *atomic.Uint64 {

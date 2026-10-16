@@ -431,12 +431,11 @@ func TestGoGitVCSReader_AheadBehind_ReusesResultOnExpiredTTLWhenHashesUnchanged(
 		t.Fatal("test setup did not diverge HEAD from base — real (ahead, behind) is (0, 0)")
 	}
 
-	cacheKey := dir + "\x00" + "main"
-	v, ok := r.aheadBehindCache.Load(cacheKey)
+	cacheKey := aheadBehindKey{worktree: dir, base: "main"}
+	entry, ok := r.aheadBehindCache.Load(cacheKey)
 	if !ok {
 		t.Fatal("cold call did not populate aheadBehindCache")
 	}
-	entry := v.(aheadBehindEntry)
 	const sentinelAhead, sentinelBehind = 999, 888
 	entry.ahead = sentinelAhead
 	entry.behind = sentinelBehind
@@ -1087,8 +1086,8 @@ func TestScannerInvalidateRepo_EvictsReaderCachesButKeepsReachableSet(t *testing
 	for _, p := range []string{repo, linked} {
 		r.diffStatCache.Store(p, diffStatEntry{expiry: time.Now().Add(time.Hour)})
 		r.hasUncommittedCache.Store(p, hasUncommittedEntry{expiry: time.Now().Add(time.Hour)})
-		r.aheadBehindCache.Store(p+"\x00main", aheadBehindEntry{expiry: time.Now().Add(time.Hour)})
-		r.commitMessagesCache.Store(p+"\x00main\x005", commitMessagesEntry{expiry: time.Now().Add(time.Hour)})
+		r.aheadBehindCache.Store(aheadBehindKey{worktree: p, base: "main"}, aheadBehindEntry{expiry: time.Now().Add(time.Hour)})
+		r.commitMessagesCache.Store(commitMessagesKey{worktree: p, base: "main", max: 5}, commitMessagesEntry{expiry: time.Now().Add(time.Hour)})
 		r.reachableSetCache.Store(p, reachableSetEntry{})
 	}
 	r.diffStatCache.Store("/other/worktree", diffStatEntry{expiry: time.Now().Add(time.Hour)})
@@ -1102,8 +1101,8 @@ func TestScannerInvalidateRepo_EvictsReaderCachesButKeepsReachableSet(t *testing
 	if n := count(&r.diffStatCache); n != 1 {
 		t.Errorf("diffStatCache holds %d entries, want only the unrelated worktree's", n)
 	}
-	for name, m := range map[string]*sync.Map{"hasUncommitted": &r.hasUncommittedCache, "aheadBehind": &r.aheadBehindCache, "commitMessages": &r.commitMessagesCache} {
-		if n := count(m); n != 0 {
+	for name, n := range map[string]int{"hasUncommitted": count(&r.hasUncommittedCache), "aheadBehind": r.aheadBehindCache.Len(), "commitMessages": r.commitMessagesCache.Len()} {
+		if n != 0 {
 			t.Errorf("%sCache holds %d entries after invalidateRepo, want 0", name, n)
 		}
 	}

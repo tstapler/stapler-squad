@@ -122,7 +122,7 @@ func TestEdgeCase_UnbornBranch_ShouldReturnNilNil_AndAheadBehindErrorsUncached(t
 	_, _, err = g.AheadBehind(dir, "main")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "head:")
-	_, cached := g.aheadBehindCache.Load(dir + "\x00" + "main")
+	_, cached := g.aheadBehindCache.Load(aheadBehindKey{worktree: dir, base: "main"})
 	assert.False(t, cached, "a failed AheadBehind must not be cached")
 
 	dirty, err := g.HasUncommitted(dir)
