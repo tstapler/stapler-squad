@@ -890,6 +890,67 @@ func (s *PRStatus) FeedbackAuthors() []string {
 	return authors
 }
 
+// FailedChecks returns a copy of the human-readable "<name> FAILED (<url>)"
+// entries captured for every CI check with a terminal failure on the most
+// recent GetPRStatus call. Exported for stuck-item root-cause reporting
+// (get_backlog_stuck_report), which needs the per-check detail URL to look
+// up the failing job's log — FeedbackText only renders these into prose.
+func (s *PRStatus) FailedChecks() []string {
+	return append([]string(nil), s.failedChecks...)
+}
+
+// GetPRDiffFiles returns the list of file paths changed by prNumber's diff
+// (`gh pr diff --name-only`), used to tell whether a failing check's test
+// touches the PR's own changed files or is a pre-existing/flaky failure
+// elsewhere in the repo (see get_backlog_stuck_report).
+func (g *GitWorktree) GetPRDiffFiles(ctx context.Context, prNumber int) ([]string, error) {
+	// kibitzer:ignore go-error-context -- matches GetPRStatus's identical unwrapped checkGHCLI error, just above
+	if err := g.checkGHCLI(); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	raw, err := g.runGHCommand(ctx, "pr.diff.nameonly", "pr", "diff", strconv.Itoa(prNumber), "--name-only")
+	if err != nil {
+		return nil, fmt.Errorf("gh pr diff failed: %s (%w)", raw, err)
+	}
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	return files, nil
+}
+
+// CheckRunRef identifies one GitHub Actions job within a run — the pair
+// GetCheckRunLog needs together to fetch a single failing check's log, and
+// the shape its callers parse out of a check's details URL
+// (".../actions/runs/<RunID>/job/<JobID>").
+type CheckRunRef struct {
+	RunID string
+	JobID string
+}
+
+// GetCheckRunLog fetches only the failed-step log for one CI job
+// (`gh run view --job <jobID> --log-failed`), used to identify which test(s)
+// actually failed inside a check GetPRStatus reported as failing.
+func (g *GitWorktree) GetCheckRunLog(ctx context.Context, ref CheckRunRef) (string, error) {
+	// kibitzer:ignore go-error-context -- matches GetPRStatus's identical unwrapped checkGHCLI error, above
+	if err := g.checkGHCLI(); err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	raw, err := g.runGHCommand(ctx, "run.view.logfailed", "run", "view", ref.RunID, "--job", ref.JobID, "--log-failed")
+	if err != nil {
+		return "", fmt.Errorf("gh run view --log-failed failed: %s (%w)", raw, err)
+	}
+	return string(raw), nil
+}
+
 // GetPRStatus fetches the combined CI check status, reviewer decisions,
 // mergeability, and PR comments for the given pull request number. ctx is the
 // caller's context, per EnablePRAutoMerge's doc comment above.

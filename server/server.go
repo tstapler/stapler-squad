@@ -1116,6 +1116,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	services.NewClientLogHandler().RegisterRoutes(srv.mux)
 	log.Info("Registered client-log handler at /api/client-logs")
+	log.Info("server deploy id", "deploy_id", services.DeployID())
 
 	// Register Circuit Breaker debug handler for observability
 	cbHandler := services.NewCircuitBreakerHandler()

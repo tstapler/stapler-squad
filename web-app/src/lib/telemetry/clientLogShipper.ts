@@ -45,6 +45,21 @@ export interface ShipperDeps {
   now?: () => number;
 }
 
+const HIDDEN_AT_KEY = "ssq:pagehide-at";
+
+/** "[lifecycle] page-load type=reload prevPageHiddenMsAgo=812" — one line per load. */
+export function describePageLoad(nowMs: number): string {
+  const nav = performance.getEntriesByType?.("navigation")[0] as PerformanceNavigationTiming | undefined;
+  let hiddenAgo = "unknown";
+  try {
+    const at = Number(sessionStorage.getItem(HIDDEN_AT_KEY));
+    if (at > 0) hiddenAgo = String(nowMs - at);
+  } catch {
+    /* storage unavailable */
+  }
+  return `[lifecycle] page-load type=${nav?.type ?? "unknown"} prevPageHiddenMsAgo=${hiddenAgo}`;
+}
+
 /** Installs the hooks and returns an uninstall function. Idempotent per call site only. */
 export function installClientLogShipper(deps: ShipperDeps): () => void {
   const now = deps.now ?? Date.now;
@@ -117,12 +132,25 @@ export function installClientLogShipper(deps: ShipperDeps): () => void {
   window.addEventListener("pagehide", onHide);
   const timer = setInterval(() => void flush(), FLUSH_INTERVAL_MS);
 
+  // A reload is how a blank terminal usually gets "fixed", so record the load type and how long
+  // the previous page had been gone; warn level so it ships.
+  safePush("warn", () => [describePageLoad(now())]);
+  const markHidden = () => {
+    try {
+      sessionStorage.setItem(HIDDEN_AT_KEY, String(now()));
+    } catch {
+      /* storage unavailable */
+    }
+  };
+  window.addEventListener("pagehide", markHidden);
+
   return () => {
     console.warn = origWarn;
     console.error = origError;
     window.removeEventListener("error", onError);
     window.removeEventListener("unhandledrejection", onRejection);
     window.removeEventListener("pagehide", onHide);
+    window.removeEventListener("pagehide", markHidden);
     clearInterval(timer);
     void flush();
   };

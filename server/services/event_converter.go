@@ -35,6 +35,7 @@ func convertEventToProto(event *events.Event) *sessionv1.SessionEvent {
 	protoEvent := &sessionv1.SessionEvent{
 		Timestamp: timestamppb.New(event.Timestamp),
 		Seq:       event.Seq,
+		DeployId:  deployID,
 	}
 
 	switch event.Type {

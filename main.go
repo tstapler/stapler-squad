@@ -481,6 +481,27 @@ var (
 					return err
 				}
 
+				// Bind and start serving :8543 (incl. /mcp) before remote access,
+				// not after. startRemoteAccess does real network I/O before it ever
+				// touches a socket -- per-LAN-IP reverse DNS/avahi/mDNS hostname
+				// discovery (resolveLANHostnames), a forward-DNS ownership re-check
+				// per discovered hostname (hostnameValidator), then TLS cert
+				// generation (EnsureNetworkTLSCerts) -- measured at 16+ seconds on
+				// this machine, long enough that a reconnecting MCP client's own
+				// backoff window (~31s total, Claude Code's documented HTTP-transport
+				// retry budget) can already be half gone before the local listener
+				// even exists. None of that work touches srv's already-registered
+				// mux routes, so local :8543 traffic (including /mcp) has no reason
+				// to wait for it. remoteAccess (used below by startHostnameDetector)
+				// is unaffected by this reorder -- only when the local listener
+				// starts relative to it changes, not its own value or error handling.
+				a.Go("http-server", func(ctx context.Context) {
+					log.Info("Starting web server", "address", address)
+					if err := srv.Start(ctx); err != nil {
+						log.Error("HTTP server stopped", "err", err)
+					}
+				})
+
 				// Start a second HTTPS server with passkey auth for remote access.
 				var remoteAccess *remoteAccessResult
 				if remoteAccessFlag || cfg.PasskeyEnabled {
@@ -490,13 +511,6 @@ var (
 						return fmt.Errorf("start remote access: %w", raErr)
 					}
 				}
-
-				a.Go("http-server", func(ctx context.Context) {
-					log.Info("Starting web server", "address", address)
-					if err := srv.Start(ctx); err != nil {
-						log.Error("HTTP server stopped", "err", err)
-					}
-				})
 
 				// The hostname detector always starts, regardless of the
 				// remote-access/passkey setting -- periodic redetection of

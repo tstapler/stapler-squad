@@ -1247,6 +1247,14 @@ func (s *Storage) FindOpenStuckStates(ctx context.Context) ([]OpenStuckStateData
 	return s.repo.FindOpenStuckStates(ctx)
 }
 
+// ListStuckStatesForItem returns every BacklogStuckState row for itemID,
+// open or resolved, ordered oldest-first — the full-history read backing
+// get_backlog_stuck_report. Thin passthrough, same rationale as
+// FindOpenStuckStates above.
+func (s *Storage) ListStuckStatesForItem(ctx context.Context, itemID string) ([]StuckStateHistoryData, error) {
+	return s.repo.ListStuckStatesForItem(ctx, itemID)
+}
+
 // HasOpenStuckReason reports whether itemID has an open (unresolved,
 // un-snoozed) stuck row for reason.
 func (s *Storage) HasOpenStuckReason(ctx context.Context, itemID string, reason domain.StuckReason) (bool, error) {
