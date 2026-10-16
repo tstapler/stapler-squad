@@ -97,13 +97,13 @@ func TestMyersCounter_ShouldEqualLcsOracle_When10000SeededPairs(t *testing.T) {
 	for i := range spikePairs {
 		a, b := spikePair(i)
 		o := countsOracle(a, b)
-		if got, want := MyersEditCounts(a, b), (EditCounts{Insertions: o.Insertions, Deletions: o.Deletions}); got != want {
+		if got, want := MyersEditCounts(a, b), EditCounts(o); got != want {
 			t.Fatalf("pair %d: myers = %+v, oracle = %+v", i, got, want)
 		}
 	}
 	for _, c := range lineSliceCorpus(400) {
 		o := countsOracle(c.a, c.b)
-		if got, want := MyersEditCounts(c.a, c.b), (EditCounts{Insertions: o.Insertions, Deletions: o.Deletions}); got != want {
+		if got, want := MyersEditCounts(c.a, c.b), EditCounts(o); got != want {
 			t.Errorf("%s: myers = %+v, oracle = %+v", c.name, got, want)
 		}
 	}

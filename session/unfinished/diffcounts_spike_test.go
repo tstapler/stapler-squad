@@ -76,7 +76,7 @@ func TestDiffCandidates_ShouldReportMismatchCountsVsOracle_When10000PairsEach(t 
 	for i := range spikePairs {
 		a, b := spikePair(i)
 		o := countsOracle(a, b)
-		want := EditCounts{Insertions: o.Insertions, Deletions: o.Deletions}
+		want := EditCounts(o)
 		if got := MyersEditCounts(a, b); got != want {
 			mismatchMyers++
 			t.Errorf("pair %d: myers = %+v, oracle = %+v", i, got, want)
