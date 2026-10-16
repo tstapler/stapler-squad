@@ -960,9 +960,7 @@ func (r *EntRepository) ListBacklogItems(ctx context.Context, filter BacklogItem
 		q = q.Where(backlogitem.StatusNotIn(excluded...))
 	}
 
-	if len(filter.SourcePluginIDs) > 0 {
-		q = q.Where(backlogitem.HasSourceWith(itemsource.PluginIDIn(filter.SourcePluginIDs...)))
-	}
+	q = applySourcePluginFilter(q, filter.SourcePluginIDs)
 	if len(filter.Priorities) > 0 {
 		q = q.Where(backlogitem.PriorityIn(filter.Priorities...))
 	}
@@ -1050,9 +1048,7 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter Bac
 	} else if excluded := excludedTerminalStatuses(filter); len(excluded) > 0 {
 		q = q.Where(backlogitem.StatusNotIn(excluded...))
 	}
-	if len(filter.SourcePluginIDs) > 0 {
-		q = q.Where(backlogitem.HasSourceWith(itemsource.PluginIDIn(filter.SourcePluginIDs...)))
-	}
+	q = applySourcePluginFilter(q, filter.SourcePluginIDs)
 	if len(filter.Priorities) > 0 {
 		q = q.Where(backlogitem.PriorityIn(filter.Priorities...))
 	}
@@ -3187,13 +3183,4 @@ func (r *EntRepository) GetWorktreeDataBySessionUUID(ctx context.Context, sessio
 		BranchName:    sess.Edges.Worktree.BranchName,
 		BaseCommitSHA: sess.Edges.Worktree.BaseCommitSha,
 	}, nil
-}
-
-// sourcePluginIDOf returns the eager-loaded source's plugin id, or "" when the
-// item is locally created or the Source edge was not loaded.
-func sourcePluginIDOf(item *ent.BacklogItem) string {
-	if item.Edges.Source == nil {
-		return ""
-	}
-	return item.Edges.Source.PluginID
 }
